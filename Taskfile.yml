@@ -1,0 +1,245 @@
+# https://taskfile.dev — single source of truth for every check.
+# Claude Code hooks (.claude/settings.json), lefthook and CI only call tasks here;
+# none of them carry logic of their own.
+#
+#   gate-fast   seconds   fmt + vet + depguard on the module(s) owning FILE   (PostToolUse / pre-commit)
+#   gate-local  ~1 min    gen freshness + {{.BUF}} lint + affected tests           (Stop hook / pre-push)
+#   gate-ci     full      everything, authoritative                          (GitHub Actions)
+version: '3'
+
+vars:
+  BIN_DIR: '{{.ROOT_DIR}}/bin'
+  # Prefer the pinned binaries from `task tools`; fall back to PATH (CI installs buf /
+  # golangci-lint via actions). OS env wins over Taskfile env, so PATH cannot be prepended here.
+  BUF:
+    sh: '[ -x {{.BIN_DIR}}/buf ] && echo {{.BIN_DIR}}/buf || echo buf'
+  WIRE:
+    sh: '[ -x {{.BIN_DIR}}/wire ] && echo {{.BIN_DIR}}/wire || echo wire'
+  GOLANGCI_LINT:
+    sh: '[ -x {{.BIN_DIR}}/golangci-lint ] && echo {{.BIN_DIR}}/golangci-lint || echo golangci-lint'
+
+  BUF_VERSION: v1.74.0
+  PROTOC_GEN_GO_VERSION: v1.36.12
+  PROTOC_GEN_CONNECT_GO_VERSION: v1.21.1
+  WIRE_VERSION: v0.7.0
+  GOLANGCI_LINT_VERSION: v2.14.0
+  LEFTHOOK_VERSION: v2.2.2
+  CONNECT_OPENAPI_VERSION: v0.28.0
+
+  # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
+  BCS: ordering
+  # Every Go module in the workspace (keep in sync with go.work).
+  MODULES: pkgs/kernel pkgs/platform pkgs/ordering apps/rpc
+  APPS: rpc
+
+tasks:
+  default:
+    cmds: [task --list]
+    silent: true
+
+  all:
+    desc: gen → wire → lint → test → build
+    cmds:
+      - task: gen
+      - task: wire
+      - task: lint
+      - task: test
+      - task: build
+
+  # ── Gates ───────────────────────────────────────────────────────────────────
+
+  affected:
+    desc: print modules touched by the current change (scripts/affected.sh)
+    cmds: [scripts/affected.sh]
+    silent: true
+
+  gate-fast:
+    desc: 'gofmt + vet + golangci-lint --fast-only on the modules owning the given files'
+    summary: |
+      task gate-fast FILE="a.go b.go"     # or
+      task gate-fast -- a.go b.go         # lefthook passes {staged_files} this way (no shell quoting)
+    vars:
+      FILES: '{{.FILE | default .CLI_ARGS}}'
+    preconditions:
+      - sh: test -n "{{.FILES}}"
+        msg: 'usage: task gate-fast FILE="<path>..."  |  task gate-fast -- <path>...'
+    silent: true
+    cmds:
+      - |
+        bad=$(gofmt -l $(echo "{{.FILES}}" | tr ' ' '\n' | grep '\.go$' || true))
+        if [ -n "$bad" ]; then echo "gofmt: $bad"; exit 1; fi
+      - |
+        for m in $(scripts/affected.sh --files {{.FILES}}); do
+          echo ">> $m"
+          (cd "$m" && go vet ./...) || exit 1
+          if [ -x {{.BIN_DIR}}/golangci-lint ] || command -v golangci-lint >/dev/null; then (cd "$m" && {{.GOLANGCI_LINT}} run --fast-only ./...) || exit 1; fi
+        done
+
+  gate-local:
+    desc: what the agent / pre-push must pass before claiming "done"
+    cmds:
+      - task: check-gen-fresh
+      - '{{.BUF}} lint'
+      - task: test-affected
+
+  gate-ci:
+    desc: everything (CI runs the pieces as separate jobs; this is the local equivalent)
+    cmds:
+      - task: check-gen-fresh
+      - task: check-work-sync
+      - task: lint
+      - task: test
+      - task: cover-gate
+      - task: build
+
+  test-affected:
+    desc: go test -race on affected modules only
+    silent: true
+    cmds:
+      - |
+        mods=$(scripts/affected.sh)
+        [ -n "$mods" ] || { echo "nothing affected"; exit 0; }
+        for m in $mods; do echo ">> $m"; (cd "$m" && go test -race ./...) || exit 1; done
+
+  cover-gate:
+    desc: domain packages must be 100% covered
+    cmds: [scripts/cover-gate.sh]
+
+  check-gen-fresh:
+    desc: regenerating must produce no diff (Go side; CI also checks TS)
+    cmds:
+      - task: gen
+      - task: wire
+      - |
+        git diff --quiet -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml' || {
+          echo "generated code is stale — commit the result of: task gen wire"
+          git --no-pager diff --stat -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml'
+          exit 1
+        }
+
+  check-work-sync:
+    desc: go.work and every go.mod agree
+    cmds:
+      - go work sync
+      - |
+        git diff --quiet -- go.work '*/go.mod' '*/*/go.mod' || { echo "go.mod drift — commit the result of: go work sync"; exit 1; }
+
+  # ── Tooling / codegen ───────────────────────────────────────────────────────
+
+  tools:
+    desc: install codegen tools into ./bin (pinned versions)
+    env: { GOBIN: '{{.BIN_DIR}}' }
+    cmds:
+      - go install github.com/bufbuild/buf/cmd/buf@{{.BUF_VERSION}}
+      - go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_VERSION}}
+      - go install connectrpc.com/connect/cmd/protoc-gen-connect-go@{{.PROTOC_GEN_CONNECT_GO_VERSION}}
+      - go install github.com/google/wire/cmd/wire@{{.WIRE_VERSION}}
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+      - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
+      - chmod +x scripts/*.sh scripts/hooks/*.sh
+
+  tools:hooks:
+    desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
+    env: { GOBIN: '{{.BIN_DIR}}' }
+    cmds:
+      - go install github.com/evilmartians/lefthook/v2@{{.LEFTHOOK_VERSION}}
+      - '{{.BIN_DIR}}/lefthook install'
+
+  gen:
+    desc: protos → each module's contract/ (Go) + OpenAPI
+    # buf.gen.yaml has no clean:true because contract/ dirs also hold hand-written
+    # helpers; stale generated files are removed first.
+    cmds:
+      - '{{.BUF}} format -w'
+      - find pkgs -name '*.pb.go' -delete
+      - find pkgs -path '*connect/*.connect.go' -delete
+      - '{{.BUF}} generate'
+      - task: gen-openapi
+
+  gen-openapi:
+    desc: per-BC OpenAPI (Connect semantics) → pkgs/<bc>/contract/v1/openapi.yaml
+    cmds:
+      - for: { var: BCS }
+        cmd: >-
+          {{.BUF}} generate --path protos/{{.ITEM}} --template
+          '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/{{.ITEM}}/contract/v1","opt":["path=openapi.yaml","base=protos/{{.ITEM}}/v1/openapi.base.yaml"]}]}'
+
+  gen-ts:
+    desc: protos → web/packages/proto (remote plugin, needs network)
+    cmds:
+      - '{{.BUF}} generate --template buf.gen.ts.yaml'
+
+  wire:
+    desc: regenerate DI graph for every app
+    cmds:
+      - for: { var: APPS }
+        cmd: '{{.WIRE}} gen ./apps/{{.ITEM}}'
+
+  # ── Quality ─────────────────────────────────────────────────────────────────
+  # The go.work root is not a module, so `./...` matches nothing there: loop per module.
+
+  lint:
+    desc: proto lint + go vet + golangci-lint (depguard enforces layer / BC boundaries)
+    cmds:
+      - '{{.BUF}} lint'
+      - for: { var: MODULES }
+        cmd: echo ">> {{.ITEM}}" && cd {{.ITEM}} && go vet ./... && {{.GOLANGCI_LINT}} run ./...
+
+  breaking:
+    desc: detect wire-incompatible proto changes against main
+    cmds: ["{{.BUF}} breaking --against '.git#branch=main'"]
+
+  test:
+    desc: go test -race, every module
+    cmds:
+      - for: { var: MODULES }
+        cmd: echo ">> {{.ITEM}}" && cd {{.ITEM}} && go test -race ./...
+
+  test-bin:
+    desc: compile test binaries into ./bin/test/
+    cmds:
+      - mkdir -p {{.BIN_DIR}}/test
+      - for: { var: MODULES }
+        cmd: cd {{.ITEM}} && go test -c -o {{.BIN_DIR}}/test/ ./...
+
+  cover:
+    desc: coverage summary per module
+    silent: true
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - for: { var: MODULES }
+        cmd: |
+          prof={{.BIN_DIR}}/coverage-$(echo {{.ITEM}} | tr / _).out
+          (cd {{.ITEM}} && go test -coverprofile="$prof" ./... >/dev/null)
+          printf '%-16s ' {{.ITEM}}; go tool cover -func="$prof" | tail -1
+
+  # ── Build / run ─────────────────────────────────────────────────────────────
+
+  build:
+    desc: build every app into ./bin
+    cmds:
+      - for: { var: APPS }
+        cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
+
+  run:
+    desc: build and run ./bin/rpc
+    deps: [build]
+    env: { APP_LOG_FORMAT: text }
+    cmds: ['{{.BIN_DIR}}/rpc']
+
+  # ── Modules ─────────────────────────────────────────────────────────────────
+
+  sync:
+    desc: push workspace build list into every go.mod (run after adding deps)
+    cmds: [go work sync]
+
+  tidy:
+    desc: go mod tidy in every module, then go work sync
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.ITEM}} && go mod tidy
+      - go work sync
+
+  clean:
+    cmds:
+      - rm -rf {{.BIN_DIR}}

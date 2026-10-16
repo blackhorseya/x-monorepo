@@ -1,0 +1,12 @@
+# Same gates as the Claude Code hooks, for humans. `task tools:hooks` installs lefthook and registers the hooks.
+pre-commit:
+  parallel: false
+  commands:
+    gate-fast:
+      glob: "*.{go,proto}"
+      run: task -s gate-fast -- {staged_files}
+
+pre-push:
+  commands:
+    gate-local:
+      run: task gate-local

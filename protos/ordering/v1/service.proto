@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package ordering.v1;
+
+import "ordering/v1/entity.proto";
+
+// OrderService is the public RPC contract of the ordering bounded context.
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+}
+
+message CreateOrderRequest {
+  string customer_id = 1;
+  repeated LineItem items = 2;
+}
+
+message CreateOrderResponse {
+  Order order = 1;
+}
+
+message GetOrderRequest {
+  string id = 1;
+}
+
+message GetOrderResponse {
+  Order order = 1;
+}
+
+message CancelOrderRequest {
+  string id = 1;
+}
+
+message CancelOrderResponse {
+  Order order = 1;
+}

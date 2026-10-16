@@ -1,0 +1,8 @@
+# TypeScript codegen for web/packages/proto (@repo/proto). Uses remote plugins,
+# so it needs network; run via `task gen-ts`.
+version: v2
+clean: true
+plugins:
+  - remote: buf.build/bufbuild/es:v2.2.5
+    out: web/packages/proto/src/gen
+    opt: target=ts

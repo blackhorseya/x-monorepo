@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package common.v1;
+
+// Money is the wire representation of the kernel Money value object.
+message Money {
+  // Amount in minor units (e.g. cents).
+  int64 amount_minor = 1;
+  // ISO 4217 currency code, e.g. "USD".
+  string currency = 2;
+}

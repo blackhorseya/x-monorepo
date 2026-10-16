@@ -1,0 +1,125 @@
+version: "2"
+
+# Architecture rules enforced here (Clean Architecture dependency direction + BC isolation).
+# NOTE: depguard `pkg` entries are PREFIX matches — no wildcards mid-path — so rules are
+# spelled out per bounded context. Adding a BC = copy the `ordering-*` blocks and the
+# `bc-isolation` deny line. DDD rules that are not about imports live in archtest
+# (pkgs/platform/archtest) and run as `go test`.
+
+linters:
+  default: standard
+  enable:
+    - depguard
+    - errorlint
+    - gocritic
+    - revive
+  settings:
+    depguard:
+      rules:
+        # ── shared: kernel / platform never depend on a BC ─────────────────
+        shared:
+          files:
+            - "**/pkgs/kernel/**"
+            - "**/pkgs/platform/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering"
+              desc: "shared packages must not depend on a bounded context"
+
+        # ── BC isolation: a BC never imports another BC ────────────────────
+        # Cross-BC goes through application/port (sync) or events (async).
+        bc-isolation:
+          files:
+            - "**/pkgs/ordering/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
+              desc: "ordering must not import inventory; use a port or an event"
+
+        # ── ordering: domain → kernel only ─────────────────────────────────
+        ordering-domain:
+          files:
+            - "!**/*_test.go"
+            - "**/pkgs/ordering/domain/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/application"
+              desc: "domain must not depend on application"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra"
+              desc: "domain must not depend on infra"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters"
+              desc: "domain must not depend on adapters"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract"
+              desc: "domain must not depend on the proto contract"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform"
+              desc: "domain must not depend on platform"
+            - pkg: "google.golang.org/protobuf"
+              desc: "domain must not depend on protobuf"
+            - pkg: "connectrpc.com"
+              desc: "domain must not depend on transport"
+
+        # ── ordering: application → domain + kernel + platform (contextx/usecasex) ─
+        ordering-application:
+          files:
+            - "!**/*_test.go"
+            - "**/pkgs/ordering/application/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra"
+              desc: "application must not depend on infra"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters"
+              desc: "application must not depend on adapters"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract"
+              desc: "application must not depend on the proto contract (use dto)"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+              desc: "application must not depend on transport"
+            - pkg: "google.golang.org/protobuf"
+              desc: "application must not depend on protobuf"
+            - pkg: "connectrpc.com"
+              desc: "application must not depend on transport"
+
+        # ── ordering: infra → domain + application/port + platform ─────────
+        ordering-infra:
+          files:
+            - "!**/*_test.go"
+            - "**/pkgs/ordering/infra/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters"
+              desc: "infra must not depend on adapters"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract"
+              desc: "infra must not depend on the proto contract"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
+              desc: "infra implements ports; it must not call use cases"
+
+        # ── ordering: adapters depend on application + contract, never on infra ─
+        ordering-adapters:
+          files:
+            - "!**/*_test.go"
+            - "**/pkgs/ordering/adapters/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra"
+              desc: "adapters must not depend on infra (wire them in provider.go)"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
+              desc: "adapters depend on usecasex.UseCase interfaces, not concrete use cases"
+
+        # ── apps: composition roots only touch provider.go + platform ──────
+        apps:
+          files:
+            - "**/apps/**"
+            - "!**/apps/**/*_test.go"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/domain"
+              desc: "apps must not touch domain"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/application"
+              desc: "apps must not call use cases directly"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra"
+              desc: "apps must not touch infra (except apps/migrate, by explicit exception)"
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/blackhorseya/x-monorepo

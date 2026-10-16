@@ -1,0 +1,347 @@
+openapi: 3.1.0
+info:
+  title: Ordering API
+  version: v1
+  description: |
+    Connect RPC contract of the ordering bounded context.
+    Every procedure is `POST /ordering.v1.OrderService/<Method>` with a JSON body;
+    errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
+    the stable domain code in the `X-Error-Code` response header.
+paths:
+  /ordering.v1.OrderService/CancelOrder:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: CancelOrder
+      operationId: ordering.v1.OrderService.CancelOrder
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.CancelOrderRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.CancelOrderResponse'
+  /ordering.v1.OrderService/CreateOrder:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: CreateOrder
+      operationId: ordering.v1.OrderService.CreateOrder
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.CreateOrderRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.CreateOrderResponse'
+  /ordering.v1.OrderService/GetOrder:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: GetOrder
+      operationId: ordering.v1.OrderService.GetOrder
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.GetOrderRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.GetOrderResponse'
+components:
+  schemas:
+    common.v1.Money:
+      type: object
+      properties:
+        amountMinor:
+          type: string
+          title: amount_minor
+          format: int64
+          description: Amount in minor units (e.g. cents).
+        currency:
+          type: string
+          title: currency
+          description: ISO 4217 currency code, e.g. "USD".
+      title: Money
+      additionalProperties: false
+      description: Money is the wire representation of the kernel Money value object.
+    connect-protocol-version:
+      type: number
+      examples:
+        - 1
+      title: Connect-Protocol-Version
+      description: Define the version of the Connect protocol
+      const: 1
+    connect-timeout-header:
+      type: number
+      examples:
+        - 1000
+      title: Connect-Timeout-Ms
+      description: Define the timeout, in ms
+    connect.error:
+      type: object
+      properties:
+        code:
+          type: string
+          examples:
+            - not_found
+          enum:
+            - canceled
+            - unknown
+            - invalid_argument
+            - deadline_exceeded
+            - not_found
+            - already_exists
+            - permission_denied
+            - resource_exhausted
+            - failed_precondition
+            - aborted
+            - out_of_range
+            - unimplemented
+            - internal
+            - unavailable
+            - data_loss
+            - unauthenticated
+          description: The status code, which should be an enum value of [google.rpc.Code][google.rpc.Code].
+        message:
+          type: string
+          description: A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the [google.rpc.Status.details][google.rpc.Status.details] field, or localized by the client.
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/connect.error_details.Any'
+          description: A list of messages that carry the error details. There is no limit on the number of messages.
+      title: Connect Error
+      additionalProperties: true
+      description: 'Error type returned by Connect: https://connectrpc.com/docs/go/errors/#http-representation'
+    connect.error_details.Any:
+      type: object
+      properties:
+        type:
+          type: string
+          description: 'A URL that acts as a globally unique identifier for the type of the serialized message. For example: `type.googleapis.com/google.rpc.ErrorInfo`.'
+        value:
+          type: string
+          format: byte
+          description: The Protobuf message, serialized as bytes and base64-encoded. The specific message type is identified by the `type` field.
+        debug:
+          type: object
+          title: Debug
+          additionalProperties: true
+          description: Deserialized error detail payload. The 'type' field indicates the schema. This field is for easier debugging and should not be relied upon for application logic.
+      additionalProperties: true
+      description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message, with an additional debug field for ConnectRPC error details.
+    google.protobuf.Timestamp:
+      type: string
+      examples:
+        - "2023-01-15T01:30:15.01Z"
+        - "2024-12-25T12:00:00Z"
+      format: date-time
+      description: A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC.
+    ordering.v1.CancelOrderRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+      title: CancelOrderRequest
+      additionalProperties: false
+    ordering.v1.CancelOrderResponse:
+      type: object
+      properties:
+        order:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.Order'
+          title: order
+      title: CancelOrderResponse
+      additionalProperties: false
+    ordering.v1.CreateOrderRequest:
+      type: object
+      properties:
+        customerId:
+          type: string
+          title: customer_id
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ordering.v1.LineItem'
+          title: items
+      title: CreateOrderRequest
+      additionalProperties: false
+    ordering.v1.CreateOrderResponse:
+      type: object
+      properties:
+        order:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.Order'
+          title: order
+      title: CreateOrderResponse
+      additionalProperties: false
+    ordering.v1.GetOrderRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+      title: GetOrderRequest
+      additionalProperties: false
+    ordering.v1.GetOrderResponse:
+      type: object
+      properties:
+        order:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.Order'
+          title: order
+      title: GetOrderResponse
+      additionalProperties: false
+    ordering.v1.LineItem:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+        quantity:
+          type: integer
+          title: quantity
+          format: int32
+        unitPrice:
+          allOf:
+            - $ref: '#/components/schemas/common.v1.Money'
+          title: unit_price
+      title: LineItem
+      additionalProperties: false
+    ordering.v1.Order:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+        customerId:
+          type: string
+          title: customer_id
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ordering.v1.LineItem'
+          title: items
+        total:
+          allOf:
+            - $ref: '#/components/schemas/common.v1.Money'
+          title: total
+        status:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.OrderStatus'
+          title: status
+        createTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: create_time
+        updateTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: update_time
+      title: Order
+      additionalProperties: false
+    ordering.v1.OrderCancellationRequested:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        reason:
+          type: string
+          title: reason
+        requestedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: requested_at
+      title: OrderCancellationRequested
+      additionalProperties: false
+      description: |-
+        OrderCancellationRequested is published by another BC (e.g. payment timeout)
+         to ask ordering to cancel an order.
+    ordering.v1.OrderStatus:
+      type: string
+      title: OrderStatus
+      enum:
+        - ORDER_STATUS_UNSPECIFIED
+        - ORDER_STATUS_PENDING
+        - ORDER_STATUS_CANCELLED
+security: []
+tags:
+  - name: ordering.v1.OrderService
+    description: OrderService is the public RPC contract of the ordering bounded context.

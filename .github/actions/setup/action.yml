@@ -1,0 +1,34 @@
+name: setup
+description: >-
+  Go (with module/build cache keyed on every go.sum) + Task. With tools=true also
+  restores ./bin (buf, protoc-gen-*, wire, golangci-lint) keyed on Taskfile.yml, so
+  `task tools` only compiles when a pinned version changes.
+
+inputs:
+  tools:
+    description: "also restore / install the pinned ./bin toolchain via `task tools`"
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version-file: go.work
+        cache-dependency-path: "**/go.sum"
+
+    - uses: go-task/setup-task@v2
+      with:
+        version: 3.54.0
+        repo-token: ${{ github.token }}
+
+    - if: inputs.tools == 'true'
+      id: tools-cache
+      uses: actions/cache@v6
+      with:
+        path: bin
+        key: ${{ runner.os }}-tools-${{ hashFiles('Taskfile.yml') }}
+
+    - if: inputs.tools == 'true' && steps.tools-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: task tools

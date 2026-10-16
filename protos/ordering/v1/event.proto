@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package ordering.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Messages consumed by the ordering BC from a broker. The consumer adapter
+// decodes these and calls the SAME use cases the RPC adapter does.
+
+// OrderCancellationRequested is published by another BC (e.g. payment timeout)
+// to ask ordering to cancel an order.
+message OrderCancellationRequested {
+  string order_id = 1;
+  string reason = 2;
+  google.protobuf.Timestamp requested_at = 3;
+}
