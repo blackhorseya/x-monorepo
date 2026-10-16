@@ -1,7 +1,7 @@
 name: setup
 description: >-
   Go (with module/build cache keyed on every go.sum) + Task. With tools=true also
-  restores ./bin (buf, protoc-gen-*, wire, golangci-lint) keyed on Taskfile.yml, so
+  restores ./bin (buf, protoc-gen-*, wire, golangci-lint) keyed on the pinned versions, so
   `task tools` only compiles when a pinned version changes.
 
 inputs:
@@ -22,12 +22,19 @@ runs:
         version: 3.54.0
         repo-token: ${{ github.token }}
 
+    # Key on the pinned tool versions (and the Go toolchain that compiles them), not on
+    # the whole Taskfile — editing a task should not trigger a 3-minute toolchain rebuild.
+    - if: inputs.tools == 'true'
+      id: tools-key
+      shell: bash
+      run: echo "key=${{ runner.os }}-tools-$(grep -E '^\s+[A-Z_]+_VERSION:' Taskfile.yml | sha256sum | cut -c1-16)-$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+
     - if: inputs.tools == 'true'
       id: tools-cache
       uses: actions/cache@v6
       with:
         path: bin
-        key: ${{ runner.os }}-tools-${{ hashFiles('Taskfile.yml') }}
+        key: ${{ steps.tools-key.outputs.key }}
 
     - if: inputs.tools == 'true' && steps.tools-cache.outputs.cache-hit != 'true'
       shell: bash
