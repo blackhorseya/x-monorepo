@@ -3,6 +3,19 @@
 Protobuf-first Go monorepo：**Clean Architecture + DDD（BC-first）**，go.work 多 module，
 Connect 對外，Wire 組裝，Turborepo 前端。
 
+## Use this template
+
+這是 GitHub template repo。按 **Use this template** 建好自己的 repo 後：
+
+```bash
+task tools                                  # 固定版本的工具鏈 → ./bin
+task rename -- github.com/<you>/<repo>      # 改 module path（go.mod / imports / buf.gen.yaml / depguard）並重新 gen
+git commit -am "chore: rename module path"  # gen-freshness 是跟 HEAD 比，先 commit
+task gate-ci                                # 跟 CI 一樣的檢查，應該全綠
+```
+
+`ordering` 是示範用的 BC，熟悉結構後可以照「移除一個 BC」那節拆掉。
+
 設計的來源與取捨：
 
 | 來源 | 借來的 | 刻意不借的 |

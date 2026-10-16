@@ -229,6 +229,17 @@ tasks:
 
   # ── Modules ─────────────────────────────────────────────────────────────────
 
+  rename:
+    desc: 'task rename -- github.com/you/repo → rewrite the module path everywhere, then regenerate'
+    preconditions:
+      - sh: test -n "{{.CLI_ARGS}}"
+        msg: 'usage: task rename -- <new module prefix, e.g. github.com/you/repo>'
+    cmds:
+      - scripts/rename.sh {{.CLI_ARGS}}
+      - task: gen
+      - task: wire
+      - task: tidy
+
   sync:
     desc: push workspace build list into every go.mod (run after adding deps)
     cmds: [go work sync]
