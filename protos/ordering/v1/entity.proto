@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package ordering.v1;
+
+import "common/v1/money.proto";
+import "google/protobuf/timestamp.proto";
+
+// Entity messages are the cross-language state schema of the Order aggregate.
+// They are a wire contract, NOT the domain model: Go keeps a hand-written
+// aggregate in domain/order and maps at the adapter boundary.
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_PENDING = 1;
+  ORDER_STATUS_CANCELLED = 2;
+}
+
+message LineItem {
+  string sku = 1;
+  int32 quantity = 2;
+  common.v1.Money unit_price = 3;
+}
+
+message Order {
+  string id = 1;
+  string customer_id = 2;
+  repeated LineItem items = 3;
+  common.v1.Money total = 4;
+  OrderStatus status = 5;
+  google.protobuf.Timestamp create_time = 6;
+  google.protobuf.Timestamp update_time = 7;
+}

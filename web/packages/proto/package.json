@@ -1,0 +1,19 @@
+{
+  "name": "@repo/proto",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/gen/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.2.5",
+    "@connectrpc/connect": "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

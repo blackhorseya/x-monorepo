@@ -24,8 +24,9 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# Go workspace file
-go.work
+# Go workspace file — committed in this repo (multi-module monorepo)
+# go.work
+go.work.sum
 
 ### Helm ###
 # Chart dependencies
@@ -494,8 +495,8 @@ $RECYCLE.BIN/
 # Serverless directories
 .serverless
 
-# golang output binary directory
-bin
+# golang output binary directory (Taskfile BIN_DIR; test binaries too)
+/bin/
 
 result.json
 coverage.txt
@@ -503,3 +504,9 @@ coverage.txt
 .worktrees/
 configs/*
 !configs/*.example.*
+
+### Monorepo ###
+.turbo/
+.next/
+.build/
+web/packages/proto/src/gen/

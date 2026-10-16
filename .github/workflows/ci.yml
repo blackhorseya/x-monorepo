@@ -1,0 +1,104 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  # ── L2: which modules did this change touch? ────────────────────────────────
+  affected:
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.detect.outputs.modules }}
+      any: ${{ steps.detect.outputs.any }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - id: detect
+        run: |
+          git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
+          mods=$(BASE_REF=origin/main scripts/affected.sh | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+          echo "modules=$mods" >> "$GITHUB_OUTPUT"
+          echo "any=$([ "$mods" != "[]" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "affected: $mods"
+
+  # ── gen freshness: generated code must match its sources ───────────────────
+  gen-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+        with: { tools: "true" }   # ./bin cached on Taskfile.yml hash
+      - run: task gen wire gen-ts
+      - name: generated code is stale → run `task gen wire gen-ts` and commit
+        run: git diff --exit-code
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - uses: bufbuild/buf-action@v1
+        with: { setup_only: true }
+      - uses: golangci/golangci-lint-action@v9
+        with: { version: v2.14.0, install-only: true }
+      - run: task lint
+
+  work-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: task check-work-sync
+
+  # ── tests: one job per affected module ─────────────────────────────────────
+  test:
+    needs: affected
+    if: needs.affected.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJson(needs.affected.outputs.modules) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: go test -race ./...
+        working-directory: ${{ matrix.module }}
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: scripts/cover-gate.sh
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: task build
+
+  # ── breaking: warn only (decision: wire-incompatible changes are allowed, but visible) ──
+  breaking:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: bufbuild/buf-action@v1
+        with: { setup_only: true }
+      - name: buf breaking (skipped while main has no protos)
+        run: |
+          git ls-tree -r --name-only origin/main -- protos | grep -q '\.proto$' || { echo "main has no protos yet — nothing to compare"; exit 0; }
+          buf breaking --against '.git#ref=refs/remotes/origin/main' --error-format=github-actions
