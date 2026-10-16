@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-        with: { tools: "true" }   # ./bin cached on Taskfile.yml hash
+        with: { tools: "true" }   # ./bin cached on the pinned tool versions
       - run: task gen wire gen-ts
       - name: generated code is stale → run `task gen wire gen-ts` and commit
         run: git diff --exit-code
