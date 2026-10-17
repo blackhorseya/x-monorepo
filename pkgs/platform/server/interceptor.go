@@ -12,12 +12,15 @@ import (
 )
 
 // NewLoggingInterceptor injects a per-request logger and logs transport-level
-// facts (procedure, protocol, code, trace_id when a span is active). Use-case-level
-// logging is a usecasex decorator.
+// facts (procedure, protocol, code, request_id, trace_id when a span is active).
+// Use-case-level logging is a usecasex decorator.
 func NewLoggingInterceptor(logger *slog.Logger) connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			l := logger.With("procedure", req.Spec().Procedure, "protocol", req.Peer().Protocol)
+			if rid := RequestID(c); rid != "" {
+				l = l.With("request_id", rid)
+			}
 			if sc := trace.SpanContextFromContext(c); sc.IsValid() {
 				l = l.With("trace_id", sc.TraceID().String())
 			}
