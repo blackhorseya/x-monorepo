@@ -11,7 +11,7 @@ log:
   format: json  # json | text
 
 postgres:
-  # empty = no database: repositories fall back to in-memory (dev, tests).
-  # `task migrate -- up` needs this set.
-  url: ""
-  # url: postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable
+  # Matches `task compose-up` (deployments/docker/docker-compose.yaml).
+  # Empty = no database: repositories fall back to in-memory (dev, tests);
+  # `task migrate -- up` needs it set.
+  url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
