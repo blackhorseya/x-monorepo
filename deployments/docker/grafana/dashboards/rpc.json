@@ -230,7 +230,7 @@
     },
     {
       "id": 5,
-      "title": "Instances up",
+      "title": "Instances reporting",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -249,7 +249,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "count(group by (instance)(go_goroutine_count{job=\"$service\"}))",
+          "expr": "count(group by (instance)(go_goroutine_count{job=\"$service\"})) or vector(0)",
           "legendFormat": ""
         }
       ],
@@ -270,7 +270,8 @@
         "colorMode": "value",
         "graphMode": "area",
         "textMode": "auto"
-      }
+      },
+      "description": "Instances that exported runtime metrics in the last 5 min (OTLP push has no `up`; a stopped instance lingers for Prometheus' staleness window)."
     },
     {
       "id": 6,
