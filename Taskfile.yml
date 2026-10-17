@@ -20,6 +20,8 @@ vars:
   # Container runtime for local infra: podman first, docker as fallback.
   COMPOSE:
     sh: 'command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose"'
+  # Config file `task run` / `task migrate` load (APP_CONFIG). Override: task run CONFIG=configs/config.yaml
+  CONFIG: '{{.CONFIG | default (printf "%s/configs/local.yaml" .ROOT_DIR)}}'
 
   BUF_VERSION: v1.74.0
   PROTOC_GEN_GO_VERSION: v1.36.12
@@ -227,18 +229,17 @@ tasks:
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
 
   run:
-    desc: 'build and run ./bin/rpc (local dev: text logs, /api/docs enabled)'
+    desc: 'build and run ./bin/rpc with configs/local.yaml (text logs, /api/docs, compose Postgres); task run CONFIG=<file> to use another'
     deps: [build]
-    env: { APP_LOG_FORMAT: text, APP_HTTP_DOCS: 'true' }
+    env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/rpc']
 
   migrate:
-    desc: 'task migrate -- up|down|version → run every BC''s migrations against APP_POSTGRES_URL'
+    desc: 'task migrate -- up|down|version → every BC''s migrations against postgres.url of configs/local.yaml (or CONFIG=<file> / APP_POSTGRES_URL)'
     preconditions:
-      - sh: test -n "$APP_POSTGRES_URL"
-        msg: 'APP_POSTGRES_URL is required, e.g. postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
       - sh: test -n "{{.CLI_ARGS}}"
         msg: 'usage: task migrate -- up|down|version'
+    env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds:
       - go run ./apps/migrate {{.CLI_ARGS}}
 

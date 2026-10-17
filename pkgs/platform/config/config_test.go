@@ -86,3 +86,21 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("invalid log.format must fail")
 	}
 }
+
+// The committed local-dev profile (what `task run` loads) must stay valid.
+func TestLoad_LocalProfile(t *testing.T) {
+	local, err := filepath.Abs(filepath.Join("..", "..", "..", "configs", "local.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chdirTemp(t)
+	t.Setenv("APP_CONFIG", local)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HTTP.Docs || cfg.Log.Format != "text" || cfg.Postgres.URL == "" {
+		t.Fatalf("unexpected local profile: %+v", cfg)
+	}
+}

@@ -1,4 +1,5 @@
-# Copy to configs/config.yaml (gitignored) for local dev, or point APP_CONFIG at a file.
+# Template. `task run` / `task migrate` use configs/local.yaml (committed); for a private
+# variant copy this to configs/config.yaml (gitignored) and run with CONFIG=configs/config.yaml.
 # Every key can also be set as APP_<SECTION>_<KEY>; env beats file beats these defaults.
 
 http:

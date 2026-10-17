@@ -31,11 +31,10 @@ task tools          # buf / protoc-gen-go / protoc-gen-connect-go / wire / golan
 task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum）
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # depguard 強制分層與 BC 邊界
-task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；dev 預設開 /api/docs（production 要 APP_HTTP_DOCS=true 才有）
-                    # 沒設 postgres.url 就用 in-memory repository；要接 Postgres：
-task compose-up      # 本機 Postgres；再 cp configs/config.example.yaml configs/config.yaml 填 postgres.url（或 export APP_POSTGRES_URL=…）
+task compose-up     # 本機 Postgres（configs/local.yaml 的 postgres.url 就是指它）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）
-task run
+task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
+                    # 不想接 DB：task run CONFIG=configs/config.example.yaml 之類另給一份（postgres.url 空 = in-memory repository）
 
 curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
   -H 'Content-Type: application/json' \
@@ -190,8 +189,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 
 ```bash
 task compose-up      # podman compose（沒有 podman 就 docker compose）起 Postgres（:5432，user/pass/db 都是 app）
-export APP_POSTGRES_URL='postgres://app:app@127.0.0.1:5432/app?sslmode=disable'   # 或寫進 configs/config.yaml
-task migrate -- up
+task migrate -- up   # configs/local.yaml 的 postgres.url 已指向它，不用 export
 task run             # app 在本機跑，不進容器
 task compose-down    # 連 volume 一起清
 ```
@@ -200,7 +198,16 @@ task compose-down    # 連 volume 一起清
 
 `platform/config.Load()` 的來源由低到高：defaults → YAML 檔 → `APP_*` 環境變數。YAML 找 `$APP_CONFIG`（指定就必須存在），
 否則依序找 `./configs/config.yaml`、`./config.yaml`，都沒有也沒關係。每個 key 都有 default，所以只靠環境變數就能跑。
-範本在 `configs/config.example.yaml`；`configs/config.yaml` 已 gitignore。
+
+`configs/` 裡有三種檔：
+
+| 檔案 | 用途 |
+|---|---|
+| `local.yaml` | **有 commit**。本機開發 profile：text log、`/api/docs` 開、`postgres.url` 指向 compose。`task run` / `task migrate` 透過 `APP_CONFIG` 載入 |
+| `config.example.yaml` | 範本，列出所有 key 與預設 |
+| `config.yaml` | gitignored。想要自己的設定就 cp example 過來改，用 `task run CONFIG=configs/config.yaml` 指定 |
+
+> 注意：env 不能把 key 清成空字串（viper 忽略空 env），所以要「不接 DB」請換一份 `postgres.url` 空的檔，不要 `APP_POSTGRES_URL=`。
 
 | YAML key | 環境變數 | 預設 | 說明 |
 |---|---|---|---|
@@ -208,7 +215,7 @@ task compose-down    # 連 volume 一起清
 | `http.docs` | `APP_HTTP_DOCS` | `false` | 掛 `/api/docs`、`/api/openapi/<bc>.yaml`（`task run` 會開） |
 | `log.level` / `log.format` | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
 | `postgres.url` | `APP_POSTGRES_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
-| — | `APP_CONFIG` | 空 | 指定 config 檔路徑 |
+| — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
 | — | `TEST_DATABASE_URL` | 空 | 只給 integration test |
 
 ## Workflow

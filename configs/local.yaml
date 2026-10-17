@@ -1,0 +1,16 @@
+# Local-dev profile, committed. Matches `task compose-up` (deployments/docker/docker-compose.yaml).
+# `task run` / `task migrate` load it via APP_CONFIG; override with `task run CONFIG=<file>`
+# or any APP_<SECTION>_<KEY> env var (env beats file). For your own tweaks copy
+# config.example.yaml to configs/config.yaml (gitignored) instead of editing this one.
+
+http:
+  addr: ":8080"
+  docs: true   # /api/docs + /api/openapi/<bc>.yaml
+
+log:
+  level: debug
+  format: text
+
+postgres:
+  # requires `task compose-up` — apps ping the database at startup
+  url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
