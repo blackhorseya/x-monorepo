@@ -8,14 +8,16 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/metrics"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
 // Initialize is the injector. wire.go is the ONLY place AppConfig is mapped
 // into component configs (via wire.FieldsOf).
-func Initialize(cfg *config.AppConfig) (*server.Server, error) {
+func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	wire.Build(
-		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Log"),
+		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Log", "Postgres"),
+		postgres.NewDB,
 		server.NewLogger,
 		server.New,
 		metrics.ProviderSet,
@@ -24,5 +26,5 @@ func Initialize(cfg *config.AppConfig) (*server.Server, error) {
 		ordering.ProviderSet,
 	)
 
-	return nil, nil
+	return nil, nil, nil
 }

@@ -9,8 +9,9 @@ import (
 
 // AppConfig is the root configuration of a deployable.
 type AppConfig struct {
-	HTTP HTTP
-	Log  Log
+	HTTP     HTTP
+	Log      Log
+	Postgres Postgres
 }
 
 // HTTP configures the Connect/gRPC/HTTP server.
@@ -18,6 +19,12 @@ type HTTP struct {
 	Addr string
 	// Docs mounts /docs and /openapi/*.yaml. Keep false in production.
 	Docs bool
+}
+
+// Postgres configures the shared connection pool. An empty URL means "no
+// database": apps fall back to in-memory repositories (local dev, tests).
+type Postgres struct {
+	URL string // e.g. postgres://user:pass@host:5432/db?sslmode=disable
 }
 
 // Log configures the structured logger.
@@ -37,6 +44,7 @@ func Load() (*AppConfig, error) {
 			Level:  getenv("APP_LOG_LEVEL", "info"),
 			Format: getenv("APP_LOG_FORMAT", "json"),
 		},
+		Postgres: Postgres{URL: getenv("APP_DB_URL", "")},
 	}
 
 	if cfg.Log.Format != "json" && cfg.Log.Format != "text" {

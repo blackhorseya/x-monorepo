@@ -9,10 +9,10 @@ package main
 import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/metrics"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
@@ -21,24 +21,32 @@ import (
 
 // Initialize is the injector. wire.go is the ONLY place AppConfig is mapped
 // into component configs (via wire.FieldsOf).
-func Initialize(cfg *config.AppConfig) (*server.Server, error) {
+func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	http := cfg.HTTP
 	log := cfg.Log
 	logger := server.NewLogger(log)
-	orderRepository := memory.NewOrderRepository()
+	configPostgres := cfg.Postgres
+	db, cleanup, err := postgres.NewDB(configPostgres)
+	if err != nil {
+		return nil, nil, err
+	}
+	repository := ordering.ProvideOrderRepository(db, logger)
 	uuidGenerator := system.NewUUIDGenerator()
 	clock := system.NewClock()
 	registry := metrics.NewRegistry()
 	recorder, err := usecasex.NewRecorder(registry)
 	if err != nil {
-		return nil, err
+		cleanup()
+		return nil, nil, err
 	}
-	v := ordering.ProvideCreateOrder(orderRepository, uuidGenerator, clock, recorder)
-	v2 := ordering.ProvideGetOrder(orderRepository, recorder)
-	v3 := ordering.ProvideCancelOrder(orderRepository, clock, recorder)
+	v := ordering.ProvideCreateOrder(repository, uuidGenerator, clock, recorder)
+	v2 := ordering.ProvideGetOrder(repository, recorder)
+	v3 := ordering.ProvideCancelOrder(repository, clock, recorder)
 	orderService := rpc.NewOrderService(v, v2, v3)
 	v4 := NewRoutes(orderService)
 	v5 := NewDocs()
 	serverServer := server.New(http, logger, v4, v5, registry)
-	return serverServer, nil
+	return serverServer, func() {
+		cleanup()
+	}, nil
 }

@@ -1,0 +1,167 @@
+package postgres
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
+)
+
+var _ order.Repository = (*OrderRepository)(nil)
+
+// OrderRepository persists the Order aggregate across orders + order_items.
+type OrderRepository struct {
+	db *gorm.DB
+}
+
+func NewOrderRepository(db *gorm.DB) *OrderRepository {
+	return &OrderRepository{db: db}
+}
+
+// orderRow / orderItemRow are persistence models: they mirror columns, not the
+// aggregate. Timestamps come from the domain (port.Clock), so gorm's automatic
+// created_at/updated_at tracking is switched off.
+type orderRow struct {
+	ID         string         `gorm:"primaryKey"`
+	CustomerID string         `gorm:"not null"`
+	Status     string         `gorm:"not null"`
+	CreatedAt  time.Time      `gorm:"not null;autoCreateTime:false"`
+	UpdatedAt  time.Time      `gorm:"not null;autoUpdateTime:false"`
+	Items      []orderItemRow `gorm:"foreignKey:OrderID;references:ID"`
+}
+
+func (orderRow) TableName() string { return Schema + ".orders" }
+
+type orderItemRow struct {
+	OrderID        string `gorm:"primaryKey"`
+	Position       int    `gorm:"primaryKey"`
+	SKU            string `gorm:"not null"`
+	Quantity       int32  `gorm:"not null"`
+	UnitPriceMinor int64  `gorm:"not null"`
+	Currency       string `gorm:"not null"`
+}
+
+func (orderItemRow) TableName() string { return Schema + ".order_items" }
+
+func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var row orderRow
+	err := i.db.WithContext(ctx).
+		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
+		Take(&row, "id = ?", string(id)).Error
+	if err != nil {
+		return nil, translate(fmt.Errorf("find order %s: %w", id, err))
+	}
+
+	return toDomain(row)
+}
+
+// Save writes the whole aggregate in one transaction: upsert the order row,
+// then replace its items (delete + insert keeps positions authoritative).
+func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	row := toRow(o)
+	err := i.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Omit(clause.Associations).Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"customer_id", "status", "updated_at"}),
+		}).Create(&row).Error; err != nil {
+			return fmt.Errorf("upsert order %s: %w", o.ID(), err)
+		}
+		if err := tx.Where("order_id = ?", row.ID).Delete(&orderItemRow{}).Error; err != nil {
+			return fmt.Errorf("clear order items %s: %w", o.ID(), err)
+		}
+		if err := tx.Create(&row.Items).Error; err != nil {
+			return fmt.Errorf("insert order items %s: %w", o.ID(), err)
+		}
+		return nil
+	})
+
+	return translate(err)
+}
+
+func toRow(o *order.Order) orderRow {
+	items := o.Items()
+	row := orderRow{
+		ID:         string(o.ID()),
+		CustomerID: o.CustomerID(),
+		Status:     o.Status().String(),
+		CreatedAt:  o.CreatedAt(),
+		UpdatedAt:  o.UpdatedAt(),
+		Items:      make([]orderItemRow, 0, len(items)),
+	}
+	for pos, it := range items {
+		row.Items = append(row.Items, orderItemRow{
+			OrderID:        row.ID,
+			Position:       pos,
+			SKU:            it.SKU(),
+			Quantity:       it.Quantity(),
+			UnitPriceMinor: it.UnitPrice().Amount(),
+			Currency:       it.UnitPrice().Currency(),
+		})
+	}
+
+	return row
+}
+
+func toDomain(row orderRow) (*order.Order, error) {
+	items := make([]order.LineItem, 0, len(row.Items))
+	for _, r := range row.Items {
+		price, err := kernel.NewMoney(r.UnitPriceMinor, r.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("load order %s item %s: %w", row.ID, r.SKU, err)
+		}
+		it, err := order.NewLineItem(r.SKU, r.Quantity, price)
+		if err != nil {
+			return nil, fmt.Errorf("load order %s item %s: %w", row.ID, r.SKU, err)
+		}
+		items = append(items, it)
+	}
+
+	status, err := order.ParseStatus(row.Status)
+	if err != nil {
+		return nil, fmt.Errorf("load order %s: %w", row.ID, err)
+	}
+
+	return order.Reconstitute(order.ReconstituteParams{
+		ID:         order.ID(row.ID),
+		CustomerID: row.CustomerID,
+		Items:      items,
+		Status:     status,
+		CreatedAt:  row.CreatedAt.UTC(),
+		UpdatedAt:  row.UpdatedAt.UTC(),
+	})
+}
+
+// translate maps driver errors onto domain errors so callers only ever see
+// order.Err* (checked with errors.Is) or context errors. Anything else is an
+// infrastructure failure and stays wrapped for logging. gorm's TranslateError
+// (see platform/postgres.NewDB) has already turned SQLSTATE 23505 into
+// gorm.ErrDuplicatedKey.
+func translate(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return order.ErrNotFound
+	case errors.Is(err, gorm.ErrDuplicatedKey):
+		return order.ErrDuplicate
+	default:
+		return err
+	}
+}

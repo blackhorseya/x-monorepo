@@ -26,10 +26,11 @@ func run() error {
 		return err
 	}
 
-	srv, err := Initialize(cfg)
+	srv, cleanup, err := Initialize(cfg)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	return srv.Run(c)
 }
