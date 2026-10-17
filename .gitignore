@@ -509,5 +509,4 @@ configs/*
 .turbo/
 .next/
 .build/
-web/packages/proto/src/gen/
 /configs/config.yaml
