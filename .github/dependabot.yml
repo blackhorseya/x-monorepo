@@ -1,0 +1,17 @@
+# Dependabot scans one module directory at a time and does not understand go.work,
+# so a Go bump touches a single go.mod and the work-sync gate rejects it. Version
+# updates for Go are therefore off (security updates still arrive — run `task tidy`
+# on their branch before merging). GitHub Actions bumps are safe and grouped weekly.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories: ["/pkgs/*", "/apps/*"]
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }
+    groups:
+      actions:
+        patterns: ["*"]

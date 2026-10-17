@@ -132,6 +132,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 - `scripts/affected.sh`：由 `go.work` 算出被改動的 module，並展開反向依賴（改 kernel → 全部；改 ordering → ordering + apps/rpc）
 - `scripts/cover-gate.sh`：所有 `*/domain/*` package 必須 100% 覆蓋
 - hook 失敗時 exit 2，stderr 會回到 agent 讓它自己修；`stop_hook_active` 防止無限循環
+- dependabot 只掃單一 module 目錄、不懂 go.work：Go 的 version updates 已關（`.github/dependabot.yml`），security updates 來時在它的分支跑 `task tidy` 再合，否則 `work-sync` 會擋
 
 ## Architecture rules：誰擋什麼
 
