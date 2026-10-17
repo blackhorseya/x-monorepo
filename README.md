@@ -32,8 +32,8 @@ task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum�
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # depguard 強制分層與 BC 邊界
 task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；dev 預設開 /api/docs（production 要 APP_HTTP_DOCS=true 才有）
-                    # 沒設 APP_DB_URL 就用 in-memory repository；要接 Postgres：
-export APP_DB_URL='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+                    # 沒設 postgres.url 就用 in-memory repository；要接 Postgres：
+cp configs/config.example.yaml configs/config.yaml   # 填 postgres.url（或 export APP_POSTGRES_URL=…）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）
 task run
 
@@ -68,7 +68,7 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 │       │   ├── port/              # 需要外界提供的能力
 │       │   └── mapper/            # domain → dto
 │       ├── infra/                 # driven：repository / port 實作
-│       │   ├── memory/            # in-memory repository（APP_DB_URL 未設時）
+│       │   ├── memory/            # in-memory repository（APP_POSTGRES_URL 未設時）
 │       │   ├── postgres/          # gorm row model + SQL + 錯誤轉譯；migrations/*.sql 以 embed 隨 BC 走
 │       │   └── system/            # clock / id
 │       └── adapters/              # driving：transport
@@ -171,7 +171,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 
 ## Persistence：Postgres、gorm、migrations
 
-- `platform/postgres.NewDB` 提供 `*gorm.DB`（driver 底層是 pgx，`TranslateError` 開啟）。`APP_DB_URL` 空 → 回 nil，
+- `platform/postgres.NewDB` 提供 `*gorm.DB`（driver 底層是 pgx，`TranslateError` 開啟）。`APP_POSTGRES_URL` 空 → 回 nil，
   `ordering.ProvideOrderRepository` 看到 nil 就改用 `infra/memory`，所以 `task run`、E2E test 不需要 DB。
 - **每個 BC 一個 Postgres schema**（`ordering.orders`），版本表也在該 schema 裡（`ordering.schema_migrations`）。
   多個 BC 共用一個 database 時，預設的單一 `public.schema_migrations` 會讓兩條 migration 序列互相覆寫版本號且不報錯；
@@ -185,13 +185,20 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
   `gorm.ErrDuplicatedKey → order.ErrDuplicate`，其他保持 wrapped 給 log。
 - integration test（`infra/postgres`、`apps/migrate`）在 `TEST_DATABASE_URL` 空時 skip；CI 的 test job 起 Postgres service。
 
-| 環境變數 | 預設 | 說明 |
-|---|---|---|
-| `APP_HTTP_ADDR` | `:8080` | |
-| `APP_HTTP_DOCS` | `false` | 掛 `/api/docs`、`/api/openapi/<bc>.yaml`（`task run` 會開） |
-| `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
-| `APP_DB_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
-| `TEST_DATABASE_URL` | 空 | 只給 integration test |
+## Config（viper）
+
+`platform/config.Load()` 的來源由低到高：defaults → YAML 檔 → `APP_*` 環境變數。YAML 找 `$APP_CONFIG`（指定就必須存在），
+否則依序找 `./configs/config.yaml`、`./config.yaml`，都沒有也沒關係。每個 key 都有 default，所以只靠環境變數就能跑。
+範本在 `configs/config.example.yaml`；`configs/config.yaml` 已 gitignore。
+
+| YAML key | 環境變數 | 預設 | 說明 |
+|---|---|---|---|
+| `http.addr` | `APP_HTTP_ADDR` | `:8080` | |
+| `http.docs` | `APP_HTTP_DOCS` | `false` | 掛 `/api/docs`、`/api/openapi/<bc>.yaml`（`task run` 會開） |
+| `log.level` / `log.format` | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
+| `postgres.url` | `APP_POSTGRES_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
+| — | `APP_CONFIG` | 空 | 指定 config 檔路徑 |
+| — | `TEST_DATABASE_URL` | 空 | 只給 integration test |
 
 ## Workflow
 
