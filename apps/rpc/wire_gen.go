@@ -31,7 +31,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	}
 	logger := providers.Logger
 	configPostgres := cfg.Postgres
-	db, cleanup2, err := postgres.NewDB(configPostgres)
+	db, cleanup2, err := postgres.NewDB(configPostgres, providers)
 	if err != nil {
 		cleanup()
 		return nil, nil, err

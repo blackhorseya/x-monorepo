@@ -13,11 +13,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
 	"connectrpc.com/otelconnect"
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
@@ -37,11 +39,11 @@ type Server struct {
 // New mounts every route, /healthz, /metrics (Prometheus exposition of the
 // OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
 // OpenTelemetry span (otelconnect, outermost) and a request logger carrying
-// its trace_id.
+// its trace_id; plain HTTP routes (docs, openapi) get theirs from otelgin,
+// which skips RPC prefixes, /healthz and /metrics so nothing is traced twice.
 func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *otel.Providers) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
-	engine.Use(gin.Recovery())
 	// Connect routes are "/<pkg>.<Service>/" prefixes; a procedure is the next segment.
 	// Redirecting or cleaning paths would break gRPC clients, so keep paths verbatim.
 	engine.RedirectTrailingSlash = false
@@ -56,9 +58,26 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 		return nil, fmt.Errorf("otelconnect interceptor: %w", err)
 	}
 	opts := connect.WithInterceptors(tracing, NewLoggingInterceptor(logger))
+	prefixes := make([]string, 0, len(routes))
+	handlers := make([]http.Handler, 0, len(routes))
 	for _, r := range routes {
 		prefix, h := r.Route(opts)
-		engine.Any(prefix+"*procedure", gin.WrapH(h))
+		prefixes = append(prefixes, prefix)
+		handlers = append(handlers, h)
+	}
+
+	// Middleware must be registered before the routes it applies to.
+	engine.Use(
+		otelgin.Middleware(tel.ServiceName,
+			otelgin.WithTracerProvider(tel.Tracer),
+			otelgin.WithMeterProvider(tel.Meter),
+			otelgin.WithPropagators(tel.Propagator),
+			otelgin.WithGinFilter(untracedByGin(prefixes)),
+		),
+		gin.Recovery(),
+	)
+	for i, prefix := range prefixes {
+		engine.Any(prefix+"*procedure", gin.WrapH(handlers[i]))
 	}
 	engine.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
 	engine.GET("/metrics", gin.WrapH(tel.MetricsHandler))
@@ -84,6 +103,24 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 		},
 		logger: logger,
 	}, nil
+}
+
+// untracedByGin returns the otelgin filter: false for paths otelconnect
+// already traces (RPC prefixes) and for the scrape/probe endpoints.
+func untracedByGin(prefixes []string) func(*gin.Context) bool {
+	return func(c *gin.Context) bool {
+		path := c.Request.URL.Path
+		if path == "/healthz" || path == "/metrics" {
+			return false
+		}
+		for _, p := range prefixes {
+			if strings.HasPrefix(path, p) {
+				return false
+			}
+		}
+
+		return true
+	}
 }
 
 // Handler exposes the router for in-process tests.
