@@ -10,17 +10,18 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/otelconnect"
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 )
 
 // Route is implemented by every BC's rpc adapter.
@@ -49,9 +50,11 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// New mounts every route, /healthz, /metrics (Prometheus text format from
-// gatherer) and, when cfg.Docs is set, /api/docs.
-func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gatherer prometheus.Gatherer) *Server {
+// New mounts every route, /healthz, /metrics (Prometheus exposition of the
+// OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
+// OpenTelemetry span (otelconnect, outermost) and a request logger carrying
+// its trace_id.
+func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *otel.Providers) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
@@ -60,13 +63,21 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gathe
 	engine.RedirectTrailingSlash = false
 	engine.RedirectFixedPath = false
 
-	opts := connect.WithInterceptors(NewLoggingInterceptor(logger))
+	tracing, err := otelconnect.NewInterceptor(
+		otelconnect.WithTracerProvider(tel.Tracer),
+		otelconnect.WithMeterProvider(tel.Meter),
+		otelconnect.WithPropagator(tel.Propagator),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("otelconnect interceptor: %w", err)
+	}
+	opts := connect.WithInterceptors(tracing, NewLoggingInterceptor(logger))
 	for _, r := range routes {
 		prefix, h := r.Route(opts)
 		engine.Any(prefix+"*procedure", gin.WrapH(h))
 	}
 	engine.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
-	engine.GET("/metrics", gin.WrapH(promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{})))
+	engine.GET("/metrics", gin.WrapH(tel.MetricsHandler))
 	if cfg.Docs {
 		mountDocs(engine, docs)
 		logger.Info("api docs enabled", "path", DocsPath)
@@ -88,7 +99,7 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gathe
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 		logger: logger,
-	}
+	}, nil
 }
 
 // Handler exposes the router for in-process tests.

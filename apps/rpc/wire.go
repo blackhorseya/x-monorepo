@@ -7,7 +7,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/metrics"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
@@ -16,11 +16,11 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	wire.Build(
-		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Log", "Postgres"),
+		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Log", "Postgres", "OTel"),
 		postgres.NewDB,
 		server.NewLogger,
 		server.New,
-		metrics.ProviderSet,
+		otel.ProviderSet,
 		NewRoutes,
 		NewDocs,
 		ordering.ProviderSet,

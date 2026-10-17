@@ -255,7 +255,7 @@ tasks:
   # ── Local infrastructure ────────────────────────────────────────────────────
 
   compose-up:
-    desc: 'start local infra (Postgres on :5432, user/pass/db = app) — apps run on the host'
+    desc: 'start local infra (Postgres :5432 user/pass/db=app; otel-lgtm: Grafana :3000, OTLP :4317) — apps run on the host'
     cmds:
       - '{{.COMPOSE}} -f deployments/docker/docker-compose.yaml up -d'
 
