@@ -26,13 +26,14 @@ func Logging[I, O any](name string) Decorator[I, O] {
 			}
 
 			var de *kernel.Error
-			if errors.Is(err, kernel.ErrConcurrentUpdate) {
+			switch {
+			case errors.Is(err, kernel.ErrConcurrentUpdate):
 				// A lost optimistic-lock race: expected under contention, retried by the caller.
 				ctx.Warn("usecase aborted", append(attrs, "error", err)...)
-			} else if errors.As(err, &de) {
+			case errors.As(err, &de):
 				// Domain errors are expected outcomes, not incidents.
 				ctx.Info("usecase rejected", append(attrs, "kind", de.Kind().String(), "code", de.Code())...)
-			} else {
+			default:
 				ctx.Error("usecase failed", append(attrs, "error", err)...)
 			}
 
