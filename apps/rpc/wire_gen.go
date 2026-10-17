@@ -8,6 +8,7 @@ package main
 
 import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -37,29 +38,40 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		return nil, nil, err
 	}
 	repository := ordering.ProvideOrderRepository(db, logger)
-	uuidGenerator := system.NewUUIDGenerator()
-	clock := system.NewClock()
-	meterProvider := providers.Meter
-	recorder, err := usecasex.NewRecorder(meterProvider)
+	transactor := ordering.ProvideTransactor(db)
+	publisher, cleanup3, err := ordering.ProvidePublisher(db, logger, providers)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	v := ordering.ProvideCreateOrder(repository, uuidGenerator, clock, recorder)
+	eventsPublisher := events.NewPublisher(publisher)
+	uuidGenerator := system.NewUUIDGenerator()
+	clock := system.NewClock()
+	meterProvider := providers.Meter
+	recorder, err := usecasex.NewRecorder(meterProvider)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	v := ordering.ProvideCreateOrder(repository, transactor, eventsPublisher, uuidGenerator, clock, recorder)
 	v2 := ordering.ProvideGetOrder(repository, recorder)
-	v3 := ordering.ProvideCancelOrder(repository, clock, recorder)
+	v3 := ordering.ProvideCancelOrder(repository, transactor, eventsPublisher, clock, recorder)
 	v4 := ordering.ProvideListOrders(repository, recorder)
 	orderService := rpc.NewOrderService(v, v2, v3, v4)
 	v5 := NewRoutes(orderService)
 	v6 := NewDocs()
 	serverServer, err := server.New(http, logger, v5, v6, providers)
 	if err != nil {
+		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	return serverServer, func() {
+		cleanup3()
 		cleanup2()
 		cleanup()
 	}, nil

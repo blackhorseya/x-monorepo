@@ -3,6 +3,7 @@ go 1.27
 use (
 	./apps/migrate
 	./apps/rpc
+	./apps/worker
 	./pkgs/kernel
 	./pkgs/ordering
 	./pkgs/platform

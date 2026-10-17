@@ -413,6 +413,63 @@ components:
       description: |-
         OrderCancellationRequested is published by another BC (e.g. payment timeout)
          to ask ordering to cancel an order.
+    ordering.v1.OrderCancelled:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        customerId:
+          type: string
+          title: customer_id
+        cancelledAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: cancelled_at
+      title: OrderCancelled
+      additionalProperties: false
+      description: |-
+        OrderCancelled is raised when an order moves to CANCELLED, whatever asked
+         for it (client call or OrderCancellationRequested).
+    ordering.v1.OrderCreated:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        customerId:
+          type: string
+          title: customer_id
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ordering.v1.OrderCreatedItem'
+          title: items
+        total:
+          allOf:
+            - $ref: '#/components/schemas/common.v1.Money'
+          title: total
+        createdAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: created_at
+      title: OrderCreated
+      additionalProperties: false
+      description: |-
+        OrderCreated is raised once per New order, in the same transaction that
+         persists it.
+    ordering.v1.OrderCreatedItem:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+        quantity:
+          type: integer
+          title: quantity
+          format: int32
+      title: OrderCreatedItem
+      additionalProperties: false
     ordering.v1.OrderStatus:
       type: string
       title: OrderStatus

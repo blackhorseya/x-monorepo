@@ -1,7 +1,8 @@
-// Package consumer adapts broker messages to use cases. It drives the SAME
+// Package consumer adapts messages from the event bus to use cases. It drives the SAME
 // CancelOrder use case as the rpc adapter; only the decode step differs.
-// Broker plumbing (NATS / SQS subscription, ack, retry) belongs to the app or a
-// platform package; this handler only knows "bytes in, error out".
+// Subscription, ack, retry and the poison queue are platform/eventbus (Watermill
+// router) and apps/worker; this handler only knows "bytes in, error out" and
+// is registered through ordering.Subscriptions.
 package consumer
 
 import (
@@ -15,14 +16,16 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
-// Topic is the subject this handler subscribes to.
-const Topic = "ordering.v1.OrderCancellationRequested"
+// Topic is the subject this handler subscribes to: the proto full name.
+var Topic = string((&orderingv1.OrderCancellationRequested{}).ProtoReflect().Descriptor().FullName())
 
-// ErrDrop tells the broker plumbing the message is poison and must not be retried.
-var ErrDrop = errors.New("consumer: drop message")
+// ErrDrop tells the router the message is poison or no longer applicable and
+// must be acknowledged without retry (eventbus.ErrDrop).
+var ErrDrop = eventbus.ErrDrop
 
 type CancelOrderUC = usecasex.UseCase[dto.CancelOrderInput, *dto.OrderOutput]
 
@@ -37,10 +40,10 @@ func NewOrderCancellationHandler(cancelOrder CancelOrderUC) *OrderCancellationHa
 
 // Handle decodes the payload and runs the use case.
 //
-// Error contract for the broker plumbing:
+// Error contract (eventbus):
 //   - nil            → ack
 //   - ErrDrop        → ack and drop (undecodable / permanently invalid)
-//   - any other err  → nack / retry
+//   - any other err  → retry, then poison queue
 func (h *OrderCancellationHandler) Handle(c context.Context, payload []byte) error {
 	ctx := contextx.FromContext(c)
 

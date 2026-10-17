@@ -2,10 +2,42 @@ syntax = "proto3";
 
 package ordering.v1;
 
+import "common/v1/money.proto";
 import "google/protobuf/timestamp.proto";
 
-// Messages consumed by the ordering BC from a broker. The consumer adapter
-// decodes these and calls the SAME use cases the RPC adapter does.
+// Integration events of the ordering bounded context. The topic of every
+// message is its fully-qualified proto name (e.g. "ordering.v1.OrderCreated").
+//
+// Published by ordering (through its transactional outbox, see
+// pkgs/platform/outbox): other BCs subscribe to these. They are a wire
+// contract like entity.proto: the domain raises order.Event values and the
+// events adapter maps them here.
+
+// OrderCreated is raised once per New order, in the same transaction that
+// persists it.
+message OrderCreated {
+  string order_id = 1;
+  string customer_id = 2;
+  repeated OrderCreatedItem items = 3;
+  common.v1.Money total = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message OrderCreatedItem {
+  string sku = 1;
+  int32 quantity = 2;
+}
+
+// OrderCancelled is raised when an order moves to CANCELLED, whatever asked
+// for it (client call or OrderCancellationRequested).
+message OrderCancelled {
+  string order_id = 1;
+  string customer_id = 2;
+  google.protobuf.Timestamp cancelled_at = 3;
+}
+
+// Consumed by ordering from a broker. The consumer adapter decodes these and
+// calls the SAME use cases the RPC adapter does.
 
 // OrderCancellationRequested is published by another BC (e.g. payment timeout)
 // to ask ordering to cancel an order.

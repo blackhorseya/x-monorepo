@@ -23,6 +23,7 @@ type Order struct {
 	status     Status
 	createdAt  time.Time
 	updatedAt  time.Time
+	events     []Event // raised, not yet pulled (see events.go)
 }
 
 // Params are the inputs of New. A parameter object (not state: every field is exported
@@ -49,7 +50,7 @@ func New(p Params) (*Order, error) {
 		return nil, err
 	}
 
-	return &Order{
+	o := &Order{
 		id:         p.ID,
 		customerID: p.CustomerID,
 		items:      slices.Clone(p.Items),
@@ -57,7 +58,10 @@ func New(p Params) (*Order, error) {
 		status:     StatusPending,
 		createdAt:  p.Now,
 		updatedAt:  p.Now,
-	}, nil
+	}
+	o.record(NewCreated(o))
+
+	return o, nil
 }
 
 // ReconstituteParams carry persisted state back into the aggregate, as stored.
@@ -96,6 +100,7 @@ func (x *Order) Cancel(now time.Time) error {
 
 	x.status = StatusCancelled
 	x.updatedAt = now
+	x.record(NewCancelled(x))
 
 	return nil
 }

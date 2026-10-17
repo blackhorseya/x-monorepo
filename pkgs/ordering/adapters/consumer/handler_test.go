@@ -12,6 +12,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 )
 
@@ -23,13 +24,17 @@ type ids struct{}
 
 func (ids) NewID(context.Context) (string, error) { return "o-1", nil }
 
+type noEvents struct{}
+
+func (noEvents) Publish(context.Context, ...order.Event) error { return nil }
+
 // The consumer and the rpc adapter share one CancelOrder use case; here we
 // drive it from an event and assert the same domain outcome and error contract.
 func TestOrderCancellationHandler(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
-	create := usecase.NewCreateOrder(repo, ids{}, clock{})
-	h := consumer.NewOrderCancellationHandler(usecase.NewCancelOrder(repo, clock{}))
+	create := usecase.NewCreateOrder(repo, memory.NewTransactor(), noEvents{}, ids{}, clock{})
+	h := consumer.NewOrderCancellationHandler(usecase.NewCancelOrder(repo, memory.NewTransactor(), noEvents{}, clock{}))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",

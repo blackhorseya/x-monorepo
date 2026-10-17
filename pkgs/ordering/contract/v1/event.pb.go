@@ -7,6 +7,7 @@
 package orderingv1
 
 import (
+	v1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -22,6 +23,198 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// OrderCreated is raised once per New order, in the same transaction that
+// persists it.
+type OrderCreated struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	CustomerId    string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	Items         []*OrderCreatedItem    `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"`
+	Total         *v1.Money              `protobuf:"bytes,4,opt,name=total,proto3" json:"total,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OrderCreated) Reset() {
+	*x = OrderCreated{}
+	mi := &file_ordering_v1_event_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrderCreated) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrderCreated) ProtoMessage() {}
+
+func (x *OrderCreated) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_event_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrderCreated.ProtoReflect.Descriptor instead.
+func (*OrderCreated) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *OrderCreated) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *OrderCreated) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *OrderCreated) GetItems() []*OrderCreatedItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *OrderCreated) GetTotal() *v1.Money {
+	if x != nil {
+		return x.Total
+	}
+	return nil
+}
+
+func (x *OrderCreated) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+type OrderCreatedItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sku           string                 `protobuf:"bytes,1,opt,name=sku,proto3" json:"sku,omitempty"`
+	Quantity      int32                  `protobuf:"varint,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OrderCreatedItem) Reset() {
+	*x = OrderCreatedItem{}
+	mi := &file_ordering_v1_event_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrderCreatedItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrderCreatedItem) ProtoMessage() {}
+
+func (x *OrderCreatedItem) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_event_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrderCreatedItem.ProtoReflect.Descriptor instead.
+func (*OrderCreatedItem) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *OrderCreatedItem) GetSku() string {
+	if x != nil {
+		return x.Sku
+	}
+	return ""
+}
+
+func (x *OrderCreatedItem) GetQuantity() int32 {
+	if x != nil {
+		return x.Quantity
+	}
+	return 0
+}
+
+// OrderCancelled is raised when an order moves to CANCELLED, whatever asked
+// for it (client call or OrderCancellationRequested).
+type OrderCancelled struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	CustomerId    string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	CancelledAt   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=cancelled_at,json=cancelledAt,proto3" json:"cancelled_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OrderCancelled) Reset() {
+	*x = OrderCancelled{}
+	mi := &file_ordering_v1_event_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrderCancelled) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrderCancelled) ProtoMessage() {}
+
+func (x *OrderCancelled) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_event_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrderCancelled.ProtoReflect.Descriptor instead.
+func (*OrderCancelled) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *OrderCancelled) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *OrderCancelled) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *OrderCancelled) GetCancelledAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CancelledAt
+	}
+	return nil
+}
+
 // OrderCancellationRequested is published by another BC (e.g. payment timeout)
 // to ask ordering to cancel an order.
 type OrderCancellationRequested struct {
@@ -35,7 +228,7 @@ type OrderCancellationRequested struct {
 
 func (x *OrderCancellationRequested) Reset() {
 	*x = OrderCancellationRequested{}
-	mi := &file_ordering_v1_event_proto_msgTypes[0]
+	mi := &file_ordering_v1_event_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -47,7 +240,7 @@ func (x *OrderCancellationRequested) String() string {
 func (*OrderCancellationRequested) ProtoMessage() {}
 
 func (x *OrderCancellationRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_ordering_v1_event_proto_msgTypes[0]
+	mi := &file_ordering_v1_event_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -60,7 +253,7 @@ func (x *OrderCancellationRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderCancellationRequested.ProtoReflect.Descriptor instead.
 func (*OrderCancellationRequested) Descriptor() ([]byte, []int) {
-	return file_ordering_v1_event_proto_rawDescGZIP(), []int{0}
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *OrderCancellationRequested) GetOrderId() string {
@@ -88,7 +281,23 @@ var File_ordering_v1_event_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x17ordering/v1/event.proto\x12\vordering.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8e\x01\n" +
+	"\x17ordering/v1/event.proto\x12\vordering.v1\x1a\x15common/v1/money.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe2\x01\n" +
+	"\fOrderCreated\x12\x19\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x1f\n" +
+	"\vcustomer_id\x18\x02 \x01(\tR\n" +
+	"customerId\x123\n" +
+	"\x05items\x18\x03 \x03(\v2\x1d.ordering.v1.OrderCreatedItemR\x05items\x12&\n" +
+	"\x05total\x18\x04 \x01(\v2\x10.common.v1.MoneyR\x05total\x129\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"@\n" +
+	"\x10OrderCreatedItem\x12\x10\n" +
+	"\x03sku\x18\x01 \x01(\tR\x03sku\x12\x1a\n" +
+	"\bquantity\x18\x02 \x01(\x05R\bquantity\"\x8b\x01\n" +
+	"\x0eOrderCancelled\x12\x19\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x1f\n" +
+	"\vcustomer_id\x18\x02 \x01(\tR\n" +
+	"customerId\x12=\n" +
+	"\fcancelled_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcancelledAt\"\x8e\x01\n" +
 	"\x1aOrderCancellationRequested\x12\x19\n" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12=\n" +
@@ -108,18 +317,26 @@ func file_ordering_v1_event_proto_rawDescGZIP() []byte {
 	return file_ordering_v1_event_proto_rawDescData
 }
 
-var file_ordering_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_ordering_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_ordering_v1_event_proto_goTypes = []any{
-	(*OrderCancellationRequested)(nil), // 0: ordering.v1.OrderCancellationRequested
-	(*timestamppb.Timestamp)(nil),      // 1: google.protobuf.Timestamp
+	(*OrderCreated)(nil),               // 0: ordering.v1.OrderCreated
+	(*OrderCreatedItem)(nil),           // 1: ordering.v1.OrderCreatedItem
+	(*OrderCancelled)(nil),             // 2: ordering.v1.OrderCancelled
+	(*OrderCancellationRequested)(nil), // 3: ordering.v1.OrderCancellationRequested
+	(*v1.Money)(nil),                   // 4: common.v1.Money
+	(*timestamppb.Timestamp)(nil),      // 5: google.protobuf.Timestamp
 }
 var file_ordering_v1_event_proto_depIdxs = []int32{
-	1, // 0: ordering.v1.OrderCancellationRequested.requested_at:type_name -> google.protobuf.Timestamp
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 0: ordering.v1.OrderCreated.items:type_name -> ordering.v1.OrderCreatedItem
+	4, // 1: ordering.v1.OrderCreated.total:type_name -> common.v1.Money
+	5, // 2: ordering.v1.OrderCreated.created_at:type_name -> google.protobuf.Timestamp
+	5, // 3: ordering.v1.OrderCancelled.cancelled_at:type_name -> google.protobuf.Timestamp
+	5, // 4: ordering.v1.OrderCancellationRequested.requested_at:type_name -> google.protobuf.Timestamp
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_ordering_v1_event_proto_init() }
@@ -133,7 +350,7 @@ func file_ordering_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ordering_v1_event_proto_rawDesc), len(file_ordering_v1_event_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

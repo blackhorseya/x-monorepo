@@ -20,14 +20,24 @@ type fixedClock struct{ t time.Time }
 
 func (i fixedClock) Now() time.Time { return i.t }
 
+// recorder is a port.EventPublisher that keeps what was published, in order.
+type recorder struct{ events []order.Event }
+
+func (r *recorder) Publish(_ context.Context, evs ...order.Event) error {
+	r.events = append(r.events, evs...)
+	return nil
+}
+
 func TestCreateGetCancel(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
 	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
 
-	create := usecase.NewCreateOrder(repo, fixedIDs{id: "o-1"}, clock)
+	tx := memory.NewTransactor()
+	rec := &recorder{}
+	create := usecase.NewCreateOrder(repo, tx, rec, fixedIDs{id: "o-1"}, clock)
 	get := usecase.NewGetOrder(repo)
-	cancel := usecase.NewCancelOrder(repo, clock)
+	cancel := usecase.NewCancelOrder(repo, tx, rec, clock)
 
 	created, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
@@ -58,5 +68,16 @@ func TestCreateGetCancel(t *testing.T) {
 
 	if _, err = get.Execute(c, dto.GetOrderInput{OrderID: "missing"}); !errors.Is(err, order.ErrNotFound) {
 		t.Fatalf("get missing err = %v, want ErrNotFound", err)
+	}
+
+	// Exactly one event per successful state change, published through the transactor.
+	if len(rec.events) != 2 {
+		t.Fatalf("published %d events, want 2 (Created, Cancelled)", len(rec.events))
+	}
+	if _, ok := rec.events[0].(order.Created); !ok || rec.events[0].OrderID() != "o-1" {
+		t.Fatalf("event[0] = %T %v", rec.events[0], rec.events[0])
+	}
+	if _, ok := rec.events[1].(order.Cancelled); !ok {
+		t.Fatalf("event[1] = %T", rec.events[1])
 	}
 }
