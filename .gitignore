@@ -504,7 +504,6 @@ coverage.txt
 .worktrees/
 configs/*
 !configs/*.example.*
-!configs/local.yaml
 
 ### Monorepo ###
 .turbo/

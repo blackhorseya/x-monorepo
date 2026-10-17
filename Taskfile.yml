@@ -20,7 +20,8 @@ vars:
   # Container runtime for local infra: podman first, docker as fallback.
   COMPOSE:
     sh: 'command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose"'
-  # Config file `task run` / `task migrate` load (APP_CONFIG). Override: task run CONFIG=configs/config.yaml
+  # Config file `task run` / `task migrate` load (APP_CONFIG). Gitignored; seeded from
+  # configs/config.example.yaml on first use. Override: task run CONFIG=<file>
   CONFIG: '{{.CONFIG | default (printf "%s/configs/local.yaml" .ROOT_DIR)}}'
 
   BUF_VERSION: v1.74.0
@@ -229,13 +230,21 @@ tasks:
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
 
   run:
-    desc: 'build and run ./bin/rpc with configs/local.yaml (text logs, /api/docs, compose Postgres); task run CONFIG=<file> to use another'
-    deps: [build]
+    desc: 'build and run ./bin/rpc with configs/local.yaml (gitignored; seeded from the example); task run CONFIG=<file> to use another'
+    deps: [build, config]
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/rpc']
 
+  config:
+    desc: 'create configs/local.yaml from configs/config.example.yaml if missing'
+    status: ['test -f {{.CONFIG}}']
+    cmds:
+      - cp configs/config.example.yaml {{.CONFIG}}
+      - 'echo "seeded {{.CONFIG}} from configs/config.example.yaml — edit it, it is gitignored"'
+
   migrate:
     desc: 'task migrate -- up|down|version → every BC''s migrations against postgres.url of configs/local.yaml (or CONFIG=<file> / APP_POSTGRES_URL)'
+    deps: [config]
     preconditions:
       - sh: test -n "{{.CLI_ARGS}}"
         msg: 'usage: task migrate -- up|down|version'
