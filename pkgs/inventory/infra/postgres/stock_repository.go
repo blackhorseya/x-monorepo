@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -55,31 +54,40 @@ func (i *StockRepository) FindBySKU(c context.Context, sku stock.SKU) (*stock.St
 	})
 }
 
-// Save is one upsert: insert the row, or update it only if nobody else did
-// since it was loaded (`WHERE stocks.version = EXCLUDED.version`), bumping the
-// version. Zero rows affected means the check failed → ErrStale.
+// Save inserts a never-saved stock (Version 0) with version 1, or updates a
+// loaded one `WHERE version = <loaded>`, bumping it. Both ways a lost race is
+// ErrStale: a second insert of the same SKU hits the primary key, an update
+// whose version moved on matches zero rows. Either way the caller reloads and
+// retries (SetStock then restocks the row the other writer created).
 func (i *StockRepository) Save(c context.Context, s *stock.Stock) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	row := stockRow{SKU: s.SKU().String(), OnHand: s.OnHand(), Reserved: s.Reserved(), Version: s.Version(), UpdatedAt: s.UpdatedAt()}
-	res := platformpg.TxOrDB(ctx, i.db).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "sku"}},
-		DoUpdates: clause.Set{
-			{Column: clause.Column{Name: "on_hand"}, Value: row.OnHand},
-			{Column: clause.Column{Name: "reserved"}, Value: row.Reserved},
-			{Column: clause.Column{Name: "updated_at"}, Value: row.UpdatedAt},
-			{Column: clause.Column{Name: "version"}, Value: gorm.Expr("stocks.version + 1")},
-		},
-		Where: clause.Where{Exprs: []clause.Expression{gorm.Expr("stocks.version = EXCLUDED.version")}},
-	}).Create(&row)
+	db := platformpg.TxOrDB(ctx, i.db)
+	if s.Version() == 0 {
+		row := stockRow{SKU: s.SKU().String(), OnHand: s.OnHand(), Reserved: s.Reserved(), Version: 1, UpdatedAt: s.UpdatedAt()}
+		if err := db.Create(&row).Error; err != nil {
+			return translate(fmt.Errorf("insert stock %s: %w", s.SKU(), err), nil, fmt.Errorf("insert stock %s: %w", s.SKU(), stock.ErrStale))
+		}
+
+		return nil
+	}
+
+	res := db.Model(&stockRow{}).
+		Where("sku = ? AND version = ?", s.SKU().String(), s.Version()).
+		Updates(map[string]any{
+			"on_hand":    s.OnHand(),
+			"reserved":   s.Reserved(),
+			"updated_at": s.UpdatedAt(),
+			"version":    gorm.Expr("version + 1"),
+		})
 	if res.Error != nil {
-		return fmt.Errorf("save stock %s: %w", s.SKU(), res.Error)
+		return fmt.Errorf("update stock %s: %w", s.SKU(), res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return fmt.Errorf("save stock %s: %w", s.SKU(), stock.ErrStale)
+		return fmt.Errorf("update stock %s: %w", s.SKU(), stock.ErrStale)
 	}
 
 	return nil
