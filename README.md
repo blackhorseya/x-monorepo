@@ -358,8 +358,8 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 ## Workflow
 
 ### 新增 RPC
-0. request 欄位的形狀規則（必填 / 範圍 / pattern）用 `buf.validate` 寫在 proto 上，不要在 adapter 手刻
-1. 改 `protos/<bc>/v1/service.proto` → `task gen`（`task breaking` 檢查相容）
+1. 改 `protos/<bc>/v1/service.proto`，request 欄位的形狀規則（必填 / 範圍 / pattern）用 `buf.validate` 寫在 message 上，不要在 adapter 手刻
+   → `task gen`（`task breaking` 檢查相容）
 2. domain 加行為 → `application/dto` + `usecase`
 3. `provider.go` 加 `ProvideXxx`，用 `decorate(name, rec, uc)` 包起來
 4. `adapters/rpc` 實作新方法（`var _ XxxServiceHandler` 會提醒）→ `task wire`
