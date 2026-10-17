@@ -47,11 +47,13 @@ var ProviderSet = wire.NewSet(
 	wire.FieldsOf(new(*Providers), "Meter", "Logger"),
 )
 
-// Providers is what instrumentation (otelconnect, usecasex, …) consumes.
+// Providers is what instrumentation (otelconnect, otelgin, gorm, usecasex, …) consumes.
 type Providers struct {
-	Tracer     trace.TracerProvider
-	Meter      metric.MeterProvider
-	Propagator propagation.TextMapPropagator
+	// ServiceName is the resolved service.name (config or executable name).
+	ServiceName string
+	Tracer      trace.TracerProvider
+	Meter       metric.MeterProvider
+	Propagator  propagation.TextMapPropagator
 	// Logger is the root logger: stdout, plus OTLP (Loki) when exporting.
 	Logger *slog.Logger
 	// MetricsHandler serves the Prometheus exposition of Meter (GET /metrics).
@@ -126,6 +128,7 @@ func New(cfg config.OTel, logCfg config.Log) (*Providers, func(), error) {
 	}
 
 	return &Providers{
+		ServiceName:    serviceName(cfg),
 		Tracer:         tracer,
 		Meter:          mp,
 		Propagator:     propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}),

@@ -13,6 +13,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 )
 
 // NewDB opens gorm for cfg.URL and pings once so misconfiguration fails at
@@ -24,7 +25,11 @@ import (
 // ErrForeignKeyViolated instead of raw pgconn codes, so BC repositories can
 // translate with errors.Is. gorm's own logger is silent: errors already reach
 // the usecase Logging decorator, and a second log line per query is noise.
-func NewDB(cfg config.Postgres) (*gorm.DB, func(), error) {
+//
+// Every statement becomes a child span of the request (see tracing.go).
+// Query variables are left out of spans: they are customer data, and the SQL
+// shape is what you need to read a trace.
+func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	if cfg.URL == "" {
 		return nil, func() {}, nil
 	}
@@ -35,6 +40,9 @@ func NewDB(cfg config.Postgres) (*gorm.DB, func(), error) {
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("open postgres: %w", err)
+	}
+	if err := db.Use(tracing{tracer: tel.Tracer.Tracer("github.com/blackhorseya/x-monorepo/pkgs/platform/postgres")}); err != nil {
+		return nil, nil, fmt.Errorf("gorm tracing plugin: %w", err)
 	}
 
 	sqlDB, err := db.DB()
