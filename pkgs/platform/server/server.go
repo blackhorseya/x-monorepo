@@ -2,7 +2,7 @@
 // by every app. It knows nothing about any bounded context.
 //
 // gin is the HTTP router: Connect handlers are mounted under their service
-// prefix with gin.WrapH, plain routes (/healthz, /metrics, /docs) are gin
+// prefix with gin.WrapH, plain routes (/healthz, /metrics, /api/docs) are gin
 // handlers. Request logging for RPCs stays in the Connect interceptor, which
 // sees procedure and code; gin only contributes routing and panic recovery.
 package server
@@ -50,7 +50,7 @@ type Server struct {
 }
 
 // New mounts every route, /healthz, /metrics (Prometheus text format from
-// gatherer) and, when cfg.Docs is set, /docs.
+// gatherer) and, when cfg.Docs is set, /api/docs.
 func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gatherer prometheus.Gatherer) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
@@ -69,9 +69,9 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gathe
 	engine.GET("/metrics", gin.WrapH(promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{})))
 	if cfg.Docs {
 		mountDocs(engine, docs)
-		logger.Info("api docs enabled", "path", "/docs")
+		logger.Info("api docs enabled", "path", DocsPath)
 	} else {
-		engine.GET("/docs", func(c *gin.Context) {
+		engine.GET(DocsPath, func(c *gin.Context) {
 			c.String(http.StatusNotFound, "api docs are disabled; start with APP_HTTP_DOCS=true\n")
 		})
 	}

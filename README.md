@@ -31,7 +31,7 @@ task tools          # buf / protoc-gen-go / protoc-gen-connect-go / wire / golan
 task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum）
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # depguard 強制分層與 BC 邊界
-task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；dev 預設開 /docs（production 要 APP_HTTP_DOCS=true 才有）
+task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；dev 預設開 /api/docs（production 要 APP_HTTP_DOCS=true 才有）
                     # 沒設 APP_DB_URL 就用 in-memory repository；要接 Postgres：
 export APP_DB_URL='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）
@@ -100,7 +100,7 @@ dto 不要照著 pb 抄。
 ## server：gin + Connect
 
 `platform/server` 用 gin 當 HTTP router：每個 BC 的 Connect handler 以 `gin.WrapH` 掛在 `/<pkg>.<Service>/*procedure`，
-`/healthz`、`/metrics`、`/docs` 是普通 gin route。`RedirectTrailingSlash` / `RedirectFixedPath` 關閉（gRPC client
+`/healthz`、`/metrics`、`/api/docs` 是普通 gin route。`RedirectTrailingSlash` / `RedirectFixedPath` 關閉（gRPC client
 不跟 redirect）；gin 只做 routing + `Recovery()`，RPC log 留在 Connect interceptor。HTTP/1.1 與 h2c 同一個 port，
 Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`）。
 
@@ -155,7 +155,7 @@ proto-first：OpenAPI 是 proto 的產物，不是另一份契約。`task gen` �
 （懂 Connect 的路徑與 error shape）把每個 BC 的 spec 生到 `pkgs/<bc>/contract/v1/openapi.yaml`，
 `protos/<bc>/v1/openapi.base.yaml` 提供 title / description 等手寫 metadata。
 BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 BC，`APP_HTTP_DOCS=true`
-時才掛 `/docs`（Scalar UI）與 `/openapi/<bc>.yaml`。production 不開。前端不需要它 —— `web/packages/proto`
+時才掛 `/api/docs`（Scalar UI，`/api/docs/<bc>`）與 `/api/openapi/<bc>.yaml`。production 不開。前端不需要它 —— `web/packages/proto`
 直接從 proto 生 connect-es client。
 
 ## Conventions
@@ -187,7 +187,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 | 環境變數 | 預設 | 說明 |
 |---|---|---|
 | `APP_HTTP_ADDR` | `:8080` | |
-| `APP_HTTP_DOCS` | `false` | 掛 `/docs`、`/openapi/<bc>.yaml`（`task run` 會開） |
+| `APP_HTTP_DOCS` | `false` | 掛 `/api/docs`、`/api/openapi/<bc>.yaml`（`task run` 會開） |
 | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
 | `APP_DB_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
 | `TEST_DATABASE_URL` | 空 | 只給 integration test |
