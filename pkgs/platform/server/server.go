@@ -1,5 +1,10 @@
 // Package server hosts Connect/gRPC/gRPC-Web services on one port and is shared
 // by every app. It knows nothing about any bounded context.
+//
+// gin is the HTTP router: Connect handlers are mounted under their service
+// prefix with gin.WrapH, plain routes (/healthz, /metrics, /docs) are gin
+// handlers. Request logging for RPCs stays in the Connect interceptor, which
+// sees procedure and code; gin only contributes routing and panic recovery.
 package server
 
 import (
@@ -11,6 +16,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -46,18 +52,23 @@ type Server struct {
 // New mounts every route, /healthz, /metrics (Prometheus text format from
 // gatherer) and, when cfg.Docs is set, /docs.
 func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gatherer prometheus.Gatherer) *Server {
-	mux := http.NewServeMux()
+	gin.SetMode(gin.ReleaseMode)
+	engine := gin.New()
+	engine.Use(gin.Recovery())
+	// Connect routes are "/<pkg>.<Service>/" prefixes; a procedure is the next segment.
+	// Redirecting or cleaning paths would break gRPC clients, so keep paths verbatim.
+	engine.RedirectTrailingSlash = false
+	engine.RedirectFixedPath = false
+
 	opts := connect.WithInterceptors(NewLoggingInterceptor(logger))
 	for _, r := range routes {
-		path, h := r.Route(opts)
-		mux.Handle(path, h)
+		prefix, h := r.Route(opts)
+		engine.Any(prefix+"*procedure", gin.WrapH(h))
 	}
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.Handle("GET /metrics", promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}))
+	engine.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
+	engine.GET("/metrics", gin.WrapH(promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{})))
 	if cfg.Docs {
-		mountDocs(mux, docs)
+		mountDocs(engine, docs)
 		logger.Info("api docs enabled", "path", "/docs")
 	}
 
@@ -68,7 +79,7 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gathe
 	return &Server{
 		srv: &http.Server{
 			Addr:              cfg.Addr,
-			Handler:           mux,
+			Handler:           engine,
 			Protocols:         protocols,
 			ReadHeaderTimeout: 5 * time.Second,
 		},
@@ -76,7 +87,7 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gathe
 	}
 }
 
-// Handler exposes the mux for in-process tests.
+// Handler exposes the router for in-process tests.
 func (s *Server) Handler() http.Handler { return s.srv.Handler }
 
 // Run blocks until c is cancelled, then shuts down gracefully.

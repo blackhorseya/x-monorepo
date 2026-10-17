@@ -109,3 +109,45 @@ func TestOrderService_E2E(t *testing.T) {
 		}
 	}
 }
+
+// gRPC needs HTTP/2 and gRPC-Web is a distinct wire format; both must survive the
+// router (gin wildcard routes + h2c) exactly like the Connect protocol does.
+func TestOrderService_Protocols(t *testing.T) {
+	srv, err := Initialize(&config.AppConfig{
+		HTTP: config.HTTP{Addr: ":0"},
+		Log:  config.Log{Level: "error", Format: "text"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewUnstartedServer(srv.Handler())
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	ts.Config.Protocols = protocols
+	ts.Start()
+	defer ts.Close()
+
+	h2c := new(http.Protocols)
+	h2c.SetUnencryptedHTTP2(true)
+	h2cClient := &http.Client{Transport: &http.Transport{Protocols: h2c}}
+
+	for _, tt := range []struct {
+		name   string
+		client *http.Client
+		opt    connect.ClientOption
+	}{
+		{"grpc", h2cClient, connect.WithGRPC()},
+		{"grpc-web", http.DefaultClient, connect.WithGRPCWeb()},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := orderingv1connect.NewOrderServiceClient(tt.client, ts.URL, tt.opt)
+			_, err := client.GetOrder(context.Background(), connect.NewRequest(&orderingv1.GetOrderRequest{Id: "nope"}))
+			var ce *connect.Error
+			if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
+				t.Fatalf("err = %v, want NotFound", err)
+			}
+		})
+	}
+}

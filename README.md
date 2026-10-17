@@ -88,6 +88,13 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 只放 usecase 需要的欄位）。同一個 usecase 被 rpc 和 consumer 兩個 adapter 呼叫時，dto 就是它們的共同語言。
 dto 不要照著 pb 抄。
 
+## server：gin + Connect
+
+`platform/server` 用 gin 當 HTTP router：每個 BC 的 Connect handler 以 `gin.WrapH` 掛在 `/<pkg>.<Service>/*procedure`，
+`/healthz`、`/metrics`、`/docs` 是普通 gin route。`RedirectTrailingSlash` / `RedirectFixedPath` 關閉（gRPC client
+不跟 redirect）；gin 只做 routing + `Recovery()`，RPC log 留在 Connect interceptor。HTTP/1.1 與 h2c 同一個 port，
+Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`）。
+
 ## usecasex：use case 的統一形狀與 decorator
 
 ```go
