@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -50,8 +51,8 @@ func TestOrderRepository_Postgres(t *testing.T) {
 	if err := platformpg.Up(c, cfg, m); err != nil {
 		t.Fatal(err)
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 1 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 1 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 2 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 2 clean", v, dirty, err)
 	}
 
 	// The version table must live inside the BC schema, never in public:
@@ -116,6 +117,54 @@ func TestOrderRepository_Postgres(t *testing.T) {
 	cancel()
 	if _, err := repo.FindByID(cancelled, "o-1"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled ctx: err = %v", err)
+	}
+
+	// List: keyset paging in SQL. o-1 (cancelled, c-1) already exists; add
+	// four more, two sharing a timestamp so the id tie-breaker runs in Postgres.
+	for i, spec := range []struct {
+		id, customer string
+		at           time.Time
+	}{
+		{"o-2", "c-2", now.Add(2 * time.Second)},
+		{"o-3", "c-1", now.Add(3 * time.Second)},
+		{"o-4", "c-1", now.Add(3 * time.Second)},
+		{"o-5", "c-2", now.Add(5 * time.Second)},
+	} {
+		o, err := order.New(order.Params{ID: order.ID(spec.id), CustomerID: spec.customer, Items: []order.LineItem{li("A", 1, 100)}, Now: spec.at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Save(c, o); err != nil {
+			t.Fatalf("Save %d: %v", i, err)
+		}
+	}
+
+	var ids []string
+	var after *order.Cursor
+	for page := 0; ; page++ {
+		got, next, err := repo.List(c, order.ListParams{Limit: 2, After: after})
+		if err != nil {
+			t.Fatalf("List page %d: %v", page, err)
+		}
+		for _, o := range got {
+			ids = append(ids, o.ID().String())
+			if len(o.Items()) == 0 {
+				t.Fatalf("List: order %s came back without items", o.ID())
+			}
+		}
+		if next == nil {
+			break
+		}
+		after = next
+	}
+	if want := "[o-5 o-4 o-3 o-2 o-1]"; fmt.Sprint(ids) != want {
+		t.Fatalf("List walk = %v, want %v", ids, want)
+	}
+
+	pending := order.StatusPending
+	filtered, next, err := repo.List(c, order.ListParams{CustomerID: "c-1", Status: &pending, Limit: 10})
+	if err != nil || next != nil || len(filtered) != 2 || filtered[0].ID() != "o-4" || filtered[1].ID() != "o-3" {
+		t.Fatalf("List filtered = %v next=%v err=%v", filtered, next, err)
 	}
 }
 

@@ -33,6 +33,7 @@ var ProviderSet = wire.NewSet(
 	ProvideCreateOrder,
 	ProvideGetOrder,
 	ProvideCancelOrder,
+	ProvideListOrders,
 
 	// adapters
 	rpc.NewOrderService,
@@ -70,4 +71,8 @@ func ProvideGetOrder(repo order.Repository, rec *usecasex.Recorder) rpc.GetOrder
 
 func ProvideCancelOrder(repo order.Repository, clock port.Clock, rec *usecasex.Recorder) rpc.CancelOrderUC {
 	return decorate("ordering.cancel_order", rec, usecase.NewCancelOrder(repo, clock))
+}
+
+func ProvideListOrders(repo order.Repository, rec *usecasex.Recorder) rpc.ListOrdersUC {
+	return decorate("ordering.list_orders", rec, usecase.NewListOrders(repo))
 }

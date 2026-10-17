@@ -122,6 +122,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ordering.v1.GetOrderResponse'
+  /ordering.v1.OrderService/ListOrders:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: ListOrders
+      description: |-
+        ListOrders pages through orders newest first (create_time desc, id desc).
+         Cursor pagination per AIP-158: pass next_page_token back unchanged with the
+         SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+      operationId: ordering.v1.OrderService.ListOrders
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.ListOrdersRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.ListOrdersResponse'
 components:
   schemas:
     common.v1.Money:
@@ -283,6 +325,43 @@ components:
             - $ref: '#/components/schemas/common.v1.Money'
           title: unit_price
       title: LineItem
+      additionalProperties: false
+    ordering.v1.ListOrdersRequest:
+      type: object
+      properties:
+        customerId:
+          type: string
+          title: customer_id
+          description: Empty = any customer.
+        status:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.OrderStatus'
+          title: status
+          description: ORDER_STATUS_UNSPECIFIED = any status.
+        pageSize:
+          type: integer
+          title: page_size
+          format: int32
+          description: 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+        pageToken:
+          type: string
+          title: page_token
+          description: Opaque; from the previous ListOrdersResponse.next_page_token.
+      title: ListOrdersRequest
+      additionalProperties: false
+    ordering.v1.ListOrdersResponse:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/ordering.v1.Order'
+          title: orders
+        nextPageToken:
+          type: string
+          title: next_page_token
+          description: Empty when this is the last page.
+      title: ListOrdersResponse
       additionalProperties: false
     ordering.v1.Order:
       type: object

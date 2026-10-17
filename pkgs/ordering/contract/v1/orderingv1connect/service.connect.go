@@ -41,6 +41,8 @@ const (
 	// OrderServiceCancelOrderProcedure is the fully-qualified name of the OrderService's CancelOrder
 	// RPC.
 	OrderServiceCancelOrderProcedure = "/ordering.v1.OrderService/CancelOrder"
+	// OrderServiceListOrdersProcedure is the fully-qualified name of the OrderService's ListOrders RPC.
+	OrderServiceListOrdersProcedure = "/ordering.v1.OrderService/ListOrders"
 )
 
 // OrderServiceClient is a client for the ordering.v1.OrderService service.
@@ -48,6 +50,10 @@ type OrderServiceClient interface {
 	CreateOrder(context.Context, *connect.Request[v1.CreateOrderRequest]) (*connect.Response[v1.CreateOrderResponse], error)
 	GetOrder(context.Context, *connect.Request[v1.GetOrderRequest]) (*connect.Response[v1.GetOrderResponse], error)
 	CancelOrder(context.Context, *connect.Request[v1.CancelOrderRequest]) (*connect.Response[v1.CancelOrderResponse], error)
+	// ListOrders pages through orders newest first (create_time desc, id desc).
+	// Cursor pagination per AIP-158: pass next_page_token back unchanged with the
+	// SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+	ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error)
 }
 
 // NewOrderServiceClient constructs a client for the ordering.v1.OrderService service. By default,
@@ -79,6 +85,12 @@ func NewOrderServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(orderServiceMethods.ByName("CancelOrder")),
 			connect.WithClientOptions(opts...),
 		),
+		listOrders: connect.NewClient[v1.ListOrdersRequest, v1.ListOrdersResponse](
+			httpClient,
+			baseURL+OrderServiceListOrdersProcedure,
+			connect.WithSchema(orderServiceMethods.ByName("ListOrders")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -87,6 +99,7 @@ type orderServiceClient struct {
 	createOrder *connect.Client[v1.CreateOrderRequest, v1.CreateOrderResponse]
 	getOrder    *connect.Client[v1.GetOrderRequest, v1.GetOrderResponse]
 	cancelOrder *connect.Client[v1.CancelOrderRequest, v1.CancelOrderResponse]
+	listOrders  *connect.Client[v1.ListOrdersRequest, v1.ListOrdersResponse]
 }
 
 // CreateOrder calls ordering.v1.OrderService.CreateOrder.
@@ -104,11 +117,20 @@ func (c *orderServiceClient) CancelOrder(ctx context.Context, req *connect.Reque
 	return c.cancelOrder.CallUnary(ctx, req)
 }
 
+// ListOrders calls ordering.v1.OrderService.ListOrders.
+func (c *orderServiceClient) ListOrders(ctx context.Context, req *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error) {
+	return c.listOrders.CallUnary(ctx, req)
+}
+
 // OrderServiceHandler is an implementation of the ordering.v1.OrderService service.
 type OrderServiceHandler interface {
 	CreateOrder(context.Context, *connect.Request[v1.CreateOrderRequest]) (*connect.Response[v1.CreateOrderResponse], error)
 	GetOrder(context.Context, *connect.Request[v1.GetOrderRequest]) (*connect.Response[v1.GetOrderResponse], error)
 	CancelOrder(context.Context, *connect.Request[v1.CancelOrderRequest]) (*connect.Response[v1.CancelOrderResponse], error)
+	// ListOrders pages through orders newest first (create_time desc, id desc).
+	// Cursor pagination per AIP-158: pass next_page_token back unchanged with the
+	// SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+	ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error)
 }
 
 // NewOrderServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -136,6 +158,12 @@ func NewOrderServiceHandler(svc OrderServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(orderServiceMethods.ByName("CancelOrder")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orderServiceListOrdersHandler := connect.NewUnaryHandler(
+		OrderServiceListOrdersProcedure,
+		svc.ListOrders,
+		connect.WithSchema(orderServiceMethods.ByName("ListOrders")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ordering.v1.OrderService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OrderServiceCreateOrderProcedure:
@@ -144,6 +172,8 @@ func NewOrderServiceHandler(svc OrderServiceHandler, opts ...connect.HandlerOpti
 			orderServiceGetOrderHandler.ServeHTTP(w, r)
 		case OrderServiceCancelOrderProcedure:
 			orderServiceCancelOrderHandler.ServeHTTP(w, r)
+		case OrderServiceListOrdersProcedure:
+			orderServiceListOrdersHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -163,4 +193,8 @@ func (UnimplementedOrderServiceHandler) GetOrder(context.Context, *connect.Reque
 
 func (UnimplementedOrderServiceHandler) CancelOrder(context.Context, *connect.Request[v1.CancelOrderRequest]) (*connect.Response[v1.CancelOrderResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ordering.v1.OrderService.CancelOrder is not implemented"))
+}
+
+func (UnimplementedOrderServiceHandler) ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ordering.v1.OrderService.ListOrders is not implemented"))
 }

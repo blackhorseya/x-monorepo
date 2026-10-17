@@ -61,3 +61,19 @@ func toProtoStatus(s string) orderingv1.OrderStatus {
 		return orderingv1.OrderStatus_ORDER_STATUS_UNSPECIFIED
 	}
 }
+
+// toDTOStatus maps a filter enum to the use case's string filter. UNSPECIFIED
+// means "any"; anything the server does not know is passed through by name so
+// the use case rejects it instead of silently widening the filter.
+func toDTOStatus(s orderingv1.OrderStatus) string {
+	switch s {
+	case orderingv1.OrderStatus_ORDER_STATUS_UNSPECIFIED:
+		return ""
+	case orderingv1.OrderStatus_ORDER_STATUS_PENDING:
+		return "PENDING"
+	case orderingv1.OrderStatus_ORDER_STATUS_CANCELLED:
+		return "CANCELLED"
+	default:
+		return s.String()
+	}
+}

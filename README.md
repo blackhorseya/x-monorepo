@@ -116,6 +116,23 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 
 分頁之類「該 RPC 自己的資料」（`next_page_token`、`total_size`）才放進 message，不做通用 `ResponseMeta` 欄位。
 
+## Pagination：cursor（keyset）+ opaque page token
+
+列表 RPC 走 [AIP-158](https://google.aip.dev/158) 的欄位名（`page_size` / `page_token` / `next_page_token`），不做 offset：
+`OFFSET n` 深頁是線性掃描，且中途插入或刪除會漏／重複；keyset 每頁都是 index range scan。`ListOrders` 是範例：
+
+| 層 | 負責 | 位置 |
+|---|---|---|
+| domain | 排序鍵固定 `(created_at desc, id desc)`（UUID 不可排序，`id` 只當 tie-breaker）；`order.Cursor` 是型別，`ListParams` 帶 `Limit` / `After` | `domain/order/cursor.go`、`repository.go` |
+| platform | `pagination.Clamp`（0 → 預設 20、上限 100、負數 → `InvalidArgument`）與 `EncodeToken` / `DecodeToken`（base64url(JSON)，不透明但不是秘密） | `platform/pagination` |
+| usecase | token 在這裡鑄造與驗證（所有 adapter 共用同一契約）；payload **包含當時的 filter**，換了 filter 還帶舊 token → `pagination.invalid_token` | `usecase/list_orders.go` |
+| infra | SQL `WHERE (created_at, id) < (?, ?) ORDER BY created_at DESC, id DESC LIMIT n+1`：多抓一筆判斷有沒有下一頁，不 COUNT；memory 版做一樣的比較 | `infra/postgres/order_repository.go`、migration `0002` 的兩個 composite index |
+
+- `total_size` 不回：大表 COUNT 是另一筆成本，要時再加 optional 欄位不算 breaking。
+- 篩選的「空值」語意：`customer_id` 空字串、`status = UNSPECIFIED` 代表不篩；但 server 不認識的 enum 值不會塌成「不篩」，
+  而是 `order.invalid_status_filter`（列表 API 寬鬆化等於擴大資料暴露面）。
+- 不開放 `order_by`：動態排序會讓 cursor 與 index 都要跟著變，有需求再加。
+
 ## Observability：OTel → LGTM
 
 `platform/otel.New(cfg.OTel, cfg.Log)` 回傳 `*otel.Providers`（TracerProvider、MeterProvider、Propagator、root `*slog.Logger`、
