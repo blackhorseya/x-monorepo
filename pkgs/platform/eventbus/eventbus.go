@@ -108,6 +108,8 @@ func NewGoChannel(l *slog.Logger) *gochannel.GoChannel {
 //  1. Recoverer: a panic becomes an error, not a dead worker.
 //  2. tracing: the producer's trace context (traceparent in metadata) becomes
 //     the parent of a CONSUMER span, so Tempo shows rpc → outbox → handler.
+//  3. withLogger: l scoped to the message (topic, handler, message_id,
+//     trace_id) goes into the context, so use-case logs reach Loki.
 //
 // The error contract (poison queue, retry, ErrDrop) is per bounded context —
 // each BC parks failed messages on its own poison topic — so it is added per
@@ -121,6 +123,7 @@ func NewRouter(l *slog.Logger, tel *otel.Providers) (*message.Router, error) {
 	r.AddMiddleware(
 		middleware.Recoverer,
 		tracing{propagator: tel.Propagator, tracer: tel.Tracer.Tracer(scopeName)}.middleware,
+		withLogger(l),
 	)
 
 	return r, nil
@@ -143,7 +146,8 @@ type ConsumerOptions struct {
 //
 //  1. PoisonQueue: after retries, park the message on opts.PoisonTopic and ack.
 //  2. Retry with backoff.
-//  3. drop: ErrDrop is logged and acknowledged (never retried, never poison).
+//  3. drop: ErrDrop is acknowledged (never retried, never poison).
+//  4. access: one Info "message" line per attempt (result ok / dropped / failed).
 //
 // Handler names are the topics, so Watermill's own metrics/logs name them.
 // One router can serve several BCs: call Register once per BC with its options.
@@ -174,7 +178,7 @@ func Register(r *message.Router, sub message.Subscriber, opts ConsumerOptions, s
 		handler := r.AddConsumerHandler(s.Topic, s.Topic, sub, func(msg *message.Message) error {
 			return h.Handle(msg.Context(), msg.Payload)
 		})
-		handler.AddMiddleware(poison, retry, drop)
+		handler.AddMiddleware(poison, retry, drop, access)
 	}
 
 	return nil
@@ -201,17 +205,63 @@ func ProvidePublisher(db *gorm.DB, l *slog.Logger, tel *otel.Providers) (message
 
 const scopeName = "github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 
-// drop turns ErrDrop into an ack with a log line; everything else passes
-// through to Retry / PoisonQueue.
+// drop turns ErrDrop into an ack (access has logged it); everything else
+// passes through to Retry / PoisonQueue.
 func drop(h message.HandlerFunc) message.HandlerFunc {
 	return func(msg *message.Message) ([]*message.Message, error) {
 		out, err := h(msg)
 		if errors.Is(err, ErrDrop) {
-			contextx.FromContext(msg.Context()).Info("eventbus: message dropped by handler", "message_id", msg.UUID, "error", err)
 			return out, nil
 		}
 
 		return out, err
+	}
+}
+
+// access logs one line per handler attempt: the consumer-side twin of the rpc
+// interceptor's "rpc" line, so worker traffic is visible at Info while use
+// cases log success at Debug. It is innermost, so every retry shows up and a
+// drop is distinguishable from a success. topic / message_id / trace_id come
+// from the logger withLogger put in the context.
+func access(h message.HandlerFunc) message.HandlerFunc {
+	return func(msg *message.Message) ([]*message.Message, error) {
+		start := time.Now()
+		out, err := h(msg)
+
+		ctx := contextx.FromContext(msg.Context())
+		attrs := []any{"duration_ms", time.Since(start).Milliseconds()}
+		switch {
+		case err == nil:
+			ctx.Info("message", append(attrs, "result", "ok")...)
+		case errors.Is(err, ErrDrop):
+			ctx.Info("message", append(attrs, "result", "dropped", "error", err)...)
+		default:
+			ctx.Error("message", append(attrs, "result", "failed", "error", err)...)
+		}
+
+		return out, err
+	}
+}
+
+// withLogger puts l, scoped to the message, into the message context: the
+// consumer-side twin of the rpc logging interceptor. Without it a handler's
+// contextx falls back to slog.Default(), which writes to stderr and never
+// reaches the OTel log pipeline. It runs inside tracing so the span exists.
+func withLogger(l *slog.Logger) message.HandlerMiddleware {
+	return func(h message.HandlerFunc) message.HandlerFunc {
+		return func(msg *message.Message) ([]*message.Message, error) {
+			ml := l.With(
+				"topic", message.SubscribeTopicFromCtx(msg.Context()),
+				"handler", message.HandlerNameFromCtx(msg.Context()),
+				"message_id", msg.UUID,
+			)
+			if sc := trace.SpanContextFromContext(msg.Context()); sc.IsValid() {
+				ml = ml.With("trace_id", sc.TraceID().String())
+			}
+			msg.SetContext(contextx.WithLogger(msg.Context(), ml))
+
+			return h(msg)
+		}
 	}
 }
 
