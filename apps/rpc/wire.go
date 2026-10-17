@@ -7,9 +7,11 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
 // Initialize is the injector. wire.go is the ONLY place AppConfig is mapped
@@ -20,6 +22,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		postgres.NewDB,
 		server.New,
 		otel.ProviderSet,
+		usecasex.NewRecorder,
+		eventbus.ProvidePublisher,
 		NewRoutes,
 		NewDocs,
 		ordering.ProviderSet,

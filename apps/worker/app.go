@@ -36,14 +36,17 @@ func NewWorker(
 		return nil, err
 	}
 
-	router, err := eventbus.NewRouter(logger, tel, eventbus.RouterOptions{
-		Poison:      publisher,
-		PoisonTopic: eventbus.PoisonTopic(ordering.Schema),
-	})
+	router, err := eventbus.NewRouter(logger, tel)
 	if err != nil {
 		return nil, err
 	}
-	eventbus.Register(router, sub, orderingSubs...)
+	err = eventbus.Register(router, sub, eventbus.ConsumerOptions{
+		Poison:      publisher,
+		PoisonTopic: eventbus.PoisonTopic(ordering.Schema),
+	}, orderingSubs...)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Worker{router: router, logger: logger}, nil
 }

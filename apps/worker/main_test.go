@@ -71,7 +71,7 @@ func TestWorker_EndToEnd(t *testing.T) {
 	logger := tel.Logger
 	repo := ordering.ProvideOrderRepository(db, logger)
 	tx := ordering.ProvideTransactor(db)
-	publisher, pubCleanup, err := ordering.ProvidePublisher(db, logger, tel)
+	publisher, pubCleanup, err := eventbus.ProvidePublisher(db, logger, tel)
 	if err != nil {
 		t.Fatal(err)
 	}

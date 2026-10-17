@@ -12,6 +12,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -36,7 +37,7 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		return nil, nil, err
 	}
 	logger := providers.Logger
-	publisher, cleanup3, err := ordering.ProvidePublisher(db, logger, providers)
+	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
 	if err != nil {
 		cleanup2()
 		cleanup()
