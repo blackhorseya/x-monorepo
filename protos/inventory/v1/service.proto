@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package inventory.v1;
 
+import "buf/validate/validate.proto";
 import "inventory/v1/entity.proto";
 
 // InventoryService is the public RPC contract of the inventory bounded context.
@@ -17,8 +18,8 @@ service InventoryService {
 }
 
 message SetStockRequest {
-  string sku = 1;
-  int32 on_hand = 2;
+  string sku = 1 [(buf.validate.field).string.min_len = 1];
+  int32 on_hand = 2 [(buf.validate.field).int32.gte = 0];
 }
 
 message SetStockResponse {
@@ -26,7 +27,7 @@ message SetStockResponse {
 }
 
 message GetStockRequest {
-  string sku = 1;
+  string sku = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 message GetStockResponse {
@@ -34,7 +35,7 @@ message GetStockResponse {
 }
 
 message GetReservationRequest {
-  string order_id = 1;
+  string order_id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 message GetReservationResponse {

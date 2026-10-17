@@ -123,6 +123,18 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 
 分頁之類「該 RPC 自己的資料」（`next_page_token`、`total_size`）才放進 message，不做通用 `ResponseMeta` 欄位。
 
+## Validation：protovalidate 在邊界擋 request 形狀
+
+| 層 | 擋什麼 | 位置 |
+|---|---|---|
+| proto | `buf.validate` rule 直接寫在 request message 上（`min_len`、`gt`、`gte`、`pattern`、`required`、`min_items`） | `protos/<bc>/v1/service.proto`、`common/v1/money.proto`、`ordering/v1/entity.proto` |
+| server | `NewValidateInterceptor`（最內層 interceptor）：違反 → `INVALID_ARGUMENT`、header `x-error-code: request.validation_failed`、error detail `buf.validate.Violations`（欄位路徑 + rule id + message）；rule 本身編不過 → `INTERNAL` | `pkgs/platform/server/validate.go` |
+| domain | 業務不變量照舊（`NewMoney`、`NewLineItem`…）：consumer path 沒有 interceptor，domain 是唯一防線 | `pkgs/<bc>/domain` |
+
+- 規則故意和 domain 重複：edge 給 client 好讀的錯（哪個欄位、哪條 rule），domain 給所有入口一致的保證。
+- `buf.yaml` 的 `deps` 帶進 `buf.build/bufbuild/protovalidate`（`buf.lock` 有 commit）；`buf.gen.yaml` 用 `managed.disable` 讓它保留自己的 Go package。
+- OpenAPI 會把 rule 轉成 `minLength` / `minimum` / `pattern`，所以 `/api/docs` 看得到。
+
 ## Pagination：cursor（keyset）+ opaque page token
 
 列表 RPC 走 [AIP-158](https://google.aip.dev/158) 的欄位名（`page_size` / `page_token` / `next_page_token`），不做 offset：
@@ -247,6 +259,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 | adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*usecase.X` | decorator 生效 | archtest |
 | generated code 和 source 一致；go.mod 無漂移 | 一致性 | CI `gen-freshness`、`work-sync` |
 | domain 100% coverage | 測試 | `cover-gate.sh` |
+| request 形狀（必填、範圍、格式）在 proto 宣告、進 use case 前就擋 | 邊界 | **protovalidate**（`platform/server/validate.go`） |
 
 archtest 只看 AST，零依賴，毫秒級；規則表在 `archtest.DefaultRules()`，BC 可用 `RunRules` 自選。
 
@@ -345,7 +358,8 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 ## Workflow
 
 ### 新增 RPC
-1. 改 `protos/<bc>/v1/service.proto` → `task gen`（`task breaking` 檢查相容）
+1. 改 `protos/<bc>/v1/service.proto`，request 欄位的形狀規則（必填 / 範圍 / pattern）用 `buf.validate` 寫在 message 上，不要在 adapter 手刻
+   → `task gen`（`task breaking` 檢查相容）
 2. domain 加行為 → `application/dto` + `usecase`
 3. `provider.go` 加 `ProvideXxx`，用 `decorate(name, rec, uc)` 包起來
 4. `adapters/rpc` 實作新方法（`var _ XxxServiceHandler` 會提醒）→ `task wire`

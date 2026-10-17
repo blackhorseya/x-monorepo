@@ -1,6 +1,10 @@
 version: v2
 modules:
   - path: protos
+# Request-shape rules (buf.validate.*) live in the .proto files and are enforced
+# by the protovalidate interceptor in platform/server (see README "Validation").
+deps:
+  - buf.build/bufbuild/protovalidate
 lint:
   use:
     - STANDARD

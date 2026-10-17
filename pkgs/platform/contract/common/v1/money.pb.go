@@ -7,6 +7,7 @@
 package commonv1
 
 import (
+	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -24,7 +25,7 @@ const (
 // Money is the wire representation of the kernel Money value object.
 type Money struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Amount in minor units (e.g. cents).
+	// Amount in minor units (e.g. cents). Never negative on the wire.
 	AmountMinor int64 `protobuf:"varint,1,opt,name=amount_minor,json=amountMinor,proto3" json:"amount_minor,omitempty"`
 	// ISO 4217 currency code, e.g. "USD".
 	Currency      string `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"`
@@ -80,10 +81,11 @@ var File_common_v1_money_proto protoreflect.FileDescriptor
 
 const file_common_v1_money_proto_rawDesc = "" +
 	"\n" +
-	"\x15common/v1/money.proto\x12\tcommon.v1\"F\n" +
-	"\x05Money\x12!\n" +
-	"\famount_minor\x18\x01 \x01(\x03R\vamountMinor\x12\x1a\n" +
-	"\bcurrency\x18\x02 \x01(\tR\bcurrencyB\xae\x01\n" +
+	"\x15common/v1/money.proto\x12\tcommon.v1\x1a\x1bbuf/validate/validate.proto\"b\n" +
+	"\x05Money\x12*\n" +
+	"\famount_minor\x18\x01 \x01(\x03B\a\xbaH\x04\"\x02(\x00R\vamountMinor\x12-\n" +
+	"\bcurrency\x18\x02 \x01(\tB\x11\xbaH\x0er\f2\n" +
+	"^[A-Z]{3}$R\bcurrencyB\xae\x01\n" +
 	"\rcom.common.v1B\n" +
 	"MoneyProtoP\x01ZLgithub.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1;commonv1\xa2\x02\x03CXX\xaa\x02\tCommon.V1\xca\x02\tCommon\\V1\xe2\x02\x15Common\\V1\\GPBMetadata\xea\x02\n" +
 	"Common::V1b\x06proto3"

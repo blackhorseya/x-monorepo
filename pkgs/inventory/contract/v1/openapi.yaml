@@ -207,6 +207,7 @@ components:
         orderId:
           type: string
           title: order_id
+          minLength: 1
       title: GetReservationRequest
       additionalProperties: false
     inventory.v1.GetReservationResponse:
@@ -224,6 +225,7 @@ components:
         sku:
           type: string
           title: sku
+          minLength: 1
       title: GetStockRequest
       additionalProperties: false
     inventory.v1.GetStockResponse:
@@ -293,9 +295,11 @@ components:
         sku:
           type: string
           title: sku
+          minLength: 1
         onHand:
           type: integer
           title: on_hand
+          minimum: 0
           format: int32
       title: SetStockRequest
       additionalProperties: false

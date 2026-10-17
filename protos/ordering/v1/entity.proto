@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package ordering.v1;
 
+import "buf/validate/validate.proto";
 import "common/v1/money.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -16,9 +17,9 @@ enum OrderStatus {
 }
 
 message LineItem {
-  string sku = 1;
-  int32 quantity = 2;
-  common.v1.Money unit_price = 3;
+  string sku = 1 [(buf.validate.field).string.min_len = 1];
+  int32 quantity = 2 [(buf.validate.field).int32.gt = 0];
+  common.v1.Money unit_price = 3 [(buf.validate.field).required = true];
 }
 
 message Order {

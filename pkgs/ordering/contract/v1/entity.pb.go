@@ -7,6 +7,7 @@
 package orderingv1
 
 import (
+	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	v1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -228,12 +229,12 @@ var File_ordering_v1_entity_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_entity_proto_rawDesc = "" +
 	"\n" +
-	"\x18ordering/v1/entity.proto\x12\vordering.v1\x1a\x15common/v1/money.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"i\n" +
-	"\bLineItem\x12\x10\n" +
-	"\x03sku\x18\x01 \x01(\tR\x03sku\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\x05R\bquantity\x12/\n" +
+	"\x18ordering/v1/entity.proto\x12\vordering.v1\x1a\x1bbuf/validate/validate.proto\x1a\x15common/v1/money.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x83\x01\n" +
+	"\bLineItem\x12\x19\n" +
+	"\x03sku\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x03sku\x12#\n" +
+	"\bquantity\x18\x02 \x01(\x05B\a\xbaH\x04\x1a\x02 \x00R\bquantity\x127\n" +
 	"\n" +
-	"unit_price\x18\x03 \x01(\v2\x10.common.v1.MoneyR\tunitPrice\"\xb9\x02\n" +
+	"unit_price\x18\x03 \x01(\v2\x10.common.v1.MoneyB\x06\xbaH\x03\xc8\x01\x01R\tunitPrice\"\xb9\x02\n" +
 	"\x05Order\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +

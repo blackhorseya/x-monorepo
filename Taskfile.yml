@@ -175,7 +175,8 @@ tasks:
   gen-ts:
     desc: protos → web/packages/proto (remote plugin, needs network)
     cmds:
-      - '{{.BUF}} generate --template buf.gen.ts.yaml'
+      # --include-imports also emits deps (buf/validate) the generated files import; WKT are skipped.
+      - '{{.BUF}} generate --template buf.gen.ts.yaml --include-imports'
 
   wire:
     desc: regenerate DI graph for every app

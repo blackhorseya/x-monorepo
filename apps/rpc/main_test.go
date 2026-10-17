@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	"connectrpc.com/connect"
 
 	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
@@ -70,7 +71,9 @@ func TestOrderService_E2E(t *testing.T) {
 			_, err := client.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: "nope"}))
 			return err
 		}, connect.CodeNotFound},
-		{"invalid currency", func() error {
+		// Shape errors are rejected by the protovalidate interceptor, before the
+		// use case: same code, the shared validation x-error-code.
+		{"invalid currency (protovalidate)", func() error {
 			_, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
 				CustomerId: "c-1",
 				Items:      []*orderingv1.LineItem{{Sku: "S", Quantity: 1, UnitPrice: &commonv1.Money{Currency: "usd"}}},
@@ -88,6 +91,24 @@ func TestOrderService_E2E(t *testing.T) {
 				t.Fatal("missing x-error-code header")
 			}
 		})
+	}
+
+	// A rejected request names the violated fields in a buf.validate.Violations detail.
+	_, err = client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: ""}))
+	var ce *connect.Error
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
+		t.Fatalf("empty request: err = %v", err)
+	}
+	if len(ce.Details()) != 1 {
+		t.Fatalf("details = %d, want violations", len(ce.Details()))
+	}
+	detail, err := ce.Details()[0].Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	violations, ok := detail.(*validate.Violations)
+	if !ok || len(violations.GetViolations()) != 2 { // customer_id, items
+		t.Fatalf("violations = %v", detail)
 	}
 
 	// ListOrders: cursor pagination end to end (3 orders for c-2, pages of 2).
@@ -114,7 +135,6 @@ func TestOrderService_E2E(t *testing.T) {
 	if err != nil || len(only.Msg.GetOrders()) != 1 {
 		t.Fatalf("ListOrders filtered: %v, %v", only, err)
 	}
-	var ce *connect.Error
 	_, err = client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{CustomerId: "c-1", PageToken: page1.Msg.GetNextPageToken()}))
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != "pagination.invalid_token" {
 		t.Fatalf("token with other filters: err = %v", err)
@@ -136,8 +156,8 @@ func TestOrderService_E2E(t *testing.T) {
 		t.Fatalf("GetReservation without a worker: err = %v", err)
 	}
 	_, err = inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-1", OnHand: -1}))
-	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != "stock.negative_quantity" {
-		t.Fatalf("SetStock negative: err = %v", err)
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
+		t.Fatalf("SetStock negative (protovalidate): err = %v", err)
 	}
 
 	// Metrics decorator is wired for every use case and exposed on /api/metrics.
@@ -156,11 +176,9 @@ func TestOrderService_E2E(t *testing.T) {
 		`usecase_duration_seconds_count{kind="ok",usecase="ordering.cancel_order"} 1`,
 		`usecase_duration_seconds_count{kind="failed_precondition",usecase="ordering.cancel_order"} 1`,
 		`usecase_duration_seconds_count{kind="not_found",usecase="ordering.get_order"} 1`,
-		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.create_order"} 1`,
 		`usecase_duration_seconds_count{kind="ok",usecase="ordering.list_orders"} 3`,
 		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.list_orders"} 1`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.set_stock"} 1`,
-		`usecase_duration_seconds_count{kind="invalid_argument",usecase="inventory.set_stock"} 1`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.get_stock"} 1`,
 		`usecase_duration_seconds_count{kind="not_found",usecase="inventory.get_reservation"} 1`,
 	} {

@@ -7,6 +7,7 @@
 package orderingv1
 
 import (
+	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -422,26 +423,26 @@ var File_ordering_v1_service_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x19ordering/v1/service.proto\x12\vordering.v1\x1a\x18ordering/v1/entity.proto\"b\n" +
-	"\x12CreateOrderRequest\x12\x1f\n" +
-	"\vcustomer_id\x18\x01 \x01(\tR\n" +
-	"customerId\x12+\n" +
-	"\x05items\x18\x02 \x03(\v2\x15.ordering.v1.LineItemR\x05items\"?\n" +
+	"\x19ordering/v1/service.proto\x12\vordering.v1\x1a\x1bbuf/validate/validate.proto\x1a\x18ordering/v1/entity.proto\"u\n" +
+	"\x12CreateOrderRequest\x12(\n" +
+	"\vcustomer_id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\n" +
+	"customerId\x125\n" +
+	"\x05items\x18\x02 \x03(\v2\x15.ordering.v1.LineItemB\b\xbaH\x05\x92\x01\x02\b\x01R\x05items\"?\n" +
 	"\x13CreateOrderResponse\x12(\n" +
-	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"!\n" +
-	"\x0fGetOrderRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"<\n" +
+	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"*\n" +
+	"\x0fGetOrderRequest\x12\x17\n" +
+	"\x02id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x02id\"<\n" +
 	"\x10GetOrderResponse\x12(\n" +
-	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"$\n" +
-	"\x12CancelOrderRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"?\n" +
+	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"-\n" +
+	"\x12CancelOrderRequest\x12\x17\n" +
+	"\x02id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x02id\"?\n" +
 	"\x13CancelOrderResponse\x12(\n" +
-	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"\xa2\x01\n" +
+	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"\xab\x01\n" +
 	"\x11ListOrdersRequest\x12\x1f\n" +
 	"\vcustomer_id\x18\x01 \x01(\tR\n" +
 	"customerId\x120\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x18.ordering.v1.OrderStatusR\x06status\x12\x1b\n" +
-	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x18.ordering.v1.OrderStatusR\x06status\x12$\n" +
+	"\tpage_size\x18\x03 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\bpageSize\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\x04 \x01(\tR\tpageToken\"h\n" +
 	"\x12ListOrdersResponse\x12*\n" +

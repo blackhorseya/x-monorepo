@@ -7,6 +7,7 @@
 package inventoryv1
 
 import (
+	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -297,18 +298,18 @@ var File_inventory_v1_service_proto protoreflect.FileDescriptor
 
 const file_inventory_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1ainventory/v1/service.proto\x12\finventory.v1\x1a\x19inventory/v1/entity.proto\"<\n" +
-	"\x0fSetStockRequest\x12\x10\n" +
-	"\x03sku\x18\x01 \x01(\tR\x03sku\x12\x17\n" +
-	"\aon_hand\x18\x02 \x01(\x05R\x06onHand\"=\n" +
+	"\x1ainventory/v1/service.proto\x12\finventory.v1\x1a\x1bbuf/validate/validate.proto\x1a\x19inventory/v1/entity.proto\"N\n" +
+	"\x0fSetStockRequest\x12\x19\n" +
+	"\x03sku\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x03sku\x12 \n" +
+	"\aon_hand\x18\x02 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\x06onHand\"=\n" +
 	"\x10SetStockResponse\x12)\n" +
-	"\x05stock\x18\x01 \x01(\v2\x13.inventory.v1.StockR\x05stock\"#\n" +
-	"\x0fGetStockRequest\x12\x10\n" +
-	"\x03sku\x18\x01 \x01(\tR\x03sku\"=\n" +
+	"\x05stock\x18\x01 \x01(\v2\x13.inventory.v1.StockR\x05stock\",\n" +
+	"\x0fGetStockRequest\x12\x19\n" +
+	"\x03sku\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x03sku\"=\n" +
 	"\x10GetStockResponse\x12)\n" +
-	"\x05stock\x18\x01 \x01(\v2\x13.inventory.v1.StockR\x05stock\"2\n" +
-	"\x15GetReservationRequest\x12\x19\n" +
-	"\border_id\x18\x01 \x01(\tR\aorderId\"U\n" +
+	"\x05stock\x18\x01 \x01(\v2\x13.inventory.v1.StockR\x05stock\";\n" +
+	"\x15GetReservationRequest\x12\"\n" +
+	"\border_id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\aorderId\"U\n" +
 	"\x16GetReservationResponse\x12;\n" +
 	"\vreservation\x18\x01 \x01(\v2\x19.inventory.v1.ReservationR\vreservation2\x85\x02\n" +
 	"\x10InventoryService\x12I\n" +

@@ -13,10 +13,15 @@ require (
 )
 
 require (
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.1 // indirect
+	buf.build/go/protovalidate v1.4.0 // indirect
+	cel.dev/cel-go v0.32.0 // indirect
+	cel.dev/expr v0.25.3 // indirect
 	connectrpc.com/connect v1.21.1 // indirect
 	connectrpc.com/connect/v2 v2.0.0 // indirect
 	connectrpc.com/otelconnect v0.12.0 // indirect
 	github.com/ThreeDotsLabs/watermill-sql/v4 v4.1.5 // indirect
+	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
@@ -97,6 +102,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.31.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/exp v0.0.0-20260820142414-ca536658362e // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect

@@ -172,11 +172,13 @@ components:
         amountMinor:
           type: string
           title: amount_minor
+          minimum: 0
           format: int64
-          description: Amount in minor units (e.g. cents).
+          description: Amount in minor units (e.g. cents). Never negative on the wire.
         currency:
           type: string
           title: currency
+          pattern: ^[A-Z]{3}$
           description: ISO 4217 currency code, e.g. "USD".
       title: Money
       additionalProperties: false
@@ -260,6 +262,7 @@ components:
         id:
           type: string
           title: id
+          minLength: 1
       title: CancelOrderRequest
       additionalProperties: false
     ordering.v1.CancelOrderResponse:
@@ -277,11 +280,13 @@ components:
         customerId:
           type: string
           title: customer_id
+          minLength: 1
         items:
           type: array
           items:
             $ref: '#/components/schemas/ordering.v1.LineItem'
           title: items
+          minItems: 1
       title: CreateOrderRequest
       additionalProperties: false
     ordering.v1.CreateOrderResponse:
@@ -299,6 +304,7 @@ components:
         id:
           type: string
           title: id
+          minLength: 1
       title: GetOrderRequest
       additionalProperties: false
     ordering.v1.GetOrderResponse:
@@ -316,7 +322,9 @@ components:
         sku:
           type: string
           title: sku
+          minLength: 1
         quantity:
+          exclusiveMinimum: 0
           type: integer
           title: quantity
           format: int32
@@ -325,6 +333,8 @@ components:
             - $ref: '#/components/schemas/common.v1.Money'
           title: unit_price
       title: LineItem
+      required:
+        - unitPrice
       additionalProperties: false
     ordering.v1.ListOrdersRequest:
       type: object
@@ -341,6 +351,7 @@ components:
         pageSize:
           type: integer
           title: page_size
+          minimum: 0
           format: int32
           description: 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
         pageToken:
@@ -480,4 +491,7 @@ components:
 security: []
 tags:
   - name: ordering.v1.OrderService
-    description: OrderService is the public RPC contract of the ordering bounded context.
+    description: |-
+      OrderService is the public RPC contract of the ordering bounded context.
+       Request shape (buf.validate rules below) is rejected at the edge with
+       INVALID_ARGUMENT before any use case runs; business invariants stay in the domain.
