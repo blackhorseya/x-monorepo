@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package inventory.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Integration events of the inventory bounded context. The topic of every
+// message is its fully-qualified proto name (e.g. "inventory.v1.StockReserved").
+//
+// Inventory also publishes ordering.v1.OrderCancellationRequested (ordering's
+// contract) when an order cannot be covered: the consumer of an event owns
+// its schema, so a request to another BC uses that BC's message.
+
+// StockReserved is raised when every line of an order was reserved.
+message StockReserved {
+  string order_id = 1;
+  repeated StockReservedLine lines = 2;
+  google.protobuf.Timestamp reserved_at = 3;
+}
+
+message StockReservedLine {
+  string sku = 1;
+  int32 quantity = 2;
+}
+
+// StockReleased is raised when a reservation is given back (order cancelled).
+message StockReleased {
+  string order_id = 1;
+  google.protobuf.Timestamp released_at = 2;
+}

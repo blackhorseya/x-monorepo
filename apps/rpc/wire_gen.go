@@ -7,6 +7,9 @@
 package main
 
 import (
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
+	rpc2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
+	system2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
@@ -62,9 +65,17 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v3 := ordering.ProvideCancelOrder(repository, transactor, eventsPublisher, clock, recorder)
 	v4 := ordering.ProvideListOrders(repository, recorder)
 	orderService := rpc.NewOrderService(v, v2, v3, v4)
-	v5 := NewRoutes(orderService)
-	v6 := NewDocs()
-	serverServer, err := server.New(http, logger, v5, v6, providers)
+	stockRepository := inventory.ProvideStockRepository(db, logger)
+	portTransactor := inventory.ProvideTransactor(db)
+	systemClock := system2.NewClock()
+	v5 := inventory.ProvideSetStock(stockRepository, portTransactor, systemClock, recorder)
+	v6 := inventory.ProvideGetStock(stockRepository, recorder)
+	reservationRepository := inventory.ProvideReservationRepository(db)
+	v7 := inventory.ProvideGetReservation(reservationRepository, recorder)
+	inventoryService := rpc2.NewInventoryService(v5, v6, v7)
+	v8 := NewRoutes(orderService, inventoryService)
+	v9 := NewDocs()
+	serverServer, err := server.New(http, logger, v8, v9, providers)
 	if err != nil {
 		cleanup3()
 		cleanup2()

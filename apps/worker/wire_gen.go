@@ -7,6 +7,10 @@
 package main
 
 import (
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
+	consumer2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
+	events2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
+	system2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
@@ -57,8 +61,18 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	}
 	v := ordering.ProvideCancelOrder(repository, transactor, eventsPublisher, clock, recorder)
 	orderCancellationHandler := consumer.NewOrderCancellationHandler(v)
-	v2 := ordering.Subscriptions(orderCancellationHandler)
-	mainWorker, err := NewWorker(worker, db, logger, providers, publisher, v2)
+	subscriptions := ordering.ProvideSubscriptions(orderCancellationHandler)
+	reservationRepository := inventory.ProvideReservationRepository(db)
+	stockRepository := inventory.ProvideStockRepository(db, logger)
+	portTransactor := inventory.ProvideTransactor(db)
+	publisher2 := events2.NewPublisher(publisher)
+	systemClock := system2.NewClock()
+	v2 := inventory.ProvideReserveStock(reservationRepository, stockRepository, portTransactor, publisher2, systemClock, recorder)
+	orderCreatedHandler := consumer2.NewOrderCreatedHandler(v2)
+	v3 := inventory.ProvideReleaseStock(reservationRepository, stockRepository, portTransactor, publisher2, systemClock, recorder)
+	orderCancelledHandler := consumer2.NewOrderCancelledHandler(v3)
+	inventorySubscriptions := inventory.ProvideSubscriptions(orderCreatedHandler, orderCancelledHandler)
+	mainWorker, err := NewWorker(worker, db, logger, providers, publisher, subscriptions, inventorySubscriptions)
 	if err != nil {
 		cleanup3()
 		cleanup2()

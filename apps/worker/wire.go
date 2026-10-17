@@ -5,6 +5,7 @@ package main
 import (
 	"github.com/google/wire"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -23,6 +24,7 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		usecasex.NewRecorder,
 		eventbus.ProvidePublisher,
 		ordering.ProviderSet,
+		inventory.ProviderSet,
 		NewWorker,
 	)
 

@@ -1,0 +1,25 @@
+package stock
+
+import (
+	"errors"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+)
+
+var (
+	ErrInvalidSKU             = kernel.NewError(kernel.KindInvalidArgument, "stock.invalid_sku", "sku must not be empty")
+	ErrNegativeQuantity       = kernel.NewError(kernel.KindInvalidArgument, "stock.negative_quantity", "quantity must not be negative")
+	ErrInvalidQuantity        = kernel.NewError(kernel.KindInvalidArgument, "stock.invalid_quantity", "quantity must be positive")
+	ErrBelowReserved          = kernel.NewError(kernel.KindFailedPrecondition, "stock.below_reserved", "on-hand quantity cannot drop below the reserved quantity")
+	ErrInsufficient           = kernel.NewError(kernel.KindFailedPrecondition, "stock.insufficient", "not enough stock available")
+	ErrReleaseExceedsReserved = kernel.NewError(kernel.KindFailedPrecondition, "stock.release_exceeds_reserved", "cannot release more than is reserved")
+	ErrNotFound               = kernel.NewError(kernel.KindNotFound, "stock.not_found", "stock not found")
+	// ErrCorruptQuantities means persisted state breaks the invariant 0 <= reserved <= on_hand.
+	ErrCorruptQuantities = kernel.NewError(kernel.KindInternal, "stock.corrupt_quantities", "persisted stock quantities are inconsistent")
+
+	// ErrStale is returned by Repository.Save when the row changed since it was
+	// loaded (optimistic concurrency). It is deliberately NOT a kernel.Error:
+	// consumers treat kernel errors as final and drop the message, while a lost
+	// race must be retried.
+	ErrStale = errors.New("stock: concurrent update, reload and retry")
+)

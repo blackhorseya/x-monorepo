@@ -1,0 +1,11 @@
+# Merged into the generated OpenAPI document (protoc-gen-connect-openapi `base=` option).
+# Hand-written metadata only; paths/schemas come from the .proto files.
+openapi: 3.1.0
+info:
+  title: Inventory API
+  version: v1
+  description: |
+    Connect RPC contract of the inventory bounded context.
+    Every procedure is `POST /inventory.v1.InventoryService/<Method>` with a JSON body;
+    errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
+    the stable domain code in the `X-Error-Code` response header.

@@ -1,0 +1,387 @@
+openapi: 3.1.0
+info:
+  title: Inventory API
+  version: v1
+  description: |
+    Connect RPC contract of the inventory bounded context.
+    Every procedure is `POST /inventory.v1.InventoryService/<Method>` with a JSON body;
+    errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
+    the stable domain code in the `X-Error-Code` response header.
+paths:
+  /inventory.v1.InventoryService/GetReservation:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: GetReservation
+      description: GetReservation reads the outcome inventory recorded for an order.
+      operationId: inventory.v1.InventoryService.GetReservation
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.GetReservationRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.GetReservationResponse'
+  /inventory.v1.InventoryService/GetStock:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: GetStock
+      operationId: inventory.v1.InventoryService.GetStock
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.GetStockRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.GetStockResponse'
+  /inventory.v1.InventoryService/SetStock:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: SetStock
+      description: |-
+        SetStock sets the on-hand quantity of a SKU (creates it when unknown).
+         Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
+      operationId: inventory.v1.InventoryService.SetStock
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.SetStockRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.SetStockResponse'
+components:
+  schemas:
+    connect-protocol-version:
+      type: number
+      examples:
+        - 1
+      title: Connect-Protocol-Version
+      description: Define the version of the Connect protocol
+      const: 1
+    connect-timeout-header:
+      type: number
+      examples:
+        - 1000
+      title: Connect-Timeout-Ms
+      description: Define the timeout, in ms
+    connect.error:
+      type: object
+      properties:
+        code:
+          type: string
+          examples:
+            - not_found
+          enum:
+            - canceled
+            - unknown
+            - invalid_argument
+            - deadline_exceeded
+            - not_found
+            - already_exists
+            - permission_denied
+            - resource_exhausted
+            - failed_precondition
+            - aborted
+            - out_of_range
+            - unimplemented
+            - internal
+            - unavailable
+            - data_loss
+            - unauthenticated
+          description: The status code, which should be an enum value of [google.rpc.Code][google.rpc.Code].
+        message:
+          type: string
+          description: A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the [google.rpc.Status.details][google.rpc.Status.details] field, or localized by the client.
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/connect.error_details.Any'
+          description: A list of messages that carry the error details. There is no limit on the number of messages.
+      title: Connect Error
+      additionalProperties: true
+      description: 'Error type returned by Connect: https://connectrpc.com/docs/go/errors/#http-representation'
+    connect.error_details.Any:
+      type: object
+      properties:
+        type:
+          type: string
+          description: 'A URL that acts as a globally unique identifier for the type of the serialized message. For example: `type.googleapis.com/google.rpc.ErrorInfo`.'
+        value:
+          type: string
+          format: byte
+          description: The Protobuf message, serialized as bytes and base64-encoded. The specific message type is identified by the `type` field.
+        debug:
+          type: object
+          title: Debug
+          additionalProperties: true
+          description: Deserialized error detail payload. The 'type' field indicates the schema. This field is for easier debugging and should not be relied upon for application logic.
+      additionalProperties: true
+      description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message, with an additional debug field for ConnectRPC error details.
+    google.protobuf.Timestamp:
+      type: string
+      examples:
+        - "2023-01-15T01:30:15.01Z"
+        - "2024-12-25T12:00:00Z"
+      format: date-time
+      description: A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC.
+    inventory.v1.GetReservationRequest:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+      title: GetReservationRequest
+      additionalProperties: false
+    inventory.v1.GetReservationResponse:
+      type: object
+      properties:
+        reservation:
+          allOf:
+            - $ref: '#/components/schemas/inventory.v1.Reservation'
+          title: reservation
+      title: GetReservationResponse
+      additionalProperties: false
+    inventory.v1.GetStockRequest:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+      title: GetStockRequest
+      additionalProperties: false
+    inventory.v1.GetStockResponse:
+      type: object
+      properties:
+        stock:
+          allOf:
+            - $ref: '#/components/schemas/inventory.v1.Stock'
+          title: stock
+      title: GetStockResponse
+      additionalProperties: false
+    inventory.v1.Reservation:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/inventory.v1.ReservationLine'
+          title: lines
+        status:
+          allOf:
+            - $ref: '#/components/schemas/inventory.v1.ReservationStatus'
+          title: status
+        shortfallSkus:
+          type: array
+          items:
+            type: string
+          title: shortfall_skus
+          description: SKUs that could not be covered (REJECTED only).
+        createTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: create_time
+        updateTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: update_time
+      title: Reservation
+      additionalProperties: false
+      description: 'Reservation is the outcome of one ordering.v1.OrderCreated: one per order.'
+    inventory.v1.ReservationLine:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+        quantity:
+          type: integer
+          title: quantity
+          format: int32
+      title: ReservationLine
+      additionalProperties: false
+    inventory.v1.ReservationStatus:
+      type: string
+      title: ReservationStatus
+      enum:
+        - RESERVATION_STATUS_UNSPECIFIED
+        - RESERVATION_STATUS_RESERVED
+        - RESERVATION_STATUS_REJECTED
+        - RESERVATION_STATUS_RELEASED
+    inventory.v1.SetStockRequest:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+        onHand:
+          type: integer
+          title: on_hand
+          format: int32
+      title: SetStockRequest
+      additionalProperties: false
+    inventory.v1.SetStockResponse:
+      type: object
+      properties:
+        stock:
+          allOf:
+            - $ref: '#/components/schemas/inventory.v1.Stock'
+          title: stock
+      title: SetStockResponse
+      additionalProperties: false
+    inventory.v1.Stock:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+        onHand:
+          type: integer
+          title: on_hand
+          format: int32
+        reserved:
+          type: integer
+          title: reserved
+          format: int32
+        available:
+          type: integer
+          title: available
+          format: int32
+        updateTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: update_time
+      title: Stock
+      additionalProperties: false
+      description: |-
+        Stock is the quantity of one SKU: on_hand is what the warehouse holds,
+         reserved is what pending orders have claimed, available = on_hand - reserved.
+    inventory.v1.StockReleased:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        releasedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: released_at
+      title: StockReleased
+      additionalProperties: false
+      description: StockReleased is raised when a reservation is given back (order cancelled).
+    inventory.v1.StockReserved:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/inventory.v1.StockReservedLine'
+          title: lines
+        reservedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: reserved_at
+      title: StockReserved
+      additionalProperties: false
+      description: StockReserved is raised when every line of an order was reserved.
+    inventory.v1.StockReservedLine:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+        quantity:
+          type: integer
+          title: quantity
+          format: int32
+      title: StockReservedLine
+      additionalProperties: false
+security: []
+tags:
+  - name: inventory.v1.InventoryService
+    description: |-
+      InventoryService is the public RPC contract of the inventory bounded context.
+       Reservations are not made through RPC: they react to ordering.v1.OrderCreated
+       (see pkgs/inventory/adapters/consumer); RPC only seeds and reads.

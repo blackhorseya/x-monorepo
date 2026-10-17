@@ -46,7 +46,7 @@ var ProviderSet = wire.NewSet(
 	// adapters
 	rpc.NewOrderService,
 	consumer.NewOrderCancellationHandler,
-	Subscriptions,
+	ProvideSubscriptions,
 )
 
 // ProvideOrderRepository picks the persistence backend from the composition
@@ -72,9 +72,14 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 }
 
 // Subscriptions lists what this BC consumes; apps/worker registers them on
-// the router. The handler name is the topic.
-func Subscriptions(cancel *consumer.OrderCancellationHandler) []eventbus.Subscription {
-	return []eventbus.Subscription{{Topic: consumer.Topic, Handler: cancel}}
+// the router with this BC's poison topic. A named type, so wire can tell each
+// BC's subscriptions apart.
+type Subscriptions []eventbus.Subscription
+
+// ProvideSubscriptions binds each consumed topic to its handler. The handler
+// name is the topic.
+func ProvideSubscriptions(cancel *consumer.OrderCancellationHandler) Subscriptions {
+	return Subscriptions{{Topic: consumer.Topic, Handler: cancel}}
 }
 
 // decorate is the one place that decides which cross-cutting decorators every

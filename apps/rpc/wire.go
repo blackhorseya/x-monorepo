@@ -5,6 +5,7 @@ package main
 import (
 	"github.com/google/wire"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -27,6 +28,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewRoutes,
 		NewDocs,
 		ordering.ProviderSet,
+		inventory.ProviderSet,
 	)
 
 	return nil, nil, nil

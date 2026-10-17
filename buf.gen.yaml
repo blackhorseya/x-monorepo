@@ -13,6 +13,9 @@ managed:
     - file_option: go_package
       path: ordering/v1
       value: github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1
+    - file_option: go_package
+      path: inventory/v1
+      value: github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1;inventoryv1
 plugins:
   - local: bin/protoc-gen-go
     out: .

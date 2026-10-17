@@ -33,9 +33,9 @@ vars:
   CONNECT_OPENAPI_VERSION: v0.28.0
 
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
-  BCS: ordering
+  BCS: ordering inventory
   # Every Go module in the workspace (keep in sync with go.work).
-  MODULES: pkgs/kernel pkgs/platform pkgs/ordering apps/rpc apps/migrate apps/worker
+  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory apps/rpc apps/migrate apps/worker
   APPS: rpc migrate worker
 
 tasks:

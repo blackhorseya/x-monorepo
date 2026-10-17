@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package inventory.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Entity messages are the cross-language state schema of the inventory
+// aggregates. They are a wire contract, NOT the domain model: Go keeps
+// hand-written aggregates in domain/stock and domain/reservation and maps at
+// the adapter boundary.
+
+// Stock is the quantity of one SKU: on_hand is what the warehouse holds,
+// reserved is what pending orders have claimed, available = on_hand - reserved.
+message Stock {
+  string sku = 1;
+  int32 on_hand = 2;
+  int32 reserved = 3;
+  int32 available = 4;
+  google.protobuf.Timestamp update_time = 5;
+}
+
+enum ReservationStatus {
+  RESERVATION_STATUS_UNSPECIFIED = 0;
+  // Every line was reserved.
+  RESERVATION_STATUS_RESERVED = 1;
+  // At least one line could not be covered; nothing was reserved and
+  // ordering was asked to cancel the order (ordering.v1.OrderCancellationRequested).
+  RESERVATION_STATUS_REJECTED = 2;
+  // The order was cancelled after reservation; the stock is available again.
+  RESERVATION_STATUS_RELEASED = 3;
+}
+
+message ReservationLine {
+  string sku = 1;
+  int32 quantity = 2;
+}
+
+// Reservation is the outcome of one ordering.v1.OrderCreated: one per order.
+message Reservation {
+  string order_id = 1;
+  repeated ReservationLine lines = 2;
+  ReservationStatus status = 3;
+  // SKUs that could not be covered (REJECTED only).
+  repeated string shortfall_skus = 4;
+  google.protobuf.Timestamp create_time = 5;
+  google.protobuf.Timestamp update_time = 6;
+}

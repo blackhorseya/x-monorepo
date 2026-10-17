@@ -84,7 +84,7 @@ func TestWorker_EndToEnd(t *testing.T) {
 
 	// The worker, with one extra subscription so the test can observe OrderCreated.
 	created := make(chan *orderingv1.OrderCreated, 1)
-	subs := append(ordering.Subscriptions(cancelOrder), eventbus.Subscription{
+	subs := append(ordering.ProvideSubscriptions(cancelOrder), eventbus.Subscription{
 		Topic: events.TopicOrderCreated,
 		Handler: eventbus.HandlerFunc(func(_ context.Context, payload []byte) error {
 			var ev orderingv1.OrderCreated
