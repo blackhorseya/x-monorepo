@@ -5,15 +5,17 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
-func TestMetrics_KindLabel(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	rec, err := usecasex.NewRecorder(reg)
+func TestMetrics_KindAttribute(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	rec, err := usecasex.NewRecorder(mp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,24 +34,32 @@ func TestMetrics_KindLabel(t *testing.T) {
 	fail = errors.New("boom")
 	_, _ = uc.Execute(c, 1) // internal
 
-	got := map[string]uint64{}
-	families, err := reg.Gather()
-	if err != nil {
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(c, &rm); err != nil {
 		t.Fatal(err)
 	}
-	for _, mf := range families {
-		if mf.GetName() != "usecase_duration_seconds" {
-			continue
-		}
-		for _, m := range mf.GetMetric() {
-			labels := map[string]string{}
-			for _, lp := range m.GetLabel() {
-				labels[lp.GetName()] = lp.GetValue()
+
+	got := map[string]uint64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "usecase.duration" {
+				continue
 			}
-			if labels["usecase"] != "test.echo" {
-				t.Fatalf("usecase label = %q", labels["usecase"])
+			if m.Unit != "s" {
+				t.Fatalf("unit = %q, want s", m.Unit)
 			}
-			got[labels["kind"]] = m.GetHistogram().GetSampleCount()
+			hist, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok {
+				t.Fatalf("data type = %T, want Histogram[float64]", m.Data)
+			}
+			for _, dp := range hist.DataPoints {
+				uc, _ := dp.Attributes.Value("usecase")
+				if uc.AsString() != "test.echo" {
+					t.Fatalf("usecase attribute = %q", uc.AsString())
+				}
+				kind, _ := dp.Attributes.Value("kind")
+				got[kind.AsString()] = dp.Count
+			}
 		}
 	}
 
@@ -61,15 +71,5 @@ func TestMetrics_KindLabel(t *testing.T) {
 	}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected kinds: %v", got)
-	}
-}
-
-func TestNewRecorder_DuplicateRegistration(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	if _, err := usecasex.NewRecorder(reg); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := usecasex.NewRecorder(reg); err == nil {
-		t.Fatal("second registration on the same registry should fail")
 	}
 }

@@ -24,6 +24,7 @@ type AppConfig struct {
 	HTTP     HTTP     `mapstructure:"http"`
 	Log      Log      `mapstructure:"log"`
 	Postgres Postgres `mapstructure:"postgres"`
+	OTel     OTel     `mapstructure:"otel"`
 }
 
 // HTTP configures the Connect/gRPC/HTTP server.
@@ -37,6 +38,15 @@ type HTTP struct {
 // database": apps fall back to in-memory repositories (local dev, tests).
 type Postgres struct {
 	URL string `mapstructure:"url"` // e.g. postgres://user:pass@host:5432/db?sslmode=disable
+}
+
+// OTel configures OpenTelemetry export (traces + bridged Prometheus metrics)
+// over OTLP/gRPC. An empty Endpoint disables it: providers become no-ops.
+type OTel struct {
+	Endpoint string `mapstructure:"endpoint"` // host:port, e.g. 127.0.0.1:4317
+	Insecure bool   `mapstructure:"insecure"` // plaintext gRPC (local collectors)
+	// ServiceName becomes service.name (Prometheus job); empty = executable name.
+	ServiceName string `mapstructure:"service_name"`
 }
 
 // Log configures the structured logger.
@@ -78,6 +88,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
+	v.SetDefault("otel.endpoint", "")
+	v.SetDefault("otel.insecure", false)
+	v.SetDefault("otel.service_name", "")
 }
 
 func readFile(v *viper.Viper) error {

@@ -5,25 +5,31 @@ import (
 	"errors"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 )
 
 // Recorder owns the use-case histogram. Build one per process from the
-// registry (see platform/metrics) and share it across every BC's decorators.
+// MeterProvider (see platform/otel) and share it across every BC's decorators.
 type Recorder struct {
-	duration *prometheus.HistogramVec
+	duration metric.Float64Histogram
 }
 
-// NewRecorder registers usecase_duration_seconds{usecase, kind} on reg.
-func NewRecorder(reg prometheus.Registerer) (*Recorder, error) {
-	duration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "usecase_duration_seconds",
-		Help:    "Use-case execution time by outcome kind (ok or kernel error kind).",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"usecase", "kind"})
-	if err := reg.Register(duration); err != nil {
+// durationBuckets mirror prometheus.DefBuckets: OTel's defaults are tuned for
+// milliseconds and would put every sub-second use case in the first bucket.
+var durationBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
+
+// NewRecorder creates usecase.duration (Prometheus: usecase_duration_seconds{usecase, kind}).
+func NewRecorder(mp metric.MeterProvider) (*Recorder, error) {
+	duration, err := mp.Meter("github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex").Float64Histogram(
+		"usecase.duration",
+		metric.WithUnit("s"),
+		metric.WithDescription("Use-case execution time by outcome kind (ok or kernel error kind)."),
+		metric.WithExplicitBucketBoundaries(durationBuckets...),
+	)
+	if err != nil {
 		return nil, err
 	}
 
@@ -32,7 +38,7 @@ func NewRecorder(reg prometheus.Registerer) (*Recorder, error) {
 
 // Metrics observes one histogram sample per execution. kind is "ok" on success,
 // the kernel error kind for domain errors, and "internal" for anything else —
-// the same split server.ToConnectError applies, so the label set stays finite.
+// the same split server.ToConnectError applies, so the attribute set stays finite.
 func Metrics[I, O any](rec *Recorder, name string) Decorator[I, O] {
 	return func(next UseCase[I, O]) UseCase[I, O] {
 		return Func[I, O](func(c context.Context, in I) (O, error) {
@@ -40,7 +46,8 @@ func Metrics[I, O any](rec *Recorder, name string) Decorator[I, O] {
 
 			out, err := next.Execute(c, in)
 
-			rec.duration.WithLabelValues(name, kindOf(err)).Observe(time.Since(start).Seconds())
+			rec.duration.Record(c, time.Since(start).Seconds(),
+				metric.WithAttributes(attribute.String("usecase", name), attribute.String("kind", kindOf(err))))
 
 			return out, err
 		})

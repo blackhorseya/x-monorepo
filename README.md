@@ -31,7 +31,7 @@ task tools          # buf / protoc-gen-go / protoc-gen-connect-go / wire / golan
 task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum）
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # depguard 強制分層與 BC 邊界
-task compose-up     # 本機 Postgres
+task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）；第一次會把 config.example.yaml 複製成 configs/local.yaml（gitignored）
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
@@ -104,6 +104,23 @@ dto 不要照著 pb 抄。
 不跟 redirect）；gin 只做 routing + `Recovery()`，RPC log 留在 Connect interceptor。HTTP/1.1 與 h2c 同一個 port，
 Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`）。
 
+## Observability：OTel → LGTM
+
+`platform/otel.New(cfg.OTel, logger)` 回傳 `*otel.Providers`（TracerProvider、MeterProvider、Propagator、`/metrics` handler），
+不碰 global。程式碼只用 OTel API instrument，Prometheus 只是輸出格式：
+
+- **metrics 永遠開**：MeterProvider 掛一個 Prometheus reader，`server` 把它放在 `GET /metrics`（沒 collector 也能 scrape）。
+  `usecasex.Metrics` 記 `usecase.duration`（exposition：`usecase_duration_seconds{usecase, kind}`），
+  `otelconnect` 產 `rpc.server.call.duration`，`contrib/instrumentation/runtime` 產 Go runtime metrics
+- **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader；`otelconnect` interceptor 掛最外層，
+  每個 RPC 一個 span，request logger 多帶 `trace_id`，log 與 trace 可對。endpoint 空 = tracer no-op、不 dial
+- **resource**：明確設 `service.name`（= Prometheus `job`）與 `service.instance.id`（= `instance`）——OTLP→Prometheus
+  只有這兩個 attribute 會變成 series label，少了 instance.id 多 replica 會寫同一條 series、counter 亂跳
+
+本機：`task compose-up` 連 `grafana/otel-lgtm` 一起起（Grafana `http://localhost:3000`，匿名 admin；OTLP gRPC :4317），
+`configs/local.yaml` 的 `otel.endpoint` 已指向它。尚未接：slog → Loki（otelslog bridge）、gorm tracing plugin、
+非 Connect route 的 otelgin。
+
 ## usecasex：use case 的統一形狀與 decorator
 
 ```go
@@ -115,9 +132,9 @@ metrics + logging 包在每個 usecase 外面（之後加 tx 也在這一處）�
 interceptor 只管 transport 層的事（procedure、protocol、code）。
 
 - `usecasex.Logging`：一行 log，domain error 是 `Info`（預期結果），其他 error 才是 `Error`
-- `usecasex.Metrics`：histogram `usecase_duration_seconds{usecase, kind}`；`kind` = `ok` / kernel error kind /
-  `internal`，和 `server.ToConnectError` 同一套判準，label 值域有限。registry 由 `platform/metrics.ProviderSet`
-  注入（每個 `Initialize()` 一個，不用 global），`server` 掛在 `GET /metrics`
+- `usecasex.Metrics`：OTel histogram `usecase.duration`（Prometheus：`usecase_duration_seconds{usecase, kind}`）；`kind` =
+  `ok` / kernel error kind / `internal`，和 `server.ToConnectError` 同一套判準，attribute 值域有限。MeterProvider 由
+  `platform/otel.ProviderSet` 注入（每個 `Initialize()` 一個，不用 global）
 
 ## Gates（harness）
 
@@ -188,7 +205,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 ## Local infra（Compose）
 
 ```bash
-task compose-up      # podman compose（沒有 podman 就 docker compose）起 Postgres（:5432，user/pass/db 都是 app）
+task compose-up      # podman compose（沒有 podman 就 docker compose）起 Postgres（:5432，user/pass/db 都是 app）＋ otel-lgtm（Grafana :3000、OTLP :4317）
 task migrate -- up   # 自動 seed 的 configs/local.yaml 已把 postgres.url 指向它，不用 export
 task run             # app 在本機跑，不進容器
 task compose-down    # 連 volume 一起清
@@ -215,6 +232,9 @@ task compose-down    # 連 volume 一起清
 | `http.docs` | `APP_HTTP_DOCS` | `false` | 掛 `/api/docs`、`/api/openapi/<bc>.yaml`（`task run` 會開） |
 | `log.level` / `log.format` | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
 | `postgres.url` | `APP_POSTGRES_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
+| `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
+| `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |
+| `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
 | — | `TEST_DATABASE_URL` | 空 | 只給 integration test |
 

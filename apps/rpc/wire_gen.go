@@ -11,7 +11,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/metrics"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -33,9 +33,16 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	repository := ordering.ProvideOrderRepository(db, logger)
 	uuidGenerator := system.NewUUIDGenerator()
 	clock := system.NewClock()
-	registry := metrics.NewRegistry()
-	recorder, err := usecasex.NewRecorder(registry)
+	oTel := cfg.OTel
+	providers, cleanup2, err := otel.New(oTel, logger)
 	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	meterProvider := providers.Meter
+	recorder, err := usecasex.NewRecorder(meterProvider)
+	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
@@ -45,8 +52,14 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	orderService := rpc.NewOrderService(v, v2, v3)
 	v4 := NewRoutes(orderService)
 	v5 := NewDocs()
-	serverServer := server.New(http, logger, v4, v5, registry)
+	serverServer, err := server.New(http, logger, v4, v5, providers)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	return serverServer, func() {
+		cleanup2()
 		cleanup()
 	}, nil
 }

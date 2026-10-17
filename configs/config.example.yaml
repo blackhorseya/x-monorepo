@@ -16,3 +16,11 @@ postgres:
   # Matches `task compose-up` (deployments/docker/docker-compose.yaml); apps ping it at startup.
   # Empty = no database: repositories fall back to in-memory; `task migrate -- up` needs it set.
   url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+
+otel:
+  # OTLP/gRPC endpoint — `task compose-up` runs grafana/otel-lgtm here (Grafana :3000).
+  # Empty = telemetry off (no-op providers). Prometheus metrics are bridged in, so
+  # /metrics and Grafana show the same series.
+  endpoint: 127.0.0.1:4317
+  insecure: true
+  service_name: ""   # empty = executable name (rpc)
