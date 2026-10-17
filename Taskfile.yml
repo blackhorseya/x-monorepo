@@ -35,8 +35,8 @@ vars:
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
   BCS: ordering
   # Every Go module in the workspace (keep in sync with go.work).
-  MODULES: pkgs/kernel pkgs/platform pkgs/ordering apps/rpc apps/migrate
-  APPS: rpc migrate
+  MODULES: pkgs/kernel pkgs/platform pkgs/ordering apps/rpc apps/migrate apps/worker
+  APPS: rpc migrate worker
 
 tasks:
   default:
@@ -234,6 +234,12 @@ tasks:
     deps: [build, config]
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/rpc']
+
+  worker:
+    desc: 'build and run ./bin/worker (event consumers) with configs/local.yaml; needs postgres.url'
+    deps: [build, config]
+    env: { APP_CONFIG: '{{.CONFIG}}' }
+    cmds: ['{{.BIN_DIR}}/worker']
 
   config:
     desc: 'create configs/local.yaml from configs/config.example.yaml if missing'

@@ -25,6 +25,7 @@ type AppConfig struct {
 	Log      Log      `mapstructure:"log"`
 	Postgres Postgres `mapstructure:"postgres"`
 	OTel     OTel     `mapstructure:"otel"`
+	Worker   Worker   `mapstructure:"worker"`
 }
 
 // HTTP configures the Connect/gRPC/HTTP server.
@@ -47,6 +48,14 @@ type OTel struct {
 	Insecure bool   `mapstructure:"insecure"` // plaintext gRPC (local collectors)
 	// ServiceName becomes service.name (Prometheus job); empty = executable name.
 	ServiceName string `mapstructure:"service_name"`
+}
+
+// Worker configures apps/worker, the process that runs every BC's event
+// consumers off the Postgres event tables (platform/eventbus).
+type Worker struct {
+	// ConsumerGroup names the offset cursor: replicas sharing a group split
+	// the work; a new group starts from the beginning of every topic.
+	ConsumerGroup string `mapstructure:"consumer_group"`
 }
 
 // Log configures the structured logger.
@@ -91,6 +100,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("otel.endpoint", "")
 	v.SetDefault("otel.insecure", false)
 	v.SetDefault("otel.service_name", "")
+	v.SetDefault("worker.consumer_group", "worker")
 }
 
 func readFile(v *viper.Viper) error {

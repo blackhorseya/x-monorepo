@@ -72,10 +72,12 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 │       │   └── system/            # clock / id
 │       └── adapters/              # driving：transport
 │           ├── rpc/               # Connect handler；pb ↔ dto
-│           └── consumer/          # broker handler；呼叫同一個 CancelOrder usecase
+│           ├── consumer/          # event handler；呼叫同一個 CancelOrder usecase
+│           └── events/            # outbound：domain event → proto → Watermill publisher
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
+│   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
 │   └── migrate/                   # 收集各 BC 的 embed migrations，up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo：apps/*、packages/proto（@repo/proto）
 ```
@@ -132,6 +134,29 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 - 篩選的「空值」語意：`customer_id` 空字串、`status = UNSPECIFIED` 代表不篩；但 server 不認識的 enum 值不會塌成「不篩」，
   而是 `order.invalid_status_filter`（列表 API 寬鬆化等於擴大資料暴露面）。
 - 不開放 `order_by`：動態排序會讓 cursor 與 index 都要跟著變，有需求再加。
+
+## Events：domain event → transactional outbox（Watermill）→ worker
+
+x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-effort publish」掉一次就是永久掉。這裡的做法：
+
+| 層 | 做什麼 | 位置 |
+|---|---|---|
+| kernel | `kernel.Event`（`AggregateID()`、`OccurredAt()`）是所有 BC 事件的 base interface | `pkgs/kernel/event.go` |
+| domain | aggregate 在行為裡 `record()`（`New` → `Created`、`Cancel` → `Cancelled`），`PullEvents()` 取出並清空；`order.Event` embed `kernel.Event`，實作共用 embedded `base` struct | `domain/order/events.go` |
+| application | `port.Transactor.Do` 包住 `repo.Save` + `port.EventPublisher.Publish`：同一個交易 | `usecase/create_order.go`、`cancel_order.go` |
+| adapters/events | domain event → `ordering.v1.OrderCreated` / `OrderCancelled` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
+| platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → PoisonQueue → Retry → drop）；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
+| infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
+| apps/worker | 另一個 process：wire 同一份 `ordering.ProviderSet`，把 `ordering.Subscriptions`（目前 `OrderCancellationRequested` → `CancelOrder`）掛上 router。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工 | `apps/worker` |
+
+- Topic → table：`ordering.v1.OrderCreated` → `ordering.events_v1_ordercreated`（+ `_offsets`），第一段就是 BC，**DDL 由該 BC 的 migration 出**（`0003_events`），
+  service 不在啟動時建表；`InitializeSchema` 關閉。新 topic = 新 migration。
+- 語意：at-least-once。handler 回 `eventbus.ErrDrop`（壞 payload、domain 說不行 → 例如重送的取消要求碰到 `ErrCannotCancel`）= ack 不重試也不進 poison；
+  其他 error → Retry（3 次、指數退避）→ `ordering.poison` 表（`events_poison`）。consumer 的冪等由 domain 狀態機保證。
+- Trace：publish 時把 `traceparent` 寫進 metadata，router 的 tracing middleware 還原成 CONSUMER span，Tempo 看得到 rpc → publish → handler 一條線。
+- 換 broker：`message.Publisher` / `Subscriber` 是 port；換 NATS / Kafka 只動 `provider.go` 的 `ProvidePublisher` 與 worker 的 subscriber，handler 與 error contract 不變
+  （SQL 表想保留當 outbox 的話，用 Watermill 的 forwarder component 轉送）。
+- 代價：watermill-sql 會把 `lib/pq` 一起連進來（只用它的 error type），實際連線仍走 pgx。
 
 ## Observability：OTel → LGTM
 
@@ -243,6 +268,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 task compose-up      # podman compose（沒有 podman 就 docker compose）起 Postgres（:5432，user/pass/db 都是 app）＋ otel-lgtm（Grafana :3000、OTLP :4317）
 task migrate -- up   # 自動 seed 的 configs/local.yaml 已把 postgres.url 指向它，不用 export
 task run             # app 在本機跑，不進容器
+task worker          # 事件 consumer process（另開一個 terminal）
 task compose-down    # 連 volume 一起清
 task grafana-reload  # 改了 deployments/docker/grafana/dashboards/*.json 之後
 ```
@@ -289,6 +315,7 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 | `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
 | `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |
 | `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |
+| `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 名；同名 replica 分工，新名字從頭讀 |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
 | — | `TEST_DATABASE_URL` | 空 | 只給 integration test |
 
@@ -309,10 +336,12 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 6. 有 DB 的話：`infra/postgres/migrations/0001_*.sql`（表都放在 `<newbc>.` schema）+ `Migration()`，
    `apps/migrate/main.go` 的 `migrations` 加一筆
 
-### 新增 consumer process
-`apps/consumer/`：複製 `apps/rpc` 的 `wire.go`，不掛 `server.New`，改成訂閱 broker 並把
-`consumer.OrderCancellationHandler.Handle` 接上；error contract 見 `adapters/consumer/handler.go`。
-要在同一個 process 跑 rpc + consumer 也可以（go-micro 式），那是 `apps/` 的決定，BC 不在乎。
+### 新增 consumer / 新 event
+- **發**：domain 加 event struct（embed `base`）並在行為裡 `record()`；`protos/<bc>/v1/event.proto` 加 message → `task gen`；
+  `adapters/events.toProto` 加 case；migration 加 `events_<topic>` + `_offsets` 兩張表（照 `0003_events.up.sql`）。
+- **收**：`adapters/consumer` 加 handler（error contract 見 `handler.go`）→ `provider.go` 的 `Subscriptions` 加一筆；
+  訂閱別的 BC 的 topic 時，表由發的那個 BC 的 migration 建。`apps/worker` 不用改，除非是新 BC（`wire.go` 加 `ProviderSet`、`NewWorker` 收它的 subscriptions）。
+- 要在同一個 process 跑 rpc + consumer 也可以（go-micro 式），那是 `apps/` 的決定，BC 不在乎。
 
 ### 拆 BC 成獨立服務
 1. 對 `pkgs/kernel`、`pkgs/platform` 打 tag：`pkgs/kernel/v0.1.0`、`pkgs/platform/v0.1.0`

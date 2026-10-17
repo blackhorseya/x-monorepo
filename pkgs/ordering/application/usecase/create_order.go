@@ -14,15 +14,18 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
 
-// CreateOrder places a new pending order.
+// CreateOrder places a new pending order and publishes OrderCreated in the
+// same transaction (transactional outbox: see port.Transactor).
 type CreateOrder struct {
-	repo  order.Repository
-	ids   port.IDGenerator
-	clock port.Clock
+	repo   order.Repository
+	tx     port.Transactor
+	events port.EventPublisher
+	ids    port.IDGenerator
+	clock  port.Clock
 }
 
-func NewCreateOrder(repo order.Repository, ids port.IDGenerator, clock port.Clock) *CreateOrder {
-	return &CreateOrder{repo: repo, ids: ids, clock: clock}
+func NewCreateOrder(repo order.Repository, tx port.Transactor, events port.EventPublisher, ids port.IDGenerator, clock port.Clock) *CreateOrder {
+	return &CreateOrder{repo: repo, tx: tx, events: events, ids: ids, clock: clock}
 }
 
 func (uc *CreateOrder) Execute(c context.Context, in dto.CreateOrderInput) (*dto.OrderOutput, error) {
@@ -51,8 +54,15 @@ func (uc *CreateOrder) Execute(c context.Context, in dto.CreateOrderInput) (*dto
 		return nil, err
 	}
 
-	if err = uc.repo.Save(ctx, o); err != nil {
-		return nil, fmt.Errorf("save order: %w", err)
+	err = uc.tx.Do(ctx, func(c context.Context) error {
+		if err := uc.repo.Save(c, o); err != nil {
+			return fmt.Errorf("save order: %w", err)
+		}
+
+		return uc.events.Publish(c, o.PullEvents()...)
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return mapper.ToOrderOutput(o), nil

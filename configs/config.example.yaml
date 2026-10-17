@@ -24,3 +24,7 @@ otel:
   endpoint: 127.0.0.1:4317
   insecure: true
   service_name: ""   # empty = executable name (rpc)
+
+worker:
+  # apps/worker: consumer group of this process (offset cursor per topic).
+  consumer_group: worker

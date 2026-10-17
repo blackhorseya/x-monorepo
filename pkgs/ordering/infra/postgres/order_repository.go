@@ -12,6 +12,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
+	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
 var _ order.Repository = (*OrderRepository)(nil)
@@ -57,7 +58,7 @@ func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order
 	}
 
 	var row orderRow
-	err := i.db.WithContext(ctx).
+	err := platformpg.TxOrDB(ctx, i.db).
 		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
 		Take(&row, "id = ?", string(id)).Error
 	if err != nil {
@@ -76,7 +77,8 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	}
 
 	row := toRow(o)
-	err := i.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	// Joins the use case's transaction when there is one (Transactor), else opens its own.
+	err := platformpg.Transaction(ctx, i.db, func(_ context.Context, tx *gorm.DB) error {
 		if err := tx.Omit(clause.Associations).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"customer_id", "status", "updated_at"}),
@@ -104,7 +106,7 @@ func (i *OrderRepository) List(c context.Context, p order.ListParams) ([]*order.
 		return nil, nil, err
 	}
 
-	q := i.db.WithContext(ctx).
+	q := platformpg.TxOrDB(ctx, i.db).
 		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
 		Order("created_at DESC, id DESC")
 	if p.CustomerID != "" {
