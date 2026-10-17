@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -82,5 +84,28 @@ func TestOrderService_E2E(t *testing.T) {
 				t.Fatal("missing x-error-code header")
 			}
 		})
+	}
+
+	// Metrics decorator is wired for every use case and exposed on /metrics.
+	res, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var sb strings.Builder
+	if _, err := io.Copy(&sb, res.Body); err != nil {
+		t.Fatal(err)
+	}
+	body := sb.String()
+	for _, want := range []string{
+		`usecase_duration_seconds_count{kind="ok",usecase="ordering.create_order"} 1`,
+		`usecase_duration_seconds_count{kind="ok",usecase="ordering.cancel_order"} 1`,
+		`usecase_duration_seconds_count{kind="failed_precondition",usecase="ordering.cancel_order"} 1`,
+		`usecase_duration_seconds_count{kind="not_found",usecase="ordering.get_order"} 1`,
+		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.create_order"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("/metrics missing %q\n%s", want, body)
+		}
 	}
 }

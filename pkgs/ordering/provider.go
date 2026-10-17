@@ -8,7 +8,6 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
@@ -26,7 +25,8 @@ var ProviderSet = wire.NewSet(
 	system.NewClock,
 	wire.Bind(new(port.Clock), new(*system.Clock)),
 
-	// application (decorated)
+	// application (decorated; see decorate)
+	usecasex.NewRecorder,
 	ProvideCreateOrder,
 	ProvideGetOrder,
 	ProvideCancelOrder,
@@ -36,23 +36,23 @@ var ProviderSet = wire.NewSet(
 	consumer.NewOrderCancellationHandler,
 )
 
-func ProvideCreateOrder(repo order.Repository, ids port.IDGenerator, clock port.Clock) rpc.CreateOrderUC {
-	return usecasex.Chain[dto.CreateOrderInput, *dto.OrderOutput](
-		usecase.NewCreateOrder(repo, ids, clock),
-		usecasex.Logging[dto.CreateOrderInput, *dto.OrderOutput]("ordering.create_order"),
+// decorate is the one place that decides which cross-cutting decorators every
+// use case of this BC gets (outermost first). Add a decorator here, not per use case.
+func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc,
+		usecasex.Metrics[I, O](rec, name),
+		usecasex.Logging[I, O](name),
 	)
 }
 
-func ProvideGetOrder(repo order.Repository) rpc.GetOrderUC {
-	return usecasex.Chain[dto.GetOrderInput, *dto.OrderOutput](
-		usecase.NewGetOrder(repo),
-		usecasex.Logging[dto.GetOrderInput, *dto.OrderOutput]("ordering.get_order"),
-	)
+func ProvideCreateOrder(repo order.Repository, ids port.IDGenerator, clock port.Clock, rec *usecasex.Recorder) rpc.CreateOrderUC {
+	return decorate("ordering.create_order", rec, usecase.NewCreateOrder(repo, ids, clock))
 }
 
-func ProvideCancelOrder(repo order.Repository, clock port.Clock) rpc.CancelOrderUC {
-	return usecasex.Chain[dto.CancelOrderInput, *dto.OrderOutput](
-		usecase.NewCancelOrder(repo, clock),
-		usecasex.Logging[dto.CancelOrderInput, *dto.OrderOutput]("ordering.cancel_order"),
-	)
+func ProvideGetOrder(repo order.Repository, rec *usecasex.Recorder) rpc.GetOrderUC {
+	return decorate("ordering.get_order", rec, usecase.NewGetOrder(repo))
+}
+
+func ProvideCancelOrder(repo order.Repository, clock port.Clock, rec *usecasex.Recorder) rpc.CancelOrderUC {
+	return decorate("ordering.cancel_order", rec, usecase.NewCancelOrder(repo, clock))
 }

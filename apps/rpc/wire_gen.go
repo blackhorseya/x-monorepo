@@ -12,7 +12,9 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/metrics"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
 // Injectors from wire.go:
@@ -26,12 +28,17 @@ func Initialize(cfg *config.AppConfig) (*server.Server, error) {
 	orderRepository := memory.NewOrderRepository()
 	uuidGenerator := system.NewUUIDGenerator()
 	clock := system.NewClock()
-	v := ordering.ProvideCreateOrder(orderRepository, uuidGenerator, clock)
-	v2 := ordering.ProvideGetOrder(orderRepository)
-	v3 := ordering.ProvideCancelOrder(orderRepository, clock)
+	registry := metrics.NewRegistry()
+	recorder, err := usecasex.NewRecorder(registry)
+	if err != nil {
+		return nil, err
+	}
+	v := ordering.ProvideCreateOrder(orderRepository, uuidGenerator, clock, recorder)
+	v2 := ordering.ProvideGetOrder(orderRepository, recorder)
+	v3 := ordering.ProvideCancelOrder(orderRepository, clock, recorder)
 	orderService := rpc.NewOrderService(v, v2, v3)
 	v4 := NewRoutes(orderService)
 	v5 := NewDocs()
-	serverServer := server.New(http, logger, v4, v5)
+	serverServer := server.New(http, logger, v4, v5, registry)
 	return serverServer, nil
 }

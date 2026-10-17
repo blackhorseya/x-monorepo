@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
@@ -41,7 +43,9 @@ type Server struct {
 	logger *slog.Logger
 }
 
-func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc) *Server {
+// New mounts every route, /healthz, /metrics (Prometheus text format from
+// gatherer) and, when cfg.Docs is set, /docs.
+func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gatherer prometheus.Gatherer) *Server {
 	mux := http.NewServeMux()
 	opts := connect.WithInterceptors(NewLoggingInterceptor(logger))
 	for _, r := range routes {
@@ -51,6 +55,7 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc) *Serv
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.Handle("GET /metrics", promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}))
 	if cfg.Docs {
 		mountDocs(mux, docs)
 		logger.Info("api docs enabled", "path", "/docs")
