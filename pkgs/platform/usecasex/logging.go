@@ -11,6 +11,11 @@ import (
 
 // Logging logs one line per execution with duration and the domain error kind.
 // name should be stable, e.g. "ordering.cancel_order".
+//
+// Success is Debug: on the rpc path the Connect interceptor already logs one
+// "rpc" line per request, and usecase.duration{kind="ok"} counts successes on
+// every path. Outcomes worth reading stay visible: a domain rejection is Info,
+// a lost optimistic-lock race Warn, anything else Error.
 func Logging[I, O any](name string) Decorator[I, O] {
 	return func(next UseCase[I, O]) UseCase[I, O] {
 		return Func[I, O](func(c context.Context, in I) (O, error) {
@@ -21,7 +26,7 @@ func Logging[I, O any](name string) Decorator[I, O] {
 
 			attrs := []any{"usecase", name, "duration_ms", time.Since(start).Milliseconds()}
 			if err == nil {
-				ctx.Info("usecase ok", attrs...)
+				ctx.Debug("usecase ok", attrs...)
 				return out, nil
 			}
 

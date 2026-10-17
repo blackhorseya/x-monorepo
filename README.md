@@ -232,7 +232,8 @@ metrics + logging 包在每個 usecase 外面，rpc 和 consumer 兩邊自動都
 transaction。Connect
 interceptor 只管 transport 層的事（procedure、protocol、code）。
 
-- `usecasex.Logging`：一行 log，domain error 是 `Info`（預期結果），其他 error 才是 `Error`
+- `usecasex.Logging`：一行 log。成功是 `Debug`（rpc 路徑已有 interceptor 的 `rpc` access log，成功次數看 metrics），domain error 是 `Info`（預期結果），
+  optimistic-lock 衝突是 `Warn`，其他 error 才是 `Error`
 - `usecasex.Metrics`：OTel histogram `usecase.duration`（Prometheus：`usecase_duration_seconds{usecase, kind}`）；`kind` =
   `ok` / kernel error kind / `internal`，和 `server.ToConnectError` 同一套判準，attribute 值域有限。MeterProvider 由
   `platform/otel.ProviderSet` 注入（每個 `Initialize()` 一個，不用 global）
