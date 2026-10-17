@@ -23,7 +23,10 @@ type Order struct {
 	status     Status
 	createdAt  time.Time
 	updatedAt  time.Time
-	events     []Event // raised, not yet pulled (see events.go)
+	// version is the optimistic-concurrency token Repository.Save compares:
+	// 0 for an order never saved, then the number of saves.
+	version int64
+	events  []Event // raised, not yet pulled (see events.go)
 }
 
 // Params are the inputs of New. A parameter object (not state: every field is exported
@@ -72,6 +75,7 @@ type ReconstituteParams struct {
 	Status     Status
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	Version    int64
 }
 
 // Reconstitute rebuilds an Order from persistence. Only repositories should call it.
@@ -89,6 +93,7 @@ func Reconstitute(p ReconstituteParams) (*Order, error) {
 		status:     p.Status,
 		createdAt:  p.CreatedAt,
 		updatedAt:  p.UpdatedAt,
+		version:    p.Version,
 	}, nil
 }
 
@@ -112,6 +117,7 @@ func (x *Order) Total() kernel.Money  { return x.total }
 func (x *Order) Status() Status       { return x.status }
 func (x *Order) CreatedAt() time.Time { return x.createdAt }
 func (x *Order) UpdatedAt() time.Time { return x.updatedAt }
+func (x *Order) Version() int64       { return x.version }
 
 func sumItems(items []LineItem) (kernel.Money, error) {
 	if len(items) == 0 {

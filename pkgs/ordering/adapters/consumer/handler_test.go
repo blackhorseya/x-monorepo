@@ -3,6 +3,7 @@ package consumer_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
 type clock struct{}
@@ -55,5 +57,19 @@ func TestOrderCancellationHandler(t *testing.T) {
 	// Garbage → drop.
 	if err := h.Handle(c, []byte{0xff, 0xff}); !errors.Is(err, consumer.ErrDrop) {
 		t.Fatalf("garbage err = %v, want ErrDrop", err)
+	}
+}
+
+// A lost optimistic-lock race is not an answer: the handler must surface it
+// for retry (the retry reloads, sees CANCELLED and then drops).
+func TestOrderCancellationHandler_StaleIsRetried(t *testing.T) {
+	stale := usecasex.Func[dto.CancelOrderInput, *dto.OrderOutput](func(context.Context, dto.CancelOrderInput) (*dto.OrderOutput, error) {
+		return nil, fmt.Errorf("save order: %w", order.ErrStale)
+	})
+	payload, _ := proto.Marshal(&orderingv1.OrderCancellationRequested{OrderId: "o-1"})
+
+	err := consumer.NewOrderCancellationHandler(stale).Handle(context.Background(), payload)
+	if err == nil || errors.Is(err, consumer.ErrDrop) || !errors.Is(err, order.ErrStale) {
+		t.Fatalf("err = %v, want ErrStale returned for retry (not ErrDrop)", err)
 	}
 }

@@ -51,8 +51,8 @@ func TestOrderRepository_Postgres(t *testing.T) {
 	if err := platformpg.Up(c, cfg, m); err != nil {
 		t.Fatal(err)
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 3 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 3 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 4 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 4 clean", v, dirty, err)
 	}
 
 	// The version table must live inside the BC schema, never in public:
@@ -92,21 +92,49 @@ func TestOrderRepository_Postgres(t *testing.T) {
 		t.Fatalf("FindByID: %v", err)
 	}
 	assertEqual(t, o, got)
+	if got.Version() != 1 {
+		t.Fatalf("version after insert = %d, want 1", got.Version())
+	}
 
-	// Update path: same id, new status, items replaced (not appended).
-	if err := o.Cancel(now.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.Save(c, o); err != nil {
-		t.Fatalf("Save (update): %v", err)
-	}
-	got, err = repo.FindByID(c, "o-1")
+	// A fresh aggregate with a taken id is a duplicate, never an overwrite.
+	dup, err := order.New(order.Params{ID: "o-1", CustomerID: "c-9", Items: []order.LineItem{li("Z", 1, 1)}, Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertEqual(t, o, got)
-	if got.Status() != order.StatusCancelled {
-		t.Fatalf("status = %v", got.Status())
+	if err := repo.Save(c, dup); !errors.Is(err, order.ErrDuplicate) {
+		t.Fatalf("fresh over existing: err = %v, want ErrDuplicate", err)
+	}
+
+	// Two writers load version 1 and both cancel: the first save wins, the
+	// second is stale (under READ COMMITTED the real loser blocks on the row
+	// lock, re-checks the WHERE and matches nothing — same outcome).
+	other, err := repo.FindByID(c, "o-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []*order.Order{got, other} {
+		if err := x.Cancel(now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.Save(c, got); err != nil {
+		t.Fatalf("Save (update): %v", err)
+	}
+	if err := repo.Save(c, other); !errors.Is(err, order.ErrStale) || !errors.Is(err, kernel.ErrConcurrentUpdate) {
+		t.Fatalf("second writer: err = %v, want ErrStale wrapping kernel.ErrConcurrentUpdate", err)
+	}
+	var de *kernel.Error
+	if errors.As(order.ErrStale, &de) {
+		t.Fatal("ErrStale must not be a kernel.Error: the consumer would drop instead of retry")
+	}
+	reloaded, err := repo.FindByID(c, "o-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Update path: new status, items replaced (not appended), version bumped once.
+	assertEqual(t, got, reloaded)
+	if reloaded.Status() != order.StatusCancelled || reloaded.Version() != 2 {
+		t.Fatalf("after update: status=%v version=%d, want CANCELLED 2", reloaded.Status(), reloaded.Version())
 	}
 
 	if _, err := repo.FindByID(c, "nope"); !errors.Is(err, order.ErrNotFound) {
