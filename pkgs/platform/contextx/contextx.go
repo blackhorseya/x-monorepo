@@ -25,7 +25,7 @@ func (x Contextx) Warn(msg string, args ...any)  { x.log(slog.LevelWarn, msg, ar
 func (x Contextx) Error(msg string, args ...any) { x.log(slog.LevelError, msg, args...) }
 
 func (x Contextx) log(level slog.Level, msg string, args ...any) {
-	x.Logger.Log(x.Context, level, msg, args...)
+	x.Log(x.Context, level, msg, args...)
 }
 
 // FromContext wraps c. It never returns a nil logger.
