@@ -82,6 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+        with: { cache-scope: "test-${{ matrix.module }}" }
       - run: go test -race ./...
         working-directory: ${{ matrix.module }}
 
