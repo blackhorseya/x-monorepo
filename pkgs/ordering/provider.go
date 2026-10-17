@@ -40,11 +40,11 @@ var ProviderSet = wire.NewSet(
 )
 
 // ProvideOrderRepository picks the persistence backend from the composition
-// root's database handle: nil (APP_DB_URL unset) means in-memory — local dev
+// root's database handle: nil (APP_POSTGRES_URL unset) means in-memory — local dev
 // and tests — otherwise Postgres. apps never run migrations; see apps/migrate.
 func ProvideOrderRepository(db *gorm.DB, logger *slog.Logger) order.Repository {
 	if db == nil {
-		logger.Warn("ordering: APP_DB_URL unset, using in-memory order repository")
+		logger.Warn("ordering: APP_POSTGRES_URL unset, using in-memory order repository")
 		return memory.NewOrderRepository()
 	}
 

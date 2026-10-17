@@ -9,9 +9,9 @@ func TestRun_Usage(t *testing.T) {
 	if err := run(nil); err == nil {
 		t.Fatal("no args should fail")
 	}
-	t.Setenv("APP_DB_URL", "")
+	t.Setenv("APP_POSTGRES_URL", "")
 	if err := run([]string{"up"}); err == nil {
-		t.Fatal("missing APP_DB_URL should fail")
+		t.Fatal("missing APP_POSTGRES_URL should fail")
 	}
 }
 
@@ -24,7 +24,7 @@ func TestRun_UpVersionDown(t *testing.T) {
 		}
 		t.Skip("TEST_DATABASE_URL not set")
 	}
-	t.Setenv("APP_DB_URL", url)
+	t.Setenv("APP_POSTGRES_URL", url)
 
 	for _, cmd := range []string{"up", "up", "version", "down", "up"} { // second up: already current is fine
 		if err := run([]string{cmd}); err != nil {

@@ -47,7 +47,7 @@ func run(args []string) error {
 		return err
 	}
 	if cfg.Postgres.URL == "" {
-		return errors.New("APP_DB_URL is required")
+		return errors.New("APP_POSTGRES_URL is required")
 	}
 
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
