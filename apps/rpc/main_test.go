@@ -11,6 +11,8 @@ import (
 
 	"connectrpc.com/connect"
 
+	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1/inventoryv1connect"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -118,6 +120,26 @@ func TestOrderService_E2E(t *testing.T) {
 		t.Fatalf("token with other filters: err = %v", err)
 	}
 
+	// Second BC on the same server: inventory's RPC surface (reservations are
+	// made by the worker, not here; in-process GoChannel has no subscriber).
+	inv := inventoryv1connect.NewInventoryServiceClient(http.DefaultClient, ts.URL)
+	set, err := inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-1", OnHand: 10}))
+	if err != nil || set.Msg.GetStock().GetAvailable() != 10 {
+		t.Fatalf("SetStock: %v, %v", set, err)
+	}
+	stock, err := inv.GetStock(c, connect.NewRequest(&inventoryv1.GetStockRequest{Sku: "SKU-1"}))
+	if err != nil || stock.Msg.GetStock().GetOnHand() != 10 || stock.Msg.GetStock().GetReserved() != 0 {
+		t.Fatalf("GetStock: %v, %v", stock, err)
+	}
+	_, err = inv.GetReservation(c, connect.NewRequest(&inventoryv1.GetReservationRequest{OrderId: o.GetId()}))
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound || ce.Meta().Get("x-error-code") != "reservation.not_found" {
+		t.Fatalf("GetReservation without a worker: err = %v", err)
+	}
+	_, err = inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-1", OnHand: -1}))
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != "stock.negative_quantity" {
+		t.Fatalf("SetStock negative: err = %v", err)
+	}
+
 	// Metrics decorator is wired for every use case and exposed on /api/metrics.
 	res, err := http.Get(ts.URL + server.MetricsPath)
 	if err != nil {
@@ -137,6 +159,10 @@ func TestOrderService_E2E(t *testing.T) {
 		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.create_order"} 1`,
 		`usecase_duration_seconds_count{kind="ok",usecase="ordering.list_orders"} 3`,
 		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.list_orders"} 1`,
+		`usecase_duration_seconds_count{kind="ok",usecase="inventory.set_stock"} 1`,
+		`usecase_duration_seconds_count{kind="invalid_argument",usecase="inventory.set_stock"} 1`,
+		`usecase_duration_seconds_count{kind="ok",usecase="inventory.get_stock"} 1`,
+		`usecase_duration_seconds_count{kind="not_found",usecase="inventory.get_reservation"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("%s missing %q\n%s", server.MetricsPath, want, body)
@@ -236,7 +262,11 @@ func TestDocs(t *testing.T) {
 	}
 
 	on := newServer(t, true)
-	for _, path := range []string{server.DocsPath, server.DocsPath + "/ordering", server.OpenAPIPath + "/ordering.yaml"} {
+	for _, path := range []string{
+		server.DocsPath,
+		server.DocsPath + "/ordering", server.OpenAPIPath + "/ordering.yaml",
+		server.DocsPath + "/inventory", server.OpenAPIPath + "/inventory.yaml",
+	} {
 		if code, _ := get(t, on, path); code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, code)
 		}
