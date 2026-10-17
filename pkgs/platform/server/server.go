@@ -2,7 +2,7 @@
 // by every app. It knows nothing about any bounded context.
 //
 // gin is the HTTP router: Connect handlers are mounted under their service
-// prefix with gin.WrapH, plain routes (/healthz, /metrics, /api/docs) are gin
+// prefix with gin.WrapH, plain routes (/api/healthz, /api/metrics, /api/docs) are gin
 // handlers. Request logging for RPCs stays in the Connect interceptor, which
 // sees procedure and code; gin only contributes routing and panic recovery.
 package server
@@ -25,6 +25,13 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 )
 
+// Everything that is not an RPC lives under /api so one ingress rule covers it
+// (RPC paths are "/<pkg>.<Service>/…" and never collide).
+const (
+	HealthzPath = "/api/healthz"
+	MetricsPath = "/api/metrics"
+)
+
 // Route is implemented by every BC's rpc adapter.
 type Route interface {
 	Route(opts ...connect.HandlerOption) (string, http.Handler)
@@ -36,11 +43,11 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// New mounts every route, /healthz, /metrics (Prometheus exposition of the
+// New mounts every route, /api/healthz, /api/metrics (Prometheus exposition of the
 // OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
 // OpenTelemetry span (otelconnect, outermost) and a request logger carrying
 // its trace_id; plain HTTP routes (docs, openapi) get theirs from otelgin,
-// which skips RPC prefixes, /healthz and /metrics so nothing is traced twice.
+// which skips RPC prefixes, /api/healthz and /api/metrics so nothing is traced twice.
 func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *otel.Providers) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
@@ -79,8 +86,8 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 	for i, prefix := range prefixes {
 		engine.Any(prefix+"*procedure", gin.WrapH(handlers[i]))
 	}
-	engine.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
-	engine.GET("/metrics", gin.WrapH(tel.MetricsHandler))
+	engine.GET(HealthzPath, func(c *gin.Context) { c.Status(http.StatusOK) })
+	engine.GET(MetricsPath, gin.WrapH(tel.MetricsHandler))
 	if cfg.Docs {
 		mountDocs(engine, docs)
 		logger.Info("api docs enabled", "path", DocsPath)
@@ -110,7 +117,7 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 func untracedByGin(prefixes []string) func(*gin.Context) bool {
 	return func(c *gin.Context) bool {
 		path := c.Request.URL.Path
-		if path == "/healthz" || path == "/metrics" {
+		if path == HealthzPath || path == MetricsPath {
 			return false
 		}
 		for _, p := range prefixes {

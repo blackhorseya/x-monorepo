@@ -1,6 +1,6 @@
 // Package otel owns the telemetry of a process: the OpenTelemetry providers
 // and the root slog.Logger. Metrics are always on: a Prometheus reader serves
-// them at /metrics (scrape without a collector). With cfg.Endpoint set, traces,
+// them at /api/metrics (scrape without a collector). With cfg.Endpoint set, traces,
 // metrics and logs are also pushed over OTLP/gRPC (locally: grafana/otel-lgtm
 // from deployments/docker — Tempo, Prometheus, Loki).
 //
@@ -56,7 +56,7 @@ type Providers struct {
 	Propagator  propagation.TextMapPropagator
 	// Logger is the root logger: stdout, plus OTLP (Loki) when exporting.
 	Logger *slog.Logger
-	// MetricsHandler serves the Prometheus exposition of Meter (GET /metrics).
+	// MetricsHandler serves the Prometheus exposition of Meter (GET /api/metrics).
 	MetricsHandler http.Handler
 }
 

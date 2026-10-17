@@ -88,8 +88,8 @@ func TestOrderService_E2E(t *testing.T) {
 		})
 	}
 
-	// Metrics decorator is wired for every use case and exposed on /metrics.
-	res, err := http.Get(ts.URL + "/metrics")
+	// Metrics decorator is wired for every use case and exposed on /api/metrics.
+	res, err := http.Get(ts.URL + server.MetricsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestOrderService_E2E(t *testing.T) {
 		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.create_order"} 1`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("/metrics missing %q\n%s", want, body)
+			t.Fatalf("%s missing %q\n%s", server.MetricsPath, want, body)
 		}
 	}
 }
