@@ -35,6 +35,10 @@ TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
 
 前端：`cd web && pnpm install && pnpm build`（Turborepo；`task gen-ts` 需要網路，產出到 `web/packages/proto`）。
 
+**新 clone / 新 worktree 第一件事**：`task tools && task gen wire`。`./bin` 和 `*.pb.go` / `*.connect.go` 都不在 git 裡
+（CI 每次重生），少了它們什麼都 build 不起來；而 `task gen` 會先刪舊的生成檔再呼叫 `bin/protoc-gen-*`，
+工具不在時會留下一個沒有 pb.go 的 tree。
+
 ## Hook harness（會擋你的東西）
 
 `.claude/settings.json` 掛了兩個 hook，exit 2 時 stderr 會回到 agent：
