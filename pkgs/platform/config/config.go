@@ -17,7 +17,7 @@ type AppConfig struct {
 // HTTP configures the Connect/gRPC/HTTP server.
 type HTTP struct {
 	Addr string
-	// Docs mounts /docs and /openapi/*.yaml. Keep false in production.
+	// Docs mounts /api/docs and /api/openapi/*.yaml. Keep false in production.
 	Docs bool
 }
 

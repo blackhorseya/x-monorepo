@@ -15,6 +15,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
 // End-to-end through the wired graph: proto client → rpc adapter → decorated
@@ -151,5 +152,55 @@ func TestOrderService_Protocols(t *testing.T) {
 				t.Fatalf("err = %v, want NotFound", err)
 			}
 		})
+	}
+}
+
+// Docs are mounted under /api only when enabled; disabled answers with a hint.
+func TestDocs(t *testing.T) {
+	get := func(t *testing.T, h http.Handler, path string) (int, string) {
+		t.Helper()
+		ts := httptest.NewServer(h)
+		defer ts.Close()
+		res, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		var sb strings.Builder
+		_, _ = io.Copy(&sb, res.Body)
+		return res.StatusCode, sb.String()
+	}
+	newServer := func(t *testing.T, docs bool) http.Handler {
+		t.Helper()
+		srv, cleanup, err := Initialize(&config.AppConfig{
+			HTTP: config.HTTP{Addr: ":0", Docs: docs},
+			Log:  config.Log{Level: "error", Format: "text"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(cleanup)
+		return srv.Handler()
+	}
+
+	on := newServer(t, true)
+	for _, path := range []string{server.DocsPath, server.DocsPath + "/ordering", server.OpenAPIPath + "/ordering.yaml"} {
+		if code, _ := get(t, on, path); code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, code)
+		}
+	}
+	if code, body := get(t, on, server.OpenAPIPath+"/ordering.yaml"); code != 200 || !strings.Contains(body, "openapi: 3") {
+		t.Fatalf("openapi body: %d %q", code, body[:min(len(body), 40)])
+	}
+	if code, _ := get(t, on, "/docs"); code != http.StatusNotFound {
+		t.Fatalf("unprefixed /docs = %d, want 404", code)
+	}
+
+	off := newServer(t, false)
+	if code, body := get(t, off, server.DocsPath); code != http.StatusNotFound || !strings.Contains(body, "APP_HTTP_DOCS=true") {
+		t.Fatalf("disabled docs = %d %q", code, body)
+	}
+	if code, _ := get(t, off, server.OpenAPIPath+"/ordering.yaml"); code != http.StatusNotFound {
+		t.Fatalf("disabled openapi = %d, want 404", code)
 	}
 }
