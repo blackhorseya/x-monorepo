@@ -3,8 +3,9 @@
 //
 // Sources, lowest to highest precedence:
 //  1. defaults (below)
-//  2. a YAML file: $APP_CONFIG if set (must exist), else the first of
-//     ./configs/config.yaml, ./config.yaml (optional; see configs/config.example.yaml)
+//  2. a YAML file: $APP_CONFIG if set (must exist; `task run`/`task migrate` point it at
+//     the gitignored configs/local.yaml, seeded from configs/config.example.yaml), else
+//     the first of ./configs/config.yaml, ./config.yaml (optional)
 //  3. environment: APP_<SECTION>_<KEY>, e.g. APP_HTTP_ADDR, APP_POSTGRES_URL
 //
 // Every key has a default so an env var alone is enough — no file, no flags.

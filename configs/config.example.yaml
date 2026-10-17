@@ -1,17 +1,18 @@
-# Copy to configs/config.yaml (gitignored) for local dev, or point APP_CONFIG at a file.
-# Every key can also be set as APP_<SECTION>_<KEY>; env beats file beats these defaults.
+# Template for configs/local.yaml (gitignored). `task run` / `task migrate` copy it there on
+# first use and load it via APP_CONFIG; edit local.yaml freely, or pass CONFIG=<file>.
+# Every key can also be set as APP_<SECTION>_<KEY>; env beats file beats the built-in defaults.
+# Values below are the local-dev profile — production should run on env vars.
 
 http:
   addr: ":8080"
   # mounts /api/docs and /api/openapi/<bc>.yaml — keep false in production
-  docs: false
+  docs: true
 
 log:
-  level: info   # debug | info | warn | error
-  format: json  # json | text
+  level: debug  # debug | info | warn | error
+  format: text  # json | text
 
 postgres:
-  # Matches `task compose-up` (deployments/docker/docker-compose.yaml).
-  # Empty = no database: repositories fall back to in-memory (dev, tests);
-  # `task migrate -- up` needs it set.
+  # Matches `task compose-up` (deployments/docker/docker-compose.yaml); apps ping it at startup.
+  # Empty = no database: repositories fall back to in-memory; `task migrate -- up` needs it set.
   url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable

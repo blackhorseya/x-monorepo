@@ -86,3 +86,21 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("invalid log.format must fail")
 	}
 }
+
+// The example (what `task run` seeds configs/local.yaml from) must stay loadable.
+func TestLoad_ExampleFile(t *testing.T) {
+	example, err := filepath.Abs(filepath.Join("..", "..", "..", "configs", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chdirTemp(t)
+	t.Setenv("APP_CONFIG", example)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HTTP.Docs || cfg.Log.Format != "text" || cfg.Postgres.URL == "" {
+		t.Fatalf("unexpected example profile: %+v", cfg)
+	}
+}
