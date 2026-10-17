@@ -18,7 +18,6 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	wire.Build(
 		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Log", "Postgres", "OTel"),
 		postgres.NewDB,
-		server.NewLogger,
 		server.New,
 		otel.ProviderSet,
 		NewRoutes,

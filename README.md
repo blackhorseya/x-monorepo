@@ -106,20 +106,23 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 
 ## Observability：OTel → LGTM
 
-`platform/otel.New(cfg.OTel, logger)` 回傳 `*otel.Providers`（TracerProvider、MeterProvider、Propagator、`/metrics` handler），
-不碰 global。程式碼只用 OTel API instrument，Prometheus 只是輸出格式：
+`platform/otel.New(cfg.OTel, cfg.Log)` 回傳 `*otel.Providers`（TracerProvider、MeterProvider、Propagator、root `*slog.Logger`、
+`/metrics` handler），不碰 global。程式碼只用 OTel API instrument，Prometheus 只是輸出格式：
 
 - **metrics 永遠開**：MeterProvider 掛一個 Prometheus reader，`server` 把它放在 `GET /metrics`（沒 collector 也能 scrape）。
   `usecasex.Metrics` 記 `usecase.duration`（exposition：`usecase_duration_seconds{usecase, kind}`），
   `otelconnect` 產 `rpc.server.call.duration`，`contrib/instrumentation/runtime` 產 Go runtime metrics
-- **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader；`otelconnect` interceptor 掛最外層，
-  每個 RPC 一個 span，request logger 多帶 `trace_id`，log 與 trace 可對。endpoint 空 = tracer no-op、不 dial
+- **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader、logs 走 batch processor；`otelconnect`
+  interceptor 掛最外層，每個 RPC 一個 span。endpoint 空 = tracer no-op、logger 只寫 stdout、不 dial
+- **logs**：root logger 永遠寫 stdout（`log.format` / `log.level`），有 endpoint 時再 fan-out 一份給 `otelslog` bridge → Loki，
+  同一個 level gate。`contextx.Contextx` 的 `Info/Warn/…` 會把 context 帶給 handler，所以 bridge 自動附 `trace_id` / `span_id`
+  （stdout 那份靠 interceptor 的 `trace_id` attr）。Loki 裡 attr 是 structured metadata：查 `{service_name="rpc"} | trace_id="…"`，
+  不要用 `|=` line filter（比不到）
 - **resource**：明確設 `service.name`（= Prometheus `job`）與 `service.instance.id`（= `instance`）——OTLP→Prometheus
   只有這兩個 attribute 會變成 series label，少了 instance.id 多 replica 會寫同一條 series、counter 亂跳
 
 本機：`task compose-up` 連 `grafana/otel-lgtm` 一起起（Grafana `http://localhost:3000`，匿名 admin；OTLP gRPC :4317），
-`configs/local.yaml` 的 `otel.endpoint` 已指向它。尚未接：slog → Loki（otelslog bridge）、gorm tracing plugin、
-非 Connect route 的 otelgin。
+`configs/local.yaml` 的 `otel.endpoint` 已指向它。尚未接：gorm tracing plugin、非 Connect route 的 otelgin。
 
 ## usecasex：use case 的統一形狀與 decorator
 

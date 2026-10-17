@@ -1,7 +1,8 @@
-// Package otel owns the OpenTelemetry providers of a process. Metrics are
-// always on: a Prometheus reader serves them at /metrics (scrape without a
-// collector). With cfg.Endpoint set, traces and metrics are also pushed over
-// OTLP/gRPC (locally: grafana/otel-lgtm from deployments/docker).
+// Package otel owns the telemetry of a process: the OpenTelemetry providers
+// and the root slog.Logger. Metrics are always on: a Prometheus reader serves
+// them at /metrics (scrape without a collector). With cfg.Endpoint set, traces,
+// metrics and logs are also pushed over OTLP/gRPC (locally: grafana/otel-lgtm
+// from deployments/docker — Tempo, Prometheus, Loki).
 //
 // Nothing is global: apps wire ProviderSet and components receive the
 // providers, so every Initialize() — tests included — gets its own.
@@ -23,11 +24,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -37,11 +40,11 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
 
-// ProviderSet wires New and exposes the MeterProvider for instrumentation
-// (usecasex.NewRecorder) without the rest of Providers.
+// ProviderSet wires New and exposes the MeterProvider (usecasex.NewRecorder)
+// and the root *slog.Logger without the rest of Providers.
 var ProviderSet = wire.NewSet(
 	New,
-	wire.FieldsOf(new(*Providers), "Meter"),
+	wire.FieldsOf(new(*Providers), "Meter", "Logger"),
 )
 
 // Providers is what instrumentation (otelconnect, usecasex, …) consumes.
@@ -49,14 +52,20 @@ type Providers struct {
 	Tracer     trace.TracerProvider
 	Meter      metric.MeterProvider
 	Propagator propagation.TextMapPropagator
+	// Logger is the root logger: stdout, plus OTLP (Loki) when exporting.
+	Logger *slog.Logger
 	// MetricsHandler serves the Prometheus exposition of Meter (GET /metrics).
 	MetricsHandler http.Handler
 }
 
-const shutdownTimeout = 5 * time.Second
+const (
+	shutdownTimeout = 5 * time.Second
+	scopeName       = "github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
+)
 
-// New builds the providers; the cleanup flushes and shuts them down.
-func New(cfg config.OTel, logger *slog.Logger) (*Providers, func(), error) {
+// New builds the providers and the root logger; the cleanup flushes and shuts
+// the exporters down.
+func New(cfg config.OTel, logCfg config.Log) (*Providers, func(), error) {
 	c := context.Background()
 	res, err := newResource(c, cfg)
 	if err != nil {
@@ -73,26 +82,35 @@ func New(cfg config.OTel, logger *slog.Logger) (*Providers, func(), error) {
 	metricOpts := []sdkmetric.Option{sdkmetric.WithResource(res), sdkmetric.WithReader(promReader)}
 
 	var tracer trace.TracerProvider = tracenoop.NewTracerProvider()
+	var lp *sdklog.LoggerProvider
 	shutdowns := []func(context.Context) error{}
 
 	if cfg.Endpoint != "" {
 		// Exporters dial lazily and retry in the background, so a collector that
 		// is down never blocks startup.
-		traceExp, metricExp, err := newOTLPExporters(c, cfg)
+		exp, err := newOTLPExporters(c, cfg)
 		if err != nil {
 			return nil, nil, err
 		}
-		tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithBatcher(traceExp))
+		tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithBatcher(exp.trace))
 		tracer = tp
-		shutdowns = append(shutdowns, tp.Shutdown)
-		metricOpts = append(metricOpts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)))
-		logger.Info("otel exporting", "endpoint", cfg.Endpoint, "service", serviceName(cfg))
+		lp = sdklog.NewLoggerProvider(sdklog.WithResource(res), sdklog.WithProcessor(sdklog.NewBatchProcessor(exp.log)))
+		shutdowns = append(shutdowns, tp.Shutdown, lp.Shutdown)
+		metricOpts = append(metricOpts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp.metric)))
 	}
 
 	mp := sdkmetric.NewMeterProvider(metricOpts...)
 	shutdowns = append(shutdowns, mp.Shutdown)
 	if err := runtime.Start(runtime.WithMeterProvider(mp)); err != nil {
 		return nil, nil, fmt.Errorf("runtime metrics: %w", err)
+	}
+
+	var logger *slog.Logger
+	if lp != nil {
+		logger = newLogger(logCfg, lp)
+		logger.Info("otel exporting", "endpoint", cfg.Endpoint, "service", serviceName(cfg))
+	} else {
+		logger = newLogger(logCfg, nil)
 	}
 
 	cleanup := func() {
@@ -111,29 +129,43 @@ func New(cfg config.OTel, logger *slog.Logger) (*Providers, func(), error) {
 		Tracer:         tracer,
 		Meter:          mp,
 		Propagator:     propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}),
+		Logger:         logger,
 		MetricsHandler: promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
 	}, cleanup, nil
 }
 
-func newOTLPExporters(c context.Context, cfg config.OTel) (sdktrace.SpanExporter, sdkmetric.Exporter, error) {
+type exporters struct {
+	trace  sdktrace.SpanExporter
+	metric sdkmetric.Exporter
+	log    sdklog.Exporter
+}
+
+func newOTLPExporters(c context.Context, cfg config.OTel) (*exporters, error) {
 	traceOpts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(cfg.Endpoint)}
 	metricOpts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(cfg.Endpoint)}
+	logOpts := []otlploggrpc.Option{otlploggrpc.WithEndpoint(cfg.Endpoint)}
 	if cfg.Insecure {
 		traceOpts = append(traceOpts, otlptracegrpc.WithInsecure())
 		metricOpts = append(metricOpts, otlpmetricgrpc.WithInsecure())
+		logOpts = append(logOpts, otlploggrpc.WithInsecure())
 	}
 
-	traceExp, err := otlptracegrpc.New(c, traceOpts...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("otlp trace exporter: %w", err)
+	var exp exporters
+	var err error
+	if exp.trace, err = otlptracegrpc.New(c, traceOpts...); err != nil {
+		return nil, fmt.Errorf("otlp trace exporter: %w", err)
 	}
-	metricExp, err := otlpmetricgrpc.New(c, metricOpts...)
-	if err != nil {
-		_ = traceExp.Shutdown(c)
-		return nil, nil, fmt.Errorf("otlp metric exporter: %w", err)
+	if exp.metric, err = otlpmetricgrpc.New(c, metricOpts...); err != nil {
+		_ = exp.trace.Shutdown(c)
+		return nil, fmt.Errorf("otlp metric exporter: %w", err)
+	}
+	if exp.log, err = otlploggrpc.New(c, logOpts...); err != nil {
+		_ = exp.trace.Shutdown(c)
+		_ = exp.metric.Shutdown(c)
+		return nil, fmt.Errorf("otlp log exporter: %w", err)
 	}
 
-	return traceExp, metricExp, nil
+	return &exp, nil
 }
 
 // newResource sets service.name and service.instance.id explicitly: the OTLP →
