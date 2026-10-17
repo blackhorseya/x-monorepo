@@ -66,7 +66,13 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 	if err != nil {
 		return nil, fmt.Errorf("otelconnect interceptor: %w", err)
 	}
-	opts := connect.WithInterceptors(tracing, NewMetaInterceptor(), NewLoggingInterceptor(logger))
+	validate, err := NewValidateInterceptor()
+	if err != nil {
+		return nil, err
+	}
+	// Outermost first: validation is innermost so a rejected request is still
+	// traced, logged (code invalid_argument) and carries X-Request-Id.
+	opts := connect.WithInterceptors(tracing, NewMetaInterceptor(), NewLoggingInterceptor(logger), validate)
 	prefixes := make([]string, 0, len(routes))
 	handlers := make([]http.Handler, 0, len(routes))
 	for _, r := range routes {

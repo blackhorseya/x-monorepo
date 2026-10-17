@@ -2,9 +2,12 @@ syntax = "proto3";
 
 package ordering.v1;
 
+import "buf/validate/validate.proto";
 import "ordering/v1/entity.proto";
 
 // OrderService is the public RPC contract of the ordering bounded context.
+// Request shape (buf.validate rules below) is rejected at the edge with
+// INVALID_ARGUMENT before any use case runs; business invariants stay in the domain.
 service OrderService {
   rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
   rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
@@ -16,8 +19,8 @@ service OrderService {
 }
 
 message CreateOrderRequest {
-  string customer_id = 1;
-  repeated LineItem items = 2;
+  string customer_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated LineItem items = 2 [(buf.validate.field).repeated.min_items = 1];
 }
 
 message CreateOrderResponse {
@@ -25,7 +28,7 @@ message CreateOrderResponse {
 }
 
 message GetOrderRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 message GetOrderResponse {
@@ -33,7 +36,7 @@ message GetOrderResponse {
 }
 
 message CancelOrderRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 message CancelOrderResponse {
@@ -46,7 +49,7 @@ message ListOrdersRequest {
   // ORDER_STATUS_UNSPECIFIED = any status.
   OrderStatus status = 2;
   // 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
-  int32 page_size = 3;
+  int32 page_size = 3 [(buf.validate.field).int32.gte = 0];
   // Opaque; from the previous ListOrdersResponse.next_page_token.
   string page_token = 4;
 }

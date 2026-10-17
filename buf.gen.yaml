@@ -4,6 +4,10 @@
 version: v2
 managed:
   enabled: true
+  # The protovalidate dependency ships its own Go package
+  # (buf.build/gen/go/bufbuild/protovalidate/...); managed mode must not rewrite it.
+  disable:
+    - module: buf.build/bufbuild/protovalidate
   override:
     - file_option: go_package_prefix
       value: github.com/blackhorseya/x-monorepo

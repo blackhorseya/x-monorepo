@@ -2,10 +2,12 @@ syntax = "proto3";
 
 package common.v1;
 
+import "buf/validate/validate.proto";
+
 // Money is the wire representation of the kernel Money value object.
 message Money {
-  // Amount in minor units (e.g. cents).
-  int64 amount_minor = 1;
+  // Amount in minor units (e.g. cents). Never negative on the wire.
+  int64 amount_minor = 1 [(buf.validate.field).int64.gte = 0];
   // ISO 4217 currency code, e.g. "USD".
-  string currency = 2;
+  string currency = 2 [(buf.validate.field).string.pattern = "^[A-Z]{3}$"];
 }

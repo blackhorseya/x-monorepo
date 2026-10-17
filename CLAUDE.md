@@ -94,6 +94,8 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - **Domain error** 用 `kernel.NewError(kind, code, msg)`；`server.ToConnectError` 依 `Kind` 映射 Connect code，
   `Code` 放 `x-error-code` header。consumer 把 domain error 視為 drop（不重試），infra error 才 retry——所以「業務上的失敗結果」
   （例如 inventory 缺貨）要做成 aggregate 狀態 + event，不能做成 error；反過來 optimistic-lock 的 `stock.ErrStale` 刻意不是 `kernel.Error`。
+- **Validation**：request 形狀由 protovalidate interceptor 擋（`x-error-code: request.validation_failed` + `Violations` detail），
+  consumer path 沒有它，所以 domain 的檢查不能拿掉。
 - **Response meta 走 header**（`X-Request-Id`、`X-Trace-Id`、`traceparent`），不包進 proto message。
 - **Persistence**：每個 BC 一個 Postgres schema（`ordering.orders`、`ordering.schema_migrations`）；SQL 放
   `pkgs/<bc>/infra/postgres/migrations/NNNN_name.{up,down}.sql` 由 BC embed（go.work 下 embed 不能跨 module）。
@@ -108,7 +110,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 
 ## 新增東西的步驟
 
-**新增 RPC**：改 `protos/<bc>/v1/service.proto` → `task gen`（`task breaking` 檢查相容）→ domain 加行為 →
+**新增 RPC**：改 `protos/<bc>/v1/service.proto`（request 欄位規則用 `buf.validate` 寫在 proto，interceptor 會擋；domain 仍保留不變量）→ `task gen`（`task breaking` 檢查相容）→ domain 加行為 →
 `application/dto` + `usecase` → `provider.go` 加 `ProvideXxx` 並用 `decorate()` 包 → `adapters/rpc` 實作
 （`var _ XxxServiceHandler` 會提醒）→ `task wire`。
 
