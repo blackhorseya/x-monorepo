@@ -17,6 +17,9 @@ vars:
     sh: '[ -x {{.BIN_DIR}}/wire ] && echo {{.BIN_DIR}}/wire || echo wire'
   GOLANGCI_LINT:
     sh: '[ -x {{.BIN_DIR}}/golangci-lint ] && echo {{.BIN_DIR}}/golangci-lint || echo golangci-lint'
+  # Container runtime for local infra: podman first, docker as fallback.
+  COMPOSE:
+    sh: 'command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose"'
 
   BUF_VERSION: v1.74.0
   PROTOC_GEN_GO_VERSION: v1.36.12
@@ -244,12 +247,12 @@ tasks:
   compose-up:
     desc: 'start local infra (Postgres on :5432, user/pass/db = app) — apps run on the host'
     cmds:
-      - docker compose -f deployments/docker/docker-compose.yaml up -d
+      - '{{.COMPOSE}} -f deployments/docker/docker-compose.yaml up -d'
 
   compose-down:
     desc: stop local infra and drop its volume
     cmds:
-      - docker compose -f deployments/docker/docker-compose.yaml down -v
+      - '{{.COMPOSE}} -f deployments/docker/docker-compose.yaml down -v'
 
   # ── Modules ─────────────────────────────────────────────────────────────────
 

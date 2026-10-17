@@ -189,7 +189,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 ## Local infra（Compose）
 
 ```bash
-task compose-up      # deployments/docker/docker-compose.yaml：只有 Postgres（:5432，user/pass/db 都是 app）
+task compose-up      # podman compose（沒有 podman 就 docker compose）起 Postgres（:5432，user/pass/db 都是 app）
 export APP_POSTGRES_URL='postgres://app:app@127.0.0.1:5432/app?sslmode=disable'   # 或寫進 configs/config.yaml
 task migrate -- up
 task run             # app 在本機跑，不進容器
