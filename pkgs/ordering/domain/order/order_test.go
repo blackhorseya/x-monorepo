@@ -94,6 +94,9 @@ func TestNew(t *testing.T) {
 			if got.Status() != order.StatusPending {
 				t.Errorf("status = %v, want PENDING", got.Status())
 			}
+			if got.Version() != 0 {
+				t.Errorf("version = %d, want 0 for a never-saved order", got.Version())
+			}
 			if got.Total().Amount() != tt.wantTotal {
 				t.Errorf("total = %d, want %d", got.Total().Amount(), tt.wantTotal)
 			}
@@ -110,12 +113,12 @@ func TestReconstitute(t *testing.T) {
 	items := []order.LineItem{mustItem(t, "SKU-1", 1, mustMoney(t, 100, "USD"))}
 
 	o, err := order.Reconstitute(order.ReconstituteParams{
-		ID: "o-1", CustomerID: "c-1", Items: items, Status: order.StatusCancelled, CreatedAt: created, UpdatedAt: updated,
+		ID: "o-1", CustomerID: "c-1", Items: items, Status: order.StatusCancelled, CreatedAt: created, UpdatedAt: updated, Version: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Status() != order.StatusCancelled || !o.CreatedAt().Equal(created) || !o.UpdatedAt().Equal(updated) {
+	if o.Status() != order.StatusCancelled || !o.CreatedAt().Equal(created) || !o.UpdatedAt().Equal(updated) || o.Version() != 3 {
 		t.Fatalf("reconstituted state mismatch: %+v", o)
 	}
 

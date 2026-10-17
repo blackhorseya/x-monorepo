@@ -59,6 +59,9 @@ func kindOf(err error) string {
 		return "ok"
 	}
 
+	if errors.Is(err, kernel.ErrConcurrentUpdate) {
+		return "aborted"
+	}
 	var de *kernel.Error
 	if errors.As(err, &de) {
 		return de.Kind().String()

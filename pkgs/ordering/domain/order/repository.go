@@ -15,7 +15,10 @@ type ListParams struct {
 type Repository interface {
 	// FindByID returns ErrNotFound when the order does not exist.
 	FindByID(c context.Context, id ID) (*Order, error)
-	// Save inserts or updates the whole aggregate.
+	// Save inserts a new order (Version 0; ErrDuplicate if the id is taken) or
+	// updates a loaded one, comparing Version: ErrStale when another writer saved
+	// it first. The stored version advances on every save, but the in-memory
+	// aggregate does not: reload before saving it again.
 	Save(c context.Context, o *Order) error
 	// List returns up to p.Limit orders newest first (created_at desc, id desc)
 	// and the cursor of the next page, or nil when this is the last page.

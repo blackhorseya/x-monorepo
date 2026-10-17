@@ -1,7 +1,7 @@
 package stock
 
 import (
-	"errors"
+	"fmt"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 )
@@ -18,8 +18,8 @@ var (
 	ErrCorruptQuantities = kernel.NewError(kernel.KindInternal, "stock.corrupt_quantities", "persisted stock quantities are inconsistent")
 
 	// ErrStale is returned by Repository.Save when the row changed since it was
-	// loaded (optimistic concurrency). It is deliberately NOT a kernel.Error:
-	// consumers treat kernel errors as final and drop the message, while a lost
-	// race must be retried.
-	ErrStale = errors.New("stock: concurrent update, reload and retry")
+	// loaded (optimistic concurrency). It wraps kernel.ErrConcurrentUpdate and is
+	// deliberately NOT a kernel.Error: consumers treat kernel errors as final and
+	// drop the message, while a lost race must be retried.
+	ErrStale = fmt.Errorf("stock: reload and retry: %w", kernel.ErrConcurrentUpdate)
 )

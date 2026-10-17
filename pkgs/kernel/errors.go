@@ -2,7 +2,17 @@
 // bounded context agrees on. It depends on nothing (no proto, no BC, no platform).
 package kernel
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrConcurrentUpdate marks an optimistic-lock loss: another writer changed the
+// aggregate after it was loaded. Bounded contexts wrap it in their own ErrStale
+// with %w. It is deliberately not an *Error: a consumer treats *Error as a
+// final answer and drops the message, while a lost race must reload and retry.
+// The rpc edge maps it to Aborted, which tells the client to retry.
+var ErrConcurrentUpdate = errors.New("concurrent update")
 
 // Kind classifies a domain error so adapters can map it to a transport code
 // without the domain knowing about gRPC / HTTP / MQ.

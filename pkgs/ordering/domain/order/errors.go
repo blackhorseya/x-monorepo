@@ -1,6 +1,10 @@
 package order
 
-import "github.com/blackhorseya/x-monorepo/pkgs/kernel"
+import (
+	"fmt"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+)
 
 var (
 	ErrInvalidID       = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_id", "order id must not be empty")
@@ -13,6 +17,13 @@ var (
 	// ErrInvalidStatusFilter is a list filter naming a status this version does not know.
 	ErrInvalidStatusFilter = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_status_filter", "unknown order status filter")
 	ErrInvalidCursor       = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_cursor", "cursor must carry a timestamp and an id")
+	// ErrStale is returned by Repository.Save when the order changed since it was
+	// loaded (optimistic concurrency, e.g. two concurrent cancels). It wraps
+	// kernel.ErrConcurrentUpdate and is deliberately NOT a kernel.Error: the
+	// consumer must retry (reload → already cancelled → ErrCannotCancel → drop),
+	// and the rpc edge answers Aborted.
+	ErrStale = fmt.Errorf("order: reload and retry: %w", kernel.ErrConcurrentUpdate)
+
 	// ErrDuplicate is returned by Repository.Save when another order already owns the id.
 	ErrDuplicate = kernel.NewError(kernel.KindConflict, "order.duplicate", "order already exists")
 	// ErrInvalidStatus means persisted state names a status this version does not know.

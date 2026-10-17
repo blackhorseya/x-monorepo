@@ -190,8 +190,11 @@ CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStoc
 - **event 的 schema 歸 consumer 所有**：缺貨是 ordering 的 message（`OrderCancellationRequested`），inventory 把它發進 ordering 的 topic / 表（同一個 DB、同一個交易）。
 - **缺貨是狀態不是 error**：`reservation.Reserve` 回 `REJECTED` + `Rejected` event，一樣落地；重送的 `OrderCreated` 找到既有 reservation 就什麼都不做。
   consumer 把 `kernel.Error` 當 final（drop），所以缺貨若用 error 表達就不會有人發取消。
-- Stock 用 `version` 做 optimistic lock：`Save` 是 `ON CONFLICT ... WHERE stocks.version = EXCLUDED.version`，輸的那邊拿 `stock.ErrStale`——
-  它**刻意不是** `kernel.Error`，consumer 會 retry 而不是 drop。
+- Stock 與 Order 都用 `version` 做 optimistic lock，輸的那邊拿 `stock.ErrStale` / `order.ErrStale`。它們 wrap `kernel.ErrConcurrentUpdate`，
+  **刻意不是** `kernel.Error`：consumer 會 retry 而不是 drop，rpc 由 `server.ToConnectError` 回 `Aborted`（`x-error-code: concurrent_update`），
+  `usecasex` 記成 `kind=aborted`、log 為 Warn。Stock 的 `Save` 是 `ON CONFLICT ... WHERE stocks.version = EXCLUDED.version`；
+  Order 拆成 version 0 → `INSERT`（撞 id 是 `order.ErrDuplicate`）與 `UPDATE ... WHERE version = <loaded>`。
+  兩個同時的 CancelOrder：先 commit 的贏，另一個 `ErrStale`；consumer 重試時 reload 看到 CANCELLED → `ErrCannotCancel` → drop。
 - 已知限制：topic 之間沒有順序保證。`OrderCancelled` 若比 `OrderCreated` 先到 inventory，release 找不到 reservation（drop），之後的 reserve 會留住庫存；
   要補的話是 reservation 的 tombstone（先收到 cancel 就記一筆 RELEASED），尚未做。
 
@@ -236,8 +239,8 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 - `usecasex.Transactional`：把 usecase 整個放進 `Transactor.Do`。usecase 拿到的 `c` 帶著 tx，repository 與 outbox
   publisher 用 `platformpg.TxOrDB` 取用，所以全部寫入一起 commit / rollback。任何 `Do` 的錯誤（含 commit 失敗）都丟掉 output。
   放在最內層，commit 失敗會被 logging / metrics 記成這次 usecase 的失敗。只給寫入用：讀取包 transaction 只會多一次 BEGIN/COMMIT。
-  它保證的是 atomicity，不是 isolation：Postgres 預設 READ COMMITTED，兩個同時的 CancelOrder 仍可能都讀到 PENDING。
-  inventory 的 stock 有 version 欄位擋這件事，ordering 目前沒有
+  它保證的是 atomicity，不是 isolation：Postgres 預設 READ COMMITTED，兩個同時的 CancelOrder 都可能讀到 PENDING。
+  擋住重複寫入的是 aggregate 的 `version`（見上方 optimistic lock），不是 transaction
 
 ## Gates（harness）
 

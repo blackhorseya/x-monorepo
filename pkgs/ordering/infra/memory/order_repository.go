@@ -41,25 +41,38 @@ func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order
 	return clone(o)
 }
 
+// Save follows the Postgres contract: Version 0 inserts (ErrDuplicate if the id
+// is taken); anything else updates only if the stored version still matches
+// (ErrStale otherwise). The stored copy's version advances by one.
 func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	cp, err := clone(o)
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	cur, exists := i.data[o.ID()]
+	switch {
+	case o.Version() == 0 && exists:
+		return order.ErrDuplicate
+	case o.Version() != 0 && (!exists || cur.Version() != o.Version()):
+		return order.ErrStale
+	}
+
+	cp, err := cloneAt(o, o.Version()+1)
 	if err != nil {
 		return err
 	}
-
-	i.mu.Lock()
-	defer i.mu.Unlock()
 	i.data[o.ID()] = cp
 
 	return nil
 }
 
-func clone(o *order.Order) (*order.Order, error) {
+func clone(o *order.Order) (*order.Order, error) { return cloneAt(o, o.Version()) }
+
+func cloneAt(o *order.Order, version int64) (*order.Order, error) {
 	return order.Reconstitute(order.ReconstituteParams{
 		ID:         o.ID(),
 		CustomerID: o.CustomerID(),
@@ -67,6 +80,7 @@ func clone(o *order.Order) (*order.Order, error) {
 		Status:     o.Status(),
 		CreatedAt:  o.CreatedAt(),
 		UpdatedAt:  o.UpdatedAt(),
+		Version:    version,
 	})
 }
 

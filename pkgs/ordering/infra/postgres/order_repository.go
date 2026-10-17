@@ -35,6 +35,7 @@ type orderRow struct {
 	Status     string         `gorm:"not null"`
 	CreatedAt  time.Time      `gorm:"not null;autoCreateTime:false"`
 	UpdatedAt  time.Time      `gorm:"not null;autoUpdateTime:false"`
+	Version    int64          `gorm:"not null"`
 	Items      []orderItemRow `gorm:"foreignKey:OrderID;references:ID"`
 }
 
@@ -68,8 +69,12 @@ func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order
 	return toDomain(row)
 }
 
-// Save writes the whole aggregate in one transaction: upsert the order row,
-// then replace its items (delete + insert keeps positions authoritative).
+// Save writes the whole aggregate in one transaction. A never-saved order
+// (Version 0) is a plain INSERT, so an id collision surfaces as ErrDuplicate
+// instead of silently overwriting. A loaded order is an UPDATE guarded by
+// `version = <loaded>` that bumps the version; zero rows means another writer
+// saved first → ErrStale. Items are replaced (delete + insert keeps positions
+// authoritative).
 func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
@@ -79,14 +84,29 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	row := toRow(o)
 	// Joins the use case's transaction when there is one (Transactor), else opens its own.
 	err := platformpg.Transaction(ctx, i.db, func(_ context.Context, tx *gorm.DB) error {
-		if err := tx.Omit(clause.Associations).Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"customer_id", "status", "updated_at"}),
-		}).Create(&row).Error; err != nil {
-			return fmt.Errorf("upsert order %s: %w", o.ID(), err)
-		}
-		if err := tx.Where("order_id = ?", row.ID).Delete(&orderItemRow{}).Error; err != nil {
-			return fmt.Errorf("clear order items %s: %w", o.ID(), err)
+		if o.Version() == 0 {
+			row.Version = 1
+			if err := tx.Omit(clause.Associations).Create(&row).Error; err != nil {
+				return fmt.Errorf("insert order %s: %w", o.ID(), err)
+			}
+		} else {
+			res := tx.Model(&orderRow{}).
+				Where("id = ? AND version = ?", row.ID, o.Version()).
+				Updates(map[string]any{
+					"customer_id": row.CustomerID,
+					"status":      row.Status,
+					"updated_at":  row.UpdatedAt,
+					"version":     gorm.Expr("version + 1"),
+				})
+			if res.Error != nil {
+				return fmt.Errorf("update order %s: %w", o.ID(), res.Error)
+			}
+			if res.RowsAffected == 0 {
+				return fmt.Errorf("update order %s: %w", o.ID(), order.ErrStale)
+			}
+			if err := tx.Where("order_id = ?", row.ID).Delete(&orderItemRow{}).Error; err != nil {
+				return fmt.Errorf("clear order items %s: %w", o.ID(), err)
+			}
 		}
 		if err := tx.Create(&row.Items).Error; err != nil {
 			return fmt.Errorf("insert order items %s: %w", o.ID(), err)
@@ -158,6 +178,7 @@ func toRow(o *order.Order) orderRow {
 		Status:     o.Status().String(),
 		CreatedAt:  o.CreatedAt(),
 		UpdatedAt:  o.UpdatedAt(),
+		Version:    o.Version(),
 		Items:      make([]orderItemRow, 0, len(items)),
 	}
 	for pos, it := range items {
@@ -200,6 +221,7 @@ func toDomain(row orderRow) (*order.Order, error) {
 		Status:     status,
 		CreatedAt:  row.CreatedAt.UTC(),
 		UpdatedAt:  row.UpdatedAt.UTC(),
+		Version:    row.Version,
 	})
 }
 

@@ -3,6 +3,7 @@ package usecasex_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -33,6 +34,8 @@ func TestMetrics_KindAttribute(t *testing.T) {
 	_, _ = uc.Execute(c, 1) // not_found
 	fail = errors.New("boom")
 	_, _ = uc.Execute(c, 1) // internal
+	fail = fmt.Errorf("save: %w", kernel.ErrConcurrentUpdate)
+	_, _ = uc.Execute(c, 1) // aborted
 
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(c, &rm); err != nil {
@@ -63,7 +66,7 @@ func TestMetrics_KindAttribute(t *testing.T) {
 		}
 	}
 
-	want := map[string]uint64{"ok": 1, "not_found": 2, "internal": 1}
+	want := map[string]uint64{"ok": 1, "not_found": 2, "internal": 1, "aborted": 1}
 	for k, n := range want {
 		if got[k] != n {
 			t.Fatalf("kind %q count = %d, want %d (all: %v)", k, got[k], n, got)
