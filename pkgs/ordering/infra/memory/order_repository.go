@@ -5,6 +5,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
@@ -67,4 +68,55 @@ func clone(o *order.Order) (*order.Order, error) {
 		CreatedAt:  o.CreatedAt(),
 		UpdatedAt:  o.UpdatedAt(),
 	})
+}
+
+// List filters, sorts newest first (created_at desc, id desc) and applies the
+// keyset cursor exactly like the Postgres implementation does in SQL.
+func (i *OrderRepository) List(c context.Context, p order.ListParams) ([]*order.Order, *order.Cursor, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	matches := make([]*order.Order, 0, len(i.data))
+	for _, o := range i.data {
+		if p.CustomerID != "" && o.CustomerID() != p.CustomerID {
+			continue
+		}
+		if p.Status != nil && o.Status() != *p.Status {
+			continue
+		}
+		if p.After != nil && !p.After.Before(o.CreatedAt(), o.ID()) {
+			continue
+		}
+		matches = append(matches, o)
+	}
+	sort.Slice(matches, func(a, b int) bool {
+		x, y := matches[a], matches[b]
+		if !x.CreatedAt().Equal(y.CreatedAt()) {
+			return x.CreatedAt().After(y.CreatedAt())
+		}
+		return x.ID() > y.ID()
+	})
+
+	var next *order.Cursor
+	if p.Limit > 0 && len(matches) > p.Limit {
+		matches = matches[:p.Limit]
+		cur := order.CursorOf(matches[p.Limit-1])
+		next = &cur
+	}
+
+	out := make([]*order.Order, 0, len(matches))
+	for _, o := range matches {
+		cp, err := clone(o)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, cp)
+	}
+
+	return out, next, nil
 }

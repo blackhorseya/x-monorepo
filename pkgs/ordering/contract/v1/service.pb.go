@@ -293,6 +293,131 @@ func (x *CancelOrderResponse) GetOrder() *Order {
 	return nil
 }
 
+type ListOrdersRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Empty = any customer.
+	CustomerId string `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	// ORDER_STATUS_UNSPECIFIED = any status.
+	Status OrderStatus `protobuf:"varint,2,opt,name=status,proto3,enum=ordering.v1.OrderStatus" json:"status,omitempty"`
+	// 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+	PageSize int32 `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// Opaque; from the previous ListOrdersResponse.next_page_token.
+	PageToken     string `protobuf:"bytes,4,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListOrdersRequest) Reset() {
+	*x = ListOrdersRequest{}
+	mi := &file_ordering_v1_service_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListOrdersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListOrdersRequest) ProtoMessage() {}
+
+func (x *ListOrdersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_service_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListOrdersRequest.ProtoReflect.Descriptor instead.
+func (*ListOrdersRequest) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_service_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ListOrdersRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *ListOrdersRequest) GetStatus() OrderStatus {
+	if x != nil {
+		return x.Status
+	}
+	return OrderStatus_ORDER_STATUS_UNSPECIFIED
+}
+
+func (x *ListOrdersRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListOrdersRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListOrdersResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Orders []*Order               `protobuf:"bytes,1,rep,name=orders,proto3" json:"orders,omitempty"`
+	// Empty when this is the last page.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListOrdersResponse) Reset() {
+	*x = ListOrdersResponse{}
+	mi := &file_ordering_v1_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListOrdersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListOrdersResponse) ProtoMessage() {}
+
+func (x *ListOrdersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListOrdersResponse.ProtoReflect.Descriptor instead.
+func (*ListOrdersResponse) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ListOrdersResponse) GetOrders() []*Order {
+	if x != nil {
+		return x.Orders
+	}
+	return nil
+}
+
+func (x *ListOrdersResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_ordering_v1_service_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_service_proto_rawDesc = "" +
@@ -311,11 +436,23 @@ const file_ordering_v1_service_proto_rawDesc = "" +
 	"\x12CancelOrderRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"?\n" +
 	"\x13CancelOrderResponse\x12(\n" +
-	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order2\xfb\x01\n" +
+	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"\xa2\x01\n" +
+	"\x11ListOrdersRequest\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
+	"customerId\x120\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x18.ordering.v1.OrderStatusR\x06status\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x04 \x01(\tR\tpageToken\"h\n" +
+	"\x12ListOrdersResponse\x12*\n" +
+	"\x06orders\x18\x01 \x03(\v2\x12.ordering.v1.OrderR\x06orders\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\xca\x02\n" +
 	"\fOrderService\x12P\n" +
 	"\vCreateOrder\x12\x1f.ordering.v1.CreateOrderRequest\x1a .ordering.v1.CreateOrderResponse\x12G\n" +
 	"\bGetOrder\x12\x1c.ordering.v1.GetOrderRequest\x1a\x1d.ordering.v1.GetOrderResponse\x12P\n" +
-	"\vCancelOrder\x12\x1f.ordering.v1.CancelOrderRequest\x1a .ordering.v1.CancelOrderResponseB\xb5\x01\n" +
+	"\vCancelOrder\x12\x1f.ordering.v1.CancelOrderRequest\x1a .ordering.v1.CancelOrderResponse\x12M\n" +
+	"\n" +
+	"ListOrders\x12\x1e.ordering.v1.ListOrdersRequest\x1a\x1f.ordering.v1.ListOrdersResponseB\xb5\x01\n" +
 	"\x0fcom.ordering.v1B\fServiceProtoP\x01ZGgithub.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1\xa2\x02\x03OXX\xaa\x02\vOrdering.V1\xca\x02\vOrdering\\V1\xe2\x02\x17Ordering\\V1\\GPBMetadata\xea\x02\fOrdering::V1b\x06proto3"
 
 var (
@@ -330,7 +467,7 @@ func file_ordering_v1_service_proto_rawDescGZIP() []byte {
 	return file_ordering_v1_service_proto_rawDescData
 }
 
-var file_ordering_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_ordering_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_ordering_v1_service_proto_goTypes = []any{
 	(*CreateOrderRequest)(nil),  // 0: ordering.v1.CreateOrderRequest
 	(*CreateOrderResponse)(nil), // 1: ordering.v1.CreateOrderResponse
@@ -338,25 +475,32 @@ var file_ordering_v1_service_proto_goTypes = []any{
 	(*GetOrderResponse)(nil),    // 3: ordering.v1.GetOrderResponse
 	(*CancelOrderRequest)(nil),  // 4: ordering.v1.CancelOrderRequest
 	(*CancelOrderResponse)(nil), // 5: ordering.v1.CancelOrderResponse
-	(*LineItem)(nil),            // 6: ordering.v1.LineItem
-	(*Order)(nil),               // 7: ordering.v1.Order
+	(*ListOrdersRequest)(nil),   // 6: ordering.v1.ListOrdersRequest
+	(*ListOrdersResponse)(nil),  // 7: ordering.v1.ListOrdersResponse
+	(*LineItem)(nil),            // 8: ordering.v1.LineItem
+	(*Order)(nil),               // 9: ordering.v1.Order
+	(OrderStatus)(0),            // 10: ordering.v1.OrderStatus
 }
 var file_ordering_v1_service_proto_depIdxs = []int32{
-	6, // 0: ordering.v1.CreateOrderRequest.items:type_name -> ordering.v1.LineItem
-	7, // 1: ordering.v1.CreateOrderResponse.order:type_name -> ordering.v1.Order
-	7, // 2: ordering.v1.GetOrderResponse.order:type_name -> ordering.v1.Order
-	7, // 3: ordering.v1.CancelOrderResponse.order:type_name -> ordering.v1.Order
-	0, // 4: ordering.v1.OrderService.CreateOrder:input_type -> ordering.v1.CreateOrderRequest
-	2, // 5: ordering.v1.OrderService.GetOrder:input_type -> ordering.v1.GetOrderRequest
-	4, // 6: ordering.v1.OrderService.CancelOrder:input_type -> ordering.v1.CancelOrderRequest
-	1, // 7: ordering.v1.OrderService.CreateOrder:output_type -> ordering.v1.CreateOrderResponse
-	3, // 8: ordering.v1.OrderService.GetOrder:output_type -> ordering.v1.GetOrderResponse
-	5, // 9: ordering.v1.OrderService.CancelOrder:output_type -> ordering.v1.CancelOrderResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	8,  // 0: ordering.v1.CreateOrderRequest.items:type_name -> ordering.v1.LineItem
+	9,  // 1: ordering.v1.CreateOrderResponse.order:type_name -> ordering.v1.Order
+	9,  // 2: ordering.v1.GetOrderResponse.order:type_name -> ordering.v1.Order
+	9,  // 3: ordering.v1.CancelOrderResponse.order:type_name -> ordering.v1.Order
+	10, // 4: ordering.v1.ListOrdersRequest.status:type_name -> ordering.v1.OrderStatus
+	9,  // 5: ordering.v1.ListOrdersResponse.orders:type_name -> ordering.v1.Order
+	0,  // 6: ordering.v1.OrderService.CreateOrder:input_type -> ordering.v1.CreateOrderRequest
+	2,  // 7: ordering.v1.OrderService.GetOrder:input_type -> ordering.v1.GetOrderRequest
+	4,  // 8: ordering.v1.OrderService.CancelOrder:input_type -> ordering.v1.CancelOrderRequest
+	6,  // 9: ordering.v1.OrderService.ListOrders:input_type -> ordering.v1.ListOrdersRequest
+	1,  // 10: ordering.v1.OrderService.CreateOrder:output_type -> ordering.v1.CreateOrderResponse
+	3,  // 11: ordering.v1.OrderService.GetOrder:output_type -> ordering.v1.GetOrderResponse
+	5,  // 12: ordering.v1.OrderService.CancelOrder:output_type -> ordering.v1.CancelOrderResponse
+	7,  // 13: ordering.v1.OrderService.ListOrders:output_type -> ordering.v1.ListOrdersResponse
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_ordering_v1_service_proto_init() }
@@ -371,7 +515,7 @@ func file_ordering_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ordering_v1_service_proto_rawDesc), len(file_ordering_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

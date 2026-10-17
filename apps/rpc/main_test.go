@@ -88,6 +88,36 @@ func TestOrderService_E2E(t *testing.T) {
 		})
 	}
 
+	// ListOrders: cursor pagination end to end (3 orders for c-2, pages of 2).
+	for range 2 {
+		if _, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
+			CustomerId: "c-2",
+			Items:      []*orderingv1.LineItem{{Sku: "S", Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 1, Currency: "USD"}}},
+		})); err != nil {
+			t.Fatalf("CreateOrder c-2: %v", err)
+		}
+	}
+	page1, err := client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{PageSize: 2}))
+	if err != nil || len(page1.Msg.GetOrders()) != 2 || page1.Msg.GetNextPageToken() == "" {
+		t.Fatalf("ListOrders page 1: %v, %v", page1, err)
+	}
+	page2, err := client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{PageSize: 2, PageToken: page1.Msg.GetNextPageToken()}))
+	if err != nil || len(page2.Msg.GetOrders()) != 1 || page2.Msg.GetNextPageToken() != "" {
+		t.Fatalf("ListOrders page 2: %v, %v", page2, err)
+	}
+	if page2.Msg.GetOrders()[0].GetId() != o.GetId() {
+		t.Fatalf("oldest order last: got %s want %s", page2.Msg.GetOrders()[0].GetId(), o.GetId())
+	}
+	only, err := client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{CustomerId: "c-1", Status: orderingv1.OrderStatus_ORDER_STATUS_CANCELLED}))
+	if err != nil || len(only.Msg.GetOrders()) != 1 {
+		t.Fatalf("ListOrders filtered: %v, %v", only, err)
+	}
+	var ce *connect.Error
+	_, err = client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{CustomerId: "c-1", PageToken: page1.Msg.GetNextPageToken()}))
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != "pagination.invalid_token" {
+		t.Fatalf("token with other filters: err = %v", err)
+	}
+
 	// Metrics decorator is wired for every use case and exposed on /api/metrics.
 	res, err := http.Get(ts.URL + server.MetricsPath)
 	if err != nil {
@@ -100,11 +130,13 @@ func TestOrderService_E2E(t *testing.T) {
 	}
 	body := sb.String()
 	for _, want := range []string{
-		`usecase_duration_seconds_count{kind="ok",usecase="ordering.create_order"} 1`,
+		`usecase_duration_seconds_count{kind="ok",usecase="ordering.create_order"} 3`,
 		`usecase_duration_seconds_count{kind="ok",usecase="ordering.cancel_order"} 1`,
 		`usecase_duration_seconds_count{kind="failed_precondition",usecase="ordering.cancel_order"} 1`,
 		`usecase_duration_seconds_count{kind="not_found",usecase="ordering.get_order"} 1`,
 		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.create_order"} 1`,
+		`usecase_duration_seconds_count{kind="ok",usecase="ordering.list_orders"} 3`,
+		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.list_orders"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("%s missing %q\n%s", server.MetricsPath, want, body)

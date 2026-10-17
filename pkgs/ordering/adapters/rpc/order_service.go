@@ -22,6 +22,7 @@ type (
 	CreateOrderUC = usecasex.UseCase[dto.CreateOrderInput, *dto.OrderOutput]
 	GetOrderUC    = usecasex.UseCase[dto.GetOrderInput, *dto.OrderOutput]
 	CancelOrderUC = usecasex.UseCase[dto.CancelOrderInput, *dto.OrderOutput]
+	ListOrdersUC  = usecasex.UseCase[dto.ListOrdersInput, *dto.ListOrdersOutput]
 )
 
 // OrderService implements the generated OrderServiceHandler.
@@ -29,10 +30,11 @@ type OrderService struct {
 	createOrder CreateOrderUC
 	getOrder    GetOrderUC
 	cancelOrder CancelOrderUC
+	listOrders  ListOrdersUC
 }
 
-func NewOrderService(createOrder CreateOrderUC, getOrder GetOrderUC, cancelOrder CancelOrderUC) *OrderService {
-	return &OrderService{createOrder: createOrder, getOrder: getOrder, cancelOrder: cancelOrder}
+func NewOrderService(createOrder CreateOrderUC, getOrder GetOrderUC, cancelOrder CancelOrderUC, listOrders ListOrdersUC) *OrderService {
+	return &OrderService{createOrder: createOrder, getOrder: getOrder, cancelOrder: cancelOrder, listOrders: listOrders}
 }
 
 // Route returns the mount path and handler (Connect + gRPC + gRPC-Web on one port).
@@ -77,4 +79,26 @@ func (h *OrderService) CancelOrder(
 	}
 
 	return connect.NewResponse(&orderingv1.CancelOrderResponse{Order: toProtoOrder(out)}), nil
+}
+
+func (h *OrderService) ListOrders(
+	c context.Context,
+	req *connect.Request[orderingv1.ListOrdersRequest],
+) (*connect.Response[orderingv1.ListOrdersResponse], error) {
+	out, err := h.listOrders.Execute(c, dto.ListOrdersInput{
+		CustomerID: req.Msg.GetCustomerId(),
+		Status:     toDTOStatus(req.Msg.GetStatus()),
+		PageSize:   req.Msg.GetPageSize(),
+		PageToken:  req.Msg.GetPageToken(),
+	})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	orders := make([]*orderingv1.Order, 0, len(out.Orders))
+	for i := range out.Orders {
+		orders = append(orders, toProtoOrder(&out.Orders[i]))
+	}
+
+	return connect.NewResponse(&orderingv1.ListOrdersResponse{Orders: orders, NextPageToken: out.NextPageToken}), nil
 }

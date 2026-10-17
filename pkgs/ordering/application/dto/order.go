@@ -30,6 +30,18 @@ type CancelOrderInput struct {
 	Reason string
 }
 
+type ListOrdersInput struct {
+	CustomerID string // "" = any
+	Status     string // "" = any; PENDING | CANCELLED
+	PageSize   int32  // 0 = default
+	PageToken  string // "" = first page
+}
+
+type ListOrdersOutput struct {
+	Orders        []OrderOutput
+	NextPageToken string // "" = last page
+}
+
 type OrderOutput struct {
 	ID         string
 	CustomerID string

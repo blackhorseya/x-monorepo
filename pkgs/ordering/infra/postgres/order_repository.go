@@ -95,6 +95,59 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	return translate(err)
 }
 
+// List is a keyset query: the row-value comparison matches the composite
+// indexes added in migration 0002, so every page is an index range scan. One
+// extra row is fetched to know whether a next page exists without a COUNT.
+func (i *OrderRepository) List(c context.Context, p order.ListParams) ([]*order.Order, *order.Cursor, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	q := i.db.WithContext(ctx).
+		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
+		Order("created_at DESC, id DESC")
+	if p.CustomerID != "" {
+		q = q.Where("customer_id = ?", p.CustomerID)
+	}
+	if p.Status != nil {
+		q = q.Where("status = ?", p.Status.String())
+	}
+	if p.After != nil {
+		q = q.Where("(created_at, id) < (?, ?)", p.After.CreatedAt(), p.After.ID().String())
+	}
+	if p.Limit > 0 {
+		q = q.Limit(p.Limit + 1)
+	}
+
+	var rows []orderRow
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, nil, translate(fmt.Errorf("list orders: %w", err))
+	}
+
+	hasMore := p.Limit > 0 && len(rows) > p.Limit
+	if hasMore {
+		rows = rows[:p.Limit]
+	}
+
+	out := make([]*order.Order, 0, len(rows))
+	for _, row := range rows {
+		o, err := toDomain(row)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, o)
+	}
+
+	var next *order.Cursor
+	if hasMore {
+		cur := order.CursorOf(out[len(out)-1])
+		next = &cur
+	}
+
+	return out, next, nil
+}
+
 func toRow(o *order.Order) orderRow {
 	items := o.Items()
 	row := orderRow{
