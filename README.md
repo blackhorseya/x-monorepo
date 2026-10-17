@@ -84,7 +84,9 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
 │   └── migrate/                   # 收集各 BC 的 embed migrations，up / down / version；唯一能 import infra 的 app
-└── web/                           # Turborepo：apps/*、packages/proto（@repo/proto）
+└── web/                           # Turborepo（pnpm）
+    ├── packages/proto/            # @repo/proto：buf 生成的 connect-es client（有 commit）
+    └── apps/console/              # Vite + React + TanStack Router / Query + Tailwind v4 + shadcn/ui
 ```
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
@@ -271,6 +273,28 @@ proto-first：OpenAPI 是 proto 的產物，不是另一份契約。`task gen` �
 BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 BC，`APP_HTTP_DOCS=true`
 時才掛 `/api/docs`（Scalar UI，`/api/docs/<bc>`）與 `/api/openapi/<bc>.yaml`。production 不開。前端不需要它 —— `web/packages/proto`
 直接從 proto 生 connect-es client。
+
+## Web console：`web/apps/console`
+
+一個最小的操作介面，用來證明 `@repo/proto` 真的能被前端用：建單、取消、設庫存，並看 inventory 非同步寫出的
+reservation 狀態。
+
+```bash
+task run            # rpc :8080（要看到 reservation 還需要 Postgres + task migrate -- up + task worker）
+task web-dev        # http://localhost:5173；CONSOLE_API=http://host:port 可改 proxy 目標
+task web-typecheck  # @repo/proto + @repo/console 的 tsc --noEmit（CI 的 web job 也跑這個 + web-build）
+```
+
+| 主題 | 做法 |
+|---|---|
+| 呼叫後端 | `@connectrpc/connect-web` + `@repo/proto` 的 service descriptor；vite dev server 把 `/ordering.v1.*`、`/inventory.v1.*` proxy 到 Go server，瀏覽器維持 same-origin，所以 server **不需要 CORS** |
+| 錯誤 | `describe()` 讀 `x-error-code` header，並解析 protovalidate 的 `Violations` detail 成 `items[0].sku: …` |
+| 資料 | TanStack Query：server 只有 unary RPC，所以 orders 與 reservation 用 `refetchInterval` polling；reservation 到 REJECTED / RELEASED（終態）就停。domain error 不 retry |
+| 路由 | TanStack Router（code-based，`/orders`、`/stock`），不需要額外的 codegen plugin |
+| UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |
+
+`@repo/proto` 的 `exports` 指向 `src/gen/*.ts`，由 bundler 直接吃 TS 原始檔，不需要 build step。
+production 部署（同 origin 掛靜態檔，或另配 CORS）尚未處理。
 
 ## Conventions
 
