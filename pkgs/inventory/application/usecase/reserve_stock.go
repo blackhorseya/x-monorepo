@@ -23,13 +23,12 @@ import (
 type ReserveStock struct {
 	reservations reservation.Repository
 	stocks       stock.Repository
-	tx           port.Transactor
 	events       port.EventPublisher
 	clock        port.Clock
 }
 
-func NewReserveStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock) *ReserveStock {
-	return &ReserveStock{reservations: reservations, stocks: stocks, tx: tx, events: events, clock: clock}
+func NewReserveStock(reservations reservation.Repository, stocks stock.Repository, events port.EventPublisher, clock port.Clock) *ReserveStock {
+	return &ReserveStock{reservations: reservations, stocks: stocks, events: events, clock: clock}
 }
 
 func (uc *ReserveStock) Execute(c context.Context, in dto.ReserveStockInput) (*dto.ReservationOutput, error) {
@@ -47,39 +46,33 @@ func (uc *ReserveStock) Execute(c context.Context, in dto.ReserveStockInput) (*d
 		lines = append(lines, line)
 	}
 
-	var r *reservation.Reservation
-	err := uc.tx.Do(ctx, func(c context.Context) error {
-		existing, err := uc.reservations.FindByOrderID(c, in.OrderID)
-		switch {
-		case err == nil:
-			r = existing // already handled (redelivery)
-			return nil
-		case !errors.Is(err, reservation.ErrNotFound):
-			return fmt.Errorf("find reservation: %w", err)
-		}
+	existing, err := uc.reservations.FindByOrderID(ctx, in.OrderID)
+	switch {
+	case err == nil:
+		return mapper.ToReservationOutput(existing), nil // already handled (redelivery)
+	case !errors.Is(err, reservation.ErrNotFound):
+		return nil, fmt.Errorf("find reservation: %w", err)
+	}
 
-		// Unknown SKUs are left out: the domain counts them as zero available.
-		stocks, err := loadStocks(c, uc.stocks, lines)
-		if err != nil {
-			return err
-		}
-
-		r, err = reservation.Reserve(reservation.Params{OrderID: in.OrderID, Lines: lines, Now: uc.clock.Now()}, stocks)
-		if err != nil {
-			return err
-		}
-		if r.Status() == reservation.StatusReserved {
-			if err := saveStocks(c, uc.stocks, stocks); err != nil {
-				return err
-			}
-		}
-		if err := uc.reservations.Add(c, r); err != nil {
-			return fmt.Errorf("add reservation: %w", err)
-		}
-
-		return uc.events.Publish(c, r.PullEvents()...)
-	})
+	// Unknown SKUs are left out: the domain counts them as zero available.
+	stocks, err := loadStocks(ctx, uc.stocks, lines)
 	if err != nil {
+		return nil, err
+	}
+
+	r, err := reservation.Reserve(reservation.Params{OrderID: in.OrderID, Lines: lines, Now: uc.clock.Now()}, stocks)
+	if err != nil {
+		return nil, err
+	}
+	if r.Status() == reservation.StatusReserved {
+		if err = saveStocks(ctx, uc.stocks, stocks); err != nil {
+			return nil, err
+		}
+	}
+	if err = uc.reservations.Add(ctx, r); err != nil {
+		return nil, fmt.Errorf("add reservation: %w", err)
+	}
+	if err = uc.events.Publish(ctx, r.PullEvents()...); err != nil {
 		return nil, err
 	}
 

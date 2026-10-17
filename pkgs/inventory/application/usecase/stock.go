@@ -16,41 +16,31 @@ import (
 // SetStock sets the on-hand count of a SKU, creating it on first use.
 type SetStock struct {
 	stocks stock.Repository
-	tx     port.Transactor
 	clock  port.Clock
 }
 
-func NewSetStock(stocks stock.Repository, tx port.Transactor, clock port.Clock) *SetStock {
-	return &SetStock{stocks: stocks, tx: tx, clock: clock}
+func NewSetStock(stocks stock.Repository, clock port.Clock) *SetStock {
+	return &SetStock{stocks: stocks, clock: clock}
 }
 
 func (uc *SetStock) Execute(c context.Context, in dto.SetStockInput) (*dto.StockOutput, error) {
 	ctx := contextx.FromContext(c)
 
-	var s *stock.Stock
-	err := uc.tx.Do(ctx, func(c context.Context) error {
-		var err error
-		s, err = uc.stocks.FindBySKU(c, stock.SKU(in.SKU))
-		switch {
-		case errors.Is(err, stock.ErrNotFound):
-			if s, err = stock.New(stock.SKU(in.SKU), in.OnHand, uc.clock.Now()); err != nil {
-				return err
-			}
-		case err != nil:
-			return fmt.Errorf("find stock %s: %w", in.SKU, err)
-		default:
-			if err = s.Restock(in.OnHand, uc.clock.Now()); err != nil {
-				return err
-			}
+	s, err := uc.stocks.FindBySKU(ctx, stock.SKU(in.SKU))
+	switch {
+	case errors.Is(err, stock.ErrNotFound):
+		if s, err = stock.New(stock.SKU(in.SKU), in.OnHand, uc.clock.Now()); err != nil {
+			return nil, err
 		}
-		if err := uc.stocks.Save(c, s); err != nil {
-			return fmt.Errorf("save stock %s: %w", in.SKU, err)
+	case err != nil:
+		return nil, fmt.Errorf("find stock %s: %w", in.SKU, err)
+	default:
+		if err = s.Restock(in.OnHand, uc.clock.Now()); err != nil {
+			return nil, err
 		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
+	}
+	if err = uc.stocks.Save(ctx, s); err != nil {
+		return nil, fmt.Errorf("save stock %s: %w", in.SKU, err)
 	}
 
 	return mapper.ToStockOutput(s), nil

@@ -15,13 +15,12 @@ import (
 // (client request) and the consumer adapter (OrderCancellationRequested event).
 type CancelOrder struct {
 	repo   order.Repository
-	tx     port.Transactor
 	events port.EventPublisher
 	clock  port.Clock
 }
 
-func NewCancelOrder(repo order.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock) *CancelOrder {
-	return &CancelOrder{repo: repo, tx: tx, events: events, clock: clock}
+func NewCancelOrder(repo order.Repository, events port.EventPublisher, clock port.Clock) *CancelOrder {
+	return &CancelOrder{repo: repo, events: events, clock: clock}
 }
 
 func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto.OrderOutput, error) {
@@ -40,14 +39,10 @@ func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto
 		return nil, err
 	}
 
-	err = uc.tx.Do(ctx, func(c context.Context) error {
-		if err := uc.repo.Save(c, o); err != nil {
-			return fmt.Errorf("save order: %w", err)
-		}
-
-		return uc.events.Publish(c, o.PullEvents()...)
-	})
-	if err != nil {
+	if err = uc.repo.Save(ctx, o); err != nil {
+		return nil, fmt.Errorf("save order: %w", err)
+	}
+	if err = uc.events.Publish(ctx, o.PullEvents()...); err != nil {
 		return nil, err
 	}
 

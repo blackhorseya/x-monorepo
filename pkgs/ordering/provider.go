@@ -84,6 +84,7 @@ func ProvideSubscriptions(cancel *consumer.OrderCancellationHandler) Subscriptio
 
 // decorate is the one place that decides which cross-cutting decorators every
 // use case of this BC gets (outermost first). Add a decorator here, not per use case.
+// Reads use it as is: a transaction would only add a BEGIN/COMMIT round trip.
 func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
 	return usecasex.Chain(uc,
 		usecasex.Metrics[I, O](rec, name),
@@ -91,8 +92,20 @@ func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase
 	)
 }
 
+// decorateTx is decorate for use cases that write: the use case runs inside
+// one transaction, so its repository writes and outbox events commit or roll
+// back together. The transaction is innermost, so a failed commit is logged
+// and counted as the use case's failure.
+func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc,
+		usecasex.Metrics[I, O](rec, name),
+		usecasex.Logging[I, O](name),
+		usecasex.Transactional[I, O](tx),
+	)
+}
+
 func ProvideCreateOrder(repo order.Repository, tx port.Transactor, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, rec *usecasex.Recorder) rpc.CreateOrderUC {
-	return decorate("ordering.create_order", rec, usecase.NewCreateOrder(repo, tx, events, ids, clock))
+	return decorateTx("ordering.create_order", rec, tx, usecase.NewCreateOrder(repo, events, ids, clock))
 }
 
 func ProvideGetOrder(repo order.Repository, rec *usecasex.Recorder) rpc.GetOrderUC {
@@ -100,7 +113,7 @@ func ProvideGetOrder(repo order.Repository, rec *usecasex.Recorder) rpc.GetOrder
 }
 
 func ProvideCancelOrder(repo order.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) rpc.CancelOrderUC {
-	return decorate("ordering.cancel_order", rec, usecase.NewCancelOrder(repo, tx, events, clock))
+	return decorateTx("ordering.cancel_order", rec, tx, usecase.NewCancelOrder(repo, events, clock))
 }
 
 func ProvideListOrders(repo order.Repository, rec *usecasex.Recorder) rpc.ListOrdersUC {

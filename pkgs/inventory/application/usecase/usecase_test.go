@@ -39,12 +39,11 @@ type fixture struct {
 func newFixture() *fixture {
 	f := &fixture{stocks: memory.NewStockRepository(), reservations: memory.NewReservationRepository(), rec: &recorder{}}
 	clock := fixedClock{t: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)}
-	tx := memory.NewTransactor()
-	f.setStock = usecase.NewSetStock(f.stocks, tx, clock)
+	f.setStock = usecase.NewSetStock(f.stocks, clock)
 	f.getStock = usecase.NewGetStock(f.stocks)
 	f.getRes = usecase.NewGetReservation(f.reservations)
-	f.reserve = usecase.NewReserveStock(f.reservations, f.stocks, tx, f.rec, clock)
-	f.release = usecase.NewReleaseStock(f.reservations, f.stocks, tx, f.rec, clock)
+	f.reserve = usecase.NewReserveStock(f.reservations, f.stocks, f.rec, clock)
+	f.release = usecase.NewReleaseStock(f.reservations, f.stocks, f.rec, clock)
 	return f
 }
 

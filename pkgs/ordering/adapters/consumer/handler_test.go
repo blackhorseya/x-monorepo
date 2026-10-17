@@ -33,8 +33,8 @@ func (noEvents) Publish(context.Context, ...order.Event) error { return nil }
 func TestOrderCancellationHandler(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
-	create := usecase.NewCreateOrder(repo, memory.NewTransactor(), noEvents{}, ids{}, clock{})
-	h := consumer.NewOrderCancellationHandler(usecase.NewCancelOrder(repo, memory.NewTransactor(), noEvents{}, clock{}))
+	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{})
+	h := consumer.NewOrderCancellationHandler(usecase.NewCancelOrder(repo, noEvents{}, clock{}))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",

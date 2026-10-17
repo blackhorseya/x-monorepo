@@ -33,11 +33,10 @@ func TestCreateGetCancel(t *testing.T) {
 	repo := memory.NewOrderRepository()
 	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
 
-	tx := memory.NewTransactor()
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, tx, rec, fixedIDs{id: "o-1"}, clock)
+	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock)
 	get := usecase.NewGetOrder(repo)
-	cancel := usecase.NewCancelOrder(repo, tx, rec, clock)
+	cancel := usecase.NewCancelOrder(repo, rec, clock)
 
 	created, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",

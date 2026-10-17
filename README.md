@@ -162,7 +162,7 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 |---|---|---|
 | kernel | `kernel.Event`（`AggregateID()`、`OccurredAt()`）是所有 BC 事件的 base interface | `pkgs/kernel/event.go` |
 | domain | aggregate 在行為裡 `record()`（`New` → `Created`、`Cancel` → `Cancelled`），`PullEvents()` 取出並清空；`order.Event` embed `kernel.Event`，實作共用 embedded `base` struct | `domain/order/events.go` |
-| application | `port.Transactor.Do` 包住 `repo.Save` + `port.EventPublisher.Publish`：同一個交易 | `usecase/create_order.go`、`cancel_order.go` |
+| application | usecase 只依序呼叫 `repo.Save` 與 `port.EventPublisher.Publish`；`provider.go` 的 `decorateTx()` 用 `usecasex.Transactional` 把整個 usecase 包進 `port.Transactor.Do`，兩者同一個交易 | `provider.go`、`usecase/create_order.go` |
 | adapters/events | domain event → `ordering.v1.OrderCreated` / `OrderCancelled` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
 | platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing）+ `Register`（每個 BC：PoisonQueue → Retry → drop）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
 | infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
@@ -225,13 +225,19 @@ type UseCase[I, O any] interface { Execute(c context.Context, in I) (O, error) }
 ```
 
 adapter 只依賴 `UseCase[I, O]`，不依賴具體 struct。`provider.go` 的 `decorate()` 用 `usecasex.Chain` 把
-metrics + logging 包在每個 usecase 外面（之後加 tx 也在這一處），rpc 和 consumer 兩邊自動都有。Connect
+metrics + logging 包在每個 usecase 外面，rpc 和 consumer 兩邊自動都有。寫入的 usecase 改用 `decorateTx()`，多包一層
+transaction。Connect
 interceptor 只管 transport 層的事（procedure、protocol、code）。
 
 - `usecasex.Logging`：一行 log，domain error 是 `Info`（預期結果），其他 error 才是 `Error`
 - `usecasex.Metrics`：OTel histogram `usecase.duration`（Prometheus：`usecase_duration_seconds{usecase, kind}`）；`kind` =
   `ok` / kernel error kind / `internal`，和 `server.ToConnectError` 同一套判準，attribute 值域有限。MeterProvider 由
   `platform/otel.ProviderSet` 注入（每個 `Initialize()` 一個，不用 global）
+- `usecasex.Transactional`：把 usecase 整個放進 `Transactor.Do`。usecase 拿到的 `c` 帶著 tx，repository 與 outbox
+  publisher 用 `platformpg.TxOrDB` 取用，所以全部寫入一起 commit / rollback。任何 `Do` 的錯誤（含 commit 失敗）都丟掉 output。
+  放在最內層，commit 失敗會被 logging / metrics 記成這次 usecase 的失敗。只給寫入用：讀取包 transaction 只會多一次 BEGIN/COMMIT。
+  它保證的是 atomicity，不是 isolation：Postgres 預設 READ COMMITTED，兩個同時的 CancelOrder 仍可能都讀到 PENDING。
+  inventory 的 stock 有 version 欄位擋這件事，ordering 目前沒有
 
 ## Gates（harness）
 
@@ -385,7 +391,7 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 1. 改 `protos/<bc>/v1/service.proto`，request 欄位的形狀規則（必填 / 範圍 / pattern）用 `buf.validate` 寫在 message 上，不要在 adapter 手刻
    → `task gen`（`task breaking` 檢查相容）
 2. domain 加行為 → `application/dto` + `usecase`
-3. `provider.go` 加 `ProvideXxx`，用 `decorate(name, rec, uc)` 包起來
+3. `provider.go` 加 `ProvideXxx`，讀取用 `decorate(name, rec, uc)`，寫入用 `decorateTx(name, rec, tx, uc)`
 4. `adapters/rpc` 實作新方法（`var _ XxxServiceHandler` 會提醒）→ `task wire`
 
 ### 新增 Bounded Context（`pkgs/inventory` 是照這個清單加的第二個 BC，可當範本）

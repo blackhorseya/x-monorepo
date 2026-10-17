@@ -16,7 +16,8 @@ type Clock interface {
 
 // Transactor runs fn atomically: every repository call and every event
 // published inside fn commits together or not at all (the transactional
-// outbox). The memory implementation just calls fn.
+// outbox). Use cases do not call it: provider.go wraps every writing use case
+// with usecasex.Transactional(tx). The memory implementation just calls fn.
 type Transactor interface {
 	Do(c context.Context, fn func(c context.Context) error) error
 }
