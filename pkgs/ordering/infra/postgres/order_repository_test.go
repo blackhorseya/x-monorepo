@@ -19,6 +19,9 @@ import (
 func TestOrderRepository_Postgres(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("TEST_DATABASE_URL must be set in CI: a skipped integration test would be a false green")
+		}
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 
