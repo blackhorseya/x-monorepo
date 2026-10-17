@@ -8,6 +8,13 @@ inputs:
   tools:
     description: "also restore / install the pinned ./bin toolchain via `task tools`"
     default: "false"
+  cache-scope:
+    description: >-
+      Suffix that makes the Go cache key unique per job (and per matrix entry). setup-go's
+      built-in cache keys only on go.sum, so every job in a run races for one key and the
+      first to finish — a light job with an empty module cache — wins; the cache is then
+      immutable and every later job "hits" ~7 KB and downloads everything anyway.
+    default: ${{ github.job }}
 
 runs:
   using: composite
@@ -15,7 +22,25 @@ runs:
     - uses: actions/setup-go@v7
       with:
         go-version-file: go.work
-        cache-dependency-path: "**/go.sum"
+        cache: false
+
+    - id: go-env
+      shell: bash
+      run: |
+        echo "modcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+        echo "buildcache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+    # One cache per job/matrix entry; restore-keys fall back to the same job's previous
+    # go.sum, then to any job's, so a dependency bump still starts from a warm cache.
+    - uses: actions/cache@v6
+      with:
+        path: |
+          ${{ steps.go-env.outputs.modcache }}
+          ${{ steps.go-env.outputs.buildcache }}
+        key: go-${{ runner.os }}-${{ inputs.cache-scope }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          go-${{ runner.os }}-${{ inputs.cache-scope }}-
+          go-${{ runner.os }}-
 
     - uses: go-task/setup-task@v2
       with:
