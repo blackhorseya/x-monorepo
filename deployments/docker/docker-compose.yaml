@@ -2,7 +2,8 @@
 #   task compose-up        # podman compose (docker compose if no podman) ... up -d
 #   task compose-down      # ... down -v   (drops the volumes)
 # configs/local.yaml (seeded from config.example.yaml) points postgres.url and otel.endpoint
-# here → task migrate -- up → task run → Grafana at http://localhost:3000 (anonymous admin).
+# here → task migrate -- up → task run → Grafana at http://localhost:3000 (anonymous admin),
+# dashboard "x-monorepo / service" provisioned from ./grafana/dashboards.
 name: x-monorepo
 
 services:
@@ -35,6 +36,10 @@ services:
       - lgtm-prometheus:/data/prometheus
       - lgtm-loki:/data/loki
       - lgtm-tempo:/data/tempo
+      # Dashboards are provisioned from the repo (folder "x-monorepo"). Edit in the UI → Export →
+      # commit the JSON → `task grafana-reload` (inotify does not cross the macOS bind mount).
+      - ./grafana/provisioning/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/x-monorepo.yaml:ro
+      - ./grafana/dashboards:/otel-lgtm/dashboards:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health >/dev/null"]
       interval: 5s

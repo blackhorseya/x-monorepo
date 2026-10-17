@@ -1,0 +1,13 @@
+# Mounted into otel-lgtm at /otel-lgtm/grafana/conf/provisioning/dashboards/x-monorepo.yaml.
+# Grafana watches the folder with inotify, which does not fire through a podman/Docker
+# Desktop bind mount on macOS — after editing a JSON run `task grafana-reload`.
+apiVersion: 1
+
+providers:
+  - name: x-monorepo
+    folder: x-monorepo
+    type: file
+    allowUiUpdates: false # the file is the source of truth; export from the UI, then commit
+    options:
+      path: /otel-lgtm/dashboards
+      foldersFromFilesStructure: false
