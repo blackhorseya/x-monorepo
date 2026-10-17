@@ -259,6 +259,11 @@ tasks:
     cmds:
       - '{{.COMPOSE}} -f deployments/docker/docker-compose.yaml up -d'
 
+  grafana-reload:
+    desc: restart otel-lgtm so Grafana re-reads deployments/docker/grafana/dashboards/*.json
+    cmds:
+      - '{{.COMPOSE}} -f deployments/docker/docker-compose.yaml restart lgtm'
+
   compose-down:
     desc: stop local infra and drop its volume
     cmds:
