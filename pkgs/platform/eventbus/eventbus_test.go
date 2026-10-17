@@ -65,7 +65,7 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 	pub := eventbus.Traced(ch, tel)
 	poison := &capture{}
 
-	router, err := eventbus.NewRouter(logger, tel, eventbus.RouterOptions{Poison: poison, PoisonTopic: "t.poison", MaxRetries: 1})
+	router, err := eventbus.NewRouter(logger, tel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 	var dropCalls, failCalls atomic.Int32
 	var seen trace.SpanContext
 	okDone := make(chan struct{}, 1)
-	eventbus.Register(router, ch,
+	err = eventbus.Register(router, ch, eventbus.ConsumerOptions{Poison: poison, PoisonTopic: "t.poison", MaxRetries: 1},
 		eventbus.Subscription{Topic: "t.ok", Handler: eventbus.HandlerFunc(func(c context.Context, _ []byte) error {
 			seen = trace.SpanContextFromContext(c)
 			okDone <- struct{}{}
@@ -88,6 +88,9 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 			return errors.New("db down")
 		})},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()

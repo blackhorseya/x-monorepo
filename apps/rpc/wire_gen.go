@@ -7,11 +7,15 @@
 package main
 
 import (
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
+	rpc2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
+	system2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -39,7 +43,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	}
 	repository := ordering.ProvideOrderRepository(db, logger)
 	transactor := ordering.ProvideTransactor(db)
-	publisher, cleanup3, err := ordering.ProvidePublisher(db, logger, providers)
+	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
 	if err != nil {
 		cleanup2()
 		cleanup()
@@ -61,9 +65,17 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v3 := ordering.ProvideCancelOrder(repository, transactor, eventsPublisher, clock, recorder)
 	v4 := ordering.ProvideListOrders(repository, recorder)
 	orderService := rpc.NewOrderService(v, v2, v3, v4)
-	v5 := NewRoutes(orderService)
-	v6 := NewDocs()
-	serverServer, err := server.New(http, logger, v5, v6, providers)
+	stockRepository := inventory.ProvideStockRepository(db, logger)
+	portTransactor := inventory.ProvideTransactor(db)
+	systemClock := system2.NewClock()
+	v5 := inventory.ProvideSetStock(stockRepository, portTransactor, systemClock, recorder)
+	v6 := inventory.ProvideGetStock(stockRepository, recorder)
+	reservationRepository := inventory.ProvideReservationRepository(db)
+	v7 := inventory.ProvideGetReservation(reservationRepository, recorder)
+	inventoryService := rpc2.NewInventoryService(v5, v6, v7)
+	v8 := NewRoutes(orderService, inventoryService)
+	v9 := NewDocs()
+	serverServer, err := server.New(http, logger, v8, v9, providers)
 	if err != nil {
 		cleanup3()
 		cleanup2()

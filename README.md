@@ -50,10 +50,11 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 ├── buf.gen.ts.yaml                # TS 輸出到 web/packages/proto
 ├── protos/
 │   ├── common/v1/money.proto      # 跨 BC 的 wire 型別
-│   └── ordering/v1/
-│       ├── entity.proto           # aggregate 的 state schema（跨語言契約，不是 Go domain model）
-│       ├── service.proto          # RPC
-│       └── event.proto            # 進出 broker 的訊息
+│   ├── ordering/v1/
+│   │   ├── entity.proto           # aggregate 的 state schema（跨語言契約，不是 Go domain model）
+│   │   ├── service.proto          # RPC
+│   │   └── event.proto            # 進出 broker 的訊息
+│   └── inventory/v1/              # 第二個 BC 的契約（entity / service / event）
 ├── pkgs/
 │   ├── kernel/                    # shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 │   ├── platform/                  # 技術共用：contextx、config、server（gin）、usecasex、metrics、postgres（gorm + migrate runner）
@@ -74,6 +75,10 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 │           ├── rpc/               # Connect handler；pb ↔ dto
 │           ├── consumer/          # event handler；呼叫同一個 CancelOrder usecase
 │           └── events/            # outbound：domain event → proto → Watermill publisher
+│   └── inventory/                 # ── 第二個 BC：同樣結構 ──
+│       ├── domain/stock/          # Stock aggregate（每 SKU 一筆，optimistic version）
+│       ├── domain/reservation/    # Reservation aggregate（每 order 一筆：RESERVED / REJECTED / RELEASED）
+│       └── adapters/consumer/     # 消費 ordering.v1.OrderCreated / OrderCancelled（只 import ordering 的 contract/）
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
@@ -89,11 +94,11 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 | `domain` | `kernel` | application / infra / adapters / contract / platform |
 | `application` | domain、kernel、`platform/{contextx,usecasex}` | infra / adapters / contract |
 | `infra` | domain、application/port、platform | adapters / contract |
-| `adapters` | application、contract、platform | 其他 BC |
+| `adapters` | application、contract、platform、**其他 BC 的 `contract/`**（consumer 解它的 event、events adapter 發它擁有的 request） | 其他 BC 的 domain / application / infra / adapters |
 | `kernel`、`platform` | 標準庫、第三方 | 任何 BC |
 | `apps/*` | 各 BC 的 `provider.go`、platform | 直接呼叫 usecase（只透過 wire）、infra |
 | `apps/migrate` | 各 BC 的 `infra/postgres`（只為了拿 `Migration()`）、platform | domain / application / adapters |
-| 任何 BC | — | 其他 BC（走 port 或 event） |
+| 任何 BC 的 domain / application / infra | — | 其他 BC 的任何東西（含 contract；走 port 或 event） |
 
 **contract 和 dto 的差別**：contract 是 wire format（有版本、跨語言、生成），dto 是 application 邊界（手寫、
 只放 usecase 需要的欄位）。同一個 usecase 被 rpc 和 consumer 兩個 adapter 呼叫時，dto 就是它們的共同語言。
@@ -145,9 +150,9 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 | domain | aggregate 在行為裡 `record()`（`New` → `Created`、`Cancel` → `Cancelled`），`PullEvents()` 取出並清空；`order.Event` embed `kernel.Event`，實作共用 embedded `base` struct | `domain/order/events.go` |
 | application | `port.Transactor.Do` 包住 `repo.Save` + `port.EventPublisher.Publish`：同一個交易 | `usecase/create_order.go`、`cancel_order.go` |
 | adapters/events | domain event → `ordering.v1.OrderCreated` / `OrderCancelled` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
-| platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → PoisonQueue → Retry → drop）；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
+| platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing）+ `Register`（每個 BC：PoisonQueue → Retry → drop）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
 | infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
-| apps/worker | 另一個 process：wire 同一份 `ordering.ProviderSet`，把 `ordering.Subscriptions`（目前 `OrderCancellationRequested` → `CancelOrder`）掛上 router。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工 | `apps/worker` |
+| apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工 | `apps/worker` |
 
 - Topic → table：`ordering.v1.OrderCreated` → `ordering.events_v1_ordercreated`（+ `_offsets`），第一段就是 BC，**DDL 由該 BC 的 migration 出**（`0003_events`），
   service 不在啟動時建表；`InitializeSchema` 關閉。新 topic = 新 migration。
@@ -157,6 +162,24 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 - 換 broker：`message.Publisher` / `Subscriber` 是 port；換 NATS / Kafka 只動 `provider.go` 的 `ProvidePublisher` 與 worker 的 subscriber，handler 與 error contract 不變
   （SQL 表想保留當 outbox 的話，用 Watermill 的 forwarder component 轉送）。
 - 代價：watermill-sql 會把 `lib/pq` 一起連進來（只用它的 error type），實際連線仍走 pgx。
+
+### 跨 BC 的示範：ordering ↔ inventory
+
+```
+CreateOrder ──► ordering.v1.OrderCreated ──► inventory ReserveStock（全有或全無）
+                                              ├─ RESERVED → inventory.v1.StockReserved
+                                              └─ REJECTED → ordering.v1.OrderCancellationRequested ──► ordering CancelOrder
+CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStock（RESERVED → RELEASED；否則 domain error → drop）
+```
+
+- inventory 只 import `ordering/contract/v1`（consumer 解 `OrderCreated`、events adapter 發 `OrderCancellationRequested`），其他一概不行（depguard `bc-isolation-*`）。
+- **event 的 schema 歸 consumer 所有**：缺貨是 ordering 的 message（`OrderCancellationRequested`），inventory 把它發進 ordering 的 topic / 表（同一個 DB、同一個交易）。
+- **缺貨是狀態不是 error**：`reservation.Reserve` 回 `REJECTED` + `Rejected` event，一樣落地；重送的 `OrderCreated` 找到既有 reservation 就什麼都不做。
+  consumer 把 `kernel.Error` 當 final（drop），所以缺貨若用 error 表達就不會有人發取消。
+- Stock 用 `version` 做 optimistic lock：`Save` 是 `ON CONFLICT ... WHERE stocks.version = EXCLUDED.version`，輸的那邊拿 `stock.ErrStale`——
+  它**刻意不是** `kernel.Error`，consumer 會 retry 而不是 drop。
+- 已知限制：topic 之間沒有順序保證。`OrderCancelled` 若比 `OrderCreated` 先到 inventory，release 找不到 reservation（drop），之後的 reserve 會留住庫存；
+  要補的話是 reservation 的 tombstone（先收到 cancel 就記一筆 RELEASED），尚未做。
 
 ## Observability：OTel → LGTM
 
@@ -216,7 +239,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 | 規則 | 類型 | 擋的工具 |
 |---|---|---|
 | domain 只 import kernel；application 不碰 infra / adapters / contract；infra 不碰 adapters；adapters 不碰 infra | Clean Arch 依賴方向 | **depguard**（`.golangci.yml`，per-BC 列出；`pkg` 是 prefix match，不能用 `*`） |
-| BC 互不 import；kernel / platform 不 import BC；apps 只碰 provider.go | 邊界 | **depguard** |
+| BC 只能從 adapters import 其他 BC 的 `contract/`；kernel / platform 不 import BC；apps 只碰 provider.go | 邊界 | **depguard**（`bc-isolation-<bc>` block） |
 | domain struct 欄位 private；無 `Set*`；每個 struct 有 constructor（`*Params` 參數物件除外）；不呼叫 `time.Now()`；不 log | DDD aggregate | **archtest**（`pkgs/platform/archtest`，每個 BC 的 `arch_test.go` 跑） |
 | `*Repository` interface 只能在 domain | DDD | archtest |
 | usecase 只有 `Execute(c, in) (out, error)` 一個公開方法 | 單一職責、可被 decorator 包 | archtest |
@@ -249,8 +272,8 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 ## Persistence：Postgres、gorm、migrations
 
 - `platform/postgres.NewDB` 提供 `*gorm.DB`（driver 底層是 pgx，`TranslateError` 開啟）。`APP_POSTGRES_URL` 空 → 回 nil，
-  `ordering.ProvideOrderRepository` 看到 nil 就改用 `infra/memory`，所以 `task run`、E2E test 不需要 DB。
-- **每個 BC 一個 Postgres schema**（`ordering.orders`），版本表也在該 schema 裡（`ordering.schema_migrations`）。
+  各 BC 的 `Provide*Repository` 看到 nil 就改用 `infra/memory`，所以 `task run`、E2E test 不需要 DB。
+- **每個 BC 一個 Postgres schema**（`ordering.orders`、`inventory.stocks`），版本表也在該 schema 裡（`ordering.schema_migrations`）。
   多個 BC 共用一個 database 時，預設的單一 `public.schema_migrations` 會讓兩條 migration 序列互相覆寫版本號且不報錯；
   schema 隔離同時解決表名與版本表的衝突。
 - SQL 放 `pkgs/<bc>/infra/postgres/migrations/NNNN_name.{up,down}.sql`，由 BC `embed`（go.work 下 embed 不能跨
@@ -315,7 +338,7 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 | `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
 | `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |
 | `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |
-| `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 名；同名 replica 分工，新名字從頭讀 |
+| `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 前綴，實際 group 是 `<值>.<bc>`（每個 BC 各自讀完整個 topic）；同名 replica 分工，新名字從頭讀 |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
 | — | `TEST_DATABASE_URL` | 空 | 只給 integration test |
 
@@ -327,20 +350,23 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 3. `provider.go` 加 `ProvideXxx`，用 `decorate(name, rec, uc)` 包起來
 4. `adapters/rpc` 實作新方法（`var _ XxxServiceHandler` 會提醒）→ `task wire`
 
-### 新增 Bounded Context
-1. `protos/<newbc>/v1/{entity,service}.proto`；`buf.gen.yaml` 加一行 `go_package` override
-2. `pkgs/<newbc>/go.mod`（module path 對齊目錄），`go.work` 加 `use`，`Taskfile.yml` 的 `MODULES` 加上
-3. 複製 `pkgs/ordering` 結構，寫 `provider.go`
-4. `.golangci.yml` 加該 BC 的 depguard block
-5. `apps/rpc`：`NewRoutes` 加參數、`wire.go` 加 `ProviderSet` → `task wire`
-6. 有 DB 的話：`infra/postgres/migrations/0001_*.sql`（表都放在 `<newbc>.` schema）+ `Migration()`，
-   `apps/migrate/main.go` 的 `migrations` 加一筆
+### 新增 Bounded Context（`pkgs/inventory` 是照這個清單加的第二個 BC，可當範本）
+1. `protos/<newbc>/v1/{entity,service,event}.proto` + `openapi.base.yaml`；`buf.gen.yaml` 加一行 `go_package` override
+2. `pkgs/<newbc>/go.mod`（module path 對齊目錄，`replace` 指向 kernel / platform / 要讀 contract 的 BC），`go.work` 加 `use`，
+   `Taskfile.yml` 的 `MODULES` 與 `BCS` 加上，`apps/*/go.mod` 加 `require` + `replace` → `task tidy`
+3. `contract/v1/openapi.go`（embed）→ `task gen`；複製 `pkgs/ordering` 結構，寫 `provider.go`（`Subscriptions` 用自己的 named type）與 `arch_test.go`
+4. `.golangci.yml`：複製 `ordering-*` 四個 layer block、加 `bc-isolation-<newbc>`，並把新 BC 加進**每個**既有 BC 的 isolation / layer deny
+   以及 `shared` / `apps` / `apps-migrate`（`pkg` 是 prefix match，不能用 `*`）
+5. `apps/rpc`：`NewRoutes` / `NewDocs` 加參數、`wire.go` 加 `ProviderSet`；`apps/worker`：`wire.go` 加 `ProviderSet`、`NewWorker` 收它的
+   `Subscriptions` 並 `Register`（自己的 poison topic）→ `task wire`
+6. 有 DB 的話：`infra/postgres/migrations/0001_*.sql`（表都放在 `<newbc>.` schema）+ 自己發的 topic 與 `<newbc>.poison` 的 events 表 + `Migration()`，
+   `apps/migrate/main.go` 的 `migrations` 加一筆（依賴順序：發進別人表的排後面）
 
 ### 新增 consumer / 新 event
 - **發**：domain 加 event struct（embed `base`）並在行為裡 `record()`；`protos/<bc>/v1/event.proto` 加 message → `task gen`；
   `adapters/events.toProto` 加 case；migration 加 `events_<topic>` + `_offsets` 兩張表（照 `0003_events.up.sql`）。
 - **收**：`adapters/consumer` 加 handler（error contract 見 `handler.go`）→ `provider.go` 的 `Subscriptions` 加一筆；
-  訂閱別的 BC 的 topic 時，表由發的那個 BC 的 migration 建。`apps/worker` 不用改，除非是新 BC（`wire.go` 加 `ProviderSet`、`NewWorker` 收它的 subscriptions）。
+  訂閱別的 BC 的 topic 時，表由發的那個 BC 的 migration 建，consumer 只 import 它的 `contract/`。`apps/worker` 不用改，除非是新 BC（見上）。
 - 要在同一個 process 跑 rpc + consumer 也可以（go-micro 式），那是 `apps/` 的決定，BC 不在乎。
 
 ### 拆 BC 成獨立服務

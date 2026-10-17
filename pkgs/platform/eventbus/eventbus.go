@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
@@ -101,8 +102,32 @@ func NewGoChannel(l *slog.Logger) *gochannel.GoChannel {
 	return gochannel.NewGoChannel(gochannel.Config{}, NewLogger(l))
 }
 
-// RouterOptions configure NewRouter.
-type RouterOptions struct {
+// NewRouter builds a Watermill router with the middleware every consumer
+// shares, outermost first:
+//
+//  1. Recoverer: a panic becomes an error, not a dead worker.
+//  2. tracing: the producer's trace context (traceparent in metadata) becomes
+//     the parent of a CONSUMER span, so Tempo shows rpc → outbox → handler.
+//
+// The error contract (poison queue, retry, ErrDrop) is per bounded context —
+// each BC parks failed messages on its own poison topic — so it is added per
+// handler by Register.
+func NewRouter(l *slog.Logger, tel *otel.Providers) (*message.Router, error) {
+	r, err := message.NewRouter(message.RouterConfig{CloseTimeout: 10 * time.Second}, NewLogger(l))
+	if err != nil {
+		return nil, err
+	}
+
+	r.AddMiddleware(
+		middleware.Recoverer,
+		tracing{propagator: tel.Propagator, tracer: tel.Tracer.Tracer(scopeName)}.middleware,
+	)
+
+	return r, nil
+}
+
+// ConsumerOptions configure the error contract of one BC's handlers (Register).
+type ConsumerOptions struct {
 	// Poison receives messages a handler failed on after every retry
 	// (middleware.PoisonQueue). Required.
 	Poison message.Publisher
@@ -113,61 +138,65 @@ type RouterOptions struct {
 	MaxRetries int
 }
 
-// NewRouter builds a Watermill router with the middleware stack every
-// consumer gets, outermost first:
+// Register adds one handler per subscription to r, all reading from sub, each
+// wrapped (inside the router's middleware, outermost first) in:
 //
-//  1. Recoverer: a panic becomes an error, not a dead worker.
-//  2. tracing: the producer's trace context (traceparent in metadata) becomes
-//     the parent of a CONSUMER span, so Tempo shows rpc → outbox → handler.
-//  3. PoisonQueue: after retries, park the message and ack.
-//  4. Retry with backoff.
-//  5. drop: ErrDrop is logged and acknowledged (never retried, never poison).
-func NewRouter(l *slog.Logger, tel *otel.Providers, opts RouterOptions) (*message.Router, error) {
+//  1. PoisonQueue: after retries, park the message on opts.PoisonTopic and ack.
+//  2. Retry with backoff.
+//  3. drop: ErrDrop is logged and acknowledged (never retried, never poison).
+//
+// Handler names are the topics, so Watermill's own metrics/logs name them.
+// One router can serve several BCs: call Register once per BC with its options.
+func Register(r *message.Router, sub message.Subscriber, opts ConsumerOptions, subs ...Subscription) error {
 	if opts.Poison == nil || opts.PoisonTopic == "" {
-		return nil, errors.New("eventbus: router needs a poison publisher and topic")
+		return errors.New("eventbus: consumer needs a poison publisher and topic")
 	}
 	if opts.MaxRetries <= 0 {
 		opts.MaxRetries = 3
-	}
-
-	r, err := message.NewRouter(message.RouterConfig{CloseTimeout: 10 * time.Second}, NewLogger(l))
-	if err != nil {
-		return nil, err
 	}
 
 	poison, err := middleware.PoisonQueueWithFilter(opts.Poison, opts.PoisonTopic, func(err error) bool {
 		return !errors.Is(err, ErrDrop)
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
+	retry := middleware.Retry{
+		MaxRetries:      opts.MaxRetries,
+		InitialInterval: 100 * time.Millisecond,
+		MaxInterval:     5 * time.Second,
+		Multiplier:      2,
+		Logger:          r.Logger(),
+	}.Middleware
 
-	r.AddMiddleware(
-		middleware.Recoverer,
-		tracing{propagator: tel.Propagator, tracer: tel.Tracer.Tracer(scopeName)}.middleware,
-		poison,
-		middleware.Retry{
-			MaxRetries:      opts.MaxRetries,
-			InitialInterval: 100 * time.Millisecond,
-			MaxInterval:     5 * time.Second,
-			Multiplier:      2,
-			Logger:          NewLogger(l),
-		}.Middleware,
-		drop,
-	)
-
-	return r, nil
-}
-
-// Register adds one handler per subscription to r, all reading from sub.
-// Handler names are the topics, so Watermill's own metrics/logs name them.
-func Register(r *message.Router, sub message.Subscriber, subs ...Subscription) {
 	for _, s := range subs {
 		h := s.Handler
-		r.AddConsumerHandler(s.Topic, s.Topic, sub, func(msg *message.Message) error {
+		handler := r.AddConsumerHandler(s.Topic, s.Topic, sub, func(msg *message.Message) error {
 			return h.Handle(msg.Context(), msg.Payload)
 		})
+		handler.AddMiddleware(poison, retry, drop)
 	}
+
+	return nil
+}
+
+// ProvidePublisher is the outbox every BC publishes through: watermill-sql
+// rows in the owning BC's schema (TableName), written inside the use case's
+// transaction, or GoChannel (in-process, at most once) when there is no
+// database. Both carry trace context. Apps provide it once (wire.go) and every
+// BC's events adapter shares it.
+func ProvidePublisher(db *gorm.DB, l *slog.Logger, tel *otel.Providers) (message.Publisher, func(), error) {
+	if db == nil {
+		ch := NewGoChannel(l)
+		return Traced(ch, tel), func() { _ = ch.Close() }, nil
+	}
+
+	pub, err := NewPostgresPublisher(db, l)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return Traced(pub, tel), func() {}, nil
 }
 
 const scopeName = "github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"

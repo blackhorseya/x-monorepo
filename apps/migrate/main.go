@@ -20,14 +20,17 @@ import (
 	"slices"
 	"syscall"
 
+	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
-// migrations lists every BC, in dependency order (none today).
+// migrations lists every BC, in dependency order: inventory publishes into
+// ordering's event tables, so ordering goes first.
 var migrations = []postgres.Migration{
 	orderingpg.Migration(),
+	inventorypg.Migration(),
 }
 
 func main() {

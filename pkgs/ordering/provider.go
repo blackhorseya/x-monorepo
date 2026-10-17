@@ -6,7 +6,6 @@ package ordering
 import (
 	"log/slog"
 
-	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/wire"
 	"gorm.io/gorm"
 
@@ -20,7 +19,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -31,7 +29,6 @@ var ProviderSet = wire.NewSet(
 	// infra → ports / repositories
 	ProvideOrderRepository,
 	ProvideTransactor,
-	ProvidePublisher,
 	events.NewPublisher,
 	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),
 	system.NewUUIDGenerator,
@@ -39,8 +36,8 @@ var ProviderSet = wire.NewSet(
 	system.NewClock,
 	wire.Bind(new(port.Clock), new(*system.Clock)),
 
-	// application (decorated; see decorate)
-	usecasex.NewRecorder,
+	// application (decorated; see decorate). *usecasex.Recorder and the
+	// message.Publisher (outbox) are shared across BCs: apps provide them.
 	ProvideCreateOrder,
 	ProvideGetOrder,
 	ProvideCancelOrder,
@@ -49,7 +46,7 @@ var ProviderSet = wire.NewSet(
 	// adapters
 	rpc.NewOrderService,
 	consumer.NewOrderCancellationHandler,
-	Subscriptions,
+	ProvideSubscriptions,
 )
 
 // ProvideOrderRepository picks the persistence backend from the composition
@@ -74,27 +71,15 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 	return postgres.NewTransactor(db)
 }
 
-// ProvidePublisher is the outbox: watermill-sql rows in this BC's schema,
-// written inside the use case's transaction, or GoChannel (in-process, at
-// most once) when there is no database. Both carry trace context.
-func ProvidePublisher(db *gorm.DB, logger *slog.Logger, tel *otel.Providers) (message.Publisher, func(), error) {
-	if db == nil {
-		ch := eventbus.NewGoChannel(logger)
-		return eventbus.Traced(ch, tel), func() { _ = ch.Close() }, nil
-	}
-
-	pub, err := eventbus.NewPostgresPublisher(db, logger)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return eventbus.Traced(pub, tel), func() {}, nil
-}
-
 // Subscriptions lists what this BC consumes; apps/worker registers them on
-// the router. The handler name is the topic.
-func Subscriptions(cancel *consumer.OrderCancellationHandler) []eventbus.Subscription {
-	return []eventbus.Subscription{{Topic: consumer.Topic, Handler: cancel}}
+// the router with this BC's poison topic. A named type, so wire can tell each
+// BC's subscriptions apart.
+type Subscriptions []eventbus.Subscription
+
+// ProvideSubscriptions binds each consumed topic to its handler. The handler
+// name is the topic.
+func ProvideSubscriptions(cancel *consumer.OrderCancellationHandler) Subscriptions {
+	return Subscriptions{{Topic: consumer.Topic, Handler: cancel}}
 }
 
 // decorate is the one place that decides which cross-cutting decorators every

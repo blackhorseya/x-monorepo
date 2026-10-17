@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/ThreeDotsLabs/watermill v1.5.3
+	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/google/wire v0.7.0
@@ -111,3 +112,5 @@ replace (
 	github.com/blackhorseya/x-monorepo/pkgs/ordering => ../../pkgs/ordering
 	github.com/blackhorseya/x-monorepo/pkgs/platform => ../../pkgs/platform
 )
+
+replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory

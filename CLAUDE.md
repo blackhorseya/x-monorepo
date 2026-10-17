@@ -57,7 +57,7 @@ CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，
 ```
 pkgs/kernel      shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 pkgs/platform    技術共用：contextx、config、server（gin + Connect）、usecasex、otel、postgres、archtest
-pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering）
+pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event）
   provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() 包起來
   contract/v1/     buf 生成的 wire format（pb + Connect + openapi.yaml），只有 adapters / apps 可 import
   domain/<agg>/    aggregate、VO、Repository interface、domain errors（手寫，不是 proto）
@@ -65,6 +65,7 @@ pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering
   infra/           driven：memory / postgres（gorm row model + embed migrations）/ system（clock、id）
   adapters/        driving：rpc（Connect handler，pb ↔ dto）、consumer（broker handler）
 apps/rpc         composition root：main + wire.go，無業務、無 mapping
+apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Watermill router，各 BC 自己的 consumer group / poison
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 ```
 
@@ -75,10 +76,10 @@ apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 | domain | kernel | 其他全部 |
 | application | domain、kernel、`platform/{contextx,usecasex}` | infra / adapters / contract |
 | infra | domain、application/port、platform | adapters / contract |
-| adapters | application、contract、platform | 其他 BC |
+| adapters | application、contract、platform、其他 BC 的 `contract/` | 其他 BC 的 domain / application / infra / adapters |
 | kernel、platform | 標準庫、第三方 | 任何 BC |
 | apps/* | 各 BC 的 `provider.go`、platform | usecase（只透過 wire）、infra |
-| 任何 BC | — | 其他 BC（走 port 或 event） |
+| 任何 BC 的 domain / application / infra | — | 其他 BC 的任何東西（走 port 或 event） |
 
 **archtest（`pkgs/platform/archtest`，每個 BC 的 `arch_test.go`）強制的 DDD 形狀**：domain struct 欄位 private、
 無 `Set*`、每個 struct 有 constructor（`*Params` 除外）、不呼叫 `time.Now()`、不 log；`*Repository` interface
@@ -91,7 +92,8 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
   同一個 usecase 被 rpc 和 consumer 共用時 dto 是共同語言。不要照 pb 抄 dto。
 - **decorator 只在 `provider.go` 的 `decorate()` 加**（metrics + logging，之後加 tx 也在這裡），rpc 與 consumer 自動都有。
 - **Domain error** 用 `kernel.NewError(kind, code, msg)`；`server.ToConnectError` 依 `Kind` 映射 Connect code，
-  `Code` 放 `x-error-code` header。consumer 把 domain error 視為 drop（不重試），infra error 才 retry。
+  `Code` 放 `x-error-code` header。consumer 把 domain error 視為 drop（不重試），infra error 才 retry——所以「業務上的失敗結果」
+  （例如 inventory 缺貨）要做成 aggregate 狀態 + event，不能做成 error；反過來 optimistic-lock 的 `stock.ErrStale` 刻意不是 `kernel.Error`。
 - **Response meta 走 header**（`X-Request-Id`、`X-Trace-Id`、`traceparent`），不包進 proto message。
 - **Persistence**：每個 BC 一個 Postgres schema（`ordering.orders`、`ordering.schema_migrations`）；SQL 放
   `pkgs/<bc>/infra/postgres/migrations/NNNN_name.{up,down}.sql` 由 BC embed（go.work 下 embed 不能跨 module）。
@@ -110,11 +112,13 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 `application/dto` + `usecase` → `provider.go` 加 `ProvideXxx` 並用 `decorate()` 包 → `adapters/rpc` 實作
 （`var _ XxxServiceHandler` 會提醒）→ `task wire`。
 
-**新增 Bounded Context**：`protos/<newbc>/v1/{entity,service}.proto` 與 `buf.gen.yaml` 的 `go_package` override →
-`pkgs/<newbc>/go.mod` + `go.work` 加 `use` + `Taskfile.yml` 的 `MODULES`（有 OpenAPI 則 `BCS`）→ 複製 `pkgs/ordering`
-結構寫 `provider.go` → `.golangci.yml` 加該 BC 的 depguard block（`pkg` 是 prefix match，不能用 `*`）→
-`apps/rpc` 的 `NewRoutes` 加參數、`wire.go` 加 `ProviderSet` → `task wire` → 有 DB 則加 migrations 與
-`apps/migrate/main.go` 的 `migrations`。
+**新增 Bounded Context**（照 `pkgs/inventory` 抄）：`protos/<newbc>/v1/{entity,service,event}.proto` + `openapi.base.yaml` 與
+`buf.gen.yaml` 的 `go_package` override → `pkgs/<newbc>/go.mod`（replace 指向 kernel / platform / 要讀 contract 的 BC）+ `go.work`
+加 `use` + `Taskfile.yml` 的 `MODULES` 與 `BCS` + `apps/*/go.mod` 的 require / replace → `task tidy` → `contract/v1/openapi.go` →
+`task gen` → 複製 `pkgs/ordering` 結構寫 `provider.go`（`Subscriptions` 自己的 named type）→ `.golangci.yml` 加該 BC 的 layer block 與
+`bc-isolation-<bc>`，並把它加進其他 BC / shared / apps 的 deny（`pkg` 是 prefix match，不能用 `*`）→ `apps/rpc` 的 `NewRoutes` /
+`NewDocs` 加參數、`apps/{rpc,worker}/wire.go` 加 `ProviderSet`、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions` → `task wire` →
+有 DB 則加 migrations（含自己 topic 與 poison 的 events 表）與 `apps/migrate/main.go` 的 `migrations`。
 
 ## Conventions（本 repo 特有）
 

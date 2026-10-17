@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package inventory.v1;
+
+import "inventory/v1/entity.proto";
+
+// InventoryService is the public RPC contract of the inventory bounded context.
+// Reservations are not made through RPC: they react to ordering.v1.OrderCreated
+// (see pkgs/inventory/adapters/consumer); RPC only seeds and reads.
+service InventoryService {
+  // SetStock sets the on-hand quantity of a SKU (creates it when unknown).
+  // Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
+  rpc SetStock(SetStockRequest) returns (SetStockResponse);
+  rpc GetStock(GetStockRequest) returns (GetStockResponse);
+  // GetReservation reads the outcome inventory recorded for an order.
+  rpc GetReservation(GetReservationRequest) returns (GetReservationResponse);
+}
+
+message SetStockRequest {
+  string sku = 1;
+  int32 on_hand = 2;
+}
+
+message SetStockResponse {
+  Stock stock = 1;
+}
+
+message GetStockRequest {
+  string sku = 1;
+}
+
+message GetStockResponse {
+  Stock stock = 1;
+}
+
+message GetReservationRequest {
+  string order_id = 1;
+}
+
+message GetReservationResponse {
+  Reservation reservation = 1;
+}
