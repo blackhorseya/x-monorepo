@@ -10,7 +10,8 @@ type SKU string
 func (x SKU) String() string { return string(x) }
 
 // Stock is the aggregate root: on-hand minus reserved is what new orders can claim.
-// version is the optimistic-concurrency token repositories compare on Save.
+// version is the optimistic-concurrency token repositories compare on Save:
+// 0 for a stock never saved, then the number of saves.
 type Stock struct {
 	sku       SKU
 	onHand    int32

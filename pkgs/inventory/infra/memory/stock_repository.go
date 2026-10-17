@@ -39,9 +39,9 @@ func (i *StockRepository) FindBySKU(c context.Context, sku stock.SKU) (*stock.St
 	return cloneStock(s, s.Version())
 }
 
-// Save applies the optimistic check Postgres does with `WHERE version = ?`:
-// the caller's version must match what is stored, and the stored copy
-// advances by one.
+// Save follows the Postgres contract: Version 0 inserts and loses (ErrStale)
+// if the SKU exists; anything else updates only if the stored version still
+// matches (ErrStale otherwise). The stored copy's version advances by one.
 func (i *StockRepository) Save(c context.Context, s *stock.Stock) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
@@ -51,7 +51,11 @@ func (i *StockRepository) Save(c context.Context, s *stock.Stock) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if cur, ok := i.data[s.SKU()]; ok && cur.Version() != s.Version() {
+	cur, exists := i.data[s.SKU()]
+	switch {
+	case s.Version() == 0 && exists:
+		return stock.ErrStale
+	case s.Version() != 0 && (!exists || cur.Version() != s.Version()):
 		return stock.ErrStale
 	}
 	cp, err := cloneStock(s, s.Version()+1)

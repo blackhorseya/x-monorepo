@@ -45,8 +45,8 @@ func TestRepositories_Postgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 2 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 2 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 3 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 3 clean", v, dirty, err)
 	}
 	for _, tbl := range []string{"inventory.stocks", "inventory.reservations"} {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl + " CASCADE").Error; err != nil {
@@ -66,11 +66,17 @@ func TestRepositories_Postgres(t *testing.T) {
 	if err := stocks.Save(c, a); err != nil {
 		t.Fatal(err)
 	}
+	// Two writers both missed FindBySKU and created the SKU: the second insert
+	// must lose, not overwrite (the gap an upsert-with-WHERE leaves at version 0).
+	twin, _ := stock.New("A", 42, now)
+	if err := stocks.Save(c, twin); !errors.Is(err, stock.ErrStale) {
+		t.Fatalf("second fresh insert: err = %v, want ErrStale", err)
+	}
 	loaded, err := stocks.FindBySKU(c, "A")
-	if err != nil || loaded.OnHand() != 5 || loaded.Version() != 0 || !loaded.UpdatedAt().Equal(now) {
+	if err != nil || loaded.OnHand() != 5 || loaded.Version() != 1 || !loaded.UpdatedAt().Equal(now) {
 		t.Fatalf("loaded = %+v, %v", loaded, err)
 	}
-	// Two readers of version 0: the first write wins, the second is stale.
+	// Two readers of version 1: the first write wins, the second is stale.
 	other, _ := stocks.FindBySKU(c, "A")
 	if err := loaded.Restock(6, now); err != nil {
 		t.Fatal(err)
@@ -85,7 +91,7 @@ func TestRepositories_Postgres(t *testing.T) {
 		t.Fatalf("stale write: %v", err)
 	}
 	reloaded, _ := stocks.FindBySKU(c, "A")
-	if reloaded.OnHand() != 6 || reloaded.Version() != 1 {
+	if reloaded.OnHand() != 6 || reloaded.Version() != 2 {
 		t.Fatalf("after race: on_hand=%d version=%d", reloaded.OnHand(), reloaded.Version())
 	}
 	// A fresh aggregate for an existing SKU (lost FindBySKU race) is stale too, not an overwrite.

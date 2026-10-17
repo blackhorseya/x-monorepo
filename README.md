@@ -192,8 +192,10 @@ CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStoc
   consumer 把 `kernel.Error` 當 final（drop），所以缺貨若用 error 表達就不會有人發取消。
 - Stock 與 Order 都用 `version` 做 optimistic lock，輸的那邊拿 `stock.ErrStale` / `order.ErrStale`。它們 wrap `kernel.ErrConcurrentUpdate`，
   **刻意不是** `kernel.Error`：consumer 會 retry 而不是 drop，rpc 由 `server.ToConnectError` 回 `Aborted`（`x-error-code: concurrent_update`），
-  `usecasex` 記成 `kind=aborted`、log 為 Warn。Stock 的 `Save` 是 `ON CONFLICT ... WHERE stocks.version = EXCLUDED.version`；
-  Order 拆成 version 0 → `INSERT`（撞 id 是 `order.ErrDuplicate`）與 `UPDATE ... WHERE version = <loaded>`。
+  `usecasex` 記成 `kind=aborted`、log 為 Warn。兩者的 `Save` 都拆成 version 0 → `INSERT`（存成 1）與
+  `UPDATE ... WHERE version = <loaded>`（+1），所以 version 是存檔次數，記憶體中的新 aggregate 永遠對不上已存的 row。
+  撞 key 時 Order 回 `order.ErrDuplicate`（id 是 server 產的，撞到就是真的重複），Stock 回 `stock.ErrStale`
+  （兩個 SetStock 同時建立同一個 SKU，輸的那個 reload 後改成 restock）。
   兩個同時的 CancelOrder：先 commit 的贏，另一個 `ErrStale`；consumer 重試時 reload 看到 CANCELLED → `ErrCannotCancel` → drop。
 - 已知限制：topic 之間沒有順序保證。`OrderCancelled` 若比 `OrderCreated` 先到 inventory，release 找不到 reservation（drop），之後的 reserve 會留住庫存；
   要補的話是 reservation 的 tombstone（先收到 cancel 就記一筆 RELEASED），尚未做。
