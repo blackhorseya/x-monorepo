@@ -60,7 +60,7 @@ CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，
 pkgs/kernel      shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 pkgs/platform    技術共用：contextx、config、server（gin + Connect）、usecasex、otel、postgres、archtest
 pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event）
-  provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() 包起來
+  provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() / decorateTx() 包起來
   contract/v1/     buf 生成的 wire format（pb + Connect + openapi.yaml），只有 adapters / apps 可 import
   domain/<agg>/    aggregate、VO、Repository interface、domain errors（手寫，不是 proto）
   application/     dto（手寫 application 邊界）、usecase（orchestration）、port、mapper
@@ -92,7 +92,9 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 
 - **contract ≠ dto**：contract 是生成的 wire format，dto 是手寫的 application 邊界，只放 usecase 需要的欄位；
   同一個 usecase 被 rpc 和 consumer 共用時 dto 是共同語言。不要照 pb 抄 dto。
-- **decorator 只在 `provider.go` 的 `decorate()` 加**（metrics + logging，之後加 tx 也在這裡），rpc 與 consumer 自動都有。
+- **decorator 只在 `provider.go` 加**：`decorate()` = metrics + logging，給讀取；`decorateTx()` 再多一層 `usecasex.Transactional`（最內層），給寫入。
+  rpc 與 consumer 自動都有。**usecase 不自己開 transaction**，也不持有 `port.Transactor`；直接用收到的 `c` 呼叫 repo / publisher，
+  它們從 context 拿到 tx。
 - **Domain error** 用 `kernel.NewError(kind, code, msg)`；`server.ToConnectError` 依 `Kind` 映射 Connect code，
   `Code` 放 `x-error-code` header。consumer 把 domain error 視為 drop（不重試），infra error 才 retry——所以「業務上的失敗結果」
   （例如 inventory 缺貨）要做成 aggregate 狀態 + event，不能做成 error；反過來 optimistic-lock 的 `stock.ErrStale` 刻意不是 `kernel.Error`。
@@ -113,7 +115,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 ## 新增東西的步驟
 
 **新增 RPC**：改 `protos/<bc>/v1/service.proto`（request 欄位規則用 `buf.validate` 寫在 proto，interceptor 會擋；domain 仍保留不變量）→ `task gen`（`task breaking` 檢查相容）→ domain 加行為 →
-`application/dto` + `usecase` → `provider.go` 加 `ProvideXxx` 並用 `decorate()` 包 → `adapters/rpc` 實作
+`application/dto` + `usecase` → `provider.go` 加 `ProvideXxx` 並用 `decorate()`（讀）或 `decorateTx()`（寫）包 → `adapters/rpc` 實作
 （`var _ XxxServiceHandler` 會提醒）→ `task wire`。
 
 **新增 Bounded Context**（照 `pkgs/inventory` 抄）：`protos/<newbc>/v1/{entity,service,event}.proto` + `openapi.base.yaml` 與

@@ -96,7 +96,8 @@ func ProvideSubscriptions(created *consumer.OrderCreatedHandler, cancelled *cons
 }
 
 // decorate is the one place that decides which cross-cutting decorators every
-// use case of this BC gets (outermost first).
+// use case of this BC gets (outermost first). Add a decorator here, not per use case.
+// Reads use it as is: a transaction would only add a BEGIN/COMMIT round trip.
 func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
 	return usecasex.Chain(uc,
 		usecasex.Metrics[I, O](rec, name),
@@ -104,8 +105,20 @@ func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase
 	)
 }
 
+// decorateTx is decorate for use cases that write: the use case runs inside
+// one transaction, so its repository writes and outbox events commit or roll
+// back together. The transaction is innermost, so a failed commit is logged
+// and counted as the use case's failure.
+func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc,
+		usecasex.Metrics[I, O](rec, name),
+		usecasex.Logging[I, O](name),
+		usecasex.Transactional[I, O](tx),
+	)
+}
+
 func ProvideSetStock(stocks stock.Repository, tx port.Transactor, clock port.Clock, rec *usecasex.Recorder) rpc.SetStockUC {
-	return decorate("inventory.set_stock", rec, usecase.NewSetStock(stocks, tx, clock))
+	return decorateTx("inventory.set_stock", rec, tx, usecase.NewSetStock(stocks, clock))
 }
 
 func ProvideGetStock(stocks stock.Repository, rec *usecasex.Recorder) rpc.GetStockUC {
@@ -117,9 +130,9 @@ func ProvideGetReservation(reservations reservation.Repository, rec *usecasex.Re
 }
 
 func ProvideReserveStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ReserveStockUC {
-	return decorate("inventory.reserve_stock", rec, usecase.NewReserveStock(reservations, stocks, tx, events, clock))
+	return decorateTx("inventory.reserve_stock", rec, tx, usecase.NewReserveStock(reservations, stocks, events, clock))
 }
 
 func ProvideReleaseStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ReleaseStockUC {
-	return decorate("inventory.release_stock", rec, usecase.NewReleaseStock(reservations, stocks, tx, events, clock))
+	return decorateTx("inventory.release_stock", rec, tx, usecase.NewReleaseStock(reservations, stocks, events, clock))
 }

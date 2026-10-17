@@ -16,7 +16,6 @@ import (
 	inventoryconsumer "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
 	inventoryevents "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
 	inventorydto "github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
-	inventoryusecase "github.com/blackhorseya/x-monorepo/pkgs/inventory/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	inventorysys "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
@@ -24,7 +23,6 @@ import (
 	orderingconsumer "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	orderingevents "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	orderingdto "github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
-	orderingusecase "github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
@@ -32,6 +30,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
 func TestRun_RequiresPostgres(t *testing.T) {
@@ -96,26 +95,31 @@ func TestWorker_EndToEnd(t *testing.T) {
 	}
 	defer pubCleanup()
 
+	rec, err := usecasex.NewRecorder(tel.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	orders := ordering.ProvideOrderRepository(db, logger)
 	otx := ordering.ProvideTransactor(db)
 	oev := orderingevents.NewPublisher(publisher)
 	oclock := orderingsys.NewClock()
-	createOrder := orderingusecase.NewCreateOrder(orders, otx, oev, orderingsys.NewUUIDGenerator(), oclock)
-	getOrder := orderingusecase.NewGetOrder(orders)
+	createOrder := ordering.ProvideCreateOrder(orders, otx, oev, orderingsys.NewUUIDGenerator(), oclock, rec)
+	getOrder := ordering.ProvideGetOrder(orders, rec)
 	orderingSubs := ordering.ProvideSubscriptions(orderingconsumer.NewOrderCancellationHandler(
-		orderingusecase.NewCancelOrder(orders, otx, oev, oclock)))
+		ordering.ProvideCancelOrder(orders, otx, oev, oclock, rec)))
 
 	stocks := inventory.ProvideStockRepository(db, logger)
 	reservations := inventory.ProvideReservationRepository(db)
 	itx := inventory.ProvideTransactor(db)
 	iev := inventoryevents.NewPublisher(publisher)
 	iclock := inventorysys.NewClock()
-	setStock := inventoryusecase.NewSetStock(stocks, itx, iclock)
-	getStock := inventoryusecase.NewGetStock(stocks)
-	getReservation := inventoryusecase.NewGetReservation(reservations)
+	setStock := inventory.ProvideSetStock(stocks, itx, iclock, rec)
+	getStock := inventory.ProvideGetStock(stocks, rec)
+	getReservation := inventory.ProvideGetReservation(reservations, rec)
 	inventorySubs := inventory.ProvideSubscriptions(
-		inventoryconsumer.NewOrderCreatedHandler(inventoryusecase.NewReserveStock(reservations, stocks, itx, iev, iclock)),
-		inventoryconsumer.NewOrderCancelledHandler(inventoryusecase.NewReleaseStock(reservations, stocks, itx, iev, iclock)),
+		inventoryconsumer.NewOrderCreatedHandler(inventory.ProvideReserveStock(reservations, stocks, itx, iev, iclock, rec)),
+		inventoryconsumer.NewOrderCancelledHandler(inventory.ProvideReleaseStock(reservations, stocks, itx, iev, iclock, rec)),
 	)
 
 	group := fmt.Sprintf("test-%d", time.Now().UnixNano())

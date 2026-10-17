@@ -18,13 +18,12 @@ import (
 type ReleaseStock struct {
 	reservations reservation.Repository
 	stocks       stock.Repository
-	tx           port.Transactor
 	events       port.EventPublisher
 	clock        port.Clock
 }
 
-func NewReleaseStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock) *ReleaseStock {
-	return &ReleaseStock{reservations: reservations, stocks: stocks, tx: tx, events: events, clock: clock}
+func NewReleaseStock(reservations reservation.Repository, stocks stock.Repository, events port.EventPublisher, clock port.Clock) *ReleaseStock {
+	return &ReleaseStock{reservations: reservations, stocks: stocks, events: events, clock: clock}
 }
 
 func (uc *ReleaseStock) Execute(c context.Context, in dto.ReleaseStockInput) (*dto.ReservationOutput, error) {
@@ -34,31 +33,25 @@ func (uc *ReleaseStock) Execute(c context.Context, in dto.ReleaseStockInput) (*d
 		return nil, reservation.ErrInvalidOrderID
 	}
 
-	var r *reservation.Reservation
-	err := uc.tx.Do(ctx, func(c context.Context) error {
-		var err error
-		r, err = uc.reservations.FindByOrderID(c, in.OrderID)
-		if err != nil {
-			return err
-		}
-		// A missing stock row is a precondition failure the domain reports (ErrStockMissing).
-		stocks, err := loadStocks(c, uc.stocks, r.Lines())
-		if err != nil {
-			return err
-		}
-		if err := r.Release(stocks, uc.clock.Now()); err != nil {
-			return err
-		}
-		if err := saveStocks(c, uc.stocks, stocks); err != nil {
-			return err
-		}
-		if err := uc.reservations.Update(c, r); err != nil {
-			return fmt.Errorf("update reservation: %w", err)
-		}
-
-		return uc.events.Publish(c, r.PullEvents()...)
-	})
+	r, err := uc.reservations.FindByOrderID(ctx, in.OrderID)
 	if err != nil {
+		return nil, err
+	}
+	// A missing stock row is a precondition failure the domain reports (ErrStockMissing).
+	stocks, err := loadStocks(ctx, uc.stocks, r.Lines())
+	if err != nil {
+		return nil, err
+	}
+	if err = r.Release(stocks, uc.clock.Now()); err != nil {
+		return nil, err
+	}
+	if err = saveStocks(ctx, uc.stocks, stocks); err != nil {
+		return nil, err
+	}
+	if err = uc.reservations.Update(ctx, r); err != nil {
+		return nil, fmt.Errorf("update reservation: %w", err)
+	}
+	if err = uc.events.Publish(ctx, r.PullEvents()...); err != nil {
 		return nil, err
 	}
 
