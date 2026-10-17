@@ -35,9 +35,10 @@ TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
 
 前端：`web/` 是 Turborepo（pnpm），目前只有 `packages/proto`（connect-es client）；`task gen-ts` 需要網路，產出到那裡。
 
-**新 clone / 新 worktree 第一件事**：`task tools && task gen wire`。`./bin`、`*.pb.go`、`*.connect.go` 都是 gitignored
-（CI 的 gen-freshness 也是每次重生），少了它們什麼都 build 不起來；而 `task gen` 會先刪舊的生成檔再呼叫 `bin/protoc-gen-*`，
-工具不在時會留下一個沒有 pb.go 的 tree。有 commit 的生成物只有 `apps/*/wire_gen.go` 與 `pkgs/<bc>/contract/v1/openapi.yaml`。
+**新 clone / 新 worktree 第一件事**：`task tools`。`./bin` 是 gitignored，而 `task gen`（也被 `gate-local` 間接呼叫）會**先刪掉**
+所有 `*.pb.go` / `*.connect.go` 再呼叫 `bin/protoc-gen-*`；工具不在時會留下一個生成檔全被刪掉的 tree。
+遇到了就 `git checkout -- pkgs` 還原，**不要**用 `git commit -a` 把刪除一起 commit 進去。
+生成物（pb.go、connect.go、`wire_gen.go`、`contract/v1/openapi.yaml`）全部有 commit，gen-freshness 靠 `git diff` 比對它們。
 
 ## Hook harness（會擋你的東西）
 
@@ -46,8 +47,7 @@ TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
 - **PostToolUse（Edit / Write）**：對 `.go / .proto / go.mod / go.work / buf*.yaml` 跑 `task gate-fast`。
   用 Bash（sed、heredoc）改檔**不會**觸發，改完請手動 `task gate-fast FILE=<path>`。
 - **Stop**：跑 `task gate-local`，失敗就不讓你宣告完成。gen-freshness 是和 HEAD 比 diff，
-  改了 proto 或 wire provider 後要 `task gen wire`，並把 `wire_gen.go` / `openapi.yaml` 的變動一起 commit
-  （pb.go / connect.go 是 gitignored，不會進 diff）。
+  改了 proto 或 wire provider 後要 `task gen wire` 並把產物一起 commit。
 
 CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，加依賴後 `task tidy`）、
 `cover-gate`（所有 `*/domain/*` package 必須 100% 覆蓋）、`buf breaking`（只警告）。
