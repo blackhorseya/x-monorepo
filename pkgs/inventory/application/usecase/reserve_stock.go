@@ -12,6 +12,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
+	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
 
@@ -70,6 +71,12 @@ func (uc *ReserveStock) Execute(c context.Context, in dto.ReserveStockInput) (*d
 		}
 	}
 	if err = uc.reservations.Add(ctx, r); err != nil {
+		if errors.Is(err, reservation.ErrDuplicate) {
+			// Lost the insert to a redelivery or to ReleaseStock's tombstone:
+			// retry lands on the "already handled" branch above.
+			return nil, fmt.Errorf("add reservation: %w", kernel.ErrConcurrentUpdate)
+		}
+
 		return nil, fmt.Errorf("add reservation: %w", err)
 	}
 	if err = uc.events.Publish(ctx, r.PullEvents()...); err != nil {

@@ -28,6 +28,9 @@ enum ReservationStatus {
   RESERVATION_STATUS_REJECTED = 2;
   // The order was cancelled after reservation; the stock is available again.
   RESERVATION_STATUS_RELEASED = 3;
+  // The order was cancelled before inventory saw it created (OrderCancelled
+  // overtook OrderCreated): nothing was reserved, the reservation has no lines.
+  RESERVATION_STATUS_CANCELLED = 4;
 }
 
 message ReservationLine {

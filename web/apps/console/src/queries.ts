@@ -31,11 +31,11 @@ export const reservationQuery = (orderId: string) =>
         throw err;
       }
     },
-    // REJECTED and RELEASED are terminal; RESERVED can still be released and
+    // Everything but RESERVED is terminal; RESERVED can still be released and
     // a missing reservation can still appear.
     refetchInterval: (q) => {
       const s = q.state.data?.status;
-      return s === ReservationStatus.REJECTED || s === ReservationStatus.RELEASED ? false : POLL_MS;
+      return s === undefined || s === ReservationStatus.RESERVED ? POLL_MS : false;
     },
   });
 

@@ -289,6 +289,7 @@ components:
         - RESERVATION_STATUS_RESERVED
         - RESERVATION_STATUS_REJECTED
         - RESERVATION_STATUS_RELEASED
+        - RESERVATION_STATUS_CANCELLED
     inventory.v1.SetStockRequest:
       type: object
       properties:

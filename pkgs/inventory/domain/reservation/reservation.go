@@ -65,6 +65,19 @@ func Reserve(p Params, stocks map[string]*stock.Stock) (*Reservation, error) {
 	return r, nil
 }
 
+// Tombstone records that the order was cancelled before inventory saw it
+// created: topics carry no ordering between them, so OrderCancelled can
+// overtake OrderCreated. Nothing was reserved, so there is nothing to release
+// and no event to raise; the late OrderCreated finds this row and reserves
+// nothing. It is the only Reservation without lines.
+func Tombstone(orderID string, now time.Time) (*Reservation, error) {
+	if orderID == "" {
+		return nil, ErrInvalidOrderID
+	}
+
+	return &Reservation{orderID: orderID, status: StatusCancelled, createdAt: now, updatedAt: now}, nil
+}
+
 // ReconstituteParams carry persisted state back into the aggregate, as stored.
 type ReconstituteParams struct {
 	OrderID   string
@@ -80,7 +93,7 @@ func Reconstitute(p ReconstituteParams) (*Reservation, error) {
 	if p.OrderID == "" {
 		return nil, ErrInvalidOrderID
 	}
-	if len(p.Lines) == 0 {
+	if len(p.Lines) == 0 && p.Status != StatusCancelled {
 		return nil, ErrNoLines
 	}
 	if p.Status.String() == "UNKNOWN" {

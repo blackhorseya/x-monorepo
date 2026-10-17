@@ -183,7 +183,7 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 CreateOrder ──► ordering.v1.OrderCreated ──► inventory ReserveStock（全有或全無）
                                               ├─ RESERVED → inventory.v1.StockReserved
                                               └─ REJECTED → ordering.v1.OrderCancellationRequested ──► ordering CancelOrder
-CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStock（RESERVED → RELEASED；否則 domain error → drop）
+CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStock（RESERVED → RELEASED；找不到 → CANCELLED tombstone；否則 domain error → drop）
 ```
 
 - inventory 只 import `ordering/contract/v1`（consumer 解 `OrderCreated`、events adapter 發 `OrderCancellationRequested`），其他一概不行（depguard `bc-isolation-*`）。
@@ -197,8 +197,10 @@ CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStoc
   撞 key 時 Order 回 `order.ErrDuplicate`（id 是 server 產的，撞到就是真的重複），Stock 回 `stock.ErrStale`
   （兩個 SetStock 同時建立同一個 SKU，輸的那個 reload 後改成 restock）。
   兩個同時的 CancelOrder：先 commit 的贏，另一個 `ErrStale`；consumer 重試時 reload 看到 CANCELLED → `ErrCannotCancel` → drop。
-- 已知限制：topic 之間沒有順序保證。`OrderCancelled` 若比 `OrderCreated` 先到 inventory，release 找不到 reservation（drop），之後的 reserve 會留住庫存；
-  要補的話是 reservation 的 tombstone（先收到 cancel 就記一筆 RELEASED），尚未做。
+- **topic 之間沒有順序保證，用 tombstone 補**：`OrderCancelled` 若比 `OrderCreated` 先到 inventory，`ReleaseStock` 找不到 reservation 時寫一筆
+  `CANCELLED`（`reservation.Tombstone`，唯一沒有 lines 的 reservation，不發 event）；晚到的 `OrderCreated` 找到它就什麼都不做。
+  兩邊同時 `Add` 撞 primary key 時，輸的那方回 `kernel.ErrConcurrentUpdate`（不是 `kernel.Error`）讓 consumer retry，重試後落在「已存在」分支：
+  release 輸給 reserve → 重試時釋放；reserve 輸給 tombstone → 重試時什麼都不做。RESERVED 以外的狀態都是終態。
 
 ## Observability：OTel → LGTM
 

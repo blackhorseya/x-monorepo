@@ -178,13 +178,41 @@ func TestReconstitute(t *testing.T) {
 	if _, err := reservation.Reconstitute(reservation.ReconstituteParams{OrderID: "o", Status: reservation.StatusReserved}); !errors.Is(err, reservation.ErrNoLines) {
 		t.Fatalf("no lines: %v", err)
 	}
+	// A tombstone is the one reservation allowed to have no lines.
+	tomb, err := reservation.Reconstitute(reservation.ReconstituteParams{OrderID: "o", Status: reservation.StatusCancelled, CreatedAt: now, UpdatedAt: now})
+	if err != nil || tomb.Status() != reservation.StatusCancelled || len(tomb.Lines()) != 0 {
+		t.Fatalf("tombstone reconstitute = %+v, %v", tomb, err)
+	}
 	if _, err := reservation.Reconstitute(reservation.ReconstituteParams{OrderID: "o", Lines: lines, Status: 0}); !errors.Is(err, reservation.ErrInvalidStatus) {
 		t.Fatalf("bad status: %v", err)
 	}
 }
 
+func TestTombstone(t *testing.T) {
+	if _, err := reservation.Tombstone("", now); !errors.Is(err, reservation.ErrInvalidOrderID) {
+		t.Fatalf("empty id: %v", err)
+	}
+	r, err := reservation.Tombstone("o-late", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.OrderID() != "o-late" || r.Status() != reservation.StatusCancelled || len(r.Lines()) != 0 || len(r.Shortfall()) != 0 {
+		t.Fatalf("tombstone = %+v", r)
+	}
+	if !r.CreatedAt().Equal(now) || !r.UpdatedAt().Equal(now) {
+		t.Fatalf("timestamps = %v / %v", r.CreatedAt(), r.UpdatedAt())
+	}
+	// Nothing was reserved: no event, and a (redelivered) release is a final no.
+	if len(r.PullEvents()) != 0 {
+		t.Fatal("tombstone must not raise events")
+	}
+	if err := r.Release(map[string]*stock.Stock{}, now); !errors.Is(err, reservation.ErrNotReserved) {
+		t.Fatalf("release tombstone: %v", err)
+	}
+}
+
 func TestStatus(t *testing.T) {
-	for _, s := range []reservation.Status{reservation.StatusReserved, reservation.StatusRejected, reservation.StatusReleased} {
+	for _, s := range []reservation.Status{reservation.StatusReserved, reservation.StatusRejected, reservation.StatusReleased, reservation.StatusCancelled} {
 		got, err := reservation.ParseStatus(s.String())
 		if err != nil || got != s {
 			t.Fatalf("round trip %s: %v %v", s, got, err)

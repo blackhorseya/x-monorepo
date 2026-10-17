@@ -157,4 +157,13 @@ func TestRepositories_Postgres(t *testing.T) {
 	if err := reservations.Update(c, never); !errors.Is(err, reservation.ErrNotFound) {
 		t.Fatalf("update unknown: %v", err)
 	}
+	// A tombstone (CANCELLED, no lines) round-trips: zero line rows is a valid aggregate.
+	tomb, _ := reservation.Tombstone("o-tomb", now)
+	if err := reservations.Add(c, tomb); err != nil {
+		t.Fatalf("add tombstone: %v", err)
+	}
+	got, err = reservations.FindByOrderID(c, "o-tomb")
+	if err != nil || got.Status() != reservation.StatusCancelled || len(got.Lines()) != 0 || len(got.Shortfall()) != 0 {
+		t.Fatalf("tombstone round trip = %+v, %v", got, err)
+	}
 }
