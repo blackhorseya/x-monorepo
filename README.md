@@ -33,7 +33,7 @@ task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.
 task lint test      # depguard 強制分層與 BC 邊界
 task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；dev 預設開 /api/docs（production 要 APP_HTTP_DOCS=true 才有）
                     # 沒設 postgres.url 就用 in-memory repository；要接 Postgres：
-cp configs/config.example.yaml configs/config.yaml   # 填 postgres.url（或 export APP_POSTGRES_URL=…）
+task compose-up      # 本機 Postgres；再 cp configs/config.example.yaml configs/config.yaml 填 postgres.url（或 export APP_POSTGRES_URL=…）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）
 task run
 
@@ -74,6 +74,7 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 │       └── adapters/              # driving：transport
 │           ├── rpc/               # Connect handler；pb ↔ dto
 │           └── consumer/          # broker handler；呼叫同一個 CancelOrder usecase
+├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   └── migrate/                   # 收集各 BC 的 embed migrations，up / down / version；唯一能 import infra 的 app
@@ -184,6 +185,16 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 - driver error 在 `infra/postgres.translate` 轉成 domain error：`gorm.ErrRecordNotFound → order.ErrNotFound`、
   `gorm.ErrDuplicatedKey → order.ErrDuplicate`，其他保持 wrapped 給 log。
 - integration test（`infra/postgres`、`apps/migrate`）在 `TEST_DATABASE_URL` 空時 skip；CI 的 test job 起 Postgres service。
+
+## Local infra（Compose）
+
+```bash
+task compose-up      # podman compose（沒有 podman 就 docker compose）起 Postgres（:5432，user/pass/db 都是 app）
+export APP_POSTGRES_URL='postgres://app:app@127.0.0.1:5432/app?sslmode=disable'   # 或寫進 configs/config.yaml
+task migrate -- up
+task run             # app 在本機跑，不進容器
+task compose-down    # 連 volume 一起清
+```
 
 ## Config（viper）
 
