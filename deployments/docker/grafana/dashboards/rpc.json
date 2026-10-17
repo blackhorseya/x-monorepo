@@ -669,7 +669,7 @@
     {
       "id": 17,
       "type": "row",
-      "title": "Go runtime — otel contrib/instrumentation/runtime (OTLP names; /api/metrics also has client_golang go_*/process_*)",
+      "title": "Go runtime — otel contrib/instrumentation/runtime (same names on OTLP and /api/metrics; no client_golang go_memstats_*/process_*)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
