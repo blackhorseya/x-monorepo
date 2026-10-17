@@ -29,8 +29,8 @@ vars:
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
   BCS: ordering
   # Every Go module in the workspace (keep in sync with go.work).
-  MODULES: pkgs/kernel pkgs/platform pkgs/ordering apps/rpc
-  APPS: rpc
+  MODULES: pkgs/kernel pkgs/platform pkgs/ordering apps/rpc apps/migrate
+  APPS: rpc migrate
 
 tasks:
   default:
@@ -228,6 +228,16 @@ tasks:
     deps: [build]
     env: { APP_LOG_FORMAT: text, APP_HTTP_DOCS: 'true' }
     cmds: ['{{.BIN_DIR}}/rpc']
+
+  migrate:
+    desc: 'task migrate -- up|down|version → run every BC''s migrations against APP_DB_URL'
+    preconditions:
+      - sh: test -n "$APP_DB_URL"
+        msg: 'APP_DB_URL is required, e.g. postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+      - sh: test -n "{{.CLI_ARGS}}"
+        msg: 'usage: task migrate -- up|down|version'
+    cmds:
+      - go run ./apps/migrate {{.CLI_ARGS}}
 
   # ── Modules ─────────────────────────────────────────────────────────────────
 

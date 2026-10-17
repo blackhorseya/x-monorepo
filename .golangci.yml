@@ -103,6 +103,7 @@ linters:
           files:
             - "**/apps/**"
             - "!**/apps/**/*_test.go"
+            - "!**/apps/migrate/**"   # see apps-migrate
           deny:
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/domain"
               desc: "apps must not touch domain"
@@ -110,6 +111,20 @@ linters:
               desc: "apps must not call use cases directly"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra"
               desc: "apps must not touch infra (except apps/migrate, by explicit exception)"
+
+        # ── apps/migrate: the one app allowed into infra — only to collect each BC's
+        #    embedded migrations. Still no domain / application / adapters.
+        apps-migrate:
+          files:
+            - "**/apps/migrate/**"
+            - "!**/apps/migrate/**/*_test.go"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/domain"
+              desc: "apps/migrate must not touch domain"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/application"
+              desc: "apps/migrate must not call use cases"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters"
+              desc: "apps/migrate must not touch adapters"
     revive:
       rules:
         - name: exported

@@ -10,4 +10,8 @@ var (
 	ErrInvalidQuantity = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_quantity", "quantity must be positive")
 	ErrCannotCancel    = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_cancel", "order cannot be cancelled in its current status")
 	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "order.not_found", "order not found")
+	// ErrDuplicate is returned by Repository.Save when another order already owns the id.
+	ErrDuplicate = kernel.NewError(kernel.KindConflict, "order.duplicate", "order already exists")
+	// ErrInvalidStatus means persisted state names a status this version does not know.
+	ErrInvalidStatus = kernel.NewError(kernel.KindInternal, "order.invalid_status", "unknown order status")
 )

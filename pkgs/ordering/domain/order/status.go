@@ -29,3 +29,16 @@ func (x Status) CanTransitionTo(next Status) bool {
 		return false
 	}
 }
+
+// ParseStatus is the inverse of String. Repositories use it to rebuild a Status
+// from its stored name; an unknown name is corrupt data, hence an internal error.
+func ParseStatus(s string) (Status, error) {
+	switch s {
+	case StatusPending.String():
+		return StatusPending, nil
+	case StatusCancelled.String():
+		return StatusCancelled, nil
+	default:
+		return StatusUnknown, ErrInvalidStatus
+	}
+}

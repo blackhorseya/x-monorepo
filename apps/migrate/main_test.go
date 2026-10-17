@@ -1,0 +1,34 @@
+package main
+
+import (
+	"os"
+	"testing"
+)
+
+func TestRun_Usage(t *testing.T) {
+	if err := run(nil); err == nil {
+		t.Fatal("no args should fail")
+	}
+	t.Setenv("APP_DB_URL", "")
+	if err := run([]string{"up"}); err == nil {
+		t.Fatal("missing APP_DB_URL should fail")
+	}
+}
+
+// Integration: needs TEST_DATABASE_URL (see pkgs/ordering/infra/postgres).
+func TestRun_UpVersionDown(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	t.Setenv("APP_DB_URL", url)
+
+	for _, cmd := range []string{"up", "up", "version", "down", "up"} { // second up: already current is fine
+		if err := run([]string{cmd}); err != nil {
+			t.Fatalf("%s: %v", cmd, err)
+		}
+	}
+	if err := run([]string{"sideways"}); err == nil {
+		t.Fatal("unknown command should fail")
+	}
+}

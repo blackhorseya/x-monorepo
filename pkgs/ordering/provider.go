@@ -4,7 +4,10 @@
 package ordering
 
 import (
+	"log/slog"
+
 	"github.com/google/wire"
+	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
@@ -12,14 +15,14 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
 var ProviderSet = wire.NewSet(
 	// infra → ports / repositories
-	memory.NewOrderRepository,
-	wire.Bind(new(order.Repository), new(*memory.OrderRepository)),
+	ProvideOrderRepository,
 	system.NewUUIDGenerator,
 	wire.Bind(new(port.IDGenerator), new(*system.UUIDGenerator)),
 	system.NewClock,
@@ -35,6 +38,18 @@ var ProviderSet = wire.NewSet(
 	rpc.NewOrderService,
 	consumer.NewOrderCancellationHandler,
 )
+
+// ProvideOrderRepository picks the persistence backend from the composition
+// root's database handle: nil (APP_DB_URL unset) means in-memory — local dev
+// and tests — otherwise Postgres. apps never run migrations; see apps/migrate.
+func ProvideOrderRepository(db *gorm.DB, logger *slog.Logger) order.Repository {
+	if db == nil {
+		logger.Warn("ordering: APP_DB_URL unset, using in-memory order repository")
+		return memory.NewOrderRepository()
+	}
+
+	return postgres.NewOrderRepository(db)
+}
 
 // decorate is the one place that decides which cross-cutting decorators every
 // use case of this BC gets (outermost first). Add a decorator here, not per use case.

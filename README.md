@@ -32,6 +32,10 @@ task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum�
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # depguard 強制分層與 BC 邊界
 task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；dev 預設開 /docs（production 要 APP_HTTP_DOCS=true 才有）
+                    # 沒設 APP_DB_URL 就用 in-memory repository；要接 Postgres：
+export APP_DB_URL='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）
+task run
 
 curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
   -H 'Content-Type: application/json' \
@@ -53,7 +57,7 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 │       └── event.proto            # 進出 broker 的訊息
 ├── pkgs/
 │   ├── kernel/                    # shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
-│   ├── platform/                  # 技術共用：contextx、config、server、usecasex、contract/common
+│   ├── platform/                  # 技術共用：contextx、config、server（gin）、usecasex、metrics、postgres（gorm + migrate runner）
 │   └── ordering/                  # ── Bounded Context（完整六角形）──
 │       ├── provider.go            # wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorator 包起來
 │       ├── contract/v1/           # buf 生成：pb + Connect + openapi.yaml（只有 adapters / apps 可 import）
@@ -64,11 +68,15 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 │       │   ├── port/              # 需要外界提供的能力
 │       │   └── mapper/            # domain → dto
 │       ├── infra/                 # driven：repository / port 實作
+│       │   ├── memory/            # in-memory repository（APP_DB_URL 未設時）
+│       │   ├── postgres/          # gorm row model + SQL + 錯誤轉譯；migrations/*.sql 以 embed 隨 BC 走
+│       │   └── system/            # clock / id
 │       └── adapters/              # driving：transport
 │           ├── rpc/               # Connect handler；pb ↔ dto
 │           └── consumer/          # broker handler；呼叫同一個 CancelOrder usecase
 ├── apps/
-│   └── rpc/                       # composition root：main + wire，無業務、無 mapping
+│   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
+│   └── migrate/                   # 收集各 BC 的 embed migrations，up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo：apps/*、packages/proto（@repo/proto）
 ```
 
@@ -81,7 +89,8 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 | `infra` | domain、application/port、platform | adapters / contract |
 | `adapters` | application、contract、platform | 其他 BC |
 | `kernel`、`platform` | 標準庫、第三方 | 任何 BC |
-| `apps/*` | 各 BC 的 `provider.go`、platform | 直接呼叫 usecase（只透過 wire） |
+| `apps/*` | 各 BC 的 `provider.go`、platform | 直接呼叫 usecase（只透過 wire）、infra |
+| `apps/migrate` | 各 BC 的 `infra/postgres`（只為了拿 `Migration()`）、platform | domain / application / adapters |
 | 任何 BC | — | 其他 BC（走 port 或 event） |
 
 **contract 和 dto 的差別**：contract 是 wire format（有版本、跨語言、生成），dto 是 application 邊界（手寫、
@@ -159,6 +168,30 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 - 所有 binary / test binary / coverage 輸出到 `./bin/`
 - goimports local-prefix `github.com/blackhorseya/x-monorepo`
 
+## Persistence：Postgres、gorm、migrations
+
+- `platform/postgres.NewDB` 提供 `*gorm.DB`（driver 底層是 pgx，`TranslateError` 開啟）。`APP_DB_URL` 空 → 回 nil，
+  `ordering.ProvideOrderRepository` 看到 nil 就改用 `infra/memory`，所以 `task run`、E2E test 不需要 DB。
+- **每個 BC 一個 Postgres schema**（`ordering.orders`），版本表也在該 schema 裡（`ordering.schema_migrations`）。
+  多個 BC 共用一個 database 時，預設的單一 `public.schema_migrations` 會讓兩條 migration 序列互相覆寫版本號且不報錯；
+  schema 隔離同時解決表名與版本表的衝突。
+- SQL 放 `pkgs/<bc>/infra/postgres/migrations/NNNN_name.{up,down}.sql`，由 BC `embed`（go.work 下 embed 不能跨
+  module）；`apps/migrate` 只收集各 BC 的 `Migration()` 並用 golang-migrate 執行。**service 啟動不跑 migration**，
+  部署流程是 `migrate up` → rollout。
+- row model（`orderRow`）是持久化模型，不是 aggregate；timestamps 來自 domain 的 `port.Clock`，所以 gorm 的
+  `autoCreateTime/autoUpdateTime` 關閉。`total` 不落地，`Reconstitute` 重算。
+- driver error 在 `infra/postgres.translate` 轉成 domain error：`gorm.ErrRecordNotFound → order.ErrNotFound`、
+  `gorm.ErrDuplicatedKey → order.ErrDuplicate`，其他保持 wrapped 給 log。
+- integration test（`infra/postgres`、`apps/migrate`）在 `TEST_DATABASE_URL` 空時 skip；CI 的 test job 起 Postgres service。
+
+| 環境變數 | 預設 | 說明 |
+|---|---|---|
+| `APP_HTTP_ADDR` | `:8080` | |
+| `APP_HTTP_DOCS` | `false` | 掛 `/docs`、`/openapi/<bc>.yaml`（`task run` 會開） |
+| `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
+| `APP_DB_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
+| `TEST_DATABASE_URL` | 空 | 只給 integration test |
+
 ## Workflow
 
 ### 新增 RPC
@@ -173,6 +206,8 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 3. 複製 `pkgs/ordering` 結構，寫 `provider.go`
 4. `.golangci.yml` 加該 BC 的 depguard block
 5. `apps/rpc`：`NewRoutes` 加參數、`wire.go` 加 `ProviderSet` → `task wire`
+6. 有 DB 的話：`infra/postgres/migrations/0001_*.sql`（表都放在 `<newbc>.` schema）+ `Migration()`，
+   `apps/migrate/main.go` 的 `migrations` 加一筆
 
 ### 新增 consumer process
 `apps/consumer/`：複製 `apps/rpc` 的 `wire.go`，不掛 `server.New`，改成訂閱 broker 並把
