@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 )
@@ -57,7 +59,8 @@ func (c *capture) len() int {
 func TestRouter_ErrorContractAndTracing(t *testing.T) {
 	exp := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
-	logger := slog.New(slog.NewTextHandler(discard{}, &slog.HandlerOptions{Level: slog.LevelError}))
+	logs := &buffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	tel := &otel.Providers{Tracer: tp, Propagator: propagation.TraceContext{}, Logger: logger}
 
 	ch := eventbus.NewGoChannel(logger)
@@ -76,6 +79,9 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 	err = eventbus.Register(router, ch, eventbus.ConsumerOptions{Poison: poison, PoisonTopic: "t.poison", MaxRetries: 1},
 		eventbus.Subscription{Topic: "t.ok", Handler: eventbus.HandlerFunc(func(c context.Context, _ []byte) error {
 			seen = trace.SpanContextFromContext(c)
+			// A use case logs through contextx: it must reach the router's logger,
+			// scoped to the message, not slog.Default().
+			contextx.FromContext(c).Error("from handler")
 			okDone <- struct{}{}
 			return nil
 		})},
@@ -115,6 +121,12 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 	if seen.TraceID() != producer.SpanContext().TraceID() {
 		t.Fatalf("consumer trace %s != producer trace %s", seen.TraceID(), producer.SpanContext().TraceID())
 	}
+	line := logs.line("from handler")
+	for _, want := range []string{"topic=t.ok", "handler=t.ok", "message_id=", "trace_id=" + seen.TraceID().String()} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("handler log %q lacks %q", line, want)
+		}
+	}
 
 	deadline := time.Now().Add(5 * time.Second)
 	for poison.len() < 1 {
@@ -133,6 +145,17 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 	if dropCalls.Load() != 1 || poison.len() != 1 {
 		t.Fatalf("drop calls = %d poison = %d; ErrDrop must ack without retry or poison", dropCalls.Load(), poison.len())
 	}
+	// One access line per attempt, with the outcome: ok, dropped, and one
+	// failed line for each of the two attempts on t.fail.
+	for topic, want := range map[string]struct {
+		result string
+		n      int
+	}{"t.ok": {"ok", 1}, "t.drop": {"dropped", 1}, "t.fail": {"failed", 2}} {
+		got := logs.count("msg=message", "topic="+topic+" ", "result="+want.result)
+		if got != want.n {
+			t.Fatalf("access lines for %s result=%s: %d, want %d\n%s", topic, want.result, got, want.n, logs.all())
+		}
+	}
 
 	cancel()
 	if err := <-done; err != nil {
@@ -150,6 +173,49 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 	}
 }
 
-type discard struct{}
+// buffer is a goroutine-safe log sink.
+type buffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
 
-func (discard) Write(p []byte) (int, error) { return len(p), nil }
+func (x *buffer) Write(p []byte) (int, error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.b.Write(p)
+}
+
+// count returns how many logged lines contain every substr.
+func (x *buffer) count(substrs ...string) int {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	n := 0
+	for _, l := range strings.Split(x.b.String(), "\n") {
+		ok := l != ""
+		for _, s := range substrs {
+			ok = ok && strings.Contains(l, s)
+		}
+		if ok {
+			n++
+		}
+	}
+	return n
+}
+
+func (x *buffer) all() string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.b.String()
+}
+
+// line returns the first logged line containing substr, or "".
+func (x *buffer) line(substr string) string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	for _, l := range strings.Split(x.b.String(), "\n") {
+		if strings.Contains(l, substr) {
+			return l
+		}
+	}
+	return ""
+}
