@@ -230,10 +230,10 @@ tasks:
     cmds: ['{{.BIN_DIR}}/rpc']
 
   migrate:
-    desc: 'task migrate -- up|down|version → run every BC''s migrations against APP_DB_URL'
+    desc: 'task migrate -- up|down|version → run every BC''s migrations against APP_POSTGRES_URL'
     preconditions:
-      - sh: test -n "$APP_DB_URL"
-        msg: 'APP_DB_URL is required, e.g. postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
+      - sh: test -n "$APP_POSTGRES_URL"
+        msg: 'APP_POSTGRES_URL is required, e.g. postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable'
       - sh: test -n "{{.CLI_ARGS}}"
         msg: 'usage: task migrate -- up|down|version'
     cmds:

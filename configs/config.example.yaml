@@ -1,0 +1,17 @@
+# Copy to configs/config.yaml (gitignored) for local dev, or point APP_CONFIG at a file.
+# Every key can also be set as APP_<SECTION>_<KEY>; env beats file beats these defaults.
+
+http:
+  addr: ":8080"
+  # mounts /api/docs and /api/openapi/<bc>.yaml — keep false in production
+  docs: false
+
+log:
+  level: info   # debug | info | warn | error
+  format: json  # json | text
+
+postgres:
+  # empty = no database: repositories fall back to in-memory (dev, tests).
+  # `task migrate -- up` needs this set.
+  url: ""
+  # url: postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable
