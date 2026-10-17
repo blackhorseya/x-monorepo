@@ -23,22 +23,22 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	http := cfg.HTTP
+	oTel := cfg.OTel
 	log := cfg.Log
-	logger := server.NewLogger(log)
-	configPostgres := cfg.Postgres
-	db, cleanup, err := postgres.NewDB(configPostgres)
+	providers, cleanup, err := otel.New(oTel, log)
 	if err != nil {
+		return nil, nil, err
+	}
+	logger := providers.Logger
+	configPostgres := cfg.Postgres
+	db, cleanup2, err := postgres.NewDB(configPostgres)
+	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	repository := ordering.ProvideOrderRepository(db, logger)
 	uuidGenerator := system.NewUUIDGenerator()
 	clock := system.NewClock()
-	oTel := cfg.OTel
-	providers, cleanup2, err := otel.New(oTel, logger)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
 	meterProvider := providers.Meter
 	recorder, err := usecasex.NewRecorder(meterProvider)
 	if err != nil {

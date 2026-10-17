@@ -11,10 +11,21 @@ import (
 
 type loggerKey struct{}
 
-// Contextx is a context.Context carrying a request-scoped logger.
+// Contextx is a context.Context carrying a request-scoped logger. Its logging
+// methods pass the context along, so context-aware handlers (the OTel bridge)
+// attach trace_id / span_id to every record automatically.
 type Contextx struct {
 	context.Context
 	*slog.Logger
+}
+
+func (x Contextx) Debug(msg string, args ...any) { x.log(slog.LevelDebug, msg, args...) }
+func (x Contextx) Info(msg string, args ...any)  { x.log(slog.LevelInfo, msg, args...) }
+func (x Contextx) Warn(msg string, args ...any)  { x.log(slog.LevelWarn, msg, args...) }
+func (x Contextx) Error(msg string, args ...any) { x.log(slog.LevelError, msg, args...) }
+
+func (x Contextx) log(level slog.Level, msg string, args ...any) {
+	x.Log(x.Context, level, msg, args...)
 }
 
 // FromContext wraps c. It never returns a nil logger.

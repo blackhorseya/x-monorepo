@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"connectrpc.com/connect"
@@ -27,21 +26,6 @@ import (
 // Route is implemented by every BC's rpc adapter.
 type Route interface {
 	Route(opts ...connect.HandlerOption) (string, http.Handler)
-}
-
-// NewLogger builds the root logger.
-func NewLogger(cfg config.Log) *slog.Logger {
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(cfg.Level)); err != nil {
-		level = slog.LevelInfo
-	}
-
-	opts := &slog.HandlerOptions{Level: level}
-	if cfg.Format == "text" {
-		return slog.New(slog.NewTextHandler(os.Stdout, opts))
-	}
-
-	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
 }
 
 // Server serves HTTP/1.1 + h2c (gRPC behind GKE/EKS ingress without TLS termination here).
