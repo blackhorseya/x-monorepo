@@ -1,0 +1,26 @@
+# Local infrastructure only — the apps run on the host (`task run`, `task migrate -- up`).
+#   task compose-up        # docker compose -f deployments/docker/docker-compose.yaml up -d
+#   task compose-down      # ... down -v   (drops the volume)
+# Then: export APP_POSTGRES_URL='postgres://app:app@127.0.0.1:5432/app?sslmode=disable'
+# (or put it in configs/config.yaml) → task migrate -- up → task run
+name: x-monorepo
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

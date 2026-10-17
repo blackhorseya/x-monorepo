@@ -239,6 +239,18 @@ tasks:
     cmds:
       - go run ./apps/migrate {{.CLI_ARGS}}
 
+  # ── Local infrastructure ────────────────────────────────────────────────────
+
+  compose-up:
+    desc: 'start local infra (Postgres on :5432, user/pass/db = app) — apps run on the host'
+    cmds:
+      - docker compose -f deployments/docker/docker-compose.yaml up -d
+
+  compose-down:
+    desc: stop local infra and drop its volume
+    cmds:
+      - docker compose -f deployments/docker/docker-compose.yaml down -v
+
   # ── Modules ─────────────────────────────────────────────────────────────────
 
   rename:
