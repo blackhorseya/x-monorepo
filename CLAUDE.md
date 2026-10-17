@@ -27,7 +27,7 @@ task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Con
 跑單一測試：`go.work` 根目錄不是 module，`./...` 在那裡比不到任何東西，必須 `cd` 進 module：
 
 ```bash
-cd pkgs/ordering && go test -race -run 'TestCreateOrder' ./application/usecase/
+cd pkgs/ordering && go test -race -run 'TestCreateGetCancel' ./application/usecase/
 cd pkgs/ordering && go test -count=1 -run '^TestArchitecture$' .      # 只跑 archtest
 TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
   go test -race ./infra/postgres/                                     # integration test，env 空時 skip
