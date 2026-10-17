@@ -167,6 +167,7 @@ const reservationBadge: Record<ReservationStatus, "default" | "secondary" | "des
   [ReservationStatus.RESERVED]: "default",
   [ReservationStatus.REJECTED]: "destructive",
   [ReservationStatus.RELEASED]: "secondary",
+  [ReservationStatus.CANCELLED]: "outline",
 };
 
 function ReservationCell({ orderId }: { orderId: string }) {

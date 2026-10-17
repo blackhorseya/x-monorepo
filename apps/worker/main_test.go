@@ -48,6 +48,8 @@ func TestRun_RequiresPostgres(t *testing.T) {
 //	                    → inventory RELEASED
 //	order B (unstocked) OrderCreated → inventory REJECTED → OrderCancellationRequested
 //	                    (published by inventory) → ordering CANCELLED → OrderCancelled
+//	order C (cancel first) OrderCancelled (published by the test, before any OrderCreated)
+//	                    → inventory CANCELLED tombstone → late OrderCreated reserves nothing
 //	                    → inventory: nothing to release (dropped, not poisoned)
 func TestWorker_EndToEnd(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -207,28 +209,58 @@ func TestWorker_EndToEnd(t *testing.T) {
 		t.Fatalf("reservation B = %+v, %v", r, err)
 	}
 
+	// ── order C: OrderCancelled overtakes OrderCreated → tombstone, late create reserves nothing ──
+	cID := "c-" + watermill.NewUUID()
+	cancelled, _ := proto.Marshal(&orderingv1.OrderCancelled{OrderId: cID, CustomerId: "c-1"})
+	msg = message.NewMessageWithContext(c, watermill.NewUUID(), cancelled)
+	msg.Metadata.Set(eventbus.MetaKey, cID)
+	if err := publisher.Publish(inventoryconsumer.TopicOrderCancelled, msg); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("reservation C CANCELLED (tombstone)", reservationIs(cID, "CANCELLED"))
+
+	created, _ := proto.Marshal(&orderingv1.OrderCreated{OrderId: cID, CustomerId: "c-1", Items: []*orderingv1.OrderCreatedItem{{Sku: "S", Quantity: 3}}})
+	msg = message.NewMessageWithContext(c, watermill.NewUUID(), created)
+	msg.Metadata.Set(eventbus.MetaKey, cID)
+	if err := publisher.Publish(inventoryconsumer.TopicOrderCreated, msg); err != nil {
+		t.Fatal(err)
+	}
+	// Consumption of the late OrderCreated shows only in the cursor: a, b and c
+	// is three OrderCreated on the inventory group.
+	waitFor("inventory consumed the late OrderCreated", func() (bool, error) {
+		var n int64
+		err := db.WithContext(c).Raw("SELECT coalesce(max(offset_acked), 0) FROM ordering.events_v1_ordercreated_offsets WHERE consumer_group = ?", group+".inventory").Scan(&n).Error
+		return n >= 3, err
+	})
+	if r, err := getReservation.Execute(c, inventorydto.GetReservationInput{OrderID: cID}); err != nil || r.Status != "CANCELLED" || len(r.Lines) != 0 {
+		t.Fatalf("reservation C after late create = %+v, %v", r, err)
+	}
+	if s, _ := getStock.Execute(c, inventorydto.GetStockInput{SKU: "S"}); s.Reserved != 0 {
+		t.Fatalf("late create reserved stock: %+v", s)
+	}
+
 	// Every hop left its row in the outbox tables (counted by aggregate key, so
 	// traffic from a locally running rpc does not interfere); nothing was
 	// poisoned, and each BC's consumer group advanced on its own cursor.
 	counts := map[string]int64{
-		"ordering.events_v1_ordercreated":               2,
+		"ordering.events_v1_ordercreated":               3, // a, b, and c (published by the test)
 		"ordering.events_v1_ordercancellationrequested": 2, // one by the test, one by inventory
-		"ordering.events_v1_ordercancelled":             2,
+		"ordering.events_v1_ordercancelled":             3, // a, b, and c (published by the test)
 		"inventory.events_v1_stockreserved":             1,
 		"inventory.events_v1_stockreleased":             1,
 		"ordering.events_poison":                        0,
 		"inventory.events_poison":                       0,
 	}
-	// OrderCancelled for B reaches inventory too, which has nothing to release: a
+	// OrderCancelled for B reaches inventory too, on a REJECTED reservation: a
 	// domain error, dropped (ack) — not retried, not poisoned. Wait for that ack.
-	waitFor("inventory acked both OrderCancelled", func() (bool, error) {
+	waitFor("inventory acked every OrderCancelled", func() (bool, error) {
 		var n int64
 		err := db.WithContext(c).Raw("SELECT coalesce(max(offset_acked), 0) FROM ordering.events_v1_ordercancelled_offsets WHERE consumer_group = ?", group+".inventory").Scan(&n).Error
-		return n >= 2, err
+		return n >= 3, err
 	})
 	for tbl, want := range counts {
 		var n int64
-		if err := db.WithContext(c).Raw("SELECT count(*) FROM "+tbl+" WHERE metadata->>'key' IN (?, ?)", a.ID, b.ID).Scan(&n).Error; err != nil || n != want {
+		if err := db.WithContext(c).Raw("SELECT count(*) FROM "+tbl+" WHERE metadata->>'key' IN (?, ?, ?)", a.ID, b.ID, cID).Scan(&n).Error; err != nil || n != want {
 			t.Fatalf("%s rows = %d err=%v, want %d", tbl, n, err, want)
 		}
 	}

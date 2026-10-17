@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file inventory/v1/entity.proto.
  */
 export const file_inventory_v1_entity: GenFile = /*@__PURE__*/
-  fileDesc("ChlpbnZlbnRvcnkvdjEvZW50aXR5LnByb3RvEgxpbnZlbnRvcnkudjEiewoFU3RvY2sSCwoDc2t1GAEgASgJEg8KB29uX2hhbmQYAiABKAUSEAoIcmVzZXJ2ZWQYAyABKAUSEQoJYXZhaWxhYmxlGAQgASgFEi8KC3VwZGF0ZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCIwCg9SZXNlcnZhdGlvbkxpbmUSCwoDc2t1GAEgASgJEhAKCHF1YW50aXR5GAIgASgFIvgBCgtSZXNlcnZhdGlvbhIQCghvcmRlcl9pZBgBIAEoCRIsCgVsaW5lcxgCIAMoCzIdLmludmVudG9yeS52MS5SZXNlcnZhdGlvbkxpbmUSLwoGc3RhdHVzGAMgASgOMh8uaW52ZW50b3J5LnYxLlJlc2VydmF0aW9uU3RhdHVzEhYKDnNob3J0ZmFsbF9za3VzGAQgAygJEi8KC2NyZWF0ZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAqmgEKEVJlc2VydmF0aW9uU3RhdHVzEiIKHlJFU0VSVkFUSU9OX1NUQVRVU19VTlNQRUNJRklFRBAAEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRVNFUlZFRBABEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRUpFQ1RFRBACEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRUxFQVNFRBADYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChlpbnZlbnRvcnkvdjEvZW50aXR5LnByb3RvEgxpbnZlbnRvcnkudjEiewoFU3RvY2sSCwoDc2t1GAEgASgJEg8KB29uX2hhbmQYAiABKAUSEAoIcmVzZXJ2ZWQYAyABKAUSEQoJYXZhaWxhYmxlGAQgASgFEi8KC3VwZGF0ZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCIwCg9SZXNlcnZhdGlvbkxpbmUSCwoDc2t1GAEgASgJEhAKCHF1YW50aXR5GAIgASgFIvgBCgtSZXNlcnZhdGlvbhIQCghvcmRlcl9pZBgBIAEoCRIsCgVsaW5lcxgCIAMoCzIdLmludmVudG9yeS52MS5SZXNlcnZhdGlvbkxpbmUSLwoGc3RhdHVzGAMgASgOMh8uaW52ZW50b3J5LnYxLlJlc2VydmF0aW9uU3RhdHVzEhYKDnNob3J0ZmFsbF9za3VzGAQgAygJEi8KC2NyZWF0ZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAqvAEKEVJlc2VydmF0aW9uU3RhdHVzEiIKHlJFU0VSVkFUSU9OX1NUQVRVU19VTlNQRUNJRklFRBAAEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRVNFUlZFRBABEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRUpFQ1RFRBACEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRUxFQVNFRBADEiAKHFJFU0VSVkFUSU9OX1NUQVRVU19DQU5DRUxMRUQQBGIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * Stock is the quantity of one SKU: on_hand is what the warehouse holds,
@@ -77,7 +77,9 @@ export const ReservationLineSchema: GenMessage<ReservationLine> = /*@__PURE__*/
   messageDesc(file_inventory_v1_entity, 1);
 
 /**
- * Reservation is the outcome of one ordering.v1.OrderCreated: one per order.
+ * Reservation is inventory's record of one order: the outcome of its
+ * ordering.v1.OrderCreated, or a CANCELLED tombstone when its
+ * ordering.v1.OrderCancelled arrived first. One per order.
  *
  * @generated from message inventory.v1.Reservation
  */
@@ -152,6 +154,14 @@ export enum ReservationStatus {
    * @generated from enum value: RESERVATION_STATUS_RELEASED = 3;
    */
   RELEASED = 3,
+
+  /**
+   * The order was cancelled before inventory saw it created (OrderCancelled
+   * overtook OrderCreated): nothing was reserved, the reservation has no lines.
+   *
+   * @generated from enum value: RESERVATION_STATUS_CANCELLED = 4;
+   */
+  CANCELLED = 4,
 }
 
 /**
