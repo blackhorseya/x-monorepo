@@ -54,7 +54,7 @@ tasks:
     silent: true
 
   gate-fast:
-    desc: 'gofmt + vet + golangci-lint --fast-only on the modules owning the given files'
+    desc: 'gofmt + vet + golangci-lint --fast-only + archtest on the modules owning the given files'
     summary: |
       task gate-fast FILE="a.go b.go"     # or
       task gate-fast -- a.go b.go         # lefthook passes {staged_files} this way (no shell quoting)
@@ -73,6 +73,8 @@ tasks:
           echo ">> $m"
           (cd "$m" && go vet ./...) || exit 1
           if [ -x {{.BIN_DIR}}/golangci-lint ] || command -v golangci-lint >/dev/null; then (cd "$m" && {{.GOLANGCI_LINT}} run --fast-only ./...) || exit 1; fi
+          # DDD rules (archtest) are an AST walk, ~1s: cheap enough to report on every edit.
+          if [ -f "$m/arch_test.go" ]; then (cd "$m" && go test -count=1 -run '^TestArchitecture$' .) || exit 1; fi
         done
 
   gate-local:
