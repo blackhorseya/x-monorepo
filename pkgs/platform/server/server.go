@@ -70,6 +70,10 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, gathe
 	if cfg.Docs {
 		mountDocs(engine, docs)
 		logger.Info("api docs enabled", "path", "/docs")
+	} else {
+		engine.GET("/docs", func(c *gin.Context) {
+			c.String(http.StatusNotFound, "api docs are disabled; start with APP_HTTP_DOCS=true\n")
+		})
 	}
 
 	protocols := new(http.Protocols)

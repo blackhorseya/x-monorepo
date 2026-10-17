@@ -31,7 +31,7 @@ task tools          # buf / protoc-gen-go / protoc-gen-connect-go / wire / golan
 task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum）
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # depguard 強制分層與 BC 邊界
-task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；APP_HTTP_DOCS=true 開 /docs
+task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；dev 預設開 /docs（production 要 APP_HTTP_DOCS=true 才有）
 
 curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
   -H 'Content-Type: application/json' \

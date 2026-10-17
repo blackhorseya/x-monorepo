@@ -224,9 +224,9 @@ tasks:
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
 
   run:
-    desc: build and run ./bin/rpc
+    desc: 'build and run ./bin/rpc (local dev: text logs, /docs enabled)'
     deps: [build]
-    env: { APP_LOG_FORMAT: text }
+    env: { APP_LOG_FORMAT: text, APP_HTTP_DOCS: 'true' }
     cmds: ['{{.BIN_DIR}}/rpc']
 
   # ── Modules ─────────────────────────────────────────────────────────────────
