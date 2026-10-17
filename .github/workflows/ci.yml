@@ -101,6 +101,21 @@ jobs:
       - run: task build
 
   # ── breaking: warn only (decision: wire-incompatible changes are allowed, but visible) ──
+  # ── web: @repo/proto must typecheck against the generated TS, console must build ──
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup   # Task (Go is unused here but comes with it)
+      - uses: pnpm/action-setup@v4
+        with: { package_json_file: web/package.json }   # version from packageManager
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: task web-typecheck web-build
+
   breaking:
     runs-on: ubuntu-latest
     continue-on-error: true

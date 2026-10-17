@@ -509,5 +509,6 @@ configs/*
 .turbo/
 .next/
 .build/
-web/packages/proto/src/gen/
+# the Python template above ignores lib/; frontend source keeps its lib/ (shadcn cn helper)
+!web/**/src/lib/
 /configs/config.yaml

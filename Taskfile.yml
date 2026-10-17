@@ -242,6 +242,33 @@ tasks:
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/worker']
 
+  # ── Web (web/: pnpm + Turborepo) ────────────────────────────────────────────
+
+  web-install:
+    desc: 'pnpm install for web/ (frozen lockfile); re-runs only when the lockfile or a package.json changes'
+    dir: web
+    sources: [pnpm-lock.yaml, package.json, '*/*/package.json']
+    generates: [node_modules/.modules.yaml]
+    cmds: [pnpm install --frozen-lockfile]
+
+  web-dev:
+    desc: 'console on http://localhost:5173, proxying RPCs to CONSOLE_API (default http://localhost:8080 = task run)'
+    deps: [web-install]
+    dir: web/apps/console
+    cmds: [pnpm dev]
+
+  web-typecheck:
+    desc: tsc --noEmit for every web package (@repo/proto, @repo/console)
+    deps: [web-install]
+    dir: web
+    cmds: [pnpm typecheck]
+
+  web-build:
+    desc: production build of web/apps/console → web/apps/console/dist
+    deps: [web-install]
+    dir: web
+    cmds: [pnpm build]
+
   config:
     desc: 'create configs/local.yaml from configs/config.example.yaml if missing'
     status: ['test -f {{.CONFIG}}']

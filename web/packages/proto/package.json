@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./*": "./src/gen/*"
+    "./*": "./src/gen/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
