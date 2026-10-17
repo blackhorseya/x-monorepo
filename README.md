@@ -94,9 +94,14 @@ dto 不要照著 pb 抄。
 type UseCase[I, O any] interface { Execute(c context.Context, in I) (O, error) }
 ```
 
-adapter 只依賴 `UseCase[I, O]`，不依賴具體 struct。`provider.go` 用 `usecasex.Chain` 把 logging（之後加
-metrics、tx）包在 usecase 外面，rpc 和 consumer 兩邊自動都有。Connect interceptor 只管 transport 層的事
-（procedure、protocol、code）。
+adapter 只依賴 `UseCase[I, O]`，不依賴具體 struct。`provider.go` 的 `decorate()` 用 `usecasex.Chain` 把
+metrics + logging 包在每個 usecase 外面（之後加 tx 也在這一處），rpc 和 consumer 兩邊自動都有。Connect
+interceptor 只管 transport 層的事（procedure、protocol、code）。
+
+- `usecasex.Logging`：一行 log，domain error 是 `Info`（預期結果），其他 error 才是 `Error`
+- `usecasex.Metrics`：histogram `usecase_duration_seconds{usecase, kind}`；`kind` = `ok` / kernel error kind /
+  `internal`，和 `server.ToConnectError` 同一套判準，label 值域有限。registry 由 `platform/metrics.ProviderSet`
+  注入（每個 `Initialize()` 一個，不用 global），`server` 掛在 `GET /metrics`
 
 ## Gates（harness）
 
@@ -152,7 +157,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 ### 新增 RPC
 1. 改 `protos/<bc>/v1/service.proto` → `task gen`（`task breaking` 檢查相容）
 2. domain 加行為 → `application/dto` + `usecase`
-3. `provider.go` 加 `ProvideXxx`（含 decorator）
+3. `provider.go` 加 `ProvideXxx`，用 `decorate(name, rec, uc)` 包起來
 4. `adapters/rpc` 實作新方法（`var _ XxxServiceHandler` 會提醒）→ `task wire`
 
 ### 新增 Bounded Context
