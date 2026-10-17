@@ -77,7 +77,9 @@ export const ReservationLineSchema: GenMessage<ReservationLine> = /*@__PURE__*/
   messageDesc(file_inventory_v1_entity, 1);
 
 /**
- * Reservation is the outcome of one ordering.v1.OrderCreated: one per order.
+ * Reservation is inventory's record of one order: the outcome of its
+ * ordering.v1.OrderCreated, or a CANCELLED tombstone when its
+ * ordering.v1.OrderCancelled arrived first. One per order.
  *
  * @generated from message inventory.v1.Reservation
  */

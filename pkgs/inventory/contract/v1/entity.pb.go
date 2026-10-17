@@ -213,7 +213,9 @@ func (x *ReservationLine) GetQuantity() int32 {
 	return 0
 }
 
-// Reservation is the outcome of one ordering.v1.OrderCreated: one per order.
+// Reservation is inventory's record of one order: the outcome of its
+// ordering.v1.OrderCreated, or a CANCELLED tombstone when its
+// ordering.v1.OrderCancelled arrived first. One per order.
 type Reservation struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	OrderId string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`

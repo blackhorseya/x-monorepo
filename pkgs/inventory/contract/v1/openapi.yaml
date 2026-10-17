@@ -268,7 +268,10 @@ components:
           title: update_time
       title: Reservation
       additionalProperties: false
-      description: 'Reservation is the outcome of one ordering.v1.OrderCreated: one per order.'
+      description: |-
+        Reservation is inventory's record of one order: the outcome of its
+         ordering.v1.OrderCreated, or a CANCELLED tombstone when its
+         ordering.v1.OrderCancelled arrived first. One per order.
     inventory.v1.ReservationLine:
       type: object
       properties:
