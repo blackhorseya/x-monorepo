@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // Doc is one bounded context's OpenAPI document.
@@ -17,31 +19,28 @@ type Doc struct {
 // mountDocs serves /openapi/<name>.yaml for each doc and an index at /docs
 // (Scalar UI loaded from CDN). Only call this when cfg.HTTP.Docs is true —
 // never in production.
-func mountDocs(mux *http.ServeMux, docs []Doc) {
+func mountDocs(engine *gin.Engine, docs []Doc) {
 	names := make([]string, 0, len(docs))
 	for _, d := range docs {
-		d := d
 		names = append(names, d.Name)
-		mux.HandleFunc("GET /openapi/"+d.Name+".yaml", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/yaml")
-			_, _ = w.Write(d.Spec)
+		engine.GET("/openapi/"+d.Name+".yaml", func(c *gin.Context) {
+			c.Data(http.StatusOK, "application/yaml", d.Spec)
 		})
-		mux.HandleFunc("GET /docs/"+d.Name, func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = fmt.Fprintf(w, scalarPage, html.EscapeString(d.Name), "/openapi/"+d.Name+".yaml")
+		engine.GET("/docs/"+d.Name, func(c *gin.Context) {
+			page := fmt.Sprintf(scalarPage, html.EscapeString(d.Name), "/openapi/"+d.Name+".yaml")
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(page))
 		})
 	}
 	sort.Strings(names)
 
-	mux.HandleFunc("GET /docs", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	engine.GET("/docs", func(c *gin.Context) {
 		var b strings.Builder
 		b.WriteString("<!doctype html><title>API docs</title><h1>API docs</h1><ul>")
 		for _, n := range names {
 			_, _ = fmt.Fprintf(&b, `<li><a href="/docs/%s">%s</a> (<a href="/openapi/%s.yaml">yaml</a>)</li>`, n, n, n)
 		}
 		b.WriteString("</ul>")
-		_, _ = w.Write([]byte(b.String()))
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(b.String()))
 	})
 }
 

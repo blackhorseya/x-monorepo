@@ -31,7 +31,7 @@ task tools          # buf / protoc-gen-go / protoc-gen-connect-go / wire / golan
 task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum）
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # depguard 強制分層與 BC 邊界
-task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；APP_HTTP_DOCS=true 開 /docs
+task run            # ./bin/rpc，Connect + gRPC + gRPC-Web 同一個 port；dev 預設開 /docs（production 要 APP_HTTP_DOCS=true 才有）
 
 curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
   -H 'Content-Type: application/json' \
@@ -87,6 +87,13 @@ curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
 **contract 和 dto 的差別**：contract 是 wire format（有版本、跨語言、生成），dto 是 application 邊界（手寫、
 只放 usecase 需要的欄位）。同一個 usecase 被 rpc 和 consumer 兩個 adapter 呼叫時，dto 就是它們的共同語言。
 dto 不要照著 pb 抄。
+
+## server：gin + Connect
+
+`platform/server` 用 gin 當 HTTP router：每個 BC 的 Connect handler 以 `gin.WrapH` 掛在 `/<pkg>.<Service>/*procedure`，
+`/healthz`、`/metrics`、`/docs` 是普通 gin route。`RedirectTrailingSlash` / `RedirectFixedPath` 關閉（gRPC client
+不跟 redirect）；gin 只做 routing + `Recovery()`，RPC log 留在 Connect interceptor。HTTP/1.1 與 h2c 同一個 port，
+Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`）。
 
 ## usecasex：use case 的統一形狀與 decorator
 
