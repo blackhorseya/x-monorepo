@@ -139,17 +139,37 @@ func TestOrderService_Protocols(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		client *http.Client
-		opt    connect.ClientOption
+		opts   []connect.ClientOption
 	}{
-		{"grpc", h2cClient, connect.WithGRPC()},
-		{"grpc-web", http.DefaultClient, connect.WithGRPCWeb()},
+		{"connect", http.DefaultClient, nil},
+		{"grpc", h2cClient, []connect.ClientOption{connect.WithGRPC()}},
+		{"grpc-web", http.DefaultClient, []connect.ClientOption{connect.WithGRPCWeb()}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			client := orderingv1connect.NewOrderServiceClient(tt.client, ts.URL, tt.opt)
-			_, err := client.GetOrder(context.Background(), connect.NewRequest(&orderingv1.GetOrderRequest{Id: "nope"}))
+			client := orderingv1connect.NewOrderServiceClient(tt.client, ts.URL, tt.opts...)
+			c := context.Background()
+
+			// Response meta travels as headers on every protocol, on errors too.
+			_, err := client.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: "nope"}))
 			var ce *connect.Error
 			if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
 				t.Fatalf("err = %v, want NotFound", err)
+			}
+			if ce.Meta().Get(server.RequestIDHeader) == "" {
+				t.Fatalf("error without %s: %v", server.RequestIDHeader, ce.Meta())
+			}
+
+			req := connect.NewRequest(&orderingv1.CreateOrderRequest{
+				CustomerId: "c-1",
+				Items:      []*orderingv1.LineItem{{Sku: "S", Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 1, Currency: "USD"}}},
+			})
+			req.Header().Set(server.RequestIDHeader, "client-"+tt.name)
+			res, err := client.CreateOrder(c, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := res.Header().Get(server.RequestIDHeader); got != "client-"+tt.name {
+				t.Fatalf("%s = %q, want echo of the client's id", server.RequestIDHeader, got)
 			}
 		})
 	}

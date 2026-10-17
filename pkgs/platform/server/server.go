@@ -46,7 +46,8 @@ type Server struct {
 // New mounts every route, /api/healthz, /api/metrics (Prometheus exposition of the
 // OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
 // OpenTelemetry span (otelconnect, outermost) and a request logger carrying
-// its trace_id; plain HTTP routes (docs, openapi) get theirs from otelgin,
+// its trace_id and request_id, and every response carries X-Request-Id /
+// X-Trace-Id (see meta.go); plain HTTP routes (docs, openapi) get spans from otelgin,
 // which skips RPC prefixes, /api/healthz and /api/metrics so nothing is traced twice.
 func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *otel.Providers) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
@@ -60,11 +61,12 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 		otelconnect.WithTracerProvider(tel.Tracer),
 		otelconnect.WithMeterProvider(tel.Meter),
 		otelconnect.WithPropagator(tel.Propagator),
+		otelconnect.WithPropagateResponseHeader(), // traceparent on responses too
 	)
 	if err != nil {
 		return nil, fmt.Errorf("otelconnect interceptor: %w", err)
 	}
-	opts := connect.WithInterceptors(tracing, NewLoggingInterceptor(logger))
+	opts := connect.WithInterceptors(tracing, NewMetaInterceptor(), NewLoggingInterceptor(logger))
 	prefixes := make([]string, 0, len(routes))
 	handlers := make([]http.Handler, 0, len(routes))
 	for _, r := range routes {

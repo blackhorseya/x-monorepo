@@ -104,6 +104,18 @@ dto 不要照著 pb 抄。
 不跟 redirect）；gin 只做 routing + `Recovery()`，RPC log 留在 Connect interceptor。HTTP/1.1 與 h2c 同一個 port，
 Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`）。
 
+**Response meta 走 header，不包進 proto message**：transport 層本來就有 status / header / trailer，在 body 包 `{data, meta}`
+等於重做一次、每個 Response 都要重複寫、client 多剝一層；錯誤的 `x-error-code` 也已經是 header。`server.NewMetaInterceptor`
+在成功與錯誤兩條路都設：
+
+| header | 內容 |
+|---|---|
+| `X-Request-Id` | client 有帶就原樣回（≤128 字），沒帶就 server 產 UUID；`server.RequestID(c)` 拿得到，request log 也有 `request_id` |
+| `X-Trace-Id` | OTel trace id（有 span 才有），直接貼到 Tempo / Loki `| trace_id="…"` |
+| `traceparent` | W3C trace context，`otelconnect.WithPropagateResponseHeader()` 回給瀏覽器端 tracing |
+
+分頁之類「該 RPC 自己的資料」（`next_page_token`、`total_size`）才放進 message，不做通用 `ResponseMeta` 欄位。
+
 ## Observability：OTel → LGTM
 
 `platform/otel.New(cfg.OTel, cfg.Log)` 回傳 `*otel.Providers`（TracerProvider、MeterProvider、Propagator、root `*slog.Logger`、
