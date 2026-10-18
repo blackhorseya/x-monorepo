@@ -9,6 +9,7 @@ require (
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/google/wire v0.7.0
+	gorm.io/gorm v1.31.2
 )
 
 require (
@@ -117,7 +118,6 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gorm.io/driver/postgres v1.6.3 // indirect
-	gorm.io/gorm v1.31.2 // indirect
 )
 
 replace (

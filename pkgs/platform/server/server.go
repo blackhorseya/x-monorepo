@@ -4,7 +4,7 @@
 // gin is the HTTP router: Connect handlers are mounted under their service
 // prefix with gin.WrapH, both at the protocol path "/<pkg>.<Service>/…" and
 // under RPCPrefix ("/api/<pkg>.<Service>/…"); plain routes (/api/healthz,
-// /api/metrics, /api/docs) are gin handlers. Request logging for RPCs stays in the Connect interceptor, which
+// /api/readyz, /api/metrics, /api/docs) are gin handlers. Request logging for RPCs stays in the Connect interceptor, which
 // sees procedure and code; gin only contributes routing and panic recovery.
 package server
 
@@ -35,7 +35,6 @@ import (
 // a prefix. The handler is the same; only the route differs.
 const (
 	RPCPrefix   = "/api"
-	HealthzPath = "/api/healthz"
 	MetricsPath = "/api/metrics"
 )
 
@@ -48,15 +47,17 @@ type Route interface {
 type Server struct {
 	srv    *http.Server
 	logger *slog.Logger
+	health *health
 }
 
-// New mounts every route, /api/healthz, /api/metrics (Prometheus exposition of the
-// OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
+// New mounts every route, the probes (/api/healthz liveness, /api/readyz
+// readiness over checks, see health.go), /api/metrics (Prometheus exposition
+// of the OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
 // OpenTelemetry span (otelconnect, outermost) and a request logger carrying
 // its trace_id and request_id, and every response carries X-Request-Id /
 // X-Trace-Id (see meta.go); plain HTTP routes (docs, openapi) get spans from otelgin,
-// which skips RPC prefixes, /api/healthz and /api/metrics so nothing is traced twice.
-func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *otel.Providers) (*Server, error) {
+// which skips RPC prefixes, the probes and /api/metrics so nothing is traced twice.
+func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	// Connect routes are "/<pkg>.<Service>/" prefixes; a procedure is the next segment.
@@ -102,7 +103,9 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 		engine.Any(prefix+"*procedure", gin.WrapH(handlers[i]))
 		engine.Any(RPCPrefix+prefix+"*procedure", gin.WrapH(http.StripPrefix(RPCPrefix, handlers[i])))
 	}
-	engine.GET(HealthzPath, func(c *gin.Context) { c.Status(http.StatusOK) })
+	hp := &health{checks: checks}
+	engine.GET(HealthzPath, hp.live)
+	engine.GET(ReadyzPath, hp.ready)
 	engine.GET(MetricsPath, gin.WrapH(tel.MetricsHandler))
 	if cfg.Docs {
 		mountDocs(engine, docs)
@@ -125,6 +128,7 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 		logger: logger,
+		health: hp,
 	}, nil
 }
 
@@ -133,7 +137,7 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 func untracedByGin(prefixes []string) func(*gin.Context) bool {
 	return func(c *gin.Context) bool {
 		path := c.Request.URL.Path
-		if path == HealthzPath || path == MetricsPath {
+		if path == HealthzPath || path == ReadyzPath || path == MetricsPath {
 			return false
 		}
 		for _, p := range prefixes {
@@ -149,7 +153,9 @@ func untracedByGin(prefixes []string) func(*gin.Context) bool {
 // Handler exposes the router for in-process tests.
 func (s *Server) Handler() http.Handler { return s.srv.Handler }
 
-// Run blocks until c is cancelled, then shuts down gracefully.
+// Run blocks until c is cancelled, then shuts down gracefully: readiness
+// flips to 503 first so a load balancer that polls it stops sending traffic
+// while in-flight requests drain.
 func (s *Server) Run(c context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
@@ -166,6 +172,7 @@ func (s *Server) Run(c context.Context) error {
 	case <-c.Done():
 	}
 
+	s.health.draining.Store(true)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	s.logger.Info("server shutting down")
