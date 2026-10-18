@@ -96,11 +96,16 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("worker.broker=redis without redis.url must fail")
 	}
 	t.Setenv("APP_REDIS_URL", "redis://127.0.0.1:6379/0")
+	t.Setenv("APP_WORKER_START_FROM", "yesterday")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("unknown worker.start_from must fail")
+	}
+	t.Setenv("APP_WORKER_START_FROM", "latest")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Worker.Broker != config.BrokerRedis || cfg.Redis.URL == "" {
+	if cfg.Worker.Broker != config.BrokerRedis || cfg.Redis.URL == "" || cfg.Worker.StartFrom != config.StartFromLatest {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }

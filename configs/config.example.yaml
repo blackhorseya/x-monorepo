@@ -36,3 +36,7 @@ worker:
   # redis:    the worker forwards each outbox table into a Redis Stream and reads that
   #           (needs redis.url). The outbox stays the write path either way.
   broker: postgres
+  # Where a consumer group that has NO cursor yet begins: beginning (replay what is
+  # retained) or latest (only what arrives after it was created). An existing cursor is
+  # never moved, so this only matters the first time a group name appears.
+  start_from: beginning

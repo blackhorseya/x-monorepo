@@ -69,12 +69,23 @@ type Worker struct {
 	// Redis Stream and consume that (needs redis.url). The outbox stays the
 	// write path either way.
 	Broker string `mapstructure:"broker"`
+	// StartFrom is where a consumer group that has NO cursor yet begins:
+	// "beginning" replays every retained message, "latest" starts after what
+	// is already there. A group that already has a cursor is never moved, so
+	// this only matters the first time a group name (or the forwarder) appears.
+	StartFrom string `mapstructure:"start_from"`
 }
 
 // Broker values of Worker.Broker.
 const (
 	BrokerPostgres = "postgres"
 	BrokerRedis    = "redis"
+)
+
+// StartFrom values of Worker.StartFrom.
+const (
+	StartFromBeginning = "beginning"
+	StartFromLatest    = "latest"
 )
 
 // Log configures the structured logger.
@@ -122,6 +133,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("otel.service_name", "")
 	v.SetDefault("worker.consumer_group", "worker")
 	v.SetDefault("worker.broker", BrokerPostgres)
+	v.SetDefault("worker.start_from", StartFromBeginning)
 }
 
 func readFile(v *viper.Viper) error {
@@ -160,6 +172,9 @@ func (x *AppConfig) validate() error {
 		}
 	default:
 		return fmt.Errorf("invalid worker.broker %q (want postgres|redis)", x.Worker.Broker)
+	}
+	if x.Worker.StartFrom != StartFromBeginning && x.Worker.StartFrom != StartFromLatest {
+		return fmt.Errorf("invalid worker.start_from %q (want beginning|latest)", x.Worker.StartFrom)
 	}
 
 	return nil
