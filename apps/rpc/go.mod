@@ -3,7 +3,7 @@ module github.com/blackhorseya/x-monorepo/apps/rpc
 go 1.27
 
 require (
-	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.1
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	connectrpc.com/connect v1.21.1
 	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0

@@ -3,7 +3,7 @@ module github.com/blackhorseya/x-monorepo/pkgs/platform
 go 1.27
 
 require (
-	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.1
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	buf.build/go/protovalidate v1.4.0
 	connectrpc.com/connect v1.21.1
 	connectrpc.com/otelconnect v0.12.0
