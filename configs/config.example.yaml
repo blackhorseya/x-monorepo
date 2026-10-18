@@ -17,6 +17,10 @@ postgres:
   # Empty = no database: repositories fall back to in-memory; `task migrate -- up` needs it set.
   url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
 
+redis:
+  # Only read when worker.broker is redis; `task compose-up` runs one here.
+  url: redis://127.0.0.1:6379/0
+
 otel:
   # OTLP/gRPC endpoint — `task compose-up` runs grafana/otel-lgtm here (Grafana :3000).
   # Empty = telemetry off (no-op providers). Prometheus metrics are bridged in, so
@@ -28,3 +32,7 @@ otel:
 worker:
   # apps/worker: consumer group of this process (offset cursor per topic).
   consumer_group: worker
+  # postgres: handlers read the outbox tables directly (nothing else to run).
+  # redis:    the worker forwards each outbox table into a Redis Stream and reads that
+  #           (needs redis.url). The outbox stays the write path either way.
+  broker: postgres

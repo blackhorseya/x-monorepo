@@ -4,7 +4,10 @@
 // independently of apps/rpc; several replicas with the same worker.consumer_group
 // share the work.
 //
-// It needs postgres.url: the event tables are the queue (platform/eventbus).
+// It needs postgres.url: the event tables are the outbox every use case
+// publishes into. worker.broker picks what the handlers read from: those
+// tables (postgres, default) or Redis Streams the worker forwards them into
+// (redis, needs redis.url). See NewWorker.
 package main
 
 import (
@@ -34,7 +37,7 @@ func run() error {
 		return err
 	}
 	if cfg.Postgres.URL == "" {
-		return errors.New("postgres.url is required: the worker consumes the Postgres event tables")
+		return errors.New("postgres.url is required: the event tables are the outbox the worker reads or forwards")
 	}
 
 	w, cleanup, err := Initialize(cfg)

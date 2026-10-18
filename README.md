@@ -173,8 +173,12 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 - 語意：at-least-once。handler 回 `eventbus.ErrDrop`（壞 payload、domain 說不行 → 例如重送的取消要求碰到 `ErrCannotCancel`）= ack 不重試也不進 poison；
   其他 error → Retry（3 次、指數退避）→ `ordering.poison` 表（`events_poison`）。consumer 的冪等由 domain 狀態機保證。
 - Trace：publish 時把 `traceparent` 寫進 metadata，router 的 tracing middleware 還原成 CONSUMER span，Tempo 看得到 rpc → publish → handler 一條線。
-- 換 broker：`message.Publisher` / `Subscriber` 是 port；換 NATS / Kafka 只動 `provider.go` 的 `ProvidePublisher` 與 worker 的 subscriber，handler 與 error contract 不變
-  （SQL 表想保留當 outbox 的話，用 Watermill 的 forwarder component 轉送）。
+- 換 broker：`message.Publisher` / `Subscriber` 是 port；handler 與 error contract 不變。已內建一個示範：`worker.broker: redis`
+  （`redis.url` 必填，`task compose-up` 有起一個）時，worker 自己當 forwarder，把每個被消費 topic 的 outbox 表（Postgres consumer group
+  固定叫 `forwarder`，所有 replica 共用，每則只轉一次）passthrough 進同名 Redis Stream，handler 再以 `<consumer_group>.<bc>` 的
+  Redis consumer group 讀。**outbox 仍是寫入路徑**（use case 不直接發 Redis，否則 commit 失敗會留下幽靈事件），poison 也仍寫 Postgres 表。
+  代價：forwarder ack 之後訊息只存在 Redis（要開 persistence，compose 已開 AOF）；SQL → Redis 是 at-least-once，重送的訊息帶同一個 UUID。
+  換 NATS / Kafka 同一個形狀：`eventbus` 多一組 publisher / subscriber，`NewWorker` 的 switch 多一個 case。
 - 代價：watermill-sql 會把 `lib/pq` 一起連進來（只用它的 error type），實際連線仍走 pgx。
 
 ### 跨 BC 的示範：ordering ↔ inventory
@@ -394,7 +398,10 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 | `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |
 | `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 前綴，實際 group 是 `<值>.<bc>`（每個 BC 各自讀完整個 topic）；同名 replica 分工，新名字從頭讀 |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
+| `redis.url` | `APP_REDIS_URL` | 空 | 只在 `worker.broker: redis` 時讀 |
+| `worker.broker` | `APP_WORKER_BROKER` | `postgres` | `postgres` 直接讀 outbox 表；`redis` 由 worker 轉送進 Redis Streams 再讀 |
 | — | `TEST_DATABASE_URL` | 未設 | 只給 integration test：設了就用該 DB，未設則 testcontainers 自起 |
+| — | `TEST_REDIS_URL` | 未設 | 同上，給 worker E2E 的 redis 模式 |
 
 ## Workflow
 

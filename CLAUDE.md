@@ -19,7 +19,7 @@ task gate-fast FILE=a.go   # gofmt + vet + golangci-lint --fast-only + archtest�
 task gate-local            # gen freshness + buf lint + affected modules 的 go test -race（~1 min）
 task gate-ci               # 與 CI 等價的全量檢查
 task breaking              # proto 對 main 做 buf breaking
-task compose-up            # 本機 Postgres :5432 + grafana/otel-lgtm（Grafana :3000、OTLP :4317）
+task compose-up            # 本機 Postgres :5432 + Redis :6379 + grafana/otel-lgtm（Grafana :3000、OTLP :4317）
 task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會自己跑
 task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Connect + gRPC + gRPC-Web 同 port，/api/docs 開）
 ```
@@ -68,7 +68,8 @@ pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering
   infra/           driven：memory / postgres（gorm row model + embed migrations）/ system（clock、id）
   adapters/        driving：rpc（Connect handler，pb ↔ dto）、consumer（broker handler）
 apps/rpc         composition root：main + wire.go，無業務、無 mapping
-apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Watermill router，各 BC 自己的 consumer group / poison
+apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Watermill router，各 BC 自己的 consumer group / poison；
+                 worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 ```
 

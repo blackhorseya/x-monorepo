@@ -19,6 +19,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/redis"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -40,9 +41,17 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	logger := providers.Logger
-	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
+	configRedis := cfg.Redis
+	universalClient, cleanup3, err := redis.NewClient(configRedis)
 	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	logger := providers.Logger
+	publisher, cleanup4, err := eventbus.ProvidePublisher(db, logger, providers)
+	if err != nil {
+		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
@@ -54,6 +63,7 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	meterProvider := providers.Meter
 	recorder, err := usecasex.NewRecorder(meterProvider)
 	if err != nil {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
@@ -72,14 +82,16 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	v3 := inventory.ProvideReleaseStock(reservationRepository, stockRepository, portTransactor, publisher2, systemClock, recorder)
 	orderCancelledHandler := consumer2.NewOrderCancelledHandler(v3)
 	inventorySubscriptions := inventory.ProvideSubscriptions(orderCreatedHandler, orderCancelledHandler)
-	mainWorker, err := NewWorker(worker, db, logger, providers, publisher, subscriptions, inventorySubscriptions)
+	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher, subscriptions, inventorySubscriptions)
 	if err != nil {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	return mainWorker, func() {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
