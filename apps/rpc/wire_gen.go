@@ -75,7 +75,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	inventoryService := rpc2.NewInventoryService(v5, v6, v7)
 	v8 := NewRoutes(orderService, inventoryService)
 	v9 := NewDocs()
-	serverServer, err := server.New(http, logger, v8, v9, providers)
+	readiness := NewReadiness(db)
+	serverServer, err := server.New(http, logger, v8, v9, readiness, providers)
 	if err != nil {
 		cleanup3()
 		cleanup2()

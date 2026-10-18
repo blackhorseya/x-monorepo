@@ -36,6 +36,15 @@ func TestOrderService_E2E(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
+	// Probes: alive, and ready (in-memory repositories: no dependency to check).
+	for _, p := range []string{server.HealthzPath, server.ReadyzPath} {
+		res, err := http.Get(ts.URL + p)
+		if err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %v, %v", p, res, err)
+		}
+		_ = res.Body.Close()
+	}
+
 	client := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
 	c := context.Background()
 

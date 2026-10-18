@@ -10,6 +10,10 @@
 package main
 
 import (
+	"context"
+
+	"gorm.io/gorm"
+
 	inventoryrpc "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
 	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
 	orderingrpc "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
@@ -20,6 +24,21 @@ import (
 // NewRoutes lists every mounted service.
 func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService) []server.Route {
 	return []server.Route{ordering, inventory}
+}
+
+// NewReadiness lists what /api/readyz checks: the database when one is
+// configured (nil db = in-memory repositories, nothing to probe).
+func NewReadiness(db *gorm.DB) server.Readiness {
+	if db == nil {
+		return nil
+	}
+	return server.Readiness{{Name: "postgres", Probe: func(c context.Context) error {
+		sqlDB, err := db.DB()
+		if err != nil {
+			return err
+		}
+		return sqlDB.PingContext(c)
+	}}}
 }
 
 // NewDocs lists every BC's OpenAPI document (served only when APP_HTTP_DOCS=true).
