@@ -3,7 +3,11 @@ package main
 import (
 	"os"
 	"testing"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
+
+func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
 
 func TestRun_Usage(t *testing.T) {
 	if err := run(nil); err == nil {
@@ -15,15 +19,9 @@ func TestRun_Usage(t *testing.T) {
 	}
 }
 
-// Integration: needs TEST_DATABASE_URL (see pkgs/ordering/infra/postgres).
+// Integration: a throwaway Postgres container, or TEST_DATABASE_URL (see pgtest).
 func TestRun_UpVersionDown(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("TEST_DATABASE_URL must be set in CI: a skipped integration test would be a false green")
-		}
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := pgtest.URL(t)
 	t.Setenv("APP_POSTGRES_URL", url)
 
 	for _, cmd := range []string{"up", "up", "version", "down", "up"} { // second up: already current is fine

@@ -69,16 +69,11 @@ jobs:
       fail-fast: false
       matrix:
         module: ${{ fromJson(needs.affected.outputs.modules) }}
-    # Integration tests (infra/postgres, apps/migrate) skip themselves when
-    # TEST_DATABASE_URL is empty; CI always provides one.
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env: { POSTGRES_PASSWORD: postgres }
-        ports: ["5432:5432"]
-        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+    # Integration tests start their own postgres:17-alpine via testcontainers
+    # (pkgs/platform/postgres/pgtest) on the runner's Docker, the same path a
+    # laptop takes. No TEST_DATABASE_URL here on purpose: with CI set, pgtest
+    # fails instead of skipping when the runtime is missing, so a green matrix
+    # means the integration tests ran.
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup

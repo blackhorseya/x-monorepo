@@ -334,7 +334,10 @@ production 部署（同 origin 掛靜態檔，或另配 CORS）尚未處理。
   `autoCreateTime/autoUpdateTime` 關閉。`total` 不落地，`Reconstitute` 重算。
 - driver error 在 `infra/postgres.translate` 轉成 domain error：`gorm.ErrRecordNotFound → order.ErrNotFound`、
   `gorm.ErrDuplicatedKey → order.ErrDuplicate`，其他保持 wrapped 給 log。
-- integration test（`infra/postgres`、`apps/migrate`）在 `TEST_DATABASE_URL` 空時 skip；CI 的 test job 起 Postgres service。
+- integration test（`infra/postgres`、`provider_test.go`、`apps/migrate`、`apps/worker`）用 `pkgs/platform/postgres/pgtest`：
+  `TEST_DATABASE_URL` 沒設就以 testcontainers 起一個 `postgres:17-alpine`（每個 test binary 一個，`TestMain` 結束時 terminate），
+  設了就直接用那個 DB（連不上是 FAIL，不是 skip）。只有「本機沒有 container runtime」會 skip，且 CI 裡一律 FAIL。
+  Podman 使用者要在 `~/.testcontainers.properties` 放 `ryuk.disabled=true`：Ryuk 寫死用名為 `bridge` 的 network，Podman 沒有。
 
 ## Local infra（Compose）
 
@@ -391,7 +394,7 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 | `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |
 | `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 前綴，實際 group 是 `<值>.<bc>`（每個 BC 各自讀完整個 topic）；同名 replica 分工，新名字從頭讀 |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
-| — | `TEST_DATABASE_URL` | 空 | 只給 integration test |
+| — | `TEST_DATABASE_URL` | 未設 | 只給 integration test：設了就用該 DB，未設則 testcontainers 自起 |
 
 ## Workflow
 

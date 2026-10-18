@@ -14,18 +14,14 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
-// Integration test: needs TEST_DATABASE_URL (CI provides a Postgres service;
-// locally e.g. postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable).
+func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
+
+// Integration test: a throwaway Postgres container, or TEST_DATABASE_URL (see pgtest).
 func TestOrderRepository_Postgres(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("TEST_DATABASE_URL must be set in CI: a skipped integration test would be a false green")
-		}
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := pgtest.URL(t)
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}

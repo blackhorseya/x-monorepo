@@ -14,6 +14,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -29,17 +30,13 @@ func (p publisher) Publish(context.Context, ...reservation.Event) error {
 	return nil
 }
 
+func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
+
 // TestReserveStock_Transactional proves the provider wires the transaction
 // decorator around a use case with several writes: the stock row and the
 // reservation are both written before Publish fails, and neither may survive.
 func TestReserveStock_Transactional(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("TEST_DATABASE_URL must be set in CI: a skipped integration test would be a false green")
-		}
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := pgtest.URL(t)
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
