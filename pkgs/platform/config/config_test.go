@@ -85,6 +85,24 @@ func TestLoad_Validate(t *testing.T) {
 	if _, err := config.Load(); err == nil {
 		t.Fatal("invalid log.format must fail")
 	}
+	t.Setenv("APP_LOG_FORMAT", "json")
+
+	t.Setenv("APP_WORKER_BROKER", "kafka")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("unknown worker.broker must fail")
+	}
+	t.Setenv("APP_WORKER_BROKER", "redis")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("worker.broker=redis without redis.url must fail")
+	}
+	t.Setenv("APP_REDIS_URL", "redis://127.0.0.1:6379/0")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Worker.Broker != config.BrokerRedis || cfg.Redis.URL == "" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
 }
 
 // The example (what `task run` seeds configs/local.yaml from) must stay loadable.

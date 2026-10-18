@@ -69,17 +69,26 @@ func URL(t testing.TB) string {
 }
 
 // Main wraps m.Run so the container started by URL is terminated after the
-// package's tests finish. It returns the exit code for os.Exit.
+// package's tests finish. It returns the exit code for os.Exit. A package
+// that also needs another helper's container calls m.Run and each helper's
+// Terminate itself.
 func Main(m *testing.M) int {
 	code := m.Run()
-	if container != nil {
-		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := container.Terminate(c); err != nil {
-			fmt.Fprintf(os.Stderr, "pgtest: terminate container: %v\n", err)
-		}
-	}
+	Terminate()
 	return code
+}
+
+// Terminate stops the container URL started, if any. Idempotent.
+func Terminate() {
+	if container == nil {
+		return
+	}
+	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := container.Terminate(c); err != nil {
+		fmt.Fprintf(os.Stderr, "pgtest: terminate container: %v\n", err)
+	}
+	container = nil
 }
 
 // runtimeUnreachableError is the one condition URL may skip on: no Docker /

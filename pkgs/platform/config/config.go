@@ -24,6 +24,7 @@ type AppConfig struct {
 	HTTP     HTTP     `mapstructure:"http"`
 	Log      Log      `mapstructure:"log"`
 	Postgres Postgres `mapstructure:"postgres"`
+	Redis    Redis    `mapstructure:"redis"`
 	OTel     OTel     `mapstructure:"otel"`
 	Worker   Worker   `mapstructure:"worker"`
 }
@@ -41,6 +42,13 @@ type Postgres struct {
 	URL string `mapstructure:"url"` // e.g. postgres://user:pass@host:5432/db?sslmode=disable
 }
 
+// Redis configures the Redis the worker uses as its broker when
+// worker.broker is "redis" (platform/eventbus Redis Streams). Nothing else
+// reads it; an empty URL is fine with the default broker.
+type Redis struct {
+	URL string `mapstructure:"url"` // e.g. redis://:pass@host:6379/0
+}
+
 // OTel configures OpenTelemetry export (traces + bridged Prometheus metrics)
 // over OTLP/gRPC. An empty Endpoint disables it: providers become no-ops.
 type OTel struct {
@@ -51,12 +59,23 @@ type OTel struct {
 }
 
 // Worker configures apps/worker, the process that runs every BC's event
-// consumers off the Postgres event tables (platform/eventbus).
+// consumers (platform/eventbus).
 type Worker struct {
 	// ConsumerGroup names the offset cursor: replicas sharing a group split
 	// the work; a new group starts from the beginning of every topic.
 	ConsumerGroup string `mapstructure:"consumer_group"`
+	// Broker is where the handlers read from: "postgres" consumes the outbox
+	// tables directly; "redis" has the worker forward each outbox table into a
+	// Redis Stream and consume that (needs redis.url). The outbox stays the
+	// write path either way.
+	Broker string `mapstructure:"broker"`
 }
+
+// Broker values of Worker.Broker.
+const (
+	BrokerPostgres = "postgres"
+	BrokerRedis    = "redis"
+)
 
 // Log configures the structured logger.
 type Log struct {
@@ -97,10 +116,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
+	v.SetDefault("redis.url", "")
 	v.SetDefault("otel.endpoint", "")
 	v.SetDefault("otel.insecure", false)
 	v.SetDefault("otel.service_name", "")
 	v.SetDefault("worker.consumer_group", "worker")
+	v.SetDefault("worker.broker", BrokerPostgres)
 }
 
 func readFile(v *viper.Viper) error {
@@ -130,6 +151,15 @@ func readFile(v *viper.Viper) error {
 func (x *AppConfig) validate() error {
 	if x.Log.Format != "json" && x.Log.Format != "text" {
 		return fmt.Errorf("invalid log.format %q (want json|text)", x.Log.Format)
+	}
+	switch x.Worker.Broker {
+	case BrokerPostgres:
+	case BrokerRedis:
+		if x.Redis.URL == "" {
+			return errors.New("worker.broker is redis but redis.url is empty")
+		}
+	default:
+		return fmt.Errorf("invalid worker.broker %q (want postgres|redis)", x.Worker.Broker)
 	}
 
 	return nil

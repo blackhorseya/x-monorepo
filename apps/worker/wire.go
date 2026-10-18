@@ -11,6 +11,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/redis"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -18,8 +19,9 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	wire.Build(
-		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel", "Worker"),
+		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "Redis", "OTel", "Worker"),
 		postgres.NewDB,
+		redis.NewClient,
 		otel.ProviderSet,
 		usecasex.NewRecorder,
 		eventbus.ProvidePublisher,

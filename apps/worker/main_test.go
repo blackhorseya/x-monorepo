@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
+	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
@@ -31,6 +33,8 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
+	platformredis "github.com/blackhorseya/x-monorepo/pkgs/platform/redis"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/redis/redistest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -52,9 +56,34 @@ func TestRun_RequiresPostgres(t *testing.T) {
 //	order C (cancel first) OrderCancelled (published by the test, before any OrderCreated)
 //	                    → inventory CANCELLED tombstone → late OrderCreated reserves nothing
 //	                    → inventory: nothing to release (dropped, not poisoned)
-func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
+func TestMain(m *testing.M) {
+	code := m.Run()
+	pgtest.Terminate()
+	redistest.Terminate()
+	os.Exit(code)
+}
 
 func TestWorker_EndToEnd(t *testing.T) {
+	t.Run("postgres", func(t *testing.T) { endToEnd(t, config.BrokerPostgres, nil) })
+	t.Run("redis", func(t *testing.T) {
+		rdb, cleanup, err := platformredis.NewClient(config.Redis{URL: redistest.URL(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+		// Streams outlive the tables the test truncates; a fresh group would
+		// otherwise replay every earlier run's messages into the counts.
+		if err := rdb.FlushDB(context.Background()).Err(); err != nil {
+			t.Fatal(err)
+		}
+		endToEnd(t, config.BrokerRedis, rdb)
+	})
+}
+
+// endToEnd runs the scenario with the handlers reading through broker.
+// Consumer progress is read through acked(topic, bc): the SQL offsets row in
+// postgres mode, XINFO GROUPS in redis mode.
+func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	url := pgtest.URL(t)
 
 	c, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -122,13 +151,36 @@ func TestWorker_EndToEnd(t *testing.T) {
 	)
 
 	group := fmt.Sprintf("test-%d", time.Now().UnixNano())
-	w, err := NewWorker(config.Worker{ConsumerGroup: group}, db, logger, tel, publisher, orderingSubs, inventorySubs)
+	w, err := NewWorker(config.Worker{ConsumerGroup: group, Broker: broker}, db, rdb, logger, tel, publisher, orderingSubs, inventorySubs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runCtx, stop := context.WithCancel(c)
 	done := make(chan error, 1)
 	go func() { done <- w.Run(runCtx) }()
+
+	// acked is how many messages of topic the bc's consumer group has
+	// acknowledged, whichever broker it reads from.
+	acked := func(topic, bc string) (int64, error) {
+		if rdb == nil {
+			var n int64
+			err := db.WithContext(c).Raw("SELECT coalesce(max(offset_acked), 0) FROM "+eventbus.OffsetsTableName(topic)+" WHERE consumer_group = ?", group+"."+bc).Scan(&n).Error
+			return n, err
+		}
+		groups, err := rdb.XInfoGroups(c, topic).Result()
+		if err != nil {
+			if strings.Contains(err.Error(), "no such key") {
+				return 0, nil // stream not created yet: nothing forwarded
+			}
+			return 0, err
+		}
+		for _, g := range groups {
+			if g.Name == group+"."+bc {
+				return g.EntriesRead - g.Pending, nil
+			}
+		}
+		return 0, nil
+	}
 
 	// waitFor polls until cond is true or the deadline passes.
 	waitFor := func(what string, cond func() (bool, error)) {
@@ -225,8 +277,7 @@ func TestWorker_EndToEnd(t *testing.T) {
 	// Consumption of the late OrderCreated shows only in the cursor: a, b and c
 	// is three OrderCreated on the inventory group.
 	waitFor("inventory consumed the late OrderCreated", func() (bool, error) {
-		var n int64
-		err := db.WithContext(c).Raw("SELECT coalesce(max(offset_acked), 0) FROM ordering.events_v1_ordercreated_offsets WHERE consumer_group = ?", group+".inventory").Scan(&n).Error
+		n, err := acked(inventoryconsumer.TopicOrderCreated, inventory.Schema)
 		return n >= 3, err
 	})
 	if r, err := getReservation.Execute(c, inventorydto.GetReservationInput{OrderID: cID}); err != nil || r.Status != "CANCELLED" || len(r.Lines) != 0 {
@@ -251,8 +302,7 @@ func TestWorker_EndToEnd(t *testing.T) {
 	// OrderCancelled for B reaches inventory too, on a REJECTED reservation: a
 	// domain error, dropped (ack) — not retried, not poisoned. Wait for that ack.
 	waitFor("inventory acked every OrderCancelled", func() (bool, error) {
-		var n int64
-		err := db.WithContext(c).Raw("SELECT coalesce(max(offset_acked), 0) FROM ordering.events_v1_ordercancelled_offsets WHERE consumer_group = ?", group+".inventory").Scan(&n).Error
+		n, err := acked(inventoryconsumer.TopicOrderCancelled, inventory.Schema)
 		return n >= 3, err
 	})
 	for tbl, want := range counts {
@@ -261,9 +311,32 @@ func TestWorker_EndToEnd(t *testing.T) {
 			t.Fatalf("%s rows = %d err=%v, want %d", tbl, n, err, want)
 		}
 	}
-	var n int64
-	if err := db.WithContext(c).Raw("SELECT offset_acked FROM ordering.events_v1_ordercancellationrequested_offsets WHERE consumer_group = ?", group+".ordering").Scan(&n).Error; err != nil || n < 2 {
-		t.Fatalf("ordering offset_acked = %d err=%v, want >= 2", n, err)
+	if n, err := acked(orderingconsumer.Topic, ordering.Schema); err != nil || n < 2 {
+		t.Fatalf("ordering acked = %d err=%v, want >= 2", n, err)
+	}
+	if rdb != nil {
+		// The forwarder moved every OrderCreated out of the outbox (its own
+		// SQL cursor), and the stream's consumer group has nothing left behind.
+		var n int64
+		if err := db.WithContext(c).Raw("SELECT coalesce(max(offset_acked), 0) FROM ordering.events_v1_ordercreated_offsets WHERE consumer_group = ?", ForwarderGroup).Scan(&n).Error; err != nil || n < 3 {
+			t.Fatalf("forwarder offset_acked = %d err=%v, want >= 3", n, err)
+		}
+		groups, err := rdb.XInfoGroups(c, inventoryconsumer.TopicOrderCreated).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found bool
+		for _, g := range groups {
+			if g.Name == group+"."+inventory.Schema {
+				found = true
+				if g.Lag != 0 || g.Pending != 0 {
+					t.Fatalf("redis group %s lag=%d pending=%d, want 0/0", g.Name, g.Lag, g.Pending)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("redis group %s.%s not found in %+v", group, inventory.Schema, groups)
+		}
 	}
 
 	stop()
