@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:   # dependabot-sync.yml re-runs CI on the head it pushed
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
