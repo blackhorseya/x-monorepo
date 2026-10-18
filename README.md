@@ -36,7 +36,7 @@ task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自�
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
 
-curl -X POST localhost:8080/ordering.v1.OrderService/CreateOrder \
+curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
   -H 'Content-Type: application/json' \
   -d '{"customerId":"c-1","items":[{"sku":"SKU-1","quantity":2,"unitPrice":{"amountMinor":"18000","currency":"USD"}}]}'
 ```
@@ -108,8 +108,10 @@ dto 不要照著 pb 抄。
 
 ## server：gin + Connect
 
-`platform/server` 用 gin 當 HTTP router：每個 BC 的 Connect handler 以 `gin.WrapH` 掛在 `/<pkg>.<Service>/*procedure`，
-`/api/healthz`、`/api/metrics`、`/api/docs` 是普通 gin route（非 RPC 的東西都在 `/api` 下，ingress 一條規則）。`RedirectTrailingSlash` / `RedirectFixedPath` 關閉（gRPC client
+`platform/server` 用 gin 當 HTTP router：每個 BC 的 Connect handler 以 `gin.WrapH` 掛在 `/api/<pkg>.<Service>/*procedure`
+（`http.StripPrefix`，給 Connect / gRPC-Web client 用 base URL `…/api`）**以及**原生路徑 `/<pkg>.<Service>/*procedure`
+（gRPC 協定把路徑寫死，grpc-go / grpcurl 加不了前綴）；`/api/healthz`、`/api/metrics`、`/api/docs` 是普通 gin route。
+整台 server 都在 `/api` 下，ingress 一條規則。`RedirectTrailingSlash` / `RedirectFixedPath` 關閉（gRPC client
 不跟 redirect）；gin 只做 routing + `Recovery()`，RPC log 留在 Connect interceptor。HTTP/1.1 與 h2c 同一個 port，
 Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`）。
 

@@ -4,9 +4,11 @@ info:
   version: v1
   description: |
     Connect RPC contract of the ordering bounded context.
-    Every procedure is `POST /ordering.v1.OrderService/<Method>` with a JSON body;
+    Every procedure is `POST /api/ordering.v1.OrderService/<Method>` (the bare `/ordering.v1.OrderService/<Method>` works too, for gRPC) with a JSON body;
     errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
     the stable domain code in the `X-Error-Code` response header.
+servers:
+  - url: /api
 paths:
   /ordering.v1.OrderService/CancelOrder:
     post:

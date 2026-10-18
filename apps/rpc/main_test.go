@@ -212,6 +212,8 @@ func TestOrderService_Protocols(t *testing.T) {
 	h2c.SetUnencryptedHTTP2(true)
 	h2cClient := &http.Client{Transport: &http.Transport{Protocols: h2c}}
 
+	// Every protocol works at the bare protocol path and under server.RPCPrefix
+	// (a connect-go client prefixes gRPC too; grpc-go could not, hence both).
 	for _, tt := range []struct {
 		name   string
 		client *http.Client
@@ -220,9 +222,16 @@ func TestOrderService_Protocols(t *testing.T) {
 		{"connect", http.DefaultClient, nil},
 		{"grpc", h2cClient, []connect.ClientOption{connect.WithGRPC()}},
 		{"grpc-web", http.DefaultClient, []connect.ClientOption{connect.WithGRPCWeb()}},
+		{"connect/api", http.DefaultClient, nil},
+		{"grpc/api", h2cClient, []connect.ClientOption{connect.WithGRPC()}},
+		{"grpc-web/api", http.DefaultClient, []connect.ClientOption{connect.WithGRPCWeb()}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			client := orderingv1connect.NewOrderServiceClient(tt.client, ts.URL, tt.opts...)
+			base := ts.URL
+			if strings.HasSuffix(tt.name, "/api") {
+				base += server.RPCPrefix
+			}
+			client := orderingv1connect.NewOrderServiceClient(tt.client, base, tt.opts...)
 			c := context.Background()
 
 			// Response meta travels as headers on every protocol, on errors too.
@@ -239,12 +248,13 @@ func TestOrderService_Protocols(t *testing.T) {
 				CustomerId: "c-1",
 				Items:      []*orderingv1.LineItem{{Sku: "S", Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 1, Currency: "USD"}}},
 			})
-			req.Header().Set(server.RequestIDHeader, "client-"+tt.name)
+			id := "client-" + strings.ReplaceAll(tt.name, "/", "-")
+			req.Header().Set(server.RequestIDHeader, id)
 			res, err := client.CreateOrder(c, req)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := res.Header().Get(server.RequestIDHeader); got != "client-"+tt.name {
+			if got := res.Header().Get(server.RequestIDHeader); got != id {
 				t.Fatalf("%s = %q, want echo of the client's id", server.RequestIDHeader, got)
 			}
 		})

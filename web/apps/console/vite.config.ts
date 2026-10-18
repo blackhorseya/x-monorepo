@@ -15,8 +15,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/ordering.v1.": api,
-      "/inventory.v1.": api,
+      "/api": api,
     },
   },
 });

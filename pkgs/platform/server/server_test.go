@@ -10,13 +10,14 @@ import (
 func TestUntracedByGin(t *testing.T) {
 	filter := untracedByGin([]string{"/ordering.v1.OrderService/"})
 	cases := map[string]bool{
-		"/ordering.v1.OrderService/CreateOrder": false, // otelconnect's job
-		"/api/healthz":                          false,
-		"/api/metrics":                          false,
-		"/healthz":                              true, // not a route any more: 404, but traced like any unknown path
-		"/api/docs":                             true,
-		"/api/openapi/ordering.yaml":            true,
-		"/nope":                                 true,
+		"/ordering.v1.OrderService/CreateOrder":     false, // otelconnect's job
+		"/api/ordering.v1.OrderService/CreateOrder": false, // same handler under RPCPrefix
+		"/api/healthz":               false,
+		"/api/metrics":               false,
+		"/healthz":                   true, // not a route any more: 404, but traced like any unknown path
+		"/api/docs":                  true,
+		"/api/openapi/ordering.yaml": true,
+		"/nope":                      true,
 	}
 	for path, want := range cases {
 		c := &gin.Context{Request: httptest.NewRequest("GET", path, nil)}

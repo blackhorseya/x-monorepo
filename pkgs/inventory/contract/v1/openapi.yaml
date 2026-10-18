@@ -4,9 +4,11 @@ info:
   version: v1
   description: |
     Connect RPC contract of the inventory bounded context.
-    Every procedure is `POST /inventory.v1.InventoryService/<Method>` with a JSON body;
+    Every procedure is `POST /api/inventory.v1.InventoryService/<Method>` (the bare `/inventory.v1.InventoryService/<Method>` works too, for gRPC) with a JSON body;
     errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
     the stable domain code in the `X-Error-Code` response header.
+servers:
+  - url: /api
 paths:
   /inventory.v1.InventoryService/GetReservation:
     post:

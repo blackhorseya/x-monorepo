@@ -2,8 +2,9 @@
 // by every app. It knows nothing about any bounded context.
 //
 // gin is the HTTP router: Connect handlers are mounted under their service
-// prefix with gin.WrapH, plain routes (/api/healthz, /api/metrics, /api/docs) are gin
-// handlers. Request logging for RPCs stays in the Connect interceptor, which
+// prefix with gin.WrapH, both at the protocol path "/<pkg>.<Service>/…" and
+// under RPCPrefix ("/api/<pkg>.<Service>/…"); plain routes (/api/healthz,
+// /api/metrics, /api/docs) are gin handlers. Request logging for RPCs stays in the Connect interceptor, which
 // sees procedure and code; gin only contributes routing and panic recovery.
 package server
 
@@ -25,9 +26,15 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 )
 
-// Everything that is not an RPC lives under /api so one ingress rule covers it
-// (RPC paths are "/<pkg>.<Service>/…" and never collide).
+// Everything lives under /api so one ingress rule covers the whole server.
+//
+// RPCs are served twice: at RPCPrefix + "/<pkg>.<Service>/<Method>", which is
+// what Connect / gRPC-Web clients configured with base URL "…/api" call (the
+// console, curl, Scalar), and at the bare "/<pkg>.<Service>/<Method>", because
+// the gRPC protocol fixes that path and a grpc-go / grpcurl client cannot add
+// a prefix. The handler is the same; only the route differs.
 const (
+	RPCPrefix   = "/api"
 	HealthzPath = "/api/healthz"
 	MetricsPath = "/api/metrics"
 )
@@ -93,6 +100,7 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, tel *
 	)
 	for i, prefix := range prefixes {
 		engine.Any(prefix+"*procedure", gin.WrapH(handlers[i]))
+		engine.Any(RPCPrefix+prefix+"*procedure", gin.WrapH(http.StripPrefix(RPCPrefix, handlers[i])))
 	}
 	engine.GET(HealthzPath, func(c *gin.Context) { c.Status(http.StatusOK) })
 	engine.GET(MetricsPath, gin.WrapH(tel.MetricsHandler))
@@ -129,7 +137,7 @@ func untracedByGin(prefixes []string) func(*gin.Context) bool {
 			return false
 		}
 		for _, p := range prefixes {
-			if strings.HasPrefix(path, p) {
+			if strings.HasPrefix(path, p) || strings.HasPrefix(path, RPCPrefix+p) {
 				return false
 			}
 		}
