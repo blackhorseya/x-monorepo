@@ -30,6 +30,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -40,7 +41,7 @@ func TestRun_RequiresPostgres(t *testing.T) {
 	}
 }
 
-// Integration (TEST_DATABASE_URL, fatal when missing in CI): the whole loop
+// Integration (pgtest: container or TEST_DATABASE_URL): the whole loop
 // across both BCs, through the real handlers and the real Postgres tables.
 //
 //	order A (stocked)   OrderCreated → inventory RESERVED → OrderCancellationRequested
@@ -51,14 +52,10 @@ func TestRun_RequiresPostgres(t *testing.T) {
 //	order C (cancel first) OrderCancelled (published by the test, before any OrderCreated)
 //	                    → inventory CANCELLED tombstone → late OrderCreated reserves nothing
 //	                    → inventory: nothing to release (dropped, not poisoned)
+func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
+
 func TestWorker_EndToEnd(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("TEST_DATABASE_URL must be set in CI: a skipped integration test would be a false green")
-		}
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := pgtest.URL(t)
 
 	c, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

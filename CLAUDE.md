@@ -29,8 +29,9 @@ task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Con
 ```bash
 cd pkgs/ordering && go test -race -run 'TestCreateGetCancel' ./application/usecase/
 cd pkgs/ordering && go test -count=1 -run '^TestArchitecture$' .      # 只跑 archtest
+go test -race ./infra/postgres/                                       # integration test：testcontainers 自起 Postgres（需 Docker/Podman）
 TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
-  go test -race ./infra/postgres/                                     # integration test，env 空時 skip
+  go test -race ./infra/postgres/                                     # 或指定現成 DB；設了連不上是 FAIL 不是 skip
 ```
 
 前端：`web/` 是 Turborepo（pnpm）。`packages/proto` 是 connect-es client（`task gen-ts` 需要網路，產出到那裡）；

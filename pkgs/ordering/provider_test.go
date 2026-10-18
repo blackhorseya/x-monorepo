@@ -16,6 +16,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -31,6 +32,8 @@ func (p publisher) Publish(context.Context, ...order.Event) error {
 
 	return nil
 }
+
+func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
 
 // TestCreateOrder_Transactional proves the provider wires the transaction
 // decorator: the order row is saved before Publish fails, and must not survive.
@@ -74,13 +77,7 @@ func TestCreateOrder_Transactional(t *testing.T) {
 
 func openDB(t *testing.T) (context.Context, *gorm.DB, *otel.Providers) {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("TEST_DATABASE_URL must be set in CI: a skipped integration test would be a false green")
-		}
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+	url := pgtest.URL(t)
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
