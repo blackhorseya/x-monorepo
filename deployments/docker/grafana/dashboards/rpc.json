@@ -572,7 +572,7 @@
     {
       "id": 14,
       "type": "row",
-      "title": "Plain HTTP routes (/api/*) — otelgin",
+      "title": "Plain HTTP routes (docs / openapi / 404) — otelgin; RPCs are above (otelconnect)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
