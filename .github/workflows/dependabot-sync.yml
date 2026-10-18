@@ -1,0 +1,65 @@
+# Dependabot bumps one go.mod at a time and does not know go.work: every other
+# module's go.mod then drifts (indirect requirements, go.sum) and the work-sync
+# gate rejects the PR. This workflow runs `task tidy` on Dependabot's branch,
+# commits the result, and re-triggers CI on the new head.
+#
+# Two GitHub rules shape it:
+#   - Workflows triggered by Dependabot get a read-only GITHUB_TOKEN unless the
+#     workflow asks for more with `permissions`.
+#   - Pushes made with GITHUB_TOKEN never start workflow runs (no recursion), so
+#     the push alone would leave the PR head without checks. `workflow_dispatch`
+#     is the documented exception, hence the explicit `gh workflow run` at the end.
+#
+# After we push, Dependabot stops auto-rebasing the branch. `@dependabot rebase`
+# force-pushes its own commit back, which fires `synchronize` and this workflow
+# re-adds the sync commit. That is expected; do not "fix" it.
+name: dependabot-sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:   # manual run on any branch, for testing the path
+
+permissions:
+  contents: write   # push the sync commit
+  actions: write    # gh workflow run ci.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  sync:
+    if: github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - run: task tidy
+      - id: diff
+        run: |
+          if git diff --quiet -- go.work '*/go.mod' '*/*/go.mod' '*/go.sum' '*/*/go.sum'; then
+            echo "in sync: nothing to commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git --no-pager diff --stat
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add go.work '*/go.mod' '*/*/go.mod' '*/go.sum' '*/*/go.sum'
+          git commit -m "chore(deps): go work sync after dependency bump"
+          git push origin "HEAD:$BRANCH"
+          # GITHUB_TOKEN pushes do not trigger ci.yml; dispatch it on the new head.
+          gh workflow run ci.yml --ref "$BRANCH"
