@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ThreeDotsLabs/watermill/message"
 	goredis "github.com/redis/go-redis/v9"
@@ -63,22 +64,39 @@ func NewWorker(
 		{inventory.Schema, inventorySubs},
 	}
 
+	start := eventbus.FromBeginning
+	if cfg.StartFrom == config.StartFromLatest {
+		start = eventbus.FromLatest
+	}
+
 	// subscriber builds the per-BC subscriber the handlers read from.
 	var subscriber func(group string) (message.Subscriber, error)
 	switch cfg.Broker {
 	case config.BrokerPostgres, "":
 		subscriber = func(group string) (message.Subscriber, error) {
-			return eventbus.NewPostgresSubscriber(db, group, logger)
+			return eventbus.NewPostgresSubscriber(db, group, start, logger)
 		}
 	case config.BrokerRedis:
 		if rdb == nil {
 			return nil, errors.New("worker.broker is redis but there is no redis client (redis.url)")
 		}
-		if err := addForwarders(router, db, rdb, logger, bcs); err != nil {
+		// Stream groups are created here, before the forwarder can run: with
+		// "latest" a group created lazily on Subscribe would miss whatever the
+		// forwarder copied in between.
+		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, bc := range bcs {
+			for _, s := range bc.subs {
+				if err := eventbus.EnsureRedisGroup(c, rdb, s.Topic, cfg.ConsumerGroup+"."+bc.schema, start); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if err := addForwarders(router, db, rdb, start, logger, bcs); err != nil {
 			return nil, err
 		}
 		subscriber = func(group string) (message.Subscriber, error) {
-			return eventbus.NewRedisSubscriber(rdb, group, logger)
+			return eventbus.NewRedisSubscriber(rdb, group, start, logger)
 		}
 	default:
 		return nil, fmt.Errorf("unknown worker.broker %q", cfg.Broker)
@@ -107,20 +125,22 @@ func NewWorker(
 const ForwarderGroup = "forwarder"
 
 // addForwarders adds one passthrough handler per distinct consumed topic:
-// outbox table (Postgres, ForwarderGroup) → Redis Stream of the same name.
+// outbox table (Postgres, ForwarderGroup, starting per start the first time
+// the group appears) → Redis Stream of the same name.
 // Per-topic passthrough keeps the existing tables and migrations; Watermill's
 // envelope-based forwarder component would need a table of its own.
 func addForwarders(
 	router *message.Router,
 	db *gorm.DB,
 	rdb goredis.UniversalClient,
+	start eventbus.Start,
 	logger *slog.Logger,
 	bcs []struct {
 		schema string
 		subs   []eventbus.Subscription
 	},
 ) error {
-	sub, err := eventbus.NewPostgresSubscriber(db, ForwarderGroup, logger)
+	sub, err := eventbus.NewPostgresSubscriber(db, ForwarderGroup, start, logger)
 	if err != nil {
 		return err
 	}

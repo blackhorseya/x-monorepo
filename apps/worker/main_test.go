@@ -349,3 +349,55 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		t.Fatal("worker did not stop")
 	}
 }
+
+// With broker=redis the stream consumer groups exist before Run: a group
+// created lazily on Subscribe would, with start_from=latest, miss whatever
+// the forwarder copied into the stream in between.
+func TestNewWorker_RedisGroupsExistBeforeRun(t *testing.T) {
+	c := context.Background()
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	db, dbCleanup, err := postgres.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbCleanup()
+	rdb, rdbCleanup, err := platformredis.NewClient(config.Redis{URL: redistest.URL(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdbCleanup()
+	if err := rdb.FlushDB(c).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	group := fmt.Sprintf("pre-%d", time.Now().UnixNano())
+	noop := eventbus.HandlerFunc(func(context.Context, []byte) error { return nil })
+	_, err = NewWorker(config.Worker{ConsumerGroup: group, Broker: config.BrokerRedis, StartFrom: config.StartFromLatest},
+		db, rdb, tel.Logger, tel, eventbus.NewGoChannel(tel.Logger),
+		ordering.Subscriptions{{Topic: orderingconsumer.Topic, Handler: noop}},
+		inventory.Subscriptions{{Topic: inventoryconsumer.TopicOrderCreated, Handler: noop}, {Topic: inventoryconsumer.TopicOrderCancelled, Handler: noop}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for topic, want := range map[string]string{
+		orderingconsumer.Topic:                group + "." + ordering.Schema,
+		inventoryconsumer.TopicOrderCreated:   group + "." + inventory.Schema,
+		inventoryconsumer.TopicOrderCancelled: group + "." + inventory.Schema,
+	} {
+		groups, err := rdb.XInfoGroups(c, topic).Result()
+		if err != nil {
+			t.Fatalf("%s: %v", topic, err)
+		}
+		found := false
+		for _, g := range groups {
+			found = found || g.Name == want
+		}
+		if !found {
+			t.Fatalf("%s: group %s missing before Run: %+v", topic, want, groups)
+		}
+	}
+}
