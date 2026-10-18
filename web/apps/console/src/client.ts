@@ -4,8 +4,9 @@ import { InventoryService } from "@repo/proto/inventory/v1/service_pb";
 import { OrderService } from "@repo/proto/ordering/v1/service_pb";
 import { ViolationsSchema } from "@repo/proto/buf/validate/validate_pb";
 
-// Same origin: vite proxies /ordering.v1.* and /inventory.v1.* to the Go server.
-const transport = createConnectTransport({ baseUrl: window.location.origin });
+// Same origin, under /api: vite proxies /api to the Go server, and in production
+// one ingress rule for /api covers RPCs, docs, healthz and metrics alike.
+const transport = createConnectTransport({ baseUrl: `${window.location.origin}/api` });
 
 export const orders = createClient(OrderService, transport);
 export const inventory = createClient(InventoryService, transport);
