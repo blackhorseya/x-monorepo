@@ -1,7 +1,9 @@
-# goreleaser — tag vX.Y.Z on main → GitHub Release (archives per OS/arch) + one image per app on ghcr.
+# goreleaser — every green CI run on main → GitHub Release (archives per OS/arch) + one image per
+# app on ghcr. .github/workflows/release.yml drives it: release-drafter makes the draft, goreleaser
+# fills it (this file), `gh release edit --draft=false` publishes it and creates the tag.
 #   task release-snapshot      # local dry run: binaries + archives under bin/dist, no images, no publish
 #   task release-check         # validate this file
-# .github/workflows/release.yml runs `goreleaser release` on tag push; ci.yml runs the snapshot on PRs.
+# ci.yml runs the snapshot on PRs.
 # Three apps, one module each under go.work; goreleaser builds from each app dir, go.work is found
 # by walking up (no root go.mod, hence project_name is explicit).
 version: 2
@@ -108,11 +110,8 @@ dockers_v2:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
-# Release notes come from release-drafter (.github/release-drafter.yml), which keeps a draft
-# release on main. Publishing that draft in the GitHub UI creates the tag, the tag runs
-# release.yml, and goreleaser finds the now-published release by tag and only adds artifacts.
-# Not use_existing_draft: that looks for a *draft* only, and by the time the tag exists the
-# draft has been published, so goreleaser would create a second release and fail on the tag.
+# Release notes come from release-drafter (.github/release-drafter.yml): release.yml runs it
+# first, goreleaser then finds that draft by name and only adds artifacts to it.
 changelog:
   disable: true
 
@@ -120,4 +119,7 @@ release:
   github:
     owner: blackhorseya
     name: x-monorepo
-  mode: keep-existing   # the release-drafter notes are the changelog; only artifacts are added
+  name_template: "{{ .Tag }}"   # must equal release-drafter's name-template: the draft is found by name
+  use_existing_draft: true      # the draft release-drafter just made
+  mode: keep-existing           # its notes are the changelog; only artifacts are added
+  draft: true                   # leave it a draft; release.yml publishes after everything is uploaded

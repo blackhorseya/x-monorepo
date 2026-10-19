@@ -1,24 +1,67 @@
 name: release
+run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 
-# Tag a green main: `git tag v0.1.0 && git push origin v0.1.0`. goreleaser then builds the
-# archives, publishes the GitHub Release and pushes one multi-arch image per app to ghcr.
+# Every green CI run on main becomes a release (same shape as kxcw-goapi-v2):
+#   prepare   release-drafter → draft release "vX.Y.Z" with notes from the merged PRs' titles
+#   build     goreleaser on that commit → archives onto the draft + one multi-arch image per
+#             app on ghcr (tagged vX.Y.Z before anything is published)
+#   publish   gh release edit --draft=false → GitHub creates the tag and marks it latest
+# Nothing deploys. workflow_dispatch re-runs the whole chain for the current main HEAD.
+#
+# workflow_run's github.sha is default-branch HEAD, not the commit CI ran on: use
+# github.event.workflow_run.head_sha everywhere. A release published with GITHUB_TOKEN emits
+# no `push: tags` / `release` events to other workflows (recursion prevention), which is why
+# this file has no tag trigger and nothing else chains off the tag.
 on:
-  push:
-    tags: ["v*"]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write   # the Release and its assets
-  packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 env:
   GOTOOLCHAIN: local
+  HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
-  goreleaser:
+  prepare:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create / update the draft release
+      pull-requests: read    # list merged PRs
+    outputs:
+      tag: ${{ steps.draft.outputs.tag_name }}
+    steps:
+      - uses: release-drafter/release-drafter@v7
+        id: draft
+        with:
+          publish: false
+          commitish: ${{ github.event.workflow_run.head_sha || github.sha }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # upload archives to the draft
+      packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}
     steps:
       - uses: actions/checkout@v7
-        with: { fetch-depth: 0 }   # changelog and {{ .PreviousTag }} need the history
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+      # The tag does not exist yet (publish creates it), but goreleaser ≥ v2.18.1 refuses to run
+      # without one, so create it locally on the commit being released. Never pushed.
+      - run: git tag "${{ needs.prepare.outputs.tag }}" "$HEAD_SHA"
       - uses: ./.github/actions/setup
       # dockers_v2 drives `docker buildx build --push` with --sbom and two platforms; the
       # default docker driver can do neither, so a docker-container builder is required.
@@ -34,3 +77,25 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ needs.prepare.outputs.tag }}
+      - run: |
+          {
+            echo "## ${{ needs.prepare.outputs.tag }} built from \`$HEAD_SHA\`"
+            for app in rpc worker migrate; do
+              echo "- \`ghcr.io/blackhorseya/x-monorepo/$app:${TAG#v}\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+        env: { TAG: "${{ needs.prepare.outputs.tag }}" }
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the draft (creates the tag)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$REPO" --target "$HEAD_SHA" --draft=false --latest

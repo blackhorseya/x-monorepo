@@ -1,11 +1,9 @@
-# release-drafter (v7) keeps one draft GitHub Release on main up to date: every merged PR is
-# filed by its Conventional Commits title (`when.conventional` parses the title; no labels),
+# release-drafter (v7) drafts the next GitHub Release: every PR merged since the last published
+# release is filed by its Conventional Commits title (`when.conventional` parses the title; no labels),
 # and the next version comes from the matching category's semver-increment:
 # `!` → major, feat → minor, everything else → patch.
-# Publishing = "Publish release" on the draft in the GitHub UI: that creates the tag, the tag
-# runs release.yml, and goreleaser attaches archives + images to the published release and
-# keeps these notes. Don't push the tag by hand while the draft exists: goreleaser then can't
-# see the draft and creates a second, empty release.
+# Run by .github/workflows/release.yml (prepare job) after every green CI on main; the same
+# workflow then fills the draft with goreleaser and publishes it. Nobody tags by hand.
 name-template: "v$RESOLVED_VERSION"
 tag-template: "v$RESOLVED_VERSION"
 
