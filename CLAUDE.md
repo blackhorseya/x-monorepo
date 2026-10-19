@@ -21,7 +21,7 @@ task gate-ci               # 與 CI 等價的全量檢查
 task breaking              # proto 對 main 做 buf breaking
 task compose-up            # 本機 Postgres :5432 + Redis :6379 + grafana/otel-lgtm（Grafana :3000、OTLP :4317）
 task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會自己跑
-task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag）
+task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag；只改 docs / web / CI / test 的 commit 會被 gate 跳過）
 task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Connect + gRPC + gRPC-Web 同 port；RPC 在 /api/<svc>/<Method> 與原生路徑都通，/api/docs 開）
 ```
 

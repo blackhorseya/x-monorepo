@@ -380,11 +380,14 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 ## Release（goreleaser + release-drafter）
 
 **每次 CI 在 main 上綠就是一版**，沒有人手動打 tag（`.github/workflows/release.yml`，`workflow_run` 掛在 ci 後面；
-`workflow_dispatch` 可對目前 main HEAD 重跑）：
+`workflow_dispatch` 可對目前 main HEAD 重跑）。`workflow_run` 沒有 `paths-ignore`，所以 prepare 先自己 gate：拿該 commit 和
+**上一個 tag** 做 diff（不是 parent commit——ci 對 main 是 cancel-in-progress，連續兩次 merge 只會觸發一次 release），
+只動到 `*.md`、`docs/`、`web/`、`.github/`、`.claude/`、`lefthook.yml`、`.golangci.yml`、`*_test.go`、`testdata/` 就整條跳過
+（step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。`workflow_dispatch` 不過 gate：
 
 | job | 做什麼 |
 |---|---|
-| prepare | release-drafter 依 merge 進來的 PR title 分類（`when.conventional`，不用 label）產 draft release `vX.Y.Z`；版號：`!` → major、`feat` → minor、其餘 patch，`test:` 不進 notes |
+| prepare | gate 過了才跑 release-drafter：依 merge 進來的 PR title 分類（`when.conventional`，不用 label）產 draft release `vX.Y.Z`；版號：`!` → major、`feat` → minor、其餘 patch，`test:` 不進 notes |
 | build | 在該 commit 本地打 tag（不 push，goreleaser 需要）→ `goreleaser release`：archives 掛上那份 draft（`use_existing_draft` + `keep-existing`，notes 保留）、三個 multi-arch image 推 `ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:X.Y.Z`（非 prerelease 另打 `latest`） |
 | publish | `gh release edit --draft=false --target <sha>`：GitHub 建 tag、標 latest。image 已經在 registry，release 一出現就能拉 |
 
