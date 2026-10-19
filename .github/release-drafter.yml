@@ -1,7 +1,7 @@
-# release-drafter keeps one draft GitHub Release on main up to date: every merged PR is filed
-# under a category by its label, and the next version is resolved from labels too
-# (breaking → major, feature → minor, else patch). Labels come from the autolabeler below, which
-# reads the Conventional Commits PR title — nobody labels by hand.
+# release-drafter (v7) keeps one draft GitHub Release on main up to date: every merged PR is
+# filed by its Conventional Commits title (`when.conventional` parses the title; no labels),
+# and the next version comes from the matching category's semver-increment:
+# `!` → major, feat → minor, everything else → patch.
 # Publishing = "Publish release" on the draft in the GitHub UI: that creates the tag, the tag
 # runs release.yml, and goreleaser attaches archives + images to the published release and
 # keeps these notes. Don't push the tag by hand while the draft exists: goreleaser then can't
@@ -10,58 +10,44 @@ name-template: "v$RESOLVED_VERSION"
 tag-template: "v$RESOLVED_VERSION"
 
 categories:
+  - type: pre-exclude
+    when:
+      conventional: { types: [test] }
   - title: "⚠️ Breaking"
-    labels: [breaking]
+    semver-increment: major
+    exclusive: true
+    when:
+      conventional: { breaking: true }
   - title: "🚀 Features"
-    labels: [feature]
+    semver-increment: minor
+    exclusive: true
+    when:
+      conventional: { type: feat }
   - title: "🐛 Bug fixes"
-    labels: [fix]
-  - title: "🧰 Maintenance"
-    labels: [chore, refactor, perf, ci, build]
-  - title: "📚 Docs"
-    labels: [documentation]
+    exclusive: true
+    when:
+      conventional: { type: fix }
   - title: "📦 Dependencies"
-    labels: [dependencies]
+    exclusive: true
     collapse-after: 5
-
-exclude-labels: [skip-changelog]
+    when:
+      conventional: { type: build, scope: deps }
+  - title: "🧰 Maintenance"
+    exclusive: true
+    when:
+      conventional: { types: [chore, refactor, perf, ci, build] }
+  - title: "📚 Docs"
+    exclusive: true
+    when:
+      conventional: { types: [docs, doc] }
+  - title: "Other"
+    exclusive: true
+  - type: version-resolver
+    semver-increment: patch
 
 change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
 change-title-escapes: '\<*_&'
 no-changes-template: "- no changes"
-
-version-resolver:
-  major:
-    labels: [breaking]
-  minor:
-    labels: [feature]
-  patch:
-    labels: [fix, chore, refactor, perf, ci, build, documentation, dependencies]
-  default: patch
-
-autolabeler:
-  - label: breaking
-    title: ['/^\w+(\(.+\))?!:/']
-  - label: feature
-    title: ['/^feat(\(.+\))?!?:/']
-  - label: fix
-    title: ['/^fix(\(.+\))?!?:/']
-  - label: chore
-    title: ['/^chore(\(.+\))?!?:/']
-  - label: refactor
-    title: ['/^refactor(\(.+\))?!?:/']
-  - label: perf
-    title: ['/^perf(\(.+\))?!?:/']
-  - label: ci
-    title: ['/^ci(\(.+\))?!?:/']
-  - label: build
-    title: ['/^build(?!\(deps\))(\(.+\))?!?:/']
-  - label: dependencies
-    title: ['/^build\(deps\):/']
-  - label: documentation
-    title: ['/^docs?(\(.+\))?!?:/']
-  - label: skip-changelog
-    title: ['/^test(\(.+\))?!?:/']
 
 template: |
   ## Changes

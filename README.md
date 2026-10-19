@@ -385,9 +385,8 @@ task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/a
 # 發版：GitHub → Releases → 打開 drafter 維護的 draft → Publish release（會建 tag → 跑 .github/workflows/release.yml）
 ```
 
-**release notes 由 release-drafter 維護**（`.github/release-drafter.yml`）：每個 PR 開啟時 autolabeler 依 Conventional Commits title 上 label
-（`feat` → `feature`、`fix`、`build(deps)` → `dependencies`、`!` → `breaking`…），merge 進 main 就更新一份 draft release，
-下一版版號也由 label 決定（`breaking` → major、`feature` → minor、其餘 patch）。要發版就在 UI 上 Publish 那份 draft——
+**release notes 由 release-drafter 維護**（`.github/release-drafter.yml`）：每次 merge 進 main 就依 PR 的 Conventional Commits title
+分類（`when.conventional`，不用 label）更新一份 draft release，下一版版號也由 title 決定（`!` → major、`feat` → minor、其餘 patch；`test:` 不進 notes）。要發版就在 UI 上 Publish 那份 draft——
 **不要自己 push tag**：draft 一旦發布就不是 draft，goreleaser 是用 tag 找 release，手動 tag 會讓它另建一份空的。
 tag 建好後 goreleaser 做兩件事：把 artifacts 掛到那份已發布的 release（每個 OS/arch 一個 tar.gz，三個 binary 一起；notes 保留 drafter 的）、
 每個 app 一個 multi-arch image：`ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<version>`（非 prerelease 另打 `latest`）。
