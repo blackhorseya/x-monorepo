@@ -8,6 +8,11 @@ run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 #   publish   gh release edit --draft=false → GitHub creates the tag and marks it latest
 # Nothing deploys. workflow_dispatch re-runs the whole chain for the current main HEAD.
 #
+# workflow_run has no paths-ignore, so `prepare` gates by hand: diff the commit against the last
+# published tag and skip the whole chain when only docs / web / CI config / tests changed. The
+# diff base is the last tag, not the parent commit — ci.yml cancels in-progress main runs, so two
+# quick merges fire release once, for the second head, and it must still see the first's changes.
+#
 # workflow_run's github.sha is default-branch HEAD, not the commit CI ran on: use
 # github.event.workflow_run.head_sha everywhere. A release published with GITHUB_TOKEN emits
 # no `push: tags` / `release` events to other workflows (recursion prevention), which is why
@@ -38,9 +43,44 @@ jobs:
       contents: write        # create / update the draft release
       pull-requests: read    # list merged PRs
     outputs:
+      release: ${{ steps.gate.outputs.release }}
       tag: ${{ steps.draft.outputs.tag_name }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0   # tags, for the diff base
+      - id: gate
+        name: Anything to release since the last tag?
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "manual dispatch: releasing \`$HEAD_SHA\` unconditionally" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          base=$(git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null || true)
+          if [ -z "$base" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "no previous tag reachable from \`$HEAD_SHA\`: releasing" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Paths that change no shipped artifact. Pathspec `*` crosses `/`, so `*.md` is any depth.
+          # README.md / LICENSE are packed into the archives but a stale copy there is acceptable.
+          releasable() {
+            git diff --name-only "$base" "$HEAD_SHA" -- . \
+              ':!*.md' ':!docs' ':!web' ':!.github' ':!.claude' ':!.idea' \
+              ':!lefthook.yml' ':!.golangci.yml' ':!*_test.go' ':!testdata'
+          }
+          if [ -z "$(releasable)" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "## skipped: nothing releasable since $base" >> "$GITHUB_STEP_SUMMARY"
+            git diff --name-only "$base" "$HEAD_SHA" | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          { echo "## releasable changes since $base"; releasable | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: release-drafter/release-drafter@v7
+        if: steps.gate.outputs.release == 'true'
         id: draft
         with:
           publish: false
@@ -50,6 +90,7 @@ jobs:
 
   build:
     needs: [prepare]
+    if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # upload archives to the draft
@@ -89,6 +130,7 @@ jobs:
 
   publish:
     needs: [prepare, build]
+    if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
