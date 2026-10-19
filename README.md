@@ -385,7 +385,10 @@ task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/a
 git tag v0.1.0 && git push origin v0.1.0   # 在綠的 main 上打 tag → .github/workflows/release.yml
 ```
 
-tag push 後 goreleaser 做三件事：GitHub Release（每個 OS/arch 一個 tar.gz，三個 binary 一起）、changelog（照 Conventional Commits 分組）、
+**release notes 由 release-drafter 維護**（`.github/release-drafter.yml`）：每個 PR 開啟時 autolabeler 依 Conventional Commits title 上 label
+（`feat` → `feature`、`fix`、`build(deps)` → `dependencies`、`!` → `breaking`…），merge 進 main 就更新一份 draft release，
+下一版版號也由 label 決定（`breaking` → major、`feature` → minor、其餘 patch）。要發版就打 draft 上寫的那個 tag。
+tag push 後 goreleaser 做兩件事：把 artifacts 掛到那份 draft 並 publish（每個 OS/arch 一個 tar.gz，三個 binary 一起；notes 保留 draft 的）、
 每個 app 一個 multi-arch image：`ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<version>`（非 prerelease 另打 `latest`）。
 `deployments/docker/Dockerfile` 只 COPY 預先 cross-compile 好的 binary 到 `distroless/static:nonroot`（有 CA certs、無 shell；
 healthcheck 從外面打 `/api/readyz`）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它

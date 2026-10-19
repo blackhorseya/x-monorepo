@@ -1,0 +1,77 @@
+# release-drafter keeps one draft GitHub Release on main up to date: every merged PR is filed
+# under a category by its label, and the next version is resolved from labels too
+# (breaking → major, feature → minor, else patch). Labels come from the autolabeler below, which
+# reads the Conventional Commits PR title — nobody labels by hand.
+# Publishing = pushing the tag the draft names (`git tag v$RESOLVED_VERSION`); goreleaser then
+# attaches archives + images to this draft (release.use_existing_draft) and keeps these notes.
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+categories:
+  - title: "⚠️ Breaking"
+    labels: [breaking]
+  - title: "🚀 Features"
+    labels: [feature]
+  - title: "🐛 Bug fixes"
+    labels: [fix]
+  - title: "🧰 Maintenance"
+    labels: [chore, refactor, perf, ci, build]
+  - title: "📚 Docs"
+    labels: [documentation]
+  - title: "📦 Dependencies"
+    labels: [dependencies]
+    collapse-after: 5
+
+exclude-labels: [skip-changelog]
+
+change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
+change-title-escapes: '\<*_&'
+no-changes-template: "- no changes"
+
+version-resolver:
+  major:
+    labels: [breaking]
+  minor:
+    labels: [feature]
+  patch:
+    labels: [fix, chore, refactor, perf, ci, build, documentation, dependencies]
+  default: patch
+
+autolabeler:
+  - label: breaking
+    title: ['/^\w+(\(.+\))?!:/']
+  - label: feature
+    title: ['/^feat(\(.+\))?!?:/']
+  - label: fix
+    title: ['/^fix(\(.+\))?!?:/']
+  - label: chore
+    title: ['/^chore(\(.+\))?!?:/']
+  - label: refactor
+    title: ['/^refactor(\(.+\))?!?:/']
+  - label: perf
+    title: ['/^perf(\(.+\))?!?:/']
+  - label: ci
+    title: ['/^ci(\(.+\))?!?:/']
+  - label: build
+    title: ['/^build(?!\(deps\))(\(.+\))?!?:/']
+  - label: dependencies
+    title: ['/^build\(deps\):/']
+  - label: documentation
+    title: ['/^docs?(\(.+\))?!?:/']
+  - label: skip-changelog
+    title: ['/^test(\(.+\))?!?:/']
+
+template: |
+  ## Changes
+
+  $CHANGES
+
+  ## Images
+
+  ```
+  ghcr.io/blackhorseya/x-monorepo/rpc:$RESOLVED_VERSION
+  ghcr.io/blackhorseya/x-monorepo/worker:$RESOLVED_VERSION
+  ghcr.io/blackhorseya/x-monorepo/migrate:$RESOLVED_VERSION
+  ```
+
+  **Full changelog**: https://github.com/blackhorseya/x-monorepo/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
