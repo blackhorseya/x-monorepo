@@ -1,0 +1,27 @@
+name: release-drafter
+
+# Two jobs in one workflow because both read .github/release-drafter.yml:
+#   pull_request_target → label the PR from its title (autolabeler only; no checkout, no PR code runs)
+#   push main           → refresh the draft release from merged PRs' labels
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create / update the draft release
+      pull-requests: write   # autolabeler
+    steps:
+      - uses: release-drafter/release-drafter@v7
+        with:
+          disable-releaser: ${{ github.event_name == 'pull_request_target' }}
+          disable-autolabeler: ${{ github.event_name == 'push' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

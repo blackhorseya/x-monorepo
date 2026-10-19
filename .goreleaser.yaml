@@ -108,37 +108,14 @@ dockers_v2:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
-# PR titles follow Conventional Commits, so the squash commits group cleanly.
+# Release notes come from release-drafter (.github/release-drafter.yml): it keeps a draft
+# release on main; the tag push lands goreleaser's artifacts on that draft and leaves its notes.
 changelog:
-  use: github
-  sort: asc
-  groups:
-    - title: Features
-      regexp: '^.*?feat(\([[:word:]]+\))?!?:.+$'
-      order: 0
-    - title: Bug fixes
-      regexp: '^.*?fix(\([[:word:]]+\))?!?:.+$'
-      order: 1
-    - title: Dependencies
-      regexp: '^.*?build\(deps\):.+$'
-      order: 2
-    - title: Other
-      order: 999
-  filters:
-    exclude:
-      - '^docs?(\(.*\))?:'
-      - '^test(\(.*\))?:'
-      - '^ci(\(.*\))?:'
+  disable: true
 
 release:
   github:
     owner: blackhorseya
     name: x-monorepo
-  footer: |
-    ## Images
-
-    ```
-    ghcr.io/blackhorseya/x-monorepo/rpc:{{ .Version }}
-    ghcr.io/blackhorseya/x-monorepo/worker:{{ .Version }}
-    ghcr.io/blackhorseya/x-monorepo/migrate:{{ .Version }}
-    ```
+  use_existing_draft: true   # the draft release-drafter maintains, matched by tag
+  mode: keep-existing        # its body is the changelog; only artifacts are added
