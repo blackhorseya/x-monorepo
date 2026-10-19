@@ -96,6 +96,17 @@ jobs:
       - uses: ./.github/actions/setup
       - run: task build
 
+  # ── release config: the snapshot must build before anyone tags ─────────────
+  release-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - uses: goreleaser/goreleaser-action@v7
+        with: { version: "~> v2.18", install-only: true }
+      - run: task release-check release-snapshot
+
   # ── breaking: warn only (decision: wire-incompatible changes are allowed, but visible) ──
   # ── web: @repo/proto must typecheck against the generated TS, console must build ──
   web:

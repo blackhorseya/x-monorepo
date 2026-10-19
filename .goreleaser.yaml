@@ -1,0 +1,144 @@
+# goreleaser — tag vX.Y.Z on main → GitHub Release (archives per OS/arch) + one image per app on ghcr.
+#   task release-snapshot      # local dry run: binaries + archives under bin/dist, no images, no publish
+#   task release-check         # validate this file
+# .github/workflows/release.yml runs `goreleaser release` on tag push; ci.yml runs the snapshot on PRs.
+# Three apps, one module each under go.work; goreleaser builds from each app dir, go.work is found
+# by walking up (no root go.mod, hence project_name is explicit).
+version: 2
+
+project_name: x-monorepo
+dist: bin/dist
+
+before:
+  hooks:
+    - go work sync
+
+builds:
+  - id: rpc
+    binary: rpc
+    dir: apps/rpc
+    main: .
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Version={{ .Version }}
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+  - id: worker
+    binary: worker
+    dir: apps/worker
+    main: .
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Version={{ .Version }}
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+  - id: migrate
+    binary: migrate
+    dir: apps/migrate
+    main: .
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Version={{ .Version }}
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# One archive per OS/arch holding all three binaries: they ship together (migrate runs before rpc/worker).
+archives:
+  - id: apps
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - src: configs/config.example.yaml
+        dst: configs/config.example.yaml
+
+checksum:
+  name_template: checksums.txt
+
+# One image per app, multi-arch (linux/amd64 + linux/arm64) from the binaries above — the
+# Dockerfile only COPYs, so no QEMU is needed. ghcr packages are created private on first
+# push: link them to the repo / make them public in GitHub → Packages once.
+dockers_v2:
+  - id: rpc
+    ids: [rpc]
+    images: [ghcr.io/blackhorseya/x-monorepo/rpc]
+    dockerfile: deployments/docker/Dockerfile
+    build_args: { APP: rpc }
+    tags: &image_tags
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    annotations: &image_annotations
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "Clean Architecture + DDD Go monorepo template"
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.licenses: MIT
+  - id: worker
+    ids: [worker]
+    images: [ghcr.io/blackhorseya/x-monorepo/worker]
+    dockerfile: deployments/docker/Dockerfile
+    build_args: { APP: worker }
+    tags: *image_tags
+    annotations: *image_annotations
+  - id: migrate
+    ids: [migrate]
+    images: [ghcr.io/blackhorseya/x-monorepo/migrate]
+    dockerfile: deployments/docker/Dockerfile
+    build_args: { APP: migrate }
+    tags: *image_tags
+    annotations: *image_annotations
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# PR titles follow Conventional Commits, so the squash commits group cleanly.
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))?!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))?!?:.+$'
+      order: 1
+    - title: Dependencies
+      regexp: '^.*?build\(deps\):.+$'
+      order: 2
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^docs?(\(.*\))?:'
+      - '^test(\(.*\))?:'
+      - '^ci(\(.*\))?:'
+
+release:
+  github:
+    owner: blackhorseya
+    name: x-monorepo
+  footer: |
+    ## Images
+
+    ```
+    ghcr.io/blackhorseya/x-monorepo/rpc:{{ .Version }}
+    ghcr.io/blackhorseya/x-monorepo/worker:{{ .Version }}
+    ghcr.io/blackhorseya/x-monorepo/migrate:{{ .Version }}
+    ```
