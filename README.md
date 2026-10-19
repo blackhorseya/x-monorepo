@@ -382,13 +382,14 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 ```bash
 task release-check      # 驗 .goreleaser.yaml
 task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/arm64 → bin/dist，不做 image、不 publish
-git tag v0.1.0 && git push origin v0.1.0   # 在綠的 main 上打 tag → .github/workflows/release.yml
+# 發版：GitHub → Releases → 打開 drafter 維護的 draft → Publish release（會建 tag → 跑 .github/workflows/release.yml）
 ```
 
 **release notes 由 release-drafter 維護**（`.github/release-drafter.yml`）：每個 PR 開啟時 autolabeler 依 Conventional Commits title 上 label
 （`feat` → `feature`、`fix`、`build(deps)` → `dependencies`、`!` → `breaking`…），merge 進 main 就更新一份 draft release，
-下一版版號也由 label 決定（`breaking` → major、`feature` → minor、其餘 patch）。要發版就打 draft 上寫的那個 tag。
-tag push 後 goreleaser 做兩件事：把 artifacts 掛到那份 draft 並 publish（每個 OS/arch 一個 tar.gz，三個 binary 一起；notes 保留 draft 的）、
+下一版版號也由 label 決定（`breaking` → major、`feature` → minor、其餘 patch）。要發版就在 UI 上 Publish 那份 draft——
+**不要自己 push tag**：draft 一旦發布就不是 draft，goreleaser 是用 tag 找 release，手動 tag 會讓它另建一份空的。
+tag 建好後 goreleaser 做兩件事：把 artifacts 掛到那份已發布的 release（每個 OS/arch 一個 tar.gz，三個 binary 一起；notes 保留 drafter 的）、
 每個 app 一個 multi-arch image：`ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<version>`（非 prerelease 另打 `latest`）。
 `deployments/docker/Dockerfile` 只 COPY 預先 cross-compile 好的 binary 到 `distroless/static:nonroot`（有 CA certs、無 shell；
 healthcheck 從外面打 `/api/readyz`）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它

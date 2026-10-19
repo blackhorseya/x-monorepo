@@ -2,8 +2,10 @@
 # under a category by its label, and the next version is resolved from labels too
 # (breaking → major, feature → minor, else patch). Labels come from the autolabeler below, which
 # reads the Conventional Commits PR title — nobody labels by hand.
-# Publishing = pushing the tag the draft names (`git tag v$RESOLVED_VERSION`); goreleaser then
-# attaches archives + images to this draft (release.use_existing_draft) and keeps these notes.
+# Publishing = "Publish release" on the draft in the GitHub UI: that creates the tag, the tag
+# runs release.yml, and goreleaser attaches archives + images to the published release and
+# keeps these notes. Don't push the tag by hand while the draft exists: goreleaser then can't
+# see the draft and creates a second, empty release.
 name-template: "v$RESOLVED_VERSION"
 tag-template: "v$RESOLVED_VERSION"
 

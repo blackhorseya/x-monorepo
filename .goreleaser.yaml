@@ -108,8 +108,11 @@ dockers_v2:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
-# Release notes come from release-drafter (.github/release-drafter.yml): it keeps a draft
-# release on main; the tag push lands goreleaser's artifacts on that draft and leaves its notes.
+# Release notes come from release-drafter (.github/release-drafter.yml), which keeps a draft
+# release on main. Publishing that draft in the GitHub UI creates the tag, the tag runs
+# release.yml, and goreleaser finds the now-published release by tag and only adds artifacts.
+# Not use_existing_draft: that looks for a *draft* only, and by the time the tag exists the
+# draft has been published, so goreleaser would create a second release and fail on the tag.
 changelog:
   disable: true
 
@@ -117,5 +120,4 @@ release:
   github:
     owner: blackhorseya
     name: x-monorepo
-  use_existing_draft: true   # the draft release-drafter maintains, matched by tag
-  mode: keep-existing        # its body is the changelog; only artifacts are added
+  mode: keep-existing   # the release-drafter notes are the changelog; only artifacts are added
