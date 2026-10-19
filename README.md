@@ -377,23 +377,27 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 不會把事件傳進容器，所以改 JSON 不會自動重載 → `task grafana-reload`。另外 OTLP 的 metric export 間隔 60s，
 `rate()` 剛啟動前兩分鐘是空的。`compose-down -v` 會清掉 Grafana 的 DB，但 provisioning 會重建 dashboard。
 
-## Release（goreleaser）
+## Release（goreleaser + release-drafter）
+
+**每次 CI 在 main 上綠就是一版**，沒有人手動打 tag（`.github/workflows/release.yml`，`workflow_run` 掛在 ci 後面；
+`workflow_dispatch` 可對目前 main HEAD 重跑）：
+
+| job | 做什麼 |
+|---|---|
+| prepare | release-drafter 依 merge 進來的 PR title 分類（`when.conventional`，不用 label）產 draft release `vX.Y.Z`；版號：`!` → major、`feat` → minor、其餘 patch，`test:` 不進 notes |
+| build | 在該 commit 本地打 tag（不 push，goreleaser 需要）→ `goreleaser release`：archives 掛上那份 draft（`use_existing_draft` + `keep-existing`，notes 保留）、三個 multi-arch image 推 `ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:X.Y.Z`（非 prerelease 另打 `latest`） |
+| publish | `gh release edit --draft=false --target <sha>`：GitHub 建 tag、標 latest。image 已經在 registry，release 一出現就能拉 |
 
 ```bash
 task release-check      # 驗 .goreleaser.yaml
 task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/arm64 → bin/dist，不做 image、不 publish
-git tag v0.1.0 && git push origin v0.1.0   # 在綠的 main 上打 tag → .github/workflows/release.yml
 ```
 
-**release notes 由 release-drafter 維護**（`.github/release-drafter.yml`）：每個 PR 開啟時 autolabeler 依 Conventional Commits title 上 label
-（`feat` → `feature`、`fix`、`build(deps)` → `dependencies`、`!` → `breaking`…），merge 進 main 就更新一份 draft release，
-下一版版號也由 label 決定（`breaking` → major、`feature` → minor、其餘 patch）。要發版就打 draft 上寫的那個 tag。
-tag push 後 goreleaser 做兩件事：把 artifacts 掛到那份 draft 並 publish（每個 OS/arch 一個 tar.gz，三個 binary 一起；notes 保留 draft 的）、
-每個 app 一個 multi-arch image：`ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<version>`（非 prerelease 另打 `latest`）。
 `deployments/docker/Dockerfile` 只 COPY 預先 cross-compile 好的 binary 到 `distroless/static:nonroot`（有 CA certs、無 shell；
 healthcheck 從外面打 `/api/readyz`）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它
-（`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在打 tag 前就會紅。
-第一次 push 到 ghcr 的 package 是 private，要到 GitHub → Packages 連到 repo / 改 public 一次。
+（`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在 merge 前就會紅。
+用 `GITHUB_TOKEN` publish 的 release 不會觸發其他 workflow 的 `push: tags` / `release` event（GitHub 防遞迴），要接部署就像
+release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghcr 的 package 是 private，要到 GitHub → Packages 連到 repo / 改 public 一次。
 
 ## Config（viper）
 
