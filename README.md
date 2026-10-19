@@ -377,6 +377,21 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 不會把事件傳進容器，所以改 JSON 不會自動重載 → `task grafana-reload`。另外 OTLP 的 metric export 間隔 60s，
 `rate()` 剛啟動前兩分鐘是空的。`compose-down -v` 會清掉 Grafana 的 DB，但 provisioning 會重建 dashboard。
 
+## Release（goreleaser）
+
+```bash
+task release-check      # 驗 .goreleaser.yaml
+task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/arm64 → bin/dist，不做 image、不 publish
+git tag v0.1.0 && git push origin v0.1.0   # 在綠的 main 上打 tag → .github/workflows/release.yml
+```
+
+tag push 後 goreleaser 做三件事：GitHub Release（每個 OS/arch 一個 tar.gz，三個 binary 一起）、changelog（照 Conventional Commits 分組）、
+每個 app 一個 multi-arch image：`ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<version>`（非 prerelease 另打 `latest`）。
+`deployments/docker/Dockerfile` 只 COPY 預先 cross-compile 好的 binary 到 `distroless/static:nonroot`（有 CA certs、無 shell；
+healthcheck 從外面打 `/api/readyz`）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它
+（`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在打 tag 前就會紅。
+第一次 push 到 ghcr 的 package 是 private，要到 GitHub → Packages 連到 repo / 改 public 一次。
+
 ## Config（viper）
 
 `platform/config.Load()` 的來源由低到高：defaults → YAML 檔 → `APP_*` 環境變數。YAML 找 `$APP_CONFIG`（指定就必須存在），

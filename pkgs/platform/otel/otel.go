@@ -37,6 +37,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
 
@@ -184,6 +185,7 @@ func newResource(c context.Context, cfg config.OTel) (*resource.Resource, error)
 		resource.WithTelemetrySDK(),
 		resource.WithAttributes(
 			attribute.String("service.name", serviceName(cfg)),
+			attribute.String("service.version", buildinfo.Version),
 			attribute.String("service.instance.id", host+":"+strconv.Itoa(os.Getpid())),
 		),
 	)

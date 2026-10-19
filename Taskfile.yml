@@ -31,6 +31,7 @@ vars:
   GOLANGCI_LINT_VERSION: v2.14.0
   LEFTHOOK_VERSION: v2.2.2
   CONNECT_OPENAPI_VERSION: v0.28.0
+  GORELEASER_VERSION: v2.18.2   # .github/workflows/release.yml pins the same minor
 
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
   BCS: ordering inventory
@@ -229,6 +230,14 @@ tasks:
     cmds:
       - for: { var: APPS }
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
+
+  release-check:
+    desc: validate .goreleaser.yaml (goreleaser from PATH; brew install goreleaser)
+    cmds: [goreleaser check]
+
+  release-snapshot:
+    desc: 'dry-run release into bin/dist: every binary + archive, no images (needs docker buildx), no publish'
+    cmds: ["goreleaser release --snapshot --clean --skip=docker,publish"]
 
   run:
     desc: 'build and run ./bin/rpc with configs/local.yaml (gitignored; seeded from the example); task run CONFIG=<file> to use another'
