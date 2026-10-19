@@ -62,7 +62,13 @@ jobs:
       # The tag does not exist yet (publish creates it), but goreleaser ≥ v2.18.1 refuses to run
       # without one, so create it locally on the commit being released. Never pushed.
       - run: git tag "${{ needs.prepare.outputs.tag }}" "$HEAD_SHA"
+      # Share the Go cache with ci.yml's release-snapshot job: same 12 cross-compile targets and
+      # flags (-X only changes the link step), refreshed on every PR. The default scope would be
+      # this job's name, "build", which collides with ci.yml's host-only `build` cache — a
+      # primary-key hit there is never re-saved, so the cross-compiles ran cold every release.
       - uses: ./.github/actions/setup
+        with:
+          cache-scope: release-snapshot
       # dockers_v2 drives `docker buildx build --push` with --sbom and two platforms; the
       # default docker driver can do neither, so a docker-container builder is required.
       - uses: docker/setup-buildx-action@v4
