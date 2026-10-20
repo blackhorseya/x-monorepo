@@ -22,6 +22,7 @@ import (
 // AppConfig is the root configuration of a deployable.
 type AppConfig struct {
 	HTTP     HTTP     `mapstructure:"http"`
+	Auth     Auth     `mapstructure:"auth"`
 	Log      Log      `mapstructure:"log"`
 	Postgres Postgres `mapstructure:"postgres"`
 	Redis    Redis    `mapstructure:"redis"`
@@ -35,6 +36,43 @@ type HTTP struct {
 	// Docs mounts /api/docs and /api/openapi/*.yaml. Keep false in production.
 	Docs bool `mapstructure:"docs"`
 }
+
+// Auth configures the server's auth interceptor (platform/server.NewAuthInterceptor):
+// who an RPC runs as, carried to use cases as contextx.Principal. It is
+// authentication only; nothing here grants or denies anything.
+type Auth struct {
+	// Mode: "off" (no interceptor, every call is anonymous), "optional"
+	// (a credential is verified when present, a call without one is
+	// anonymous), "required" (no valid credential → Unauthenticated).
+	Mode string `mapstructure:"mode"`
+	// APIKeys are static keys as "name=key[,name=key…]" (one string so an env
+	// var can carry it). A matching X-API-Key header makes the principal
+	// {Subject: name, Method: "api_key"}.
+	APIKeys string `mapstructure:"api_keys"`
+	JWT     JWT    `mapstructure:"jwt"`
+	// Public lists procedures ("/<pkg>.<Service>/<Method>") that never need a
+	// credential, whatever the mode.
+	Public []string `mapstructure:"public"`
+}
+
+// JWT verifies `Authorization: Bearer <token>`: exactly one of HS256Secret
+// (HS256) or PublicKey (PEM: RSA → RS256/384/512, EC → ES256/384/512, Ed25519 →
+// EdDSA) must be set when auth is on and a JWT is expected. The token must
+// carry exp, and iss / aud when Issuer / Audience are set. Claims read into
+// the principal: sub, name, roles ([]string).
+type JWT struct {
+	Issuer      string `mapstructure:"issuer"`
+	Audience    string `mapstructure:"audience"`
+	HS256Secret string `mapstructure:"hs256_secret"`
+	PublicKey   string `mapstructure:"public_key"`
+}
+
+// Mode values of Auth.Mode.
+const (
+	AuthOff      = "off"
+	AuthOptional = "optional"
+	AuthRequired = "required"
+)
 
 // Postgres configures the shared connection pool. An empty URL means "no
 // database": apps fall back to in-memory repositories (local dev, tests).
@@ -124,6 +162,13 @@ func Load() (*AppConfig, error) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("http.addr", ":8080")
 	v.SetDefault("http.docs", false)
+	v.SetDefault("auth.mode", AuthOff)
+	v.SetDefault("auth.api_keys", "")
+	v.SetDefault("auth.jwt.issuer", "")
+	v.SetDefault("auth.jwt.audience", "")
+	v.SetDefault("auth.jwt.hs256_secret", "")
+	v.SetDefault("auth.jwt.public_key", "")
+	v.SetDefault("auth.public", []string{})
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
@@ -163,6 +208,18 @@ func readFile(v *viper.Viper) error {
 func (x *AppConfig) validate() error {
 	if x.Log.Format != "json" && x.Log.Format != "text" {
 		return fmt.Errorf("invalid log.format %q (want json|text)", x.Log.Format)
+	}
+	switch x.Auth.Mode {
+	case AuthOff:
+	case AuthOptional, AuthRequired:
+		if x.Auth.APIKeys == "" && x.Auth.JWT.HS256Secret == "" && x.Auth.JWT.PublicKey == "" {
+			return fmt.Errorf("auth.mode is %s but no auth.api_keys, auth.jwt.hs256_secret or auth.jwt.public_key is set", x.Auth.Mode)
+		}
+	default:
+		return fmt.Errorf("invalid auth.mode %q (want off|optional|required)", x.Auth.Mode)
+	}
+	if x.Auth.JWT.HS256Secret != "" && x.Auth.JWT.PublicKey != "" {
+		return errors.New("auth.jwt.hs256_secret and auth.jwt.public_key are exclusive")
 	}
 	switch x.Worker.Broker {
 	case BrokerPostgres:

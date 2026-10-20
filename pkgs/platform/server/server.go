@@ -55,9 +55,10 @@ type Server struct {
 // of the OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
 // OpenTelemetry span (otelconnect, outermost) and a request logger carrying
 // its trace_id and request_id, and every response carries X-Request-Id /
-// X-Trace-Id (see meta.go); plain HTTP routes (docs, openapi) get spans from otelgin,
+// X-Trace-Id (see meta.go); auth (auth.go, when auth.Mode is not off) resolves
+// the caller to a contextx.Principal; plain HTTP routes (docs, openapi) get spans from otelgin,
 // which skips RPC prefixes, the probes and /api/metrics so nothing is traced twice.
-func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers) (*Server, error) {
+func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	// Connect routes are "/<pkg>.<Service>/" prefixes; a procedure is the next segment.
@@ -78,9 +79,20 @@ func New(cfg config.HTTP, logger *slog.Logger, routes []Route, docs []Doc, check
 	if err != nil {
 		return nil, err
 	}
-	// Outermost first: validation is innermost so a rejected request is still
-	// traced, logged (code invalid_argument) and carries X-Request-Id.
-	opts := connect.WithInterceptors(tracing, NewMetaInterceptor(), NewLoggingInterceptor(logger), validate)
+	authn, err := NewAuthInterceptor(auth)
+	if err != nil {
+		return nil, err
+	}
+	// Outermost first: auth and validation are inside logging so a rejected
+	// request is still traced, logged (code unauthenticated / invalid_argument)
+	// and carries X-Request-Id; auth before validation so an anonymous caller
+	// learns nothing about the request rules.
+	interceptors := []connect.Interceptor{tracing, NewMetaInterceptor(), NewLoggingInterceptor(logger)}
+	if authn != nil {
+		interceptors = append(interceptors, authn)
+		logger.Info("auth enabled", "mode", auth.Mode, "public", auth.Public)
+	}
+	opts := connect.WithInterceptors(append(interceptors, validate)...)
 	prefixes := make([]string, 0, len(routes))
 	handlers := make([]http.Handler, 0, len(routes))
 	for _, r := range routes {

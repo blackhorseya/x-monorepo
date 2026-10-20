@@ -8,6 +8,24 @@ http:
   # mounts /api/docs and /api/openapi/<bc>.yaml — keep false in production
   docs: true
 
+auth:
+  # off: every call is anonymous (local dev, E2E). optional: a credential is verified when sent.
+  # required: no valid credential → UNAUTHENTICATED (x-error-code auth.unauthenticated / auth.invalid_credential).
+  # Probes, /api/metrics and /api/docs are outside the RPC chain and always open.
+  mode: off
+  # Static keys for X-API-Key, "name=key,name=key" (≥16 chars each); the principal's subject is the name.
+  api_keys: ""
+  jwt:
+    # Authorization: Bearer <token>. Exactly one of hs256_secret (≥32 bytes) or public_key (PEM:
+    # RSA / EC / Ed25519, algorithm family pinned to the key type). exp is required; iss / aud are
+    # checked when set. Claims → principal: sub, name, roles.
+    issuer: ""
+    audience: ""
+    hs256_secret: ""
+    public_key: ""
+  # Procedures that never need a credential: ["/ordering.v1.OrderService/GetOrder"]
+  public: []
+
 log:
   level: debug  # debug | info | warn | error
   format: text  # json | text

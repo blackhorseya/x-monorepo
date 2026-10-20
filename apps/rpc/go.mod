@@ -8,6 +8,7 @@ require (
 	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/wire v0.7.0
 	gorm.io/gorm v1.31.2
 )

@@ -29,6 +29,9 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	if cfg.HTTP.Addr != ":8080" || cfg.HTTP.Docs || cfg.Log.Level != "info" || cfg.Log.Format != "json" || cfg.Postgres.URL != "" {
 		t.Fatalf("defaults: %+v", cfg)
 	}
+	if cfg.Auth.Mode != config.AuthOff || cfg.Auth.APIKeys != "" || len(cfg.Auth.Public) != 0 {
+		t.Fatalf("auth defaults: %+v", cfg.Auth)
+	}
 }
 
 func TestLoad_FileThenEnvOverrides(t *testing.T) {
@@ -101,12 +104,32 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("unknown worker.start_from must fail")
 	}
 	t.Setenv("APP_WORKER_START_FROM", "latest")
+
+	t.Setenv("APP_AUTH_MODE", "maybe")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("unknown auth.mode must fail")
+	}
+	t.Setenv("APP_AUTH_MODE", "required")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("auth.mode=required with nothing to verify against must fail")
+	}
+	t.Setenv("APP_AUTH_API_KEYS", "ci=secret")
+	t.Setenv("APP_AUTH_JWT_HS256_SECRET", "s")
+	t.Setenv("APP_AUTH_JWT_PUBLIC_KEY", "pem")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("hs256_secret and public_key together must fail")
+	}
+	t.Setenv("APP_AUTH_JWT_PUBLIC_KEY", "")
+	t.Setenv("APP_AUTH_PUBLIC", "/a.v1.S/Get,/a.v1.S/List")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Worker.Broker != config.BrokerRedis || cfg.Redis.URL == "" || cfg.Worker.StartFrom != config.StartFromLatest {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+	if cfg.Auth.Mode != config.AuthRequired || cfg.Auth.APIKeys != "ci=secret" || len(cfg.Auth.Public) != 2 || cfg.Auth.Public[1] != "/a.v1.S/List" {
+		t.Fatalf("auth = %+v", cfg.Auth)
 	}
 }
 

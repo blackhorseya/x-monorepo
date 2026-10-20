@@ -28,6 +28,7 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	http := cfg.HTTP
+	auth := cfg.Auth
 	oTel := cfg.OTel
 	log := cfg.Log
 	providers, cleanup, err := otel.New(oTel, log)
@@ -76,7 +77,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v8 := NewRoutes(orderService, inventoryService)
 	v9 := NewDocs()
 	readiness := NewReadiness(db)
-	serverServer, err := server.New(http, logger, v8, v9, readiness, providers)
+	serverServer, err := server.New(http, auth, logger, v8, v9, readiness, providers)
 	if err != nil {
 		cleanup3()
 		cleanup2()

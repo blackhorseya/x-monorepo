@@ -25,6 +25,9 @@ func Logging[I, O any](name string) Decorator[I, O] {
 			out, err := next.Execute(ctx, in)
 
 			attrs := []any{"usecase", name, "duration_ms", time.Since(start).Milliseconds()}
+			if p := contextx.PrincipalFrom(ctx); !p.IsAnonymous() {
+				attrs = append(attrs, "sub", p.Subject)
+			}
 			if err == nil {
 				ctx.Debug("usecase ok", attrs...)
 				return out, nil
