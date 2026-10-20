@@ -9,6 +9,7 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill/message"
 	goredis "github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/metric"
 	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
@@ -23,6 +24,7 @@ import (
 type Worker struct {
 	router *message.Router
 	logger *slog.Logger
+	lag    metric.Registration
 }
 
 // NewWorker registers every BC's subscriptions on one router. Each BC reads
@@ -31,6 +33,11 @@ type Worker struct {
 // get every message instead of splitting it, while replicas of this process
 // (same worker.consumer_group) still share the work. Failed messages of a BC
 // go to that BC's poison topic, always in Postgres.
+//
+// Metrics (platform/eventbus): every handler attempt is a sample of
+// eventbus.consumer.duration, and eventbus.Lag reports each cursor's backlog —
+// the BC groups on whatever they read from, the forwarder's Postgres cursor in
+// redis mode, and each BC's poison table.
 //
 // worker.broker decides what the handlers read:
 //
@@ -68,6 +75,14 @@ func NewWorker(
 	if cfg.StartFrom == config.StartFromLatest {
 		start = eventbus.FromLatest
 	}
+	instruments, err := eventbus.NewInstruments(tel.Meter)
+	if err != nil {
+		return nil, err
+	}
+	lag := eventbus.LagOptions{DB: db, Redis: rdb}
+	for _, bc := range bcs {
+		lag.PoisonTopics = append(lag.PoisonTopics, eventbus.PoisonTopic(bc.schema))
+	}
 
 	// subscriber builds the per-BC subscriber the handlers read from.
 	var subscriber func(group string) (message.Subscriber, error)
@@ -75,6 +90,11 @@ func NewWorker(
 	case config.BrokerPostgres, "":
 		subscriber = func(group string) (message.Subscriber, error) {
 			return eventbus.NewPostgresSubscriber(db, group, start, logger)
+		}
+		for _, bc := range bcs {
+			for _, s := range bc.subs {
+				lag.Postgres = append(lag.Postgres, eventbus.Cursor{Topic: s.Topic, ConsumerGroup: cfg.ConsumerGroup + "." + bc.schema})
+			}
 		}
 	case config.BrokerRedis:
 		if rdb == nil {
@@ -92,11 +112,20 @@ func NewWorker(
 				}
 			}
 		}
-		if err := addForwarders(router, db, rdb, start, logger, bcs); err != nil {
+		forwarded, err := addForwarders(router, db, rdb, start, logger, bcs)
+		if err != nil {
 			return nil, err
+		}
+		for _, topic := range forwarded {
+			lag.Postgres = append(lag.Postgres, eventbus.Cursor{Topic: topic, ConsumerGroup: ForwarderGroup})
 		}
 		subscriber = func(group string) (message.Subscriber, error) {
 			return eventbus.NewRedisSubscriber(rdb, group, start, logger)
+		}
+		for _, bc := range bcs {
+			for _, s := range bc.subs {
+				lag.RedisStreams = append(lag.RedisStreams, eventbus.Cursor{Topic: s.Topic, ConsumerGroup: cfg.ConsumerGroup + "." + bc.schema})
+			}
 		}
 	default:
 		return nil, fmt.Errorf("unknown worker.broker %q", cfg.Broker)
@@ -110,13 +139,18 @@ func NewWorker(
 		err = eventbus.Register(router, sub, eventbus.ConsumerOptions{
 			Poison:      publisher,
 			PoisonTopic: eventbus.PoisonTopic(bc.schema),
+			Instruments: instruments,
 		}, bc.subs...)
 		if err != nil {
 			return nil, err
 		}
 	}
+	reg, err := eventbus.Lag(tel.Meter, lag)
+	if err != nil {
+		return nil, err
+	}
 
-	return &Worker{router: router, logger: logger}, nil
+	return &Worker{router: router, logger: logger, lag: reg}, nil
 }
 
 // ForwarderGroup is the Postgres consumer group of the outbox → Redis
@@ -126,7 +160,8 @@ const ForwarderGroup = "forwarder"
 
 // addForwarders adds one passthrough handler per distinct consumed topic:
 // outbox table (Postgres, ForwarderGroup, starting per start the first time
-// the group appears) → Redis Stream of the same name.
+// the group appears) → Redis Stream of the same name. It returns the topics
+// it forwards.
 // Per-topic passthrough keeps the existing tables and migrations; Watermill's
 // envelope-based forwarder component would need a table of its own.
 func addForwarders(
@@ -139,33 +174,38 @@ func addForwarders(
 		schema string
 		subs   []eventbus.Subscription
 	},
-) error {
+) ([]string, error) {
 	sub, err := eventbus.NewPostgresSubscriber(db, ForwarderGroup, start, logger)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pub, err := eventbus.NewRedisPublisher(rdb, logger)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	seen := map[string]bool{}
+	var topics []string
 	for _, bc := range bcs {
 		for _, s := range bc.subs {
 			if seen[s.Topic] {
 				continue
 			}
 			seen[s.Topic] = true
+			topics = append(topics, s.Topic)
 			router.AddHandler("forward:"+s.Topic, s.Topic, sub, s.Topic, pub, message.PassthroughHandler)
 		}
 	}
 
-	return nil
+	return topics, nil
 }
 
-// Run blocks until c is done, then drains in-flight handlers.
+// Run blocks until c is done, then drains in-flight handlers. The lag
+// gauges stop being observed when it returns, so a stopped worker does not
+// keep querying the stores.
 func (w *Worker) Run(c context.Context) error {
 	w.logger.Info("worker started")
 	defer w.logger.Info("worker stopped")
+	defer func() { _ = w.lag.Unregister() }()
 
 	return w.router.Run(c)
 }

@@ -5,7 +5,7 @@
     "x-monorepo",
     "otel"
   ],
-  "description": "RED view of one deployable (job = service.name): Connect RPCs, use cases, plain HTTP routes, Go runtime, WARN/ERROR logs. Source: deployments/docker/grafana/dashboards/rpc.json.",
+  "description": "RED view of one deployable (job = service.name): Connect RPCs, use cases, plain HTTP routes, worker eventbus lag, Go runtime, WARN/ERROR logs. Source: deployments/docker/grafana/dashboards/rpc.json.",
   "editable": true,
   "graphTooltip": 1,
   "timezone": "browser",
@@ -570,13 +570,161 @@
       }
     },
     {
+      "id": 24,
+      "type": "row",
+      "title": "Worker — eventbus (lag gauges are per replica: max, never sum)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 25,
+      "title": "Consumer lag (unacked messages)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "eventbus_consumer_lag: messages past the group's cursor that the subscriber could read now. Postgres: outbox rows below the snapshot xmin; Redis: XINFO lag + pending. In redis mode the forwarder group is the outbox → stream hop.",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (topic, consumer_group, broker)(eventbus_consumer_lag{job=\"$service\"})",
+          "legendFormat": "{{consumer_group}} ← {{topic}} ({{broker}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "title": "Oldest unacked message age",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "eventbus_consumer_oldest_age_seconds: how long the head of the backlog has been waiting. 0 when caught up.",
+      "gridPos": {
+        "x": 8,
+        "y": 24,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (topic, consumer_group, broker)(eventbus_consumer_oldest_age_seconds{job=\"$service\"})",
+          "legendFormat": "{{consumer_group}} ← {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "title": "Handler attempts / s by result, poison backlog",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "eventbus_consumer_duration_seconds: one sample per attempt (retries included); a parked message is its last failed attempt. eventbus_poison_messages: rows on <bc>.poison — never consumed, so it only grows until someone requeues or drops them.",
+      "gridPos": {
+        "x": 16,
+        "y": 24,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (topic, result)(rate(eventbus_consumer_duration_seconds_count{job=\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{topic}} {{result}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (topic)(eventbus_poison_messages{job=\"$service\"})",
+          "legendFormat": "poison {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
       "id": 14,
       "type": "row",
       "title": "Plain HTTP routes (docs / openapi / 404) — otelgin; RPCs are above (otelconnect)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 23,
+        "y": 32,
         "w": 24,
         "h": 1
       },
@@ -592,7 +740,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 24,
+        "y": 33,
         "w": 12,
         "h": 8
       },
@@ -634,7 +782,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 24,
+        "y": 33,
         "w": 12,
         "h": 8
       },
@@ -673,7 +821,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 41,
         "w": 24,
         "h": 1
       },
@@ -689,7 +837,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 33,
+        "y": 42,
         "w": 6,
         "h": 8
       },
@@ -731,7 +879,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 33,
+        "y": 42,
         "w": 6,
         "h": 8
       },
@@ -773,7 +921,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 33,
+        "y": 42,
         "w": 6,
         "h": 8
       },
@@ -815,7 +963,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 33,
+        "y": 42,
         "w": 6,
         "h": 8
       },
@@ -854,7 +1002,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 41,
+        "y": 50,
         "w": 24,
         "h": 1
       },
@@ -870,7 +1018,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 51,
         "w": 24,
         "h": 10
       },
