@@ -1,4 +1,5 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
+import { CredentialControl } from "./components/credential";
 import { OrdersPage } from "./routes/orders";
 import { StockPage } from "./routes/stock";
 
@@ -17,6 +18,7 @@ const rootRoute = createRootRoute({
             </Link>
           ))}
         </nav>
+        <CredentialControl />
       </header>
       <Outlet />
     </div>

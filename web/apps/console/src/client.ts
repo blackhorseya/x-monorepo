@@ -1,12 +1,23 @@
-import { Code, ConnectError, createClient } from "@connectrpc/connect";
+import { Code, ConnectError, createClient, type Interceptor } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { InventoryService } from "@repo/proto/inventory/v1/service_pb";
 import { OrderService } from "@repo/proto/ordering/v1/service_pb";
 import { ViolationsSchema } from "@repo/proto/buf/validate/validate_pb";
+import { credentialHeaders } from "./auth";
 
 // Same origin, under /api: vite proxies /api to the Go server, and in production
 // one ingress rule for /api covers RPCs, docs, healthz and metrics alike.
-const transport = createConnectTransport({ baseUrl: `${window.location.origin}/api` });
+// The credential interceptor attaches X-API-Key / Authorization from src/auth.ts
+// to every call (nothing when anonymous), read at call time so a change in
+// the header control applies to the next RPC without rebuilding clients.
+const withCredential: Interceptor = (next) => (req) => {
+  for (const [k, v] of Object.entries(credentialHeaders())) req.header.set(k, v);
+  return next(req);
+};
+const transport = createConnectTransport({
+  baseUrl: `${window.location.origin}/api`,
+  interceptors: [withCredential],
+});
 
 export const orders = createClient(OrderService, transport);
 export const inventory = createClient(InventoryService, transport);
@@ -31,4 +42,9 @@ function fieldPath(elements: { fieldName?: string; subscript: { case?: string; v
 
 export function isNotFound(err: unknown): boolean {
   return ConnectError.from(err).code === Code.NotFound;
+}
+
+// The server runs with auth on and did not accept what we sent (or nothing).
+export function isUnauthenticated(err: unknown): boolean {
+  return ConnectError.from(err).code === Code.Unauthenticated;
 }

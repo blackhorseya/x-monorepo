@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { describe, orders } from "../client";
+import { describe, isUnauthenticated, orders } from "../client";
 import { keys, ordersQuery, reservationQuery } from "../queries";
 
 type Line = { sku: string; quantity: number; priceMinor: number };
@@ -206,10 +206,14 @@ export function Field({
 }
 
 export function ErrorAlert({ error }: { error: unknown }) {
+  const unauthenticated = isUnauthenticated(error);
   return (
     <Alert variant="destructive">
-      <AlertTitle>Request failed</AlertTitle>
-      <AlertDescription>{describe(error)}</AlertDescription>
+      <AlertTitle>{unauthenticated ? "Not authenticated" : "Request failed"}</AlertTitle>
+      <AlertDescription>
+        {describe(error)}
+        {unauthenticated && " — the server runs with auth on; set an API key or JWT with the Credential button above."}
+      </AlertDescription>
     </Alert>
   );
 }
