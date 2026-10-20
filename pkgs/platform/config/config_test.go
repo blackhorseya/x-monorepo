@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
@@ -31,6 +32,9 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	}
 	if cfg.Auth.Mode != config.AuthOff || cfg.Auth.APIKeys != "" || len(cfg.Auth.Public) != 0 || cfg.Auth.AdminRole != "admin" {
 		t.Fatalf("auth defaults: %+v", cfg.Auth)
+	}
+	if cfg.HTTP.ShutdownDelay != 0 || cfg.HTTP.ShutdownTimeout != 15*time.Second {
+		t.Fatalf("shutdown defaults: %+v", cfg.HTTP)
 	}
 }
 
@@ -90,6 +94,17 @@ func TestLoad_Validate(t *testing.T) {
 	}
 	t.Setenv("APP_LOG_FORMAT", "json")
 
+	t.Setenv("APP_HTTP_SHUTDOWN_DELAY", "-1s")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("negative http.shutdown_delay must fail")
+	}
+	t.Setenv("APP_HTTP_SHUTDOWN_DELAY", "2s")
+	t.Setenv("APP_HTTP_SHUTDOWN_TIMEOUT", "0")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("zero http.shutdown_timeout must fail")
+	}
+	t.Setenv("APP_HTTP_SHUTDOWN_TIMEOUT", "500ms")
+
 	t.Setenv("APP_WORKER_BROKER", "kafka")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("unknown worker.broker must fail")
@@ -127,6 +142,9 @@ func TestLoad_Validate(t *testing.T) {
 	}
 	if cfg.Worker.Broker != config.BrokerRedis || cfg.Redis.URL == "" || cfg.Worker.StartFrom != config.StartFromLatest {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+	if cfg.HTTP.ShutdownDelay != 2*time.Second || cfg.HTTP.ShutdownTimeout != 500*time.Millisecond {
+		t.Fatalf("shutdown = %+v", cfg.HTTP)
 	}
 	if cfg.Auth.Mode != config.AuthRequired || cfg.Auth.APIKeys != "ci=secret" || len(cfg.Auth.Public) != 2 || cfg.Auth.Public[1] != "/a.v1.S/List" {
 		t.Fatalf("auth = %+v", cfg.Auth)

@@ -142,6 +142,10 @@ type ConsumerOptions struct {
 	// Instruments records eventbus.consumer.duration per attempt (NewInstruments).
 	// nil records nothing.
 	Instruments *Instruments
+	// DrainTimeout is how long a handler running when the router's context
+	// is cancelled may finish before it is abandoned (Draining). Default
+	// DefaultDrainTimeout.
+	DrainTimeout time.Duration
 }
 
 // Register adds one handler per subscription to r, all reading from sub, each
@@ -155,6 +159,8 @@ type ConsumerOptions struct {
 //
 // Handler names are the topics, so Watermill's own metrics/logs name them.
 // One router can serve several BCs: call Register once per BC with its options.
+// sub is wrapped in Draining: on shutdown an in-flight handler finishes and
+// is acked instead of being aborted.
 func Register(r *message.Router, sub message.Subscriber, opts ConsumerOptions, subs ...Subscription) error {
 	if opts.Poison == nil || opts.PoisonTopic == "" {
 		return errors.New("eventbus: consumer needs a poison publisher and topic")
@@ -177,6 +183,7 @@ func Register(r *message.Router, sub message.Subscriber, opts ConsumerOptions, s
 		Logger:          r.Logger(),
 	}.Middleware
 
+	sub = Draining(sub, opts.DrainTimeout)
 	for _, s := range subs {
 		h := s.Handler
 		handler := r.AddConsumerHandler(s.Topic, s.Topic, sub, func(msg *message.Message) error {

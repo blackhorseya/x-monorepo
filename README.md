@@ -112,6 +112,10 @@ dto 不要照著 pb 抄。
 （`http.StripPrefix`，給 Connect / gRPC-Web client 用 base URL `…/api`）**以及**原生路徑 `/<pkg>.<Service>/*procedure`
 （gRPC 協定把路徑寫死，grpc-go / grpcurl 加不了前綴）；`/api/healthz`（liveness：process 活著就 200，不看依賴）、`/api/readyz`（readiness：跑 app 給的 `server.Readiness` checks，
 rpc 是 Postgres ping；任一失敗或 server 正在 drain 回 503 + JSON 明細）、`/api/metrics`、`/api/docs` 是普通 gin route。
+**Graceful shutdown**（`Server.Serve`，`apps/rpc/main.go` 以 `signal.NotifyContext` 接 SIGINT / SIGTERM）：先把 `/api/readyz` 翻成 503 `"server":"draining"`
+但其他路徑照常服務 `http.shutdown_delay`（預設 0：本機 Ctrl-C 立刻關；k8s 設 ≥ 一個 probe period，LB 才來得及停止派流量），
+再關 listener、給 in-flight request `http.shutdown_timeout`（預設 15s）跑完；超時才切斷並回 error。liveness 全程 200。
+HTTP/1.1 與 h2c 各一個 in-flight request 的 drain 有真 socket 的測試（`platform/server/shutdown_test.go`），SIGTERM → exit 0 有 `apps/rpc/shutdown_test.go`。
 整台 server 都在 `/api` 下，ingress 一條規則。`RedirectTrailingSlash` / `RedirectFixedPath` 關閉（gRPC client
 不跟 redirect）；gin 只做 routing + `Recovery()`，RPC log 留在 Connect interceptor。HTTP/1.1 與 h2c 同一個 port，
 Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`）。
@@ -187,6 +191,10 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   都會再收到）並同一個 transaction 刪掉 poison row，`drop <bc> <offset>…|all` 直接刪。同一個 binary（cobra：沒有子命令 = 跑 consumer）：
   `worker poison …`，image 也是 `docker run …/worker poison list`，`--help` 有完整說明。`eventbus_poison_messages` 不為 0 就來這裡；修好 handler 再 requeue，再失敗會再進 poison。
 - Trace：publish 時把 `traceparent` 寫進 metadata，router 的 tracing middleware 還原成 CONSUMER span，Tempo 看得到 rpc → publish → handler 一條線。
+- **Graceful shutdown**：SIGTERM 後 router 停止取新訊息，但**正在跑的 handler 跑完、ack 寫進去**才結束（`eventbus.Draining` 包住每個 BC 的 subscriber
+  與 redis 模式的 forwarder；上限 `eventbus.DefaultDrainTimeout` 8s，超過就 cancel 掉 handler 的 context 並放棄、訊息留給下一次）。
+  不包的話 watermill-sql / redisstream 在 subscribe context 一 cancel 就把 message context 也 cancel、丟掉它的 ack：use case 的 transaction 中途失敗、重啟後再收一次。
+  兩種 broker 都有測（`platform/eventbus/shutdown_test.go`），SIGTERM → exit 0 有 `apps/worker/shutdown_test.go`。k8s 的 `terminationGracePeriodSeconds` 要 > 10s（router `CloseTimeout`）。
 - 換 broker：`message.Publisher` / `Subscriber` 是 port；handler 與 error contract 不變。已內建一個示範：`worker.broker: redis`
   （`redis.url` 必填，`task compose-up` 有起一個）時，worker 自己當 forwarder，把每個被消費 topic 的 outbox 表（Postgres consumer group
   固定叫 `forwarder`，所有 replica 共用，每則只轉一次）passthrough 進同名 Redis Stream，handler 再以 `<consumer_group>.<bc>` 的
@@ -436,7 +444,8 @@ task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/a
 ```
 
 `deployments/docker/Dockerfile` 只 COPY 預先 cross-compile 好的 binary 到 `distroless/static:nonroot`（有 CA certs、無 shell；
-healthcheck 從外面打 `/api/readyz`）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它
+healthcheck 從外面打 `/api/readyz`）。兩個 binary 都吃 SIGTERM 做 graceful shutdown（rpc：readyz 先 503 → drain，見 server 一節；worker：in-flight handler 跑完才停，見 Events 一節），
+部署的 grace period 要大於 `http.shutdown_delay + http.shutdown_timeout`（rpc）/ 10s（worker）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它
 （`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在 merge 前就會紅，release 的 build job 也共用它的 Go cache（`cache-scope: release-snapshot`），cross-compile 不用冷啟。
 用 `GITHUB_TOKEN` publish 的 release 不會觸發其他 workflow 的 `push: tags` / `release` event（GitHub 防遞迴），要接部署就像
 release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghcr 的 package 是 private，要到 GitHub → Packages 連到 repo / 改 public 一次。
@@ -460,6 +469,8 @@ release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghc
 |---|---|---|---|
 | `http.addr` | `APP_HTTP_ADDR` | `:8080` | |
 | `http.docs` | `APP_HTTP_DOCS` | `false` | 掛 `/api/docs`、`/api/openapi/<bc>.yaml`（`task run` 會開） |
+| `http.shutdown_delay` | `APP_HTTP_SHUTDOWN_DELAY` | `0s` | SIGTERM 後 `/api/readyz` 先回 503、其他照常服務這麼久，讓 LB 先把流量移走再關 listener；k8s 下設 ≥ 一個 readiness probe period |
+| `http.shutdown_timeout` | `APP_HTTP_SHUTDOWN_TIMEOUT` | `15s` | listener 關掉後 in-flight request 的完成上限，超過就切斷、`Run` 回 error。`terminationGracePeriodSeconds` 要 > delay + timeout |
 | `log.level` / `log.format` | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
 | `auth.mode` | `APP_AUTH_MODE` | `off` | `off` 不掛 auth interceptor；`optional` 有帶 credential 才驗（沒帶 = anonymous，帶了驗不過一樣是錯）；`required` 沒有合法 credential → `UNAUTHENTICATED` |
 | `auth.api_keys` | `APP_AUTH_API_KEYS` | 空 | `name=key[:role\|role],name=key`（key ≥ 16 字元），對 `X-API-Key` header；principal 的 subject = name、roles = 冒號後的清單。一個字串，所以 env 帶得動 |

@@ -16,9 +16,25 @@ import (
 // transaction, and the worker's forwarder copies each outbox table into its
 // stream (apps/worker). Streams are unbounded by default; a MAXLEN is a
 // retention decision left to the deployment.
+//
+// Close is a no-op: redisstream's Publisher.Close closes the client it was
+// given, and client is shared (subscribers, lag gauges). The router closes a
+// forwarder's publisher as soon as that handler stops, which with Draining
+// is while other handlers may still be acking. platform/redis.NewClient's
+// cleanup owns the client's lifetime.
 func NewRedisPublisher(client goredis.UniversalClient, l *slog.Logger) (message.Publisher, error) {
-	return redisstream.NewPublisher(redisstream.PublisherConfig{Client: client}, NewLogger(l))
+	pub, err := redisstream.NewPublisher(redisstream.PublisherConfig{Client: client}, NewLogger(l))
+	if err != nil {
+		return nil, err
+	}
+
+	return keepClient{pub}, nil
 }
+
+// keepClient is a Publisher whose Close leaves the shared client open.
+type keepClient struct{ message.Publisher }
+
+func (keepClient) Close() error { return nil }
 
 // NewRedisSubscriber reads topics as Redis Streams consumer groups: replicas
 // sharing consumerGroup split the work (XREADGROUP); a different group gets

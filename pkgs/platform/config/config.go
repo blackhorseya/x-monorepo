@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -35,6 +36,15 @@ type HTTP struct {
 	Addr string `mapstructure:"addr"`
 	// Docs mounts /api/docs and /api/openapi/*.yaml. Keep false in production.
 	Docs bool `mapstructure:"docs"`
+	// ShutdownDelay is how long the server keeps serving after SIGTERM with
+	// /api/readyz already answering 503, so a load balancer that polls it
+	// stops routing before the listener closes. 0 (default) closes at once;
+	// behind Kubernetes set it to at least one readiness probe period.
+	ShutdownDelay time.Duration `mapstructure:"shutdown_delay"`
+	// ShutdownTimeout bounds the drain of in-flight requests after the
+	// listener closed; what is still running then is cut off. Default 15s.
+	// terminationGracePeriodSeconds must exceed shutdown_delay + shutdown_timeout.
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 }
 
 // Auth configures the server's auth interceptor (platform/server.NewAuthInterceptor):
@@ -165,6 +175,8 @@ func Load() (*AppConfig, error) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("http.addr", ":8080")
 	v.SetDefault("http.docs", false)
+	v.SetDefault("http.shutdown_delay", 0)
+	v.SetDefault("http.shutdown_timeout", 15*time.Second)
 	v.SetDefault("auth.mode", AuthOff)
 	v.SetDefault("auth.api_keys", "")
 	v.SetDefault("auth.admin_role", "admin")
@@ -210,6 +222,12 @@ func readFile(v *viper.Viper) error {
 }
 
 func (x *AppConfig) validate() error {
+	if x.HTTP.ShutdownDelay < 0 {
+		return fmt.Errorf("invalid http.shutdown_delay %s (want >= 0)", x.HTTP.ShutdownDelay)
+	}
+	if x.HTTP.ShutdownTimeout <= 0 {
+		return fmt.Errorf("invalid http.shutdown_timeout %s (want > 0)", x.HTTP.ShutdownTimeout)
+	}
 	if x.Log.Format != "json" && x.Log.Format != "text" {
 		return fmt.Errorf("invalid log.format %q (want json|text)", x.Log.Format)
 	}

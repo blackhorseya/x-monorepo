@@ -7,6 +7,11 @@ http:
   addr: ":8080"
   # mounts /api/docs and /api/openapi/<bc>.yaml — keep false in production
   docs: true
+  # after SIGTERM: keep serving with /api/readyz = 503 for this long so the load
+  # balancer stops routing first (0 = close at once; behind Kubernetes use at
+  # least one readiness probe period), then give in-flight requests shutdown_timeout.
+  shutdown_delay: 0s
+  shutdown_timeout: 15s
 
 auth:
   # off: every call is anonymous (local dev, E2E). optional: a credential is verified when sent.
