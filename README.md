@@ -321,7 +321,9 @@ proto-first：OpenAPI 是 proto 的產物，不是另一份契約。`task gen` �
 （懂 Connect 的路徑與 error shape）把每個 BC 的 spec 生到 `pkgs/<bc>/contract/v1/openapi.yaml`，
 `protos/<bc>/v1/openapi.base.yaml` 提供 title / description 等手寫 metadata。
 BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 BC，`APP_HTTP_DOCS=true`
-時才掛 `/api/docs`（Scalar UI，`/api/docs/<bc>`）與 `/api/openapi/<bc>.yaml`。production 不開。前端不需要它 —— `web/packages/proto`
+時才掛 `/api/docs`（Scalar UI，`/api/docs/<bc>`）與 `/api/openapi/<bc>.yaml`。production 不開。
+spec 裡的 `servers` 是相對的 `/api`（任何 host 都對），但 serve 出去的 yaml 會把它改寫成 request 的絕對 origin（`X-Forwarded-Proto` / Host）：
+Scalar 的 Send request 用 `new URL(server + path)`，相對 server 會噴「The URL seems to be invalid」；順便讓檔案直接匯入 Postman / Bruno 就能打。前端不需要它 —— `web/packages/proto`
 直接從 proto 生 connect-es client。
 
 ## Web console：`web/apps/console`
