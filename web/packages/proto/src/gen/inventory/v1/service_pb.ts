@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file inventory/v1/service.proto.
  */
 export const file_inventory_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayIyChVHZXRSZXNlcnZhdGlvblJlcXVlc3QSGQoIb3JkZXJfaWQYASABKAlCB7pIBHICEAEiSAoWR2V0UmVzZXJ2YXRpb25SZXNwb25zZRIuCgtyZXNlcnZhdGlvbhgBIAEoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbjKFAgoQSW52ZW50b3J5U2VydmljZRJJCghTZXRTdG9jaxIdLmludmVudG9yeS52MS5TZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuU2V0U3RvY2tSZXNwb25zZRJJCghHZXRTdG9jaxIdLmludmVudG9yeS52MS5HZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuR2V0U3RvY2tSZXNwb25zZRJbCg5HZXRSZXNlcnZhdGlvbhIjLmludmVudG9yeS52MS5HZXRSZXNlcnZhdGlvblJlcXVlc3QaJC5pbnZlbnRvcnkudjEuR2V0UmVzZXJ2YXRpb25SZXNwb25zZWIGcHJvdG8z", [file_buf_validate_validate, file_inventory_v1_entity]);
+  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJDChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCSJSChJMaXN0U3RvY2tzUmVzcG9uc2USIwoGc3RvY2tzGAEgAygLMhMuaW52ZW50b3J5LnYxLlN0b2NrEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCSIyChVHZXRSZXNlcnZhdGlvblJlcXVlc3QSGQoIb3JkZXJfaWQYASABKAlCB7pIBHICEAEiSAoWR2V0UmVzZXJ2YXRpb25SZXNwb25zZRIuCgtyZXNlcnZhdGlvbhgBIAEoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbjLWAgoQSW52ZW50b3J5U2VydmljZRJJCghTZXRTdG9jaxIdLmludmVudG9yeS52MS5TZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuU2V0U3RvY2tSZXNwb25zZRJJCghHZXRTdG9jaxIdLmludmVudG9yeS52MS5HZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuR2V0U3RvY2tSZXNwb25zZRJPCgpMaXN0U3RvY2tzEh8uaW52ZW50b3J5LnYxLkxpc3RTdG9ja3NSZXF1ZXN0GiAuaW52ZW50b3J5LnYxLkxpc3RTdG9ja3NSZXNwb25zZRJbCg5HZXRSZXNlcnZhdGlvbhIjLmludmVudG9yeS52MS5HZXRSZXNlcnZhdGlvblJlcXVlc3QaJC5pbnZlbnRvcnkudjEuR2V0UmVzZXJ2YXRpb25SZXNwb25zZWIGcHJvdG8z", [file_buf_validate_validate, file_inventory_v1_entity]);
 
 /**
  * @generated from message inventory.v1.SetStockRequest
@@ -89,6 +89,56 @@ export const GetStockResponseSchema: GenMessage<GetStockResponse> = /*@__PURE__*
   messageDesc(file_inventory_v1_service, 3);
 
 /**
+ * @generated from message inventory.v1.ListStocksRequest
+ */
+export type ListStocksRequest = Message<"inventory.v1.ListStocksRequest"> & {
+  /**
+   * 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+   *
+   * @generated from field: int32 page_size = 1;
+   */
+  pageSize: number;
+
+  /**
+   * Opaque; from the previous ListStocksResponse.next_page_token.
+   *
+   * @generated from field: string page_token = 2;
+   */
+  pageToken: string;
+};
+
+/**
+ * Describes the message inventory.v1.ListStocksRequest.
+ * Use `create(ListStocksRequestSchema)` to create a new message.
+ */
+export const ListStocksRequestSchema: GenMessage<ListStocksRequest> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 4);
+
+/**
+ * @generated from message inventory.v1.ListStocksResponse
+ */
+export type ListStocksResponse = Message<"inventory.v1.ListStocksResponse"> & {
+  /**
+   * @generated from field: repeated inventory.v1.Stock stocks = 1;
+   */
+  stocks: Stock[];
+
+  /**
+   * Empty when this is the last page.
+   *
+   * @generated from field: string next_page_token = 2;
+   */
+  nextPageToken: string;
+};
+
+/**
+ * Describes the message inventory.v1.ListStocksResponse.
+ * Use `create(ListStocksResponseSchema)` to create a new message.
+ */
+export const ListStocksResponseSchema: GenMessage<ListStocksResponse> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 5);
+
+/**
  * @generated from message inventory.v1.GetReservationRequest
  */
 export type GetReservationRequest = Message<"inventory.v1.GetReservationRequest"> & {
@@ -103,7 +153,7 @@ export type GetReservationRequest = Message<"inventory.v1.GetReservationRequest"
  * Use `create(GetReservationRequestSchema)` to create a new message.
  */
 export const GetReservationRequestSchema: GenMessage<GetReservationRequest> = /*@__PURE__*/
-  messageDesc(file_inventory_v1_service, 4);
+  messageDesc(file_inventory_v1_service, 6);
 
 /**
  * @generated from message inventory.v1.GetReservationResponse
@@ -120,7 +170,7 @@ export type GetReservationResponse = Message<"inventory.v1.GetReservationRespons
  * Use `create(GetReservationResponseSchema)` to create a new message.
  */
 export const GetReservationResponseSchema: GenMessage<GetReservationResponse> = /*@__PURE__*/
-  messageDesc(file_inventory_v1_service, 5);
+  messageDesc(file_inventory_v1_service, 7);
 
 /**
  * InventoryService is the public RPC contract of the inventory bounded context.
@@ -148,6 +198,16 @@ export const InventoryService: GenService<{
     methodKind: "unary";
     input: typeof GetStockRequestSchema;
     output: typeof GetStockResponseSchema;
+  },
+  /**
+   * ListStocks pages through every SKU, ascending by SKU.
+   *
+   * @generated from rpc inventory.v1.InventoryService.ListStocks
+   */
+  listStocks: {
+    methodKind: "unary";
+    input: typeof ListStocksRequestSchema;
+    output: typeof ListStocksResponseSchema;
   },
   /**
    * GetReservation reads the outcome inventory recorded for an order.

@@ -12,6 +12,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/pagination"
 )
 
 type fixedClock struct{ t time.Time }
@@ -33,6 +34,7 @@ type fixture struct {
 	rec          *recorder
 	setStock     *usecase.SetStock
 	getStock     *usecase.GetStock
+	listStocks   *usecase.ListStocks
 	getRes       *usecase.GetReservation
 	reserve      *usecase.ReserveStock
 	release      *usecase.ReleaseStock
@@ -44,6 +46,7 @@ func newFixture() *fixture {
 	f.clock = clock
 	f.setStock = usecase.NewSetStock(f.stocks, clock)
 	f.getStock = usecase.NewGetStock(f.stocks)
+	f.listStocks = usecase.NewListStocks(f.stocks)
 	f.getRes = usecase.NewGetReservation(f.reservations)
 	f.reserve = usecase.NewReserveStock(f.reservations, f.stocks, f.rec, clock)
 	f.release = usecase.NewReleaseStock(f.reservations, f.stocks, f.rec, clock)
@@ -78,6 +81,36 @@ func TestSetGetStock(t *testing.T) {
 	}
 	if _, err := f.getStock.Execute(c, dto.GetStockInput{}); !errors.Is(err, stock.ErrInvalidSKU) {
 		t.Fatalf("empty: %v", err)
+	}
+}
+
+// ListStocks pages ascending by SKU; the token resumes after the last SKU
+// and a tampered token is rejected.
+func TestListStocks(t *testing.T) {
+	c := context.Background()
+	f := newFixture()
+	for _, sku := range []string{"C", "A", "B"} {
+		if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: sku, OnHand: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := f.listStocks.Execute(c, dto.ListStocksInput{PageSize: 2})
+	if err != nil || len(page.Stocks) != 2 || page.Stocks[0].SKU != "A" || page.Stocks[1].SKU != "B" || page.NextPageToken == "" {
+		t.Fatalf("page 1 = %+v, %v", page, err)
+	}
+	last, err := f.listStocks.Execute(c, dto.ListStocksInput{PageSize: 2, PageToken: page.NextPageToken})
+	if err != nil || len(last.Stocks) != 1 || last.Stocks[0].SKU != "C" || last.NextPageToken != "" {
+		t.Fatalf("page 2 = %+v, %v", last, err)
+	}
+	all, err := f.listStocks.Execute(c, dto.ListStocksInput{})
+	if err != nil || len(all.Stocks) != 3 || all.NextPageToken != "" {
+		t.Fatalf("default page = %+v, %v", all, err)
+	}
+	if _, err := f.listStocks.Execute(c, dto.ListStocksInput{PageToken: "not-a-token"}); !errors.Is(err, pagination.ErrInvalidToken) {
+		t.Fatalf("bad token: %v", err)
+	}
+	if _, err := f.listStocks.Execute(c, dto.ListStocksInput{PageSize: -1}); err == nil {
+		t.Fatal("negative page size must fail")
 	}
 }
 

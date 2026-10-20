@@ -332,7 +332,7 @@ Scalar 的 Send request 用 `new URL(server + path)`，相對 server 會噴「Th
 
 ## Web console：`web/apps/console`
 
-一個最小的操作介面，用來證明 `@repo/proto` 真的能被前端用：建單、取消、設庫存，並看 inventory 非同步寫出的
+一個最小的操作介面，用來證明 `@repo/proto` 真的能被前端用：建單、取消、設庫存 / 看全部 SKU，並看 inventory 非同步寫出的
 reservation 狀態。
 
 ```bash
@@ -348,6 +348,7 @@ task web-typecheck  # @repo/proto + @repo/console 的 tsc --noEmit（CI 的 web 
 | 認證 | header 右側的 **Credential**：API key（`X-API-Key`）或 JWT（`Authorization: Bearer`），存 localStorage（`console.credential`），transport 的 interceptor 每次呼叫時讀，改了下一個 RPC 就生效；`VITE_CONSOLE_API_KEY` / `VITE_CONSOLE_TOKEN` 可在 build 時 seed。server `auth.mode: off` 時什麼都不用設 |
 | 資料 | TanStack Query：server 只有 unary RPC，所以 orders 與 reservation 用 `refetchInterval` polling；reservation 到 REJECTED / RELEASED（終態）就停。domain error 不 retry |
 | 路由 | TanStack Router（code-based，`/orders`、`/stock`、`/poison`），不需要額外的 codegen plugin |
+| Stock 頁 | `inventory.v1.InventoryService/ListStocks`（keyset，SKU 升冪，opaque page token）的表格，`useInfiniteQuery` + Load more，每 2s poll 已載入的頁；上方 Set stock 建立 / 覆寫 on hand，列上 Edit 把該 SKU 帶進表單 |
 | Poison 頁 | `admin.v1.AdminService`：各 BC 的 poison 表，Show（metadata + payload base64）/ Requeue / Drop，每個 BC 有 Requeue all / Drop all；server auth 開著時 credential 要帶 `admin` role |
 | UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |
 

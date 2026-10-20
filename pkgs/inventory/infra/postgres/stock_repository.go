@@ -54,6 +54,49 @@ func (i *StockRepository) FindBySKU(c context.Context, sku stock.SKU) (*stock.St
 	})
 }
 
+func (i *StockRepository) List(c context.Context, p stock.ListParams) ([]*stock.Stock, stock.SKU, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+
+	q := platformpg.TxOrDB(ctx, i.db).Order("sku ASC")
+	if p.After != "" {
+		q = q.Where("sku > ?", p.After.String())
+	}
+	if p.Limit > 0 {
+		q = q.Limit(p.Limit + 1)
+	}
+	var rows []stockRow
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, "", fmt.Errorf("list stocks: %w", err)
+	}
+	hasMore := p.Limit > 0 && len(rows) > p.Limit
+	if hasMore {
+		rows = rows[:p.Limit]
+	}
+	out := make([]*stock.Stock, 0, len(rows))
+	for _, row := range rows {
+		s, err := stock.Reconstitute(stock.ReconstituteParams{
+			SKU:       stock.SKU(row.SKU),
+			OnHand:    row.OnHand,
+			Reserved:  row.Reserved,
+			Version:   row.Version,
+			UpdatedAt: row.UpdatedAt.UTC(),
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, s)
+	}
+	var next stock.SKU
+	if hasMore {
+		next = out[len(out)-1].SKU()
+	}
+
+	return out, next, nil
+}
+
 // Save inserts a never-saved stock (Version 0) with version 1, or updates a
 // loaded one `WHERE version = <loaded>`, bumping it. Both ways a lost race is
 // ErrStale: a second insert of the same SKU hits the primary key, an update

@@ -97,6 +97,22 @@ func TestRepositories_Postgres(t *testing.T) {
 		t.Fatalf("fresh over existing: %v", err)
 	}
 
+	// ── stock: keyset listing ascending by SKU ─────────────────────────────
+	for _, sku := range []string{"C", "B"} {
+		s, _ := stock.New(stock.SKU(sku), 1, now)
+		if err := stocks.Save(c, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, next, err := stocks.List(c, stock.ListParams{Limit: 2})
+	if err != nil || len(page) != 2 || page[0].SKU() != "A" || page[1].SKU() != "B" || next != "B" {
+		t.Fatalf("list page 1 = %v next=%q err=%v", page, next, err)
+	}
+	page, next, err = stocks.List(c, stock.ListParams{Limit: 2, After: next})
+	if err != nil || len(page) != 1 || page[0].SKU() != "C" || page[0].Version() != 1 || next != "" {
+		t.Fatalf("list page 2 = %v next=%q err=%v", page, next, err)
+	}
+
 	// ── reservation: add, duplicate, round trip with shortfall, update ─────
 	line := func(sku string, qty int32) reservation.Line {
 		l, err := reservation.NewLine(sku, qty)

@@ -41,6 +41,7 @@ var ProviderSet = wire.NewSet(
 	// message.Publisher (outbox) are shared across BCs: apps provide them.
 	ProvideSetStock,
 	ProvideGetStock,
+	ProvideListStocks,
 	ProvideGetReservation,
 	ProvideReserveStock,
 	ProvideReleaseStock,
@@ -123,6 +124,10 @@ func ProvideSetStock(stocks stock.Repository, tx port.Transactor, clock port.Clo
 
 func ProvideGetStock(stocks stock.Repository, rec *usecasex.Recorder) rpc.GetStockUC {
 	return decorate("inventory.get_stock", rec, usecase.NewGetStock(stocks))
+}
+
+func ProvideListStocks(stocks stock.Repository, rec *usecasex.Recorder) rpc.ListStocksUC {
+	return decorate("inventory.list_stocks", rec, usecase.NewListStocks(stocks))
 }
 
 func ProvideGetReservation(reservations reservation.Repository, rec *usecasex.Recorder) rpc.GetReservationUC {

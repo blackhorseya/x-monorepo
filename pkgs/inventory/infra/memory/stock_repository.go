@@ -5,6 +5,7 @@ package memory
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
@@ -65,6 +66,39 @@ func (i *StockRepository) Save(c context.Context, s *stock.Stock) error {
 	i.data[s.SKU()] = cp
 
 	return nil
+}
+
+func (i *StockRepository) List(c context.Context, p stock.ListParams) ([]*stock.Stock, stock.SKU, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	skus := make([]stock.SKU, 0, len(i.data))
+	for sku := range i.data {
+		if sku > p.After {
+			skus = append(skus, sku)
+		}
+	}
+	slices.Sort(skus)
+	var next stock.SKU
+	if p.Limit > 0 && len(skus) > p.Limit {
+		skus = skus[:p.Limit]
+		next = skus[p.Limit-1]
+	}
+	out := make([]*stock.Stock, 0, len(skus))
+	for _, sku := range skus {
+		cp, err := cloneStock(i.data[sku], i.data[sku].Version())
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, cp)
+	}
+
+	return out, next, nil
 }
 
 func cloneStock(s *stock.Stock, version int64) (*stock.Stock, error) {

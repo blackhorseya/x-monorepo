@@ -131,6 +131,35 @@ components:
           title: stock
       title: GetStockResponse
       additionalProperties: false
+    inventory.v1.ListStocksRequest:
+      type: object
+      properties:
+        pageSize:
+          type: integer
+          title: page_size
+          minimum: 0
+          format: int32
+          description: 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+        pageToken:
+          type: string
+          title: page_token
+          description: Opaque; from the previous ListStocksResponse.next_page_token.
+      title: ListStocksRequest
+      additionalProperties: false
+    inventory.v1.ListStocksResponse:
+      type: object
+      properties:
+        stocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/inventory.v1.Stock'
+          title: stocks
+        nextPageToken:
+          type: string
+          title: next_page_token
+          description: Empty when this is the last page.
+      title: ListStocksResponse
+      additionalProperties: false
     inventory.v1.Reservation:
       type: object
       properties:
@@ -361,6 +390,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/inventory.v1.GetStockResponse'
+  /inventory.v1.InventoryService/ListStocks:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: ListStocks
+      description: ListStocks pages through every SKU, ascending by SKU.
+      operationId: inventory.v1.InventoryService.ListStocks
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.ListStocksRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.ListStocksResponse'
   /inventory.v1.InventoryService/SetStock:
     post:
       tags:

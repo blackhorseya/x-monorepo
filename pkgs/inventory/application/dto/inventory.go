@@ -41,6 +41,16 @@ type GetStockInput struct {
 	SKU string
 }
 
+type ListStocksInput struct {
+	PageSize  int32  // 0 = default
+	PageToken string // "" = first page
+}
+
+type ListStocksOutput struct {
+	Stocks        []StockOutput
+	NextPageToken string // "" = last page
+}
+
 type StockOutput struct {
 	SKU       string
 	OnHand    int32
