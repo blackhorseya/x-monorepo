@@ -120,10 +120,17 @@ func TestServer_Serve_GracefulShutdown(t *testing.T) {
 	shutdownAt := time.Now()
 	cancel()
 
-	// Inside the delay window: not ready, still alive, still serving.
-	code, body, err := get(t, clients["http1"], base+ReadyzPath)
-	if err != nil || code != http.StatusServiceUnavailable || !strings.Contains(body, `"server":"draining"`) {
-		t.Fatalf("ready during drain = %d %q, %v", code, body, err)
+	// Inside the delay window: not ready (polled: Serve flips the flag on
+	// its own goroutine), still alive, still serving.
+	for {
+		code, body, err := get(t, clients["http1"], base+ReadyzPath)
+		if err == nil && code == http.StatusServiceUnavailable && strings.Contains(body, `"server":"draining"`) {
+			break
+		}
+		if time.Since(shutdownAt) > delay/2 {
+			t.Fatalf("ready during drain = %d %q, %v", code, body, err)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if code, _, err := get(t, clients["http1"], base+HealthzPath); err != nil || code != 200 {
 		t.Fatalf("live during drain = %d, %v", code, err)

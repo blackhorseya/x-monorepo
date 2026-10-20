@@ -13,11 +13,11 @@ import (
 // a close timeout before the drain gives up.
 const DefaultDrainTimeout = 8 * time.Second
 
-// settle is how long after the last ack the inner subscriber keeps its
+// ackSettle is how long after the last ack the inner subscriber keeps its
 // context: the SQL subscriber commits the offset (and the Redis one XACKs)
 // right after the ack, through that context. Cancelling it in that window
 // would roll the ack back and the message would be seen again after restart.
-const settle = time.Second
+const ackSettle = time.Second
 
 // Draining wraps sub so cancelling the Subscribe context stops taking new
 // messages but does not abort the one being handled: it keeps a live context
@@ -111,12 +111,12 @@ func (d *draining) await(c context.Context, msg *message.Message) bool {
 	}
 }
 
-// settle waits until settle has passed since lastDone (see the constant).
+// settle waits until ackSettle has passed since lastDone.
 func (d *draining) settle(lastDone time.Time) {
 	if lastDone.IsZero() {
 		return
 	}
-	if wait := settle - time.Since(lastDone); wait > 0 {
+	if wait := ackSettle - time.Since(lastDone); wait > 0 {
 		time.Sleep(wait)
 	}
 }
