@@ -12,6 +12,14 @@ http:
   # least one readiness probe period), then give in-flight requests shutdown_timeout.
   shutdown_delay: 0s
   shutdown_timeout: 15s
+  # server-side deadline of one RPC: the use case's context expires, the client gets
+  # DEADLINE_EXCEEDED (x-error-code request.timeout). 0 = none.
+  timeout: 10s
+  # token bucket on RPCs, outside auth: rps 0 = off; burst 0 = rps; by: global | peer (client IP)
+  rate_limit:
+    rps: 0
+    burst: 0
+    by: global
 
 auth:
   # off: every call is anonymous (local dev, E2E). optional: a credential is verified when sent.

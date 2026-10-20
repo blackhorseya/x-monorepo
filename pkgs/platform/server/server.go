@@ -61,8 +61,10 @@ type Server struct {
 // of the OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
 // OpenTelemetry span (otelconnect, outermost) and a request logger carrying
 // its trace_id and request_id, and every response carries X-Request-Id /
-// X-Trace-Id (see meta.go); auth (auth.go, when auth.Mode is not off) resolves
-// the caller to a contextx.Principal; plain HTTP routes (docs, openapi) get spans from otelgin,
+// X-Trace-Id (see meta.go); the rate limit (limits.go, when cfg.RateLimit.RPS
+// is set) drops a flood; auth (auth.go, when auth.Mode is not off) resolves
+// the caller to a contextx.Principal; the timeout (limits.go, cfg.Timeout)
+// bounds the rest; plain HTTP routes (docs, openapi) get spans from otelgin,
 // which skips RPC prefixes, the probes and /api/metrics so nothing is traced twice.
 func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
@@ -89,14 +91,28 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if err != nil {
 		return nil, err
 	}
-	// Outermost first: auth and validation are inside logging so a rejected
-	// request is still traced, logged (code unauthenticated / invalid_argument)
-	// and carries X-Request-Id; auth before validation so an anonymous caller
-	// learns nothing about the request rules.
+	limiter, err := NewRateLimitInterceptor(cfg.RateLimit)
+	if err != nil {
+		return nil, err
+	}
+	// Outermost first: everything that rejects is inside logging so a
+	// rejected request is still traced, logged (its code) and carries
+	// X-Request-Id. Rate limit before auth so a flood is dropped before each
+	// request pays for a credential check; timeout after auth so the
+	// deadline covers validation and the use case, not credential parsing;
+	// auth before validation so an anonymous caller learns nothing about
+	// the request rules.
 	interceptors := []connect.Interceptor{tracing, NewMetaInterceptor(), NewLoggingInterceptor(logger)}
+	if limiter != nil {
+		interceptors = append(interceptors, limiter)
+		logger.Info("rate limit enabled", "rps", cfg.RateLimit.RPS, "burst", cfg.RateLimit.Burst, "by", cfg.RateLimit.By)
+	}
 	if authn != nil {
 		interceptors = append(interceptors, authn)
 		logger.Info("auth enabled", "mode", auth.Mode, "public", auth.Public)
+	}
+	if deadline := NewTimeoutInterceptor(cfg.Timeout); deadline != nil {
+		interceptors = append(interceptors, deadline)
 	}
 	opts := connect.WithInterceptors(append(interceptors, validate)...)
 	prefixes := make([]string, 0, len(routes))
