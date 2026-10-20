@@ -43,7 +43,7 @@ import (
 
 func TestRun_RequiresPostgres(t *testing.T) {
 	t.Setenv("APP_POSTGRES_URL", "")
-	if err := run(); err == nil {
+	if err := run(nil); err == nil {
 		t.Fatal("missing postgres.url should fail")
 	}
 }

@@ -251,6 +251,15 @@ tasks:
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/worker']
 
+  poison:
+    desc: 'task poison -- list|show|requeue|drop … → operate a BC''s poison table via ./bin/worker poison (task poison -- --help)'
+    deps: [build, config]
+    preconditions:
+      - sh: test -n "{{.CLI_ARGS}}"
+        msg: 'usage: task poison -- list [-n 50] [<bc>] | show <bc> <offset> | requeue <bc> <offset>...|all | drop <bc> <offset>...|all'
+    env: { APP_CONFIG: '{{.CONFIG}}' }
+    cmds: ['{{.BIN_DIR}}/worker poison {{.CLI_ARGS}}']
+
   # ── Web (web/: pnpm + Turborepo) ────────────────────────────────────────────
 
   web-install:
