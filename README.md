@@ -369,7 +369,7 @@ task migrate -- up   # 自動 seed 的 configs/local.yaml 已把 postgres.url �
 task run             # app 在本機跑，不進容器
 task worker          # 事件 consumer process（另開一個 terminal）
 task compose-down    # 連 volume 一起清
-task grafana-reload  # 改了 deployments/docker/grafana/dashboards/*.json 之後
+task grafana-reload  # 改了 deployments/docker/grafana/{dashboards/*.json,provisioning/alerting.yaml} 之後
 ```
 
 **Grafana dashboard 由 repo provision**：`deployments/docker/grafana/provisioning/dashboards.yaml` 掛進 otel-lgtm 的
@@ -386,6 +386,20 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 | HTTP routes | `http_server_request_duration_seconds`（otelgin） | `/api/*` 的 route / status、p95 |
 | Go runtime | `go_goroutine_count`、`go_memory_used_bytes`… | OTel runtime instrumentation 的名字，OTLP 與 `/api/metrics` 相同。`/api/metrics` 用自建 registry，沒有 client_golang 的 `go_memstats_*`、`process_*` |
 | Logs | Loki `{service_name="$service"} \| severity_text=~"WARN\|ERROR"` | severity 是 structured metadata，要用 `\|` 不是 `\|=` |
+
+Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/alerting.yaml` → folder `x-monorepo`、group
+`worker-eventbus`，每分鐘評估，全部用 `max by`，gauge 是 per replica 不能 sum）：
+
+| rule | 條件 | 意思 / 怎麼處理 |
+|---|---|---|
+| Eventbus consumer lag | `eventbus_consumer_lag` > 100 持續 5m | handler 追不上或沒人在消費；看 oldest age 分辨，再加 worker replica |
+| Eventbus consumer stalled | `eventbus_consumer_oldest_age_seconds` > 600 持續 5m | 該 group 完全沒前進（通常是 subscriber 連不到 DB / Redis，不是 handler 失敗——失敗的會進 poison） |
+| Eventbus poison messages | `eventbus_poison_messages` > 0 持續 1m | 有訊息停在 poison 表，`task poison -- list` 看、`requeue` / `drop` 解，alert 隨 gauge 歸零 |
+| Eventbus metrics absent | `absent(eventbus_consumer_lag)` 持續 10m | 沒有 worker 在匯出，上面三條都是瞎的 |
+
+每條都帶 `__dashboardUid__` / `__panelId__`，所以「Worker — eventbus」的 panel 上會畫 alert 狀態。只有 rule 沒有送達：contact point /
+notification policy 由部署環境依 `severity` label 自己接（Grafana → Alerting → Notification policies）。Alerting provisioning
+只在啟動時讀，改完一樣 `task grafana-reload`。
 
 踩雷：Grafana 13 的 file provisioner 用 inotify 監看資料夾，podman machine / Docker Desktop 的 bind mount 在 macOS 上
 不會把事件傳進容器，所以改 JSON 不會自動重載 → `task grafana-reload`。另外 OTLP 的 metric export 間隔 60s，

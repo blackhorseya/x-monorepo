@@ -1,0 +1,149 @@
+# Grafana-managed alert rules for the worker's event bus, provisioned from the repo
+# (mounted into otel-lgtm at /otel-lgtm/grafana/conf/provisioning/alerting/x-monorepo.yaml).
+# Alerting provisioning is read at startup only: after editing run `task grafana-reload`.
+#
+# They evaluate the gauges apps/worker exports (platform/eventbus.Lag): each is per replica,
+# so every rule aggregates with max, never sum. Thresholds are a laptop/demo starting point —
+# a deployment tunes them here, and routes them by attaching a notification policy to the
+# severity label (nothing is provisioned for delivery: the alerts show in Alerting → Alert rules
+# and as state on the "Worker — eventbus" panels of the x-monorepo / service dashboard).
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: worker-eventbus
+    folder: x-monorepo
+    interval: 1m
+    rules:
+      # Backlog is growing faster than the handlers drain it (or nobody is consuming).
+      - uid: x-monorepo-eventbus-lag
+        title: Eventbus consumer lag
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max by (topic, consumer_group, broker) (eventbus_consumer_lag)
+              legendFormat: "{{topic}} {{consumer_group}} ({{broker}})"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [100] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: worker }
+        annotations:
+          summary: "{{ $labels.consumer_group }} is {{ $values.A }} messages behind on {{ $labels.topic }}"
+          description: >-
+            eventbus_consumer_lag has been above 100 for 5 minutes. Either the handlers are slower than the producers
+            (scale the worker: replicas sharing worker.consumer_group split the work) or no worker is consuming
+            this group. Oldest-age tells which: a growing age with a flat lag means nothing is being acked.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "25"
+
+      # The head of the queue is old: consumption stalled, whatever the count says.
+      - uid: x-monorepo-eventbus-stale
+        title: Eventbus consumer stalled
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max by (topic, consumer_group, broker) (eventbus_consumer_oldest_age_seconds)
+              legendFormat: "{{topic}} {{consumer_group}} ({{broker}})"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [600] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical, service: worker }
+        annotations:
+          summary: "oldest unacked message on {{ $labels.topic }} for {{ $labels.consumer_group }} is {{ $values.A }}s old"
+          description: >-
+            eventbus_consumer_oldest_age_seconds has been above 10 minutes for 5 minutes: the group is not making
+            progress on this topic. Check the worker is running and healthy, then its logs for the handler
+            (one "message" line per attempt) — a message that keeps failing is retried then parked on the poison
+            table, so a *stuck* head usually means the subscriber itself is blocked (DB / Redis connectivity).
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "26"
+
+      # Something is parked: a human has to look (worker poison list / show / requeue / drop).
+      - uid: x-monorepo-eventbus-poison
+        title: Eventbus poison messages
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max by (topic) (eventbus_poison_messages)
+              legendFormat: "{{topic}}"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: worker }
+        annotations:
+          summary: "{{ $values.A }} message(s) parked on {{ $labels.topic }}"
+          description: >-
+            A handler gave up on these after every retry; nothing consumes the poison table, so the alert stays
+            until an operator acts: `task poison -- list` (or `worker poison list` in the image) shows them with
+            the last error, `show <bc> <offset>` the payload, then `requeue` (after the fix) or `drop`.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "27"
+
+      # No lag series at all: no worker is exporting, so the rules above cannot fire either.
+      - uid: x-monorepo-eventbus-absent
+        title: Eventbus metrics absent
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: absent(eventbus_consumer_lag)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: worker }
+        annotations:
+          summary: "no worker has exported eventbus_consumer_lag for 10 minutes"
+          description: >-
+            The lag and poison rules are silent without this series. Either no worker is running, or its OTLP
+            export is not reaching the collector (otel.endpoint).
