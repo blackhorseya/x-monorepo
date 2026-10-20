@@ -9,126 +9,18 @@ info:
     the stable domain code in the `X-Error-Code` response header.
 servers:
   - url: /api
-paths:
-  /inventory.v1.InventoryService/GetReservation:
-    post:
-      tags:
-        - inventory.v1.InventoryService
-      summary: GetReservation
-      description: GetReservation reads the outcome inventory recorded for an order.
-      operationId: inventory.v1.InventoryService.GetReservation
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/inventory.v1.GetReservationRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/inventory.v1.GetReservationResponse'
-  /inventory.v1.InventoryService/GetStock:
-    post:
-      tags:
-        - inventory.v1.InventoryService
-      summary: GetStock
-      operationId: inventory.v1.InventoryService.GetStock
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/inventory.v1.GetStockRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/inventory.v1.GetStockResponse'
-  /inventory.v1.InventoryService/SetStock:
-    post:
-      tags:
-        - inventory.v1.InventoryService
-      summary: SetStock
-      description: |-
-        SetStock sets the on-hand quantity of a SKU (creates it when unknown).
-         Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
-      operationId: inventory.v1.InventoryService.SetStock
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/inventory.v1.SetStockRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/inventory.v1.SetStockResponse'
 components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Static key from `auth.api_keys` (`name=key[:role|role]`); the principal's subject is the name.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (HS256 secret or PEM public key); claims sub / name / roles.
   schemas:
     connect-protocol-version:
       type: number
@@ -388,7 +280,128 @@ components:
           format: int32
       title: StockReservedLine
       additionalProperties: false
-security: []
+security:
+  - apiKey: []
+  - bearer: []
+paths:
+  /inventory.v1.InventoryService/GetReservation:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: GetReservation
+      description: GetReservation reads the outcome inventory recorded for an order.
+      operationId: inventory.v1.InventoryService.GetReservation
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.GetReservationRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.GetReservationResponse'
+  /inventory.v1.InventoryService/GetStock:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: GetStock
+      operationId: inventory.v1.InventoryService.GetStock
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.GetStockRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.GetStockResponse'
+  /inventory.v1.InventoryService/SetStock:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: SetStock
+      description: |-
+        SetStock sets the on-hand quantity of a SKU (creates it when unknown).
+         Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
+      operationId: inventory.v1.InventoryService.SetStock
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.SetStockRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.SetStockResponse'
 tags:
   - name: inventory.v1.InventoryService
     description: |-

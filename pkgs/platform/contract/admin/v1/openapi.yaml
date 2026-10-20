@@ -9,170 +9,18 @@ info:
     otherwise `PERMISSION_DENIED` with `X-Error-Code: auth.permission_denied`.
 servers:
   - url: /api
-paths:
-  /admin.v1.AdminService/DropPoison:
-    post:
-      tags:
-        - admin.v1.AdminService
-      summary: DropPoison
-      description: DropPoison deletes parked messages for good.
-      operationId: admin.v1.AdminService.DropPoison
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/admin.v1.DropPoisonRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/admin.v1.DropPoisonResponse'
-  /admin.v1.AdminService/GetPoison:
-    post:
-      tags:
-        - admin.v1.AdminService
-      summary: GetPoison
-      description: GetPoison returns one parked message in full (metadata + payload).
-      operationId: admin.v1.AdminService.GetPoison
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/admin.v1.GetPoisonRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/admin.v1.GetPoisonResponse'
-  /admin.v1.AdminService/ListPoison:
-    post:
-      tags:
-        - admin.v1.AdminService
-      summary: ListPoison
-      description: |-
-        ListPoison returns the messages parked on one BC's poison table, oldest
-         first (nothing consumes it, so this is the whole backlog).
-      operationId: admin.v1.AdminService.ListPoison
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/admin.v1.ListPoisonRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/admin.v1.ListPoisonResponse'
-  /admin.v1.AdminService/RequeuePoison:
-    post:
-      tags:
-        - admin.v1.AdminService
-      summary: RequeuePoison
-      description: |-
-        RequeuePoison publishes parked messages back onto the topic each was
-         consumed from (same message id, poison metadata removed) and unparks
-         them in the same transaction. Every consumer group behind the topic
-         handles them again; a message that fails again is parked again.
-      operationId: admin.v1.AdminService.RequeuePoison
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/admin.v1.RequeuePoisonRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/admin.v1.RequeuePoisonResponse'
 components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Static key from `auth.api_keys` (`name=key[:role|role]`); the principal's subject is the name.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (HS256 secret or PEM public key); claims sub / name / roles.
   schemas:
     admin.v1.DropPoisonRequest:
       type: object
@@ -404,7 +252,172 @@ components:
         - "2024-12-25T12:00:00Z"
       format: date-time
       description: A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC.
-security: []
+security:
+  - apiKey: []
+  - bearer: []
+paths:
+  /admin.v1.AdminService/DropPoison:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: DropPoison
+      description: DropPoison deletes parked messages for good.
+      operationId: admin.v1.AdminService.DropPoison
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.DropPoisonRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.DropPoisonResponse'
+  /admin.v1.AdminService/GetPoison:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: GetPoison
+      description: GetPoison returns one parked message in full (metadata + payload).
+      operationId: admin.v1.AdminService.GetPoison
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.GetPoisonRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.GetPoisonResponse'
+  /admin.v1.AdminService/ListPoison:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: ListPoison
+      description: |-
+        ListPoison returns the messages parked on one BC's poison table, oldest
+         first (nothing consumes it, so this is the whole backlog).
+      operationId: admin.v1.AdminService.ListPoison
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.ListPoisonRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.ListPoisonResponse'
+  /admin.v1.AdminService/RequeuePoison:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: RequeuePoison
+      description: |-
+        RequeuePoison publishes parked messages back onto the topic each was
+         consumed from (same message id, poison metadata removed) and unparks
+         them in the same transaction. Every consumer group behind the topic
+         handles them again; a message that fails again is parked again.
+      operationId: admin.v1.AdminService.RequeuePoison
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.RequeuePoisonRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.RequeuePoisonResponse'
 tags:
   - name: admin.v1.AdminService
     description: |-

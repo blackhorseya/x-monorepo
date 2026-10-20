@@ -9,164 +9,18 @@ info:
     the stable domain code in the `X-Error-Code` response header.
 servers:
   - url: /api
-paths:
-  /ordering.v1.OrderService/CancelOrder:
-    post:
-      tags:
-        - ordering.v1.OrderService
-      summary: CancelOrder
-      operationId: ordering.v1.OrderService.CancelOrder
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ordering.v1.CancelOrderRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ordering.v1.CancelOrderResponse'
-  /ordering.v1.OrderService/CreateOrder:
-    post:
-      tags:
-        - ordering.v1.OrderService
-      summary: CreateOrder
-      operationId: ordering.v1.OrderService.CreateOrder
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ordering.v1.CreateOrderRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ordering.v1.CreateOrderResponse'
-  /ordering.v1.OrderService/GetOrder:
-    post:
-      tags:
-        - ordering.v1.OrderService
-      summary: GetOrder
-      operationId: ordering.v1.OrderService.GetOrder
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ordering.v1.GetOrderRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ordering.v1.GetOrderResponse'
-  /ordering.v1.OrderService/ListOrders:
-    post:
-      tags:
-        - ordering.v1.OrderService
-      summary: ListOrders
-      description: |-
-        ListOrders pages through orders newest first (create_time desc, id desc).
-         Cursor pagination per AIP-158: pass next_page_token back unchanged with the
-         SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
-      operationId: ordering.v1.OrderService.ListOrders
-      parameters:
-        - name: Connect-Protocol-Version
-          in: header
-          description: Define the version of the Connect protocol
-          schema:
-            $ref: '#/components/schemas/connect-protocol-version'
-          example: 1
-        - name: Connect-Timeout-Ms
-          in: header
-          description: Define the timeout, in ms
-          schema:
-            $ref: '#/components/schemas/connect-timeout-header'
-          example: 1000
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ordering.v1.ListOrdersRequest'
-        required: true
-      responses:
-        default:
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/connect.error'
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ordering.v1.ListOrdersResponse'
 components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Static key from `auth.api_keys` (`name=key[:role|role]`); the principal's subject is the name.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (HS256 secret or PEM public key); claims sub / name / roles.
   schemas:
     common.v1.Money:
       type: object
@@ -490,7 +344,166 @@ components:
         - ORDER_STATUS_UNSPECIFIED
         - ORDER_STATUS_PENDING
         - ORDER_STATUS_CANCELLED
-security: []
+security:
+  - apiKey: []
+  - bearer: []
+paths:
+  /ordering.v1.OrderService/CancelOrder:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: CancelOrder
+      operationId: ordering.v1.OrderService.CancelOrder
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.CancelOrderRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.CancelOrderResponse'
+  /ordering.v1.OrderService/CreateOrder:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: CreateOrder
+      operationId: ordering.v1.OrderService.CreateOrder
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.CreateOrderRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.CreateOrderResponse'
+  /ordering.v1.OrderService/GetOrder:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: GetOrder
+      operationId: ordering.v1.OrderService.GetOrder
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.GetOrderRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.GetOrderResponse'
+  /ordering.v1.OrderService/ListOrders:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: ListOrders
+      description: |-
+        ListOrders pages through orders newest first (create_time desc, id desc).
+         Cursor pagination per AIP-158: pass next_page_token back unchanged with the
+         SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+      operationId: ordering.v1.OrderService.ListOrders
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.ListOrdersRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.ListOrdersResponse'
 tags:
   - name: ordering.v1.OrderService
     description: |-
