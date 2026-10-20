@@ -166,8 +166,11 @@ tasks:
       - task: gen-openapi
 
   gen-openapi:
-    desc: per-BC OpenAPI (Connect semantics) → pkgs/<bc>/contract/v1/openapi.yaml
+    desc: per-BC OpenAPI (Connect semantics) → pkgs/<bc>/contract/v1/openapi.yaml (+ platform's admin.v1)
     cmds:
+      - >-
+        {{.BUF}} generate --path protos/admin --template
+        '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/platform/contract/admin/v1","opt":["path=openapi.yaml","base=protos/admin/v1/openapi.base.yaml"]}]}'
       - for: { var: BCS }
         cmd: >-
           {{.BUF}} generate --path protos/{{.ITEM}} --template

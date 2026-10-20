@@ -15,6 +15,9 @@ managed:
       path: common/v1
       value: github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1;commonv1
     - file_option: go_package
+      path: admin/v1
+      value: github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1;adminv1
+    - file_option: go_package
       path: ordering/v1
       value: github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1
     - file_option: go_package

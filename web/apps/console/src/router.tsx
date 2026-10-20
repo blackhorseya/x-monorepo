@@ -1,6 +1,7 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { CredentialControl } from "./components/credential";
 import { OrdersPage } from "./routes/orders";
+import { PoisonPage } from "./routes/poison";
 import { StockPage } from "./routes/stock";
 
 const rootRoute = createRootRoute({
@@ -12,6 +13,7 @@ const rootRoute = createRootRoute({
           {[
             { to: "/orders", label: "Orders" },
             { to: "/stock", label: "Stock" },
+            { to: "/poison", label: "Poison" },
           ].map((l) => (
             <Link key={l.to} to={l.to} activeProps={{ className: "text-foreground font-medium" }}>
               {l.label}
@@ -35,9 +37,10 @@ const indexRoute = createRoute({
 
 const ordersRoute = createRoute({ getParentRoute: () => rootRoute, path: "/orders", component: OrdersPage });
 const stockRoute = createRoute({ getParentRoute: () => rootRoute, path: "/stock", component: StockPage });
+const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: PoisonPage });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, stockRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, stockRoute, poisonRoute]),
   defaultPreload: "intent",
 });
 

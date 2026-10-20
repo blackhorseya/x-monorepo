@@ -45,8 +45,13 @@ const (
 // authenticator verifies one kind of credential already extracted from the
 // request. Verifying is constant-time where the credential is a secret.
 type authenticator struct {
-	keys map[[32]byte]string // sha256(key) → name
+	keys map[[32]byte]apiKey // sha256(key) → who
 	jwt  *jwtVerifier
+}
+
+type apiKey struct {
+	name  string
+	roles []string
 }
 
 // NewAuthInterceptor builds the interceptor for cfg. With auth.mode off it
@@ -119,12 +124,12 @@ func (a *authenticator) authenticate(apiKey, authorization string) (contextx.Pri
 		if a.keys == nil {
 			return contextx.Principal{}, true, errors.New("api keys are not accepted")
 		}
-		name, ok := a.keys[sha256.Sum256([]byte(apiKey))]
+		k, ok := a.keys[sha256.Sum256([]byte(apiKey))]
 		if !ok {
 			return contextx.Principal{}, true, errors.New("unknown api key")
 		}
 
-		return contextx.Principal{Subject: name, Method: MethodAPIKey}, true, nil
+		return contextx.Principal{Subject: k.name, Roles: k.roles, Method: MethodAPIKey}, true, nil
 	}
 	if authorization != "" {
 		scheme, token, _ := strings.Cut(authorization, " ")
@@ -142,22 +147,29 @@ func (a *authenticator) authenticate(apiKey, authorization string) (contextx.Pri
 	return contextx.Principal{}, false, nil
 }
 
-// parseAPIKeys reads "name=key[,name=key…]". Keys are kept and looked up as
-// SHA-256 digests, so the comparison does not leak the key by timing and a
-// config dump does not show it.
-func parseAPIKeys(s string) (map[[32]byte]string, error) {
-	keys := map[[32]byte]string{}
+// parseAPIKeys reads "name=key[:role|role…][,name=key…]". Keys are kept and
+// looked up as SHA-256 digests, so the comparison does not leak the key by
+// timing and a config dump does not show it.
+func parseAPIKeys(s string) (map[[32]byte]apiKey, error) {
+	keys := map[[32]byte]apiKey{}
 	for _, pair := range strings.Split(s, ",") {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue
 		}
-		name, key, ok := strings.Cut(pair, "=")
+		name, rest, ok := strings.Cut(pair, "=")
+		key, roleList, _ := strings.Cut(rest, ":")
 		name, key = strings.TrimSpace(name), strings.TrimSpace(key)
 		if !ok || name == "" || len(key) < 16 {
-			return nil, fmt.Errorf("auth: api_keys entry %q: want name=key with a key of at least 16 characters", name)
+			return nil, fmt.Errorf("auth: api_keys entry %q: want name=key[:role|role] with a key of at least 16 characters", name)
 		}
-		keys[sha256.Sum256([]byte(key))] = name
+		var roles []string
+		for _, r := range strings.Split(roleList, "|") {
+			if r = strings.TrimSpace(r); r != "" {
+				roles = append(roles, r)
+			}
+		}
+		keys[sha256.Sum256([]byte(key))] = apiKey{name: name, roles: roles}
 	}
 	if len(keys) == 0 {
 		return nil, errors.New("auth: api_keys is set but holds no name=key entry")
@@ -233,6 +245,29 @@ func (v *jwtVerifier) verify(token string) (contextx.Principal, error) {
 	}
 
 	return contextx.Principal{Subject: cl.Subject, Name: cl.Name, Roles: cl.Roles, Method: MethodJWT}, nil
+}
+
+// PermissionDeniedCode is the x-error-code when the principal is known but
+// lacks what the procedure requires (see RequireRole).
+const PermissionDeniedCode = "auth.permission_denied"
+
+// RequireRole is the one authorization helper the platform offers, for its
+// own admin surface: with auth off it allows everything (the deployment chose
+// no auth); otherwise the principal must exist and hold role. Returns a
+// connect error ready to be returned from a handler.
+func RequireRole(c context.Context, cfg config.Auth, role string) error {
+	if cfg.Mode == config.AuthOff || cfg.Mode == "" {
+		return nil
+	}
+	p := contextx.PrincipalFrom(c)
+	if p.IsAnonymous() {
+		return authError(connect.CodeUnauthenticated, UnauthenticatedCode, errors.New("credentials required"))
+	}
+	if !p.HasRole(role) {
+		return authError(connect.CodePermissionDenied, PermissionDeniedCode, fmt.Errorf("role %q required", role))
+	}
+
+	return nil
 }
 
 func authError(code connect.Code, errorCode string, err error) error {

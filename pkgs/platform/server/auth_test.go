@@ -90,7 +90,7 @@ func TestAuthInterceptor_Off(t *testing.T) {
 }
 
 func TestAuthInterceptor_Modes(t *testing.T) {
-	keys := "ci=ci-key-0123456789abcdef, console = console-key-0123456789"
+	keys := "ci=ci-key-0123456789abcdef:admin|ops, console = console-key-0123456789"
 	now := time.Now()
 	valid := token(t, []byte(secret), jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": "u-1", "name": "Ann", "roles": []string{"admin"}, "iss": "x", "aud": "api", "exp": now.Add(time.Minute).Unix(),
@@ -148,8 +148,11 @@ func TestAuthInterceptor_Modes(t *testing.T) {
 			if tt.wantSub == "u-1" && (p.Name != "Ann" || !p.HasRole("admin") || p.Method != server.MethodJWT) {
 				t.Fatalf("jwt principal = %+v", p)
 			}
-			if tt.wantSub == "console" && p.Method != server.MethodAPIKey {
+			if tt.wantSub == "console" && (p.Method != server.MethodAPIKey || len(p.Roles) != 0) {
 				t.Fatalf("api key principal = %+v", p)
+			}
+			if tt.wantSub == "ci" && (!p.HasRole("admin") || !p.HasRole("ops") || p.HasRole("root")) {
+				t.Fatalf("api key roles = %+v", p)
 			}
 		})
 	}
@@ -183,5 +186,26 @@ func TestAuthInterceptor_AlgorithmPinned(t *testing.T) {
 	_, err = call(t, config.Auth{Mode: config.AuthOptional, APIKeys: "ci=ci-key-0123456789abcdef"}, "/a.v1.S/Get", map[string]string{server.AuthorizationHeader: "Bearer " + good})
 	if code, ec := errCode(err); code != connect.CodeUnauthenticated || ec != server.InvalidCredentialCode {
 		t.Fatalf("bearer with only api keys = %v", err)
+	}
+}
+
+func TestRequireRole(t *testing.T) {
+	c := context.Background()
+	admin := contextx.WithPrincipal(c, contextx.Principal{Subject: "a", Roles: []string{"admin"}})
+	user := contextx.WithPrincipal(c, contextx.Principal{Subject: "u"})
+	off := config.Auth{Mode: config.AuthOff}
+	on := config.Auth{Mode: config.AuthRequired}
+
+	if err := server.RequireRole(c, off, "admin"); err != nil {
+		t.Fatalf("auth off must allow: %v", err)
+	}
+	if err := server.RequireRole(admin, on, "admin"); err != nil {
+		t.Fatalf("admin must pass: %v", err)
+	}
+	if code, ec := errCode(server.RequireRole(user, on, "admin")); code != connect.CodePermissionDenied || ec != server.PermissionDeniedCode {
+		t.Fatalf("user = %s %s", code, ec)
+	}
+	if code, ec := errCode(server.RequireRole(c, on, "admin")); code != connect.CodeUnauthenticated || ec != server.UnauthenticatedCode {
+		t.Fatalf("anonymous = %s %s", code, ec)
 	}
 }
