@@ -149,6 +149,10 @@ type Worker struct {
 	// is already there. A group that already has a cursor is never moved, so
 	// this only matters the first time a group name (or the forwarder) appears.
 	StartFrom string `mapstructure:"start_from"`
+	// HandlerTimeout bounds one handler attempt (the consumer-side twin of
+	// HTTP.Timeout): the use case's context expires, the attempt fails and is
+	// retried, then parked on the poison topic. 0 = none.
+	HandlerTimeout time.Duration `mapstructure:"handler_timeout"`
 }
 
 // Broker values of Worker.Broker.
@@ -223,6 +227,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("worker.consumer_group", "worker")
 	v.SetDefault("worker.broker", BrokerPostgres)
 	v.SetDefault("worker.start_from", StartFromBeginning)
+	v.SetDefault("worker.handler_timeout", 10*time.Second)
 }
 
 func readFile(v *viper.Viper) error {
@@ -294,6 +299,9 @@ func (x *AppConfig) validate() error {
 	}
 	if x.Worker.StartFrom != StartFromBeginning && x.Worker.StartFrom != StartFromLatest {
 		return fmt.Errorf("invalid worker.start_from %q (want beginning|latest)", x.Worker.StartFrom)
+	}
+	if x.Worker.HandlerTimeout < 0 {
+		return fmt.Errorf("invalid worker.handler_timeout %s (want >= 0, 0 = none)", x.Worker.HandlerTimeout)
 	}
 
 	return nil

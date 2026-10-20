@@ -34,6 +34,10 @@ type Worker struct {
 // (same worker.consumer_group) still share the work. Failed messages of a BC
 // go to that BC's poison topic, always in Postgres.
 //
+// worker.handler_timeout bounds each handler attempt (ConsumerOptions
+// .HandlerTimeout); a use case that hangs on the database fails that attempt
+// instead of holding the message forever.
+//
 // Metrics (platform/eventbus): every handler attempt is a sample of
 // eventbus.consumer.duration, and eventbus.Lag reports each cursor's backlog —
 // the BC groups on whatever they read from, the forwarder's Postgres cursor in
@@ -137,9 +141,10 @@ func NewWorker(
 			return nil, err
 		}
 		err = eventbus.Register(router, sub, eventbus.ConsumerOptions{
-			Poison:      publisher,
-			PoisonTopic: eventbus.PoisonTopic(bc.schema),
-			Instruments: instruments,
+			Poison:         publisher,
+			PoisonTopic:    eventbus.PoisonTopic(bc.schema),
+			Instruments:    instruments,
+			HandlerTimeout: cfg.HandlerTimeout,
 		}, bc.subs...)
 		if err != nil {
 			return nil, err

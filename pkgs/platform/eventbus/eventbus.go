@@ -146,6 +146,10 @@ type ConsumerOptions struct {
 	// is cancelled may finish before it is abandoned (Draining). Default
 	// DefaultDrainTimeout.
 	DrainTimeout time.Duration
+	// HandlerTimeout bounds every attempt of a handler: its context expires,
+	// the attempt's error is retried like any other and finally parked. 0 =
+	// no deadline. On shutdown the shorter of this and DrainTimeout wins.
+	HandlerTimeout time.Duration
 }
 
 // Register adds one handler per subscription to r, all reading from sub, each
@@ -156,6 +160,9 @@ type ConsumerOptions struct {
 //  3. drop: ErrDrop is acknowledged (never retried, never poison).
 //  4. metrics (opts.Instruments) and access: one histogram sample and one
 //     Info "message" line per attempt (result ok / dropped / failed).
+//  5. timeout (opts.HandlerTimeout): a deadline per attempt, innermost so
+//     every retry gets a fresh one and the failure is logged and parked as
+//     "handler timed out".
 //
 // Handler names are the topics, so Watermill's own metrics/logs name them.
 // One router can serve several BCs: call Register once per BC with its options.
@@ -193,10 +200,45 @@ func Register(r *message.Router, sub message.Subscriber, opts ConsumerOptions, s
 		if opts.Instruments != nil {
 			mws = append(mws, opts.Instruments.middleware)
 		}
-		handler.AddMiddleware(append(mws, access)...)
+		mws = append(mws, access)
+		if opts.HandlerTimeout > 0 {
+			mws = append(mws, timeout(opts.HandlerTimeout))
+		}
+		handler.AddMiddleware(mws...)
 	}
 
 	return nil
+}
+
+// ErrHandlerTimeout wraps the error of an attempt that failed after its
+// ConsumerOptions.HandlerTimeout expired. It is retried (and parked) like
+// any infra error; a handler that returns ErrDrop is still dropped.
+var ErrHandlerTimeout = errors.New("eventbus: handler timed out")
+
+// timeout puts a deadline on the message context for one attempt and puts
+// the parent context back afterwards: the next attempt derives its deadline
+// from msg.Context(), so leaving the expired one there would make every
+// retry fail at once. A handler that succeeds after the deadline is acked as
+// usual (its work is committed).
+func timeout(d time.Duration) message.HandlerMiddleware {
+	return func(h message.HandlerFunc) message.HandlerFunc {
+		return func(msg *message.Message) ([]*message.Message, error) {
+			parent := msg.Context()
+			ctx, cancel := context.WithTimeout(parent, d)
+			msg.SetContext(ctx)
+			defer func() {
+				cancel()
+				msg.SetContext(parent)
+			}()
+
+			out, err := h(msg)
+			if err != nil && !errors.Is(err, ErrDrop) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				err = fmt.Errorf("%w after %s: %w", ErrHandlerTimeout, d, err)
+			}
+
+			return out, err
+		}
+	}
 }
 
 // ProvidePublisher is the outbox every BC publishes through: watermill-sql

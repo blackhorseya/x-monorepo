@@ -174,7 +174,7 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 | domain | aggregate 在行為裡 `record()`（`New` → `Created`、`Cancel` → `Cancelled`），`PullEvents()` 取出並清空；`order.Event` embed `kernel.Event`，實作共用 embedded `base` struct | `domain/order/events.go` |
 | application | usecase 只依序呼叫 `repo.Save` 與 `port.EventPublisher.Publish`；`provider.go` 的 `decorateTx()` 用 `usecasex.Transactional` 把整個 usecase 包進 `port.Transactor.Do`，兩者同一個交易 | `provider.go`、`usecase/create_order.go` |
 | adapters/events | domain event → `ordering.v1.OrderCreated` / `OrderCancelled` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
-| platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → 把帶 topic / message_id / trace_id 的 logger 放進 context，usecase log 才會進 Loki）+ `Register`（每個 BC：PoisonQueue → Retry → drop → access：每則訊息一行 Info `message`，對應 rpc 的 `rpc` access log）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
+| platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → 把帶 topic / message_id / trace_id 的 logger 放進 context，usecase log 才會進 Loki）+ `Register`（每個 BC：PoisonQueue → Retry → drop → access → timeout：每則訊息一行 Info `message`，對應 rpc 的 `rpc` access log；`worker.handler_timeout` 給每次 attempt 一個 deadline）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
 | infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
 | apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工。`worker poison …`（`task poison -- …`）是 poison 表的操作面 | `apps/worker` |
 
@@ -496,6 +496,7 @@ release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghc
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
 | `redis.url` | `APP_REDIS_URL` | 空 | 只在 `worker.broker: redis` 時讀 |
 | `worker.broker` | `APP_WORKER_BROKER` | `postgres` | `postgres` 直接讀 outbox 表；`redis` 由 worker 轉送進 Redis Streams 再讀 |
+| `worker.handler_timeout` | `APP_WORKER_HANDLER_TIMEOUT` | `10s` | 單次 handler attempt 的 deadline（`http.timeout` 的 consumer 版）：usecase 的 context 到期、該次算 failed 照常 retry，用完後以 `handler timed out` 為 reason 進 poison；`0` = 不限。SIGTERM 時 in-flight handler 的上限是它和 drain 的 8s 取短 |
 | — | `TEST_DATABASE_URL` | 未設 | 只給 integration test：設了就用該 DB，未設則 testcontainers 自起 |
 | — | `TEST_REDIS_URL` | 未設 | 同上，給 worker E2E 的 redis 模式 |
 

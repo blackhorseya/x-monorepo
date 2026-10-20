@@ -116,7 +116,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
   所有 interceptor 都是 unary-only：哪天加了 streaming RPC，auth 要另外用 `WrapStreamingHandler` 包，不然 stream 沒有驗。
 - **Graceful shutdown 是有測試保護的行為**：rpc 收到 SIGTERM 先把 `/api/readyz` 翻 503 再服務 `http.shutdown_delay`（預設 0），然後關 listener、
   in-flight request 有 `http.shutdown_timeout`；worker 的 `eventbus.Register` 把 subscriber 包進 `eventbus.Draining`，正在跑的 handler 跑完 + ack 才結束
-  （上限 8s）。改 `Server.Serve` / `Draining` 請一起跑 `platform/server` 與 `platform/eventbus` 的 shutdown tests。
+  （上限 8s）。每次 handler attempt 另有 `worker.handler_timeout`（預設 10s，0 = 不限）：到期的 attempt 照常 retry，用完進 poison。改 `Server.Serve` / `Draining` 請一起跑 `platform/server` 與 `platform/eventbus` 的 shutdown tests。
 - **Response meta 走 header**（`X-Request-Id`、`X-Trace-Id`、`traceparent`），不包進 proto message。
 - **Persistence**：每個 BC 一個 Postgres schema（`ordering.orders`、`ordering.schema_migrations`）；SQL 放
   `pkgs/<bc>/infra/postgres/migrations/NNNN_name.{up,down}.sql` 由 BC embed（go.work 下 embed 不能跨 module）。
