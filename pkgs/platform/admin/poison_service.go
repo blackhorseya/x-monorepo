@@ -34,8 +34,17 @@ type PoisonService struct {
 }
 
 func NewPoisonService(db *gorm.DB, auth config.Auth, schemas []string) *PoisonService {
+	// A config built by hand (tests) skips config.Load's defaults; an empty
+	// role would deny everyone with auth on.
+	if auth.AdminRole == "" {
+		auth.AdminRole = DefaultAdminRole
+	}
+
 	return &PoisonService{db: db, schemas: schemas, auth: auth}
 }
+
+// DefaultAdminRole is auth.admin_role when unset (config.Load sets the same).
+const DefaultAdminRole = "admin"
 
 // Route mounts the service (Connect + gRPC + gRPC-Web on one port).
 func (h *PoisonService) Route(opts ...connect.HandlerOption) (string, http.Handler) {

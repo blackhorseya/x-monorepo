@@ -83,7 +83,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
-│   └── migrate/                   # 收集各 BC 的 embed migrations，up / down / version；唯一能 import infra 的 app
+│   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）
     ├── packages/proto/            # @repo/proto：buf 生成的 connect-es client（有 commit）
     └── apps/console/              # Vite + React + TanStack Router / Query + Tailwind v4 + shadcn/ui
@@ -373,7 +373,7 @@ production 部署（同 origin 掛靜態檔，或另配 CORS）尚未處理。
   多個 BC 共用一個 database 時，預設的單一 `public.schema_migrations` 會讓兩條 migration 序列互相覆寫版本號且不報錯；
   schema 隔離同時解決表名與版本表的衝突。
 - SQL 放 `pkgs/<bc>/infra/postgres/migrations/NNNN_name.{up,down}.sql`，由 BC `embed`（go.work 下 embed 不能跨
-  module）；`apps/migrate` 只收集各 BC 的 `Migration()` 並用 golang-migrate 執行。**service 啟動不跑 migration**，
+  module）；`apps/migrate` 只收集各 BC 的 `Migration()` 並用 golang-migrate 執行（cobra：`up` / `down` / `version`，`--help` 有說明；跟 rpc / worker 一樣是同一個 image 的不同 binary）。**service 啟動不跑 migration**，
   部署流程是 `migrate up` → rollout。
 - row model（`orderRow`）是持久化模型，不是 aggregate；timestamps 來自 domain 的 `port.Clock`，所以 gorm 的
   `autoCreateTime/autoUpdateTime` 關閉。`total` 不落地，`Reconstitute` 重算。

@@ -14,6 +14,8 @@ import (
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1/adminv1connect"
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
@@ -28,7 +30,7 @@ func TestAuth_Required(t *testing.T) {
 		Log:  config.Log{Level: "error", Format: "text"},
 		Auth: config.Auth{
 			Mode:    config.AuthRequired,
-			APIKeys: "console=console-key-0123456789",
+			APIKeys: "console=console-key-0123456789,ops=ops-key-0123456789abc:admin",
 			JWT:     config.JWT{HS256Secret: secret, Issuer: "x-monorepo"},
 			Public:  []string{orderingv1connect.OrderServiceGetOrderProcedure},
 		},
@@ -95,5 +97,37 @@ func TestAuth_Required(t *testing.T) {
 	bad := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL, withHeader(server.AuthorizationHeader, "Bearer "+token+"x"))
 	if _, err := bad.CreateOrder(c, connect.NewRequest(create)); !errors.As(err, &ce) || ce.Meta().Get("x-error-code") != server.InvalidCredentialCode {
 		t.Fatalf("tampered token = %v", err)
+	}
+
+	// Authorization on the admin surface: the role comes from the JWT's
+	// roles claim or the API key's ":role" suffix. No database is wired here,
+	// so a caller that passes the role check gets FailedPrecondition
+	// poison.no_database — proof the guard let it through.
+	adminToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "u-2", "iss": "x-monorepo", "exp": time.Now().Add(time.Minute).Unix(), "roles": []string{"ops", "admin"},
+	}).SignedString([]byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tt := range map[string]struct {
+		header, value string
+		code          connect.Code
+		errorCode     string
+	}{
+		"anonymous":        {"", "", connect.CodeUnauthenticated, server.UnauthenticatedCode},
+		"jwt without role": {server.AuthorizationHeader, "Bearer " + token, connect.CodePermissionDenied, server.PermissionDeniedCode},
+		"api key no role":  {server.APIKeyHeader, "console-key-0123456789", connect.CodePermissionDenied, server.PermissionDeniedCode},
+		"jwt roles claim":  {server.AuthorizationHeader, "Bearer " + adminToken, connect.CodeFailedPrecondition, "poison.no_database"},
+		"api key :admin":   {server.APIKeyHeader, "ops-key-0123456789abc", connect.CodeFailedPrecondition, "poison.no_database"},
+	} {
+		var opts []connect.ClientOption
+		if tt.header != "" {
+			opts = append(opts, withHeader(tt.header, tt.value))
+		}
+		admin := adminv1connect.NewAdminServiceClient(http.DefaultClient, ts.URL, opts...)
+		_, err := admin.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{}))
+		if !errors.As(err, &ce) || ce.Code() != tt.code || ce.Meta().Get("x-error-code") != tt.errorCode {
+			t.Fatalf("%s: ListPoison = %v, want %s / %s", name, err, tt.code, tt.errorCode)
+		}
 	}
 }
