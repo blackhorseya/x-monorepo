@@ -10,3 +10,21 @@ info:
     otherwise `PERMISSION_DENIED` with `X-Error-Code: auth.permission_denied`.
 servers:
   - url: /api
+
+# Auth (platform/server auth interceptor, auth.mode optional|required): either an API key
+# or a JWT. Declared here so Scalar / Postman show an Auth field; with auth.mode: off they are ignored.
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Static key from `auth.api_keys` (`name=key[:role|role]`); the principal's subject is the name.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (HS256 secret or PEM public key); claims sub / name / roles.
+security:
+  - apiKey: []
+  - bearer: []
