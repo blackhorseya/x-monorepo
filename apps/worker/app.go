@@ -179,6 +179,7 @@ func addForwarders(
 	if err != nil {
 		return nil, err
 	}
+	sub = eventbus.Draining(sub, 0) // a forward in progress at SIGTERM completes and is acked
 	pub, err := eventbus.NewRedisPublisher(rdb, logger)
 	if err != nil {
 		return nil, err
@@ -199,9 +200,11 @@ func addForwarders(
 	return topics, nil
 }
 
-// Run blocks until c is done, then drains in-flight handlers. The lag
-// gauges stop being observed when it returns, so a stopped worker does not
-// keep querying the stores.
+// Run blocks until c is done (SIGTERM in main), then stops taking messages
+// and lets the handlers in flight finish and ack (eventbus.Draining, up to
+// eventbus.DefaultDrainTimeout) before returning. The lag gauges stop being
+// observed when it returns, so a stopped worker does not keep querying the
+// stores.
 func (w *Worker) Run(c context.Context) error {
 	w.logger.Info("worker started")
 	defer w.logger.Info("worker stopped")

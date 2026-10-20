@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -38,6 +39,9 @@ const (
 	MetricsPath = "/api/metrics"
 )
 
+// defaultShutdownTimeout is http.shutdown_timeout when unset (config.Load sets the same).
+const defaultShutdownTimeout = 15 * time.Second
+
 // Route is implemented by every BC's rpc adapter.
 type Route interface {
 	Route(opts ...connect.HandlerOption) (string, http.Handler)
@@ -45,9 +49,11 @@ type Route interface {
 
 // Server serves HTTP/1.1 + h2c (gRPC behind GKE/EKS ingress without TLS termination here).
 type Server struct {
-	srv    *http.Server
-	logger *slog.Logger
-	health *health
+	srv             *http.Server
+	logger          *slog.Logger
+	health          *health
+	shutdownDelay   time.Duration
+	shutdownTimeout time.Duration
 }
 
 // New mounts every route, the probes (/api/healthz liveness, /api/readyz
@@ -132,6 +138,11 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	protocols.SetHTTP1(true)
 	protocols.SetUnencryptedHTTP2(true)
 
+	// A config built by hand (tests) skips config.Load's defaults.
+	if cfg.ShutdownTimeout <= 0 {
+		cfg.ShutdownTimeout = defaultShutdownTimeout
+	}
+
 	return &Server{
 		srv: &http.Server{
 			Addr:              cfg.Addr,
@@ -139,8 +150,10 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 			Protocols:         protocols,
 			ReadHeaderTimeout: 5 * time.Second,
 		},
-		logger: logger,
-		health: hp,
+		logger:          logger,
+		health:          hp,
+		shutdownDelay:   cfg.ShutdownDelay,
+		shutdownTimeout: cfg.ShutdownTimeout,
 	}, nil
 }
 
@@ -165,14 +178,32 @@ func untracedByGin(prefixes []string) func(*gin.Context) bool {
 // Handler exposes the router for in-process tests.
 func (s *Server) Handler() http.Handler { return s.srv.Handler }
 
-// Run blocks until c is cancelled, then shuts down gracefully: readiness
-// flips to 503 first so a load balancer that polls it stops sending traffic
-// while in-flight requests drain.
+// Run listens on cfg.Addr and serves until c is cancelled (Serve).
 func (s *Server) Run(c context.Context) error {
+	ln, err := net.Listen("tcp", s.srv.Addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", s.srv.Addr, err)
+	}
+
+	return s.Serve(c, ln)
+}
+
+// Serve serves on ln until c is cancelled (SIGTERM in main), then shuts
+// down in the order a load balancer needs:
+//
+//  1. /api/readyz answers 503 "draining" while everything else keeps being
+//     served for http.shutdown_delay, so a balancer polling readiness stops
+//     routing here before the listener goes away (0 skips the wait);
+//  2. the listener closes and in-flight requests get http.shutdown_timeout
+//     to finish; the error is that deadline's when some did not.
+//
+// Liveness stays 200 throughout: the process is fine, it is leaving.
+// It returns nil after a clean drain, or the listen/serve error.
+func (s *Server) Serve(c context.Context, ln net.Listener) error {
 	errCh := make(chan error, 1)
 	go func() {
-		s.logger.Info("server listening", "addr", s.srv.Addr)
-		if err := s.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		s.logger.Info("server listening", "addr", ln.Addr().String())
+		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 		close(errCh)
@@ -185,9 +216,16 @@ func (s *Server) Run(c context.Context) error {
 	}
 
 	s.health.draining.Store(true)
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	s.logger.Info("server draining", "delay", s.shutdownDelay, "timeout", s.shutdownTimeout)
+	if s.shutdownDelay > 0 {
+		time.Sleep(s.shutdownDelay)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 	defer cancel()
-	s.logger.Info("server shutting down")
+	if err := s.srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown: in-flight requests outlived http.shutdown_timeout %s: %w", s.shutdownTimeout, err)
+	}
+	s.logger.Info("server stopped")
 
-	return s.srv.Shutdown(shutdownCtx)
+	return nil
 }
