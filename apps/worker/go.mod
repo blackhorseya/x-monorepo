@@ -9,6 +9,7 @@ require (
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/google/wire v0.7.0
 	github.com/redis/go-redis/v9 v9.23.0
+	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/otel/metric v1.47.0
 	google.golang.org/protobuf v1.36.12
 	gorm.io/gorm v1.31.2
@@ -65,6 +66,7 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

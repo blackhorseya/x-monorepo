@@ -22,6 +22,7 @@ task breaking              # proto 對 main 做 buf breaking
 task compose-up            # 本機 Postgres :5432 + Redis :6379 + grafana/otel-lgtm（Grafana :3000、OTLP :4317）
 task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會自己跑
 task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag；只改 docs / web / CI / test 的 commit 會被 gate 跳過）
+task poison -- list        # 看各 BC 的 poison 表；requeue <bc> <offset>…|all 送回原 topic、drop 刪掉（worker poison 子命令）
 task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Connect + gRPC + gRPC-Web 同 port；RPC 在 /api/<svc>/<Method> 與原生路徑都通，/api/docs 開）
 ```
 
@@ -70,7 +71,8 @@ pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering
   adapters/        driving：rpc（Connect handler，pb ↔ dto）、consumer（broker handler）
 apps/rpc         composition root：main + wire.go，無業務、無 mapping
 apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Watermill router，各 BC 自己的 consumer group / poison；
-                 worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）
+                 worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）；
+                 `worker poison list|show|requeue|drop` 操作各 BC 的 poison 表（requeue = 重新 insert 回原 topic 的 outbox 表）
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 ```
 
@@ -128,7 +130,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 加 `use` + `Taskfile.yml` 的 `MODULES` 與 `BCS` + `apps/*/go.mod` 的 require / replace → `task tidy` → `contract/v1/openapi.go` →
 `task gen` → 複製 `pkgs/ordering` 結構寫 `provider.go`（`Subscriptions` 自己的 named type）→ `.golangci.yml` 加該 BC 的 layer block 與
 `bc-isolation-<bc>`，並把它加進其他 BC / shared / apps 的 deny（`pkg` 是 prefix match，不能用 `*`）→ `apps/rpc` 的 `NewRoutes` /
-`NewDocs` 加參數、`apps/{rpc,worker}/wire.go` 加 `ProviderSet`、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions` → `task wire` →
+`NewDocs` 加參數、`apps/{rpc,worker}/wire.go` 加 `ProviderSet`、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions`、`poison.go` 的 `schemas` 加它 → `task wire` →
 有 DB 則加 migrations（含自己 topic 與 poison 的 events 表）與 `apps/migrate/main.go` 的 `migrations`。
 
 ## Conventions（本 repo 特有）

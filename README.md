@@ -169,12 +169,17 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 | adapters/events | domain event → `ordering.v1.OrderCreated` / `OrderCancelled` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
 | platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → 把帶 topic / message_id / trace_id 的 logger 放進 context，usecase log 才會進 Loki）+ `Register`（每個 BC：PoisonQueue → Retry → drop → access：每則訊息一行 Info `message`，對應 rpc 的 `rpc` access log）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
 | infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
-| apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工 | `apps/worker` |
+| apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工。`worker poison …`（`task poison -- …`）是 poison 表的操作面 | `apps/worker` |
 
 - Topic → table：`ordering.v1.OrderCreated` → `ordering.events_v1_ordercreated`（+ `_offsets`），第一段就是 BC，**DDL 由該 BC 的 migration 出**（`0003_events`），
   service 不在啟動時建表；`InitializeSchema` 關閉。新 topic = 新 migration。
 - 語意：at-least-once。handler 回 `eventbus.ErrDrop`（壞 payload、domain 說不行 → 例如重送的取消要求碰到 `ErrCannotCancel`）= ack 不重試也不進 poison；
   其他 error → Retry（3 次、指數退避）→ `ordering.poison` 表（`events_poison`）。consumer 的冪等由 domain 狀態機保證。
+- Poison 操作面：`task poison -- list [-n 50] [<bc>]` 列出各 BC 停在 poison 表的訊息（offset、uuid、原 topic、最後一次 error），
+  `show <bc> <offset>` 看完整 metadata 與 payload（proto bytes，印 base64；用 `buf convert` 解），`requeue <bc> <offset>…|all`
+  把訊息**重新 insert 回原 topic 的 outbox 表**（同一個 message id、拿掉 poison metadata；每個 consumer group、含 redis 模式的 forwarder
+  都會再收到）並同一個 transaction 刪掉 poison row，`drop <bc> <offset>…|all` 直接刪。同一個 binary（cobra：沒有子命令 = 跑 consumer）：
+  `worker poison …`，image 也是 `docker run …/worker poison list`，`--help` 有完整說明。`eventbus_poison_messages` 不為 0 就來這裡；修好 handler 再 requeue，再失敗會再進 poison。
 - Trace：publish 時把 `traceparent` 寫進 metadata，router 的 tracing middleware 還原成 CONSUMER span，Tempo 看得到 rpc → publish → handler 一條線。
 - 換 broker：`message.Publisher` / `Subscriber` 是 port；handler 與 error contract 不變。已內建一個示範：`worker.broker: redis`
   （`redis.url` 必填，`task compose-up` 有起一個）時，worker 自己當 forwarder，把每個被消費 topic 的 outbox 表（Postgres consumer group
