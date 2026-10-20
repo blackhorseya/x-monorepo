@@ -105,7 +105,7 @@ func NewAuthInterceptor(cfg config.Auth) (connect.UnaryInterceptorFunc, error) {
 				return next(c, req)
 			}
 			ctx := contextx.FromContext(c)
-			ctx = contextx.FromContext(contextx.WithLogger(ctx, ctx.Logger.With("sub", p.Subject)))
+			ctx = contextx.FromContext(contextx.WithLogger(ctx, ctx.With("sub", p.Subject)))
 
 			return next(contextx.WithPrincipal(ctx, p), req)
 		}
