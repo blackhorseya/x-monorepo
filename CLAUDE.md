@@ -111,6 +111,8 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - **Auth 只做 authentication**：`auth.mode` 預設 `off`（`task run`、E2E、console 都沒帶 credential）；開了之後 `server.NewAuthInterceptor`
   把 `X-API-Key` / `Authorization: Bearer <jwt>` 解析成 `contextx.Principal` 放進 context，usecase 用 `contextx.PrincipalFrom(c)` 讀，
   consumer path 永遠是 anonymous。要不要做授權（role 檢查）是讀的人的事，不要在 interceptor 裡加。
+  Interceptor chain 由外而內：`tracing, meta, logging, [rate limit], [auth], [timeout], validate`——rate limit 在 auth 之外（洪水先擋再驗簽章）、
+  timeout 在 auth 之內（deadline 算 validate + usecase）；`http.timeout` 到期的失敗一律 `DEADLINE_EXCEEDED` + `request.timeout`，超過 `http.rate_limit` 是 `RESOURCE_EXHAUSTED` + `request.rate_limited` + `Retry-After`。
   所有 interceptor 都是 unary-only：哪天加了 streaming RPC，auth 要另外用 `WrapStreamingHandler` 包，不然 stream 沒有驗。
 - **Graceful shutdown 是有測試保護的行為**：rpc 收到 SIGTERM 先把 `/api/readyz` 翻 503 再服務 `http.shutdown_delay`（預設 0），然後關 listener、
   in-flight request 有 `http.shutdown_timeout`；worker 的 `eventbus.Register` 把 subscriber 包進 `eventbus.Draining`，正在跑的 handler 跑完 + ack 才結束

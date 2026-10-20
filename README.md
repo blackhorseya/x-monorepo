@@ -138,6 +138,8 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 |---|---|---|
 | proto | `buf.validate` rule 直接寫在 request message 上（`min_len`、`gt`、`gte`、`pattern`、`required`、`min_items`） | `protos/<bc>/v1/service.proto`、`common/v1/money.proto`、`ordering/v1/entity.proto` |
 | server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 對 `auth.api_keys`，否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method}` 放進 context，之後的 log（usecase 那行）帶 `sub`（`rpc` access line 在它外層，沒有）；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
+| server | `NewRateLimitInterceptor`（`http.rate_limit.rps` > 0 才掛，在 logging 之內、auth 之外——洪水要在付 JWT 簽章驗證成本之前就擋掉）：token bucket，`by: global` 一桶 / `peer` 每個 client IP 一桶（idle 1 分鐘回收）。沒 token → `RESOURCE_EXHAUSTED`、`x-error-code: request.rate_limited`、`Retry-After: <秒>`，不排隊等 | `pkgs/platform/server/limits.go` |
+| server | `NewTimeoutInterceptor`（`http.timeout` > 0 才掛，在 auth 之內、validate 之外）：usecase 拿到會到期的 context，慢 query 被 cancel 而不是吃掉整個 shutdown drain 窗口。到期後失敗的 RPC 一律回 `DEADLINE_EXCEEDED` + `x-error-code: request.timeout`（不管 driver 的 error 被 `ToConnectError` 映成什麼）；到期後仍成功的照常回 response（工作已 commit）。client 的 deadline 較短時一樣適用 | `pkgs/platform/server/limits.go` |
 | server | `NewValidateInterceptor`（最內層 interceptor）：違反 → `INVALID_ARGUMENT`、header `x-error-code: request.validation_failed`、error detail `buf.validate.Violations`（欄位路徑 + rule id + message）；rule 本身編不過 → `INTERNAL` | `pkgs/platform/server/validate.go` |
 | domain | 業務不變量照舊（`NewMoney`、`NewLineItem`…）：consumer path 沒有 interceptor，domain 是唯一防線 | `pkgs/<bc>/domain` |
 
@@ -470,6 +472,8 @@ release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghc
 | `http.addr` | `APP_HTTP_ADDR` | `:8080` | |
 | `http.docs` | `APP_HTTP_DOCS` | `false` | 掛 `/api/docs`、`/api/openapi/<bc>.yaml`（`task run` 會開） |
 | `http.shutdown_delay` | `APP_HTTP_SHUTDOWN_DELAY` | `0s` | SIGTERM 後 `/api/readyz` 先回 503、其他照常服務這麼久，讓 LB 先把流量移走再關 listener；k8s 下設 ≥ 一個 readiness probe period |
+| `http.timeout` | `APP_HTTP_TIMEOUT` | `10s` | 單一 RPC 的 server-side deadline（timeout interceptor）：usecase 的 context 到期、client 收 `DEADLINE_EXCEEDED` + `x-error-code: request.timeout`；`0` = 不限。client 自己帶的 `Connect-Timeout-Ms` 較短時以它為準 |
+| `http.rate_limit.rps` / `.burst` / `.by` | `APP_HTTP_RATE_LIMIT_RPS` … | `0` / `0` / `global` | token bucket（rate limit interceptor，在 auth 之外）：`rps` 0 = 關；`burst` 0 = rps 無條件進位；`by: global` 全 server 一桶、`peer` 每個 client IP 一桶（連線的 peer address；proxy 沒保留來源時等於大家同一桶）。超過 → `RESOURCE_EXHAUSTED` + `x-error-code: request.rate_limited` + `Retry-After`（秒） |
 | `http.shutdown_timeout` | `APP_HTTP_SHUTDOWN_TIMEOUT` | `15s` | listener 關掉後 in-flight request 的完成上限，超過就切斷、`Run` 回 error。`terminationGracePeriodSeconds` 要 > delay + timeout |
 | `log.level` / `log.format` | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
 | `auth.mode` | `APP_AUTH_MODE` | `off` | `off` 不掛 auth interceptor；`optional` 有帶 credential 才驗（沒帶 = anonymous，帶了驗不過一樣是錯）；`required` 沒有合法 credential → `UNAUTHENTICATED` |

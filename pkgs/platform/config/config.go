@@ -45,7 +45,31 @@ type HTTP struct {
 	// listener closed; what is still running then is cut off. Default 15s.
 	// terminationGracePeriodSeconds must exceed shutdown_delay + shutdown_timeout.
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+	// Timeout is the server-side deadline of one RPC (platform/server
+	// timeout interceptor): the use case's context expires and the client
+	// gets DEADLINE_EXCEEDED. 0 = none. config.Load defaults it to 10s.
+	Timeout time.Duration `mapstructure:"timeout"`
+	// RateLimit is the token-bucket limit on RPCs (platform/server rate
+	// limit interceptor). Off unless RPS is set.
+	RateLimit RateLimit `mapstructure:"rate_limit"`
 }
+
+// RateLimit configures the rate limit interceptor: a token bucket refilled
+// at RPS per second holding Burst tokens, either one bucket for the whole
+// server (By "global") or one per client IP (By "peer", the connection's
+// peer address — one key for everyone behind a proxy that does not preserve
+// it). A request with no token gets RESOURCE_EXHAUSTED and Retry-After.
+type RateLimit struct {
+	RPS   float64 `mapstructure:"rps"`
+	Burst int     `mapstructure:"burst"` // 0 = RPS rounded up
+	By    string  `mapstructure:"by"`    // global | peer
+}
+
+// By values of RateLimit.By.
+const (
+	RateLimitGlobal = "global"
+	RateLimitPeer   = "peer"
+)
 
 // Auth configures the server's auth interceptor (platform/server.NewAuthInterceptor):
 // who an RPC runs as, carried to use cases as contextx.Principal. It is
@@ -177,6 +201,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("http.docs", false)
 	v.SetDefault("http.shutdown_delay", 0)
 	v.SetDefault("http.shutdown_timeout", 15*time.Second)
+	v.SetDefault("http.timeout", 10*time.Second)
+	v.SetDefault("http.rate_limit.rps", 0)
+	v.SetDefault("http.rate_limit.burst", 0)
+	v.SetDefault("http.rate_limit.by", RateLimitGlobal)
 	v.SetDefault("auth.mode", AuthOff)
 	v.SetDefault("auth.api_keys", "")
 	v.SetDefault("auth.admin_role", "admin")
@@ -227,6 +255,15 @@ func (x *AppConfig) validate() error {
 	}
 	if x.HTTP.ShutdownTimeout <= 0 {
 		return fmt.Errorf("invalid http.shutdown_timeout %s (want > 0)", x.HTTP.ShutdownTimeout)
+	}
+	if x.HTTP.Timeout < 0 {
+		return fmt.Errorf("invalid http.timeout %s (want >= 0, 0 = none)", x.HTTP.Timeout)
+	}
+	if x.HTTP.RateLimit.RPS < 0 || x.HTTP.RateLimit.Burst < 0 {
+		return fmt.Errorf("invalid http.rate_limit rps=%v burst=%d (want >= 0)", x.HTTP.RateLimit.RPS, x.HTTP.RateLimit.Burst)
+	}
+	if by := x.HTTP.RateLimit.By; by != RateLimitGlobal && by != RateLimitPeer {
+		return fmt.Errorf("invalid http.rate_limit.by %q (want global|peer)", by)
 	}
 	if x.Log.Format != "json" && x.Log.Format != "text" {
 		return fmt.Errorf("invalid log.format %q (want json|text)", x.Log.Format)
