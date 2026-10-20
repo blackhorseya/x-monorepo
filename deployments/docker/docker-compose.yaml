@@ -65,6 +65,8 @@ services:
       # commit the JSON → `task grafana-reload` (inotify does not cross the macOS bind mount).
       - ./grafana/provisioning/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/x-monorepo.yaml:ro
       - ./grafana/dashboards:/otel-lgtm/dashboards:ro
+      # Alert rules (lag / stalled / poison / absent) for the worker, same lifecycle: edit → `task grafana-reload`.
+      - ./grafana/provisioning/alerting.yaml:/otel-lgtm/grafana/conf/provisioning/alerting/x-monorepo.yaml:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health >/dev/null"]
       interval: 5s
