@@ -39,6 +39,9 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	if cfg.HTTP.Timeout != 10*time.Second || cfg.HTTP.RateLimit.RPS != 0 || cfg.HTTP.RateLimit.By != config.RateLimitGlobal {
 		t.Fatalf("limit defaults: %+v", cfg.HTTP)
 	}
+	if cfg.Worker.HandlerTimeout != 10*time.Second {
+		t.Fatalf("worker defaults: %+v", cfg.Worker)
+	}
 }
 
 func TestLoad_FileThenEnvOverrides(t *testing.T) {
@@ -112,6 +115,11 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("negative http.timeout must fail")
 	}
 	t.Setenv("APP_HTTP_TIMEOUT", "0")
+	t.Setenv("APP_WORKER_HANDLER_TIMEOUT", "-1s")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("negative worker.handler_timeout must fail")
+	}
+	t.Setenv("APP_WORKER_HANDLER_TIMEOUT", "0")
 	t.Setenv("APP_HTTP_RATE_LIMIT_RPS", "-1")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("negative http.rate_limit.rps must fail")
@@ -159,7 +167,7 @@ func TestLoad_Validate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Worker.Broker != config.BrokerRedis || cfg.Redis.URL == "" || cfg.Worker.StartFrom != config.StartFromLatest {
+	if cfg.Worker.Broker != config.BrokerRedis || cfg.Redis.URL == "" || cfg.Worker.StartFrom != config.StartFromLatest || cfg.Worker.HandlerTimeout != 0 {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 	if cfg.HTTP.ShutdownDelay != 2*time.Second || cfg.HTTP.ShutdownTimeout != 500*time.Millisecond {

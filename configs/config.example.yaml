@@ -73,3 +73,7 @@ worker:
   # retained) or latest (only what arrives after it was created). An existing cursor is
   # never moved, so this only matters the first time a group name appears.
   start_from: beginning
+  # deadline of one handler attempt (the consumer-side http.timeout): the use case's
+  # context expires, the attempt is retried, then the message is parked as poison
+  # with reason "handler timed out". 0 = none.
+  handler_timeout: 10s
