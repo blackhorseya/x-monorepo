@@ -43,6 +43,15 @@ services:
   # Apps export OTLP/gRPC to :4317; otel.endpoint in configs/local.yaml already points here.
   lgtm:
     image: grafana/otel-lgtm:0.37.0
+    # Retention, via the image's *_EXTRA_ARGS hooks (run-*.sh): a laptop stack otherwise keeps
+    # everything forever (Loki/Tempo default: no deletion / 14d). Pyroscope here is v2 storage,
+    # whose time-based retention has no flag yet. Loki also needs a delete-request store once
+    # retention is on, and it refuses writes (503) when the *VM disk* is nearly full — if Loki
+    # goes quiet, check `podman machine ssh df -h /` before anything else.
+    environment:
+      LOKI_EXTRA_ARGS: "-compactor.retention-enabled=true -compactor.delete-request-store=filesystem -store.retention=${LGTM_RETENTION:-72h}"
+      TEMPO_EXTRA_ARGS: "-backend-worker.compaction.block-retention=${LGTM_RETENTION:-72h} -backend-scheduler.provider.work.compaction.block-retention=${LGTM_RETENTION:-72h}"
+      PROMETHEUS_EXTRA_ARGS: "--storage.tsdb.retention.time=${LGTM_RETENTION:-72h}"
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
       - "${OTLP_GRPC_PORT:-4317}:4317"
