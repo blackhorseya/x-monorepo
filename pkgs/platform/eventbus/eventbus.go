@@ -139,6 +139,9 @@ type ConsumerOptions struct {
 	// MaxRetries before a message is parked (default 3, exponential backoff
 	// from 100ms to 5s).
 	MaxRetries int
+	// Instruments records eventbus.consumer.duration per attempt (NewInstruments).
+	// nil records nothing.
+	Instruments *Instruments
 }
 
 // Register adds one handler per subscription to r, all reading from sub, each
@@ -147,7 +150,8 @@ type ConsumerOptions struct {
 //  1. PoisonQueue: after retries, park the message on opts.PoisonTopic and ack.
 //  2. Retry with backoff.
 //  3. drop: ErrDrop is acknowledged (never retried, never poison).
-//  4. access: one Info "message" line per attempt (result ok / dropped / failed).
+//  4. metrics (opts.Instruments) and access: one histogram sample and one
+//     Info "message" line per attempt (result ok / dropped / failed).
 //
 // Handler names are the topics, so Watermill's own metrics/logs name them.
 // One router can serve several BCs: call Register once per BC with its options.
@@ -178,7 +182,11 @@ func Register(r *message.Router, sub message.Subscriber, opts ConsumerOptions, s
 		handler := r.AddConsumerHandler(s.Topic, s.Topic, sub, func(msg *message.Message) error {
 			return h.Handle(msg.Context(), msg.Payload)
 		})
-		handler.AddMiddleware(poison, retry, drop, access)
+		mws := []message.HandlerMiddleware{poison, retry, drop}
+		if opts.Instruments != nil {
+			mws = append(mws, opts.Instruments.middleware)
+		}
+		handler.AddMiddleware(append(mws, access)...)
 	}
 
 	return nil

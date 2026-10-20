@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -339,6 +342,37 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		}
 	}
 
+	// Lag gauges, as Prometheus would scrape them: every cursor the worker
+	// reads is caught up, nothing is parked, and the handlers left samples.
+	// The forwarder's cursor and the stream groups show up only in redis mode.
+	wantCursors := 3 // ordering: 1 topic; inventory: 2 topics
+	if rdb != nil {
+		wantCursors = 6 // + the forwarder on each distinct topic
+	}
+	waitFor("every consumer lag gauge at 0", func() (bool, error) {
+		lag := scrape(t, tel.MetricsHandler, "eventbus_consumer_lag")
+		if len(lag) != wantCursors {
+			return false, fmt.Errorf("%d lag series, want %d: %v", len(lag), wantCursors, lag)
+		}
+		for _, v := range lag {
+			if v != "0" {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_poison_messages") {
+		if v != "0" {
+			t.Fatalf("%s = %s, want 0", series, v)
+		}
+	}
+	if n := len(scrape(t, tel.MetricsHandler, "eventbus_poison_messages")); n != 2 {
+		t.Fatalf("%d poison series, want 2", n)
+	}
+	if n := len(scrape(t, tel.MetricsHandler, "eventbus_consumer_duration_seconds_count")); n == 0 {
+		t.Fatal("no eventbus_consumer_duration_seconds_count samples")
+	}
+
 	stop()
 	select {
 	case err := <-done:
@@ -348,6 +382,26 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("worker did not stop")
 	}
+}
+
+// scrape GETs the Prometheus exposition and returns the samples of one
+// metric family: "name{labels}" → value.
+func scrape(t *testing.T, h http.Handler, name string) map[string]string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/metrics", nil))
+	body, _ := io.ReadAll(rec.Result().Body)
+	out := map[string]string{}
+	for _, line := range strings.Split(string(body), "\n") {
+		if !strings.HasPrefix(line, name+"{") {
+			continue
+		}
+		series, value, ok := strings.Cut(line, " ")
+		if ok {
+			out[series] = value
+		}
+	}
+	return out
 }
 
 // With broker=redis the stream consumer groups exist before Run: a group
