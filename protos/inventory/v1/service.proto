@@ -13,6 +13,8 @@ service InventoryService {
   // Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
   rpc SetStock(SetStockRequest) returns (SetStockResponse);
   rpc GetStock(GetStockRequest) returns (GetStockResponse);
+  // ListStocks pages through every SKU, ascending by SKU.
+  rpc ListStocks(ListStocksRequest) returns (ListStocksResponse);
   // GetReservation reads the outcome inventory recorded for an order.
   rpc GetReservation(GetReservationRequest) returns (GetReservationResponse);
 }
@@ -32,6 +34,19 @@ message GetStockRequest {
 
 message GetStockResponse {
   Stock stock = 1;
+}
+
+message ListStocksRequest {
+  // 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+  int32 page_size = 1 [(buf.validate.field).int32.gte = 0];
+  // Opaque; from the previous ListStocksResponse.next_page_token.
+  string page_token = 2;
+}
+
+message ListStocksResponse {
+  repeated Stock stocks = 1;
+  // Empty when this is the last page.
+  string next_page_token = 2;
 }
 
 message GetReservationRequest {

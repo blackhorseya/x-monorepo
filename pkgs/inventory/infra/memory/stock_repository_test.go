@@ -49,3 +49,28 @@ func TestStockRepository_Versioning(t *testing.T) {
 		t.Fatalf("update of a missing sku: err = %v, want ErrStale", err)
 	}
 }
+
+func TestStockRepository_List(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewStockRepository()
+	now := time.Now()
+	for _, sku := range []string{"B", "C", "A"} {
+		s, _ := stock.New(stock.SKU(sku), 1, now)
+		if err := repo.Save(c, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, next, err := repo.List(c, stock.ListParams{Limit: 2})
+	if err != nil || len(page) != 2 || page[0].SKU() != "A" || page[1].SKU() != "B" || next != "B" {
+		t.Fatalf("page 1 = %v next=%q err=%v", page, next, err)
+	}
+	page, next, err = repo.List(c, stock.ListParams{Limit: 2, After: next})
+	if err != nil || len(page) != 1 || page[0].SKU() != "C" || next != "" {
+		t.Fatalf("page 2 = %v next=%q err=%v", page, next, err)
+	}
+	// Copies: mutating a listed aggregate does not touch the store.
+	_ = page[0].Restock(99, now)
+	if got, _ := repo.FindBySKU(c, "C"); got.OnHand() != 1 {
+		t.Fatal("List returned an alias of the stored aggregate")
+	}
+}

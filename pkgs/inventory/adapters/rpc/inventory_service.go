@@ -21,6 +21,7 @@ var _ inventoryv1connect.InventoryServiceHandler = (*InventoryService)(nil)
 type (
 	SetStockUC       = usecasex.UseCase[dto.SetStockInput, *dto.StockOutput]
 	GetStockUC       = usecasex.UseCase[dto.GetStockInput, *dto.StockOutput]
+	ListStocksUC     = usecasex.UseCase[dto.ListStocksInput, *dto.ListStocksOutput]
 	GetReservationUC = usecasex.UseCase[dto.GetReservationInput, *dto.ReservationOutput]
 )
 
@@ -28,11 +29,12 @@ type (
 type InventoryService struct {
 	setStock       SetStockUC
 	getStock       GetStockUC
+	listStocks     ListStocksUC
 	getReservation GetReservationUC
 }
 
-func NewInventoryService(setStock SetStockUC, getStock GetStockUC, getReservation GetReservationUC) *InventoryService {
-	return &InventoryService{setStock: setStock, getStock: getStock, getReservation: getReservation}
+func NewInventoryService(setStock SetStockUC, getStock GetStockUC, listStocks ListStocksUC, getReservation GetReservationUC) *InventoryService {
+	return &InventoryService{setStock: setStock, getStock: getStock, listStocks: listStocks, getReservation: getReservation}
 }
 
 // Route returns the mount path and handler (Connect + gRPC + gRPC-Web on one port).
@@ -62,6 +64,22 @@ func (h *InventoryService) GetStock(
 	}
 
 	return connect.NewResponse(&inventoryv1.GetStockResponse{Stock: toProtoStock(out)}), nil
+}
+
+func (h *InventoryService) ListStocks(
+	c context.Context,
+	req *connect.Request[inventoryv1.ListStocksRequest],
+) (*connect.Response[inventoryv1.ListStocksResponse], error) {
+	out, err := h.listStocks.Execute(c, dto.ListStocksInput{PageSize: req.Msg.GetPageSize(), PageToken: req.Msg.GetPageToken()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+	stocks := make([]*inventoryv1.Stock, 0, len(out.Stocks))
+	for i := range out.Stocks {
+		stocks = append(stocks, toProtoStock(&out.Stocks[i]))
+	}
+
+	return connect.NewResponse(&inventoryv1.ListStocksResponse{Stocks: stocks, NextPageToken: out.NextPageToken}), nil
 }
 
 func (h *InventoryService) GetReservation(

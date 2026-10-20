@@ -206,6 +206,113 @@ func (x *GetStockResponse) GetStock() *Stock {
 	return nil
 }
 
+type ListStocksRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// Opaque; from the previous ListStocksResponse.next_page_token.
+	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListStocksRequest) Reset() {
+	*x = ListStocksRequest{}
+	mi := &file_inventory_v1_service_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListStocksRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListStocksRequest) ProtoMessage() {}
+
+func (x *ListStocksRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_service_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListStocksRequest.ProtoReflect.Descriptor instead.
+func (*ListStocksRequest) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ListStocksRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListStocksRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListStocksResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Stocks []*Stock               `protobuf:"bytes,1,rep,name=stocks,proto3" json:"stocks,omitempty"`
+	// Empty when this is the last page.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListStocksResponse) Reset() {
+	*x = ListStocksResponse{}
+	mi := &file_inventory_v1_service_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListStocksResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListStocksResponse) ProtoMessage() {}
+
+func (x *ListStocksResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_service_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListStocksResponse.ProtoReflect.Descriptor instead.
+func (*ListStocksResponse) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ListStocksResponse) GetStocks() []*Stock {
+	if x != nil {
+		return x.Stocks
+	}
+	return nil
+}
+
+func (x *ListStocksResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 type GetReservationRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
@@ -215,7 +322,7 @@ type GetReservationRequest struct {
 
 func (x *GetReservationRequest) Reset() {
 	*x = GetReservationRequest{}
-	mi := &file_inventory_v1_service_proto_msgTypes[4]
+	mi := &file_inventory_v1_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -227,7 +334,7 @@ func (x *GetReservationRequest) String() string {
 func (*GetReservationRequest) ProtoMessage() {}
 
 func (x *GetReservationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_inventory_v1_service_proto_msgTypes[4]
+	mi := &file_inventory_v1_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -240,7 +347,7 @@ func (x *GetReservationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetReservationRequest.ProtoReflect.Descriptor instead.
 func (*GetReservationRequest) Descriptor() ([]byte, []int) {
-	return file_inventory_v1_service_proto_rawDescGZIP(), []int{4}
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetReservationRequest) GetOrderId() string {
@@ -259,7 +366,7 @@ type GetReservationResponse struct {
 
 func (x *GetReservationResponse) Reset() {
 	*x = GetReservationResponse{}
-	mi := &file_inventory_v1_service_proto_msgTypes[5]
+	mi := &file_inventory_v1_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -271,7 +378,7 @@ func (x *GetReservationResponse) String() string {
 func (*GetReservationResponse) ProtoMessage() {}
 
 func (x *GetReservationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_inventory_v1_service_proto_msgTypes[5]
+	mi := &file_inventory_v1_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -284,7 +391,7 @@ func (x *GetReservationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetReservationResponse.ProtoReflect.Descriptor instead.
 func (*GetReservationResponse) Descriptor() ([]byte, []int) {
-	return file_inventory_v1_service_proto_rawDescGZIP(), []int{5}
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetReservationResponse) GetReservation() *Reservation {
@@ -307,14 +414,23 @@ const file_inventory_v1_service_proto_rawDesc = "" +
 	"\x0fGetStockRequest\x12\x19\n" +
 	"\x03sku\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x03sku\"=\n" +
 	"\x10GetStockResponse\x12)\n" +
-	"\x05stock\x18\x01 \x01(\v2\x13.inventory.v1.StockR\x05stock\";\n" +
+	"\x05stock\x18\x01 \x01(\v2\x13.inventory.v1.StockR\x05stock\"X\n" +
+	"\x11ListStocksRequest\x12$\n" +
+	"\tpage_size\x18\x01 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\"i\n" +
+	"\x12ListStocksResponse\x12+\n" +
+	"\x06stocks\x18\x01 \x03(\v2\x13.inventory.v1.StockR\x06stocks\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\";\n" +
 	"\x15GetReservationRequest\x12\"\n" +
 	"\border_id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\aorderId\"U\n" +
 	"\x16GetReservationResponse\x12;\n" +
-	"\vreservation\x18\x01 \x01(\v2\x19.inventory.v1.ReservationR\vreservation2\x85\x02\n" +
+	"\vreservation\x18\x01 \x01(\v2\x19.inventory.v1.ReservationR\vreservation2\xd6\x02\n" +
 	"\x10InventoryService\x12I\n" +
 	"\bSetStock\x12\x1d.inventory.v1.SetStockRequest\x1a\x1e.inventory.v1.SetStockResponse\x12I\n" +
-	"\bGetStock\x12\x1d.inventory.v1.GetStockRequest\x1a\x1e.inventory.v1.GetStockResponse\x12[\n" +
+	"\bGetStock\x12\x1d.inventory.v1.GetStockRequest\x1a\x1e.inventory.v1.GetStockResponse\x12O\n" +
+	"\n" +
+	"ListStocks\x12\x1f.inventory.v1.ListStocksRequest\x1a .inventory.v1.ListStocksResponse\x12[\n" +
 	"\x0eGetReservation\x12#.inventory.v1.GetReservationRequest\x1a$.inventory.v1.GetReservationResponseB\xbc\x01\n" +
 	"\x10com.inventory.v1B\fServiceProtoP\x01ZIgithub.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1;inventoryv1\xa2\x02\x03IXX\xaa\x02\fInventory.V1\xca\x02\fInventory\\V1\xe2\x02\x18Inventory\\V1\\GPBMetadata\xea\x02\rInventory::V1b\x06proto3"
 
@@ -330,32 +446,37 @@ func file_inventory_v1_service_proto_rawDescGZIP() []byte {
 	return file_inventory_v1_service_proto_rawDescData
 }
 
-var file_inventory_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_inventory_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_inventory_v1_service_proto_goTypes = []any{
 	(*SetStockRequest)(nil),        // 0: inventory.v1.SetStockRequest
 	(*SetStockResponse)(nil),       // 1: inventory.v1.SetStockResponse
 	(*GetStockRequest)(nil),        // 2: inventory.v1.GetStockRequest
 	(*GetStockResponse)(nil),       // 3: inventory.v1.GetStockResponse
-	(*GetReservationRequest)(nil),  // 4: inventory.v1.GetReservationRequest
-	(*GetReservationResponse)(nil), // 5: inventory.v1.GetReservationResponse
-	(*Stock)(nil),                  // 6: inventory.v1.Stock
-	(*Reservation)(nil),            // 7: inventory.v1.Reservation
+	(*ListStocksRequest)(nil),      // 4: inventory.v1.ListStocksRequest
+	(*ListStocksResponse)(nil),     // 5: inventory.v1.ListStocksResponse
+	(*GetReservationRequest)(nil),  // 6: inventory.v1.GetReservationRequest
+	(*GetReservationResponse)(nil), // 7: inventory.v1.GetReservationResponse
+	(*Stock)(nil),                  // 8: inventory.v1.Stock
+	(*Reservation)(nil),            // 9: inventory.v1.Reservation
 }
 var file_inventory_v1_service_proto_depIdxs = []int32{
-	6, // 0: inventory.v1.SetStockResponse.stock:type_name -> inventory.v1.Stock
-	6, // 1: inventory.v1.GetStockResponse.stock:type_name -> inventory.v1.Stock
-	7, // 2: inventory.v1.GetReservationResponse.reservation:type_name -> inventory.v1.Reservation
-	0, // 3: inventory.v1.InventoryService.SetStock:input_type -> inventory.v1.SetStockRequest
-	2, // 4: inventory.v1.InventoryService.GetStock:input_type -> inventory.v1.GetStockRequest
-	4, // 5: inventory.v1.InventoryService.GetReservation:input_type -> inventory.v1.GetReservationRequest
-	1, // 6: inventory.v1.InventoryService.SetStock:output_type -> inventory.v1.SetStockResponse
-	3, // 7: inventory.v1.InventoryService.GetStock:output_type -> inventory.v1.GetStockResponse
-	5, // 8: inventory.v1.InventoryService.GetReservation:output_type -> inventory.v1.GetReservationResponse
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	8, // 0: inventory.v1.SetStockResponse.stock:type_name -> inventory.v1.Stock
+	8, // 1: inventory.v1.GetStockResponse.stock:type_name -> inventory.v1.Stock
+	8, // 2: inventory.v1.ListStocksResponse.stocks:type_name -> inventory.v1.Stock
+	9, // 3: inventory.v1.GetReservationResponse.reservation:type_name -> inventory.v1.Reservation
+	0, // 4: inventory.v1.InventoryService.SetStock:input_type -> inventory.v1.SetStockRequest
+	2, // 5: inventory.v1.InventoryService.GetStock:input_type -> inventory.v1.GetStockRequest
+	4, // 6: inventory.v1.InventoryService.ListStocks:input_type -> inventory.v1.ListStocksRequest
+	6, // 7: inventory.v1.InventoryService.GetReservation:input_type -> inventory.v1.GetReservationRequest
+	1, // 8: inventory.v1.InventoryService.SetStock:output_type -> inventory.v1.SetStockResponse
+	3, // 9: inventory.v1.InventoryService.GetStock:output_type -> inventory.v1.GetStockResponse
+	5, // 10: inventory.v1.InventoryService.ListStocks:output_type -> inventory.v1.ListStocksResponse
+	7, // 11: inventory.v1.InventoryService.GetReservation:output_type -> inventory.v1.GetReservationResponse
+	8, // [8:12] is the sub-list for method output_type
+	4, // [4:8] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_inventory_v1_service_proto_init() }
@@ -370,7 +491,7 @@ func file_inventory_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_inventory_v1_service_proto_rawDesc), len(file_inventory_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

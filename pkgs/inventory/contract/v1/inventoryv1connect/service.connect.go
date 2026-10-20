@@ -39,6 +39,9 @@ const (
 	// InventoryServiceGetStockProcedure is the fully-qualified name of the InventoryService's GetStock
 	// RPC.
 	InventoryServiceGetStockProcedure = "/inventory.v1.InventoryService/GetStock"
+	// InventoryServiceListStocksProcedure is the fully-qualified name of the InventoryService's
+	// ListStocks RPC.
+	InventoryServiceListStocksProcedure = "/inventory.v1.InventoryService/ListStocks"
 	// InventoryServiceGetReservationProcedure is the fully-qualified name of the InventoryService's
 	// GetReservation RPC.
 	InventoryServiceGetReservationProcedure = "/inventory.v1.InventoryService/GetReservation"
@@ -50,6 +53,8 @@ type InventoryServiceClient interface {
 	// Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
 	SetStock(context.Context, *connect.Request[v1.SetStockRequest]) (*connect.Response[v1.SetStockResponse], error)
 	GetStock(context.Context, *connect.Request[v1.GetStockRequest]) (*connect.Response[v1.GetStockResponse], error)
+	// ListStocks pages through every SKU, ascending by SKU.
+	ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error)
 	// GetReservation reads the outcome inventory recorded for an order.
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
 }
@@ -77,6 +82,12 @@ func NewInventoryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(inventoryServiceMethods.ByName("GetStock")),
 			connect.WithClientOptions(opts...),
 		),
+		listStocks: connect.NewClient[v1.ListStocksRequest, v1.ListStocksResponse](
+			httpClient,
+			baseURL+InventoryServiceListStocksProcedure,
+			connect.WithSchema(inventoryServiceMethods.ByName("ListStocks")),
+			connect.WithClientOptions(opts...),
+		),
 		getReservation: connect.NewClient[v1.GetReservationRequest, v1.GetReservationResponse](
 			httpClient,
 			baseURL+InventoryServiceGetReservationProcedure,
@@ -90,6 +101,7 @@ func NewInventoryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 type inventoryServiceClient struct {
 	setStock       *connect.Client[v1.SetStockRequest, v1.SetStockResponse]
 	getStock       *connect.Client[v1.GetStockRequest, v1.GetStockResponse]
+	listStocks     *connect.Client[v1.ListStocksRequest, v1.ListStocksResponse]
 	getReservation *connect.Client[v1.GetReservationRequest, v1.GetReservationResponse]
 }
 
@@ -103,6 +115,11 @@ func (c *inventoryServiceClient) GetStock(ctx context.Context, req *connect.Requ
 	return c.getStock.CallUnary(ctx, req)
 }
 
+// ListStocks calls inventory.v1.InventoryService.ListStocks.
+func (c *inventoryServiceClient) ListStocks(ctx context.Context, req *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error) {
+	return c.listStocks.CallUnary(ctx, req)
+}
+
 // GetReservation calls inventory.v1.InventoryService.GetReservation.
 func (c *inventoryServiceClient) GetReservation(ctx context.Context, req *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error) {
 	return c.getReservation.CallUnary(ctx, req)
@@ -114,6 +131,8 @@ type InventoryServiceHandler interface {
 	// Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
 	SetStock(context.Context, *connect.Request[v1.SetStockRequest]) (*connect.Response[v1.SetStockResponse], error)
 	GetStock(context.Context, *connect.Request[v1.GetStockRequest]) (*connect.Response[v1.GetStockResponse], error)
+	// ListStocks pages through every SKU, ascending by SKU.
+	ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error)
 	// GetReservation reads the outcome inventory recorded for an order.
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
 }
@@ -137,6 +156,12 @@ func NewInventoryServiceHandler(svc InventoryServiceHandler, opts ...connect.Han
 		connect.WithSchema(inventoryServiceMethods.ByName("GetStock")),
 		connect.WithHandlerOptions(opts...),
 	)
+	inventoryServiceListStocksHandler := connect.NewUnaryHandler(
+		InventoryServiceListStocksProcedure,
+		svc.ListStocks,
+		connect.WithSchema(inventoryServiceMethods.ByName("ListStocks")),
+		connect.WithHandlerOptions(opts...),
+	)
 	inventoryServiceGetReservationHandler := connect.NewUnaryHandler(
 		InventoryServiceGetReservationProcedure,
 		svc.GetReservation,
@@ -149,6 +174,8 @@ func NewInventoryServiceHandler(svc InventoryServiceHandler, opts ...connect.Han
 			inventoryServiceSetStockHandler.ServeHTTP(w, r)
 		case InventoryServiceGetStockProcedure:
 			inventoryServiceGetStockHandler.ServeHTTP(w, r)
+		case InventoryServiceListStocksProcedure:
+			inventoryServiceListStocksHandler.ServeHTTP(w, r)
 		case InventoryServiceGetReservationProcedure:
 			inventoryServiceGetReservationHandler.ServeHTTP(w, r)
 		default:
@@ -166,6 +193,10 @@ func (UnimplementedInventoryServiceHandler) SetStock(context.Context, *connect.R
 
 func (UnimplementedInventoryServiceHandler) GetStock(context.Context, *connect.Request[v1.GetStockRequest]) (*connect.Response[v1.GetStockResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("inventory.v1.InventoryService.GetStock is not implemented"))
+}
+
+func (UnimplementedInventoryServiceHandler) ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("inventory.v1.InventoryService.ListStocks is not implemented"))
 }
 
 func (UnimplementedInventoryServiceHandler) GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error) {
