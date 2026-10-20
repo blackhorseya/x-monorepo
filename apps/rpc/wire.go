@@ -26,6 +26,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		usecasex.NewRecorder,
 		eventbus.ProvidePublisher,
 		NewRoutes,
+		NewPoisonService,
 		NewDocs,
 		NewReadiness,
 		ordering.ProviderSet,

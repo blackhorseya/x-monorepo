@@ -1,5 +1,6 @@
 import { Code, ConnectError, createClient, type Interceptor } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
+import { AdminService } from "@repo/proto/admin/v1/service_pb";
 import { InventoryService } from "@repo/proto/inventory/v1/service_pb";
 import { OrderService } from "@repo/proto/ordering/v1/service_pb";
 import { ViolationsSchema } from "@repo/proto/buf/validate/validate_pb";
@@ -21,6 +22,7 @@ const transport = createConnectTransport({
 
 export const orders = createClient(OrderService, transport);
 export const inventory = createClient(InventoryService, transport);
+export const admin = createClient(AdminService, transport);
 
 // describe turns a Connect error into one line: the domain code from the
 // x-error-code header, plus protovalidate field violations when present.

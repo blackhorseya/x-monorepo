@@ -1,0 +1,12 @@
+# Merged into the generated OpenAPI document (protoc-gen-connect-openapi `base=` option).
+openapi: 3.1.0
+info:
+  title: Admin API
+  version: v1
+  description: |
+    Operator RPCs of the platform (not part of any bounded context): the poison queues of every BC the server hosts.
+    Every procedure is `POST /api/admin.v1.AdminService/<Method>` with a JSON body. With auth on, the caller needs the
+    `auth.admin_role` role: `X-API-Key` of a key declared as `name=key:admin`, or a JWT whose `roles` claim holds it;
+    otherwise `PERMISSION_DENIED` with `X-Error-Code: auth.permission_denied`.
+servers:
+  - url: /api

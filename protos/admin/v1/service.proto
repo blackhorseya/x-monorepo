@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package admin.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+// AdminService is the operator side of the platform: today the poison queues
+// (platform/eventbus) of every bounded context the server hosts. It is not
+// part of any BC's contract. Access: with auth on, the caller needs the
+// auth.admin_role role (PERMISSION_DENIED, x-error-code auth.permission_denied
+// otherwise); with auth.mode off everything is open, like the rest.
+service AdminService {
+  // ListPoison returns the messages parked on one BC's poison table, oldest
+  // first (nothing consumes it, so this is the whole backlog).
+  rpc ListPoison(ListPoisonRequest) returns (ListPoisonResponse);
+  // GetPoison returns one parked message in full (metadata + payload).
+  rpc GetPoison(GetPoisonRequest) returns (GetPoisonResponse);
+  // RequeuePoison publishes parked messages back onto the topic each was
+  // consumed from (same message id, poison metadata removed) and unparks
+  // them in the same transaction. Every consumer group behind the topic
+  // handles them again; a message that fails again is parked again.
+  rpc RequeuePoison(RequeuePoisonRequest) returns (RequeuePoisonResponse);
+  // DropPoison deletes parked messages for good.
+  rpc DropPoison(DropPoisonRequest) returns (DropPoisonResponse);
+}
+
+// PoisonMessage is one row of <bc>.events_poison. offset identifies the row;
+// uuid is the message id and repeats when a message is poisoned twice.
+message PoisonMessage {
+  string bounded_context = 1;
+  int64 offset = 2;
+  string uuid = 3;
+  google.protobuf.Timestamp parked_at = 4;
+  // topic it was consumed from and will be requeued to.
+  string topic = 5;
+  // handler that gave up on it and the last error.
+  string handler = 6;
+  string reason = 7;
+  // The full Watermill metadata, poison keys included.
+  map<string, string> metadata = 8;
+  // Payload is the topic's proto message, raw; only set by GetPoison.
+  bytes payload = 9;
+}
+
+message ListPoisonRequest {
+  // Schema name of the BC ("ordering"); empty = every BC the server hosts.
+  string bounded_context = 1;
+  // Rows per BC, oldest first; 0 = server default (50), at most 500.
+  int32 limit = 2 [(buf.validate.field).int32 = {
+    gte: 0
+    lte: 500
+  }];
+}
+
+message ListPoisonResponse {
+  repeated PoisonMessage messages = 1;
+}
+
+message GetPoisonRequest {
+  string bounded_context = 1 [(buf.validate.field).string.min_len = 1];
+  int64 offset = 2 [(buf.validate.field).int64.gt = 0];
+}
+
+message GetPoisonResponse {
+  PoisonMessage message = 1;
+}
+
+// Rows to act on: the listed offsets, or every row of the BC when all is set.
+// Exactly one of the two.
+message RequeuePoisonRequest {
+  string bounded_context = 1 [(buf.validate.field).string.min_len = 1];
+  repeated int64 offsets = 2 [(buf.validate.field).repeated.items.int64.gt = 0];
+  bool all = 3;
+  option (buf.validate.message).cel = {
+    id: "poison.offsets_xor_all"
+    message: "set offsets or all, not both and not neither"
+    expression: "(this.offsets.size() > 0) != this.all"
+  };
+}
+
+message RequeuePoisonResponse {
+  // How many rows were requeued; rows that no longer existed are not counted.
+  int32 count = 1;
+}
+
+message DropPoisonRequest {
+  string bounded_context = 1 [(buf.validate.field).string.min_len = 1];
+  repeated int64 offsets = 2 [(buf.validate.field).repeated.items.int64.gt = 0];
+  bool all = 3;
+  option (buf.validate.message).cel = {
+    id: "poison.offsets_xor_all"
+    message: "set offsets or all, not both and not neither"
+    expression: "(this.offsets.size() > 0) != this.all"
+  };
+}
+
+message DropPoisonResponse {
+  int32 count = 1;
+}

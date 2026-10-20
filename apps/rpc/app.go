@@ -14,16 +14,28 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	inventoryrpc "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
 	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	orderingrpc "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
-// NewRoutes lists every mounted service.
-func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService) []server.Route {
-	return []server.Route{ordering, inventory}
+// NewRoutes lists every mounted service: the BCs' and the platform's admin surface.
+func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, poison *admin.PoisonService) []server.Route {
+	return []server.Route{ordering, inventory, poison}
+}
+
+// NewPoisonService serves admin.v1.AdminService over every BC's poison
+// table. Adding a BC: add its Schema here (the worker's poison.go lists the
+// same set).
+func NewPoisonService(db *gorm.DB, auth config.Auth) *admin.PoisonService {
+	return admin.NewPoisonService(db, auth, []string{ordering.Schema, inventory.Schema})
 }
 
 // NewReadiness lists what /api/readyz checks: the database when one is
@@ -46,5 +58,6 @@ func NewDocs() []server.Doc {
 	return []server.Doc{
 		{Name: "ordering", Spec: orderingv1.OpenAPI},
 		{Name: "inventory", Spec: inventoryv1.OpenAPI},
+		{Name: "admin", Spec: adminv1.OpenAPI},
 	}
 }

@@ -45,11 +45,14 @@ type Auth struct {
 	// (a credential is verified when present, a call without one is
 	// anonymous), "required" (no valid credential → Unauthenticated).
 	Mode string `mapstructure:"mode"`
-	// APIKeys are static keys as "name=key[,name=key…]" (one string so an env
-	// var can carry it). A matching X-API-Key header makes the principal
-	// {Subject: name, Method: "api_key"}.
+	// APIKeys are static keys as "name=key[:role|role…][,name=key…]" (one
+	// string so an env var can carry it). A matching X-API-Key header makes
+	// the principal {Subject: name, Roles: roles, Method: "api_key"}.
 	APIKeys string `mapstructure:"api_keys"`
-	JWT     JWT    `mapstructure:"jwt"`
+	// AdminRole is the role admin.v1.AdminService requires when auth is on
+	// (default "admin"); with auth.mode off it is not checked.
+	AdminRole string `mapstructure:"admin_role"`
+	JWT       JWT    `mapstructure:"jwt"`
 	// Public lists procedures ("/<pkg>.<Service>/<Method>") that never need a
 	// credential, whatever the mode.
 	Public []string `mapstructure:"public"`
@@ -164,6 +167,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("http.docs", false)
 	v.SetDefault("auth.mode", AuthOff)
 	v.SetDefault("auth.api_keys", "")
+	v.SetDefault("auth.admin_role", "admin")
 	v.SetDefault("auth.jwt.issuer", "")
 	v.SetDefault("auth.jwt.audience", "")
 	v.SetDefault("auth.jwt.hs256_secret", "")
@@ -217,6 +221,9 @@ func (x *AppConfig) validate() error {
 		}
 	default:
 		return fmt.Errorf("invalid auth.mode %q (want off|optional|required)", x.Auth.Mode)
+	}
+	if x.Auth.AdminRole == "" {
+		return errors.New("auth.admin_role must not be empty")
 	}
 	if x.Auth.JWT.HS256Secret != "" && x.Auth.JWT.PublicKey != "" {
 		return errors.New("auth.jwt.hs256_secret and auth.jwt.public_key are exclusive")

@@ -13,8 +13,10 @@ auth:
   # required: no valid credential → UNAUTHENTICATED (x-error-code auth.unauthenticated / auth.invalid_credential).
   # Probes, /api/metrics and /api/docs are outside the RPC chain and always open.
   mode: off
-  # Static keys for X-API-Key, "name=key,name=key" (≥16 chars each); the principal's subject is the name.
+  # Static keys for X-API-Key, "name=key[:role|role],name=key" (≥16 chars each); the principal's
+  # subject is the name, roles the list after the colon (admin.v1.AdminService needs admin_role).
   api_keys: ""
+  admin_role: admin
   jwt:
     # Authorization: Bearer <token>. Exactly one of hs256_secret (≥32 bytes) or public_key (PEM:
     # RSA / EC / Ed25519, algorithm family pinned to the key type). exp is required; iss / aud are

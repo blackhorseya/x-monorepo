@@ -1,0 +1,415 @@
+openapi: 3.1.0
+info:
+  title: Admin API
+  version: v1
+  description: |
+    Operator RPCs of the platform (not part of any bounded context): the poison queues of every BC the server hosts.
+    Every procedure is `POST /api/admin.v1.AdminService/<Method>` with a JSON body. With auth on, the caller needs the
+    `auth.admin_role` role: `X-API-Key` of a key declared as `name=key:admin`, or a JWT whose `roles` claim holds it;
+    otherwise `PERMISSION_DENIED` with `X-Error-Code: auth.permission_denied`.
+servers:
+  - url: /api
+paths:
+  /admin.v1.AdminService/DropPoison:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: DropPoison
+      description: DropPoison deletes parked messages for good.
+      operationId: admin.v1.AdminService.DropPoison
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.DropPoisonRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.DropPoisonResponse'
+  /admin.v1.AdminService/GetPoison:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: GetPoison
+      description: GetPoison returns one parked message in full (metadata + payload).
+      operationId: admin.v1.AdminService.GetPoison
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.GetPoisonRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.GetPoisonResponse'
+  /admin.v1.AdminService/ListPoison:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: ListPoison
+      description: |-
+        ListPoison returns the messages parked on one BC's poison table, oldest
+         first (nothing consumes it, so this is the whole backlog).
+      operationId: admin.v1.AdminService.ListPoison
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.ListPoisonRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.ListPoisonResponse'
+  /admin.v1.AdminService/RequeuePoison:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: RequeuePoison
+      description: |-
+        RequeuePoison publishes parked messages back onto the topic each was
+         consumed from (same message id, poison metadata removed) and unparks
+         them in the same transaction. Every consumer group behind the topic
+         handles them again; a message that fails again is parked again.
+      operationId: admin.v1.AdminService.RequeuePoison
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.RequeuePoisonRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.RequeuePoisonResponse'
+components:
+  schemas:
+    admin.v1.DropPoisonRequest:
+      type: object
+      properties:
+        boundedContext:
+          type: string
+          title: bounded_context
+          minLength: 1
+        offsets:
+          type: array
+          items:
+            exclusiveMinimum: 0
+            type: string
+            format: int64
+          title: offsets
+        all:
+          type: boolean
+          title: all
+      title: DropPoisonRequest
+      additionalProperties: false
+      description: |
+        poison.offsets_xor_all // set offsets or all, not both and not neither
+    admin.v1.DropPoisonResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+          title: count
+          format: int32
+      title: DropPoisonResponse
+      additionalProperties: false
+    admin.v1.GetPoisonRequest:
+      type: object
+      properties:
+        boundedContext:
+          type: string
+          title: bounded_context
+          minLength: 1
+        offset:
+          exclusiveMinimum: 0
+          type: string
+          title: offset
+          format: int64
+      title: GetPoisonRequest
+      additionalProperties: false
+    admin.v1.GetPoisonResponse:
+      type: object
+      properties:
+        message:
+          allOf:
+            - $ref: '#/components/schemas/admin.v1.PoisonMessage'
+          title: message
+      title: GetPoisonResponse
+      additionalProperties: false
+    admin.v1.ListPoisonRequest:
+      type: object
+      properties:
+        boundedContext:
+          type: string
+          title: bounded_context
+          description: Schema name of the BC ("ordering"); empty = every BC the server hosts.
+        limit:
+          type: integer
+          title: limit
+          maximum: 500
+          minimum: 0
+          format: int32
+          description: Rows per BC, oldest first; 0 = server default (50), at most 500.
+      title: ListPoisonRequest
+      additionalProperties: false
+    admin.v1.ListPoisonResponse:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/admin.v1.PoisonMessage'
+          title: messages
+      title: ListPoisonResponse
+      additionalProperties: false
+    admin.v1.PoisonMessage:
+      type: object
+      properties:
+        boundedContext:
+          type: string
+          title: bounded_context
+        offset:
+          type: string
+          title: offset
+          format: int64
+        uuid:
+          type: string
+          title: uuid
+        parkedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: parked_at
+        topic:
+          type: string
+          title: topic
+          description: topic it was consumed from and will be requeued to.
+        handler:
+          type: string
+          title: handler
+          description: handler that gave up on it and the last error.
+        reason:
+          type: string
+          title: reason
+        metadata:
+          type: object
+          title: metadata
+          additionalProperties:
+            type: string
+            title: value
+          description: The full Watermill metadata, poison keys included.
+        payload:
+          type: string
+          title: payload
+          format: byte
+          description: Payload is the topic's proto message, raw; only set by GetPoison.
+      title: PoisonMessage
+      additionalProperties: false
+      description: |-
+        PoisonMessage is one row of <bc>.events_poison. offset identifies the row;
+         uuid is the message id and repeats when a message is poisoned twice.
+    admin.v1.RequeuePoisonRequest:
+      type: object
+      properties:
+        boundedContext:
+          type: string
+          title: bounded_context
+          minLength: 1
+        offsets:
+          type: array
+          items:
+            exclusiveMinimum: 0
+            type: string
+            format: int64
+          title: offsets
+        all:
+          type: boolean
+          title: all
+      title: RequeuePoisonRequest
+      additionalProperties: false
+      description: |
+        Rows to act on: the listed offsets, or every row of the BC when all is set.
+         Exactly one of the two.
+        poison.offsets_xor_all // set offsets or all, not both and not neither
+    admin.v1.RequeuePoisonResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+          title: count
+          format: int32
+          description: How many rows were requeued; rows that no longer existed are not counted.
+      title: RequeuePoisonResponse
+      additionalProperties: false
+    connect-protocol-version:
+      type: number
+      examples:
+        - 1
+      title: Connect-Protocol-Version
+      description: Define the version of the Connect protocol
+      const: 1
+    connect-timeout-header:
+      type: number
+      examples:
+        - 1000
+      title: Connect-Timeout-Ms
+      description: Define the timeout, in ms
+    connect.error:
+      type: object
+      properties:
+        code:
+          type: string
+          examples:
+            - not_found
+          enum:
+            - canceled
+            - unknown
+            - invalid_argument
+            - deadline_exceeded
+            - not_found
+            - already_exists
+            - permission_denied
+            - resource_exhausted
+            - failed_precondition
+            - aborted
+            - out_of_range
+            - unimplemented
+            - internal
+            - unavailable
+            - data_loss
+            - unauthenticated
+          description: The status code, which should be an enum value of [google.rpc.Code][google.rpc.Code].
+        message:
+          type: string
+          description: A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the [google.rpc.Status.details][google.rpc.Status.details] field, or localized by the client.
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/connect.error_details.Any'
+          description: A list of messages that carry the error details. There is no limit on the number of messages.
+      title: Connect Error
+      additionalProperties: true
+      description: 'Error type returned by Connect: https://connectrpc.com/docs/go/errors/#http-representation'
+    connect.error_details.Any:
+      type: object
+      properties:
+        type:
+          type: string
+          description: 'A URL that acts as a globally unique identifier for the type of the serialized message. For example: `type.googleapis.com/google.rpc.ErrorInfo`.'
+        value:
+          type: string
+          format: byte
+          description: The Protobuf message, serialized as bytes and base64-encoded. The specific message type is identified by the `type` field.
+        debug:
+          type: object
+          title: Debug
+          additionalProperties: true
+          description: Deserialized error detail payload. The 'type' field indicates the schema. This field is for easier debugging and should not be relied upon for application logic.
+      additionalProperties: true
+      description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message, with an additional debug field for ConnectRPC error details.
+    google.protobuf.Timestamp:
+      type: string
+      examples:
+        - "2023-01-15T01:30:15.01Z"
+        - "2024-12-25T12:00:00Z"
+      format: date-time
+      description: A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC.
+security: []
+tags:
+  - name: admin.v1.AdminService
+    description: |-
+      AdminService is the operator side of the platform: today the poison queues
+       (platform/eventbus) of every bounded context the server hosts. It is not
+       part of any BC's contract. Access: with auth on, the caller needs the
+       auth.admin_role role (PERMISSION_DENIED, x-error-code auth.permission_denied
+       otherwise); with auth.mode off everything is open, like the rest.

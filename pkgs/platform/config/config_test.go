@@ -29,7 +29,7 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	if cfg.HTTP.Addr != ":8080" || cfg.HTTP.Docs || cfg.Log.Level != "info" || cfg.Log.Format != "json" || cfg.Postgres.URL != "" {
 		t.Fatalf("defaults: %+v", cfg)
 	}
-	if cfg.Auth.Mode != config.AuthOff || cfg.Auth.APIKeys != "" || len(cfg.Auth.Public) != 0 {
+	if cfg.Auth.Mode != config.AuthOff || cfg.Auth.APIKeys != "" || len(cfg.Auth.Public) != 0 || cfg.Auth.AdminRole != "admin" {
 		t.Fatalf("auth defaults: %+v", cfg.Auth)
 	}
 }

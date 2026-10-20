@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
-import { inventory, isNotFound, orders } from "./client";
+import { admin, inventory, isNotFound, orders } from "./client";
 
 // The server exposes unary RPCs only, so the console polls. Reservations are
 // written by apps/worker after it consumes OrderCreated, and orders can be
@@ -11,6 +11,8 @@ export const keys = {
   orders: ["orders"] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
   stock: (sku: string) => ["stock", sku] as const,
+  poison: ["poison"] as const,
+  poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
 };
 
 export const ordersQuery = queryOptions({
@@ -44,4 +46,17 @@ export const stockQuery = (sku: string) =>
     queryKey: keys.stock(sku),
     queryFn: async () => (await inventory.getStock({ sku })).stock ?? null,
     enabled: sku !== "",
+  });
+
+// Every BC's poison table; parking happens after retries, so a slower poll is fine.
+export const poisonQuery = queryOptions({
+  queryKey: keys.poison,
+  queryFn: async () => (await admin.listPoison({})).messages,
+  refetchInterval: 5000,
+});
+
+export const poisonDetailQuery = (bc: string, offset: bigint) =>
+  queryOptions({
+    queryKey: keys.poisonDetail(bc, offset),
+    queryFn: async () => (await admin.getPoison({ boundedContext: bc, offset })).message ?? null,
   });
