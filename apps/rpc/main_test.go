@@ -175,6 +175,14 @@ func TestOrderService_E2E(t *testing.T) {
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound || ce.Meta().Get("x-error-code") != "reservation.not_found" {
 		t.Fatalf("GetReservation without a worker: err = %v", err)
 	}
+	rs, err := inv.ListReservations(c, connect.NewRequest(&inventoryv1.ListReservationsRequest{Status: inventoryv1.ReservationStatus_RESERVATION_STATUS_RESERVED}))
+	if err != nil || len(rs.Msg.GetReservations()) != 0 || rs.Msg.GetNextPageToken() != "" {
+		t.Fatalf("ListReservations without a worker: %v, %v", rs, err)
+	}
+	_, err = inv.ListReservations(c, connect.NewRequest(&inventoryv1.ListReservationsRequest{PageSize: -1}))
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
+		t.Fatalf("ListReservations negative page size (protovalidate): err = %v", err)
+	}
 	_, err = inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-1", OnHand: -1}))
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
 		t.Fatalf("SetStock negative (protovalidate): err = %v", err)
@@ -202,6 +210,7 @@ func TestOrderService_E2E(t *testing.T) {
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.list_stocks"} 2`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.get_stock"} 1`,
 		`usecase_duration_seconds_count{kind="not_found",usecase="inventory.get_reservation"} 1`,
+		`usecase_duration_seconds_count{kind="ok",usecase="inventory.list_reservations"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("%s missing %q\n%s", server.MetricsPath, want, body)

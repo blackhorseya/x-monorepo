@@ -17,6 +17,8 @@ service InventoryService {
   rpc ListStocks(ListStocksRequest) returns (ListStocksResponse);
   // GetReservation reads the outcome inventory recorded for an order.
   rpc GetReservation(GetReservationRequest) returns (GetReservationResponse);
+  // ListReservations pages through reservations newest first, optionally by status.
+  rpc ListReservations(ListReservationsRequest) returns (ListReservationsResponse);
 }
 
 message SetStockRequest {
@@ -55,4 +57,19 @@ message GetReservationRequest {
 
 message GetReservationResponse {
   Reservation reservation = 1;
+}
+
+message ListReservationsRequest {
+  // RESERVATION_STATUS_UNSPECIFIED = any status.
+  ReservationStatus status = 1;
+  // 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+  int32 page_size = 2 [(buf.validate.field).int32.gte = 0];
+  // Opaque; from the previous ListReservationsResponse.next_page_token.
+  string page_token = 3;
+}
+
+message ListReservationsResponse {
+  repeated Reservation reservations = 1;
+  // Empty when this is the last page.
+  string next_page_token = 2;
 }

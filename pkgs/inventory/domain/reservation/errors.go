@@ -12,6 +12,10 @@ var (
 	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "reservation.not_found", "reservation not found")
 	// ErrDuplicate is returned by Repository.Save when the order already has a reservation.
 	ErrDuplicate = kernel.NewError(kernel.KindConflict, "reservation.duplicate", "reservation already exists for this order")
+	// ErrInvalidStatusFilter is a list filter naming a status this version does not know.
+	ErrInvalidStatusFilter = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_status_filter", "unknown reservation status filter")
+	// ErrInvalidCursor is a list cursor missing its timestamp or order id.
+	ErrInvalidCursor = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_cursor", "cursor must carry a timestamp and an order id")
 	// ErrInvalidStatus means persisted state names a status this version does not know.
 	ErrInvalidStatus = kernel.NewError(kernel.KindInternal, "reservation.invalid_status", "unknown reservation status")
 )

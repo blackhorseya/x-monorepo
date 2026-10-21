@@ -45,6 +45,9 @@ const (
 	// InventoryServiceGetReservationProcedure is the fully-qualified name of the InventoryService's
 	// GetReservation RPC.
 	InventoryServiceGetReservationProcedure = "/inventory.v1.InventoryService/GetReservation"
+	// InventoryServiceListReservationsProcedure is the fully-qualified name of the InventoryService's
+	// ListReservations RPC.
+	InventoryServiceListReservationsProcedure = "/inventory.v1.InventoryService/ListReservations"
 )
 
 // InventoryServiceClient is a client for the inventory.v1.InventoryService service.
@@ -57,6 +60,8 @@ type InventoryServiceClient interface {
 	ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error)
 	// GetReservation reads the outcome inventory recorded for an order.
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
+	// ListReservations pages through reservations newest first, optionally by status.
+	ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error)
 }
 
 // NewInventoryServiceClient constructs a client for the inventory.v1.InventoryService service. By
@@ -94,15 +99,22 @@ func NewInventoryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(inventoryServiceMethods.ByName("GetReservation")),
 			connect.WithClientOptions(opts...),
 		),
+		listReservations: connect.NewClient[v1.ListReservationsRequest, v1.ListReservationsResponse](
+			httpClient,
+			baseURL+InventoryServiceListReservationsProcedure,
+			connect.WithSchema(inventoryServiceMethods.ByName("ListReservations")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // inventoryServiceClient implements InventoryServiceClient.
 type inventoryServiceClient struct {
-	setStock       *connect.Client[v1.SetStockRequest, v1.SetStockResponse]
-	getStock       *connect.Client[v1.GetStockRequest, v1.GetStockResponse]
-	listStocks     *connect.Client[v1.ListStocksRequest, v1.ListStocksResponse]
-	getReservation *connect.Client[v1.GetReservationRequest, v1.GetReservationResponse]
+	setStock         *connect.Client[v1.SetStockRequest, v1.SetStockResponse]
+	getStock         *connect.Client[v1.GetStockRequest, v1.GetStockResponse]
+	listStocks       *connect.Client[v1.ListStocksRequest, v1.ListStocksResponse]
+	getReservation   *connect.Client[v1.GetReservationRequest, v1.GetReservationResponse]
+	listReservations *connect.Client[v1.ListReservationsRequest, v1.ListReservationsResponse]
 }
 
 // SetStock calls inventory.v1.InventoryService.SetStock.
@@ -125,6 +137,11 @@ func (c *inventoryServiceClient) GetReservation(ctx context.Context, req *connec
 	return c.getReservation.CallUnary(ctx, req)
 }
 
+// ListReservations calls inventory.v1.InventoryService.ListReservations.
+func (c *inventoryServiceClient) ListReservations(ctx context.Context, req *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error) {
+	return c.listReservations.CallUnary(ctx, req)
+}
+
 // InventoryServiceHandler is an implementation of the inventory.v1.InventoryService service.
 type InventoryServiceHandler interface {
 	// SetStock sets the on-hand quantity of a SKU (creates it when unknown).
@@ -135,6 +152,8 @@ type InventoryServiceHandler interface {
 	ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error)
 	// GetReservation reads the outcome inventory recorded for an order.
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
+	// ListReservations pages through reservations newest first, optionally by status.
+	ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error)
 }
 
 // NewInventoryServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -168,6 +187,12 @@ func NewInventoryServiceHandler(svc InventoryServiceHandler, opts ...connect.Han
 		connect.WithSchema(inventoryServiceMethods.ByName("GetReservation")),
 		connect.WithHandlerOptions(opts...),
 	)
+	inventoryServiceListReservationsHandler := connect.NewUnaryHandler(
+		InventoryServiceListReservationsProcedure,
+		svc.ListReservations,
+		connect.WithSchema(inventoryServiceMethods.ByName("ListReservations")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/inventory.v1.InventoryService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case InventoryServiceSetStockProcedure:
@@ -178,6 +203,8 @@ func NewInventoryServiceHandler(svc InventoryServiceHandler, opts ...connect.Han
 			inventoryServiceListStocksHandler.ServeHTTP(w, r)
 		case InventoryServiceGetReservationProcedure:
 			inventoryServiceGetReservationHandler.ServeHTTP(w, r)
+		case InventoryServiceListReservationsProcedure:
+			inventoryServiceListReservationsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -201,4 +228,8 @@ func (UnimplementedInventoryServiceHandler) ListStocks(context.Context, *connect
 
 func (UnimplementedInventoryServiceHandler) GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("inventory.v1.InventoryService.GetReservation is not implemented"))
+}
+
+func (UnimplementedInventoryServiceHandler) ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("inventory.v1.InventoryService.ListReservations is not implemented"))
 }

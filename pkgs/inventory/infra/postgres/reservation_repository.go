@@ -98,6 +98,49 @@ func (i *ReservationRepository) Update(c context.Context, r *reservation.Reserva
 	return nil
 }
 
+func (i *ReservationRepository) List(c context.Context, p reservation.ListParams) ([]*reservation.Reservation, *reservation.Cursor, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	q := platformpg.TxOrDB(ctx, i.db).
+		Preload("Lines", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
+		Order("created_at DESC, order_id DESC")
+	if p.Status != nil {
+		q = q.Where("status = ?", p.Status.String())
+	}
+	if p.After != nil {
+		q = q.Where("(created_at, order_id) < (?, ?)", p.After.CreatedAt(), p.After.OrderID())
+	}
+	if p.Limit > 0 {
+		q = q.Limit(p.Limit + 1)
+	}
+	var rows []reservationRow
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, nil, fmt.Errorf("list reservations: %w", err)
+	}
+	hasMore := p.Limit > 0 && len(rows) > p.Limit
+	if hasMore {
+		rows = rows[:p.Limit]
+	}
+	out := make([]*reservation.Reservation, 0, len(rows))
+	for _, row := range rows {
+		r, err := toDomain(row)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, r)
+	}
+	var next *reservation.Cursor
+	if hasMore {
+		cur := reservation.CursorOf(out[len(out)-1])
+		next = &cur
+	}
+
+	return out, next, nil
+}
+
 func toRow(r *reservation.Reservation) reservationRow {
 	short := make(map[string]bool, len(r.Shortfall()))
 	for _, sku := range r.Shortfall() {

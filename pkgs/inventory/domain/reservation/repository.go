@@ -14,4 +14,8 @@ type Repository interface {
 	Add(c context.Context, r *Reservation) error
 	// Update stores a status change; ErrNotFound when it was never added.
 	Update(c context.Context, r *Reservation) error
+	// List returns up to p.Limit reservations newest first (created_at desc,
+	// order_id desc) and the cursor of the next page, or nil when this is the
+	// last page.
+	List(c context.Context, p ListParams) ([]*Reservation, *Cursor, error)
 }

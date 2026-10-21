@@ -36,6 +36,7 @@ type fixture struct {
 	getStock     *usecase.GetStock
 	listStocks   *usecase.ListStocks
 	getRes       *usecase.GetReservation
+	listRes      *usecase.ListReservations
 	reserve      *usecase.ReserveStock
 	release      *usecase.ReleaseStock
 }
@@ -48,6 +49,7 @@ func newFixture() *fixture {
 	f.getStock = usecase.NewGetStock(f.stocks)
 	f.listStocks = usecase.NewListStocks(f.stocks)
 	f.getRes = usecase.NewGetReservation(f.reservations)
+	f.listRes = usecase.NewListReservations(f.reservations)
 	f.reserve = usecase.NewReserveStock(f.reservations, f.stocks, f.rec, clock)
 	f.release = usecase.NewReleaseStock(f.reservations, f.stocks, f.rec, clock)
 	return f
@@ -355,5 +357,51 @@ func TestAddRace_IsRetried(t *testing.T) {
 				t.Fatalf("after retry reserved = %d, want 0", a.Reserved)
 			}
 		})
+	}
+}
+
+// ListReservations is newest first (the fixed clock makes every row the same
+// age, so the order id breaks the tie), filters by status, and its token is
+// bound to the filter it was issued for.
+func TestListReservations(t *testing.T) {
+	c := context.Background()
+	f := newFixture()
+	if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: "A", OnHand: 10}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"o-1", "o-3"} {
+		if _, err := f.reserve.Execute(c, dto.ReserveStockInput{OrderID: id, Lines: []dto.Line{{SKU: "A", Quantity: 1}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// o-2 cancelled before it was created: a CANCELLED tombstone.
+	if _, err := f.release.Execute(c, dto.ReleaseStockInput{OrderID: "o-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := f.listRes.Execute(c, dto.ListReservationsInput{PageSize: 2})
+	if err != nil || len(page.Reservations) != 2 || page.Reservations[0].OrderID != "o-3" || page.Reservations[1].OrderID != "o-2" || page.NextPageToken == "" {
+		t.Fatalf("page 1 = %+v, %v", page, err)
+	}
+	last, err := f.listRes.Execute(c, dto.ListReservationsInput{PageSize: 2, PageToken: page.NextPageToken})
+	if err != nil || len(last.Reservations) != 1 || last.Reservations[0].OrderID != "o-1" || last.NextPageToken != "" {
+		t.Fatalf("page 2 = %+v, %v", last, err)
+	}
+	reserved, err := f.listRes.Execute(c, dto.ListReservationsInput{Status: "RESERVED", PageSize: 1})
+	if err != nil || len(reserved.Reservations) != 1 || reserved.Reservations[0].OrderID != "o-3" || reserved.NextPageToken == "" {
+		t.Fatalf("RESERVED page 1 = %+v, %v", reserved, err)
+	}
+	// The token carries its filter: replayed with another one it is rejected.
+	if _, err := f.listRes.Execute(c, dto.ListReservationsInput{Status: "CANCELLED", PageToken: reserved.NextPageToken}); !errors.Is(err, pagination.ErrInvalidToken) {
+		t.Fatalf("token with another filter: %v", err)
+	}
+	if _, err := f.listRes.Execute(c, dto.ListReservationsInput{Status: "BOGUS"}); !errors.Is(err, reservation.ErrInvalidStatusFilter) {
+		t.Fatalf("bogus status: %v", err)
+	}
+	if _, err := f.listRes.Execute(c, dto.ListReservationsInput{PageToken: "not-a-token"}); !errors.Is(err, pagination.ErrInvalidToken) {
+		t.Fatalf("bad token: %v", err)
+	}
+	if _, err := f.listRes.Execute(c, dto.ListReservationsInput{PageSize: -1}); err == nil {
+		t.Fatal("negative page size must fail")
 	}
 }

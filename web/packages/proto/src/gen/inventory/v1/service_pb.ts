@@ -5,7 +5,7 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv1";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv1";
 import { file_buf_validate_validate } from "../../buf/validate/validate_pb";
-import type { Reservation, Stock } from "./entity_pb";
+import type { Reservation, ReservationStatus, Stock } from "./entity_pb";
 import { file_inventory_v1_entity } from "./entity_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file inventory/v1/service.proto.
  */
 export const file_inventory_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJDChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCSJSChJMaXN0U3RvY2tzUmVzcG9uc2USIwoGc3RvY2tzGAEgAygLMhMuaW52ZW50b3J5LnYxLlN0b2NrEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCSIyChVHZXRSZXNlcnZhdGlvblJlcXVlc3QSGQoIb3JkZXJfaWQYASABKAlCB7pIBHICEAEiSAoWR2V0UmVzZXJ2YXRpb25SZXNwb25zZRIuCgtyZXNlcnZhdGlvbhgBIAEoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbjLWAgoQSW52ZW50b3J5U2VydmljZRJJCghTZXRTdG9jaxIdLmludmVudG9yeS52MS5TZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuU2V0U3RvY2tSZXNwb25zZRJJCghHZXRTdG9jaxIdLmludmVudG9yeS52MS5HZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuR2V0U3RvY2tSZXNwb25zZRJPCgpMaXN0U3RvY2tzEh8uaW52ZW50b3J5LnYxLkxpc3RTdG9ja3NSZXF1ZXN0GiAuaW52ZW50b3J5LnYxLkxpc3RTdG9ja3NSZXNwb25zZRJbCg5HZXRSZXNlcnZhdGlvbhIjLmludmVudG9yeS52MS5HZXRSZXNlcnZhdGlvblJlcXVlc3QaJC5pbnZlbnRvcnkudjEuR2V0UmVzZXJ2YXRpb25SZXNwb25zZWIGcHJvdG8z", [file_buf_validate_validate, file_inventory_v1_entity]);
+  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJDChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCSJSChJMaXN0U3RvY2tzUmVzcG9uc2USIwoGc3RvY2tzGAEgAygLMhMuaW52ZW50b3J5LnYxLlN0b2NrEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCSIyChVHZXRSZXNlcnZhdGlvblJlcXVlc3QSGQoIb3JkZXJfaWQYASABKAlCB7pIBHICEAEiSAoWR2V0UmVzZXJ2YXRpb25SZXNwb25zZRIuCgtyZXNlcnZhdGlvbhgBIAEoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbiJ6ChdMaXN0UmVzZXJ2YXRpb25zUmVxdWVzdBIvCgZzdGF0dXMYASABKA4yHy5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb25TdGF0dXMSGgoJcGFnZV9zaXplGAIgASgFQge6SAQaAigAEhIKCnBhZ2VfdG9rZW4YAyABKAkiZAoYTGlzdFJlc2VydmF0aW9uc1Jlc3BvbnNlEi8KDHJlc2VydmF0aW9ucxgBIAMoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbhIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkyuQMKEEludmVudG9yeVNlcnZpY2USSQoIU2V0U3RvY2sSHS5pbnZlbnRvcnkudjEuU2V0U3RvY2tSZXF1ZXN0Gh4uaW52ZW50b3J5LnYxLlNldFN0b2NrUmVzcG9uc2USSQoIR2V0U3RvY2sSHS5pbnZlbnRvcnkudjEuR2V0U3RvY2tSZXF1ZXN0Gh4uaW52ZW50b3J5LnYxLkdldFN0b2NrUmVzcG9uc2USTwoKTGlzdFN0b2NrcxIfLmludmVudG9yeS52MS5MaXN0U3RvY2tzUmVxdWVzdBogLmludmVudG9yeS52MS5MaXN0U3RvY2tzUmVzcG9uc2USWwoOR2V0UmVzZXJ2YXRpb24SIy5pbnZlbnRvcnkudjEuR2V0UmVzZXJ2YXRpb25SZXF1ZXN0GiQuaW52ZW50b3J5LnYxLkdldFJlc2VydmF0aW9uUmVzcG9uc2USYQoQTGlzdFJlc2VydmF0aW9ucxIlLmludmVudG9yeS52MS5MaXN0UmVzZXJ2YXRpb25zUmVxdWVzdBomLmludmVudG9yeS52MS5MaXN0UmVzZXJ2YXRpb25zUmVzcG9uc2ViBnByb3RvMw", [file_buf_validate_validate, file_inventory_v1_entity]);
 
 /**
  * @generated from message inventory.v1.SetStockRequest
@@ -173,6 +173,63 @@ export const GetReservationResponseSchema: GenMessage<GetReservationResponse> = 
   messageDesc(file_inventory_v1_service, 7);
 
 /**
+ * @generated from message inventory.v1.ListReservationsRequest
+ */
+export type ListReservationsRequest = Message<"inventory.v1.ListReservationsRequest"> & {
+  /**
+   * RESERVATION_STATUS_UNSPECIFIED = any status.
+   *
+   * @generated from field: inventory.v1.ReservationStatus status = 1;
+   */
+  status: ReservationStatus;
+
+  /**
+   * 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+   *
+   * @generated from field: int32 page_size = 2;
+   */
+  pageSize: number;
+
+  /**
+   * Opaque; from the previous ListReservationsResponse.next_page_token.
+   *
+   * @generated from field: string page_token = 3;
+   */
+  pageToken: string;
+};
+
+/**
+ * Describes the message inventory.v1.ListReservationsRequest.
+ * Use `create(ListReservationsRequestSchema)` to create a new message.
+ */
+export const ListReservationsRequestSchema: GenMessage<ListReservationsRequest> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 8);
+
+/**
+ * @generated from message inventory.v1.ListReservationsResponse
+ */
+export type ListReservationsResponse = Message<"inventory.v1.ListReservationsResponse"> & {
+  /**
+   * @generated from field: repeated inventory.v1.Reservation reservations = 1;
+   */
+  reservations: Reservation[];
+
+  /**
+   * Empty when this is the last page.
+   *
+   * @generated from field: string next_page_token = 2;
+   */
+  nextPageToken: string;
+};
+
+/**
+ * Describes the message inventory.v1.ListReservationsResponse.
+ * Use `create(ListReservationsResponseSchema)` to create a new message.
+ */
+export const ListReservationsResponseSchema: GenMessage<ListReservationsResponse> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 9);
+
+/**
  * InventoryService is the public RPC contract of the inventory bounded context.
  * Reservations are not made through RPC: they react to ordering.v1.OrderCreated
  * (see pkgs/inventory/adapters/consumer); RPC only seeds and reads.
@@ -218,6 +275,16 @@ export const InventoryService: GenService<{
     methodKind: "unary";
     input: typeof GetReservationRequestSchema;
     output: typeof GetReservationResponseSchema;
+  },
+  /**
+   * ListReservations pages through reservations newest first, optionally by status.
+   *
+   * @generated from rpc inventory.v1.InventoryService.ListReservations
+   */
+  listReservations: {
+    methodKind: "unary";
+    input: typeof ListReservationsRequestSchema;
+    output: typeof ListReservationsResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_inventory_v1_service, 0);

@@ -42,8 +42,8 @@ func TestRepositories_Postgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 4 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 4 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 5 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 5 clean", v, dirty, err)
 	}
 	for _, tbl := range []string{"inventory.stocks", "inventory.reservations"} {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl + " CASCADE").Error; err != nil {
@@ -179,4 +179,31 @@ func TestRepositories_Postgres(t *testing.T) {
 	if err != nil || got.Status() != reservation.StatusCancelled || len(got.Lines()) != 0 || len(got.Shortfall()) != 0 {
 		t.Fatalf("tombstone round trip = %+v, %v", got, err)
 	}
+
+	// ── list: newest first, order_id breaks the created_at tie, lines preloaded ──
+	// o-1 (REJECTED), o-2 (RELEASED) and o-tomb (CANCELLED) all share `now`.
+	rpage, rnext, err := reservations.List(c, reservation.ListParams{Limit: 2})
+	if err != nil || len(rpage) != 2 || rpage[0].OrderID() != "o-tomb" || rpage[1].OrderID() != "o-2" || rnext == nil || rnext.OrderID() != "o-2" {
+		t.Fatalf("page 1 = %v next=%v err=%v", ids(rpage), rnext, err)
+	}
+	rpage, rnext, err = reservations.List(c, reservation.ListParams{Limit: 2, After: rnext})
+	if err != nil || len(rpage) != 1 || rpage[0].OrderID() != "o-1" || rnext != nil {
+		t.Fatalf("page 2 = %v next=%v err=%v", ids(rpage), rnext, err)
+	}
+	if len(rpage[0].Lines()) == 0 || len(rpage[0].Shortfall()) == 0 {
+		t.Fatalf("listed reservation lost its lines: %+v", rpage[0])
+	}
+	cancelled := reservation.StatusCancelled
+	rpage, rnext, err = reservations.List(c, reservation.ListParams{Status: &cancelled, Limit: 10})
+	if err != nil || len(rpage) != 1 || rpage[0].OrderID() != "o-tomb" || rnext != nil {
+		t.Fatalf("filtered = %v next=%v err=%v", ids(rpage), rnext, err)
+	}
+}
+
+func ids(rs []*reservation.Reservation) []string {
+	out := make([]string, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, r.OrderID())
+	}
+	return out
 }

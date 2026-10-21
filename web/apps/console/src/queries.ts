@@ -11,6 +11,7 @@ export const keys = {
   orders: ["orders"] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
   stocks: ["stocks"] as const,
+  reservations: (status: ReservationStatus) => ["reservations", status] as const,
   poison: ["poison"] as const,
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
 };
@@ -50,6 +51,17 @@ export const stocksQuery = infiniteQueryOptions({
   getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
   refetchInterval: POLL_MS,
 });
+
+// Reservations newest first, 20 per page, optionally one status (UNSPECIFIED =
+// any); RESERVED rows can still be released by the worker, so loaded pages poll.
+export const reservationsQuery = (status: ReservationStatus) =>
+  infiniteQueryOptions({
+    queryKey: keys.reservations(status),
+    queryFn: async ({ pageParam }) => inventory.listReservations({ status, pageSize: 20, pageToken: pageParam }),
+    initialPageParam: "",
+    getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
+    refetchInterval: POLL_MS,
+  });
 
 // Every BC's poison table; parking happens after retries, so a slower poll is fine.
 export const poisonQuery = queryOptions({
