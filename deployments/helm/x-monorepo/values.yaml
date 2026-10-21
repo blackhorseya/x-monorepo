@@ -49,9 +49,10 @@ config:
     timeout: 10s
     rate_limit: { rps: 0, burst: 0, by: global }
   auth:
-    # off | optional | required. `required` with no api_keys / jwt key refuses every RPC —
-    # set secrets.apiKeys / secrets.jwtHs256Secret / config.auth.jwt.public_key first.
-    mode: off
+    # off | optional | required — quoted: unquoted `off` is a YAML 1.1 boolean and would render
+    # as `mode: false`. `required` with no api_keys / jwt key refuses every RPC — set
+    # secrets.apiKeys / secrets.jwtHs256Secret / config.auth.jwt.public_key first.
+    mode: "off"
     admin_role: admin
     jwt: { issuer: "", audience: "", public_key: "" }
     public: []
@@ -89,6 +90,8 @@ rpc:
   # so endpoints drop it before the listener closes; in-flight requests then get timeoutSeconds.
   # terminationGracePeriodSeconds = delaySeconds + timeoutSeconds + graceMarginSeconds, and
   # readiness.periodSeconds must be <= delaySeconds (the chart refuses to render otherwise).
+  # (What actually pulls a terminating pod out of Endpoints is the deletion, not the probe;
+  # the delay covers kube-proxy / ingress propagation. The bound keeps the two in step.)
   shutdown:
     delaySeconds: 5
     timeoutSeconds: 15

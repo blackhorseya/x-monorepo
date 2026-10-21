@@ -21,6 +21,13 @@ def main(profile: str) -> None:
         if d:
             docs[(d["kind"], d["metadata"]["name"])] = d
 
+    # The config file the pods read, parsed as the app parses it: YAML 1.1 turns an unquoted
+    # off / on / yes / no into a boolean, and config.Load rejects `auth.mode: false`.
+    cfg = yaml.safe_load(one(docs, "ConfigMap", "")["data"]["config.yaml"])
+    check(cfg["auth"]["mode"] in ("off", "optional", "required"), f'auth.mode rendered as {cfg["auth"]["mode"]!r}')
+    for path, v in walk(cfg):
+        check(not isinstance(v, bool) or path[-1] in ("docs", "insecure"), f"{'.'.join(path)} rendered as boolean {v!r}")
+
     rpc = one(docs, "Deployment", "-rpc")
     worker = one(docs, "Deployment", "-worker")
     spec = rpc["spec"]["template"]["spec"]
@@ -98,6 +105,14 @@ def merge(a, b):
             out[k] = merge(a.get(k), v) if k in a else v
         return out
     return b
+
+
+def walk(node, path=()):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from walk(v, path + (str(k),))
+    else:
+        yield path, node
 
 
 def one(docs, kind, suffix):
