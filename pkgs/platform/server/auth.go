@@ -14,6 +14,9 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/golang-jwt/jwt/v5"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -61,8 +64,10 @@ type apiKey struct {
 // always an error (even in optional mode — a bad token is never "anonymous"),
 // a missing one is anonymous in optional mode and Unauthenticated in required
 // mode. auth.public procedures skip all of it. The principal goes into the
-// context and, when the logging interceptor runs outside this one, into the
-// request logger as `sub`.
+// context, into the request logger as `sub` (use-case lines), onto the rpc
+// access line (`auth`, `sub`, see NewLoggingInterceptor) and onto the span
+// (enduser.id, enduser.roles, auth.method) — the audit trail across Loki and
+// Tempo. Names and credentials are never recorded.
 func NewAuthInterceptor(cfg config.Auth) (connect.UnaryInterceptorFunc, error) {
 	switch cfg.Mode {
 	case config.AuthOff, "":
@@ -98,6 +103,9 @@ func NewAuthInterceptor(cfg config.Auth) (connect.UnaryInterceptorFunc, error) {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			if public[req.Spec().Procedure] {
+				recordAuth(c, AuthPublic, "")
+				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(AuthPublic))
+
 				return next(c, req)
 			}
 			p, found, err := a.authenticate(req.Header().Get(APIKeyHeader), req.Header().Get(AuthorizationHeader))
@@ -107,8 +115,16 @@ func NewAuthInterceptor(cfg config.Auth) (connect.UnaryInterceptorFunc, error) {
 			case !found && required:
 				return nil, authError(connect.CodeUnauthenticated, UnauthenticatedCode, errors.New("credentials required"))
 			case !found:
+				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(AuthAnonymous))
+
 				return next(c, req)
 			}
+			recordAuth(c, p.Method, p.Subject)
+			trace.SpanFromContext(c).SetAttributes(
+				semconv.EnduserID(p.Subject),
+				enduserRolesKey.StringSlice(p.Roles),
+				authMethodKey.String(p.Method),
+			)
 			ctx := contextx.FromContext(c)
 			ctx = contextx.FromContext(contextx.WithLogger(ctx, ctx.With("sub", p.Subject)))
 
@@ -116,6 +132,13 @@ func NewAuthInterceptor(cfg config.Auth) (connect.UnaryInterceptorFunc, error) {
 		}
 	}, nil
 }
+
+// Span attributes set by the auth interceptor. enduser.id is the semantic
+// convention; the other two are ours (enduser.role was dropped from semconv).
+const (
+	enduserRolesKey = attribute.Key("enduser.roles")
+	authMethodKey   = attribute.Key("auth.method")
+)
 
 // authenticate resolves the headers to a principal. found is false when no
 // credential was sent; err is set when one was sent and is invalid.
