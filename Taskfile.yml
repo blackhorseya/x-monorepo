@@ -263,6 +263,15 @@ tasks:
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/worker poison {{.CLI_ARGS}}']
 
+  prune:
+    desc: 'task prune -- --older-than 720h [--dry-run] [--unconsumed] [<bc>] → delete acked outbox rows + consumed inbox rows via ./bin/worker prune'
+    deps: [build, config]
+    preconditions:
+      - sh: test -n "{{.CLI_ARGS}}"
+        msg: 'usage: task prune -- --older-than <duration> [--dry-run] [--unconsumed] [<bc>]   (start with --dry-run)'
+    env: { APP_CONFIG: '{{.CONFIG}}' }
+    cmds: ['{{.BIN_DIR}}/worker prune {{.CLI_ARGS}}']
+
   # ── Web (web/: pnpm + Turborepo) ────────────────────────────────────────────
 
   web-install:
