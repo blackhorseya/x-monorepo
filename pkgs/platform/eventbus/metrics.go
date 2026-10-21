@@ -85,6 +85,11 @@ type LagOptions struct {
 	RedisStreams []Cursor
 	// PoisonTopics are the tables whose row count is the parked backlog.
 	PoisonTopics []string
+	// OutboxTables are outbox tables (TopicTables) whose size and retention
+	// state are reported.
+	OutboxTables []string
+	// InboxSchemas are the BCs whose `<schema>.inbox` size is reported.
+	InboxSchemas []string
 }
 
 // Lag registers the backlog gauges, observed on every collection (the OTLP
@@ -94,7 +99,25 @@ type LagOptions struct {
 //	eventbus.consumer.oldest_age{topic, consumer_group, broker}  seconds since the oldest of them was written
 //	eventbus.poison.messages{topic}                               rows parked on a poison topic (never consumed, so also a running total)
 //
-// Prometheus: eventbus_consumer_lag, eventbus_consumer_oldest_age_seconds, eventbus_poison_messages.
+// and the retention state of the tables `worker prune` manages:
+//
+//	eventbus.outbox.rows{table}             rows in the outbox table
+//	eventbus.outbox.oldest_age{table}       seconds since the oldest row was written; 0 when empty
+//	eventbus.outbox.held{table}             rows some consumer group with a cursor has not acked (prune keeps them, whatever their age)
+//	eventbus.outbox.oldest_held_age{table}  seconds since the oldest held row was written; 0 when none
+//	eventbus.inbox.rows{schema}             rows in <schema>.inbox
+//	eventbus.inbox.oldest_age{schema}       seconds since the oldest inbox row was consumed; 0 when empty
+//
+// Prometheus: eventbus_consumer_lag, eventbus_consumer_oldest_age_seconds, eventbus_poison_messages,
+// eventbus_outbox_rows, eventbus_outbox_oldest_age_seconds, eventbus_outbox_held, eventbus_outbox_oldest_held_age_seconds,
+// eventbus_inbox_rows, eventbus_inbox_oldest_age_seconds.
+//
+// oldest_age past the retention prune runs with means prune is not running or
+// cannot delete; oldest_held_age growing for days while every configured
+// group's consumer.oldest_age stays low means a group nobody runs any more
+// still has a cursor (`worker prune --dry-run` names it; --forget-group).
+// held counts against every group in the offsets table, not only the ones
+// this process consumes with; a table without any cursor has 0 held.
 //
 // Postgres lag is exactly what the watermill-sql subscriber could read now:
 // rows past the group's (transaction_id, offset) cursor whose transaction is
@@ -129,14 +152,51 @@ func Lag(mp metric.MeterProvider, opts LagOptions) (metric.Registration, error) 
 		return nil, err
 	}
 
+	outboxRows, err := meter.Int64ObservableGauge("eventbus.outbox.rows",
+		metric.WithUnit("{row}"),
+		metric.WithDescription("Rows in the outbox table."))
+	if err != nil {
+		return nil, err
+	}
+	outboxAge, err := meter.Float64ObservableGauge("eventbus.outbox.oldest_age",
+		metric.WithUnit("s"),
+		metric.WithDescription("Seconds since the oldest outbox row was written; 0 when the table is empty."))
+	if err != nil {
+		return nil, err
+	}
+	outboxHeld, err := meter.Int64ObservableGauge("eventbus.outbox.held",
+		metric.WithUnit("{row}"),
+		metric.WithDescription("Outbox rows a consumer group with a cursor has not acknowledged; prune keeps them whatever their age."))
+	if err != nil {
+		return nil, err
+	}
+	outboxHeldAge, err := meter.Float64ObservableGauge("eventbus.outbox.oldest_held_age",
+		metric.WithUnit("s"),
+		metric.WithDescription("Seconds since the oldest held outbox row was written; 0 when none is held."))
+	if err != nil {
+		return nil, err
+	}
+	inboxRows, err := meter.Int64ObservableGauge("eventbus.inbox.rows",
+		metric.WithUnit("{row}"),
+		metric.WithDescription("Rows in the consumer inbox."))
+	if err != nil {
+		return nil, err
+	}
+	inboxAge, err := meter.Float64ObservableGauge("eventbus.inbox.oldest_age",
+		metric.WithUnit("s"),
+		metric.WithDescription("Seconds since the oldest inbox row was consumed; 0 when the table is empty."))
+	if err != nil {
+		return nil, err
+	}
+
 	var sqlDB *sql.DB
 	if opts.DB != nil {
 		if sqlDB, err = opts.DB.DB(); err != nil {
 			return nil, fmt.Errorf("eventbus: postgres pool: %w", err)
 		}
 	}
-	if sqlDB == nil && (len(opts.Postgres) > 0 || len(opts.PoisonTopics) > 0) {
-		return nil, errors.New("eventbus: postgres cursors or poison topics need a database")
+	if sqlDB == nil && (len(opts.Postgres) > 0 || len(opts.PoisonTopics) > 0 || len(opts.OutboxTables) > 0 || len(opts.InboxSchemas) > 0) {
+		return nil, errors.New("eventbus: postgres cursors, poison topics, outbox and inbox tables need a database")
 	}
 	if opts.Redis == nil && len(opts.RedisStreams) > 0 {
 		return nil, errors.New("eventbus: redis cursors need a redis client")
@@ -174,9 +234,55 @@ func Lag(mp metric.MeterProvider, opts LagOptions) (metric.Registration, error) 
 			}
 			o.ObserveInt64(poison, n, metric.WithAttributes(attribute.String("topic", topic)))
 		}
+		for _, table := range opts.OutboxTables {
+			s, err := outboxState(c, sqlDB, table)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			attrs := metric.WithAttributes(attribute.String("table", table))
+			o.ObserveInt64(outboxRows, s.rows, attrs)
+			o.ObserveFloat64(outboxAge, s.oldest, attrs)
+			o.ObserveInt64(outboxHeld, s.held, attrs)
+			o.ObserveFloat64(outboxHeldAge, s.oldestHeld, attrs)
+		}
+		for _, schema := range opts.InboxSchemas {
+			var n int64
+			var oldest float64
+			err := sqlDB.QueryRowContext(c, `SELECT count(*), coalesce(extract(epoch FROM now() - min(consumed_at)), 0) FROM `+schema+`.inbox`).Scan(&n, &oldest)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("eventbus: inbox %s: %w", schema, err))
+				continue
+			}
+			attrs := metric.WithAttributes(attribute.String("schema", schema))
+			o.ObserveInt64(inboxRows, n, attrs)
+			o.ObserveFloat64(inboxAge, oldest, attrs)
+		}
 
 		return errors.Join(errs...)
-	}, lag, age, poison)
+	}, lag, age, poison, outboxRows, outboxAge, outboxHeld, outboxHeldAge, inboxRows, inboxAge)
+}
+
+// tableState is one outbox table's size and what retention can do with it.
+type tableState struct {
+	rows, held         int64
+	oldest, oldestHeld float64
+}
+
+// outboxState is one scan of the table: every row, and the rows some cursor
+// in the offsets table has not passed yet (the unread predicate prune
+// negates). Ages are computed in SQL like postgresLag (created_at is
+// TIMESTAMP, no zone).
+func outboxState(c context.Context, db *sql.DB, table string) (tableState, error) {
+	q := `SELECT count(*), coalesce(extract(epoch FROM localtimestamp - min(m.created_at)), 0),
+		count(*) FILTER (WHERE held), coalesce(extract(epoch FROM localtimestamp - min(m.created_at) FILTER (WHERE held)), 0)
+		FROM (SELECT m.created_at, EXISTS (SELECT 1 FROM ` + table + `_offsets o WHERE ` + unread + `) AS held FROM ` + table + ` m) m`
+	var s tableState
+	if err := db.QueryRowContext(c, q).Scan(&s.rows, &s.oldest, &s.held, &s.oldestHeld); err != nil {
+		return s, fmt.Errorf("eventbus: outbox %s: %w", table, err)
+	}
+
+	return s, nil
 }
 
 func cursorAttrs(cur Cursor, broker string) []attribute.KeyValue {

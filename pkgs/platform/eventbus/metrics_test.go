@@ -182,13 +182,28 @@ func TestLag_Postgres(t *testing.T) {
 		}
 	}
 
+	if _, err := sqlDB.ExecContext(c, "CREATE TABLE eventbustest.inbox (message_id VARCHAR(36) PRIMARY KEY, consumed_at TIMESTAMPTZ NOT NULL DEFAULT now())"); err != nil {
+		t.Fatal(err)
+	}
+
 	m := newMetrics()
 	cur := eventbus.Cursor{Topic: startTopic, ConsumerGroup: "lagger"}
-	reg, err := eventbus.Lag(m.mp, eventbus.LagOptions{DB: db, Postgres: []eventbus.Cursor{cur}, PoisonTopics: []string{startTopic}})
+	table := eventbus.TableName(startTopic)
+	reg, err := eventbus.Lag(m.mp, eventbus.LagOptions{DB: db, Postgres: []eventbus.Cursor{cur}, PoisonTopics: []string{startTopic},
+		OutboxTables: []string{table}, InboxSchemas: []string{"eventbustest"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = reg.Unregister() }()
+	tk := key(attribute.String("table", table))
+	ik := key(attribute.String("schema", "eventbustest"))
+	gauge := func(name string, k attribute.Distinct) any { return m.collect(t, name)[k] }
+	within := func(name string, v any, lo, hi float64) {
+		t.Helper()
+		if f, ok := v.(float64); !ok || f < lo || f > hi {
+			t.Fatalf("%s = %v, want [%v, %v]", name, v, lo, hi)
+		}
+	}
 
 	// A group that never subscribed is behind by the whole table.
 	k := cursorKey(startTopic, "lagger", "postgres")
@@ -202,6 +217,24 @@ func TestLag_Postgres(t *testing.T) {
 	// The table doubles as a "poison" topic here: its row count is the backlog.
 	if got := m.collect(t, "eventbus.poison.messages")[key(attribute.String("topic", startTopic))]; got != int64(3) {
 		t.Fatalf("poison = %v, want 3", got)
+	}
+	// Outbox: three rows, none held — no group has a cursor yet, so prune
+	// would only touch them with --unconsumed. Inbox: empty.
+	if got := gauge("eventbus.outbox.rows", tk); got != int64(3) {
+		t.Fatalf("outbox rows = %v, want 3", got)
+	}
+	within("outbox oldest_age", gauge("eventbus.outbox.oldest_age", tk), 0.000001, 60)
+	if got := gauge("eventbus.outbox.held", tk); got != int64(0) {
+		t.Fatalf("outbox held without cursor = %v, want 0", got)
+	}
+	if got := gauge("eventbus.outbox.oldest_held_age", tk); got != float64(0) {
+		t.Fatalf("outbox oldest_held_age without cursor = %v, want 0", got)
+	}
+	if got := gauge("eventbus.inbox.rows", ik); got != int64(0) {
+		t.Fatalf("inbox rows = %v, want 0", got)
+	}
+	if got := gauge("eventbus.inbox.oldest_age", ik); got != float64(0) {
+		t.Fatalf("inbox oldest_age when empty = %v, want 0", got)
 	}
 
 	// The subscriber commits the group's cursor once per batch, so the gauge
@@ -224,6 +257,39 @@ func TestLag_Postgres(t *testing.T) {
 	if age := m.collect(t, "eventbus.consumer.oldest_age")[k]; age != float64(0) {
 		t.Fatalf("oldest_age when caught up = %v, want 0", age)
 	}
+	// Caught up: the rows are still there (prune's job), none held.
+	if got, held := gauge("eventbus.outbox.rows", tk), gauge("eventbus.outbox.held", tk); got != int64(3) || held != int64(0) {
+		t.Fatalf("outbox after drain: rows=%v held=%v, want 3/0", got, held)
+	}
+
+	// Two more rows the group has not read: held, with an age of their own
+	// (younger than the table's oldest row). The subscriber is closed first so
+	// it does not race the gauge.
+	if err := sub.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"four", "five"} {
+		if err := pub.Publish(startTopic, message.NewMessage(watermill.NewUUID(), []byte(p))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, held := gauge("eventbus.outbox.rows", tk), gauge("eventbus.outbox.held", tk); got != int64(5) || held != int64(2) {
+		t.Fatalf("outbox with unread rows: rows=%v held=%v, want 5/2", got, held)
+	}
+	heldAge, oldestAge := gauge("eventbus.outbox.oldest_held_age", tk), gauge("eventbus.outbox.oldest_age", tk)
+	within("outbox oldest_held_age", heldAge, 0.000001, 60)
+	if heldAge.(float64) > oldestAge.(float64) {
+		t.Fatalf("oldest_held_age %v > oldest_age %v", heldAge, oldestAge)
+	}
+
+	// Inbox: rows and the age of the oldest, from the DB clock.
+	if _, err := sqlDB.ExecContext(c, `INSERT INTO eventbustest.inbox (message_id, consumed_at) VALUES ('a', now() - interval '1 hour'), ('b', now())`); err != nil {
+		t.Fatal(err)
+	}
+	if got := gauge("eventbus.inbox.rows", ik); got != int64(2) {
+		t.Fatalf("inbox rows = %v, want 2", got)
+	}
+	within("inbox oldest_age", gauge("eventbus.inbox.oldest_age", ik), 3600, 3700)
 }
 
 func TestLag_Redis(t *testing.T) {

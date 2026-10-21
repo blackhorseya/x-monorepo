@@ -117,6 +117,14 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl + " CASCADE").Error; err != nil {
 			t.Fatal(err)
 		}
+		// The offsets table too: each run's test-<ts> group would otherwise
+		// stay behind as a stale cursor, holding every later row back from
+		// prune (and tripping eventbus_outbox_held below).
+		if strings.Contains(tbl, ".events_v1_") {
+			if err := db.WithContext(c).Exec("TRUNCATE " + tbl + "_offsets").Error; err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 
 	// Both BCs, exactly as apps/rpc + apps/worker wire them.
@@ -405,6 +413,26 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	}
 	if n := len(scrape(t, tel.MetricsHandler, "eventbus_consumer_duration_seconds_count")); n == 0 {
 		t.Fatal("no eventbus_consumer_duration_seconds_count samples")
+	}
+	// Retention gauges: every outbox table of both BCs — the 3 consumed
+	// topics and the 2 published-only ones (OrderCancelled, StockReleased),
+	// found in the catalogue — and both inboxes; with every group caught up
+	// no outbox row is held back from prune.
+	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 5 {
+		t.Fatalf("%d outbox row series, want 5: %v", len(rows), rows)
+	}
+	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_outbox_held") {
+		if v != "0" {
+			t.Fatalf("%s = %s, want 0 (every group acked)", series, v)
+		}
+	}
+	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_inbox_rows") {
+		if v == "0" {
+			t.Fatalf("%s = 0, want the consumed message ids", series)
+		}
+	}
+	if n := len(scrape(t, tel.MetricsHandler, "eventbus_inbox_rows")); n != 2 {
+		t.Fatalf("%d inbox series, want 2", n)
 	}
 
 	stop()

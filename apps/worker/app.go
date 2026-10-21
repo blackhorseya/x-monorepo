@@ -41,7 +41,9 @@ type Worker struct {
 // Metrics (platform/eventbus): every handler attempt is a sample of
 // eventbus.consumer.duration, and eventbus.Lag reports each cursor's backlog —
 // the BC groups on whatever they read from, the forwarder's Postgres cursor in
-// redis mode, and each BC's poison table.
+// redis mode, and each BC's poison table — plus, with a database, the size and
+// retention state of every outbox table and inbox (what `worker prune` deletes
+// or is held back from deleting).
 //
 // worker.broker decides what the handlers read:
 //
@@ -86,6 +88,21 @@ func NewWorker(
 	lag := eventbus.LagOptions{DB: db, Redis: rdb}
 	for _, bc := range bcs {
 		lag.PoisonTopics = append(lag.PoisonTopics, eventbus.PoisonTopic(bc.schema))
+	}
+	if db != nil {
+		// Retention gauges for what `worker prune` manages: every outbox table
+		// of every BC (found in the catalogue, so published-only topics count)
+		// and each BC's inbox.
+		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, bc := range bcs {
+			tables, err := eventbus.TopicTables(c, db, bc.schema)
+			if err != nil {
+				return nil, err
+			}
+			lag.OutboxTables = append(lag.OutboxTables, tables...)
+			lag.InboxSchemas = append(lag.InboxSchemas, bc.schema)
+		}
 	}
 
 	// subscriber builds the per-BC subscriber the handlers read from.
