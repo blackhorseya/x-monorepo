@@ -1,0 +1,8 @@
+# Profile 4: smoke test without a database — in-memory repositories, no migrate hook,
+# no Secret. Validates that nothing in the chart requires one.
+rpc:
+  replicaCount: 1
+worker:
+  replicaCount: 1
+prune:
+  enabled: false

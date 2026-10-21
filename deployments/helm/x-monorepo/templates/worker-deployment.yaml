@@ -1,0 +1,58 @@
+{{- $w := .Values.worker -}}
+{{- $grace := include "x-monorepo.worker.terminationGracePeriodSeconds" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-worker
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ $w.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "x-monorepo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        {{- include "x-monorepo.checksums" . | nindent 8 }}
+        {{- with $w.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "x-monorepo.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # > 8s handler drain + 10s router close. No probes: the worker has no HTTP server.
+      terminationGracePeriodSeconds: {{ $grace }}
+      containers:
+        - name: worker
+          image: {{ include "x-monorepo.image" (dict "root" . "app" "worker") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- include "x-monorepo.commonEnv" (dict "root" . "extra" $w.extraEnv) | nindent 10 }}
+          resources:
+            {{- toYaml $w.resources | nindent 12 }}
+          {{- include "x-monorepo.configMount" . | nindent 10 }}
+      {{- include "x-monorepo.configVolume" . | nindent 6 }}
+      {{- with $w.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -79,7 +79,8 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │       ├── domain/stock/          # Stock aggregate（每 SKU 一筆，optimistic version）
 │       ├── domain/reservation/    # Reservation aggregate（每 order 一筆：RESERVED / REJECTED / RELEASED）
 │       └── adapters/consumer/     # 消費 ordering.v1.OrderCreated / OrderCancelled（只 import ordering 的 contract/）
-├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器
+├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
+├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
@@ -113,7 +114,7 @@ dto 不要照著 pb 抄。
 （gRPC 協定把路徑寫死，grpc-go / grpcurl 加不了前綴）；`/api/healthz`（liveness：process 活著就 200，不看依賴）、`/api/readyz`（readiness：跑 app 給的 `server.Readiness` checks，
 rpc 是 Postgres ping；任一失敗或 server 正在 drain 回 503 + JSON 明細）、`/api/metrics`、`/api/docs` 是普通 gin route。
 **Graceful shutdown**（`Server.Serve`，`apps/rpc/main.go` 以 `signal.NotifyContext` 接 SIGINT / SIGTERM）：先把 `/api/readyz` 翻成 503 `"server":"draining"`
-但其他路徑照常服務 `http.shutdown_delay`（預設 0：本機 Ctrl-C 立刻關；k8s 設 ≥ 一個 probe period，LB 才來得及停止派流量），
+但其他路徑照常服務 `http.shutdown_delay`（預設 0：本機 Ctrl-C 立刻關；k8s 設 ≥ 一個 probe period，LB 才來得及停止派流量——Helm chart 的 `rpc.shutdown` 把這個關係算死），
 再關 listener、給 in-flight request `http.shutdown_timeout`（預設 15s）跑完；超時才切斷並回 error。liveness 全程 200。
 HTTP/1.1 與 h2c 各一個 in-flight request 的 drain 有真 socket 的測試（`platform/server/shutdown_test.go`），SIGTERM → exit 0 有 `apps/rpc/shutdown_test.go`。
 整台 server 都在 `/api` 下，ingress 一條規則。`RedirectTrailingSlash` / `RedirectFixedPath` 關閉（gRPC client
@@ -207,7 +208,7 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 - **Graceful shutdown**：SIGTERM 後 router 停止取新訊息，但**正在跑的 handler 跑完、ack 寫進去**才結束（`eventbus.Draining` 包住每個 BC 的 subscriber
   與 redis 模式的 forwarder；上限 `eventbus.DefaultDrainTimeout` 8s，超過就 cancel 掉 handler 的 context 並放棄、訊息留給下一次）。
   不包的話 watermill-sql / redisstream 在 subscribe context 一 cancel 就把 message context 也 cancel、丟掉它的 ack：use case 的 transaction 中途失敗、重啟後再收一次。
-  兩種 broker 都有測（`platform/eventbus/shutdown_test.go`），SIGTERM → exit 0 有 `apps/worker/shutdown_test.go`。k8s 的 `terminationGracePeriodSeconds` 要 > 10s（router `CloseTimeout`）。
+  兩種 broker 都有測（`platform/eventbus/shutdown_test.go`），SIGTERM → exit 0 有 `apps/worker/shutdown_test.go`。k8s 的 `terminationGracePeriodSeconds` 要 > 18s（8s drain + router `CloseTimeout` 10s；Helm chart 的 `worker.terminationGracePeriodSeconds` 預設 30、低於 19 拒絕 render）。
 - 換 broker：`message.Publisher` / `Subscriber` 是 port；handler 與 error contract 不變。已內建一個示範：`worker.broker: redis`
   （`redis.url` 必填，`task compose-up` 有起一個）時，worker 自己當 forwarder，把每個被消費 topic 的 outbox 表（Postgres consumer group
   固定叫 `forwarder`，所有 replica 共用，每則只轉一次）passthrough 進同名 Redis Stream，handler 再以 `<consumer_group>.<bc>` 的
@@ -309,7 +310,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 |---|---|---|---|
 | `task gate-fast FILE=…` | Claude Code `PostToolUse`（Edit/Write）、`pre-commit` | gofmt + vet + golangci-lint（含 depguard）+ archtest（module 根有 `arch_test.go` 時）於被改檔案所屬 module | 秒 |
 | `task gate-local` | Claude Code `Stop`、`pre-push` | gen freshness + buf lint + affected modules 的 `go test -race`（含 archtest） | ~1 min |
-| `.github/workflows/ci.yml` | PR | gen-freshness（含 TS）、lint、work-sync、test（matrix by affected module）、coverage、build；`buf breaking` **只警告** | 全 |
+| `.github/workflows/ci.yml` | PR | gen-freshness（含 TS）、lint、work-sync、test（matrix by affected module）、coverage、build、helm（`task helm-check`）；`buf breaking` **只警告** | 全 |
 
 - `scripts/affected.sh`：由 `go.work` 算出被改動的 module，並展開反向依賴（改 kernel → 全部；改 ordering → ordering + apps/rpc）
 - `scripts/cover-gate.sh`：所有 `*/domain/*` package 必須 100% 覆蓋
@@ -457,7 +458,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 **每次 CI 在 main 上綠就是一版**，沒有人手動打 tag（`.github/workflows/release.yml`，`workflow_run` 掛在 ci 後面；
 `workflow_dispatch` 可對目前 main HEAD 重跑）。`workflow_run` 沒有 `paths-ignore`，所以 prepare 先自己 gate：拿該 commit 和
 **上一個 tag** 做 diff（不是 parent commit——ci 對 main 是 cancel-in-progress，連續兩次 merge 只會觸發一次 release），
-只動到 `*.md`、`docs/`、`web/`、`.github/`、`.claude/`、`lefthook.yml`、`.golangci.yml`、`*_test.go`、`testdata/` 就整條跳過
+只動到 `*.md`、`docs/`、`web/`、`.github/`、`.claude/`、`deployments/helm/`、`lefthook.yml`、`.golangci.yml`、`*_test.go`、`testdata/` 就整條跳過
 （step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。`workflow_dispatch` 不過 gate：
 
 | job | 做什麼 |
@@ -473,10 +474,37 @@ task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/a
 
 `deployments/docker/Dockerfile` 只 COPY 預先 cross-compile 好的 binary 到 `distroless/static:nonroot`（有 CA certs、無 shell；
 healthcheck 從外面打 `/api/readyz`）。兩個 binary 都吃 SIGTERM 做 graceful shutdown（rpc：readyz 先 503 → drain，見 server 一節；worker：in-flight handler 跑完才停，見 Events 一節），
-部署的 grace period 要大於 `http.shutdown_delay + http.shutdown_timeout`（rpc）/ 10s（worker）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它
+部署的 grace period 要大於 `http.shutdown_delay + http.shutdown_timeout`（rpc）/ 18s（worker：8s drain + 10s router close）——Helm chart 把這兩個數字算死（下一節）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它
 （`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在 merge 前就會紅，release 的 build job 也共用它的 Go cache（`cache-scope: release-snapshot`），cross-compile 不用冷啟。
 用 `GITHUB_TOKEN` publish 的 release 不會觸發其他 workflow 的 `push: tags` / `release` event（GitHub 防遞迴），要接部署就像
 release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghcr 的 package 是 private，要到 GitHub → Packages 連到 repo / 改 public 一次。
+
+## Deploy（Helm）
+
+`deployments/helm/x-monorepo/` 是這些 image 的 chart，沒有 dependency、不假設 ingress controller 或 secret 工具。它做的事是把
+上面各節講的「部署要配合的行為」寫成算式，而不是讓人手抄：
+
+| 物件 | 怎麼接 app |
+|---|---|
+| ConfigMap `config.yaml` | `values.config` 原樣 render（key 同 `configs/config.example.yaml`），`APP_CONFIG` 指過去；預設 `http.docs: false`、`log.format: json`、`auth.mode: off` |
+| Secret `<release>-env` | `secrets.{postgresUrl,redisUrl,apiKeys,jwtHs256Secret}` → `APP_POSTGRES_URL` / `APP_REDIS_URL` / `APP_AUTH_API_KEYS` / `APP_AUTH_JWT_HS256_SECRET`（env 蓋過檔案）；或 `secrets.existingSecret` 用自己管的 |
+| rpc Deployment | liveness `/api/healthz`、readiness `/api/readyz`；`rpc.shutdown.{delaySeconds,timeoutSeconds}` 變成 `APP_HTTP_SHUTDOWN_*`，`terminationGracePeriodSeconds = delay + timeout + graceMargin`，`readiness.periodSeconds > delaySeconds` 直接 render 失敗。image 是 distroless 沒 shell，所以沒有 `preStop: sleep`——app 自己的 `shutdown_delay` 就是那個 sleep |
+| worker Deployment | **沒有 probe**（worker 沒 HTTP server；起不來會 exit 非 0 由 Deployment 重啟，健康看 `eventbus_*` gauge 與 alert）；`terminationGracePeriodSeconds` 預設 30，< 19 render 失敗 |
+| migrate Job | `pre-install,pre-upgrade` hook 跑 `migrate up`：新 code 不會先於新 schema 起來。hook 跑在 release 的 Secret 存在之前，所以 chart 另 render 一個 hook-scoped 的 `<release>-migrate-env`（跑完刪）；`existingSecret` 則直接讀它 |
+| prune CronJob | `worker prune --older-than <prune.olderThan>`（預設 720h、每天一次、`concurrencyPolicy: Forbid`）；`prune.forgetGroups` 對應 `--forget-group`。alert「retention overdue」的 45d 是 720h 的 1.5×，改一個要一起改 |
+| HPA / PDB / Ingress | 只有 rpc；HPA 開了就不 render `replicas`、要有 `resources.requests.cpu`；PDB 只在可能 >1 replica 時 render；Ingress 走 HTTP/1.1（Connect / gRPC-Web），原生 gRPC 要另外 h2c |
+
+```bash
+task helm-check    # 每個 ci/*.yaml profile：helm lint --strict → helm template | kubeconform -strict → deployments/helm/check.py
+helm install api deployments/helm/x-monorepo -n app --create-namespace \
+  --set-string secrets.postgresUrl='postgres://…' --set config.otel.endpoint=otel-collector:4317 \
+  --set 'imagePullSecrets[0].name=ghcr'    # ghcr package 是 private
+```
+
+`check.py` 是 chart 裡唯一有邏輯的地方的測試：rpc 的 grace period 算式與 env、readiness period 的關係、worker 沒 probe、migrate hook
+與它的 Secret 的順序、prune 的 args。`ci/` 四個 profile（預設 + DB、redis broker + HPA + ingress + auth required、existingSecret、無 DB）
+在 CI 的 `helm` job 跑。**沒有在真的 cluster 裝過**：hook 順序與 probe 行為是對照文件與 render 結果，不是實測。
+`appVersion` 要手動跟著 release 走（image.tag 空時用它）；chart 本身沒有 publish 到 OCI registry。
 
 ## Config（viper）
 

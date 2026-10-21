@@ -96,6 +96,17 @@ jobs:
       - uses: ./.github/actions/setup
       - run: task build
 
+  # ── helm: the chart renders under every ci/ profile and its derived numbers hold ──
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+        with: { tools: "true" }   # kubeconform lives in ./bin
+      - uses: azure/setup-helm@v4
+        with: { version: v4.3.0 }
+      - run: task helm-check
+
   # ── release config: the snapshot must build before anyone tags ─────────────
   release-snapshot:
     runs-on: ubuntu-latest

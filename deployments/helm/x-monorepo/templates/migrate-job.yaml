@@ -1,0 +1,65 @@
+{{- $m := .Values.migrate -}}
+{{- $hookSecret := and (not .Values.secrets.existingSecret) .Values.secrets.postgresUrl -}}
+{{- $secret := ternary (printf "%s-migrate-env" (include "x-monorepo.fullname" .)) .Values.secrets.existingSecret (not (empty $hookSecret)) -}}
+{{- if and $m.enabled $secret }}
+{{- if $hookSecret }}
+# Pre-install hooks run before any regular resource exists, so the hook cannot read the
+# release's <fullname>-env Secret: this hook-scoped copy carries the URL and is deleted with the Job.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-migrate-env
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  APP_POSTGRES_URL: {{ .Values.secrets.postgresUrl | quote }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-migrate
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    # New code never starts against an old schema; a failed migration fails the release.
+    # golang-migrate takes a Postgres advisory lock, so a retried pod cannot race itself.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $m.backoffLimit }}
+  activeDeadlineSeconds: {{ $m.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "x-monorepo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "x-monorepo.image" (dict "root" . "app" "migrate") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          args: ["up"]
+          envFrom:
+            - secretRef:
+                name: {{ $secret }}
+          resources:
+            {{- toYaml $m.resources | nindent 12 }}
+{{- end }}

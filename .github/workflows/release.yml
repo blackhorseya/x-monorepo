@@ -68,7 +68,7 @@ jobs:
           # README.md / LICENSE are packed into the archives but a stale copy there is acceptable.
           releasable() {
             git diff --name-only "$base" "$HEAD_SHA" -- . \
-              ':!*.md' ':!docs' ':!web' ':!.github' ':!.claude' ':!.idea' \
+              ':!*.md' ':!docs' ':!web' ':!.github' ':!.claude' ':!.idea' ':!deployments/helm' \
               ':!lefthook.yml' ':!.golangci.yml' ':!*_test.go' ':!testdata'
           }
           if [ -z "$(releasable)" ]; then

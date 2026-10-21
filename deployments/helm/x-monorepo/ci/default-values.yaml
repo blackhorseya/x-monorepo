@@ -1,0 +1,6 @@
+# Profile 1: defaults + a database. What a first install looks like.
+imagePullSecrets: [{ name: ghcr }]
+secrets:
+  postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
+config:
+  otel: { endpoint: otel-collector:4317 }
