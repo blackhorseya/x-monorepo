@@ -194,7 +194,8 @@ func Register(r *message.Router, sub message.Subscriber, opts ConsumerOptions, s
 	for _, s := range subs {
 		h := s.Handler
 		handler := r.AddConsumerHandler(s.Topic, s.Topic, sub, func(msg *message.Message) error {
-			return h.Handle(msg.Context(), msg.Payload)
+			// The message id is what usecasex.Idempotent records in the BC's inbox.
+			return h.Handle(contextx.WithMessageID(msg.Context(), msg.UUID), msg.Payload)
 		})
 		mws := []message.HandlerMiddleware{poison, retry, drop}
 		if opts.Instruments != nil {

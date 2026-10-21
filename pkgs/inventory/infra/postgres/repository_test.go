@@ -42,8 +42,8 @@ func TestRepositories_Postgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 3 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 3 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 4 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 4 clean", v, dirty, err)
 	}
 	for _, tbl := range []string{"inventory.stocks", "inventory.reservations"} {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl + " CASCADE").Error; err != nil {

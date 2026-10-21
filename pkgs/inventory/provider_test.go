@@ -69,14 +69,15 @@ func TestReserveStock_Transactional(t *testing.T) {
 	stocks := inventory.ProvideStockRepository(db, tel.Logger)
 	reservations := inventory.ProvideReservationRepository(db)
 	tx := inventory.ProvideTransactor(db)
+	inbox := inventory.ProvideInbox(db)
 	clock := system.NewClock()
 	reserve := func(orderID string, fail bool) (*dto.ReservationOutput, error) {
-		uc := inventory.ProvideReserveStock(reservations, stocks, tx, publisher{fail: fail}, clock, rec)
+		uc := inventory.ProvideReserveStock(reservations, stocks, tx, inbox, publisher{fail: fail}, clock, rec)
 		return uc.Execute(c, dto.ReserveStockInput{OrderID: orderID, Lines: []dto.Line{{SKU: "SKU-TX", Quantity: 2}}})
 	}
 	getStock := inventory.ProvideGetStock(stocks, rec)
 
-	if _, err := inventory.ProvideSetStock(stocks, tx, clock, rec).Execute(c, dto.SetStockInput{SKU: "SKU-TX", OnHand: 5}); err != nil {
+	if _, err := inventory.ProvideSetStock(stocks, tx, inbox, clock, rec).Execute(c, dto.SetStockInput{SKU: "SKU-TX", OnHand: 5}); err != nil {
 		t.Fatalf("set stock: %v", err)
 	}
 

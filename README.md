@@ -181,7 +181,11 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 - Topic → table：`ordering.v1.OrderCreated` → `ordering.events_v1_ordercreated`（+ `_offsets`），第一段就是 BC，**DDL 由該 BC 的 migration 出**（`0003_events`），
   service 不在啟動時建表；`InitializeSchema` 關閉。新 topic = 新 migration。
 - 語意：at-least-once。handler 回 `eventbus.ErrDrop`（壞 payload、domain 說不行 → 例如重送的取消要求碰到 `ErrCannotCancel`）= ack 不重試也不進 poison；
-  其他 error → Retry（3 次、指數退避）→ `ordering.poison` 表（`events_poison`）。consumer 的冪等由 domain 狀態機保證。
+  其他 error → Retry（3 次、指數退避）→ `ordering.poison` 表（`events_poison`）。
+- 冪等有兩層：**inbox**（`<bc>.inbox` 表，`usecasex.Idempotent` 在 `decorateTx` 的 transaction 之內把 message id 記進去，重送（broker at-least-once、
+  `poison requeue`、ack 遺失）在載入任何 aggregate 之前就以 `message.duplicate` drop；失敗的 attempt 連記錄一起 rollback，retry 會重記）
+  加上 domain 狀態機（同一筆 order 的第二個 `OrderCreated` → `reservation.duplicate`）。inbox 的列不清：它要活得比最晚的重送（poison 列任何時候都能 requeue）久。
+  沒 DB（in-memory）時沒有 inbox：GoChannel 本來就 at most once。
 - Poison 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison`，auth 開著時要 `auth.admin_role`

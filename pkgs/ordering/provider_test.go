@@ -45,7 +45,7 @@ func TestCreateOrder_Transactional(t *testing.T) {
 	}
 	repo := ordering.ProvideOrderRepository(db, tel.Logger)
 	create := func(fail bool) (*dto.OrderOutput, error) {
-		uc := ordering.ProvideCreateOrder(repo, ordering.ProvideTransactor(db), publisher{fail: fail}, system.NewUUIDGenerator(), system.NewClock(), rec)
+		uc := ordering.ProvideCreateOrder(repo, ordering.ProvideTransactor(db), ordering.ProvideInbox(db), publisher{fail: fail}, system.NewUUIDGenerator(), system.NewClock(), rec)
 		return uc.Execute(c, dto.CreateOrderInput{
 			CustomerID: "c-tx",
 			Items:      []dto.LineItem{{SKU: "A", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 100, Currency: "USD"}}},
