@@ -1,5 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
+import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { admin, inventory, isNotFound, orders } from "./client";
 
 // The server exposes unary RPCs only, so the console polls. Reservations are
@@ -9,6 +10,7 @@ const POLL_MS = 2000;
 
 export const keys = {
   orders: ["orders"] as const,
+  ordersPage: (customerId: string, status: OrderStatus) => ["orders", customerId, status] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
   stocks: ["stocks"] as const,
   reservations: (status: ReservationStatus) => ["reservations", status] as const,
@@ -16,11 +18,17 @@ export const keys = {
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
 };
 
-export const ordersQuery = queryOptions({
-  queryKey: keys.orders,
-  queryFn: async () => (await orders.listOrders({ pageSize: 20 })).orders,
-  refetchInterval: POLL_MS,
-});
+// Orders newest first, 20 per page, by customer (empty = any) and status
+// (UNSPECIFIED = any). Loaded pages poll: inventory cancels orders on its own.
+// The key starts with keys.orders so a mutation invalidates every filter.
+export const ordersQuery = (customerId: string, status: OrderStatus) =>
+  infiniteQueryOptions({
+    queryKey: keys.ordersPage(customerId, status),
+    queryFn: async ({ pageParam }) => orders.listOrders({ customerId, status, pageSize: 20, pageToken: pageParam }),
+    initialPageParam: "",
+    getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
+    refetchInterval: POLL_MS,
+  });
 
 // null = the worker has not reserved anything for this order (yet).
 export const reservationQuery = (orderId: string) =>
