@@ -112,6 +112,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		"ordering.events_v1_ordercancellationrequested", "ordering.events_poison",
 		"inventory.stocks", "inventory.reservations", "inventory.events_v1_stockreserved",
 		"inventory.events_v1_stockreleased", "inventory.events_poison",
+		"ordering.inbox", "inventory.inbox",
 	} {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl + " CASCADE").Error; err != nil {
 			t.Fatal(err)
@@ -133,24 +134,26 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 
 	orders := ordering.ProvideOrderRepository(db, logger)
 	otx := ordering.ProvideTransactor(db)
+	oinbox := ordering.ProvideInbox(db)
 	oev := orderingevents.NewPublisher(publisher)
 	oclock := orderingsys.NewClock()
-	createOrder := ordering.ProvideCreateOrder(orders, otx, oev, orderingsys.NewUUIDGenerator(), oclock, rec)
+	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, rec)
 	getOrder := ordering.ProvideGetOrder(orders, rec)
 	orderingSubs := ordering.ProvideSubscriptions(orderingconsumer.NewOrderCancellationHandler(
-		ordering.ProvideCancelOrder(orders, otx, oev, oclock, rec)))
+		ordering.ProvideCancelOrder(orders, otx, oinbox, oev, oclock, rec)))
 
 	stocks := inventory.ProvideStockRepository(db, logger)
 	reservations := inventory.ProvideReservationRepository(db)
 	itx := inventory.ProvideTransactor(db)
+	iinbox := inventory.ProvideInbox(db)
 	iev := inventoryevents.NewPublisher(publisher)
 	iclock := inventorysys.NewClock()
-	setStock := inventory.ProvideSetStock(stocks, itx, iclock, rec)
+	setStock := inventory.ProvideSetStock(stocks, itx, iinbox, iclock, rec)
 	getStock := inventory.ProvideGetStock(stocks, rec)
 	getReservation := inventory.ProvideGetReservation(reservations, rec)
 	inventorySubs := inventory.ProvideSubscriptions(
-		inventoryconsumer.NewOrderCreatedHandler(inventory.ProvideReserveStock(reservations, stocks, itx, iev, iclock, rec)),
-		inventoryconsumer.NewOrderCancelledHandler(inventory.ProvideReleaseStock(reservations, stocks, itx, iev, iclock, rec)),
+		inventoryconsumer.NewOrderCreatedHandler(inventory.ProvideReserveStock(reservations, stocks, itx, iinbox, iev, iclock, rec)),
+		inventoryconsumer.NewOrderCancelledHandler(inventory.ProvideReleaseStock(reservations, stocks, itx, iinbox, iev, iclock, rec)),
 	)
 
 	group := fmt.Sprintf("test-%d", time.Now().UnixNano())
@@ -288,6 +291,37 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	}
 	if s, _ := getStock.Execute(c, inventorydto.GetStockInput{SKU: "S"}); s.Reserved != 0 {
 		t.Fatalf("late create reserved stock: %+v", s)
+	}
+
+	// ── redelivery: the same message id twice → the inbox drops the second before the use case ──
+	// The second delivery carries a DIFFERENT order id in its payload: without
+	// the inbox it would reserve stock for order E; with it, E never exists —
+	// which is what tells inbox protection apart from the aggregate's own
+	// duplicate check (reservation.ErrDuplicate protects only the same order).
+	dID, eID := "d-"+watermill.NewUUID(), "e-"+watermill.NewUUID()
+	dupID := watermill.NewUUID()
+	for _, orderID := range []string{dID, eID} {
+		created, _ := proto.Marshal(&orderingv1.OrderCreated{OrderId: orderID, CustomerId: "c-1", Items: []*orderingv1.OrderCreatedItem{{Sku: "S", Quantity: 1}}})
+		msg = message.NewMessageWithContext(c, dupID, created)
+		msg.Metadata.Set(eventbus.MetaKey, orderID)
+		if err := publisher.Publish(inventoryconsumer.TopicOrderCreated, msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor("reservation D RESERVED", reservationIs(dID, "RESERVED"))
+	waitFor("inventory acked the redelivered OrderCreated", func() (bool, error) {
+		n, err := acked(inventoryconsumer.TopicOrderCreated, inventory.Schema)
+		return n >= 5, err
+	})
+	if _, err := getReservation.Execute(c, inventorydto.GetReservationInput{OrderID: eID}); !errors.Is(err, reservation.ErrNotFound) {
+		t.Fatalf("redelivered message id ran the use case again: reservation E err = %v, want not found", err)
+	}
+	if s, _ := getStock.Execute(c, inventorydto.GetStockInput{SKU: "S"}); s.Reserved != 1 {
+		t.Fatalf("stock after redelivery = %+v, want reserved 1 (D only)", s)
+	}
+	var inboxRows int64
+	if err := db.WithContext(c).Raw("SELECT count(*) FROM inventory.inbox WHERE message_id = ?", dupID).Scan(&inboxRows).Error; err != nil || inboxRows != 1 {
+		t.Fatalf("inventory.inbox rows for %s = %d err=%v, want 1", dupID, inboxRows, err)
 	}
 
 	// Every hop left its row in the outbox tables (counted by aggregate key, so

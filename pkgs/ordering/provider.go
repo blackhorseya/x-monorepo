@@ -19,6 +19,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
+	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -29,6 +30,7 @@ var ProviderSet = wire.NewSet(
 	// infra → ports / repositories
 	ProvideOrderRepository,
 	ProvideTransactor,
+	ProvideInbox,
 	events.NewPublisher,
 	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),
 	system.NewUUIDGenerator,
@@ -71,6 +73,19 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 	return postgres.NewTransactor(db)
 }
 
+// ProvideInbox is this BC's consumer inbox (usecasex.Idempotent): the
+// `<schema>.inbox` table on Postgres, none in memory — a nil Inbox makes
+// Idempotent a pass-through, which is right because the in-memory transactor
+// could not roll a record back with a failed attempt, and the in-memory bus
+// is at most once anyway.
+func ProvideInbox(db *gorm.DB) port.Inbox {
+	if db == nil {
+		return nil
+	}
+
+	return platformpg.NewInbox(db, Schema)
+}
+
 // Subscriptions lists what this BC consumes; apps/worker registers them on
 // the router with this BC's poison topic. A named type, so wire can tell each
 // BC's subscriptions apart.
@@ -94,26 +109,30 @@ func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase
 
 // decorateTx is decorate for use cases that write: the use case runs inside
 // one transaction, so its repository writes and outbox events commit or roll
-// back together. The transaction is innermost, so a failed commit is logged
-// and counted as the use case's failure.
-func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+// back together. The transaction is innermost but one, so a failed commit is
+// logged and counted as the use case's failure; inside it, Idempotent records
+// the consumed message id in this BC's inbox (same transaction: it rolls back
+// with a failed attempt) and drops a redelivery before any aggregate is
+// loaded. On the rpc path there is no message id and it is a pass-through.
+func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, inbox port.Inbox, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
 	return usecasex.Chain(uc,
 		usecasex.Metrics[I, O](rec, name),
 		usecasex.Logging[I, O](name),
 		usecasex.Transactional[I, O](tx),
+		usecasex.Idempotent[I, O](inbox),
 	)
 }
 
-func ProvideCreateOrder(repo order.Repository, tx port.Transactor, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, rec *usecasex.Recorder) rpc.CreateOrderUC {
-	return decorateTx("ordering.create_order", rec, tx, usecase.NewCreateOrder(repo, events, ids, clock))
+func ProvideCreateOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, rec *usecasex.Recorder) rpc.CreateOrderUC {
+	return decorateTx("ordering.create_order", rec, tx, inbox, usecase.NewCreateOrder(repo, events, ids, clock))
 }
 
 func ProvideGetOrder(repo order.Repository, rec *usecasex.Recorder) rpc.GetOrderUC {
 	return decorate("ordering.get_order", rec, usecase.NewGetOrder(repo))
 }
 
-func ProvideCancelOrder(repo order.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) rpc.CancelOrderUC {
-	return decorateTx("ordering.cancel_order", rec, tx, usecase.NewCancelOrder(repo, events, clock))
+func ProvideCancelOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) rpc.CancelOrderUC {
+	return decorateTx("ordering.cancel_order", rec, tx, inbox, usecase.NewCancelOrder(repo, events, clock))
 }
 
 func ProvideListOrders(repo order.Repository, rec *usecasex.Recorder) rpc.ListOrdersUC {

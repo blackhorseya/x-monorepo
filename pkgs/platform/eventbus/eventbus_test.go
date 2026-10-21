@@ -75,10 +75,12 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 
 	var dropCalls, failCalls atomic.Int32
 	var seen trace.SpanContext
+	var seenMessageID string
 	okDone := make(chan struct{}, 1)
 	err = eventbus.Register(router, ch, eventbus.ConsumerOptions{Poison: poison, PoisonTopic: "t.poison", MaxRetries: 1},
 		eventbus.Subscription{Topic: "t.ok", Handler: eventbus.HandlerFunc(func(c context.Context, _ []byte) error {
 			seen = trace.SpanContextFromContext(c)
+			seenMessageID = contextx.MessageIDFrom(c) // what usecasex.Idempotent records
 			// A use case logs through contextx: it must reach the router's logger,
 			// scoped to the message, not slog.Default().
 			contextx.FromContext(c).Error("from handler")
@@ -106,8 +108,13 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 
 	// Producer span → metadata → consumer span.
 	producerCtx, producer := tp.Tracer("test").Start(context.Background(), "rpc")
+	okID := watermill.NewUUID()
 	for _, topic := range []string{"t.ok", "t.drop", "t.fail"} {
-		if err := pub.Publish(topic, message.NewMessageWithContext(producerCtx, watermill.NewUUID(), []byte(topic))); err != nil {
+		id := watermill.NewUUID()
+		if topic == "t.ok" {
+			id = okID
+		}
+		if err := pub.Publish(topic, message.NewMessageWithContext(producerCtx, id, []byte(topic))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -117,6 +124,9 @@ func TestRouter_ErrorContractAndTracing(t *testing.T) {
 	case <-okDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("t.ok not delivered")
+	}
+	if seenMessageID != okID {
+		t.Fatalf("handler saw message id %q, want %q", seenMessageID, okID)
 	}
 	if seen.TraceID() != producer.SpanContext().TraceID() {
 		t.Fatalf("consumer trace %s != producer trace %s", seen.TraceID(), producer.SpanContext().TraceID())

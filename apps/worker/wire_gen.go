@@ -58,6 +58,7 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	}
 	repository := ordering.ProvideOrderRepository(db, logger)
 	transactor := ordering.ProvideTransactor(db)
+	inbox := ordering.ProvideInbox(db)
 	eventsPublisher := events.NewPublisher(publisher)
 	clock := system.NewClock()
 	meterProvider := providers.Meter
@@ -69,17 +70,18 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v := ordering.ProvideCancelOrder(repository, transactor, eventsPublisher, clock, recorder)
+	v := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, recorder)
 	orderCancellationHandler := consumer.NewOrderCancellationHandler(v)
 	subscriptions := ordering.ProvideSubscriptions(orderCancellationHandler)
 	reservationRepository := inventory.ProvideReservationRepository(db)
 	stockRepository := inventory.ProvideStockRepository(db, logger)
 	portTransactor := inventory.ProvideTransactor(db)
+	portInbox := inventory.ProvideInbox(db)
 	publisher2 := events2.NewPublisher(publisher)
 	systemClock := system2.NewClock()
-	v2 := inventory.ProvideReserveStock(reservationRepository, stockRepository, portTransactor, publisher2, systemClock, recorder)
+	v2 := inventory.ProvideReserveStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
 	orderCreatedHandler := consumer2.NewOrderCreatedHandler(v2)
-	v3 := inventory.ProvideReleaseStock(reservationRepository, stockRepository, portTransactor, publisher2, systemClock, recorder)
+	v3 := inventory.ProvideReleaseStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
 	orderCancelledHandler := consumer2.NewOrderCancelledHandler(v3)
 	inventorySubscriptions := inventory.ProvideSubscriptions(orderCreatedHandler, orderCancelledHandler)
 	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher, subscriptions, inventorySubscriptions)

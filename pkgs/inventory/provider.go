@@ -21,6 +21,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
+	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -32,6 +33,7 @@ var ProviderSet = wire.NewSet(
 	ProvideStockRepository,
 	ProvideReservationRepository,
 	ProvideTransactor,
+	ProvideInbox,
 	events.NewPublisher,
 	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),
 	system.NewClock,
@@ -82,6 +84,19 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 	return postgres.NewTransactor(db)
 }
 
+// ProvideInbox is this BC's consumer inbox (usecasex.Idempotent): the
+// `<schema>.inbox` table on Postgres, none in memory — a nil Inbox makes
+// Idempotent a pass-through, which is right because the in-memory transactor
+// could not roll a record back with a failed attempt, and the in-memory bus
+// is at most once anyway.
+func ProvideInbox(db *gorm.DB) port.Inbox {
+	if db == nil {
+		return nil
+	}
+
+	return platformpg.NewInbox(db, Schema)
+}
+
 // Subscriptions lists what this BC consumes; apps/worker registers them on
 // the router with this BC's poison topic. A named type, so wire can tell each
 // BC's subscriptions apart.
@@ -108,18 +123,22 @@ func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase
 
 // decorateTx is decorate for use cases that write: the use case runs inside
 // one transaction, so its repository writes and outbox events commit or roll
-// back together. The transaction is innermost, so a failed commit is logged
-// and counted as the use case's failure.
-func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+// back together. The transaction is innermost but one, so a failed commit is
+// logged and counted as the use case's failure; inside it, Idempotent records
+// the consumed message id in this BC's inbox (same transaction: it rolls back
+// with a failed attempt) and drops a redelivery before any aggregate is
+// loaded. On the rpc path there is no message id and it is a pass-through.
+func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, inbox port.Inbox, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
 	return usecasex.Chain(uc,
 		usecasex.Metrics[I, O](rec, name),
 		usecasex.Logging[I, O](name),
 		usecasex.Transactional[I, O](tx),
+		usecasex.Idempotent[I, O](inbox),
 	)
 }
 
-func ProvideSetStock(stocks stock.Repository, tx port.Transactor, clock port.Clock, rec *usecasex.Recorder) rpc.SetStockUC {
-	return decorateTx("inventory.set_stock", rec, tx, usecase.NewSetStock(stocks, clock))
+func ProvideSetStock(stocks stock.Repository, tx port.Transactor, inbox port.Inbox, clock port.Clock, rec *usecasex.Recorder) rpc.SetStockUC {
+	return decorateTx("inventory.set_stock", rec, tx, inbox, usecase.NewSetStock(stocks, clock))
 }
 
 func ProvideGetStock(stocks stock.Repository, rec *usecasex.Recorder) rpc.GetStockUC {
@@ -134,10 +153,10 @@ func ProvideGetReservation(reservations reservation.Repository, rec *usecasex.Re
 	return decorate("inventory.get_reservation", rec, usecase.NewGetReservation(reservations))
 }
 
-func ProvideReserveStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ReserveStockUC {
-	return decorateTx("inventory.reserve_stock", rec, tx, usecase.NewReserveStock(reservations, stocks, events, clock))
+func ProvideReserveStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ReserveStockUC {
+	return decorateTx("inventory.reserve_stock", rec, tx, inbox, usecase.NewReserveStock(reservations, stocks, events, clock))
 }
 
-func ProvideReleaseStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ReleaseStockUC {
-	return decorateTx("inventory.release_stock", rec, tx, usecase.NewReleaseStock(reservations, stocks, events, clock))
+func ProvideReleaseStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ReleaseStockUC {
+	return decorateTx("inventory.release_stock", rec, tx, inbox, usecase.NewReleaseStock(reservations, stocks, events, clock))
 }

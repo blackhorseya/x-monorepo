@@ -44,6 +44,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	}
 	repository := ordering.ProvideOrderRepository(db, logger)
 	transactor := ordering.ProvideTransactor(db)
+	inbox := ordering.ProvideInbox(db)
 	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
 	if err != nil {
 		cleanup2()
@@ -61,15 +62,16 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v := ordering.ProvideCreateOrder(repository, transactor, eventsPublisher, uuidGenerator, clock, recorder)
+	v := ordering.ProvideCreateOrder(repository, transactor, inbox, eventsPublisher, uuidGenerator, clock, recorder)
 	v2 := ordering.ProvideGetOrder(repository, recorder)
-	v3 := ordering.ProvideCancelOrder(repository, transactor, eventsPublisher, clock, recorder)
+	v3 := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, recorder)
 	v4 := ordering.ProvideListOrders(repository, recorder)
 	orderService := rpc.NewOrderService(v, v2, v3, v4)
 	stockRepository := inventory.ProvideStockRepository(db, logger)
 	portTransactor := inventory.ProvideTransactor(db)
+	portInbox := inventory.ProvideInbox(db)
 	systemClock := system2.NewClock()
-	v5 := inventory.ProvideSetStock(stockRepository, portTransactor, systemClock, recorder)
+	v5 := inventory.ProvideSetStock(stockRepository, portTransactor, portInbox, systemClock, recorder)
 	v6 := inventory.ProvideGetStock(stockRepository, recorder)
 	v7 := inventory.ProvideListStocks(stockRepository, recorder)
 	reservationRepository := inventory.ProvideReservationRepository(db)
