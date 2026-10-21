@@ -118,14 +118,14 @@ is parked again. "all" = every row.`, "requeued", eventbus.Requeue)
 }
 
 // withDB loads the config, opens the database the way the worker does and
-// runs fn on it.
+// runs fn on it (poison and prune commands).
 func withDB(cmd *cobra.Command, load func() (*config.AppConfig, error), fn func(context.Context, *gorm.DB) error) error {
 	cfg, err := load()
 	if err != nil {
 		return err
 	}
 	if cfg.Postgres.URL == "" {
-		return errors.New("postgres.url is required: poison tables live in Postgres")
+		return errors.New("postgres.url is required: the event tables live in Postgres")
 	}
 	tel, telCleanup, err := otel.New(cfg.OTel, cfg.Log)
 	if err != nil {

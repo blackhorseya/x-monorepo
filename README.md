@@ -176,7 +176,7 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 | adapters/events | domain event → `ordering.v1.OrderCreated` / `OrderCancelled` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
 | platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → 把帶 topic / message_id / trace_id 的 logger 放進 context，usecase log 才會進 Loki）+ `Register`（每個 BC：PoisonQueue → Retry → drop → access → timeout：每則訊息一行 Info `message`，對應 rpc 的 `rpc` access log；`worker.handler_timeout` 給每次 attempt 一個 deadline）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
 | infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
-| apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工。`worker poison …`（`task poison -- …`）是 poison 表的操作面 | `apps/worker` |
+| apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工。`worker poison …`（`task poison -- …`）是 poison 表的操作面、`worker prune`（`task prune -- …`）是 outbox / inbox 的 retention | `apps/worker` |
 
 - Topic → table：`ordering.v1.OrderCreated` → `ordering.events_v1_ordercreated`（+ `_offsets`），第一段就是 BC，**DDL 由該 BC 的 migration 出**（`0003_events`），
   service 不在啟動時建表；`InitializeSchema` 關閉。新 topic = 新 migration。
@@ -184,8 +184,13 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   其他 error → Retry（3 次、指數退避）→ `ordering.poison` 表（`events_poison`）。
 - 冪等有兩層：**inbox**（`<bc>.inbox` 表，`usecasex.Idempotent` 在 `decorateTx` 的 transaction 之內把 message id 記進去，重送（broker at-least-once、
   `poison requeue`、ack 遺失）在載入任何 aggregate 之前就以 `message.duplicate` drop；失敗的 attempt 連記錄一起 rollback，retry 會重記）
-  加上 domain 狀態機（同一筆 order 的第二個 `OrderCreated` → `reservation.duplicate`）。inbox 的列不清：它要活得比最晚的重送（poison 列任何時候都能 requeue）久。
+  加上 domain 狀態機（同一筆 order 的第二個 `OrderCreated` → `reservation.duplicate`）。
   沒 DB（in-memory）時沒有 inbox：GoChannel 本來就 at most once。
+- **Retention**：outbox 表與 inbox 表都只會長，`task prune -- --older-than 720h [--dry-run] [--unconsumed] [<bc>]`（`worker prune`）刪掉
+  (1) 比 `--older-than` 老、且**每個**有 cursor 的 consumer group 都 ack 過的 outbox 列（判斷式就是 lag gauge / subscriber「還沒讀」的反面；
+  redis 模式下 cursor 是 forwarder 的）——沒有任何 group 有 cursor 的表（只發不收的 topic、worker 從沒跑過）預設跳過，`--unconsumed` 才清；
+  (2) 比 `--older-than` 老的 inbox 列，但任何 BC 的 poison 表還停著的 message id 留著（requeue 用原 id 重發，inbox 列是擋重做的憑據）。
+  poison 表不在此列（`poison drop` 才是）；redis stream 的修剪是 Redis 端的 XTRIM 政策。先 `--dry-run` 看數字再跑。
 - Poison 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison`，auth 開著時要 `auth.admin_role`

@@ -23,6 +23,7 @@ task compose-up            # 本機 Postgres :5432 + Redis :6379 + grafana/otel-
 task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會自己跑
 task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag；只改 docs / web / CI / test 的 commit 會被 gate 跳過）
 task poison -- list        # 看各 BC 的 poison 表；requeue <bc> <offset>…|all 送回原 topic、drop 刪掉（worker poison 子命令）
+task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 outbox 列 + 消費過的 inbox 列（worker prune；先 dry-run）
 task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Connect + gRPC + gRPC-Web 同 port；RPC 在 /api/<svc>/<Method> 與原生路徑都通，/api/docs 開）
 ```
 
@@ -73,7 +74,8 @@ pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering
 apps/rpc         composition root：main + wire.go，無業務、無 mapping
 apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Watermill router，各 BC 自己的 consumer group / poison；
                  worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）；
-                 `worker poison list|show|requeue|drop` 操作各 BC 的 poison 表（requeue = 重新 insert 回原 topic 的 outbox 表）
+                 `worker poison list|show|requeue|drop` 操作各 BC 的 poison 表（requeue = 重新 insert 回原 topic 的 outbox 表）；
+                 `worker prune --older-than <d>` 是 outbox / inbox 的 retention（poison 表不清）
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 ```
 
