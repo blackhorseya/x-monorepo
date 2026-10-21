@@ -1,7 +1,8 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
+import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { CredentialControl } from "./components/credential";
-import { OrdersPage } from "./routes/orders";
+import { OrdersPage, type OrdersSearch } from "./routes/orders";
 import { PoisonPage } from "./routes/poison";
 import { ReservationsPage, type ReservationsSearch } from "./routes/reservations";
 import { StockPage } from "./routes/stock";
@@ -38,7 +39,15 @@ const indexRoute = createRoute({
   },
 });
 
-const ordersRoute = createRoute({ getParentRoute: () => rootRoute, path: "/orders", component: OrdersPage });
+const ordersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/orders",
+  component: OrdersPage,
+  validateSearch: (raw: Record<string, unknown>): OrdersSearch => ({
+    status: typeof raw.status === "string" && raw.status in OrderStatus ? (raw.status as OrdersSearch["status"]) : undefined,
+    customer: typeof raw.customer === "string" && raw.customer !== "" ? raw.customer : undefined,
+  }),
+});
 const reservationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/reservations",

@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus, Trash2 } from "lucide-react";
 import { cloneElement, useId, useState, type ReactElement } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
@@ -17,6 +17,9 @@ import { keys, ordersQuery, reservationQuery } from "../queries";
 import { reservationBadge } from "./reservations";
 
 type Line = { sku: string; quantity: number; priceMinor: number };
+
+// Search params of /orders: a status filter and a customer id filter.
+export type OrdersSearch = { status?: "PENDING" | "CANCELLED"; customer?: string };
 
 export function OrdersPage() {
   return (
@@ -101,14 +104,61 @@ function CreateOrderCard() {
 }
 
 function OrdersCard() {
-  const list = useQuery(ordersQuery);
+  const search = useSearch({ from: "/orders" });
+  const navigate = useNavigate({ from: "/orders" });
+  const status = search.status ? OrderStatus[search.status] : OrderStatus.UNSPECIFIED;
+  const customer = search.customer ?? "";
+  const [customerInput, setCustomerInput] = useState(customer);
+  const list = useInfiniteQuery(ordersQuery(customer, status));
+  const rows = list.data?.pages.flatMap((p) => p.orders) ?? [];
+  const setSearch = (patch: Partial<OrdersSearch>) => void navigate({ search: (prev) => ({ ...prev, ...patch }) });
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Orders</CardTitle>
-        <CardDescription>Latest 20, refreshed every 2s.</CardDescription>
+        <CardDescription>Newest first, 20 per page, refreshed every 2s.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="grid gap-4">
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="flex gap-2">
+            {(["ANY", "PENDING", "CANCELLED"] as const).map((s) => {
+              const active = s === "ANY" ? !search.status : search.status === s;
+              return (
+                <Button key={s} size="sm" variant={active ? "default" : "outline"} onClick={() => setSearch({ status: s === "ANY" ? undefined : s })}>
+                  {s}
+                </Button>
+              );
+            })}
+          </div>
+          <form
+            className="flex items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setSearch({ customer: customerInput.trim() || undefined });
+            }}
+          >
+            <Field label="Customer" className="w-48">
+              <Input value={customerInput} placeholder="any" onChange={(e) => setCustomerInput(e.target.value)} />
+            </Field>
+            <Button type="submit" variant="outline" size="sm">
+              Filter
+            </Button>
+            {customer && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setCustomerInput("");
+                  setSearch({ customer: undefined });
+                }}
+              >
+                Clear
+              </Button>
+            )}
+          </form>
+        </div>
         {list.isError && <ErrorAlert error={list.error} />}
         <Table>
           <TableHeader>
@@ -122,9 +172,23 @@ function OrdersCard() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {list.data?.map((o) => <OrderRow key={o.id} order={o} />)}
+            {rows.map((o) => (
+              <OrderRow key={o.id} order={o} />
+            ))}
+            {list.isSuccess && rows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  No orders{search.status ? ` with status ${search.status}` : ""}{customer ? ` for ${customer}` : ""} yet.
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
+        {list.hasNextPage && (
+          <Button variant="outline" size="sm" className="justify-self-start" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
+            Load more
+          </Button>
+        )}
       </CardContent>
     </Card>
   );
