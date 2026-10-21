@@ -1,0 +1,2 @@
+DROP INDEX inventory.reservations_status_created_at_order_id_idx;
+DROP INDEX inventory.reservations_created_at_order_id_idx;

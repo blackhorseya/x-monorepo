@@ -1,7 +1,9 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
+import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { CredentialControl } from "./components/credential";
 import { OrdersPage } from "./routes/orders";
 import { PoisonPage } from "./routes/poison";
+import { ReservationsPage, type ReservationsSearch } from "./routes/reservations";
 import { StockPage } from "./routes/stock";
 
 const rootRoute = createRootRoute({
@@ -12,6 +14,7 @@ const rootRoute = createRootRoute({
         <nav className="flex gap-4 text-sm text-muted-foreground">
           {[
             { to: "/orders", label: "Orders" },
+            { to: "/reservations", label: "Reservations" },
             { to: "/stock", label: "Stock" },
             { to: "/poison", label: "Poison" },
           ].map((l) => (
@@ -36,11 +39,20 @@ const indexRoute = createRoute({
 });
 
 const ordersRoute = createRoute({ getParentRoute: () => rootRoute, path: "/orders", component: OrdersPage });
+const reservationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/reservations",
+  component: ReservationsPage,
+  validateSearch: (raw: Record<string, unknown>): ReservationsSearch => ({
+    status: typeof raw.status === "string" && raw.status in ReservationStatus ? (raw.status as ReservationsSearch["status"]) : undefined,
+    order: typeof raw.order === "string" && raw.order !== "" ? raw.order : undefined,
+  }),
+});
 const stockRoute = createRoute({ getParentRoute: () => rootRoute, path: "/stock", component: StockPage });
 const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: PoisonPage });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, stockRoute, poisonRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, reservationsRoute, stockRoute, poisonRoute]),
   defaultPreload: "intent",
 });
 

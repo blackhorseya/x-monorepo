@@ -45,6 +45,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGetStock,
 	ProvideListStocks,
 	ProvideGetReservation,
+	ProvideListReservations,
 	ProvideReserveStock,
 	ProvideReleaseStock,
 
@@ -151,6 +152,10 @@ func ProvideListStocks(stocks stock.Repository, rec *usecasex.Recorder) rpc.List
 
 func ProvideGetReservation(reservations reservation.Repository, rec *usecasex.Recorder) rpc.GetReservationUC {
 	return decorate("inventory.get_reservation", rec, usecase.NewGetReservation(reservations))
+}
+
+func ProvideListReservations(reservations reservation.Repository, rec *usecasex.Recorder) rpc.ListReservationsUC {
+	return decorate("inventory.list_reservations", rec, usecase.NewListReservations(reservations))
 }
 
 func ProvideReserveStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ReserveStockUC {

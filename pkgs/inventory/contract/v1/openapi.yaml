@@ -131,6 +131,40 @@ components:
           title: stock
       title: GetStockResponse
       additionalProperties: false
+    inventory.v1.ListReservationsRequest:
+      type: object
+      properties:
+        status:
+          allOf:
+            - $ref: '#/components/schemas/inventory.v1.ReservationStatus'
+          title: status
+          description: RESERVATION_STATUS_UNSPECIFIED = any status.
+        pageSize:
+          type: integer
+          title: page_size
+          minimum: 0
+          format: int32
+          description: 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+        pageToken:
+          type: string
+          title: page_token
+          description: Opaque; from the previous ListReservationsResponse.next_page_token.
+      title: ListReservationsRequest
+      additionalProperties: false
+    inventory.v1.ListReservationsResponse:
+      type: object
+      properties:
+        reservations:
+          type: array
+          items:
+            $ref: '#/components/schemas/inventory.v1.Reservation'
+          title: reservations
+        nextPageToken:
+          type: string
+          title: next_page_token
+          description: Empty when this is the last page.
+      title: ListReservationsResponse
+      additionalProperties: false
     inventory.v1.ListStocksRequest:
       type: object
       properties:
@@ -390,6 +424,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/inventory.v1.GetStockResponse'
+  /inventory.v1.InventoryService/ListReservations:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: ListReservations
+      description: ListReservations pages through reservations newest first, optionally by status.
+      operationId: inventory.v1.InventoryService.ListReservations
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.ListReservationsRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.ListReservationsResponse'
   /inventory.v1.InventoryService/ListStocks:
     post:
       tags:

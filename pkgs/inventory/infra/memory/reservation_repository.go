@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
@@ -76,6 +77,51 @@ func (i *ReservationRepository) Update(c context.Context, r *reservation.Reserva
 	i.data[r.OrderID()] = cp
 
 	return nil
+}
+
+func (i *ReservationRepository) List(c context.Context, p reservation.ListParams) ([]*reservation.Reservation, *reservation.Cursor, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	matches := make([]*reservation.Reservation, 0, len(i.data))
+	for _, r := range i.data {
+		if p.Status != nil && r.Status() != *p.Status {
+			continue
+		}
+		if p.After != nil && !p.After.Before(r.CreatedAt(), r.OrderID()) {
+			continue
+		}
+		matches = append(matches, r)
+	}
+	sort.Slice(matches, func(a, b int) bool {
+		x, y := matches[a], matches[b]
+		if !x.CreatedAt().Equal(y.CreatedAt()) {
+			return x.CreatedAt().After(y.CreatedAt())
+		}
+		return x.OrderID() > y.OrderID()
+	})
+
+	var next *reservation.Cursor
+	if p.Limit > 0 && len(matches) > p.Limit {
+		matches = matches[:p.Limit]
+		cur := reservation.CursorOf(matches[p.Limit-1])
+		next = &cur
+	}
+	out := make([]*reservation.Reservation, 0, len(matches))
+	for _, r := range matches {
+		cp, err := cloneReservation(r)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, cp)
+	}
+
+	return out, next, nil
 }
 
 func cloneReservation(r *reservation.Reservation) (*reservation.Reservation, error) {

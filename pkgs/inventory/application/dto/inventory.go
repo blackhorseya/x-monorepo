@@ -41,6 +41,17 @@ type GetStockInput struct {
 	SKU string
 }
 
+type ListReservationsInput struct {
+	Status    string // "" = any; RESERVED | REJECTED | RELEASED | CANCELLED
+	PageSize  int32  // 0 = default
+	PageToken string // "" = first page
+}
+
+type ListReservationsOutput struct {
+	Reservations  []ReservationOutput
+	NextPageToken string // "" = last page
+}
+
 type ListStocksInput struct {
 	PageSize  int32  // 0 = default
 	PageToken string // "" = first page

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Plus, Trash2 } from "lucide-react";
 import { cloneElement, useId, useState, type ReactElement } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { describe, isUnauthenticated, orders } from "../client";
 import { keys, ordersQuery, reservationQuery } from "../queries";
+import { reservationBadge } from "./reservations";
 
 type Line = { sku: string; quantity: number; priceMinor: number };
 
@@ -162,14 +164,6 @@ function OrderRow({ order }: { order: Order }) {
   );
 }
 
-const reservationBadge: Record<ReservationStatus, "default" | "secondary" | "destructive" | "outline"> = {
-  [ReservationStatus.UNSPECIFIED]: "outline",
-  [ReservationStatus.RESERVED]: "default",
-  [ReservationStatus.REJECTED]: "destructive",
-  [ReservationStatus.RELEASED]: "secondary",
-  [ReservationStatus.CANCELLED]: "outline",
-};
-
 function ReservationCell({ orderId }: { orderId: string }) {
   const { data, isError, error } = useQuery(reservationQuery(orderId));
   if (isError) return <span className="text-xs text-destructive">{describe(error)}</span>;
@@ -177,7 +171,9 @@ function ReservationCell({ orderId }: { orderId: string }) {
   if (data === null) return <span className="text-sm text-muted-foreground">none yet</span>;
   return (
     <span className="flex flex-wrap items-center gap-2">
-      <Badge variant={reservationBadge[data.status]}>{ReservationStatus[data.status]}</Badge>
+      <Link to="/reservations" search={{ order: orderId }} title="Open in Reservations">
+        <Badge variant={reservationBadge[data.status]}>{ReservationStatus[data.status]}</Badge>
+      </Link>
       {data.shortfallSkus.length > 0 && (
         <span className="text-xs text-muted-foreground">short: {data.shortfallSkus.join(", ")}</span>
       )}

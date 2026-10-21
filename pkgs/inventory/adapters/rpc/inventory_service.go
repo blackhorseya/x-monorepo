@@ -4,6 +4,7 @@ package rpc
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -19,22 +20,33 @@ var _ inventoryv1connect.InventoryServiceHandler = (*InventoryService)(nil)
 
 // Use-case aliases keep handler signatures readable.
 type (
-	SetStockUC       = usecasex.UseCase[dto.SetStockInput, *dto.StockOutput]
-	GetStockUC       = usecasex.UseCase[dto.GetStockInput, *dto.StockOutput]
-	ListStocksUC     = usecasex.UseCase[dto.ListStocksInput, *dto.ListStocksOutput]
-	GetReservationUC = usecasex.UseCase[dto.GetReservationInput, *dto.ReservationOutput]
+	SetStockUC         = usecasex.UseCase[dto.SetStockInput, *dto.StockOutput]
+	GetStockUC         = usecasex.UseCase[dto.GetStockInput, *dto.StockOutput]
+	ListStocksUC       = usecasex.UseCase[dto.ListStocksInput, *dto.ListStocksOutput]
+	GetReservationUC   = usecasex.UseCase[dto.GetReservationInput, *dto.ReservationOutput]
+	ListReservationsUC = usecasex.UseCase[dto.ListReservationsInput, *dto.ListReservationsOutput]
 )
 
 // InventoryService implements the generated InventoryServiceHandler.
 type InventoryService struct {
-	setStock       SetStockUC
-	getStock       GetStockUC
-	listStocks     ListStocksUC
-	getReservation GetReservationUC
+	setStock         SetStockUC
+	getStock         GetStockUC
+	listStocks       ListStocksUC
+	getReservation   GetReservationUC
+	listReservations ListReservationsUC
 }
 
-func NewInventoryService(setStock SetStockUC, getStock GetStockUC, listStocks ListStocksUC, getReservation GetReservationUC) *InventoryService {
-	return &InventoryService{setStock: setStock, getStock: getStock, listStocks: listStocks, getReservation: getReservation}
+func NewInventoryService(
+	setStock SetStockUC,
+	getStock GetStockUC,
+	listStocks ListStocksUC,
+	getReservation GetReservationUC,
+	listReservations ListReservationsUC,
+) *InventoryService {
+	return &InventoryService{
+		setStock: setStock, getStock: getStock, listStocks: listStocks,
+		getReservation: getReservation, listReservations: listReservations,
+	}
 }
 
 // Route returns the mount path and handler (Connect + gRPC + gRPC-Web on one port).
@@ -92,6 +104,38 @@ func (h *InventoryService) GetReservation(
 	}
 
 	return connect.NewResponse(&inventoryv1.GetReservationResponse{Reservation: toProtoReservation(out)}), nil
+}
+
+func (h *InventoryService) ListReservations(
+	c context.Context,
+	req *connect.Request[inventoryv1.ListReservationsRequest],
+) (*connect.Response[inventoryv1.ListReservationsResponse], error) {
+	out, err := h.listReservations.Execute(c, dto.ListReservationsInput{
+		Status:    toDTOStatus(req.Msg.GetStatus()),
+		PageSize:  req.Msg.GetPageSize(),
+		PageToken: req.Msg.GetPageToken(),
+	})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+	rs := make([]*inventoryv1.Reservation, 0, len(out.Reservations))
+	for i := range out.Reservations {
+		rs = append(rs, toProtoReservation(&out.Reservations[i]))
+	}
+
+	return connect.NewResponse(&inventoryv1.ListReservationsResponse{Reservations: rs, NextPageToken: out.NextPageToken}), nil
+}
+
+// toDTOStatus maps a filter enum to the use case's string filter. UNSPECIFIED
+// means "any"; the name is passed through (the inverse of toProtoStatus), so
+// a value the server does not know is rejected by the use case instead of
+// silently widening the filter.
+func toDTOStatus(s inventoryv1.ReservationStatus) string {
+	if s == inventoryv1.ReservationStatus_RESERVATION_STATUS_UNSPECIFIED {
+		return ""
+	}
+
+	return strings.TrimPrefix(s.String(), "RESERVATION_STATUS_")
 }
 
 func toProtoStock(s *dto.StockOutput) *inventoryv1.Stock {
