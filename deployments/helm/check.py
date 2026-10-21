@@ -52,6 +52,19 @@ def main(profile: str) -> None:
     check("livenessProbe" not in wc and "readinessProbe" not in wc, "worker has no probes")
     check(worker["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] > 18, "worker grace > 18s")
 
+    wa = values["worker"]["autoscaling"]
+    check(("replicas" in worker["spec"]) != wa["enabled"], "worker replicas omitted iff autoscaling")
+    hpa, so = find(docs, "HorizontalPodAutoscaler", "-worker"), find(docs, "ScaledObject", "-worker")
+    check((hpa is not None) == (wa["enabled"] and wa["metric"] == "cpu"), "worker HPA iff autoscaling cpu")
+    check((so is not None) == (wa["enabled"] and wa["metric"] == "lag"), "worker ScaledObject iff autoscaling lag")
+    if so:
+        trig = so["spec"]["triggers"][0]
+        group = values["config"]["worker"]["consumer_group"]
+        check(trig["type"] == "prometheus" and "max(" in trig["metadata"]["query"] and f'consumer_group=~"{group}\\\\..*"' in trig["metadata"]["query"],
+              f'lag query takes max over the {group}.* groups: {trig["metadata"]["query"]}')
+        expect(trig["metadata"]["threshold"], str(wa["lag"]["threshold"]), "lag threshold")
+        expect(so["spec"]["scaleTargetRef"]["name"], worker["metadata"]["name"], "ScaledObject targets the worker")
+
     # migrate: a pre-install/pre-upgrade hook with a Secret it can actually read at that time.
     has_db = bool(values["secrets"].get("postgresUrl") or values["secrets"].get("existingSecret"))
     job = find(docs, "Job", "-migrate")

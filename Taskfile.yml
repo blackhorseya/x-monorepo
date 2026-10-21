@@ -249,7 +249,7 @@ tasks:
       - for: { var: PROFILES }
         cmd: |
           helm lint --strict {{.CHART}} -f {{.ITEM}} >/dev/null
-          helm template t {{.CHART}} -f {{.ITEM}} | {{.KUBECONFORM}} -strict -summary -kubernetes-version 1.30.0 >/dev/null
+          helm template t {{.CHART}} -f {{.ITEM}} | {{.KUBECONFORM}} -strict -summary -kubernetes-version 1.30.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{"}}.Group{{"}}"}}/{{"{{"}}.ResourceKind{{"}}"}}_{{"{{"}}.ResourceAPIVersion{{"}}"}}.json' >/dev/null
           helm template t {{.CHART}} -f {{.ITEM}} | deployments/helm/check.py {{.ITEM}}
     preconditions:
       - sh: command -v helm >/dev/null

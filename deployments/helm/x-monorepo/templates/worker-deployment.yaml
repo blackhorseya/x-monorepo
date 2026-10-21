@@ -8,7 +8,9 @@ metadata:
     {{- include "x-monorepo.labels" . | nindent 4 }}
     app.kubernetes.io/component: worker
 spec:
+  {{- if not $w.autoscaling.enabled }}
   replicas: {{ $w.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "x-monorepo.selectorLabels" . | nindent 6 }}

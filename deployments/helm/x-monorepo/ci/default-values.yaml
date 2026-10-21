@@ -4,3 +4,5 @@ secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
 config:
   otel: { endpoint: otel-collector:4317 }
+worker:
+  autoscaling: { enabled: true, metric: cpu, minReplicas: 1, maxReplicas: 4 }

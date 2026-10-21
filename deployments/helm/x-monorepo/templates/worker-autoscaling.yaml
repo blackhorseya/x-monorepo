@@ -1,0 +1,59 @@
+{{- $a := .Values.worker.autoscaling -}}
+{{- if $a.enabled }}
+{{- if eq $a.metric "cpu" }}
+{{- if not $.Values.worker.resources.requests.cpu }}
+{{- fail "worker.autoscaling metric cpu needs worker.resources.requests.cpu" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-worker
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "x-monorepo.fullname" . }}-worker
+  minReplicas: {{ $a.minReplicas }}
+  maxReplicas: {{ $a.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $a.cpu.targetUtilizationPercentage }}
+{{- else if eq $a.metric "lag" }}
+{{- if not .Values.config.otel.endpoint }}
+{{- fail "worker.autoscaling metric lag needs config.otel.endpoint: without OTLP the worker exports no eventbus_consumer_lag" }}
+{{- end }}
+{{- $query := default (printf "max(eventbus_consumer_lag{consumer_group=~\"%s\\\\..*\"})" .Values.config.worker.consumer_group) $a.lag.query }}
+# KEDA (keda.sh) scales the Deployment on the worst consumer group's backlog. The gauge is
+# per replica and identical on each, so the query takes max, never sum; KEDA divides the
+# value by threshold to get the replica count (AverageValue semantics).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-worker
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    name: {{ include "x-monorepo.fullname" . }}-worker
+  minReplicaCount: {{ $a.minReplicas }}
+  maxReplicaCount: {{ $a.maxReplicas }}
+  pollingInterval: {{ $a.lag.pollingInterval }}
+  cooldownPeriod: {{ $a.lag.cooldownPeriod }}
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $a.lag.prometheusAddress }}
+        query: {{ $query | quote }}
+        threshold: {{ $a.lag.threshold | quote }}
+{{- else }}
+{{- fail (printf "worker.autoscaling.metric %q: want lag or cpu" $a.metric) }}
+{{- end }}
+{{- end }}

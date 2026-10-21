@@ -149,6 +149,28 @@ worker:
   # SIGTERM: the router stops taking messages, running handlers get up to 8s to finish and
   # ack, the router closes within 10s. Must stay above 18s; 30s leaves room for a slow ack.
   terminationGracePeriodSeconds: 30
+  # Replicas share config.worker.consumer_group, so adding one splits the work. What to scale
+  # on: handlers are DB-bound, so CPU stays low while the backlog grows — `lag` (KEDA
+  # ScaledObject on eventbus_consumer_lag from Prometheus; needs the KEDA operator and the
+  # worker exporting over OTLP) is the signal that means something; `cpu` is a plain HPA for
+  # clusters without KEDA. Either way replicaCount is ignored when enabled.
+  autoscaling:
+    enabled: false
+    metric: lag            # lag | cpu
+    minReplicas: 1
+    maxReplicas: 6
+    cpu:
+      targetUtilizationPercentage: 70
+    lag:
+      # Prometheus the OTLP collector writes to (KEDA queries it directly).
+      prometheusAddress: http://prometheus:9090
+      # Unacked messages per replica to aim for; scale out above it. The worst group counts
+      # (max over topics / groups: the gauges are per replica, never sum them).
+      threshold: 100
+      # Query override; empty = max over every consumer group of this consumer_group prefix.
+      query: ""
+      pollingInterval: 30
+      cooldownPeriod: 300
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }

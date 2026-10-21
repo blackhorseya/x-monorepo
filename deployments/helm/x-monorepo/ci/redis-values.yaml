@@ -18,8 +18,13 @@ rpc:
     hosts: [{ host: api.example.com, paths: [{ path: /, pathType: Prefix }] }]
     tls: [{ secretName: api-tls, hosts: [api.example.com] }]
 worker:
-  replicaCount: 2
   terminationGracePeriodSeconds: 45
+  autoscaling:
+    enabled: true
+    metric: lag
+    minReplicas: 2
+    maxReplicas: 8
+    lag: { prometheusAddress: http://prometheus.monitoring:9090, threshold: 200 }
 prune:
   schedule: "0 4 * * 0"
   olderThan: 168h
