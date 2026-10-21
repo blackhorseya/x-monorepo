@@ -118,6 +118,81 @@ groups:
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "27"
 
+      # Retention is overdue: the oldest row still in an outbox / inbox table is older than prune should
+      # allow — prune is not running, or something holds the rows back (see the next rule).
+      - uid: x-monorepo-eventbus-retention
+        title: Eventbus retention overdue
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max by (table) (eventbus_outbox_oldest_age_seconds or label_replace(eventbus_inbox_oldest_age_seconds, "table", "$1.inbox", "schema", "(.*)"))
+              legendFormat: "{{table}}"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [3888000] }
+        for: 1h
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: worker }
+        annotations:
+          summary: "oldest row in {{ $labels.table }} is {{ $values.A }}s old"
+          description: >-
+            The oldest row still in the table is older than 45 days (1.5× the `task prune -- --older-than 720h`
+            example — set this to 1.5× whatever your prune job uses). Either prune is not scheduled, or it runs and
+            cannot delete: `task prune -- --older-than 720h --dry-run` says which, its NOTE column names the consumer
+            group holding rows back. A poison row's inbox id is kept on purpose (it can be requeued any time).
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "29"
+
+      # Rows are held back by a consumer group that is not making progress — while the lag rules above only
+      # watch the groups this worker is configured with, this one sees every cursor in the offsets table,
+      # so a group from a renamed worker.consumer_group or an E2E run shows up here and nowhere else.
+      - uid: x-monorepo-eventbus-held
+        title: Eventbus rows held by a stale consumer group
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max by (table) (eventbus_outbox_oldest_held_age_seconds)
+              legendFormat: "{{table}}"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [86400] }
+        for: 30m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: worker }
+        annotations:
+          summary: "a consumer group has not acked a {{ $values.A }}s old row on {{ $labels.table }}"
+          description: >-
+            Some consumer group's cursor on this table is more than a day behind, so prune keeps everything after
+            it. If "Eventbus consumer stalled" is not firing, the group is one no worker runs any more (an old
+            worker.consumer_group, a `test-<ts>.*` group from an E2E run): `task prune -- --older-than 720h --dry-run`
+            names it in NOTE, then `--forget-group <name>` deletes its cursor so the rows become prunable.
+            If it is a live group, fix consumption first — forgetting a live group makes it restart from
+            worker.start_from.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "29"
+
       # No lag series at all: no worker is exporting, so the rules above cannot fire either.
       - uid: x-monorepo-eventbus-absent
         title: Eventbus metrics absent

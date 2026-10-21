@@ -48,6 +48,12 @@ type PruneResult struct {
 	Forgotten []string
 }
 
+// unread is the subscriber's / lag gauge's "row m is still to read for the
+// cursor row o" predicate, shared by prune (its negation is "prunable") and
+// the outbox gauges (its existence over all groups is "held back").
+const unread = `(m.transaction_id = o.last_processed_transaction_id AND m."offset" > o.offset_acked)
+	OR m.transaction_id > o.last_processed_transaction_id`
+
 // Blocker is a consumer group behind on a table.
 type Blocker struct {
 	Group  string
@@ -109,9 +115,6 @@ func PruneTopicTable(c context.Context, db *gorm.DB, table string, opts PruneOpt
 		return res, nil
 	}
 
-	// unread is the subscriber's / lag gauge's "still to read for group o".
-	const unread = `(m.transaction_id = o.last_processed_transaction_id AND m."offset" > o.offset_acked)
-			   OR m.transaction_id > o.last_processed_transaction_id`
 	offsets := table + `_offsets o`
 	if opts.DryRun && len(res.Forgotten) > 0 {
 		offsets = `(SELECT * FROM ` + table + `_offsets WHERE consumer_group NOT IN ?) o`

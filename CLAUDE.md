@@ -75,7 +75,8 @@ apps/rpc         composition root：main + wire.go，無業務、無 mapping
 apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Watermill router，各 BC 自己的 consumer group / poison；
                  worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）；
                  `worker poison list|show|requeue|drop` 操作各 BC 的 poison 表（requeue = 重新 insert 回原 topic 的 outbox 表）；
-                 `worker prune --older-than <d>` 是 outbox / inbox 的 retention（poison 表不清）
+                 `worker prune --older-than <d>` 是 outbox / inbox 的 retention（poison 表不清）；
+                 有 DB 時 `eventbus.Lag` 另報每張 outbox 表 / inbox 的大小與最老一列年齡（`eventbus_outbox_*` / `eventbus_inbox_*`），alert 用它抓 prune 沒跑與 stale group
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 ```
 
