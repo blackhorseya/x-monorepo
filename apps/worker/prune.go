@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -25,6 +26,7 @@ func newPruneCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 		dryRun     bool
 		unconsumed bool
 		batch      int
+		forget     []string
 	)
 	cmd := &cobra.Command{
 		Use:   "prune [<bc>] --older-than <duration>",
@@ -39,6 +41,12 @@ func newPruneCmd(load func() (*config.AppConfig, error)) *cobra.Command {
                        parked in any poison table (poison requeue republishes a message
                        under its original id; the inbox row is what keeps a BC that
                        already consumed it from doing so again).
+
+A row stays as long as ONE group with a cursor has not read it: the NOTE column names
+the groups holding old rows back. A group that will never run again (an E2E run
+against this database, a renamed worker.consumer_group, a BC group from before the
+broker moved to redis) is removed with --forget-group <name>; if it ever comes back it
+starts over as a new group (worker.start_from).
 
 Poison tables are never pruned here (see poison drop). Durations are Go syntax:
 720h = 30 days. Start with --dry-run.`,
@@ -55,7 +63,7 @@ Poison tables are never pruned here (see poison drop). Durations are Go syntax:
 				}
 				bcs = []string{bc}
 			}
-			opts := eventbus.PruneOptions{OlderThan: olderThan, Unconsumed: unconsumed, DryRun: dryRun, BatchSize: batch}
+			opts := eventbus.PruneOptions{OlderThan: olderThan, Unconsumed: unconsumed, DryRun: dryRun, BatchSize: batch, ForgetGroups: forget}
 			return withDB(cmd, load, func(c context.Context, db *gorm.DB) error {
 				return prune(c, db, bcs, opts, cmd.OutOrStdout())
 			})
@@ -65,6 +73,7 @@ Poison tables are never pruned here (see poison drop). Durations are Go syntax:
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "count what would be deleted, delete nothing")
 	cmd.Flags().BoolVar(&unconsumed, "unconsumed", false, "also prune topic tables no consumer group has a cursor on")
 	cmd.Flags().IntVar(&batch, "batch", 10000, "rows per DELETE statement")
+	cmd.Flags().StringArrayVar(&forget, "forget-group", nil, "delete this consumer group's cursors first (repeatable); it no longer holds rows back")
 	_ = cmd.MarkFlagRequired("older-than")
 
 	return cmd
@@ -89,7 +98,7 @@ func prune(c context.Context, db *gorm.DB, bcs []string, opts eventbus.PruneOpti
 				return err
 			}
 			total += res.Rows
-			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", res.Table, res.Rows, res.Skipped)
+			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", res.Table, res.Rows, note(res, opts.DryRun))
 		}
 		res, err := eventbus.PruneInbox(c, db, bc, opts.OlderThan, schemas, opts.DryRun)
 		if err != nil {
@@ -104,4 +113,33 @@ func prune(c context.Context, db *gorm.DB, bcs []string, opts eventbus.PruneOpti
 	_, _ = fmt.Fprintf(out, "%s %d row(s) older than %s\n", map[bool]string{true: "would delete", false: "deleted"}[opts.DryRun], total, opts.OlderThan)
 
 	return nil
+}
+
+// note is the NOTE column of one topic table: why it was skipped, which
+// groups were forgotten, and which still hold old rows back.
+func note(res eventbus.PruneResult, dryRun bool) string {
+	var parts []string
+	if len(res.Forgotten) > 0 {
+		verb := "forgot"
+		if dryRun {
+			verb = "would forget"
+		}
+		parts = append(parts, verb+" "+strings.Join(res.Forgotten, ", "))
+	}
+	if res.Skipped != "" {
+		parts = append(parts, res.Skipped)
+	}
+	if len(res.Blockers) > 0 {
+		names := make([]string, 0, len(res.Blockers))
+		for i, b := range res.Blockers {
+			if i == 3 {
+				names = append(names, fmt.Sprintf("+%d more", len(res.Blockers)-3))
+				break
+			}
+			names = append(names, fmt.Sprintf("%s (%d unread)", b.Group, b.Unread))
+		}
+		parts = append(parts, "held back by "+strings.Join(names, ", "))
+	}
+
+	return strings.Join(parts, "; ")
 }

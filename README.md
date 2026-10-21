@@ -190,6 +190,8 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   (1) 比 `--older-than` 老、且**每個**有 cursor 的 consumer group 都 ack 過的 outbox 列（判斷式就是 lag gauge / subscriber「還沒讀」的反面；
   redis 模式下 cursor 是 forwarder 的）——沒有任何 group 有 cursor 的表（只發不收的 topic、worker 從沒跑過）預設跳過，`--unconsumed` 才清；
   (2) 比 `--older-than` 老的 inbox 列，但任何 BC 的 poison 表還停著的 message id 留著（requeue 用原 id 重發，inbox 列是擋重做的憑據）。
+  一列只要還有**一個**有 cursor 的 group 沒讀就留著，NOTE 欄會列出是誰擋的；不會再跑的 group（對這個 DB 跑過的 E2E 留下的 `test-*`、
+  改過名的 `worker.consumer_group`、broker 改 redis 前的 BC group）用 `--forget-group <name>` 先刪掉它的 cursor（真回來就當新 group，照 `worker.start_from`）。
   poison 表不在此列（`poison drop` 才是）；redis stream 的修剪是 Redis 端的 XTRIM 政策。先 `--dry-run` 看數字再跑。
 - Poison 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，

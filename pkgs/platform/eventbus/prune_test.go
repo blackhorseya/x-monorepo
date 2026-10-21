@@ -158,10 +158,34 @@ func TestPrune(t *testing.T) {
 	if len(left) != 3 || left[0] != ids[1] || left[2] != ids[3] {
 		t.Fatalf("left = %v, want %v (only the first, acked by both, goes)", left, ids[1:])
 	}
-	// g2 catches up: the next run takes the rest.
+	// g2 catches up, but a group that will never run again (its cursor sits
+	// at zero) holds everything back; the result names it. Forgetting it in a
+	// dry run reports what would go without touching its cursor; the real run
+	// drops the cursor and takes the rest.
 	consume("g2", 3, 4)
-	if res, err := eventbus.PruneTopicTable(c, db, eventbus.TableName(topic), opts); err != nil || res.Rows != 3 || count(eventbus.TableName(topic)) != 0 {
-		t.Fatalf("after g2 caught up: %+v, %v", res, err)
+	if err := db.WithContext(c).Exec("INSERT INTO " + eventbus.OffsetsTableName(topic) + " (consumer_group, offset_acked, last_processed_transaction_id) VALUES ('stale', 0, '0')").Error; err != nil {
+		t.Fatal(err)
+	}
+	res, err := eventbus.PruneTopicTable(c, db, eventbus.TableName(topic), opts)
+	if err != nil || res.Rows != 0 || len(res.Blockers) != 1 || res.Blockers[0] != (eventbus.Blocker{Group: "stale", Unread: 3}) {
+		t.Fatalf("held back by a stale group: %+v, %v", res, err)
+	}
+	forget := eventbus.PruneOptions{OlderThan: time.Hour, ForgetGroups: []string{"stale", "never-existed"}, DryRun: true}
+	res, err = eventbus.PruneTopicTable(c, db, eventbus.TableName(topic), forget)
+	if err != nil || res.Rows != 3 || len(res.Blockers) != 0 || len(res.Forgotten) != 1 || res.Forgotten[0] != "stale" {
+		t.Fatalf("forget (dry run): %+v, %v", res, err)
+	}
+	var staleRows int64
+	if err := db.WithContext(c).Raw("SELECT count(*) FROM " + eventbus.OffsetsTableName(topic) + " WHERE consumer_group = 'stale'").Scan(&staleRows).Error; err != nil || staleRows != 1 {
+		t.Fatalf("dry run touched the cursor: %d, %v", staleRows, err)
+	}
+	forget.DryRun = false
+	res, err = eventbus.PruneTopicTable(c, db, eventbus.TableName(topic), forget)
+	if err != nil || res.Rows != 3 || len(res.Forgotten) != 1 || count(eventbus.TableName(topic)) != 0 {
+		t.Fatalf("forget: %+v, %v", res, err)
+	}
+	if err := db.WithContext(c).Raw("SELECT count(*) FROM " + eventbus.OffsetsTableName(topic) + " WHERE consumer_group = 'stale'").Scan(&staleRows).Error; err != nil || staleRows != 0 {
+		t.Fatalf("stale cursor still there: %d, %v", staleRows, err)
 	}
 
 	// A table nobody has a cursor on is skipped, unless asked for.

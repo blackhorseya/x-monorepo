@@ -43,8 +43,9 @@ func TestPruneCommand(t *testing.T) {
 		}
 	}
 	// A published-only topic (no cursor): rows there are skipped by default.
-	const topic = "inventory.v1.StockReserved"
-	for _, tbl := range []string{eventbus.TableName(topic), eventbus.OffsetsTableName(topic), "inventory.inbox"} {
+	// OrderCreated gets a stale cursor that holds its old row back.
+	const topic, held = "inventory.v1.StockReserved", "ordering.v1.OrderCreated"
+	for _, tbl := range []string{eventbus.TableName(topic), eventbus.OffsetsTableName(topic), eventbus.TableName(held), eventbus.OffsetsTableName(held), "inventory.inbox"} {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +57,18 @@ func TestPruneCommand(t *testing.T) {
 	if err := pub.Publish(topic, message.NewMessage(watermill.NewUUID(), []byte("p"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.WithContext(c).Exec("UPDATE " + eventbus.TableName(topic) + " SET created_at = created_at - interval '48 hours'").Error; err != nil {
+	if err := pub.Publish(held, message.NewMessage(watermill.NewUUID(), []byte("p"))); err != nil {
+		t.Fatal(err)
+	}
+	for _, tbl := range []string{eventbus.TableName(topic), eventbus.TableName(held)} {
+		if err := db.WithContext(c).Exec("UPDATE " + tbl + " SET created_at = created_at - interval '48 hours'").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One live group that has read the row, one stale group that never will.
+	if err := db.WithContext(c).Exec("INSERT INTO " + eventbus.OffsetsTableName(held) + ` (consumer_group, offset_acked, last_processed_transaction_id)
+		SELECT 'live.ordering', max("offset"), max(transaction_id) FROM ` + eventbus.TableName(held) + `
+		UNION ALL SELECT 'test-old.ordering', 0, '0'`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.WithContext(c).Exec("INSERT INTO inventory.inbox (message_id, consumed_at) VALUES (?, now() - interval '48 hours'), (?, now())", watermill.NewUUID(), watermill.NewUUID()).Error; err != nil {
@@ -79,6 +91,10 @@ func TestPruneCommand(t *testing.T) {
 		return out.String(), err
 	}
 
+	row := func(out, table string, n string) bool {
+		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(table) + `\s+` + n + `\b`).MatchString(out)
+	}
+
 	// Argument errors never open the database.
 	noDB := &config.AppConfig{Log: cfg.Log}
 	for _, args := range [][]string{{}, {"--older-than", "0"}, {"--older-than", "24h", "billing"}, {"--older-than", "30d"}} {
@@ -90,12 +106,24 @@ func TestPruneCommand(t *testing.T) {
 		t.Fatalf("prune without a database = %v", err)
 	}
 
-	out, err := exec(cfg, "--older-than", "24h", "--dry-run", "inventory")
+	out, err := exec(cfg, "--older-than", "24h", "--dry-run")
 	if err != nil {
 		t.Fatalf("dry run: %v\n%s", err, out)
 	}
-	row := func(out, table string, n string) bool {
-		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(table) + `\s+` + n + `\b`).MatchString(out)
+	if !row(out, eventbus.TableName(held), "0") || !strings.Contains(out, "held back by test-old.ordering (1 unread)") {
+		t.Fatalf("stale group not reported:\n%s", out)
+	}
+	out, err = exec(cfg, "--older-than", "24h", "--dry-run", "--forget-group", "test-old.ordering", "ordering")
+	if err != nil || !row(out, eventbus.TableName(held), "1") || !strings.Contains(out, "would forget test-old.ordering") {
+		t.Fatalf("forget dry run: %v\n%s", err, out)
+	}
+	out, err = exec(cfg, "--older-than", "24h", "--forget-group", "test-old.ordering", "ordering")
+	if err != nil || !row(out, eventbus.TableName(held), "1") || !strings.Contains(out, "forgot test-old.ordering") || count(eventbus.TableName(held)) != 0 {
+		t.Fatalf("forget: %v\n%s", err, out)
+	}
+	out, err = exec(cfg, "--older-than", "24h", "--dry-run", "inventory")
+	if err != nil {
+		t.Fatalf("dry run: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "WOULD DELETE") || !row(out, eventbus.TableName(topic), "0") || !strings.Contains(out, "no consumer group") ||
 		!row(out, "inventory.inbox", "1") || !strings.Contains(out, "would delete 1 row(s)") {

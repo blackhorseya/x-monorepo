@@ -24,6 +24,13 @@ type PruneOptions struct {
 	// BatchSize rows per DELETE (default 10000), so a first run on a big
 	// table is many short transactions, not one long lock.
 	BatchSize int
+	// ForgetGroups are consumer groups whose cursors are deleted from the
+	// table's offsets table first, so they no longer hold rows back: groups
+	// that will never run again (an E2E run against this database, a
+	// worker.consumer_group that was renamed, a BC group after the broker
+	// moved to redis). If such a group does come back it starts over as a new
+	// group (worker.start_from). Ignored by DryRun (reported as Forgotten).
+	ForgetGroups []string
 }
 
 // PruneResult is what Prune did to one table.
@@ -33,6 +40,18 @@ type PruneResult struct {
 	Rows int64
 	// Skipped says why nothing was touched ("" when the table was pruned).
 	Skipped string
+	// Blockers are the consumer groups that still have unread rows older
+	// than OlderThan — what keeps those rows from being pruned. A group that
+	// will never catch up belongs in ForgetGroups.
+	Blockers []Blocker
+	// Forgotten are the ForgetGroups that had a cursor on this table.
+	Forgotten []string
+}
+
+// Blocker is a consumer group behind on a table.
+type Blocker struct {
+	Group  string
+	Unread int64
 }
 
 // TopicTables lists the outbox tables of a schema (`<schema>.events_<topic>`,
@@ -67,22 +86,54 @@ func PruneTopicTable(c context.Context, db *gorm.DB, table string, opts PruneOpt
 		return res, fmt.Errorf("eventbus: prune %s: older_than must be positive", table)
 	}
 	q := postgres.TxOrDB(c, db)
+	secs := opts.OlderThan.Seconds()
+	if len(opts.ForgetGroups) > 0 {
+		if err := q.Raw(`SELECT consumer_group FROM `+table+`_offsets WHERE consumer_group IN ? ORDER BY consumer_group`, opts.ForgetGroups).Scan(&res.Forgotten).Error; err != nil {
+			return res, fmt.Errorf("eventbus: prune %s: %w", table, err)
+		}
+		if !opts.DryRun && len(res.Forgotten) > 0 {
+			if err := q.Exec(`DELETE FROM `+table+`_offsets WHERE consumer_group IN ?`, res.Forgotten).Error; err != nil {
+				return res, fmt.Errorf("eventbus: prune %s: forget groups: %w", table, err)
+			}
+		}
+	}
 	var groups int64
 	if err := q.Raw(`SELECT count(*) FROM ` + table + `_offsets`).Scan(&groups).Error; err != nil {
 		return res, fmt.Errorf("eventbus: prune %s: %w", table, err)
+	}
+	if opts.DryRun {
+		groups -= int64(len(res.Forgotten))
 	}
 	if groups == 0 && !opts.Unconsumed {
 		res.Skipped = "no consumer group has a cursor on it (use --unconsumed to prune anyway)"
 		return res, nil
 	}
 
+	// unread is the subscriber's / lag gauge's "still to read for group o".
+	const unread = `(m.transaction_id = o.last_processed_transaction_id AND m."offset" > o.offset_acked)
+			   OR m.transaction_id > o.last_processed_transaction_id`
+	offsets := table + `_offsets o`
+	if opts.DryRun && len(res.Forgotten) > 0 {
+		offsets = `(SELECT * FROM ` + table + `_offsets WHERE consumer_group NOT IN ?) o`
+	}
 	where := `m.created_at < localtimestamp - make_interval(secs => ?)
-		AND NOT EXISTS (SELECT 1 FROM ` + table + `_offsets o
-			WHERE (m.transaction_id = o.last_processed_transaction_id AND m."offset" > o.offset_acked)
-			   OR m.transaction_id > o.last_processed_transaction_id)`
-	secs := opts.OlderThan.Seconds()
+		AND NOT EXISTS (SELECT 1 FROM ` + offsets + ` WHERE ` + unread + `)`
+	args := []any{secs}
+	if opts.DryRun && len(res.Forgotten) > 0 {
+		args = append(args, res.Forgotten)
+	}
+	// Who is holding old rows back, whatever happens next.
+	blockQ := `SELECT o.consumer_group AS "group", count(*) AS unread FROM ` + table + ` m JOIN ` + offsets + ` ON (` + unread + `)
+		WHERE m.created_at < localtimestamp - make_interval(secs => ?) GROUP BY 1 ORDER BY 2 DESC, 1`
+	blockArgs := []any{secs}
+	if opts.DryRun && len(res.Forgotten) > 0 {
+		blockArgs = []any{res.Forgotten, secs}
+	}
+	if err := q.Raw(blockQ, blockArgs...).Scan(&res.Blockers).Error; err != nil {
+		return res, fmt.Errorf("eventbus: prune %s: blockers: %w", table, err)
+	}
 	if opts.DryRun {
-		if err := q.Raw(`SELECT count(*) FROM `+table+` m WHERE `+where, secs).Scan(&res.Rows).Error; err != nil {
+		if err := q.Raw(`SELECT count(*) FROM `+table+` m WHERE `+where, args...).Scan(&res.Rows).Error; err != nil {
 			return res, fmt.Errorf("eventbus: prune %s (dry run): %w", table, err)
 		}
 		return res, nil
@@ -93,7 +144,7 @@ func PruneTopicTable(c context.Context, db *gorm.DB, table string, opts PruneOpt
 		batch = 10000
 	}
 	for {
-		r := q.Exec(`DELETE FROM `+table+` WHERE ctid = ANY(ARRAY(SELECT m.ctid FROM `+table+` m WHERE `+where+` LIMIT ?))`, secs, batch)
+		r := q.Exec(`DELETE FROM `+table+` WHERE ctid = ANY(ARRAY(SELECT m.ctid FROM `+table+` m WHERE `+where+` LIMIT ?))`, append(args, batch)...)
 		if r.Error != nil {
 			return res, fmt.Errorf("eventbus: prune %s: %w", table, r.Error)
 		}
