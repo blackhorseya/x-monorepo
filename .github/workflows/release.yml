@@ -69,7 +69,7 @@ jobs:
           releasable() {
             git diff --name-only "$base" "$HEAD_SHA" -- . \
               ':!*.md' ':!docs' ':!web' ':!.github' ':!.claude' ':!.idea' ':!deployments/helm' \
-              ':!lefthook.yml' ':!.golangci.yml' ':!*_test.go' ':!testdata'
+              ':!lefthook.yml' ':!.golangci.yml' ':!*_test.go' ':!testdata' ':!tests'
           }
           if [ -z "$(releasable)" ]; then
             echo "release=false" >> "$GITHUB_OUTPUT"

@@ -82,6 +82,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
+├── tests/k6/                      # k6：orders（load + thresholds）、ratelimit、timeout；task k6 -- <script>、task k6-smoke
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
@@ -314,7 +315,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 |---|---|---|---|
 | `task gate-fast FILE=…` | Claude Code `PostToolUse`（Edit/Write）、`pre-commit` | gofmt + vet + golangci-lint（含 depguard）+ archtest（module 根有 `arch_test.go` 時）於被改檔案所屬 module | 秒 |
 | `task gate-local` | Claude Code `Stop`、`pre-push` | gen freshness + buf lint + affected modules 的 `go test -race`（含 archtest） | ~1 min |
-| `.github/workflows/ci.yml` | PR | gen-freshness（含 TS）、lint、work-sync、test（matrix by affected module）、coverage、build、helm（`task helm-check`）、helm-kind（`task helm-kind`：kind 真裝 + smoke）；`buf breaking` **只警告** | 全 |
+| `.github/workflows/ci.yml` | PR | gen-freshness（含 TS）、lint、work-sync、test（matrix by affected module）、coverage、build、helm（`task helm-check`）、helm-kind（`task helm-kind`：kind 真裝 + smoke）、k6（`task k6-smoke`：load / rate limit / timeout 三個 k6 腳本打真的 rpc + Postgres）；`buf breaking` **只警告** | 全 |
 
 - `scripts/affected.sh`：由 `go.work` 算出被改動的 module，並展開反向依賴（改 kernel → 全部；改 ordering → ordering + apps/rpc）
 - `scripts/cover-gate.sh`：所有 `*/domain/*` package 必須 100% 覆蓋
@@ -462,7 +463,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 **每次 CI 在 main 上綠就是一版**，沒有人手動打 tag（`.github/workflows/release.yml`，`workflow_run` 掛在 ci 後面；
 `workflow_dispatch` 可對目前 main HEAD 重跑）。`workflow_run` 沒有 `paths-ignore`，所以 prepare 先自己 gate：拿該 commit 和
 **上一個 tag** 做 diff（不是 parent commit——ci 對 main 是 cancel-in-progress，連續兩次 merge 只會觸發一次 release），
-只動到 `*.md`、`docs/`、`web/`、`.github/`、`.claude/`、`deployments/helm/`、`lefthook.yml`、`.golangci.yml`、`*_test.go`、`testdata/` 就整條跳過
+只動到 `*.md`、`docs/`、`web/`、`.github/`、`.claude/`、`deployments/helm/`、`tests/`、`lefthook.yml`、`.golangci.yml`、`*_test.go`、`testdata/` 就整條跳過
 （step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。`workflow_dispatch` 不過 gate：
 
 | job | 做什麼 |
@@ -482,6 +483,24 @@ healthcheck 從外面打 `/api/readyz`）。兩個 binary 都吃 SIGTERM 做 gra
 （`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在 merge 前就會紅，release 的 build job 也共用它的 Go cache（`cache-scope: release-snapshot`），cross-compile 不用冷啟。
 用 `GITHUB_TOKEN` publish 的 release 不會觸發其他 workflow 的 `push: tags` / `release` event（GitHub 防遞迴），要接部署就像
 release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghcr 的 package 是 private，要到 GitHub → Packages 連到 repo / 改 public 一次。
+
+## Load test（k6）
+
+`tests/k6/` 是三個對著真的 `rpc` 打的 k6 腳本（Connect over JSON，`lib.js` 的 `rpc()` 按 method 打 tag，`API_KEY` 有設就帶 `X-API-Key`）：
+
+| 腳本 | 打什麼 | 驗什麼 |
+|---|---|---|
+| `orders.js` | setup 先 `SetStock` 20 個 SKU，每個 VU 迴圈 CreateOrder（1–3 行）→ GetOrder → ListOrders(customer) | `http_req_failed < 1%`、CreateOrder p95 < 300ms / p99 < 800ms、GetOrder p95 < 100ms、ListOrders p95 < 200ms、`rpc_errors == 0`（門檻是「筆電 + Docker Postgres 輕鬆過」的數字，要調是刻意調，不是失敗了改） |
+| `ratelimit.js` | server 開 `http.rate_limit.rps=RPS`，以 `RPS × FACTOR`（預設 4）的 constant-arrival-rate 打 ListOrders | 被拒的每一筆都是 429 + `code: resource_exhausted` + `x-error-code: request.rate_limited` + 整數 `Retry-After ≥ 1`；放行數 ≈ `RPS × 秒數`（+ 一個 burst）、其餘全拒——limiter 是拒絕不是排隊 |
+| `timeout.js` | server 開 `http.timeout=1ns`（要有 `postgres.url`：context 過期是在 DB call 才浮上來，in-memory repo 不看它） | 每一筆都是 504 + `code: deadline_exceeded` + `x-error-code: request.timeout`，不是 INTERNAL（pgx 包過的 context error 也要被對應到）；server 沒斷線 |
+
+```bash
+task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 60s × 20 VU；BASE_URL / API_KEY / VUS / DURATION / RPS 用 env 蓋
+task k6 -- ratelimit -e RPS=50    # server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50 起
+task k6-smoke                     # tests/k6/smoke.sh：三個腳本各自起一個 bin/rpc（:18090、local Postgres、對應的 env），10s × 10 VU；CI 的 k6 job 就是它
+```
+
+worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等它——要看 consumer 追不追得上就看 `eventbus_consumer_lag`；這也是 Helm `worker.autoscaling.metric: lag` 的壓力源。
 
 ## Deploy（Helm）
 

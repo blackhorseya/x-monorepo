@@ -107,6 +107,29 @@ jobs:
         with: { version: v4.3.0 }
       - run: task helm-check
 
+  # The interceptors under traffic: tests/k6/smoke.sh runs the three k6 scripts, each against
+  # its own ./bin/rpc on the service Postgres — load thresholds, rate limit at 50 rps (429 +
+  # Retry-After, accepted ≈ rps), timeout at 1ns (every call DEADLINE_EXCEEDED). ~1 min.
+  k6:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - uses: grafana/setup-k6-action@v1
+      - run: task build
+      - run: APP_CONFIG=configs/config.example.yaml APP_POSTGRES_URL=$DATABASE_URL bin/migrate up
+      - run: task k6-smoke
+      - if: failure()
+        run: tail -n 50 bin/k6-*.log
+
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
   # commit, install → smoke → upgrade → smoke (deployments/helm/kind). ~3 min, in parallel.
   helm-kind:
