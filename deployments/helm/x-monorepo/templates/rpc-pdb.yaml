@@ -1,0 +1,17 @@
+{{- $rpc := .Values.rpc -}}
+{{- $max := ternary $rpc.autoscaling.maxReplicas $rpc.replicaCount $rpc.autoscaling.enabled -}}
+{{- if and $rpc.podDisruptionBudget.enabled (gt (int $max) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rpc
+spec:
+  maxUnavailable: {{ $rpc.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rpc
+{{- end }}

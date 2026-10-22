@@ -1,0 +1,15 @@
+apiVersion: v2
+name: x-monorepo
+description: >-
+  rpc (Connect API), worker (event consumers), a migrate hook Job and a prune CronJob,
+  wired the way the binaries expect: config file + APP_* env, probes on /api/healthz and
+  /api/readyz, terminationGracePeriodSeconds derived from the apps' own shutdown settings.
+type: application
+# Chart version: bump on any template / values change. appVersion: the image tag deployed
+# when image.tag is empty — keep it on a published release (ghcr.io/blackhorseya/x-monorepo/*).
+version: 0.1.0
+appVersion: "0.16.0"
+kubeVersion: ">=1.26.0-0"
+home: https://github.com/blackhorseya/x-monorepo
+sources:
+  - https://github.com/blackhorseya/x-monorepo

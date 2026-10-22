@@ -1,0 +1,213 @@
+# Default values for x-monorepo. Everything the binaries read comes from two places:
+#   - the ConfigMap rendered from `config` below, mounted at /etc/x-monorepo/config.yaml
+#     and pointed at with APP_CONFIG (same keys as configs/config.example.yaml);
+#   - APP_* env vars for secrets (postgres / redis URL, API keys, JWT secret) and for the
+#     values this chart derives (http.shutdown_*). env beats file beats built-in defaults.
+# Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<tag>.
+# They are distroless (no shell): no exec probes, no preStop sleep — the apps' own graceful
+# shutdown does that job (see rpc.shutdown / worker.terminationGracePeriodSeconds).
+
+image:
+  registry: ghcr.io/blackhorseya/x-monorepo
+  # Empty = .Chart.appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The ghcr packages are private: a pull secret is required unless they were made public.
+#   kubectl create secret docker-registry ghcr --docker-server=ghcr.io --docker-username=<user> --docker-password=<PAT with read:packages>
+imagePullSecrets: []
+#  - name: ghcr
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532   # distroless nonroot
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile: { type: RuntimeDefault }
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }
+
+# Rendered verbatim as config.yaml (APP_CONFIG). Keys / meaning: configs/config.example.yaml
+# and the README "Config" table. Do NOT put http.shutdown_delay / http.shutdown_timeout here:
+# the chart sets them from rpc.shutdown so terminationGracePeriodSeconds cannot drift from them.
+# Secrets (postgres.url, redis.url, auth.api_keys, auth.jwt.hs256_secret) go in `secrets`.
+config:
+  http:
+    addr: ":8080"       # the Service / probes below assume this port
+    docs: false
+    timeout: 10s
+    rate_limit: { rps: 0, burst: 0, by: global }
+  auth:
+    # off | optional | required — quoted: unquoted `off` is a YAML 1.1 boolean and would render
+    # as `mode: false`. `required` with no api_keys / jwt key refuses every RPC — set
+    # secrets.apiKeys / secrets.jwtHs256Secret / config.auth.jwt.public_key first.
+    mode: "off"
+    admin_role: admin
+    jwt: { issuer: "", audience: "", public_key: "" }
+    public: []
+  log:
+    level: info
+    format: json
+  otel:
+    # OTLP/gRPC collector. Empty = telemetry off: the worker has no HTTP server, so without this
+    # it exports NOTHING — no consumer lag, no outbox / inbox gauges, so none of the eventbus
+    # alerts can fire. rpc still serves /api/metrics for a Prometheus scrape.
+    endpoint: ""
+    insecure: true
+  worker:
+    consumer_group: worker   # replicas share it (split the work); a new name replays from start_from
+    broker: postgres         # redis needs secrets.redisUrl
+    start_from: beginning
+    handler_timeout: 10s     # must fit inside the 8s drain + terminationGracePeriodSeconds below
+
+secrets:
+  # Name of a Secret you manage, with any of the keys APP_POSTGRES_URL, APP_REDIS_URL,
+  # APP_AUTH_API_KEYS, APP_AUTH_JWT_HS256_SECRET. When set, the values below are ignored and
+  # the chart creates no Secret (the migrate hook reads this one directly).
+  existingSecret: ""
+  # Otherwise these are put into <release>-env. Empty = key not rendered (the app then uses
+  # config.yaml / its default — an empty postgresUrl means in-memory repositories).
+  postgresUrl: ""
+  redisUrl: ""
+  apiKeys: ""          # "name=key[:role|role],name=key"
+  jwtHs256Secret: ""
+
+rpc:
+  replicaCount: 2
+  # Graceful shutdown, in seconds (the app takes Go durations; the chart renders "<n>s").
+  # After SIGTERM the pod answers /api/readyz with 503 for delaySeconds while still serving,
+  # so endpoints drop it before the listener closes; in-flight requests then get timeoutSeconds.
+  # terminationGracePeriodSeconds = delaySeconds + timeoutSeconds + graceMarginSeconds, and
+  # readiness.periodSeconds must be <= delaySeconds (the chart refuses to render otherwise).
+  # (What actually pulls a terminating pod out of Endpoints is the deletion, not the probe;
+  # the delay covers kube-proxy / ingress propagation. The bound keeps the two in step.)
+  shutdown:
+    delaySeconds: 5
+    timeoutSeconds: 15
+    graceMarginSeconds: 5
+  liveness:    # /api/healthz: process alive, dependencies not consulted
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:   # /api/readyz: Postgres ping; 503 while draining
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+    successThreshold: 1
+  resources:
+    requests: { cpu: 100m, memory: 64Mi }
+    limits: { memory: 256Mi }
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+  # Connect / gRPC-Web work over HTTP/1.1; native gRPC needs an h2c-capable ingress
+  # (e.g. nginx: nginx.ingress.kubernetes.io/backend-protocol: GRPC on a separate host).
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: api.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+  autoscaling:
+    enabled: false   # when on, replicaCount is ignored; needs resources.requests.cpu
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true    # rendered only when more than one replica can exist
+    maxUnavailable: 1
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+worker:
+  replicaCount: 1
+  # No HTTP server → no probes; the process exits non-zero when it cannot start (bad config,
+  # DB / Redis unreachable) and the Deployment restarts it. Health is observed through the
+  # eventbus_* gauges over OTLP (config.otel.endpoint) and the provisioned alert rules.
+  # SIGTERM: the router stops taking messages, running handlers get up to 8s to finish and
+  # ack, the router closes within 10s. Must stay above 18s; 30s leaves room for a slow ack.
+  terminationGracePeriodSeconds: 30
+  # Replicas share config.worker.consumer_group, so adding one splits the work. What to scale
+  # on: handlers are DB-bound, so CPU stays low while the backlog grows — `lag` (KEDA
+  # ScaledObject on eventbus_consumer_lag from Prometheus; needs the KEDA operator and the
+  # worker exporting over OTLP) is the signal that means something; `cpu` is a plain HPA for
+  # clusters without KEDA. Either way replicaCount is ignored when enabled.
+  autoscaling:
+    enabled: false
+    metric: lag            # lag | cpu
+    minReplicas: 1
+    maxReplicas: 6
+    cpu:
+      targetUtilizationPercentage: 70
+    lag:
+      # Prometheus the OTLP collector writes to (KEDA queries it directly).
+      prometheusAddress: http://prometheus:9090
+      # Unacked messages per replica to aim for; scale out above it. The worst group counts
+      # (max over topics / groups: the gauges are per replica, never sum them).
+      threshold: 100
+      # Query override; empty = max over every consumer group of this consumer_group prefix.
+      query: ""
+      pollingInterval: 30
+      cooldownPeriod: 300
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# `migrate up` as a pre-install / pre-upgrade hook: new code never starts against an old
+# schema. The Job needs the Postgres URL before the release's own Secret exists, so with
+# secrets.postgresUrl the chart renders a hook-scoped copy (<release>-migrate-env); with
+# secrets.existingSecret it reads that. Not rendered when neither gives a URL.
+migrate:
+  enabled: true
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 128Mi }
+
+# `worker prune --older-than <olderThan>`: deletes outbox rows every consumer group has acked
+# and inbox rows older than this. The "Eventbus retention overdue" alert
+# (deployments/docker/grafana/provisioning/alerting.yaml) fires at 45d = 1.5 × 720h: move both
+# together. Rows a group has not acked are never deleted; the alert "rows held by a stale
+# consumer group" tells you which group, forgetGroups removes its cursor.
+prune:
+  enabled: true
+  schedule: "17 3 * * *"
+  olderThan: 720h
+  dryRun: false
+  unconsumed: false
+  forgetGroups: []
+  batch: 10000
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 128Mi }

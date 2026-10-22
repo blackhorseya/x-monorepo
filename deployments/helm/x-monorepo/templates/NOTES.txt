@@ -1,0 +1,24 @@
+{{ .Chart.Name }} {{ .Chart.Version }} → images {{ .Values.image.registry }}/{rpc,worker,migrate}:{{ include "x-monorepo.imageTag" . }}
+
+rpc      {{ include "x-monorepo.fullname" . }}-rpc  (Service port {{ .Values.rpc.service.port }} → /api/<pkg>.<Service>/<Method>, /api/healthz, /api/readyz, /api/metrics)
+worker   {{ include "x-monorepo.fullname" . }}-worker  broker={{ .Values.config.worker.broker }} group={{ .Values.config.worker.consumer_group }}
+{{- if .Values.prune.enabled }}
+prune    CronJob {{ .Values.prune.schedule | quote }}  worker prune --older-than={{ .Values.prune.olderThan }}{{ if .Values.prune.dryRun }} --dry-run{{ end }}
+{{- end }}
+{{- if not (include "x-monorepo.secretName" .) }}
+
+!! No Postgres URL (secrets.postgresUrl / secrets.existingSecret): repositories are in-memory,
+   the migrate hook was skipped and prune has nothing to prune. Fine for a smoke test only.
+{{- end }}
+{{- if not .Values.imagePullSecrets }}
+
+!! imagePullSecrets is empty: the ghcr packages are private unless you made them public.
+{{- end }}
+{{- if not .Values.config.otel.endpoint }}
+
+!! config.otel.endpoint is empty: the worker exports no metrics at all (no lag, outbox or
+   inbox gauges), so the provisioned eventbus alerts cannot fire.
+{{- end }}
+
+Port-forward:  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "x-monorepo.fullname" . }}-rpc 8080:{{ .Values.rpc.service.port }}
+               curl -s localhost:8080/api/readyz

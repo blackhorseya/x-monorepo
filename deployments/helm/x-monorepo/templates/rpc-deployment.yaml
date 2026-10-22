@@ -1,0 +1,78 @@
+{{- $rpc := .Values.rpc -}}
+{{- $grace := include "x-monorepo.rpc.terminationGracePeriodSeconds" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rpc
+spec:
+  {{- if not $rpc.autoscaling.enabled }}
+  replicas: {{ $rpc.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rpc
+  template:
+    metadata:
+      labels:
+        {{- include "x-monorepo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rpc
+      annotations:
+        {{- include "x-monorepo.checksums" . | nindent 8 }}
+        {{- with $rpc.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "x-monorepo.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # shutdown.delaySeconds (readyz 503, still serving) + shutdown.timeoutSeconds (in-flight
+      # drain) + graceMarginSeconds. The app does the waiting; there is no preStop (no shell).
+      terminationGracePeriodSeconds: {{ $grace }}
+      containers:
+        - name: rpc
+          image: {{ include "x-monorepo.image" (dict "root" . "app" "rpc") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ (splitList ":" .Values.config.http.addr) | last | int }}
+              protocol: TCP
+          {{- $env := list
+                (dict "name" "APP_HTTP_SHUTDOWN_DELAY" "value" (printf "%ds" (int $rpc.shutdown.delaySeconds)))
+                (dict "name" "APP_HTTP_SHUTDOWN_TIMEOUT" "value" (printf "%ds" (int $rpc.shutdown.timeoutSeconds))) }}
+          {{- include "x-monorepo.commonEnv" (dict "root" . "extra" (concat $env $rpc.extraEnv)) | nindent 10 }}
+          livenessProbe:
+            httpGet: { path: /api/healthz, port: http }
+            {{- toYaml $rpc.liveness | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /api/readyz, port: http }
+            {{- toYaml $rpc.readiness | nindent 12 }}
+          resources:
+            {{- toYaml $rpc.resources | nindent 12 }}
+          {{- include "x-monorepo.configMount" . | nindent 10 }}
+      {{- include "x-monorepo.configVolume" . | nindent 6 }}
+      {{- with $rpc.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $rpc.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $rpc.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $rpc.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

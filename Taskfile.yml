@@ -32,6 +32,7 @@ vars:
   LEFTHOOK_VERSION: v2.2.2
   CONNECT_OPENAPI_VERSION: v0.28.0
   GORELEASER_VERSION: v2.18.2   # .github/workflows/release.yml pins the same minor
+  KUBECONFORM_VERSION: v0.7.0   # helm-check; helm itself comes from PATH (brew install helm)
 
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
   BCS: ordering inventory
@@ -100,6 +101,7 @@ tasks:
       - task: test
       - task: cover-gate
       - task: build
+      - task: helm-check
 
   test-affected:
     desc: go test -race on affected modules only
@@ -145,7 +147,8 @@ tasks:
       - go install github.com/google/wire/cmd/wire@{{.WIRE_VERSION}}
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
       - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
-      - chmod +x scripts/*.sh scripts/hooks/*.sh
+      - go install github.com/yannh/kubeconform/cmd/kubeconform@{{.KUBECONFORM_VERSION}}
+      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py
 
   tools:hooks:
     desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
@@ -233,6 +236,24 @@ tasks:
     cmds:
       - for: { var: APPS }
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
+
+  helm-check:
+    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers'
+    vars:
+      CHART: deployments/helm/x-monorepo
+      KUBECONFORM:
+        sh: '[ -x {{.BIN_DIR}}/kubeconform ] && echo {{.BIN_DIR}}/kubeconform || echo kubeconform'
+      PROFILES:
+        sh: ls {{.CHART}}/ci/*.yaml
+    cmds:
+      - for: { var: PROFILES }
+        cmd: |
+          helm lint --strict {{.CHART}} -f {{.ITEM}} >/dev/null
+          helm template t {{.CHART}} -f {{.ITEM}} | {{.KUBECONFORM}} -strict -summary -kubernetes-version 1.30.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{"}}.Group{{"}}"}}/{{"{{"}}.ResourceKind{{"}}"}}_{{"{{"}}.ResourceAPIVersion{{"}}"}}.json' >/dev/null
+          helm template t {{.CHART}} -f {{.ITEM}} | deployments/helm/check.py {{.ITEM}}
+    preconditions:
+      - sh: command -v helm >/dev/null
+        msg: helm not found (brew install helm)
 
   release-check:
     desc: validate .goreleaser.yaml (goreleaser from PATH; brew install goreleaser)
