@@ -10,6 +10,7 @@ import (
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -542,11 +543,291 @@ func (x *DropPoisonResponse) GetCount() int32 {
 	return 0
 }
 
+type PruneRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Schema name of the BC ("ordering"); empty = every BC the server hosts.
+	BoundedContext string `protobuf:"bytes,1,opt,name=bounded_context,json=boundedContext,proto3" json:"bounded_context,omitempty"`
+	// Rows younger than this are kept whatever their state. Required, positive.
+	OlderThan *durationpb.Duration `protobuf:"bytes,2,opt,name=older_than,json=olderThan,proto3" json:"older_than,omitempty"`
+	// Count what would be deleted, delete nothing (forget_groups are reported
+	// as forgotten but kept).
+	DryRun bool `protobuf:"varint,3,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	// Also prune topic tables no consumer group has a cursor on.
+	Unconsumed bool `protobuf:"varint,4,opt,name=unconsumed,proto3" json:"unconsumed,omitempty"`
+	// Consumer groups whose cursors are deleted first so they no longer hold
+	// rows back (an E2E run, a renamed worker.consumer_group); a group that
+	// comes back starts over as a new group.
+	ForgetGroups []string `protobuf:"bytes,5,rep,name=forget_groups,json=forgetGroups,proto3" json:"forget_groups,omitempty"`
+	// Rows per DELETE statement; 0 = server default (10000).
+	BatchSize     int32 `protobuf:"varint,6,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneRequest) Reset() {
+	*x = PruneRequest{}
+	mi := &file_admin_v1_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneRequest) ProtoMessage() {}
+
+func (x *PruneRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_v1_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneRequest.ProtoReflect.Descriptor instead.
+func (*PruneRequest) Descriptor() ([]byte, []int) {
+	return file_admin_v1_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *PruneRequest) GetBoundedContext() string {
+	if x != nil {
+		return x.BoundedContext
+	}
+	return ""
+}
+
+func (x *PruneRequest) GetOlderThan() *durationpb.Duration {
+	if x != nil {
+		return x.OlderThan
+	}
+	return nil
+}
+
+func (x *PruneRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+func (x *PruneRequest) GetUnconsumed() bool {
+	if x != nil {
+		return x.Unconsumed
+	}
+	return false
+}
+
+func (x *PruneRequest) GetForgetGroups() []string {
+	if x != nil {
+		return x.ForgetGroups
+	}
+	return nil
+}
+
+func (x *PruneRequest) GetBatchSize() int32 {
+	if x != nil {
+		return x.BatchSize
+	}
+	return 0
+}
+
+// PruneTable is what happened to one table (eventbus.PruneResult).
+type PruneTable struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// "<bc>.events_<topic>" or "<bc>.inbox".
+	Table string `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
+	// Rows deleted — or, dry run, that would be.
+	Rows int64 `protobuf:"varint,2,opt,name=rows,proto3" json:"rows,omitempty"`
+	// Why nothing was touched; empty when the table was pruned.
+	Skipped string `protobuf:"bytes,3,opt,name=skipped,proto3" json:"skipped,omitempty"`
+	// Consumer groups still holding rows older than older_than back.
+	Blockers []*PruneBlocker `protobuf:"bytes,4,rep,name=blockers,proto3" json:"blockers,omitempty"`
+	// The forget_groups that had a cursor on this table.
+	Forgotten     []string `protobuf:"bytes,5,rep,name=forgotten,proto3" json:"forgotten,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneTable) Reset() {
+	*x = PruneTable{}
+	mi := &file_admin_v1_service_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneTable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneTable) ProtoMessage() {}
+
+func (x *PruneTable) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_v1_service_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneTable.ProtoReflect.Descriptor instead.
+func (*PruneTable) Descriptor() ([]byte, []int) {
+	return file_admin_v1_service_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *PruneTable) GetTable() string {
+	if x != nil {
+		return x.Table
+	}
+	return ""
+}
+
+func (x *PruneTable) GetRows() int64 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *PruneTable) GetSkipped() string {
+	if x != nil {
+		return x.Skipped
+	}
+	return ""
+}
+
+func (x *PruneTable) GetBlockers() []*PruneBlocker {
+	if x != nil {
+		return x.Blockers
+	}
+	return nil
+}
+
+func (x *PruneTable) GetForgotten() []string {
+	if x != nil {
+		return x.Forgotten
+	}
+	return nil
+}
+
+type PruneBlocker struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ConsumerGroup string                 `protobuf:"bytes,1,opt,name=consumer_group,json=consumerGroup,proto3" json:"consumer_group,omitempty"`
+	Unread        int64                  `protobuf:"varint,2,opt,name=unread,proto3" json:"unread,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneBlocker) Reset() {
+	*x = PruneBlocker{}
+	mi := &file_admin_v1_service_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneBlocker) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneBlocker) ProtoMessage() {}
+
+func (x *PruneBlocker) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_v1_service_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneBlocker.ProtoReflect.Descriptor instead.
+func (*PruneBlocker) Descriptor() ([]byte, []int) {
+	return file_admin_v1_service_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PruneBlocker) GetConsumerGroup() string {
+	if x != nil {
+		return x.ConsumerGroup
+	}
+	return ""
+}
+
+func (x *PruneBlocker) GetUnread() int64 {
+	if x != nil {
+		return x.Unread
+	}
+	return 0
+}
+
+type PruneResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Tables []*PruneTable          `protobuf:"bytes,1,rep,name=tables,proto3" json:"tables,omitempty"`
+	// Sum of rows over tables.
+	Total         int64 `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneResponse) Reset() {
+	*x = PruneResponse{}
+	mi := &file_admin_v1_service_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneResponse) ProtoMessage() {}
+
+func (x *PruneResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_v1_service_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneResponse.ProtoReflect.Descriptor instead.
+func (*PruneResponse) Descriptor() ([]byte, []int) {
+	return file_admin_v1_service_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *PruneResponse) GetTables() []*PruneTable {
+	if x != nil {
+		return x.Tables
+	}
+	return nil
+}
+
+func (x *PruneResponse) GetTotal() int64 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
 var File_admin_v1_service_proto protoreflect.FileDescriptor
 
 const file_admin_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x16admin/v1/service.proto\x12\badmin.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xff\x02\n" +
+	"\x16admin/v1/service.proto\x12\badmin.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xff\x02\n" +
 	"\rPoisonMessage\x12'\n" +
 	"\x0fbounded_context\x18\x01 \x01(\tR\x0eboundedContext\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x12\n" +
@@ -584,14 +865,39 @@ const file_admin_v1_service_proto_rawDesc = "" +
 	"\x03all\x18\x03 \x01(\bR\x03all:r\xbaHo\x1am\n" +
 	"\x16poison.offsets_xor_all\x12,set offsets or all, not both and not neither\x1a%(this.offsets.size() > 0) != this.all\"*\n" +
 	"\x12DropPoisonResponse\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x05R\x05count2\xb8\x02\n" +
+	"\x05count\x18\x01 \x01(\x05R\x05count\"\x96\x02\n" +
+	"\fPruneRequest\x12'\n" +
+	"\x0fbounded_context\x18\x01 \x01(\tR\x0eboundedContext\x12E\n" +
+	"\n" +
+	"older_than\x18\x02 \x01(\v2\x19.google.protobuf.DurationB\v\xbaH\b\xc8\x01\x01\xaa\x01\x02*\x00R\tolderThan\x12\x17\n" +
+	"\adry_run\x18\x03 \x01(\bR\x06dryRun\x12\x1e\n" +
+	"\n" +
+	"unconsumed\x18\x04 \x01(\bR\n" +
+	"unconsumed\x121\n" +
+	"\rforget_groups\x18\x05 \x03(\tB\f\xbaH\t\x92\x01\x06\"\x04r\x02\x10\x01R\fforgetGroups\x12*\n" +
+	"\n" +
+	"batch_size\x18\x06 \x01(\x05B\v\xbaH\b\x1a\x06\x18\xa0\x8d\x06(\x00R\tbatchSize\"\xa2\x01\n" +
+	"\n" +
+	"PruneTable\x12\x14\n" +
+	"\x05table\x18\x01 \x01(\tR\x05table\x12\x12\n" +
+	"\x04rows\x18\x02 \x01(\x03R\x04rows\x12\x18\n" +
+	"\askipped\x18\x03 \x01(\tR\askipped\x122\n" +
+	"\bblockers\x18\x04 \x03(\v2\x16.admin.v1.PruneBlockerR\bblockers\x12\x1c\n" +
+	"\tforgotten\x18\x05 \x03(\tR\tforgotten\"M\n" +
+	"\fPruneBlocker\x12%\n" +
+	"\x0econsumer_group\x18\x01 \x01(\tR\rconsumerGroup\x12\x16\n" +
+	"\x06unread\x18\x02 \x01(\x03R\x06unread\"S\n" +
+	"\rPruneResponse\x12,\n" +
+	"\x06tables\x18\x01 \x03(\v2\x14.admin.v1.PruneTableR\x06tables\x12\x14\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total2\xf2\x02\n" +
 	"\fAdminService\x12G\n" +
 	"\n" +
 	"ListPoison\x12\x1b.admin.v1.ListPoisonRequest\x1a\x1c.admin.v1.ListPoisonResponse\x12D\n" +
 	"\tGetPoison\x12\x1a.admin.v1.GetPoisonRequest\x1a\x1b.admin.v1.GetPoisonResponse\x12P\n" +
 	"\rRequeuePoison\x12\x1e.admin.v1.RequeuePoisonRequest\x1a\x1f.admin.v1.RequeuePoisonResponse\x12G\n" +
 	"\n" +
-	"DropPoison\x12\x1b.admin.v1.DropPoisonRequest\x1a\x1c.admin.v1.DropPoisonResponseB\xa9\x01\n" +
+	"DropPoison\x12\x1b.admin.v1.DropPoisonRequest\x1a\x1c.admin.v1.DropPoisonResponse\x128\n" +
+	"\x05Prune\x12\x16.admin.v1.PruneRequest\x1a\x17.admin.v1.PruneResponseB\xa9\x01\n" +
 	"\fcom.admin.v1B\fServiceProtoP\x01ZJgithub.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1;adminv1\xa2\x02\x03AXX\xaa\x02\bAdmin.V1\xca\x02\bAdmin\\V1\xe2\x02\x14Admin\\V1\\GPBMetadata\xea\x02\tAdmin::V1b\x06proto3"
 
 var (
@@ -606,7 +912,7 @@ func file_admin_v1_service_proto_rawDescGZIP() []byte {
 	return file_admin_v1_service_proto_rawDescData
 }
 
-var file_admin_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_admin_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_admin_v1_service_proto_goTypes = []any{
 	(*PoisonMessage)(nil),         // 0: admin.v1.PoisonMessage
 	(*ListPoisonRequest)(nil),     // 1: admin.v1.ListPoisonRequest
@@ -617,27 +923,37 @@ var file_admin_v1_service_proto_goTypes = []any{
 	(*RequeuePoisonResponse)(nil), // 6: admin.v1.RequeuePoisonResponse
 	(*DropPoisonRequest)(nil),     // 7: admin.v1.DropPoisonRequest
 	(*DropPoisonResponse)(nil),    // 8: admin.v1.DropPoisonResponse
-	nil,                           // 9: admin.v1.PoisonMessage.MetadataEntry
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*PruneRequest)(nil),          // 9: admin.v1.PruneRequest
+	(*PruneTable)(nil),            // 10: admin.v1.PruneTable
+	(*PruneBlocker)(nil),          // 11: admin.v1.PruneBlocker
+	(*PruneResponse)(nil),         // 12: admin.v1.PruneResponse
+	nil,                           // 13: admin.v1.PoisonMessage.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),   // 15: google.protobuf.Duration
 }
 var file_admin_v1_service_proto_depIdxs = []int32{
-	10, // 0: admin.v1.PoisonMessage.parked_at:type_name -> google.protobuf.Timestamp
-	9,  // 1: admin.v1.PoisonMessage.metadata:type_name -> admin.v1.PoisonMessage.MetadataEntry
+	14, // 0: admin.v1.PoisonMessage.parked_at:type_name -> google.protobuf.Timestamp
+	13, // 1: admin.v1.PoisonMessage.metadata:type_name -> admin.v1.PoisonMessage.MetadataEntry
 	0,  // 2: admin.v1.ListPoisonResponse.messages:type_name -> admin.v1.PoisonMessage
 	0,  // 3: admin.v1.GetPoisonResponse.message:type_name -> admin.v1.PoisonMessage
-	1,  // 4: admin.v1.AdminService.ListPoison:input_type -> admin.v1.ListPoisonRequest
-	3,  // 5: admin.v1.AdminService.GetPoison:input_type -> admin.v1.GetPoisonRequest
-	5,  // 6: admin.v1.AdminService.RequeuePoison:input_type -> admin.v1.RequeuePoisonRequest
-	7,  // 7: admin.v1.AdminService.DropPoison:input_type -> admin.v1.DropPoisonRequest
-	2,  // 8: admin.v1.AdminService.ListPoison:output_type -> admin.v1.ListPoisonResponse
-	4,  // 9: admin.v1.AdminService.GetPoison:output_type -> admin.v1.GetPoisonResponse
-	6,  // 10: admin.v1.AdminService.RequeuePoison:output_type -> admin.v1.RequeuePoisonResponse
-	8,  // 11: admin.v1.AdminService.DropPoison:output_type -> admin.v1.DropPoisonResponse
-	8,  // [8:12] is the sub-list for method output_type
-	4,  // [4:8] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	15, // 4: admin.v1.PruneRequest.older_than:type_name -> google.protobuf.Duration
+	11, // 5: admin.v1.PruneTable.blockers:type_name -> admin.v1.PruneBlocker
+	10, // 6: admin.v1.PruneResponse.tables:type_name -> admin.v1.PruneTable
+	1,  // 7: admin.v1.AdminService.ListPoison:input_type -> admin.v1.ListPoisonRequest
+	3,  // 8: admin.v1.AdminService.GetPoison:input_type -> admin.v1.GetPoisonRequest
+	5,  // 9: admin.v1.AdminService.RequeuePoison:input_type -> admin.v1.RequeuePoisonRequest
+	7,  // 10: admin.v1.AdminService.DropPoison:input_type -> admin.v1.DropPoisonRequest
+	9,  // 11: admin.v1.AdminService.Prune:input_type -> admin.v1.PruneRequest
+	2,  // 12: admin.v1.AdminService.ListPoison:output_type -> admin.v1.ListPoisonResponse
+	4,  // 13: admin.v1.AdminService.GetPoison:output_type -> admin.v1.GetPoisonResponse
+	6,  // 14: admin.v1.AdminService.RequeuePoison:output_type -> admin.v1.RequeuePoisonResponse
+	8,  // 15: admin.v1.AdminService.DropPoison:output_type -> admin.v1.DropPoisonResponse
+	12, // 16: admin.v1.AdminService.Prune:output_type -> admin.v1.PruneResponse
+	12, // [12:17] is the sub-list for method output_type
+	7,  // [7:12] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_admin_v1_service_proto_init() }
@@ -651,7 +967,7 @@ func file_admin_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_v1_service_proto_rawDesc), len(file_admin_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
