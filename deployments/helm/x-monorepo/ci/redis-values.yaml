@@ -24,7 +24,8 @@ worker:
     metric: lag
     minReplicas: 2
     maxReplicas: 8
-    lag: { prometheusAddress: http://prometheus.monitoring:9090, threshold: 200 }
+    lag: { prometheusAddress: http://prometheus.monitoring.svc:9090, threshold: 200 }
+    behavior: { scaleDown: { stabilizationWindowSeconds: 120 } }
 prune:
   schedule: "0 4 * * 0"
   olderThan: 168h

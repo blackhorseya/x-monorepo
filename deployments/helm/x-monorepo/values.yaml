@@ -162,15 +162,26 @@ worker:
     cpu:
       targetUtilizationPercentage: 70
     lag:
-      # Prometheus the OTLP collector writes to (KEDA queries it directly).
-      prometheusAddress: http://prometheus:9090
+      # Prometheus the OTLP collector writes to. The KEDA operator queries it from ITS OWN
+      # namespace, so a bare Service name does not resolve: use <svc>.<namespace>.svc (the
+      # chart refuses an address whose host has no dot).
+      prometheusAddress: http://prometheus.monitoring.svc:9090
       # Unacked messages per replica to aim for; scale out above it. The worst group counts
       # (max over topics / groups: the gauges are per replica, never sum them).
       threshold: 100
       # Query override; empty = max over every consumer group of this consumer_group prefix.
       query: ""
+      # Only meaningful with minReplicas 0, which lag scaling cannot use (the gauge comes
+      # from the worker itself: at 0 replicas nothing reports lag), so these do not affect
+      # scaling here; KEDA still uses pollingInterval to refresh the ScaledObject status.
+      # Scale-out / scale-in pace is the HPA's: see behavior below.
       pollingInterval: 30
       cooldownPeriod: 300
+    # autoscaling/v2 HPA behavior, passed through to the HPA (cpu) or to the HPA KEDA creates
+    # (lag). The HPA's own scale-down stabilization is 300s by default: after the backlog is
+    # gone the worker stays scaled out for that long. Empty = Kubernetes defaults.
+    behavior: {}
+    #  scaleDown: { stabilizationWindowSeconds: 60 }
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }

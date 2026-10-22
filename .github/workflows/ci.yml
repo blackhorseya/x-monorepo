@@ -131,7 +131,9 @@ jobs:
         run: tail -n 50 bin/k6-*.log
 
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
-  # commit, install → smoke → upgrade → smoke (deployments/helm/kind). ~3 min, in parallel.
+  # commit, install → smoke → upgrade → smoke (deployments/helm/kind), then KEDA + an OTLP
+  # collector + Prometheus and a k6 burst that must scale the worker out on
+  # eventbus_consumer_lag and back (task helm-kind-keda). ~5 min, in parallel.
   helm-kind:
     runs-on: ubuntu-latest
     steps:
@@ -141,12 +143,16 @@ jobs:
         with: { version: v4.3.0 }
       - uses: helm/kind-action@v1
         with: { version: v0.33.0, install_only: true }
+      - uses: grafana/setup-k6-action@v1
       - run: task helm-kind
+      - run: task helm-kind-keda
       - if: failure()
         run: |
           kubectl -n x-monorepo get all
           kubectl -n x-monorepo describe pods | tail -120
           kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200 || true
+          kubectl -n x-monorepo get scaledobject,hpa 2>/dev/null || true
+          kubectl -n keda logs deploy/keda-operator --tail=50 2>/dev/null || true
 
   # ── release config: the snapshot must build before anyone tags ─────────────
   release-snapshot:

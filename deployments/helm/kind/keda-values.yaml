@@ -1,0 +1,19 @@
+# On top of values.yaml for `task helm-kind-keda`: the worker exports over OTLP to the
+# collector in monitoring.yaml (every 5s instead of the SDK's 60s, so KEDA sees the backlog
+# while it exists) and scales on lag — small threshold and a short HPA scale-down
+# stabilization, so a 45s k6 burst is enough to watch replicas go up and come back.
+config:
+  otel: { endpoint: otel-collector:4317, insecure: true }
+worker:
+  extraEnv:
+    - { name: OTEL_METRIC_EXPORT_INTERVAL, value: "5000" }
+  autoscaling:
+    enabled: true
+    metric: lag
+    minReplicas: 1
+    maxReplicas: 4
+    lag:
+      prometheusAddress: http://prometheus.x-monorepo.svc:9090
+      threshold: 50
+    behavior:
+      scaleDown: { stabilizationWindowSeconds: 30 }

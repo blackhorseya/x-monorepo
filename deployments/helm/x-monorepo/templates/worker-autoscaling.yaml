@@ -25,9 +25,19 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ $a.cpu.targetUtilizationPercentage }}
+  {{- with $a.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- else if eq $a.metric "lag" }}
 {{- if not .Values.config.otel.endpoint }}
 {{- fail "worker.autoscaling metric lag needs config.otel.endpoint: without OTLP the worker exports no eventbus_consumer_lag" }}
+{{- end }}
+{{- if lt (int $a.minReplicas) 1 }}
+{{- fail "worker.autoscaling.minReplicas must be >= 1 with metric lag: the lag gauge is exported by the worker, at 0 replicas nothing reports it" }}
+{{- end }}
+{{- if not (regexMatch "^https?://[^/:]+\\.[^/:]+" $a.lag.prometheusAddress) }}
+{{- fail (printf "worker.autoscaling.lag.prometheusAddress %q: KEDA resolves it from its own namespace, use http://<svc>.<namespace>.svc:<port>" $a.lag.prometheusAddress) }}
 {{- end }}
 {{- $query := default (printf "max(eventbus_consumer_lag{consumer_group=~\"%s\\\\..*\"})" .Values.config.worker.consumer_group) $a.lag.query }}
 # KEDA (keda.sh) scales the Deployment on the worst consumer group's backlog. The gauge is
@@ -47,6 +57,12 @@ spec:
   maxReplicaCount: {{ $a.maxReplicas }}
   pollingInterval: {{ $a.lag.pollingInterval }}
   cooldownPeriod: {{ $a.lag.cooldownPeriod }}
+  {{- with $a.behavior }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
   triggers:
     - type: prometheus
       metadata:

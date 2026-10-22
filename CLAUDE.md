@@ -27,6 +27,7 @@ task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 out
 task helm-check            # deployments/helm/x-monorepo：每個 ci/*.yaml profile 跑 helm lint + kubeconform + check.py（derived 數字：grace period、hook 順序、prune args）
 task k6-smoke              # tests/k6：orders（load thresholds）/ ratelimit（429 + Retry-After）/ timeout（1ns → 全部 DEADLINE_EXCEEDED）各自起一個 bin/rpc 打；task k6 -- <script> 打現成 server
 task helm-kind             # 真裝：kind cluster + deployments/helm/kind（拋棄式 Postgres / Redis）+ tree build 的 image，install → smoke → upgrade → smoke；helm-kind-down 刪 cluster
+task helm-kind-keda        # 接著在同一個 cluster：KEDA + OTLP collector + Prometheus，k6 灌訂單看 worker 真的靠 eventbus_consumer_lag scale out / in
 task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Connect + gRPC + gRPC-Web 同 port；RPC 在 /api/<svc>/<Method> 與原生路徑都通，/api/docs 開）
 ```
 

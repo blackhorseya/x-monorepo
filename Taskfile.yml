@@ -291,6 +291,26 @@ tasks:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
 
+  helm-kind-keda:
+    desc: 'on the helm-kind cluster: KEDA + deployments/helm/kind/monitoring.yaml (OTLP collector → Prometheus), the chart re-installed with kind/keda-values.yaml (worker.autoscaling lag), then kind/scale.sh floods orders with k6 and expects the worker to scale out on eventbus_consumer_lag and back'
+    vars:
+      NS: x-monorepo
+      CHART: deployments/helm/x-monorepo
+      KIND_DIR: deployments/helm/kind
+      KEDA_VERSION: 2.21.0
+    cmds:
+      - helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1 || true
+      - helm upgrade --install keda kedacore/keda -n keda --create-namespace --version {{.KEDA_VERSION}} --wait --timeout 3m >/dev/null
+      - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/monitoring.yaml >/dev/null
+      - kubectl -n {{.NS}} rollout status deploy/otel-collector deploy/prometheus --timeout=2m
+      - helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml -f {{.KIND_DIR}}/keda-values.yaml --wait --timeout 3m >/dev/null
+      - '{{.KIND_DIR}}/scale.sh {{.NS}} x-monorepo'
+    preconditions:
+      - sh: kind get clusters 2>/dev/null | grep -qx x-monorepo
+        msg: no kind cluster — run task helm-kind first
+      - sh: command -v k6 >/dev/null && command -v jq >/dev/null
+        msg: needs k6 and jq
+
   helm-kind-down:
     desc: delete the kind cluster created by helm-kind
     cmds: [kind delete cluster --name x-monorepo]
