@@ -26,6 +26,9 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 kubectl -n "$ns" get scaledobject "$release-worker"
+# The series shows up only after the worker's first metric export (OTEL_METRIC_EXPORT_INTERVAL)
+# has been scraped by Prometheus: right after a fresh install that is a few tens of seconds.
+for _ in $(seq 1 60); do [ "$(lag)" != none ] && break; sleep 2; done
 [ "$(lag)" != none ] || { echo "scale: Prometheus has no series for: $group"; kubectl -n "$ns" logs deploy/otel-collector --tail=20; exit 1; }
 # A previous burst may still be scaling down: start from the floor or the "scaled out" check is void.
 for _ in $(seq 1 120); do [ "$(replicas)" = "$min" ] && break; sleep 2; done
