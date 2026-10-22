@@ -25,6 +25,7 @@ task release-snapshot      # goreleaser dry run → bin/dist（真的 release �
 task poison -- list        # 看各 BC 的 poison 表；requeue <bc> <offset>…|all 送回原 topic、drop 刪掉（worker poison 子命令）
 task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 outbox 列 + 消費過的 inbox 列（worker prune；先 dry-run；NOTE 列出擋住的 group，--forget-group 刪掉不會再跑的）
 task helm-check            # deployments/helm/x-monorepo：每個 ci/*.yaml profile 跑 helm lint + kubeconform + check.py（derived 數字：grace period、hook 順序、prune args）
+task helm-kind             # 真裝：kind cluster + deployments/helm/kind（拋棄式 Postgres / Redis）+ tree build 的 image，install → smoke → upgrade → smoke；helm-kind-down 刪 cluster
 task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Connect + gRPC + gRPC-Web 同 port；RPC 在 /api/<svc>/<Method> 與原生路徑都通，/api/docs 開）
 ```
 
@@ -80,7 +81,7 @@ apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Wate
                  有 DB 時 `eventbus.Lag` 另報每張 outbox 表 / inbox 的大小與最老一列年齡（`eventbus_outbox_*` / `eventbus_inbox_*`），alert 用它抓 prune 沒跑與 stale group
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 deployments/helm Helm chart：rpc / worker Deployment、migrate pre-install/pre-upgrade hook Job、prune CronJob；terminationGracePeriodSeconds
-                 從 rpc.shutdown / worker 的 drain 算出來（改 shutdown 行為要一起改 values 註解與 check.py）；沒在真 cluster 裝過
+                 從 rpc.shutdown / worker 的 drain 算出來（改 shutdown 行為要一起改 values 註解與 check.py）；CI 的 helm-kind job 在 kind 真裝 + smoke
 ```
 
 **depguard（`.golangci.yml`）強制的 import 方向**：

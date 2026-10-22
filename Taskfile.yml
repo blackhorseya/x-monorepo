@@ -255,6 +255,46 @@ tasks:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
 
+  helm-kind:
+    desc: 'install the chart for real: kind cluster + deployments/helm/kind/deps.yaml (Postgres, Redis), images built from the tree and kind-loaded, helm upgrade --install --wait twice (pre-install then pre-upgrade hook), then deployments/helm/kind/smoke.sh (an order reserves stock through the worker). helm-kind-down deletes the cluster'
+    vars:
+      CLUSTER: x-monorepo
+      NS: x-monorepo
+      CHART: deployments/helm/x-monorepo
+      KIND_DIR: deployments/helm/kind
+      ARCH:
+        sh: go env GOARCH
+      DOCKER:
+        sh: 'command -v docker >/dev/null && echo docker || echo podman'
+    cmds:
+      - kind get clusters 2>/dev/null | grep -qx {{.CLUSTER}} || kind create cluster --name {{.CLUSTER}} --wait 2m
+      - for: [rpc, worker, migrate]
+        cmd: CGO_ENABLED=0 GOOS=linux GOARCH={{.ARCH}} go build -trimpath -o {{.BIN_DIR}}/kind/linux/{{.ARCH}}/{{.ITEM}} ./apps/{{.ITEM}}
+      # Same Dockerfile as the release (context layout <os>/<arch>/<app>); TARGETPLATFORM is set by
+      # hand because plain `docker build` / podman do not inject it the way buildx does.
+      # `localhost/` prefix: podman qualifies bare names with it anyway, so this is the one
+      # spelling docker, podman and the archive loaded into kind all agree on.
+      - for: [rpc, worker, migrate]
+        cmd: '{{.DOCKER}} build -q -f deployments/docker/Dockerfile --build-arg APP={{.ITEM}} --build-arg TARGETPLATFORM=linux/{{.ARCH}} -t localhost/x-monorepo/{{.ITEM}}:kind {{.BIN_DIR}}/kind >/dev/null'
+      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind'
+      - kind load image-archive --name {{.CLUSTER}} {{.BIN_DIR}}/kind/images.tar
+      - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+      - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null
+      - kubectl -n {{.NS}} rollout status deploy/postgres deploy/redis --timeout=2m
+      - helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null
+      - '{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
+      # Second pass is an upgrade: pre-upgrade hook re-runs migrate (no-op), pods roll, release stays ready.
+      - helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null
+      - '{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
+      - helm -n {{.NS}} status x-monorepo | head -5
+    preconditions:
+      - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
+        msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
+
+  helm-kind-down:
+    desc: delete the kind cluster created by helm-kind
+    cmds: [kind delete cluster --name x-monorepo]
+
   release-check:
     desc: validate .goreleaser.yaml (goreleaser from PATH; brew install goreleaser)
     cmds: [goreleaser check]
