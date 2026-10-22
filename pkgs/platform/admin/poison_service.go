@@ -121,6 +121,51 @@ func (h *PoisonService) DropPoison(c context.Context, req *connect.Request[admin
 	return connect.NewResponse(&adminv1.DropPoisonResponse{Count: n}), nil
 }
 
+// Prune is `worker prune` over RPC (eventbus.PruneSchema per BC). Every
+// hosted BC's poison table protects the inbox rows, whichever BC is pruned.
+// No transaction here on purpose: each DELETE batch commits on its own.
+func (h *PoisonService) Prune(c context.Context, req *connect.Request[adminv1.PruneRequest]) (*connect.Response[adminv1.PruneResponse], error) {
+	if err := h.guard(c); err != nil {
+		return nil, err
+	}
+	bcs := h.schemas
+	if bc := req.Msg.GetBoundedContext(); bc != "" {
+		if err := h.known(bc); err != nil {
+			return nil, err
+		}
+		bcs = []string{bc}
+	}
+	opts := eventbus.PruneOptions{
+		OlderThan:    req.Msg.GetOlderThan().AsDuration(),
+		Unconsumed:   req.Msg.GetUnconsumed(),
+		DryRun:       req.Msg.GetDryRun(),
+		BatchSize:    int(req.Msg.GetBatchSize()),
+		ForgetGroups: req.Msg.GetForgetGroups(),
+	}
+	res := &adminv1.PruneResponse{}
+	for _, bc := range bcs {
+		results, err := eventbus.PruneSchema(c, h.db, bc, opts, h.schemas)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		for _, r := range results {
+			res.Total += r.Rows
+			res.Tables = append(res.Tables, pruneToProto(r))
+		}
+	}
+
+	return connect.NewResponse(res), nil
+}
+
+func pruneToProto(r eventbus.PruneResult) *adminv1.PruneTable {
+	out := &adminv1.PruneTable{Table: r.Table, Rows: r.Rows, Skipped: r.Skipped, Forgotten: r.Forgotten}
+	for _, b := range r.Blockers {
+		out.Blockers = append(out.Blockers, &adminv1.PruneBlocker{ConsumerGroup: b.Group, Unread: b.Unread})
+	}
+
+	return out
+}
+
 // act runs op on the BC's rows (offsets empty = all, the request's xor rule
 // already made sure "all" was explicit).
 func (h *PoisonService) act(c context.Context, bc string, offsets []int64, op func(context.Context, *gorm.DB, string, ...int64) (int, error)) (int32, error) {

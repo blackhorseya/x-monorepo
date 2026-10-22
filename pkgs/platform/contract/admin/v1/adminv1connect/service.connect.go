@@ -42,6 +42,8 @@ const (
 	AdminServiceRequeuePoisonProcedure = "/admin.v1.AdminService/RequeuePoison"
 	// AdminServiceDropPoisonProcedure is the fully-qualified name of the AdminService's DropPoison RPC.
 	AdminServiceDropPoisonProcedure = "/admin.v1.AdminService/DropPoison"
+	// AdminServicePruneProcedure is the fully-qualified name of the AdminService's Prune RPC.
+	AdminServicePruneProcedure = "/admin.v1.AdminService/Prune"
 )
 
 // AdminServiceClient is a client for the admin.v1.AdminService service.
@@ -58,6 +60,15 @@ type AdminServiceClient interface {
 	RequeuePoison(context.Context, *connect.Request[v1.RequeuePoisonRequest]) (*connect.Response[v1.RequeuePoisonResponse], error)
 	// DropPoison deletes parked messages for good.
 	DropPoison(context.Context, *connect.Request[v1.DropPoisonRequest]) (*connect.Response[v1.DropPoisonResponse], error)
+	// Prune is `worker prune` over RPC: per bounded context, delete the outbox
+	// rows older than older_than that every consumer group with a cursor has
+	// acknowledged, and the consumed inbox rows older than that (ids still
+	// parked in a poison table excepted). Poison tables are never pruned here.
+	// The call runs under the server's http.timeout: it is the operator's path
+	// for a dry run, for forgetting a stale group and for routine runs — a big
+	// first backlog belongs to the CLI / CronJob (deleted batches stay deleted
+	// on DEADLINE_EXCEEDED, only the counts are lost; re-running is safe).
+	Prune(context.Context, *connect.Request[v1.PruneRequest]) (*connect.Response[v1.PruneResponse], error)
 }
 
 // NewAdminServiceClient constructs a client for the admin.v1.AdminService service. By default, it
@@ -95,6 +106,12 @@ func NewAdminServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(adminServiceMethods.ByName("DropPoison")),
 			connect.WithClientOptions(opts...),
 		),
+		prune: connect.NewClient[v1.PruneRequest, v1.PruneResponse](
+			httpClient,
+			baseURL+AdminServicePruneProcedure,
+			connect.WithSchema(adminServiceMethods.ByName("Prune")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -104,6 +121,7 @@ type adminServiceClient struct {
 	getPoison     *connect.Client[v1.GetPoisonRequest, v1.GetPoisonResponse]
 	requeuePoison *connect.Client[v1.RequeuePoisonRequest, v1.RequeuePoisonResponse]
 	dropPoison    *connect.Client[v1.DropPoisonRequest, v1.DropPoisonResponse]
+	prune         *connect.Client[v1.PruneRequest, v1.PruneResponse]
 }
 
 // ListPoison calls admin.v1.AdminService.ListPoison.
@@ -126,6 +144,11 @@ func (c *adminServiceClient) DropPoison(ctx context.Context, req *connect.Reques
 	return c.dropPoison.CallUnary(ctx, req)
 }
 
+// Prune calls admin.v1.AdminService.Prune.
+func (c *adminServiceClient) Prune(ctx context.Context, req *connect.Request[v1.PruneRequest]) (*connect.Response[v1.PruneResponse], error) {
+	return c.prune.CallUnary(ctx, req)
+}
+
 // AdminServiceHandler is an implementation of the admin.v1.AdminService service.
 type AdminServiceHandler interface {
 	// ListPoison returns the messages parked on one BC's poison table, oldest
@@ -140,6 +163,15 @@ type AdminServiceHandler interface {
 	RequeuePoison(context.Context, *connect.Request[v1.RequeuePoisonRequest]) (*connect.Response[v1.RequeuePoisonResponse], error)
 	// DropPoison deletes parked messages for good.
 	DropPoison(context.Context, *connect.Request[v1.DropPoisonRequest]) (*connect.Response[v1.DropPoisonResponse], error)
+	// Prune is `worker prune` over RPC: per bounded context, delete the outbox
+	// rows older than older_than that every consumer group with a cursor has
+	// acknowledged, and the consumed inbox rows older than that (ids still
+	// parked in a poison table excepted). Poison tables are never pruned here.
+	// The call runs under the server's http.timeout: it is the operator's path
+	// for a dry run, for forgetting a stale group and for routine runs — a big
+	// first backlog belongs to the CLI / CronJob (deleted batches stay deleted
+	// on DEADLINE_EXCEEDED, only the counts are lost; re-running is safe).
+	Prune(context.Context, *connect.Request[v1.PruneRequest]) (*connect.Response[v1.PruneResponse], error)
 }
 
 // NewAdminServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -173,6 +205,12 @@ func NewAdminServiceHandler(svc AdminServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(adminServiceMethods.ByName("DropPoison")),
 		connect.WithHandlerOptions(opts...),
 	)
+	adminServicePruneHandler := connect.NewUnaryHandler(
+		AdminServicePruneProcedure,
+		svc.Prune,
+		connect.WithSchema(adminServiceMethods.ByName("Prune")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/admin.v1.AdminService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AdminServiceListPoisonProcedure:
@@ -183,6 +221,8 @@ func NewAdminServiceHandler(svc AdminServiceHandler, opts ...connect.HandlerOpti
 			adminServiceRequeuePoisonHandler.ServeHTTP(w, r)
 		case AdminServiceDropPoisonProcedure:
 			adminServiceDropPoisonHandler.ServeHTTP(w, r)
+		case AdminServicePruneProcedure:
+			adminServicePruneHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -206,4 +246,8 @@ func (UnimplementedAdminServiceHandler) RequeuePoison(context.Context, *connect.
 
 func (UnimplementedAdminServiceHandler) DropPoison(context.Context, *connect.Request[v1.DropPoisonRequest]) (*connect.Response[v1.DropPoisonResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("admin.v1.AdminService.DropPoison is not implemented"))
+}
+
+func (UnimplementedAdminServiceHandler) Prune(context.Context, *connect.Request[v1.PruneRequest]) (*connect.Response[v1.PruneResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("admin.v1.AdminService.Prune is not implemented"))
 }

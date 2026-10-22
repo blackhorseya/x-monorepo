@@ -5,15 +5,15 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv1";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv1";
 import { file_buf_validate_validate } from "../../buf/validate/validate_pb";
-import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
+import type { Duration, Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_duration, file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file admin/v1/service.proto.
  */
 export const file_admin_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChZhZG1pbi92MS9zZXJ2aWNlLnByb3RvEghhZG1pbi52MSKgAgoNUG9pc29uTWVzc2FnZRIXCg9ib3VuZGVkX2NvbnRleHQYASABKAkSDgoGb2Zmc2V0GAIgASgDEgwKBHV1aWQYAyABKAkSLQoJcGFya2VkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBINCgV0b3BpYxgFIAEoCRIPCgdoYW5kbGVyGAYgASgJEg4KBnJlYXNvbhgHIAEoCRI3CghtZXRhZGF0YRgIIAMoCzIlLmFkbWluLnYxLlBvaXNvbk1lc3NhZ2UuTWV0YWRhdGFFbnRyeRIPCgdwYXlsb2FkGAkgASgMGi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASJHChFMaXN0UG9pc29uUmVxdWVzdBIXCg9ib3VuZGVkX2NvbnRleHQYASABKAkSGQoFbGltaXQYAiABKAVCCrpIBxoFGPQDKAAiPwoSTGlzdFBvaXNvblJlc3BvbnNlEikKCG1lc3NhZ2VzGAEgAygLMhcuYWRtaW4udjEuUG9pc29uTWVzc2FnZSJNChBHZXRQb2lzb25SZXF1ZXN0EiAKD2JvdW5kZWRfY29udGV4dBgBIAEoCUIHukgEcgIQARIXCgZvZmZzZXQYAiABKANCB7pIBCICIAAiPQoRR2V0UG9pc29uUmVzcG9uc2USKAoHbWVzc2FnZRgBIAEoCzIXLmFkbWluLnYxLlBvaXNvbk1lc3NhZ2Ui2AEKFFJlcXVldWVQb2lzb25SZXF1ZXN0EiAKD2JvdW5kZWRfY29udGV4dBgBIAEoCUIHukgEcgIQARIdCgdvZmZzZXRzGAIgAygDQgy6SAmSAQYiBCICIAASCwoDYWxsGAMgASgIOnK6SG8abQoWcG9pc29uLm9mZnNldHNfeG9yX2FsbBIsc2V0IG9mZnNldHMgb3IgYWxsLCBub3QgYm90aCBhbmQgbm90IG5laXRoZXIaJSh0aGlzLm9mZnNldHMuc2l6ZSgpID4gMCkgIT0gdGhpcy5hbGwiJgoVUmVxdWV1ZVBvaXNvblJlc3BvbnNlEg0KBWNvdW50GAEgASgFItUBChFEcm9wUG9pc29uUmVxdWVzdBIgCg9ib3VuZGVkX2NvbnRleHQYASABKAlCB7pIBHICEAESHQoHb2Zmc2V0cxgCIAMoA0IMukgJkgEGIgQiAiAAEgsKA2FsbBgDIAEoCDpyukhvGm0KFnBvaXNvbi5vZmZzZXRzX3hvcl9hbGwSLHNldCBvZmZzZXRzIG9yIGFsbCwgbm90IGJvdGggYW5kIG5vdCBuZWl0aGVyGiUodGhpcy5vZmZzZXRzLnNpemUoKSA+IDApICE9IHRoaXMuYWxsIiMKEkRyb3BQb2lzb25SZXNwb25zZRINCgVjb3VudBgBIAEoBTK4AgoMQWRtaW5TZXJ2aWNlEkcKCkxpc3RQb2lzb24SGy5hZG1pbi52MS5MaXN0UG9pc29uUmVxdWVzdBocLmFkbWluLnYxLkxpc3RQb2lzb25SZXNwb25zZRJECglHZXRQb2lzb24SGi5hZG1pbi52MS5HZXRQb2lzb25SZXF1ZXN0GhsuYWRtaW4udjEuR2V0UG9pc29uUmVzcG9uc2USUAoNUmVxdWV1ZVBvaXNvbhIeLmFkbWluLnYxLlJlcXVldWVQb2lzb25SZXF1ZXN0Gh8uYWRtaW4udjEuUmVxdWV1ZVBvaXNvblJlc3BvbnNlEkcKCkRyb3BQb2lzb24SGy5hZG1pbi52MS5Ecm9wUG9pc29uUmVxdWVzdBocLmFkbWluLnYxLkRyb3BQb2lzb25SZXNwb25zZWIGcHJvdG8z", [file_buf_validate_validate, file_google_protobuf_timestamp]);
+  fileDesc("ChZhZG1pbi92MS9zZXJ2aWNlLnByb3RvEghhZG1pbi52MSKgAgoNUG9pc29uTWVzc2FnZRIXCg9ib3VuZGVkX2NvbnRleHQYASABKAkSDgoGb2Zmc2V0GAIgASgDEgwKBHV1aWQYAyABKAkSLQoJcGFya2VkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBINCgV0b3BpYxgFIAEoCRIPCgdoYW5kbGVyGAYgASgJEg4KBnJlYXNvbhgHIAEoCRI3CghtZXRhZGF0YRgIIAMoCzIlLmFkbWluLnYxLlBvaXNvbk1lc3NhZ2UuTWV0YWRhdGFFbnRyeRIPCgdwYXlsb2FkGAkgASgMGi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASJHChFMaXN0UG9pc29uUmVxdWVzdBIXCg9ib3VuZGVkX2NvbnRleHQYASABKAkSGQoFbGltaXQYAiABKAVCCrpIBxoFGPQDKAAiPwoSTGlzdFBvaXNvblJlc3BvbnNlEikKCG1lc3NhZ2VzGAEgAygLMhcuYWRtaW4udjEuUG9pc29uTWVzc2FnZSJNChBHZXRQb2lzb25SZXF1ZXN0EiAKD2JvdW5kZWRfY29udGV4dBgBIAEoCUIHukgEcgIQARIXCgZvZmZzZXQYAiABKANCB7pIBCICIAAiPQoRR2V0UG9pc29uUmVzcG9uc2USKAoHbWVzc2FnZRgBIAEoCzIXLmFkbWluLnYxLlBvaXNvbk1lc3NhZ2Ui2AEKFFJlcXVldWVQb2lzb25SZXF1ZXN0EiAKD2JvdW5kZWRfY29udGV4dBgBIAEoCUIHukgEcgIQARIdCgdvZmZzZXRzGAIgAygDQgy6SAmSAQYiBCICIAASCwoDYWxsGAMgASgIOnK6SG8abQoWcG9pc29uLm9mZnNldHNfeG9yX2FsbBIsc2V0IG9mZnNldHMgb3IgYWxsLCBub3QgYm90aCBhbmQgbm90IG5laXRoZXIaJSh0aGlzLm9mZnNldHMuc2l6ZSgpID4gMCkgIT0gdGhpcy5hbGwiJgoVUmVxdWV1ZVBvaXNvblJlc3BvbnNlEg0KBWNvdW50GAEgASgFItUBChFEcm9wUG9pc29uUmVxdWVzdBIgCg9ib3VuZGVkX2NvbnRleHQYASABKAlCB7pIBHICEAESHQoHb2Zmc2V0cxgCIAMoA0IMukgJkgEGIgQiAiAAEgsKA2FsbBgDIAEoCDpyukhvGm0KFnBvaXNvbi5vZmZzZXRzX3hvcl9hbGwSLHNldCBvZmZzZXRzIG9yIGFsbCwgbm90IGJvdGggYW5kIG5vdCBuZWl0aGVyGiUodGhpcy5vZmZzZXRzLnNpemUoKSA+IDApICE9IHRoaXMuYWxsIiMKEkRyb3BQb2lzb25SZXNwb25zZRINCgVjb3VudBgBIAEoBSLOAQoMUHJ1bmVSZXF1ZXN0EhcKD2JvdW5kZWRfY29udGV4dBgBIAEoCRI6CgpvbGRlcl90aGFuGAIgASgLMhkuZ29vZ2xlLnByb3RvYnVmLkR1cmF0aW9uQgu6SAjIAQGqAQIqABIPCgdkcnlfcnVuGAMgASgIEhIKCnVuY29uc3VtZWQYBCABKAgSIwoNZm9yZ2V0X2dyb3VwcxgFIAMoCUIMukgJkgEGIgRyAhABEh8KCmJhdGNoX3NpemUYBiABKAVCC7pICBoGGKCNBigAIncKClBydW5lVGFibGUSDQoFdGFibGUYASABKAkSDAoEcm93cxgCIAEoAxIPCgdza2lwcGVkGAMgASgJEigKCGJsb2NrZXJzGAQgAygLMhYuYWRtaW4udjEuUHJ1bmVCbG9ja2VyEhEKCWZvcmdvdHRlbhgFIAMoCSI2CgxQcnVuZUJsb2NrZXISFgoOY29uc3VtZXJfZ3JvdXAYASABKAkSDgoGdW5yZWFkGAIgASgDIkQKDVBydW5lUmVzcG9uc2USJAoGdGFibGVzGAEgAygLMhQuYWRtaW4udjEuUHJ1bmVUYWJsZRINCgV0b3RhbBgCIAEoAzLyAgoMQWRtaW5TZXJ2aWNlEkcKCkxpc3RQb2lzb24SGy5hZG1pbi52MS5MaXN0UG9pc29uUmVxdWVzdBocLmFkbWluLnYxLkxpc3RQb2lzb25SZXNwb25zZRJECglHZXRQb2lzb24SGi5hZG1pbi52MS5HZXRQb2lzb25SZXF1ZXN0GhsuYWRtaW4udjEuR2V0UG9pc29uUmVzcG9uc2USUAoNUmVxdWV1ZVBvaXNvbhIeLmFkbWluLnYxLlJlcXVldWVQb2lzb25SZXF1ZXN0Gh8uYWRtaW4udjEuUmVxdWV1ZVBvaXNvblJlc3BvbnNlEkcKCkRyb3BQb2lzb24SGy5hZG1pbi52MS5Ecm9wUG9pc29uUmVxdWVzdBocLmFkbWluLnYxLkRyb3BQb2lzb25SZXNwb25zZRI4CgVQcnVuZRIWLmFkbWluLnYxLlBydW5lUmVxdWVzdBoXLmFkbWluLnYxLlBydW5lUmVzcG9uc2ViBnByb3RvMw", [file_buf_validate_validate, file_google_protobuf_duration, file_google_protobuf_timestamp]);
 
 /**
  * PoisonMessage is one row of <bc>.events_poison. offset identifies the row;
@@ -259,11 +259,164 @@ export const DropPoisonResponseSchema: GenMessage<DropPoisonResponse> = /*@__PUR
   messageDesc(file_admin_v1_service, 8);
 
 /**
- * AdminService is the operator side of the platform: today the poison queues
- * (platform/eventbus) of every bounded context the server hosts. It is not
- * part of any BC's contract. Access: with auth on, the caller needs the
- * auth.admin_role role (PERMISSION_DENIED, x-error-code auth.permission_denied
- * otherwise); with auth.mode off everything is open, like the rest.
+ * @generated from message admin.v1.PruneRequest
+ */
+export type PruneRequest = Message<"admin.v1.PruneRequest"> & {
+  /**
+   * Schema name of the BC ("ordering"); empty = every BC the server hosts.
+   *
+   * @generated from field: string bounded_context = 1;
+   */
+  boundedContext: string;
+
+  /**
+   * Rows younger than this are kept whatever their state. Required, positive.
+   *
+   * @generated from field: google.protobuf.Duration older_than = 2;
+   */
+  olderThan?: Duration;
+
+  /**
+   * Count what would be deleted, delete nothing (forget_groups are reported
+   * as forgotten but kept).
+   *
+   * @generated from field: bool dry_run = 3;
+   */
+  dryRun: boolean;
+
+  /**
+   * Also prune topic tables no consumer group has a cursor on.
+   *
+   * @generated from field: bool unconsumed = 4;
+   */
+  unconsumed: boolean;
+
+  /**
+   * Consumer groups whose cursors are deleted first so they no longer hold
+   * rows back (an E2E run, a renamed worker.consumer_group); a group that
+   * comes back starts over as a new group.
+   *
+   * @generated from field: repeated string forget_groups = 5;
+   */
+  forgetGroups: string[];
+
+  /**
+   * Rows per DELETE statement; 0 = server default (10000).
+   *
+   * @generated from field: int32 batch_size = 6;
+   */
+  batchSize: number;
+};
+
+/**
+ * Describes the message admin.v1.PruneRequest.
+ * Use `create(PruneRequestSchema)` to create a new message.
+ */
+export const PruneRequestSchema: GenMessage<PruneRequest> = /*@__PURE__*/
+  messageDesc(file_admin_v1_service, 9);
+
+/**
+ * PruneTable is what happened to one table (eventbus.PruneResult).
+ *
+ * @generated from message admin.v1.PruneTable
+ */
+export type PruneTable = Message<"admin.v1.PruneTable"> & {
+  /**
+   * "<bc>.events_<topic>" or "<bc>.inbox".
+   *
+   * @generated from field: string table = 1;
+   */
+  table: string;
+
+  /**
+   * Rows deleted — or, dry run, that would be.
+   *
+   * @generated from field: int64 rows = 2;
+   */
+  rows: bigint;
+
+  /**
+   * Why nothing was touched; empty when the table was pruned.
+   *
+   * @generated from field: string skipped = 3;
+   */
+  skipped: string;
+
+  /**
+   * Consumer groups still holding rows older than older_than back.
+   *
+   * @generated from field: repeated admin.v1.PruneBlocker blockers = 4;
+   */
+  blockers: PruneBlocker[];
+
+  /**
+   * The forget_groups that had a cursor on this table.
+   *
+   * @generated from field: repeated string forgotten = 5;
+   */
+  forgotten: string[];
+};
+
+/**
+ * Describes the message admin.v1.PruneTable.
+ * Use `create(PruneTableSchema)` to create a new message.
+ */
+export const PruneTableSchema: GenMessage<PruneTable> = /*@__PURE__*/
+  messageDesc(file_admin_v1_service, 10);
+
+/**
+ * @generated from message admin.v1.PruneBlocker
+ */
+export type PruneBlocker = Message<"admin.v1.PruneBlocker"> & {
+  /**
+   * @generated from field: string consumer_group = 1;
+   */
+  consumerGroup: string;
+
+  /**
+   * @generated from field: int64 unread = 2;
+   */
+  unread: bigint;
+};
+
+/**
+ * Describes the message admin.v1.PruneBlocker.
+ * Use `create(PruneBlockerSchema)` to create a new message.
+ */
+export const PruneBlockerSchema: GenMessage<PruneBlocker> = /*@__PURE__*/
+  messageDesc(file_admin_v1_service, 11);
+
+/**
+ * @generated from message admin.v1.PruneResponse
+ */
+export type PruneResponse = Message<"admin.v1.PruneResponse"> & {
+  /**
+   * @generated from field: repeated admin.v1.PruneTable tables = 1;
+   */
+  tables: PruneTable[];
+
+  /**
+   * Sum of rows over tables.
+   *
+   * @generated from field: int64 total = 2;
+   */
+  total: bigint;
+};
+
+/**
+ * Describes the message admin.v1.PruneResponse.
+ * Use `create(PruneResponseSchema)` to create a new message.
+ */
+export const PruneResponseSchema: GenMessage<PruneResponse> = /*@__PURE__*/
+  messageDesc(file_admin_v1_service, 12);
+
+/**
+ * AdminService is the operator side of the platform: the poison queues and
+ * the outbox / inbox retention (platform/eventbus) of every bounded context
+ * the server hosts. It is not part of any BC's contract. Access: with auth
+ * on, the caller needs the auth.admin_role role (PERMISSION_DENIED,
+ * x-error-code auth.permission_denied otherwise); with auth.mode off
+ * everything is open, like the rest.
  *
  * @generated from service admin.v1.AdminService
  */
@@ -311,6 +464,23 @@ export const AdminService: GenService<{
     methodKind: "unary";
     input: typeof DropPoisonRequestSchema;
     output: typeof DropPoisonResponseSchema;
+  },
+  /**
+   * Prune is `worker prune` over RPC: per bounded context, delete the outbox
+   * rows older than older_than that every consumer group with a cursor has
+   * acknowledged, and the consumed inbox rows older than that (ids still
+   * parked in a poison table excepted). Poison tables are never pruned here.
+   * The call runs under the server's http.timeout: it is the operator's path
+   * for a dry run, for forgetting a stale group and for routine runs — a big
+   * first backlog belongs to the CLI / CronJob (deleted batches stay deleted
+   * on DEADLINE_EXCEEDED, only the counts are lost; re-running is safe).
+   *
+   * @generated from rpc admin.v1.AdminService.Prune
+   */
+  prune: {
+    methodKind: "unary";
+    input: typeof PruneRequestSchema;
+    output: typeof PruneResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_admin_v1_service, 0);

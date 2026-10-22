@@ -196,7 +196,8 @@ migrate:
 # and inbox rows older than this. The "Eventbus retention overdue" alert
 # (deployments/docker/grafana/provisioning/alerting.yaml) fires at 45d = 1.5 × 720h: move both
 # together. Rows a group has not acked are never deleted; the alert "rows held by a stale
-# consumer group" tells you which group, forgetGroups removes its cursor.
+# consumer group" tells you which group, forgetGroups removes its cursor. The same thing
+# ad hoc, without kubectl: AdminService.Prune (console Prune page) — dry run, forget, small runs.
 prune:
   enabled: true
   schedule: "17 3 * * *"

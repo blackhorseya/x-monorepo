@@ -111,7 +111,7 @@ func PruneTopicTable(c context.Context, db *gorm.DB, table string, opts PruneOpt
 		groups -= int64(len(res.Forgotten))
 	}
 	if groups == 0 && !opts.Unconsumed {
-		res.Skipped = "no consumer group has a cursor on it (use --unconsumed to prune anyway)"
+		res.Skipped = "no consumer group has a cursor on it (unconsumed prunes it anyway)"
 		return res, nil
 	}
 
@@ -156,6 +156,32 @@ func PruneTopicTable(c context.Context, db *gorm.DB, table string, opts PruneOpt
 			return res, nil
 		}
 	}
+}
+
+// PruneSchema prunes one bounded context: every topic table of the schema
+// (TopicTables, in name order) with opts, then its inbox with opts.OlderThan
+// and opts.DryRun. poisonSchemas are ALL the BCs whose poison tables may
+// still park a message id (PruneInbox), not just this one. The CLI and the
+// admin RPC both run this; results are in table order, the inbox last.
+func PruneSchema(c context.Context, db *gorm.DB, schema string, opts PruneOptions, poisonSchemas []string) ([]PruneResult, error) {
+	tables, err := TopicTables(c, db, schema)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]PruneResult, 0, len(tables)+1)
+	for _, tbl := range tables {
+		res, err := PruneTopicTable(c, db, tbl, opts)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, res)
+	}
+	res, err := PruneInbox(c, db, schema, opts.OlderThan, poisonSchemas, opts.DryRun)
+	if err != nil {
+		return results, err
+	}
+
+	return append(results, res), nil
 }
 
 // PruneInbox deletes a bounded context's inbox rows (`<schema>.inbox`,

@@ -3,13 +3,15 @@ syntax = "proto3";
 package admin.v1;
 
 import "buf/validate/validate.proto";
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
-// AdminService is the operator side of the platform: today the poison queues
-// (platform/eventbus) of every bounded context the server hosts. It is not
-// part of any BC's contract. Access: with auth on, the caller needs the
-// auth.admin_role role (PERMISSION_DENIED, x-error-code auth.permission_denied
-// otherwise); with auth.mode off everything is open, like the rest.
+// AdminService is the operator side of the platform: the poison queues and
+// the outbox / inbox retention (platform/eventbus) of every bounded context
+// the server hosts. It is not part of any BC's contract. Access: with auth
+// on, the caller needs the auth.admin_role role (PERMISSION_DENIED,
+// x-error-code auth.permission_denied otherwise); with auth.mode off
+// everything is open, like the rest.
 service AdminService {
   // ListPoison returns the messages parked on one BC's poison table, oldest
   // first (nothing consumes it, so this is the whole backlog).
@@ -23,6 +25,15 @@ service AdminService {
   rpc RequeuePoison(RequeuePoisonRequest) returns (RequeuePoisonResponse);
   // DropPoison deletes parked messages for good.
   rpc DropPoison(DropPoisonRequest) returns (DropPoisonResponse);
+  // Prune is `worker prune` over RPC: per bounded context, delete the outbox
+  // rows older than older_than that every consumer group with a cursor has
+  // acknowledged, and the consumed inbox rows older than that (ids still
+  // parked in a poison table excepted). Poison tables are never pruned here.
+  // The call runs under the server's http.timeout: it is the operator's path
+  // for a dry run, for forgetting a stale group and for routine runs — a big
+  // first backlog belongs to the CLI / CronJob (deleted batches stay deleted
+  // on DEADLINE_EXCEEDED, only the counts are lost; re-running is safe).
+  rpc Prune(PruneRequest) returns (PruneResponse);
 }
 
 // PoisonMessage is one row of <bc>.events_poison. offset identifies the row;
@@ -97,4 +108,53 @@ message DropPoisonRequest {
 
 message DropPoisonResponse {
   int32 count = 1;
+}
+
+message PruneRequest {
+  // Schema name of the BC ("ordering"); empty = every BC the server hosts.
+  string bounded_context = 1;
+  // Rows younger than this are kept whatever their state. Required, positive.
+  google.protobuf.Duration older_than = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).duration.gt = {}
+  ];
+  // Count what would be deleted, delete nothing (forget_groups are reported
+  // as forgotten but kept).
+  bool dry_run = 3;
+  // Also prune topic tables no consumer group has a cursor on.
+  bool unconsumed = 4;
+  // Consumer groups whose cursors are deleted first so they no longer hold
+  // rows back (an E2E run, a renamed worker.consumer_group); a group that
+  // comes back starts over as a new group.
+  repeated string forget_groups = 5 [(buf.validate.field).repeated.items.string.min_len = 1];
+  // Rows per DELETE statement; 0 = server default (10000).
+  int32 batch_size = 6 [(buf.validate.field).int32 = {
+    gte: 0
+    lte: 100000
+  }];
+}
+
+// PruneTable is what happened to one table (eventbus.PruneResult).
+message PruneTable {
+  // "<bc>.events_<topic>" or "<bc>.inbox".
+  string table = 1;
+  // Rows deleted — or, dry run, that would be.
+  int64 rows = 2;
+  // Why nothing was touched; empty when the table was pruned.
+  string skipped = 3;
+  // Consumer groups still holding rows older than older_than back.
+  repeated PruneBlocker blockers = 4;
+  // The forget_groups that had a cursor on this table.
+  repeated string forgotten = 5;
+}
+
+message PruneBlocker {
+  string consumer_group = 1;
+  int64 unread = 2;
+}
+
+message PruneResponse {
+  repeated PruneTable tables = 1;
+  // Sum of rows over tables.
+  int64 total = 2;
 }

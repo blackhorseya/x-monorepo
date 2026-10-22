@@ -146,6 +146,109 @@ components:
       description: |-
         PoisonMessage is one row of <bc>.events_poison. offset identifies the row;
          uuid is the message id and repeats when a message is poisoned twice.
+    admin.v1.PruneBlocker:
+      type: object
+      properties:
+        consumerGroup:
+          type: string
+          title: consumer_group
+        unread:
+          type: string
+          title: unread
+          format: int64
+      title: PruneBlocker
+      additionalProperties: false
+    admin.v1.PruneRequest:
+      type: object
+      properties:
+        boundedContext:
+          type: string
+          title: bounded_context
+          description: Schema name of the BC ("ordering"); empty = every BC the server hosts.
+        olderThan:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Duration'
+          title: older_than
+          description: |
+            Rows younger than this are kept whatever their state. Required, positive.
+            duration.gt = 0s
+        dryRun:
+          type: boolean
+          title: dry_run
+          description: |-
+            Count what would be deleted, delete nothing (forget_groups are reported
+             as forgotten but kept).
+        unconsumed:
+          type: boolean
+          title: unconsumed
+          description: Also prune topic tables no consumer group has a cursor on.
+        forgetGroups:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          title: forget_groups
+          description: |-
+            Consumer groups whose cursors are deleted first so they no longer hold
+             rows back (an E2E run, a renamed worker.consumer_group); a group that
+             comes back starts over as a new group.
+        batchSize:
+          type: integer
+          title: batch_size
+          maximum: 100000
+          minimum: 0
+          format: int32
+          description: Rows per DELETE statement; 0 = server default (10000).
+      title: PruneRequest
+      required:
+        - olderThan
+      additionalProperties: false
+    admin.v1.PruneResponse:
+      type: object
+      properties:
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/admin.v1.PruneTable'
+          title: tables
+        total:
+          type: string
+          title: total
+          format: int64
+          description: Sum of rows over tables.
+      title: PruneResponse
+      additionalProperties: false
+    admin.v1.PruneTable:
+      type: object
+      properties:
+        table:
+          type: string
+          title: table
+          description: '"<bc>.events_<topic>" or "<bc>.inbox".'
+        rows:
+          type: string
+          title: rows
+          format: int64
+          description: Rows deleted — or, dry run, that would be.
+        skipped:
+          type: string
+          title: skipped
+          description: Why nothing was touched; empty when the table was pruned.
+        blockers:
+          type: array
+          items:
+            $ref: '#/components/schemas/admin.v1.PruneBlocker'
+          title: blockers
+          description: Consumer groups still holding rows older than older_than back.
+        forgotten:
+          type: array
+          items:
+            type: string
+          title: forgotten
+          description: The forget_groups that had a cursor on this table.
+      title: PruneTable
+      additionalProperties: false
+      description: PruneTable is what happened to one table (eventbus.PruneResult).
     admin.v1.RequeuePoisonRequest:
       type: object
       properties:
@@ -245,6 +348,10 @@ components:
           description: Deserialized error detail payload. The 'type' field indicates the schema. This field is for easier debugging and should not be relied upon for application logic.
       additionalProperties: true
       description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message, with an additional debug field for ConnectRPC error details.
+    google.protobuf.Duration:
+      type: string
+      format: duration
+      description: A signed duration in seconds, with up to nine fractional digits and an `s` suffix (for example, `3s` or `-0.001s`).
     google.protobuf.Timestamp:
       type: string
       examples:
@@ -375,6 +482,53 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/admin.v1.ListPoisonResponse'
+  /admin.v1.AdminService/Prune:
+    post:
+      tags:
+        - admin.v1.AdminService
+      summary: Prune
+      description: |-
+        Prune is `worker prune` over RPC: per bounded context, delete the outbox
+         rows older than older_than that every consumer group with a cursor has
+         acknowledged, and the consumed inbox rows older than that (ids still
+         parked in a poison table excepted). Poison tables are never pruned here.
+         The call runs under the server's http.timeout: it is the operator's path
+         for a dry run, for forgetting a stale group and for routine runs — a big
+         first backlog belongs to the CLI / CronJob (deleted batches stay deleted
+         on DEADLINE_EXCEEDED, only the counts are lost; re-running is safe).
+      operationId: admin.v1.AdminService.Prune
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/admin.v1.PruneRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/admin.v1.PruneResponse'
   /admin.v1.AdminService/RequeuePoison:
     post:
       tags:
@@ -421,8 +575,9 @@ paths:
 tags:
   - name: admin.v1.AdminService
     description: |-
-      AdminService is the operator side of the platform: today the poison queues
-       (platform/eventbus) of every bounded context the server hosts. It is not
-       part of any BC's contract. Access: with auth on, the caller needs the
-       auth.admin_role role (PERMISSION_DENIED, x-error-code auth.permission_denied
-       otherwise); with auth.mode off everything is open, like the rest.
+      AdminService is the operator side of the platform: the poison queues and
+       the outbox / inbox retention (platform/eventbus) of every bounded context
+       the server hosts. It is not part of any BC's contract. Access: with auth
+       on, the caller needs the auth.admin_role role (PERMISSION_DENIED,
+       x-error-code auth.permission_denied otherwise); with auth.mode off
+       everything is open, like the rest.

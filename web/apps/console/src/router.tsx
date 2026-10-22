@@ -4,6 +4,7 @@ import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { CredentialControl } from "./components/credential";
 import { OrdersPage, type OrdersSearch } from "./routes/orders";
 import { PoisonPage } from "./routes/poison";
+import { PrunePage } from "./routes/prune";
 import { ReservationsPage, type ReservationsSearch } from "./routes/reservations";
 import { StockPage } from "./routes/stock";
 
@@ -18,6 +19,7 @@ const rootRoute = createRootRoute({
             { to: "/reservations", label: "Reservations" },
             { to: "/stock", label: "Stock" },
             { to: "/poison", label: "Poison" },
+            { to: "/prune", label: "Prune" },
           ].map((l) => (
             <Link key={l.to} to={l.to} activeProps={{ className: "text-foreground font-medium" }}>
               {l.label}
@@ -59,9 +61,10 @@ const reservationsRoute = createRoute({
 });
 const stockRoute = createRoute({ getParentRoute: () => rootRoute, path: "/stock", component: StockPage });
 const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: PoisonPage });
+const pruneRoute = createRoute({ getParentRoute: () => rootRoute, path: "/prune", component: PrunePage });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, reservationsRoute, stockRoute, poisonRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, reservationsRoute, stockRoute, poisonRoute, pruneRoute]),
   defaultPreload: "intent",
 });
 

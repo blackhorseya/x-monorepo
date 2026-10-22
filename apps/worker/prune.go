@@ -88,24 +88,14 @@ func prune(c context.Context, db *gorm.DB, bcs []string, opts eventbus.PruneOpti
 	_, _ = fmt.Fprintf(w, "TABLE\t%s\tNOTE\n", verb)
 	var total int64
 	for _, bc := range bcs {
-		tables, err := eventbus.TopicTables(c, db, bc)
+		results, err := eventbus.PruneSchema(c, db, bc, opts, schemas)
 		if err != nil {
 			return err
 		}
-		for _, tbl := range tables {
-			res, err := eventbus.PruneTopicTable(c, db, tbl, opts)
-			if err != nil {
-				return err
-			}
+		for _, res := range results {
 			total += res.Rows
 			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", res.Table, res.Rows, note(res, opts.DryRun))
 		}
-		res, err := eventbus.PruneInbox(c, db, bc, opts.OlderThan, schemas, opts.DryRun)
-		if err != nil {
-			return err
-		}
-		total += res.Rows
-		_, _ = fmt.Fprintf(w, "%s\t%d\t\n", res.Table, res.Rows)
 	}
 	if err := w.Flush(); err != nil {
 		return err
