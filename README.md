@@ -81,6 +81,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │       └── adapters/consumer/     # 消費 ordering.v1.OrderCreated / OrderCancelled（只 import ordering 的 contract/）
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
+├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
@@ -310,7 +311,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 |---|---|---|---|
 | `task gate-fast FILE=…` | Claude Code `PostToolUse`（Edit/Write）、`pre-commit` | gofmt + vet + golangci-lint（含 depguard）+ archtest（module 根有 `arch_test.go` 時）於被改檔案所屬 module | 秒 |
 | `task gate-local` | Claude Code `Stop`、`pre-push` | gen freshness + buf lint + affected modules 的 `go test -race`（含 archtest） | ~1 min |
-| `.github/workflows/ci.yml` | PR | gen-freshness（含 TS）、lint、work-sync、test（matrix by affected module）、coverage、build、helm（`task helm-check`）；`buf breaking` **只警告** | 全 |
+| `.github/workflows/ci.yml` | PR | gen-freshness（含 TS）、lint、work-sync、test（matrix by affected module）、coverage、build、helm（`task helm-check`）、helm-kind（`task helm-kind`：kind 真裝 + smoke）；`buf breaking` **只警告** | 全 |
 
 - `scripts/affected.sh`：由 `go.work` 算出被改動的 module，並展開反向依賴（改 kernel → 全部；改 ordering → ordering + apps/rpc）
 - `scripts/cover-gate.sh`：所有 `*/domain/*` package 必須 100% 覆蓋
@@ -504,7 +505,10 @@ helm install api deployments/helm/x-monorepo -n app --create-namespace \
 
 `check.py` 是 chart 裡唯一有邏輯的地方的測試：rpc 的 grace period 算式與 env、readiness period 的關係、worker 沒 probe、migrate hook
 與它的 Secret 的順序、prune 的 args。`ci/` 四個 profile（預設 + DB、redis broker + HPA + ingress + auth required、existingSecret、無 DB）
-在 CI 的 `helm` job 跑。**沒有在真的 cluster 裝過**：hook 順序與 probe 行為是對照文件與 render 結果，不是實測。
+在 CI 的 `helm` job 跑。真的裝一次是 `task helm-kind`（CI 的 `helm-kind` job）：起 kind cluster、`deployments/helm/kind/deps.yaml`
+放一個拋棄式 Postgres + Redis（chart 沒有 subchart dependency，production 接 managed DB，這份只給 smoke 用）、從 working tree build 三個 image
+`kind load` 進去、`helm upgrade --install --wait` 兩次（第一次走 pre-install hook、第二次走 pre-upgrade），每次跑 `kind/smoke.sh`：
+SetStock → CreateOrder → worker 透過 Redis Streams 消費 OrderCreated → GetStock 看到 reserved。本機約 1 分鐘（cluster 已存在時），`task helm-kind-down` 刪 cluster。
 `appVersion` 要手動跟著 release 走（image.tag 空時用它）；chart 本身沒有 publish 到 OCI registry。
 
 ## Config（viper）
