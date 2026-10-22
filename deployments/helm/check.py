@@ -57,7 +57,11 @@ def main(profile: str) -> None:
     hpa, so = find(docs, "HorizontalPodAutoscaler", "-worker"), find(docs, "ScaledObject", "-worker")
     check((hpa is not None) == (wa["enabled"] and wa["metric"] == "cpu"), "worker HPA iff autoscaling cpu")
     check((so is not None) == (wa["enabled"] and wa["metric"] == "lag"), "worker ScaledObject iff autoscaling lag")
+    behavior = wa.get("behavior") or None
+    if hpa:
+        expect(hpa["spec"].get("behavior"), behavior, "worker HPA behavior passthrough")
     if so:
+        expect(so["spec"].get("advanced", {}).get("horizontalPodAutoscalerConfig", {}).get("behavior"), behavior, "ScaledObject HPA behavior passthrough")
         trig = so["spec"]["triggers"][0]
         group = values["config"]["worker"]["consumer_group"]
         check(trig["type"] == "prometheus" and "max(" in trig["metadata"]["query"] and f'consumer_group=~"{group}\\\\..*"' in trig["metadata"]["query"],

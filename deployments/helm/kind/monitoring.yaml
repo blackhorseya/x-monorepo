@@ -1,0 +1,95 @@
+# What `worker.autoscaling.metric: lag` needs around the chart, kind-sized: an OTLP/gRPC
+# collector the worker exports to (config.otel.endpoint) that re-exposes the metrics in
+# Prometheus format, and a Prometheus scraping it every 5s that KEDA queries
+# (worker.autoscaling.lag.prometheusAddress). Production has its own collector / Prometheus;
+# this file only exists for `task helm-kind-keda`. Service names match keda-values.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: { endpoint: 0.0.0.0:4317 }
+    exporters:
+      prometheus: { endpoint: 0.0.0.0:8889 }
+      nop: {}
+    service:
+      pipelines:
+        metrics: { receivers: [otlp], exporters: [prometheus] }
+        traces: { receivers: [otlp], exporters: [nop] }
+        logs: { receivers: [otlp], exporters: [nop] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+spec:
+  selector: { app: otel-collector }
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: 4317 }
+    - { name: prometheus, port: 8889, targetPort: 8889 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: otel-collector }
+  template:
+    metadata:
+      labels: { app: otel-collector }
+    spec:
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.142.0
+          args: [--config=/etc/otel/config.yaml]
+          ports: [{ containerPort: 4317 }, { containerPort: 8889 }]
+          volumeMounts: [{ name: config, mountPath: /etc/otel }]
+      volumes: [{ name: config, configMap: { name: otel-collector } }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus
+data:
+  prometheus.yml: |
+    global: { scrape_interval: 5s }
+    scrape_configs:
+      - job_name: otel-collector
+        static_configs: [{ targets: [otel-collector:8889] }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector: { app: prometheus }
+  ports: [{ port: 9090, targetPort: 9090 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: prometheus }
+  template:
+    metadata:
+      labels: { app: prometheus }
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.9.1
+          args: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.retention.time=1h]
+          ports: [{ containerPort: 9090 }]
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 9090 }
+            periodSeconds: 2
+          volumeMounts: [{ name: config, mountPath: /etc/prometheus }]
+      volumes: [{ name: config, configMap: { name: prometheus } }]
