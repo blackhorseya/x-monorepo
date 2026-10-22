@@ -295,6 +295,22 @@ tasks:
     desc: delete the kind cluster created by helm-kind
     cmds: [kind delete cluster --name x-monorepo]
 
+  k6:
+    desc: 'one k6 script against a running server (default http://127.0.0.1:8080, i.e. task run): task k6 -- orders|ratelimit|timeout [k6 args…]; BASE_URL / API_KEY / VUS / DURATION / RPS are read from the environment (k6 __ENV), see the headers of tests/k6/*.js'
+    cmds:
+      - 'k6 run tests/k6/{{index (splitArgs .CLI_ARGS) 0}}.js {{slice (splitArgs .CLI_ARGS) 1 | join " "}}'
+    preconditions:
+      - sh: command -v k6 >/dev/null
+        msg: k6 not found (brew install k6)
+
+  k6-smoke:
+    desc: 'tests/k6/smoke.sh: the three k6 scripts, short, each against its own ./bin/rpc on :18090 with the local Postgres (DATABASE_URL) — load thresholds, rate limit at 50 rps, timeout at 1ns. What CI runs'
+    deps: [build]
+    cmds: ['tests/k6/smoke.sh {{.BIN_DIR}} {{.CLI_ARGS}}']
+    preconditions:
+      - sh: command -v k6 >/dev/null
+        msg: k6 not found (brew install k6)
+
   release-check:
     desc: validate .goreleaser.yaml (goreleaser from PATH; brew install goreleaser)
     cmds: [goreleaser check]
