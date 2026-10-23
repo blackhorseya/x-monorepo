@@ -98,7 +98,7 @@ func (h *PoisonService) GetPoison(c context.Context, req *connect.Request[adminv
 		}
 	}
 	ce := connect.NewError(connect.CodeNotFound, errNoRow)
-	ce.Meta().Set("x-error-code", "poison.not_found")
+	ce.Meta().Set("x-error-code", "admin.poison_not_found")
 
 	return nil, ce
 }
@@ -190,7 +190,7 @@ func (h *PoisonService) guard(c context.Context) error {
 	}
 	if h.db == nil {
 		ce := connect.NewError(connect.CodeFailedPrecondition, errNoDB)
-		ce.Meta().Set("x-error-code", "poison.no_database")
+		ce.Meta().Set("x-error-code", "admin.no_database")
 		return ce
 	}
 
@@ -204,7 +204,7 @@ func (h *PoisonService) known(bc string) error {
 		}
 	}
 	ce := connect.NewError(connect.CodeInvalidArgument, errUnknownBC)
-	ce.Meta().Set("x-error-code", "poison.unknown_bounded_context")
+	ce.Meta().Set("x-error-code", "admin.unknown_bounded_context")
 
 	return ce
 }

@@ -84,7 +84,7 @@ message RequeuePoisonRequest {
   repeated int64 offsets = 2 [(buf.validate.field).repeated.items.int64.gt = 0];
   bool all = 3;
   option (buf.validate.message).cel = {
-    id: "poison.offsets_xor_all"
+    id: "admin.poison_offsets_xor_all"
     message: "set offsets or all, not both and not neither"
     expression: "(this.offsets.size() > 0) != this.all"
   };
@@ -100,7 +100,7 @@ message DropPoisonRequest {
   repeated int64 offsets = 2 [(buf.validate.field).repeated.items.int64.gt = 0];
   bool all = 3;
   option (buf.validate.message).cel = {
-    id: "poison.offsets_xor_all"
+    id: "admin.poison_offsets_xor_all"
     message: "set offsets or all, not both and not neither"
     expression: "(this.offsets.size() > 0) != this.all"
   };

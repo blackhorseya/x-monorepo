@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // Console smoke against the real server: a ./bin/rpc with no database (in-memory
-// repositories, admin RPCs answer poison.no_database) and the production build
+// repositories, admin RPCs answer admin.no_database) and the production build
 // served by vite preview, which proxies /api to it like the dev server does.
 // `task web-e2e` builds both first; CI runs it in the console-e2e job.
 const rpcPort = Number(process.env.E2E_RPC_PORT ?? 18091);

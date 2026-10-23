@@ -42,7 +42,7 @@ components:
       title: DropPoisonRequest
       additionalProperties: false
       description: |
-        poison.offsets_xor_all // set offsets or all, not both and not neither
+        admin.poison_offsets_xor_all // set offsets or all, not both and not neither
     admin.v1.DropPoisonResponse:
       type: object
       properties:
@@ -271,7 +271,7 @@ components:
       description: |
         Rows to act on: the listed offsets, or every row of the BC when all is set.
          Exactly one of the two.
-        poison.offsets_xor_all // set offsets or all, not both and not neither
+        admin.poison_offsets_xor_all // set offsets or all, not both and not neither
     admin.v1.RequeuePoisonResponse:
       type: object
       properties:
