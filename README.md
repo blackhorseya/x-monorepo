@@ -373,7 +373,7 @@ task web-typecheck  # @repo/proto + @repo/console 的 tsc --noEmit（CI 的 web 
 | 路由 | TanStack Router（code-based，`/orders`、`/reservations`、`/stock`、`/poison`），不需要額外的 codegen plugin；`/orders` 的 `status` / `customer` 與 `/reservations` 的 `status` / `order` 走 search params（`validateSearch`），連結可分享 |
 | Orders 頁 | `ordering.v1.OrderService/ListOrders`（keyset，`created_at desc, id desc`，customer / status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s poll；mutation 以 `["orders"]` 前綴 invalidate 所有 filter 的頁 |
 | Reservations 頁 | `inventory.v1.InventoryService/ListReservations`（keyset，`created_at desc, order_id desc`，status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s poll；Orders 頁的 reservation badge 連到 `/reservations?order=<id>`，該筆釘在最上面 |
-| Stock 頁 | `inventory.v1.InventoryService/ListStocks`（keyset，SKU 升冪，opaque page token）的表格，`useInfiniteQuery` + Load more，每 2s poll 已載入的頁；上方 Set stock 建立 / 覆寫 on hand，列上 Edit 把該 SKU 帶進表單 |
+| Stock 頁 | `inventory.v1.InventoryService/ListStocks`（keyset，SKU 升冪，opaque page token；`sku_prefix` / `only_reserved` 篩選，token 帶著篩選條件，換條件續頁是 INVALID_ARGUMENT）的表格，`useInfiniteQuery` + Load more，每 2s poll 已載入的頁；篩選走 `/stock?prefix=&reserved=` search params；上方 Set stock 建立 / 覆寫 on hand，列上 Edit 把該 SKU 帶進表單 |
 | Poison 頁 | `admin.v1.AdminService`：各 BC 的 poison 表，Show（metadata + payload base64）/ Requeue / Drop，每個 BC 有 Requeue all / Drop all；server auth 開著時 credential 要帶 `admin` role |
 | UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |
 

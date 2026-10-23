@@ -6,7 +6,7 @@ import { OrdersPage, type OrdersSearch } from "./routes/orders";
 import { PoisonPage } from "./routes/poison";
 import { PrunePage, type PruneSearch } from "./routes/prune";
 import { ReservationsPage, type ReservationsSearch } from "./routes/reservations";
-import { StockPage } from "./routes/stock";
+import { StockPage, type StockSearch } from "./routes/stock";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -59,7 +59,15 @@ const reservationsRoute = createRoute({
     order: typeof raw.order === "string" && raw.order !== "" ? raw.order : undefined,
   }),
 });
-const stockRoute = createRoute({ getParentRoute: () => rootRoute, path: "/stock", component: StockPage });
+const stockRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/stock",
+  component: StockPage,
+  validateSearch: (raw: Record<string, unknown>): StockSearch => ({
+    prefix: typeof raw.prefix === "string" && raw.prefix !== "" ? raw.prefix : undefined,
+    reserved: raw.reserved === true ? true : undefined,
+  }),
+});
 const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: PoisonPage });
 const pruneRoute = createRoute({
   getParentRoute: () => rootRoute,

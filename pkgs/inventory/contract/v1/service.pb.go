@@ -210,8 +210,13 @@ type ListStocksRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
 	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	// Opaque; from the previous ListStocksResponse.next_page_token.
-	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// Opaque; from the previous ListStocksResponse.next_page_token. It carries
+	// the filters below: continuing it with different ones is INVALID_ARGUMENT.
+	PageToken string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// Only SKUs starting with this (case-sensitive); empty = every SKU.
+	SkuPrefix string `protobuf:"bytes,3,opt,name=sku_prefix,json=skuPrefix,proto3" json:"sku_prefix,omitempty"`
+	// Only SKUs with reserved > 0, i.e. ones pending orders currently hold.
+	OnlyReserved  bool `protobuf:"varint,4,opt,name=only_reserved,json=onlyReserved,proto3" json:"only_reserved,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -258,6 +263,20 @@ func (x *ListStocksRequest) GetPageToken() string {
 		return x.PageToken
 	}
 	return ""
+}
+
+func (x *ListStocksRequest) GetSkuPrefix() string {
+	if x != nil {
+		return x.SkuPrefix
+	}
+	return ""
+}
+
+func (x *ListStocksRequest) GetOnlyReserved() bool {
+	if x != nil {
+		return x.OnlyReserved
+	}
+	return false
 }
 
 type ListStocksResponse struct {
@@ -530,11 +549,14 @@ const file_inventory_v1_service_proto_rawDesc = "" +
 	"\x0fGetStockRequest\x12\x19\n" +
 	"\x03sku\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x03sku\"=\n" +
 	"\x10GetStockResponse\x12)\n" +
-	"\x05stock\x18\x01 \x01(\v2\x13.inventory.v1.StockR\x05stock\"X\n" +
+	"\x05stock\x18\x01 \x01(\v2\x13.inventory.v1.StockR\x05stock\"\xa5\x01\n" +
 	"\x11ListStocksRequest\x12$\n" +
 	"\tpage_size\x18\x01 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x02 \x01(\tR\tpageToken\"i\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\x12&\n" +
+	"\n" +
+	"sku_prefix\x18\x03 \x01(\tB\a\xbaH\x04r\x02\x18@R\tskuPrefix\x12#\n" +
+	"\ronly_reserved\x18\x04 \x01(\bR\fonlyReserved\"i\n" +
 	"\x12ListStocksResponse\x12+\n" +
 	"\x06stocks\x18\x01 \x03(\v2\x13.inventory.v1.StockR\x06stocks\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\";\n" +

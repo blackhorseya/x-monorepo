@@ -177,7 +177,18 @@ components:
         pageToken:
           type: string
           title: page_token
-          description: Opaque; from the previous ListStocksResponse.next_page_token.
+          description: |-
+            Opaque; from the previous ListStocksResponse.next_page_token. It carries
+             the filters below: continuing it with different ones is INVALID_ARGUMENT.
+        skuPrefix:
+          type: string
+          title: sku_prefix
+          maxLength: 64
+          description: Only SKUs starting with this (case-sensitive); empty = every SKU.
+        onlyReserved:
+          type: boolean
+          title: only_reserved
+          description: Only SKUs with reserved > 0, i.e. ones pending orders currently hold.
       title: ListStocksRequest
       additionalProperties: false
     inventory.v1.ListStocksResponse:
@@ -468,7 +479,9 @@ paths:
       tags:
         - inventory.v1.InventoryService
       summary: ListStocks
-      description: ListStocks pages through every SKU, ascending by SKU.
+      description: |-
+        ListStocks pages through SKUs ascending, optionally narrowed by prefix
+         and to SKUs with something reserved.
       operationId: inventory.v1.InventoryService.ListStocks
       parameters:
         - name: Connect-Protocol-Version

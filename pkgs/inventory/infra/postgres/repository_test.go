@@ -112,6 +112,27 @@ func TestRepositories_Postgres(t *testing.T) {
 	if err != nil || len(page) != 1 || page[0].SKU() != "C" || page[0].Version() != 1 || next != "" {
 		t.Fatalf("list page 2 = %v next=%q err=%v", page, next, err)
 	}
+	// Filters: prefix is a literal (LIKE wildcards escaped), reserved > 0.
+	for _, sku := range []string{"B_1", "B-1"} {
+		s, _ := stock.New(stock.SKU(sku), 2, now)
+		if sku == "B-1" {
+			if short := stock.ReserveAll(map[string]*stock.Stock{sku: s}, []string{sku}, map[string]int32{sku: 1}, now); short != nil {
+				t.Fatalf("reserve: short %v", short)
+			}
+		}
+		if err := stocks.Save(c, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if page, _, err := stocks.List(c, stock.ListParams{Limit: 10, SKUPrefix: "B_"}); err != nil || len(page) != 1 || page[0].SKU() != "B_1" {
+		t.Fatalf("prefix with _ = %v err=%v (must not match B-1)", page, err)
+	}
+	if page, next, err := stocks.List(c, stock.ListParams{Limit: 1, SKUPrefix: "B"}); err != nil || len(page) != 1 || page[0].SKU() != "B" || next != "B" {
+		t.Fatalf("prefix page 1 = %v next=%q err=%v", page, next, err)
+	}
+	if page, _, err := stocks.List(c, stock.ListParams{Limit: 10, OnlyReserved: true}); err != nil || len(page) != 1 || page[0].SKU() != "B-1" {
+		t.Fatalf("only reserved = %v err=%v", page, err)
+	}
 
 	// ── reservation: add, duplicate, round trip with shortfall, update ─────
 	line := func(sku string, qty int32) reservation.Line {

@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import type { Stock } from "@repo/proto/inventory/v1/entity_pb";
 import { Badge } from "@/components/ui/badge";
@@ -10,11 +11,21 @@ import { inventory } from "../client";
 import { keys, stocksQuery } from "../queries";
 import { ErrorAlert, Field } from "./orders";
 
+// prefix / reserved are search params (/stock?prefix=SKU-1&reserved=true), so
+// a filtered view is a shareable link, like /orders and /reservations.
+export type StockSearch = { prefix?: string; reserved?: boolean };
+
 export function StockPage() {
   const qc = useQueryClient();
+  const search = useSearch({ from: "/stock" });
+  const navigate = useNavigate({ from: "/stock" });
+  const prefix = search.prefix ?? "";
+  const onlyReserved = search.reserved ?? false;
+  const [prefixInput, setPrefixInput] = useState(prefix);
+  const setSearch = (patch: Partial<StockSearch>) => void navigate({ search: (prev) => ({ ...prev, ...patch }) });
   const [sku, setSku] = useState("SKU-1");
   const [onHand, setOnHand] = useState(10);
-  const list = useInfiniteQuery(stocksQuery);
+  const list = useInfiniteQuery(stocksQuery(prefix, onlyReserved));
   const stocks = list.data?.pages.flatMap((p) => p.stocks) ?? [];
 
   const set = useMutation({
@@ -51,9 +62,41 @@ export function StockPage() {
       <Card>
         <CardHeader>
           <CardTitle>Stock</CardTitle>
-          <CardDescription>Every SKU, ascending, refreshed every 2s.</CardDescription>
+          <CardDescription>SKUs ascending, refreshed every 2s; narrow by prefix or to what pending orders hold.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
+          <div className="flex flex-wrap items-end gap-4">
+            <form
+              className="flex items-end gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setSearch({ prefix: prefixInput.trim() || undefined });
+              }}
+            >
+              <Field label="SKU prefix" className="w-40">
+                <Input value={prefixInput} placeholder="SKU-" onChange={(e) => setPrefixInput(e.target.value)} />
+              </Field>
+              <Button type="submit" variant="secondary" size="sm">
+                Filter
+              </Button>
+              {prefix !== "" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setPrefixInput("");
+                    setSearch({ prefix: undefined });
+                  }}
+                >
+                  Clear
+                </Button>
+              )}
+            </form>
+            <Button size="sm" variant={onlyReserved ? "default" : "outline"} onClick={() => setSearch({ reserved: onlyReserved ? undefined : true })}>
+              Reserved only
+            </Button>
+          </div>
           {list.isError && <ErrorAlert error={list.error} />}
           <Table>
             <TableHeader>
@@ -80,7 +123,7 @@ export function StockPage() {
               {list.isSuccess && stocks.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No stock yet — set one above.
+                    {prefix !== "" || onlyReserved ? "No SKU matches the filter." : "No stock yet — set one above."}
                   </TableCell>
                 </TableRow>
               )}

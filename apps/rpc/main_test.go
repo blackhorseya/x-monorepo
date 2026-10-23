@@ -171,6 +171,14 @@ func TestOrderService_E2E(t *testing.T) {
 	if err != nil || len(list.Msg.GetStocks()) != 1 || list.Msg.GetStocks()[0].GetSku() != "SKU-1" || list.Msg.GetNextPageToken() != "" {
 		t.Fatalf("ListStocks page 2: %v, %v", list, err)
 	}
+	list, err = inv.ListStocks(c, connect.NewRequest(&inventoryv1.ListStocksRequest{SkuPrefix: "SKU-1"}))
+	if err != nil || len(list.Msg.GetStocks()) != 1 || list.Msg.GetStocks()[0].GetSku() != "SKU-1" {
+		t.Fatalf("ListStocks by prefix: %v, %v", list, err)
+	}
+	list, err = inv.ListStocks(c, connect.NewRequest(&inventoryv1.ListStocksRequest{OnlyReserved: true}))
+	if err != nil || len(list.Msg.GetStocks()) != 0 {
+		t.Fatalf("ListStocks only reserved without a worker: %v, %v", list, err)
+	}
 	_, err = inv.GetReservation(c, connect.NewRequest(&inventoryv1.GetReservationRequest{OrderId: o.GetId()}))
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound || ce.Meta().Get("x-error-code") != "reservation.not_found" {
 		t.Fatalf("GetReservation without a worker: err = %v", err)
@@ -207,7 +215,7 @@ func TestOrderService_E2E(t *testing.T) {
 		`usecase_duration_seconds_count{kind="ok",usecase="ordering.list_orders"} 3`,
 		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.list_orders"} 1`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.set_stock"} 2`,
-		`usecase_duration_seconds_count{kind="ok",usecase="inventory.list_stocks"} 2`,
+		`usecase_duration_seconds_count{kind="ok",usecase="inventory.list_stocks"} 4`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.get_stock"} 1`,
 		`usecase_duration_seconds_count{kind="not_found",usecase="inventory.get_reservation"} 1`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.list_reservations"} 1`,

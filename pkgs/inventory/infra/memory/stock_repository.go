@@ -6,6 +6,7 @@ package memory
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
@@ -78,8 +79,8 @@ func (i *StockRepository) List(c context.Context, p stock.ListParams) ([]*stock.
 	defer i.mu.RUnlock()
 
 	skus := make([]stock.SKU, 0, len(i.data))
-	for sku := range i.data {
-		if sku > p.After {
+	for sku, s := range i.data {
+		if sku > p.After && strings.HasPrefix(sku.String(), p.SKUPrefix) && (!p.OnlyReserved || s.Reserved() > 0) {
 			skus = append(skus, sku)
 		}
 	}
