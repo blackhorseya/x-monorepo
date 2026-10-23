@@ -1,5 +1,6 @@
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import type { PoisonMessage } from "@repo/proto/admin/v1/service_pb";
 import { Badge } from "@/components/ui/badge";
@@ -107,7 +108,9 @@ function PoisonRow({ message: m, onShow }: { message: PoisonMessage; onShow: () 
     <TableRow>
       <TableCell className="font-mono text-xs">{String(m.offset)}</TableCell>
       <TableCell>
-        <Badge variant="secondary">{m.boundedContext}</Badge>
+        <Link to="/prune" search={{ bc: m.boundedContext }} title={`Prune ${m.boundedContext} (dry run first)`}>
+          <Badge variant="secondary">{m.boundedContext}</Badge>
+        </Link>
       </TableCell>
       <TableCell className="whitespace-nowrap text-xs">{m.parkedAt ? timestampDate(m.parkedAt).toLocaleString() : ""}</TableCell>
       <TableCell className="font-mono text-xs">{m.topic}</TableCell>

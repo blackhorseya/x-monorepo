@@ -197,7 +197,8 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   改過名的 `worker.consumer_group`、broker 改 redis 前的 BC group）用 `--forget-group <name>` 先刪掉它的 cursor（真回來就當新 group，照 `worker.start_from`）。
   poison 表不在此列（`poison drop` 才是）；redis stream 的修剪是 Redis 端的 XTRIM 政策。先 `--dry-run` 看數字再跑。
   同一件事也有 RPC：`AdminService.Prune`（`older_than` / `dry_run` / `unconsumed` / `forget_groups` / `batch_size`，回每張表的列數、skipped 原因、
-  擋住的 group），console 的 **Prune** 頁就是打它——alert 響了之後不用進 pod：dry run 看 NOTE、填 forget、再跑。它跑在 `http.timeout` 底下，
+  擋住的 group），console 的 **Prune** 頁就是打它——alert 響了之後不用進 pod：dry run 看 NOTE、填 forget、再跑；
+bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`，Poison 頁的 BC badge 與 alert 說明都連過來），dry run 永遠從開著開始。它跑在 `http.timeout` 底下，
   所以是 dry-run / forget-group / 例行小量的入口；第一次清大 backlog 用 CLI / CronJob（逾時只是回應掉了，已刪的 batch 都已 commit，重跑無害）。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
