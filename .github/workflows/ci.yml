@@ -103,7 +103,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with: { tools: "true" }   # kubeconform lives in ./bin
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with: { version: v4.3.0 }
       - run: task helm-check
 
@@ -139,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with: { version: v4.3.0 }
       - uses: helm/kind-action@v1
         with: { version: v0.33.0, install_only: true }
