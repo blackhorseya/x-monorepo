@@ -14,6 +14,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
@@ -228,7 +229,7 @@ func addForwarders(
 // observed when it returns, so a stopped worker does not keep querying the
 // stores.
 func (w *Worker) Run(c context.Context) error {
-	w.logger.Info("worker started")
+	w.logger.Info("worker started", buildinfo.Get().LogAttrs()...)
 	defer w.logger.Info("worker stopped")
 	defer func() { _ = w.lag.Unregister() }()
 

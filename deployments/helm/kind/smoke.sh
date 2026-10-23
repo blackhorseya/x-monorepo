@@ -11,6 +11,7 @@ pf=$!
 trap 'kill $pf 2>/dev/null || true' EXIT
 for _ in $(seq 1 30); do curl -fsS "$api/readyz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "$api/readyz" >/dev/null || { echo "smoke: /api/readyz never answered 200"; exit 1; }
+echo "smoke: running $(curl -fsS "$api/version")"
 
 rpc() { curl -fsS -H 'Content-Type: application/json' "$api/$1" -d "$2"; }
 sku="kind-$(date +%s)"
