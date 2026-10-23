@@ -42,7 +42,8 @@ TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
 ```
 
 前端：`web/` 是 Turborepo（pnpm）。`packages/proto` 是 connect-es client（`task gen-ts` 需要網路，產出到那裡）；
-`apps/console` 是 Vite + TanStack Router / Query + Tailwind v4 + shadcn/ui，`task web-dev`（proxy 到 :8080）/ `task web-typecheck` / `task web-build`。
+`apps/console` 是 Vite + TanStack Router / Query + Tailwind v4 + shadcn/ui，`task web-dev`（proxy 到 :8080）/ `task web-typecheck` / `task web-build` /
+`task web-e2e`（Playwright：`web/apps/console/e2e`，起一個無 DB 的 `bin/rpc` + vite preview 真打；locator 用 `getByLabel` / `getByRole`，第一次先 `pnpm exec playwright install chromium`）。
 shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` import 要確認是 `@/lib/utils`。
 
 **新 clone / 新 worktree 第一件事**：`task tools`。`./bin` 是 gitignored，而 `task gen`（也被 `gate-local` 間接呼叫）會**先刪掉**

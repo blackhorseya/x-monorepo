@@ -181,6 +181,30 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: task web-typecheck web-build
 
+  # ── console-e2e: the built console driven by Playwright against a real bin/rpc (in-memory) ──
+  console-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - uses: pnpm/action-setup@v6
+        with: { package_json_file: web/package.json }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: task build web-install
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web/apps/console
+      - run: task web-e2e
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: web/apps/console/playwright-report
+          retention-days: 7
+
   breaking:
     runs-on: ubuntu-latest
     continue-on-error: true
