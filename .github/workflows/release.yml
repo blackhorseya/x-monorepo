@@ -9,7 +9,7 @@ run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 # Nothing deploys. workflow_dispatch re-runs the whole chain for the current main HEAD.
 #
 # workflow_run has no paths-ignore, so `prepare` gates by hand: diff the commit against the last
-# published tag and skip the whole chain when only docs / web / CI config / tests changed. The
+# published tag (scripts/releasable.sh) and skip the whole chain when nothing shipped changed. The
 # diff base is the last tag, not the parent commit — ci.yml cancels in-progress main runs, so two
 # quick merges fire release once, for the second head, and it must still see the first's changes.
 #
@@ -64,13 +64,9 @@ jobs:
             echo "no previous tag reachable from \`$HEAD_SHA\`: releasing" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # Paths that change no shipped artifact. Pathspec `*` crosses `/`, so `*.md` is any depth.
-          # README.md / LICENSE are packed into the archives but a stale copy there is acceptable.
-          releasable() {
-            git diff --name-only "$base" "$HEAD_SHA" -- . \
-              ':!*.md' ':!docs' ':!web' ':!.github' ':!.claude' ':!.idea' ':!deployments/helm' \
-              ':!lefthook.yml' ':!.golangci.yml' ':!*_test.go' ':!testdata' ':!tests'
-          }
+          # scripts/releasable.sh owns the list of paths that change no shipped artifact;
+          # `task release-gate` runs the same script locally.
+          releasable() { scripts/releasable.sh "$base" "$HEAD_SHA"; }
           if [ -z "$(releasable)" ]; then
             echo "release=false" >> "$GITHUB_OUTPUT"
             echo "## skipped: nothing releasable since $base" >> "$GITHUB_STEP_SUMMARY"
