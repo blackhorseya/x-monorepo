@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1/inventoryv1connect"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -44,6 +47,16 @@ func TestOrderService_E2E(t *testing.T) {
 		}
 		_ = res.Body.Close()
 	}
+	// /api/version: the stamped identity (a test binary is "dev") and the Go runtime.
+	vres, err := http.Get(ts.URL + server.VersionPath)
+	if err != nil || vres.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %v, %v", server.VersionPath, vres, err)
+	}
+	var info buildinfo.Info
+	if err := json.NewDecoder(vres.Body).Decode(&info); err != nil || info.Version != "dev" || info.Go != runtime.Version() {
+		t.Fatalf("version = %+v, %v", info, err)
+	}
+	_ = vres.Body.Close()
 
 	client := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
 	c := context.Background()

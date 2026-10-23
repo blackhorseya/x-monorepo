@@ -23,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 )
@@ -140,6 +141,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	hp := &health{checks: checks}
 	engine.GET(HealthzPath, hp.live)
 	engine.GET(ReadyzPath, hp.ready)
+	engine.GET(VersionPath, hp.version)
 	engine.GET(MetricsPath, gin.WrapH(tel.MetricsHandler))
 	if cfg.Docs {
 		mountDocs(engine, docs)
@@ -178,7 +180,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 func untracedByGin(prefixes []string) func(*gin.Context) bool {
 	return func(c *gin.Context) bool {
 		path := c.Request.URL.Path
-		if path == HealthzPath || path == ReadyzPath || path == MetricsPath {
+		if path == HealthzPath || path == ReadyzPath || path == VersionPath || path == MetricsPath {
 			return false
 		}
 		for _, p := range prefixes {
@@ -218,7 +220,7 @@ func (s *Server) Run(c context.Context) error {
 func (s *Server) Serve(c context.Context, ln net.Listener) error {
 	errCh := make(chan error, 1)
 	go func() {
-		s.logger.Info("server listening", "addr", ln.Addr().String())
+		s.logger.Info("server listening", append([]any{"addr", ln.Addr().String()}, buildinfo.Get().LogAttrs()...)...)
 		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

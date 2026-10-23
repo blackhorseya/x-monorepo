@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 )
 
 // Probe paths. Liveness answers "is the process alive" and never looks at
@@ -16,6 +18,7 @@ import (
 const (
 	HealthzPath = "/api/healthz" // liveness
 	ReadyzPath  = "/api/readyz"  // readiness
+	VersionPath = "/api/version" // buildinfo of the running binary
 )
 
 // Check is one readiness dependency: Probe returns nil when it can serve.
@@ -39,6 +42,11 @@ type health struct {
 }
 
 func (h *health) live(c *gin.Context) { c.Status(http.StatusOK) }
+
+// version answers what is running: the stamped release / commit / date and the
+// Go runtime. Unauthenticated like the probes, so a kubectl port-forward or
+// the ingress tells you which build a pod is without reading its labels.
+func (h *health) version(c *gin.Context) { c.JSON(http.StatusOK, buildinfo.Get()) }
 
 // ready runs every check and reports each by name: 200 when all pass,
 // 503 with the failing ones' errors otherwise (or "draining" at shutdown).

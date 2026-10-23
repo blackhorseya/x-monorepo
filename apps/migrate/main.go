@@ -25,6 +25,7 @@ import (
 
 	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
@@ -59,6 +60,7 @@ func run(args []string) error {
 func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "migrate",
+		Version:       buildinfo.Get().String(),
 		Short:         "apply every bounded context's Postgres migrations",
 		Long:          "migrate runs each bounded context's embedded migrations against postgres.url, one schema and version table per BC. Services never migrate on start: run `migrate up` before rolling them out.",
 		SilenceUsage:  true, // a failing migration is not a usage error

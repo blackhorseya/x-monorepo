@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
 
@@ -49,6 +50,7 @@ func run(args []string) error {
 func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "worker",
+		Version:       buildinfo.Get().String(),
 		Short:         "event consumers of every bounded context",
 		Long:          "worker runs each bounded context's event handlers on one router (no subcommand) and operates their poison queues (poison) and retention (prune).",
 		SilenceUsage:  true, // a failing worker is not a usage error
