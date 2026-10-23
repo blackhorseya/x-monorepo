@@ -339,6 +339,10 @@ tasks:
     desc: 'dry-run release into bin/dist: every binary + archive, no images (needs docker buildx), no publish'
     cmds: ["goreleaser release --snapshot --clean --skip=docker,publish"]
 
+  release-gate:
+    desc: 'what release.yml would ship: files changed since the last v* tag that reach an artifact (empty = merging this cuts no version)'
+    cmds: ['scripts/releasable.sh {{.CLI_ARGS}}']
+
   run:
     desc: 'build and run ./bin/rpc with configs/local.yaml (gitignored; seeded from the example); task run CONFIG=<file> to use another'
     deps: [build, config]

@@ -463,8 +463,9 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 **每次 CI 在 main 上綠就是一版**，沒有人手動打 tag（`.github/workflows/release.yml`，`workflow_run` 掛在 ci 後面；
 `workflow_dispatch` 可對目前 main HEAD 重跑）。`workflow_run` 沒有 `paths-ignore`，所以 prepare 先自己 gate：拿該 commit 和
 **上一個 tag** 做 diff（不是 parent commit——ci 對 main 是 cancel-in-progress，連續兩次 merge 只會觸發一次 release），
-只動到 `*.md`、`docs/`、`web/`、`.github/`、`.claude/`、`deployments/helm/`、`tests/`、`lefthook.yml`、`.golangci.yml`、`*_test.go`、`testdata/` 就整條跳過
-（step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。`workflow_dispatch` 不過 gate：
+沒有任何檔案會進到 archive / image 就整條跳過（排除清單在 `scripts/releasable.sh`：docs、`web/`、CI / hook / lint / `Taskfile.yml`、
+`scripts/`、Helm chart、kind / compose 開發環境、tests 與 test-only 套件；step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。
+`task release-gate` 在本機跑同一個腳本，merge 前就知道會不會發版。`workflow_dispatch` 不過 gate：
 
 | job | 做什麼 |
 |---|---|
