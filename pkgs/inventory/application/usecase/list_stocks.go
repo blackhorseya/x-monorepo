@@ -16,17 +16,22 @@ const (
 	MaxPageSize     = 100
 )
 
-// ListStocks pages through every SKU ascending. The page token is minted and
-// verified here (platform/pagination), so every adapter shares one contract.
+// ListStocks pages through SKUs ascending, optionally by prefix and only the
+// reserved ones. The page token is minted and verified here
+// (platform/pagination), so every adapter shares one contract; it carries the
+// filters it was minted with, so a page cannot be continued under others.
 type ListStocks struct {
 	stocks stock.Repository
 }
 
 func NewListStocks(stocks stock.Repository) *ListStocks { return &ListStocks{stocks: stocks} }
 
-// pageToken is the payload behind the opaque token: the last SKU of the page.
+// pageToken is the payload behind the opaque token: the last SKU of the page
+// and the filters that produced it.
 type pageToken struct {
-	SKU string `json:"sku"`
+	SKU          string `json:"sku"`
+	Prefix       string `json:"p,omitempty"`
+	OnlyReserved bool   `json:"r,omitempty"`
 }
 
 func (uc *ListStocks) Execute(c context.Context, in dto.ListStocksInput) (*dto.ListStocksOutput, error) {
@@ -36,13 +41,13 @@ func (uc *ListStocks) Execute(c context.Context, in dto.ListStocksInput) (*dto.L
 	if err != nil {
 		return nil, err
 	}
-	params := stock.ListParams{Limit: limit}
+	params := stock.ListParams{Limit: limit, SKUPrefix: in.SKUPrefix, OnlyReserved: in.OnlyReserved}
 	if in.PageToken != "" {
 		var tok pageToken
 		if err := pagination.DecodeToken(in.PageToken, &tok); err != nil {
 			return nil, err
 		}
-		if tok.SKU == "" {
+		if tok.SKU == "" || tok.Prefix != in.SKUPrefix || tok.OnlyReserved != in.OnlyReserved {
 			return nil, pagination.ErrInvalidToken
 		}
 		params.After = stock.SKU(tok.SKU)
@@ -57,7 +62,7 @@ func (uc *ListStocks) Execute(c context.Context, in dto.ListStocksInput) (*dto.L
 		out.Stocks = append(out.Stocks, *mapper.ToStockOutput(s))
 	}
 	if next != "" {
-		if out.NextPageToken, err = pagination.EncodeToken(pageToken{SKU: next.String()}); err != nil {
+		if out.NextPageToken, err = pagination.EncodeToken(pageToken{SKU: next.String(), Prefix: in.SKUPrefix, OnlyReserved: in.OnlyReserved}); err != nil {
 			return nil, err
 		}
 	}

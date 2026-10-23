@@ -56,7 +56,8 @@ type InventoryServiceClient interface {
 	// Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
 	SetStock(context.Context, *connect.Request[v1.SetStockRequest]) (*connect.Response[v1.SetStockResponse], error)
 	GetStock(context.Context, *connect.Request[v1.GetStockRequest]) (*connect.Response[v1.GetStockResponse], error)
-	// ListStocks pages through every SKU, ascending by SKU.
+	// ListStocks pages through SKUs ascending, optionally narrowed by prefix
+	// and to SKUs with something reserved.
 	ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error)
 	// GetReservation reads the outcome inventory recorded for an order.
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
@@ -148,7 +149,8 @@ type InventoryServiceHandler interface {
 	// Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
 	SetStock(context.Context, *connect.Request[v1.SetStockRequest]) (*connect.Response[v1.SetStockResponse], error)
 	GetStock(context.Context, *connect.Request[v1.GetStockRequest]) (*connect.Response[v1.GetStockResponse], error)
-	// ListStocks pages through every SKU, ascending by SKU.
+	// ListStocks pages through SKUs ascending, optionally narrowed by prefix
+	// and to SKUs with something reserved.
 	ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error)
 	// GetReservation reads the outcome inventory recorded for an order.
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)

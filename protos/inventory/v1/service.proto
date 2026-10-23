@@ -13,7 +13,8 @@ service InventoryService {
   // Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
   rpc SetStock(SetStockRequest) returns (SetStockResponse);
   rpc GetStock(GetStockRequest) returns (GetStockResponse);
-  // ListStocks pages through every SKU, ascending by SKU.
+  // ListStocks pages through SKUs ascending, optionally narrowed by prefix
+  // and to SKUs with something reserved.
   rpc ListStocks(ListStocksRequest) returns (ListStocksResponse);
   // GetReservation reads the outcome inventory recorded for an order.
   rpc GetReservation(GetReservationRequest) returns (GetReservationResponse);
@@ -41,8 +42,13 @@ message GetStockResponse {
 message ListStocksRequest {
   // 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
   int32 page_size = 1 [(buf.validate.field).int32.gte = 0];
-  // Opaque; from the previous ListStocksResponse.next_page_token.
+  // Opaque; from the previous ListStocksResponse.next_page_token. It carries
+  // the filters below: continuing it with different ones is INVALID_ARGUMENT.
   string page_token = 2;
+  // Only SKUs starting with this (case-sensitive); empty = every SKU.
+  string sku_prefix = 3 [(buf.validate.field).string.max_len = 64];
+  // Only SKUs with reserved > 0, i.e. ones pending orders currently hold.
+  bool only_reserved = 4;
 }
 
 message ListStocksResponse {

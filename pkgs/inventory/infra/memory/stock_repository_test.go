@@ -73,4 +73,21 @@ func TestStockRepository_List(t *testing.T) {
 	if got, _ := repo.FindBySKU(c, "C"); got.OnHand() != 1 {
 		t.Fatal("List returned an alias of the stored aggregate")
 	}
+	// Filters compose with the keyset: prefix, reserved > 0, and both.
+	held, _ := stock.New("BA", 2, now)
+	if short := stock.ReserveAll(map[string]*stock.Stock{"BA": held}, []string{"BA"}, map[string]int32{"BA": 1}, now); short != nil {
+		t.Fatalf("reserve: short %v", short)
+	}
+	if err := repo.Save(c, held); err != nil {
+		t.Fatal(err)
+	}
+	if page, next, err := repo.List(c, stock.ListParams{Limit: 10, SKUPrefix: "B"}); err != nil || len(page) != 2 || page[0].SKU() != "B" || page[1].SKU() != "BA" || next != "" {
+		t.Fatalf("prefix = %v next=%q err=%v", page, next, err)
+	}
+	if page, _, err := repo.List(c, stock.ListParams{Limit: 10, OnlyReserved: true}); err != nil || len(page) != 1 || page[0].SKU() != "BA" {
+		t.Fatalf("only reserved = %v err=%v", page, err)
+	}
+	if page, _, err := repo.List(c, stock.ListParams{Limit: 10, SKUPrefix: "A", OnlyReserved: true}); err != nil || len(page) != 0 {
+		t.Fatalf("prefix + reserved = %v err=%v", page, err)
+	}
 }

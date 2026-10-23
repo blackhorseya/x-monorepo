@@ -114,6 +114,35 @@ func TestListStocks(t *testing.T) {
 	if _, err := f.listStocks.Execute(c, dto.ListStocksInput{PageSize: -1}); err == nil {
 		t.Fatal("negative page size must fail")
 	}
+
+	// Filters: prefix and only-reserved narrow the listing, and a token minted
+	// under one filter does not continue under another.
+	for _, sku := range []string{"AB", "AC"} {
+		if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: sku, OnHand: 3}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.reserve.Execute(c, dto.ReserveStockInput{OrderID: "o-list", Lines: []dto.Line{{SKU: "AC", Quantity: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	byPrefix, err := f.listStocks.Execute(c, dto.ListStocksInput{SKUPrefix: "A", PageSize: 2})
+	if err != nil || len(byPrefix.Stocks) != 2 || byPrefix.Stocks[0].SKU != "A" || byPrefix.Stocks[1].SKU != "AB" || byPrefix.NextPageToken == "" {
+		t.Fatalf("prefix page 1 = %+v, %v", byPrefix, err)
+	}
+	rest, err := f.listStocks.Execute(c, dto.ListStocksInput{SKUPrefix: "A", PageSize: 2, PageToken: byPrefix.NextPageToken})
+	if err != nil || len(rest.Stocks) != 1 || rest.Stocks[0].SKU != "AC" || rest.NextPageToken != "" {
+		t.Fatalf("prefix page 2 = %+v, %v", rest, err)
+	}
+	if _, err := f.listStocks.Execute(c, dto.ListStocksInput{PageSize: 2, PageToken: byPrefix.NextPageToken}); !errors.Is(err, pagination.ErrInvalidToken) {
+		t.Fatalf("token under another filter: %v", err)
+	}
+	reserved, err := f.listStocks.Execute(c, dto.ListStocksInput{OnlyReserved: true})
+	if err != nil || len(reserved.Stocks) != 1 || reserved.Stocks[0].SKU != "AC" || reserved.Stocks[0].Reserved != 1 {
+		t.Fatalf("only reserved = %+v, %v", reserved, err)
+	}
+	if none, err := f.listStocks.Execute(c, dto.ListStocksInput{SKUPrefix: "Z", OnlyReserved: true}); err != nil || len(none.Stocks) != 0 {
+		t.Fatalf("no match = %+v, %v", none, err)
+	}
 }
 
 func TestReserveRelease(t *testing.T) {

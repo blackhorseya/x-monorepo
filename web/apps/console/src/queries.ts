@@ -13,6 +13,7 @@ export const keys = {
   ordersPage: (customerId: string, status: OrderStatus) => ["orders", customerId, status] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
   stocks: ["stocks"] as const,
+  stocksPage: (skuPrefix: string, onlyReserved: boolean) => ["stocks", skuPrefix, onlyReserved] as const,
   reservations: (status: ReservationStatus) => ["reservations", status] as const,
   poison: ["poison"] as const,
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
@@ -50,15 +51,18 @@ export const reservationQuery = (orderId: string) =>
     },
   });
 
-// Every SKU, ascending, 20 per page; the worker moves reserved / available
-// as orders come and go, so the loaded pages are polled.
-export const stocksQuery = infiniteQueryOptions({
-  queryKey: keys.stocks,
-  queryFn: async ({ pageParam }) => inventory.listStocks({ pageSize: 20, pageToken: pageParam }),
-  initialPageParam: "",
-  getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
-  refetchInterval: POLL_MS,
-});
+// SKUs ascending, 20 per page, by prefix (empty = every SKU) and optionally
+// only the ones with something reserved; the worker moves reserved / available
+// as orders come and go, so the loaded pages are polled. The key starts with
+// keys.stocks so Set stock invalidates every filter.
+export const stocksQuery = (skuPrefix: string, onlyReserved: boolean) =>
+  infiniteQueryOptions({
+    queryKey: keys.stocksPage(skuPrefix, onlyReserved),
+    queryFn: async ({ pageParam }) => inventory.listStocks({ skuPrefix, onlyReserved, pageSize: 20, pageToken: pageParam }),
+    initialPageParam: "",
+    getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
+    refetchInterval: POLL_MS,
+  });
 
 // Reservations newest first, 20 per page, optionally one status (UNSPECIFIED =
 // any); RESERVED rows can still be released by the worker, so loaded pages poll.

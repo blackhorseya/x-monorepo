@@ -82,7 +82,10 @@ func (h *InventoryService) ListStocks(
 	c context.Context,
 	req *connect.Request[inventoryv1.ListStocksRequest],
 ) (*connect.Response[inventoryv1.ListStocksResponse], error) {
-	out, err := h.listStocks.Execute(c, dto.ListStocksInput{PageSize: req.Msg.GetPageSize(), PageToken: req.Msg.GetPageToken()})
+	out, err := h.listStocks.Execute(c, dto.ListStocksInput{
+		PageSize: req.Msg.GetPageSize(), PageToken: req.Msg.GetPageToken(),
+		SKUPrefix: req.Msg.GetSkuPrefix(), OnlyReserved: req.Msg.GetOnlyReserved(),
+	})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}

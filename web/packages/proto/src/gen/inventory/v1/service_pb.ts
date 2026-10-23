@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file inventory/v1/service.proto.
  */
 export const file_inventory_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJDChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCSJSChJMaXN0U3RvY2tzUmVzcG9uc2USIwoGc3RvY2tzGAEgAygLMhMuaW52ZW50b3J5LnYxLlN0b2NrEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCSIyChVHZXRSZXNlcnZhdGlvblJlcXVlc3QSGQoIb3JkZXJfaWQYASABKAlCB7pIBHICEAEiSAoWR2V0UmVzZXJ2YXRpb25SZXNwb25zZRIuCgtyZXNlcnZhdGlvbhgBIAEoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbiJ6ChdMaXN0UmVzZXJ2YXRpb25zUmVxdWVzdBIvCgZzdGF0dXMYASABKA4yHy5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb25TdGF0dXMSGgoJcGFnZV9zaXplGAIgASgFQge6SAQaAigAEhIKCnBhZ2VfdG9rZW4YAyABKAkiZAoYTGlzdFJlc2VydmF0aW9uc1Jlc3BvbnNlEi8KDHJlc2VydmF0aW9ucxgBIAMoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbhIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkyuQMKEEludmVudG9yeVNlcnZpY2USSQoIU2V0U3RvY2sSHS5pbnZlbnRvcnkudjEuU2V0U3RvY2tSZXF1ZXN0Gh4uaW52ZW50b3J5LnYxLlNldFN0b2NrUmVzcG9uc2USSQoIR2V0U3RvY2sSHS5pbnZlbnRvcnkudjEuR2V0U3RvY2tSZXF1ZXN0Gh4uaW52ZW50b3J5LnYxLkdldFN0b2NrUmVzcG9uc2USTwoKTGlzdFN0b2NrcxIfLmludmVudG9yeS52MS5MaXN0U3RvY2tzUmVxdWVzdBogLmludmVudG9yeS52MS5MaXN0U3RvY2tzUmVzcG9uc2USWwoOR2V0UmVzZXJ2YXRpb24SIy5pbnZlbnRvcnkudjEuR2V0UmVzZXJ2YXRpb25SZXF1ZXN0GiQuaW52ZW50b3J5LnYxLkdldFJlc2VydmF0aW9uUmVzcG9uc2USYQoQTGlzdFJlc2VydmF0aW9ucxIlLmludmVudG9yeS52MS5MaXN0UmVzZXJ2YXRpb25zUmVxdWVzdBomLmludmVudG9yeS52MS5MaXN0UmVzZXJ2YXRpb25zUmVzcG9uc2ViBnByb3RvMw", [file_buf_validate_validate, file_inventory_v1_entity]);
+  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJ3ChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCRIbCgpza3VfcHJlZml4GAMgASgJQge6SARyAhhAEhUKDW9ubHlfcmVzZXJ2ZWQYBCABKAgiUgoSTGlzdFN0b2Nrc1Jlc3BvbnNlEiMKBnN0b2NrcxgBIAMoCzITLmludmVudG9yeS52MS5TdG9jaxIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiMgoVR2V0UmVzZXJ2YXRpb25SZXF1ZXN0EhkKCG9yZGVyX2lkGAEgASgJQge6SARyAhABIkgKFkdldFJlc2VydmF0aW9uUmVzcG9uc2USLgoLcmVzZXJ2YXRpb24YASABKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24iegoXTGlzdFJlc2VydmF0aW9uc1JlcXVlc3QSLwoGc3RhdHVzGAEgASgOMh8uaW52ZW50b3J5LnYxLlJlc2VydmF0aW9uU3RhdHVzEhoKCXBhZ2Vfc2l6ZRgCIAEoBUIHukgEGgIoABISCgpwYWdlX3Rva2VuGAMgASgJImQKGExpc3RSZXNlcnZhdGlvbnNSZXNwb25zZRIvCgxyZXNlcnZhdGlvbnMYASADKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24SFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJMrkDChBJbnZlbnRvcnlTZXJ2aWNlEkkKCFNldFN0b2NrEh0uaW52ZW50b3J5LnYxLlNldFN0b2NrUmVxdWVzdBoeLmludmVudG9yeS52MS5TZXRTdG9ja1Jlc3BvbnNlEkkKCEdldFN0b2NrEh0uaW52ZW50b3J5LnYxLkdldFN0b2NrUmVxdWVzdBoeLmludmVudG9yeS52MS5HZXRTdG9ja1Jlc3BvbnNlEk8KCkxpc3RTdG9ja3MSHy5pbnZlbnRvcnkudjEuTGlzdFN0b2Nrc1JlcXVlc3QaIC5pbnZlbnRvcnkudjEuTGlzdFN0b2Nrc1Jlc3BvbnNlElsKDkdldFJlc2VydmF0aW9uEiMuaW52ZW50b3J5LnYxLkdldFJlc2VydmF0aW9uUmVxdWVzdBokLmludmVudG9yeS52MS5HZXRSZXNlcnZhdGlvblJlc3BvbnNlEmEKEExpc3RSZXNlcnZhdGlvbnMSJS5pbnZlbnRvcnkudjEuTGlzdFJlc2VydmF0aW9uc1JlcXVlc3QaJi5pbnZlbnRvcnkudjEuTGlzdFJlc2VydmF0aW9uc1Jlc3BvbnNlYgZwcm90bzM", [file_buf_validate_validate, file_inventory_v1_entity]);
 
 /**
  * @generated from message inventory.v1.SetStockRequest
@@ -100,11 +100,26 @@ export type ListStocksRequest = Message<"inventory.v1.ListStocksRequest"> & {
   pageSize: number;
 
   /**
-   * Opaque; from the previous ListStocksResponse.next_page_token.
+   * Opaque; from the previous ListStocksResponse.next_page_token. It carries
+   * the filters below: continuing it with different ones is INVALID_ARGUMENT.
    *
    * @generated from field: string page_token = 2;
    */
   pageToken: string;
+
+  /**
+   * Only SKUs starting with this (case-sensitive); empty = every SKU.
+   *
+   * @generated from field: string sku_prefix = 3;
+   */
+  skuPrefix: string;
+
+  /**
+   * Only SKUs with reserved > 0, i.e. ones pending orders currently hold.
+   *
+   * @generated from field: bool only_reserved = 4;
+   */
+  onlyReserved: boolean;
 };
 
 /**
@@ -257,7 +272,8 @@ export const InventoryService: GenService<{
     output: typeof GetStockResponseSchema;
   },
   /**
-   * ListStocks pages through every SKU, ascending by SKU.
+   * ListStocks pages through SKUs ascending, optionally narrowed by prefix
+   * and to SKUs with something reserved.
    *
    * @generated from rpc inventory.v1.InventoryService.ListStocks
    */

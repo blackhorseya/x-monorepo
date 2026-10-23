@@ -53,8 +53,10 @@ type ListReservationsOutput struct {
 }
 
 type ListStocksInput struct {
-	PageSize  int32  // 0 = default
-	PageToken string // "" = first page
+	PageSize     int32  // 0 = default
+	PageToken    string // "" = first page; carries the filters it was minted with
+	SKUPrefix    string // "" = every SKU
+	OnlyReserved bool   // only SKUs with reserved > 0
 }
 
 type ListStocksOutput struct {

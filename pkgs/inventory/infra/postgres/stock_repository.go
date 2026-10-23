@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -54,6 +55,9 @@ func (i *StockRepository) FindBySKU(c context.Context, sku stock.SKU) (*stock.St
 	})
 }
 
+// likeEscape turns a literal string into a LIKE pattern fragment (ESCAPE '\').
+var likeEscape = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
 func (i *StockRepository) List(c context.Context, p stock.ListParams) ([]*stock.Stock, stock.SKU, error) {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
@@ -63,6 +67,13 @@ func (i *StockRepository) List(c context.Context, p stock.ListParams) ([]*stock.
 	q := platformpg.TxOrDB(ctx, i.db).Order("sku ASC")
 	if p.After != "" {
 		q = q.Where("sku > ?", p.After.String())
+	}
+	if p.SKUPrefix != "" {
+		// Literal prefix: escape LIKE's wildcards so "SKU_1" does not match "SKU-1".
+		q = q.Where("sku LIKE ? ESCAPE '\\'", likeEscape.Replace(p.SKUPrefix)+"%")
+	}
+	if p.OnlyReserved {
+		q = q.Where("reserved > 0")
 	}
 	if p.Limit > 0 {
 		q = q.Limit(p.Limit + 1)
