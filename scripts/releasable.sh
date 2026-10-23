@@ -23,4 +23,4 @@ git diff --name-only "$base" "$head" -- . \
   ':!*.md' ':!docs' ':!web' ':!.github' ':!.claude' ':!.idea' ':!.gitignore' \
   ':!Taskfile.yml' ':!lefthook.yml' ':!.golangci.yml' ':!scripts' ':!buf.gen.ts.yaml' \
   ':!deployments/helm' ':!deployments/docker/docker-compose.yaml' ':!deployments/docker/grafana' \
-  ':!*_test.go' ':!testdata' ':!tests' ':!pkgs/platform/archtest' ':!pkgs/platform/postgres/pgtest'
+  ':!*_test.go' ':!testdata' ':!tests' ':!pkgs/platform/archtest' ':!pkgs/platform/postgres/pgtest' ':!pkgs/platform/redis/redistest'
