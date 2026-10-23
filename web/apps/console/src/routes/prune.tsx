@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import type { PruneTable } from "@repo/proto/admin/v1/service_pb";
 import { Badge } from "@/components/ui/badge";
@@ -15,12 +16,22 @@ import { ErrorAlert, Field } from "./orders";
 // consumer groups hold old rows back; forgetting a group that will never run
 // again releases them. Big first backlogs belong to the CLI / CronJob — this
 // call runs under the server's RPC timeout.
+//
+// bc / days / forget live in the URL (/prune?bc=ordering&forget=test-old.ordering)
+// so the Poison page and alert runbooks can land here prefilled. Dry run and
+// unconsumed are deliberately not: a link never arms a real delete.
+export type PruneSearch = { bc?: string; days?: number; forget?: string };
+
 export function PrunePage() {
-  const [bc, setBc] = useState("");
-  const [days, setDays] = useState(30);
+  const search = useSearch({ from: "/prune" });
+  const navigate = useNavigate({ from: "/prune" });
+  const bc = search.bc ?? "";
+  const days = search.days ?? 30;
+  const forget = search.forget ?? "";
+  const setSearch = (patch: Partial<PruneSearch>) =>
+    void navigate({ replace: true, search: (prev) => ({ ...prev, ...patch }) });
   const [dryRun, setDryRun] = useState(true);
   const [unconsumed, setUnconsumed] = useState(false);
-  const [forget, setForget] = useState("");
 
   const run = useMutation({
     mutationFn: () =>
@@ -51,13 +62,13 @@ export function PrunePage() {
         <CardContent className="grid gap-4">
           <div className="flex flex-wrap items-end gap-2">
             <Field label="Bounded context (empty = all)" className="w-44">
-              <Input value={bc} placeholder="ordering" onChange={(e) => setBc(e.target.value)} />
+              <Input value={bc} placeholder="ordering" onChange={(e) => setSearch({ bc: e.target.value || undefined })} />
             </Field>
             <Field label="Older than (days)" className="w-32">
-              <Input type="number" min={1} value={days} onChange={(e) => setDays(Number(e.target.value))} />
+              <Input type="number" min={1} value={days} onChange={(e) => setSearch({ days: Number(e.target.value) })} />
             </Field>
             <Field label="Forget groups (comma-separated)" className="w-72">
-              <Input value={forget} placeholder="test-old.ordering" onChange={(e) => setForget(e.target.value)} />
+              <Input value={forget} placeholder="test-old.ordering" onChange={(e) => setSearch({ forget: e.target.value || undefined })} />
             </Field>
             <Toggle label="Dry run" checked={dryRun} onChange={setDryRun} />
             <Toggle label="Unconsumed tables too" checked={unconsumed} onChange={setUnconsumed} />

@@ -150,7 +150,8 @@ groups:
             The oldest row still in the table is older than 45 days (1.5× the `task prune -- --older-than 720h`
             example — set this to 1.5× whatever your prune job uses). Either prune is not scheduled, or it runs and
             cannot delete: `task prune -- --older-than 720h --dry-run` says which, its NOTE column names the consumer
-            group holding rows back. A poison row's inbox id is kept on purpose (it can be requeued any time).
+            group holding rows back; so does the console's dry run at `/prune?bc=<schema>` (the part of the table
+            name before the dot). A poison row's inbox id is kept on purpose (it can be requeued any time).
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "29"
 
@@ -187,7 +188,8 @@ groups:
             Some consumer group's cursor on this table is more than a day behind, so prune keeps everything after
             it. If "Eventbus consumer stalled" is not firing, the group is one no worker runs any more (an old
             worker.consumer_group, a `test-<ts>.*` group from an E2E run): `task prune -- --older-than 720h --dry-run`
-            names it in NOTE, then `--forget-group <name>` deletes its cursor so the rows become prunable.
+            names it in NOTE, then `--forget-group <name>` deletes its cursor so the rows become prunable
+            (console: `/prune?bc=<schema>&forget=<name>`, dry run first).
             If it is a live group, fix consumption first — forgetting a live group makes it restart from
             worker.start_from.
           __dashboardUid__: x-monorepo-rpc

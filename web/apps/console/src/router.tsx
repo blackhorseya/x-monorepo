@@ -4,7 +4,7 @@ import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { CredentialControl } from "./components/credential";
 import { OrdersPage, type OrdersSearch } from "./routes/orders";
 import { PoisonPage } from "./routes/poison";
-import { PrunePage } from "./routes/prune";
+import { PrunePage, type PruneSearch } from "./routes/prune";
 import { ReservationsPage, type ReservationsSearch } from "./routes/reservations";
 import { StockPage } from "./routes/stock";
 
@@ -61,7 +61,16 @@ const reservationsRoute = createRoute({
 });
 const stockRoute = createRoute({ getParentRoute: () => rootRoute, path: "/stock", component: StockPage });
 const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: PoisonPage });
-const pruneRoute = createRoute({ getParentRoute: () => rootRoute, path: "/prune", component: PrunePage });
+const pruneRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/prune",
+  component: PrunePage,
+  validateSearch: (raw: Record<string, unknown>): PruneSearch => ({
+    bc: typeof raw.bc === "string" && raw.bc !== "" ? raw.bc : undefined,
+    days: typeof raw.days === "number" && Number.isFinite(raw.days) && raw.days > 0 ? raw.days : undefined,
+    forget: typeof raw.forget === "string" && raw.forget !== "" ? raw.forget : undefined,
+  }),
+});
 
 export const router = createRouter({
   routeTree: rootRoute.addChildren([indexRoute, ordersRoute, reservationsRoute, stockRoute, poisonRoute, pruneRoute]),
