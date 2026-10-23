@@ -512,3 +512,7 @@ configs/*
 # the Python template above ignores lib/; frontend source keeps its lib/ (shadcn cn helper)
 !web/**/src/lib/
 /configs/config.yaml
+
+# playwright (web/apps/console e2e)
+test-results/
+playwright-report/

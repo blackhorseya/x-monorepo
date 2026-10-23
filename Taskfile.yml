@@ -400,6 +400,12 @@ tasks:
     dir: web
     cmds: [pnpm build]
 
+  web-e2e:
+    desc: 'Playwright smoke of the console against a real ./bin/rpc (no DB, in-memory) + vite preview of the build; once: pnpm exec playwright install chromium (web/apps/console)'
+    deps: [build, web-build]
+    dir: web/apps/console
+    cmds: ['pnpm exec playwright test {{.CLI_ARGS}}']
+
   config:
     desc: 'create configs/local.yaml from configs/config.example.yaml if missing'
     status: ['test -f {{.CONFIG}}']
