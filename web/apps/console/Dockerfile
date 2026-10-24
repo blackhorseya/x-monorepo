@@ -15,5 +15,6 @@ ENV RPC_UPSTREAM=http://rpc:8080 \
     NGINX_ENVSUBST_OUTPUT_DIR=/tmp
 COPY deploy/default.conf.template /etc/nginx/templates/default.conf.template
 COPY deploy/console.conf /etc/nginx/conf.d/default.conf
+COPY deploy/security-headers.conf /etc/nginx/security-headers.conf
 COPY dist/ /usr/share/nginx/html/
 EXPOSE 8080
