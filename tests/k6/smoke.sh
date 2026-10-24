@@ -3,10 +3,11 @@
 # at $DATABASE_URL: orders under its load thresholds, ratelimit with the server at 50 rps,
 # timeout with the server at a 1ns deadline, reservation with a ./bin/worker next to the
 # rpc (outbox → worker → RESERVED latency). `task k6-smoke` locally, the `k6` job in CI.
-#   smoke.sh <bin dir> [script…]        (default: orders ratelimit timeout reservation)
+#   smoke.sh <bin dir> [script…]        (default: reservation orders ratelimit timeout — reservation
+#   first so its worker meets an empty outbox, not the backlog the others leave behind)
 set -euo pipefail
 bin=$1; shift
-scripts=("$@"); [ ${#scripts[@]} -gt 0 ] || scripts=(orders ratelimit timeout reservation)
+scripts=("$@"); [ ${#scripts[@]} -gt 0 ] || scripts=(reservation orders ratelimit timeout)
 port=${PORT:-18090}
 export APP_CONFIG=configs/config.example.yaml APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false
 export APP_POSTGRES_URL=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
@@ -42,7 +43,9 @@ for s in "${scripts[@]}"; do
   # CREATE_P95: the smoke runs on a shared CI runner against a Postgres container, where
   # CreateOrder's p95 lands anywhere between 150 and 400ms at the same p50 as a laptop.
   # RESERVE_P95: same story for the worker chain (outbox poll + handler + the Postgres service).
+  # RUN_ID per script: SKUs are named from it, and a worker reserving one script's SKUs
+  # while another's setup() SetStocks them is an optimistic-lock conflict (concurrent_update).
   k6 run --quiet "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e VUS=10 -e DURATION=10s -e RPS=50 \
-    -e "CREATE_P95=${CREATE_P95:-500}" -e "RESERVE_P95=${RESERVE_P95:-5000}" -e "RUN_ID=smoke-$$"
+    -e "CREATE_P95=${CREATE_P95:-500}" -e "RESERVE_P95=${RESERVE_P95:-5000}" -e "RUN_ID=smoke-$$-$s"
   stop
 done

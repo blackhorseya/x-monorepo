@@ -17,7 +17,11 @@ const timedOut = new Rate("timed_out");
 
 export const options = {
   scenarios: {
-    deadline: { executor: "constant-vus", vus: Number(__ENV.VUS || 10), duration: __ENV.DURATION || "5s" },
+    deadline: {
+      executor: "constant-vus",
+      vus: Number(__ENV.VUS || 10),
+      duration: __ENV.DURATION || "5s",
+    },
   },
   thresholds: {
     timed_out: ["rate==1"],
@@ -30,10 +34,10 @@ export default function () {
   const res = rpc("ordering.v1.OrderService/ListOrders", { page_size: 1 });
   timedOut.add(
     check(res, {
-      "504": (r) => r.status === 504,
+      504: (r) => r.status === 504,
       "code deadline_exceeded": (r) => r.json("code") === "deadline_exceeded",
       "x-error-code request.timeout": (r) => errorCode(r) === "request.timeout",
-    }),
+    })
   );
   sleep(0.01);
 }

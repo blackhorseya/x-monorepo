@@ -12,7 +12,7 @@
 import http from "k6/http";
 import { sleep } from "k6";
 import { Counter, Trend } from "k6/metrics";
-import { rpc, ok, sku } from "./lib.js";
+import { rpc, ok, sku, setStock } from "./lib.js";
 
 // GetReservation is 404 (not_found) until the worker has consumed the order;
 // that is the poll loop's "not yet", not a failed request.
@@ -48,13 +48,7 @@ export const options = {
 
 export function setup() {
   for (let i = 0; i < SKUS; i++) {
-    ok(
-      rpc("inventory.v1.InventoryService/SetStock", {
-        sku: sku(i),
-        on_hand: 1_000_000,
-      }),
-      "SetStock"
-    );
+    setStock(i, 1_000_000);
   }
 }
 
