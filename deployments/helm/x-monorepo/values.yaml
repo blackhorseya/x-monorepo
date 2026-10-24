@@ -135,6 +135,18 @@ rpc:
   podDisruptionBudget:
     enabled: true    # rendered only when more than one replica can exist
     maxUnavailable: 1
+  # Prometheus Operator: a ServiceMonitor on the rpc Service's http port, path /api/metrics
+  # (always served, outside the auth chain). The operator selects ServiceMonitors by label:
+  # put what its serviceMonitorSelector wants in labels (kube-prometheus-stack: release: <name>).
+  # Without the operator, scrape the Service yourself; without any Prometheus the worker still
+  # needs config.otel.endpoint — this only covers the rpc.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    relabelings: []
+    metricRelabelings: []
   extraEnv: []
   podAnnotations: {}
   nodeSelector: {}
@@ -234,6 +246,21 @@ console:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# Ingress-only NetworkPolicies, one per Deployment (egress untouched — where Postgres / Redis /
+# the collector live is the cluster's business). Needs a CNI that enforces NetworkPolicy (kind's
+# kindnet does not, so helm-kind cannot prove them). rpc always admits the console's pods;
+# each ingressFrom is a list of NetworkPolicyPeer (podSelector / namespaceSelector / ipBlock),
+# and an EMPTY list means any source on the port — list your ingress controller's namespace
+# and Prometheus to tighten it. worker gets no ingress at all.
+networkPolicy:
+  enabled: false
+  rpc:
+    ingressFrom: []
+    #  - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+    #  - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+  console:
+    ingressFrom: []
 
 # `migrate up` as a pre-install / pre-upgrade hook: new code never starts against an old
 # schema. The Job needs the Postgres URL before the release's own Secret exists, so with

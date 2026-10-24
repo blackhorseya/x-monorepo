@@ -6,3 +6,5 @@ worker:
   replicaCount: 1
 prune:
   enabled: false
+# NetworkPolicies with nothing listed: rpc open to any source on its port, worker closed.
+networkPolicy: { enabled: true }

@@ -1,0 +1,36 @@
+{{- $m := .Values.rpc.serviceMonitor -}}
+{{- if $m.enabled }}
+# Prometheus Operator scrape of GET /api/metrics (always served, outside the auth chain).
+# The operator picks ServiceMonitors by label (serviceMonitorSelector), so set labels to
+# whatever yours selects (kube-prometheus-stack: release: <its release name>).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rpc
+    {{- with $m.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rpc
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  endpoints:
+    - port: http
+      path: /api/metrics
+      interval: {{ $m.interval }}
+      scrapeTimeout: {{ $m.scrapeTimeout }}
+      {{- with $m.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
