@@ -4,6 +4,8 @@
 # `!` → major, feat → minor, everything else → patch.
 # Run by .github/workflows/release.yml (prepare job) after every green CI on main; the same
 # workflow then fills the draft with goreleaser and publishes it. Nobody tags by hand.
+# The autolabeler block at the bottom is used by .github/workflows/labeler.yml alone
+# (pull_request_target): labels are for the PR list, nothing here reads them.
 name-template: "v$RESOLVED_VERSION"
 tag-template: "v$RESOLVED_VERSION"
 
@@ -61,3 +63,33 @@ template: |
   ```
 
   **Full changelog**: https://github.com/blackhorseya/x-monorepo/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+# PR labels (labeler.yml): one from the Conventional Commits type, plus one per area touched.
+# Dependabot labels its own PRs (dependencies / go / github_actions), so build(deps) is not here.
+autolabeler:
+  - label: breaking
+    title: ['/^\w+(\(.+\))?!:/']
+  - label: feature
+    title: ['/^feat(\(.+\))?!?:/']
+  - label: fix
+    title: ['/^fix(\(.+\))?!?:/']
+  - label: refactor
+    title: ['/^(refactor|perf)(\(.+\))?!?:/']
+  - label: test
+    title: ['/^test(\(.+\))?!?:/']
+  - label: documentation
+    title: ['/^docs?(\(.+\))?!?:/']
+  - label: ci
+    title: ['/^(ci|chore|build)(?!\(deps\))(\(.+\))?!?:/']
+  - label: proto
+    files: ['protos/**']
+  - label: web
+    files: ['web/**']
+  - label: helm
+    files: ['deployments/**']
+  - label: ordering
+    files: ['pkgs/ordering/**']
+  - label: inventory
+    files: ['pkgs/inventory/**']
+  - label: platform
+    files: ['pkgs/platform/**', 'pkgs/kernel/**']
