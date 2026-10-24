@@ -6,6 +6,7 @@
 # Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<tag>.
 # They are distroless (no shell): no exec probes, no preStop sleep — the apps' own graceful
 # shutdown does that job (see rpc.shutdown / worker.terminationGracePeriodSeconds).
+# The optional console (web/apps/console/Dockerfile, nginx) is .../console:<tag>.
 
 image:
   registry: ghcr.io/blackhorseya/x-monorepo
@@ -185,6 +186,49 @@ worker:
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# The web console (web/apps/console): nginx serving the Vite build, /api proxied to this
+# release's rpc Service in-cluster (RPC_UPSTREAM; the browser stays same-origin, no CORS).
+# Off by default: it is a UI for operators, and the image exists only once the release
+# pipeline publishes it. It gets no config file and no Secret — with auth.mode on, people
+# paste their own API key / JWT into the console's credential dialog.
+console:
+  enabled: false
+  replicaCount: 1
+  liveness:    # /healthz is nginx itself; the rpc's health is the rpc's probes' business
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 1
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+    successThreshold: 1
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 64Mi }
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+  # Plain HTTP/1.1: the console only ever uses Connect over JSON.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: console.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
   extraEnv: []
   podAnnotations: {}
   nodeSelector: {}

@@ -95,6 +95,24 @@ def main(profile: str) -> None:
             check(f"--forget-group={g}" in pc["args"], f"prune --forget-group={g}")
         expect(cron["spec"]["concurrencyPolicy"], "Forbid", "prune never overlaps itself")
 
+    # console: nginx with the one env var, no app config, no Secret, /tmp writable, probes on itself.
+    con = find(docs, "Deployment", "-console")
+    cv = values["console"]
+    check((con is not None) == cv["enabled"], "console Deployment iff enabled")
+    check((find(docs, "Service", "-console") is not None) == cv["enabled"], "console Service iff enabled")
+    check((find(docs, "Ingress", "-console") is not None) == (cv["enabled"] and cv["ingress"]["enabled"]), "console Ingress iff enabled")
+    if con:
+        cs = con["spec"]["template"]["spec"]
+        cc = cs["containers"][0]
+        cenv = {e["name"]: e.get("value") for e in cc["env"]}
+        expect(cenv.get("RPC_UPSTREAM"), f'http://{rpc["metadata"]["name"]}:{values["rpc"]["service"]["port"]}', "console RPC_UPSTREAM = this release's rpc Service")
+        check(not any(k.startswith("APP_") for k in cenv) and "envFrom" not in cc, "console gets no APP_* env and no Secret")
+        check(any(m["mountPath"] == "/tmp" for m in cc["volumeMounts"]) and any("emptyDir" in v for v in cs["volumes"]), "console has an emptyDir at /tmp")
+        check(cc["securityContext"].get("readOnlyRootFilesystem") is True, "console rootfs read-only")
+        expect(cc["readinessProbe"]["httpGet"]["path"], "/healthz", "console readiness path")
+        expect(cc["livenessProbe"]["httpGet"]["path"], "/healthz", "console liveness path")
+        expect(cc["ports"][0]["containerPort"], 8080, "console containerPort = nginx-unprivileged's 8080")
+
     # Every app pod reads the same config file and, when there is one, the same Secret.
     for d in (rpc, worker):
         cc = d["spec"]["template"]["spec"]["containers"][0]

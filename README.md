@@ -421,7 +421,12 @@ task web-e2e        # Playwright smoke：建好的 console（vite preview）打�
 | UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |
 
 `@repo/proto` 的 `exports` 指向 `src/gen/*.ts`，由 bundler 直接吃 TS 原始檔，不需要 build step。
-production 部署（同 origin 掛靜態檔，或另配 CORS）尚未處理。
+
+部署：`web/apps/console/Dockerfile` 把 `task web-build` 的 `dist/` 放進 `nginxinc/nginx-unprivileged`（:8080），`deploy/default.conf.template`
+一個 server：`/` 走 SPA fallback（任何路由都回 `index.html`，`assets/` immutable cache）、`/api/` proxy 到 `RPC_UPSTREAM`（預設 `http://rpc:8080`），
+瀏覽器維持 same-origin，rpc 一樣不需要 CORS；`/healthz` 給 probe。image 只寫 `/tmp`（entrypoint 用 envsubst 把 template render 到 `/tmp/default.conf`，
+`conf.d` 只剩一行 include），所以 read-only rootfs + 任意 uid 都能跑——Helm chart 的 `console.enabled` 就是這樣部署它（見 Deploy）。
+image 目前只在 `task helm-kind` 本機 build（`localhost/x-monorepo/console:kind`），release pipeline 還沒發 `ghcr.io/.../console`。
 
 ## Conventions
 
@@ -564,6 +569,7 @@ worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等
 | migrate Job | `pre-install,pre-upgrade` hook 跑 `migrate up`：新 code 不會先於新 schema 起來。hook 跑在 release 的 Secret 存在之前，所以 chart 另 render 一個 hook-scoped 的 `<release>-migrate-env`（跑完刪）；`existingSecret` 則直接讀它 |
 | prune CronJob | `worker prune --older-than <prune.olderThan>`（預設 720h、每天一次、`concurrencyPolicy: Forbid`）；`prune.forgetGroups` 對應 `--forget-group`。alert「retention overdue」的 45d 是 720h 的 1.5×，改一個要一起改 |
 | HPA / PDB / Ingress | rpc：CPU HPA（開了就不 render `replicas`、要有 `resources.requests.cpu`）、PDB 只在可能 >1 replica 時 render、Ingress 走 HTTP/1.1（Connect / gRPC-Web），原生 gRPC 要另外 h2c |
+| console Deployment（`console.enabled`，預設 off） | `web/apps/console` 的 nginx image：唯一的 env 是 `RPC_UPSTREAM=http://<release>-rpc:<rpc.service.port>`（chart 算出來），**沒有** `APP_CONFIG`、沒有 Secret——nginx 看不到 Postgres URL 和 API key，auth 開著時使用者在 console 的 Credential 對話框貼自己的 key / JWT；probe 打 nginx 自己的 `/healthz`（rpc 的健康是 rpc probe 的事）；同一組 `podSecurityContext`（uid 65532、read-only rootfs）+ `/tmp` emptyDir 就夠。自己的 Service / Ingress（`console.ingress`，純 HTTP/1.1） |
 | worker autoscaling | replica 共用 `consumer_group` 就是分工，但 handler 是 DB-bound，CPU 低時 lag 照樣長，所以 `worker.autoscaling.metric` 預設 `lag`：KEDA `ScaledObject` 用 Prometheus trigger 查 `max(eventbus_consumer_lag{consumer_group=~"<group>\\..*"})`（gauge 是 per replica，取 max 不 sum；要 `config.otel.endpoint`，否則拒絕 render）；沒 KEDA 的 cluster 用 `metric: cpu` 出普通 HPA。實測踩到的三件事都做成 render 時就擋：`lag.prometheusAddress` 要 `http://<svc>.<ns>.svc:<port>`（KEDA operator 從**它自己的** namespace 解析，裸 Service 名不通）；`minReplicas` 必須 ≥ 1（lag gauge 是 worker 自己報的，0 個 replica 就沒人報）；`pollingInterval` / `cooldownPeriod` 只對 scale-to-zero 有效，縮回去的節奏是 HPA 的 `behavior.scaleDown`（預設 stabilization 300s，`worker.autoscaling.behavior` 透傳） |
 
 ```bash
@@ -574,11 +580,11 @@ helm install api deployments/helm/x-monorepo -n app --create-namespace \
 ```
 
 `check.py` 是 chart 裡唯一有邏輯的地方的測試：rpc 的 grace period 算式與 env、readiness period 的關係、worker 沒 probe、migrate hook
-與它的 Secret 的順序、prune 的 args。`ci/` 四個 profile（預設 + DB、redis broker + HPA + ingress + auth required、existingSecret、無 DB）
+與它的 Secret 的順序、prune 的 args、console 的 `RPC_UPSTREAM` 指到這個 release 的 rpc Service 且沒有 `APP_*` / Secret。`ci/` 五個 profile（預設 + DB、redis broker + HPA + ingress + auth required、existingSecret、無 DB、console + 自己的 ingress）
 在 CI 的 `helm` job 跑。真的裝一次是 `task helm-kind`（CI 的 `helm-kind` job）：起 kind cluster、`deployments/helm/kind/deps.yaml`
-放一個拋棄式 Postgres + Redis（chart 沒有 subchart dependency，production 接 managed DB，這份只給 smoke 用）、從 working tree build 三個 image
+放一個拋棄式 Postgres + Redis（chart 沒有 subchart dependency，production 接 managed DB，這份只給 smoke 用）、從 working tree build 三個 Go image + console image（`web-build` → nginx）
 `kind load` 進去、`helm upgrade --install --wait` 兩次（第一次走 pre-install hook、第二次走 pre-upgrade），每次跑 `kind/smoke.sh`：
-SetStock → CreateOrder → worker 透過 Redis Streams 消費 OrderCreated → GetStock 看到 reserved。本機約 1 分鐘（cluster 已存在時），`task helm-kind-down` 刪 cluster。
+SetStock → CreateOrder → worker 透過 Redis Streams 消費 OrderCreated → GetStock 看到 reserved；console 的 `/reservations` 回 `index.html`、`/api/readyz` 經 nginx proxy 到 rpc。本機約 1 分鐘（cluster 已存在時），`task helm-kind-down` 刪 cluster。
 接著 `task helm-kind-keda`（CI 同一個 job 的第二步）：裝 KEDA、`kind/monitoring.yaml` 放一個 OTLP collector（gRPC :4317 → Prometheus exporter :8889）
 和一個 5s scrape 的 Prometheus，用 `kind/keda-values.yaml` 重裝 chart（`OTEL_METRIC_EXPORT_INTERVAL=5000`、threshold 50、scaleDown stabilization 30s），
 `kind/scale.sh` 用 `tests/k6/orders.js` 灌 45 秒訂單：實測 lag 0 → 2000+，worker 13 秒內 1 → 4 replica，backlog 消化完縮回 1。

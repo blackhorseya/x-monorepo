@@ -256,7 +256,8 @@ tasks:
         msg: helm not found (brew install helm)
 
   helm-kind:
-    desc: 'install the chart for real: kind cluster + deployments/helm/kind/deps.yaml (Postgres, Redis), images built from the tree and kind-loaded, helm upgrade --install --wait twice (pre-install then pre-upgrade hook), then deployments/helm/kind/smoke.sh (an order reserves stock through the worker). helm-kind-down deletes the cluster'
+    deps: [web-build]
+    desc: 'install the chart for real: kind cluster + deployments/helm/kind/deps.yaml (Postgres, Redis), images built from the tree (rpc / worker / migrate + the console on web-build) and kind-loaded, helm upgrade --install --wait twice (pre-install then pre-upgrade hook), then deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api). helm-kind-down deletes the cluster'
     vars:
       CLUSTER: x-monorepo
       NS: x-monorepo
@@ -276,7 +277,9 @@ tasks:
       # spelling docker, podman and the archive loaded into kind all agree on.
       - for: [rpc, worker, migrate]
         cmd: '{{.DOCKER}} build -q -f deployments/docker/Dockerfile --build-arg APP={{.ITEM}} --build-arg TARGETPLATFORM=linux/{{.ARCH}} -t localhost/x-monorepo/{{.ITEM}}:kind {{.BIN_DIR}}/kind >/dev/null'
-      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind'
+      # The console: nginx + web/apps/console/dist (built by the web-build dep), context = that dir.
+      - '{{.DOCKER}} build -q -t localhost/x-monorepo/console:kind web/apps/console >/dev/null'
+      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind localhost/x-monorepo/console:kind'
       - kind load image-archive --name {{.CLUSTER}} {{.BIN_DIR}}/kind/images.tar
       - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f - >/dev/null
       - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null
