@@ -102,7 +102,7 @@ func TestAuth_Required(t *testing.T) {
 	// Authorization on the admin surface: the role comes from the JWT's
 	// roles claim or the API key's ":role" suffix. No database is wired here,
 	// so a caller that passes the role check gets FailedPrecondition
-	// poison.no_database — proof the guard let it through.
+	// admin.no_database — proof the guard let it through.
 	adminToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": "u-2", "iss": "x-monorepo", "exp": time.Now().Add(time.Minute).Unix(), "roles": []string{"ops", "admin"},
 	}).SignedString([]byte(secret))
@@ -117,8 +117,8 @@ func TestAuth_Required(t *testing.T) {
 		"anonymous":        {"", "", connect.CodeUnauthenticated, server.UnauthenticatedCode},
 		"jwt without role": {server.AuthorizationHeader, "Bearer " + token, connect.CodePermissionDenied, server.PermissionDeniedCode},
 		"api key no role":  {server.APIKeyHeader, "console-key-0123456789", connect.CodePermissionDenied, server.PermissionDeniedCode},
-		"jwt roles claim":  {server.AuthorizationHeader, "Bearer " + adminToken, connect.CodeFailedPrecondition, "poison.no_database"},
-		"api key :admin":   {server.APIKeyHeader, "ops-key-0123456789abc", connect.CodeFailedPrecondition, "poison.no_database"},
+		"jwt roles claim":  {server.AuthorizationHeader, "Bearer " + adminToken, connect.CodeFailedPrecondition, "admin.no_database"},
+		"api key :admin":   {server.APIKeyHeader, "ops-key-0123456789abc", connect.CodeFailedPrecondition, "admin.no_database"},
 	} {
 		var opts []connect.ClientOption
 		if tt.header != "" {

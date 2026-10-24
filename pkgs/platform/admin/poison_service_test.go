@@ -126,7 +126,7 @@ func TestPoisonService(t *testing.T) {
 		t.Fatalf("neither offsets nor all = %v", err)
 	}
 	_, err = ops.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{BoundedContext: "billing"}))
-	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != "poison.unknown_bounded_context" {
+	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != "admin.unknown_bounded_context" {
 		t.Fatalf("unknown bc = %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestPoisonService(t *testing.T) {
 		t.Fatalf("get = %v, %v", got, err)
 	}
 	_, err = ops.GetPoison(c, connect.NewRequest(&adminv1.GetPoisonRequest{BoundedContext: "admintest", Offset: 999999}))
-	if code, ec := errCode(err); code != connect.CodeNotFound || ec != "poison.not_found" {
+	if code, ec := errCode(err); code != connect.CodeNotFound || ec != "admin.poison_not_found" {
 		t.Fatalf("get missing = %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestPoisonService(t *testing.T) {
 	// No database: a clear precondition error, not a nil-pointer panic.
 	nodb := admin.NewPoisonService(nil, config.Auth{Mode: config.AuthOff}, []string{"admintest"})
 	_, err = nodb.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{}))
-	if code, ec := errCode(err); code != connect.CodeFailedPrecondition || ec != "poison.no_database" {
+	if code, ec := errCode(err); code != connect.CodeFailedPrecondition || ec != "admin.no_database" {
 		t.Fatalf("no db = %v", err)
 	}
 }

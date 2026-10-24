@@ -137,7 +137,7 @@ func TestPruneRPC(t *testing.T) {
 		t.Fatalf("negative older_than = %v", err)
 	}
 	_, err = ops.Prune(c, connect.NewRequest(&adminv1.PruneRequest{BoundedContext: "billing", OlderThan: day, DryRun: true}))
-	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != "poison.unknown_bounded_context" {
+	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != "admin.unknown_bounded_context" {
 		t.Fatalf("unknown bc = %v", err)
 	}
 
@@ -209,7 +209,7 @@ func TestPruneRPC(t *testing.T) {
 
 	nodb := admin.NewPoisonService(nil, config.Auth{Mode: config.AuthOff}, []string{"prunea"})
 	_, err = nodb.Prune(c, connect.NewRequest(&adminv1.PruneRequest{OlderThan: day, DryRun: true}))
-	if code, ec := errCode(err); code != connect.CodeFailedPrecondition || ec != "poison.no_database" {
+	if code, ec := errCode(err); code != connect.CodeFailedPrecondition || ec != "admin.no_database" {
 		t.Fatalf("no db = %v", err)
 	}
 }
