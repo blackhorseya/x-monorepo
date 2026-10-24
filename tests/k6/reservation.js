@@ -48,7 +48,13 @@ export const options = {
 
 export function setup() {
   for (let i = 0; i < SKUS; i++) {
-    ok(rpc("inventory.v1.InventoryService/SetStock", { sku: sku(i), on_hand: 1_000_000 }), "SetStock");
+    ok(
+      rpc("inventory.v1.InventoryService/SetStock", {
+        sku: sku(i),
+        on_hand: 1_000_000,
+      }),
+      "SetStock"
+    );
   }
 }
 
@@ -56,15 +62,25 @@ export default function () {
   const created = ok(
     rpc("ordering.v1.OrderService/CreateOrder", {
       customer_id: `k6-reserve-${__VU}`,
-      items: [{ sku: sku(Math.floor(Math.random() * SKUS)), quantity: 1, unit_price: { amount_minor: 1000, currency: "USD" } }],
+      items: [
+        {
+          sku: sku(Math.floor(Math.random() * SKUS)),
+          quantity: 1,
+          unit_price: { amount_minor: 1000, currency: "USD" },
+        },
+      ],
     }),
-    "CreateOrder",
+    "CreateOrder"
   );
   if (!created) return;
   const start = Date.now();
   for (;;) {
     // NotFound until the worker has consumed the order: not an error here.
-    const res = rpc("inventory.v1.InventoryService/GetReservation", { order_id: created.order.id }, { tags: { poll: "true" } });
+    const res = rpc(
+      "inventory.v1.InventoryService/GetReservation",
+      { order_id: created.order.id },
+      { tags: { poll: "true" } }
+    );
     if (res.status === 200) {
       const status = res.json("reservation.status");
       if (status === "RESERVATION_STATUS_RESERVED") {
