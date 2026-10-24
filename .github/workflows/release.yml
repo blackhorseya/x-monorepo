@@ -80,6 +80,7 @@ jobs:
         id: draft
         with:
           publish: false
+          disable-autolabeler: true   # labeler.yml does that on pull_request_target
           commitish: ${{ github.event.workflow_run.head_sha || github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

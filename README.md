@@ -514,6 +514,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 | job | 做什麼 |
 |---|---|
 | prepare | gate 過了才跑 release-drafter：依 merge 進來的 PR title 分類（`when.conventional`，不用 label）產 draft release `vX.Y.Z`；版號：`!` → major、`feat` → minor、其餘 patch，`test:` 不進 notes |
+| （labeler.yml） | 不在 release 鏈上：`pull_request_target` 跑 release-drafter 的 autolabeler，依 title 的 type 貼 `feature` / `fix` / `refactor` / `test` / `documentation` / `ci` / `breaking`，依路徑貼 `proto` / `web` / `helm` / `ordering` / `inventory` / `platform`。純顯示，版號不看它 |
 | build | 在該 commit 本地打 tag（不 push，goreleaser 需要）→ `goreleaser release`：archives 掛上那份 draft（`use_existing_draft` + `keep-existing`，notes 保留）、三個 multi-arch image 推 `ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:X.Y.Z`（非 prerelease 另打 `latest`） |
 | publish | `gh release edit --draft=false --target <sha>`：GitHub 建 tag、標 latest。image 已經在 registry，release 一出現就能拉 |
 
