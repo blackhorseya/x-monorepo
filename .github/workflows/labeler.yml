@@ -1,9 +1,12 @@
 name: labeler
 
 # Labels a PR from its title (Conventional Commits type) and from the paths it touches,
-# via release-drafter's autolabeler (rules in .github/release-drafter.yml). Display only:
+# via release-drafter's autolabeler (rules in .github/release-drafter.yml; `sync-labels`
+# there drops a configured label that stopped matching, e.g. after a title edit). Display only:
 # release.yml's prepare job files PRs by title (`when.conventional`), never by label.
 # pull_request_target: runs with the base repo's token on forks too, no checkout, no PR code runs.
+# v7 split the autolabeler into its own action; the drafter action no longer labels
+# (and has no disable-* inputs — running it here would try to create a release).
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, edited]
@@ -17,8 +20,4 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - uses: release-drafter/release-drafter@v7
-        with:
-          disable-releaser: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: release-drafter/release-drafter/autolabeler@v7

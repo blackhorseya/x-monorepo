@@ -79,8 +79,7 @@ jobs:
         if: steps.gate.outputs.release == 'true'
         id: draft
         with:
-          publish: false
-          disable-autolabeler: true   # labeler.yml does that on pull_request_target
+          publish: false   # labels are labeler.yml's job (autolabeler action, pull_request_target)
           commitish: ${{ github.event.workflow_run.head_sha || github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
