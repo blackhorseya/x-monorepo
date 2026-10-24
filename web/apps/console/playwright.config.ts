@@ -29,6 +29,8 @@ export const ADMIN_KEY = "e2e-admin-key-0123456789abcdef";
 
 export default defineConfig({
   testDir: "e2e",
+  // DB mode also runs one bin/worker (e2e/worker.setup.ts) so reservations happen.
+  globalSetup: "./e2e/worker.setup.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

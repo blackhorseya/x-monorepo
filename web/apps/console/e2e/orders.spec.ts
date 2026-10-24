@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { withDB } from "./mode";
 
 // The server keeps orders in memory for the whole run and the tests run in
 // parallel, so each one works under its own customer id and filters by it.
@@ -24,7 +25,9 @@ test("create, see, cancel an order", async ({ page }) => {
   await expect(row).toHaveCount(1);
   await expect(row.getByText("PENDING")).toBeVisible();
   await expect(row.getByText("25.98 USD")).toBeVisible(); // 2 × 1299 minor USD
-  await expect(row.getByText("none yet")).toBeVisible(); // no worker: no reservation
+  // Without a worker nothing ever reserves; with one (DB mode) the cell flips
+  // to RESERVED / REJECTED at its own pace, which e2e/reservation.spec.ts covers.
+  if (!withDB) await expect(row.getByText("none yet")).toBeVisible();
 
   await row.getByRole("button", { name: "Cancel" }).click();
   await expect(row.getByText("CANCELLED")).toBeVisible();
