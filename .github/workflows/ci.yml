@@ -107,9 +107,10 @@ jobs:
         with: { version: v4.3.0 }
       - run: task helm-check
 
-  # The interceptors under traffic: tests/k6/smoke.sh runs the three k6 scripts, each against
+  # The interceptors under traffic: tests/k6/smoke.sh runs the four k6 scripts, each against
   # its own ./bin/rpc on the service Postgres — load thresholds, rate limit at 50 rps (429 +
-  # Retry-After, accepted ≈ rps), timeout at 1ns (every call DEADLINE_EXCEEDED). ~2–3 min.
+  # Retry-After, accepted ≈ rps), timeout at 1ns (every call DEADLINE_EXCEEDED), reservation
+  # with a ./bin/worker beside the rpc (order → RESERVED latency). ~3 min.
   k6:
     runs-on: ubuntu-latest
     services:

@@ -1,0 +1,87 @@
+// End to end through the worker: CreateOrder → ordering outbox → worker → inventory
+// reserves → GetReservation says RESERVED. Measures the one number orders.js leaves
+// out — how long an order waits for its reservation — with a worker running next
+// to the server (smoke.sh starts one; against task run, start `bin/worker` yourself).
+//   k6 run tests/k6/reservation.js -e BASE_URL=http://127.0.0.1:8080 [-e VUS=5] [-e DURATION=30s]
+// Each VU: CreateOrder (one line, qty 1, stock is plentiful) then polls
+// GetReservation every POLL ms until RESERVED or RESERVE_TIMEOUT ms pass.
+// reservation_latency is CreateOrder-returned → RESERVED seen; the poll interval
+// bounds its resolution. Thresholds: p95 under RESERVE_P95 (ms, default 3000:
+// the outbox is polled, so ~1s of that is waiting for the next tick, the rest is
+// the handler + SetStock contention), no timeouts, no REJECTED (stock is 1e6).
+import http from "k6/http";
+import { sleep } from "k6";
+import { Counter, Trend } from "k6/metrics";
+import { rpc, ok, sku } from "./lib.js";
+
+// GetReservation is 404 (not_found) until the worker has consumed the order;
+// that is the poll loop's "not yet", not a failed request.
+http.setResponseCallback(http.expectedStatuses(200, 404));
+
+const SKUS = Number(__ENV.SKUS || 20);
+const POLL = Number(__ENV.POLL || 100);
+const RESERVE_TIMEOUT = Number(__ENV.RESERVE_TIMEOUT || 30_000);
+const RESERVE_P95 = Number(__ENV.RESERVE_P95 || 3000);
+
+const reservationLatency = new Trend("reservation_latency", true);
+const reservationTimeouts = new Counter("reservation_timeouts");
+const reservationWrong = new Counter("reservation_wrong_status");
+
+export const options = {
+  scenarios: {
+    reservation: {
+      executor: "constant-vus",
+      vus: Number(__ENV.VUS || 5),
+      duration: __ENV.DURATION || "30s",
+      gracefulStop: `${RESERVE_TIMEOUT + 5000}ms`,
+    },
+  },
+  thresholds: {
+    http_req_failed: ["rate<0.01"],
+    reservation_latency: [`p(95)<${RESERVE_P95}`],
+    reservation_timeouts: ["count==0"],
+    reservation_wrong_status: ["count==0"],
+    rpc_errors: ["count==0"],
+  },
+  summaryTrendStats: ["avg", "p(50)", "p(95)", "p(99)", "max"],
+};
+
+export function setup() {
+  for (let i = 0; i < SKUS; i++) {
+    ok(rpc("inventory.v1.InventoryService/SetStock", { sku: sku(i), on_hand: 1_000_000 }), "SetStock");
+  }
+}
+
+export default function () {
+  const created = ok(
+    rpc("ordering.v1.OrderService/CreateOrder", {
+      customer_id: `k6-reserve-${__VU}`,
+      items: [{ sku: sku(Math.floor(Math.random() * SKUS)), quantity: 1, unit_price: { amount_minor: 1000, currency: "USD" } }],
+    }),
+    "CreateOrder",
+  );
+  if (!created) return;
+  const start = Date.now();
+  for (;;) {
+    // NotFound until the worker has consumed the order: not an error here.
+    const res = rpc("inventory.v1.InventoryService/GetReservation", { order_id: created.order.id }, { tags: { poll: "true" } });
+    if (res.status === 200) {
+      const status = res.json("reservation.status");
+      if (status === "RESERVATION_STATUS_RESERVED") {
+        reservationLatency.add(Date.now() - start);
+      } else {
+        reservationWrong.add(1, { status: String(status) });
+      }
+      return;
+    }
+    if (res.status !== 404) {
+      ok(res, "GetReservation"); // counts the error with its code
+      return;
+    }
+    if (Date.now() - start > RESERVE_TIMEOUT) {
+      reservationTimeouts.add(1);
+      return;
+    }
+    sleep(POLL / 1000);
+  }
+}
