@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { KeyRound, LogOut } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -6,15 +7,22 @@ import { Label } from "@/components/ui/label";
 import { setCredential, subject, useCredential, type Credential } from "../auth";
 
 // Header control: who the console calls as. Set an API key or a JWT, or clear
-// it to go anonymous; the next RPC uses it (queries refetch on their own).
+// it to go anonymous. Every query is invalidated on the spot so an
+// UNAUTHENTICATED / PERMISSION_DENIED page recovers (or appears) at once instead
+// of on its next poll — the slowest one (poison) is 5s.
 export function CredentialControl() {
+  const qc = useQueryClient();
   const current = useCredential();
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<Credential["kind"]>(current?.kind ?? "api_key");
   const [value, setValue] = useState("");
 
+  const apply = (c: Credential | null) => {
+    setCredential(c);
+    void qc.invalidateQueries();
+  };
   const save = () => {
-    setCredential({ kind, value });
+    apply({ kind, value });
     setValue("");
     setOpen(false);
   };
@@ -26,7 +34,7 @@ export function CredentialControl() {
         <KeyRound /> Credential
       </Button>
       {current && (
-        <Button variant="ghost" size="sm" onClick={() => setCredential(null)} title="Call anonymously">
+        <Button variant="ghost" size="sm" onClick={() => apply(null)} title="Call anonymously">
           <LogOut /> Clear
         </Button>
       )}
