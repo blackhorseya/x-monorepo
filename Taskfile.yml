@@ -401,7 +401,7 @@ tasks:
     cmds: [pnpm build]
 
   web-e2e:
-    desc: 'Playwright smoke of the console against a real ./bin/rpc (no DB, in-memory) + vite preview of the build; once: pnpm exec playwright install chromium (web/apps/console)'
+    desc: 'Playwright smoke of the console against a real ./bin/rpc + vite preview of the build; E2E_DATABASE_URL=postgres://… runs migrate up and uses that DB (what CI does), unset = in-memory; once: pnpm exec playwright install chromium (web/apps/console)'
     deps: [build, web-build]
     dir: web/apps/console
     cmds: ['pnpm exec playwright test {{.CLI_ARGS}}']

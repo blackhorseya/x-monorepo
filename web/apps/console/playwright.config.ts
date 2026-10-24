@@ -1,12 +1,18 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Console smoke against the real server: a ./bin/rpc with no database (in-memory
-// repositories, admin RPCs answer admin.no_database) and the production build
+// Console smoke against the real server: a ./bin/rpc and the production build
 // served by vite preview, which proxies /api to it like the dev server does.
 // `task web-e2e` builds both first; CI runs it in the console-e2e job.
+//
+// Two modes, picked by E2E_DATABASE_URL:
+//   unset → no database: in-memory repositories, admin RPCs answer admin.no_database
+//   set   → bin/migrate up, then rpc on that Postgres: poison / prune run for real
+// Specs read the same variable (e2e/mode.ts) to assert the right behaviour.
 const rpcPort = Number(process.env.E2E_RPC_PORT ?? 18091);
 const webPort = Number(process.env.E2E_WEB_PORT ?? 4173);
 const rpc = `http://127.0.0.1:${rpcPort}`;
+const db = process.env.E2E_DATABASE_URL;
+const bin = "../../../bin";
 
 export default defineConfig({
   testDir: "e2e",
@@ -21,11 +27,18 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
     {
-      // APP_CONFIG=/dev/null: defaults only, so postgres.url stays empty (viper
-      // ignores empty env, so the example config could not be blanked that way).
-      command: "../../../bin/rpc",
+      // APP_CONFIG=/dev/null: defaults only, so postgres.url is exactly what
+      // E2E_DATABASE_URL says (viper ignores empty env, so the example config
+      // could not be blanked that way). readyz pings Postgres when it is wired.
+      command: db ? `${bin}/migrate up && exec ${bin}/rpc` : `${bin}/rpc`,
       url: `${rpc}/api/readyz`,
-      env: { APP_CONFIG: "/dev/null", APP_HTTP_ADDR: `:${rpcPort}`, APP_HTTP_DOCS: "false", APP_LOG_LEVEL: "warn" },
+      env: {
+        APP_CONFIG: "/dev/null",
+        APP_HTTP_ADDR: `:${rpcPort}`,
+        APP_HTTP_DOCS: "false",
+        APP_LOG_LEVEL: "warn",
+        ...(db ? { APP_POSTGRES_URL: db } : {}),
+      },
       reuseExistingServer: !process.env.CI,
       stdout: "ignore",
       stderr: "pipe",
