@@ -1,13 +1,18 @@
 # Dependabot scans one module directory at a time and does not understand go.work, so a
 # Go bump touches a single go.mod and the other modules drift. dependabot-sync.yml runs
 # `task tidy` on its branch, commits, and re-runs CI, so Go version updates can stay on.
-# Go bumps are grouped into one weekly PR across all modules; Actions bumps likewise.
+# Go bumps are grouped into one weekly PR across all modules; Actions and npm bumps likewise.
+# npm: the pnpm workspace under web/ (one lockfile). The console is a shipped artifact
+# (ghcr .../console), so a merged npm bump cuts a patch release — hence weekly and grouped.
+# @bufbuild/protobuf / @connectrpc bumps may need `task gen-ts` to regenerate packages/proto.
+# Titles: `build(deps): …` so release-drafter files them under Dependencies.
 version: 2
 updates:
   - package-ecosystem: gomod
     directories: ["/pkgs/*", "/apps/*"]
     schedule: { interval: weekly }
     open-pull-requests-limit: 3
+    commit-message: { prefix: build, include: scope }
     groups:
       go:
         patterns: ["*"]
@@ -15,6 +20,16 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule: { interval: weekly }
+    commit-message: { prefix: build, include: scope }
     groups:
       actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    commit-message: { prefix: build, include: scope }
+    groups:
+      npm:
         patterns: ["*"]
