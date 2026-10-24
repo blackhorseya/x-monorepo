@@ -3,6 +3,7 @@ import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { CredentialControl } from "./components/credential";
 import { ServerVersion } from "./components/version";
+import { OrderPage } from "./routes/order";
 import { OrdersPage, type OrdersSearch } from "./routes/orders";
 import { PoisonPage } from "./routes/poison";
 import { PrunePage, type PruneSearch } from "./routes/prune";
@@ -54,6 +55,9 @@ const ordersRoute = createRoute({
     customer: typeof raw.customer === "string" && raw.customer !== "" ? raw.customer : undefined,
   }),
 });
+// A sibling of /orders, not a child: OrdersPage renders no Outlet, and the nav's
+// activeProps on /orders still light up here (prefix match).
+const orderRoute = createRoute({ getParentRoute: () => rootRoute, path: "/orders/$id", component: OrderPage });
 const reservationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/reservations",
@@ -85,7 +89,7 @@ const pruneRoute = createRoute({
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, reservationsRoute, stockRoute, poisonRoute, pruneRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, poisonRoute, pruneRoute]),
   defaultPreload: "intent",
 });
 
