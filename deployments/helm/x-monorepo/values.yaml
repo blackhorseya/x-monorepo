@@ -194,10 +194,9 @@ worker:
 
 # The web console (web/apps/console): nginx serving the Vite build, /api proxied to this
 # release's rpc Service in-cluster (RPC_UPSTREAM; the browser stays same-origin, no CORS).
-# Off by default: it is a UI for operators. The image exists only for releases cut after the
-# console joined the pipeline (GitHub → Packages lists the tags): set image.tag to one of those,
-# the default appVersion predates it. It gets no config file and no Secret — with auth.mode on,
-# people paste their own API key / JWT into the console's credential dialog.
+# Off by default: it is a UI for operators. The image exists from v0.23.0 on (the default
+# appVersion); an older image.tag has no console. It gets no config file and no Secret — with
+# auth.mode on, people paste their own API key / JWT into the console's credential dialog.
 console:
   enabled: false
   replicaCount: 1
