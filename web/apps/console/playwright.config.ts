@@ -14,6 +14,12 @@ import { defineConfig, devices } from "@playwright/test";
 // what the console does when the server wants a credential, for both kinds. Its
 // own preview port = its own origin, so the credential it stores in localStorage
 // never leaks into the other project.
+// E2E_CONSOLE_URL: run the "chromium" project against a console served from somewhere else —
+// e2e/image.sh builds web/apps/console/Dockerfile and points this at the container, so the
+// nginx config (SPA fallback, /api proxy, cache headers) is what gets tested, not vite preview.
+// The rpc is still started here; the container reaches it through the host. (image.sh runs
+// --project chromium only; the auth pair still starts but is unused in that mode.)
+const consoleURL = process.env.E2E_CONSOLE_URL;
 const rpcPort = Number(process.env.E2E_RPC_PORT ?? 18091);
 const webPort = Number(process.env.E2E_WEB_PORT ?? 4173);
 const authRpcPort = rpcPort + 1;
@@ -55,7 +61,7 @@ export default defineConfig({
       testIgnore: /\/auth\//,
       use: {
         ...devices["Desktop Chrome"],
-        baseURL: `http://localhost:${webPort}`,
+        baseURL: consoleURL ?? `http://localhost:${webPort}`,
       },
     },
     {
@@ -83,12 +89,16 @@ export default defineConfig({
       stdout: "ignore",
       stderr: "pipe",
     },
-    {
-      command: `pnpm exec vite preview --port ${webPort} --strictPort`,
-      url: `http://localhost:${webPort}/`,
-      env: { CONSOLE_API: rpc },
-      reuseExistingServer: !process.env.CI,
-    },
+    ...(consoleURL
+      ? []
+      : [
+          {
+            command: `pnpm exec vite preview --port ${webPort} --strictPort`,
+            url: `http://localhost:${webPort}/`,
+            env: { CONSOLE_API: rpc },
+            reuseExistingServer: !process.env.CI,
+          },
+        ]),
     {
       // auth.mode=required, in-memory: probes stay open (readyz is the ready signal),
       // every RPC wants X-API-Key or a bearer JWT; the admin role comes from the
