@@ -12,6 +12,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/golang-jwt/jwt/v5"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -24,7 +25,7 @@ const secret = "0123456789abcdef0123456789abcdef" // 32 bytes
 // principal the next function saw, and the error.
 func call(t *testing.T, cfg config.Auth, procedure string, headers map[string]string) (contextx.Principal, error) {
 	t.Helper()
-	in, err := server.NewAuthInterceptor(cfg)
+	in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,18 +74,18 @@ func errCode(err error) (connect.Code, string) {
 
 func TestAuthInterceptor_Off(t *testing.T) {
 	for _, mode := range []string{"", config.AuthOff} {
-		in, err := server.NewAuthInterceptor(config.Auth{Mode: mode})
+		in, err := server.NewAuthInterceptor(config.Auth{Mode: mode}, noop.NewMeterProvider())
 		if err != nil || in != nil {
 			t.Fatalf("mode %q: %v, %v", mode, in, err)
 		}
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider()); err == nil {
 		t.Fatal("required with nothing configured must fail")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, APIKeys: "ci=short"}); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, APIKeys: "ci=short"}, noop.NewMeterProvider()); err == nil {
 		t.Fatal("short api key must fail")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{HS256Secret: "short"}}); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{HS256Secret: "short"}}, noop.NewMeterProvider()); err == nil {
 		t.Fatal("short hs256 secret must fail")
 	}
 }
@@ -179,7 +180,7 @@ func TestAuthInterceptor_AlgorithmPinned(t *testing.T) {
 	if _, err := call(t, cfg, "/a.v1.S/Get", map[string]string{server.AuthorizationHeader: "Bearer " + confused}); err == nil {
 		t.Fatal("HS256 token signed with the public key must be rejected")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{PublicKey: "not pem"}}); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{PublicKey: "not pem"}}, noop.NewMeterProvider()); err == nil {
 		t.Fatal("bad pem must fail")
 	}
 	// Only api keys configured: a bearer token is a credential that cannot verify.

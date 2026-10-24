@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric/noop"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -46,7 +47,7 @@ func TestAccessLine_Principal(t *testing.T) {
 		JWT:     config.JWT{HS256Secret: secret},
 		Public:  []string{"/a.v1.S/Public"},
 	}
-	authn, err := server.NewAuthInterceptor(cfg)
+	authn, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider())
 	if err != nil {
 		t.Fatal(err)
 	}

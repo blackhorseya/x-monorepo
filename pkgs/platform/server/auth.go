@@ -15,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 
@@ -57,6 +58,25 @@ type apiKey struct {
 	roles []string
 }
 
+// Results of one pass through the auth interceptor, the `result` attribute of
+// auth.decisions (Prometheus: auth_decisions_total{result, method}). The
+// rejected ones are what the dashboard's Auth row and the "credential
+// rejections" alert watch: `invalid` climbing is someone guessing keys or a
+// client still sending a rotated key, `missing` climbing after a deploy is a
+// client that lost its header. otelconnect's rpc_server_call_duration_seconds
+// only says `unauthenticated` for both, hence this counter. `method` is which
+// credential header was sent (api_key / jwt / none) — never who.
+const (
+	ResultOK        = "ok"        // credential verified, principal in the context
+	ResultPublic    = "public"    // procedure in auth.public, nothing checked
+	ResultAnonymous = "anonymous" // no credential, optional mode: runs anonymous
+	ResultMissing   = "missing"   // no credential, required mode: Unauthenticated
+	ResultInvalid   = "invalid"   // credential sent and rejected (any mode)
+
+	// MethodNone is the `method` attribute when no credential header was sent.
+	MethodNone = "none"
+)
+
 // NewAuthInterceptor builds the interceptor for cfg. With auth.mode off it
 // returns nil (nothing to install). Otherwise every RPC is resolved to a
 // principal: X-API-Key against auth.api_keys, else Authorization: Bearer
@@ -67,14 +87,22 @@ type apiKey struct {
 // context, into the request logger as `sub` (use-case lines), onto the rpc
 // access line (`auth`, `sub`, see NewLoggingInterceptor) and onto the span
 // (enduser.id, enduser.roles, auth.method) — the audit trail across Loki and
-// Tempo. Names and credentials are never recorded.
-func NewAuthInterceptor(cfg config.Auth) (connect.UnaryInterceptorFunc, error) {
+// Tempo. Names and credentials are never recorded. Every decision is counted
+// on mp's auth.decisions{result, method} (see the Result* constants).
+func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider) (connect.UnaryInterceptorFunc, error) {
 	switch cfg.Mode {
 	case config.AuthOff, "":
 		return nil, nil
 	case config.AuthOptional, config.AuthRequired:
 	default:
 		return nil, fmt.Errorf("auth: unknown mode %q", cfg.Mode)
+	}
+	decisions, err := mp.Meter("github.com/blackhorseya/x-monorepo/pkgs/platform/server").Int64Counter(
+		"auth.decisions",
+		metric.WithDescription("Auth interceptor outcomes: result ok / public / anonymous / missing / invalid, by credential method api_key / jwt / none."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("auth: decisions counter: %w", err)
 	}
 	a := &authenticator{}
 	if cfg.APIKeys != "" {
@@ -100,25 +128,37 @@ func NewAuthInterceptor(cfg config.Auth) (connect.UnaryInterceptorFunc, error) {
 	}
 	required := cfg.Mode == config.AuthRequired
 
+	count := func(c context.Context, result, method string) {
+		decisions.Add(c, 1, metric.WithAttributes(attribute.String("result", result), attribute.String("method", method)))
+	}
+
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			if public[req.Spec().Procedure] {
+				count(c, ResultPublic, MethodNone)
 				recordAuth(c, AuthPublic, "")
 				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(AuthPublic))
 
 				return next(c, req)
 			}
-			p, found, err := a.authenticate(req.Header().Get(APIKeyHeader), req.Header().Get(AuthorizationHeader))
+			apiKey, authorization := req.Header().Get(APIKeyHeader), req.Header().Get(AuthorizationHeader)
+			p, found, err := a.authenticate(apiKey, authorization)
 			switch {
 			case err != nil:
+				count(c, ResultInvalid, credentialMethod(apiKey, authorization))
+
 				return nil, authError(connect.CodeUnauthenticated, InvalidCredentialCode, err)
 			case !found && required:
+				count(c, ResultMissing, MethodNone)
+
 				return nil, authError(connect.CodeUnauthenticated, UnauthenticatedCode, errors.New("credentials required"))
 			case !found:
+				count(c, ResultAnonymous, MethodNone)
 				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(AuthAnonymous))
 
 				return next(c, req)
 			}
+			count(c, ResultOK, p.Method)
 			recordAuth(c, p.Method, p.Subject)
 			trace.SpanFromContext(c).SetAttributes(
 				semconv.EnduserID(p.Subject),
@@ -139,6 +179,19 @@ const (
 	enduserRolesKey = attribute.Key("enduser.roles")
 	authMethodKey   = attribute.Key("auth.method")
 )
+
+// credentialMethod names the credential a request carried, with the same
+// precedence as authenticate (an api key wins over a bearer token).
+func credentialMethod(apiKey, authorization string) string {
+	switch {
+	case apiKey != "":
+		return MethodAPIKey
+	case authorization != "":
+		return MethodJWT
+	default:
+		return MethodNone
+	}
+}
 
 // authenticate resolves the headers to a principal. found is false when no
 // credential was sent; err is set when one was sent and is invalid.
