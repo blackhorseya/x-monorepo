@@ -6,6 +6,8 @@
 # workflow then fills the draft with goreleaser and publishes it. Nobody tags by hand.
 # The autolabeler block at the bottom is used by .github/workflows/labeler.yml alone
 # (pull_request_target): labels are for the PR list, nothing here reads them.
+# sync-labels: a label from a rule that no longer matches is removed again.
+sync-labels: true
 name-template: "v$RESOLVED_VERSION"
 tag-template: "v$RESOLVED_VERSION"
 
