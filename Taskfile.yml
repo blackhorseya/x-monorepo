@@ -415,6 +415,11 @@ tasks:
     dir: web/apps/console
     cmds: ['pnpm exec playwright test {{.CLI_ARGS}}']
 
+  web-e2e-image:
+    desc: 'the chromium e2e project against the real console image: build web/apps/console/Dockerfile (docker or podman), run it with RPC_UPSTREAM back to the host, Playwright starts bin/rpc as usual; also runs e2e/image.spec.ts (nginx: SPA fallback, cache headers, /api proxy, /healthz). What CI''s console-image job runs'
+    deps: [build, web-build]
+    cmds: ['web/apps/console/e2e/image.sh {{.CLI_ARGS}}']
+
   config:
     desc: 'create configs/local.yaml from configs/config.example.yaml if missing'
     status: ['test -f {{.CONFIG}}']

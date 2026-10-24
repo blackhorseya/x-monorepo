@@ -223,6 +223,32 @@ jobs:
           path: web/apps/console/playwright-report
           retention-days: 7
 
+  # ── console-image: the same specs against the nginx image the release ships (in-memory rpc) ──
+  # vite preview also serves the SPA and proxies /api, but web/apps/console/Dockerfile's nginx
+  # config is what runs in the cluster: deep links → index.html, immutable assets, /api proxy.
+  console-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - uses: pnpm/action-setup@v6
+        with: { package_json_file: web/package.json }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: task build web-install
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web/apps/console
+      - run: task web-e2e-image
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-image
+          path: web/apps/console/playwright-report
+          retention-days: 7
+
   breaking:
     runs-on: ubuntu-latest
     continue-on-error: true
