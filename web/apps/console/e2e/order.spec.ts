@@ -8,8 +8,20 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   page,
 }) => {
   const customer = `e2e-detail-${Date.now()}`;
+  // With a worker, an order for a SKU nobody stocked is REJECTED and cancelled
+  // by inventory before this test reaches its Cancel button — so seed stock for
+  // a SKU of our own and the Reservation card gets to show RESERVED.
+  const sku = withDB ? `E2E-D-${Date.now()}` : "SKU-1";
+  if (withDB) {
+    await page.goto("/stock");
+    await page.getByLabel("SKU", { exact: true }).fill(sku);
+    await page.getByLabel("On hand").fill("5");
+    await page.getByRole("button", { name: "Set", exact: true }).click();
+    await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
+  }
   await page.goto("/orders");
   await page.getByLabel("Customer").first().fill(customer);
+  await page.getByLabel("SKU").first().fill(sku);
   await page.getByRole("button", { name: "Create order" }).click();
   await page.getByLabel("Customer").nth(1).fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
@@ -24,15 +36,25 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   ).toBeVisible();
   await expect(page.getByText(`customer ${customer}`)).toBeVisible();
 
-  const lines = page.getByRole("row").filter({ hasText: "SKU-1" });
+  const lines = page.getByRole("row").filter({ hasText: sku });
   await expect(lines).toHaveCount(1);
   await expect(lines).toContainText("12.99 USD"); // unit
   await expect(lines).toContainText("25.98 USD"); // 2 × 1299 minor
   await expect(page.getByTestId("order-total")).toContainText("25.98 USD");
   await expect(page.getByTestId("order-status")).toHaveText("PENDING");
-  // Without a worker nothing reserves; with one the card flips on its own
-  // (reservation.spec.ts covers the RESERVED path end to end).
-  if (!withDB) await expect(page.getByText("none yet")).toBeVisible();
+  // Without a worker nothing reserves; with one the card flips to RESERVED at
+  // the worker's pace and shows the reserved line.
+  const reservation = page
+    .locator('[data-slot="card"]', { hasText: "Reservation" })
+    .last();
+  if (withDB) {
+    await expect(reservation.getByText("RESERVED")).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(reservation).toContainText(`${sku} × 2`);
+  } else {
+    await expect(reservation.getByText("none yet")).toBeVisible();
+  }
   await expect(
     page.getByRole("link", { name: "Open in Reservations" })
   ).toHaveAttribute("href", `/reservations?order=${id}`);
@@ -40,6 +62,10 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByTestId("order-status")).toHaveText("CANCELLED");
   await expect(page.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+  if (withDB)
+    await expect(reservation.getByText("RELEASED")).toBeVisible({
+      timeout: 30_000,
+    });
 
   // Back on the list the row agrees (same cache key prefix, invalidated).
   await page.getByRole("link", { name: "All orders" }).click();
