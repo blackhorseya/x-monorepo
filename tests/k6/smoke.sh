@@ -28,6 +28,9 @@ for s in "${scripts[@]}"; do
     curl -fsS "http://127.0.0.1:$port/api/readyz" >/dev/null 2>&1 && break
     sleep 0.2
   done
-  k6 run --quiet "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e VUS=10 -e DURATION=10s -e RPS=50 -e "RUN_ID=smoke-$$"
+  # CREATE_P95: the smoke runs on a shared CI runner against a Postgres container, where
+  # CreateOrder's p95 lands anywhere between 150 and 400ms at the same p50 as a laptop.
+  k6 run --quiet "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e VUS=10 -e DURATION=10s -e RPS=50 \
+    -e "CREATE_P95=${CREATE_P95:-500}" -e "RUN_ID=smoke-$$"
   stop
 done

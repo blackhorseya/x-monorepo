@@ -543,7 +543,7 @@ release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghc
 ```bash
 task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 60s × 20 VU；BASE_URL / API_KEY / VUS / DURATION / RPS 用 env 蓋
 task k6 -- ratelimit -e RPS=50    # server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50 起
-task k6-smoke                     # tests/k6/smoke.sh：三個腳本各自起一個 bin/rpc（:18090、local Postgres、對應的 env），10s × 10 VU；CI 的 k6 job 就是它
+task k6-smoke                     # tests/k6/smoke.sh：三個腳本各自起一個 bin/rpc（:18090、local Postgres、對應的 env），10s × 10 VU；CI 的 k6 job 就是它；CreateOrder 的 p95 門檻放寬到 CREATE_P95（預設 500ms；腳本本身預設 300），shared runner 的尾巴比筆電寬
 ```
 
 worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等它——要看 consumer 追不追得上就看 `eventbus_consumer_lag`；這也是 Helm `worker.autoscaling.metric: lag` 的壓力源。
