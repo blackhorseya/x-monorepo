@@ -8,6 +8,10 @@ run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 #             web/apps/console/Dockerfile; goreleaser has no binary to attach it to) — all
 #             tagged vX.Y.Z before anything is published
 #   publish   gh release edit --draft=false → GitHub creates the tag and marks it latest
+#   chart     opens a chart-only PR moving deployments/helm's appVersion to the new tag (CI on it
+#             is dispatched by hand: GITHUB_TOKEN pushes start no workflows). Needs the repo
+#             setting "Allow GitHub Actions to create and approve pull requests"; without it the
+#             branch is pushed and the step summary links the compare page.
 # Nothing deploys. workflow_dispatch re-runs the whole chain for the current main HEAD.
 #
 # workflow_run has no paths-ignore, so `prepare` gates by hand: diff the commit against the last
@@ -175,3 +179,50 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: gh release edit "$TAG" --repo "$REPO" --target "$HEAD_SHA" --draft=false --latest
+
+  chart:
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the chore/chart-appversion-* branch
+      pull-requests: write   # open the PR
+      actions: write         # gh workflow run ci.yml on it
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main   # the PR targets current main, not the released commit
+      - name: PR moving the chart's appVersion to this release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          chart=deployments/helm/x-monorepo/Chart.yaml
+          v=${TAG#v}
+          cur=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' "$chart")
+          if [ "$cur" = "$v" ]; then
+            echo "chart appVersion already $v" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          IFS=. read -r a b c <<<"$(sed -n 's/^version: //p' "$chart")"
+          new="$a.$b.$((c + 1))"
+          sed -i "s/^version: .*/version: $new/; s/^appVersion: .*/appVersion: \"$v\"/" "$chart"
+          branch="chore/chart-appversion-$v"
+          title="chore(helm): chart $new — appVersion $v"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -qam "$title"
+          git push -f origin "$branch"
+          if [ "$(gh pr list --repo "$REPO" --head "$branch" --json number --jq 'length')" = 0 ]; then
+            body="Opened by release.yml after publishing $TAG: \`image.tag\` empty now deploys the release that exists. Chart-only, so merging it cuts no version."
+            if ! gh pr create --repo "$REPO" --base main --head "$branch" --title "$title" --body "$body"; then
+              echo "::warning::could not open the PR (repo setting 'Allow GitHub Actions to create and approve pull requests' is off?)"
+              echo "chart appVersion → $v pushed to \`$branch\`, open it by hand: https://github.com/$REPO/compare/main...$branch?expand=1" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+          gh workflow run ci.yml --repo "$REPO" --ref "$branch"
+          echo "chart appVersion → $v: $(gh pr list --repo "$REPO" --head "$branch" --json url --jq '.[0].url')" >> "$GITHUB_STEP_SUMMARY"
