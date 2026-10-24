@@ -516,7 +516,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 沒有任何檔案會進到 archive / image 就整條跳過（排除清單在 `scripts/releasable.sh`：docs、CI / hook / lint / `Taskfile.yml`、
 `scripts/`、Helm chart、kind / compose 開發環境、tests 與 test-only 套件（含 console 的 `e2e/`）；`web/` 其餘都算，console image 是 artifact；
 step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。
-`task release-gate` 在本機跑同一個腳本，merge 前就知道會不會發版。`workflow_dispatch` 不過 gate：
+`task release-gate` 在本機跑同一個腳本，merge 前就知道會不會發版，會的話再跑 `scripts/next-version.sh` 從 commit title 算 drafter 會給的版號（`!` → major、`feat` → minor、其餘 patch；main 上每個 commit 都是 squash 進來的 PR title，所以和 drafter 一致）。`workflow_dispatch` 不過 gate：
 
 | job | 做什麼 |
 |---|---|

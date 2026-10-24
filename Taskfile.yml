@@ -343,8 +343,14 @@ tasks:
     cmds: ["goreleaser release --snapshot --clean --skip=docker,publish"]
 
   release-gate:
-    desc: 'what release.yml would ship: files changed since the last v* tag that reach an artifact (empty = merging this cuts no version)'
-    cmds: ['scripts/releasable.sh {{.CLI_ARGS}}']
+    desc: 'what release.yml would do with HEAD: the files changed since the last v* tag that reach an artifact (scripts/releasable.sh; none = no release) and the version release-drafter would resolve from the commit titles (scripts/next-version.sh)'
+    silent: true
+    cmds:
+      - |
+        files=$(scripts/releasable.sh {{.CLI_ARGS}})
+        if [ -z "$files" ]; then echo "no release: nothing releasable in that range"; exit 0; fi
+        echo "$files"
+        echo "→ release $(scripts/next-version.sh {{.CLI_ARGS}})"
 
   run:
     desc: 'build and run ./bin/rpc with configs/local.yaml (gitignored; seeded from the example); task run CONFIG=<file> to use another'
