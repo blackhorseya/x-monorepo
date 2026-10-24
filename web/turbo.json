@@ -3,6 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": ["VITE_CONSOLE_VERSION"],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
     "dev": {

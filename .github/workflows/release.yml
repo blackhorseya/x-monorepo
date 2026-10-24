@@ -120,8 +120,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       # The console's dist/ before goreleaser: a broken web build fails the job before any Go
-      # image has been pushed under this version.
-      - run: task web-build
+      # image has been pushed under this version. VITE_CONSOLE_VERSION is what its footer shows.
+      - run: VITE_CONSOLE_VERSION="${TAG#v}" task web-build   # same spelling as goreleaser's .Version
+        env: { TAG: "${{ needs.prepare.outputs.tag }}" }
       # dockers_v2 drives `docker buildx build --push` with --sbom and two platforms; the
       # default docker driver can do neither, so a docker-container builder is required.
       - uses: docker/setup-buildx-action@v4
