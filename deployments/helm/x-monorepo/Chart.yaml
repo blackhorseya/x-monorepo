@@ -7,7 +7,8 @@ description: >-
   /api/readyz, terminationGracePeriodSeconds derived from the apps' own shutdown settings.
 type: application
 # Chart version: bump on any template / values change. appVersion: the image tag deployed
-# when image.tag is empty — keep it on a published release (ghcr.io/blackhorseya/x-monorepo/*).
+# when image.tag is empty — a published release (ghcr.io/blackhorseya/x-monorepo/*); release.yml's
+# chart job opens a PR moving it (and bumping the patch here) after every release.
 version: 0.3.0
 appVersion: "0.23.0"
 kubeVersion: ">=1.26.0-0"
