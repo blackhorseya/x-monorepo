@@ -30,6 +30,20 @@ test("hashed assets are immutable, unknown ones are 404 (not index.html)", async
   expect((await request.get("/assets/does-not-exist.js")).status()).toBe(404);
 });
 
+test("security headers on what nginx serves, not on the proxied /api", async ({
+  request,
+}) => {
+  const page = (await request.get("/orders")).headers();
+  expect(page["content-security-policy"]).toContain("frame-ancestors 'none'");
+  expect(page["content-security-policy"]).toContain("script-src 'self'");
+  expect(page["x-content-type-options"]).toBe("nosniff");
+  expect(page["x-frame-options"]).toBe("DENY");
+  expect(page["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+  // The rpc owns /api responses (and /api/docs loads Scalar from a CDN): no CSP from nginx there.
+  const api = (await request.get("/api/version")).headers();
+  expect(api["content-security-policy"]).toBeUndefined();
+});
+
 test("/api is the rpc behind nginx; /healthz is nginx itself", async ({
   request,
 }) => {

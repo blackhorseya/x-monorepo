@@ -62,6 +62,7 @@ template: |
   ghcr.io/blackhorseya/x-monorepo/rpc:$RESOLVED_VERSION
   ghcr.io/blackhorseya/x-monorepo/worker:$RESOLVED_VERSION
   ghcr.io/blackhorseya/x-monorepo/migrate:$RESOLVED_VERSION
+  ghcr.io/blackhorseya/x-monorepo/console:$RESOLVED_VERSION
   ```
 
   **Full changelog**: https://github.com/blackhorseya/x-monorepo/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
