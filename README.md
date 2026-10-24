@@ -164,7 +164,6 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`；�
 | `order.duplicate` | `ALREADY_EXISTS` | ordering domain | 同 id 再 Save（repo 層） |
 | `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數 |
 | `stock.below_reserved` | `FAILED_PRECONDITION` | inventory domain | SetStock 想把 on-hand 壓到低於已 reserved |
-| `stock.insufficient` | `FAILED_PRECONDITION` | inventory domain | 定義了但目前沒人回：缺貨不是 error，consumer 走 `stock.ReserveAll` 做成 `SHORTFALL` reservation + event |
 | `stock.release_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Release 超過 reserved |
 | `stock.not_found` | `NOT_FOUND` | inventory domain | |
 | `reservation.invalid_order_id` / `reservation.no_lines` / `reservation.invalid_sku` / `reservation.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | aggregate 不變量 |
