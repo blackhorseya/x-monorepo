@@ -22,6 +22,10 @@ echo "smoke: running $(curl -fsS "$api/version")"
 for _ in $(seq 1 30); do curl -fsS "$console/healthz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "$console/reservations" | grep -q "<title>x-monorepo console</title>" \
   || { echo "smoke: console did not serve index.html for /reservations"; exit 1; }
+curl -fsSI "$console/reservations" | grep -qi '^content-security-policy: .*frame-ancestors' \
+  || { echo "smoke: console index.html lacks the CSP header"; exit 1; }
+curl -fsSI "$console/api/readyz" | grep -qi '^content-security-policy' \
+  && { echo "smoke: console applied its CSP to a proxied /api response"; exit 1; }
 curl -fsS "$console/api/readyz" >/dev/null || { echo "smoke: console /api proxy to the rpc failed"; exit 1; }
 echo "smoke: console serves the UI and proxies /api → $(curl -fsS "$console/api/version")"
 
