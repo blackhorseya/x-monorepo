@@ -1,17 +1,29 @@
 #!/usr/bin/env bash
-# End-to-end through the installed release: rpc answers, an order reserves stock via the worker.
+# End-to-end through the installed release: rpc answers, an order reserves stock via the worker,
+# the console serves the UI and proxies /api to the rpc.
 #   smoke.sh <namespace> <release>
 # Needs kubectl + curl + jq. Exits non-zero (with the pods' state) when anything is off.
 set -euo pipefail
-ns=$1 release=$2 port=${SMOKE_PORT:-18080}
+ns=$1 release=$2 port=${SMOKE_PORT:-18080} cport=${SMOKE_CONSOLE_PORT:-18081}
 api="http://127.0.0.1:$port/api"
+console="http://127.0.0.1:$cport"
 
 kubectl -n "$ns" port-forward "svc/$release-rpc" "$port:80" >/dev/null 2>&1 &
 pf=$!
-trap 'kill $pf 2>/dev/null || true' EXIT
+kubectl -n "$ns" port-forward "svc/$release-console" "$cport:80" >/dev/null 2>&1 &
+pfc=$!
+trap 'kill $pf $pfc 2>/dev/null || true' EXIT
 for _ in $(seq 1 30); do curl -fsS "$api/readyz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "$api/readyz" >/dev/null || { echo "smoke: /api/readyz never answered 200"; exit 1; }
 echo "smoke: running $(curl -fsS "$api/version")"
+
+# Console: the SPA for any route (TanStack Router handles /reservations client-side), the rpc
+# through nginx's /api proxy — what the browser does.
+for _ in $(seq 1 30); do curl -fsS "$console/healthz" >/dev/null 2>&1 && break; sleep 1; done
+curl -fsS "$console/reservations" | grep -q "<title>x-monorepo console</title>" \
+  || { echo "smoke: console did not serve index.html for /reservations"; exit 1; }
+curl -fsS "$console/api/readyz" >/dev/null || { echo "smoke: console /api proxy to the rpc failed"; exit 1; }
+echo "smoke: console serves the UI and proxies /api → $(curl -fsS "$console/api/version")"
 
 rpc() { curl -fsS -H 'Content-Type: application/json' "$api/$1" -d "$2"; }
 sku="kind-$(date +%s)"

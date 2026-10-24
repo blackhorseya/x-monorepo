@@ -1,0 +1,11 @@
+# Profile 5: the console on, with its own host; everything else default + a database.
+secrets:
+  postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
+console:
+  enabled: true
+  replicaCount: 2
+  ingress:
+    enabled: true
+    className: nginx
+    hosts: [{ host: console.example.com, paths: [{ path: /, pathType: Prefix }] }]
+    tls: [{ secretName: console-tls, hosts: [console.example.com] }]

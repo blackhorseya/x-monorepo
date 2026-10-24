@@ -125,3 +125,8 @@ checksum/secrets: {{ include "x-monorepo.secretData" . | sha256sum }}
 {{- end -}}
 {{- $t -}}
 {{- end -}}
+
+{{/* Where the console's nginx sends /api: the rpc Service of this release, in-cluster. */}}
+{{- define "x-monorepo.console.rpcUpstream" -}}
+{{- printf "http://%s-rpc:%d" (include "x-monorepo.fullname" .) (int .Values.rpc.service.port) -}}
+{{- end -}}

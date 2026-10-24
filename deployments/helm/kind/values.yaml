@@ -1,6 +1,7 @@
 # `task helm-kind`: the chart against deps.yaml inside a kind cluster, with images built from
 # the working tree and `kind load`ed (never pulled). Redis broker so the forwarder path
-# (outbox → Redis Streams → consumer) is the one exercised; everything else is the default.
+# (outbox → Redis Streams → consumer) is the one exercised; console on so its nginx → rpc
+# proxy is exercised too; everything else is the default.
 image:
   registry: localhost/x-monorepo
   tag: kind
@@ -18,3 +19,5 @@ rpc:
 worker:
   resources:
     requests: { cpu: 10m, memory: 32Mi }
+console:
+  enabled: true
