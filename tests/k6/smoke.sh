@@ -29,7 +29,10 @@ for s in "${scripts[@]}"; do
   esac
   env ${env[@]+"${env[@]}"} "$bin/rpc" > "$bin/k6-$s.log" 2>&1 & pid=$!
   if [ "$s" = reservation ]; then
-    "$bin/worker" > "$bin/k6-$s-worker.log" 2>&1 & wpid=$!
+    # Defaults, not config.example.yaml: that file has redis.url for compose-up and
+    # the worker pings whatever redis.url names at startup even with broker=postgres —
+    # CI has no Redis. Same as the console e2e's worker.setup.ts.
+    APP_CONFIG=/dev/null "$bin/worker" > "$bin/k6-$s-worker.log" 2>&1 & wpid=$!
   fi
   for _ in $(seq 1 50); do
     kill -0 "$pid" 2>/dev/null || { echo "rpc exited:"; cat "$bin/k6-$s.log"; exit 1; }
