@@ -51,7 +51,7 @@ postgres:
   url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
 
 redis:
-  # Only read when worker.broker is redis; `task compose-up` runs one here.
+  # Only used (connected, pinged) when worker.broker is redis; `task compose-up` runs one here.
   url: redis://127.0.0.1:6379/0
 
 otel:

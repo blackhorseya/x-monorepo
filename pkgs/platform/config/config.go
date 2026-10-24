@@ -119,7 +119,9 @@ type Postgres struct {
 
 // Redis configures the Redis the worker uses as its broker when
 // worker.broker is "redis" (platform/eventbus Redis Streams). Nothing else
-// reads it; an empty URL is fine with the default broker.
+// reads it, and with the default broker the worker does not even connect
+// (apps/worker ProvideRedis), so a URL pointing at a Redis that is not
+// running is harmless there.
 type Redis struct {
 	URL string `mapstructure:"url"` // e.g. redis://:pass@host:6379/0
 }

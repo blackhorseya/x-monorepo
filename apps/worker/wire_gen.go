@@ -19,7 +19,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/redis"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -41,8 +40,8 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	configRedis := cfg.Redis
-	universalClient, cleanup3, err := redis.NewClient(configRedis)
+	redis := cfg.Redis
+	universalClient, cleanup3, err := ProvideRedis(worker, redis)
 	if err != nil {
 		cleanup2()
 		cleanup()
