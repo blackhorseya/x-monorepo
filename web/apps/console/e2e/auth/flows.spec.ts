@@ -73,10 +73,10 @@ test("mutations carry the credential set after the page loaded", async ({
     page.getByRole("alert").filter({ hasText: "auth.unauthenticated" })
   ).toHaveCount(2);
 
-  // A role-less key is enough for OrderService: the list recovers at once, the
-  // form's own alert stays until its next attempt — which now succeeds.
+  // A role-less key is enough for OrderService: the list recovers at once and
+  // the form's stale error goes with it (the credential change resets mutations).
   await useKey(page, OPS_KEY);
-  await expect(page.getByRole("alert")).toHaveCount(1);
+  await expect(page.getByRole("alert")).toHaveCount(0);
   await page.getByLabel("Customer").first().fill(id);
   await page.getByRole("button", { name: "Create order" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
@@ -113,6 +113,7 @@ test("SetStock under auth: refused anonymous, ok with a key", async ({
   ).toBeVisible();
 
   await useKey(page, ADMIN_KEY);
+  await expect(page.getByRole("alert")).toHaveCount(0);
   await page.getByLabel("SKU", { exact: true }).fill(sku);
   await page.getByLabel("On hand").fill("3");
   await page.getByRole("button", { name: "Set", exact: true }).click();

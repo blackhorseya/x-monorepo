@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useResetOnCredentialChange } from "../auth";
 import { describe, isUnauthenticated, orders } from "../client";
 import { keys, ordersQuery, reservationQuery } from "../queries";
 import { reservationBadge } from "./reservations";
@@ -48,6 +49,7 @@ function CreateOrderCard() {
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.orders }),
   });
+  useResetOnCredentialChange(create);
 
   const setLine = (i: number, patch: Partial<Line>) =>
     setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -203,6 +205,7 @@ function OrderRow({ order }: { order: Order }) {
       void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
     },
   });
+  useResetOnCredentialChange(cancel);
   const pending = order.status === OrderStatus.PENDING;
 
   return (

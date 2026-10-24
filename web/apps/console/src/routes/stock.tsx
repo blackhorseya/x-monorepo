@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
+import { useResetOnCredentialChange } from "../auth";
 import type { Stock } from "@repo/proto/inventory/v1/entity_pb";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ export function StockPage() {
     mutationFn: () => inventory.setStock({ sku, onHand }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: keys.stocks }),
   });
+  useResetOnCredentialChange(set);
 
   return (
     <div className="grid gap-6">

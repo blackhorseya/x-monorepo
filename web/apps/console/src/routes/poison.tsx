@@ -2,6 +2,7 @@ import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
+import { useResetOnCredentialChange } from "../auth";
 import type { PoisonMessage } from "@repo/proto/admin/v1/service_pb";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,6 +77,7 @@ function useActions(bc: string, offsets: bigint[] | "all") {
   const done = () => qc.invalidateQueries({ queryKey: keys.poison });
   const requeue = useMutation({ mutationFn: () => admin.requeuePoison(body), onSuccess: done });
   const drop = useMutation({ mutationFn: () => admin.dropPoison(body), onSuccess: done });
+  useResetOnCredentialChange(requeue, drop);
   return { requeue, drop };
 }
 

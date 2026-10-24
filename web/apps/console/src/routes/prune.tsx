@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
+import { useResetOnCredentialChange } from "../auth";
 import type { PruneTable } from "@repo/proto/admin/v1/service_pb";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,7 @@ export function PrunePage() {
           .filter((g) => g !== ""),
       }),
   });
+  useResetOnCredentialChange(run);
   const verb = run.variables === undefined || dryRun ? "would delete" : "deleted";
 
   return (

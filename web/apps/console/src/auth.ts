@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 // The credential the console sends with every RPC, when the server runs with
 // auth.mode optional / required (platform/server auth interceptor). Either a
@@ -59,6 +59,20 @@ export function useCredential(): Credential | null {
     },
     getCredential,
   );
+}
+
+// Mutations are not queries: the credential control invalidates every query,
+// so a list that failed UNAUTHENTICATED recovers on the spot, but a form's own
+// failed mutation would keep showing its error until the next attempt. Pages
+// hang their mutations on this so a credential change (set / clear) resets
+// them too — the error was about the old credential.
+export function useResetOnCredentialChange(...mutations: { reset: () => void }[]): void {
+  const credential = useCredential();
+  const latest = useRef(mutations);
+  latest.current = mutations;
+  useEffect(() => {
+    for (const m of latest.current) m.reset(); // idle mutations: no-op
+  }, [credential]);
 }
 
 // Headers for the current credential: what the Connect interceptor attaches.
