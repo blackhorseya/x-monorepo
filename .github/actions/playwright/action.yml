@@ -1,0 +1,32 @@
+name: playwright
+description: >-
+  Chromium for Playwright, cached under ~/.cache/ms-playwright keyed on the installed
+  @playwright/test version (not the lockfile: an unrelated npm bump must not evict it).
+  On a hit only the apt dependencies are installed (`install-deps`, not cached — apt is
+  the runner's); on a miss `install --with-deps` downloads the browser too and the cache
+  is saved for the next run. Needs pnpm + `task web-install` done (reads the version
+  from node_modules). Used by ci.yml's console-e2e and console-image jobs.
+
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      working-directory: web/apps/console
+      run: echo "v=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+    - id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.version.outputs.v }}-chromium
+
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: web/apps/console
+      run: pnpm exec playwright install --with-deps chromium
+
+    - if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      working-directory: web/apps/console
+      run: pnpm exec playwright install-deps chromium
