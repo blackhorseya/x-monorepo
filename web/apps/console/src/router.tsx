@@ -2,6 +2,7 @@ import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } fr
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { CredentialControl } from "./components/credential";
+import { ServerVersion } from "./components/version";
 import { OrdersPage, type OrdersSearch } from "./routes/orders";
 import { PoisonPage } from "./routes/poison";
 import { PrunePage, type PruneSearch } from "./routes/prune";
@@ -29,6 +30,9 @@ const rootRoute = createRootRoute({
         <CredentialControl />
       </header>
       <Outlet />
+      <footer className="mt-10 flex justify-end text-xs text-muted-foreground">
+        <ServerVersion />
+      </footer>
     </div>
   ),
 });

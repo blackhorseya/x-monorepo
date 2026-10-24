@@ -3,6 +3,9 @@ import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { admin, inventory, isNotFound, orders } from "./client";
 
+// GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
+export type ServerVersion = { version: string; commit: string; date: string; go: string };
+
 // The server exposes unary RPCs only, so the console polls. Reservations are
 // written by apps/worker after it consumes OrderCreated, and orders can be
 // cancelled by inventory (shortfall), so both change without a user action.
@@ -17,7 +20,21 @@ export const keys = {
   reservations: (status: ReservationStatus) => ["reservations", status] as const,
   poison: ["poison"] as const,
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
+  version: ["version"] as const,
 };
+
+// The build never changes while a tab is open; refetch only on a reload or
+// after a long idle so a rolling deploy eventually shows up.
+export const versionQuery = queryOptions({
+  queryKey: keys.version,
+  queryFn: async (): Promise<ServerVersion> => {
+    const res = await fetch("/api/version");
+    if (!res.ok) throw new Error(`GET /api/version: ${res.status}`);
+    return (await res.json()) as ServerVersion;
+  },
+  staleTime: 5 * 60_000,
+  refetchInterval: 5 * 60_000,
+});
 
 // Orders newest first, 20 per page, by customer (empty = any) and status
 // (UNSPECIFIED = any). Loaded pages poll: inventory cancels orders on its own.
