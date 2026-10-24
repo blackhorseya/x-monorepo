@@ -10,7 +10,7 @@
 // Postgres service container make the write path's tail wider, not slower on
 // median (observed p50 22ms / p95 368ms / zero errors on a 10s run).
 import { sleep } from "k6";
-import { rpc, ok, sku } from "./lib.js";
+import { rpc, ok, sku, setStock } from "./lib.js";
 
 const SKUS = Number(__ENV.SKUS || 20);
 const CREATE_P95 = Number(__ENV.CREATE_P95 || 300);
@@ -35,7 +35,7 @@ export const options = {
 
 export function setup() {
   for (let i = 0; i < SKUS; i++) {
-    ok(rpc("inventory.v1.InventoryService/SetStock", { sku: sku(i), on_hand: 1_000_000 }), "SetStock");
+    setStock(i, 1_000_000);
   }
 }
 
@@ -47,13 +47,31 @@ export default function () {
     items.push({
       sku: sku(Math.floor(Math.random() * SKUS)),
       quantity: 1 + Math.floor(Math.random() * 5),
-      unit_price: { amount_minor: 100 + Math.floor(Math.random() * 10_000), currency: "USD" },
+      unit_price: {
+        amount_minor: 100 + Math.floor(Math.random() * 10_000),
+        currency: "USD",
+      },
     });
   }
-  const created = ok(rpc("ordering.v1.OrderService/CreateOrder", { customer_id: customer, items }), "CreateOrder");
+  const created = ok(
+    rpc("ordering.v1.OrderService/CreateOrder", {
+      customer_id: customer,
+      items,
+    }),
+    "CreateOrder"
+  );
   if (created) {
-    ok(rpc("ordering.v1.OrderService/GetOrder", { id: created.order.id }), "GetOrder");
+    ok(
+      rpc("ordering.v1.OrderService/GetOrder", { id: created.order.id }),
+      "GetOrder"
+    );
   }
-  ok(rpc("ordering.v1.OrderService/ListOrders", { customer_id: customer, page_size: 20 }), "ListOrders");
+  ok(
+    rpc("ordering.v1.OrderService/ListOrders", {
+      customer_id: customer,
+      page_size: 20,
+    }),
+    "ListOrders"
+  );
   sleep(Number(__ENV.THINK || 0.1));
 }

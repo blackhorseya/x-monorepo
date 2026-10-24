@@ -35,7 +35,9 @@ export function ok(res, what) {
 }
 
 export function errorCode(res) {
-  return res.headers["X-Error-Code"] || (res.status === 200 ? "" : safeCode(res));
+  return (
+    res.headers["X-Error-Code"] || (res.status === 200 ? "" : safeCode(res))
+  );
 }
 
 function safeCode(res) {
@@ -44,6 +46,21 @@ function safeCode(res) {
   } catch (_) {
     return String(res.status);
   }
+}
+
+// setStock for setup(): SetStock is a read-modify-write under optimistic locking, so a
+// worker touching the same SKU at that moment answers 409 Aborted + concurrent_update —
+// "reload and retry", which for an absolute on_hand means: send it again.
+export function setStock(i, onHand) {
+  let res;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    res = rpc("inventory.v1.InventoryService/SetStock", {
+      sku: sku(i),
+      on_hand: onHand,
+    });
+    if (res.status !== 409) break;
+  }
+  return ok(res, "SetStock");
 }
 
 export function sku(i) {

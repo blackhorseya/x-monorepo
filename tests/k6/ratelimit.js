@@ -35,7 +35,10 @@ export const options = {
   },
   thresholds: {
     // the limiter let through about RPS/s (+ one burst), and rejected the rest
-    accepted: [`count<=${Math.ceil(RPS * seconds * 1.3 + RPS)}`, `count>=${Math.floor(RPS * seconds * 0.7)}`],
+    accepted: [
+      `count<=${Math.ceil(RPS * seconds * 1.3 + RPS)}`,
+      `count>=${Math.floor(RPS * seconds * 0.7)}`,
+    ],
     rate_limited: ["count>0"],
     rate_limited_well_formed: ["rate==1"],
     // nothing but 200 and 429 came back
@@ -44,7 +47,11 @@ export const options = {
 };
 
 export default function () {
-  const res = rpc("ordering.v1.OrderService/ListOrders", { page_size: 1 }, { tags: { scenario: "flood" } });
+  const res = rpc(
+    "ordering.v1.OrderService/ListOrders",
+    { page_size: 1 },
+    { tags: { scenario: "flood" } }
+  );
   if (res.status === 200) {
     accepted.add(1);
     return;
@@ -53,10 +60,12 @@ export default function () {
   const retryAfter = Number(res.headers["Retry-After"]);
   wellFormed.add(
     check(res, {
-      "429": (r) => r.status === 429,
+      429: (r) => r.status === 429,
       "code resource_exhausted": (r) => r.json("code") === "resource_exhausted",
-      "x-error-code request.rate_limited": (r) => errorCode(r) === "request.rate_limited",
-      "Retry-After integer >= 1": () => Number.isInteger(retryAfter) && retryAfter >= 1,
-    }),
+      "x-error-code request.rate_limited": (r) =>
+        errorCode(r) === "request.rate_limited",
+      "Retry-After integer >= 1": () =>
+        Number.isInteger(retryAfter) && retryAfter >= 1,
+    })
   );
 }
