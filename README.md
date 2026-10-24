@@ -405,7 +405,7 @@ reservation 狀態。
 task run            # rpc :8080（要看到 reservation 還需要 Postgres + task migrate -- up + task worker）
 task web-dev        # http://localhost:5173；CONSOLE_API=http://host:port 可改 proxy 目標
 task web-typecheck  # @repo/proto + @repo/console 的 tsc --noEmit（CI 的 web job 也跑這個 + web-build）
-task web-e2e        # Playwright smoke：建好的 console（vite preview）打真的 ./bin/rpc（無 DB、in-memory）；orders / stock / poison / prune 各頁走一遍（CI 的 console-e2e job）。第一次要 cd web/apps/console && pnpm exec playwright install chromium
+task web-e2e        # Playwright smoke：建好的 console（vite preview）打真的 ./bin/rpc；orders / stock / poison / prune 各頁走一遍。E2E_DATABASE_URL=postgres://… 先 migrate up 再接那個 DB（CI 的 console-e2e job 這樣跑，poison / prune 真的執行），沒設就 in-memory、admin 頁驗 admin.no_database。第一次要 cd web/apps/console && pnpm exec playwright install chromium
 ```
 
 | 主題 | 做法 |

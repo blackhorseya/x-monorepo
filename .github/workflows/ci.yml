@@ -181,9 +181,18 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: task web-typecheck web-build
 
-  # ── console-e2e: the built console driven by Playwright against a real bin/rpc (in-memory) ──
+  # ── console-e2e: the built console driven by Playwright against a real bin/rpc on Postgres ──
+  # (E2E_DATABASE_URL: the webServer runs bin/migrate up first; poison / prune then run for real)
   console-e2e:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      E2E_DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
