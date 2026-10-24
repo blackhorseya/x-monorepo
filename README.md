@@ -426,7 +426,8 @@ task web-e2e        # Playwright smoke：建好的 console（vite preview）打�
 一個 server：`/` 走 SPA fallback（任何路由都回 `index.html`，`assets/` immutable cache）、`/api/` proxy 到 `RPC_UPSTREAM`（預設 `http://rpc:8080`），
 瀏覽器維持 same-origin，rpc 一樣不需要 CORS；`/healthz` 給 probe。image 只寫 `/tmp`（entrypoint 用 envsubst 把 template render 到 `/tmp/default.conf`，
 `conf.d` 只剩一行 include），所以 read-only rootfs + 任意 uid 都能跑——Helm chart 的 `console.enabled` 就是這樣部署它（見 Deploy）。
-image 目前只在 `task helm-kind` 本機 build（`localhost/x-monorepo/console:kind`），release pipeline 還沒發 `ghcr.io/.../console`。
+release pipeline 把它和三個 Go image 一起推成 `ghcr.io/blackhorseya/x-monorepo/console:X.Y.Z`（見 Release；`task helm-kind` 則從 working tree
+build 成 `localhost/x-monorepo/console:kind`）。所以 console 的改動**會切版**：只有 `e2e/` 和 `playwright.config.ts` 不算。
 
 ## Conventions
 
@@ -512,15 +513,16 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 **每次 CI 在 main 上綠就是一版**，沒有人手動打 tag（`.github/workflows/release.yml`，`workflow_run` 掛在 ci 後面；
 `workflow_dispatch` 可對目前 main HEAD 重跑）。`workflow_run` 沒有 `paths-ignore`，所以 prepare 先自己 gate：拿該 commit 和
 **上一個 tag** 做 diff（不是 parent commit——ci 對 main 是 cancel-in-progress，連續兩次 merge 只會觸發一次 release），
-沒有任何檔案會進到 archive / image 就整條跳過（排除清單在 `scripts/releasable.sh`：docs、`web/`、CI / hook / lint / `Taskfile.yml`、
-`scripts/`、Helm chart、kind / compose 開發環境、tests 與 test-only 套件；step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。
+沒有任何檔案會進到 archive / image 就整條跳過（排除清單在 `scripts/releasable.sh`：docs、CI / hook / lint / `Taskfile.yml`、
+`scripts/`、Helm chart、kind / compose 開發環境、tests 與 test-only 套件（含 console 的 `e2e/`）；`web/` 其餘都算，console image 是 artifact；
+step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。
 `task release-gate` 在本機跑同一個腳本，merge 前就知道會不會發版。`workflow_dispatch` 不過 gate：
 
 | job | 做什麼 |
 |---|---|
 | prepare | gate 過了才跑 release-drafter：依 merge 進來的 PR title 分類（`when.conventional`，不用 label）產 draft release `vX.Y.Z`；版號：`!` → major、`feat` → minor、其餘 patch，`test:` 不進 notes |
 | （labeler.yml） | 不在 release 鏈上：`pull_request_target` 跑 release-drafter 的 autolabeler，依 title 的 type 貼 `feature` / `fix` / `refactor` / `test` / `documentation` / `ci` / `breaking`，依路徑貼 `proto` / `web` / `helm` / `ordering` / `inventory` / `platform`。純顯示，版號不看它 |
-| build | 在該 commit 本地打 tag（不 push，goreleaser 需要）→ `goreleaser release`：archives 掛上那份 draft（`use_existing_draft` + `keep-existing`，notes 保留）、三個 multi-arch image 推 `ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:X.Y.Z`（非 prerelease 另打 `latest`） |
+| build | 在該 commit 本地打 tag（不 push，goreleaser 需要）→ `task web-build` → `goreleaser release`：archives 掛上那份 draft（`use_existing_draft` + `keep-existing`，notes 保留）、三個 multi-arch image 推 `ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:X.Y.Z`（非 prerelease 另打 `latest`）→ `docker buildx build --push` 把 console 的 `dist/` 推成第四個 image `.../console:X.Y.Z`（同一套 tag 規則；goreleaser 沒有 binary 可以掛它） |
 | publish | `gh release edit --draft=false --target <sha>`：GitHub 建 tag、標 latest。image 已經在 registry，release 一出現就能拉 |
 
 ```bash
