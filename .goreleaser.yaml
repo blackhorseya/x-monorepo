@@ -5,7 +5,9 @@
 #   task release-check         # validate this file
 # ci.yml runs the snapshot on PRs.
 # Three apps, one module each under go.work; goreleaser builds from each app dir, go.work is found
-# by walking up (no root go.mod, hence project_name is explicit).
+# by walking up (no root go.mod, hence project_name is explicit). The fourth image, the web
+# console (web/apps/console/Dockerfile), has no Go binary: release.yml pushes it with docker buildx
+# right after this, same tags.
 version: 2
 
 project_name: x-monorepo
@@ -73,8 +75,8 @@ checksum:
   name_template: checksums.txt
 
 # One image per app, multi-arch (linux/amd64 + linux/arm64) from the binaries above — the
-# Dockerfile only COPYs, so no QEMU is needed. ghcr packages are created private on first
-# push: link them to the repo / make them public in GitHub → Packages once.
+# Dockerfile only COPYs, so no QEMU is needed. ghcr packages (these and console) are created
+# private on first push: link them to the repo / make them public in GitHub → Packages once.
 dockers_v2:
   - id: rpc
     ids: [rpc]

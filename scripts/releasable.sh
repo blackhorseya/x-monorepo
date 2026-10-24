@@ -7,9 +7,11 @@
 #   task release-gate                        # same thing
 #
 # Everything is releasable unless excluded here. Excluded = changes no shipped artifact:
-# docs, the web console, CI / hook / lint / task configuration, tests and test-only helpers,
-# the Helm chart (not published anywhere), the kind / compose dev environments. The Dockerfile,
-# configs/config.example.yaml (packed into the archives) and .goreleaser.yaml stay releasable.
+# docs, CI / hook / lint / task configuration, tests and test-only helpers (the console's
+# Playwright e2e included), the Helm chart (not published anywhere), the kind / compose dev
+# environments. The web console itself IS shipped (release.yml pushes its nginx image), so
+# web/ counts except its tests. The Dockerfiles, configs/config.example.yaml (packed into the
+# archives) and .goreleaser.yaml stay releasable.
 # README.md / LICENSE are packed too, but a stale copy there is acceptable.
 # Pathspec `*` crosses `/`, so `*.md` is any depth.
 set -euo pipefail
@@ -20,7 +22,7 @@ if [ -z "$base" ]; then
   exit 2
 fi
 git diff --name-only "$base" "$head" -- . \
-  ':!*.md' ':!docs' ':!web' ':!.github' ':!.claude' ':!.idea' ':!.gitignore' \
+  ':!*.md' ':!docs' ':!web/apps/console/e2e' ':!web/apps/console/playwright.config.ts' ':!.github' ':!.claude' ':!.idea' ':!.gitignore' \
   ':!Taskfile.yml' ':!lefthook.yml' ':!.golangci.yml' ':!scripts' ':!buf.gen.ts.yaml' \
   ':!deployments/helm' ':!deployments/docker/docker-compose.yaml' ':!deployments/docker/grafana' \
   ':!*_test.go' ':!testdata' ':!tests' ':!pkgs/platform/archtest' ':!pkgs/platform/postgres/pgtest' ':!pkgs/platform/redis/redistest'
