@@ -8,7 +8,7 @@ description: >-
 type: application
 # Chart version: bump on any template / values change. appVersion: the image tag deployed
 # when image.tag is empty — keep it on a published release (ghcr.io/blackhorseya/x-monorepo/*).
-version: 0.2.1
+version: 0.3.0
 appVersion: "0.23.0"
 kubeVersion: ">=1.26.0-0"
 home: https://github.com/blackhorseya/x-monorepo

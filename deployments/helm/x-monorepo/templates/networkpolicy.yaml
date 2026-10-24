@@ -1,0 +1,77 @@
+{{- $np := .Values.networkPolicy -}}
+{{- if $np.enabled }}
+{{- $httpPort := int (regexReplaceAll ".*:" .Values.config.http.addr "") }}
+# Ingress-only policies (egress is left alone: where Postgres / Redis / the collector live
+# is the cluster's business). Enforced only by a CNI that implements NetworkPolicy — kind's
+# default kindnet does not, so helm-kind cannot prove these; check.py checks the shape.
+#   rpc:     the console's pods (same release) + networkPolicy.rpc.ingressFrom; empty list =
+#            any source on the http port (an ingress controller / Prometheus you did not list)
+#   worker:  nothing — it has no listener
+#   console: networkPolicy.console.ingressFrom, same empty-means-any rule
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rpc
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rpc
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: {{ $httpPort }} }
+      {{- if or $np.rpc.ingressFrom .Values.console.enabled }}
+      from:
+        {{- if .Values.console.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "x-monorepo.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: console
+        {{- end }}
+        {{- with $np.rpc.ingressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-worker
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  policyTypes: [Ingress]
+  ingress: []
+{{- if .Values.console.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-console
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: console
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8080 }
+      {{- with $np.console.ingressFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

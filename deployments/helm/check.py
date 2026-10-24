@@ -113,6 +113,41 @@ def main(profile: str) -> None:
         expect(cc["livenessProbe"]["httpGet"]["path"], "/healthz", "console liveness path")
         expect(cc["ports"][0]["containerPort"], 8080, "console containerPort = nginx-unprivileged's 8080")
 
+    # ServiceMonitor: scrapes the rpc Service's http port at /api/metrics.
+    sm = find(docs, "ServiceMonitor", "-rpc")
+    check((sm is not None) == values["rpc"]["serviceMonitor"]["enabled"], "ServiceMonitor iff enabled")
+    if sm:
+        svc = one(docs, "Service", "-rpc")
+        ep = sm["spec"]["endpoints"][0]
+        expect(ep["path"], "/api/metrics", "ServiceMonitor path")
+        expect(ep["port"], svc["spec"]["ports"][0]["name"], "ServiceMonitor port = the rpc Service's port name")
+        check(all(svc["metadata"]["labels"].get(k) == v for k, v in sm["spec"]["selector"]["matchLabels"].items()), "ServiceMonitor selects the rpc Service")
+        for k, v in values["rpc"]["serviceMonitor"]["labels"].items():
+            expect(sm["metadata"]["labels"].get(k), v, f"ServiceMonitor label {k}")
+
+    # NetworkPolicy: ingress-only, one per Deployment; the console may always reach the rpc.
+    npv = values["networkPolicy"]
+    for comp in ("rpc", "worker", "console"):
+        pol = find(docs, "NetworkPolicy", f"-{comp}")
+        want = npv["enabled"] and (comp != "console" or cv["enabled"])
+        check((pol is not None) == want, f"NetworkPolicy {comp} iff enabled")
+        if pol:
+            expect(pol["spec"]["policyTypes"], ["Ingress"], f"NetworkPolicy {comp} is ingress-only")
+            expect(pol["spec"]["podSelector"]["matchLabels"].get("app.kubernetes.io/component"), comp, f"NetworkPolicy {comp} selects its pods")
+    if npv["enabled"]:
+        rp = one(docs, "NetworkPolicy", "-rpc")["spec"]["ingress"][0]
+        expect(rp["ports"], [{"protocol": "TCP", "port": c["ports"][0]["containerPort"]}], "rpc NetworkPolicy port = http.addr")
+        peers = rp.get("from", [])
+        from_console = [p for p in peers if p.get("podSelector", {}).get("matchLabels", {}).get("app.kubernetes.io/component") == "console"]
+        check(bool(from_console) == cv["enabled"], "rpc NetworkPolicy admits the console iff the console is deployed")
+        check(len(peers) == len(from_console) + len(npv["rpc"]["ingressFrom"]), "rpc NetworkPolicy peers = console + ingressFrom")
+        check(("from" in rp) == bool(peers), "rpc NetworkPolicy: no peers listed means any source")
+        expect(one(docs, "NetworkPolicy", "-worker")["spec"]["ingress"], [], "worker NetworkPolicy denies all ingress")
+        if cv["enabled"]:
+            cp = one(docs, "NetworkPolicy", "-console")["spec"]["ingress"][0]
+            expect(cp["ports"], [{"protocol": "TCP", "port": 8080}], "console NetworkPolicy port")
+            expect(cp.get("from", []), npv["console"]["ingressFrom"], "console NetworkPolicy peers = ingressFrom")
+
     # Every app pod reads the same config file and, when there is one, the same Secret.
     for d in (rpc, worker):
         cc = d["spec"]["template"]["spec"]["containers"][0]
