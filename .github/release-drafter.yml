@@ -65,6 +65,17 @@ template: |
   ghcr.io/blackhorseya/x-monorepo/console:$RESOLVED_VERSION
   ```
 
+  ## Verify
+
+  Images carry an SBOM + provenance attestation and a keyless cosign signature; `checksums.txt` is signed too.
+
+  ```bash
+  ID='https://github.com/blackhorseya/x-monorepo/.github/workflows/release.yml@refs/heads/main'
+  ISS=https://token.actions.githubusercontent.com
+  cosign verify --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" ghcr.io/blackhorseya/x-monorepo/rpc:$RESOLVED_VERSION
+  cosign verify-blob --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" --certificate checksums.txt.pem --signature checksums.txt.sig checksums.txt
+  ```
+
   **Full changelog**: https://github.com/blackhorseya/x-monorepo/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
 
 # PR labels (labeler.yml): one from the Conventional Commits type, plus one per area touched.

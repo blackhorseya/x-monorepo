@@ -74,8 +74,24 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# Keyless (Sigstore) signatures, both from the ambient GitHub OIDC token (release.yml's build job
+# has id-token: write and installs cosign): checksums.txt gets a .sig + .pem next to it on the
+# release, every image is signed by digest (docker_signs is publish-phase, after the push).
+# Verify: see README → Release → 驗證. Snapshots skip this (`--skip=sign`): no OIDC token on a PR.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+
 # One image per app, multi-arch (linux/amd64 + linux/arm64) from the binaries above — the
-# Dockerfile only COPYs, so no QEMU is needed. ghcr packages (these and console) are created
+# Dockerfile only COPYs, so no QEMU is needed. dockers_v2 attaches an SBOM (sbom: true is the
+# default) and buildx adds SLSA provenance; release.yml gives the console image the same two. ghcr packages (these and console) are created
 # private on first push: link them to the repo / make them public in GitHub → Packages once.
 dockers_v2:
   - id: rpc
@@ -108,6 +124,12 @@ dockers_v2:
     build_args: { APP: migrate }
     tags: *image_tags
     annotations: *image_annotations
+
+# `artifacts` default (empty) = the dockers_v2 images above. The default args carry --key; keyless
+# is the override. ${digest} is the pushed index digest, so the signature covers every tag.
+docker_signs:
+  - cmd: cosign
+    args: ["sign", "--yes", "${artifact}@${digest}"]
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
