@@ -6,7 +6,8 @@ run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 #   build     goreleaser on that commit → archives onto the draft + one multi-arch image per
 #             app on ghcr, then `docker buildx build --push` of the web console (nginx image,
 #             web/apps/console/Dockerfile; goreleaser has no binary to attach it to) — all
-#             tagged vX.Y.Z before anything is published
+#             tagged vX.Y.Z before anything is published. Every image carries an SBOM and
+#             provenance attestation and a keyless cosign signature; checksums.txt is signed too
 #   publish   gh release edit --draft=false → GitHub creates the tag and marks it latest
 #   chart     opens a chart-only PR moving deployments/helm's appVersion to the new tag (CI on it
 #             is dispatched by hand: GITHUB_TOKEN pushes start no workflows). Needs the repo
@@ -97,6 +98,7 @@ jobs:
     permissions:
       contents: write   # upload archives to the draft
       packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate,console}
+      id-token: write   # cosign keyless: the OIDC token names this workflow in the certificate
     steps:
       - uses: actions/checkout@v7
         with:
@@ -131,6 +133,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Keyless signing (.goreleaser.yaml signs / docker_signs, and the console step below):
+      # the certificate's identity is this workflow at refs/heads/main, the issuer GitHub's.
+      - uses: sigstore/cosign-installer@v4
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2.18"
@@ -141,7 +146,9 @@ jobs:
       # The console image: dist/ from `task web-build` above into nginx-unprivileged. The
       # Dockerfile only COPYs and the base image is multi-arch, so like the Go images this
       # needs no QEMU. Same tag rule as .goreleaser.yaml's image_tags (latest unless prerelease);
-      # the `source` label is what links the ghcr package to this repo.
+      # the `source` label is what links the ghcr package to this repo. --sbom matches what
+      # dockers_v2 attaches to the Go images (buildx adds provenance on its own); the index
+      # digest from --metadata-file is what gets signed, so one signature covers both tags.
       - name: Push the console image
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -151,6 +158,7 @@ jobs:
           tags=(-t "$IMAGE:$version")
           case "$version" in *-*) ;; *) tags+=(-t "$IMAGE:latest") ;; esac
           docker buildx build --platform linux/amd64,linux/arm64 --push "${tags[@]}" \
+            --sbom=true --metadata-file bin/console-metadata.json \
             --label org.opencontainers.image.title=x-monorepo-console \
             --label org.opencontainers.image.description="Web console of the x-monorepo template (nginx)" \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
@@ -158,6 +166,8 @@ jobs:
             --label org.opencontainers.image.version="$version" \
             --label org.opencontainers.image.licenses=MIT \
             web/apps/console
+          digest=$(jq -r '."containerimage.digest"' bin/console-metadata.json)
+          cosign sign --yes "$IMAGE@$digest"
       - run: |
           {
             echo "## ${{ needs.prepare.outputs.tag }} built from \`$HEAD_SHA\`"

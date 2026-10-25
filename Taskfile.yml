@@ -339,8 +339,8 @@ tasks:
     cmds: [goreleaser check]
 
   release-snapshot:
-    desc: 'dry-run release into bin/dist: every binary + archive, no images (needs docker buildx), no publish'
-    cmds: ["goreleaser release --snapshot --clean --skip=docker,publish"]
+    desc: 'dry-run release into bin/dist: every binary + archive, no images (needs docker buildx), no signing (needs the CI OIDC token), no publish'
+    cmds: ["goreleaser release --snapshot --clean --skip=docker,publish,sign"]
 
   release-gate:
     desc: 'what release.yml would do with HEAD: the files changed since the last v* tag that reach an artifact (scripts/releasable.sh; none = no release) and the version release-drafter would resolve from the commit titles (scripts/next-version.sh)'
