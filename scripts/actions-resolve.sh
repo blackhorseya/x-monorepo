@@ -16,5 +16,6 @@ while IFS= read -r use; do
   else
     echo "MISSING $use (no tag, branch or commit named $ref in $repo)"; fail=1
   fi
-done < <(grep -rhoE 'uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[^ #]+' .github | sed -E 's/^uses: *//' | sort -u)
+done < <(grep -rhE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@' .github \
+  | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]#].*$//' | sort -u)   # the YAML key only, not prose mentioning `uses:`
 exit $fail
