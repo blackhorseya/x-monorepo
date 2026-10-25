@@ -202,6 +202,7 @@ function OrderRow({ order }: { order: Order }) {
     mutationFn: () => orders.cancelOrder({ id: order.id }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.orders });
+      void qc.invalidateQueries({ queryKey: keys.order(order.id) });
       void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
     },
   });
@@ -210,7 +211,11 @@ function OrderRow({ order }: { order: Order }) {
 
   return (
     <TableRow>
-      <TableCell className="font-mono text-xs">{order.id.slice(0, 8)}</TableCell>
+      <TableCell className="font-mono text-xs">
+        <Link to="/orders/$id" params={{ id: order.id }} title={order.id} className="underline">
+          {order.id.slice(0, 8)}
+        </Link>
+      </TableCell>
       <TableCell>{order.customerId}</TableCell>
       <TableCell className="text-right tabular-nums">{formatMoney(order.total?.amountMinor, order.total?.currency)}</TableCell>
       <TableCell>
@@ -281,7 +286,7 @@ export function ErrorAlert({ error }: { error: unknown }) {
   );
 }
 
-function formatMoney(minor: bigint | undefined, currency: string | undefined): string {
+export function formatMoney(minor: bigint | undefined, currency: string | undefined): string {
   if (minor === undefined || !currency) return "";
   return `${(Number(minor) / 100).toFixed(2)} ${currency}`;
 }

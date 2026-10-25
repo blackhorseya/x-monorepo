@@ -14,6 +14,7 @@ const POLL_MS = 2000;
 export const keys = {
   orders: ["orders"] as const,
   ordersPage: (customerId: string, status: OrderStatus) => ["orders", customerId, status] as const,
+  order: (id: string) => ["order", id] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
   stocks: ["stocks"] as const,
   stocksPage: (skuPrefix: string, onlyReserved: boolean) => ["stocks", skuPrefix, onlyReserved] as const,
@@ -46,6 +47,25 @@ export const ordersQuery = (customerId: string, status: OrderStatus) =>
     initialPageParam: "",
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
     refetchInterval: POLL_MS,
+  });
+
+// One order for /orders/$id; null = no such id. PENDING keeps polling because
+// inventory cancels orders on its own; CANCELLED is terminal.
+export const orderQuery = (id: string) =>
+  queryOptions({
+    queryKey: keys.order(id),
+    queryFn: async () => {
+      try {
+        return (await orders.getOrder({ id })).order ?? null;
+      } catch (err) {
+        if (isNotFound(err)) return null;
+        throw err;
+      }
+    },
+    refetchInterval: (q) => {
+      const s = q.state.data?.status;
+      return s === undefined || s === OrderStatus.PENDING ? POLL_MS : false;
+    },
   });
 
 // null = the worker has not reserved anything for this order (yet).

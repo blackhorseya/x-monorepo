@@ -131,7 +131,11 @@ function ReservationRow({ reservation: r }: { reservation: Reservation }) {
   const at = (t?: { seconds: bigint }) => (t ? new Date(Number(t.seconds) * 1000).toLocaleString() : "");
   return (
     <TableRow>
-      <TableCell className="font-mono text-xs">{r.orderId}</TableCell>
+      <TableCell className="font-mono text-xs">
+        <Link to="/orders/$id" params={{ id: r.orderId }} className="underline">
+          {r.orderId}
+        </Link>
+      </TableCell>
       <TableCell>
         <span className="flex flex-wrap items-center gap-2">
           <Badge variant={reservationBadge[r.status]}>{ReservationStatus[r.status]}</Badge>
