@@ -135,7 +135,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       # Keyless signing (.goreleaser.yaml signs / docker_signs, and the console step below):
       # the certificate's identity is this workflow at refs/heads/main, the issuer GitHub's.
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2   # no floating v4 tag exists: @v4 fails to resolve
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2.18"
