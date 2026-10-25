@@ -6,29 +6,54 @@ name: release-gate
 # Its own workflow, not a ci.yml job, so a retitle (`edited`) refreshes it without re-running CI —
 # the predicted bump comes from the PR title, which becomes the squash commit's subject.
 # Advice only: nothing here can fail the PR, and fork PRs are skipped (read-only token).
+# workflow_dispatch with a PR number is for PRs whose pull_request run never starts: the chart
+# PR release.yml opens with GITHUB_TOKEN (a bot PR needs approval before its workflows run), so
+# its chart job dispatches this instead.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to comment on
+        required: true
+        type: string
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: release-gate-${{ github.event.pull_request.number }}
+  group: release-gate-${{ inputs.pr || github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   comment:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }   # tags (the diff base) and origin/main
-      # HEAD is the merge of the PR into main (refs/pull/N/merge), so origin/main..HEAD is this
-      # PR's diff and <last tag>..origin/main is what already waits on main.
+      # On pull_request HEAD is already the merge of the PR into main (refs/pull/N/merge). On
+      # dispatch the PR's number, title and merge ref are looked up; the merge ref can lag a PR
+      # that was opened a moment ago, so fall back to its head (fine for a branch cut from main,
+      # which the chart PR is — releasable.sh diffs two-dot).
+      - name: Which PR?
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr || github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            TITLE=$(gh pr view "$PR" --json title --jq .title)
+            git fetch -q origin "refs/pull/$PR/merge:refs/release-gate/head" \
+              || git fetch -q origin "refs/pull/$PR/head:refs/release-gate/head"
+            git checkout -q refs/release-gate/head
+          fi
+          { echo "number=$PR"; echo "title=$TITLE"; } >> "$GITHUB_OUTPUT"
       - name: What would merging release?
-        env: { TITLE: "${{ github.event.pull_request.title }}" }
+        env: { TITLE: "${{ steps.pr.outputs.title }}" }
         run: |
           scripts/release-gate-pr.sh origin/main HEAD "$TITLE" | tee body.md >> "$GITHUB_STEP_SUMMARY"
       # Edit the existing comment (found by its marker) or create it. Dependabot PRs hand this job
@@ -38,7 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ steps.pr.outputs.number }}
         run: |
           # jq picks the one id itself: `| head -1` under Actions' default pipefail would SIGPIPE
           # gh on a long comment list and fail the step.
