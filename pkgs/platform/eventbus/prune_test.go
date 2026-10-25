@@ -167,7 +167,8 @@ func TestPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := eventbus.PruneTopicTable(c, db, eventbus.TableName(topic), opts)
-	if err != nil || res.Rows != 0 || len(res.Blockers) != 1 || res.Blockers[0] != (eventbus.Blocker{Group: "stale", Unread: 3}) {
+	if err != nil || res.Rows != 0 || len(res.Blockers) != 1 || res.Blockers[0].Group != "stale" || res.Blockers[0].Unread != 3 ||
+		res.Blockers[0].OldestUnread < 2*time.Hour || res.Blockers[0].OldestUnread > 3*time.Hour {
 		t.Fatalf("held back by a stale group: %+v, %v", res, err)
 	}
 	forget := eventbus.PruneOptions{OlderThan: time.Hour, ForgetGroups: []string{"stale", "never-existed"}, DryRun: true}

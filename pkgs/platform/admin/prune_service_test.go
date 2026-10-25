@@ -156,7 +156,8 @@ func TestPruneRPC(t *testing.T) {
 		t.Fatalf("published-only table = %v", tbl)
 	}
 	if tbl := tables[1]; tbl.GetTable() != eventbus.TableName(topic) || tbl.GetRows() != 0 || len(tbl.GetBlockers()) != 1 ||
-		tbl.GetBlockers()[0].GetConsumerGroup() != "test-old.prunea" || tbl.GetBlockers()[0].GetUnread() != 3 {
+		tbl.GetBlockers()[0].GetConsumerGroup() != "test-old.prunea" || tbl.GetBlockers()[0].GetUnread() != 3 ||
+		tbl.GetBlockers()[0].GetOldestUnread().AsDuration() < 48*time.Hour {
 		t.Fatalf("held topic = %v", tbl)
 	}
 	if tbl := tables[2]; tbl.GetTable() != "prunea.inbox" || tbl.GetRows() != 1 {

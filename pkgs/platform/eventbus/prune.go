@@ -40,9 +40,11 @@ type PruneResult struct {
 	Rows int64
 	// Skipped says why nothing was touched ("" when the table was pruned).
 	Skipped string
-	// Blockers are the consumer groups that still have unread rows older
-	// than OlderThan — what keeps those rows from being pruned. A group that
-	// will never catch up belongs in ForgetGroups.
+	// Blockers are the consumer groups with rows they have not read on this
+	// table, oldest unread first, whatever the rows' age — the same "held"
+	// the outbox gauges report. The ones whose OldestUnread is past
+	// OlderThan are what keeps prunable rows from going; a group that will
+	// never catch up belongs in ForgetGroups.
 	Blockers []Blocker
 	// Forgotten are the ForgetGroups that had a cursor on this table.
 	Forgotten []string
@@ -54,10 +56,14 @@ type PruneResult struct {
 const unread = `(m.transaction_id = o.last_processed_transaction_id AND m."offset" > o.offset_acked)
 	OR m.transaction_id > o.last_processed_transaction_id`
 
-// Blocker is a consumer group behind on a table.
+// Blocker is a consumer group behind on a table: Unread rows it has not
+// read, the oldest of them OldestUnread old. Past PruneOptions.OlderThan the
+// group holds prunable rows back; younger, it is merely behind (a live group
+// between two polls shows up like that).
 type Blocker struct {
-	Group  string
-	Unread int64
+	Group        string
+	Unread       int64
+	OldestUnread time.Duration
 }
 
 // TopicTables lists the outbox tables of a schema (`<schema>.events_<topic>`,
@@ -125,15 +131,26 @@ func PruneTopicTable(c context.Context, db *gorm.DB, table string, opts PruneOpt
 	if opts.DryRun && len(res.Forgotten) > 0 {
 		args = append(args, res.Forgotten)
 	}
-	// Who is holding old rows back, whatever happens next.
-	blockQ := `SELECT o.consumer_group AS "group", count(*) AS unread FROM ` + table + ` m JOIN ` + offsets + ` ON (` + unread + `)
-		WHERE m.created_at < localtimestamp - make_interval(secs => ?) GROUP BY 1 ORDER BY 2 DESC, 1`
-	blockArgs := []any{secs}
+	// Who is behind, by how much and since when — no age filter, so a stale
+	// group shows up before its rows reach the retention (the held gauge and
+	// its alert see it that early too), whatever happens next.
+	blockQ := `SELECT o.consumer_group AS "group", count(*) AS unread,
+		extract(epoch FROM localtimestamp - min(m.created_at)) AS oldest_secs
+		FROM ` + table + ` m JOIN ` + offsets + ` ON (` + unread + `) GROUP BY 1 ORDER BY 3 DESC, 1`
+	var blockArgs []any
 	if opts.DryRun && len(res.Forgotten) > 0 {
-		blockArgs = []any{res.Forgotten, secs}
+		blockArgs = []any{res.Forgotten}
 	}
-	if err := q.Raw(blockQ, blockArgs...).Scan(&res.Blockers).Error; err != nil {
+	var blockers []struct {
+		Group      string
+		Unread     int64
+		OldestSecs float64
+	}
+	if err := q.Raw(blockQ, blockArgs...).Scan(&blockers).Error; err != nil {
 		return res, fmt.Errorf("eventbus: prune %s: blockers: %w", table, err)
+	}
+	for _, b := range blockers {
+		res.Blockers = append(res.Blockers, Blocker{Group: b.Group, Unread: b.Unread, OldestUnread: time.Duration(b.OldestSecs * float64(time.Second))})
 	}
 	if opts.DryRun {
 		if err := q.Raw(`SELECT count(*) FROM `+table+` m WHERE `+where, args...).Scan(&res.Rows).Error; err != nil {

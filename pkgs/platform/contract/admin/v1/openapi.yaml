@@ -156,6 +156,14 @@ components:
           type: string
           title: unread
           format: int64
+          description: Rows on the table the group has not read, whatever their age.
+        oldestUnread:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Duration'
+          title: oldest_unread
+          description: |-
+            Age of the oldest of them. Past older_than the group holds prunable rows
+             back; younger, it is merely behind (a live group between two polls).
       title: PruneBlocker
       additionalProperties: false
     admin.v1.PruneRequest:
@@ -239,7 +247,10 @@ components:
           items:
             $ref: '#/components/schemas/admin.v1.PruneBlocker'
           title: blockers
-          description: Consumer groups still holding rows older than older_than back.
+          description: |-
+            Consumer groups with unread rows on the table, oldest unread first,
+             whatever the rows' age; the ones whose oldest_unread is past older_than
+             are what holds prunable rows back.
         forgotten:
           type: array
           items:
