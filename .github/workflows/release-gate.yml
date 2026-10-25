@@ -1,0 +1,48 @@
+name: release-gate
+
+# One sticky comment per PR saying what merging it does to the release train: "releases vX.Y.Z
+# (minor — feat: …)" or "cuts no release", plus which of its files reach an artifact and what is
+# already waiting on main (scripts/release-gate-pr.sh = the same scripts as `task release-gate`).
+# Its own workflow, not a ci.yml job, so a retitle (`edited`) refreshes it without re-running CI —
+# the predicted bump comes from the PR title, which becomes the squash commit's subject.
+# Advice only: nothing here can fail the PR, and fork PRs are skipped (read-only token).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: release-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }   # tags (the diff base) and origin/main
+      # HEAD is the merge of the PR into main (refs/pull/N/merge), so origin/main..HEAD is this
+      # PR's diff and <last tag>..origin/main is what already waits on main.
+      - name: What would merging release?
+        env: { TITLE: "${{ github.event.pull_request.title }}" }
+        run: |
+          scripts/release-gate-pr.sh origin/main HEAD "$TITLE" | tee body.md >> "$GITHUB_STEP_SUMMARY"
+      # Edit the existing comment (found by its marker) or create it. Dependabot PRs hand this job
+      # a read-only token, so a failed post is a notice, never a red check.
+      - name: Sticky comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[] | select(.body | startswith("<!-- release-gate -->")) | .id' | head -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@body.md --silent
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -F body=@body.md --silent
+          fi
