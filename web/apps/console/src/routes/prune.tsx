@@ -33,6 +33,12 @@ export function PrunePage() {
     void navigate({ replace: true, search: (prev) => ({ ...prev, ...patch }) });
   const [dryRun, setDryRun] = useState(true);
   const [unconsumed, setUnconsumed] = useState(false);
+  // A group badge in the note adds that group to forget (deduplicated, URL included), so the
+  // alert runbook is dry run → click → Dry run again → Prune, nothing retyped.
+  const addForget = (group: string) => {
+    const groups = forget.split(",").map((g) => g.trim()).filter((g) => g !== "");
+    if (!groups.includes(group)) setSearch({ forget: [...groups, group].join(",") });
+  };
 
   const run = useMutation({
     mutationFn: () =>
@@ -59,7 +65,8 @@ export function PrunePage() {
             Deletes outbox rows every consumer group has acknowledged and consumed inbox rows older than the age; poison
             tables are never touched. Start with a dry run: the note column lists every consumer group with unread rows
             and the age of its oldest one — <em>held back by</em> when that age is past the retention, <em>behind</em> when
-            a live group simply has not caught up yet — and a group that will never run again goes in <em>forget</em>.
+            a live group simply has not caught up yet — and a group that will never run again goes in <em>forget</em>
+            (click its badge to add it).
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -106,7 +113,7 @@ export function PrunePage() {
                     <TableCell className="font-mono text-xs">{t.table}</TableCell>
                     <TableCell className="text-right tabular-nums">{String(t.rows)}</TableCell>
                     <TableCell className="text-xs">
-                      <Note table={t} dryRun={dryRun} olderThanSeconds={days * 86400} />
+                      <Note table={t} dryRun={dryRun} olderThanSeconds={days * 86400} onForget={addForget} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -129,8 +136,19 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 }
 
 // Same wording as the CLI's NOTE column: forgotten groups, why skipped, who holds prunable
-// rows back (oldest unread past the retention) and who is merely behind.
-function Note({ table, dryRun, olderThanSeconds }: { table: PruneTable; dryRun: boolean; olderThanSeconds: number }) {
+// rows back (oldest unread past the retention) and who is merely behind. Each group is a
+// button that adds it to forget.
+function Note({
+  table,
+  dryRun,
+  olderThanSeconds,
+  onForget,
+}: {
+  table: PruneTable;
+  dryRun: boolean;
+  olderThanSeconds: number;
+  onForget: (group: string) => void;
+}) {
   const held = table.blockers.filter((b) => oldestSeconds(b) >= olderThanSeconds);
   const behind = table.blockers.filter((b) => oldestSeconds(b) < olderThanSeconds);
   return (
@@ -145,9 +163,7 @@ function Note({ table, dryRun, olderThanSeconds }: { table: PruneTable; dryRun: 
         <>
           <span>held back by</span>
           {held.map((b) => (
-            <Badge key={b.consumerGroup} variant="destructive" className="font-mono">
-              {b.consumerGroup} ({String(b.unread)} unread, oldest {age(oldestSeconds(b))})
-            </Badge>
+            <GroupBadge key={b.consumerGroup} blocker={b} variant="destructive" onForget={onForget} />
           ))}
         </>
       )}
@@ -155,13 +171,35 @@ function Note({ table, dryRun, olderThanSeconds }: { table: PruneTable; dryRun: 
         <>
           <span className="text-muted-foreground">behind:</span>
           {behind.map((b) => (
-            <Badge key={b.consumerGroup} variant="outline" className="font-mono">
-              {b.consumerGroup} ({String(b.unread)} unread, oldest {age(oldestSeconds(b))})
-            </Badge>
+            <GroupBadge key={b.consumerGroup} blocker={b} variant="outline" onForget={onForget} />
           ))}
         </>
       )}
     </span>
+  );
+}
+
+function GroupBadge({
+  blocker: b,
+  variant,
+  onForget,
+}: {
+  blocker: PruneBlocker;
+  variant: "destructive" | "outline";
+  onForget: (group: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="cursor-pointer rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      title="add to forget groups"
+      aria-label={`forget ${b.consumerGroup}`}
+      onClick={() => onForget(b.consumerGroup)}
+    >
+      <Badge variant={variant} className="font-mono">
+        {b.consumerGroup} ({String(b.unread)} unread, oldest {age(oldestSeconds(b))})
+      </Badge>
+    </button>
   );
 }
 
