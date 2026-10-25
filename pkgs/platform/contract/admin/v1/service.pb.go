@@ -645,7 +645,9 @@ type PruneTable struct {
 	Rows int64 `protobuf:"varint,2,opt,name=rows,proto3" json:"rows,omitempty"`
 	// Why nothing was touched; empty when the table was pruned.
 	Skipped string `protobuf:"bytes,3,opt,name=skipped,proto3" json:"skipped,omitempty"`
-	// Consumer groups still holding rows older than older_than back.
+	// Consumer groups with unread rows on the table, oldest unread first,
+	// whatever the rows' age; the ones whose oldest_unread is past older_than
+	// are what holds prunable rows back.
 	Blockers []*PruneBlocker `protobuf:"bytes,4,rep,name=blockers,proto3" json:"blockers,omitempty"`
 	// The forget_groups that had a cursor on this table.
 	Forgotten     []string `protobuf:"bytes,5,rep,name=forgotten,proto3" json:"forgotten,omitempty"`
@@ -721,7 +723,11 @@ func (x *PruneTable) GetForgotten() []string {
 type PruneBlocker struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ConsumerGroup string                 `protobuf:"bytes,1,opt,name=consumer_group,json=consumerGroup,proto3" json:"consumer_group,omitempty"`
-	Unread        int64                  `protobuf:"varint,2,opt,name=unread,proto3" json:"unread,omitempty"`
+	// Rows on the table the group has not read, whatever their age.
+	Unread int64 `protobuf:"varint,2,opt,name=unread,proto3" json:"unread,omitempty"`
+	// Age of the oldest of them. Past older_than the group holds prunable rows
+	// back; younger, it is merely behind (a live group between two polls).
+	OldestUnread  *durationpb.Duration `protobuf:"bytes,3,opt,name=oldest_unread,json=oldestUnread,proto3" json:"oldest_unread,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -768,6 +774,13 @@ func (x *PruneBlocker) GetUnread() int64 {
 		return x.Unread
 	}
 	return 0
+}
+
+func (x *PruneBlocker) GetOldestUnread() *durationpb.Duration {
+	if x != nil {
+		return x.OldestUnread
+	}
+	return nil
 }
 
 type PruneResponse struct {
@@ -883,10 +896,11 @@ const file_admin_v1_service_proto_rawDesc = "" +
 	"\x04rows\x18\x02 \x01(\x03R\x04rows\x12\x18\n" +
 	"\askipped\x18\x03 \x01(\tR\askipped\x122\n" +
 	"\bblockers\x18\x04 \x03(\v2\x16.admin.v1.PruneBlockerR\bblockers\x12\x1c\n" +
-	"\tforgotten\x18\x05 \x03(\tR\tforgotten\"M\n" +
+	"\tforgotten\x18\x05 \x03(\tR\tforgotten\"\x8d\x01\n" +
 	"\fPruneBlocker\x12%\n" +
 	"\x0econsumer_group\x18\x01 \x01(\tR\rconsumerGroup\x12\x16\n" +
-	"\x06unread\x18\x02 \x01(\x03R\x06unread\"S\n" +
+	"\x06unread\x18\x02 \x01(\x03R\x06unread\x12>\n" +
+	"\roldest_unread\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\foldestUnread\"S\n" +
 	"\rPruneResponse\x12,\n" +
 	"\x06tables\x18\x01 \x03(\v2\x14.admin.v1.PruneTableR\x06tables\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x03R\x05total2\xf2\x02\n" +
@@ -938,22 +952,23 @@ var file_admin_v1_service_proto_depIdxs = []int32{
 	0,  // 3: admin.v1.GetPoisonResponse.message:type_name -> admin.v1.PoisonMessage
 	15, // 4: admin.v1.PruneRequest.older_than:type_name -> google.protobuf.Duration
 	11, // 5: admin.v1.PruneTable.blockers:type_name -> admin.v1.PruneBlocker
-	10, // 6: admin.v1.PruneResponse.tables:type_name -> admin.v1.PruneTable
-	1,  // 7: admin.v1.AdminService.ListPoison:input_type -> admin.v1.ListPoisonRequest
-	3,  // 8: admin.v1.AdminService.GetPoison:input_type -> admin.v1.GetPoisonRequest
-	5,  // 9: admin.v1.AdminService.RequeuePoison:input_type -> admin.v1.RequeuePoisonRequest
-	7,  // 10: admin.v1.AdminService.DropPoison:input_type -> admin.v1.DropPoisonRequest
-	9,  // 11: admin.v1.AdminService.Prune:input_type -> admin.v1.PruneRequest
-	2,  // 12: admin.v1.AdminService.ListPoison:output_type -> admin.v1.ListPoisonResponse
-	4,  // 13: admin.v1.AdminService.GetPoison:output_type -> admin.v1.GetPoisonResponse
-	6,  // 14: admin.v1.AdminService.RequeuePoison:output_type -> admin.v1.RequeuePoisonResponse
-	8,  // 15: admin.v1.AdminService.DropPoison:output_type -> admin.v1.DropPoisonResponse
-	12, // 16: admin.v1.AdminService.Prune:output_type -> admin.v1.PruneResponse
-	12, // [12:17] is the sub-list for method output_type
-	7,  // [7:12] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	15, // 6: admin.v1.PruneBlocker.oldest_unread:type_name -> google.protobuf.Duration
+	10, // 7: admin.v1.PruneResponse.tables:type_name -> admin.v1.PruneTable
+	1,  // 8: admin.v1.AdminService.ListPoison:input_type -> admin.v1.ListPoisonRequest
+	3,  // 9: admin.v1.AdminService.GetPoison:input_type -> admin.v1.GetPoisonRequest
+	5,  // 10: admin.v1.AdminService.RequeuePoison:input_type -> admin.v1.RequeuePoisonRequest
+	7,  // 11: admin.v1.AdminService.DropPoison:input_type -> admin.v1.DropPoisonRequest
+	9,  // 12: admin.v1.AdminService.Prune:input_type -> admin.v1.PruneRequest
+	2,  // 13: admin.v1.AdminService.ListPoison:output_type -> admin.v1.ListPoisonResponse
+	4,  // 14: admin.v1.AdminService.GetPoison:output_type -> admin.v1.GetPoisonResponse
+	6,  // 15: admin.v1.AdminService.RequeuePoison:output_type -> admin.v1.RequeuePoisonResponse
+	8,  // 16: admin.v1.AdminService.DropPoison:output_type -> admin.v1.DropPoisonResponse
+	12, // 17: admin.v1.AdminService.Prune:output_type -> admin.v1.PruneResponse
+	13, // [13:18] is the sub-list for method output_type
+	8,  // [8:13] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_admin_v1_service_proto_init() }

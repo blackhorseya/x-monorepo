@@ -142,7 +142,9 @@ message PruneTable {
   int64 rows = 2;
   // Why nothing was touched; empty when the table was pruned.
   string skipped = 3;
-  // Consumer groups still holding rows older than older_than back.
+  // Consumer groups with unread rows on the table, oldest unread first,
+  // whatever the rows' age; the ones whose oldest_unread is past older_than
+  // are what holds prunable rows back.
   repeated PruneBlocker blockers = 4;
   // The forget_groups that had a cursor on this table.
   repeated string forgotten = 5;
@@ -150,7 +152,11 @@ message PruneTable {
 
 message PruneBlocker {
   string consumer_group = 1;
+  // Rows on the table the group has not read, whatever their age.
   int64 unread = 2;
+  // Age of the oldest of them. Past older_than the group holds prunable rows
+  // back; younger, it is merely behind (a live group between two polls).
+  google.protobuf.Duration oldest_unread = 3;
 }
 
 message PruneResponse {

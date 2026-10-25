@@ -115,7 +115,8 @@ type LagOptions struct {
 // oldest_age past the retention prune runs with means prune is not running or
 // cannot delete; oldest_held_age growing for days while every configured
 // group's consumer.oldest_age stays low means a group nobody runs any more
-// still has a cursor (`worker prune --dry-run` names it; --forget-group).
+// still has a cursor (`worker prune --dry-run` lists every group behind with
+// its oldest unread age, whatever the retention; --forget-group).
 // held counts against every group in the offsets table, not only the ones
 // this process consumes with; a table without any cursor has 0 held.
 //

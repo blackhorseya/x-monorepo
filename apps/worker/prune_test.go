@@ -71,6 +71,11 @@ func TestPruneCommand(t *testing.T) {
 		UNION ALL SELECT 'test-old.ordering', 0, '0'`).Error; err != nil {
 		t.Fatal(err)
 	}
+	// A fresh row nobody has read yet: the live group is "behind" on it, not
+	// holding anything back, and it is too young to be pruned anyway.
+	if err := pub.Publish(held, message.NewMessage(watermill.NewUUID(), []byte("p"))); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.WithContext(c).Exec("INSERT INTO inventory.inbox (message_id, consumed_at) VALUES (?, now() - interval '48 hours'), (?, now())", watermill.NewUUID(), watermill.NewUUID()).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -110,15 +115,16 @@ func TestPruneCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run: %v\n%s", err, out)
 	}
-	if !row(out, eventbus.TableName(held), "0") || !strings.Contains(out, "held back by test-old.ordering (1 unread)") {
-		t.Fatalf("stale group not reported:\n%s", out)
+	if !row(out, eventbus.TableName(held), "0") || !strings.Contains(out, "held back by test-old.ordering (2 unread, oldest 2d)") ||
+		!regexp.MustCompile(`behind: live\.ordering \(1 unread, oldest \ds\)`).MatchString(out) {
+		t.Fatalf("stale and behind groups not reported:\n%s", out)
 	}
 	out, err = exec(cfg, "--older-than", "24h", "--dry-run", "--forget-group", "test-old.ordering", "ordering")
 	if err != nil || !row(out, eventbus.TableName(held), "1") || !strings.Contains(out, "would forget test-old.ordering") {
 		t.Fatalf("forget dry run: %v\n%s", err, out)
 	}
 	out, err = exec(cfg, "--older-than", "24h", "--forget-group", "test-old.ordering", "ordering")
-	if err != nil || !row(out, eventbus.TableName(held), "1") || !strings.Contains(out, "forgot test-old.ordering") || count(eventbus.TableName(held)) != 0 {
+	if err != nil || !row(out, eventbus.TableName(held), "1") || !strings.Contains(out, "forgot test-old.ordering") || count(eventbus.TableName(held)) != 1 {
 		t.Fatalf("forget: %v\n%s", err, out)
 	}
 	out, err = exec(cfg, "--older-than", "24h", "--dry-run", "inventory")

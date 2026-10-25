@@ -42,8 +42,10 @@ func newPruneCmd(load func() (*config.AppConfig, error)) *cobra.Command {
                        under its original id; the inbox row is what keeps a BC that
                        already consumed it from doing so again).
 
-A row stays as long as ONE group with a cursor has not read it: the NOTE column names
-the groups holding old rows back. A group that will never run again (an E2E run
+A row stays as long as ONE group with a cursor has not read it: the NOTE column lists
+every group with unread rows and the age of its oldest one — "held back by" when that
+age is past --older-than (it really keeps rows from going), "behind" when younger (a
+live group between two polls is normal there). A group that will never run again (an E2E run
 against this database, a renamed worker.consumer_group, a BC group from before the
 broker moved to redis) is removed with --forget-group <name>; if it ever comes back it
 starts over as a new group (worker.start_from).
@@ -94,7 +96,7 @@ func prune(c context.Context, db *gorm.DB, bcs []string, opts eventbus.PruneOpti
 		}
 		for _, res := range results {
 			total += res.Rows
-			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", res.Table, res.Rows, note(res, opts.DryRun))
+			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", res.Table, res.Rows, note(res, opts))
 		}
 	}
 	if err := w.Flush(); err != nil {
@@ -106,12 +108,13 @@ func prune(c context.Context, db *gorm.DB, bcs []string, opts eventbus.PruneOpti
 }
 
 // note is the NOTE column of one topic table: why it was skipped, which
-// groups were forgotten, and which still hold old rows back.
-func note(res eventbus.PruneResult, dryRun bool) string {
+// groups were forgotten, which hold prunable rows back (oldest unread past
+// --older-than) and which are merely behind.
+func note(res eventbus.PruneResult, opts eventbus.PruneOptions) string {
 	var parts []string
 	if len(res.Forgotten) > 0 {
 		verb := "forgot"
-		if dryRun {
+		if opts.DryRun {
 			verb = "would forget"
 		}
 		parts = append(parts, verb+" "+strings.Join(res.Forgotten, ", "))
@@ -119,17 +122,44 @@ func note(res eventbus.PruneResult, dryRun bool) string {
 	if res.Skipped != "" {
 		parts = append(parts, res.Skipped)
 	}
-	if len(res.Blockers) > 0 {
-		names := make([]string, 0, len(res.Blockers))
-		for i, b := range res.Blockers {
-			if i == 3 {
-				names = append(names, fmt.Sprintf("+%d more", len(res.Blockers)-3))
-				break
-			}
-			names = append(names, fmt.Sprintf("%s (%d unread)", b.Group, b.Unread))
+	var held, behind []string
+	for _, b := range res.Blockers {
+		s := fmt.Sprintf("%s (%d unread, oldest %s)", b.Group, b.Unread, age(b.OldestUnread))
+		if b.OldestUnread >= opts.OlderThan {
+			held = append(held, s)
+		} else {
+			behind = append(behind, s)
 		}
-		parts = append(parts, "held back by "+strings.Join(names, ", "))
+	}
+	if len(held) > 0 {
+		parts = append(parts, "held back by "+strings.Join(capped(held), ", "))
+	}
+	if len(behind) > 0 {
+		parts = append(parts, "behind: "+strings.Join(capped(behind), ", "))
 	}
 
 	return strings.Join(parts, "; ")
+}
+
+// capped keeps the first three entries and counts the rest.
+func capped(names []string) []string {
+	if len(names) <= 3 {
+		return names
+	}
+
+	return append(names[:3:3], fmt.Sprintf("+%d more", len(names)-3))
+}
+
+// age renders a duration the way an operator reads it: 42s, 15m, 7h, 7d.
+func age(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }

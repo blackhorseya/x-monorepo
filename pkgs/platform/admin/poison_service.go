@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 
@@ -160,7 +161,7 @@ func (h *PoisonService) Prune(c context.Context, req *connect.Request[adminv1.Pr
 func pruneToProto(r eventbus.PruneResult) *adminv1.PruneTable {
 	out := &adminv1.PruneTable{Table: r.Table, Rows: r.Rows, Skipped: r.Skipped, Forgotten: r.Forgotten}
 	for _, b := range r.Blockers {
-		out.Blockers = append(out.Blockers, &adminv1.PruneBlocker{ConsumerGroup: b.Group, Unread: b.Unread})
+		out.Blockers = append(out.Blockers, &adminv1.PruneBlocker{ConsumerGroup: b.Group, Unread: b.Unread, OldestUnread: durationpb.New(b.OldestUnread)})
 	}
 
 	return out

@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { useResetOnCredentialChange } from "../auth";
-import type { PruneTable } from "@repo/proto/admin/v1/service_pb";
+import type { PruneBlocker, PruneTable } from "@repo/proto/admin/v1/service_pb";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,8 +57,9 @@ export function PrunePage() {
           <CardTitle>Prune</CardTitle>
           <CardDescription>
             Deletes outbox rows every consumer group has acknowledged and consumed inbox rows older than the age; poison
-            tables are never touched. Start with a dry run: the note column names the groups holding old rows back, and
-            a group that will never run again goes in <em>forget</em>.
+            tables are never touched. Start with a dry run: the note column lists every consumer group with unread rows
+            and the age of its oldest one — <em>held back by</em> when that age is past the retention, <em>behind</em> when
+            a live group simply has not caught up yet — and a group that will never run again goes in <em>forget</em>.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -105,7 +106,7 @@ export function PrunePage() {
                     <TableCell className="font-mono text-xs">{t.table}</TableCell>
                     <TableCell className="text-right tabular-nums">{String(t.rows)}</TableCell>
                     <TableCell className="text-xs">
-                      <Note table={t} dryRun={dryRun} />
+                      <Note table={t} dryRun={dryRun} olderThanSeconds={days * 86400} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -127,8 +128,11 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   );
 }
 
-// Same wording as the CLI's NOTE column: forgotten groups, why skipped, who holds rows back.
-function Note({ table, dryRun }: { table: PruneTable; dryRun: boolean }) {
+// Same wording as the CLI's NOTE column: forgotten groups, why skipped, who holds prunable
+// rows back (oldest unread past the retention) and who is merely behind.
+function Note({ table, dryRun, olderThanSeconds }: { table: PruneTable; dryRun: boolean; olderThanSeconds: number }) {
+  const held = table.blockers.filter((b) => oldestSeconds(b) >= olderThanSeconds);
+  const behind = table.blockers.filter((b) => oldestSeconds(b) < olderThanSeconds);
   return (
     <span className="flex flex-wrap items-center gap-1">
       {table.forgotten.length > 0 && (
@@ -137,16 +141,36 @@ function Note({ table, dryRun }: { table: PruneTable; dryRun: boolean }) {
         </span>
       )}
       {table.skipped && <span className="text-muted-foreground">{table.skipped}</span>}
-      {table.blockers.length > 0 && (
+      {held.length > 0 && (
         <>
           <span>held back by</span>
-          {table.blockers.map((b) => (
+          {held.map((b) => (
             <Badge key={b.consumerGroup} variant="destructive" className="font-mono">
-              {b.consumerGroup} ({String(b.unread)} unread)
+              {b.consumerGroup} ({String(b.unread)} unread, oldest {age(oldestSeconds(b))})
+            </Badge>
+          ))}
+        </>
+      )}
+      {behind.length > 0 && (
+        <>
+          <span className="text-muted-foreground">behind:</span>
+          {behind.map((b) => (
+            <Badge key={b.consumerGroup} variant="outline" className="font-mono">
+              {b.consumerGroup} ({String(b.unread)} unread, oldest {age(oldestSeconds(b))})
             </Badge>
           ))}
         </>
       )}
     </span>
   );
+}
+
+const oldestSeconds = (b: PruneBlocker) => Number(b.oldestUnread?.seconds ?? 0n);
+
+// 42s / 15m / 7h / 7d, the CLI's spelling.
+function age(seconds: number): string {
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 48 * 3600) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86400)}d`;
 }
