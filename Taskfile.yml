@@ -102,6 +102,12 @@ tasks:
       - task: cover-gate
       - task: build
       - task: helm-check
+      - task: scripts-test
+
+  scripts-test:
+    desc: 'scripts/test.sh: the CI / release decision scripts (ci-changes, releasable, next-version, release-gate-pr) against throwaway git repos'
+    cmds:
+      - scripts/test.sh
 
   test-affected:
     desc: go test -race on affected modules only

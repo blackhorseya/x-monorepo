@@ -37,6 +37,7 @@ jobs:
       run_console_e2e: ${{ steps.jobs.outputs.run_console_e2e }}
       run_console_image: ${{ steps.jobs.outputs.run_console_image }}
       run_helm: ${{ steps.jobs.outputs.run_helm }}
+      run_scripts_test: ${{ steps.jobs.outputs.run_scripts_test }}
       run_helm_kind: ${{ steps.jobs.outputs.run_helm_kind }}
       run_k6: ${{ steps.jobs.outputs.run_k6 }}
     steps:
@@ -235,6 +236,16 @@ jobs:
       - uses: actions/checkout@v7
       - run: scripts/actions-resolve.sh
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+
+  # ── scripts-test: the decision scripts above (which jobs run, what releases, which version) ──
+  # A wrong rule in scripts/ci-changes.sh skips a job silently, so its rules are pinned by tests.
+  scripts-test:
+    needs: affected
+    if: needs.affected.outputs.run_scripts_test == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/test.sh
 
   # ── breaking: warn only (decision: wire-incompatible changes are allowed, but visible) ──
   # ── web: @repo/proto must typecheck against the generated TS, console must build ──

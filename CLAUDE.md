@@ -61,7 +61,7 @@ shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` im
   改了 proto 或 wire provider 後要 `task gen wire` 並把產物一起 commit。
 
 CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，加依賴後 `task tidy`）、
-`cover-gate`（所有 `*/domain/*` package 必須 100% 覆蓋）、`buf breaking`（只警告）。PR 上每個 job 只在輸入有變時跑（`scripts/ci-changes.sh` 決定；main 一律全跑），所以一支 PR 沒跑 helm-kind / k6 是正常的，不是壞掉。
+`cover-gate`（所有 `*/domain/*` package 必須 100% 覆蓋）、`buf breaking`（只警告）。PR 上每個 job 只在輸入有變時跑（`scripts/ci-changes.sh` 決定；main 一律全跑），所以一支 PR 沒跑 helm-kind / k6 是正常的，不是壞掉；改 `scripts/ci-changes.sh` 的對照表要一起改 `scripts/test.sh`（`task scripts-test`）。
 
 ## 架構：誰依賴誰
 
