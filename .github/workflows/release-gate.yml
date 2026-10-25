@@ -40,7 +40,9 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[] | select(.body | startswith("<!-- release-gate -->")) | .id' | head -1)
+          # jq picks the one id itself: `| head -1` under Actions' default pipefail would SIGPIPE
+          # gh on a long comment list and fail the step.
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq 'first(.[] | select(.body | startswith("<!-- release-gate -->")) | .id)')
           if [ -n "$id" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@body.md --silent
           else
