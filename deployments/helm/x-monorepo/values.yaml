@@ -14,7 +14,7 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
-# The ghcr packages are private: a pull secret is required unless they were made public.
+# The ghcr packages are public: no pull secret needed. For a private mirror:
 #   kubectl create secret docker-registry ghcr --docker-server=ghcr.io --docker-username=<user> --docker-password=<PAT with read:packages>
 imagePullSecrets: []
 #  - name: ghcr

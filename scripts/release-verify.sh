@@ -5,8 +5,8 @@
 # images. release.yml's verify job runs it right after publish — a release whose own instructions
 # fail is a red run, not something found by hand a day later.
 #
-#   scripts/release-verify.sh vX.Y.Z    # needs gh (logged in), cosign, sha256sum; ghcr login for the
-#                                        # images (the packages are private): docker/podman login
+#   scripts/release-verify.sh vX.Y.Z    # needs gh (logged in), cosign, sha256sum; the ghcr packages
+#                                        # are public, so no registry login
 set -euo pipefail
 tag=${1:?usage: scripts/release-verify.sh vX.Y.Z}
 repo=${REPO:-blackhorseya/x-monorepo}
