@@ -11,6 +11,8 @@ run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 #             and the archives + checksums.txt get a GitHub artifact attestation (SLSA provenance,
 #             `gh attestation verify`)
 #   publish   gh release edit --draft=false → GitHub creates the tag and marks it latest
+#   verify    scripts/release-verify.sh on what was just published: the Verify block of the release
+#             notes, run for real (checksums bundle, archive attestation, four image signatures)
 #   chart     opens a chart-only PR moving deployments/helm's appVersion to the new tag (CI and the
 #             release-gate comment on it are dispatched by hand: GITHUB_TOKEN pushes start no workflows). Needs the repo
 #             setting "Allow GitHub Actions to create and approve pull requests"; without it the
@@ -204,6 +206,28 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: gh release edit "$TAG" --repo "$REPO" --target "$HEAD_SHA" --draft=false --latest
+
+  # Verify what the notes tell a reader to verify. Red here = published but broken signing /
+  # attestation (v0.26.0 took three tries for exactly that); the chart PR does not wait for it.
+  verify:
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read   # the ghcr packages are private: cosign needs a login to read the images
+    steps:
+      - uses: actions/checkout@v7
+      - uses: sigstore/cosign-installer@v4.1.2   # same pin as build above and ci.yml's release-snapshot
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: scripts/release-verify.sh "${{ needs.prepare.outputs.tag }}" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
 
   chart:
     needs: [prepare, publish]
