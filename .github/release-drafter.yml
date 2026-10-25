@@ -77,6 +77,8 @@ template: |
   gh attestation verify x-monorepo_${RESOLVED_VERSION}_linux_amd64.tar.gz --repo blackhorseya/x-monorepo
   ```
 
+  Or all of it at once: `scripts/release-verify.sh v$RESOLVED_VERSION` (the release run's `verify` job did the same right after publishing).
+
   **Full changelog**: https://github.com/blackhorseya/x-monorepo/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
 
 # PR labels (labeler.yml): one from the Conventional Commits type, plus one per area touched.
