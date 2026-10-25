@@ -34,6 +34,17 @@ test("/prune is prefilled from the URL and a dry run reaches the server", async 
   await expect(page.locator('[data-slot="card-title"]', { hasText: /^would delete \d+ row\(s\)$/ })).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "ordering." }).first()).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
+  // A group badge in the note adds that group to forget (URL too), deduplicated. Which groups
+  // are behind depends on what the worker is doing right now, so take whatever is there.
+  const badges = page.getByRole("button", { name: /^forget / });
+  if ((await badges.count()) > 0) {
+    const group = (await badges.first().getAttribute("aria-label"))!.replace(/^forget /, "");
+    await badges.first().click();
+    await expect(page.getByLabel("Forget groups (comma-separated)")).toHaveValue(`old.ordering,${group}`);
+    await expect(page).toHaveURL(new RegExp(`forget=old\\.ordering%2C${group.replace(/\./g, "\\.")}`));
+    await badges.first().click();
+    await expect(page.getByLabel("Forget groups (comma-separated)")).toHaveValue(`old.ordering,${group}`);
+  }
 });
 
 test("/reservations renders", async ({ page }) => {
