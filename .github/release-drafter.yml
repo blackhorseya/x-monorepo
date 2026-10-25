@@ -73,7 +73,7 @@ template: |
   ID='https://github.com/blackhorseya/x-monorepo/.github/workflows/release.yml@refs/heads/main'
   ISS=https://token.actions.githubusercontent.com
   cosign verify --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" ghcr.io/blackhorseya/x-monorepo/rpc:$RESOLVED_VERSION
-  cosign verify-blob --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" --certificate checksums.txt.pem --signature checksums.txt.sig checksums.txt
+  cosign verify-blob --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" --bundle checksums.txt.sigstore.json checksums.txt
   ```
 
   **Full changelog**: https://github.com/blackhorseya/x-monorepo/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION

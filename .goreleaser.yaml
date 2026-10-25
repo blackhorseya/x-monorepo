@@ -75,17 +75,18 @@ checksum:
   name_template: checksums.txt
 
 # Keyless (Sigstore) signatures, both from the ambient GitHub OIDC token (release.yml's build job
-# has id-token: write and installs cosign): checksums.txt gets a .sig + .pem next to it on the
-# release, every image is signed by digest (docker_signs is publish-phase, after the push).
-# Verify: see README → Release → 驗證. Snapshots skip this (`--skip=sign`): no OIDC token on a PR.
+# has id-token: write and installs cosign v3): checksums.txt gets a Sigstore bundle
+# (checksums.txt.sigstore.json — signature + certificate + Rekor entry in one file) next to it on
+# the release, every image is signed by digest (docker_signs is publish-phase, after the push).
+# cosign v3's sign-blob writes bundles only (--output-signature / --output-certificate are ignored),
+# so verify with --bundle. See README → Release → 驗證. Snapshots skip this (`--skip=sign`).
 signs:
   - cmd: cosign
     artifacts: checksum
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.sigstore.json"
     args:
       - sign-blob
-      - "--output-certificate=${certificate}"
-      - "--output-signature=${signature}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
 
