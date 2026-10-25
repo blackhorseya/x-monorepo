@@ -67,13 +67,14 @@ template: |
 
   ## Verify
 
-  Images carry an SBOM + provenance attestation and a keyless cosign signature; `checksums.txt` is signed too.
+  Images carry an SBOM + provenance attestation and a keyless cosign signature; `checksums.txt` is signed too, and every archive has a GitHub artifact attestation.
 
   ```bash
   ID='https://github.com/blackhorseya/x-monorepo/.github/workflows/release.yml@refs/heads/main'
   ISS=https://token.actions.githubusercontent.com
   cosign verify --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" ghcr.io/blackhorseya/x-monorepo/rpc:$RESOLVED_VERSION
   cosign verify-blob --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" --bundle checksums.txt.sigstore.json checksums.txt
+  gh attestation verify x-monorepo_${RESOLVED_VERSION}_linux_amd64.tar.gz --repo blackhorseya/x-monorepo
   ```
 
   **Full changelog**: https://github.com/blackhorseya/x-monorepo/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
