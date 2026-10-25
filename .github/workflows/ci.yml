@@ -164,6 +164,10 @@ jobs:
           kubectl -n keda logs deploy/keda-operator --tail=50 2>/dev/null || true
 
   # ── release config: the snapshot must build before anyone tags ─────────────
+  # release.yml itself only ever runs on main (workflow_run), so this job also exercises the two
+  # things that broke v0.26.0's first attempts after green PRs: the signing flags against the
+  # cosign that cosign-installer actually installs (#119) — same cosign-installer tag as
+  # release.yml, keep them equal — and, in actions-resolve below, that every action ref exists.
   release-snapshot:
     runs-on: ubuntu-latest
     steps:
@@ -172,7 +176,20 @@ jobs:
       - uses: ./.github/actions/setup
       - uses: goreleaser/goreleaser-action@v7
         with: { version: "~> v2.18", install-only: true }
+      - uses: sigstore/cosign-installer@v4.1.2
       - run: task release-check release-snapshot
+      - name: .goreleaser.yaml's signs command works with this cosign (throwaway key)
+        run: scripts/cosign-smoke.sh
+
+  # ── actions-resolve: every `uses: owner/repo@ref` under .github exists on GitHub ──
+  # actionlint checks YAML, not the remote; `sigstore/cosign-installer@v4` passed every PR and
+  # failed the first release on main (#115). ~20 API calls, read-only token.
+  actions-resolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/actions-resolve.sh
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
 
   # ── breaking: warn only (decision: wire-incompatible changes are allowed, but visible) ──
   # ── web: @repo/proto must typecheck against the generated TS, console must build ──
