@@ -11,8 +11,8 @@ run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 #             and the archives + checksums.txt get a GitHub artifact attestation (SLSA provenance,
 #             `gh attestation verify`)
 #   publish   gh release edit --draft=false → GitHub creates the tag and marks it latest
-#   chart     opens a chart-only PR moving deployments/helm's appVersion to the new tag (CI on it
-#             is dispatched by hand: GITHUB_TOKEN pushes start no workflows). Needs the repo
+#   chart     opens a chart-only PR moving deployments/helm's appVersion to the new tag (CI and the
+#             release-gate comment on it are dispatched by hand: GITHUB_TOKEN pushes start no workflows). Needs the repo
 #             setting "Allow GitHub Actions to create and approve pull requests"; without it the
 #             branch is pushed and the step summary links the compare page.
 # Nothing deploys. workflow_dispatch re-runs the whole chain for the current main HEAD.
@@ -212,7 +212,7 @@ jobs:
     permissions:
       contents: write        # push the chore/chart-appversion-* branch
       pull-requests: write   # open the PR
-      actions: write         # gh workflow run ci.yml on it
+      actions: write         # gh workflow run ci.yml / release-gate.yml on it
     steps:
       - uses: actions/checkout@v7
         with:
@@ -250,4 +250,5 @@ jobs:
             fi
           fi
           gh workflow run ci.yml --repo "$REPO" --ref "$branch"
+          gh workflow run release-gate.yml --repo "$REPO" --ref main -f pr="$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')"
           echo "chart appVersion → $v: $(gh pr list --repo "$REPO" --head "$branch" --json url --jq '.[0].url')" >> "$GITHUB_STEP_SUMMARY"
