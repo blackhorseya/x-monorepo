@@ -7,7 +7,9 @@ run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 #             app on ghcr, then `docker buildx build --push` of the web console (nginx image,
 #             web/apps/console/Dockerfile; goreleaser has no binary to attach it to) — all
 #             tagged vX.Y.Z before anything is published. Every image carries an SBOM and
-#             provenance attestation and a keyless cosign signature; checksums.txt is signed too
+#             provenance attestation and a keyless cosign signature; checksums.txt is signed too,
+#             and the archives + checksums.txt get a GitHub artifact attestation (SLSA provenance,
+#             `gh attestation verify`)
 #   publish   gh release edit --draft=false → GitHub creates the tag and marks it latest
 #   chart     opens a chart-only PR moving deployments/helm's appVersion to the new tag (CI on it
 #             is dispatched by hand: GITHUB_TOKEN pushes start no workflows). Needs the repo
@@ -98,7 +100,8 @@ jobs:
     permissions:
       contents: write   # upload archives to the draft
       packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate,console}
-      id-token: write   # cosign keyless: the OIDC token names this workflow in the certificate
+      id-token: write   # cosign keyless + attest-build-provenance: the OIDC token names this workflow
+      attestations: write   # store the archives' provenance attestation on the repo
     steps:
       - uses: actions/checkout@v7
         with:
@@ -143,6 +146,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ needs.prepare.outputs.tag }}
+      # SLSA provenance for what goreleaser just uploaded — the archives and checksums.txt — stored
+      # as GitHub artifact attestations (Settings → Attestations; this repo is public, so anyone can
+      # `gh attestation verify <file> --repo blackhorseya/x-monorepo`). cosign already signs
+      # checksums.txt; this is the per-archive statement of which workflow run built it. The images'
+      # provenance comes from buildx (--sbom / dockers_v2), not from here. Exact tag on purpose:
+      # release.yml runs only on main, so a tag that does not resolve breaks a release, not a PR.
+      - uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-path: |
+            bin/dist/*.tar.gz
+            bin/dist/checksums.txt
       # The console image: dist/ from `task web-build` above into nginx-unprivileged. The
       # Dockerfile only COPYs and the base image is multi-arch, so like the Go images this
       # needs no QEMU. Same tag rule as .goreleaser.yaml's image_tags (latest unless prerelease);

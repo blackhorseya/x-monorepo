@@ -529,7 +529,7 @@ step summary 會列出原因；archive 裡的 README 會停在上一版，可接
 |---|---|
 | prepare | gate 過了才跑 release-drafter：依 merge 進來的 PR title 分類（`when.conventional`，不用 label）產 draft release `vX.Y.Z`；版號：`!` → major、`feat` → minor、其餘 patch，`test:` 不進 notes |
 | （labeler.yml） | 不在 release 鏈上：`pull_request_target` 跑 release-drafter 的 autolabeler，依 title 的 type 貼 `feature` / `fix` / `refactor` / `test` / `documentation` / `ci` / `breaking`，依路徑貼 `proto` / `web` / `helm` / `ordering` / `inventory` / `platform`。純顯示，版號不看它 |
-| build | 在該 commit 本地打 tag（不 push，goreleaser 需要）→ `task web-build` → `goreleaser release`：archives 掛上那份 draft（`use_existing_draft` + `keep-existing`，notes 保留）、三個 multi-arch image 推 `ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:X.Y.Z`（非 prerelease 另打 `latest`）→ `docker buildx build --push` 把 console 的 `dist/` 推成第四個 image `.../console:X.Y.Z`（同一套 tag 規則；goreleaser 沒有 binary 可以掛它）。四個 image 都附 SBOM（SPDX）+ SLSA provenance attestation，並由 cosign keyless 以 digest 簽名（job 有 `id-token: write`，certificate 的 identity 是這個 workflow）；`checksums.txt` 也簽（cosign v3 的 Sigstore bundle `checksums.txt.sigstore.json` 掛上 release，簽章 + certificate + Rekor entry 一個檔） |
+| build | 在該 commit 本地打 tag（不 push，goreleaser 需要）→ `task web-build` → `goreleaser release`：archives 掛上那份 draft（`use_existing_draft` + `keep-existing`，notes 保留）、三個 multi-arch image 推 `ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:X.Y.Z`（非 prerelease 另打 `latest`）→ `docker buildx build --push` 把 console 的 `dist/` 推成第四個 image `.../console:X.Y.Z`（同一套 tag 規則；goreleaser 沒有 binary 可以掛它）。四個 image 都附 SBOM（SPDX）+ SLSA provenance attestation，並由 cosign keyless 以 digest 簽名（job 有 `id-token: write`，certificate 的 identity 是這個 workflow）；`checksums.txt` 也簽（cosign v3 的 Sigstore bundle `checksums.txt.sigstore.json` 掛上 release，簽章 + certificate + Rekor entry 一個檔）；archive 與 `checksums.txt` 另由 `actions/attest-build-provenance` 寫一份 GitHub artifact attestation（SLSA provenance，存在 repo 的 Attestations，`gh attestation verify` 驗——cosign 蓋 image 與 checksums，這份補每個 archive 是哪一次 run 做的） |
 | publish | `gh release edit --draft=false --target <sha>`：GitHub 建 tag、標 latest。image 已經在 registry，release 一出現就能拉 |
 
 ```bash
@@ -544,6 +544,7 @@ ID='https://github.com/blackhorseya/x-monorepo/.github/workflows/release.yml@ref
 ISS=https://token.actions.githubusercontent.com
 cosign verify --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" ghcr.io/blackhorseya/x-monorepo/rpc:X.Y.Z
 cosign verify-blob --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" --bundle checksums.txt.sigstore.json checksums.txt
+gh attestation verify x-monorepo_X.Y.Z_linux_amd64.tar.gz --repo blackhorseya/x-monorepo   # archive 的 SLSA provenance（任何 artifact 檔都行，含 checksums.txt）
 docker buildx imagetools inspect ghcr.io/blackhorseya/x-monorepo/rpc:X.Y.Z --format '{{ json .SBOM }}'   # 或 .Provenance
 ```
 
