@@ -215,7 +215,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read   # the ghcr packages are private: cosign needs a login to read the images
+      packages: read   # the packages are public; the login below only lifts ghcr's anonymous rate limit
     steps:
       - uses: actions/checkout@v7
       - uses: sigstore/cosign-installer@v4.1.2   # same pin as build above and ci.yml's release-snapshot

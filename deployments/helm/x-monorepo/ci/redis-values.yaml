@@ -1,5 +1,5 @@
 # Profile 2: redis broker, autoscaling, ingress, auth required, prune with a forgotten group.
-imagePullSecrets: [{ name: ghcr }]
+imagePullSecrets: [{ name: ghcr }]   # exercises the field; the real packages are public
 secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
   redisUrl: redis://redis:6379/0

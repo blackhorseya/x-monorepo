@@ -538,7 +538,7 @@ task release-check      # 驗 .goreleaser.yaml
 task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/arm64 → bin/dist，不做 image、不簽名、不 publish
 ```
 
-**驗證**（release notes 的 Verify 區塊也有同一組指令；image 要先 `docker login ghcr.io`，package 是 private）：
+**驗證**（release notes 的 Verify 區塊也有同一組指令；package 是 public，不用 login）：
 
 ```bash
 ID='https://github.com/blackhorseya/x-monorepo/.github/workflows/release.yml@refs/heads/main'
@@ -555,7 +555,7 @@ healthcheck 從外面打 `/api/readyz`）。兩個 binary 都吃 SIGTERM 做 gra
 （`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在 merge 前就會紅（也用同一個 cosign-installer 裝 cosign 跑 `scripts/cosign-smoke.sh`：拿 `.goreleaser.yaml` 的 `signs` args 配臨時 key 簽一次、驗一次——release.yml 只在 main 跑，v0.26.0 前兩次就是 action tag 不存在、cosign v3 flag 變了這種 PR CI 看不到的錯；`actions-resolve` job 另用 `scripts/actions-resolve.sh` 確認 `.github` 裡每個 `uses:` 的 ref 真的存在），release 的 build job 也共用它的 Go cache（`cache-scope: release-snapshot`），cross-compile 不用冷啟。
 發布之後 release.yml 的 `verify` job 跑 `scripts/release-verify.sh vX.Y.Z`（`task release-verify -- vX.Y.Z` 本機同一支）：把 release notes 的 Verify 區塊真的跑一遍——下載 archives 對 checksums.txt、`cosign verify-blob --bundle`、`gh attestation verify`、四個 image 的 `cosign verify`——簽名或 attestation 壞了 release run 就紅，不用等人手動驗。
 用 `GITHUB_TOKEN` publish 的 release 不會觸發其他 workflow 的 `push: tags` / `release` event（GitHub 防遞迴），要接部署就像
-release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghcr 的 package 是 private，要到 GitHub → Packages 連到 repo / 改 public 一次。
+release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghcr 的 package 是 private，四個 package 都已在 GitHub → Packages 改成 public（新 app 的 image 第一次 push 後要再改一次：Package settings → Danger Zone → Change visibility）。
 
 ## Load test（k6）
 
@@ -599,8 +599,7 @@ worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等
 ```bash
 task helm-check    # 每個 ci/*.yaml profile：helm lint --strict → helm template | kubeconform -strict → deployments/helm/check.py
 helm install api deployments/helm/x-monorepo -n app --create-namespace \
-  --set-string secrets.postgresUrl='postgres://…' --set config.otel.endpoint=otel-collector:4317 \
-  --set 'imagePullSecrets[0].name=ghcr'    # ghcr package 是 private
+  --set-string secrets.postgresUrl='postgres://…' --set config.otel.endpoint=otel-collector:4317   # image 是 public 的 ghcr，不用 pull secret
 ```
 
 `check.py` 是 chart 裡唯一有邏輯的地方的測試：rpc 的 grace period 算式與 env、readiness period 的關係、worker 沒 probe、migrate hook
