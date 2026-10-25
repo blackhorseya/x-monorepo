@@ -14,12 +14,31 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
-  # ── L2: which modules did this change touch? ────────────────────────────────
+  # ── affected: which modules and which jobs does this change need? ─────────────
+  # scripts/affected.sh → the go.work modules for the test matrix; scripts/ci-changes.sh → one
+  # run_<job> flag per job below, from the files the PR touches (a docs / Grafana / workflow-only
+  # PR runs almost nothing; Go runs the Go jobs, kind and k6; web runs web + e2e + image + kind…).
+  # On main (the release gate) and on dispatch every job runs: a skipped job must never be the
+  # reason main is green. Skipped jobs count as success for required checks.
   affected:
     runs-on: ubuntu-latest
     outputs:
       modules: ${{ steps.detect.outputs.modules }}
       any: ${{ steps.detect.outputs.any }}
+      run_gen_freshness: ${{ steps.jobs.outputs.run_gen_freshness }}
+      run_lint: ${{ steps.jobs.outputs.run_lint }}
+      run_work_sync: ${{ steps.jobs.outputs.run_work_sync }}
+      run_coverage: ${{ steps.jobs.outputs.run_coverage }}
+      run_build: ${{ steps.jobs.outputs.run_build }}
+      run_breaking: ${{ steps.jobs.outputs.run_breaking }}
+      run_release_snapshot: ${{ steps.jobs.outputs.run_release_snapshot }}
+      run_actions_resolve: ${{ steps.jobs.outputs.run_actions_resolve }}
+      run_web: ${{ steps.jobs.outputs.run_web }}
+      run_console_e2e: ${{ steps.jobs.outputs.run_console_e2e }}
+      run_console_image: ${{ steps.jobs.outputs.run_console_image }}
+      run_helm: ${{ steps.jobs.outputs.run_helm }}
+      run_helm_kind: ${{ steps.jobs.outputs.run_helm_kind }}
+      run_k6: ${{ steps.jobs.outputs.run_k6 }}
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
@@ -31,9 +50,17 @@ jobs:
           echo "modules=$mods" >> "$GITHUB_OUTPUT"
           echo "any=$([ "$mods" != "[]" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "affected: $mods"
+      - id: jobs
+        env:
+          CI_ALL: ${{ github.event_name != 'pull_request' && '1' || '' }}
+        run: |
+          scripts/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
+          { echo "### jobs for this change"; scripts/ci-changes.sh | sed 's/^run_/- /; s/=true/ ✅/; s/=false/ ⏭ skipped/'; } >> "$GITHUB_STEP_SUMMARY"
 
   # ── gen freshness: generated code must match its sources ───────────────────
   gen-freshness:
+    needs: affected
+    if: needs.affected.outputs.run_gen_freshness == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +71,8 @@ jobs:
         run: git diff --exit-code
 
   lint:
+    needs: affected
+    if: needs.affected.outputs.run_lint == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -55,6 +84,8 @@ jobs:
       - run: task lint
 
   work-sync:
+    needs: affected
+    if: needs.affected.outputs.run_work_sync == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -83,6 +114,8 @@ jobs:
         working-directory: ${{ matrix.module }}
 
   coverage:
+    needs: affected
+    if: needs.affected.outputs.run_coverage == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -90,6 +123,8 @@ jobs:
       - run: scripts/cover-gate.sh
 
   build:
+    needs: affected
+    if: needs.affected.outputs.run_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -98,6 +133,8 @@ jobs:
 
   # ── helm: the chart renders under every ci/ profile and its derived numbers hold ──
   helm:
+    needs: affected
+    if: needs.affected.outputs.run_helm == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -112,6 +149,8 @@ jobs:
   # Retry-After, accepted ≈ rps), timeout at 1ns (every call DEADLINE_EXCEEDED), reservation
   # with a ./bin/worker beside the rpc (order → RESERVED latency). ~3 min.
   k6:
+    needs: affected
+    if: needs.affected.outputs.run_k6 == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -137,6 +176,8 @@ jobs:
   # k6 burst that must scale the worker out on eventbus_consumer_lag and back
   # (task helm-kind-keda). ~5 min, in parallel.
   helm-kind:
+    needs: affected
+    if: needs.affected.outputs.run_helm_kind == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -169,6 +210,8 @@ jobs:
   # cosign that cosign-installer actually installs (#119) — same cosign-installer tag as
   # release.yml, keep them equal — and, in actions-resolve below, that every action ref exists.
   release-snapshot:
+    needs: affected
+    if: needs.affected.outputs.run_release_snapshot == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -185,6 +228,8 @@ jobs:
   # actionlint checks YAML, not the remote; `sigstore/cosign-installer@v4` passed every PR and
   # failed the first release on main (#115). ~20 API calls, read-only token.
   actions-resolve:
+    needs: affected
+    if: needs.affected.outputs.run_actions_resolve == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -194,6 +239,8 @@ jobs:
   # ── breaking: warn only (decision: wire-incompatible changes are allowed, but visible) ──
   # ── web: @repo/proto must typecheck against the generated TS, console must build ──
   web:
+    needs: affected
+    if: needs.affected.outputs.run_web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -210,6 +257,8 @@ jobs:
   # ── console-e2e: the built console driven by Playwright against a real bin/rpc on Postgres ──
   # (E2E_DATABASE_URL: the webServer runs bin/migrate up first; poison / prune then run for real)
   console-e2e:
+    needs: affected
+    if: needs.affected.outputs.run_console_e2e == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -243,6 +292,8 @@ jobs:
   # vite preview also serves the SPA and proxies /api, but web/apps/console/Dockerfile's nginx
   # config is what runs in the cluster: deep links → index.html, immutable assets, /api proxy.
   console-image:
+    needs: affected
+    if: needs.affected.outputs.run_console_image == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -265,6 +316,8 @@ jobs:
           retention-days: 7
 
   breaking:
+    needs: affected
+    if: needs.affected.outputs.run_breaking == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
