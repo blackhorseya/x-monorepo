@@ -88,7 +88,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if err != nil {
 		return nil, err
 	}
-	authn, err := NewAuthInterceptor(auth)
+	authn, err := NewAuthInterceptor(auth, tel.Meter)
 	if err != nil {
 		return nil, err
 	}

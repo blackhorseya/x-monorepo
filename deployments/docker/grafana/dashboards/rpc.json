@@ -1164,6 +1164,114 @@
         "enableLogDetails": true,
         "dedupStrategy": "none"
       }
+    },
+    {
+      "id": 30,
+      "title": "Auth \u2014 server.NewAuthInterceptor (auth_decisions_total is a counter: sum, unlike the eventbus gauges)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 69,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 31,
+      "title": "Decisions / s by result and credential",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "auth_decisions_total{result, method}: every pass through the auth interceptor (auth.mode optional / required; nothing with mode off). ok = credential verified, public = auth.public procedure, anonymous = no credential in optional mode, missing = no credential in required mode, invalid = credential sent and rejected. method is the header sent (api_key / jwt / none), never who.",
+      "gridPos": {
+        "x": 0,
+        "y": 70,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (result, method)(rate(auth_decisions_total{job=\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{result}} ({{method}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "title": "Rejections / s: missing, invalid, permission denied",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "What callers are being refused. missing / invalid come from auth_decisions_total; permission_denied is the RPC status otelconnect records when a handler's RequireRole refuses a known principal (the auth interceptor only authenticates). A step in `invalid` is a guessed or rotated key; `missing` after a deploy is a client that lost its header.",
+      "gridPos": {
+        "x": 12,
+        "y": 70,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (result, method)(rate(auth_decisions_total{job=\"$service\",result=~\"missing|invalid\"}[$__rate_interval]))",
+          "legendFormat": "{{result}} ({{method}})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(rpc_server_call_duration_seconds_count{job=\"$service\",rpc_response_status_code=\"permission_denied\"}[$__rate_interval]))",
+          "legendFormat": "permission_denied (rpc status)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ]
 }

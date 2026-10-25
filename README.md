@@ -182,7 +182,7 @@ Kind → Connect code 只在 `server.ToConnectError` 一處；consumer 不看 co
 | 層 | 擋什麼 | 位置 |
 |---|---|---|
 | proto | `buf.validate` rule 直接寫在 request message 上（`min_len`、`gt`、`gte`、`pattern`、`required`、`min_items`） | `protos/<bc>/v1/service.proto`、`common/v1/money.proto`、`ordering/v1/entity.proto` |
-| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 對 `auth.api_keys`，否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
+| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 對 `auth.api_keys`，否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
 | server | `NewRateLimitInterceptor`（`http.rate_limit.rps` > 0 才掛，在 logging 之內、auth 之外——洪水要在付 JWT 簽章驗證成本之前就擋掉）：token bucket，`by: global` 一桶 / `peer` 每個 client IP 一桶（idle 1 分鐘回收）。沒 token → `RESOURCE_EXHAUSTED`、`x-error-code: request.rate_limited`、`Retry-After: <秒>`，不排隊等 | `pkgs/platform/server/limits.go` |
 | server | `NewTimeoutInterceptor`（`http.timeout` > 0 才掛，在 auth 之內、validate 之外）：usecase 拿到會到期的 context，慢 query 被 cancel 而不是吃掉整個 shutdown drain 窗口。到期後失敗的 RPC 一律回 `DEADLINE_EXCEEDED` + `x-error-code: request.timeout`（不管 driver 的 error 被 `ToConnectError` 映成什麼）；到期後仍成功的照常回 response（工作已 commit）。client 的 deadline 較短時一樣適用 | `pkgs/platform/server/limits.go` |
 | server | `NewValidateInterceptor`（最內層 interceptor）：違反 → `INVALID_ARGUMENT`、header `x-error-code: request.validation_failed`、error detail `buf.validate.Violations`（欄位路徑 + rule id + message）；rule 本身編不過 → `INTERNAL` | `pkgs/platform/server/validate.go` |
@@ -299,7 +299,9 @@ CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStoc
 
 - **metrics 永遠開**：MeterProvider 掛一個 Prometheus reader，`server` 把它放在 `GET /api/metrics`（沒 collector 也能 scrape）。
   `usecasex.Metrics` 記 `usecase.duration`（exposition：`usecase_duration_seconds{usecase, kind}`），
-  `otelconnect` 產 `rpc.server.call.duration`，`contrib/instrumentation/runtime` 產 Go runtime metrics
+  `otelconnect` 產 `rpc.server.call.duration`，`contrib/instrumentation/runtime` 產 Go runtime metrics，
+  auth interceptor 記 `auth.decisions`（`auth_decisions_total{result, method}`：`ok` / `public` / `anonymous` / `missing` / `invalid` × `api_key` / `jwt` / `none`——
+  RPC status 只會說 `unauthenticated`，分不出「沒帶」和「帶了被拒」；label 只有這兩個有限集合，沒有 subject）
 - **worker 的 backlog**（`platform/eventbus`，`apps/worker` 註冊）：`eventbus.consumer.duration{topic, result}` 每次 handler
   attempt 一個 sample（retry 也算，被 park 的訊息就是它最後一次 `failed`）；`eventbus.Lag` 掛 observable gauge，每次 collect
   才去查：`eventbus_consumer_lag{topic, consumer_group, broker}` = 該 group 還沒 ack 的訊息數——Postgres 用和 watermill-sql
@@ -483,11 +485,12 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 | Worker — eventbus | `eventbus_consumer_lag`、`eventbus_consumer_oldest_age_seconds`、`eventbus_consumer_duration_seconds`、`eventbus_poison_messages` | 每個 consumer group（含 forwarder）的 backlog 與最老訊息年齡、handler attempt/s（含 retry）、poison 表大小；`$service` 選 `worker` |
 | Worker — eventbus（第二排） | `eventbus_outbox_rows`、`eventbus_outbox_held`、`eventbus_inbox_rows`、`eventbus_outbox_oldest_age_seconds`、`eventbus_outbox_oldest_held_age_seconds`、`eventbus_inbox_oldest_age_seconds` | prune 管的表：大小、被 group 扣住的列、最老一列的年齡（超過 retention = prune 沒跑或刪不動；held 的年齡一直長 = stale group） |
 | HTTP routes | `http_server_request_duration_seconds`（otelgin） | `/api/*` 的 route / status、p95 |
+| Auth | `auth_decisions_total{result, method}`、`rpc_server_call_duration_seconds_count{rpc_response_status_code="permission_denied"}` | 每秒多少 ok / public / anonymous / missing / invalid，各用什麼 credential；被拒的三種（沒帶、帶錯、role 不夠）疊在一起看。counter，`sum` |
 | Go runtime | `go_goroutine_count`、`go_memory_used_bytes`… | OTel runtime instrumentation 的名字，OTLP 與 `/api/metrics` 相同。`/api/metrics` 用自建 registry，沒有 client_golang 的 `go_memstats_*`、`process_*` |
 | Logs | Loki `{service_name="$service"} \| severity_text=~"WARN\|ERROR"` | severity 是 structured metadata，要用 `\|` 不是 `\|=` |
 
-Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/alerting.yaml` → folder `x-monorepo`、group
-`worker-eventbus`，每分鐘評估，全部用 `max by`，gauge 是 per replica 不能 sum）：
+Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/alerting.yaml` → folder `x-monorepo`，每分鐘評估；group
+`worker-eventbus` 全部用 `max by`，gauge 是 per replica 不能 sum；group `rpc-auth` 讀 counter，跨 replica `sum`）：
 
 | rule | 條件 | 意思 / 怎麼處理 |
 |---|---|---|
@@ -497,8 +500,10 @@ Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/ale
 | Eventbus retention overdue | `eventbus_outbox_oldest_age_seconds` / `eventbus_inbox_oldest_age_seconds` > 45d 持續 1h | prune 沒在跑，或跑了刪不動；`task prune -- --older-than 720h --dry-run` 或 console Prune 頁的 dry run 會說是誰擋的。閾值設成 prune retention 的 1.5× |
 | Eventbus rows held by a stale consumer group | `eventbus_outbox_oldest_held_age_seconds` > 1d 持續 30m | offsets 表裡有 group 一天沒前進；consumer stalled 沒響就是沒人跑的 group（舊 `worker.consumer_group`、E2E 的 `test-<ts>.*`），`--forget-group` / console Prune 頁的 forget 刪掉它的 cursor |
 | Eventbus metrics absent | `absent(eventbus_consumer_lag)` 持續 10m | 沒有 worker 在匯出，上面幾條都是瞎的 |
+| Auth credential rejections | `rate(auth_decisions_total{result="invalid"}[5m])` > 1/s 持續 5m（by `method`） | 有人在猜 key / 重放 token，或 key 換了 client 還送舊的；Loki `{service_name="rpc"} \| code="unauthenticated"` 看是哪個 procedure、request id（credential 本身不記）。rate limit 在 auth 外層，洪水先被擋 |
+| Auth permission denied | `rate(rpc_server_call_duration_seconds_count{rpc_response_status_code="permission_denied"}[5m])` > 0.1/s 持續 10m（by `rpc_method`） | 驗過身分但 role 不夠（`auth.permission_denied`）：access line 有 `sub`，是正當 operator 就補 role（`name=key:role` / JWT `roles`），不是就是在摸 admin surface |
 
-每條都帶 `__dashboardUid__` / `__panelId__`，所以「Worker — eventbus」的 panel 上會畫 alert 狀態。只有 rule 沒有送達：contact point /
+每條都帶 `__dashboardUid__` / `__panelId__`，所以「Worker — eventbus」與「Auth」的 panel 上會畫 alert 狀態。只有 rule 沒有送達：contact point /
 notification policy 由部署環境依 `severity` label 自己接（Grafana → Alerting → Notification policies）。Alerting provisioning
 只在啟動時讀，改完一樣 `task grafana-reload`。
 

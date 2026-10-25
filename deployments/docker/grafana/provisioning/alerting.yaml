@@ -2,8 +2,9 @@
 # (mounted into otel-lgtm at /otel-lgtm/grafana/conf/provisioning/alerting/x-monorepo.yaml).
 # Alerting provisioning is read at startup only: after editing run `task grafana-reload`.
 #
-# They evaluate the gauges apps/worker exports (platform/eventbus.Lag): each is per replica,
-# so every rule aggregates with max, never sum. Thresholds are a laptop/demo starting point —
+# The worker-eventbus group evaluates the gauges apps/worker exports (platform/eventbus.Lag): each
+# is per replica, so those rules aggregate with max, never sum. The rpc-auth group reads counters
+# (auth_decisions_total, rpc_server_call_duration_seconds_count), which are summed across replicas. Thresholds are a laptop/demo starting point —
 # a deployment tunes them here, and routes them by attaching a notification policy to the
 # severity label (nothing is provisioned for delivery: the alerts show in Alerting → Alert rules
 # and as state on the "Worker — eventbus" panels of the x-monorepo / service dashboard).
@@ -224,3 +225,81 @@ groups:
           description: >-
             The lag and poison rules are silent without this series. Either no worker is running, or its OTLP
             export is not reaching the collector (otel.endpoint).
+
+  - orgId: 1
+    name: rpc-auth
+    folder: x-monorepo
+    interval: 1m
+    rules:
+      # Credentials are being rejected at a rate no honest client produces: someone is guessing api keys /
+      # replaying tokens, or a key was rotated and a client still sends the old one.
+      - uid: x-monorepo-auth-invalid
+        title: Auth credential rejections
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: sum by (method) (rate(auth_decisions_total{result="invalid"}[5m]))
+              legendFormat: "{{method}}"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: rpc }
+        annotations:
+          summary: "{{ $values.A }} rejected {{ $labels.method }} credentials per second"
+          description: >-
+            auth_decisions_total{result="invalid"} has grown by more than one per second for 5 minutes. The rpc access
+            lines (`code=unauthenticated auth=anonymous`, Loki `{service_name="rpc"} | code="unauthenticated"`) show the
+            procedures and request ids but never the credential. A single source hammering one procedure is a guess;
+            steady rejections from a known client right after a key rotation mean its config still carries the old key.
+            The http.rate_limit interceptor is outside auth, so a flood is throttled before it reaches this counter.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "32"
+
+      # Known principals are being refused by a role gate: either a client was given a key without the role it
+      # needs (admin RPCs want auth.admin_role) or something is probing the admin surface with a valid low-role key.
+      - uid: x-monorepo-auth-denied
+        title: Auth permission denied
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: sum by (rpc_method) (rate(rpc_server_call_duration_seconds_count{rpc_response_status_code="permission_denied"}[5m]))
+              legendFormat: "{{rpc_method}}"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.1] }
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: rpc }
+        annotations:
+          summary: "{{ $labels.rpc_method }} refused {{ $values.A }} authenticated callers per second"
+          description: >-
+            permission_denied responses (x-error-code auth.permission_denied: the principal verified but lacks the role
+            the handler requires) have been above 0.1/s for 10 minutes on this RPC. The access line carries `sub`, so
+            `{service_name="rpc"} | code="permission_denied"` names the caller: a legitimate operator needs the role
+            on their key (auth.api_keys `name=key:role`) or JWT (`roles` claim); anything else is probing.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "32"
