@@ -213,8 +213,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: task build web-install
-      - run: pnpm exec playwright install --with-deps chromium
-        working-directory: web/apps/console
+      - uses: ./.github/actions/playwright
       - run: task web-e2e
       - if: failure()
         uses: actions/upload-artifact@v7
@@ -239,8 +238,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: task build web-install
-      - run: pnpm exec playwright install --with-deps chromium
-        working-directory: web/apps/console
+      - uses: ./.github/actions/playwright
       - run: task web-e2e-image
       - if: failure()
         uses: actions/upload-artifact@v7
