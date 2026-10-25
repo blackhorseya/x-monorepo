@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 Protobuf-first Go monorepo：Clean Architecture + DDD（bounded context 優先）、`go.work` 多 module、
-Connect 對外、Wire 組裝、Turborepo 前端（`web/`）。細節以 `README.md` 為準，這份只放「開工就要知道」的事。
+Connect 對外、Wire 組裝、Turborepo 前端（`web/`）。細節以 `README.md`（架構與程式碼規則）和 `docs/`（CI / release / 維運 / config / error codes / workflow）為準，這份只放「開工就要知道」的事。
 
 ## 常用指令
 
@@ -139,8 +139,8 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 
 `platform/config.Load()`：defaults → YAML（`$APP_CONFIG`，否則 `./configs/config.yaml`）→ `APP_*` env，由低到高。
 `configs/local.yaml` gitignored，`task run` / `task migrate` 第一次會從 `config.example.yaml` 複製。
-注意：viper 忽略空 env，`APP_POSTGRES_URL=` 清不掉 key，要「不接 DB」請改 local.yaml。完整 key 表見 README。
-`auth.*`（mode / api_keys / jwt / public）見 README 的 Config 表。
+注意：viper 忽略空 env，`APP_POSTGRES_URL=` 清不掉 key，要「不接 DB」請改 local.yaml。完整 key 表見 `docs/config.md`。
+`auth.*`（mode / api_keys / jwt / public）見 `docs/config.md`。
 
 ## 新增東西的步驟
 

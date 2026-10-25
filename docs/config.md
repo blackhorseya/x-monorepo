@@ -1,0 +1,46 @@
+# Config
+
+<sub>← [README](../README.md)</sub>
+
+## Config（viper）
+
+`platform/config.Load()` 的來源由低到高：defaults → YAML 檔 → `APP_*` 環境變數。YAML 找 `$APP_CONFIG`（指定就必須存在），
+否則依序找 `./configs/config.yaml`、`./config.yaml`，都沒有也沒關係。每個 key 都有 default，所以只靠環境變數就能跑。
+
+`configs/` 裡：
+
+| 檔案 | 用途 |
+|---|---|
+| `config.example.yaml` | 有 commit 的範本，內容就是本機開發 profile（text log、`/api/docs` 開、`postgres.url` 指向 compose） |
+| `local.yaml` | gitignored。`task run` / `task migrate` 第一次會從 example 複製過來（`task config`），之後透過 `APP_CONFIG` 載入；隨意改 |
+| 其他 | `configs/*` 全部 gitignored；`task run CONFIG=<file>` 可指定別的檔 |
+
+> 注意：env 不能把 key 清成空字串（viper 忽略空 env），所以要「不接 DB」請改 local.yaml 的 `postgres.url`，不要 `APP_POSTGRES_URL=`。
+
+| YAML key | 環境變數 | 預設 | 說明 |
+|---|---|---|---|
+| `http.addr` | `APP_HTTP_ADDR` | `:8080` | |
+| `http.docs` | `APP_HTTP_DOCS` | `false` | 掛 `/api/docs`、`/api/openapi/<bc>.yaml`（`task run` 會開） |
+| `http.shutdown_delay` | `APP_HTTP_SHUTDOWN_DELAY` | `0s` | SIGTERM 後 `/api/readyz` 先回 503、其他照常服務這麼久，讓 LB 先把流量移走再關 listener；k8s 下設 ≥ 一個 readiness probe period |
+| `http.timeout` | `APP_HTTP_TIMEOUT` | `10s` | 單一 RPC 的 server-side deadline（timeout interceptor）：usecase 的 context 到期、client 收 `DEADLINE_EXCEEDED` + `x-error-code: request.timeout`；`0` = 不限。client 自己帶的 `Connect-Timeout-Ms` 較短時以它為準 |
+| `http.rate_limit.rps` / `.burst` / `.by` | `APP_HTTP_RATE_LIMIT_RPS` … | `0` / `0` / `global` | token bucket（rate limit interceptor，在 auth 之外）：`rps` 0 = 關；`burst` 0 = rps 無條件進位；`by: global` 全 server 一桶、`peer` 每個 client IP 一桶（連線的 peer address；proxy 沒保留來源時等於大家同一桶）。超過 → `RESOURCE_EXHAUSTED` + `x-error-code: request.rate_limited` + `Retry-After`（秒） |
+| `http.shutdown_timeout` | `APP_HTTP_SHUTDOWN_TIMEOUT` | `15s` | listener 關掉後 in-flight request 的完成上限，超過就切斷、`Run` 回 error。`terminationGracePeriodSeconds` 要 > delay + timeout |
+| `log.level` / `log.format` | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
+| `auth.mode` | `APP_AUTH_MODE` | `off` | `off` 不掛 auth interceptor；`optional` 有帶 credential 才驗（沒帶 = anonymous，帶了驗不過一樣是錯）；`required` 沒有合法 credential → `UNAUTHENTICATED` |
+| `auth.api_keys` | `APP_AUTH_API_KEYS` | 空 | `name=key[:role\|role],name=key`（key ≥ 16 字元），對 `X-API-Key` header；principal 的 subject = name、roles = 冒號後的清單。一個字串，所以 env 帶得動 |
+| `auth.admin_role` | `APP_AUTH_ADMIN_ROLE` | `admin` | `admin.v1.AdminService`（poison 操作）要求的 role；`auth.mode: off` 時不檢查 |
+| `auth.jwt.hs256_secret` / `auth.jwt.public_key` | `APP_AUTH_JWT_HS256_SECRET` / `APP_AUTH_JWT_PUBLIC_KEY` | 空 | 二選一：HS256 secret（≥ 32 bytes）或 PEM public key（RSA / EC / Ed25519，演算法家族釘死在 key 型別上）。對 `Authorization: Bearer <jwt>`，`exp` 必填 |
+| `auth.jwt.issuer` / `auth.jwt.audience` | `APP_AUTH_JWT_ISSUER` / `APP_AUTH_JWT_AUDIENCE` | 空 | 設了就檢查 `iss` / `aud` |
+| `auth.public` | `APP_AUTH_PUBLIC` | 空 | 不需 credential 的 procedure 清單（`/ordering.v1.OrderService/GetOrder`，env 用逗號分隔） |
+| `postgres.url` | `APP_POSTGRES_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
+| `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
+| `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |
+| `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |
+| `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 前綴，實際 group 是 `<值>.<bc>`（每個 BC 各自讀完整個 topic）；同名 replica 分工，新名字從哪開始看 `worker.start_from` |
+| `worker.start_from` | `APP_WORKER_START_FROM` | `beginning` | **還沒有 cursor** 的 group 從哪開始：`beginning` 重播所有留存的訊息，`latest` 只收建立之後的。已有 cursor 的 group 不會被移動；redis 模式也套用到 forwarder 的 SQL group 與 stream group |
+| — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
+| `redis.url` | `APP_REDIS_URL` | 空 | 只在 `worker.broker: redis` 時連（啟動 ping）；預設 broker 下 worker 完全不碰它 |
+| `worker.broker` | `APP_WORKER_BROKER` | `postgres` | `postgres` 直接讀 outbox 表；`redis` 由 worker 轉送進 Redis Streams 再讀 |
+| `worker.handler_timeout` | `APP_WORKER_HANDLER_TIMEOUT` | `10s` | 單次 handler attempt 的 deadline（`http.timeout` 的 consumer 版）：usecase 的 context 到期、該次算 failed 照常 retry，用完後以 `handler timed out` 為 reason 進 poison；`0` = 不限。SIGTERM 時 in-flight handler 的上限是它和 drain 的 8s 取短 |
+| — | `TEST_DATABASE_URL` | 未設 | 只給 integration test：設了就用該 DB，未設則 testcontainers 自起 |
+| — | `TEST_REDIS_URL` | 未設 | 同上，給 worker E2E 的 redis 模式 |
