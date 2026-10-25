@@ -551,7 +551,7 @@ docker buildx imagetools inspect ghcr.io/blackhorseya/x-monorepo/rpc:X.Y.Z --for
 `deployments/docker/Dockerfile` 只 COPY 預先 cross-compile 好的 binary 到 `distroless/static:nonroot`（有 CA certs、無 shell；
 healthcheck 從外面打 `/api/readyz`）。兩個 binary 都吃 SIGTERM 做 graceful shutdown（rpc：readyz 先 503 → drain，見 server 一節；worker：in-flight handler 跑完才停，見 Events 一節），
 部署的 grace period 要大於 `http.shutdown_delay + http.shutdown_timeout`（rpc）/ 18s（worker：8s drain + 10s router close）——Helm chart 把這兩個數字算死（下一節）。Binary 用 `-X` 把版本寫進 `pkgs/platform/buildinfo`，OTel resource 的 `service.version` 就是它；三個 binary 都吃 `--version`，rpc 的 `server listening` 與 worker 的 `worker started` log 帶 `version` / `commit`，rpc 另有 `GET /api/version`
-（`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在 merge 前就會紅，release 的 build job 也共用它的 Go cache（`cache-scope: release-snapshot`），cross-compile 不用冷啟。
+（`go build` 直接跑的是 `dev`）。CI 的 `release-snapshot` job 在每個 PR 跑一次 snapshot，壞掉的 release 設定在 merge 前就會紅（也用同一個 cosign-installer 裝 cosign 跑 `scripts/cosign-smoke.sh`：拿 `.goreleaser.yaml` 的 `signs` args 配臨時 key 簽一次、驗一次——release.yml 只在 main 跑，v0.26.0 前兩次就是 action tag 不存在、cosign v3 flag 變了這種 PR CI 看不到的錯；`actions-resolve` job 另用 `scripts/actions-resolve.sh` 確認 `.github` 裡每個 `uses:` 的 ref 真的存在），release 的 build job 也共用它的 Go cache（`cache-scope: release-snapshot`），cross-compile 不用冷啟。
 用 `GITHUB_TOKEN` publish 的 release 不會觸發其他 workflow 的 `push: tags` / `release` event（GitHub 防遞迴），要接部署就像
 release.yml 那樣用 `gh workflow run` 明確 dispatch。第一次 push 到 ghcr 的 package 是 private，要到 GitHub → Packages 連到 repo / 改 public 一次。
 
