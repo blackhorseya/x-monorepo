@@ -111,6 +111,7 @@ function OrdersCard() {
   const status = search.status ? OrderStatus[search.status] : OrderStatus.UNSPECIFIED;
   const customer = search.customer ?? "";
   const [customerInput, setCustomerInput] = useState(customer);
+  const [orderIdInput, setOrderIdInput] = useState("");
   const list = useInfiniteQuery(ordersQuery(customer, status));
   const rows = list.data?.pages.flatMap((p) => p.orders) ?? [];
   const setSearch = (patch: Partial<OrdersSearch>) => void navigate({ search: (prev) => ({ ...prev, ...patch }) });
@@ -159,6 +160,23 @@ function OrdersCard() {
                 Clear
               </Button>
             )}
+          </form>
+          {/* A full order id (from Reservations, a log line, a support ticket) goes straight to
+              /orders/$id; the list only shows the first 8 characters and may not have the page. */}
+          <form
+            className="flex items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const id = orderIdInput.trim();
+              if (id) void navigate({ to: "/orders/$id", params: { id } });
+            }}
+          >
+            <Field label="Order id" className="w-72">
+              <Input value={orderIdInput} placeholder="paste a full id" onChange={(e) => setOrderIdInput(e.target.value)} />
+            </Field>
+            <Button type="submit" variant="outline" size="sm" disabled={!orderIdInput.trim()}>
+              Open
+            </Button>
           </form>
         </div>
         {list.isError && <ErrorAlert error={list.error} />}
