@@ -240,17 +240,18 @@ func (a *authenticator) authenticate(c context.Context, apiKey, authorization st
 				rc, cancel = context.WithTimeout(c, a.resolverTimeout)
 			}
 			p, ok, err := a.resolver.ResolveAPIKey(rc, apiKey)
+			deadlineErr := rc.Err() // read BEFORE cancel(): cancel() itself makes rc.Err() non-nil
 			cancel()
 			switch {
 			case err != nil:
 				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, err)
-			case rc.Err() != nil:
+			case deadlineErr != nil:
 				// The deadline passed while the resolver was answering: a late
 				// success is not a verified credential (the resolver may have
 				// ignored the context, or won a race with it). The bound is only
 				// a bound for resolvers that honour their context; this keeps
 				// the decision honest either way.
-				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, rc.Err())
+				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, deadlineErr)
 			case ok:
 				p.Method = MethodAPIKey
 

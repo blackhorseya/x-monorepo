@@ -276,6 +276,23 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 	}
 	r.fail = false
 
+	// The production shape: a timeout is set (config default 2s) and the
+	// resolver answers in time. The hit is accepted and the miss is a plain
+	// unknown key — neither is mistaken for a resolver failure (regression:
+	// cancel() ran before the context was inspected, so every answer looked
+	// like context.Canceled).
+	r.calls = 0
+	cfg.ResolverTimeout = 2 * time.Second
+	p, err = callWith("xk_dbkey-0123456789abcdef0123456789")
+	if err != nil || p.Subject != "acc-1" || r.calls != 1 {
+		t.Fatalf("in-time resolver success with a timeout set: %+v, %v, calls %d", p, err, r.calls)
+	}
+	_, err = callWith("xk_unknown-0123456789abcdef01234567")
+	if !isInvalidCredential(err) || strings.Contains(err.Error(), "could not be verified") {
+		t.Fatalf("in-time miss with a timeout set must be a plain unknown key, not a resolver failure: %v", err)
+	}
+	cfg.ResolverTimeout = 0
+
 	// A resolver that hangs (stuck database) is cut off by auth.resolver_timeout
 	// and the request is rejected, not held: regression for the lookup running
 	// outside http.timeout.
