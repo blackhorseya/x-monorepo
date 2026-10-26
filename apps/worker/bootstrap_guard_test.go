@@ -1,0 +1,180 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"io"
+	"math/big"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+)
+
+const guardPassword = "s3cretPW"
+
+// writeTestCA writes a throwaway self-signed CA and returns its path, escaped
+// for use as a sslrootcert query value.
+func writeTestCA(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "bootstrap-guard-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return url.QueryEscape(path)
+}
+
+// The check runs on pgx's own parse of the URL — the parse gorm's postgres
+// driver does for the real connection — so what it approves is what pgx will
+// do, not what a shell or a regexp thinks the URL says. Every rejection names
+// a reason and at most a host:port; the URL and the password never appear.
+func TestCheckBootstrapConn(t *testing.T) {
+	ca := writeTestCA(t)
+	const base = "postgres://u:" + guardPassword + "@127.0.0.1:15432/app"
+	forward := connPolicy{expectTarget: "127.0.0.1:15432"}
+
+	cases := []struct {
+		name     string
+		url      string
+		policy   connPolicy
+		password string // what must not leak; defaults to guardPassword
+		reject   bool
+		contains string // part of the expected error
+	}{
+		// What passes: the certificate chain is verified.
+		{name: "verify-ca with sslrootcert", url: base + "?sslmode=verify-ca&sslrootcert=" + ca},
+		{name: "verify-full", url: base + "?sslmode=verify-full"},
+		// pgx treats require + sslrootcert as verify-ca (configTLS), so the chain is verified.
+		{name: "require with sslrootcert is verify-ca in pgx", url: base + "?sslmode=require&sslrootcert=" + ca},
+		{name: "verify-ca to the expected target", url: base + "?sslmode=verify-ca&sslrootcert=" + ca, policy: forward},
+		{name: "several hosts, all verified", url: "postgres://u:" + guardPassword + "@a.example:5432,b.example:5432/app?sslmode=verify-full"},
+
+		// No TLS, or TLS that does not verify the server.
+		{name: "disable", url: base + "?sslmode=disable", reject: true, contains: "TLS disabled"},
+		{name: "allow falls back to plaintext", url: base + "?sslmode=allow", reject: true},
+		{name: "prefer falls back to plaintext", url: base + "?sslmode=prefer", reject: true},
+		{name: "require without sslrootcert encrypts but does not verify", url: base + "?sslmode=require", reject: true, contains: "does not verify"},
+
+		// Bypasses of the earlier shell guards.
+		{name: "spaced key: pgx trims it, last wins", url: base + "?sslmode=verify-ca&sslmode =disable&sslrootcert=" + ca, reject: true, contains: "TLS disabled"},
+		{name: "leading-space key", url: base + "?sslmode=verify-ca& sslmode=disable&sslrootcert=" + ca, reject: true, contains: "TLS disabled"},
+		{name: "duplicate key, last wins", url: base + "?sslmode=verify-full&sslmode=disable", reject: true, contains: "TLS disabled"},
+		{name: "percent-encoded key", url: base + "?sslmode=verify-full&ssl%6Dode=disable", reject: true},
+		{
+			name: "sslmode text inside the password", url: "postgres://u:p_sslmode=verify-ca@127.0.0.1:15432/app?sslmode=disable",
+			password: "p_sslmode=verify-ca", reject: true, contains: "TLS disabled",
+		},
+		{
+			name: "host override in the query", url: base + "?sslmode=verify-ca&sslrootcert=" + ca + "&host=evil.example",
+			policy: forward, reject: true, contains: "evil.example",
+		},
+
+		// The target.
+		{name: "authority host is not the expected target", url: "postgres://u:" + guardPassword + "@db.internal:5432/app?sslmode=verify-ca&sslrootcert=" + ca, policy: forward, reject: true, contains: "target mismatch: got db.internal:5432"},
+		{name: "one of several hosts is not the target", url: "postgres://u:" + guardPassword + "@127.0.0.1:15432,evil.example:5432/app?sslmode=verify-full", policy: forward, reject: true, contains: "evil.example:5432"},
+		{name: "the target's port must match too", url: "postgres://u:" + guardPassword + "@127.0.0.1:5432/app?sslmode=verify-full", policy: forward, reject: true, contains: "target mismatch"},
+
+		// The development escape hatch skips TLS only.
+		{name: "plaintext allowed", url: base + "?sslmode=disable", policy: connPolicy{allowPlaintext: true}},
+		{name: "plaintext allowed to the expected target", url: base + "?sslmode=disable", policy: connPolicy{allowPlaintext: true, expectTarget: "127.0.0.1:15432"}},
+		{name: "plaintext allowed, wrong target", url: "postgres://u:" + guardPassword + "@db.internal:5432/app?sslmode=disable", policy: connPolicy{allowPlaintext: true, expectTarget: "127.0.0.1:15432"}, reject: true, contains: "target mismatch"},
+
+		// Not a URL pgx accepts: no pgx text, which can quote the string.
+		{name: "unparsable", url: "postgres://u:" + guardPassword + "@h:notaport/app", reject: true, contains: "not a valid connection string"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkBootstrapConn(tc.url, tc.policy)
+			if !tc.reject {
+				if err != nil {
+					t.Fatalf("checkBootstrapConn = %v, want nil", err)
+				}
+
+				return
+			}
+			if err == nil {
+				t.Fatal("checkBootstrapConn = nil, want a rejection")
+			}
+			if tc.contains != "" && !strings.Contains(err.Error(), tc.contains) {
+				t.Fatalf("error %q lacks %q", err, tc.contains)
+			}
+			pw := tc.password
+			if pw == "" {
+				pw = guardPassword
+			}
+			if strings.Contains(err.Error(), pw) || strings.Contains(err.Error(), "postgres://") {
+				t.Fatalf("the error carries the URL or the password: %q", err)
+			}
+		})
+	}
+}
+
+// The check runs in the command before anything connects. The URL points at a
+// closed port, so a refused guard is told apart from a failed connection by
+// the error alone.
+func TestBootstrapCommand_GuardRunsBeforeConnecting(t *testing.T) {
+	cfg := &config.AppConfig{
+		Postgres: config.Postgres{URL: "postgres://u:" + guardPassword + "@127.0.0.1:1/app?sslmode=disable"},
+		Log:      config.Log{Level: "error", Format: "text"},
+		Auth:     config.Auth{AdminRole: "admin"},
+	}
+	run := func(args ...string) error {
+		cmd := newRootCmd(func() (*config.AppConfig, error) { return cfg, nil })
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(io.Discard)
+		cmd.SetArgs(append([]string{"bootstrap"}, args...))
+
+		return cmd.ExecuteContext(context.Background())
+	}
+
+	err := run()
+	if err == nil || !strings.Contains(err.Error(), "refusing to connect: TLS disabled") {
+		t.Fatalf("plaintext URL by default = %v, want a refusal before connecting", err)
+	}
+	if strings.Contains(err.Error(), guardPassword) {
+		t.Fatalf("the refusal carries the password: %q", err)
+	}
+
+	err = run("--expect-target", "127.0.0.1:15432", "--insecure-allow-plaintext")
+	if err == nil || !strings.Contains(err.Error(), "target mismatch: got 127.0.0.1:1") {
+		t.Fatalf("wrong target with the plaintext flag = %v, want a refusal before connecting", err)
+	}
+
+	err = run("--insecure-allow-plaintext")
+	if err == nil || strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("plaintext allowed = %v, want it past the guard (and failing to connect to the closed port)", err)
+	}
+
+	err = run("--expect-target", "not-a-target")
+	if err == nil || !strings.Contains(err.Error(), "host:port") {
+		t.Fatalf("malformed --expect-target = %v, want a usage error", err)
+	}
+}

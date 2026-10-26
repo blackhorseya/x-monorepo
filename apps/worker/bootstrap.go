@@ -20,6 +20,9 @@ func newBootstrapCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 		roles     []string
 		keyName   string
 		expiresIn time.Duration
+
+		expectTarget   string
+		allowPlaintext bool
 	)
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
@@ -76,6 +79,8 @@ stdout only, never to the log.`,
 	cmd.Flags().StringArrayVar(&roles, "role", nil, "role of the first account (repeatable; default: auth.admin_role)")
 	cmd.Flags().StringVar(&keyName, "key-name", "bootstrap", "name of the first API key")
 	cmd.Flags().DurationVar(&expiresIn, "expires-in", 0, "the key expires this long from now (Go duration, e.g. 720h; 0 = never)")
+	cmd.Flags().StringVar(&expectTarget, "expect-target", "", "host:port every database connection must go to (e.g. 127.0.0.1:15432 behind kubectl port-forward); anything else is refused before connecting")
+	cmd.Flags().BoolVar(&allowPlaintext, "insecure-allow-plaintext", false, "skip the TLS check, for a local development database only; --expect-target still applies")
 
 	return cmd
 }
