@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,5 +252,19 @@ func TestLoad_PostgresPool(t *testing.T) {
 				t.Fatalf("override not applied: %+v", cfg.Postgres)
 			}
 		})
+	}
+}
+
+// The negative-idle refusal tells the operator what 0 means, and 0 is not
+// "no idle connections": NewDB skips the setter, so database/sql keeps its default.
+func TestLoad_PostgresIdleMessageDescribesZero(t *testing.T) {
+	chdirTemp(t)
+	t.Setenv("APP_POSTGRES_MAX_IDLE_CONNS", "-1")
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("negative postgres.max_idle_conns must fail")
+	}
+	if strings.Contains(err.Error(), "none idle") || !strings.Contains(err.Error(), "database/sql default") {
+		t.Fatalf("error misdescribes max_idle_conns=0: %v", err)
 	}
 }
