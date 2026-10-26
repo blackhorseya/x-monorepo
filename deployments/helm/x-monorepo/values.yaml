@@ -294,3 +294,22 @@ prune:
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 128Mi }
+
+# `worker expire --older-than <olderThan>`: the reservation TTL. A RESERVED reservation held
+# longer than this gives its stock back and ordering is asked to cancel the order (the customer
+# neither completed nor cancelled it). The "Reservation expiry overdue" alert
+# (deployments/docker/grafana/provisioning/alerting.yaml) fires at 36h = 1.5 × 24h: move both
+# together. Only RESERVED is touched — COMMITTED / RELEASED are never due. The same thing ad hoc,
+# without kubectl: InventoryService.ExpireReservations (console Expire page) — dry run, small runs.
+expire:
+  enabled: true
+  schedule: "*/15 * * * *"
+  olderThan: 24h
+  dryRun: false
+  batch: 100
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 128Mi }

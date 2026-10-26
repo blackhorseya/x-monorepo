@@ -10,6 +10,8 @@ import (
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	durationpb "google.golang.org/protobuf/types/known/durationpb"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -536,11 +538,190 @@ func (x *ListReservationsResponse) GetNextPageToken() string {
 	return ""
 }
 
+type ExpireReservationsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A RESERVED reservation held at least this long expires. Required, positive.
+	OlderThan *durationpb.Duration `protobuf:"bytes,1,opt,name=older_than,json=olderThan,proto3" json:"older_than,omitempty"`
+	// List what would expire, change nothing.
+	DryRun bool `protobuf:"varint,2,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	// Reservations per call, oldest first; 0 = server default (100), at most 1000.
+	Limit         int32 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExpireReservationsRequest) Reset() {
+	*x = ExpireReservationsRequest{}
+	mi := &file_inventory_v1_service_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExpireReservationsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExpireReservationsRequest) ProtoMessage() {}
+
+func (x *ExpireReservationsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_service_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExpireReservationsRequest.ProtoReflect.Descriptor instead.
+func (*ExpireReservationsRequest) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ExpireReservationsRequest) GetOlderThan() *durationpb.Duration {
+	if x != nil {
+		return x.OlderThan
+	}
+	return nil
+}
+
+func (x *ExpireReservationsRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+func (x *ExpireReservationsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+// ExpiredReservation is one reservation the call expired — or, dry run, would.
+type ExpiredReservation struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	OrderId string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	// When it was reserved (the start of the hold).
+	ReservedAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=reserved_at,json=reservedAt,proto3" json:"reserved_at,omitempty"`
+	// How long it had been held when the call ran.
+	HeldFor       *durationpb.Duration `protobuf:"bytes,3,opt,name=held_for,json=heldFor,proto3" json:"held_for,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExpiredReservation) Reset() {
+	*x = ExpiredReservation{}
+	mi := &file_inventory_v1_service_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExpiredReservation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExpiredReservation) ProtoMessage() {}
+
+func (x *ExpiredReservation) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_service_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExpiredReservation.ProtoReflect.Descriptor instead.
+func (*ExpiredReservation) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ExpiredReservation) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *ExpiredReservation) GetReservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ReservedAt
+	}
+	return nil
+}
+
+func (x *ExpiredReservation) GetHeldFor() *durationpb.Duration {
+	if x != nil {
+		return x.HeldFor
+	}
+	return nil
+}
+
+type ExpireReservationsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Oldest first. len(expired) == limit means there may be more: call again.
+	Expired       []*ExpiredReservation `protobuf:"bytes,1,rep,name=expired,proto3" json:"expired,omitempty"`
+	DryRun        bool                  `protobuf:"varint,2,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExpireReservationsResponse) Reset() {
+	*x = ExpireReservationsResponse{}
+	mi := &file_inventory_v1_service_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExpireReservationsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExpireReservationsResponse) ProtoMessage() {}
+
+func (x *ExpireReservationsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_service_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExpireReservationsResponse.ProtoReflect.Descriptor instead.
+func (*ExpireReservationsResponse) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ExpireReservationsResponse) GetExpired() []*ExpiredReservation {
+	if x != nil {
+		return x.Expired
+	}
+	return nil
+}
+
+func (x *ExpireReservationsResponse) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
 var File_inventory_v1_service_proto protoreflect.FileDescriptor
 
 const file_inventory_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1ainventory/v1/service.proto\x12\finventory.v1\x1a\x1bbuf/validate/validate.proto\x1a\x19inventory/v1/entity.proto\"N\n" +
+	"\x1ainventory/v1/service.proto\x12\finventory.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19inventory/v1/entity.proto\"N\n" +
 	"\x0fSetStockRequest\x12\x19\n" +
 	"\x03sku\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x03sku\x12 \n" +
 	"\aon_hand\x18\x02 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\x06onHand\"=\n" +
@@ -571,14 +752,29 @@ const file_inventory_v1_service_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"\x81\x01\n" +
 	"\x18ListReservationsResponse\x12=\n" +
 	"\freservations\x18\x01 \x03(\v2\x19.inventory.v1.ReservationR\freservations\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\xb9\x03\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x9d\x01\n" +
+	"\x19ExpireReservationsRequest\x12E\n" +
+	"\n" +
+	"older_than\x18\x01 \x01(\v2\x19.google.protobuf.DurationB\v\xbaH\b\xc8\x01\x01\xaa\x01\x02*\x00R\tolderThan\x12\x17\n" +
+	"\adry_run\x18\x02 \x01(\bR\x06dryRun\x12 \n" +
+	"\x05limit\x18\x03 \x01(\x05B\n" +
+	"\xbaH\a\x1a\x05\x18\xe8\a(\x00R\x05limit\"\xa2\x01\n" +
+	"\x12ExpiredReservation\x12\x19\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\x12;\n" +
+	"\vreserved_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"reservedAt\x124\n" +
+	"\bheld_for\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\aheldFor\"q\n" +
+	"\x1aExpireReservationsResponse\x12:\n" +
+	"\aexpired\x18\x01 \x03(\v2 .inventory.v1.ExpiredReservationR\aexpired\x12\x17\n" +
+	"\adry_run\x18\x02 \x01(\bR\x06dryRun2\xa2\x04\n" +
 	"\x10InventoryService\x12I\n" +
 	"\bSetStock\x12\x1d.inventory.v1.SetStockRequest\x1a\x1e.inventory.v1.SetStockResponse\x12I\n" +
 	"\bGetStock\x12\x1d.inventory.v1.GetStockRequest\x1a\x1e.inventory.v1.GetStockResponse\x12O\n" +
 	"\n" +
 	"ListStocks\x12\x1f.inventory.v1.ListStocksRequest\x1a .inventory.v1.ListStocksResponse\x12[\n" +
 	"\x0eGetReservation\x12#.inventory.v1.GetReservationRequest\x1a$.inventory.v1.GetReservationResponse\x12a\n" +
-	"\x10ListReservations\x12%.inventory.v1.ListReservationsRequest\x1a&.inventory.v1.ListReservationsResponseB\xbc\x01\n" +
+	"\x10ListReservations\x12%.inventory.v1.ListReservationsRequest\x1a&.inventory.v1.ListReservationsResponse\x12g\n" +
+	"\x12ExpireReservations\x12'.inventory.v1.ExpireReservationsRequest\x1a(.inventory.v1.ExpireReservationsResponseB\xbc\x01\n" +
 	"\x10com.inventory.v1B\fServiceProtoP\x01ZIgithub.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1;inventoryv1\xa2\x02\x03IXX\xaa\x02\fInventory.V1\xca\x02\fInventory\\V1\xe2\x02\x18Inventory\\V1\\GPBMetadata\xea\x02\rInventory::V1b\x06proto3"
 
 var (
@@ -593,44 +789,55 @@ func file_inventory_v1_service_proto_rawDescGZIP() []byte {
 	return file_inventory_v1_service_proto_rawDescData
 }
 
-var file_inventory_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_inventory_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_inventory_v1_service_proto_goTypes = []any{
-	(*SetStockRequest)(nil),          // 0: inventory.v1.SetStockRequest
-	(*SetStockResponse)(nil),         // 1: inventory.v1.SetStockResponse
-	(*GetStockRequest)(nil),          // 2: inventory.v1.GetStockRequest
-	(*GetStockResponse)(nil),         // 3: inventory.v1.GetStockResponse
-	(*ListStocksRequest)(nil),        // 4: inventory.v1.ListStocksRequest
-	(*ListStocksResponse)(nil),       // 5: inventory.v1.ListStocksResponse
-	(*GetReservationRequest)(nil),    // 6: inventory.v1.GetReservationRequest
-	(*GetReservationResponse)(nil),   // 7: inventory.v1.GetReservationResponse
-	(*ListReservationsRequest)(nil),  // 8: inventory.v1.ListReservationsRequest
-	(*ListReservationsResponse)(nil), // 9: inventory.v1.ListReservationsResponse
-	(*Stock)(nil),                    // 10: inventory.v1.Stock
-	(*Reservation)(nil),              // 11: inventory.v1.Reservation
-	(ReservationStatus)(0),           // 12: inventory.v1.ReservationStatus
+	(*SetStockRequest)(nil),            // 0: inventory.v1.SetStockRequest
+	(*SetStockResponse)(nil),           // 1: inventory.v1.SetStockResponse
+	(*GetStockRequest)(nil),            // 2: inventory.v1.GetStockRequest
+	(*GetStockResponse)(nil),           // 3: inventory.v1.GetStockResponse
+	(*ListStocksRequest)(nil),          // 4: inventory.v1.ListStocksRequest
+	(*ListStocksResponse)(nil),         // 5: inventory.v1.ListStocksResponse
+	(*GetReservationRequest)(nil),      // 6: inventory.v1.GetReservationRequest
+	(*GetReservationResponse)(nil),     // 7: inventory.v1.GetReservationResponse
+	(*ListReservationsRequest)(nil),    // 8: inventory.v1.ListReservationsRequest
+	(*ListReservationsResponse)(nil),   // 9: inventory.v1.ListReservationsResponse
+	(*ExpireReservationsRequest)(nil),  // 10: inventory.v1.ExpireReservationsRequest
+	(*ExpiredReservation)(nil),         // 11: inventory.v1.ExpiredReservation
+	(*ExpireReservationsResponse)(nil), // 12: inventory.v1.ExpireReservationsResponse
+	(*Stock)(nil),                      // 13: inventory.v1.Stock
+	(*Reservation)(nil),                // 14: inventory.v1.Reservation
+	(ReservationStatus)(0),             // 15: inventory.v1.ReservationStatus
+	(*durationpb.Duration)(nil),        // 16: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),      // 17: google.protobuf.Timestamp
 }
 var file_inventory_v1_service_proto_depIdxs = []int32{
-	10, // 0: inventory.v1.SetStockResponse.stock:type_name -> inventory.v1.Stock
-	10, // 1: inventory.v1.GetStockResponse.stock:type_name -> inventory.v1.Stock
-	10, // 2: inventory.v1.ListStocksResponse.stocks:type_name -> inventory.v1.Stock
-	11, // 3: inventory.v1.GetReservationResponse.reservation:type_name -> inventory.v1.Reservation
-	12, // 4: inventory.v1.ListReservationsRequest.status:type_name -> inventory.v1.ReservationStatus
-	11, // 5: inventory.v1.ListReservationsResponse.reservations:type_name -> inventory.v1.Reservation
-	0,  // 6: inventory.v1.InventoryService.SetStock:input_type -> inventory.v1.SetStockRequest
-	2,  // 7: inventory.v1.InventoryService.GetStock:input_type -> inventory.v1.GetStockRequest
-	4,  // 8: inventory.v1.InventoryService.ListStocks:input_type -> inventory.v1.ListStocksRequest
-	6,  // 9: inventory.v1.InventoryService.GetReservation:input_type -> inventory.v1.GetReservationRequest
-	8,  // 10: inventory.v1.InventoryService.ListReservations:input_type -> inventory.v1.ListReservationsRequest
-	1,  // 11: inventory.v1.InventoryService.SetStock:output_type -> inventory.v1.SetStockResponse
-	3,  // 12: inventory.v1.InventoryService.GetStock:output_type -> inventory.v1.GetStockResponse
-	5,  // 13: inventory.v1.InventoryService.ListStocks:output_type -> inventory.v1.ListStocksResponse
-	7,  // 14: inventory.v1.InventoryService.GetReservation:output_type -> inventory.v1.GetReservationResponse
-	9,  // 15: inventory.v1.InventoryService.ListReservations:output_type -> inventory.v1.ListReservationsResponse
-	11, // [11:16] is the sub-list for method output_type
-	6,  // [6:11] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	13, // 0: inventory.v1.SetStockResponse.stock:type_name -> inventory.v1.Stock
+	13, // 1: inventory.v1.GetStockResponse.stock:type_name -> inventory.v1.Stock
+	13, // 2: inventory.v1.ListStocksResponse.stocks:type_name -> inventory.v1.Stock
+	14, // 3: inventory.v1.GetReservationResponse.reservation:type_name -> inventory.v1.Reservation
+	15, // 4: inventory.v1.ListReservationsRequest.status:type_name -> inventory.v1.ReservationStatus
+	14, // 5: inventory.v1.ListReservationsResponse.reservations:type_name -> inventory.v1.Reservation
+	16, // 6: inventory.v1.ExpireReservationsRequest.older_than:type_name -> google.protobuf.Duration
+	17, // 7: inventory.v1.ExpiredReservation.reserved_at:type_name -> google.protobuf.Timestamp
+	16, // 8: inventory.v1.ExpiredReservation.held_for:type_name -> google.protobuf.Duration
+	11, // 9: inventory.v1.ExpireReservationsResponse.expired:type_name -> inventory.v1.ExpiredReservation
+	0,  // 10: inventory.v1.InventoryService.SetStock:input_type -> inventory.v1.SetStockRequest
+	2,  // 11: inventory.v1.InventoryService.GetStock:input_type -> inventory.v1.GetStockRequest
+	4,  // 12: inventory.v1.InventoryService.ListStocks:input_type -> inventory.v1.ListStocksRequest
+	6,  // 13: inventory.v1.InventoryService.GetReservation:input_type -> inventory.v1.GetReservationRequest
+	8,  // 14: inventory.v1.InventoryService.ListReservations:input_type -> inventory.v1.ListReservationsRequest
+	10, // 15: inventory.v1.InventoryService.ExpireReservations:input_type -> inventory.v1.ExpireReservationsRequest
+	1,  // 16: inventory.v1.InventoryService.SetStock:output_type -> inventory.v1.SetStockResponse
+	3,  // 17: inventory.v1.InventoryService.GetStock:output_type -> inventory.v1.GetStockResponse
+	5,  // 18: inventory.v1.InventoryService.ListStocks:output_type -> inventory.v1.ListStocksResponse
+	7,  // 19: inventory.v1.InventoryService.GetReservation:output_type -> inventory.v1.GetReservationResponse
+	9,  // 20: inventory.v1.InventoryService.ListReservations:output_type -> inventory.v1.ListReservationsResponse
+	12, // 21: inventory.v1.InventoryService.ExpireReservations:output_type -> inventory.v1.ExpireReservationsResponse
+	16, // [16:22] is the sub-list for method output_type
+	10, // [10:16] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_inventory_v1_service_proto_init() }
@@ -645,7 +852,7 @@ func file_inventory_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_inventory_v1_service_proto_rawDesc), len(file_inventory_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

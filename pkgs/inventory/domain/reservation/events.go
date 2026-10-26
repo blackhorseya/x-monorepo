@@ -73,6 +73,21 @@ func NewCommitted(r *Reservation) Committed {
 	return Committed{base: newBase(r, r.updatedAt)}
 }
 
+// Expired is raised, after Released, when a RESERVED reservation was held past
+// its TTL: the stock went back (Released) and ordering is asked to cancel the
+// order — this event is what the events adapter turns into that request.
+type Expired struct {
+	base
+	heldFor time.Duration
+}
+
+func NewExpired(r *Reservation, heldFor time.Duration) Expired {
+	return Expired{base: newBase(r, r.updatedAt), heldFor: heldFor}
+}
+
+// HeldFor is how long the reservation had been held when it expired.
+func (x Expired) HeldFor() time.Duration { return x.heldFor }
+
 // PullEvents returns the events raised since the last pull and clears them.
 // Use cases call it inside the transaction that saves the aggregate.
 func (x *Reservation) PullEvents() []Event {

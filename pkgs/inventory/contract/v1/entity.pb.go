@@ -39,6 +39,9 @@ const (
 	// The order was completed (ordering.v1.OrderCompleted): the reserved quantity
 	// left on_hand — sold, not held.
 	ReservationStatus_RESERVATION_STATUS_COMMITTED ReservationStatus = 5
+	// Held past its TTL (ExpireReservations): the stock was given back and
+	// ordering was asked to cancel the order (ordering.v1.OrderCancellationRequested).
+	ReservationStatus_RESERVATION_STATUS_EXPIRED ReservationStatus = 6
 )
 
 // Enum value maps for ReservationStatus.
@@ -50,6 +53,7 @@ var (
 		3: "RESERVATION_STATUS_RELEASED",
 		4: "RESERVATION_STATUS_CANCELLED",
 		5: "RESERVATION_STATUS_COMMITTED",
+		6: "RESERVATION_STATUS_EXPIRED",
 	}
 	ReservationStatus_value = map[string]int32{
 		"RESERVATION_STATUS_UNSPECIFIED": 0,
@@ -58,6 +62,7 @@ var (
 		"RESERVATION_STATUS_RELEASED":    3,
 		"RESERVATION_STATUS_CANCELLED":   4,
 		"RESERVATION_STATUS_COMMITTED":   5,
+		"RESERVATION_STATUS_EXPIRED":     6,
 	}
 )
 
@@ -329,14 +334,15 @@ const file_inventory_v1_entity_proto_rawDesc = "" +
 	"\vcreate_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime*\xde\x01\n" +
+	"updateTime*\xfe\x01\n" +
 	"\x11ReservationStatus\x12\"\n" +
 	"\x1eRESERVATION_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bRESERVATION_STATUS_RESERVED\x10\x01\x12\x1f\n" +
 	"\x1bRESERVATION_STATUS_REJECTED\x10\x02\x12\x1f\n" +
 	"\x1bRESERVATION_STATUS_RELEASED\x10\x03\x12 \n" +
 	"\x1cRESERVATION_STATUS_CANCELLED\x10\x04\x12 \n" +
-	"\x1cRESERVATION_STATUS_COMMITTED\x10\x05B\xbb\x01\n" +
+	"\x1cRESERVATION_STATUS_COMMITTED\x10\x05\x12\x1e\n" +
+	"\x1aRESERVATION_STATUS_EXPIRED\x10\x06B\xbb\x01\n" +
 	"\x10com.inventory.v1B\vEntityProtoP\x01ZIgithub.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1;inventoryv1\xa2\x02\x03IXX\xaa\x02\fInventory.V1\xca\x02\fInventory\\V1\xe2\x02\x18Inventory\\V1\\GPBMetadata\xea\x02\rInventory::V1b\x06proto3"
 
 var (

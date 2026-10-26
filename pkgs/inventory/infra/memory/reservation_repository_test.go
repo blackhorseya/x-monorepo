@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/memory"
 )
 
@@ -62,4 +63,59 @@ func TestReservationRepository_CountByStatus(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Status() != reservation.StatusCancelled || got[0].Count() != 2 || !got[0].OldestUpdatedAt().Equal(t0) {
 		t.Fatalf("counts = %+v, %v", got, err)
 	}
+}
+
+// ListReservedBefore: RESERVED only, hold started strictly before the instant,
+// oldest first, limited — the same contract as Postgres.
+func TestReservationRepository_ListReservedBefore(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewReservationRepository()
+	now := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	line, _ := reservation.NewLine("A", 1)
+	for _, in := range []struct {
+		id string
+		at time.Time
+	}{{"o-new", now}, {"o-old", now.Add(-time.Hour)}, {"o-older", now.Add(-2 * time.Hour)}} {
+		s, _ := stock.New("A", 10, in.at)
+		r, err := reservation.Reserve(reservation.Params{OrderID: in.id, Lines: []reservation.Line{line}, Now: in.at}, map[string]*stock.Stock{"A": s})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Add(c, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tomb, _ := reservation.Tombstone("o-tomb", now.Add(-3*time.Hour)) // not RESERVED: never due
+	if err := repo.Add(c, tomb); err != nil {
+		t.Fatal(err)
+	}
+
+	due, err := repo.ListReservedBefore(c, now, 10)
+	if err != nil || len(due) != 2 || due[0].OrderID() != "o-older" || due[1].OrderID() != "o-old" {
+		t.Fatalf("before now = %v, %v", due, err)
+	}
+	due, err = repo.ListReservedBefore(c, now, 1)
+	if err != nil || len(due) != 1 || due[0].OrderID() != "o-older" {
+		t.Fatalf("limit 1 = %v, %v", due, err)
+	}
+	// The copy handed out is detached from the store.
+	if err := due[0].Expire(map[string]*stock.Stock{"A": mustStock(t, 10, 1)}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := repo.FindByOrderID(c, "o-older"); got.Status() != reservation.StatusReserved {
+		t.Fatal("ListReservedBefore leaked the stored aggregate")
+	}
+	cancelled, cancel := context.WithCancel(c)
+	cancel()
+	if _, err := repo.ListReservedBefore(cancelled, now, 1); err == nil {
+		t.Fatal("cancelled context must fail")
+	}
+}
+
+func mustStock(t *testing.T, onHand, reserved int32) *stock.Stock {
+	s, err := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: onHand, Reserved: reserved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

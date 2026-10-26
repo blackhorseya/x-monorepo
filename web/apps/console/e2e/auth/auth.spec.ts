@@ -52,3 +52,20 @@ test("/poison needs the admin role", async ({ page }) => {
   // Past the role gate: this server has no database, so the next error is admin's own.
   await expect(page.getByRole("alert")).toContainText("admin.no_database");
 });
+
+test("/expire needs the admin role", async ({ page }) => {
+  // InventoryService.ExpireReservations is the one inventory procedure behind the gate:
+  // it cancels other people's orders. ops gets permission_denied; admin gets the dry run.
+  await page.goto("/expire");
+  await useKey(page, OPS_KEY);
+  await page.getByRole("button", { name: "Dry run", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("auth.permission_denied");
+
+  await useKey(page, ADMIN_KEY);
+  await page.getByRole("button", { name: "Dry run", exact: true }).click();
+  await expect(
+    page.locator('[data-slot="card-title"]', {
+      hasText: /^would expire \d+ reservation\(s\)$/,
+    })
+  ).toBeVisible();
+});

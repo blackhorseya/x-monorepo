@@ -42,8 +42,8 @@ func TestRepositories_Postgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 6 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 6 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 7 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 7 clean", v, dirty, err)
 	}
 	for _, tbl := range []string{"inventory.stocks", "inventory.reservations"} {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl + " CASCADE").Error; err != nil {
@@ -228,6 +228,35 @@ func TestRepositories_Postgres(t *testing.T) {
 	rpage, rnext, err = reservations.List(c, reservation.ListParams{Status: &cancelled, Limit: 10})
 	if err != nil || len(rpage) != 1 || rpage[0].OrderID() != "o-tomb" || rnext != nil {
 		t.Fatalf("filtered = %v next=%v err=%v", ids(rpage), rnext, err)
+	}
+
+	// ── reserved before: RESERVED only, hold started before the instant, oldest first ──
+	// o-2 was RESERVED then RELEASED above, so it must not show; o-old (reserved an hour
+	// before `now`) and o-new (at `now`) are the candidates.
+	reloaded, _ = stocks.FindBySKU(c, "A")
+	for _, in := range []struct {
+		id string
+		at time.Time
+	}{{"o-new", now}, {"o-old", now.Add(-time.Hour)}} {
+		r, err := reservation.Reserve(reservation.Params{OrderID: in.id, Lines: []reservation.Line{line("A", 1)}, Now: in.at}, map[string]*stock.Stock{"A": reloaded})
+		if err != nil || r.Status() != reservation.StatusReserved {
+			t.Fatalf("reserve %s = %v %v", in.id, r, err)
+		}
+		if err := reservations.Add(c, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due, err := reservations.ListReservedBefore(c, now.Add(time.Second), 10)
+	if err != nil || len(due) != 2 || due[0].OrderID() != "o-old" || due[1].OrderID() != "o-new" || len(due[0].Lines()) != 1 {
+		t.Fatalf("reserved before now+1s = %v, %v", ids(due), err)
+	}
+	due, err = reservations.ListReservedBefore(c, now, 10)
+	if err != nil || len(due) != 1 || due[0].OrderID() != "o-old" {
+		t.Fatalf("reserved before now = %v, %v (strictly before)", ids(due), err)
+	}
+	due, err = reservations.ListReservedBefore(c, now.Add(time.Second), 1)
+	if err != nil || len(due) != 1 || due[0].OrderID() != "o-old" {
+		t.Fatalf("limit 1 = %v, %v", ids(due), err)
 	}
 }
 

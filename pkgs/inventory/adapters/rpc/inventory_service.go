@@ -7,11 +7,14 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
 	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1/inventoryv1connect"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
@@ -20,20 +23,25 @@ var _ inventoryv1connect.InventoryServiceHandler = (*InventoryService)(nil)
 
 // Use-case aliases keep handler signatures readable.
 type (
-	SetStockUC         = usecasex.UseCase[dto.SetStockInput, *dto.StockOutput]
-	GetStockUC         = usecasex.UseCase[dto.GetStockInput, *dto.StockOutput]
-	ListStocksUC       = usecasex.UseCase[dto.ListStocksInput, *dto.ListStocksOutput]
-	GetReservationUC   = usecasex.UseCase[dto.GetReservationInput, *dto.ReservationOutput]
-	ListReservationsUC = usecasex.UseCase[dto.ListReservationsInput, *dto.ListReservationsOutput]
+	SetStockUC           = usecasex.UseCase[dto.SetStockInput, *dto.StockOutput]
+	GetStockUC           = usecasex.UseCase[dto.GetStockInput, *dto.StockOutput]
+	ListStocksUC         = usecasex.UseCase[dto.ListStocksInput, *dto.ListStocksOutput]
+	GetReservationUC     = usecasex.UseCase[dto.GetReservationInput, *dto.ReservationOutput]
+	ListReservationsUC   = usecasex.UseCase[dto.ListReservationsInput, *dto.ListReservationsOutput]
+	ExpireReservationsUC = usecasex.UseCase[dto.ExpireReservationsInput, *dto.ExpireReservationsOutput]
 )
 
-// InventoryService implements the generated InventoryServiceHandler.
+// InventoryService implements the generated InventoryServiceHandler. auth is
+// read only by ExpireReservations (server.RequireRole, the admin role): the
+// one procedure here that acts on other people's orders.
 type InventoryService struct {
-	setStock         SetStockUC
-	getStock         GetStockUC
-	listStocks       ListStocksUC
-	getReservation   GetReservationUC
-	listReservations ListReservationsUC
+	setStock           SetStockUC
+	getStock           GetStockUC
+	listStocks         ListStocksUC
+	getReservation     GetReservationUC
+	listReservations   ListReservationsUC
+	expireReservations ExpireReservationsUC
+	auth               config.Auth
 }
 
 func NewInventoryService(
@@ -42,10 +50,17 @@ func NewInventoryService(
 	listStocks ListStocksUC,
 	getReservation GetReservationUC,
 	listReservations ListReservationsUC,
+	expireReservations ExpireReservationsUC,
+	auth config.Auth,
 ) *InventoryService {
+	if auth.AdminRole == "" {
+		auth.AdminRole = admin.DefaultAdminRole // config.Load sets the same; this is for hand-built configs (tests)
+	}
+
 	return &InventoryService{
 		setStock: setStock, getStock: getStock, listStocks: listStocks,
 		getReservation: getReservation, listReservations: listReservations,
+		expireReservations: expireReservations, auth: auth,
 	}
 }
 
@@ -127,6 +142,36 @@ func (h *InventoryService) ListReservations(
 	}
 
 	return connect.NewResponse(&inventoryv1.ListReservationsResponse{Reservations: rs, NextPageToken: out.NextPageToken}), nil
+}
+
+// ExpireReservations is the operator's sweep (dry run, small run); the routine
+// one is `worker expire`. Admin role when auth is on: it cancels other
+// people's orders.
+func (h *InventoryService) ExpireReservations(
+	c context.Context,
+	req *connect.Request[inventoryv1.ExpireReservationsRequest],
+) (*connect.Response[inventoryv1.ExpireReservationsResponse], error) {
+	if err := server.RequireRole(c, h.auth, h.auth.AdminRole); err != nil {
+		return nil, err
+	}
+	out, err := h.expireReservations.Execute(c, dto.ExpireReservationsInput{
+		OlderThan: req.Msg.GetOlderThan().AsDuration(),
+		Limit:     int(req.Msg.GetLimit()),
+		DryRun:    req.Msg.GetDryRun(),
+	})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+	expired := make([]*inventoryv1.ExpiredReservation, 0, len(out.Expired))
+	for _, e := range out.Expired {
+		expired = append(expired, &inventoryv1.ExpiredReservation{
+			OrderId:    e.OrderID,
+			ReservedAt: timestamppb.New(e.ReservedAt),
+			HeldFor:    durationpb.New(e.HeldFor),
+		})
+	}
+
+	return connect.NewResponse(&inventoryv1.ExpireReservationsResponse{Expired: expired, DryRun: out.DryRun}), nil
 }
 
 // toDTOStatus maps a filter enum to the use case's string filter. UNSPECIFIED

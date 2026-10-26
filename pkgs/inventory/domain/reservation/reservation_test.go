@@ -206,6 +206,61 @@ func TestCommit(t *testing.T) {
 	}
 }
 
+func TestExpire(t *testing.T) {
+	st := stocks(t, map[string]int32{"A": 5, "B": 1})
+	lines := []reservation.Line{line(t, "A", 2), line(t, "B", 1)}
+	r, err := reservation.Reserve(reservation.Params{OrderID: "o-5", Lines: lines, Now: now}, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.PullEvents()
+	later := now.Add(25 * time.Hour)
+
+	// Same preconditions as Release: a missing stock changes nothing.
+	if err := r.Expire(map[string]*stock.Stock{"A": st["A"]}, later); !errors.Is(err, reservation.ErrStockMissing) {
+		t.Fatalf("missing stock: %v", err)
+	}
+	if r.Status() != reservation.StatusReserved || st["A"].Reserved() != 2 {
+		t.Fatal("failed expire must not change anything")
+	}
+	// Stock says less is reserved than the reservation holds (corrupt): the stock error surfaces.
+	bad, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 1, UpdatedAt: now})
+	if err := r.Expire(map[string]*stock.Stock{"A": bad, "B": st["B"]}, later); !errors.Is(err, stock.ErrReleaseExceedsReserved) {
+		t.Fatalf("corrupt stock: %v", err)
+	}
+
+	if err := r.Expire(st, later); err != nil {
+		t.Fatal(err)
+	}
+	// Given back, not sold: on-hand untouched, nothing reserved.
+	if r.Status() != reservation.StatusExpired || !r.UpdatedAt().Equal(later) ||
+		st["A"].OnHand() != 5 || st["A"].Reserved() != 0 || st["B"].OnHand() != 1 || st["B"].Reserved() != 0 {
+		t.Fatalf("status=%s A=%d/%d B=%d/%d", r.Status(), st["A"].OnHand(), st["A"].Reserved(), st["B"].OnHand(), st["B"].Reserved())
+	}
+	// Released (the stock moved) then Expired (ask ordering to cancel), both at `later`.
+	evs := r.PullEvents()
+	if len(evs) != 2 {
+		t.Fatalf("events = %#v", evs)
+	}
+	if rel, ok := evs[0].(reservation.Released); !ok || rel.OrderID() != "o-5" || !rel.OccurredAt().Equal(later) {
+		t.Fatalf("events[0] = %#v", evs[0])
+	}
+	exp, ok := evs[1].(reservation.Expired)
+	if !ok || exp.OrderID() != "o-5" || exp.AggregateID() != "o-5" || !exp.OccurredAt().Equal(later) || exp.HeldFor() != 25*time.Hour {
+		t.Fatalf("events[1] = %#v", evs[1])
+	}
+	// Terminal: a late OrderCancelled / OrderCompleted / second sweep all refuse.
+	for name, f := range map[string]func() error{
+		"release": func() error { return r.Release(st, later) },
+		"commit":  func() error { return r.Commit(st, later) },
+		"expire":  func() error { return r.Expire(st, later) },
+	} {
+		if err := f(); !errors.Is(err, reservation.ErrNotReserved) {
+			t.Fatalf("%s after expire: %v", name, err)
+		}
+	}
+}
+
 func TestReconstitute(t *testing.T) {
 	lines := []reservation.Line{line(t, "A", 1)}
 	r, err := reservation.Reconstitute(reservation.ReconstituteParams{

@@ -3,6 +3,8 @@ syntax = "proto3";
 package inventory.v1;
 
 import "buf/validate/validate.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
 import "inventory/v1/entity.proto";
 
 // InventoryService is the public RPC contract of the inventory bounded context.
@@ -20,6 +22,13 @@ service InventoryService {
   rpc GetReservation(GetReservationRequest) returns (GetReservationResponse);
   // ListReservations pages through reservations newest first, optionally by status.
   rpc ListReservations(ListReservationsRequest) returns (ListReservationsResponse);
+  // ExpireReservations is `worker expire` over RPC: RESERVED reservations held
+  // longer than older_than give their stock back (EXPIRED, inventory.v1.StockReleased)
+  // and ordering is asked to cancel the order (ordering.v1.OrderCancellationRequested).
+  // Oldest first, one transaction per call, at most limit of them; the routine
+  // sweep is the CronJob, this is the operator's dry run / small run. Requires
+  // the admin role when auth is on (x-error-code: auth.permission_denied).
+  rpc ExpireReservations(ExpireReservationsRequest) returns (ExpireReservationsResponse);
 }
 
 message SetStockRequest {
@@ -78,4 +87,34 @@ message ListReservationsResponse {
   repeated Reservation reservations = 1;
   // Empty when this is the last page.
   string next_page_token = 2;
+}
+
+message ExpireReservationsRequest {
+  // A RESERVED reservation held at least this long expires. Required, positive.
+  google.protobuf.Duration older_than = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).duration.gt = {}
+  ];
+  // List what would expire, change nothing.
+  bool dry_run = 2;
+  // Reservations per call, oldest first; 0 = server default (100), at most 1000.
+  int32 limit = 3 [(buf.validate.field).int32 = {
+    gte: 0
+    lte: 1000
+  }];
+}
+
+// ExpiredReservation is one reservation the call expired — or, dry run, would.
+message ExpiredReservation {
+  string order_id = 1;
+  // When it was reserved (the start of the hold).
+  google.protobuf.Timestamp reserved_at = 2;
+  // How long it had been held when the call ran.
+  google.protobuf.Duration held_for = 3;
+}
+
+message ExpireReservationsResponse {
+  // Oldest first. len(expired) == limit means there may be more: call again.
+  repeated ExpiredReservation expired = 1;
+  bool dry_run = 2;
 }

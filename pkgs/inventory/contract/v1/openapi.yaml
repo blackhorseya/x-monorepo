@@ -88,6 +88,10 @@ components:
           description: Deserialized error detail payload. The 'type' field indicates the schema. This field is for easier debugging and should not be relied upon for application logic.
       additionalProperties: true
       description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message, with an additional debug field for ConnectRPC error details.
+    google.protobuf.Duration:
+      type: string
+      format: duration
+      description: A signed duration in seconds, with up to nine fractional digits and an `s` suffix (for example, `3s` or `-0.001s`).
     google.protobuf.Timestamp:
       type: string
       examples:
@@ -95,6 +99,64 @@ components:
         - "2024-12-25T12:00:00Z"
       format: date-time
       description: A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC.
+    inventory.v1.ExpireReservationsRequest:
+      type: object
+      properties:
+        olderThan:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Duration'
+          title: older_than
+          description: |
+            A RESERVED reservation held at least this long expires. Required, positive.
+            duration.gt = 0s
+        dryRun:
+          type: boolean
+          title: dry_run
+          description: List what would expire, change nothing.
+        limit:
+          type: integer
+          title: limit
+          maximum: 1000
+          minimum: 0
+          format: int32
+          description: Reservations per call, oldest first; 0 = server default (100), at most 1000.
+      title: ExpireReservationsRequest
+      required:
+        - olderThan
+      additionalProperties: false
+    inventory.v1.ExpireReservationsResponse:
+      type: object
+      properties:
+        expired:
+          type: array
+          items:
+            $ref: '#/components/schemas/inventory.v1.ExpiredReservation'
+          title: expired
+          description: 'Oldest first. len(expired) == limit means there may be more: call again.'
+        dryRun:
+          type: boolean
+          title: dry_run
+      title: ExpireReservationsResponse
+      additionalProperties: false
+    inventory.v1.ExpiredReservation:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        reservedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: reserved_at
+          description: When it was reserved (the start of the hold).
+        heldFor:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Duration'
+          title: held_for
+          description: How long it had been held when the call ran.
+      title: ExpiredReservation
+      additionalProperties: false
+      description: ExpiredReservation is one reservation the call expired — or, dry run, would.
     inventory.v1.GetReservationRequest:
       type: object
       properties:
@@ -262,6 +324,7 @@ components:
         - RESERVATION_STATUS_RELEASED
         - RESERVATION_STATUS_CANCELLED
         - RESERVATION_STATUS_COMMITTED
+        - RESERVATION_STATUS_EXPIRED
     inventory.v1.SetStockRequest:
       type: object
       properties:
@@ -374,6 +437,51 @@ security:
   - apiKey: []
   - bearer: []
 paths:
+  /inventory.v1.InventoryService/ExpireReservations:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: ExpireReservations
+      description: |-
+        ExpireReservations is `worker expire` over RPC: RESERVED reservations held
+         longer than older_than give their stock back (EXPIRED, inventory.v1.StockReleased)
+         and ordering is asked to cancel the order (ordering.v1.OrderCancellationRequested).
+         Oldest first, one transaction per call, at most limit of them; the routine
+         sweep is the CronJob, this is the operator's dry run / small run. Requires
+         the admin role when auth is on (x-error-code: auth.permission_denied).
+      operationId: inventory.v1.InventoryService.ExpireReservations
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.ExpireReservationsRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.ExpireReservationsResponse'
   /inventory.v1.InventoryService/GetReservation:
     post:
       tags:

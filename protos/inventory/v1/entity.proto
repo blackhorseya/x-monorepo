@@ -34,6 +34,9 @@ enum ReservationStatus {
   // The order was completed (ordering.v1.OrderCompleted): the reserved quantity
   // left on_hand — sold, not held.
   RESERVATION_STATUS_COMMITTED = 5;
+  // Held past its TTL (ExpireReservations): the stock was given back and
+  // ordering was asked to cancel the order (ordering.v1.OrderCancellationRequested).
+  RESERVATION_STATUS_EXPIRED = 6;
 }
 
 message ReservationLine {
