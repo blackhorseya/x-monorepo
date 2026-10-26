@@ -112,6 +112,21 @@ func (x *Order) Confirm(now time.Time) error {
 	return nil
 }
 
+// Complete fulfils a Confirmed order: the stock inventory held for it is sold.
+// Driven by the rpc adapter; inventory commits the reservation on the
+// OrderCompleted this raises. A completed order cannot be cancelled afterwards.
+func (x *Order) Complete(now time.Time) error {
+	if !x.status.CanTransitionTo(StatusCompleted) {
+		return ErrCannotComplete
+	}
+
+	x.status = StatusCompleted
+	x.updatedAt = now
+	x.record(NewCompleted(x))
+
+	return nil
+}
+
 // Cancel moves the order to Cancelled if the state machine allows it.
 func (x *Order) Cancel(now time.Time) error {
 	if !x.status.CanTransitionTo(StatusCancelled) {

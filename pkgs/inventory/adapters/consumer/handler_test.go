@@ -39,6 +39,43 @@ func (s *releaseStub) Execute(c context.Context, in dto.ReleaseStockInput) (*dto
 	return s.stub.Execute(c, in)
 }
 
+type commitStub struct{ stub }
+
+func (s *commitStub) Execute(c context.Context, in dto.CommitStockInput) (*dto.ReservationOutput, error) {
+	return s.stub.Execute(c, in)
+}
+
+func TestOrderCompletedHandler(t *testing.T) {
+	c := context.Background()
+	uc := &commitStub{}
+	h := consumer.NewOrderCompletedHandler(uc)
+	payload, _ := proto.Marshal(&orderingv1.OrderCompleted{OrderId: "o-1"})
+
+	uc.out = &dto.ReservationOutput{OrderID: "o-1", Status: "COMMITTED"}
+	if err := h.Handle(c, payload); err != nil {
+		t.Fatal(err)
+	}
+	if in, ok := uc.in.(dto.CommitStockInput); !ok || in.OrderID != "o-1" {
+		t.Fatalf("input = %#v", uc.in)
+	}
+	// Already released / committed, or no reservation at all: final.
+	uc.out, uc.err = nil, reservation.ErrNotReserved
+	if err := h.Handle(c, payload); !errors.Is(err, consumer.ErrDrop) {
+		t.Fatalf("not reserved: %v", err)
+	}
+	uc.err = reservation.ErrNotFound
+	if err := h.Handle(c, payload); !errors.Is(err, consumer.ErrDrop) {
+		t.Fatalf("not found: %v", err)
+	}
+	uc.err = errors.New("db down")
+	if err := h.Handle(c, payload); errors.Is(err, consumer.ErrDrop) {
+		t.Fatalf("infra error must retry: %v", err)
+	}
+	if err := h.Handle(c, []byte{0xff, 0xff}); !errors.Is(err, consumer.ErrDrop) {
+		t.Fatalf("garbage: %v", err)
+	}
+}
+
 func TestOrderCreatedHandler(t *testing.T) {
 	c := context.Background()
 	uc := &reserveStub{}

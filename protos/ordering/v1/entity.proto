@@ -16,6 +16,9 @@ enum OrderStatus {
   ORDER_STATUS_CANCELLED = 2;
   // Every line was reserved by inventory (inventory.v1.StockReserved consumed). Still cancellable.
   ORDER_STATUS_CONFIRMED = 3;
+  // Fulfilled (CompleteOrder): inventory commits the reservation — the stock is sold, not held.
+  // Terminal: a completed order cannot be cancelled.
+  ORDER_STATUS_COMPLETED = 4;
 }
 
 message LineItem {

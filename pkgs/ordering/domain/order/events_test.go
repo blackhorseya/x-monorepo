@@ -56,6 +56,18 @@ func TestOrder_Events(t *testing.T) {
 		t.Fatalf("after Confirm: %+v", evs)
 	}
 
+	// Completed is raised by Complete; try it on a copy so the cancel path below still runs.
+	done, _ := order.Reconstitute(order.ReconstituteParams{ID: "o-2", CustomerID: "c-2", Items: []order.LineItem{a}, Status: order.StatusConfirmed, CreatedAt: now, UpdatedAt: now})
+	completedAt := now.Add(45 * time.Second)
+	if err := done.Complete(completedAt); err != nil {
+		t.Fatal(err)
+	}
+	evs = done.PullEvents()
+	completed, ok := evs[0].(order.Completed)
+	if len(evs) != 1 || !ok || completed.OrderID() != "o-2" || completed.CustomerID() != "c-2" || !completed.OccurredAt().Equal(completedAt) {
+		t.Fatalf("after Complete: %+v", evs)
+	}
+
 	later := now.Add(time.Minute)
 	if err := o.Cancel(later); err != nil {
 		t.Fatal(err)

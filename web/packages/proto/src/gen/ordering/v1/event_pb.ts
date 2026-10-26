@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/event.proto.
  */
 export const file_ordering_v1_event: GenFile = /*@__PURE__*/
-  fileDesc("ChdvcmRlcmluZy92MS9ldmVudC5wcm90bxILb3JkZXJpbmcudjEitAEKDE9yZGVyQ3JlYXRlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIsCgVpdGVtcxgDIAMoCzIdLm9yZGVyaW5nLnYxLk9yZGVyQ3JlYXRlZEl0ZW0SHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMQoQT3JkZXJDcmVhdGVkSXRlbRILCgNza3UYASABKAkSEAoIcXVhbnRpdHkYAiABKAUiaQoOT3JkZXJDb25maXJtZWQSEAoIb3JkZXJfaWQYASABKAkSEwoLY3VzdG9tZXJfaWQYAiABKAkSMAoMY29uZmlybWVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJpCg5PcmRlckNhbmNlbGxlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIwCgxjYW5jZWxsZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wInAKGk9yZGVyQ2FuY2VsbGF0aW9uUmVxdWVzdGVkEhAKCG9yZGVyX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCRIwCgxyZXF1ZXN0ZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wYgZwcm90bzM", [file_common_v1_money, file_google_protobuf_timestamp]);
+  fileDesc("ChdvcmRlcmluZy92MS9ldmVudC5wcm90bxILb3JkZXJpbmcudjEitAEKDE9yZGVyQ3JlYXRlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIsCgVpdGVtcxgDIAMoCzIdLm9yZGVyaW5nLnYxLk9yZGVyQ3JlYXRlZEl0ZW0SHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMQoQT3JkZXJDcmVhdGVkSXRlbRILCgNza3UYASABKAkSEAoIcXVhbnRpdHkYAiABKAUiaQoOT3JkZXJDb25maXJtZWQSEAoIb3JkZXJfaWQYASABKAkSEwoLY3VzdG9tZXJfaWQYAiABKAkSMAoMY29uZmlybWVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJpCg5PcmRlckNvbXBsZXRlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIwCgxjb21wbGV0ZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wImkKDk9yZGVyQ2FuY2VsbGVkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEjAKDGNhbmNlbGxlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAicAoaT3JkZXJDYW5jZWxsYXRpb25SZXF1ZXN0ZWQSEAoIb3JkZXJfaWQYASABKAkSDgoGcmVhc29uGAIgASgJEjAKDHJlcXVlc3RlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBiBnByb3RvMw", [file_common_v1_money, file_google_protobuf_timestamp]);
 
 /**
  * OrderCreated is raised once per New order, in the same transaction that
@@ -109,6 +109,36 @@ export const OrderConfirmedSchema: GenMessage<OrderConfirmed> = /*@__PURE__*/
   messageDesc(file_ordering_v1_event, 2);
 
 /**
+ * OrderCompleted is raised when an order moves to COMPLETED (CompleteOrder on a
+ * CONFIRMED order): inventory consumes it to commit the reservation.
+ *
+ * @generated from message ordering.v1.OrderCompleted
+ */
+export type OrderCompleted = Message<"ordering.v1.OrderCompleted"> & {
+  /**
+   * @generated from field: string order_id = 1;
+   */
+  orderId: string;
+
+  /**
+   * @generated from field: string customer_id = 2;
+   */
+  customerId: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp completed_at = 3;
+   */
+  completedAt?: Timestamp;
+};
+
+/**
+ * Describes the message ordering.v1.OrderCompleted.
+ * Use `create(OrderCompletedSchema)` to create a new message.
+ */
+export const OrderCompletedSchema: GenMessage<OrderCompleted> = /*@__PURE__*/
+  messageDesc(file_ordering_v1_event, 3);
+
+/**
  * OrderCancelled is raised when an order moves to CANCELLED, whatever asked
  * for it (client call or OrderCancellationRequested).
  *
@@ -136,7 +166,7 @@ export type OrderCancelled = Message<"ordering.v1.OrderCancelled"> & {
  * Use `create(OrderCancelledSchema)` to create a new message.
  */
 export const OrderCancelledSchema: GenMessage<OrderCancelled> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_event, 3);
+  messageDesc(file_ordering_v1_event, 4);
 
 /**
  * OrderCancellationRequested is published by another BC (e.g. payment timeout)
@@ -166,5 +196,5 @@ export type OrderCancellationRequested = Message<"ordering.v1.OrderCancellationR
  * Use `create(OrderCancellationRequestedSchema)` to create a new message.
  */
 export const OrderCancellationRequestedSchema: GenMessage<OrderCancellationRequested> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_event, 4);
+  messageDesc(file_ordering_v1_event, 5);
 

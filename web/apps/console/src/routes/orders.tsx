@@ -20,7 +20,7 @@ import { reservationBadge } from "./reservations";
 type Line = { sku: string; quantity: number; priceMinor: number };
 
 // Search params of /orders: a status filter and a customer id filter.
-export type OrdersSearch = { status?: "PENDING" | "CONFIRMED" | "CANCELLED"; customer?: string };
+export type OrdersSearch = { status?: "PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED"; customer?: string };
 
 export function OrdersPage() {
   return (
@@ -125,7 +125,7 @@ function OrdersCard() {
       <CardContent className="grid gap-4">
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex gap-2">
-            {(["ANY", "PENDING", "CONFIRMED", "CANCELLED"] as const).map((s) => {
+            {(["ANY", "PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"] as const).map((s) => {
               const active = s === "ANY" ? !search.status : search.status === s;
               return (
                 <Button key={s} size="sm" variant={active ? "default" : "outline"} onClick={() => setSearch({ status: s === "ANY" ? undefined : s })}>
@@ -224,10 +224,22 @@ function OrderRow({ order }: { order: Order }) {
       void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
     },
   });
+  const complete = useMutation({
+    mutationFn: () => orders.completeOrder({ id: order.id }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.orders });
+      void qc.invalidateQueries({ queryKey: keys.order(order.id) });
+      void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
+    },
+  });
   useResetOnCredentialChange(cancel);
+  useResetOnCredentialChange(complete);
   // PENDING and CONFIRMED (inventory reserved every line) are both still the customer's to
-  // cancel; inventory releases the reservation on OrderCancelled.
+  // cancel; inventory releases the reservation on OrderCancelled. Only CONFIRMED can be
+  // completed: inventory commits the reservation on OrderCompleted (sold, not held).
   const open = order.status === OrderStatus.PENDING || order.status === OrderStatus.CONFIRMED;
+  const confirmed = order.status === OrderStatus.CONFIRMED;
+  const busy = cancel.isPending || complete.isPending;
 
   return (
     <TableRow>
@@ -244,13 +256,19 @@ function OrderRow({ order }: { order: Order }) {
       <TableCell>
         <ReservationCell orderId={order.id} />
       </TableCell>
-      <TableCell className="text-right">
+      <TableCell className="space-x-2 text-right">
+        {confirmed && (
+          <Button size="sm" onClick={() => complete.mutate()} disabled={busy}>
+            Complete
+          </Button>
+        )}
         {open && (
-          <Button variant="outline" size="sm" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+          <Button variant="outline" size="sm" onClick={() => cancel.mutate()} disabled={busy}>
             Cancel
           </Button>
         )}
         {cancel.isError && <p className="text-xs text-destructive">{describe(cancel.error)}</p>}
+        {complete.isError && <p className="text-xs text-destructive">{describe(complete.error)}</p>}
       </TableCell>
     </TableRow>
   );
@@ -311,11 +329,12 @@ export function formatMoney(minor: bigint | undefined, currency: string | undefi
   return `${(Number(minor) / 100).toFixed(2)} ${currency}`;
 }
 
-// PENDING is waiting on inventory (outline), CONFIRMED is the settled good state (default),
-// CANCELLED is over (secondary). Shared with the order detail page.
+// PENDING is waiting on inventory (outline), CONFIRMED and COMPLETED are the good states
+// (default), CANCELLED is over (secondary). Shared with the order detail page.
 export function statusVariant(status: OrderStatus): "default" | "outline" | "secondary" {
   switch (status) {
     case OrderStatus.CONFIRMED:
+    case OrderStatus.COMPLETED:
       return "default";
     case OrderStatus.PENDING:
       return "outline";

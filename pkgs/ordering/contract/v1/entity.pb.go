@@ -32,6 +32,9 @@ const (
 	OrderStatus_ORDER_STATUS_CANCELLED   OrderStatus = 2
 	// Every line was reserved by inventory (inventory.v1.StockReserved consumed). Still cancellable.
 	OrderStatus_ORDER_STATUS_CONFIRMED OrderStatus = 3
+	// Fulfilled (CompleteOrder): inventory commits the reservation — the stock is sold, not held.
+	// Terminal: a completed order cannot be cancelled.
+	OrderStatus_ORDER_STATUS_COMPLETED OrderStatus = 4
 )
 
 // Enum value maps for OrderStatus.
@@ -41,12 +44,14 @@ var (
 		1: "ORDER_STATUS_PENDING",
 		2: "ORDER_STATUS_CANCELLED",
 		3: "ORDER_STATUS_CONFIRMED",
+		4: "ORDER_STATUS_COMPLETED",
 	}
 	OrderStatus_value = map[string]int32{
 		"ORDER_STATUS_UNSPECIFIED": 0,
 		"ORDER_STATUS_PENDING":     1,
 		"ORDER_STATUS_CANCELLED":   2,
 		"ORDER_STATUS_CONFIRMED":   3,
+		"ORDER_STATUS_COMPLETED":   4,
 	}
 )
 
@@ -249,12 +254,13 @@ const file_ordering_v1_entity_proto_rawDesc = "" +
 	"\vcreate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime*}\n" +
+	"updateTime*\x99\x01\n" +
 	"\vOrderStatus\x12\x1c\n" +
 	"\x18ORDER_STATUS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14ORDER_STATUS_PENDING\x10\x01\x12\x1a\n" +
 	"\x16ORDER_STATUS_CANCELLED\x10\x02\x12\x1a\n" +
-	"\x16ORDER_STATUS_CONFIRMED\x10\x03B\xb4\x01\n" +
+	"\x16ORDER_STATUS_CONFIRMED\x10\x03\x12\x1a\n" +
+	"\x16ORDER_STATUS_COMPLETED\x10\x04B\xb4\x01\n" +
 	"\x0fcom.ordering.v1B\vEntityProtoP\x01ZGgithub.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1\xa2\x02\x03OXX\xaa\x02\vOrdering.V1\xca\x02\vOrdering\\V1\xe2\x02\x17Ordering\\V1\\GPBMetadata\xea\x02\fOrdering::V1b\x06proto3"
 
 var (

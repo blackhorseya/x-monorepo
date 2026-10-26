@@ -15,7 +15,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/entity.proto.
  */
 export const file_ordering_v1_entity: GenFile = /*@__PURE__*/
-  fileDesc("ChhvcmRlcmluZy92MS9lbnRpdHkucHJvdG8SC29yZGVyaW5nLnYxImkKCExpbmVJdGVtEhQKA3NrdRgBIAEoCUIHukgEcgIQARIZCghxdWFudGl0eRgCIAEoBUIHukgEGgIgABIsCgp1bml0X3ByaWNlGAMgASgLMhAuY29tbW9uLnYxLk1vbmV5Qga6SAPIAQEi+wEKBU9yZGVyEgoKAmlkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEiQKBWl0ZW1zGAMgAygLMhUub3JkZXJpbmcudjEuTGluZUl0ZW0SHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkSKAoGc3RhdHVzGAUgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSLwoLY3JlYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC3VwZGF0ZV90aW1lGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCp9CgtPcmRlclN0YXR1cxIcChhPUkRFUl9TVEFUVVNfVU5TUEVDSUZJRUQQABIYChRPUkRFUl9TVEFUVVNfUEVORElORxABEhoKFk9SREVSX1NUQVRVU19DQU5DRUxMRUQQAhIaChZPUkRFUl9TVEFUVVNfQ09ORklSTUVEEANiBnByb3RvMw", [file_buf_validate_validate, file_common_v1_money, file_google_protobuf_timestamp]);
+  fileDesc("ChhvcmRlcmluZy92MS9lbnRpdHkucHJvdG8SC29yZGVyaW5nLnYxImkKCExpbmVJdGVtEhQKA3NrdRgBIAEoCUIHukgEcgIQARIZCghxdWFudGl0eRgCIAEoBUIHukgEGgIgABIsCgp1bml0X3ByaWNlGAMgASgLMhAuY29tbW9uLnYxLk1vbmV5Qga6SAPIAQEi+wEKBU9yZGVyEgoKAmlkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEiQKBWl0ZW1zGAMgAygLMhUub3JkZXJpbmcudjEuTGluZUl0ZW0SHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkSKAoGc3RhdHVzGAUgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSLwoLY3JlYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC3VwZGF0ZV90aW1lGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCqZAQoLT3JkZXJTdGF0dXMSHAoYT1JERVJfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGAoUT1JERVJfU1RBVFVTX1BFTkRJTkcQARIaChZPUkRFUl9TVEFUVVNfQ0FOQ0VMTEVEEAISGgoWT1JERVJfU1RBVFVTX0NPTkZJUk1FRBADEhoKFk9SREVSX1NUQVRVU19DT01QTEVURUQQBGIGcHJvdG8z", [file_buf_validate_validate, file_common_v1_money, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ordering.v1.LineItem
@@ -116,6 +116,14 @@ export enum OrderStatus {
    * @generated from enum value: ORDER_STATUS_CONFIRMED = 3;
    */
   CONFIRMED = 3,
+
+  /**
+   * Fulfilled (CompleteOrder): inventory commits the reservation — the stock is sold, not held.
+   * Terminal: a completed order cannot be cancelled.
+   *
+   * @generated from enum value: ORDER_STATUS_COMPLETED = 4;
+   */
+  COMPLETED = 4,
 }
 
 /**

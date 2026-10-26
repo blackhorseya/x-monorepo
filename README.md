@@ -246,12 +246,14 @@ CreateOrder ──► ordering.v1.OrderCreated ──► inventory ReserveStock�
                                               ├─ RESERVED → inventory.v1.StockReserved ──► ordering ConfirmOrder（PENDING → CONFIRMED → ordering.v1.OrderConfirmed；已 CANCELLED → domain error → drop）
                                               └─ REJECTED → ordering.v1.OrderCancellationRequested ──► ordering CancelOrder
 CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStock（RESERVED → RELEASED；找不到 → CANCELLED tombstone；否則 domain error → drop）
+CompleteOrder ─► ordering.v1.OrderCompleted ──► inventory CommitStock（RESERVED → COMMITTED：on_hand 與 reserved 同時扣掉——賣掉了；否則 domain error → drop）
 ```
 
-Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → CANCELLED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）。
-`ConfirmOrder` 沒有 RPC：確認是 inventory 的答覆，不是 client 的呼叫。
+Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED | CANCELLED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）；COMPLETED 是終點，不能再取消。
+`ConfirmOrder` 沒有 RPC：確認是 inventory 的答覆，不是 client 的呼叫；`CompleteOrder` 只有 RPC（只有 CONFIRMED 能完成，`order.cannot_complete`）。
+cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的那邊 reload 後被狀態機拒絕，所以每張 order 只會有 `OrderCancelled` / `OrderCompleted` 其一。
 
-- 兩個 BC 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled`、events adapter 發 `OrderCancellationRequested`；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
+- 兩個 BC 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled` / `OrderCompleted`、events adapter 發 `OrderCancellationRequested`；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
 - **event 的 schema 歸 consumer 所有**：缺貨是 ordering 的 message（`OrderCancellationRequested`），inventory 把它發進 ordering 的 topic / 表（同一個 DB、同一個交易）。
 - **缺貨是狀態不是 error**：`reservation.Reserve` 回 `REJECTED` + `Rejected` event，一樣落地；重送的 `OrderCreated` 找到既有 reservation 就什麼都不做。
   consumer 把 `kernel.Error` 當 final（drop），所以缺貨若用 error 表達就不會有人發取消。

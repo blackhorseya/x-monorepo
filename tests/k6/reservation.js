@@ -28,6 +28,7 @@ const reservationLatency = new Trend("reservation_latency", true);
 const reservationTimeouts = new Counter("reservation_timeouts");
 const reservationWrong = new Counter("reservation_wrong_status");
 const orderNotConfirmed = new Counter("order_not_confirmed");
+const reservationNotCommitted = new Counter("reservation_not_committed");
 
 export const options = {
   scenarios: {
@@ -44,6 +45,7 @@ export const options = {
     reservation_timeouts: ["count==0"],
     reservation_wrong_status: ["count==0"],
     order_not_confirmed: ["count==0"],
+    reservation_not_committed: ["count==0"],
     rpc_errors: ["count==0"],
   },
   summaryTrendStats: ["avg", "p(50)", "p(95)", "p(99)", "max"],
@@ -82,7 +84,7 @@ export default function () {
       const status = res.json("reservation.status");
       if (status === "RESERVATION_STATUS_RESERVED") {
         reservationLatency.add(Date.now() - start);
-        waitConfirmed(created.order.id, start);
+        if (waitConfirmed(created.order.id, start)) completeAndWaitCommitted(created.order.id, start);
       } else {
         reservationWrong.add(1, { status: String(status) });
       }
@@ -105,11 +107,28 @@ export default function () {
 function waitConfirmed(orderId, start) {
   for (;;) {
     const res = rpc("ordering.v1.OrderService/GetOrder", { id: orderId }, { tags: { poll: "true" } });
-    if (!ok(res, "GetOrder")) return;
+    if (!ok(res, "GetOrder")) return false;
     const status = res.json("order.status");
-    if (status === "ORDER_STATUS_CONFIRMED") return;
+    if (status === "ORDER_STATUS_CONFIRMED") return true;
     if (status !== "ORDER_STATUS_PENDING" || Date.now() - start > RESERVE_TIMEOUT) {
       orderNotConfirmed.add(1, { status: String(status) });
+      return false;
+    }
+    sleep(POLL / 1000);
+  }
+}
+
+// And the sale: CompleteOrder (rpc) → OrderCompleted → inventory commits the
+// reservation (COMMITTED). Same deadline again, so a slow worker shows up here too.
+function completeAndWaitCommitted(orderId, start) {
+  if (!ok(rpc("ordering.v1.OrderService/CompleteOrder", { id: orderId }), "CompleteOrder")) return;
+  for (;;) {
+    const res = rpc("inventory.v1.InventoryService/GetReservation", { order_id: orderId }, { tags: { poll: "true" } });
+    if (!ok(res, "GetReservation")) return;
+    const status = res.json("reservation.status");
+    if (status === "RESERVATION_STATUS_COMMITTED") return;
+    if (status !== "RESERVATION_STATUS_RESERVED" || Date.now() - start > RESERVE_TIMEOUT) {
+      reservationNotCommitted.add(1, { status: String(status) });
       return;
     }
     sleep(POLL / 1000);

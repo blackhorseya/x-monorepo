@@ -14,6 +14,7 @@ var (
 	ErrInvalidQuantity = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_quantity", "quantity must be positive")
 	ErrCannotCancel    = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_cancel", "order cannot be cancelled in its current status")
 	ErrCannotConfirm   = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_confirm", "order cannot be confirmed in its current status")
+	ErrCannotComplete  = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_complete", "only a confirmed order can be completed")
 	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "order.not_found", "order not found")
 	// ErrInvalidStatusFilter is a list filter naming a status this version does not know.
 	ErrInvalidStatusFilter = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_status_filter", "unknown order status filter")

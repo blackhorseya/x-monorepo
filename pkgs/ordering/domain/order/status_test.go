@@ -9,7 +9,7 @@ import (
 )
 
 func TestStatuses_AndStatusCount(t *testing.T) {
-	if got := order.Statuses(); len(got) != 3 || got[0] != order.StatusPending || got[2] != order.StatusCancelled {
+	if got := order.Statuses(); len(got) != 4 || got[0] != order.StatusPending || got[2] != order.StatusCompleted || got[3] != order.StatusCancelled {
 		t.Fatalf("Statuses() = %v", got)
 	}
 	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
@@ -20,7 +20,7 @@ func TestStatuses_AndStatusCount(t *testing.T) {
 }
 
 func TestParseStatus_RoundTrip(t *testing.T) {
-	for _, s := range []order.Status{order.StatusPending, order.StatusConfirmed, order.StatusCancelled} {
+	for _, s := range order.Statuses() {
 		got, err := order.ParseStatus(s.String())
 		if err != nil || got != s {
 			t.Fatalf("ParseStatus(%q) = %v, %v", s, got, err)

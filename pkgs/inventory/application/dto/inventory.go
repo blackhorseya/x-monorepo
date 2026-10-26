@@ -19,6 +19,11 @@ type ReleaseStockInput struct {
 	OrderID string
 }
 
+// CommitStockInput is what ordering.v1.OrderCompleted boils down to for inventory.
+type CommitStockInput struct {
+	OrderID string
+}
+
 // ReservationStatsInput has no fields: the stats are for the whole BC.
 type ReservationStatsInput struct{}
 
@@ -41,7 +46,7 @@ type GetReservationInput struct {
 type ReservationOutput struct {
 	OrderID       string
 	Lines         []Line
-	Status        string   // RESERVED | REJECTED | RELEASED
+	Status        string   // RESERVED | REJECTED | RELEASED | COMMITTED | CANCELLED
 	ShortfallSKUs []string // REJECTED only
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -57,7 +62,7 @@ type GetStockInput struct {
 }
 
 type ListReservationsInput struct {
-	Status    string // "" = any; RESERVED | REJECTED | RELEASED | CANCELLED
+	Status    string // "" = any; RESERVED | REJECTED | RELEASED | COMMITTED | CANCELLED
 	PageSize  int32  // 0 = default
 	PageToken string // "" = first page
 }

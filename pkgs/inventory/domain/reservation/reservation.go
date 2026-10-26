@@ -144,6 +144,34 @@ func (x *Reservation) Release(stocks map[string]*stock.Stock, now time.Time) err
 	return nil
 }
 
+// Commit turns a RESERVED reservation into a sale: every reserved quantity
+// leaves its Stock's on-hand (order completed). Same preconditions as Release;
+// a reservation already released or committed refuses with ErrNotReserved,
+// which the caller can treat as final.
+func (x *Reservation) Commit(stocks map[string]*stock.Stock, now time.Time) error {
+	if x.status != StatusReserved {
+		return ErrNotReserved
+	}
+
+	need, order := demand(x.lines)
+	for _, sku := range order {
+		if _, ok := stocks[sku]; !ok {
+			return ErrStockMissing
+		}
+	}
+	for _, sku := range order {
+		if err := stocks[sku].Commit(need[sku], now); err != nil {
+			return err
+		}
+	}
+
+	x.status = StatusCommitted
+	x.updatedAt = now
+	x.record(NewCommitted(x))
+
+	return nil
+}
+
 // demand sums quantities per SKU and keeps first-seen order (maps iterate randomly).
 func demand(lines []Line) (map[string]int32, []string) {
 	need := make(map[string]int32, len(lines))

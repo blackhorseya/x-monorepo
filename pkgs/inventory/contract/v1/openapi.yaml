@@ -261,6 +261,7 @@ components:
         - RESERVATION_STATUS_REJECTED
         - RESERVATION_STATUS_RELEASED
         - RESERVATION_STATUS_CANCELLED
+        - RESERVATION_STATUS_COMMITTED
     inventory.v1.SetStockRequest:
       type: object
       properties:
@@ -311,6 +312,21 @@ components:
       description: |-
         Stock is the quantity of one SKU: on_hand is what the warehouse holds,
          reserved is what pending orders have claimed, available = on_hand - reserved.
+    inventory.v1.StockCommitted:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        committedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: committed_at
+      title: StockCommitted
+      additionalProperties: false
+      description: |-
+        StockCommitted is raised when a reservation is committed (order completed):
+         the reserved quantity is deducted from on_hand.
     inventory.v1.StockReleased:
       type: object
       properties:

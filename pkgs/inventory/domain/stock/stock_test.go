@@ -103,6 +103,25 @@ func TestReserveAll_AllOrNothing(t *testing.T) {
 	}
 }
 
+func TestCommit(t *testing.T) {
+	s, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
+	later := now.Add(time.Minute)
+
+	if err := s.Commit(0, later); !errors.Is(err, stock.ErrInvalidQuantity) {
+		t.Fatalf("zero: %v", err)
+	}
+	if err := s.Commit(3, later); !errors.Is(err, stock.ErrCommitExceedsReserved) {
+		t.Fatalf("too much: %v", err)
+	}
+	if err := s.Commit(2, later); err != nil {
+		t.Fatal(err)
+	}
+	// Sold: on-hand and reserved both drop, available is unchanged.
+	if s.OnHand() != 3 || s.Reserved() != 0 || s.Available() != 3 || !s.UpdatedAt().Equal(later) {
+		t.Fatalf("on_hand=%d reserved=%d available=%d", s.OnHand(), s.Reserved(), s.Available())
+	}
+}
+
 func TestRelease(t *testing.T) {
 	s, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
 	later := now.Add(time.Minute)

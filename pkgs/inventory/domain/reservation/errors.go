@@ -7,7 +7,7 @@ var (
 	ErrNoLines         = kernel.NewError(kernel.KindInvalidArgument, "reservation.no_lines", "reservation must contain at least one line")
 	ErrInvalidSKU      = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_sku", "sku must not be empty")
 	ErrInvalidQuantity = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_quantity", "quantity must be positive")
-	ErrNotReserved     = kernel.NewError(kernel.KindFailedPrecondition, "reservation.not_reserved", "only a RESERVED reservation can be released")
+	ErrNotReserved     = kernel.NewError(kernel.KindFailedPrecondition, "reservation.not_reserved", "only a RESERVED reservation can be released or committed")
 	ErrStockMissing    = kernel.NewError(kernel.KindFailedPrecondition, "reservation.stock_missing", "stock of a reserved sku is missing")
 	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "reservation.not_found", "reservation not found")
 	// ErrDuplicate is returned by Repository.Save when the order already has a reservation.

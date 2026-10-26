@@ -28,3 +28,10 @@ message StockReleased {
   string order_id = 1;
   google.protobuf.Timestamp released_at = 2;
 }
+
+// StockCommitted is raised when a reservation is committed (order completed):
+// the reserved quantity is deducted from on_hand.
+message StockCommitted {
+  string order_id = 1;
+  google.protobuf.Timestamp committed_at = 2;
+}

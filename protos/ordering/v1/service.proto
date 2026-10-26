@@ -12,6 +12,10 @@ service OrderService {
   rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
   rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+  // CompleteOrder fulfils a CONFIRMED order (CONFIRMED → COMPLETED) and publishes
+  // ordering.v1.OrderCompleted, on which inventory commits the reservation.
+  // Any other status is FAILED_PRECONDITION (x-error-code: order.cannot_complete).
+  rpc CompleteOrder(CompleteOrderRequest) returns (CompleteOrderResponse);
   // ListOrders pages through orders newest first (create_time desc, id desc).
   // Cursor pagination per AIP-158: pass next_page_token back unchanged with the
   // SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
@@ -40,6 +44,14 @@ message CancelOrderRequest {
 }
 
 message CancelOrderResponse {
+  Order order = 1;
+}
+
+message CompleteOrderRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message CompleteOrderResponse {
   Order order = 1;
 }
 
