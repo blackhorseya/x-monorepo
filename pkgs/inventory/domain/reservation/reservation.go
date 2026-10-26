@@ -144,6 +144,37 @@ func (x *Reservation) Release(stocks map[string]*stock.Stock, now time.Time) err
 	return nil
 }
 
+// Expire gives a RESERVED reservation held past its TTL back to stocks, like
+// Release, but ends in EXPIRED and raises Released (the stock moved) then
+// Expired (ask ordering to cancel the order, carrying how long it was held).
+// The hold is measured from updatedAt, which for a RESERVED reservation is
+// when Reserve ran. Same preconditions as Release.
+func (x *Reservation) Expire(stocks map[string]*stock.Stock, now time.Time) error {
+	if x.status != StatusReserved {
+		return ErrNotReserved
+	}
+
+	need, order := demand(x.lines)
+	for _, sku := range order {
+		if _, ok := stocks[sku]; !ok {
+			return ErrStockMissing
+		}
+	}
+	for _, sku := range order {
+		if err := stocks[sku].Release(need[sku], now); err != nil {
+			return err
+		}
+	}
+
+	heldFor := now.Sub(x.updatedAt)
+	x.status = StatusExpired
+	x.updatedAt = now
+	x.record(NewReleased(x))
+	x.record(NewExpired(x, heldFor))
+
+	return nil
+}
+
 // Commit turns a RESERVED reservation into a sale: every reserved quantity
 // leaves its Stock's on-hand (order completed). Same preconditions as Release;
 // a reservation already released or committed refuses with ErrNotReserved,

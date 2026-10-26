@@ -48,6 +48,9 @@ const (
 	// InventoryServiceListReservationsProcedure is the fully-qualified name of the InventoryService's
 	// ListReservations RPC.
 	InventoryServiceListReservationsProcedure = "/inventory.v1.InventoryService/ListReservations"
+	// InventoryServiceExpireReservationsProcedure is the fully-qualified name of the InventoryService's
+	// ExpireReservations RPC.
+	InventoryServiceExpireReservationsProcedure = "/inventory.v1.InventoryService/ExpireReservations"
 )
 
 // InventoryServiceClient is a client for the inventory.v1.InventoryService service.
@@ -63,6 +66,13 @@ type InventoryServiceClient interface {
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
 	// ListReservations pages through reservations newest first, optionally by status.
 	ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error)
+	// ExpireReservations is `worker expire` over RPC: RESERVED reservations held
+	// longer than older_than give their stock back (EXPIRED, inventory.v1.StockReleased)
+	// and ordering is asked to cancel the order (ordering.v1.OrderCancellationRequested).
+	// Oldest first, one transaction per call, at most limit of them; the routine
+	// sweep is the CronJob, this is the operator's dry run / small run. Requires
+	// the admin role when auth is on (x-error-code: auth.permission_denied).
+	ExpireReservations(context.Context, *connect.Request[v1.ExpireReservationsRequest]) (*connect.Response[v1.ExpireReservationsResponse], error)
 }
 
 // NewInventoryServiceClient constructs a client for the inventory.v1.InventoryService service. By
@@ -106,16 +116,23 @@ func NewInventoryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(inventoryServiceMethods.ByName("ListReservations")),
 			connect.WithClientOptions(opts...),
 		),
+		expireReservations: connect.NewClient[v1.ExpireReservationsRequest, v1.ExpireReservationsResponse](
+			httpClient,
+			baseURL+InventoryServiceExpireReservationsProcedure,
+			connect.WithSchema(inventoryServiceMethods.ByName("ExpireReservations")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // inventoryServiceClient implements InventoryServiceClient.
 type inventoryServiceClient struct {
-	setStock         *connect.Client[v1.SetStockRequest, v1.SetStockResponse]
-	getStock         *connect.Client[v1.GetStockRequest, v1.GetStockResponse]
-	listStocks       *connect.Client[v1.ListStocksRequest, v1.ListStocksResponse]
-	getReservation   *connect.Client[v1.GetReservationRequest, v1.GetReservationResponse]
-	listReservations *connect.Client[v1.ListReservationsRequest, v1.ListReservationsResponse]
+	setStock           *connect.Client[v1.SetStockRequest, v1.SetStockResponse]
+	getStock           *connect.Client[v1.GetStockRequest, v1.GetStockResponse]
+	listStocks         *connect.Client[v1.ListStocksRequest, v1.ListStocksResponse]
+	getReservation     *connect.Client[v1.GetReservationRequest, v1.GetReservationResponse]
+	listReservations   *connect.Client[v1.ListReservationsRequest, v1.ListReservationsResponse]
+	expireReservations *connect.Client[v1.ExpireReservationsRequest, v1.ExpireReservationsResponse]
 }
 
 // SetStock calls inventory.v1.InventoryService.SetStock.
@@ -143,6 +160,11 @@ func (c *inventoryServiceClient) ListReservations(ctx context.Context, req *conn
 	return c.listReservations.CallUnary(ctx, req)
 }
 
+// ExpireReservations calls inventory.v1.InventoryService.ExpireReservations.
+func (c *inventoryServiceClient) ExpireReservations(ctx context.Context, req *connect.Request[v1.ExpireReservationsRequest]) (*connect.Response[v1.ExpireReservationsResponse], error) {
+	return c.expireReservations.CallUnary(ctx, req)
+}
+
 // InventoryServiceHandler is an implementation of the inventory.v1.InventoryService service.
 type InventoryServiceHandler interface {
 	// SetStock sets the on-hand quantity of a SKU (creates it when unknown).
@@ -156,6 +178,13 @@ type InventoryServiceHandler interface {
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
 	// ListReservations pages through reservations newest first, optionally by status.
 	ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error)
+	// ExpireReservations is `worker expire` over RPC: RESERVED reservations held
+	// longer than older_than give their stock back (EXPIRED, inventory.v1.StockReleased)
+	// and ordering is asked to cancel the order (ordering.v1.OrderCancellationRequested).
+	// Oldest first, one transaction per call, at most limit of them; the routine
+	// sweep is the CronJob, this is the operator's dry run / small run. Requires
+	// the admin role when auth is on (x-error-code: auth.permission_denied).
+	ExpireReservations(context.Context, *connect.Request[v1.ExpireReservationsRequest]) (*connect.Response[v1.ExpireReservationsResponse], error)
 }
 
 // NewInventoryServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -195,6 +224,12 @@ func NewInventoryServiceHandler(svc InventoryServiceHandler, opts ...connect.Han
 		connect.WithSchema(inventoryServiceMethods.ByName("ListReservations")),
 		connect.WithHandlerOptions(opts...),
 	)
+	inventoryServiceExpireReservationsHandler := connect.NewUnaryHandler(
+		InventoryServiceExpireReservationsProcedure,
+		svc.ExpireReservations,
+		connect.WithSchema(inventoryServiceMethods.ByName("ExpireReservations")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/inventory.v1.InventoryService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case InventoryServiceSetStockProcedure:
@@ -207,6 +242,8 @@ func NewInventoryServiceHandler(svc InventoryServiceHandler, opts ...connect.Han
 			inventoryServiceGetReservationHandler.ServeHTTP(w, r)
 		case InventoryServiceListReservationsProcedure:
 			inventoryServiceListReservationsHandler.ServeHTTP(w, r)
+		case InventoryServiceExpireReservationsProcedure:
+			inventoryServiceExpireReservationsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -234,4 +271,8 @@ func (UnimplementedInventoryServiceHandler) GetReservation(context.Context, *con
 
 func (UnimplementedInventoryServiceHandler) ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("inventory.v1.InventoryService.ListReservations is not implemented"))
+}
+
+func (UnimplementedInventoryServiceHandler) ExpireReservations(context.Context, *connect.Request[v1.ExpireReservationsRequest]) (*connect.Response[v1.ExpireReservationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("inventory.v1.InventoryService.ExpireReservations is not implemented"))
 }

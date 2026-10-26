@@ -40,6 +40,7 @@ type fixture struct {
 	reserve      *usecase.ReserveStock
 	release      *usecase.ReleaseStock
 	commit       *usecase.CommitStock
+	expire       *usecase.ExpireReservations
 }
 
 func newFixture() *fixture {
@@ -54,7 +55,96 @@ func newFixture() *fixture {
 	f.reserve = usecase.NewReserveStock(f.reservations, f.stocks, f.rec, clock)
 	f.release = usecase.NewReleaseStock(f.reservations, f.stocks, f.rec, clock)
 	f.commit = usecase.NewCommitStock(f.reservations, f.stocks, f.rec, clock)
+	f.expire = usecase.NewExpireReservations(f.reservations, f.stocks, f.rec, clock)
 	return f
+}
+
+// The reservation TTL: a dry run lists, a real run releases the stock, ends the
+// reservation EXPIRED and asks ordering to cancel; everything else is left alone.
+func TestExpireReservations(t *testing.T) {
+	c := context.Background()
+	f := newFixture()
+	if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: "A", OnHand: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.expire.Execute(c, dto.ExpireReservationsInput{}); !errors.Is(err, reservation.ErrInvalidOlderThan) {
+		t.Fatalf("zero older-than: %v", err)
+	}
+
+	// Three holds of different ages (the fixture clock is fixed, so reserve at an
+	// earlier time by moving the clock first), plus one already committed.
+	t0 := f.clock.t
+	for _, in := range []struct {
+		id  string
+		ago time.Duration
+	}{{"o-fresh", time.Minute}, {"o-old", 25 * time.Hour}, {"o-older", 48 * time.Hour}, {"o-oldest", 96 * time.Hour}, {"o-sold", 72 * time.Hour}} {
+		f.reserve = usecase.NewReserveStock(f.reservations, f.stocks, f.rec, fixedClock{t: t0.Add(-in.ago)})
+		if _, err := f.reserve.Execute(c, dto.ReserveStockInput{OrderID: in.id, Lines: []dto.Line{{SKU: "A", Quantity: 1}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.commit.Execute(c, dto.CommitStockInput{OrderID: "o-sold"}); err != nil {
+		t.Fatal(err)
+	}
+	f.rec.events = nil
+
+	// Dry run: lists the three held past 24h, oldest first, changes nothing.
+	out, err := f.expire.Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour, DryRun: true})
+	if err != nil || !out.DryRun || len(out.Expired) != 3 || out.Expired[0].OrderID != "o-oldest" || out.Expired[1].OrderID != "o-older" || out.Expired[2].OrderID != "o-old" {
+		t.Fatalf("dry run = %+v, %v", out, err)
+	}
+	if out.Expired[0].HeldFor != 96*time.Hour || !out.Expired[0].ReservedAt.Equal(t0.Add(-96*time.Hour)) {
+		t.Fatalf("dry run entry = %+v", out.Expired[0])
+	}
+	if r, _ := f.getRes.Execute(c, dto.GetReservationInput{OrderID: "o-oldest"}); r.Status != "RESERVED" {
+		t.Fatalf("dry run changed o-oldest: %s", r.Status)
+	}
+	if a, _ := f.getStock.Execute(c, dto.GetStockInput{SKU: "A"}); a.Reserved != 4 || len(f.rec.events) != 0 {
+		t.Fatalf("dry run moved stock / published: %+v %d", a, len(f.rec.events))
+	}
+
+	// Limit 1: only the oldest goes.
+	out, err = f.expire.Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour, Limit: 1})
+	if err != nil || out.DryRun || len(out.Expired) != 1 || out.Expired[0].OrderID != "o-oldest" {
+		t.Fatalf("limit 1 = %+v, %v", out, err)
+	}
+	if r, _ := f.getRes.Execute(c, dto.GetReservationInput{OrderID: "o-oldest"}); r.Status != "EXPIRED" {
+		t.Fatalf("o-oldest = %s, want EXPIRED", r.Status)
+	}
+	// Released (stock back) then Expired (cancel the order), nothing else.
+	if len(f.rec.events) != 2 {
+		t.Fatalf("events = %d, want Released, Expired", len(f.rec.events))
+	}
+	if _, ok := f.rec.events[0].(reservation.Released); !ok {
+		t.Fatalf("event[0] = %T", f.rec.events[0])
+	}
+	if ex, ok := f.rec.events[1].(reservation.Expired); !ok || ex.OrderID() != "o-oldest" || ex.HeldFor() != 96*time.Hour {
+		t.Fatalf("event[1] = %#v", f.rec.events[1])
+	}
+
+	// The rest in one batch: o-older and o-old share SKU A, so the second one's stock load
+	// must see the version the first one's save advanced (the hot-SKU path of the CronJob).
+	out, err = f.expire.Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour})
+	if err != nil || len(out.Expired) != 2 || out.Expired[0].OrderID != "o-older" || out.Expired[1].OrderID != "o-old" {
+		t.Fatalf("second sweep = %+v, %v", out, err)
+	}
+	out, err = f.expire.Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour})
+	if err != nil || len(out.Expired) != 0 {
+		t.Fatalf("third sweep = %+v, %v, want nothing due", out, err)
+	}
+	a, _ := f.getStock.Execute(c, dto.GetStockInput{SKU: "A"})
+	if a.OnHand != 9 || a.Reserved != 1 || a.Available != 8 {
+		t.Fatalf("stock after sweeps = %+v (sold 1, fresh 1 held)", a)
+	}
+	for id, want := range map[string]string{"o-fresh": "RESERVED", "o-old": "EXPIRED", "o-older": "EXPIRED", "o-oldest": "EXPIRED", "o-sold": "COMMITTED"} {
+		if r, _ := f.getRes.Execute(c, dto.GetReservationInput{OrderID: id}); r.Status != want {
+			t.Fatalf("%s = %s, want %s", id, r.Status, want)
+		}
+	}
+	// A late OrderCancelled (ordering cancelled on our request) finds EXPIRED: final, no double release.
+	if _, err := f.release.Execute(c, dto.ReleaseStockInput{OrderID: "o-old"}); !errors.Is(err, reservation.ErrNotReserved) {
+		t.Fatalf("release after expire: %v", err)
+	}
 }
 
 // Order completed: the reservation is committed, the stock sold.

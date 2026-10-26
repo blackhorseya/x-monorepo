@@ -5,6 +5,8 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv1";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv1";
 import { file_buf_validate_validate } from "../../buf/validate/validate_pb";
+import type { Duration, Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_duration, file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Reservation, ReservationStatus, Stock } from "./entity_pb";
 import { file_inventory_v1_entity } from "./entity_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -13,7 +15,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file inventory/v1/service.proto.
  */
 export const file_inventory_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJ3ChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCRIbCgpza3VfcHJlZml4GAMgASgJQge6SARyAhhAEhUKDW9ubHlfcmVzZXJ2ZWQYBCABKAgiUgoSTGlzdFN0b2Nrc1Jlc3BvbnNlEiMKBnN0b2NrcxgBIAMoCzITLmludmVudG9yeS52MS5TdG9jaxIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiMgoVR2V0UmVzZXJ2YXRpb25SZXF1ZXN0EhkKCG9yZGVyX2lkGAEgASgJQge6SARyAhABIkgKFkdldFJlc2VydmF0aW9uUmVzcG9uc2USLgoLcmVzZXJ2YXRpb24YASABKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24iegoXTGlzdFJlc2VydmF0aW9uc1JlcXVlc3QSLwoGc3RhdHVzGAEgASgOMh8uaW52ZW50b3J5LnYxLlJlc2VydmF0aW9uU3RhdHVzEhoKCXBhZ2Vfc2l6ZRgCIAEoBUIHukgEGgIoABISCgpwYWdlX3Rva2VuGAMgASgJImQKGExpc3RSZXNlcnZhdGlvbnNSZXNwb25zZRIvCgxyZXNlcnZhdGlvbnMYASADKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24SFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJMrkDChBJbnZlbnRvcnlTZXJ2aWNlEkkKCFNldFN0b2NrEh0uaW52ZW50b3J5LnYxLlNldFN0b2NrUmVxdWVzdBoeLmludmVudG9yeS52MS5TZXRTdG9ja1Jlc3BvbnNlEkkKCEdldFN0b2NrEh0uaW52ZW50b3J5LnYxLkdldFN0b2NrUmVxdWVzdBoeLmludmVudG9yeS52MS5HZXRTdG9ja1Jlc3BvbnNlEk8KCkxpc3RTdG9ja3MSHy5pbnZlbnRvcnkudjEuTGlzdFN0b2Nrc1JlcXVlc3QaIC5pbnZlbnRvcnkudjEuTGlzdFN0b2Nrc1Jlc3BvbnNlElsKDkdldFJlc2VydmF0aW9uEiMuaW52ZW50b3J5LnYxLkdldFJlc2VydmF0aW9uUmVxdWVzdBokLmludmVudG9yeS52MS5HZXRSZXNlcnZhdGlvblJlc3BvbnNlEmEKEExpc3RSZXNlcnZhdGlvbnMSJS5pbnZlbnRvcnkudjEuTGlzdFJlc2VydmF0aW9uc1JlcXVlc3QaJi5pbnZlbnRvcnkudjEuTGlzdFJlc2VydmF0aW9uc1Jlc3BvbnNlYgZwcm90bzM", [file_buf_validate_validate, file_inventory_v1_entity]);
+  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJ3ChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCRIbCgpza3VfcHJlZml4GAMgASgJQge6SARyAhhAEhUKDW9ubHlfcmVzZXJ2ZWQYBCABKAgiUgoSTGlzdFN0b2Nrc1Jlc3BvbnNlEiMKBnN0b2NrcxgBIAMoCzITLmludmVudG9yeS52MS5TdG9jaxIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiMgoVR2V0UmVzZXJ2YXRpb25SZXF1ZXN0EhkKCG9yZGVyX2lkGAEgASgJQge6SARyAhABIkgKFkdldFJlc2VydmF0aW9uUmVzcG9uc2USLgoLcmVzZXJ2YXRpb24YASABKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24iegoXTGlzdFJlc2VydmF0aW9uc1JlcXVlc3QSLwoGc3RhdHVzGAEgASgOMh8uaW52ZW50b3J5LnYxLlJlc2VydmF0aW9uU3RhdHVzEhoKCXBhZ2Vfc2l6ZRgCIAEoBUIHukgEGgIoABISCgpwYWdlX3Rva2VuGAMgASgJImQKGExpc3RSZXNlcnZhdGlvbnNSZXNwb25zZRIvCgxyZXNlcnZhdGlvbnMYASADKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24SFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJIoMBChlFeHBpcmVSZXNlcnZhdGlvbnNSZXF1ZXN0EjoKCm9sZGVyX3RoYW4YASABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb25CC7pICMgBAaoBAioAEg8KB2RyeV9ydW4YAiABKAgSGQoFbGltaXQYAyABKAVCCrpIBxoFGOgHKAAihAEKEkV4cGlyZWRSZXNlcnZhdGlvbhIQCghvcmRlcl9pZBgBIAEoCRIvCgtyZXNlcnZlZF9hdBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASKwoIaGVsZF9mb3IYAyABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb24iYAoaRXhwaXJlUmVzZXJ2YXRpb25zUmVzcG9uc2USMQoHZXhwaXJlZBgBIAMoCzIgLmludmVudG9yeS52MS5FeHBpcmVkUmVzZXJ2YXRpb24SDwoHZHJ5X3J1bhgCIAEoCDKiBAoQSW52ZW50b3J5U2VydmljZRJJCghTZXRTdG9jaxIdLmludmVudG9yeS52MS5TZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuU2V0U3RvY2tSZXNwb25zZRJJCghHZXRTdG9jaxIdLmludmVudG9yeS52MS5HZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuR2V0U3RvY2tSZXNwb25zZRJPCgpMaXN0U3RvY2tzEh8uaW52ZW50b3J5LnYxLkxpc3RTdG9ja3NSZXF1ZXN0GiAuaW52ZW50b3J5LnYxLkxpc3RTdG9ja3NSZXNwb25zZRJbCg5HZXRSZXNlcnZhdGlvbhIjLmludmVudG9yeS52MS5HZXRSZXNlcnZhdGlvblJlcXVlc3QaJC5pbnZlbnRvcnkudjEuR2V0UmVzZXJ2YXRpb25SZXNwb25zZRJhChBMaXN0UmVzZXJ2YXRpb25zEiUuaW52ZW50b3J5LnYxLkxpc3RSZXNlcnZhdGlvbnNSZXF1ZXN0GiYuaW52ZW50b3J5LnYxLkxpc3RSZXNlcnZhdGlvbnNSZXNwb25zZRJnChJFeHBpcmVSZXNlcnZhdGlvbnMSJy5pbnZlbnRvcnkudjEuRXhwaXJlUmVzZXJ2YXRpb25zUmVxdWVzdBooLmludmVudG9yeS52MS5FeHBpcmVSZXNlcnZhdGlvbnNSZXNwb25zZWIGcHJvdG8z", [file_buf_validate_validate, file_google_protobuf_duration, file_google_protobuf_timestamp, file_inventory_v1_entity]);
 
 /**
  * @generated from message inventory.v1.SetStockRequest
@@ -245,6 +247,96 @@ export const ListReservationsResponseSchema: GenMessage<ListReservationsResponse
   messageDesc(file_inventory_v1_service, 9);
 
 /**
+ * @generated from message inventory.v1.ExpireReservationsRequest
+ */
+export type ExpireReservationsRequest = Message<"inventory.v1.ExpireReservationsRequest"> & {
+  /**
+   * A RESERVED reservation held at least this long expires. Required, positive.
+   *
+   * @generated from field: google.protobuf.Duration older_than = 1;
+   */
+  olderThan?: Duration;
+
+  /**
+   * List what would expire, change nothing.
+   *
+   * @generated from field: bool dry_run = 2;
+   */
+  dryRun: boolean;
+
+  /**
+   * Reservations per call, oldest first; 0 = server default (100), at most 1000.
+   *
+   * @generated from field: int32 limit = 3;
+   */
+  limit: number;
+};
+
+/**
+ * Describes the message inventory.v1.ExpireReservationsRequest.
+ * Use `create(ExpireReservationsRequestSchema)` to create a new message.
+ */
+export const ExpireReservationsRequestSchema: GenMessage<ExpireReservationsRequest> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 10);
+
+/**
+ * ExpiredReservation is one reservation the call expired — or, dry run, would.
+ *
+ * @generated from message inventory.v1.ExpiredReservation
+ */
+export type ExpiredReservation = Message<"inventory.v1.ExpiredReservation"> & {
+  /**
+   * @generated from field: string order_id = 1;
+   */
+  orderId: string;
+
+  /**
+   * When it was reserved (the start of the hold).
+   *
+   * @generated from field: google.protobuf.Timestamp reserved_at = 2;
+   */
+  reservedAt?: Timestamp;
+
+  /**
+   * How long it had been held when the call ran.
+   *
+   * @generated from field: google.protobuf.Duration held_for = 3;
+   */
+  heldFor?: Duration;
+};
+
+/**
+ * Describes the message inventory.v1.ExpiredReservation.
+ * Use `create(ExpiredReservationSchema)` to create a new message.
+ */
+export const ExpiredReservationSchema: GenMessage<ExpiredReservation> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 11);
+
+/**
+ * @generated from message inventory.v1.ExpireReservationsResponse
+ */
+export type ExpireReservationsResponse = Message<"inventory.v1.ExpireReservationsResponse"> & {
+  /**
+   * Oldest first. len(expired) == limit means there may be more: call again.
+   *
+   * @generated from field: repeated inventory.v1.ExpiredReservation expired = 1;
+   */
+  expired: ExpiredReservation[];
+
+  /**
+   * @generated from field: bool dry_run = 2;
+   */
+  dryRun: boolean;
+};
+
+/**
+ * Describes the message inventory.v1.ExpireReservationsResponse.
+ * Use `create(ExpireReservationsResponseSchema)` to create a new message.
+ */
+export const ExpireReservationsResponseSchema: GenMessage<ExpireReservationsResponse> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 12);
+
+/**
  * InventoryService is the public RPC contract of the inventory bounded context.
  * Reservations are not made through RPC: they react to ordering.v1.OrderCreated
  * (see pkgs/inventory/adapters/consumer); RPC only seeds and reads.
@@ -301,6 +393,21 @@ export const InventoryService: GenService<{
     methodKind: "unary";
     input: typeof ListReservationsRequestSchema;
     output: typeof ListReservationsResponseSchema;
+  },
+  /**
+   * ExpireReservations is `worker expire` over RPC: RESERVED reservations held
+   * longer than older_than give their stock back (EXPIRED, inventory.v1.StockReleased)
+   * and ordering is asked to cancel the order (ordering.v1.OrderCancellationRequested).
+   * Oldest first, one transaction per call, at most limit of them; the routine
+   * sweep is the CronJob, this is the operator's dry run / small run. Requires
+   * the admin role when auth is on (x-error-code: auth.permission_denied).
+   *
+   * @generated from rpc inventory.v1.InventoryService.ExpireReservations
+   */
+  expireReservations: {
+    methodKind: "unary";
+    input: typeof ExpireReservationsRequestSchema;
+    output: typeof ExpireReservationsResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_inventory_v1_service, 0);

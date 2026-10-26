@@ -384,6 +384,15 @@ tasks:
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/worker poison {{.CLI_ARGS}}']
 
+  expire:
+    desc: 'task expire -- --older-than 24h [--dry-run] [--batch N] → reservation TTL: release RESERVED reservations held longer than this and ask ordering to cancel, via ./bin/worker expire'
+    deps: [build, config]
+    preconditions:
+      - sh: test -n "{{.CLI_ARGS}}"
+        msg: 'usage: task expire -- --older-than <duration> [--dry-run] [--batch N]   (start with --dry-run)'
+    env: { APP_CONFIG: '{{.CONFIG}}' }
+    cmds: ['{{.BIN_DIR}}/worker expire {{.CLI_ARGS}}']
+
   prune:
     desc: 'task prune -- --older-than 720h [--dry-run] [--unconsumed] [<bc>] → delete acked outbox rows + consumed inbox rows via ./bin/worker prune'
     deps: [build, config]

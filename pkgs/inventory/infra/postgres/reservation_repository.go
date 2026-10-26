@@ -141,6 +141,38 @@ func (i *ReservationRepository) List(c context.Context, p reservation.ListParams
 	return out, next, nil
 }
 
+// ListReservedBefore is the expiry sweep's input: RESERVED rows whose hold
+// (updated_at, set by Reserve) started before the instant, oldest first. The
+// partial index of 0007 serves it.
+func (i *ReservationRepository) ListReservedBefore(c context.Context, before time.Time, limit int) ([]*reservation.Reservation, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	q := platformpg.TxOrDB(ctx, i.db).
+		Preload("Lines", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
+		Where("status = ? AND updated_at < ?", reservation.StatusReserved.String(), before).
+		Order("updated_at ASC, order_id ASC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	var rows []reservationRow
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list reserved before %s: %w", before.UTC().Format(time.RFC3339), err)
+	}
+	out := make([]*reservation.Reservation, 0, len(rows))
+	for _, row := range rows {
+		r, err := toDomain(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+
+	return out, nil
+}
+
 func toRow(r *reservation.Reservation) reservationRow {
 	short := make(map[string]bool, len(r.Shortfall()))
 	for _, sku := range r.Shortfall() {

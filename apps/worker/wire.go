@@ -6,6 +6,7 @@ import (
 	"github.com/google/wire"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
+	inventorycli "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/cli"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -27,6 +28,23 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		ordering.ProviderSet,
 		inventory.ProviderSet,
 		NewWorker,
+	)
+
+	return nil, nil, nil
+}
+
+// InitializeExpire builds `worker expire`: inventory's reservation TTL sweep
+// on the database, without the router. Same component configs as Initialize
+// minus Redis / Worker (a sweep is one process reading and writing Postgres;
+// its events go through the outbox like everyone else's).
+func InitializeExpire(cfg *config.AppConfig) (*inventorycli.Expire, func(), error) {
+	wire.Build(
+		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel"),
+		postgres.NewDB,
+		otel.ProviderSet,
+		usecasex.NewRecorder,
+		eventbus.ProvidePublisher,
+		inventory.ProviderSet,
 	)
 
 	return nil, nil, nil

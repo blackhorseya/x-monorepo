@@ -3,6 +3,7 @@ import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { CredentialControl } from "./components/credential";
 import { ServerVersion } from "./components/version";
+import { ExpirePage, type ExpireSearch } from "./routes/expire";
 import { OrderPage } from "./routes/order";
 import { OrdersPage, type OrdersSearch } from "./routes/orders";
 import { PoisonPage } from "./routes/poison";
@@ -22,6 +23,7 @@ const rootRoute = createRootRoute({
             { to: "/stock", label: "Stock" },
             { to: "/poison", label: "Poison" },
             { to: "/prune", label: "Prune" },
+            { to: "/expire", label: "Expire" },
           ].map((l) => (
             <Link key={l.to} to={l.to} activeProps={{ className: "text-foreground font-medium" }}>
               {l.label}
@@ -88,8 +90,17 @@ const pruneRoute = createRoute({
   }),
 });
 
+const expireRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/expire",
+  component: ExpirePage,
+  validateSearch: (raw: Record<string, unknown>): ExpireSearch => ({
+    hours: typeof raw.hours === "number" && Number.isFinite(raw.hours) && raw.hours > 0 ? raw.hours : undefined,
+  }),
+});
+
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, poisonRoute, pruneRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, poisonRoute, pruneRoute, expireRoute]),
   defaultPreload: "intent",
 });
 

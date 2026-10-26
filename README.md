@@ -247,13 +247,17 @@ CreateOrder ──► ordering.v1.OrderCreated ──► inventory ReserveStock�
                                               └─ REJECTED → ordering.v1.OrderCancellationRequested ──► ordering CancelOrder
 CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStock（RESERVED → RELEASED；找不到 → CANCELLED tombstone；否則 domain error → drop）
 CompleteOrder ─► ordering.v1.OrderCompleted ──► inventory CommitStock（RESERVED → COMMITTED：on_hand 與 reserved 同時扣掉——賣掉了；否則 domain error → drop）
+worker expire ─► inventory ExpireReservations（RESERVED 超過 TTL → EXPIRED：stock 還回去 + inventory.v1.StockReleased，並發 ordering.v1.OrderCancellationRequested ──► ordering CancelOrder（CONFIRMED → CANCELLED）；回來的 OrderCancelled 找到 EXPIRED → drop）
 ```
 
 Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED | CANCELLED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）；COMPLETED 是終點，不能再取消。
 `ConfirmOrder` 沒有 RPC：確認是 inventory 的答覆，不是 client 的呼叫；`CompleteOrder` 只有 RPC（只有 CONFIRMED 能完成，`order.cannot_complete`）。
 cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的那邊 reload 後被狀態機拒絕，所以每張 order 只會有 `OrderCancelled` / `OrderCompleted` 其一。
+**Reservation TTL**：客戶既不完成也不取消，庫存不能一直被扣著——`worker expire --older-than 24h`（Helm `expire` CronJob 每 15 分鐘；`task expire -- --older-than 24h --dry-run` 先看）掃 RESERVED 超過 TTL 的 reservation，一批一個交易、最老的先。
+Reservation 沒有 version：它和同一張 order 的 Commit / Release 之間的鎖是 **stock 列的 version**（同一交易裡一起 Save），輸的那批整批 rollback 重跑。
+已知的窗口：`CompleteOrder` commit 到 inventory 消費 `OrderCompleted` 之間 reservation 仍是 RESERVED，sweep 剛好掃到會把庫存還回去並請求取消，ordering 拒絕（COMPLETED 是終點）、`OrderCompleted` 到了找到 EXPIRED 也 drop——結果是 order COMPLETED 但沒賣出。窗口是一跳 consumer 對上以小時計的 TTL，守的是 eventbus lag 的 alert，不是 use case。
 
-- 兩個 BC 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled` / `OrderCompleted`、events adapter 發 `OrderCancellationRequested`；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
+- 兩個 BC 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled` / `OrderCompleted`、events adapter 發 `OrderCancellationRequested`（缺貨與過期都是它）；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
 - **event 的 schema 歸 consumer 所有**：缺貨是 ordering 的 message（`OrderCancellationRequested`），inventory 把它發進 ordering 的 topic / 表（同一個 DB、同一個交易）。
 - **缺貨是狀態不是 error**：`reservation.Reserve` 回 `REJECTED` + `Rejected` event，一樣落地；重送的 `OrderCreated` 找到既有 reservation 就什麼都不做。
   consumer 把 `kernel.Error` 當 final（drop），所以缺貨若用 error 表達就不會有人發取消。

@@ -136,6 +136,45 @@ func cloneReservation(r *reservation.Reservation) (*reservation.Reservation, err
 	})
 }
 
+// ListReservedBefore mirrors the Postgres query: RESERVED, hold started before
+// the instant, oldest hold first (then order id, so the order is stable).
+func (i *ReservationRepository) ListReservedBefore(c context.Context, before time.Time, limit int) ([]*reservation.Reservation, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	matches := make([]*reservation.Reservation, 0)
+	for _, r := range i.data {
+		if r.Status() == reservation.StatusReserved && r.UpdatedAt().Before(before) {
+			matches = append(matches, r)
+		}
+	}
+	sort.Slice(matches, func(a, b int) bool {
+		x, y := matches[a], matches[b]
+		if !x.UpdatedAt().Equal(y.UpdatedAt()) {
+			return x.UpdatedAt().Before(y.UpdatedAt())
+		}
+		return x.OrderID() < y.OrderID()
+	})
+	if limit > 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	out := make([]*reservation.Reservation, 0, len(matches))
+	for _, r := range matches {
+		cp, err := cloneReservation(r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cp)
+	}
+
+	return out, nil
+}
+
 // CountByStatus mirrors the Postgres GROUP BY: statuses with no reservation are absent.
 func (i *ReservationRepository) CountByStatus(c context.Context) ([]reservation.StatusCount, error) {
 	ctx := contextx.FromContext(c)

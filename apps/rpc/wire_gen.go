@@ -8,6 +8,7 @@ package main
 
 import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
+	events2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
 	rpc2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
 	system2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
@@ -78,12 +79,14 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	reservationRepository := inventory.ProvideReservationRepository(db)
 	v9 := inventory.ProvideGetReservation(reservationRepository, recorder)
 	v10 := inventory.ProvideListReservations(reservationRepository, recorder)
-	inventoryService := rpc2.NewInventoryService(v6, v7, v8, v9, v10)
+	publisher2 := events2.NewPublisher(publisher)
+	v11 := inventory.ProvideExpireReservations(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
+	inventoryService := rpc2.NewInventoryService(v6, v7, v8, v9, v10, v11, auth)
 	poisonService := NewPoisonService(db, auth)
-	v11 := NewRoutes(orderService, inventoryService, poisonService)
-	v12 := NewDocs()
+	v12 := NewRoutes(orderService, inventoryService, poisonService)
+	v13 := NewDocs()
 	readiness := NewReadiness(db)
-	serverServer, err := server.New(http, auth, logger, v11, v12, readiness, providers)
+	serverServer, err := server.New(http, auth, logger, v12, v13, readiness, providers)
 	if err != nil {
 		cleanup3()
 		cleanup2()

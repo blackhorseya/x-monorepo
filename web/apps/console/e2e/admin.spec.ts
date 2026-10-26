@@ -47,6 +47,15 @@ test("/prune is prefilled from the URL and a dry run reaches the server", async 
   }
 });
 
+test("/expire is prefilled from the URL and a dry run reaches the server", async ({ page }) => {
+  // Inventory is in-memory without a database, so unlike /prune this works in both modes.
+  await page.goto("/expire?hours=48");
+  await expect(page.getByLabel("Older than (hours)")).toHaveValue("48");
+  await page.getByRole("button", { name: "Dry run", exact: true }).click();
+  await expect(page.locator('[data-slot="card-title"]', { hasText: /^would expire \d+ reservation\(s\)$/ })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 test("/reservations renders", async ({ page }) => {
   await page.goto("/reservations");
   await expect(page.locator('[data-slot="card-title"]', { hasText: "Reservations" })).toBeVisible();

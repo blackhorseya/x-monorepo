@@ -111,6 +111,29 @@ func TestPublisher_MapsDomainEventsToWire(t *testing.T) {
 		t.Fatalf("StockCommitted = %v", &committed)
 	}
 
+	// Expired, on a fourth order: Released then the cancellation request with the hold in the reason.
+	stale, err := reservation.Reserve(reservation.Params{OrderID: "o-4", Lines: []reservation.Line{line("A", 1)}, Now: now}, map[string]*stock.Stock{"A": a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stale.Expire(map[string]*stock.Stock{"A": a}, now.Add(25*time.Hour+30*time.Second+500*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.Publish(context.Background(), stale.PullEvents()...); err != nil {
+		t.Fatal(err)
+	}
+	// Reserved (from Reserve) then Released then the request.
+	if len(sink.topics) != 8 || sink.topics[6] != "inventory.v1.StockReleased" || sink.topics[7] != "ordering.v1.OrderCancellationRequested" {
+		t.Fatalf("topics = %v", sink.topics)
+	}
+	var expired orderingv1.OrderCancellationRequested
+	if err := proto.Unmarshal(sink.msgs[7].Payload, &expired); err != nil {
+		t.Fatal(err)
+	}
+	if expired.GetOrderId() != "o-4" || expired.GetReason() != "inventory: reservation expired after 25h0m30s" {
+		t.Fatalf("expired request = %v", &expired)
+	}
+
 	var req orderingv1.OrderCancellationRequested
 	if err := proto.Unmarshal(sink.msgs[2].Payload, &req); err != nil {
 		t.Fatal(err)

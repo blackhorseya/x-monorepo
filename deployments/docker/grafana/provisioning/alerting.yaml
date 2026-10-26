@@ -194,6 +194,46 @@ groups:
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "36"
 
+      # The reservation TTL is not being enforced: a RESERVED reservation has been held for 1.5 × the
+      # default TTL (24h; deployments/helm/x-monorepo/values.yaml `expire.olderThan` — move both together).
+      # `worker expire` (the expire CronJob) should have released it hours ago: the CronJob is off, failing,
+      # or the sweep keeps losing a race (ABORTED) on the same stock row. Only RESERVED counts: a reservation
+      # the customer completed or cancelled is terminal and never due.
+      - uid: x-monorepo-reservation-expiry
+        title: Reservation expiry overdue — RESERVED held past 1.5 × TTL
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max (inventory_reservations_oldest_age_seconds{status="RESERVED"})
+              legendFormat: "oldest RESERVED reservation"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [129600] }
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: worker }
+        annotations:
+          summary: "a reservation has been RESERVED for {{ $values.A }}s"
+          description: >-
+            inventory_reservations_oldest_age_seconds{status="RESERVED"} is above 129600 (36h = 1.5 × the 24h TTL):
+            `worker expire` has not released it. Check the expire CronJob's last Jobs (`kubectl get jobs -l
+            app.kubernetes.io/component=expire`), then run a dry run — `task expire -- --older-than 24h --dry-run`
+            or the console's Expire page — to see what is due and whether the sweep fails (ABORTED = a lost race
+            on a stock row, rerun). The reservation itself is `ListReservations status=RESERVED`, oldest at the bottom.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "36"
+
       # Rows are held back by a consumer group that is not making progress — while the lag rules above only
       # watch the groups this worker is configured with, this one sees every cursor in the offsets table,
       # so a group from a renamed worker.consumer_group or an E2E run shows up here and nowhere else.

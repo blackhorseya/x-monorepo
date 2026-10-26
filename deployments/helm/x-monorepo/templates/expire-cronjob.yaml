@@ -1,0 +1,52 @@
+{{- $e := .Values.expire -}}
+{{- if $e.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-expire
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: expire
+spec:
+  schedule: {{ $e.schedule | quote }}
+  concurrencyPolicy: {{ $e.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ $e.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $e.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "x-monorepo.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: expire
+          annotations:
+            {{- include "x-monorepo.checksums" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "x-monorepo.serviceAccountName" . }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: expire
+              image: {{ include "x-monorepo.image" (dict "root" . "app" "worker") }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              args:
+                - expire
+                - --older-than={{ $e.olderThan }}
+                - --batch={{ $e.batch }}
+                {{- if $e.dryRun }}
+                - --dry-run
+                {{- end }}
+              {{- include "x-monorepo.commonEnv" (dict "root" . "extra" list) | nindent 14 }}
+              resources:
+                {{- toYaml $e.resources | nindent 16 }}
+              {{- include "x-monorepo.configMount" . | nindent 14 }}
+          {{- include "x-monorepo.configVolume" . | nindent 10 }}
+{{- end }}

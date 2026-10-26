@@ -24,6 +24,27 @@ type CommitStockInput struct {
 	OrderID string
 }
 
+// ExpireReservationsInput is one sweep: RESERVED reservations held at least
+// OlderThan, oldest first, at most Limit (0 = default 100, capped at 1000).
+// DryRun lists them and changes nothing.
+type ExpireReservationsInput struct {
+	OlderThan time.Duration
+	Limit     int
+	DryRun    bool
+}
+
+// ExpiredReservation is one reservation a sweep expired (or would).
+type ExpiredReservation struct {
+	OrderID    string
+	ReservedAt time.Time
+	HeldFor    time.Duration
+}
+
+type ExpireReservationsOutput struct {
+	Expired []ExpiredReservation // oldest first; len == Limit means there may be more
+	DryRun  bool
+}
+
 // ReservationStatsInput has no fields: the stats are for the whole BC.
 type ReservationStatsInput struct{}
 
@@ -46,7 +67,7 @@ type GetReservationInput struct {
 type ReservationOutput struct {
 	OrderID       string
 	Lines         []Line
-	Status        string   // RESERVED | REJECTED | RELEASED | COMMITTED | CANCELLED
+	Status        string   // RESERVED | REJECTED | RELEASED | COMMITTED | EXPIRED | CANCELLED
 	ShortfallSKUs []string // REJECTED only
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -62,7 +83,7 @@ type GetStockInput struct {
 }
 
 type ListReservationsInput struct {
-	Status    string // "" = any; RESERVED | REJECTED | RELEASED | COMMITTED | CANCELLED
+	Status    string // "" = any; RESERVED | REJECTED | RELEASED | COMMITTED | EXPIRED | CANCELLED
 	PageSize  int32  // 0 = default
 	PageToken string // "" = first page
 }

@@ -95,6 +95,17 @@ def main(profile: str) -> None:
             check(f"--forget-group={g}" in pc["args"], f"prune --forget-group={g}")
         expect(cron["spec"]["concurrencyPolicy"], "Forbid", "prune never overlaps itself")
 
+    # expire: the reservation TTL CronJob, same shape as prune.
+    cron = find(docs, "CronJob", "-expire")
+    check((cron is not None) == values["expire"]["enabled"], "expire CronJob iff enabled")
+    if cron:
+        ec = cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+        check("/worker:" in ec["image"], "expire runs the worker image")
+        check(ec["args"][0] == "expire", "expire runs `worker expire`")
+        check(f'--older-than={values["expire"]["olderThan"]}' in ec["args"], "expire --older-than")
+        check(("--dry-run" in ec["args"]) == bool(values["expire"]["dryRun"]), "expire --dry-run iff dryRun")
+        expect(cron["spec"]["concurrencyPolicy"], "Forbid", "expire never overlaps itself")
+
     # console: nginx with the one env var, no app config, no Secret, /tmp writable, probes on itself.
     con = find(docs, "Deployment", "-console")
     cv = values["console"]

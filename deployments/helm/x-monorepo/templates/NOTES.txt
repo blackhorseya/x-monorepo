@@ -8,10 +8,13 @@ console  {{ include "x-monorepo.fullname" . }}-console  (Service port {{ .Values
 {{- if .Values.prune.enabled }}
 prune    CronJob {{ .Values.prune.schedule | quote }}  worker prune --older-than={{ .Values.prune.olderThan }}{{ if .Values.prune.dryRun }} --dry-run{{ end }}
 {{- end }}
+{{- if .Values.expire.enabled }}
+expire   CronJob {{ .Values.expire.schedule | quote }}  worker expire --older-than={{ .Values.expire.olderThan }}{{ if .Values.expire.dryRun }} --dry-run{{ end }}
+{{- end }}
 {{- if not (include "x-monorepo.secretName" .) }}
 
 !! No Postgres URL (secrets.postgresUrl / secrets.existingSecret): repositories are in-memory,
-   the migrate hook was skipped and prune has nothing to prune. Fine for a smoke test only.
+   the migrate hook was skipped and prune / expire have nothing to work on. Fine for a smoke test only.
 {{- end }}
 {{- if not .Values.imagePullSecrets }}
 

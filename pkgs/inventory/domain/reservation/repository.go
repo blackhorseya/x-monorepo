@@ -1,6 +1,9 @@
 package reservation
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Repository persists Reservation, one per order. Add and Update are
 // separate so a race on the same order (two workers, or OrderCreated against
@@ -21,4 +24,7 @@ type Repository interface {
 	// CountByStatus returns one StatusCount per status that has at least one
 	// reservation (none for an empty status): the funnel the worker exports as gauges.
 	CountByStatus(c context.Context) ([]StatusCount, error)
+	// ListReservedBefore returns up to limit RESERVED reservations whose hold
+	// started (updated_at) before the instant, oldest first: the expiry sweep's input.
+	ListReservedBefore(c context.Context, before time.Time, limit int) ([]*Reservation, error)
 }

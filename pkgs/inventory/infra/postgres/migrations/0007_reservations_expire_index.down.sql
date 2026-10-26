@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS inventory.reservations_reserved_updated_at_idx;

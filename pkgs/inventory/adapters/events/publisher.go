@@ -1,8 +1,8 @@
 // Package events is the outbound adapter for domain events: it maps
 // reservation.Event values to the wire contract and hands them to a Watermill
-// publisher. Reserved / Released / Committed are inventory.v1 messages; Rejected becomes
-// ordering.v1.OrderCancellationRequested — a request owned by ordering's
-// contract, published into ordering's topic (and table) so ordering's
+// publisher. Reserved / Released / Committed are inventory.v1 messages; Rejected
+// and Expired become ordering.v1.OrderCancellationRequested — a request owned by
+// ordering's contract, published into ordering's topic (and table) so ordering's
 // consumer picks it up.
 package events
 
@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
@@ -81,6 +82,12 @@ func toProto(e reservation.Event) (string, proto.Message, error) {
 		return TopicOrderCancellationRequested, &orderingv1.OrderCancellationRequested{
 			OrderId:     ev.OrderID(),
 			Reason:      "inventory: insufficient stock for " + strings.Join(ev.Shortfall(), ", "),
+			RequestedAt: timestamppb.New(ev.OccurredAt()),
+		}, nil
+	case reservation.Expired:
+		return TopicOrderCancellationRequested, &orderingv1.OrderCancellationRequested{
+			OrderId:     ev.OrderID(),
+			Reason:      "inventory: reservation expired after " + ev.HeldFor().Truncate(time.Second).String(),
 			RequestedAt: timestamppb.New(ev.OccurredAt()),
 		}, nil
 	case reservation.Released:

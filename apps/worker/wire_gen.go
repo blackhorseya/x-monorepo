@@ -8,6 +8,7 @@ package main
 
 import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/cli"
 	consumer2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
 	events2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
 	system2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
@@ -101,6 +102,53 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	}
 	return mainWorker, func() {
 		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+	}, nil
+}
+
+// InitializeExpire builds `worker expire`: inventory's reservation TTL sweep
+// on the database, without the router. Same component configs as Initialize
+// minus Redis / Worker (a sweep is one process reading and writing Postgres;
+// its events go through the outbox like everyone else's).
+func InitializeExpire(cfg *config.AppConfig) (*cli.Expire, func(), error) {
+	configPostgres := cfg.Postgres
+	oTel := cfg.OTel
+	log := cfg.Log
+	providers, cleanup, err := otel.New(oTel, log)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, cleanup2, err := postgres.NewDB(configPostgres, providers)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	repository := inventory.ProvideReservationRepository(db)
+	logger := providers.Logger
+	stockRepository := inventory.ProvideStockRepository(db, logger)
+	transactor := inventory.ProvideTransactor(db)
+	inbox := inventory.ProvideInbox(db)
+	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	eventsPublisher := events2.NewPublisher(publisher)
+	clock := system2.NewClock()
+	meterProvider := providers.Meter
+	recorder, err := usecasex.NewRecorder(meterProvider)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	v := inventory.ProvideExpireReservations(repository, stockRepository, transactor, inbox, eventsPublisher, clock, recorder)
+	expire := cli.NewExpire(v)
+	return expire, func() {
 		cleanup3()
 		cleanup2()
 		cleanup()

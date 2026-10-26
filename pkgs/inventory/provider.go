@@ -1,6 +1,7 @@
 // Package inventory is the inventory bounded context: stock per SKU, and the
 // reservation each order claims. It reacts to ordering's OrderCreated /
-// OrderCancelled / OrderCompleted events and asks ordering to cancel orders it cannot cover.
+// OrderCancelled / OrderCompleted events and asks ordering to cancel orders it cannot cover
+// — or held past the reservation TTL (ExpireReservations: `worker expire`, the rpc, the CronJob).
 // ProviderSet is its only export to composition roots (apps/*).
 package inventory
 
@@ -10,6 +11,7 @@ import (
 	"github.com/google/wire"
 	"gorm.io/gorm"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/cli"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/metrics"
@@ -51,9 +53,11 @@ var ProviderSet = wire.NewSet(
 	ProvideReserveStock,
 	ProvideReleaseStock,
 	ProvideCommitStock,
+	ProvideExpireReservations,
 
 	// adapters
 	rpc.NewInventoryService,
+	cli.NewExpire,
 	consumer.NewOrderCreatedHandler,
 	consumer.NewOrderCancelledHandler,
 	consumer.NewOrderCompletedHandler,
@@ -187,4 +191,11 @@ func ProvideReleaseStock(reservations reservation.Repository, stocks stock.Repos
 
 func ProvideCommitStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.CommitStockUC {
 	return decorateTx("inventory.commit_stock", rec, tx, inbox, usecase.NewCommitStock(reservations, stocks, events, clock))
+}
+
+// ProvideExpireReservations is the reservation TTL sweep, shared by the rpc
+// adapter (operator) and the cli adapter (`worker expire`, the CronJob); the
+// type is the plain use case, each adapter names its own alias of it.
+func ProvideExpireReservations(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) rpc.ExpireReservationsUC {
+	return decorateTx("inventory.expire_reservations", rec, tx, inbox, usecase.NewExpireReservations(reservations, stocks, events, clock))
 }
