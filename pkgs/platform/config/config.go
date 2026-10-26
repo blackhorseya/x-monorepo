@@ -284,9 +284,10 @@ func (x *AppConfig) validate() error {
 	switch x.Auth.Mode {
 	case AuthOff:
 	case AuthOptional, AuthRequired:
-		if x.Auth.APIKeys == "" && x.Auth.JWT.HS256Secret == "" && x.Auth.JWT.PublicKey == "" {
-			return fmt.Errorf("auth.mode is %s but no auth.api_keys, auth.jwt.hs256_secret or auth.jwt.public_key is set", x.Auth.Mode)
-		}
+		// No static key and no jwt is allowed: the rpc server also resolves
+		// keys through server.CredentialResolver (the identity BC's database).
+		// server.New warns about it, because with an empty identity store
+		// nobody can get in until a key exists (bootstrap: auth.api_keys).
 	default:
 		return fmt.Errorf("invalid auth.mode %q (want off|optional|required)", x.Auth.Mode)
 	}

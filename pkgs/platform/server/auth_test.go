@@ -298,11 +298,37 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 	if !slow.sawDeadline {
 		t.Fatal("resolver must receive a context with a deadline")
 	}
+	// A resolver that ignores its context and answers "found" after the
+	// deadline is still rejected: a late success is not a verified credential
+	// (regression: only the resolver's own error used to be checked).
+	late := &lateResolver{delay: 60 * time.Millisecond}
+	in, err = server.NewAuthInterceptor(cfgTimeout, noop.NewMeterProvider(), late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	next = in(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
+		called = true
+		return connect.NewResponse(&struct{}{}), nil
+	})
+	_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+	if !isInvalidCredential(err) || called {
+		t.Fatalf("late success after the deadline: err=%v next called=%v (want rejected, handler not called)", err, called)
+	}
 
 	// Resolver only: no static key, no jwt, still a valid configuration.
 	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), r); err != nil {
 		t.Fatalf("resolver-only config: %v", err)
 	}
+}
+
+// lateResolver ignores its context and answers "found" after delay.
+type lateResolver struct{ delay time.Duration }
+
+func (r *lateResolver) ResolveAPIKey(context.Context, string) (contextx.Principal, bool, error) {
+	time.Sleep(r.delay)
+
+	return contextx.Principal{Subject: "acc-late", Roles: []string{"admin"}}, true, nil
 }
 
 // hangingResolver blocks until its context is done, like a stuck database.

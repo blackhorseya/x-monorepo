@@ -244,6 +244,13 @@ func (a *authenticator) authenticate(c context.Context, apiKey, authorization st
 			switch {
 			case err != nil:
 				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, err)
+			case rc.Err() != nil:
+				// The deadline passed while the resolver was answering: a late
+				// success is not a verified credential (the resolver may have
+				// ignored the context, or won a race with it). The bound is only
+				// a bound for resolvers that honour their context; this keeps
+				// the decision honest either way.
+				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, rc.Err())
 			case ok:
 				p.Method = MethodAPIKey
 

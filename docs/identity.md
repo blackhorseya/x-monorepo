@@ -62,7 +62,7 @@ resolver 前面有 in-process cache，TTL `auth.DefaultCacheTTL` = 30s，hit 與
 | key 的 `expires_at` | **準時**：entry 的有效期取 `min(now+30s, expires_at)`，到期的下一個 request 重查、被拒 |
 | DB 掛掉 | **bounded staleness**：30s 內驗過的 key 在那個 window 結束前照常通過；window 外、或沒驗過的 key，resolver 回 error → 拒絕（`auth.invalid_credential`）+ error log。DB 掛掉**不會讓任何沒驗過的 key 進來**，但也不會立刻踢掉剛驗過的 |
 | resolver error | 不 cache，每個 request 都再試 |
-| resolver 查太久 | `auth.resolver_timeout`（預設 2s）到期 = 拒絕；auth 在 `http.timeout` 之外，所以這個上限是獨立的 |
+| resolver 查太久 | `auth.resolver_timeout`（預設 2s）到期 = 拒絕，**到期後才回來的成功也拒絕**（interceptor 回來後查 context，不只看 resolver 的 error）；auth 在 `http.timeout` 之外，所以這個上限是獨立的。它是 context 的 deadline：resolver 不理 context 的話（例如 driver 不吃 ctx）request 還是會等它回來，只是回來後被拒 |
 
 「DB 掛掉仍服務 30s 內驗過的 key」是刻意的（可用性 > 立即一致；不等於放行），要改成嚴格 fail-closed 就得每個 request 都查 DB，等於沒有 cache——這是產品決定，不是 bug。
 
