@@ -123,9 +123,13 @@ type subscriberOptions struct {
 
 // WithPollInterval is how long the subscriber waits before it asks the outbox
 // table again after a poll that found nothing (watermill-sql PollInterval).
-// It is the floor of the consumer-side latency of an event that arrives while
-// the subscriber is idle, and every subscriber (one per handler topic and BC,
-// per worker replica) issues one query per interval. 0 keeps the library's 1s.
+// The library waits a full interval only after a query that found nothing: an
+// event that arrives during that wait is seen 0 to about one interval later,
+// and the next query after one that found a message does not wait at all.
+// Scheduling, the database and the handler add their own latency on top.
+// While idle, every polling loop (one per handler subscription, or per
+// forwarded topic in redis mode, per worker replica) issues one query per
+// interval. 0 keeps the library's 1s.
 // The resend wait after a nack and the wait after a failed query keep the
 // library's 1s: handler failures are retried in-process by Register's Retry
 // middleware long before a nack, and a failing database should not be polled
