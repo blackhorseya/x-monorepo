@@ -306,7 +306,7 @@ func postgresLag(c context.Context, db *sql.DB, cur Cursor) (int64, float64, err
 			FROM ` + OffsetsTableName(cur.Topic) + ` WHERE consumer_group = $1
 		) o
 		WHERE m.transaction_id < pg_snapshot_xmin(pg_current_snapshot())
-		  AND ((m.transaction_id = o.tx AND m."offset" > o.acked) OR m.transaction_id > o.tx)`
+		  AND (m.transaction_id, m."offset") > (o.tx, o.acked)`
 	var n int64
 	var age float64
 	if err := db.QueryRowContext(c, q, cur.ConsumerGroup).Scan(&n, &age); err != nil {
