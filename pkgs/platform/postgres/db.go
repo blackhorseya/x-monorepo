@@ -21,6 +21,12 @@ import (
 // app has no database and repositories fall back to memory. The cleanup closes
 // the pool; wire threads it to the injector's cleanup.
 //
+// The pool is capped by cfg (MaxOpenConns and friends, set before the first
+// connection): every app opens its pool here, so rpc, worker and the CLIs all
+// obey postgres.max_open_conns. A config.Postgres built by hand rather than
+// config.Load has zeros: unlimited open, database/sql's own idle default (2),
+// connections never recycled.
+//
 // TranslateError makes the driver surface gorm.ErrDuplicatedKey /
 // ErrForeignKeyViolated instead of raw pgconn codes, so BC repositories can
 // translate with errors.Is. gorm's own logger is silent: errors already reach
@@ -50,6 +56,12 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 		return nil, nil, fmt.Errorf("postgres pool: %w", err)
 	}
 	cleanup := func() { _ = sqlDB.Close() }
+	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	if cfg.MaxIdleConns > 0 { // 0 keeps database/sql's default of 2, not "no idle connections"
+		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	}
+	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 
 	c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

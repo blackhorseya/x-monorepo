@@ -58,6 +58,15 @@ config:
     jwt: { issuer: "", audience: "", public_key: "" }
     public: []
     resolver_timeout: 2s
+  # postgres.url comes from `secrets`. Pool limits are per pod: total connections =
+  # (rpc + worker + CronJob pods) x max_open_conns, below Postgres max_connections
+  # (docs/operations.md). The worker needs >= 2 x subscribers + 1 (11); to give it less than
+  # rpc, set APP_POSTGRES_MAX_OPEN_CONNS in worker.extraEnv.
+  postgres:
+    max_open_conns: 25
+    max_idle_conns: 10
+    conn_max_lifetime: 30m
+    conn_max_idle_time: 5m
   log:
     level: info
     format: json

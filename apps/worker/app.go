@@ -82,6 +82,10 @@ func NewWorker(
 		{inventory.Schema, inventorySubs},
 	}
 
+	if err := checkPool(db, bcs); err != nil {
+		return nil, err
+	}
+
 	start := eventbus.FromBeginning
 	if cfg.StartFrom == config.StartFromLatest {
 		start = eventbus.FromLatest
@@ -242,11 +246,38 @@ func addForwarders(
 	return topics, nil
 }
 
-// checkPool is a stub so the tests compile; it refuses nothing yet.
-func checkPool(*gorm.DB, []struct {
+// minConnsPerSubscriber is what one busy subscriber needs from the pool: the
+// transaction watermill-sql keeps open from claiming a message until its ack,
+// and the connection the handler's own use case transaction runs on.
+const minConnsPerSubscriber = 2
+
+// checkPool refuses a postgres.max_open_conns the subscribers can starve on.
+// With every subscriber busy at once each holds its claiming transaction and
+// waits for a second connection that never frees up: the handlers run into
+// worker.handler_timeout one after the other and every message ends up on the
+// poison topic. The floor is the subscribers' two connections each plus one for
+// the lag gauges. 0 (unlimited) and no database always pass.
+func checkPool(db *gorm.DB, bcs []struct {
 	schema string
 	subs   []eventbus.Subscription
 }) error {
+	if db == nil {
+		return nil
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("postgres pool: %w", err)
+	}
+	subs := 0
+	for _, bc := range bcs {
+		subs += len(bc.subs)
+	}
+	limit, need := sqlDB.Stats().MaxOpenConnections, minConnsPerSubscriber*subs+1
+	if limit > 0 && limit < need {
+		return fmt.Errorf("postgres.max_open_conns %d is below the %d this worker needs (%d subscribers x %d connections each, +1 for the gauges): "+
+			"with every subscriber busy the pool deadlocks and handlers time out; raise it, or set 0 for unlimited", limit, need, subs, minConnsPerSubscriber)
+	}
+
 	return nil
 }
 
