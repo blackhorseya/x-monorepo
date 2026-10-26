@@ -1,0 +1,156 @@
+// Package identity is the identity bounded context: the accounts and API keys
+// the rpc server's auth interceptor resolves X-API-Key against (next to the
+// static auth.api_keys, which stay the break-glass path). It only verifies —
+// JWTs keep coming from the external issuer of auth.jwt — and it publishes no
+// events. ProviderSet is its only export to composition roots (apps/*); the
+// platform reaches it through server.CredentialResolver (adapters/auth), wired
+// in apps/rpc.
+package identity
+
+import (
+	"log/slog"
+
+	"github.com/google/wire"
+	"gorm.io/gorm"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/port"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/account"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/memory"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
+)
+
+// Schema is the Postgres schema of this BC (tables, migrations).
+const Schema = postgres.Schema
+
+var ProviderSet = wire.NewSet(
+	// infra → ports / repositories
+	ProvideAccountRepository,
+	ProvideAPIKeyRepository,
+	ProvideTransactor,
+	system.NewClock,
+	wire.Bind(new(port.Clock), new(*system.Clock)),
+	system.NewUUIDGenerator,
+	wire.Bind(new(port.IDGenerator), new(*system.UUIDGenerator)),
+	system.NewSecretGenerator,
+	wire.Bind(new(port.SecretGenerator), new(*system.SecretGenerator)),
+
+	// application (decorated; see decorate). *usecasex.Recorder is shared
+	// across BCs: apps provide it.
+	ProvideCreateAccount,
+	ProvideGetAccount,
+	ProvideListAccounts,
+	ProvideDisableAccount,
+	ProvideEnableAccount,
+	ProvideAssignRoles,
+	ProvideCreateAPIKey,
+	ProvideListAPIKeys,
+	ProvideRevokeAPIKey,
+	ProvideResolveAPIKey,
+	ProvideWhoAmI,
+	wire.Struct(new(rpc.UseCases), "*"),
+
+	// adapters
+	rpc.NewIdentityService,
+	auth.NewResolver,
+)
+
+// ProvideAccountRepository picks the persistence backend from the composition
+// root's database handle: nil (APP_POSTGRES_URL unset) means in-memory.
+func ProvideAccountRepository(db *gorm.DB, logger *slog.Logger) account.Repository {
+	if db == nil {
+		logger.Warn("identity: APP_POSTGRES_URL unset, using in-memory account repository")
+		return memory.NewAccountRepository()
+	}
+
+	return postgres.NewAccountRepository(db)
+}
+
+func ProvideAPIKeyRepository(db *gorm.DB) apikey.Repository {
+	if db == nil {
+		return memory.NewAPIKeyRepository()
+	}
+
+	return postgres.NewAPIKeyRepository(db)
+}
+
+// ProvideTransactor pairs with the repositories: a real transaction on
+// Postgres, a pass-through in memory.
+func ProvideTransactor(db *gorm.DB) port.Transactor {
+	if db == nil {
+		return memory.NewTransactor()
+	}
+
+	return postgres.NewTransactor(db)
+}
+
+// decorate is the one place that decides which cross-cutting decorators every
+// use case of this BC gets (outermost first). Reads use it as is.
+func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc,
+		usecasex.Metrics[I, O](rec, name),
+		usecasex.Logging[I, O](name),
+	)
+}
+
+// decorateTx is decorate for use cases that write: one transaction around
+// the use case. This BC has no consumer path, so there is no inbox / Idempotent.
+func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc,
+		usecasex.Metrics[I, O](rec, name),
+		usecasex.Logging[I, O](name),
+		usecasex.Transactional[I, O](tx),
+	)
+}
+
+func ProvideCreateAccount(accounts account.Repository, ids port.IDGenerator, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.CreateAccountUC {
+	return decorateTx("identity.create_account", rec, tx, usecase.NewCreateAccount(accounts, ids, clock))
+}
+
+func ProvideGetAccount(accounts account.Repository, rec *usecasex.Recorder) rpc.GetAccountUC {
+	return decorate("identity.get_account", rec, usecase.NewGetAccount(accounts))
+}
+
+func ProvideListAccounts(accounts account.Repository, rec *usecasex.Recorder) rpc.ListAccountsUC {
+	return decorate("identity.list_accounts", rec, usecase.NewListAccounts(accounts))
+}
+
+func ProvideDisableAccount(accounts account.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.DisableAccountUC {
+	return decorateTx("identity.disable_account", rec, tx, usecase.NewDisableAccount(accounts, clock))
+}
+
+func ProvideEnableAccount(accounts account.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.EnableAccountUC {
+	return decorateTx("identity.enable_account", rec, tx, usecase.NewEnableAccount(accounts, clock))
+}
+
+func ProvideAssignRoles(accounts account.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.AssignRolesUC {
+	return decorateTx("identity.assign_roles", rec, tx, usecase.NewAssignRoles(accounts, clock))
+}
+
+func ProvideCreateAPIKey(accounts account.Repository, keys apikey.Repository, ids port.IDGenerator, secrets port.SecretGenerator, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.CreateAPIKeyUC {
+	return decorateTx("identity.create_api_key", rec, tx, usecase.NewCreateAPIKey(accounts, keys, ids, secrets, clock))
+}
+
+func ProvideListAPIKeys(accounts account.Repository, keys apikey.Repository, rec *usecasex.Recorder) rpc.ListAPIKeysUC {
+	return decorate("identity.list_api_keys", rec, usecase.NewListAPIKeys(accounts, keys))
+}
+
+func ProvideRevokeAPIKey(keys apikey.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.RevokeAPIKeyUC {
+	return decorateTx("identity.revoke_api_key", rec, tx, usecase.NewRevokeAPIKey(keys, clock))
+}
+
+// ProvideResolveAPIKey is the auth path (adapters/auth.Resolver, in front of
+// the platform's interceptor). Logging's success line is Debug, and the
+// resolver caches, so the access log is not doubled per request.
+func ProvideResolveAPIKey(accounts account.Repository, keys apikey.Repository, clock port.Clock, rec *usecasex.Recorder) auth.ResolveAPIKeyUC {
+	return decorate("identity.resolve_api_key", rec, usecase.NewResolveAPIKey(accounts, keys, clock))
+}
+
+func ProvideWhoAmI(rec *usecasex.Recorder) rpc.WhoAmIUC {
+	return decorate("identity.whoami", rec, usecase.NewWhoAmI())
+}

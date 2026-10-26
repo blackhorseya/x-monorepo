@@ -26,12 +26,13 @@
 | `http.rate_limit.rps` / `.burst` / `.by` | `APP_HTTP_RATE_LIMIT_RPS` … | `0` / `0` / `global` | token bucket（rate limit interceptor，在 auth 之外）：`rps` 0 = 關；`burst` 0 = rps 無條件進位；`by: global` 全 server 一桶、`peer` 每個 client IP 一桶（連線的 peer address；proxy 沒保留來源時等於大家同一桶）。超過 → `RESOURCE_EXHAUSTED` + `x-error-code: request.rate_limited` + `Retry-After`（秒） |
 | `http.shutdown_timeout` | `APP_HTTP_SHUTDOWN_TIMEOUT` | `15s` | listener 關掉後 in-flight request 的完成上限，超過就切斷、`Run` 回 error。`terminationGracePeriodSeconds` 要 > delay + timeout |
 | `log.level` / `log.format` | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
-| `auth.mode` | `APP_AUTH_MODE` | `off` | `off` 不掛 auth interceptor；`optional` 有帶 credential 才驗（沒帶 = anonymous，帶了驗不過一樣是錯）；`required` 沒有合法 credential → `UNAUTHENTICATED` |
-| `auth.api_keys` | `APP_AUTH_API_KEYS` | 空 | `name=key[:role\|role],name=key`（key ≥ 16 字元），對 `X-API-Key` header；principal 的 subject = name、roles = 冒號後的清單。一個字串，所以 env 帶得動 |
-| `auth.admin_role` | `APP_AUTH_ADMIN_ROLE` | `admin` | `admin.v1.AdminService`（poison 操作）要求的 role；`auth.mode: off` 時不檢查 |
+| `auth.mode` | `APP_AUTH_MODE` | `off` | `off` 不掛 auth interceptor；`optional` 有帶 credential 才驗（沒帶 = anonymous，帶了驗不過一樣是錯）；`required` 沒有合法 credential → `UNAUTHENTICATED`。開著但 `api_keys` 與 `jwt` 都空是合法的（只靠 identity 的 DB key，`server.New` 會 Warn）；identity 表空的話就是沒人進得來 |
+| `auth.api_keys` | `APP_AUTH_API_KEYS` | 空 | `name=key[:role\|role],name=key`（key ≥ 16 字元），對 `X-API-Key` header；principal 的 subject = name、roles = 冒號後的清單。一個字串，所以 env 帶得動。這是 static / break-glass 那組：對不上時 interceptor 再問 `pkgs/identity` 的 DB key（`identity.v1.IdentityService`，見 `docs/identity.md`），所以 mode 開著、這裡空著也合法——第一把 admin key 仍建議放這裡 bootstrap |
+| `auth.admin_role` | `APP_AUTH_ADMIN_ROLE` | `admin` | `admin.v1.AdminService`（poison 操作）、`InventoryService.ExpireReservations`、`identity.v1.IdentityService`（除 `WhoAmI`）要求的 role；`auth.mode: off` 時不檢查 |
 | `auth.jwt.hs256_secret` / `auth.jwt.public_key` | `APP_AUTH_JWT_HS256_SECRET` / `APP_AUTH_JWT_PUBLIC_KEY` | 空 | 二選一：HS256 secret（≥ 32 bytes）或 PEM public key（RSA / EC / Ed25519，演算法家族釘死在 key 型別上）。對 `Authorization: Bearer <jwt>`，`exp` 必填 |
 | `auth.jwt.issuer` / `auth.jwt.audience` | `APP_AUTH_JWT_ISSUER` / `APP_AUTH_JWT_AUDIENCE` | 空 | 設了就檢查 `iss` / `aud` |
 | `auth.public` | `APP_AUTH_PUBLIC` | 空 | 不需 credential 的 procedure 清單（`/ordering.v1.OrderService/GetOrder`，env 用逗號分隔） |
+| `auth.resolver_timeout` | `APP_AUTH_RESOLVER_TIMEOUT` | `2s` | 一次 `server.CredentialResolver` 查詢（identity BC 的 DB key）的上限。auth 在 `http.timeout` 之外，沒有它 DB 卡住會拖住所有帶 key 的 request 與 shutdown drain；到期 = 拒絕（`auth.invalid_credential`）。`0` = 不限 |
 | `postgres.url` | `APP_POSTGRES_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
 | `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
 | `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |

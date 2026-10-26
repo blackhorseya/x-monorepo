@@ -47,7 +47,7 @@ func TestAccessLine_Principal(t *testing.T) {
 		JWT:     config.JWT{HS256Secret: secret},
 		Public:  []string{"/a.v1.S/Public"},
 	}
-	authn, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider())
+	authn, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

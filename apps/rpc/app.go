@@ -14,6 +14,8 @@ import (
 
 	"gorm.io/gorm"
 
+	identityrpc "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
+	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	inventoryrpc "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
 	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
@@ -27,13 +29,14 @@ import (
 )
 
 // NewRoutes lists every mounted service: the BCs' and the platform's admin surface.
-func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, poison *admin.PoisonService) []server.Route {
-	return []server.Route{ordering, inventory, poison}
+func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, identity *identityrpc.IdentityService, poison *admin.PoisonService) []server.Route {
+	return []server.Route{ordering, inventory, identity, poison}
 }
 
 // NewPoisonService serves admin.v1.AdminService over every BC's poison
 // table. Adding a BC: add its Schema here (the worker's poison.go lists the
-// same set).
+// same set). identity is not here: it consumes no events, so it has no
+// poison table.
 func NewPoisonService(db *gorm.DB, auth config.Auth) *admin.PoisonService {
 	return admin.NewPoisonService(db, auth, []string{ordering.Schema, inventory.Schema})
 }
@@ -58,6 +61,7 @@ func NewDocs() []server.Doc {
 	return []server.Doc{
 		{Name: "ordering", Spec: orderingv1.OpenAPI},
 		{Name: "inventory", Spec: inventoryv1.OpenAPI},
+		{Name: "identity", Spec: identityv1.OpenAPI},
 		{Name: "admin", Spec: adminv1.OpenAPI},
 	}
 }

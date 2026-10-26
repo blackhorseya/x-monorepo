@@ -70,7 +70,8 @@ CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，
 pkgs/kernel      shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 pkgs/platform    技術共用：contextx、config、server（gin + Connect）、usecasex、otel、postgres、archtest；
                  admin（admin.v1.AdminService：poison 操作 + Prune RPC，與 worker 的 CLI 同一組 eventbus 函式；contract 在 protos/admin，不屬於任何 BC）
-pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event，ordering 再消費它的 `StockReserved` 把 order 變 CONFIRMED；`CompleteOrder` RPC 發 `OrderCompleted`，inventory 消費它把 reservation COMMITTED、扣 on_hand；`worker expire` 把 RESERVED 超過 TTL 的變 EXPIRED、還庫存、發 `OrderCancellationRequested`）
+pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event，ordering 再消費它的 `StockReserved` 把 order 變 CONFIRMED；`CompleteOrder` RPC 發 `OrderCompleted`，inventory 消費它把 reservation COMMITTED、扣 on_hand；`worker expire` 把 RESERVED 超過 TTL 的變 EXPIRED、還庫存、發 `OrderCancellationRequested`；
+                 identity 是第三個：DB 管理的 account / API key，沒有 event；`adapters/auth` 實作 platform 的 `server.CredentialResolver`，auth interceptor 對 `X-API-Key` 先查 config `auth.api_keys` 再問它（TTL cache 30s）——`docs/identity.md`）
   provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() / decorateTx() 包起來
   contract/v1/     buf 生成的 wire format（pb + Connect + openapi.yaml），只有 adapters / apps 可 import
   domain/<agg>/    aggregate、VO、Repository interface、domain errors（手寫，不是 proto）
@@ -122,7 +123,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - **Validation**：request 形狀由 protovalidate interceptor 擋（`x-error-code: request.validation_failed` + `Violations` detail），
   consumer path 沒有它，所以 domain 的檢查不能拿掉。
 - **Auth 只做 authentication**：`auth.mode` 預設 `off`（`task run`、E2E、console 都沒帶 credential）；開了之後 `server.NewAuthInterceptor`
-  把 `X-API-Key` / `Authorization: Bearer <jwt>` 解析成 `contextx.Principal` 放進 context，usecase 用 `contextx.PrincipalFrom(c)` 讀，
+  把 `X-API-Key`（config `auth.api_keys` 先、再問 `server.CredentialResolver` = identity 的 DB key；resolver 失敗是拒絕不是放行）/ `Authorization: Bearer <jwt>` 解析成 `contextx.Principal` 放進 context（identity key 的 `Subject` 是 account id、`CredentialID` 是 key id），usecase 用 `contextx.PrincipalFrom(c)` 讀，
   consumer path 永遠是 anonymous。`rpc` access line 的 `auth` / `sub` 與 span 的 `enduser.id` 由 auth interceptor 透過 logging interceptor 留在 context 的 slot 回報（`recordAuth`），不要把 principal 塞進 metrics label——它記的 `auth_decisions_total{result, method}` 只有 ok / public / anonymous / missing / invalid × api_key / jwt / none（Grafana 的 Auth row 與 `rpc-auth` alert 讀它）。要不要做授權（role 檢查）是讀的人的事，不要在 interceptor 裡加。
   Interceptor chain 由外而內：`tracing, meta, logging, [rate limit], [auth], [timeout], validate`——rate limit 在 auth 之外（洪水先擋再驗簽章）、
   timeout 在 auth 之內（deadline 算 validate + usecase）；`http.timeout` 到期的失敗一律 `DEADLINE_EXCEEDED` + `request.timeout`，超過 `http.rate_limit` 是 `RESOURCE_EXHAUSTED` + `request.rate_limited` + `Retry-After`。
@@ -154,7 +155,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 加 `use` + `Taskfile.yml` 的 `MODULES` 與 `BCS` + `apps/*/go.mod` 的 require / replace → `task tidy` → `contract/v1/openapi.go` →
 `task gen` → 複製 `pkgs/ordering` 結構寫 `provider.go`（`Subscriptions` 自己的 named type）→ `.golangci.yml` 加該 BC 的 layer block 與
 `bc-isolation-<bc>`，並把它加進其他 BC / shared / apps 的 deny（`pkg` 是 prefix match，不能用 `*`）→ `apps/rpc` 的 `NewRoutes` /
-`NewDocs` / `NewPoisonService` 的 schema 清單加它、`apps/{rpc,worker}/wire.go` 加 `ProviderSet`、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions`、`poison.go` 的 `schemas` 加它 → `task wire` →
+`NewDocs` / `NewPoisonService` 的 schema 清單加它、`apps/{rpc,worker}/wire.go` 加 `ProviderSet`、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions`、`poison.go` 的 `schemas` 加它（沒有 event 的 BC 如 identity：worker / poison 都不加）→ `task wire` →
 有 DB 則加 migrations（含自己 topic 與 poison 的 events 表、`<bc>.inbox` 表）與 `apps/migrate/main.go` 的 `migrations`；`application/port` 加自己的 `Inbox` 與 `provider.go` 的 `ProvideInbox`（每個 BC 自己的型別，wire 才分得開）。
 
 ## Conventions（本 repo 特有）

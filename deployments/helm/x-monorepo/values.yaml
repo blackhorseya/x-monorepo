@@ -57,6 +57,7 @@ config:
     admin_role: admin
     jwt: { issuer: "", audience: "", public_key: "" }
     public: []
+    resolver_timeout: 2s
   log:
     level: info
     format: json

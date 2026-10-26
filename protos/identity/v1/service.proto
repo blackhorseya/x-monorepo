@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package identity.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "identity/v1/entity.proto";
+
+// IdentityService manages the accounts and API keys the rpc server's auth
+// interceptor resolves X-API-Key against (next to the static auth.api_keys of
+// the config, which stay the break-glass path). Every procedure but WhoAmI
+// requires the admin role when auth is on (x-error-code: auth.permission_denied).
+// It only verifies: JWTs keep coming from the external issuer of auth.jwt.
+service IdentityService {
+  // CreateAccount registers who a key will speak for; roles are free-form
+  // strings (auth.admin_role is the one the platform reads).
+  rpc CreateAccount(CreateAccountRequest) returns (CreateAccountResponse);
+  rpc GetAccount(GetAccountRequest) returns (GetAccountResponse);
+  // ListAccounts pages through accounts by id ascending.
+  rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
+  // DisableAccount refuses every key of the account from the next request
+  // (bounded by the resolver cache TTL) without revoking them.
+  rpc DisableAccount(DisableAccountRequest) returns (DisableAccountResponse);
+  rpc EnableAccount(EnableAccountRequest) returns (EnableAccountResponse);
+  // AssignRoles replaces the account's roles (an empty list clears them).
+  rpc AssignRoles(AssignRolesRequest) returns (AssignRolesResponse);
+  // CreateApiKey mints a key for an account and returns the secret ONCE; only
+  // its hash is stored, so a lost secret means a new key.
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
+  // ListApiKeys lists every key of an account, revoked ones included, newest first.
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
+  rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
+  // WhoAmI returns the principal the caller's credential resolved to (no role
+  // needed; anonymous when auth is off or optional and nothing was sent).
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+}
+
+message CreateAccountRequest {
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 100
+  }];
+  repeated string roles = 2 [(buf.validate.field).repeated = {
+    max_items: 20
+    items: {
+      string: {
+        min_len: 1
+        max_len: 50
+      }
+    }
+  }];
+}
+
+message CreateAccountResponse {
+  Account account = 1;
+}
+
+message GetAccountRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetAccountResponse {
+  Account account = 1;
+}
+
+message ListAccountsRequest {
+  // 0 = server default (20); capped at 100.
+  int32 page_size = 1 [(buf.validate.field).int32.gte = 0];
+  string page_token = 2;
+}
+
+message ListAccountsResponse {
+  repeated Account accounts = 1;
+  string next_page_token = 2;
+}
+
+message DisableAccountRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message DisableAccountResponse {
+  Account account = 1;
+}
+
+message EnableAccountRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message EnableAccountResponse {
+  Account account = 1;
+}
+
+message AssignRolesRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated string roles = 2 [(buf.validate.field).repeated = {
+    max_items: 20
+    items: {
+      string: {
+        min_len: 1
+        max_len: 50
+      }
+    }
+  }];
+}
+
+message AssignRolesResponse {
+  Account account = 1;
+}
+
+message CreateApiKeyRequest {
+  string account_id = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 100
+  }];
+  // Unset: never expires. Must be in the future (identity domain: api_key.invalid_expiry).
+  google.protobuf.Timestamp expire_time = 3;
+}
+
+message CreateApiKeyResponse {
+  ApiKey api_key = 1;
+  // The plaintext secret, shown once. Send it as X-API-Key.
+  string secret = 2;
+}
+
+message ListApiKeysRequest {
+  string account_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ListApiKeysResponse {
+  repeated ApiKey api_keys = 1;
+}
+
+message RevokeApiKeyRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message RevokeApiKeyResponse {
+  ApiKey api_key = 1;
+}
+
+message WhoAmIRequest {}
+
+message WhoAmIResponse {
+  // True when no credential was established (auth off, or optional with none sent):
+  // the other fields are empty.
+  bool anonymous = 1;
+  // The stable identifier: the account id for a key managed here, the key's
+  // name for a static auth.api_keys entry, the JWT sub.
+  string subject = 2;
+  string name = 3;
+  repeated string roles = 4;
+  // "api_key" or "jwt".
+  string method = 5;
+  // The ApiKey id when the credential is a key managed here; empty otherwise.
+  string credential_id = 6;
+}

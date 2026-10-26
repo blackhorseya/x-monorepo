@@ -7,6 +7,10 @@
 package main
 
 import (
+	"github.com/blackhorseya/x-monorepo/pkgs/identity"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
+	rpc3 "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
+	system3 "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	events2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
 	rpc2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
@@ -29,7 +33,7 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	http := cfg.HTTP
-	auth := cfg.Auth
+	configAuth := cfg.Auth
 	oTel := cfg.OTel
 	log := cfg.Log
 	providers, cleanup, err := otel.New(oTel, log)
@@ -81,12 +85,43 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v10 := inventory.ProvideListReservations(reservationRepository, recorder)
 	publisher2 := events2.NewPublisher(publisher)
 	v11 := inventory.ProvideExpireReservations(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	inventoryService := rpc2.NewInventoryService(v6, v7, v8, v9, v10, v11, auth)
-	poisonService := NewPoisonService(db, auth)
-	v12 := NewRoutes(orderService, inventoryService, poisonService)
-	v13 := NewDocs()
+	inventoryService := rpc2.NewInventoryService(v6, v7, v8, v9, v10, v11, configAuth)
+	accountRepository := identity.ProvideAccountRepository(db, logger)
+	systemUUIDGenerator := system3.NewUUIDGenerator()
+	clock2 := system3.NewClock()
+	transactor2 := identity.ProvideTransactor(db)
+	v12 := identity.ProvideCreateAccount(accountRepository, systemUUIDGenerator, clock2, transactor2, recorder)
+	v13 := identity.ProvideGetAccount(accountRepository, recorder)
+	v14 := identity.ProvideListAccounts(accountRepository, recorder)
+	v15 := identity.ProvideDisableAccount(accountRepository, clock2, transactor2, recorder)
+	v16 := identity.ProvideEnableAccount(accountRepository, clock2, transactor2, recorder)
+	v17 := identity.ProvideAssignRoles(accountRepository, clock2, transactor2, recorder)
+	apikeyRepository := identity.ProvideAPIKeyRepository(db)
+	secretGenerator := system3.NewSecretGenerator()
+	v18 := identity.ProvideCreateAPIKey(accountRepository, apikeyRepository, systemUUIDGenerator, secretGenerator, clock2, transactor2, recorder)
+	v19 := identity.ProvideListAPIKeys(accountRepository, apikeyRepository, recorder)
+	v20 := identity.ProvideRevokeAPIKey(apikeyRepository, clock2, transactor2, recorder)
+	v21 := identity.ProvideWhoAmI(recorder)
+	useCases := rpc3.UseCases{
+		CreateAccount:  v12,
+		GetAccount:     v13,
+		ListAccounts:   v14,
+		DisableAccount: v15,
+		EnableAccount:  v16,
+		AssignRoles:    v17,
+		CreateAPIKey:   v18,
+		ListAPIKeys:    v19,
+		RevokeAPIKey:   v20,
+		WhoAmI:         v21,
+	}
+	identityService := rpc3.NewIdentityService(useCases, configAuth)
+	poisonService := NewPoisonService(db, configAuth)
+	v22 := NewRoutes(orderService, inventoryService, identityService, poisonService)
+	v23 := NewDocs()
 	readiness := NewReadiness(db)
-	serverServer, err := server.New(http, auth, logger, v12, v13, readiness, providers)
+	v24 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
+	resolver := auth.NewResolver(v24, clock2)
+	serverServer, err := server.New(http, configAuth, logger, v22, v23, readiness, providers, resolver)
 	if err != nil {
 		cleanup3()
 		cleanup2()

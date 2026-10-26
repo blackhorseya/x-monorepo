@@ -67,7 +67,7 @@ type Server struct {
 // the caller to a contextx.Principal; the timeout (limits.go, cfg.Timeout)
 // bounds the rest; plain HTTP routes (docs, openapi) get spans from otelgin,
 // which skips RPC prefixes, the probes and /api/metrics so nothing is traced twice.
-func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers) (*Server, error) {
+func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers, resolver CredentialResolver) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	// Connect routes are "/<pkg>.<Service>/" prefixes; a procedure is the next segment.
@@ -88,7 +88,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if err != nil {
 		return nil, err
 	}
-	authn, err := NewAuthInterceptor(auth, tel.Meter)
+	authn, err := NewAuthInterceptor(auth, tel.Meter, resolver)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +111,12 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if authn != nil {
 		interceptors = append(interceptors, authn)
 		logger.Info("auth enabled", "mode", auth.Mode, "public", auth.Public)
+		if auth.APIKeys == "" && auth.JWT.HS256Secret == "" && auth.JWT.PublicKey == "" {
+			// Valid (the resolver alone can answer), but with an empty identity
+			// store nobody can ever get in: boot would have failed here before
+			// resolvers existed, so say it loudly instead of locking out silently.
+			logger.Warn("auth relies solely on resolver-managed api keys: no auth.api_keys and no auth.jwt — bootstrap needs a static admin key or an existing identity database")
+		}
 	}
 	if deadline := NewTimeoutInterceptor(cfg.Timeout); deadline != nil {
 		interceptors = append(interceptors, deadline)

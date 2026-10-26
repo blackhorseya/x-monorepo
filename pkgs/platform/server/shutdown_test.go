@@ -44,7 +44,7 @@ func newTestServer(t *testing.T, cfg config.HTTP, route Route) (string, context.
 	}
 	t.Cleanup(cleanup)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv, err := New(cfg, config.Auth{}, logger, []Route{route}, nil, nil, tel)
+	srv, err := New(cfg, config.Auth{}, logger, []Route{route}, nil, nil, tel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

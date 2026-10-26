@@ -27,7 +27,7 @@ func TestAuthInterceptor_Decisions(t *testing.T) {
 		JWT:     config.JWT{HS256Secret: secret},
 		Public:  []string{"/a.v1.S/Public"},
 	}
-	in, err := server.NewAuthInterceptor(cfg, mp)
+	in, err := server.NewAuthInterceptor(cfg, mp, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestAuthInterceptor_Decisions(t *testing.T) {
 	// Optional mode: no credential is a decision too, a different one.
 	cfg.Mode = config.AuthOptional
 	reader = sdkmetric.NewManualReader()
-	in, err = server.NewAuthInterceptor(cfg, sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	in, err = server.NewAuthInterceptor(cfg, sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

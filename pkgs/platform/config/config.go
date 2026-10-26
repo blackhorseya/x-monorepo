@@ -90,6 +90,11 @@ type Auth struct {
 	// Public lists procedures ("/<pkg>.<Service>/<Method>") that never need a
 	// credential, whatever the mode.
 	Public []string `mapstructure:"public"`
+	// ResolverTimeout bounds one server.CredentialResolver lookup (the
+	// identity BC's database read behind an X-API-Key the config does not
+	// know). Auth runs outside http.timeout, so without this a stuck database
+	// would hold every authenticating request. Default 2s; 0 = unbounded.
+	ResolverTimeout time.Duration `mapstructure:"resolver_timeout"`
 }
 
 // JWT verifies `Authorization: Bearer <token>`: exactly one of HS256Secret
@@ -219,6 +224,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.jwt.hs256_secret", "")
 	v.SetDefault("auth.jwt.public_key", "")
 	v.SetDefault("auth.public", []string{})
+	v.SetDefault("auth.resolver_timeout", 2*time.Second)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
@@ -278,14 +284,18 @@ func (x *AppConfig) validate() error {
 	switch x.Auth.Mode {
 	case AuthOff:
 	case AuthOptional, AuthRequired:
-		if x.Auth.APIKeys == "" && x.Auth.JWT.HS256Secret == "" && x.Auth.JWT.PublicKey == "" {
-			return fmt.Errorf("auth.mode is %s but no auth.api_keys, auth.jwt.hs256_secret or auth.jwt.public_key is set", x.Auth.Mode)
-		}
+		// No static key and no jwt is allowed: the rpc server also resolves
+		// keys through server.CredentialResolver (the identity BC's database).
+		// server.New warns about it, because with an empty identity store
+		// nobody can get in until a key exists (bootstrap: auth.api_keys).
 	default:
 		return fmt.Errorf("invalid auth.mode %q (want off|optional|required)", x.Auth.Mode)
 	}
 	if x.Auth.AdminRole == "" {
 		return errors.New("auth.admin_role must not be empty")
+	}
+	if x.Auth.ResolverTimeout < 0 {
+		return errors.New("auth.resolver_timeout must not be negative")
 	}
 	if x.Auth.JWT.HS256Secret != "" && x.Auth.JWT.PublicKey != "" {
 		return errors.New("auth.jwt.hs256_secret and auth.jwt.public_key are exclusive")

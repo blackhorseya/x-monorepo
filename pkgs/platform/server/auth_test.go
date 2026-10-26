@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ const secret = "0123456789abcdef0123456789abcdef" // 32 bytes
 // principal the next function saw, and the error.
 func call(t *testing.T, cfg config.Auth, procedure string, headers map[string]string) (contextx.Principal, error) {
 	t.Helper()
-	in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider())
+	in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,18 +75,18 @@ func errCode(err error) (connect.Code, string) {
 
 func TestAuthInterceptor_Off(t *testing.T) {
 	for _, mode := range []string{"", config.AuthOff} {
-		in, err := server.NewAuthInterceptor(config.Auth{Mode: mode}, noop.NewMeterProvider())
+		in, err := server.NewAuthInterceptor(config.Auth{Mode: mode}, noop.NewMeterProvider(), nil)
 		if err != nil || in != nil {
 			t.Fatalf("mode %q: %v, %v", mode, in, err)
 		}
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider()); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), nil); err == nil {
 		t.Fatal("required with nothing configured must fail")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, APIKeys: "ci=short"}, noop.NewMeterProvider()); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, APIKeys: "ci=short"}, noop.NewMeterProvider(), nil); err == nil {
 		t.Fatal("short api key must fail")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{HS256Secret: "short"}}, noop.NewMeterProvider()); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{HS256Secret: "short"}}, noop.NewMeterProvider(), nil); err == nil {
 		t.Fatal("short hs256 secret must fail")
 	}
 }
@@ -180,7 +181,7 @@ func TestAuthInterceptor_AlgorithmPinned(t *testing.T) {
 	if _, err := call(t, cfg, "/a.v1.S/Get", map[string]string{server.AuthorizationHeader: "Bearer " + confused}); err == nil {
 		t.Fatal("HS256 token signed with the public key must be rejected")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{PublicKey: "not pem"}}, noop.NewMeterProvider()); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{PublicKey: "not pem"}}, noop.NewMeterProvider(), nil); err == nil {
 		t.Fatal("bad pem must fail")
 	}
 	// Only api keys configured: a bearer token is a credential that cannot verify.
@@ -209,4 +210,155 @@ func TestRequireRole(t *testing.T) {
 	if code, ec := errCode(server.RequireRole(c, on, "admin")); code != connect.CodeUnauthenticated || ec != server.UnauthenticatedCode {
 		t.Fatalf("anonymous = %s %s", code, ec)
 	}
+}
+
+// resolver is a CredentialResolver with a fixed answer table and a switchable failure.
+type resolver struct {
+	known map[string]contextx.Principal
+	fail  bool
+	calls int
+}
+
+func (r *resolver) ResolveAPIKey(_ context.Context, key string) (contextx.Principal, bool, error) {
+	r.calls++
+	if r.fail {
+		return contextx.Principal{}, false, errors.New("db down")
+	}
+	p, ok := r.known[key]
+
+	return p, ok, nil
+}
+
+// Keys the config does not know are asked of the resolver; the config keys
+// win first (break glass) and never hit it; a resolver failure rejects the
+// request as invalid instead of letting it through; and a resolver alone is a
+// valid auth configuration.
+func TestAuthInterceptor_Resolver(t *testing.T) {
+	r := &resolver{known: map[string]contextx.Principal{
+		"xk_dbkey-0123456789abcdef0123456789": {Subject: "acc-1", Name: "ops", Roles: []string{"admin"}, CredentialID: "key-1"},
+	}}
+	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "ci=ci-key-0123456789abcdef:viewer"}
+	callWith := func(key string) (contextx.Principal, error) {
+		in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var seen contextx.Principal
+		next := in(func(c context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
+			seen = contextx.PrincipalFrom(c)
+			return connect.NewResponse(&struct{}{}), nil
+		})
+		req := connect.NewRequest(&struct{}{})
+		req.Header().Set(server.APIKeyHeader, key)
+		_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+
+		return seen, err
+	}
+
+	p, err := callWith("ci-key-0123456789abcdef")
+	if err != nil || p.Subject != "ci" || r.calls != 0 {
+		t.Fatalf("config key: %+v, %v, resolver calls %d", p, err, r.calls)
+	}
+	p, err = callWith("xk_dbkey-0123456789abcdef0123456789")
+	if err != nil || p.Subject != "acc-1" || p.Method != server.MethodAPIKey || p.CredentialID != "key-1" || !p.HasRole("admin") || r.calls != 1 {
+		t.Fatalf("resolved key: %+v, %v, calls %d", p, err, r.calls)
+	}
+	if _, err := callWith("xk_unknown-0123456789abcdef01234567"); !isInvalidCredential(err) {
+		t.Fatalf("unknown key: %v", err)
+	}
+	r.fail = true
+	_, err = callWith("xk_dbkey-0123456789abcdef0123456789")
+	if !isInvalidCredential(err) {
+		t.Fatalf("resolver failure: %v", err)
+	}
+	if strings.Contains(err.Error(), "db down") {
+		t.Fatalf("resolver failure must not leak to the client: %v", err)
+	}
+	r.fail = false
+
+	// The production shape: a timeout is set (config default 2s) and the
+	// resolver answers in time. The hit is accepted and the miss is a plain
+	// unknown key — neither is mistaken for a resolver failure (regression:
+	// cancel() ran before the context was inspected, so every answer looked
+	// like context.Canceled).
+	r.calls = 0
+	cfg.ResolverTimeout = 2 * time.Second
+	p, err = callWith("xk_dbkey-0123456789abcdef0123456789")
+	if err != nil || p.Subject != "acc-1" || r.calls != 1 {
+		t.Fatalf("in-time resolver success with a timeout set: %+v, %v, calls %d", p, err, r.calls)
+	}
+	_, err = callWith("xk_unknown-0123456789abcdef01234567")
+	if !isInvalidCredential(err) || strings.Contains(err.Error(), "could not be verified") {
+		t.Fatalf("in-time miss with a timeout set must be a plain unknown key, not a resolver failure: %v", err)
+	}
+	cfg.ResolverTimeout = 0
+
+	// A resolver that hangs (stuck database) is cut off by auth.resolver_timeout
+	// and the request is rejected, not held: regression for the lookup running
+	// outside http.timeout.
+	slow := &hangingResolver{}
+	cfgTimeout := config.Auth{Mode: config.AuthRequired, APIKeys: cfg.APIKeys, ResolverTimeout: 20 * time.Millisecond}
+	in, err := server.NewAuthInterceptor(cfgTimeout, noop.NewMeterProvider(), slow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := in(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
+		return connect.NewResponse(&struct{}{}), nil
+	})
+	req := connect.NewRequest(&struct{}{})
+	req.Header().Set(server.APIKeyHeader, "xk_dbkey-0123456789abcdef0123456789")
+	start := time.Now()
+	_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+	if !isInvalidCredential(err) || time.Since(start) > time.Second {
+		t.Fatalf("hanging resolver: err=%v after %v (want invalid credential within the timeout)", err, time.Since(start))
+	}
+	if !slow.sawDeadline {
+		t.Fatal("resolver must receive a context with a deadline")
+	}
+	// A resolver that ignores its context and answers "found" after the
+	// deadline is still rejected: a late success is not a verified credential
+	// (regression: only the resolver's own error used to be checked).
+	late := &lateResolver{delay: 60 * time.Millisecond}
+	in, err = server.NewAuthInterceptor(cfgTimeout, noop.NewMeterProvider(), late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	next = in(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
+		called = true
+		return connect.NewResponse(&struct{}{}), nil
+	})
+	_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+	if !isInvalidCredential(err) || called {
+		t.Fatalf("late success after the deadline: err=%v next called=%v (want rejected, handler not called)", err, called)
+	}
+
+	// Resolver only: no static key, no jwt, still a valid configuration.
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), r); err != nil {
+		t.Fatalf("resolver-only config: %v", err)
+	}
+}
+
+// lateResolver ignores its context and answers "found" after delay.
+type lateResolver struct{ delay time.Duration }
+
+func (r *lateResolver) ResolveAPIKey(context.Context, string) (contextx.Principal, bool, error) {
+	time.Sleep(r.delay)
+
+	return contextx.Principal{Subject: "acc-late", Roles: []string{"admin"}}, true, nil
+}
+
+// hangingResolver blocks until its context is done, like a stuck database.
+type hangingResolver struct{ sawDeadline bool }
+
+func (r *hangingResolver) ResolveAPIKey(c context.Context, _ string) (contextx.Principal, bool, error) {
+	_, r.sawDeadline = c.Deadline()
+	<-c.Done()
+
+	return contextx.Principal{}, false, c.Err()
+}
+
+func isInvalidCredential(err error) bool {
+	var ce *connect.Error
+	return errors.As(err, &ce) && ce.Code() == connect.CodeUnauthenticated && ce.Meta().Get("x-error-code") == server.InvalidCredentialCode
 }

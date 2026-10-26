@@ -152,9 +152,16 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("unknown auth.mode must fail")
 	}
 	t.Setenv("APP_AUTH_MODE", "required")
-	if _, err := config.Load(); err == nil {
-		t.Fatal("auth.mode=required with nothing to verify against must fail")
+	// Nothing static to verify against is allowed: the rpc server also resolves
+	// keys through the identity BC (server.CredentialResolver); server.New warns.
+	if _, err := config.Load(); err != nil {
+		t.Fatalf("auth.mode=required with no static key / jwt must load (resolver-only): %v", err)
 	}
+	t.Setenv("APP_AUTH_RESOLVER_TIMEOUT", "-1s")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("negative auth.resolver_timeout must fail")
+	}
+	t.Setenv("APP_AUTH_RESOLVER_TIMEOUT", "2s")
 	t.Setenv("APP_AUTH_API_KEYS", "ci=secret")
 	t.Setenv("APP_AUTH_JWT_HS256_SECRET", "s")
 	t.Setenv("APP_AUTH_JWT_PUBLIC_KEY", "pem")

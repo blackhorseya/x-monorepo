@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package identity.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Entity messages are the cross-language state schema of the identity
+// aggregates. They are a wire contract, NOT the domain model: Go keeps
+// hand-written aggregates in domain/account and domain/apikey and maps at
+// the adapter boundary.
+
+enum AccountStatus {
+  ACCOUNT_STATUS_UNSPECIFIED = 0;
+  // Credentials of the account resolve to a principal.
+  ACCOUNT_STATUS_ACTIVE = 1;
+  // Every credential of the account is refused (auth.invalid_credential);
+  // the keys themselves are untouched and work again after EnableAccount.
+  ACCOUNT_STATUS_DISABLED = 2;
+}
+
+// Account is who an API key speaks for. The id is the principal's subject
+// (rpc access line `sub`, span enduser.id); roles are what RequireRole checks.
+message Account {
+  string id = 1;
+  string name = 2;
+  repeated string roles = 3;
+  AccountStatus status = 4;
+  google.protobuf.Timestamp create_time = 5;
+  google.protobuf.Timestamp update_time = 6;
+}
+
+enum ApiKeyStatus {
+  API_KEY_STATUS_UNSPECIFIED = 0;
+  API_KEY_STATUS_ACTIVE = 1;
+  // Revoked keys stay listed (who had what, until when) but never resolve again.
+  API_KEY_STATUS_REVOKED = 2;
+}
+
+// ApiKey is one credential of an account. The secret is returned once, by
+// CreateApiKey; only its SHA-256 is stored. prefix is the first characters of
+// the secret, enough to tell keys apart in a listing and in a client's config.
+message ApiKey {
+  string id = 1;
+  string account_id = 2;
+  string name = 3;
+  string prefix = 4;
+  ApiKeyStatus status = 5;
+  google.protobuf.Timestamp create_time = 6;
+  // Unset: the key does not expire.
+  google.protobuf.Timestamp expire_time = 7;
+  // Set once the key is REVOKED.
+  google.protobuf.Timestamp revoke_time = 8;
+}
