@@ -312,3 +312,58 @@ func TestWhoAmI(t *testing.T) {
 		t.Fatalf("principal = %+v, %v", out, err)
 	}
 }
+
+func TestBootstrap(t *testing.T) {
+	f := newFixture()
+	c := context.Background()
+	boot := usecase.NewBootstrap(f.accounts, f.keys, f.ids, f.secrets, f.clock)
+	exp := f.clock.t.Add(24 * time.Hour)
+
+	// Validation happens before anything is written: a bad role leaves the store empty.
+	if _, err := boot.Execute(c, dto.BootstrapInput{Name: "root", Roles: []string{"admin", " "}, KeyName: "k"}); !errors.Is(err, account.ErrInvalidRole) {
+		t.Fatalf("bad role: %v", err)
+	}
+	if _, err := boot.Execute(c, dto.BootstrapInput{Name: "root", Roles: []string{"admin"}, KeyName: ""}); !errors.Is(err, apikey.ErrInvalidName) {
+		t.Fatalf("bad key name: %v", err)
+	}
+	if got, _, _ := f.accounts.List(c, account.ListParams{Limit: 10}); len(got) != 0 {
+		t.Fatalf("failed bootstrap wrote %d account(s)", len(got))
+	}
+
+	res, err := boot.Execute(c, dto.BootstrapInput{Name: "root", Roles: []string{"admin"}, KeyName: "bootstrap", ExpiresAt: exp})
+	if err != nil || !res.Created || res.Account.Name != "root" || !slices.Equal(res.Account.Roles, []string{"admin"}) ||
+		res.Key.AccountID != res.Account.ID || res.Key.Name != "bootstrap" || !res.Key.ExpiresAt.Equal(exp) ||
+		!strings.HasPrefix(res.Secret, "xk_") || res.Key.Prefix != res.Secret[:8] {
+		t.Fatalf("bootstrap = %+v, %v", res, err)
+	}
+	// The key resolves to the account it was made for.
+	p, err := f.resolve.Execute(c, dto.ResolveAPIKeyInput{Secret: res.Secret})
+	if err != nil || p.AccountID != res.Account.ID || p.KeyID != res.Key.ID || !slices.Equal(p.Roles, []string{"admin"}) {
+		t.Fatalf("resolve bootstrap key = %+v, %v", p, err)
+	}
+
+	// Second run: an account exists → nothing written, Created false, no secret.
+	again, err := boot.Execute(c, dto.BootstrapInput{Name: "other", Roles: []string{"admin"}, KeyName: "k"})
+	if err != nil || again.Created || again.Secret != "" || again.Account.ID != "" {
+		t.Fatalf("second bootstrap = %+v, %v", again, err)
+	}
+	if got, _, _ := f.accounts.List(c, account.ListParams{Limit: 10}); len(got) != 1 {
+		t.Fatalf("second bootstrap changed the store: %d account(s)", len(got))
+	}
+	keys, err := f.listKeys.Execute(c, dto.ListAPIKeysInput{AccountID: res.Account.ID})
+	if err != nil || len(keys.Keys) != 1 {
+		t.Fatalf("keys after second bootstrap = %+v, %v", keys, err)
+	}
+
+	// Generator failures surface with their step.
+	g := newFixture()
+	g.ids.err = errors.New("entropy exhausted")
+	if _, err := usecase.NewBootstrap(g.accounts, g.keys, g.ids, g.secrets, g.clock).Execute(c, dto.BootstrapInput{Name: "root", KeyName: "k"}); err == nil || !strings.Contains(err.Error(), "generate account id") {
+		t.Fatalf("id failure: %v", err)
+	}
+	g.ids.err = nil
+	g.secrets.err = errors.New("entropy exhausted")
+	if _, err := usecase.NewBootstrap(g.accounts, g.keys, g.ids, g.secrets, g.clock).Execute(c, dto.BootstrapInput{Name: "root", KeyName: "k"}); err == nil || !strings.Contains(err.Error(), "generate api key secret") {
+		t.Fatalf("secret failure: %v", err)
+	}
+}
