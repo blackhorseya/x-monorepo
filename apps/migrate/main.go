@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	identitypg "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
@@ -31,10 +32,11 @@ import (
 )
 
 // migrations lists every BC, in dependency order: inventory publishes into
-// ordering's event tables, so ordering goes first.
+// ordering's event tables, so ordering goes first; identity stands alone.
 var migrations = []postgres.Migration{
 	orderingpg.Migration(),
 	inventorypg.Migration(),
+	identitypg.Migration(),
 }
 
 func main() {
