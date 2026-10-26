@@ -53,8 +53,12 @@ type PruneResult struct {
 // unread is the subscriber's / lag gauge's "row m is still to read for the
 // cursor row o" predicate, shared by prune (its negation is "prunable") and
 // the outbox gauges (its existence over all groups is "held back").
-const unread = `(m.transaction_id = o.last_processed_transaction_id AND m."offset" > o.offset_acked)
-	OR m.transaction_id > o.last_processed_transaction_id`
+//
+// It is a row-value comparison, not (tx = o.tx AND offset > acked) OR tx > o.tx:
+// the two are the same ordering, but only this form lets the planner range-scan
+// the (transaction_id, offset) primary key instead of reading the whole table.
+// A NULL offset_acked behaves as before (equal transaction ids → not unread).
+const unread = `(m.transaction_id, m."offset") > (o.last_processed_transaction_id, o.offset_acked)`
 
 // Blocker is a consumer group behind on a table: Unread rows it has not
 // read, the oldest of them OldestUnread old. Past PruneOptions.OlderThan the
