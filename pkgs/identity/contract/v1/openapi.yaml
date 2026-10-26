@@ -1,0 +1,830 @@
+openapi: 3.1.0
+info:
+  title: Identity API
+  version: v1
+  description: |
+    Connect RPC contract of the identity bounded context: the accounts and API keys the
+    server's auth interceptor resolves `X-API-Key` against. Every procedure but `WhoAmI` needs
+    the admin role when auth is on.
+    Every procedure is `POST /api/identity.v1.IdentityService/<Method>` (the bare `/identity.v1.IdentityService/<Method>` works too, for gRPC) with a JSON body;
+    errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
+    the stable domain code in the `X-Error-Code` response header.
+servers:
+  - url: /api
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: A key minted by `CreateApiKey`, or a static key from `auth.api_keys`.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (HS256 secret or PEM public key); claims sub / name / roles.
+  schemas:
+    connect-protocol-version:
+      type: number
+      examples:
+        - 1
+      title: Connect-Protocol-Version
+      description: Define the version of the Connect protocol
+      const: 1
+    connect-timeout-header:
+      type: number
+      examples:
+        - 1000
+      title: Connect-Timeout-Ms
+      description: Define the timeout, in ms
+    connect.error:
+      type: object
+      properties:
+        code:
+          type: string
+          examples:
+            - not_found
+          enum:
+            - canceled
+            - unknown
+            - invalid_argument
+            - deadline_exceeded
+            - not_found
+            - already_exists
+            - permission_denied
+            - resource_exhausted
+            - failed_precondition
+            - aborted
+            - out_of_range
+            - unimplemented
+            - internal
+            - unavailable
+            - data_loss
+            - unauthenticated
+          description: The status code, which should be an enum value of [google.rpc.Code][google.rpc.Code].
+        message:
+          type: string
+          description: A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the [google.rpc.Status.details][google.rpc.Status.details] field, or localized by the client.
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/connect.error_details.Any'
+          description: A list of messages that carry the error details. There is no limit on the number of messages.
+      title: Connect Error
+      additionalProperties: true
+      description: 'Error type returned by Connect: https://connectrpc.com/docs/go/errors/#http-representation'
+    connect.error_details.Any:
+      type: object
+      properties:
+        type:
+          type: string
+          description: 'A URL that acts as a globally unique identifier for the type of the serialized message. For example: `type.googleapis.com/google.rpc.ErrorInfo`.'
+        value:
+          type: string
+          format: byte
+          description: The Protobuf message, serialized as bytes and base64-encoded. The specific message type is identified by the `type` field.
+        debug:
+          type: object
+          title: Debug
+          additionalProperties: true
+          description: Deserialized error detail payload. The 'type' field indicates the schema. This field is for easier debugging and should not be relied upon for application logic.
+      additionalProperties: true
+      description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message, with an additional debug field for ConnectRPC error details.
+    google.protobuf.Timestamp:
+      type: string
+      examples:
+        - "2023-01-15T01:30:15.01Z"
+        - "2024-12-25T12:00:00Z"
+      format: date-time
+      description: A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC.
+    identity.v1.Account:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+        name:
+          type: string
+          title: name
+        roles:
+          type: array
+          items:
+            type: string
+          title: roles
+        status:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.AccountStatus'
+          title: status
+        createTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: create_time
+        updateTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: update_time
+      title: Account
+      additionalProperties: false
+      description: |-
+        Account is who an API key speaks for. The id is the principal's subject
+         (rpc access line `sub`, span enduser.id); roles are what RequireRole checks.
+    identity.v1.AccountStatus:
+      type: string
+      title: AccountStatus
+      enum:
+        - ACCOUNT_STATUS_UNSPECIFIED
+        - ACCOUNT_STATUS_ACTIVE
+        - ACCOUNT_STATUS_DISABLED
+    identity.v1.ApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+        accountId:
+          type: string
+          title: account_id
+        name:
+          type: string
+          title: name
+        prefix:
+          type: string
+          title: prefix
+        status:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.ApiKeyStatus'
+          title: status
+        createTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: create_time
+        expireTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: expire_time
+          description: 'Unset: the key does not expire.'
+        revokeTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: revoke_time
+          description: Set once the key is REVOKED.
+      title: ApiKey
+      additionalProperties: false
+      description: |-
+        ApiKey is one credential of an account. The secret is returned once, by
+         CreateApiKey; only its SHA-256 is stored. prefix is the first characters of
+         the secret, enough to tell keys apart in a listing and in a client's config.
+    identity.v1.ApiKeyStatus:
+      type: string
+      title: ApiKeyStatus
+      enum:
+        - API_KEY_STATUS_UNSPECIFIED
+        - API_KEY_STATUS_ACTIVE
+        - API_KEY_STATUS_REVOKED
+    identity.v1.AssignRolesRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+          minLength: 1
+        roles:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+            minLength: 1
+          title: roles
+          maxItems: 20
+      title: AssignRolesRequest
+      additionalProperties: false
+    identity.v1.AssignRolesResponse:
+      type: object
+      properties:
+        account:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.Account'
+          title: account
+      title: AssignRolesResponse
+      additionalProperties: false
+    identity.v1.CreateAccountRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          title: name
+          maxLength: 100
+          minLength: 1
+        roles:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+            minLength: 1
+          title: roles
+          maxItems: 20
+      title: CreateAccountRequest
+      additionalProperties: false
+    identity.v1.CreateAccountResponse:
+      type: object
+      properties:
+        account:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.Account'
+          title: account
+      title: CreateAccountResponse
+      additionalProperties: false
+    identity.v1.CreateApiKeyRequest:
+      type: object
+      properties:
+        accountId:
+          type: string
+          title: account_id
+          minLength: 1
+        name:
+          type: string
+          title: name
+          maxLength: 100
+          minLength: 1
+        expireTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: expire_time
+          description: 'Unset: never expires. Must be in the future (identity domain: api_key.invalid_expiry).'
+      title: CreateApiKeyRequest
+      additionalProperties: false
+    identity.v1.CreateApiKeyResponse:
+      type: object
+      properties:
+        apiKey:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.ApiKey'
+          title: api_key
+        secret:
+          type: string
+          title: secret
+          description: The plaintext secret, shown once. Send it as X-API-Key.
+      title: CreateApiKeyResponse
+      additionalProperties: false
+    identity.v1.DisableAccountRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+          minLength: 1
+      title: DisableAccountRequest
+      additionalProperties: false
+    identity.v1.DisableAccountResponse:
+      type: object
+      properties:
+        account:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.Account'
+          title: account
+      title: DisableAccountResponse
+      additionalProperties: false
+    identity.v1.EnableAccountRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+          minLength: 1
+      title: EnableAccountRequest
+      additionalProperties: false
+    identity.v1.EnableAccountResponse:
+      type: object
+      properties:
+        account:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.Account'
+          title: account
+      title: EnableAccountResponse
+      additionalProperties: false
+    identity.v1.GetAccountRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+          minLength: 1
+      title: GetAccountRequest
+      additionalProperties: false
+    identity.v1.GetAccountResponse:
+      type: object
+      properties:
+        account:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.Account'
+          title: account
+      title: GetAccountResponse
+      additionalProperties: false
+    identity.v1.ListAccountsRequest:
+      type: object
+      properties:
+        pageSize:
+          type: integer
+          title: page_size
+          minimum: 0
+          format: int32
+          description: 0 = server default (20); capped at 100.
+        pageToken:
+          type: string
+          title: page_token
+      title: ListAccountsRequest
+      additionalProperties: false
+    identity.v1.ListAccountsResponse:
+      type: object
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/identity.v1.Account'
+          title: accounts
+        nextPageToken:
+          type: string
+          title: next_page_token
+      title: ListAccountsResponse
+      additionalProperties: false
+    identity.v1.ListApiKeysRequest:
+      type: object
+      properties:
+        accountId:
+          type: string
+          title: account_id
+          minLength: 1
+      title: ListApiKeysRequest
+      additionalProperties: false
+    identity.v1.ListApiKeysResponse:
+      type: object
+      properties:
+        apiKeys:
+          type: array
+          items:
+            $ref: '#/components/schemas/identity.v1.ApiKey'
+          title: api_keys
+      title: ListApiKeysResponse
+      additionalProperties: false
+    identity.v1.RevokeApiKeyRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+          minLength: 1
+      title: RevokeApiKeyRequest
+      additionalProperties: false
+    identity.v1.RevokeApiKeyResponse:
+      type: object
+      properties:
+        apiKey:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.ApiKey'
+          title: api_key
+      title: RevokeApiKeyResponse
+      additionalProperties: false
+    identity.v1.WhoAmIRequest:
+      type: object
+      title: WhoAmIRequest
+      additionalProperties: false
+    identity.v1.WhoAmIResponse:
+      type: object
+      properties:
+        anonymous:
+          type: boolean
+          title: anonymous
+          description: |-
+            True when no credential was established (auth off, or optional with none sent):
+             the other fields are empty.
+        subject:
+          type: string
+          title: subject
+          description: |-
+            The stable identifier: the account id for a key managed here, the key's
+             name for a static auth.api_keys entry, the JWT sub.
+        name:
+          type: string
+          title: name
+        roles:
+          type: array
+          items:
+            type: string
+          title: roles
+        method:
+          type: string
+          title: method
+          description: '"api_key" or "jwt".'
+        credentialId:
+          type: string
+          title: credential_id
+          description: The ApiKey id when the credential is a key managed here; empty otherwise.
+      title: WhoAmIResponse
+      additionalProperties: false
+security:
+  - apiKey: []
+  - bearer: []
+paths:
+  /identity.v1.IdentityService/AssignRoles:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: AssignRoles
+      description: AssignRoles replaces the account's roles (an empty list clears them).
+      operationId: identity.v1.IdentityService.AssignRoles
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.AssignRolesRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.AssignRolesResponse'
+  /identity.v1.IdentityService/CreateAccount:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: CreateAccount
+      description: |-
+        CreateAccount registers who a key will speak for; roles are free-form
+         strings (auth.admin_role is the one the platform reads).
+      operationId: identity.v1.IdentityService.CreateAccount
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.CreateAccountRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.CreateAccountResponse'
+  /identity.v1.IdentityService/CreateApiKey:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: CreateApiKey
+      description: |-
+        CreateApiKey mints a key for an account and returns the secret ONCE; only
+         its hash is stored, so a lost secret means a new key.
+      operationId: identity.v1.IdentityService.CreateApiKey
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.CreateApiKeyRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.CreateApiKeyResponse'
+  /identity.v1.IdentityService/DisableAccount:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: DisableAccount
+      description: |-
+        DisableAccount refuses every key of the account from the next request
+         (bounded by the resolver cache TTL) without revoking them.
+      operationId: identity.v1.IdentityService.DisableAccount
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.DisableAccountRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.DisableAccountResponse'
+  /identity.v1.IdentityService/EnableAccount:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: EnableAccount
+      operationId: identity.v1.IdentityService.EnableAccount
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.EnableAccountRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.EnableAccountResponse'
+  /identity.v1.IdentityService/GetAccount:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: GetAccount
+      operationId: identity.v1.IdentityService.GetAccount
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.GetAccountRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.GetAccountResponse'
+  /identity.v1.IdentityService/ListAccounts:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: ListAccounts
+      description: ListAccounts pages through accounts by id ascending.
+      operationId: identity.v1.IdentityService.ListAccounts
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.ListAccountsRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.ListAccountsResponse'
+  /identity.v1.IdentityService/ListApiKeys:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: ListApiKeys
+      description: ListApiKeys lists every key of an account, revoked ones included, newest first.
+      operationId: identity.v1.IdentityService.ListApiKeys
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.ListApiKeysRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.ListApiKeysResponse'
+  /identity.v1.IdentityService/RevokeApiKey:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: RevokeApiKey
+      operationId: identity.v1.IdentityService.RevokeApiKey
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.RevokeApiKeyRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.RevokeApiKeyResponse'
+  /identity.v1.IdentityService/WhoAmI:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: WhoAmI
+      description: |-
+        WhoAmI returns the principal the caller's credential resolved to (no role
+         needed; anonymous when auth is off or optional and nothing was sent).
+      operationId: identity.v1.IdentityService.WhoAmI
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.WhoAmIRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.WhoAmIResponse'
+tags:
+  - name: identity.v1.IdentityService
+    description: |-
+      IdentityService manages the accounts and API keys the rpc server's auth
+       interceptor resolves X-API-Key against (next to the static auth.api_keys of
+       the config, which stay the break-glass path). Every procedure but WhoAmI
+       requires the admin role when auth is on (x-error-code: auth.permission_denied).
+       It only verifies: JWTs keep coming from the external issuer of auth.jwt.

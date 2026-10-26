@@ -1,0 +1,31 @@
+# Merged into the generated OpenAPI document (protoc-gen-connect-openapi `base=` option).
+# Hand-written metadata only; paths/schemas come from the .proto files.
+openapi: 3.1.0
+info:
+  title: Identity API
+  version: v1
+  description: |
+    Connect RPC contract of the identity bounded context: the accounts and API keys the
+    server's auth interceptor resolves `X-API-Key` against. Every procedure but `WhoAmI` needs
+    the admin role when auth is on.
+    Every procedure is `POST /api/identity.v1.IdentityService/<Method>` (the bare `/identity.v1.IdentityService/<Method>` works too, for gRPC) with a JSON body;
+    errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
+    the stable domain code in the `X-Error-Code` response header.
+servers:
+  - url: /api
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: A key minted by `CreateApiKey`, or a static key from `auth.api_keys`.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (HS256 secret or PEM public key); claims sub / name / roles.
+security:
+  - apiKey: []
+  - bearer: []
