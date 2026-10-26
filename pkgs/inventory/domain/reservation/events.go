@@ -64,6 +64,15 @@ func NewReleased(r *Reservation) Released {
 	return Released{base: newBase(r, r.updatedAt)}
 }
 
+// Committed is raised when a RESERVED reservation is turned into a sale.
+type Committed struct {
+	base
+}
+
+func NewCommitted(r *Reservation) Committed {
+	return Committed{base: newBase(r, r.updatedAt)}
+}
+
 // PullEvents returns the events raised since the last pull and clears them.
 // Use cases call it inside the transaction that saves the aggregate.
 func (x *Reservation) PullEvents() []Event {

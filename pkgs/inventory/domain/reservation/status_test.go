@@ -8,7 +8,7 @@ import (
 )
 
 func TestStatuses_AndStatusCount(t *testing.T) {
-	if got := reservation.Statuses(); len(got) != 4 || got[0] != reservation.StatusReserved || got[3] != reservation.StatusCancelled {
+	if got := reservation.Statuses(); len(got) != 5 || got[0] != reservation.StatusReserved || got[3] != reservation.StatusCommitted || got[4] != reservation.StatusCancelled {
 		t.Fatalf("Statuses() = %v", got)
 	}
 	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)

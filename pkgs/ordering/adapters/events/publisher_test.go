@@ -53,6 +53,28 @@ func TestPublisher_MapsDomainEventsToWire(t *testing.T) {
 		t.Fatalf("topics = %v", sink.topics)
 	}
 
+	// Completed, on a second order (the first was cancelled).
+	done, err := order.Reconstitute(order.ReconstituteParams{ID: "o-2", CustomerID: "c-2", Items: []order.LineItem{li}, Status: order.StatusConfirmed, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := done.Complete(now.Add(2 * time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.NewPublisher(sink).Publish(context.Background(), done.PullEvents()...); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.msgs) != 4 || sink.topics[3] != "ordering.v1.OrderCompleted" || sink.msgs[3].Metadata.Get("key") != "o-2" {
+		t.Fatalf("topics = %v, key = %q", sink.topics, sink.msgs[3].Metadata.Get("key"))
+	}
+	var completed orderingv1.OrderCompleted
+	if err := proto.Unmarshal(sink.msgs[3].Payload, &completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed.GetOrderId() != "o-2" || completed.GetCustomerId() != "c-2" || !completed.GetCompletedAt().AsTime().Equal(now.Add(2*time.Minute)) {
+		t.Fatalf("OrderCompleted = %v", &completed)
+	}
+
 	var created orderingv1.OrderCreated
 	if err := proto.Unmarshal(sink.msgs[0].Payload, &created); err != nil {
 		t.Fatal(err)

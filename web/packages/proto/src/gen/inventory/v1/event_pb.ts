@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file inventory/v1/event.proto.
  */
 export const file_inventory_v1_event: GenFile = /*@__PURE__*/
-  fileDesc("ChhpbnZlbnRvcnkvdjEvZXZlbnQucHJvdG8SDGludmVudG9yeS52MSKCAQoNU3RvY2tSZXNlcnZlZBIQCghvcmRlcl9pZBgBIAEoCRIuCgVsaW5lcxgCIAMoCzIfLmludmVudG9yeS52MS5TdG9ja1Jlc2VydmVkTGluZRIvCgtyZXNlcnZlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMgoRU3RvY2tSZXNlcnZlZExpbmUSCwoDc2t1GAEgASgJEhAKCHF1YW50aXR5GAIgASgFIlIKDVN0b2NrUmVsZWFzZWQSEAoIb3JkZXJfaWQYASABKAkSLwoLcmVsZWFzZWRfYXQYAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChhpbnZlbnRvcnkvdjEvZXZlbnQucHJvdG8SDGludmVudG9yeS52MSKCAQoNU3RvY2tSZXNlcnZlZBIQCghvcmRlcl9pZBgBIAEoCRIuCgVsaW5lcxgCIAMoCzIfLmludmVudG9yeS52MS5TdG9ja1Jlc2VydmVkTGluZRIvCgtyZXNlcnZlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMgoRU3RvY2tSZXNlcnZlZExpbmUSCwoDc2t1GAEgASgJEhAKCHF1YW50aXR5GAIgASgFIlIKDVN0b2NrUmVsZWFzZWQSEAoIb3JkZXJfaWQYASABKAkSLwoLcmVsZWFzZWRfYXQYAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIlQKDlN0b2NrQ29tbWl0dGVkEhAKCG9yZGVyX2lkGAEgASgJEjAKDGNvbW1pdHRlZF9hdBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBiBnByb3RvMw", [file_google_protobuf_timestamp]);
 
 /**
  * StockReserved is raised when every line of an order was reserved.
@@ -88,4 +88,29 @@ export type StockReleased = Message<"inventory.v1.StockReleased"> & {
  */
 export const StockReleasedSchema: GenMessage<StockReleased> = /*@__PURE__*/
   messageDesc(file_inventory_v1_event, 2);
+
+/**
+ * StockCommitted is raised when a reservation is committed (order completed):
+ * the reserved quantity is deducted from on_hand.
+ *
+ * @generated from message inventory.v1.StockCommitted
+ */
+export type StockCommitted = Message<"inventory.v1.StockCommitted"> & {
+  /**
+   * @generated from field: string order_id = 1;
+   */
+  orderId: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp committed_at = 2;
+   */
+  committedAt?: Timestamp;
+};
+
+/**
+ * Describes the message inventory.v1.StockCommitted.
+ * Use `create(StockCommittedSchema)` to create a new message.
+ */
+export const StockCommittedSchema: GenMessage<StockCommitted> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_event, 3);
 

@@ -55,7 +55,7 @@ test.describe("with a worker", () => {
     const sku = `E2E-R-${Date.now()}`;
     const customer = `e2e-res-${Date.now()}`;
 
-    await page.goto("/stock");
+    await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
     await page.getByLabel("SKU", { exact: true }).fill(sku);
     await page.getByLabel("On hand").fill("3");
     await page.getByRole("button", { name: "Set", exact: true }).click();

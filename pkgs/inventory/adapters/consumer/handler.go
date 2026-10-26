@@ -1,5 +1,6 @@
 // Package consumer adapts ordering's integration events to inventory use
-// cases: OrderCreated → ReserveStock, OrderCancelled → ReleaseStock. It
+// cases: OrderCreated → ReserveStock, OrderCancelled → ReleaseStock,
+// OrderCompleted → CommitStock. It
 // decodes ordering's contract (the only ordering package a BC may import)
 // and knows nothing about subscription, ack or retry — that is
 // platform/eventbus (Watermill router) and apps/worker.
@@ -24,6 +25,7 @@ import (
 var (
 	TopicOrderCreated   = string((&orderingv1.OrderCreated{}).ProtoReflect().Descriptor().FullName())
 	TopicOrderCancelled = string((&orderingv1.OrderCancelled{}).ProtoReflect().Descriptor().FullName())
+	TopicOrderCompleted = string((&orderingv1.OrderCompleted{}).ProtoReflect().Descriptor().FullName())
 )
 
 // ErrDrop tells the router the message is poison or no longer applicable and
@@ -33,6 +35,7 @@ var ErrDrop = eventbus.ErrDrop
 type (
 	ReserveStockUC = usecasex.UseCase[dto.ReserveStockInput, *dto.ReservationOutput]
 	ReleaseStockUC = usecasex.UseCase[dto.ReleaseStockInput, *dto.ReservationOutput]
+	CommitStockUC  = usecasex.UseCase[dto.CommitStockInput, *dto.ReservationOutput]
 )
 
 // OrderCreatedHandler reserves stock for every new order.
@@ -96,6 +99,32 @@ func (h *OrderCancelledHandler) Handle(c context.Context, payload []byte) error 
 
 	if _, err := h.release.Execute(ctx, dto.ReleaseStockInput{OrderID: evt.GetOrderId()}); err != nil {
 		return final(ctx, TopicOrderCancelled, evt.GetOrderId(), err)
+	}
+
+	return nil
+}
+
+// OrderCompletedHandler commits what a completed order had reserved: sold.
+type OrderCompletedHandler struct {
+	commit CommitStockUC
+}
+
+func NewOrderCompletedHandler(commit CommitStockUC) *OrderCompletedHandler {
+	return &OrderCompletedHandler{commit: commit}
+}
+
+// Handle follows the same error contract as OrderCreatedHandler.Handle.
+func (h *OrderCompletedHandler) Handle(c context.Context, payload []byte) error {
+	ctx := contextx.FromContext(c)
+
+	var evt orderingv1.OrderCompleted
+	if err := proto.Unmarshal(payload, &evt); err != nil {
+		ctx.Warn("undecodable event", "topic", TopicOrderCompleted, "error", err)
+		return fmt.Errorf("%w: %w", ErrDrop, err)
+	}
+
+	if _, err := h.commit.Execute(ctx, dto.CommitStockInput{OrderID: evt.GetOrderId()}); err != nil {
+		return final(ctx, TopicOrderCompleted, evt.GetOrderId(), err)
 	}
 
 	return nil

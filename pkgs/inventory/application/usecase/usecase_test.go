@@ -39,6 +39,7 @@ type fixture struct {
 	listRes      *usecase.ListReservations
 	reserve      *usecase.ReserveStock
 	release      *usecase.ReleaseStock
+	commit       *usecase.CommitStock
 }
 
 func newFixture() *fixture {
@@ -52,7 +53,63 @@ func newFixture() *fixture {
 	f.listRes = usecase.NewListReservations(f.reservations)
 	f.reserve = usecase.NewReserveStock(f.reservations, f.stocks, f.rec, clock)
 	f.release = usecase.NewReleaseStock(f.reservations, f.stocks, f.rec, clock)
+	f.commit = usecase.NewCommitStock(f.reservations, f.stocks, f.rec, clock)
 	return f
+}
+
+// Order completed: the reservation is committed, the stock sold.
+func TestCommitStock(t *testing.T) {
+	c := context.Background()
+	f := newFixture()
+	for sku, n := range map[string]int32{"A": 5, "B": 1} {
+		if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: sku, OnHand: n}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := f.commit.Execute(c, dto.CommitStockInput{}); !errors.Is(err, reservation.ErrInvalidOrderID) {
+		t.Fatalf("empty id: %v", err)
+	}
+	// No reservation: an anomaly (only CONFIRMED orders complete), final — no tombstone.
+	if _, err := f.commit.Execute(c, dto.CommitStockInput{OrderID: "o-unknown"}); !errors.Is(err, reservation.ErrNotFound) {
+		t.Fatalf("unknown order: %v", err)
+	}
+	if _, err := f.getRes.Execute(c, dto.GetReservationInput{OrderID: "o-unknown"}); !errors.Is(err, reservation.ErrNotFound) {
+		t.Fatalf("commit must not write a tombstone: %v", err)
+	}
+
+	if _, err := f.reserve.Execute(c, dto.ReserveStockInput{OrderID: "o-1", Lines: []dto.Line{{SKU: "A", Quantity: 2}, {SKU: "B", Quantity: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.commit.Execute(c, dto.CommitStockInput{OrderID: "o-1"})
+	if err != nil || out.Status != "COMMITTED" {
+		t.Fatalf("commit = %+v, %v", out, err)
+	}
+	a, _ := f.getStock.Execute(c, dto.GetStockInput{SKU: "A"})
+	b, _ := f.getStock.Execute(c, dto.GetStockInput{SKU: "B"})
+	if a.OnHand != 3 || a.Reserved != 0 || a.Available != 3 || b.OnHand != 0 || b.Reserved != 0 {
+		t.Fatalf("after commit A=%+v B=%+v", a, b)
+	}
+	if len(f.rec.events) != 2 {
+		t.Fatalf("events = %d, want Reserved, Committed", len(f.rec.events))
+	}
+	if _, ok := f.rec.events[1].(reservation.Committed); !ok {
+		t.Fatalf("event = %T", f.rec.events[1])
+	}
+	// Redelivered OrderCompleted, or a late OrderCancelled: final, nothing moves.
+	if _, err := f.commit.Execute(c, dto.CommitStockInput{OrderID: "o-1"}); !errors.Is(err, reservation.ErrNotReserved) {
+		t.Fatalf("double commit: %v", err)
+	}
+	if _, err := f.release.Execute(c, dto.ReleaseStockInput{OrderID: "o-1"}); !errors.Is(err, reservation.ErrNotReserved) {
+		t.Fatalf("release after commit: %v", err)
+	}
+	// A rejected reservation holds nothing to commit.
+	if _, err := f.reserve.Execute(c, dto.ReserveStockInput{OrderID: "o-2", Lines: []dto.Line{{SKU: "A", Quantity: 9}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.commit.Execute(c, dto.CommitStockInput{OrderID: "o-2"}); !errors.Is(err, reservation.ErrNotReserved) {
+		t.Fatalf("commit rejected: %v", err)
+	}
 }
 
 func TestSetGetStock(t *testing.T) {

@@ -36,6 +36,14 @@ message OrderConfirmed {
   google.protobuf.Timestamp confirmed_at = 3;
 }
 
+// OrderCompleted is raised when an order moves to COMPLETED (CompleteOrder on a
+// CONFIRMED order): inventory consumes it to commit the reservation.
+message OrderCompleted {
+  string order_id = 1;
+  string customer_id = 2;
+  google.protobuf.Timestamp completed_at = 3;
+}
+
 // OrderCancelled is raised when an order moves to CANCELLED, whatever asked
 // for it (client call or OrderCancellationRequested).
 message OrderCancelled {

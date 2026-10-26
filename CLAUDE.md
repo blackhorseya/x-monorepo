@@ -43,7 +43,7 @@ TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
 
 前端：`web/` 是 Turborepo（pnpm）。`packages/proto` 是 connect-es client（`task gen-ts` 需要網路，產出到那裡）；
 `apps/console` 是 Vite + TanStack Router / Query + Tailwind v4 + shadcn/ui，`task web-dev`（proxy 到 :8080）/ `task web-typecheck` / `task web-build` /
-`task web-e2e`（Playwright：`web/apps/console/e2e`，起 `bin/rpc` + vite preview 真打；`E2E_DATABASE_URL` 有設就先 `migrate up` 走 Postgres 並由 `e2e/worker.setup.ts` 多起一個 `bin/worker`（CI；`reservation.spec.ts` 驗 outbox → worker → RESERVED / RELEASED，`reservations.spec.ts` 驗 /reservations 的 status filter 與 `?order=` pin），沒設是 in-memory，spec 用 `e2e/mode.ts` 的 `withDB` 分支；project `auth`（`e2e/auth/`）另起一個 `auth.mode=required` 的 rpc + preview 驗 credential 流程（API key 與 `jwt.ts` 現場簽的 HS256 JWT；`helpers.ts` / `jwt.ts` 不是 spec，project 的 testMatch 只收 `*.spec.ts`）；locator 用 `getByLabel` / `getByRole`，第一次先 `pnpm exec playwright install chromium`）；`task web-e2e-image` 把 chromium project 改打真的 console image（`e2e/image.sh`，`E2E_CONSOLE_URL` 取代 vite preview；`image.spec.ts` 只在這模式跑，驗 nginx 的 fallback / cache header / proxy）。
+`task web-e2e`（Playwright：`web/apps/console/e2e`，起 `bin/rpc` + vite preview 真打；`E2E_DATABASE_URL` 有設就先 `migrate up` 走 Postgres 並由 `e2e/worker.setup.ts` 多起一個 `bin/worker`（CI；`reservation.spec.ts` 驗 outbox → worker → RESERVED / RELEASED 與 Complete → COMMITTED，`reservations.spec.ts` 驗 /reservations 的 status filter 與 `?order=` pin），沒設是 in-memory，spec 用 `e2e/mode.ts` 的 `withDB` 分支；project `auth`（`e2e/auth/`）另起一個 `auth.mode=required` 的 rpc + preview 驗 credential 流程（API key 與 `jwt.ts` 現場簽的 HS256 JWT；`helpers.ts` / `jwt.ts` 不是 spec，project 的 testMatch 只收 `*.spec.ts`）；locator 用 `getByLabel` / `getByRole`，第一次先 `pnpm exec playwright install chromium`）；`task web-e2e-image` 把 chromium project 改打真的 console image（`e2e/image.sh`，`E2E_CONSOLE_URL` 取代 vite preview；`image.spec.ts` 只在這模式跑，驗 nginx 的 fallback / cache header / proxy）。
 shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` import 要確認是 `@/lib/utils`。
 
 **新 clone / 新 worktree 第一件事**：`task tools`。`./bin` 是 gitignored，而 `task gen`（也被 `gate-local` 間接呼叫）會**先刪掉**
@@ -69,7 +69,7 @@ CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，
 pkgs/kernel      shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 pkgs/platform    技術共用：contextx、config、server（gin + Connect）、usecasex、otel、postgres、archtest；
                  admin（admin.v1.AdminService：poison 操作 + Prune RPC，與 worker 的 CLI 同一組 eventbus 函式；contract 在 protos/admin，不屬於任何 BC）
-pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event，ordering 再消費它的 `StockReserved` 把 order 變 CONFIRMED）
+pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event，ordering 再消費它的 `StockReserved` 把 order 變 CONFIRMED；`CompleteOrder` RPC 發 `OrderCompleted`，inventory 消費它把 reservation COMMITTED、扣 on_hand）
   provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() / decorateTx() 包起來
   contract/v1/     buf 生成的 wire format（pb + Connect + openapi.yaml），只有 adapters / apps 可 import
   domain/<agg>/    aggregate、VO、Repository interface、domain errors（手寫，不是 proto）

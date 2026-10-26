@@ -188,6 +188,60 @@ func (x *StockReleased) GetReleasedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// StockCommitted is raised when a reservation is committed (order completed):
+// the reserved quantity is deducted from on_hand.
+type StockCommitted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	CommittedAt   *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=committed_at,json=committedAt,proto3" json:"committed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StockCommitted) Reset() {
+	*x = StockCommitted{}
+	mi := &file_inventory_v1_event_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StockCommitted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StockCommitted) ProtoMessage() {}
+
+func (x *StockCommitted) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_event_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StockCommitted.ProtoReflect.Descriptor instead.
+func (*StockCommitted) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_event_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *StockCommitted) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *StockCommitted) GetCommittedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CommittedAt
+	}
+	return nil
+}
+
 var File_inventory_v1_event_proto protoreflect.FileDescriptor
 
 const file_inventory_v1_event_proto_rawDesc = "" +
@@ -204,7 +258,10 @@ const file_inventory_v1_event_proto_rawDesc = "" +
 	"\rStockReleased\x12\x19\n" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12;\n" +
 	"\vreleased_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"releasedAtB\xba\x01\n" +
+	"releasedAt\"j\n" +
+	"\x0eStockCommitted\x12\x19\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\x12=\n" +
+	"\fcommitted_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\vcommittedAtB\xba\x01\n" +
 	"\x10com.inventory.v1B\n" +
 	"EventProtoP\x01ZIgithub.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1;inventoryv1\xa2\x02\x03IXX\xaa\x02\fInventory.V1\xca\x02\fInventory\\V1\xe2\x02\x18Inventory\\V1\\GPBMetadata\xea\x02\rInventory::V1b\x06proto3"
 
@@ -220,22 +277,24 @@ func file_inventory_v1_event_proto_rawDescGZIP() []byte {
 	return file_inventory_v1_event_proto_rawDescData
 }
 
-var file_inventory_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_inventory_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_inventory_v1_event_proto_goTypes = []any{
 	(*StockReserved)(nil),         // 0: inventory.v1.StockReserved
 	(*StockReservedLine)(nil),     // 1: inventory.v1.StockReservedLine
 	(*StockReleased)(nil),         // 2: inventory.v1.StockReleased
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*StockCommitted)(nil),        // 3: inventory.v1.StockCommitted
+	(*timestamppb.Timestamp)(nil), // 4: google.protobuf.Timestamp
 }
 var file_inventory_v1_event_proto_depIdxs = []int32{
 	1, // 0: inventory.v1.StockReserved.lines:type_name -> inventory.v1.StockReservedLine
-	3, // 1: inventory.v1.StockReserved.reserved_at:type_name -> google.protobuf.Timestamp
-	3, // 2: inventory.v1.StockReleased.released_at:type_name -> google.protobuf.Timestamp
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 1: inventory.v1.StockReserved.reserved_at:type_name -> google.protobuf.Timestamp
+	4, // 2: inventory.v1.StockReleased.released_at:type_name -> google.protobuf.Timestamp
+	4, // 3: inventory.v1.StockCommitted.committed_at:type_name -> google.protobuf.Timestamp
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_inventory_v1_event_proto_init() }
@@ -249,7 +308,7 @@ func file_inventory_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_inventory_v1_event_proto_rawDesc), len(file_inventory_v1_event_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

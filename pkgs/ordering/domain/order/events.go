@@ -90,6 +90,16 @@ func NewConfirmed(o *Order) Confirmed {
 	return Confirmed{base: newBase(o, o.updatedAt)}
 }
 
+// Completed is raised by Complete.
+type Completed struct {
+	base
+}
+
+// NewCompleted builds the event for o as it stands; the aggregate calls it from Complete.
+func NewCompleted(o *Order) Completed {
+	return Completed{base: newBase(o, o.updatedAt)}
+}
+
 // Cancelled is raised by Cancel.
 type Cancelled struct {
 	base

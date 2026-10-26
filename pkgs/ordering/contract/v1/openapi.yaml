@@ -130,6 +130,24 @@ components:
           title: order
       title: CancelOrderResponse
       additionalProperties: false
+    ordering.v1.CompleteOrderRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+          minLength: 1
+      title: CompleteOrderRequest
+      additionalProperties: false
+    ordering.v1.CompleteOrderResponse:
+      type: object
+      properties:
+        order:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.Order'
+          title: order
+      title: CompleteOrderResponse
+      additionalProperties: false
     ordering.v1.CreateOrderRequest:
       type: object
       properties:
@@ -298,6 +316,24 @@ components:
       description: |-
         OrderCancelled is raised when an order moves to CANCELLED, whatever asked
          for it (client call or OrderCancellationRequested).
+    ordering.v1.OrderCompleted:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        customerId:
+          type: string
+          title: customer_id
+        completedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: completed_at
+      title: OrderCompleted
+      additionalProperties: false
+      description: |-
+        OrderCompleted is raised when an order moves to COMPLETED (CompleteOrder on a
+         CONFIRMED order): inventory consumes it to commit the reservation.
     ordering.v1.OrderConfirmed:
       type: object
       properties:
@@ -363,6 +399,7 @@ components:
         - ORDER_STATUS_PENDING
         - ORDER_STATUS_CANCELLED
         - ORDER_STATUS_CONFIRMED
+        - ORDER_STATUS_COMPLETED
 security:
   - apiKey: []
   - bearer: []
@@ -405,6 +442,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ordering.v1.CancelOrderResponse'
+  /ordering.v1.OrderService/CompleteOrder:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: CompleteOrder
+      description: |-
+        CompleteOrder fulfils a CONFIRMED order (CONFIRMED → COMPLETED) and publishes
+         ordering.v1.OrderCompleted, on which inventory commits the reservation.
+         Any other status is FAILED_PRECONDITION (x-error-code: order.cannot_complete).
+      operationId: ordering.v1.OrderService.CompleteOrder
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.CompleteOrderRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.CompleteOrderResponse'
   /ordering.v1.OrderService/CreateOrder:
     post:
       tags:

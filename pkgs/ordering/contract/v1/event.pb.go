@@ -215,6 +215,68 @@ func (x *OrderConfirmed) GetConfirmedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// OrderCompleted is raised when an order moves to COMPLETED (CompleteOrder on a
+// CONFIRMED order): inventory consumes it to commit the reservation.
+type OrderCompleted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	CustomerId    string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	CompletedAt   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OrderCompleted) Reset() {
+	*x = OrderCompleted{}
+	mi := &file_ordering_v1_event_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrderCompleted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrderCompleted) ProtoMessage() {}
+
+func (x *OrderCompleted) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_event_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrderCompleted.ProtoReflect.Descriptor instead.
+func (*OrderCompleted) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *OrderCompleted) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *OrderCompleted) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *OrderCompleted) GetCompletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return nil
+}
+
 // OrderCancelled is raised when an order moves to CANCELLED, whatever asked
 // for it (client call or OrderCancellationRequested).
 type OrderCancelled struct {
@@ -228,7 +290,7 @@ type OrderCancelled struct {
 
 func (x *OrderCancelled) Reset() {
 	*x = OrderCancelled{}
-	mi := &file_ordering_v1_event_proto_msgTypes[3]
+	mi := &file_ordering_v1_event_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -240,7 +302,7 @@ func (x *OrderCancelled) String() string {
 func (*OrderCancelled) ProtoMessage() {}
 
 func (x *OrderCancelled) ProtoReflect() protoreflect.Message {
-	mi := &file_ordering_v1_event_proto_msgTypes[3]
+	mi := &file_ordering_v1_event_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -253,7 +315,7 @@ func (x *OrderCancelled) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderCancelled.ProtoReflect.Descriptor instead.
 func (*OrderCancelled) Descriptor() ([]byte, []int) {
-	return file_ordering_v1_event_proto_rawDescGZIP(), []int{3}
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *OrderCancelled) GetOrderId() string {
@@ -290,7 +352,7 @@ type OrderCancellationRequested struct {
 
 func (x *OrderCancellationRequested) Reset() {
 	*x = OrderCancellationRequested{}
-	mi := &file_ordering_v1_event_proto_msgTypes[4]
+	mi := &file_ordering_v1_event_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -302,7 +364,7 @@ func (x *OrderCancellationRequested) String() string {
 func (*OrderCancellationRequested) ProtoMessage() {}
 
 func (x *OrderCancellationRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_ordering_v1_event_proto_msgTypes[4]
+	mi := &file_ordering_v1_event_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -315,7 +377,7 @@ func (x *OrderCancellationRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderCancellationRequested.ProtoReflect.Descriptor instead.
 func (*OrderCancellationRequested) Descriptor() ([]byte, []int) {
-	return file_ordering_v1_event_proto_rawDescGZIP(), []int{4}
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *OrderCancellationRequested) GetOrderId() string {
@@ -360,6 +422,11 @@ const file_ordering_v1_event_proto_rawDesc = "" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
 	"customerId\x12=\n" +
 	"\fconfirmed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vconfirmedAt\"\x8b\x01\n" +
+	"\x0eOrderCompleted\x12\x19\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x1f\n" +
+	"\vcustomer_id\x18\x02 \x01(\tR\n" +
+	"customerId\x12=\n" +
+	"\fcompleted_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\"\x8b\x01\n" +
 	"\x0eOrderCancelled\x12\x19\n" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
@@ -384,28 +451,30 @@ func file_ordering_v1_event_proto_rawDescGZIP() []byte {
 	return file_ordering_v1_event_proto_rawDescData
 }
 
-var file_ordering_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_ordering_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_ordering_v1_event_proto_goTypes = []any{
 	(*OrderCreated)(nil),               // 0: ordering.v1.OrderCreated
 	(*OrderCreatedItem)(nil),           // 1: ordering.v1.OrderCreatedItem
 	(*OrderConfirmed)(nil),             // 2: ordering.v1.OrderConfirmed
-	(*OrderCancelled)(nil),             // 3: ordering.v1.OrderCancelled
-	(*OrderCancellationRequested)(nil), // 4: ordering.v1.OrderCancellationRequested
-	(*v1.Money)(nil),                   // 5: common.v1.Money
-	(*timestamppb.Timestamp)(nil),      // 6: google.protobuf.Timestamp
+	(*OrderCompleted)(nil),             // 3: ordering.v1.OrderCompleted
+	(*OrderCancelled)(nil),             // 4: ordering.v1.OrderCancelled
+	(*OrderCancellationRequested)(nil), // 5: ordering.v1.OrderCancellationRequested
+	(*v1.Money)(nil),                   // 6: common.v1.Money
+	(*timestamppb.Timestamp)(nil),      // 7: google.protobuf.Timestamp
 }
 var file_ordering_v1_event_proto_depIdxs = []int32{
 	1, // 0: ordering.v1.OrderCreated.items:type_name -> ordering.v1.OrderCreatedItem
-	5, // 1: ordering.v1.OrderCreated.total:type_name -> common.v1.Money
-	6, // 2: ordering.v1.OrderCreated.created_at:type_name -> google.protobuf.Timestamp
-	6, // 3: ordering.v1.OrderConfirmed.confirmed_at:type_name -> google.protobuf.Timestamp
-	6, // 4: ordering.v1.OrderCancelled.cancelled_at:type_name -> google.protobuf.Timestamp
-	6, // 5: ordering.v1.OrderCancellationRequested.requested_at:type_name -> google.protobuf.Timestamp
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	6, // 1: ordering.v1.OrderCreated.total:type_name -> common.v1.Money
+	7, // 2: ordering.v1.OrderCreated.created_at:type_name -> google.protobuf.Timestamp
+	7, // 3: ordering.v1.OrderConfirmed.confirmed_at:type_name -> google.protobuf.Timestamp
+	7, // 4: ordering.v1.OrderCompleted.completed_at:type_name -> google.protobuf.Timestamp
+	7, // 5: ordering.v1.OrderCancelled.cancelled_at:type_name -> google.protobuf.Timestamp
+	7, // 6: ordering.v1.OrderCancellationRequested.requested_at:type_name -> google.protobuf.Timestamp
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_ordering_v1_event_proto_init() }
@@ -419,7 +488,7 @@ func file_ordering_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ordering_v1_event_proto_rawDesc), len(file_ordering_v1_event_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

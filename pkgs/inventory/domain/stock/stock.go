@@ -107,6 +107,24 @@ func ReserveAll(stocks map[string]*Stock, skus []string, need map[string]int32, 
 	return nil
 }
 
+// Commit turns a reservation into a sale: the quantity leaves both reserved
+// and on-hand. Only what is reserved can be committed, so the invariant
+// 0 <= reserved <= on_hand holds without a separate check.
+func (x *Stock) Commit(quantity int32, now time.Time) error {
+	if quantity <= 0 {
+		return ErrInvalidQuantity
+	}
+	if quantity > x.reserved {
+		return ErrCommitExceedsReserved
+	}
+
+	x.onHand -= quantity
+	x.reserved -= quantity
+	x.updatedAt = now
+
+	return nil
+}
+
 // Release gives a reservation back.
 func (x *Stock) Release(quantity int32, now time.Time) error {
 	if quantity <= 0 {

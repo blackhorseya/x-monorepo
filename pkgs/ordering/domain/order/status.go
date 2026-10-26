@@ -13,6 +13,9 @@ const (
 	// Appended after Cancelled so stored values keep their meaning; status is
 	// persisted by name anyway.
 	StatusConfirmed
+	// StatusCompleted: fulfilled (CompleteOrder); inventory commits the reservation
+	// on the OrderCompleted it receives. Terminal.
+	StatusCompleted
 )
 
 func (x Status) String() string {
@@ -23,6 +26,8 @@ func (x Status) String() string {
 		return "CANCELLED"
 	case StatusConfirmed:
 		return "CONFIRMED"
+	case StatusCompleted:
+		return "COMPLETED"
 	default:
 		return "UNKNOWN"
 	}
@@ -34,7 +39,10 @@ func (x Status) CanTransitionTo(next Status) bool {
 	case StatusPending:
 		return next == StatusConfirmed || next == StatusCancelled
 	case StatusConfirmed:
-		return next == StatusCancelled // the customer may still cancel; inventory releases on OrderCancelled
+		// Fulfil it, or the customer may still cancel (inventory releases on
+		// OrderCancelled). Save compares version, so a cancel racing a complete
+		// loses: an order ends in exactly one of the two.
+		return next == StatusCompleted || next == StatusCancelled
 	default:
 		return false
 	}
@@ -50,6 +58,8 @@ func ParseStatus(s string) (Status, error) {
 		return StatusCancelled, nil
 	case StatusConfirmed.String():
 		return StatusConfirmed, nil
+	case StatusCompleted.String():
+		return StatusCompleted, nil
 	default:
 		return StatusUnknown, ErrInvalidStatus
 	}
@@ -57,7 +67,9 @@ func ParseStatus(s string) (Status, error) {
 
 // Statuses lists every status this version knows, in lifecycle order. Readers
 // that report per-status figures use it to show a zero instead of nothing.
-func Statuses() []Status { return []Status{StatusPending, StatusConfirmed, StatusCancelled} }
+func Statuses() []Status {
+	return []Status{StatusPending, StatusConfirmed, StatusCompleted, StatusCancelled}
+}
 
 // StatusCount is how many orders sit in one status and when the oldest of them
 // last changed (zero time when there are none): the saga's funnel, as the

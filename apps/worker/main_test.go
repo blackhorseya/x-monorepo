@@ -30,6 +30,7 @@ import (
 	orderingevents "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	orderingdto "github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -55,6 +56,8 @@ func TestRun_RequiresPostgres(t *testing.T) {
 //	order A (stocked)   OrderCreated → inventory RESERVED → StockReserved → ordering CONFIRMED
 //	                    → OrderCancellationRequested (published by the test) → ordering CANCELLED → OrderCancelled
 //	                    → inventory RELEASED
+//	order F (stocked)   OrderCreated → RESERVED → CONFIRMED (as A) → CompleteOrder (rpc path) → COMPLETED
+//	                    → OrderCompleted → inventory COMMITTED (on_hand drops)
 //	order B (unstocked) OrderCreated → inventory REJECTED → OrderCancellationRequested
 //	                    (published by inventory) → ordering CANCELLED → OrderCancelled
 //	order C (cancel first) OrderCancelled (published by the test, before any OrderCreated)
@@ -110,9 +113,10 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	}
 	for _, tbl := range []string{
 		"ordering.orders", "ordering.events_v1_ordercreated", "ordering.events_v1_ordercancelled",
-		"ordering.events_v1_ordercancellationrequested", "ordering.events_poison",
+		"ordering.events_v1_ordercancellationrequested", "ordering.events_v1_orderconfirmed",
+		"ordering.events_v1_ordercompleted", "ordering.events_poison",
 		"inventory.stocks", "inventory.reservations", "inventory.events_v1_stockreserved",
-		"inventory.events_v1_stockreleased", "inventory.events_poison",
+		"inventory.events_v1_stockreleased", "inventory.events_v1_stockcommitted", "inventory.events_poison",
 		"ordering.inbox", "inventory.inbox",
 	} {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl + " CASCADE").Error; err != nil {
@@ -148,6 +152,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	oclock := orderingsys.NewClock()
 	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, rec)
 	getOrder := ordering.ProvideGetOrder(orders, rec)
+	completeOrder := ordering.ProvideCompleteOrder(orders, otx, oinbox, oev, oclock, rec)
 	orderingSubs := ordering.ProvideSubscriptions(
 		orderingconsumer.NewOrderCancellationHandler(ordering.ProvideCancelOrder(orders, otx, oinbox, oev, oclock, rec)),
 		orderingconsumer.NewStockReservedHandler(ordering.ProvideConfirmOrder(orders, otx, oinbox, oev, oclock, rec)))
@@ -166,6 +171,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	inventorySubs := inventory.ProvideSubscriptions(
 		inventoryconsumer.NewOrderCreatedHandler(inventory.ProvideReserveStock(reservations, stocks, itx, iinbox, iev, iclock, rec)),
 		inventoryconsumer.NewOrderCancelledHandler(inventory.ProvideReleaseStock(reservations, stocks, itx, iinbox, iev, iclock, rec)),
+		inventoryconsumer.NewOrderCompletedHandler(inventory.ProvideCommitStock(reservations, stocks, itx, iinbox, iev, iclock, rec)),
 	)
 
 	group := fmt.Sprintf("test-%d", time.Now().UnixNano())
@@ -263,6 +269,29 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		t.Fatalf("stock after release = %+v", s)
 	}
 
+	// ── order F: stocked → CONFIRMED → completed by the client → inventory COMMITTED (sold) ──
+	f, err := createOrder.Execute(c, orderingdto.CreateOrderInput{
+		CustomerID: "c-1",
+		Items:      []orderingdto.LineItem{{SKU: "S", Quantity: 2, UnitPrice: orderingdto.Money{AmountMinor: 100, Currency: "USD"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Completing before inventory answered is refused — the order is still PENDING, or
+	// just CONFIRMED; either way the final state below is what matters.
+	waitFor("order F CONFIRMED", orderIs(f.ID, "CONFIRMED"))
+	if done, err := completeOrder.Execute(c, orderingdto.CompleteOrderInput{OrderID: f.ID}); err != nil || done.Status != "COMPLETED" {
+		t.Fatalf("complete F = %+v, %v", done, err)
+	}
+	waitFor("reservation F COMMITTED", reservationIs(f.ID, "COMMITTED"))
+	if s, _ := getStock.Execute(c, inventorydto.GetStockInput{SKU: "S"}); s.OnHand != 3 || s.Reserved != 0 || s.Available != 3 {
+		t.Fatalf("stock after commit = %+v, want on_hand 3 (sold 2)", s)
+	}
+	// Terminal on both sides: no cancel after completion.
+	if _, err := completeOrder.Execute(c, orderingdto.CompleteOrderInput{OrderID: f.ID}); !errors.Is(err, order.ErrCannotComplete) {
+		t.Fatalf("second complete err = %v, want ErrCannotComplete", err)
+	}
+
 	// ── order B: unstocked SKU → REJECTED → inventory asks ordering to cancel ──
 	b, err := createOrder.Execute(c, orderingdto.CreateOrderInput{
 		CustomerID: "c-1",
@@ -341,12 +370,14 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	// traffic from a locally running rpc does not interfere); nothing was
 	// poisoned, and each BC's consumer group advanced on its own cursor.
 	counts := map[string]int64{
-		"ordering.events_v1_ordercreated":               3, // a, b, and c (published by the test)
+		"ordering.events_v1_ordercreated":               4, // a, f, b, and c (published by the test)
 		"ordering.events_v1_ordercancellationrequested": 2, // one by the test, one by inventory
 		"ordering.events_v1_ordercancelled":             3, // a, b, and c (published by the test)
-		"inventory.events_v1_stockreserved":             1,
-		"ordering.events_v1_orderconfirmed":             1, // a: StockReserved consumed → CONFIRMED (b rejected, c tombstoned)
-		"inventory.events_v1_stockreleased":             1,
+		"inventory.events_v1_stockreserved":             2, // a, f
+		"ordering.events_v1_orderconfirmed":             2, // a, f: StockReserved consumed → CONFIRMED (b rejected, c tombstoned)
+		"ordering.events_v1_ordercompleted":             1, // f
+		"inventory.events_v1_stockcommitted":            1, // f
+		"inventory.events_v1_stockreleased":             1, // a
 		"ordering.events_poison":                        0,
 		"inventory.events_poison":                       0,
 	}
@@ -358,7 +389,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	})
 	for tbl, want := range counts {
 		var n int64
-		if err := db.WithContext(c).Raw("SELECT count(*) FROM "+tbl+" WHERE metadata->>'key' IN (?, ?, ?)", a.ID, b.ID, cID).Scan(&n).Error; err != nil || n != want {
+		if err := db.WithContext(c).Raw("SELECT count(*) FROM "+tbl+" WHERE metadata->>'key' IN (?, ?, ?, ?)", a.ID, f.ID, b.ID, cID).Scan(&n).Error; err != nil || n != want {
 			t.Fatalf("%s rows = %d err=%v, want %d", tbl, n, err, want)
 		}
 	}
@@ -393,9 +424,9 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	// Lag gauges, as Prometheus would scrape them: every cursor the worker
 	// reads is caught up, nothing is parked, and the handlers left samples.
 	// The forwarder's cursor and the stream groups show up only in redis mode.
-	wantCursors := 4 // ordering: 2 topics; inventory: 2 topics
+	wantCursors := 5 // ordering: 2 topics; inventory: 3 topics
 	if rdb != nil {
-		wantCursors = 8 // + the forwarder on each distinct topic
+		wantCursors = 10 // + the forwarder on each distinct topic
 	}
 	waitFor("every consumer lag gauge at 0", func() (bool, error) {
 		lag := scrape(t, tel.MetricsHandler, "eventbus_consumer_lag")
@@ -410,17 +441,17 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		return true, nil
 	})
 	// The saga funnel gauges (each BC's adapters/metrics), read from the same
-	// database: a and b ended CANCELLED, nothing is left PENDING, and D holds a
-	// RESERVED reservation. Every known status has a series, zero or not.
+	// database: a and b ended CANCELLED, f COMPLETED, nothing is left PENDING,
+	// and D holds a RESERVED reservation. Every known status has a series, zero or not.
 	orderGauges := scrape(t, tel.MetricsHandler, "ordering_orders")
-	if len(orderGauges) != 3 || atoi(orderGauges[`ordering_orders{status="CANCELLED"}`]) < 2 || orderGauges[`ordering_orders{status="PENDING"}`] != "0" {
+	if len(orderGauges) != 4 || atoi(orderGauges[`ordering_orders{status="CANCELLED"}`]) < 2 || atoi(orderGauges[`ordering_orders{status="COMPLETED"}`]) < 1 || orderGauges[`ordering_orders{status="PENDING"}`] != "0" {
 		t.Fatalf("ordering_orders = %v", orderGauges)
 	}
 	reservationGauges := scrape(t, tel.MetricsHandler, "inventory_reservations")
-	if len(reservationGauges) != 4 || atoi(reservationGauges[`inventory_reservations{status="RESERVED"}`]) < 1 {
+	if len(reservationGauges) != 5 || atoi(reservationGauges[`inventory_reservations{status="RESERVED"}`]) < 1 || atoi(reservationGauges[`inventory_reservations{status="COMMITTED"}`]) < 1 {
 		t.Fatalf("inventory_reservations = %v", reservationGauges)
 	}
-	if ages := scrape(t, tel.MetricsHandler, "ordering_orders_oldest_age_seconds"); len(ages) != 3 || ages[`ordering_orders_oldest_age_seconds{status="PENDING"}`] != "0" {
+	if ages := scrape(t, tel.MetricsHandler, "ordering_orders_oldest_age_seconds"); len(ages) != 4 || ages[`ordering_orders_oldest_age_seconds{status="PENDING"}`] != "0" {
 		t.Fatalf("ordering_orders_oldest_age_seconds = %v", ages)
 	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_poison_messages") {
@@ -434,12 +465,12 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	if n := len(scrape(t, tel.MetricsHandler, "eventbus_consumer_duration_seconds_count")); n == 0 {
 		t.Fatal("no eventbus_consumer_duration_seconds_count samples")
 	}
-	// Retention gauges: every outbox table of both BCs — the 4 consumed
-	// topics and the 2 published-only ones (OrderConfirmed, StockReleased),
-	// found in the catalogue — and both inboxes; with every group caught up
-	// no outbox row is held back from prune.
-	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 6 {
-		t.Fatalf("%d outbox row series, want 6: %v", len(rows), rows)
+	// Retention gauges: every outbox table of both BCs — the 5 consumed
+	// topics and the 3 published-only ones (OrderConfirmed, StockReleased,
+	// StockCommitted), found in the catalogue — and both inboxes; with every
+	// group caught up no outbox row is held back from prune.
+	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 8 {
+		t.Fatalf("%d outbox row series, want 8: %v", len(rows), rows)
 	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_outbox_held") {
 		if v != "0" {

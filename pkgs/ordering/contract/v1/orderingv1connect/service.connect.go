@@ -41,6 +41,9 @@ const (
 	// OrderServiceCancelOrderProcedure is the fully-qualified name of the OrderService's CancelOrder
 	// RPC.
 	OrderServiceCancelOrderProcedure = "/ordering.v1.OrderService/CancelOrder"
+	// OrderServiceCompleteOrderProcedure is the fully-qualified name of the OrderService's
+	// CompleteOrder RPC.
+	OrderServiceCompleteOrderProcedure = "/ordering.v1.OrderService/CompleteOrder"
 	// OrderServiceListOrdersProcedure is the fully-qualified name of the OrderService's ListOrders RPC.
 	OrderServiceListOrdersProcedure = "/ordering.v1.OrderService/ListOrders"
 )
@@ -50,6 +53,10 @@ type OrderServiceClient interface {
 	CreateOrder(context.Context, *connect.Request[v1.CreateOrderRequest]) (*connect.Response[v1.CreateOrderResponse], error)
 	GetOrder(context.Context, *connect.Request[v1.GetOrderRequest]) (*connect.Response[v1.GetOrderResponse], error)
 	CancelOrder(context.Context, *connect.Request[v1.CancelOrderRequest]) (*connect.Response[v1.CancelOrderResponse], error)
+	// CompleteOrder fulfils a CONFIRMED order (CONFIRMED → COMPLETED) and publishes
+	// ordering.v1.OrderCompleted, on which inventory commits the reservation.
+	// Any other status is FAILED_PRECONDITION (x-error-code: order.cannot_complete).
+	CompleteOrder(context.Context, *connect.Request[v1.CompleteOrderRequest]) (*connect.Response[v1.CompleteOrderResponse], error)
 	// ListOrders pages through orders newest first (create_time desc, id desc).
 	// Cursor pagination per AIP-158: pass next_page_token back unchanged with the
 	// SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
@@ -85,6 +92,12 @@ func NewOrderServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(orderServiceMethods.ByName("CancelOrder")),
 			connect.WithClientOptions(opts...),
 		),
+		completeOrder: connect.NewClient[v1.CompleteOrderRequest, v1.CompleteOrderResponse](
+			httpClient,
+			baseURL+OrderServiceCompleteOrderProcedure,
+			connect.WithSchema(orderServiceMethods.ByName("CompleteOrder")),
+			connect.WithClientOptions(opts...),
+		),
 		listOrders: connect.NewClient[v1.ListOrdersRequest, v1.ListOrdersResponse](
 			httpClient,
 			baseURL+OrderServiceListOrdersProcedure,
@@ -96,10 +109,11 @@ func NewOrderServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 
 // orderServiceClient implements OrderServiceClient.
 type orderServiceClient struct {
-	createOrder *connect.Client[v1.CreateOrderRequest, v1.CreateOrderResponse]
-	getOrder    *connect.Client[v1.GetOrderRequest, v1.GetOrderResponse]
-	cancelOrder *connect.Client[v1.CancelOrderRequest, v1.CancelOrderResponse]
-	listOrders  *connect.Client[v1.ListOrdersRequest, v1.ListOrdersResponse]
+	createOrder   *connect.Client[v1.CreateOrderRequest, v1.CreateOrderResponse]
+	getOrder      *connect.Client[v1.GetOrderRequest, v1.GetOrderResponse]
+	cancelOrder   *connect.Client[v1.CancelOrderRequest, v1.CancelOrderResponse]
+	completeOrder *connect.Client[v1.CompleteOrderRequest, v1.CompleteOrderResponse]
+	listOrders    *connect.Client[v1.ListOrdersRequest, v1.ListOrdersResponse]
 }
 
 // CreateOrder calls ordering.v1.OrderService.CreateOrder.
@@ -117,6 +131,11 @@ func (c *orderServiceClient) CancelOrder(ctx context.Context, req *connect.Reque
 	return c.cancelOrder.CallUnary(ctx, req)
 }
 
+// CompleteOrder calls ordering.v1.OrderService.CompleteOrder.
+func (c *orderServiceClient) CompleteOrder(ctx context.Context, req *connect.Request[v1.CompleteOrderRequest]) (*connect.Response[v1.CompleteOrderResponse], error) {
+	return c.completeOrder.CallUnary(ctx, req)
+}
+
 // ListOrders calls ordering.v1.OrderService.ListOrders.
 func (c *orderServiceClient) ListOrders(ctx context.Context, req *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error) {
 	return c.listOrders.CallUnary(ctx, req)
@@ -127,6 +146,10 @@ type OrderServiceHandler interface {
 	CreateOrder(context.Context, *connect.Request[v1.CreateOrderRequest]) (*connect.Response[v1.CreateOrderResponse], error)
 	GetOrder(context.Context, *connect.Request[v1.GetOrderRequest]) (*connect.Response[v1.GetOrderResponse], error)
 	CancelOrder(context.Context, *connect.Request[v1.CancelOrderRequest]) (*connect.Response[v1.CancelOrderResponse], error)
+	// CompleteOrder fulfils a CONFIRMED order (CONFIRMED → COMPLETED) and publishes
+	// ordering.v1.OrderCompleted, on which inventory commits the reservation.
+	// Any other status is FAILED_PRECONDITION (x-error-code: order.cannot_complete).
+	CompleteOrder(context.Context, *connect.Request[v1.CompleteOrderRequest]) (*connect.Response[v1.CompleteOrderResponse], error)
 	// ListOrders pages through orders newest first (create_time desc, id desc).
 	// Cursor pagination per AIP-158: pass next_page_token back unchanged with the
 	// SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
@@ -158,6 +181,12 @@ func NewOrderServiceHandler(svc OrderServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(orderServiceMethods.ByName("CancelOrder")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orderServiceCompleteOrderHandler := connect.NewUnaryHandler(
+		OrderServiceCompleteOrderProcedure,
+		svc.CompleteOrder,
+		connect.WithSchema(orderServiceMethods.ByName("CompleteOrder")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orderServiceListOrdersHandler := connect.NewUnaryHandler(
 		OrderServiceListOrdersProcedure,
 		svc.ListOrders,
@@ -172,6 +201,8 @@ func NewOrderServiceHandler(svc OrderServiceHandler, opts ...connect.HandlerOpti
 			orderServiceGetOrderHandler.ServeHTTP(w, r)
 		case OrderServiceCancelOrderProcedure:
 			orderServiceCancelOrderHandler.ServeHTTP(w, r)
+		case OrderServiceCompleteOrderProcedure:
+			orderServiceCompleteOrderHandler.ServeHTTP(w, r)
 		case OrderServiceListOrdersProcedure:
 			orderServiceListOrdersHandler.ServeHTTP(w, r)
 		default:
@@ -193,6 +224,10 @@ func (UnimplementedOrderServiceHandler) GetOrder(context.Context, *connect.Reque
 
 func (UnimplementedOrderServiceHandler) CancelOrder(context.Context, *connect.Request[v1.CancelOrderRequest]) (*connect.Response[v1.CancelOrderResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ordering.v1.OrderService.CancelOrder is not implemented"))
+}
+
+func (UnimplementedOrderServiceHandler) CompleteOrder(context.Context, *connect.Request[v1.CompleteOrderRequest]) (*connect.Response[v1.CompleteOrderResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ordering.v1.OrderService.CompleteOrder is not implemented"))
 }
 
 func (UnimplementedOrderServiceHandler) ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error) {

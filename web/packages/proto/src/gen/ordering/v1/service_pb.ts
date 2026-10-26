@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/service.proto.
  */
 export const file_ordering_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChlvcmRlcmluZy92MS9zZXJ2aWNlLnByb3RvEgtvcmRlcmluZy52MSJiChJDcmVhdGVPcmRlclJlcXVlc3QSHAoLY3VzdG9tZXJfaWQYASABKAlCB7pIBHICEAESLgoFaXRlbXMYAiADKAsyFS5vcmRlcmluZy52MS5MaW5lSXRlbUIIukgFkgECCAEiOAoTQ3JlYXRlT3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiYKD0dldE9yZGVyUmVxdWVzdBITCgJpZBgBIAEoCUIHukgEcgIQASI1ChBHZXRPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiKQoSQ2FuY2VsT3JkZXJSZXF1ZXN0EhMKAmlkGAEgASgJQge6SARyAhABIjgKE0NhbmNlbE9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciKCAQoRTGlzdE9yZGVyc1JlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSKAoGc3RhdHVzGAIgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSGgoJcGFnZV9zaXplGAMgASgFQge6SAQaAigAEhIKCnBhZ2VfdG9rZW4YBCABKAkiUQoSTGlzdE9yZGVyc1Jlc3BvbnNlEiIKBm9yZGVycxgBIAMoCzISLm9yZGVyaW5nLnYxLk9yZGVyEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCTLKAgoMT3JkZXJTZXJ2aWNlElAKC0NyZWF0ZU9yZGVyEh8ub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXF1ZXN0GiAub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXNwb25zZRJHCghHZXRPcmRlchIcLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVxdWVzdBodLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVzcG9uc2USUAoLQ2FuY2VsT3JkZXISHy5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlc3BvbnNlEk0KCkxpc3RPcmRlcnMSHi5vcmRlcmluZy52MS5MaXN0T3JkZXJzUmVxdWVzdBofLm9yZGVyaW5nLnYxLkxpc3RPcmRlcnNSZXNwb25zZWIGcHJvdG8z", [file_buf_validate_validate, file_ordering_v1_entity]);
+  fileDesc("ChlvcmRlcmluZy92MS9zZXJ2aWNlLnByb3RvEgtvcmRlcmluZy52MSJiChJDcmVhdGVPcmRlclJlcXVlc3QSHAoLY3VzdG9tZXJfaWQYASABKAlCB7pIBHICEAESLgoFaXRlbXMYAiADKAsyFS5vcmRlcmluZy52MS5MaW5lSXRlbUIIukgFkgECCAEiOAoTQ3JlYXRlT3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiYKD0dldE9yZGVyUmVxdWVzdBITCgJpZBgBIAEoCUIHukgEcgIQASI1ChBHZXRPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiKQoSQ2FuY2VsT3JkZXJSZXF1ZXN0EhMKAmlkGAEgASgJQge6SARyAhABIjgKE0NhbmNlbE9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciIrChRDb21wbGV0ZU9yZGVyUmVxdWVzdBITCgJpZBgBIAEoCUIHukgEcgIQASI6ChVDb21wbGV0ZU9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciKCAQoRTGlzdE9yZGVyc1JlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSKAoGc3RhdHVzGAIgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSGgoJcGFnZV9zaXplGAMgASgFQge6SAQaAigAEhIKCnBhZ2VfdG9rZW4YBCABKAkiUQoSTGlzdE9yZGVyc1Jlc3BvbnNlEiIKBm9yZGVycxgBIAMoCzISLm9yZGVyaW5nLnYxLk9yZGVyEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCTKiAwoMT3JkZXJTZXJ2aWNlElAKC0NyZWF0ZU9yZGVyEh8ub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXF1ZXN0GiAub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXNwb25zZRJHCghHZXRPcmRlchIcLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVxdWVzdBodLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVzcG9uc2USUAoLQ2FuY2VsT3JkZXISHy5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlc3BvbnNlElYKDUNvbXBsZXRlT3JkZXISIS5vcmRlcmluZy52MS5Db21wbGV0ZU9yZGVyUmVxdWVzdBoiLm9yZGVyaW5nLnYxLkNvbXBsZXRlT3JkZXJSZXNwb25zZRJNCgpMaXN0T3JkZXJzEh4ub3JkZXJpbmcudjEuTGlzdE9yZGVyc1JlcXVlc3QaHy5vcmRlcmluZy52MS5MaXN0T3JkZXJzUmVzcG9uc2ViBnByb3RvMw", [file_buf_validate_validate, file_ordering_v1_entity]);
 
 /**
  * @generated from message ordering.v1.CreateOrderRequest
@@ -123,6 +123,40 @@ export const CancelOrderResponseSchema: GenMessage<CancelOrderResponse> = /*@__P
   messageDesc(file_ordering_v1_service, 5);
 
 /**
+ * @generated from message ordering.v1.CompleteOrderRequest
+ */
+export type CompleteOrderRequest = Message<"ordering.v1.CompleteOrderRequest"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+};
+
+/**
+ * Describes the message ordering.v1.CompleteOrderRequest.
+ * Use `create(CompleteOrderRequestSchema)` to create a new message.
+ */
+export const CompleteOrderRequestSchema: GenMessage<CompleteOrderRequest> = /*@__PURE__*/
+  messageDesc(file_ordering_v1_service, 6);
+
+/**
+ * @generated from message ordering.v1.CompleteOrderResponse
+ */
+export type CompleteOrderResponse = Message<"ordering.v1.CompleteOrderResponse"> & {
+  /**
+   * @generated from field: ordering.v1.Order order = 1;
+   */
+  order?: Order;
+};
+
+/**
+ * Describes the message ordering.v1.CompleteOrderResponse.
+ * Use `create(CompleteOrderResponseSchema)` to create a new message.
+ */
+export const CompleteOrderResponseSchema: GenMessage<CompleteOrderResponse> = /*@__PURE__*/
+  messageDesc(file_ordering_v1_service, 7);
+
+/**
  * @generated from message ordering.v1.ListOrdersRequest
  */
 export type ListOrdersRequest = Message<"ordering.v1.ListOrdersRequest"> & {
@@ -160,7 +194,7 @@ export type ListOrdersRequest = Message<"ordering.v1.ListOrdersRequest"> & {
  * Use `create(ListOrdersRequestSchema)` to create a new message.
  */
 export const ListOrdersRequestSchema: GenMessage<ListOrdersRequest> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 6);
+  messageDesc(file_ordering_v1_service, 8);
 
 /**
  * @generated from message ordering.v1.ListOrdersResponse
@@ -184,7 +218,7 @@ export type ListOrdersResponse = Message<"ordering.v1.ListOrdersResponse"> & {
  * Use `create(ListOrdersResponseSchema)` to create a new message.
  */
 export const ListOrdersResponseSchema: GenMessage<ListOrdersResponse> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 7);
+  messageDesc(file_ordering_v1_service, 9);
 
 /**
  * OrderService is the public RPC contract of the ordering bounded context.
@@ -217,6 +251,18 @@ export const OrderService: GenService<{
     methodKind: "unary";
     input: typeof CancelOrderRequestSchema;
     output: typeof CancelOrderResponseSchema;
+  },
+  /**
+   * CompleteOrder fulfils a CONFIRMED order (CONFIRMED → COMPLETED) and publishes
+   * ordering.v1.OrderCompleted, on which inventory commits the reservation.
+   * Any other status is FAILED_PRECONDITION (x-error-code: order.cannot_complete).
+   *
+   * @generated from rpc ordering.v1.OrderService.CompleteOrder
+   */
+  completeOrder: {
+    methodKind: "unary";
+    input: typeof CompleteOrderRequestSchema;
+    output: typeof CompleteOrderResponseSchema;
   },
   /**
    * ListOrders pages through orders newest first (create_time desc, id desc).

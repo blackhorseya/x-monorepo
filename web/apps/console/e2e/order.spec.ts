@@ -13,7 +13,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   // a SKU of our own and the Reservation card gets to show RESERVED.
   const sku = withDB ? `E2E-D-${Date.now()}` : "SKU-1";
   if (withDB) {
-    await page.goto("/stock");
+    await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
     await page.getByLabel("SKU", { exact: true }).fill(sku);
     await page.getByLabel("On hand").fill("5");
     await page.getByRole("button", { name: "Set", exact: true }).click();
@@ -55,6 +55,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
       timeout: 30_000,
     });
     await expect(reservation).toContainText(`${sku} × 2`);
+    // CONFIRMED is the only state that can be completed; the button appears with it.
     await expect(page.getByTestId("order-status")).toHaveText("CONFIRMED", {
       timeout: 30_000,
     });

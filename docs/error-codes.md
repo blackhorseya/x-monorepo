@@ -26,18 +26,20 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`；�
 | `admin.poison_not_found` | `NOT_FOUND` | admin | `GetPoison` 的 offset 不存在 |
 | `order.invalid_id` / `order.empty_customer` / `order.no_items` / `order.invalid_sku` / `order.invalid_quantity` | `INVALID_ARGUMENT` | ordering domain | aggregate 不變量（consumer path 沒有 protovalidate，所以留著） |
 | `order.invalid_status_filter` / `order.invalid_cursor` | `INVALID_ARGUMENT` | ordering domain | ListOrders 的 filter / cursor 壞掉 |
-| `order.cannot_cancel` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING / CONFIRMED 的 order 被 Cancel |
+| `order.cannot_cancel` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING / CONFIRMED 的 order 被 Cancel（COMPLETED 是終點） |
 | `order.cannot_confirm` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING 的 order 收到 `StockReserved`（consumer path：drop） |
+| `order.cannot_complete` | `FAILED_PRECONDITION` | ordering domain | 不是 CONFIRMED 的 order 被 Complete（PENDING 還沒有庫存可 commit；再按一次也是這個） |
 | `order.not_found` | `NOT_FOUND` | ordering domain | |
 | `order.duplicate` | `ALREADY_EXISTS` | ordering domain | 同 id 再 Save（repo 層） |
 | `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數 |
 | `stock.below_reserved` | `FAILED_PRECONDITION` | inventory domain | SetStock 想把 on-hand 壓到低於已 reserved |
 | `stock.release_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Release 超過 reserved |
+| `stock.commit_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Commit 超過 reserved（stock 列與 reservation 不一致：資料壞了） |
 | `stock.not_found` | `NOT_FOUND` | inventory domain | |
 | `reservation.invalid_order_id` / `reservation.no_lines` / `reservation.invalid_sku` / `reservation.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | aggregate 不變量 |
 | `reservation.invalid_status_filter` / `reservation.invalid_cursor` | `INVALID_ARGUMENT` | inventory domain | ListReservations 的 filter / cursor |
-| `reservation.not_reserved` | `FAILED_PRECONDITION` | inventory domain | 只有 RESERVED 能 Release |
-| `reservation.stock_missing` | `FAILED_PRECONDITION` | inventory domain | Release 時某 SKU 的 stock 列不在了 |
+| `reservation.not_reserved` | `FAILED_PRECONDITION` | inventory domain | 只有 RESERVED 能 Release / Commit（重送的 `OrderCancelled` / `OrderCompleted`：drop） |
+| `reservation.stock_missing` | `FAILED_PRECONDITION` | inventory domain | Release / Commit 時某 SKU 的 stock 列不在了 |
 | `reservation.not_found` | `NOT_FOUND` | inventory domain | `GetReservation`：worker 還沒處理這張 order（console 顯示 `none yet`） |
 | `reservation.duplicate` | `ALREADY_EXISTS` | inventory domain | 同一 order 第二張 reservation（repo `Add`）；reserve / release usecase 把它當「已處理」吞掉，rpc 實際上看不到 |
 | `message.duplicate` | （不到 rpc） | `usecasex.Idempotent` | consumer inbox 看到重送的 message id：handler 回它、broker ack、不 retry；rpc path 沒 message id 不會發 |

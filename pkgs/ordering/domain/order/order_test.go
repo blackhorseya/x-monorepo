@@ -175,6 +175,39 @@ func TestOrder_Confirm(t *testing.T) {
 	}
 }
 
+func TestOrder_Complete(t *testing.T) {
+	now := time.Now()
+	later := now.Add(time.Minute)
+	o, err := order.New(order.Params{ID: "o-1", CustomerID: "c-1", Items: []order.LineItem{mustItem(t, "SKU-1", 1, mustMoney(t, 100, "USD"))}, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Only a confirmed order can be completed: inventory has not reserved a pending one.
+	if err := o.Complete(later); !errors.Is(err, order.ErrCannotComplete) {
+		t.Fatalf("complete while pending err = %v, want ErrCannotComplete", err)
+	}
+	if err := o.Confirm(later); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Complete(later.Add(time.Minute)); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if o.Status() != order.StatusCompleted || !o.UpdatedAt().Equal(later.Add(time.Minute)) {
+		t.Fatalf("status = %v, updatedAt = %v", o.Status(), o.UpdatedAt())
+	}
+	// Terminal: no second completion, no cancellation, no late confirmation.
+	if err := o.Complete(later); !errors.Is(err, order.ErrCannotComplete) {
+		t.Fatalf("second complete err = %v, want ErrCannotComplete", err)
+	}
+	if err := o.Cancel(later); !errors.Is(err, order.ErrCannotCancel) {
+		t.Fatalf("cancel after complete err = %v, want ErrCannotCancel", err)
+	}
+	if err := o.Confirm(later); !errors.Is(err, order.ErrCannotConfirm) {
+		t.Fatalf("confirm after complete err = %v, want ErrCannotConfirm", err)
+	}
+}
+
 func TestOrder_ItemsIsACopy(t *testing.T) {
 	o, _ := order.New(order.Params{ID: "o-1", CustomerID: "c-1", Items: []order.LineItem{mustItem(t, "SKU-1", 1, mustMoney(t, 100, "USD"))}, Now: time.Now()})
 	items := o.Items()
@@ -186,16 +219,18 @@ func TestOrder_ItemsIsACopy(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	tests := []struct {
-		s          order.Status
-		str        string
-		canCancel  bool
-		canConfirm bool
+		s           order.Status
+		str         string
+		canCancel   bool
+		canConfirm  bool
+		canComplete bool
 	}{
-		{order.StatusPending, "PENDING", true, true},
-		{order.StatusConfirmed, "CONFIRMED", true, false},
-		{order.StatusCancelled, "CANCELLED", false, false},
-		{order.StatusUnknown, "UNKNOWN", false, false},
-		{order.Status(99), "UNKNOWN", false, false},
+		{order.StatusPending, "PENDING", true, true, false},
+		{order.StatusConfirmed, "CONFIRMED", true, false, true},
+		{order.StatusCompleted, "COMPLETED", false, false, false},
+		{order.StatusCancelled, "CANCELLED", false, false, false},
+		{order.StatusUnknown, "UNKNOWN", false, false, false},
+		{order.Status(99), "UNKNOWN", false, false, false},
 	}
 	for _, tt := range tests {
 		if tt.s.String() != tt.str {
@@ -206,6 +241,9 @@ func TestStatus(t *testing.T) {
 		}
 		if tt.s.CanTransitionTo(order.StatusConfirmed) != tt.canConfirm {
 			t.Errorf("%s.CanTransitionTo(CONFIRMED) = %v", tt.str, !tt.canConfirm)
+		}
+		if tt.s.CanTransitionTo(order.StatusCompleted) != tt.canComplete {
+			t.Errorf("%s.CanTransitionTo(COMPLETED) = %v", tt.str, !tt.canComplete)
 		}
 		if tt.s.CanTransitionTo(order.StatusPending) {
 			t.Errorf("%s must not transition to PENDING", tt.str)

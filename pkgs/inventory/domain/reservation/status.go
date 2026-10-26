@@ -4,12 +4,13 @@ import "time"
 
 // Status is the lifecycle of a Reservation.
 //
-//	Reserve   ─┬─ RESERVED ── Release ── RELEASED
+//	Reserve   ─┬─ RESERVED ─┬─ Release ── RELEASED   (order cancelled: stock given back)
+//	           │            └─ Commit ─── COMMITTED  (order completed: stock sold)
 //	           └─ REJECTED
 //	Tombstone ─── CANCELLED   (OrderCancelled arrived before OrderCreated)
 //
 // Every status but RESERVED is terminal: a late OrderCreated finds the row and
-// reserves nothing, a late OrderCancelled finds it and releases nothing.
+// reserves nothing, a late OrderCancelled / OrderCompleted finds it and does nothing.
 type Status int
 
 const (
@@ -17,6 +18,7 @@ const (
 	StatusRejected
 	StatusReleased
 	StatusCancelled
+	StatusCommitted
 )
 
 var statusNames = map[Status]string{
@@ -24,6 +26,7 @@ var statusNames = map[Status]string{
 	StatusRejected:  "REJECTED",
 	StatusReleased:  "RELEASED",
 	StatusCancelled: "CANCELLED",
+	StatusCommitted: "COMMITTED",
 }
 
 func (x Status) String() string {
@@ -37,7 +40,7 @@ func (x Status) String() string {
 // Statuses lists every status this version knows, in lifecycle order. Readers
 // that report per-status figures use it to show a zero instead of nothing.
 func Statuses() []Status {
-	return []Status{StatusReserved, StatusRejected, StatusReleased, StatusCancelled}
+	return []Status{StatusReserved, StatusRejected, StatusReleased, StatusCommitted, StatusCancelled}
 }
 
 // StatusCount is how many reservations sit in one status and when the oldest

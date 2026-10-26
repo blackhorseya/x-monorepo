@@ -1,6 +1,6 @@
 // Package inventory is the inventory bounded context: stock per SKU, and the
 // reservation each order claims. It reacts to ordering's OrderCreated /
-// OrderCancelled events and asks ordering to cancel orders it cannot cover.
+// OrderCancelled / OrderCompleted events and asks ordering to cancel orders it cannot cover.
 // ProviderSet is its only export to composition roots (apps/*).
 package inventory
 
@@ -50,11 +50,13 @@ var ProviderSet = wire.NewSet(
 	ProvideReservationStats,
 	ProvideReserveStock,
 	ProvideReleaseStock,
+	ProvideCommitStock,
 
 	// adapters
 	rpc.NewInventoryService,
 	consumer.NewOrderCreatedHandler,
 	consumer.NewOrderCancelledHandler,
+	consumer.NewOrderCompletedHandler,
 	ProvideSubscriptions,
 	ProvideGauges,
 )
@@ -108,10 +110,11 @@ type Subscriptions []eventbus.Subscription
 
 // ProvideSubscriptions binds each consumed topic to its handler. The handler
 // name is the topic.
-func ProvideSubscriptions(created *consumer.OrderCreatedHandler, cancelled *consumer.OrderCancelledHandler) Subscriptions {
+func ProvideSubscriptions(created *consumer.OrderCreatedHandler, cancelled *consumer.OrderCancelledHandler, completed *consumer.OrderCompletedHandler) Subscriptions {
 	return Subscriptions{
 		{Topic: consumer.TopicOrderCreated, Handler: created},
 		{Topic: consumer.TopicOrderCancelled, Handler: cancelled},
+		{Topic: consumer.TopicOrderCompleted, Handler: completed},
 	}
 }
 
@@ -180,4 +183,8 @@ func ProvideReserveStock(reservations reservation.Repository, stocks stock.Repos
 
 func ProvideReleaseStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ReleaseStockUC {
 	return decorateTx("inventory.release_stock", rec, tx, inbox, usecase.NewReleaseStock(reservations, stocks, events, clock))
+}
+
+func ProvideCommitStock(reservations reservation.Repository, stocks stock.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.CommitStockUC {
+	return decorateTx("inventory.commit_stock", rec, tx, inbox, usecase.NewCommitStock(reservations, stocks, events, clock))
 }

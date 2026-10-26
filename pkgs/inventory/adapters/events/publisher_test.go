@@ -89,6 +89,28 @@ func TestPublisher_MapsDomainEventsToWire(t *testing.T) {
 		t.Fatalf("StockReleased = %v", &released)
 	}
 
+	// Committed, on a third order.
+	sold, err := reservation.Reserve(reservation.Params{OrderID: "o-3", Lines: []reservation.Line{line("A", 1)}, Now: now}, map[string]*stock.Stock{"A": a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sold.Commit(map[string]*stock.Stock{"A": a}, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.Publish(context.Background(), sold.PullEvents()...); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.topics) != 5 || sink.topics[4] != "inventory.v1.StockCommitted" || sink.msgs[4].Metadata.Get(eventbus.MetaKey) != "o-3" {
+		t.Fatalf("topics = %v", sink.topics)
+	}
+	var committed inventoryv1.StockCommitted
+	if err := proto.Unmarshal(sink.msgs[4].Payload, &committed); err != nil {
+		t.Fatal(err)
+	}
+	if committed.GetOrderId() != "o-3" || !committed.GetCommittedAt().AsTime().Equal(now.Add(2*time.Minute)) {
+		t.Fatalf("StockCommitted = %v", &committed)
+	}
+
 	var req orderingv1.OrderCancellationRequested
 	if err := proto.Unmarshal(sink.msgs[2].Payload, &req); err != nil {
 		t.Fatal(err)

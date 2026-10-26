@@ -35,6 +35,11 @@ type ConfirmOrderInput struct {
 	OrderID string
 }
 
+// CompleteOrderInput is driven by the rpc adapter: fulfil a CONFIRMED order.
+type CompleteOrderInput struct {
+	OrderID string
+}
+
 // OrderStatsInput has no fields: the stats are for the whole BC.
 type OrderStatsInput struct{}
 
@@ -52,7 +57,7 @@ type OrderStatsOutput struct {
 
 type ListOrdersInput struct {
 	CustomerID string // "" = any
-	Status     string // "" = any; PENDING | CANCELLED
+	Status     string // "" = any; PENDING | CONFIRMED | COMPLETED | CANCELLED
 	PageSize   int32  // 0 = default
 	PageToken  string // "" = first page
 }
@@ -67,7 +72,7 @@ type OrderOutput struct {
 	CustomerID string
 	Items      []LineItem
 	Total      Money
-	Status     string // PENDING | CANCELLED
+	Status     string // PENDING | CONFIRMED | COMPLETED | CANCELLED
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }

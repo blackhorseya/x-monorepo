@@ -19,22 +19,24 @@ var _ orderingv1connect.OrderServiceHandler = (*OrderService)(nil)
 
 // Use-case aliases keep handler signatures readable.
 type (
-	CreateOrderUC = usecasex.UseCase[dto.CreateOrderInput, *dto.OrderOutput]
-	GetOrderUC    = usecasex.UseCase[dto.GetOrderInput, *dto.OrderOutput]
-	CancelOrderUC = usecasex.UseCase[dto.CancelOrderInput, *dto.OrderOutput]
-	ListOrdersUC  = usecasex.UseCase[dto.ListOrdersInput, *dto.ListOrdersOutput]
+	CreateOrderUC   = usecasex.UseCase[dto.CreateOrderInput, *dto.OrderOutput]
+	GetOrderUC      = usecasex.UseCase[dto.GetOrderInput, *dto.OrderOutput]
+	CancelOrderUC   = usecasex.UseCase[dto.CancelOrderInput, *dto.OrderOutput]
+	CompleteOrderUC = usecasex.UseCase[dto.CompleteOrderInput, *dto.OrderOutput]
+	ListOrdersUC    = usecasex.UseCase[dto.ListOrdersInput, *dto.ListOrdersOutput]
 )
 
 // OrderService implements the generated OrderServiceHandler.
 type OrderService struct {
-	createOrder CreateOrderUC
-	getOrder    GetOrderUC
-	cancelOrder CancelOrderUC
-	listOrders  ListOrdersUC
+	createOrder   CreateOrderUC
+	getOrder      GetOrderUC
+	cancelOrder   CancelOrderUC
+	completeOrder CompleteOrderUC
+	listOrders    ListOrdersUC
 }
 
-func NewOrderService(createOrder CreateOrderUC, getOrder GetOrderUC, cancelOrder CancelOrderUC, listOrders ListOrdersUC) *OrderService {
-	return &OrderService{createOrder: createOrder, getOrder: getOrder, cancelOrder: cancelOrder, listOrders: listOrders}
+func NewOrderService(createOrder CreateOrderUC, getOrder GetOrderUC, cancelOrder CancelOrderUC, completeOrder CompleteOrderUC, listOrders ListOrdersUC) *OrderService {
+	return &OrderService{createOrder: createOrder, getOrder: getOrder, cancelOrder: cancelOrder, completeOrder: completeOrder, listOrders: listOrders}
 }
 
 // Route returns the mount path and handler (Connect + gRPC + gRPC-Web on one port).
@@ -79,6 +81,18 @@ func (h *OrderService) CancelOrder(
 	}
 
 	return connect.NewResponse(&orderingv1.CancelOrderResponse{Order: toProtoOrder(out)}), nil
+}
+
+func (h *OrderService) CompleteOrder(
+	c context.Context,
+	req *connect.Request[orderingv1.CompleteOrderRequest],
+) (*connect.Response[orderingv1.CompleteOrderResponse], error) {
+	out, err := h.completeOrder.Execute(c, dto.CompleteOrderInput{OrderID: req.Msg.GetId()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&orderingv1.CompleteOrderResponse{Order: toProtoOrder(out)}), nil
 }
 
 func (h *OrderService) ListOrders(

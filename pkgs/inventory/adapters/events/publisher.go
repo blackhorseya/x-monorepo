@@ -1,6 +1,6 @@
 // Package events is the outbound adapter for domain events: it maps
 // reservation.Event values to the wire contract and hands them to a Watermill
-// publisher. Reserved / Released are inventory.v1 messages; Rejected becomes
+// publisher. Reserved / Released / Committed are inventory.v1 messages; Rejected becomes
 // ordering.v1.OrderCancellationRequested — a request owned by ordering's
 // contract, published into ordering's topic (and table) so ordering's
 // consumer picks it up.
@@ -27,6 +27,7 @@ import (
 var (
 	TopicStockReserved              = string((&inventoryv1.StockReserved{}).ProtoReflect().Descriptor().FullName())
 	TopicStockReleased              = string((&inventoryv1.StockReleased{}).ProtoReflect().Descriptor().FullName())
+	TopicStockCommitted             = string((&inventoryv1.StockCommitted{}).ProtoReflect().Descriptor().FullName())
 	TopicOrderCancellationRequested = string((&orderingv1.OrderCancellationRequested{}).ProtoReflect().Descriptor().FullName())
 )
 
@@ -86,6 +87,11 @@ func toProto(e reservation.Event) (string, proto.Message, error) {
 		return TopicStockReleased, &inventoryv1.StockReleased{
 			OrderId:    ev.OrderID(),
 			ReleasedAt: timestamppb.New(ev.OccurredAt()),
+		}, nil
+	case reservation.Committed:
+		return TopicStockCommitted, &inventoryv1.StockCommitted{
+			OrderId:     ev.OrderID(),
+			CommittedAt: timestamppb.New(ev.OccurredAt()),
 		}, nil
 	default:
 		return "", nil, fmt.Errorf("no wire mapping for domain event %T", e)

@@ -160,6 +160,52 @@ func TestRelease(t *testing.T) {
 	}
 }
 
+func TestCommit(t *testing.T) {
+	st := stocks(t, map[string]int32{"A": 5, "B": 1})
+	lines := []reservation.Line{line(t, "A", 2), line(t, "B", 1)}
+	r, err := reservation.Reserve(reservation.Params{OrderID: "o-4", Lines: lines, Now: now}, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.PullEvents()
+	later := now.Add(time.Minute)
+
+	// Stock missing: nothing changes.
+	if err := r.Commit(map[string]*stock.Stock{"A": st["A"]}, later); !errors.Is(err, reservation.ErrStockMissing) {
+		t.Fatalf("missing stock: %v", err)
+	}
+	if r.Status() != reservation.StatusReserved || st["A"].Reserved() != 2 || st["A"].OnHand() != 5 {
+		t.Fatal("failed commit must not change anything")
+	}
+
+	// Stock says less is reserved than the reservation holds (corrupt): the stock error surfaces.
+	bad, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 1, UpdatedAt: now})
+	if err := r.Commit(map[string]*stock.Stock{"A": bad, "B": st["B"]}, later); !errors.Is(err, stock.ErrCommitExceedsReserved) {
+		t.Fatalf("corrupt stock: %v", err)
+	}
+
+	if err := r.Commit(st, later); err != nil {
+		t.Fatal(err)
+	}
+	// Sold: on-hand drops by what was reserved, nothing stays reserved.
+	if r.Status() != reservation.StatusCommitted || !r.UpdatedAt().Equal(later) ||
+		st["A"].OnHand() != 3 || st["A"].Reserved() != 0 || st["B"].OnHand() != 0 || st["B"].Reserved() != 0 {
+		t.Fatalf("status=%s A=%d/%d B=%d/%d", r.Status(), st["A"].OnHand(), st["A"].Reserved(), st["B"].OnHand(), st["B"].Reserved())
+	}
+	evs := r.PullEvents()
+	ev, ok := evs[0].(reservation.Committed)
+	if len(evs) != 1 || !ok || ev.OrderID() != "o-4" || ev.AggregateID() != "o-4" || !ev.OccurredAt().Equal(later) {
+		t.Fatalf("events = %#v", evs)
+	}
+	// Terminal: neither a redelivered OrderCompleted nor a late OrderCancelled changes it.
+	if err := r.Commit(st, later); !errors.Is(err, reservation.ErrNotReserved) {
+		t.Fatalf("double commit: %v", err)
+	}
+	if err := r.Release(st, later); !errors.Is(err, reservation.ErrNotReserved) {
+		t.Fatalf("release after commit: %v", err)
+	}
+}
+
 func TestReconstitute(t *testing.T) {
 	lines := []reservation.Line{line(t, "A", 1)}
 	r, err := reservation.Reconstitute(reservation.ReconstituteParams{
@@ -212,7 +258,7 @@ func TestTombstone(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	for _, s := range []reservation.Status{reservation.StatusReserved, reservation.StatusRejected, reservation.StatusReleased, reservation.StatusCancelled} {
+	for _, s := range reservation.Statuses() {
 		got, err := reservation.ParseStatus(s.String())
 		if err != nil || got != s {
 			t.Fatalf("round trip %s: %v %v", s, got, err)

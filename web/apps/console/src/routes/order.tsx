@@ -73,8 +73,19 @@ function OrderDetail({ order }: { order: Order }) {
       void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
     },
   });
+  const complete = useMutation({
+    mutationFn: () => orders.completeOrder({ id: order.id }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.orders });
+      void qc.invalidateQueries({ queryKey: keys.order(order.id) });
+      void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
+    },
+  });
   useResetOnCredentialChange(cancel);
+  useResetOnCredentialChange(complete);
   const open = order.status === OrderStatus.PENDING || order.status === OrderStatus.CONFIRMED;
+  const confirmed = order.status === OrderStatus.CONFIRMED;
+  const busy = cancel.isPending || complete.isPending;
 
   return (
     <>
@@ -85,18 +96,26 @@ function OrderDetail({ order }: { order: Order }) {
         >
           {OrderStatus[order.status]}
         </Badge>
+        {confirmed && (
+          <Button size="sm" onClick={() => complete.mutate()} disabled={busy}>
+            Complete
+          </Button>
+        )}
         {open && (
           <Button
             variant="outline"
             size="sm"
             onClick={() => cancel.mutate()}
-            disabled={cancel.isPending}
+            disabled={busy}
           >
             Cancel
           </Button>
         )}
         {cancel.isError && (
           <p className="text-xs text-destructive">{describe(cancel.error)}</p>
+        )}
+        {complete.isError && (
+          <p className="text-xs text-destructive">{describe(complete.error)}</p>
         )}
       </div>
       <Table>
