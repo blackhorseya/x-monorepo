@@ -10,6 +10,9 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
 
+// maxExpireBatch mirrors usecase.MaxExpireLimit (apps may not import application).
+const maxExpireBatch = 1000
+
 // newExpireCmd is `worker expire`: the reservation TTL. RESERVED reservations
 // held longer than --older-than give their stock back (EXPIRED) and ordering is
 // asked to cancel the order. The sweep itself is inventory's (adapters/cli,
@@ -40,8 +43,10 @@ The same thing over RPC, for a dry run or a small run: InventoryService.ExpireRe
 			if olderThan <= 0 {
 				return fmt.Errorf("--older-than must be positive (e.g. 24h)")
 			}
-			if batch <= 0 {
-				return fmt.Errorf("--batch must be positive")
+			if batch <= 0 || batch > maxExpireBatch {
+				// The use case caps its limit at the same number; a bigger flag would make the
+				// "batch came back short" test below stop after the first (capped) batch.
+				return fmt.Errorf("--batch must be between 1 and %d", maxExpireBatch)
 			}
 			cfg, err := load()
 			if err != nil {

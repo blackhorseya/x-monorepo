@@ -79,7 +79,7 @@ func TestExpireCommand(t *testing.T) {
 
 	// Argument errors never open the database.
 	noDB := &config.AppConfig{Log: cfg.Log}
-	for _, args := range [][]string{{}, {"--older-than", "0"}, {"--older-than", "24h", "--batch", "0"}, {"--older-than", "24h", "inventory"}} {
+	for _, args := range [][]string{{}, {"--older-than", "0"}, {"--older-than", "24h", "--batch", "0"}, {"--older-than", "24h", "--batch", "1001"}, {"--older-than", "24h", "inventory"}} {
 		if _, err := exec(noDB, args...); err == nil || strings.Contains(err.Error(), "postgres.url") {
 			t.Fatalf("expire %v without a database = %v, want a usage error", args, err)
 		}

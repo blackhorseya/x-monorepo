@@ -30,7 +30,7 @@
   是該 status 最老一筆距上次狀態變更的秒數（每個已知 status 都有 series，空的報 0——alert 要看到 0 不是 no data）。
   每次 scrape 一句 `GROUP BY status`（`OrderStats` / `ReservationStats` use case → `Repository.CountByStatus`），
   每個 replica 報一樣的數字，`max` 不 `sum`。PENDING 老 = StockReserved 或缺貨的取消都沒回到 ordering（alert `x-monorepo-saga-pending`）；
-  RESERVED 老 = 庫存被沒走完的訂單扣著（reservation TTL 是下一步）。
+  RESERVED 老 = 庫存被沒走完的訂單扣著，超過 TTL 的 1.5× 就是 `worker expire` 沒跑（alert `x-monorepo-reservation-expiry`）；EXPIRED 在長 = TTL 在殺單，看 TTL 是不是太短。
 - **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader、logs 走 batch processor；`otelconnect`
   interceptor 掛最外層，每個 RPC 一個 span。endpoint 空 = tracer no-op、logger 只寫 stdout、不 dial
 - **span 的來源**：RPC 由 `otelconnect`；`/api/docs`、`/api/openapi/*` 等普通 route 由 `otelgin`（filter 掉 RPC prefix、
