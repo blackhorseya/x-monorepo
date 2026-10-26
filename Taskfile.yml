@@ -393,6 +393,12 @@ tasks:
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/worker expire {{.CLI_ARGS}}']
 
+  bootstrap:
+    desc: 'task bootstrap [-- --name root --role admin --key-name bootstrap --expires-in 720h] → identity''s first account + API key on an empty store, secret printed once, via ./bin/worker bootstrap'
+    deps: [build, config]
+    env: { APP_CONFIG: '{{.CONFIG}}' }
+    cmds: ['{{.BIN_DIR}}/worker bootstrap {{.CLI_ARGS}}']
+
   prune:
     desc: 'task prune -- --older-than 720h [--dry-run] [--unconsumed] [<bc>] → delete acked outbox rows + consumed inbox rows via ./bin/worker prune'
     deps: [build, config]
