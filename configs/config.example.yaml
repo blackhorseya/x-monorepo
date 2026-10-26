@@ -80,3 +80,8 @@ worker:
   # context expires, the attempt is retried, then the message is parked as poison
   # with reason "handler timed out". 0 = none.
   handler_timeout: 10s
+  # How long each Postgres subscriber waits before it asks its outbox table again after
+  # finding nothing: an event arriving during that wait is seen 0 to about one interval
+  # later (no wait after a poll that found a message), and each polling loop costs one
+  # query per replica per interval (see docs/operations.md). Must be > 0.
+  poll_interval: 200ms

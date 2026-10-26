@@ -43,5 +43,6 @@
 | `redis.url` | `APP_REDIS_URL` | 空 | 只在 `worker.broker: redis` 時連（啟動 ping）；預設 broker 下 worker 完全不碰它 |
 | `worker.broker` | `APP_WORKER_BROKER` | `postgres` | `postgres` 直接讀 outbox 表；`redis` 由 worker 轉送進 Redis Streams 再讀 |
 | `worker.handler_timeout` | `APP_WORKER_HANDLER_TIMEOUT` | `10s` | 單次 handler attempt 的 deadline（`http.timeout` 的 consumer 版）：usecase 的 context 到期、該次算 failed 照常 retry，用完後以 `handler timed out` 為 reason 進 poison；`0` = 不限。SIGTERM 時 in-flight handler 的上限是它和 drain 的 8s 取短 |
+| `worker.poll_interval` | `APP_WORKER_POLL_INTERVAL` | `200ms` | 每個 Postgres subscriber 在查不到訊息後，隔多久再查一次 outbox 表（watermill-sql `PollInterval`）；必須 > 0。空輪詢之後才會等滿一個間隔，所以新事件在等待期間到達的額外延遲是 0 到約一個間隔（忙碌時下一次查詢不等）；它也是 DB 輪詢 QPS 的來源（`輪詢迴圈數 × replica 數 ÷ 間隔`；postgres broker 的迴圈數是 handler subscription 數，redis 模式是 forwarder 的 distinct topic 數，見 [operations.md](operations.md)）。只影響 `postgres` broker 與 redis 模式 forwarder 的 SQL 端；重送等待與查詢失敗的退避仍是 library 的 1s |
 | — | `TEST_DATABASE_URL` | 未設 | 只給 integration test：設了就用該 DB，未設則 testcontainers 自起 |
 | — | `TEST_REDIS_URL` | 未設 | 同上，給 worker E2E 的 redis 模式 |

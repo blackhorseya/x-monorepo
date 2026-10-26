@@ -115,7 +115,7 @@ func NewWorker(
 	switch cfg.Broker {
 	case config.BrokerPostgres, "":
 		subscriber = func(group string) (message.Subscriber, error) {
-			return eventbus.NewPostgresSubscriber(db, group, start, logger)
+			return eventbus.NewPostgresSubscriber(db, group, start, logger, eventbus.WithPollInterval(cfg.PollInterval))
 		}
 		for _, bc := range bcs {
 			for _, s := range bc.subs {
@@ -138,7 +138,7 @@ func NewWorker(
 				}
 			}
 		}
-		forwarded, err := addForwarders(router, db, rdb, start, logger, bcs)
+		forwarded, err := addForwarders(router, db, rdb, start, cfg.PollInterval, logger, bcs)
 		if err != nil {
 			return nil, err
 		}
@@ -210,13 +210,14 @@ func addForwarders(
 	db *gorm.DB,
 	rdb goredis.UniversalClient,
 	start eventbus.Start,
+	pollInterval time.Duration,
 	logger *slog.Logger,
 	bcs []struct {
 		schema string
 		subs   []eventbus.Subscription
 	},
 ) ([]string, error) {
-	sub, err := eventbus.NewPostgresSubscriber(db, ForwarderGroup, start, logger)
+	sub, err := eventbus.NewPostgresSubscriber(db, ForwarderGroup, start, logger, eventbus.WithPollInterval(pollInterval))
 	if err != nil {
 		return nil, err
 	}

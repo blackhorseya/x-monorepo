@@ -72,6 +72,7 @@ config:
     broker: postgres         # redis needs secrets.redisUrl
     start_from: beginning
     handler_timeout: 10s     # must fit inside the 8s drain + terminationGracePeriodSeconds below
+    poll_interval: 200ms     # outbox poll when idle: lower = lower latency, more DB queries (docs/operations.md)
 
 secrets:
   # Name of a Secret you manage, with any of the keys APP_POSTGRES_URL, APP_REDIS_URL,
