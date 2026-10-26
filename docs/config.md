@@ -34,6 +34,10 @@
 | `auth.public` | `APP_AUTH_PUBLIC` | 空 | 不需 credential 的 procedure 清單（`/ordering.v1.OrderService/GetOrder`，env 用逗號分隔） |
 | `auth.resolver_timeout` | `APP_AUTH_RESOLVER_TIMEOUT` | `2s` | 一次 `server.CredentialResolver` 查詢（identity BC 的 DB key）的上限。auth 在 `http.timeout` 之外，沒有它 DB 卡住會拖住所有帶 key 的 request 與 shutdown drain；到期 = 拒絕（`auth.invalid_credential`）。`0` = 不限 |
 | `postgres.url` | `APP_POSTGRES_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
+| `postgres.max_open_conns` | `APP_POSTGRES_MAX_OPEN_CONNS` | `25` | 這個 process 對 Postgres 最多開幾條連線（`sql.DB.SetMaxOpenConns`）；超過的查詢排隊等空的。`apps/rpc`、`apps/worker`、`worker` 子命令、`apps/migrate` 都經 `NewDB`，都吃這個。**`0` = 不設上限**（database/sql 的原預設，這裡是明確的 opt-out）；負值被拒。整個部署的總連線數 ≈ replica 數 × 這個值，必須小於 Postgres 的 `max_connections`（見 [operations.md](operations.md)）。`apps/worker` 另外在啟動時拒絕低於 `2 × subscriber 數 + 1` 的值（5 個 subscriber = 11）：每個 subscriber 從領到訊息到 ack 一直佔著一條交易連線，handler 的 use case 又要另一條，池子太小會全部卡在等連線、撞 `worker.handler_timeout` 後進 poison |
+| `postgres.max_idle_conns` | `APP_POSTGRES_MAX_IDLE_CONNS` | `10` | 閒置時保留幾條連線（`SetMaxIdleConns`）；`0` = 用 database/sql 的預設（2）。`max_open_conns` 有設上限時，不得大於它 |
+| `postgres.conn_max_lifetime` | `APP_POSTGRES_CONN_MAX_LIFETIME` | `30m` | 一條連線用多久後換掉（`SetConnMaxLifetime`），讓 failover、DNS / pgbouncer 變動後池子不會一直黏在舊 backend；`0` = 不換 |
+| `postgres.conn_max_idle_time` | `APP_POSTGRES_CONN_MAX_IDLE_TIME` | `5m` | 閒置多久後關掉（`SetConnMaxIdleTime`），讓尖峰多開的連線還給 server；`0` = 不關 |
 | `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
 | `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |
 | `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |

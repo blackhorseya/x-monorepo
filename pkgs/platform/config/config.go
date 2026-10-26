@@ -120,6 +120,23 @@ const (
 // database": apps fall back to in-memory repositories (local dev, tests).
 type Postgres struct {
 	URL string `mapstructure:"url"` // e.g. postgres://user:pass@host:5432/db?sslmode=disable
+
+	// MaxOpenConns caps the connections this process opens (database/sql
+	// SetMaxOpenConns): a query past the cap waits for a free one. 0 =
+	// unlimited, which is database/sql's own default and an explicit opt-out
+	// here. The total a deployment can open is replicas x this, and it must stay
+	// below the server's max_connections (docs/operations.md).
+	MaxOpenConns int `mapstructure:"max_open_conns"`
+	// MaxIdleConns is how many connections stay open when idle. 0 = database/sql's
+	// default (2). Must not exceed MaxOpenConns when that is capped.
+	MaxIdleConns int `mapstructure:"max_idle_conns"`
+	// ConnMaxLifetime recycles a connection after this age, so a pool does not
+	// pin itself to one backend after a failover or a pgbouncer / DNS change.
+	// 0 = never.
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+	// ConnMaxIdleTime closes a connection idle this long, so a burst's extra
+	// connections go back to the server. 0 = never.
+	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time"`
 }
 
 // Redis configures the Redis the worker uses as its broker when
@@ -235,6 +252,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
+	v.SetDefault("postgres.max_open_conns", 25)
+	v.SetDefault("postgres.max_idle_conns", 10)
+	v.SetDefault("postgres.conn_max_lifetime", 30*time.Minute)
+	v.SetDefault("postgres.conn_max_idle_time", 5*time.Minute)
 	v.SetDefault("redis.url", "")
 	v.SetDefault("otel.endpoint", "")
 	v.SetDefault("otel.insecure", false)
@@ -301,6 +322,15 @@ func (x *AppConfig) validate() error {
 	}
 	if x.Auth.AdminRole == "" {
 		return errors.New("auth.admin_role must not be empty")
+	}
+	if x.Postgres.MaxOpenConns < 0 || x.Postgres.MaxIdleConns < 0 {
+		return errors.New("postgres.max_open_conns and postgres.max_idle_conns must not be negative (max_open_conns 0 = unlimited; max_idle_conns 0 = the database/sql default)")
+	}
+	if x.Postgres.MaxOpenConns > 0 && x.Postgres.MaxIdleConns > x.Postgres.MaxOpenConns {
+		return fmt.Errorf("postgres.max_idle_conns %d exceeds postgres.max_open_conns %d", x.Postgres.MaxIdleConns, x.Postgres.MaxOpenConns)
+	}
+	if x.Postgres.ConnMaxLifetime < 0 || x.Postgres.ConnMaxIdleTime < 0 {
+		return errors.New("postgres.conn_max_lifetime and postgres.conn_max_idle_time must not be negative (0 = never)")
 	}
 	if x.Auth.ResolverTimeout < 0 {
 		return errors.New("auth.resolver_timeout must not be negative")

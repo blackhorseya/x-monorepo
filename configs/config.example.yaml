@@ -52,6 +52,15 @@ postgres:
   # Matches `task compose-up` (deployments/docker/docker-compose.yaml); apps ping it at startup.
   # Empty = no database: repositories fall back to in-memory; `task migrate -- up` needs it set.
   url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+  # Per-process pool (rpc, worker and the CLIs each open their own): total connections is
+  # replicas x max_open_conns and must stay below the server's max_connections
+  # (docs/operations.md). 0 = unlimited open. The worker refuses a cap below
+  # 2 x subscribers + 1 (11 today): every subscriber holds one connection while its handler
+  # uses another.
+  max_open_conns: 25
+  max_idle_conns: 10        # 0 = database/sql default (2); must not exceed max_open_conns when capped
+  conn_max_lifetime: 30m    # recycle: a pool should not pin itself to one backend forever
+  conn_max_idle_time: 5m    # a burst's extra connections go back to the server
 
 redis:
   # Only used (connected, pinged) when worker.broker is redis; `task compose-up` runs one here.

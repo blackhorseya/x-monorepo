@@ -143,3 +143,38 @@ SetStock → CreateOrder → worker 透過 Redis Streams 消費 OrderCreated →
 和一個 5s scrape 的 Prometheus，用 `kind/keda-values.yaml` 重裝 chart（`OTEL_METRIC_EXPORT_INTERVAL=5000`、threshold 50、scaleDown stabilization 30s），
 `kind/scale.sh` 用 `tests/k6/orders.js` 灌 45 秒訂單：實測 lag 0 → 2000+，worker 13 秒內 1 → 4 replica，backlog 消化完縮回 1。
 `appVersion`（image.tag 空時用它）由 release.yml 的 `chart` job 在每次發版後開一支 chart-only PR 跟上（bot push 不會觸發 CI，所以它自己 `gh workflow run ci.yml`；要 repo 開「Allow GitHub Actions to create and approve pull requests」，沒開就只推 branch、summary 給 compare 連結）；chart 本身沒有 publish 到 OCI registry。
+
+## DB 連線池容量（`postgres.max_open_conns`）
+
+每個 process（rpc、worker、`worker expire|prune|poison` 這些 CLI、migrate Job）自己開一個池，上限是 `postgres.max_open_conns`（預設 25）。Postgres 那頭看到的是全部加起來：
+
+```
+總連線數 ≈ Σ（各 Deployment 的 replica 數 × max_open_conns）+ 同時在跑的 CronJob / migrate Job × max_open_conns
+        < max_connections − superuser_reserved_connections（預設 100 − 3）
+```
+
+預設 chart 是 rpc 2、worker 1、expire 與 prune 兩個 CronJob 各 1：
+
+- 平常（只有 rpc + worker）：3 × 25 = 75。
+- 兩個 CronJob 同時在跑：5 × 25 = **125**，還沒算 migrate Job（upgrade 時）和 rolling update 的 surge pod。即使只有一個 CronJob 在跑，也是 4 × 25 = 100，已經超過 Postgres 預設 `max_connections=100` 扣掉 reserved 後的約 97 條。
+- rpc HPA 開到 10、KEDA 把 worker 撐到 6：16 × 25 = 400。
+
+這是**每個 process 都用滿上限**的最壞情況，實際不一定會到（要看負載；`orders.js` 100 VU 才把單一 rpc 推到 25），但**預設組態不能保證在 `max_connections=100` 的 Postgres 上最壞情況不出事**。所以上線前必須依實際 replica 數（用 `maxReplicas`）往回推，不要直接信預設值：
+
+1. 決定 Postgres 的 `max_connections`（或前面放 pgbouncer，transaction pooling）。
+2. 用「最大 replica 數」帶進公式（`rpc.autoscaling.maxReplicas`、`worker.autoscaling.maxReplicas`，不是 `replicaCount`），反推每個 pod 的 `max_open_conns`。
+3. rpc 與 worker 的需求不同，分開設：`config.postgres.max_open_conns` 是共用預設，worker 用 `worker.extraEnv`（`APP_POSTGRES_MAX_OPEN_CONNS`）覆蓋。
+
+**worker 有下限**：每個 subscriber 從領到訊息到 ack 都佔著一條交易連線（watermill-sql 在那條交易裡 `FOR UPDATE` 住 cursor），handler 的 use case 又要另一條。池子小於 `2 × subscriber 數 + 1`（目前 5 個 subscriber = 11）時，所有 subscriber 同時忙就會彼此卡死，handler 一個個撞 `worker.handler_timeout`、訊息進 poison。實測 `max_open_conns=1`：reservation.js 每筆都 10s 後 `handler timed out`。所以 worker 啟動時直接拒絕低於這個值的設定（`0` = 不設上限除外）。新增 BC 或 handler 時下限跟著變。
+
+**rpc 沒有死鎖的下限，代價是延遲**：池子滿了請求排隊等連線（受 `http.timeout` 約束，這條沒實測）。本機 100 VU 打 `orders.js`（10s）：
+
+| `max_open_conns` | server 端看到的連線數（尖峰） | 吞吐 |
+|---|---|---|
+| 0（不設上限） | 35 | 2745 req/s |
+| 25（預設） | 25 | 2820 req/s |
+| 10 | 11（多 1 條的原因沒查） | 2793 req/s |
+
+上限住了，吞吐沒掉（這台筆電上；100 VU 時連線數不是瓶頸）。`max_idle_conns` 小於實際併發時，多出的連線每次用完就關、下次重連；看到 `pg_stat_activity` 的連線一直在重建就把它調到接近 `max_open_conns`。
+
+**搭配 KEDA / HPA**：replica 數是動態的，所以公式用 `maxReplicas`。縮容時 pod 的池子隨 pod 關閉（SIGTERM 時 `NewDB` 的 cleanup 關池子）；`conn_max_idle_time`（5m）讓尖峰過後多開的連線自己回收，`conn_max_lifetime`（30m）讓 failover / DNS 變動後池子換到新的 backend。
