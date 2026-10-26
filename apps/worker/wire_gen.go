@@ -7,6 +7,9 @@
 package main
 
 import (
+	"github.com/blackhorseya/x-monorepo/pkgs/identity"
+	cli2 "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/cli"
+	system3 "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/cli"
 	consumer2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
@@ -150,6 +153,44 @@ func InitializeExpire(cfg *config.AppConfig) (*cli.Expire, func(), error) {
 	expire := cli.NewExpire(v)
 	return expire, func() {
 		cleanup3()
+		cleanup2()
+		cleanup()
+	}, nil
+}
+
+// InitializeBootstrap builds `worker bootstrap`: identity's first account +
+// first key on an empty store. Identity publishes no events, so it is not in
+// Initialize (the router) — only this operator command needs it.
+func InitializeBootstrap(cfg *config.AppConfig) (*cli2.Bootstrap, func(), error) {
+	configPostgres := cfg.Postgres
+	oTel := cfg.OTel
+	log := cfg.Log
+	providers, cleanup, err := otel.New(oTel, log)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, cleanup2, err := postgres.NewDB(configPostgres, providers)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	logger := providers.Logger
+	repository := identity.ProvideAccountRepository(db, logger)
+	apikeyRepository := identity.ProvideAPIKeyRepository(db)
+	uuidGenerator := system3.NewUUIDGenerator()
+	secretGenerator := system3.NewSecretGenerator()
+	clock := system3.NewClock()
+	transactor := identity.ProvideTransactor(db)
+	meterProvider := providers.Meter
+	recorder, err := usecasex.NewRecorder(meterProvider)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	v := identity.ProvideBootstrap(repository, apikeyRepository, uuidGenerator, secretGenerator, clock, transactor, recorder)
+	bootstrap := cli2.NewBootstrap(v)
+	return bootstrap, func() {
 		cleanup2()
 		cleanup()
 	}, nil
