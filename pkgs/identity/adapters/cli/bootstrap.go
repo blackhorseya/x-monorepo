@@ -25,8 +25,7 @@ type Bootstrap struct {
 func NewBootstrap(bootstrap BootstrapUC) *Bootstrap { return &Bootstrap{bootstrap: bootstrap} }
 
 // Run bootstraps the store and reports on out. Created false (an account
-// already exists) is not an error: the command is safe to leave in a job
-// that runs on every rollout.
+// already exists) is not an error: running it again is a no-op.
 //
 // A failed write to out is an error: by then the transaction has committed,
 // and a secret that never reached the operator is lost (only its hash is

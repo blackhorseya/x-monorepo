@@ -27,9 +27,13 @@ func newBootstrapCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 		Long: `Create the first account (--name, --role; the role defaults to auth.admin_role so the
 key can call IdentityService) and its first API key (--key-name, --expires-in) in one
 transaction, and print the key's secret once. Only an empty store is touched: when any
-account exists the command prints "already bootstrapped" and exits 0, so it is safe to
-leave in a job that runs on every rollout — but two runs racing on an empty store can
-both create (the guard is a read, not a constraint); run it from one place.
+account exists the command prints "already bootstrapped" and exits 0, so running it
+again is a no-op — but two runs racing on an empty store can both create (the guard is
+a read, not a constraint); run it from one place.
+
+Run it only on the operator's own machine (kubectl port-forward to the database). Its
+stdout carries the secret, so never run it inside the cluster — a Pod's stdout lands in
+the Pod log. See docs/operations.md.
 
 With the printed X-API-Key, CreateAccount / CreateApiKey make the real accounts; the
 static auth.api_keys entry (if any) stays the break-glass path. The secret goes to
