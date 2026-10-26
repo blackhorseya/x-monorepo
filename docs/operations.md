@@ -106,17 +106,35 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 #    host 若是 <svc>.<ns>.svc，就把那個 Service port-forward 到本機；managed DB 就走你們原本連它的 proxy / bastion。
 kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 kill 它
 
-# 2. 帳密從同一個 Secret 取，只把 host:port 換成轉發的本機 port；整串放進 env，不要 echo、不要貼進 log / 票
-export APP_POSTGRES_URL=$(kubectl -n app get secret <fullname>-env -o jsonpath='{.data.APP_POSTGRES_URL}' \
-  | base64 -d | sed -E 's#@[^/]+/#@127.0.0.1:15432/#')
-
-# 3. 在 repo 根目錄用 release 同版 code 跑（或下載同版 release 的 worker binary：./worker bootstrap）
-task bootstrap -- --name root --role <release 的 auth.admin_role> --key-name bootstrap
+# 2. 取 URL、改寫 host:port、跑 bootstrap，全部在同一個 fail-fast 子 shell 裡：任何一步失敗就中止、不會跑到 bootstrap。
+#    URL 只存在這個子 shell 的變數裡（不 export、不 echo、不進 history），結束就沒了。
+(
+  set -euo pipefail
+  port=15432                      # 與上面 port-forward 的本機 port 一致
+  ca=/path/to/db-ca.pem           # DB 的 CA；連線用 sslmode=verify-ca 驗憑證鏈
+  raw=$(kubectl -n app get secret <fullname>-env -o jsonpath='{.data.APP_POSTGRES_URL}' | base64 -d)
+  [ -n "$raw" ] || { echo "abort: APP_POSTGRES_URL is empty or missing in the Secret" >&2; exit 1; }
+  # 只換 authority（@ 到下一個 / ? 或結尾），db 名與 query 原樣保留；沒有 /db 的 URL 也成立
+  url=$(printf '%s' "$raw" | sed -E "s#@[^/?]+([/?]|\$)#@127.0.0.1:${port}\1#; s/sslmode=verify-full/sslmode=verify-ca/")
+  case "$url" in
+    postgres://*@127.0.0.1:${port}/*|postgres://*@127.0.0.1:${port}\?*) ;;
+    *) echo "abort: the URL's host was not rewritten to 127.0.0.1:${port} (is it postgres://user:pass@host[:port]/db?...)" >&2; exit 1 ;;
+  esac
+  case "$url" in
+    *sslmode=verify-ca*|*sslmode=verify-full*) ;;
+    *) echo "abort: the URL must set sslmode=verify-ca or verify-full (never require / disable)" >&2; exit 1 ;;
+  esac
+  url="${url}&sslrootcert=${ca}"
+  # 3. 用空的 config 檔跑：不會讀 configs/local.yaml，萬一 env 沒生效也只會報 postgres.url is required，不會連到本機 DB。
+  #    不用 `task bootstrap`：它會把 APP_CONFIG 設成 configs/local.yaml。release 同版 code 在 repo 根目錄跑，或換成同版 worker binary（./worker bootstrap）。
+  cfg=$(mktemp); trap 'rm -f "$cfg"' EXIT
+  APP_CONFIG="$cfg" APP_POSTGRES_URL="$url" go run ./apps/worker bootstrap --name root --role <release 的 auth.admin_role> --key-name bootstrap
+)
 ```
 
-- env（`APP_POSTGRES_URL`）蓋過 config 檔；`--role` 預設是**本機 config** 的 `auth.admin_role`，與 release 的不同時要明寫，不然 key 會沒有管理權限。
-- `sslmode=verify-full` 的 URL 在 localhost 驗不過 server 憑證的 hostname，這時改 `sslmode=require`，或用 proxy 的 TLS。
-- 第一次跑印出 `X-API-Key: xk_…`（只這一次，庫裡只有 hash），抄到密碼管理器；再跑一次是 `already bootstrapped`、什麼都不寫。做完 `unset APP_POSTGRES_URL`、停掉 port-forward。
+- 空 config 代表 `--role` 的預設是內建預設值、不是 release 的 `auth.admin_role`；兩者不同時要明寫 `--role`，不然 key 會沒有管理權限。
+- TLS 一律驗憑證，**不要用 `sslmode=require` 或 `disable` 連 release 的 DB**（`require` 在沒有 `sslrootcert` 時不驗證 DB 憑證）。透過 port-forward 連 `127.0.0.1` 時 hostname 對不上，所以用 `verify-ca` + `sslrootcert`（憑證鏈照驗，只是不比對主機名；上面的指令把 `verify-full` 轉成 `verify-ca`）。或者改從能以原主機名連到 DB 的地方（bastion、managed DB 的 proxy）跑，保留 `verify-full`，這時不需要 port-forward 與那兩行改寫。
+- 第一次跑印出 `X-API-Key: xk_…`（只這一次，庫裡只有 hash），抄到密碼管理器；再跑一次是 `already bootstrapped`、什麼都不寫。做完停掉 port-forward。
 - 已有 account 就是 no-op，但**不要同時跑兩個**：guard 是 read 不是 constraint，兩個 run 在空 store 上搶跑會各建一個。
 
 `worker bootstrap` 因為輸出失敗（terminal 被關、pipe 斷掉）而 exit 非 0，代表 account 與 key **已經建立**、secret **已經遺失**（庫裡只有 hash，重跑是 no-op、不會重印）。補救：用 config `auth.api_keys` 的 break-glass key 登入，再呼叫 `CreateApiKey` 開一把新 key（錯誤訊息裡有沒送達那把的 key ID 與 prefix，要的話 `RevokeApiKey` 它）。
