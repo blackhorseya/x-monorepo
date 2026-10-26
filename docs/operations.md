@@ -106,25 +106,46 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 #    host 若是 <svc>.<ns>.svc，就把那個 Service port-forward 到本機；managed DB 就走你們原本連它的 proxy / bastion。
 kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 kill 它
 
-# 2. 取 URL、改寫 host:port、跑 bootstrap，全部在同一個 fail-fast 子 shell 裡：任何一步失敗就中止、不會跑到 bootstrap。
-#    URL 只存在這個子 shell 的變數裡（不 export、不 echo、不進 history），結束就沒了。
+# 2. 取 URL、改寫 host:port、檢查 sslmode、跑 bootstrap，全部在同一個 fail-fast 子 shell 裡：任何一步失敗就中止、不會跑到 bootstrap。
+#    原始 URL 與改寫後的 URL 只存在這個子 shell 的變數裡（不 export、不 echo、不進 history）；最終的 URL 會以 APP_POSTGRES_URL 傳給 go run 這個子程序。
 (
+  set +x                          # 外層若開了 xtrace（set -x / bash -x / zsh -x），先關掉，不然下面每一行連同密碼都會被印出
   set -euo pipefail
   port=15432                      # 與上面 port-forward 的本機 port 一致
   ca=/path/to/db-ca.pem           # DB 的 CA；連線用 sslmode=verify-ca 驗憑證鏈
+  abort() { echo "abort: $1" >&2; exit 1; }
   raw=$(kubectl -n app get secret <fullname>-env -o jsonpath='{.data.APP_POSTGRES_URL}' | base64 -d)
-  [ -n "$raw" ] || { echo "abort: APP_POSTGRES_URL is empty or missing in the Secret" >&2; exit 1; }
+  [ -n "$raw" ] || abort "APP_POSTGRES_URL is empty or missing in the Secret"
   # 只換 authority（@ 到下一個 / ? 或結尾），db 名與 query 原樣保留；沒有 /db 的 URL 也成立
-  url=$(printf '%s' "$raw" | sed -E "s#@[^/?]+([/?]|\$)#@127.0.0.1:${port}\1#; s/sslmode=verify-full/sslmode=verify-ca/")
+  url=$(printf '%s' "$raw" | sed -E "s#@[^/?]+([/?]|\$)#@127.0.0.1:${port}\1#")
   case "$url" in
     postgres://*@127.0.0.1:${port}/*|postgres://*@127.0.0.1:${port}\?*) ;;
-    *) echo "abort: the URL's host was not rewritten to 127.0.0.1:${port} (is it postgres://user:pass@host[:port]/db?...)" >&2; exit 1 ;;
+    *) abort "the URL's host was not rewritten to 127.0.0.1:${port} (is it postgres://user:pass@host[:port]/db?...)" ;;
   esac
-  case "$url" in
-    *sslmode=verify-ca*|*sslmode=verify-full*) ;;
-    *) echo "abort: the URL must set sslmode=verify-ca or verify-full (never require / disable)" >&2; exit 1 ;;
-  esac
-  url="${url}&sslrootcert=${ca}"
+  # sslmode 只看第一個 ? 之後的 query，逐個參數比對名稱：剛好一個 sslmode，值必須剛好是 verify-ca 或 verify-full。
+  # 沒有 query、0 個或多個 sslmode、其他值，或 query 含 % ; #（pgx 會 URL-decode 參數名，ssl%6Dode=disable 就是第二個 sslmode）、
+  # 或 URL 已經帶 sslrootcert（pgx 取第一個值，會蓋過下面附上的 CA）都中止。不拿整串 URL 做子字串比對（密碼裡也可以出現 sslmode=…）。
+  case "$url" in *\?*) ;; *) abort "the URL has no query: it must set sslmode=verify-ca or verify-full" ;; esac
+  base=${url%%\?*}
+  rest=${url#*\?}
+  case "$rest" in *%*|*\;*|*\#*) abort "the query contains % ; or #: refusing to guess how it decodes" ;; esac
+  query=; nssl=0
+  while [ -n "$rest" ]; do
+    param=${rest%%&*}
+    case "$rest" in *\&*) rest=${rest#*&} ;; *) rest= ;; esac
+    case "${param%%=*}" in
+      sslmode)
+        nssl=$((nssl + 1))
+        case "$param" in
+          sslmode=verify-ca|sslmode=verify-full) param=sslmode=verify-ca ;;  # port-forward 之後 hostname 對不上，verify-full 改成 verify-ca
+          *) abort "sslmode must be exactly verify-ca or verify-full (never require / disable)" ;;
+        esac ;;
+      sslrootcert) abort "remove sslrootcert from the Secret's URL; this command adds the CA itself" ;;
+    esac
+    query="${query:+$query&}$param"
+  done
+  [ "$nssl" -eq 1 ] || abort "the query must contain exactly one sslmode (found $nssl)"
+  url="${base}?${query}&sslrootcert=${ca}"
   # 3. 用空的 config 檔跑：不會讀 configs/local.yaml，萬一 env 沒生效也只會報 postgres.url is required，不會連到本機 DB。
   #    不用 `task bootstrap`：它會把 APP_CONFIG 設成 configs/local.yaml。release 同版 code 在 repo 根目錄跑，或換成同版 worker binary（./worker bootstrap）。
   cfg=$(mktemp); trap 'rm -f "$cfg"' EXIT
@@ -133,7 +154,7 @@ kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 ki
 ```
 
 - 空 config 代表 `--role` 的預設是內建預設值、不是 release 的 `auth.admin_role`；兩者不同時要明寫 `--role`，不然 key 會沒有管理權限。
-- TLS 一律驗憑證，**不要用 `sslmode=require` 或 `disable` 連 release 的 DB**（`require` 在沒有 `sslrootcert` 時不驗證 DB 憑證）。透過 port-forward 連 `127.0.0.1` 時 hostname 對不上，所以用 `verify-ca` + `sslrootcert`（憑證鏈照驗，只是不比對主機名；上面的指令把 `verify-full` 轉成 `verify-ca`）。或者改從能以原主機名連到 DB 的地方（bastion、managed DB 的 proxy）跑，保留 `verify-full`，這時不需要 port-forward 與那兩行改寫。
+- TLS 一律驗憑證，**不要用 `sslmode=require` 或 `disable` 連 release 的 DB**；上面的子 shell 只認 query 裡剛好一個 `sslmode`、值剛好是 `verify-ca` / `verify-full`，其他情況（沒有 query、重複、其他值、含 `%` `;` `#`、URL 已有 `sslrootcert`）一律中止（`require` 在沒有 `sslrootcert` 時不驗證 DB 憑證）。透過 port-forward 連 `127.0.0.1` 時 hostname 對不上，所以用 `verify-ca` + `sslrootcert`（憑證鏈照驗，只是不比對主機名；上面的指令把 `verify-full` 轉成 `verify-ca`）。或者改從能以原主機名連到 DB 的地方（bastion、managed DB 的 proxy）跑，保留 `verify-full`，這時不需要 port-forward 與那兩行改寫。
 - 第一次跑印出 `X-API-Key: xk_…`（只這一次，庫裡只有 hash），抄到密碼管理器；再跑一次是 `already bootstrapped`、什麼都不寫。做完停掉 port-forward。
 - 已有 account 就是 no-op，但**不要同時跑兩個**：guard 是 read 不是 constraint，兩個 run 在空 store 上搶跑會各建一個。
 
