@@ -11,6 +11,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
@@ -45,12 +46,14 @@ var ProviderSet = wire.NewSet(
 	ProvideCancelOrder,
 	ProvideConfirmOrder,
 	ProvideListOrders,
+	ProvideOrderStats,
 
 	// adapters
 	rpc.NewOrderService,
 	consumer.NewOrderCancellationHandler,
 	consumer.NewStockReservedHandler,
 	ProvideSubscriptions,
+	ProvideGauges,
 )
 
 // ProvideOrderRepository picks the persistence backend from the composition
@@ -102,6 +105,13 @@ func ProvideSubscriptions(cancel *consumer.OrderCancellationHandler, reserved *c
 	}
 }
 
+// Gauges is this BC's funnel gauges (adapters/metrics: orders per status and
+// the age of the oldest in each); apps/worker registers them next to the
+// eventbus lag gauges. A named type so wire can tell each BC's apart.
+type Gauges struct{ *metrics.Gauges }
+
+func ProvideGauges(stats metrics.OrderStatsUC) Gauges { return Gauges{metrics.NewGauges(stats)} }
+
 // decorate is the one place that decides which cross-cutting decorators every
 // use case of this BC gets (outermost first). Add a decorator here, not per use case.
 // Reads use it as is: a transaction would only add a BEGIN/COMMIT round trip.
@@ -143,6 +153,12 @@ func ProvideCancelOrder(repo order.Repository, tx port.Transactor, inbox port.In
 // ProvideConfirmOrder has no rpc caller: only the consumer (inventory.v1.StockReserved) drives it.
 func ProvideConfirmOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ConfirmOrderUC {
 	return decorateTx("ordering.confirm_order", rec, tx, inbox, usecase.NewConfirmOrder(repo, events, clock))
+}
+
+// ProvideOrderStats feeds the gauges; decorated like every read (its Logging
+// success line is Debug, so a scrape every 15s stays quiet at Info).
+func ProvideOrderStats(repo order.Repository, rec *usecasex.Recorder) metrics.OrderStatsUC {
+	return decorate("ordering.order_stats", rec, usecase.NewOrderStats(repo))
 }
 
 func ProvideListOrders(repo order.Repository, rec *usecasex.Recorder) rpc.ListOrdersUC {

@@ -19,6 +19,21 @@ type ReleaseStockInput struct {
 	OrderID string
 }
 
+// ReservationStatsInput has no fields: the stats are for the whole BC.
+type ReservationStatsInput struct{}
+
+// StatusStat is one status of the funnel: how many reservations, and when the
+// oldest of them last changed (zero when Count is 0). Every known status is present.
+type StatusStat struct {
+	Status          string
+	Count           int64
+	OldestUpdatedAt time.Time
+}
+
+type ReservationStatsOutput struct {
+	Statuses []StatusStat
+}
+
 type GetReservationInput struct {
 	OrderID string
 }

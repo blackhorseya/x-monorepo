@@ -156,6 +156,44 @@ groups:
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "29"
 
+      # The saga's happy path never closed: an order has waited for inventory's answer (StockReserved →
+      # CONFIRMED, or a shortfall → CANCELLED) for 10 minutes. Nothing on the eventbus rules has to be red for
+      # this: a handler that keeps dropping (domain error) acks fine and shows up here and nowhere else.
+      - uid: x-monorepo-saga-pending
+        title: Saga stuck — order PENDING too long
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max (ordering_orders_oldest_age_seconds{status="PENDING"})
+              legendFormat: "oldest PENDING order"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [600] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: worker }
+        annotations:
+          summary: "an order has been PENDING for {{ $values.A }}s"
+          description: >-
+            ordering_orders_oldest_age_seconds{status="PENDING"} is above 600: inventory's answer for at least one
+            order never reached ordering. Check eventbus_consumer_lag on ordering.v1.OrderCreated (inventory's
+            group) and inventory.v1.StockReserved (ordering's group), then the poison tables (`task poison -- list`):
+            a StockReserved or OrderCancellationRequested parked there is exactly this. The order itself is
+            `ListOrders status=PENDING` / the console's PENDING filter, oldest first at the bottom.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "36"
+
       # Rows are held back by a consumer group that is not making progress — while the lag rules above only
       # watch the groups this worker is configured with, this one sees every cursor in the offsets table,
       # so a group from a renamed worker.consumer_group or an E2E run shows up here and nowhere else.

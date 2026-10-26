@@ -18,4 +18,7 @@ type Repository interface {
 	// order_id desc) and the cursor of the next page, or nil when this is the
 	// last page.
 	List(c context.Context, p ListParams) ([]*Reservation, *Cursor, error)
+	// CountByStatus returns one StatusCount per status that has at least one
+	// reservation (none for an empty status): the funnel the worker exports as gauges.
+	CountByStatus(c context.Context) ([]StatusCount, error)
 }

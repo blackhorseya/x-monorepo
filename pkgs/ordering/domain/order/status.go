@@ -1,5 +1,7 @@
 package order
 
+import "time"
+
 // Status is the lifecycle state of an Order.
 type Status uint8
 
@@ -52,3 +54,24 @@ func ParseStatus(s string) (Status, error) {
 		return StatusUnknown, ErrInvalidStatus
 	}
 }
+
+// Statuses lists every status this version knows, in lifecycle order. Readers
+// that report per-status figures use it to show a zero instead of nothing.
+func Statuses() []Status { return []Status{StatusPending, StatusConfirmed, StatusCancelled} }
+
+// StatusCount is how many orders sit in one status and when the oldest of them
+// last changed (zero time when there are none): the saga's funnel, as the
+// repository counts it. Age is the reader's to compute — the domain has no clock.
+type StatusCount struct {
+	status          Status
+	count           int64
+	oldestUpdatedAt time.Time
+}
+
+func NewStatusCount(status Status, count int64, oldestUpdatedAt time.Time) StatusCount {
+	return StatusCount{status: status, count: count, oldestUpdatedAt: oldestUpdatedAt}
+}
+
+func (x StatusCount) Status() Status             { return x.status }
+func (x StatusCount) Count() int64               { return x.count }
+func (x StatusCount) OldestUpdatedAt() time.Time { return x.oldestUpdatedAt }

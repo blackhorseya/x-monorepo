@@ -7,6 +7,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -133,4 +134,41 @@ func (i *OrderRepository) List(c context.Context, p order.ListParams) ([]*order.
 	}
 
 	return out, next, nil
+}
+
+// CountByStatus mirrors the Postgres GROUP BY: statuses with no order are absent.
+func (i *OrderRepository) CountByStatus(c context.Context) ([]order.StatusCount, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	type acc struct {
+		n      int64
+		oldest time.Time
+	}
+	by := map[order.Status]*acc{}
+	for _, o := range i.data {
+		a := by[o.Status()]
+		if a == nil {
+			a = &acc{oldest: o.UpdatedAt()}
+			by[o.Status()] = a
+		}
+		a.n++
+		if o.UpdatedAt().Before(a.oldest) {
+			a.oldest = o.UpdatedAt()
+		}
+	}
+
+	out := make([]order.StatusCount, 0, len(by))
+	for _, st := range order.Statuses() {
+		if a, ok := by[st]; ok {
+			out = append(out, order.NewStatusCount(st, a.n, a.oldest))
+		}
+	}
+
+	return out, nil
 }

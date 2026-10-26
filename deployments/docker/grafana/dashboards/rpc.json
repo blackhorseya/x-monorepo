@@ -838,13 +838,161 @@
       }
     },
     {
+      "id": 33,
+      "type": "row",
+      "title": "Saga \u2014 ordering \u2194 inventory funnel (per replica gauges read from the DB: max, never sum)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 34,
+      "title": "Orders by status",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "ordering_orders{status}: every order in the ordering BC by status. PENDING is waiting for inventory's answer (StockReserved \u2192 CONFIRMED, shortfall \u2192 CANCELLED); a PENDING count that does not drain while CONFIRMED / CANCELLED stand still is a broken saga \u2014 check consumer lag on ordering.v1.OrderCreated and inventory.v1.StockReserved, then the poison tables.",
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (status)(ordering_orders{job=\"$service\"})",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 35,
+      "title": "Reservations by status",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "inventory_reservations{status}: RESERVED is stock on hold for an order that has not moved on, REJECTED a shortfall (ordering was asked to cancel), RELEASED a cancelled order's hold given back, CANCELLED a tombstone (OrderCancelled overtook OrderCreated).",
+      "gridPos": {
+        "x": 8,
+        "y": 41,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (status)(inventory_reservations{job=\"$service\"})",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 36,
+      "title": "Oldest order / reservation age by status",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "ordering_orders_oldest_age_seconds / inventory_reservations_oldest_age_seconds: how long the oldest row in each status has sat there since its last status change (0 when the status is empty). PENDING past 10 minutes raises x-monorepo-saga-pending; RESERVED growing for days is stock held by orders nobody completed.",
+      "gridPos": {
+        "x": 16,
+        "y": 41,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (status)(ordering_orders_oldest_age_seconds{job=\"$service\"})",
+          "legendFormat": "order {{status}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (status)(inventory_reservations_oldest_age_seconds{job=\"$service\"})",
+          "legendFormat": "reservation {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
       "id": 14,
       "type": "row",
       "title": "Plain HTTP routes (docs / openapi / 404) \u2014 otelgin; RPCs are above (otelconnect)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 49,
         "w": 24,
         "h": 1
       },
@@ -860,7 +1008,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 41,
+        "y": 50,
         "w": 12,
         "h": 8
       },
@@ -902,7 +1050,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 41,
+        "y": 50,
         "w": 12,
         "h": 8
       },
@@ -941,7 +1089,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 49,
+        "y": 58,
         "w": 24,
         "h": 1
       },
@@ -957,7 +1105,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 59,
         "w": 6,
         "h": 8
       },
@@ -999,7 +1147,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 50,
+        "y": 59,
         "w": 6,
         "h": 8
       },
@@ -1041,7 +1189,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 50,
+        "y": 59,
         "w": 6,
         "h": 8
       },
@@ -1083,7 +1231,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 50,
+        "y": 59,
         "w": 6,
         "h": 8
       },
@@ -1122,7 +1270,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 58,
+        "y": 67,
         "w": 24,
         "h": 1
       },
@@ -1138,7 +1286,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 59,
+        "y": 68,
         "w": 24,
         "h": 10
       },
@@ -1172,7 +1320,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 69,
+        "y": 78,
         "w": 24,
         "h": 1
       },
@@ -1189,7 +1337,7 @@
       "description": "auth_decisions_total{result, method}: every pass through the auth interceptor (auth.mode optional / required; nothing with mode off). ok = credential verified, public = auth.public procedure, anonymous = no credential in optional mode, missing = no credential in required mode, invalid = credential sent and rejected. method is the header sent (api_key / jwt / none), never who.",
       "gridPos": {
         "x": 0,
-        "y": 70,
+        "y": 79,
         "w": 12,
         "h": 8
       },
@@ -1232,7 +1380,7 @@
       "description": "What callers are being refused. missing / invalid come from auth_decisions_total; permission_denied is the RPC status otelconnect records when a handler's RequireRole refuses a known principal (the auth interceptor only authenticates). A step in `invalid` is a guessed or rotated key; `missing` after a deploy is a client that lost its header.",
       "gridPos": {
         "x": 12,
-        "y": 70,
+        "y": 79,
         "w": 12,
         "h": 8
       },

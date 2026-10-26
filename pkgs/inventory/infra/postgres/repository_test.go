@@ -211,6 +211,16 @@ func TestRepositories_Postgres(t *testing.T) {
 	if err != nil || len(rpage) != 1 || rpage[0].OrderID() != "o-1" || rnext != nil {
 		t.Fatalf("page 2 = %v next=%v err=%v", ids(rpage), rnext, err)
 	}
+	// ── count by status: REJECTED, RELEASED, CANCELLED one each; RESERVED absent ──
+	counts, err := reservations.CountByStatus(c)
+	if err != nil || len(counts) != 3 {
+		t.Fatalf("CountByStatus = %+v, %v", counts, err)
+	}
+	for _, sc := range counts {
+		if sc.Count() != 1 || sc.Status() == reservation.StatusReserved || sc.OldestUpdatedAt().IsZero() {
+			t.Fatalf("CountByStatus entry = %+v", sc)
+		}
+	}
 	if len(rpage[0].Lines()) == 0 || len(rpage[0].Shortfall()) == 0 {
 		t.Fatalf("listed reservation lost its lines: %+v", rpage[0])
 	}

@@ -23,4 +23,7 @@ type Repository interface {
 	// List returns up to p.Limit orders newest first (created_at desc, id desc)
 	// and the cursor of the next page, or nil when this is the last page.
 	List(c context.Context, p ListParams) ([]*Order, *Cursor, error)
+	// CountByStatus returns one StatusCount per status that has at least one
+	// order (none for an empty status): the funnel the worker exports as gauges.
+	CountByStatus(c context.Context) ([]StatusCount, error)
 }

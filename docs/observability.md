@@ -25,6 +25,12 @@
   `eventbus_inbox_oldest_age_seconds{schema}` 是 `<bc>.inbox`。這些是 `count(*)` 全表掃，表很大時把 OTLP 的 collect 間隔拉長。
   每個 replica 都回報同一組數字：**用 `max`，不要 `sum`**。
   worker 沒有 HTTP server，這些只走 OTLP（60s 一次）
+- **saga 的漏斗**（各 BC 的 `adapters/metrics`，`apps/worker` 和 lag gauge 一起註冊，只在有 DB 時）：`ordering_orders{status}` /
+  `inventory_reservations{status}` 是每個 status 的筆數，`ordering_orders_oldest_age_seconds{status}` / `inventory_reservations_oldest_age_seconds{status}`
+  是該 status 最老一筆距上次狀態變更的秒數（每個已知 status 都有 series，空的報 0——alert 要看到 0 不是 no data）。
+  每次 scrape 一句 `GROUP BY status`（`OrderStats` / `ReservationStats` use case → `Repository.CountByStatus`），
+  每個 replica 報一樣的數字，`max` 不 `sum`。PENDING 老 = StockReserved 或缺貨的取消都沒回到 ordering（alert `x-monorepo-saga-pending`）；
+  RESERVED 老 = 庫存被沒走完的訂單扣著（reservation TTL 是下一步）。
 - **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader、logs 走 batch processor；`otelconnect`
   interceptor 掛最外層，每個 RPC 一個 span。endpoint 空 = tracer no-op、logger 只寫 stdout、不 dial
 - **span 的來源**：RPC 由 `otelconnect`；`/api/docs`、`/api/openapi/*` 等普通 route 由 `otelgin`（filter 掉 RPC prefix、
