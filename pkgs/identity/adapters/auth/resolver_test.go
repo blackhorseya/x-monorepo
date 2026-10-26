@@ -79,6 +79,47 @@ func TestResolver(t *testing.T) {
 	}
 	uc.fail = false
 
+	// A key that expires inside the TTL window is refused at its expiry, not
+	// at the end of the window (regression: the cache used to outlive expires_at).
+	expiring := "xk_" + strings.Repeat("e", 43)
+	uc.known[expiring] = &dto.ResolveAPIKeyOutput{AccountID: "acc-2", KeyID: "key-2", ExpiresAt: clk.t.Add(2 * time.Second)}
+	if _, found, err := r.ResolveAPIKey(c, expiring); err != nil || !found {
+		t.Fatalf("expiring before expiry: %v, %v", found, err)
+	}
+	clk.t = clk.t.Add(2 * time.Second)
+	calls := uc.calls
+	delete(uc.known, expiring) // what the use case would now answer: expired → not found
+	if _, found, err := r.ResolveAPIKey(c, expiring); err != nil || found || uc.calls != calls+1 {
+		t.Fatalf("at expiry: found=%v err=%v calls=%d (want a fresh lookup that refuses)", found, err, uc.calls)
+	}
+	// A key with no expiry keeps the full TTL.
+	clk.t = clk.t.Add(auth.DefaultCacheTTL)
+	_, _, _ = r.ResolveAPIKey(c, good)
+	calls = uc.calls
+	clk.t = clk.t.Add(auth.DefaultCacheTTL - time.Second)
+	if _, found, _ := r.ResolveAPIKey(c, good); !found || uc.calls != calls {
+		t.Fatal("no-expiry key must be served from cache for the whole TTL")
+	}
+
+	// Contract during an outage: a key verified inside the window keeps
+	// working until the window ends (bounded staleness); a key that was not
+	// verified is refused. Both are deliberate (docs/identity.md).
+	clk.t = clk.t.Add(auth.DefaultCacheTTL)
+	_, _, _ = r.ResolveAPIKey(c, good)
+	uc.fail = true
+	if _, found, err := r.ResolveAPIKey(c, good); err != nil || !found {
+		t.Fatalf("cached key during outage: found=%v err=%v (want served until the window ends)", found, err)
+	}
+	other := "xk_" + strings.Repeat("o", 43)
+	if _, _, err := r.ResolveAPIKey(c, other); !errors.Is(err, errDB) {
+		t.Fatalf("unverified key during outage: %v (want the outage error → rejected)", err)
+	}
+	clk.t = clk.t.Add(auth.DefaultCacheTTL)
+	if _, _, err := r.ResolveAPIKey(c, good); !errors.Is(err, errDB) {
+		t.Fatalf("cached key after the window during outage: %v (want rejected)", err)
+	}
+	uc.fail = false
+
 	// TTL 0: no cache at all.
 	uc2 := &counting{known: uc.known}
 	r0 := auth.NewResolverWithTTL(uc2, clk, 0)

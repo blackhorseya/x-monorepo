@@ -40,6 +40,9 @@ auth:
     public_key: ""
   # Procedures that never need a credential: ["/ordering.v1.OrderService/GetOrder"]
   public: []
+  # Bound on one identity-BC key lookup (X-API-Key the config does not know; auth runs outside
+  # http.timeout). A stuck database rejects fast instead of holding every request. 0 = unbounded.
+  resolver_timeout: 2s
 
 log:
   level: debug  # debug | info | warn | error

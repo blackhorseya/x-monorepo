@@ -32,6 +32,7 @@
 | `auth.jwt.hs256_secret` / `auth.jwt.public_key` | `APP_AUTH_JWT_HS256_SECRET` / `APP_AUTH_JWT_PUBLIC_KEY` | 空 | 二選一：HS256 secret（≥ 32 bytes）或 PEM public key（RSA / EC / Ed25519，演算法家族釘死在 key 型別上）。對 `Authorization: Bearer <jwt>`，`exp` 必填 |
 | `auth.jwt.issuer` / `auth.jwt.audience` | `APP_AUTH_JWT_ISSUER` / `APP_AUTH_JWT_AUDIENCE` | 空 | 設了就檢查 `iss` / `aud` |
 | `auth.public` | `APP_AUTH_PUBLIC` | 空 | 不需 credential 的 procedure 清單（`/ordering.v1.OrderService/GetOrder`，env 用逗號分隔） |
+| `auth.resolver_timeout` | `APP_AUTH_RESOLVER_TIMEOUT` | `2s` | 一次 `server.CredentialResolver` 查詢（identity BC 的 DB key）的上限。auth 在 `http.timeout` 之外，沒有它 DB 卡住會拖住所有帶 key 的 request 與 shutdown drain；到期 = 拒絕（`auth.invalid_credential`）。`0` = 不限 |
 | `postgres.url` | `APP_POSTGRES_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
 | `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
 | `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |

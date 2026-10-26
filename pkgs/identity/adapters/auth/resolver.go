@@ -26,8 +26,11 @@ var _ server.CredentialResolver = (*Resolver)(nil)
 type ResolveAPIKeyUC = usecasex.UseCase[dto.ResolveAPIKeyInput, *dto.ResolveAPIKeyOutput]
 
 // DefaultCacheTTL bounds how long a resolved (or refused) key is served from
-// memory: a revoke, a disable or a role change takes effect within it. The
-// hot path pays one lookup per key per TTL instead of one per request.
+// memory: a revoke, a disable or a role change takes effect within it, and a
+// database outage keeps serving keys verified within it (bounded staleness,
+// never a key that was not verified). A key's own expiry is exact: an entry
+// never outlives expires_at. The hot path pays one lookup per key per TTL
+// instead of one per request.
 const DefaultCacheTTL = 30 * time.Second
 
 // MaxCacheEntries bounds the cache; past it the whole cache is dropped (a
@@ -49,7 +52,7 @@ type Resolver struct {
 type entry struct {
 	principal contextx.Principal
 	found     bool
-	until     time.Time
+	until     time.Time // the earlier of now+ttl and the key's expires_at
 }
 
 // NewResolver builds the resolver with DefaultCacheTTL.
@@ -78,12 +81,16 @@ func (a *Resolver) ResolveAPIKey(c context.Context, key string) (contextx.Princi
 	switch {
 	case err == nil:
 		e = entry{found: true, principal: contextx.Principal{Subject: out.AccountID, Name: out.Name, Roles: out.Roles, CredentialID: out.KeyID}}
+		e.until = now.Add(a.ttl)
+		if !out.ExpiresAt.IsZero() && out.ExpiresAt.Before(e.until) {
+			e.until = out.ExpiresAt
+		}
 	case isDomainError(err):
-		e = entry{found: false}
+		e = entry{found: false, until: now.Add(a.ttl)}
 	default:
 		return contextx.Principal{}, false, err
 	}
-	a.put(h, e, now)
+	a.put(h, e)
 
 	return e.principal, e.found, nil
 }
@@ -106,7 +113,7 @@ func (a *Resolver) get(h apikey.Hash, now time.Time) (entry, bool) {
 	return e, true
 }
 
-func (a *Resolver) put(h apikey.Hash, e entry, now time.Time) {
+func (a *Resolver) put(h apikey.Hash, e entry) {
 	if a.ttl <= 0 {
 		return
 	}
@@ -115,7 +122,6 @@ func (a *Resolver) put(h apikey.Hash, e entry, now time.Time) {
 	if len(a.cache) >= MaxCacheEntries {
 		a.cache = make(map[apikey.Hash]entry)
 	}
-	e.until = now.Add(a.ttl)
 	a.cache[h] = e
 }
 

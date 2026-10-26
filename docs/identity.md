@@ -51,10 +51,20 @@ metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有
 
 **Bootstrap**：第一把 admin key 用 config `auth.api_keys`（`root=<key>:admin`），拿它 `CreateAccount` + `CreateApiKey`，之後 config 那把留著當 break-glass。沒有 seed migration、沒有 bootstrap CLI。
 
-## 生效延遲
+## 生效延遲與 cache 契約
 
 resolver 前面有 in-process cache，TTL `auth.DefaultCacheTTL` = 30s，hit 與 miss 都 cache（miss 也 cache 是為了擋猜 key 打 DB；真正的防線是 rate limit）。
-所以 **revoke / disable / role 變更最多 30s 後生效**，每個 rpc replica 各自一份 cache。resolver error 不 cache。cache 上限 10k entries，超過整個丟掉重來。
+每個 rpc replica 各自一份；上限 10k entries，超過整個丟掉重來。契約（`adapters/auth/resolver_test.go` 逐條有測）：
+
+| 事件 | 生效 |
+|---|---|
+| revoke / disable / `AssignRoles` | 最多 **30s** 後（該 replica 的 entry 到期） |
+| key 的 `expires_at` | **準時**：entry 的有效期取 `min(now+30s, expires_at)`，到期的下一個 request 重查、被拒 |
+| DB 掛掉 | **bounded staleness**：30s 內驗過的 key 在那個 window 結束前照常通過；window 外、或沒驗過的 key，resolver 回 error → 拒絕（`auth.invalid_credential`）+ error log。DB 掛掉**不會讓任何沒驗過的 key 進來**，但也不會立刻踢掉剛驗過的 |
+| resolver error | 不 cache，每個 request 都再試 |
+| resolver 查太久 | `auth.resolver_timeout`（預設 2s）到期 = 拒絕；auth 在 `http.timeout` 之外，所以這個上限是獨立的 |
+
+「DB 掛掉仍服務 30s 內驗過的 key」是刻意的（可用性 > 立即一致；不等於放行），要改成嚴格 fail-closed 就得每個 request 都查 DB，等於沒有 cache——這是產品決定，不是 bug。
 
 v1 **不記** `last_used_at`（hot path 寫入）；要審計誰用了哪把 key看 access line 的 `sub`（account id）。
 

@@ -236,10 +236,14 @@ func TestAPIKeyLifecycleAndResolve(t *testing.T) {
 		t.Fatalf("list unknown: %v", err)
 	}
 
-	// Resolve: the happy path carries the account, not the key's name.
+	// Resolve: the happy path carries the account, not the key's name, and
+	// the key's expiry (zero for k1) so a cache can honour it.
 	p, err := f.resolve.Execute(c, dto.ResolveAPIKeyInput{Secret: k1.Secret})
-	if err != nil || p.AccountID != a.ID || p.Name != "ci" || !slices.Equal(p.Roles, []string{"admin"}) || p.KeyID != k1.Key.ID {
+	if err != nil || p.AccountID != a.ID || p.Name != "ci" || !slices.Equal(p.Roles, []string{"admin"}) || p.KeyID != k1.Key.ID || !p.ExpiresAt.IsZero() {
 		t.Fatalf("resolve = %+v, %v", p, err)
+	}
+	if p2, err := f.resolve.Execute(c, dto.ResolveAPIKeyInput{Secret: k2.Secret}); err != nil || !p2.ExpiresAt.Equal(exp) {
+		t.Fatalf("resolve expiring = %+v, %v", p2, err)
 	}
 	for name, tc := range map[string]struct {
 		secret string

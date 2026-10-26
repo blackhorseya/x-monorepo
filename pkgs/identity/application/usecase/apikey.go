@@ -145,5 +145,5 @@ func (uc *ResolveAPIKey) Execute(c context.Context, in dto.ResolveAPIKeyInput) (
 		return nil, account.ErrDisabled
 	}
 
-	return &dto.ResolveAPIKeyOutput{AccountID: a.ID().String(), Name: a.Name(), Roles: a.Roles(), KeyID: k.ID().String()}, nil
+	return &dto.ResolveAPIKeyOutput{AccountID: a.ID().String(), Name: a.Name(), Roles: a.Roles(), KeyID: k.ID().String(), ExpiresAt: k.ExpiresAt()}, nil
 }

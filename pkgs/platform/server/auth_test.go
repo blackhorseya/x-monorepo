@@ -276,10 +276,43 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 	}
 	r.fail = false
 
+	// A resolver that hangs (stuck database) is cut off by auth.resolver_timeout
+	// and the request is rejected, not held: regression for the lookup running
+	// outside http.timeout.
+	slow := &hangingResolver{}
+	cfgTimeout := config.Auth{Mode: config.AuthRequired, APIKeys: cfg.APIKeys, ResolverTimeout: 20 * time.Millisecond}
+	in, err := server.NewAuthInterceptor(cfgTimeout, noop.NewMeterProvider(), slow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := in(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
+		return connect.NewResponse(&struct{}{}), nil
+	})
+	req := connect.NewRequest(&struct{}{})
+	req.Header().Set(server.APIKeyHeader, "xk_dbkey-0123456789abcdef0123456789")
+	start := time.Now()
+	_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+	if !isInvalidCredential(err) || time.Since(start) > time.Second {
+		t.Fatalf("hanging resolver: err=%v after %v (want invalid credential within the timeout)", err, time.Since(start))
+	}
+	if !slow.sawDeadline {
+		t.Fatal("resolver must receive a context with a deadline")
+	}
+
 	// Resolver only: no static key, no jwt, still a valid configuration.
 	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), r); err != nil {
 		t.Fatalf("resolver-only config: %v", err)
 	}
+}
+
+// hangingResolver blocks until its context is done, like a stuck database.
+type hangingResolver struct{ sawDeadline bool }
+
+func (r *hangingResolver) ResolveAPIKey(c context.Context, _ string) (contextx.Principal, bool, error) {
+	_, r.sawDeadline = c.Deadline()
+	<-c.Done()
+
+	return contextx.Principal{}, false, c.Err()
 }
 
 func isInvalidCredential(err error) bool {

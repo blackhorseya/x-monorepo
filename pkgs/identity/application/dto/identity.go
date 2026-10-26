@@ -94,6 +94,7 @@ type ResolveAPIKeyOutput struct {
 	Name      string
 	Roles     []string
 	KeyID     string
+	ExpiresAt time.Time // zero: never; a cache must not serve the key past it
 }
 
 // WhoAmIInput has no fields: the answer is the principal in the context.

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/golang-jwt/jwt/v5"
@@ -61,9 +62,10 @@ type CredentialResolver interface {
 // authenticator verifies one kind of credential already extracted from the
 // request. Verifying is constant-time where the credential is a secret.
 type authenticator struct {
-	keys     map[[32]byte]apiKey // sha256(key) → who (config auth.api_keys)
-	resolver CredentialResolver  // keys managed elsewhere, asked after keys
-	jwt      *jwtVerifier
+	keys            map[[32]byte]apiKey // sha256(key) → who (config auth.api_keys)
+	resolver        CredentialResolver  // keys managed elsewhere, asked after keys
+	resolverTimeout time.Duration       // bound on one resolver call (auth.resolver_timeout; 0 = none)
+	jwt             *jwtVerifier
 }
 
 type apiKey struct {
@@ -118,7 +120,7 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 	if err != nil {
 		return nil, fmt.Errorf("auth: decisions counter: %w", err)
 	}
-	a := &authenticator{resolver: resolver}
+	a := &authenticator{resolver: resolver, resolverTimeout: cfg.ResolverTimeout}
 	if cfg.APIKeys != "" {
 		keys, err := parseAPIKeys(cfg.APIKeys)
 		if err != nil {
@@ -229,7 +231,16 @@ func (a *authenticator) authenticate(c context.Context, apiKey, authorization st
 			return contextx.Principal{Subject: k.name, Roles: k.roles, Method: MethodAPIKey}, true, nil
 		}
 		if a.resolver != nil {
-			p, ok, err := a.resolver.ResolveAPIKey(c, apiKey)
+			// Auth sits outside the timeout interceptor (the deadline is for
+			// validation + use case), so the resolver's database read gets
+			// its own bound: a stuck database rejects fast instead of holding
+			// every request and the shutdown drain.
+			rc, cancel := c, func() {}
+			if a.resolverTimeout > 0 {
+				rc, cancel = context.WithTimeout(c, a.resolverTimeout)
+			}
+			p, ok, err := a.resolver.ResolveAPIKey(rc, apiKey)
+			cancel()
 			switch {
 			case err != nil:
 				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, err)
