@@ -81,7 +81,7 @@ apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Wate
                  worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）；
                  `worker poison list|show|requeue|drop` 操作各 BC 的 poison 表（requeue = 重新 insert 回原 topic 的 outbox 表）；
                  `worker prune --older-than <d>` 是 outbox / inbox 的 retention（poison 表不清）；
-                 有 DB 時 `eventbus.Lag` 另報每張 outbox 表 / inbox 的大小與最老一列年齡（`eventbus_outbox_*` / `eventbus_inbox_*`），alert 用它抓 prune 沒跑與 stale group
+                 有 DB 時 `eventbus.Lag` 另報每張 outbox 表 / inbox 的大小與最老一列年齡（`eventbus_outbox_*` / `eventbus_inbox_*`），alert 用它抓 prune 沒跑與 stale group；各 BC 的 `adapters/metrics` 另報 `ordering_orders{status}` / `inventory_reservations{status}` 與各 status 最老一筆的年齡（saga 漏斗，PENDING 太老有 alert）
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 deployments/helm Helm chart：rpc / worker Deployment、migrate pre-install/pre-upgrade hook Job、prune CronJob、console（nginx，/api proxy 到 rpc Service，`console.enabled` 預設 off）、
                  選配 rpc ServiceMonitor 與 ingress-only NetworkPolicy（rpc 永遠放行 console；`ingressFrom` 空 = 任何來源）；terminationGracePeriodSeconds

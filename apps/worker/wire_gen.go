@@ -85,7 +85,11 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	v4 := inventory.ProvideReleaseStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
 	orderCancelledHandler := consumer2.NewOrderCancelledHandler(v4)
 	inventorySubscriptions := inventory.ProvideSubscriptions(orderCreatedHandler, orderCancelledHandler)
-	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher, subscriptions, inventorySubscriptions)
+	v5 := ordering.ProvideOrderStats(repository, recorder)
+	gauges := ordering.ProvideGauges(v5)
+	v6 := inventory.ProvideReservationStats(reservationRepository, recorder)
+	inventoryGauges := inventory.ProvideGauges(v6)
+	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher, subscriptions, inventorySubscriptions, gauges, inventoryGauges)
 	if err != nil {
 		cleanup4()
 		cleanup3()

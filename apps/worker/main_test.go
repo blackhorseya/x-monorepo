@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -160,13 +161,15 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	setStock := inventory.ProvideSetStock(stocks, itx, iinbox, iclock, rec)
 	getStock := inventory.ProvideGetStock(stocks, rec)
 	getReservation := inventory.ProvideGetReservation(reservations, rec)
+	orderingGauges := ordering.ProvideGauges(ordering.ProvideOrderStats(orders, rec))
+	inventoryGauges := inventory.ProvideGauges(inventory.ProvideReservationStats(reservations, rec))
 	inventorySubs := inventory.ProvideSubscriptions(
 		inventoryconsumer.NewOrderCreatedHandler(inventory.ProvideReserveStock(reservations, stocks, itx, iinbox, iev, iclock, rec)),
 		inventoryconsumer.NewOrderCancelledHandler(inventory.ProvideReleaseStock(reservations, stocks, itx, iinbox, iev, iclock, rec)),
 	)
 
 	group := fmt.Sprintf("test-%d", time.Now().UnixNano())
-	w, err := NewWorker(config.Worker{ConsumerGroup: group, Broker: broker}, db, rdb, logger, tel, publisher, orderingSubs, inventorySubs)
+	w, err := NewWorker(config.Worker{ConsumerGroup: group, Broker: broker}, db, rdb, logger, tel, publisher, orderingSubs, inventorySubs, orderingGauges, inventoryGauges)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +409,20 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		}
 		return true, nil
 	})
+	// The saga funnel gauges (each BC's adapters/metrics), read from the same
+	// database: a and b ended CANCELLED, nothing is left PENDING, and D holds a
+	// RESERVED reservation. Every known status has a series, zero or not.
+	orderGauges := scrape(t, tel.MetricsHandler, "ordering_orders")
+	if len(orderGauges) != 3 || atoi(orderGauges[`ordering_orders{status="CANCELLED"}`]) < 2 || orderGauges[`ordering_orders{status="PENDING"}`] != "0" {
+		t.Fatalf("ordering_orders = %v", orderGauges)
+	}
+	reservationGauges := scrape(t, tel.MetricsHandler, "inventory_reservations")
+	if len(reservationGauges) != 4 || atoi(reservationGauges[`inventory_reservations{status="RESERVED"}`]) < 1 {
+		t.Fatalf("inventory_reservations = %v", reservationGauges)
+	}
+	if ages := scrape(t, tel.MetricsHandler, "ordering_orders_oldest_age_seconds"); len(ages) != 3 || ages[`ordering_orders_oldest_age_seconds{status="PENDING"}`] != "0" {
+		t.Fatalf("ordering_orders_oldest_age_seconds = %v", ages)
+	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_poison_messages") {
 		if v != "0" {
 			t.Fatalf("%s = %s, want 0", series, v)
@@ -498,7 +515,8 @@ func TestNewWorker_RedisGroupsExistBeforeRun(t *testing.T) {
 	_, err = NewWorker(config.Worker{ConsumerGroup: group, Broker: config.BrokerRedis, StartFrom: config.StartFromLatest},
 		db, rdb, tel.Logger, tel, eventbus.NewGoChannel(tel.Logger),
 		ordering.Subscriptions{{Topic: orderingconsumer.Topic, Handler: noop}},
-		inventory.Subscriptions{{Topic: inventoryconsumer.TopicOrderCreated, Handler: noop}, {Topic: inventoryconsumer.TopicOrderCancelled, Handler: noop}})
+		inventory.Subscriptions{{Topic: inventoryconsumer.TopicOrderCreated, Handler: noop}, {Topic: inventoryconsumer.TopicOrderCancelled, Handler: noop}},
+		ordering.Gauges{}, inventory.Gauges{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,4 +537,9 @@ func TestNewWorker_RedisGroupsExistBeforeRun(t *testing.T) {
 			t.Fatalf("%s: group %s missing before Run: %+v", topic, want, groups)
 		}
 	}
+}
+
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }

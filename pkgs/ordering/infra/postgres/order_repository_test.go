@@ -190,6 +190,28 @@ func TestOrderRepository_Postgres(t *testing.T) {
 	if err != nil || next != nil || len(filtered) != 2 || filtered[0].ID() != "o-4" || filtered[1].ID() != "o-3" {
 		t.Fatalf("List filtered = %v next=%v err=%v", filtered, next, err)
 	}
+
+	// ── count by status: one row per non-empty status, summing to every order ──
+	all, _, err := repo.List(c, order.ListParams{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts, err := repo.CountByStatus(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	byStatus := map[order.Status]order.StatusCount{}
+	for _, sc := range counts {
+		if sc.Count() == 0 || sc.OldestUpdatedAt().IsZero() {
+			t.Fatalf("empty status reported: %+v", sc)
+		}
+		total += sc.Count()
+		byStatus[sc.Status()] = sc
+	}
+	if total != int64(len(all)) || byStatus[order.StatusPending].Count() < 2 {
+		t.Fatalf("CountByStatus = %+v, want total %d with >= 2 PENDING", counts, len(all))
+	}
 }
 
 func assertEqual(t *testing.T, want, got *order.Order) {

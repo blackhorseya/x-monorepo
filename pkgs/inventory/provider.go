@@ -12,6 +12,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/metrics"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/usecase"
@@ -46,6 +47,7 @@ var ProviderSet = wire.NewSet(
 	ProvideListStocks,
 	ProvideGetReservation,
 	ProvideListReservations,
+	ProvideReservationStats,
 	ProvideReserveStock,
 	ProvideReleaseStock,
 
@@ -54,6 +56,7 @@ var ProviderSet = wire.NewSet(
 	consumer.NewOrderCreatedHandler,
 	consumer.NewOrderCancelledHandler,
 	ProvideSubscriptions,
+	ProvideGauges,
 )
 
 // ProvideStockRepository picks the persistence backend from the composition
@@ -152,6 +155,19 @@ func ProvideListStocks(stocks stock.Repository, rec *usecasex.Recorder) rpc.List
 
 func ProvideGetReservation(reservations reservation.Repository, rec *usecasex.Recorder) rpc.GetReservationUC {
 	return decorate("inventory.get_reservation", rec, usecase.NewGetReservation(reservations))
+}
+
+// Gauges is this BC's funnel gauges (adapters/metrics: reservations per status
+// and the age of the oldest in each); apps/worker registers them next to the
+// eventbus lag gauges. A named type so wire can tell each BC's apart.
+type Gauges struct{ *metrics.Gauges }
+
+func ProvideGauges(stats metrics.ReservationStatsUC) Gauges { return Gauges{metrics.NewGauges(stats)} }
+
+// ProvideReservationStats feeds the gauges; decorated like every read (Logging's
+// success line is Debug, so a scrape every 15s stays quiet at Info).
+func ProvideReservationStats(reservations reservation.Repository, rec *usecasex.Recorder) metrics.ReservationStatsUC {
+	return decorate("inventory.reservation_stats", rec, usecase.NewReservationStats(reservations))
 }
 
 func ProvideListReservations(reservations reservation.Repository, rec *usecasex.Recorder) rpc.ListReservationsUC {

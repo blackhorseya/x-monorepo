@@ -25,7 +25,9 @@ import (
 type Worker struct {
 	router *message.Router
 	logger *slog.Logger
-	lag    metric.Registration
+	// gauges are the callback registrations observed while Run runs: the
+	// eventbus lag gauges and each BC's funnel gauges (orders / reservations per status).
+	gauges []metric.Registration
 }
 
 // NewWorker registers every BC's subscriptions on one router. Each BC reads
@@ -65,6 +67,8 @@ func NewWorker(
 	publisher message.Publisher,
 	orderingSubs ordering.Subscriptions,
 	inventorySubs inventory.Subscriptions,
+	orderingGauges ordering.Gauges,
+	inventoryGauges inventory.Gauges,
 ) (*Worker, error) {
 	router, err := eventbus.NewRouter(logger, tel)
 	if err != nil {
@@ -172,8 +176,22 @@ func NewWorker(
 	if err != nil {
 		return nil, err
 	}
+	w := &Worker{router: router, logger: logger, gauges: []metric.Registration{reg}}
+	// The saga funnel (ordering_orders / inventory_reservations by status): read
+	// from the database on every scrape like the lag gauges, so only with one.
+	if db != nil {
+		for _, g := range []interface {
+			Register(metric.MeterProvider) (metric.Registration, error)
+		}{orderingGauges, inventoryGauges} {
+			r, err := g.Register(tel.Meter)
+			if err != nil {
+				return nil, err
+			}
+			w.gauges = append(w.gauges, r)
+		}
+	}
 
-	return &Worker{router: router, logger: logger, lag: reg}, nil
+	return w, nil
 }
 
 // ForwarderGroup is the Postgres consumer group of the outbox → Redis
@@ -231,7 +249,11 @@ func addForwarders(
 func (w *Worker) Run(c context.Context) error {
 	w.logger.Info("worker started", buildinfo.Get().LogAttrs()...)
 	defer w.logger.Info("worker stopped")
-	defer func() { _ = w.lag.Unregister() }()
+	defer func() {
+		for _, g := range w.gauges {
+			_ = g.Unregister()
+		}
+	}()
 
 	return w.router.Run(c)
 }

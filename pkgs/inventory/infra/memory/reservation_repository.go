@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -133,4 +134,41 @@ func cloneReservation(r *reservation.Reservation) (*reservation.Reservation, err
 		CreatedAt: r.CreatedAt(),
 		UpdatedAt: r.UpdatedAt(),
 	})
+}
+
+// CountByStatus mirrors the Postgres GROUP BY: statuses with no reservation are absent.
+func (i *ReservationRepository) CountByStatus(c context.Context) ([]reservation.StatusCount, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	type acc struct {
+		n      int64
+		oldest time.Time
+	}
+	by := map[reservation.Status]*acc{}
+	for _, r := range i.data {
+		a := by[r.Status()]
+		if a == nil {
+			a = &acc{oldest: r.UpdatedAt()}
+			by[r.Status()] = a
+		}
+		a.n++
+		if r.UpdatedAt().Before(a.oldest) {
+			a.oldest = r.UpdatedAt()
+		}
+	}
+
+	out := make([]reservation.StatusCount, 0, len(by))
+	for _, st := range reservation.Statuses() {
+		if a, ok := by[st]; ok {
+			out = append(out, reservation.NewStatusCount(st, a.n, a.oldest))
+		}
+	}
+
+	return out, nil
 }

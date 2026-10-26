@@ -35,6 +35,21 @@ type ConfirmOrderInput struct {
 	OrderID string
 }
 
+// OrderStatsInput has no fields: the stats are for the whole BC.
+type OrderStatsInput struct{}
+
+// StatusStat is one status of the funnel: how many orders, and when the oldest
+// of them last changed (zero when Count is 0). Every known status is present.
+type StatusStat struct {
+	Status          string
+	Count           int64
+	OldestUpdatedAt time.Time
+}
+
+type OrderStatsOutput struct {
+	Statuses []StatusStat
+}
+
 type ListOrdersInput struct {
 	CustomerID string // "" = any
 	Status     string // "" = any; PENDING | CANCELLED

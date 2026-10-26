@@ -242,3 +242,31 @@ func translate(err error) error {
 		return err
 	}
 }
+
+// CountByStatus is one GROUP BY over the orders table; statuses with no row are absent.
+func (i *OrderRepository) CountByStatus(c context.Context) ([]order.StatusCount, error) {
+	ctx := contextx.FromContext(c)
+
+	var rows []struct {
+		Status string
+		N      int64
+		Oldest time.Time
+	}
+	err := platformpg.TxOrDB(ctx, i.db).
+		Raw(`SELECT status, count(*) AS n, min(updated_at) AS oldest FROM ` + Schema + `.orders GROUP BY status ORDER BY status`).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("count orders by status: %w", err)
+	}
+
+	out := make([]order.StatusCount, 0, len(rows))
+	for _, r := range rows {
+		st, err := order.ParseStatus(r.Status)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, order.NewStatusCount(st, r.N, r.Oldest))
+	}
+
+	return out, nil
+}

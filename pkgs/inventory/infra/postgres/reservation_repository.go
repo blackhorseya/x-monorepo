@@ -197,3 +197,31 @@ func toDomain(row reservationRow) (*reservation.Reservation, error) {
 		UpdatedAt: row.UpdatedAt.UTC(),
 	})
 }
+
+// CountByStatus is one GROUP BY over the reservations table; statuses with no row are absent.
+func (i *ReservationRepository) CountByStatus(c context.Context) ([]reservation.StatusCount, error) {
+	ctx := contextx.FromContext(c)
+
+	var rows []struct {
+		Status string
+		N      int64
+		Oldest time.Time
+	}
+	err := platformpg.TxOrDB(ctx, i.db).
+		Raw(`SELECT status, count(*) AS n, min(updated_at) AS oldest FROM ` + Schema + `.reservations GROUP BY status ORDER BY status`).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("count reservations by status: %w", err)
+	}
+
+	out := make([]reservation.StatusCount, 0, len(rows))
+	for _, r := range rows {
+		st, err := reservation.ParseStatus(r.Status)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, reservation.NewStatusCount(st, r.N, r.Oldest))
+	}
+
+	return out, nil
+}

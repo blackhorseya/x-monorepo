@@ -43,3 +43,23 @@ func TestReservationRepository_List(t *testing.T) {
 		t.Fatal("cancelled context must fail")
 	}
 }
+
+// CountByStatus reports only the statuses that have reservations, with the oldest updated_at of each.
+func TestReservationRepository_CountByStatus(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewReservationRepository()
+	t0 := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	if got, err := repo.CountByStatus(c); err != nil || len(got) != 0 {
+		t.Fatalf("empty = %v, %v", got, err)
+	}
+	for i, id := range []string{"o-1", "o-2"} {
+		r, _ := reservation.Tombstone(id, t0.Add(time.Duration(i)*time.Minute))
+		if err := repo.Add(c, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := repo.CountByStatus(c)
+	if err != nil || len(got) != 1 || got[0].Status() != reservation.StatusCancelled || got[0].Count() != 2 || !got[0].OldestUpdatedAt().Equal(t0) {
+		t.Fatalf("counts = %+v, %v", got, err)
+	}
+}
