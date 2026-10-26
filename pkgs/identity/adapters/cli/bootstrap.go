@@ -27,22 +27,33 @@ func NewBootstrap(bootstrap BootstrapUC) *Bootstrap { return &Bootstrap{bootstra
 // Run bootstraps the store and reports on out. Created false (an account
 // already exists) is not an error: the command is safe to leave in a job
 // that runs on every rollout.
+//
+// A failed write to out is an error: by then the transaction has committed,
+// and a secret that never reached the operator is lost (only its hash is
+// stored), so exiting 0 would hide it. The error names the account and key —
+// never the secret — and points at the break-glass path.
 func (h *Bootstrap) Run(c context.Context, out io.Writer, name string, roles []string, keyName string, expiresAt time.Time) error {
 	res, err := h.bootstrap.Execute(c, dto.BootstrapInput{Name: name, Roles: roles, KeyName: keyName, ExpiresAt: expiresAt})
 	if err != nil {
 		return err
 	}
 	if !res.Created {
-		_, _ = fmt.Fprintln(out, "already bootstrapped: an account exists, nothing written")
+		if _, err := fmt.Fprintln(out, "already bootstrapped: an account exists, nothing written"); err != nil {
+			return fmt.Errorf("write bootstrap result: %w", err)
+		}
+
 		return nil
 	}
 	expires := "never"
 	if !res.Key.ExpiresAt.IsZero() {
 		expires = res.Key.ExpiresAt.UTC().Format(time.RFC3339)
 	}
-	_, _ = fmt.Fprintf(out, "account %s (%s) roles=%v\napi key %s (%s) prefix=%s expires=%s\n",
-		res.Account.ID, res.Account.Name, res.Account.Roles, res.Key.ID, res.Key.Name, res.Key.Prefix, expires)
-	_, _ = fmt.Fprintf(out, "X-API-Key: %s\nThis secret is shown once; only its hash is stored.\n", res.Secret)
+	_, err = fmt.Fprintf(out, "account %s (%s) roles=%v\napi key %s (%s) prefix=%s expires=%s\nX-API-Key: %s\nThis secret is shown once; only its hash is stored.\n",
+		res.Account.ID, res.Account.Name, res.Account.Roles, res.Key.ID, res.Key.Name, res.Key.Prefix, expires, res.Secret)
+	if err != nil {
+		return fmt.Errorf("account %s and api key %s (prefix %s) were created but the secret was not delivered; sign in with a config auth.api_keys (break-glass) key and create a new key: %w",
+			res.Account.ID, res.Key.ID, res.Key.Prefix, err)
+	}
 
 	return nil
 }

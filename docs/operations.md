@@ -92,12 +92,44 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 | migrate Job | `pre-install,pre-upgrade` hook 跑 `migrate up`：新 code 不會先於新 schema 起來。hook 跑在 release 的 Secret 存在之前，所以 chart 另 render 一個 hook-scoped 的 `<release>-migrate-env`（跑完刪）；`existingSecret` 則直接讀它 |
 | prune CronJob | `worker prune --older-than <prune.olderThan>`（預設 720h、每天一次、`concurrencyPolicy: Forbid`）；`prune.forgetGroups` 對應 `--forget-group`。alert「retention overdue」的 45d 是 720h 的 1.5×，改一個要一起改 |
 | expire CronJob | `worker expire --older-than <expire.olderThan>`（預設 24h、每 15 分鐘、`Forbid`）：reservation TTL，RESERVED 超過就還庫存 + 請 ordering 取消。alert「expiry overdue」的 36h 是 24h 的 1.5×，改一個要一起改；dry run / 小量跑走 `InventoryService.ExpireReservations`（console Expire 頁，要 admin role） |
-| identity bootstrap（不在 chart 裡） | 第一個 account + API key：對著 release 的 DB 跑一次 worker image 的 `worker bootstrap`（例如 `kubectl run -it --rm bootstrap --image=<worker image> --env-from=<release>-rpc 的 Secret -- worker bootstrap`），secret 印在那個 shell 一次，再用它開真正的帳號；config `auth.api_keys` 留作 break-glass。已有 account 就是 no-op，但不要同時跑兩個 |
+| identity bootstrap（不在 chart 裡） | 第一個 account + API key：對著 release 的 DB 跑一次 worker image 的 `worker bootstrap`（image 的 ENTRYPOINT 是 `/app`，args 就是子命令；寫法見下面的 Job），secret 印在 Pod log 一次，再用它開真正的帳號；config `auth.api_keys` 留作 break-glass。已有 account 就是 no-op，但不要同時跑兩個 |
 | HPA / PDB / Ingress | rpc：CPU HPA（開了就不 render `replicas`、要有 `resources.requests.cpu`）、PDB 只在可能 >1 replica 時 render、Ingress 走 HTTP/1.1（Connect / gRPC-Web），原生 gRPC 要另外 h2c |
 | console Deployment（`console.enabled`，預設 off） | `web/apps/console` 的 nginx image：唯一的 env 是 `RPC_UPSTREAM=http://<release>-rpc:<rpc.service.port>`（chart 算出來），**沒有** `APP_CONFIG`、沒有 Secret——nginx 看不到 Postgres URL 和 API key，auth 開著時使用者在 console 的 Credential 對話框貼自己的 key / JWT；probe 打 nginx 自己的 `/healthz`（rpc 的健康是 rpc probe 的事）；同一組 `podSecurityContext`（uid 65532、read-only rootfs）+ `/tmp` emptyDir 就夠。自己的 Service / Ingress（`console.ingress`，純 HTTP/1.1） |
 | ServiceMonitor（`rpc.serviceMonitor.enabled`，預設 off） | Prometheus Operator 抓 rpc Service 的 `http` port、path `/api/metrics`（gin route，auth 開著也不擋）；operator 靠 label 選 ServiceMonitor，`serviceMonitor.labels` 放它要的（kube-prometheus-stack 是 `release: <name>`）。只管 rpc——worker 沒 HTTP server，它的 metrics 只能走 `config.otel.endpoint` |
 | NetworkPolicy（`networkPolicy.enabled`，預設 off） | 每個 Deployment 一張、只管 ingress（egress 不碰：DB / Redis / collector 在哪是 cluster 的事）。rpc 永遠放行同 release 的 console pod，加上 `networkPolicy.rpc.ingressFrom`（NetworkPolicyPeer list；**空 = 該 port 對任何來源開**，要收緊就列 ingress controller 與 Prometheus 的 namespace）；worker 不收任何 ingress；console 同一套 `console.ingressFrom`。要 CNI 真的實作 NetworkPolicy 才有效，kind 預設的 kindnet 不會，所以 helm-kind 驗不了，check.py 驗形狀 |
 | worker autoscaling | replica 共用 `consumer_group` 就是分工，但 handler 是 DB-bound，CPU 低時 lag 照樣長，所以 `worker.autoscaling.metric` 預設 `lag`：KEDA `ScaledObject` 用 Prometheus trigger 查 `max(eventbus_consumer_lag{consumer_group=~"<group>\\..*"})`（gauge 是 per replica，取 max 不 sum；要 `config.otel.endpoint`，否則拒絕 render）；沒 KEDA 的 cluster 用 `metric: cpu` 出普通 HPA。實測踩到的三件事都做成 render 時就擋：`lag.prometheusAddress` 要 `http://<svc>.<ns>.svc:<port>`（KEDA operator 從**它自己的** namespace 解析，裸 Service 名不通）；`minReplicas` 必須 ≥ 1（lag gauge 是 worker 自己報的，0 個 replica 就沒人報）；`pollingInterval` / `cooldownPeriod` 只對 scale-to-zero 有效，縮回去的節奏是 HPA 的 `behavior.scaleDown`（預設 stabilization 300s，`worker.autoscaling.behavior` 透傳） |
+
+identity bootstrap 的 Job（`<fullname>` 是 chart 的 fullname，release `api` 就是 `api-x-monorepo`：Secret 是 `<fullname>-env`——用 `secrets.existingSecret` 的話換成那個名字，`APP_POSTGRES_URL` 從它的 `envFrom` 來；config 的 ConfigMap 就叫 `<fullname>`，與其他 worker Job 掛法相同）：
+
+```bash
+kubectl apply -n app -f - <<'YAML'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: identity-bootstrap
+spec:
+  backoffLimit: 0   # 失敗不重跑：重跑拿不到第一次的 secret
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: ghcr.io/blackhorseya/x-monorepo/worker:<tag>   # 與 release 同一個 tag
+          args: [bootstrap, --name=root, --key-name=bootstrap]
+          env:
+            - {name: APP_CONFIG, value: /etc/x-monorepo/config.yaml}
+          envFrom:
+            - secretRef: {name: <fullname>-env}
+          volumeMounts:
+            - {name: config, mountPath: /etc/x-monorepo, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: <fullname>}
+YAML
+kubectl logs -n app job/identity-bootstrap   # X-API-Key 只在這裡出現一次，抄走後 kubectl delete job identity-bootstrap
+```
+
+`worker bootstrap` 因為輸出失敗（log 抓不到、pipe 斷掉）而 exit 非 0，代表 account 與 key **已經建立**、secret **已經遺失**（庫裡只有 hash，重跑是 no-op、不會重印）。補救：用 config `auth.api_keys` 的 break-glass key 登入，再呼叫 `CreateApiKey` 開一把新 key（錯誤訊息裡有沒送達那把的 key ID 與 prefix，要的話 `RevokeApiKey` 它）。
 
 ```bash
 task helm-check    # 每個 ci/*.yaml profile：helm lint --strict → helm template | kubeconform -strict → deployments/helm/check.py
