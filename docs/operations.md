@@ -153,7 +153,13 @@ SetStock → CreateOrder → worker 透過 Redis Streams 消費 OrderCreated →
         < max_connections − superuser_reserved_connections（預設 100 − 3）
 ```
 
-預設 chart（rpc 2 + worker 1，另有 expire / prune CronJob 偶爾各一個）≈ 4 × 25 = 100，**已經貼著 Postgres 預設的 `max_connections=100`**；rpc HPA 開到 10、KEDA 把 worker 撐到 6 就是 16 × 25 = 400。所以上線前先算：
+預設 chart 是 rpc 2、worker 1、expire 與 prune 兩個 CronJob 各 1：
+
+- 平常（只有 rpc + worker）：3 × 25 = 75。
+- 兩個 CronJob 同時在跑：5 × 25 = **125**，還沒算 migrate Job（upgrade 時）和 rolling update 的 surge pod。即使只有一個 CronJob 在跑，也是 4 × 25 = 100，已經超過 Postgres 預設 `max_connections=100` 扣掉 reserved 後的約 97 條。
+- rpc HPA 開到 10、KEDA 把 worker 撐到 6：16 × 25 = 400。
+
+這是**每個 process 都用滿上限**的最壞情況，實際不一定會到（要看負載；`orders.js` 100 VU 才把單一 rpc 推到 25），但**預設組態不能保證在 `max_connections=100` 的 Postgres 上最壞情況不出事**。所以上線前必須依實際 replica 數（用 `maxReplicas`）往回推，不要直接信預設值：
 
 1. 決定 Postgres 的 `max_connections`（或前面放 pgbouncer，transaction pooling）。
 2. 用「最大 replica 數」帶進公式（`rpc.autoscaling.maxReplicas`、`worker.autoscaling.maxReplicas`，不是 `replicaCount`），反推每個 pod 的 `max_open_conns`。

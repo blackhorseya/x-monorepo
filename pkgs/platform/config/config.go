@@ -324,7 +324,7 @@ func (x *AppConfig) validate() error {
 		return errors.New("auth.admin_role must not be empty")
 	}
 	if x.Postgres.MaxOpenConns < 0 || x.Postgres.MaxIdleConns < 0 {
-		return errors.New("postgres.max_open_conns and postgres.max_idle_conns must not be negative (0 = unlimited open / none idle)")
+		return errors.New("postgres.max_open_conns and postgres.max_idle_conns must not be negative (max_open_conns 0 = unlimited; max_idle_conns 0 = the database/sql default)")
 	}
 	if x.Postgres.MaxOpenConns > 0 && x.Postgres.MaxIdleConns > x.Postgres.MaxOpenConns {
 		return fmt.Errorf("postgres.max_idle_conns %d exceeds postgres.max_open_conns %d", x.Postgres.MaxIdleConns, x.Postgres.MaxOpenConns)
