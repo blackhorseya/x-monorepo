@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseStatus_RoundTrip(t *testing.T) {
-	for _, s := range []order.Status{order.StatusPending, order.StatusCancelled} {
+	for _, s := range []order.Status{order.StatusPending, order.StatusConfirmed, order.StatusCancelled} {
 		got, err := order.ParseStatus(s.String())
 		if err != nil || got != s {
 			t.Fatalf("ParseStatus(%q) = %v, %v", s, got, err)

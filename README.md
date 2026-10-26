@@ -243,12 +243,15 @@ bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`�
 
 ```
 CreateOrder ──► ordering.v1.OrderCreated ──► inventory ReserveStock（全有或全無）
-                                              ├─ RESERVED → inventory.v1.StockReserved
+                                              ├─ RESERVED → inventory.v1.StockReserved ──► ordering ConfirmOrder（PENDING → CONFIRMED → ordering.v1.OrderConfirmed；已 CANCELLED → domain error → drop）
                                               └─ REJECTED → ordering.v1.OrderCancellationRequested ──► ordering CancelOrder
 CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStock（RESERVED → RELEASED；找不到 → CANCELLED tombstone；否則 domain error → drop）
 ```
 
-- inventory 只 import `ordering/contract/v1`（consumer 解 `OrderCreated`、events adapter 發 `OrderCancellationRequested`），其他一概不行（depguard `bc-isolation-*`）。
+Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → CANCELLED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）。
+`ConfirmOrder` 沒有 RPC：確認是 inventory 的答覆，不是 client 的呼叫。
+
+- 兩個 BC 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled`、events adapter 發 `OrderCancellationRequested`；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
 - **event 的 schema 歸 consumer 所有**：缺貨是 ordering 的 message（`OrderCancellationRequested`），inventory 把它發進 ordering 的 topic / 表（同一個 DB、同一個交易）。
 - **缺貨是狀態不是 error**：`reservation.Reserve` 回 `REJECTED` + `Rejected` event，一樣落地；重送的 `OrderCreated` 找到既有 reservation 就什麼都不做。
   consumer 把 `kernel.Error` 當 final（drop），所以缺貨若用 error 表達就不會有人發取消。

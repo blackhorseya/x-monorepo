@@ -57,6 +57,8 @@ func toProtoStatus(s string) orderingv1.OrderStatus {
 		return orderingv1.OrderStatus_ORDER_STATUS_PENDING
 	case "CANCELLED":
 		return orderingv1.OrderStatus_ORDER_STATUS_CANCELLED
+	case "CONFIRMED":
+		return orderingv1.OrderStatus_ORDER_STATUS_CONFIRMED
 	default:
 		return orderingv1.OrderStatus_ORDER_STATUS_UNSPECIFIED
 	}
@@ -73,6 +75,8 @@ func toDTOStatus(s orderingv1.OrderStatus) string {
 		return "PENDING"
 	case orderingv1.OrderStatus_ORDER_STATUS_CANCELLED:
 		return "CANCELLED"
+	case orderingv1.OrderStatus_ORDER_STATUS_CONFIRMED:
+		return "CONFIRMED"
 	default:
 		return s.String()
 	}

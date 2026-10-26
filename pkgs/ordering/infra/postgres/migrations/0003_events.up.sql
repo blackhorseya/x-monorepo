@@ -1,7 +1,7 @@
 -- Event tables of the ordering BC: one watermill-sql (v4, Postgres) topic table + consumer
 -- offsets table per topic, exactly the DDL the library would create with InitializeSchema,
 -- named by platform/eventbus.TableName (<bc>.events_<topic>). Payload is proto bytes.
--- Topics: ordering.v1.OrderCreated / OrderCancelled (published), ordering.v1.OrderCancellationRequested
+-- Topics: ordering.v1.OrderCreated / OrderCancelled (published; OrderConfirmed came in 0006), ordering.v1.OrderCancellationRequested
 -- (consumed), ordering.poison (messages the router gave up on).
 
 CREATE TABLE ordering.events_v1_ordercreated (

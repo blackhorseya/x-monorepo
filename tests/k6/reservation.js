@@ -4,7 +4,8 @@
 // to the server (smoke.sh starts one; against task run, start `bin/worker` yourself).
 //   k6 run tests/k6/reservation.js -e BASE_URL=http://127.0.0.1:8080 [-e VUS=5] [-e DURATION=30s]
 // Each VU: CreateOrder (one line, qty 1, stock is plentiful) then polls
-// GetReservation every POLL ms until RESERVED or RESERVE_TIMEOUT ms pass.
+// GetReservation every POLL ms until RESERVED or RESERVE_TIMEOUT ms pass, then GetOrder
+// until CONFIRMED (ordering consumed StockReserved; order_not_confirmed counts the misses).
 // reservation_latency is CreateOrder-returned → RESERVED seen; the poll interval
 // bounds its resolution. Thresholds: p95 under RESERVE_P95 (ms, default 3000:
 // the outbox is polled, so ~1s of that is waiting for the next tick, the rest is
@@ -26,6 +27,7 @@ const RESERVE_P95 = Number(__ENV.RESERVE_P95 || 3000);
 const reservationLatency = new Trend("reservation_latency", true);
 const reservationTimeouts = new Counter("reservation_timeouts");
 const reservationWrong = new Counter("reservation_wrong_status");
+const orderNotConfirmed = new Counter("order_not_confirmed");
 
 export const options = {
   scenarios: {
@@ -41,6 +43,7 @@ export const options = {
     reservation_latency: [`p(95)<${RESERVE_P95}`],
     reservation_timeouts: ["count==0"],
     reservation_wrong_status: ["count==0"],
+    order_not_confirmed: ["count==0"],
     rpc_errors: ["count==0"],
   },
   summaryTrendStats: ["avg", "p(50)", "p(95)", "p(99)", "max"],
@@ -79,6 +82,7 @@ export default function () {
       const status = res.json("reservation.status");
       if (status === "RESERVATION_STATUS_RESERVED") {
         reservationLatency.add(Date.now() - start);
+        waitConfirmed(created.order.id, start);
       } else {
         reservationWrong.add(1, { status: String(status) });
       }
@@ -90,6 +94,22 @@ export default function () {
     }
     if (Date.now() - start > RESERVE_TIMEOUT) {
       reservationTimeouts.add(1);
+      return;
+    }
+    sleep(POLL / 1000);
+  }
+}
+
+// The other half of the saga: ordering consumes StockReserved and the order turns
+// CONFIRMED. Same deadline as the reservation (counted from CreateOrder).
+function waitConfirmed(orderId, start) {
+  for (;;) {
+    const res = rpc("ordering.v1.OrderService/GetOrder", { id: orderId }, { tags: { poll: "true" } });
+    if (!ok(res, "GetOrder")) return;
+    const status = res.json("order.status");
+    if (status === "ORDER_STATUS_CONFIRMED") return;
+    if (status !== "ORDER_STATUS_PENDING" || Date.now() - start > RESERVE_TIMEOUT) {
+      orderNotConfirmed.add(1, { status: String(status) });
       return;
     }
     sleep(POLL / 1000);

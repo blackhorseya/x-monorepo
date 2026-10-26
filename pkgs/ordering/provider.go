@@ -43,11 +43,13 @@ var ProviderSet = wire.NewSet(
 	ProvideCreateOrder,
 	ProvideGetOrder,
 	ProvideCancelOrder,
+	ProvideConfirmOrder,
 	ProvideListOrders,
 
 	// adapters
 	rpc.NewOrderService,
 	consumer.NewOrderCancellationHandler,
+	consumer.NewStockReservedHandler,
 	ProvideSubscriptions,
 )
 
@@ -93,8 +95,11 @@ type Subscriptions []eventbus.Subscription
 
 // ProvideSubscriptions binds each consumed topic to its handler. The handler
 // name is the topic.
-func ProvideSubscriptions(cancel *consumer.OrderCancellationHandler) Subscriptions {
-	return Subscriptions{{Topic: consumer.Topic, Handler: cancel}}
+func ProvideSubscriptions(cancel *consumer.OrderCancellationHandler, reserved *consumer.StockReservedHandler) Subscriptions {
+	return Subscriptions{
+		{Topic: consumer.Topic, Handler: cancel},
+		{Topic: consumer.TopicStockReserved, Handler: reserved},
+	}
 }
 
 // decorate is the one place that decides which cross-cutting decorators every
@@ -133,6 +138,11 @@ func ProvideGetOrder(repo order.Repository, rec *usecasex.Recorder) rpc.GetOrder
 
 func ProvideCancelOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) rpc.CancelOrderUC {
 	return decorateTx("ordering.cancel_order", rec, tx, inbox, usecase.NewCancelOrder(repo, events, clock))
+}
+
+// ProvideConfirmOrder has no rpc caller: only the consumer (inventory.v1.StockReserved) drives it.
+func ProvideConfirmOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ConfirmOrderUC {
+	return decorateTx("ordering.confirm_order", rec, tx, inbox, usecase.NewConfirmOrder(repo, events, clock))
 }
 
 func ProvideListOrders(repo order.Repository, rec *usecasex.Recorder) rpc.ListOrdersUC {

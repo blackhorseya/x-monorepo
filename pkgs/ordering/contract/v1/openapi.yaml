@@ -298,6 +298,24 @@ components:
       description: |-
         OrderCancelled is raised when an order moves to CANCELLED, whatever asked
          for it (client call or OrderCancellationRequested).
+    ordering.v1.OrderConfirmed:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        customerId:
+          type: string
+          title: customer_id
+        confirmedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: confirmed_at
+      title: OrderConfirmed
+      additionalProperties: false
+      description: |-
+        OrderConfirmed is raised when an order moves to CONFIRMED: ordering consumed
+         inventory.v1.StockReserved for it (every line reserved).
     ordering.v1.OrderCreated:
       type: object
       properties:
@@ -344,6 +362,7 @@ components:
         - ORDER_STATUS_UNSPECIFIED
         - ORDER_STATUS_PENDING
         - ORDER_STATUS_CANCELLED
+        - ORDER_STATUS_CONFIRMED
 security:
   - apiKey: []
   - bearer: []

@@ -20,7 +20,7 @@ import { reservationBadge } from "./reservations";
 type Line = { sku: string; quantity: number; priceMinor: number };
 
 // Search params of /orders: a status filter and a customer id filter.
-export type OrdersSearch = { status?: "PENDING" | "CANCELLED"; customer?: string };
+export type OrdersSearch = { status?: "PENDING" | "CONFIRMED" | "CANCELLED"; customer?: string };
 
 export function OrdersPage() {
   return (
@@ -125,7 +125,7 @@ function OrdersCard() {
       <CardContent className="grid gap-4">
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex gap-2">
-            {(["ANY", "PENDING", "CANCELLED"] as const).map((s) => {
+            {(["ANY", "PENDING", "CONFIRMED", "CANCELLED"] as const).map((s) => {
               const active = s === "ANY" ? !search.status : search.status === s;
               return (
                 <Button key={s} size="sm" variant={active ? "default" : "outline"} onClick={() => setSearch({ status: s === "ANY" ? undefined : s })}>
@@ -225,7 +225,9 @@ function OrderRow({ order }: { order: Order }) {
     },
   });
   useResetOnCredentialChange(cancel);
-  const pending = order.status === OrderStatus.PENDING;
+  // PENDING and CONFIRMED (inventory reserved every line) are both still the customer's to
+  // cancel; inventory releases the reservation on OrderCancelled.
+  const open = order.status === OrderStatus.PENDING || order.status === OrderStatus.CONFIRMED;
 
   return (
     <TableRow>
@@ -237,13 +239,13 @@ function OrderRow({ order }: { order: Order }) {
       <TableCell>{order.customerId}</TableCell>
       <TableCell className="text-right tabular-nums">{formatMoney(order.total?.amountMinor, order.total?.currency)}</TableCell>
       <TableCell>
-        <Badge variant={pending ? "default" : "secondary"}>{OrderStatus[order.status]}</Badge>
+        <Badge variant={statusVariant(order.status)}>{OrderStatus[order.status]}</Badge>
       </TableCell>
       <TableCell>
         <ReservationCell orderId={order.id} />
       </TableCell>
       <TableCell className="text-right">
-        {pending && (
+        {open && (
           <Button variant="outline" size="sm" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
             Cancel
           </Button>
@@ -307,4 +309,17 @@ export function ErrorAlert({ error }: { error: unknown }) {
 export function formatMoney(minor: bigint | undefined, currency: string | undefined): string {
   if (minor === undefined || !currency) return "";
   return `${(Number(minor) / 100).toFixed(2)} ${currency}`;
+}
+
+// PENDING is waiting on inventory (outline), CONFIRMED is the settled good state (default),
+// CANCELLED is over (secondary). Shared with the order detail page.
+export function statusVariant(status: OrderStatus): "default" | "outline" | "secondary" {
+  switch (status) {
+    case OrderStatus.CONFIRMED:
+      return "default";
+    case OrderStatus.PENDING:
+      return "outline";
+    default:
+      return "secondary";
+  }
 }

@@ -46,6 +46,16 @@ func TestOrder_Events(t *testing.T) {
 		t.Fatalf("second pull: %d events, want 0", len(got))
 	}
 
+	confirmedAt := now.Add(30 * time.Second)
+	if err := o.Confirm(confirmedAt); err != nil {
+		t.Fatal(err)
+	}
+	evs = o.PullEvents()
+	confirmed, ok := evs[0].(order.Confirmed)
+	if len(evs) != 1 || !ok || confirmed.OrderID() != "o-1" || confirmed.CustomerID() != "c-1" || !confirmed.OccurredAt().Equal(confirmedAt) {
+		t.Fatalf("after Confirm: %+v", evs)
+	}
+
 	later := now.Add(time.Minute)
 	if err := o.Cancel(later); err != nil {
 		t.Fatal(err)

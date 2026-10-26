@@ -97,6 +97,21 @@ func Reconstitute(p ReconstituteParams) (*Order, error) {
 	}, nil
 }
 
+// Confirm moves the order to Confirmed: inventory reserved every line. A late
+// StockReserved for an order already cancelled is refused (ErrCannotConfirm);
+// inventory releases that reservation on the OrderCancelled it also receives.
+func (x *Order) Confirm(now time.Time) error {
+	if !x.status.CanTransitionTo(StatusConfirmed) {
+		return ErrCannotConfirm
+	}
+
+	x.status = StatusConfirmed
+	x.updatedAt = now
+	x.record(NewConfirmed(x))
+
+	return nil
+}
+
 // Cancel moves the order to Cancelled if the state machine allows it.
 func (x *Order) Cancel(now time.Time) error {
 	if !x.status.CanTransitionTo(StatusCancelled) {

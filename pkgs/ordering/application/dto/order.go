@@ -30,6 +30,11 @@ type CancelOrderInput struct {
 	Reason string
 }
 
+// ConfirmOrderInput is driven by the consumer adapter only (inventory.v1.StockReserved).
+type ConfirmOrderInput struct {
+	OrderID string
+}
+
 type ListOrdersInput struct {
 	CustomerID string // "" = any
 	Status     string // "" = any; PENDING | CANCELLED
