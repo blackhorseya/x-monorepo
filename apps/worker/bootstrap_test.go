@@ -56,7 +56,7 @@ func TestBootstrapCommand(t *testing.T) {
 		cmd := newRootCmd(func() (*config.AppConfig, error) { return cfg, nil })
 		cmd.SetOut(&buf)
 		cmd.SetErr(io.Discard)
-		cmd.SetArgs(append([]string{"bootstrap"}, args...))
+		cmd.SetArgs(append([]string{"bootstrap", "--insecure-allow-plaintext"}, args...)) // the test database is plaintext
 		prev := slog.Default()
 		slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		defer slog.SetDefault(prev)

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -38,6 +39,12 @@ Run it only on the operator's own machine (kubectl port-forward to the database)
 stdout carries the secret, so never run it inside the cluster — a Pod's stdout lands in
 the Pod log. See docs/operations.md.
 
+Before it connects, the command parses postgres.url the way the connection will and
+refuses unless every attempt verifies the server (sslmode=verify-ca with sslrootcert, or
+verify-full; disable, allow, prefer and require without sslrootcert are refused).
+--expect-target host:port additionally refuses a URL that would dial anything else.
+--insecure-allow-plaintext skips the TLS check for a local development database only.
+
 With the printed X-API-Key, CreateAccount / CreateApiKey make the real accounts; the
 static auth.api_keys entry (if any) stays the break-glass path. The secret goes to
 stdout only, never to the log.`,
@@ -52,12 +59,20 @@ stdout only, never to the log.`,
 			if expiresIn < 0 {
 				return fmt.Errorf("--expires-in must not be negative (0 = never)")
 			}
+			if expectTarget != "" {
+				if _, _, err := net.SplitHostPort(expectTarget); err != nil {
+					return errors.New("--expect-target must be host:port")
+				}
+			}
 			cfg, err := load()
 			if err != nil {
 				return err
 			}
 			if cfg.Postgres.URL == "" {
 				return errors.New("postgres.url is required: accounts live in Postgres")
+			}
+			if err := checkBootstrapConn(cfg.Postgres.URL, connPolicy{expectTarget: expectTarget, allowPlaintext: allowPlaintext}); err != nil {
+				return fmt.Errorf("refusing to connect: %w", err)
 			}
 			if len(roles) == 0 {
 				roles = []string{cfg.Auth.AdminRole}
