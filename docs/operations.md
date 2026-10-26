@@ -112,10 +112,20 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      securityContext:   # 同 chart 的 podSecurityContext / containerSecurityContext：Restricted Pod Security namespace 才起得來
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: bootstrap
           image: ghcr.io/blackhorseya/x-monorepo/worker:<tag>   # 與 release 同一個 tag
           args: [bootstrap, --name=root, --key-name=bootstrap]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
           env:
             - {name: APP_CONFIG, value: /etc/x-monorepo/config.yaml}
           envFrom:
