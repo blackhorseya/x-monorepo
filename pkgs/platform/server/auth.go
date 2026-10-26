@@ -46,11 +46,24 @@ const (
 	MethodAPIKey = "api_key"
 )
 
+// CredentialResolver is the platform's door to credentials that live
+// somewhere other than the config: the identity bounded context implements it
+// (its adapters/auth) and the composition root wires it in, so the platform
+// never imports a BC. ResolveAPIKey answers for a presented X-API-Key the
+// static auth.api_keys did not match: found=false means no such key (the
+// request is rejected as invalid), err means the lookup itself failed (the
+// request is rejected too, and the error is logged — a database outage must
+// not log anyone in). The resolver owns its cache and its hashing.
+type CredentialResolver interface {
+	ResolveAPIKey(c context.Context, key string) (p contextx.Principal, found bool, err error)
+}
+
 // authenticator verifies one kind of credential already extracted from the
 // request. Verifying is constant-time where the credential is a secret.
 type authenticator struct {
-	keys map[[32]byte]apiKey // sha256(key) → who
-	jwt  *jwtVerifier
+	keys     map[[32]byte]apiKey // sha256(key) → who (config auth.api_keys)
+	resolver CredentialResolver  // keys managed elsewhere, asked after keys
+	jwt      *jwtVerifier
 }
 
 type apiKey struct {
@@ -79,8 +92,9 @@ const (
 
 // NewAuthInterceptor builds the interceptor for cfg. With auth.mode off it
 // returns nil (nothing to install). Otherwise every RPC is resolved to a
-// principal: X-API-Key against auth.api_keys, else Authorization: Bearer
-// against auth.jwt; a credential that is present but does not verify is
+// principal: X-API-Key against auth.api_keys and then the resolver (nil when
+// no BC manages keys; the static keys stay the break-glass path that needs no
+// database), else Authorization: Bearer against auth.jwt; a credential that is present but does not verify is
 // always an error (even in optional mode — a bad token is never "anonymous"),
 // a missing one is anonymous in optional mode and Unauthenticated in required
 // mode. auth.public procedures skip all of it. The principal goes into the
@@ -89,7 +103,7 @@ const (
 // (enduser.id, enduser.roles, auth.method) — the audit trail across Loki and
 // Tempo. Names and credentials are never recorded. Every decision is counted
 // on mp's auth.decisions{result, method} (see the Result* constants).
-func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider) (connect.UnaryInterceptorFunc, error) {
+func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver CredentialResolver) (connect.UnaryInterceptorFunc, error) {
 	switch cfg.Mode {
 	case config.AuthOff, "":
 		return nil, nil
@@ -104,7 +118,7 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider) (connect.Unary
 	if err != nil {
 		return nil, fmt.Errorf("auth: decisions counter: %w", err)
 	}
-	a := &authenticator{}
+	a := &authenticator{resolver: resolver}
 	if cfg.APIKeys != "" {
 		keys, err := parseAPIKeys(cfg.APIKeys)
 		if err != nil {
@@ -119,7 +133,7 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider) (connect.Unary
 		}
 		a.jwt = v
 	}
-	if a.keys == nil && a.jwt == nil {
+	if a.keys == nil && a.jwt == nil && a.resolver == nil {
 		return nil, errors.New("auth: mode is on but neither api_keys nor jwt is configured")
 	}
 	public := make(map[string]bool, len(cfg.Public))
@@ -142,8 +156,15 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider) (connect.Unary
 				return next(c, req)
 			}
 			apiKey, authorization := req.Header().Get(APIKeyHeader), req.Header().Get(AuthorizationHeader)
-			p, found, err := a.authenticate(apiKey, authorization)
+			p, found, err := a.authenticate(c, apiKey, authorization)
 			switch {
+			case errors.Is(err, errResolver):
+				// The lookup failed, not the credential: say so in the log (the
+				// client sees the same rejection as a bad key), count it as invalid.
+				count(c, ResultInvalid, credentialMethod(apiKey, authorization))
+				contextx.FromContext(c).Error("auth: credential resolver failed", "error", err)
+
+				return nil, authError(connect.CodeUnauthenticated, InvalidCredentialCode, errors.New("credential could not be verified"))
 			case err != nil:
 				count(c, ResultInvalid, credentialMethod(apiKey, authorization))
 
@@ -193,19 +214,33 @@ func credentialMethod(apiKey, authorization string) string {
 	}
 }
 
+// errResolver marks a CredentialResolver failure (infrastructure, not the credential).
+var errResolver = errors.New("credential resolver")
+
 // authenticate resolves the headers to a principal. found is false when no
-// credential was sent; err is set when one was sent and is invalid.
-func (a *authenticator) authenticate(apiKey, authorization string) (contextx.Principal, bool, error) {
+// credential was sent; err is set when one was sent and is invalid (or, wrapped
+// in errResolver, when the resolver could not answer).
+func (a *authenticator) authenticate(c context.Context, apiKey, authorization string) (contextx.Principal, bool, error) {
 	if apiKey != "" {
-		if a.keys == nil {
+		if a.keys == nil && a.resolver == nil {
 			return contextx.Principal{}, true, errors.New("api keys are not accepted")
 		}
-		k, ok := a.keys[sha256.Sum256([]byte(apiKey))]
-		if !ok {
-			return contextx.Principal{}, true, errors.New("unknown api key")
+		if k, ok := a.keys[sha256.Sum256([]byte(apiKey))]; ok {
+			return contextx.Principal{Subject: k.name, Roles: k.roles, Method: MethodAPIKey}, true, nil
+		}
+		if a.resolver != nil {
+			p, ok, err := a.resolver.ResolveAPIKey(c, apiKey)
+			switch {
+			case err != nil:
+				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, err)
+			case ok:
+				p.Method = MethodAPIKey
+
+				return p, true, nil
+			}
 		}
 
-		return contextx.Principal{Subject: k.name, Roles: k.roles, Method: MethodAPIKey}, true, nil
+		return contextx.Principal{}, true, errors.New("unknown api key")
 	}
 	if authorization != "" {
 		scheme, token, _ := strings.Cut(authorization, " ")

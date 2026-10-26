@@ -86,7 +86,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v12 := NewRoutes(orderService, inventoryService, poisonService)
 	v13 := NewDocs()
 	readiness := NewReadiness(db)
-	serverServer, err := server.New(http, auth, logger, v12, v13, readiness, providers)
+	credentialResolver := NewCredentialResolver()
+	serverServer, err := server.New(http, auth, logger, v12, v13, readiness, providers, credentialResolver)
 	if err != nil {
 		cleanup3()
 		cleanup2()

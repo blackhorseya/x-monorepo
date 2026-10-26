@@ -11,7 +11,8 @@ type principalKey struct{}
 // consumer path, tests, auth.mode off — there is none: PrincipalFrom returns
 // the zero value and IsAnonymous is true.
 type Principal struct {
-	// Subject is the stable identifier: the JWT `sub`, or the API key's name.
+	// Subject is the stable identifier: the JWT `sub`, the account id of a key
+	// the identity BC manages, or the name of a static auth.api_keys entry.
 	Subject string
 	// Name is a display name (JWT `name`), may be empty.
 	Name string
@@ -19,6 +20,10 @@ type Principal struct {
 	Roles []string
 	// Method is how the principal was established: "jwt" or "api_key".
 	Method string
+	// CredentialID names the credential itself when it has an identity of its
+	// own (the api key id of a key the identity BC manages); empty for a JWT
+	// or a static key. Revoking that one key is what it is for.
+	CredentialID string
 }
 
 // IsAnonymous reports whether no principal was established.

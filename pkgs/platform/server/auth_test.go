@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ const secret = "0123456789abcdef0123456789abcdef" // 32 bytes
 // principal the next function saw, and the error.
 func call(t *testing.T, cfg config.Auth, procedure string, headers map[string]string) (contextx.Principal, error) {
 	t.Helper()
-	in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider())
+	in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,18 +75,18 @@ func errCode(err error) (connect.Code, string) {
 
 func TestAuthInterceptor_Off(t *testing.T) {
 	for _, mode := range []string{"", config.AuthOff} {
-		in, err := server.NewAuthInterceptor(config.Auth{Mode: mode}, noop.NewMeterProvider())
+		in, err := server.NewAuthInterceptor(config.Auth{Mode: mode}, noop.NewMeterProvider(), nil)
 		if err != nil || in != nil {
 			t.Fatalf("mode %q: %v, %v", mode, in, err)
 		}
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider()); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), nil); err == nil {
 		t.Fatal("required with nothing configured must fail")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, APIKeys: "ci=short"}, noop.NewMeterProvider()); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, APIKeys: "ci=short"}, noop.NewMeterProvider(), nil); err == nil {
 		t.Fatal("short api key must fail")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{HS256Secret: "short"}}, noop.NewMeterProvider()); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{HS256Secret: "short"}}, noop.NewMeterProvider(), nil); err == nil {
 		t.Fatal("short hs256 secret must fail")
 	}
 }
@@ -180,7 +181,7 @@ func TestAuthInterceptor_AlgorithmPinned(t *testing.T) {
 	if _, err := call(t, cfg, "/a.v1.S/Get", map[string]string{server.AuthorizationHeader: "Bearer " + confused}); err == nil {
 		t.Fatal("HS256 token signed with the public key must be rejected")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{PublicKey: "not pem"}}, noop.NewMeterProvider()); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{PublicKey: "not pem"}}, noop.NewMeterProvider(), nil); err == nil {
 		t.Fatal("bad pem must fail")
 	}
 	// Only api keys configured: a bearer token is a credential that cannot verify.
@@ -209,4 +210,79 @@ func TestRequireRole(t *testing.T) {
 	if code, ec := errCode(server.RequireRole(c, on, "admin")); code != connect.CodeUnauthenticated || ec != server.UnauthenticatedCode {
 		t.Fatalf("anonymous = %s %s", code, ec)
 	}
+}
+
+// resolver is a CredentialResolver with a fixed answer table and a switchable failure.
+type resolver struct {
+	known map[string]contextx.Principal
+	fail  bool
+	calls int
+}
+
+func (r *resolver) ResolveAPIKey(_ context.Context, key string) (contextx.Principal, bool, error) {
+	r.calls++
+	if r.fail {
+		return contextx.Principal{}, false, errors.New("db down")
+	}
+	p, ok := r.known[key]
+
+	return p, ok, nil
+}
+
+// Keys the config does not know are asked of the resolver; the config keys
+// win first (break glass) and never hit it; a resolver failure rejects the
+// request as invalid instead of letting it through; and a resolver alone is a
+// valid auth configuration.
+func TestAuthInterceptor_Resolver(t *testing.T) {
+	r := &resolver{known: map[string]contextx.Principal{
+		"xk_dbkey-0123456789abcdef0123456789": {Subject: "acc-1", Name: "ops", Roles: []string{"admin"}, CredentialID: "key-1"},
+	}}
+	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "ci=ci-key-0123456789abcdef:viewer"}
+	callWith := func(key string) (contextx.Principal, error) {
+		in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var seen contextx.Principal
+		next := in(func(c context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
+			seen = contextx.PrincipalFrom(c)
+			return connect.NewResponse(&struct{}{}), nil
+		})
+		req := connect.NewRequest(&struct{}{})
+		req.Header().Set(server.APIKeyHeader, key)
+		_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+
+		return seen, err
+	}
+
+	p, err := callWith("ci-key-0123456789abcdef")
+	if err != nil || p.Subject != "ci" || r.calls != 0 {
+		t.Fatalf("config key: %+v, %v, resolver calls %d", p, err, r.calls)
+	}
+	p, err = callWith("xk_dbkey-0123456789abcdef0123456789")
+	if err != nil || p.Subject != "acc-1" || p.Method != server.MethodAPIKey || p.CredentialID != "key-1" || !p.HasRole("admin") || r.calls != 1 {
+		t.Fatalf("resolved key: %+v, %v, calls %d", p, err, r.calls)
+	}
+	if _, err := callWith("xk_unknown-0123456789abcdef01234567"); !isInvalidCredential(err) {
+		t.Fatalf("unknown key: %v", err)
+	}
+	r.fail = true
+	_, err = callWith("xk_dbkey-0123456789abcdef0123456789")
+	if !isInvalidCredential(err) {
+		t.Fatalf("resolver failure: %v", err)
+	}
+	if strings.Contains(err.Error(), "db down") {
+		t.Fatalf("resolver failure must not leak to the client: %v", err)
+	}
+	r.fail = false
+
+	// Resolver only: no static key, no jwt, still a valid configuration.
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), r); err != nil {
+		t.Fatalf("resolver-only config: %v", err)
+	}
+}
+
+func isInvalidCredential(err error) bool {
+	var ce *connect.Error
+	return errors.As(err, &ce) && ce.Code() == connect.CodeUnauthenticated && ce.Meta().Get("x-error-code") == server.InvalidCredentialCode
 }

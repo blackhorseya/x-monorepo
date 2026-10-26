@@ -31,6 +31,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewReadiness,
 		ordering.ProviderSet,
 		inventory.ProviderSet,
+		NewCredentialResolver,
 	)
 
 	return nil, nil, nil
