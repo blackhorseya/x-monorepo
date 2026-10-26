@@ -160,6 +160,13 @@ type Worker struct {
 	// HTTP.Timeout): the use case's context expires, the attempt fails and is
 	// retried, then parked on the poison topic. 0 = none.
 	HandlerTimeout time.Duration `mapstructure:"handler_timeout"`
+	// PollInterval is how long each Postgres subscriber waits before it
+	// queries its outbox table again after finding nothing. It bounds how soon
+	// an idle consumer sees a new event, and costs one query per subscriber
+	// (handler topics x BCs, plus the redis forwarder) per replica per
+	// interval. Only the postgres broker (and the forwarder's SQL side) polls.
+	// Must be positive.
+	PollInterval time.Duration `mapstructure:"poll_interval"`
 }
 
 // Broker values of Worker.Broker.
@@ -236,6 +243,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("worker.broker", BrokerPostgres)
 	v.SetDefault("worker.start_from", StartFromBeginning)
 	v.SetDefault("worker.handler_timeout", 10*time.Second)
+	v.SetDefault("worker.poll_interval", 200*time.Millisecond)
 }
 
 func readFile(v *viper.Viper) error {
@@ -311,6 +319,9 @@ func (x *AppConfig) validate() error {
 	}
 	if x.Worker.StartFrom != StartFromBeginning && x.Worker.StartFrom != StartFromLatest {
 		return fmt.Errorf("invalid worker.start_from %q (want beginning|latest)", x.Worker.StartFrom)
+	}
+	if x.Worker.PollInterval <= 0 {
+		return fmt.Errorf("invalid worker.poll_interval %s (want > 0)", x.Worker.PollInterval)
 	}
 	if x.Worker.HandlerTimeout < 0 {
 		return fmt.Errorf("invalid worker.handler_timeout %s (want >= 0, 0 = none)", x.Worker.HandlerTimeout)

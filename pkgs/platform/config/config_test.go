@@ -39,7 +39,7 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	if cfg.HTTP.Timeout != 10*time.Second || cfg.HTTP.RateLimit.RPS != 0 || cfg.HTTP.RateLimit.By != config.RateLimitGlobal {
 		t.Fatalf("limit defaults: %+v", cfg.HTTP)
 	}
-	if cfg.Worker.HandlerTimeout != 10*time.Second {
+	if cfg.Worker.HandlerTimeout != 10*time.Second || cfg.Worker.PollInterval != 200*time.Millisecond {
 		t.Fatalf("worker defaults: %+v", cfg.Worker)
 	}
 }
@@ -120,6 +120,19 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("negative worker.handler_timeout must fail")
 	}
 	t.Setenv("APP_WORKER_HANDLER_TIMEOUT", "0")
+	t.Setenv("APP_WORKER_POLL_INTERVAL", "0")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("zero worker.poll_interval must fail")
+	}
+	t.Setenv("APP_WORKER_POLL_INTERVAL", "-1s")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("negative worker.poll_interval must fail")
+	}
+	t.Setenv("APP_WORKER_POLL_INTERVAL", "50ms")
+	if cfg, err := config.Load(); err != nil || cfg.Worker.PollInterval != 50*time.Millisecond {
+		t.Fatalf("worker.poll_interval override: %+v, %v", cfg.Worker, err)
+	}
+	t.Setenv("APP_WORKER_POLL_INTERVAL", "200ms")
 	t.Setenv("APP_HTTP_RATE_LIMIT_RPS", "-1")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("negative http.rate_limit.rps must fail")

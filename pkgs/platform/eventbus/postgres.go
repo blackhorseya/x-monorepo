@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	wsql "github.com/ThreeDotsLabs/watermill-sql/v4/pkg/sql"
@@ -113,11 +114,48 @@ func (p *PostgresPublisher) Publish(topic string, msgs ...*message.Message) erro
 // Close is a no-op: the pool belongs to platform/postgres.NewDB.
 func (p *PostgresPublisher) Close() error { return nil }
 
+// SubscriberOption tunes NewPostgresSubscriber.
+type SubscriberOption func(*subscriberOptions)
+
+type subscriberOptions struct {
+	pollInterval time.Duration
+}
+
+// WithPollInterval is how long the subscriber waits before it asks the outbox
+// table again after a poll that found nothing (watermill-sql PollInterval).
+// It is the floor of the consumer-side latency of an event that arrives while
+// the subscriber is idle, and every subscriber (one per handler topic and BC,
+// per worker replica) issues one query per interval. 0 keeps the library's 1s.
+// The resend wait after a nack and the wait after a failed query keep the
+// library's 1s: handler failures are retried in-process by Register's Retry
+// middleware long before a nack, and a failing database should not be polled
+// faster.
+func WithPollInterval(d time.Duration) SubscriberOption {
+	return func(o *subscriberOptions) { o.pollInterval = d }
+}
+
+// subscriberConfig is the watermill-sql config NewPostgresSubscriber builds,
+// split out so a test can read what was passed down.
+func subscriberConfig(consumerGroup string, offsetsAdapter wsql.OffsetsAdapter, opts ...SubscriberOption) wsql.SubscriberConfig {
+	var o subscriberOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	return wsql.SubscriberConfig{
+		ConsumerGroup:    consumerGroup,
+		SchemaAdapter:    schema(),
+		OffsetsAdapter:   offsetsAdapter,
+		PollInterval:     o.pollInterval,
+		InitializeSchema: false, // DDL ships in the BC's migrations
+	}
+}
+
 // NewPostgresSubscriber reads a topic's table for consumerGroup. Several
 // processes with the same group share the work (offsets are per group and
 // claimed FOR UPDATE); a different group gets every message again from
 // start (FromBeginning) or only what arrives after it was created (FromLatest).
-func NewPostgresSubscriber(db *gorm.DB, consumerGroup string, start Start, l *slog.Logger) (message.Subscriber, error) {
+func NewPostgresSubscriber(db *gorm.DB, consumerGroup string, start Start, l *slog.Logger, opts ...SubscriberOption) (message.Subscriber, error) {
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, fmt.Errorf("eventbus: postgres pool: %w", err)
@@ -127,10 +165,5 @@ func NewPostgresSubscriber(db *gorm.DB, consumerGroup string, start Start, l *sl
 		offsetsAdapter = latestOffsets{offsets()}
 	}
 
-	return wsql.NewSubscriber(wsql.BeginnerFromStdSQL(sqlDB), wsql.SubscriberConfig{
-		ConsumerGroup:    consumerGroup,
-		SchemaAdapter:    schema(),
-		OffsetsAdapter:   offsetsAdapter,
-		InitializeSchema: false, // DDL ships in the BC's migrations
-	}, NewLogger(l))
+	return wsql.NewSubscriber(wsql.BeginnerFromStdSQL(sqlDB), subscriberConfig(consumerGroup, offsetsAdapter, opts...), NewLogger(l))
 }

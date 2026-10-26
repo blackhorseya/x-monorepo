@@ -8,8 +8,10 @@
 // until CONFIRMED (ordering consumed StockReserved; order_not_confirmed counts the misses).
 // reservation_latency is CreateOrder-returned → RESERVED seen; the poll interval
 // bounds its resolution. Thresholds: p95 under RESERVE_P95 (ms, default 3000:
-// the outbox is polled, so ~1s of that is waiting for the next tick, the rest is
-// the handler + SetStock contention), no timeouts, no REJECTED (stock is 1e6).
+// loose on purpose, for a shared CI runner). The outbox is polled, so the floor is the
+// worker's worker.poll_interval (default 200ms; laptop, 10 VU: p50 ~0.2s / p95 ~0.25s,
+// against p50 ~0.9s / p95 ~1.1s when it was the library's 1s); the rest is the handler
+// + SetStock contention. No timeouts, no REJECTED (stock is 1e6).
 import http from "k6/http";
 import { sleep } from "k6";
 import { Counter, Trend } from "k6/metrics";

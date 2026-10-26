@@ -80,3 +80,7 @@ worker:
   # context expires, the attempt is retried, then the message is parked as poison
   # with reason "handler timed out". 0 = none.
   handler_timeout: 10s
+  # How long each Postgres subscriber waits before it asks its outbox table again after
+  # finding nothing: the floor of an idle consumer's latency, and one query per subscriber
+  # per replica per interval (see docs/operations.md). Must be > 0.
+  poll_interval: 200ms
