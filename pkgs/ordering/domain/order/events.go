@@ -80,6 +80,16 @@ type moneyView struct {
 	currency string
 }
 
+// Confirmed is raised by Confirm.
+type Confirmed struct {
+	base
+}
+
+// NewConfirmed builds the event for o as it stands; the aggregate calls it from Confirm.
+func NewConfirmed(o *Order) Confirmed {
+	return Confirmed{base: newBase(o, o.updatedAt)}
+}
+
 // Cancelled is raised by Cancel.
 type Cancelled struct {
 	base

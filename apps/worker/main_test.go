@@ -51,8 +51,8 @@ func TestRun_RequiresPostgres(t *testing.T) {
 // Integration (pgtest: container or TEST_DATABASE_URL): the whole loop
 // across both BCs, through the real handlers and the real Postgres tables.
 //
-//	order A (stocked)   OrderCreated → inventory RESERVED → OrderCancellationRequested
-//	                    (published by the test) → ordering CANCELLED → OrderCancelled
+//	order A (stocked)   OrderCreated → inventory RESERVED → StockReserved → ordering CONFIRMED
+//	                    → OrderCancellationRequested (published by the test) → ordering CANCELLED → OrderCancelled
 //	                    → inventory RELEASED
 //	order B (unstocked) OrderCreated → inventory REJECTED → OrderCancellationRequested
 //	                    (published by inventory) → ordering CANCELLED → OrderCancelled
@@ -147,8 +147,9 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	oclock := orderingsys.NewClock()
 	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, rec)
 	getOrder := ordering.ProvideGetOrder(orders, rec)
-	orderingSubs := ordering.ProvideSubscriptions(orderingconsumer.NewOrderCancellationHandler(
-		ordering.ProvideCancelOrder(orders, otx, oinbox, oev, oclock, rec)))
+	orderingSubs := ordering.ProvideSubscriptions(
+		orderingconsumer.NewOrderCancellationHandler(ordering.ProvideCancelOrder(orders, otx, oinbox, oev, oclock, rec)),
+		orderingconsumer.NewStockReservedHandler(ordering.ProvideConfirmOrder(orders, otx, oinbox, oev, oclock, rec)))
 
 	stocks := inventory.ProvideStockRepository(db, logger)
 	reservations := inventory.ProvideReservationRepository(db)
@@ -242,6 +243,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		t.Fatal(err)
 	}
 	waitFor("reservation A RESERVED", reservationIs(a.ID, "RESERVED"))
+	waitFor("order A CONFIRMED (StockReserved consumed)", orderIs(a.ID, "CONFIRMED"))
 	if s, _ := getStock.Execute(c, inventorydto.GetStockInput{SKU: "S"}); s.Reserved != 2 || s.Available != 3 {
 		t.Fatalf("stock after reserve = %+v", s)
 	}
@@ -340,6 +342,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		"ordering.events_v1_ordercancellationrequested": 2, // one by the test, one by inventory
 		"ordering.events_v1_ordercancelled":             3, // a, b, and c (published by the test)
 		"inventory.events_v1_stockreserved":             1,
+		"ordering.events_v1_orderconfirmed":             1, // a: StockReserved consumed → CONFIRMED (b rejected, c tombstoned)
 		"inventory.events_v1_stockreleased":             1,
 		"ordering.events_poison":                        0,
 		"inventory.events_poison":                       0,
@@ -387,9 +390,9 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	// Lag gauges, as Prometheus would scrape them: every cursor the worker
 	// reads is caught up, nothing is parked, and the handlers left samples.
 	// The forwarder's cursor and the stream groups show up only in redis mode.
-	wantCursors := 3 // ordering: 1 topic; inventory: 2 topics
+	wantCursors := 4 // ordering: 2 topics; inventory: 2 topics
 	if rdb != nil {
-		wantCursors = 6 // + the forwarder on each distinct topic
+		wantCursors = 8 // + the forwarder on each distinct topic
 	}
 	waitFor("every consumer lag gauge at 0", func() (bool, error) {
 		lag := scrape(t, tel.MetricsHandler, "eventbus_consumer_lag")
@@ -414,12 +417,12 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	if n := len(scrape(t, tel.MetricsHandler, "eventbus_consumer_duration_seconds_count")); n == 0 {
 		t.Fatal("no eventbus_consumer_duration_seconds_count samples")
 	}
-	// Retention gauges: every outbox table of both BCs — the 3 consumed
-	// topics and the 2 published-only ones (OrderCancelled, StockReleased),
+	// Retention gauges: every outbox table of both BCs — the 4 consumed
+	// topics and the 2 published-only ones (OrderConfirmed, StockReleased),
 	// found in the catalogue — and both inboxes; with every group caught up
 	// no outbox row is held back from prune.
-	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 5 {
-		t.Fatalf("%d outbox row series, want 5: %v", len(rows), rows)
+	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 6 {
+		t.Fatalf("%d outbox row series, want 6: %v", len(rows), rows)
 	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_outbox_held") {
 		if v != "0" {

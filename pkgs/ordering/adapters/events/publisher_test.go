@@ -38,6 +38,9 @@ func TestPublisher_MapsDomainEventsToWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := o.Confirm(now.Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if err := o.Cancel(now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +49,7 @@ func TestPublisher_MapsDomainEventsToWire(t *testing.T) {
 	if err := events.NewPublisher(sink).Publish(context.Background(), o.PullEvents()...); err != nil {
 		t.Fatal(err)
 	}
-	if len(sink.msgs) != 2 || sink.topics[0] != "ordering.v1.OrderCreated" || sink.topics[1] != "ordering.v1.OrderCancelled" {
+	if len(sink.msgs) != 3 || sink.topics[0] != "ordering.v1.OrderCreated" || sink.topics[1] != "ordering.v1.OrderConfirmed" || sink.topics[2] != "ordering.v1.OrderCancelled" {
 		t.Fatalf("topics = %v", sink.topics)
 	}
 
@@ -63,8 +66,16 @@ func TestPublisher_MapsDomainEventsToWire(t *testing.T) {
 		t.Fatalf("metadata = %v", sink.msgs[0].Metadata)
 	}
 
+	var confirmed orderingv1.OrderConfirmed
+	if err := proto.Unmarshal(sink.msgs[1].Payload, &confirmed); err != nil {
+		t.Fatal(err)
+	}
+	if confirmed.GetOrderId() != "o-1" || confirmed.GetCustomerId() != "c-1" || !confirmed.GetConfirmedAt().AsTime().Equal(now.Add(30*time.Second)) {
+		t.Fatalf("OrderConfirmed = %v", &confirmed)
+	}
+
 	var cancelled orderingv1.OrderCancelled
-	if err := proto.Unmarshal(sink.msgs[1].Payload, &cancelled); err != nil {
+	if err := proto.Unmarshal(sink.msgs[2].Payload, &cancelled); err != nil {
 		t.Fatal(err)
 	}
 	if cancelled.GetOrderId() != "o-1" || !cancelled.GetCancelledAt().AsTime().Equal(now.Add(time.Minute)) {

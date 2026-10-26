@@ -28,6 +28,54 @@ func (r *recorder) Publish(_ context.Context, evs ...order.Event) error {
 	return nil
 }
 
+func TestConfirmThenCancel(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewOrderRepository()
+	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
+	rec := &recorder{}
+	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock)
+	confirm := usecase.NewConfirmOrder(repo, rec, clock)
+	cancel := usecase.NewCancelOrder(repo, rec, clock)
+
+	if _, err := create.Execute(c, dto.CreateOrderInput{
+		CustomerID: "c-1",
+		Items:      []dto.LineItem{{SKU: "SKU-1", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 500, Currency: "USD"}}},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	confirmed, err := confirm.Execute(c, dto.ConfirmOrderInput{OrderID: "o-1"})
+	if err != nil || confirmed.Status != "CONFIRMED" {
+		t.Fatalf("confirm = %+v, %v", confirmed, err)
+	}
+	// StockReserved redelivered: the aggregate refuses, the consumer drops.
+	if _, err = confirm.Execute(c, dto.ConfirmOrderInput{OrderID: "o-1"}); !errors.Is(err, order.ErrCannotConfirm) {
+		t.Fatalf("second confirm err = %v, want ErrCannotConfirm", err)
+	}
+	if _, err = confirm.Execute(c, dto.ConfirmOrderInput{}); !errors.Is(err, order.ErrInvalidID) {
+		t.Fatalf("empty id err = %v, want ErrInvalidID", err)
+	}
+	if _, err = confirm.Execute(c, dto.ConfirmOrderInput{OrderID: "missing"}); !errors.Is(err, order.ErrNotFound) {
+		t.Fatalf("missing err = %v, want ErrNotFound", err)
+	}
+
+	// Confirmed is still cancellable; a StockReserved arriving after that is refused.
+	cancelled, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
+	if err != nil || cancelled.Status != "CANCELLED" {
+		t.Fatalf("cancel = %+v, %v", cancelled, err)
+	}
+	if _, err = confirm.Execute(c, dto.ConfirmOrderInput{OrderID: "o-1"}); !errors.Is(err, order.ErrCannotConfirm) {
+		t.Fatalf("confirm after cancel err = %v, want ErrCannotConfirm", err)
+	}
+
+	if len(rec.events) != 3 {
+		t.Fatalf("published %d events, want 3 (Created, Confirmed, Cancelled)", len(rec.events))
+	}
+	if _, ok := rec.events[1].(order.Confirmed); !ok || rec.events[1].OrderID() != "o-1" {
+		t.Fatalf("event[1] = %T %v", rec.events[1], rec.events[1])
+	}
+}
+
 func TestCreateGetCancel(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()

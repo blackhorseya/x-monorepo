@@ -41,9 +41,12 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   await expect(lines).toContainText("12.99 USD"); // unit
   await expect(lines).toContainText("25.98 USD"); // 2 × 1299 minor
   await expect(page.getByTestId("order-total")).toContainText("25.98 USD");
-  await expect(page.getByTestId("order-status")).toHaveText("PENDING");
+  // With a worker the order may already be CONFIRMED (StockReserved consumed) by now.
+  await expect(page.getByTestId("order-status")).toHaveText(
+    withDB ? /^(PENDING|CONFIRMED)$/ : "PENDING"
+  );
   // Without a worker nothing reserves; with one the card flips to RESERVED at
-  // the worker's pace and shows the reserved line.
+  // the worker's pace and shows the reserved line, and the order to CONFIRMED.
   const reservation = page
     .locator('[data-slot="card"]', { hasText: "Reservation" })
     .last();
@@ -52,6 +55,9 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
       timeout: 30_000,
     });
     await expect(reservation).toContainText(`${sku} × 2`);
+    await expect(page.getByTestId("order-status")).toHaveText("CONFIRMED", {
+      timeout: 30_000,
+    });
   } else {
     await expect(reservation.getByText("none yet")).toBeVisible();
   }

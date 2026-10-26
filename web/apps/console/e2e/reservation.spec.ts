@@ -2,13 +2,16 @@ import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 
 // The whole event chain through the UI: CreateOrder → ordering outbox → worker →
-// inventory reserves → GetReservation shows RESERVED; Cancel → RELEASED. Needs
+// inventory reserves → GetReservation shows RESERVED → StockReserved → the order
+// shows CONFIRMED; Cancel (still allowed) → CANCELLED + RELEASED. Needs
 // the worker e2e/worker.setup.ts starts, so DB mode only.
 test.skip(!withDB, "needs Postgres + worker (E2E_DATABASE_URL)");
 
 const WORKER = { timeout: 30_000 };
 
-test("an order is reserved by the worker, cancelling releases it", async ({ page }) => {
+test("an order is reserved by the worker and confirmed, cancelling releases it", async ({
+  page,
+}) => {
   const sku = `E2E-W-${Date.now()}`;
   const customer = `e2e-worker-${Date.now()}`;
 
@@ -29,6 +32,8 @@ test("an order is reserved by the worker, cancelling releases it", async ({ page
   const row = page.getByRole("row").filter({ hasText: customer });
   await expect(row).toHaveCount(1);
   await expect(row.getByText("RESERVED")).toBeVisible(WORKER);
+  // Ordering consumed inventory's StockReserved: the saga closes on the happy path too.
+  await expect(row.getByText("CONFIRMED")).toBeVisible(WORKER);
 
   // Stock shows the hold.
   await page.goto(`/stock?prefix=${sku}`);
@@ -37,6 +42,7 @@ test("an order is reserved by the worker, cancelling releases it", async ({ page
   await expect(stockRow).toContainText("3"); // available
 
   await page.goto(`/orders?customer=${customer}`);
+  await expect(row.getByText("CONFIRMED")).toBeVisible();
   await row.getByRole("button", { name: "Cancel" }).click();
   await expect(row.getByText("CANCELLED")).toBeVisible();
   await expect(row.getByText("RELEASED")).toBeVisible(WORKER);

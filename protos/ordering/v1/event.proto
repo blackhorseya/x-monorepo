@@ -28,6 +28,14 @@ message OrderCreatedItem {
   int32 quantity = 2;
 }
 
+// OrderConfirmed is raised when an order moves to CONFIRMED: ordering consumed
+// inventory.v1.StockReserved for it (every line reserved).
+message OrderConfirmed {
+  string order_id = 1;
+  string customer_id = 2;
+  google.protobuf.Timestamp confirmed_at = 3;
+}
+
 // OrderCancelled is raised when an order moves to CANCELLED, whatever asked
 // for it (client call or OrderCancellationRequested).
 message OrderCancelled {

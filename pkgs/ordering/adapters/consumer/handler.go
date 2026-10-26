@@ -21,6 +21,7 @@ import (
 )
 
 // Topic is the subject this handler subscribes to: the proto full name.
+// (StockReservedHandler in stock_reserved.go consumes inventory's StockReserved.)
 var Topic = string((&orderingv1.OrderCancellationRequested{}).ProtoReflect().Descriptor().FullName())
 
 // ErrDrop tells the router the message is poison or no longer applicable and

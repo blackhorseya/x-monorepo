@@ -22,7 +22,7 @@ import {
 import { useResetOnCredentialChange } from "../auth";
 import { describe, orders } from "../client";
 import { keys, orderQuery, reservationQuery } from "../queries";
-import { ErrorAlert, formatMoney } from "./orders";
+import { ErrorAlert, formatMoney, statusVariant } from "./orders";
 import { reservationBadge } from "./reservations";
 
 // /orders/$id: one order in full — every line, the total, and what inventory
@@ -74,18 +74,18 @@ function OrderDetail({ order }: { order: Order }) {
     },
   });
   useResetOnCredentialChange(cancel);
-  const pending = order.status === OrderStatus.PENDING;
+  const open = order.status === OrderStatus.PENDING || order.status === OrderStatus.CONFIRMED;
 
   return (
     <>
       <div className="flex flex-wrap items-center gap-3">
         <Badge
-          variant={pending ? "default" : "secondary"}
+          variant={statusVariant(order.status)}
           data-testid="order-status"
         >
           {OrderStatus[order.status]}
         </Badge>
-        {pending && (
+        {open && (
           <Button
             variant="outline"
             size="sm"

@@ -148,6 +148,33 @@ func TestOrder_Cancel(t *testing.T) {
 	}
 }
 
+func TestOrder_Confirm(t *testing.T) {
+	now := time.Now()
+	later := now.Add(time.Minute)
+	o, err := order.New(order.Params{ID: "o-1", CustomerID: "c-1", Items: []order.LineItem{mustItem(t, "SKU-1", 1, mustMoney(t, 100, "USD"))}, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := o.Confirm(later); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if o.Status() != order.StatusConfirmed || !o.UpdatedAt().Equal(later) {
+		t.Fatalf("status = %v, updatedAt = %v", o.Status(), o.UpdatedAt())
+	}
+	if err := o.Confirm(later); !errors.Is(err, order.ErrCannotConfirm) {
+		t.Fatalf("second confirm err = %v, want ErrCannotConfirm", err)
+	}
+	// A confirmed order is still the customer's to cancel; inventory releases on OrderCancelled.
+	if err := o.Cancel(later.Add(time.Minute)); err != nil {
+		t.Fatalf("cancel after confirm: %v", err)
+	}
+	// A late StockReserved for a cancelled order is refused, not applied.
+	if err := o.Confirm(later); !errors.Is(err, order.ErrCannotConfirm) {
+		t.Fatalf("confirm after cancel err = %v, want ErrCannotConfirm", err)
+	}
+}
+
 func TestOrder_ItemsIsACopy(t *testing.T) {
 	o, _ := order.New(order.Params{ID: "o-1", CustomerID: "c-1", Items: []order.LineItem{mustItem(t, "SKU-1", 1, mustMoney(t, 100, "USD"))}, Now: time.Now()})
 	items := o.Items()
@@ -159,14 +186,16 @@ func TestOrder_ItemsIsACopy(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	tests := []struct {
-		s         order.Status
-		str       string
-		canCancel bool
+		s          order.Status
+		str        string
+		canCancel  bool
+		canConfirm bool
 	}{
-		{order.StatusPending, "PENDING", true},
-		{order.StatusCancelled, "CANCELLED", false},
-		{order.StatusUnknown, "UNKNOWN", false},
-		{order.Status(99), "UNKNOWN", false},
+		{order.StatusPending, "PENDING", true, true},
+		{order.StatusConfirmed, "CONFIRMED", true, false},
+		{order.StatusCancelled, "CANCELLED", false, false},
+		{order.StatusUnknown, "UNKNOWN", false, false},
+		{order.Status(99), "UNKNOWN", false, false},
 	}
 	for _, tt := range tests {
 		if tt.s.String() != tt.str {
@@ -174,6 +203,9 @@ func TestStatus(t *testing.T) {
 		}
 		if tt.s.CanTransitionTo(order.StatusCancelled) != tt.canCancel {
 			t.Errorf("%s.CanTransitionTo(CANCELLED) = %v", tt.str, !tt.canCancel)
+		}
+		if tt.s.CanTransitionTo(order.StatusConfirmed) != tt.canConfirm {
+			t.Errorf("%s.CanTransitionTo(CONFIRMED) = %v", tt.str, !tt.canConfirm)
 		}
 		if tt.s.CanTransitionTo(order.StatusPending) {
 			t.Errorf("%s must not transition to PENDING", tt.str)

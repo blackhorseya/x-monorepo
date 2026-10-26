@@ -14,6 +14,8 @@ enum OrderStatus {
   ORDER_STATUS_UNSPECIFIED = 0;
   ORDER_STATUS_PENDING = 1;
   ORDER_STATUS_CANCELLED = 2;
+  // Every line was reserved by inventory (inventory.v1.StockReserved consumed). Still cancellable.
+  ORDER_STATUS_CONFIRMED = 3;
 }
 
 message LineItem {

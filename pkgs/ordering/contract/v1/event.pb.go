@@ -153,6 +153,68 @@ func (x *OrderCreatedItem) GetQuantity() int32 {
 	return 0
 }
 
+// OrderConfirmed is raised when an order moves to CONFIRMED: ordering consumed
+// inventory.v1.StockReserved for it (every line reserved).
+type OrderConfirmed struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	CustomerId    string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	ConfirmedAt   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OrderConfirmed) Reset() {
+	*x = OrderConfirmed{}
+	mi := &file_ordering_v1_event_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrderConfirmed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrderConfirmed) ProtoMessage() {}
+
+func (x *OrderConfirmed) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_event_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrderConfirmed.ProtoReflect.Descriptor instead.
+func (*OrderConfirmed) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *OrderConfirmed) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *OrderConfirmed) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *OrderConfirmed) GetConfirmedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ConfirmedAt
+	}
+	return nil
+}
+
 // OrderCancelled is raised when an order moves to CANCELLED, whatever asked
 // for it (client call or OrderCancellationRequested).
 type OrderCancelled struct {
@@ -166,7 +228,7 @@ type OrderCancelled struct {
 
 func (x *OrderCancelled) Reset() {
 	*x = OrderCancelled{}
-	mi := &file_ordering_v1_event_proto_msgTypes[2]
+	mi := &file_ordering_v1_event_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -178,7 +240,7 @@ func (x *OrderCancelled) String() string {
 func (*OrderCancelled) ProtoMessage() {}
 
 func (x *OrderCancelled) ProtoReflect() protoreflect.Message {
-	mi := &file_ordering_v1_event_proto_msgTypes[2]
+	mi := &file_ordering_v1_event_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -191,7 +253,7 @@ func (x *OrderCancelled) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderCancelled.ProtoReflect.Descriptor instead.
 func (*OrderCancelled) Descriptor() ([]byte, []int) {
-	return file_ordering_v1_event_proto_rawDescGZIP(), []int{2}
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *OrderCancelled) GetOrderId() string {
@@ -228,7 +290,7 @@ type OrderCancellationRequested struct {
 
 func (x *OrderCancellationRequested) Reset() {
 	*x = OrderCancellationRequested{}
-	mi := &file_ordering_v1_event_proto_msgTypes[3]
+	mi := &file_ordering_v1_event_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -240,7 +302,7 @@ func (x *OrderCancellationRequested) String() string {
 func (*OrderCancellationRequested) ProtoMessage() {}
 
 func (x *OrderCancellationRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_ordering_v1_event_proto_msgTypes[3]
+	mi := &file_ordering_v1_event_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -253,7 +315,7 @@ func (x *OrderCancellationRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderCancellationRequested.ProtoReflect.Descriptor instead.
 func (*OrderCancellationRequested) Descriptor() ([]byte, []int) {
-	return file_ordering_v1_event_proto_rawDescGZIP(), []int{3}
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *OrderCancellationRequested) GetOrderId() string {
@@ -293,6 +355,11 @@ const file_ordering_v1_event_proto_rawDesc = "" +
 	"\x10OrderCreatedItem\x12\x10\n" +
 	"\x03sku\x18\x01 \x01(\tR\x03sku\x12\x1a\n" +
 	"\bquantity\x18\x02 \x01(\x05R\bquantity\"\x8b\x01\n" +
+	"\x0eOrderConfirmed\x12\x19\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x1f\n" +
+	"\vcustomer_id\x18\x02 \x01(\tR\n" +
+	"customerId\x12=\n" +
+	"\fconfirmed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vconfirmedAt\"\x8b\x01\n" +
 	"\x0eOrderCancelled\x12\x19\n" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
@@ -317,26 +384,28 @@ func file_ordering_v1_event_proto_rawDescGZIP() []byte {
 	return file_ordering_v1_event_proto_rawDescData
 }
 
-var file_ordering_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_ordering_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_ordering_v1_event_proto_goTypes = []any{
 	(*OrderCreated)(nil),               // 0: ordering.v1.OrderCreated
 	(*OrderCreatedItem)(nil),           // 1: ordering.v1.OrderCreatedItem
-	(*OrderCancelled)(nil),             // 2: ordering.v1.OrderCancelled
-	(*OrderCancellationRequested)(nil), // 3: ordering.v1.OrderCancellationRequested
-	(*v1.Money)(nil),                   // 4: common.v1.Money
-	(*timestamppb.Timestamp)(nil),      // 5: google.protobuf.Timestamp
+	(*OrderConfirmed)(nil),             // 2: ordering.v1.OrderConfirmed
+	(*OrderCancelled)(nil),             // 3: ordering.v1.OrderCancelled
+	(*OrderCancellationRequested)(nil), // 4: ordering.v1.OrderCancellationRequested
+	(*v1.Money)(nil),                   // 5: common.v1.Money
+	(*timestamppb.Timestamp)(nil),      // 6: google.protobuf.Timestamp
 }
 var file_ordering_v1_event_proto_depIdxs = []int32{
 	1, // 0: ordering.v1.OrderCreated.items:type_name -> ordering.v1.OrderCreatedItem
-	4, // 1: ordering.v1.OrderCreated.total:type_name -> common.v1.Money
-	5, // 2: ordering.v1.OrderCreated.created_at:type_name -> google.protobuf.Timestamp
-	5, // 3: ordering.v1.OrderCancelled.cancelled_at:type_name -> google.protobuf.Timestamp
-	5, // 4: ordering.v1.OrderCancellationRequested.requested_at:type_name -> google.protobuf.Timestamp
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	5, // 1: ordering.v1.OrderCreated.total:type_name -> common.v1.Money
+	6, // 2: ordering.v1.OrderCreated.created_at:type_name -> google.protobuf.Timestamp
+	6, // 3: ordering.v1.OrderConfirmed.confirmed_at:type_name -> google.protobuf.Timestamp
+	6, // 4: ordering.v1.OrderCancelled.cancelled_at:type_name -> google.protobuf.Timestamp
+	6, // 5: ordering.v1.OrderCancellationRequested.requested_at:type_name -> google.protobuf.Timestamp
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_ordering_v1_event_proto_init() }
@@ -350,7 +419,7 @@ func file_ordering_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ordering_v1_event_proto_rawDesc), len(file_ordering_v1_event_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
