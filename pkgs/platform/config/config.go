@@ -120,6 +120,12 @@ const (
 // database": apps fall back to in-memory repositories (local dev, tests).
 type Postgres struct {
 	URL string `mapstructure:"url"` // e.g. postgres://user:pass@host:5432/db?sslmode=disable
+
+	// Pool limits: declared so the tests compile; nothing reads them yet.
+	MaxOpenConns    int           `mapstructure:"max_open_conns"`
+	MaxIdleConns    int           `mapstructure:"max_idle_conns"`
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time"`
 }
 
 // Redis configures the Redis the worker uses as its broker when

@@ -242,6 +242,14 @@ func addForwarders(
 	return topics, nil
 }
 
+// checkPool is a stub so the tests compile; it refuses nothing yet.
+func checkPool(*gorm.DB, []struct {
+	schema string
+	subs   []eventbus.Subscription
+}) error {
+	return nil
+}
+
 // Run blocks until c is done (SIGTERM in main), then stops taking messages
 // and lets the handlers in flight finish and ack (eventbus.Draining, up to
 // eventbus.DefaultDrainTimeout) before returning. The lag gauges stop being

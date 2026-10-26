@@ -39,6 +39,9 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	if cfg.HTTP.Timeout != 10*time.Second || cfg.HTTP.RateLimit.RPS != 0 || cfg.HTTP.RateLimit.By != config.RateLimitGlobal {
 		t.Fatalf("limit defaults: %+v", cfg.HTTP)
 	}
+	if p := cfg.Postgres; p.MaxOpenConns != 25 || p.MaxIdleConns != 10 || p.ConnMaxLifetime != 30*time.Minute || p.ConnMaxIdleTime != 5*time.Minute {
+		t.Fatalf("postgres pool defaults: %+v", p)
+	}
 	if cfg.Worker.HandlerTimeout != 10*time.Second || cfg.Worker.PollInterval != 200*time.Millisecond {
 		t.Fatalf("worker defaults: %+v", cfg.Worker)
 	}
@@ -216,5 +219,37 @@ func TestLoad_ExampleFile(t *testing.T) {
 	}
 	if !cfg.HTTP.Docs || cfg.Log.Format != "text" || cfg.Postgres.URL == "" {
 		t.Fatalf("unexpected example profile: %+v", cfg)
+	}
+}
+
+func TestLoad_PostgresPool(t *testing.T) {
+	chdirTemp(t)
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		ok   bool
+	}{
+		{"override", map[string]string{"APP_POSTGRES_MAX_OPEN_CONNS": "40", "APP_POSTGRES_MAX_IDLE_CONNS": "40", "APP_POSTGRES_CONN_MAX_LIFETIME": "1h", "APP_POSTGRES_CONN_MAX_IDLE_TIME": "1m"}, true},
+		{"unlimited open is an explicit opt-out", map[string]string{"APP_POSTGRES_MAX_OPEN_CONNS": "0"}, true},
+		{"idle 0 means the database/sql default", map[string]string{"APP_POSTGRES_MAX_IDLE_CONNS": "0"}, true},
+		{"never recycle", map[string]string{"APP_POSTGRES_CONN_MAX_LIFETIME": "0", "APP_POSTGRES_CONN_MAX_IDLE_TIME": "0"}, true},
+		{"negative open", map[string]string{"APP_POSTGRES_MAX_OPEN_CONNS": "-1"}, false},
+		{"negative idle", map[string]string{"APP_POSTGRES_MAX_IDLE_CONNS": "-1"}, false},
+		{"idle above a capped open", map[string]string{"APP_POSTGRES_MAX_OPEN_CONNS": "5", "APP_POSTGRES_MAX_IDLE_CONNS": "6"}, false},
+		{"negative lifetime", map[string]string{"APP_POSTGRES_CONN_MAX_LIFETIME": "-1s"}, false},
+		{"negative idle time", map[string]string{"APP_POSTGRES_CONN_MAX_IDLE_TIME": "-1s"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := config.Load()
+			if (err == nil) != tc.ok {
+				t.Fatalf("Load() = %+v, %v; want ok=%v", cfg.Postgres, err, tc.ok)
+			}
+			if tc.ok && tc.env["APP_POSTGRES_MAX_OPEN_CONNS"] == "40" && (cfg.Postgres.MaxOpenConns != 40 || cfg.Postgres.ConnMaxLifetime != time.Hour || cfg.Postgres.ConnMaxIdleTime != time.Minute) {
+				t.Fatalf("override not applied: %+v", cfg.Postgres)
+			}
+		})
 	}
 }
