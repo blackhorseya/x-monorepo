@@ -54,7 +54,8 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │   │   ├── entity.proto           # aggregate 的 state schema（跨語言契約，不是 Go domain model）
 │   │   ├── service.proto          # RPC
 │   │   └── event.proto            # 進出 broker 的訊息
-│   └── inventory/v1/              # 第二個 BC 的契約（entity / service / event）
+│   ├── inventory/v1/              # 第二個 BC 的契約（entity / service / event）
+│   └── identity/v1/               # 第三個 BC：account / API key（entity / service，沒有 event）
 ├── pkgs/
 │   ├── kernel/                    # shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 │   ├── platform/                  # 技術共用：contextx、config、server（gin）、usecasex、metrics、postgres（gorm + migrate runner）
@@ -75,10 +76,14 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │           ├── rpc/               # Connect handler；pb ↔ dto
 │           ├── consumer/          # event handler；呼叫同一個 CancelOrder usecase
 │           └── events/            # outbound：domain event → proto → Watermill publisher
-│   └── inventory/                 # ── 第二個 BC：同樣結構 ──
+│   ├── inventory/                 # ── 第二個 BC：同樣結構 ──
 │       ├── domain/stock/          # Stock aggregate（每 SKU 一筆，optimistic version）
 │       ├── domain/reservation/    # Reservation aggregate（每 order 一筆：RESERVED / REJECTED / RELEASED）
 │       └── adapters/consumer/     # 消費 ordering.v1.OrderCreated / OrderCancelled（只 import ordering 的 contract/）
+│   └── identity/                  # ── 第三個 BC：DB 管理的 account + API key，給 auth interceptor 解 X-API-Key（docs/identity.md）──
+│       ├── domain/account/        # Account aggregate（id = principal subject、roles、ACTIVE / DISABLED）
+│       ├── domain/apikey/         # APIKey aggregate（只存 sha256、prefix；ACTIVE / REVOKED、expires_at）
+│       └── adapters/auth/         # 實作 platform 的 server.CredentialResolver（TTL cache），apps/rpc 以 wire.Bind 接上
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
@@ -105,6 +110,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/config.md`](docs/config.md) | 所有 config key、預設值、env 覆寫規則、`auth.*` |
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
+| [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
 
@@ -154,7 +160,7 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 | 層 | 擋什麼 | 位置 |
 |---|---|---|
 | proto | `buf.validate` rule 直接寫在 request message 上（`min_len`、`gt`、`gte`、`pattern`、`required`、`min_items`） | `protos/<bc>/v1/service.proto`、`common/v1/money.proto`、`ordering/v1/entity.proto` |
-| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 對 `auth.api_keys`，否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
+| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 先對 `auth.api_keys`（static，break-glass）再問 `server.CredentialResolver`（`pkgs/identity` 的 DB key，見 `docs/identity.md`；resolver 失敗 = 拒絕，不放行），否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method, CredentialID}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
 | server | `NewRateLimitInterceptor`（`http.rate_limit.rps` > 0 才掛，在 logging 之內、auth 之外——洪水要在付 JWT 簽章驗證成本之前就擋掉）：token bucket，`by: global` 一桶 / `peer` 每個 client IP 一桶（idle 1 分鐘回收）。沒 token → `RESOURCE_EXHAUSTED`、`x-error-code: request.rate_limited`、`Retry-After: <秒>`，不排隊等 | `pkgs/platform/server/limits.go` |
 | server | `NewTimeoutInterceptor`（`http.timeout` > 0 才掛，在 auth 之內、validate 之外）：usecase 拿到會到期的 context，慢 query 被 cancel 而不是吃掉整個 shutdown drain 窗口。到期後失敗的 RPC 一律回 `DEADLINE_EXCEEDED` + `x-error-code: request.timeout`（不管 driver 的 error 被 `ToConnectError` 映成什麼）；到期後仍成功的照常回 response（工作已 commit）。client 的 deadline 較短時一樣適用 | `pkgs/platform/server/limits.go` |
 | server | `NewValidateInterceptor`（最內層 interceptor）：違反 → `INVALID_ARGUMENT`、header `x-error-code: request.validation_failed`、error detail `buf.validate.Violations`（欄位路徑 + rule id + message）；rule 本身編不過 → `INTERNAL` | `pkgs/platform/server/validate.go` |
@@ -257,7 +263,7 @@ cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的
 Reservation 沒有 version：它和同一張 order 的 Commit / Release 之間的鎖是 **stock 列的 version**（同一交易裡一起 Save），輸的那批整批 rollback 重跑。
 已知的窗口：`CompleteOrder` commit 到 inventory 消費 `OrderCompleted` 之間 reservation 仍是 RESERVED，sweep 剛好掃到會把庫存還回去並請求取消，ordering 拒絕（COMPLETED 是終點）、`OrderCompleted` 到了找到 EXPIRED 也 drop——結果是 order COMPLETED 但沒賣出。窗口是一跳 consumer 對上以小時計的 TTL，守的是 eventbus lag 的 alert，不是 use case。
 
-- 兩個 BC 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled` / `OrderCompleted`、events adapter 發 `OrderCancellationRequested`（缺貨與過期都是它）；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
+- ordering 與 inventory 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled` / `OrderCompleted`、events adapter 發 `OrderCancellationRequested`（缺貨與過期都是它）；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
 - **event 的 schema 歸 consumer 所有**：缺貨是 ordering 的 message（`OrderCancellationRequested`），inventory 把它發進 ordering 的 topic / 表（同一個 DB、同一個交易）。
 - **缺貨是狀態不是 error**：`reservation.Reserve` 回 `REJECTED` + `Rejected` event，一樣落地；重送的 `OrderCreated` 找到既有 reservation 就什麼都不做。
   consumer 把 `kernel.Error` 當 final（drop），所以缺貨若用 error 表達就不會有人發取消。
@@ -321,7 +327,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 時才掛 `/api/docs`（Scalar UI，`/api/docs/<bc>`）與 `/api/openapi/<bc>.yaml`。production 不開。
 spec 裡的 `servers` 是相對的 `/api`（任何 host 都對），但 serve 出去的 yaml 會把它改寫成 request 的絕對 origin（`X-Forwarded-Proto` / Host）：
 Scalar 的 Send request 用 `new URL(server + path)`，相對 server 會噴「The URL seems to be invalid」；順便讓檔案直接匯入 Postman / Bruno 就能打。
-三份 `openapi.base.yaml` 都宣告 `securitySchemes`（`apiKey` = `X-API-Key`、`bearer` = JWT），所以 Scalar 右上 **Auth** 可以選一種填進去
+四份 `openapi.base.yaml` 都宣告 `securitySchemes`（`apiKey` = `X-API-Key`、`bearer` = JWT），所以 Scalar 右上 **Auth** 可以選一種填進去
 （`auth.mode: required` 時填 `configs/local.yaml` 的 `auth.api_keys` 那把 key）；`auth.mode: off` 時填不填都一樣。前端不需要它 —— `web/packages/proto`
 直接從 proto 生 connect-es client。
 

@@ -1,0 +1,81 @@
+# Identity
+
+<sub>← [README](../README.md)</sub>
+
+`pkgs/identity` 是第三個 bounded context：**DB 管理的 account 與 API key**，給 rpc server 的 auth interceptor 解 `X-API-Key`。
+它只做 verifier——JWT 仍由 `auth.jwt` 指的外部 issuer 發；它不發 event、不消費 event（沒有 outbox / inbox / poison 表）。
+
+## 形狀
+
+```
+X-API-Key ──► platform/server auth interceptor
+               ├─ 1. config auth.api_keys（static，break-glass，不需要 DB）
+               └─ 2. server.CredentialResolver ──► identity/adapters/auth.Resolver（TTL cache 30s）
+                                                    └─► ResolveAPIKey use case：sha256(secret) → api_keys.hash → key.Usable(now) → account.IsActive → principal
+```
+
+- **platform 不 import BC**（depguard `shared`）。platform 開一個 port `server.CredentialResolver`，identity 的 `adapters/auth` 實作它，
+  `apps/rpc/wire.go` 用 `wire.Bind` 接起來。這是唯一一處 platform 反向呼叫 BC 的地方，而且只透過 platform 自己宣告的 interface。
+- **查序**：config key 先、resolver 後。config key 永遠不打 DB，所以 DB 掛了 operator 還進得去；resolver 回 error（DB 掛）時 request 被拒成
+  `auth.invalid_credential`，**不會**放行、也不會把 error 內容給 client（access log 有 `auth: credential resolver failed`）。
+- **沒 DB 時**（`postgres.url` 空）repository 是 in-memory：`task run` / E2E 開 auth 一樣可以 `CreateApiKey` 然後用那把 key 打，重啟就沒了。
+
+## Domain
+
+| Aggregate | 欄位 | 行為 |
+|---|---|---|
+| `account.Account` | `id`（= principal subject）、`name`、`roles []string`（trim / dedupe / sort）、`status ACTIVE\|DISABLED`、`version` | `Disable` / `Enable`（不是終點，可來回）、`AssignRoles`（整組取代，空 = 清掉）。沒有 `Set*` |
+| `apikey.APIKey` | `id`（= principal `CredentialID`）、`accountID`、`name`、`prefix`（secret 前 8 字元，列表辨識用）、`hash`（sha256）、`status ACTIVE\|REVOKED`、`expiresAt?`、`revokedAt?`、`version` | `New(…, secret, …)` 自己算 prefix + hash，plaintext 不存；`Usable(now)` 回 `ErrRevoked` / `ErrExpired`；`Revoke` 終點 |
+
+secret 由 `infra/system.SecretGenerator` 產：`xk_` + 32 bytes base64url（43 字元，256 bits）。高 entropy 所以 sha256 就夠，不需要 argon2；
+DB dump 不會漏 key，查詢是 index lookup 不是逐筆比對。`CreateApiKey` 的 response 是**唯一一次**看到 plaintext 的機會。
+
+## Principal 語意（platform 的變更）
+
+| credential | `Subject` | `Name` | `Roles` | `Method` | `CredentialID` |
+|---|---|---|---|---|---|
+| config `auth.api_keys` | entry 的 name | 空 | 冒號後的清單 | `api_key` | 空 |
+| identity 的 key | **account id** | account name | account roles | `api_key` | **api key id** |
+| JWT | `sub` | `name` claim | `roles` claim | `jwt` | 空 |
+
+`CredentialID` 是新欄位：撤銷「這一把」key 用它找。access line / span 的 `sub` 對 identity key 是 account id，不是 key name。
+metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有 api_key / jwt / none）。
+
+## RPC（`identity.v1.IdentityService`）
+
+全部 `server.RequireRole(auth.admin_role)`，**除了 `WhoAmI`**（回 caller 自己的 principal；anonymous 時 `anonymous: true`）：
+`CreateAccount` / `GetAccount` / `ListAccounts`（id 升冪，opaque page token）/ `DisableAccount` / `EnableAccount` / `AssignRoles` /
+`CreateApiKey`（回 secret 一次）/ `ListApiKeys`（含 REVOKED，新到舊）/ `RevokeApiKey`。
+
+**啟動行為的改變**：以前 `auth.mode: required` 但 `api_keys` 與 `jwt` 都空會開不起來；現在合法（resolver 一個人也能答），但 DB 空的話就是「auth 開著、沒有任何 credential 能過」的 fail-closed server——`server.New` 會印一行 Warn。Helm 少掛 secret 不再 CrashLoop，而是鎖在外面，看 log。
+
+**Bootstrap**：第一把 admin key 用 config `auth.api_keys`（`root=<key>:admin`），拿它 `CreateAccount` + `CreateApiKey`，之後 config 那把留著當 break-glass。沒有 seed migration、沒有 bootstrap CLI。
+
+## 生效延遲
+
+resolver 前面有 in-process cache，TTL `auth.DefaultCacheTTL` = 30s，hit 與 miss 都 cache（miss 也 cache 是為了擋猜 key 打 DB；真正的防線是 rate limit）。
+所以 **revoke / disable / role 變更最多 30s 後生效**，每個 rpc replica 各自一份 cache。resolver error 不 cache。cache 上限 10k entries，超過整個丟掉重來。
+
+v1 **不記** `last_used_at`（hot path 寫入）；要審計誰用了哪把 key看 access line 的 `sub`（account id）。
+
+## 擴充路徑：帳號密碼 / 自己當 issuer
+
+Account 已經是「誰」，password 不是它的欄位，而是第二種 credential aggregate：
+
+1. `domain/password`：`PasswordCredential{accountID, argon2idHash, updatedAt}`，`Verify(plain)`，一個 account 一筆。
+2. `Login(name, password)` use case：走同一條 `account.IsActive()` / roles 路徑，輸出同一個 principal 形狀。
+3. `Login` RPC 發自簽 JWT（HS256，用現有 `auth.jwt.hs256_secret`，`sub` = account id）→ **interceptor 完全不用改**，它已經驗 JWT 的 sub / roles。
+4. 要加的是 issuer 那一側：token 過期、refresh / logout、console login 頁、brute-force 鎖定——都在 identity BC 與 console 內，不碰 platform / 其他 BC。
+
+Ownership（`CreateOrder.customer_id` 由 principal 帶、`GetOrder` 只能看自己的）是 identity 存在的業務理由，排在 console 頁之後另開 PR。
+
+## 檔案
+
+```
+pkgs/identity/
+├── provider.go                 ProviderSet；decorate / decorateTx（沒有 inbox：沒有 consumer path）
+├── domain/account, domain/apikey
+├── application/{dto,usecase,port,mapper}   ResolveAPIKey 與 WhoAmI 也是 use case
+├── infra/{memory,postgres,system}          identity.accounts / identity.api_keys（roles 是 jsonb array）
+└── adapters/{auth,rpc}                     auth.Resolver 實作 server.CredentialResolver；rpc 是 Connect handler
+```

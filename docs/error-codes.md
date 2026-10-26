@@ -16,9 +16,9 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`；�
 | `request.timeout` | `DEADLINE_EXCEEDED` | timeout interceptor | 超過 `http.timeout`，不管底下是什麼錯 |
 | `request.rate_limited` | `RESOURCE_EXHAUSTED` | rate limit interceptor | 超過 `http.rate_limit`，另帶 `Retry-After` |
 | `auth.unauthenticated` | `UNAUTHENTICATED` | auth interceptor | `auth.mode=required` 且沒帶 credential |
-| `auth.invalid_credential` | `UNAUTHENTICATED` | auth interceptor | 帶了但對不上（未知 API key、JWT 簽章 / exp / iss / aud 不對） |
-| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService 與 `InventoryService.ExpireReservations` 要 `auth.admin_role`） |
-| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`order.ErrStale` / `stock.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；重送即可，刻意沒有前綴也不是 `kernel.Error` |
+| `auth.invalid_credential` | `UNAUTHENTICATED` | auth interceptor | 帶了但對不上（未知 API key、JWT 簽章 / exp / iss / aud 不對）。identity 的 key 被 revoke / 過期 / account disabled、或 resolver 查 DB 失敗，client 看到的也是這個（不洩漏原因；resolver 失敗另有 error log） |
+| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`InventoryService.ExpireReservations`、`IdentityService` 除 `WhoAmI` 外都要 `auth.admin_role`） |
+| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`order.ErrStale` / `stock.ErrStale` / `account.ErrStale` / `apikey.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；重送即可，刻意沒有前綴也不是 `kernel.Error` |
 | `pagination.invalid_page_size` | `INVALID_ARGUMENT` | `platform/pagination` | `page_size` 負數 |
 | `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（ListOrders / ListStocks 把 filter 編進 token） |
 | `admin.no_database` | `FAILED_PRECONDITION` | admin | server 沒接 Postgres（`postgres.url` 空）：poison 表與 outbox / inbox 都在 DB |
@@ -43,7 +43,19 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`；�
 | `reservation.stock_missing` | `FAILED_PRECONDITION` | inventory domain | Release / Commit / Expire 時某 SKU 的 stock 列不在了 |
 | `reservation.not_found` | `NOT_FOUND` | inventory domain | `GetReservation`：worker 還沒處理這張 order（console 顯示 `none yet`） |
 | `reservation.duplicate` | `ALREADY_EXISTS` | inventory domain | 同一 order 第二張 reservation（repo `Add`）；reserve / release usecase 把它當「已處理」吞掉，rpc 實際上看不到 |
+| `account.invalid_id` / `account.invalid_name` / `account.invalid_role` | `INVALID_ARGUMENT` | identity domain | aggregate 不變量（role 不能是空字串；protovalidate 先擋 rpc 那條） |
+| `account.invalid_cursor` | `INVALID_ARGUMENT` | identity domain | ListAccounts 的 page token 解得開但沒有 id |
+| `account.already_disabled` / `account.already_active` | `FAILED_PRECONDITION` | identity domain | Disable 已 DISABLED / Enable 已 ACTIVE 的 account |
+| `account.disabled` | `FAILED_PRECONDITION` | identity domain | ResolveAPIKey：key 沒事但 account 是 DISABLED（rpc 看到的是 `auth.invalid_credential`） |
+| `account.not_found` | `NOT_FOUND` | identity domain | 含 `CreateApiKey` / `ListApiKeys` 指到不存在的 account |
+| `account.duplicate` | `ALREADY_EXISTS` | identity domain | 同 id 再 Add（repo 層；id 是 UUID，實際上不會發生） |
+| `api_key.invalid_id` / `api_key.invalid_account_id` / `api_key.invalid_name` / `api_key.invalid_secret` | `INVALID_ARGUMENT` | identity domain | aggregate 不變量；`invalid_secret` 也是 ResolveAPIKey 對太短的 key 的答案 |
+| `api_key.invalid_expiry` | `INVALID_ARGUMENT` | identity domain | `CreateApiKey.expire_time` 不在未來 |
+| `api_key.already_revoked` | `FAILED_PRECONDITION` | identity domain | Revoke 已 REVOKED 的 key |
+| `api_key.revoked` / `api_key.expired` | `FAILED_PRECONDITION` | identity domain | ResolveAPIKey：`Usable(now)` 拒絕（rpc 看到的是 `auth.invalid_credential`） |
+| `api_key.not_found` | `NOT_FOUND` | identity domain | `RevokeApiKey` 的 id 不存在；ResolveAPIKey 的 hash 對不上 |
+| `api_key.duplicate` | `ALREADY_EXISTS` | identity domain | 同 id 或同 hash 再 Add（repo 層） |
 | `message.duplicate` | （不到 rpc） | `usecasex.Idempotent` | consumer inbox 看到重送的 message id：handler 回它、broker ack、不 retry；rpc path 沒 message id 不會發 |
-| `order.invalid_status` / `reservation.invalid_status` / `stock.corrupt_quantities` | `INTERNAL`（header 不帶 code） | domain | 從 DB 讀回來的狀態 / 數量不合法：資料壞了，不是 client 的錯 |
+| `order.invalid_status` / `reservation.invalid_status` / `stock.corrupt_quantities` / `account.invalid_status` / `api_key.invalid_status` | `INTERNAL`（header 不帶 code） | domain | 從 DB 讀回來的狀態 / 數量不合法：資料壞了，不是 client 的錯 |
 
 Kind → Connect code 只在 `server.ToConnectError` 一處；consumer 不看 code：`kernel.Error` 一律 drop（進 poison），其他 error retry。

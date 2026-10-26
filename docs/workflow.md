@@ -11,7 +11,7 @@
 3. `provider.go` 加 `ProvideXxx`，讀取用 `decorate(name, rec, uc)`，寫入用 `decorateTx(name, rec, tx, uc)`
 4. `adapters/rpc` 實作新方法（`var _ XxxServiceHandler` 會提醒）→ `task wire`
 
-### 新增 Bounded Context（`pkgs/inventory` 是照這個清單加的第二個 BC，可當範本）
+### 新增 Bounded Context（`pkgs/inventory` 是照這個清單加的第二個 BC，可當範本；`pkgs/identity` 是沒有 event 的版本：沒有 consumer / events adapter / outbox / inbox / poison，`apps/worker` 與 `NewPoisonService` 都不用加）
 1. `protos/<newbc>/v1/{entity,service,event}.proto` + `openapi.base.yaml`；`buf.gen.yaml` 加一行 `go_package` override
 2. `pkgs/<newbc>/go.mod`（module path 對齊目錄，`replace` 指向 kernel / platform / 要讀 contract 的 BC），`go.work` 加 `use`，
    `Taskfile.yml` 的 `MODULES` 與 `BCS` 加上，`apps/*/go.mod` 加 `require` + `replace` → `task tidy`
@@ -22,6 +22,7 @@
    `Subscriptions` 並 `Register`（自己的 poison topic）→ `task wire`
 6. 有 DB 的話：`infra/postgres/migrations/0001_*.sql`（表都放在 `<newbc>.` schema）+ 自己發的 topic 與 `<newbc>.poison` 的 events 表 + `Migration()`，
    `apps/migrate/main.go` 的 `migrations` 加一筆（依賴順序：發進別人表的排後面）
+7. `task gen-ts`（需要網路）把 TS client 產進 `web/packages/proto/src/gen/<newbc>/`——CI 的 gen-freshness 也比這個
 
 ### 新增 consumer / 新 event
 - **發**：domain 加 event struct（embed `base`）並在行為裡 `record()`；`protos/<bc>/v1/event.proto` 加 message → `task gen`；
