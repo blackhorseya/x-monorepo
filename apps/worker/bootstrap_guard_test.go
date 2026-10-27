@@ -69,6 +69,7 @@ func TestCheckBootstrapConn(t *testing.T) {
 		password string   // what must not leak; defaults to guardPassword
 		leaks    []string // more fragments of the URL or environment the error must not carry
 		env      map[string]string
+		noTarget bool // run without --expect-target (the loop otherwise pins base's host:port)
 		reject   bool
 		contains string // part of the expected error
 	}{
@@ -78,7 +79,8 @@ func TestCheckBootstrapConn(t *testing.T) {
 		// pgx treats require + sslrootcert as verify-ca (configTLS), so the chain is verified.
 		{name: "require with sslrootcert is verify-ca in pgx", url: base + "?sslmode=require&sslrootcert=" + ca},
 		{name: "verify-ca to the expected target", url: base + "?sslmode=verify-ca&sslrootcert=" + ca, policy: forward},
-		{name: "several hosts, all verified", url: "postgres://u:" + guardPassword + "@a.example:5432,b.example:5432/app?sslmode=verify-full"},
+		{name: "several hosts, every one the target", url: "postgres://u:" + guardPassword + "@127.0.0.1:15432,127.0.0.1:15432/app?sslmode=verify-full"},
+		{name: "several hosts, they differ", url: "postgres://u:" + guardPassword + "@127.0.0.1:15432,b.example:5432/app?sslmode=verify-full", reject: true, contains: "does not match --expect-target 127.0.0.1:15432", leaks: []string{"b.example"}},
 
 		// No TLS, or TLS that does not verify the server.
 		{name: "disable", url: base + "?sslmode=disable", reject: true, contains: "TLS is disabled"},
@@ -117,8 +119,8 @@ func TestCheckBootstrapConn(t *testing.T) {
 			policy: forward, password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host",
 		},
 		{
-			name: "unencoded @ in the password, no expected target, plaintext", url: "postgres://u:pa@SYNTHETIC_SECRET@127.0.0.1:15432/app?sslmode=disable",
-			password: "SYNTHETIC_SECRET", leaks: []string{"pa@", "127.0.0.1"}, reject: true, contains: "invalid host",
+			name: "unencoded @ in the password, plaintext", url: "postgres://u:pa@SYNTHETIC_SECRET@127.0.0.1:15432/app?sslmode=disable",
+			policy: connPolicy{allowPlaintext: true}, password: "SYNTHETIC_SECRET", leaks: []string{"pa@"}, reject: true, contains: "invalid host",
 		},
 
 		// The host can come from the environment, not the URL.
@@ -128,7 +130,7 @@ func TestCheckBootstrapConn(t *testing.T) {
 		},
 		{
 			name: "PGHOST with a TLS that does not verify", url: "postgres:///app?sslmode=require", env: map[string]string{"PGHOST": "pghost.example"},
-			reject: true, contains: "does not verify", leaks: []string{"pghost.example"},
+			policy: connPolicy{expectTarget: "pghost.example:5432"}, reject: true, contains: "does not verify", leaks: []string{"pghost.example"},
 		},
 		{
 			name: "PGHOST that is not a host name", url: "postgres:///app?sslmode=verify-full", env: map[string]string{"PGHOST": "SYNTHETIC_PGHOST"},
@@ -140,7 +142,7 @@ func TestCheckBootstrapConn(t *testing.T) {
 		// reaches the resolver, whose error quotes it into the log.
 		{
 			name: "unencoded @ in the password, no --expect-target", url: "postgres://u:@SYNTHETIC_SECRET@127.0.0.1:15432/app?sslmode=verify-full",
-			password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host",
+			noTarget: true, password: "SYNTHETIC_SECRET", reject: true, contains: "--expect-target is required",
 		},
 		{name: "host with a slash", url: base + "?sslmode=verify-full&host=SYNTHETIC_SECRET/x", password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host"},
 		{name: "host with a space", url: base + "?sslmode=verify-full&host=SYNTHETIC_SECRET%20x", password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host"},
@@ -153,10 +155,32 @@ func TestCheckBootstrapConn(t *testing.T) {
 			name: "a bad host in a fallback", url: "postgres://u:" + guardPassword + "@a.example:5432,SYNTHETIC_SECRET@b:5432/app?sslmode=verify-full",
 			password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host",
 		},
-		{name: "IPv6 host", url: "postgres://u:" + guardPassword + "@[::1]:5432/app?sslmode=verify-full"},
-		{name: "DNS name with hyphens and digits", url: "postgres://u:" + guardPassword + "@db-1.eu-west.example.com:5432/app?sslmode=verify-full"},
-		{name: "unix socket directory", url: base + "?host=/var/run/postgresql", policy: connPolicy{allowPlaintext: true}},
+		{name: "IPv6 host", url: "postgres://u:" + guardPassword + "@[::1]:5432/app?sslmode=verify-full", policy: connPolicy{expectTarget: "[::1]:5432"}},
+		{name: "DNS name with hyphens and digits", url: "postgres://u:" + guardPassword + "@db-1.eu-west.example.com:5432/app?sslmode=verify-full", policy: connPolicy{expectTarget: "db-1.eu-west.example.com:5432"}},
+		{name: "unix socket directory", url: base + "?host=/var/run/postgresql", policy: connPolicy{allowPlaintext: true, expectTarget: "/var/run/postgresql:15432"}},
+		// A fully qualified name ends in a root dot; only that one trailing dot is allowed.
+		{name: "localhost with a root dot", url: "postgres://u:" + guardPassword + "@localhost.:5432/app?sslmode=verify-full", policy: connPolicy{expectTarget: "localhost.:5432"}},
+		{name: "FQDN with a root dot", url: "postgres://u:" + guardPassword + "@db.example.com.:5432/app?sslmode=verify-full", policy: connPolicy{expectTarget: "db.example.com.:5432"}},
+		{name: "empty label in the middle", url: base + "?sslmode=verify-full&host=a..b", reject: true, contains: "invalid host"},
+		{name: "a lone root dot", url: base + "?sslmode=verify-full&host=.", reject: true, contains: "invalid host"},
+		{name: "two root dots", url: base + "?sslmode=verify-full&host=..", reject: true, contains: "invalid host"},
+		{name: "two trailing dots", url: base + "?sslmode=verify-full&host=db.example.com..", reject: true, contains: "invalid host"},
 		{name: "socket path with a space", url: base + "?host=/var/run/SYNTHETIC_SECRET%20x", policy: connPolicy{allowPlaintext: true}, password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host"},
+
+		// --expect-target is required: whatever pgx parses as the host may be a piece
+		// of a malformed password (a valid-looking label too), so only the target the
+		// operator typed can be trusted.
+		{name: "no --expect-target", url: base + "?sslmode=verify-full", noTarget: true, reject: true, contains: "--expect-target is required"},
+		{name: "no --expect-target, plaintext allowed", url: base + "?sslmode=disable", policy: connPolicy{allowPlaintext: true}, noTarget: true, reject: true, contains: "--expect-target is required"},
+		{name: "no --expect-target, unparsable URL", url: "postgres://u:" + guardPassword + "@h:notaport/app", noTarget: true, reject: true, contains: "--expect-target is required"},
+		{
+			name: "a valid-looking label that is part of the password", url: "postgres://u:pw@SECRETLABEL/app?sslmode=verify-full",
+			reject: true, contains: "does not match --expect-target 127.0.0.1:15432", leaks: []string{"SECRETLABEL"},
+		},
+		{
+			name: "the same with plaintext allowed", url: "postgres://u:pw@SECRETLABEL/app?sslmode=disable", policy: connPolicy{allowPlaintext: true},
+			reject: true, contains: "does not match --expect-target 127.0.0.1:15432", leaks: []string{"SECRETLABEL"},
+		},
 
 		// Not a URL pgx accepts: no pgx text, which can quote the string.
 		{name: "unparsable", url: "postgres://u:" + guardPassword + "@h:notaport/app", reject: true, contains: "not a valid connection string"},
@@ -166,7 +190,11 @@ func TestCheckBootstrapConn(t *testing.T) {
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
-			err := checkBootstrapConn(tc.url, tc.policy)
+			policy := tc.policy
+			if policy.expectTarget == "" && !tc.noTarget {
+				policy.expectTarget = "127.0.0.1:15432"
+			}
+			err := checkBootstrapConn(tc.url, policy)
 			if !tc.reject {
 				if err != nil {
 					t.Fatalf("checkBootstrapConn = %v, want nil", err)
@@ -185,7 +213,7 @@ func TestCheckBootstrapConn(t *testing.T) {
 				pw = guardPassword
 			}
 			for _, leak := range append([]string{pw, "postgres://", "127.0.0.1", "u:"}, tc.leaks...) {
-				if leak == "127.0.0.1" && tc.policy.expectTarget != "" {
+				if leak == "127.0.0.1" && policy.expectTarget != "" {
 					continue // the operator's own --expect-target is fine to print
 				}
 				if strings.Contains(err.Error(), leak) {
@@ -214,7 +242,7 @@ func TestBootstrapCommand_GuardRunsBeforeConnecting(t *testing.T) {
 		return cmd.ExecuteContext(context.Background())
 	}
 
-	err := run()
+	err := run("--expect-target", "127.0.0.1:1")
 	if err == nil || !strings.Contains(err.Error(), "refusing to connect: TLS is disabled") {
 		t.Fatalf("plaintext URL by default = %v, want a refusal before connecting", err)
 	}
@@ -227,7 +255,7 @@ func TestBootstrapCommand_GuardRunsBeforeConnecting(t *testing.T) {
 		t.Fatalf("wrong target with the plaintext flag = %v, want a refusal before connecting", err)
 	}
 
-	err = run("--insecure-allow-plaintext")
+	err = run("--expect-target", "127.0.0.1:1", "--insecure-allow-plaintext")
 	if err == nil || strings.Contains(err.Error(), "refusing") {
 		t.Fatalf("plaintext allowed = %v, want it past the guard (and failing to connect to the closed port)", err)
 	}
@@ -270,19 +298,64 @@ func TestBootstrapCommand_RefusalLeaksNothingFromTheURL(t *testing.T) {
 	}
 }
 
-// Without --expect-target the host is not pinned, so the structure check is
-// the only thing between a password with an unencoded @ and the resolver. The
-// command is driven the way main drives it, and what main would log is
-// captured.
-func TestBootstrapCommand_MalformedHostLeaksNothingWithoutExpectTarget(t *testing.T) {
+// --expect-target is required: without it the command refuses before it reads
+// the config or parses the URL, with a fixed message. The URL carries a
+// piece-of-the-password host that is a valid label (SECRETLABEL) and an
+// unencoded @ (SYNTHETIC_SECRET), and the command is driven the way main
+// drives it, with what main would log captured.
+func TestBootstrapCommand_ExpectTargetIsRequired(t *testing.T) {
+	for _, args := range [][]string{
+		{"bootstrap"},
+		{"bootstrap", "--expect-target", ""},
+		{"bootstrap", "--insecure-allow-plaintext"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			loaded := false
+			cfg := &config.AppConfig{
+				Postgres: config.Postgres{URL: "postgres://u:@SYNTHETIC_SECRET@SECRETLABEL/app?sslmode=verify-full"},
+				Log:      config.Log{Level: "debug", Format: "text"},
+				Auth:     config.Auth{AdminRole: "admin"},
+			}
+			var stdout, stderr bytes.Buffer
+			cmd := newRootCmd(func() (*config.AppConfig, error) { loaded = true; return cfg, nil })
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			cmd.SetArgs(args)
+
+			err := cmd.ExecuteContext(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "--expect-target is required") {
+				t.Fatalf("error = %v, want %q", err, "--expect-target is required")
+			}
+			if loaded {
+				t.Error("the config was loaded before the flag was checked")
+			}
+			slog.Error("worker exited", "error", err) // what main does with it
+			for name, out := range map[string]string{"error": err.Error(), "stdout": stdout.String(), "stderr": stderr.String(), "log": logs.String()} {
+				for _, frag := range []string{"SYNTHETIC_SECRET", "SECRETLABEL"} {
+					if strings.Contains(out, frag) {
+						t.Errorf("%s carries %q from the URL: %q", name, frag, out)
+					}
+				}
+			}
+		})
+	}
+}
+
+// With the flag, a host that is a valid label but part of the password is a
+// target mismatch, refused before the resolver sees it.
+func TestBootstrapCommand_SecretLabelHostIsRefused(t *testing.T) {
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	const secret = "SYNTHETIC_SECRET"
 	cfg := &config.AppConfig{
-		Postgres: config.Postgres{URL: "postgres://u:@" + secret + "@127.0.0.1:15432/app?sslmode=verify-full"},
+		Postgres: config.Postgres{URL: "postgres://u:pw@SECRETLABEL/app?sslmode=verify-full"},
 		Log:      config.Log{Level: "debug", Format: "text"},
 		Auth:     config.Auth{AdminRole: "admin"},
 	}
@@ -290,19 +363,16 @@ func TestBootstrapCommand_MalformedHostLeaksNothingWithoutExpectTarget(t *testin
 	cmd := newRootCmd(func() (*config.AppConfig, error) { return cfg, nil })
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"bootstrap"})
+	cmd.SetArgs([]string{"bootstrap", "--expect-target", "127.0.0.1:15432"})
 
 	err := cmd.ExecuteContext(context.Background())
-	if err == nil {
-		t.Fatal("malformed host = nil, want a refusal")
+	if err == nil || !strings.Contains(err.Error(), "refusing to connect: connection target does not match --expect-target 127.0.0.1:15432") {
+		t.Fatalf("error = %v, want a target mismatch before connecting (not a resolver error)", err)
 	}
 	slog.Error("worker exited", "error", err) // what main does with it
-	if !strings.Contains(err.Error(), "refusing to connect") {
-		t.Fatalf("error = %q, want a refusal before connecting (not a resolver error)", err)
-	}
 	for name, out := range map[string]string{"error": err.Error(), "stdout": stdout.String(), "stderr": stderr.String(), "log": logs.String()} {
-		if strings.Contains(out, secret) {
-			t.Errorf("%s carries a piece of the URL: %q", name, out)
+		if strings.Contains(out, "SECRETLABEL") {
+			t.Errorf("%s carries the host: %q", name, out)
 		}
 	}
 }

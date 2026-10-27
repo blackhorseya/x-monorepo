@@ -6,9 +6,13 @@ import (
 	"crypto/sha256"
 	"io"
 	"log/slog"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	identitypg "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -51,12 +55,17 @@ func TestBootstrapCommand(t *testing.T) {
 	// exec runs the command with the log captured too (a CLI use case logs
 	// through slog.Default: nothing puts a logger in its context), so the test
 	// can tell what went to the operator (out) from what went to the log.
+	pc, err := pgx.ParseConfig(cfg.Postgres.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := net.JoinHostPort(pc.Host, strconv.Itoa(int(pc.Port)))
 	exec := func(cfg *config.AppConfig, args ...string) (out, logged string, err error) {
 		var buf, logBuf bytes.Buffer
 		cmd := newRootCmd(func() (*config.AppConfig, error) { return cfg, nil })
 		cmd.SetOut(&buf)
 		cmd.SetErr(io.Discard)
-		cmd.SetArgs(append([]string{"bootstrap", "--insecure-allow-plaintext"}, args...)) // the test database is plaintext
+		cmd.SetArgs(append([]string{"bootstrap", "--insecure-allow-plaintext", "--expect-target", target}, args...)) // the test database is plaintext, and the target is required
 		prev := slog.Default()
 		slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		defer slog.SetDefault(prev)
