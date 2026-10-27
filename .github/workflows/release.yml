@@ -280,36 +280,51 @@ jobs:
           # Only this PR's runs are touched: same repo, same branch, same commit, and (when the
           # run lists its pull_requests at all, which these bot runs did not) this PR's number.
           # Another PR or a fork at the same SHA is not ours to approve.
-          # ci.yml is dispatched only if, after the polling, none of its runs is past the approval
-          # gate. Approved, running and finished runs all count, so an approve whose response got
-          # lost (the run is re-read after every round) or a run somebody approved by hand cannot
-          # double CI. Polling is 12 rounds of an API read + 5s sleep, i.e. at least 60s.
+          # ci.yml is dispatched only if no run of it was ever seen past the approval gate while
+          # polling. Approved, running and finished runs all count, so an approve whose response
+          # got lost (the runs are re-read every round) or a run somebody approved by hand cannot
+          # double CI. A failed read keeps what the previous read showed rather than blanking it,
+          # and once a run has been seen past the gate that is remembered; this PR's other runs
+          # awaiting approval (release-gate, ...) are still approved in that round. Polling is 12 rounds of
+          # an API read + 5s sleep, i.e. at least 60s, not a hard cap.
           sha=$(git rev-parse HEAD)
           pr=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')
+          # Non-zero when the list or the filter fails, so "no runs yet" ([]) and "could not read" differ.
           my_runs() {
-            { gh api "repos/$REPO/actions/runs?head_sha=$sha&event=pull_request&per_page=100" 2>/dev/null \
+            gh api "repos/$REPO/actions/runs?head_sha=$sha&event=pull_request&per_page=100" 2>/dev/null \
               | jq -c --arg repo "$REPO" --arg branch "$branch" --arg sha "$sha" --argjson pr "$pr" \
                 '[.workflow_runs[]
                   | select(.head_repository.full_name == $repo and .head_branch == $branch and .head_sha == $sha)
                   | select((.pull_requests | length) == 0 or any(.pull_requests[]; .number == $pr))
-                  | {id, path, status, conclusion}]' 2>/dev/null; } || echo '[]'
+                  | {id, path, status, conclusion}]' 2>/dev/null
           }
           # A run waiting for approval is status=completed, conclusion=action_required on the REST
           # API (status=action_required is only what the list filter accepts), so test both.
           awaiting='(.status == "action_required" or .conclusion == "action_required")'
           ci_past_gate() { jq -e ".[] | select(.path == \".github/workflows/ci.yml\" and ($awaiting | not))" <<<"$1" >/dev/null 2>&1; }
-          runs=$(my_runs)
+          runs='[]'
+          past_gate=""
           for _ in $(seq 1 12); do
-            for id in $(jq -r ".[] | select($awaiting) | .id" <<<"$runs" 2>/dev/null || true); do
-              gh api -X POST "repos/$REPO/actions/runs/$id/approve" >/dev/null 2>&1 || echo "approve of run $id failed" >> "$RUNNER_TEMP/approve-errors.txt"
-            done
+            if now=$(my_runs); then runs=$now; fi
+            if ci_past_gate "$runs"; then past_gate=1; fi
+            while read -r id path; do
+              [ -n "$id" ] || continue
+              if gh api -X POST "repos/$REPO/actions/runs/$id/approve" >/dev/null 2>&1; then
+                [ "$path" != .github/workflows/ci.yml ] || past_gate=1   # accepted: CI starts, whatever the next read says
+              else
+                echo "approve of run $id failed" >> "$RUNNER_TEMP/approve-errors.txt"
+              fi
+            done < <(jq -r ".[] | select($awaiting) | \"\\(.id) \\(.path)\"" <<<"$runs" 2>/dev/null || true)
+            [ -z "$past_gate" ] || break
             sleep 5
-            runs=$(my_runs)
-            ci_past_gate "$runs" && break
           done
-          if ! ci_past_gate "$runs"; then
+          if [ -z "$past_gate" ]; then
+            if now=$(my_runs); then runs=$now; fi
+            ci_past_gate "$runs" && past_gate=1
+          fi
+          if [ -z "$past_gate" ]; then
             echo "::warning::no ci.yml pull_request run of $branch got past approval, dispatching it instead"
-            echo "ci.yml: dispatched, not approved ($({ wc -l < "$RUNNER_TEMP/approve-errors.txt"; } 2>/dev/null || echo 0) approve failure(s), runs seen: $runs)" >> "$GITHUB_STEP_SUMMARY"
+            echo "ci.yml: dispatched, not approved ($({ wc -l < "$RUNNER_TEMP/approve-errors.txt"; } 2>/dev/null || echo 0) approve failure(s), last runs seen: $runs)" >> "$GITHUB_STEP_SUMMARY"
             gh workflow run ci.yml --repo "$REPO" --ref "$branch"
           fi
           gh workflow run release-gate.yml --repo "$REPO" --ref main -f pr="$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')"
