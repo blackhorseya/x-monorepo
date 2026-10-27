@@ -6,13 +6,15 @@
 #
 # Overrides (scripts/test.sh uses them to run this against a fake engine): DOCKER, the engine
 # command; IMAGES, a space-separated list that skips reading the names below; PULL_RETRY_SLEEP,
-# the seconds between attempts (5, then 10, then 15 times this).
+# the wait unit between attempts (1x, 2x, 3x this; default 5 seconds).
 #
 # testcontainers-go creates each container and lets the daemon pull a missing image inside that
-# call, with no retry: one 502 from Docker Hub fails the test (run 39370298272, pkgs/ordering:
+# call. It retries the registry request itself (attemptToPullImage, with backoff) but not the
+# rest of the call, and a Docker Hub 502 still failed a run (39370298272, pkgs/ordering:
 # `reaper: ... failed to resolve reference "docker.io/testcontainers/ryuk:0.14.0": ... 502 Bad
 # Gateway`). With the images already local that call never touches the registry, and the pull
-# here is retried. Ryuk stays on: it is what removes the containers when a test binary is killed.
+# here is retried by the engine CLI. Ryuk stays on: it is what removes the containers when a
+# test binary is killed.
 #
 # The names are read from where the tests take them, so a version bump follows by itself:
 #   postgres, redis  the Image constants of pgtest / redistest
@@ -48,10 +50,26 @@ pull() {
   return 1
 }
 
+# One background pull per image, each in its own process group (set -m), so that cancelling
+# kills the subshell, its `sleep` and the engine it started, not just the subshell. The trap is
+# in place before the first pull starts and also runs on a normal exit, where it finds nothing.
+set -m
 pids=""
+# shellcheck disable=SC2329  # runs from the EXIT trap
+cleanup() {
+  trap - EXIT
+  local p
+  for p in $pids; do kill -TERM -- "-$p" 2>/dev/null || true; done
+  for p in $pids; do wait "$p" 2>/dev/null || true; done
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 for img in $images; do
   pull "$img" & pids="$pids $!"
 done
 rc=0
 for p in $pids; do wait "$p" || rc=1; done
+pids=""
 exit $rc
