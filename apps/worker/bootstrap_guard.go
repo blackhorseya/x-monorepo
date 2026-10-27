@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -47,8 +49,9 @@ func checkBootstrapConn(url string, p connPolicy) error {
 }
 
 // validateBootstrapConn checks a parsed config: every connection attempt —
-// the main one and each fallback pgx will try next — must dial the expected
-// target, and unless plaintext is allowed must verify the server.
+// the main one and each fallback pgx will try next — must have a structurally
+// valid host (always), dial the expected target (when one is given), and
+// unless plaintext is allowed must verify the server.
 //
 // What "verifies the server" looks like after pgx's configTLS
 // (pgx v5.11.0, pgconn/config.go):
@@ -66,6 +69,14 @@ func checkBootstrapConn(url string, p connPolicy) error {
 // itself (InsecureSkipVerify false) or has installed its own chain check.
 func validateBootstrapConn(cfg *pgconn.Config, p connPolicy) error {
 	attempts := append([]*pgconn.Config{cfg}, fallbackConfigs(cfg)...)
+
+	// Before anything else, and with or without --expect-target: a host that
+	// is not a host never reaches the resolver, whose error quotes it.
+	for _, a := range attempts {
+		if !validHost(a.Host) {
+			return errors.New("postgres.url has an invalid host")
+		}
+	}
 
 	if p.expectTarget != "" {
 		for _, a := range attempts {
@@ -98,4 +109,44 @@ func fallbackConfigs(cfg *pgconn.Config) []*pgconn.Config {
 	}
 
 	return out
+}
+
+// validHost reports whether h is something pgx can dial: an IP address, a DNS
+// name (RFC 1123 labels: 1-63 letters, digits or hyphens, not starting or
+// ending with a hyphen, 253 bytes at most), or a unix socket directory.
+//
+// It exists because pgx does not validate the host. A password with an
+// unencoded @ ("u:@SECRET@127.0.0.1") makes the host "SECRET@127.0.0.1", which
+// the resolver then quotes in its error ("lookup SECRET@127.0.0.1"), and main
+// logs that. Nothing that could carry a secret is a valid host: no @, %, space
+// or other punctuation.
+func validHost(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	if strings.HasPrefix(h, "/") {
+		// A socket directory (PGHOST=/var/run/postgresql, host=/tmp): a plain
+		// path, no spaces or other characters a secret would need.
+		return !strings.ContainsFunc(h, func(r rune) bool { return !isHostRune(r) && r != '/' && r != '.' && r != '_' })
+	}
+	if _, err := netip.ParseAddr(h); err == nil {
+		return true
+	}
+	for _, label := range strings.Split(h, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !isHostRune(r) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// isHostRune is a letter, a digit or a hyphen: what a DNS label is made of.
+func isHostRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-'
 }
