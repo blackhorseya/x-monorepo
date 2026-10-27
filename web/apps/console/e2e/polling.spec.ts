@@ -1,10 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
+import { withDB } from "./mode";
 
 // Request budget of the orders list. The server only has unary RPCs, so the console polls;
 // this pins down what is allowed to poll. Terminal rows (CANCELLED, no reservation to wait
 // for) must not poll GetReservation, and later pages must not be refetched every tick, only
 // the first one (new / changed orders show up there). In-memory mode is enough: no worker,
 // so a PENDING order keeps "waiting", a cancelled one is terminal.
+test.skip(withDB, "a worker reserves these orders, so they are not 'none yet' rows (reservation.spec.ts covers that path)");
+
 const WINDOW_MS = 8_000;
 const PAGE = 20;
 const TOTAL = PAGE + 5; // two pages

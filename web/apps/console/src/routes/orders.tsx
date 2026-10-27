@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus, Trash2 } from "lucide-react";
-import { cloneElement, useId, useState, type ReactElement } from "react";
+import { cloneElement, useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useResetOnCredentialChange } from "../auth";
 import { describe, isUnauthenticated, orders } from "../client";
-import { keys, ordersQuery, reservationQuery } from "../queries";
+import { keys, ordersQuery, refreshFirstPage, reservationQuery } from "../queries";
 import { reservationBadge } from "./reservations";
 
 type Line = { sku: string; quantity: number; priceMinor: number };
@@ -113,6 +113,14 @@ function OrdersCard() {
   const [customerInput, setCustomerInput] = useState(customer);
   const [orderIdInput, setOrderIdInput] = useState("");
   const list = useInfiniteQuery(ordersQuery(customer, status));
+  const qc = useQueryClient();
+  // Only the newest page polls (see refreshFirstPage); a hidden tab does not.
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") void refreshFirstPage(qc, customer, status).catch(() => {});
+    }, 2000);
+    return () => clearInterval(t);
+  }, [qc, customer, status]);
   const rows = list.data?.pages.flatMap((p) => p.orders) ?? [];
   const setSearch = (patch: Partial<OrdersSearch>) => void navigate({ search: (prev) => ({ ...prev, ...patch }) });
 
@@ -120,7 +128,7 @@ function OrdersCard() {
     <Card>
       <CardHeader>
         <CardTitle>Orders</CardTitle>
-        <CardDescription>Newest first, 20 per page, refreshed every 2s.</CardDescription>
+        <CardDescription>Newest first, 20 per page; the newest page refreshes every 2s.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="flex flex-wrap items-end gap-4">
@@ -254,7 +262,7 @@ function OrderRow({ order }: { order: Order }) {
         <Badge variant={statusVariant(order.status)}>{OrderStatus[order.status]}</Badge>
       </TableCell>
       <TableCell>
-        <ReservationCell orderId={order.id} />
+        <ReservationCell orderId={order.id} orderStatus={order.status} />
       </TableCell>
       <TableCell className="space-x-2 text-right">
         {confirmed && (
@@ -274,8 +282,16 @@ function OrderRow({ order }: { order: Order }) {
   );
 }
 
-function ReservationCell({ orderId }: { orderId: string }) {
-  const { data, isError, error } = useQuery(reservationQuery(orderId));
+function ReservationCell({ orderId, orderStatus }: { orderId: string; orderStatus: OrderStatus }) {
+  const { data, isError, error, refetch } = useQuery(reservationQuery(orderId, orderStatus));
+  // The row does not poll once nothing is pending; the order's own status moving (the list
+  // polls that) is the cue to look at the reservation again.
+  const seen = useRef(orderStatus);
+  useEffect(() => {
+    if (seen.current === orderStatus) return;
+    seen.current = orderStatus;
+    void refetch();
+  }, [orderStatus, refetch]);
   if (isError) return <span className="text-xs text-destructive">{describe(error)}</span>;
   if (data === undefined) return null;
   if (data === null) return <span className="text-sm text-muted-foreground">none yet</span>;

@@ -1,6 +1,7 @@
-import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
+import type { ListOrdersResponse } from "@repo/proto/ordering/v1/service_pb";
 import { admin, inventory, isNotFound, orders } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
@@ -10,6 +11,9 @@ export type ServerVersion = { version: string; commit: string; date: string; go:
 // written by apps/worker after it consumes OrderCreated, and orders can be
 // cancelled by inventory (shortfall), so both change without a user action.
 const POLL_MS = 2000;
+// A list query is fresh for a second: remounting a list (or two components asking for the
+// same page) within a tick reuses the data instead of going back to the server.
+const LIST_STALE_MS = 1000;
 
 export const keys = {
   orders: ["orders"] as const,
@@ -38,16 +42,35 @@ export const versionQuery = queryOptions({
 });
 
 // Orders newest first, 20 per page, by customer (empty = any) and status
-// (UNSPECIFIED = any). Loaded pages poll: inventory cancels orders on its own.
-// The key starts with keys.orders so a mutation invalidates every filter.
+// (UNSPECIFIED = any). Inventory cancels orders on its own, so the list refreshes, but not
+// by refetchInterval: that would refetch every loaded page each tick (N pages = N requests).
+// refreshFirstPage polls the newest page instead. The key starts with keys.orders so a
+// mutation invalidates every filter.
 export const ordersQuery = (customerId: string, status: OrderStatus) =>
   infiniteQueryOptions({
     queryKey: keys.ordersPage(customerId, status),
     queryFn: async ({ pageParam }) => orders.listOrders({ customerId, status, pageSize: 20, pageToken: pageParam }),
     initialPageParam: "",
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
-    refetchInterval: POLL_MS,
+    staleTime: LIST_STALE_MS,
   });
+
+// One poll tick of the orders list: fetch only the first page. Same orders in the same order
+// = nothing moved, so just swap in the fresh rows (status changes) and keep the other pages.
+// Anything else (a new order, one that left the filter) shifts the page boundaries, so
+// refetch every loaded page. Older pages catch up on a remount, a mutation or window focus.
+export async function refreshFirstPage(qc: QueryClient, customerId: string, status: OrderStatus) {
+  const key = keys.ordersPage(customerId, status);
+  const cur = qc.getQueryData<InfiniteData<ListOrdersResponse, string>>(key);
+  if (cur === undefined || qc.isFetching({ queryKey: key }) > 0) return;
+  const fresh = await orders.listOrders({ customerId, status, pageSize: 20, pageToken: "" });
+  const old = cur.pages[0]?.orders ?? [];
+  const same = fresh.orders.length === old.length && fresh.orders.every((o, i) => o.id === old[i]?.id);
+  if (!same) return qc.invalidateQueries({ queryKey: key });
+  qc.setQueryData<InfiniteData<ListOrdersResponse, string>>(key, (d) =>
+    d === undefined ? d : { ...d, pages: [fresh, ...d.pages.slice(1)] },
+  );
+}
 
 // One order for /orders/$id; null = no such id. PENDING keeps polling because
 // inventory cancels orders on its own; CANCELLED is terminal.
@@ -69,7 +92,12 @@ export const orderQuery = (id: string) =>
   });
 
 // null = the worker has not reserved anything for this order (yet).
-export const reservationQuery = (orderId: string) =>
+//
+// orderStatus is given by a list row, which already polls its orders: the row only waits
+// when something is still to happen (see reservationPending); everything else fetches once,
+// and again when the order's status changes (ReservationCell). Without it (the order page)
+// the reservation polls on its own state alone.
+export const reservationQuery = (orderId: string, orderStatus?: OrderStatus) =>
   queryOptions({
     queryKey: keys.reservation(orderId),
     queryFn: async () => {
@@ -83,10 +111,20 @@ export const reservationQuery = (orderId: string) =>
     // Everything but RESERVED is terminal; RESERVED can still be released and
     // a missing reservation can still appear.
     refetchInterval: (q) => {
+      if (orderStatus !== undefined) return reservationPending(orderStatus, q.state.data?.status) ? POLL_MS : false;
       const s = q.state.data?.status;
       return s === undefined || s === ReservationStatus.RESERVED ? POLL_MS : false;
     },
   });
+
+// Is there a change to wait for, given the order's status and the reservation's (undefined =
+// none yet)? PENDING: the worker has not reserved yet. COMPLETED / CANCELLED with the stock
+// still RESERVED: the commit / release event is on its way. A CONFIRMED order holds its
+// reservation until the customer acts, which moves the order's status and re-fetches.
+export function reservationPending(order: OrderStatus, reservation: ReservationStatus | undefined): boolean {
+  if (order === OrderStatus.PENDING) return true;
+  return (order === OrderStatus.COMPLETED || order === OrderStatus.CANCELLED) && reservation === ReservationStatus.RESERVED;
+}
 
 // SKUs ascending, 20 per page, by prefix (empty = every SKU) and optionally
 // only the ones with something reserved; the worker moves reserved / available
@@ -99,6 +137,7 @@ export const stocksQuery = (skuPrefix: string, onlyReserved: boolean) =>
     initialPageParam: "",
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
     refetchInterval: POLL_MS,
+    staleTime: LIST_STALE_MS,
   });
 
 // Reservations newest first, 20 per page, optionally one status (UNSPECIFIED =
@@ -110,6 +149,7 @@ export const reservationsQuery = (status: ReservationStatus) =>
     initialPageParam: "",
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
     refetchInterval: POLL_MS,
+    staleTime: LIST_STALE_MS,
   });
 
 // Every BC's poison table; parking happens after retries, so a slower poll is fine.
