@@ -273,6 +273,22 @@ jobs:
               exit 0
             fi
           fi
-          gh workflow run ci.yml --repo "$REPO" --ref "$branch"
+          # A PR opened with GITHUB_TOKEN gets its pull_request runs parked in action_required
+          # (approval); left alone they turn into a red 0-job "failure" the moment the PR merges
+          # or closes, next to the green dispatch run below. Approve them so ci.yml runs as the
+          # PR's own check. Only if that does not work out fall back to dispatching ci.yml.
+          sha=$(git rev-parse HEAD)
+          ci_run=""
+          for _ in $(seq 1 12); do
+            for id in $(gh api "repos/$REPO/actions/runs?head_sha=$sha&event=pull_request&status=action_required" --jq '.workflow_runs[]|"\(.id):\(.path)"' 2>/dev/null || true); do
+              if gh api -X POST "repos/$REPO/actions/runs/${id%%:*}/approve" >/dev/null 2>&1 && [ "${id#*:}" = .github/workflows/ci.yml ]; then ci_run=${id%%:*}; fi
+            done
+            [ -z "$ci_run" ] || break
+            sleep 5
+          done
+          if [ -z "$ci_run" ]; then
+            echo "::warning::no pull_request run of ci.yml to approve on $branch, dispatching it instead"
+            gh workflow run ci.yml --repo "$REPO" --ref "$branch"
+          fi
           gh workflow run release-gate.yml --repo "$REPO" --ref main -f pr="$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')"
           echo "chart appVersion → $v: $(gh pr list --repo "$REPO" --head "$branch" --json url --jq '.[0].url')" >> "$GITHUB_STEP_SUMMARY"
