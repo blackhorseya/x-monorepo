@@ -71,18 +71,20 @@ func TestOutboxState_MatchesLegacyExists(t *testing.T) {
 	msgs, offs := TableName(stateTopic), OffsetsTableName(stateTopic)
 
 	for name, cursors := range map[string]string{
-		"no cursor":                       ``,
-		"one at zero":                     `('a', 0, '0')`,
-		"mid transaction":                 `('a', 2, '1')`,
-		"end of transaction":              `('a', 6, '2')`,
-		"transaction 3, low offset":       `('a', 1, '3')`,
-		"empty transaction":               `('a', 0, '4')`,
-		"beyond the end":                  `('a', 100, '9')`,
-		"NULL offset_acked":               `('a', NULL, '2')`,
-		"several, lagging one decides":    `('a', 100, '9'), ('b', 3, '1'), ('c', 7, '3')`,
-		"NULL below a real one":           `('a', NULL, '2'), ('b', 5, '2'), ('c', 9, '5')`,
-		"NULL above a real one":           `('a', NULL, '3'), ('b', 5, '2')`,
-		"same transaction, NULL and real": `('a', NULL, '2'), ('b', 4, '2')`,
+		"no cursor":                            ``,
+		"one at zero":                          `('a', 0, '0')`,
+		"mid transaction":                      `('a', 2, '1')`,
+		"end of transaction":                   `('a', 6, '2')`,
+		"transaction 3, low offset":            `('a', 1, '3')`,
+		"empty transaction":                    `('a', 0, '4')`,
+		"beyond the end":                       `('a', 100, '9')`,
+		"NULL offset_acked":                    `('a', NULL, '2')`,
+		"several, lagging one decides":         `('a', 100, '9'), ('b', 3, '1'), ('c', 7, '3')`,
+		"NULL below a real one":                `('a', NULL, '2'), ('b', 5, '2'), ('c', 9, '5')`,
+		"lowest transaction only a NULL group": `('a', NULL, '2'), ('b', 5, '3')`,
+		"NULL group alone below all rows":      `('a', NULL, '0'), ('b', 0, '4')`,
+		"NULL above a real one":                `('a', NULL, '3'), ('b', 5, '2')`,
+		"same transaction, NULL and real":      `('a', NULL, '2'), ('b', 4, '2')`,
 	} {
 		if _, err := sqlDB.ExecContext(c, "DELETE FROM "+offs); err != nil {
 			t.Fatal(err)
@@ -108,8 +110,9 @@ func TestOutboxState_MatchesLegacyExists(t *testing.T) {
 }
 
 // The gauge runs on every scrape over the whole table, so "held" must not
-// cost a probe of the offsets table per message row: that SubPlan took ~240ms
-// at 200k rows, against ~24ms for comparing each row to the lowest cursor.
+// cost a probe of the offsets table per message row: that SubPlan took ~270ms
+// at 200k rows (median wall time, 4 groups), against ~26ms for comparing each row
+// to the lowest cursor.
 func TestOutboxState_NoPerRowSubplan(t *testing.T) {
 	c, sqlDB := stateDB(t)
 	rows, err := sqlDB.QueryContext(c, "EXPLAIN "+outboxStateQuery(TableName(stateTopic)))
