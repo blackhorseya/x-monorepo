@@ -132,6 +132,50 @@ expect_eq "affected: another workflow is no module"  ""              "$(affected
 affected_fixture aall
 expect_eq "affected: --all ignores the diff"         "pkgs/a pkgs/b" "$(in_repo scripts/affected.sh --all | tr '\n' ' ' | sed 's/ $//')"
 
+# ── ci-prepull-images.sh ────────────────────────────────────────────────────────
+# Run against a fake engine (DOCKER=...) with the image list and the backoff overridden. The fake
+# logs each pull to $FAKE_LOG and either succeeds after FAKE_FAIL_FIRST failures per image or, in
+# hang mode, records its pid and blocks like an engine stuck on a registry.
+prepull_tmp=$(mktemp -d)
+fake_engine="$prepull_tmp/engine"
+cat > "$fake_engine" <<'ENGINE'
+#!/usr/bin/env bash
+# usage: engine pull --quiet <image>
+img=$3
+echo "$img" >> "$FAKE_LOG"
+if [ "${FAKE_HANG:-}" = 1 ]; then echo $$ >> "$FAKE_PIDS"; exec sleep 600; fi
+n=$(grep -cx "$img" "$FAKE_LOG")
+[ "$n" -gt "${FAKE_FAIL_FIRST:-0}" ]
+ENGINE
+chmod +x "$fake_engine"
+prepull() { # prepull <fail-first> -> prints "<exit> <attempts of a> <b> <c>"
+  : > "$prepull_tmp/log"
+  local rc=0
+  FAKE_LOG="$prepull_tmp/log" FAKE_FAIL_FIRST=$1 DOCKER="$fake_engine" IMAGES="a b c" PULL_RETRY_SLEEP=0 \
+    "$src/scripts/ci-prepull-images.sh" >/dev/null 2>&1 || rc=$?
+  echo "$rc $(grep -cx a "$prepull_tmp/log") $(grep -cx b "$prepull_tmp/log") $(grep -cx c "$prepull_tmp/log")"
+}
+expect_eq "prepull: all succeed at once"             "0 1 1 1" "$(prepull 0)"
+expect_eq "prepull: two failures then success"       "0 3 3 3" "$(prepull 2)"
+expect_eq "prepull: gives up after four attempts"    "1 4 4 4" "$(prepull 9)"
+
+# Cancelled while the pulls hang: no engine process may outlive the script.
+: > "$prepull_tmp/log"; : > "$prepull_tmp/pids"
+FAKE_HANG=1 FAKE_LOG="$prepull_tmp/log" FAKE_PIDS="$prepull_tmp/pids" DOCKER="$fake_engine" IMAGES="a b c" PULL_RETRY_SLEEP=0 \
+  "$src/scripts/ci-prepull-images.sh" >/dev/null 2>&1 &
+prepull_pid=$!
+for _ in $(seq 50); do [ "$(wc -l < "$prepull_tmp/pids" | tr -d ' ')" = 3 ] && break; sleep 0.1; done
+expect_eq "prepull: three engines started" "3" "$(wc -l < "$prepull_tmp/pids" | tr -d ' ')"
+kill -TERM "$prepull_pid"
+wait "$prepull_pid" 2>/dev/null || true
+sleep 0.5
+alive=0
+for p in $(cat "$prepull_tmp/pids"); do
+  if kill -0 "$p" 2>/dev/null; then alive=$((alive + 1)); kill -KILL "$p" 2>/dev/null || true; fi
+done
+expect_eq "prepull: SIGTERM leaves no engine running" "0" "$alive"
+rm -rf "$prepull_tmp"
+
 # ── releasable.sh ───────────────────────────────────────────────────────────────
 fixture releasable
 touch_file README.md changed; touch_file docs/guide.md; touch_file pkgs/ordering/README.md
