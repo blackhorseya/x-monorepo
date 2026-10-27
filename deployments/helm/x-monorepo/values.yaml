@@ -51,8 +51,10 @@ config:
     rate_limit: { rps: 0, burst: 0, by: global }
   auth:
     # off | optional | required — quoted: unquoted `off` is a YAML 1.1 boolean and would render
-    # as `mode: false`. `required` with no api_keys / jwt key refuses every RPC — set
-    # secrets.apiKeys / secrets.jwtHs256Secret / config.auth.jwt.public_key first.
+    # as `mode: false`. With `optional` / `required`, API keys the identity service stores in
+    # the DB (the first one comes from `worker bootstrap`, docs/operations.md) are checked too,
+    # so secrets.apiKeys / secrets.jwtHs256Secret / config.auth.jwt.public_key may stay empty;
+    # with `required`, until a DB key exists (or a static / JWT key is set) every request is refused.
     mode: "off"
     admin_role: admin
     jwt: { issuer: "", audience: "", public_key: "" }
