@@ -138,6 +138,18 @@ expect_eq "affected: --all ignores the diff"         "pkgs/a pkgs/b" "$(in_repo 
 # hang mode, records its pid and blocks like an engine stuck on a registry.
 prepull_tmp=$(mktemp -d)
 fake_engine="$prepull_tmp/engine"
+# The hang case below starts the script in the background. If the suite is cancelled meanwhile,
+# stop that script (its own trap takes the fake engines down) and wait, so nothing outlives us.
+prepull_pid=""
+prepull_stop() {
+  [ -n "$prepull_pid" ] || return 0
+  kill -TERM "$prepull_pid" 2>/dev/null || true
+  wait "$prepull_pid" 2>/dev/null || true
+  prepull_pid=""
+}
+trap 'prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 cat > "$fake_engine" <<'ENGINE'
 #!/usr/bin/env bash
 # usage: engine pull --quiet <image>
@@ -166,8 +178,7 @@ FAKE_HANG=1 FAKE_LOG="$prepull_tmp/log" FAKE_PIDS="$prepull_tmp/pids" DOCKER="$f
 prepull_pid=$!
 for _ in $(seq 50); do [ "$(wc -l < "$prepull_tmp/pids" | tr -d ' ')" = 3 ] && break; sleep 0.1; done
 expect_eq "prepull: three engines started" "3" "$(wc -l < "$prepull_tmp/pids" | tr -d ' ')"
-kill -TERM "$prepull_pid"
-wait "$prepull_pid" 2>/dev/null || true
+prepull_stop
 sleep 0.5
 alive=0
 for p in $(cat "$prepull_tmp/pids"); do
