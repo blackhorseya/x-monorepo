@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/url"
 	"os"
@@ -65,7 +66,9 @@ func TestCheckBootstrapConn(t *testing.T) {
 		name     string
 		url      string
 		policy   connPolicy
-		password string // what must not leak; defaults to guardPassword
+		password string   // what must not leak; defaults to guardPassword
+		leaks    []string // more fragments of the URL or environment the error must not carry
+		env      map[string]string
 		reject   bool
 		contains string // part of the expected error
 	}{
@@ -78,40 +81,64 @@ func TestCheckBootstrapConn(t *testing.T) {
 		{name: "several hosts, all verified", url: "postgres://u:" + guardPassword + "@a.example:5432,b.example:5432/app?sslmode=verify-full"},
 
 		// No TLS, or TLS that does not verify the server.
-		{name: "disable", url: base + "?sslmode=disable", reject: true, contains: "TLS disabled"},
+		{name: "disable", url: base + "?sslmode=disable", reject: true, contains: "TLS is disabled"},
 		{name: "allow falls back to plaintext", url: base + "?sslmode=allow", reject: true},
 		{name: "prefer falls back to plaintext", url: base + "?sslmode=prefer", reject: true},
 		{name: "require without sslrootcert encrypts but does not verify", url: base + "?sslmode=require", reject: true, contains: "does not verify"},
 
 		// Bypasses of the earlier shell guards.
-		{name: "spaced key: pgx trims it, last wins", url: base + "?sslmode=verify-ca&sslmode =disable&sslrootcert=" + ca, reject: true, contains: "TLS disabled"},
-		{name: "leading-space key", url: base + "?sslmode=verify-ca& sslmode=disable&sslrootcert=" + ca, reject: true, contains: "TLS disabled"},
-		{name: "duplicate key, last wins", url: base + "?sslmode=verify-full&sslmode=disable", reject: true, contains: "TLS disabled"},
+		{name: "spaced key: pgx trims it, last wins", url: base + "?sslmode=verify-ca&sslmode =disable&sslrootcert=" + ca, reject: true, contains: "TLS is disabled"},
+		{name: "leading-space key", url: base + "?sslmode=verify-ca& sslmode=disable&sslrootcert=" + ca, reject: true, contains: "TLS is disabled"},
+		{name: "duplicate key, last wins", url: base + "?sslmode=verify-full&sslmode=disable", reject: true, contains: "TLS is disabled"},
 		{name: "percent-encoded key", url: base + "?sslmode=verify-full&ssl%6Dode=disable", reject: true},
 		{
 			name: "sslmode text inside the password", url: "postgres://u:p_sslmode=verify-ca@127.0.0.1:15432/app?sslmode=disable",
-			password: "p_sslmode=verify-ca", reject: true, contains: "TLS disabled",
+			password: "p_sslmode=verify-ca", reject: true, contains: "TLS is disabled",
 		},
 		{
 			name: "host override in the query", url: base + "?sslmode=verify-ca&sslrootcert=" + ca + "&host=evil.example",
-			policy: forward, reject: true, contains: "evil.example",
+			policy: forward, reject: true, contains: "does not match --expect-target 127.0.0.1:15432", leaks: []string{"evil.example"},
 		},
 
 		// The target.
-		{name: "authority host is not the expected target", url: "postgres://u:" + guardPassword + "@db.internal:5432/app?sslmode=verify-ca&sslrootcert=" + ca, policy: forward, reject: true, contains: "target mismatch: got db.internal:5432"},
-		{name: "one of several hosts is not the target", url: "postgres://u:" + guardPassword + "@127.0.0.1:15432,evil.example:5432/app?sslmode=verify-full", policy: forward, reject: true, contains: "evil.example:5432"},
-		{name: "the target's port must match too", url: "postgres://u:" + guardPassword + "@127.0.0.1:5432/app?sslmode=verify-full", policy: forward, reject: true, contains: "target mismatch"},
+		{name: "authority host is not the expected target", url: "postgres://u:" + guardPassword + "@db.internal:5432/app?sslmode=verify-ca&sslrootcert=" + ca, policy: forward, reject: true, contains: "connection target does not match --expect-target 127.0.0.1:15432", leaks: []string{"db.internal"}},
+		{name: "one of several hosts is not the target", url: "postgres://u:" + guardPassword + "@127.0.0.1:15432,evil.example:5432/app?sslmode=verify-full", policy: forward, reject: true, contains: "does not match --expect-target", leaks: []string{"evil.example"}},
+		{name: "the target's port must match too", url: "postgres://u:" + guardPassword + "@127.0.0.1:5432/app?sslmode=verify-full", policy: forward, reject: true, contains: "does not match --expect-target"},
 
 		// The development escape hatch skips TLS only.
 		{name: "plaintext allowed", url: base + "?sslmode=disable", policy: connPolicy{allowPlaintext: true}},
 		{name: "plaintext allowed to the expected target", url: base + "?sslmode=disable", policy: connPolicy{allowPlaintext: true, expectTarget: "127.0.0.1:15432"}},
-		{name: "plaintext allowed, wrong target", url: "postgres://u:" + guardPassword + "@db.internal:5432/app?sslmode=disable", policy: connPolicy{allowPlaintext: true, expectTarget: "127.0.0.1:15432"}, reject: true, contains: "target mismatch"},
+		{name: "plaintext allowed, wrong target", url: "postgres://u:" + guardPassword + "@db.internal:5432/app?sslmode=disable", policy: connPolicy{allowPlaintext: true, expectTarget: "127.0.0.1:15432"}, reject: true, contains: "does not match --expect-target 127.0.0.1:15432", leaks: []string{"db.internal"}},
+
+		// A password with an unencoded @: pgx takes the text after the first @ as the
+		// host, so the "host" is part of the password. Neither goes into a message.
+		{
+			name: "unencoded @ in the password, wrong target", url: "postgres://u:@SYNTHETIC_SECRET@127.0.0.1:15432/app?sslmode=verify-full",
+			policy: forward, password: "SYNTHETIC_SECRET", reject: true, contains: "does not match --expect-target 127.0.0.1:15432",
+		},
+		{
+			name: "unencoded @ in the password, no expected target, plaintext", url: "postgres://u:pa@SYNTHETIC_SECRET@127.0.0.1:15432/app?sslmode=disable",
+			password: "SYNTHETIC_SECRET", leaks: []string{"pa@", "127.0.0.1"}, reject: true, contains: "TLS is disabled",
+		},
+
+		// The host can come from the environment, not the URL.
+		{
+			name: "PGHOST decides the host", url: "postgres:///app?sslmode=verify-full", env: map[string]string{"PGHOST": "SYNTHETIC_PGHOST"},
+			policy: forward, reject: true, contains: "does not match --expect-target", leaks: []string{"SYNTHETIC_PGHOST"},
+		},
+		{
+			name: "PGHOST with a TLS that does not verify", url: "postgres:///app?sslmode=require", env: map[string]string{"PGHOST": "SYNTHETIC_PGHOST"},
+			reject: true, contains: "does not verify", leaks: []string{"SYNTHETIC_PGHOST"},
+		},
 
 		// Not a URL pgx accepts: no pgx text, which can quote the string.
 		{name: "unparsable", url: "postgres://u:" + guardPassword + "@h:notaport/app", reject: true, contains: "not a valid connection string"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
 			err := checkBootstrapConn(tc.url, tc.policy)
 			if !tc.reject {
 				if err != nil {
@@ -130,8 +157,13 @@ func TestCheckBootstrapConn(t *testing.T) {
 			if pw == "" {
 				pw = guardPassword
 			}
-			if strings.Contains(err.Error(), pw) || strings.Contains(err.Error(), "postgres://") {
-				t.Fatalf("the error carries the URL or the password: %q", err)
+			for _, leak := range append([]string{pw, "postgres://", "127.0.0.1", "u:"}, tc.leaks...) {
+				if leak == "127.0.0.1" && tc.policy.expectTarget != "" {
+					continue // the operator's own --expect-target is fine to print
+				}
+				if strings.Contains(err.Error(), leak) {
+					t.Fatalf("the error carries %q from the URL or the environment: %q", leak, err)
+				}
 			}
 		})
 	}
@@ -156,7 +188,7 @@ func TestBootstrapCommand_GuardRunsBeforeConnecting(t *testing.T) {
 	}
 
 	err := run()
-	if err == nil || !strings.Contains(err.Error(), "refusing to connect: TLS disabled") {
+	if err == nil || !strings.Contains(err.Error(), "refusing to connect: TLS is disabled") {
 		t.Fatalf("plaintext URL by default = %v, want a refusal before connecting", err)
 	}
 	if strings.Contains(err.Error(), guardPassword) {
@@ -164,7 +196,7 @@ func TestBootstrapCommand_GuardRunsBeforeConnecting(t *testing.T) {
 	}
 
 	err = run("--expect-target", "127.0.0.1:15432", "--insecure-allow-plaintext")
-	if err == nil || !strings.Contains(err.Error(), "target mismatch: got 127.0.0.1:1") {
+	if err == nil || !strings.Contains(err.Error(), "does not match --expect-target 127.0.0.1:15432") {
 		t.Fatalf("wrong target with the plaintext flag = %v, want a refusal before connecting", err)
 	}
 
@@ -176,5 +208,37 @@ func TestBootstrapCommand_GuardRunsBeforeConnecting(t *testing.T) {
 	err = run("--expect-target", "not-a-target")
 	if err == nil || !strings.Contains(err.Error(), "host:port") {
 		t.Fatalf("malformed --expect-target = %v, want a usage error", err)
+	}
+}
+
+// Whatever the command prints or logs on a refusal — its error, stderr, stdout,
+// the default slog output — carries no piece of the URL: not the password and,
+// for a password with an unencoded @, not the "host" pgx cuts out of it.
+func TestBootstrapCommand_RefusalLeaksNothingFromTheURL(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const secret = "SYNTHETIC_SECRET"
+	cfg := &config.AppConfig{
+		Postgres: config.Postgres{URL: "postgres://u:@" + secret + "@127.0.0.1:15432/app?sslmode=verify-full"},
+		Log:      config.Log{Level: "debug", Format: "text"},
+		Auth:     config.Auth{AdminRole: "admin"},
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := newRootCmd(func() (*config.AppConfig, error) { return cfg, nil })
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"bootstrap", "--expect-target", "127.0.0.1:15432"})
+
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "refusing to connect") {
+		t.Fatalf("malformed URL = %v, want a refusal before connecting", err)
+	}
+	for name, out := range map[string]string{"error": err.Error(), "stdout": stdout.String(), "stderr": stderr.String(), "log": logs.String()} {
+		if strings.Contains(out, secret) {
+			t.Errorf("%s carries a piece of the URL: %q", name, out)
+		}
 	}
 }
