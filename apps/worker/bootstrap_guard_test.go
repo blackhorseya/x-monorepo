@@ -114,22 +114,49 @@ func TestCheckBootstrapConn(t *testing.T) {
 		// host, so the "host" is part of the password. Neither goes into a message.
 		{
 			name: "unencoded @ in the password, wrong target", url: "postgres://u:@SYNTHETIC_SECRET@127.0.0.1:15432/app?sslmode=verify-full",
-			policy: forward, password: "SYNTHETIC_SECRET", reject: true, contains: "does not match --expect-target 127.0.0.1:15432",
+			policy: forward, password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host",
 		},
 		{
 			name: "unencoded @ in the password, no expected target, plaintext", url: "postgres://u:pa@SYNTHETIC_SECRET@127.0.0.1:15432/app?sslmode=disable",
-			password: "SYNTHETIC_SECRET", leaks: []string{"pa@", "127.0.0.1"}, reject: true, contains: "TLS is disabled",
+			password: "SYNTHETIC_SECRET", leaks: []string{"pa@", "127.0.0.1"}, reject: true, contains: "invalid host",
 		},
 
 		// The host can come from the environment, not the URL.
 		{
-			name: "PGHOST decides the host", url: "postgres:///app?sslmode=verify-full", env: map[string]string{"PGHOST": "SYNTHETIC_PGHOST"},
-			policy: forward, reject: true, contains: "does not match --expect-target", leaks: []string{"SYNTHETIC_PGHOST"},
+			name: "PGHOST decides the host", url: "postgres:///app?sslmode=verify-full", env: map[string]string{"PGHOST": "pghost.example"},
+			policy: forward, reject: true, contains: "does not match --expect-target", leaks: []string{"pghost.example"},
 		},
 		{
-			name: "PGHOST with a TLS that does not verify", url: "postgres:///app?sslmode=require", env: map[string]string{"PGHOST": "SYNTHETIC_PGHOST"},
-			reject: true, contains: "does not verify", leaks: []string{"SYNTHETIC_PGHOST"},
+			name: "PGHOST with a TLS that does not verify", url: "postgres:///app?sslmode=require", env: map[string]string{"PGHOST": "pghost.example"},
+			reject: true, contains: "does not verify", leaks: []string{"pghost.example"},
 		},
+		{
+			name: "PGHOST that is not a host name", url: "postgres:///app?sslmode=verify-full", env: map[string]string{"PGHOST": "SYNTHETIC_PGHOST"},
+			reject: true, contains: "invalid host", leaks: []string{"SYNTHETIC_PGHOST"},
+		},
+
+		// The host must be an IP, a DNS name or a unix socket directory, whether or
+		// not --expect-target is set: a host pgx cut out of the password otherwise
+		// reaches the resolver, whose error quotes it into the log.
+		{
+			name: "unencoded @ in the password, no --expect-target", url: "postgres://u:@SYNTHETIC_SECRET@127.0.0.1:15432/app?sslmode=verify-full",
+			password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host",
+		},
+		{name: "host with a slash", url: base + "?sslmode=verify-full&host=SYNTHETIC_SECRET/x", password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host"},
+		{name: "host with a space", url: base + "?sslmode=verify-full&host=SYNTHETIC_SECRET%20x", password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host"},
+		{name: "host with a percent", url: base + "?sslmode=verify-full&host=SYNTHETIC_SECRET%2541", password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host"},
+		{name: "host with an encoded @", url: base + "?sslmode=verify-full&host=SYNTHETIC_SECRET%40127.0.0.1", password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host"},
+		{name: "empty label", url: base + "?sslmode=verify-full&host=a..example", reject: true, contains: "invalid host"},
+		{name: "label starts with a hyphen", url: base + "?sslmode=verify-full&host=-a.example", reject: true, contains: "invalid host"},
+		{name: "label over 63 chars", url: base + "?sslmode=verify-full&host=" + strings.Repeat("a", 64) + ".example", reject: true, contains: "invalid host"},
+		{
+			name: "a bad host in a fallback", url: "postgres://u:" + guardPassword + "@a.example:5432,SYNTHETIC_SECRET@b:5432/app?sslmode=verify-full",
+			password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host",
+		},
+		{name: "IPv6 host", url: "postgres://u:" + guardPassword + "@[::1]:5432/app?sslmode=verify-full"},
+		{name: "DNS name with hyphens and digits", url: "postgres://u:" + guardPassword + "@db-1.eu-west.example.com:5432/app?sslmode=verify-full"},
+		{name: "unix socket directory", url: base + "?host=/var/run/postgresql", policy: connPolicy{allowPlaintext: true}},
+		{name: "socket path with a space", url: base + "?host=/var/run/SYNTHETIC_SECRET%20x", policy: connPolicy{allowPlaintext: true}, password: "SYNTHETIC_SECRET", reject: true, contains: "invalid host"},
 
 		// Not a URL pgx accepts: no pgx text, which can quote the string.
 		{name: "unparsable", url: "postgres://u:" + guardPassword + "@h:notaport/app", reject: true, contains: "not a valid connection string"},
@@ -235,6 +262,43 @@ func TestBootstrapCommand_RefusalLeaksNothingFromTheURL(t *testing.T) {
 	err := cmd.ExecuteContext(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "refusing to connect") {
 		t.Fatalf("malformed URL = %v, want a refusal before connecting", err)
+	}
+	for name, out := range map[string]string{"error": err.Error(), "stdout": stdout.String(), "stderr": stderr.String(), "log": logs.String()} {
+		if strings.Contains(out, secret) {
+			t.Errorf("%s carries a piece of the URL: %q", name, out)
+		}
+	}
+}
+
+// Without --expect-target the host is not pinned, so the structure check is
+// the only thing between a password with an unencoded @ and the resolver. The
+// command is driven the way main drives it, and what main would log is
+// captured.
+func TestBootstrapCommand_MalformedHostLeaksNothingWithoutExpectTarget(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const secret = "SYNTHETIC_SECRET"
+	cfg := &config.AppConfig{
+		Postgres: config.Postgres{URL: "postgres://u:@" + secret + "@127.0.0.1:15432/app?sslmode=verify-full"},
+		Log:      config.Log{Level: "debug", Format: "text"},
+		Auth:     config.Auth{AdminRole: "admin"},
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := newRootCmd(func() (*config.AppConfig, error) { return cfg, nil })
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"bootstrap"})
+
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("malformed host = nil, want a refusal")
+	}
+	slog.Error("worker exited", "error", err) // what main does with it
+	if !strings.Contains(err.Error(), "refusing to connect") {
+		t.Fatalf("error = %q, want a refusal before connecting (not a resolver error)", err)
 	}
 	for name, out := range map[string]string{"error": err.Error(), "stdout": stdout.String(), "stderr": stderr.String(), "log": logs.String()} {
 		if strings.Contains(out, secret) {
