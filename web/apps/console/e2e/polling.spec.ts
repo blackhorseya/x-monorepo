@@ -128,3 +128,35 @@ test("a late poll response does not undo a cancel", async ({ page }) => {
   expect(text).not.toContain("PENDING");
   expect(await row.getByRole("button", { name: "Cancel" }).count()).toBe(0);
 });
+
+// The wait for a late reservation starts when the order turns terminal, not when the query was
+// created: a PENDING order that was fetched many times (every list / detail mount fetches) must
+// still get its full window after it is cancelled.
+test("a cancelled order still waits for its reservation after many fetches while PENDING", async ({ page }) => {
+  const customer = `e2e-budget-${Date.now()}`;
+  const id = await createOrder(page, customer);
+
+  let late = false;
+  let fetches = 0;
+  await page.route("**/inventory.v1.InventoryService/GetReservation", async (route) => {
+    fetches++;
+    if (!late) return route.fulfill({ status: 404, json: { code: "not_found", message: "reservation not found" } });
+    return route.fulfill({ json: { reservation: { orderId: id, status: "RESERVATION_STATUS_CANCELLED" } } });
+  });
+
+  await page.goto(`/orders?customer=${customer}`);
+  const row = page.getByRole("row").filter({ hasText: customer });
+  await expect(row.getByText("none yet")).toBeVisible();
+  // Every mount of the list and of the detail page fetches the reservation again.
+  while (fetches < 20) {
+    await row.getByRole("link", { name: /^[0-9a-f]{8}$/ }).click();
+    await expect(page.getByRole("link", { name: "All orders" })).toBeVisible();
+    await page.goBack();
+    await expect(row.getByText("none yet")).toBeVisible();
+  }
+
+  await row.getByRole("button", { name: "Cancel" }).click();
+  await expect(row.getByText("CANCELLED")).toBeVisible();
+  late = true; // the worker comes back
+  await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 8_000 });
+});
