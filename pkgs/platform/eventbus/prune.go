@@ -22,14 +22,18 @@ type PruneOptions struct {
 	// DryRun counts instead of deleting.
 	DryRun bool
 	// BatchSize rows per DELETE (default 10000), so a first run on a big
-	// table is many short transactions, not one long lock.
+	// table is many short statements, not one long one. Each commits on its
+	// own only when the context carries no transaction (the CLI and the admin
+	// RPC carry none); inside one they all share its lifetime and locks.
 	BatchSize int
 	// ForgetGroups are consumer groups whose cursors are deleted from the
 	// table's offsets table first, so they no longer hold rows back: groups
 	// that will never run again (an E2E run against this database, a
 	// worker.consumer_group that was renamed, a BC group after the broker
 	// moved to redis). If such a group does come back it starts over as a new
-	// group (worker.start_from). Ignored by DryRun (reported as Forgotten).
+	// group (worker.start_from). A DryRun deletes none of the cursors but
+	// reports them as Forgotten and counts rows and Blockers as if they were
+	// already gone.
 	ForgetGroups []string
 }
 

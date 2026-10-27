@@ -83,7 +83,7 @@ func TestPostgresSubscriber_Start(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	subscribe := func(group string, start eventbus.Start) <-chan *message.Message {
+	open := func(group string, start eventbus.Start) (<-chan *message.Message, message.Subscriber) {
 		t.Helper()
 		sub, err := eventbus.NewPostgresSubscriber(db, group, start, tel.Logger)
 		if err != nil {
@@ -94,6 +94,11 @@ func TestPostgresSubscriber_Start(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		return ch, sub
+	}
+	subscribe := func(group string, start eventbus.Start) <-chan *message.Message {
+		t.Helper()
+		ch, _ := open(group, start)
 		return ch
 	}
 
@@ -101,7 +106,7 @@ func TestPostgresSubscriber_Start(t *testing.T) {
 	publish("two")
 
 	// A new group from the beginning replays both.
-	begin := subscribe("from-beginning", eventbus.FromBeginning)
+	begin, beginSub := open("from-beginning", eventbus.FromBeginning)
 	for _, want := range []string{"one", "two"} {
 		if got, ok := receive(t, begin, 5*time.Second); !ok || got != want {
 			t.Fatalf("beginning: got %q ok=%v, want %q", got, ok, want)
@@ -124,6 +129,25 @@ func TestPostgresSubscriber_Start(t *testing.T) {
 	}
 	// Re-subscribing an existing group with FromLatest does not skip anything
 	// either: "from-beginning" reopened as latest still continues from its cursor.
+	// The first subscriber is closed first: two live subscribers of one group
+	// share its messages (that is the point of a group), so with both polling
+	// either could take "four" and the reopened one would see nothing. Msg.Ack
+	// only signals the subscriber, which then commits the cursor; closing
+	// before that commit rolls "three" back and it would be delivered again.
+	var acked bool
+	for deadline := time.Now().Add(5 * time.Second); !acked && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		row := sqlDB.QueryRowContext(c, `SELECT offset_acked >= (SELECT max("offset") FROM `+eventbus.TableName(startTopic)+`)
+			FROM `+eventbus.OffsetsTableName(startTopic)+` WHERE consumer_group = 'from-beginning'`)
+		if err := row.Scan(&acked); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !acked {
+		t.Fatal("from-beginning never committed its cursor past three")
+	}
+	if err := beginSub.Close(); err != nil {
+		t.Fatal(err)
+	}
 	publish("four")
 	reopened := subscribe("from-beginning", eventbus.FromLatest)
 	if got, ok := receive(t, reopened, 5*time.Second); !ok || got != "four" {
