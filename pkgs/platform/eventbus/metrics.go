@@ -274,6 +274,16 @@ type tableState struct {
 // in the offsets table has not passed yet (the unread predicate prune
 // negates). Ages are computed in SQL like postgresLag (created_at is
 // TIMESTAMP, no zone).
+//
+// "Some cursor has not passed the row" is the same as "the lowest cursor has
+// not": rows and cursors are ordered by the same (transaction_id, offset)
+// pair, so the union of the groups' unread ranges is the lowest group's range
+// (a NULL offset_acked sorts after the real ones of its transaction and
+// leaves only the later transactions unread, as it does per cursor). The
+// lowest cursor is picked once from the one-row-per-group offsets table and
+// each message row is compared to it; asking the offsets table per message
+// row (an EXISTS) was a SubPlan run once per row, ~10x slower at 200k rows.
+// No cursor at all holds nothing.
 func outboxState(c context.Context, db *sql.DB, table string) (tableState, error) {
 	var s tableState
 	if err := db.QueryRowContext(c, outboxStateQuery(table)).Scan(&s.rows, &s.oldest, &s.held, &s.oldestHeld); err != nil {
@@ -286,7 +296,10 @@ func outboxState(c context.Context, db *sql.DB, table string) (tableState, error
 func outboxStateQuery(table string) string {
 	return `SELECT count(*), coalesce(extract(epoch FROM localtimestamp - min(m.created_at)), 0),
 		count(*) FILTER (WHERE held), coalesce(extract(epoch FROM localtimestamp - min(m.created_at) FILTER (WHERE held)), 0)
-		FROM (SELECT m.created_at, EXISTS (SELECT 1 FROM ` + table + `_offsets o WHERE ` + unread + `) AS held FROM ` + table + ` m) m`
+		FROM (SELECT m.created_at, (m.transaction_id, m."offset") > (o.last_processed_transaction_id, o.offset_acked) AS held
+			FROM ` + table + ` m
+			LEFT JOIN (SELECT last_processed_transaction_id, offset_acked FROM ` + table + `_offsets
+				ORDER BY last_processed_transaction_id, offset_acked LIMIT 1) o ON true) m`
 }
 
 func cursorAttrs(cur Cursor, broker string) []attribute.KeyValue {
