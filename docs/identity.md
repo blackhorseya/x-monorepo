@@ -49,7 +49,7 @@ metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有
 
 **啟動行為的改變**：以前 `auth.mode: required` 但 `api_keys` 與 `jwt` 都空會開不起來；現在合法（resolver 一個人也能答），但 DB 空的話就是「auth 開著、沒有任何 credential 能過」的 fail-closed server——`server.New` 會印一行 Warn。Helm 少掛 secret 不再 CrashLoop，而是鎖在外面，看 log。
 
-**Bootstrap**：第一把 admin key 用 config `auth.api_keys`（`root=<key>:admin`），拿它 `CreateAccount` + `CreateApiKey`，之後 config 那把留著當 break-glass。沒有 seed migration、沒有 bootstrap CLI。
+**Bootstrap**：`task bootstrap`（= `worker bootstrap`，use case `identity.bootstrap`）在**沒有任何 account** 的 store 上一個 transaction 建第一個 account（`--name root`、`--role` 預設 `auth.admin_role`）和它的第一把 key（`--key-name bootstrap`、`--expires-in 0` = 永不過期），secret 只印到 stdout 一次、不進 log。已有 account 就印 `already bootstrapped` 並 exit 0，但**只在操作者本機跑**（經 `kubectl port-forward` 連 DB，見 `docs/operations.md`；`--expect-target host:port` 必填，連線只准連它），不要放進叢集的 Job——secret 是 stdout，會進 Pod log；guard 是 read 不是 constraint（`accounts.name` 沒有 unique），兩個 run 在空 store 上搶跑會各建一個——從一個地方跑一次。拿印出來的 key 再 `CreateAccount` / `CreateApiKey` 建真正的帳號；config `auth.api_keys`（`root=<key>:admin`）不再是必經路，留著當 break-glass。沒有 seed migration。
 
 ## 生效延遲與 cache 契約
 

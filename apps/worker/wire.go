@@ -5,6 +5,8 @@ package main
 import (
 	"github.com/google/wire"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/identity"
+	identitycli "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/cli"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	inventorycli "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/cli"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
@@ -45,6 +47,21 @@ func InitializeExpire(cfg *config.AppConfig) (*inventorycli.Expire, func(), erro
 		usecasex.NewRecorder,
 		eventbus.ProvidePublisher,
 		inventory.ProviderSet,
+	)
+
+	return nil, nil, nil
+}
+
+// InitializeBootstrap builds `worker bootstrap`: identity's first account +
+// first key on an empty store. Identity publishes no events, so it is not in
+// Initialize (the router) — only this operator command needs it.
+func InitializeBootstrap(cfg *config.AppConfig) (*identitycli.Bootstrap, func(), error) {
+	wire.Build(
+		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel"),
+		postgres.NewDB,
+		otel.ProviderSet,
+		usecasex.NewRecorder,
+		identity.ProviderSet,
 	)
 
 	return nil, nil, nil

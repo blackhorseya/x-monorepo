@@ -393,6 +393,12 @@ tasks:
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/worker expire {{.CLI_ARGS}}']
 
+  bootstrap:
+    desc: 'task bootstrap [-- --name root --role admin --key-name bootstrap --expires-in 720h] → identity''s first account + API key on an empty store, secret printed once, via ./bin/worker bootstrap (local development database only: --insecure-allow-plaintext skips the TLS check; --expect-target pins the compose Postgres, 127.0.0.1:$POSTGRES_PORT, default 5432)'
+    deps: [build, config]
+    env: { APP_CONFIG: '{{.CONFIG}}' }
+    cmds: ['{{.BIN_DIR}}/worker bootstrap --insecure-allow-plaintext --expect-target "127.0.0.1:${POSTGRES_PORT:-5432}" {{.CLI_ARGS}}']
+
   prune:
     desc: 'task prune -- --older-than 720h [--dry-run] [--unconsumed] [<bc>] → delete acked outbox rows + consumed inbox rows via ./bin/worker prune'
     deps: [build, config]

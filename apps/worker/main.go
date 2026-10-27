@@ -52,7 +52,7 @@ func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 		Use:           "worker",
 		Version:       buildinfo.Get().String(),
 		Short:         "event consumers of every bounded context",
-		Long:          "worker runs each bounded context's event handlers on one router (no subcommand) and operates their poison queues (poison), retention (prune) and the reservation TTL (expire).",
+		Long:          "worker runs each bounded context's event handlers on one router (no subcommand) and operates their poison queues (poison), retention (prune), the reservation TTL (expire) and identity's first account (bootstrap).",
 		SilenceUsage:  true, // a failing worker is not a usage error
 		SilenceErrors: true, // main logs it
 		Args:          cobra.NoArgs,
@@ -74,7 +74,7 @@ func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 			return w.Run(cmd.Context())
 		},
 	}
-	root.AddCommand(newPoisonCmd(load), newPruneCmd(load), newExpireCmd(load))
+	root.AddCommand(newPoisonCmd(load), newPruneCmd(load), newExpireCmd(load), newBootstrapCmd(load))
 
 	return root
 }

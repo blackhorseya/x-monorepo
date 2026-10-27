@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/cli"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
@@ -53,11 +54,13 @@ var ProviderSet = wire.NewSet(
 	ProvideRevokeAPIKey,
 	ProvideResolveAPIKey,
 	ProvideWhoAmI,
+	ProvideBootstrap,
 	wire.Struct(new(rpc.UseCases), "*"),
 
 	// adapters
 	rpc.NewIdentityService,
 	auth.NewResolver,
+	cli.NewBootstrap,
 )
 
 // ProvideAccountRepository picks the persistence backend from the composition
@@ -153,4 +156,10 @@ func ProvideResolveAPIKey(accounts account.Repository, keys apikey.Repository, c
 
 func ProvideWhoAmI(rec *usecasex.Recorder) rpc.WhoAmIUC {
 	return decorate("identity.whoami", rec, usecase.NewWhoAmI())
+}
+
+// ProvideBootstrap is `worker bootstrap` (adapters/cli): first account + first
+// key in one transaction on an empty store.
+func ProvideBootstrap(accounts account.Repository, keys apikey.Repository, ids port.IDGenerator, secrets port.SecretGenerator, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) cli.BootstrapUC {
+	return decorateTx("identity.bootstrap", rec, tx, usecase.NewBootstrap(accounts, keys, ids, secrets, clock))
 }

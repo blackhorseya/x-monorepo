@@ -108,3 +108,22 @@ type WhoAmIOutput struct {
 	Method       string
 	CredentialID string
 }
+
+// BootstrapInput is the first account and its first key, made together when
+// the store holds no account at all (`worker bootstrap`).
+type BootstrapInput struct {
+	Name      string
+	Roles     []string
+	KeyName   string
+	ExpiresAt time.Time // zero: never
+}
+
+// BootstrapOutput: Created false means an account already existed and
+// nothing was written (Account / Key / Secret are then empty). Secret is
+// the plaintext, handed out exactly once.
+type BootstrapOutput struct {
+	Created bool
+	Account AccountOutput
+	Key     APIKeyOutput
+	Secret  string
+}
