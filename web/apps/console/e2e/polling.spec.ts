@@ -2,11 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { withDB } from "./mode";
 
 // Request budget of the orders list. The server only has unary RPCs, so the console polls;
-// this pins down what is allowed to poll. Terminal rows (CANCELLED, no reservation to wait
-// for) must not poll GetReservation, and later pages must not be refetched every tick, only
-// the first one (new / changed orders show up there). In-memory mode is enough: no worker,
-// so a PENDING order keeps "waiting", a cancelled one is terminal.
-test.skip(withDB, "a worker reserves these orders, so they are not 'none yet' rows (reservation.spec.ts covers that path)");
+// this pins down what is allowed to poll. Terminal rows (CANCELLED with its tombstone, nothing
+// to wait for) must not poll GetReservation, and later pages must not be refetched every tick,
+// only the first one (new / changed orders show up there). In-memory mode: no worker, so a
+// PENDING order keeps waiting and the reservation answers are scripted where a test needs them.
+test.skip(withDB, "a worker reserves these orders, so reservations are not the scripted ones (reservation.spec.ts covers that path)");
 
 const WINDOW_MS = 8_000;
 const PAGE = 20;
@@ -26,6 +26,12 @@ test("terminal rows and later pages stop polling", async ({ page }) => {
     await post(page, "ordering.v1.OrderService/CancelOrder", { id: order.id });
   }
 
+  // What a worker leaves behind for a cancelled order: a CANCELLED tombstone, the final state.
+  await page.route("**/inventory.v1.InventoryService/GetReservation", (route) => {
+    const { orderId } = route.request().postDataJSON() as { orderId: string };
+    return route.fulfill({ json: { reservation: { orderId, status: "RESERVATION_STATUS_CANCELLED" } } });
+  });
+
   const calls = { reservation: 0, firstPage: 0, laterPages: 0 };
   let counting = false;
   page.on("request", (req) => {
@@ -43,7 +49,7 @@ test("terminal rows and later pages stop polling", async ({ page }) => {
   await expect(page.getByRole("row").filter({ hasText: customer })).toHaveCount(PAGE);
   await page.getByRole("button", { name: "Load more" }).click();
   await expect(page.getByRole("row").filter({ hasText: customer })).toHaveCount(TOTAL);
-  await expect(page.getByText("none yet")).toHaveCount(TOTAL);
+  await expect(page.getByTitle("Open in Reservations")).toHaveCount(TOTAL);
 
   counting = true;
   await page.waitForTimeout(WINDOW_MS);

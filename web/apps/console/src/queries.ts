@@ -63,7 +63,12 @@ export async function refreshFirstPage(qc: QueryClient, customerId: string, stat
   const key = keys.ordersPage(customerId, status);
   const cur = qc.getQueryData<InfiniteData<ListOrdersResponse, string>>(key);
   if (cur === undefined || qc.isFetching({ queryKey: key }) > 0) return;
+  const stamp = qc.getQueryState(key)?.dataUpdatedAt;
   const fresh = await orders.listOrders({ customerId, status, pageSize: 20, pageToken: "" });
+  // This request lives outside the query, so a mutation's refetch cannot cancel it. If the
+  // cache moved on while it was in flight (a refetch running, or one that already landed),
+  // the response is older than what is shown: drop it, the next tick tries again.
+  if (qc.isFetching({ queryKey: key }) > 0 || qc.getQueryState(key)?.dataUpdatedAt !== stamp) return;
   const old = cur.pages[0]?.orders ?? [];
   const same = fresh.orders.length === old.length && fresh.orders.every((o, i) => o.id === old[i]?.id);
   if (!same) return qc.invalidateQueries({ queryKey: key });
@@ -111,19 +116,29 @@ export const reservationQuery = (orderId: string, orderStatus?: OrderStatus) =>
     // Everything but RESERVED is terminal; RESERVED can still be released and
     // a missing reservation can still appear.
     refetchInterval: (q) => {
-      if (orderStatus !== undefined) return reservationPending(orderStatus, q.state.data?.status) ? POLL_MS : false;
+      if (orderStatus !== undefined) return reservationPending(orderStatus, q.state.data?.status, q.state.dataUpdateCount) ? POLL_MS : false;
       const s = q.state.data?.status;
       return s === undefined || s === ReservationStatus.RESERVED ? POLL_MS : false;
     },
   });
 
-// Is there a change to wait for, given the order's status and the reservation's (undefined =
-// none yet)? PENDING: the worker has not reserved yet. COMPLETED / CANCELLED with the stock
-// still RESERVED: the commit / release event is on its way. A CONFIRMED order holds its
-// reservation until the customer acts, which moves the order's status and re-fetches.
-export function reservationPending(order: OrderStatus, reservation: ReservationStatus | undefined): boolean {
+// Is there a change to wait for, given the order's status, the reservation's (undefined =
+// none yet) and how many times it was fetched? PENDING: the worker has not reserved yet.
+// COMPLETED / CANCELLED with the stock still RESERVED: the commit / release event is on its
+// way. COMPLETED / CANCELLED with no reservation yet is not final either: inventory takes
+// OrderCancelled before OrderCreated and then records a CANCELLED tombstone, however late the
+// worker gets to it, and the order's status will not move again to prompt a re-fetch. Look
+// for LATE_POLLS ticks, then give up until the next mount / focus. A CONFIRMED order holds
+// its reservation until the customer acts, which moves the order's status and re-fetches.
+const LATE_POLLS = 15;
+export function reservationPending(
+  order: OrderStatus,
+  reservation: ReservationStatus | undefined,
+  fetches: number,
+): boolean {
   if (order === OrderStatus.PENDING) return true;
-  return (order === OrderStatus.COMPLETED || order === OrderStatus.CANCELLED) && reservation === ReservationStatus.RESERVED;
+  if (order !== OrderStatus.COMPLETED && order !== OrderStatus.CANCELLED) return false;
+  return reservation === undefined ? fetches < LATE_POLLS : reservation === ReservationStatus.RESERVED;
 }
 
 // SKUs ascending, 20 per page, by prefix (empty = every SKU) and optionally
