@@ -120,6 +120,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with: { cache-scope: "test-${{ matrix.module }}" }
+      # testcontainers lets the daemon pull a missing image with no retry; one Docker Hub 502 on
+      # ryuk failed a run (39370298272). Pull postgres, redis and ryuk first, with retries.
+      - run: scripts/ci-prepull-images.sh
       - run: go test -race ./...
         working-directory: ${{ matrix.module }}
 
