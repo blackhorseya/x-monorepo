@@ -9,7 +9,9 @@
 # which conf.d/console.conf includes — so /tmp is the ONE path that has to be
 # writable: a read-only root filesystem with a tmpfs / emptyDir at /tmp is enough, whatever
 # uid runs it (the Helm chart runs it as 65532 like the Go images).
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+# The base is pinned tag@sha256 (the multi-arch index, so linux/amd64 and linux/arm64 both resolve);
+# dependabot's docker ecosystem moves the tag and the digest together.
+FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
 ENV RPC_UPSTREAM=http://rpc:8080 \
     NGINX_ENVSUBST_FILTER=^RPC_ \
     NGINX_ENVSUBST_OUTPUT_DIR=/tmp

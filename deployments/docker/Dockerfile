@@ -2,7 +2,9 @@
 # Build context layout: <os>/<arch>/<binary>; APP picks which one (rpc | worker | migrate).
 # distroless/static has CA certs + tzdata and no shell — TLS to Postgres/Redis/OTLP works,
 # `docker exec sh` does not. Healthcheck from outside (GET /api/readyz), not HEALTHCHECK.
-FROM gcr.io/distroless/static-debian12:nonroot
+# The base is pinned tag@sha256 (the multi-arch index, so linux/amd64 and linux/arm64 both resolve);
+# dependabot's docker ecosystem moves the tag and the digest together.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG TARGETPLATFORM
 ARG APP
 COPY $TARGETPLATFORM/$APP /app
