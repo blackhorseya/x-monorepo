@@ -5,6 +5,9 @@
 # npm: the pnpm workspace under web/ (one lockfile). The console is a shipped artifact
 # (ghcr .../console), so a merged npm bump cuts a patch release — hence weekly and grouped.
 # @bufbuild/protobuf / @connectrpc bumps may need `task gen-ts` to regenerate packages/proto.
+# docker: the two shipped base images (distroless for rpc / worker / migrate, nginx-unprivileged
+# for the console), pinned as tag@sha256 so a bump moves both. A merged bump changes a shipped
+# image, so it cuts a patch release. CI / kind test images (postgres, redis, otel) are not covered.
 # Titles: `build(deps): …` so release-drafter files them under Dependencies.
 version: 2
 updates:
@@ -32,4 +35,12 @@ updates:
     commit-message: { prefix: build, include: scope }
     groups:
       npm:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories: ["/deployments/docker", "/web/apps/console"]
+    schedule: { interval: weekly }
+    commit-message: { prefix: build, include: scope }
+    groups:
+      docker:
         patterns: ["*"]
