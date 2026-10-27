@@ -55,3 +55,70 @@ test("terminal rows and later pages stop polling", async ({ page }) => {
   // The first page still refreshes, or a new order / a cancel from elsewhere would never show.
   expect(calls.firstPage).toBeGreaterThanOrEqual(2);
 });
+
+const createOrder = async (page: Page, customer: string) => {
+  const res = await post(page, "ordering.v1.OrderService/CreateOrder", {
+    customerId: customer,
+    items: [{ sku: "SKU-1", quantity: 1, unitPrice: { amountMinor: "100", currency: "USD" } }],
+  });
+  return ((await res.json()) as { order: { id: string } }).order.id;
+};
+
+// Inventory accepts OrderCancelled before OrderCreated (a stopped or lagging worker) and then
+// records a CANCELLED tombstone, so "cancelled order, no reservation yet" is not a final state:
+// the row must keep looking until the reservation shows up.
+test("a cancelled order picks up a reservation that appears late", async ({ page }) => {
+  const customer = `e2e-late-${Date.now()}`;
+  const id = await createOrder(page, customer);
+  await post(page, "ordering.v1.OrderService/CancelOrder", { id });
+
+  // The worker "comes back" after the list has loaded: NotFound until then, then the tombstone.
+  let late = false;
+  await page.route("**/inventory.v1.InventoryService/GetReservation", async (route) => {
+    if (!late) return route.fulfill({ status: 404, json: { code: "not_found", message: "reservation not found" } });
+    return route.fulfill({ json: { reservation: { orderId: id, status: "RESERVATION_STATUS_CANCELLED" } } });
+  });
+
+  await page.goto(`/orders?customer=${customer}`);
+  const row = page.getByRole("row").filter({ hasText: customer });
+  await expect(row.getByText("none yet")).toBeVisible();
+  late = true;
+  await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 8_000 });
+});
+
+// A first-page poll answered after a mutation has refreshed the list holds the older state; it
+// must not overwrite the cancel the user just made.
+test("a late poll response does not undo a cancel", async ({ page }) => {
+  const customer = `e2e-race-${Date.now()}`;
+  await createOrder(page, customer);
+
+  let hold = false;
+  let held!: () => void;
+  const captured = new Promise<void>((r) => (held = r));
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  await page.route("**/ordering.v1.OrderService/ListOrders", async (route) => {
+    if (!hold) return route.continue();
+    hold = false; // only the first poll after this point is delayed
+    const res = await route.fetch(); // answered now, with the order still PENDING ...
+    held();
+    await released; // ... but delivered to the browser late
+    await route.fulfill({ response: res });
+  });
+
+  await page.goto(`/orders?customer=${customer}`);
+  const row = page.getByRole("row").filter({ hasText: customer });
+  await expect(row.getByText("PENDING")).toBeVisible();
+
+  hold = true;
+  await captured;
+  await row.getByRole("button", { name: "Cancel" }).click();
+  await expect(row.getByText("CANCELLED")).toBeVisible();
+  release();
+  await page.waitForTimeout(300); // far below the 2s tick: only the stale response can act now
+  // A snapshot, not a retrying expect: the next poll tick would repair a regression and hide it.
+  const text = await row.innerText();
+  expect(text).toContain("CANCELLED");
+  expect(text).not.toContain("PENDING");
+  expect(await row.getByRole("button", { name: "Cancel" }).count()).toBe(0);
+});
