@@ -261,9 +261,9 @@ tasks:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
 
-  helm-kind:
+  helm-kind-up:
     deps: [web-build]
-    desc: 'install the chart for real: kind cluster + deployments/helm/kind/deps.yaml (Postgres, Redis), images built from the tree (rpc / worker / migrate + the console on web-build) and kind-loaded, helm upgrade --install --wait twice (pre-install then pre-upgrade hook), then deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api). helm-kind-down deletes the cluster'
+    desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster (reused if it exists), images built from the tree (rpc / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
     vars:
       CLUSTER: x-monorepo
       NS: x-monorepo
@@ -290,6 +290,18 @@ tasks:
       - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f - >/dev/null
       - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null
       - kubectl -n {{.NS}} rollout status deploy/postgres deploy/redis --timeout=2m
+    preconditions:
+      - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
+        msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
+
+  helm-kind:
+    deps: [helm-kind-up]
+    desc: 'install the chart for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api). helm-kind-down deletes the cluster'
+    vars:
+      NS: x-monorepo
+      CHART: deployments/helm/x-monorepo
+      KIND_DIR: deployments/helm/kind
+    cmds:
       - helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null
       - '{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
       # Second pass is an upgrade: pre-upgrade hook re-runs migrate (no-op), pods roll, release stays ready.
@@ -301,7 +313,8 @@ tasks:
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
 
   helm-kind-keda:
-    desc: 'on the helm-kind cluster: KEDA + deployments/helm/kind/monitoring.yaml (OTLP collector → Prometheus), the chart re-installed with kind/keda-values.yaml (worker.autoscaling lag), then kind/scale.sh floods orders with k6 and expects the worker to scale out on eventbus_consumer_lag and back'
+    deps: [helm-kind-up]
+    desc: 'on the helm-kind-up cluster (independent of helm-kind, CI runs both in parallel): KEDA + deployments/helm/kind/monitoring.yaml (OTLP collector → Prometheus), the chart re-installed with kind/keda-values.yaml (worker.autoscaling lag), then kind/scale.sh floods orders with k6 and expects the worker to scale out on eventbus_consumer_lag and back'
     vars:
       NS: x-monorepo
       CHART: deployments/helm/x-monorepo
@@ -315,8 +328,6 @@ tasks:
       - helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml -f {{.KIND_DIR}}/keda-values.yaml --wait --timeout 3m >/dev/null
       - '{{.KIND_DIR}}/scale.sh {{.NS}} x-monorepo'
     preconditions:
-      - sh: kind get clusters 2>/dev/null | grep -qx x-monorepo
-        msg: no kind cluster — run task helm-kind first
       - sh: command -v k6 >/dev/null && command -v jq >/dev/null
         msg: needs k6 and jq
 
