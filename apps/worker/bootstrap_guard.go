@@ -32,8 +32,11 @@ type connPolicy struct {
 // host= overrides, environment and service-file settings are all already
 // applied. A shell or a regexp reading the URL text cannot promise that.
 //
-// Errors say why and, at most, which host:port. pgx's own parse error can
-// quote the connection string, so it is not passed on.
+// Errors say why and nothing parsed from the URL or the environment: not the
+// host, port, user or database, and not pgx's own parse error, which can quote
+// the string. A password with an unencoded @ makes pgx cut part of it out as
+// the host, so even "which host" can be the secret. The only value a message
+// carries is --expect-target, which the operator typed.
 func checkBootstrapConn(url string, p connPolicy) error {
 	cc, err := pgx.ParseConfig(url)
 	if err != nil {
@@ -62,28 +65,12 @@ func checkBootstrapConn(url string, p connPolicy) error {
 // So a TLSConfig is acceptable when it is non-nil and either verifies by
 // itself (InsecureSkipVerify false) or has installed its own chain check.
 func validateBootstrapConn(cfg *pgconn.Config, p connPolicy) error {
-	type attempt struct {
-		target   string
-		verified bool
-		tls      bool
-	}
-	attempts := []attempt{{
-		target:   net.JoinHostPort(cfg.Host, strconv.Itoa(int(cfg.Port))),
-		tls:      cfg.TLSConfig != nil,
-		verified: cfg.TLSConfig != nil && (!cfg.TLSConfig.InsecureSkipVerify || cfg.TLSConfig.VerifyPeerCertificate != nil),
-	}}
-	for _, fb := range cfg.Fallbacks {
-		attempts = append(attempts, attempt{
-			target:   net.JoinHostPort(fb.Host, strconv.Itoa(int(fb.Port))),
-			tls:      fb.TLSConfig != nil,
-			verified: fb.TLSConfig != nil && (!fb.TLSConfig.InsecureSkipVerify || fb.TLSConfig.VerifyPeerCertificate != nil),
-		})
-	}
+	attempts := append([]*pgconn.Config{cfg}, fallbackConfigs(cfg)...)
 
 	if p.expectTarget != "" {
 		for _, a := range attempts {
-			if a.target != p.expectTarget {
-				return fmt.Errorf("target mismatch: got %s, want %s", a.target, p.expectTarget)
+			if net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))) != p.expectTarget {
+				return fmt.Errorf("connection target does not match --expect-target %s", p.expectTarget)
 			}
 		}
 	}
@@ -92,12 +79,23 @@ func validateBootstrapConn(cfg *pgconn.Config, p connPolicy) error {
 	}
 	for _, a := range attempts {
 		switch {
-		case !a.tls:
-			return fmt.Errorf("TLS disabled for %s: use sslmode=verify-ca with sslrootcert, or verify-full", a.target)
-		case !a.verified:
-			return fmt.Errorf("TLS does not verify the server certificate for %s: use sslmode=verify-ca with sslrootcert, or verify-full", a.target)
+		case a.TLSConfig == nil:
+			return errors.New("TLS is disabled for the connection: use sslmode=verify-ca with sslrootcert, or verify-full")
+		case a.TLSConfig.InsecureSkipVerify && a.TLSConfig.VerifyPeerCertificate == nil:
+			return errors.New("TLS does not verify the server certificate: use sslmode=verify-ca with sslrootcert, or verify-full")
 		}
 	}
 
 	return nil
+}
+
+// fallbackConfigs lifts each fallback attempt to a Config so it is checked
+// the same way as the main one.
+func fallbackConfigs(cfg *pgconn.Config) []*pgconn.Config {
+	out := make([]*pgconn.Config, 0, len(cfg.Fallbacks))
+	for _, fb := range cfg.Fallbacks {
+		out = append(out, &pgconn.Config{Host: fb.Host, Port: fb.Port, TLSConfig: fb.TLSConfig})
+	}
+
+	return out
 }
