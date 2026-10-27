@@ -275,15 +275,18 @@ type tableState struct {
 // negates). Ages are computed in SQL like postgresLag (created_at is
 // TIMESTAMP, no zone).
 func outboxState(c context.Context, db *sql.DB, table string) (tableState, error) {
-	q := `SELECT count(*), coalesce(extract(epoch FROM localtimestamp - min(m.created_at)), 0),
-		count(*) FILTER (WHERE held), coalesce(extract(epoch FROM localtimestamp - min(m.created_at) FILTER (WHERE held)), 0)
-		FROM (SELECT m.created_at, EXISTS (SELECT 1 FROM ` + table + `_offsets o WHERE ` + unread + `) AS held FROM ` + table + ` m) m`
 	var s tableState
-	if err := db.QueryRowContext(c, q).Scan(&s.rows, &s.oldest, &s.held, &s.oldestHeld); err != nil {
+	if err := db.QueryRowContext(c, outboxStateQuery(table)).Scan(&s.rows, &s.oldest, &s.held, &s.oldestHeld); err != nil {
 		return s, fmt.Errorf("eventbus: outbox %s: %w", table, err)
 	}
 
 	return s, nil
+}
+
+func outboxStateQuery(table string) string {
+	return `SELECT count(*), coalesce(extract(epoch FROM localtimestamp - min(m.created_at)), 0),
+		count(*) FILTER (WHERE held), coalesce(extract(epoch FROM localtimestamp - min(m.created_at) FILTER (WHERE held)), 0)
+		FROM (SELECT m.created_at, EXISTS (SELECT 1 FROM ` + table + `_offsets o WHERE ` + unread + `) AS held FROM ` + table + ` m) m`
 }
 
 func cursorAttrs(cur Cursor, broker string) []attribute.KeyValue {
