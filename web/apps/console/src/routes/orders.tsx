@@ -283,7 +283,14 @@ function OrderRow({ order }: { order: Order }) {
 }
 
 function ReservationCell({ orderId, orderStatus }: { orderId: string; orderStatus: OrderStatus }) {
-  const { data, isError, error, refetch } = useQuery(reservationQuery(orderId, orderStatus));
+  // When the order turned terminal (or this row mounted on a terminal order): the window
+  // for a reservation that is not there yet (see reservationPending) counts from here. Set
+  // while rendering, from the order alone, so the query options built below already carry it.
+  const lateSince = useRef<number>(undefined);
+  const finished = orderStatus === OrderStatus.COMPLETED || orderStatus === OrderStatus.CANCELLED;
+  if (!finished) lateSince.current = undefined;
+  else lateSince.current ??= Date.now();
+  const { data, isError, error, refetch } = useQuery(reservationQuery(orderId, orderStatus, lateSince.current));
   // The row does not poll once nothing is pending; the order's own status moving (the list
   // polls that) is the cue to look at the reservation again.
   const seen = useRef(orderStatus);

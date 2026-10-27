@@ -102,7 +102,7 @@ export const orderQuery = (id: string) =>
 // when something is still to happen (see reservationPending); everything else fetches once,
 // and again when the order's status changes (ReservationCell). Without it (the order page)
 // the reservation polls on its own state alone.
-export const reservationQuery = (orderId: string, orderStatus?: OrderStatus) =>
+export const reservationQuery = (orderId: string, orderStatus?: OrderStatus, lateSince?: number) =>
   queryOptions({
     queryKey: keys.reservation(orderId),
     queryFn: async () => {
@@ -116,29 +116,33 @@ export const reservationQuery = (orderId: string, orderStatus?: OrderStatus) =>
     // Everything but RESERVED is terminal; RESERVED can still be released and
     // a missing reservation can still appear.
     refetchInterval: (q) => {
-      if (orderStatus !== undefined) return reservationPending(orderStatus, q.state.data?.status, q.state.dataUpdateCount) ? POLL_MS : false;
+      if (orderStatus !== undefined) return reservationPending(orderStatus, q.state.data?.status, lateSince) ? POLL_MS : false;
       const s = q.state.data?.status;
       return s === undefined || s === ReservationStatus.RESERVED ? POLL_MS : false;
     },
   });
 
 // Is there a change to wait for, given the order's status, the reservation's (undefined =
-// none yet) and how many times it was fetched? PENDING: the worker has not reserved yet.
-// COMPLETED / CANCELLED with the stock still RESERVED: the commit / release event is on its
-// way. COMPLETED / CANCELLED with no reservation yet is not final either: inventory takes
-// OrderCancelled before OrderCreated and then records a CANCELLED tombstone, however late the
-// worker gets to it, and the order's status will not move again to prompt a re-fetch. Look
-// for LATE_POLLS ticks, then give up until the next mount / focus. A CONFIRMED order holds
+// none yet) and lateSince (when the order turned terminal with no reservation, ms epoch)?
+// PENDING: the worker has not reserved yet. COMPLETED / CANCELLED with the stock still
+// RESERVED: the commit / release event is on its way. COMPLETED / CANCELLED with no
+// reservation yet is not final either: inventory takes OrderCancelled before OrderCreated and
+// then records a CANCELLED tombstone however late the worker gets to it, and the order's
+// status will not move again to prompt a re-fetch. Look for LATE_WAIT_MS from lateSince, then
+// give up until the next mount / focus. A deadline, not a fetch count: fetches made while the
+// order was PENDING, or by other mounts, must not use the window up. A CONFIRMED order holds
 // its reservation until the customer acts, which moves the order's status and re-fetches.
-const LATE_POLLS = 15;
+const LATE_WAIT_MS = 30_000;
 export function reservationPending(
   order: OrderStatus,
   reservation: ReservationStatus | undefined,
-  fetches: number,
+  lateSince: number | undefined,
+  now = Date.now(),
 ): boolean {
   if (order === OrderStatus.PENDING) return true;
   if (order !== OrderStatus.COMPLETED && order !== OrderStatus.CANCELLED) return false;
-  return reservation === undefined ? fetches < LATE_POLLS : reservation === ReservationStatus.RESERVED;
+  if (reservation === undefined) return lateSince === undefined || now - lateSince < LATE_WAIT_MS;
+  return reservation === ReservationStatus.RESERVED;
 }
 
 // SKUs ascending, 20 per page, by prefix (empty = every SKU) and optionally
