@@ -52,7 +52,7 @@ type PruneResult struct {
 
 // unread is the subscriber's / lag gauge's "row m is still to read for the
 // cursor row o" predicate, shared by prune (its negation is "prunable") and
-// the outbox gauges (its existence over all groups is "held back").
+// the outbox gauges (unread for the lowest cursor is "held back").
 //
 // It is a row-value comparison, not (tx = o.tx AND offset > acked) OR tx > o.tx:
 // the two are the same ordering, but only this form lets the planner range-scan
