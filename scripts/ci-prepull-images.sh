@@ -8,13 +8,13 @@
 # command; IMAGES, a space-separated list that skips reading the names below; PULL_RETRY_SLEEP,
 # the wait unit between attempts (1x, 2x, 3x this; default 5 seconds).
 #
-# testcontainers-go creates each container and lets the daemon pull a missing image inside that
-# call. It retries the registry request itself (attemptToPullImage, with backoff) but not the
-# rest of the call, and a Docker Hub 502 still failed a run (39370298272, pkgs/ordering:
-# `reaper: ... failed to resolve reference "docker.io/testcontainers/ryuk:0.14.0": ... 502 Bad
-# Gateway`). With the images already local that call never touches the registry, and the pull
-# here is retried by the engine CLI. Ryuk stays on: it is what removes the containers when a
-# test binary is killed.
+# testcontainers-go pulls a missing image while it creates the container. v0.44.0 retries its own
+# ImagePull request (attemptToPullImage, with backoff), yet a Docker Hub 502 still failed a run
+# (39370298272, pkgs/ordering: `reaper: ... failed to resolve reference
+# "docker.io/testcontainers/ryuk:0.14.0": ... 502 Bad Gateway`); which step of the create path
+# that was is not traced. With the images already local that path does not need the registry,
+# and the pull here is retried by the engine CLI. Ryuk stays on: it is what removes the
+# containers when a test binary is killed.
 #
 # The names are read from where the tests take them, so a version bump follows by itself:
 #   postgres, redis  the Image constants of pgtest / redistest
