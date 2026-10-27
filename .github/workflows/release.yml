@@ -292,12 +292,15 @@ jobs:
                 '[.workflow_runs[]
                   | select(.head_repository.full_name == $repo and .head_branch == $branch and .head_sha == $sha)
                   | select((.pull_requests | length) == 0 or any(.pull_requests[]; .number == $pr))
-                  | {id, path, status}]' 2>/dev/null; } || echo '[]'
+                  | {id, path, status, conclusion}]' 2>/dev/null; } || echo '[]'
           }
-          ci_past_gate() { jq -e '.[] | select(.path == ".github/workflows/ci.yml" and .status != "action_required")' <<<"$1" >/dev/null 2>&1; }
+          # A run waiting for approval is status=completed, conclusion=action_required on the REST
+          # API (status=action_required is only what the list filter accepts), so test both.
+          awaiting='(.status == "action_required" or .conclusion == "action_required")'
+          ci_past_gate() { jq -e ".[] | select(.path == \".github/workflows/ci.yml\" and ($awaiting | not))" <<<"$1" >/dev/null 2>&1; }
           runs=$(my_runs)
           for _ in $(seq 1 12); do
-            for id in $(jq -r '.[] | select(.status == "action_required") | .id' <<<"$runs" 2>/dev/null || true); do
+            for id in $(jq -r ".[] | select($awaiting) | .id" <<<"$runs" 2>/dev/null || true); do
               gh api -X POST "repos/$REPO/actions/runs/$id/approve" >/dev/null 2>&1 || echo "approve of run $id failed" >> "$RUNNER_TEMP/approve-errors.txt"
             done
             sleep 5
