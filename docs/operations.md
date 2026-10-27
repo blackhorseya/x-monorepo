@@ -128,7 +128,7 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 | NetworkPolicy（`networkPolicy.enabled`，預設 off） | 每個 Deployment 一張、只管 ingress（egress 不碰：DB / Redis / collector 在哪是 cluster 的事）。rpc 永遠放行同 release 的 console pod，加上 `networkPolicy.rpc.ingressFrom`（NetworkPolicyPeer list；**空 = 該 port 對任何來源開**，要收緊就列 ingress controller 與 Prometheus 的 namespace）；worker 不收任何 ingress；console 同一套 `console.ingressFrom`。要 CNI 真的實作 NetworkPolicy 才有效，kind 預設的 kindnet 不會，所以 helm-kind 驗不了，check.py 驗形狀 |
 | worker autoscaling | replica 共用 `consumer_group` 就是分工，但 handler 是 DB-bound，CPU 低時 lag 照樣長，所以 `worker.autoscaling.metric` 預設 `lag`：KEDA `ScaledObject` 用 Prometheus trigger 查 `max(eventbus_consumer_lag{consumer_group=~"<group>\\..*"})`（gauge 是 per replica，取 max 不 sum；要 `config.otel.endpoint`，否則拒絕 render）；沒 KEDA 的 cluster 用 `metric: cpu` 出普通 HPA。實測踩到的三件事都做成 render 時就擋：`lag.prometheusAddress` 要 `http://<svc>.<ns>.svc:<port>`（KEDA operator 從**它自己的** namespace 解析，裸 Service 名不通）；`minReplicas` 必須 ≥ 1（lag gauge 是 worker 自己報的，0 個 replica 就沒人報）；`pollingInterval` / `cooldownPeriod` 只對 scale-to-zero 有效，縮回去的節奏是 HPA 的 `behavior.scaleDown`（預設 stabilization 300s，`worker.autoscaling.behavior` 透傳） |
 
-**identity bootstrap（在操作者本機跑，不要在叢集裡跑）**：secret 是 `worker bootstrap` 的 stdout，叢集裡任何 Pod（Job、`kubectl run`、`kubectl exec`）的 stdout 都會進 Pod log，也可能被 log collector 收走——所以只在你自己的 terminal 跑，經 port-forward 連 DB。chart 本身沒有 Postgres（`secrets.postgresUrl` 指到哪就是哪；kind 的 `deps.yaml` 才有 Service `postgres`），`<fullname>` 是 chart 的 fullname（release `api` 就是 `api-x-monorepo`）：
+**identity bootstrap（在操作者本機跑，不要在叢集裡跑）**：secret 是 `worker bootstrap` 的 stdout，叢集裡任何 Pod（Job、`kubectl run`、`kubectl exec`）的 stdout 都會進 Pod log，也可能被 log collector 收走——所以只在你自己的 terminal 跑，經 port-forward 連 DB。chart 本身沒有 Postgres（`secrets.postgresUrl` 指到哪就是哪；kind 的 `deps.yaml` 才有 Service `postgres`），`<fullname>` 是 chart 的 fullname（release `api` 就是 `api-x-monorepo`），`<release-ns>` 是 release 裝的 namespace（跟 `<db-ns>` 不一定同一個）：
 
 ```bash
 # 1. DB 的位置在 release 的 Secret 裡：APP_POSTGRES_URL（用 secrets.existingSecret 的話換成那個名字）。
@@ -143,7 +143,7 @@ kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 ki
   set -euo pipefail
   port=15432                      # 與上面 port-forward 的本機 port 一致
   ca=/path/to/db-ca.pem           # DB 的 CA
-  raw=$(kubectl -n app get secret <fullname>-env -o jsonpath='{.data.APP_POSTGRES_URL}' | base64 -d)
+  raw=$(kubectl -n <release-ns> get secret <fullname>-env -o jsonpath='{.data.APP_POSTGRES_URL}' | base64 -d)
   [ -n "$raw" ] || { echo "abort: APP_POSTGRES_URL is empty or missing in the Secret" >&2; exit 1; }
   # 改寫之前先看原始 URL 的 authority（:// 之後到第一個 / 或 ? 之前）：@ 必須剛好一個。密碼裡的 @ 要編碼成 %40；
   # 未編碼的 @ 讓下面的 sed 把一段密碼當成 host 截掉、改寫成「合法但密碼不對」的 URL，所以直接中止（不印 URL，也不會呼叫 go）。
@@ -162,6 +162,7 @@ kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 ki
 )
 ```
 
+- DB 要開 TLS 才走得通這份 runbook：chart 沒有 Postgres，kind 的 `deps.yaml` 那個也沒開 TLS。自備的 Postgres 開 `ssl=on`（自簽 CA 也行），`ca` 指到簽它的 CA；`verify-ca` 不比對主機名，所以 server 憑證的 SAN 不需要含 `127.0.0.1`。app 自己的 `secrets.postgresUrl` 可以維持 `sslmode=require`（只有 bootstrap 這條路要驗憑證）。
 - 空 config 代表 `--role` 的預設是內建預設值、不是 release 的 `auth.admin_role`；兩者不同時要明寫 `--role`，不然 key 會沒有管理權限。
 - TLS 一律驗憑證。透過 port-forward 連 `127.0.0.1` 時 hostname 對不上，所以用 `verify-ca` + `sslrootcert`（憑證鏈照驗，只是不比對主機名；上面的指令在 URL 尾端附加這兩個）。或者改從能以原主機名連到 DB 的地方（bastion、managed DB 的 proxy）跑，保留 `verify-full`，這時不需要 port-forward 與 `sed`，`--expect-target` 填那個 host:port。
 - 附加（而不是取代）的理由：整串 URL 做取代會改到不該改的字，例如密碼 `pw_sslmode=verify-full` 或 `application_name=sslmode=verify-full`。附加只依賴「重複 key 以最後一個為準」；這個語意就算哪天變了，bootstrap 的檢查是看 pgx 最終解析出的結果，TLS 沒驗證就在連線前拒絕——會安全地失敗，不會悄悄用錯的設定連線。密碼要用 `%40`、`%2F`、`%3F` 編碼 `@`、`/`、`?`；未編碼的 `@` 是 malformed URL：上面的指令在改寫前就會中止（authority 裡 `@` 不是剛好一個），不會呼叫 `go`。
@@ -169,7 +170,8 @@ kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 ki
 - 檢查在 bootstrap 裡做，不在 shell：它用 `pgx.ParseConfig`（gorm 開連線時用的同一個 parser）解析 `postgres.url`，連線前要求主 attempt 與每個 fallback 都驗證 server（`verify-ca` 帶 `sslrootcert`，或 `verify-full`；`disable` / `allow` / `prefer` / 沒有 `sslrootcert` 的 `require` 都拒絕），並要求每個 attempt 的 host:port 都**剛好等於 `--expect-target`**（擋 query 裡的 `host=` 或多個 host）。**`--expect-target` 是必填**，沒帶或帶空值，在讀 config、解析 URL 之前就以「--expect-target is required」拒絕：密碼含未編碼的 `@` 時，pgx 解析出的 host 可能是密碼的一段，而且可能剛好長得像合法的 host 名稱（`postgres://u:pw@SECRETLABEL/app` 的 `SECRETLABEL`），單看 URL 分不出來；resolver 的錯誤（`lookup <那一段>`）會被 main 寫進 log。所以只有操作者自己指定的目標可信，其他一律不信。結構檢查（host 必須是 IP、RFC 1123 DNS 名稱——可以有結尾一個根點，如 `localhost.`——或 unix socket 目錄，否則以「postgres.url has an invalid host」拒絕）只是第二道防線：它擋得住 `SECRET@127.0.0.1` 這種不成形的 host，擋不住像 host 的密碼片段，真正擋住的是 target 釘選。所以 URL 怎麼寫（空白 key、重複 key、`%` 編碼）都以 pgx 實際解析的結果為準。拒絕訊息只有原因（target 不符時加上你自己帶的 `--expect-target` 值），**不含任何從 URL 或 `PG*` env 解析出來的值**（host、port、user、dbname、密碼）：密碼含未編碼的 `@` 時，pgx 會把密碼的一段當成 host，印出來就是把密碼寫進 log。
 - 殘餘風險（TOCTOU）：檢查和實際連線各解析一次 `postgres.url`。前提是操作期間，本機的 CA 檔（`sslrootcert`）、service file、`PG*` env 由你控制且不變；有人能在這兩步之間換掉它們，檢查就保證不了連線。
 - `--insecure-allow-plaintext` 只跳過 TLS 檢查，`--expect-target` 照樣必填、照樣釘選。它只給本機開發用的 DB——`task bootstrap` 帶著它，並把 target 釘在 compose 的 Postgres（`127.0.0.1:${POSTGRES_PORT:-5432}`，預設 `127.0.0.1:5432`；`configs/local.yaml` 的 `postgres.url` 改了 port 就設同一個 `POSTGRES_PORT`）。**不要用它連 release 的 DB。**
-- 第一次跑印出 `X-API-Key: xk_…`（只這一次，庫裡只有 hash），抄到密碼管理器；再跑一次是 `already bootstrapped`、什麼都不寫。做完停掉 port-forward。
+- 第一次跑印出 `X-API-Key: xk_…`（只這一次，庫裡只有 hash），抄到密碼管理器；再跑一次是 `already bootstrapped`、什麼都不寫。做完停掉 port-forward。port-forward 在有些環境（kind + podman 實測）會在 client 連線被重置後自己結束（`lost connection to pod`），重跑時若出現 `connection refused`，重開 port-forward 再跑。
+- 這把 key 要 `config.auth.mode` 是 `optional` 或 `required` 才有作用（chart 預設 `off`，不檢查 credential）。`required` 時不用設 `secrets.apiKeys`：DB 裡的 key 由 resolver 驗（kind 實測：沒帶 key 回 401、帶 bootstrap 出來的 key 呼叫 `IdentityService/WhoAmI` 回 `root` / `admin`）。
 - 已有 account 就是 no-op，但**不要同時跑兩個**：guard 是 read 不是 constraint，兩個 run 在空 store 上搶跑會各建一個。
 
 `worker bootstrap` 因為輸出失敗（terminal 被關、pipe 斷掉）而 exit 非 0，代表 account 與 key **已經建立**、secret **已經遺失**（庫裡只有 hash，重跑是 no-op、不會重印）。補救：用 config `auth.api_keys` 的 break-glass key 登入，再呼叫 `CreateApiKey` 開一把新 key（錯誤訊息裡有沒送達那把的 key ID 與 prefix，要的話 `RevokeApiKey` 它）。
