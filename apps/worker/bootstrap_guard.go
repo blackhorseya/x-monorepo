@@ -40,6 +40,13 @@ type connPolicy struct {
 // the host, so even "which host" can be the secret. The only value a message
 // carries is --expect-target, which the operator typed.
 func checkBootstrapConn(url string, p connPolicy) error {
+	// Before the URL is touched: without a target the operator typed there is
+	// nothing to trust, because whatever pgx parses as the host may be a piece
+	// of a malformed password (u:pw@SECRETLABEL looks like a perfectly good
+	// host name).
+	if p.expectTarget == "" {
+		return errors.New("--expect-target is required")
+	}
 	cc, err := pgx.ParseConfig(url)
 	if err != nil {
 		return errors.New("postgres.url is not a valid connection string")
@@ -50,7 +57,7 @@ func checkBootstrapConn(url string, p connPolicy) error {
 
 // validateBootstrapConn checks a parsed config: every connection attempt —
 // the main one and each fallback pgx will try next — must have a structurally
-// valid host (always), dial the expected target (when one is given), and
+// valid host, dial the target the operator gave with --expect-target, and
 // unless plaintext is allowed must verify the server.
 //
 // What "verifies the server" looks like after pgx's configTLS
@@ -70,19 +77,19 @@ func checkBootstrapConn(url string, p connPolicy) error {
 func validateBootstrapConn(cfg *pgconn.Config, p connPolicy) error {
 	attempts := append([]*pgconn.Config{cfg}, fallbackConfigs(cfg)...)
 
-	// Before anything else, and with or without --expect-target: a host that
-	// is not a host never reaches the resolver, whose error quotes it.
+	// Before anything else: a host that is not even shaped like one never
+	// reaches the resolver, whose error quotes it. A second line of defence —
+	// what actually keeps a piece of the password out of the log is the target
+	// pin below, since a valid-looking label can be part of a password too.
 	for _, a := range attempts {
 		if !validHost(a.Host) {
 			return errors.New("postgres.url has an invalid host")
 		}
 	}
 
-	if p.expectTarget != "" {
-		for _, a := range attempts {
-			if net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))) != p.expectTarget {
-				return fmt.Errorf("connection target does not match --expect-target %s", p.expectTarget)
-			}
+	for _, a := range attempts {
+		if net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))) != p.expectTarget {
+			return fmt.Errorf("connection target does not match --expect-target %s", p.expectTarget)
 		}
 	}
 	if p.allowPlaintext {
@@ -115,11 +122,16 @@ func fallbackConfigs(cfg *pgconn.Config) []*pgconn.Config {
 // name (RFC 1123 labels: 1-63 letters, digits or hyphens, not starting or
 // ending with a hyphen, 253 bytes at most), or a unix socket directory.
 //
-// It exists because pgx does not validate the host. A password with an
-// unencoded @ ("u:@SECRET@127.0.0.1") makes the host "SECRET@127.0.0.1", which
-// the resolver then quotes in its error ("lookup SECRET@127.0.0.1"), and main
-// logs that. Nothing that could carry a secret is a valid host: no @, %, space
-// or other punctuation.
+// It is a second line of defence only. pgx does not validate the host, so a
+// password with an unencoded @ ("u:@SECRET@127.0.0.1") makes the host
+// "SECRET@127.0.0.1", which the resolver quotes in its error and main logs;
+// rejecting what cannot be a host name catches that early. It cannot catch a
+// password piece that looks like a host name ("u:pw@SECRETLABEL/app"): no check
+// on the URL alone can tell the two apart. That is what the --expect-target
+// pin is for, and why the flag is required.
+//
+// One trailing dot (a fully qualified name, "localhost.") is allowed; an empty
+// label anywhere else is not.
 func validHost(h string) bool {
 	if h == "" || len(h) > 253 {
 		return false
@@ -132,7 +144,7 @@ func validHost(h string) bool {
 	if _, err := netip.ParseAddr(h); err == nil {
 		return true
 	}
-	for _, label := range strings.Split(h, ".") {
+	for _, label := range strings.Split(strings.TrimSuffix(h, "."), ".") {
 		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}

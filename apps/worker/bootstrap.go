@@ -42,14 +42,23 @@ the Pod log. See docs/operations.md.
 Before it connects, the command parses postgres.url the way the connection will and
 refuses unless every attempt verifies the server (sslmode=verify-ca with sslrootcert, or
 verify-full; disable, allow, prefer and require without sslrootcert are refused).
---expect-target host:port additionally refuses a URL that would dial anything else.
---insecure-allow-plaintext skips the TLS check for a local development database only.
+--expect-target host:port is required and every connection attempt must dial exactly it:
+the host parsed from postgres.url can be a piece of a malformed password (an unencoded @),
+so only the target you typed is trusted, and it is the only value an error will print.
+--insecure-allow-plaintext skips the TLS check for a local development database only;
+--expect-target still applies.
 
 With the printed X-API-Key, CreateAccount / CreateApiKey make the real accounts; the
 static auth.api_keys entry (if any) stays the break-glass path. The secret goes to
 stdout only, never to the log.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// First, before the config is read or the URL parsed: the host in the URL
+			// may be a piece of a malformed password, so only a target the operator
+			// typed can be trusted (and is the only value an error will ever print).
+			if strings.TrimSpace(expectTarget) == "" {
+				return errors.New("--expect-target is required: pass the host:port of the database you mean to reach (for example 127.0.0.1:15432 behind kubectl port-forward)")
+			}
 			if strings.TrimSpace(name) == "" {
 				return errors.New("--name must not be empty")
 			}
@@ -59,10 +68,8 @@ stdout only, never to the log.`,
 			if expiresIn < 0 {
 				return fmt.Errorf("--expires-in must not be negative (0 = never)")
 			}
-			if expectTarget != "" {
-				if _, _, err := net.SplitHostPort(expectTarget); err != nil {
-					return errors.New("--expect-target must be host:port")
-				}
+			if _, _, err := net.SplitHostPort(expectTarget); err != nil {
+				return errors.New("--expect-target must be host:port")
 			}
 			cfg, err := load()
 			if err != nil {
@@ -94,7 +101,7 @@ stdout only, never to the log.`,
 	cmd.Flags().StringArrayVar(&roles, "role", nil, "role of the first account (repeatable; default: auth.admin_role)")
 	cmd.Flags().StringVar(&keyName, "key-name", "bootstrap", "name of the first API key")
 	cmd.Flags().DurationVar(&expiresIn, "expires-in", 0, "the key expires this long from now (Go duration, e.g. 720h; 0 = never)")
-	cmd.Flags().StringVar(&expectTarget, "expect-target", "", "host:port every database connection must go to (e.g. 127.0.0.1:15432 behind kubectl port-forward); anything else is refused before connecting")
+	cmd.Flags().StringVar(&expectTarget, "expect-target", "", "required: the host:port every database connection must go to (e.g. 127.0.0.1:15432 behind kubectl port-forward); anything else is refused before connecting")
 	cmd.Flags().BoolVar(&allowPlaintext, "insecure-allow-plaintext", false, "skip the TLS check, for a local development database only; --expect-target still applies")
 
 	return cmd
