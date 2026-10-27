@@ -46,9 +46,13 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
       - id: detect
+        env:
+          CI_ALL: ${{ github.event_name != 'pull_request' && '1' || '' }}
         run: |
           git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
-          mods=$(BASE_REF=origin/main scripts/affected.sh | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+          # main and dispatch: every module (the diff against main is empty there, which would
+          # skip the whole test matrix); a PR: the modules its diff reaches.
+          mods=$(BASE_REF=origin/main scripts/affected.sh ${CI_ALL:+--all} | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
           echo "modules=$mods" >> "$GITHUB_OUTPUT"
           echo "any=$([ "$mods" != "[]" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "affected: $mods"

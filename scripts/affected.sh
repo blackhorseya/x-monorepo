@@ -9,6 +9,8 @@
 #   - a file under a module dir affects that module
 #   - a module affects every module that depends on it (reverse deps via go.work)
 #   - a change outside any module (protos/, buf.gen.yaml, go.work, Taskfile.yml, .golangci.yml) affects all
+#   - so does a change to what the test job itself runs on: .github/workflows/ci.yml,
+#     .github/actions/* and scripts/* (the same inputs scripts/ci-changes.sh runs every job for)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -39,7 +41,7 @@ for f in $FILES; do
     [[ "$f" == "$m/"* ]] && { mark "$m"; matched=1; break; }
   done
   # global inputs → everything
-  if [[ -z "$matched" ]] && [[ "$f" == protos/* || "$f" == buf.* || "$f" == go.work || "$f" == Taskfile.yml || "$f" == .golangci.yml ]]; then
+  if [[ -z "$matched" ]] && [[ "$f" == protos/* || "$f" == buf.* || "$f" == go.work || "$f" == Taskfile.yml || "$f" == .golangci.yml || "$f" == .github/workflows/ci.yml || "$f" == .github/actions/* || "$f" == scripts/* ]]; then
     echo "$ALL"; exit 0
   fi
 done

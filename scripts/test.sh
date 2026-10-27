@@ -99,6 +99,39 @@ git -C "$repo" update-ref refs/remotes/origin/main main
 git -C "$repo" checkout -q change
 expect_eq "branch behind main sees only its own files" "k6" "$(in_repo scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 
+# ── affected.sh ─────────────────────────────────────────────────────────────────
+# The test matrix runs the modules this prints. A file no module claims must still run all of them
+# when it is something the test job runs on (ci.yml, .github/actions, scripts/), and --all (main,
+# dispatch) must list every module whatever the diff is.
+# affected_fixture <name>: $repo with go.work over pkgs/a and pkgs/b (b requires a), committed on main.
+affected_fixture() {
+  fixture "$1"
+  mkdir -p "$repo/pkgs/a" "$repo/pkgs/b"
+  printf 'module example.com/a\n\ngo 1.22\n' > "$repo/pkgs/a/go.mod"
+  printf 'module example.com/b\n\ngo 1.22\n\nrequire example.com/a v0.0.0\n' > "$repo/pkgs/b/go.mod"
+  printf 'go 1.22\n\nuse (\n\t./pkgs/a\n\t./pkgs/b\n)\n' > "$repo/go.work"
+  commit "chore: modules"
+  git -C "$repo" update-ref refs/remotes/origin/main main
+}
+# affected_on <name> <files...>: commits the files on a branch off main and prints the modules.
+affected_on() {
+  local name=$1; shift
+  affected_fixture "$name"
+  git -C "$repo" checkout -q -b change
+  for f in "$@"; do touch_file "$f"; done
+  commit "chore: $name"
+  in_repo scripts/affected.sh | tr '\n' ' ' | sed 's/ $//'
+}
+expect_eq "affected: docs touch no module"           ""              "$(affected_on adocs README.md docs/a.md)"
+expect_eq "affected: a file under a module"          "pkgs/b"        "$(affected_on amod pkgs/b/x.go)"
+expect_eq "affected: dependents follow"              "pkgs/a pkgs/b" "$(affected_on adep pkgs/a/x.go)"
+expect_eq "affected: ci.yml is every module"         "pkgs/a pkgs/b" "$(affected_on aci .github/workflows/ci.yml)"
+expect_eq "affected: .github/actions is every module" "pkgs/a pkgs/b" "$(affected_on aact .github/actions/setup/action.yml)"
+expect_eq "affected: scripts/ is every module"       "pkgs/a pkgs/b" "$(affected_on ascripts scripts/new.sh)"
+expect_eq "affected: another workflow is no module"  ""              "$(affected_on awf .github/workflows/release.yml)"
+affected_fixture aall
+expect_eq "affected: --all ignores the diff"         "pkgs/a pkgs/b" "$(in_repo scripts/affected.sh --all | tr '\n' ' ' | sed 's/ $//')"
+
 # ── releasable.sh ───────────────────────────────────────────────────────────────
 fixture releasable
 touch_file README.md changed; touch_file docs/guide.md; touch_file pkgs/ordering/README.md
