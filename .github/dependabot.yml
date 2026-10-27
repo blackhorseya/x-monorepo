@@ -8,7 +8,10 @@
 # docker: the two shipped base images (distroless for rpc / worker / migrate, nginx-unprivileged
 # for the console), pinned as tag@sha256 so a bump moves both. A merged bump changes a shipped
 # image, so it cuts a patch release. CI / kind test images (postgres, redis, otel) are not covered.
-# Titles: `build(deps): …` so release-drafter files them under Dependencies.
+# github-actions: every third-party `uses:` is pinned to a commit SHA with its tag as a trailing
+# comment (`@<sha> # v7`); Dependabot bumps the SHA and rewrites that comment together. Local
+# `./.github/actions/*` are not versioned, but their own `uses:` are scanned. A bump touches CI only, so it cuts no release.
+# Titles: `build(deps): …` (`ci(deps): …` for Actions) so release-drafter files them under Dependencies.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -21,9 +24,9 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: github-actions
-    directory: "/"
+    directories: ["/", "/.github/actions/*"]
     schedule: { interval: weekly }
-    commit-message: { prefix: build, include: scope }
+    commit-message: { prefix: ci, include: scope }
     groups:
       actions:
         patterns: ["*"]

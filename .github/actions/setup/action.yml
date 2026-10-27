@@ -19,7 +19,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-go@v7
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
       with:
         go-version-file: go.work
         cache: false
@@ -32,7 +32,7 @@ runs:
 
     # One cache per job/matrix entry; restore-keys fall back to the same job's previous
     # go.sum, then to any job's, so a dependency bump still starts from a warm cache.
-    - uses: actions/cache@v6
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: |
           ${{ steps.go-env.outputs.modcache }}
@@ -42,7 +42,7 @@ runs:
           go-${{ runner.os }}-${{ inputs.cache-scope }}-
           go-${{ runner.os }}-
 
-    - uses: go-task/setup-task@v2
+    - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2
       with:
         version: 3.54.0
         repo-token: ${{ github.token }}
@@ -56,7 +56,7 @@ runs:
 
     - if: inputs.tools == 'true'
       id: tools-cache
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: bin
         key: ${{ steps.tools-key.outputs.key }}
