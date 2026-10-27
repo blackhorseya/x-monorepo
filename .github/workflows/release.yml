@@ -50,6 +50,7 @@ jobs:
   prepare:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 9s, max 19s (last 11 days)
     permissions:
       contents: write        # create / update the draft release
       pull-requests: read    # list merged PRs
@@ -99,6 +100,7 @@ jobs:
     needs: [prepare]
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # p90 387s, max 394s (last 11 days)
     permissions:
       contents: write   # upload archives to the draft
       packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate,console}
@@ -197,6 +199,7 @@ jobs:
     needs: [prepare, build]
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 5s (last 11 days)
     permissions:
       contents: write
     steps:
@@ -213,6 +216,7 @@ jobs:
     needs: [prepare, publish]
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 29s (last 11 days)
     permissions:
       contents: read
       packages: read   # the packages are public; the login below only lifts ghcr's anonymous rate limit
@@ -233,6 +237,7 @@ jobs:
     needs: [prepare, publish]
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 13s (last 11 days)
     permissions:
       contents: write        # push the chore/chart-appversion-* branch
       pull-requests: write   # open the PR
