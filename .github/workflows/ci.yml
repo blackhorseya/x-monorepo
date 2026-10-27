@@ -22,6 +22,7 @@ jobs:
   # reason main is green. Skipped jobs count as success for required checks.
   affected:
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 20s, max 116s (last 11 days)
     outputs:
       modules: ${{ steps.detect.outputs.modules }}
       any: ${{ steps.detect.outputs.any }}
@@ -63,6 +64,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_gen_freshness == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # p90 53s, max 225s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -75,6 +77,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_lint == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # p90 120s, max 209s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -88,6 +91,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_work_sync == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 27s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -98,6 +102,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.any == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # p90 192s (apps/worker), max 238s; headroom for image pulls (last 11 days)
     strategy:
       fail-fast: false
       matrix:
@@ -118,6 +123,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_coverage == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 28s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -127,6 +133,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_build == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # p90 89s, max 158s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -137,6 +144,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_helm == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # p90 58s, max 262s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -153,6 +161,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_k6 == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # p90 109s, max 169s (last 11 days)
     services:
       postgres:
         image: postgres:16-alpine
@@ -180,6 +189,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_helm_kind == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # p90 289s, max 382s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -214,6 +224,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_release_snapshot == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # p90 302s, max 374s (last 11 days)
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
@@ -232,6 +243,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_actions_resolve == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 13s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - run: scripts/actions-resolve.sh
@@ -243,6 +255,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_scripts_test == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 7s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - run: scripts/test.sh
@@ -253,6 +266,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_web == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # p90 49s, max 431s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup   # Task (Go is unused here but comes with it)
@@ -271,6 +285,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_console_e2e == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # p90 142s, max 656s (last 11 days)
     services:
       postgres:
         image: postgres:16-alpine
@@ -306,6 +321,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_console_image == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # p90 112s, max 627s (last 11 days)
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -330,6 +346,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_breaking == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 8s (last 11 days)
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7

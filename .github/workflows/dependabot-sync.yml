@@ -35,6 +35,7 @@ jobs:
   sync:
     if: github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 58s, n=5 (last 11 days)
     steps:
       - uses: actions/checkout@v7
         with:

@@ -17,6 +17,7 @@ permissions:
 jobs:
   label:
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # p90 6s (last 11 days)
     permissions:
       pull-requests: write
     steps:
