@@ -182,14 +182,20 @@ jobs:
 
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
   # commit (the console one needs node: pnpm build of web/apps/console), install → smoke →
-  # upgrade → smoke (deployments/helm/kind), then KEDA + an OTLP collector + Prometheus and a
-  # k6 burst that must scale the worker out on eventbus_consumer_lag and back
-  # (task helm-kind-keda). ~5 min, in parallel.
+  # upgrade → smoke (task helm-kind), and, on a cluster of its own, KEDA + an OTLP collector +
+  # Prometheus and a k6 burst that must scale the worker out on eventbus_consumer_lag and back
+  # (task helm-kind-keda). The two never shared state beyond the base (helm-kind-up: cluster,
+  # images, Postgres / Redis), so they run as parallel matrix legs instead of back to back.
   helm-kind:
+    name: helm-kind (${{ matrix.task }})
     needs: affected
     if: needs.affected.outputs.run_helm_kind == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15 # p90 289s, max 382s (last 11 days)
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [helm-kind, helm-kind-keda]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -205,8 +211,7 @@ jobs:
       - uses: helm/kind-action@v1
         with: { version: v0.33.0, install_only: true }
       - uses: grafana/setup-k6-action@v1
-      - run: task helm-kind
-      - run: task helm-kind-keda
+      - run: task ${{ matrix.task }}
       - if: failure()
         run: |
           kubectl -n x-monorepo get all
