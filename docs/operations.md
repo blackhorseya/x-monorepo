@@ -108,7 +108,7 @@ kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 ki
 
 # 2. 取 URL、改寫、跑 bootstrap，全部在同一個 fail-fast 子 shell 裡：任何一步失敗就中止、不會跑到 bootstrap。
 #    原始 URL 與改寫後的 URL 只存在這個子 shell 的變數裡（不 export、不 echo、不進 history）；最終的 URL 會以 APP_POSTGRES_URL 傳給 go run 這個子程序。
-#    shell 只做改寫；連線安全（TLS 要驗證、只連 --expect-target）由 bootstrap 用 pgx 自己的 parser 檢查，不通過就在連線前拒絕。
+#    shell 只做改寫；連線安全由 bootstrap 檢查：--expect-target 必填（沒帶就拒絕）、每個 attempt 只准連它、TLS 要驗證，不通過就在連線前拒絕。
 (
   set +x                          # 外層若開了 xtrace（set -x / bash -x / zsh -x），先關掉，不然下面每一行連同密碼都會被印出
   set -euo pipefail
@@ -137,9 +137,9 @@ kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 ki
 - TLS 一律驗憑證。透過 port-forward 連 `127.0.0.1` 時 hostname 對不上，所以用 `verify-ca` + `sslrootcert`（憑證鏈照驗，只是不比對主機名；上面的指令在 URL 尾端附加這兩個）。或者改從能以原主機名連到 DB 的地方（bastion、managed DB 的 proxy）跑，保留 `verify-full`，這時不需要 port-forward 與 `sed`，`--expect-target` 填那個 host:port。
 - 附加（而不是取代）的理由：整串 URL 做取代會改到不該改的字，例如密碼 `pw_sslmode=verify-full` 或 `application_name=sslmode=verify-full`。附加只依賴「重複 key 以最後一個為準」；這個語意就算哪天變了，bootstrap 的檢查是看 pgx 最終解析出的結果，TLS 沒驗證就在連線前拒絕——會安全地失敗，不會悄悄用錯的設定連線。密碼要用 `%40`、`%2F`、`%3F` 編碼 `@`、`/`、`?`；未編碼的 `@` 是 malformed URL：上面的指令在改寫前就會中止（authority 裡 `@` 不是剛好一個），不會呼叫 `go`。
 - `sslmode=require` 配有效的 `sslrootcert`，pgx 視同 `verify-ca`（跟 libpq 一致），檢查會放行；沒有 `sslrootcert` 的 `require`（只加密、不驗證 server）、`disable`、`allow`、`prefer` 一律拒絕。
-- 檢查在 bootstrap 裡做，不在 shell：它用 `pgx.ParseConfig`（gorm 開連線時用的同一個 parser）解析 `postgres.url`，連線前要求主 attempt 與每個 fallback 都驗證 server（`verify-ca` 帶 `sslrootcert`，或 `verify-full`；`disable` / `allow` / `prefer` / 沒有 `sslrootcert` 的 `require` 都拒絕），並要求每個 attempt 的 host:port 都等於 `--expect-target`（擋 query 裡的 `host=` 或多個 host）。不管有沒有帶 `--expect-target`，每個 attempt 的 host 還要是結構合法的 IP、DNS 名稱（RFC 1123）或 unix socket 目錄，否則在連線前以「postgres.url has an invalid host」拒絕——不然 pgx 會把密碼的一段當成 host 交給 resolver，resolver 的錯誤（`lookup <那一段>`）會被 main 寫進 log。所以 URL 怎麼寫（空白 key、重複 key、`%` 編碼）都以 pgx 實際解析的結果為準。拒絕訊息只有原因（target 不符時加上你自己帶的 `--expect-target` 值），**不含任何從 URL 或 `PG*` env 解析出來的值**（host、port、user、dbname、密碼）：密碼含未編碼的 `@` 時，pgx 會把密碼的一段當成 host，印出來就是把密碼寫進 log。
+- 檢查在 bootstrap 裡做，不在 shell：它用 `pgx.ParseConfig`（gorm 開連線時用的同一個 parser）解析 `postgres.url`，連線前要求主 attempt 與每個 fallback 都驗證 server（`verify-ca` 帶 `sslrootcert`，或 `verify-full`；`disable` / `allow` / `prefer` / 沒有 `sslrootcert` 的 `require` 都拒絕），並要求每個 attempt 的 host:port 都**剛好等於 `--expect-target`**（擋 query 裡的 `host=` 或多個 host）。**`--expect-target` 是必填**，沒帶或帶空值，在讀 config、解析 URL 之前就以「--expect-target is required」拒絕：密碼含未編碼的 `@` 時，pgx 解析出的 host 可能是密碼的一段，而且可能剛好長得像合法的 host 名稱（`postgres://u:pw@SECRETLABEL/app` 的 `SECRETLABEL`），單看 URL 分不出來；resolver 的錯誤（`lookup <那一段>`）會被 main 寫進 log。所以只有操作者自己指定的目標可信，其他一律不信。結構檢查（host 必須是 IP、RFC 1123 DNS 名稱——可以有結尾一個根點，如 `localhost.`——或 unix socket 目錄，否則以「postgres.url has an invalid host」拒絕）只是第二道防線：它擋得住 `SECRET@127.0.0.1` 這種不成形的 host，擋不住像 host 的密碼片段，真正擋住的是 target 釘選。所以 URL 怎麼寫（空白 key、重複 key、`%` 編碼）都以 pgx 實際解析的結果為準。拒絕訊息只有原因（target 不符時加上你自己帶的 `--expect-target` 值），**不含任何從 URL 或 `PG*` env 解析出來的值**（host、port、user、dbname、密碼）：密碼含未編碼的 `@` 時，pgx 會把密碼的一段當成 host，印出來就是把密碼寫進 log。
 - 殘餘風險（TOCTOU）：檢查和實際連線各解析一次 `postgres.url`。前提是操作期間，本機的 CA 檔（`sslrootcert`）、service file、`PG*` env 由你控制且不變；有人能在這兩步之間換掉它們，檢查就保證不了連線。
-- `--insecure-allow-plaintext` 跳過 TLS 檢查（`--expect-target` 照樣生效），只給本機開發用的 DB——`task bootstrap` 就帶著它。**不要用它連 release 的 DB。**
+- `--insecure-allow-plaintext` 只跳過 TLS 檢查，`--expect-target` 照樣必填、照樣釘選。它只給本機開發用的 DB——`task bootstrap` 帶著它，並把 target 釘在 compose 的 Postgres（`127.0.0.1:${POSTGRES_PORT:-5432}`，預設 `127.0.0.1:5432`；`configs/local.yaml` 的 `postgres.url` 改了 port 就設同一個 `POSTGRES_PORT`）。**不要用它連 release 的 DB。**
 - 第一次跑印出 `X-API-Key: xk_…`（只這一次，庫裡只有 hash），抄到密碼管理器；再跑一次是 `already bootstrapped`、什麼都不寫。做完停掉 port-forward。
 - 已有 account 就是 no-op，但**不要同時跑兩個**：guard 是 read 不是 constraint，兩個 run 在空 store 上搶跑會各建一個。
 
