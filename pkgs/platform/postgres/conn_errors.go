@@ -1,0 +1,96 @@
+package postgres
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"net"
+	"syscall"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// connError is what a failed connection attempt becomes before it leaves this
+// package: a category and, for a server rejection, its SQLSTATE. Nothing else.
+//
+// pgx's own text puts the user and database in the message, the server's
+// message can name the role or echo a setting value, and either can quote a
+// piece of the connection string; a password with an unencoded @ or one that
+// looks like a setting makes even "which host" a secret. So the message is
+// built here from fixed words, and only the operator's own expect_target (a
+// value they typed) may appear in it.
+//
+// The category stays checkable: errors.Is answers for the causes in the original
+// chain (context.DeadlineExceeded, syscall.ECONNREFUSED and the like), and
+// errors.As to *pgconn.PgError yields a copy that has the Code and Severity but
+// no Message, Detail or other server text. No other type of the original chain
+// is reachable from here.
+type connError struct {
+	kind     string
+	sqlstate string
+	severity string
+	cause    error
+}
+
+func (e *connError) Error() string {
+	if e.sqlstate != "" {
+		return fmt.Sprintf("%s (SQLSTATE %s)", e.kind, e.sqlstate)
+	}
+
+	return e.kind
+}
+
+func (e *connError) Is(target error) bool { return errors.Is(e.cause, target) }
+
+func (e *connError) As(target any) bool {
+	if pp, ok := target.(**pgconn.PgError); ok && e.sqlstate != "" {
+		*pp = &pgconn.PgError{Severity: e.severity, Code: e.sqlstate}
+
+		return true
+	}
+
+	return false
+}
+
+// redactConnErr reduces err, from opening or pinging a connection, to a
+// connError. target is the operator's postgres.expect_target, or "".
+func redactConnErr(err error, target string) error {
+	if err == nil {
+		return nil
+	}
+	e := &connError{cause: err}
+	var (
+		pgErr *pgconn.PgError
+		dns   *net.DNSError
+		unk   x509.UnknownAuthorityError
+		cert  *tls.CertificateVerificationError
+		rec   tls.RecordHeaderError
+	)
+	switch {
+	case errors.As(err, &pgErr):
+		e.kind, e.sqlstate, e.severity = "server rejected the connection", pgErr.Code, pgErr.Severity
+	case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
+		e.kind = "connection timed out"
+	case errors.As(err, &dns):
+		e.kind = "host lookup failed"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		e.kind = "connection refused"
+	case errors.As(err, &cert) || errors.As(err, &unk) || errors.As(err, &rec):
+		e.kind = "TLS handshake failed"
+	default:
+		e.kind = "connection failed"
+	}
+	if target != "" {
+		e.kind += " to " + target
+	}
+
+	return e
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+
+	return errors.As(err, &ne) && ne.Timeout()
+}
