@@ -138,3 +138,55 @@ func TestNewDB_TimestampZoneMatrix(t *testing.T) {
 		})
 	}
 }
+
+// The zone a DSN's last TimeZone names, however each spelling is cased, is
+// both the session's timezone and the one TIMESTAMP columns decode in; they
+// must never disagree. pgx sends every runtime parameter in a map, and Postgres
+// treats TimeZone, timezone and TIMEZONE as the same setting, so a DSN that
+// leaves two spellings in that map lets the server apply whichever it reads
+// last, differently from one connection to the next. Hence many pools per DSN:
+// one pool agreeing proves nothing.
+func TestNewDB_MixedCaseTimeZoneKeysAgreeWithDecoding(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	base := pgtest.URL(t)
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+
+	cases := []struct{ query, session string }{
+		{"TimeZone=UTC&timezone=Asia/Taipei", "Asia/Taipei"},
+		{"TIMEZONE=UTC&TimeZone=Asia/Taipei", "Asia/Taipei"},
+		{"timezone=Asia/Taipei&TimeZone=UTC", "UTC"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.query, func(t *testing.T) {
+			for i := 0; i < 20; i++ {
+				db, cleanup, err := postgres.NewDB(config.Postgres{URL: base + sep + tc.query}, tel)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var row struct {
+					Actual  time.Time
+					Decoded time.Time
+					Session string
+				}
+				err = db.Raw("SELECT CURRENT_TIMESTAMP AS actual, LOCALTIMESTAMP AS decoded, current_setting('TimeZone') AS session").Scan(&row).Error
+				cleanup()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if d := row.Decoded.Sub(row.Actual); d > time.Minute || d < -time.Minute {
+					t.Fatalf("pool %d: LOCALTIMESTAMP decodes %s away from CURRENT_TIMESTAMP (session %q): session and decoding disagree", i, d, row.Session)
+				}
+				if row.Session != tc.session {
+					t.Fatalf("pool %d: session timezone = %q, want the last one, %q", i, row.Session, tc.session)
+				}
+			}
+		})
+	}
+}
