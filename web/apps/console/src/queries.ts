@@ -1,3 +1,4 @@
+import { Code, ConnectError } from "@connectrpc/connect";
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
@@ -26,7 +27,7 @@ export const keys = {
   poison: ["poison"] as const,
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
   version: ["version"] as const,
-  whoami: ["whoami"] as const,
+  adminProbe: (generation: number) => ["admin-probe", generation] as const,
   accounts: ["accounts"] as const,
   account: (id: string) => ["account", id] as const,
   apiKeys: (accountId: string) => ["api-keys", accountId] as const,
@@ -188,14 +189,32 @@ export const poisonDetailQuery = (bc: string, offset: bigint) =>
     queryFn: async () => (await admin.getPoison({ boundedContext: bc, offset })).message ?? null,
   });
 
-// Who the server thinks the console is (identity WhoAmI, no role needed). The admin gate of the
-// /accounts pages reads it; the server still decides every call. Not polled: the credential
-// control invalidates every query when the credential changes.
-export const whoamiQuery = queryOptions({
-  queryKey: keys.whoami,
-  queryFn: () => identity.whoAmI({}),
-  staleTime: 60_000,
-});
+// Can the current credential use the admin identity RPCs? Asked of the server itself (the
+// cheapest admin call, one account) rather than guessed from WhoAmI's roles: the role the server
+// wants is auth.admin_role, which the console cannot know, and with auth off there is no role at
+// all. true = the call went through; PERMISSION_DENIED / UNAUTHENTICATED = false; anything else
+// (network, 5xx) is an error, not a "no".
+//
+// Keyed by the credential generation (src/auth.ts), so a late answer for the previous credential
+// lands under its own key and is never read for the new one; the new one asks again, unproven =
+// not admin until it answers.
+export const adminProbeQuery = (generation: number) =>
+  queryOptions({
+    queryKey: keys.adminProbe(generation),
+    queryFn: async () => {
+      try {
+        await identity.listAccounts({ pageSize: 1 });
+        return true;
+      } catch (err) {
+        const code = ConnectError.from(err).code;
+        if (code === Code.PermissionDenied || code === Code.Unauthenticated) return false;
+        throw err;
+      }
+    },
+    staleTime: 60_000,
+    gcTime: 60_000,
+    retry: false,
+  });
 
 // Accounts by id ascending, 20 per page. Created / disabled / re-roled from this console,
 // so no polling; the key starts with keys.accounts so a mutation invalidates every page.
