@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"syscall"
@@ -48,6 +49,9 @@ func TestNewDB_ConnectionRefusedCarriesNoURLText(t *testing.T) {
 				t.Fatal("NewDB = nil, want an error (nothing listens on port 1)")
 			}
 			assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb")
+			if !strings.Contains(err.Error(), "127.0.0.1:1") {
+				t.Fatalf("the error lacks the host:port that was dialed: %q", err)
+			}
 			if !errors.Is(err, syscall.ECONNREFUSED) {
 				t.Fatalf("errors.Is(err, ECONNREFUSED) = false for %q: the category must stay checkable", err)
 			}
@@ -108,6 +112,9 @@ func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
 			t.Fatal("NewDB = nil, want a rejected login")
 		}
 		assertNoURLText(t, err, role, "wrong")
+		if want := net.JoinHostPort(u.Hostname(), u.Port()); !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error lacks the host:port that was dialed (%s): %q", want, err)
+		}
 		var pgErr *pgconn.PgError
 		if !errors.As(err, &pgErr) || pgErr.Code != "28P01" {
 			t.Fatalf("errors.As PgError = %v (%v), want SQLSTATE 28P01", pgErr, err)
@@ -116,4 +123,39 @@ func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
 			t.Fatalf("the PgError still carries the server's text: %+v", pgErr)
 		}
 	})
+}
+
+// Several hosts: every target that was tried is named, none of the rest of the
+// URL. A host that is not shaped like one (a password with an unencoded @ makes
+// pgx cut part of it out as the host) is never printed, and then the error is
+// the category alone.
+func TestNewDB_ConnectionErrorNamesEveryTargetTried(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+
+	_, cleanup, err := postgres.NewDB(config.Postgres{
+		URL: "postgres://leakyuser:" + secretMarker + "@127.0.0.1:1,127.0.0.1:2/leakydb?sslmode=disable",
+	}, tel)
+	if err == nil {
+		cleanup()
+		t.Fatal("NewDB = nil, want an error")
+	}
+	assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb")
+	for _, want := range []string{"127.0.0.1:1", "127.0.0.1:2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error lacks %s: %q", want, err)
+		}
+	}
+
+	_, cleanup, err = postgres.NewDB(config.Postgres{
+		URL: "postgres://u:@" + secretMarker + "@127.0.0.1:1/app?sslmode=disable",
+	}, tel)
+	if err == nil {
+		cleanup()
+		t.Fatal("NewDB = nil, want an error")
+	}
+	assertNoURLText(t, err, secretMarker)
 }
