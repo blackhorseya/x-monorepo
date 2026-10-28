@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
 import { useKey } from "./helpers";
+import { uid } from "../uid";
 
 // /accounts: DB-managed accounts and their API keys (identity.v1.IdentityService).
 // Runs in the auth project: the server is auth.mode=required, so the admin gate is
@@ -27,7 +28,7 @@ test("no admin role: no nav entry, and the route says so", async ({ page }) => {
 });
 
 test("admin: create account → key (secret shown once) → revoke → disable / enable", async ({ page }) => {
-  const name = `e2e-acct-${Date.now()}`;
+  const name = `e2e-acct-${uid()}`;
   await page.goto("/accounts");
   await useKey(page, ADMIN_KEY);
 
@@ -109,7 +110,7 @@ test("admin: create account → key (secret shown once) → revoke → disable /
 
 // Revoke taking effect is the resolver cache's 30s contract (adapters/auth/resolver_test.go), too slow for here.
 test("the key the dialog showed really authenticates", async ({ page, request }) => {
-  const name = `e2e-key-${Date.now()}`;
+  const name = `e2e-key-${uid()}`;
   await page.goto("/accounts");
   await useKey(page, ADMIN_KEY);
   await page.getByLabel("Name", { exact: true }).fill(name);

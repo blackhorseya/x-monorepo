@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
+import { uid } from "./uid";
 
 // The server keeps orders in memory for the whole run and the tests run in
 // parallel, so each one works under its own customer id and filters by it.
-const customer = (t: string) => `e2e-${t}-${Date.now()}`;
+const customer = (t: string) => `e2e-${t}-${uid()}`;
 
 test("/ lands on /orders", async ({ page }) => {
   await page.goto("/");
@@ -15,7 +16,7 @@ test("create, see, cancel an order", async ({ page }) => {
   const id = customer("cancel");
   // With a worker, an order for a SKU nobody stocked is REJECTED and cancelled by inventory
   // (a racing PENDING / Cancel button), so seed stock for a SKU of our own, as order.spec.ts does.
-  const sku = withDB ? `E2E-O-${Date.now()}` : "SKU-1";
+  const sku = withDB ? `E2E-O-${uid()}` : "SKU-1";
   if (withDB) {
     await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
     await page.getByLabel("SKU", { exact: true }).fill(sku);

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
 import { subject, useJWT, useKey } from "./helpers";
 import { mintJWT } from "./jwt";
+import { uid } from "../uid";
 
 // The parts of the credential story auth.spec.ts leaves out: the JWT kind
 // (header shows the token's sub; expired / wrong issuer / wrong secret are
@@ -9,7 +10,7 @@ import { mintJWT } from "./jwt";
 // that mutations carry the credential too — the interceptor is read at call
 // time, so a key set after the page loaded must reach the next Create / Set.
 
-const customer = (t: string) => `e2e-auth-${t}-${Date.now()}`;
+const customer = (t: string) => `e2e-auth-${t}-${uid()}`;
 
 test("JWT: sub in the header, rejected variants name the reason", async ({
   page,
@@ -103,7 +104,7 @@ test("mutations carry the credential set after the page loaded", async ({
 test("SetStock under auth: refused anonymous, ok with a key", async ({
   page,
 }) => {
-  const sku = `E2E-AUTH-${Date.now()}`;
+  const sku = `E2E-AUTH-${uid()}`;
   await page.goto("/stock");
   await page.getByLabel("SKU", { exact: true }).fill(sku);
   await page.getByLabel("On hand").fill("3");

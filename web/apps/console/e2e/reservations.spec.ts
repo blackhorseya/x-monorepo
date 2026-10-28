@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
+import { uid } from "./uid";
 
 // /reservations: the status filter buttons drive ?status=, ?order= pins one
 // reservation above the list. Works in both modes — in-memory just has nothing
@@ -52,8 +53,8 @@ test.describe("with a worker", () => {
   test("the list filters by status and the pinned card follows the order", async ({
     page,
   }) => {
-    const sku = `E2E-R-${Date.now()}`;
-    const customer = `e2e-res-${Date.now()}`;
+    const sku = `E2E-R-${uid()}`;
+    const customer = `e2e-res-${uid()}`;
 
     await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
     await page.getByLabel("SKU", { exact: true }).fill(sku);
