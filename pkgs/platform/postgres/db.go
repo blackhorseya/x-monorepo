@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -57,8 +56,8 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 
 	// One parse, whatever the settings: the config that passes the check (when
 	// expect_target is set) is the one the pool dials with, and the zone
-	// TIMESTAMP columns decode in comes from the same parse, not from a regexp
-	// over the raw string (see openPool). Handing gorm the URL would parse it
+	// TIMESTAMP columns decode in comes from the same parse, the runtime
+	// parameters pgx sends the session (see openPool). Handing gorm the URL would parse it
 	// a second time, and a service file or the environment can change between
 	// the two reads.
 	cc, err := parseConn(cfg)
@@ -68,7 +67,7 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	if err := mergeTimeZoneKeys(cc); err != nil {
 		return nil, nil, err
 	}
-	pool := openPool(cc, cfg.URL)
+	pool := openPool(cc)
 
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: pool}), &gorm.Config{
 		TranslateError: true,
@@ -130,14 +129,15 @@ func parseConn(cfg config.Postgres) (*pgx.ConnConfig, error) {
 // refused with. It says nothing of the zones or the rest of the URL.
 var errConflictingTimeZones = errors.New("postgres.url has conflicting timezone parameters")
 
-// mergeTimeZoneKeys leaves cc with at most one timezone parameter. Postgres
-// treats TimeZone, timezone and TIMEZONE as one setting, but pgx keeps one map
-// entry per spelling and sends them in map order, so with two spellings the
-// server applies whichever it reads last, a different one from connection to
-// connection. Spellings that agree are merged into the lower-case key; ones that
-// name different zones are refused, as no answer is right. The same spelling
-// repeated is not a case of this: pgx keeps its last value. "time_zone" is not
-// a spelling of the setting and is left alone (Postgres refuses it).
+// mergeTimeZoneKeys leaves cc with at most one timezone parameter, under the
+// lower-case key, so that "the session's timezone" is one entry that can be read.
+// Postgres treats TimeZone, timezone and TIMEZONE as one setting, but pgx keeps
+// one map entry per spelling and sends them in map order, so with two spellings
+// the server applies whichever it reads last, a different one from connection to
+// connection. Spellings that agree are merged; ones that name different zones
+// are refused, as no answer is right. The same spelling repeated is not a case
+// of this: pgx keeps its last value. "time_zone" is not a spelling of the
+// setting and is left alone (Postgres refuses it).
 func mergeTimeZoneKeys(cc *pgx.ConnConfig) error {
 	var (
 		keys  []string
@@ -153,7 +153,7 @@ func mergeTimeZoneKeys(cc *pgx.ConnConfig) error {
 		keys = append(keys, k)
 		value = v
 	}
-	if len(keys) < 2 {
+	if len(keys) == 0 || (len(keys) == 1 && keys[0] == "timezone") {
 		return nil
 	}
 	for _, k := range keys {
@@ -164,62 +164,19 @@ func mergeTimeZoneKeys(cc *pgx.ConnConfig) error {
 	return nil
 }
 
-// timeZoneMatcher is gorm.io/driver/postgres v1.6.3's own (postgres.go:38), but
-// for the case of the name: the driver knows three spellings, while Postgres
-// and pgx treat every casing as the one setting, and a spelling the matcher
-// missed (TIMEZONE, TimeZONE) reached the session with no codec to match.
-var timeZoneMatcher = regexp.MustCompile("(?i)(time_zone|timezone)=(.*?)($|&| )")
-
-// sessionZone is the zone the driver would install for dsn, or "" for none.
-//
-// gorm's driver runs timeZoneMatcher over the whole raw string, so a password
-// that contains "TimeZone=x" (pTimeZone=x) is taken for a timezone and sent to
-// the server as one, which rejects the login and echoes the fragment. Here a
-// match counts only when the parsed config agrees that a timezone was set: it
-// must have a timezone runtime parameter, and a match equal to its value wins.
-// When the setting is repeated (TimeZone=UTC&TimeZone=Asia/Taipei) the last one
-// wins, as it does for the session pgx opens; the driver's regexp took the
-// first, so the two could disagree on which zone TIMESTAMP columns decode in.
-// A password never lands in RuntimeParams, so its fragment is ignored. With a
-// parameter present but written in a form the matcher reads differently (a
-// percent-encoded slash), the first match is kept, so the driver's refusal of
-// that zone is kept too. A timezone that comes only from PGTZ or a service
-// file has no text in dsn to match, as before: the session gets it, the
-// decoding does not.
-func sessionZone(cc *pgx.ConnConfig, dsn string) string {
-	var param []string
-	for k, v := range cc.RuntimeParams {
-		if strings.EqualFold(k, "timezone") || strings.EqualFold(k, "time_zone") {
-			param = append(param, v)
-		}
-	}
-	if len(param) == 0 {
-		return ""
-	}
-	matches := timeZoneMatcher.FindAllStringSubmatch(dsn, -1)
-	for i := len(matches) - 1; i >= 0; i-- {
-		for _, v := range param {
-			if matches[i][2] == v {
-				return matches[i][2]
-			}
-		}
-	}
-	if len(matches) > 0 {
-		return matches[len(matches)-1][2]
-	}
-
-	return ""
-}
-
 // openPool opens the pool from cc and does what gorm's driver does for a DSN
-// (postgres.go:95-121, v1.6.3), which handing the driver a Conn skips: a
-// TimeZone in the DSN becomes the session's timezone and the zone TIMESTAMP
-// (without time zone) columns decode in. What is dialed comes from cc alone.
-// PreferSimpleProtocol and the other driver options are not used by NewDB.
-func openPool(cc *pgx.ConnConfig, dsn string) *sql.DB {
+// (postgres.go:95-121, v1.6.3), which handing the driver a Conn skips: the zone
+// TIMESTAMP (without time zone) columns decode in is the session's own, the
+// timezone runtime parameter pgx sends (NewDB has merged its spellings into the
+// one lower-case key). Taking it from there rather than from a regexp over the
+// DSN text makes the two the same value whichever way pgx got it (the URL, PGTZ,
+// a service file, a percent-encoded value), and a password can never be one: it
+// is not among the runtime parameters, which TestPasswordFragmentsNeverReachRuntimeParams
+// pins. What is dialed comes from cc alone. PreferSimpleProtocol and the other
+// driver options are not used by NewDB.
+func openPool(cc *pgx.ConnConfig) *sql.DB {
 	var opts []stdlib.OptionOpenDB
-	if zone := sessionZone(cc, dsn); zone != "" {
-		cc.RuntimeParams["timezone"] = zone
+	if zone := cc.RuntimeParams["timezone"]; zone != "" {
 		opts = append(opts, stdlib.OptionAfterConnect(func(_ context.Context, conn *pgx.Conn) error {
 			loc, err := time.LoadLocation(zone)
 			if err != nil {
