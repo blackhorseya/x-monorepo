@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"syscall"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -19,8 +22,13 @@ import (
 // message can name the role or echo a setting value, and either can quote a
 // piece of the connection string; a password with an unencoded @ or one that
 // looks like a setting makes even "which host" a secret. So the message is
-// built here from fixed words, and only the operator's own expect_target (a
-// value they typed) may appear in it.
+// built here from fixed words plus the host:port of each target the config
+// tried, which is what an operator needs to find the failing side. Those come
+// from the parsed config and only when every one of them is shaped like a host
+// (validHost): pgx does not validate it, and a password with an unencoded @ has
+// part of itself cut out as the host. A host that is not shaped like one means
+// no target is printed at all. A password fragment that merely looks like a
+// host name cannot be told apart; that is what expect_target pins.
 //
 // The category stays checkable: errors.Is answers for the causes in the original
 // chain (context.DeadlineExceeded, syscall.ECONNREFUSED and the like), and
@@ -55,8 +63,8 @@ func (e *connError) As(target any) bool {
 }
 
 // redactConnErr reduces err, from opening or pinging a connection, to a
-// connError. target is the operator's postgres.expect_target, or "".
-func redactConnErr(err error, target string) error {
+// connError. cc is the config the connection was made from.
+func redactConnErr(err error, cc *pgx.ConnConfig) error {
 	if err == nil {
 		return nil
 	}
@@ -82,8 +90,8 @@ func redactConnErr(err error, target string) error {
 	default:
 		e.kind = "connection failed"
 	}
-	if target != "" {
-		e.kind += " to " + target
+	if targets := connTargets(cc); targets != "" {
+		e.kind += " to " + targets
 	}
 
 	return e
@@ -93,4 +101,22 @@ func isTimeout(err error) bool {
 	var ne net.Error
 
 	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// connTargets lists the host:port of the main attempt and each fallback, or ""
+// when there is no config or any host is not shaped like one.
+func connTargets(cc *pgx.ConnConfig) string {
+	if cc == nil {
+		return ""
+	}
+	attempts := append([]*pgconn.Config{&cc.Config}, fallbackConfigs(&cc.Config)...)
+	out := make([]string, 0, len(attempts))
+	for _, a := range attempts {
+		if !validHost(a.Host) {
+			return ""
+		}
+		out = append(out, net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))))
+	}
+
+	return strings.Join(out, ", ")
 }

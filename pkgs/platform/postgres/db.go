@@ -74,7 +74,7 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	if err != nil {
 		_ = pool.Close()
 
-		return nil, nil, fmt.Errorf("open postgres: %w", redactConnErr(err, cfg.ExpectTarget))
+		return nil, nil, fmt.Errorf("open postgres: %w", redactConnErr(err, cc))
 	}
 	if err := db.Use(tracing{tracer: tel.Tracer.Tracer("github.com/blackhorseya/x-monorepo/pkgs/platform/postgres")}); err != nil {
 		return nil, nil, fmt.Errorf("gorm tracing plugin: %w", err)
@@ -96,7 +96,7 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	defer cancel()
 	if err := sqlDB.PingContext(c); err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("ping postgres: %w", redactConnErr(err, cfg.ExpectTarget))
+		return nil, nil, fmt.Errorf("ping postgres: %w", redactConnErr(err, cc))
 	}
 
 	return db, cleanup, nil
