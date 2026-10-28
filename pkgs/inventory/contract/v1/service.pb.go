@@ -422,6 +422,97 @@ func (x *GetReservationResponse) GetReservation() *Reservation {
 	return nil
 }
 
+type BatchGetReservationsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 1 to 100 order ids (the same maximum as a page); duplicates are allowed
+	// and answered once.
+	OrderIds      []string `protobuf:"bytes,1,rep,name=order_ids,json=orderIds,proto3" json:"order_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetReservationsRequest) Reset() {
+	*x = BatchGetReservationsRequest{}
+	mi := &file_inventory_v1_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetReservationsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetReservationsRequest) ProtoMessage() {}
+
+func (x *BatchGetReservationsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetReservationsRequest.ProtoReflect.Descriptor instead.
+func (*BatchGetReservationsRequest) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *BatchGetReservationsRequest) GetOrderIds() []string {
+	if x != nil {
+		return x.OrderIds
+	}
+	return nil
+}
+
+type BatchGetReservationsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Only the orders that have one, in no particular order: match on order_id.
+	Reservations  []*Reservation `protobuf:"bytes,1,rep,name=reservations,proto3" json:"reservations,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchGetReservationsResponse) Reset() {
+	*x = BatchGetReservationsResponse{}
+	mi := &file_inventory_v1_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchGetReservationsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchGetReservationsResponse) ProtoMessage() {}
+
+func (x *BatchGetReservationsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchGetReservationsResponse.ProtoReflect.Descriptor instead.
+func (*BatchGetReservationsResponse) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *BatchGetReservationsResponse) GetReservations() []*Reservation {
+	if x != nil {
+		return x.Reservations
+	}
+	return nil
+}
+
 type ListReservationsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// RESERVATION_STATUS_UNSPECIFIED = any status.
@@ -436,7 +527,7 @@ type ListReservationsRequest struct {
 
 func (x *ListReservationsRequest) Reset() {
 	*x = ListReservationsRequest{}
-	mi := &file_inventory_v1_service_proto_msgTypes[8]
+	mi := &file_inventory_v1_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -448,7 +539,7 @@ func (x *ListReservationsRequest) String() string {
 func (*ListReservationsRequest) ProtoMessage() {}
 
 func (x *ListReservationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_inventory_v1_service_proto_msgTypes[8]
+	mi := &file_inventory_v1_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -461,7 +552,7 @@ func (x *ListReservationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReservationsRequest.ProtoReflect.Descriptor instead.
 func (*ListReservationsRequest) Descriptor() ([]byte, []int) {
-	return file_inventory_v1_service_proto_rawDescGZIP(), []int{8}
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListReservationsRequest) GetStatus() ReservationStatus {
@@ -496,7 +587,7 @@ type ListReservationsResponse struct {
 
 func (x *ListReservationsResponse) Reset() {
 	*x = ListReservationsResponse{}
-	mi := &file_inventory_v1_service_proto_msgTypes[9]
+	mi := &file_inventory_v1_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -508,7 +599,7 @@ func (x *ListReservationsResponse) String() string {
 func (*ListReservationsResponse) ProtoMessage() {}
 
 func (x *ListReservationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_inventory_v1_service_proto_msgTypes[9]
+	mi := &file_inventory_v1_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -521,7 +612,7 @@ func (x *ListReservationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReservationsResponse.ProtoReflect.Descriptor instead.
 func (*ListReservationsResponse) Descriptor() ([]byte, []int) {
-	return file_inventory_v1_service_proto_rawDescGZIP(), []int{9}
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListReservationsResponse) GetReservations() []*Reservation {
@@ -552,7 +643,7 @@ type ExpireReservationsRequest struct {
 
 func (x *ExpireReservationsRequest) Reset() {
 	*x = ExpireReservationsRequest{}
-	mi := &file_inventory_v1_service_proto_msgTypes[10]
+	mi := &file_inventory_v1_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -564,7 +655,7 @@ func (x *ExpireReservationsRequest) String() string {
 func (*ExpireReservationsRequest) ProtoMessage() {}
 
 func (x *ExpireReservationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_inventory_v1_service_proto_msgTypes[10]
+	mi := &file_inventory_v1_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -577,7 +668,7 @@ func (x *ExpireReservationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExpireReservationsRequest.ProtoReflect.Descriptor instead.
 func (*ExpireReservationsRequest) Descriptor() ([]byte, []int) {
-	return file_inventory_v1_service_proto_rawDescGZIP(), []int{10}
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ExpireReservationsRequest) GetOlderThan() *durationpb.Duration {
@@ -615,7 +706,7 @@ type ExpiredReservation struct {
 
 func (x *ExpiredReservation) Reset() {
 	*x = ExpiredReservation{}
-	mi := &file_inventory_v1_service_proto_msgTypes[11]
+	mi := &file_inventory_v1_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -627,7 +718,7 @@ func (x *ExpiredReservation) String() string {
 func (*ExpiredReservation) ProtoMessage() {}
 
 func (x *ExpiredReservation) ProtoReflect() protoreflect.Message {
-	mi := &file_inventory_v1_service_proto_msgTypes[11]
+	mi := &file_inventory_v1_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -640,7 +731,7 @@ func (x *ExpiredReservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExpiredReservation.ProtoReflect.Descriptor instead.
 func (*ExpiredReservation) Descriptor() ([]byte, []int) {
-	return file_inventory_v1_service_proto_rawDescGZIP(), []int{11}
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ExpiredReservation) GetOrderId() string {
@@ -675,7 +766,7 @@ type ExpireReservationsResponse struct {
 
 func (x *ExpireReservationsResponse) Reset() {
 	*x = ExpireReservationsResponse{}
-	mi := &file_inventory_v1_service_proto_msgTypes[12]
+	mi := &file_inventory_v1_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -687,7 +778,7 @@ func (x *ExpireReservationsResponse) String() string {
 func (*ExpireReservationsResponse) ProtoMessage() {}
 
 func (x *ExpireReservationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_inventory_v1_service_proto_msgTypes[12]
+	mi := &file_inventory_v1_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -700,7 +791,7 @@ func (x *ExpireReservationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExpireReservationsResponse.ProtoReflect.Descriptor instead.
 func (*ExpireReservationsResponse) Descriptor() ([]byte, []int) {
-	return file_inventory_v1_service_proto_rawDescGZIP(), []int{12}
+	return file_inventory_v1_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ExpireReservationsResponse) GetExpired() []*ExpiredReservation {
@@ -744,7 +835,12 @@ const file_inventory_v1_service_proto_rawDesc = "" +
 	"\x15GetReservationRequest\x12\"\n" +
 	"\border_id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\aorderId\"U\n" +
 	"\x16GetReservationResponse\x12;\n" +
-	"\vreservation\x18\x01 \x01(\v2\x19.inventory.v1.ReservationR\vreservation\"\x97\x01\n" +
+	"\vreservation\x18\x01 \x01(\v2\x19.inventory.v1.ReservationR\vreservation\"L\n" +
+	"\x1bBatchGetReservationsRequest\x12-\n" +
+	"\torder_ids\x18\x01 \x03(\tB\x10\xbaH\r\x92\x01\n" +
+	"\b\x01\x10d\"\x04r\x02\x10\x01R\borderIds\"]\n" +
+	"\x1cBatchGetReservationsResponse\x12=\n" +
+	"\freservations\x18\x01 \x03(\v2\x19.inventory.v1.ReservationR\freservations\"\x97\x01\n" +
 	"\x17ListReservationsRequest\x127\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x1f.inventory.v1.ReservationStatusR\x06status\x12$\n" +
 	"\tpage_size\x18\x02 \x01(\x05B\a\xbaH\x04\x1a\x02(\x00R\bpageSize\x12\x1d\n" +
@@ -766,13 +862,14 @@ const file_inventory_v1_service_proto_rawDesc = "" +
 	"\bheld_for\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\aheldFor\"q\n" +
 	"\x1aExpireReservationsResponse\x12:\n" +
 	"\aexpired\x18\x01 \x03(\v2 .inventory.v1.ExpiredReservationR\aexpired\x12\x17\n" +
-	"\adry_run\x18\x02 \x01(\bR\x06dryRun2\xa2\x04\n" +
+	"\adry_run\x18\x02 \x01(\bR\x06dryRun2\x91\x05\n" +
 	"\x10InventoryService\x12I\n" +
 	"\bSetStock\x12\x1d.inventory.v1.SetStockRequest\x1a\x1e.inventory.v1.SetStockResponse\x12I\n" +
 	"\bGetStock\x12\x1d.inventory.v1.GetStockRequest\x1a\x1e.inventory.v1.GetStockResponse\x12O\n" +
 	"\n" +
 	"ListStocks\x12\x1f.inventory.v1.ListStocksRequest\x1a .inventory.v1.ListStocksResponse\x12[\n" +
-	"\x0eGetReservation\x12#.inventory.v1.GetReservationRequest\x1a$.inventory.v1.GetReservationResponse\x12a\n" +
+	"\x0eGetReservation\x12#.inventory.v1.GetReservationRequest\x1a$.inventory.v1.GetReservationResponse\x12m\n" +
+	"\x14BatchGetReservations\x12).inventory.v1.BatchGetReservationsRequest\x1a*.inventory.v1.BatchGetReservationsResponse\x12a\n" +
 	"\x10ListReservations\x12%.inventory.v1.ListReservationsRequest\x1a&.inventory.v1.ListReservationsResponse\x12g\n" +
 	"\x12ExpireReservations\x12'.inventory.v1.ExpireReservationsRequest\x1a(.inventory.v1.ExpireReservationsResponseB\xbc\x01\n" +
 	"\x10com.inventory.v1B\fServiceProtoP\x01ZIgithub.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1;inventoryv1\xa2\x02\x03IXX\xaa\x02\fInventory.V1\xca\x02\fInventory\\V1\xe2\x02\x18Inventory\\V1\\GPBMetadata\xea\x02\rInventory::V1b\x06proto3"
@@ -789,55 +886,60 @@ func file_inventory_v1_service_proto_rawDescGZIP() []byte {
 	return file_inventory_v1_service_proto_rawDescData
 }
 
-var file_inventory_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_inventory_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_inventory_v1_service_proto_goTypes = []any{
-	(*SetStockRequest)(nil),            // 0: inventory.v1.SetStockRequest
-	(*SetStockResponse)(nil),           // 1: inventory.v1.SetStockResponse
-	(*GetStockRequest)(nil),            // 2: inventory.v1.GetStockRequest
-	(*GetStockResponse)(nil),           // 3: inventory.v1.GetStockResponse
-	(*ListStocksRequest)(nil),          // 4: inventory.v1.ListStocksRequest
-	(*ListStocksResponse)(nil),         // 5: inventory.v1.ListStocksResponse
-	(*GetReservationRequest)(nil),      // 6: inventory.v1.GetReservationRequest
-	(*GetReservationResponse)(nil),     // 7: inventory.v1.GetReservationResponse
-	(*ListReservationsRequest)(nil),    // 8: inventory.v1.ListReservationsRequest
-	(*ListReservationsResponse)(nil),   // 9: inventory.v1.ListReservationsResponse
-	(*ExpireReservationsRequest)(nil),  // 10: inventory.v1.ExpireReservationsRequest
-	(*ExpiredReservation)(nil),         // 11: inventory.v1.ExpiredReservation
-	(*ExpireReservationsResponse)(nil), // 12: inventory.v1.ExpireReservationsResponse
-	(*Stock)(nil),                      // 13: inventory.v1.Stock
-	(*Reservation)(nil),                // 14: inventory.v1.Reservation
-	(ReservationStatus)(0),             // 15: inventory.v1.ReservationStatus
-	(*durationpb.Duration)(nil),        // 16: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),      // 17: google.protobuf.Timestamp
+	(*SetStockRequest)(nil),              // 0: inventory.v1.SetStockRequest
+	(*SetStockResponse)(nil),             // 1: inventory.v1.SetStockResponse
+	(*GetStockRequest)(nil),              // 2: inventory.v1.GetStockRequest
+	(*GetStockResponse)(nil),             // 3: inventory.v1.GetStockResponse
+	(*ListStocksRequest)(nil),            // 4: inventory.v1.ListStocksRequest
+	(*ListStocksResponse)(nil),           // 5: inventory.v1.ListStocksResponse
+	(*GetReservationRequest)(nil),        // 6: inventory.v1.GetReservationRequest
+	(*GetReservationResponse)(nil),       // 7: inventory.v1.GetReservationResponse
+	(*BatchGetReservationsRequest)(nil),  // 8: inventory.v1.BatchGetReservationsRequest
+	(*BatchGetReservationsResponse)(nil), // 9: inventory.v1.BatchGetReservationsResponse
+	(*ListReservationsRequest)(nil),      // 10: inventory.v1.ListReservationsRequest
+	(*ListReservationsResponse)(nil),     // 11: inventory.v1.ListReservationsResponse
+	(*ExpireReservationsRequest)(nil),    // 12: inventory.v1.ExpireReservationsRequest
+	(*ExpiredReservation)(nil),           // 13: inventory.v1.ExpiredReservation
+	(*ExpireReservationsResponse)(nil),   // 14: inventory.v1.ExpireReservationsResponse
+	(*Stock)(nil),                        // 15: inventory.v1.Stock
+	(*Reservation)(nil),                  // 16: inventory.v1.Reservation
+	(ReservationStatus)(0),               // 17: inventory.v1.ReservationStatus
+	(*durationpb.Duration)(nil),          // 18: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),        // 19: google.protobuf.Timestamp
 }
 var file_inventory_v1_service_proto_depIdxs = []int32{
-	13, // 0: inventory.v1.SetStockResponse.stock:type_name -> inventory.v1.Stock
-	13, // 1: inventory.v1.GetStockResponse.stock:type_name -> inventory.v1.Stock
-	13, // 2: inventory.v1.ListStocksResponse.stocks:type_name -> inventory.v1.Stock
-	14, // 3: inventory.v1.GetReservationResponse.reservation:type_name -> inventory.v1.Reservation
-	15, // 4: inventory.v1.ListReservationsRequest.status:type_name -> inventory.v1.ReservationStatus
-	14, // 5: inventory.v1.ListReservationsResponse.reservations:type_name -> inventory.v1.Reservation
-	16, // 6: inventory.v1.ExpireReservationsRequest.older_than:type_name -> google.protobuf.Duration
-	17, // 7: inventory.v1.ExpiredReservation.reserved_at:type_name -> google.protobuf.Timestamp
-	16, // 8: inventory.v1.ExpiredReservation.held_for:type_name -> google.protobuf.Duration
-	11, // 9: inventory.v1.ExpireReservationsResponse.expired:type_name -> inventory.v1.ExpiredReservation
-	0,  // 10: inventory.v1.InventoryService.SetStock:input_type -> inventory.v1.SetStockRequest
-	2,  // 11: inventory.v1.InventoryService.GetStock:input_type -> inventory.v1.GetStockRequest
-	4,  // 12: inventory.v1.InventoryService.ListStocks:input_type -> inventory.v1.ListStocksRequest
-	6,  // 13: inventory.v1.InventoryService.GetReservation:input_type -> inventory.v1.GetReservationRequest
-	8,  // 14: inventory.v1.InventoryService.ListReservations:input_type -> inventory.v1.ListReservationsRequest
-	10, // 15: inventory.v1.InventoryService.ExpireReservations:input_type -> inventory.v1.ExpireReservationsRequest
-	1,  // 16: inventory.v1.InventoryService.SetStock:output_type -> inventory.v1.SetStockResponse
-	3,  // 17: inventory.v1.InventoryService.GetStock:output_type -> inventory.v1.GetStockResponse
-	5,  // 18: inventory.v1.InventoryService.ListStocks:output_type -> inventory.v1.ListStocksResponse
-	7,  // 19: inventory.v1.InventoryService.GetReservation:output_type -> inventory.v1.GetReservationResponse
-	9,  // 20: inventory.v1.InventoryService.ListReservations:output_type -> inventory.v1.ListReservationsResponse
-	12, // 21: inventory.v1.InventoryService.ExpireReservations:output_type -> inventory.v1.ExpireReservationsResponse
-	16, // [16:22] is the sub-list for method output_type
-	10, // [10:16] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	15, // 0: inventory.v1.SetStockResponse.stock:type_name -> inventory.v1.Stock
+	15, // 1: inventory.v1.GetStockResponse.stock:type_name -> inventory.v1.Stock
+	15, // 2: inventory.v1.ListStocksResponse.stocks:type_name -> inventory.v1.Stock
+	16, // 3: inventory.v1.GetReservationResponse.reservation:type_name -> inventory.v1.Reservation
+	16, // 4: inventory.v1.BatchGetReservationsResponse.reservations:type_name -> inventory.v1.Reservation
+	17, // 5: inventory.v1.ListReservationsRequest.status:type_name -> inventory.v1.ReservationStatus
+	16, // 6: inventory.v1.ListReservationsResponse.reservations:type_name -> inventory.v1.Reservation
+	18, // 7: inventory.v1.ExpireReservationsRequest.older_than:type_name -> google.protobuf.Duration
+	19, // 8: inventory.v1.ExpiredReservation.reserved_at:type_name -> google.protobuf.Timestamp
+	18, // 9: inventory.v1.ExpiredReservation.held_for:type_name -> google.protobuf.Duration
+	13, // 10: inventory.v1.ExpireReservationsResponse.expired:type_name -> inventory.v1.ExpiredReservation
+	0,  // 11: inventory.v1.InventoryService.SetStock:input_type -> inventory.v1.SetStockRequest
+	2,  // 12: inventory.v1.InventoryService.GetStock:input_type -> inventory.v1.GetStockRequest
+	4,  // 13: inventory.v1.InventoryService.ListStocks:input_type -> inventory.v1.ListStocksRequest
+	6,  // 14: inventory.v1.InventoryService.GetReservation:input_type -> inventory.v1.GetReservationRequest
+	8,  // 15: inventory.v1.InventoryService.BatchGetReservations:input_type -> inventory.v1.BatchGetReservationsRequest
+	10, // 16: inventory.v1.InventoryService.ListReservations:input_type -> inventory.v1.ListReservationsRequest
+	12, // 17: inventory.v1.InventoryService.ExpireReservations:input_type -> inventory.v1.ExpireReservationsRequest
+	1,  // 18: inventory.v1.InventoryService.SetStock:output_type -> inventory.v1.SetStockResponse
+	3,  // 19: inventory.v1.InventoryService.GetStock:output_type -> inventory.v1.GetStockResponse
+	5,  // 20: inventory.v1.InventoryService.ListStocks:output_type -> inventory.v1.ListStocksResponse
+	7,  // 21: inventory.v1.InventoryService.GetReservation:output_type -> inventory.v1.GetReservationResponse
+	9,  // 22: inventory.v1.InventoryService.BatchGetReservations:output_type -> inventory.v1.BatchGetReservationsResponse
+	11, // 23: inventory.v1.InventoryService.ListReservations:output_type -> inventory.v1.ListReservationsResponse
+	14, // 24: inventory.v1.InventoryService.ExpireReservations:output_type -> inventory.v1.ExpireReservationsResponse
+	18, // [18:25] is the sub-list for method output_type
+	11, // [11:18] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_inventory_v1_service_proto_init() }
@@ -852,7 +954,7 @@ func file_inventory_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_inventory_v1_service_proto_rawDesc), len(file_inventory_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

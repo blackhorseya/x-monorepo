@@ -64,6 +64,14 @@ type GetReservationInput struct {
 	OrderID string
 }
 
+type BatchGetReservationsInput struct {
+	OrderIDs []string
+}
+
+type BatchGetReservationsOutput struct {
+	Reservations []ReservationOutput
+}
+
 type ReservationOutput struct {
 	OrderID       string
 	Lines         []Line

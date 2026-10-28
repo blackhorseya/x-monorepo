@@ -99,6 +99,33 @@ components:
         - "2024-12-25T12:00:00Z"
       format: date-time
       description: A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC.
+    inventory.v1.BatchGetReservationsRequest:
+      type: object
+      properties:
+        orderIds:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          title: order_ids
+          maxItems: 100
+          minItems: 1
+          description: |-
+            1 to 100 order ids (the same maximum as a page); duplicates are allowed
+             and answered once.
+      title: BatchGetReservationsRequest
+      additionalProperties: false
+    inventory.v1.BatchGetReservationsResponse:
+      type: object
+      properties:
+        reservations:
+          type: array
+          items:
+            $ref: '#/components/schemas/inventory.v1.Reservation'
+          title: reservations
+          description: 'Only the orders that have one, in no particular order: match on order_id.'
+      title: BatchGetReservationsResponse
+      additionalProperties: false
     inventory.v1.ExpireReservationsRequest:
       type: object
       properties:
@@ -437,6 +464,48 @@ security:
   - apiKey: []
   - bearer: []
 paths:
+  /inventory.v1.InventoryService/BatchGetReservations:
+    post:
+      tags:
+        - inventory.v1.InventoryService
+      summary: BatchGetReservations
+      description: |-
+        BatchGetReservations reads the reservations of up to 100 orders in one
+         query (GetReservation for a list): an order without one is left out of the
+         response, not an error. Same access as GetReservation.
+      operationId: inventory.v1.InventoryService.BatchGetReservations
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory.v1.BatchGetReservationsRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory.v1.BatchGetReservationsResponse'
   /inventory.v1.InventoryService/ExpireReservations:
     post:
       tags:

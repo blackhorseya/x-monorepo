@@ -119,3 +119,36 @@ func mustStock(t *testing.T, onHand, reserved int32) *stock.Stock {
 	}
 	return s
 }
+
+// FindByOrderIDs returns the reservations that exist, once each, whatever the
+// order of the ids; unknown ids are skipped — the same contract as Postgres.
+func TestReservationRepository_FindByOrderIDs(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewReservationRepository()
+	now := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	for _, id := range []string{"o-1", "o-2", "o-3"} {
+		r, _ := reservation.Tombstone(id, now)
+		if err := repo.Add(c, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rs, err := repo.FindByOrderIDs(c, []string{"o-3", "o-missing", "o-1", "o-3"})
+	if err != nil || len(rs) != 2 {
+		t.Fatalf("FindByOrderIDs = %v, %v; want o-1 and o-3", rs, err)
+	}
+	got := map[string]bool{}
+	for _, r := range rs {
+		got[r.OrderID()] = true
+	}
+	if !got["o-1"] || !got["o-3"] {
+		t.Fatalf("FindByOrderIDs = %v", got)
+	}
+	if rs, err := repo.FindByOrderIDs(c, nil); err != nil || len(rs) != 0 {
+		t.Fatalf("no ids = %v, %v", rs, err)
+	}
+	cancelled, cancel := context.WithCancel(c)
+	cancel()
+	if _, err := repo.FindByOrderIDs(cancelled, []string{"o-1"}); err == nil {
+		t.Fatal("cancelled context must fail")
+	}
+}

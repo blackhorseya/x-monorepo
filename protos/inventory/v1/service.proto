@@ -20,6 +20,10 @@ service InventoryService {
   rpc ListStocks(ListStocksRequest) returns (ListStocksResponse);
   // GetReservation reads the outcome inventory recorded for an order.
   rpc GetReservation(GetReservationRequest) returns (GetReservationResponse);
+  // BatchGetReservations reads the reservations of up to 100 orders in one
+  // query (GetReservation for a list): an order without one is left out of the
+  // response, not an error. Same access as GetReservation.
+  rpc BatchGetReservations(BatchGetReservationsRequest) returns (BatchGetReservationsResponse);
   // ListReservations pages through reservations newest first, optionally by status.
   rpc ListReservations(ListReservationsRequest) returns (ListReservationsResponse);
   // ExpireReservations is `worker expire` over RPC: RESERVED reservations held
@@ -72,6 +76,23 @@ message GetReservationRequest {
 
 message GetReservationResponse {
   Reservation reservation = 1;
+}
+
+message BatchGetReservationsRequest {
+  // 1 to 100 order ids (the same maximum as a page); duplicates are allowed
+  // and answered once.
+  repeated string order_ids = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 100
+    items: {
+      string: {min_len: 1}
+    }
+  }];
+}
+
+message BatchGetReservationsResponse {
+  // Only the orders that have one, in no particular order: match on order_id.
+  repeated Reservation reservations = 1;
 }
 
 message ListReservationsRequest {

@@ -258,6 +258,20 @@ func TestRepositories_Postgres(t *testing.T) {
 	if err != nil || len(due) != 1 || due[0].OrderID() != "o-old" {
 		t.Fatalf("limit 1 = %v, %v", ids(due), err)
 	}
+
+	// ── find by order ids: one query, lines preloaded, unknown and repeated ids tolerated ──
+	found, err := reservations.FindByOrderIDs(c, []string{"o-1", "o-missing", "o-old", "o-1"})
+	if err != nil || len(found) != 2 {
+		t.Fatalf("FindByOrderIDs = %v, %v; want o-1 and o-old", ids(found), err)
+	}
+	for _, r := range found {
+		if len(r.Lines()) == 0 {
+			t.Fatalf("FindByOrderIDs lost the lines of %s", r.OrderID())
+		}
+	}
+	if found, err := reservations.FindByOrderIDs(c, []string{"o-missing"}); err != nil || len(found) != 0 {
+		t.Fatalf("FindByOrderIDs unknown = %v, %v", ids(found), err)
+	}
 }
 
 func ids(rs []*reservation.Reservation) []string {
