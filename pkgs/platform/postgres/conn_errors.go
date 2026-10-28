@@ -74,7 +74,16 @@ func redactConnErr(err error, target string) error {
 	)
 	switch {
 	case errors.As(err, &pgErr):
-		e.kind, e.sqlstate, e.severity = "server rejected the connection", pgErr.Code, pgErr.Severity
+		e.kind = "server rejected the connection"
+		// The server is not trusted for text: a code that is not a SQLSTATE or
+		// a severity that is not one of Postgres's own is dropped, and with no
+		// valid code there is no PgError to hand out.
+		if validSQLSTATE(pgErr.Code) {
+			e.sqlstate = pgErr.Code
+			if severities[pgErr.Severity] {
+				e.severity = pgErr.Severity
+			}
+		}
 	case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
 		e.kind = "connection timed out"
 	case errors.As(err, &dns):
@@ -123,3 +132,24 @@ func redactIfConnect(err error, target string) error {
 // errUnparsableURL is what a URL pgx cannot parse is reported as: pgx's own
 // error quotes it, user and database included.
 var errUnparsableURL = errors.New("postgres.url is not a valid connection string")
+
+// validSQLSTATE reports whether c is a SQLSTATE: five characters of 0-9 and A-Z.
+func validSQLSTATE(c string) bool {
+	if len(c) != 5 {
+		return false
+	}
+	for i := 0; i < len(c); i++ {
+		if ch := c[i]; (ch < '0' || ch > '9') && (ch < 'A' || ch > 'Z') {
+			return false
+		}
+	}
+
+	return true
+}
+
+// severities are the severity strings Postgres itself sends in an error or
+// notice (the S field, which can be localized, is not among them when it is).
+var severities = map[string]bool{
+	"ERROR": true, "FATAL": true, "PANIC": true, "WARNING": true,
+	"NOTICE": true, "DEBUG": true, "INFO": true, "LOG": true,
+}
