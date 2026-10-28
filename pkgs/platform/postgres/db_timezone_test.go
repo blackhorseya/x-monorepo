@@ -58,3 +58,186 @@ func TestNewDB_ExpectTargetKeepsTimestampDecoding(t *testing.T) {
 		t.Fatalf("baseline zone offset = %ds, want 28800 (TimeZone=Asia/Taipei is the driver's)", off)
 	}
 }
+
+// The zone TIMESTAMP columns decode in follows gorm's driver for every way a
+// TimeZone can be written, now that NewDB reads it from the parsed config
+// instead of leaving it to the driver's regexp over the raw string.
+func TestNewDB_TimestampZoneMatrix(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	base := pgtest.URL(t)
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+
+	cases := []struct {
+		name   string
+		query  string
+		env    string
+		offset int    // seconds east of UTC the decoded TIMESTAMP carries
+		reject string // set: NewDB must fail, with this in the error
+		// session, when set, is the zone the server session must report.
+		session string
+	}{
+		{name: "none", offset: 0},
+		{name: "TimeZone", query: "TimeZone=Asia/Taipei", offset: 8 * 3600},
+		{name: "lowercase timezone", query: "timezone=Asia/Taipei", offset: 8 * 3600},
+		{name: "time_zone is not a Postgres parameter, refused as before", query: "time_zone=Asia/Taipei", reject: "SQLSTATE 42704"},
+		{name: "UTC", query: "TimeZone=UTC", offset: 0},
+		{name: "repeated, last wins (UTC then Taipei)", query: "TimeZone=UTC&TimeZone=Asia/Taipei", offset: 8 * 3600, session: "Asia/Taipei"},
+		{name: "repeated, last wins (Taipei then UTC)", query: "TimeZone=Asia/Taipei&TimeZone=UTC", offset: 0, session: "UTC"},
+		{name: "after another parameter", query: "application_name=x&TimeZone=Asia/Taipei", offset: 8 * 3600},
+		{name: "PGTZ is the session's only, decoding stays UTC", env: "Asia/Taipei", offset: 0},
+		{name: "percent-encoded slash is refused as before", query: "TimeZone=Asia%2FTaipei", reject: "connection failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env != "" {
+				t.Setenv("PGTZ", tc.env)
+			}
+			dsn := base
+			if tc.query != "" {
+				dsn += sep + tc.query
+			}
+			db, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn}, tel)
+			if tc.reject != "" {
+				if err == nil {
+					cleanup()
+					t.Fatal("NewDB = nil, want a refusal")
+				}
+				if !strings.Contains(err.Error(), tc.reject) {
+					t.Fatalf("error = %q, want %q", err, tc.reject)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			var got time.Time
+			if err := db.Raw("SELECT TIMESTAMP '2026-10-28 12:00:00'").Scan(&got).Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, off := got.Zone(); off != tc.offset {
+				t.Fatalf("decoded %s (offset %ds), want offset %ds", got, off, tc.offset)
+			}
+			if tc.session != "" {
+				var tz string
+				if err := db.Raw("SHOW timezone").Scan(&tz).Error; err != nil {
+					t.Fatal(err)
+				}
+				if tz != tc.session {
+					t.Fatalf("session timezone = %q, want %q: decoding and the session must agree", tz, tc.session)
+				}
+			}
+		})
+	}
+}
+
+// Several spellings of TimeZone (TimeZone, timezone, TIMEZONE) that agree are
+// one setting: they are merged, and the session and the zone TIMESTAMP columns
+// decode in are that value on every connection. Many pools per DSN, because one
+// pool agreeing proves nothing: pgx sends the parameters from a map, so a
+// spelling left behind makes the server's pick vary from connection to
+// connection. (Spellings that disagree are refused: see
+// TestNewDB_ConflictingTimeZoneKeysAreRefused.)
+func TestNewDB_SameTimeZoneInSeveralCasesIsMerged(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	base := pgtest.URL(t)
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+
+	cases := []struct{ query, session string }{
+		{"TimeZone=Asia/Taipei&timezone=Asia/Taipei", "Asia/Taipei"},
+		{"TIMEZONE=UTC&TimeZone=UTC&timezone=UTC", "UTC"},
+		{"timezone=Asia/Taipei&TimeZone=Asia/Taipei", "Asia/Taipei"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.query, func(t *testing.T) {
+			for i := 0; i < 20; i++ {
+				db, cleanup, err := postgres.NewDB(config.Postgres{URL: base + sep + tc.query}, tel)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var row struct {
+					Actual  time.Time
+					Decoded time.Time
+					Session string
+				}
+				err = db.Raw("SELECT CURRENT_TIMESTAMP AS actual, LOCALTIMESTAMP AS decoded, current_setting('TimeZone') AS session").Scan(&row).Error
+				cleanup()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if d := row.Decoded.Sub(row.Actual); d > time.Minute || d < -time.Minute {
+					t.Fatalf("pool %d: LOCALTIMESTAMP decodes %s away from CURRENT_TIMESTAMP (session %q): session and decoding disagree", i, d, row.Session)
+				}
+				if row.Session != tc.session {
+					t.Fatalf("pool %d: session timezone = %q, want %q", i, row.Session, tc.session)
+				}
+			}
+		})
+	}
+}
+
+// Any casing of the setting's name is the setting: the zone TIMESTAMP columns
+// decode in is the one the session gets, whichever way the DSN spells it, and
+// including spellings that gorm's own matcher (time_zone|TimeZone|timezone)
+// does not know. Many pools per DSN, 30, because the failure of an unmerged
+// spelling is about the codec, which is deterministic, and the failure of a
+// merged one is about the session, which is not.
+func TestNewDB_AnyCasingOfTimeZoneDecodesInThatZone(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	base := pgtest.URL(t)
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+
+	for _, query := range []string{
+		"TIMEZONE=Asia/Taipei",
+		"TimeZONE=Asia/Taipei",
+		"TIMEZONE=Asia/Taipei&TimeZONE=Asia/Taipei",
+		"TIMEZONE=Asia/Taipei&TimeZone=Asia/Taipei&timezone=Asia/Taipei",
+	} {
+		t.Run(query, func(t *testing.T) {
+			for i := 0; i < 30; i++ {
+				db, cleanup, err := postgres.NewDB(config.Postgres{URL: base + sep + query}, tel)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var row struct {
+					Actual  time.Time
+					Decoded time.Time
+					Session string
+				}
+				err = db.Raw("SELECT CURRENT_TIMESTAMP AS actual, LOCALTIMESTAMP AS decoded, current_setting('TimeZone') AS session").Scan(&row).Error
+				cleanup()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if row.Session != "Asia/Taipei" {
+					t.Fatalf("pool %d: session timezone = %q, want Asia/Taipei", i, row.Session)
+				}
+				if d := row.Decoded.Sub(row.Actual); d > time.Minute || d < -time.Minute {
+					t.Fatalf("pool %d: LOCALTIMESTAMP decodes %s away from CURRENT_TIMESTAMP: session and decoding disagree", i, d)
+				}
+			}
+		})
+	}
+}

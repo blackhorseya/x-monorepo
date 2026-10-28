@@ -6,8 +6,10 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -53,30 +55,29 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 		return nil, func() {}, nil
 	}
 
-	dialector := postgres.Open(cfg.URL)
-	var checked *sql.DB // the pool opened from the checked parse, closed if gorm.Open fails
-	if cfg.ExpectTarget != "" {
-		// Parse once: the config that passes the check is the one the pool
-		// dials with. Handing gorm the URL would parse it again, and a service
-		// file or the environment can change between the two reads.
-		cc, err := ParseCheckedConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true})
-		if err != nil {
-			return nil, nil, fmt.Errorf("postgres.expect_target: %w", err)
-		}
-		checked = openChecked(cc, cfg.URL)
-		dialector = postgres.New(postgres.Config{Conn: checked})
+	// One parse, whatever the settings: the config that passes the check (when
+	// expect_target is set) is the one the pool dials with, and the zone
+	// TIMESTAMP columns decode in comes from the same parse, not from a regexp
+	// over the raw string (see openPool). Handing gorm the URL would parse it
+	// a second time, and a service file or the environment can change between
+	// the two reads.
+	cc, err := parseConn(cfg)
+	if err != nil {
+		return nil, nil, err
 	}
+	if err := mergeTimeZoneKeys(cc); err != nil {
+		return nil, nil, err
+	}
+	pool := openPool(cc, cfg.URL)
 
-	db, err := gorm.Open(dialector, &gorm.Config{
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: pool}), &gorm.Config{
 		TranslateError: true,
 		Logger:         gormlogger.Default.LogMode(gormlogger.Silent),
 	})
 	if err != nil {
-		if checked != nil {
-			_ = checked.Close()
-		}
+		_ = pool.Close()
 
-		return nil, nil, fmt.Errorf("open postgres: %w", err)
+		return nil, nil, fmt.Errorf("open postgres: %w", redactConnErr(err, cfg.ExpectTarget))
 	}
 	if err := db.Use(tracing{tracer: tel.Tracer.Tracer("github.com/blackhorseya/x-monorepo/pkgs/platform/postgres")}); err != nil {
 		return nil, nil, fmt.Errorf("gorm tracing plugin: %w", err)
@@ -98,30 +99,126 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	defer cancel()
 	if err := sqlDB.PingContext(c); err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("ping postgres: %w", err)
+		return nil, nil, fmt.Errorf("ping postgres: %w", redactConnErr(err, cfg.ExpectTarget))
 	}
 
 	return db, cleanup, nil
 }
 
-// timeZoneMatcher is gorm.io/driver/postgres v1.6.3's own (postgres.go:38):
-// the TimeZone it looks for in the DSN text.
-var timeZoneMatcher = regexp.MustCompile("(time_zone|TimeZone|timezone)=(.*?)($|&| )")
+// parseConn parses cfg.URL once. With cfg.ExpectTarget it also checks the
+// target (and returns the guard's error naming it); without, it only parses.
+// Neither error carries anything parsed from the URL: pgx's own parse error can
+// quote the string.
+func parseConn(cfg config.Postgres) (*pgx.ConnConfig, error) {
+	if cfg.ExpectTarget != "" {
+		cc, err := ParseCheckedConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true})
+		if err != nil {
+			return nil, fmt.Errorf("postgres.expect_target: %w", err)
+		}
 
-// openChecked opens the pool from cc, the config the guard approved, and does
-// what gorm's driver does for a DSN (postgres.go:95-121, v1.6.3) so that the
-// check changes where NewDB dials and nothing else: a TimeZone in the DSN
-// becomes the session's timezone and the zone TIMESTAMP (without time zone)
-// columns decode in. Handing the driver a Conn skips all of that.
+		return cc, nil
+	}
+	cc, err := pgx.ParseConfig(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres: %w", errUnparsableURL)
+	}
+
+	return cc, nil
+}
+
+// errConflictingTimeZones is what a URL that names two different zones is
+// refused with. It says nothing of the zones or the rest of the URL.
+var errConflictingTimeZones = errors.New("postgres.url has conflicting timezone parameters")
+
+// mergeTimeZoneKeys leaves cc with at most one timezone parameter. Postgres
+// treats TimeZone, timezone and TIMEZONE as one setting, but pgx keeps one map
+// entry per spelling and sends them in map order, so with two spellings the
+// server applies whichever it reads last, a different one from connection to
+// connection. Spellings that agree are merged into the lower-case key; ones that
+// name different zones are refused, as no answer is right. The same spelling
+// repeated is not a case of this: pgx keeps its last value. "time_zone" is not
+// a spelling of the setting and is left alone (Postgres refuses it).
+func mergeTimeZoneKeys(cc *pgx.ConnConfig) error {
+	var (
+		keys  []string
+		value string
+	)
+	for k, v := range cc.RuntimeParams {
+		if !strings.EqualFold(k, "timezone") {
+			continue
+		}
+		if len(keys) > 0 && v != value {
+			return errConflictingTimeZones
+		}
+		keys = append(keys, k)
+		value = v
+	}
+	if len(keys) < 2 {
+		return nil
+	}
+	for _, k := range keys {
+		delete(cc.RuntimeParams, k)
+	}
+	cc.RuntimeParams["timezone"] = value
+
+	return nil
+}
+
+// timeZoneMatcher is gorm.io/driver/postgres v1.6.3's own (postgres.go:38), but
+// for the case of the name: the driver knows three spellings, while Postgres
+// and pgx treat every casing as the one setting, and a spelling the matcher
+// missed (TIMEZONE, TimeZONE) reached the session with no codec to match.
+var timeZoneMatcher = regexp.MustCompile("(?i)(time_zone|timezone)=(.*?)($|&| )")
+
+// sessionZone is the zone the driver would install for dsn, or "" for none.
 //
-// The zone is read from dsn the way the driver reads it, as text, so with and
-// without expect_target the same URL means the same thing. That is not a
-// second parse: what is dialed comes from cc alone. PreferSimpleProtocol and
-// the other driver options are not used by NewDB.
-func openChecked(cc *pgx.ConnConfig, dsn string) *sql.DB {
+// gorm's driver runs timeZoneMatcher over the whole raw string, so a password
+// that contains "TimeZone=x" (pTimeZone=x) is taken for a timezone and sent to
+// the server as one, which rejects the login and echoes the fragment. Here a
+// match counts only when the parsed config agrees that a timezone was set: it
+// must have a timezone runtime parameter, and a match equal to its value wins.
+// When the setting is repeated (TimeZone=UTC&TimeZone=Asia/Taipei) the last one
+// wins, as it does for the session pgx opens; the driver's regexp took the
+// first, so the two could disagree on which zone TIMESTAMP columns decode in.
+// A password never lands in RuntimeParams, so its fragment is ignored. With a
+// parameter present but written in a form the matcher reads differently (a
+// percent-encoded slash), the first match is kept, so the driver's refusal of
+// that zone is kept too. A timezone that comes only from PGTZ or a service
+// file has no text in dsn to match, as before: the session gets it, the
+// decoding does not.
+func sessionZone(cc *pgx.ConnConfig, dsn string) string {
+	var param []string
+	for k, v := range cc.RuntimeParams {
+		if strings.EqualFold(k, "timezone") || strings.EqualFold(k, "time_zone") {
+			param = append(param, v)
+		}
+	}
+	if len(param) == 0 {
+		return ""
+	}
+	matches := timeZoneMatcher.FindAllStringSubmatch(dsn, -1)
+	for i := len(matches) - 1; i >= 0; i-- {
+		for _, v := range param {
+			if matches[i][2] == v {
+				return matches[i][2]
+			}
+		}
+	}
+	if len(matches) > 0 {
+		return matches[len(matches)-1][2]
+	}
+
+	return ""
+}
+
+// openPool opens the pool from cc and does what gorm's driver does for a DSN
+// (postgres.go:95-121, v1.6.3), which handing the driver a Conn skips: a
+// TimeZone in the DSN becomes the session's timezone and the zone TIMESTAMP
+// (without time zone) columns decode in. What is dialed comes from cc alone.
+// PreferSimpleProtocol and the other driver options are not used by NewDB.
+func openPool(cc *pgx.ConnConfig, dsn string) *sql.DB {
 	var opts []stdlib.OptionOpenDB
-	if m := timeZoneMatcher.FindStringSubmatch(dsn); len(m) > 2 {
-		zone := m[2]
+	if zone := sessionZone(cc, dsn); zone != "" {
 		cc.RuntimeParams["timezone"] = zone
 		opts = append(opts, stdlib.OptionAfterConnect(func(_ context.Context, conn *pgx.Conn) error {
 			loc, err := time.LoadLocation(zone)
