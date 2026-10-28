@@ -1,0 +1,60 @@
+package postgres_test
+
+import (
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
+)
+
+// Integration (pgtest): postgres.expect_target only checks where NewDB dials;
+// it must not change what a row decodes to. gorm's driver, given a DSN with a
+// TimeZone, decodes TIMESTAMP (without time zone) columns in that zone; a pool
+// opened from an already parsed config has to keep doing so, or every
+// timestamp the repositories read shifts by the zone's offset.
+func TestNewDB_ExpectTargetKeepsTimestampDecoding(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+
+	base := pgtest.URL(t)
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+	dsn := base + sep + "TimeZone=Asia/Taipei"
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(expectTarget string) time.Time {
+		t.Helper()
+		db, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn, ExpectTarget: expectTarget}, tel)
+		if err != nil {
+			t.Fatalf("NewDB(expect_target=%q): %v", expectTarget, err)
+		}
+		defer cleanup()
+		var got time.Time
+		if err := db.Raw("SELECT TIMESTAMP '2026-10-28 12:00:00'").Scan(&got).Error; err != nil {
+			t.Fatal(err)
+		}
+
+		return got
+	}
+
+	want := read("")
+	if got := read(u.Host); !got.Equal(want) {
+		t.Fatalf("with expect_target a TIMESTAMP reads as %s, without it %s: the check changed decoding", got.UTC(), want.UTC())
+	}
+	if _, off := want.Zone(); off != 8*3600 {
+		t.Fatalf("baseline zone offset = %ds, want 28800 (TimeZone=Asia/Taipei is the driver's)", off)
+	}
+}
