@@ -6,6 +6,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -64,6 +65,9 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := mergeTimeZoneKeys(cc); err != nil {
+		return nil, nil, err
+	}
 	pool := openPool(cc, cfg.URL)
 
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: pool}), &gorm.Config{
@@ -120,6 +124,44 @@ func parseConn(cfg config.Postgres) (*pgx.ConnConfig, error) {
 	}
 
 	return cc, nil
+}
+
+// errConflictingTimeZones is what a URL that names two different zones is
+// refused with. It says nothing of the zones or the rest of the URL.
+var errConflictingTimeZones = errors.New("postgres.url has conflicting timezone parameters")
+
+// mergeTimeZoneKeys leaves cc with at most one timezone parameter. Postgres
+// treats TimeZone, timezone and TIMEZONE as one setting, but pgx keeps one map
+// entry per spelling and sends them in map order, so with two spellings the
+// server applies whichever it reads last, a different one from connection to
+// connection. Spellings that agree are merged into the lower-case key; ones that
+// name different zones are refused, as no answer is right. The same spelling
+// repeated is not a case of this: pgx keeps its last value. "time_zone" is not
+// a spelling of the setting and is left alone (Postgres refuses it).
+func mergeTimeZoneKeys(cc *pgx.ConnConfig) error {
+	var (
+		keys  []string
+		value string
+	)
+	for k, v := range cc.RuntimeParams {
+		if !strings.EqualFold(k, "timezone") {
+			continue
+		}
+		if len(keys) > 0 && v != value {
+			return errConflictingTimeZones
+		}
+		keys = append(keys, k)
+		value = v
+	}
+	if len(keys) < 2 {
+		return nil
+	}
+	for _, k := range keys {
+		delete(cc.RuntimeParams, k)
+	}
+	cc.RuntimeParams["timezone"] = value
+
+	return nil
 }
 
 // timeZoneMatcher is gorm.io/driver/postgres v1.6.3's own (postgres.go:38):

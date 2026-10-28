@@ -139,14 +139,14 @@ func TestNewDB_TimestampZoneMatrix(t *testing.T) {
 	}
 }
 
-// The zone a DSN's last TimeZone names, however each spelling is cased, is
-// both the session's timezone and the one TIMESTAMP columns decode in; they
-// must never disagree. pgx sends every runtime parameter in a map, and Postgres
-// treats TimeZone, timezone and TIMEZONE as the same setting, so a DSN that
-// leaves two spellings in that map lets the server apply whichever it reads
-// last, differently from one connection to the next. Hence many pools per DSN:
-// one pool agreeing proves nothing.
-func TestNewDB_MixedCaseTimeZoneKeysAgreeWithDecoding(t *testing.T) {
+// Several spellings of TimeZone (TimeZone, timezone, TIMEZONE) that agree are
+// one setting: they are merged, and the session and the zone TIMESTAMP columns
+// decode in are that value on every connection. Many pools per DSN, because one
+// pool agreeing proves nothing: pgx sends the parameters from a map, so a
+// spelling left behind makes the server's pick vary from connection to
+// connection. (Spellings that disagree are refused: see
+// TestNewDB_ConflictingTimeZoneKeysAreRefused.)
+func TestNewDB_SameTimeZoneInSeveralCasesIsMerged(t *testing.T) {
 	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
 	if err != nil {
 		t.Fatal(err)
@@ -159,9 +159,9 @@ func TestNewDB_MixedCaseTimeZoneKeysAgreeWithDecoding(t *testing.T) {
 	}
 
 	cases := []struct{ query, session string }{
-		{"TimeZone=UTC&timezone=Asia/Taipei", "Asia/Taipei"},
-		{"TIMEZONE=UTC&TimeZone=Asia/Taipei", "Asia/Taipei"},
-		{"timezone=Asia/Taipei&TimeZone=UTC", "UTC"},
+		{"TimeZone=Asia/Taipei&timezone=Asia/Taipei", "Asia/Taipei"},
+		{"TIMEZONE=UTC&TimeZone=UTC&timezone=UTC", "UTC"},
+		{"timezone=Asia/Taipei&TimeZone=Asia/Taipei", "Asia/Taipei"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.query, func(t *testing.T) {
@@ -184,7 +184,7 @@ func TestNewDB_MixedCaseTimeZoneKeysAgreeWithDecoding(t *testing.T) {
 					t.Fatalf("pool %d: LOCALTIMESTAMP decodes %s away from CURRENT_TIMESTAMP (session %q): session and decoding disagree", i, d, row.Session)
 				}
 				if row.Session != tc.session {
-					t.Fatalf("pool %d: session timezone = %q, want the last one, %q", i, row.Session, tc.session)
+					t.Fatalf("pool %d: session timezone = %q, want %q", i, row.Session, tc.session)
 				}
 			}
 		})
