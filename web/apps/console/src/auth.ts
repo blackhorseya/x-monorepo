@@ -34,6 +34,10 @@ function load(): Credential | null {
 }
 
 let current: Credential | null = load();
+// Bumped on every setCredential. Anything that answers "who am I" for the current credential keys
+// its cache by this, so an answer for the previous credential can never be read as the new one's.
+// A counter, not the credential: the secret stays out of query keys (devtools, error reports).
+let generation = 0;
 const listeners = new Set<() => void>();
 
 export function getCredential(): Credential | null {
@@ -42,6 +46,7 @@ export function getCredential(): Credential | null {
 
 export function setCredential(c: Credential | null): void {
   current = c && c.value.trim() ? { kind: c.kind, value: c.value.trim() } : null;
+  generation++;
   try {
     if (current) localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
     else localStorage.setItem(STORAGE_KEY, "null"); // explicit "none" beats the env seed
@@ -51,14 +56,17 @@ export function setCredential(c: Credential | null): void {
   listeners.forEach((l) => l());
 }
 
+export function useCredentialGeneration(): number {
+  return useSyncExternalStore(subscribe, () => generation);
+}
+
+function subscribe(l: () => void) {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+
 export function useCredential(): Credential | null {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    getCredential,
-  );
+  return useSyncExternalStore(subscribe, getCredential);
 }
 
 // Mutations are not queries: the credential control invalidates every query,
