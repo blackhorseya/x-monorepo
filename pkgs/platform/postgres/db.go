@@ -133,6 +133,9 @@ var timeZoneMatcher = regexp.MustCompile("(time_zone|TimeZone|timezone)=(.*?)($|
 // the server as one, which rejects the login and echoes the fragment. Here a
 // match counts only when the parsed config agrees that a timezone was set: it
 // must have a timezone runtime parameter, and a match equal to its value wins.
+// When the setting is repeated (TimeZone=UTC&TimeZone=Asia/Taipei) the last one
+// wins, as it does for the session pgx opens; the driver's regexp took the
+// first, so the two could disagree on which zone TIMESTAMP columns decode in.
 // A password never lands in RuntimeParams, so its fragment is ignored. With a
 // parameter present but written in a form the matcher reads differently (a
 // percent-encoded slash), the first match is kept, so the driver's refusal of
@@ -150,15 +153,15 @@ func sessionZone(cc *pgx.ConnConfig, dsn string) string {
 		return ""
 	}
 	matches := timeZoneMatcher.FindAllStringSubmatch(dsn, -1)
-	for _, m := range matches {
+	for i := len(matches) - 1; i >= 0; i-- {
 		for _, v := range param {
-			if m[2] == v {
-				return m[2]
+			if matches[i][2] == v {
+				return matches[i][2]
 			}
 		}
 	}
 	if len(matches) > 0 {
-		return matches[0][2]
+		return matches[len(matches)-1][2]
 	}
 
 	return ""

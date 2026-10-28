@@ -80,12 +80,16 @@ func TestNewDB_TimestampZoneMatrix(t *testing.T) {
 		env    string
 		offset int    // seconds east of UTC the decoded TIMESTAMP carries
 		reject string // set: NewDB must fail, with this in the error
+		// session, when set, is the zone the server session must report.
+		session string
 	}{
 		{name: "none", offset: 0},
 		{name: "TimeZone", query: "TimeZone=Asia/Taipei", offset: 8 * 3600},
 		{name: "lowercase timezone", query: "timezone=Asia/Taipei", offset: 8 * 3600},
 		{name: "time_zone is not a Postgres parameter, refused as before", query: "time_zone=Asia/Taipei", reject: "SQLSTATE 42704"},
 		{name: "UTC", query: "TimeZone=UTC", offset: 0},
+		{name: "repeated, last wins (UTC then Taipei)", query: "TimeZone=UTC&TimeZone=Asia/Taipei", offset: 8 * 3600, session: "Asia/Taipei"},
+		{name: "repeated, last wins (Taipei then UTC)", query: "TimeZone=Asia/Taipei&TimeZone=UTC", offset: 0, session: "UTC"},
 		{name: "after another parameter", query: "application_name=x&TimeZone=Asia/Taipei", offset: 8 * 3600},
 		{name: "PGTZ is the session's only, decoding stays UTC", env: "Asia/Taipei", offset: 0},
 		{name: "percent-encoded slash is refused as before", query: "TimeZone=Asia%2FTaipei", reject: "connection failed"},
@@ -121,6 +125,15 @@ func TestNewDB_TimestampZoneMatrix(t *testing.T) {
 			}
 			if _, off := got.Zone(); off != tc.offset {
 				t.Fatalf("decoded %s (offset %ds), want offset %ds", got, off, tc.offset)
+			}
+			if tc.session != "" {
+				var tz string
+				if err := db.Raw("SHOW timezone").Scan(&tz).Error; err != nil {
+					t.Fatal(err)
+				}
+				if tz != tc.session {
+					t.Fatalf("session timezone = %q, want %q: decoding and the session must agree", tz, tc.session)
+				}
 			}
 		})
 	}
