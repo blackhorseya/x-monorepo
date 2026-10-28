@@ -76,8 +76,9 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
 
   const row = page.getByRole("row").filter({ hasText: customer });
   await expect(row).toHaveCount(1);
-  // Complete only shows once inventory answered (CONFIRMED); PENDING has nothing to commit.
-  await expect(row.getByRole("button", { name: "Complete" })).toHaveCount(0);
+  // Complete only shows once inventory answered (CONFIRMED). "No Complete while PENDING" is not
+  // asserted here: the worker can confirm before the check runs, so it never settles to 0
+  // (orders.spec.ts asserts it where no worker runs).
   await expect(row.getByText("CONFIRMED")).toBeVisible(WORKER);
   await row.getByRole("button", { name: "Complete" }).click();
   await expect(row.getByText("COMPLETED")).toBeVisible();
