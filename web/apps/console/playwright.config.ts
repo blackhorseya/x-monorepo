@@ -24,8 +24,11 @@ const rpcPort = Number(process.env.E2E_RPC_PORT ?? 18091);
 const webPort = Number(process.env.E2E_WEB_PORT ?? 4173);
 const authRpcPort = rpcPort + 1;
 const authWebPort = webPort + 1;
+const roleRpcPort = rpcPort + 2;
+const roleWebPort = webPort + 2;
 const rpc = `http://127.0.0.1:${rpcPort}`;
 const authRpc = `http://127.0.0.1:${authRpcPort}`;
+const roleRpc = `http://127.0.0.1:${roleRpcPort}`;
 const db = process.env.E2E_DATABASE_URL;
 const bin = "../../../bin";
 const baseEnv = {
@@ -40,6 +43,10 @@ const baseEnv = {
 // iss / aud, so a token for another issuer is auth.invalid_credential).
 export const OPS_KEY = "e2e-ops-key-0123456789abcdef";
 export const ADMIN_KEY = "e2e-admin-key-0123456789abcdef";
+// The "auth-role" pair: same shape, but auth.admin_role is "operator" (a supported setting), so
+// the key holding "operator" is the admin and the one holding "admin" is not.
+export const OPERATOR_KEY = "e2e-operator-key-0123456789abcdef";
+export const NOT_OPERATOR_KEY = "e2e-notoperator-key-0123456789abcdef";
 export const JWT_SECRET = "e2e-hs256-secret-0123456789abcdef0123456789abcdef"; // ≥ 32 bytes
 export const JWT_ISSUER = "https://e2e.example.com";
 export const JWT_AUDIENCE = "x-monorepo-console-e2e";
@@ -58,7 +65,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: /\/auth\//,
+      testIgnore: /\/auth(-role)?\//,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: consoleURL ?? `http://localhost:${webPort}`,
@@ -70,6 +77,14 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         baseURL: `http://localhost:${authWebPort}`,
+      },
+    },
+    {
+      name: "auth-role",
+      testMatch: /\/auth-role\/.*\.spec\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: `http://localhost:${roleWebPort}`,
       },
     },
   ],
@@ -122,6 +137,27 @@ export default defineConfig({
       command: `pnpm exec vite preview --port ${authWebPort} --strictPort`,
       url: `http://localhost:${authWebPort}/`,
       env: { CONSOLE_API: authRpc },
+      reuseExistingServer: !process.env.CI,
+    },
+    {
+      // auth.admin_role=operator: RequireRole wants "operator", not the default "admin".
+      command: `${bin}/rpc`,
+      url: `${roleRpc}/api/readyz`,
+      env: {
+        ...baseEnv,
+        APP_HTTP_ADDR: `:${roleRpcPort}`,
+        APP_AUTH_MODE: "required",
+        APP_AUTH_ADMIN_ROLE: "operator",
+        APP_AUTH_API_KEYS: `boss=${OPERATOR_KEY}:operator,legacy=${NOT_OPERATOR_KEY}:admin`,
+      },
+      reuseExistingServer: !process.env.CI,
+      stdout: "ignore",
+      stderr: "pipe",
+    },
+    {
+      command: `pnpm exec vite preview --port ${roleWebPort} --strictPort`,
+      url: `http://localhost:${roleWebPort}/`,
+      env: { CONSOLE_API: roleRpc },
       reuseExistingServer: !process.env.CI,
     },
   ],

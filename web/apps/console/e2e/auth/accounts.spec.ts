@@ -139,3 +139,36 @@ async function storageDump(page: Page): Promise<string> {
     ]),
   );
 }
+
+// Switching credential while the previous one's admin check is still in flight: the late answer
+// belongs to the old credential and must not open the admin UI for the new one.
+test("a late admin answer does not outlive a switch to a role-less key", async ({ page }) => {
+  await page.goto("/orders");
+
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  let held!: () => void;
+  const heldAdmin = new Promise<void>((r) => (held = r));
+  const seen: string[] = [];
+  await page.route("**/identity.v1.IdentityService/*", async (route) => {
+    const key = route.request().headers()["x-api-key"];
+    seen.push(key === ADMIN_KEY ? "admin" : key === OPS_KEY ? "ops" : "other");
+    if (key !== ADMIN_KEY) return route.continue();
+    const res = await route.fetch(); // the server has already answered: admin
+    held();
+    await released; // ... but the browser hears it late
+    await route.fulfill({ response: res });
+  });
+
+  await useKey(page, ADMIN_KEY);
+  await heldAdmin;
+  await useKey(page, OPS_KEY);
+  await expect.poll(() => seen.includes("ops")).toBe(true); // the new credential was checked on its own
+  release();
+
+  await page.waitForTimeout(1500); // let the stale answer land and render
+  await expect(nav(page)).toHaveCount(0);
+  await page.goto("/accounts");
+  await expect(page.getByText("Admin role required")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create account" })).toHaveCount(0);
+});
