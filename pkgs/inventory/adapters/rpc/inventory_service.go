@@ -127,11 +127,21 @@ func (h *InventoryService) GetReservation(
 	return connect.NewResponse(&inventoryv1.GetReservationResponse{Reservation: toProtoReservation(out)}), nil
 }
 
+// BatchGetReservations is GetReservation for up to 100 orders; same access.
 func (h *InventoryService) BatchGetReservations(
 	c context.Context,
 	req *connect.Request[inventoryv1.BatchGetReservationsRequest],
 ) (*connect.Response[inventoryv1.BatchGetReservationsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, nil)
+	out, err := h.batchGetReservations.Execute(c, dto.BatchGetReservationsInput{OrderIDs: req.Msg.GetOrderIds()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+	rs := make([]*inventoryv1.Reservation, 0, len(out.Reservations))
+	for i := range out.Reservations {
+		rs = append(rs, toProtoReservation(&out.Reservations[i]))
+	}
+
+	return connect.NewResponse(&inventoryv1.BatchGetReservationsResponse{Reservations: rs}), nil
 }
 
 func (h *InventoryService) ListReservations(

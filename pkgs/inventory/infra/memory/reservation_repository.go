@@ -39,7 +39,33 @@ func (i *ReservationRepository) FindByOrderID(c context.Context, orderID string)
 }
 
 func (i *ReservationRepository) FindByOrderIDs(c context.Context, orderIDs []string) ([]*reservation.Reservation, error) {
-	return nil, nil
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	seen := make(map[string]struct{}, len(orderIDs))
+	out := make([]*reservation.Reservation, 0, len(orderIDs))
+	for _, id := range orderIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		r, ok := i.data[id]
+		if !ok {
+			continue
+		}
+		cp, err := cloneReservation(r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cp)
+	}
+
+	return out, nil
 }
 
 func (i *ReservationRepository) Add(c context.Context, r *reservation.Reservation) error {

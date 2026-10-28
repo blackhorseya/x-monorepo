@@ -38,6 +38,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`；�
 | `stock.not_found` | `NOT_FOUND` | inventory domain | |
 | `reservation.invalid_order_id` / `reservation.no_lines` / `reservation.invalid_sku` / `reservation.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | aggregate 不變量 |
 | `reservation.invalid_status_filter` / `reservation.invalid_cursor` | `INVALID_ARGUMENT` | inventory domain | ListReservations 的 filter / cursor |
+| `reservation.too_many_order_ids` | `INVALID_ARGUMENT` | inventory domain | `BatchGetReservations` 一次超過 100 個 order id（rpc 先被 protovalidate 擋，這是直呼 use case 的那條）；空清單與空字串 id 走 `reservation.invalid_order_id` |
 | `reservation.invalid_older_than` | `INVALID_ARGUMENT` | inventory domain | ExpireReservations 的 `older_than` 不是正數（rpc 先被 protovalidate 擋，這是 CLI / 直呼 use case 的那條） |
 | `reservation.not_reserved` | `FAILED_PRECONDITION` | inventory domain | 只有 RESERVED 能 Release / Commit / Expire（重送的 `OrderCancelled` / `OrderCompleted`、過期後才到的 `OrderCancelled`：drop） |
 | `reservation.stock_missing` | `FAILED_PRECONDITION` | inventory domain | Release / Commit / Expire 時某 SKU 的 stock 列不在了 |
