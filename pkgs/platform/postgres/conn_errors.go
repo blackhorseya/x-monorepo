@@ -120,3 +120,17 @@ func connTargets(cc *pgx.ConnConfig) string {
 
 	return strings.Join(out, ", ")
 }
+
+// redactIfConnect redacts err when it is a failure to establish a connection
+// and returns it untouched otherwise. migrate needs the split: a connect
+// failure quotes the URL's user and database and the server's login message,
+// while an error from a migration's own SQL, after the connection is up, is
+// exactly what the operator has to read to fix it.
+func redactIfConnect(err error, cc *pgx.ConnConfig) error {
+	var ce *pgconn.ConnectError
+	if errors.As(err, &ce) {
+		return redactConnErr(err, cc)
+	}
+
+	return err
+}

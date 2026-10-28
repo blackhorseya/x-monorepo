@@ -57,21 +57,28 @@ func Version(c context.Context, cfg config.Postgres, m Migration) (version uint,
 // config (see NewDB: a second parse could read a changed service file). It is
 // the bare pgx path, with none of gorm's driver setup. Unset, the URL goes to
 // the "pgx" driver as before.
-func openMigrateDB(cfg config.Postgres) (*sql.DB, error) {
+//
+// The config it returns is for naming the dialed host:port in a connection
+// error. With expect_target it is the config the pool opened from. Without, the
+// "pgx" driver parses the URL itself, so this is a separate parse made only for
+// that message (nil if the URL does not parse, and then the error is the
+// category alone).
+func openMigrateDB(cfg config.Postgres) (*sql.DB, *pgx.ConnConfig, error) {
 	if cfg.ExpectTarget != "" {
 		cc, err := ParseCheckedConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true})
 		if err != nil {
-			return nil, fmt.Errorf("postgres.expect_target: %w", err)
+			return nil, nil, fmt.Errorf("postgres.expect_target: %w", err)
 		}
 
-		return stdlib.OpenDB(*cc), nil
+		return stdlib.OpenDB(*cc), cc, nil
 	}
 	db, err := sql.Open("pgx", cfg.URL)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres for migrate: %w", err)
+		return nil, nil, fmt.Errorf("open postgres for migrate: %w", err)
 	}
+	cc, _ := pgx.ParseConfig(cfg.URL)
 
-	return db, nil
+	return db, cc, nil
 }
 
 // run opens a short-lived database/sql handle of its own: golang-migrate's
@@ -84,7 +91,7 @@ func run(c context.Context, cfg config.Postgres, m Migration, op func(*migrate.M
 		return errors.New("postgres url must not be empty")
 	}
 
-	db, err := openMigrateDB(cfg)
+	db, cc, err := openMigrateDB(cfg)
 	if err != nil {
 		return err
 	}
@@ -93,7 +100,7 @@ func run(c context.Context, cfg config.Postgres, m Migration, op func(*migrate.M
 	// before golang-migrate touches anything.
 	if _, err := db.ExecContext(c, "CREATE SCHEMA IF NOT EXISTS "+pgx.Identifier{m.Schema}.Sanitize()); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("create schema %s: %w", m.Schema, err)
+		return fmt.Errorf("create schema %s: %w", m.Schema, redactIfConnect(err, cc))
 	}
 
 	src, err := iofs.New(m.Files, ".")
@@ -108,7 +115,7 @@ func run(c context.Context, cfg config.Postgres, m Migration, op func(*migrate.M
 	})
 	if err != nil {
 		_ = db.Close()
-		return fmt.Errorf("open migration driver for %s: %w", m.Schema, err)
+		return fmt.Errorf("open migration driver for %s: %w", m.Schema, redactIfConnect(err, cc))
 	}
 
 	mg, err := migrate.NewWithInstance("iofs", src, "pgx5", driver)
@@ -119,7 +126,7 @@ func run(c context.Context, cfg config.Postgres, m Migration, op func(*migrate.M
 	defer func() { _, _ = mg.Close() }() // closes driver → db
 
 	if err := op(mg); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("migrate %s: %w", m.Schema, err)
+		return fmt.Errorf("migrate %s: %w", m.Schema, redactIfConnect(err, cc))
 	}
 
 	return nil
