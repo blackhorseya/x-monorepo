@@ -41,11 +41,15 @@ export function useOrderReservations(rows: readonly Order[]) {
   const latest = useRef({ rows, known });
   latest.current = { rows, known };
   const busy = useRef(false);
+  const resyncAll = useRef(false); // a refocus asked for every row while a request was in flight
   const generation = useRef(0); // bumped when the credential changes: older answers are dropped
 
   // all: ask about every row, not only the waiting ones (a refocused tab).
   const refresh = useCallback(async (all = false) => {
-    if (busy.current) return;
+    if (busy.current) {
+      if (all) resyncAll.current = true; // not dropped: runs once the request in flight is done
+      return;
+    }
     const { rows, known } = latest.current;
     const ids = all ? rows.map((o) => o.id) : wantedOrderIds(rows, known, Date.now());
     if (ids.length === 0) return;
@@ -79,7 +83,13 @@ export function useOrderReservations(rows: readonly Order[]) {
     } catch (err) {
       if (gen === generation.current) setError(err);
     } finally {
-      if (gen === generation.current) busy.current = false;
+      if (gen === generation.current) {
+        busy.current = false;
+        if (resyncAll.current && document.visibilityState === "visible") {
+          resyncAll.current = false;
+          void refresh(true);
+        }
+      }
     }
   }, []);
 
@@ -112,6 +122,7 @@ export function useOrderReservations(rows: readonly Order[]) {
     seenCredential.current = credential;
     generation.current++;
     busy.current = false;
+    resyncAll.current = false;
     setKnown(new Map());
     setError(undefined);
   }, [credential]);
