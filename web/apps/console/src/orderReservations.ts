@@ -50,6 +50,7 @@ export function useOrderReservations(rows: readonly Order[]) {
       if (all) resyncAll.current = true; // not dropped: runs once the request in flight is done
       return;
     }
+    if (all) resyncAll.current = false; // this full refresh is the queued one too
     const { rows, known } = latest.current;
     const ids = all ? rows.map((o) => o.id) : wantedOrderIds(rows, known, Date.now());
     if (ids.length === 0) return;
