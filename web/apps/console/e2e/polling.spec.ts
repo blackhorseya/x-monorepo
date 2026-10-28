@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { withDB } from "./mode";
+import { uid } from "./uid";
 
 // Request budget of the orders list. The server only has unary RPCs, so the console polls;
 // this pins down what is allowed to poll. The list never calls GetReservation: the rows still
@@ -18,7 +19,7 @@ const post = (page: Page, method: string, body: object) =>
   page.request.post(`/api/${method}`, { data: body });
 
 test("terminal rows and later pages stop polling", async ({ page }) => {
-  const customer = `e2e-poll-${Date.now()}`;
+  const customer = `e2e-poll-${uid()}`;
   for (let i = 0; i < TOTAL; i++) {
     const res = await post(page, "ordering.v1.OrderService/CreateOrder", {
       customerId: customer,
@@ -72,7 +73,7 @@ test("terminal rows and later pages stop polling", async ({ page }) => {
 // They must share one BatchGetReservations per tick — carrying every waiting row on the loaded
 // pages — instead of a GetReservation each.
 test("PENDING rows share one batch request per tick", async ({ page }) => {
-  const customer = `e2e-pending-${Date.now()}`;
+  const customer = `e2e-pending-${uid()}`;
   for (let i = 0; i < TOTAL; i++) await createOrder(page, customer);
 
   const calls = { reservation: 0, batch: 0, firstPage: 0, laterPages: 0 };
@@ -124,7 +125,7 @@ const createOrder = async (page: Page, customer: string) => {
 // records a CANCELLED tombstone, so "cancelled order, no reservation yet" is not a final state:
 // the row must keep looking until the reservation shows up.
 test("a cancelled order picks up a reservation that appears late", async ({ page }) => {
-  const customer = `e2e-late-${Date.now()}`;
+  const customer = `e2e-late-${uid()}`;
   const id = await createOrder(page, customer);
   await post(page, "ordering.v1.OrderService/CancelOrder", { id });
 
@@ -145,7 +146,7 @@ test("a cancelled order picks up a reservation that appears late", async ({ page
 // A first-page poll answered after a mutation has refreshed the list holds the older state; it
 // must not overwrite the cancel the user just made.
 test("a late poll response does not undo a cancel", async ({ page }) => {
-  const customer = `e2e-race-${Date.now()}`;
+  const customer = `e2e-race-${uid()}`;
   await createOrder(page, customer);
 
   let hold = false;
@@ -183,7 +184,7 @@ test("a late poll response does not undo a cancel", async ({ page }) => {
 // created: a PENDING order that was fetched many times (every list / detail mount fetches) must
 // still get its full window after it is cancelled.
 test("a cancelled order still waits for its reservation after many fetches while PENDING", async ({ page }) => {
-  const customer = `e2e-budget-${Date.now()}`;
+  const customer = `e2e-budget-${uid()}`;
   const id = await createOrder(page, customer);
 
   let late = false;
@@ -216,7 +217,7 @@ test("a cancelled order still waits for its reservation after many fetches while
 // refocused page always has: the worker may have caught up while nobody was watching.
 test("returning to the tab looks again at a row whose wait ran out", async ({ page }) => {
   await page.clock.install();
-  const customer = `e2e-focus-${Date.now()}`;
+  const customer = `e2e-focus-${uid()}`;
   const id = await createOrder(page, customer);
   await post(page, "ordering.v1.OrderService/CancelOrder", { id });
 
@@ -248,7 +249,7 @@ test("returning to the tab looks again at a row whose wait ran out", async ({ pa
 // row must wait its turn, not be dropped because a request is already running.
 test("returning to the tab while another row's request is in flight still looks at the expired row", async ({ page }) => {
   await page.clock.install();
-  const customer = `e2e-busy-${Date.now()}`;
+  const customer = `e2e-busy-${uid()}`;
   const expired = await createOrder(page, customer); // cancelled: its wait for a reservation runs out
   await post(page, "ordering.v1.OrderService/CancelOrder", { id: expired });
   await createOrder(page, customer); // PENDING: keeps polling, alone once the other one went quiet
@@ -288,7 +289,7 @@ test("returning to the tab while another row's request is in flight still looks 
 // that request ends the queue stays, and the next refocus must consume it rather than run its own
 // full refresh and then the queued one on top: two full refreshes in total, not three.
 test("a queued refocus is consumed by the next full refresh", async ({ page }) => {
-  const customer = `e2e-queue-${Date.now()}`;
+  const customer = `e2e-queue-${uid()}`;
   const id = await createOrder(page, customer);
   await post(page, "ordering.v1.OrderService/CancelOrder", { id });
 

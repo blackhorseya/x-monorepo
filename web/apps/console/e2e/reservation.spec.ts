@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
+import { uid } from "./uid";
 
 // The whole event chain through the UI: CreateOrder → ordering outbox → worker →
 // inventory reserves → GetReservation shows RESERVED → StockReserved → the order
@@ -13,8 +14,8 @@ const WORKER = { timeout: 30_000 };
 test("an order is reserved by the worker and confirmed, cancelling releases it", async ({
   page,
 }) => {
-  const sku = `E2E-W-${Date.now()}`;
-  const customer = `e2e-worker-${Date.now()}`;
+  const sku = `E2E-W-${uid()}`;
+  const customer = `e2e-worker-${uid()}`;
 
   await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
   await page.getByLabel("SKU", { exact: true }).fill(sku);
@@ -57,8 +58,8 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
 test("completing a confirmed order commits the reservation: the stock is sold", async ({
   page,
 }) => {
-  const sku = `E2E-C-${Date.now()}`;
-  const customer = `e2e-complete-${Date.now()}`;
+  const sku = `E2E-C-${uid()}`;
+  const customer = `e2e-complete-${uid()}`;
 
   await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
   await page.getByLabel("SKU", { exact: true }).fill(sku);
@@ -76,8 +77,9 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
 
   const row = page.getByRole("row").filter({ hasText: customer });
   await expect(row).toHaveCount(1);
-  // Complete only shows once inventory answered (CONFIRMED); PENDING has nothing to commit.
-  await expect(row.getByRole("button", { name: "Complete" })).toHaveCount(0);
+  // Complete only shows once inventory answered (CONFIRMED). "No Complete while PENDING" is not
+  // asserted here: the worker can confirm before the check runs, so it never settles to 0
+  // (orders.spec.ts asserts it where no worker runs).
   await expect(row.getByText("CONFIRMED")).toBeVisible(WORKER);
   await row.getByRole("button", { name: "Complete" }).click();
   await expect(row.getByText("COMPLETED")).toBeVisible();

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { uid } from "./uid";
 
-const sku = `E2E-${Date.now()}`;
+const sku = `E2E-${uid()}`;
 
 test("set stock, filter by prefix and by reserved", async ({ page }) => {
   await page.goto("/stock");

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
+import { uid } from "./uid";
 
 // /orders/$id: the id cell of the list links here; the page shows every line,
 // the total, the reservation, and cancels. A deep link to an unknown id says so.
@@ -7,11 +8,11 @@ import { withDB } from "./mode";
 test("the list links to the order; the page shows lines, cancels, and polls the status", async ({
   page,
 }) => {
-  const customer = `e2e-detail-${Date.now()}`;
+  const customer = `e2e-detail-${uid()}`;
   // With a worker, an order for a SKU nobody stocked is REJECTED and cancelled
   // by inventory before this test reaches its Cancel button — so seed stock for
   // a SKU of our own and the Reservation card gets to show RESERVED.
-  const sku = withDB ? `E2E-D-${Date.now()}` : "SKU-1";
+  const sku = withDB ? `E2E-D-${uid()}` : "SKU-1";
   if (withDB) {
     await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
     await page.getByLabel("SKU", { exact: true }).fill(sku);
@@ -98,7 +99,7 @@ test("an unknown id is a not-found page, not an error", async ({ page }) => {
 test("the Order id box on /orders opens the page for a pasted id", async ({
   page,
 }) => {
-  const customer = `e2e-jump-${Date.now()}`;
+  const customer = `e2e-jump-${uid()}`;
   await page.goto("/orders");
   await page.getByLabel("Customer").first().fill(customer);
   await page.getByRole("button", { name: "Create order" }).click();
