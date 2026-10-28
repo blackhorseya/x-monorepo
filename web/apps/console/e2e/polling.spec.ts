@@ -210,3 +210,36 @@ test("a cancelled order still waits for its reservation after many fetches while
   late = true; // the worker comes back
   await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 8_000 });
 });
+
+// Once the wait for a reservation that is not there yet has run out (30s after the order turned
+// terminal) the row stops asking. Coming back to the tab must still look once more, as a
+// refocused page always has: the worker may have caught up while nobody was watching.
+test("returning to the tab looks again at a row whose wait ran out", async ({ page }) => {
+  await page.clock.install();
+  const customer = `e2e-focus-${Date.now()}`;
+  const id = await createOrder(page, customer);
+  await post(page, "ordering.v1.OrderService/CancelOrder", { id });
+
+  let late = false;
+  let fetches = 0;
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", async (route) => {
+    fetches++;
+    if (!late) return route.fulfill({ json: {} });
+    return route.fulfill({ json: { reservations: [{ orderId: id, status: "RESERVATION_STATUS_CANCELLED" }] } });
+  });
+
+  await page.goto(`/orders?customer=${customer}`);
+  const row = page.getByRole("row").filter({ hasText: customer });
+  await expect(row.getByText("none yet")).toBeVisible();
+
+  // Let the 30s window run out and the row go quiet, then the worker "comes back".
+  await page.clock.fastForward(40_000);
+  await page.waitForTimeout(500);
+  const quiet = fetches;
+  await page.waitForTimeout(2_500);
+  expect(fetches).toBe(quiet);
+  late = true;
+
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 5_000 });
+});
