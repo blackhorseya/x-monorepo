@@ -91,8 +91,8 @@ func TestNewDB_TimestampZoneMatrix(t *testing.T) {
 		{name: "repeated, last wins (UTC then Taipei)", query: "TimeZone=UTC&TimeZone=Asia/Taipei", offset: 8 * 3600, session: "Asia/Taipei"},
 		{name: "repeated, last wins (Taipei then UTC)", query: "TimeZone=Asia/Taipei&TimeZone=UTC", offset: 0, session: "UTC"},
 		{name: "after another parameter", query: "application_name=x&TimeZone=Asia/Taipei", offset: 8 * 3600},
-		{name: "PGTZ is the session's only, decoding stays UTC", env: "Asia/Taipei", offset: 0},
-		{name: "percent-encoded slash is refused as before", query: "TimeZone=Asia%2FTaipei", reject: "connection failed"},
+		{name: "PGTZ reaches the session and the decoding alike", env: "Asia/Taipei", offset: 8 * 3600},
+		{name: "percent-encoded slash is the zone it decodes to", query: "TimeZone=Asia%2FTaipei", offset: 8 * 3600, session: "Asia/Taipei"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
