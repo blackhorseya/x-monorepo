@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -92,20 +93,30 @@ func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
 			u.Hostname(), u.Port(), strings.TrimPrefix(u.Path, "/"), role, pw)
 	}
 
-	t.Run("password that looks like a TimeZone setting", func(t *testing.T) {
-		db, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn(password)}, tel)
-		if err != nil {
-			t.Fatalf("NewDB: %v (the password fragment was sent as the session timezone)", err)
-		}
-		defer cleanup()
-		var tz string
-		if err := db.Raw("SHOW timezone").Scan(&tz).Error; err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(tz, secretMarker) {
-			t.Fatalf("session timezone = %q", tz)
-		}
-	})
+	for i, fragment := range []string{"pTimeZone=", "pTIMEZONE=", "pTimeZONE=", "ptime_zone="} {
+		t.Run("password that looks like a TimeZone setting/"+fragment, func(t *testing.T) {
+			name := fmt.Sprintf("%s_%d", role, i)
+			pw := fragment + secretMarker
+			if err := admin.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", name, pw)).Error; err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { admin.Exec("DROP ROLE IF EXISTS " + name) })
+			d := fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=disable",
+				u.Hostname(), u.Port(), strings.TrimPrefix(u.Path, "/"), name, pw)
+			db, cleanup, err := postgres.NewDB(config.Postgres{URL: d}, tel)
+			if err != nil {
+				t.Fatalf("NewDB: %v (the password fragment was sent as the session timezone)", err)
+			}
+			defer cleanup()
+			var tz string
+			if err := db.Raw("SHOW timezone").Scan(&tz).Error; err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(tz, secretMarker) {
+				t.Fatalf("session timezone = %q", tz)
+			}
+		})
+	}
 
 	hostPort := net.JoinHostPort(u.Hostname(), u.Port())
 	for _, expectTarget := range []string{"", hostPort} {
@@ -176,6 +187,35 @@ func TestNewDB_UnparsableURLIsNotQuoted(t *testing.T) {
 		assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb", "notaport")
 		if !strings.Contains(err.Error(), "not a valid connection string") {
 			t.Fatalf("error = %q, want the fixed parse message", err)
+		}
+	}
+}
+
+// The protection against a password fragment becoming a timezone rests on one
+// fact about pgx: what it parses out of the connection string as the password
+// is never among the runtime parameters, which are the only place a timezone is
+// taken from. Pinned here so a change in pgx shows up as this test failing.
+func TestPasswordFragmentsNeverReachRuntimeParams(t *testing.T) {
+	for _, pw := range []string{
+		"pTimeZone=" + secretMarker, "pTIMEZONE=" + secretMarker, "pTimeZONE=" + secretMarker,
+		"ptime_zone=" + secretMarker, "x&TimeZone=" + secretMarker,
+	} {
+		for name, dsn := range map[string]string{
+			"url":     "postgres://u:" + url.QueryEscape(pw) + "@127.0.0.1:1/app?sslmode=disable",
+			"keyword": "host=127.0.0.1 port=1 dbname=app user=u sslmode=disable password='" + pw + "'",
+		} {
+			cc, err := pgx.ParseConfig(dsn)
+			if err != nil {
+				t.Fatalf("%s %q: %v", name, pw, err)
+			}
+			if cc.Password != pw {
+				t.Fatalf("%s %q: parsed password = %q", name, pw, cc.Password)
+			}
+			for k, v := range cc.RuntimeParams {
+				if strings.Contains(k, secretMarker) || strings.Contains(v, secretMarker) {
+					t.Fatalf("%s %q: runtime parameter %q=%q carries the password", name, pw, k, v)
+				}
+			}
 		}
 	}
 }

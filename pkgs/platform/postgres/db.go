@@ -164,9 +164,11 @@ func mergeTimeZoneKeys(cc *pgx.ConnConfig) error {
 	return nil
 }
 
-// timeZoneMatcher is gorm.io/driver/postgres v1.6.3's own (postgres.go:38):
-// the TimeZone it looks for in the DSN text.
-var timeZoneMatcher = regexp.MustCompile("(time_zone|TimeZone|timezone)=(.*?)($|&| )")
+// timeZoneMatcher is gorm.io/driver/postgres v1.6.3's own (postgres.go:38), but
+// for the case of the name: the driver knows three spellings, while Postgres
+// and pgx treat every casing as the one setting, and a spelling the matcher
+// missed (TIMEZONE, TimeZONE) reached the session with no codec to match.
+var timeZoneMatcher = regexp.MustCompile("(?i)(time_zone|timezone)=(.*?)($|&| )")
 
 // sessionZone is the zone the driver would install for dsn, or "" for none.
 //
