@@ -13,6 +13,9 @@ import (
 type Repository interface {
 	// FindByOrderID returns ErrNotFound when the order has no reservation yet.
 	FindByOrderID(c context.Context, orderID string) (*Reservation, error)
+	// FindByOrderIDs returns the reservations that exist for the given orders,
+	// once each and in no particular order; an order without one is skipped.
+	FindByOrderIDs(c context.Context, orderIDs []string) ([]*Reservation, error)
 	// Add inserts a new reservation; ErrDuplicate when the order already has one.
 	Add(c context.Context, r *Reservation) error
 	// Update stores a status change; ErrNotFound when it was never added.

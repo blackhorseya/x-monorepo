@@ -2,10 +2,12 @@ import { expect, test, type Page } from "@playwright/test";
 import { withDB } from "./mode";
 
 // Request budget of the orders list. The server only has unary RPCs, so the console polls;
-// this pins down what is allowed to poll. Terminal rows (CANCELLED with its tombstone, nothing
-// to wait for) must not poll GetReservation, and later pages must not be refetched every tick,
-// only the first one (new / changed orders show up there). In-memory mode: no worker, so a
-// PENDING order keeps waiting and the reservation answers are scripted where a test needs them.
+// this pins down what is allowed to poll. The list never calls GetReservation: the rows still
+// waiting for something share one BatchGetReservations per tick, terminal rows (CANCELLED with
+// its tombstone, nothing to wait for) are not asked about at all, and later pages must not be
+// refetched every tick, only the first one (new / changed orders show up there). In-memory
+// mode: no worker, so a PENDING order keeps waiting and the reservation answers are scripted
+// where a test needs them.
 test.skip(withDB, "a worker reserves these orders, so reservations are not the scripted ones (reservation.spec.ts covers that path)");
 
 const WINDOW_MS = 8_000;
@@ -27,17 +29,20 @@ test("terminal rows and later pages stop polling", async ({ page }) => {
   }
 
   // What a worker leaves behind for a cancelled order: a CANCELLED tombstone, the final state.
-  await page.route("**/inventory.v1.InventoryService/GetReservation", (route) => {
-    const { orderId } = route.request().postDataJSON() as { orderId: string };
-    return route.fulfill({ json: { reservation: { orderId, status: "RESERVATION_STATUS_CANCELLED" } } });
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", (route) => {
+    const { orderIds } = route.request().postDataJSON() as { orderIds: string[] };
+    return route.fulfill({
+      json: { reservations: orderIds.map((orderId) => ({ orderId, status: "RESERVATION_STATUS_CANCELLED" })) },
+    });
   });
 
-  const calls = { reservation: 0, firstPage: 0, laterPages: 0 };
+  const calls = { reservation: 0, batch: 0, firstPage: 0, laterPages: 0 };
   let counting = false;
   page.on("request", (req) => {
     if (!counting || req.method() !== "POST") return;
     const url = req.url();
     if (url.endsWith("/inventory.v1.InventoryService/GetReservation")) calls.reservation++;
+    else if (url.endsWith("/inventory.v1.InventoryService/BatchGetReservations")) calls.batch++;
     else if (url.endsWith("/ordering.v1.OrderService/ListOrders")) {
       const { pageToken } = req.postDataJSON() as { pageToken?: string };
       if (pageToken) calls.laterPages++;
@@ -57,9 +62,54 @@ test("terminal rows and later pages stop polling", async ({ page }) => {
   console.log(`requests in ${WINDOW_MS / 1000}s:`, JSON.stringify(calls));
 
   expect(calls.reservation).toBe(0);
+  expect(calls.batch).toBe(0);
   expect(calls.laterPages).toBe(0);
   // The first page still refreshes, or a new order / a cancel from elsewhere would never show.
   expect(calls.firstPage).toBeGreaterThanOrEqual(2);
+});
+
+// PENDING rows are the ones that keep waiting (no worker here, so they never get a reservation).
+// They must share one BatchGetReservations per tick — carrying every waiting row on the loaded
+// pages — instead of a GetReservation each.
+test("PENDING rows share one batch request per tick", async ({ page }) => {
+  const customer = `e2e-pending-${Date.now()}`;
+  for (let i = 0; i < TOTAL; i++) await createOrder(page, customer);
+
+  const calls = { reservation: 0, batch: 0, firstPage: 0, laterPages: 0 };
+  const batchSizes: number[] = [];
+  let counting = false;
+  page.on("request", (req) => {
+    if (!counting || req.method() !== "POST") return;
+    const url = req.url();
+    if (url.endsWith("/inventory.v1.InventoryService/GetReservation")) calls.reservation++;
+    else if (url.endsWith("/inventory.v1.InventoryService/BatchGetReservations")) {
+      calls.batch++;
+      batchSizes.push((req.postDataJSON() as { orderIds: string[] }).orderIds.length);
+    } else if (url.endsWith("/ordering.v1.OrderService/ListOrders")) {
+      const { pageToken } = req.postDataJSON() as { pageToken?: string };
+      if (pageToken) calls.laterPages++;
+      else calls.firstPage++;
+    }
+  });
+
+  await page.goto(`/orders?customer=${customer}`);
+  const rows = page.getByRole("row").filter({ hasText: customer });
+  await expect(rows).toHaveCount(PAGE);
+  await page.getByRole("button", { name: "Load more" }).click();
+  await expect(rows).toHaveCount(TOTAL);
+  await expect(page.getByText("none yet")).toHaveCount(TOTAL);
+
+  counting = true;
+  await page.waitForTimeout(WINDOW_MS);
+  counting = false;
+  console.log(`requests in ${WINDOW_MS / 1000}s:`, JSON.stringify({ ...calls, batchSizes }));
+
+  expect(calls.reservation).toBe(0);
+  expect(calls.laterPages).toBe(0);
+  // One per 2s tick (4 in the window, one more if the window straddles a tick), every waiting row in it.
+  expect(calls.batch).toBeGreaterThanOrEqual(2);
+  expect(calls.batch).toBeLessThanOrEqual(5);
+  expect(batchSizes.every((n) => n === TOTAL)).toBe(true);
 });
 
 const createOrder = async (page: Page, customer: string) => {
@@ -80,9 +130,9 @@ test("a cancelled order picks up a reservation that appears late", async ({ page
 
   // The worker "comes back" after the list has loaded: NotFound until then, then the tombstone.
   let late = false;
-  await page.route("**/inventory.v1.InventoryService/GetReservation", async (route) => {
-    if (!late) return route.fulfill({ status: 404, json: { code: "not_found", message: "reservation not found" } });
-    return route.fulfill({ json: { reservation: { orderId: id, status: "RESERVATION_STATUS_CANCELLED" } } });
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", async (route) => {
+    if (!late) return route.fulfill({ json: {} }); // no reservation for anyone yet
+    return route.fulfill({ json: { reservations: [{ orderId: id, status: "RESERVATION_STATUS_CANCELLED" }] } });
   });
 
   await page.goto(`/orders?customer=${customer}`);
@@ -138,10 +188,10 @@ test("a cancelled order still waits for its reservation after many fetches while
 
   let late = false;
   let fetches = 0;
-  await page.route("**/inventory.v1.InventoryService/GetReservation", async (route) => {
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", async (route) => {
     fetches++;
-    if (!late) return route.fulfill({ status: 404, json: { code: "not_found", message: "reservation not found" } });
-    return route.fulfill({ json: { reservation: { orderId: id, status: "RESERVATION_STATUS_CANCELLED" } } });
+    if (!late) return route.fulfill({ json: {} });
+    return route.fulfill({ json: { reservations: [{ orderId: id, status: "RESERVATION_STATUS_CANCELLED" }] } });
   });
 
   await page.goto(`/orders?customer=${customer}`);
@@ -159,4 +209,77 @@ test("a cancelled order still waits for its reservation after many fetches while
   await expect(row.getByText("CANCELLED")).toBeVisible();
   late = true; // the worker comes back
   await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 8_000 });
+});
+
+// Once the wait for a reservation that is not there yet has run out (30s after the order turned
+// terminal) the row stops asking. Coming back to the tab must still look once more, as a
+// refocused page always has: the worker may have caught up while nobody was watching.
+test("returning to the tab looks again at a row whose wait ran out", async ({ page }) => {
+  await page.clock.install();
+  const customer = `e2e-focus-${Date.now()}`;
+  const id = await createOrder(page, customer);
+  await post(page, "ordering.v1.OrderService/CancelOrder", { id });
+
+  let late = false;
+  let fetches = 0;
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", async (route) => {
+    fetches++;
+    if (!late) return route.fulfill({ json: {} });
+    return route.fulfill({ json: { reservations: [{ orderId: id, status: "RESERVATION_STATUS_CANCELLED" }] } });
+  });
+
+  await page.goto(`/orders?customer=${customer}`);
+  const row = page.getByRole("row").filter({ hasText: customer });
+  await expect(row.getByText("none yet")).toBeVisible();
+
+  // Let the 30s window run out and the row go quiet, then the worker "comes back".
+  await page.clock.fastForward(40_000);
+  await page.waitForTimeout(500);
+  const quiet = fetches;
+  await page.waitForTimeout(2_500);
+  expect(fetches).toBe(quiet);
+  late = true;
+
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 5_000 });
+});
+
+// The same, but a poll for another row is in flight when the tab comes back: the refresh of every
+// row must wait its turn, not be dropped because a request is already running.
+test("returning to the tab while another row's request is in flight still looks at the expired row", async ({ page }) => {
+  await page.clock.install();
+  const customer = `e2e-busy-${Date.now()}`;
+  const expired = await createOrder(page, customer); // cancelled: its wait for a reservation runs out
+  await post(page, "ordering.v1.OrderService/CancelOrder", { id: expired });
+  await createOrder(page, customer); // PENDING: keeps polling, alone once the other one went quiet
+
+  let late = false;
+  let hold = false;
+  let held!: () => void;
+  const captured = new Promise<void>((r) => (held = r));
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", async (route) => {
+    const { orderIds } = route.request().postDataJSON() as { orderIds: string[] };
+    if (hold && !orderIds.includes(expired)) {
+      hold = false; // only the first poll that leaves the expired row out is delayed
+      held();
+      await released;
+      return route.fulfill({ json: {} });
+    }
+    if (!late || !orderIds.includes(expired)) return route.fulfill({ json: {} });
+    return route.fulfill({ json: { reservations: [{ orderId: expired, status: "RESERVATION_STATUS_CANCELLED" }] } });
+  });
+
+  await page.goto(`/orders?customer=${customer}`);
+  const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: expired.slice(0, 8) }) });
+  await expect(row.getByText("none yet")).toBeVisible();
+
+  await page.clock.fastForward(40_000); // the expired row's wait is over
+  hold = true;
+  await captured; // a poll for the PENDING row alone is now in flight
+  late = true; // the worker comes back
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  release();
+  await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 5_000 });
 });

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -195,6 +196,21 @@ func TestOrderService_E2E(t *testing.T) {
 	_, err = inv.GetReservation(c, connect.NewRequest(&inventoryv1.GetReservationRequest{OrderId: o.GetId()}))
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound || ce.Meta().Get("x-error-code") != "reservation.not_found" {
 		t.Fatalf("GetReservation without a worker: err = %v", err)
+	}
+	batch, err := inv.BatchGetReservations(c, connect.NewRequest(&inventoryv1.BatchGetReservationsRequest{OrderIds: []string{o.GetId(), "o-unknown"}}))
+	if err != nil || len(batch.Msg.GetReservations()) != 0 {
+		t.Fatalf("BatchGetReservations without a worker: %v, %v (unknown orders are left out, not an error)", batch, err)
+	}
+	for name, ids := range map[string][]string{"none": nil, "empty id": {o.GetId(), ""}, "over 100": make([]string, 101)} {
+		if name == "over 100" {
+			for i := range ids {
+				ids[i] = fmt.Sprintf("o-%d", i)
+			}
+		}
+		_, err = inv.BatchGetReservations(c, connect.NewRequest(&inventoryv1.BatchGetReservationsRequest{OrderIds: ids}))
+		if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
+			t.Fatalf("BatchGetReservations %s (protovalidate): err = %v", name, err)
+		}
 	}
 	rs, err := inv.ListReservations(c, connect.NewRequest(&inventoryv1.ListReservationsRequest{Status: inventoryv1.ReservationStatus_RESERVATION_STATUS_RESERVED}))
 	if err != nil || len(rs.Msg.GetReservations()) != 0 || rs.Msg.GetNextPageToken() != "" {

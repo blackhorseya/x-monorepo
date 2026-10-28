@@ -1,8 +1,9 @@
+import { Code, ConnectError } from "@connectrpc/connect";
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import type { ListOrdersResponse } from "@repo/proto/ordering/v1/service_pb";
-import { admin, inventory, isNotFound, orders } from "./client";
+import { admin, identity, inventory, isNotFound, orders } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
 export type ServerVersion = { version: string; commit: string; date: string; go: string };
@@ -10,7 +11,7 @@ export type ServerVersion = { version: string; commit: string; date: string; go:
 // The server exposes unary RPCs only, so the console polls. Reservations are
 // written by apps/worker after it consumes OrderCreated, and orders can be
 // cancelled by inventory (shortfall), so both change without a user action.
-const POLL_MS = 2000;
+export const POLL_MS = 2000;
 // A list query is fresh for a second: remounting a list (or two components asking for the
 // same page) within a tick reuses the data instead of going back to the server.
 const LIST_STALE_MS = 1000;
@@ -26,6 +27,10 @@ export const keys = {
   poison: ["poison"] as const,
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
   version: ["version"] as const,
+  adminProbe: (generation: number) => ["admin-probe", generation] as const,
+  accounts: ["accounts"] as const,
+  account: (id: string) => ["account", id] as const,
+  apiKeys: (accountId: string) => ["api-keys", accountId] as const,
 };
 
 // The build never changes while a tab is open; refetch only on a reload or
@@ -96,13 +101,10 @@ export const orderQuery = (id: string) =>
     },
   });
 
-// null = the worker has not reserved anything for this order (yet).
-//
-// orderStatus is given by a list row, which already polls its orders: the row only waits
-// when something is still to happen (see reservationPending); everything else fetches once,
-// and again when the order's status changes (ReservationCell). Without it (the order page)
-// the reservation polls on its own state alone.
-export const reservationQuery = (orderId: string, orderStatus?: OrderStatus, lateSince?: number) =>
+// null = the worker has not reserved anything for this order (yet). One order's page polls it
+// on its own state alone; the orders list does not use this at all: its rows share one
+// BatchGetReservations per tick (orderReservations.ts).
+export const reservationQuery = (orderId: string) =>
   queryOptions({
     queryKey: keys.reservation(orderId),
     queryFn: async () => {
@@ -116,13 +118,12 @@ export const reservationQuery = (orderId: string, orderStatus?: OrderStatus, lat
     // Everything but RESERVED is terminal; RESERVED can still be released and
     // a missing reservation can still appear.
     refetchInterval: (q) => {
-      if (orderStatus !== undefined) return reservationPending(orderStatus, q.state.data?.status, lateSince) ? POLL_MS : false;
       const s = q.state.data?.status;
       return s === undefined || s === ReservationStatus.RESERVED ? POLL_MS : false;
     },
   });
 
-// Is there a change to wait for, given the order's status, the reservation's (undefined =
+// Is there a change to wait for on an orders-list row, given the order's status, the reservation's (undefined =
 // none yet) and lateSince (when the order turned terminal with no reservation, ms epoch)?
 // PENDING: the worker has not reserved yet. COMPLETED / CANCELLED with the stock still
 // RESERVED: the commit / release event is on its way. COMPLETED / CANCELLED with no
@@ -182,4 +183,64 @@ export const poisonDetailQuery = (bc: string, offset: bigint) =>
   queryOptions({
     queryKey: keys.poisonDetail(bc, offset),
     queryFn: async () => (await admin.getPoison({ boundedContext: bc, offset })).message ?? null,
+  });
+
+// Can the current credential use the admin identity RPCs? Asked of the server itself (the
+// cheapest admin call, one account) rather than guessed from WhoAmI's roles: the role the server
+// wants is auth.admin_role, which the console cannot know, and with auth off there is no role at
+// all. true = the call went through; PERMISSION_DENIED / UNAUTHENTICATED = false; anything else
+// (network, 5xx) is an error, not a "no".
+//
+// Keyed by the credential generation (src/auth.ts), so a late answer for the previous credential
+// lands under its own key and is never read for the new one; the new one asks again, unproven =
+// not admin until it answers.
+export const adminProbeQuery = (generation: number) =>
+  queryOptions({
+    queryKey: keys.adminProbe(generation),
+    queryFn: async () => {
+      try {
+        await identity.listAccounts({ pageSize: 1 });
+        return true;
+      } catch (err) {
+        const code = ConnectError.from(err).code;
+        if (code === Code.PermissionDenied || code === Code.Unauthenticated) return false;
+        throw err;
+      }
+    },
+    staleTime: 60_000,
+    gcTime: 60_000,
+    retry: false,
+  });
+
+// Accounts by id ascending, 20 per page. Created / disabled / re-roled from this console,
+// so no polling; the key starts with keys.accounts so a mutation invalidates every page.
+export const accountsQuery = infiniteQueryOptions({
+  queryKey: keys.accounts,
+  queryFn: async ({ pageParam }) => identity.listAccounts({ pageSize: 20, pageToken: pageParam }),
+  initialPageParam: "",
+  getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
+  staleTime: LIST_STALE_MS,
+});
+
+// null = no such account.
+export const accountQuery = (id: string) =>
+  queryOptions({
+    queryKey: keys.account(id),
+    queryFn: async () => {
+      try {
+        return (await identity.getAccount({ id })).account ?? null;
+      } catch (err) {
+        if (isNotFound(err)) return null;
+        throw err;
+      }
+    },
+    staleTime: LIST_STALE_MS,
+  });
+
+// Every key of one account, REVOKED included, newest first (one response, no paging).
+export const apiKeysQuery = (accountId: string) =>
+  queryOptions({
+    queryKey: keys.apiKeys(accountId),
+    queryFn: async () => (await identity.listApiKeys({ accountId })).apiKeys,
+    staleTime: LIST_STALE_MS,
   });

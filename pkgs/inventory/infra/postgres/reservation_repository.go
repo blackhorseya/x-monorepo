@@ -62,6 +62,37 @@ func (i *ReservationRepository) FindByOrderID(c context.Context, orderID string)
 	return toDomain(row)
 }
 
+// FindByOrderIDs is one primary-key lookup (order_id IN (...)) plus one for the
+// lines, however many ids: the batch behind the console's orders list.
+func (i *ReservationRepository) FindByOrderIDs(c context.Context, orderIDs []string) ([]*reservation.Reservation, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(orderIDs) == 0 {
+		return nil, nil
+	}
+
+	var rows []reservationRow
+	err := platformpg.TxOrDB(ctx, i.db).
+		Preload("Lines", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
+		Where("order_id IN ?", orderIDs).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("find %d reservations: %w", len(orderIDs), err)
+	}
+	out := make([]*reservation.Reservation, 0, len(rows))
+	for _, row := range rows {
+		r, err := toDomain(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+
+	return out, nil
+}
+
 // Add inserts the aggregate; the primary key turns a race into ErrDuplicate.
 func (i *ReservationRepository) Add(c context.Context, r *reservation.Reservation) error {
 	ctx := contextx.FromContext(c)

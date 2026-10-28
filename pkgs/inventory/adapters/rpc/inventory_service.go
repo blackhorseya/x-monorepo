@@ -23,25 +23,27 @@ var _ inventoryv1connect.InventoryServiceHandler = (*InventoryService)(nil)
 
 // Use-case aliases keep handler signatures readable.
 type (
-	SetStockUC           = usecasex.UseCase[dto.SetStockInput, *dto.StockOutput]
-	GetStockUC           = usecasex.UseCase[dto.GetStockInput, *dto.StockOutput]
-	ListStocksUC         = usecasex.UseCase[dto.ListStocksInput, *dto.ListStocksOutput]
-	GetReservationUC     = usecasex.UseCase[dto.GetReservationInput, *dto.ReservationOutput]
-	ListReservationsUC   = usecasex.UseCase[dto.ListReservationsInput, *dto.ListReservationsOutput]
-	ExpireReservationsUC = usecasex.UseCase[dto.ExpireReservationsInput, *dto.ExpireReservationsOutput]
+	SetStockUC             = usecasex.UseCase[dto.SetStockInput, *dto.StockOutput]
+	GetStockUC             = usecasex.UseCase[dto.GetStockInput, *dto.StockOutput]
+	ListStocksUC           = usecasex.UseCase[dto.ListStocksInput, *dto.ListStocksOutput]
+	GetReservationUC       = usecasex.UseCase[dto.GetReservationInput, *dto.ReservationOutput]
+	BatchGetReservationsUC = usecasex.UseCase[dto.BatchGetReservationsInput, *dto.BatchGetReservationsOutput]
+	ListReservationsUC     = usecasex.UseCase[dto.ListReservationsInput, *dto.ListReservationsOutput]
+	ExpireReservationsUC   = usecasex.UseCase[dto.ExpireReservationsInput, *dto.ExpireReservationsOutput]
 )
 
 // InventoryService implements the generated InventoryServiceHandler. auth is
 // read only by ExpireReservations (server.RequireRole, the admin role): the
 // one procedure here that acts on other people's orders.
 type InventoryService struct {
-	setStock           SetStockUC
-	getStock           GetStockUC
-	listStocks         ListStocksUC
-	getReservation     GetReservationUC
-	listReservations   ListReservationsUC
-	expireReservations ExpireReservationsUC
-	auth               config.Auth
+	setStock             SetStockUC
+	getStock             GetStockUC
+	listStocks           ListStocksUC
+	getReservation       GetReservationUC
+	batchGetReservations BatchGetReservationsUC
+	listReservations     ListReservationsUC
+	expireReservations   ExpireReservationsUC
+	auth                 config.Auth
 }
 
 func NewInventoryService(
@@ -49,6 +51,7 @@ func NewInventoryService(
 	getStock GetStockUC,
 	listStocks ListStocksUC,
 	getReservation GetReservationUC,
+	batchGetReservations BatchGetReservationsUC,
 	listReservations ListReservationsUC,
 	expireReservations ExpireReservationsUC,
 	auth config.Auth,
@@ -59,7 +62,7 @@ func NewInventoryService(
 
 	return &InventoryService{
 		setStock: setStock, getStock: getStock, listStocks: listStocks,
-		getReservation: getReservation, listReservations: listReservations,
+		getReservation: getReservation, batchGetReservations: batchGetReservations, listReservations: listReservations,
 		expireReservations: expireReservations, auth: auth,
 	}
 }
@@ -122,6 +125,23 @@ func (h *InventoryService) GetReservation(
 	}
 
 	return connect.NewResponse(&inventoryv1.GetReservationResponse{Reservation: toProtoReservation(out)}), nil
+}
+
+// BatchGetReservations is GetReservation for up to 100 orders; same access.
+func (h *InventoryService) BatchGetReservations(
+	c context.Context,
+	req *connect.Request[inventoryv1.BatchGetReservationsRequest],
+) (*connect.Response[inventoryv1.BatchGetReservationsResponse], error) {
+	out, err := h.batchGetReservations.Execute(c, dto.BatchGetReservationsInput{OrderIDs: req.Msg.GetOrderIds()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+	rs := make([]*inventoryv1.Reservation, 0, len(out.Reservations))
+	for i := range out.Reservations {
+		rs = append(rs, toProtoReservation(&out.Reservations[i]))
+	}
+
+	return connect.NewResponse(&inventoryv1.BatchGetReservationsResponse{Reservations: rs}), nil
 }
 
 func (h *InventoryService) ListReservations(

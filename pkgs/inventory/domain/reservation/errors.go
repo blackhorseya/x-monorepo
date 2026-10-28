@@ -11,7 +11,9 @@ var (
 	// ErrInvalidOlderThan is an expiry sweep asked for a non-positive hold time.
 	ErrInvalidOlderThan = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_older_than", "older-than must be positive")
 	ErrStockMissing     = kernel.NewError(kernel.KindFailedPrecondition, "reservation.stock_missing", "stock of a reserved sku is missing")
-	ErrNotFound         = kernel.NewError(kernel.KindNotFound, "reservation.not_found", "reservation not found")
+	// ErrTooManyOrderIDs is a batch read asked for more orders than one call may.
+	ErrTooManyOrderIDs = kernel.NewError(kernel.KindInvalidArgument, "reservation.too_many_order_ids", "too many order ids in one call")
+	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "reservation.not_found", "reservation not found")
 	// ErrDuplicate is returned by Repository.Save when the order already has a reservation.
 	ErrDuplicate = kernel.NewError(kernel.KindConflict, "reservation.duplicate", "reservation already exists for this order")
 	// ErrInvalidStatusFilter is a list filter naming a status this version does not know.

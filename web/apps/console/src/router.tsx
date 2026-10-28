@@ -1,8 +1,11 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
+import { useIsAdmin } from "./components/admin";
 import { CredentialControl } from "./components/credential";
 import { ServerVersion } from "./components/version";
+import { AccountPage } from "./routes/account";
+import { AccountsPage } from "./routes/accounts";
 import { ExpirePage, type ExpireSearch } from "./routes/expire";
 import { OrderPage } from "./routes/order";
 import { OrdersPage, type OrdersSearch } from "./routes/orders";
@@ -11,20 +14,26 @@ import { PrunePage, type PruneSearch } from "./routes/prune";
 import { ReservationsPage, type ReservationsSearch } from "./routes/reservations";
 import { StockPage, type StockSearch } from "./routes/stock";
 
-const rootRoute = createRootRoute({
-  component: () => (
+const navLinks = [
+  { to: "/orders", label: "Orders" },
+  { to: "/reservations", label: "Reservations" },
+  { to: "/stock", label: "Stock" },
+  { to: "/poison", label: "Poison" },
+  { to: "/prune", label: "Prune" },
+  { to: "/expire", label: "Expire" },
+] as const;
+
+// Layout: the nav shows Accounts only to a caller whose WhoAmI carries the admin role. That is
+// a courtesy, not a gate: the server checks the role on every identity RPC.
+function Root() {
+  const isAdmin = useIsAdmin();
+  const links = isAdmin ? [...navLinks, { to: "/accounts", label: "Accounts" } as const] : navLinks;
+  return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
       <header className="mb-6 flex flex-wrap items-baseline gap-6">
         <h1 className="text-xl font-semibold">x-monorepo console</h1>
         <nav className="flex gap-4 text-sm text-muted-foreground">
-          {[
-            { to: "/orders", label: "Orders" },
-            { to: "/reservations", label: "Reservations" },
-            { to: "/stock", label: "Stock" },
-            { to: "/poison", label: "Poison" },
-            { to: "/prune", label: "Prune" },
-            { to: "/expire", label: "Expire" },
-          ].map((l) => (
+          {links.map((l) => (
             <Link key={l.to} to={l.to} activeProps={{ className: "text-foreground font-medium" }}>
               {l.label}
             </Link>
@@ -37,8 +46,10 @@ const rootRoute = createRootRoute({
         <ServerVersion />
       </footer>
     </div>
-  ),
-});
+  );
+}
+
+const rootRoute = createRootRoute({ component: Root });
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -78,6 +89,9 @@ const stockRoute = createRoute({
     reserved: raw.reserved === true ? true : undefined,
   }),
 });
+const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: AccountsPage });
+// A sibling of /accounts, like /orders/$id: the nav's prefix match lights Accounts up here too.
+const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: AccountPage });
 const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: PoisonPage });
 const pruneRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -100,7 +114,7 @@ const expireRoute = createRoute({
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, poisonRoute, pruneRoute, expireRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, poisonRoute, pruneRoute, expireRoute]),
   defaultPreload: "intent",
 });
 

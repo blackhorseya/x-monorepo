@@ -1,7 +1,7 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus, Trash2 } from "lucide-react";
-import { cloneElement, useEffect, useId, useRef, useState, type ReactElement } from "react";
+import { cloneElement, useEffect, useId, useState, type ReactElement } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useResetOnCredentialChange } from "../auth";
 import { describe, isUnauthenticated, orders } from "../client";
-import { keys, ordersQuery, refreshFirstPage, reservationQuery } from "../queries";
+import { useOrderReservations, type RowReservation } from "../orderReservations";
+import { keys, ordersQuery, refreshFirstPage } from "../queries";
 import { reservationBadge } from "./reservations";
 
 type Line = { sku: string; quantity: number; priceMinor: number };
@@ -122,6 +123,7 @@ function OrdersCard() {
     return () => clearInterval(t);
   }, [qc, customer, status]);
   const rows = list.data?.pages.flatMap((p) => p.orders) ?? [];
+  const reservations = useOrderReservations(rows);
   const setSearch = (patch: Partial<OrdersSearch>) => void navigate({ search: (prev) => ({ ...prev, ...patch }) });
 
   return (
@@ -201,7 +203,7 @@ function OrdersCard() {
           </TableHeader>
           <TableBody>
             {rows.map((o) => (
-              <OrderRow key={o.id} order={o} />
+              <OrderRow key={o.id} order={o} reservation={reservations.known.get(o.id)} reservationError={reservations.error} />
             ))}
             {list.isSuccess && rows.length === 0 && (
               <TableRow>
@@ -222,14 +224,13 @@ function OrdersCard() {
   );
 }
 
-function OrderRow({ order }: { order: Order }) {
+function OrderRow({ order, reservation, reservationError }: { order: Order; reservation?: RowReservation; reservationError: unknown }) {
   const qc = useQueryClient();
   const cancel = useMutation({
     mutationFn: () => orders.cancelOrder({ id: order.id }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.orders });
       void qc.invalidateQueries({ queryKey: keys.order(order.id) });
-      void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
     },
   });
   const complete = useMutation({
@@ -237,7 +238,6 @@ function OrderRow({ order }: { order: Order }) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.orders });
       void qc.invalidateQueries({ queryKey: keys.order(order.id) });
-      void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
     },
   });
   useResetOnCredentialChange(cancel);
@@ -262,7 +262,7 @@ function OrderRow({ order }: { order: Order }) {
         <Badge variant={statusVariant(order.status)}>{OrderStatus[order.status]}</Badge>
       </TableCell>
       <TableCell>
-        <ReservationCell orderId={order.id} orderStatus={order.status} />
+        <ReservationCell orderId={order.id} state={reservation} error={reservationError} />
       </TableCell>
       <TableCell className="space-x-2 text-right">
         {confirmed && (
@@ -282,25 +282,10 @@ function OrderRow({ order }: { order: Order }) {
   );
 }
 
-function ReservationCell({ orderId, orderStatus }: { orderId: string; orderStatus: OrderStatus }) {
-  // When the order turned terminal (or this row mounted on a terminal order): the window
-  // for a reservation that is not there yet (see reservationPending) counts from here. Set
-  // while rendering, from the order alone, so the query options built below already carry it.
-  const lateSince = useRef<number>(undefined);
-  const finished = orderStatus === OrderStatus.COMPLETED || orderStatus === OrderStatus.CANCELLED;
-  if (!finished) lateSince.current = undefined;
-  else lateSince.current ??= Date.now();
-  const { data, isError, error, refetch } = useQuery(reservationQuery(orderId, orderStatus, lateSince.current));
-  // The row does not poll once nothing is pending; the order's own status moving (the list
-  // polls that) is the cue to look at the reservation again.
-  const seen = useRef(orderStatus);
-  useEffect(() => {
-    if (seen.current === orderStatus) return;
-    seen.current = orderStatus;
-    void refetch();
-  }, [orderStatus, refetch]);
-  if (isError) return <span className="text-xs text-destructive">{describe(error)}</span>;
-  if (data === undefined) return null;
+function ReservationCell({ orderId, state, error }: { orderId: string; state?: RowReservation; error: unknown }) {
+  // The list asks for every waiting row's reservation at once (useOrderReservations); this only shows it.
+  if (state === undefined) return error === undefined ? null : <span className="text-xs text-destructive">{describe(error)}</span>;
+  const data = state.reservation;
   if (data === null) return <span className="text-sm text-muted-foreground">none yet</span>;
   return (
     <span className="flex flex-wrap items-center gap-2">
