@@ -11,7 +11,7 @@ import (
 	migratepgx "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
-	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx"
+	"github.com/jackc/pgx/v5/stdlib" // also registers database/sql driver "pgx"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
@@ -52,6 +52,28 @@ func Version(c context.Context, cfg config.Postgres, m Migration) (version uint,
 	return version, dirty, err
 }
 
+// openMigrateDB opens the handle migrate runs on. With cfg.ExpectTarget set
+// the URL is parsed once, checked, and the pool is opened from that very
+// config (see NewDB: a second parse could read a changed service file). It is
+// the bare pgx path, with none of gorm's driver setup. Unset, the URL goes to
+// the "pgx" driver as before.
+func openMigrateDB(cfg config.Postgres) (*sql.DB, error) {
+	if cfg.ExpectTarget != "" {
+		cc, err := ParseCheckedConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true})
+		if err != nil {
+			return nil, fmt.Errorf("postgres.expect_target: %w", err)
+		}
+
+		return stdlib.OpenDB(*cc), nil
+	}
+	db, err := sql.Open("pgx", cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres for migrate: %w", err)
+	}
+
+	return db, nil
+}
+
 // run opens a short-lived database/sql handle of its own: golang-migrate's
 // Close() closes the *sql.DB it was given, so it must never borrow gorm's pool.
 func run(c context.Context, cfg config.Postgres, m Migration, op func(*migrate.Migrate) error) error {
@@ -62,9 +84,9 @@ func run(c context.Context, cfg config.Postgres, m Migration, op func(*migrate.M
 		return errors.New("postgres url must not be empty")
 	}
 
-	db, err := sql.Open("pgx", cfg.URL)
+	db, err := openMigrateDB(cfg)
 	if err != nil {
-		return fmt.Errorf("open postgres for migrate: %w", err)
+		return err
 	}
 
 	// The version table lives inside the BC schema, so the schema has to exist
