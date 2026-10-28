@@ -7,8 +7,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -60,7 +63,7 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("postgres.expect_target: %w", err)
 		}
-		checked = stdlib.OpenDB(*cc)
+		checked = openChecked(cc, cfg.URL)
 		dialector = postgres.New(postgres.Config{Conn: checked})
 	}
 
@@ -99,4 +102,41 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	}
 
 	return db, cleanup, nil
+}
+
+// timeZoneMatcher is gorm.io/driver/postgres v1.6.3's own (postgres.go:38):
+// the TimeZone it looks for in the DSN text.
+var timeZoneMatcher = regexp.MustCompile("(time_zone|TimeZone|timezone)=(.*?)($|&| )")
+
+// openChecked opens the pool from cc, the config the guard approved, and does
+// what gorm's driver does for a DSN (postgres.go:95-121, v1.6.3) so that the
+// check changes where NewDB dials and nothing else: a TimeZone in the DSN
+// becomes the session's timezone and the zone TIMESTAMP (without time zone)
+// columns decode in. Handing the driver a Conn skips all of that.
+//
+// The zone is read from dsn the way the driver reads it, as text, so with and
+// without expect_target the same URL means the same thing. That is not a
+// second parse: what is dialed comes from cc alone. PreferSimpleProtocol and
+// the other driver options are not used by NewDB.
+func openChecked(cc *pgx.ConnConfig, dsn string) *sql.DB {
+	var opts []stdlib.OptionOpenDB
+	if m := timeZoneMatcher.FindStringSubmatch(dsn); len(m) > 2 {
+		zone := m[2]
+		cc.RuntimeParams["timezone"] = zone
+		opts = append(opts, stdlib.OptionAfterConnect(func(_ context.Context, conn *pgx.Conn) error {
+			loc, err := time.LoadLocation(zone)
+			if err != nil {
+				return err
+			}
+			conn.TypeMap().RegisterType(&pgtype.Type{
+				Name:  "timestamp",
+				OID:   pgtype.TimestampOID,
+				Codec: &pgtype.TimestampCodec{ScanLocation: loc},
+			})
+
+			return nil
+		}))
+	}
+
+	return stdlib.OpenDB(*cc, opts...)
 }
