@@ -15,7 +15,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file inventory/v1/service.proto.
  */
 export const file_inventory_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJ3ChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCRIbCgpza3VfcHJlZml4GAMgASgJQge6SARyAhhAEhUKDW9ubHlfcmVzZXJ2ZWQYBCABKAgiUgoSTGlzdFN0b2Nrc1Jlc3BvbnNlEiMKBnN0b2NrcxgBIAMoCzITLmludmVudG9yeS52MS5TdG9jaxIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiMgoVR2V0UmVzZXJ2YXRpb25SZXF1ZXN0EhkKCG9yZGVyX2lkGAEgASgJQge6SARyAhABIkgKFkdldFJlc2VydmF0aW9uUmVzcG9uc2USLgoLcmVzZXJ2YXRpb24YASABKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24iegoXTGlzdFJlc2VydmF0aW9uc1JlcXVlc3QSLwoGc3RhdHVzGAEgASgOMh8uaW52ZW50b3J5LnYxLlJlc2VydmF0aW9uU3RhdHVzEhoKCXBhZ2Vfc2l6ZRgCIAEoBUIHukgEGgIoABISCgpwYWdlX3Rva2VuGAMgASgJImQKGExpc3RSZXNlcnZhdGlvbnNSZXNwb25zZRIvCgxyZXNlcnZhdGlvbnMYASADKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24SFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJIoMBChlFeHBpcmVSZXNlcnZhdGlvbnNSZXF1ZXN0EjoKCm9sZGVyX3RoYW4YASABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb25CC7pICMgBAaoBAioAEg8KB2RyeV9ydW4YAiABKAgSGQoFbGltaXQYAyABKAVCCrpIBxoFGOgHKAAihAEKEkV4cGlyZWRSZXNlcnZhdGlvbhIQCghvcmRlcl9pZBgBIAEoCRIvCgtyZXNlcnZlZF9hdBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASKwoIaGVsZF9mb3IYAyABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb24iYAoaRXhwaXJlUmVzZXJ2YXRpb25zUmVzcG9uc2USMQoHZXhwaXJlZBgBIAMoCzIgLmludmVudG9yeS52MS5FeHBpcmVkUmVzZXJ2YXRpb24SDwoHZHJ5X3J1bhgCIAEoCDKiBAoQSW52ZW50b3J5U2VydmljZRJJCghTZXRTdG9jaxIdLmludmVudG9yeS52MS5TZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuU2V0U3RvY2tSZXNwb25zZRJJCghHZXRTdG9jaxIdLmludmVudG9yeS52MS5HZXRTdG9ja1JlcXVlc3QaHi5pbnZlbnRvcnkudjEuR2V0U3RvY2tSZXNwb25zZRJPCgpMaXN0U3RvY2tzEh8uaW52ZW50b3J5LnYxLkxpc3RTdG9ja3NSZXF1ZXN0GiAuaW52ZW50b3J5LnYxLkxpc3RTdG9ja3NSZXNwb25zZRJbCg5HZXRSZXNlcnZhdGlvbhIjLmludmVudG9yeS52MS5HZXRSZXNlcnZhdGlvblJlcXVlc3QaJC5pbnZlbnRvcnkudjEuR2V0UmVzZXJ2YXRpb25SZXNwb25zZRJhChBMaXN0UmVzZXJ2YXRpb25zEiUuaW52ZW50b3J5LnYxLkxpc3RSZXNlcnZhdGlvbnNSZXF1ZXN0GiYuaW52ZW50b3J5LnYxLkxpc3RSZXNlcnZhdGlvbnNSZXNwb25zZRJnChJFeHBpcmVSZXNlcnZhdGlvbnMSJy5pbnZlbnRvcnkudjEuRXhwaXJlUmVzZXJ2YXRpb25zUmVxdWVzdBooLmludmVudG9yeS52MS5FeHBpcmVSZXNlcnZhdGlvbnNSZXNwb25zZWIGcHJvdG8z", [file_buf_validate_validate, file_google_protobuf_duration, file_google_protobuf_timestamp, file_inventory_v1_entity]);
+  fileDesc("ChppbnZlbnRvcnkvdjEvc2VydmljZS5wcm90bxIMaW52ZW50b3J5LnYxIkEKD1NldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAESGAoHb25faGFuZBgCIAEoBUIHukgEGgIoACI2ChBTZXRTdG9ja1Jlc3BvbnNlEiIKBXN0b2NrGAEgASgLMhMuaW52ZW50b3J5LnYxLlN0b2NrIicKD0dldFN0b2NrUmVxdWVzdBIUCgNza3UYASABKAlCB7pIBHICEAEiNgoQR2V0U3RvY2tSZXNwb25zZRIiCgVzdG9jaxgBIAEoCzITLmludmVudG9yeS52MS5TdG9jayJ3ChFMaXN0U3RvY2tzUmVxdWVzdBIaCglwYWdlX3NpemUYASABKAVCB7pIBBoCKAASEgoKcGFnZV90b2tlbhgCIAEoCRIbCgpza3VfcHJlZml4GAMgASgJQge6SARyAhhAEhUKDW9ubHlfcmVzZXJ2ZWQYBCABKAgiUgoSTGlzdFN0b2Nrc1Jlc3BvbnNlEiMKBnN0b2NrcxgBIAMoCzITLmludmVudG9yeS52MS5TdG9jaxIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiMgoVR2V0UmVzZXJ2YXRpb25SZXF1ZXN0EhkKCG9yZGVyX2lkGAEgASgJQge6SARyAhABIkgKFkdldFJlc2VydmF0aW9uUmVzcG9uc2USLgoLcmVzZXJ2YXRpb24YASABKAsyGS5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb24iQgobQmF0Y2hHZXRSZXNlcnZhdGlvbnNSZXF1ZXN0EiMKCW9yZGVyX2lkcxgBIAMoCUIQukgNkgEKCAEQZCIEcgIQASJPChxCYXRjaEdldFJlc2VydmF0aW9uc1Jlc3BvbnNlEi8KDHJlc2VydmF0aW9ucxgBIAMoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbiJ6ChdMaXN0UmVzZXJ2YXRpb25zUmVxdWVzdBIvCgZzdGF0dXMYASABKA4yHy5pbnZlbnRvcnkudjEuUmVzZXJ2YXRpb25TdGF0dXMSGgoJcGFnZV9zaXplGAIgASgFQge6SAQaAigAEhIKCnBhZ2VfdG9rZW4YAyABKAkiZAoYTGlzdFJlc2VydmF0aW9uc1Jlc3BvbnNlEi8KDHJlc2VydmF0aW9ucxgBIAMoCzIZLmludmVudG9yeS52MS5SZXNlcnZhdGlvbhIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkigwEKGUV4cGlyZVJlc2VydmF0aW9uc1JlcXVlc3QSOgoKb2xkZXJfdGhhbhgBIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbkILukgIyAEBqgECKgASDwoHZHJ5X3J1bhgCIAEoCBIZCgVsaW1pdBgDIAEoBUIKukgHGgUY6AcoACKEAQoSRXhwaXJlZFJlc2VydmF0aW9uEhAKCG9yZGVyX2lkGAEgASgJEi8KC3Jlc2VydmVkX2F0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIrCghoZWxkX2ZvchgDIAEoCzIZLmdvb2dsZS5wcm90b2J1Zi5EdXJhdGlvbiJgChpFeHBpcmVSZXNlcnZhdGlvbnNSZXNwb25zZRIxCgdleHBpcmVkGAEgAygLMiAuaW52ZW50b3J5LnYxLkV4cGlyZWRSZXNlcnZhdGlvbhIPCgdkcnlfcnVuGAIgASgIMpEFChBJbnZlbnRvcnlTZXJ2aWNlEkkKCFNldFN0b2NrEh0uaW52ZW50b3J5LnYxLlNldFN0b2NrUmVxdWVzdBoeLmludmVudG9yeS52MS5TZXRTdG9ja1Jlc3BvbnNlEkkKCEdldFN0b2NrEh0uaW52ZW50b3J5LnYxLkdldFN0b2NrUmVxdWVzdBoeLmludmVudG9yeS52MS5HZXRTdG9ja1Jlc3BvbnNlEk8KCkxpc3RTdG9ja3MSHy5pbnZlbnRvcnkudjEuTGlzdFN0b2Nrc1JlcXVlc3QaIC5pbnZlbnRvcnkudjEuTGlzdFN0b2Nrc1Jlc3BvbnNlElsKDkdldFJlc2VydmF0aW9uEiMuaW52ZW50b3J5LnYxLkdldFJlc2VydmF0aW9uUmVxdWVzdBokLmludmVudG9yeS52MS5HZXRSZXNlcnZhdGlvblJlc3BvbnNlEm0KFEJhdGNoR2V0UmVzZXJ2YXRpb25zEikuaW52ZW50b3J5LnYxLkJhdGNoR2V0UmVzZXJ2YXRpb25zUmVxdWVzdBoqLmludmVudG9yeS52MS5CYXRjaEdldFJlc2VydmF0aW9uc1Jlc3BvbnNlEmEKEExpc3RSZXNlcnZhdGlvbnMSJS5pbnZlbnRvcnkudjEuTGlzdFJlc2VydmF0aW9uc1JlcXVlc3QaJi5pbnZlbnRvcnkudjEuTGlzdFJlc2VydmF0aW9uc1Jlc3BvbnNlEmcKEkV4cGlyZVJlc2VydmF0aW9ucxInLmludmVudG9yeS52MS5FeHBpcmVSZXNlcnZhdGlvbnNSZXF1ZXN0GiguaW52ZW50b3J5LnYxLkV4cGlyZVJlc2VydmF0aW9uc1Jlc3BvbnNlYgZwcm90bzM", [file_buf_validate_validate, file_google_protobuf_duration, file_google_protobuf_timestamp, file_inventory_v1_entity]);
 
 /**
  * @generated from message inventory.v1.SetStockRequest
@@ -190,6 +190,45 @@ export const GetReservationResponseSchema: GenMessage<GetReservationResponse> = 
   messageDesc(file_inventory_v1_service, 7);
 
 /**
+ * @generated from message inventory.v1.BatchGetReservationsRequest
+ */
+export type BatchGetReservationsRequest = Message<"inventory.v1.BatchGetReservationsRequest"> & {
+  /**
+   * 1 to 100 order ids (the same maximum as a page); duplicates are allowed
+   * and answered once.
+   *
+   * @generated from field: repeated string order_ids = 1;
+   */
+  orderIds: string[];
+};
+
+/**
+ * Describes the message inventory.v1.BatchGetReservationsRequest.
+ * Use `create(BatchGetReservationsRequestSchema)` to create a new message.
+ */
+export const BatchGetReservationsRequestSchema: GenMessage<BatchGetReservationsRequest> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 8);
+
+/**
+ * @generated from message inventory.v1.BatchGetReservationsResponse
+ */
+export type BatchGetReservationsResponse = Message<"inventory.v1.BatchGetReservationsResponse"> & {
+  /**
+   * Only the orders that have one, in no particular order: match on order_id.
+   *
+   * @generated from field: repeated inventory.v1.Reservation reservations = 1;
+   */
+  reservations: Reservation[];
+};
+
+/**
+ * Describes the message inventory.v1.BatchGetReservationsResponse.
+ * Use `create(BatchGetReservationsResponseSchema)` to create a new message.
+ */
+export const BatchGetReservationsResponseSchema: GenMessage<BatchGetReservationsResponse> = /*@__PURE__*/
+  messageDesc(file_inventory_v1_service, 9);
+
+/**
  * @generated from message inventory.v1.ListReservationsRequest
  */
 export type ListReservationsRequest = Message<"inventory.v1.ListReservationsRequest"> & {
@@ -220,7 +259,7 @@ export type ListReservationsRequest = Message<"inventory.v1.ListReservationsRequ
  * Use `create(ListReservationsRequestSchema)` to create a new message.
  */
 export const ListReservationsRequestSchema: GenMessage<ListReservationsRequest> = /*@__PURE__*/
-  messageDesc(file_inventory_v1_service, 8);
+  messageDesc(file_inventory_v1_service, 10);
 
 /**
  * @generated from message inventory.v1.ListReservationsResponse
@@ -244,7 +283,7 @@ export type ListReservationsResponse = Message<"inventory.v1.ListReservationsRes
  * Use `create(ListReservationsResponseSchema)` to create a new message.
  */
 export const ListReservationsResponseSchema: GenMessage<ListReservationsResponse> = /*@__PURE__*/
-  messageDesc(file_inventory_v1_service, 9);
+  messageDesc(file_inventory_v1_service, 11);
 
 /**
  * @generated from message inventory.v1.ExpireReservationsRequest
@@ -277,7 +316,7 @@ export type ExpireReservationsRequest = Message<"inventory.v1.ExpireReservations
  * Use `create(ExpireReservationsRequestSchema)` to create a new message.
  */
 export const ExpireReservationsRequestSchema: GenMessage<ExpireReservationsRequest> = /*@__PURE__*/
-  messageDesc(file_inventory_v1_service, 10);
+  messageDesc(file_inventory_v1_service, 12);
 
 /**
  * ExpiredReservation is one reservation the call expired — or, dry run, would.
@@ -310,7 +349,7 @@ export type ExpiredReservation = Message<"inventory.v1.ExpiredReservation"> & {
  * Use `create(ExpiredReservationSchema)` to create a new message.
  */
 export const ExpiredReservationSchema: GenMessage<ExpiredReservation> = /*@__PURE__*/
-  messageDesc(file_inventory_v1_service, 11);
+  messageDesc(file_inventory_v1_service, 13);
 
 /**
  * @generated from message inventory.v1.ExpireReservationsResponse
@@ -334,7 +373,7 @@ export type ExpireReservationsResponse = Message<"inventory.v1.ExpireReservation
  * Use `create(ExpireReservationsResponseSchema)` to create a new message.
  */
 export const ExpireReservationsResponseSchema: GenMessage<ExpireReservationsResponse> = /*@__PURE__*/
-  messageDesc(file_inventory_v1_service, 12);
+  messageDesc(file_inventory_v1_service, 14);
 
 /**
  * InventoryService is the public RPC contract of the inventory bounded context.
@@ -383,6 +422,18 @@ export const InventoryService: GenService<{
     methodKind: "unary";
     input: typeof GetReservationRequestSchema;
     output: typeof GetReservationResponseSchema;
+  },
+  /**
+   * BatchGetReservations reads the reservations of up to 100 orders in one
+   * query (GetReservation for a list): an order without one is left out of the
+   * response, not an error. Same access as GetReservation.
+   *
+   * @generated from rpc inventory.v1.InventoryService.BatchGetReservations
+   */
+  batchGetReservations: {
+    methodKind: "unary";
+    input: typeof BatchGetReservationsRequestSchema;
+    output: typeof BatchGetReservationsResponseSchema;
   },
   /**
    * ListReservations pages through reservations newest first, optionally by status.

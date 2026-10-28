@@ -38,6 +38,10 @@ func (i *ReservationRepository) FindByOrderID(c context.Context, orderID string)
 	return cloneReservation(r)
 }
 
+func (i *ReservationRepository) FindByOrderIDs(c context.Context, orderIDs []string) ([]*reservation.Reservation, error) {
+	return nil, nil
+}
+
 func (i *ReservationRepository) Add(c context.Context, r *reservation.Reservation) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {

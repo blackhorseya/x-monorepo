@@ -45,6 +45,9 @@ const (
 	// InventoryServiceGetReservationProcedure is the fully-qualified name of the InventoryService's
 	// GetReservation RPC.
 	InventoryServiceGetReservationProcedure = "/inventory.v1.InventoryService/GetReservation"
+	// InventoryServiceBatchGetReservationsProcedure is the fully-qualified name of the
+	// InventoryService's BatchGetReservations RPC.
+	InventoryServiceBatchGetReservationsProcedure = "/inventory.v1.InventoryService/BatchGetReservations"
 	// InventoryServiceListReservationsProcedure is the fully-qualified name of the InventoryService's
 	// ListReservations RPC.
 	InventoryServiceListReservationsProcedure = "/inventory.v1.InventoryService/ListReservations"
@@ -64,6 +67,10 @@ type InventoryServiceClient interface {
 	ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error)
 	// GetReservation reads the outcome inventory recorded for an order.
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
+	// BatchGetReservations reads the reservations of up to 100 orders in one
+	// query (GetReservation for a list): an order without one is left out of the
+	// response, not an error. Same access as GetReservation.
+	BatchGetReservations(context.Context, *connect.Request[v1.BatchGetReservationsRequest]) (*connect.Response[v1.BatchGetReservationsResponse], error)
 	// ListReservations pages through reservations newest first, optionally by status.
 	ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error)
 	// ExpireReservations is `worker expire` over RPC: RESERVED reservations held
@@ -110,6 +117,12 @@ func NewInventoryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(inventoryServiceMethods.ByName("GetReservation")),
 			connect.WithClientOptions(opts...),
 		),
+		batchGetReservations: connect.NewClient[v1.BatchGetReservationsRequest, v1.BatchGetReservationsResponse](
+			httpClient,
+			baseURL+InventoryServiceBatchGetReservationsProcedure,
+			connect.WithSchema(inventoryServiceMethods.ByName("BatchGetReservations")),
+			connect.WithClientOptions(opts...),
+		),
 		listReservations: connect.NewClient[v1.ListReservationsRequest, v1.ListReservationsResponse](
 			httpClient,
 			baseURL+InventoryServiceListReservationsProcedure,
@@ -127,12 +140,13 @@ func NewInventoryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 
 // inventoryServiceClient implements InventoryServiceClient.
 type inventoryServiceClient struct {
-	setStock           *connect.Client[v1.SetStockRequest, v1.SetStockResponse]
-	getStock           *connect.Client[v1.GetStockRequest, v1.GetStockResponse]
-	listStocks         *connect.Client[v1.ListStocksRequest, v1.ListStocksResponse]
-	getReservation     *connect.Client[v1.GetReservationRequest, v1.GetReservationResponse]
-	listReservations   *connect.Client[v1.ListReservationsRequest, v1.ListReservationsResponse]
-	expireReservations *connect.Client[v1.ExpireReservationsRequest, v1.ExpireReservationsResponse]
+	setStock             *connect.Client[v1.SetStockRequest, v1.SetStockResponse]
+	getStock             *connect.Client[v1.GetStockRequest, v1.GetStockResponse]
+	listStocks           *connect.Client[v1.ListStocksRequest, v1.ListStocksResponse]
+	getReservation       *connect.Client[v1.GetReservationRequest, v1.GetReservationResponse]
+	batchGetReservations *connect.Client[v1.BatchGetReservationsRequest, v1.BatchGetReservationsResponse]
+	listReservations     *connect.Client[v1.ListReservationsRequest, v1.ListReservationsResponse]
+	expireReservations   *connect.Client[v1.ExpireReservationsRequest, v1.ExpireReservationsResponse]
 }
 
 // SetStock calls inventory.v1.InventoryService.SetStock.
@@ -153,6 +167,11 @@ func (c *inventoryServiceClient) ListStocks(ctx context.Context, req *connect.Re
 // GetReservation calls inventory.v1.InventoryService.GetReservation.
 func (c *inventoryServiceClient) GetReservation(ctx context.Context, req *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error) {
 	return c.getReservation.CallUnary(ctx, req)
+}
+
+// BatchGetReservations calls inventory.v1.InventoryService.BatchGetReservations.
+func (c *inventoryServiceClient) BatchGetReservations(ctx context.Context, req *connect.Request[v1.BatchGetReservationsRequest]) (*connect.Response[v1.BatchGetReservationsResponse], error) {
+	return c.batchGetReservations.CallUnary(ctx, req)
 }
 
 // ListReservations calls inventory.v1.InventoryService.ListReservations.
@@ -176,6 +195,10 @@ type InventoryServiceHandler interface {
 	ListStocks(context.Context, *connect.Request[v1.ListStocksRequest]) (*connect.Response[v1.ListStocksResponse], error)
 	// GetReservation reads the outcome inventory recorded for an order.
 	GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error)
+	// BatchGetReservations reads the reservations of up to 100 orders in one
+	// query (GetReservation for a list): an order without one is left out of the
+	// response, not an error. Same access as GetReservation.
+	BatchGetReservations(context.Context, *connect.Request[v1.BatchGetReservationsRequest]) (*connect.Response[v1.BatchGetReservationsResponse], error)
 	// ListReservations pages through reservations newest first, optionally by status.
 	ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error)
 	// ExpireReservations is `worker expire` over RPC: RESERVED reservations held
@@ -218,6 +241,12 @@ func NewInventoryServiceHandler(svc InventoryServiceHandler, opts ...connect.Han
 		connect.WithSchema(inventoryServiceMethods.ByName("GetReservation")),
 		connect.WithHandlerOptions(opts...),
 	)
+	inventoryServiceBatchGetReservationsHandler := connect.NewUnaryHandler(
+		InventoryServiceBatchGetReservationsProcedure,
+		svc.BatchGetReservations,
+		connect.WithSchema(inventoryServiceMethods.ByName("BatchGetReservations")),
+		connect.WithHandlerOptions(opts...),
+	)
 	inventoryServiceListReservationsHandler := connect.NewUnaryHandler(
 		InventoryServiceListReservationsProcedure,
 		svc.ListReservations,
@@ -240,6 +269,8 @@ func NewInventoryServiceHandler(svc InventoryServiceHandler, opts ...connect.Han
 			inventoryServiceListStocksHandler.ServeHTTP(w, r)
 		case InventoryServiceGetReservationProcedure:
 			inventoryServiceGetReservationHandler.ServeHTTP(w, r)
+		case InventoryServiceBatchGetReservationsProcedure:
+			inventoryServiceBatchGetReservationsHandler.ServeHTTP(w, r)
 		case InventoryServiceListReservationsProcedure:
 			inventoryServiceListReservationsHandler.ServeHTTP(w, r)
 		case InventoryServiceExpireReservationsProcedure:
@@ -267,6 +298,10 @@ func (UnimplementedInventoryServiceHandler) ListStocks(context.Context, *connect
 
 func (UnimplementedInventoryServiceHandler) GetReservation(context.Context, *connect.Request[v1.GetReservationRequest]) (*connect.Response[v1.GetReservationResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("inventory.v1.InventoryService.GetReservation is not implemented"))
+}
+
+func (UnimplementedInventoryServiceHandler) BatchGetReservations(context.Context, *connect.Request[v1.BatchGetReservationsRequest]) (*connect.Response[v1.BatchGetReservationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("inventory.v1.InventoryService.BatchGetReservations is not implemented"))
 }
 
 func (UnimplementedInventoryServiceHandler) ListReservations(context.Context, *connect.Request[v1.ListReservationsRequest]) (*connect.Response[v1.ListReservationsResponse], error) {

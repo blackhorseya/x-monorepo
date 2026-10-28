@@ -62,6 +62,10 @@ func (i *ReservationRepository) FindByOrderID(c context.Context, orderID string)
 	return toDomain(row)
 }
 
+func (i *ReservationRepository) FindByOrderIDs(c context.Context, orderIDs []string) ([]*reservation.Reservation, error) {
+	return nil, nil
+}
+
 // Add inserts the aggregate; the primary key turns a race into ErrDuplicate.
 func (i *ReservationRepository) Add(c context.Context, r *reservation.Reservation) error {
 	ctx := contextx.FromContext(c)

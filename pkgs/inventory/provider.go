@@ -48,6 +48,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGetStock,
 	ProvideListStocks,
 	ProvideGetReservation,
+	ProvideBatchGetReservations,
 	ProvideListReservations,
 	ProvideReservationStats,
 	ProvideReserveStock,
@@ -175,6 +176,10 @@ func ProvideGauges(stats metrics.ReservationStatsUC) Gauges { return Gauges{metr
 // success line is Debug, so a scrape every 15s stays quiet at Info).
 func ProvideReservationStats(reservations reservation.Repository, rec *usecasex.Recorder) metrics.ReservationStatsUC {
 	return decorate("inventory.reservation_stats", rec, usecase.NewReservationStats(reservations))
+}
+
+func ProvideBatchGetReservations(reservations reservation.Repository, rec *usecasex.Recorder) rpc.BatchGetReservationsUC {
+	return decorate("inventory.batch_get_reservations", rec, usecase.NewBatchGetReservations(reservations))
 }
 
 func ProvideListReservations(reservations reservation.Repository, rec *usecasex.Recorder) rpc.ListReservationsUC {

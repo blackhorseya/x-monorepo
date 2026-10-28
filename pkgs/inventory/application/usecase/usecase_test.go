@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -36,6 +37,7 @@ type fixture struct {
 	getStock     *usecase.GetStock
 	listStocks   *usecase.ListStocks
 	getRes       *usecase.GetReservation
+	batchGetRes  *usecase.BatchGetReservations
 	listRes      *usecase.ListReservations
 	reserve      *usecase.ReserveStock
 	release      *usecase.ReleaseStock
@@ -51,6 +53,7 @@ func newFixture() *fixture {
 	f.getStock = usecase.NewGetStock(f.stocks)
 	f.listStocks = usecase.NewListStocks(f.stocks)
 	f.getRes = usecase.NewGetReservation(f.reservations)
+	f.batchGetRes = usecase.NewBatchGetReservations(f.reservations)
 	f.listRes = usecase.NewListReservations(f.reservations)
 	f.reserve = usecase.NewReserveStock(f.reservations, f.stocks, f.rec, clock)
 	f.release = usecase.NewReleaseStock(f.reservations, f.stocks, f.rec, clock)
@@ -579,5 +582,54 @@ func TestListReservations(t *testing.T) {
 	}
 	if _, err := f.listRes.Execute(c, dto.ListReservationsInput{PageSize: -1}); err == nil {
 		t.Fatal("negative page size must fail")
+	}
+}
+
+// BatchGetReservations answers GetReservation for many orders in one read: an
+// order without a reservation is left out (not an error), a repeated id is
+// answered once, and the input is bounded.
+func TestBatchGetReservations(t *testing.T) {
+	c := context.Background()
+	f := newFixture()
+	if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: "A", OnHand: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.reserve.Execute(c, dto.ReserveStockInput{OrderID: "o-1", Lines: []dto.Line{{SKU: "A", Quantity: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	// o-2 cancelled before it was created: a CANCELLED tombstone.
+	if _, err := f.release.Execute(c, dto.ReleaseStockInput{OrderID: "o-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := f.batchGetRes.Execute(c, dto.BatchGetReservationsInput{OrderIDs: []string{"o-1", "o-missing", "o-2", "o-1"}})
+	if err != nil || len(out.Reservations) != 2 {
+		t.Fatalf("batch = %+v, %v; want o-1 and o-2 once each, o-missing left out", out, err)
+	}
+	got := map[string]string{}
+	for _, r := range out.Reservations {
+		got[r.OrderID] = r.Status
+	}
+	if got["o-1"] != "RESERVED" || got["o-2"] != "CANCELLED" {
+		t.Fatalf("statuses = %v", got)
+	}
+	if out, err := f.batchGetRes.Execute(c, dto.BatchGetReservationsInput{OrderIDs: []string{"o-nope"}}); err != nil || len(out.Reservations) != 0 {
+		t.Fatalf("nothing found = %+v, %v; want empty, no error", out, err)
+	}
+
+	for name, ids := range map[string][]string{"none": nil, "empty id": {"o-1", ""}} {
+		if _, err := f.batchGetRes.Execute(c, dto.BatchGetReservationsInput{OrderIDs: ids}); !errors.Is(err, reservation.ErrInvalidOrderID) {
+			t.Fatalf("%s: err = %v, want ErrInvalidOrderID", name, err)
+		}
+	}
+	many := make([]string, usecase.MaxBatchOrderIDs+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("o-%d", i)
+	}
+	if _, err := f.batchGetRes.Execute(c, dto.BatchGetReservationsInput{OrderIDs: many}); !errors.Is(err, reservation.ErrTooManyOrderIDs) {
+		t.Fatalf("%d ids: err = %v, want ErrTooManyOrderIDs", len(many), err)
+	}
+	if _, err := f.batchGetRes.Execute(c, dto.BatchGetReservationsInput{OrderIDs: many[:usecase.MaxBatchOrderIDs]}); err != nil {
+		t.Fatalf("%d ids (the maximum): %v", usecase.MaxBatchOrderIDs, err)
 	}
 }
