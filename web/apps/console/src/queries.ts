@@ -10,7 +10,7 @@ export type ServerVersion = { version: string; commit: string; date: string; go:
 // The server exposes unary RPCs only, so the console polls. Reservations are
 // written by apps/worker after it consumes OrderCreated, and orders can be
 // cancelled by inventory (shortfall), so both change without a user action.
-const POLL_MS = 2000;
+export const POLL_MS = 2000;
 // A list query is fresh for a second: remounting a list (or two components asking for the
 // same page) within a tick reuses the data instead of going back to the server.
 const LIST_STALE_MS = 1000;
@@ -96,13 +96,10 @@ export const orderQuery = (id: string) =>
     },
   });
 
-// null = the worker has not reserved anything for this order (yet).
-//
-// orderStatus is given by a list row, which already polls its orders: the row only waits
-// when something is still to happen (see reservationPending); everything else fetches once,
-// and again when the order's status changes (ReservationCell). Without it (the order page)
-// the reservation polls on its own state alone.
-export const reservationQuery = (orderId: string, orderStatus?: OrderStatus, lateSince?: number) =>
+// null = the worker has not reserved anything for this order (yet). One order's page polls it
+// on its own state alone; the orders list does not use this at all: its rows share one
+// BatchGetReservations per tick (orderReservations.ts).
+export const reservationQuery = (orderId: string) =>
   queryOptions({
     queryKey: keys.reservation(orderId),
     queryFn: async () => {
@@ -116,13 +113,12 @@ export const reservationQuery = (orderId: string, orderStatus?: OrderStatus, lat
     // Everything but RESERVED is terminal; RESERVED can still be released and
     // a missing reservation can still appear.
     refetchInterval: (q) => {
-      if (orderStatus !== undefined) return reservationPending(orderStatus, q.state.data?.status, lateSince) ? POLL_MS : false;
       const s = q.state.data?.status;
       return s === undefined || s === ReservationStatus.RESERVED ? POLL_MS : false;
     },
   });
 
-// Is there a change to wait for, given the order's status, the reservation's (undefined =
+// Is there a change to wait for on an orders-list row, given the order's status, the reservation's (undefined =
 // none yet) and lateSince (when the order turned terminal with no reservation, ms epoch)?
 // PENDING: the worker has not reserved yet. COMPLETED / CANCELLED with the stock still
 // RESERVED: the commit / release event is on its way. COMPLETED / CANCELLED with no
