@@ -243,3 +243,43 @@ test("returning to the tab looks again at a row whose wait ran out", async ({ pa
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 5_000 });
 });
+
+// The same, but a poll for another row is in flight when the tab comes back: the refresh of every
+// row must wait its turn, not be dropped because a request is already running.
+test("returning to the tab while another row's request is in flight still looks at the expired row", async ({ page }) => {
+  await page.clock.install();
+  const customer = `e2e-busy-${Date.now()}`;
+  const expired = await createOrder(page, customer); // cancelled: its wait for a reservation runs out
+  await post(page, "ordering.v1.OrderService/CancelOrder", { id: expired });
+  await createOrder(page, customer); // PENDING: keeps polling, alone once the other one went quiet
+
+  let late = false;
+  let hold = false;
+  let held!: () => void;
+  const captured = new Promise<void>((r) => (held = r));
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", async (route) => {
+    const { orderIds } = route.request().postDataJSON() as { orderIds: string[] };
+    if (hold && !orderIds.includes(expired)) {
+      hold = false; // only the first poll that leaves the expired row out is delayed
+      held();
+      await released;
+      return route.fulfill({ json: {} });
+    }
+    if (!late || !orderIds.includes(expired)) return route.fulfill({ json: {} });
+    return route.fulfill({ json: { reservations: [{ orderId: expired, status: "RESERVATION_STATUS_CANCELLED" }] } });
+  });
+
+  await page.goto(`/orders?customer=${customer}`);
+  const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: expired.slice(0, 8) }) });
+  await expect(row.getByText("none yet")).toBeVisible();
+
+  await page.clock.fastForward(40_000); // the expired row's wait is over
+  hold = true;
+  await captured; // a poll for the PENDING row alone is now in flight
+  late = true; // the worker comes back
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  release();
+  await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 5_000 });
+});
