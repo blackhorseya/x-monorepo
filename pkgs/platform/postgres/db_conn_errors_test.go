@@ -49,8 +49,10 @@ func TestNewDB_ConnectionRefusedCarriesNoURLText(t *testing.T) {
 				t.Fatal("NewDB = nil, want an error (nothing listens on port 1)")
 			}
 			assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb")
-			if !strings.Contains(err.Error(), "127.0.0.1:1") {
-				t.Fatalf("the error lacks the host:port that was dialed: %q", err)
+			// A host parsed from the URL is not printed unless the operator pinned
+			// it: with a malformed password it can be a piece of the password.
+			if got := strings.Contains(err.Error(), "127.0.0.1:1"); got != (expectTarget != "") {
+				t.Fatalf("host:port present = %v with expect_target=%q: %q", got, expectTarget, err)
 			}
 			if !errors.Is(err, syscall.ECONNREFUSED) {
 				t.Fatalf("errors.Is(err, ECONNREFUSED) = false for %q: the category must stay checkable", err)
@@ -105,57 +107,75 @@ func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
 		}
 	})
 
-	t.Run("wrong password", func(t *testing.T) {
-		_, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn("wrong")}, tel)
-		if err == nil {
-			cleanup()
-			t.Fatal("NewDB = nil, want a rejected login")
-		}
-		assertNoURLText(t, err, role, "wrong")
-		if want := net.JoinHostPort(u.Hostname(), u.Port()); !strings.Contains(err.Error(), want) {
-			t.Fatalf("the error lacks the host:port that was dialed (%s): %q", want, err)
-		}
-		var pgErr *pgconn.PgError
-		if !errors.As(err, &pgErr) || pgErr.Code != "28P01" {
-			t.Fatalf("errors.As PgError = %v (%v), want SQLSTATE 28P01", pgErr, err)
-		}
-		if pgErr.Message != "" || pgErr.Detail != "" {
-			t.Fatalf("the PgError still carries the server's text: %+v", pgErr)
-		}
-	})
+	hostPort := net.JoinHostPort(u.Hostname(), u.Port())
+	for _, expectTarget := range []string{"", hostPort} {
+		t.Run("wrong password/expect_target="+expectTarget, func(t *testing.T) {
+			_, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn("wrong"), ExpectTarget: expectTarget}, tel)
+			if err == nil {
+				cleanup()
+				t.Fatal("NewDB = nil, want a rejected login")
+			}
+			assertNoURLText(t, err, role, "wrong")
+			if got := strings.Contains(err.Error(), hostPort); got != (expectTarget != "") {
+				t.Fatalf("host:port present = %v with expect_target=%q: %q", got, expectTarget, err)
+			}
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "28P01" {
+				t.Fatalf("errors.As PgError = %v (%v), want SQLSTATE 28P01", pgErr, err)
+			}
+			if pgErr.Message != "" || pgErr.Detail != "" {
+				t.Fatalf("the PgError still carries the server's text: %+v", pgErr)
+			}
+		})
+	}
 }
 
-// Several hosts: every target that was tried is named, none of the rest of the
-// URL. A host that is not shaped like one (a password with an unencoded @ makes
-// pgx cut part of it out as the host) is never printed, and then the error is
-// the category alone.
-func TestNewDB_ConnectionErrorNamesEveryTargetTried(t *testing.T) {
+// Without expect_target no host from the URL is ever printed. The URL below is
+// valid, so the host is "SYNTHETICSECRET.invalid"; to the code it could as well
+// be a piece of a password (u:prefix@... is the shape of a mistyped one), and
+// nothing parsed from the URL can tell the two apart.
+func TestNewDB_UnpinnedHostIsNeverPrinted(t *testing.T) {
 	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer telCleanup()
 
-	_, cleanup, err := postgres.NewDB(config.Postgres{
-		URL: "postgres://leakyuser:" + secretMarker + "@127.0.0.1:1,127.0.0.1:2/leakydb?sslmode=disable",
-	}, tel)
-	if err == nil {
-		cleanup()
-		t.Fatal("NewDB = nil, want an error")
+	for _, dsn := range []string{
+		"postgres://u:prefix@SYNTHETICSECRET.invalid:1/app?sslmode=disable",
+		"postgres://u:@SYNTHETICSECRET@127.0.0.1:1/app?sslmode=disable",
+		"postgres://leakyuser:pw@127.0.0.1:1,SYNTHETICSECRET.invalid:2/leakydb?sslmode=disable",
+	} {
+		_, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn}, tel)
+		if err == nil {
+			cleanup()
+			t.Fatalf("NewDB(%q) = nil, want an error", dsn)
+		}
+		assertNoURLText(t, err, "SYNTHETICSECRET", ".invalid", "127.0.0.1", "leakyuser", "leakydb")
 	}
-	assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb")
-	for _, want := range []string{"127.0.0.1:1", "127.0.0.1:2"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("the error lacks %s: %q", want, err)
+}
+
+// A URL that does not parse says so in fixed words: pgx's parse error quotes
+// the string, user and database included.
+func TestNewDB_UnparsableURLIsNotQuoted(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+
+	for _, expectTarget := range []string{"", "127.0.0.1:1"} {
+		_, cleanup, err := postgres.NewDB(config.Postgres{
+			URL:          "postgres://leakyuser:" + secretMarker + "@h:notaport/leakydb",
+			ExpectTarget: expectTarget,
+		}, tel)
+		if err == nil {
+			cleanup()
+			t.Fatal("NewDB = nil, want an error")
+		}
+		assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb", "notaport")
+		if !strings.Contains(err.Error(), "not a valid connection string") {
+			t.Fatalf("error = %q, want the fixed parse message", err)
 		}
 	}
-
-	_, cleanup, err = postgres.NewDB(config.Postgres{
-		URL: "postgres://u:@" + secretMarker + "@127.0.0.1:1/app?sslmode=disable",
-	}, tel)
-	if err == nil {
-		cleanup()
-		t.Fatal("NewDB = nil, want an error")
-	}
-	assertNoURLText(t, err, secretMarker)
 }

@@ -26,8 +26,9 @@ func okMigration() postgres.Migration {
 	}
 }
 
-// migrate's connection failures read like NewDB's: a category, the host:port
-// that was dialed, and nothing else from the URL. Both ways of opening it.
+// migrate's connection failures read like NewDB's: a category, and the pinned
+// host:port when expect_target is set, nothing else from the URL. Both ways of
+// opening it.
 func TestMigrate_ConnectionErrorsCarryNoURLText(t *testing.T) {
 	for _, expectTarget := range []string{"", "127.0.0.1:1"} {
 		t.Run("expect_target="+expectTarget, func(t *testing.T) {
@@ -39,8 +40,8 @@ func TestMigrate_ConnectionErrorsCarryNoURLText(t *testing.T) {
 				t.Fatal("Up = nil, want an error (nothing listens on port 1)")
 			}
 			assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb")
-			if !strings.Contains(err.Error(), "127.0.0.1:1") {
-				t.Fatalf("the error lacks the host:port that was dialed: %q", err)
+			if got := strings.Contains(err.Error(), "127.0.0.1:1"); got != (expectTarget != "") {
+				t.Fatalf("host:port present = %v with expect_target=%q: %q", got, expectTarget, err)
 			}
 			if !errors.Is(err, syscall.ECONNREFUSED) {
 				t.Fatalf("errors.Is(err, ECONNREFUSED) = false for %q", err)
@@ -84,8 +85,8 @@ func TestMigrate_ServerErrors(t *testing.T) {
 				t.Fatal("Up = nil, want a rejected login")
 			}
 			assertNoURLText(t, err, role, "wrong")
-			if !strings.Contains(err.Error(), hostPort) {
-				t.Fatalf("the error lacks the host:port that was dialed (%s): %q", hostPort, err)
+			if got := strings.Contains(err.Error(), hostPort); got != (expectTarget != "") {
+				t.Fatalf("host:port present = %v with expect_target=%q: %q", got, expectTarget, err)
 			}
 			var pgErr *pgconn.PgError
 			if !errors.As(err, &pgErr) || pgErr.Code != "28P01" || pgErr.Message != "" {
@@ -102,5 +103,45 @@ func TestMigrate_ServerErrors(t *testing.T) {
 				t.Fatalf("a migration's own SQL error = %v, want its text kept", err)
 			}
 		})
+	}
+}
+
+// Without expect_target no host from the URL is ever printed (see NewDB's
+// TestNewDB_UnpinnedHostIsNeverPrinted), for up, down and version alike; and a
+// URL that does not parse is reported in fixed words, not as pgx quotes it.
+func TestMigrate_UnpinnedHostAndParseErrorsAreNotQuoted(t *testing.T) {
+	m := okMigration()
+	ops := map[string]func(cfg config.Postgres) error{
+		"up":   func(cfg config.Postgres) error { return postgres.Up(context.Background(), cfg, m) },
+		"down": func(cfg config.Postgres) error { return postgres.Down(context.Background(), cfg, m) },
+		"version": func(cfg config.Postgres) error {
+			_, _, err := postgres.Version(context.Background(), cfg, m)
+
+			return err
+		},
+	}
+	for name, op := range ops {
+		t.Run(name+"/valid URL, unpinned host", func(t *testing.T) {
+			err := op(config.Postgres{URL: "postgres://u:prefix@SYNTHETICSECRET.invalid:1/app?sslmode=disable"})
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			assertNoURLText(t, err, "SYNTHETICSECRET", ".invalid")
+		})
+		for _, expectTarget := range []string{"", "127.0.0.1:1"} {
+			t.Run(name+"/unparsable/expect_target="+expectTarget, func(t *testing.T) {
+				err := op(config.Postgres{
+					URL:          "postgres://leakyuser:" + secretMarker + "@h:notaport/leakydb",
+					ExpectTarget: expectTarget,
+				})
+				if err == nil {
+					t.Fatal("want an error")
+				}
+				assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb", "notaport", "xxxxx")
+				if !strings.Contains(err.Error(), "not a valid connection string") {
+					t.Fatalf("error = %q, want the fixed parse message", err)
+				}
+			})
+		}
 	}
 }
