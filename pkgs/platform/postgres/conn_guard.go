@@ -1,4 +1,4 @@
-package main
+package postgres
 
 import (
 	"errors"
@@ -12,25 +12,25 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// connPolicy is what `worker bootstrap` demands of the database connection
-// before it opens one.
-type connPolicy struct {
-	// expectTarget, when set, is the host:port every connection attempt must
+// ConnPolicy is what a caller demands of the database connection before it
+// opens one: `worker bootstrap` always, any other app through
+// postgres.expect_target.
+type ConnPolicy struct {
+	// ExpectTarget, when set, is the host:port every connection attempt must
 	// dial (for example 127.0.0.1:15432 behind a kubectl port-forward). It
 	// stops a host= (or a host list) in the URL from sending the connection
 	// somewhere other than the forward.
-	expectTarget string
-	// allowPlaintext skips the TLS check, for a local development database.
-	// expectTarget still applies.
-	allowPlaintext bool
+	ExpectTarget string
+	// AllowPlaintext skips the TLS check, for a local development database.
+	// ExpectTarget still applies.
+	AllowPlaintext bool
 }
 
-// checkBootstrapConn parses url the way the connection itself will and
+// CheckConn parses url the way the connection itself will and
 // validates the result.
 //
-// The parse is pgx.ParseConfig, the one gorm's postgres driver runs on the
-// same string when it opens the pool, so what is approved here is what pgx
-// connects with: key trimming, duplicate keys (the last wins), URL decoding,
+// The parse is pgx.ParseConfig, the one gorm's postgres driver runs on a DSN,
+// so what is approved here is what pgx connects with: key trimming, duplicate keys (the last wins), URL decoding,
 // host= overrides, environment and service-file settings are all already
 // applied. A shell or a regexp reading the URL text cannot promise that.
 //
@@ -39,23 +39,37 @@ type connPolicy struct {
 // the string. A password with an unencoded @ makes pgx cut part of it out as
 // the host, so even "which host" can be the secret. The only value a message
 // carries is --expect-target, which the operator typed.
-func checkBootstrapConn(url string, p connPolicy) error {
+func CheckConn(url string, p ConnPolicy) error {
+	_, err := ParseCheckedConn(url, p)
+
+	return err
+}
+
+// ParseCheckedConn is CheckConn that hands back the config it approved. A
+// caller that opens the connection must open it from this value, not from url
+// again: the URL can name state outside itself (a service file, the
+// environment) that changes between two parses, so a second parse is not
+// guaranteed to be the one that was checked.
+func ParseCheckedConn(url string, p ConnPolicy) (*pgx.ConnConfig, error) {
 	// Before the URL is touched: without a target the operator typed there is
 	// nothing to trust, because whatever pgx parses as the host may be a piece
 	// of a malformed password (u:pw@SECRETLABEL looks like a perfectly good
 	// host name).
-	if p.expectTarget == "" {
-		return errors.New("--expect-target is required")
+	if p.ExpectTarget == "" {
+		return nil, errors.New("--expect-target is required")
 	}
 	cc, err := pgx.ParseConfig(url)
 	if err != nil {
-		return errors.New("postgres.url is not a valid connection string")
+		return nil, errors.New("postgres.url is not a valid connection string")
+	}
+	if err := validateConn(&cc.Config, p); err != nil {
+		return nil, err
 	}
 
-	return validateBootstrapConn(&cc.Config, p)
+	return cc, nil
 }
 
-// validateBootstrapConn checks a parsed config: every connection attempt —
+// validateConn checks a parsed config: every connection attempt —
 // the main one and each fallback pgx will try next — must have a structurally
 // valid host, dial the target the operator gave with --expect-target, and
 // unless plaintext is allowed must verify the server.
@@ -74,7 +88,7 @@ func checkBootstrapConn(url string, p connPolicy) error {
 //
 // So a TLSConfig is acceptable when it is non-nil and either verifies by
 // itself (InsecureSkipVerify false) or has installed its own chain check.
-func validateBootstrapConn(cfg *pgconn.Config, p connPolicy) error {
+func validateConn(cfg *pgconn.Config, p ConnPolicy) error {
 	attempts := append([]*pgconn.Config{cfg}, fallbackConfigs(cfg)...)
 
 	// Before anything else: a host that is not even shaped like one never
@@ -88,11 +102,11 @@ func validateBootstrapConn(cfg *pgconn.Config, p connPolicy) error {
 	}
 
 	for _, a := range attempts {
-		if net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))) != p.expectTarget {
-			return fmt.Errorf("connection target does not match --expect-target %s", p.expectTarget)
+		if net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))) != p.ExpectTarget {
+			return fmt.Errorf("connection target does not match --expect-target %s", p.ExpectTarget)
 		}
 	}
-	if p.allowPlaintext {
+	if p.AllowPlaintext {
 		return nil
 	}
 	for _, a := range attempts {

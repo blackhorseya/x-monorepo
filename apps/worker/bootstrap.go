@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
 // newBootstrapCmd is `worker bootstrap`: identity's first account and its
@@ -78,7 +79,7 @@ stdout only, never to the log.`,
 			if cfg.Postgres.URL == "" {
 				return errors.New("postgres.url is required: accounts live in Postgres")
 			}
-			if err := checkBootstrapConn(cfg.Postgres.URL, connPolicy{expectTarget: expectTarget, allowPlaintext: allowPlaintext}); err != nil {
+			if err := postgres.CheckConn(cfg.Postgres.URL, postgres.ConnPolicy{ExpectTarget: expectTarget, AllowPlaintext: allowPlaintext}); err != nil {
 				return fmt.Errorf("refusing to connect: %w", err)
 			}
 			if len(roles) == 0 {

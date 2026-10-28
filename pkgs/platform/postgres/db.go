@@ -5,9 +5,14 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"regexp"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -27,6 +32,14 @@ import (
 // config.Load has zeros: unlimited open, database/sql's own idle default (2),
 // connections never recycled.
 //
+// With cfg.ExpectTarget set (postgres.expect_target), the URL is checked
+// before anything dials: every connection attempt, fallback hosts included,
+// must go to that host:port, or NewDB returns an error naming the expected
+// target and nothing else from the URL. The URL is parsed once, and that parse
+// opens the pool. Empty = no check. Only the target is
+// enforced here; the TLS requirement is `worker bootstrap`'s alone, because
+// local development and in-cluster services legitimately run without it.
+//
 // TranslateError makes the driver surface gorm.ErrDuplicatedKey /
 // ErrForeignKeyViolated instead of raw pgconn codes, so BC repositories can
 // translate with errors.Is. gorm's own logger is silent: errors already reach
@@ -40,11 +53,29 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 		return nil, func() {}, nil
 	}
 
-	db, err := gorm.Open(postgres.Open(cfg.URL), &gorm.Config{
+	dialector := postgres.Open(cfg.URL)
+	var checked *sql.DB // the pool opened from the checked parse, closed if gorm.Open fails
+	if cfg.ExpectTarget != "" {
+		// Parse once: the config that passes the check is the one the pool
+		// dials with. Handing gorm the URL would parse it again, and a service
+		// file or the environment can change between the two reads.
+		cc, err := ParseCheckedConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true})
+		if err != nil {
+			return nil, nil, fmt.Errorf("postgres.expect_target: %w", err)
+		}
+		checked = openChecked(cc, cfg.URL)
+		dialector = postgres.New(postgres.Config{Conn: checked})
+	}
+
+	db, err := gorm.Open(dialector, &gorm.Config{
 		TranslateError: true,
 		Logger:         gormlogger.Default.LogMode(gormlogger.Silent),
 	})
 	if err != nil {
+		if checked != nil {
+			_ = checked.Close()
+		}
+
 		return nil, nil, fmt.Errorf("open postgres: %w", err)
 	}
 	if err := db.Use(tracing{tracer: tel.Tracer.Tracer("github.com/blackhorseya/x-monorepo/pkgs/platform/postgres")}); err != nil {
@@ -71,4 +102,41 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	}
 
 	return db, cleanup, nil
+}
+
+// timeZoneMatcher is gorm.io/driver/postgres v1.6.3's own (postgres.go:38):
+// the TimeZone it looks for in the DSN text.
+var timeZoneMatcher = regexp.MustCompile("(time_zone|TimeZone|timezone)=(.*?)($|&| )")
+
+// openChecked opens the pool from cc, the config the guard approved, and does
+// what gorm's driver does for a DSN (postgres.go:95-121, v1.6.3) so that the
+// check changes where NewDB dials and nothing else: a TimeZone in the DSN
+// becomes the session's timezone and the zone TIMESTAMP (without time zone)
+// columns decode in. Handing the driver a Conn skips all of that.
+//
+// The zone is read from dsn the way the driver reads it, as text, so with and
+// without expect_target the same URL means the same thing. That is not a
+// second parse: what is dialed comes from cc alone. PreferSimpleProtocol and
+// the other driver options are not used by NewDB.
+func openChecked(cc *pgx.ConnConfig, dsn string) *sql.DB {
+	var opts []stdlib.OptionOpenDB
+	if m := timeZoneMatcher.FindStringSubmatch(dsn); len(m) > 2 {
+		zone := m[2]
+		cc.RuntimeParams["timezone"] = zone
+		opts = append(opts, stdlib.OptionAfterConnect(func(_ context.Context, conn *pgx.Conn) error {
+			loc, err := time.LoadLocation(zone)
+			if err != nil {
+				return err
+			}
+			conn.TypeMap().RegisterType(&pgtype.Type{
+				Name:  "timestamp",
+				OID:   pgtype.TimestampOID,
+				Codec: &pgtype.TimestampCodec{ScanLocation: loc},
+			})
+
+			return nil
+		}))
+	}
+
+	return stdlib.OpenDB(*cc, opts...)
 }
