@@ -259,6 +259,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
+	v.SetDefault("postgres.expect_target", "")
 	v.SetDefault("postgres.max_open_conns", 25)
 	v.SetDefault("postgres.max_idle_conns", 10)
 	v.SetDefault("postgres.conn_max_lifetime", 30*time.Minute)

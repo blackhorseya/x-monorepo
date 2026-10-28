@@ -52,6 +52,9 @@ postgres:
   # Matches `task compose-up` (deployments/docker/docker-compose.yaml); apps ping it at startup.
   # Empty = no database: repositories fall back to in-memory; `task migrate -- up` needs it set.
   url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+  # Optional host:port every connection attempt must dial (host= overrides and fallback hosts
+  # included); NewDB refuses to connect otherwise. Empty = no check. Target only, not TLS.
+  expect_target: ""
   # Per-process pool (rpc, worker and the CLIs each open their own): total connections is
   # replicas x max_open_conns and must stay below the server's max_connections
   # (docs/operations.md). 0 = unlimited open. The worker refuses a cap below

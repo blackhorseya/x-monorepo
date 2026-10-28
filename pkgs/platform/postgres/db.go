@@ -27,6 +27,13 @@ import (
 // config.Load has zeros: unlimited open, database/sql's own idle default (2),
 // connections never recycled.
 //
+// With cfg.ExpectTarget set (postgres.expect_target), the URL is checked
+// before anything dials: every connection attempt, fallback hosts included,
+// must go to that host:port, or NewDB returns an error naming the expected
+// target and nothing else from the URL. Empty = no check. Only the target is
+// enforced here; the TLS requirement is `worker bootstrap`'s alone, because
+// local development and in-cluster services legitimately run without it.
+//
 // TranslateError makes the driver surface gorm.ErrDuplicatedKey /
 // ErrForeignKeyViolated instead of raw pgconn codes, so BC repositories can
 // translate with errors.Is. gorm's own logger is silent: errors already reach
@@ -38,6 +45,12 @@ import (
 func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	if cfg.URL == "" {
 		return nil, func() {}, nil
+	}
+
+	if cfg.ExpectTarget != "" {
+		if err := CheckConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true}); err != nil {
+			return nil, nil, fmt.Errorf("postgres.expect_target: %w", err)
+		}
 	}
 
 	db, err := gorm.Open(postgres.Open(cfg.URL), &gorm.Config{

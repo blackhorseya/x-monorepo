@@ -255,6 +255,21 @@ func TestLoad_PostgresPool(t *testing.T) {
 	}
 }
 
+// postgres.expect_target is empty by default (no check) and reads from the
+// environment like every other key.
+func TestLoad_PostgresExpectTarget(t *testing.T) {
+	chdirTemp(t)
+	cfg, err := config.Load()
+	if err != nil || cfg.Postgres.ExpectTarget != "" {
+		t.Fatalf("default = %q, %v; want empty", cfg.Postgres.ExpectTarget, err)
+	}
+	t.Setenv("APP_POSTGRES_EXPECT_TARGET", "127.0.0.1:15432")
+	cfg, err = config.Load()
+	if err != nil || cfg.Postgres.ExpectTarget != "127.0.0.1:15432" {
+		t.Fatalf("env = %q, %v; want 127.0.0.1:15432", cfg.Postgres.ExpectTarget, err)
+	}
+}
+
 // The negative-idle refusal tells the operator what 0 means, and 0 is not
 // "no idle connections": NewDB skips the setter, so database/sql keeps its default.
 func TestLoad_PostgresIdleMessageDescribesZero(t *testing.T) {
