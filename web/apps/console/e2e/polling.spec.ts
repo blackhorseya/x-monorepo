@@ -283,3 +283,52 @@ test("returning to the tab while another row's request is in flight still looks 
   release();
   await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 5_000 });
 });
+
+// A refocus that arrives while a request is in flight is queued (once); if the tab is hidden when
+// that request ends the queue stays, and the next refocus must consume it rather than run its own
+// full refresh and then the queued one on top: two full refreshes in total, not three.
+test("a queued refocus is consumed by the next full refresh", async ({ page }) => {
+  const customer = `e2e-queue-${Date.now()}`;
+  const id = await createOrder(page, customer);
+  await post(page, "ordering.v1.OrderService/CancelOrder", { id });
+
+  let calls = 0;
+  let hold = false;
+  let held!: () => void;
+  let release!: () => void;
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", async (route) => {
+    calls++;
+    if (hold) {
+      hold = false;
+      held();
+      await new Promise<void>((r) => (release = r));
+    }
+    return route.fulfill({ json: { reservations: [{ orderId: id, status: "RESERVATION_STATUS_CANCELLED" }] } });
+  });
+  const visibility = (state: "visible" | "hidden") =>
+    page.evaluate((s) => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => s });
+      document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+    }, state);
+
+  await page.goto(`/orders?customer=${customer}`);
+  await expect(page.getByTitle("Open in Reservations")).toHaveText("CANCELLED");
+  await page.waitForTimeout(200);
+  calls = 0;
+
+  const captured = new Promise<void>((r) => (held = r));
+  hold = true;
+  await visibility("visible"); // full refresh #1, held in flight
+  await captured;
+  await visibility("visible"); // queued behind it
+  await visibility("hidden");
+  release();
+  await page.waitForTimeout(2_500);
+  expect(calls).toBe(1); // hidden: the queue does not start anything
+
+  await visibility("visible"); // full refresh #2 — and the queue it consumes
+  await page.waitForTimeout(1_500);
+  expect(calls).toBe(2);
+  await page.waitForTimeout(4_200);
+  expect(calls).toBe(2); // nothing keeps polling
+});
