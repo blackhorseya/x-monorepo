@@ -29,9 +29,8 @@ type ConnPolicy struct {
 // CheckConn parses url the way the connection itself will and
 // validates the result.
 //
-// The parse is pgx.ParseConfig, the one gorm's postgres driver runs on the
-// same string when it opens the pool, so what is approved here is what pgx
-// connects with: key trimming, duplicate keys (the last wins), URL decoding,
+// The parse is pgx.ParseConfig, the one gorm's postgres driver runs on a DSN,
+// so what is approved here is what pgx connects with: key trimming, duplicate keys (the last wins), URL decoding,
 // host= overrides, environment and service-file settings are all already
 // applied. A shell or a regexp reading the URL text cannot promise that.
 //
@@ -41,19 +40,33 @@ type ConnPolicy struct {
 // the host, so even "which host" can be the secret. The only value a message
 // carries is --expect-target, which the operator typed.
 func CheckConn(url string, p ConnPolicy) error {
+	_, err := ParseCheckedConn(url, p)
+
+	return err
+}
+
+// ParseCheckedConn is CheckConn that hands back the config it approved. A
+// caller that opens the connection must open it from this value, not from url
+// again: the URL can name state outside itself (a service file, the
+// environment) that changes between two parses, so a second parse is not
+// guaranteed to be the one that was checked.
+func ParseCheckedConn(url string, p ConnPolicy) (*pgx.ConnConfig, error) {
 	// Before the URL is touched: without a target the operator typed there is
 	// nothing to trust, because whatever pgx parses as the host may be a piece
 	// of a malformed password (u:pw@SECRETLABEL looks like a perfectly good
 	// host name).
 	if p.ExpectTarget == "" {
-		return errors.New("--expect-target is required")
+		return nil, errors.New("--expect-target is required")
 	}
 	cc, err := pgx.ParseConfig(url)
 	if err != nil {
-		return errors.New("postgres.url is not a valid connection string")
+		return nil, errors.New("postgres.url is not a valid connection string")
+	}
+	if err := validateConn(&cc.Config, p); err != nil {
+		return nil, err
 	}
 
-	return validateConn(&cc.Config, p)
+	return cc, nil
 }
 
 // validateConn checks a parsed config: every connection attempt —

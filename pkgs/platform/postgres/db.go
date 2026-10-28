@@ -5,9 +5,11 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -30,7 +32,8 @@ import (
 // With cfg.ExpectTarget set (postgres.expect_target), the URL is checked
 // before anything dials: every connection attempt, fallback hosts included,
 // must go to that host:port, or NewDB returns an error naming the expected
-// target and nothing else from the URL. Empty = no check. Only the target is
+// target and nothing else from the URL. The URL is parsed once, and that parse
+// opens the pool. Empty = no check. Only the target is
 // enforced here; the TLS requirement is `worker bootstrap`'s alone, because
 // local development and in-cluster services legitimately run without it.
 //
@@ -47,17 +50,29 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 		return nil, func() {}, nil
 	}
 
+	dialector := postgres.Open(cfg.URL)
+	var checked *sql.DB // the pool opened from the checked parse, closed if gorm.Open fails
 	if cfg.ExpectTarget != "" {
-		if err := CheckConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true}); err != nil {
+		// Parse once: the config that passes the check is the one the pool
+		// dials with. Handing gorm the URL would parse it again, and a service
+		// file or the environment can change between the two reads.
+		cc, err := ParseCheckedConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true})
+		if err != nil {
 			return nil, nil, fmt.Errorf("postgres.expect_target: %w", err)
 		}
+		checked = stdlib.OpenDB(*cc)
+		dialector = postgres.New(postgres.Config{Conn: checked})
 	}
 
-	db, err := gorm.Open(postgres.Open(cfg.URL), &gorm.Config{
+	db, err := gorm.Open(dialector, &gorm.Config{
 		TranslateError: true,
 		Logger:         gormlogger.Default.LogMode(gormlogger.Silent),
 	})
 	if err != nil {
+		if checked != nil {
+			_ = checked.Close()
+		}
+
 		return nil, nil, fmt.Errorf("open postgres: %w", err)
 	}
 	if err := db.Use(tracing{tracer: tel.Tracer.Tracer("github.com/blackhorseya/x-monorepo/pkgs/platform/postgres")}); err != nil {
