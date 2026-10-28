@@ -121,6 +121,13 @@ const (
 type Postgres struct {
 	URL string `mapstructure:"url"` // e.g. postgres://user:pass@host:5432/db?sslmode=disable
 
+	// ExpectTarget, when set, is the host:port every connection attempt for URL
+	// must dial; NewDB refuses to connect otherwise. It catches a host= (or a
+	// host list) in the URL sending the pool somewhere other than intended.
+	// Empty = no check. Only the target is checked, not TLS: that rule stays
+	// with `worker bootstrap`.
+	ExpectTarget string `mapstructure:"expect_target"`
+
 	// MaxOpenConns caps the connections this process opens (database/sql
 	// SetMaxOpenConns): a query past the cap waits for a free one. 0 =
 	// unlimited, which is database/sql's own default and an explicit opt-out

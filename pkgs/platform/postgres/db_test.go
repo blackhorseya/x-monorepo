@@ -105,3 +105,56 @@ func TestNewDB_PoolLimits(t *testing.T) {
 		t.Fatalf("server saw at most %d connections of the pool, want between 2 and %d", p, maxOpen)
 	}
 }
+
+// postgres.expect_target is opt-in: set, NewDB refuses a URL whose target
+// differs before it dials, and the error carries the expected host:port only
+// (never the DSN). Unset, nothing is checked and the connection is attempted
+// as before. The URLs point at a closed port, so "refused by the guard" and
+// "tried to connect" are told apart by the error alone.
+func TestNewDB_ExpectTarget(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+
+	const pw = "s3cretPW"
+	cases := []struct {
+		name    string
+		url     string
+		target  string
+		refused bool
+	}{
+		{name: "unset, no check", url: "postgres://u:" + pw + "@127.0.0.1:1/app?sslmode=disable"},
+		{name: "matching target passes the guard", url: "postgres://u:" + pw + "@127.0.0.1:1/app?sslmode=disable", target: "127.0.0.1:1"},
+		{name: "other host", url: "postgres://u:" + pw + "@db.internal:5432/app?sslmode=disable", target: "127.0.0.1:1", refused: true},
+		{name: "other port", url: "postgres://u:" + pw + "@127.0.0.1:2/app?sslmode=disable", target: "127.0.0.1:1", refused: true},
+		{name: "host= override", url: "postgres://u:" + pw + "@127.0.0.1:1/app?sslmode=disable&host=db.internal", target: "127.0.0.1:1", refused: true},
+		{name: "fallback host", url: "postgres://u:" + pw + "@127.0.0.1:1,db.internal:5432/app?sslmode=disable", target: "127.0.0.1:1", refused: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db, cleanup, err := postgres.NewDB(config.Postgres{URL: tc.url, ExpectTarget: tc.target}, tel)
+			if err == nil {
+				cleanup()
+				t.Fatalf("NewDB = %v, nil; want an error (nothing listens on port 1)", db)
+			}
+			if strings.Contains(err.Error(), pw) || strings.Contains(err.Error(), "postgres://") {
+				t.Fatalf("the error carries the DSN: %q", err)
+			}
+			if tc.refused {
+				if !strings.Contains(err.Error(), "postgres.expect_target") || strings.Contains(err.Error(), "open postgres") {
+					t.Fatalf("error = %q, want the guard's refusal before any connection", err)
+				}
+				if strings.Contains(err.Error(), "db.internal") {
+					t.Fatalf("the error carries the URL's host: %q", err)
+				}
+
+				return
+			}
+			if !strings.Contains(err.Error(), "open postgres") || strings.Contains(err.Error(), "postgres.expect_target") {
+				t.Fatalf("error = %q, want it past the guard and failing to connect", err)
+			}
+		})
+	}
+}
