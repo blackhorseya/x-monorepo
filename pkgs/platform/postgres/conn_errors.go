@@ -7,11 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
 	"syscall"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -22,13 +19,12 @@ import (
 // message can name the role or echo a setting value, and either can quote a
 // piece of the connection string; a password with an unencoded @ or one that
 // looks like a setting makes even "which host" a secret. So the message is
-// built here from fixed words plus the host:port of each target the config
-// tried, which is what an operator needs to find the failing side. Those come
-// from the parsed config and only when every one of them is shaped like a host
-// (validHost): pgx does not validate it, and a password with an unencoded @ has
-// part of itself cut out as the host. A host that is not shaped like one means
-// no target is printed at all. A password fragment that merely looks like a
-// host name cannot be told apart; that is what expect_target pins.
+// built here from fixed words, and only the operator's own expect_target (a
+// value they typed, and one the connection was checked against) may appear in
+// it. A host parsed from the URL is never printed: pgx does not validate it, a
+// password with an unencoded @ has part of itself cut out as the host, and a
+// piece of a password can look exactly like a host name, so no check on the
+// parsed value is enough. That is what expect_target is for.
 //
 // The category stays checkable: errors.Is answers for the causes in the original
 // chain (context.DeadlineExceeded, syscall.ECONNREFUSED and the like), and
@@ -63,8 +59,8 @@ func (e *connError) As(target any) bool {
 }
 
 // redactConnErr reduces err, from opening or pinging a connection, to a
-// connError. cc is the config the connection was made from.
-func redactConnErr(err error, cc *pgx.ConnConfig) error {
+// connError. target is the operator's postgres.expect_target, or "".
+func redactConnErr(err error, target string) error {
 	if err == nil {
 		return nil
 	}
@@ -90,8 +86,8 @@ func redactConnErr(err error, cc *pgx.ConnConfig) error {
 	default:
 		e.kind = "connection failed"
 	}
-	if targets := connTargets(cc); targets != "" {
-		e.kind += " to " + targets
+	if target != "" {
+		e.kind += " to " + target
 	}
 
 	return e
@@ -103,34 +99,27 @@ func isTimeout(err error) bool {
 	return errors.As(err, &ne) && ne.Timeout()
 }
 
-// connTargets lists the host:port of the main attempt and each fallback, or ""
-// when there is no config or any host is not shaped like one.
-func connTargets(cc *pgx.ConnConfig) string {
-	if cc == nil {
-		return ""
-	}
-	attempts := append([]*pgconn.Config{&cc.Config}, fallbackConfigs(&cc.Config)...)
-	out := make([]string, 0, len(attempts))
-	for _, a := range attempts {
-		if !validHost(a.Host) {
-			return ""
-		}
-		out = append(out, net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))))
-	}
-
-	return strings.Join(out, ", ")
-}
-
-// redactIfConnect redacts err when it is a failure to establish a connection
-// and returns it untouched otherwise. migrate needs the split: a connect
-// failure quotes the URL's user and database and the server's login message,
-// while an error from a migration's own SQL, after the connection is up, is
-// exactly what the operator has to read to fix it.
-func redactIfConnect(err error, cc *pgx.ConnConfig) error {
-	var ce *pgconn.ConnectError
-	if errors.As(err, &ce) {
-		return redactConnErr(err, cc)
+// redactIfConnect redacts err when it is a failure to establish a connection,
+// or a URL that did not parse, and returns it untouched otherwise. migrate
+// needs the split: a connect failure quotes the URL's user and database and the
+// server's login message, and a parse failure quotes the URL, while an error
+// from a migration's own SQL, after the connection is up, is exactly what the
+// operator has to read to fix it.
+func redactIfConnect(err error, target string) error {
+	var (
+		parse *pgconn.ParseConfigError
+		conn  *pgconn.ConnectError
+	)
+	switch {
+	case errors.As(err, &parse):
+		return errUnparsableURL
+	case errors.As(err, &conn):
+		return redactConnErr(err, target)
 	}
 
 	return err
 }
+
+// errUnparsableURL is what a URL pgx cannot parse is reported as: pgx's own
+// error quotes it, user and database included.
+var errUnparsableURL = errors.New("postgres.url is not a valid connection string")

@@ -6,7 +6,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -74,7 +73,7 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	if err != nil {
 		_ = pool.Close()
 
-		return nil, nil, fmt.Errorf("open postgres: %w", redactConnErr(err, cc))
+		return nil, nil, fmt.Errorf("open postgres: %w", redactConnErr(err, cfg.ExpectTarget))
 	}
 	if err := db.Use(tracing{tracer: tel.Tracer.Tracer("github.com/blackhorseya/x-monorepo/pkgs/platform/postgres")}); err != nil {
 		return nil, nil, fmt.Errorf("gorm tracing plugin: %w", err)
@@ -96,7 +95,7 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	defer cancel()
 	if err := sqlDB.PingContext(c); err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("ping postgres: %w", redactConnErr(err, cc))
+		return nil, nil, fmt.Errorf("ping postgres: %w", redactConnErr(err, cfg.ExpectTarget))
 	}
 
 	return db, cleanup, nil
@@ -117,7 +116,7 @@ func parseConn(cfg config.Postgres) (*pgx.ConnConfig, error) {
 	}
 	cc, err := pgx.ParseConfig(cfg.URL)
 	if err != nil {
-		return nil, errors.New("open postgres: postgres.url is not a valid connection string")
+		return nil, fmt.Errorf("open postgres: %w", errUnparsableURL)
 	}
 
 	return cc, nil
