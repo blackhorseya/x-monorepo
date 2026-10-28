@@ -190,3 +190,54 @@ func TestNewDB_SameTimeZoneInSeveralCasesIsMerged(t *testing.T) {
 		})
 	}
 }
+
+// Any casing of the setting's name is the setting: the zone TIMESTAMP columns
+// decode in is the one the session gets, whichever way the DSN spells it, and
+// including spellings that gorm's own matcher (time_zone|TimeZone|timezone)
+// does not know. Many pools per DSN, 30, because the failure of an unmerged
+// spelling is about the codec, which is deterministic, and the failure of a
+// merged one is about the session, which is not.
+func TestNewDB_AnyCasingOfTimeZoneDecodesInThatZone(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	base := pgtest.URL(t)
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+
+	for _, query := range []string{
+		"TIMEZONE=Asia/Taipei",
+		"TimeZONE=Asia/Taipei",
+		"TIMEZONE=Asia/Taipei&TimeZONE=Asia/Taipei",
+		"TIMEZONE=Asia/Taipei&TimeZone=Asia/Taipei&timezone=Asia/Taipei",
+	} {
+		t.Run(query, func(t *testing.T) {
+			for i := 0; i < 30; i++ {
+				db, cleanup, err := postgres.NewDB(config.Postgres{URL: base + sep + query}, tel)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var row struct {
+					Actual  time.Time
+					Decoded time.Time
+					Session string
+				}
+				err = db.Raw("SELECT CURRENT_TIMESTAMP AS actual, LOCALTIMESTAMP AS decoded, current_setting('TimeZone') AS session").Scan(&row).Error
+				cleanup()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if row.Session != "Asia/Taipei" {
+					t.Fatalf("pool %d: session timezone = %q, want Asia/Taipei", i, row.Session)
+				}
+				if d := row.Decoded.Sub(row.Actual); d > time.Minute || d < -time.Minute {
+					t.Fatalf("pool %d: LOCALTIMESTAMP decodes %s away from CURRENT_TIMESTAMP: session and decoding disagree", i, d)
+				}
+			}
+		})
+	}
+}
