@@ -107,7 +107,8 @@ test("admin: create account → key (secret shown once) → revoke → disable /
   await expect(row).toContainText("ACTIVE");
 });
 
-test("the created key authenticates, and revoking it stops it", async ({ page, request }) => {
+// Revoke taking effect is the resolver cache's 30s contract (adapters/auth/resolver_test.go), too slow for here.
+test("the key the dialog showed really authenticates", async ({ page, request }) => {
   const name = `e2e-key-${Date.now()}`;
   await page.goto("/accounts");
   await useKey(page, ADMIN_KEY);
@@ -126,12 +127,6 @@ test("the created key authenticates, and revoking it stops it", async ({ page, r
       data: {},
     });
   expect((await whoami()).status()).toBe(200);
-
-  await page.getByRole("row").filter({ hasText: "probe" }).getByRole("button", { name: "Revoke" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Revoke key" }).click();
-  await expect(page.getByRole("row").filter({ hasText: "probe" })).toContainText("REVOKED");
-  // The resolver caches for up to 30s (docs/identity.md), so poll rather than assert at once.
-  await expect.poll(async () => (await whoami()).status(), { timeout: 40_000 }).toBe(401);
 });
 
 // Everything the page could have persisted, as one string.

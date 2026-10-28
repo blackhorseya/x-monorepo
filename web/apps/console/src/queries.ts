@@ -2,7 +2,7 @@ import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import type { ListOrdersResponse } from "@repo/proto/ordering/v1/service_pb";
-import { admin, inventory, isNotFound, orders } from "./client";
+import { admin, identity, inventory, isNotFound, orders } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
 export type ServerVersion = { version: string; commit: string; date: string; go: string };
@@ -26,6 +26,10 @@ export const keys = {
   poison: ["poison"] as const,
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
   version: ["version"] as const,
+  whoami: ["whoami"] as const,
+  accounts: ["accounts"] as const,
+  account: (id: string) => ["account", id] as const,
+  apiKeys: (accountId: string) => ["api-keys", accountId] as const,
 };
 
 // The build never changes while a tab is open; refetch only on a reload or
@@ -182,4 +186,46 @@ export const poisonDetailQuery = (bc: string, offset: bigint) =>
   queryOptions({
     queryKey: keys.poisonDetail(bc, offset),
     queryFn: async () => (await admin.getPoison({ boundedContext: bc, offset })).message ?? null,
+  });
+
+// Who the server thinks the console is (identity WhoAmI, no role needed). The admin gate of the
+// /accounts pages reads it; the server still decides every call. Not polled: the credential
+// control invalidates every query when the credential changes.
+export const whoamiQuery = queryOptions({
+  queryKey: keys.whoami,
+  queryFn: () => identity.whoAmI({}),
+  staleTime: 60_000,
+});
+
+// Accounts by id ascending, 20 per page. Created / disabled / re-roled from this console,
+// so no polling; the key starts with keys.accounts so a mutation invalidates every page.
+export const accountsQuery = infiniteQueryOptions({
+  queryKey: keys.accounts,
+  queryFn: async ({ pageParam }) => identity.listAccounts({ pageSize: 20, pageToken: pageParam }),
+  initialPageParam: "",
+  getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
+  staleTime: LIST_STALE_MS,
+});
+
+// null = no such account.
+export const accountQuery = (id: string) =>
+  queryOptions({
+    queryKey: keys.account(id),
+    queryFn: async () => {
+      try {
+        return (await identity.getAccount({ id })).account ?? null;
+      } catch (err) {
+        if (isNotFound(err)) return null;
+        throw err;
+      }
+    },
+    staleTime: LIST_STALE_MS,
+  });
+
+// Every key of one account, REVOKED included, newest first (one response, no paging).
+export const apiKeysQuery = (accountId: string) =>
+  queryOptions({
+    queryKey: keys.apiKeys(accountId),
+    queryFn: async () => (await identity.listApiKeys({ accountId })).apiKeys,
+    staleTime: LIST_STALE_MS,
   });
