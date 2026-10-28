@@ -43,10 +43,11 @@ export function useOrderReservations(rows: readonly Order[]) {
   const busy = useRef(false);
   const generation = useRef(0); // bumped when the credential changes: older answers are dropped
 
-  const refresh = useCallback(async () => {
+  // all: ask about every row, not only the waiting ones (a refocused tab).
+  const refresh = useCallback(async (all = false) => {
     if (busy.current) return;
     const { rows, known } = latest.current;
-    const ids = wantedOrderIds(rows, known, Date.now());
+    const ids = all ? rows.map((o) => o.id) : wantedOrderIds(rows, known, Date.now());
     if (ids.length === 0) return;
     busy.current = true;
     const gen = generation.current;
@@ -92,7 +93,16 @@ export function useOrderReservations(rows: readonly Order[]) {
     const t = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, POLL_MS);
-    return () => clearInterval(t);
+    // Back on the tab: look at every row once, including the ones whose wait for a reservation ran
+    // out (reservationPending) — the worker may have caught up meanwhile. Once, not a poll.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [refresh]);
 
   // A credential change makes what was learned (and any error) about the old one void.
