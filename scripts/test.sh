@@ -327,6 +327,38 @@ expect_match "merge-tree run is reported"   'merge-tree run 77' "$out"
 printf '77 completed success merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$old_main" > "$tmp/stub-stale/tree_runs"; ready stale
 expect_eq    "merge-tree run on another base does not count" 2 "$rc"
 
+# The title must match exactly: a substring match let "...base=<main>-wrong-tree" through.
+for bad_title in "merge-tree pr=7 head=$head_sha base=$main_sha-wrong-tree" \
+                 "merge-tree pr=7 head=$head_sha base=${main_sha}0" \
+                 "merge-tree pr=7 head=${head_sha}0 base=$main_sha" \
+                 "merge-tree pr=77 head=$head_sha base=$main_sha" \
+                 "x merge-tree pr=7 head=$head_sha base=$main_sha" \
+                 "merge-tree pr=7 head=$head_sha base=$main_sha x"; do
+  printf '78 completed success %s\n' "$bad_title" > "$tmp/stub-stale/tree_runs"; ready stale
+  expect_eq "inexact merge-tree title [$bad_title] exits 2" 2 "$rc"
+done
+printf '79 in_progress  merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-stale/tree_runs"; ready stale
+expect_eq    "unfinished merge-tree run does not count" 2 "$rc"
+printf '80 completed failure merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-stale/tree_runs"; ready stale
+expect_eq    "failed merge-tree run does not count" 2 "$rc"
+printf '81 completed success merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-stale/tree_runs"; ready stale
+expect_eq    "exact merge-tree title still counts" 0 "$rc"
+
+# ── merge-tree-inputs.sh: the workflow's first step; the run title carries these values ──
+inputs_rc() { set +e; "$src/scripts/merge-tree-inputs.sh" "$@" >/dev/null 2>&1; local r=$?; set -e; echo "$r"; }
+expect_eq "inputs: valid pr / head / base accepted"  0 "$(inputs_rc 7 "$head_sha" "$main_sha")"
+expect_eq "inputs: non-numeric pr rejected"          1 "$(inputs_rc 7a "$head_sha" "$main_sha")"
+expect_eq "inputs: empty pr rejected"                1 "$(inputs_rc '' "$head_sha" "$main_sha")"
+expect_eq "inputs: short head rejected"              1 "$(inputs_rc 7 "${head_sha%?}" "$main_sha")"
+expect_eq "inputs: long base rejected"               1 "$(inputs_rc 7 "$head_sha" "${main_sha}0")"
+expect_eq "inputs: uppercase head rejected"          1 "$(inputs_rc 7 "$(printf '%s' "$head_sha" | tr 0-9 A-J)" "$main_sha")"
+expect_eq "inputs: non-hex base rejected"            1 "$(inputs_rc 7 "$head_sha" "${main_sha%?}g")"
+expect_eq "inputs: head with suffix injection rejected" 1 "$(inputs_rc 7 "$head_sha x" "$main_sha")"
+expect_eq "inputs: base with newline suffix rejected"   1 "$(inputs_rc 7 "$head_sha" "$main_sha
+x")"
+expect_eq "inputs: pr with suffix injection rejected"   1 "$(inputs_rc '7 x' "$head_sha" "$main_sha")"
+expect_eq "inputs: wrong arg count is a usage error" 3 "$(inputs_rc 7 "$head_sha")"
+
 stub_gh otherhead; printf '%s\n%s\n' "$main_sha" "9999999999999999999999999999999999999999" > "$tmp/stub-otherhead/parents"; ready otherhead
 expect_eq    "run for another head exits 2" 2 "$rc"
 stub_gh pending; printf 'pass\npending\n' > "$tmp/stub-pending/checks"; ready pending
