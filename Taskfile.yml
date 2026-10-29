@@ -379,6 +379,14 @@ tasks:
       - sh: command -v k6 >/dev/null && command -v python3 >/dev/null
         msg: needs k6 (brew install k6) and python3
 
+  k6-bench:
+    desc: 'tests/k6/bench.sh: the performance baseline (#263) — CreateOrder throughput/latency at saturation and order → RESERVED latency through the worker, RUNS (3) times with fixed parameters, each run in its own Postgres database (created on the server of DATABASE_URL, migrated, dropped after). Writes {{.BIN_DIR}}/k6-bench/<stamp>/{result.json,summary.md} (median, min–max, CV; commit, Go/Postgres/k6, CPU, parameters). Needs psql and CREATE DATABASE. Not in CI: docs/perf-baseline.md'
+    deps: [build]
+    cmds: ['tests/k6/bench.sh {{.BIN_DIR}} {{.CLI_ARGS}}']
+    preconditions:
+      - sh: command -v k6 >/dev/null && command -v psql >/dev/null && command -v python3 >/dev/null
+        msg: needs k6 (brew install k6), psql and python3
+
   k6-smoke:
     desc: 'tests/k6/smoke.sh: the four k6 scripts, short, each against its own ./bin/rpc on :18090 with the local Postgres (DATABASE_URL) — load thresholds, rate limit at 50 rps, timeout at 1ns, reservation with a ./bin/worker next to the rpc. What CI runs'
     deps: [build]
