@@ -78,7 +78,10 @@ expect_eq "Dockerfile is an image change" \
 expect_eq ".goreleaser.yaml is an image change" \
   "release_snapshot console_image helm_kind" \
   "$(jobs_on goreleaser .goreleaser.yaml)"
-expect_eq "another workflow is actions-resolve only" "actions_resolve" "$(jobs_on wf .github/workflows/release.yml)"
+expect_eq "another workflow is actions-resolve only" "actions_resolve" "$(jobs_on wf .github/workflows/labeler.yml)"
+# release.yml pins cosign-release (#215): a bump there must run release-snapshot's cosign smoke and
+# Rekor canary, which ci-changes.sh used to skip (release.yml only set the actions area).
+expect_eq "release.yml runs release-snapshot too" "release_snapshot actions_resolve" "$(jobs_on relyml .github/workflows/release.yml)"
 expect_eq "ci.yml runs everything"   "$all_jobs" "$(jobs_on ciyml .github/workflows/ci.yml)"
 expect_eq "Taskfile runs everything" "$all_jobs" "$(jobs_on taskfile Taskfile.yml)"
 expect_eq "scripts/ runs everything" "$all_jobs" "$(jobs_on scripts scripts/new.sh)"
@@ -299,6 +302,63 @@ if python3 -c 'import yaml' 2>/dev/null; then
   expect_match "smoke: 2nd sign of the artifact leaves no bundle fails" '^1 FAIL: .*bundle' "$(smoke 3)"
 else
   echo "skip: cosign-smoke cases need python3 -c 'import yaml'"
+fi
+
+# ── rekor-v2-canary.sh ──────────────────────────────────────────────────────────
+# Fails when the default signing config of the installed cosign lists a Rekor that is not v1 (#215):
+# #204's 409 handling (cosign v3.1.4 / sigstore-go v1.3.0) exists for Rekor v1 only. Offline: the
+# config comes from REKOR_CANARY_SIGNING_CONFIG, or from a fake cosign whose `initialize` writes one
+# into TUF_ROOT the way the real one does. The positive case against the real default config is the
+# CI job itself.
+canary_cfg() { # canary_cfg <name> <rekorTlogUrls json> -> path of a signing config with those logs
+  local f="$tmp/canary-$1.json"
+  printf '{"mediaType":"application/vnd.dev.sigstore.signingconfig.v0.2+json","rekorTlogUrls":%s,"rekorTlogConfig":{"selector":"ANY"}}\n' "$2" > "$f"
+  echo "$f"
+}
+canary() { # canary <config path> -> "<exit> <output>"
+  local out rc=0
+  out=$(REKOR_CANARY_SIGNING_CONFIG=$1 "$src/scripts/rekor-v2-canary.sh" 2>&1) || rc=$?
+  echo "$rc $out"
+}
+v1='{"url":"https://rekor.sigstore.dev","majorApiVersion":1,"validFor":{"start":"2021-01-12T11:53:27.000Z"},"operator":"sigstore.dev"}'
+v2='{"url":"https://log2025-1.rekor.sigstore.dev","majorApiVersion":2,"validFor":{"start":"2025-10-01T00:00:00Z"},"operator":"sigstore.dev"}'
+if command -v jq >/dev/null; then
+  expect_match "canary: v1 only passes"                  '^0 '                     "$(canary "$(canary_cfg v1 "[$v1]")")"
+  expect_match "canary: a v2 log fails"                  '^1 '                     "$(canary "$(canary_cfg v2 "[$v2]")")"
+  expect_match "canary: v2 failure points at #215"       '#215'                    "$(canary "$(canary_cfg v2b "[$v2]")")"
+  expect_match "canary: v2 failure names the log"        'log2025-1\.rekor'        "$(canary "$(canary_cfg v2c "[$v2]")")"
+  expect_match "canary: v1 + v2 (selector ANY) fails"    '^1 '                     "$(canary "$(canary_cfg both "[$v1,$v2]")")"
+  expect_match "canary: unknown major version fails"     '^1 '                     "$(canary "$(canary_cfg v3 "[$v1,${v2/\"majorApiVersion\":2/\"majorApiVersion\":3}]")")"
+  expect_match "canary: no rekor log at all fails"       '^1 '                     "$(canary "$(canary_cfg none "[]")")"
+  echo 'not json' > "$tmp/canary-garbage.json"
+  expect_match "canary: unparseable config fails closed" '^1 '                     "$(canary "$tmp/canary-garbage.json")"
+  expect_match "canary: missing config file fails closed" '^1 '                    "$(canary "$tmp/canary-absent.json")"
+
+  # Resolution through cosign: a fake `initialize` writes the config under TUF_ROOT/<mirror>/targets/.
+  canary_fake="$tmp/cosign-canary"; mkdir -p "$canary_fake"
+  cat > "$canary_fake/cosign" <<'FAKE'
+#!/usr/bin/env bash
+[ "$1" = initialize ] || exit 2
+[ "${FAKE_TUF_DOWN:-}" = 1 ] && { echo "tuf: dial tcp: lookup tuf-repo-cdn.sigstore.dev: no such host" >&2; exit 1; }
+[ -n "${FAKE_CONFIG:-}" ] || exit 0   # initialised, but no signing config among the targets
+mkdir -p "$TUF_ROOT/tuf-repo-cdn.example/targets"
+cp "$FAKE_CONFIG" "$TUF_ROOT/tuf-repo-cdn.example/targets/signing_config.v0.2.json"
+FAKE
+  chmod +x "$canary_fake/cosign"
+  canary_via() { # canary_via <env assignment> -> "<exit> <output>"
+    local out rc=0
+    out=$(env -u REKOR_CANARY_SIGNING_CONFIG PATH="$canary_fake:$PATH" REKOR_CANARY_RETRY_DELAY=0 "$@" "$src/scripts/rekor-v2-canary.sh" 2>&1) || rc=$?
+    echo "$rc $out"
+  }
+  expect_match "canary via cosign: v1 default passes"   '^0 '        "$(canary_via FAKE_CONFIG="$(canary_cfg viav1 "[$v1]")")"
+  expect_match "canary via cosign: v2 default fails"    '^1 '        "$(canary_via FAKE_CONFIG="$(canary_cfg viav2 "[$v1,$v2]")")"
+  expect_match "canary via cosign: no signing config fails" '^1 '   "$(canary_via FAKE_CONFIG=)"
+  tuf_down=$(canary_via FAKE_TUF_DOWN=1)
+  expect_match "canary via cosign: TUF unreachable fails closed" '^1 ' "$tuf_down"
+  expect_match "canary via cosign: TUF outage is not called v2"  'TUF|initialize' "$tuf_down"
+  if printf '%s' "$tuf_down" | grep -q 'majorApiVersion'; then bad "TUF outage reported as a v2 finding: [$tuf_down]"; else ok; fi
+else
+  echo "skip: rekor-v2-canary cases need jq"
 fi
 
 # ── red-stage.sh ────────────────────────────────────────────────────────────────
