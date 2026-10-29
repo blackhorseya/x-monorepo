@@ -33,17 +33,23 @@ func (uc *ConfirmOrder) Execute(c context.Context, in dto.ConfirmOrderInput) (*d
 		return nil, order.ErrInvalidID
 	}
 
-	o, err := uc.repo.FindByID(ctx, order.ID(in.OrderID))
+	var o *order.Order
+	err := retryOnConflict(ctx, func() error {
+		var err error
+		if o, err = uc.repo.FindByID(ctx, order.ID(in.OrderID)); err != nil {
+			return err
+		}
+		if err = o.Confirm(uc.clock.Now()); err != nil {
+			return err
+		}
+		if err = uc.repo.Save(ctx, o); err != nil {
+			return fmt.Errorf("save order: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	if err = o.Confirm(uc.clock.Now()); err != nil {
-		return nil, err
-	}
-
-	if err = uc.repo.Save(ctx, o); err != nil {
-		return nil, fmt.Errorf("save order: %w", err)
 	}
 	if err = uc.events.Publish(ctx, o.PullEvents()...); err != nil {
 		return nil, err
