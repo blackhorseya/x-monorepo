@@ -6,8 +6,8 @@ info:
   version: v1
   description: |
     Connect RPC contract of the identity bounded context: the accounts and API keys the
-    server's auth interceptor resolves `X-API-Key` against. Every procedure but `WhoAmI` needs
-    the admin role when auth is on.
+    server's auth interceptor resolves `X-API-Key` against. Every procedure but `WhoAmI` and `ClaimInvite`
+    needs the admin role when auth is on.
     Every procedure is `POST /api/identity.v1.IdentityService/<Method>` (the bare `/identity.v1.IdentityService/<Method>` works too, for gRPC) with a JSON body;
     errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
     the stable domain code in the `X-Error-Code` response header.

@@ -16,6 +16,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/account"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/externalidentity"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/invite"
@@ -39,6 +40,8 @@ type extWorld struct {
 	invites  invite.Repository
 	bindings externalidentity.Repository
 
+	tx        port.Transactor
+	rec       *usecasex.Recorder
 	create    rpc.CreateInviteUC
 	claim     rpc.ClaimInviteUC
 	revoke    rpc.RevokeSessionsUC
@@ -58,6 +61,7 @@ func newExtWorld(t *testing.T) *extWorld {
 	w.accounts, w.invites, w.bindings = postgres.NewAccountRepository(db), postgres.NewInviteRepository(db), postgres.NewExternalIdentityRepository(db)
 	keys, tx, audit, ids := postgres.NewAPIKeyRepository(db), postgres.NewTransactor(db), postgres.NewAuditLog(db), system.NewUUIDGenerator()
 	cfg := config.Auth{AdminRole: "admin"}
+	w.tx, w.rec = tx, rec
 	w.create = identity.ProvideCreateInvite(w.accounts, w.invites, ids, audit, w.clock, tx, rec)
 	w.claim = identity.ProvideClaimInvite(w.invites, w.bindings, w.accounts, w.clock, tx, rec)
 	w.revoke = identity.ProvideRevokeSessions(w.accounts, audit, w.clock, tx, rec)
@@ -104,6 +108,43 @@ func (w *extWorld) count(t *testing.T, query string, args ...any) int64 {
 
 func (w *extWorld) claimAs(sub, email string, verified bool) (*dto.AccountOutput, error) {
 	return w.claim.Execute(w.ctx, dto.ClaimInviteInput{Issuer: issuer, Subject: sub, Email: email, EmailVerified: verified})
+}
+
+// gatedBindings holds every Add until `reads` Finds have returned, so that all
+// racers have seen "not bound" before the first insert.
+type gatedBindings struct {
+	externalidentity.Repository
+	reads int
+	mu    sync.Mutex
+	seen  int
+	open  chan struct{}
+	once  sync.Once
+}
+
+func (g *gatedBindings) init() { g.once.Do(func() { g.open = make(chan struct{}) }) }
+
+func (g *gatedBindings) Find(c context.Context, iss, sub string) (*externalidentity.Identity, error) {
+	g.init()
+	out, err := g.Repository.Find(c, iss, sub)
+	g.mu.Lock()
+	g.seen++
+	if g.seen == g.reads {
+		close(g.open)
+	}
+	g.mu.Unlock()
+
+	return out, err
+}
+
+func (g *gatedBindings) Add(c context.Context, e *externalidentity.Identity) error {
+	g.init()
+	select {
+	case <-g.open:
+	case <-time.After(10 * time.Second):
+		return errors.New("gate: the other claim never finished its read")
+	}
+
+	return g.Repository.Add(c, e)
 }
 
 // race runs the calls at the same moment and returns their errors.
@@ -207,9 +248,19 @@ func TestClaimInvite_SameSubTwoInvitesRaceOnPostgres(t *testing.T) {
 	w.invite(t, "acc-1", "one@example.com")
 	w.invite(t, "acc-2", "two@example.com")
 
+	// Both claims must finish their "is it bound yet?" read before either
+	// inserts, so only the primary key can stop the second one: without the
+	// gate, two goroutines released together can happen to serialize and a
+	// missing constraint would go unnoticed.
+	gate := &gatedBindings{Repository: w.bindings, reads: 2}
+	claim := identity.ProvideClaimInvite(w.invites, gate, w.accounts, w.clock, w.tx, w.rec)
+	claimWith := func(email string) error {
+		_, err := claim.Execute(w.ctx, dto.ClaimInviteInput{Issuer: issuer, Subject: "sub-1", Email: email, EmailVerified: true})
+		return err
+	}
 	errs := race(
-		func() error { _, err := w.claimAs("sub-1", "one@example.com", true); return err },
-		func() error { _, err := w.claimAs("sub-1", "two@example.com", true); return err },
+		func() error { return claimWith("one@example.com") },
+		func() error { return claimWith("two@example.com") },
 	)
 	won, dup := 0, 0
 	for _, err := range errs {
