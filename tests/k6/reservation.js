@@ -16,7 +16,7 @@
 import http from "k6/http";
 import { sleep } from "k6";
 import { Counter, Trend } from "k6/metrics";
-import { rpc, ok, sku, setStock, createOrder, customer, systemTags } from "./lib.js";
+import { rpc, ok, sku, setStock, createOrder, customer, systemTags, throwOnError } from "./lib.js";
 
 // GetReservation is 404 (not_found) until the worker has consumed the order;
 // that is the poll loop's "not yet", not a failed request.
@@ -34,6 +34,7 @@ const orderNotConfirmed = new Counter("order_not_confirmed");
 const reservationNotCommitted = new Counter("reservation_not_committed");
 
 export const options = {
+  throw: throwOnError,
   systemTags,
   scenarios: {
     reservation: {

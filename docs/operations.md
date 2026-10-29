@@ -91,6 +91,7 @@ task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 6
 task k6 -- ratelimit -e RPS=50    # server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50 起
 task k6 -- reservation            # server 旁要有 bin/worker 在跑（同一個 Postgres），不然每筆都 timeout
 task k6-auth-matrix               # tests/k6/auth-matrix.sh：orders / reservation 在每一種 auth 狀態各跑一次（2 VU × 5s）加上 fixtures，見下方「Auth 組合」；CI 的 k6-auth job 就是它
+task k6-wire                      # tests/k6/wire.sh：四個腳本打 tests/k6/wire_server.py（回壞掉的 HTTP response），驗 key 不進 k6 的輸出 / summary / metrics tag，見下方「壞掉的 HTTP response」；不需要 Postgres 和 rpc，CI 的 k6-auth job 跑它
 task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一個 bin/rpc（:18090、local Postgres、對應的 env；reservation 排第一且多起一個 bin/worker，讓它面對空的 outbox；RUN_ID 每個腳本不同，SKU 才不會互撞），10s × 10 VU；CI 的 k6 job 就是它；CreateOrder 的 p95 門檻放寬到 CREATE_P95（預設 500ms；腳本本身預設 300）、reservation 的放寬到 RESERVE_P95（預設 5000ms；腳本 3000），shared runner 的尾巴比筆電寬
 ```
 
@@ -100,7 +101,7 @@ task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一
 
 | `K6_CUSTOMER_MODE` | 行為 |
 |---|---|
-| `auto`（預設） | 每個 VU 的第一個 CreateOrder 不帶 `customer_id`：200 → 之後都不帶；`400 order.empty_customer` → 改帶腳本自己的 customer（名字含 `RUN_ID`）重送，之後都帶（沒寫入任何東西，那次 400 不算 `http_req_failed` 也不進 CreateOrder 的延遲）。**只快取這兩種答案**；其他任何回應（503、401、403…）都不快取，整個 run 立刻 abort，訊息是 `customer probe: …CreateOrder answered status <N> code <code>`，錯誤來源就是那一次真實呼叫（只印 RPC / status / Connect code，不印 response body 或其他 header：上游或 proxy 可能把 `X-API-Key` 反射進去，code 只印已知值（16 個 Connect code 和平台的 x-error-code，見 `tests/k6/codes.js`），其他一律 `<unrecognized>`；輸出前再把這次用的 `API_KEY` 值換成 `<redacted>`）。`rpc()` 不跟 redirect（`redirects: 0`：3xx 就是一個要回報的錯誤，Location 不印），`name` tag 固定為 RPC 名，四支腳本的 `systemTags` 不含 `url`——上游反射的 key 進不了 k6 自己的 warning 和 metrics；`task k6-auth-matrix` 的反射 cell 同時檢查 log、`--summary-export` 和 `--out json`。ListOrders 跟 CreateOrder 解出來的結果走（auth off 篩腳本的 customer、有 principal 看自己的，admin 看全部） |
+| `auto`（預設） | 每個 VU 的第一個 CreateOrder 不帶 `customer_id`：200 → 之後都不帶；`400 order.empty_customer` → 改帶腳本自己的 customer（名字含 `RUN_ID`）重送，之後都帶（沒寫入任何東西，那次 400 不算 `http_req_failed` 也不進 CreateOrder 的延遲）。**只快取這兩種答案**；其他任何回應（503、401、403…）都不快取，整個 run 立刻 abort，訊息是 `customer probe: …CreateOrder answered status <N> code <code>`，錯誤來源就是那一次真實呼叫（只印 RPC / status / Connect code，不印 response body 或其他 header：上游或 proxy 可能把 `X-API-Key` 反射進去，code 只印已知值（16 個 Connect code 和平台的 x-error-code，見 `tests/k6/codes.js`），其他一律 `<unrecognized>`；輸出前再把這次用的 `API_KEY` 值換成 `<redacted>`）。`rpc()` 不跟 redirect（`redirects: 0`：3xx 就是一個要回報的錯誤，Location 不印），`name` tag 固定為 RPC 名，四支腳本的 `systemTags` 不含 `url`（和 `error`，見下方「壞掉的 HTTP response」）——合法 HTTP 的反射進不了 k6 自己的 warning 和 metrics；`task k6-auth-matrix` 的反射 cell 同時檢查 log、`--summary-export` 和 `--out json`。ListOrders 跟 CreateOrder 解出來的結果走（auth off 篩腳本的 customer、有 principal 看自己的，admin 看全部） |
 | `include` / `omit` | 不探測，一律帶 / 一律不帶 `customer_id`（探測的那一次 CreateOrder 有顧慮、或要固定行為時用） |
 
 `task k6-auth-matrix` 驗證的組合（`tests/k6/auth-matrix.sh`，真的 rpc + Postgres，reservation 旁有 worker，各自的 `RUN_ID` / SKU / customer；腳本原本的 thresholds 不動，另外要求 `rpc_ok`（成功的 CreateOrder / GetOrder / ListOrders，reservation 是 CreateOrder / CompleteOrder / GetReservation）都 > 0）：
@@ -115,6 +116,22 @@ task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一
 | on，只有 `CreateOrder` 在 `auth.public`，role-less key | | **不支援**：CreateOrder 是 anonymous（要 customer），但帶 key 的 GetOrder / ListOrders 看不到別人的單 → `order.not_found` / `order.permission_denied`。matrix 要求它失敗、輸出看得到 `order.not_found` |
 | `WhoAmI` 回一次 503（透過 `tests/k6/fault_proxy.py`，test-only，不改產品行為） | | 不受影響（不依賴 WhoAmI） |
 | 判斷用的第一個 CreateOrder 回一次 503 | | abort，訊息含 `customer probe` 和 503 / `unavailable`，不會被當成 anonymous 快取 |
+
+### 壞掉的 HTTP response（`task k6-wire`）
+
+上游或 proxy 回的不是合法 HTTP（status code 是 key、version 是 key、header 行沒有冒號且帶著 key）時，Go 的 parser 把「讀不懂的那段」原樣放進錯誤，而 k6 在 `http.post` 回傳之前就把它印成 `Request Failed` warning，並寫進每一筆樣本的 `error` tag——`lib.js` 的 `redact` 只包得到腳本自己印的診斷，在這之前攔不到。實測（k6 v2.2.0）：只在腳本裡包 try/catch **沒有用**（請求失敗時 `http.post` 不丟例外，warning 已經印了）。做法是三件事一起：
+
+1. `options.throw: true`（`lib.js` 的 `throwOnError`）：請求失敗改成丟例外，k6 不再自己印 warning；
+2. `rpc()` 抓住例外，只用訊息挑一個固定分類，訊息本身不印、不放進回傳：回一個 `status: 0` 的 response，`errorCode()` / `knownCode()` 給 `transport.<class>`——`malformed_response`（status / version / header / chunk 讀不懂）、`truncated_response`（`unexpected EOF`）、`timeout`、`connection_refused`、`dns`、`connection_closed`（對方直接關線）、`other`；`rpc()` 每個 VU 前三次印 `<RPC>: no response, transport.<class>`（整句過 `redact()`：決策用 `knownCode()`，輸出和 `errorCode()` 一樣遮罩，key 剛好等於 `transport.<class>` 也不會出現；`wire.sh` 有 14 個這樣的 cell）。這次不是 `rpc_duration` 的樣本；
+3. `systemTags` 拿掉 `error`（自由文字，就是 parser 的訊息），保留 `error_code`（k6 的固定數字分類，例如 1000 = 一般 transport 錯誤）。
+
+`rpc()` 以外的任何 `http.*` 呼叫都不受保護：沒被抓到的例外 k6 會連訊息一起印。新腳本一律走 `rpc()`，`options` 帶 `throw: throwOnError`。
+
+對監控查詢的影響：repo 裡沒有東西讀 k6 的 `error` tag（k6 沒接 Grafana / Prometheus remote write；`kind/scale.sh` 只看 exit code 和 log），所以沒有 dashboard 或 alert 受影響。自己用 `--out` 接 k6 metrics 的人，原本 `error` tag 現在沒有了，改看 `error_code`（或 `status == 0`）；細節看 log 的 `transport.<class>`。
+
+另外 transport 失敗不再被默默放過：k6 對沒有 response 的請求不計 `http_req_failed`，所以 `timeout.js` 打到一個回壞掉 HTTP 的 server 時，原本每筆都在 `check` 丟例外、`timed_out` 沒有樣本 → `rate==1` 空過、exit 0；現在 `check` 看得到 `status 0`，`timed_out` 是 0% → exit 99。
+
+`tests/k6/wire.sh`（`task k6-wire`，不需要 Postgres 和 rpc，約 1 分鐘）：四支腳本 × 六種壞掉的回應（`tests/k6/wire_server.py`：`status` / `version` / `header` / `chunk` 帶著請求的 `X-API-Key`，`truncated` body 不完整，`closed` 連線直接關），每個 run 都要非零退出，`API_KEY`（自造的假 key）不能出現在 k6 輸出、`--summary-export`、`--out json` 的任何一行，metrics 不能有自由文字的 `error` tag，`closed`（key 根本沒上線）要有 `transport.<class>` 的診斷。每個 cell 還要證明 fixture 真的在場：server 要在 5 秒內 listen、跑完仍活著、自己印出 `served <mode>`（壞回應確實送出），而且 k6 回報的失敗分類必須恰好是該 mode 的（`status` / `version` / `header` / `chunk` → `malformed_response`、`truncated` → `truncated_response`、`closed` → `connection_closed`），出現其他分類（例如 server 缺席時的 `connection_refused`）就紅——光看 exit 非零和沒有 key 證明不了什麼。最後兩個負例 cell 讓 `wire.sh` 自己再跑一次：server 不啟動（`WIRE_SERVER_CMD=false`）、server 回錯的 mode（`WIRE_SERVE_AS=closed`），它必須失敗，否則 gate 本身標紅。失敗用 go test 的 `--- FAIL:` 格式印，`scripts/red-stage.sh` 讀得懂。
 
 CI 的 `k6-auth` job 和 `k6` job 平行；matrix 的 cell 名字可以接在 task 後面只跑幾個：`task k6-auth-matrix -- on-admin-orders whoami-public`。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
 
