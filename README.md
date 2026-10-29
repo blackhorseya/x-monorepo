@@ -220,6 +220,9 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   擋住的 group），console 的 **Prune** 頁就是打它——alert 響了之後不用進 pod：dry run 看 NOTE、填 forget、再跑；
 bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`，Poison 頁的 BC badge 與 alert 說明都連過來），dry run 永遠從開著開始。它跑在 `http.timeout` 底下，
   所以是 dry-run / forget-group / 例行小量的入口；第一次清大 backlog 用 CLI / CronJob（逾時只是回應掉了，已刪的 batch 都已 commit，重跑無害）。
+- **Inventory 寫入要 admin**：`inventory.v1.InventoryService` 的 `SetStock`（覆寫 on-hand）與 `ExpireReservations` auth 開著時要 `auth.admin_role`
+  （非 admin → `PERMISSION_DENIED` + `auth.permission_denied`，沒帶 credential → `UNAUTHENTICATED`；`auth.mode: off` 全開）；`GetStock` / `ListStocks` /
+  reservation 的讀取不檢查 role。console 的 Stock 頁 Set 要用 admin key / JWT。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `auth.admin_role`
@@ -259,6 +262,13 @@ worker expire ─► inventory ExpireReservations（RESERVED 超過 TTL → EXPI
 Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED | CANCELLED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）；COMPLETED 是終點，不能再取消。
 `ConfirmOrder` 沒有 RPC：確認是 inventory 的答覆，不是 client 的呼叫；`CompleteOrder` 只有 RPC（只有 CONFIRMED 能完成，`order.cannot_complete`）。
 cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的那邊 reload 後被狀態機拒絕，所以每張 order 只會有 `OrderCancelled` / `OrderCompleted` 其一。
+**CreateOrder 冪等**：`CreateOrderRequest.idempotency_key`（選填、1–64 個可見 ASCII；放在 request 欄位而不是 header，因為它在 proto / openapi 契約裡、所有協定長一樣、可被 protovalidate 驗證，也不必為它多一個把 header 塞進 context 的 interceptor）讓 client 逾時重送不會下出兩張單：
+- **範圍**：`(customer_id, key)`，customer 是 `ownership` 解析後的那個——admin 代客下單時就是被代下單的 customer，所以同一個 key 在不同 customer 之間互不相干，也看不到彼此。
+- **同 key 同內容**回原訂單，狀態是**現在**的（可能已經 CONFIRMED，不是建單當下的快照），不寫入、不發 `OrderCreated`。「內容」= items 的 sku / quantity / 單價 / 幣別，**依序**（`order.Fingerprint`，sha256，不正規化）：同樣的行換個順序、或把同 SKU 拆成兩行，都算不同內容——順序就是訂單的 position，悄悄回一張跟你這次送的不一樣的單比報錯更糟。
+- **同 key 不同內容**：`ALREADY_EXISTS` + `x-error-code: order.idempotency_key_reused`，沒寫入；訊息固定，不帶訂單 id、items 或 key。換 key 才能下新單。
+- **保存期 = 訂單的壽命**：key 與 `request_hash` 是 `ordering.orders` 的兩個 nullable 欄位（migration `0008`，partial unique index），沒有 TTL 表，key 不會比訂單先過期。空 key = 不保護，行為與以前完全相同（舊 client 不受影響）。
+- **併發**：兩個同 key 請求同時到，靠 `INSERT … ON CONFLICT (customer_id, idempotency_key) DO NOTHING` 決勝負，不靠應用層鎖；輸家（`Save` → `ErrIdempotencyConflict`）在**同一個交易**回讀勝出者再決定回放或 reused（DO NOTHING 不會讓交易 abort）。衝突路徑在 `Publish` 之前返回，outbox 不會多一列。
+- key 值不進 log、error、metric label、span。
 **Reservation TTL**：客戶既不完成也不取消，庫存不能一直被扣著——`worker expire --older-than 24h`（Helm `expire` CronJob 每 15 分鐘；`task expire -- --older-than 24h --dry-run` 先看）掃 RESERVED 超過 TTL 的 reservation，一批一個交易、最老的先。
 Reservation 沒有 version 欄位，同一張 order 的 Commit / Release / Expire 之間有兩道鎖：**stock 列的 version**（同一交易裡一起 Save）擋住同時改庫存；**reservation 的 status compare-and-swap**（`Update` 用 `WHERE status = <讀到的 status>`，轉移都是單向所以不需要 version 欄、沒有 migration）擋住「讀完 reservation 之後它被別的交易改了」——stock version 看不到這個，因為 stock 是在那之後才載入的（例如 Commit 讀到 RESERVED、另一交易 expire 並讓別單 reserve 走庫存）。另外，reservation 在讀取後被改、stock 之後才載入時，aggregate 可能先在 stock 層失敗（例如 `commit_exceeds_reserved`）：use case 在 domain 呼叫失敗時會重讀 reservation，status 已變就改回報 `reservation.ErrStale` 而不是當成終態 domain error。輸的那邊拿 `reservation.ErrStale`（wrap `kernel.ErrConcurrentUpdate`，不是 `kernel.Error`）：consumer 重試、重新讀到最新 status；expire 整批 rollback 重跑。
 與 `CompleteOrder` 的競態：`CompleteOrder` commit 到 inventory 消費 `OrderCompleted` 之間 reservation 仍是 RESERVED，sweep 剛好掃到會把庫存還回去並請求取消，ordering 拒絕（COMPLETED 是終點）。`OrderCompleted` 到了找到 EXPIRED 就補扣：`available` 夠 → 從 on_hand 扣、COMMITTED（照常發 `StockCommitted`）；不夠（庫存這段時間被別張單訂走）→ 全部不動、標 `COMMIT_SHORT`（終態、不發 event、不會變負）——訂單已 COMPLETED 但庫存缺口要營運處理，alert `x-monorepo-commit-short`，步驟見 `docs/operations.md`。重送的 `OrderCompleted` 找到 COMMITTED / COMMIT_SHORT 是 domain error → drop，不會扣第二次。

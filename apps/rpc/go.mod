@@ -11,6 +11,7 @@ require (
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/wire v0.7.0
+	google.golang.org/protobuf v1.36.12
 	gorm.io/gorm v1.31.2
 )
 
@@ -119,7 +120,6 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/grpc v1.83.2 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 	gorm.io/driver/postgres v1.6.3 // indirect
 )
 

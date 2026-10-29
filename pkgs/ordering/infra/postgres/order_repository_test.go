@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
@@ -47,8 +49,8 @@ func TestOrderRepository_Postgres(t *testing.T) {
 	if err := platformpg.Up(c, cfg, m); err != nil {
 		t.Fatal(err)
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 7 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 7 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 8 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 8 clean", v, dirty, err)
 	}
 
 	// The version table must live inside the BC schema, never in public:
@@ -233,5 +235,101 @@ func assertEqual(t *testing.T, want, got *order.Order) {
 		if wi[i] != gi[i] {
 			t.Fatalf("item %d: got %+v want %+v (order must be preserved)", i, gi[i], wi[i])
 		}
+	}
+}
+
+// Idempotency keys: ON CONFLICT DO NOTHING on the partial unique index. Losing
+// the race writes nothing and must leave the surrounding transaction usable;
+// a taken id must still be a plain duplicate, not a swallowed conflict.
+func TestOrderRepository_IdempotencyKey_Postgres(t *testing.T) {
+	c := context.Background()
+	url := pgtest.URL(t)
+	cfg := config.Postgres{URL: url}
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	db, cleanup, err := platformpg.NewDB(cfg, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`TRUNCATE ordering.orders CASCADE`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	repo := postgres.NewOrderRepository(db)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	usd, _ := kernel.NewMoney(100, "USD")
+	item, _ := order.NewLineItem("A", 1, usd)
+	mk := func(id, customer, key string) *order.Order {
+		o, err := order.New(order.Params{ID: order.ID(id), CustomerID: customer, Items: []order.LineItem{item}, Now: now, IdempotencyKey: key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	count := func(id string) (n int64) {
+		if err := db.Raw(`SELECT (SELECT count(*) FROM ordering.orders WHERE id = ?) + (SELECT count(*) FROM ordering.order_items WHERE order_id = ?)`, id, id).Scan(&n).Error; err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	if err := repo.Save(c, mk("o-1", "c-1", "k")); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(c, mk("o-2", "c-1", "k")); !errors.Is(err, order.ErrIdempotencyConflict) {
+		t.Fatalf("same customer, same key: err = %v, want ErrIdempotencyConflict", err)
+	}
+	if n := count("o-2"); n != 0 {
+		t.Fatalf("losing save left %d rows behind", n)
+	}
+	if err := repo.Save(c, mk("o-1", "c-1", "k-other")); !errors.Is(err, order.ErrDuplicate) {
+		t.Fatalf("taken id with a fresh key: err = %v, want ErrDuplicate", err)
+	}
+	for _, o := range []*order.Order{mk("o-3", "c-2", "k"), mk("o-4", "c-1", ""), mk("o-5", "c-1", "")} {
+		if err := repo.Save(c, o); err != nil {
+			t.Fatalf("%s: %v", o.ID(), err)
+		}
+	}
+
+	got, err := repo.FindByIdempotencyKey(c, "c-1", "k")
+	if err != nil || got.ID() != "o-1" || got.IdempotencyKey() != "k" || got.RequestHash() != order.Fingerprint(got.Items()) {
+		t.Fatalf("lookup = %v, %v", got, err)
+	}
+	if _, err := repo.FindByIdempotencyKey(c, "c-9", "k"); !errors.Is(err, order.ErrNotFound) {
+		t.Fatalf("other customer's key: err = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.FindByIdempotencyKey(c, "c-1", ""); !errors.Is(err, order.ErrNotFound) {
+		t.Fatalf("empty key must not match keyless rows: err = %v", err)
+	}
+
+	// Inside one transaction a lost race is not an abort: the same tx reads the winner back.
+	err = platformpg.Transaction(c, db, func(c context.Context, _ *gorm.DB) error {
+		if err := repo.Save(c, mk("o-6", "c-1", "k")); !errors.Is(err, order.ErrIdempotencyConflict) {
+			return fmt.Errorf("save: %w", err)
+		}
+		w, err := repo.FindByIdempotencyKey(c, "c-1", "k")
+		if err != nil || w.ID() != "o-1" {
+			return fmt.Errorf("read back: %v, %w", w, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("transaction after a lost race: %v", err)
+	}
+
+	// An update (cancel) neither drops nor changes the key.
+	_ = got.Cancel(now.Add(time.Minute))
+	if err := repo.Save(c, got); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := repo.FindByIdempotencyKey(c, "c-1", "k"); err != nil || again.Status() != order.StatusCancelled {
+		t.Fatalf("after update: %v, %v", again, err)
 	}
 }

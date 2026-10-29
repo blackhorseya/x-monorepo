@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { admin } from "../client";
-import { ErrorAlert, Field } from "./orders";
+import { ErrorAlert } from "../components/error-alert";
+import { Field } from "../components/field";
 
 // Operator side of the outbox / inbox retention (admin.v1.AdminService.Prune,
 // the RPC twin of `worker prune`): a dry run shows what would go and which

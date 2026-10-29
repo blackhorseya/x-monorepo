@@ -17,7 +17,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `request.rate_limited` | `RESOURCE_EXHAUSTED` | rate limit interceptor | 超過 `http.rate_limit`，另帶 `Retry-After` |
 | `auth.unauthenticated` | `UNAUTHENTICATED` | auth interceptor | `auth.mode=required` 且沒帶 credential |
 | `auth.invalid_credential` | `UNAUTHENTICATED` | auth interceptor | 帶了但對不上（未知 API key、JWT 簽章 / exp / iss / aud 不對）。identity 的 key 被 revoke / 過期 / account disabled、或 resolver 查 DB 失敗，client 看到的也是這個（不洩漏原因；resolver 失敗另有 error log） |
-| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`InventoryService.ExpireReservations`、`IdentityService` 除 `WhoAmI` 外都要 `auth.admin_role`） |
+| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`InventoryService.SetStock` 與 `ExpireReservations`、`IdentityService` 除 `WhoAmI` 外都要 `auth.admin_role`） |
 | `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`order.ErrStale` / `stock.ErrStale` / `account.ErrStale` / `apikey.ErrStale` / `reservation.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；Order 的 cancel / confirm / complete 已先在 use case 內重試 3 次，仍撞才會出現；重送即可，刻意沒有前綴也不是 `kernel.Error` |
 | `pagination.invalid_page_size` | `INVALID_ARGUMENT` | `platform/pagination` | `page_size` 負數 |
 | `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（ListOrders / ListStocks 把 filter 編進 token） |
@@ -32,6 +32,8 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `order.cannot_complete` | `FAILED_PRECONDITION` | ordering domain | 不是 CONFIRMED 的 order 被 Complete（PENDING 還沒有庫存可 commit；再按一次也是這個） |
 | `order.not_found` | `NOT_FOUND` | ordering domain / application | 沒有這筆；非 admin 的 principal 讀、取消、完成別人的訂單也是它（`GetOrder` / `CancelOrder` / `CompleteOrder`，不洩漏存在與否） |
 | `order.duplicate` | `ALREADY_EXISTS` | ordering domain | 同 id 再 Save（repo 層） |
+| `order.idempotency_key_reused` | `ALREADY_EXISTS` | ordering domain（`CreateOrder`） | 同一個 customer 的 `idempotency_key` 已用在**內容不同**的請求上（items 的 sku / quantity / 單價 / 幣別 / **順序**任一不同）；沒寫入、沒發 event。訊息固定，不帶訂單、items、key；要換 key 才能下新單。內容相同的重送不是錯誤，回原訂單 |
+| `order.idempotency_conflict` | （不到 rpc） | ordering repo（`Save`） | 新單的 (customer, key) 被別人先佔了：use case 接住、回讀勝出的那筆再決定回放或 `order.idempotency_key_reused`；`INTERNAL` Kind 只是保險，正常不會到 `ToConnectError` |
 | `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數 |
 | `stock.below_reserved` | `FAILED_PRECONDITION` | inventory domain | SetStock 想把 on-hand 壓到低於已 reserved |
 | `stock.release_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Release 超過 reserved |

@@ -12,7 +12,8 @@ import { ConfirmButton } from "../components/confirm";
 import { useResetOnCredentialChange } from "../auth";
 import { identity } from "../client";
 import { accountsQuery, keys } from "../queries";
-import { ErrorAlert, Field } from "./orders";
+import { ErrorAlert } from "../components/error-alert";
+import { Field } from "../components/field";
 
 // "viewer, ops" → ["viewer", "ops"]; the server trims / dedupes / sorts, this only splits.
 export const parseRoles = (raw: string): string[] =>

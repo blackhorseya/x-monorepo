@@ -24,7 +24,7 @@ task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會�
 task merge-ready -- <pr>   # merge 前必跑：PR 最新綠燈是不是對「現在的 main + 這個 head」跑的（列 main / merge / base / head SHA 與 check 數）；stale（main 已前進）exit 2，先 `-- <pr> --revalidate` 重驗，不要 update branch（head 一變就要重審）
 task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag；沒改到會進 artifact 的檔案就被 gate 跳過，task release-gate 先看：列 releasable 檔 + 預測版號；四個 image 與 checksums.txt 都由 cosign keyless 簽名、archive 另有 GitHub artifact attestation，發布後 verify job 跑 scripts/release-verify.sh 全驗一遍；snapshot 以 --skip=sign 跳過）
 task poison -- list        # 看各 BC 的 poison 表；requeue <bc> <offset>…|all 送回原 topic、drop 刪掉（worker poison 子命令）
-task expire -- --older-than 24h --dry-run   # reservation TTL：RESERVED 超過的還庫存 + 發 OrderCancellationRequested（worker expire；Helm expire CronJob 每 15 分鐘；rpc 版 InventoryService.ExpireReservations 給 console Expire 頁，要 admin role）
+task expire -- --older-than 24h --dry-run   # reservation TTL：RESERVED 超過的還庫存 + 發 OrderCancellationRequested（worker expire；Helm expire CronJob 每 15 分鐘；rpc 版 InventoryService.ExpireReservations 給 console Expire 頁，要 admin role；`InventoryService.SetStock` 同樣要 admin role，auth 開著時非 admin 是 `PERMISSION_DENIED`）
 task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 outbox 列 + 消費過的 inbox 列（worker prune；先 dry-run；NOTE 列出每個落後的 group 與最老未讀年齡：held back by = 過了 retention、behind = 還沒，--forget-group 刪掉不會再跑的）
 task bootstrap                              # identity 第一個 account + API key（空 store 才建；worker bootstrap；secret 只印一次）
 task helm-check            # deployments/helm/x-monorepo：每個 ci/*.yaml profile 跑 helm lint + kubeconform + check.py（derived 數字：grace period、hook 順序、prune args、console 的 RPC_UPSTREAM、ServiceMonitor / NetworkPolicy 的選擇器）
@@ -47,6 +47,7 @@ TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
 前端：`web/` 是 Turborepo（pnpm）。`packages/proto` 是 connect-es client（`task gen-ts` 需要網路，產出到那裡）；
 `apps/console` 是 Vite + TanStack Router / Query + Tailwind v4 + shadcn/ui，`task web-dev`（proxy 到 :8080）/ `task web-typecheck` / `task web-build` /
 `task web-e2e`（Playwright：`web/apps/console/e2e`，起 `bin/rpc` + vite preview 真打；`E2E_DATABASE_URL` 有設就先 `migrate up` 走 Postgres 並由 `e2e/worker.setup.ts` 多起一個 `bin/worker`（CI；`reservation.spec.ts` 驗 outbox → worker → RESERVED / RELEASED 與 Complete → COMMITTED，`reservations.spec.ts` 驗 /reservations 的 status filter 與 `?order=` pin），沒設是 in-memory，spec 用 `e2e/mode.ts` 的 `withDB` 分支；project `auth`（`e2e/auth/`）另起一個 `auth.mode=required` 的 rpc + preview 驗 credential 流程（API key 與 `jwt.ts` 現場簽的 HS256 JWT；`helpers.ts` / `jwt.ts` 不是 spec，project 的 testMatch 只收 `*.spec.ts`）；locator 用 `getByLabel` / `getByRole`，第一次先 `pnpm exec playwright install chromium`）；`task web-e2e-image` 把 chromium project 改打真的 console image（`e2e/image.sh`，`E2E_CONSOLE_URL` 取代 vite preview；`image.spec.ts` 只在這模式跑，驗 nginx 的 fallback / cache header / proxy）。
+console 每個頁面（`src/routes/*`）是 `router.tsx` 裡 `lazyRouteComponent` 拆出的獨立 chunk，layout 與 `client.ts` / `queries.ts` 留在首屏；頁面之間共用的東西（`Field`、`ErrorAlert`、`formatMoney` 等）放 `src/components/`，不要讓 layout 或別的頁面 import `routes/<page>` 的 runtime 值（會把那頁綁回首屏，型別用 `import type` 無妨）；載入中 / chunk 載入失敗由 `defaultPendingComponent` / `defaultErrorComponent`（`components/route-status.tsx`，含 Retry）顯示。
 shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` import 要確認是 `@/lib/utils`。
 
 **新 clone / 新 worktree 第一件事**：`task tools`。`./bin` 是 gitignored，而 `task gen`（也被 `gate-local` 間接呼叫）會**先刪掉**
@@ -122,6 +123,10 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
   （例如 inventory 缺貨）要做成 aggregate 狀態 + event，不能做成 error；反過來 optimistic-lock 的 `stock.ErrStale` / `reservation.ErrStale` / `order.ErrStale` 刻意不是 `kernel.Error`：
   它們 wrap `kernel.ErrConcurrentUpdate`，consumer 會 retry，rpc 回 `Aborted`（`x-error-code: concurrent_update`），metrics 記 `kind=aborted`。
 - **Optimistic lock**：aggregate 帶 `version`，`Save` 比對後 +1。存完後記憶體中的 aggregate 版本**不會**前進，要再存一次請先 reload。
+- **CreateOrder 冪等**：`CreateOrderRequest.idempotency_key`（選填，1–64 個可見 ASCII）。範圍是 `unique(customer_id, key)`，customer 是 `ownership.ForCreate` 解析後的（admin 代客 = 被代下單的 customer）；
+  key + `request_hash`（`order.Fingerprint(items)`，**不正規化**：順序、重複 SKU 都算內容）存在 `ordering.orders`（migration `0008`，partial unique index），與訂單同壽、不另設 TTL。
+  同 key 同內容 → 回原訂單**目前**狀態、不寫不發 event；同 key 不同內容 → `ALREADY_EXISTS` / `order.idempotency_key_reused`（訊息固定，不帶任何資料）。
+  併發靠 `INSERT … ON CONFLICT (customer_id, idempotency_key) DO NOTHING`（不 abort tx、不靠鎖）：`Save` 回 `ErrIdempotencyConflict`，use case 在**同一個 tx** 回讀勝出者；衝突路徑在 `Publish` 之前返回，所以 outbox 不會多一列。key 值不進 log / error / metric / span（R4）。空 key = 舊行為。
 - **Validation**：request 形狀由 protovalidate interceptor 擋（`x-error-code: request.validation_failed` + `Violations` detail），
   consumer path 沒有它，所以 domain 的檢查不能拿掉。
 - **Auth 只做 authentication**：`auth.mode` 預設 `off`（`task run`、E2E、console 都沒帶 credential）；開了之後 `server.NewAuthInterceptor`

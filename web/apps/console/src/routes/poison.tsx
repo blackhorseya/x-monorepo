@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { admin, describe } from "../client";
 import { keys, poisonDetailQuery, poisonQuery } from "../queries";
-import { ErrorAlert } from "./orders";
+import { ErrorAlert } from "../components/error-alert";
 
 // Operator view of every BC's poison table (admin.v1.AdminService): the
 // messages a worker handler gave up on. Requeue puts one back on its topic
