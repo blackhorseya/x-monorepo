@@ -18,10 +18,11 @@ import (
 // use case Bootstrap); this file is flags and wiring.
 func newBootstrapCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 	var (
-		name      string
-		roles     []string
-		keyName   string
-		expiresIn time.Duration
+		name       string
+		roles      []string
+		keyName    string
+		expiresIn  time.Duration
+		adminEmail string
 
 		expectTarget   string
 		allowPlaintext bool
@@ -51,7 +52,15 @@ so only the target you typed is trusted, and it is the only value an error will 
 
 With the printed X-API-Key, CreateAccount / CreateApiKey make the real accounts; the
 static auth.api_keys entry (if any) stays the break-glass path. The secret goes to
-stdout only, never to the log.`,
+stdout only, never to the log.
+
+With --admin-email <email> the OIDC path replaces the API key: the first account (--name,
+--role) is created together with an invite for that email, valid 7 days and single use.
+No API key is made and nothing secret exists to print — the deployer signs in at the
+identity provider with that verified email and calls ClaimInvite. --key-name and
+--expires-in belong to the API-key path and are refused with it. The same empty-store
+guard, --expect-target and TLS rules apply. If nobody claims it in 7 days, reissue the
+invite with the static auth.api_keys admin key (CreateInvite).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// First, before the config is read or the URL parsed: the host in the URL
@@ -62,6 +71,9 @@ stdout only, never to the log.`,
 			}
 			if strings.TrimSpace(name) == "" {
 				return errors.New("--name must not be empty")
+			}
+			if adminEmail != "" && (cmd.Flags().Changed("key-name") || cmd.Flags().Changed("expires-in")) {
+				return errors.New("--key-name and --expires-in do not apply with --admin-email: it creates an invite, not an API key")
 			}
 			if strings.TrimSpace(keyName) == "" {
 				return errors.New("--key-name must not be empty")
@@ -95,6 +107,10 @@ stdout only, never to the log.`,
 			}
 			defer cleanup()
 
+			if adminEmail != "" {
+				return boot.RunInvite(cmd.Context(), cmd.OutOrStdout(), name, roles, adminEmail)
+			}
+
 			return boot.Run(cmd.Context(), cmd.OutOrStdout(), name, roles, keyName, expiresAt)
 		},
 	}
@@ -102,6 +118,7 @@ stdout only, never to the log.`,
 	cmd.Flags().StringArrayVar(&roles, "role", nil, "role of the first account (repeatable; default: auth.admin_role)")
 	cmd.Flags().StringVar(&keyName, "key-name", "bootstrap", "name of the first API key")
 	cmd.Flags().DurationVar(&expiresIn, "expires-in", 0, "the key expires this long from now (Go duration, e.g. 720h; 0 = never)")
+	cmd.Flags().StringVar(&adminEmail, "admin-email", "", "create the first admin account with an invite for this email instead of an API key (the deployer signs in at the IdP and calls ClaimInvite)")
 	cmd.Flags().StringVar(&expectTarget, "expect-target", "", "required: the host:port every database connection must go to (e.g. 127.0.0.1:15432 behind kubectl port-forward); anything else is refused before connecting")
 	cmd.Flags().BoolVar(&allowPlaintext, "insecure-allow-plaintext", false, "skip the TLS check, for a local development database only; --expect-target still applies")
 

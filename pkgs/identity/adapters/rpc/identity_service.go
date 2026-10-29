@@ -48,6 +48,8 @@ type UseCases struct {
 	ListAPIKeys    ListAPIKeysUC
 	RevokeAPIKey   RevokeAPIKeyUC
 	WhoAmI         WhoAmIUC
+	CreateInvite   CreateInviteUC
+	RevokeSessions RevokeSessionsUC
 }
 
 // IdentityService implements the generated IdentityServiceHandler. Every
@@ -195,6 +197,32 @@ func (h *IdentityService) RevokeApiKey(c context.Context, req *connect.Request[i
 	return connect.NewResponse(&identityv1.RevokeApiKeyResponse{ApiKey: toProtoAPIKey(out)}), nil
 }
 
+func (h *IdentityService) CreateInvite(c context.Context, req *connect.Request[identityv1.CreateInviteRequest]) (*connect.Response[identityv1.CreateInviteResponse], error) {
+	if err := h.admin(c); err != nil {
+		return nil, err
+	}
+	out, err := h.uc.CreateInvite.Execute(c, dto.CreateInviteInput{AccountID: req.Msg.GetAccountId(), Email: req.Msg.GetEmail()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&identityv1.CreateInviteResponse{Invite: toProtoInvite(out)}), nil
+}
+
+// RevokeSessions is "sign out of all devices", not a compromise response; the
+// contract comment on the RPC says so, and so must any UI that offers it.
+func (h *IdentityService) RevokeSessions(c context.Context, req *connect.Request[identityv1.RevokeSessionsRequest]) (*connect.Response[identityv1.RevokeSessionsResponse], error) {
+	if err := h.admin(c); err != nil {
+		return nil, err
+	}
+	out, err := h.uc.RevokeSessions.Execute(c, dto.RevokeSessionsInput{AccountID: req.Msg.GetAccountId()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&identityv1.RevokeSessionsResponse{Account: toProtoAccount(out)}), nil
+}
+
 func (h *IdentityService) WhoAmI(c context.Context, _ *connect.Request[identityv1.WhoAmIRequest]) (*connect.Response[identityv1.WhoAmIResponse], error) {
 	out, err := h.uc.WhoAmI.Execute(c, dto.WhoAmIInput{})
 	if err != nil {
@@ -207,10 +235,27 @@ func (h *IdentityService) WhoAmI(c context.Context, _ *connect.Request[identityv
 }
 
 func toProtoAccount(a *dto.AccountOutput) *identityv1.Account {
-	return &identityv1.Account{
+	out := &identityv1.Account{
 		Id: a.ID, Name: a.Name, Roles: a.Roles, Status: toProtoAccountStatus(a.Status),
 		CreateTime: timestamppb.New(a.CreatedAt), UpdateTime: timestamppb.New(a.UpdatedAt),
 	}
+	if !a.SessionsRevokedAt.IsZero() {
+		out.SessionsRevokeTime = timestamppb.New(a.SessionsRevokedAt)
+	}
+
+	return out
+}
+
+func toProtoInvite(v *dto.InviteOutput) *identityv1.Invite {
+	out := &identityv1.Invite{
+		Id: v.ID, Email: v.Email, AccountId: v.AccountID,
+		CreateTime: timestamppb.New(v.CreatedAt), ExpireTime: timestamppb.New(v.ExpiresAt),
+	}
+	if !v.ClaimedAt.IsZero() {
+		out.ClaimTime = timestamppb.New(v.ClaimedAt)
+	}
+
+	return out
 }
 
 func toProtoAccountStatus(s string) identityv1.AccountStatus {

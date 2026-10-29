@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md) · [identity.md](identity.md)</sub>
 
-> **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9），未實作。** 這份是現行規格，實作拆成 #270–#274（§12）。
+> **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）。** 這份是現行規格，實作拆成 #270–#274（§12）；PR 3（#271）已實作 identity BC 這一半，細節見 [`identity.md`](identity.md)「外部身分綁定」。
 > x-monorepo 是通用 template：登入走**外部 OIDC（方案 B）**，本機開發與測試用 **Dex**；自建帳密 issuer（方案 A）降為可選模組，未排程（§13）。
 > API key 繼續用於機器對機器與 break-glass。**OIDC 預設關閉，關閉時行為與現在完全相同。**
 > 所有範例的 secret 都是佔位符（`<…>`），不是可用的值（紅線 R4）。
@@ -134,7 +134,7 @@
 - `worker bootstrap --admin-email <email>`：在**空 store** 上建 admin account，**同時發出該 email 的邀請**（§5，7 天）。部署者從 IdP 登入並呼叫 `ClaimInvite` 後完成綁定。
 - **不做 config 層級的 `bootstrap_admins`**。
 - 執行方式不變：**操作者本機**經 `kubectl port-forward` 連 DB、`--expect-target host:port` 必填、不放進叢集 Job；runbook 要求 Postgres 連線用 `verify-ca` 或 `verify-full` TLS（`docs/operations.md`，PR 6）。
-- 不帶 `--admin-email` 時行為不變（account + 第一把 API key）；帶 `--admin-email` 時是否同時產出 API key，在 PR 3 定案。
+- 不帶 `--admin-email` 時行為不變（account + 第一把 API key）；帶 `--admin-email` 時**不**產 API key（PR 3 定案：沒有 secret 可印；API key 路徑照舊走不帶旗標的 bootstrap）。
 - 邀請過期（7 天內沒人登入）：用 break-glass 的 static admin API key 重新發邀請。
 - Console 以 OIDC 為主；API key 登入入口見 §8。
 

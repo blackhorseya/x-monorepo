@@ -18,7 +18,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `auth.unauthenticated` | `UNAUTHENTICATED` | auth interceptor | `auth.mode=required` 且沒帶 credential |
 | `auth.invalid_credential` | `UNAUTHENTICATED` | auth interceptor | 帶了但對不上（未知 API key、JWT 簽章 / exp / iss / aud 不對）。identity 的 key 被 revoke / 過期 / account disabled、或 resolver 查 DB 失敗，client 看到的也是這個（不洩漏原因；resolver 失敗另有 error log） |
 | `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`InventoryService.SetStock` 與 `ExpireReservations`、`IdentityService` 除 `WhoAmI` 外都要 `auth.admin_role`） |
-| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`order.ErrStale` / `stock.ErrStale` / `account.ErrStale` / `apikey.ErrStale` / `reservation.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；Order 的 cancel / confirm / complete 已先在 use case 內重試 3 次，仍撞才會出現；重送即可，刻意沒有前綴也不是 `kernel.Error` |
+| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`order.ErrStale` / `stock.ErrStale` / `account.ErrStale` / `apikey.ErrStale` / `invite.ErrStale` / `reservation.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；Order 的 cancel / confirm / complete 已先在 use case 內重試 3 次，仍撞才會出現；重送即可，刻意沒有前綴也不是 `kernel.Error` |
 | `pagination.invalid_page_size` | `INVALID_ARGUMENT` | `platform/pagination` | `page_size` 負數 |
 | `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（ListOrders / ListStocks 把 filter 編進 token） |
 | `admin.no_database` | `FAILED_PRECONDITION` | admin | server 沒接 Postgres（`postgres.url` 空）：poison 表與 outbox / inbox 都在 DB |
@@ -60,6 +60,13 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `api_key.revoked` / `api_key.expired` | `FAILED_PRECONDITION` | identity domain | ResolveAPIKey：`Usable(now)` 拒絕（rpc 看到的是 `auth.invalid_credential`） |
 | `api_key.not_found` | `NOT_FOUND` | identity domain | `RevokeApiKey` 的 id 不存在；ResolveAPIKey 的 hash 對不上 |
 | `api_key.duplicate` | `ALREADY_EXISTS` | identity domain | 同 id 或同 hash 再 Add（repo 層） |
+| `identity.invalid_issuer` / `identity.invalid_subject` / `identity.invalid_binding_account` / `identity.invalid_mapping` | `INVALID_ARGUMENT` | identity domain（`externalidentity`） | external identity 不變量：issuer / subject / account 不能空、`mapping` 只認 `bound` 與 `auto_provision` |
+| `identity.unbound` | `NOT_FOUND` | identity domain（`externalidentity`） | `(iss, sub)` 沒有綁定任何 account（`mapping: bound`）。resolver 把它交給呼叫端（#272：未綁定只能 `ClaimInvite`）；不進 cache |
+| `identity.already_bound` | `ALREADY_EXISTS` | identity domain（`externalidentity`） | `(iss, sub)` 已綁定：`ClaimInvite` 的 sub 已有 account，或 `auto_provision` 同一身分並發（輸家整筆 rollback，resolver 重讀） |
+| `invite.invalid_id` / `invite.invalid_email` / `invite.invalid_account` | `INVALID_ARGUMENT` | identity domain（`invite`） | invite 不變量；`invalid_email` 也是 `CreateInvite` / `worker bootstrap --admin-email` 給了不像 email 的字串 |
+| `invite.not_found` | `NOT_FOUND` | identity domain（`invite`） | `ClaimInvite`：這個 email 沒有任何 invite |
+| `invite.expired` / `invite.already_claimed` / `invite.email_unverified` / `invite.email_mismatch` | `FAILED_PRECONDITION` | identity domain（`invite`） | `ClaimInvite` 拒絕：超過 7 天、已被用過（含兩個 sub 搶同一張，輸家拿這個）、token 的 `email_verified` 不是 true、email 與邀請不符。被拒的 claim 不會花掉 invite |
+| `account.session_revoked` / `account.missing_iat` | `PERMISSION_DENIED` | identity domain（`account.CheckSession`，經 external resolver） | token 的 `iat` 早於 `sessions_revoked_at`，或 token 沒有 `iat`（無從比較，一律拒絕） |
 | `message.duplicate` | （不到 rpc） | `usecasex.Idempotent` | consumer inbox 看到重送的 message id：handler 回它、broker ack、不 retry；rpc path 沒 message id 不會發 |
 | `order.invalid_status` / `reservation.invalid_status` / `stock.corrupt_quantities` / `account.invalid_status` / `api_key.invalid_status` | `INTERNAL`（header 不帶 code） | domain | 從 DB 讀回來的狀態 / 數量不合法：資料壞了，不是 client 的錯 |
 

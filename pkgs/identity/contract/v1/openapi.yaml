@@ -123,6 +123,14 @@ components:
           allOf:
             - $ref: '#/components/schemas/google.protobuf.Timestamp'
           title: update_time
+        sessionsRevokeTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: sessions_revoke_time
+          description: |-
+            Access tokens issued before this are refused (RevokeSessions). Unset: never
+             revoked. It is "sign out everywhere", not a compromise response: see
+             IdentityService.RevokeSessions.
       title: Account
       additionalProperties: false
       description: |-
@@ -275,6 +283,29 @@ components:
           description: The plaintext secret, shown once. Send it as X-API-Key.
       title: CreateApiKeyResponse
       additionalProperties: false
+    identity.v1.CreateInviteRequest:
+      type: object
+      properties:
+        accountId:
+          type: string
+          title: account_id
+          minLength: 1
+        email:
+          type: string
+          title: email
+          maxLength: 254
+          minLength: 3
+      title: CreateInviteRequest
+      additionalProperties: false
+    identity.v1.CreateInviteResponse:
+      type: object
+      properties:
+        invite:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.Invite'
+          title: invite
+      title: CreateInviteResponse
+      additionalProperties: false
     identity.v1.DisableAccountRequest:
       type: object
       properties:
@@ -329,6 +360,36 @@ components:
           title: account
       title: GetAccountResponse
       additionalProperties: false
+    identity.v1.Invite:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+        email:
+          type: string
+          title: email
+        accountId:
+          type: string
+          title: account_id
+        createTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: create_time
+        expireTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: expire_time
+        claimTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: claim_time
+          description: Set once the invite has been claimed.
+      title: Invite
+      additionalProperties: false
+      description: |-
+        Invite pre-binds an email to an account. It is single use, valid for 7 days,
+         and carries no secret: the person signs in at the identity provider and claims it.
     identity.v1.ListAccountsRequest:
       type: object
       properties:
@@ -392,6 +453,24 @@ components:
             - $ref: '#/components/schemas/identity.v1.ApiKey'
           title: api_key
       title: RevokeApiKeyResponse
+      additionalProperties: false
+    identity.v1.RevokeSessionsRequest:
+      type: object
+      properties:
+        accountId:
+          type: string
+          title: account_id
+          minLength: 1
+      title: RevokeSessionsRequest
+      additionalProperties: false
+    identity.v1.RevokeSessionsResponse:
+      type: object
+      properties:
+        account:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.Account'
+          title: account
+      title: RevokeSessionsResponse
       additionalProperties: false
     identity.v1.WhoAmIRequest:
       type: object
@@ -555,6 +634,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/identity.v1.CreateApiKeyResponse'
+  /identity.v1.IdentityService/CreateInvite:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: CreateInvite
+      description: |-
+        CreateInvite pre-binds an email to an account (valid 7 days, single use,
+         no secret). The person signs in at the identity provider with that verified
+         email and claims it; the claim binds their (issuer, subject) to the account,
+         after which only the subject counts. Audited.
+      operationId: identity.v1.IdentityService.CreateInvite
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.CreateInviteRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.CreateInviteResponse'
   /identity.v1.IdentityService/DisableAccount:
     post:
       tags:
@@ -788,6 +910,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/identity.v1.RevokeApiKeyResponse'
+  /identity.v1.IdentityService/RevokeSessions:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: RevokeSessions
+      description: |-
+        RevokeSessions refuses every access token of the account issued before now
+         (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
+         NOTHING MORE: it does not touch the identity provider's refresh tokens, so
+         whoever holds one can still obtain a token with a newer issue time. It is
+         NOT a response to a stolen account. If an account is suspected stolen,
+         DisableAccount it (effective for every token, refresh-derived ones
+         included) and revoke the user's refresh tokens or reset their credentials
+         at the identity provider. Requires the admin role; audited (who, which
+         account, when; never a token).
+      operationId: identity.v1.IdentityService.RevokeSessions
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.RevokeSessionsRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.RevokeSessionsResponse'
   /identity.v1.IdentityService/WhoAmI:
     post:
       tags:

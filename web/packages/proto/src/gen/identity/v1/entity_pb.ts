@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file identity/v1/entity.proto.
  */
 export const file_identity_v1_entity: GenFile = /*@__PURE__*/
-  fileDesc("ChhpZGVudGl0eS92MS9lbnRpdHkucHJvdG8SC2lkZW50aXR5LnYxIsABCgdBY2NvdW50EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFcm9sZXMYAyADKAkSKgoGc3RhdHVzGAQgASgOMhouaWRlbnRpdHkudjEuQWNjb3VudFN0YXR1cxIvCgtjcmVhdGVfdGltZRgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLdXBkYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIrcCCgZBcGlLZXkSCgoCaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIMCgRuYW1lGAMgASgJEg4KBnByZWZpeBgEIAEoCRIpCgZzdGF0dXMYBSABKA4yGS5pZGVudGl0eS52MS5BcGlLZXlTdGF0dXMSLwoLY3JlYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2V4cGlyZV90aW1lGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtyZXZva2VfdGltZRgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMQoNbGFzdF91c2VfdGltZRgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAqZwoNQWNjb3VudFN0YXR1cxIeChpBQ0NPVU5UX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFUFDQ09VTlRfU1RBVFVTX0FDVElWRRABEhsKF0FDQ09VTlRfU1RBVFVTX0RJU0FCTEVEEAIqZQoMQXBpS2V5U3RhdHVzEh4KGkFQSV9LRVlfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGQoVQVBJX0tFWV9TVEFUVVNfQUNUSVZFEAESGgoWQVBJX0tFWV9TVEFUVVNfUkVWT0tFRBACYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChhpZGVudGl0eS92MS9lbnRpdHkucHJvdG8SC2lkZW50aXR5LnYxIvoBCgdBY2NvdW50EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFcm9sZXMYAyADKAkSKgoGc3RhdHVzGAQgASgOMhouaWRlbnRpdHkudjEuQWNjb3VudFN0YXR1cxIvCgtjcmVhdGVfdGltZRgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLdXBkYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjgKFHNlc3Npb25zX3Jldm9rZV90aW1lGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLJAQoGSW52aXRlEgoKAmlkGAEgASgJEg0KBWVtYWlsGAIgASgJEhIKCmFjY291bnRfaWQYAyABKAkSLwoLY3JlYXRlX3RpbWUYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2V4cGlyZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjbGFpbV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCK3AgoGQXBpS2V5EgoKAmlkGAEgASgJEhIKCmFjY291bnRfaWQYAiABKAkSDAoEbmFtZRgDIAEoCRIOCgZwcmVmaXgYBCABKAkSKQoGc3RhdHVzGAUgASgOMhkuaWRlbnRpdHkudjEuQXBpS2V5U3RhdHVzEi8KC2NyZWF0ZV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtleHBpcmVfdGltZRgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLcmV2b2tlX3RpbWUYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjEKDWxhc3RfdXNlX3RpbWUYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wKmcKDUFjY291bnRTdGF0dXMSHgoaQUNDT1VOVF9TVEFUVVNfVU5TUEVDSUZJRUQQABIZChVBQ0NPVU5UX1NUQVRVU19BQ1RJVkUQARIbChdBQ0NPVU5UX1NUQVRVU19ESVNBQkxFRBACKmUKDEFwaUtleVN0YXR1cxIeChpBUElfS0VZX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFUFQSV9LRVlfU1RBVFVTX0FDVElWRRABEhoKFkFQSV9LRVlfU1RBVFVTX1JFVk9LRUQQAmIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * Account is who an API key speaks for. The id is the principal's subject
@@ -50,6 +50,15 @@ export type Account = Message<"identity.v1.Account"> & {
    * @generated from field: google.protobuf.Timestamp update_time = 6;
    */
   updateTime?: Timestamp;
+
+  /**
+   * Access tokens issued before this are refused (RevokeSessions). Unset: never
+   * revoked. It is "sign out everywhere", not a compromise response: see
+   * IdentityService.RevokeSessions.
+   *
+   * @generated from field: google.protobuf.Timestamp sessions_revoke_time = 7;
+   */
+  sessionsRevokeTime?: Timestamp;
 };
 
 /**
@@ -58,6 +67,53 @@ export type Account = Message<"identity.v1.Account"> & {
  */
 export const AccountSchema: GenMessage<Account> = /*@__PURE__*/
   messageDesc(file_identity_v1_entity, 0);
+
+/**
+ * Invite pre-binds an email to an account. It is single use, valid for 7 days,
+ * and carries no secret: the person signs in at the identity provider and claims it.
+ *
+ * @generated from message identity.v1.Invite
+ */
+export type Invite = Message<"identity.v1.Invite"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string email = 2;
+   */
+  email: string;
+
+  /**
+   * @generated from field: string account_id = 3;
+   */
+  accountId: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp create_time = 4;
+   */
+  createTime?: Timestamp;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp expire_time = 5;
+   */
+  expireTime?: Timestamp;
+
+  /**
+   * Set once the invite has been claimed.
+   *
+   * @generated from field: google.protobuf.Timestamp claim_time = 6;
+   */
+  claimTime?: Timestamp;
+};
+
+/**
+ * Describes the message identity.v1.Invite.
+ * Use `create(InviteSchema)` to create a new message.
+ */
+export const InviteSchema: GenMessage<Invite> = /*@__PURE__*/
+  messageDesc(file_identity_v1_entity, 1);
 
 /**
  * ApiKey is one credential of an account. The secret is returned once, by
@@ -127,7 +183,7 @@ export type ApiKey = Message<"identity.v1.ApiKey"> & {
  * Use `create(ApiKeySchema)` to create a new message.
  */
 export const ApiKeySchema: GenMessage<ApiKey> = /*@__PURE__*/
-  messageDesc(file_identity_v1_entity, 1);
+  messageDesc(file_identity_v1_entity, 2);
 
 /**
  * @generated from enum identity.v1.AccountStatus

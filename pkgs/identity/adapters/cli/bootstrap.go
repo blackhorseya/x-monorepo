@@ -57,7 +57,32 @@ func (h *Bootstrap) Run(c context.Context, out io.Writer, name string, roles []s
 	return nil
 }
 
-// RunInvite is Run for `worker bootstrap --admin-email` (RED stub).
+// RunInvite is Run for `worker bootstrap --admin-email`: the first admin
+// account plus an invite for adminEmail, on an empty store. There is no API
+// key and nothing secret to print: the deployer signs in at the identity
+// provider with that (verified) email and calls ClaimInvite.
+//
+// Like Run, a failed write to out is an error once the transaction has
+// committed: the error names the account and the invite so the operator can
+// reissue the invite with a static admin key.
 func (h *Bootstrap) RunInvite(c context.Context, out io.Writer, name string, roles []string, adminEmail string) error {
-	return fmt.Errorf("not implemented")
+	res, err := h.bootstrap.Execute(c, dto.BootstrapInput{Name: name, Roles: roles, AdminEmail: adminEmail})
+	if err != nil {
+		return err
+	}
+	if !res.Created {
+		if _, err := fmt.Fprintln(out, "already bootstrapped: an account exists, nothing written"); err != nil {
+			return fmt.Errorf("write bootstrap result: %w", err)
+		}
+
+		return nil
+	}
+	_, err = fmt.Fprintf(out, "account %s (%s) roles=%v\ninvite %s for %s expires=%s\nSign in at the identity provider with that verified email and call ClaimInvite to bind it. The invite carries no credential.\n",
+		res.Account.ID, res.Account.Name, res.Account.Roles, res.Invite.ID, res.Invite.Email, res.Invite.ExpiresAt.UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("account %s and invite %s for %s were created but the result was not delivered; reissue the invite with a config auth.api_keys (break-glass) key: %w",
+			res.Account.ID, res.Invite.ID, res.Invite.Email, err)
+	}
+
+	return nil
 }

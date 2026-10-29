@@ -30,6 +30,21 @@ service IdentityService {
   // ListApiKeys lists every key of an account, revoked ones included, newest first.
   rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
   rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
+  // CreateInvite pre-binds an email to an account (valid 7 days, single use,
+  // no secret). The person signs in at the identity provider with that verified
+  // email and claims it; the claim binds their (issuer, subject) to the account,
+  // after which only the subject counts. Audited.
+  rpc CreateInvite(CreateInviteRequest) returns (CreateInviteResponse);
+  // RevokeSessions refuses every access token of the account issued before now
+  // (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
+  // NOTHING MORE: it does not touch the identity provider's refresh tokens, so
+  // whoever holds one can still obtain a token with a newer issue time. It is
+  // NOT a response to a stolen account. If an account is suspected stolen,
+  // DisableAccount it (effective for every token, refresh-derived ones
+  // included) and revoke the user's refresh tokens or reset their credentials
+  // at the identity provider. Requires the admin role; audited (who, which
+  // account, when; never a token).
+  rpc RevokeSessions(RevokeSessionsRequest) returns (RevokeSessionsResponse);
   // WhoAmI returns the principal the caller's credential resolved to (no role
   // needed; anonymous when auth is off or optional and nothing was sent).
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
@@ -137,6 +152,26 @@ message RevokeApiKeyRequest {
 
 message RevokeApiKeyResponse {
   ApiKey api_key = 1;
+}
+
+message CreateInviteRequest {
+  string account_id = 1 [(buf.validate.field).string.min_len = 1];
+  string email = 2 [(buf.validate.field).string = {
+    min_len: 3
+    max_len: 254
+  }];
+}
+
+message CreateInviteResponse {
+  Invite invite = 1;
+}
+
+message RevokeSessionsRequest {
+  string account_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message RevokeSessionsResponse {
+  Account account = 1;
 }
 
 message WhoAmIRequest {}

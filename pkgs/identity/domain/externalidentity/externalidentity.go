@@ -5,7 +5,6 @@ package externalidentity
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
@@ -22,8 +21,6 @@ var (
 	ErrDuplicate = kernel.NewError(kernel.KindConflict, "identity.already_bound", "external identity is already bound to an account")
 )
 
-var errNotImplemented = errors.New("not implemented")
-
 // Mapping is how an issuer's unknown identities are treated.
 type Mapping uint8
 
@@ -35,10 +32,28 @@ const (
 	MappingAutoProvision
 )
 
-func (m Mapping) String() string { return "" }
+func (m Mapping) String() string {
+	switch m {
+	case MappingBound:
+		return "bound"
+	case MappingAutoProvision:
+		return "auto_provision"
+	default:
+		return "unknown"
+	}
+}
 
-// ParseMapping parses a configured value; "" is MappingBound.
-func ParseMapping(s string) (Mapping, error) { return 0, errNotImplemented }
+// ParseMapping parses a configured value; "" is MappingBound, the fail-closed default.
+func ParseMapping(s string) (Mapping, error) {
+	switch s {
+	case "", "bound":
+		return MappingBound, nil
+	case "auto_provision":
+		return MappingAutoProvision, nil
+	default:
+		return 0, ErrInvalidMapping
+	}
+}
 
 // Identity is one binding.
 type Identity struct {
@@ -50,7 +65,16 @@ type Identity struct {
 
 // New validates and creates a binding.
 func New(issuer, subject, accountID string, now time.Time) (*Identity, error) {
-	return nil, errNotImplemented
+	switch {
+	case issuer == "":
+		return nil, ErrInvalidIssuer
+	case subject == "":
+		return nil, ErrInvalidSubject
+	case accountID == "":
+		return nil, ErrInvalidAccount
+	}
+
+	return &Identity{issuer: issuer, subject: subject, accountID: accountID, createdAt: now}, nil
 }
 
 func (x *Identity) Issuer() string       { return x.issuer }

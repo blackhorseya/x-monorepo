@@ -112,6 +112,10 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v20 := identity.ProvideListAPIKeys(accountRepository, apikeyRepository, recorder)
 	v21 := identity.ProvideRevokeAPIKey(apikeyRepository, adminCensus, auth, clock2, transactor2, recorder)
 	v22 := identity.ProvideWhoAmI(recorder)
+	inviteRepository := identity.ProvideInviteRepository(db)
+	auditLog := identity.ProvideAuditLog(db)
+	v23 := identity.ProvideCreateInvite(accountRepository, inviteRepository, systemUUIDGenerator, auditLog, clock2, transactor2, recorder)
+	v24 := identity.ProvideRevokeSessions(accountRepository, auditLog, clock2, transactor2, recorder)
 	useCases := rpc3.UseCases{
 		CreateAccount:  v13,
 		GetAccount:     v14,
@@ -123,22 +127,24 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		ListAPIKeys:    v20,
 		RevokeAPIKey:   v21,
 		WhoAmI:         v22,
+		CreateInvite:   v23,
+		RevokeSessions: v24,
 	}
 	identityService := rpc3.NewIdentityService(useCases, auth)
 	poisonService := NewPoisonService(db, auth)
-	v23 := NewRoutes(orderService, inventoryService, identityService, poisonService)
-	v24 := NewDocs()
+	v25 := NewRoutes(orderService, inventoryService, identityService, poisonService)
+	v26 := NewDocs()
 	readiness := NewReadiness(db)
-	v25 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
-	v26 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
-	resolver, cleanup4, err := identity.ProvideResolver(v25, v26, clock2, auth, logger, meterProvider)
+	v27 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
+	v28 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
+	resolver, cleanup4, err := identity.ProvideResolver(v27, v28, clock2, auth, logger, meterProvider)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	serverServer, err := server.New(http, auth, logger, v23, v24, readiness, providers, resolver)
+	serverServer, err := server.New(http, auth, logger, v25, v26, readiness, providers, resolver)
 	if err != nil {
 		cleanup4()
 		cleanup3()

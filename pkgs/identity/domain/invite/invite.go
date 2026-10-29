@@ -5,7 +5,8 @@ package invite
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
@@ -15,16 +16,17 @@ import (
 const TTL = 7 * 24 * time.Hour
 
 var (
-	ErrInvalidID        = kernel.NewError(kernel.KindInvalidArgument, "invite.invalid_id", "invite id must not be empty")
-	ErrInvalidEmail     = kernel.NewError(kernel.KindInvalidArgument, "invite.invalid_email", "invite email is not a valid address")
-	ErrInvalidAccount   = kernel.NewError(kernel.KindInvalidArgument, "invite.invalid_account", "invite must name an account")
-	ErrNotFound         = kernel.NewError(kernel.KindNotFound, "invite.not_found", "no invite for this email")
-	ErrExpired          = kernel.NewError(kernel.KindFailedPrecondition, "invite.expired", "invite has expired")
-	ErrAlreadyClaimed   = kernel.NewError(kernel.KindFailedPrecondition, "invite.already_claimed", "invite has already been used")
-	ErrEmailUnverified  = kernel.NewError(kernel.KindFailedPrecondition, "invite.email_unverified", "the identity provider has not verified this email")
-	ErrEmailMismatch    = kernel.NewError(kernel.KindFailedPrecondition, "invite.email_mismatch", "token email does not match the invite")
-	ErrStale            = errors.New("invite: reload and retry")
-	errNotImplementedIn = errors.New("not implemented")
+	ErrInvalidID       = kernel.NewError(kernel.KindInvalidArgument, "invite.invalid_id", "invite id must not be empty")
+	ErrInvalidEmail    = kernel.NewError(kernel.KindInvalidArgument, "invite.invalid_email", "invite email is not a valid address")
+	ErrInvalidAccount  = kernel.NewError(kernel.KindInvalidArgument, "invite.invalid_account", "invite must name an account")
+	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "invite.not_found", "no invite for this email")
+	ErrExpired         = kernel.NewError(kernel.KindFailedPrecondition, "invite.expired", "invite has expired")
+	ErrAlreadyClaimed  = kernel.NewError(kernel.KindFailedPrecondition, "invite.already_claimed", "invite has already been used")
+	ErrEmailUnverified = kernel.NewError(kernel.KindFailedPrecondition, "invite.email_unverified", "the identity provider has not verified this email")
+	ErrEmailMismatch   = kernel.NewError(kernel.KindFailedPrecondition, "invite.email_mismatch", "token email does not match the invite")
+	// ErrStale is returned by Repository.Save when the row changed since it was
+	// loaded. It wraps kernel.ErrConcurrentUpdate: rpc answers Aborted.
+	ErrStale = fmt.Errorf("invite: reload and retry: %w", kernel.ErrConcurrentUpdate)
 )
 
 // ID identifies an Invite.
@@ -45,11 +47,33 @@ type Invite struct {
 
 // New creates a pending invite valid for TTL from now.
 func New(id ID, email, accountID string, now time.Time) (*Invite, error) {
-	return nil, errNotImplementedIn
+	if id == "" {
+		return nil, ErrInvalidID
+	}
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	if accountID == "" {
+		return nil, ErrInvalidAccount
+	}
+
+	return &Invite{id: id, email: email, accountID: accountID, createdAt: now, expiresAt: now.Add(TTL)}, nil
 }
 
-// NormalizeEmail trims and lower-cases an address for comparison.
-func NormalizeEmail(email string) (string, error) { return "", errNotImplementedIn }
+// NormalizeEmail trims and lower-cases an address for comparison, and refuses
+// what cannot be a plain address (exactly one "@", something on both sides, no
+// whitespace). Matching is on this form only; the IdP's verification is what
+// makes it trustworthy.
+func NormalizeEmail(email string) (string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	local, domain, ok := strings.Cut(email, "@")
+	if !ok || local == "" || domain == "" || strings.Contains(domain, "@") || strings.ContainsAny(email, " \t\r\n<>") {
+		return "", ErrInvalidEmail
+	}
+
+	return email, nil
+}
 
 func (x *Invite) ID() ID               { return x.id }
 func (x *Invite) Email() string        { return x.email }
@@ -60,8 +84,25 @@ func (x *Invite) ClaimedAt() time.Time { return x.claimedAt }
 func (x *Invite) Version() int64       { return x.version }
 
 // Claim spends the invite for a token whose email is verified and matches.
+//
+// The refusals, in order: already spent, expired, email not verified by the
+// IdP, email different from the invite's. A refused claim changes nothing.
 func (x *Invite) Claim(email string, emailVerified bool, now time.Time) error {
-	return errNotImplementedIn
+	if !x.claimedAt.IsZero() {
+		return ErrAlreadyClaimed
+	}
+	if !now.Before(x.expiresAt) {
+		return ErrExpired
+	}
+	if !emailVerified {
+		return ErrEmailUnverified
+	}
+	if normalized, err := NormalizeEmail(email); err != nil || normalized != x.email {
+		return ErrEmailMismatch
+	}
+	x.claimedAt = now
+
+	return nil
 }
 
 // ReconstituteParams carry persisted state back into the aggregate.
@@ -76,7 +117,19 @@ type ReconstituteParams struct {
 }
 
 // Reconstitute rebuilds an Invite from persistence. Only repositories call it.
-func Reconstitute(p ReconstituteParams) (*Invite, error) { return nil, errNotImplementedIn }
+func Reconstitute(p ReconstituteParams) (*Invite, error) {
+	if p.ID == "" {
+		return nil, ErrInvalidID
+	}
+	if _, err := NormalizeEmail(p.Email); err != nil {
+		return nil, err
+	}
+	if p.AccountID == "" {
+		return nil, ErrInvalidAccount
+	}
+
+	return &Invite{id: p.ID, email: p.Email, accountID: p.AccountID, createdAt: p.CreatedAt, expiresAt: p.ExpiresAt, claimedAt: p.ClaimedAt, version: p.Version}, nil
+}
 
 // Repository persists Invite.
 type Repository interface {

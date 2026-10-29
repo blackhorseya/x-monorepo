@@ -238,8 +238,12 @@ func TestIdentityService_AuthOff(t *testing.T) {
 // newService assembles the service the way provider.go / wire do.
 func newService(accounts account.Repository, keys apikey.Repository, tx port.Transactor, clock port.Clock, ids port.IDGenerator, secrets port.SecretGenerator, rec *usecasex.Recorder, auth config.Auth) *rpc.IdentityService {
 	census := identity.ProvideAdminCensus(nil, accounts, keys, clock)
+	invites := identity.ProvideInviteRepository(nil)
+	audit := identity.ProvideAuditLog(nil)
 
 	return rpc.NewIdentityService(rpc.UseCases{
+		CreateInvite:   identity.ProvideCreateInvite(accounts, invites, ids, audit, clock, tx, rec),
+		RevokeSessions: identity.ProvideRevokeSessions(accounts, audit, clock, tx, rec),
 		CreateAccount:  identity.ProvideCreateAccount(accounts, ids, clock, tx, rec),
 		GetAccount:     identity.ProvideGetAccount(accounts, rec),
 		ListAccounts:   identity.ProvideListAccounts(accounts, rec),
@@ -270,4 +274,81 @@ func errorCode(err error) string {
 	}
 
 	return ""
+}
+
+// CreateInvite and RevokeSessions: admin only, and the answers carry the
+// invite (no secret) and the revocation line.
+func TestIdentityService_InviteAndRevokeSessions(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	rec, err := usecasex.NewRecorder(tel.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	accounts := identity.ProvideAccountRepository(nil, logger)
+	keys := identity.ProvideAPIKeyRepository(nil)
+	clock := system.NewClock()
+	svc := newService(accounts, keys, identity.ProvideTransactor(nil), clock, system.NewUUIDGenerator(), system.NewSecretGenerator(), rec, config.Auth{Mode: config.AuthRequired})
+	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "root=root-key-0123456789abcdef:admin, viewer=viewer-key-0123456789abcdef", ResolverTimeout: 2 * time.Second}
+	srv, err := server.New(config.HTTP{Addr: ":0"}, cfg, logger, []server.Route{svc}, nil, nil, tel, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	client := func(key string) identityv1connect.IdentityServiceClient {
+		return identityv1connect.NewIdentityServiceClient(&http.Client{Transport: keyTransport{key: key}}, ts.URL)
+	}
+	c := context.Background()
+	root, viewer := client("root-key-0123456789abcdef"), client("viewer-key-0123456789abcdef")
+
+	acc, err := root.CreateAccount(c, connect.NewRequest(&identityv1.CreateAccountRequest{Name: "ops", Roles: []string{"ops"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := acc.Msg.GetAccount().GetId()
+
+	if _, err := viewer.CreateInvite(c, connect.NewRequest(&identityv1.CreateInviteRequest{AccountId: id, Email: "ops@example.com"})); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Fatalf("viewer CreateInvite = %v", err)
+	}
+	if _, err := viewer.RevokeSessions(c, connect.NewRequest(&identityv1.RevokeSessionsRequest{AccountId: id})); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Fatalf("viewer RevokeSessions = %v", err)
+	}
+
+	inv, err := root.CreateInvite(c, connect.NewRequest(&identityv1.CreateInviteRequest{AccountId: id, Email: "Ops@Example.com"}))
+	if err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	got := inv.Msg.GetInvite()
+	if got.GetEmail() != "ops@example.com" || got.GetAccountId() != id || got.GetClaimTime() != nil ||
+		!got.GetExpireTime().AsTime().Equal(got.GetCreateTime().AsTime().Add(7*24*time.Hour)) {
+		t.Fatalf("CreateInvite = %+v", got)
+	}
+	if _, err := root.CreateInvite(c, connect.NewRequest(&identityv1.CreateInviteRequest{AccountId: id, Email: "no-at-sign"})); connect.CodeOf(err) != connect.CodeInvalidArgument || errorCode(err) != "invite.invalid_email" {
+		t.Fatalf("bad email = %v", err)
+	}
+	if _, err := root.CreateInvite(c, connect.NewRequest(&identityv1.CreateInviteRequest{AccountId: "nope", Email: "a@b.co"})); connect.CodeOf(err) != connect.CodeNotFound || errorCode(err) != "account.not_found" {
+		t.Fatalf("unknown account = %v", err)
+	}
+
+	rv, err := root.RevokeSessions(c, connect.NewRequest(&identityv1.RevokeSessionsRequest{AccountId: id}))
+	if err != nil {
+		t.Fatalf("RevokeSessions: %v", err)
+	}
+	a := rv.Msg.GetAccount()
+	if a.GetSessionsRevokeTime() == nil || a.GetStatus() != identityv1.AccountStatus_ACCOUNT_STATUS_ACTIVE || !slices.Equal(a.GetRoles(), []string{"ops"}) {
+		t.Fatalf("RevokeSessions = %+v", a)
+	}
+	if _, err := root.RevokeSessions(c, connect.NewRequest(&identityv1.RevokeSessionsRequest{AccountId: "nope"})); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("unknown account = %v", err)
+	}
+	// The revocation time shows on reads too.
+	g, err := root.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: id}))
+	if err != nil || g.Msg.GetAccount().GetSessionsRevokeTime() == nil {
+		t.Fatalf("GetAccount = %+v, %v", g, err)
+	}
 }
