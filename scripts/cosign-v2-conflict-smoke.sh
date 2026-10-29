@@ -17,7 +17,7 @@ wrapper = os.path.abspath("scripts/cosign-sign-blob.sh")
 QUOTED = b'{"code":14,"message":"troubleshooting: adding rekor v2 entry: unexpected response: 409 {example}"}'
 
 def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label="", pre=(),
-        bundles=None):
+        bundles=None, dashdash=False):
     hits = []
     sent = []   # the response bodies the fixture really wrote, to assert the payloads are the ones named
     want_body = QUOTED if quoted else body
