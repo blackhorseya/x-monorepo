@@ -107,14 +107,15 @@
 | 項目 | 規則 |
 |---|---|
 | 位置 | 由 issuer 的 discovery 文件取得；**不提供 `jwks_url` override**（§10） |
-| cache 時間 | 依 `Cache-Control`，夾在 **5 分鐘到 24 小時**；沒給用 **1 小時** |
-| 未知 `kid` | **立即重抓**，但**每個 issuer 每 30 秒最多一次**；重抓後仍找不到 → 拒絕 |
-| 重抓失敗 | 沿用舊 key，**最多 24 小時**；超過就拒絕 |
+| 刷新 | **固定每 1 小時**刷新一次，不看 `Cache-Control`（決策 d-20261029230116368184-41） |
+| 未知 `kid` | **立即重抓**，但**每個 issuer 每 30 秒最多一次**（限速中的查詢直接拒絕、不等待）；重抓後仍找不到 → 拒絕 |
+| 重抓失敗 | 沿用舊 key，**從最後一次成功起最多 24 小時**；超過就拒絕。IdP 回 200 但內容被拒（例如有格式錯誤的 key）不算成功 |
 | 啟動時抓不到 | **不視為致命錯誤**（IdP 暫時不可用不該讓 rpc 起不來；之後第一次請求或背景重試補抓） |
-| 演算法 | 只收 **RS256 / ES256 / EdDSA**，且 `alg` 必須與 JWK 一致；`none` 與 HS256 一律拒絕（OIDC issuer 不接受 HS256） |
+| 演算法 | 只收 **RS256 / ES256 / EdDSA**，且 `alg` 必須與 JWK 一致；`none` 與 HS256 一律拒絕（OIDC issuer 不接受 HS256）。金鑰型別也要符合：RS256 用 ≥ 2048 bits 的 RSA、ES256 用 P-256、EdDSA 用 Ed25519；`use` 是 `enc` 的 JWK 不用來驗簽 |
 
-**Metrics**（label 固定、無高基數）：`auth_jwks_fetch_total{issuer,result}`、`auth_jwks_age_seconds{issuer}`。
-**Alert**：任一 issuer **超過 2 小時沒有成功重抓**。dashboard 與 alert 在 PR 6 加（`docs/observability.md`）。
+**實作**（決策 d-20261029230116368184-41）：驗簽與 claims 用 `golang-jwt/jwt/v5`；JWKS 的解析、儲存、定時刷新與未知 `kid` 重抓用 `MicahParks/keyfunc` 與 `jwkset`，不自己寫。platform 只保留一層薄 adapter：多 issuer 路由、discovery、http issuer 規則、24 小時 stale 上限、金鑰型別檢查、未知 `kid` 的限速入口與 metrics。
+**Metrics**（label 固定、無高基數）：`auth_jwks_fetch_total{issuer,result}`（每次 JWKS 請求一筆，`ok` 是 HTTP 200 且為 JWK Set 文件；discovery 失敗也記 `error`）、`auth_jwks_age_seconds{issuer}`（距最後一次成功的秒數，沒成功過就從啟動算起）。
+**Alert**：任一 issuer **超過 2 小時沒有成功重抓**（`x-monorepo-auth-jwks-stale`，隨 PR 2 上線；dashboard 在 PR 6 加，`docs/observability.md`）。
 
 ## 8. Console（Q3）
 
@@ -173,7 +174,7 @@
 | 3 | #271 | `feat(identity)` | external identity 綁定、邀請、`ClaimInvite`、`sessions_revoked_at`、resolver、`bootstrap --admin-email` |
 | 4 | #272 | `feat(platform)` | interceptor 串接：verifier → resolver → Principal；未綁定只放行 `ClaimInvite` |
 | 5 | #273 | `feat(console)` | PKCE 登入、邀請認領、accounts UI、撤銷 session UI |
-| 6 | #274 | `chore(dev)` | Dex（compose / kind）、E2E、Helm、runbook、dashboard / alert |
+| 6 | #274 | `chore(dev)` | Dex（compose / kind）、E2E、Helm、runbook、dashboard（alert 已隨 PR 2 上線） |
 
 **依賴**：1 →（2 ∥ 3）→ 4 → 5 → 6。**PR 4 完成後，PR 5 起（Console / E2E 改動）要等定價 #267 合併完才開工**，避免與它的 Console 改動衝突。
 
