@@ -58,7 +58,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	eventsPublisher := events.NewPublisher(publisher)
 	uuidGenerator := system.NewUUIDGenerator()
 	clock := system.NewClock()
-	policy := ordering.ProvideOwnership(configAuth)
+	policy := ordering.ProvideOwnership(auth)
 	meterProvider := providers.Meter
 	recorder, err := usecasex.NewRecorder(meterProvider)
 	if err != nil {
