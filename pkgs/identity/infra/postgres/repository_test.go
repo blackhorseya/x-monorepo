@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -210,6 +211,61 @@ func TestRepositories_Postgres(t *testing.T) {
 	}
 	if ok, err := keys.TouchLastUsed(c, "nope", now, window); err != nil || ok {
 		t.Fatalf("unknown id = %v, %v", ok, err)
+	}
+
+	// ── last_used_at under concurrency: the SQL condition, not a lock in Go, is what
+	// lets one writer through per interval. Every round is 32 goroutines released
+	// together at the same instant, against the real table. ───────────────────────
+	racer, _ := apikey.New("k5", "a", "racer", "xk_"+strings.Repeat("r", 43), time.Time{}, now)
+	if err := keys.Add(c, racer); err != nil {
+		t.Fatal(err)
+	}
+	stampers := func(at time.Time) (stamped int) {
+		t.Helper()
+		const writers = 32
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		results := make(chan bool, writers)
+		for range writers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				ok, err := keys.TouchLastUsed(c, "k5", at, time.Minute)
+				if err != nil {
+					t.Errorf("concurrent touch: %v", err)
+				}
+				results <- ok
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+		for ok := range results {
+			if ok {
+				stamped++
+			}
+		}
+
+		return stamped
+	}
+	t0 := now.Add(time.Hour)
+	for _, round := range []struct {
+		name string
+		at   time.Time
+		want int
+	}{
+		{"never used: exactly one writer wins", t0, 1},
+		{"one microsecond before the interval ends: nobody", t0.Add(time.Minute - time.Microsecond), 0},
+		{"exactly one interval later: exactly one writer wins", t0.Add(time.Minute), 1},
+		{"inside the new interval: nobody", t0.Add(time.Minute + 30*time.Second), 0},
+	} {
+		if got := stampers(round.at); got != round.want {
+			t.Fatalf("%s: %d writers stamped, want %d", round.name, got, round.want)
+		}
+	}
+	if raced, _ := keys.FindByID(c, "k5"); !raced.LastUsedAt().Equal(t0.Add(time.Minute)) || raced.Version() != 1 {
+		t.Fatalf("after the races: last_used %v version %d, want %v / 1", raced.LastUsedAt(), raced.Version(), t0.Add(time.Minute))
 	}
 
 	// Context errors come back as such, before any SQL.

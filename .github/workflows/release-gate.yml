@@ -8,7 +8,11 @@ name: release-gate
 # Advice only: nothing here can fail the PR, and fork PRs are skipped (read-only token).
 # workflow_dispatch with a PR number is for PRs whose pull_request run never starts: the chart
 # PR release.yml opens with GITHUB_TOKEN (a bot PR needs approval before its workflows run), so
-# its chart job dispatches this instead.
+# its chart job dispatches this instead. That job also approves the parked pull_request run, which
+# starts a second later, so both land in one concurrency group within seconds: only a new
+# pull_request run may cancel what is in flight (a retitle or push supersedes the older run); a
+# dispatch queues behind it. Letting the dispatch cancel it too turned the approved run into a
+# cancelled `comment` check, which the PR page shows as a failure (#196).
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
@@ -25,7 +29,7 @@ permissions:
 
 concurrency:
   group: release-gate-${{ inputs.pr || github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   comment:

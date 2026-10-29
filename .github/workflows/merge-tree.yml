@@ -1,0 +1,54 @@
+name: merge-tree
+run-name: merge-tree pr=${{ inputs.pr }} head=${{ inputs.head }} base=${{ inputs.base }}
+
+# Builds main + a PR head, on demand: the composite tree a stale pull_request run did not check.
+# A pull_request run checks out refs/pull/N/merge as of the run's start, and `gh run rerun` reuses
+# that same merge commit — so once main moves, only a fresh run like this one can say whether
+# main + the PR still compiles. scripts/merge-ready.sh <pr> --revalidate dispatches it; the next
+# merge-ready call reads the run title above (pr / head / base) and accepts a success for exactly
+# the current main and PR head. Nothing here touches the PR branch, so its head (and its review)
+# stays as it was. Dispatch needs this file on the default branch.
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number
+        required: true
+        type: string
+      head:
+        description: PR head SHA to build (the job refuses if the PR no longer points there)
+        required: true
+        type: string
+      base:
+        description: main SHA to merge it into
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  merge-tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Default ref (the dispatched branch) only to get scripts/merge-tree-inputs.sh: the inputs are
+      # validated before any of them reaches git, so the run title SHAs are the SHAs that get built.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { fetch-depth: 0 }
+      - env:
+          PR: ${{ inputs.pr }}
+          HEAD: ${{ inputs.head }}
+          BASE: ${{ inputs.base }}
+        run: scripts/merge-tree-inputs.sh "$PR" "$HEAD" "$BASE"
+      - uses: ./.github/actions/setup
+      - env:
+          PR: ${{ inputs.pr }}
+          HEAD: ${{ inputs.head }}
+          BASE: ${{ inputs.base }}
+        run: |
+          git checkout --detach "$BASE"
+          [ "$(git rev-parse HEAD)" = "$BASE" ] || { echo "checked out $(git rev-parse HEAD), not base $BASE" >&2; exit 1; }
+          git fetch origin "refs/pull/$PR/head"
+          [ "$(git rev-parse FETCH_HEAD)" = "$HEAD" ] || { echo "PR #$PR head moved: now $(git rev-parse FETCH_HEAD), asked for $HEAD" >&2; exit 1; }
+          scripts/merge-tree-check.sh "$BASE" "$HEAD"
