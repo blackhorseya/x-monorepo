@@ -30,6 +30,7 @@ task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 out
 task bootstrap                              # identity 第一個 account + API key（空 store 才建；worker bootstrap；secret 只印一次）
 task helm-check            # deployments/helm/x-monorepo：每個 ci/*.yaml profile 跑 helm lint + kubeconform + check.py（derived 數字：grace period、hook 順序、prune args、console 的 RPC_UPSTREAM、ServiceMonitor / NetworkPolicy 的選擇器）
 task k6-wire               # tests/k6/wire.sh：四支腳本打一個回壞掉 HTTP response（status code / version / header 行帶著請求的 X-API-Key、body 被截斷、連線直接關）的假 server；每個 run 必須失敗，且 key 不在 k6 輸出、summary、metrics tag 任何地方（不需要 Postgres；CI 的 k6-auth job）
+task k6-bench              # tests/k6/bench.sh：效能 baseline（CreateOrder 吞吐 / 延遲、下單 → RESERVED，N≥3 次、每次獨立資料庫）；結果與重跑方法見 docs/perf-baseline.md；不進 CI
 task k6-smoke              # tests/k6：orders（load thresholds）/ ratelimit（429 + Retry-After）/ timeout（1ns → 全部 DEADLINE_EXCEEDED）/ reservation（rpc + worker，下單 → RESERVED 延遲）各自起一個 bin/rpc 打；task k6 -- <script> 打現成 server
 task helm-kind             # 真裝：kind cluster + deployments/helm/kind（拋棄式 Postgres / Redis）+ tree build 的 image（含 console：web-build → web/apps/console/Dockerfile），install → smoke → upgrade → smoke；helm-kind-down 刪 cluster
 task helm-kind-keda        # 接著在同一個 cluster：KEDA + OTLP collector + Prometheus，k6 灌訂單看 worker 真的靠 eventbus_consumer_lag scale out / in
