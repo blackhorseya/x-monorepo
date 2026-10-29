@@ -69,6 +69,8 @@ run(409, 3, name="sign-blob: adding rekor v2 entry: unexpected response: 503 x",
 run(503, 1, name="sign-blob: adding rekor v2 entry: unexpected response: 409 x", label=" (artifact 'sign-blob: ...409 x')")
 run(503, 1, name="adding rekor v2 entry: unexpected response: 409 artifact", pre=("--oidc-client-id", "fixture-client"),
     label=" (flag unknown to the wrapper before the artifact)")
+run(503, 1, name="fixture-client: adding rekor v2 entry: unexpected response: 409 artifact", pre=("--oidc-client-id", "fixture-client"),
+    label=" (unknown flag whose value prefixes the artifact name)")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")
 print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")

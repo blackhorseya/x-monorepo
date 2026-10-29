@@ -421,6 +421,10 @@ expect_eq    "sign: a 503, artifact named 'sign-blob: ...409 x', is not retried"
 odd409='adding rekor v2 entry: unexpected response: 409 artifact'
 SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART=$odd409 sign_blob unknownflag-503 "v2path503 v2path503 v2path503"
 expect_eq    "sign: an unrecognised artifact never turns a 503 into a conflict" 1 "$sb_tries"
+# The flag value equals the start of the file name: a string-prefix match cannot prove the artifact was
+# identified (PR #259 r5), so an unknown flag disables the classification altogether.
+SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART='fixture-client: adding rekor v2 entry: unexpected response: 409 artifact' sign_blob unknownflag-collide "v2path503 v2path503 v2path503"
+expect_eq    "sign: an unknown flag whose value prefixes the file name never makes a conflict" 1 "$sb_tries"
 SB_REL=1 SB_PRE='--oidc-client-id fixture-client' sign_blob unknownflag-409 "v2path409 ok"
 expect_eq    "sign: an unrecognised artifact fails closed even on a real 409" 1 "$sb_tries"
 SB_ART='artifact{build}.txt' sign_blob v2brace "v2brace ok"
