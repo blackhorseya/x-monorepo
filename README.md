@@ -111,6 +111,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
+| [`docs/identity-login.md`](docs/identity-login.md) | 帳號密碼登入與自家 JWT issuer 的設計提案（方案比較、金鑰 / token / 節流、Console、拆 PR、未決問題；未實作） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
 

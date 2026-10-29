@@ -111,12 +111,8 @@ Dashboard「x-monorepo / service」的 Identity row 有四張圖（lookups/s by 
 
 ## 擴充路徑：帳號密碼 / 自己當 issuer
 
-Account 已經是「誰」，password 不是它的欄位，而是第二種 credential aggregate：
-
-1. `domain/password`：`PasswordCredential{accountID, argon2idHash, updatedAt}`，`Verify(plain)`，一個 account 一筆。
-2. `Login(name, password)` use case：走同一條 `account.IsActive()` / roles 路徑，輸出同一個 principal 形狀。
-3. `Login` RPC 發自簽 JWT（HS256，用現有 `auth.jwt.hs256_secret`，`sub` = account id）→ **interceptor 完全不用改**，它已經驗 JWT 的 sub / roles。
-4. 要加的是 issuer 那一側：token 過期、refresh / logout、console login 頁、brute-force 鎖定——都在 identity BC 與 console 內，不碰 platform / 其他 BC。
+提案（未實作）見 [`docs/identity-login.md`](identity-login.md)：方案比較（自建 issuer vs 外部 OIDC verifier）、argon2id / EdDSA / KEK / JWKS / refresh rotation / 登入節流的設計、Console 影響、遷移與拆 PR 計畫、未決問題。
+先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
 
 ## Ordering ownership（PR 3）
 
