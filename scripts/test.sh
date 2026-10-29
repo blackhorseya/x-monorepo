@@ -454,6 +454,25 @@ bundle_usage bundle-empty           "--bundle="
 SB_REL=1 SB_PRE='--' SB_ART='--bundle=decoy' SB_SENTINEL=decoy sign_blob dashdash-decoy "v2path409 ok"
 expect_eq    "sign: after -- a --bundle=... artifact makes exactly one attempt" 1 "$sb_tries"
 if [ -e "$tmp/sb-dashdash-decoy/decoy" ]; then ok; else bad "sign: the file named by a --bundle=decoy artifact after -- was deleted"; fi
+# An argv the wrapper cannot interpret never reaches cosign and never touches a file (#260): cosign
+# gives `--oidc-client-id` the next token as its value, so in `--oidc-client-id --bundle=decoy` there
+# is no bundle at all and `decoy` is not the wrapper's to remove. Usage error, exit 2, 0 cosign calls.
+sign_argv_refused() { # sign_argv_refused <name> <args...>: runs the wrapper in a tempdir holding the sentinel `decoy`
+  local n=$1 d="$tmp/sb-$1"; shift; mkdir -p "$d"; echo artifact > "$d/artifact"; echo keep > "$d/decoy"
+  : > "$d/args"; rm -f "$d/count"
+  set +e
+  sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="err" \
+    COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" "$@" 2>&1)
+  sb_rc=$?
+  set -e
+  sb_tries=$(cat "$d/count" 2>/dev/null || echo 0)
+  expect_eq    "sign: $n exits 2"                 2 "$sb_rc"
+  expect_eq    "sign: $n never calls cosign"      0 "$sb_tries"
+  if [ "$(cat "$d/decoy" 2>/dev/null)" = keep ]; then ok; else bad "sign: $n removed or changed the sentinel file"; fi
+}
+sign_argv_refused unknown-value-flag-swallows-bundle sign-blob --oidc-client-id --bundle=decoy --yes --key KEY --signing-config CFG artifact
+sign_argv_refused unknown-flag-after-bundle sign-blob --bundle=decoy --oidc-client-id x artifact --yes
+sign_argv_refused other-subcommand verify-blob --bundle=decoy artifact
 SB_PRE='--oidc-client-id fixture-client' bundle_usage bundle-twice-unknown-flag "--bundle=@B@.old --bundle=@B@"
 SB_ART='artifact{build}.txt' sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"

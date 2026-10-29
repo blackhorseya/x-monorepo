@@ -17,7 +17,7 @@ wrapper = os.path.abspath("scripts/cosign-sign-blob.sh")
 QUOTED = b'{"code":14,"message":"troubleshooting: adding rekor v2 entry: unexpected response: 409 {example}"}'
 
 def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label="", pre=(),
-        bundles=None, dashdash=False):
+        bundles=None, dashdash=False, want_rc=None):
     hits = []
     sent = []   # the response bodies the fixture really wrote, to assert the payloads are the ones named
     want_body = QUOTED if quoted else body
@@ -59,6 +59,8 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
         decoy_kept = os.path.exists(d + "/decoy")
     print("v2 HTTP %d%s: wrapper exit %d, POSTs %d (want %d), bundle left %s" % (status, (" (body quotes a 409)" if quoted else "") + label, r.returncode, len(hits), want_posts, left))
     ok = r.returncode != 0 and len(hits) == want_posts and not left and decoy_kept
+    if want_rc is not None:
+        ok = ok and r.returncode == want_rc
     if want_body is not None and sent != [want_body] * len(hits):
         print("FAIL: v2 HTTP %d%s: the fixture sent %r, not the payload under test %r" % (status, label, sent[:1], want_body)); sys.exit(1)
     if not ok:
@@ -81,6 +83,10 @@ run(503, 1, name="fixture-client: adding rekor v2 entry: unexpected response: 40
     label=" (unknown flag whose value prefixes the artifact name)")
 run(503, 0, name="artifact", bundles=lambda d: ["--bundle=" + d + "/bundle.json", "--bundle=" + d + "/other.json"],
     label=" (--bundle twice: usage error, cosign never runs)")
+# #260: cosign hands `--bundle=decoy` to --oidc-client-id as its value, so it has no bundle and sends
+# nothing; the wrapper must not have taken `decoy` for the bundle: usage error, no POST, decoy kept.
+run(503, 0, bundles=lambda d: [], pre=("--oidc-client-id", "--bundle=decoy"), want_rc=2,
+    label=" (unknown value flag swallows --bundle=decoy: exit 2, cosign never runs, decoy kept)")
 run(409, 1, name="--bundle=decoy", dashdash=True, label=" (after --, a '--bundle=decoy' artifact: one attempt, decoy file kept)")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")
