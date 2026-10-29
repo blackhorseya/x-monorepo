@@ -76,15 +76,24 @@ func urlWith(t *testing.T, base, name, app string) string {
 // matrix empties identity.accounts and locks every row of it, which on the
 // shared TEST_DATABASE_URL would reach into other tests' fixtures and make
 // their admins part of this census. Scoped to this package on purpose.
+//
+// This needs CREATEDB on the server (the testcontainers default role has it; a
+// supplied TEST_DATABASE_URL must too, see README). Without it the test fails
+// with that explanation: sharing the supplied database instead would bring the
+// interference back, and skipping would hide the regression.
 func ownedDatabase(t *testing.T) string {
 	t.Helper()
 	base := pgtest.URL(t)
 	name := "lockexp_" + randomName(t)
 	admin := openDB(t, base)
 	if err := admin.Exec("CREATE DATABASE " + name).Error; err != nil {
-		t.Fatalf("create database %s: %v", name, err)
+		t.Fatalf("create database %s: %v (the identity expiry matrix needs a role with CREATEDB; see README, TEST_DATABASE_URL)", name, err)
 	}
-	t.Cleanup(func() { admin.Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)") })
+	t.Cleanup(func() {
+		if err := admin.Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)").Error; err != nil {
+			t.Errorf("drop database %s: %v", name, err)
+		}
+	})
 	owned := urlWith(t, base, name, "")
 	if err := platformpg.Up(context.Background(), config.Postgres{URL: owned}, postgres.Migration()); err != nil {
 		t.Fatal(err)
@@ -118,26 +127,29 @@ func holdAdminRows(t *testing.T, db *gorm.DB) *lockHolder {
 	return &lockHolder{tx: tx, pid: pid}
 }
 
-// waitQueuedBehind returns once Postgres itself reports that the backend of the
-// writer under test (the only connection tagged writerApp) is blocked by holder
-// (pg_blocking_pids). Pinning the writer, not just the holder, keeps an
-// unrelated waiter from releasing the barrier early. The wait is on that lock
-// state, with a bound, not on elapsed time: there is no sleep to be too short
-// on a slow runner.
+// queuedBehind reports whether the backend of the writer tagged writerApp is
+// blocked by holder right now (pg_stat_activity + pg_blocking_pids). Pinning the
+// writer, not just the holder, keeps an unrelated waiter from passing for it.
+func (h *lockHolder) queuedBehind(t *testing.T, ctx context.Context, db *gorm.DB, writerApp string) bool {
+	t.Helper()
+	var blocked int
+	if err := db.WithContext(ctx).Raw("SELECT count(*) FROM pg_stat_activity WHERE application_name = ? AND ? = ANY(pg_blocking_pids(pid))", writerApp, h.pid).Scan(&blocked).Error; err != nil {
+		t.Fatalf("poll pg_blocking_pids: %v", err)
+	}
+
+	return blocked > 0
+}
+
+// waitQueuedBehind returns once queuedBehind holds. The wait is on that lock
+// state, with a bound, not on elapsed time: there is no sleep to be too short on
+// a slow runner.
 func (h *lockHolder) waitQueuedBehind(t *testing.T, db *gorm.DB, writerApp string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
-	for {
-		var blocked int
-		if err := db.WithContext(ctx).Raw("SELECT count(*) FROM pg_stat_activity WHERE application_name = ? AND ? = ANY(pg_blocking_pids(pid))", writerApp, h.pid).Scan(&blocked).Error; err != nil {
-			t.Fatalf("poll pg_blocking_pids: %v", err)
-		}
-		if blocked > 0 {
-			return
-		}
+	for !h.queuedBehind(t, ctx, db, writerApp) {
 		select {
 		case <-ctx.Done():
 			t.Fatalf("writer %s never queued behind the lock holder (pid %d)", writerApp, h.pid)
@@ -306,4 +318,43 @@ func TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres(t *testing.T) {
 			t.Fatal("account still ACTIVE after a permitted disable")
 		}
 	})
+}
+
+// The barrier identifies the writer under test: another application queued on
+// the same holder is real lock contention but not the provider call.
+func TestLockExpiryBarrier_PinsTheWriterPostgres(t *testing.T) {
+	owned := ownedDatabase(t)
+	db := openDB(t, owned)
+	f := newCensusFixture(t, db)
+	f.account("pin-a", []string{censusRole}, time.Time{})
+	h := holdAdminRows(t, db)
+
+	const other = "lockexp-unrelated"
+	otherDB := openDB(t, urlWith(t, owned, "", other))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		otherDB.Exec("SELECT 1 FROM identity.accounts FOR UPDATE")
+	}()
+	h.waitQueuedBehind(t, db, other) // precondition: it is queued behind the holder
+
+	if h.queuedBehind(t, context.Background(), db, "lockexp-writer-not-started") {
+		t.Fatal("the barrier accepted an application that never ran as the writer")
+	}
+	h.release(t) // let the unrelated waiter finish before its handle is closed
+	<-done
+}
+
+// The matrix empties and locks identity.accounts in its own database; accounts
+// that live in the shared (supplied) database must not notice.
+func TestLockExpiryMatrix_LeavesTheSharedDatabaseAlonePostgres(t *testing.T) {
+	shared := censusDB(t)
+	sf := newCensusFixture(t, shared)
+	bystander, _ := sf.account("bystander", []string{"viewer"}, time.Time{})
+
+	t.Run("matrix", TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres)
+
+	if _, err := sf.accounts.FindByID(context.Background(), bystander); err != nil {
+		t.Fatalf("an account of the shared database is gone after the matrix: %v", err)
+	}
 }
