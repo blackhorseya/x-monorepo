@@ -109,12 +109,12 @@
 | 位置 | 由 issuer 的 discovery 文件取得；**不提供 `jwks_url` override**（§10） |
 | 刷新 | **固定每 1 小時**刷新一次，不看 `Cache-Control`（決策 d-20261029230116368184-41） |
 | 未知 `kid` | **立即重抓**，但**每個 issuer 每 30 秒最多一次**（限速中的查詢直接拒絕、不等待）；重抓後仍找不到 → 拒絕 |
-| 重抓失敗 | 沿用舊 key，**從最後一次成功起最多 24 小時**；超過就拒絕。IdP 回 200 但內容被拒（例如有格式錯誤的 key）不算成功 |
+| 重抓失敗 | 沿用舊 key，**從最後一次成功起最多 24 小時**；超過就拒絕。IdP 回 200 但內容被拒（例如有格式錯誤的 key）不算成功。`Close()` 之後已持有的 key 仍可驗，未知 `kid` 一律拒絕且不發請求，進行中的請求會被中止 |
 | 啟動時抓不到 | **不視為致命錯誤**（IdP 暫時不可用不該讓 rpc 起不來；之後第一次請求或背景重試補抓） |
 | 演算法 | 只收 **RS256 / ES256 / EdDSA**，且 `alg` 必須與 JWK 一致；`none` 與 HS256 一律拒絕（OIDC issuer 不接受 HS256）。金鑰型別也要符合：RS256 用 ≥ 2048 bits 的 RSA、ES256 用 P-256、EdDSA 用 Ed25519；`use` 是 `enc` 的 JWK 不用來驗簽 |
 
 **實作**（決策 d-20261029230116368184-41）：驗簽與 claims 用 `golang-jwt/jwt/v5`；JWKS 的解析、儲存、定時刷新與未知 `kid` 重抓用 `MicahParks/keyfunc` 與 `jwkset`，不自己寫。platform 只保留一層薄 adapter：多 issuer 路由、discovery、http issuer 規則、24 小時 stale 上限、金鑰型別檢查、未知 `kid` 的限速入口與 metrics。
-**Metrics**（label 固定、無高基數）：`auth_jwks_fetch_total{issuer,result}`（每次 JWKS 請求一筆，`ok` 是 HTTP 200 且為 JWK Set 文件；discovery 失敗也記 `error`）、`auth_jwks_age_seconds{issuer}`（距最後一次成功的秒數，沒成功過就從啟動算起）。
+**Metrics**（label 固定、無高基數）：`auth_jwks_fetch_total{issuer,result}`（每次 JWKS 嘗試恰好一筆：`ok` 是 library 已接受並替換 key 的刷新，`error` 是沒有回應、非 200、不是 JWK Set，或 library 拒絕內容；discovery 失敗也記 `error`）、`auth_jwks_age_seconds{issuer}`（距最後一次「key 被接受」的秒數，沒成功過就從啟動算起；只在 key 與這個時間一起更新，所以被拒的 200 不會讓舊 key 看起來是新的；`Close()` 會把它從 meter provider 移除）。
 **Alert**：任一 issuer **超過 2 小時沒有成功重抓**（`x-monorepo-auth-jwks-stale`，隨 PR 2 上線；dashboard 在 PR 6 加，`docs/observability.md`）。
 
 ## 8. Console（Q3）
