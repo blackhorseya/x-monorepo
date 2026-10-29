@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,9 +67,14 @@ func randomName(t *testing.T) string {
 // acquisition, commit, migration, cleanup included) and no idle transaction can
 // outlive them, whatever the Go side is waiting on. They sit above the Go-side
 // waits (15s barrier, 15s join) so those fire first on a healthy server.
+//
+// golang-migrate ignores the context it is handed, so for setup these are the
+// only bound that reaches the migration's own SQL.
 const (
 	statementTimeoutMS       = "30000"
+	lockTimeoutMS            = "10000"
 	idleInTransactionTimeout = "60000"
+	connectTimeoutS          = "10"
 )
 
 // urlWith returns base pointed at database name (when not empty) and tagged
@@ -87,7 +93,23 @@ func urlWith(t *testing.T, base, name, app string) string {
 		q.Set("application_name", app)
 	}
 	q.Set("statement_timeout", statementTimeoutMS)
+	q.Set("lock_timeout", lockTimeoutMS)
+	q.Set("connect_timeout", connectTimeoutS)
 	q.Set("idle_in_transaction_session_timeout", idleInTransactionTimeout)
+	u.RawQuery = q.Encode()
+
+	return u.String()
+}
+
+// withParam overrides one connection parameter of rawURL.
+func withParam(t *testing.T, rawURL, key, value string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse database url: %v", err)
+	}
+	q := u.Query()
+	q.Set(key, value)
 	u.RawQuery = q.Encode()
 
 	return u.String()
@@ -132,20 +154,34 @@ type lockHolder struct {
 
 func holdAdminRows(t *testing.T, db *gorm.DB) *lockHolder {
 	t.Helper()
+	h, err := tryHoldAdminRows(db)
+	if err != nil {
+		t.Fatalf("take the admin rows: %v", err)
+	}
+	t.Cleanup(func() { h.tx.Rollback() }) // no-op once committed
+
+	return h
+}
+
+// tryHoldAdminRows locks every account row in a transaction of its own. It
+// fails (rolling the transaction back) rather than wait for ever: the
+// connection's lock_timeout / statement_timeout bound the acquisition.
+func tryHoldAdminRows(db *gorm.DB) (*lockHolder, error) {
 	tx := db.Begin()
 	if err := tx.Error; err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	t.Cleanup(func() { tx.Rollback() }) // no-op once committed
 	var pid int
 	if err := tx.Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
-		t.Fatal(err)
+		tx.Rollback()
+		return nil, err
 	}
 	if err := tx.Exec("SELECT 1 FROM identity.accounts FOR UPDATE").Error; err != nil {
-		t.Fatal(err)
+		tx.Rollback()
+		return nil, err
 	}
 
-	return &lockHolder{tx: tx, pid: pid}
+	return &lockHolder{tx: tx, pid: pid}, nil
 }
 
 // queuedBehind reports whether the backend of the writer tagged writerApp is
@@ -407,5 +443,61 @@ func TestLockExpiryMatrix_LeavesTheSharedDatabaseAlonePostgres(t *testing.T) {
 
 	if _, err := sf.accounts.FindByID(c, bystander); err != nil {
 		t.Fatalf("an account of the shared database is gone after the matrix: %v", err)
+	}
+}
+
+// Setup is bounded by the server, not by good luck: a row lock somebody else
+// already holds makes the holder fail fast with a clear error instead of hanging
+// the suite until its global timeout.
+func TestLockExpirySetup_CompetingRowLockFailsFastPostgres(t *testing.T) {
+	owned := ownedDatabase(t)
+	db := openDB(t, owned)
+	f := newCensusFixture(t, db)
+	f.account("setup-a", []string{censusRole}, time.Time{})
+	first := holdAdminRows(t, db)
+	defer first.release(t)
+
+	impatient := openDB(t, withParam(t, owned, "lock_timeout", "500"))
+	start := time.Now()
+	_, err := tryHoldAdminRows(impatient)
+	if err == nil {
+		t.Fatal("took the admin rows while another transaction held them")
+	}
+	if !strings.Contains(err.Error(), "55P03") {
+		t.Fatalf("err = %v, want a lock_timeout (SQLSTATE 55P03)", err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("gave up after %s, want well under the suite timeout", took)
+	}
+}
+
+// Same for the migration: golang-migrate ignores its context, so a locked
+// version table must surface through the connection's timeouts.
+func TestLockExpirySetup_LockedMigrationTableFailsFastPostgres(t *testing.T) {
+	owned := ownedDatabase(t)
+	db := openDB(t, owned)
+	holder := db.Begin()
+	if err := holder.Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { holder.Rollback() })
+	if err := holder.Exec("LOCK TABLE identity.schema_migrations IN ACCESS EXCLUSIVE MODE").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	impatient := withParam(t, withParam(t, owned, "lock_timeout", "500"), "statement_timeout", "2000")
+	result := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		result <- platformpg.Up(context.Background(), config.Postgres{URL: impatient}, postgres.Migration())
+	}()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("migrated while the version table was locked")
+		}
+		t.Logf("failed after %s: %v", time.Since(start).Round(time.Millisecond), err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("the migration hung on a locked version table")
 	}
 }
