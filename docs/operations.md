@@ -60,7 +60,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 
 ## Load test（k6）
 
-`tests/k6/` 是四個對著真的 `rpc` 打的 k6 腳本（Connect over JSON，`lib.js` 的 `rpc()` 按 method 打 tag，`API_KEY` 有設就帶 `X-API-Key`；有 key 時 `orders.js` / `reservation.js` 不帶 `customer_id`、ListOrders 不篩 customer，由 server 用 key 的 subject——ordering 的訂單屬於呼叫者，role-less 的 key 不能替別的 customer 下單，見 `docs/identity.md`）：
+`tests/k6/` 是四個對著真的 `rpc` 打的 k6 腳本（Connect over JSON，`lib.js` 的 `rpc()` 按 method 打 tag，`API_KEY` 有設就帶 `X-API-Key`；`orders.js` / `reservation.js` 先問一次 `WhoAmI`：server 認得呼叫者（`anonymous: false`）就不帶 `customer_id`、ListOrders 不篩 customer，由 server 用呼叫者的 subject；不認得（auth off，就算送了 key 也是 anonymous）就用腳本自己的 customer 名。ordering 的訂單屬於呼叫者，role-less 的 key 不能替別的 customer 下單，見 `docs/identity.md`；用 admin key 時 ListOrders 不篩 customer 會列全部，不只是自己的）：
 
 | 腳本 | 打什麼 | 驗什麼 |
 |---|---|---|
