@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { inventory } from "../client";
 import { keys, stocksQuery } from "../queries";
-import { ErrorAlert, Field } from "./orders";
+import { ErrorAlert } from "../components/error-alert";
+import { Field } from "../components/field";
 
 // prefix / reserved are search params (/stock?prefix=SKU-1&reserved=true), so
 // a filtered view is a shareable link, like /orders and /reservations.

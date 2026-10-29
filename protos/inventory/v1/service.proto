@@ -13,6 +13,7 @@ import "inventory/v1/entity.proto";
 service InventoryService {
   // SetStock sets the on-hand quantity of a SKU (creates it when unknown).
   // Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
+  // Requires the admin role when auth is on (x-error-code: auth.permission_denied).
   rpc SetStock(SetStockRequest) returns (SetStockResponse);
   rpc GetStock(GetStockRequest) returns (GetStockResponse);
   // ListStocks pages through SKUs ascending, optionally narrowed by prefix

@@ -49,8 +49,9 @@ func (h *OrderService) CreateOrder(
 	req *connect.Request[orderingv1.CreateOrderRequest],
 ) (*connect.Response[orderingv1.CreateOrderResponse], error) {
 	out, err := h.createOrder.Execute(c, dto.CreateOrderInput{
-		CustomerID: req.Msg.GetCustomerId(),
-		Items:      toDTOItems(req.Msg.GetItems()),
+		CustomerID:     req.Msg.GetCustomerId(),
+		Items:          toDTOItems(req.Msg.GetItems()),
+		IdempotencyKey: req.Msg.GetIdempotencyKey(),
 	})
 	if err != nil {
 		return nil, server.ToConnectError(err)

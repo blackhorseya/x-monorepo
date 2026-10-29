@@ -24,6 +24,8 @@ bin=$1; shift
 scripts=("$@"); [ ${#scripts[@]} -gt 0 ] || scripts=(orders ratelimit timeout reservation)
 port=${PORT:-18190}
 KEY=k6-fake-wire-canary-0001
+# setup()'s SetStock sends ADMIN_API_KEY, a second key the server reflects: both must stay out
+ADMIN_KEY=k6-fake-wire-admin-canary-0002
 dir="$bin/k6-wire"; mkdir -p "$dir"
 server_cmd=${WIRE_SERVER_CMD:-python3 tests/k6/wire_server.py}
 # the class k6 must report for each mode (rpc() in lib.js: transport.<class>), and no other
@@ -54,7 +56,7 @@ for s in "${scripts[@]}"; do
     [ -n "$up" ] || why+=("wire server did not listen on :$port within 5s")
     rc=0
     k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
-      "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$KEY" -e VUS=1 -e DURATION=2s \
+      "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$KEY" -e "ADMIN_API_KEY=$ADMIN_KEY" -e VUS=1 -e DURATION=2s \
       -e RPS=5 -e "RUN_ID=wire-$$-$s-$mode" > "$log.log" 2>&1 || rc=$?
     # alive at the end: a server that died mid-run answered nothing after that
     kill -0 "$xpid" 2>/dev/null || why+=("wire server exited during the run")
@@ -63,9 +65,11 @@ for s in "${scripts[@]}"; do
       || why+=("wire server never served '$mode' (its log has no 'served $mode' line)")
     [ "$rc" != 0 ] || why+=("k6 exited 0: a transport failure must fail the run")
     for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
-      if grep -q -- "$KEY" "$f" 2>/dev/null; then
-        why+=("forbidden text $KEY found in $(basename "$f") (a credential reflected by the wire parser error)")
-      fi
+      for k in "$KEY" "$ADMIN_KEY"; do
+        if grep -q -- "$k" "$f" 2>/dev/null; then
+          why+=("forbidden text $k found in $(basename "$f") (a credential reflected by the wire parser error)")
+        fi
+      done
     done
     # nothing free-text in a tag: k6's `error` tag is the parser's own message
     if grep -q '"error":"' "$log-metrics.json" 2>/dev/null; then

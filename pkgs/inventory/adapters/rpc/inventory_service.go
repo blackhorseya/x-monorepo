@@ -33,8 +33,9 @@ type (
 )
 
 // InventoryService implements the generated InventoryServiceHandler. auth is
-// read only by ExpireReservations (server.RequireRole, the admin role): the
-// one procedure here that acts on other people's orders.
+// read by the two writes, SetStock and ExpireReservations (server.RequireRole,
+// the admin role): one overwrites stock, the other acts on other people's
+// orders. The reads stay open to any caller the auth interceptor lets in.
 type InventoryService struct {
 	setStock             SetStockUC
 	getStock             GetStockUC
@@ -72,10 +73,14 @@ func (h *InventoryService) Route(opts ...connect.HandlerOption) (string, http.Ha
 	return inventoryv1connect.NewInventoryServiceHandler(h, opts...)
 }
 
+// SetStock overwrites a SKU's on-hand count. Admin role when auth is on.
 func (h *InventoryService) SetStock(
 	c context.Context,
 	req *connect.Request[inventoryv1.SetStockRequest],
 ) (*connect.Response[inventoryv1.SetStockResponse], error) {
+	if err := server.RequireRole(c, h.auth, h.auth.AdminRole); err != nil {
+		return nil, err
+	}
 	out, err := h.setStock.Execute(c, dto.SetStockInput{SKU: req.Msg.GetSku(), OnHand: req.Msg.GetOnHand()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
