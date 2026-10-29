@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 wrapper = os.path.abspath("scripts/cosign-sign-blob.sh")
 
-def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label=""):
+def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label="", pre=()):
     hits = []
     body = {409: b'{"code":6,"message":"an equivalent entry already exists with index 123"}',
             503: b'{"code":14,"message":"unavailable"}'}[status]
@@ -43,7 +43,7 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
                    "rekorTlogConfig": {"selector": "ALL"}}
             open(d + "/config.json", "w").write(json.dumps(cfg)); open(d + "/" + name, "w").write("fixture")
             # cwd=d and a bare artifact name: how cosign prints a relative path in its error line
-            r = subprocess.run([wrapper, "sign-blob", "--bundle=" + d + "/bundle.json",
+            r = subprocess.run([wrapper, "sign-blob", "--bundle=" + d + "/bundle.json", *pre,
                                 name, "--yes", "--key", d + "/cosign.key",
                                 "--signing-config", d + "/config.json"],
                                cwd=d, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -67,6 +67,8 @@ for nm in ("entry", "a", "v2", "api"):
 run(503, 1, name="503 ", body=b"adding rekor v2 entry: unexpected response: 409 {}", label=" (artifact '503 ' and a body quoting a 409)")
 run(409, 3, name="sign-blob: adding rekor v2 entry: unexpected response: 503 x", label=" (artifact 'sign-blob: ...503 x')")
 run(503, 1, name="sign-blob: adding rekor v2 entry: unexpected response: 409 x", label=" (artifact 'sign-blob: ...409 x')")
+run(503, 1, name="adding rekor v2 entry: unexpected response: 409 artifact", pre=("--oidc-client-id", "fixture-client"),
+    label=" (flag unknown to the wrapper before the artifact)")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")
 print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")

@@ -313,7 +313,7 @@ signfake="$tmp/cosign-sign"; mkdir -p "$signfake"
 cat > "$signfake/cosign" <<'FAKE'
 #!/usr/bin/env bash
 n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_COUNT"
-art=$3; echo "$*" >> "$FAKE_ARGS"; echo "token=${SIGSTORE_ID_TOKEN:-}" >> "$FAKE_ARGS"
+art=${FAKE_ART:-$3}; echo "$*" >> "$FAKE_ARGS"; echo "token=${SIGSTORE_ID_TOKEN:-}" >> "$FAKE_ARGS"
 for a in "$@"; do case $a in --bundle=*) bundle=${a#--bundle=} ;; esac; done
 [ -s "$bundle" ] && echo "STALE: attempt $n found a bundle left by an earlier one" >> "$FAKE_ARGS"
 set -- $FAKE_SEQ; step=${!n:-err}
@@ -350,8 +350,8 @@ sign_blob() { # SB_ART=<file name> overrides the artifact name
   sb_bundle="$d/checksums.txt.sigstore.json"
   set +e
   if [ -n "${SB_REL:-}" ]; then # a bare relative artifact name, as cosign prints it
-    sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "--bundle=$sb_bundle" "$art" --yes 2>&1)
+    sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token FAKE_ART="$art" \
+      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "--bundle=$sb_bundle" ${SB_PRE:-} "$art" --yes 2>&1)
   else
     sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
       COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/$art" --yes 2>&1)
@@ -416,6 +416,13 @@ SB_REL=1 SB_ART='sign-blob: adding rekor v2 entry: unexpected response: 503 x' s
 expect_eq    "sign: a real 409, artifact named 'sign-blob: ...503 x', is retried" 2 "$sb_tries"
 SB_REL=1 SB_ART='sign-blob: adding rekor v2 entry: unexpected response: 409 x' sign_blob subcmd-503 "v2path503 v2path503 v2path503"
 expect_eq    "sign: a 503, artifact named 'sign-blob: ...409 x', is not retried" 1 "$sb_tries"
+# A value flag the wrapper does not know, before the artifact: the artifact cannot be identified, so
+# nothing is classified (fail closed: one attempt), whatever the file name says (PR #259 review).
+odd409='adding rekor v2 entry: unexpected response: 409 artifact'
+SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART=$odd409 sign_blob unknownflag-503 "v2path503 v2path503 v2path503"
+expect_eq    "sign: an unrecognised artifact never turns a 503 into a conflict" 1 "$sb_tries"
+SB_REL=1 SB_PRE='--oidc-client-id fixture-client' sign_blob unknownflag-409 "v2path409 ok"
+expect_eq    "sign: an unrecognised artifact fails closed even on a real 409" 1 "$sb_tries"
 sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"
