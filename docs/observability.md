@@ -39,6 +39,13 @@
   每次 scrape 一句 `GROUP BY status`（`OrderStats` / `ReservationStats` use case → `Repository.CountByStatus`），
   每個 replica 報一樣的數字，`max` 不 `sum`。PENDING 老 = StockReserved 或缺貨的取消都沒回到 ordering（alert `x-monorepo-saga-pending`）；
   RESERVED 老 = 庫存被沒走完的訂單扣著，超過 TTL 的 1.5× 就是 `worker expire` 沒跑（alert `x-monorepo-reservation-expiry`）；EXPIRED 在長 = TTL 在殺單，看 TTL 是不是太短；COMMIT_SHORT > 0 = 訂單已 COMPLETED 但庫存補不回來（sweep 與 CompleteOrder 競態後庫存被別單訂走），alert `x-monorepo-commit-short`。
+- **CreateOrder 的結果**（`ordering/adapters/metrics`，**rpc** 註冊，因為 CreateOrder 跑在 rpc）：`ordering_create_order_total{result}` 是 counter（**sum**，不像上面的 gauge 用 max）：
+  `created` = 寫入了新訂單（有沒有帶 `idempotency_key` 都算）、`replayed` = 同 key 同內容，回了原訂單（沒寫入、沒發 `OrderCreated`；併發輸家回讀勝出者也是這個）、
+  `key_reused` = 同 key 不同內容（`order.idempotency_key_reused`）。計數點在最外層 decorator，也就是交易 commit **之後**：commit 失敗或 rollback 的 create 不會被記成 `created`。
+  **label 只有 `result`**，沒有 key、customer、order id（R4 與基數）。其他失敗（驗證、`order.permission_denied`、infra error）**刻意不計**：
+  `usecase_duration_seconds{usecase="ordering.create_order", kind}` 已經依 kernel error kind 拆開，再加一個 `rejected` 只會把不同負責人的原因混在一起。
+  Grafana「Saga」row 的兩個面板看 results/s 與 replayed / key_reused 佔比。沒設 alert：`replayed` 是重試保護正常運作（client 逾時重送），
+  `key_reused` 是單一整合的 bug（同一把 key 送兩個請求），都沒有可靠的服務水準線可設門檻；真的有疑慮時看面板，再用 `x-error-code` 的 access line 找是哪個 client。
 - **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader、logs 走 batch processor；`otelconnect`
   interceptor 掛最外層，每個 RPC 一個 span。endpoint 空 = tracer no-op、logger 只寫 stdout、不 dial
 - **span 的來源**：RPC 由 `otelconnect`；`/api/docs`、`/api/openapi/*` 等普通 route 由 `otelgin`（filter 掉 RPC prefix、

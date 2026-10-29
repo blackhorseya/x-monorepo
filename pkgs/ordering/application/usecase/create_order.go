@@ -107,5 +107,8 @@ func replay(prior *order.Order, items []order.LineItem) (*dto.OrderOutput, error
 		return nil, order.ErrIdempotencyKeyReused
 	}
 
-	return mapper.ToOrderOutput(prior), nil
+	out := mapper.ToOrderOutput(prior)
+	out.Replayed = true
+
+	return out, nil
 }

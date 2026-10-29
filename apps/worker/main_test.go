@@ -28,6 +28,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	orderingconsumer "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	orderingevents "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
+	orderingmetrics "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
 	orderingdto "github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
@@ -151,7 +152,11 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	oev := orderingevents.NewPublisher(publisher)
 	oclock := orderingsys.NewClock()
 	own := ordering.ProvideOwnership(config.Auth{})
-	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, own, rec)
+	createResults, err := orderingmetrics.NewCreateOrderResults(tel.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, own, rec, createResults)
 	getOrder := ordering.ProvideGetOrder(orders, own, rec)
 	completeOrder := ordering.ProvideCompleteOrder(orders, otx, oinbox, oev, oclock, ordering.ProvideOwnership(config.Auth{}), rec)
 	orderingSubs := ordering.ProvideSubscriptions(
