@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -192,7 +193,31 @@ type raceEnv struct {
 	p, sku, skuB string
 	o1, o2       string
 
+	// startGate, when set, runs in pinned before the caller starts waiting for
+	// its actor, with the actor's result channel: tests use it to force the
+	// schedule in which the actor has already finished.
+	startGate func(result <-chan error)
+
 	expiredMine int // how many of o1 the last ExpireReservations attempt expired
+}
+
+// withServerTimeouts adds server-side lock and statement timeouts to a
+// connection URL. Contexts bound what this package's own calls do, but
+// platformpg.Up runs migrate, whose Version query ignores the caller's context
+// (migrate v4 pgx driver, QueryRowContext(context.Background())); the server is
+// the one place that bounds it. Connection establishment is not covered.
+func withServerTimeouts(raw string, lock, statement time.Duration) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	// pgx sends unknown DSN keys to the server as runtime parameters (milliseconds).
+	q.Set("lock_timeout", fmt.Sprint(lock.Milliseconds()))
+	q.Set("statement_timeout", fmt.Sprint(statement.Milliseconds()))
+	u.RawQuery = q.Encode()
+
+	return u.String()
 }
 
 // newEnv opens the database with SKU (on_hand onHand) and no reservation.
@@ -200,10 +225,12 @@ func newEnv(t *testing.T, onHand int32) *raceEnv {
 	t.Helper()
 	url := pgtest.URL(t)
 
-	// Every statement of the test, the victim included, runs under this deadline.
+	// The test's own statements, the victim included, run under this deadline;
+	// migrate's and the connection dial are bounded by withServerTimeouts / pgx
+	// instead, and cleanup gets a fresh budget of its own.
 	c, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
-	cfg := config.Postgres{URL: url}
+	cfg := config.Postgres{URL: withServerTimeouts(url, 30*time.Second, 2*time.Minute)}
 	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
 	if err != nil {
 		t.Fatal(err)
@@ -225,13 +252,15 @@ func newEnv(t *testing.T, onHand int32) *raceEnv {
 		o1: "o-" + p + "-1", o2: "o-" + p + "-2",
 	}
 	clean := func() {
+		cc, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		like := "%" + p + "%"
 		for _, q := range []string{
 			`DELETE FROM inventory.reservations WHERE order_id LIKE ?`,
 			`DELETE FROM inventory.stocks WHERE sku LIKE ?`,
 			`DELETE FROM inventory.inbox WHERE message_id LIKE ?`,
 		} {
-			if err := db.WithContext(c).Exec(q, like).Error; err != nil {
+			if err := db.WithContext(cc).Exec(q, like).Error; err != nil {
 				t.Errorf("cleanup %q: %v", q, err)
 			}
 		}
@@ -443,10 +472,24 @@ func (e *raceEnv) pinned(fn func(ctx context.Context, conn *gorm.DB) error) (int
 		})
 	}()
 
+	if e.startGate != nil {
+		e.startGate(result)
+	}
 	select {
 	case pid := <-pids:
 		return pid, result, nil
 	case err := <-result:
+		// A fast actor can publish its pid and its result before this select
+		// runs, and select picks at random: a published pid means it started.
+		select {
+		case pid := <-pids:
+			done := make(chan error, 1)
+			done <- err
+
+			return pid, done, nil
+		default:
+		}
+
 		return 0, nil, fmt.Errorf("pinned actor did not start: %w", err)
 	case <-time.After(15 * time.Second):
 		cancel()
@@ -1166,6 +1209,81 @@ func TestIntruderRunsUnderADeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := e.join(done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A fast actor that starts and finishes before the caller looks is a success,
+// not a start failure: with the schedule forced so that both its pid and its
+// result are already published when the caller's select runs, the pid decides
+// (select alone would pick either at random).
+func TestPinnedFastActorIsNotAStartFailure(t *testing.T) {
+	e := newEnv(t, 2)
+	e.startGate = func(result <-chan error) {
+		for deadline := time.Now().Add(15 * time.Second); len(result) == 0; {
+			if time.Now().After(deadline) {
+				t.Error("actor never finished")
+
+				return
+			}
+			time.Sleep(time.Millisecond) // wait for an observable state: the published result
+		}
+	}
+	for i := 0; i < 50; i++ {
+		pid, done, err := e.pinned(func(context.Context, *gorm.DB) error { return nil })
+		if err != nil || pid == 0 {
+			t.Fatalf("run %d: pinned = %d, %v; want a started actor", i, pid, err)
+		}
+		if err := e.join(done); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The fixture's migration step is bounded by the server, not only by a context
+// migrate does not read: with the migration table locked, Up fails at the lock
+// timeout instead of waiting forever.
+func TestSetupMigrationIsBoundedByServerTimeouts(t *testing.T) {
+	e := newEnv(t, 2)
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	_, holderDone, err := e.pinned(func(ctx context.Context, conn *gorm.DB) error {
+		if err := conn.Exec(`BEGIN`).Error; err != nil {
+			return err
+		}
+		if err := conn.Exec(`LOCK TABLE inventory.schema_migrations IN ACCESS EXCLUSIVE MODE`).Error; err != nil {
+			return err
+		}
+		close(locked)
+		if err := gate(ctx, release); err != nil {
+			return err
+		}
+
+		return conn.Exec(`ROLLBACK`).Error
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.await(locked, holderDone)
+
+	cfg := config.Postgres{URL: withServerTimeouts(pgtest.URL(t), time.Second, 5*time.Second)}
+	started := time.Now()
+	if err := platformpg.Up(e.c, cfg, postgres.Migration()); err == nil {
+		t.Fatal("Up succeeded while its migration table was locked")
+	}
+	if d := time.Since(started); d > 20*time.Second {
+		t.Fatalf("Up took %s to give up; want the server's lock timeout to bound it", d)
+	}
+
+	close(release)
+	if err := e.join(holderDone); err != nil {
 		t.Fatal(err)
 	}
 }
