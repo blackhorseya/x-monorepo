@@ -207,16 +207,18 @@ func TestIdentityService_AuthOff(t *testing.T) {
 
 // newService assembles the service the way provider.go / wire do.
 func newService(accounts account.Repository, keys apikey.Repository, tx port.Transactor, clock port.Clock, ids port.IDGenerator, secrets port.SecretGenerator, rec *usecasex.Recorder, auth config.Auth) *rpc.IdentityService {
+	census := identity.ProvideAdminCensus(nil, accounts, keys)
+
 	return rpc.NewIdentityService(rpc.UseCases{
 		CreateAccount:  identity.ProvideCreateAccount(accounts, ids, clock, tx, rec),
 		GetAccount:     identity.ProvideGetAccount(accounts, rec),
 		ListAccounts:   identity.ProvideListAccounts(accounts, rec),
-		DisableAccount: identity.ProvideDisableAccount(accounts, clock, tx, rec),
+		DisableAccount: identity.ProvideDisableAccount(accounts, census, auth, clock, tx, rec),
 		EnableAccount:  identity.ProvideEnableAccount(accounts, clock, tx, rec),
-		AssignRoles:    identity.ProvideAssignRoles(accounts, clock, tx, rec),
+		AssignRoles:    identity.ProvideAssignRoles(accounts, census, auth, clock, tx, rec),
 		CreateAPIKey:   identity.ProvideCreateAPIKey(accounts, keys, ids, secrets, clock, tx, rec),
 		ListAPIKeys:    identity.ProvideListAPIKeys(accounts, keys, rec),
-		RevokeAPIKey:   identity.ProvideRevokeAPIKey(keys, clock, tx, rec),
+		RevokeAPIKey:   identity.ProvideRevokeAPIKey(keys, census, auth, clock, tx, rec),
 		WhoAmI:         identity.ProvideWhoAmI(rec),
 	}, auth)
 }

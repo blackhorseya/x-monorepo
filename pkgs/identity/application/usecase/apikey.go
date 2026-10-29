@@ -84,14 +84,17 @@ func (uc *ListAPIKeys) Execute(c context.Context, in dto.ListAPIKeysInput) (*dto
 	return out, nil
 }
 
-// RevokeAPIKey ends a key for good.
+// RevokeAPIKey ends a key for good. Revoking the last usable key of the last
+// effective admin is account.ErrLastAdmin.
 type RevokeAPIKey struct {
-	keys  apikey.Repository
-	clock port.Clock
+	keys   apikey.Repository
+	census port.AdminCensus
+	role   string
+	clock  port.Clock
 }
 
-func NewRevokeAPIKey(keys apikey.Repository, clock port.Clock) *RevokeAPIKey {
-	return &RevokeAPIKey{keys: keys, clock: clock}
+func NewRevokeAPIKey(keys apikey.Repository, census port.AdminCensus, adminRole string, clock port.Clock) *RevokeAPIKey {
+	return &RevokeAPIKey{keys: keys, census: census, role: adminRole, clock: clock}
 }
 
 func (uc *RevokeAPIKey) Execute(c context.Context, in dto.RevokeAPIKeyInput) (*dto.APIKeyOutput, error) {
@@ -99,12 +102,26 @@ func (uc *RevokeAPIKey) Execute(c context.Context, in dto.RevokeAPIKeyInput) (*d
 	if in.ID == "" {
 		return nil, apikey.ErrInvalidID
 	}
+	now := uc.clock.Now()
+	g := &adminGuard{census: uc.census, role: uc.role, now: now}
+	admins, err := g.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
 	k, err := uc.keys.FindByID(ctx, apikey.ID(in.ID))
 	if err != nil {
 		return nil, err
 	}
-	if err := k.Revoke(uc.clock.Now()); err != nil {
+	// Only a key that resolves today counts towards its account's standing;
+	// revoking an expired one changes nothing.
+	usable := k.Usable(now) == nil
+	if err := k.Revoke(now); err != nil {
 		return nil, err
+	}
+	if usable {
+		if err := account.GuardLastAdminKey(admins, account.ID(k.AccountID())); err != nil {
+			return nil, err
+		}
 	}
 	if err := uc.keys.Save(ctx, k); err != nil {
 		return nil, fmt.Errorf("save api key %s: %w", in.ID, err)
