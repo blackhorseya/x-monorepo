@@ -73,11 +73,13 @@ test("list: Cancel asks first; declining leaves the order PENDING", async ({ pag
   await expect(row).toHaveCount(1);
 
   await row.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await expect(row.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
 
   await row.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel order" }).click();
   await expect(row.getByText("CANCELLED")).toBeVisible();
 });
