@@ -10,12 +10,13 @@
 // Postgres service container make the write path's tail wider, not slower on
 // median (observed p50 22ms / p95 368ms / zero errors on a 10s run).
 import { sleep } from "k6";
-import { rpc, ok, sku, setStock, customerId, createOrder, customer as customerName, systemTags } from "./lib.js";
+import { rpc, ok, sku, setStock, customerId, createOrder, customer as customerName, systemTags, throwOnError } from "./lib.js";
 
 const SKUS = Number(__ENV.SKUS || 20);
 const CREATE_P95 = Number(__ENV.CREATE_P95 || 300);
 
 export const options = {
+  throw: throwOnError,
   systemTags,
   scenarios: {
     orders: {

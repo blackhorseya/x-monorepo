@@ -189,7 +189,8 @@ jobs:
 
   # The same scripts in every auth state (tests/k6/auth-matrix.sh): auth on with a role-less /
   # an admin key, auth off with no key / a key sent, × orders / reservation, 2 VU, plus the
-  # per-procedure-public and fails-once fixtures (#193). Parallel to `k6`, same trigger.
+  # per-procedure-public and fails-once fixtures (#193), then tests/k6/wire.sh: the scripts against
+  # a broken HTTP response that quotes the key (#209). Parallel to `k6`, same trigger.
   k6-auth:
     needs: affected
     if: needs.affected.outputs.run_k6 == 'true'
@@ -210,8 +211,10 @@ jobs:
       - run: task build
       - run: APP_CONFIG=configs/config.example.yaml APP_POSTGRES_URL=$DATABASE_URL bin/migrate up
       - run: task k6-auth-matrix
+      # a broken HTTP response must not carry the key into k6's output or tags (#209)
+      - run: task k6-wire
       - if: failure()
-        run: tail -n 50 bin/k6-auth-*.log
+        run: tail -n 50 bin/k6-auth-*.log bin/k6-wire/*.log
 
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
   # commit (the console one needs node: pnpm build of web/apps/console), install → smoke →
