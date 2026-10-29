@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,16 +133,42 @@ func (x *hookStocks) Save(c context.Context, s *stock.Stock) error {
 // hookReservations runs onUpdate once, just before the first Update.
 type hookReservations struct {
 	reservation.Repository
-	onUpdate func()
+	onUpdate func(c context.Context)
 }
 
 func (x *hookReservations) Update(c context.Context, r *reservation.Reservation) error {
 	if f := x.onUpdate; f != nil {
 		x.onUpdate = nil
-		f()
+		f(c)
 	}
 
 	return x.Repository.Update(c, r)
+}
+
+// scopedSweep limits the expiry sweep's DB-wide read to one cell's orders. The
+// filter runs after an unlimited read, so rows of other fixtures neither get
+// expired nor crowd this cell out of the sweep limit.
+type scopedSweep struct {
+	reservation.Repository
+	prefix string
+}
+
+func (x scopedSweep) ListReservedBefore(c context.Context, before time.Time, limit int) ([]*reservation.Reservation, error) {
+	all, err := x.Repository.ListReservedBefore(c, before, 0)
+	if err != nil {
+		return nil, err
+	}
+	var mine []*reservation.Reservation
+	for _, r := range all {
+		if strings.HasPrefix(r.OrderID(), x.prefix) {
+			mine = append(mine, r)
+		}
+	}
+	if limit > 0 && len(mine) > limit {
+		mine = mine[:limit]
+	}
+
+	return mine, nil
 }
 
 var envSeq atomic.Int64
@@ -159,7 +186,7 @@ type raceEnv struct {
 	now, old     clockAt
 
 	// Every row of one cell is named after p, so cells never share data (the
-	// expiry sweep is the only DB-wide read, and it is filtered to these).
+	// expiry sweep is the only DB-wide read; attempt wraps it in scopedSweep).
 	p, sku, skuB string
 	o1, o2       string
 
@@ -275,7 +302,7 @@ func (e *raceEnv) attempt(v victim, msgID string, stocks stock.Repository, reser
 
 		return consumer.NewOrderCancelledHandler(inventory.ProvideReleaseStock(reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec)).Handle(c, payload)
 	default:
-		out, err := inventory.ProvideExpireReservations(reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec).Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour})
+		out, err := inventory.ProvideExpireReservations(scopedSweep{Repository: reservations, prefix: "o-" + e.p + "-"}, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec).Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour})
 		e.expiredMine = 0
 		if out != nil {
 			for _, x := range out.Expired {
@@ -296,7 +323,16 @@ type intruder func(e *raceEnv) error
 
 var (
 	// iExpire: the sweep gives o1's stock back (EXPIRED, stock x/0).
-	iExpire intruder = func(e *raceEnv) error { return e.attempt(vExpire, "", e.stocks, e.reservations) }
+	iExpire intruder = func(e *raceEnv) error {
+		if err := e.attempt(vExpire, "", e.stocks, e.reservations); err != nil {
+			return err
+		}
+		if e.expiredMine != 1 {
+			return fmt.Errorf("sweep expired %d of o1; want exactly 1", e.expiredMine)
+		}
+
+		return nil
+	}
 	// iCommit: the order completes first.
 	iCommit intruder = func(e *raceEnv) error { return e.attempt(vComplete, "", e.stocks, e.reservations) }
 	// iRelease: the order is cancelled first.
@@ -329,33 +365,48 @@ func (e *raceEnv) tryReserve(orderID string, clock clockAt, lines ...dto.Line) e
 	return nil
 }
 
-// lockWaiters is how many sessions Postgres reports as waiting for a lock.
-func (e *raceEnv) lockWaiters() int {
+// victimLock identifies the victim's transaction from inside its context: its
+// backend pid, which an intruder's blocked statement must be waiting on.
+func (e *raceEnv) victimPID(c context.Context) int {
+	e.t.Helper()
+	var pid int
+	if err := platformpg.TxOrDB(c, e.db).Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
+		e.t.Fatal(err)
+	}
+
+	return pid
+}
+
+// blockedBy is how many sessions wait for a lock held by backend pid.
+func (e *raceEnv) blockedBy(pid int) int {
 	e.t.Helper()
 	var n int
-	if err := e.db.WithContext(e.c).Raw(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&n).Error; err != nil {
+	if err := e.db.WithContext(e.c).Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND ? = ANY(pg_blocking_pids(pid))`, pid).Scan(&n).Error; err != nil {
 		e.t.Fatal(err)
 	}
 
 	return n
 }
 
-// parked runs in on its own goroutine and returns once Postgres says it is
-// waiting for a lock (the victim's), plus the channel its result arrives on.
-func (e *raceEnv) parked(in intruder) <-chan error {
+// parked runs in on its own goroutine and returns once Postgres says a session
+// is waiting on the victim's backend (c is the victim's transaction context),
+// plus the channel its result arrives on. Waiters on anything else, or on
+// another session, do not count.
+func (e *raceEnv) parked(c context.Context, in intruder) <-chan error {
+	pid := e.victimPID(c)
 	done := make(chan error, 1)
 	// fire-and-forget: joined by the caller, which reads done after the victim returns.
 	go func() { done <- in(e) }()
 
 	deadline := time.Now().Add(15 * time.Second)
-	for e.lockWaiters() == 0 {
+	for e.blockedBy(pid) == 0 {
 		select {
 		case err := <-done:
 			e.t.Fatalf("intruder finished (%v) instead of waiting for the victim's lock", err)
 		default:
 		}
 		if time.Now().After(deadline) {
-			e.t.Fatal("intruder never blocked on a lock")
+			e.t.Fatal("intruder never blocked on the victim's lock")
 		}
 		time.Sleep(time.Millisecond) // poll interval of an observed condition, not a guess at timing
 	}
@@ -599,7 +650,7 @@ func TestInterleavingMatrix(t *testing.T) {
 			case bSave:
 				stocks.onSave = fire
 			case bUpdate:
-				reservations.onUpdate = func() { parkedErr = e.parked(c.by) }
+				reservations.onUpdate = func(vc context.Context) { parkedErr = e.parked(vc, c.by) }
 			}
 
 			msgID := e.p + "-m1"
@@ -653,6 +704,17 @@ func TestInterleavingMatrix(t *testing.T) {
 				}
 				if again := e.read(c.checkO2); again != got {
 					t.Fatalf("a duplicate delivery moved the state: %+v → %+v", got, again)
+				}
+			}
+
+			// The rightful holder can still complete: o2's hold is real, not just a number.
+			if c.checkO2 && c.want.o2 == reserved {
+				out, err := inventory.ProvideCommitStock(e.reservations, e.stocks, e.tx, e.inbox, publisher{}, e.now, e.rec).Execute(e.c, dto.CommitStockInput{OrderID: e.o2})
+				if err != nil || out.Status != "COMMITTED" {
+					t.Fatalf("o2 commit = %+v, %v; want COMMITTED", out, err)
+				}
+				if after := e.read(true); after.o2 != committed || after.onHand != got.onHand-2 || after.reserved != got.reserved-2 {
+					t.Fatalf("after o2 commit = %+v; want o2 COMMITTED, on_hand %d reserved %d", after, got.onHand-2, got.reserved-2)
 				}
 			}
 
