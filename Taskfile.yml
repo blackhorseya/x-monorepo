@@ -341,7 +341,7 @@ tasks:
     cmds: [kind delete cluster --name x-monorepo]
 
   k6:
-    desc: 'one k6 script against a running server (default http://127.0.0.1:8080, i.e. task run): task k6 -- orders|ratelimit|timeout|reservation [k6 args…]; BASE_URL / API_KEY / VUS / DURATION / RPS are read from the environment (k6 __ENV), see the headers of tests/k6/*.js'
+    desc: 'one k6 script against a running server (default http://127.0.0.1:8080, i.e. task run): task k6 -- orders|ratelimit|timeout|reservation [k6 args…]; BASE_URL / API_KEY / ADMIN_API_KEY (setup SetStock, admin role when auth is on) / VUS / DURATION / RPS are read from the environment (k6 __ENV), see the headers of tests/k6/*.js'
     cmds:
       - 'k6 run tests/k6/{{index (splitArgs .CLI_ARGS) 0}}.js {{slice (splitArgs .CLI_ARGS) 1 | join " "}}'
     preconditions:

@@ -1,21 +1,21 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus, Trash2 } from "lucide-react";
-import { cloneElement, useEffect, useId, useState, type ReactElement } from "react";
+import { useEffect, useState } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useResetOnCredentialChange } from "../auth";
 import { ConfirmButton } from "../components/confirm";
 import { useCanChooseCustomer } from "../components/customer";
-import { describe, isUnauthenticated, orders } from "../client";
+import { ErrorAlert } from "../components/error-alert";
+import { Field } from "../components/field";
+import { formatMoney, statusVariant } from "../components/order-status";
+import { describe, orders } from "../client";
 import { useOrderReservations, type RowReservation } from "../orderReservations";
 import { keys, ordersQuery, refreshFirstPage } from "../queries";
 import { reservationBadge } from "./reservations";
@@ -319,56 +319,4 @@ function ReservationCell({ orderId, state, error }: { orderId: string; state?: R
       )}
     </span>
   );
-}
-
-// Field labels one input: the id ties <label for> to it, so clicking the label
-// focuses the input and screen readers (and getByLabel) can find it.
-export function Field({
-  label,
-  className,
-  children,
-}: {
-  label: string;
-  className?: string;
-  children: ReactElement<{ id?: string }>;
-}) {
-  const id = useId();
-  return (
-    <div className={cn("grid gap-1.5", className)}>
-      <Label htmlFor={id}>{label}</Label>
-      {cloneElement(children, { id })}
-    </div>
-  );
-}
-
-export function ErrorAlert({ error }: { error: unknown }) {
-  const unauthenticated = isUnauthenticated(error);
-  return (
-    <Alert variant="destructive">
-      <AlertTitle>{unauthenticated ? "Not authenticated" : "Request failed"}</AlertTitle>
-      <AlertDescription>
-        {describe(error)}
-        {unauthenticated && " — the server runs with auth on; set an API key or JWT with the Credential button above."}
-      </AlertDescription>
-    </Alert>
-  );
-}
-
-export function formatMoney(minor: bigint | undefined, currency: string | undefined): string {
-  if (minor === undefined || !currency) return "";
-  return `${(Number(minor) / 100).toFixed(2)} ${currency}`;
-}
-
-// PENDING is waiting on inventory (outline), CONFIRMED and COMPLETED are the good states
-// (default), CANCELLED is over (secondary). Shared with the order detail page.
-export function statusVariant(status: OrderStatus): "default" | "outline" | "secondary" {
-  switch (status) {
-    case OrderStatus.CONFIRMED:
-    case OrderStatus.COMPLETED:
-      return "default";
-    case OrderStatus.PENDING:
-      return "outline";
-    default:
-      return "secondary";
-  }
 }

@@ -1,19 +1,18 @@
-import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
-import type { ReactElement } from "react";
+import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from "@tanstack/react-router";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
 import { CredentialControl } from "./components/credential";
+import { RouteError, RoutePending } from "./components/route-status";
 import { ServerVersion } from "./components/version";
-import { AccountPage } from "./routes/account";
-import { AccountsPage } from "./routes/accounts";
-import { ExpirePage, type ExpireSearch } from "./routes/expire";
-import { OrderPage } from "./routes/order";
-import { OrdersPage, type OrdersSearch } from "./routes/orders";
-import { PoisonPage } from "./routes/poison";
-import { PrunePage, type PruneSearch } from "./routes/prune";
-import { ReservationsPage, type ReservationsSearch } from "./routes/reservations";
-import { StockPage, type StockSearch } from "./routes/stock";
+import type { ExpireSearch } from "./routes/expire";
+import type { OrdersSearch } from "./routes/orders";
+import type { PruneSearch } from "./routes/prune";
+import type { ReservationsSearch } from "./routes/reservations";
+import type { StockSearch } from "./routes/stock";
+
+// Every page is its own chunk (lazyRouteComponent), fetched on first visit or on link intent
+// (defaultPreload). The search types above are type-only imports, so they cost nothing at runtime.
 
 const navLinks = [
   { to: "/orders", label: "Orders" },
@@ -30,12 +29,18 @@ const adminLinks = [
 ] as const;
 
 // An admin page behind AdminGate: for anyone else the page never mounts, so it asks the server
-// nothing and shows the gate instead.
-const gated = (Page: () => ReactElement) => () => (
-  <AdminGate>
-    <Page />
-  </AdminGate>
-);
+// nothing (not even for its chunk, once the router has the answer) and shows the gate instead.
+// The lazy component's preload is kept, so link intent still warms the chunk.
+type LazyPage = ReturnType<typeof lazyRouteComponent>;
+const gated = (Page: LazyPage): LazyPage => {
+  const Gated = () => (
+    <AdminGate>
+      <Page />
+    </AdminGate>
+  );
+  Gated.preload = Page.preload;
+  return Gated;
+};
 
 // Layout: the nav shows the admin pages only to a caller the server's admin check lets through
 // (with auth.mode=off that is everyone, as on the server). That is a courtesy, not a gate: the
@@ -78,7 +83,7 @@ const indexRoute = createRoute({
 const ordersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/orders",
-  component: OrdersPage,
+  component: lazyRouteComponent(() => import("./routes/orders"), "OrdersPage"),
   validateSearch: (raw: Record<string, unknown>): OrdersSearch => ({
     status: typeof raw.status === "string" && raw.status in OrderStatus ? (raw.status as OrdersSearch["status"]) : undefined,
     customer: typeof raw.customer === "string" && raw.customer !== "" ? raw.customer : undefined,
@@ -86,11 +91,11 @@ const ordersRoute = createRoute({
 });
 // A sibling of /orders, not a child: OrdersPage renders no Outlet, and the nav's
 // activeProps on /orders still light up here (prefix match).
-const orderRoute = createRoute({ getParentRoute: () => rootRoute, path: "/orders/$id", component: OrderPage });
+const orderRoute = createRoute({ getParentRoute: () => rootRoute, path: "/orders/$id", component: lazyRouteComponent(() => import("./routes/order"), "OrderPage") });
 const reservationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/reservations",
-  component: ReservationsPage,
+  component: lazyRouteComponent(() => import("./routes/reservations"), "ReservationsPage"),
   validateSearch: (raw: Record<string, unknown>): ReservationsSearch => ({
     status: typeof raw.status === "string" && raw.status in ReservationStatus ? (raw.status as ReservationsSearch["status"]) : undefined,
     order: typeof raw.order === "string" && raw.order !== "" ? raw.order : undefined,
@@ -99,20 +104,20 @@ const reservationsRoute = createRoute({
 const stockRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/stock",
-  component: StockPage,
+  component: lazyRouteComponent(() => import("./routes/stock"), "StockPage"),
   validateSearch: (raw: Record<string, unknown>): StockSearch => ({
     prefix: typeof raw.prefix === "string" && raw.prefix !== "" ? raw.prefix : undefined,
     reserved: raw.reserved === true ? true : undefined,
   }),
 });
-const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: AccountsPage });
+const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: lazyRouteComponent(() => import("./routes/accounts"), "AccountsPage") });
 // A sibling of /accounts, like /orders/$id: the nav's prefix match lights Accounts up here too.
-const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: AccountPage });
-const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: gated(PoisonPage) });
+const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: lazyRouteComponent(() => import("./routes/account"), "AccountPage") });
+const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: gated(lazyRouteComponent(() => import("./routes/poison"), "PoisonPage")) });
 const pruneRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/prune",
-  component: gated(PrunePage),
+  component: gated(lazyRouteComponent(() => import("./routes/prune"), "PrunePage")),
   validateSearch: (raw: Record<string, unknown>): PruneSearch => ({
     bc: typeof raw.bc === "string" && raw.bc !== "" ? raw.bc : undefined,
     days: typeof raw.days === "number" && Number.isFinite(raw.days) && raw.days > 0 ? raw.days : undefined,
@@ -123,7 +128,7 @@ const pruneRoute = createRoute({
 const expireRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/expire",
-  component: gated(ExpirePage),
+  component: gated(lazyRouteComponent(() => import("./routes/expire"), "ExpirePage")),
   validateSearch: (raw: Record<string, unknown>): ExpireSearch => ({
     hours: typeof raw.hours === "number" && Number.isFinite(raw.hours) && raw.hours > 0 ? raw.hours : undefined,
   }),
@@ -132,6 +137,8 @@ const expireRoute = createRoute({
 export const router = createRouter({
   routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, poisonRoute, pruneRoute, expireRoute]),
   defaultPreload: "intent",
+  defaultPendingComponent: RoutePending,
+  defaultErrorComponent: RouteError,
 });
 
 declare module "@tanstack/react-router" {

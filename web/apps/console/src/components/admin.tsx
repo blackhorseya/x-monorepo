@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useCredentialGeneration } from "../auth";
 import { adminProbeQuery } from "../queries";
-import { ErrorAlert } from "../routes/orders";
+import { ErrorAlert } from "./error-alert";
 
 // Does the current credential pass the server's admin check? Asked of the server (see
 // adminProbeQuery), so it follows auth.admin_role and auth.mode as configured. false until the

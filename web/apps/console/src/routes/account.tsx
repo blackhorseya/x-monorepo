@@ -14,7 +14,8 @@ import { ConfirmButton } from "../components/confirm";
 import { useResetOnCredentialChange } from "../auth";
 import { identity } from "../client";
 import { accountQuery, apiKeysQuery, keys } from "../queries";
-import { ErrorAlert, Field } from "./orders";
+import { ErrorAlert } from "../components/error-alert";
+import { Field } from "../components/field";
 import { AccountToggle, accountBadge, at, parseRoles } from "./accounts";
 
 // /accounts/$id: one account — its roles, and its API keys. The key list shows a prefix and a

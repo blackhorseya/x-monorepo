@@ -386,6 +386,7 @@ export const InventoryService: GenService<{
   /**
    * SetStock sets the on-hand quantity of a SKU (creates it when unknown).
    * Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
+   * Requires the admin role when auth is on (x-error-code: auth.permission_denied).
    *
    * @generated from rpc inventory.v1.InventoryService.SetStock
    */
