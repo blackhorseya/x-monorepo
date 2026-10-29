@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -44,6 +45,7 @@ func (u *touching) count() int {
 }
 
 type lastUsedFixture struct {
+	uc     *counting
 	r      *auth.Resolver
 	clk    *clock
 	touch  *touching
@@ -55,7 +57,7 @@ func newLastUsedFixture(t *testing.T, interval time.Duration) *lastUsedFixture {
 	t.Helper()
 	secret := "xk_" + strings.Repeat("g", 43)
 	uc := &counting{known: map[string]*dto.ResolveAPIKeyOutput{secret: {AccountID: "acc-1", KeyID: "key-1"}}}
-	f := &lastUsedFixture{clk: &clock{t: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)}, touch: &touching{}, logs: &bytes.Buffer{}, secret: secret}
+	f := &lastUsedFixture{uc: uc, clk: &clock{t: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)}, touch: &touching{}, logs: &bytes.Buffer{}, secret: secret}
 	f.r = newResolver(t, uc, f.clk, noopMeter())
 	f.r.TrackLastUsed(f.touch, interval, slog.New(slog.NewTextHandler(f.logs, nil)))
 
@@ -166,5 +168,41 @@ func TestResolver_LastUsed_DoesNotBlockTheRequest(t *testing.T) {
 	f.r.Wait()
 	if f.touch.count() != 1 {
 		t.Fatalf("touches = %d, want 1", f.touch.count())
+	}
+}
+
+// A full claim table must not forget claims that are still inside their window:
+// forgetting them sends every live key back to the database on its next request
+// (the conditional UPDATE keeps the column right, but not the round trips).
+func TestResolver_LastUsed_CapacityKeepsLiveClaims(t *testing.T) {
+	c := context.Background()
+	f := newLastUsedFixture(t, time.Minute)
+
+	_, _, _ = f.r.ResolveAPIKey(c, f.secret)
+	f.r.Wait()
+	for i := range auth.MaxCacheEntries {
+		secret := fmt.Sprintf("xk_%040d", i)
+		f.uc.known[secret] = &dto.ResolveAPIKeyOutput{AccountID: "acc-1", KeyID: fmt.Sprintf("other-%d", i)}
+		_, _, _ = f.r.ResolveAPIKey(c, secret)
+		f.r.Wait()
+	}
+	if got := f.touch.count(); got > auth.MaxCacheEntries {
+		t.Fatalf("claims past the table's bound were written: %d touches, bound %d", got, auth.MaxCacheEntries)
+	}
+	before := f.touch.count()
+
+	// Same instant, same key: still inside its window, so no write, however full the table is.
+	_, _, _ = f.r.ResolveAPIKey(c, f.secret)
+	f.r.Wait()
+	if f.touch.count() != before {
+		t.Fatalf("a full table forgot a live claim: %d touches, want %d", f.touch.count(), before)
+	}
+
+	// Once the window has passed, the key is stamped again: a full table is not a stuck one.
+	f.clk.t = f.clk.t.Add(time.Minute)
+	_, _, _ = f.r.ResolveAPIKey(c, f.secret)
+	f.r.Wait()
+	if f.touch.count() != before+1 {
+		t.Fatalf("after the window: %d touches, want %d", f.touch.count(), before+1)
 	}
 }
