@@ -122,25 +122,28 @@ func TestCommit(t *testing.T) {
 	}
 }
 
-func TestSell(t *testing.T) {
-	s, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
+func TestSellAll(t *testing.T) {
+	a, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
+	b, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "B", OnHand: 1, Reserved: 1, UpdatedAt: now})
+	stocks := map[string]*stock.Stock{"A": a, "B": b}
 	later := now.Add(time.Minute)
 
-	if err := s.Sell(0, later); !errors.Is(err, stock.ErrInvalidQuantity) {
-		t.Fatalf("zero: %v", err)
+	// Only what is available can be sold, and nothing moves unless every sku is covered:
+	// B has nothing available, C is missing altogether.
+	short := stock.SellAll(stocks, []string{"A", "B", "C"}, map[string]int32{"A": 3, "B": 1, "C": 1}, later)
+	if len(short) != 2 || short[0] != "B" || short[1] != "C" {
+		t.Fatalf("short = %v", short)
 	}
-	// Only what is available can be sold; the reserved part belongs to others.
-	if err := s.Sell(4, later); !errors.Is(err, stock.ErrInsufficientAvailable) {
-		t.Fatalf("too much: %v", err)
+	if a.OnHand() != 5 || a.Reserved() != 2 || b.OnHand() != 1 || !a.UpdatedAt().Equal(now) {
+		t.Fatalf("failed sale must not change anything: A=%d/%d B=%d/%d", a.OnHand(), a.Reserved(), b.OnHand(), b.Reserved())
 	}
-	if s.OnHand() != 5 || s.Reserved() != 2 {
-		t.Fatalf("failed sell must not change anything: on_hand=%d reserved=%d", s.OnHand(), s.Reserved())
+
+	if short := stock.SellAll(stocks, []string{"A"}, map[string]int32{"A": 3}, later); short != nil {
+		t.Fatalf("short = %v", short)
 	}
-	if err := s.Sell(3, later); err != nil {
-		t.Fatal(err)
-	}
-	if s.OnHand() != 2 || s.Reserved() != 2 || s.Available() != 0 || !s.UpdatedAt().Equal(later) {
-		t.Fatalf("on_hand=%d reserved=%d available=%d", s.OnHand(), s.Reserved(), s.Available())
+	// Sold from what was available; the reserved part still belongs to others.
+	if a.OnHand() != 2 || a.Reserved() != 2 || a.Available() != 0 || !a.UpdatedAt().Equal(later) {
+		t.Fatalf("A on_hand=%d reserved=%d available=%d", a.OnHand(), a.Reserved(), a.Available())
 	}
 }
 

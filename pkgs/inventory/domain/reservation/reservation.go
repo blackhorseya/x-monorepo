@@ -183,7 +183,7 @@ func (x *Reservation) Expire(stocks map[string]*stock.Stock, now time.Time) erro
 // An EXPIRED reservation is the one exception: the sweep gave its stock back
 // before OrderCompleted arrived, and ordering will not cancel a COMPLETED
 // order, so the sale must still land. It is sold from what is available now
-// (Stock.Sell) and ends COMMITTED; when any line is no longer covered nothing
+// (stock.SellAll) and ends COMMITTED; when any line is no longer covered nothing
 // moves and it ends COMMIT_SHORT, raising no event — the status is the signal.
 func (x *Reservation) Commit(stocks map[string]*stock.Stock, now time.Time) error {
 	if x.status != StatusReserved && x.status != StatusExpired {
@@ -198,18 +198,11 @@ func (x *Reservation) Commit(stocks map[string]*stock.Stock, now time.Time) erro
 	}
 
 	if x.status == StatusExpired {
-		for _, sku := range order {
-			if !stocks[sku].CanReserve(need[sku]) {
-				x.status = StatusCommitShort
-				x.updatedAt = now
+		if short := stock.SellAll(stocks, order, need, now); len(short) > 0 {
+			x.status = StatusCommitShort
+			x.updatedAt = now
 
-				return nil
-			}
-		}
-		for _, sku := range order {
-			if err := stocks[sku].Sell(need[sku], now); err != nil {
-				return err
-			}
+			return nil
 		}
 	} else {
 		for _, sku := range order {
