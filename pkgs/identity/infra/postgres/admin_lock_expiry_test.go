@@ -42,6 +42,16 @@ func openDB(t *testing.T, url string) *gorm.DB {
 	return db
 }
 
+// testCtx is the deadline of one test's own SQL and provider calls; it is
+// cancelled when the test ends.
+func testCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+
+	return ctx
+}
+
 func randomName(t *testing.T) string {
 	t.Helper()
 	b := make([]byte, 6)
@@ -52,8 +62,17 @@ func randomName(t *testing.T) string {
 	return hex.EncodeToString(b)
 }
 
+// Server-side bounds every connection of this file carries: no statement (lock
+// acquisition, commit, migration, cleanup included) and no idle transaction can
+// outlive them, whatever the Go side is waiting on. They sit above the Go-side
+// waits (15s barrier, 15s join) so those fire first on a healthy server.
+const (
+	statementTimeoutMS       = "30000"
+	idleInTransactionTimeout = "60000"
+)
+
 // urlWith returns base pointed at database name (when not empty) and tagged
-// with application_name app (when not empty).
+// with application_name app (when not empty), with the server-side bounds.
 func urlWith(t *testing.T, base, name, app string) string {
 	t.Helper()
 	u, err := url.Parse(base)
@@ -63,11 +82,13 @@ func urlWith(t *testing.T, base, name, app string) string {
 	if name != "" {
 		u.Path = "/" + name
 	}
+	q := u.Query()
 	if app != "" {
-		q := u.Query()
 		q.Set("application_name", app)
-		u.RawQuery = q.Encode()
 	}
+	q.Set("statement_timeout", statementTimeoutMS)
+	q.Set("idle_in_transaction_session_timeout", idleInTransactionTimeout)
+	u.RawQuery = q.Encode()
 
 	return u.String()
 }
@@ -85,7 +106,7 @@ func ownedDatabase(t *testing.T) string {
 	t.Helper()
 	base := pgtest.URL(t)
 	name := "lockexp_" + randomName(t)
-	admin := openDB(t, base)
+	admin := openDB(t, urlWith(t, base, "", ""))
 	if err := admin.Exec("CREATE DATABASE " + name).Error; err != nil {
 		t.Fatalf("create database %s: %v (the identity expiry matrix needs a role with CREATEDB; see README, TEST_DATABASE_URL)", name, err)
 	}
@@ -95,7 +116,7 @@ func ownedDatabase(t *testing.T) string {
 		}
 	})
 	owned := urlWith(t, base, name, "")
-	if err := platformpg.Up(context.Background(), config.Postgres{URL: owned}, postgres.Migration()); err != nil {
+	if err := platformpg.Up(testCtx(t), config.Postgres{URL: owned}, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,6 +194,7 @@ type expiryRun struct {
 	db        *gorm.DB // holder side; the writer has its own handle
 	writerApp string
 	clock     *stepClock
+	cancel    context.CancelFunc // cancels the context the provider call runs on
 }
 
 func (r expiryRun) do(t *testing.T, call func() error) error {
@@ -189,6 +211,11 @@ func (r expiryRun) do(t *testing.T, call func() error) error {
 	case err := <-done:
 		return err
 	case <-time.After(15 * time.Second):
+		r.cancel() // reaches the provider's Execute context, so the writer's SQL stops
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
 		t.Fatal("the writer never returned after the lock was released")
 		return nil
 	}
@@ -206,7 +233,9 @@ func TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Auth{AdminRole: censusRole}
-	c := context.Background()
+	c := testCtx(t)
+	runCtx, cancelRun := context.WithCancel(c)
+	t.Cleanup(cancelRun)
 
 	// setup gives each case its own clock and wiring, built like the provider does.
 	type env struct {
@@ -217,7 +246,11 @@ func TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres(t *testing.T) {
 	}
 	setup := func(t *testing.T) env {
 		t.Helper()
-		t.Cleanup(func() { db.Exec("TRUNCATE identity.accounts CASCADE") })
+		t.Cleanup(func() {
+			if err := db.Exec("TRUNCATE identity.accounts CASCADE").Error; err != nil {
+				t.Errorf("empty the owned database: %v", err)
+			}
+		})
 		clock := &stepClock{t: f.now}
 		// The writer under test gets a handle of its own, tagged so the barrier can
 		// tell its backend from anything else on the server.
@@ -230,17 +263,17 @@ func TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres(t *testing.T) {
 		revoke := identity.ProvideRevokeAPIKey(keys, census, cfg, clock, tx, rec)
 
 		return env{
-			run: expiryRun{db: db, writerApp: app, clock: clock},
+			run: expiryRun{db: db, writerApp: app, clock: clock, cancel: cancelRun},
 			disable: func(id account.ID) error {
-				_, err := disable.Execute(c, dto.DisableAccountInput{ID: id.String()})
+				_, err := disable.Execute(runCtx, dto.DisableAccountInput{ID: id.String()})
 				return err
 			},
 			assign: func(id account.ID) error {
-				_, err := assign.Execute(c, dto.AssignRolesInput{ID: id.String(), Roles: []string{"viewer"}})
+				_, err := assign.Execute(runCtx, dto.AssignRolesInput{ID: id.String(), Roles: []string{"viewer"}})
 				return err
 			},
 			revoke: func(id apikey.ID) error {
-				_, err := revoke.Execute(c, dto.RevokeAPIKeyInput{ID: id.String()})
+				_, err := revoke.Execute(runCtx, dto.RevokeAPIKeyInput{ID: id.String()})
 				return err
 			},
 		}
@@ -329,8 +362,7 @@ func TestLockExpiryBarrier_PinsTheWriterPostgres(t *testing.T) {
 	f.account("pin-a", []string{censusRole}, time.Time{})
 	h := holdAdminRows(t, db)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := testCtx(t)
 	const other = "lockexp-unrelated"
 	otherDB := openDB(t, urlWith(t, owned, "", other))
 	result := make(chan error, 1)
@@ -356,19 +388,24 @@ func TestLockExpiryBarrier_PinsTheWriterPostgres(t *testing.T) {
 // shared database is only migrated here, never emptied: the bystander is
 // uniquely named and is the only row this test removes.
 func TestLockExpiryMatrix_LeavesTheSharedDatabaseAlonePostgres(t *testing.T) {
-	base := pgtest.URL(t)
+	c := testCtx(t)
+	base := urlWith(t, pgtest.URL(t), "", "")
 	shared := openDB(t, base)
-	if err := platformpg.Up(context.Background(), config.Postgres{URL: base}, postgres.Migration()); err != nil {
+	if err := platformpg.Up(c, config.Postgres{URL: base}, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
 	sf := newCensusFixture(t, shared)
 	// Keyless: the fixture's key secrets repeat from run to run.
 	bystander, _ := sf.account("bystander-"+randomName(t), []string{"viewer"})
-	t.Cleanup(func() { shared.Exec("DELETE FROM identity.accounts WHERE id = ?", bystander.String()) })
+	t.Cleanup(func() {
+		if err := shared.Exec("DELETE FROM identity.accounts WHERE id = ?", bystander.String()).Error; err != nil {
+			t.Errorf("remove the bystander %s: %v", bystander, err)
+		}
+	})
 
 	t.Run("matrix", TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres)
 
-	if _, err := sf.accounts.FindByID(context.Background(), bystander); err != nil {
+	if _, err := sf.accounts.FindByID(c, bystander); err != nil {
 		t.Fatalf("an account of the shared database is gone after the matrix: %v", err)
 	}
 }
