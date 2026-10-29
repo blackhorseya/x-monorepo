@@ -9,6 +9,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
@@ -51,7 +52,7 @@ func TestListOrders_WalksAllPagesNewestFirst(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
 	seedOrders(t, repo, 7)
-	list := usecase.NewListOrders(repo)
+	list := usecase.NewListOrders(repo, ownership.New("admin"))
 
 	var ids []string
 	token := ""
@@ -81,7 +82,7 @@ func TestListOrders_Filters(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
 	seedOrders(t, repo, 7)
-	list := usecase.NewListOrders(repo)
+	list := usecase.NewListOrders(repo, ownership.New("admin"))
 
 	out, err := list.Execute(c, dto.ListOrdersInput{CustomerID: "c-1", Status: "CANCELLED"})
 	if err != nil {
@@ -101,7 +102,7 @@ func TestListOrders_Rejects(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
 	seedOrders(t, repo, 4)
-	list := usecase.NewListOrders(repo)
+	list := usecase.NewListOrders(repo, ownership.New("admin"))
 
 	first, err := list.Execute(c, dto.ListOrdersInput{CustomerID: "c-0", PageSize: 1})
 	if err != nil || first.NextPageToken == "" {

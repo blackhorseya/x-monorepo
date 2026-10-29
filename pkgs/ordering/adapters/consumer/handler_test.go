@@ -11,6 +11,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
@@ -35,7 +36,7 @@ func (noEvents) Publish(context.Context, ...order.Event) error { return nil }
 func TestOrderCancellationHandler(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
-	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{})
+	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"))
 	h := consumer.NewOrderCancellationHandler(usecase.NewCancelOrder(repo, noEvents{}, clock{}))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{

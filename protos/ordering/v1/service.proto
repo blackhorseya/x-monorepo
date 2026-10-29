@@ -9,7 +9,16 @@ import "ordering/v1/entity.proto";
 // Request shape (buf.validate rules below) is rejected at the edge with
 // INVALID_ARGUMENT before any use case runs; business invariants stay in the domain.
 service OrderService {
+  // CreateOrder places a PENDING order. Whose order it is depends on who calls
+  // (auth.mode on, principal = the caller's account id or JWT sub):
+  //   - a non-admin always orders for themselves; naming another customer_id is
+  //     PERMISSION_DENIED (x-error-code: order.permission_denied);
+  //   - an admin (auth.admin_role) may order on behalf of a customer, and without
+  //     customer_id orders for themselves;
+  //   - anonymous (auth.mode off, or a public procedure): customer_id is required.
   rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+  // GetOrder reads one order. A non-admin reading someone else's order gets
+  // NOT_FOUND, the same answer as for an order that does not exist.
   rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
   // CompleteOrder fulfils a CONFIRMED order (CONFIRMED → COMPLETED) and publishes
@@ -19,11 +28,16 @@ service OrderService {
   // ListOrders pages through orders newest first (create_time desc, id desc).
   // Cursor pagination per AIP-158: pass next_page_token back unchanged with the
   // SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+  // A non-admin lists only their own orders: customer_id empty means themselves,
+  // another customer is PERMISSION_DENIED. Admin and anonymous callers filter freely.
   rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
 }
 
 message CreateOrderRequest {
-  string customer_id = 1 [(buf.validate.field).string.min_len = 1];
+  // Optional. Empty = the caller (their principal's subject). A non-admin may
+  // only name themselves; an admin may name any customer; an anonymous caller
+  // (auth off) must name one, else INVALID_ARGUMENT (order.empty_customer).
+  string customer_id = 1;
   repeated LineItem items = 2 [(buf.validate.field).repeated.min_items = 1];
 }
 
@@ -56,7 +70,8 @@ message CompleteOrderResponse {
 }
 
 message ListOrdersRequest {
-  // Empty = any customer.
+  // Empty = any customer for an admin or anonymous caller, the caller's own
+  // orders for anyone else. A non-admin naming another customer is PERMISSION_DENIED.
   string customer_id = 1;
   // ORDER_STATUS_UNSPECIFIED = any status.
   OrderStatus status = 2;

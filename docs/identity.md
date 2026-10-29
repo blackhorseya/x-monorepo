@@ -116,7 +116,25 @@ Account 已經是「誰」，password 不是它的欄位，而是第二種 crede
 3. `Login` RPC 發自簽 JWT（HS256，用現有 `auth.jwt.hs256_secret`，`sub` = account id）→ **interceptor 完全不用改**，它已經驗 JWT 的 sub / roles。
 4. 要加的是 issuer 那一側：token 過期、refresh / logout、console login 頁、brute-force 鎖定——都在 identity BC 與 console 內，不碰 platform / 其他 BC。
 
-Ownership（`CreateOrder.customer_id` 由 principal 帶、`GetOrder` 只能看自己的）是 identity 存在的業務理由，排在 console 頁之後另開 PR。
+## Ordering ownership（PR 3）
+
+identity 存在的業務理由：訂單屬於 principal。授權判斷在 ordering 的 **application 層**（`application/ownership.Policy`，三個 use case 呼叫它；domain 不碰 principal），
+admin role 名稱是注入的 `auth.admin_role`（`ProvideOwnership`），不是寫死的 `"admin"`。「誰是 customer」= `Principal.Subject`（identity key 是 account id、JWT 是 `sub`、static key 是 name）。
+
+| RPC | 非 admin（有 principal） | admin（`auth.admin_role`） | anonymous（auth off，或 `auth.public` 的 procedure / optional 沒帶 credential） |
+|---|---|---|---|
+| `CreateOrder` | `customer_id` 空 = 自己；帶自己 = 自己；帶別人 → `PERMISSION_DENIED`（`order.permission_denied`），不寫入 | 帶了用帶的（代客下單），沒帶 = 自己 | 現行規則：`customer_id` 必填（`order.empty_customer`） |
+| `ListOrders` | 沒帶 `customer_id` = 自己的；帶別人 → `PERMISSION_DENIED` | 現行：空 = 全部，或指定 customer | 現行 |
+| `GetOrder` | 讀別人的訂單 → `NOT_FOUND`（`order.not_found`，跟不存在的 id 一樣，不洩漏存在與否） | 現行 | 現行 |
+| `CancelOrder` / `CompleteOrder` | **這次沒改**（任何 caller 都能操作任何訂單；Follow-up） | 同 | 同 |
+
+- 非 admin 的 `GetOrder` 走 `Repository.FindByIDForCustomer`（postgres：`WHERE id = ? AND customer_id = ?`，不符就在載入 items 之前結束）：「不存在」與「不是你的」走同一條查詢路徑：兩者都在選列時結束，不載入他人的 items，所以回應時間不隨訂單大小而異。這不是密碼學意義的 constant-time 保證。admin / anonymous 照舊 `FindByID`。
+- page token 綁的是**解析後**的 customer，所以非 admin 不帶 filter 翻頁、token 跟自己的 Subject 一致。
+- `auth.mode: off` 時沒有 principal，整張表只剩 anonymous 那欄；consumer path 永遠是 anonymous，不受影響。
+- `auth.public` 列進去的 procedure 不跑 auth，也就是 anonymous：公開的 `GetOrder` 任何人都讀得到任何訂單。ownership 保護的是「帶了 credential 的人」。
+- **行為變更**：以前任何 credential 都能替任何 customer 下單。現在 role-less 的 static key / JWT 只能替自己下單，要代客下單的整合（例如後台系統）需要 `auth.admin_role`。
+  proto 的 `CreateOrderRequest.customer_id` 拿掉 `min_len`（沒用 `optional` 關鍵字，Go 型別不變、`buf breaking` 無差異）；空值的語意由 use case 決定。
+- Console 的下單表單：Customer 選填；admin（以 `ListAccounts` 探測，跟 Accounts 導覽同一個判斷）或 anonymous（`WhoAmI.anonymous`）才可填，其他人欄位鎖住、不送 `customer_id`。這只是便利，伺服器才是關卡。
 
 ## 檔案
 

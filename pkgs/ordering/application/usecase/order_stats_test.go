@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 )
@@ -30,7 +31,7 @@ func TestOrderStats_ZeroFills(t *testing.T) {
 	}
 
 	for i, id := range []string{"o-1", "o-2", "o-3"} {
-		create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: id}, fixedClock{t: t0.Add(time.Duration(i) * time.Minute)})
+		create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: id}, fixedClock{t: t0.Add(time.Duration(i) * time.Minute)}, ownership.New("admin"))
 		if _, err := create.Execute(c, dto.CreateOrderInput{CustomerID: "c-1", Items: []dto.LineItem{{SKU: "S", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 1, Currency: "USD"}}}}); err != nil {
 			t.Fatal(err)
 		}

@@ -23,9 +23,12 @@ const (
 )
 
 type CreateOrderRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CustomerId    string                 `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
-	Items         []*LineItem            `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Optional. Empty = the caller (their principal's subject). A non-admin may
+	// only name themselves; an admin may name any customer; an anonymous caller
+	// (auth off) must name one, else INVALID_ARGUMENT (order.empty_customer).
+	CustomerId    string      `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	Items         []*LineItem `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -384,7 +387,8 @@ func (x *CompleteOrderResponse) GetOrder() *Order {
 
 type ListOrdersRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Empty = any customer.
+	// Empty = any customer for an admin or anonymous caller, the caller's own
+	// orders for anyone else. A non-admin naming another customer is PERMISSION_DENIED.
 	CustomerId string `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
 	// ORDER_STATUS_UNSPECIFIED = any status.
 	Status OrderStatus `protobuf:"varint,2,opt,name=status,proto3,enum=ordering.v1.OrderStatus" json:"status,omitempty"`
@@ -511,9 +515,9 @@ var File_ordering_v1_service_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x19ordering/v1/service.proto\x12\vordering.v1\x1a\x1bbuf/validate/validate.proto\x1a\x18ordering/v1/entity.proto\"u\n" +
-	"\x12CreateOrderRequest\x12(\n" +
-	"\vcustomer_id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\n" +
+	"\x19ordering/v1/service.proto\x12\vordering.v1\x1a\x1bbuf/validate/validate.proto\x1a\x18ordering/v1/entity.proto\"l\n" +
+	"\x12CreateOrderRequest\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
 	"customerId\x125\n" +
 	"\x05items\x18\x02 \x03(\v2\x15.ordering.v1.LineItemB\b\xbaH\x05\x92\x01\x02\b\x01R\x05items\"?\n" +
 	"\x13CreateOrderResponse\x12(\n" +

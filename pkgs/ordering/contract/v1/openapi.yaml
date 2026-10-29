@@ -154,7 +154,10 @@ components:
         customerId:
           type: string
           title: customer_id
-          minLength: 1
+          description: |-
+            Optional. Empty = the caller (their principal's subject). A non-admin may
+             only name themselves; an admin may name any customer; an anonymous caller
+             (auth off) must name one, else INVALID_ARGUMENT (order.empty_customer).
         items:
           type: array
           items:
@@ -216,7 +219,9 @@ components:
         customerId:
           type: string
           title: customer_id
-          description: Empty = any customer.
+          description: |-
+            Empty = any customer for an admin or anonymous caller, the caller's own
+             orders for anyone else. A non-admin naming another customer is PERMISSION_DENIED.
         status:
           allOf:
             - $ref: '#/components/schemas/ordering.v1.OrderStatus'
@@ -489,6 +494,14 @@ paths:
       tags:
         - ordering.v1.OrderService
       summary: CreateOrder
+      description: |-
+        CreateOrder places a PENDING order. Whose order it is depends on who calls
+         (auth.mode on, principal = the caller's account id or JWT sub):
+           - a non-admin always orders for themselves; naming another customer_id is
+             PERMISSION_DENIED (x-error-code: order.permission_denied);
+           - an admin (auth.admin_role) may order on behalf of a customer, and without
+             customer_id orders for themselves;
+           - anonymous (auth.mode off, or a public procedure): customer_id is required.
       operationId: ordering.v1.OrderService.CreateOrder
       parameters:
         - name: Connect-Protocol-Version
@@ -527,6 +540,9 @@ paths:
       tags:
         - ordering.v1.OrderService
       summary: GetOrder
+      description: |-
+        GetOrder reads one order. A non-admin reading someone else's order gets
+         NOT_FOUND, the same answer as for an order that does not exist.
       operationId: ordering.v1.OrderService.GetOrder
       parameters:
         - name: Connect-Protocol-Version
@@ -569,6 +585,8 @@ paths:
         ListOrders pages through orders newest first (create_time desc, id desc).
          Cursor pagination per AIP-158: pass next_page_token back unchanged with the
          SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+         A non-admin lists only their own orders: customer_id empty means themselves,
+         another customer is PERMISSION_DENIED. Admin and anonymous callers filter freely.
       operationId: ordering.v1.OrderService.ListOrders
       parameters:
         - name: Connect-Protocol-Version
