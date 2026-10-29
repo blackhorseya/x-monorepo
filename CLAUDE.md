@@ -24,7 +24,7 @@ task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會�
 task merge-ready -- <pr>   # merge 前必跑：PR 最新綠燈是不是對「現在的 main + 這個 head」跑的（列 main / merge / base / head SHA 與 check 數）；stale（main 已前進）exit 2，先 `-- <pr> --revalidate` 重驗，不要 update branch（head 一變就要重審）
 task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag；沒改到會進 artifact 的檔案就被 gate 跳過，task release-gate 先看：列 releasable 檔 + 預測版號；四個 image 與 checksums.txt 都由 cosign keyless 簽名、archive 另有 GitHub artifact attestation，發布後 verify job 跑 scripts/release-verify.sh 全驗一遍；snapshot 以 --skip=sign 跳過）
 task poison -- list        # 看各 BC 的 poison 表；requeue <bc> <offset>…|all 送回原 topic、drop 刪掉（worker poison 子命令）
-task expire -- --older-than 24h --dry-run   # reservation TTL：RESERVED 超過的還庫存 + 發 OrderCancellationRequested（worker expire；Helm expire CronJob 每 15 分鐘；rpc 版 InventoryService.ExpireReservations 給 console Expire 頁，要 admin role）
+task expire -- --older-than 24h --dry-run   # reservation TTL：RESERVED 超過的還庫存 + 發 OrderCancellationRequested（worker expire；Helm expire CronJob 每 15 分鐘；rpc 版 InventoryService.ExpireReservations 給 console Expire 頁，要 admin role；`InventoryService.SetStock` 同樣要 admin role，auth 開著時非 admin 是 `PERMISSION_DENIED`）
 task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 outbox 列 + 消費過的 inbox 列（worker prune；先 dry-run；NOTE 列出每個落後的 group 與最老未讀年齡：held back by = 過了 retention、behind = 還沒，--forget-group 刪掉不會再跑的）
 task bootstrap                              # identity 第一個 account + API key（空 store 才建；worker bootstrap；secret 只印一次）
 task helm-check            # deployments/helm/x-monorepo：每個 ci/*.yaml profile 跑 helm lint + kubeconform + check.py（derived 數字：grace period、hook 順序、prune args、console 的 RPC_UPSTREAM、ServiceMonitor / NetworkPolicy 的選擇器）

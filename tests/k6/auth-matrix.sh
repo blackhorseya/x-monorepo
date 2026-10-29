@@ -59,6 +59,8 @@ cell() {
   local kenv=(-e "BASE_URL=$target" -e VUS=2 -e DURATION=5s -e RPS=50
     -e "CREATE_P95=${CREATE_P95:-500}" -e "RESERVE_P95=${RESERVE_P95:-5000}" -e "RUN_ID=$id")
   [ "$key" = - ] || kenv+=(-e "API_KEY=$key")
+  # setup()'s SetStock takes the admin role: when the server knows the admin key, the script gets it too
+  case "$*" in *"k6-admin=$ADMIN_KEY"*) kenv+=(-e "ADMIN_API_KEY=$ADMIN_KEY") ;; esac
   for kv in ${K6_ENV:-}; do kenv+=(-e "$kv"); done
   local rc=0
   k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
@@ -78,7 +80,7 @@ cell() {
 # ── the 8 cells: {auth on, role-less key | auth on, admin key | auth off, no key | auth off, key sent} × script ──
 ON=(APP_AUTH_MODE=required)
 for s in reservation orders; do
-  cell "on-roleless-$s" "$s" 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+  cell "on-roleless-$s" "$s" 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
   cell "on-admin-$s"    "$s" 0 - "$ADMIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-admin=$ADMIN_KEY:admin"
   cell "off-nokey-$s"   "$s" 0 - -            APP_AUTH_MODE=off
   cell "off-key-$s"     "$s" 0 - "$PLAIN_KEY" APP_AUTH_MODE=off "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
@@ -87,33 +89,33 @@ done
 # ── fixtures: per-procedure public, and a call that fails once ──
 # Only WhoAmI public: WhoAmI answers anonymous for everyone, but the key still authenticates every
 # other procedure — the script must not read "anonymous" off WhoAmI.
-cell whoami-public orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY" "APP_AUTH_PUBLIC=$WHOAMI"
+cell whoami-public orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin" "APP_AUTH_PUBLIC=$WHOAMI"
 # Only CreateOrder public with a role-less key: CreateOrder is anonymous (needs a customer), then
 # the key's GetOrder cannot see that customer's order. Not a supported combination (docs/operations.md):
 # it must fail (99: thresholds crossed), and with the server's real answer in the output.
-cell create-public orders 99 order.not_found "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY" "APP_AUTH_PUBLIC=$CREATE"
+cell create-public orders 99 order.not_found "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin" "APP_AUTH_PUBLIC=$CREATE"
 # WhoAmI fails once (503): nothing may be decided from it, so the run is unaffected.
-FAIL_PATH=$WHOAMI cell whoami-503 orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$WHOAMI cell whoami-503 orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
 # The deciding CreateOrder fails once (503): never cached as an answer, aborts (108) naming the source.
-FAIL_PATH=$CREATE cell create-503 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE cell create-503 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
 
 # The same failure with a body that echoes the key: abort names RPC, status and code, never the body.
-FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect-1 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
-FAIL_PATH=$CREATE REFLECT=header FORBID=$PLAIN_KEY cell create-503-reflect-header orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
-FAIL_PATH=$CREATE REFLECT=json FORBID=$PLAIN_KEY cell create-503-reflect-json orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
-FAIL_PATH=$CREATE REFLECT=prefixed FORBID=$PLAIN_KEY cell create-503-reflect-prefixed orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect-1 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
+FAIL_PATH=$CREATE REFLECT=header FORBID=$PLAIN_KEY cell create-503-reflect-header orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
+FAIL_PATH=$CREATE REFLECT=json FORBID=$PLAIN_KEY cell create-503-reflect-json orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
+FAIL_PATH=$CREATE REFLECT=prefixed FORBID=$PLAIN_KEY cell create-503-reflect-prefixed orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
 # The ordinary ok() diagnostics (K6_CUSTOMER_MODE=omit: no probe) must not print it either: a code that
 # is the key (header or JSON), the first CreateOrder refused once → thresholds crossed (99).
 for m in header json; do
-  FAIL_PATH=$CREATE REFLECT=$m K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell "create-503-omit-$m" orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+  FAIL_PATH=$CREATE REFLECT=$m K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell "create-503-omit-$m" orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
 done
 # A 307 whose Location carries the key: not followed, not logged, not tagged (aborts 108; with omit, 99).
-FAIL_PATH=$CREATE REFLECT=redirect FORBID=$PLAIN_KEY cell create-307 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
-FAIL_PATH=$CREATE REFLECT=redirect K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell create-307-omit orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
-FAIL_PATH=$CREATE REFLECT=redirect-path FORBID=$PLAIN_KEY cell create-307-path orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=redirect FORBID=$PLAIN_KEY cell create-307 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
+FAIL_PATH=$CREATE REFLECT=redirect K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell create-307-omit orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
+FAIL_PATH=$CREATE REFLECT=redirect-path FORBID=$PLAIN_KEY cell create-307-path orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
 # A key that is itself a known error code, echoed as the code: redacted in the metric tags too.
 CODE_KEY=order.empty_customer
-FAIL_PATH=$CREATE REFLECT=json K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$CODE_KEY cell create-key-is-code orders 99 - "$CODE_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$CODE_KEY"
+FAIL_PATH=$CREATE REFLECT=json K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$CODE_KEY cell create-key-is-code orders 99 - "$CODE_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$CODE_KEY,k6-admin=$ADMIN_KEY:admin"
 # ...and the auto split must not depend on what is printed: auth off ignores the key, which equals
 # order.empty_customer, and the server's real 400 order.empty_customer still means "name the customer".
 cell off-key-is-code orders 0 - order.empty_customer APP_AUTH_MODE=off

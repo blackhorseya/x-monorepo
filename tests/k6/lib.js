@@ -2,6 +2,8 @@
 // thresholds in each script can be per RPC. Environment:
 //   BASE_URL  server root (default http://127.0.0.1:8080); RPCs live under /api
 //   API_KEY   X-API-Key when the server runs with auth on (optional)
+//   ADMIN_API_KEY  X-API-Key for setup()'s SetStock only (default API_KEY): SetStock takes the
+//             admin role when auth is on (docs/identity.md), CreateOrder etc. do not need it
 //   K6_CUSTOMER_MODE  who names the customer (default auto), see customerId below
 //             Ordering is owned by the caller (docs/identity.md): a server that knows the
 //             caller (a key or JWT) takes the customer from it, one that does not (auth off,
@@ -32,7 +34,8 @@ export const rpcOk = new Counter("rpc_ok");
 
 export function rpc(method, body, extra = {}) {
   const headers = { "Content-Type": "application/json" };
-  if (__ENV.API_KEY) headers["X-API-Key"] = __ENV.API_KEY;
+  const key = extra.apiKey || __ENV.API_KEY;
+  if (key) headers["X-API-Key"] = key;
   const res = http.post(`${BASE_URL}/api/${method}`, JSON.stringify(body), {
     headers,
     // name = the RPC, not the URL; redirects 0: a 3xx is an answer to report, never followed (the
@@ -146,20 +149,24 @@ function jsonCode(res) {
 
 // redact is the second layer: no diagnostic leaves with the key this run uses in it.
 export function redact(text) {
-  const key = __ENV.API_KEY;
-  return key ? String(text).split(key).join("<redacted>") : String(text);
+  let out = String(text);
+  for (const key of [__ENV.API_KEY, __ENV.ADMIN_API_KEY]) {
+    if (key) out = out.split(key).join("<redacted>");
+  }
+  return out;
 }
 
-// setStock for setup(): SetStock is a read-modify-write under optimistic locking, so a
+// setStock for setup(): needs the admin role when auth is on (ADMIN_API_KEY, else API_KEY). SetStock is a read-modify-write under optimistic locking, so a
 // worker touching the same SKU at that moment answers 409 Aborted + concurrent_update —
 // "reload and retry", which for an absolute on_hand means: send it again.
 export function setStock(i, onHand) {
   let res;
   for (let attempt = 0; attempt < 5; attempt++) {
-    res = rpc("inventory.v1.InventoryService/SetStock", {
-      sku: sku(i),
-      on_hand: onHand,
-    });
+    res = rpc(
+      "inventory.v1.InventoryService/SetStock",
+      { sku: sku(i), on_hand: onHand },
+      { apiKey: __ENV.ADMIN_API_KEY }
+    );
     if (res.status !== 409) break;
   }
   return ok(res, "SetStock");

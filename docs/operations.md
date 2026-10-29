@@ -72,7 +72,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 | `reservation.js` | 旁邊要有一個 `worker`（同一個 Postgres）：每個 VU CreateOrder（1 行、qty 1）後每 `POLL`（100ms）打一次 GetReservation，404 視為「還沒消費」 | `reservation_latency`（CreateOrder 回來 → 看到 RESERVED）p95 < `RESERVE_P95`（預設 3000ms；outbox 是 polling，空輪詢之後最多再等約一個 `worker.poll_interval`（預設 200ms）才看到新事件，筆電 10 VU 實測 p50 ≈ 0.2s / p95 ≈ 0.25s；改這項之前是 library 預設的 1s，p50 ≈ 0.9s / p95 ≈ 1.1s。腳本的 `POLL`（100ms）也佔解析度，所以數字會落在 100ms 的倍數附近）、`RESERVE_TIMEOUT`（30s）內沒等到算 `reservation_timeouts`、不是 RESERVED 算 `reservation_wrong_status`，兩者都要 0 |
 
 ```bash
-task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 60s × 20 VU；BASE_URL / API_KEY / VUS / DURATION / RPS 用 env 蓋（auth 開著就帶 API_KEY，任何有效的 key 都行，不必是 admin）
+task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 60s × 20 VU；BASE_URL / API_KEY / VUS / DURATION / RPS 用 env 蓋（auth 開著就帶 API_KEY；`orders` / `reservation` 的 setup 呼叫 `SetStock`，auth 開著時要 admin role：API_KEY 本身是 admin key 就夠，否則另帶 `ADMIN_API_KEY` 只給 setup 用）
 task k6 -- ratelimit -e RPS=50    # server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50 起
 task k6 -- reservation            # server 旁要有 bin/worker 在跑（同一個 Postgres），不然每筆都 timeout
 task k6-auth-matrix               # tests/k6/auth-matrix.sh：orders / reservation 在每一種 auth 狀態各跑一次（2 VU × 5s）加上 fixtures，見下方「Auth 組合」；CI 的 k6-auth job 就是它
@@ -92,7 +92,7 @@ task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一
 
 | auth | key | orders / reservation |
 |---|---|---|
-| on（`required`） | role-less key | 支援（`auto` → 不帶 customer，只能下自己的單） |
+| on（`required`） | role-less key（setup 的 SetStock 用另帶的 `ADMIN_API_KEY`） | 支援（`auto` → 不帶 customer，只能下自己的單） |
 | on | admin key | 支援（`auto` → 不帶 customer；ListOrders 會列全部） |
 | off | 不帶 | 支援（`auto` → 帶腳本的 customer） |
 | off | 帶 key（server 忽略） | 支援（同上，不看 `API_KEY`） |
