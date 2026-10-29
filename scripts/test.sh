@@ -320,6 +320,9 @@ set -- $FAKE_SEQ; step=${!n:-err}
 case $step in
   ok)    echo '{"fake":"bundle"}' > "$bundle" ;;
   409)   echo "Error: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
+  v2)    echo "Error: signing: adding rekor v2 entry: rpc error: code = AlreadyExists desc = an equivalent entry already exists" >&2; exit 1 ;;
+  url)   echo "Error: fetching signing config: GET https://config.example/409/config returned 503" >&2; exit 17 ;;
+  exists) echo "Error: creating output: file AlreadyExists" >&2; exit 17 ;;
   empty) : > "$bundle" ;;
   none)  : ;;
   *)     echo "Error: signing: getting ID Token: 500 Internal Server Error" >&2; echo partial > "$bundle"; exit 1 ;;
@@ -333,7 +336,7 @@ sign_blob() {
   sb_bundle="$d/checksums.txt.sigstore.json"
   set +e
   sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-    COSIGN_SIGN_RETRY_DELAY=0 scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/checksums.txt" --yes 2>&1)
+    COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/checksums.txt" --yes 2>&1)
   sb_rc=$?
   set -e
   sb_tries=$(cat "$d/count" 2>/dev/null || echo 0); sb_args=$d/args
@@ -367,6 +370,25 @@ expect_eq    "sign: empty bundle is not retried"           1 "$sb_tries"
 if [ ! -s "$sb_bundle" ]; then ok; else bad "sign: empty bundle case left a non-empty bundle"; fi
 sign_blob none "none"
 if [ "$sb_rc" != 0 ]; then ok; else bad "sign: success with no bundle must fail"; fi
+sign_blob v2 "v2 ok"
+expect_eq    "sign: Rekor v2 AlreadyExists is retried"       2 "$sb_tries"
+expect_eq    "sign: Rekor v2 AlreadyExists then success"     0 "$sb_rc"
+sign_blob url "url url url"
+expect_eq    "sign: a /409/ in a URL is not a conflict"      1 "$sb_tries"
+if [ "$sb_rc" != 0 ]; then ok; else bad "sign: URL-409 failure must fail"; fi
+sign_blob exists "exists exists exists"
+expect_eq    "sign: AlreadyExists outside Rekor is not retried" 1 "$sb_tries"
+SB_EXTRA="COSIGN_SIGN_RETRIES=3" sign_blob ceiling "409 409 409 409 ok"
+if [ "$sb_rc" != 0 ]; then ok; else bad "sign: COSIGN_SIGN_RETRIES must not raise the ceiling"; fi
+expect_eq    "sign: the ceiling stays 3 attempts"            3 "$sb_tries"
+badseq="$tmp/badseq"; mkdir -p "$badseq"
+printf '#!/bin/sh\necho seq: broken >&2\nexit 127\n' > "$badseq/seq"; chmod +x "$badseq/seq"
+SB_EXTRA="PATH=$badseq:$signfake:$PATH" sign_blob noseq "ok"
+expect_eq    "sign: a broken seq does not skip the signing"  1 "$sb_tries"
+expect_eq    "sign: a broken seq still signs and exits 0"    0 "$sb_rc"
+if [ -s "$sb_bundle" ]; then ok; else bad "sign: broken seq left no bundle"; fi
+SB_EXTRA="COSIGN_SIGN_RETRY_DELAY=abc" sign_blob baddelay "409 ok"
+if [ "$sb_rc" != 0 ]; then ok; else bad "sign: a non-numeric delay must fail"; fi
 sign_blob token "409 409 409"
 case $sb_out in *secret-oidc-token*) bad "sign: the OIDC token reached the log" ;; *) ok ;; esac
 
