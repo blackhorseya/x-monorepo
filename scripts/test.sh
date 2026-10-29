@@ -263,5 +263,37 @@ fixture gatenotag
 git -C "$repo" tag -d v0.1.0 >/dev/null
 expect_match "no tag: unconditional" 'first merge releases unconditionally' "$(in_repo scripts/release-gate-pr.sh main main "feat: x")"
 
+# ── red-stage.sh ────────────────────────────────────────────────────────────────
+# Classifies `go test` output of a RED run: compile / panic / assertion / setup / pass. Exit 0 only
+# for `assertion` (the expected message was printed under a --- FAIL).
+red() { local rc=0 out; out=$(printf '%s\n' "$2" | scripts/red-stage.sh -m "$1") || rc=$?; echo "$out $rc"; }
+want_msg='want 1 call.* got 0'
+expect_eq "red: target assertion"  "assertion 0" "$(red "$want_msg" '=== RUN   TestCreate
+    order_test.go:42: find calls: want 1 call, got 0
+--- FAIL: TestCreate (0.00s)
+FAIL
+FAIL	example.com/x/ordering	0.012s')"
+expect_eq "red: setup failed before the target" "setup 1" "$(red "$want_msg" '=== RUN   TestCreate
+    order_test.go:20: seed CreateOrder: invalid customer
+--- FAIL: TestCreate (0.00s)
+FAIL
+FAIL	example.com/x/ordering	0.012s')"
+expect_eq "red: compile failure" "compile 1" "$(red "$want_msg" '# example.com/x/ordering [example.com/x/ordering.test]
+./order_test.go:9:14: undefined: NewThing
+FAIL	example.com/x/ordering [build failed]')"
+expect_eq "red: unrelated typo is still compile" "compile 1" "$(red "$want_msg" '# example.com/x/ordering
+./order.go:3:1: syntax error: unexpected }
+FAIL	example.com/x/ordering [build failed]
+FAIL')"
+expect_eq "red: panic before the assertion" "panic 1" "$(red "$want_msg" '--- FAIL: TestCreate (0.00s)
+panic: runtime error: invalid memory address or nil pointer dereference [recovered]
+FAIL	example.com/x/ordering	0.012s')"
+expect_eq "red: green run is not a RED" "pass 1" "$(red "$want_msg" 'ok  	example.com/x/ordering	0.012s')"
+expect_eq "red: message only in the RUN echo is not an assertion" "setup 1" "$(red "$want_msg" '=== RUN   want 1 call, got 0
+--- FAIL: TestCreate (0.00s)
+FAIL')"
+set +e; scripts/red-stage.sh </dev/null >/dev/null 2>&1; rc=$?; set -e
+expect_eq "red: -m is required" 64 "$rc"
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
