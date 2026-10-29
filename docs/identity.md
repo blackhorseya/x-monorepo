@@ -118,6 +118,11 @@ Account 已經是「誰」，password 不是它的欄位，而是第二種 crede
 3. `Login` RPC 發自簽 JWT（HS256，用現有 `auth.jwt.hs256_secret`，`sub` = account id）→ **interceptor 完全不用改**，它已經驗 JWT 的 sub / roles。
 4. 要加的是 issuer 那一側：token 過期、refresh / logout、console login 頁、brute-force 鎖定——都在 identity BC 與 console 內，不碰 platform / 其他 BC。
 
+## Inventory 寫入（`inventory.v1.InventoryService`）
+
+`SetStock` 與 `ExpireReservations` 都是 `server.RequireRole(auth.admin_role)`：非 admin 的 principal → `PERMISSION_DENIED`（`auth.permission_denied`），沒有 credential（`optional` 沒帶 / `required` 被攔）→ `UNAUTHENTICATED`，`auth.mode: off` 不檢查。
+`GetStock` / `ListStocks` / reservation 讀取不檢查 role。**行為變更**：以前任何 credential 都能 `SetStock`；整合（k6 setup、腳本）要改用 admin key。
+
 ## Ordering ownership（PR 3）
 
 identity 存在的業務理由：訂單屬於 principal。授權判斷在 ordering 的 **application 層**（`application/ownership.Policy`，五個 use case 呼叫它；domain 不碰 principal），

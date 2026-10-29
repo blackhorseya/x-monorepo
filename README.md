@@ -220,6 +220,9 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   擋住的 group），console 的 **Prune** 頁就是打它——alert 響了之後不用進 pod：dry run 看 NOTE、填 forget、再跑；
 bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`，Poison 頁的 BC badge 與 alert 說明都連過來），dry run 永遠從開著開始。它跑在 `http.timeout` 底下，
   所以是 dry-run / forget-group / 例行小量的入口；第一次清大 backlog 用 CLI / CronJob（逾時只是回應掉了，已刪的 batch 都已 commit，重跑無害）。
+- **Inventory 寫入要 admin**：`inventory.v1.InventoryService` 的 `SetStock`（覆寫 on-hand）與 `ExpireReservations` auth 開著時要 `auth.admin_role`
+  （非 admin → `PERMISSION_DENIED` + `auth.permission_denied`，沒帶 credential → `UNAUTHENTICATED`；`auth.mode: off` 全開）；`GetStock` / `ListStocks` /
+  reservation 的讀取不檢查 role。console 的 Stock 頁 Set 要用 admin key / JWT。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `auth.admin_role`
