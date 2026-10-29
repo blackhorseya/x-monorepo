@@ -1,7 +1,8 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
+import type { ReactElement } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
-import { useIsAdmin } from "./components/admin";
+import { AdminGate, useIsAdmin } from "./components/admin";
 import { CredentialControl } from "./components/credential";
 import { ServerVersion } from "./components/version";
 import { AccountPage } from "./routes/account";
@@ -18,16 +19,30 @@ const navLinks = [
   { to: "/orders", label: "Orders" },
   { to: "/reservations", label: "Reservations" },
   { to: "/stock", label: "Stock" },
+] as const;
+
+// The pages whose RPCs the server answers to the admin role only.
+const adminLinks = [
   { to: "/poison", label: "Poison" },
   { to: "/prune", label: "Prune" },
   { to: "/expire", label: "Expire" },
+  { to: "/accounts", label: "Accounts" },
 ] as const;
 
-// Layout: the nav shows Accounts only to a caller whose WhoAmI carries the admin role. That is
-// a courtesy, not a gate: the server checks the role on every identity RPC.
+// An admin page behind AdminGate: for anyone else the page never mounts, so it asks the server
+// nothing and shows the gate instead.
+const gated = (Page: () => ReactElement) => () => (
+  <AdminGate>
+    <Page />
+  </AdminGate>
+);
+
+// Layout: the nav shows the admin pages only to a caller the server's admin check lets through
+// (with auth.mode=off that is everyone, as on the server). That is a courtesy, not a gate: the
+// server checks the role on every admin RPC.
 function Root() {
   const isAdmin = useIsAdmin();
-  const links = isAdmin ? [...navLinks, { to: "/accounts", label: "Accounts" } as const] : navLinks;
+  const links = isAdmin ? [...navLinks, ...adminLinks] : navLinks;
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
       <header className="mb-6 flex flex-wrap items-baseline gap-6">
@@ -92,11 +107,11 @@ const stockRoute = createRoute({
 const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: AccountsPage });
 // A sibling of /accounts, like /orders/$id: the nav's prefix match lights Accounts up here too.
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: AccountPage });
-const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: PoisonPage });
+const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: gated(PoisonPage) });
 const pruneRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/prune",
-  component: PrunePage,
+  component: gated(PrunePage),
   validateSearch: (raw: Record<string, unknown>): PruneSearch => ({
     bc: typeof raw.bc === "string" && raw.bc !== "" ? raw.bc : undefined,
     days: typeof raw.days === "number" && Number.isFinite(raw.days) && raw.days > 0 ? raw.days : undefined,
@@ -107,7 +122,7 @@ const pruneRoute = createRoute({
 const expireRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/expire",
-  component: ExpirePage,
+  component: gated(ExpirePage),
   validateSearch: (raw: Record<string, unknown>): ExpireSearch => ({
     hours: typeof raw.hours === "number" && Number.isFinite(raw.hours) && raw.hours > 0 ? raw.hours : undefined,
   }),

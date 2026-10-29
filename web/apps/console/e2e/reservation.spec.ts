@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { uid } from "./uid";
+import { cellUnder, confirm, createCard, filterCard } from "./orders-ui";
 
 // The whole event chain through the UI: CreateOrder → ordering outbox → worker →
 // inventory reserves → GetReservation shows RESERVED → StockReserved → the order
@@ -24,11 +25,11 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
   await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
 
   await page.goto("/orders");
-  await page.getByLabel("Customer").first().fill(customer);
-  await page.getByLabel("SKU").first().fill(sku);
+  await createCard(page).getByLabel("Customer").fill(customer);
+  await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByLabel("Qty").fill("2");
   await page.getByRole("button", { name: "Create order" }).click();
-  await page.getByLabel("Customer").nth(1).fill(customer);
+  await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
 
   const row = page.getByRole("row").filter({ hasText: customer });
@@ -46,6 +47,7 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
   await page.goto(`/orders?customer=${customer}`);
   await expect(row.getByText("CONFIRMED")).toBeVisible();
   await row.getByRole("button", { name: "Cancel" }).click();
+  await confirm(page, "Cancel order");
   await expect(row.getByText("CANCELLED")).toBeVisible();
   await expect(row.getByText("RELEASED")).toBeVisible(WORKER);
 
@@ -68,11 +70,11 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
   await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
 
   await page.goto("/orders");
-  await page.getByLabel("Customer").first().fill(customer);
-  await page.getByLabel("SKU").first().fill(sku);
+  await createCard(page).getByLabel("Customer").fill(customer);
+  await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByLabel("Qty").fill("2");
   await page.getByRole("button", { name: "Create order" }).click();
-  await page.getByLabel("Customer").nth(1).fill(customer);
+  await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
 
   const row = page.getByRole("row").filter({ hasText: customer });
@@ -82,6 +84,7 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
   // (orders.spec.ts asserts it where no worker runs).
   await expect(row.getByText("CONFIRMED")).toBeVisible(WORKER);
   await row.getByRole("button", { name: "Complete" }).click();
+  await confirm(page, "Complete order");
   await expect(row.getByText("COMPLETED")).toBeVisible();
   // Terminal: neither button is left.
   await expect(row.getByRole("button")).toHaveCount(0);
@@ -90,8 +93,8 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
   // The stock was sold: on hand 5 → 3, nothing reserved.
   await page.goto(`/stock?prefix=${sku}`);
   const stockRow = page.getByRole("row").filter({ hasText: sku });
-  await expect(stockRow.getByRole("cell").nth(1)).toHaveText("3"); // on hand
-  await expect(stockRow.getByRole("cell").nth(2)).toHaveText("0"); // reserved
+  await expect(await cellUnder(page, stockRow, "On hand")).toHaveText("3");
+  await expect(await cellUnder(page, stockRow, "Reserved")).toHaveText("0");
 
   // The COMMITTED filter lists it.
   await page.goto(`/reservations?status=COMMITTED`);

@@ -3,6 +3,7 @@ import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
 import { subject, useJWT, useKey } from "./helpers";
 import { mintJWT } from "./jwt";
 import { uid } from "../uid";
+import { confirm, createCard, filterCard } from "../orders-ui";
 
 // The parts of the credential story auth.spec.ts leaves out: the JWT kind
 // (header shows the token's sub; expired / wrong issuer / wrong secret are
@@ -49,8 +50,8 @@ test("JWT: sub in the header, rejected variants name the reason", async ({
 test("JWT roles claim drives the admin gate", async ({ page }) => {
   await page.goto("/prune");
   await useJWT(page, mintJWT("bob"));
-  await page.getByRole("button", { name: "Dry run", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("auth.permission_denied");
+  await expect(page.getByText("Admin role required")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dry run", exact: true })).toHaveCount(0);
 
   await useJWT(page, mintJWT("carol", { roles: ["admin"] }));
   await page.getByRole("button", { name: "Dry run", exact: true }).click();
@@ -70,7 +71,7 @@ test("mutations carry the credential set after the page loaded", async ({
   // Anonymous Create is refused by the server, and says so next to the form.
   // (Nobody is known to default to, so the field stays locked: the answer is the
   // server's, not a customer id's.)
-  await expect(page.getByLabel("Customer").first()).toBeDisabled();
+  await expect(createCard(page).getByLabel("Customer")).toBeDisabled();
   await page.getByRole("button", { name: "Create order" }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "auth.unauthenticated" })
@@ -81,16 +82,16 @@ test("mutations carry the credential set after the page loaded", async ({
   // Its owner is the customer, so the form does not offer to name one.
   await useKey(page, OPS_KEY);
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(page.getByLabel("Customer").first()).toBeDisabled();
+  await expect(createCard(page).getByLabel("Customer")).toBeDisabled();
 
   // Naming a customer is the admin's (ordering on behalf of someone).
   await useKey(page, ADMIN_KEY);
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(page.getByLabel("Customer").first()).toBeEnabled();
-  await page.getByLabel("Customer").first().fill(id);
+  await expect(createCard(page).getByLabel("Customer")).toBeEnabled();
+  await createCard(page).getByLabel("Customer").fill(id);
   await page.getByRole("button", { name: "Create order" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await page.getByLabel("Customer").nth(1).fill(id);
+  await filterCard(page).getByLabel("Customer").fill(id);
   await page.getByRole("button", { name: "Filter" }).click();
   const row = page.getByRole("row").filter({ hasText: id });
   await expect(row).toHaveCount(1);
@@ -100,6 +101,7 @@ test("mutations carry the credential set after the page loaded", async ({
   // filtered by another customer's id, which a role-less caller may not do).
   await useJWT(page, mintJWT("dave", { roles: ["admin"] }));
   await row.getByRole("button", { name: "Cancel" }).click();
+  await confirm(page, "Cancel order");
   await expect(row.getByText("CANCELLED")).toBeVisible();
 
   // Clear (the header's; the filter form has its own): the next write is anonymous again.
@@ -110,17 +112,16 @@ test("mutations carry the credential set after the page loaded", async ({
   ).toBeVisible();
 });
 
-test("SetStock under auth: refused anonymous, ok with a key", async ({
+test("SetStock under auth: no form anonymous, ok with an admin key", async ({
   page,
 }) => {
   const sku = `E2E-AUTH-${uid()}`;
   await page.goto("/stock");
-  await page.getByLabel("SKU", { exact: true }).fill(sku);
-  await page.getByLabel("On hand").fill("3");
-  await page.getByRole("button", { name: "Set", exact: true }).click();
+  // Anonymous is not admin: the list is refused (alert) and there is no Set form to try.
   await expect(
     page.getByRole("alert").filter({ hasText: "auth.unauthenticated" }).first()
   ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Set", exact: true })).toHaveCount(0);
 
   await useKey(page, ADMIN_KEY);
   await expect(page.getByRole("alert")).toHaveCount(0);

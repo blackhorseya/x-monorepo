@@ -35,7 +35,7 @@ test("list: Complete asks first, says it cannot be undone, and declining sends n
   await row.getByRole("button", { name: "Complete" }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText(/cannot be undone/i);
-  await expect(dialog).toContainText(/committed/i);
+  await expect(dialog).toContainText(/commits the reservation/i);
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect(completes).toEqual([]);

@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useResetOnCredentialChange } from "../auth";
+import { ConfirmButton } from "../components/confirm";
 import { useCanChooseCustomer } from "../components/customer";
 import { describe, isUnauthenticated, orders } from "../client";
 import { useOrderReservations, type RowReservation } from "../orderReservations";
@@ -276,14 +277,25 @@ function OrderRow({ order, reservation, reservationError }: { order: Order; rese
       </TableCell>
       <TableCell className="space-x-2 text-right">
         {confirmed && (
-          <Button size="sm" onClick={() => complete.mutate()} disabled={busy}>
-            Complete
-          </Button>
+          <ConfirmButton
+            label="Complete"
+            variant="default"
+            title="Complete this order?"
+            description="This cannot be undone: inventory commits the reservation, so the stock is sold, not just held."
+            action="Complete order"
+            onConfirm={() => complete.mutateAsync()}
+            disabled={busy}
+          />
         )}
         {open && (
-          <Button variant="outline" size="sm" onClick={() => cancel.mutate()} disabled={busy}>
-            Cancel
-          </Button>
+          <ConfirmButton
+            label="Cancel"
+            title="Cancel this order?"
+            description="The order is cancelled and inventory releases what it reserved."
+            action="Cancel order"
+            onConfirm={() => cancel.mutateAsync()}
+            disabled={busy}
+          />
         )}
         {cancel.isError && <p className="text-xs text-destructive">{describe(cancel.error)}</p>}
         {complete.isError && <p className="text-xs text-destructive">{describe(complete.error)}</p>}

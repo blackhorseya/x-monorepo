@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useIsAdmin } from "../components/admin";
 import { inventory } from "../client";
 import { keys, stocksQuery } from "../queries";
 import { ErrorAlert, Field } from "./orders";
@@ -18,6 +19,8 @@ export type StockSearch = { prefix?: string; reserved?: boolean };
 
 export function StockPage() {
   const qc = useQueryClient();
+  // Setting stock is the admin's; anyone else gets the list only. A courtesy: the server decides.
+  const isAdmin = useIsAdmin();
   const search = useSearch({ from: "/stock" });
   const navigate = useNavigate({ from: "/stock" });
   const prefix = search.prefix ?? "";
@@ -37,29 +40,31 @@ export function StockPage() {
 
   return (
     <div className="grid gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Set stock</CardTitle>
-          <CardDescription>
-            On hand is a count, not a delta, and creates the SKU when unknown; it cannot go below what pending orders
-            hold. Reserved changes as orders are created and cancelled.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="flex flex-wrap items-end gap-2">
-            <Field label="SKU" className="w-40">
-              <Input value={sku} onChange={(e) => setSku(e.target.value)} />
-            </Field>
-            <Field label="On hand" className="w-28">
-              <Input type="number" value={onHand} onChange={(e) => setOnHand(Number(e.target.value))} />
-            </Field>
-            <Button onClick={() => set.mutate()} disabled={set.isPending}>
-              Set
-            </Button>
-          </div>
-          {set.isError && <ErrorAlert error={set.error} />}
-        </CardContent>
-      </Card>
+      {isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Set stock</CardTitle>
+            <CardDescription>
+              On hand is a count, not a delta, and creates the SKU when unknown; it cannot go below what pending orders
+              hold. Reserved changes as orders are created and cancelled.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="flex flex-wrap items-end gap-2">
+              <Field label="SKU" className="w-40">
+                <Input value={sku} onChange={(e) => setSku(e.target.value)} />
+              </Field>
+              <Field label="On hand" className="w-28">
+                <Input type="number" value={onHand} onChange={(e) => setOnHand(Number(e.target.value))} />
+              </Field>
+              <Button onClick={() => set.mutate()} disabled={set.isPending}>
+                Set
+              </Button>
+            </div>
+            {set.isError && <ErrorAlert error={set.error} />}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -116,16 +121,20 @@ export function StockPage() {
                 <StockRow
                   key={s.sku}
                   stock={s}
-                  onEdit={() => {
-                    setSku(s.sku);
-                    setOnHand(s.onHand);
-                  }}
+                  onEdit={
+                    isAdmin
+                      ? () => {
+                          setSku(s.sku);
+                          setOnHand(s.onHand);
+                        }
+                      : undefined
+                  }
                 />
               ))}
               {list.isSuccess && stocks.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    {prefix !== "" || onlyReserved ? "No SKU matches the filter." : "No stock yet — set one above."}
+                    {prefix !== "" || onlyReserved ? "No SKU matches the filter." : isAdmin ? "No stock yet — set one above." : "No stock yet."}
                   </TableCell>
                 </TableRow>
               )}
@@ -142,7 +151,7 @@ export function StockPage() {
   );
 }
 
-function StockRow({ stock, onEdit }: { stock: Stock; onEdit: () => void }) {
+function StockRow({ stock, onEdit }: { stock: Stock; onEdit?: () => void }) {
   const updated = stock.updateTime ? new Date(Number(stock.updateTime.seconds) * 1000) : undefined;
   return (
     <TableRow>
@@ -156,9 +165,11 @@ function StockRow({ stock, onEdit }: { stock: Stock; onEdit: () => void }) {
       </TableCell>
       <TableCell className="text-xs text-muted-foreground">{updated?.toLocaleString()}</TableCell>
       <TableCell className="text-right">
-        <Button variant="outline" size="sm" onClick={onEdit}>
-          Edit
-        </Button>
+        {onEdit && (
+          <Button variant="outline" size="sm" onClick={onEdit}>
+            Edit
+          </Button>
+        )}
       </TableCell>
     </TableRow>
   );

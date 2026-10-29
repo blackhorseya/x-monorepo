@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { uid } from "./uid";
+import { cellUnder, confirm, createCard, filterCard } from "./orders-ui";
 
 // The server keeps orders in memory for the whole run and the tests run in
 // parallel, so each one works under its own customer id and filters by it.
@@ -25,18 +26,18 @@ test("create, see, cancel an order", async ({ page }) => {
     await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
   }
   await page.goto("/orders");
-  await page.getByLabel("Customer").first().fill(id);
-  await page.getByLabel("SKU").first().fill(sku);
+  await createCard(page).getByLabel("Customer").fill(id);
+  await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByRole("button", { name: "Create order" }).click();
 
-  await page.getByLabel("Customer").nth(1).fill(id);
+  await filterCard(page).getByLabel("Customer").fill(id);
   await page.getByRole("button", { name: "Filter" }).click();
   await expect(page).toHaveURL(new RegExp(`customer=${id}`));
 
   const row = page.getByRole("row").filter({ hasText: id });
   await expect(row).toHaveCount(1);
-  // The order's own status cell (4th): the reservation cell can show a CANCELLED badge too.
-  const status = row.getByRole("cell").nth(3);
+  // The order's own status cell (under "Order"): the reservation cell can show a CANCELLED badge too.
+  const status = await cellUnder(page, row, "Order");
   // With a worker the order may already be CONFIRMED (StockReserved consumed) by now.
   await expect(status).toHaveText(withDB ? /^(PENDING|CONFIRMED)$/ : "PENDING");
   await expect(row.getByText("25.98 USD")).toBeVisible(); // 2 × 1299 minor USD
@@ -49,6 +50,7 @@ test("create, see, cancel an order", async ({ page }) => {
   // e2e/reservation.spec.ts covers.
 
   await row.getByRole("button", { name: "Cancel" }).click();
+  await confirm(page, "Cancel order");
   await expect(status).toHaveText("CANCELLED");
   await expect(row.getByRole("button", { name: "Cancel" })).toHaveCount(0);
 
@@ -60,7 +62,7 @@ test("create, see, cancel an order", async ({ page }) => {
 
 test("validation failures surface the field", async ({ page }) => {
   await page.goto("/orders");
-  await page.getByLabel("Customer").first().fill(customer("invalid"));
+  await createCard(page).getByLabel("Customer").fill(customer("invalid"));
   await page.getByLabel("Qty").fill("0");
   await page.getByRole("button", { name: "Create order" }).click();
   const alert = page.getByRole("alert");
