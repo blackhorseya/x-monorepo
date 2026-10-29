@@ -13,6 +13,10 @@ var (
 	ErrInvalidCursor   = kernel.NewError(kernel.KindInvalidArgument, "account.invalid_cursor", "page token does not continue a listing")
 	ErrAlreadyDisabled = kernel.NewError(kernel.KindFailedPrecondition, "account.already_disabled", "account is already disabled")
 	ErrAlreadyActive   = kernel.NewError(kernel.KindFailedPrecondition, "account.already_active", "account is already active")
+	// ErrLastAdmin refuses a change that would leave no ACTIVE admin account
+	// holding a usable key. The message names nobody: the caller may not be
+	// allowed to know who the other admins are.
+	ErrLastAdmin = kernel.NewError(kernel.KindFailedPrecondition, "identity.last_admin", "operation would leave no active admin with a usable api key")
 	// ErrDisabled is why a credential of a disabled account does not resolve.
 	ErrDisabled  = kernel.NewError(kernel.KindFailedPrecondition, "account.disabled", "account is disabled")
 	ErrNotFound  = kernel.NewError(kernel.KindNotFound, "account.not_found", "account not found")
