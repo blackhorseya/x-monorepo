@@ -143,8 +143,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       # Keyless signing (.goreleaser.yaml signs / docker_signs, and the console step below):
       # the certificate's identity is this workflow at refs/heads/main, the issuer GitHub's.
-      # no floating v4 tag exists: @v4 fails to resolve
+      # no floating v4 tag exists: @v4 fails to resolve. cosign-release is pinned above the
+      # installer's default (v3.0.6): sign-blob there fails the whole release on Rekor's 409 "equivalent
+      # entry already exists" (v0.36.0 attempt 1, #195); v3.1.4's sigstore-go fetches that entry instead
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           version: "~> v2.18"
@@ -224,8 +228,10 @@ jobs:
       packages: read   # the packages are public; the login below only lifts ghcr's anonymous rate limit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # same pin as build above and ci.yml's release-snapshot
+      # same pin and cosign-release as build above and ci.yml's release-snapshot
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io

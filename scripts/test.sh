@@ -264,6 +264,43 @@ fixture gatenotag
 git -C "$repo" tag -d v0.1.0 >/dev/null
 expect_match "no tag: unconditional" 'first merge releases unconditionally' "$(in_repo scripts/release-gate-pr.sh main main "feat: x")"
 
+# ── cosign-smoke.sh ─────────────────────────────────────────────────────────────
+# Against a fake cosign (no network): sign-blob writes the --bundle file, verify-blob only checks
+# the bundle is there and non-empty. FAKE_SKIP_SIGN_N=<n> makes the n-th sign-blob exit 0 without
+# writing anything — a cosign that "succeeds" on the equivalent-entry 409 but loses the bundle
+# (#195). The smoke's three signs are: checksums.txt, then the artifact signed twice (3rd = the
+# one that meets the 409). A bundle left over from the 1st sign of that artifact must not pass.
+fakebin="$tmp/cosign-fake"; mkdir -p "$fakebin"
+cat > "$fakebin/cosign" <<'FAKE'
+#!/usr/bin/env bash
+case $1 in
+  version) echo "GitVersion:    vfake" ;;
+  generate-key-pair) : > cosign.key; : > cosign.pub ;;
+  import-key-pair) : > import-cosign.key; : > import-cosign.pub ;;
+  sign-blob)
+    n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_COUNT"
+    for a in "$@"; do case $a in --bundle=*) bundle=${a#--bundle=} ;; esac; done
+    [ "$n" = "${FAKE_SKIP_SIGN_N:-0}" ] || echo '{"fake":"bundle"}' > "$bundle" ;;
+  verify-blob)
+    while [ $# -gt 0 ]; do [ "$1" = --bundle ] && bundle=$2; shift; done
+    [ -s "$bundle" ] || { echo "no bundle" >&2; exit 1; } ;;
+  *) exit 2 ;;
+esac
+FAKE
+chmod +x "$fakebin/cosign"
+smoke() { # smoke <skip-sign-n> -> prints "<exit> <FAIL line, if any>"
+  fixture "smoke$1"; cp "$src/.goreleaser.yaml" "$repo/"
+  local out rc=0
+  out=$(cd "$repo" && PATH="$fakebin:$PATH" FAKE_COUNT="$tmp/count$1" FAKE_SKIP_SIGN_N=$1 scripts/cosign-smoke.sh 2>&1) || rc=$?
+  echo "$rc $(printf '%s' "$out" | grep -m1 '^FAIL' || true)"
+}
+if python3 -c 'import yaml' 2>/dev/null; then
+  expect_match "smoke: every sign writes a bundle passes"            '^0 $' "$(smoke 0)"
+  expect_match "smoke: 2nd sign of the artifact leaves no bundle fails" '^1 FAIL: .*bundle' "$(smoke 3)"
+else
+  echo "skip: cosign-smoke cases need python3 -c 'import yaml'"
+fi
+
 # ── red-stage.sh ────────────────────────────────────────────────────────────────
 # Classifies `go test` output of a RED run: compile / panic / assertion / setup / pass. Exit 0 only
 # for `assertion` (the expected message was printed under a --- FAIL).
