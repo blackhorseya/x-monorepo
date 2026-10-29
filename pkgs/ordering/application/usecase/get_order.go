@@ -5,6 +5,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/mapper"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
@@ -12,10 +13,11 @@ import (
 // GetOrder loads a single order.
 type GetOrder struct {
 	repo order.Repository
+	own  *ownership.Policy
 }
 
-func NewGetOrder(repo order.Repository) *GetOrder {
-	return &GetOrder{repo: repo}
+func NewGetOrder(repo order.Repository, own *ownership.Policy) *GetOrder {
+	return &GetOrder{repo: repo, own: own}
 }
 
 func (uc *GetOrder) Execute(c context.Context, in dto.GetOrderInput) (*dto.OrderOutput, error) {

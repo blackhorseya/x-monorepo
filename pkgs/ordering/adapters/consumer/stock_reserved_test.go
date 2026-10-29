@@ -11,6 +11,7 @@ import (
 	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
@@ -22,8 +23,8 @@ import (
 func TestStockReservedHandler(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
-	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{})
-	get := usecase.NewGetOrder(repo)
+	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"))
+	get := usecase.NewGetOrder(repo, ownership.New("admin"))
 	cancel := usecase.NewCancelOrder(repo, noEvents{}, clock{})
 	h := consumer.NewStockReservedHandler(usecase.NewConfirmOrder(repo, noEvents{}, clock{}))
 

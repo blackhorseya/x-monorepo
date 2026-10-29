@@ -6,6 +6,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/mapper"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/pagination"
@@ -21,10 +22,11 @@ const (
 // verified here, so every adapter (rpc, consumer, cli) shares one contract.
 type ListOrders struct {
 	repo order.Repository
+	own  *ownership.Policy
 }
 
-func NewListOrders(repo order.Repository) *ListOrders {
-	return &ListOrders{repo: repo}
+func NewListOrders(repo order.Repository, own *ownership.Policy) *ListOrders {
+	return &ListOrders{repo: repo, own: own}
 }
 
 // pageToken is the payload behind the opaque token. It carries the filters it

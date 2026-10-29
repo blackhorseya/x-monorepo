@@ -9,6 +9,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/mapper"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -22,10 +23,11 @@ type CreateOrder struct {
 	events port.EventPublisher
 	ids    port.IDGenerator
 	clock  port.Clock
+	own    *ownership.Policy
 }
 
-func NewCreateOrder(repo order.Repository, events port.EventPublisher, ids port.IDGenerator, clock port.Clock) *CreateOrder {
-	return &CreateOrder{repo: repo, events: events, ids: ids, clock: clock}
+func NewCreateOrder(repo order.Repository, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy) *CreateOrder {
+	return &CreateOrder{repo: repo, events: events, ids: ids, clock: clock, own: own}
 }
 
 func (uc *CreateOrder) Execute(c context.Context, in dto.CreateOrderInput) (*dto.OrderOutput, error) {

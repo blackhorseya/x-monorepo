@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
@@ -33,7 +34,7 @@ func TestConfirmThenCancel(t *testing.T) {
 	repo := memory.NewOrderRepository()
 	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock)
+	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
 	confirm := usecase.NewConfirmOrder(repo, rec, clock)
 	cancel := usecase.NewCancelOrder(repo, rec, clock)
 
@@ -81,7 +82,7 @@ func TestCompleteOrder(t *testing.T) {
 	repo := memory.NewOrderRepository()
 	clock := fixedClock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock)
+	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
 	confirm := usecase.NewConfirmOrder(repo, rec, clock)
 	complete := usecase.NewCompleteOrder(repo, rec, clock)
 	cancel := usecase.NewCancelOrder(repo, rec, clock)
@@ -133,8 +134,8 @@ func TestCreateGetCancel(t *testing.T) {
 	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
 
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock)
-	get := usecase.NewGetOrder(repo)
+	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
+	get := usecase.NewGetOrder(repo, ownership.New("admin"))
 	cancel := usecase.NewCancelOrder(repo, rec, clock)
 
 	created, err := create.Execute(c, dto.CreateOrderInput{

@@ -20,6 +20,7 @@ func TestToConnectError(t *testing.T) {
 	}{
 		{"kernel kind", fmt.Errorf("wrap: %w", kernel.NewError(kernel.KindNotFound, "x.not_found", "nope")), connect.CodeNotFound, "x.not_found"},
 		{"conflict", kernel.NewError(kernel.KindConflict, "x.dup", "dup"), connect.CodeAlreadyExists, "x.dup"},
+		{"permission denied", kernel.NewError(kernel.KindPermissionDenied, "x.denied", "no"), connect.CodePermissionDenied, "x.denied"},
 		{"optimistic lock loss", fmt.Errorf("save x: %w", fmt.Errorf("x: stale: %w", kernel.ErrConcurrentUpdate)), connect.CodeAborted, server.ConcurrentUpdateCode},
 		{"unknown hides message", errors.New("dial tcp: secret host"), connect.CodeInternal, ""},
 	} {
