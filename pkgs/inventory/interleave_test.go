@@ -6,13 +6,17 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -185,6 +189,40 @@ func TestCommitStock_ExpiredUnderneathWithoutRereserve(t *testing.T) {
 	out, err = e.commit(e.stocks, "o-race-1")
 	if err != nil || out.Status != "COMMITTED" {
 		t.Fatalf("retry = %+v, %v; want COMMITTED", out, err)
+	}
+	if s := e.stockNow(t); s.OnHand() != 0 || s.Reserved() != 0 {
+		t.Fatalf("stock = on_hand %d reserved %d; want 0/0", s.OnHand(), s.Reserved())
+	}
+}
+
+// The same race as TestCommitStock_ExpiredUnderneathWithoutRereserve, through
+// the consumer entry point: the OrderCompleted handler must not turn it into a
+// drop (the eventbus would never deliver the message again, order COMPLETED
+// and nothing sold). A plain error is retried, and the retry sells.
+func TestOrderCompletedHandler_ExpiredUnderneathIsRetried(t *testing.T) {
+	e := newRaceEnv(t)
+	interleaved := &beforeFind{Repository: e.stocks}
+	interleaved.hook = func() { e.expire(t) }
+	payload, err := proto.Marshal(&orderingv1.OrderCompleted{OrderId: "o-race-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := func(stocks stock.Repository) error {
+		commit := inventory.ProvideCommitStock(e.reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec)
+
+		return consumer.NewOrderCompletedHandler(commit).Handle(e.c, payload)
+	}
+
+	err = handle(interleaved)
+	if err == nil || errors.Is(err, consumer.ErrDrop) || !errors.Is(err, kernel.ErrConcurrentUpdate) {
+		t.Fatalf("handler = %v, want a retryable error (not ErrDrop)", err)
+	}
+	if err := handle(e.stocks); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	got, err := e.reservations.FindByOrderID(e.c, "o-race-1")
+	if err != nil || got.Status() != reservation.StatusCommitted {
+		t.Fatalf("reservation = %v, %v; want COMMITTED", got, err)
 	}
 	if s := e.stockNow(t); s.OnHand() != 0 || s.Reserved() != 0 {
 		t.Fatalf("stock = on_hand %d reserved %d; want 0/0", s.OnHand(), s.Reserved())

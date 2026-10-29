@@ -71,6 +71,10 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 4. COMMIT_SHORT 列留著當稽核紀錄，不要刪；alert 看的是新增量，所以不必手動解除，最後一筆之後一小時自動恢復。累積筆數在「Reservations by status」panel。
 5. 若頻繁出現：expire TTL（Helm `expire.olderThan`）可能比訂單從 CONFIRMED 到完成的時間還短，TTL 在殺還沒完成的單——先調長 TTL，再看 EXPIRED 筆數有沒有降下來。
 
+並發語意（為什麼偶爾看到 `ABORTED` 或 consumer 重試）：reservation 沒有 version 欄位，`Update` 是 `WHERE status = <讀到的 status>` 的 compare-and-swap，輸的一方拿 `reservation.ErrStale`（wrap `kernel.ErrConcurrentUpdate`）；沒有 migration，轉移皆單向所以不會 ABA。
+- consumer（`OrderCompleted` / `OrderCancelled`）：視為可重試的競態，eventbus 重送後依最新 status 走——例如 sweep 剛好先 expire，`OrderCompleted` 重試後走 EXPIRED 重扣（`COMMITTED` 或 `COMMIT_SHORT`）。reservation 在讀取後被改、stock 之後才載入而在 stock 層失敗（`commit_exceeds_reserved` 之類）時，use case 會重讀 reservation，status 已變就同樣回報 `ErrStale`，不會被當成終態 drop。
+- `worker expire` / `ExpireReservations` RPC：一批一個交易，批內任何一筆撞版（stock version 或 reservation status）整批 rollback，CLI 下次排程重跑、RPC 回 `ABORTED` 重送即可。熱門 SKU 或剛好同時完成的訂單會讓整批重跑、延遲同批其他 reservation 的過期；持續撞版就調小 `--limit`。
+
 ## Load test（k6）
 
 `tests/k6/` 是四個對著真的 `rpc` 打的 k6 腳本（Connect over JSON，`lib.js` 的 `rpc()` 按 method 打 tag，`API_KEY` 有設就帶 `X-API-Key`；`orders.js` / `reservation.js` 下單時誰指定 customer 見下方「Auth 組合」）：

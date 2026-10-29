@@ -131,5 +131,7 @@ func staleIfMoved(c context.Context, repo reservation.Repository, r *reservation
 		return cause
 	}
 
-	return fmt.Errorf("reservation %s moved %s -> %s while it was handled: %w: %w", r.OrderID(), r.LoadedStatus(), cur.Status(), reservation.ErrStale, cause)
+	// cause is text only: wrapping it too would let the consumer find its
+	// kernel.Error and drop the message instead of retrying.
+	return fmt.Errorf("reservation %s moved %s -> %s while it was handled (%s): %w", r.OrderID(), r.LoadedStatus(), cur.Status(), cause.Error(), reservation.ErrStale)
 }
