@@ -143,3 +143,71 @@ func TestErrStaleIsConcurrentUpdate(t *testing.T) {
 		t.Fatal("ErrStale must not be a kernel.Error")
 	}
 }
+
+// Money's zero value is not the only way to hold a Money that kernel.NewMoney
+// would have refused: Multiply(-1) goes negative, ZeroMoney takes any string.
+// The aggregate must refuse them all, on every path that stores a price.
+func TestPriceInvariants(t *testing.T) {
+	negative := usd(t, 100).Multiply(-1)
+	for name, price := range map[string]kernel.Money{
+		"negative via Multiply": negative,
+		"lower case currency":   kernel.ZeroMoney("usd"),
+		"long currency":         kernel.ZeroMoney("BOGUS"),
+		"short currency":        kernel.ZeroMoney("US"),
+	} {
+		if _, err := product.New("A", "Apple", price, now); !errors.Is(err, product.ErrInvalidPrice) {
+			t.Errorf("New with %s: %v, want ErrInvalidPrice", name, err)
+		}
+		if _, err := product.Reconstitute(product.ReconstituteParams{SKU: "A", Name: "Apple", Price: price, Active: true}); !errors.Is(err, product.ErrInvalidPrice) {
+			t.Errorf("Reconstitute with %s: %v, want ErrInvalidPrice", name, err)
+		}
+		p, _ := product.New("A", "Apple", usd(t, 1), now)
+		if err := p.Reprice(price, now.Add(time.Minute)); !errors.Is(err, product.ErrInvalidPrice) {
+			t.Errorf("Reprice with %s: %v, want ErrInvalidPrice", name, err)
+		}
+		if p.Price() != usd(t, 1) {
+			t.Errorf("a refused Reprice with %s changed the price to %v", name, p.Price())
+		}
+	}
+}
+
+// The currency must be an assigned ISO 4217 code, not just three capital letters.
+func TestUnassignedCurrencyIsRefused(t *testing.T) {
+	const code = "product.unsupported_currency"
+	hasCode := func(err error) bool {
+		var ke *kernel.Error
+		return errors.As(err, &ke) && ke.Code() == code
+	}
+	for _, c := range []string{"AAA", "ZZZ", "QQQ"} {
+		m, err := kernel.NewMoney(1, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := product.New("A", "Apple", m, now); !hasCode(err) {
+			t.Errorf("New with %s: %v, want %s", c, err, code)
+		}
+		p, _ := product.New("A", "Apple", usd(t, 1), now)
+		if err := p.Reprice(m, now); !hasCode(err) {
+			t.Errorf("Reprice with %s: %v, want %s", c, err, code)
+		}
+	}
+	for _, c := range []string{"USD", "EUR", "JPY", "TWD"} {
+		m, _ := kernel.NewMoney(1, c)
+		if _, err := product.New("A", "Apple", m, now); err != nil {
+			t.Errorf("New with %s: %v", c, err)
+		}
+	}
+}
+
+// Every whitespace Go's strings.TrimSpace removes makes a blank name; a zero
+// width space is not whitespace to it.
+func TestBlankNames(t *testing.T) {
+	for _, name := range []string{"\t", "\n", "\v", "\f", "\r", " ", "\u0085", " ", " ", " ", " ", " ", " ", " ", "　", " \t　 "} {
+		if _, err := product.New("A", name, usd(t, 1), now); !errors.Is(err, product.ErrInvalidName) {
+			t.Errorf("name %q: %v, want ErrInvalidName", name, err)
+		}
+	}
+	if _, err := product.New("A", "​", usd(t, 1), now); err != nil {
+		t.Errorf("zero width space: %v", err)
+	}
+}

@@ -150,3 +150,19 @@ func TestCatalog_RoundTrip(t *testing.T) {
 	_, err = cl.DeactivateProduct(c, connect.NewRequest(&catalogv1.DeactivateProductRequest{Sku: "NOPE"}))
 	wantConnectCode(t, err, connect.CodeNotFound, "product.not_found")
 }
+
+// ISO 4217 means an assigned code: three capital letters that no currency uses
+// pass protovalidate but are refused by the catalog.
+func TestCatalog_UnassignedCurrency(t *testing.T) {
+	c := context.Background()
+	cl := startCatalog(t, config.Auth{Mode: config.AuthOff})("")
+
+	_, err := cl.UpsertProduct(c, upsertReq("A", 100, "ZZZ"))
+	wantConnectCode(t, err, connect.CodeInvalidArgument, "product.unsupported_currency")
+	if _, err = cl.GetProduct(c, connect.NewRequest(&catalogv1.GetProductRequest{Sku: "A"})); err == nil {
+		t.Fatal("a refused upsert created the product")
+	}
+	if _, err = cl.UpsertProduct(c, upsertReq("A", 100, "TWD")); err != nil {
+		t.Fatalf("assigned currency: %v", err)
+	}
+}
