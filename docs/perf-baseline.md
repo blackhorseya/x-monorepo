@@ -20,13 +20,24 @@ RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變�
   - **reserve**：每秒 100 張單、30 秒（open model），每張 CreateOrder 後輪詢 GetReservation（`POLL`=50ms）到 RESERVED。兩個延遲，名稱即定義：`order → RESERVED` 從**送出 CreateOrder 之前**算到看到 RESERVED（端到端）；`CreateOrder returned → RESERVED` 從 CreateOrder 回傳後算起（worker 負責的那段）。輪詢間隔使每筆觀測值最多晚 50ms（平均約 25ms）看到 RESERVED，是量測誤差而非延遲的一部分；不要把兩個分布的 percentile 相加或相減當修正值。
 - 吞吐的分母：第一個 iteration 開始到最後一次 CreateOrder 回傳（k6 腳本自己記的 `bench_iter_start_ms` / `bench_create_end_ms` 的 min / max），不用 k6 Counter 的 rate（它的分母是整個 test，包含 setup() 的 SetStock）。
 - 可重跑的輸入：SKU 由 `SEED`（預設 1，記在 `result.json` 的 `parameters.seed`）和 iteration 序號決定的 PRNG（mulberry32）選，不用 `Math.random`；同參數、單 VU 時序列逐筆相同，多 VU 時交錯順序由排程決定。
-- 輸出：`result.json`（機器可讀：每個指標的 median / min / max / CV / 各 run 數值，加上 commit、Go / Postgres / k6 版本、CPU、OS、load average、參數）、`summary.md`、以及每個 run 的 k6 `--summary-export` 與 log。
-- API key：腳本送一把假 key（auth off 會忽略），`bench.sh` 結束時 grep 輸出目錄所有檔案，找到就整個 bench 失敗；k6 腳本沿用 `lib.js` 的規則（不印 body / URL，`systemTags` 不含 `url`、`error`）。
-- 量測工具本身的測試：`task k6-bench-test`（報告定義的單元測試、對 stub server 的 fixture：seed 可重現、端到端延遲含 CreateOrder、吞吐不被 setup 稀釋、sentinel 資料庫不會被 drop）；不進 CI。
+- **哪些 attempt 算數，由工具依事前固定的規則判定**，不是看過數字的人：量測期間每 5 秒取樣一次 1 分鐘 load average，任何一個樣本超過 `MAX_LOAD_PER_CORE`（預設 1.0）× 核心數，該 attempt 就是 invalid。attempt 一直跑到有 `RUNS`（3）個 valid 或達 `MAX_ATTEMPTS`（預設 6）；**所有 attempt 的檔案都留在輸出目錄**，統計只用 valid 的，invalid 的列在 `summary.md` / `result.json` 的 attempts 表；湊不滿 3 個 valid 就在 summary 最上面印「NOT A VALID BASELINE」並以 exit 3 結束。門檻 1.0 的意思：load average 含 bench 自己的 rpc / worker / k6 / Postgres，超過核心數代表可執行的工作比核心還多；這個數字是預設值，不是由實測結果推導的，要換就在跑## Baseline
 
-## Baseline
+**目前沒有符合規則的 valid baseline。** 下面的表是探索性結果：在共用的開發機上、條件受限、而且挑選過程有事後成分（見 attempt 清單），**不是乾淨的 baseline**，只能當量級參考，不要拿來判定優化有沒有效。要得到 valid 的數字，在機器安靜時重跑 `task k6-bench`；工具會自己判定。
 
-量測條件：程式 commit `1675b0d`（baseline 之後只多了記錄 load average 的環境欄位，不影響量測；= main `e47307b` 加上本 PR 的 `tests/k6`、`Taskfile.yml`，沒有 runtime 程式碼差異）、Go 1.27.1、Postgres 17.9、k6 v2.2.0、Apple M1 Max（10 核）、Darwin 25.6.0。**共用的開發機**，其他程式同時在跑：1 分鐘 load average 開始 6.11、結束 8.54（10 核）；同一台機器在 load 約 14 時跑的一次，reserve 延遲 p95 到 7 秒、丟了數百個 iteration，所以數字只能在同一台、相近 load 下比。3 次 run，下表是中位數、min–max 與變異係數（stdev/mean）。原始輸出：`result.json` 在 `bin/k6-bench/<stamp>/`；本次的副本 `/Users/sean/.agend/workspace/x-monorepo-worker-45/perf-baseline-20261029T221617Z/`。
+### 所有 attempt（都保留，副本在 `/Users/sean/.agend/workspace/x-monorepo-worker-45/`）
+
+| 目錄 | 時間（UTC） | 程式 | load（1m） | 狀態 |
+|---|---|---|---|---|
+| `perf-baseline-20261029T213621Z` | 21:36–21:4x | PR head a4d6720 | 未取樣 | 舊定義（drain、延遲、吞吐的算法後來被 review 判定有誤），只供溯源，數字已作廢 |
+| `perf-baseline-20261029T220610Z-DISCARDED` | 22:06–22:12 | 1675b0d | 當時未取樣；結束後 `uptime` 約 14 | **事後棄用**：先看到 reserve p95 約 7 秒、丟 446 個 iteration，才去查 load，理由是看過結果後才決定的 |
+| `perf-baseline-20261029T221617Z` | 22:16–22:22 | 1675b0d | 只有起訖兩點：6.11 → 8.54 | 下表來源。跑之前我寫了「等 load < 6」的等待迴圈，**這個門檻是看過上一組之後才訂的**，而且實際開始時是 6.11；中間沒有取樣，無法證明整段符合任何規則 |
+| `perf-baseline-r3-attempts/out`（attempt 1–6） | 22:48–22:59 | e0219ec（規則出現後的第一次） | 每個 attempt 的最大值 23.08 / 19.19 / 15.84 / 15.28 / 18.32 / 25.71（上限 10.0） | **6 組全部 invalid**，工具印「NOT A VALID BASELINE」 |
+
+最後一列是第一次在規則之下跑：這台機器當時的 load 15–26，其他程式同時在跑，一組都沒達標。它的統計表（不是 baseline）顯示 load 高時尾端會差多遠：reserve 端到端 p95 的中位數 4360ms（min–max 277–14365ms），而下表（load 較低的一組）是 308ms。
+
+### 探索性結果（`perf-baseline-20261029T221617Z`，3 次 run）
+
+程式 commit `1675b0d`（= main `e47307b` 加上本 PR 的 `tests/k6`、`Taskfile.yml`，沒有 runtime 程式碼差異；之後的修改只動工具）、Go 1.27.1、Postgres 17.9、k6 v2.2.0、Apple M1 Max（10 核）、Darwin 25.6.0。當時 1 分鐘 load average 起訖 6.11、8.54（10 核）。3 次 run，中位數、min–max 與變異係數（stdev/mean）。這一組的 drain 起算時間還在快照之後（後來修正為在快照之前，只會讓窗口略長、速率略低），且當時沒有對帳 `reserved_ok`，所以 drain 與 reserve 的數字重跑後可能略有不同。
 
 | metric | median | min–max | CV |
 |---|---|---|---|
@@ -48,6 +59,18 @@ RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變�
 | CreateOrder returned → RESERVED p95 (ms) | 305 | 305–306 | 0.2% |
 | CreateOrder returned → RESERVED p99 (ms) | 359 | 356–361 | 0.6% |
 
+解讀（僅限這一組探索性結果）：
+
+- CreateOrder 的 p50 / p95 / p99 約 6.8 / 11 / 19 ms，吞吐約 2700 req/s、CV 約 9%。
+- backlog drain 約 370 orders/s，遠低於 CreateOrder 的飽和吞吐：持續高負載下 outbox 積壓會線性成長，這是 reservation 路徑目前的瓶頸，也是 batching 優化的對照指標。
+- 100 orders/s 下，端到端 order → RESERVED p50 / p95 / p99 約 155 / 308 / 365 ms，其中 CreateOrder 回傳後的部分約 153 / 305 / 359 ms。
+- reviewer 在另一台 Postgres 17.11、load 11→15 的環境重跑，CreateOrder 約 1950–4462 req/s、端到端 p95 約 253–264 ms：同一量級，但絕對值隨環境與 load 變動很大，這也是為什麼需要工具判定的 valid 條件。
+
+er) | 365 | 358–365 | 0.9% |
+| CreateOrder returned → RESERVED p50 (ms) | 153 | 153–153 | 0.0% |
+| CreateOrder returned → RESERVED p95 (ms) | 305 | 305–306 | 0.2% |
+| CreateOrder returned → RESERVED p99 (ms) | 359 | 356–361 | 0.6% |
+
 解讀：
 
 - CreateOrder 的 p50 / p95 / p99 約 6.8 / 11 / 19 ms，吞吐約 2700 req/s、CV 約 9%；p95 / p99 的 CV 到 16–18%，比較優化時，落在這個離散程度內的差異不要當結論，必要時加大 `RUNS`。
@@ -57,4 +80,4 @@ RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變�
 
 ## 比較
 
-優化前後用同一台機器、同一組參數（含 `SEED`）、相近的 load average 各跑一次 `task k6-bench`，比 `result.json` 的 `median` 與 `cv_pct`。參數、seed 或 load 差很多的結果不能比；`result.json` 的 `parameters` / `environment` 就是用來核對這件事。
+優化前後用同一台機器、同一組參數（含 `SEED`），各取得一份**工具判定為 valid** 的 `task k6-bench` 結果（不是 NOT A VALID BASELINE 的），比 `result.json` 的 `median` 與 `cv_pct`。參數、seed 或 load 差很多的結果不能比；`result.json` 的 `parameters` / `environment` 就是用來核對這件事。
