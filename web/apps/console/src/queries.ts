@@ -194,7 +194,9 @@ export const poisonDetailQuery = (bc: string, offset: bigint) =>
 //
 // Keyed by the credential generation (src/auth.ts), so a late answer for the previous credential
 // lands under its own key and is never read for the new one; the new one asks again, unproven =
-// not admin until it answers.
+// not admin until it answers. "Not admin" is an answer (PERMISSION_DENIED / UNAUTHENTICATED) and
+// is cached; a probe that could not be answered (5xx, network, timeout) throws, is retried with
+// backoff, and is never cached as "not admin" (see AdminProbeNotice for what is left to the user).
 export const adminProbeQuery = (generation: number) =>
   queryOptions({
     queryKey: keys.adminProbe(generation),
@@ -210,7 +212,8 @@ export const adminProbeQuery = (generation: number) =>
     },
     staleTime: 60_000,
     gcTime: 60_000,
-    retry: false,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 4_000),
   });
 
 // Who the server thinks the current credential is. The order form reads `anonymous` from it: an

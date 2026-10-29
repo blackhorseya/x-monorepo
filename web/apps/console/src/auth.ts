@@ -56,6 +56,10 @@ export function setCredential(c: Credential | null): void {
   listeners.forEach((l) => l());
 }
 
+export function getCredentialGeneration(): number {
+  return generation;
+}
+
 export function useCredentialGeneration(): number {
   return useSyncExternalStore(subscribe, () => generation);
 }

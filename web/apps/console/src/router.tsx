@@ -1,10 +1,13 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from "@tanstack/react-router";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
-import { useIsAdmin } from "./components/admin";
+import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
+import { getCredentialGeneration } from "./auth";
 import { CredentialControl } from "./components/credential";
 import { RouteError, RoutePending } from "./components/route-status";
 import { ServerVersion } from "./components/version";
+import { queryClient } from "./queryClient";
+import { adminProbeQuery } from "./queries";
 import type { ExpireSearch } from "./routes/expire";
 import type { OrdersSearch } from "./routes/orders";
 import type { PruneSearch } from "./routes/prune";
@@ -18,16 +21,41 @@ const navLinks = [
   { to: "/orders", label: "Orders" },
   { to: "/reservations", label: "Reservations" },
   { to: "/stock", label: "Stock" },
+] as const;
+
+// The pages whose RPCs the server answers to the admin role only.
+const adminLinks = [
   { to: "/poison", label: "Poison" },
   { to: "/prune", label: "Prune" },
   { to: "/expire", label: "Expire" },
+  { to: "/accounts", label: "Accounts" },
 ] as const;
 
-// Layout: the nav shows Accounts only to a caller whose WhoAmI carries the admin role. That is
-// a courtesy, not a gate: the server checks the role on every identity RPC.
+// An admin page behind AdminGate: for anyone else the page never mounts, so it asks the server
+// nothing and shows the gate instead. Its chunk is not fetched either: the router calls a route
+// component's preload before anything renders (direct load, link intent, navigation), so preload
+// only reaches the page's own while the admin probe has already answered true for this
+// credential. Until then the chunk is fetched when the page first renders, behind the gate.
+type LazyPage = ReturnType<typeof lazyRouteComponent>;
+const gated = (Page: LazyPage): LazyPage => {
+  const Gated = () => (
+    <AdminGate>
+      <Page />
+    </AdminGate>
+  );
+  Gated.preload = async () => {
+    const known = queryClient.getQueryData(adminProbeQuery(getCredentialGeneration()).queryKey);
+    if (known === true) await Page.preload?.();
+  };
+  return Gated;
+};
+
+// Layout: the nav shows the admin pages only to a caller the server's admin check lets through
+// (with auth.mode=off that is everyone, as on the server). That is a courtesy, not a gate: the
+// server checks the role on every admin RPC.
 function Root() {
   const isAdmin = useIsAdmin();
-  const links = isAdmin ? [...navLinks, { to: "/accounts", label: "Accounts" } as const] : navLinks;
+  const links = isAdmin ? [...navLinks, ...adminLinks] : navLinks;
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
       <header className="mb-6 flex flex-wrap items-baseline gap-6">
@@ -41,6 +69,7 @@ function Root() {
         </nav>
         <CredentialControl />
       </header>
+      <AdminProbeNotice />
       <Outlet />
       <footer className="mt-10 flex justify-end text-xs text-muted-foreground">
         <ServerVersion />
@@ -92,11 +121,11 @@ const stockRoute = createRoute({
 const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: lazyRouteComponent(() => import("./routes/accounts"), "AccountsPage") });
 // A sibling of /accounts, like /orders/$id: the nav's prefix match lights Accounts up here too.
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: lazyRouteComponent(() => import("./routes/account"), "AccountPage") });
-const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: lazyRouteComponent(() => import("./routes/poison"), "PoisonPage") });
+const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: gated(lazyRouteComponent(() => import("./routes/poison"), "PoisonPage")) });
 const pruneRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/prune",
-  component: lazyRouteComponent(() => import("./routes/prune"), "PrunePage"),
+  component: gated(lazyRouteComponent(() => import("./routes/prune"), "PrunePage")),
   validateSearch: (raw: Record<string, unknown>): PruneSearch => ({
     bc: typeof raw.bc === "string" && raw.bc !== "" ? raw.bc : undefined,
     days: typeof raw.days === "number" && Number.isFinite(raw.days) && raw.days > 0 ? raw.days : undefined,
@@ -107,7 +136,7 @@ const pruneRoute = createRoute({
 const expireRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/expire",
-  component: lazyRouteComponent(() => import("./routes/expire"), "ExpirePage"),
+  component: gated(lazyRouteComponent(() => import("./routes/expire"), "ExpirePage")),
   validateSearch: (raw: Record<string, unknown>): ExpireSearch => ({
     hours: typeof raw.hours === "number" && Number.isFinite(raw.hours) && raw.hours > 0 ? raw.hours : undefined,
   }),
