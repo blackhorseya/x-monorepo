@@ -449,7 +449,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		t.Fatalf("ordering_orders = %v", orderGauges)
 	}
 	reservationGauges := scrape(t, tel.MetricsHandler, "inventory_reservations")
-	if len(reservationGauges) != 6 || atoi(reservationGauges[`inventory_reservations{status="RESERVED"}`]) < 1 || atoi(reservationGauges[`inventory_reservations{status="COMMITTED"}`]) < 1 {
+	if len(reservationGauges) != 7 || atoi(reservationGauges[`inventory_reservations{status="RESERVED"}`]) < 1 || atoi(reservationGauges[`inventory_reservations{status="COMMITTED"}`]) < 1 {
 		t.Fatalf("inventory_reservations = %v", reservationGauges)
 	}
 	if ages := scrape(t, tel.MetricsHandler, "ordering_orders_oldest_age_seconds"); len(ages) != 4 || ages[`ordering_orders_oldest_age_seconds{status="PENDING"}`] != "0" {

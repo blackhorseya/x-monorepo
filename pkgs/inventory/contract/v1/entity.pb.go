@@ -38,10 +38,18 @@ const (
 	ReservationStatus_RESERVATION_STATUS_CANCELLED ReservationStatus = 4
 	// The order was completed (ordering.v1.OrderCompleted): the reserved quantity
 	// left on_hand — sold, not held.
+	//
+	// Also reached from EXPIRED: when OrderCompleted arrived after the expiry
+	// sweep gave the stock back, it is sold from what is available now.
 	ReservationStatus_RESERVATION_STATUS_COMMITTED ReservationStatus = 5
 	// Held past its TTL (ExpireReservations): the stock was given back and
 	// ordering was asked to cancel the order (ordering.v1.OrderCancellationRequested).
 	ReservationStatus_RESERVATION_STATUS_EXPIRED ReservationStatus = 6
+	// The order was completed after its reservation expired and the stock given
+	// back is no longer available: the sale is not covered. Nothing was deducted;
+	// the order is COMPLETED, so operations must settle it by hand (restock or
+	// compensate). Terminal.
+	ReservationStatus_RESERVATION_STATUS_COMMIT_SHORT ReservationStatus = 7
 )
 
 // Enum value maps for ReservationStatus.
@@ -54,15 +62,17 @@ var (
 		4: "RESERVATION_STATUS_CANCELLED",
 		5: "RESERVATION_STATUS_COMMITTED",
 		6: "RESERVATION_STATUS_EXPIRED",
+		7: "RESERVATION_STATUS_COMMIT_SHORT",
 	}
 	ReservationStatus_value = map[string]int32{
-		"RESERVATION_STATUS_UNSPECIFIED": 0,
-		"RESERVATION_STATUS_RESERVED":    1,
-		"RESERVATION_STATUS_REJECTED":    2,
-		"RESERVATION_STATUS_RELEASED":    3,
-		"RESERVATION_STATUS_CANCELLED":   4,
-		"RESERVATION_STATUS_COMMITTED":   5,
-		"RESERVATION_STATUS_EXPIRED":     6,
+		"RESERVATION_STATUS_UNSPECIFIED":  0,
+		"RESERVATION_STATUS_RESERVED":     1,
+		"RESERVATION_STATUS_REJECTED":     2,
+		"RESERVATION_STATUS_RELEASED":     3,
+		"RESERVATION_STATUS_CANCELLED":    4,
+		"RESERVATION_STATUS_COMMITTED":    5,
+		"RESERVATION_STATUS_EXPIRED":      6,
+		"RESERVATION_STATUS_COMMIT_SHORT": 7,
 	}
 )
 
@@ -334,7 +344,7 @@ const file_inventory_v1_entity_proto_rawDesc = "" +
 	"\vcreate_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime*\xfe\x01\n" +
+	"updateTime*\xa3\x02\n" +
 	"\x11ReservationStatus\x12\"\n" +
 	"\x1eRESERVATION_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bRESERVATION_STATUS_RESERVED\x10\x01\x12\x1f\n" +
@@ -342,7 +352,8 @@ const file_inventory_v1_entity_proto_rawDesc = "" +
 	"\x1bRESERVATION_STATUS_RELEASED\x10\x03\x12 \n" +
 	"\x1cRESERVATION_STATUS_CANCELLED\x10\x04\x12 \n" +
 	"\x1cRESERVATION_STATUS_COMMITTED\x10\x05\x12\x1e\n" +
-	"\x1aRESERVATION_STATUS_EXPIRED\x10\x06B\xbb\x01\n" +
+	"\x1aRESERVATION_STATUS_EXPIRED\x10\x06\x12#\n" +
+	"\x1fRESERVATION_STATUS_COMMIT_SHORT\x10\aB\xbb\x01\n" +
 	"\x10com.inventory.v1B\vEntityProtoP\x01ZIgithub.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1;inventoryv1\xa2\x02\x03IXX\xaa\x02\fInventory.V1\xca\x02\fInventory\\V1\xe2\x02\x18Inventory\\V1\\GPBMetadata\xea\x02\rInventory::V1b\x06proto3"
 
 var (

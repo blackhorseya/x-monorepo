@@ -10,6 +10,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -177,11 +178,26 @@ func TestRepositories_Postgres(t *testing.T) {
 	if err := reservations.Add(c, ok); err != nil {
 		t.Fatal(err)
 	}
+	// Update is a compare-and-swap on the status the aggregate was loaded with:
+	// two copies read as RESERVED, the first to write wins, the other is stale.
+	ok, err = reservations.FindByOrderID(c, "o-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rival, _ := reservations.FindByOrderID(c, "o-2")
 	if err := ok.Release(map[string]*stock.Stock{"A": reloaded}, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if err := reservations.Update(c, ok); err != nil {
 		t.Fatal(err)
+	}
+	// rival ran in its own transaction, against stock as it was when it read.
+	own, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
+	if err := rival.Expire(map[string]*stock.Stock{"A": own}, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := reservations.Update(c, rival); !errors.Is(err, reservation.ErrStale) || !errors.Is(err, kernel.ErrConcurrentUpdate) {
+		t.Fatalf("update over a moved reservation: %v", err)
 	}
 	got, _ = reservations.FindByOrderID(c, "o-2")
 	if got.Status() != reservation.StatusReleased || !got.UpdatedAt().Equal(now.Add(time.Second)) || len(got.Shortfall()) != 0 {

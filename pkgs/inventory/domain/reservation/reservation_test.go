@@ -206,6 +206,80 @@ func TestCommit(t *testing.T) {
 	}
 }
 
+// expired reserves lines against stocks and lets the sweep give them back, as
+// when OrderCompleted is still in flight (issue #218).
+func expired(t *testing.T, st map[string]*stock.Stock, lines ...reservation.Line) *reservation.Reservation {
+	t.Helper()
+	r, err := reservation.Reserve(reservation.Params{OrderID: "o-6", Lines: lines, Now: now}, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Expire(st, now.Add(25*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	r.PullEvents()
+
+	return r
+}
+
+func TestCommit_AfterExpire(t *testing.T) {
+	later := now.Add(26 * time.Hour)
+
+	t.Run("covered: sold from what is available", func(t *testing.T) {
+		st := stocks(t, map[string]int32{"A": 5, "B": 1})
+		r := expired(t, st, line(t, "A", 2), line(t, "B", 1))
+
+		if err := r.Commit(map[string]*stock.Stock{"A": st["A"]}, later); !errors.Is(err, reservation.ErrStockMissing) {
+			t.Fatalf("missing stock: %v", err)
+		}
+		if err := r.Commit(st, later); err != nil {
+			t.Fatal(err)
+		}
+		if r.Status() != reservation.StatusCommitted || !r.UpdatedAt().Equal(later) ||
+			st["A"].OnHand() != 3 || st["A"].Reserved() != 0 || st["B"].OnHand() != 0 || st["B"].Reserved() != 0 {
+			t.Fatalf("status=%s A=%d/%d B=%d/%d", r.Status(), st["A"].OnHand(), st["A"].Reserved(), st["B"].OnHand(), st["B"].Reserved())
+		}
+		if evs := r.PullEvents(); len(evs) != 1 {
+			t.Fatalf("events = %#v", evs)
+		} else if _, ok := evs[0].(reservation.Committed); !ok {
+			t.Fatalf("event = %T", evs[0])
+		}
+		if err := r.Commit(st, later); !errors.Is(err, reservation.ErrNotReserved) {
+			t.Fatalf("double commit: %v", err)
+		}
+	})
+
+	t.Run("one line short: all or nothing, COMMIT_SHORT", func(t *testing.T) {
+		st := stocks(t, map[string]int32{"A": 5, "B": 1})
+		r := expired(t, st, line(t, "A", 2), line(t, "B", 1))
+		// Someone else claimed B's last unit after the sweep.
+		if _, err := reservation.Reserve(reservation.Params{OrderID: "o-7", Lines: []reservation.Line{line(t, "B", 1)}, Now: now}, st); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := r.Commit(st, later); err != nil {
+			t.Fatal(err)
+		}
+		if r.Status() != reservation.StatusCommitShort || !r.UpdatedAt().Equal(later) ||
+			st["A"].OnHand() != 5 || st["A"].Reserved() != 0 || st["B"].OnHand() != 1 || st["B"].Reserved() != 1 {
+			t.Fatalf("status=%s A=%d/%d B=%d/%d", r.Status(), st["A"].OnHand(), st["A"].Reserved(), st["B"].OnHand(), st["B"].Reserved())
+		}
+		if evs := r.PullEvents(); len(evs) != 0 {
+			t.Fatalf("events = %#v", evs)
+		}
+		// COMMIT_SHORT is terminal.
+		for name, f := range map[string]func() error{
+			"commit":  func() error { return r.Commit(st, later) },
+			"release": func() error { return r.Release(st, later) },
+			"expire":  func() error { return r.Expire(st, later) },
+		} {
+			if err := f(); !errors.Is(err, reservation.ErrNotReserved) {
+				t.Fatalf("%s after commit short: %v", name, err)
+			}
+		}
+	})
+}
+
 func TestExpire(t *testing.T) {
 	st := stocks(t, map[string]int32{"A": 5, "B": 1})
 	lines := []reservation.Line{line(t, "A", 2), line(t, "B", 1)}
@@ -249,10 +323,9 @@ func TestExpire(t *testing.T) {
 	if !ok || exp.OrderID() != "o-5" || exp.AggregateID() != "o-5" || !exp.OccurredAt().Equal(later) || exp.HeldFor() != 25*time.Hour {
 		t.Fatalf("events[1] = %#v", evs[1])
 	}
-	// Terminal: a late OrderCancelled / OrderCompleted / second sweep all refuse.
+	// A late OrderCancelled / second sweep refuse; OrderCompleted does not (TestCommit_AfterExpire).
 	for name, f := range map[string]func() error{
 		"release": func() error { return r.Release(st, later) },
-		"commit":  func() error { return r.Commit(st, later) },
 		"expire":  func() error { return r.Expire(st, later) },
 	} {
 		if err := f(); !errors.Is(err, reservation.ErrNotReserved) {
@@ -271,6 +344,10 @@ func TestReconstitute(t *testing.T) {
 	}
 	if r.Status() != reservation.StatusRejected || r.Shortfall()[0] != "A" || len(r.PullEvents()) != 0 {
 		t.Fatalf("reconstituted = %+v", r)
+	}
+	// A stored reservation remembers the status it was read in (Repository.Update's compare-and-swap).
+	if r.LoadedStatus() != reservation.StatusRejected {
+		t.Fatalf("loaded status = %s", r.LoadedStatus())
 	}
 
 	if _, err := reservation.Reconstitute(reservation.ReconstituteParams{Lines: lines, Status: reservation.StatusReserved}); !errors.Is(err, reservation.ErrInvalidOrderID) {

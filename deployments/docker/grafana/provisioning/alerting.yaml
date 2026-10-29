@@ -234,6 +234,46 @@ groups:
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "36"
 
+      # A completed order the stock no longer covers: its reservation was EXPIRED by the sweep just before
+      # OrderCompleted arrived, and the released quantity was taken by another order meanwhile (README "與
+      # CompleteOrder 的競態"). The order is COMPLETED, nothing was deducted, the row is COMMIT_SHORT forever.
+      # The row is the audit record and is never removed, so the rule fires on a rise over the last hour
+      # (delta), not on the standing count — it resolves by itself an hour after the last one; the standing
+      # count stays on the "Reservations by status" panel. Runbook: docs/operations.md "COMMIT_SHORT 處置".
+      - uid: x-monorepo-commit-short
+        title: Commit short — a completed order is not covered by stock
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max (delta(inventory_reservations{status="COMMIT_SHORT"}[1h]))
+              legendFormat: "new COMMIT_SHORT in the last hour"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical, service: worker }
+        annotations:
+          summary: "{{ $values.A }} completed order(s) went COMMIT_SHORT in the last hour"
+          description: >-
+            A reservation ended COMMIT_SHORT: the order is COMPLETED but its stock was released by the expiry
+            sweep and is no longer available, so nothing was deducted. List them with `ListReservations
+            status=COMMIT_SHORT` (console Reservations page, filter COMMIT_SHORT) and settle each by hand —
+            restock or compensate the customer; see docs/operations.md "COMMIT_SHORT 處置".
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "35"
+
       # Rows are held back by a consumer group that is not making progress — while the lag rules above only
       # watch the groups this worker is configured with, this one sees every cursor in the offsets table,
       # so a group from a renamed worker.consumer_group or an E2E run shows up here and nowhere else.

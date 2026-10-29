@@ -73,7 +73,7 @@ CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，
 pkgs/kernel      shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 pkgs/platform    技術共用：contextx、config、server（gin + Connect）、usecasex、otel、postgres、archtest；
                  admin（admin.v1.AdminService：poison 操作 + Prune RPC，與 worker 的 CLI 同一組 eventbus 函式；contract 在 protos/admin，不屬於任何 BC）
-pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event，ordering 再消費它的 `StockReserved` 把 order 變 CONFIRMED；`CompleteOrder` RPC 發 `OrderCompleted`，inventory 消費它把 reservation COMMITTED、扣 on_hand；`worker expire` 把 RESERVED 超過 TTL 的變 EXPIRED、還庫存、發 `OrderCancellationRequested`；
+pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event，ordering 再消費它的 `StockReserved` 把 order 變 CONFIRMED；`CompleteOrder` RPC 發 `OrderCompleted`，inventory 消費它把 reservation COMMITTED、扣 on_hand；`worker expire` 把 RESERVED 超過 TTL 的變 EXPIRED、還庫存、發 `OrderCancellationRequested`；sweep 與 `CompleteOrder` 競態時，`OrderCompleted` 遇 EXPIRED 會從 available 補扣成 COMMITTED，不夠就 `COMMIT_SHORT`（終態、不動庫存、alert `x-monorepo-commit-short`，營運手動處理）；
                  identity 是第三個：DB 管理的 account / API key，沒有 event；`adapters/auth` 實作 platform 的 `server.CredentialResolver`，auth interceptor 對 `X-API-Key` 先查 config `auth.api_keys` 再問它（TTL cache 30s）；key 通過驗證會節流、best-effort 地寫 `last_used_at`（`auth.last_used_interval`，預設 1m，寫入失敗不影響驗證）；`DisableAccount` / `AssignRoles` / `RevokeApiKey` 有 last-admin guard：會讓最後一個有效 admin（ACTIVE、有 `auth.admin_role`、至少一把未撤銷未過期 key）失格就回 `identity.last_admin`（`FAILED_PRECONDITION`），同一 transaction 內先 `port.AdminCensus.LockAdmins`（Postgres `FOR UPDATE` 鎖 admin 列、再另一條 statement 算 key；memory 靠 Transactor 串行）再載入 aggregate，「現在」也在拿到鎖之後才讀（`LockAdmins` 回傳，等鎖期間過期的 key 不算），config 的 static key 不算——`docs/identity.md`）
   provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() / decorateTx() 包起來
   contract/v1/     buf 生成的 wire format（pb + Connect + openapi.yaml），只有 adapters / apps 可 import
@@ -120,7 +120,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
   它們從 context 拿到 tx。
 - **Domain error** 用 `kernel.NewError(kind, code, msg)`；`server.ToConnectError` 依 `Kind` 映射 Connect code，
   `Code` 放 `x-error-code` header。consumer 把 domain error 視為 drop（不重試），infra error 才 retry——所以「業務上的失敗結果」
-  （例如 inventory 缺貨）要做成 aggregate 狀態 + event，不能做成 error；反過來 optimistic-lock 的 `stock.ErrStale` / `order.ErrStale` 刻意不是 `kernel.Error`：
+  （例如 inventory 缺貨）要做成 aggregate 狀態 + event，不能做成 error；反過來 optimistic-lock 的 `stock.ErrStale` / `reservation.ErrStale` / `order.ErrStale` 刻意不是 `kernel.Error`：
   它們 wrap `kernel.ErrConcurrentUpdate`，consumer 會 retry，rpc 回 `Aborted`（`x-error-code: concurrent_update`），metrics 記 `kind=aborted`。
 - **Optimistic lock**：aggregate 帶 `version`，`Save` 比對後 +1。存完後記憶體中的 aggregate 版本**不會**前進，要再存一次請先 reload。
 - **CreateOrder 冪等**：`CreateOrderRequest.idempotency_key`（選填，1–64 個可見 ASCII）。範圍是 `unique(customer_id, key)`，customer 是 `ownership.ForCreate` 解析後的（admin 代客 = 被代下單的 customer）；

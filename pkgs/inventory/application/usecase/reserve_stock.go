@@ -117,3 +117,30 @@ func saveStocks(c context.Context, repo stock.Repository, stocks map[string]*sto
 
 	return nil
 }
+
+// staleIfMoved classifies a failed domain call on r. The stock was loaded
+// after r was read, so when another transaction moved r in between (expired,
+// released, committed), the stock no longer matches the status r was read in
+// and the aggregate fails with a domain error (e.g. commit_exceeds_reserved)
+// that is really a lost race. If r moved since it was loaded the error is
+// reservation.ErrStale — retryable, and the retry works from the new status;
+// otherwise cause is returned unchanged. A failed re-read is returned instead of cause.
+func staleIfMoved(c context.Context, repo reservation.Repository, r *reservation.Reservation, cause error) error {
+	cur, err := repo.FindByOrderID(c, r.OrderID())
+	switch {
+	case errors.Is(err, reservation.ErrNotFound):
+		// It was found a moment ago and rows are never deleted: nothing to classify, keep the answer.
+		return cause
+	case err != nil:
+		// Not knowing whether r moved is not a reason to hand back cause, which is final for the
+		// consumer (dropped for good); the lookup error is infrastructure and is retried. The
+		// failed call is text only, for the same reason as below.
+		return fmt.Errorf("reread reservation %s after %s: %w", r.OrderID(), cause.Error(), err)
+	case cur.Status() == r.LoadedStatus():
+		return cause
+	}
+
+	// cause is text only: wrapping it too would let the consumer find its
+	// kernel.Error and drop the message instead of retrying.
+	return fmt.Errorf("reservation %s moved %s -> %s while it was handled (%s): %w", r.OrderID(), r.LoadedStatus(), cur.Status(), cause.Error(), reservation.ErrStale)
+}
