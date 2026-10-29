@@ -46,11 +46,12 @@ if [ -z "$cfg" ]; then
 fi
 
 [ -f "$cfg" ] || { echo "FAIL: signing config $cfg does not exist"; exit 1; }
-# Shape first: exactly one JSON object whose rekorTlogUrls is a non-empty array of objects. jq
-# exits 0 on zero inputs (an empty or blank file) and cosign initialize only warns when it cannot
-# fetch the signing config, so "jq succeeded" proves nothing until the shape is checked.
-jq -e -s 'length == 1 and (.[0] | type == "object" and (.rekorTlogUrls | type == "array" and length > 0 and all(.[]; type == "object")))' "$cfg" >/dev/null 2>&1 \
-  || { echo "FAIL: $cfg is not one JSON signing config with a non-empty rekorTlogUrls array of objects (empty, blank or malformed): nothing was verified"; exit 1; }
+# Shape first: exactly one JSON object whose rekorTlogUrls is a non-empty array of objects, each
+# naming its log with a non-empty string url. jq exits 0 on zero inputs (an empty or blank file) and
+# cosign initialize only warns when it cannot fetch the signing config, so "jq succeeded" proves
+# nothing until the shape is checked (#235).
+jq -e -s 'length == 1 and (.[0] | type == "object" and (.rekorTlogUrls | type == "array" and length > 0 and all(.[]; type == "object" and (.url | type == "string" and length > 0))))' "$cfg" >/dev/null 2>&1 \
+  || { echo "FAIL: $cfg is not one JSON signing config with a non-empty rekorTlogUrls array of logs that each have a url (empty, blank, truncated or malformed): nothing was verified"; exit 1; }
 logs=$(jq -c '.rekorTlogUrls' "$cfg")
 
 version=$(cosign version 2>/dev/null | sed -n 's/^GitVersion: *//p' || true)
