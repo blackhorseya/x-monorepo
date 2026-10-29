@@ -293,6 +293,10 @@ expect_eq "red: green run is not a RED" "pass 1" "$(red "$want_msg" 'ok  	exampl
 expect_eq "red: message only in the RUN echo is not an assertion" "setup 1" "$(red "$want_msg" '=== RUN   want 1 call, got 0
 --- FAIL: TestCreate (0.00s)
 FAIL')"
+# A long log must not flip a found message to setup: grep -q exiting early SIGPIPEs the filter
+# upstream of it, and pipefail turns that into "not found".
+long_log=$(printf '=== RUN   TestX\n    x_test.go:10: target assertion\n'; for _ in $(seq 1 20000); do printf '    long diagnostic line %0100d\n' 0; done; printf -- '--- FAIL: TestX (0.00s)\nFAIL\n')
+expect_eq "red: long output still assertion" "assertion 0" "$(out=$(printf '%s\n' "$long_log" | scripts/red-stage.sh -m 'target assertion') && rc=0 || rc=$?; echo "$out $rc")"
 set +e; scripts/red-stage.sh </dev/null >/dev/null 2>&1; rc=$?; set -e
 expect_eq "red: -m is required" 64 "$rc"
 
