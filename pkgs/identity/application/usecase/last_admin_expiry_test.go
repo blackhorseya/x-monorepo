@@ -14,17 +14,16 @@ import (
 
 // slowLock is a census whose lock takes a while to get: before delegating it
 // runs wait, which stands for the time spent queued behind another writer (the
-// test uses it to move the clock). Whoever decided what "now" is before asking
-// for the lock judges key expiry by the instant the wait began.
+// test uses it to move the clock).
 type slowLock struct {
 	port.AdminCensus
 	wait func()
 }
 
-func (s slowLock) LockAdmins(c context.Context, role string, now time.Time) ([]account.AdminStanding, error) {
+func (s slowLock) LockAdmins(c context.Context, role string) ([]account.AdminStanding, time.Time, error) {
 	s.wait()
 
-	return s.AdminCensus.LockAdmins(c, role, now)
+	return s.AdminCensus.LockAdmins(c, role)
 }
 
 // expiringKey gives the account a key that expires an hour after the fixture's

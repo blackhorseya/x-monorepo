@@ -26,22 +26,25 @@ var _ port.AdminCensus = (*AdminCensus)(nil)
 // original snapshot; a statement started after the lock sees what the
 // transaction that held it committed.
 type AdminCensus struct {
-	db *gorm.DB
+	db    *gorm.DB
+	clock port.Clock
 }
 
-func NewAdminCensus(db *gorm.DB) *AdminCensus { return &AdminCensus{db: db} }
+func NewAdminCensus(db *gorm.DB, clock port.Clock) *AdminCensus {
+	return &AdminCensus{db: db, clock: clock}
+}
 
-func (i *AdminCensus) LockAdmins(c context.Context, role string, now time.Time) ([]account.AdminStanding, error) {
+func (i *AdminCensus) LockAdmins(c context.Context, role string) ([]account.AdminStanding, time.Time, error) {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 
 	// jsonb containment; the array literal is a bound parameter, so the `?` of
 	// the operator family never meets gorm's placeholder.
 	want, err := json.Marshal([]string{role})
 	if err != nil {
-		return nil, fmt.Errorf("encode role %q: %w", role, err)
+		return nil, time.Time{}, fmt.Errorf("encode role %q: %w", role, err)
 	}
 	tx := platformpg.TxOrDB(ctx, i.db)
 	var ids []string
@@ -50,10 +53,13 @@ func (i *AdminCensus) LockAdmins(c context.Context, role string, now time.Time) 
 		Where("status = ? AND roles @> ?::jsonb", account.StatusActive.String(), string(want)).
 		Order("id ASC").
 		Pluck("id", &ids).Error; err != nil {
-		return nil, fmt.Errorf("lock admin accounts: %w", err)
+		return nil, time.Time{}, fmt.Errorf("lock admin accounts: %w", err)
 	}
+	// Read the clock only now: the first statement may have queued behind another
+	// writer, and a key that expired meanwhile must not count.
+	now := i.clock.Now()
 	if len(ids) == 0 {
-		return nil, nil
+		return nil, now, nil
 	}
 
 	var counts []struct {
@@ -65,7 +71,7 @@ func (i *AdminCensus) LockAdmins(c context.Context, role string, now time.Time) 
 		Where("account_id IN ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)", ids, apikey.StatusActive.String(), now).
 		Group("account_id").
 		Scan(&counts).Error; err != nil {
-		return nil, fmt.Errorf("count admin keys: %w", err)
+		return nil, time.Time{}, fmt.Errorf("count admin keys: %w", err)
 	}
 	n := make(map[string]int, len(counts))
 	for _, row := range counts {
@@ -78,5 +84,5 @@ func (i *AdminCensus) LockAdmins(c context.Context, role string, now time.Time) 
 		}
 	}
 
-	return out, nil
+	return out, now, nil
 }

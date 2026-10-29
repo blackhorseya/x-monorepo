@@ -237,7 +237,7 @@ func TestIdentityService_AuthOff(t *testing.T) {
 
 // newService assembles the service the way provider.go / wire do.
 func newService(accounts account.Repository, keys apikey.Repository, tx port.Transactor, clock port.Clock, ids port.IDGenerator, secrets port.SecretGenerator, rec *usecasex.Recorder, auth config.Auth) *rpc.IdentityService {
-	census := identity.ProvideAdminCensus(nil, accounts, keys)
+	census := identity.ProvideAdminCensus(nil, accounts, keys, clock)
 
 	return rpc.NewIdentityService(rpc.UseCases{
 		CreateAccount:  identity.ProvideCreateAccount(accounts, ids, clock, tx, rec),

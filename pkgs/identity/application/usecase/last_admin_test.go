@@ -219,8 +219,8 @@ func newRendezvous(inner port.AdminCensus) *rendezvous {
 	return &rendezvous{AdminCensus: inner, both: make(chan struct{})}
 }
 
-func (r *rendezvous) LockAdmins(c context.Context, role string, now time.Time) ([]account.AdminStanding, error) {
-	admins, err := r.AdminCensus.LockAdmins(c, role, now)
+func (r *rendezvous) LockAdmins(c context.Context, role string) ([]account.AdminStanding, time.Time, error) {
+	admins, now, err := r.AdminCensus.LockAdmins(c, role)
 	if r.arrived.Add(1) == 2 {
 		close(r.both)
 	}
@@ -229,7 +229,7 @@ func (r *rendezvous) LockAdmins(c context.Context, role string, now time.Time) (
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	return admins, err
+	return admins, now, err
 }
 
 // race runs both calls at once and requires that exactly one is refused as the last admin.

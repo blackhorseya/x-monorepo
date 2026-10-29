@@ -18,23 +18,25 @@ var _ port.AdminCensus = (*AdminCensus)(nil)
 type AdminCensus struct {
 	accounts account.Repository
 	keys     apikey.Repository
+	clock    port.Clock
 }
 
-func NewAdminCensus(accounts account.Repository, keys apikey.Repository) *AdminCensus {
-	return &AdminCensus{accounts: accounts, keys: keys}
+func NewAdminCensus(accounts account.Repository, keys apikey.Repository, clock port.Clock) *AdminCensus {
+	return &AdminCensus{accounts: accounts, keys: keys, clock: clock}
 }
 
 const censusPage = 100
 
-func (i *AdminCensus) LockAdmins(c context.Context, role string, now time.Time) ([]account.AdminStanding, error) {
+func (i *AdminCensus) LockAdmins(c context.Context, role string) ([]account.AdminStanding, time.Time, error) {
 	ctx := contextx.FromContext(c)
+	now := i.clock.Now()
 
 	var out []account.AdminStanding
 	var after account.ID
 	for {
 		page, next, err := i.accounts.List(ctx, account.ListParams{Limit: censusPage, After: after})
 		if err != nil {
-			return nil, err
+			return nil, time.Time{}, err
 		}
 		for _, a := range page {
 			if !a.IsActive() || !a.HasRole(role) {
@@ -42,7 +44,7 @@ func (i *AdminCensus) LockAdmins(c context.Context, role string, now time.Time) 
 			}
 			keys, err := i.keys.ListByAccount(ctx, a.ID().String())
 			if err != nil {
-				return nil, err
+				return nil, time.Time{}, err
 			}
 			usable := 0
 			for _, k := range keys {
@@ -55,7 +57,7 @@ func (i *AdminCensus) LockAdmins(c context.Context, role string, now time.Time) 
 			}
 		}
 		if next == "" {
-			return out, nil
+			return out, now, nil
 		}
 		after = next
 	}

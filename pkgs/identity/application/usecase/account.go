@@ -133,10 +133,9 @@ func NewDisableAccount(accounts account.Repository, census port.AdminCensus, adm
 }
 
 func (uc *DisableAccount) Execute(c context.Context, in dto.DisableAccountInput) (*dto.AccountOutput, error) {
-	now := uc.clock.Now()
-	g := &adminGuard{census: uc.census, role: uc.role, now: now}
+	g := &adminGuard{census: uc.census, role: uc.role}
 
-	return mutateAccount(c, uc.accounts, g, in.ID, func(a *account.Account) error { return a.Disable(now) })
+	return mutateAccount(c, uc.accounts, g, uc.clock, in.ID, func(a *account.Account, now time.Time) error { return a.Disable(now) })
 }
 
 // EnableAccount is the inverse of DisableAccount.
@@ -150,7 +149,7 @@ func NewEnableAccount(accounts account.Repository, clock port.Clock) *EnableAcco
 }
 
 func (uc *EnableAccount) Execute(c context.Context, in dto.EnableAccountInput) (*dto.AccountOutput, error) {
-	return mutateAccount(c, uc.accounts, nil, in.ID, func(a *account.Account) error { return a.Enable(uc.clock.Now()) })
+	return mutateAccount(c, uc.accounts, nil, uc.clock, in.ID, func(a *account.Account, now time.Time) error { return a.Enable(now) })
 }
 
 // AssignRoles replaces the account's roles. Dropping the admin role from the
@@ -167,51 +166,54 @@ func NewAssignRoles(accounts account.Repository, census port.AdminCensus, adminR
 }
 
 func (uc *AssignRoles) Execute(c context.Context, in dto.AssignRolesInput) (*dto.AccountOutput, error) {
-	now := uc.clock.Now()
-	g := &adminGuard{census: uc.census, role: uc.role, now: now}
+	g := &adminGuard{census: uc.census, role: uc.role}
 
-	return mutateAccount(c, uc.accounts, g, in.ID, func(a *account.Account) error { return a.AssignRoles(in.Roles, now) })
+	return mutateAccount(c, uc.accounts, g, uc.clock, in.ID, func(a *account.Account, now time.Time) error { return a.AssignRoles(in.Roles, now) })
 }
 
 // adminGuard is what a writer that can take admin standing away needs: the
-// census (taken, and locked, before anything is loaded) and the role and clock
-// that define "effective admin".
+// census (taken, and locked, before anything is loaded) and the role that
+// defines "effective admin".
 type adminGuard struct {
 	census port.AdminCensus
 	role   string
-	now    time.Time
 }
 
-func (g *adminGuard) lock(ctx context.Context) ([]account.AdminStanding, error) {
-	admins, err := g.census.LockAdmins(ctx, g.role, g.now)
+// lock returns the effective admins and the instant they were judged at: read
+// once the lock is held, so the writer's own "now" never predates it.
+func (g *adminGuard) lock(ctx context.Context) ([]account.AdminStanding, time.Time, error) {
+	admins, now, err := g.census.LockAdmins(ctx, g.role)
 	if err != nil {
-		return nil, fmt.Errorf("lock admins: %w", err)
+		return nil, time.Time{}, fmt.Errorf("lock admins: %w", err)
 	}
 
-	return admins, nil
+	return admins, now, nil
 }
 
 // mutateAccount is load → behaviour → save, shared by the three account writes.
 // With a guard it first locks the admins, then refuses a change after which
 // the account is no longer an ACTIVE holder of the admin role while being the
 // last effective admin.
-func mutateAccount(c context.Context, accounts account.Repository, g *adminGuard, id string, fn func(*account.Account) error) (*dto.AccountOutput, error) {
+func mutateAccount(c context.Context, accounts account.Repository, g *adminGuard, clock port.Clock, id string, fn func(*account.Account, time.Time) error) (*dto.AccountOutput, error) {
 	ctx := contextx.FromContext(c)
 	if id == "" {
 		return nil, account.ErrInvalidID
 	}
 	var admins []account.AdminStanding
+	var now time.Time
 	if g != nil {
 		var err error
-		if admins, err = g.lock(ctx); err != nil {
+		if admins, now, err = g.lock(ctx); err != nil {
 			return nil, err
 		}
+	} else {
+		now = clock.Now()
 	}
 	a, err := accounts.FindByID(ctx, account.ID(id))
 	if err != nil {
 		return nil, err
 	}
-	if err := fn(a); err != nil {
+	if err := fn(a, now); err != nil {
 		return nil, err
 	}
 	if g != nil && (!a.IsActive() || !a.HasRole(g.role)) {

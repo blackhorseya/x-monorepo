@@ -102,9 +102,8 @@ func (uc *RevokeAPIKey) Execute(c context.Context, in dto.RevokeAPIKeyInput) (*d
 	if in.ID == "" {
 		return nil, apikey.ErrInvalidID
 	}
-	now := uc.clock.Now()
-	g := &adminGuard{census: uc.census, role: uc.role, now: now}
-	admins, err := g.lock(ctx)
+	g := &adminGuard{census: uc.census, role: uc.role}
+	admins, now, err := g.lock(ctx)
 	if err != nil {
 		return nil, err
 	}

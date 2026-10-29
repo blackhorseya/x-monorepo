@@ -95,7 +95,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v14 := identity.ProvideGetAccount(accountRepository, recorder)
 	v15 := identity.ProvideListAccounts(accountRepository, recorder)
 	apikeyRepository := identity.ProvideAPIKeyRepository(db)
-	adminCensus := identity.ProvideAdminCensus(db, accountRepository, apikeyRepository)
+	adminCensus := identity.ProvideAdminCensus(db, accountRepository, apikeyRepository, clock2)
 	v16 := identity.ProvideDisableAccount(accountRepository, adminCensus, auth, clock2, transactor2, recorder)
 	v17 := identity.ProvideEnableAccount(accountRepository, clock2, transactor2, recorder)
 	v18 := identity.ProvideAssignRoles(accountRepository, adminCensus, auth, clock2, transactor2, recorder)

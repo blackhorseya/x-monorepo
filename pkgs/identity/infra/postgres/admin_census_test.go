@@ -107,7 +107,8 @@ func TestAdminCensus_Postgres(t *testing.T) {
 	db := censusDB(t)
 	f := newCensusFixture(t, db)
 	c := context.Background()
-	census := postgres.NewAdminCensus(db)
+	at := &stepClock{t: f.now}
+	census := postgres.NewAdminCensus(db, at)
 	soon := f.now.Add(time.Hour)
 
 	f.account("two", []string{censusRole, "ops"}, time.Time{}, soon)
@@ -139,26 +140,30 @@ func TestAdminCensus_Postgres(t *testing.T) {
 	}
 	_ = revoked
 
-	admins, err := census.LockAdmins(c, censusRole, f.now)
+	admins, judged, err := census.LockAdmins(c, censusRole)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !judged.Equal(f.now) {
+		t.Fatalf("judged at %v, want the clock's %v", judged, f.now)
 	}
 	if got := toStandings(admins); len(got) != 2 || got["acc-two"] != 2 || got["acc-expiring"] != 1 {
 		t.Fatalf("census at now = %v, want acc-two:2 acc-expiring:1", got)
 	}
 	// An hour on, the expiring key no longer counts, and neither does its account.
-	admins, err = census.LockAdmins(c, censusRole, soon.Add(time.Second))
+	at.advance(time.Hour + time.Second)
+	admins, _, err = census.LockAdmins(c, censusRole)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := toStandings(admins); len(got) != 1 || got["acc-two"] != 1 {
 		t.Fatalf("census later = %v, want acc-two:1", got)
 	}
-	if admins, err = census.LockAdmins(c, "nobody", f.now); err != nil || len(admins) != 0 {
+	if admins, _, err = census.LockAdmins(c, "nobody"); err != nil || len(admins) != 0 {
 		t.Fatalf("census of an unheld role = %v, %v", admins, err)
 	}
 	// A role name is data, not SQL or JSON syntax.
-	if admins, err = census.LockAdmins(c, `ad"min'] OR true --`, f.now); err != nil || len(admins) != 0 {
+	if admins, _, err = census.LockAdmins(c, `ad"min'] OR true --`); err != nil || len(admins) != 0 {
 		t.Fatalf("census of a hostile role = %v, %v", admins, err)
 	}
 }
@@ -170,8 +175,8 @@ type rendezvous struct {
 	both    chan struct{}
 }
 
-func (r *rendezvous) LockAdmins(c context.Context, role string, now time.Time) ([]account.AdminStanding, error) {
-	admins, err := r.AdminCensus.LockAdmins(c, role, now)
+func (r *rendezvous) LockAdmins(c context.Context, role string) ([]account.AdminStanding, time.Time, error) {
+	admins, now, err := r.AdminCensus.LockAdmins(c, role)
 	if r.arrived.Add(1) == 2 {
 		close(r.both)
 	}
@@ -180,7 +185,7 @@ func (r *rendezvous) LockAdmins(c context.Context, role string, now time.Time) (
 	case <-time.After(500 * time.Millisecond):
 	}
 
-	return admins, err
+	return admins, now, err
 }
 
 type fixedClock struct{ t time.Time }
@@ -223,7 +228,7 @@ func TestLastAdminGuard_ConcurrentPostgres(t *testing.T) {
 	tx := postgres.NewTransactor(db)
 	clock := fixedClock{t: f.now}
 	newCensus := func() *rendezvous {
-		return &rendezvous{AdminCensus: postgres.NewAdminCensus(db), both: make(chan struct{})}
+		return &rendezvous{AdminCensus: postgres.NewAdminCensus(db, clock), both: make(chan struct{})}
 	}
 	c := context.Background()
 
@@ -239,7 +244,7 @@ func TestLastAdminGuard_ConcurrentPostgres(t *testing.T) {
 			func() error { _, err := disable.Execute(c, dto.DisableAccountInput{ID: a.String()}); return err },
 			func() error { _, err := disable.Execute(c, dto.DisableAccountInput{ID: b.String()}); return err },
 		)
-		admins, err := postgres.NewAdminCensus(db).LockAdmins(c, censusRole, f.now)
+		admins, _, err := postgres.NewAdminCensus(db, clock).LockAdmins(c, censusRole)
 		if err != nil || len(admins) != 1 {
 			t.Fatalf("admins left = %v, %v; want exactly one", admins, err)
 		}
@@ -256,7 +261,7 @@ func TestLastAdminGuard_ConcurrentPostgres(t *testing.T) {
 			func() error { _, err := revoke.Execute(c, dto.RevokeAPIKeyInput{ID: kids[0].String()}); return err },
 			func() error { _, err := revoke.Execute(c, dto.RevokeAPIKeyInput{ID: kids[1].String()}); return err },
 		)
-		admins, err := postgres.NewAdminCensus(db).LockAdmins(c, censusRole, f.now)
+		admins, _, err := postgres.NewAdminCensus(db, clock).LockAdmins(c, censusRole)
 		if err != nil || len(admins) != 1 || admins[0].UsableKeys() != 1 {
 			t.Fatalf("admins left = %v, %v; want one with one key", admins, err)
 		}
@@ -353,7 +358,7 @@ func TestLastAdminGuard_KeyExpiresWhileQueuedPostgres(t *testing.T) {
 		f.account("q-b", []string{censusRole}, f.now.Add(time.Hour))
 		t.Cleanup(func() { db.Exec("TRUNCATE identity.accounts CASCADE") })
 		disable := usecasex.Chain[dto.DisableAccountInput, *dto.AccountOutput](
-			usecase.NewDisableAccount(f.accounts, postgres.NewAdminCensus(db), censusRole, clock),
+			usecase.NewDisableAccount(f.accounts, postgres.NewAdminCensus(db, clock), censusRole, clock),
 			usecasex.Transactional[dto.DisableAccountInput, *dto.AccountOutput](tx),
 		)
 		err := runBlockedBehindLock(t, db, clock, 2*time.Hour, func() error {
@@ -370,7 +375,7 @@ func TestLastAdminGuard_KeyExpiresWhileQueuedPostgres(t *testing.T) {
 		_, kids := f.account("q-keys", []string{censusRole}, time.Time{}, f.now.Add(time.Hour))
 		t.Cleanup(func() { db.Exec("TRUNCATE identity.accounts CASCADE") })
 		revoke := usecasex.Chain[dto.RevokeAPIKeyInput, *dto.APIKeyOutput](
-			usecase.NewRevokeAPIKey(f.keys, postgres.NewAdminCensus(db), censusRole, clock),
+			usecase.NewRevokeAPIKey(f.keys, postgres.NewAdminCensus(db, clock), censusRole, clock),
 			usecasex.Transactional[dto.RevokeAPIKeyInput, *dto.APIKeyOutput](tx),
 		)
 		err := runBlockedBehindLock(t, db, clock, 2*time.Hour, func() error {

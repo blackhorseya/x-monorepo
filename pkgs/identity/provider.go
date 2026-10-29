@@ -101,12 +101,12 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 
 // ProvideAdminCensus pairs with the repositories too: Postgres locks the admin
 // rows for the transaction, in memory the Transactor serialises writers.
-func ProvideAdminCensus(db *gorm.DB, accounts account.Repository, keys apikey.Repository) port.AdminCensus {
+func ProvideAdminCensus(db *gorm.DB, accounts account.Repository, keys apikey.Repository, clock port.Clock) port.AdminCensus {
 	if db == nil {
-		return memory.NewAdminCensus(accounts, keys)
+		return memory.NewAdminCensus(accounts, keys, clock)
 	}
 
-	return postgres.NewAdminCensus(db)
+	return postgres.NewAdminCensus(db, clock)
 }
 
 // adminRole is the role the last-admin guard protects: auth.admin_role, the

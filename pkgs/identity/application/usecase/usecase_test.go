@@ -72,7 +72,7 @@ func newFixture() *fixture {
 		clock: &fixedClock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}, ids: &seq{}, secrets: &seq{n: 100},
 		accounts: memory.NewAccountRepository(), keys: memory.NewAPIKeyRepository(),
 	}
-	f.census = memory.NewAdminCensus(f.accounts, f.keys)
+	f.census = memory.NewAdminCensus(f.accounts, f.keys, f.clock)
 	f.createAccount = usecase.NewCreateAccount(f.accounts, f.ids, f.clock)
 	f.getAccount = usecase.NewGetAccount(f.accounts)
 	f.listAccounts = usecase.NewListAccounts(f.accounts)
