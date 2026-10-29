@@ -68,7 +68,9 @@ test("mutations carry the credential set after the page loaded", async ({
   );
 
   // Anonymous Create is refused by the server, and says so next to the form.
-  await page.getByLabel("Customer").first().fill(id);
+  // (Nobody is known to default to, so the field stays locked: the answer is the
+  // server's, not a customer id's.)
+  await expect(page.getByLabel("Customer").first()).toBeDisabled();
   await page.getByRole("button", { name: "Create order" }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "auth.unauthenticated" })
@@ -76,8 +78,15 @@ test("mutations carry the credential set after the page loaded", async ({
 
   // A role-less key is enough for OrderService: the list recovers at once and
   // the form's stale error goes with it (the credential change resets mutations).
+  // Its owner is the customer, so the form does not offer to name one.
   await useKey(page, OPS_KEY);
   await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByLabel("Customer").first()).toBeDisabled();
+
+  // Naming a customer is the admin's (ordering on behalf of someone).
+  await useKey(page, ADMIN_KEY);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByLabel("Customer").first()).toBeEnabled();
   await page.getByLabel("Customer").first().fill(id);
   await page.getByRole("button", { name: "Create order" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
@@ -87,14 +96,14 @@ test("mutations carry the credential set after the page loaded", async ({
   await expect(row).toHaveCount(1);
   await expect(row.getByText("PENDING")).toBeVisible();
 
-  // Cancel too, and with the other kind of credential.
-  await useJWT(page, mintJWT("dave"));
+  // Cancel too, and with the other kind of credential (an admin one: the list is
+  // filtered by another customer's id, which a role-less caller may not do).
+  await useJWT(page, mintJWT("dave", { roles: ["admin"] }));
   await row.getByRole("button", { name: "Cancel" }).click();
   await expect(row.getByText("CANCELLED")).toBeVisible();
 
   // Clear (the header's; the filter form has its own): the next write is anonymous again.
   await page.locator("header").getByRole("button", { name: "Clear" }).click();
-  await page.getByLabel("Customer").first().fill(customer("anon"));
   await page.getByRole("button", { name: "Create order" }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "auth.unauthenticated" }).first()

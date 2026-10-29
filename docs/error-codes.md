@@ -7,7 +7,7 @@
 每個失敗的 RPC 都帶 Connect code（HTTP status 由它決定）+ header `x-error-code`，client 判斷用後者（`console` 的 `describe()` 就是印它）。
 來源三種：**platform interceptor**（`request.*` / `auth.*`）、**admin**（`admin.*`，`pkgs/platform/admin` 自己設）、**domain error**
 （`kernel.NewError(kind, code, msg)`，`server.ToConnectError` 依 `Kind` 映射：InvalidArgument → `INVALID_ARGUMENT`、NotFound → `NOT_FOUND`、
-FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`；其他 → `INTERNAL`，**沒有** `x-error-code`，訊息固定 `internal error`）。
+FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、PermissionDenied → `PERMISSION_DENIED`；其他 → `INTERNAL`，**沒有** `x-error-code`，訊息固定 `internal error`）。
 加新的 domain error 就在該 aggregate 的 `errors.go` 加一行，前綴 = aggregate 名；這張表是手寫的，改了記得同步。
 
 | `x-error-code` | Connect code | 誰設 | 什麼時候 |
@@ -24,12 +24,13 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`；�
 | `admin.no_database` | `FAILED_PRECONDITION` | admin | server 沒接 Postgres（`postgres.url` 空）：poison 表與 outbox / inbox 都在 DB |
 | `admin.unknown_bounded_context` | `INVALID_ARGUMENT` | admin | `bounded_context` 不在 `apps/rpc` 列的 schema 清單 |
 | `admin.poison_not_found` | `NOT_FOUND` | admin | `GetPoison` 的 offset 不存在 |
+| `order.permission_denied` | `PERMISSION_DENIED` | ordering application（`ownership.Policy`） | 非 admin 的 principal 替別人下單（`CreateOrder`）或列別人的訂單（`ListOrders`）；admin role = `auth.admin_role`。讀別人的訂單（`GetOrder`）是 `order.not_found`，不是這個 |
 | `order.invalid_id` / `order.empty_customer` / `order.no_items` / `order.invalid_sku` / `order.invalid_quantity` | `INVALID_ARGUMENT` | ordering domain | aggregate 不變量（consumer path 沒有 protovalidate，所以留著） |
 | `order.invalid_status_filter` / `order.invalid_cursor` | `INVALID_ARGUMENT` | ordering domain | ListOrders 的 filter / cursor 壞掉 |
 | `order.cannot_cancel` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING / CONFIRMED 的 order 被 Cancel（COMPLETED 是終點） |
 | `order.cannot_confirm` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING 的 order 收到 `StockReserved`（consumer path：drop） |
 | `order.cannot_complete` | `FAILED_PRECONDITION` | ordering domain | 不是 CONFIRMED 的 order 被 Complete（PENDING 還沒有庫存可 commit；再按一次也是這個） |
-| `order.not_found` | `NOT_FOUND` | ordering domain | |
+| `order.not_found` | `NOT_FOUND` | ordering domain / application | 沒有這筆；非 admin 的 principal 讀別人的訂單也是它（`GetOrder`，不洩漏存在與否） |
 | `order.duplicate` | `ALREADY_EXISTS` | ordering domain | 同 id 再 Save（repo 層） |
 | `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數 |
 | `stock.below_reserved` | `FAILED_PRECONDITION` | inventory domain | SetStock 想把 on-hand 壓到低於已 reserved |

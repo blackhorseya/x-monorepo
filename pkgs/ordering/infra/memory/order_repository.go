@@ -42,6 +42,25 @@ func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order
 	return clone(o)
 }
 
+// FindByIDForCustomer is FindByID for one customer's orders: another
+// customer's order is ErrNotFound, the same as a missing one.
+func (i *OrderRepository) FindByIDForCustomer(c context.Context, id order.ID, customerID string) (*order.Order, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	o, ok := i.data[id]
+	if !ok || o.CustomerID() != customerID {
+		return nil, order.ErrNotFound
+	}
+
+	return clone(o)
+}
+
 // Save follows the Postgres contract: Version 0 inserts (ErrDuplicate if the id
 // is taken); anything else updates only if the stored version still matches
 // (ErrStale otherwise). The stored copy's version advances by one.

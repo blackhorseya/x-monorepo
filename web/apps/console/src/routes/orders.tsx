@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useResetOnCredentialChange } from "../auth";
+import { useCanChooseCustomer } from "../components/customer";
 import { describe, isUnauthenticated, orders } from "../client";
 import { useOrderReservations, type RowReservation } from "../orderReservations";
 import { keys, ordersQuery, refreshFirstPage } from "../queries";
@@ -34,14 +35,18 @@ export function OrdersPage() {
 
 function CreateOrderCard() {
   const qc = useQueryClient();
-  const [customerId, setCustomerId] = useState("c-1");
+  // Optional: empty = the caller. Only an admin (on behalf of a customer) or an anonymous caller
+  // (who has nobody to default to) may name one; for anyone else the server uses their own
+  // subject and refuses another, so the field is locked and nothing is sent.
+  const canChoose = useCanChooseCustomer();
+  const [customerId, setCustomerId] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [lines, setLines] = useState<Line[]>([{ sku: "SKU-1", quantity: 2, priceMinor: 1299 }]);
 
   const create = useMutation({
     mutationFn: () =>
       orders.createOrder({
-        customerId,
+        customerId: canChoose ? customerId.trim() : "",
         items: lines.map((l) => ({
           sku: l.sku,
           quantity: l.quantity,
@@ -66,7 +71,12 @@ function CreateOrderCard() {
       <CardContent className="grid gap-4">
         <div className="flex flex-wrap gap-4">
           <Field label="Customer" className="w-48">
-            <Input value={customerId} onChange={(e) => setCustomerId(e.target.value)} />
+            <Input
+              value={canChoose ? customerId : ""}
+              placeholder={canChoose ? "optional: you, if empty" : "your account"}
+              disabled={!canChoose}
+              onChange={(e) => setCustomerId(e.target.value)}
+            />
           </Field>
           <Field label="Currency" className="w-24">
             <Input value={currency} onChange={(e) => setCurrency(e.target.value)} />

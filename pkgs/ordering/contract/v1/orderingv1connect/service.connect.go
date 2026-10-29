@@ -50,7 +50,16 @@ const (
 
 // OrderServiceClient is a client for the ordering.v1.OrderService service.
 type OrderServiceClient interface {
+	// CreateOrder places a PENDING order. Whose order it is depends on who calls
+	// (auth.mode on, principal = the caller's account id or JWT sub):
+	//   - a non-admin always orders for themselves; naming another customer_id is
+	//     PERMISSION_DENIED (x-error-code: order.permission_denied);
+	//   - an admin (auth.admin_role) may order on behalf of a customer, and without
+	//     customer_id orders for themselves;
+	//   - anonymous (auth.mode off, or a public procedure): customer_id is required.
 	CreateOrder(context.Context, *connect.Request[v1.CreateOrderRequest]) (*connect.Response[v1.CreateOrderResponse], error)
+	// GetOrder reads one order. A non-admin reading someone else's order gets
+	// NOT_FOUND, the same answer as for an order that does not exist.
 	GetOrder(context.Context, *connect.Request[v1.GetOrderRequest]) (*connect.Response[v1.GetOrderResponse], error)
 	CancelOrder(context.Context, *connect.Request[v1.CancelOrderRequest]) (*connect.Response[v1.CancelOrderResponse], error)
 	// CompleteOrder fulfils a CONFIRMED order (CONFIRMED → COMPLETED) and publishes
@@ -60,6 +69,8 @@ type OrderServiceClient interface {
 	// ListOrders pages through orders newest first (create_time desc, id desc).
 	// Cursor pagination per AIP-158: pass next_page_token back unchanged with the
 	// SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+	// A non-admin lists only their own orders: customer_id empty means themselves,
+	// another customer is PERMISSION_DENIED. Admin and anonymous callers filter freely.
 	ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error)
 }
 
@@ -143,7 +154,16 @@ func (c *orderServiceClient) ListOrders(ctx context.Context, req *connect.Reques
 
 // OrderServiceHandler is an implementation of the ordering.v1.OrderService service.
 type OrderServiceHandler interface {
+	// CreateOrder places a PENDING order. Whose order it is depends on who calls
+	// (auth.mode on, principal = the caller's account id or JWT sub):
+	//   - a non-admin always orders for themselves; naming another customer_id is
+	//     PERMISSION_DENIED (x-error-code: order.permission_denied);
+	//   - an admin (auth.admin_role) may order on behalf of a customer, and without
+	//     customer_id orders for themselves;
+	//   - anonymous (auth.mode off, or a public procedure): customer_id is required.
 	CreateOrder(context.Context, *connect.Request[v1.CreateOrderRequest]) (*connect.Response[v1.CreateOrderResponse], error)
+	// GetOrder reads one order. A non-admin reading someone else's order gets
+	// NOT_FOUND, the same answer as for an order that does not exist.
 	GetOrder(context.Context, *connect.Request[v1.GetOrderRequest]) (*connect.Response[v1.GetOrderResponse], error)
 	CancelOrder(context.Context, *connect.Request[v1.CancelOrderRequest]) (*connect.Response[v1.CancelOrderResponse], error)
 	// CompleteOrder fulfils a CONFIRMED order (CONFIRMED → COMPLETED) and publishes
@@ -153,6 +173,8 @@ type OrderServiceHandler interface {
 	// ListOrders pages through orders newest first (create_time desc, id desc).
 	// Cursor pagination per AIP-158: pass next_page_token back unchanged with the
 	// SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+	// A non-admin lists only their own orders: customer_id empty means themselves,
+	// another customer is PERMISSION_DENIED. Admin and anonymous callers filter freely.
 	ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error)
 }
 

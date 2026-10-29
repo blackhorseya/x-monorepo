@@ -150,8 +150,9 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	oinbox := ordering.ProvideInbox(db)
 	oev := orderingevents.NewPublisher(publisher)
 	oclock := orderingsys.NewClock()
-	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, rec)
-	getOrder := ordering.ProvideGetOrder(orders, rec)
+	own := ordering.ProvideOwnership(config.Auth{})
+	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, own, rec)
+	getOrder := ordering.ProvideGetOrder(orders, own, rec)
 	completeOrder := ordering.ProvideCompleteOrder(orders, otx, oinbox, oev, oclock, rec)
 	orderingSubs := ordering.ProvideSubscriptions(
 		orderingconsumer.NewOrderCancellationHandler(ordering.ProvideCancelOrder(orders, otx, oinbox, oev, oclock, rec)),

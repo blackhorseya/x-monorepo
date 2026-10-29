@@ -24,6 +24,8 @@ const (
 	KindNotFound
 	KindFailedPrecondition
 	KindConflict
+	// KindPermissionDenied: the caller is known but may not do this.
+	KindPermissionDenied
 )
 
 func (k Kind) String() string {
@@ -36,6 +38,8 @@ func (k Kind) String() string {
 		return "failed_precondition"
 	case KindConflict:
 		return "conflict"
+	case KindPermissionDenied:
+		return "permission_denied"
 	default:
 		return "internal"
 	}
