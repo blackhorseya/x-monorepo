@@ -55,12 +55,14 @@ echo "equivalent-entry $(openssl rand -hex 16)" > "$work/equiv.txt"
 signs_cmd "$work/equiv.txt"
 COSIGN_PASSWORD= "${cmd[@]}" --key "$work/import-cosign.key" >/dev/null \
   || { echo "FAIL: first signature of the artifact failed (Rekor unreachable, not the 409 case)"; exit 1; }
+# Both signs write the same $sig: drop the first bundle so the checks below see the second one only.
+rm -f "$sig"
 if ! out=$(COSIGN_PASSWORD= "${cmd[@]}" --key "$work/import-cosign.key" 2>&1); then
   echo "FAIL: signing the same artifact again met an equivalent Rekor entry and cosign gave up (#195):"
   printf '%s\n' "$out" | sed -E 's/[0-9a-f]{40,}/<id>/g' | tail -n 2
   exit 1
 fi
-[ -s "$sig" ] || { echo "FAIL: the equivalent-entry bundle $sig is empty"; exit 1; }
+[ -s "$sig" ] || { echo "FAIL: the second signature wrote no bundle ($sig missing or empty)"; exit 1; }
 cosign verify-blob --key "$work/import-cosign.pub" --bundle "$sig" "$work/equiv.txt" \
   || { echo "FAIL: the equivalent-entry bundle does not verify (signature or log inclusion)"; exit 1; }
 echo "signing the same artifact twice reuses the existing Rekor entry and the bundle verifies"
