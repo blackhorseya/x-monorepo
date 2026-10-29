@@ -140,3 +140,31 @@ func fetchCounts(t *testing.T, ms map[string]metricdata.Metrics) map[string]int6
 
 	return out
 }
+
+// P2b, in flight: Close aborts a JWKS request that is already running instead of
+// leaving it to its 10 s timeout, and the lookup that was waiting on it fails.
+func TestRegression_CloseAbortsInFlightFetch(t *testing.T) {
+	clk := newClock()
+	known, ghost := rsSigner(t, "k-known"), edSigner(t, "k-ghost")
+	idp := newIdP(t, known)
+	v := newVerifier(t, clk, idp)
+	v.Warm(t.Context())
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	idp.set(func(p *fakeIdP) { p.blockJWKS = release })
+	_, base := idp.hits()
+	result := make(chan error, 1)
+	go func() { _, err := verify(v, ghost.sign(t, goodClaims(clk, idp.url()))); result <- err }()
+	waitFor(t, "the unknown-kid fetch to be in flight", func() bool { _, j := idp.hits(); return j > base })
+
+	v.Close()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("the lookup of an unknown kid succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not abort the in-flight JWKS request")
+	}
+}

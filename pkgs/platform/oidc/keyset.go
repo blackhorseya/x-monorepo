@@ -46,6 +46,7 @@ var (
 	errUnknownKey = errors.New("no signing key for this kid")
 	errStale      = errors.New("signing keys are older than 24h without a successful refresh")
 	errNotReady   = errors.New("issuer discovery has not succeeded yet")
+	errClosed     = errors.New("verifier is closed")
 )
 
 type keyset struct {
@@ -66,9 +67,9 @@ type keyset struct {
 	lastInit time.Time
 
 	mu          sync.Mutex
-	lastSuccess time.Time
-	prevSuccess time.Time
-	pending     bool // the last JWKS response looked fine; jwkset may still refuse it
+	lastSuccess time.Time // set only together with a keyset jwkset has accepted (acceptedStorage)
+
+	failed sync.Map // request context → struct{}: attempts the transport already counted as errors
 
 	group singleflight.Group
 }
@@ -83,13 +84,16 @@ func (ks *keyset) ready(c context.Context) (keyfunc.Keyfunc, error) {
 	if ks.kf != nil {
 		return ks.kf, nil
 	}
+	if ks.ctx.Err() != nil {
+		return nil, errClosed
+	}
 	now := ks.now()
 	if !ks.lastInit.IsZero() && now.Sub(ks.lastInit) < initWindow {
 		return nil, errNotReady
 	}
 	ks.lastInit = now
 
-	c, cancel := context.WithTimeout(context.WithoutCancel(c), fetchTimeout)
+	c, cancel := ks.fetchContext(c)
 	defer cancel()
 	uri, err := ks.discover(c)
 	if err != nil {
@@ -109,6 +113,7 @@ func (ks *keyset) ready(c context.Context) (keyfunc.Keyfunc, error) {
 		RefreshErrorHandler:       ks.onRefreshError,
 		RefreshInterval:           ks.refreshInterval,
 		HTTPTimeout:               fetchTimeout,
+		Storage:                   acceptedStorage{Storage: jwkset.NewMemoryStorage(), ks: ks},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("jwks storage: %w", err)
@@ -143,10 +148,18 @@ func (ks *keyset) key(c context.Context, tok *jwt.Token, kid, alg string) (any, 
 	if err != nil {
 		return nil, err
 	}
+	// The trust check comes before the lookup: lastSuccess only moves forward,
+	// when jwkset has replaced the keys, so a key read after this point comes
+	// from the set that was trusted here or from a newer accepted one.
+	if ks.age() > maxStale {
+		return nil, errStale
+	}
 	v, err, _ := ks.group.Do(kid+"|"+alg, func() (any, error) {
-		lc, cancel := context.WithTimeout(context.WithoutCancel(c), fetchTimeout)
+		lc, cancel := ks.fetchContext(c)
 		defer cancel()
-		if !hasKey(lc, kf, kid) && ks.lim.Tokens() < 1 {
+		// After Close the keys already held still verify, but an unknown kid
+		// never starts a request.
+		if !hasKey(lc, kf, kid) && (ks.ctx.Err() != nil || ks.lim.Tokens() < 1) {
 			return nil, errUnknownKey
 		}
 
@@ -154,9 +167,6 @@ func (ks *keyset) key(c context.Context, tok *jwt.Token, kid, alg string) (any, 
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errUnknownKey, err)
-	}
-	if ks.age() > maxStale {
-		return nil, errStale
 	}
 	if err := keyFitsAlg(v, alg); err != nil {
 		return nil, err
@@ -231,57 +241,71 @@ func (ks *keyset) count(c context.Context, result string) {
 	ks.fetchC.Add(c, 1, metric.WithAttributes(attribute.String("issuer", ks.iss.Issuer), attribute.String("result", result)))
 }
 
-// record is called by the transport for every JWKS request.
-func (ks *keyset) record(c context.Context, ok bool) {
-	ks.mu.Lock()
-	ks.pending = false // only the latest attempt can still be taken back
-	if ok {
-		ks.prevSuccess, ks.lastSuccess, ks.pending = ks.lastSuccess, ks.now(), true
-	}
-	ks.mu.Unlock()
-	if ok {
-		ks.count(c, "ok")
-	} else {
-		ks.count(c, "error")
-	}
+// fetchContext bounds one discovery or JWKS request. It keeps the caller's
+// values but not its cancellation (the result is shared by every request
+// waiting on it), and it ends when the verifier is closed.
+func (ks *keyset) fetchContext(c context.Context) (context.Context, context.CancelFunc) {
+	fc, cancel := context.WithTimeout(context.WithoutCancel(c), fetchTimeout)
+	stop := context.AfterFunc(ks.ctx, cancel)
+
+	return fc, func() { stop(); cancel() }
 }
 
-// onRefreshError is jwkset's handler for a refresh that failed. If the
-// transport had already booked that response as a success (HTTP 200 and a JWK
-// Set envelope) but jwkset refused its content, the keys were not replaced, so
-// the success is taken back.
+// acceptedStorage is the one place a refresh counts as a success: jwkset calls
+// KeyReplaceAll only after it has parsed every JWK of a response, so the
+// last-success time moves in the same step as the keys it vouches for. A
+// response jwkset refuses never gets here.
+type acceptedStorage struct {
+	jwkset.Storage
+	ks *keyset
+}
+
+func (a acceptedStorage) KeyReplaceAll(c context.Context, keys []jwkset.JWK) error {
+	a.ks.mu.Lock()
+	defer a.ks.mu.Unlock()
+	if err := a.Storage.KeyReplaceAll(c, keys); err != nil {
+		return err
+	}
+	a.ks.lastSuccess = a.ks.now()
+	a.ks.count(c, "ok")
+
+	return nil
+}
+
+// onRefreshError is jwkset's handler for every failed refresh. The transport
+// has already counted the failures it saw (no response, bad status, not a JWK
+// Set); what is left is a well-formed response whose keys jwkset refused, which
+// is counted here, so each attempt ends in exactly one result.
 func (ks *keyset) onRefreshError(c context.Context, err error) {
 	contextx.FromContext(c).Warn("oidc: jwks refresh failed", "issuer", ks.iss.Issuer, "error", err)
-	ks.mu.Lock()
-	// pending is the latest response, booked as a success a moment ago; an
-	// older success that nothing has taken back since is not touched.
-	revert := ks.pending && ks.now().Sub(ks.lastSuccess) <= fetchTimeout
-	if revert {
-		ks.lastSuccess, ks.pending = ks.prevSuccess, false
-	}
-	ks.mu.Unlock()
-	if revert {
+	if _, counted := ks.failed.LoadAndDelete(c); !counted {
 		ks.count(c, "error")
 	}
 }
 
-// countingTransport books every JWKS response: a success is HTTP 200 with a
-// JWK Set document of at most maxResponseLen bytes. Redirects never get here
-// (the client does not follow them).
+// countingTransport counts the JWKS requests that fail before jwkset sees any
+// keys: no response, a status other than 200, or a body that is oversized or
+// not a JWK Set. It does not decide that a fetch succeeded; only jwkset
+// accepting the keys does (acceptedStorage).
 type countingTransport struct {
 	base http.RoundTripper
 	ks   *keyset
 }
 
+func (t countingTransport) fail(req *http.Request) {
+	t.ks.failed.Store(req.Context(), struct{}{}) // the handler gets this same context
+	t.ks.count(req.Context(), "error")
+}
+
 func (t countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
-		t.ks.record(req.Context(), false)
+		t.fail(req)
 
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.ks.record(req.Context(), false)
+		t.fail(req)
 
 		return resp, nil
 	}
@@ -291,11 +315,10 @@ func (t countingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		Keys []json.RawMessage `json:"keys"`
 	}
 	if err != nil || len(body) > maxResponseLen || json.Unmarshal(body, &doc) != nil || doc.Keys == nil {
-		t.ks.record(req.Context(), false)
+		t.fail(req)
 
 		return nil, errors.New("jwks response is not a JWK Set")
 	}
-	t.ks.record(req.Context(), true)
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 
 	return resp, nil

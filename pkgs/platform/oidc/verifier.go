@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -44,7 +45,9 @@ type Identity struct {
 type Verifier struct {
 	issuers map[string]*keyset
 	now     func() time.Time
-	cancel  context.CancelFunc // ends the JWKS refresh goroutines
+	cancel  context.CancelFunc // ends the JWKS refresh goroutines and in-flight fetches
+	reg     metric.Registration
+	closed  sync.Once
 }
 
 // Option customises New.
@@ -129,19 +132,27 @@ func New(cfg config.OIDC, opts ...Option) (*Verifier, error) {
 		v.issuers[is.Issuer] = ks
 	}
 
-	if _, err := meter.Float64ObservableGauge("auth.jwks.age",
+	age, err := meter.Float64ObservableGauge("auth.jwks.age",
 		metric.WithUnit("s"),
-		metric.WithDescription("Seconds since the last successful JWKS fetch per OIDC issuer (since startup while there has been none)."),
-		metric.WithFloat64Callback(func(_ context.Context, obs metric.Float64Observer) error {
-			for iss, ks := range v.issuers {
-				obs.Observe(ks.age().Seconds(), metric.WithAttributes(attribute.String("issuer", iss)))
-			}
-
-			return nil
-		})); err != nil {
+		metric.WithDescription("Seconds since the last successful JWKS fetch per OIDC issuer (since startup while there has been none)."))
+	if err != nil {
 		cancel()
 
 		return nil, fmt.Errorf("oidc: age gauge: %w", err)
+	}
+	// Registered by hand, not as an instrument callback, so that Close can take
+	// it out of the provider again.
+	v.reg, err = meter.RegisterCallback(func(_ context.Context, obs metric.Observer) error {
+		for iss, ks := range v.issuers {
+			obs.ObserveFloat64(age, ks.age().Seconds(), metric.WithAttributes(attribute.String("issuer", iss)))
+		}
+
+		return nil
+	}, age)
+	if err != nil {
+		cancel()
+
+		return nil, fmt.Errorf("oidc: age gauge callback: %w", err)
 	}
 
 	return v, nil
@@ -156,9 +167,18 @@ func (v *Verifier) Warm(c context.Context) {
 	}
 }
 
-// Close stops the background JWKS refresh. The verifier keeps verifying with
-// the keys it holds, but they no longer refresh.
-func (v *Verifier) Close() { v.cancel() }
+// Close ends the background JWKS refresh, aborts fetches in flight and removes
+// the age gauge from the meter provider. Tokens signed by keys already held
+// still verify; an unknown kid is rejected without any request, so no new key
+// is admitted. Safe to call more than once.
+func (v *Verifier) Close() {
+	v.closed.Do(func() {
+		v.cancel()
+		if v.reg != nil {
+			_ = v.reg.Unregister()
+		}
+	})
+}
 
 type claims struct {
 	jwt.RegisteredClaims

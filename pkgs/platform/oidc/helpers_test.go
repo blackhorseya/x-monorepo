@@ -134,6 +134,7 @@ type fakeIdP struct {
 	jwksHit       int
 	failJWKS      bool
 	failDiscovery bool
+	blockJWKS     chan struct{} // when set, /keys waits for it (or for the client to give up)
 	cacheControl  string
 	discIssuer    string // overrides the issuer the discovery document claims
 	jwksURI       string // overrides the jwks_uri the discovery document claims
@@ -162,10 +163,20 @@ func newIdP(t *testing.T, signers ...*signer) *fakeIdP {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"issuer": iss, "jwks_uri": uri})
 	})
-	mux.HandleFunc("/keys", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		p.jwksHit++
+		block := p.blockJWKS
+		p.mu.Unlock()
+		if block != nil {
+			select {
+			case <-block:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		p.jwksHit++
 		if p.failJWKS {
 			http.Error(w, "boom", http.StatusServiceUnavailable)
 
