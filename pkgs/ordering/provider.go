@@ -61,7 +61,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGauges,
 )
 
-// ProvideOwnership is the ownership policy of CreateOrder / GetOrder / ListOrders:
+// ProvideOwnership is the ownership policy of CreateOrder / GetOrder / ListOrders / CancelOrder / CompleteOrder:
 // who counts as admin comes from config auth.admin_role.
 func ProvideOwnership(auth config.Auth) *ownership.Policy {
 	role := auth.AdminRole
@@ -162,8 +162,8 @@ func ProvideGetOrder(repo order.Repository, own *ownership.Policy, rec *usecasex
 	return decorate("ordering.get_order", rec, usecase.NewGetOrder(repo, own))
 }
 
-func ProvideCancelOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) rpc.CancelOrderUC {
-	return decorateTx("ordering.cancel_order", rec, tx, inbox, usecase.NewCancelOrder(repo, events, clock))
+func ProvideCancelOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, own *ownership.Policy, rec *usecasex.Recorder) rpc.CancelOrderUC {
+	return decorateTx("ordering.cancel_order", rec, tx, inbox, usecase.NewCancelOrder(repo, events, clock, own))
 }
 
 // ProvideConfirmOrder has no rpc caller: only the consumer (inventory.v1.StockReserved) drives it.
@@ -172,8 +172,8 @@ func ProvideConfirmOrder(repo order.Repository, tx port.Transactor, inbox port.I
 }
 
 // ProvideCompleteOrder is rpc-driven: inventory reacts to the OrderCompleted it raises.
-func ProvideCompleteOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) rpc.CompleteOrderUC {
-	return decorateTx("ordering.complete_order", rec, tx, inbox, usecase.NewCompleteOrder(repo, events, clock))
+func ProvideCompleteOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, own *ownership.Policy, rec *usecasex.Recorder) rpc.CompleteOrderUC {
+	return decorateTx("ordering.complete_order", rec, tx, inbox, usecase.NewCompleteOrder(repo, events, clock, own))
 }
 
 // ProvideOrderStats feeds the gauges; decorated like every read (its Logging

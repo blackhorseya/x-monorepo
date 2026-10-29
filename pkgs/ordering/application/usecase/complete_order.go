@@ -6,6 +6,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/mapper"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -20,10 +21,11 @@ type CompleteOrder struct {
 	repo   order.Repository
 	events port.EventPublisher
 	clock  port.Clock
+	own    *ownership.Policy
 }
 
-func NewCompleteOrder(repo order.Repository, events port.EventPublisher, clock port.Clock) *CompleteOrder {
-	return &CompleteOrder{repo: repo, events: events, clock: clock}
+func NewCompleteOrder(repo order.Repository, events port.EventPublisher, clock port.Clock, own *ownership.Policy) *CompleteOrder {
+	return &CompleteOrder{repo: repo, events: events, clock: clock, own: own}
 }
 
 func (uc *CompleteOrder) Execute(c context.Context, in dto.CompleteOrderInput) (*dto.OrderOutput, error) {
@@ -36,7 +38,9 @@ func (uc *CompleteOrder) Execute(c context.Context, in dto.CompleteOrderInput) (
 	var o *order.Order
 	err := retryOnConflict(ctx, func() error {
 		var err error
-		if o, err = uc.repo.FindByID(ctx, order.ID(in.OrderID)); err != nil {
+		// Reloaded on every retry, so the owner condition rides along each time. A
+		// confined caller's foreign order is order.not_found, as in GetOrder.
+		if o, err = uc.find(ctx, in.OrderID); err != nil {
 			return err
 		}
 		if err = o.Complete(uc.clock.Now()); err != nil {
@@ -56,4 +60,12 @@ func (uc *CompleteOrder) Execute(c context.Context, in dto.CompleteOrderInput) (
 	}
 
 	return mapper.ToOrderOutput(o), nil
+}
+
+func (uc *CompleteOrder) find(ctx contextx.Contextx, id string) (*order.Order, error) {
+	if customer, confined := uc.own.OwnOnly(ctx); confined {
+		return uc.repo.FindByIDForCustomer(ctx, order.ID(id), customer)
+	}
+
+	return uc.repo.FindByID(ctx, order.ID(id))
 }

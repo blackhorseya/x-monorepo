@@ -16,6 +16,7 @@ import (
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -37,7 +38,7 @@ func TestOrderCancellationHandler(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
 	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"))
-	h := consumer.NewOrderCancellationHandler(usecase.NewCancelOrder(repo, noEvents{}, clock{}))
+	h := consumer.NewOrderCancellationHandler(usecase.NewCancelOrder(repo, noEvents{}, clock{}, ownership.New("admin")))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
@@ -72,5 +73,30 @@ func TestOrderCancellationHandler_StaleIsRetried(t *testing.T) {
 	err := consumer.NewOrderCancellationHandler(stale).Handle(context.Background(), payload)
 	if err == nil || errors.Is(err, consumer.ErrDrop) || !errors.Is(err, order.ErrStale) {
 		t.Fatalf("err = %v, want ErrStale returned for retry (not ErrDrop)", err)
+	}
+}
+
+// OrderCancellationRequested carries no principal, so the ownership policy must
+// not confine it: the handler cancels an order whoever placed it, even with a
+// policy that confines every named caller.
+func TestOrderCancellationHandler_CancelsAnyCustomersOrder(t *testing.T) {
+	repo := memory.NewOrderRepository()
+	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"))
+	cancel := usecase.NewCancelOrder(repo, noEvents{}, clock{}, ownership.New("admin"))
+	alice := contextx.WithPrincipal(context.Background(), contextx.Principal{Subject: "acct-alice", Roles: []string{"user"}, Method: "api_key"})
+
+	if _, err := create.Execute(alice, dto.CreateOrderInput{
+		Items: []dto.LineItem{{SKU: "S", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 1, Currency: "USD"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload, _ := proto.Marshal(&orderingv1.OrderCancellationRequested{OrderId: "o-1", Reason: "reservation expired"})
+	if err := consumer.NewOrderCancellationHandler(cancel).Handle(context.Background(), payload); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	got, err := usecase.NewGetOrder(repo, ownership.New("admin")).Execute(context.Background(), dto.GetOrderInput{OrderID: "o-1"})
+	if err != nil || got.Status != "CANCELLED" {
+		t.Fatalf("order after the event = %+v, %v, want CANCELLED", got, err)
 	}
 }

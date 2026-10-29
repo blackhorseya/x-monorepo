@@ -64,6 +64,8 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	inbox := ordering.ProvideInbox(db)
 	eventsPublisher := events.NewPublisher(publisher)
 	clock := system.NewClock()
+	auth := cfg.Auth
+	policy := ordering.ProvideOwnership(auth)
 	meterProvider := providers.Meter
 	recorder, err := usecasex.NewRecorder(meterProvider)
 	if err != nil {
@@ -73,7 +75,7 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, recorder)
+	v := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)
 	orderCancellationHandler := consumer.NewOrderCancellationHandler(v)
 	v2 := ordering.ProvideConfirmOrder(repository, transactor, inbox, eventsPublisher, clock, recorder)
 	stockReservedHandler := consumer.NewStockReservedHandler(v2)

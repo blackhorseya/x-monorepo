@@ -61,7 +61,7 @@ func TestConfirmRetriesStaleAndSeesCancel(t *testing.T) {
 		if n != 1 {
 			return
 		}
-		if _, err := usecase.NewCancelOrder(inner, &recorder{}, clock).Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); err != nil {
+		if _, err := usecase.NewCancelOrder(inner, &recorder{}, clock, ownership.New("admin")).Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); err != nil {
 			t.Fatalf("competing cancel: %v", err)
 		}
 	}
@@ -94,7 +94,7 @@ func TestCancelRetriesStaleAfterConfirm(t *testing.T) {
 		}
 	}
 
-	out, err := usecase.NewCancelOrder(repo, rec, clock).Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
+	out, err := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin")).Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
 	if err != nil || out.Status != "CANCELLED" {
 		t.Fatalf("cancel = %+v, %v; want CANCELLED after one retry", out, err)
 	}
@@ -121,12 +121,12 @@ func TestCompleteRetriesStaleAndSeesCancel(t *testing.T) {
 		if n != 1 {
 			return
 		}
-		if _, err := usecase.NewCancelOrder(inner, &recorder{}, clock).Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); err != nil {
+		if _, err := usecase.NewCancelOrder(inner, &recorder{}, clock, ownership.New("admin")).Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); err != nil {
 			t.Fatalf("competing cancel: %v", err)
 		}
 	}
 
-	_, err := usecase.NewCompleteOrder(repo, &recorder{}, clock).Execute(c, dto.CompleteOrderInput{OrderID: "o-1"})
+	_, err := usecase.NewCompleteOrder(repo, &recorder{}, clock, ownership.New("admin")).Execute(c, dto.CompleteOrderInput{OrderID: "o-1"})
 	if !errors.Is(err, order.ErrCannotComplete) {
 		t.Fatalf("complete err = %v, want ErrCannotComplete", err)
 	}
@@ -140,7 +140,7 @@ func TestRetryExhaustedReturnsStale(t *testing.T) {
 	seedOrder(t, inner, clock)
 
 	repo := &racyRepo{Repository: inner, failWith: order.ErrStale}
-	_, err := usecase.NewCancelOrder(repo, &recorder{}, clock).Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
+	_, err := usecase.NewCancelOrder(repo, &recorder{}, clock, ownership.New("admin")).Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
 	if !errors.Is(err, order.ErrStale) {
 		t.Fatalf("err = %v, want ErrStale once retries run out", err)
 	}
@@ -179,7 +179,7 @@ func TestRetryStopsOnCancelledContext(t *testing.T) {
 	repo.beforeSave = nil
 	cancelOnFirst := &cancelAfterSave{racyRepo: repo, cancel: cancel}
 
-	_, err := usecase.NewCancelOrder(cancelOnFirst, &recorder{}, clock).Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
+	_, err := usecase.NewCancelOrder(cancelOnFirst, &recorder{}, clock, ownership.New("admin")).Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
 	if err == nil {
 		t.Fatal("want an error")
 	}

@@ -271,3 +271,122 @@ func TestRepository_FindByIDForCustomer(t *testing.T) {
 		}
 	})
 }
+
+// confirmed moves a placed order to CONFIRMED, the only state Complete accepts.
+func confirmed(t *testing.T, repo order.Repository, id string) {
+	t.Helper()
+	confirm := usecase.NewConfirmOrder(repo, &recorder{}, fixedClock{t: time.Date(2026, 10, 29, 9, 1, 0, 0, time.UTC)})
+	if out, err := confirm.Execute(context.Background(), dto.ConfirmOrderInput{OrderID: id}); err != nil || out.Status != "CONFIRMED" {
+		t.Fatalf("confirm %s = %+v, %v", id, out, err)
+	}
+}
+
+func statusOf(t *testing.T, repo order.Repository, id string) string {
+	t.Helper()
+	out, err := usecase.NewGetOrder(repo, ownership.New(adminRole)).Execute(context.Background(), dto.GetOrderInput{OrderID: id})
+	if err != nil {
+		t.Fatalf("status of %s: %v", id, err)
+	}
+
+	return out.Status
+}
+
+func TestCancelOrder_Ownership(t *testing.T) {
+	repos(t, func(t *testing.T, repo order.Repository) {
+		create := newCreate(repo)
+		rec := &recorder{}
+		cancel := usecase.NewCancelOrder(repo, rec, fixedClock{t: time.Date(2026, 10, 29, 9, 2, 0, 0, time.UTC)}, ownership.New(adminRole))
+
+		// Somebody else's order is refused exactly like a missing one: same
+		// error, same text, order untouched, nothing published.
+		mine := place(t, create, alice, "")
+		_, other := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: mine.ID})
+		_, missing := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: "no-such-order"})
+		if !errors.Is(other, order.ErrNotFound) || !errors.Is(missing, order.ErrNotFound) {
+			t.Fatalf("other = %v, missing = %v, want both ErrNotFound", other, missing)
+		}
+		if other.Error() != missing.Error() {
+			t.Fatalf("other %q differs from missing %q", other, missing)
+		}
+		if got := statusOf(t, repo, mine.ID); got != "PENDING" {
+			t.Fatalf("status after a foreign cancel = %s, want PENDING", got)
+		}
+		if len(rec.events) != 0 {
+			t.Fatalf("foreign cancel published %d events, want 0", len(rec.events))
+		}
+
+		// The owner, an admin and an anonymous caller (auth off, or the consumer
+		// path) each cancel: admin and anonymous someone else's order.
+		for name, ctx := range map[string]context.Context{"owner": as(alice), "admin": as(ops), "anonymous": context.Background()} {
+			o := place(t, create, alice, "")
+			if out, err := cancel.Execute(ctx, dto.CancelOrderInput{OrderID: o.ID}); err != nil || out.Status != "CANCELLED" {
+				t.Fatalf("%s cancel = %+v, %v", name, out, err)
+			}
+		}
+		if len(rec.events) != 3 {
+			t.Fatalf("published %d events, want 3 (one per allowed cancel)", len(rec.events))
+		}
+	})
+}
+
+func TestCompleteOrder_Ownership(t *testing.T) {
+	repos(t, func(t *testing.T, repo order.Repository) {
+		create := newCreate(repo)
+		rec := &recorder{}
+		complete := usecase.NewCompleteOrder(repo, rec, fixedClock{t: time.Date(2026, 10, 29, 9, 2, 0, 0, time.UTC)}, ownership.New(adminRole))
+
+		mine := place(t, create, alice, "")
+		confirmed(t, repo, mine.ID)
+		_, other := complete.Execute(as(bob), dto.CompleteOrderInput{OrderID: mine.ID})
+		_, missing := complete.Execute(as(bob), dto.CompleteOrderInput{OrderID: "no-such-order"})
+		if !errors.Is(other, order.ErrNotFound) || !errors.Is(missing, order.ErrNotFound) {
+			t.Fatalf("other = %v, missing = %v, want both ErrNotFound", other, missing)
+		}
+		if other.Error() != missing.Error() {
+			t.Fatalf("other %q differs from missing %q", other, missing)
+		}
+		if got := statusOf(t, repo, mine.ID); got != "CONFIRMED" {
+			t.Fatalf("status after a foreign complete = %s, want CONFIRMED", got)
+		}
+		if len(rec.events) != 0 {
+			t.Fatalf("foreign complete published %d events, want 0", len(rec.events))
+		}
+
+		for name, ctx := range map[string]context.Context{"owner": as(alice), "admin": as(ops), "anonymous": context.Background()} {
+			o := place(t, create, alice, "")
+			confirmed(t, repo, o.ID)
+			if out, err := complete.Execute(ctx, dto.CompleteOrderInput{OrderID: o.ID}); err != nil || out.Status != "COMPLETED" {
+				t.Fatalf("%s complete = %+v, %v", name, out, err)
+			}
+		}
+		if len(rec.events) != 3 {
+			t.Fatalf("published %d events, want 3 (one per allowed complete)", len(rec.events))
+		}
+	})
+}
+
+// A confined caller's cancel/complete goes through FindByIDForCustomer and never
+// FindByID, like GetOrder; admin and anonymous keep the plain find.
+func TestCancelComplete_ConfinedCallerNeverLoadsAForeignOrder(t *testing.T) {
+	repos(t, func(t *testing.T, repo order.Repository) {
+		create := newCreate(repo)
+		mine := place(t, create, alice, "")
+		confirmed(t, repo, mine.ID)
+		spy := &spyRepo{Repository: repo}
+		clk := fixedClock{t: time.Date(2026, 10, 29, 9, 2, 0, 0, time.UTC)}
+		cancel := usecase.NewCancelOrder(spy, &recorder{}, clk, ownership.New(adminRole))
+		complete := usecase.NewCompleteOrder(spy, &recorder{}, clk, ownership.New(adminRole))
+
+		_, cerr := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: mine.ID})
+		_, derr := complete.Execute(as(bob), dto.CompleteOrderInput{OrderID: mine.ID})
+		if !errors.Is(cerr, order.ErrNotFound) || !errors.Is(derr, order.ErrNotFound) {
+			t.Fatalf("cancel = %v, complete = %v, want both ErrNotFound", cerr, derr)
+		}
+		if len(spy.findByID) != 0 {
+			t.Fatalf("FindByID called for a confined caller: %v", spy.findByID)
+		}
+		if want := mine.ID + "/" + bob.Subject; len(spy.findForCustomer) != 2 || spy.findForCustomer[0] != want || spy.findForCustomer[1] != want {
+			t.Fatalf("FindByIDForCustomer calls = %v, want 2 x %s", spy.findForCustomer, want)
+		}
+	})
+}

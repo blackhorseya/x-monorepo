@@ -120,7 +120,7 @@ Account 已經是「誰」，password 不是它的欄位，而是第二種 crede
 
 ## Ordering ownership（PR 3）
 
-identity 存在的業務理由：訂單屬於 principal。授權判斷在 ordering 的 **application 層**（`application/ownership.Policy`，三個 use case 呼叫它；domain 不碰 principal），
+identity 存在的業務理由：訂單屬於 principal。授權判斷在 ordering 的 **application 層**（`application/ownership.Policy`，五個 use case 呼叫它；domain 不碰 principal），
 admin role 名稱是注入的 `auth.admin_role`（`ProvideOwnership`），不是寫死的 `"admin"`。「誰是 customer」= `Principal.Subject`（identity key 是 account id、JWT 是 `sub`、static key 是 name）。
 
 | RPC | 非 admin（有 principal） | admin（`auth.admin_role`） | anonymous（auth off，或 `auth.public` 的 procedure / optional 沒帶 credential） |
@@ -128,9 +128,9 @@ admin role 名稱是注入的 `auth.admin_role`（`ProvideOwnership`），不是
 | `CreateOrder` | `customer_id` 空 = 自己；帶自己 = 自己；帶別人 → `PERMISSION_DENIED`（`order.permission_denied`），不寫入 | 帶了用帶的（代客下單），沒帶 = 自己 | 現行規則：`customer_id` 必填（`order.empty_customer`） |
 | `ListOrders` | 沒帶 `customer_id` = 自己的；帶別人 → `PERMISSION_DENIED` | 現行：空 = 全部，或指定 customer | 現行 |
 | `GetOrder` | 讀別人的訂單 → `NOT_FOUND`（`order.not_found`，跟不存在的 id 一樣，不洩漏存在與否） | 現行 | 現行 |
-| `CancelOrder` / `CompleteOrder` | **這次沒改**（任何 caller 都能操作任何訂單；Follow-up） | 同 | 同 |
+| `CancelOrder` / `CompleteOrder` | 操作別人的訂單 → `NOT_FOUND`（`order.not_found`，同 `GetOrder`；訂單狀態不變、不發 event）；自己的照常。`CompleteOrder` 的語意（任何 caller 都能完成）沒改 | 現行：任何訂單 | 現行（consumer 的 `OrderCancellationRequested` 沒有 principal，所以仍可取消任何訂單） |
 
-- 非 admin 的 `GetOrder` 走 `Repository.FindByIDForCustomer`（postgres：`WHERE id = ? AND customer_id = ?`，不符就在載入 items 之前結束）：「不存在」與「不是你的」走同一條查詢路徑：兩者都在選列時結束，不載入他人的 items，所以回應時間不隨訂單大小而異。這不是密碼學意義的 constant-time 保證。admin / anonymous 照舊 `FindByID`。
+- 非 admin 的 `GetOrder` / `CancelOrder` / `CompleteOrder` 走 `Repository.FindByIDForCustomer`（postgres：`WHERE id = ? AND customer_id = ?`，不符就在載入 items 之前結束）：「不存在」與「不是你的」走同一條查詢路徑：兩者都在選列時結束，不載入他人的 items，所以回應時間不隨訂單大小而異。這不是密碼學意義的 constant-time 保證。admin / anonymous 照舊 `FindByID`。
 - page token 綁的是**解析後**的 customer，所以非 admin 不帶 filter 翻頁、token 跟自己的 Subject 一致。
 - `auth.mode: off` 時沒有 principal，整張表只剩 anonymous 那欄；consumer path 永遠是 anonymous，不受影響。
 - `auth.public` 列進去的 procedure 不跑 auth，也就是 anonymous：公開的 `GetOrder` 任何人都讀得到任何訂單。ownership 保護的是「帶了 credential 的人」。
