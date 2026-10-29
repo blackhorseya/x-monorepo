@@ -14,8 +14,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 wrapper = os.path.abspath("scripts/cosign-sign-blob.sh")
 
-def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label="", pre=()):
+QUOTED = b'{"code":14,"message":"troubleshooting: adding rekor v2 entry: unexpected response: 409 {example}"}'
+
+def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label="", pre=(),
+        bundles=None):
     hits = []
+    sent = []   # the response bodies the fixture really wrote, to assert the payloads are the ones named
+    want_body = QUOTED if quoted else body
     body = {409: b'{"code":6,"message":"an equivalent entry already exists with index 123"}',
             503: b'{"code":14,"message":"unavailable"}'}[status]
     if body is not None:
@@ -24,7 +29,7 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
         body = b'{"code":14,"message":"troubleshooting: adding rekor v2 entry: unexpected response: 409 {example}"}'
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
-            hits.append(self.path)
+            hits.append(self.path); sent.append(body)
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             self.send_response(status); self.send_header("Content-Type", ctype); self.end_headers()
             self.wfile.write(body)
@@ -43,7 +48,7 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
                    "rekorTlogConfig": {"selector": "ALL"}}
             open(d + "/config.json", "w").write(json.dumps(cfg)); open(d + "/" + name, "w").write("fixture")
             # cwd=d and a bare artifact name: how cosign prints a relative path in its error line
-            r = subprocess.run([wrapper, "sign-blob", "--bundle=" + d + "/bundle.json", *pre,
+            r = subprocess.run([wrapper, "sign-blob", *(bundles(d) if bundles else ["--bundle=" + d + "/bundle.json"]), *pre,
                                 name, "--yes", "--key", d + "/cosign.key",
                                 "--signing-config", d + "/config.json"],
                                cwd=d, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -53,6 +58,8 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
         left = os.path.exists(d + "/bundle.json")
     print("v2 HTTP %d%s: wrapper exit %d, POSTs %d (want %d), bundle left %s" % (status, (" (body quotes a 409)" if quoted else "") + label, r.returncode, len(hits), want_posts, left))
     ok = r.returncode != 0 and len(hits) == want_posts and not left
+    if want_body is not None and sent != [want_body] * len(hits):
+        print("FAIL: v2 HTTP %d%s: the fixture sent %r, not the payload under test %r" % (status, label, sent[:1], want_body)); sys.exit(1)
     if not ok:
         print("FAIL: v2 HTTP %d:\n%s" % (status, r.stdout)); sys.exit(1)
 
@@ -71,6 +78,8 @@ run(503, 1, name="adding rekor v2 entry: unexpected response: 409 artifact", pre
     label=" (flag unknown to the wrapper before the artifact)")
 run(503, 1, name="fixture-client: adding rekor v2 entry: unexpected response: 409 artifact", pre=("--oidc-client-id", "fixture-client"),
     label=" (unknown flag whose value prefixes the artifact name)")
+run(503, 0, name="artifact", bundles=lambda d: ["--bundle=" + d + "/bundle.json", "--bundle=" + d + "/other.json"],
+    label=" (--bundle twice: usage error, cosign never runs)")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")
 print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")

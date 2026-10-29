@@ -344,17 +344,19 @@ esac
 FAKE
 chmod +x "$signfake/cosign"
 # sign_blob <name> "<FAKE_SEQ>": runs the wrapper with goreleaser's args; sets sb_rc, sb_out, sb_tries, sb_bundle.
-sign_blob() { # SB_ART=<file name> overrides the artifact name
+sign_blob() { # SB_ART=<file name> overrides the artifact name; SB_BUNDLE_ARGS (@B@ = the bundle path) the --bundle arguments
   local d="$tmp/sb-$1" art="${SB_ART:-checksums.txt}"; mkdir -p "$d"; echo artifact > "$d/$art"
   : > "$d/args"; rm -f "$d/count"
   sb_bundle="$d/checksums.txt.sigstore.json"
+  local bargs="${SB_BUNDLE_ARGS:---bundle=@B@}" bundle_args
+  bargs=${bargs//@B@/$sb_bundle}; read -r -a bundle_args <<<"$bargs"
   set +e
   if [ -n "${SB_REL:-}" ]; then # a bare relative artifact name, as cosign prints it
     sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token FAKE_ART="$art" \
-      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "--bundle=$sb_bundle" ${SB_PRE:-} "$art" --yes 2>&1)
+      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "${bundle_args[@]}" ${SB_PRE:-} "$art" --yes 2>&1)
   else
     sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-      COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/$art" --yes 2>&1)
+      COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "${bundle_args[@]}" "$d/$art" --yes 2>&1)
   fi
   sb_rc=$?
   set -e
@@ -434,6 +436,19 @@ SB_REL=1 SB_PRE='--' sign_blob argv-dashdash "v2path409 ok"
 expect_eq    "sign: -- is not understood, no retry" 1 "$sb_tries"
 SB_REL=1 SB_PRE='second-positional' sign_blob argv-two "v2path409 ok"
 expect_eq    "sign: two positionals are not understood, no retry" 1 "$sb_tries"
+# One parser, one bundle path (PR #259 r6): a --bundle the wrapper cannot pin down is a usage error
+# (exit 2) before cosign runs, never a retry with a stale or unknown bundle.
+bundle_usage() { # bundle_usage <name> "<--bundle args, @B@ = bundle path>" [extra args]
+  SB_BUNDLE_ARGS=$2 sign_blob "$1" "409 409 409"
+  expect_eq    "sign: $1 exits 2" 2 "$sb_rc"
+  expect_eq    "sign: $1 never calls cosign" 0 "$sb_tries"
+  if [ ! -e "$sb_bundle" ] && [ ! -e "$sb_bundle.old" ]; then ok; else bad "sign: $1 left a bundle"; fi
+}
+bundle_usage bundle-twice-old-first "--bundle=@B@.old --bundle=@B@"
+bundle_usage bundle-twice-new-first "--bundle=@B@ --bundle=@B@.old"
+bundle_usage bundle-separate        "--bundle @B@"
+bundle_usage bundle-empty           "--bundle="
+SB_PRE='--oidc-client-id fixture-client' bundle_usage bundle-twice-unknown-flag "--bundle=@B@.old --bundle=@B@"
 SB_ART='artifact{build}.txt' sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"
