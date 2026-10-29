@@ -322,6 +322,9 @@ case $step in
   409)   echo "Error: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
   v2)    echo "Error: signing: adding rekor v2 entry: rpc error: code = AlreadyExists desc = an equivalent entry already exists" >&2; exit 1 ;;
   nonrekor409) echo "Error: proxy: HTTP 409 Conflict from https://registry.example/v2/" >&2; exit 17 ;;
+  v2http) echo "Error: signing: adding rekor v2 entry: unexpected response: 409 {\"code\":6,\"message\":\"an equivalent entry already exists with index 123\"}" >&2; exit 1 ;;
+  v2503)  echo "Error: signing: adding rekor v2 entry: unexpected response: 503 {\"code\":14,\"message\":\"unavailable\"}" >&2; exit 17 ;;
+  mixed)  printf 'Using Rekor at https://rekor.sigstore.dev\nError: fetching signing config: HTTP 409 Conflict from https://config.example/config\n' >&2; exit 17 ;;
   url)   echo "Error: fetching signing config: GET https://config.example/409/config returned 503" >&2; exit 17 ;;
   exists) echo "Error: creating output: file AlreadyExists" >&2; exit 17 ;;
   empty) : > "$bundle" ;;
@@ -374,6 +377,16 @@ if [ "$sb_rc" != 0 ]; then ok; else bad "sign: success with no bundle must fail"
 sign_blob v2 "v2 ok"
 expect_eq    "sign: Rekor v2 AlreadyExists is retried"       2 "$sb_tries"
 expect_eq    "sign: Rekor v2 AlreadyExists then success"     0 "$sb_rc"
+# The pinned cosign v3.1.4 (sigstore-go v1.3.0 + rekor-tiles v2.3.0 pkg/client/write/write.go) words a
+# Rekor v2 409 as "adding rekor v2 entry: unexpected response: 409 <json body>" (observed with the real
+# cosign against a loopback v2 server, PR #249 review).
+sign_blob v2http "v2http ok"
+expect_eq    "sign: Rekor v2 HTTP 409 (unexpected response) is retried" 2 "$sb_tries"
+expect_eq    "sign: Rekor v2 HTTP 409 then success"          0 "$sb_rc"
+sign_blob v2503 "v2503 v2503 v2503"
+expect_eq    "sign: Rekor v2 HTTP 503 is not retried"        1 "$sb_tries"
+sign_blob mixed "mixed mixed mixed"
+expect_eq    "sign: a 409 from another service next to a Rekor line is not retried" 1 "$sb_tries"
 sign_blob url "url url url"
 expect_eq    "sign: a /409/ in a URL is not a conflict"      1 "$sb_tries"
 if [ "$sb_rc" != 0 ]; then ok; else bad "sign: URL-409 failure must fail"; fi
