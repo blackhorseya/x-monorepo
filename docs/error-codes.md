@@ -32,7 +32,9 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `order.cannot_complete` | `FAILED_PRECONDITION` | ordering domain | 不是 CONFIRMED 的 order 被 Complete（PENDING 還沒有庫存可 commit；再按一次也是這個） |
 | `order.not_found` | `NOT_FOUND` | ordering domain / application | 沒有這筆；非 admin 的 principal 讀、取消、完成別人的訂單也是它（`GetOrder` / `CancelOrder` / `CompleteOrder`，不洩漏存在與否） |
 | `order.duplicate` | `ALREADY_EXISTS` | ordering domain | 同 id 再 Save（repo 層） |
-| `order.idempotency_key_reused` | `ALREADY_EXISTS` | ordering domain（`CreateOrder`） | 同一個 customer 的 `idempotency_key` 已用在**內容不同**的請求上（items 的 sku / quantity / 單價 / 幣別 / **順序**任一不同）；沒寫入、沒發 event。訊息固定，不帶訂單、items、key；要換 key 才能下新單。內容相同的重送不是錯誤，回原訂單 |
+| `order.unknown_sku` / `order.inactive_sku` | `INVALID_ARGUMENT` | ordering domain（`CreateOrder`） | catalog 報不出價：SKU 沒有 product（`unknown_sku`，多半打錯）／product 已下架（`inactive_sku`）。**整張單被拒、沒寫入、沒發 event、冪等 key 也沒被花掉**（商品上架後同一個 key 重送就成立）。訊息固定，不回是哪個 SKU（呼叫端知道自己送了什麼） |
+| `order.mixed_currency` | `INVALID_ARGUMENT` | ordering domain（`CreateOrder`） | 同一張單的行落在兩種幣別（每個 product 各自的幣別，一張單只能一種）；沒寫入 |
+| `order.idempotency_key_reused` | `ALREADY_EXISTS` | ordering domain（`CreateOrder`） | 同一個 customer 的 `idempotency_key` 已用在**內容不同**的請求上（items 的 sku / quantity / **順序**任一不同；價格不是請求內容，是 catalog 的）；沒寫入、沒發 event。訊息固定，不帶訂單、items、key；要換 key 才能下新單。內容相同的重送不是錯誤，回原訂單 |
 | `order.idempotency_conflict` | （不到 rpc） | ordering repo（`Save`） | 新單的 (customer, key) 被別人先佔了：use case 接住、回讀勝出的那筆再決定回放或 `order.idempotency_key_reused`；`INTERNAL` Kind 只是保險，正常不會到 `ToConnectError` |
 | `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數 |
 | `stock.below_reserved` | `FAILED_PRECONDITION` | inventory domain | SetStock 想把 on-hand 壓到低於已 reserved |

@@ -20,7 +20,7 @@ import { useOrderReservations, type RowReservation } from "../orderReservations"
 import { keys, ordersQuery, refreshFirstPage } from "../queries";
 import { reservationBadge } from "./reservations";
 
-type Line = { sku: string; quantity: number; priceMinor: number };
+type Line = { sku: string; quantity: number };
 
 // Search params of /orders: a status filter and a customer id filter.
 export type OrdersSearch = { status?: "PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED"; customer?: string };
@@ -41,18 +41,13 @@ function CreateOrderCard() {
   // subject and refuses another, so the field is locked and nothing is sent.
   const canChoose = useCanChooseCustomer();
   const [customerId, setCustomerId] = useState("");
-  const [currency, setCurrency] = useState("USD");
-  const [lines, setLines] = useState<Line[]>([{ sku: "SKU-1", quantity: 2, priceMinor: 1299 }]);
+  const [lines, setLines] = useState<Line[]>([{ sku: "SKU-1", quantity: 2 }]);
 
   const create = useMutation({
     mutationFn: () =>
       orders.createOrder({
         customerId: canChoose ? customerId.trim() : "",
-        items: lines.map((l) => ({
-          sku: l.sku,
-          quantity: l.quantity,
-          unitPrice: { amountMinor: BigInt(l.priceMinor), currency },
-        })),
+        items: lines.map((l) => ({ sku: l.sku, quantity: l.quantity })),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.orders }),
   });
@@ -66,6 +61,7 @@ function CreateOrderCard() {
       <CardHeader>
         <CardTitle>Create order</CardTitle>
         <CardDescription>
+          Prices come from the catalog (Products), not from you: the order keeps the price each SKU had when it was placed.
           Inventory reserves stock asynchronously; reservations need <code>apps/worker</code> and Postgres.
         </CardDescription>
       </CardHeader>
@@ -79,9 +75,6 @@ function CreateOrderCard() {
               onChange={(e) => setCustomerId(e.target.value)}
             />
           </Field>
-          <Field label="Currency" className="w-24">
-            <Input value={currency} onChange={(e) => setCurrency(e.target.value)} />
-          </Field>
         </div>
         {lines.map((l, i) => (
           <div key={i} className="flex flex-wrap items-end gap-2">
@@ -91,20 +84,13 @@ function CreateOrderCard() {
             <Field label="Qty" className="w-20">
               <Input type="number" value={l.quantity} onChange={(e) => setLine(i, { quantity: Number(e.target.value) })} />
             </Field>
-            <Field label="Unit price (minor)" className="w-36">
-              <Input
-                type="number"
-                value={l.priceMinor}
-                onChange={(e) => setLine(i, { priceMinor: Number(e.target.value) })}
-              />
-            </Field>
             <Button variant="ghost" size="icon" aria-label="remove line" onClick={() => setLines(lines.filter((_, j) => j !== i))}>
               <Trash2 />
             </Button>
           </div>
         ))}
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setLines([...lines, { sku: "", quantity: 1, priceMinor: 100 }])}>
+          <Button variant="outline" onClick={() => setLines([...lines, { sku: "", quantity: 1 }])}>
             <Plus /> Line
           </Button>
           <Button onClick={() => create.mutate()} disabled={create.isPending}>

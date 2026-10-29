@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
+import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { cellUnder, confirm, createCard, filterCard } from "./orders-ui";
 
@@ -13,11 +14,13 @@ test("/ lands on /orders", async ({ page }) => {
   await expect(page.locator('[data-slot="card-title"]', { hasText: "Orders" })).toBeVisible();
 });
 
-test("create, see, cancel an order", async ({ page }) => {
+test("create, see, cancel an order", async ({ page, request }) => {
   const id = customer("cancel");
   // With a worker, an order for a SKU nobody stocked is REJECTED and cancelled by inventory
   // (a racing PENDING / Cancel button), so seed stock for a SKU of our own, as order.spec.ts does.
-  const sku = withDB ? `E2E-O-${uid()}` : "SKU-1";
+  // The price is the catalog's: a product of our own at 1299 minor USD.
+  const sku = `E2E-O-${uid()}`;
+  await seedProduct(request, sku);
   if (withDB) {
     await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
     await page.getByLabel("SKU", { exact: true }).fill(sku);
