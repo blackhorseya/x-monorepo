@@ -46,14 +46,14 @@ func TestSchema_AgreesWithTheDomain(t *testing.T) {
 	db := migratedDB(t)
 
 	// names: every blank the domain refuses is refused by the CHECK too
-	blanks := []string{"\t", "\n", "\v", "\f", "\r", " ", "\u0085", " ", " ", " ", " ", " ", " ", " ", "　", " \t　 "}
+	blanks := []string{"\t", "\n", "\v", "\f", "\r", " ", "\u0085", "\u00a0", "\u1680", "\u2003", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", " \t\u3000 "}
 	for n, name := range blanks {
 		if err := db.Exec(insertSQL, "BLANK", name, 1, "USD").Error; err == nil {
 			t.Errorf("blank name %q (case %d) accepted by the schema", name, n)
 			db.Exec("DELETE FROM catalog.products")
 		}
 	}
-	if err := db.Exec(insertSQL, "ZW", "​", 1, "USD").Error; err != nil {
+	if err := db.Exec(insertSQL, "ZW", "\u200b", 1, "USD").Error; err != nil {
 		t.Errorf("zero width space is not whitespace to the domain, the schema refused it: %v", err)
 	}
 

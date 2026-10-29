@@ -202,12 +202,12 @@ func TestUnassignedCurrencyIsRefused(t *testing.T) {
 // Every whitespace Go's strings.TrimSpace removes makes a blank name; a zero
 // width space is not whitespace to it.
 func TestBlankNames(t *testing.T) {
-	for _, name := range []string{"\t", "\n", "\v", "\f", "\r", " ", "\u0085", " ", " ", " ", " ", " ", " ", " ", "　", " \t　 "} {
+	for _, name := range []string{"\t", "\n", "\v", "\f", "\r", " ", "\u0085", "\u00a0", "\u1680", "\u2003", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", " \t\u3000 "} {
 		if _, err := product.New("A", name, usd(t, 1), now); !errors.Is(err, product.ErrInvalidName) {
 			t.Errorf("name %q: %v, want ErrInvalidName", name, err)
 		}
 	}
-	if _, err := product.New("A", "​", usd(t, 1), now); err != nil {
+	if _, err := product.New("A", "\u200b", usd(t, 1), now); err != nil {
 		t.Errorf("zero width space: %v", err)
 	}
 }
