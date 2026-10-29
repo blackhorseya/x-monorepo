@@ -198,6 +198,15 @@ function jsonCode(res) {
   }
 }
 
+// statusTag is a status field of a response body, for tags and messages: a value of `known`
+// (codes.js ORDER_STATUSES / RESERVATION_STATUSES) or <unrecognized> — never the raw field, which
+// a misbehaving upstream or proxy can make the request's X-API-Key (a 200 with legal JSON passes
+// every other check). Output only: decisions compare the raw value, so a wrong status is still
+// wrong. Redacted like errorCode(): a key can equal a legal value.
+export function statusTag(status, known) {
+  return redact(known.has(status) ? status : "<unrecognized>");
+}
+
 // redact is the second layer: no diagnostic leaves with the key this run uses in it.
 export function redact(text) {
   let out = String(text);

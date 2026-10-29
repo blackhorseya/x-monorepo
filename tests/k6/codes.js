@@ -90,3 +90,26 @@ export const KNOWN_CODES = new Set([
   "x.dup",
   "x.not_found",
 ]);
+
+// The status enums of a response body (proto: ordering.v1.OrderStatus, inventory.v1.ReservationStatus):
+// the only values a diagnostic tag may carry (lib.js statusTag), because a misbehaving upstream
+// can put the caller's X-API-Key in a status field of an otherwise legal 200 JSON. A value added
+// later shows as <unrecognized> until it is listed.
+export const ORDER_STATUSES = new Set([
+  "ORDER_STATUS_UNSPECIFIED",
+  "ORDER_STATUS_PENDING",
+  "ORDER_STATUS_CANCELLED",
+  "ORDER_STATUS_CONFIRMED",
+  "ORDER_STATUS_COMPLETED",
+]);
+
+export const RESERVATION_STATUSES = new Set([
+  "RESERVATION_STATUS_UNSPECIFIED",
+  "RESERVATION_STATUS_RESERVED",
+  "RESERVATION_STATUS_REJECTED",
+  "RESERVATION_STATUS_RELEASED",
+  "RESERVATION_STATUS_CANCELLED",
+  "RESERVATION_STATUS_COMMITTED",
+  "RESERVATION_STATUS_EXPIRED",
+  "RESERVATION_STATUS_COMMIT_SHORT",
+]);
