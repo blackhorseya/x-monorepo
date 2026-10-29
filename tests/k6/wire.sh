@@ -90,6 +90,45 @@ for s in "${scripts[@]}"; do
   done
 done
 
+# a key that IS a failure class string (a well-formed made-up key, `transport.<class>`): rpc() decides
+# on the class but must print it through redact() like any other output, so the key never shows. The
+# status wire answer reflects it as the status code; both keys are set to the same string, so the
+# SetStock of setup() (ADMIN_API_KEY) and every other call (API_KEY) are covered.
+if [ -z "${WIRE_NO_NEGATIVES:-}" ]; then
+  for s in orders timeout; do
+    for c in malformed_response truncated_response timeout connection_refused dns connection_closed other; do
+      case " ${scripts[*]} " in *" $s "*) ;; *) continue ;; esac
+      cell="wire-$s-key-is-transport.$c" log="$dir/$s-key-$c" k="transport.$c"
+      echo "=== RUN   $cell"
+      why=()
+      python3 tests/k6/wire_server.py "$port" status > "$log-server.log" 2>&1 & xpid=$!
+      for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
+      rc=0
+      k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
+        "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$k" -e "ADMIN_API_KEY=$k" -e VUS=1 \
+        -e DURATION=2s -e RPS=5 -e "RUN_ID=wire-$$-$s-key-$c" > "$log.log" 2>&1 || rc=$?
+      stop
+      grep -q "^served status$" "$log-server.log" 2>/dev/null || why+=("wire server never served 'status'")
+      [ "$rc" != 0 ] || why+=("k6 exited 0: a transport failure must fail the run")
+      for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
+        if grep -q -- "$k" "$f" 2>/dev/null; then
+          why+=("forbidden text $k found in $(basename "$f") (a key equal to a failure class string)")
+        fi
+      done
+      # the status wire answer is a malformed_response: shown as is, or redacted when the key is that very string
+      if [ "$c" = malformed_response ]; then want_out='<redacted>'; else want_out='transport.malformed_response'; fi
+      grep -q -- "$want_out" "$log.log" || why+=("no diagnostic: output lacks $want_out")
+      if [ ${#why[@]} -gt 0 ]; then
+        echo "--- FAIL: $cell (k6 exit $rc)"
+        printf '    %s\n' "${why[@]}"
+        fails+=("$cell")
+      else
+        echo "--- PASS: $cell (k6 exit $rc)"
+      fi
+    done
+  done
+fi
+
 # negatives: the gate must go red when its fixture is absent or wrong
 if [ -z "${WIRE_NO_NEGATIVES:-}" ] && [ -z "${WIRE_SERVER_CMD:-}${WIRE_SERVE_AS:-}" ]; then
   for neg in "absent:WIRE_SERVER_CMD=false" "wrong-mode:WIRE_SERVE_AS=closed"; do
