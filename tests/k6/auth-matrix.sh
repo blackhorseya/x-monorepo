@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The k6 auth gate: orders.js and reservation.js (small VU, functional) against a real rpc +
-# worker + Postgres, once per auth state — 8 cells — plus the fixtures that pin what the
+# worker (in every cell) + Postgres, once per auth state — 8 cells — plus the fixtures that pin what the
 # scripts do in the awkward ones (per-procedure public, a procedure that fails once).
 # Why: a green run on the default auth-off server says nothing about a role-less key, an
 # admin key, or a key sent to a server that ignores it; #187 found each by hand (#193).
@@ -43,9 +43,9 @@ cell() {
   local log="$bin/k6-auth-$name" id="auth-$$-$name" target="http://127.0.0.1:$port" t0=$SECONDS
   echo "== $name ($s, expect $expect)"
   env "$@" "$bin/rpc" > "$log-rpc.log" 2>&1 & pid=$!
-  if [ "$s" = reservation ]; then
-    APP_CONFIG=/dev/null "$bin/worker" > "$log-worker.log" 2>&1 & wpid=$!
-  fi
+  # a worker in every cell: orders cells leave their outbox for it too, so the next cell's worker
+  # does not start on a backlog (that is what stretches reservation_latency on a reused database)
+  APP_CONFIG=/dev/null "$bin/worker" > "$log-worker.log" 2>&1 & wpid=$!
   for _ in $(seq 1 50); do
     kill -0 "$pid" 2>/dev/null || { echo "rpc exited:"; cat "$log-rpc.log"; exit 1; }
     curl -fsS "http://127.0.0.1:$port/api/readyz" >/dev/null 2>&1 && break

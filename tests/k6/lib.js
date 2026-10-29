@@ -2,11 +2,12 @@
 // thresholds in each script can be per RPC. Environment:
 //   BASE_URL  server root (default http://127.0.0.1:8080); RPCs live under /api
 //   API_KEY   X-API-Key when the server runs with auth on (optional)
-//             Ordering is owned by the caller (docs/identity.md). Where the server
-//             knows the caller (WhoAmI.anonymous = false) the scripts name no
-//             customer and the server uses the caller's subject; where it does
-//             not (auth off, even with a key sent) they name their own customers.
+//   K6_CUSTOMER_MODE  who names the customer (default auto), see customerId below
+//             Ordering is owned by the caller (docs/identity.md): a server that knows the
+//             caller (a key or JWT) takes the customer from it, one that does not (auth off,
+//             even with a key sent; a public procedure) needs customer_id.
 import http from "k6/http";
+import exec from "k6/execution";
 import { check } from "k6";
 import { Counter, Trend } from "k6/metrics";
 
@@ -28,25 +29,63 @@ export function rpc(method, body, extra = {}) {
     headers,
     tags: { rpc: method.split("/")[1], ...extra.tags },
     timeout: extra.timeout || "30s",
+    responseCallback: extra.responseCallback,
   });
-  rpcDuration.add(res.timings.duration, { rpc: method.split("/")[1] });
+  // a probe's expected refusal is not a sample of the RPC's latency
+  if (!extra.probe) rpcDuration.add(res.timings.duration, { rpc: method.split("/")[1] });
   return res;
 }
 
-// customerId is the customer_id for a request body. Whether the server knows
-// who is calling is the server's answer (IdentityService/WhoAmI), not something
-// to read off the environment: auth off ignores an X-API-Key that is sent, and
-// then customer_id is required. Anonymous → the script's own name; a principal
-// → nothing, the server uses the caller's subject. If WhoAmI cannot be asked
-// (e.g. auth required and no key) the name is sent: the request will be
-// refused for the credential, which is the error worth seeing. Asked once per VU.
-let anonymous;
+// Who names the customer is the server's answer to the request itself, not something to infer
+// from the environment (an X-API-Key that is sent but ignored by auth off), nor from another
+// procedure (WhoAmI is public while CreateOrder is not; one call that fails says nothing about
+// the rest). K6_CUSTOMER_MODE:
+//   auto     (default) the first CreateOrder of a VU is sent without customer_id. 200 → the
+//            server knows the caller: name no customer from now on. 400 order.empty_customer →
+//            it does not: send the script's own customer (this call is repeated with it, nothing
+//            was written). Only these two answers are remembered; anything else (503, 401, 403, a
+//            refused credential…) is not cached: the run aborts at once with that answer.
+//   include  always send the script's customer_id (auth off; a key that may place for others)
+//   omit     never send it (the server takes the caller's subject)
+// ListOrders follows what CreateOrder resolved: auth off filters by the script's customer, a
+// principal sees its own (an admin: all). Per VU, as k6 runs each VU in its own runtime.
+const MODE = __ENV.K6_CUSTOMER_MODE || "auto";
+if (!["auto", "include", "omit"].includes(MODE)) {
+  throw new Error(`K6_CUSTOMER_MODE=${MODE}: want auto, include or omit`);
+}
+let resolved = MODE === "auto" ? "" : MODE;
+
 export function customerId(name) {
-  if (anonymous === undefined) {
-    const res = rpc("identity.v1.IdentityService/WhoAmI", {});
-    anonymous = res.status !== 200 || res.json("anonymous") === true;
+  if (!resolved) {
+    exec.test.abort(
+      "customer probe: ListOrders before CreateOrder resolved who names the customer (set K6_CUSTOMER_MODE)"
+    );
   }
-  return anonymous ? { customer_id: name } : {};
+  return resolved === "include" ? { customer_id: name } : {};
+}
+
+// createOrder is CreateOrder with the customer as K6_CUSTOMER_MODE says; the response is
+// returned as rpc() does, for ok().
+export function createOrder(body, name) {
+  const method = "ordering.v1.OrderService/CreateOrder";
+  if (resolved) return rpc(method, { ...body, ...customerId(name) });
+  const res = rpc(method, body, {
+    probe: true,
+    tags: { probe: "true" },
+    responseCallback: http.expectedStatuses(200, 400),
+  });
+  if (res.status === 200) {
+    resolved = "omit";
+    return res;
+  }
+  if (res.status === 400 && errorCode(res) === "order.empty_customer") {
+    resolved = "include";
+    return rpc(method, { ...body, ...customerId(name) });
+  }
+  exec.test.abort(
+    `customer probe: ${method} answered status ${res.status} code ${errorCode(res)} ` +
+      `body ${String(res.body).slice(0, 200)}; not cached, not a customer answer (K6_CUSTOMER_MODE=include|omit skips the probe)`
+  );
 }
 
 let shown = 0; // per VU

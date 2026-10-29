@@ -87,7 +87,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
-├── tests/k6/                      # k6：orders（load + thresholds）、ratelimit、timeout、reservation（worker 鏈延遲）；task k6 -- <script>、task k6-smoke
+├── tests/k6/                      # k6：orders（load + thresholds）、ratelimit、timeout、reservation（worker 鏈延遲）；task k6 -- <script>、task k6-smoke、task k6-auth-matrix（各 auth 組合）
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router

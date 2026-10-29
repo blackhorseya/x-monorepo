@@ -62,7 +62,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 
 ## Load test（k6）
 
-`tests/k6/` 是四個對著真的 `rpc` 打的 k6 腳本（Connect over JSON，`lib.js` 的 `rpc()` 按 method 打 tag，`API_KEY` 有設就帶 `X-API-Key`；`orders.js` / `reservation.js` 先問一次 `WhoAmI`：server 認得呼叫者（`anonymous: false`）就不帶 `customer_id`、ListOrders 不篩 customer，由 server 用呼叫者的 subject；不認得（auth off，就算送了 key 也是 anonymous）就用腳本自己的 customer 名。ordering 的訂單屬於呼叫者，role-less 的 key 不能替別的 customer 下單，見 `docs/identity.md`；用 admin key 時 ListOrders 不篩 customer 會列全部，不只是自己的）：
+`tests/k6/` 是四個對著真的 `rpc` 打的 k6 腳本（Connect over JSON，`lib.js` 的 `rpc()` 按 method 打 tag，`API_KEY` 有設就帶 `X-API-Key`；`orders.js` / `reservation.js` 下單時誰指定 customer 見下方「Auth 組合」）：
 
 | 腳本 | 打什麼 | 驗什麼 |
 |---|---|---|
@@ -75,8 +75,33 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 60s × 20 VU；BASE_URL / API_KEY / VUS / DURATION / RPS 用 env 蓋（auth 開著就帶 API_KEY，任何有效的 key 都行，不必是 admin）
 task k6 -- ratelimit -e RPS=50    # server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50 起
 task k6 -- reservation            # server 旁要有 bin/worker 在跑（同一個 Postgres），不然每筆都 timeout
+task k6-auth-matrix               # tests/k6/auth-matrix.sh：orders / reservation 在每一種 auth 狀態各跑一次（2 VU × 5s）加上 fixtures，見下方「Auth 組合」；CI 的 k6-auth job 就是它
 task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一個 bin/rpc（:18090、local Postgres、對應的 env；reservation 排第一且多起一個 bin/worker，讓它面對空的 outbox；RUN_ID 每個腳本不同，SKU 才不會互撞），10s × 10 VU；CI 的 k6 job 就是它；CreateOrder 的 p95 門檻放寬到 CREATE_P95（預設 500ms；腳本本身預設 300）、reservation 的放寬到 RESERVE_P95（預設 5000ms；腳本 3000），shared runner 的尾巴比筆電寬
 ```
+
+### Auth 組合
+
+訂單屬於呼叫者（`docs/identity.md`）：server 認得呼叫者（key / JWT）就由它的 subject 當 customer，不認得（auth off，就算送了 key 也被忽略；或該 procedure 在 `auth.public`）就要 `customer_id`，否則 `400 order.empty_customer`。`orders.js` / `reservation.js` 不從環境（有沒有 `API_KEY`）、也不從別的 procedure（`WhoAmI`）推斷，而是由 `K6_CUSTOMER_MODE` 決定（`lib.js`）：
+
+| `K6_CUSTOMER_MODE` | 行為 |
+|---|---|
+| `auto`（預設） | 每個 VU 的第一個 CreateOrder 不帶 `customer_id`：200 → 之後都不帶；`400 order.empty_customer` → 改帶腳本自己的 customer（名字含 `RUN_ID`）重送，之後都帶（沒寫入任何東西，那次 400 不算 `http_req_failed` 也不進 CreateOrder 的延遲）。**只快取這兩種答案**；其他任何回應（503、401、403…）都不快取，整個 run 立刻 abort，訊息是 `customer probe: …CreateOrder answered status <N> code <code> body …`，錯誤來源就是那一次真實呼叫。ListOrders 跟 CreateOrder 解出來的結果走（auth off 篩腳本的 customer、有 principal 看自己的，admin 看全部） |
+| `include` / `omit` | 不探測，一律帶 / 一律不帶 `customer_id`（探測的那一次 CreateOrder 有顧慮、或要固定行為時用） |
+
+`task k6-auth-matrix` 驗證的組合（`tests/k6/auth-matrix.sh`，真的 rpc + Postgres，reservation 旁有 worker，各自的 `RUN_ID` / SKU / customer；腳本原本的 thresholds 不動，另外要求 `rpc_ok`（成功的 CreateOrder / GetOrder / ListOrders，reservation 是 CreateOrder / CompleteOrder / GetReservation）都 > 0）：
+
+| auth | key | orders / reservation |
+|---|---|---|
+| on（`required`） | role-less key | 支援（`auto` → 不帶 customer，只能下自己的單） |
+| on | admin key | 支援（`auto` → 不帶 customer；ListOrders 會列全部） |
+| off | 不帶 | 支援（`auto` → 帶腳本的 customer） |
+| off | 帶 key（server 忽略） | 支援（同上，不看 `API_KEY`） |
+| on，只有 `WhoAmI` 在 `auth.public`，role-less key | | 支援（WhoAmI 不被問，CreateOrder 的答案才算數） |
+| on，只有 `CreateOrder` 在 `auth.public`，role-less key | | **不支援**：CreateOrder 是 anonymous（要 customer），但帶 key 的 GetOrder / ListOrders 看不到別人的單 → `order.not_found` / `order.permission_denied`。matrix 要求它失敗、輸出看得到 `order.not_found` |
+| `WhoAmI` 回一次 503（透過 `tests/k6/fault_proxy.py`，test-only，不改產品行為） | | 不受影響（不依賴 WhoAmI） |
+| 判斷用的第一個 CreateOrder 回一次 503 | | abort，訊息含 `customer probe` 和 503 / `unavailable`，不會被當成 anonymous 快取 |
+
+CI 的 `k6-auth` job 和 `k6` job 平行；matrix 的 cell 名字可以接在 task 後面只跑幾個：`task k6-auth-matrix -- on-admin-orders whoami-public`。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
 
 worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等它——要看 consumer 追不追得上就看 `eventbus_consumer_lag`；這也是 Helm `worker.autoscaling.metric: lag` 的壓力源。`reservation.js` 才等：它量的是單筆訂單從下單到 RESERVED 的端到端延遲，是 worker 鏈的 benchmark 基準。
 

@@ -16,7 +16,7 @@
 import http from "k6/http";
 import { sleep } from "k6";
 import { Counter, Trend } from "k6/metrics";
-import { rpc, ok, sku, setStock, customerId, customer } from "./lib.js";
+import { rpc, ok, sku, setStock, createOrder, customer } from "./lib.js";
 
 // GetReservation is 404 (not_found) until the worker has consumed the order;
 // that is the poll loop's "not yet", not a failed request.
@@ -66,16 +66,18 @@ export function setup() {
 
 export default function () {
   const created = ok(
-    rpc("ordering.v1.OrderService/CreateOrder", {
-      ...customerId(customer(`reserve-${__VU}`)),
-      items: [
-        {
-          sku: sku(Math.floor(Math.random() * SKUS)),
-          quantity: 1,
-          unit_price: { amount_minor: 1000, currency: "USD" },
-        },
-      ],
-    }),
+    createOrder(
+      {
+        items: [
+          {
+            sku: sku(Math.floor(Math.random() * SKUS)),
+            quantity: 1,
+            unit_price: { amount_minor: 1000, currency: "USD" },
+          },
+        ],
+      },
+      customer(`reserve-${__VU}`)
+    ),
     "CreateOrder"
   );
   if (!created) return;

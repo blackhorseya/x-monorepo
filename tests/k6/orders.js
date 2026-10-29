@@ -1,7 +1,7 @@
 // Load: the ordering write path and the two reads behind the console.
 //   k6 run tests/k6/orders.js -e BASE_URL=http://127.0.0.1:8080 [-e API_KEY=…] [-e VUS=20] [-e DURATION=60s]
 // setup() stocks SKUS skus (SetStock is idempotent: on_hand is a count), then each
-// VU loops CreateOrder (1–3 lines) → GetOrder → ListOrders(customer; with API_KEY no customer is named, see lib.js). With the
+// VU loops CreateOrder (1–3 lines) → GetOrder → ListOrders (who names the customer: K6_CUSTOMER_MODE, see lib.js). With the
 // worker running, inventory reserves stock for every order; this script does
 // not wait for that (see the worker's eventbus_consumer_lag for the backlog).
 // Thresholds are what a laptop with Postgres in Docker comfortably meets; raise
@@ -10,7 +10,7 @@
 // Postgres service container make the write path's tail wider, not slower on
 // median (observed p50 22ms / p95 368ms / zero errors on a 10s run).
 import { sleep } from "k6";
-import { rpc, ok, sku, setStock, customerId, customer as customerName } from "./lib.js";
+import { rpc, ok, sku, setStock, customerId, createOrder, customer as customerName } from "./lib.js";
 
 const SKUS = Number(__ENV.SKUS || 20);
 const CREATE_P95 = Number(__ENV.CREATE_P95 || 300);
@@ -58,10 +58,7 @@ export default function () {
     });
   }
   const created = ok(
-    rpc("ordering.v1.OrderService/CreateOrder", {
-      ...customerId(customer),
-      items,
-    }),
+    createOrder({ items }, customer),
     "CreateOrder"
   );
   if (created) {
