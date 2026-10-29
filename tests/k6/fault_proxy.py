@@ -2,8 +2,9 @@
 """Fault proxy for the k6 auth fixtures: forwards to the rpc, except that the first call whose
 path ends with FAIL_PATH is answered 503 (a Connect `unavailable`) without reaching it.
   fault_proxy.py <listen port> <upstream port> <procedure, e.g. /identity.v1.IdentityService/WhoAmI>
-REFLECT=1 makes the injected body (and its code) echo the request's X-API-Key, as a misbehaving
-upstream or proxy might: the scripts must not print it.
+REFLECT makes the injected answer echo the request's X-API-Key, as a misbehaving upstream or proxy
+might — the scripts must not print it. 1: in the message and the X-Error-Code header after a word;
+header: X-Error-Code is the key; json: the JSON code is the key; prefixed: "unavailable." + key in both.
 Test tooling only: no product behaviour is changed, the rpc never sees the failed call."""
 import http.server
 import json
@@ -30,9 +31,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 armed = False
         if inject:
             print(f"injected 503 on {self.path}", file=sys.stderr, flush=True)
-            reflected = self.headers.get("X-API-Key", "") if os.environ.get("REFLECT") else ""
-            body = {"code": "unavailable", "message": f"injected by fault_proxy.py {reflected}".strip()}
-            extra = {"X-Error-Code": f"unavailable {reflected}".strip()} if reflected else {}
+            mode = os.environ.get("REFLECT", "")
+            key = self.headers.get("X-API-Key", "") if mode else ""
+            body = {"code": "unavailable", "message": "injected by fault_proxy.py"}
+            extra = {}
+            if mode == "1":
+                body["message"] += " " + key
+                extra["X-Error-Code"] = "unavailable " + key
+            elif mode == "header":
+                extra["X-Error-Code"] = key
+            elif mode == "json":
+                body["code"] = key
+            elif mode == "prefixed":
+                body["code"] = "unavailable." + key
+                extra["X-Error-Code"] = "unavailable." + key
             self.reply(503, json.dumps(body).encode(), extra)
             return
         req = urllib.request.Request(f"http://127.0.0.1:{upstream}{self.path}", body, method="POST")

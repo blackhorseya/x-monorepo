@@ -33,7 +33,7 @@ trap stop EXIT
 fails=()
 # cell <name> <script> <expect: the k6 exit code> <match: text the k6 output must contain, or -> <key|-> <server env…>
 #   env knobs: FAIL_PATH=<procedure> → a fault proxy in front of the rpc answers that procedure's
-#   first call 503 (once), REFLECT=1 → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
+#   first call 503 (once), REFLECT=1|header|json|prefixed → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
 #   k6 -e; FORBID=<text> → the k6 output must not contain it (a key must never be printed).
 cell() {
   local name=$1 s=$2 expect=$3 match=$4 key=$5; shift 5
@@ -97,7 +97,10 @@ FAIL_PATH=$WHOAMI cell whoami-503 orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_A
 FAIL_PATH=$CREATE cell create-503 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 
 # The same failure with a body that echoes the key: abort names RPC, status and code, never the body.
-FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect-1 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=header FORBID=$PLAIN_KEY cell create-503-reflect-header orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=json FORBID=$PLAIN_KEY cell create-503-reflect-json orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=prefixed FORBID=$PLAIN_KEY cell create-503-reflect-prefixed orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 
 if [ ${#fails[@]} -gt 0 ]; then echo "auth matrix FAILED: ${fails[*]}"; exit 1; fi
 echo "auth matrix ok"
