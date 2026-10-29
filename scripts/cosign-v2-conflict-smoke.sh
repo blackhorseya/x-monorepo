@@ -17,7 +17,7 @@ wrapper = os.path.abspath("scripts/cosign-sign-blob.sh")
 QUOTED = b'{"code":14,"message":"troubleshooting: adding rekor v2 entry: unexpected response: 409 {example}"}'
 
 def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label="", pre=(),
-        bundles=None, dashdash=False, want_rc=None):
+        bundles=None, dashdash=False, want_rc=None, canary=None):
     hits = []
     sent = []   # the response bodies the fixture really wrote, to assert the payloads are the ones named
     want_body = QUOTED if quoted else body
@@ -61,6 +61,8 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
     ok = r.returncode != 0 and len(hits) == want_posts and not left and decoy_kept
     if want_rc is not None:
         ok = ok and r.returncode == want_rc
+    if canary is not None and canary in r.stdout:
+        ok = False   # a diagnostic must not echo an argv value (an unknown flag's value may be a secret)
     if want_body is not None and sent != [want_body] * len(hits):
         print("FAIL: v2 HTTP %d%s: the fixture sent %r, not the payload under test %r" % (status, label, sent[:1], want_body)); sys.exit(1)
     if not ok:
@@ -87,6 +89,10 @@ run(503, 0, name="artifact", bundles=lambda d: ["--bundle=" + d + "/bundle.json"
 # nothing; the wrapper must not have taken `decoy` for the bundle: usage error, no POST, decoy kept.
 run(503, 0, bundles=lambda d: [], pre=("--oidc-client-id", "--bundle=decoy"), want_rc=2,
     label=" (unknown value flag swallows --bundle=decoy: exit 2, cosign never runs, decoy kept)")
+CANARY = "synthetic-pr261-token-canary-DO-NOT-LOG"
+for pre in (("--identity-token=" + CANARY,), ("--identity-token", CANARY), ("--frobnicate", CANARY)):
+    run(503, 0, pre=pre, want_rc=2, canary=CANARY,
+        label=" (unknown flag %s: exit 2, cosign never runs, the value is not echoed)" % pre[0].split("=")[0])
 run(409, 1, name="--bundle=decoy", dashdash=True, label=" (after --, a '--bundle=decoy' artifact: one attempt, decoy file kept)")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")

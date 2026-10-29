@@ -475,10 +475,19 @@ sign_argv_refused() { # sign_argv_refused <name> <args...>: runs the wrapper in 
   expect_eq    "sign: $n exits 2"                 2 "$sb_rc"
   expect_eq    "sign: $n never calls cosign"      0 "$sb_tries"
   if [ "$(cat "$d/decoy" 2>/dev/null)" = keep ]; then ok; else bad "sign: $n removed or changed the sentinel file"; fi
+  # No diagnostic echoes an argv value: an unknown flag's value may be a secret (--identity-token).
+  case $sb_out in *"$canary"*) bad "sign: $n printed an argv value: $sb_out" ;; *) ok ;; esac
 }
+canary=synthetic-pr261-token-canary-DO-NOT-LOG
 sign_argv_refused unknown-value-flag-swallows-bundle sign-blob --oidc-client-id --bundle=decoy --yes --key KEY --signing-config CFG artifact
 sign_argv_refused unknown-flag-after-bundle sign-blob --bundle=decoy --oidc-client-id x artifact --yes
 sign_argv_refused other-subcommand verify-blob --bundle=decoy artifact
+sign_argv_refused canary-flag-equals sign-blob --bundle=decoy "--identity-token=$canary" artifact --yes
+sign_argv_refused canary-flag-separate sign-blob --bundle=decoy --identity-token "$canary" artifact --yes
+sign_argv_refused canary-bare-after-unknown sign-blob --bundle=decoy --frobnicate "$canary" artifact --yes
+sign_argv_refused canary-dash-token sign-blob --bundle=decoy "-s$canary" artifact --yes
+sign_argv_refused canary-subcommand "$canary" --bundle=decoy artifact
+sign_argv_refused canary-key-missing-value sign-blob --bundle=decoy artifact "--key"
 SB_PRE='--oidc-client-id fixture-client' bundle_usage bundle-twice-unknown-flag "--bundle=@B@.old --bundle=@B@"
 SB_ART='artifact{build}.txt' sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
