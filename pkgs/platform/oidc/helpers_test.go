@@ -128,14 +128,15 @@ func (s *signer) sign(t *testing.T, claims jwt.MapClaims) string {
 type fakeIdP struct {
 	srv *httptest.Server
 
-	mu           sync.Mutex
-	keys         []map[string]any
-	discoveryHit int
-	jwksHit      int
-	failJWKS     bool
-	cacheControl string
-	discIssuer   string // overrides the issuer the discovery document claims
-	jwksURI      string // overrides the jwks_uri the discovery document claims
+	mu            sync.Mutex
+	keys          []map[string]any
+	discoveryHit  int
+	jwksHit       int
+	failJWKS      bool
+	failDiscovery bool
+	cacheControl  string
+	discIssuer    string // overrides the issuer the discovery document claims
+	jwksURI       string // overrides the jwks_uri the discovery document claims
 }
 
 func newIdP(t *testing.T, signers ...*signer) *fakeIdP {
@@ -146,8 +147,13 @@ func newIdP(t *testing.T, signers ...*signer) *fakeIdP {
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		p.mu.Lock()
 		p.discoveryHit++
-		iss, uri := p.discIssuer, p.jwksURI
+		iss, uri, fail := p.discIssuer, p.jwksURI, p.failDiscovery
 		p.mu.Unlock()
+		if fail {
+			http.Error(w, "boom", http.StatusServiceUnavailable)
+
+			return
+		}
 		if iss == "" {
 			iss = p.srv.URL
 		}
@@ -213,6 +219,7 @@ func newVerifier(t *testing.T, clk *clock, p *fakeIdP, opts ...oidc.Option) *oid
 	if err != nil {
 		t.Fatalf("oidc.New: %v", err)
 	}
+	t.Cleanup(v.Close)
 
 	return v
 }

@@ -50,9 +50,9 @@ func TestMetrics_FetchCounterAndAge(t *testing.T) {
 	}
 
 	idp.set(func(p *fakeIdP) { p.failJWKS = true })
-	clk.Add(time.Hour + time.Second) // TTL over: the refetch fails
-	_, _ = verify(v, s.sign(t, goodClaims(clk, idp.url())))
-	clk.Add(time.Hour) // 2h1s since the last success: the alert condition
+	// An unknown kid triggers a refetch, which fails.
+	_, _ = verify(v, esSigner(t, "k-unknown").sign(t, goodClaims(clk, idp.url())))
+	clk.Add(2*time.Hour + time.Second) // the alert condition: no success for 2 h
 	if got := age(t, collect(t, reader), idp.url()); got != 7201 {
 		t.Fatalf("age after 2h1s without a success = %v, want 7201", got)
 	}

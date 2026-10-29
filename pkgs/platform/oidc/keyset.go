@@ -1,150 +1,225 @@
 package oidc
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/MicahParks/jwkset"
+	"github.com/MicahParks/keyfunc/v3"
+	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/singleflight"
+	"golang.org/x/time/rate"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
 
-// JWKS cache rules (docs/identity-login.md §7).
+// JWKS rules (docs/identity-login.md §7). Key parsing, storage, the periodic
+// refresh and the unknown-kid refetch are MicahParks/keyfunc and jwkset; this
+// file is the thin adapter around them: discovery, the 24 h stale bound, the
+// key-type check, the unknown-kid gate and the fetch metrics.
 const (
-	defaultTTL     = time.Hour
-	minTTL         = 5 * time.Minute
-	maxTTL         = 24 * time.Hour
-	refetchWindow  = 30 * time.Second // at most one fetch attempt per issuer per window
-	maxStale       = 24 * time.Hour   // last keys keep verifying this long after the last success
-	fetchTimeout   = 10 * time.Second
-	maxResponseLen = 1 << 20
+	defaultRefreshInterval = time.Hour        // fixed refresh of every issuer's JWKS
+	unknownKIDInterval     = 30 * time.Second // at most one unknown-kid refetch per issuer per window
+	maxStale               = 24 * time.Hour   // keys keep verifying this long after the last successful fetch
+	initWindow             = 30 * time.Second // at most one discovery attempt per issuer per window
+	fetchTimeout           = 10 * time.Second // one discovery or JWKS request
+	maxResponseLen         = 1 << 20          // bytes read from discovery / JWKS
+	minRSABits             = 2048
 )
 
-var errUnknownKey = errors.New("no signing key for this kid")
+var (
+	errUnknownKey = errors.New("no signing key for this kid")
+	errStale      = errors.New("signing keys are older than 24h without a successful refresh")
+	errNotReady   = errors.New("issuer discovery has not succeeded yet")
+)
 
-// keyset is one issuer's discovery + JWKS state. Reads (every request) take mu
-// briefly; fetches are serialised by fetchMu and run with mu released, so a
-// slow IdP never blocks verification against keys already cached.
 type keyset struct {
 	iss    config.OIDCIssuer
-	client *http.Client
+	client *http.Client // discovery
+	jwks   *http.Client // handed to jwkset: counts every JWKS request
 	now    func() time.Time
 	fetchC metric.Int64Counter
 
-	created time.Time
+	created         time.Time
+	ctx             context.Context // ends the refresh goroutine (Verifier.Close)
+	refreshInterval time.Duration
+	unknownInterval time.Duration
 
-	fetchMu sync.Mutex
-	jwksURI string // discovered; cleared on any failure so the next attempt rediscovers
+	initMu   sync.Mutex
+	kf       keyfunc.Keyfunc
+	lim      *rate.Limiter
+	lastInit time.Time
 
-	mu          sync.RWMutex
-	keys        map[string]verifyKey
-	expiresAt   time.Time
+	mu          sync.Mutex
 	lastSuccess time.Time
-	lastAttempt time.Time
+	prevSuccess time.Time
+	pending     bool // the last JWKS response looked fine; jwkset may still refuse it
+
+	group singleflight.Group
 }
 
-type snapshot struct {
-	keys        map[string]verifyKey
-	expiresAt   time.Time
-	lastSuccess time.Time
-	lastAttempt time.Time
+// ready returns the keyfunc, building it once discovery has succeeded. It does
+// network I/O only on the first call that gets that far, and an IdP that is
+// down just means the call fails (at most one attempt per initWindow) while
+// every token is rejected.
+func (ks *keyset) ready(c context.Context) (keyfunc.Keyfunc, error) {
+	ks.initMu.Lock()
+	defer ks.initMu.Unlock()
+	if ks.kf != nil {
+		return ks.kf, nil
+	}
+	now := ks.now()
+	if !ks.lastInit.IsZero() && now.Sub(ks.lastInit) < initWindow {
+		return nil, errNotReady
+	}
+	ks.lastInit = now
+
+	c, cancel := context.WithTimeout(context.WithoutCancel(c), fetchTimeout)
+	defer cancel()
+	uri, err := ks.discover(c)
+	if err != nil {
+		ks.count(c, "error")
+		contextx.FromContext(c).Warn("oidc: discovery failed", "issuer", ks.iss.Issuer, "error", err)
+
+		return nil, err
+	}
+
+	ks.lim = rate.NewLimiter(rate.Every(ks.unknownInterval), 1)
+	store, err := jwkset.NewStorageFromHTTP(uri, jwkset.HTTPClientStorageOptions{
+		Client: ks.jwks,
+		Ctx:    ks.ctx,
+		// The first request must not fail construction: an IdP that is down at
+		// startup is not fatal, the keys arrive with the next refresh.
+		NoErrorReturnFirstHTTPReq: true,
+		RefreshErrorHandler:       ks.onRefreshError,
+		RefreshInterval:           ks.refreshInterval,
+		HTTPTimeout:               fetchTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("jwks storage: %w", err)
+	}
+	client, err := jwkset.NewHTTPClient(jwkset.HTTPClientOptions{
+		HTTPURLs:          map[string]jwkset.Storage{uri: store},
+		RateLimitWaitMax:  fetchTimeout, // also bounds the refetch itself; the gate below keeps this from blocking requests
+		RefreshUnknownKID: ks.lim,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("jwks client: %w", err)
+	}
+	kf, err := keyfunc.New(keyfunc.Options{
+		Ctx:          ks.ctx,
+		Storage:      client,
+		UseWhitelist: []jwkset.USE{jwkset.UseSig, jwkset.USE("")}, // a JWK for encryption never verifies
+	})
+	if err != nil {
+		return nil, fmt.Errorf("keyfunc: %w", err)
+	}
+	ks.kf = kf
+
+	return kf, nil
 }
 
-func (ks *keyset) snap() snapshot {
-	ks.mu.RLock()
-	defer ks.mu.RUnlock()
+// key returns the verification key for the token's kid and alg. An unknown kid
+// refetches the JWKS only when this issuer's 30 s window allows it (checked
+// here, so a throttled lookup is rejected at once instead of waiting inside
+// the library), and concurrent lookups of the same kid share one call.
+func (ks *keyset) key(c context.Context, tok *jwt.Token, kid, alg string) (any, error) {
+	kf, err := ks.ready(c)
+	if err != nil {
+		return nil, err
+	}
+	v, err, _ := ks.group.Do(kid+"|"+alg, func() (any, error) {
+		lc, cancel := context.WithTimeout(context.WithoutCancel(c), fetchTimeout)
+		defer cancel()
+		if !hasKey(lc, kf, kid) && ks.lim.Tokens() < 1 {
+			return nil, errUnknownKey
+		}
 
-	return snapshot{ks.keys, ks.expiresAt, ks.lastSuccess, ks.lastAttempt}
+		return kf.KeyfuncCtx(lc)(tok)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errUnknownKey, err)
+	}
+	if ks.age() > maxStale {
+		return nil, errStale
+	}
+	if err := keyFitsAlg(v, alg); err != nil {
+		return nil, err
+	}
+
+	return v, nil
 }
 
-// fresh answers from the cache alone: the kid is known and the cache has not
-// expired.
-func (s snapshot) fresh(kid string, now time.Time) (verifyKey, bool) {
-	if now.Before(s.expiresAt) {
-		if k, ok := s.keys[kid]; ok {
-			return k, true
+func hasKey(c context.Context, kf keyfunc.Keyfunc, kid string) bool {
+	all, err := kf.Storage().KeyReadAll(c)
+	if err != nil {
+		return false
+	}
+	for _, j := range all {
+		if j.Marshal().KID == kid {
+			return true
 		}
 	}
 
-	return verifyKey{}, false
+	return false
 }
 
-// usable also accepts expired keys, but only within maxStale of the last
-// successful fetch (stale-if-error).
-func (s snapshot) usable(kid string, now time.Time) (verifyKey, bool) {
-	if s.lastSuccess.IsZero() || now.Sub(s.lastSuccess) > maxStale {
-		return verifyKey{}, false
+// keyFitsAlg is the kty/alg consistency check on the key actually returned:
+// RS256 needs an RSA key of at least 2048 bits, ES256 a P-256 key, EdDSA an
+// Ed25519 key. (keyfunc itself only compares a JWK's own "alg" with the
+// token's.)
+func keyFitsAlg(key any, alg string) error {
+	switch k := key.(type) {
+	case *rsa.PublicKey:
+		if alg == algRS256 && k.N.BitLen() >= minRSABits {
+			return nil
+		}
+	case *ecdsa.PublicKey:
+		if alg == algES256 && k.Curve == elliptic.P256() {
+			return nil
+		}
+	case ed25519.PublicKey:
+		if alg == algEdDSA {
+			return nil
+		}
 	}
-	k, ok := s.keys[kid]
 
-	return k, ok
+	return fmt.Errorf("signing key does not fit alg %s", alg)
 }
 
-// key returns the verification key for kid: from the cache when it is fresh,
-// else after a refetch the 30 s window allows, else from stale keys. An
-// unknown kid is never guessed.
-func (ks *keyset) key(c context.Context, kid string) (verifyKey, error) {
-	if k, ok := ks.snap().fresh(kid, ks.now()); ok {
-		return k, nil
-	}
-	ks.refresh(c, kid)
-	if k, ok := ks.snap().usable(kid, ks.now()); ok {
-		return k, nil
-	}
+// Algorithms accepted, each tied to exactly one key type.
+const (
+	algRS256 = "RS256"
+	algES256 = "ES256"
+	algEdDSA = "EdDSA"
+)
 
-	return verifyKey{}, errUnknownKey
+func algAllowed(alg string) bool {
+	return alg == algRS256 || alg == algES256 || alg == algEdDSA
 }
 
-// refresh fetches when the cache cannot answer for kid and the window allows.
-// Concurrent callers queue on fetchMu and re-check, so a rotation seen by many
-// requests at once costs one fetch.
-func (ks *keyset) refresh(c context.Context, kid string) {
-	ks.fetchMu.Lock()
-	defer ks.fetchMu.Unlock()
-
-	now := ks.now()
-	s := ks.snap()
-	if _, ok := s.fresh(kid, now); ok {
-		return // somebody fetched while we waited
-	}
-	if !s.lastAttempt.IsZero() && now.Sub(s.lastAttempt) < refetchWindow {
-		return
-	}
-
-	ks.mu.Lock()
-	ks.lastAttempt = now
-	ks.mu.Unlock()
-
-	keys, ttl, err := ks.fetch(c)
-	if err != nil {
-		ks.jwksURI = ""
-		ks.fetchC.Add(c, 1, metric.WithAttributes(attribute.String("issuer", ks.iss.Issuer), attribute.String("result", "error")))
-		contextx.FromContext(c).Warn("oidc: jwks fetch failed", "issuer", ks.iss.Issuer, "error", err)
-
-		return
-	}
-	ks.fetchC.Add(c, 1, metric.WithAttributes(attribute.String("issuer", ks.iss.Issuer), attribute.String("result", "ok")))
-	done := ks.now()
-	ks.mu.Lock()
-	ks.keys, ks.expiresAt, ks.lastSuccess = keys, done.Add(ttl), done
-	ks.mu.Unlock()
-}
-
-// age is the time since the last successful fetch, or since startup while
-// there has been none: the number the "no refresh for 2 h" alert watches.
+// age is the time since the last successful JWKS fetch, or since startup while
+// there has been none: what the "no refresh for 2 h" alert watches, and what
+// bounds stale-if-error.
 func (ks *keyset) age() time.Duration {
-	s := ks.snap()
-	from := s.lastSuccess
+	ks.mu.Lock()
+	from := ks.lastSuccess
+	ks.mu.Unlock()
 	if from.IsZero() {
 		from = ks.created
 	}
@@ -152,39 +227,99 @@ func (ks *keyset) age() time.Duration {
 	return ks.now().Sub(from)
 }
 
-// fetch runs discovery (once, then remembered) and the JWKS request. It is
-// detached from the caller's cancellation: the result is shared by every
-// request waiting on it, so one client hanging up must not fail it.
-func (ks *keyset) fetch(c context.Context) (map[string]verifyKey, time.Duration, error) {
-	c, cancel := context.WithTimeout(context.WithoutCancel(c), fetchTimeout)
-	defer cancel()
+func (ks *keyset) count(c context.Context, result string) {
+	ks.fetchC.Add(c, 1, metric.WithAttributes(attribute.String("issuer", ks.iss.Issuer), attribute.String("result", result)))
+}
 
-	if ks.jwksURI == "" {
-		uri, err := ks.discover(c)
-		if err != nil {
-			return nil, 0, err
-		}
-		ks.jwksURI = uri
+// record is called by the transport for every JWKS request.
+func (ks *keyset) record(c context.Context, ok bool) {
+	ks.mu.Lock()
+	ks.pending = false // only the latest attempt can still be taken back
+	if ok {
+		ks.prevSuccess, ks.lastSuccess, ks.pending = ks.lastSuccess, ks.now(), true
 	}
-	body, hdr, err := ks.get(c, ks.jwksURI)
-	if err != nil {
-		return nil, 0, fmt.Errorf("jwks: %w", err)
+	ks.mu.Unlock()
+	if ok {
+		ks.count(c, "ok")
+	} else {
+		ks.count(c, "error")
 	}
-	keys, err := parseJWKS(body)
-	if err != nil {
-		return nil, 0, err
-	}
+}
 
-	return keys, cacheTTL(hdr.Get("Cache-Control")), nil
+// onRefreshError is jwkset's handler for a refresh that failed. If the
+// transport had already booked that response as a success (HTTP 200 and a JWK
+// Set envelope) but jwkset refused its content, the keys were not replaced, so
+// the success is taken back.
+func (ks *keyset) onRefreshError(c context.Context, err error) {
+	contextx.FromContext(c).Warn("oidc: jwks refresh failed", "issuer", ks.iss.Issuer, "error", err)
+	ks.mu.Lock()
+	// pending is the latest response, booked as a success a moment ago; an
+	// older success that nothing has taken back since is not touched.
+	revert := ks.pending && ks.now().Sub(ks.lastSuccess) <= fetchTimeout
+	if revert {
+		ks.lastSuccess, ks.pending = ks.prevSuccess, false
+	}
+	ks.mu.Unlock()
+	if revert {
+		ks.count(c, "error")
+	}
+}
+
+// countingTransport books every JWKS response: a success is HTTP 200 with a
+// JWK Set document of at most maxResponseLen bytes. Redirects never get here
+// (the client does not follow them).
+type countingTransport struct {
+	base http.RoundTripper
+	ks   *keyset
+}
+
+func (t countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		t.ks.record(req.Context(), false)
+
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.ks.record(req.Context(), false)
+
+		return resp, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseLen+1))
+	_ = resp.Body.Close()
+	var doc struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err != nil || len(body) > maxResponseLen || json.Unmarshal(body, &doc) != nil || doc.Keys == nil {
+		t.ks.record(req.Context(), false)
+
+		return nil, errors.New("jwks response is not a JWK Set")
+	}
+	t.ks.record(req.Context(), true)
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+
+	return resp, nil
 }
 
 // discover reads the discovery document. Its issuer must be the configured one
-// (otherwise another issuer's keys could be planted by a rogue document) and
-// its jwks_uri must pass the same http/https policy as the issuer.
+// (otherwise a rogue document could point us at another issuer's keys) and its
+// jwks_uri must pass the same http/https policy as the issuer.
 func (ks *keyset) discover(c context.Context) (string, error) {
-	body, _, err := ks.get(c, strings.TrimRight(ks.iss.Issuer, "/")+"/.well-known/openid-configuration")
+	req, err := http.NewRequestWithContext(c, http.MethodGet, strings.TrimRight(ks.iss.Issuer, "/")+"/.well-known/openid-configuration", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := ks.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("discovery: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("discovery: status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseLen+1))
+	if err != nil || len(body) > maxResponseLen {
+		return "", errors.New("discovery: unreadable or oversized response")
 	}
 	var doc struct {
 		Issuer  string `json:"issuer"`
@@ -201,48 +336,4 @@ func (ks *keyset) discover(c context.Context) (string, error) {
 	}
 
 	return doc.JWKSURI, nil
-}
-
-func (ks *keyset) get(c context.Context, url string) ([]byte, http.Header, error) {
-	req, err := http.NewRequestWithContext(c, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	resp, err := ks.client.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseLen+1))
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(body) > maxResponseLen {
-		return nil, nil, errors.New("response too large")
-	}
-
-	return body, resp.Header, nil
-}
-
-// cacheTTL is the Cache-Control max-age clamped to [5m, 24h]; without a usable
-// max-age it is 1 h.
-func cacheTTL(cacheControl string) time.Duration {
-	for _, d := range strings.Split(cacheControl, ",") {
-		name, val, ok := strings.Cut(strings.TrimSpace(d), "=")
-		if !ok || !strings.EqualFold(name, "max-age") {
-			continue
-		}
-		secs, err := strconv.ParseInt(strings.Trim(val, `"`), 10, 64)
-		if err != nil || secs < 0 {
-			break
-		}
-		ttl := time.Duration(min(secs, int64(maxTTL/time.Second))) * time.Second
-
-		return min(max(ttl, minTTL), maxTTL)
-	}
-
-	return defaultTTL
 }

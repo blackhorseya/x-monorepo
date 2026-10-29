@@ -4,9 +4,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"sync"
 	"testing"
 	"time"
@@ -92,6 +94,9 @@ func TestVerify_ClaimChecks(t *testing.T) {
 		// iat is required: sessions_revoked_at (#271) is compared against it.
 		"iat missing": {func(c jwt.MapClaims) { delete(c, "iat") }, false},
 		"exp missing": {func(c jwt.MapClaims) { delete(c, "exp") }, false},
+		// iat from the future is clock skew up to 60 s, a forged token beyond.
+		"iat 59s ahead": {func(c jwt.MapClaims) { c["iat"] = now.Add(59 * time.Second).Unix() }, true},
+		"iat 61s ahead": {func(c jwt.MapClaims) { c["iat"] = now.Add(61 * time.Second).Unix() }, false},
 		// 60 s of skew either way, and not a second more.
 		"exp 59s ago":  {func(c jwt.MapClaims) { c["exp"] = now.Add(-59 * time.Second).Unix() }, true},
 		"exp 61s ago":  {func(c jwt.MapClaims) { c["exp"] = now.Add(-61 * time.Second).Unix() }, false},
@@ -221,6 +226,22 @@ func TestVerify_AlgorithmConfusion(t *testing.T) {
 			t.Fatal("an encryption key verified a signature")
 		}
 	})
+	t.Run("RSA key below 2048 bits", func(t *testing.T) {
+		clk := newClock()
+		small, err := rsa.GenerateKey(rand.Reader, 1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		weak := &signer{kid: "k-weak", alg: "RS256", method: jwt.SigningMethodRS256, priv: small, jwk: map[string]any{
+			"kty": "RSA", "kid": "k-weak", "use": "sig", "alg": "RS256",
+			"n": b64(small.N.Bytes()), "e": b64(big.NewInt(int64(small.E)).Bytes()),
+		}}
+		idp := newIdP(t, weak)
+		v := newVerifier(t, clk, idp)
+		if _, err := verify(v, weak.sign(t, goodClaims(clk, idp.url()))); err == nil {
+			t.Fatal("a 1024-bit RSA key was trusted")
+		}
+	})
 	t.Run("token without kid", func(t *testing.T) {
 		tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims())
 		out, _ := tok.SignedString(rsaKey)
@@ -228,110 +249,89 @@ func TestVerify_AlgorithmConfusion(t *testing.T) {
 			t.Fatal("a token without kid was accepted")
 		}
 	})
-	t.Run("unusable JWKs do not poison the set", func(t *testing.T) {
+	t.Run("unsupported key types are skipped", func(t *testing.T) {
 		clk := newClock()
 		good := rsSigner(t, "k-good")
 		idp := newIdP(t)
-		idp.rawKeys(map[string]any{"kty": "oct", "kid": "k-oct", "k": "AAAA"}, map[string]any{"kty": "RSA", "kid": "k-broken", "n": "!!", "e": "AQAB"}, good.jwk)
+		idp.rawKeys(map[string]any{"kty": "oct", "kid": "k-oct", "k": "AAAA"}, good.jwk)
 		v := newVerifier(t, clk, idp)
 		if _, err := verify(v, good.sign(t, goodClaims(clk, idp.url()))); err != nil {
-			t.Fatalf("good key rejected beside junk: %v", err)
+			t.Fatalf("good key rejected beside an unsupported one: %v", err)
 		}
 	})
 }
 
-// JWKS cache lifetime follows Cache-Control, clamped to [5m, 24h], 1h without one.
-func TestJWKS_CacheLifetime(t *testing.T) {
-	for name, tc := range map[string]struct {
-		header string
-		ttl    time.Duration
-	}{
-		"max-age 10m":           {"max-age=600", 10 * time.Minute},
-		"no header":             {"", time.Hour},
-		"no max-age":            {"public", time.Hour},
-		"no-store":              {"no-store", time.Hour},
-		"garbage max-age":       {"max-age=soon", time.Hour},
-		"below the floor":       {"max-age=10", 5 * time.Minute},
-		"max-age 0":             {"max-age=0", 5 * time.Minute},
-		"above the ceiling":     {"max-age=999999", 24 * time.Hour},
-		"with other directives": {"public, max-age=7200, must-revalidate", 2 * time.Hour},
-	} {
-		t.Run(name, func(t *testing.T) {
-			clk := newClock()
-			s := rsSigner(t, "k1")
-			idp := newIdP(t, s)
-			idp.set(func(p *fakeIdP) { p.cacheControl = tc.header })
-			v := newVerifier(t, clk, idp)
-			try := func() {
-				t.Helper()
-				if _, err := verify(v, s.sign(t, goodClaims(clk, idp.url()))); err != nil {
-					t.Fatal(err)
-				}
-			}
-			try()
-			if _, j := idp.hits(); j != 1 {
-				t.Fatalf("first verify fetched %d times, want 1", j)
-			}
-			clk.Add(tc.ttl - time.Second)
-			try()
-			if _, j := idp.hits(); j != 1 {
-				t.Fatalf("1s before the TTL it refetched (%d fetches)", j)
-			}
-			clk.Add(time.Second)
-			try()
-			if _, j := idp.hits(); j != 2 {
-				t.Fatalf("at the TTL it fetched %d times, want 2", j)
-			}
-		})
+// Intervals are fixed: JWKS refresh hourly, one unknown-kid refetch per issuer
+// per 30 s, keys good for 24 h past the last success.
+func TestJWKS_FixedIntervals(t *testing.T) {
+	if oidc.DefaultRefreshInterval != time.Hour || oidc.DefaultUnknownKIDInterval != 30*time.Second || oidc.MaxStale != 24*time.Hour {
+		t.Fatalf("intervals: refresh=%v unknown-kid=%v stale=%v", oidc.DefaultRefreshInterval, oidc.DefaultUnknownKIDInterval, oidc.MaxStale)
 	}
 }
 
-// An unknown kid refetches at once, but at most once per 30 s per issuer; a kid
-// that is still unknown afterwards is rejected, never guessed.
-func TestJWKS_UnknownKidRefetchAndThrottle(t *testing.T) {
+// The keys are refreshed on a timer, whatever the IdP's Cache-Control says.
+func TestJWKS_PeriodicRefresh(t *testing.T) {
 	clk := newClock()
-	old, fresh := rsSigner(t, "k-old"), esSigner(t, "k-new")
+	s := rsSigner(t, "k1")
+	idp := newIdP(t, s)
+	idp.set(func(p *fakeIdP) { p.cacheControl = "max-age=999999" })
+	v := newVerifier(t, clk, idp, oidc.WithRefreshInterval(30*time.Millisecond))
+	if _, err := verify(v, s.sign(t, goodClaims(clk, idp.url()))); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "periodic JWKS refreshes", func() bool { _, j := idp.hits(); return j >= 4 })
+	if d, _ := idp.hits(); d != 1 {
+		t.Fatalf("discovery ran %d times, want once (the jwks_uri is remembered)", d)
+	}
+}
+
+// An unknown kid refetches at once, but at most once per window per issuer; a
+// kid that is still unknown afterwards is rejected, never guessed.
+func TestJWKS_UnknownKidRefetchAndThrottle(t *testing.T) {
+	const window = 400 * time.Millisecond
+	clk := newClock()
+	old, fresh, ghost := rsSigner(t, "k-old"), esSigner(t, "k-new"), edSigner(t, "k-ghost")
 	idp := newIdP(t, old)
-	v := newVerifier(t, clk, idp)
+	v := newVerifier(t, clk, idp, oidc.WithUnknownKIDInterval(window))
 	if _, err := verify(v, old.sign(t, goodClaims(clk, idp.url()))); err != nil {
 		t.Fatal(err)
 	}
 
-	idp.setKeys(old, fresh)   // the IdP rotates
-	clk.Add(31 * time.Second) // past the 30 s window of the initial fetch
+	idp.setKeys(old, fresh) // the IdP rotates
 	if _, err := verify(v, fresh.sign(t, goodClaims(clk, idp.url()))); err != nil {
-		t.Fatalf("a rotated-in kid must be picked up immediately: %v", err)
+		t.Fatalf("a rotated-in kid must be picked up at once: %v", err)
 	}
 	if _, j := idp.hits(); j != 2 {
 		t.Fatalf("fetches = %d, want 2", j)
 	}
 
-	ghost := edSigner(t, "k-ghost")
-	clk.Add(10 * time.Second) // 10 s after the last fetch: inside the window
 	if _, err := verify(v, ghost.sign(t, goodClaims(clk, idp.url()))); err == nil {
 		t.Fatal("unknown kid accepted")
 	}
 	if _, j := idp.hits(); j != 2 {
-		t.Fatalf("unknown kid inside 30 s refetched (%d fetches)", j)
+		t.Fatalf("unknown kid inside the window refetched (%d fetches)", j)
 	}
 
-	idp.setKeys(old, fresh, ghost)
-	clk.Add(10 * time.Second) // 20 s: still throttled even though the key now exists upstream
+	idp.setKeys(old, fresh, ghost) // upstream has it now, but the window is still closed
 	if _, err := verify(v, ghost.sign(t, goodClaims(clk, idp.url()))); err == nil {
 		t.Fatal("throttle bypassed")
 	}
-	clk.Add(10 * time.Second) // 30 s
+	if _, j := idp.hits(); j != 2 {
+		t.Fatalf("throttled lookups fetched (%d fetches)", j)
+	}
+
+	time.Sleep(window + 50*time.Millisecond)
 	if _, err := verify(v, ghost.sign(t, goodClaims(clk, idp.url()))); err != nil {
-		t.Fatalf("after 30 s the refetch must happen: %v", err)
+		t.Fatalf("after the window the refetch must happen: %v", err)
 	}
 	if _, j := idp.hits(); j != 3 {
 		t.Fatalf("fetches = %d, want 3", j)
 	}
 }
 
-// A flood of tokens with a kid nobody has costs one fetch per window, and
-// concurrent first sightings of a rotated key share a single fetch.
-func TestJWKS_ConcurrentUnknownKidsShareOneFetch(t *testing.T) {
+// Many requests carrying a freshly rotated kid cost one fetch; a flood of
+// tokens with a kid nobody has costs at most one more per window.
+func TestJWKS_ConcurrentLookupsShareFetches(t *testing.T) {
 	clk := newClock()
 	old, fresh := rsSigner(t, "k-old"), esSigner(t, "k-new")
 	idp := newIdP(t, old)
@@ -340,16 +340,13 @@ func TestJWKS_ConcurrentUnknownKidsShareOneFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	idp.setKeys(old, fresh)
-	clk.Add(time.Minute)
 
 	tok := fresh.sign(t, goodClaims(clk, idp.url()))
-	ghost := edSigner(t, "k-ghost").sign(t, goodClaims(clk, idp.url()))
 	var wg sync.WaitGroup
-	errs := make(chan error, 100)
+	errs := make(chan error, 50)
 	for range 50 {
-		wg.Add(2)
+		wg.Add(1)
 		go func() { defer wg.Done(); _, err := verify(v, tok); errs <- err }()
-		go func() { defer wg.Done(); _, err := verify(v, ghost); _ = err }()
 	}
 	wg.Wait()
 	close(errs)
@@ -361,70 +358,139 @@ func TestJWKS_ConcurrentUnknownKidsShareOneFetch(t *testing.T) {
 	if _, j := idp.hits(); j != 2 {
 		t.Fatalf("fetches = %d, want 2 (initial + one shared refetch)", j)
 	}
+
+	// Now a flood of bogus kids: the window was consumed by the rotation above,
+	// so nothing more is fetched.
+	ghost := edSigner(t, "k-ghost").sign(t, goodClaims(clk, idp.url()))
+	for range 50 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = verify(v, ghost) }()
+	}
+	wg.Wait()
+	if _, j := idp.hits(); j != 2 {
+		t.Fatalf("bogus kids caused fetches: %d, want 2", j)
+	}
 }
 
-// When a refetch fails the old keys keep working for up to 24 h after the last
-// success; an unknown kid is rejected throughout, and after 24 h so is
-// everything.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// jwkset keeps the old keys when a refresh fails (checked here, not assumed),
+// but has no bound on how long; the adapter caps it at 24 h after the last
+// successful fetch. An unknown kid is rejected throughout.
 func TestJWKS_StaleIfError(t *testing.T) {
 	clk := newClock()
 	s := rsSigner(t, "k1")
 	idp := newIdP(t, s)
-	v := newVerifier(t, clk, idp)
+	v := newVerifier(t, clk, idp, oidc.WithRefreshInterval(30*time.Millisecond), oidc.WithUnknownKIDInterval(50*time.Millisecond))
 	tok := func() string { return s.sign(t, goodClaims(clk, idp.url())) }
 	if _, err := verify(v, tok()); err != nil {
 		t.Fatal(err)
 	}
 
 	idp.set(func(p *fakeIdP) { p.failJWKS = true })
-	clk.Add(time.Hour + time.Second) // TTL over, refetch fails
+	_, base := idp.hits()
+	waitFor(t, "failed refreshes", func() bool { _, j := idp.hits(); return j >= base+3 })
 	if _, err := verify(v, tok()); err != nil {
-		t.Fatalf("stale key must keep working while the IdP is down: %v", err)
+		t.Fatalf("after failed refreshes the old key must keep verifying: %v", err)
 	}
-	if _, j := idp.hits(); j != 2 {
-		t.Fatalf("expected one failed refetch, fetches = %d", j)
-	}
-	other := esSigner(t, "k-unknown")
-	clk.Add(time.Minute)
-	if _, err := verify(v, other.sign(t, goodClaims(clk, idp.url()))); err == nil {
+	if _, err := verify(v, esSigner(t, "k-unknown").sign(t, goodClaims(clk, idp.url()))); err == nil {
 		t.Fatal("an unknown kid was accepted while serving stale keys")
 	}
 
-	clk.Add(22*time.Hour + 58*time.Minute) // 23h59m1s after the last success: inside 24 h
+	clk.Add(24*time.Hour - time.Minute) // inside 24 h of the last success
 	if _, err := verify(v, tok()); err != nil {
 		t.Fatalf("inside 24 h of the last success the stale key must still verify: %v", err)
 	}
-	clk.Add(2 * time.Minute) // 24h1m1s after the last success
+	clk.Add(2 * time.Minute) // 24h01m after the last success
 	if _, err := verify(v, tok()); err == nil {
-		t.Fatal("a key older than 24 h without a successful refetch was still trusted")
+		t.Fatal("a key older than 24 h without a successful refresh was still trusted")
 	}
 
-	// Recovery: the IdP comes back and the next window works again.
+	// Recovery: the next successful refresh brings the keys back.
 	idp.set(func(p *fakeIdP) { p.failJWKS = false })
-	clk.Add(30 * time.Second)
-	if _, err := verify(v, tok()); err != nil {
-		t.Fatalf("no recovery after the IdP returned: %v", err)
-	}
+	waitFor(t, "recovery", func() bool { _, err := verify(v, tok()); return err == nil })
 }
 
-// An IdP that is down at startup is not fatal: New succeeds, requests fail
-// closed, and the first fetch after the throttle window recovers.
-func TestJWKS_StartupFetchFailureIsNotFatal(t *testing.T) {
+// A JWKS that answers 200 but that jwkset refuses (here a malformed RSA key)
+// leaves the old keys in place and must not count as a refresh: otherwise an
+// IdP serving junk would keep stale keys alive past the 24 h bound.
+func TestJWKS_RefusedContentDoesNotExtendTrust(t *testing.T) {
 	clk := newClock()
 	s := rsSigner(t, "k1")
 	idp := newIdP(t, s)
-	idp.set(func(p *fakeIdP) { p.failJWKS = true })
-	v := newVerifier(t, clk, idp)
-	v.Warm(t.Context()) // best-effort: no error, no panic
+	v := newVerifier(t, clk, idp, oidc.WithRefreshInterval(30*time.Millisecond))
+	tok := func() string { return s.sign(t, goodClaims(clk, idp.url())) }
+	if _, err := verify(v, tok()); err != nil {
+		t.Fatal(err)
+	}
 
-	if _, err := verify(v, s.sign(t, goodClaims(clk, idp.url()))); err == nil {
-		t.Fatal("verified with no keys")
+	idp.rawKeys(s.jwk, map[string]any{"kty": "RSA", "kid": "k-broken", "n": "!!", "e": "AQAB"})
+	_, base := idp.hits()
+	waitFor(t, "refreshes of the refused JWKS", func() bool { _, j := idp.hits(); return j >= base+3 })
+	if _, err := verify(v, tok()); err != nil {
+		t.Fatalf("old keys must keep working when a refresh is refused: %v", err)
 	}
-	idp.set(func(p *fakeIdP) { p.failJWKS = false })
-	clk.Add(30 * time.Second)
-	if _, err := verify(v, s.sign(t, goodClaims(clk, idp.url()))); err != nil {
-		t.Fatalf("did not recover: %v", err)
+	// 25 h later the IdP is still serving the refused JWKS and refreshes keep
+	// "succeeding" at the HTTP level; they must not have renewed the trust.
+	clk.Add(25 * time.Hour)
+	_, base = idp.hits()
+	waitFor(t, "refreshes after the clock moved", func() bool { _, j := idp.hits(); return j >= base+3 })
+	if _, err := verify(v, tok()); err == nil {
+		t.Fatal("refused refreshes extended the trust in stale keys past 24 h")
 	}
+}
+
+// An IdP that is down at startup is not fatal: New and Warm succeed, requests
+// fail closed, and the keys arrive once the IdP answers.
+func TestJWKS_StartupFailureIsNotFatal(t *testing.T) {
+	t.Run("jwks down", func(t *testing.T) {
+		clk := newClock()
+		s := rsSigner(t, "k1")
+		idp := newIdP(t, s)
+		idp.set(func(p *fakeIdP) { p.failJWKS = true })
+		v := newVerifier(t, clk, idp, oidc.WithRefreshInterval(30*time.Millisecond))
+		v.Warm(t.Context())
+		if _, err := verify(v, s.sign(t, goodClaims(clk, idp.url()))); err == nil {
+			t.Fatal("verified with no keys")
+		}
+		idp.set(func(p *fakeIdP) { p.failJWKS = false })
+		waitFor(t, "recovery", func() bool { _, err := verify(v, s.sign(t, goodClaims(clk, idp.url()))); return err == nil })
+	})
+	t.Run("discovery down", func(t *testing.T) {
+		clk := newClock()
+		s := rsSigner(t, "k1")
+		idp := newIdP(t, s)
+		idp.set(func(p *fakeIdP) { p.failDiscovery = true })
+		v := newVerifier(t, clk, idp)
+		v.Warm(t.Context())
+		tok := s.sign(t, goodClaims(clk, idp.url()))
+		if _, err := verify(v, tok); err == nil {
+			t.Fatal("verified with no discovery")
+		}
+		idp.set(func(p *fakeIdP) { p.failDiscovery = false })
+		if d, _ := idp.hits(); d != 1 {
+			t.Fatalf("discovery attempts = %d, want 1 so far", d)
+		}
+		if _, err := verify(v, tok); err == nil { // same 30 s window: no new attempt
+			t.Fatal("verified inside the discovery window")
+		}
+		if d, _ := idp.hits(); d != 1 {
+			t.Fatalf("discovery retried inside its 30 s window (%d attempts)", d)
+		}
+		clk.Add(30 * time.Second)
+		if _, err := verify(v, s.sign(t, goodClaims(clk, idp.url()))); err != nil {
+			t.Fatalf("did not recover after the window: %v", err)
+		}
+	})
 }
 
 // The discovery document must name the issuer we asked about.

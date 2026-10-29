@@ -44,6 +44,7 @@ type Identity struct {
 type Verifier struct {
 	issuers map[string]*keyset
 	now     func() time.Time
+	cancel  context.CancelFunc // ends the JWKS refresh goroutines
 }
 
 // Option customises New.
@@ -53,6 +54,9 @@ type options struct {
 	now    func() time.Time
 	client *http.Client
 	mp     metric.MeterProvider
+
+	refreshInterval time.Duration
+	unknownInterval time.Duration
 }
 
 // WithClock replaces time.Now (tests).
@@ -76,7 +80,10 @@ func New(cfg config.OIDC, opts ...Option) (*Verifier, error) {
 	if len(cfg.Issuers) == 0 {
 		return nil, errors.New("oidc: no issuers configured")
 	}
-	o := options{now: time.Now, client: &http.Client{Timeout: fetchTimeout}, mp: otel.GetMeterProvider()}
+	o := options{
+		now: time.Now, client: &http.Client{Timeout: fetchTimeout}, mp: otel.GetMeterProvider(),
+		refreshInterval: defaultRefreshInterval, unknownInterval: unknownKIDInterval,
+	}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -90,18 +97,36 @@ func New(cfg config.OIDC, opts ...Option) (*Verifier, error) {
 		return nil, fmt.Errorf("oidc: fetch counter: %w", err)
 	}
 
-	v := &Verifier{issuers: make(map[string]*keyset, len(cfg.Issuers)), now: o.now}
+	ctx, cancel := context.WithCancel(context.Background())
+	v := &Verifier{issuers: make(map[string]*keyset, len(cfg.Issuers)), now: o.now, cancel: cancel}
 	for _, is := range cfg.Issuers {
 		if err := config.CheckIssuerURL(is.Issuer, is.AllowInsecureIssuer); err != nil {
+			cancel()
+
 			return nil, fmt.Errorf("oidc: %w", err)
 		}
 		if is.Audience == "" {
+			cancel()
+
 			return nil, fmt.Errorf("oidc: issuer %s has no audience", is.Issuer)
 		}
 		if _, dup := v.issuers[is.Issuer]; dup {
+			cancel()
+
 			return nil, fmt.Errorf("oidc: duplicate issuer %s", is.Issuer)
 		}
-		v.issuers[is.Issuer] = &keyset{iss: is, client: &client, now: o.now, fetchC: fetches, created: o.now()}
+		ks := &keyset{
+			iss: is, client: &client, now: o.now, fetchC: fetches, created: o.now(), ctx: ctx,
+			refreshInterval: o.refreshInterval, unknownInterval: o.unknownInterval,
+		}
+		base := client.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		jc := client
+		jc.Transport = countingTransport{base: base, ks: ks}
+		ks.jwks = &jc
+		v.issuers[is.Issuer] = ks
 	}
 
 	if _, err := meter.Float64ObservableGauge("auth.jwks.age",
@@ -114,19 +139,26 @@ func New(cfg config.OIDC, opts ...Option) (*Verifier, error) {
 
 			return nil
 		})); err != nil {
+		cancel()
+
 		return nil, fmt.Errorf("oidc: age gauge: %w", err)
 	}
 
 	return v, nil
 }
 
-// Warm fetches every issuer's keys now so the first request does not pay for
-// it. Best-effort: a failure is logged and counted, nothing more.
+// Warm discovers every issuer and fetches its keys now so the first request
+// does not pay for it. Best-effort: a failure is logged and counted, nothing
+// more, and the verifier retries on its own.
 func (v *Verifier) Warm(c context.Context) {
 	for _, ks := range v.issuers {
-		ks.refresh(c, "")
+		_, _ = ks.ready(c)
 	}
 }
+
+// Close stops the background JWKS refresh. The verifier keeps verifying with
+// the keys it holds, but they no longer refresh.
+func (v *Verifier) Close() { v.cancel() }
 
 type claims struct {
 	jwt.RegisteredClaims
@@ -159,20 +191,18 @@ func (v *Verifier) Verify(c context.Context, token string) (Identity, error) {
 	if kid == "" {
 		return Identity{}, fmt.Errorf("%w: no kid", ErrInvalidToken)
 	}
-	vk, err := ks.key(c, kid)
+	key, err := ks.key(c, parsed, kid, alg)
 	if err != nil {
 		return Identity{}, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
-	if vk.alg != alg {
-		return Identity{}, fmt.Errorf("%w: token alg %s does not fit the key", ErrInvalidToken, alg)
-	}
 
 	var cl claims
-	if _, err := jwt.ParseWithClaims(token, &cl, func(*jwt.Token) (any, error) { return vk.key, nil },
+	if _, err := jwt.ParseWithClaims(token, &cl, func(*jwt.Token) (any, error) { return key, nil },
 		jwt.WithValidMethods([]string{alg}),
 		jwt.WithIssuer(ks.iss.Issuer),
 		jwt.WithAudience(ks.iss.Audience),
 		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(), // iat, when present, must not be in the future (the check below makes it required)
 		jwt.WithLeeway(leeway),
 		jwt.WithTimeFunc(v.now),
 	); err != nil {
