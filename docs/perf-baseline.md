@@ -20,7 +20,13 @@ RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變�
   - **reserve**：每秒 100 張單、30 秒（open model），每張 CreateOrder 後輪詢 GetReservation（`POLL`=50ms）到 RESERVED。兩個延遲，名稱即定義：`order → RESERVED` 從**送出 CreateOrder 之前**算到看到 RESERVED（端到端）；`CreateOrder returned → RESERVED` 從 CreateOrder 回傳後算起（worker 負責的那段）。輪詢間隔使每筆觀測值最多晚 50ms（平均約 25ms）看到 RESERVED，是量測誤差而非延遲的一部分；不要把兩個分布的 percentile 相加或相減當修正值。
 - 吞吐的分母：第一個 iteration 開始到最後一次 CreateOrder 回傳（k6 腳本自己記的 `bench_iter_start_ms` / `bench_create_end_ms` 的 min / max），不用 k6 Counter 的 rate（它的分母是整個 test，包含 setup() 的 SetStock）。
 - 可重跑的輸入：SKU 由 `SEED`（預設 1，記在 `result.json` 的 `parameters.seed`）和 iteration 序號決定的 PRNG（mulberry32）選，不用 `Math.random`；同參數、單 VU 時序列逐筆相同，多 VU 時交錯順序由排程決定。
-- **哪些 attempt 算數，由工具依事前固定的規則判定**，不是看過數字的人：量測期間每 5 秒取樣一次 1 分鐘 load average，任何一個樣本超過 `MAX_LOAD_PER_CORE`（預設 1.0）× 核心數，該 attempt 就是 invalid。attempt 一直跑到有 `RUNS`（3）個 valid 或達 `MAX_ATTEMPTS`（預設 6）；**所有 attempt 的檔案都留在輸出目錄**，統計只用 valid 的，invalid 的列在 `summary.md` / `result.json` 的 attempts 表；湊不滿 3 個 valid 就在 summary 最上面印「NOT A VALID BASELINE」並以 exit 3 結束。門檻 1.0 的意思：load average 含 bench 自己的 rpc / worker / k6 / Postgres，超過核心數代表可執行的工作比核心還多；這個數字是預設值，不是由實測結果推導的，要換就在跑## Baseline
+- **哪些 attempt 算數，由工具依事前固定的規則判定**，不是看過數字的人：量測期間每 5 秒取樣一次 1 分鐘 load average，任何一個樣本超過 `MAX_LOAD_PER_CORE`（預設 1.0）× 核心數，該 attempt 就是 invalid。attempt 一直跑到有 `RUNS`（3）個 valid 或達 `MAX_ATTEMPTS`（預設 6）；**所有 attempt 的檔案都留在輸出目錄**，統計只用 valid 的，invalid 的列在 `summary.md` / `result.json` 的 attempts 表；湊不滿 3 個 valid 就在 summary 最上面印「NOT A VALID BASELINE」並以 exit 3 結束。門檻 1.0 的意思：load average 含 bench 自己的 rpc / worker / k6 / Postgres，超過核心數代表可執行的工作比核心還多；這個數字是預設值，不是由實測結果推導的，要換就在跑之前用環境變數指定（會記進 `result.json`）。
+- **對帳**：reserve 階段每個 attempt 必須「CreateOrder 成功數 = 看到 RESERVED 的數量」（`reserved_ok`），`gracefulStop` 涵蓋 CreateOrder 逾時加等待的上限；k6 印出 `No script iterations fully finished` 也算失敗。已建立但沒完成的單不會被算成成功或延遲 0ms；reservation 的成功率 = 看到 RESERVED 的訂單 ÷ 建立成功的訂單（不是 CreateOrder 的成功率）。
+- 輸出：`result.json`（機器可讀：每個指標的 median / min / max / CV / 各 run 數值，加上 commit、Go / Postgres / k6 版本、CPU、OS、每個 attempt 的 load 取樣統計與是否 valid、參數）、`summary.md`、以及每個 attempt 的 k6 `--summary-export`、load 取樣 csv 與 log。
+- API key：腳本送一把假 key（auth off 會忽略），`bench.sh` 結束時 grep 輸出目錄所有檔案，找到就整個 bench 失敗；k6 腳本沿用 `lib.js` 的規則（不印 body / URL，`systemTags` 不含 `url`、`error`）。
+- 量測工具本身的測試：`task k6-bench-test`（報告定義與有效性/對帳的單元測試、drain 起算時間（fake psql）、對 stub server 的 fixture：seed 可重現、端到端延遲含 CreateOrder、吞吐不被 setup 稀釋、被中斷的 reservation 不會悄悄通過、sentinel 資料庫不會被 drop）；不進 CI。
+
+## Baseline
 
 **目前沒有符合規則的 valid baseline。** 下面的表是探索性結果：在共用的開發機上、條件受限、而且挑選過程有事後成分（見 attempt 清單），**不是乾淨的 baseline**，只能當量級參考，不要拿來判定優化有沒有效。要得到 valid 的數字，在機器安靜時重跑 `task k6-bench`；工具會自己判定。
 
@@ -50,7 +56,7 @@ RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變�
 | backlog drain (orders/s) | 372 | 342–380 | 4.5% |
 | backlog drain (s) | 69.6 | 64.8–72.1 | 4.4% |
 | reserve: orders created (req/s) | 100.0 | 100.0–100.0 | 0.0% |
-| reserve: success | 100.00% | 100.00–100.00% | 0.0% |
+| reserve: success（舊定義：CreateOrder 成功率，非對帳） | 100.00% | 100.00–100.00% | 0.0% |
 | reserve: dropped iterations | 0 | 0–1 | 141.4% |
 | order → RESERVED p50 (ms, from before CreateOrder) | 155 | 155–156 | 0.3% |
 | order → RESERVED p95 (ms, from before CreateOrder) | 308 | 308–309 | 0.2% |
@@ -65,18 +71,6 @@ RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變�
 - backlog drain 約 370 orders/s，遠低於 CreateOrder 的飽和吞吐：持續高負載下 outbox 積壓會線性成長，這是 reservation 路徑目前的瓶頸，也是 batching 優化的對照指標。
 - 100 orders/s 下，端到端 order → RESERVED p50 / p95 / p99 約 155 / 308 / 365 ms，其中 CreateOrder 回傳後的部分約 153 / 305 / 359 ms。
 - reviewer 在另一台 Postgres 17.11、load 11→15 的環境重跑，CreateOrder 約 1950–4462 req/s、端到端 p95 約 253–264 ms：同一量級，但絕對值隨環境與 load 變動很大，這也是為什麼需要工具判定的 valid 條件。
-
-er) | 365 | 358–365 | 0.9% |
-| CreateOrder returned → RESERVED p50 (ms) | 153 | 153–153 | 0.0% |
-| CreateOrder returned → RESERVED p95 (ms) | 305 | 305–306 | 0.2% |
-| CreateOrder returned → RESERVED p99 (ms) | 359 | 356–361 | 0.6% |
-
-解讀：
-
-- CreateOrder 的 p50 / p95 / p99 約 6.8 / 11 / 19 ms，吞吐約 2700 req/s、CV 約 9%；p95 / p99 的 CV 到 16–18%，比較優化時，落在這個離散程度內的差異不要當結論，必要時加大 `RUNS`。
-- backlog drain 約 370 orders/s（CV 約 5%），遠低於 CreateOrder 的飽和吞吐：持續高負載下 outbox 積壓會線性成長，這是 reservation 路徑目前的瓶頸，也是 batching 優化的對照指標。
-- 100 orders/s 下，端到端 order → RESERVED p50 / p95 / p99 約 155 / 308 / 365 ms，其中 CreateOrder 回傳後的部分約 153 / 305 / 359 ms；CreateOrder 本身只佔幾 ms，其餘是 outbox 輪詢（`worker.poll_interval` 預設 200ms）+ worker + handler。
-- reserve 的 dropped iterations 中位數 0（一次 run 為 1）：到達率打滿預配置 VU 時的瞬間丟棄；成功率 100% 是已執行 RPC 的成功率，不代表所有計畫到達的訂單都完成（丟棄數另列）。
 
 ## 比較
 
