@@ -15,7 +15,7 @@ import (
 // on which inventory commits the reservation: the stock is sold, not held.
 // Driven by the rpc adapter only. Any other status refuses with
 // order.ErrCannotComplete — including CANCELLED, so a complete racing a cancel
-// cannot both win: Save compares the version, the loser reloads and is refused.
+// cannot both win: Save compares the version, the loser reloads (retryOnConflict) and is refused.
 type CompleteOrder struct {
 	repo   order.Repository
 	events port.EventPublisher
@@ -33,17 +33,23 @@ func (uc *CompleteOrder) Execute(c context.Context, in dto.CompleteOrderInput) (
 		return nil, order.ErrInvalidID
 	}
 
-	o, err := uc.repo.FindByID(ctx, order.ID(in.OrderID))
+	var o *order.Order
+	err := retryOnConflict(ctx, func() error {
+		var err error
+		if o, err = uc.repo.FindByID(ctx, order.ID(in.OrderID)); err != nil {
+			return err
+		}
+		if err = o.Complete(uc.clock.Now()); err != nil {
+			return err
+		}
+		if err = uc.repo.Save(ctx, o); err != nil {
+			return fmt.Errorf("save order: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	if err = o.Complete(uc.clock.Now()); err != nil {
-		return nil, err
-	}
-
-	if err = uc.repo.Save(ctx, o); err != nil {
-		return nil, fmt.Errorf("save order: %w", err)
 	}
 	if err = uc.events.Publish(ctx, o.PullEvents()...); err != nil {
 		return nil, err

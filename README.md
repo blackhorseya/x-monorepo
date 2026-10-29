@@ -273,7 +273,11 @@ Reservation 沒有 version：它和同一張 order 的 Commit / Release 之間�
   `UPDATE ... WHERE version = <loaded>`（+1），所以 version 是存檔次數，記憶體中的新 aggregate 永遠對不上已存的 row。
   撞 key 時 Order 回 `order.ErrDuplicate`（id 是 server 產的，撞到就是真的重複），Stock 回 `stock.ErrStale`
   （兩個 SetStock 同時建立同一個 SKU，輸的那個 reload 後改成 restock）。
-  兩個同時的 CancelOrder：先 commit 的贏，另一個 `ErrStale`；consumer 重試時 reload 看到 CANCELLED → `ErrCannotCancel` → drop。
+  Order 的 `CancelOrder` / `ConfirmOrder` / `CompleteOrder` 在 use case 內先對 `ErrStale` 做 server 端重試（`usecase.retryOnConflict`：最多 3 次、每次間隔 0–20ms jitter，
+  每次都重新 `FindByID` 再套 domain 行為再 `Save`；只重試 `kernel.ErrConcurrentUpdate`，`ErrDuplicate` 與其他錯誤不重試，context 取消即停）。
+  所以輸的那邊拿到的是「看到贏家結果後的 domain 判決」：兩個同時的 CancelOrder → 後者重試看到 CANCELLED → `ErrCannotCancel`；
+  confirm 輸給 cancel → `ErrCannotConfirm`（consumer drop）；cancel 輸給 confirm → CONFIRMED 仍可取消，重試成功。
+  3 次都撞才把 `ErrStale` 往外丟（rpc `Aborted`、consumer retry 的舊路徑不變）。event 只在 Save 成功後發一次。
 - **topic 之間沒有順序保證，用 tombstone 補**：`OrderCancelled` 若比 `OrderCreated` 先到 inventory，`ReleaseStock` 找不到 reservation 時寫一筆
   `CANCELLED`（`reservation.Tombstone`，唯一沒有 lines 的 reservation，不發 event）；晚到的 `OrderCreated` 找到它就什麼都不做。
   兩邊同時 `Add` 撞 primary key 時，輸的那方回 `kernel.ErrConcurrentUpdate`（不是 `kernel.Error`）讓 consumer retry，重試後落在「已存在」分支：
