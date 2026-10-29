@@ -10,8 +10,8 @@
 #
 # Fail-closed:
 #  - only an `Error: ` output line whose outer status is a Rekor conflict (v1 `log/entries][409]`, v2
-#    `adding rekor v2 entry: unexpected response: 409`, the first status on the line: a 409 quoted
-#    in another status's body does not count, #256) is retried, at most 2 more times (a constant,
+#    `adding rekor v2 entry: unexpected response: 409`, the first status on the first `Error: ` line: a
+#    409 quoted in another status's body does not count, #256) is retried, at most 2 more times (a constant,
 #    not configurable); any other failure exits at once;
 #  - a 409 is never success: a failed attempt stays failed, and when the retries run out the
 #    script exits non-zero;
@@ -40,20 +40,20 @@ log=$(mktemp); trap 'rm -f "$log"' EXIT
 #   v2  `Error: ...adding rekor v2 entry: unexpected response: 409 {...}`  (sigstore-go v1.3.0 +
 #       rekor-tiles v2.3.0 pkg/client/write, the HTTP writer; scripts/cosign-v2-conflict-smoke.sh
 #       runs the real cosign against a loopback v2 server to keep this string honest)
-# The line must start with `Error: `, the FIRST status marker on it (leftmost; a quoted marker in the
-# body comes after the real one) must carry exactly 409, and nothing before that marker may open a
-# body (`{`). Matching is per line, so the two lines of a mixed log never combine.
+# Only the FIRST `Error: ` line of the output is the outer error: cosign prints its error once and a
+# multi-line response body follows it, so a later line that looks like `Error: ...409` is body text.
+# On that line the FIRST (leftmost) status marker must carry exactly 409 (a quoted marker in the body
+# comes after the real one). Nothing else about the context is assumed: it holds the artifact path,
+# which may contain any character. Matching is per line, so lines of a mixed log never combine.
 # No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
 status_re='(log/entries\]\[([0-9]+)\]|adding rekor v2 entry: unexpected response: ([0-9]+)([^0-9]|$))'
-is_conflict() { # is_conflict <file>: some line of it is a Rekor conflict error
-  local line head
+is_conflict() { # is_conflict <file>: the first `Error: ` line of it is a Rekor conflict error
+  local line
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in 'Error: '*) ;; *) continue ;; esac
-    if [[ $line =~ $status_re ]]; then
-      head=${line%%"${BASH_REMATCH[0]}"*}
-      case $head in *'{'*) continue ;; esac
-      [ "${BASH_REMATCH[2]}${BASH_REMATCH[3]}" = 409 ] && return 0
-    fi
+    [[ $line =~ $status_re ]] || return 1
+    [ "${BASH_REMATCH[2]}${BASH_REMATCH[3]}" = 409 ]
+    return
   done <"$1"
   return 1
 }
