@@ -410,6 +410,12 @@ for nm in entry a v2 api; do
 done
 SB_REL=1 SB_ART='503 ' sign_blob short-503sp "v2path503q v2path503q v2path503q"
 expect_eq    "sign: a 503 quoting a 409, artifact named '503 ', is not retried" 1 "$sb_tries"
+# The subcommand is an argument too, but not the artifact: a file named like `sign-blob: <marker>` must not
+# be taken for the context prefix (PR #259 review).
+SB_REL=1 SB_ART='sign-blob: adding rekor v2 entry: unexpected response: 503 x' sign_blob subcmd-409 "v2path409 ok"
+expect_eq    "sign: a real 409, artifact named 'sign-blob: ...503 x', is retried" 2 "$sb_tries"
+SB_REL=1 SB_ART='sign-blob: adding rekor v2 entry: unexpected response: 409 x' sign_blob subcmd-503 "v2path503 v2path503 v2path503"
+expect_eq    "sign: a 503, artifact named 'sign-blob: ...409 x', is not retried" 1 "$sb_tries"
 sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"

@@ -65,6 +65,8 @@ run(409, 3, name="a{b] adding rekor v2 entry: unexpected response: 503.txt", lab
 for nm in ("entry", "a", "v2", "api"):
     run(409, 3, name=nm, label=" (artifact named %r)" % nm)
 run(503, 1, name="503 ", body=b"adding rekor v2 entry: unexpected response: 409 {}", label=" (artifact '503 ' and a body quoting a 409)")
+run(409, 3, name="sign-blob: adding rekor v2 entry: unexpected response: 503 x", label=" (artifact 'sign-blob: ...503 x')")
+run(503, 1, name="sign-blob: adding rekor v2 entry: unexpected response: 409 x", label=" (artifact 'sign-blob: ...409 x')")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")
 print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")
