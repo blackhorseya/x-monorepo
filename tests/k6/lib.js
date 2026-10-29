@@ -61,7 +61,8 @@ export function rpc(method, body, extra = {}) {
   } catch (e) {
     // the exception's message is the raw transport error: classified, never echoed
     const failed = transportFailure(e);
-    if (unanswered++ < 3) console.error(`${method}: no response, ${knownCode(failed)}`);
+    // decisions use knownCode(); output goes through redact() like errorCode() does (a key can equal a class)
+    if (unanswered++ < 3) console.error(redact(`${method}: no response, ${knownCode(failed)}`));
     return failed;
   }
   // a probe's expected refusal is not a sample of the RPC's latency

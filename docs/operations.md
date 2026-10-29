@@ -107,7 +107,7 @@ task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一
 上游或 proxy 回的不是合法 HTTP（status code 是 key、version 是 key、header 行沒有冒號且帶著 key）時，Go 的 parser 把「讀不懂的那段」原樣放進錯誤，而 k6 在 `http.post` 回傳之前就把它印成 `Request Failed` warning，並寫進每一筆樣本的 `error` tag——`lib.js` 的 `redact` 只包得到腳本自己印的診斷，在這之前攔不到。實測（k6 v2.2.0）：只在腳本裡包 try/catch **沒有用**（請求失敗時 `http.post` 不丟例外，warning 已經印了）。做法是三件事一起：
 
 1. `options.throw: true`（`lib.js` 的 `throwOnError`）：請求失敗改成丟例外，k6 不再自己印 warning；
-2. `rpc()` 抓住例外，只用訊息挑一個固定分類，訊息本身不印、不放進回傳：回一個 `status: 0` 的 response，`errorCode()` / `knownCode()` 給 `transport.<class>`——`malformed_response`（status / version / header / chunk 讀不懂）、`truncated_response`（`unexpected EOF`）、`timeout`、`connection_refused`、`dns`、`connection_closed`（對方直接關線）、`other`；`rpc()` 每個 VU 前三次印 `<RPC>: no response, transport.<class>`。這次不是 `rpc_duration` 的樣本；
+2. `rpc()` 抓住例外，只用訊息挑一個固定分類，訊息本身不印、不放進回傳：回一個 `status: 0` 的 response，`errorCode()` / `knownCode()` 給 `transport.<class>`——`malformed_response`（status / version / header / chunk 讀不懂）、`truncated_response`（`unexpected EOF`）、`timeout`、`connection_refused`、`dns`、`connection_closed`（對方直接關線）、`other`；`rpc()` 每個 VU 前三次印 `<RPC>: no response, transport.<class>`（整句過 `redact()`：決策用 `knownCode()`，輸出和 `errorCode()` 一樣遮罩，key 剛好等於 `transport.<class>` 也不會出現；`wire.sh` 有 14 個這樣的 cell）。這次不是 `rpc_duration` 的樣本；
 3. `systemTags` 拿掉 `error`（自由文字，就是 parser 的訊息），保留 `error_code`（k6 的固定數字分類，例如 1000 = 一般 transport 錯誤）。
 
 `rpc()` 以外的任何 `http.*` 呼叫都不受保護：沒被抓到的例外 k6 會連訊息一起印。新腳本一律走 `rpc()`，`options` 帶 `throw: throwOnError`。
