@@ -118,3 +118,18 @@ func TestStatus(t *testing.T) {
 		t.Fatalf("unknown: %v", err)
 	}
 }
+
+func TestLastUsedAt(t *testing.T) {
+	k, _ := apikey.New("key-1", "acc-1", "ci", secret, time.Time{}, now)
+	if !k.LastUsedAt().IsZero() {
+		t.Fatalf("a new key was never used, got %v", k.LastUsedAt())
+	}
+	p := apikey.ReconstituteParams{
+		ID: "key-1", AccountID: "acc-1", Name: "ci", Hash: apikey.HashSecret(secret),
+		Status: apikey.StatusActive, CreatedAt: now, LastUsedAt: now.Add(time.Minute),
+	}
+	r, err := apikey.Reconstitute(p)
+	if err != nil || !r.LastUsedAt().Equal(now.Add(time.Minute)) {
+		t.Fatalf("reconstitute = %+v, %v", r, err)
+	}
+}

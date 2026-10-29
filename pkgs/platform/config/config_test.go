@@ -34,6 +34,9 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	if cfg.Auth.Mode != config.AuthOff || cfg.Auth.APIKeys != "" || len(cfg.Auth.Public) != 0 || cfg.Auth.AdminRole != "admin" {
 		t.Fatalf("auth defaults: %+v", cfg.Auth)
 	}
+	if cfg.Auth.LastUsedInterval != time.Minute {
+		t.Fatalf("auth.last_used_interval default = %v, want 1m", cfg.Auth.LastUsedInterval)
+	}
 	if cfg.HTTP.ShutdownDelay != 0 || cfg.HTTP.ShutdownTimeout != 15*time.Second {
 		t.Fatalf("shutdown defaults: %+v", cfg.HTTP)
 	}
@@ -179,6 +182,15 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("negative auth.resolver_timeout must fail")
 	}
 	t.Setenv("APP_AUTH_RESOLVER_TIMEOUT", "2s")
+	t.Setenv("APP_AUTH_LAST_USED_INTERVAL", "-1s")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("negative auth.last_used_interval must fail")
+	}
+	t.Setenv("APP_AUTH_LAST_USED_INTERVAL", "0")
+	if cfg, err := config.Load(); err != nil || cfg.Auth.LastUsedInterval != 0 {
+		t.Fatalf("auth.last_used_interval=0 (off) must load: %+v, %v", cfg.Auth, err)
+	}
+	t.Setenv("APP_AUTH_LAST_USED_INTERVAL", "1m")
 	t.Setenv("APP_AUTH_API_KEYS", "ci=secret")
 	t.Setenv("APP_AUTH_JWT_HS256_SECRET", "s")
 	t.Setenv("APP_AUTH_JWT_PUBLIC_KEY", "pem")

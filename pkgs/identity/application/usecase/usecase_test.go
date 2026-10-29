@@ -367,3 +367,48 @@ func TestBootstrap(t *testing.T) {
 		t.Fatalf("secret failure: %v", err)
 	}
 }
+
+func TestTouchAPIKey(t *testing.T) {
+	f := newFixture()
+	c := context.Background()
+	a, _ := f.createAccount.Execute(c, dto.CreateAccountInput{Name: "ci"})
+	k, err := f.createKey.Execute(c, dto.CreateAPIKeyInput{AccountID: a.ID, Name: "laptop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	touch := usecase.NewTouchAPIKey(f.keys, f.clock, time.Minute)
+
+	listed := func() time.Time {
+		t.Helper()
+		l, err := f.listKeys.Execute(c, dto.ListAPIKeysInput{AccountID: a.ID})
+		if err != nil || len(l.Keys) != 1 {
+			t.Fatalf("list = %+v, %v", l, err)
+		}
+		return l.Keys[0].LastUsedAt
+	}
+	if !listed().IsZero() {
+		t.Fatal("a key never used lists a zero last_used_at")
+	}
+	if out, err := touch.Execute(c, dto.TouchAPIKeyInput{KeyID: k.Key.ID}); err != nil || !out.Recorded {
+		t.Fatalf("first touch = %+v, %v", out, err)
+	}
+	if got := listed(); !got.Equal(f.clock.t) {
+		t.Fatalf("last_used_at = %v, want %v", got, f.clock.t)
+	}
+	// Inside the window: not recorded, the listing keeps the first time.
+	first := f.clock.t
+	f.clock.t = f.clock.t.Add(30 * time.Second)
+	if out, err := touch.Execute(c, dto.TouchAPIKeyInput{KeyID: k.Key.ID}); err != nil || out.Recorded {
+		t.Fatalf("touch inside window = %+v, %v", out, err)
+	}
+	if got := listed(); !got.Equal(first) {
+		t.Fatalf("last_used_at moved inside the window: %v", got)
+	}
+	f.clock.t = first.Add(time.Minute)
+	if out, err := touch.Execute(c, dto.TouchAPIKeyInput{KeyID: k.Key.ID}); err != nil || !out.Recorded {
+		t.Fatalf("touch after window = %+v, %v", out, err)
+	}
+	if _, err := touch.Execute(c, dto.TouchAPIKeyInput{}); !errors.Is(err, apikey.ErrInvalidID) {
+		t.Fatalf("empty id: %v", err)
+	}
+}

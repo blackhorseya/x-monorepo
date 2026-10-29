@@ -300,5 +300,159 @@ else
   echo "skip: cosign-smoke cases need python3 -c 'import yaml'"
 fi
 
+# ── merge-ready.sh ──────────────────────────────────────────────────────────────
+# A pull_request run checks out refs/pull/N/merge: the PR head merged into main *as it was when
+# the run started*. merge-ready.sh must call a green run stale once main has moved on. gh is
+# stubbed: each call is answered from a file in the stub's directory (see stub_gh).
+main_sha=1111111111111111111111111111111111111111
+old_main=2222222222222222222222222222222222222222
+head_sha=3333333333333333333333333333333333333333
+merge_sha=4444444444444444444444444444444444444444
+stub_gh() {
+  stubdir="$tmp/stub-$1"; mkdir -p "$stubdir/bin"
+  cat > "$stubdir/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+d=$GH_STUB_DIR
+echo "gh $*" >> "$d/calls"
+case "$*" in
+  "pr view "*)                           cat "$d/pr_view" ;;
+  "api repos/o/r/git/ref/heads/"*)       cat "$d/main_sha" ;;
+  "run list --workflow ci.yml"*)         cat "$d/run_list" ;;
+  "run list --workflow merge-tree.yml"*) cat "$d/tree_runs" 2>/dev/null || true ;;
+  "run view "*"--log")                   cat "$d/run_log" ;;
+  "api repos/o/r/commits/"*)             cat "$d/parents" ;;
+  "pr checks "*)                         cat "$d/checks" ;;
+  "run rerun "*|"workflow run "*) ;;
+  *) echo "gh stub: unexpected: $*" >&2; exit 99 ;;
+esac
+STUB
+  chmod +x "$stubdir/bin/gh"
+  printf '%s main\n' "$head_sha" > "$stubdir/pr_view"
+  printf '%s\n' "$main_sha" > "$stubdir/main_sha"
+  printf '99 completed success\n' > "$stubdir/run_list"
+  printf 'affected\tfetch +%s:refs/remotes/pull/7/merge\n' "$merge_sha" > "$stubdir/run_log"
+  printf '%s\n%s\n' "$main_sha" "$head_sha" > "$stubdir/parents"
+  printf 'pass\npass\nskipping\n' > "$stubdir/checks"
+}
+# ready <name> [args...]: runs merge-ready.sh 7 against stub <name>; sets out and rc.
+ready() {
+  local name=$1; shift
+  set +e
+  out=$(GH_STUB_DIR="$tmp/stub-$name" PATH="$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 "$@" 2>&1)
+  rc=$?
+  set -e
+}
+stub_gh fresh;  ready fresh
+expect_eq    "fresh run exits 0"            0 "$rc"
+expect_match "fresh run lists main SHA"     "main +$main_sha" "$out"
+expect_match "fresh run lists merge SHA"    "merge +$merge_sha" "$out"
+expect_match "fresh run lists check head"   "head +$head_sha" "$out"
+expect_match "fresh run counts checks"      '3 checks' "$out"
+
+stub_gh stale; printf '%s\n%s\n' "$old_main" "$head_sha" > "$tmp/stub-stale/parents"; ready stale
+expect_eq    "stale base exits 2"           2 "$rc"
+expect_match "stale base is named"          'STALE' "$out"
+expect_match "stale shows the old base"     "base +$old_main" "$out"
+ready stale --revalidate
+expect_eq    "stale + revalidate still 2"   2 "$rc"
+expect_match "revalidate dispatches merge-tree.yml" 'workflow run merge-tree.yml' "$(cat "$tmp/stub-stale/calls")"
+if grep -q 'run rerun' "$tmp/stub-stale/calls"; then bad "revalidate must not use gh run rerun (reuses the old merge ref)"; else ok; fi
+# A successful dispatch run for this very pr / head / main also counts as the composite check.
+printf '77 completed success merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-stale/tree_runs"; ready stale
+expect_eq    "stale + matching merge-tree run exits 0" 0 "$rc"
+expect_match "merge-tree run is reported"   'merge-tree run 77' "$out"
+printf '77 completed success merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$old_main" > "$tmp/stub-stale/tree_runs"; ready stale
+expect_eq    "merge-tree run on another base does not count" 2 "$rc"
+
+# The title must match exactly: a substring match let "...base=<main>-wrong-tree" through.
+for bad_title in "merge-tree pr=7 head=$head_sha base=$main_sha-wrong-tree" \
+                 "merge-tree pr=7 head=$head_sha base=${main_sha}0" \
+                 "merge-tree pr=7 head=${head_sha}0 base=$main_sha" \
+                 "merge-tree pr=77 head=$head_sha base=$main_sha" \
+                 "x merge-tree pr=7 head=$head_sha base=$main_sha" \
+                 "merge-tree pr=7 head=$head_sha base=$main_sha x"; do
+  printf '78 completed success %s\n' "$bad_title" > "$tmp/stub-stale/tree_runs"; ready stale
+  expect_eq "inexact merge-tree title [$bad_title] exits 2" 2 "$rc"
+done
+printf '79 in_progress  merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-stale/tree_runs"; ready stale
+expect_eq    "unfinished merge-tree run does not count" 2 "$rc"
+printf '80 completed failure merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-stale/tree_runs"; ready stale
+expect_eq    "failed merge-tree run does not count" 2 "$rc"
+printf '81 completed success merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-stale/tree_runs"; ready stale
+expect_eq    "exact merge-tree title still counts" 0 "$rc"
+
+# ── merge-tree-inputs.sh: the workflow's first step; the run title carries these values ──
+inputs_rc() { set +e; "$src/scripts/merge-tree-inputs.sh" "$@" >/dev/null 2>&1; local r=$?; set -e; echo "$r"; }
+expect_eq "inputs: valid pr / head / base accepted"  0 "$(inputs_rc 7 "$head_sha" "$main_sha")"
+expect_eq "inputs: non-numeric pr rejected"          1 "$(inputs_rc 7a "$head_sha" "$main_sha")"
+expect_eq "inputs: empty pr rejected"                1 "$(inputs_rc '' "$head_sha" "$main_sha")"
+expect_eq "inputs: short head rejected"              1 "$(inputs_rc 7 "${head_sha%?}" "$main_sha")"
+expect_eq "inputs: long base rejected"               1 "$(inputs_rc 7 "$head_sha" "${main_sha}0")"
+expect_eq "inputs: uppercase head rejected"          1 "$(inputs_rc 7 "$(printf '%s' "$head_sha" | tr 0-9 A-J)" "$main_sha")"
+expect_eq "inputs: non-hex base rejected"            1 "$(inputs_rc 7 "$head_sha" "${main_sha%?}g")"
+expect_eq "inputs: head with suffix injection rejected" 1 "$(inputs_rc 7 "$head_sha x" "$main_sha")"
+expect_eq "inputs: base with newline suffix rejected"   1 "$(inputs_rc 7 "$head_sha" "$main_sha
+x")"
+expect_eq "inputs: pr with suffix injection rejected"   1 "$(inputs_rc '7 x' "$head_sha" "$main_sha")"
+expect_eq "inputs: wrong arg count is a usage error" 3 "$(inputs_rc 7 "$head_sha")"
+
+stub_gh otherhead; printf '%s\n%s\n' "$main_sha" "9999999999999999999999999999999999999999" > "$tmp/stub-otherhead/parents"; ready otherhead
+expect_eq    "run for another head exits 2" 2 "$rc"
+stub_gh pending; printf 'pass\npending\n' > "$tmp/stub-pending/checks"; ready pending
+expect_eq    "pending check exits 1"        1 "$rc"
+stub_gh failing; printf 'pass\nfail\n' > "$tmp/stub-failing/checks"; ready failing
+expect_eq    "failed check exits 1"         1 "$rc"
+stub_gh cancel; printf 'pass\ncancel\n' > "$tmp/stub-cancel/checks"; ready cancel
+expect_eq    "cancelled check exits 1"      1 "$rc"
+stub_gh running; printf '99 in_progress \n' > "$tmp/stub-running/run_list"; ready running
+expect_eq    "unfinished run exits 1"       1 "$rc"
+stub_gh norun; : > "$tmp/stub-norun/run_list"; ready norun
+expect_eq    "no pull_request run exits 1"  1 "$rc"
+stub_gh nochecks; : > "$tmp/stub-nochecks/checks"; ready nochecks
+expect_eq    "no checks at all exits 1"     1 "$rc"
+set +e; "$src/scripts/merge-ready.sh" >/dev/null 2>&1; rc=$?; set -e
+expect_eq    "no PR number exits 3"         3 "$rc"
+
+# ── merge-tree-check.sh ─────────────────────────────────────────────────────────
+# The #187 / #188 shape: one branch adds a parameter to a constructor and fixes the callers it
+# knows, the other adds a new file calling the old signature. git merges them without a conflict
+# and each branch builds on its own — only the merged tree fails, which is what the check builds.
+if command -v go >/dev/null 2>&1; then
+  export GOFLAGS=-mod=mod GOWORK=off GOTOOLCHAIN=local
+  fixture tree
+  printf 'module fx\n\ngo 1.21\n' > "$repo/go.mod"
+  printf 'package fx\n\nfunc NewCreateOrder(a, b int) int { return a + b }\n' > "$repo/order.go"
+  printf 'package fx\n\nimport "testing"\n\nfunc TestOrder(t *testing.T) { _ = NewCreateOrder(1, 2) }\n' > "$repo/order_test.go"
+  commit "feat: base"
+  git -C "$repo" update-ref refs/remotes/origin/main main
+  git -C "$repo" checkout -q -b ownership
+  printf 'package fx\n\nfunc NewCreateOrder(a, b, policy int) int { return a + b + policy }\n' > "$repo/order.go"
+  printf 'package fx\n\nimport "testing"\n\nfunc TestOrder(t *testing.T) { _ = NewCreateOrder(1, 2, 0) }\n' > "$repo/order_test.go"
+  commit "feat: ownership policy"
+  git -C "$repo" checkout -q main
+  git -C "$repo" checkout -q -b retry
+  printf 'package fx\n\nimport "testing"\n\nfunc TestRetry(t *testing.T) { _ = NewCreateOrder(3, 4) }\n' > "$repo/retry_test.go"
+  commit "test: retry"
+  git -C "$repo" checkout -q main
+  tree_check() { set +e; tc_out=$(in_repo scripts/merge-tree-check.sh "$@" 2>&1); tc_rc=$?; set -e; }
+  tree_check main ownership; expect_eq "ownership alone builds"   0 "$tc_rc"
+  tree_check main retry;     expect_eq "retry alone builds"       0 "$tc_rc"
+  if git -C "$repo" merge-tree --write-tree ownership retry >/dev/null 2>&1; then ok; else bad "fixture: ownership + retry must merge without a text conflict"; fi
+  tree_check ownership retry
+  expect_eq    "merged tree fails to compile" 1 "$tc_rc"
+  expect_match "failure names the call"       'NewCreateOrder' "$tc_out"
+  git -C "$repo" checkout -q -b clash main
+  echo "package fx // clash" > "$repo/order.go"; commit "feat: clash"
+  git -C "$repo" checkout -q -b clash2 main
+  echo "package fx // other" > "$repo/order.go"; commit "feat: clash2"
+  git -C "$repo" checkout -q main
+  tree_check clash clash2
+  expect_eq    "text conflict exits 2"        2 "$tc_rc"
+  if [ -n "$(git -C "$repo" worktree list | sed 1d)" ]; then bad "merge-tree-check.sh left a worktree behind"; else ok; fi
+  unset GOFLAGS GOWORK GOTOOLCHAIN
+else
+  echo "scripts/test.sh: go not found — merge-tree-check.sh fixture skipped" >&2
+fi
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
