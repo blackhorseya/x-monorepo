@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -105,5 +106,92 @@ func TestOrdering_IdempotencyKey(t *testing.T) {
 	b, _ := place(alice, "", "", "SKU-1")
 	if a == nil || b == nil || a.GetId() == b.GetId() {
 		t.Fatalf("keyless calls = %v, %v, want two orders", a, b)
+	}
+}
+
+// ordering_create_order_total{result}: what CreateOrder ended in, counted at the
+// outermost decorator (after the transaction committed). Only the result label:
+// no key, customer or order id (R4, cardinality).
+func TestOrdering_CreateOrderResultMetric(t *testing.T) {
+	srv, cleanup, err := Initialize(&config.AppConfig{
+		HTTP: config.HTTP{Addr: ":0"},
+		Log:  config.Log{Level: "error", Format: "text"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	c := context.Background()
+	cl := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
+
+	place := func(key, sku string, qty int32) error {
+		_, err := cl.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
+			CustomerId:     "metric-customer",
+			IdempotencyKey: key,
+			Items:          []*orderingv1.LineItem{{Sku: sku, Quantity: qty, UnitPrice: &commonv1.Money{AmountMinor: 100, Currency: "USD"}}},
+		}))
+		return err
+	}
+	for _, step := range []struct {
+		key, sku string
+		qty      int32
+		wantErr  bool
+	}{
+		{"", "SKU-1", 1, false},                // created (keyless)
+		{"secret-key-1", "SKU-1", 1, false},    // created
+		{"secret-key-1", "SKU-1", 1, false},    // replayed
+		{"secret-key-1", "SKU-1", 1, false},    // replayed
+		{"secret-key-1", "SKU-OTHER", 1, true}, // key_reused
+		{"", "SKU-1", -1, true},                // validation error: not counted
+	} {
+		if err := place(step.key, step.sku, step.qty); (err != nil) != step.wantErr {
+			t.Fatalf("place(%q, %q, %d): err = %v, wantErr %v", step.key, step.sku, step.qty, err, step.wantErr)
+		}
+	}
+
+	res, err := http.Get(ts.URL + server.MetricsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var sb strings.Builder
+	if _, err := io.Copy(&sb, res.Body); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]string{}
+	for _, line := range strings.Split(sb.String(), "\n") {
+		if !strings.HasPrefix(line, "ordering_create_order_total{") {
+			continue
+		}
+		labels := line[strings.Index(line, "{")+1 : strings.LastIndex(line, "}")]
+		result := ""
+		for _, kv := range strings.Split(labels, ",") {
+			name, val, _ := strings.Cut(kv, "=")
+			switch name {
+			case "result":
+				result = strings.Trim(val, `"`)
+			case "otel_scope_name", "otel_scope_version", "otel_scope_schema_url", "otel_scope_info", "job", "instance":
+			default:
+				t.Fatalf("unexpected label %q on %s: only result may vary", name, line)
+			}
+		}
+		got[result] = line[strings.LastIndex(line, " ")+1:]
+	}
+	want := map[string]string{"created": "2", "replayed": "2", "key_reused": "1"}
+	if len(got) != len(want) {
+		t.Fatalf("ordering_create_order_total results = %v, want %v\n%s", got, want, sb.String())
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("ordering_create_order_total{result=%q} = %q, want %s (all: %v)", k, got[k], v, got)
+		}
+	}
+	for _, leak := range []string{"secret-key-1", "metric-customer"} {
+		if strings.Contains(sb.String(), leak) {
+			t.Fatalf("/api/metrics leaks %q", leak)
+		}
 	}
 }

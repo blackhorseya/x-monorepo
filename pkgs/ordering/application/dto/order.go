@@ -77,4 +77,7 @@ type OrderOutput struct {
 	Status     string // PENDING | CONFIRMED | COMPLETED | CANCELLED
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// Replayed is true when CreateOrder answered with an order an earlier call
+	// with the same idempotency key had already created (nothing was written).
+	Replayed bool
 }

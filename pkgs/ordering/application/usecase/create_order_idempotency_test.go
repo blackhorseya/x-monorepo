@@ -128,6 +128,9 @@ func TestCreateOrder_IdempotencyKey(t *testing.T) {
 			if second.ID != first.ID {
 				t.Fatalf("replay created %s, want the original %s", second.ID, first.ID)
 			}
+			if first.Replayed || !second.Replayed {
+				t.Fatalf("Replayed = %v / %v, want false for the create and true for the replay", first.Replayed, second.Replayed)
+			}
 			if n := f.total(t, as(ops)); n != 1 {
 				t.Fatalf("%d orders stored, want 1", n)
 			}
@@ -270,6 +273,7 @@ func TestCreateOrder_IdempotencyKey(t *testing.T) {
 
 			const n = 8
 			ids := make([]string, n)
+			replayed := make([]bool, n)
 			errs := make([]error, n)
 			start := make(chan struct{})
 			var wg sync.WaitGroup
@@ -280,7 +284,7 @@ func TestCreateOrder_IdempotencyKey(t *testing.T) {
 					<-start
 					out, err := f.create.Execute(as(alice), in)
 					if err == nil {
-						ids[g] = out.ID
+						ids[g], replayed[g] = out.ID, out.Replayed
 					}
 					errs[g] = err
 				}()
@@ -295,6 +299,16 @@ func TestCreateOrder_IdempotencyKey(t *testing.T) {
 				if ids[g] != ids[0] {
 					t.Fatalf("request %d got %s, request 0 got %s: one key, two orders", g, ids[g], ids[0])
 				}
+			}
+			// Whoever lost the race (lookup miss then conflict, or a late lookup hit) is a replay.
+			created := 0
+			for _, r := range replayed {
+				if !r {
+					created++
+				}
+			}
+			if created != 1 {
+				t.Fatalf("%d of %d answers were not replays, want exactly the 1 that created", created, n)
 			}
 			if got := f.total(t, as(ops)); got != 1 {
 				t.Fatalf("%d orders stored, want 1", got)
