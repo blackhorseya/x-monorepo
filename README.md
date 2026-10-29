@@ -252,7 +252,7 @@ CreateOrder ──► ordering.v1.OrderCreated ──► inventory ReserveStock�
                                               ├─ RESERVED → inventory.v1.StockReserved ──► ordering ConfirmOrder（PENDING → CONFIRMED → ordering.v1.OrderConfirmed；已 CANCELLED → domain error → drop）
                                               └─ REJECTED → ordering.v1.OrderCancellationRequested ──► ordering CancelOrder
 CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStock（RESERVED → RELEASED；找不到 → CANCELLED tombstone；否則 domain error → drop）
-CompleteOrder ─► ordering.v1.OrderCompleted ──► inventory CommitStock（RESERVED → COMMITTED：on_hand 與 reserved 同時扣掉——賣掉了；否則 domain error → drop）
+CompleteOrder ─► ordering.v1.OrderCompleted ──► inventory CommitStock（RESERVED → COMMITTED：on_hand 與 reserved 同時扣掉——賣掉了；EXPIRED → 從 available 補扣成 COMMITTED，不夠就 COMMIT_SHORT；其餘 domain error → drop）
 worker expire ─► inventory ExpireReservations（RESERVED 超過 TTL → EXPIRED：stock 還回去 + inventory.v1.StockReleased，並發 ordering.v1.OrderCancellationRequested ──► ordering CancelOrder（CONFIRMED → CANCELLED）；回來的 OrderCancelled 找到 EXPIRED → drop）
 ```
 
@@ -261,7 +261,7 @@ Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED
 cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的那邊 reload 後被狀態機拒絕，所以每張 order 只會有 `OrderCancelled` / `OrderCompleted` 其一。
 **Reservation TTL**：客戶既不完成也不取消，庫存不能一直被扣著——`worker expire --older-than 24h`（Helm `expire` CronJob 每 15 分鐘；`task expire -- --older-than 24h --dry-run` 先看）掃 RESERVED 超過 TTL 的 reservation，一批一個交易、最老的先。
 Reservation 沒有 version：它和同一張 order 的 Commit / Release 之間的鎖是 **stock 列的 version**（同一交易裡一起 Save），輸的那批整批 rollback 重跑。
-已知的窗口：`CompleteOrder` commit 到 inventory 消費 `OrderCompleted` 之間 reservation 仍是 RESERVED，sweep 剛好掃到會把庫存還回去並請求取消，ordering 拒絕（COMPLETED 是終點）、`OrderCompleted` 到了找到 EXPIRED 也 drop——結果是 order COMPLETED 但沒賣出。窗口是一跳 consumer 對上以小時計的 TTL，守的是 eventbus lag 的 alert，不是 use case。
+與 `CompleteOrder` 的競態：`CompleteOrder` commit 到 inventory 消費 `OrderCompleted` 之間 reservation 仍是 RESERVED，sweep 剛好掃到會把庫存還回去並請求取消，ordering 拒絕（COMPLETED 是終點）。`OrderCompleted` 到了找到 EXPIRED 就補扣：`available` 夠 → 從 on_hand 扣、COMMITTED（照常發 `StockCommitted`）；不夠（庫存這段時間被別張單訂走）→ 全部不動、標 `COMMIT_SHORT`（終態、不發 event、不會變負）——訂單已 COMPLETED 但庫存缺口要營運處理，alert `x-monorepo-commit-short`，步驟見 `docs/operations.md`。重送的 `OrderCompleted` 找到 COMMITTED / COMMIT_SHORT 是 domain error → drop，不會扣第二次。
 
 - ordering 與 inventory 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled` / `OrderCompleted`、events adapter 發 `OrderCancellationRequested`（缺貨與過期都是它）；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
 - **event 的 schema 歸 consumer 所有**：缺貨是 ordering 的 message（`OrderCancellationRequested`），inventory 把它發進 ordering 的 topic / 表（同一個 DB、同一個交易）。

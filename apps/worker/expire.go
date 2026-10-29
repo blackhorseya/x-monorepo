@@ -32,7 +32,9 @@ and ordering is asked to cancel the order (ordering.v1.OrderCancellationRequeste
 reason "reservation expired after <held>"); ordering moves the CONFIRMED order to
 CANCELLED and the OrderCancelled it then publishes finds the EXPIRED row here and is
 dropped. Only RESERVED reservations are touched: a reservation the customer completed
-(COMMITTED) or cancelled (RELEASED) is never due.
+(COMMITTED) or cancelled (RELEASED) is never due. If the order was completed just
+before the sweep, its OrderCompleted still finds the EXPIRED row and sells the stock
+from what is available (COMMITTED), or marks COMMIT_SHORT when it is gone.
 
 One batch is one transaction; a lost race with a concurrent commit / release of the
 same order (optimistic lock on the stock rows) fails the batch, which rolls back — rerun.

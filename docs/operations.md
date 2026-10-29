@@ -43,6 +43,7 @@ Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/ale
 | Eventbus retention overdue | `eventbus_outbox_oldest_age_seconds` / `eventbus_inbox_oldest_age_seconds` > 45d 持續 1h | prune 沒在跑，或跑了刪不動；`task prune -- --older-than 720h --dry-run` 或 console Prune 頁的 dry run 會說是誰擋的。閾值設成 prune retention 的 1.5× |
 | Eventbus rows held by a stale consumer group | `eventbus_outbox_oldest_held_age_seconds` > 1d 持續 30m | offsets 表裡有 group 一天沒前進；consumer stalled 沒響就是沒人跑的 group（舊 `worker.consumer_group`、E2E 的 `test-<ts>.*`），`--forget-group` / console Prune 頁的 forget 刪掉它的 cursor |
 | Reservation expiry overdue | `inventory_reservations_oldest_age_seconds{status="RESERVED"}` > 36h（1.5 × 24h TTL）持續 15m | `worker expire` 沒跑或一直失敗：看 expire CronJob 的 Job，再 `task expire -- --older-than 24h --dry-run` 或 console Expire 頁 dry run 看誰到期、sweep 有沒有 ABORTED（stock 列撞版，重跑就好）。閾值跟 Helm `expire.olderThan` 綁在一起，改一個要一起改 |
+| Commit short — completed order not covered | `max(delta(inventory_reservations{status="COMMIT_SHORT"}[1h]))` > 0（severity critical，不等） | 訂單已 COMPLETED（客戶被承諾有貨），但它的 reservation 先被 expire sweep 還了庫存、`OrderCompleted` 到時庫存已被別單訂走，沒扣到：處置見下方「COMMIT_SHORT 處置」。COMMIT_SHORT 是終態列、不會被清掉，所以 alert 看的是一小時內新增的數量（最後一筆之後一小時自己解除）；累積筆數看「Reservations by status」panel |
 | Saga stuck — order PENDING too long | `ordering_orders_oldest_age_seconds{status="PENDING"}` > 600 持續 5m | 有訂單等 inventory 的答覆超過 10 分鐘：看 `ordering.v1.OrderCreated`（inventory 的 group）與 `inventory.v1.StockReserved`（ordering 的 group）的 lag，再看 poison 表——handler 一直 drop 的話 eventbus 幾條都不會紅，只有這條會 |
 | Eventbus metrics absent | `absent(eventbus_consumer_lag)` 持續 10m | 沒有 worker 在匯出，上面幾條都是瞎的 |
 | Auth credential rejections | `rate(auth_decisions_total{result="invalid"}[5m])` > 1/s 持續 5m（by `method`） | 有人在猜 key / 重放 token，或 key 換了 client 還送舊的；Loki `{service_name="rpc"} \| code="unauthenticated"` 看是哪個 procedure、request id（credential 本身不記）。rate limit 在 auth 外層，洪水先被擋 |
@@ -59,6 +60,16 @@ notification policy 由部署環境依 `severity` label 自己接（Grafana → 
 Retention 預設 72h（compose 的 `LGTM_RETENTION`，透過 image 的 `LOKI/TEMPO/PROMETHEUS_EXTRA_ARGS` 下 flag；Pyroscope v2 storage
 還沒有時間型 retention）。Loki 突然沒 log 但 metrics / traces 正常，先看 `podman machine ssh df -h /`：VM 磁碟快滿時 Loki 的
 WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_disk_full_failures_total`），跟 app 無關，`podman system prune` 就好。
+
+### COMMIT_SHORT 處置
+
+`COMMIT_SHORT` = 訂單已 COMPLETED，但 inventory 沒有賣出對應庫存：expire sweep 在 `CompleteOrder` 之後、`OrderCompleted` 被消費之前把 reservation 轉 EXPIRED 還了庫存，`OrderCompleted` 到時 `available` 已被別張單訂走（全部不動，stock 不會變負）。TTL 以小時計、窗口只有一個 consumer 跳，所以這條應該很少響；響了不是 bug，是需要人處理的缺貨。
+
+1. 找出是哪些單：console Reservations 頁選 `COMMIT_SHORT`，或 `ListReservations status=COMMIT_SHORT`（`order_id` 對回 ordering 的訂單、line 看缺哪個 SKU 多少）。
+2. 看庫存現況：`GetStock` / console Stocks 頁，`available = on_hand - reserved`。缺口 = 該單 line 的數量 − `available`。
+3. 二選一處置：實體庫存其實還在（只是系統帳少扣）→ 補貨或對帳後 `SetStock` 把 `on_hand` 調到實際值，讓帳面追上已賣出的數量；實體庫存不足 → 走業務面補償（缺貨通知、退款），inventory 沒有「撤銷 COMPLETED」的路徑。
+4. COMMIT_SHORT 列留著當稽核紀錄，不要刪；alert 看的是新增量，所以不必手動解除，最後一筆之後一小時自動恢復。累積筆數在「Reservations by status」panel。
+5. 若頻繁出現：expire TTL（Helm `expire.olderThan`）可能比訂單從 CONFIRMED 到完成的時間還短，TTL 在殺還沒完成的單——先調長 TTL，再看 EXPIRED 筆數有沒有降下來。
 
 ## Load test（k6）
 
