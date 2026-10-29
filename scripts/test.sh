@@ -346,6 +346,7 @@ chmod +x "$signfake/cosign"
 # sign_blob <name> "<FAKE_SEQ>": runs the wrapper with goreleaser's args; sets sb_rc, sb_out, sb_tries, sb_bundle.
 sign_blob() { # SB_ART=<file name> overrides the artifact name; SB_BUNDLE_ARGS (@B@ = the bundle path) the --bundle arguments
   local d="$tmp/sb-$1" art="${SB_ART:-checksums.txt}"; mkdir -p "$d"; echo artifact > "$d/$art"
+  if [ -n "${SB_SENTINEL:-}" ]; then echo keep > "$d/$SB_SENTINEL"; fi
   : > "$d/args"; rm -f "$d/count"
   sb_bundle="$d/checksums.txt.sigstore.json"
   local bargs="${SB_BUNDLE_ARGS:---bundle=@B@}" bundle_args
@@ -448,6 +449,11 @@ bundle_usage bundle-twice-old-first "--bundle=@B@.old --bundle=@B@"
 bundle_usage bundle-twice-new-first "--bundle=@B@ --bundle=@B@.old"
 bundle_usage bundle-separate        "--bundle @B@"
 bundle_usage bundle-empty           "--bundle="
+# After `--` everything is a positional: a file named `--bundle=decoy` is the artifact, never the bundle,
+# so the unrelated file `decoy` is not removed and, as `--` is not understood, there is one attempt.
+SB_REL=1 SB_PRE='--' SB_ART='--bundle=decoy' SB_SENTINEL=decoy sign_blob dashdash-decoy "v2path409 ok"
+expect_eq    "sign: after -- a --bundle=... artifact makes exactly one attempt" 1 "$sb_tries"
+if [ -e "$tmp/sb-dashdash-decoy/decoy" ]; then ok; else bad "sign: the file named by a --bundle=decoy artifact after -- was deleted"; fi
 SB_PRE='--oidc-client-id fixture-client' bundle_usage bundle-twice-unknown-flag "--bundle=@B@.old --bundle=@B@"
 SB_ART='artifact{build}.txt' sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"

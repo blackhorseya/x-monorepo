@@ -48,16 +48,19 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
                    "rekorTlogConfig": {"selector": "ALL"}}
             open(d + "/config.json", "w").write(json.dumps(cfg)); open(d + "/" + name, "w").write("fixture")
             # cwd=d and a bare artifact name: how cosign prints a relative path in its error line
+            open(d + "/decoy", "w").write("keep")   # what a mis-parsed --bundle=decoy would delete
+            tail = ["--yes", "--key", d + "/cosign.key", "--signing-config", d + "/config.json"]
+            args = tail + ["--", name] if dashdash else [name] + tail
             r = subprocess.run([wrapper, "sign-blob", *(bundles(d) if bundles else ["--bundle=" + d + "/bundle.json"]), *pre,
-                                name, "--yes", "--key", d + "/cosign.key",
-                                "--signing-config", d + "/config.json"],
+                                *args],
                                cwd=d, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, timeout=120)
         finally:
             srv.shutdown(); srv.server_close(); t.join()
         left = os.path.exists(d + "/bundle.json")
+        decoy_kept = os.path.exists(d + "/decoy")
     print("v2 HTTP %d%s: wrapper exit %d, POSTs %d (want %d), bundle left %s" % (status, (" (body quotes a 409)" if quoted else "") + label, r.returncode, len(hits), want_posts, left))
-    ok = r.returncode != 0 and len(hits) == want_posts and not left
+    ok = r.returncode != 0 and len(hits) == want_posts and not left and decoy_kept
     if want_body is not None and sent != [want_body] * len(hits):
         print("FAIL: v2 HTTP %d%s: the fixture sent %r, not the payload under test %r" % (status, label, sent[:1], want_body)); sys.exit(1)
     if not ok:
@@ -80,6 +83,7 @@ run(503, 1, name="fixture-client: adding rekor v2 entry: unexpected response: 40
     label=" (unknown flag whose value prefixes the artifact name)")
 run(503, 0, name="artifact", bundles=lambda d: ["--bundle=" + d + "/bundle.json", "--bundle=" + d + "/other.json"],
     label=" (--bundle twice: usage error, cosign never runs)")
+run(409, 1, name="--bundle=decoy", dashdash=True, label=" (after --, a '--bundle=decoy' artifact: one attempt, decoy file kept)")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")
 print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")
