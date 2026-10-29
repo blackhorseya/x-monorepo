@@ -54,7 +54,7 @@ test("lines priced in two currencies are flagged before the server refuses them"
   await page.goto("/orders");
   const card = createCard(page);
   await card.getByLabel("SKU").first().fill(usd);
-  await page.getByRole("button", { name: "Line" }).click();
+  await page.getByRole("button", { name: "Line", exact: true }).click();
   await card.getByLabel("SKU").nth(1).fill(eur);
 
   await expect(card.getByTestId("quote-total")).toContainText("one currency");
