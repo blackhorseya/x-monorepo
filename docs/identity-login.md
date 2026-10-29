@@ -177,9 +177,10 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 
 | RPC | 授權 | 說明 |
 |---|---|---|
-| `Login` | public | `name`、`password`、`attempt_id` → access token + `expires_in`；`Set-Cookie` refresh |
+| `StartLogin` | public | 無參數 → attempt ticket（見 §5.1）；無 DB 存取 |
+| `Login` | public | `name`、`password`、`ticket` → access token + `expires_in`；`Set-Cookie` refresh |
 | `Refresh` | public（憑 cookie） | rotate；回新 access token |
-| `Logout` | public（憑 cookie 與 / 或 `attempt_ids`） | 撤銷 family、對未 commit 的 Login 寫 tombstone（§5.1）；冪等 |
+| `Logout` | public（憑 cookie 與 / 或 attempt `tickets`） | 撤銷 family、把對應 attempt 列設為 CANCELLED（§5.1）；冪等 |
 | `ChangePassword` | 登入者本人 | 需要 current password；成功撤銷其他 session |
 | `SetPassword` | `auth.admin_role` | 設定 / 重設某 account 的密碼；撤銷該 account 全部 session |
 | `ResetLoginThrottle` | `auth.admin_role` | 解鎖 |
@@ -196,7 +197,8 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 | `auth.issuer.name` / `.audience` | … | 空（enabled 時必填） | `iss` / `aud`；必須與 `auth.jwt.*` 不同 |
 | `auth.issuer.kek` | `APP_AUTH_ISSUER_KEK` | 空（enabled 時必填） | 32 bytes base64；**只走 env / Secret**，config 檔載入時拒絕這個 key |
 | `auth.issuer.access_ttl` | … | `10m` | ≤ 1h |
-| `auth.issuer.login_timeout` | … | `10s` | `Login` 最長處理時間，必須 > 0 且 ≤ 1m（取消契約的 admission 界線，見 §5.1）；不依賴 `http.timeout` |
+| `auth.issuer.login_timeout` | … | `10s` | `Login` 單次最長處理時間，必須 > 0 且 ≤ 1m；不依賴 `http.timeout`（見 §5.1） |
+| `auth.issuer.attempt_window` | … | `60s` | attempt ticket 的有效期（`not_after`），必須 > 0 且 ≤ 5m；取消契約的不可重設 admission 界線（見 §5.1） |
 | `auth.issuer.session_idle_ttl` / `.session_max_ttl` | … | `8h` / `168h` | refresh |
 | `auth.issuer.argon2.*` | … | m=65536KiB、t=3、p=2、max_concurrent=4 | 見 §4.2 |
 | `auth.issuer.login_rate_limit` | … | 待量測 | per-peer |
@@ -215,22 +217,26 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
   2. **但丟棄 body 不能阻止瀏覽器處理 `Set-Cookie`**：慢的 `Login` 回應在 Logout 之後到達時，瀏覽器仍會收下 HttpOnly refresh cookie，reload 的靜默 `Refresh` 就把 session 救回來（reviewer 已用真 Chromium 重現這個順序）。所以**取消必須發生在 server 端**，見 §5.1；JS 的 generation 只管 UI 狀態。
   3. `refresh` 是 **single-flight**，且跨分頁用 **Web Locks**（`navigator.locks.request("console.refresh", …)`）序列化，**持鎖到 fetch 完成**。access token 只在各分頁記憶體、不跨分頁共享，所以不能假設別的分頁已更新自己的 token；拿到鎖後直接用目前共享的 cookie 送出（以最新 cookie 再 rotate 不構成 reuse），不靠 server 寬容（見 §4.5）。
   4. 401 的自動重試**每個 generation 最多一次**：收到 `UNAUTHENTICATED` → refresh → 重放原請求；refresh 失敗 → 轉為 anonymous 並導向 `/login`，不迴圈。
-  5. 登出 / Clear：先 `bump generation`，再送 `Logout`（帶上所有 in-flight 的 `attempt_id`，§5.1）；`Logout` 的回應（成功或失敗）都不改變 credential 狀態。
+  5. 登出 / Clear：先 `bump generation`，再送 `Logout`（帶上所有 in-flight 的 attempt ticket，§5.1）；`Logout` 的回應（成功或失敗）都不改變 credential 狀態。
   6. 多分頁：登出 / 登入用 `BroadcastChannel` 通知其他分頁（只傳事件，不傳 token），其他分頁各自靜默 refresh 或回登入頁。
 
 ### 5.1 登入嘗試的 server 端取消（`attempt_id`）
 
-- Console 每次 `Login` 產生 128-bit 隨機 `attempt_id`（`crypto.getRandomValues`），隨 request 送出；server 把它存在建立的 session 上。
-- `Logout` 接受 `attempt_ids[]`（public procedure，不需 cookie）。
-- **原子性契約**：以 `attempt_id` 為鍵有**一列**狀態 `identity.login_attempts(attempt_id PK, state PENDING|COMMITTED|CANCELLED, family_id?, expires_at)`，`Login` 與 `Logout` 都**先對這一列取 row lock**，靠同一把鎖跨 pod 互斥（不是「各自一個普通 transaction 再各查一次」——那樣有 check→commit 的中間窗口）：
-  - `Login`（單一 transaction，READ COMMITTED 即可）：`INSERT … (attempt_id, PENDING) ON CONFLICT DO NOTHING` → `SELECT … FOR UPDATE` 重讀該列。狀態是 `CANCELLED` 或列已過期 → **不建 session、不發 `Set-Cookie`**，回 `UNAUTHENTICATED`（committed rejection）；狀態是 `COMMITTED`（重用）→ 拒絕；否則建 session、列改 `COMMITTED` 並記 `family_id`，同一 transaction commit。
-  - `Logout`（單一 transaction）：`INSERT … (attempt_id, CANCELLED) ON CONFLICT (attempt_id) DO UPDATE SET state='CANCELLED'`（取同一把 row lock），再撤銷該列的 `family_id`（若已 COMMITTED）整個 family，同一 transaction commit。
+- Console 每次登入先呼叫 `StartLogin`（public、無狀態、不碰 DB、受 rate limit）取得 **attempt ticket**：server 產生 128-bit 隨機 `attempt_id`，簽 `MAC = HMAC(HKDF(KEK, "attempt"), attempt_id ‖ not_after)`，`not_after = now + auth.issuer.attempt_window`（預設 60s，≤ 5m）；ticket = `attempt_id.not_after.MAC`。`Login` / `Logout` 都帶 ticket。**ticket 的 `not_after` 是不可重設的 admission 界線**：同一個 attempt 無法靠重送、延遲或重新進 queue 取得新的期限。
+- `Logout` 接受 `tickets[]`（public procedure，不需 cookie）。
+- **原子性契約**：以 `attempt_id` 為鍵有**一列**狀態 `identity.login_attempts(attempt_id PK, state PENDING|COMMITTED|CANCELLED, family_id?, not_after)`，`Login` 與 `Logout` 都**先對這一列取 row lock**，靠同一把鎖跨 pod 互斥（不是「各自一個普通 transaction 再各查一次」——那樣有 check→commit 的中間窗口）：
+  - `Login`（單一 transaction，READ COMMITTED 即可）：先驗 ticket 的 MAC；**在 transaction 內以 DB 時鐘**（`transaction_timestamp()`，與 prune 同一個時鐘來源，不用 pod 時鐘）檢查 `now ≤ not_after`，不成立 → 拒絕（不建列、不建 session、不發 `Set-Cookie`）；成立才 `INSERT … (attempt_id, PENDING, not_after) ON CONFLICT DO NOTHING` → `SELECT … FOR UPDATE` 重讀該列。狀態是 `CANCELLED` → 拒絕；`COMMITTED`（重用）→ 拒絕；否則建 session、列改 `COMMITTED` 並記 `family_id`，同一 transaction commit。
+  - `Logout`（單一 transaction）：驗 ticket MAC；`INSERT … (attempt_id, CANCELLED, not_after) ON CONFLICT (attempt_id) DO UPDATE SET state='CANCELLED'`（取同一把 row lock），再依列上的 `family_id`（不論 state 現在是什麼）撤銷整個 family，同一 transaction commit。ticket 已過 `not_after` 的 Logout 仍可執行（冪等，只會多寫一列）。
   - 互斥的推論：兩個 transaction 對同一列的寫入必須排隊。Login 先拿到鎖 → Logout 等 Login commit 後看到 `COMMITTED` + `family_id` 並撤銷；Logout 先拿到鎖 → Login 重讀時必看到 `CANCELLED`。**所以 `Logout` 成功返回之後，不存在可用的該 attempt 的 session，也不可能再被建立**（不論 Login 是在 check 前、check 後還是 commit 前被打斷）。
   - 記憶體 repo（無 DB）以 per-`attempt_id` mutex 提供同一語意，並跑同一組測試。
-- **保留與 admission 界線**：`login_attempts` 列的 `expires_at` = 建立時間 + 固定 15 分鐘（取消後也保留到此時間，之後由 prune 清）。`Login` 有自己的最長期限 `auth.issuer.login_timeout`（預設 10s，必須 > 0 且 ≤ 1m），與 `http.timeout` 無關（現況 `http.timeout=0` 合法且代表無期限，所以不能依賴它）；`enabled=true` 時 `login_timeout` 不合法就拒絕啟動。因為 `login_timeout` ≤ 1m < 15m，取消後不會有「列已過期、遲到的 Login 才檢查」的窗口；萬一過期，`Login` 一律拒絕過期列（見上）。
-- `attempt_id` 是不可猜的 128-bit 值，等同取消能力：**按 credential 保密，不進 log / span / metrics**；它只能取消自己的嘗試，不是 account ownership 的證明，也沒有任何用 account id 撤銷他人 session 的路徑。同一個 `attempt_id` 只能用一次。
+- **保留與 admission 界線（正確性不靠猜 TTL）**：
+  - `login_timeout`（`Login` 單次最長處理時間，預設 10s，必須 > 0 且 ≤ 1m，與 `http.timeout` 無關——現況 `http.timeout=0` 合法）只限制**一次處理**；真正限制「這個 attempt 還能不能被受理」的是 ticket 的 `not_after`（上面的 DB 時鐘檢查）。
+  - 列的保留期 = `not_after + login_timeout + 60s margin`（以 DB 時鐘比較），之後 prune 才可刪。因為 admission 檢查與 `INSERT` 在同一個 transaction、同一個 DB 時鐘，任何通過檢查的 Login 必在 `not_after` 之前開始，且在 `login_timeout` 內結束，所以**列被刪除之後，原 attempt 的任何 Login 都會在 ticket 檢查就被拒絕**，不可能「prune 後重新 INSERT 出全新 PENDING」。
+  - 反例（reviewer 提出）：Login(A) 卡在 queue、Logout(A) 先建 CANCELLED、列被 prune、Login(A) 才進來 → 現在在 admission 就因 `now > not_after` 被拒。單純延長 TTL 或在每次 admission 重設 timeout 都不是這個契約。
+  - `enabled=true` 時 `attempt_window` 必須 > 0 且 ≤ 5m、`login_timeout` 必須 > 0 且 ≤ 1m，否則拒絕啟動。
+- `attempt_id` 是不可猜的 128-bit 值，等同取消能力：**按 credential 保密，不進 log / span / metrics**；它只能取消自己的嘗試，不是 account ownership 的證明，也沒有任何用 account id 撤銷他人 session 的路徑。同一個 `attempt_id` 只能用一次（在 ticket 有效期內由列的 state 保證；期限後由 `not_after` 保證）。
 - 取消只作用於該瀏覽器的 attempt / family，**不是全裝置登出**；跨裝置不共享 cookie 與 attempt。收到「其他分頁登出」通知的分頁必須**取消自己的 pending attempts（送 `Logout`）並 bump generation**，不能只導回登入頁。
-- `Refresh` 的遲到回應（輪替後的新 refresh token）屬於**同一個 family**；Logout 撤銷 family（以出示的 cookie 或 `attempt_id` 找到它），新舊 token 一併失效，不需要另外的機制。
+- `Refresh` 的遲到回應（輪替後的新 refresh token）屬於**同一個 family**；Logout 撤銷 family（以出示的 cookie 或 ticket 找到它），新舊 token 一併失效，不需要另外的機制。
 - `AbortController` 中止 request 只是 best-effort 的省流量手段，**不作為 session 已取消的證明**；測試與規格都以 server 端狀態為準。
 - E2E（`web/apps/console/e2e/auth/`）在既有 `auth` project 增加登入情境；需要 `auth.issuer.enabled` 的 rpc 設定。
 
@@ -273,8 +279,8 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 | 2 | `refactor(platform): select JWT verifier by iss` | `TokenVerifier` port、依 `iss` 分派、`kid` keyset 抽象；`enabled=false` 行為不變（選配 `jwks_uri`）；啟用前提的啟動檢查 | characterization：既有 JWT 測試全綠不改，且補外部 issuer/audience 未設 / 只設其一 / 皆設（含 wildcard 接受自訂 `iss`）；**assertion RED**：兩個 verifier 時，`iss=A` 的 token 用 B 的 key 簽 → 拒絕；外部 `iss` 未 pin 或等於自家 `iss` → 啟動拒絕；`alg=none` / `HS256`（對 EdDSA keyset）→ 拒絕 |
 | 3 | `feat(identity): password credential domain` | `password.Credential`、argon2id、PHC、`NeedsRehash`、migration + repo（memory / postgres） | 新 API 型 RED（compile）+ GREEN 的 assertion：錯密碼 `Verify` 為假；參數低於 policy 下限 → `ErrWeakParams`；兩次 hash 同密碼結果不同（salt）；plaintext 不出現在 `%v` / error |
 | 4 | `feat(identity): signing keys, KEK sealing and JWKS` | `signingkey` domain、`Sealer`（AES-GCM，AAD=kid）、keyset provider、`/.well-known/jwks.json`、`worker identity rotate-key` | **assertion**：錯 KEK 解不開；JWKS 不含任何私鑰欄位；`RETIRING` 只驗不簽、`RETIRED` 不在 keyset；輪替後舊 token 在窗口內仍可驗、窗口後被拒；未知 `kid` 重載限速 |
-| 5 | `feat(identity): login, refresh and logout` | session domain、`Login` / `Refresh` / `Logout` / `ChangePassword` / `SetPassword`、節流表、auth.public 自動併入、metrics、config 與啟動檢查 | **assertion**：不存在 name 與錯密碼的回應（code / message）逐字相同，且 hasher 呼叫次數相同；DISABLED 帳號同樣完整驗密碼；第 N 次失敗後 `throttled`，且鎖定中不呼叫 hasher；對不存在 name 也會 throttled；reuse 舊 refresh → family 全撤銷（拒絕回應之後從 repo 重讀確認已落地，驗 committed rejection）；失敗登入的 counter 在拒絕後仍已遞增；「Pod A commit rotation 後丟回應、Pod B 用舊 token 重試」→ family 撤銷、需重新登入（明確行為）；`Logout{attempt_id}` 對已 commit 的 session 撤銷 family，對尚未 commit 的 Login 把列設為 CANCELLED 使其不建 session、不發 cookie；**用 barrier 固定「Login 已 `INSERT … ON CONFLICT` 且已 `SELECT … FOR UPDATE`（或尚未取鎖）、尚未 commit」時插入 Logout**，經真 handler＋repo（Postgres 與 memory 各跑一次）驗證：Logout 返回後重讀 session 為 revoked 或不存在、`Refresh` 失敗；另測 Login 先 / Logout 先 / 兩者交錯的所有順序，以及過期列一律拒絕；`DisableAccount` 撤銷全部 session；`enabled=false` → `UNIMPLEMENTED`；缺 KEK 拒絕啟動 |
-| 6 | `feat(console): login page and session credential` | `/login`、`session` credential、`attempt_id` 取消、Web Locks 序列化 refresh、generation 防護、BroadcastChannel | Playwright（`auth` project，**真 Chromium + 真 rpc**）：登入後呼叫成功；reload 靜默 refresh；**慢的 login 回應在 Logout/Clear 之後到達 → 不設定 credential，且之後 reload / `Refresh` 仍不能恢復該 session**（斷言 cookie jar 與 server session 兩側，不能只斷言 JS 狀態）；401 重試每個 generation 最多一次；登出後 access token 不留在任何 Web Storage |
+| 5 | `feat(identity): login, refresh and logout` | session domain、`StartLogin` / `Login` / `Refresh` / `Logout` / `ChangePassword` / `SetPassword`、節流表、auth.public 自動併入、metrics、config 與啟動檢查 | **assertion**：不存在 name 與錯密碼的回應（code / message）逐字相同，且 hasher 呼叫次數相同；DISABLED 帳號同樣完整驗密碼；第 N 次失敗後 `throttled`，且鎖定中不呼叫 hasher；對不存在 name 也會 throttled；reuse 舊 refresh → family 全撤銷（拒絕回應之後從 repo 重讀確認已落地，驗 committed rejection）；失敗登入的 counter 在拒絕後仍已遞增；「Pod A commit rotation 後丟回應、Pod B 用舊 token 重試」→ family 撤銷、需重新登入（明確行為）；`Logout{ticket}` 對已 commit 的 session 撤銷 family，對尚未 commit 的 Login 把列設為 CANCELLED 使其不建 session、不發 cookie；**用 barrier 固定「Login 已 `INSERT … ON CONFLICT` 且已 `SELECT … FOR UPDATE`（或尚未取鎖）、尚未 commit」時插入 Logout**，經真 handler＋repo（Postgres 與 memory 各跑一次）驗證：Logout 返回後重讀 session 為 revoked 或不存在、`Refresh` 失敗；另測 Login 先 / Logout 先 / 兩者交錯的所有順序；**取消 → 列到期 prune → 原 attempt 延遲 admission／重送**（用可控的 DB 時鐘或注入 clock）必須拒絕、不能建 session；也驗「跨過 prune 邊界但單次處理仍未超過 `login_timeout`」的情境；ticket MAC 被改、`not_after` 被改、他人 ticket 都拒絕；撤銷依列上的 `family_id`，不依賴 state=COMMITTED；`DisableAccount` 撤銷全部 session；`enabled=false` → `UNIMPLEMENTED`；缺 KEK 拒絕啟動 |
+| 6 | `feat(console): login page and session credential` | `/login`、`session` credential、`StartLogin` ticket 與取消、Web Locks 序列化 refresh、generation 防護、BroadcastChannel | Playwright（`auth` project，**真 Chromium + 真 rpc**）：登入後呼叫成功；reload 靜默 refresh；**慢的 login 回應在 Logout/Clear 之後到達 → 不設定 credential，且之後 reload / `Refresh` 仍不能恢復該 session**（斷言 cookie jar 與 server session 兩側，不能只斷言 JS 狀態）；401 重試每個 generation 最多一次；登出後 access token 不留在任何 Web Storage |
 | 7 | `docs/chore(helm)`: config / runbook / chart | `docs/config.md`、`docs/operations.md`、Helm `secrets.authIssuerKek`（支援 `existingSecret`）、`helm-check` profile、k6 `login`（throttle 429 + `Retry-After`）、dashboard row / alert | `helm-check` 新 profile 失敗在「缺 KEK 的 profile 不該 render 成功」；k6 threshold |
 
 順序：1 → 2 →（3 ∥ 4）→ 5 → 6 → 7。2 與 3 互相獨立，可平行；5 依賴 2、3、4；6 依賴 5。每支都過 `task gate-local`、domain 100% 覆蓋。
