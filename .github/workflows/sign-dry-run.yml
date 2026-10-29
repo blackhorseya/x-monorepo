@@ -1,0 +1,85 @@
+# Real keyless signing without a release (#262). ci.yml's release-snapshot skips `sign` (no OIDC
+# token on a PR run's snapshot, and a throwaway key proves the flags, not Fulcio / Rekor), so
+# the first real run of .goreleaser.yaml's `signs` → scripts/cosign-sign-blob.sh used to be the next
+# release. This runs goreleaser as a snapshot (no images, no publish, no tag, no release, no
+# draft) with `sign` NOT skipped: checksums.txt is signed through the wrapper with the ambient OIDC
+# token (Fulcio certificate, Rekor entry), then `cosign verify-blob` checks that bundle in the same
+# job. A failed sign or a failed verify fails the job.
+#
+# Triggers: workflow_dispatch (Actions → sign-dry-run → Run workflow; a dispatch needs this file on
+# main) and a pull_request that touches what the signing path is made of, so such a change is proven
+# before merge. Fork and Dependabot PRs get no id-token, so they are skipped, not red.
+#
+# Not part of the release chain: nothing here pushes, tags or writes (contents: read), and it is
+# under .github/, which scripts/releasable.sh excludes, so adding or changing it cuts no version
+# and next-version.sh is unaffected. The certificate's identity is THIS workflow at the ref that ran
+# it (not release.yml@main, which docs/release.md's Verify block uses for the real release), so
+# the identity below comes from github.workflow_ref. The Rekor 409 path stays covered by the
+# fixtures (scripts/test.sh, cosign-v2-conflict-smoke.sh); no conflict is provoked against the real log.
+name: sign-dry-run
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/sign-dry-run.yml
+      - .goreleaser.yaml
+      - scripts/cosign-sign-blob.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sign-dry-run-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  sign:
+    # a PR from a fork or from Dependabot has no OIDC token to give
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write   # the one extra: the OIDC token cosign trades for a Fulcio certificate
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { fetch-depth: 0 }
+      # the cosign release.yml signs with, read from its lines like rekor-canary.yml does: no
+      # second pin to keep equal (every `cosign-release:` there must agree)
+      - id: pin
+        run: |
+          v=$(sed -n 's/^ *cosign-release: *//p' .github/workflows/release.yml | sort -u)
+          [ "$(printf '%s\n' "$v" | grep -c .)" = 1 ] || { echo "release.yml pins cosign-release to: [$v]"; exit 1; }
+          echo "cosign=$v" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+        with: { version: "~> v2.18", install-only: true }
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ steps.pin.outputs.cosign }}
+      # --snapshot never publishes and needs no tag; docker is skipped (no push, and docker_signs
+      # is part of that phase); `sign` is deliberately absent from --skip.
+      - name: goreleaser snapshot, signing checksums.txt for real
+        run: goreleaser release --snapshot --clean --skip=docker,publish
+      - name: cosign verify-blob the bundle the wrapper produced
+        run: |
+          set -euo pipefail
+          bundle=bin/dist/checksums.txt.sigstore.json
+          [ -s bin/dist/checksums.txt ] || { echo "bin/dist/checksums.txt is missing or empty"; exit 1; }
+          [ -s "$bundle" ] || { echo "$bundle is missing or empty: the sign step did not run"; exit 1; }
+          cosign verify-blob \
+            --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --bundle "$bundle" bin/dist/checksums.txt
+          {
+            echo "## sign-dry-run: signed through scripts/cosign-sign-blob.sh and verified"
+            echo "- identity: \`https://github.com/$GITHUB_WORKFLOW_REF\`"
+            echo "- cosign: \`${{ steps.pin.outputs.cosign }}\`"
+            echo "- \`$(sha256sum bin/dist/checksums.txt | cut -d' ' -f1)\`  checksums.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
