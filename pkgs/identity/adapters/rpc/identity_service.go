@@ -83,7 +83,7 @@ type UseCases struct {
 }
 
 // IdentityService implements the generated IdentityServiceHandler. Every
-// procedure but WhoAmI is behind server.RequireRole(auth.AdminRole): managing
+// procedure but WhoAmI and ClaimInvite is behind server.RequireRole(auth.AdminRole): managing
 // who may call is the operator's job.
 type IdentityService struct {
 	uc   UseCases

@@ -78,9 +78,16 @@ func (w *extWorld) newAccount(t *testing.T, id string, roles ...string) {
 	}
 }
 
+// invite stores a pending invite through the repository, not CreateInvite: the
+// ClaimInvite tests must reach ClaimInvite's own behaviour even while
+// CreateInvite is unimplemented.
 func (w *extWorld) invite(t *testing.T, accountID, email string) {
 	t.Helper()
-	if _, err := w.create.Execute(w.ctx, dto.CreateInviteInput{AccountID: accountID, Email: email}); err != nil {
+	v, err := invite.New(invite.ID(randomName(t)), email, accountID, w.clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.invites.Add(w.ctx, v); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -321,5 +328,21 @@ func TestExternalResolver_OnPostgres(t *testing.T) {
 	w.clock.advance(time.Second)
 	if _, err := r.ResolveExternal(w.ctx, id); !errors.Is(err, account.ErrDisabled) {
 		t.Fatalf("30 s after the disable = %v, want account.ErrDisabled", err)
+	}
+}
+
+func TestCreateInvite_OnPostgres(t *testing.T) {
+	w := newExtWorld(t)
+	w.newAccount(t, "acc-1")
+	admin := contextx.WithPrincipal(w.ctx, contextx.Principal{Subject: "root-1"})
+	out, err := w.create.Execute(admin, dto.CreateInviteInput{AccountID: "acc-1", Email: "Ops@Example.com"})
+	if err != nil || out.Email != "ops@example.com" || !out.ExpiresAt.Equal(w.clock.Now().Add(7*24*time.Hour)) {
+		t.Fatalf("create = %+v, %v", out, err)
+	}
+	if n := w.count(t, "SELECT count(*) FROM identity.invites WHERE email = 'ops@example.com' AND claimed_at IS NULL"); n != 1 {
+		t.Fatalf("invites = %d", n)
+	}
+	if n := w.count(t, "SELECT count(*) FROM identity.audit_events WHERE actor = 'root-1' AND action = 'identity.create_invite' AND target_account_id = 'acc-1'"); n != 1 {
+		t.Fatalf("audit rows = %d", n)
 	}
 }

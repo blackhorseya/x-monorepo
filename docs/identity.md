@@ -43,7 +43,7 @@ metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有
 
 ## RPC（`identity.v1.IdentityService`）
 
-全部 `server.RequireRole(auth.admin_role)`，**除了 `WhoAmI`**（回 caller 自己的 principal；anonymous 時 `anonymous: true`）：
+全部 `server.RequireRole(auth.admin_role)`，**除了 `WhoAmI` 與 `ClaimInvite`**（回 caller 自己的 principal；anonymous 時 `anonymous: true`）：
 `CreateAccount` / `GetAccount` / `ListAccounts`（id 升冪，opaque page token）/ `DisableAccount` / `EnableAccount` / `AssignRoles` /
 `CreateApiKey`（回 secret 一次）/ `ListApiKeys`（含 REVOKED，新到舊）/ `RevokeApiKey` /
 `CreateInvite`（email 邀請，7 天、單次、不含 secret，寫 audit）/ `RevokeSessions`（見下）；`ClaimInvite` 不要 admin role（見「外部身分綁定」）。

@@ -1065,6 +1065,6 @@ tags:
     description: |-
       IdentityService manages the accounts and API keys the rpc server's auth
        interceptor resolves X-API-Key against (next to the static auth.api_keys of
-       the config, which stay the break-glass path). Every procedure but WhoAmI
+       the config, which stay the break-glass path). Every procedure but WhoAmI and ClaimInvite
        requires the admin role when auth is on (x-error-code: auth.permission_denied).
        It only verifies: JWTs keep coming from the external issuer of auth.jwt.
