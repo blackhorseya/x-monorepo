@@ -7,7 +7,7 @@ import { useKey } from "./helpers";
 // what it does not even ask. Runs in the auth project: auth.mode=required, ADMIN_KEY holds the
 // admin role, OPS_KEY none.
 
-const adminPages = ["Poison", "Prune", "Expire", "Accounts"] as const;
+const adminPages = ["Poison", "Prune", "Expire", "Accounts", "Products"] as const;
 const navLink = (page: Page, name: string) => page.locator("header nav").getByRole("link", { name, exact: true });
 
 test("no admin role: the nav leaves out every admin page", async ({ page }) => {
@@ -21,11 +21,11 @@ test("no admin role: the nav leaves out every admin page", async ({ page }) => {
   for (const name of adminPages) await expect(navLink(page, name)).toBeVisible();
 });
 
-for (const path of ["/poison", "/prune", "/expire"]) {
+for (const path of ["/poison", "/prune", "/expire", "/products"]) {
   test(`no admin role: ${path} shows the gate and sends no admin RPC`, async ({ page }) => {
     const adminCalls: string[] = [];
     page.on("request", (req) => {
-      if (req.method() === "POST" && /\/(admin\.v1\.AdminService|inventory\.v1\.InventoryService\/ExpireReservations)/.test(req.url())) {
+      if (req.method() === "POST" && /\/(admin\.v1\.AdminService|catalog\.v1\.CatalogService|inventory\.v1\.InventoryService\/ExpireReservations)/.test(req.url())) {
         adminCalls.push(req.url());
       }
     });

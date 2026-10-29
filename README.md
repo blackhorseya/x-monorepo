@@ -55,7 +55,8 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │   │   ├── service.proto          # RPC
 │   │   └── event.proto            # 進出 broker 的訊息
 │   ├── inventory/v1/              # 第二個 BC 的契約（entity / service / event）
-│   └── identity/v1/               # 第三個 BC：account / API key（entity / service，沒有 event）
+│   ├── identity/v1/               # 第三個 BC：account / API key（entity / service，沒有 event）
+│   └── catalog/v1/                # 第四個 BC：商品價格（entity / service，沒有 event）
 ├── pkgs/
 │   ├── kernel/                    # shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 │   ├── platform/                  # 技術共用：contextx、config、server（gin）、usecasex、metrics、postgres（gorm + migrate runner）
@@ -84,6 +85,9 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │       ├── domain/account/        # Account aggregate（id = principal subject、roles、ACTIVE / DISABLED）
 │       ├── domain/apikey/         # APIKey aggregate（只存 sha256、prefix；ACTIVE / REVOKED、expires_at）
 │       └── adapters/auth/         # 實作 platform 的 server.CredentialResolver（TTL cache），apps/rpc 以 wire.Bind 接上
+│   └── catalog/                   # ── 第四個 BC：商品價格的 server 端來源，沒有 event（docs/catalog.md）──
+│       ├── domain/product/        # Product aggregate（sku、name、price（每個 product 各自的幣別）、active、optimistic version）
+│       └── application/usecase/   # Upsert / Get / List / Deactivate + QuotePrices（批次報價，分得出不存在與已下架；ordering 尚未接）
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
@@ -111,6 +115,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
+| [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、Console 的 Products 頁（ordering 尚未接） |
 | [`docs/identity-login.md`](docs/identity-login.md) | 帳號密碼登入與自家 JWT issuer 的設計提案（方案比較、金鑰 / token / 節流、Console、拆 PR、未決問題；未實作） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
@@ -225,6 +230,8 @@ bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`�
 - **Inventory 寫入要 admin**：`inventory.v1.InventoryService` 的 `SetStock`（覆寫 on-hand）與 `ExpireReservations` auth 開著時要 `auth.admin_role`
   （非 admin → `PERMISSION_DENIED` + `auth.permission_denied`，沒帶 credential → `UNAUTHENTICATED`；`auth.mode: off` 全開）；`GetStock` / `ListStocks` /
   reservation 的讀取不檢查 role。console 的 Stock 頁 Set 要用 admin key / JWT。
+- **Catalog 寫入要 admin**：`catalog.v1.CatalogService` 的 `UpsertProduct` 與 `DeactivateProduct`（它們決定客人被收多少錢）同一個 gate；`GetProduct` / `ListProducts` 不檢查 role。
+  console 的 Products 頁是 admin 頁。ordering 還沒用 catalog 的價格（見 `docs/catalog.md`）。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `auth.admin_role`
@@ -370,6 +377,7 @@ task web-e2e-image  # 同一套 chromium spec 改打真的 console image（e2e/i
 | Orders 頁 | 建單表單的 Customer 選填：admin（`ListAccounts` 探測）或 anonymous（`WhoAmI.anonymous`）才可填，其他 credential 欄位鎖住、由 server 用 principal 的 subject；`ordering.v1.OrderService/ListOrders`（keyset，`created_at desc, id desc`，customer / status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s 只重抓第一頁（`refreshFirstPage`）；mutation 以 `["orders"]` 前綴 invalidate 所有 filter 的頁。Reservation 欄不逐列 `GetReservation`：還在等的列（PENDING，或 COMPLETED／CANCELLED 但仍 RESERVED／尚無）每 2s 共用一次 `inventory.v1.InventoryService/BatchGetReservations`（一次最多 100 個 order id，超過就分批；沒有要等的列就不打、分頁隱藏不打），訂單狀態變動時立刻補查一次，回到分頁（`visibilitychange`）時對所有已載入的列再查一次（含等待窗口已過期的缺失列）。非第一頁的列不隨第一頁刷新，訂單狀態維持載入時的值（PENDING 的列會持續被查），重載或 Load more 後更新；訂單詳情頁仍用 `GetReservation` 自己 poll |
 | Reservations 頁 | `inventory.v1.InventoryService/ListReservations`（keyset，`created_at desc, order_id desc`，status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s poll；Orders 頁的 reservation badge 連到 `/reservations?order=<id>`，該筆釘在最上面 |
 | Stock 頁 | `inventory.v1.InventoryService/ListStocks`（keyset，SKU 升冪，opaque page token；`sku_prefix` / `only_reserved` 篩選，token 帶著篩選條件，換條件續頁是 INVALID_ARGUMENT）的表格，`useInfiniteQuery` + Load more，每 2s poll 已載入的頁；篩選走 `/stock?prefix=&reserved=` search params；上方 Set stock 建立 / 覆寫 on hand，列上 Edit 把該 SKU 帶進表單 |
+| Products 頁 | admin 頁（`AdminGate` 之後）：`catalog.v1.CatalogService`——儲存商品（`UpsertProduct`：SKU / Name / Price（minor units）/ Currency，沒有就建、有就改價，下架的會重新上架）、`ListProducts` 表格（SKU 升冪、`useInfiniteQuery` + Load more，不 poll；`/products?prefix=` 篩選，含下架的）、Edit（帶回表單）、Deactivate |
 | Poison 頁 | `admin.v1.AdminService`：各 BC 的 poison 表，Show（metadata + payload base64）/ Requeue / Drop，每個 BC 有 Requeue all / Drop all；server auth 開著時 credential 要帶 `admin` role |
 | UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |
 
