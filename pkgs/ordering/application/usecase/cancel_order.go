@@ -35,7 +35,9 @@ func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto
 	var o *order.Order
 	err := retryOnConflict(ctx, func() error {
 		var err error
-		if o, err = uc.repo.FindByID(ctx, order.ID(in.OrderID)); err != nil {
+		// Reloaded on every retry, so the owner condition rides along each time. A
+		// confined caller's foreign order is order.not_found, as in GetOrder.
+		if o, err = uc.find(ctx, in.OrderID); err != nil {
 			return err
 		}
 		if err = o.Cancel(uc.clock.Now()); err != nil {
@@ -59,4 +61,12 @@ func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto
 	}
 
 	return mapper.ToOrderOutput(o), nil
+}
+
+func (uc *CancelOrder) find(ctx contextx.Contextx, id string) (*order.Order, error) {
+	if customer, confined := uc.own.OwnOnly(ctx); confined {
+		return uc.repo.FindByIDForCustomer(ctx, order.ID(id), customer)
+	}
+
+	return uc.repo.FindByID(ctx, order.ID(id))
 }

@@ -61,7 +61,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGauges,
 )
 
-// ProvideOwnership is the ownership policy of CreateOrder / GetOrder / ListOrders:
+// ProvideOwnership is the ownership policy of CreateOrder / GetOrder / ListOrders / CancelOrder / CompleteOrder:
 // who counts as admin comes from config auth.admin_role.
 func ProvideOwnership(auth config.Auth) *ownership.Policy {
 	role := auth.AdminRole
