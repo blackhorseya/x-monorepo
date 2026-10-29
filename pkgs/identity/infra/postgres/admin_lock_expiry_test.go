@@ -2,7 +2,11 @@ package postgres_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
@@ -15,8 +19,79 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
+	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
+
+// openDB opens (and closes at cleanup) a handle on url.
+func openDB(t *testing.T, url string) *gorm.DB {
+	t.Helper()
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(telCleanup)
+	db, cleanup, err := platformpg.NewDB(config.Postgres{URL: url}, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+
+	return db
+}
+
+func randomName(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+
+	return hex.EncodeToString(b)
+}
+
+// urlWith returns base pointed at database name (when not empty) and tagged
+// with application_name app (when not empty).
+func urlWith(t *testing.T, base, name, app string) string {
+	t.Helper()
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse database url: %v", err)
+	}
+	if name != "" {
+		u.Path = "/" + name
+	}
+	if app != "" {
+		q := u.Query()
+		q.Set("application_name", app)
+		u.RawQuery = q.Encode()
+	}
+
+	return u.String()
+}
+
+// ownedDatabase creates a database only this test uses and returns its URL: the
+// matrix empties identity.accounts and locks every row of it, which on the
+// shared TEST_DATABASE_URL would reach into other tests' fixtures and make
+// their admins part of this census. Scoped to this package on purpose.
+func ownedDatabase(t *testing.T) string {
+	t.Helper()
+	base := pgtest.URL(t)
+	name := "lockexp_" + randomName(t)
+	admin := openDB(t, base)
+	if err := admin.Exec("CREATE DATABASE " + name).Error; err != nil {
+		t.Fatalf("create database %s: %v", name, err)
+	}
+	t.Cleanup(func() { admin.Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)") })
+	owned := urlWith(t, base, name, "")
+	if err := platformpg.Up(context.Background(), config.Postgres{URL: owned}, postgres.Migration()); err != nil {
+		t.Fatal(err)
+	}
+
+	return owned
+}
 
 // lockHolder is a second transaction sitting on the admin rows, the "someone
 // else is mid-write" the guard has to queue behind.
@@ -43,10 +118,13 @@ func holdAdminRows(t *testing.T, db *gorm.DB) *lockHolder {
 	return &lockHolder{tx: tx, pid: pid}
 }
 
-// waitQueuedBehind returns once Postgres itself reports a backend blocked by
-// holder (pg_blocking_pids). The wait is on that lock state, with a bound, not
-// on elapsed time: there is no sleep to be too short on a slow runner.
-func (h *lockHolder) waitQueuedBehind(t *testing.T, db *gorm.DB) {
+// waitQueuedBehind returns once Postgres itself reports that the backend of the
+// writer under test (the only connection tagged writerApp) is blocked by holder
+// (pg_blocking_pids). Pinning the writer, not just the holder, keeps an
+// unrelated waiter from releasing the barrier early. The wait is on that lock
+// state, with a bound, not on elapsed time: there is no sleep to be too short
+// on a slow runner.
+func (h *lockHolder) waitQueuedBehind(t *testing.T, db *gorm.DB, writerApp string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -54,7 +132,7 @@ func (h *lockHolder) waitQueuedBehind(t *testing.T, db *gorm.DB) {
 	defer tick.Stop()
 	for {
 		var blocked int
-		if err := db.WithContext(ctx).Raw("SELECT count(*) FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid))", h.pid).Scan(&blocked).Error; err != nil {
+		if err := db.WithContext(ctx).Raw("SELECT count(*) FROM pg_stat_activity WHERE application_name = ? AND ? = ANY(pg_blocking_pids(pid))", writerApp, h.pid).Scan(&blocked).Error; err != nil {
 			t.Fatalf("poll pg_blocking_pids: %v", err)
 		}
 		if blocked > 0 {
@@ -62,7 +140,7 @@ func (h *lockHolder) waitQueuedBehind(t *testing.T, db *gorm.DB) {
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("no backend ever queued behind the lock holder (pid %d)", h.pid)
+			t.Fatalf("writer %s never queued behind the lock holder (pid %d)", writerApp, h.pid)
 		case <-tick.C:
 		}
 	}
@@ -80,8 +158,9 @@ func (h *lockHolder) release(t *testing.T) {
 // identity provider, the way apps/rpc gets it) is called while the admin rows
 // are locked, the key's expiry passes during the wait, and the lock is released.
 type expiryRun struct {
-	db    *gorm.DB
-	clock *stepClock
+	db        *gorm.DB // holder side; the writer has its own handle
+	writerApp string
+	clock     *stepClock
 }
 
 func (r expiryRun) do(t *testing.T, call func() error) error {
@@ -89,7 +168,7 @@ func (r expiryRun) do(t *testing.T, call func() error) error {
 	h := holdAdminRows(t, r.db)
 	done := make(chan error, 1)
 	go func() { done <- call() }()
-	h.waitQueuedBehind(t, r.db)
+	h.waitQueuedBehind(t, r.db, r.writerApp)
 	// The writer is parked on the lock and has not looked at the clock after it.
 	r.clock.advance(2 * time.Hour)
 	h.release(t)
@@ -107,9 +186,9 @@ func (r expiryRun) do(t *testing.T, call func() error) error {
 // when the writer started queueing for it. The matrix: each way the last admin
 // can be removed, with the backup standing only until the clock moves.
 func TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres(t *testing.T) {
-	db := censusDB(t)
+	owned := ownedDatabase(t)
+	db := openDB(t, owned)
 	f := newCensusFixture(t, db)
-	tx := postgres.NewTransactor(db)
 	rec, err := usecasex.NewRecorder(noop.NewMeterProvider())
 	if err != nil {
 		t.Fatal(err)
@@ -128,13 +207,18 @@ func TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres(t *testing.T) {
 		t.Helper()
 		t.Cleanup(func() { db.Exec("TRUNCATE identity.accounts CASCADE") })
 		clock := &stepClock{t: f.now}
-		census := identity.ProvideAdminCensus(db, f.accounts, f.keys, clock)
-		disable := identity.ProvideDisableAccount(f.accounts, census, cfg, clock, tx, rec)
-		assign := identity.ProvideAssignRoles(f.accounts, census, cfg, clock, tx, rec)
-		revoke := identity.ProvideRevokeAPIKey(f.keys, census, cfg, clock, tx, rec)
+		// The writer under test gets a handle of its own, tagged so the barrier can
+		// tell its backend from anything else on the server.
+		app := fmt.Sprintf("lockexp-writer-%s", randomName(t))
+		wdb := openDB(t, urlWith(t, owned, "", app))
+		accounts, keys, tx := postgres.NewAccountRepository(wdb), postgres.NewAPIKeyRepository(wdb), postgres.NewTransactor(wdb)
+		census := identity.ProvideAdminCensus(wdb, accounts, keys, clock)
+		disable := identity.ProvideDisableAccount(accounts, census, cfg, clock, tx, rec)
+		assign := identity.ProvideAssignRoles(accounts, census, cfg, clock, tx, rec)
+		revoke := identity.ProvideRevokeAPIKey(keys, census, cfg, clock, tx, rec)
 
 		return env{
-			run: expiryRun{db: db, clock: clock},
+			run: expiryRun{db: db, writerApp: app, clock: clock},
 			disable: func(id account.ID) error {
 				_, err := disable.Execute(c, dto.DisableAccountInput{ID: id.String()})
 				return err
