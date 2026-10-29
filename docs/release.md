@@ -11,7 +11,7 @@
 `scripts/`、Helm chart、kind / compose 開發環境、tests 與 test-only 套件（含 console 的 `e2e/`）；`web/` 其餘都算，console image 是 artifact；
 step summary 會列出原因；archive 裡的 README 會停在上一版，可接受）。
 `task release-gate` 在本機跑同一個腳本，merge 前就知道會不會發版，會的話再跑 `scripts/next-version.sh` 從 commit title 算 drafter 會給的版號（`!` → major、`feat` → minor、其餘 patch；main 上每個 commit 都是 squash 進來的 PR title，所以和 drafter 一致）。
-每個 PR 上另有一則 sticky comment 說同一件事（`.github/workflows/release-gate.yml` → `scripts/release-gate-pr.sh`：「merge 會發 vX.Y.Z（minor — feat: …）」或「不發版」、這個 PR 哪些檔會進 artifact、main 上從上一個 tag 起已經累積了什麼；版號用 PR title 當 squash commit 的 subject 算，retitle 會重算；純建議，不擋 PR，fork PR 不貼；release.yml 開的 chart PR 是 bot PR、`pull_request` 的 workflow 不會自己跑，所以它的 chart job 以 `workflow_dispatch -f pr=N` 補貼同一則）。`workflow_dispatch` 不過 gate：
+每個 PR 上另有一則 sticky comment 說同一件事（`.github/workflows/release-gate.yml` → `scripts/release-gate-pr.sh`：「merge 會發 vX.Y.Z（minor — feat: …）」或「不發版」、這個 PR 哪些檔會進 artifact、main 上從上一個 tag 起已經累積了什麼；版號用 PR title 當 squash commit 的 subject 算，retitle 會重算；純建議，不擋 PR，fork PR 不貼；release.yml 開的 chart PR 是 bot PR、`pull_request` 的 workflow 不會自己跑，所以它的 chart job 以 `workflow_dispatch -f pr=N` 補貼同一則；同一 PR 的 run 共用 concurrency group，只有 `pull_request` run 會取消進行中的 run，dispatch 排在後面，否則 approve 後啟動的 `pull_request` run 會被 dispatch 取消、PR 頁面顯示 `comment` 失敗）。`workflow_dispatch` 不過 gate：
 
 | job | 做什麼 |
 |---|---|
