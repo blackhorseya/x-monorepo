@@ -5,6 +5,7 @@ package main
 import (
 	"github.com/google/wire"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/catalog"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
 	identityauth "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
@@ -34,6 +35,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		ordering.ProviderSet,
 		inventory.ProviderSet,
 		identity.ProviderSet,
+		catalog.ProviderSet,
 		// The auth interceptor asks identity for keys the config does not know.
 		wire.Bind(new(server.CredentialResolver), new(*identityauth.Resolver)),
 	)

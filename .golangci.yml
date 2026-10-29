@@ -29,6 +29,8 @@ linters:
               desc: "shared packages must not depend on a bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
               desc: "shared packages must not depend on a bounded context (identity reaches the platform through server.CredentialResolver, wired in apps)"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
+              desc: "shared packages must not depend on a bounded context"
 
         # ── BC isolation: a BC never imports another BC's internals ─────────
         # Only contract/ (the generated wire format) crosses the line, and only
@@ -55,6 +57,14 @@ linters:
               desc: "ordering must not import identity internals; use its contract/ from an adapter, a port or an event"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters"
               desc: "ordering must not import identity internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/domain"
+              desc: "ordering must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/application"
+              desc: "ordering must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra"
+              desc: "ordering must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters"
+              desc: "ordering must not import catalog internals; use its contract/ from an adapter, a port or an event"
         bc-isolation-inventory:
           files:
             - "**/pkgs/inventory/**"
@@ -75,6 +85,14 @@ linters:
               desc: "inventory must not import identity internals; use its contract/ from an adapter, a port or an event"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters"
               desc: "inventory must not import identity internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/domain"
+              desc: "inventory must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/application"
+              desc: "inventory must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra"
+              desc: "inventory must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters"
+              desc: "inventory must not import catalog internals; use its contract/ from an adapter, a port or an event"
         bc-isolation-identity:
           files:
             - "**/pkgs/identity/**"
@@ -95,6 +113,43 @@ linters:
               desc: "identity must not import inventory internals; use its contract/ from an adapter, a port or an event"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters"
               desc: "identity must not import inventory internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/domain"
+              desc: "identity must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/application"
+              desc: "identity must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra"
+              desc: "identity must not import catalog internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters"
+              desc: "identity must not import catalog internals; use its contract/ from an adapter, a port or an event"
+
+        bc-isolation-catalog:
+          files:
+            - "**/pkgs/catalog/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/domain"
+              desc: "catalog must not import ordering internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/application"
+              desc: "catalog must not import ordering internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra"
+              desc: "catalog must not import ordering internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters"
+              desc: "catalog must not import ordering internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory/domain"
+              desc: "catalog must not import inventory internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory/application"
+              desc: "catalog must not import inventory internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra"
+              desc: "catalog must not import inventory internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters"
+              desc: "catalog must not import inventory internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/domain"
+              desc: "catalog must not import identity internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/application"
+              desc: "catalog must not import identity internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/infra"
+              desc: "catalog must not import identity internals; use its contract/ from an adapter, a port or an event"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters"
+              desc: "catalog must not import identity internals; use its contract/ from an adapter, a port or an event"
 
         # ── ordering: domain → kernel only ─────────────────────────────────
         ordering-domain:
@@ -113,6 +168,8 @@ linters:
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
               desc: "domain must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
+              desc: "domain must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
               desc: "domain must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform"
               desc: "domain must not depend on platform"
@@ -137,6 +194,8 @@ linters:
               desc: "application must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
               desc: "application must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
+              desc: "application must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform/server"
               desc: "application must not depend on transport"
             - pkg: "google.golang.org/protobuf"
@@ -157,6 +216,8 @@ linters:
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
               desc: "infra must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
+              desc: "infra must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
               desc: "infra must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
               desc: "infra implements ports; it must not call use cases"
@@ -190,6 +251,8 @@ linters:
               desc: "domain must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
               desc: "domain must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
+              desc: "domain must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform"
               desc: "domain must not depend on platform"
             - pkg: "google.golang.org/protobuf"
@@ -213,6 +276,8 @@ linters:
               desc: "application must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
               desc: "application must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
+              desc: "application must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform/server"
               desc: "application must not depend on transport"
             - pkg: "google.golang.org/protobuf"
@@ -233,6 +298,8 @@ linters:
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering"
               desc: "infra must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
+              desc: "infra must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
               desc: "infra must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory/application/usecase"
               desc: "infra implements ports; it must not call use cases"
@@ -266,6 +333,8 @@ linters:
               desc: "domain must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
               desc: "domain must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
+              desc: "domain must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform"
               desc: "domain must not depend on platform"
             - pkg: "google.golang.org/protobuf"
@@ -289,6 +358,8 @@ linters:
               desc: "application must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
               desc: "application must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
+              desc: "application must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform/server"
               desc: "application must not depend on transport"
             - pkg: "google.golang.org/protobuf"
@@ -310,6 +381,8 @@ linters:
               desc: "infra must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
               desc: "infra must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog"
+              desc: "infra must not depend on another bounded context"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
               desc: "infra implements ports; it must not call use cases"
 
@@ -322,6 +395,84 @@ linters:
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/infra"
               desc: "adapters must not depend on infra (wire them in provider.go)"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
+              desc: "adapters depend on usecasex.UseCase interfaces, not concrete use cases"
+
+        catalog-domain:
+          files:
+            - "!**/*_test.go"
+            - "**/pkgs/catalog/domain/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/application"
+              desc: "domain must not depend on application"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra"
+              desc: "domain must not depend on infra"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters"
+              desc: "domain must not depend on adapters"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract"
+              desc: "domain must not depend on the proto contract"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering"
+              desc: "domain must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
+              desc: "domain must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
+              desc: "domain must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform"
+              desc: "domain must not depend on platform"
+            - pkg: "google.golang.org/protobuf"
+              desc: "domain must not depend on protobuf"
+            - pkg: "connectrpc.com"
+              desc: "domain must not depend on transport"
+
+        catalog-application:
+          files:
+            - "!**/*_test.go"
+            - "**/pkgs/catalog/application/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra"
+              desc: "application must not depend on infra"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters"
+              desc: "application must not depend on adapters"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract"
+              desc: "application must not depend on the proto contract (use dto)"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering"
+              desc: "application must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
+              desc: "application must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
+              desc: "application must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+              desc: "application must not depend on transport"
+            - pkg: "google.golang.org/protobuf"
+              desc: "application must not depend on protobuf"
+            - pkg: "connectrpc.com"
+              desc: "application must not depend on transport"
+
+        catalog-infra:
+          files:
+            - "!**/*_test.go"
+            - "**/pkgs/catalog/infra/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters"
+              desc: "infra must not depend on adapters"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract"
+              desc: "infra must not depend on the proto contract"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/ordering"
+              desc: "infra must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/inventory"
+              desc: "infra must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
+              desc: "infra must not depend on another bounded context"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/application/usecase"
+              desc: "infra implements ports; it must not call use cases"
+
+        catalog-adapters:
+          files:
+            - "!**/*_test.go"
+            - "**/pkgs/catalog/adapters/**"
+          deny:
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra"
+              desc: "adapters must not depend on infra (wire them in provider.go)"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/application/usecase"
               desc: "adapters depend on usecasex.UseCase interfaces, not concrete use cases"
 
         # ── apps: composition roots only touch provider.go + platform ──────
@@ -349,6 +500,12 @@ linters:
               desc: "apps must not call use cases directly"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/infra"
               desc: "apps must not touch infra (except apps/migrate, by explicit exception)"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/domain"
+              desc: "apps must not touch domain"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/application"
+              desc: "apps must not call use cases directly"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra"
+              desc: "apps must not touch infra (except apps/migrate, by explicit exception)"
 
         # ── apps/migrate: the one app allowed into infra — only to collect each BC's
         #    embedded migrations. Still no domain / application / adapters.
@@ -375,11 +532,16 @@ linters:
               desc: "apps/migrate must not call use cases"
             - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters"
               desc: "apps/migrate must not touch adapters"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/domain"
+              desc: "apps/migrate must not touch domain"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/application"
+              desc: "apps/migrate must not call use cases"
+            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters"
+              desc: "apps/migrate must not touch adapters"
     revive:
       rules:
         - name: exported
           disabled: true
-
 formatters:
   enable:
     - gofmt
