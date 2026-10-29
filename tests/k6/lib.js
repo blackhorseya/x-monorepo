@@ -2,6 +2,10 @@
 // thresholds in each script can be per RPC. Environment:
 //   BASE_URL  server root (default http://127.0.0.1:8080); RPCs live under /api
 //   API_KEY   X-API-Key when the server runs with auth on (optional)
+//             Ordering is owned by the caller (docs/identity.md): with a key the
+//             scripts name no customer, the server uses the key's own subject and
+//             ListOrders runs unfiltered (= the key's orders). A key that was
+//             allowed to name customers (auth.admin_role) works the same way.
 import http from "k6/http";
 import { check } from "k6";
 import { Counter, Trend } from "k6/metrics";
@@ -24,6 +28,13 @@ export function rpc(method, body, extra = {}) {
   });
   rpcDuration.add(res.timings.duration, { rpc: method.split("/")[1] });
   return res;
+}
+
+// customerId is the customer_id for a request body: the script's own name when
+// the server is anonymous (no API_KEY, auth off — customer_id is required
+// there), nothing when a key is in play (the server fills in the caller).
+export function customerId(name) {
+  return __ENV.API_KEY ? {} : { customer_id: name };
 }
 
 export function ok(res, what) {
