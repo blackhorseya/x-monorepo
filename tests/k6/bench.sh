@@ -6,9 +6,11 @@
 # taken on a quiet machine you name in the report (docs/perf-baseline.md).
 #   bench.sh <bin dir> [out dir]       out dir default: <bin dir>/k6-bench/<stamp>
 #
-# Every run gets its own database (k6_bench_<stamp>_<n>, created on the server of DATABASE_URL and
+# Every run gets its own database (k6_bench_<stamp>_<pid+random>_<n>, created on the server of DATABASE_URL and
 # migrated by ./bin/migrate) and its own RUN_ID, and the database is dropped when the run ends, also
-# on failure or ^C: the write volume is bounded by the parameters below and nothing is left behind,
+# on failure or ^C — but only if this run's own CREATE DATABASE succeeded: a database that already has
+# the name is someone else's, the run fails there and never drops it (tests/k6/bench_db_test.sh,
+# `task k6-bench-test`). The write volume is bounded by the parameters below and nothing is left behind,
 # and every run starts from the same empty outbox. Needs psql and a role that may CREATE DATABASE.
 #
 # Fixed parameters (override only to measure something else; they are recorded in result.json):
@@ -21,7 +23,10 @@
 set -euo pipefail
 bin=$1; shift
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-out=${1:-$bin/k6-bench/$stamp}
+# pid + random: two benches started in the same second (same stamp) never share a database name or
+# an output directory. BENCH_DB_SUFFIX pins it (bench_db_test.sh forces a collision with it).
+suffix=${BENCH_DB_SUFFIX:-$$$RANDOM}
+out=${1:-$bin/k6-bench/$stamp-$suffix}
 mkdir -p "$out"
 
 RUNS=${RUNS:-3}
@@ -52,11 +57,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 for n in $(seq 1 "$RUNS"); do
-  db="k6_bench_$(printf %s "$stamp" | tr A-Z a-z)_$n"
-  run_id="bench-$stamp-$n"
-  url=$(dburl "$db")
-  echo "== run $n/$RUNS ($run_id, database $db)"
-  psql "$base_url" -qAt -c "create database $db" >/dev/null
+  name="k6_bench_$(printf %s "$stamp" | tr A-Z a-z)_${suffix}_$n"
+  run_id="bench-$stamp-$suffix-$n"
+  url=$(dburl "$name")
+  echo "== run $n/$RUNS ($run_id, database $name)"
+  # db (what cleanup drops) is set only once this CREATE succeeded; if it fails the name was taken
+  psql "$base_url" -qAt -c "create database $name" >/dev/null || { echo "cannot create $name: not touching it" >&2; exit 1; }
+  db=$name
   APP_POSTGRES_URL=$url "$bin/migrate" up > "$out/run$n-migrate.log" 2>&1
   APP_POSTGRES_URL=$url "$bin/rpc" > "$out/run$n-rpc.log" 2>&1 & pid=$!
   APP_POSTGRES_URL=$url "$bin/worker" > "$out/run$n-worker.log" 2>&1 & wpid=$!

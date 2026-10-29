@@ -13,7 +13,7 @@ task k6-bench -- /tmp/my-out       # 指定輸出目錄
 RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變數，見 tests/k6/bench.sh 檔頭
 ```
 
-- 每個 run 在 Postgres 建一個專屬資料庫（`k6_bench_<stamp>_<n>`）、用 `./bin/migrate up` 建 schema、起 `./bin/rpc` + `./bin/worker`（auth off、telemetry off、log warn），跑完 drop（失敗或 ^C 也會）。所以每個 run 從空的 outbox 起跳，寫入量由參數決定（create：約 28k 張單；reserve：100 × 30 = 3000 張），也不會留東西在你的資料庫裡（#238）。每個 run 另有獨立的 `RUN_ID`。
+- 每個 run 在 Postgres 建一個專屬資料庫（`k6_bench_<stamp>_<pid+random>_<n>`；只 drop 自己 CREATE 成功的，名稱已存在就失敗退出、不碰它，`task k6-bench-test` 用 sentinel 資料庫驗證）、用 `./bin/migrate up` 建 schema、起 `./bin/rpc` + `./bin/worker`（auth off、telemetry off、log warn），跑完 drop（失敗或 ^C 也會）。所以每個 run 從空的 outbox 起跳，寫入量由參數決定（create：約 28k 張單；reserve：100 × 30 = 3000 張），也不會留東西在你的資料庫裡（#238）。每個 run 另有獨立的 `RUN_ID`。
 - 兩個階段（`tests/k6/bench.js`，`PHASE=create|reserve`）：
   - **create**：20 VU 不停頓連打 CreateOrder 10 秒（closed model，飽和狀態的吞吐與延遲）。
   - **backlog drain**：create 之後 worker 還欠一大堆 reservation；計時到沒有 PENDING 的訂單為止。這是 worker 在持續有積壓時（會一次撈多筆的情況）的 reservation 吞吐。
