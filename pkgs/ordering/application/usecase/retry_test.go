@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
@@ -37,7 +38,7 @@ func (r *racyRepo) Save(c context.Context, o *order.Order) error {
 func seedOrder(t *testing.T, inner order.Repository, clock fixedClock) {
 	t.Helper()
 
-	create := usecase.NewCreateOrder(inner, &recorder{}, fixedIDs{id: "o-1"}, clock)
+	create := usecase.NewCreateOrder(inner, &recorder{}, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
 	if _, err := create.Execute(context.Background(), dto.CreateOrderInput{
 		CustomerID: "c-1",
 		Items:      []dto.LineItem{{SKU: "SKU-1", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 500, Currency: "USD"}}},
