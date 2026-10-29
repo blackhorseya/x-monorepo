@@ -43,8 +43,8 @@ func TestRepositories_Postgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 1 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 1 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 2 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 2 clean", v, dirty, err)
 	}
 	if err := db.WithContext(c).Exec("TRUNCATE identity.accounts CASCADE").Error; err != nil {
 		t.Fatal(err)
@@ -181,6 +181,35 @@ func TestRepositories_Postgres(t *testing.T) {
 	}
 	if _, err := keys.ListByAccount(c, "a"); !errors.Is(err, apikey.ErrInvalidStatus) {
 		t.Fatalf("corrupt status in list: %v", err)
+	}
+
+	// ── last_used_at: conditional write, no version bump, Save does not touch it ─
+	fresh, _ := keys.FindByID(c, "k2")
+	if !fresh.LastUsedAt().IsZero() {
+		t.Fatalf("k2 was never used, got %v", fresh.LastUsedAt())
+	}
+	window := time.Minute
+	if ok, err := keys.TouchLastUsed(c, "k2", now, window); err != nil || !ok {
+		t.Fatalf("first touch = %v, %v", ok, err)
+	}
+	if ok, err := keys.TouchLastUsed(c, "k2", now.Add(window-time.Second), window); err != nil || ok {
+		t.Fatalf("touch inside window = %v, %v", ok, err)
+	}
+	if ok, err := keys.TouchLastUsed(c, "k2", now.Add(window), window); err != nil || !ok {
+		t.Fatalf("touch after window = %v, %v", ok, err)
+	}
+	touched, _ := keys.FindByID(c, "k2")
+	if !touched.LastUsedAt().Equal(now.Add(window)) || touched.Version() != fresh.Version() {
+		t.Fatalf("touched = last_used %v version %d, want %v / %d", touched.LastUsedAt(), touched.Version(), now.Add(window), fresh.Version())
+	}
+	if err := keys.Save(c, fresh); err != nil {
+		t.Fatalf("save of a pre-touch aggregate must not be stale: %v", err)
+	}
+	if after, _ := keys.FindByID(c, "k2"); !after.LastUsedAt().Equal(now.Add(window)) {
+		t.Fatalf("save clobbered last_used_at: %v", after.LastUsedAt())
+	}
+	if ok, err := keys.TouchLastUsed(c, "nope", now, window); err != nil || ok {
+		t.Fatalf("unknown id = %v, %v", ok, err)
 	}
 
 	// Context errors come back as such, before any SQL.
