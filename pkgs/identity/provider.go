@@ -9,6 +9,7 @@ package identity
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/google/wire"
 	"go.opentelemetry.io/otel/metric"
@@ -168,16 +169,22 @@ func ProvideTouchAPIKey(keys apikey.Repository, clock port.Clock, cfg config.Aut
 	)
 }
 
+// resolverDrain bounds how long shutdown waits for the last last_used_at writes
+// (each already bounded by the resolver's own timeout).
+const resolverDrain = 3 * time.Second
+
 // ProvideResolver is the auth path's resolver with last_used_at switched on as
-// configured (auth.last_used_interval, 0 = off).
-func ProvideResolver(resolve auth.ResolveAPIKeyUC, touch auth.TouchAPIKeyUC, clock port.Clock, cfg config.Auth, logger *slog.Logger, mp metric.MeterProvider) (*auth.Resolver, error) {
+// configured (auth.last_used_interval, 0 = off). Its cleanup gives the stamps
+// still in flight a bounded moment to land; wire runs it before the database
+// handle it depends on is closed.
+func ProvideResolver(resolve auth.ResolveAPIKeyUC, touch auth.TouchAPIKeyUC, clock port.Clock, cfg config.Auth, logger *slog.Logger, mp metric.MeterProvider) (*auth.Resolver, func(), error) {
 	r, err := auth.NewResolver(resolve, clock, mp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	r.TrackLastUsed(touch, cfg.LastUsedInterval, logger)
 
-	return r, nil
+	return r, func() { r.WaitTimeout(resolverDrain) }, nil
 }
 
 func ProvideWhoAmI(rec *usecasex.Recorder) rpc.WhoAmIUC {

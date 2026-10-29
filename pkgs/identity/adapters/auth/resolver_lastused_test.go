@@ -206,3 +206,22 @@ func TestResolver_LastUsed_CapacityKeepsLiveClaims(t *testing.T) {
 		t.Fatalf("after the window: %d touches, want %d", f.touch.count(), before+1)
 	}
 }
+
+// Shutdown waits for in-flight stamps, but never longer than it is told to.
+func TestResolver_LastUsed_WaitTimeout(t *testing.T) {
+	c := context.Background()
+	f := newLastUsedFixture(t, time.Minute)
+	f.touch.release = make(chan struct{})
+
+	_, _, _ = f.r.ResolveAPIKey(c, f.secret)
+	if f.r.WaitTimeout(50 * time.Millisecond) {
+		t.Fatal("WaitTimeout reported done while a write was still blocked")
+	}
+	close(f.touch.release)
+	if !f.r.WaitTimeout(2 * time.Second) {
+		t.Fatal("WaitTimeout did not see the write finish")
+	}
+	if f.touch.count() != 1 {
+		t.Fatalf("touches = %d, want 1", f.touch.count())
+	}
+}

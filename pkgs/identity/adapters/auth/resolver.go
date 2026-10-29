@@ -171,6 +171,26 @@ func (a *Resolver) TrackLastUsed(touch TouchAPIKeyUC, interval time.Duration, lo
 // tests and for a shutdown that wants the final stamps.
 func (a *Resolver) Wait() { a.writes.Wait() }
 
+// WaitTimeout is Wait with a bound, for shutdown: it reports whether every write
+// finished within d. The writes carry their own timeout (touchTimeout), so a
+// stuck database costs a shutdown at most d, and the stamps that did not land
+// are lost (best-effort).
+func (a *Resolver) WaitTimeout(d time.Duration) bool {
+	done := make(chan struct{})
+	// fire-and-forget: only observes the WaitGroup; it ends when the writes do
+	// (each bounded by touchTimeout), and the caller stops waiting after d.
+	go func() {
+		a.writes.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 // noteUse stamps the key behind a successful lookup, if it is due.
 func (a *Resolver) noteUse(c context.Context, keyID string, now time.Time) {
 	if a.touch == nil || keyID == "" || !a.claim(keyID, now) {

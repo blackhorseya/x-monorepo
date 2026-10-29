@@ -122,7 +122,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	readiness := NewReadiness(db)
 	v25 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
 	v26 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
-	resolver, err := identity.ProvideResolver(v25, v26, clock2, auth, logger, meterProvider)
+	resolver, cleanup4, err := identity.ProvideResolver(v25, v26, clock2, auth, logger, meterProvider)
 	if err != nil {
 		cleanup3()
 		cleanup2()
@@ -131,12 +131,14 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	}
 	serverServer, err := server.New(http, auth, logger, v23, v24, readiness, providers, resolver)
 	if err != nil {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	return serverServer, func() {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()

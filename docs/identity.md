@@ -107,6 +107,7 @@ Dashboard「x-monorepo / service」的 Identity row 有四張圖（lookups/s by 
 - **落後沒有嚴格上限**：interval 是寫入頻率的上限，不是「Last used」新鮮度的保證。兩層節流的相位會疊加——interval=60s，replica A 在 t=0 寫入成功；replica B 在 t=59s 認領，但 DB 條件拒絕（`Recorded: false`，A 剛寫過）；B 在 t=118s 才再次認領，最後一次使用到顯示落後 118s。所以健康時最多接近**兩個 interval**，寫入失敗或 DB 掛掉時更久（恢復後下一個 request 補上）。不把 DB 的 no-op 當失敗而放掉認領，是因為那樣每個 request 都會再打一次 DB，等於沒有記憶體端節流。resolver cache 的 30s 不影響它：cache hit 也會認領。
 - 認領表有上限（`MaxCacheEntries`，兩代輪替：超過一個 interval 的認領本來就沒有作用，整代丟掉；**不整張清空**，否則 live key 會在 window 內全部回頭打 DB）。同一個 interval 內超過上限個不同的 key 不是 API key 的流量型態；超過的 key 這一代不寫，等下一代。
 - 關閉（`0`）時不寫、不開 goroutine，欄位維持原值。
+- Shutdown：`apps/rpc` 的 cleanup 會先讓還在跑的寫入最多再等 3s（`Resolver.WaitTimeout`，早於 DB 關閉），逾時就放棄，最後的 stamp 可能遺失（best-effort）。
 
 ## 擴充路徑：帳號密碼 / 自己當 issuer
 
