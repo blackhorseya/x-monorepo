@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
-import { useKey } from "./helpers";
+import { settle, useKey } from "./helpers";
 
 // The admin pages are their own chunks (lazy routes). A caller who is not an admin never needs
 // them: the gate must show without fetching, or waiting for, the page's chunk — also when the
@@ -132,32 +132,43 @@ test("admin: a chunk that fails to load is a visible error, not a blank page, an
 
 // The admin answer for the previous credential is cached under its own generation. A new
 // credential must not inherit it: until the new probe answers, the router must not preload the
-// admin chunk (pending), and once it says "no" it must not either (false).
-test("credential change: the cached admin answer is not reused, pending or denied, for chunk or gate", async ({ page }) => {
-  await seed(page, ADMIN_KEY);
-  await page.goto("/stock");
-  await expect(nav(page, "Poison")).toBeVisible(); // probe true is cached for the admin key
+// admin chunk (pending), and once it says "no" it must not either (denied). Fresh page context per
+// route, so no admin chunk is cached by an earlier case.
+for (const name of ["poison", "prune", "expire"]) {
+  test(`credential change: a cached admin answer cannot preload ${name}, pending or denied`, async ({ page }) => {
+    await seed(page, ADMIN_KEY);
+    await page.goto("/stock");
+    await expect(nav(page, "Poison")).toBeVisible(); // probe true is cached for the admin key
 
-  let release!: () => void;
-  const hold = new Promise<void>((r) => (release = r));
-  await page.route("**/identity.v1.IdentityService/ListAccounts", async (route) => {
-    await hold; // the new credential's probe is pending
-    await route.continue(); // real server: 403 for OPS_KEY
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    let opsStarted!: () => void;
+    const opsProbeInFlight = new Promise<void>((r) => (opsStarted = r));
+    await page.route("**/identity.v1.IdentityService/ListAccounts", async (route) => {
+      if (route.request().headers()["x-api-key"] !== OPS_KEY) return route.continue();
+      const answer = await route.fetch(); // the real 403 for OPS_KEY, held back
+      opsStarted();
+      await hold;
+      await route.fulfill({ response: answer });
+    });
+    const chunks: string[] = [];
+    page.on("request", (r) => {
+      if (chunk(name).test(r.url())) chunks.push(r.url());
+    });
+
+    try {
+      await useKey(page, OPS_KEY);
+      await opsProbeInFlight; // the new credential's probe is pending
+      await navigate(page, `/${name}`);
+      await expect(page).toHaveURL(new RegExp(`/${name}$`));
+      await settle(page); // the router has had its chance to preload
+      expect(chunks).toEqual([]);
+      await expect(gate(page)).toHaveCount(0); // pending is not an answer: no gate, no page
+    } finally {
+      release();
+    }
+    await expect(gate(page)).toBeVisible(); // denied
+    await settle(page);
+    expect(chunks).toEqual([]);
   });
-  const chunks: string[] = [];
-  page.on("request", (r) => {
-    if (chunk("poison").test(r.url())) chunks.push(r.url());
-  });
-
-  await useKey(page, OPS_KEY);
-  await navigate(page, "/poison");
-  await expect(gate(page)).toHaveCount(0); // pending is not an answer: no gate, no page
-  await expect(poisonPage(page)).toHaveCount(0);
-  await page.waitForTimeout(500);
-  expect(chunks).toEqual([]);
-
-  release();
-  await expect(gate(page)).toBeVisible(); // denied
-  await page.waitForTimeout(500);
-  expect(chunks).toEqual([]);
-});
+}

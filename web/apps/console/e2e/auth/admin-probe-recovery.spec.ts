@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
-import { useKey } from "./helpers";
+import { settle, useKey } from "./helpers";
 
 // The admin capability probe (ListAccounts) against a server that really enforces the role.
 // What the console must do with each answer, and with a credential change:
@@ -43,14 +43,18 @@ test("admin: a probe that cannot reach the server (network failure) recovers the
 
 test("unauthenticated is an answer, not a failure: no admin UI, no notice, no retry", async ({ page }) => {
   await seed(page, OPS_KEY);
+  await page.clock.install(); // the retry timers are ours to advance
   let calls = 0;
   await page.route(PROBE, (route) => {
     calls++;
     return route.fulfill(unauthenticated);
   });
+  const answered = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts"));
   await page.goto("/stock");
+  await answered;
   await expect(page.locator('[data-slot="card-title"]', { hasText: "Stock" }).first()).toBeVisible();
-  await page.waitForTimeout(1_500); // longer than the first retry delay (1s)
+  await page.clock.runFor(30_000); // past every retry delay a failing probe would wait (500ms … 4s, ×3)
+  await settle(page);
   await expect(setButton(page)).toHaveCount(0);
   await expect(poisonNav(page)).toHaveCount(0);
   await expect(page.getByText(NOTICE)).toHaveCount(0);
@@ -80,26 +84,33 @@ test("a late answer for the previous credential never opens the admin UI of the 
   await seed(page, ADMIN_KEY);
   let release!: () => void;
   const hold = new Promise<void>((r) => (release = r));
-  let held!: () => void;
-  const heldSeen = new Promise<void>((r) => (held = r));
-  let calls = 0;
+  let captured!: () => void;
+  const adminAnswerInHand = new Promise<void>((r) => (captured = r));
   await page.route(PROBE, async (route) => {
-    if (++calls === 1) {
-      held();
-      await hold; // the admin key's answer, still in flight
-    }
-    await route.continue();
+    if (route.request().headers()["x-api-key"] !== ADMIN_KEY) return route.continue();
+    const answer = await route.fetch(); // the admin key's real 200, in hand but not yet delivered
+    captured();
+    await hold;
+    await route.fulfill({ response: answer });
   });
+  const probeResponse = (status: number) =>
+    page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && r.status() === status);
+  const opsDenied = probeResponse(403);
+  const lateAdmin = probeResponse(200);
+  opsDenied.catch(() => {}); // only awaited on the happy path
+  lateAdmin.catch(() => {});
   try {
     await page.goto("/stock");
-    await heldSeen;
-    await useKey(page, OPS_KEY); // 403 from the real server
+    await adminAnswerInHand;
+    await useKey(page, OPS_KEY);
+    await opsDenied; // the new credential's answer is in: denied
     await expect(page.locator('[data-slot="card-title"]', { hasText: "Stock" }).first()).toBeVisible();
-    await expect.poll(() => calls).toBeGreaterThanOrEqual(2);
+    await expect(setButton(page)).toHaveCount(0);
   } finally {
-    release(); // the admin key's 200 now lands under its own generation
+    release();
   }
-  await page.waitForTimeout(500);
+  await (await lateAdmin).body(); // the old 200 has reached the page
+  await settle(page);
   await expect(setButton(page)).toHaveCount(0);
   await expect(poisonNav(page)).toHaveCount(0);
 });
