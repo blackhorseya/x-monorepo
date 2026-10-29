@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -177,6 +178,7 @@ type raceEnv struct {
 	t            *testing.T
 	c            context.Context
 	db           *gorm.DB
+	logger       *slog.Logger
 	stocks       stock.Repository
 	reservations reservation.Repository
 	tx           port.Transactor
@@ -216,7 +218,7 @@ func newEnv(t *testing.T, onHand int32) *raceEnv {
 
 	p := fmt.Sprintf("x%x%d", time.Now().UnixNano()&0xffffff, envSeq.Add(1))
 	e := &raceEnv{
-		t: t, c: c, db: db,
+		t: t, c: c, db: db, logger: tel.Logger,
 		p: p, sku: "SKU-" + p, skuB: "SKUB-" + p,
 		o1: "o-" + p + "-1", o2: "o-" + p + "-2",
 	}
@@ -377,29 +379,61 @@ func (e *raceEnv) victimPID(c context.Context) int {
 	return pid
 }
 
-// blockedBy is how many sessions wait for a lock held by backend pid.
-func (e *raceEnv) blockedBy(pid int) int {
+// blockedBy is how many sessions wait for a lock held by backend holder:
+// waiter is the one session that counts, or 0 for any.
+func (e *raceEnv) blockedBy(holder, waiter int) int {
 	e.t.Helper()
 	var n int
-	if err := e.db.WithContext(e.c).Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND ? = ANY(pg_blocking_pids(pid))`, pid).Scan(&n).Error; err != nil {
+	if err := e.db.WithContext(e.c).Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND ? = ANY(pg_blocking_pids(pid)) AND (? = 0 OR pid = ?)`, holder, waiter, waiter).Scan(&n).Error; err != nil {
 		e.t.Fatal(err)
 	}
 
 	return n
 }
 
-// parked runs in on its own goroutine and returns once Postgres says a session
-// is waiting on the victim's backend (c is the victim's transaction context),
-// plus the channel its result arrives on. Waiters on anything else, or on
-// another session, do not count.
+// on is e with its repositories, transactor and inbox bound to one pinned
+// connection, so everything run through it is one Postgres backend.
+func (e *raceEnv) on(conn *gorm.DB) *raceEnv {
+	c := *e
+	c.db = conn
+	c.stocks = inventory.ProvideStockRepository(conn, e.logger)
+	c.reservations = inventory.ProvideReservationRepository(conn)
+	c.tx = inventory.ProvideTransactor(conn)
+	c.inbox = inventory.ProvideInbox(conn)
+
+	return &c
+}
+
+// parked runs in on its own goroutine, pinned to one connection whose backend
+// pid is recorded, and returns once Postgres reports exactly that backend
+// waiting on a lock held by the victim's backend (c is the victim's
+// transaction context) — the intruder has done its reads and reached its
+// write. Waiters on anything else, or any other session on the victim, do
+// not count. The channel carries the intruder's result.
 func (e *raceEnv) parked(c context.Context, in intruder) <-chan error {
-	pid := e.victimPID(c)
+	victim := e.victimPID(c)
 	done := make(chan error, 1)
+	pids := make(chan int, 1)
 	// fire-and-forget: joined by the caller, which reads done after the victim returns.
-	go func() { done <- in(e) }()
+	go func() {
+		done <- e.db.WithContext(e.c).Connection(func(conn *gorm.DB) error {
+			var pid int
+			if err := conn.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
+				pids <- 0
+				return err
+			}
+			pids <- pid
+
+			return in(e.on(conn))
+		})
+	}()
+	intruderPID := <-pids
+	if intruderPID == 0 {
+		e.t.Fatalf("intruder could not start: %v", <-done)
+	}
 
 	deadline := time.Now().Add(15 * time.Second)
-	for e.blockedBy(pid) == 0 {
+	for e.blockedBy(victim, intruderPID) == 0 {
 		select {
 		case err := <-done:
 			e.t.Fatalf("intruder finished (%v) instead of waiting for the victim's lock", err)
@@ -894,14 +928,14 @@ func TestLockBarrierIgnoresUnrelatedWaiters(t *testing.T) {
 	}()
 
 	deadline := time.Now().Add(15 * time.Second)
-	for e.blockedBy(pid) == 0 {
+	for e.blockedBy(pid, 0) == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("probe waiter never blocked")
 		}
 		time.Sleep(time.Millisecond)
 	}
 	// A real lock wait exists in the database, but not on this victim.
-	if n := e.blockedBy(e.victimPID(e.c)); n != 0 {
+	if n := e.blockedBy(e.victimPID(e.c), 0); n != 0 {
 		t.Fatalf("blockedBy(unrelated backend) = %d; want 0", n)
 	}
 
@@ -911,5 +945,82 @@ func TestLockBarrierIgnoresUnrelatedWaiters(t *testing.T) {
 	}
 	if err := <-waiter; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Even a session waiting on the very same victim lock does not count unless it
+// is the intended intruder (the reviewer's second probe: an unrelated UPDATE of
+// the victim's stock row while the intended intruder is still idle).
+func TestLockBarrierRequiresTheIntendedIntruder(t *testing.T) {
+	e := newEnv(t, 2)
+	pin := func(fn func(conn *gorm.DB) error) <-chan error {
+		done := make(chan error, 1)
+		// fire-and-forget: joined below through done.
+		go func() { done <- e.db.WithContext(e.c).Connection(fn) }()
+
+		return done
+	}
+	pidOf := func(conn *gorm.DB) int {
+		var pid int
+		if err := conn.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
+			t.Error(err)
+		}
+
+		return pid
+	}
+
+	victim, intended, unrelated := make(chan int, 1), make(chan int, 1), make(chan int, 1)
+	release, releaseIntended := make(chan struct{}), make(chan struct{})
+	update := `UPDATE inventory.stocks SET updated_at = updated_at WHERE sku = ?`
+
+	vDone := pin(func(conn *gorm.DB) error {
+		if err := conn.Exec(`BEGIN`).Error; err != nil {
+			return err
+		}
+		if err := conn.Exec(update, e.sku).Error; err != nil { // the victim holds the stock row
+			return err
+		}
+		victim <- pidOf(conn)
+		<-release
+
+		return conn.Exec(`COMMIT`).Error
+	})
+	vPID := <-victim
+
+	iDone := pin(func(conn *gorm.DB) error { // the intended intruder: connected, not yet at the row
+		intended <- pidOf(conn)
+		<-releaseIntended
+
+		return conn.Exec(update, e.sku).Error
+	})
+	iPID := <-intended
+
+	uDone := pin(func(conn *gorm.DB) error { // an unrelated session blocked on the same row
+		unrelated <- pidOf(conn)
+
+		return conn.Exec(update, e.sku).Error
+	})
+	uPID := <-unrelated
+
+	deadline := time.Now().Add(15 * time.Second)
+	for e.blockedBy(vPID, uPID) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("unrelated waiter never blocked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if n := e.blockedBy(vPID, iPID); n != 0 {
+		t.Fatalf("intended intruder counted as blocked (%d) before it ever reached the row", n)
+	}
+	if n := e.blockedBy(vPID, 0); n == 0 {
+		t.Fatal("sanity: an unrelated waiter on the victim should be visible without the waiter filter")
+	}
+
+	close(release)
+	close(releaseIntended)
+	for _, d := range []<-chan error{vDone, iDone, uDone} {
+		if err := <-d; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
