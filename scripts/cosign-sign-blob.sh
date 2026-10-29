@@ -9,9 +9,10 @@
 # Rekor entry, never a reuse of the one that conflicted.
 #
 # Fail-closed:
-#  - only an output line that is a Rekor conflict (v1 `log/entries][409]`, v2 `adding rekor v2
-#    entry: unexpected response: 409`) is retried, at most 2 more times (a
-#    constant, not configurable); any other failure exits at once;
+#  - only an `Error: ` output line whose outer status is a Rekor conflict (v1 `log/entries][409]`, v2
+#    `adding rekor v2 entry: unexpected response: 409`, the first status on the line: a 409 quoted
+#    in another status's body does not count, #256) is retried, at most 2 more times (a constant,
+#    not configurable); any other failure exits at once;
 #  - a 409 is never success: a failed attempt stays failed, and when the retries run out the
 #    script exits non-zero;
 #  - the bundle is removed before every attempt and after every failure, and a "successful" cosign
@@ -32,15 +33,30 @@ done
 [ -n "$bundle" ] || { echo "cosign-sign-blob: no --bundle=<file> in the arguments" >&2; exit 2; }
 
 log=$(mktemp); trap 'rm -f "$log"' EXIT
-# A conflict is one line that is a Rekor conflict error, not a substring of the whole output (a URL
-# or id with 409, another service's 409 next to a line that mentions Rekor, an AlreadyExists from
-# something else are ordinary failures). The two shapes of the pinned cosign v3.1.4:
-#   v1  `[POST /api/v1/log/entries][409] createLogEntryConflict {...}`  (rekor client)
-#   v2  `adding rekor v2 entry: unexpected response: 409 {...}`  (sigstore-go v1.3.0 +
+# A conflict is the OUTER status of one cosign error line (#256), not any 409 text on a line: a
+# non-conflict (HTTP 503, ...) whose body quotes a 409 is an ordinary failure. The two shapes of the
+# pinned cosign v3.1.4, each `Error: <context>: <status marker><status> <body>`:
+#   v1  `Error: ...[POST /api/v1/log/entries][409] createLogEntryConflict {...}`  (rekor client)
+#   v2  `Error: ...adding rekor v2 entry: unexpected response: 409 {...}`  (sigstore-go v1.3.0 +
 #       rekor-tiles v2.3.0 pkg/client/write, the HTTP writer; scripts/cosign-v2-conflict-smoke.sh
 #       runs the real cosign against a loopback v2 server to keep this string honest)
+# The line must start with `Error: `, the FIRST status marker on it (leftmost; a quoted marker in the
+# body comes after the real one) must carry exactly 409, and nothing before that marker may open a
+# body (`{`). Matching is per line, so the two lines of a mixed log never combine.
 # No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
-conflict='log/entries\]\[409\]|adding rekor v2 entry: unexpected response: 409([^0-9]|$)'
+status_re='(log/entries\]\[([0-9]+)\]|adding rekor v2 entry: unexpected response: ([0-9]+)([^0-9]|$))'
+is_conflict() { # is_conflict <file>: some line of it is a Rekor conflict error
+  local line head
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in 'Error: '*) ;; *) continue ;; esac
+    if [[ $line =~ $status_re ]]; then
+      head=${line%%"${BASH_REMATCH[0]}"*}
+      case $head in *'{'*) continue ;; esac
+      [ "${BASH_REMATCH[2]}${BASH_REMATCH[3]}" = 409 ] && return 0
+    fi
+  done <"$1"
+  return 1
+}
 
 attempt=0
 while [ "$attempt" -lt "$max" ]; do
@@ -57,7 +73,7 @@ while [ "$attempt" -lt "$max" ]; do
     exit 1
   fi
   rm -f "$bundle"
-  if ! grep -Eq -- "$conflict" "$log" ; then
+  if ! is_conflict "$log"; then
     echo "cosign-sign-blob: FAIL: attempt $attempt/$max failed (exit $rc), not a Rekor conflict: not retrying" >&2
     exit "$rc"
   fi
