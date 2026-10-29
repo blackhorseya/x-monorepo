@@ -404,22 +404,21 @@ func (e *raceEnv) on(conn *gorm.DB) *raceEnv {
 	return &c
 }
 
-// parked runs in on its own goroutine, pinned to one connection whose backend
-// pid is recorded, and returns once Postgres reports exactly that backend
-// waiting on a lock held by the victim's backend (c is the victim's
-// transaction context) — the intruder has done its reads and reached its
-// write. Waiters on anything else, or any other session on the victim, do
-// not count. The channel carries the intruder's result.
-func (e *raceEnv) parked(c context.Context, in intruder) <-chan error {
-	victim := e.victimPID(c)
-	done := make(chan error, 1)
+// startIntruder runs in on its own goroutine, pinned to one connection, and
+// returns that connection's backend pid plus the channel the result arrives
+// on. Every way the start can fail (no connection, pid query error, timeout)
+// is returned as an error instead of leaving the caller waiting.
+func (e *raceEnv) startIntruder(in intruder) (pid int, done <-chan error, err error) {
+	// The context bounds connection acquisition and, generously, the intruder itself.
+	ctx, cancel := context.WithTimeout(e.c, time.Minute)
+	result := make(chan error, 1)
 	pids := make(chan int, 1)
-	// fire-and-forget: joined by the caller, which reads done after the victim returns.
+	// fire-and-forget: joined by the caller, which reads result after the victim returns.
 	go func() {
-		done <- e.db.WithContext(e.c).Connection(func(conn *gorm.DB) error {
+		defer cancel()
+		result <- e.db.WithContext(ctx).Connection(func(conn *gorm.DB) error {
 			var pid int
 			if err := conn.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
-				pids <- 0
 				return err
 			}
 			pids <- pid
@@ -427,9 +426,29 @@ func (e *raceEnv) parked(c context.Context, in intruder) <-chan error {
 			return in(e.on(conn))
 		})
 	}()
-	intruderPID := <-pids
-	if intruderPID == 0 {
-		e.t.Fatalf("intruder could not start: %v", <-done)
+
+	select {
+	case pid := <-pids:
+		return pid, result, nil
+	case err := <-result:
+		return 0, nil, fmt.Errorf("intruder did not start: %w", err)
+	case <-time.After(15 * time.Second):
+		cancel()
+
+		return 0, nil, errors.New("intruder did not start within 15s")
+	}
+}
+
+// parked starts in and returns once Postgres reports exactly that backend
+// waiting on a lock held by the victim's backend (c is the victim's
+// transaction context) — the intruder has done its reads and reached its
+// write. Waiters on anything else, or any other session on the victim, do
+// not count. The channel carries the intruder's result.
+func (e *raceEnv) parked(c context.Context, in intruder) <-chan error {
+	victim := e.victimPID(c)
+	intruderPID, done, err := e.startIntruder(in)
+	if err != nil {
+		e.t.Fatal(err)
 	}
 
 	deadline := time.Now().Add(15 * time.Second)
@@ -1022,5 +1041,44 @@ func TestLockBarrierRequiresTheIntendedIntruder(t *testing.T) {
 		if err := <-d; err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// The intruder's start can fail before its callback runs (closed or exhausted
+// pool): that must come back as the real error at once, not as a hang until the
+// suite's timeout.
+func TestIntruderStartFailureIsReported(t *testing.T) {
+	e := newEnv(t, 2)
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(telCleanup)
+	dead, cleanup, err := platformpg.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	sqlDB, err := dead.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	broken := *e
+	broken.db = dead
+
+	ran := false
+	started := time.Now()
+	pid, done, err := broken.startIntruder(func(*raceEnv) error { ran = true; return nil })
+	if err == nil || pid != 0 || done != nil {
+		t.Fatalf("startIntruder over a closed pool = %d, %v, %v; want an error", pid, done, err)
+	}
+	if ran {
+		t.Fatal("the intruder ran without a connection")
+	}
+	if d := time.Since(started); d > 5*time.Second {
+		t.Fatalf("start failure took %s to surface; want it prompt", d)
 	}
 }
