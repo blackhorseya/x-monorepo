@@ -35,7 +35,7 @@
 | Q5 | `worker bootstrap --admin-email`；Console 保留 API key break-glass | §9 |
 | Q6 | 本機 issuer `http://dex.localtest.me:5556/dex`；非 https 的放行條件；無 `jwks_url` override | §10 |
 | Q7 | JWKS cache、重抓、metrics、alert、演算法 | §7 |
-| Q8 | `sessions_revoked_at`；admin 撤銷；Console 登出 | §11 |
+| Q8 | `sessions_revoked_at`；admin 撤銷（定位是「登出所有裝置」，不是盜用處置）；Console 登出；盜用處置步驟 | §11 |
 | Q9 | 6 支 PR 與依賴 | §12 |
 
 ## 3. 憑證優先序
@@ -148,9 +148,18 @@
 ## 11. 登出與撤銷（Q8）
 
 - account 新增 **`sessions_revoked_at`**：token 的 `iat` **早於**這個時間就拒絕；**沒有 `iat` 的 token 也拒絕**。因為走 §6 的 resolver，**30 秒內生效**。
-- admin 可以「**撤銷所有 session**」（針對某個 account）：需要 `auth.admin_role`，**寫入 audit**（誰、對哪個 account、何時；不記 token）。RPC 名稱在 PR 3 定案。
+- admin 可以「**撤銷所有 session**」（針對某個 account），定位是**「登出所有裝置」**（見下方限制）：需要 `auth.admin_role`，**寫入 audit**（誰、對哪個 account、何時；不記 token）。RPC 名稱在 PR 3 定案。
 - **Console「登出」只清除本機 token**（記憶體的 access token 與 sessionStorage 的 refresh token）；IdP 提供 `end_session_endpoint` 時才導去 IdP 登出（**Dex 不支援**，所以本機開發只清本機）。
 - 登出本身不呼叫 server 撤銷；要讓已簽出的 token 提早失效，用 admin 撤銷。已簽出的 access token 在 IdP 設定的壽命內，除非 admin 撤銷，否則仍有效。
+
+**限制（Sean 決定採此做法）**：`sessions_revoked_at` 只會拒絕 `iat` **早於**撤銷時間的 access token。拿著有效 IdP refresh token 的人仍能向 IdP 換到新 `iat` 的 token，我們這邊撤銷不了 refresh token。所以 admin 的「撤銷所有 session」只是「登出所有裝置」，**不能當作帳號遭盜用時的處置**。
+**不做 `auth_time` 檢查**：各家 IdP 不一定把 `auth_time` 帶進 access token。日後如有需要，可做成 per-issuer 的 opt-in。
+
+**懷疑帳號遭盜用的處置步驟**
+
+1. **停用帳號**（`DisableAccount`）：§6 的 resolver 每個請求都檢查 disabled 狀態，**30 秒內生效**，連用 refresh token 換出的新 token 也會被擋。
+2. **到 IdP 撤銷該使用者的 refresh token，或重設憑證**（密碼、MFA）；這一步只有 IdP 能做。
+3. 確認安全後再**重新啟用**帳號。
 
 ## 12. 拆 PR（Q9）
 
