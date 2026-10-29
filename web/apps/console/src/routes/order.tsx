@@ -22,7 +22,8 @@ import {
 import { useResetOnCredentialChange } from "../auth";
 import { describe, orders } from "../client";
 import { keys, orderQuery, reservationQuery } from "../queries";
-import { ErrorAlert, formatMoney, statusVariant } from "./orders";
+import { ErrorAlert } from "../components/error-alert";
+import { formatMoney, statusVariant } from "../components/order-status";
 import { reservationBadge } from "./reservations";
 
 // /orders/$id: one order in full — every line, the total, and what inventory

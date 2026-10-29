@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { reservationQuery, reservationsQuery } from "../queries";
-import { ErrorAlert } from "./orders";
+import { ErrorAlert } from "../components/error-alert";
 
 // Search params of /reservations: a status filter and, from the Orders page,
 // the order whose reservation to pin at the top.

@@ -22,7 +22,8 @@ import {
 } from "@/components/ui/table";
 import { inventory } from "../client";
 import { keys } from "../queries";
-import { ErrorAlert, Field } from "./orders";
+import { ErrorAlert } from "../components/error-alert";
+import { Field } from "../components/field";
 
 // Operator side of the reservation TTL (InventoryService.ExpireReservations, the
 // RPC twin of `worker expire`): a dry run lists the RESERVED reservations held
