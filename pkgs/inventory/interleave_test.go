@@ -228,3 +228,51 @@ func TestOrderCompletedHandler_ExpiredUnderneathIsRetried(t *testing.T) {
 		t.Fatalf("stock = on_hand %d reserved %d; want 0/0", s.OnHand(), s.Reserved())
 	}
 }
+
+var errLookup = errors.New("lookup fault")
+
+// failNthFind fails the n-th FindByOrderID (1-based) with errLookup.
+type failNthFind struct {
+	reservation.Repository
+	n, calls int
+}
+
+func (x *failNthFind) FindByOrderID(c context.Context, orderID string) (*reservation.Reservation, error) {
+	x.calls++
+	if x.calls == x.n {
+		return nil, errLookup
+	}
+
+	return x.Repository.FindByOrderID(c, orderID)
+}
+
+// The re-read that classifies a failure can fail too. Not knowing whether the
+// reservation moved is no reason to keep the (final) domain error: through the
+// consumer entry point the message must be retried, not dropped, and the same
+// message delivered again must then sell.
+func TestOrderCompletedHandler_RereadFailureIsRetried(t *testing.T) {
+	e := newRaceEnv(t)
+	interleaved := &beforeFind{Repository: e.stocks}
+	interleaved.hook = func() { e.expire(t) }
+	flaky := &failNthFind{Repository: e.reservations, n: 2} // 1st: the use case's read, 2nd: the re-read
+	payload, err := proto.Marshal(&orderingv1.OrderCompleted{OrderId: "o-race-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := func(reservations reservation.Repository, stocks stock.Repository) error {
+		commit := inventory.ProvideCommitStock(reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec)
+
+		return consumer.NewOrderCompletedHandler(commit).Handle(e.c, payload)
+	}
+
+	err = handle(flaky, interleaved)
+	if !errors.Is(err, errLookup) || errors.Is(err, consumer.ErrDrop) {
+		t.Fatalf("handler = %v, want the lookup error and no ErrDrop", err)
+	}
+	if err := handle(e.reservations, e.stocks); err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
+	if got, err := e.reservations.FindByOrderID(e.c, "o-race-1"); err != nil || got.Status() != reservation.StatusCommitted {
+		t.Fatalf("reservation = %v, %v; want COMMITTED", got, err)
+	}
+}
