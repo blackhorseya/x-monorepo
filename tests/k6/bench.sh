@@ -4,6 +4,14 @@
 # into result.json (machine readable) and summary.md (median and spread). `task k6-bench`.
 # Not part of the PR gate and not run by CI: a shared runner's numbers are noise, a baseline is
 # taken on a quiet machine you name in the report (docs/perf-baseline.md).
+#
+# Which attempts count is decided here, by a rule fixed before the run, not by whoever reads the numbers:
+# the 1m load average is sampled every 5s while an attempt runs, and an attempt is valid iff no sample
+# exceeds MAX_LOAD_PER_CORE x cores. Attempts go on until RUNS valid ones exist or MAX_ATTEMPTS is
+# reached; every attempt stays in the output directory; the statistics use the valid ones only; fewer
+# than RUNS valid = "NOT A VALID BASELINE" and exit 3 (the numbers are still printed, under that banner).
+# The load average includes the bench's own processes: 1.0 per core means no more runnable work than
+# cores, with room for what the bench itself needs only on an otherwise quiet machine.
 #   bench.sh <bin dir> [out dir]       out dir default: <bin dir>/k6-bench/<stamp>
 #
 # Every run gets its own database (k6_bench_<stamp>_<pid+random>_<n>, created on the server of DATABASE_URL and
@@ -14,7 +22,8 @@
 # and every run starts from the same empty outbox. Needs psql and a role that may CREATE DATABASE.
 #
 # Fixed parameters (override only to measure something else; they are recorded in result.json):
-#   RUNS=3 (N, ≥ 3)          CREATE_VUS=20 CREATE_DURATION=10s      create phase: closed model, saturation
+#   RUNS=3 (valid runs wanted, ≥ 3)  MAX_ATTEMPTS=6  MAX_LOAD_PER_CORE=1.0
+#   CREATE_VUS=20 CREATE_DURATION=10s      create phase: closed model, saturation
 #   RESERVE_RATE=100 RESERVE_DURATION=30s                           reserve phase: open model, orders/s
 #   SKUS=50  SEED=1 (SKU choice)  POLL=50 (ms)  DRAIN_TIMEOUT=300 (s)  PORT=18090
 # The k6 scripts never print a response body or URL; to prove the key stays out, the rpc is sent a
@@ -33,6 +42,7 @@ RUNS=${RUNS:-3}
 [ "$RUNS" -ge 3 ] || { echo "RUNS=$RUNS: want at least 3" >&2; exit 2; }
 CREATE_VUS=${CREATE_VUS:-20}; CREATE_DURATION=${CREATE_DURATION:-10s}
 RESERVE_RATE=${RESERVE_RATE:-100}; RESERVE_DURATION=${RESERVE_DURATION:-30s}
+MAX_ATTEMPTS=${MAX_ATTEMPTS:-$((RUNS * 2))}; MAX_LOAD_PER_CORE=${MAX_LOAD_PER_CORE:-1.0}
 SKUS=${SKUS:-50}; POLL=${POLL:-50}; SEED=${SEED:-1}; DRAIN_TIMEOUT=${DRAIN_TIMEOUT:-300}
 port=${PORT:-18090}
 base_url=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
@@ -44,10 +54,26 @@ p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2
 
 export APP_CONFIG=/dev/null APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false APP_LOG_LEVEL=${APP_LOG_LEVEL:-warn}
 
-now() { python3 -I -c 'import time; print(time.time())'; }
+ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 
-pid="" wpid="" db=""
+# 1m load average every 5s into $1 (epoch,load) until stopped
+pid="" wpid="" db="" lpid=""
+sample_load() {
+  python3 -I -c 'import os, sys, time
+while True:
+    print(f"{int(time.time())},{round(os.getloadavg()[0], 2)}", flush=True)
+    time.sleep(5)' >> "$1" & lpid=$!
+}
+stop_load() { [ -n "$lpid" ] && kill "$lpid" 2>/dev/null && wait "$lpid" 2>/dev/null || true; lpid=""; }
+# <attempt>: valid iff it has a load sample and none is over the limit (bench_report.py's rule, same code)
+attempt_valid() {
+  python3 -I -c 'import sys; sys.path.insert(0, "tests/k6"); import bench_report as r
+sys.exit(0 if r.validity(r.load_samples(sys.argv[1], sys.argv[2]), float(sys.argv[3]))["valid"] else 1)' \
+    "$out" "$1" "$(python3 -I -c "print($MAX_LOAD_PER_CORE * $ncpu)")"
+}
+
 cleanup() {
+  stop_load
   [ -n "$wpid" ] && kill "$wpid" 2>/dev/null && wait "$wpid" 2>/dev/null || true; wpid=""
   [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true; pid=""
   if [ -n "$db" ]; then
@@ -58,15 +84,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# the machine is shared: the load average (1m) before the first run and after the last is part of the
-# environment, a number taken at 14 on 10 cores is not comparable to one taken at 2
-load_start=$(python3 -I -c 'import os; print(round(os.getloadavg()[0], 2))')
-
-for n in $(seq 1 "$RUNS"); do
+valid=0
+attempts=0
+while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
+  attempts=$((attempts + 1)); n=$attempts
   name="k6_bench_$(printf %s "$stamp" | tr A-Z a-z)_${suffix}_$n"
   run_id="bench-$stamp-$suffix-$n"
   url=$(dburl "$name")
-  echo "== run $n/$RUNS ($run_id, database $name)"
+  echo "== attempt $n ($valid/$RUNS valid so far; $run_id, database $name)"
+  sample_load "$out/run$n-load.csv"
   # db (what cleanup drops) is set only once this CREATE succeeded; if it fails the name was taken
   psql "$base_url" -qAt -c "create database $name" >/dev/null || { echo "cannot create $name: not touching it" >&2; exit 1; }
   db=$name
@@ -85,44 +111,28 @@ for n in $(seq 1 "$RUNS"); do
   k6 run --quiet --summary-export "$out/run$n-create.json" tests/k6/bench.js "${k6env[@]}" \
     -e PHASE=create -e "VUS=$CREATE_VUS" -e "DURATION=$CREATE_DURATION" > "$out/run$n-create.log" 2>&1
 
-  # the create phase leaves a backlog for the worker (CreateOrder outruns reservation): the orders
-  # still PENDING at this moment, and the seconds until none is, are the same window — their
-  # ratio is what the worker reserves per second while draining. (Orders reserved during the create
-  # phase are not in either number.)
-  pending=$(psql "$url" -qAt -c "select count(*) from ordering.orders where status = 'PENDING'")
-  total=$(psql "$url" -qAt -c "select count(*) from ordering.orders")
-  t0=$(now)
-  until [ "$(psql "$url" -qAt -c "select count(*) from ordering.orders where status = 'PENDING'")" = 0 ]; do
-    python3 -I -c "import sys; sys.exit(0 if $(now) - $t0 < $DRAIN_TIMEOUT else 1)" \
-      || { echo "backlog not drained within ${DRAIN_TIMEOUT}s" >&2; exit 1; }
-    sleep 0.2
-  done
-  secs=$(python3 -I -c "print(round($(now) - $t0, 2))")
-  # PENDING gone is not success: every order must have gone through the saga to CONFIRMED, with
-  # one RESERVED reservation each (a worker that rejected or lost orders would also empty PENDING)
-  notok=$(psql "$url" -qAt -c "select count(*) from ordering.orders where status <> 'CONFIRMED'")
-  reserved=$(psql "$url" -qAt -c "select count(*) from inventory.reservations where status = 'RESERVED'")
-  if [ "$notok" != 0 ] || [ "$reserved" != "$total" ]; then
-    echo "drain ended with $notok order(s) not CONFIRMED and $reserved RESERVED reservation(s) for $total orders" >&2
-    exit 1
-  fi
-  echo "{\"total_orders\": $total, \"pending_at_end\": $pending, \"seconds\": $secs}" > "$out/run$n-drain.json"
+  # the create phase leaves a backlog for the worker (CreateOrder outruns reservation): how long it
+  # takes to drain, over the orders still PENDING at the start of that window (tests/k6/bench_drain.sh)
+  tests/k6/bench_drain.sh "$url" "$out/run$n-drain.json" "$DRAIN_TIMEOUT"
 
   k6 run --quiet --summary-export "$out/run$n-reserve.json" tests/k6/bench.js "${k6env[@]}" \
     -e PHASE=reserve -e "RATE=$RESERVE_RATE" -e "DURATION=$RESERVE_DURATION" > "$out/run$n-reserve.log" 2>&1
+  stop_load
+  python3 -I -c 'import os, time; print(f"{int(time.time())},{round(os.getloadavg()[0], 2)}")' >> "$out/run$n-load.csv"
   cleanup
+  if attempt_valid "$n"; then valid=$((valid + 1)); echo "   attempt $n valid"; else echo "   attempt $n INVALID (load over $(python3 -I -c "print($MAX_LOAD_PER_CORE * $ncpu)")): kept, not counted"; fi
 done
 
 # where the numbers were taken: enough for someone else to rerun them under the same conditions
 cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
-ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+rc=0
 pgv=$(psql "$base_url" -qAt -c "show server_version")
 BENCH_COMMIT=$(git rev-parse HEAD) BENCH_DIRTY=$(git status --porcelain -- . ':!bin' | head -c1) \
 BENCH_GO=$(go version) BENCH_PG=$pgv BENCH_K6=$(k6 version | head -n1) BENCH_CPU=$cpu BENCH_NCPU=$ncpu \
-BENCH_OS=$(uname -srm) BENCH_STAMP=$stamp BENCH_LOAD_START=$load_start BENCH_RUNS=$RUNS BENCH_SKUS=$SKUS BENCH_POLL=$POLL BENCH_SEED=$SEED \
+BENCH_OS=$(uname -srm) BENCH_STAMP=$stamp BENCH_ATTEMPTS=$attempts BENCH_MAX_LOAD_PER_CORE=$MAX_LOAD_PER_CORE BENCH_RUNS=$RUNS BENCH_SKUS=$SKUS BENCH_POLL=$POLL BENCH_SEED=$SEED \
 BENCH_CREATE_VUS=$CREATE_VUS BENCH_CREATE_DURATION=$CREATE_DURATION \
 BENCH_RESERVE_RATE=$RESERVE_RATE BENCH_RESERVE_DURATION=$RESERVE_DURATION \
-  python3 -I tests/k6/bench_report.py "$out"
+  python3 -I tests/k6/bench_report.py "$out" || rc=$?
 
 # R4: the key must be in nothing this run wrote
 if grep -rl -- "$CANARY" "$out" 2>/dev/null; then
@@ -131,3 +141,4 @@ if grep -rl -- "$CANARY" "$out" 2>/dev/null; then
 fi
 echo "ok  no API key in $out"
 cat "$out/summary.md"
+exit "$rc"

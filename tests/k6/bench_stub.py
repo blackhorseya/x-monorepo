@@ -1,7 +1,8 @@
 """A stand-in for the rpc, for bench_fixture_test.sh: answers the four calls bench.js makes, with
 delays the test chooses, and logs the SKU of every CreateOrder (one per line) to $STUB_SKU_LOG.
     python3 tests/k6/bench_stub.py <port>
-Env: SETUP_DELAY_MS (each SetStock), CREATE_DELAY_MS (each CreateOrder), STUB_SKU_LOG."""
+Env: SETUP_DELAY_MS (each SetStock), CREATE_DELAY_MS (each CreateOrder), NEVER_RESERVE (GetReservation is 404
+forever), STUB_SKU_LOG."""
 import json
 import os
 import sys
@@ -35,10 +36,15 @@ class Handler(BaseHTTPRequestHandler):
                 out = {"order": {"id": f"o-{counter[0]}"}}
                 with open(log_path, "a") as f:
                     f.write(body["items"][0]["sku"] + "\n")
+        elif method == "GetReservation" and os.environ.get("NEVER_RESERVE"):
+            return self.reply(404, {"code": "not_found", "message": "not yet"})
         elif method == "GetReservation":
             out = {"reservation": {"status": "RESERVATION_STATUS_RESERVED"}}
+        self.reply(200, out)
+
+    def reply(self, status, out):
         data = json.dumps(out).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()

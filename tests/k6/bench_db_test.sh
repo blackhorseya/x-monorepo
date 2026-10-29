@@ -39,7 +39,7 @@ check() { if [ "$1" = ok ]; then echo "--- PASS: $2"; else echo "--- FAIL: $2"; 
 # 1. the exact name is taken (forced: fixed clock and suffix): the run fails and drops nothing
 sentinel k6_bench_20000101t000000z_fixed_1
 rc=0
-PATH="$work/fakebin:$PATH" BENCH_DB_SUFFIX=fixed RUNS=3 CREATE_VUS=2 CREATE_DURATION=1s RESERVE_RATE=5 RESERVE_DURATION=2s \
+PATH="$work/fakebin:$PATH" BENCH_DB_SUFFIX=fixed RUNS=3 MAX_LOAD_PER_CORE=1000 CREATE_VUS=2 CREATE_DURATION=1s RESERVE_RATE=5 RESERVE_DURATION=2s \
   tests/k6/bench.sh "$bin" "$work/out1" > "$work/out1.log" 2>&1 || rc=$?
 [ "$rc" != 0 ] && r=ok || r=bad; check $r "name taken: bench.sh exits non-zero (exit $rc)"
 survives k6_bench_20000101t000000z_fixed_1 && r=ok || r=bad; check $r "name taken: the existing database and its row survive"
@@ -48,7 +48,7 @@ survives k6_bench_20000101t000000z_fixed_1 && r=ok || r=bad; check $r "name take
 # first-format name of the old scheme exists and is left alone, the bench completes
 sentinel k6_bench_20000101t000000z_1
 rc=0
-PATH="$work/fakebin:$PATH" RUNS=3 CREATE_VUS=2 CREATE_DURATION=1s RESERVE_RATE=5 RESERVE_DURATION=2s \
+PATH="$work/fakebin:$PATH" RUNS=3 MAX_LOAD_PER_CORE=1000 CREATE_VUS=2 CREATE_DURATION=1s RESERVE_RATE=5 RESERVE_DURATION=2s \
   tests/k6/bench.sh "$bin" "$work/out2" > "$work/out2.log" 2>&1 || rc=$?
 [ "$rc" = 0 ] && r=ok || r=bad; check $r "same second: bench.sh completes (exit $rc)"
 survives k6_bench_20000101t000000z_1 && r=ok || r=bad; check $r "same second: the pre-existing old-format database survives"

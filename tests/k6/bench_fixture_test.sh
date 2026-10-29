@@ -22,8 +22,10 @@ run() {
   : > "$work/$name.skus"
   env "${stubenv[@]}" STUB_SKU_LOG="$work/$name.skus" python3 tests/k6/bench_stub.py "$port" & xpid=$!
   for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
+  local rc=0
   k6 run --quiet --summary-export "$work/$name.json" "$js" -e "BASE_URL=http://127.0.0.1:$port" -e RUN_ID=fx \
-    -e K6_CUSTOMER_MODE=omit "${kargs[@]}" > "$work/$name.log" 2>&1 || true
+    -e K6_CUSTOMER_MODE=omit "${kargs[@]}" > "$work/$name.log" 2>&1 || rc=$?
+  echo "$rc" > "$work/$name.rc"
   stop
 }
 
@@ -62,6 +64,19 @@ assert count > 20, f"only {count} CreateOrders"
 assert t >= 0.75 * count, f"throughput {t:.1f}/s for {count} CreateOrders in a ~1s scenario"
 PY
 check $r "throughput: not diluted by a 1s setup()"
+
+# 4. a created order whose reservation never shows up (CreateOrder takes 6.5s, the wait is 1s, the test
+# lasts 1s): the iteration is not cut off by gracefulStop but runs to its own timeout, and k6 fails the
+# run (reservation_timeouts). With the old gracefulStop it was cut off: k6 exit 0, nothing counted.
+run d1 CREATE_DELAY_MS=6500 NEVER_RESERVE=1 -- -e PHASE=reserve -e RATE=1 -e DURATION=1s -e PRE_VUS=1 -e MAX_VUS=1 -e RESERVE_TIMEOUT=1000
+python3 -I - "$work/d1.json" "$(cat "$work/d1.rc")" <<'PY' && r=ok || r=bad
+import json, sys
+rc = int(sys.argv[2])
+m = json.load(open(sys.argv[1]))["metrics"]
+timeouts = m["reservation_timeouts"]["count"]
+assert rc != 0 and timeouts == 1, f"k6 exit {rc}, reservation_timeouts {timeouts}: an unfinished order passed as a success"
+PY
+check $r "interrupted: an order created but never RESERVED does not pass quietly"
 
 [ "$fails" = 0 ] || { echo "FAIL: $fails check(s)"; exit 1; }
 echo "ok  bench fixtures"

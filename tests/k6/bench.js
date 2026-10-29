@@ -51,6 +51,9 @@ const createEnd = new Trend("bench_create_end_ms");
 const orderToReserved = new Trend("order_to_reserved", true);
 const reservedAfterCreate = new Trend("reserved_after_create", true);
 const reservationTimeouts = new Counter("reservation_timeouts");
+// orders that were created and then seen RESERVED: bench_report.py reconciles it with the CreateOrder
+// successes (an iteration cut off by gracefulStop is in neither this nor reservation_timeouts)
+const reservedOk = new Counter("reserved_ok");
 const reservationWrong = new Counter("reservation_wrong_status");
 
 const scenarios = {
@@ -68,7 +71,9 @@ const scenarios = {
     preAllocatedVUs: Number(__ENV.PRE_VUS || 50),
     maxVUs: Number(__ENV.MAX_VUS || 400),
     exec: "reserve",
-    gracefulStop: `${RESERVE_TIMEOUT + 5000}ms`,
+    // an iteration is a CreateOrder (up to rpc()'s 30s timeout) and then a wait of up to RESERVE_TIMEOUT:
+    // the grace must cover both, or a slow tail is cut off silently (k6 exits 0 for that)
+    gracefulStop: `${30_000 + RESERVE_TIMEOUT + 5000}ms`,
   },
 };
 
@@ -144,6 +149,7 @@ export function reserve() {
         const now = Date.now();
         orderToReserved.add(now - sent);
         reservedAfterCreate.add(now - start);
+        reservedOk.add(1);
         ok(res, "GetReservation");
       } else {
         reservationWrong.add(1, { status: statusTag(status, RESERVATION_STATUSES) });
