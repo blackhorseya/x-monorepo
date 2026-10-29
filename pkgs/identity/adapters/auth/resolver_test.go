@@ -44,7 +44,7 @@ func TestResolver(t *testing.T) {
 	uc := &counting{known: map[string]*dto.ResolveAPIKeyOutput{good: {AccountID: "acc-1", Name: "ops", Roles: []string{"admin"}, KeyID: "key-1"}}}
 	clk := &clock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}
 	var _ usecasex.UseCase[dto.ResolveAPIKeyInput, *dto.ResolveAPIKeyOutput] = uc
-	r := auth.NewResolver(uc, clk)
+	r := newResolver(t, uc, clk, noopMeter())
 
 	p, found, err := r.ResolveAPIKey(c, good)
 	if err != nil || !found || p.Subject != "acc-1" || p.Name != "ops" || p.CredentialID != "key-1" || len(p.Roles) != 1 {
@@ -122,7 +122,10 @@ func TestResolver(t *testing.T) {
 
 	// TTL 0: no cache at all.
 	uc2 := &counting{known: uc.known}
-	r0 := auth.NewResolverWithTTL(uc2, clk, 0)
+	r0, err := auth.NewResolverWithTTL(uc2, clk, 0, noopMeter())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for range 3 {
 		if _, found, err := r0.ResolveAPIKey(c, good); err != nil || !found {
 			t.Fatalf("no cache: %v, %v", found, err)
@@ -134,7 +137,7 @@ func TestResolver(t *testing.T) {
 
 	// Bounded: past MaxCacheEntries distinct misses the cache is dropped, not grown.
 	uc3 := &counting{known: uc.known}
-	r3 := auth.NewResolver(uc3, clk)
+	r3 := newResolver(t, uc3, clk, noopMeter())
 	for i := range auth.MaxCacheEntries + 1 {
 		_, _, _ = r3.ResolveAPIKey(c, "xk_"+strings.Repeat("x", 30)+strings.Repeat("0", 13-len(itoa(i)))+itoa(i))
 	}
