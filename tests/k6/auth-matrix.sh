@@ -101,6 +101,11 @@ FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect-1 orders 1
 FAIL_PATH=$CREATE REFLECT=header FORBID=$PLAIN_KEY cell create-503-reflect-header orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 FAIL_PATH=$CREATE REFLECT=json FORBID=$PLAIN_KEY cell create-503-reflect-json orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 FAIL_PATH=$CREATE REFLECT=prefixed FORBID=$PLAIN_KEY cell create-503-reflect-prefixed orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+# The ordinary ok() diagnostics (K6_CUSTOMER_MODE=omit: no probe) must not print it either: a code that
+# is the key (header or JSON), the first CreateOrder refused once → thresholds crossed (99).
+for m in header json; do
+  FAIL_PATH=$CREATE REFLECT=$m K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell "create-503-omit-$m" orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+done
 
 if [ ${#fails[@]} -gt 0 ]; then echo "auth matrix FAILED: ${fails[*]}"; exit 1; fi
 echo "auth matrix ok"
