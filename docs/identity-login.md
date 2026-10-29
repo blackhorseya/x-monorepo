@@ -126,6 +126,7 @@
 - **BFF 是升級路徑，不在這個範圍**：之後若要把 refresh token 移出瀏覽器，改由 BFF 持有並以 `HttpOnly` cookie 與 SPA 溝通；此時需要另訂 CSRF 規則。現在不做，只記錄。
 - **API key 入口保留**為次要的 break-glass（貼 key，維持現狀存放方式），可用 `console.apiKeyLogin` 關閉。OIDC 與 API key 兩種 credential 互斥：設定其中一種就清掉另一種。
 - 沿用既有 `generation` 機制：登入 / refresh 回應到達時若 generation 已變（期間登出或換 credential）就丟棄，不寫入 credential。
+- **待決實作細節（#273 定）**：refresh 失敗時的處理，包括暫時性錯誤（例如 IdP 503）與 refresh token 失效的區分。本文不規定。
 - 新增 accounts UI（admin）：邀請、綁定狀態、`AssignRoles`、撤銷 session（§11）。
 
 ## 9. 第一個 admin（Q5）
@@ -204,16 +205,16 @@
 | # | 問題 | 狀態 |
 |---|---|---|
 | 1 | 方案 A 還是 B | **已決**：B（外部 OIDC + Dex），A 降為可選模組（開頭、§13） |
-| 2 | 簽章金鑰保管 | 隨方案 A 擱置（§13）；B 不持有簽章私鑰 |
+| 2 | 簽章金鑰保管 | 隨方案 A 擱置（§13） |
 | 3 | access token 壽命 | 改由 OIDC 取代：壽命由 IdP 決定，驗證規則見 §6 |
 | 4 | 登出 / 停用的即時性 | **已決**（Q8）：`sessions_revoked_at`，30 秒內生效（§11） |
-| 5 | 自動輪替 | 隨方案 A 擱置（§13）；IdP 金鑰輪替靠 §7 的 JWKS 重抓跟上 |
+| 5 | 自動輪替 | 隨方案 A 擱置（§13）；IdP 端的金鑰變動見 §7 |
 | 6 | 密碼政策 | 隨方案 A 擱置（§13）；B 由 IdP 負責 |
-| 7 | 節流參數 | 隨方案 A 擱置（§13）；B 的登入節流由 IdP 負責，既有 `http.rate_limit` 不變 |
+| 7 | 節流參數 | 隨方案 A 擱置（§13）；登入節流由 IdP 負責（§1） |
 | 8 | `jwks_uri` 支援 | **已決**（Q7）：支援，由 discovery 取得、不提供 override（§7、§10） |
-| 9 | 非 localhost 的 http | **已決**（Q6）：非 https 只在 loopback 或明確 `allow_insecure_issuer` 時放行（§10）；不再有 `Secure` cookie 問題 |
-| 10 | 忘記密碼 / 註冊 / MFA | 改由 OIDC 取代：全部交給 IdP（§1 非目標） |
+| 9 | 非 localhost 的 http | **已決**（Q6）：非 https 只在 loopback 或明確 `allow_insecure_issuer` 時放行（§10） |
+| 10 | 忘記密碼 / 註冊 / MFA | 改由 OIDC 取代：交給 IdP（§1） |
 | 11 | roles 來源 | **已決**（Q2、Q4）：永遠以 account 為準，不從 claim 推導（§5、§6） |
-| 12 | refresh 回應遺失 | 改由 OIDC 取代：refresh 規則由 IdP 決定；Console 遇到 refresh 失敗的處置（含 IdP 暫時 5xx）列為 PR 5 實作細節，本文不規定；可推導 refresh token 的選項隨方案 A 擱置 |
+| 12 | refresh 回應遺失 | 改由 OIDC 取代；Console 的 refresh 失敗處理見 §8「待決實作細節」；可推導 refresh token 的選項隨方案 A 擱置（§13） |
 | 13 | 外部 JWT 的 `iss` pin | 沿用既有設計（非 Q1–Q9）：§3 的啟動檢查，PR 2 驗收 |
-| 14 | 登入限流粒度 | 隨方案 A 擱置（§13）；B 沒有我們自己的登入 endpoint |
+| 14 | 登入限流粒度 | 隨方案 A 擱置（§13） |
