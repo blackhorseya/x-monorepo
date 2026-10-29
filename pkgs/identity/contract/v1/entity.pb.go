@@ -228,7 +228,7 @@ type ApiKey struct {
 	// When the key last authenticated a request. Unset: never used (or used only
 	// before this was recorded). Best-effort and throttled: written at most once per
 	// auth.last_used_interval (default 1m) and dropped when the write fails, so it
-	// can trail the real last use by about that interval; it is not an audit log.
+	// can trail the real last use by up to about two intervals (more while writes fail); it is not an audit log.
 	LastUseTime   *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_use_time,json=lastUseTime,proto3" json:"last_use_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

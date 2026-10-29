@@ -54,7 +54,7 @@ type APIKeyOutput struct {
 	CreatedAt  time.Time
 	ExpiresAt  time.Time // zero: never
 	RevokedAt  time.Time // zero: not revoked
-	LastUsedAt time.Time // zero: never used (throttled, best-effort: up to auth.last_used_interval stale)
+	LastUsedAt time.Time // zero: never used (throttled, best-effort: can trail by about two auth.last_used_interval)
 }
 
 // CreateAPIKeyInput mints a key; ExpiresAt zero means it never expires.

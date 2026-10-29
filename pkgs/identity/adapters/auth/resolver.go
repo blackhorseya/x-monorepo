@@ -99,7 +99,13 @@ type Resolver struct {
 	logger     *slog.Logger
 	inflight   chan struct{}
 	writes     sync.WaitGroup
+	// Claims, two generations: a claim is only ever consulted for touchEvery, so
+	// when the current generation is older than that it becomes the previous one
+	// and the old previous (every claim in it expired) is dropped. Never a
+	// wholesale reset, which would forget claims still inside their window.
 	touched    map[string]time.Time // key id → when this replica last claimed a write
+	touchedOld map[string]time.Time
+	touchedAt  time.Time // when touched started
 }
 
 type entry struct {
@@ -158,6 +164,7 @@ func (a *Resolver) TrackLastUsed(touch TouchAPIKeyUC, interval time.Duration, lo
 	a.touch, a.touchEvery, a.logger = touch, interval, logger
 	a.inflight = make(chan struct{}, maxTouchesInFlight)
 	a.touched = make(map[string]time.Time)
+	a.touchedOld = make(map[string]time.Time)
 }
 
 // Wait blocks until the last_used_at writes started so far have finished: for
@@ -201,11 +208,21 @@ func (a *Resolver) noteUse(c context.Context, keyID string, now time.Time) {
 func (a *Resolver) claim(keyID string, now time.Time) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if last, ok := a.touched[keyID]; ok && now.Sub(last) < a.touchEvery {
+	if a.touchedAt.IsZero() || now.Sub(a.touchedAt) >= a.touchEvery {
+		a.touchedOld, a.touched, a.touchedAt = a.touched, make(map[string]time.Time), now
+	}
+	last, ok := a.touched[keyID]
+	if !ok {
+		last, ok = a.touchedOld[keyID]
+	}
+	if ok && now.Sub(last) < a.touchEvery {
 		return false
 	}
 	if len(a.touched) >= MaxCacheEntries {
-		a.touched = make(map[string]time.Time)
+		// More than MaxCacheEntries distinct keys inside one window is not API-key
+		// traffic. Past it new keys wait for the next generation unstamped, rather
+		// than forgetting claims that still hold or sending every request to the DB.
+		return false
 	}
 	a.touched[keyID] = now
 
@@ -215,8 +232,10 @@ func (a *Resolver) claim(keyID string, now time.Time) bool {
 func (a *Resolver) unclaim(keyID string, claimedAt time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.touched[keyID].Equal(claimedAt) {
-		delete(a.touched, keyID)
+	for _, m := range []map[string]time.Time{a.touched, a.touchedOld} {
+		if t, ok := m[keyID]; ok && t.Equal(claimedAt) {
+			delete(m, keyID)
+		}
 	}
 }
 

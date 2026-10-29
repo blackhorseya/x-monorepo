@@ -128,7 +128,7 @@ function KeysCard({ accountId }: { accountId: string }) {
         <CardDescription>
           Newest first, revoked ones included. A revoked key stops working within 30s. The secret is shown once, when the key is
           created. Last used is best-effort and can trail the real
-          last use by about a minute.
+          last use by a couple of minutes.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
