@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useCredentialGeneration } from "../auth";
 import { adminProbeQuery } from "../queries";
@@ -16,6 +17,21 @@ function useAdminProbe() {
 
 export function useIsAdmin(): boolean {
   return useAdminProbe().data === true;
+}
+
+// The probe could not be answered (it is already retried with backoff): say so, instead of
+// hiding the admin UI as if the caller were known not to be an admin, and let the user ask again.
+export function AdminProbeNotice() {
+  const probe = useAdminProbe();
+  if (!probe.isError) return null;
+  return (
+    <div role="status" className="mb-4 flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-sm text-muted-foreground">
+      <span>Could not confirm admin access; admin features stay hidden until it is.</span>
+      <Button variant="outline" size="sm" onClick={() => void probe.refetch()} disabled={probe.isFetching}>
+        Retry
+      </Button>
+    </div>
+  );
 }
 
 // Page-level gate for the admin pages: children only render for an admin.

@@ -2,7 +2,7 @@ import { Link, Outlet, createRootRoute, createRoute, createRouter, redirect } fr
 import type { ReactElement } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
-import { AdminGate, useIsAdmin } from "./components/admin";
+import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
 import { CredentialControl } from "./components/credential";
 import { ServerVersion } from "./components/version";
 import { AccountPage } from "./routes/account";
@@ -56,6 +56,7 @@ function Root() {
         </nav>
         <CredentialControl />
       </header>
+      <AdminProbeNotice />
       <Outlet />
       <footer className="mt-10 flex justify-end text-xs text-muted-foreground">
         <ServerVersion />
