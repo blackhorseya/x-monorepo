@@ -33,7 +33,7 @@ trap stop EXIT
 fails=()
 # cell <name> <script> <expect: the k6 exit code> <match: text the k6 output must contain, or -> <key|-> <server env…>
 #   env knobs: FAIL_PATH=<procedure> → a fault proxy in front of the rpc answers that procedure's
-#   first call 503 (once), REFLECT=1|header|json|prefixed|redirect → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
+#   first call 503 (once), REFLECT=1|header|json|prefixed|redirect|redirect-path → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
 #   k6 -e; FORBID=<text> → the k6 output, summary export and metrics stream must not contain it (a key must never be printed).
 cell() {
   local name=$1 s=$2 expect=$3 match=$4 key=$5; shift 5
@@ -110,9 +110,13 @@ done
 # A 307 whose Location carries the key: not followed, not logged, not tagged (aborts 108; with omit, 99).
 FAIL_PATH=$CREATE REFLECT=redirect FORBID=$PLAIN_KEY cell create-307 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 FAIL_PATH=$CREATE REFLECT=redirect K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell create-307-omit orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=redirect-path FORBID=$PLAIN_KEY cell create-307-path orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 # A key that is itself a known error code, echoed as the code: redacted in the metric tags too.
 CODE_KEY=order.empty_customer
 FAIL_PATH=$CREATE REFLECT=json K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$CODE_KEY cell create-key-is-code orders 99 - "$CODE_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$CODE_KEY"
+# ...and the auto split must not depend on what is printed: auth off ignores the key, which equals
+# order.empty_customer, and the server's real 400 order.empty_customer still means "name the customer".
+cell off-key-is-code orders 0 - order.empty_customer APP_AUTH_MODE=off
 
 if [ ${#fails[@]} -gt 0 ]; then echo "auth matrix FAILED: ${fails[*]}"; exit 1; fi
 echo "auth matrix ok"
