@@ -26,7 +26,10 @@ class=pass
 if grep -Eq '\[(build|setup) failed\]' <<<"$out"; then class=compile
 elif grep -Eq '^panic: ' <<<"$out"; then class=panic
 elif grep -Eq '^--- FAIL: ' <<<"$out"; then
-  if grep -Ev '^(=== |--- |FAIL|ok )' <<<"$out" | grep -Eq -- "$msg"; then class=assertion; else class=setup; fi
+  # Not `grep -Ev … | grep -Eq`: -q exits at the first match, the upstream grep then dies of SIGPIPE
+  # on a long log and pipefail reads that as "message not found".
+  body=$(grep -Ev '^(=== |--- |FAIL|ok )' <<<"$out" || true)
+  if grep -E -- "$msg" <<<"$body" >/dev/null; then class=assertion; else class=setup; fi
 fi
 echo "$class"
 [ "$class" = assertion ]

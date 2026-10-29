@@ -178,4 +178,4 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
   - 純文件、註解、無可測行為的預設值變更，以及沒有可測邏輯的 CI 修正，免 RED。已凍結的 RED 歷史不重寫。
   - `scripts/red-stage.sh -m '<預期訊息 regex>'` 讀 `go test` 輸出，分類成 `assertion` / `setup` / `compile` / `panic` / `pass`
     （只有 `assertion` exit 0）。它只是候選分類：訊息有印出不代表那是對的 assertion，語意由 reviewer 判。
-    例：`git switch --detach <RED SHA> && go test -run '^TestX$' ./pkgs/ordering/... 2>&1 | scripts/red-stage.sh -m 'want 1 call'`
+    例（在固定 RED SHA 的 named worktree 裡跑，不要切換自己綁定 worktree 的 HEAD）：`cd <RED SHA 的 named worktree> && go test -run '^TestX$' ./pkgs/ordering/... 2>&1 | scripts/red-stage.sh -m 'want 1 call'`
