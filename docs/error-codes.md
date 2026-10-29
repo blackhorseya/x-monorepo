@@ -8,7 +8,7 @@
 來源三種：**platform interceptor**（`request.*` / `auth.*`）、**admin**（`admin.*`，`pkgs/platform/admin` 自己設）、**domain error**
 （`kernel.NewError(kind, code, msg)`，`server.ToConnectError` 依 `Kind` 映射：InvalidArgument → `INVALID_ARGUMENT`、NotFound → `NOT_FOUND`、
 FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、PermissionDenied → `PERMISSION_DENIED`；其他 → `INTERNAL`，**沒有** `x-error-code`，訊息固定 `internal error`）。
-加新的 domain error 就在該 aggregate 的 `errors.go` 加一行，前綴 = aggregate 名；這張表是手寫的，改了記得同步。
+加新的 domain error 就在該 aggregate 的 `errors.go` 加一行，前綴 = aggregate 名（跨 aggregate 的 BC 層規則用 BC 名，如 `identity.last_admin`）；這張表是手寫的，改了記得同步。
 
 | `x-error-code` | Connect code | 誰設 | 什麼時候 |
 |---|---|---|---|
