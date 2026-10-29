@@ -4,7 +4,8 @@ path ends with FAIL_PATH is answered 503 (a Connect `unavailable`) without reach
   fault_proxy.py <listen port> <upstream port> <procedure, e.g. /identity.v1.IdentityService/WhoAmI>
 REFLECT makes the injected answer echo the request's X-API-Key, as a misbehaving upstream or proxy
 might — the scripts must not print it. 1: in the message and the X-Error-Code header after a word;
-header: X-Error-Code is the key; json: the JSON code is the key; prefixed: "unavailable." + key in both.
+header: X-Error-Code is the key; json: the JSON code is the key; prefixed: "unavailable." + key in both;
+redirect: a 307 whose Location carries the key (a client that follows it logs the URL).
 Test tooling only: no product behaviour is changed, the rpc never sees the failed call."""
 import http.server
 import json
@@ -45,6 +46,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif mode == "prefixed":
                 body["code"] = "unavailable." + key
                 extra["X-Error-Code"] = "unavailable." + key
+            if mode == "redirect":
+                extra["Location"] = "http://127.0.0.1:9/?k=" + key
+                self.reply(307, b"", extra)
+                return
             self.reply(503, json.dumps(body).encode(), extra)
             return
         req = urllib.request.Request(f"http://127.0.0.1:{upstream}{self.path}", body, method="POST")

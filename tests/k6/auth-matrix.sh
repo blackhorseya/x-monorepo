@@ -33,8 +33,8 @@ trap stop EXIT
 fails=()
 # cell <name> <script> <expect: the k6 exit code> <match: text the k6 output must contain, or -> <key|-> <server env…>
 #   env knobs: FAIL_PATH=<procedure> → a fault proxy in front of the rpc answers that procedure's
-#   first call 503 (once), REFLECT=1|header|json|prefixed → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
-#   k6 -e; FORBID=<text> → the k6 output must not contain it (a key must never be printed).
+#   first call 503 (once), REFLECT=1|header|json|prefixed|redirect → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
+#   k6 -e; FORBID=<text> → the k6 output, summary export and metrics stream must not contain it (a key must never be printed).
 cell() {
   local name=$1 s=$2 expect=$3 match=$4 key=$5; shift 5
   if [ ${#only[@]} -gt 0 ]; then
@@ -61,12 +61,13 @@ cell() {
   [ "$key" = - ] || kenv+=(-e "API_KEY=$key")
   for kv in ${K6_ENV:-}; do kenv+=(-e "$kv"); done
   local rc=0
-  k6 run --quiet "tests/k6/$s.js" "${kenv[@]}" > "$log.log" 2>&1 || rc=$?
+  k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
+    "tests/k6/$s.js" "${kenv[@]}" > "$log.log" 2>&1 || rc=$?
   stop
   if [ "$rc" != "$expect" ]; then
     echo "   ✗ $name: expected k6 exit $expect, got $rc"; tail -n 25 "$log.log"; fails+=("$name")
-  elif [ -n "${FORBID:-}" ] && grep -q -- "$FORBID" "$log.log"; then
-    echo "   ✗ $name: k6 output contains the forbidden text (a credential?)"; fails+=("$name")
+  elif [ -n "${FORBID:-}" ] && grep -q -- "$FORBID" "$log.log" "$log-summary.json" "$log-metrics.json" 2>/dev/null; then
+    echo "   ✗ $name: k6 output / summary / metrics contain the forbidden text (a credential?)"; fails+=("$name")
   elif [ "$match" != - ] && ! grep -q -- "$match" "$log.log"; then
     echo "   ✗ $name: k6 output lacks '$match'"; tail -n 25 "$log.log"; fails+=("$name")
   else
@@ -106,6 +107,12 @@ FAIL_PATH=$CREATE REFLECT=prefixed FORBID=$PLAIN_KEY cell create-503-reflect-pre
 for m in header json; do
   FAIL_PATH=$CREATE REFLECT=$m K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell "create-503-omit-$m" orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 done
+# A 307 whose Location carries the key: not followed, not logged, not tagged (aborts 108; with omit, 99).
+FAIL_PATH=$CREATE REFLECT=redirect FORBID=$PLAIN_KEY cell create-307 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=redirect K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell create-307-omit orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+# A key that is itself a known error code, echoed as the code: redacted in the metric tags too.
+CODE_KEY=order.empty_customer
+FAIL_PATH=$CREATE REFLECT=json K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$CODE_KEY cell create-key-is-code orders 99 - "$CODE_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$CODE_KEY"
 
 if [ ${#fails[@]} -gt 0 ]; then echo "auth matrix FAILED: ${fails[*]}"; exit 1; fi
 echo "auth matrix ok"
