@@ -16,7 +16,7 @@
 # Fixed parameters (override only to measure something else; they are recorded in result.json):
 #   RUNS=3 (N, ≥ 3)          CREATE_VUS=20 CREATE_DURATION=10s      create phase: closed model, saturation
 #   RESERVE_RATE=100 RESERVE_DURATION=30s                           reserve phase: open model, orders/s
-#   SKUS=50  POLL=50 (ms)  DRAIN_TIMEOUT=300 (s)  PORT=18090
+#   SKUS=50  SEED=1 (SKU choice)  POLL=50 (ms)  DRAIN_TIMEOUT=300 (s)  PORT=18090
 # The k6 scripts never print a response body or URL; to prove the key stays out, the rpc is sent a
 # made-up key as API_KEY / ADMIN_API_KEY (auth is off, it is ignored) and every file the run
 # produces is searched for it; one hit fails the whole bench.
@@ -33,7 +33,7 @@ RUNS=${RUNS:-3}
 [ "$RUNS" -ge 3 ] || { echo "RUNS=$RUNS: want at least 3" >&2; exit 2; }
 CREATE_VUS=${CREATE_VUS:-20}; CREATE_DURATION=${CREATE_DURATION:-10s}
 RESERVE_RATE=${RESERVE_RATE:-100}; RESERVE_DURATION=${RESERVE_DURATION:-30s}
-SKUS=${SKUS:-50}; POLL=${POLL:-50}; DRAIN_TIMEOUT=${DRAIN_TIMEOUT:-300}
+SKUS=${SKUS:-50}; POLL=${POLL:-50}; SEED=${SEED:-1}; DRAIN_TIMEOUT=${DRAIN_TIMEOUT:-300}
 port=${PORT:-18090}
 base_url=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
 CANARY=k6-fake-bench-canary-0001   # made up for this test; nothing here is a credential
@@ -43,6 +43,8 @@ dburl() { python3 -I -c 'import sys, urllib.parse as u
 p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base_url" "$1"; }
 
 export APP_CONFIG=/dev/null APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false APP_LOG_LEVEL=${APP_LOG_LEVEL:-warn}
+
+now() { python3 -I -c 'import time; print(time.time())'; }
 
 pid="" wpid="" db=""
 cleanup() {
@@ -75,19 +77,32 @@ for n in $(seq 1 "$RUNS"); do
   done
 
   k6env=(-e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$CANARY" -e "ADMIN_API_KEY=$CANARY" -e "RUN_ID=$run_id"
-    -e "SKUS=$SKUS" -e "POLL=$POLL")
+    -e "SKUS=$SKUS" -e "POLL=$POLL" -e "SEED=$SEED")
   k6 run --quiet --summary-export "$out/run$n-create.json" tests/k6/bench.js "${k6env[@]}" \
     -e PHASE=create -e "VUS=$CREATE_VUS" -e "DURATION=$CREATE_DURATION" > "$out/run$n-create.log" 2>&1
 
-  # the create phase leaves a backlog for the worker: wait for it, and time it (reservation
-  # throughput of the batching worker with nothing else going on). PENDING = not yet reserved.
-  t0=$SECONDS
+  # the create phase leaves a backlog for the worker (CreateOrder outruns reservation): the orders
+  # still PENDING at this moment, and the seconds until none is, are the same window — their
+  # ratio is what the worker reserves per second while draining. (Orders reserved during the create
+  # phase are not in either number.)
+  pending=$(psql "$url" -qAt -c "select count(*) from ordering.orders where status = 'PENDING'")
+  total=$(psql "$url" -qAt -c "select count(*) from ordering.orders")
+  t0=$(now)
   until [ "$(psql "$url" -qAt -c "select count(*) from ordering.orders where status = 'PENDING'")" = 0 ]; do
-    [ $((SECONDS - t0)) -lt "$DRAIN_TIMEOUT" ] || { echo "backlog not drained within ${DRAIN_TIMEOUT}s" >&2; exit 1; }
-    sleep 0.5
+    python3 -I -c "import sys; sys.exit(0 if $(now) - $t0 < $DRAIN_TIMEOUT else 1)" \
+      || { echo "backlog not drained within ${DRAIN_TIMEOUT}s" >&2; exit 1; }
+    sleep 0.2
   done
-  drained=$(psql "$url" -qAt -c "select count(*) from ordering.orders")
-  echo "{\"orders\": $drained, \"seconds\": $((SECONDS - t0))}" > "$out/run$n-drain.json"
+  secs=$(python3 -I -c "print(round($(now) - $t0, 2))")
+  # PENDING gone is not success: every order must have gone through the saga to CONFIRMED, with
+  # one RESERVED reservation each (a worker that rejected or lost orders would also empty PENDING)
+  notok=$(psql "$url" -qAt -c "select count(*) from ordering.orders where status <> 'CONFIRMED'")
+  reserved=$(psql "$url" -qAt -c "select count(*) from inventory.reservations where status = 'RESERVED'")
+  if [ "$notok" != 0 ] || [ "$reserved" != "$total" ]; then
+    echo "drain ended with $notok order(s) not CONFIRMED and $reserved RESERVED reservation(s) for $total orders" >&2
+    exit 1
+  fi
+  echo "{\"total_orders\": $total, \"pending_at_end\": $pending, \"seconds\": $secs}" > "$out/run$n-drain.json"
 
   k6 run --quiet --summary-export "$out/run$n-reserve.json" tests/k6/bench.js "${k6env[@]}" \
     -e PHASE=reserve -e "RATE=$RESERVE_RATE" -e "DURATION=$RESERVE_DURATION" > "$out/run$n-reserve.log" 2>&1
@@ -100,7 +115,7 @@ ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 pgv=$(psql "$base_url" -qAt -c "show server_version")
 BENCH_COMMIT=$(git rev-parse HEAD) BENCH_DIRTY=$(git status --porcelain -- . ':!bin' | head -c1) \
 BENCH_GO=$(go version) BENCH_PG=$pgv BENCH_K6=$(k6 version | head -n1) BENCH_CPU=$cpu BENCH_NCPU=$ncpu \
-BENCH_OS=$(uname -srm) BENCH_STAMP=$stamp BENCH_RUNS=$RUNS BENCH_SKUS=$SKUS BENCH_POLL=$POLL \
+BENCH_OS=$(uname -srm) BENCH_STAMP=$stamp BENCH_RUNS=$RUNS BENCH_SKUS=$SKUS BENCH_POLL=$POLL BENCH_SEED=$SEED \
 BENCH_CREATE_VUS=$CREATE_VUS BENCH_CREATE_DURATION=$CREATE_DURATION \
 BENCH_RESERVE_RATE=$RESERVE_RATE BENCH_RESERVE_DURATION=$RESERVE_DURATION \
   python3 -I tests/k6/bench_report.py "$out"
