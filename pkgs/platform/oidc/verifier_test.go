@@ -1,6 +1,9 @@
 package oidc_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -144,6 +147,11 @@ func TestVerify_AlgorithmConfusion(t *testing.T) {
 	}
 	pemKey := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
 
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	hmac := func(secret []byte, kid string) string {
 		tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims())
 		tok.Header["kid"] = kid
@@ -182,7 +190,7 @@ func TestVerify_AlgorithmConfusion(t *testing.T) {
 		"alg none":                                none("k-rs"),
 		"RS256 token, kid names the EC key":       signWith(jwt.SigningMethodRS256, rsaKey, "k-es"), // RS256 against a kty=EC JWK
 		"RS512 is not on the allow-list":          signWith(jwt.SigningMethodRS512, rsaKey, "k-rs"),
-		"ES384 is not on the allow-list":          signWith(jwt.SigningMethodES384, ecKey, "k-es"),
+		"ES384 is not on the allow-list":          signWith(jwt.SigningMethodES384, p384, "k-es"),
 		"PS256 is not on the allow-list":          signWith(jwt.SigningMethodPS256, rsaKey, "k-rs"),
 	} {
 		t.Run(name, func(t *testing.T) {
