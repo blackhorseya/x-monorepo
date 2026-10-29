@@ -117,6 +117,14 @@ FAIL_PATH=$CREATE REFLECT=json K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$CODE_KEY cel
 # ...and the auto split must not depend on what is printed: auth off ignores the key, which equals
 # order.empty_customer, and the server's real 400 order.empty_customer still means "name the customer".
 cell off-key-is-code orders 0 - order.empty_customer APP_AUTH_MODE=off
+# ratelimit.js / timeout.js decide on the server's x-error-code too: a key equal to that code (printed
+# redacted) must not change the verdict. (No FORBID: the scripts' own check names spell the code.)
+RL=(APP_AUTH_MODE=off APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50)
+TO=(APP_AUTH_MODE=off APP_HTTP_TIMEOUT=1ns APP_LOG_LEVEL=error)
+cell ratelimit-key ratelimit 0 - "$PLAIN_KEY" "${RL[@]}"
+cell ratelimit-key-is-code ratelimit 0 - request.rate_limited "${RL[@]}"
+cell timeout-key timeout 0 - "$PLAIN_KEY" "${TO[@]}"
+cell timeout-key-is-code timeout 0 - request.timeout "${TO[@]}"
 
 if [ ${#fails[@]} -gt 0 ]; then echo "auth matrix FAILED: ${fails[*]}"; exit 1; fi
 echo "auth matrix ok"
