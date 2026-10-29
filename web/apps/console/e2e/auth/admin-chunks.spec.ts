@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
+import { useKey } from "./helpers";
 
 // The admin pages are their own chunks (lazy routes). A caller who is not an admin never needs
 // them: the gate must show without fetching, or waiting for, the page's chunk — also when the
@@ -86,4 +87,77 @@ test("admin: link intent still preloads the admin chunk", async ({ page }) => {
   });
   await nav(page, "Poison").hover();
   await expect.poll(() => chunks.length).toBeGreaterThan(0);
+});
+
+// ── An admin whose chunk is slow or missing, and a credential that changes under the router ──
+
+const POISON_CHUNK = "**/assets/poison-*.js";
+const gate = (page: Page) => page.getByText("Admin role required");
+const poisonPage = (page: Page) => page.getByText("Poison queue");
+
+test("admin: a slow chunk shows the loading state, never the role gate, and the page mounts on release", async ({ page }) => {
+  await seed(page, ADMIN_KEY);
+  let release!: () => void;
+  const hold = new Promise<void>((r) => (release = r));
+  await page.route(POISON_CHUNK, async (route) => {
+    await hold;
+    await route.continue();
+  });
+  try {
+    await page.goto("/poison");
+    await expect(page.getByRole("status").filter({ hasText: "Loading" })).toBeVisible();
+    await expect(gate(page)).toHaveCount(0);
+    await expect(poisonPage(page)).toHaveCount(0);
+  } finally {
+    release();
+  }
+  await expect(poisonPage(page)).toBeVisible();
+  await expect(gate(page)).toHaveCount(0);
+});
+
+test("admin: a chunk that fails to load is a visible error, not a blank page, and Retry recovers", async ({ page }) => {
+  await seed(page, ADMIN_KEY);
+  let failing = true;
+  await page.route(POISON_CHUNK, (route) => (failing ? route.abort("failed") : route.continue()));
+  await page.goto("/poison");
+  await expect(page.getByText("Failed to load this page")).toBeVisible();
+  await expect(gate(page)).toHaveCount(0);
+  await expect(page.locator("header nav")).toBeVisible(); // the layout survives
+
+  failing = false;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(poisonPage(page)).toBeVisible();
+  await expect(page.getByText("Failed to load this page")).toHaveCount(0);
+});
+
+// The admin answer for the previous credential is cached under its own generation. A new
+// credential must not inherit it: until the new probe answers, the router must not preload the
+// admin chunk (pending), and once it says "no" it must not either (false).
+test("credential change: the cached admin answer is not reused, pending or denied, for chunk or gate", async ({ page }) => {
+  await seed(page, ADMIN_KEY);
+  await page.goto("/stock");
+  await expect(nav(page, "Poison")).toBeVisible(); // probe true is cached for the admin key
+
+  let release!: () => void;
+  const hold = new Promise<void>((r) => (release = r));
+  await page.route("**/identity.v1.IdentityService/ListAccounts", async (route) => {
+    await hold; // the new credential's probe is pending
+    await route.continue(); // real server: 403 for OPS_KEY
+  });
+  const chunks: string[] = [];
+  page.on("request", (r) => {
+    if (chunk("poison").test(r.url())) chunks.push(r.url());
+  });
+
+  await useKey(page, OPS_KEY);
+  await navigate(page, "/poison");
+  await expect(gate(page)).toHaveCount(0); // pending is not an answer: no gate, no page
+  await expect(poisonPage(page)).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(chunks).toEqual([]);
+
+  release();
+  await expect(gate(page)).toBeVisible(); // denied
+  await page.waitForTimeout(500);
+  expect(chunks).toEqual([]);
 });
