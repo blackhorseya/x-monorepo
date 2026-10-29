@@ -304,6 +304,72 @@ else
   echo "skip: cosign-smoke cases need python3 -c 'import yaml'"
 fi
 
+# ── cosign-sign-blob.sh ─────────────────────────────────────────────────────────
+# .goreleaser.yaml's `signs.cmd` (#215 option C): cosign sign-blob, re-signed at most twice more and
+# only when the failure is a Rekor 409. Fake cosign, scripted per attempt by FAKE_SEQ (space
+# separated): ok = write the bundle, 409 = Rekor conflict on stderr + exit 1, err = another failure,
+# empty = exit 0 with an empty bundle, none = exit 0 with no bundle. Offline, no sleeping.
+signfake="$tmp/cosign-sign"; mkdir -p "$signfake"
+cat > "$signfake/cosign" <<'FAKE'
+#!/usr/bin/env bash
+n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_COUNT"
+echo "$*" >> "$FAKE_ARGS"; echo "token=${SIGSTORE_ID_TOKEN:-}" >> "$FAKE_ARGS"
+for a in "$@"; do case $a in --bundle=*) bundle=${a#--bundle=} ;; esac; done
+[ -s "$bundle" ] && echo "STALE: attempt $n found a bundle left by an earlier one" >> "$FAKE_ARGS"
+set -- $FAKE_SEQ; step=${!n:-err}
+case $step in
+  ok)    echo '{"fake":"bundle"}' > "$bundle" ;;
+  409)   echo "Error: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
+  empty) : > "$bundle" ;;
+  none)  : ;;
+  *)     echo "Error: signing: getting ID Token: 500 Internal Server Error" >&2; echo partial > "$bundle"; exit 1 ;;
+esac
+FAKE
+chmod +x "$signfake/cosign"
+# sign_blob <name> "<FAKE_SEQ>": runs the wrapper with goreleaser's args; sets sb_rc, sb_out, sb_tries, sb_bundle.
+sign_blob() {
+  local d="$tmp/sb-$1"; mkdir -p "$d"; echo artifact > "$d/checksums.txt"
+  : > "$d/args"; rm -f "$d/count"
+  sb_bundle="$d/checksums.txt.sigstore.json"
+  set +e
+  sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
+    COSIGN_SIGN_RETRY_DELAY=0 scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/checksums.txt" --yes 2>&1)
+  sb_rc=$?
+  set -e
+  sb_tries=$(cat "$d/count" 2>/dev/null || echo 0); sb_args=$d/args
+}
+sign_blob first "ok"
+expect_eq    "sign: first attempt succeeds"                0 "$sb_rc"
+expect_eq    "sign: first attempt signs once"              1 "$sb_tries"
+if [ -s "$sb_bundle" ]; then ok; else bad "sign: first attempt left no bundle"; fi
+expect_match "sign: cosign gets goreleaser's args"         '^sign-blob --bundle=.*checksums.txt.sigstore.json .*checksums.txt --yes$' "$(sed -n 1p "$sb_args")"
+sign_blob retry "409 ok"
+expect_eq    "sign: 409 then success exits 0"              0 "$sb_rc"
+expect_eq    "sign: 409 then success signs twice"          2 "$sb_tries"
+if [ -s "$sb_bundle" ]; then ok; else bad "sign: 409 then success left no bundle"; fi
+expect_match "sign: attempts are logged"                   'attempt 1/3' "$sb_out"
+expect_match "sign: the retry is logged"                   'attempt 2/3' "$sb_out"
+if grep -q STALE "$sb_args"; then bad "sign: retry started on the previous attempt's bundle"; else ok; fi
+sign_blob twice "409 409 ok"
+expect_eq    "sign: two 409s then success exits 0"         0 "$sb_rc"
+expect_eq    "sign: two 409s then success signs 3 times"   3 "$sb_tries"
+sign_blob always "409 409 409 ok"
+if [ "$sb_rc" != 0 ]; then ok; else bad "sign: 409 every time must fail"; fi
+expect_eq    "sign: 409 every time stops after 3 attempts" 3 "$sb_tries"
+if [ ! -e "$sb_bundle" ]; then ok; else bad "sign: exhausted retries left a bundle"; fi
+sign_blob other "err ok"
+if [ "$sb_rc" != 0 ]; then ok; else bad "sign: non-409 error must fail"; fi
+expect_eq    "sign: non-409 error is not retried"          1 "$sb_tries"
+if [ ! -e "$sb_bundle" ]; then ok; else bad "sign: failed sign left a bundle"; fi
+sign_blob empty "empty"
+if [ "$sb_rc" != 0 ]; then ok; else bad "sign: success with an empty bundle must fail"; fi
+expect_eq    "sign: empty bundle is not retried"           1 "$sb_tries"
+if [ ! -s "$sb_bundle" ]; then ok; else bad "sign: empty bundle case left a non-empty bundle"; fi
+sign_blob none "none"
+if [ "$sb_rc" != 0 ]; then ok; else bad "sign: success with no bundle must fail"; fi
+sign_blob token "409 409 409"
+case $sb_out in *secret-oidc-token*) bad "sign: the OIDC token reached the log" ;; *) ok ;; esac
+
 # ── rekor-v2-canary.sh ──────────────────────────────────────────────────────────
 # Fails when the default signing config of the installed cosign lists a Rekor that is not v1 (#215):
 # #204's 409 handling (cosign v3.1.4 / sigstore-go v1.3.0) exists for Rekor v1 only. Offline: the
