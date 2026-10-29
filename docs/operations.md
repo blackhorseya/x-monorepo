@@ -133,6 +133,17 @@ task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一
 
 `tests/k6/wire.sh`（`task k6-wire`，不需要 Postgres 和 rpc，約 1 分鐘）：四支腳本 × 六種壞掉的回應（`tests/k6/wire_server.py`：`status` / `version` / `header` / `chunk` 帶著請求的 `X-API-Key`，`truncated` body 不完整，`closed` 連線直接關），每個 run 都要非零退出，`API_KEY`（自造的假 key）不能出現在 k6 輸出、`--summary-export`、`--out json` 的任何一行，metrics 不能有自由文字的 `error` tag，`closed`（key 根本沒上線）要有 `transport.<class>` 的診斷。每個 cell 還要證明 fixture 真的在場：server 要在 5 秒內 listen、跑完仍活著、自己印出 `served <mode>`（壞回應確實送出），而且 k6 回報的失敗分類必須恰好是該 mode 的（`status` / `version` / `header` / `chunk` → `malformed_response`、`truncated` → `truncated_response`、`closed` → `connection_closed`），出現其他分類（例如 server 缺席時的 `connection_refused`）就紅——光看 exit 非零和沒有 key 證明不了什麼。最後兩個負例 cell 讓 `wire.sh` 自己再跑一次：server 不啟動（`WIRE_SERVER_CMD=false`）、server 回錯的 mode（`WIRE_SERVE_AS=closed`），它必須失敗，否則 gate 本身標紅。失敗用 go test 的 `--- FAIL:` 格式印，`scripts/red-stage.sh` 讀得懂。
 
+### 合法 JSON 的 status 欄位反射（`task k6-wire`）
+
+HTTP 和 JSON 都合法、但 enum 欄位被上游或 proxy 填成請求的 `X-API-Key`（`reservation.status`、`order.status`），`reservation.js` 原本把 raw 值 `String(status)` 直接放進 `reservation_wrong_status` / `order_not_confirmed` / `reservation_not_committed` 的 `status` tag，key 會進 `--out json`（#243）。做法：
+
+- tag 只走 `lib.js` 的 `statusTag(status, known)`：值在 `codes.js` 的 `ORDER_STATUSES` / `RESERVATION_STATUSES`（proto enum）裡才原樣輸出，其他一律 `<unrecognized>`，再過 `redact()`（key 剛好等於合法 enum 值時變 `<redacted>`），和 `errorCode()` 同一套；
+- 判定不動：`if` 比的是 raw 值，錯的 status 照樣累加 counter、threshold 照樣紅，遮罩只影響輸出；
+- 新增 enum 值要同步 `codes.js`，否則 tag 先顯示 `<unrecognized>`；
+- 其他腳本沒有從 response 取值放 tag（`orders.js` / `ratelimit.js` / `timeout.js` 只用固定字串，`console.error` 只印 `res.status` 數字和 `errorCode()`）。
+
+`wire.sh` 在跑 `reservation` 時多四個 `wire-reservation-reflect-*` cell（`tests/k6/status_server.py`，合法 200 + JSON，不需要 Postgres）：三個 counter 各一個（status 是 key → `<unrecognized>`），加一個 key 設成合法 enum 值 `RESERVATION_STATUS_EXPIRED`（→ `<redacted>`）；每個 cell 要求 k6 非零退出、counter 真的有樣本且 tag 是固定值，key 不在 log、`--summary-export`、`--out json`。
+
 CI 的 `k6-auth` job 和 `k6` job 平行；matrix 的 cell 名字可以接在 task 後面只跑幾個：`task k6-auth-matrix -- on-admin-orders whoami-public`。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
 
 worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等它——要看 consumer 追不追得上就看 `eventbus_consumer_lag`；這也是 Helm `worker.autoscaling.metric: lag` 的壓力源。`reservation.js` 才等：它量的是單筆訂單從下單到 RESERVED 的端到端延遲，是 worker 鏈的 benchmark 基準。

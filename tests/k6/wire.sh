@@ -129,6 +129,50 @@ if [ -z "${WIRE_NO_NEGATIVES:-}" ]; then
   done
 fi
 
+# legal HTTP, legal JSON, but an enum field quotes the key back (tests/k6/status_server.py): the
+# diagnostic tags of reservation.js (reservation_wrong_status / order_not_confirmed /
+# reservation_not_committed) are built from response fields, so the key must not reach them. Each
+# run must still fail its own threshold (a status that is not the expected one is counted as wrong,
+# redacting must not turn it into a pass), and the tag must be the fixed bucket. The last cell sets
+# the key to a legal enum value: the value passes the allowlist, so only redact() keeps it out.
+case " ${scripts[*]} " in *" reservation "*)
+  for cell_def in "reservation:reservation_wrong_status:$KEY:unrecognized" \
+                  "order:order_not_confirmed:$KEY:unrecognized" \
+                  "commit:reservation_not_committed:$KEY:unrecognized" \
+                  "reservation:reservation_wrong_status:RESERVATION_STATUS_EXPIRED:redacted"; do
+    IFS=: read -r mode counter k want_tag <<<"$cell_def"
+    cell="wire-reservation-reflect-$mode-$want_tag" log="$dir/reservation-reflect-$mode-$want_tag"
+    echo "=== RUN   $cell"
+    why=()
+    python3 tests/k6/status_server.py "$port" "$mode" > "$log-server.log" 2>&1 & xpid=$!
+    for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
+    rc=0
+    k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
+      tests/k6/reservation.js -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$k" -e "ADMIN_API_KEY=$k" -e VUS=1 \
+      -e DURATION=2s -e SKUS=1 -e "RUN_ID=wire-$$-reflect-$mode" > "$log.log" 2>&1 || rc=$?
+    stop
+    grep -q "^served $mode$" "$log-server.log" 2>/dev/null || why+=("status server never served the reflected '$mode' answer")
+    [ "$rc" != 0 ] || why+=("k6 exited 0: a wrong status must fail $counter")
+    for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
+      if grep -q -- "$k" "$f" 2>/dev/null; then
+        why+=("forbidden text $k found in $(basename "$f") (a credential reflected into a legal JSON status)")
+      fi
+    done
+    # the counter was really hit, with the fixed bucket as its tag
+    grep -q "\"metric\":\"$counter\"" "$log-metrics.json" 2>/dev/null \
+      || why+=("no $counter sample: the threshold decision changed or the fixture was not reached")
+    grep -q "\"status\":\"[^\"]*$want_tag" "$log-metrics.json" 2>/dev/null \
+      || why+=("$counter carries no status tag with $want_tag")
+    if [ ${#why[@]} -gt 0 ]; then
+      echo "--- FAIL: $cell (k6 exit $rc)"
+      printf '    %s\n' "${why[@]}"
+      fails+=("$cell")
+    else
+      echo "--- PASS: $cell (k6 exit $rc)"
+    fi
+  done ;;
+esac
+
 # negatives: the gate must go red when its fixture is absent or wrong
 if [ -z "${WIRE_NO_NEGATIVES:-}" ] && [ -z "${WIRE_SERVER_CMD:-}${WIRE_SERVE_AS:-}" ]; then
   for neg in "absent:WIRE_SERVER_CMD=false" "wrong-mode:WIRE_SERVE_AS=closed"; do

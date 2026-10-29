@@ -16,7 +16,8 @@
 import http from "k6/http";
 import { sleep } from "k6";
 import { Counter, Trend } from "k6/metrics";
-import { rpc, ok, sku, setStock, createOrder, customer, systemTags, throwOnError } from "./lib.js";
+import { rpc, ok, sku, setStock, createOrder, customer, statusTag, systemTags, throwOnError } from "./lib.js";
+import { ORDER_STATUSES, RESERVATION_STATUSES } from "./codes.js";
 
 // GetReservation is 404 (not_found) until the worker has consumed the order;
 // that is the poll loop's "not yet", not a failed request.
@@ -97,7 +98,7 @@ export default function () {
         reservationLatency.add(Date.now() - start);
         if (waitConfirmed(created.order.id, start)) completeAndWaitCommitted(created.order.id, start);
       } else {
-        reservationWrong.add(1, { status: String(status) });
+        reservationWrong.add(1, { status: statusTag(status, RESERVATION_STATUSES) });
       }
       return;
     }
@@ -122,7 +123,7 @@ function waitConfirmed(orderId, start) {
     const status = res.json("order.status");
     if (status === "ORDER_STATUS_CONFIRMED") return true;
     if (status !== "ORDER_STATUS_PENDING" || Date.now() - start > RESERVE_TIMEOUT) {
-      orderNotConfirmed.add(1, { status: String(status) });
+      orderNotConfirmed.add(1, { status: statusTag(status, ORDER_STATUSES) });
       return false;
     }
     sleep(POLL / 1000);
@@ -139,7 +140,7 @@ function completeAndWaitCommitted(orderId, start) {
     const status = res.json("reservation.status");
     if (status === "RESERVATION_STATUS_COMMITTED") return;
     if (status !== "RESERVATION_STATUS_RESERVED" || Date.now() - start > RESERVE_TIMEOUT) {
-      reservationNotCommitted.add(1, { status: String(status) });
+      reservationNotCommitted.add(1, { status: statusTag(status, RESERVATION_STATUSES) });
       return;
     }
     sleep(POLL / 1000);
