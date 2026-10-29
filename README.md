@@ -116,7 +116,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
 | [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、Console 的 Products 頁（ordering 尚未接） |
-| [`docs/identity-login.md`](docs/identity-login.md) | 帳號密碼登入與自家 JWT issuer 的設計提案（方案比較、金鑰 / token / 節流、Console、拆 PR、未決問題；未實作） |
+| [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
 

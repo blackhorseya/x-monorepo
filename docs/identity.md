@@ -113,10 +113,10 @@ Dashboard「x-monorepo / service」的 Identity row 有四張圖（lookups/s by 
 - 關閉（`0`）時不寫、不開 goroutine，欄位維持原值。
 - Shutdown：`apps/rpc` 的 cleanup 會先讓還在跑的寫入最多再等 3s（`Resolver.WaitTimeout`，早於 DB 關閉），逾時就放棄，最後的 stamp 可能遺失（best-effort）。
 
-## 擴充路徑：帳號密碼 / 自己當 issuer
+## 擴充路徑：外部 OIDC 登入
 
-提案（未實作）見 [`docs/identity-login.md`](identity-login.md)：方案比較（自建 issuer vs 外部 OIDC verifier）、argon2id / EdDSA / KEK / JWKS / refresh rotation / 登入節流的設計、Console 影響、遷移與拆 PR 計畫、未決問題。
-先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
+現行規格（已定案，未實作）見 [`docs/identity-login.md`](identity-login.md)：登入走**外部 OIDC**（本機開發用 Dex），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
+自建帳密 issuer 降為可選模組（未排程），設計要點留在該文件的「方案 A」一節。先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
 
 ## Inventory 寫入（`inventory.v1.InventoryService`）
 
