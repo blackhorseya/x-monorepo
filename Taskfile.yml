@@ -128,7 +128,7 @@ tasks:
     cmds: [scripts/cover-gate.sh]
 
   check-gen-fresh:
-    desc: regenerating must produce no diff (Go side; CI also checks TS)
+    desc: regenerating must produce no diff — Go / OpenAPI / Wire only, NOT TS (use check-gen-fresh-all for TS freshness)
     cmds:
       - task: gen
       - task: wire
@@ -136,6 +136,19 @@ tasks:
         git diff --quiet -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml' || {
           echo "generated code is stale — commit the result of: task gen wire"
           git --no-pager diff --stat -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml'
+          exit 1
+        }
+
+  check-gen-fresh-all:
+    desc: same as the CI gen-freshness job — task gen wire gen-ts, then any diff fails (includes web/packages/proto TS; needs network)
+    cmds:
+      - task: gen
+      - task: wire
+      - task: gen-ts
+      - |
+        git diff --quiet -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml' 'web/packages/proto/src/gen' || {
+          echo "generated code is stale — commit the result of: task gen wire gen-ts"
+          git --no-pager diff --stat -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml' 'web/packages/proto/src/gen'
           exit 1
         }
 

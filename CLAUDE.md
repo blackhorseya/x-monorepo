@@ -18,6 +18,7 @@ task test                  # go test -race，每個 module
 task gate-fast FILE=a.go   # gofmt + vet + golangci-lint --fast-only + archtest，只跑該檔所屬 module（秒級）
 task gate-local            # gen freshness + buf lint + affected modules 的 go test -race（~1 min）
 task gate-ci               # 與 CI 等價的全量檢查
+task check-gen-fresh-all   # gen freshness 含 TS（= CI gen-freshness；需要網路）；check-gen-fresh 只含 Go / OpenAPI / Wire
 task breaking              # proto 對 main 做 buf breaking
 task compose-up            # 本機 Postgres :5432 + Redis :6379 + grafana/otel-lgtm（Grafana :3000、OTLP :4317）
 task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會自己跑
@@ -174,6 +175,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - Receiver：domain `x`、usecase `uc`、infra `i`、handler `h`；interface 參數 `c context.Context`，
   實作內 `ctx := contextx.FromContext(c)`
 - PR title 遵循 Conventional Commits
+- **Review contracts**（`docs/workflow.md#review-contracts`，PR template 有 checkbox）：proto 變更的驗證回報要明列 Go / OpenAPI / Wire / **TS** 的結果（`task check-gen-fresh` 不含 TS，用 `task check-gen-fresh-all`）；宣稱 migration 線上可用要用完整交易驗鎖；認證 generation／取消測試 reload 後同時驗 cookie 與 server session；公開 mutation 設計要有寫入量與清理上界的資源表
 - **RED commit 要失敗在「目標」**：行為變更先提交失敗的測試，但「指令 exit 非零」不等於缺陷重現——typo、缺依賴、
   fixture 建立失敗、上游 use case 先拒絕都會讓新測試變紅。
   - behavioral fix（修 regression、改行為）：RED 必須失敗在**目標 assertion**（預期的 assertion 訊息）。
