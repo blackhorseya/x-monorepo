@@ -2,9 +2,12 @@ import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComp
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
+import { getCredentialGeneration } from "./auth";
 import { CredentialControl } from "./components/credential";
 import { RouteError, RoutePending } from "./components/route-status";
 import { ServerVersion } from "./components/version";
+import { queryClient } from "./queryClient";
+import { adminProbeQuery } from "./queries";
 import type { ExpireSearch } from "./routes/expire";
 import type { OrdersSearch } from "./routes/orders";
 import type { PruneSearch } from "./routes/prune";
@@ -29,8 +32,10 @@ const adminLinks = [
 ] as const;
 
 // An admin page behind AdminGate: for anyone else the page never mounts, so it asks the server
-// nothing (not even for its chunk, once the router has the answer) and shows the gate instead.
-// The lazy component's preload is kept, so link intent still warms the chunk.
+// nothing and shows the gate instead. Its chunk is not fetched either: the router calls a route
+// component's preload before anything renders (direct load, link intent, navigation), so preload
+// only reaches the page's own while the admin probe has already answered true for this
+// credential. Until then the chunk is fetched when the page first renders, behind the gate.
 type LazyPage = ReturnType<typeof lazyRouteComponent>;
 const gated = (Page: LazyPage): LazyPage => {
   const Gated = () => (
@@ -38,7 +43,10 @@ const gated = (Page: LazyPage): LazyPage => {
       <Page />
     </AdminGate>
   );
-  Gated.preload = Page.preload;
+  Gated.preload = async () => {
+    const known = queryClient.getQueryData(adminProbeQuery(getCredentialGeneration()).queryKey);
+    if (known === true) await Page.preload?.();
+  };
   return Gated;
 };
 
