@@ -321,6 +321,7 @@ case $step in
   ok)    echo '{"fake":"bundle"}' > "$bundle" ;;
   409)   echo "Error: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
   v2)    echo "Error: signing: adding rekor v2 entry: rpc error: code = AlreadyExists desc = an equivalent entry already exists" >&2; exit 1 ;;
+  nonrekor409) echo "Error: proxy: HTTP 409 Conflict from https://registry.example/v2/" >&2; exit 17 ;;
   url)   echo "Error: fetching signing config: GET https://config.example/409/config returned 503" >&2; exit 17 ;;
   exists) echo "Error: creating output: file AlreadyExists" >&2; exit 17 ;;
   empty) : > "$bundle" ;;
@@ -381,6 +382,13 @@ expect_eq    "sign: AlreadyExists outside Rekor is not retried" 1 "$sb_tries"
 SB_EXTRA="COSIGN_SIGN_RETRIES=3" sign_blob ceiling "409 409 409 409 ok"
 if [ "$sb_rc" != 0 ]; then ok; else bad "sign: COSIGN_SIGN_RETRIES must not raise the ceiling"; fi
 expect_eq    "sign: the ceiling stays 3 attempts"            3 "$sb_tries"
+for rv in -1 abc ""; do
+  SB_EXTRA="COSIGN_SIGN_RETRIES=$rv" sign_blob "ceiling$rv" "409 409 409 409 ok"
+  expect_eq  "sign: COSIGN_SIGN_RETRIES='$rv' is ignored, ceiling stays 3" 3 "$sb_tries"
+done
+sign_blob nonrekor409 "nonrekor409 ok"
+expect_eq    "sign: a 409 that does not name Rekor is not retried" 1 "$sb_tries"
+if [ "$sb_rc" != 0 ]; then ok; else bad "sign: non-Rekor 409 must fail"; fi
 badseq="$tmp/badseq"; mkdir -p "$badseq"
 printf '#!/bin/sh\necho seq: broken >&2\nexit 127\n' > "$badseq/seq"; chmod +x "$badseq/seq"
 SB_EXTRA="PATH=$badseq:$signfake:$PATH" sign_blob noseq "ok"
