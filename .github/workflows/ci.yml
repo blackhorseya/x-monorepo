@@ -278,6 +278,8 @@ jobs:
       - run: task release-check release-snapshot
       - name: .goreleaser.yaml's signs command works with this cosign (throwaway key)
         run: scripts/cosign-smoke.sh
+      - name: a Rekor v2 409 is re-signed, a 503 is not (#215, real cosign, loopback v2)
+        run: scripts/cosign-v2-conflict-smoke.sh
       # cosign's default signing config must still be Rekor v1: #204's 409 handling is v1-only (#215).
       # TUF changes without a repo commit, so rekor-canary.yml runs this weekly as well.
       - name: the default signing config has no Rekor v2 log (#215)

@@ -10,7 +10,7 @@
 #
 # Fail-closed:
 #  - only an output line that is a Rekor conflict (v1 `log/entries][409]`, v2 `adding rekor v2
-#    entry: unexpected response: 409` or `code = AlreadyExists`) is retried, at most 2 more times (a
+#    entry: unexpected response: 409`) is retried, at most 2 more times (a
 #    constant, not configurable); any other failure exits at once;
 #  - a 409 is never success: a failed attempt stays failed, and when the retries run out the
 #    script exits non-zero;
@@ -37,9 +37,10 @@ log=$(mktemp); trap 'rm -f "$log"' EXIT
 # something else are ordinary failures). The two shapes of the pinned cosign v3.1.4:
 #   v1  `[POST /api/v1/log/entries][409] createLogEntryConflict {...}`  (rekor client)
 #   v2  `adding rekor v2 entry: unexpected response: 409 {...}`  (sigstore-go v1.3.0 +
-#       rekor-tiles v2.3.0 pkg/client/write: the HTTP writer; a gRPC transport would say
-#       `adding rekor v2 entry: ... code = AlreadyExists`)
-conflict='log/entries\]\[409\]|adding rekor v2 entry:.*(unexpected response: 409([^0-9]|$)|code = AlreadyExists)'
+#       rekor-tiles v2.3.0 pkg/client/write, the HTTP writer; scripts/cosign-v2-conflict-smoke.sh
+#       runs the real cosign against a loopback v2 server to keep this string honest)
+# No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
+conflict='log/entries\]\[409\]|adding rekor v2 entry: unexpected response: 409([^0-9]|$)'
 
 attempt=0
 while [ "$attempt" -lt "$max" ]; do

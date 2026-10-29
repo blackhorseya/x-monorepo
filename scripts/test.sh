@@ -374,9 +374,8 @@ expect_eq    "sign: empty bundle is not retried"           1 "$sb_tries"
 if [ ! -s "$sb_bundle" ]; then ok; else bad "sign: empty bundle case left a non-empty bundle"; fi
 sign_blob none "none"
 if [ "$sb_rc" != 0 ]; then ok; else bad "sign: success with no bundle must fail"; fi
-sign_blob v2 "v2 ok"
-expect_eq    "sign: Rekor v2 AlreadyExists is retried"       2 "$sb_tries"
-expect_eq    "sign: Rekor v2 AlreadyExists then success"     0 "$sb_rc"
+sign_blob v2 "v2 v2 v2"
+expect_eq    "sign: a gRPC-shaped AlreadyExists (cosign never prints one) is not retried" 1 "$sb_tries"
 # The pinned cosign v3.1.4 (sigstore-go v1.3.0 + rekor-tiles v2.3.0 pkg/client/write/write.go) words a
 # Rekor v2 409 as "adding rekor v2 entry: unexpected response: 409 <json body>" (observed with the real
 # cosign against a loopback v2 server, PR #249 review).
