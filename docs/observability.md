@@ -12,6 +12,14 @@
   `otelconnect` 產 `rpc.server.call.duration`，`contrib/instrumentation/runtime` 產 Go runtime metrics，
   auth interceptor 記 `auth.decisions`（`auth_decisions_total{result, method}`：`ok` / `public` / `anonymous` / `missing` / `invalid` × `api_key` / `jwt` / `none`——
   RPC status 只會說 `unauthenticated`，分不出「沒帶」和「帶了被拒」；label 只有這兩個有限集合，沒有 subject）
+- **identity 的 key resolver**（`identity/adapters/auth`，`apps/rpc` 用注入的 MeterProvider 建）：
+  `identity_resolver_lookups_total{result}`，result 只有五個值，一次 lookup 一定落在 `hit` 或 `miss`，`miss` 之後再落在 `db_ok` / `db_miss` / `error` 其中一個：
+  `hit` = cache 命中（cache 住的成功和 cache 住的拒絕都算）、`miss` = cache 沒有（沒進過、過了 TTL、或 TTL=0 關掉 cache）、
+  `db_ok` = use case 認得這把 key、`db_miss` = use case 回 domain error（不存在 / revoked / expired / account disabled / 太短；也會被 cache）、
+  `error` = 基礎設施錯誤（DB 掛、`auth.resolver_timeout`；不 cache）。所以 `hit + miss` = 全部 lookup，`miss = db_ok + db_miss + error`，
+  cache hit ratio = `hit / (hit + miss)`。`identity_resolver_cache_entries` 是該 replica 目前 cache 的 entry 數（上限 10k，滿了整個丟掉；
+  過期的 entry 要等下一次被查到才刪，所以不會自己下降）。counter 跨 replica `sum`，gauge 每個 replica 各一份、看 `instance`，不要 sum。
+  **label 只有 `result`**：不放 key、prefix、hash、account id、key id 或任何每把 key 不同的值，series 數固定 ≤ 5（`resolver_metrics_test.go` 斷言）
 - **worker 的 backlog**（`platform/eventbus`，`apps/worker` 註冊）：`eventbus.consumer.duration{topic, result}` 每次 handler
   attempt 一個 sample（retry 也算，被 park 的訊息就是它最後一次 `failed`）；`eventbus.Lag` 掛 observable gauge，每次 collect
   才去查：`eventbus_consumer_lag{topic, consumer_group, broker}` = 該 group 還沒 ack 的訊息數——Postgres 用和 watermill-sql

@@ -28,11 +28,12 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 | Saga | `ordering_orders{status}`、`inventory_reservations{status}`、`*_oldest_age_seconds{status}` | ordering ↔ inventory 的漏斗：各 status 幾筆、最老一筆卡多久；PENDING 不消而 CONFIRMED / COMPLETED / CANCELLED 不動就是 saga 斷了；RESERVED 最老一筆超過 TTL 是 expire 沒跑（EXPIRED 在長 = TTL 在殺單，看是不是 TTL 太短）；CONFIRMED 一直不變 COMPLETED / CANCELLED 是業務面（沒人按 Complete），不是 bug；`$service` 選 `worker` |
 | HTTP routes | `http_server_request_duration_seconds`（otelgin） | `/api/*` 的 route / status、p95 |
 | Auth | `auth_decisions_total{result, method}`、`rpc_server_call_duration_seconds_count{rpc_response_status_code="permission_denied"}` | 每秒多少 ok / public / anonymous / missing / invalid，各用什麼 credential；被拒的三種（沒帶、帶錯、role 不夠）疊在一起看。counter，`sum` |
+| Identity | `identity_resolver_lookups_total{result}`、`identity_resolver_cache_entries` | key resolver 的 lookup 各 result（hit / miss / db_ok / db_miss / error）每秒多少、cache hit ratio、error 率、每個 replica 的 cache 大小。counter `sum`，cache size 是 per replica（`max by (instance)`） |
 | Go runtime | `go_goroutine_count`、`go_memory_used_bytes`… | OTel runtime instrumentation 的名字，OTLP 與 `/api/metrics` 相同。`/api/metrics` 用自建 registry，沒有 client_golang 的 `go_memstats_*`、`process_*` |
 | Logs | Loki `{service_name="$service"} \| severity_text=~"WARN\|ERROR"` | severity 是 structured metadata，要用 `\|` 不是 `\|=` |
 
 Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/alerting.yaml` → folder `x-monorepo`，每分鐘評估；group
-`worker-eventbus` 全部用 `max by`，gauge 是 per replica 不能 sum；group `rpc-auth` 讀 counter，跨 replica `sum`）：
+`worker-eventbus` 全部用 `max by`，gauge 是 per replica 不能 sum；group `rpc-auth` 與 `rpc-identity` 讀 counter，跨 replica `sum`）：
 
 | rule | 條件 | 意思 / 怎麼處理 |
 |---|---|---|
@@ -46,8 +47,9 @@ Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/ale
 | Eventbus metrics absent | `absent(eventbus_consumer_lag)` 持續 10m | 沒有 worker 在匯出，上面幾條都是瞎的 |
 | Auth credential rejections | `rate(auth_decisions_total{result="invalid"}[5m])` > 1/s 持續 5m（by `method`） | 有人在猜 key / 重放 token，或 key 換了 client 還送舊的；Loki `{service_name="rpc"} \| code="unauthenticated"` 看是哪個 procedure、request id（credential 本身不記）。rate limit 在 auth 外層，洪水先被擋 |
 | Auth permission denied | `rate(rpc_server_call_duration_seconds_count{rpc_response_status_code="permission_denied"}[5m])` > 0.1/s 持續 10m（by `rpc_method`） | 驗過身分但 role 不夠（`auth.permission_denied`）：access line 有 `sub`，是正當 operator 就補 role（`name=key:role` / JWT `roles`），不是就是在摸 admin surface |
+| Identity resolver errors | `sum(rate(identity_resolver_lookups_total{result="error"}[5m])) / sum(rate(identity_resolver_lookups_total{result=~"db_ok\|db_miss\|error"}[5m]))` > 5% 持續 5m（severity critical） | resolver 查不到 DB 或 timeout：30s TTL 內驗過的 key 還能過，其他的被拒成 `auth.invalid_credential`，有 valid key 的 caller 被鎖在外面。健康時是 0，只有基礎設施故障才會有 `error`，所以門檻不用高；分母刻意只算會碰 DB 的 lookup（hit 不算）——outage 時 cache 命中照過，算進去會把比例稀釋到看不見。5m 吸收 DB failover / 連線池重建的短暫抖動。先看 Postgres，再看 Loki `{service_name="rpc"} \|= "credential resolver failed"` |
 
-每條都帶 `__dashboardUid__` / `__panelId__`，所以「Worker — eventbus」與「Auth」的 panel 上會畫 alert 狀態。只有 rule 沒有送達：contact point /
+每條都帶 `__dashboardUid__` / `__panelId__`，所以「Worker — eventbus」、「Auth」與「Identity」的 panel 上會畫 alert 狀態。只有 rule 沒有送達：contact point /
 notification policy 由部署環境依 `severity` label 自己接（Grafana → Alerting → Notification policies）。Alerting provisioning
 只在啟動時讀，改完一樣 `task grafana-reload`。
 
