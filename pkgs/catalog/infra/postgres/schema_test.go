@@ -111,3 +111,27 @@ func TestSchema_SKUOrderIsBytewise(t *testing.T) {
 		}
 	}
 }
+
+// The Go whitelist the aggregate checks and the table the foreign key checks are one list.
+func TestSchema_CurrencySeedMatchesGo(t *testing.T) {
+	db := migratedDB(t)
+
+	var seeded []string
+	if err := db.Raw(`SELECT code FROM catalog.currencies ORDER BY code COLLATE "C"`).Scan(&seeded).Error; err != nil {
+		t.Fatal(err)
+	}
+	want := product.CurrencyCodes()
+	if len(seeded) != len(want) {
+		t.Fatalf("seeded %d codes, Go has %d", len(seeded), len(want))
+	}
+	for i := range want {
+		if seeded[i] != want[i] {
+			t.Fatalf("code %d: seed %q, Go %q", i, seeded[i], want[i])
+		}
+	}
+	for _, c := range want { // and every one of them is usable as a price currency
+		if err := db.Exec(insertSQL, "CUR-"+c, "x", 1, c).Error; err != nil {
+			t.Errorf("seeded currency %s refused by the foreign key: %v", c, err)
+		}
+	}
+}

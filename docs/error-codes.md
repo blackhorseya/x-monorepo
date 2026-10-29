@@ -39,7 +39,8 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `stock.release_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Release 超過 reserved |
 | `stock.commit_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Commit 超過 reserved（stock 列與 reservation 不一致：資料壞了） |
 | `stock.not_found` | `NOT_FOUND` | inventory domain | |
-| `product.invalid_sku` / `product.invalid_name` / `product.invalid_price` | `INVALID_ARGUMENT` | catalog domain | UpsertProduct / GetProduct / DeactivateProduct / 批次報價的參數：sku 1–64 bytes、name 1–200 字元且不能全是空白、price 必須經 `kernel.NewMoney` 建出（rpc 先被 protovalidate 擋，這是直呼 use case 的那條） |
+| `product.invalid_sku` / `product.invalid_name` / `product.invalid_price` | `INVALID_ARGUMENT` | catalog domain | UpsertProduct / GetProduct / DeactivateProduct / 批次報價的參數：sku 1–64 bytes、name 1–200 字元且不能全是空白（`strings.TrimSpace` 的定義）、price 必須是非負金額加 3 個大寫字母的幣別——domain 對 `Money` 重新檢查（`Multiply(-1)`、`ZeroMoney("usd")` 這類繞過 `NewMoney` 的值也擋）（rpc 先被 protovalidate 擋，這是直呼 use case 的那條） |
+| `product.unsupported_currency` | `INVALID_ARGUMENT` | catalog domain | 幣別格式對但不是已指派的 ISO 4217 代碼（`AAA`、`ZZZ`…）；白名單是 SIX List One（`domain/product/currency_codes.go`，與 `catalog.currencies` 同一份）。protovalidate 只擋格式，所以這個一定走到 domain |
 | `money.invalid_amount` / `money.invalid_currency` | `INVALID_ARGUMENT` | kernel `Money` | 金額為負、幣別不是 3 個大寫英文字母（ISO 4217 形狀）；`UpsertProduct` 的價格（rpc 先被 protovalidate 擋） |
 | `product.not_found` | `NOT_FOUND` | catalog domain | `GetProduct` / `DeactivateProduct` 的 SKU 沒有 product（`UpsertProduct` 會建立它，不會回這個） |
 | `reservation.invalid_order_id` / `reservation.no_lines` / `reservation.invalid_sku` / `reservation.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | aggregate 不變量 |

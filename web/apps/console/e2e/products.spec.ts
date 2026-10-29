@@ -15,6 +15,9 @@ test("save a product, reprice it, deactivate it, bring it back", async ({ page }
   await page.getByLabel("Currency").fill("usd");
   await page.getByRole("button", { name: "Save product" }).click();
 
+  // Narrow the list to this run's SKU first: a database reused across runs holds more than one page.
+  await page.getByLabel("SKU prefix").fill(sku);
+  await page.getByRole("button", { name: "Filter" }).click();
   const row = page.getByRole("row").filter({ hasText: sku });
   await expect(row).toHaveCount(1);
   await expect(row).toContainText("Apple");
@@ -57,7 +60,6 @@ test("filter by prefix, and a filtered link opens prefilled", async ({ page }) =
   await page.getByLabel("Name", { exact: true }).fill("Zed");
   await page.getByLabel("Price (minor units)").fill("5");
   await page.getByRole("button", { name: "Save product" }).click();
-  await expect(page.getByRole("row").filter({ hasText: other })).toHaveCount(1);
 
   await page.getByLabel("SKU prefix").fill(other);
   await page.getByRole("button", { name: "Filter" }).click();

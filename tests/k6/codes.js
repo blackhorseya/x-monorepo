@@ -68,6 +68,7 @@ export const KNOWN_CODES = new Set([
   "product.invalid_price",
   "product.invalid_sku",
   "product.not_found",
+  "product.unsupported_currency",
   "request.rate_limited",
   "request.timeout",
   "request.validation_failed",

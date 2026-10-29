@@ -17,6 +17,19 @@ const (
 	maxNameRunes = 200
 )
 
+// assigned is currencyCodes as a set.
+var assigned = func() map[string]struct{} {
+	set := make(map[string]struct{}, len(currencyCodes))
+	for _, c := range currencyCodes {
+		set[c] = struct{}{}
+	}
+
+	return set
+}()
+
+// CurrencyCodes lists the ISO 4217 codes a Product may be priced in, ascending (a copy).
+func CurrencyCodes() []string { return append([]string(nil), currencyCodes...) }
+
 // SKU identifies a Product.
 type SKU string
 
@@ -83,11 +96,16 @@ func validateName(name string) error {
 	return nil
 }
 
-// validatePrice refuses the zero Money, the one value that can exist without
-// going through kernel.NewMoney (it has no currency).
+// validatePrice holds the price to what kernel.NewMoney guarantees. Money's fields are private,
+// but its zero value, Multiply (which can go negative) and ZeroMoney (any string) all produce
+// values NewMoney would have refused, so the aggregate re-checks instead of trusting the type;
+// then the currency must be an assigned ISO 4217 code, which the kernel's shape check cannot say.
 func validatePrice(price kernel.Money) error {
-	if price.Currency() == "" {
+	if _, err := kernel.NewMoney(price.Amount(), price.Currency()); err != nil {
 		return ErrInvalidPrice
+	}
+	if _, ok := assigned[price.Currency()]; !ok {
+		return ErrUnsupportedCurrency
 	}
 
 	return nil

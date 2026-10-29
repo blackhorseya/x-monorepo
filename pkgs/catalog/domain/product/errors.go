@@ -7,10 +7,11 @@ import (
 )
 
 var (
-	ErrInvalidSKU   = kernel.NewError(kernel.KindInvalidArgument, "product.invalid_sku", "sku must be 1 to 64 bytes")
-	ErrInvalidName  = kernel.NewError(kernel.KindInvalidArgument, "product.invalid_name", "name must be 1 to 200 characters and not blank")
-	ErrInvalidPrice = kernel.NewError(kernel.KindInvalidArgument, "product.invalid_price", "price must be built with kernel.NewMoney")
-	ErrNotFound     = kernel.NewError(kernel.KindNotFound, "product.not_found", "product not found")
+	ErrInvalidSKU          = kernel.NewError(kernel.KindInvalidArgument, "product.invalid_sku", "sku must be 1 to 64 bytes")
+	ErrInvalidName         = kernel.NewError(kernel.KindInvalidArgument, "product.invalid_name", "name must be 1 to 200 characters and not blank")
+	ErrInvalidPrice        = kernel.NewError(kernel.KindInvalidArgument, "product.invalid_price", "price must be a non-negative amount with a 3-letter currency, as kernel.NewMoney builds")
+	ErrUnsupportedCurrency = kernel.NewError(kernel.KindInvalidArgument, "product.unsupported_currency", "currency must be an assigned ISO 4217 code")
+	ErrNotFound            = kernel.NewError(kernel.KindNotFound, "product.not_found", "product not found")
 
 	// ErrStale is returned by Repository.Save when the row changed since it was
 	// loaded (optimistic concurrency). It wraps kernel.ErrConcurrentUpdate and is

@@ -211,3 +211,21 @@ func TestBlankNames(t *testing.T) {
 		t.Errorf("zero width space: %v", err)
 	}
 }
+
+func TestCurrencyCodes(t *testing.T) {
+	codes := product.CurrencyCodes()
+	if len(codes) < 100 {
+		t.Fatalf("only %d codes", len(codes))
+	}
+	seen := map[string]bool{}
+	for i, c := range codes {
+		if _, err := kernel.NewMoney(0, c); err != nil || seen[c] || (i > 0 && codes[i-1] >= c) {
+			t.Fatalf("code %q at %d: shape err=%v duplicate=%v; want distinct, ascending, 3 capital letters", c, i, err, seen[c])
+		}
+		seen[c] = true
+	}
+	codes[0] = "XXX-changed"
+	if product.CurrencyCodes()[0] == "XXX-changed" {
+		t.Fatal("CurrencyCodes returns the package's own slice")
+	}
+}

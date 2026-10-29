@@ -12,8 +12,8 @@
 | 欄位 | 規則 |
 |---|---|
 | `sku` | 1–64 bytes（`product.invalid_sku`）；主鍵 |
-| `name` | 1–200 字元，不能全是空白（`product.invalid_name`） |
-| `price` | `kernel.Money`：minor units（cents）、不能為負（`money.invalid_amount`）、幣別是 3 個大寫英文字母（`money.invalid_currency`）。**幣別屬於 product**，改價可以同時換幣別 |
+| `name` | 1–200 字元，不能全是空白（`product.invalid_name`）；「空白」= `strings.TrimSpace` 去掉的字元（tab / LF / VT / FF / CR / 空格 / U+0085 / U+00A0 / Unicode Z 類），schema 的 CHECK 用明列的字元集表達同一個定義（不用 `[[:space:]]`，它跟 locale 走）；DB 寫得進去的 name，Get / List 一定重建得起來 |
+| `price` | `kernel.Money`：minor units（cents）、不能為負、幣別必須是**已指派的 ISO 4217 代碼**（`product.unsupported_currency`；格式不對是 `product.invalid_price`）。`Money` 的零值、`Multiply(-1)`、`ZeroMoney(任意字串)` 都能繞過 `NewMoney`，所以 aggregate 對每個進來的價格（`New` / `Reprice` / `Reconstitute`）重新檢查。**幣別屬於 product**，改價可以同時換幣別。白名單來源 SIX List One（2026-09-17，178 個代碼，`domain/product/currency_gen.py` 產生 `currency_codes.go` 與 migration 的 seed）；**不動 `kernel.NewMoney`**（ordering 也用它） |
 | `active` | 下架（`Deactivate`）的 product 還在，但不能被報價 |
 | `version` / `update_time` | optimistic lock（`product.ErrStale` wrap `kernel.ErrConcurrentUpdate`，rpc 回 `ABORTED` + `x-error-code: concurrent_update`）；時間由 `port.Clock` 給，domain 不呼叫 `time.Now()` |
 
@@ -48,7 +48,9 @@ Domain 方法反映行為：`Rename`、`Reprice`、`Deactivate`、`Activate`。`
 ## 儲存
 
 - Postgres：schema `catalog`，表 `catalog.products`（migration `0001_catalog`，已接進 `apps/migrate`）。欄位 `price_amount bigint`、`price_currency char(3)`，
-  CHECK 把 domain 的不變量也寫進 schema（金額 ≥ 0、幣別 `^[A-Z]{3}$`、sku / name 長度），手寫的壞資料進不來。`text_pattern_ops` index 服務 `sku LIKE 'prefix%'`。
+  `catalog.currencies`（ISO 4217 參照表，與 Go 白名單同一份，測試比對一致）+ `products.price_currency` 的 FK；CHECK 把其餘不變量也寫進 schema（金額 ≥ 0、sku / name 長度與 name 不得全空白），手寫的壞資料進不來。
+  `sku` 欄位是 `COLLATE "C"`：keyset 分頁、`ORDER BY sku`、`LIKE 'prefix%'` 都是 bytewise，和 memory repo / Go 一致，不隨 cluster 的 locale 變（在 en_US.UTF-8 的 cluster 上實測）；C collation 的主鍵本身就服務 prefix 搜尋，所以沒有額外的 `text_pattern_ops` index。
+  下一次 ISO 4217 發布 = 新 migration 對 `catalog.currencies` 補 / 刪差異，並重跑 `currency_gen.py` 更新 Go 白名單。
 - `postgres.url` 空 → in-memory repository（`task run` 與 E2E 不需要 DB），遵守同一份 `Save` 合約（`ErrStale`）。
 - `Save`：version 0 是 insert（同 SKU 第二次 insert 輸 → `ErrStale`），其他是 `UPDATE … WHERE version = ?`；`UpsertProduct` 在同一個 transaction 內 find → save。
 
