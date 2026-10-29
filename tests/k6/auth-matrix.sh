@@ -33,7 +33,8 @@ trap stop EXIT
 fails=()
 # cell <name> <script> <expect: pass|fail> <match: text the k6 output must contain, or -> <key|-> <server env…>
 #   env knobs: FAIL_PATH=<procedure> → a fault proxy in front of the rpc answers that procedure's
-#   first call 503 (once); K6_ENV="a=b c=d" → extra k6 -e.
+#   first call 503 (once), REFLECT=1 → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
+#   k6 -e; FORBID=<text> → the k6 output must not contain it (a key must never be printed).
 cell() {
   local name=$1 s=$2 expect=$3 match=$4 key=$5; shift 5
   if [ ${#only[@]} -gt 0 ]; then
@@ -65,6 +66,8 @@ cell() {
   local got=pass; [ $rc -eq 0 ] || got=fail
   if [ "$got" != "$expect" ]; then
     echo "   ✗ $name: expected $expect, k6 exit $rc"; tail -n 25 "$log.log"; fails+=("$name")
+  elif [ -n "${FORBID:-}" ] && grep -q -- "$FORBID" "$log.log"; then
+    echo "   ✗ $name: k6 output contains the forbidden text (a credential?)"; fails+=("$name")
   elif [ "$match" != - ] && ! grep -q -- "$match" "$log.log"; then
     echo "   ✗ $name: k6 output lacks '$match'"; tail -n 25 "$log.log"; fails+=("$name")
   else
@@ -93,6 +96,9 @@ cell create-public orders fail order.not_found "$PLAIN_KEY" "${ON[@]}" "APP_AUTH
 FAIL_PATH=$WHOAMI cell whoami-503 orders pass - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 # The deciding CreateOrder fails once (503): never cached as an answer, aborts naming the source.
 FAIL_PATH=$CREATE cell create-503 orders fail "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+
+# The same failure with a body that echoes the key: abort names RPC, status and code, never the body.
+FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect orders fail "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 
 if [ ${#fails[@]} -gt 0 ]; then echo "auth matrix FAILED: ${fails[*]}"; exit 1; fi
 echo "auth matrix ok"
