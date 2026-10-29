@@ -17,6 +17,9 @@ export const BASE_URL = __ENV.BASE_URL || "http://127.0.0.1:8080";
 // the platform's own code (request.rate_limited, request.timeout, a domain code).
 export const rpcDuration = new Trend("rpc_duration", true);
 export const rpcErrors = new Counter("rpc_errors");
+// Successful operations per RPC: the scripts threshold on it (count>0) so a run that was
+// refused everywhere cannot pass on "no errors" alone, and cells of the auth gate are comparable.
+export const rpcOk = new Counter("rpc_ok");
 
 export function rpc(method, body, extra = {}) {
   const headers = { "Content-Type": "application/json" };
@@ -46,10 +49,17 @@ export function customerId(name) {
   return anonymous ? { customer_id: name } : {};
 }
 
+let shown = 0; // per VU
 export function ok(res, what) {
   const good = check(res, { [`${what} 200`]: (r) => r.status === 200 });
   if (!good) {
     rpcErrors.add(1, { rpc: what, code: errorCode(res) });
+    // the counter tags are not in the summary; say which RPC was refused, and how, a few times
+    if (shown++ < 3) {
+      console.error(`${what}: status ${res.status} code ${errorCode(res)}`);
+    }
+  } else {
+    rpcOk.add(1, { rpc: what });
   }
   return good ? res.json() : null;
 }
@@ -81,6 +91,12 @@ export function setStock(i, onHand) {
     if (res.status !== 409) break;
   }
   return ok(res, "SetStock");
+}
+
+// customer name for a script's own customers (auth off, or a server that does not know the
+// caller): RUN_ID in it, so runs sharing a database do not share customers.
+export function customer(label) {
+  return `k6-${__ENV.RUN_ID || "run"}-${label}`;
 }
 
 export function sku(i) {

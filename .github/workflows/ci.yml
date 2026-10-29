@@ -187,6 +187,32 @@ jobs:
       - if: failure()
         run: tail -n 50 bin/k6-*.log
 
+  # The same scripts in every auth state (tests/k6/auth-matrix.sh): auth on with a role-less /
+  # an admin key, auth off with no key / a key sent, × orders / reservation, 2 VU, plus the
+  # per-procedure-public and fails-once fixtures (#193). Parallel to `k6`, same trigger.
+  k6-auth:
+    needs: affected
+    if: needs.affected.outputs.run_k6 == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup
+      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
+      - run: task build
+      - run: APP_CONFIG=configs/config.example.yaml APP_POSTGRES_URL=$DATABASE_URL bin/migrate up
+      - run: task k6-auth-matrix
+      - if: failure()
+        run: tail -n 50 bin/k6-auth-*.log
+
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
   # commit (the console one needs node: pnpm build of web/apps/console), install → smoke →
   # upgrade → smoke (task helm-kind), and, on a cluster of its own, KEDA + an OTLP collector +

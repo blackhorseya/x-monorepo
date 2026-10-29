@@ -16,7 +16,7 @@
 import http from "k6/http";
 import { sleep } from "k6";
 import { Counter, Trend } from "k6/metrics";
-import { rpc, ok, sku, setStock, customerId } from "./lib.js";
+import { rpc, ok, sku, setStock, customerId, customer } from "./lib.js";
 
 // GetReservation is 404 (not_found) until the worker has consumed the order;
 // that is the poll loop's "not yet", not a failed request.
@@ -50,6 +50,10 @@ export const options = {
     order_not_confirmed: ["count==0"],
     reservation_not_committed: ["count==0"],
     rpc_errors: ["count==0"],
+    // the chain ran: orders created, reserved (latency samples), confirmed and committed
+    "rpc_ok{rpc:CreateOrder}": ["count>0"],
+    "rpc_ok{rpc:CompleteOrder}": ["count>0"],
+    "rpc_ok{rpc:GetReservation}": ["count>0"],
   },
   summaryTrendStats: ["avg", "p(50)", "p(95)", "p(99)", "max"],
 };
@@ -63,7 +67,7 @@ export function setup() {
 export default function () {
   const created = ok(
     rpc("ordering.v1.OrderService/CreateOrder", {
-      ...customerId(`k6-reserve-${__VU}`),
+      ...customerId(customer(`reserve-${__VU}`)),
       items: [
         {
           sku: sku(Math.floor(Math.random() * SKUS)),
