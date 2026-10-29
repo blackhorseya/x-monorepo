@@ -28,6 +28,10 @@ var (
 
 	// ErrDuplicate is returned by Repository.Save when another order already owns the id.
 	ErrDuplicate = kernel.NewError(kernel.KindConflict, "order.duplicate", "order already exists")
+	// ErrIdempotencyKeyReused is CreateOrder's answer to a key this customer already
+	// spent on a request with different items. The message is fixed on purpose: it
+	// never carries the other order, its items, or the key.
+	ErrIdempotencyKeyReused = kernel.NewError(kernel.KindConflict, "order.idempotency_key_reused", "idempotency key was already used for a different request")
 	// ErrInvalidStatus means persisted state names a status this version does not know.
 	ErrInvalidStatus = kernel.NewError(kernel.KindInternal, "order.invalid_status", "unknown order status")
 )
