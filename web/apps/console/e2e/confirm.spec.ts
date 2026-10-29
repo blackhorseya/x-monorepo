@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { withDB } from "./mode";
 import { uid } from "./uid";
+import { cellUnder, createCard, filterCard } from "./orders-ui";
 
 // Cancel and Complete on an order ask first: Cancel gives the reservation back, Complete commits
 // it (stock sold) and cannot be undone. Declining must send nothing.
@@ -64,22 +66,36 @@ test("detail: Complete asks first and declining sends nothing", async ({ page })
 
 test("list: Cancel asks first; declining leaves the order PENDING", async ({ page }) => {
   const customer = `e2e-confirm-${uid()}`;
+  // With a worker, an order for a SKU nobody stocked is REJECTED and cancelled by inventory, so
+  // its Cancel button vanishes whenever the worker beats the click. Stock a SKU of our own, as
+  // orders.spec.ts does; the order then settles at CONFIRMED and stays cancellable.
+  const sku = withDB ? `E2E-C-${uid()}` : "SKU-1";
+  if (withDB) {
+    await page.goto(`/stock?prefix=${sku}`);
+    await page.getByLabel("SKU", { exact: true }).fill(sku);
+    await page.getByLabel("On hand").fill("5");
+    await page.getByRole("button", { name: "Set", exact: true }).click();
+    await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
+  }
   await page.goto("/orders");
-  await page.getByLabel("Customer").first().fill(customer);
+  await createCard(page).getByLabel("Customer").fill(customer);
+  await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByRole("button", { name: "Create order" }).click();
-  await page.getByLabel("Customer").nth(1).fill(customer);
+  await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
   const row = page.getByRole("row").filter({ hasText: customer });
   await expect(row).toHaveCount(1);
+  const status = await cellUnder(page, row, "Order");
 
   await row.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(status).toHaveText(withDB ? /^(PENDING|CONFIRMED)$/ : "PENDING");
   await expect(row.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
 
   await row.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel order" }).click();
-  await expect(row.getByText("CANCELLED")).toBeVisible();
+  await expect(status).toHaveText("CANCELLED");
 });
