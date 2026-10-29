@@ -12,6 +12,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/pricing"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
@@ -41,6 +42,10 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(port.IDGenerator), new(*system.UUIDGenerator)),
 	system.NewClock,
 	wire.Bind(new(port.Clock), new(*system.Clock)),
+	// The catalog prices every order. The apps bind catalogv1connect.CatalogServiceHandler to
+	// the catalog's own service (apps/rpc); only its contract is imported here.
+	pricing.NewQuoter,
+	wire.Bind(new(port.PriceQuoter), new(*pricing.Quoter)),
 
 	// application (decorated; see decorate). *usecasex.Recorder and the
 	// message.Publisher (outbox) are shared across BCs: apps provide them.
@@ -157,9 +162,9 @@ func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transacto
 
 // ProvideCreateOrder is decorateTx plus the result counter on the outside: it
 // counts after the transaction committed, so a rolled-back create is never "created".
-func ProvideCreateOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy, rec *usecasex.Recorder, results *metrics.CreateOrderResults) rpc.CreateOrderUC {
+func ProvideCreateOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy, prices port.PriceQuoter, rec *usecasex.Recorder, results *metrics.CreateOrderResults) rpc.CreateOrderUC {
 	return usecasex.Chain(
-		decorateTx("ordering.create_order", rec, tx, inbox, usecase.NewCreateOrder(repo, events, ids, clock, own)),
+		decorateTx("ordering.create_order", rec, tx, inbox, usecase.NewCreateOrder(repo, events, ids, clock, own, prices)),
 		results.Decorator(),
 	)
 }

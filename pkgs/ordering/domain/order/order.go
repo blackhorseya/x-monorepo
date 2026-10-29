@@ -4,6 +4,7 @@ package order
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
@@ -27,7 +28,8 @@ type Order struct {
 	// 0 for an order never saved, then the number of saves.
 	version int64
 	// idempotencyKey / requestHash are set only on an order created with a key:
-	// the caller's retry token and the Fingerprint of the items it was spent on.
+	// the caller's retry token and the fingerprint of the request it was spent on
+	// (FingerprintV2; orders from before server pricing hold the v1 Fingerprint).
 	idempotencyKey string
 	requestHash    string
 	events         []Event // raised, not yet pulled (see events.go)
@@ -70,7 +72,7 @@ func New(p Params) (*Order, error) {
 	}
 	if p.IdempotencyKey != "" {
 		o.idempotencyKey = p.IdempotencyKey
-		o.requestHash = Fingerprint(o.items)
+		o.requestHash = FingerprintV2(requestLines(o.items))
 	}
 	o.record(NewCreated(o))
 
@@ -168,15 +170,42 @@ func (x *Order) Version() int64       { return x.version }
 // IdempotencyKey is the retry token the order was created with, "" if none.
 func (x *Order) IdempotencyKey() string { return x.idempotencyKey }
 
-// RequestHash is the Fingerprint of the items the idempotency key was spent on, "" if no key.
+// RequestHash is the fingerprint of the request the idempotency key was spent on, "" if no key.
 func (x *Order) RequestHash() string { return x.requestHash }
 
-// IsReplayOf reports whether items are the request this order's idempotency key
-// was first spent on (same Fingerprint). An order without a key replays nothing.
-func (x *Order) IsReplayOf(items []LineItem) bool {
-	return x.requestHash != "" && x.requestHash == Fingerprint(items)
+// IsReplayOf reports whether lines are the request this order's idempotency key was first
+// spent on. An order without a key replays nothing.
+//
+// A v2 hash covers sku and quantity, so it is compared with the lines directly. A v1 hash
+// (an order placed when the caller typed the price) also covers the price, which a retry no
+// longer carries: the lines are priced with the snapshot on this order, position by
+// position, and compared as v1. That is the same answer the retry always got — same
+// sku / quantity sequence replays, anything else is a reused key — without asking the
+// catalog, whose price may have moved since.
+func (x *Order) IsReplayOf(lines []RequestLine) bool {
+	switch {
+	case x.requestHash == "":
+		return false
+	case strings.HasPrefix(x.requestHash, fingerprintV2Prefix):
+		return x.requestHash == FingerprintV2(lines)
+	}
+
+	if len(lines) != len(x.items) {
+		return false
+	}
+	asPlaced := make([]LineItem, 0, len(lines))
+	for n, l := range lines {
+		if l.sku != x.items[n].sku {
+			return false
+		}
+		asPlaced = append(asPlaced, LineItem{sku: l.sku, quantity: l.quantity, unitPrice: x.items[n].unitPrice})
+	}
+
+	return x.requestHash == Fingerprint(asPlaced)
 }
 
+// sumItems totals the lines. They share one currency: each product has its own, an order
+// has one.
 func sumItems(items []LineItem) (kernel.Money, error) {
 	if len(items) == 0 {
 		return kernel.Money{}, ErrNoItems
@@ -186,7 +215,7 @@ func sumItems(items []LineItem) (kernel.Money, error) {
 	for _, it := range items {
 		var err error
 		if total, err = total.Add(it.Subtotal()); err != nil {
-			return kernel.Money{}, err
+			return kernel.Money{}, ErrMixedCurrency // Add fails only on a currency mismatch
 		}
 	}
 

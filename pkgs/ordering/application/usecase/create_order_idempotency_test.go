@@ -16,6 +16,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -62,8 +63,8 @@ func (r *lockedRecorder) created() int {
 	return n
 }
 
-func items(skus ...string) []dto.LineItem {
-	out := make([]dto.LineItem, 0, len(skus))
+func items(skus ...string) []dto.OrderLine {
+	out := make([]dto.OrderLine, 0, len(skus))
 	for _, s := range skus {
 		out = append(out, dto.OrderLine{SKU: s, Quantity: 1})
 	}

@@ -281,7 +281,7 @@ func TestCreateOrder_LegacyV1KeysStillReplay(t *testing.T) {
 		b, _ := order.NewLineItem("B", 2, usd(250))
 		now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 		legacy, err := order.Reconstitute(order.ReconstituteParams{
-			ID: "legacy-" + t.Name(), CustomerID: "acct-alice", Items: []order.LineItem{a, b}, Status: order.StatusConfirmed,
+			ID: order.ID("legacy-" + t.Name()), CustomerID: "acct-alice", Items: []order.LineItem{a, b}, Status: order.StatusConfirmed,
 			CreatedAt: now, UpdatedAt: now, IdempotencyKey: "k-legacy", RequestHash: order.Fingerprint([]order.LineItem{a, b}),
 		})
 		if err != nil {

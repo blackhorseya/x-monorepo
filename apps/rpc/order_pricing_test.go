@@ -43,7 +43,7 @@ func post(t *testing.T, url, contentType string, body []byte) (int, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	out, _ := io.ReadAll(res.Body)
 
 	return res.StatusCode, out
