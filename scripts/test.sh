@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the release / CI decision scripts: scripts/ci-changes.sh (which ci.yml jobs a change
 # runs), scripts/releasable.sh (does a change cut a release), scripts/next-version.sh (which
-# version) and scripts/release-gate-pr.sh (the PR comment built from the three). A wrong rule in
+# version), scripts/release-gate-pr.sh (the PR comment built from the three) and
+# scripts/red-stage.sh (where a RED `go test` run failed). A wrong rule in
 # ci-changes.sh skips a job silently — CI stays green — so the rules are pinned here.
 #
 #   scripts/test.sh          # task scripts-test; CI's scripts-test job
@@ -262,6 +263,42 @@ expect_match "pending count"                   'waiting on main since `v0.1.0`: 
 fixture gatenotag
 git -C "$repo" tag -d v0.1.0 >/dev/null
 expect_match "no tag: unconditional" 'first merge releases unconditionally' "$(in_repo scripts/release-gate-pr.sh main main "feat: x")"
+
+# ── red-stage.sh ────────────────────────────────────────────────────────────────
+# Classifies `go test` output of a RED run: compile / panic / assertion / setup / pass. Exit 0 only
+# for `assertion` (the expected message was printed under a --- FAIL).
+red() { local rc=0 out; out=$(printf '%s\n' "$2" | scripts/red-stage.sh -m "$1") || rc=$?; echo "$out $rc"; }
+want_msg='want 1 call.* got 0'
+expect_eq "red: target assertion"  "assertion 0" "$(red "$want_msg" '=== RUN   TestCreate
+    order_test.go:42: find calls: want 1 call, got 0
+--- FAIL: TestCreate (0.00s)
+FAIL
+FAIL	example.com/x/ordering	0.012s')"
+expect_eq "red: setup failed before the target" "setup 1" "$(red "$want_msg" '=== RUN   TestCreate
+    order_test.go:20: seed CreateOrder: invalid customer
+--- FAIL: TestCreate (0.00s)
+FAIL
+FAIL	example.com/x/ordering	0.012s')"
+expect_eq "red: compile failure" "compile 1" "$(red "$want_msg" '# example.com/x/ordering [example.com/x/ordering.test]
+./order_test.go:9:14: undefined: NewThing
+FAIL	example.com/x/ordering [build failed]')"
+expect_eq "red: unrelated typo is still compile" "compile 1" "$(red "$want_msg" '# example.com/x/ordering
+./order.go:3:1: syntax error: unexpected }
+FAIL	example.com/x/ordering [build failed]
+FAIL')"
+expect_eq "red: panic before the assertion" "panic 1" "$(red "$want_msg" '--- FAIL: TestCreate (0.00s)
+panic: runtime error: invalid memory address or nil pointer dereference [recovered]
+FAIL	example.com/x/ordering	0.012s')"
+expect_eq "red: green run is not a RED" "pass 1" "$(red "$want_msg" 'ok  	example.com/x/ordering	0.012s')"
+expect_eq "red: message only in the RUN echo is not an assertion" "setup 1" "$(red "$want_msg" '=== RUN   want 1 call, got 0
+--- FAIL: TestCreate (0.00s)
+FAIL')"
+# A long log must not flip a found message to setup: grep -q exiting early SIGPIPEs the filter
+# upstream of it, and pipefail turns that into "not found".
+long_log=$(printf '=== RUN   TestX\n    x_test.go:10: target assertion\n'; for _ in $(seq 1 20000); do printf '    long diagnostic line %0100d\n' 0; done; printf -- '--- FAIL: TestX (0.00s)\nFAIL\n')
+expect_eq "red: long output still assertion" "assertion 0" "$(out=$(printf '%s\n' "$long_log" | scripts/red-stage.sh -m 'target assertion') && rc=0 || rc=$?; echo "$out $rc")"
+set +e; scripts/red-stage.sh </dev/null >/dev/null 2>&1; rc=$?; set -e
+expect_eq "red: -m is required" 64 "$rc"
 
 # ── merge-ready.sh ──────────────────────────────────────────────────────────────
 # A pull_request run checks out refs/pull/N/merge: the PR head merged into main *as it was when
