@@ -12,7 +12,7 @@
 - 人（Console 使用者）可以用 account name + password 登入，拿到短命 access token 呼叫 RPC。
 - token 是**自家簽發**的 JWT，經由既有的 auth interceptor 解成同一個 `contextx.Principal`（`Subject` = account id、`Roles` = account roles、`Method` = `jwt`）；ordering ownership 等下游**不用改**。
 - 可以撤銷（登出、停用 account）、可以輪替簽章金鑰、登入有節流、錯誤不洩漏帳號是否存在。
-- 預設關閉；開啟前與開啟後，既有 API key / 外部 JWT 使用者行為不變。
+- 預設關閉；`enabled=false` 時行為與現在逐字相同。開啟後，既有 API key 使用者不受影響；外部 JWT 使用者在**滿足 §2 的啟用前提**（外部 verifier 已 pin `iss`）時不受影響。
 
 **非目標**
 
@@ -34,12 +34,14 @@
 
 1. 有 `X-API-Key`：config → resolver（維持現狀）。對不上就是 `auth.invalid_credential`，**不會**再 fallback 到 Bearer。
 2. 沒有 `X-API-Key`、有 `Authorization: Bearer`：**依 `iss` 分派到唯一一個 verifier**——
-   - `iss` = `auth.issuer.name`（自家）→ 自家 keyset（依 `kid`）；
-   - 其他（含空）→ 既有的外部 verifier，行為與現在逐字相同。
-   - 分派只為了選 verifier：`iss` 在驗簽前是不可信的，所以 **選完之後仍完整驗簽 + `iss` / `aud` / `exp`**；兩個 verifier **不互相 fallback**（避免用外部 key 驗自家 token 或反過來）。
+   - `iss` 與 `auth.issuer.name` **完全相等** → 自家 keyset（依 `kid`，只收 EdDSA）；
+   - 其他（含空、未知）→ 既有的外部 verifier，由它自己的規則決定（`auth.jwt.issuer` 有 pin 就只收那個 `iss`；沒有外部 verifier 就拒絕）。
+   - 分派只為了選 verifier：`iss` 在驗簽前是不可信的，所以 **選完之後仍完整驗簽 + `iss` / `aud` / `exp`**；兩個 verifier **不互相 fallback**（不用驗簽失敗後的重試來掩蓋邊界；JWT profile 互斥，見 RFC 8725 §3.12）。
+   - **現況的反例**：目前外部 `auth.jwt.issuer` / `audience` 可以留空（wildcard，任何 `iss` 的合法簽章 token 都過；reviewer 已用 current main 實測）。wildcard 外部 verifier 與自家 `iss` 的信任邊界會重疊——帶著自家 `iss` 的既有外部 token 會被改派到自家 verifier 而被拒。所以**不能**宣稱「開啟後對所有外部 JWT 設定零影響」，改為下面的啟用前提。
 3. 都沒有：`auth.unauthenticated`（`required`）或 anonymous（`optional`）。
 
-兩個 issuer 的 `iss` 必須不同（啟動時檢查，相同就拒絕啟動）；自家 `aud` 也必須和外部 `aud` 不同，避免一邊的 token 被另一邊接受。
+**啟用前提（啟動時檢查，不滿足就拒絕啟動）**：若有設外部 verifier（`hs256_secret` 或 `public_key`），則 `auth.jwt.issuer` **必須非空**且 ≠ `auth.issuer.name`；自家 `aud` ≠ 外部 `aud`。沒有外部 verifier 則無此限制。這讓兩個 profile 以 `iss` 互斥、信任邊界不重疊。
+遷移條件：外部 `auth.jwt.issuer` 目前留空的部署，要先把它 pin 成該 IdP 實際簽發的 `iss`（這本身是收緊，在啟用 issuer 之前獨立上線並觀察 `auth_decisions_total{result="invalid"}`），再啟用自家 issuer。audience 不強制，issuer 必設。
 
 ## 3. 方案比較
 
@@ -124,7 +126,7 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 
 - 現在 `jwtVerifier` 是單一 key。改成 `server.TokenVerifier` port：`Verify(c, token) (Principal, error)`，auth interceptor 依 `iss` 選 verifier（§2）。外部 verifier 包現有實作；自家 verifier 由 identity 的 `adapters/auth` 提供，`apps/rpc/wire.go` 用 `wire.Bind` 接（與 `CredentialResolver` 同模式，platform 不 import BC）。
 - 外部 verifier 順便支援 `jwks_uri`（方案 B 的前置，可獨立 PR / 以 flag 保留，見未決問題）。
-- **既有行為不變**：沒設自家 issuer 時，所有 Bearer 都走外部 verifier，錯誤碼、metrics label（`method` 仍只有 `api_key / jwt / none`）完全相同。
+- **`enabled=false` 行為不變**：沒設自家 issuer 時，所有 Bearer 都走外部 verifier（含 wildcard 設定），錯誤碼、metrics label（`method` 仍只有 `api_key / jwt / none`）完全相同。`enabled=true` 的相容範圍以 §2 的啟用前提為界。
 
 ### 4.5 Token 壽命、refresh 與登出
 
@@ -133,7 +135,11 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 | access | JWT（`iss`、`aud`、`sub`、`name`、`roles`、`iat`、`exp`、`jti`、`sid`、`kid`） | **10 分鐘**（`auth.issuer.access_ttl`，上限 1h） | 只在記憶體 |
 | refresh | 不透明 256-bit 隨機（`xr_` + base64url），DB 只存 sha256 | idle 8h、absolute 7d | `HttpOnly; Secure; SameSite=Strict; Path=/api/identity.v1.IdentityService/` cookie |
 
-- **Rotation + reuse 偵測**：每次 `Refresh` 換一個新 refresh token，舊的標 rotated。已 rotated 的 token 再被出示 = 被偷（或客戶端 race）→ **整個 family 撤銷**，回 `auth.invalid_credential`，記一行 Warn（只有 family id 前綴與類別，無 token）。為了容忍合法的並行 refresh（兩個分頁），舊 token 有 10s 寬限，寬限內重送回同一個結果的**冪等**回應（不產生分叉 family）。
+- **Rotation + reuse 偵測**：每次 `Refresh` 換一個新 refresh token，舊的標 rotated。已 rotated 的 token 再被出示 = 被偷（或客戶端 race）→ **整個 family 撤銷**，回 `auth.invalid_credential`，記一行 Warn（只有 family id 前綴與類別，無 token）。
+- **不提供 server 端的 grace / 冪等 replay**。refresh token 在 DB 只存 sha256，換出去的新 token 是獨立隨機值，Pod A commit 後回應遺失、Pod B 只有舊 token 與 hash，**無從重現同一顆新 token**；所以不承諾「重送回同一結果」。後果與處理：
+  - 合法的並行 refresh（多分頁）由 **client 端 Web Locks 序列化**（§5），不靠 server 寬容。
+  - 「commit 後回應遺失」（網路中斷、pod 重啟）→ 客戶端重送舊 token → 被視為 reuse → family 撤銷 → **使用者重新登入**。這是有意的 fail-closed 取捨，文件化、有測試（PR 5）。
+  - 替代機制是**可推導的 refresh token**（`HKDF(KEK) → HMAC(sid ‖ generation)`，server 只存 generation，重送舊 token 可重新推導下一顆），代價是 KEK 外洩可偽造 refresh token；列在未決問題 12，預設不做。
 - **登出**：`Logout` 撤銷該 session（family），清 cookie；已簽出的 access token **最多再有效 `access_ttl`**。這是明確的取捨（見未決問題 4：是否加 `sid` 即時檢查）。
 - **停用 account**：`Refresh` 每次檢查 `account.IsActive`，停用後下一次 refresh 失敗；access token 最多再有效 `access_ttl`，比 API key 的 30s cache 長，文件化。`DisableAccount` 同時撤銷該 account 全部 session（同一 transaction）。
 - roles 在**簽發當下**從 account 取，不放進 refresh token；`AssignRoles` 後最慢 `access_ttl` 生效。
@@ -152,6 +158,12 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 3. 鎖定回應：`RESOURCE_EXHAUSTED` + `x-error-code: login.throttled` + `Retry-After`；對存在 / 不存在的帳號格式與延遲一致。
 4. metrics：`identity.login.attempts{result}`，`result` ∈ `ok / invalid / throttled / error`（固定四值；**不放 name / account id / peer**，同 resolver 的 cardinality 紀律）；alert：`throttled` 比率異常（credential stuffing 訊號）。
 
+**失敗結果必須在拒絕時仍持久化（committed rejection）**：`usecasex.Transactional`（`pkgs/platform/usecasex/transactional.go`）會把 use case 回的 error 傳給交易、導致回滾——如果 `Login` 在同一交易寫 failure counter 後 `return err`，計數會跟著回滾，節流形同虛設；`Refresh` 的 reuse → family 撤銷同理。所以：
+
+- `Login` / `Refresh` use case 的**業務拒絕不是 error，是 output 的結果值**（`Outcome: Rejected{Reason}`，與 CLAUDE.md「業務上的失敗結果要做成狀態，不是 error」一致），交易正常 commit（計數 / 撤銷落地）；只有 infra 失敗才回 error（並回滾）。
+- 由 **adapter（rpc handler）** 把 `Outcome: Rejected` 映成 `UNAUTHENTICATED` / `RESOURCE_EXHAUSTED`（`x-error-code`、`Retry-After`）。對外仍是錯誤，對內已 commit。
+- RED：拒絕回應之後，**重新從 repo 讀**，斷言 `failures` 已增加、reuse 後 family 已全部 revoked。
+
 ### 4.7 不洩漏帳號是否存在
 
 - `Login` 的所有失敗（name 不存在、密碼錯、account DISABLED、無 password credential）回**同一個** `UNAUTHENTICATED` + `x-error-code: login.invalid_credentials` + 同一段訊息。
@@ -165,9 +177,9 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 
 | RPC | 授權 | 說明 |
 |---|---|---|
-| `Login` | public | `name`、`password` → access token + `expires_in`；`Set-Cookie` refresh |
+| `Login` | public | `name`、`password`、`attempt_id` → access token + `expires_in`；`Set-Cookie` refresh |
 | `Refresh` | public（憑 cookie） | rotate；回新 access token |
-| `Logout` | public（憑 cookie） | 撤銷 session；冪等 |
+| `Logout` | public（憑 cookie 與 / 或 `attempt_ids`） | 撤銷 family、對未 commit 的 Login 寫 tombstone（§5.1）；冪等 |
 | `ChangePassword` | 登入者本人 | 需要 current password；成功撤銷其他 session |
 | `SetPassword` | `auth.admin_role` | 設定 / 重設某 account 的密碼；撤銷該 account 全部 session |
 | `ResetLoginThrottle` | `auth.admin_role` | 解鎖 |
@@ -198,17 +210,30 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 - **token 存放：access token 只放記憶體，refresh token 放 `HttpOnly` cookie；兩者都不進 `localStorage` / `sessionStorage`**。理由：CSP 雖然擋 inline script，但任何一個 XSS（或被入侵的 npm 依賴）都能讀 `localStorage` 並帶走長效 credential；`HttpOnly` cookie 讀不到，記憶體中的 access token 只有 10 分鐘壽命、重新整理頁面就消失。代價：reload 後要靠 cookie 靜默 `Refresh`（一次 round trip）；CSRF 風險由 `SameSite=Strict` + cookie `Path` 限縮到 identity service + Connect 要求 `Content-Type: application/json` / `Connect-Protocol-Version` header（跨站表單送不出）+ 只接受同源 `Origin` 處理。`Secure` 在 `http://localhost` 的瀏覽器行為視為安全來源，本機開發不受影響；非 localhost 的 http 部署不支援登入（文件化）。
 - **既有的貼 API key / JWT 控制保留**（break-glass 與機器 token），它設的仍是 `localStorage`（維持現狀，不擴大改動）；新增 `Credential.kind = "session"`，其值**不持久化**。兩者互斥：設定其中一種就清掉另一種。
 - **舊回應不得覆寫新的憑證結果**（沿用並延伸 `generation`）：
-  1. `login()` / `refresh()` 開始時記下 `generation`；回應到達時若 `generation` 已變（使用者在期間按了 Clear、換了 credential、或登出）→ **丟棄結果**，不 `setCredential`，也不顯示錯誤。
-  2. `refresh` 是 **single-flight**（同一時間只有一個 in-flight promise，所有 401 重試共用）。
-  3. 401 的自動重試**每個 generation 最多一次**：收到 `UNAUTHENTICATED` → refresh → 重放原請求；refresh 失敗 → 轉為 anonymous 並導向 `/login`，不迴圈。
-  4. 登出：先 `bump generation` 再送 `Logout`；`Logout` 的回應（成功或失敗）都不改變 credential 狀態。
-  5. 多分頁：登出 / 登入用 `BroadcastChannel` 通知其他分頁（只傳事件，不傳 token），其他分頁各自靜默 refresh 或回登入頁。
+  1. `login()` / `refresh()` 開始時記下 `generation`；回應到達時若 `generation` 已變（使用者在期間按了 Clear、換了 credential、或登出）→ **丟棄 body**，不 `setCredential`，也不顯示錯誤。
+  2. **但丟棄 body 不能阻止瀏覽器處理 `Set-Cookie`**：慢的 `Login` 回應在 Logout 之後到達時，瀏覽器仍會收下 HttpOnly refresh cookie，reload 的靜默 `Refresh` 就把 session 救回來（reviewer 已用真 Chromium 重現這個順序）。所以**取消必須發生在 server 端**，見 §5.1；JS 的 generation 只管 UI 狀態。
+  3. `refresh` 是 **single-flight**，且跨分頁用 **Web Locks**（`navigator.locks.request("console.refresh", …)`）序列化：拿到鎖後先看別的分頁是否已換新（以 access token 是否已更新判斷）再決定要不要送（server 不提供 grace，見 §4.5）。
+  4. 401 的自動重試**每個 generation 最多一次**：收到 `UNAUTHENTICATED` → refresh → 重放原請求；refresh 失敗 → 轉為 anonymous 並導向 `/login`，不迴圈。
+  5. 登出 / Clear：先 `bump generation`，再送 `Logout`（帶上所有 in-flight 的 `attempt_id`，§5.1）；`Logout` 的回應（成功或失敗）都不改變 credential 狀態。
+  6. 多分頁：登出 / 登入用 `BroadcastChannel` 通知其他分頁（只傳事件，不傳 token），其他分頁各自靜默 refresh 或回登入頁。
+
+### 5.1 登入嘗試的 server 端取消（`attempt_id`）
+
+- Console 每次 `Login` 產生 128-bit 隨機 `attempt_id`（`crypto.getRandomValues`），隨 request 送出；server 把它存在建立的 session 上。
+- `Logout` 接受 `attempt_ids[]`（public procedure，不需 cookie）：
+  - 已 commit 的 session：依 `attempt_id` 找到並**撤銷整個 family**——之後即使瀏覽器收下遲到的 `Set-Cookie`，那顆 refresh token 在 server 端已是 revoked，reload 的 `Refresh` 失敗。
+  - 還沒 commit 的 `Login`（取消比登入先到）：寫一筆 **tombstone**（`identity.cancelled_attempts`，TTL 10 分鐘，> `http.timeout`），`Login` 在 commit session 前檢查，命中就**不建立 session、不發 `Set-Cookie`**，回 `UNAUTHENTICATED`。
+- `attempt_id` 是不可猜的 128-bit 值，只能取消自己的嘗試（不洩漏任何 account 資訊）；tombstone 不含 account；同一個 `attempt_id` 只能用一次（重用一律被拒）。
+- `Refresh` 的遲到回應（輪替後的新 refresh token）屬於**同一個 family**；Logout 撤銷 family（以出示的 cookie 或 `attempt_id` 找到它），新舊 token 一併失效，不需要另外的機制。
+- `AbortController` 中止 request 只是 best-effort 的省流量手段，**不作為 session 已取消的證明**；測試與規格都以 server 端狀態為準。
 - E2E（`web/apps/console/e2e/auth/`）在既有 `auth` project 增加登入情境；需要 `auth.issuer.enabled` 的 rpc 設定。
 
 ## 6. 遷移與向下相容
 
 - 全部是**加法**：新增 migration（接在 `0002` 後：`password_credentials`、`sessions`、`signing_keys`、`login_throttle`），不改既有表；`down` 只刪新表。
-- `auth.issuer.enabled=false`（預設）：沒有新 RPC 生效、沒有新 route 行為、interceptor 的 Bearer 全走既有 verifier——**既有 API key / 外部 JWT / static key 使用者零影響**（PR 2 以 characterization test 釘住：同樣的輸入，錯誤碼、metrics 與現在相同）。
+- `auth.issuer.enabled=false`（預設）：沒有新 RPC 生效、沒有新 route 行為、interceptor 的 Bearer 全走既有 verifier——**既有 API key / 外部 JWT / static key 使用者零影響**。
+- `enabled=true`：API key 路徑不變；外部 JWT 在 §2 的啟用前提下不變（`iss` 已 pin 且與自家不同 → 互斥）。外部 issuer 未 pin 的部署必須先 pin 才能啟用（遷移步驟，見 §2）。
+- PR 2 的 characterization 涵蓋：`enabled=false`；外部 issuer/audience 皆未設（wildcard）、只設其中之一、兩者皆設；外部 `iss` 與自家 `iss` 衝突 → 啟動拒絕；同樣的輸入在 `enabled=false` 下錯誤碼與 metrics 與現在相同。
 - 沒有 password credential 的既有 account 不能登入，但 API key 照常。account 不需要 backfill。
 - 啟動行為：`enabled=true` 但缺 `kek` / `name` / `audience`，或 `name` 與 `auth.jwt.issuer` 相同，或 `auth.mode=off` → **拒絕啟動**（fail-fast，不要 fail-open）。
 - **Bootstrap**：`worker bootstrap` 目前只建 account + API key。要讓第一個管理者能用密碼登入，另開子命令 `worker identity set-password --expect-target host:port --account <id>`，**密碼只從 stdin / TTY 讀，不收 argv、不印出**；其餘規則同 bootstrap（本機 port-forward、不放叢集 Job）。第一把 admin API key 仍是 break-glass。
@@ -223,7 +248,7 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 | 帳號列舉 | 單一錯誤碼 / 訊息、dummy hash、節流 key 不依賴帳號存在 |
 | refresh token 被偷 | 只存 hash、rotation + reuse 偵測 → 撤銷 family、`HttpOnly` cookie |
 | 簽章金鑰外洩 | KEK 與 DB 分離、私鑰不落檔、kid 輪替與 RETIRING 窗口、可 rewrap |
-| algorithm confusion / 跨 issuer | verifier 釘死 `EdDSA`、依 `iss` 分派且不互相 fallback、`iss` / `aud` 必須不同 |
+| algorithm confusion / 跨 issuer | verifier 釘死 `EdDSA`、依 `iss` 分派且不互相 fallback、外部 `iss` 必須 pin 且 ≠ 自家 `iss`、`aud` 必須不同 |
 | XSS 偷 token | 不進 Web Storage；access 只在記憶體且短命 |
 | CSRF（cookie） | `SameSite=Strict`、`Path` 限縮、非簡單請求、`Origin` 檢查 |
 | DB 掛掉 | 已載入 keyset 繼續驗（bounded staleness）；`Login` / `Refresh` 失敗；static API key 仍可用 |
@@ -239,11 +264,11 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 | # | PR | 內容 | RED 測試點 |
 |---|---|---|---|
 | 1 | `docs(identity): …`（本文件） | 設計、方案比較、未決問題；`identity.md` 擴充路徑改指向這份 | 免 RED（純文件） |
-| 2 | `refactor(platform): select JWT verifier by iss` | `TokenVerifier` port、依 `iss` 分派、`kid` keyset 抽象；外部 verifier 行為不變（選配 `jwks_uri`） | characterization：既有 JWT 測試全綠不改；**assertion RED**：兩個 verifier 時，`iss=A` 的 token 用 B 的 key 簽 → 拒絕；未知 `iss` → `auth.invalid_credential`；`alg=none` / `HS256`（對 EdDSA keyset）→ 拒絕 |
+| 2 | `refactor(platform): select JWT verifier by iss` | `TokenVerifier` port、依 `iss` 分派、`kid` keyset 抽象；`enabled=false` 行為不變（選配 `jwks_uri`）；啟用前提的啟動檢查 | characterization：既有 JWT 測試全綠不改，且補外部 issuer/audience 未設 / 只設其一 / 皆設（含 wildcard 接受自訂 `iss`）；**assertion RED**：兩個 verifier 時，`iss=A` 的 token 用 B 的 key 簽 → 拒絕；外部 `iss` 未 pin 或等於自家 `iss` → 啟動拒絕；`alg=none` / `HS256`（對 EdDSA keyset）→ 拒絕 |
 | 3 | `feat(identity): password credential domain` | `password.Credential`、argon2id、PHC、`NeedsRehash`、migration + repo（memory / postgres） | 新 API 型 RED（compile）+ GREEN 的 assertion：錯密碼 `Verify` 為假；參數低於 policy 下限 → `ErrWeakParams`；兩次 hash 同密碼結果不同（salt）；plaintext 不出現在 `%v` / error |
 | 4 | `feat(identity): signing keys, KEK sealing and JWKS` | `signingkey` domain、`Sealer`（AES-GCM，AAD=kid）、keyset provider、`/.well-known/jwks.json`、`worker identity rotate-key` | **assertion**：錯 KEK 解不開；JWKS 不含任何私鑰欄位；`RETIRING` 只驗不簽、`RETIRED` 不在 keyset；輪替後舊 token 在窗口內仍可驗、窗口後被拒；未知 `kid` 重載限速 |
-| 5 | `feat(identity): login, refresh and logout` | session domain、`Login` / `Refresh` / `Logout` / `ChangePassword` / `SetPassword`、節流表、auth.public 自動併入、metrics、config 與啟動檢查 | **assertion**：不存在 name 與錯密碼的回應（code / message）逐字相同，且 hasher 呼叫次數相同；DISABLED 帳號同樣完整驗密碼；第 N 次失敗後 `throttled`，且鎖定中不呼叫 hasher；對不存在 name 也會 throttled；reuse 舊 refresh → family 全撤銷；寬限內並行 refresh 冪等；`DisableAccount` 撤銷全部 session；`enabled=false` → `UNIMPLEMENTED`；缺 KEK 拒絕啟動 |
-| 6 | `feat(console): login page and session credential` | `/login`、`session` credential、single-flight refresh、generation 防護、BroadcastChannel | Playwright（`auth` project）：登入後呼叫成功；reload 靜默 refresh；**慢的 login 回應在 Clear 之後到達 → 不設定 credential**；401 重試每個 generation 最多一次；登出後 access token 不留在任何 Web Storage |
+| 5 | `feat(identity): login, refresh and logout` | session domain、`Login` / `Refresh` / `Logout` / `ChangePassword` / `SetPassword`、節流表、auth.public 自動併入、metrics、config 與啟動檢查 | **assertion**：不存在 name 與錯密碼的回應（code / message）逐字相同，且 hasher 呼叫次數相同；DISABLED 帳號同樣完整驗密碼；第 N 次失敗後 `throttled`，且鎖定中不呼叫 hasher；對不存在 name 也會 throttled；reuse 舊 refresh → family 全撤銷（拒絕回應之後從 repo 重讀確認已落地，驗 committed rejection）；失敗登入的 counter 在拒絕後仍已遞增；「Pod A commit rotation 後丟回應、Pod B 用舊 token 重試」→ family 撤銷、需重新登入（明確行為）；`Logout{attempt_id}` 對已 commit 的 session 撤銷 family，對尚未 commit 的 Login 寫 tombstone 使其不建 session、不發 cookie；`DisableAccount` 撤銷全部 session；`enabled=false` → `UNIMPLEMENTED`；缺 KEK 拒絕啟動 |
+| 6 | `feat(console): login page and session credential` | `/login`、`session` credential、`attempt_id` 取消、Web Locks 序列化 refresh、generation 防護、BroadcastChannel | Playwright（`auth` project，**真 Chromium + 真 rpc**）：登入後呼叫成功；reload 靜默 refresh；**慢的 login 回應在 Logout/Clear 之後到達 → 不設定 credential，且之後 reload / `Refresh` 仍不能恢復該 session**（斷言 cookie jar 與 server session 兩側，不能只斷言 JS 狀態）；401 重試每個 generation 最多一次；登出後 access token 不留在任何 Web Storage |
 | 7 | `docs/chore(helm)`: config / runbook / chart | `docs/config.md`、`docs/operations.md`、Helm `secrets.authIssuerKek`（支援 `existingSecret`）、`helm-check` profile、k6 `login`（throttle 429 + `Retry-After`）、dashboard row / alert | `helm-check` 新 profile 失敗在「缺 KEK 的 profile 不該 render 成功」；k6 threshold |
 
 順序：1 → 2 →（3 ∥ 4）→ 5 → 6 → 7。2 與 3 互相獨立，可平行；5 依賴 2、3、4；6 依賴 5。每支都過 `task gate-local`、domain 100% 覆蓋。
@@ -261,3 +286,5 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 9. **非 localhost 的 http 部署**：登入要求 HTTPS（`Secure` cookie）——是否接受本機以外不支援 http？
 10. **忘記密碼 / 註冊 / MFA**：確認都不在這個範圍（沒有 email 通道）？之後要做的話走哪個通道？
 11. **roles 來源**（方案 B 才需要）：roles 取自 provider token claim，還是永遠以 `identity.accounts` 為準？
+12. **refresh 回應遺失的處理**：接受「重新登入」（預設，fail-closed），還是改用可推導的 refresh token 容忍重送（KEK 外洩可偽造 refresh token）？
+13. **外部 JWT 的 `iss` pin**：啟用 issuer 前，現有外部 `auth.jwt.issuer` 未設的部署（若有）要先 pin；這是收緊，要不要單獨一支 PR 先上？
