@@ -9,8 +9,8 @@
 # Rekor entry, never a reuse of the one that conflicted.
 #
 # Fail-closed:
-#  - only output that is a Rekor conflict (v1 `[409] createLogEntryConflict`, `409 Conflict`, v2
-#    gRPC `code = AlreadyExists`, and it must name Rekor) is retried, at most 2 more times (a
+#  - only an output line that is a Rekor conflict (v1 `log/entries][409]`, v2 `adding rekor v2
+#    entry: unexpected response: 409` or `code = AlreadyExists`) is retried, at most 2 more times (a
 #    constant, not configurable); any other failure exits at once;
 #  - a 409 is never success: a failed attempt stays failed, and when the retries run out the
 #    script exits non-zero;
@@ -32,10 +32,14 @@ done
 [ -n "$bundle" ] || { echo "cosign-sign-blob: no --bundle=<file> in the arguments" >&2; exit 2; }
 
 log=$(mktemp); trap 'rm -f "$log"' EXIT
-# A conflict is a Rekor error shape, not a substring: a URL or id containing 409, or an AlreadyExists
-# from something else, is an ordinary failure.
-conflict='\]\[409\]|[Hh][Tt][Tt][Pp] 409|409 Conflict|(^|[^/A-Za-z0-9_.-])createLogEntryConflict|code = AlreadyExists|codes\.AlreadyExists'
-rekor='[Rr]ekor|log/entries'
+# A conflict is one line that is a Rekor conflict error, not a substring of the whole output (a URL
+# or id with 409, another service's 409 next to a line that mentions Rekor, an AlreadyExists from
+# something else are ordinary failures). The two shapes of the pinned cosign v3.1.4:
+#   v1  `[POST /api/v1/log/entries][409] createLogEntryConflict {...}`  (rekor client)
+#   v2  `adding rekor v2 entry: unexpected response: 409 {...}`  (sigstore-go v1.3.0 +
+#       rekor-tiles v2.3.0 pkg/client/write: the HTTP writer; a gRPC transport would say
+#       `adding rekor v2 entry: ... code = AlreadyExists`)
+conflict='log/entries\]\[409\]|adding rekor v2 entry:.*(unexpected response: 409([^0-9]|$)|code = AlreadyExists)'
 
 attempt=0
 while [ "$attempt" -lt "$max" ]; do
@@ -52,7 +56,7 @@ while [ "$attempt" -lt "$max" ]; do
     exit 1
   fi
   rm -f "$bundle"
-  if ! grep -Eq -- "$conflict" "$log" || ! grep -Eq -- "$rekor" "$log"; then
+  if ! grep -Eq -- "$conflict" "$log" ; then
     echo "cosign-sign-blob: FAIL: attempt $attempt/$max failed (exit $rc), not a Rekor conflict: not retrying" >&2
     exit "$rc"
   fi
