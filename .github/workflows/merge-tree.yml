@@ -32,16 +32,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Default ref (the dispatched branch) only to get scripts/merge-tree-inputs.sh: the inputs are
+      # validated before any of them reaches git, so the run title SHAs are the SHAs that get built.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ inputs.base }}
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
+      - env:
+          PR: ${{ inputs.pr }}
+          HEAD: ${{ inputs.head }}
+          BASE: ${{ inputs.base }}
+        run: scripts/merge-tree-inputs.sh "$PR" "$HEAD" "$BASE"
       - uses: ./.github/actions/setup
       - env:
           PR: ${{ inputs.pr }}
           HEAD: ${{ inputs.head }}
           BASE: ${{ inputs.base }}
         run: |
+          git checkout --detach "$BASE"
+          [ "$(git rev-parse HEAD)" = "$BASE" ] || { echo "checked out $(git rev-parse HEAD), not base $BASE" >&2; exit 1; }
           git fetch origin "refs/pull/$PR/head"
           [ "$(git rev-parse FETCH_HEAD)" = "$HEAD" ] || { echo "PR #$PR head moved: now $(git rev-parse FETCH_HEAD), asked for $HEAD" >&2; exit 1; }
           scripts/merge-tree-check.sh "$BASE" "$HEAD"

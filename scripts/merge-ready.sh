@@ -92,12 +92,17 @@ if $fresh; then
 fi
 
 # ── stale: a merge-tree run for exactly (pr, head, main) is the other way to be proven ──
-tree=$(gh run list --workflow merge-tree.yml --event workflow_dispatch --repo "$repo" --limit 30 \
+# The run title is the whole claim (merge-tree.yml validates its inputs, so it is exactly what ran):
+# compare it for equality, never as a substring — "...base=<main>-wrong-tree" must not pass.
+want="merge-tree pr=$pr head=$head base=$main"
+tree=""
+while read -r id st concl title; do
+  if [ "$st" = completed ] && [ "$concl" = success ] && [ "$title" = "$want" ]; then tree=$id; break; fi
+done < <(gh run list --workflow merge-tree.yml --event workflow_dispatch --repo "$repo" --limit 30 \
   --json databaseId,status,conclusion,displayTitle \
-  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null \
-  | grep -F " completed success merge-tree pr=$pr head=$head base=$main" | head -1 || true)
+  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null || true)
 if [ -n "$tree" ]; then
-  echo "READY: merge-tree run ${tree%% *} built main $main + head $head and passed ($total checks green on the PR)"
+  echo "READY: merge-tree run $tree built main $main + head $head and passed ($total checks green on the PR)"
   exit 0
 fi
 echo "NOT READY (stale): re-verify main $main + head $head before merging"
