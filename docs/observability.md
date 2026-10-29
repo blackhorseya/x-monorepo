@@ -38,7 +38,7 @@
   是該 status 最老一筆距上次狀態變更的秒數（每個已知 status 都有 series，空的報 0——alert 要看到 0 不是 no data）。
   每次 scrape 一句 `GROUP BY status`（`OrderStats` / `ReservationStats` use case → `Repository.CountByStatus`），
   每個 replica 報一樣的數字，`max` 不 `sum`。PENDING 老 = StockReserved 或缺貨的取消都沒回到 ordering（alert `x-monorepo-saga-pending`）；
-  RESERVED 老 = 庫存被沒走完的訂單扣著，超過 TTL 的 1.5× 就是 `worker expire` 沒跑（alert `x-monorepo-reservation-expiry`）；EXPIRED 在長 = TTL 在殺單，看 TTL 是不是太短。
+  RESERVED 老 = 庫存被沒走完的訂單扣著，超過 TTL 的 1.5× 就是 `worker expire` 沒跑（alert `x-monorepo-reservation-expiry`）；EXPIRED 在長 = TTL 在殺單，看 TTL 是不是太短；COMMIT_SHORT > 0 = 訂單已 COMPLETED 但庫存補不回來（sweep 與 CompleteOrder 競態後庫存被別單訂走），alert `x-monorepo-commit-short`。
 - **CreateOrder 的結果**（`ordering/adapters/metrics`，**rpc** 註冊，因為 CreateOrder 跑在 rpc）：`ordering_create_order_total{result}` 是 counter（**sum**，不像上面的 gauge 用 max）：
   `created` = 寫入了新訂單（有沒有帶 `idempotency_key` 都算）、`replayed` = 同 key 同內容，回了原訂單（沒寫入、沒發 `OrderCreated`；併發輸家回讀勝出者也是這個）、
   `key_reused` = 同 key 不同內容（`order.idempotency_key_reused`）。計數點在最外層 decorator，也就是交易 commit **之後**：commit 失敗或 rollback 的 create 不會被記成 `created`。

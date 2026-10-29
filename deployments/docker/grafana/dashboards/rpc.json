@@ -900,7 +900,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "inventory_reservations{status}: RESERVED is stock on hold for an order that has not moved on, REJECTED a shortfall (ordering was asked to cancel), RELEASED a cancelled order's hold given back, CANCELLED a tombstone (OrderCancelled overtook OrderCreated).",
+      "description": "inventory_reservations{status}: RESERVED is stock on hold for an order that has not moved on, REJECTED a shortfall (ordering was asked to cancel), RELEASED a cancelled order's hold given back, COMMIT_SHORT a completed order whose released stock was gone when OrderCompleted arrived (alert x-monorepo-commit-short), CANCELLED a tombstone (OrderCancelled overtook OrderCreated).",
       "gridPos": {
         "x": 8,
         "y": 41,

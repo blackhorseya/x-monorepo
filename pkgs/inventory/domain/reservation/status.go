@@ -6,11 +6,18 @@ import "time"
 //
 //	Reserve   ─┬─ RESERVED ─┬─ Release ── RELEASED   (order cancelled: stock given back)
 //	           │            ├─ Commit ─── COMMITTED  (order completed: stock sold)
-//	           │            └─ Expire ─── EXPIRED    (held past the TTL: stock given back, cancellation requested)
+//	           │            └─ Expire ─── EXPIRED ─┬─ Commit ── COMMITTED    (OrderCompleted overtaken by the sweep: sold from what is available)
+//	           │                                   └─ Commit ── COMMIT_SHORT (... but the stock was taken meanwhile: sold, not covered)
 //	           └─ REJECTED
 //	Tombstone ─── CANCELLED   (OrderCancelled arrived before OrderCreated)
 //
-// Every status but RESERVED is terminal: a late OrderCreated finds the row and
+// EXPIRED is terminal for the sweep and for OrderCancelled, but not for
+// OrderCompleted: ordering refuses to cancel a COMPLETED order, so the sale
+// still has to land. COMMIT_SHORT is the anomaly where it cannot: the order is
+// COMPLETED, the customer was promised stock inventory no longer has, and
+// operations must settle it by hand (docs/operations.md).
+//
+// Every other status is terminal: a late OrderCreated finds the row and
 // reserves nothing, a late OrderCancelled / OrderCompleted finds it and does nothing.
 type Status int
 
@@ -21,15 +28,17 @@ const (
 	StatusCancelled
 	StatusCommitted
 	StatusExpired
+	StatusCommitShort
 )
 
 var statusNames = map[Status]string{
-	StatusReserved:  "RESERVED",
-	StatusRejected:  "REJECTED",
-	StatusReleased:  "RELEASED",
-	StatusCancelled: "CANCELLED",
-	StatusCommitted: "COMMITTED",
-	StatusExpired:   "EXPIRED",
+	StatusReserved:    "RESERVED",
+	StatusRejected:    "REJECTED",
+	StatusReleased:    "RELEASED",
+	StatusCancelled:   "CANCELLED",
+	StatusCommitted:   "COMMITTED",
+	StatusExpired:     "EXPIRED",
+	StatusCommitShort: "COMMIT_SHORT",
 }
 
 func (x Status) String() string {
@@ -43,7 +52,7 @@ func (x Status) String() string {
 // Statuses lists every status this version knows, in lifecycle order. Readers
 // that report per-status figures use it to show a zero instead of nothing.
 func Statuses() []Status {
-	return []Status{StatusReserved, StatusRejected, StatusReleased, StatusCommitted, StatusExpired, StatusCancelled}
+	return []Status{StatusReserved, StatusRejected, StatusReleased, StatusCommitted, StatusExpired, StatusCommitShort, StatusCancelled}
 }
 
 // StatusCount is how many reservations sit in one status and when the oldest

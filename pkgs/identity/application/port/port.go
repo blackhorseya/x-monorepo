@@ -5,6 +5,8 @@ package port
 import (
 	"context"
 	"time"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/account"
 )
 
 // Clock abstracts time for deterministic tests.
@@ -29,4 +31,19 @@ type SecretGenerator interface {
 // implementation just calls fn.
 type Transactor interface {
 	Do(c context.Context, fn func(c context.Context) error) error
+}
+
+// AdminCensus lists the effective admins (account.AdminStanding: ACTIVE, holds
+// role, at least one key usable at now) and, inside the transaction the caller
+// is in, locks them so that two writers deciding whether somebody is the last
+// admin cannot both see the other as still there. Call it before loading the
+// aggregates the writer changes: whatever is read after the lock is current.
+// Outside a transaction the lock is released at once, i.e. there is none.
+//
+// The returned time is the instant "usable key" was judged, read once the lock
+// is held (a writer queued behind another can wait a while, and a key may
+// expire meanwhile). The caller uses it as its own "now" for the rest of the
+// operation, so the census and the decision never disagree about expiry.
+type AdminCensus interface {
+	LockAdmins(c context.Context, role string) ([]account.AdminStanding, time.Time, error)
 }

@@ -50,7 +50,7 @@ func (uc *ReleaseStock) Execute(c context.Context, in dto.ReleaseStockInput) (*d
 		return nil, err
 	}
 	if err = r.Release(stocks, uc.clock.Now()); err != nil {
-		return nil, err
+		return nil, staleIfMoved(ctx, uc.reservations, r, err)
 	}
 	if err = saveStocks(ctx, uc.stocks, stocks); err != nil {
 		return nil, err

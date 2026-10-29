@@ -3,7 +3,6 @@ import { Link, useParams } from "@tanstack/react-router";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -20,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useResetOnCredentialChange } from "../auth";
+import { ConfirmButton } from "../components/confirm";
 import { describe, orders } from "../client";
 import { keys, orderQuery, reservationQuery } from "../queries";
 import { ErrorAlert } from "../components/error-alert";
@@ -98,19 +98,25 @@ function OrderDetail({ order }: { order: Order }) {
           {OrderStatus[order.status]}
         </Badge>
         {confirmed && (
-          <Button size="sm" onClick={() => complete.mutate()} disabled={busy}>
-            Complete
-          </Button>
+          <ConfirmButton
+            label="Complete"
+            variant="default"
+            title="Complete this order?"
+            description="This cannot be undone: inventory commits the reservation, so the stock is sold, not just held."
+            action="Complete order"
+            onConfirm={() => complete.mutateAsync()}
+            disabled={busy}
+          />
         )}
         {open && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => cancel.mutate()}
+          <ConfirmButton
+            label="Cancel"
+            title="Cancel this order?"
+            description="The order is cancelled and inventory releases what it reserved."
+            action="Cancel order"
+            onConfirm={() => cancel.mutateAsync()}
             disabled={busy}
-          >
-            Cancel
-          </Button>
+          />
         )}
         {cancel.isError && (
           <p className="text-xs text-destructive">{describe(cancel.error)}</p>

@@ -125,6 +125,33 @@ func (x *Stock) Commit(quantity int32, now time.Time) error {
 	return nil
 }
 
+// SellAll sells need[sku] from stocks[sku] for every sku, all or nothing, for
+// a sale whose reservation had already been given back (OrderCompleted after
+// the reservation expired): the quantity leaves on-hand straight from what is
+// available. It returns the SKUs that are short (absent from stocks, or not
+// enough available), in the order given, and touches no Stock in that case.
+// Like ReserveAll it lives here because only this package may change a Stock
+// without the fallible single-aggregate API; reserved <= on_hand still holds.
+func SellAll(stocks map[string]*Stock, skus []string, need map[string]int32, now time.Time) []string {
+	var short []string
+	for _, sku := range skus {
+		if s, ok := stocks[sku]; !ok || !s.CanReserve(need[sku]) {
+			short = append(short, sku)
+		}
+	}
+	if len(short) > 0 {
+		return short
+	}
+
+	for _, sku := range skus {
+		s := stocks[sku]
+		s.onHand -= need[sku]
+		s.updatedAt = now
+	}
+
+	return nil
+}
+
 // Release gives a reservation back.
 func (x *Stock) Release(quantity int32, now time.Time) error {
 	if quantity <= 0 {

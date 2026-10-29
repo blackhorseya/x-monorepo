@@ -122,6 +122,31 @@ func TestCommit(t *testing.T) {
 	}
 }
 
+func TestSellAll(t *testing.T) {
+	a, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
+	b, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "B", OnHand: 1, Reserved: 1, UpdatedAt: now})
+	stocks := map[string]*stock.Stock{"A": a, "B": b}
+	later := now.Add(time.Minute)
+
+	// Only what is available can be sold, and nothing moves unless every sku is covered:
+	// B has nothing available, C is missing altogether.
+	short := stock.SellAll(stocks, []string{"A", "B", "C"}, map[string]int32{"A": 3, "B": 1, "C": 1}, later)
+	if len(short) != 2 || short[0] != "B" || short[1] != "C" {
+		t.Fatalf("short = %v", short)
+	}
+	if a.OnHand() != 5 || a.Reserved() != 2 || b.OnHand() != 1 || !a.UpdatedAt().Equal(now) {
+		t.Fatalf("failed sale must not change anything: A=%d/%d B=%d/%d", a.OnHand(), a.Reserved(), b.OnHand(), b.Reserved())
+	}
+
+	if short := stock.SellAll(stocks, []string{"A"}, map[string]int32{"A": 3}, later); short != nil {
+		t.Fatalf("short = %v", short)
+	}
+	// Sold from what was available; the reserved part still belongs to others.
+	if a.OnHand() != 2 || a.Reserved() != 2 || a.Available() != 0 || !a.UpdatedAt().Equal(later) {
+		t.Fatalf("A on_hand=%d reserved=%d available=%d", a.OnHand(), a.Reserved(), a.Available())
+	}
+}
+
 func TestRelease(t *testing.T) {
 	s, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
 	later := now.Add(time.Minute)

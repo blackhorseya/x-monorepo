@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { uid } from "./uid";
+import { confirm, createCard, filterCard } from "./orders-ui";
 
 // /orders/$id: the id cell of the list links here; the page shows every line,
 // the total, the reservation, and cancels. A deep link to an unknown id says so.
@@ -21,10 +22,10 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
     await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
   }
   await page.goto("/orders");
-  await page.getByLabel("Customer").first().fill(customer);
-  await page.getByLabel("SKU").first().fill(sku);
+  await createCard(page).getByLabel("Customer").fill(customer);
+  await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByRole("button", { name: "Create order" }).click();
-  await page.getByLabel("Customer").nth(1).fill(customer);
+  await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
 
   const row = page.getByRole("row").filter({ hasText: customer });
@@ -68,6 +69,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   ).toHaveAttribute("href", `/reservations?order=${id}`);
 
   await page.getByRole("button", { name: "Cancel" }).click();
+  await confirm(page, "Cancel order");
   await expect(page.getByTestId("order-status")).toHaveText("CANCELLED");
   await expect(page.getByRole("button", { name: "Cancel" })).toHaveCount(0);
   if (withDB)
@@ -78,7 +80,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   // Back on the list the row agrees (same cache key prefix, invalidated).
   await page.getByRole("link", { name: "All orders" }).click();
   await expect(page).toHaveURL(/\/orders$/);
-  await page.getByLabel("Customer").nth(1).fill(customer);
+  await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
   await expect(row.getByText("CANCELLED")).toBeVisible();
 });
@@ -101,9 +103,9 @@ test("the Order id box on /orders opens the page for a pasted id", async ({
 }) => {
   const customer = `e2e-jump-${uid()}`;
   await page.goto("/orders");
-  await page.getByLabel("Customer").first().fill(customer);
+  await createCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Create order" }).click();
-  await page.getByLabel("Customer").nth(1).fill(customer);
+  await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
   const row = page.getByRole("row").filter({ hasText: customer });
   await expect(row).toHaveCount(1);

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -102,8 +103,12 @@ func (i *ReservationRepository) Update(c context.Context, r *reservation.Reserva
 
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if _, exists := i.data[r.OrderID()]; !exists {
+	stored, exists := i.data[r.OrderID()]
+	if !exists {
 		return reservation.ErrNotFound
+	}
+	if stored.Status() != r.LoadedStatus() {
+		return fmt.Errorf("update reservation %s: %w", r.OrderID(), reservation.ErrStale)
 	}
 	i.data[r.OrderID()] = cp
 

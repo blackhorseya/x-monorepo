@@ -25,17 +25,20 @@ const (
 // CronJob) and InventoryService.ExpireReservations (operator: dry run, small run).
 //
 // One call is one transaction (decorateTx): every stock Save in it compares
-// the stock's version, which is the lock between this sweep and a concurrent
-// Commit / Release of the same reservation (Reservation itself has no version).
-// A lost race (stock.ErrStale) fails the whole batch, which rolls back; the
+// the stock's version, and Repository.Update compares the reservation's status
+// (Reservation itself has no version), which together are the lock between this
+// sweep and a concurrent Commit / Release of the same reservation.
+// A lost race (stock.ErrStale / reservation.ErrStale) fails the whole batch, which rolls back; the
 // caller retries — the CLI on its next run, the rpc with ABORTED to the operator.
 //
-// Known window: between CompleteOrder committing and inventory consuming its
-// OrderCompleted the reservation is still RESERVED. A sweep landing in that
-// window gives the stock back and asks for a cancellation ordering refuses
-// (COMPLETED is terminal); the OrderCompleted then finds EXPIRED and is dropped
-// — order COMPLETED, nothing sold. The window is one consumer hop against a TTL
-// of hours; the eventbus lag alerts are the guard, not this use case.
+// Race with CompleteOrder: between CompleteOrder committing and inventory
+// consuming its OrderCompleted the reservation is still RESERVED. A sweep
+// landing in that window gives the stock back and asks for a cancellation
+// ordering refuses (COMPLETED is terminal). The sweep does not try to avoid
+// it; CommitStock repairs it when the OrderCompleted arrives: an EXPIRED
+// reservation is sold from what is available then (COMMITTED), or ends
+// COMMIT_SHORT when the stock was taken meanwhile (alert
+// x-monorepo-commit-short). The window is one consumer hop against a TTL of hours.
 type ExpireReservations struct {
 	reservations reservation.Repository
 	stocks       stock.Repository
@@ -79,7 +82,7 @@ func (uc *ExpireReservations) Execute(c context.Context, in dto.ExpireReservatio
 			return nil, err
 		}
 		if err = r.Expire(stocks, now); err != nil {
-			return nil, fmt.Errorf("expire reservation %s: %w", r.OrderID(), err)
+			return nil, fmt.Errorf("expire reservation %s: %w", r.OrderID(), staleIfMoved(ctx, uc.reservations, r, err))
 		}
 		if err = saveStocks(ctx, uc.stocks, stocks); err != nil {
 			return nil, err

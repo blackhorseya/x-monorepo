@@ -109,7 +109,11 @@ func (i *ReservationRepository) Add(c context.Context, r *reservation.Reservatio
 	return nil
 }
 
-// Update stores a status change; lines are immutable after Add.
+// Update stores a status change; lines are immutable after Add. It is a
+// compare-and-swap on status: the row only changes while it still has the
+// status the aggregate was loaded with, otherwise ErrStale. Every transition is
+// one-way, so the status alone detects a reservation that moved (expired,
+// committed, released) between this transaction's read and its write.
 func (i *ReservationRepository) Update(c context.Context, r *reservation.Reservation) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
@@ -117,13 +121,21 @@ func (i *ReservationRepository) Update(c context.Context, r *reservation.Reserva
 	}
 
 	res := platformpg.TxOrDB(ctx, i.db).Model(&reservationRow{}).
-		Where("order_id = ?", r.OrderID()).
+		Where("order_id = ? AND status = ?", r.OrderID(), r.LoadedStatus().String()).
 		Updates(map[string]any{"status": r.Status().String(), "updated_at": r.UpdatedAt()})
 	if res.Error != nil {
 		return fmt.Errorf("update reservation %s: %w", r.OrderID(), res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return reservation.ErrNotFound
+		var n int64
+		if err := platformpg.TxOrDB(ctx, i.db).Model(&reservationRow{}).Where("order_id = ?", r.OrderID()).Count(&n).Error; err != nil {
+			return fmt.Errorf("update reservation %s: %w", r.OrderID(), err)
+		}
+		if n == 0 {
+			return reservation.ErrNotFound
+		}
+
+		return fmt.Errorf("update reservation %s: %w", r.OrderID(), reservation.ErrStale)
 	}
 
 	return nil

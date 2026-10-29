@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { uid } from "./uid";
+import { confirm, createCard, filterCard } from "./orders-ui";
 
 // /reservations: the status filter buttons drive ?status=, ?order= pins one
 // reservation above the list. Works in both modes — in-memory just has nothing
@@ -63,11 +64,11 @@ test.describe("with a worker", () => {
     await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
 
     await page.goto("/orders");
-    await page.getByLabel("Customer").first().fill(customer);
-    await page.getByLabel("SKU").first().fill(sku);
+    await createCard(page).getByLabel("Customer").fill(customer);
+    await createCard(page).getByLabel("SKU").fill(sku);
     await page.getByLabel("Qty").fill("1");
     await page.getByRole("button", { name: "Create order" }).click();
-    await page.getByLabel("Customer").nth(1).fill(customer);
+    await filterCard(page).getByLabel("Customer").fill(customer);
     await page.getByRole("button", { name: "Filter" }).click();
     const orderRow = page.getByRole("row").filter({ hasText: customer });
     await expect(orderRow.getByText("RESERVED")).toBeVisible(WORKER);
@@ -99,6 +100,7 @@ test.describe("with a worker", () => {
 
     await page.goto(`/orders?customer=${customer}`);
     await orderRow.getByRole("button", { name: "Cancel" }).click();
+    await confirm(page, "Cancel order");
     await expect(orderRow.getByText("CANCELLED")).toBeVisible();
 
     await page.goto(`/reservations?order=${orderId}&status=RELEASED`);

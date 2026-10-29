@@ -18,6 +18,9 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/pagination"
 )
 
+// adminRole is the role the last-admin guard protects in these tests.
+const adminRole = "admin"
+
 type fixedClock struct{ t time.Time }
 
 func (i *fixedClock) Now() time.Time { return i.t }
@@ -50,6 +53,7 @@ type fixture struct {
 	secrets  *seq
 	accounts *memory.AccountRepository
 	keys     *memory.APIKeyRepository
+	census   *memory.AdminCensus
 
 	createAccount  *usecase.CreateAccount
 	getAccount     *usecase.GetAccount
@@ -68,15 +72,16 @@ func newFixture() *fixture {
 		clock: &fixedClock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}, ids: &seq{}, secrets: &seq{n: 100},
 		accounts: memory.NewAccountRepository(), keys: memory.NewAPIKeyRepository(),
 	}
+	f.census = memory.NewAdminCensus(f.accounts, f.keys, f.clock)
 	f.createAccount = usecase.NewCreateAccount(f.accounts, f.ids, f.clock)
 	f.getAccount = usecase.NewGetAccount(f.accounts)
 	f.listAccounts = usecase.NewListAccounts(f.accounts)
-	f.disableAccount = usecase.NewDisableAccount(f.accounts, f.clock)
+	f.disableAccount = usecase.NewDisableAccount(f.accounts, f.census, adminRole, f.clock)
 	f.enableAccount = usecase.NewEnableAccount(f.accounts, f.clock)
-	f.assignRoles = usecase.NewAssignRoles(f.accounts, f.clock)
+	f.assignRoles = usecase.NewAssignRoles(f.accounts, f.census, adminRole, f.clock)
 	f.createKey = usecase.NewCreateAPIKey(f.accounts, f.keys, f.ids, f.secrets, f.clock)
 	f.listKeys = usecase.NewListAPIKeys(f.accounts, f.keys)
-	f.revokeKey = usecase.NewRevokeAPIKey(f.keys, f.clock)
+	f.revokeKey = usecase.NewRevokeAPIKey(f.keys, f.census, adminRole, f.clock)
 	f.resolve = usecase.NewResolveAPIKey(f.accounts, f.keys, f.clock)
 	return f
 }
@@ -190,6 +195,11 @@ func TestAPIKeyLifecycleAndResolve(t *testing.T) {
 	f := newFixture()
 	c := context.Background()
 	a, _ := f.createAccount.Execute(c, dto.CreateAccountInput{Name: "ci", Roles: []string{"admin"}})
+	// Another effective admin, so disabling / revoking below is never about the last one.
+	other, _ := f.createAccount.Execute(c, dto.CreateAccountInput{Name: "other", Roles: []string{"admin"}})
+	if _, err := f.createKey.Execute(c, dto.CreateAPIKeyInput{AccountID: other.ID, Name: "other"}); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := f.createKey.Execute(c, dto.CreateAPIKeyInput{Name: "k"}); !errors.Is(err, apikey.ErrInvalidAccountID) {
 		t.Fatalf("no account: %v", err)

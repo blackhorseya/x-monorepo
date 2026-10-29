@@ -11,7 +11,7 @@ import {
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui";
 
 // A button that asks before it acts: for the operations that are hard to take back (disable an
-// account, revoke a key). onConfirm runs on the action button and the dialog closes once it
+// account, revoke a key, complete an order). onConfirm runs on the action button and the dialog closes once it
 // settles; its error is the caller's to show (the mutation's own ErrorAlert).
 export function ConfirmButton({
   label,
@@ -20,6 +20,7 @@ export function ConfirmButton({
   action,
   onConfirm,
   disabled,
+  variant = "outline",
 }: {
   label: string;
   title: string;
@@ -27,13 +28,14 @@ export function ConfirmButton({
   action: string;
   onConfirm: () => Promise<unknown>;
   disabled?: boolean;
+  variant?: "outline" | "default";
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogPrimitive.Trigger asChild>
-        <Button variant="outline" size="sm" disabled={disabled}>
+        <Button variant={variant} size="sm" disabled={disabled}>
           {label}
         </Button>
       </AlertDialogPrimitive.Trigger>

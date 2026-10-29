@@ -44,6 +44,7 @@ export const KNOWN_CODES = new Set([
   "auth.invalid_credential",
   "auth.permission_denied",
   "auth.unauthenticated",
+  "identity.last_admin",
   "message.duplicate",
   "order.cannot_cancel",
   "order.cannot_complete",

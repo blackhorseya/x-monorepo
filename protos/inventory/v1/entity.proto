@@ -33,10 +33,18 @@ enum ReservationStatus {
   RESERVATION_STATUS_CANCELLED = 4;
   // The order was completed (ordering.v1.OrderCompleted): the reserved quantity
   // left on_hand — sold, not held.
+  //
+  // Also reached from EXPIRED: when OrderCompleted arrived after the expiry
+  // sweep gave the stock back, it is sold from what is available now.
   RESERVATION_STATUS_COMMITTED = 5;
   // Held past its TTL (ExpireReservations): the stock was given back and
   // ordering was asked to cancel the order (ordering.v1.OrderCancellationRequested).
   RESERVATION_STATUS_EXPIRED = 6;
+  // The order was completed after its reservation expired and the stock given
+  // back is no longer available: the sale is not covered. Nothing was deducted;
+  // the order is COMPLETED, so operations must settle it by hand (restock or
+  // compensate). Terminal.
+  RESERVATION_STATUS_COMMIT_SHORT = 7;
 }
 
 message ReservationLine {
