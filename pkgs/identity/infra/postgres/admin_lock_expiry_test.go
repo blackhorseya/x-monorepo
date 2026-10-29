@@ -329,28 +329,42 @@ func TestLockExpiryBarrier_PinsTheWriterPostgres(t *testing.T) {
 	f.account("pin-a", []string{censusRole}, time.Time{})
 	h := holdAdminRows(t, db)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	const other = "lockexp-unrelated"
 	otherDB := openDB(t, urlWith(t, owned, "", other))
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		otherDB.Exec("SELECT 1 FROM identity.accounts FOR UPDATE")
-	}()
+	result := make(chan error, 1)
+	go func() { result <- otherDB.WithContext(ctx).Exec("SELECT 1 FROM identity.accounts FOR UPDATE").Error }()
 	h.waitQueuedBehind(t, db, other) // precondition: it is queued behind the holder
 
-	if h.queuedBehind(t, context.Background(), db, "lockexp-writer-not-started") {
+	if h.queuedBehind(t, ctx, db, "lockexp-writer-not-started") {
 		t.Fatal("the barrier accepted an application that never ran as the writer")
 	}
 	h.release(t) // let the unrelated waiter finish before its handle is closed
-	<-done
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("the unrelated waiter failed after the lock was released: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the unrelated waiter never finished after the lock was released")
+	}
 }
 
-// The matrix empties and locks identity.accounts in its own database; accounts
-// that live in the shared (supplied) database must not notice.
+// The matrix empties and locks identity.accounts in its own database; an account
+// that already lives in the shared (supplied) database must not notice. The
+// shared database is only migrated here, never emptied: the bystander is
+// uniquely named and is the only row this test removes.
 func TestLockExpiryMatrix_LeavesTheSharedDatabaseAlonePostgres(t *testing.T) {
-	shared := censusDB(t)
+	base := pgtest.URL(t)
+	shared := openDB(t, base)
+	if err := platformpg.Up(context.Background(), config.Postgres{URL: base}, postgres.Migration()); err != nil {
+		t.Fatal(err)
+	}
 	sf := newCensusFixture(t, shared)
-	bystander, _ := sf.account("bystander", []string{"viewer"}, time.Time{})
+	// Keyless: the fixture's key secrets repeat from run to run.
+	bystander, _ := sf.account("bystander-"+randomName(t), []string{"viewer"})
+	t.Cleanup(func() { shared.Exec("DELETE FROM identity.accounts WHERE id = ?", bystander.String()) })
 
 	t.Run("matrix", TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres)
 
