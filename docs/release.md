@@ -25,6 +25,13 @@ task release-check      # 驗 .goreleaser.yaml
 task release-snapshot   # 本機 dry run：每個 app × linux/darwin × amd64/arm64 → bin/dist，不做 image、不簽名、不 publish
 ```
 
+**簽章 dry-run（不發版就跑真實 keyless 簽章，#262）**：`release-snapshot` 跳過 `sign`，真實的 Fulcio / Rekor 路徑原本要到下一次正式 release 才第一次跑到。
+`.github/workflows/sign-dry-run.yml` 補這一段：goreleaser `--snapshot --skip=docker,publish`（**不** skip `sign`），`checksums.txt` 經 `scripts/cosign-sign-blob.sh` 用 job 的 OIDC token 真的簽出 `checksums.txt.sigstore.json`，同一個 job 接著 `cosign verify-blob --bundle` 驗，簽或驗失敗 job 就紅。
+不推 image、不建 tag / release / draft，權限只有 `contents: read` + `id-token: write`，位於 `.github/` 底下，所以不進 `scripts/releasable.sh`、不影響 `next-version.sh`。
+用法：GitHub → Actions → sign-dry-run → Run workflow（`gh workflow run sign-dry-run.yml --ref main`；dispatch 要求這個 workflow 檔在 main 上）；改到 `.goreleaser.yaml`、`scripts/cosign-sign-blob.sh` 或這個 workflow 的同 repo PR 也會自動跑（fork 與 Dependabot 的 PR 拿不到 id-token，直接略過）。
+驗證的 identity 是**這個 workflow 自己**（`https://github.com/$GITHUB_WORKFLOW_REF`，issuer `https://token.actions.githubusercontent.com`），不是下面 Verify 區塊的 `release.yml@refs/heads/main`；cosign 版本讀 `release.yml` 的 `cosign-release`，不多一處要對齊的釘版。
+Rekor 409 的重簽仍由 fixture（`scripts/test.sh`、`cosign-v2-conflict-smoke.sh`）覆蓋，不對真實 Rekor 製造衝突；每跑一次會在公開的 Rekor 留下一筆 entry。
+
 **驗證**（release notes 的 Verify 區塊也有同一組指令；package 是 public，不用 login）：
 
 ```bash
