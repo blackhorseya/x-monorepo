@@ -1,6 +1,9 @@
 package apikey
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Repository persists APIKey, one row per id; the hash is unique too.
 type Repository interface {
@@ -19,4 +22,11 @@ type Repository interface {
 	// newest first (created_at desc, id desc). An account has a handful of
 	// keys, so there is no paging.
 	ListByAccount(c context.Context, accountID string) ([]*APIKey, error)
+	// TouchLastUsed stamps last_used_at = at unless it was already stamped
+	// less than minInterval before at, and reports whether it wrote. It is a
+	// single conditional write that does not touch Version, so it can neither
+	// make a concurrent Save stale nor be undone by one, and a second replica
+	// racing the same key loses instead of writing twice. A key that does not
+	// exist is false, nil: there is nothing to stamp.
+	TouchLastUsed(c context.Context, id ID, at time.Time, minInterval time.Duration) (bool, error)
 }

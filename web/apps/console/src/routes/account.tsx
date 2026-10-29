@@ -127,7 +127,8 @@ function KeysCard({ accountId }: { accountId: string }) {
         <CardTitle>API keys</CardTitle>
         <CardDescription>
           Newest first, revoked ones included. A revoked key stops working within 30s. The secret is shown once, when the key is
-          created.
+          created. Last used is best-effort and can trail the real
+          last use by about a minute.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
@@ -152,6 +153,7 @@ function KeysCard({ accountId }: { accountId: string }) {
               <TableHead>Prefix</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Expires</TableHead>
+              <TableHead>Last used</TableHead>
               <TableHead>Created</TableHead>
               <TableHead />
             </TableRow>
@@ -162,7 +164,7 @@ function KeysCard({ accountId }: { accountId: string }) {
             ))}
             {list.isSuccess && rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground">
+                <TableCell colSpan={7} className="text-center text-muted-foreground">
                   No API keys yet.
                 </TableCell>
               </TableRow>
@@ -183,6 +185,7 @@ function KeyRow({ apiKey: k, onRevoke }: { apiKey: ApiKey; onRevoke: () => Promi
         <Badge variant={keyBadge[k.status]}>{ApiKeyStatus[k.status]}</Badge>
       </TableCell>
       <TableCell className="text-xs text-muted-foreground">{k.expireTime ? at(k.expireTime) : "never"}</TableCell>
+      <TableCell className="text-xs text-muted-foreground">{k.lastUseTime ? at(k.lastUseTime) : "—"}</TableCell>
       <TableCell className="text-xs text-muted-foreground">{at(k.createTime)}</TableCell>
       <TableCell className="text-right">
         {k.status === ApiKeyStatus.ACTIVE && (

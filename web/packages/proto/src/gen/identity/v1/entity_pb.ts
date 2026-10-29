@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file identity/v1/entity.proto.
  */
 export const file_identity_v1_entity: GenFile = /*@__PURE__*/
-  fileDesc("ChhpZGVudGl0eS92MS9lbnRpdHkucHJvdG8SC2lkZW50aXR5LnYxIsABCgdBY2NvdW50EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFcm9sZXMYAyADKAkSKgoGc3RhdHVzGAQgASgOMhouaWRlbnRpdHkudjEuQWNjb3VudFN0YXR1cxIvCgtjcmVhdGVfdGltZRgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLdXBkYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIoQCCgZBcGlLZXkSCgoCaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIMCgRuYW1lGAMgASgJEg4KBnByZWZpeBgEIAEoCRIpCgZzdGF0dXMYBSABKA4yGS5pZGVudGl0eS52MS5BcGlLZXlTdGF0dXMSLwoLY3JlYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2V4cGlyZV90aW1lGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtyZXZva2VfdGltZRgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAqZwoNQWNjb3VudFN0YXR1cxIeChpBQ0NPVU5UX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFUFDQ09VTlRfU1RBVFVTX0FDVElWRRABEhsKF0FDQ09VTlRfU1RBVFVTX0RJU0FCTEVEEAIqZQoMQXBpS2V5U3RhdHVzEh4KGkFQSV9LRVlfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGQoVQVBJX0tFWV9TVEFUVVNfQUNUSVZFEAESGgoWQVBJX0tFWV9TVEFUVVNfUkVWT0tFRBACYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChhpZGVudGl0eS92MS9lbnRpdHkucHJvdG8SC2lkZW50aXR5LnYxIsABCgdBY2NvdW50EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFcm9sZXMYAyADKAkSKgoGc3RhdHVzGAQgASgOMhouaWRlbnRpdHkudjEuQWNjb3VudFN0YXR1cxIvCgtjcmVhdGVfdGltZRgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLdXBkYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIrcCCgZBcGlLZXkSCgoCaWQYASABKAkSEgoKYWNjb3VudF9pZBgCIAEoCRIMCgRuYW1lGAMgASgJEg4KBnByZWZpeBgEIAEoCRIpCgZzdGF0dXMYBSABKA4yGS5pZGVudGl0eS52MS5BcGlLZXlTdGF0dXMSLwoLY3JlYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2V4cGlyZV90aW1lGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtyZXZva2VfdGltZRgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMQoNbGFzdF91c2VfdGltZRgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAqZwoNQWNjb3VudFN0YXR1cxIeChpBQ0NPVU5UX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFUFDQ09VTlRfU1RBVFVTX0FDVElWRRABEhsKF0FDQ09VTlRfU1RBVFVTX0RJU0FCTEVEEAIqZQoMQXBpS2V5U3RhdHVzEh4KGkFQSV9LRVlfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGQoVQVBJX0tFWV9TVEFUVVNfQUNUSVZFEAESGgoWQVBJX0tFWV9TVEFUVVNfUkVWT0tFRBACYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * Account is who an API key speaks for. The id is the principal's subject
@@ -110,6 +110,16 @@ export type ApiKey = Message<"identity.v1.ApiKey"> & {
    * @generated from field: google.protobuf.Timestamp revoke_time = 8;
    */
   revokeTime?: Timestamp;
+
+  /**
+   * When the key last authenticated a request. Unset: never used (or used only
+   * before this was recorded). Best-effort and throttled: written at most once per
+   * auth.last_used_interval (default 1m) and dropped when the write fails, so it
+   * can trail the real last use by about that interval; it is not an audit log.
+   *
+   * @generated from field: google.protobuf.Timestamp last_use_time = 9;
+   */
+  lastUseTime?: Timestamp;
 };
 
 /**

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/mapper"
@@ -146,4 +147,31 @@ func (uc *ResolveAPIKey) Execute(c context.Context, in dto.ResolveAPIKeyInput) (
 	}
 
 	return &dto.ResolveAPIKeyOutput{AccountID: a.ID().String(), Name: a.Name(), Roles: a.Roles(), KeyID: k.ID().String(), ExpiresAt: k.ExpiresAt()}, nil
+}
+
+// TouchAPIKey stamps last_used_at on a key that just resolved, at most once per
+// minInterval (the repository decides, atomically, so replicas agree). It is
+// the write behind the resolver's throttle, which already keeps requests away
+// from it; the condition here is what holds across replicas and restarts.
+type TouchAPIKey struct {
+	keys        apikey.Repository
+	clock       port.Clock
+	minInterval time.Duration
+}
+
+func NewTouchAPIKey(keys apikey.Repository, clock port.Clock, minInterval time.Duration) *TouchAPIKey {
+	return &TouchAPIKey{keys: keys, clock: clock, minInterval: minInterval}
+}
+
+func (uc *TouchAPIKey) Execute(c context.Context, in dto.TouchAPIKeyInput) (*dto.TouchAPIKeyOutput, error) {
+	ctx := contextx.FromContext(c)
+	if in.KeyID == "" {
+		return nil, apikey.ErrInvalidID
+	}
+	recorded, err := uc.keys.TouchLastUsed(ctx, apikey.ID(in.KeyID), uc.clock.Now(), uc.minInterval)
+	if err != nil {
+		return nil, fmt.Errorf("touch api key %s: %w", in.KeyID, err)
+	}
+
+	return &dto.TouchAPIKeyOutput{Recorded: recorded}, nil
 }

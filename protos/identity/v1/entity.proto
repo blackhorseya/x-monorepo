@@ -50,4 +50,9 @@ message ApiKey {
   google.protobuf.Timestamp expire_time = 7;
   // Set once the key is REVOKED.
   google.protobuf.Timestamp revoke_time = 8;
+  // When the key last authenticated a request. Unset: never used (or used only
+  // before this was recorded). Best-effort and throttled: written at most once per
+  // auth.last_used_interval (default 1m) and dropped when the write fails, so it
+  // can trail the real last use by about that interval; it is not an audit log.
+  google.protobuf.Timestamp last_use_time = 9;
 }

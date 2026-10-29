@@ -34,6 +34,8 @@ type apiKeyRow struct {
 	CreatedAt time.Time  `gorm:"not null;autoCreateTime:false"`
 	ExpiresAt *time.Time `gorm:"autoUpdateTime:false"`
 	RevokedAt *time.Time `gorm:"autoUpdateTime:false"`
+	// LastUsedAt is written by TouchLastUsed only; Save leaves the column alone.
+	LastUsedAt *time.Time `gorm:"autoUpdateTime:false"`
 }
 
 func (apiKeyRow) TableName() string { return Schema + ".api_keys" }
@@ -51,6 +53,11 @@ func toRow(k *apikey.APIKey) apiKeyRow {
 	if !k.RevokedAt().IsZero() {
 		t := k.RevokedAt()
 		row.RevokedAt = &t
+	}
+
+	if !k.LastUsedAt().IsZero() {
+		t := k.LastUsedAt()
+		row.LastUsedAt = &t
 	}
 
 	return row
@@ -72,6 +79,9 @@ func toAPIKey(row apiKeyRow) (*apikey.APIKey, error) {
 	}
 	if row.RevokedAt != nil {
 		p.RevokedAt = row.RevokedAt.UTC()
+	}
+	if row.LastUsedAt != nil {
+		p.LastUsedAt = row.LastUsedAt.UTC()
 	}
 
 	return apikey.Reconstitute(p)
@@ -139,6 +149,25 @@ func (i *APIKeyRepository) Save(c context.Context, k *apikey.APIKey) error {
 	}
 
 	return nil
+}
+
+// TouchLastUsed is one `UPDATE ... WHERE id = ? AND (last_used_at IS NULL OR
+// last_used_at <= at - minInterval)`: the window is decided by the row, so two
+// replicas racing the same key write once. It does not touch version.
+func (i *APIKeyRepository) TouchLastUsed(c context.Context, id apikey.ID, at time.Time, minInterval time.Duration) (bool, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
+	res := platformpg.TxOrDB(ctx, i.db).Model(&apiKeyRow{}).
+		Where("id = ? AND (last_used_at IS NULL OR last_used_at <= ?)", id.String(), at.Add(-minInterval)).
+		UpdateColumn("last_used_at", at)
+	if res.Error != nil {
+		return false, fmt.Errorf("touch api key %s: %w", id, res.Error)
+	}
+
+	return res.RowsAffected > 0, nil
 }
 
 func (i *APIKeyRepository) ListByAccount(c context.Context, accountID string) ([]*apikey.APIKey, error) {

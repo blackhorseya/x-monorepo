@@ -8,7 +8,6 @@ package main
 
 import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
-	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
 	rpc3 "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
 	system3 "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
@@ -33,7 +32,7 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	http := cfg.HTTP
-	configAuth := cfg.Auth
+	auth := cfg.Auth
 	oTel := cfg.OTel
 	log := cfg.Log
 	providers, cleanup, err := otel.New(oTel, log)
@@ -86,7 +85,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v11 := inventory.ProvideListReservations(reservationRepository, recorder)
 	publisher2 := events2.NewPublisher(publisher)
 	v12 := inventory.ProvideExpireReservations(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	inventoryService := rpc2.NewInventoryService(v6, v7, v8, v9, v10, v11, v12, configAuth)
+	inventoryService := rpc2.NewInventoryService(v6, v7, v8, v9, v10, v11, v12, auth)
 	accountRepository := identity.ProvideAccountRepository(db, logger)
 	systemUUIDGenerator := system3.NewUUIDGenerator()
 	clock2 := system3.NewClock()
@@ -115,20 +114,21 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		RevokeAPIKey:   v21,
 		WhoAmI:         v22,
 	}
-	identityService := rpc3.NewIdentityService(useCases, configAuth)
-	poisonService := NewPoisonService(db, configAuth)
+	identityService := rpc3.NewIdentityService(useCases, auth)
+	poisonService := NewPoisonService(db, auth)
 	v23 := NewRoutes(orderService, inventoryService, identityService, poisonService)
 	v24 := NewDocs()
 	readiness := NewReadiness(db)
 	v25 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
-	resolver, err := auth.NewResolver(v25, clock2, meterProvider)
+	v26 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
+	resolver, err := identity.ProvideResolver(v25, v26, clock2, auth, logger, meterProvider)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	serverServer, err := server.New(http, configAuth, logger, v23, v24, readiness, providers, resolver)
+	serverServer, err := server.New(http, auth, logger, v23, v24, readiness, providers, resolver)
 	if err != nil {
 		cleanup3()
 		cleanup2()

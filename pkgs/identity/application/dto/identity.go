@@ -46,14 +46,15 @@ type AssignRolesInput struct {
 }
 
 type APIKeyOutput struct {
-	ID        string
-	AccountID string
-	Name      string
-	Prefix    string
-	Status    string // ACTIVE | REVOKED
-	CreatedAt time.Time
-	ExpiresAt time.Time // zero: never
-	RevokedAt time.Time // zero: not revoked
+	ID         string
+	AccountID  string
+	Name       string
+	Prefix     string
+	Status     string // ACTIVE | REVOKED
+	CreatedAt  time.Time
+	ExpiresAt  time.Time // zero: never
+	RevokedAt  time.Time // zero: not revoked
+	LastUsedAt time.Time // zero: never used (throttled, best-effort: up to auth.last_used_interval stale)
 }
 
 // CreateAPIKeyInput mints a key; ExpiresAt zero means it never expires.
@@ -95,6 +96,16 @@ type ResolveAPIKeyOutput struct {
 	Roles     []string
 	KeyID     string
 	ExpiresAt time.Time // zero: never; a cache must not serve the key past it
+}
+
+// TouchAPIKeyInput is a key that just resolved; Recorded is false when its
+// last_used_at was already stamped inside the window.
+type TouchAPIKeyInput struct {
+	KeyID string
+}
+
+type TouchAPIKeyOutput struct {
+	Recorded bool
 }
 
 // WhoAmIInput has no fields: the answer is the principal in the context.

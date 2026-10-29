@@ -21,13 +21,14 @@ func ToAccountOutput(a *account.Account) *dto.AccountOutput {
 
 func ToAPIKeyOutput(k *apikey.APIKey) *dto.APIKeyOutput {
 	return &dto.APIKeyOutput{
-		ID:        k.ID().String(),
-		AccountID: k.AccountID(),
-		Name:      k.Name(),
-		Prefix:    k.Prefix(),
-		Status:    k.Status().String(),
-		CreatedAt: k.CreatedAt(),
-		ExpiresAt: k.ExpiresAt(),
-		RevokedAt: k.RevokedAt(),
+		ID:         k.ID().String(),
+		AccountID:  k.AccountID(),
+		Name:       k.Name(),
+		Prefix:     k.Prefix(),
+		Status:     k.Status().String(),
+		CreatedAt:  k.CreatedAt(),
+		ExpiresAt:  k.ExpiresAt(),
+		RevokedAt:  k.RevokedAt(),
+		LastUsedAt: k.LastUsedAt(),
 	}
 }
