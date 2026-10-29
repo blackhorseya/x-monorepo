@@ -25,7 +25,7 @@ set -euo pipefail
 
 max=3   # 1 sign + at most 2 re-signs
 delay=${COSIGN_SIGN_RETRY_DELAY:-5}
-case $delay in ''|*[!0-9]*) echo "cosign-sign-blob: COSIGN_SIGN_RETRY_DELAY must be whole seconds, got '$delay'" >&2; exit 2 ;; esac
+case $delay in ''|*[!0-9]*) echo "cosign-sign-blob: COSIGN_SIGN_RETRY_DELAY must be whole seconds" >&2; exit 2 ;; esac
 
 log=$(mktemp); trap 'rm -f "$log"' EXIT
 # A conflict is the OUTER status of one cosign error line (#256), not any 409 text on a line: a
@@ -68,19 +68,24 @@ status_re='(log/entries\]\[([0-9]+)\]|adding rekor v2 entry: unexpected response
 # so without exactly one positional and no `--` the retry is off: is_conflict says "not a conflict".
 bundle=
 artifact=
+# No usage error prints an argv value: the value of a flag this script does not know (--identity-token=...)
+# or a token that may have been swallowed as one can be a secret. Only a known flag name, a flag name cut
+# off before `=`, or a position is shown.
 usage() { echo "cosign-sign-blob: $1" >&2; exit 2; }
 parse_argv() {
-  local pos=() nbundle=0 classify=1
-  [ "${1:-}" = sign-blob ] || usage "only 'sign-blob' is supported, got '${1:-}'"
+  local pos=() nbundle=0 classify=1 at=1
+  [ "${1:-}" = sign-blob ] || usage "only 'sign-blob' is supported as the first argument"
   shift
   while [ $# -gt 0 ]; do
+    at=$((at + 1))
     case $1 in
       --bundle=*) nbundle=$((nbundle + 1)); bundle=${1#--bundle=} ;;
       --bundle) nbundle=2 ;;
       --yes|-y|--key=*|--signing-config=*) ;;
-      --key|--signing-config) [ $# -ge 2 ] || usage "$1 needs a value"; shift ;;
+      --key|--signing-config) [ $# -ge 2 ] || usage "$1 needs a value"; shift; at=$((at + 1)) ;;
       --) classify=0; shift; pos+=("$@"); break ;; # everything after -- is a positional, never a flag
-      -*) usage "unsupported flag '$1': cannot tell which path cosign writes the bundle to" ;;
+      --*=*) usage "unsupported flag '${1%%=*}' (position $at): cannot tell which path cosign writes the bundle to" ;;
+      -*) usage "unsupported argument at position $at: cannot tell which path cosign writes the bundle to" ;;
       *) pos+=("$1") ;;
     esac
     shift
