@@ -95,6 +95,11 @@ type Auth struct {
 	// know). Auth runs outside http.timeout, so without this a stuck database
 	// would hold every authenticating request. Default 2s; 0 = unbounded.
 	ResolverTimeout time.Duration `mapstructure:"resolver_timeout"`
+	// LastUsedInterval is how often an identity API key's last_used_at is
+	// written: at most once per key per interval (per replica in memory, and by
+	// the UPDATE's own condition across replicas). It is the staleness the
+	// Console shows. Default 1m; 0 = never record.
+	LastUsedInterval time.Duration `mapstructure:"last_used_interval"`
 }
 
 // JWT verifies `Authorization: Bearer <token>`: exactly one of HS256Secret
@@ -256,6 +261,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.jwt.public_key", "")
 	v.SetDefault("auth.public", []string{})
 	v.SetDefault("auth.resolver_timeout", 2*time.Second)
+	v.SetDefault("auth.last_used_interval", time.Minute)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
@@ -342,6 +348,9 @@ func (x *AppConfig) validate() error {
 	}
 	if x.Auth.ResolverTimeout < 0 {
 		return errors.New("auth.resolver_timeout must not be negative")
+	}
+	if x.Auth.LastUsedInterval < 0 {
+		return errors.New("auth.last_used_interval must not be negative")
 	}
 	if x.Auth.JWT.HS256Secret != "" && x.Auth.JWT.PublicKey != "" {
 		return errors.New("auth.jwt.hs256_secret and auth.jwt.public_key are exclusive")

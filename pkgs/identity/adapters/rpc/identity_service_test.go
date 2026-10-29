@@ -57,6 +57,8 @@ func TestIdentityService_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// last_used_at on, as production wires it (auth.last_used_interval = 1m).
+	resolver.TrackLastUsed(identity.ProvideTouchAPIKey(keys, clock, config.Auth{LastUsedInterval: time.Minute}, rec), time.Minute, logger)
 
 	// ResolverTimeout as config.Load defaults it: the resolver path under test is the production one.
 	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "root=root-key-0123456789abcdef:admin, viewer=viewer-key-0123456789abcdef", ResolverTimeout: 2 * time.Second}
@@ -120,9 +122,18 @@ func TestIdentityService_EndToEnd(t *testing.T) {
 	if err != nil || got.Msg.GetAccount().GetName() != "ops bot" {
 		t.Fatalf("get = %+v, %v", got, err)
 	}
+	// The bot's calls above (WhoAmI, ListAccounts, GetAccount) stamped last_use_time once
+	// (one window); a key never used (minted.Msg's, before the first call) had none.
+	if minted.Msg.GetApiKey().GetLastUseTime() != nil {
+		t.Fatalf("a new key has no last_use_time: %v", minted.Msg.GetApiKey().GetLastUseTime())
+	}
+	resolver.Wait()
 	keysOf, err := bot.ListApiKeys(c, connect.NewRequest(&identityv1.ListApiKeysRequest{AccountId: id}))
 	if err != nil || len(keysOf.Msg.GetApiKeys()) != 1 || keysOf.Msg.GetApiKeys()[0].GetStatus() != identityv1.ApiKeyStatus_API_KEY_STATUS_ACTIVE {
 		t.Fatalf("keys = %+v, %v", keysOf, err)
+	}
+	if lu := keysOf.Msg.GetApiKeys()[0].GetLastUseTime(); lu == nil || time.Since(lu.AsTime()) > time.Minute {
+		t.Fatalf("last_use_time = %v, want just now", lu)
 	}
 
 	// Roles change → next request sees it (TTL 0 here; DefaultCacheTTL in production).

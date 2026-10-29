@@ -150,3 +150,54 @@ func TestAPIKeyRepository(t *testing.T) {
 		t.Fatal("cancelled list")
 	}
 }
+
+func TestAPIKeyRepository_TouchLastUsed(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewAPIKeyRepository()
+	k, _ := apikey.New("k1", "a", "laptop", "xk_"+strings.Repeat("a", 43), time.Time{}, now)
+	if err := repo.Add(c, k); err != nil {
+		t.Fatal(err)
+	}
+	window := time.Minute
+
+	// Never used: the first touch writes.
+	if ok, err := repo.TouchLastUsed(c, "k1", now, window); err != nil || !ok {
+		t.Fatalf("first touch = %v, %v", ok, err)
+	}
+	// Inside the window: no write, last_used_at stays.
+	if ok, err := repo.TouchLastUsed(c, "k1", now.Add(window-time.Second), window); err != nil || ok {
+		t.Fatalf("touch inside window = %v, %v", ok, err)
+	}
+	if got, _ := repo.FindByID(c, "k1"); !got.LastUsedAt().Equal(now) {
+		t.Fatalf("last_used_at = %v, want %v", got.LastUsedAt(), now)
+	}
+	// At the window's end it writes again.
+	if ok, err := repo.TouchLastUsed(c, "k1", now.Add(window), window); err != nil || !ok {
+		t.Fatalf("touch after window = %v, %v", ok, err)
+	}
+	if got, _ := repo.FindByID(c, "k1"); !got.LastUsedAt().Equal(now.Add(window)) {
+		t.Fatalf("last_used_at = %v, want %v", got.LastUsedAt(), now.Add(window))
+	}
+	// A touch never moves the version, so it cannot make a revoke stale.
+	loaded, _ := repo.FindByID(c, "k1")
+	if _, err := repo.TouchLastUsed(c, "k1", now.Add(3*window), window); err != nil {
+		t.Fatal(err)
+	}
+	_ = loaded.Revoke(now)
+	if err := repo.Save(c, loaded); err != nil {
+		t.Fatalf("save after touch: %v", err)
+	}
+	// Save writes the aggregate it loaded; it must not roll last_used_at back.
+	if got, _ := repo.FindByID(c, "k1"); !got.LastUsedAt().Equal(now.Add(3 * window)) {
+		t.Fatalf("save clobbered last_used_at: %v", got.LastUsedAt())
+	}
+	// An unknown id is nothing to write, not an error.
+	if ok, err := repo.TouchLastUsed(c, "nope", now, window); err != nil || ok {
+		t.Fatalf("unknown id = %v, %v", ok, err)
+	}
+	cancelled, cancel := context.WithCancel(c)
+	cancel()
+	if _, err := repo.TouchLastUsed(cancelled, "k1", now, window); err == nil {
+		t.Fatal("cancelled touch")
+	}
+}

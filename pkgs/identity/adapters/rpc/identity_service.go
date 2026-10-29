@@ -232,6 +232,9 @@ func toProtoAPIKey(k *dto.APIKeyOutput) *identityv1.ApiKey {
 	if !k.RevokedAt.IsZero() {
 		out.RevokeTime = timestamppb.New(k.RevokedAt)
 	}
+	if !k.LastUsedAt.IsZero() {
+		out.LastUseTime = timestamppb.New(k.LastUsedAt)
+	}
 
 	return out
 }

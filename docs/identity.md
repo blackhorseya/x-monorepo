@@ -89,7 +89,25 @@ Dashboard「x-monorepo / service」的 Identity row 有四張圖（lookups/s by 
 
 「DB 掛掉仍服務 30s 內驗過的 key」是刻意的（可用性 > 立即一致；不等於放行），要改成嚴格 fail-closed 就得每個 request 都查 DB，等於沒有 cache——這是產品決定，不是 bug。
 
-v1 **不記** `last_used_at`（hot path 寫入）；要審計誰用了哪把 key看 access line 的 `sub`（account id）。
+### last_used_at（節流、best-effort）
+
+`api_keys.last_used_at`（nullable `timestamptz`，migration `0002`）記 key 最後一次通過驗證的時間，`ListApiKeys` 的 `last_use_time` 與 Console account 頁的「Last used」（沒用過顯示 `—`）讀它。它是**給人看的粗略指標，不是稽核紀錄**——要查「誰在什麼時候做了什麼」看 access line 的 `sub`（account id）與 `enduser.id`。
+
+驗證成功要寫 DB，但 hot path 不能每個 request 都寫，所以有兩層節流（`auth.last_used_interval`，預設 `1m`，`0` = 關）：
+
+1. **記憶體端（`Resolver`，每個 replica）**：同一把 key 在 interval 內只有第一個 request 會「認領」這次寫入，其餘（cache hit 也算）只付一次 map 查詢。這層擋掉 99.9% 的寫入。
+2. **DB 端（`TouchLastUsed`）**：`UPDATE api_keys SET last_used_at = $at WHERE id = $id AND (last_used_at IS NULL OR last_used_at <= $at - interval)`。條件在 row 上，所以多 replica 同時認領同一把 key、或 replica 重啟丟了記憶體狀態，也只有一個寫得進去。
+
+為什麼兩層都要：只做記憶體端，N 個 replica 每個 interval 會寫 N 次、重啟後又全部重寫；只做 DB 端，每個 request 都要多一趟 round trip。這個寫入**不碰 `version`**（不走 `Save`）：不然 hot path 的寫入會讓並行的 `RevokeApiKey` 吃 `ErrStale`；反過來 `Save` 也不會寫 `last_used_at`，舊 aggregate 存回去不會把它倒退。
+
+失敗語意（best-effort）：
+
+- 寫入在 request 路徑之外的 goroutine 跑（`context.WithoutCancel` + 2s timeout，同時最多 8 個，滿了就丟掉這次，之後的 request 會補），**不會讓驗證失敗、也不會拖慢 request**。
+- 失敗只記一行 Warn（`identity: last_used_at write failed class=timeout|canceled|error`）：**只有錯誤類別**，沒有 error 文字（driver 的錯誤可能引用語句與參數）、沒有 key / hash / prefix（紅線 R4）。失敗會放掉認領，下一個 request 重試，不會把 key 停擺一整個 interval。
+- **落後沒有嚴格上限**：interval 是寫入頻率的上限，不是「Last used」新鮮度的保證。兩層節流的相位會疊加——interval=60s，replica A 在 t=0 寫入成功；replica B 在 t=59s 認領，但 DB 條件拒絕（`Recorded: false`，A 剛寫過）；B 在 t=118s 才再次認領，最後一次使用到顯示落後 118s。所以健康時最多接近**兩個 interval**，寫入失敗或 DB 掛掉時更久（恢復後下一個 request 補上）。不把 DB 的 no-op 當失敗而放掉認領，是因為那樣每個 request 都會再打一次 DB，等於沒有記憶體端節流。resolver cache 的 30s 不影響它：cache hit 也會認領。
+- 認領表有上限（`MaxCacheEntries`，兩代輪替：超過一個 interval 的認領本來就沒有作用，整代丟掉；**不整張清空**，否則 live key 會在 window 內全部回頭打 DB）。同一個 interval 內超過上限個不同的 key 不是 API key 的流量型態；超過的 key 這一代不寫，等下一代。
+- 關閉（`0`）時不寫、不開 goroutine，欄位維持原值。
+- Shutdown：`apps/rpc` 的 cleanup 會先讓還在跑的寫入最多再等 3s（`Resolver.WaitTimeout`，早於 DB 關閉），逾時就放棄，最後的 stamp 可能遺失（best-effort）。
 
 ## 擴充路徑：帳號密碼 / 自己當 issuer
 
