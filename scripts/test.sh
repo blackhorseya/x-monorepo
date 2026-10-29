@@ -419,24 +419,30 @@ SB_REL=1 SB_ART='sign-blob: adding rekor v2 entry: unexpected response: 503 x' s
 expect_eq    "sign: a real 409, artifact named 'sign-blob: ...503 x', is retried" 2 "$sb_tries"
 SB_REL=1 SB_ART='sign-blob: adding rekor v2 entry: unexpected response: 409 x' sign_blob subcmd-503 "v2path503 v2path503 v2path503"
 expect_eq    "sign: a 503, artifact named 'sign-blob: ...409 x', is not retried" 1 "$sb_tries"
-# A value flag the wrapper does not know, before the artifact: the artifact cannot be identified, so
-# nothing is classified (fail closed: one attempt), whatever the file name says (PR #259 review).
+# A flag the wrapper does not know (#260, was: one attempt without classification, PR #259): cosign
+# may take the next token as its value, so the wrapper cannot tell the artifact or the bundle path.
+# Usage error, exit 2, before cosign runs; whatever the file name says, a real 409 included.
 odd409='adding rekor v2 entry: unexpected response: 409 artifact'
+unknown_flag_refused() { # unknown_flag_refused <name> <label>: after SB_PRE / SB_ART / FAKE_SEQ are set by the caller
+  expect_eq    "sign: $2 exits 2"            2 "$sb_rc"
+  expect_eq    "sign: $2 never calls cosign" 0 "$sb_tries"
+}
 SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART=$odd409 sign_blob unknownflag-503 "v2path503 v2path503 v2path503"
-expect_eq    "sign: an unrecognised artifact never turns a 503 into a conflict" 1 "$sb_tries"
+unknown_flag_refused unknownflag-503 "an unknown flag next to an artifact named like a 409"
 # The flag value equals the start of the file name: a string-prefix match cannot prove the artifact was
-# identified (PR #259 r5), so an unknown flag disables the classification altogether.
+# identified (PR #259 r5).
 SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART='fixture-client: adding rekor v2 entry: unexpected response: 409 artifact' sign_blob unknownflag-collide "v2path503 v2path503 v2path503"
-expect_eq    "sign: an unknown flag whose value prefixes the file name never makes a conflict" 1 "$sb_tries"
+unknown_flag_refused unknownflag-collide "an unknown flag whose value prefixes the file name"
 SB_REL=1 SB_PRE='--oidc-client-id fixture-client' sign_blob unknownflag-409 "v2path409 ok"
-expect_eq    "sign: an unrecognised artifact fails closed even on a real 409" 1 "$sb_tries"
-# The argv whitelist (parse_argv): known flags keep the retry, anything else turns it off.
+unknown_flag_refused unknownflag-409 "an unknown flag on a would-be real 409"
+# The argv whitelist (parse_argv): known flags keep the retry; `--` and a positional count other than one
+# keep the bundle path unambiguous, so they run once, unclassified (#260); unknown flags are the cases above.
 SB_REL=1 SB_PRE='-y' sign_blob argv-y "v2path409 ok"
 expect_eq    "sign: -y is a known flag, a real 409 is still retried" 2 "$sb_tries"
 SB_REL=1 SB_PRE='--' sign_blob argv-dashdash "v2path409 ok"
-expect_eq    "sign: -- is not understood, no retry" 1 "$sb_tries"
+expect_eq    "sign: -- is understood but names no artifact: one attempt, no retry" 1 "$sb_tries"
 SB_REL=1 SB_PRE='second-positional' sign_blob argv-two "v2path409 ok"
-expect_eq    "sign: two positionals are not understood, no retry" 1 "$sb_tries"
+expect_eq    "sign: two positionals name no artifact: one attempt, no retry" 1 "$sb_tries"
 # One parser, one bundle path (PR #259 r6): a --bundle the wrapper cannot pin down is a usage error
 # (exit 2) before cosign runs, never a retry with a stale or unknown bundle.
 bundle_usage() { # bundle_usage <name> "<--bundle args, @B@ = bundle path>" [extra args]
@@ -450,7 +456,7 @@ bundle_usage bundle-twice-new-first "--bundle=@B@ --bundle=@B@.old"
 bundle_usage bundle-separate        "--bundle @B@"
 bundle_usage bundle-empty           "--bundle="
 # After `--` everything is a positional: a file named `--bundle=decoy` is the artifact, never the bundle,
-# so the unrelated file `decoy` is not removed and, as `--` is not understood, there is one attempt.
+# so the unrelated file `decoy` is not removed and, as `--` names no artifact, there is one attempt.
 SB_REL=1 SB_PRE='--' SB_ART='--bundle=decoy' SB_SENTINEL=decoy sign_blob dashdash-decoy "v2path409 ok"
 expect_eq    "sign: after -- a --bundle=... artifact makes exactly one attempt" 1 "$sb_tries"
 if [ -e "$tmp/sb-dashdash-decoy/decoy" ]; then ok; else bad "sign: the file named by a --bundle=decoy artifact after -- was deleted"; fi

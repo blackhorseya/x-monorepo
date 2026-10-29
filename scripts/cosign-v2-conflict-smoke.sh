@@ -77,10 +77,10 @@ for nm in ("entry", "a", "v2", "api"):
 run(503, 1, name="503 ", body=b"adding rekor v2 entry: unexpected response: 409 {}", label=" (artifact '503 ' and a body quoting a 409)")
 run(409, 3, name="sign-blob: adding rekor v2 entry: unexpected response: 503 x", label=" (artifact 'sign-blob: ...503 x')")
 run(503, 1, name="sign-blob: adding rekor v2 entry: unexpected response: 409 x", label=" (artifact 'sign-blob: ...409 x')")
-run(503, 1, name="adding rekor v2 entry: unexpected response: 409 artifact", pre=("--oidc-client-id", "fixture-client"),
-    label=" (flag unknown to the wrapper before the artifact)")
-run(503, 1, name="fixture-client: adding rekor v2 entry: unexpected response: 409 artifact", pre=("--oidc-client-id", "fixture-client"),
-    label=" (unknown flag whose value prefixes the artifact name)")
+run(503, 0, name="adding rekor v2 entry: unexpected response: 409 artifact", pre=("--oidc-client-id", "fixture-client"), want_rc=2,
+    label=" (flag unknown to the wrapper before the artifact: exit 2, cosign never runs)")
+run(503, 0, name="fixture-client: adding rekor v2 entry: unexpected response: 409 artifact", pre=("--oidc-client-id", "fixture-client"), want_rc=2,
+    label=" (unknown flag whose value prefixes the artifact name: exit 2, cosign never runs)")
 run(503, 0, name="artifact", bundles=lambda d: ["--bundle=" + d + "/bundle.json", "--bundle=" + d + "/other.json"],
     label=" (--bundle twice: usage error, cosign never runs)")
 # #260: cosign hands `--bundle=decoy` to --oidc-client-id as its value, so it has no bundle and sends
