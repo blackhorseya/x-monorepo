@@ -121,7 +121,13 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v24 := NewDocs()
 	readiness := NewReadiness(db)
 	v25 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
-	resolver := auth.NewResolver(v25, clock2)
+	resolver, err := auth.NewResolver(v25, clock2, meterProvider)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	serverServer, err := server.New(http, configAuth, logger, v23, v24, readiness, providers, resolver)
 	if err != nil {
 		cleanup3()
