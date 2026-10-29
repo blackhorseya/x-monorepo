@@ -200,7 +200,9 @@ func newEnv(t *testing.T, onHand int32) *raceEnv {
 	t.Helper()
 	url := pgtest.URL(t)
 
-	c := context.Background()
+	// Every statement of the test, the victim included, runs under this deadline.
+	c, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	t.Cleanup(cancel)
 	cfg := config.Postgres{URL: url}
 	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
 	if err != nil {
