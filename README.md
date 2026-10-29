@@ -408,5 +408,5 @@ build 成 `localhost/x-monorepo/console:kind`）。所以 console 的改動**會
   `gorm.ErrDuplicatedKey → order.ErrDuplicate`，其他保持 wrapped 給 log。
 - integration test（`infra/postgres`、`provider_test.go`、`apps/migrate`、`apps/worker`）用 `pkgs/platform/postgres/pgtest`：
   `TEST_DATABASE_URL` 沒設就以 testcontainers 起一個 `postgres:17-alpine`（每個 test binary 一個，`TestMain` 結束時 terminate），
-  設了就直接用那個 DB（連不上是 FAIL，不是 skip）。只有「本機沒有 container runtime」會 skip，且 CI 裡一律 FAIL。
+  設了就直接用那個 DB（連不上是 FAIL，不是 skip）。例外：`pkgs/identity` 的 last-admin 到期矩陣（`admin_lock_expiry_test.go`）會 `CREATE DATABASE` 開一個私有 DB 來隔離 `TRUNCATE` / 鎖定整張 accounts 表，所以提供的 `TEST_DATABASE_URL` 角色需要 `CREATEDB`（testcontainers 預設角色已有；沒有時該測試以 42501 明確 FAIL，不 skip；補權限：`ALTER ROLE <role> CREATEDB;`）。只有「本機沒有 container runtime」會 skip，且 CI 裡一律 FAIL。
   Podman 使用者要在 `~/.testcontainers.properties` 放 `ryuk.disabled=true`：Ryuk 寫死用名為 `bridge` 的 network，Podman 沒有。

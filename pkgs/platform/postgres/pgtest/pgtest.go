@@ -8,6 +8,9 @@
 //     answered (pull, start, readiness) is a failure.
 //   - set, non-empty: that database is used as-is. Unreachable → the test
 //     fails, never skips: the caller asked for it.
+//     Tests that isolate themselves with CREATE DATABASE (pkgs/identity's
+//     lock-expiry matrix) need that URL's role to hold CREATEDB
+//     (ALTER ROLE <role> CREATEDB); without it they fail with SQLSTATE 42501.
 //   - set, empty: fails. An empty opt-in is a typo, not "no opt-in".
 //
 // Each package that wants a database adds its own TestMain:
