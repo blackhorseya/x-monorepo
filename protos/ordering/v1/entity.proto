@@ -21,6 +21,8 @@ enum OrderStatus {
   ORDER_STATUS_COMPLETED = 4;
 }
 
+// LineItem is one line of an Order. unit_price is the snapshot of the catalog
+// price at the moment the order was placed: a later reprice does not change it.
 message LineItem {
   string sku = 1 [(buf.validate.field).string.min_len = 1];
   int32 quantity = 2 [(buf.validate.field).int32.gt = 0];

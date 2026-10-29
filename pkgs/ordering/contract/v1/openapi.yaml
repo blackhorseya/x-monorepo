@@ -148,6 +148,27 @@ components:
           title: order
       title: CompleteOrderResponse
       additionalProperties: false
+    ordering.v1.CreateOrderItem:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+          minLength: 1
+        quantity:
+          exclusiveMinimum: 0
+          type: integer
+          title: quantity
+          format: int32
+      title: CreateOrderItem
+      additionalProperties: false
+      description: |-
+        CreateOrderItem is one line of a CreateOrder request. It used to be
+         ordering.v1.LineItem with a caller-supplied unit_price (field 3); the price now
+         comes from the catalog, so the field is gone. The numbers of sku and quantity
+         are unchanged, so an old client keeps working on the wire: a field 3 it still
+         sends is an unknown field, ignored by the binary codecs, and discarded by
+         connect-go's JSON codec (see apps/rpc/order_pricing_test.go).
     ordering.v1.CreateOrderRequest:
       type: object
       properties:
@@ -161,9 +182,15 @@ components:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/ordering.v1.LineItem'
+            $ref: '#/components/schemas/ordering.v1.CreateOrderItem'
           title: items
           minItems: 1
+          description: |-
+            What to buy: sku and quantity only. The unit price is the catalog's
+             (catalog.v1.CatalogService), read when the order is placed and stored on
+             the order's lines as a snapshot; an unknown or inactive SKU is
+             INVALID_ARGUMENT (order.unknown_sku / order.inactive_sku) and one order
+             cannot mix currencies (order.mixed_currency).
         idempotencyKey:
           type: string
           title: idempotency_key
@@ -225,6 +252,9 @@ components:
       required:
         - unitPrice
       additionalProperties: false
+      description: |-
+        LineItem is one line of an Order. unit_price is the snapshot of the catalog
+         price at the moment the order was placed: a later reprice does not change it.
     ordering.v1.ListOrdersRequest:
       type: object
       properties:

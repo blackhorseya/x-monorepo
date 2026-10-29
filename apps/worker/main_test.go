@@ -32,6 +32,7 @@ import (
 	orderingdto "github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
+	orderingmemory "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -156,7 +157,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, own, rec, createResults)
+	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, own, orderingmemory.NewFlatPriceList(100, "USD"), rec, createResults)
 	getOrder := ordering.ProvideGetOrder(orders, own, rec)
 	completeOrder := ordering.ProvideCompleteOrder(orders, otx, oinbox, oev, oclock, ordering.ProvideOwnership(config.Auth{}), rec)
 	orderingSubs := ordering.ProvideSubscriptions(
@@ -252,7 +253,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	}
 	a, err := createOrder.Execute(c, orderingdto.CreateOrderInput{
 		CustomerID: "c-1",
-		Items:      []orderingdto.LineItem{{SKU: "S", Quantity: 2, UnitPrice: orderingdto.Money{AmountMinor: 100, Currency: "USD"}}},
+		Items:      []orderingdto.OrderLine{{SKU: "S", Quantity: 2}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +279,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	// ── order F: stocked → CONFIRMED → completed by the client → inventory COMMITTED (sold) ──
 	f, err := createOrder.Execute(c, orderingdto.CreateOrderInput{
 		CustomerID: "c-1",
-		Items:      []orderingdto.LineItem{{SKU: "S", Quantity: 2, UnitPrice: orderingdto.Money{AmountMinor: 100, Currency: "USD"}}},
+		Items:      []orderingdto.OrderLine{{SKU: "S", Quantity: 2}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -301,7 +302,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	// ── order B: unstocked SKU → REJECTED → inventory asks ordering to cancel ──
 	b, err := createOrder.Execute(c, orderingdto.CreateOrderInput{
 		CustomerID: "c-1",
-		Items:      []orderingdto.LineItem{{SKU: "NOPE", Quantity: 1, UnitPrice: orderingdto.Money{AmountMinor: 100, Currency: "USD"}}},
+		Items:      []orderingdto.OrderLine{{SKU: "NOPE", Quantity: 1}},
 	})
 	if err != nil {
 		t.Fatal(err)

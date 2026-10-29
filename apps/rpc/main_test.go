@@ -21,7 +21,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
@@ -61,11 +60,13 @@ func TestOrderService_E2E(t *testing.T) {
 
 	client := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
 	c := context.Background()
+	seedProduct(t, ts.URL, "", "SKU-1", 1299, "USD")
+	seedProduct(t, ts.URL, "", "S", 1, "USD")
 
 	created, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
 		CustomerId: "c-1",
-		Items: []*orderingv1.LineItem{
-			{Sku: "SKU-1", Quantity: 2, UnitPrice: &commonv1.Money{AmountMinor: 1299, Currency: "USD"}},
+		Items: []*orderingv1.CreateOrderItem{
+			{Sku: "SKU-1", Quantity: 2},
 		},
 	}))
 	if err != nil {
@@ -96,10 +97,10 @@ func TestOrderService_E2E(t *testing.T) {
 		}, connect.CodeNotFound},
 		// Shape errors are rejected by the protovalidate interceptor, before the
 		// use case: same code, the shared validation x-error-code.
-		{"invalid currency (protovalidate)", func() error {
+		{"zero quantity (protovalidate)", func() error {
 			_, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
 				CustomerId: "c-1",
-				Items:      []*orderingv1.LineItem{{Sku: "S", Quantity: 1, UnitPrice: &commonv1.Money{Currency: "usd"}}},
+				Items:      []*orderingv1.CreateOrderItem{{Sku: "S", Quantity: 0}},
 			}))
 			return err
 		}, connect.CodeInvalidArgument},
@@ -138,7 +139,7 @@ func TestOrderService_E2E(t *testing.T) {
 	for range 2 {
 		if _, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
 			CustomerId: "c-2",
-			Items:      []*orderingv1.LineItem{{Sku: "S", Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 1, Currency: "USD"}}},
+			Items:      []*orderingv1.CreateOrderItem{{Sku: "S", Quantity: 1}},
 		})); err != nil {
 			t.Fatalf("CreateOrder c-2: %v", err)
 		}
@@ -278,6 +279,7 @@ func TestOrderService_Protocols(t *testing.T) {
 	h2c := new(http.Protocols)
 	h2c.SetUnencryptedHTTP2(true)
 	h2cClient := &http.Client{Transport: &http.Transport{Protocols: h2c}}
+	seedProduct(t, ts.URL, "", "S", 1, "USD")
 
 	// Every protocol works at the bare protocol path and under server.RPCPrefix
 	// (a connect-go client prefixes gRPC too; grpc-go could not, hence both).
@@ -313,7 +315,7 @@ func TestOrderService_Protocols(t *testing.T) {
 
 			req := connect.NewRequest(&orderingv1.CreateOrderRequest{
 				CustomerId: "c-1",
-				Items:      []*orderingv1.LineItem{{Sku: "S", Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 1, Currency: "USD"}}},
+				Items:      []*orderingv1.CreateOrderItem{{Sku: "S", Quantity: 1}},
 			})
 			id := "client-" + strings.ReplaceAll(tt.name, "/", "-")
 			req.Header().Set(server.RequestIDHeader, id)

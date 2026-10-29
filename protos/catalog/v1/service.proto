@@ -7,7 +7,7 @@ import "catalog/v1/entity.proto";
 import "common/v1/money.proto";
 
 // CatalogService is the public RPC contract of the catalog bounded context:
-// the server-side source of product prices. Ordering does not call it yet.
+// the server-side source of product prices. Ordering prices every order with it (QuotePrices).
 service CatalogService {
   // UpsertProduct creates a product or replaces the name and price of an
   // existing one; an inactive product is activated again. The price's
@@ -22,6 +22,11 @@ service CatalogService {
   // inactive product succeeds and changes nothing. Requires the admin role
   // when auth is on (x-error-code: auth.permission_denied).
   rpc DeactivateProduct(DeactivateProductRequest) returns (DeactivateProductResponse);
+  // QuotePrices answers, for up to 100 SKUs in one query, what each sells for
+  // now: the price of every active product, and the SKUs that cannot be quoted,
+  // split into those with no product and those that were deactivated. Same
+  // access as GetProduct. Ordering calls it (in process) to price an order.
+  rpc QuotePrices(QuotePricesRequest) returns (QuotePricesResponse);
 }
 
 message UpsertProductRequest {
@@ -70,4 +75,27 @@ message DeactivateProductRequest {
 
 message DeactivateProductResponse {
   Product product = 1;
+}
+
+message QuotePricesRequest {
+  // 1 to 100 SKUs; duplicates are allowed and answered once.
+  repeated string skus = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 100
+    items: {
+      string: {
+        min_len: 1
+        max_len: 64
+      }
+    }
+  }];
+}
+
+message QuotePricesResponse {
+  // Active products only, by SKU.
+  map<string, common.v1.Money> prices = 1;
+  // SKUs no product exists for, in request order.
+  repeated string missing = 2;
+  // SKUs whose product was deactivated, in request order.
+  repeated string inactive = 3;
 }

@@ -71,10 +71,10 @@ func (i *seqIDs) NewID(context.Context) (string, error) {
 }
 
 func newCreate(repo order.Repository) *usecase.CreateOrder {
-	return usecase.NewCreateOrder(repo, &recorder{}, &seqIDs{}, fixedClock{t: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)}, ownership.New(adminRole))
+	return usecase.NewCreateOrder(repo, &recorder{}, &seqIDs{}, fixedClock{t: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)}, ownership.New(adminRole), memory.NewFlatPriceList(500, "USD"))
 }
 
-var oneItem = []dto.LineItem{{SKU: "SKU-1", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 500, Currency: "USD"}}}
+var oneItem = []dto.OrderLine{{SKU: "SKU-1", Quantity: 1}}
 
 func place(t *testing.T, create *usecase.CreateOrder, p contextx.Principal, customer string) *dto.OrderOutput {
 	t.Helper()
