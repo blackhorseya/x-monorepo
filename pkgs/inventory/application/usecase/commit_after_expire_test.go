@@ -10,6 +10,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
+	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 )
 
 // reserveAt reserves one order as if the clock read at, then restores the fixture's clock.
@@ -159,4 +160,43 @@ func TestReservationMovedWhileHandled_IsStale(t *testing.T) {
 			t.Fatalf("expire = %v, want ErrStale", err)
 		}
 	})
+}
+
+var errLookup = errors.New("lookup fault")
+
+// failNthFind fails the n-th FindByOrderID (1-based) with errLookup.
+type failNthFind struct {
+	reservation.Repository
+	n, calls int
+}
+
+func (i *failNthFind) FindByOrderID(c context.Context, orderID string) (*reservation.Reservation, error) {
+	i.calls++
+	if i.calls == i.n {
+		return nil, errLookup
+	}
+
+	return i.Repository.FindByOrderID(c, orderID)
+}
+
+// When the reservation moved under CommitStock and the re-read that classifies
+// the failure itself fails, the original domain error (final: the consumer
+// drops the message for good) must not leak out: the lookup error is returned,
+// which is infrastructure and retried.
+func TestCommitStock_RereadFailureIsNotFinal(t *testing.T) {
+	c := context.Background()
+	f := newFixture()
+	if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: "A", OnHand: 5}); err != nil {
+		t.Fatal(err)
+	}
+	reserveAt(t, f, f.clock.t.Add(-25*time.Hour), "o-1", 2)
+	flaky := &failNthFind{Repository: f.reservations, n: 2} // 1st: the use case's read, 2nd: the re-read
+	hooked := &onFirstLoad{Repository: f.stocks, hook: func() { sweep(t, f) }}
+	commit := usecase.NewCommitStock(flaky, hooked, f.rec, f.clock)
+
+	_, err := commit.Execute(c, dto.CommitStockInput{OrderID: "o-1"})
+	var de *kernel.Error
+	if !errors.Is(err, errLookup) || errors.As(err, &de) {
+		t.Fatalf("commit = %v, want the lookup error and no final kernel.Error", err)
+	}
 }
