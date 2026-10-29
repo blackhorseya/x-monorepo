@@ -46,8 +46,12 @@ if [ -z "$cfg" ]; then
 fi
 
 [ -f "$cfg" ] || { echo "FAIL: signing config $cfg does not exist"; exit 1; }
-logs=$(jq -c '[.rekorTlogUrls[]?]' "$cfg" 2>/dev/null) || { echo "FAIL: $cfg is not a signing config jq can read"; exit 1; }
-[ "$logs" != "[]" ] || { echo "FAIL: the signing config lists no Rekor log (rekorTlogUrls empty or missing): cannot tell which Rekor cosign would sign against"; exit 1; }
+# Shape first: exactly one JSON object whose rekorTlogUrls is a non-empty array of objects. jq
+# exits 0 on zero inputs (an empty or blank file) and cosign initialize only warns when it cannot
+# fetch the signing config, so "jq succeeded" proves nothing until the shape is checked.
+jq -e -s 'length == 1 and (.[0] | type == "object" and (.rekorTlogUrls | type == "array" and length > 0 and all(.[]; type == "object")))' "$cfg" >/dev/null 2>&1 \
+  || { echo "FAIL: $cfg is not one JSON signing config with a non-empty rekorTlogUrls array of objects (empty, blank or malformed): nothing was verified"; exit 1; }
+logs=$(jq -c '.rekorTlogUrls' "$cfg")
 
 version=$(cosign version 2>/dev/null | sed -n 's/^GitVersion: *//p' || true)
 bad=$(jq -r '.[] | select(.majorApiVersion != 1) | "  \(.url)  majorApiVersion=\(.majorApiVersion)  validFor=\(.validFor | tojson)  operator=\(.operator)"' <<<"$logs")
