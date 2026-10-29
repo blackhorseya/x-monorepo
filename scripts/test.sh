@@ -346,6 +346,16 @@ if command -v jq >/dev/null; then
   expect_match "canary: non-object log entry fails"       '^1 [^ ]'                 "$(canary "$tmp/canary-strentry.json")"
   expect_match "canary: two JSON documents fail"          '^1 '                     "$(canary "$tmp/canary-two.json")"
   expect_match "canary: empty file says unreadable, not ok" 'FAIL' "$(canary "$tmp/canary-empty.json")"
+  # The rest of #235's matrix: a document that parses but cannot name the log it describes.
+  printf 'null\n' > "$tmp/canary-null.json"; printf '{"rekorTlogUrls":[{"url":"https://rekor.sig' > "$tmp/canary-trunc.json"
+  echo '{"rekorTlogUrls":[{"url":"","majorApiVersion":1}]}' > "$tmp/canary-emptyurl.json"
+  echo '{"rekorTlogUrls":[{"majorApiVersion":1}]}' > "$tmp/canary-nourl.json"
+  echo '{"rekorTlogUrls":[{"url":5,"majorApiVersion":1}]}' > "$tmp/canary-numurl.json"
+  expect_match "canary: JSON null fails closed"           '^1 '                     "$(canary "$tmp/canary-null.json")"
+  expect_match "canary: truncated JSON fails closed"      '^1 '                     "$(canary "$tmp/canary-trunc.json")"
+  expect_match "canary: log with an empty url fails"      '^1 '                     "$(canary "$tmp/canary-emptyurl.json")"
+  expect_match "canary: log without a url fails"          '^1 '                     "$(canary "$tmp/canary-nourl.json")"
+  expect_match "canary: log with a non-string url fails"  '^1 '                     "$(canary "$tmp/canary-numurl.json")"
 
   # Resolution through cosign: a fake `initialize` writes the config under TUF_ROOT/<mirror>/targets/.
   canary_fake="$tmp/cosign-canary"; mkdir -p "$canary_fake"
