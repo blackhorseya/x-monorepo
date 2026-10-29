@@ -3,10 +3,15 @@ package inventory_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
@@ -18,45 +23,151 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
+// Interleaving regression matrix (issue #231) for the inventory transitions
+// that race on one reservation: CommitStock (OrderCompleted), ReleaseStock
+// (OrderCancelled) and ExpireReservations, against real Postgres through the
+// provider's transaction / inbox / metrics decorators and, for the consumers,
+// through the real handlers (so "retry" vs "drop" is the eventbus's answer,
+// not just an error type).
+//
+// Every interleaving is forced, never timed. The victim runs normally; at the
+// chosen barrier a hook runs the intruder to completion (its own committed
+// transaction) and only then lets the victim continue:
+//
+//	bFind   after the victim read the reservation, before it reads the stock
+//	bSave   after it read the stock and decided, before it writes the stock
+//	bUpdate after it wrote the stock, before it writes the reservation
+//
+// bUpdate is different: the victim's transaction already holds the stock row
+// lock, so an intruder that touches the stock would block the hook forever. The
+// intruder runs in a goroutine instead and the hook waits until Postgres
+// reports it parked on a lock (pg_stat_activity), the victim then finishes and
+// the lock releases it. That wait polls an observable state; nothing is slept
+// for as a guess.
+//
+// What each lock is proven by (see the cell comments):
+//   - stock version (Save WHERE version): intruders that change only the stock
+//     (a spare-units reserve) at bSave;
+//   - reservation status CAS (Update WHERE status): intruders that hand the
+//     victim a *fresh* stock which fits its stale reservation, at bFind;
+//   - staleIfMoved: every bFind cell where the aggregate's own domain error
+//     comes first, asserted through the handler as retry, never ErrDrop.
+
+type outcome string
+
+const (
+	outOK    outcome = "ok"    // nil: acked
+	outDrop  outcome = "drop"  // eventbus.ErrDrop: acked and dropped for good
+	outStale outcome = "stale" // retried: wraps kernel.ErrConcurrentUpdate, not a kernel.Error
+)
+
+func classify(err error) outcome {
+	switch {
+	case err == nil:
+		return outOK
+	case errors.Is(err, consumer.ErrDrop):
+		return outDrop
+	case errors.Is(err, kernel.ErrConcurrentUpdate):
+		return outStale
+	default:
+		return outcome("other: " + err.Error())
+	}
+}
+
+type victim int
+
+const (
+	vComplete victim = iota // OrderCompleted → CommitStock
+	vCancel                 // OrderCancelled → ReleaseStock
+	vExpire                 // ExpireReservations sweep
+)
+
+func (v victim) usecase() string {
+	return [...]string{"inventory.commit_stock", "inventory.release_stock", "inventory.expire_reservations"}[v]
+}
+
+type barrier int
+
+const (
+	bFind barrier = iota
+	bSave
+	bUpdate
+)
+
 type clockAt struct{ at time.Time }
 
 func (x clockAt) Now() time.Time { return x.at }
 
-// beforeFind runs hook once, just before the first stock load: the point
-// between a use case reading its reservation and reading the stock.
-type beforeFind struct {
+// hookStocks runs onFind / onSave once, just before the first FindBySKU / Save.
+type hookStocks struct {
 	stock.Repository
-	hook func()
+	onFind, onSave func()
 }
 
-func (x *beforeFind) FindBySKU(c context.Context, sku stock.SKU) (*stock.Stock, error) {
-	if h := x.hook; h != nil {
-		x.hook = nil
-		h()
+func (x *hookStocks) FindBySKU(c context.Context, sku stock.SKU) (*stock.Stock, error) {
+	if f := x.onFind; f != nil {
+		x.onFind = nil
+		f()
 	}
 
 	return x.Repository.FindBySKU(c, sku)
 }
 
+func (x *hookStocks) Save(c context.Context, s *stock.Stock) error {
+	if f := x.onSave; f != nil {
+		x.onSave = nil
+		f()
+	}
+
+	return x.Repository.Save(c, s)
+}
+
+// hookReservations runs onUpdate once, just before the first Update.
+type hookReservations struct {
+	reservation.Repository
+	onUpdate func()
+}
+
+func (x *hookReservations) Update(c context.Context, r *reservation.Reservation) error {
+	if f := x.onUpdate; f != nil {
+		x.onUpdate = nil
+		f()
+	}
+
+	return x.Repository.Update(c, r)
+}
+
+var envSeq atomic.Int64
+
 type raceEnv struct {
+	t            *testing.T
 	c            context.Context
+	db           *gorm.DB
 	stocks       stock.Repository
 	reservations reservation.Repository
 	tx           port.Transactor
 	inbox        port.Inbox
 	rec          *usecasex.Recorder
+	reader       *metric.ManualReader
 	now, old     clockAt
+
+	// Every row of one cell is named after p, so cells never share data (the
+	// expiry sweep is the only DB-wide read, and it is filtered to these).
+	p, sku, skuB string
+	o1, o2       string
+
+	expiredMine int // how many of o1 the last ExpireReservations attempt expired
 }
 
-// newRaceEnv opens a database with SKU-RACE stocked with 2 and o-race-1
-// reserved (2 units) 25 hours ago, i.e. due for the expiry sweep.
-func newRaceEnv(t *testing.T) *raceEnv {
+// newEnv opens the database with SKU (on_hand onHand) and no reservation.
+func newEnv(t *testing.T, onHand int32) *raceEnv {
 	t.Helper()
 	url := pgtest.URL(t)
 
@@ -75,157 +186,548 @@ func newRaceEnv(t *testing.T) *raceEnv {
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{
-		`DELETE FROM inventory.reservations WHERE order_id LIKE 'o-race-%'`,
-		`DELETE FROM inventory.stocks WHERE sku = 'SKU-RACE'`,
-	} {
-		if err := db.WithContext(c).Exec(q).Error; err != nil {
-			t.Fatal(err)
+
+	p := fmt.Sprintf("x%x%d", time.Now().UnixNano()&0xffffff, envSeq.Add(1))
+	e := &raceEnv{
+		t: t, c: c, db: db,
+		p: p, sku: "SKU-" + p, skuB: "SKUB-" + p,
+		o1: "o-" + p + "-1", o2: "o-" + p + "-2",
+	}
+	clean := func() {
+		like := "%" + p + "%"
+		for _, q := range []string{
+			`DELETE FROM inventory.reservations WHERE order_id LIKE ?`,
+			`DELETE FROM inventory.stocks WHERE sku LIKE ?`,
+			`DELETE FROM inventory.inbox WHERE message_id LIKE ?`,
+		} {
+			if err := db.WithContext(c).Exec(q, like).Error; err != nil {
+				t.Errorf("cleanup %q: %v", q, err)
+			}
 		}
 	}
+	clean()
+	t.Cleanup(clean)
 
-	rec, err := usecasex.NewRecorder(tel.Meter)
+	reader := metric.NewManualReader()
+	rec, err := usecasex.NewRecorder(metric.NewMeterProvider(metric.WithReader(reader)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &raceEnv{
-		c:            c,
-		stocks:       inventory.ProvideStockRepository(db, tel.Logger),
-		reservations: inventory.ProvideReservationRepository(db),
-		tx:           inventory.ProvideTransactor(db),
-		inbox:        inventory.ProvideInbox(db),
-		rec:          rec,
-		now:          clockAt{at: time.Now().UTC()},
-	}
+	e.rec, e.reader = rec, reader
+	e.stocks = inventory.ProvideStockRepository(db, tel.Logger)
+	e.reservations = inventory.ProvideReservationRepository(db)
+	e.tx = inventory.ProvideTransactor(db)
+	e.inbox = inventory.ProvideInbox(db)
+	e.now = clockAt{at: time.Now().UTC()}
 	e.old = clockAt{at: e.now.at.Add(-25 * time.Hour)}
-	if _, err := inventory.ProvideSetStock(e.stocks, e.tx, e.inbox, e.now, rec).Execute(c, dto.SetStockInput{SKU: "SKU-RACE", OnHand: 2}); err != nil {
-		t.Fatal(err)
-	}
-	e.reserve(t, "o-race-1", e.old)
+	e.setStock(e.sku, onHand)
 
 	return e
 }
 
-func (e *raceEnv) reserve(t *testing.T, orderID string, clock clockAt) {
+// newRaceEnv is newEnv plus o1 holding 2 units of SKU, reserved 25 hours ago
+// (due for the expiry sweep), so the stock starts at on_hand/2.
+func newRaceEnv(t *testing.T, onHand int32) *raceEnv {
 	t.Helper()
+	e := newEnv(t, onHand)
+	e.reserve(e.o1, e.old, dto.Line{SKU: e.sku, Quantity: 2})
+
+	return e
+}
+
+func (e *raceEnv) setStock(sku string, onHand int32) {
+	e.t.Helper()
+	if _, err := inventory.ProvideSetStock(e.stocks, e.tx, e.inbox, e.now, e.rec).Execute(e.c, dto.SetStockInput{SKU: sku, OnHand: onHand}); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func (e *raceEnv) reserve(orderID string, clock clockAt, lines ...dto.Line) {
+	e.t.Helper()
 	uc := inventory.ProvideReserveStock(e.reservations, e.stocks, e.tx, e.inbox, publisher{}, clock, e.rec)
-	out, err := uc.Execute(e.c, dto.ReserveStockInput{OrderID: orderID, Lines: []dto.Line{{SKU: "SKU-RACE", Quantity: 2}}})
+	out, err := uc.Execute(e.c, dto.ReserveStockInput{OrderID: orderID, Lines: lines})
 	if err != nil || out.Status != "RESERVED" {
-		t.Fatalf("reserve %s = %+v, %v", orderID, out, err)
+		e.t.Fatalf("reserve %s = %+v, %v", orderID, out, err)
 	}
 }
 
-func (e *raceEnv) expire(t *testing.T) {
-	t.Helper()
-	out, err := inventory.ProvideExpireReservations(e.reservations, e.stocks, e.tx, e.inbox, publisher{}, e.now, e.rec).Execute(e.c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour})
-	if err != nil || len(out.Expired) != 1 {
-		t.Fatalf("expire = %+v, %v", out, err)
+// attempt is one delivery of the victim against the given repositories:
+// the consumer handler for complete / cancel (with message id msgID when set,
+// as eventbus does), the use case for the sweep.
+func (e *raceEnv) attempt(v victim, msgID string, stocks stock.Repository, reservations reservation.Repository) error {
+	c := e.c
+	if msgID != "" {
+		c = contextx.WithMessageID(c, msgID)
+	}
+	switch v {
+	case vComplete:
+		payload, err := proto.Marshal(&orderingv1.OrderCompleted{OrderId: e.o1})
+		if err != nil {
+			e.t.Fatal(err)
+		}
+
+		return consumer.NewOrderCompletedHandler(inventory.ProvideCommitStock(reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec)).Handle(c, payload)
+	case vCancel:
+		payload, err := proto.Marshal(&orderingv1.OrderCancelled{OrderId: e.o1})
+		if err != nil {
+			e.t.Fatal(err)
+		}
+
+		return consumer.NewOrderCancelledHandler(inventory.ProvideReleaseStock(reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec)).Handle(c, payload)
+	default:
+		out, err := inventory.ProvideExpireReservations(reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec).Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour})
+		e.expiredMine = 0
+		if out != nil {
+			for _, x := range out.Expired {
+				if x.OrderID == e.o1 {
+					e.expiredMine++
+				}
+			}
+		}
+
+		return err
 	}
 }
 
-func (e *raceEnv) commit(stocks stock.Repository, orderID string) (*dto.ReservationOutput, error) {
-	return inventory.ProvideCommitStock(e.reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec).Execute(e.c, dto.CommitStockInput{OrderID: orderID})
+// An intruder is another actor moving the same reservation / stock; it runs as
+// its own transactions and reports its error instead of failing the test, so it
+// can also run off the test goroutine.
+type intruder func(e *raceEnv) error
+
+var (
+	// iExpire: the sweep gives o1's stock back (EXPIRED, stock x/0).
+	iExpire intruder = func(e *raceEnv) error { return e.attempt(vExpire, "", e.stocks, e.reservations) }
+	// iCommit: the order completes first.
+	iCommit intruder = func(e *raceEnv) error { return e.attempt(vComplete, "", e.stocks, e.reservations) }
+	// iRelease: the order is cancelled first.
+	iRelease intruder = func(e *raceEnv) error { return e.attempt(vCancel, "", e.stocks, e.reservations) }
+	// iReserve: another order takes spare units (changes only the stock row).
+	iReserve intruder = func(e *raceEnv) error { return e.tryReserve(e.o2, e.now, dto.Line{SKU: e.sku, Quantity: 2}) }
+)
+
+// then runs a, then b: "o1 gave its units back, and o2 reserved them".
+func then(a, b intruder) intruder {
+	return func(e *raceEnv) error {
+		if err := a(e); err != nil {
+			return err
+		}
+
+		return b(e)
+	}
 }
 
-func (e *raceEnv) stockNow(t *testing.T) *stock.Stock {
-	t.Helper()
-	s, err := e.stocks.FindBySKU(e.c, "SKU-RACE")
+func (e *raceEnv) tryReserve(orderID string, clock clockAt, lines ...dto.Line) error {
+	uc := inventory.ProvideReserveStock(e.reservations, e.stocks, e.tx, e.inbox, publisher{}, clock, e.rec)
+	out, err := uc.Execute(e.c, dto.ReserveStockInput{OrderID: orderID, Lines: lines})
 	if err != nil {
+		return err
+	}
+	if out.Status != "RESERVED" {
+		return fmt.Errorf("reserve %s = %s", orderID, out.Status)
+	}
+
+	return nil
+}
+
+// lockWaiters is how many sessions Postgres reports as waiting for a lock.
+func (e *raceEnv) lockWaiters() int {
+	e.t.Helper()
+	var n int
+	if err := e.db.WithContext(e.c).Raw(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&n).Error; err != nil {
+		e.t.Fatal(err)
+	}
+
+	return n
+}
+
+// parked runs in on its own goroutine and returns once Postgres says it is
+// waiting for a lock (the victim's), plus the channel its result arrives on.
+func (e *raceEnv) parked(in intruder) <-chan error {
+	done := make(chan error, 1)
+	// fire-and-forget: joined by the caller, which reads done after the victim returns.
+	go func() { done <- in(e) }()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for e.lockWaiters() == 0 {
+		select {
+		case err := <-done:
+			e.t.Fatalf("intruder finished (%v) instead of waiting for the victim's lock", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatal("intruder never blocked on a lock")
+		}
+		time.Sleep(time.Millisecond) // poll interval of an observed condition, not a guess at timing
+	}
+
+	return done
+}
+
+type state struct {
+	o1, o2   reservation.Status
+	onHand   int32
+	reserved int32
+}
+
+func (e *raceEnv) read(withO2 bool) state {
+	e.t.Helper()
+	var st state
+	r, err := e.reservations.FindByOrderID(e.c, e.o1)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	st.o1 = r.Status()
+	if withO2 {
+		r2, err := e.reservations.FindByOrderID(e.c, e.o2)
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		st.o2 = r2.Status()
+	}
+	s, err := e.stocks.FindBySKU(e.c, stock.SKU(e.sku))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	st.onHand, st.reserved = s.OnHand(), s.Reserved()
+	// The invariant every interleaving must keep, whatever it decided.
+	if st.reserved < 0 || st.onHand < st.reserved {
+		e.t.Fatalf("stock broke 0 <= reserved <= on_hand: on_hand %d reserved %d", st.onHand, st.reserved)
+	}
+
+	return st
+}
+
+// aborted is the usecase.duration samples of kind "aborted" per use case.
+func (e *raceEnv) aborted() map[string]int {
+	e.t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := e.reader.Collect(e.c, &rm); err != nil {
+		e.t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			hist, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok || m.Name != "usecase.duration" {
+				continue
+			}
+			for _, dp := range hist.DataPoints {
+				name, _ := dp.Attributes.Value("usecase")
+				kind, _ := dp.Attributes.Value("kind")
+				if kind.AsString() == "aborted" {
+					got[name.AsString()] += int(dp.Count)
+				}
+			}
+		}
+	}
+
+	return got
+}
+
+// cell is one scheduled interleaving. The victim's first delivery meets the
+// intruder at the barrier and must end `first`; the same message delivered again
+// (eventbus redelivery) must end `retry`, and the final state must be `want`.
+type cell struct {
+	name   string
+	onHand int32 // SKU on-hand before o1's hold; default 2
+	// holdO2 reserves 2 units for o2 at e.now before the race (needs onHand 4).
+	holdO2 bool
+
+	victim victim
+	at     barrier
+	by     intruder
+
+	first, retry outcome
+	retryExpires int // vExpire: how many of o1 the redelivery expires
+
+	want    state
+	checkO2 bool
+	// aborted overrides the expected aborted use-case counts; default is one for
+	// the victim's use case when `first` is outStale.
+	aborted map[string]int
+}
+
+func TestInterleavingMatrix(t *testing.T) {
+	const (
+		reserved  = reservation.StatusReserved
+		committed = reservation.StatusCommitted
+		short     = reservation.StatusCommitShort
+		released  = reservation.StatusReleased
+		expired   = reservation.StatusExpired
+	)
+
+	cells := []cell{
+		// ── complete (CommitStock) vs expire ───────────────────────────────
+		{
+			// The sweep returned the units and nobody took them: the stock the
+			// commit loads says reserved 0, so its own domain guard
+			// (commit_exceeds_reserved) fires before any stale-token check.
+			// That is a lost race, retryable; the retry sells o1 from what is
+			// available.
+			name: "complete/expire-without-rereserve@find", victim: vComplete, at: bFind, by: iExpire,
+			first: outStale, retry: outOK, want: state{o1: committed, onHand: 0, reserved: 0},
+		},
+		{
+			// …and o2 took them: the fresh stock (2/2) fits o1's stale RESERVED
+			// snapshot, so only the reservation status CAS stops o1 selling out
+			// of o2's hold. The retry sees EXPIRED, finds nothing available and
+			// ends COMMIT_SHORT; o2's hold is intact.
+			name: "complete/expire-then-o2-reserves@find", victim: vComplete, at: bFind, by: then(iExpire, iReserve),
+			first: outStale, retry: outOK, want: state{o1: short, o2: reserved, onHand: 2, reserved: 2}, checkO2: true,
+		},
+		{
+			// The sweep lands after the commit decided on the stock it read: the
+			// stock version moved, Save loses.
+			name: "complete/expire@save", victim: vComplete, at: bSave, by: iExpire,
+			first: outStale, retry: outOK, want: state{o1: committed, onHand: 0, reserved: 0},
+		},
+		{
+			// Only the stock changes (o2 takes the spare units; o1 stays
+			// RESERVED, so the status CAS cannot see it). Without the version
+			// predicate the commit would write its 2/0 over o2's 4/4.
+			name: "complete/spare-units-reserved@save", onHand: 4, victim: vComplete, at: bSave, by: iReserve,
+			first: outStale, retry: outOK, want: state{o1: committed, o2: reserved, onHand: 2, reserved: 2}, checkO2: true,
+		},
+		{
+			// The commit holds the stock row lock when the sweep arrives. The
+			// sweep waits, then loses its stock version and aborts; o1 is sold once.
+			name: "complete/expire-blocked@update", victim: vComplete, at: bUpdate, by: iExpire,
+			first: outOK, want: state{o1: committed, onHand: 0, reserved: 0},
+			aborted: map[string]int{"inventory.expire_reservations": 1},
+		},
+
+		// ── complete vs release ────────────────────────────────────────────
+		{
+			// Ordering cannot emit both OrderCancelled and OrderCompleted, but
+			// consumers are at-least-once and unordered: if both ever arrive the
+			// second must not oversell. Cancel got there first.
+			name: "complete/release@find", victim: vComplete, at: bFind, by: iRelease,
+			first: outStale, retry: outDrop, want: state{o1: released, onHand: 2, reserved: 0},
+		},
+		{
+			// …with the units re-reserved by o2: status CAS again.
+			name: "complete/release-then-o2-reserves@find", victim: vComplete, at: bFind, by: then(iRelease, iReserve),
+			first: outStale, retry: outDrop, want: state{o1: released, o2: reserved, onHand: 2, reserved: 2}, checkO2: true,
+		},
+
+		// ── double complete ────────────────────────────────────────────────
+		{
+			// Same order completed twice (two different messages): the second
+			// finds the stock already sold and must neither deduct again nor go negative.
+			name: "complete/complete@find", victim: vComplete, at: bFind, by: iCommit,
+			first: outStale, retry: outDrop, want: state{o1: committed, onHand: 0, reserved: 0},
+		},
+		{
+			// The same with o2 holding units: the fresh stock (2/2) fits the
+			// stale snapshot, so a second deduction would eat o2's hold. Only the
+			// status CAS prevents it.
+			name: "complete/complete-with-o2-hold@find", onHand: 4, holdO2: true, victim: vComplete, at: bFind, by: iCommit,
+			first: outStale, retry: outDrop, want: state{o1: committed, o2: reserved, onHand: 2, reserved: 2}, checkO2: true,
+		},
+
+		// ── cancel (ReleaseStock) vs expire / complete ─────────────────────
+		{
+			name: "cancel/expire@find", victim: vCancel, at: bFind, by: iExpire,
+			first: outStale, retry: outDrop, want: state{o1: expired, onHand: 2, reserved: 0},
+		},
+		{
+			// A release over o2's fresh hold would free o2's units; the CAS stops it.
+			name: "cancel/expire-then-o2-reserves@find", victim: vCancel, at: bFind, by: then(iExpire, iReserve),
+			first: outStale, retry: outDrop, want: state{o1: expired, o2: reserved, onHand: 2, reserved: 2}, checkO2: true,
+		},
+		{
+			name: "cancel/complete@find", victim: vCancel, at: bFind, by: iCommit,
+			first: outStale, retry: outDrop, want: state{o1: committed, onHand: 0, reserved: 0},
+		},
+		{
+			// Version lock for the release path: o2 took spare units meanwhile.
+			name: "cancel/spare-units-reserved@save", onHand: 4, victim: vCancel, at: bSave, by: iReserve,
+			first: outStale, retry: outOK, want: state{o1: released, o2: reserved, onHand: 4, reserved: 2}, checkO2: true,
+		},
+		{
+			name: "cancel/complete-blocked@update", victim: vCancel, at: bUpdate, by: iCommit,
+			first: outOK, want: state{o1: released, onHand: 2, reserved: 0},
+			aborted: map[string]int{"inventory.commit_stock": 1},
+		},
+
+		// ── expire (sweep) vs complete / cancel ────────────────────────────
+		{
+			name: "expire/complete@find", victim: vExpire, at: bFind, by: iCommit,
+			first: outStale, retry: outOK, retryExpires: 0, want: state{o1: committed, onHand: 0, reserved: 0},
+		},
+		{
+			name: "expire/release@find", victim: vExpire, at: bFind, by: iRelease,
+			first: outStale, retry: outOK, retryExpires: 0, want: state{o1: released, onHand: 2, reserved: 0},
+		},
+		{
+			// The sweep must not free the units o2 still holds after o1 sold its own.
+			name: "expire/complete-with-o2-hold@find", onHand: 4, holdO2: true, victim: vExpire, at: bFind, by: iCommit,
+			first: outStale, retry: outOK, retryExpires: 0, want: state{o1: committed, o2: reserved, onHand: 2, reserved: 2}, checkO2: true,
+		},
+		{
+			name: "expire/spare-units-reserved@save", onHand: 4, victim: vExpire, at: bSave, by: iReserve,
+			first: outStale, retry: outOK, retryExpires: 1, want: state{o1: expired, o2: reserved, onHand: 4, reserved: 2}, checkO2: true,
+		},
+		{
+			name: "expire/complete-blocked@update", victim: vExpire, at: bUpdate, by: iCommit,
+			first: outOK, want: state{o1: expired, onHand: 2, reserved: 0},
+			aborted: map[string]int{"inventory.commit_stock": 1},
+		},
+	}
+
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			if c.onHand == 0 {
+				c.onHand = 2
+			}
+			e := newRaceEnv(t, c.onHand)
+			if c.holdO2 {
+				e.reserve(e.o2, e.now, dto.Line{SKU: e.sku, Quantity: 2})
+			}
+
+			stocks := &hookStocks{Repository: e.stocks}
+			reservations := &hookReservations{Repository: e.reservations}
+			var parkedErr <-chan error
+			fire := func() {
+				if err := c.by(e); err != nil {
+					t.Errorf("intruder: %v", err)
+				}
+			}
+			switch c.at {
+			case bFind:
+				stocks.onFind = fire
+			case bSave:
+				stocks.onSave = fire
+			case bUpdate:
+				reservations.onUpdate = func() { parkedErr = e.parked(c.by) }
+			}
+
+			msgID := e.p + "-m1"
+			if c.victim == vExpire {
+				msgID = ""
+			}
+			err := e.attempt(c.victim, msgID, stocks, reservations)
+			if got := classify(err); got != c.first {
+				t.Fatalf("first delivery = %v (%s); want %s", err, got, c.first)
+			}
+			if c.first == outStale {
+				var de *kernel.Error
+				if errors.As(err, &de) {
+					t.Fatalf("first delivery %v carries a kernel.Error %q: the consumer would drop it", err, de.Code())
+				}
+			}
+			if parkedErr != nil {
+				// The intruder was released by the victim's commit and must have lost.
+				if got := classify(<-parkedErr); got != outStale {
+					t.Fatalf("intruder parked on the victim's lock ended %s; want stale", got)
+				}
+			}
+
+			last := c.first
+			if c.first != outOK {
+				// Redelivery of the same message: the failed attempt rolled back with
+				// its inbox record, so this one must run (not ErrDuplicateMessage).
+				err = e.attempt(c.victim, msgID, e.stocks, e.reservations)
+				if errors.Is(err, usecasex.ErrDuplicateMessage) {
+					t.Fatalf("redelivery was swallowed as a duplicate: the failed attempt's inbox record survived (%v)", err)
+				}
+				if got := classify(err); got != c.retry {
+					t.Fatalf("redelivery = %v (%s); want %s", err, got, c.retry)
+				}
+				if c.victim == vExpire && e.expiredMine != c.retryExpires {
+					t.Fatalf("redelivery expired %d of o1; want %d", e.expiredMine, c.retryExpires)
+				}
+				last = c.retry
+			}
+
+			got := e.read(c.checkO2)
+			if got != c.want {
+				t.Fatalf("final state = %+v; want %+v", got, c.want)
+			}
+
+			// A handler message that was applied is not applied twice.
+			if last == outOK && c.victim != vExpire {
+				err = e.attempt(c.victim, msgID, e.stocks, e.reservations)
+				if !errors.Is(err, usecasex.ErrDuplicateMessage) || classify(err) != outDrop {
+					t.Fatalf("third delivery of an applied message = %v; want a dropped duplicate", err)
+				}
+				if again := e.read(c.checkO2); again != got {
+					t.Fatalf("a duplicate delivery moved the state: %+v → %+v", got, again)
+				}
+			}
+
+			wantAborted := c.aborted
+			if wantAborted == nil {
+				wantAborted = map[string]int{}
+				if c.first == outStale {
+					wantAborted[c.victim.usecase()] = 1
+				}
+			}
+			if gotAborted := e.aborted(); fmt.Sprint(gotAborted) != fmt.Sprint(wantAborted) {
+				t.Fatalf("aborted use cases = %v; want %v", gotAborted, wantAborted)
+			}
+		})
+	}
+}
+
+// Two lines, one of them re-reserved by someone else after the sweep: the late
+// commit must end COMMIT_SHORT without moving either SKU (no half sale), and
+// the first attempt, which lands on the first line's domain guard, is a
+// retryable lost race, not a drop.
+func TestCompleteVsExpire_MultiLinePartialShortage(t *testing.T) {
+	e := newEnv(t, 2)
+	e.setStock(e.skuB, 2)
+	e.reserve(e.o1, e.old, dto.Line{SKU: e.sku, Quantity: 2}, dto.Line{SKU: e.skuB, Quantity: 2})
+
+	stocks := &hookStocks{Repository: e.stocks}
+	stocks.onFind = func() {
+		if err := iExpire(e); err != nil {
+			t.Errorf("expire: %v", err)
+		}
+		// Only line B is taken again; line A stays free.
+		if err := e.tryReserve(e.o2, e.now, dto.Line{SKU: e.skuB, Quantity: 2}); err != nil {
+			t.Errorf("o2 reserve: %v", err)
+		}
+	}
+	msg := e.p + "-m1"
+	if err := e.attempt(vComplete, msg, stocks, e.reservations); classify(err) != outStale {
+		t.Fatalf("first delivery = %v; want stale", err)
+	}
+	if err := e.attempt(vComplete, msg, e.stocks, e.reservations); err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
+
+	r, err := e.reservations.FindByOrderID(e.c, e.o1)
+	if err != nil || r.Status() != reservation.StatusCommitShort {
+		t.Fatalf("o1 = %v, %v; want COMMIT_SHORT", r, err)
+	}
+	for _, tc := range []struct {
+		sku              string
+		onHand, reserved int32
+	}{{e.sku, 2, 0}, {e.skuB, 2, 2}} { // untouched: A free, B still o2's
+		s, err := e.stocks.FindBySKU(e.c, stock.SKU(tc.sku))
+		if err != nil || s.OnHand() != tc.onHand || s.Reserved() != tc.reserved {
+			t.Fatalf("%s = %v, %v; want on_hand %d reserved %d", tc.sku, s, err, tc.onHand, tc.reserved)
+		}
+	}
+}
+
+// A domain rejection that is not a lost race stays final: the re-read finds the
+// reservation exactly as it was loaded, so the error is kept and the message is
+// dropped instead of retried forever.
+func TestTerminalDomainErrorIsStillDropped(t *testing.T) {
+	e := newRaceEnv(t, 2)
+	if err := e.attempt(vCancel, "", e.stocks, e.reservations); err != nil {
 		t.Fatal(err)
 	}
 
-	return s
-}
-
-// The stock version cannot see a reservation that changed after it was read:
-// CommitStock reads o1 as RESERVED, then another transaction expires o1 and
-// o2 reserves the very units it gave back, and only then does CommitStock
-// load the (now fresh) stock. Without a lock on the reservation itself it
-// would sell o1 out of o2's hold. The commit must lose (retryable), and the
-// retry must see EXPIRED, find nothing available and end COMMIT_SHORT, with
-// o2's hold intact.
-func TestCommitStock_ReservationChangedUnderneath(t *testing.T) {
-	e := newRaceEnv(t)
-	interleaved := &beforeFind{Repository: e.stocks}
-	interleaved.hook = func() {
-		e.expire(t)
-		e.reserve(t, "o-race-2", e.now)
+	for _, v := range []victim{vComplete, vCancel} {
+		if err := e.attempt(v, "", e.stocks, e.reservations); classify(err) != outDrop {
+			t.Fatalf("victim %d over a RELEASED reservation = %v; want a drop", v, err)
+		}
 	}
-
-	out, err := e.commit(interleaved, "o-race-1")
-	if !errors.Is(err, kernel.ErrConcurrentUpdate) {
-		t.Fatalf("commit over a changed reservation = %+v, %v; want a retryable concurrent update", out, err)
-	}
-
-	// The failed attempt rolled back; the retry reloads and sees EXPIRED.
-	out, err = e.commit(e.stocks, "o-race-1")
-	if err != nil || out.Status != "COMMIT_SHORT" {
-		t.Fatalf("retry = %+v, %v; want COMMIT_SHORT", out, err)
-	}
-	if s := e.stockNow(t); s.OnHand() != 2 || s.Reserved() != 2 {
-		t.Fatalf("stock = on_hand %d reserved %d; want 2/2 (o2's hold intact)", s.OnHand(), s.Reserved())
-	}
-	out, err = e.commit(e.stocks, "o-race-2")
-	if err != nil || out.Status != "COMMITTED" {
-		t.Fatalf("o2 commit = %+v, %v; want COMMITTED", out, err)
-	}
-}
-
-// Same window, nobody reserves the units the sweep gave back: the stock the
-// commit loads now says reserved 0, so selling "from the reservation" fails
-// in the stock aggregate before the reservation is ever written. That is the
-// same lost race, not a final domain error: it must be retryable, and the
-// retry sells o1 from what is available (COMMITTED).
-func TestCommitStock_ExpiredUnderneathWithoutRereserve(t *testing.T) {
-	e := newRaceEnv(t)
-	interleaved := &beforeFind{Repository: e.stocks}
-	interleaved.hook = func() { e.expire(t) }
-
-	out, err := e.commit(interleaved, "o-race-1")
-	if !errors.Is(err, kernel.ErrConcurrentUpdate) {
-		t.Fatalf("commit over an expired reservation = %+v, %v; want a retryable concurrent update, not a final domain error", out, err)
-	}
-
-	out, err = e.commit(e.stocks, "o-race-1")
-	if err != nil || out.Status != "COMMITTED" {
-		t.Fatalf("retry = %+v, %v; want COMMITTED", out, err)
-	}
-	if s := e.stockNow(t); s.OnHand() != 0 || s.Reserved() != 0 {
-		t.Fatalf("stock = on_hand %d reserved %d; want 0/0", s.OnHand(), s.Reserved())
-	}
-}
-
-// The same race as TestCommitStock_ExpiredUnderneathWithoutRereserve, through
-// the consumer entry point: the OrderCompleted handler must not turn it into a
-// drop (the eventbus would never deliver the message again, order COMPLETED
-// and nothing sold). A plain error is retried, and the retry sells.
-func TestOrderCompletedHandler_ExpiredUnderneathIsRetried(t *testing.T) {
-	e := newRaceEnv(t)
-	interleaved := &beforeFind{Repository: e.stocks}
-	interleaved.hook = func() { e.expire(t) }
-	payload, err := proto.Marshal(&orderingv1.OrderCompleted{OrderId: "o-race-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle := func(stocks stock.Repository) error {
-		commit := inventory.ProvideCommitStock(e.reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec)
-
-		return consumer.NewOrderCompletedHandler(commit).Handle(e.c, payload)
-	}
-
-	err = handle(interleaved)
-	if err == nil || errors.Is(err, consumer.ErrDrop) || !errors.Is(err, kernel.ErrConcurrentUpdate) {
-		t.Fatalf("handler = %v, want a retryable error (not ErrDrop)", err)
-	}
-	if err := handle(e.stocks); err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	got, err := e.reservations.FindByOrderID(e.c, "o-race-1")
-	if err != nil || got.Status() != reservation.StatusCommitted {
-		t.Fatalf("reservation = %v, %v; want COMMITTED", got, err)
-	}
-	if s := e.stockNow(t); s.OnHand() != 0 || s.Reserved() != 0 {
-		t.Fatalf("stock = on_hand %d reserved %d; want 0/0", s.OnHand(), s.Reserved())
+	if got := e.read(false); got != (state{o1: reservation.StatusReleased, onHand: 2, reserved: 0}) {
+		t.Fatalf("state = %+v", got)
 	}
 }
 
@@ -251,28 +753,24 @@ func (x *failNthFind) FindByOrderID(c context.Context, orderID string) (*reserva
 // consumer entry point the message must be retried, not dropped, and the same
 // message delivered again must then sell.
 func TestOrderCompletedHandler_RereadFailureIsRetried(t *testing.T) {
-	e := newRaceEnv(t)
-	interleaved := &beforeFind{Repository: e.stocks}
-	interleaved.hook = func() { e.expire(t) }
+	e := newRaceEnv(t, 2)
+	stocks := &hookStocks{Repository: e.stocks}
+	stocks.onFind = func() {
+		if err := iExpire(e); err != nil {
+			t.Errorf("expire: %v", err)
+		}
+	}
 	flaky := &failNthFind{Repository: e.reservations, n: 2} // 1st: the use case's read, 2nd: the re-read
-	payload, err := proto.Marshal(&orderingv1.OrderCompleted{OrderId: "o-race-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle := func(reservations reservation.Repository, stocks stock.Repository) error {
-		commit := inventory.ProvideCommitStock(reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec)
+	msg := e.p + "-m1"
 
-		return consumer.NewOrderCompletedHandler(commit).Handle(e.c, payload)
-	}
-
-	err = handle(flaky, interleaved)
+	err := e.attempt(vComplete, msg, stocks, flaky)
 	if !errors.Is(err, errLookup) || errors.Is(err, consumer.ErrDrop) {
 		t.Fatalf("handler = %v, want the lookup error and no ErrDrop", err)
 	}
-	if err := handle(e.reservations, e.stocks); err != nil {
+	if err := e.attempt(vComplete, msg, e.stocks, e.reservations); err != nil {
 		t.Fatalf("redelivery: %v", err)
 	}
-	if got, err := e.reservations.FindByOrderID(e.c, "o-race-1"); err != nil || got.Status() != reservation.StatusCommitted {
-		t.Fatalf("reservation = %v, %v; want COMMITTED", got, err)
+	if got := e.read(false); got != (state{o1: reservation.StatusCommitted, onHand: 0, reserved: 0}) {
+		t.Fatalf("state = %+v; want COMMITTED 0/0", got)
 	}
 }
