@@ -6,6 +6,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/mapper"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -20,10 +21,11 @@ type CompleteOrder struct {
 	repo   order.Repository
 	events port.EventPublisher
 	clock  port.Clock
+	own    *ownership.Policy
 }
 
-func NewCompleteOrder(repo order.Repository, events port.EventPublisher, clock port.Clock) *CompleteOrder {
-	return &CompleteOrder{repo: repo, events: events, clock: clock}
+func NewCompleteOrder(repo order.Repository, events port.EventPublisher, clock port.Clock, own *ownership.Policy) *CompleteOrder {
+	return &CompleteOrder{repo: repo, events: events, clock: clock, own: own}
 }
 
 func (uc *CompleteOrder) Execute(c context.Context, in dto.CompleteOrderInput) (*dto.OrderOutput, error) {

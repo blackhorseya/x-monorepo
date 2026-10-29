@@ -36,7 +36,7 @@ func TestConfirmThenCancel(t *testing.T) {
 	rec := &recorder{}
 	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
 	confirm := usecase.NewConfirmOrder(repo, rec, clock)
-	cancel := usecase.NewCancelOrder(repo, rec, clock)
+	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
@@ -84,8 +84,8 @@ func TestCompleteOrder(t *testing.T) {
 	rec := &recorder{}
 	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
 	confirm := usecase.NewConfirmOrder(repo, rec, clock)
-	complete := usecase.NewCompleteOrder(repo, rec, clock)
-	cancel := usecase.NewCancelOrder(repo, rec, clock)
+	complete := usecase.NewCompleteOrder(repo, rec, clock, ownership.New("admin"))
+	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
@@ -136,7 +136,7 @@ func TestCreateGetCancel(t *testing.T) {
 	rec := &recorder{}
 	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
 	get := usecase.NewGetOrder(repo, ownership.New("admin"))
-	cancel := usecase.NewCancelOrder(repo, rec, clock)
+	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
 
 	created, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",

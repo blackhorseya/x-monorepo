@@ -6,6 +6,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/mapper"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -17,10 +18,11 @@ type CancelOrder struct {
 	repo   order.Repository
 	events port.EventPublisher
 	clock  port.Clock
+	own    *ownership.Policy
 }
 
-func NewCancelOrder(repo order.Repository, events port.EventPublisher, clock port.Clock) *CancelOrder {
-	return &CancelOrder{repo: repo, events: events, clock: clock}
+func NewCancelOrder(repo order.Repository, events port.EventPublisher, clock port.Clock, own *ownership.Policy) *CancelOrder {
+	return &CancelOrder{repo: repo, events: events, clock: clock, own: own}
 }
 
 func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto.OrderOutput, error) {

@@ -69,8 +69,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	}
 	v := ordering.ProvideCreateOrder(repository, transactor, inbox, eventsPublisher, uuidGenerator, clock, policy, recorder)
 	v2 := ordering.ProvideGetOrder(repository, policy, recorder)
-	v3 := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, recorder)
-	v4 := ordering.ProvideCompleteOrder(repository, transactor, inbox, eventsPublisher, clock, recorder)
+	v3 := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)
+	v4 := ordering.ProvideCompleteOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)
 	v5 := ordering.ProvideListOrders(repository, policy, recorder)
 	orderService := rpc.NewOrderService(v, v2, v3, v4, v5)
 	stockRepository := inventory.ProvideStockRepository(db, logger)
