@@ -4,7 +4,7 @@ import { AdminService } from "@repo/proto/admin/v1/service_pb";
 import { IdentityService } from "@repo/proto/identity/v1/service_pb";
 import { InventoryService } from "@repo/proto/inventory/v1/service_pb";
 import { OrderService } from "@repo/proto/ordering/v1/service_pb";
-import { ViolationsSchema } from "@repo/proto/buf/validate/validate_pb";
+import { ViolationsSchema } from "@repo/proto/buf/validate/violations_pb";
 import { credentialHeaders } from "./auth";
 
 // Same origin, under /api: vite proxies /api to the Go server, and in production

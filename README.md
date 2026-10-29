@@ -170,6 +170,7 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 - 規則故意和 domain 重複：edge 給 client 好讀的錯（哪個欄位、哪條 rule），domain 給所有入口一致的保證。
 - `buf.yaml` 的 `deps` 帶進 `buf.build/bufbuild/protovalidate`（`buf.lock` 有 commit）；`buf.gen.yaml` 用 `managed.disable` 讓它保留自己的 Go package。
 - OpenAPI 會把 rule 轉成 `minLength` / `minimum` / `pattern`，所以 `/api/docs` 看得到。
+- TS client 不帶 rule：`task gen-ts` 經 `tools/stripvalidate` 把 options（含 `buf.validate.*`，也含其他 unknown option field）和 `validate.proto` 拿掉，只留 `Violations` / `Violation` / `FieldPath` / `FieldPathElement`（`buf/validate/violations.proto`，package 與 type URL 不變），console bundle 因此少 ~70 kB raw / ~13 kB gzip。代價：瀏覽器端用不了 protovalidate 規則（驗證只在 server 與 domain）；wire 相容由 `tools/stripvalidate` 的測試鎖住。詳見 `web/packages/proto/README.md`。
 
 ## Pagination：cursor（keyset）+ opaque page token
 

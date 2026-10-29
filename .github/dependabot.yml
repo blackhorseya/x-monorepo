@@ -15,7 +15,7 @@
 version: 2
 updates:
   - package-ecosystem: gomod
-    directories: ["/pkgs/*", "/apps/*"]
+    directories: ["/pkgs/*", "/apps/*", "/tools/*"]
     schedule: { interval: weekly }
     open-pull-requests-limit: 3
     commit-message: { prefix: build, include: scope }

@@ -9,4 +9,5 @@ use (
 	./pkgs/kernel
 	./pkgs/ordering
 	./pkgs/platform
+	./tools/stripvalidate
 )
