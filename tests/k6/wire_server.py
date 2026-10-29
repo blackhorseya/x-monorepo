@@ -10,7 +10,7 @@ misbehaving upstream or proxy that reflects the credential would:
   chunk      a chunked body whose size is the key
   truncated  Content-Length 100, 5 bytes, close (unexpected EOF; the key is only in a header)
   closed     the connection is closed without a byte: no key on the wire at all
-Test tooling only: the rpc is not involved."""
+Prints `served <mode>` to stderr after each answer. Test tooling only: the rpc is not involved."""
 import socket
 import sys
 import threading
@@ -45,6 +45,8 @@ def serve(conn):
                 return
             data += chunk
         conn.sendall(answer(key_of(data)))
+        # wire.sh asserts this line: the broken answer of this mode really went out
+        print(f"served {mode}", file=sys.stderr, flush=True)
 
 
 listener = socket.socket()

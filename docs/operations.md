@@ -116,7 +116,7 @@ task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一
 
 另外 transport 失敗不再被默默放過：k6 對沒有 response 的請求不計 `http_req_failed`，所以 `timeout.js` 打到一個回壞掉 HTTP 的 server 時，原本每筆都在 `check` 丟例外、`timed_out` 沒有樣本 → `rate==1` 空過、exit 0；現在 `check` 看得到 `status 0`，`timed_out` 是 0% → exit 99。
 
-`tests/k6/wire.sh`（`task k6-wire`，不需要 Postgres 和 rpc，約 1 分鐘）：四支腳本 × 六種壞掉的回應（`tests/k6/wire_server.py`：`status` / `version` / `header` / `chunk` 帶著請求的 `X-API-Key`，`truncated` body 不完整，`closed` 連線直接關），每個 run 都要非零退出，`API_KEY`（自造的假 key）不能出現在 k6 輸出、`--summary-export`、`--out json` 的任何一行，metrics 不能有自由文字的 `error` tag，`closed`（key 根本沒上線）要有 `transport.<class>` 的診斷。失敗用 go test 的 `--- FAIL:` 格式印，`scripts/red-stage.sh` 讀得懂。
+`tests/k6/wire.sh`（`task k6-wire`，不需要 Postgres 和 rpc，約 1 分鐘）：四支腳本 × 六種壞掉的回應（`tests/k6/wire_server.py`：`status` / `version` / `header` / `chunk` 帶著請求的 `X-API-Key`，`truncated` body 不完整，`closed` 連線直接關），每個 run 都要非零退出，`API_KEY`（自造的假 key）不能出現在 k6 輸出、`--summary-export`、`--out json` 的任何一行，metrics 不能有自由文字的 `error` tag，`closed`（key 根本沒上線）要有 `transport.<class>` 的診斷。每個 cell 還要證明 fixture 真的在場：server 要在 5 秒內 listen、跑完仍活著、自己印出 `served <mode>`（壞回應確實送出），而且 k6 回報的失敗分類必須恰好是該 mode 的（`status` / `version` / `header` / `chunk` → `malformed_response`、`truncated` → `truncated_response`、`closed` → `connection_closed`），出現其他分類（例如 server 缺席時的 `connection_refused`）就紅——光看 exit 非零和沒有 key 證明不了什麼。最後兩個負例 cell 讓 `wire.sh` 自己再跑一次：server 不啟動（`WIRE_SERVER_CMD=false`）、server 回錯的 mode（`WIRE_SERVE_AS=closed`），它必須失敗，否則 gate 本身標紅。失敗用 go test 的 `--- FAIL:` 格式印，`scripts/red-stage.sh` 讀得懂。
 
 CI 的 `k6-auth` job 和 `k6` job 平行；matrix 的 cell 名字可以接在 task 後面只跑幾個：`task k6-auth-matrix -- on-admin-orders whoami-public`。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
 
