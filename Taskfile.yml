@@ -35,9 +35,9 @@ vars:
   KUBECONFORM_VERSION: v0.7.0   # helm-check; helm itself comes from PATH (brew install helm)
 
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
-  BCS: ordering inventory identity
+  BCS: ordering inventory identity catalog
   # Every Go module in the workspace (keep in sync with go.work).
-  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity apps/rpc apps/migrate apps/worker tools/stripvalidate
+  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity pkgs/catalog apps/rpc apps/migrate apps/worker tools/stripvalidate
   APPS: rpc migrate worker
 
 tasks:

@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package catalog.v1;
+
+import "buf/validate/validate.proto";
+import "catalog/v1/entity.proto";
+import "common/v1/money.proto";
+
+// CatalogService is the public RPC contract of the catalog bounded context:
+// the server-side source of product prices. Ordering does not call it yet.
+service CatalogService {
+  // UpsertProduct creates a product or replaces the name and price of an
+  // existing one; an inactive product is activated again. The price's
+  // currency may change. Requires the admin role when auth is on
+  // (x-error-code: auth.permission_denied).
+  rpc UpsertProduct(UpsertProductRequest) returns (UpsertProductResponse);
+  rpc GetProduct(GetProductRequest) returns (GetProductResponse);
+  // ListProducts pages through SKUs ascending, optionally narrowed by prefix.
+  // Inactive products are listed too (check `active`).
+  rpc ListProducts(ListProductsRequest) returns (ListProductsResponse);
+  // DeactivateProduct stops a product from being quoted. Deactivating an
+  // inactive product succeeds and changes nothing. Requires the admin role
+  // when auth is on (x-error-code: auth.permission_denied).
+  rpc DeactivateProduct(DeactivateProductRequest) returns (DeactivateProductResponse);
+}
+
+message UpsertProductRequest {
+  string sku = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  string name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 200
+  }];
+  common.v1.Money price = 3 [(buf.validate.field).required = true];
+}
+
+message UpsertProductResponse {
+  Product product = 1;
+}
+
+message GetProductRequest {
+  string sku = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetProductResponse {
+  Product product = 1;
+}
+
+message ListProductsRequest {
+  // 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+  int32 page_size = 1 [(buf.validate.field).int32.gte = 0];
+  // Opaque; from the previous ListProductsResponse.next_page_token. It carries
+  // the filter below: continuing it with a different one is INVALID_ARGUMENT.
+  string page_token = 2;
+  // Only SKUs starting with this (case-sensitive); empty = every SKU.
+  string sku_prefix = 3 [(buf.validate.field).string.max_len = 64];
+}
+
+message ListProductsResponse {
+  repeated Product products = 1;
+  // Empty when this is the last page.
+  string next_page_token = 2;
+}
+
+message DeactivateProductRequest {
+  string sku = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message DeactivateProductResponse {
+  Product product = 1;
+}

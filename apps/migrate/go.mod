@@ -122,4 +122,6 @@ replace (
 
 replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory
 
+replace github.com/blackhorseya/x-monorepo/pkgs/catalog => ../../pkgs/catalog
+
 replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity
