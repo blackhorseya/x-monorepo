@@ -21,9 +21,13 @@ type touching struct {
 	ids     []string
 	err     error
 	release chan struct{} // non-nil: Execute blocks until it is closed
+	started chan string   // non-nil: Execute announces its key id here before blocking
 }
 
 func (u *touching) Execute(_ context.Context, in dto.TouchAPIKeyInput) (*dto.TouchAPIKeyOutput, error) {
+	if u.started != nil {
+		u.started <- in.KeyID
+	}
 	if u.release != nil {
 		<-u.release
 	}
