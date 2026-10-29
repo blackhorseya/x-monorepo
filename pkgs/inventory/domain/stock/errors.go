@@ -13,6 +13,7 @@ var (
 	ErrBelowReserved          = kernel.NewError(kernel.KindFailedPrecondition, "stock.below_reserved", "on-hand quantity cannot drop below the reserved quantity")
 	ErrReleaseExceedsReserved = kernel.NewError(kernel.KindFailedPrecondition, "stock.release_exceeds_reserved", "cannot release more than is reserved")
 	ErrCommitExceedsReserved  = kernel.NewError(kernel.KindFailedPrecondition, "stock.commit_exceeds_reserved", "cannot commit more than is reserved")
+	ErrInsufficientAvailable  = kernel.NewError(kernel.KindFailedPrecondition, "stock.insufficient_available", "cannot sell more than is available")
 	ErrNotFound               = kernel.NewError(kernel.KindNotFound, "stock.not_found", "stock not found")
 	// ErrCorruptQuantities means persisted state breaks the invariant 0 <= reserved <= on_hand.
 	ErrCorruptQuantities = kernel.NewError(kernel.KindInternal, "stock.corrupt_quantities", "persisted stock quantities are inconsistent")

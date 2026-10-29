@@ -12,7 +12,7 @@ import { ErrorAlert } from "./orders";
 // the order whose reservation to pin at the top.
 export type ReservationsSearch = { status?: keyof typeof ReservationStatus; order?: string };
 
-const statuses = ["RESERVED", "REJECTED", "RELEASED", "COMMITTED", "EXPIRED", "CANCELLED"] as const;
+const statuses = ["RESERVED", "REJECTED", "RELEASED", "COMMITTED", "EXPIRED", "COMMIT_SHORT", "CANCELLED"] as const;
 
 export const reservationBadge: Record<ReservationStatus, "default" | "secondary" | "destructive" | "outline"> = {
   [ReservationStatus.UNSPECIFIED]: "outline",
@@ -21,6 +21,7 @@ export const reservationBadge: Record<ReservationStatus, "default" | "secondary"
   [ReservationStatus.RELEASED]: "secondary",
   [ReservationStatus.COMMITTED]: "default",
   [ReservationStatus.EXPIRED]: "destructive",
+  [ReservationStatus.COMMIT_SHORT]: "destructive",
   [ReservationStatus.CANCELLED]: "outline",
 };
 

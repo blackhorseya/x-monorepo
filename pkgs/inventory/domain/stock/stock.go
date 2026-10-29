@@ -125,6 +125,24 @@ func (x *Stock) Commit(quantity int32, now time.Time) error {
 	return nil
 }
 
+// Sell takes quantity out of on-hand straight from what is available, for a
+// sale whose reservation had already been given back (OrderCompleted after the
+// reservation expired). All or nothing: more than is available changes nothing
+// and returns ErrInsufficientAvailable, so reserved <= on_hand still holds.
+func (x *Stock) Sell(quantity int32, now time.Time) error {
+	if quantity <= 0 {
+		return ErrInvalidQuantity
+	}
+	if quantity > x.Available() {
+		return ErrInsufficientAvailable
+	}
+
+	x.onHand -= quantity
+	x.updatedAt = now
+
+	return nil
+}
+
 // Release gives a reservation back.
 func (x *Stock) Release(quantity int32, now time.Time) error {
 	if quantity <= 0 {

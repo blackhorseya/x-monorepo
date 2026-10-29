@@ -352,6 +352,7 @@ components:
         - RESERVATION_STATUS_CANCELLED
         - RESERVATION_STATUS_COMMITTED
         - RESERVATION_STATUS_EXPIRED
+        - RESERVATION_STATUS_COMMIT_SHORT
     inventory.v1.SetStockRequest:
       type: object
       properties:

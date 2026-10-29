@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file inventory/v1/entity.proto.
  */
 export const file_inventory_v1_entity: GenFile = /*@__PURE__*/
-  fileDesc("ChlpbnZlbnRvcnkvdjEvZW50aXR5LnByb3RvEgxpbnZlbnRvcnkudjEiewoFU3RvY2sSCwoDc2t1GAEgASgJEg8KB29uX2hhbmQYAiABKAUSEAoIcmVzZXJ2ZWQYAyABKAUSEQoJYXZhaWxhYmxlGAQgASgFEi8KC3VwZGF0ZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCIwCg9SZXNlcnZhdGlvbkxpbmUSCwoDc2t1GAEgASgJEhAKCHF1YW50aXR5GAIgASgFIvgBCgtSZXNlcnZhdGlvbhIQCghvcmRlcl9pZBgBIAEoCRIsCgVsaW5lcxgCIAMoCzIdLmludmVudG9yeS52MS5SZXNlcnZhdGlvbkxpbmUSLwoGc3RhdHVzGAMgASgOMh8uaW52ZW50b3J5LnYxLlJlc2VydmF0aW9uU3RhdHVzEhYKDnNob3J0ZmFsbF9za3VzGAQgAygJEi8KC2NyZWF0ZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAq/gEKEVJlc2VydmF0aW9uU3RhdHVzEiIKHlJFU0VSVkFUSU9OX1NUQVRVU19VTlNQRUNJRklFRBAAEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRVNFUlZFRBABEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRUpFQ1RFRBACEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRUxFQVNFRBADEiAKHFJFU0VSVkFUSU9OX1NUQVRVU19DQU5DRUxMRUQQBBIgChxSRVNFUlZBVElPTl9TVEFUVVNfQ09NTUlUVEVEEAUSHgoaUkVTRVJWQVRJT05fU1RBVFVTX0VYUElSRUQQBmIGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("ChlpbnZlbnRvcnkvdjEvZW50aXR5LnByb3RvEgxpbnZlbnRvcnkudjEiewoFU3RvY2sSCwoDc2t1GAEgASgJEg8KB29uX2hhbmQYAiABKAUSEAoIcmVzZXJ2ZWQYAyABKAUSEQoJYXZhaWxhYmxlGAQgASgFEi8KC3VwZGF0ZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCIwCg9SZXNlcnZhdGlvbkxpbmUSCwoDc2t1GAEgASgJEhAKCHF1YW50aXR5GAIgASgFIvgBCgtSZXNlcnZhdGlvbhIQCghvcmRlcl9pZBgBIAEoCRIsCgVsaW5lcxgCIAMoCzIdLmludmVudG9yeS52MS5SZXNlcnZhdGlvbkxpbmUSLwoGc3RhdHVzGAMgASgOMh8uaW52ZW50b3J5LnYxLlJlc2VydmF0aW9uU3RhdHVzEhYKDnNob3J0ZmFsbF9za3VzGAQgAygJEi8KC2NyZWF0ZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAqowIKEVJlc2VydmF0aW9uU3RhdHVzEiIKHlJFU0VSVkFUSU9OX1NUQVRVU19VTlNQRUNJRklFRBAAEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRVNFUlZFRBABEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRUpFQ1RFRBACEh8KG1JFU0VSVkFUSU9OX1NUQVRVU19SRUxFQVNFRBADEiAKHFJFU0VSVkFUSU9OX1NUQVRVU19DQU5DRUxMRUQQBBIgChxSRVNFUlZBVElPTl9TVEFUVVNfQ09NTUlUVEVEEAUSHgoaUkVTRVJWQVRJT05fU1RBVFVTX0VYUElSRUQQBhIjCh9SRVNFUlZBVElPTl9TVEFUVVNfQ09NTUlUX1NIT1JUEAdiBnByb3RvMw", [file_google_protobuf_timestamp]);
 
 /**
  * Stock is the quantity of one SKU: on_hand is what the warehouse holds,
@@ -167,6 +167,9 @@ export enum ReservationStatus {
    * The order was completed (ordering.v1.OrderCompleted): the reserved quantity
    * left on_hand — sold, not held.
    *
+   * Also reached from EXPIRED: when OrderCompleted arrived after the expiry
+   * sweep gave the stock back, it is sold from what is available now.
+   *
    * @generated from enum value: RESERVATION_STATUS_COMMITTED = 5;
    */
   COMMITTED = 5,
@@ -178,6 +181,16 @@ export enum ReservationStatus {
    * @generated from enum value: RESERVATION_STATUS_EXPIRED = 6;
    */
   EXPIRED = 6,
+
+  /**
+   * The order was completed after its reservation expired and the stock given
+   * back is no longer available: the sale is not covered. Nothing was deducted;
+   * the order is COMPLETED, so operations must settle it by hand (restock or
+   * compensate). Terminal.
+   *
+   * @generated from enum value: RESERVATION_STATUS_COMMIT_SHORT = 7;
+   */
+  COMMIT_SHORT = 7,
 }
 
 /**

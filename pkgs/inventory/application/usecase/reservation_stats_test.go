@@ -18,7 +18,7 @@ func TestReservationStats_ZeroFills(t *testing.T) {
 	stats := usecase.NewReservationStats(repo)
 
 	out, err := stats.Execute(c, dto.ReservationStatsInput{})
-	if err != nil || len(out.Statuses) != 6 {
+	if err != nil || len(out.Statuses) != 7 {
 		t.Fatalf("empty stats = %+v, %v", out, err)
 	}
 	for _, s := range out.Statuses {

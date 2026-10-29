@@ -122,6 +122,28 @@ func TestCommit(t *testing.T) {
 	}
 }
 
+func TestSell(t *testing.T) {
+	s, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
+	later := now.Add(time.Minute)
+
+	if err := s.Sell(0, later); !errors.Is(err, stock.ErrInvalidQuantity) {
+		t.Fatalf("zero: %v", err)
+	}
+	// Only what is available can be sold; the reserved part belongs to others.
+	if err := s.Sell(4, later); !errors.Is(err, stock.ErrInsufficientAvailable) {
+		t.Fatalf("too much: %v", err)
+	}
+	if s.OnHand() != 5 || s.Reserved() != 2 {
+		t.Fatalf("failed sell must not change anything: on_hand=%d reserved=%d", s.OnHand(), s.Reserved())
+	}
+	if err := s.Sell(3, later); err != nil {
+		t.Fatal(err)
+	}
+	if s.OnHand() != 2 || s.Reserved() != 2 || s.Available() != 0 || !s.UpdatedAt().Equal(later) {
+		t.Fatalf("on_hand=%d reserved=%d available=%d", s.OnHand(), s.Reserved(), s.Available())
+	}
+}
+
 func TestRelease(t *testing.T) {
 	s, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 2, UpdatedAt: now})
 	later := now.Add(time.Minute)

@@ -30,12 +30,14 @@ const (
 // A lost race (stock.ErrStale) fails the whole batch, which rolls back; the
 // caller retries — the CLI on its next run, the rpc with ABORTED to the operator.
 //
-// Known window: between CompleteOrder committing and inventory consuming its
-// OrderCompleted the reservation is still RESERVED. A sweep landing in that
-// window gives the stock back and asks for a cancellation ordering refuses
-// (COMPLETED is terminal); the OrderCompleted then finds EXPIRED and is dropped
-// — order COMPLETED, nothing sold. The window is one consumer hop against a TTL
-// of hours; the eventbus lag alerts are the guard, not this use case.
+// Race with CompleteOrder: between CompleteOrder committing and inventory
+// consuming its OrderCompleted the reservation is still RESERVED. A sweep
+// landing in that window gives the stock back and asks for a cancellation
+// ordering refuses (COMPLETED is terminal). The sweep does not try to avoid
+// it; CommitStock repairs it when the OrderCompleted arrives: an EXPIRED
+// reservation is sold from what is available then (COMMITTED), or ends
+// COMMIT_SHORT when the stock was taken meanwhile (alert
+// x-monorepo-commit-short). The window is one consumer hop against a TTL of hours.
 type ExpireReservations struct {
 	reservations reservation.Repository
 	stocks       stock.Repository

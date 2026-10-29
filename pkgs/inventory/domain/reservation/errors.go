@@ -7,7 +7,7 @@ var (
 	ErrNoLines         = kernel.NewError(kernel.KindInvalidArgument, "reservation.no_lines", "reservation must contain at least one line")
 	ErrInvalidSKU      = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_sku", "sku must not be empty")
 	ErrInvalidQuantity = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_quantity", "quantity must be positive")
-	ErrNotReserved     = kernel.NewError(kernel.KindFailedPrecondition, "reservation.not_reserved", "only a RESERVED reservation can be released, committed or expired")
+	ErrNotReserved     = kernel.NewError(kernel.KindFailedPrecondition, "reservation.not_reserved", "only a RESERVED reservation can be released or expired, and only a RESERVED or EXPIRED one committed")
 	// ErrInvalidOlderThan is an expiry sweep asked for a non-positive hold time.
 	ErrInvalidOlderThan = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_older_than", "older-than must be positive")
 	ErrStockMissing     = kernel.NewError(kernel.KindFailedPrecondition, "reservation.stock_missing", "stock of a reserved sku is missing")

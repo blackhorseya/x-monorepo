@@ -13,9 +13,13 @@ import (
 )
 
 // CommitStock reacts to an order being completed: its RESERVED reservation
-// becomes a sale, the reserved quantity leaving on-hand. Anything but RESERVED
-// (released, committed, rejected, tombstoned) is a domain error the consumer
-// treats as final. Unlike ReleaseStock there is no tombstone branch: an order
+// becomes a sale, the reserved quantity leaving on-hand. An EXPIRED one (the
+// expiry sweep landed between CompleteOrder and this event, issue #218) is
+// sold from what is available now, or ends COMMIT_SHORT when it is not
+// covered any more: the order is COMPLETED either way, so it is never dropped.
+// Anything else (released, committed, rejected, tombstoned, COMMIT_SHORT) is a
+// domain error the consumer treats as final, which also makes a redelivery
+// harmless. Unlike ReleaseStock there is no tombstone branch: an order
 // is only completable once CONFIRMED, i.e. after inventory reserved it, so a
 // missing reservation is an anomaly (ErrNotFound → drop), not an ordering race.
 // Nor can a cancel and a complete both land: ordering's Save compares the
@@ -55,6 +59,9 @@ func (uc *CommitStock) Execute(c context.Context, in dto.CommitStockInput) (*dto
 	}
 	if err = uc.reservations.Update(ctx, r); err != nil {
 		return nil, fmt.Errorf("update reservation: %w", err)
+	}
+	if r.Status() == reservation.StatusCommitShort {
+		ctx.Error("order completed after its reservation expired and the stock is gone", "order_id", r.OrderID())
 	}
 	if err = uc.events.Publish(ctx, r.PullEvents()...); err != nil {
 		return nil, err
