@@ -23,3 +23,15 @@ async function useCredential(
 // What the header says the console calls as (src/auth.ts subject()).
 export const subject = (page: Page) =>
   page.locator("header").getByText(/^(anonymous|api key|jwt)/);
+
+// Lets everything already queued in the page run: pending microtasks, two frames of rendering
+// and one timer turn. Used after a response or navigation has provably happened, so that a
+// negative assertion ("nothing was fetched / shown") is made after the page had its chance to
+// react, not after a guessed delay.
+export const settle = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)))
+      )
+  );
