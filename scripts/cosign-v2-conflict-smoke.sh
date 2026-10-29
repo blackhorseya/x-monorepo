@@ -12,10 +12,12 @@ exec python3 -I - <<'PY'
 import json, os, subprocess, sys, tempfile, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-def run(status, want_posts):
+def run(status, want_posts, quoted=False):
     hits = []
     body = {409: b'{"code":6,"message":"an equivalent entry already exists with index 123"}',
             503: b'{"code":14,"message":"unavailable"}'}[status]
+    if quoted:  # a non-conflict whose body quotes the 409 error text (#256)
+        body = b'{"code":14,"message":"troubleshooting: adding rekor v2 entry: unexpected response: 409 {example}"}'
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
             hits.append(self.path)
@@ -44,12 +46,13 @@ def run(status, want_posts):
         finally:
             srv.shutdown(); srv.server_close(); t.join()
         left = os.path.exists(d + "/bundle.json")
-    print("v2 HTTP %d: wrapper exit %d, POSTs %d (want %d), bundle left %s" % (status, r.returncode, len(hits), want_posts, left))
+    print("v2 HTTP %d%s: wrapper exit %d, POSTs %d (want %d), bundle left %s" % (status, " (body quotes a 409)" if quoted else "", r.returncode, len(hits), want_posts, left))
     ok = r.returncode != 0 and len(hits) == want_posts and not left
     if not ok:
         print("FAIL: v2 HTTP %d:\n%s" % (status, r.stdout)); sys.exit(1)
 
 run(409, 3)
 run(503, 1)
-print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried")
+run(503, 1, quoted=True)
+print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")
 PY
