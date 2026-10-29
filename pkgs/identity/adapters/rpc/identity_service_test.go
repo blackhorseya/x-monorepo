@@ -53,7 +53,10 @@ func TestIdentityService_EndToEnd(t *testing.T) {
 	secrets := system.NewSecretGenerator()
 	svc := newService(accounts, keys, tx, clock, ids, secrets, rec, config.Auth{Mode: config.AuthRequired})
 	// TTL 0: a revoke is visible on the next request, so the test does not sleep.
-	resolver := auth.NewResolverWithTTL(identity.ProvideResolveAPIKey(accounts, keys, clock, rec), clock, 0)
+	resolver, err := auth.NewResolverWithTTL(identity.ProvideResolveAPIKey(accounts, keys, clock, rec), clock, 0, tel.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// ResolverTimeout as config.Load defaults it: the resolver path under test is the production one.
 	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "root=root-key-0123456789abcdef:admin, viewer=viewer-key-0123456789abcdef", ResolverTimeout: 2 * time.Second}

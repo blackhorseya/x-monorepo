@@ -64,6 +64,29 @@ resolver 前面有 in-process cache，TTL `auth.DefaultCacheTTL` = 30s，hit 與
 | resolver error | 不 cache，每個 request 都再試 |
 | resolver 查太久 | `auth.resolver_timeout`（預設 2s）到期 = 拒絕，**到期後才回來的成功也拒絕**（interceptor 回來後查 context，不只看 resolver 的 error）；auth 在 `http.timeout` 之外，所以這個上限是獨立的。它是 context 的 deadline：resolver 不理 context 的話（例如 driver 不吃 ctx）request 還是會等它回來，只是回來後被拒 |
 
+### Metrics
+
+resolver 用注入的 `metric.MeterProvider`（不是 global）記兩個 instrument，exposition 名在括號：
+
+| instrument | 型別 | 意思 |
+|---|---|---|
+| `identity.resolver.lookups{result}`（`identity_resolver_lookups_total`） | counter | 每次 `ResolveAPIKey` 的去向，見下表 |
+| `identity.resolver.cache.entries`（`identity_resolver_cache_entries`） | observable gauge，無 label | 這個 replica 的 cache 現在有幾筆（≤ 10k） |
+
+| `result` | 對應的路徑 |
+|---|---|
+| `hit` | cache 命中，不問 use case（cache 住的成功與 cache 住的拒絕都算） |
+| `miss` | cache 沒有（沒進過、過了 TTL / `expires_at`、或 TTL=0）→ 接著問 use case，最後一定再多記下面三者之一 |
+| `db_ok` | use case 回 principal（key 有效、account active），寫入 cache |
+| `db_miss` | use case 回 domain error（`found=false`：不存在、revoked、expired、account disabled、太短），拒絕也寫入 cache |
+| `error` | 其他錯誤（DB 掛、timeout）：回 err、不 cache，interceptor 拒成 `auth.invalid_credential` |
+
+`hit + miss` = 全部 lookup；`miss = db_ok + db_miss + error`；hit ratio = `hit / (hit + miss)`。
+**label 只有 `result`，值固定五個**：不放 key、prefix、hash、account id、key id——每把 key 一個 series 會讓 cardinality 隨 key 數與猜 key 的流量無限長；
+要查「哪把 key」看 access line 的 `sub`。`resolver_metrics_test.go` 用 100 把不同的 key 打過，斷言 attribute 只有 `result`、series ≤ 5。
+Dashboard「x-monorepo / service」的 Identity row 有四張圖（lookups/s by result、hit ratio、error rate、cache size）；alert `x-monorepo-identity-resolver-errors`
+見 `docs/operations.md`。
+
 「DB 掛掉仍服務 30s 內驗過的 key」是刻意的（可用性 > 立即一致；不等於放行），要改成嚴格 fail-closed 就得每個 request 都查 DB，等於沒有 cache——這是產品決定，不是 bug。
 
 v1 **不記** `last_used_at`（hot path 寫入）；要審計誰用了哪把 key看 access line 的 `sub`（account id）。

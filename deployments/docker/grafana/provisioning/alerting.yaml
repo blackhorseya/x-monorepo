@@ -383,3 +383,48 @@ groups:
             on their key (auth.api_keys `name=key:role`) or JWT (`roles` claim); anything else is probing.
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "32"
+
+  - orgId: 1
+    name: rpc-identity
+    folder: x-monorepo
+    interval: 1m
+    rules:
+      # The key resolver cannot reach the database (or times out): keys not verified in the last 30s are
+      # rejected as auth.invalid_credential, so callers with a valid key are being locked out.
+      - uid: x-monorepo-identity-resolver-errors
+        title: Identity resolver errors
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                sum(rate(identity_resolver_lookups_total{result="error"}[5m]))
+                / sum(rate(identity_resolver_lookups_total{result=~"db_ok|db_miss|error"}[5m]))
+              legendFormat: error share of DB lookups
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical, service: rpc }
+        annotations:
+          summary: "{{ $values.A }} of identity key lookups are failing"
+          description: >-
+            More than 5% of the lookups that reach the database (identity_resolver_lookups_total result=error
+            over db_ok + db_miss + error) have failed for 5 minutes. A healthy resolver has none: only an
+            infrastructure failure (Postgres down or unreachable, auth.resolver_timeout expiring) produces one. The
+            denominator excludes cache hits on purpose — during an outage cached keys keep passing and would dilute
+            the ratio. Keys verified within the 30s TTL are still served; everything else is rejected as
+            auth.invalid_credential. Check Postgres first, then `{service_name="rpc"} |= "credential resolver failed"` in Loki.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "40"
