@@ -205,7 +205,7 @@
 |---|---|---|
 | 1 | 方案 A 還是 B | **已決**：B（外部 OIDC + Dex），A 降為可選模組（開頭、§13） |
 | 2 | 簽章金鑰保管 | 隨方案 A 擱置（§13）；B 不持有簽章私鑰 |
-| 3 | access token 壽命 | 改由 OIDC 取代：壽命由 IdP 決定，我們只驗 `exp` / `iat`（§6） |
+| 3 | access token 壽命 | 改由 OIDC 取代：壽命由 IdP 決定，驗證規則見 §6 |
 | 4 | 登出 / 停用的即時性 | **已決**（Q8）：`sessions_revoked_at`，30 秒內生效（§11） |
 | 5 | 自動輪替 | 隨方案 A 擱置（§13）；IdP 金鑰輪替靠 §7 的 JWKS 重抓跟上 |
 | 6 | 密碼政策 | 隨方案 A 擱置（§13）；B 由 IdP 負責 |
@@ -214,6 +214,6 @@
 | 9 | 非 localhost 的 http | **已決**（Q6）：非 https 只在 loopback 或明確 `allow_insecure_issuer` 時放行（§10）；不再有 `Secure` cookie 問題 |
 | 10 | 忘記密碼 / 註冊 / MFA | 改由 OIDC 取代：全部交給 IdP（§1 非目標） |
 | 11 | roles 來源 | **已決**（Q2、Q4）：永遠以 account 為準，不從 claim 推導（§5、§6） |
-| 12 | refresh 回應遺失 | 改由 OIDC 取代：refresh 規則由 IdP 決定，Console refresh 失敗就回登入頁（§8）；可推導 refresh token 的選項隨方案 A 擱置 |
+| 12 | refresh 回應遺失 | 改由 OIDC 取代：refresh 規則由 IdP 決定；Console 遇到 refresh 失敗的處置（含 IdP 暫時 5xx）列為 PR 5 實作細節，本文不規定；可推導 refresh token 的選項隨方案 A 擱置 |
 | 13 | 外部 JWT 的 `iss` pin | 沿用既有設計（非 Q1–Q9）：§3 的啟動檢查，PR 2 驗收 |
 | 14 | 登入限流粒度 | 隨方案 A 擱置（§13）；B 沒有我們自己的登入 endpoint |
