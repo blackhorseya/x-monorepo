@@ -40,6 +40,7 @@ go=false;     has '*.go' 'go.work' 'go.work.sum' '*/go.mod' '*/go.sum' '.golangc
 [ $proto = true ] && go=true   # generated Go is committed; a proto change is a Go change
 web=false;    has 'web/*' && web=true
 helm=false;   has 'deployments/helm/*' && helm=true
+release=false; has '.github/workflows/release.yml' && release=true   # pins cosign-release: the smoke + Rekor canary must run on a bump (#215)
 images=false; has 'deployments/docker/Dockerfile*' 'web/apps/console/Dockerfile' 'web/apps/console/deploy/*' '.goreleaser.yaml' '.dockerignore' && images=true
 k6=false;     has 'tests/k6/*' && k6=true
 
@@ -52,7 +53,7 @@ out work_sync        "$go" "$ci"
 out coverage         "$go" "$ci"
 out build            "$go" "$ci"
 out breaking         "$proto" "$ci"
-out release_snapshot "$go" "$images" "$ci"
+out release_snapshot "$go" "$images" "$release" "$ci"
 out actions_resolve  "$actions" "$ci"
 out web              "$web" "$proto" "$ci"
 out console_e2e      "$go" "$web" "$ci"

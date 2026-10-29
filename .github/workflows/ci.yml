@@ -257,7 +257,7 @@ jobs:
   # release.yml itself only ever runs on main (workflow_run), so this job also exercises the two
   # things that broke v0.26.0's first attempts after green PRs: the signing flags against the
   # cosign that cosign-installer actually installs (#119) — same cosign-installer tag and
-  # cosign-release as release.yml, keep them equal — and, in actions-resolve below, that every action ref exists.
+  # cosign-release as release.yml (rekor-canary.yml reads it from there), keep them equal — and, in actions-resolve below, that every action ref exists.
   release-snapshot:
     needs: affected
     if: needs.affected.outputs.run_release_snapshot == 'true'
@@ -275,6 +275,10 @@ jobs:
       - run: task release-check release-snapshot
       - name: .goreleaser.yaml's signs command works with this cosign (throwaway key)
         run: scripts/cosign-smoke.sh
+      # cosign's default signing config must still be Rekor v1: #204's 409 handling is v1-only (#215).
+      # TUF changes without a repo commit, so rekor-canary.yml runs this weekly as well.
+      - name: the default signing config has no Rekor v2 log (#215)
+        run: scripts/rekor-v2-canary.sh
 
   # ── actions-resolve: every `uses: owner/repo@ref` under .github exists on GitHub ──
   # actionlint checks YAML, not the remote; `sigstore/cosign-installer@v4` passed every PR and

@@ -228,7 +228,7 @@ jobs:
       packages: read   # the packages are public; the login below only lifts ghcr's anonymous rate limit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # same pin and cosign-release as build above and ci.yml's release-snapshot
+      # same pin and cosign-release as build above and ci.yml's release-snapshot (rekor-canary.yml reads it from here)
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.1.4
