@@ -82,7 +82,7 @@ func (uc *ExpireReservations) Execute(c context.Context, in dto.ExpireReservatio
 			return nil, err
 		}
 		if err = r.Expire(stocks, now); err != nil {
-			return nil, fmt.Errorf("expire reservation %s: %w", r.OrderID(), err)
+			return nil, fmt.Errorf("expire reservation %s: %w", r.OrderID(), staleIfMoved(ctx, uc.reservations, r, err))
 		}
 		if err = saveStocks(ctx, uc.stocks, stocks); err != nil {
 			return nil, err

@@ -9,6 +9,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
 )
 
 // reserveAt reserves one order as if the clock read at, then restores the fixture's clock.
@@ -103,4 +104,59 @@ func TestCommitStock_AfterExpire_Short(t *testing.T) {
 	if a.OnHand != 0 || a.Reserved != 0 {
 		t.Fatalf("after o-2 A=%+v, want on_hand 0 reserved 0", a)
 	}
+}
+
+// onFirstLoad runs hook once, right before the first stock load: after a use
+// case read its reservation, before it reads the stock.
+type onFirstLoad struct {
+	stock.Repository
+	hook func()
+}
+
+func (i *onFirstLoad) FindBySKU(c context.Context, sku stock.SKU) (*stock.Stock, error) {
+	if h := i.hook; h != nil {
+		i.hook = nil
+		h()
+	}
+
+	return i.Repository.FindBySKU(c, sku)
+}
+
+// A reservation that moved between being read and the stock being loaded makes
+// the aggregate fail on a stock that no longer matches (here: nothing reserved
+// any more). That is a lost race, retryable, not a final domain error.
+func TestReservationMovedWhileHandled_IsStale(t *testing.T) {
+	c := context.Background()
+
+	t.Run("release over an expired reservation", func(t *testing.T) {
+		f := newFixture()
+		if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: "A", OnHand: 5}); err != nil {
+			t.Fatal(err)
+		}
+		reserveAt(t, f, f.clock.t.Add(-25*time.Hour), "o-1", 2)
+		hooked := &onFirstLoad{Repository: f.stocks, hook: func() { sweep(t, f) }}
+		release := usecase.NewReleaseStock(f.reservations, hooked, f.rec, f.clock)
+
+		if _, err := release.Execute(c, dto.ReleaseStockInput{OrderID: "o-1"}); !errors.Is(err, reservation.ErrStale) {
+			t.Fatalf("release = %v, want ErrStale", err)
+		}
+	})
+
+	t.Run("expire over a committed reservation", func(t *testing.T) {
+		f := newFixture()
+		if _, err := f.setStock.Execute(c, dto.SetStockInput{SKU: "A", OnHand: 5}); err != nil {
+			t.Fatal(err)
+		}
+		reserveAt(t, f, f.clock.t.Add(-25*time.Hour), "o-1", 2)
+		hooked := &onFirstLoad{Repository: f.stocks, hook: func() {
+			if _, err := f.commit.Execute(c, dto.CommitStockInput{OrderID: "o-1"}); err != nil {
+				t.Fatal(err)
+			}
+		}}
+		expire := usecase.NewExpireReservations(f.reservations, hooked, f.rec, f.clock)
+
+		if _, err := expire.Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour}); !errors.Is(err, reservation.ErrStale) {
+			t.Fatalf("expire = %v, want ErrStale", err)
+		}
+	})
 }

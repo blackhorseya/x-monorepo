@@ -52,7 +52,7 @@ func (uc *CommitStock) Execute(c context.Context, in dto.CommitStockInput) (*dto
 		return nil, err
 	}
 	if err = r.Commit(stocks, uc.clock.Now()); err != nil {
-		return nil, err
+		return nil, staleIfMoved(ctx, uc.reservations, r, err)
 	}
 	if err = saveStocks(ctx, uc.stocks, stocks); err != nil {
 		return nil, err

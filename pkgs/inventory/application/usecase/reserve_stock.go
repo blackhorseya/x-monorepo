@@ -117,3 +117,19 @@ func saveStocks(c context.Context, repo stock.Repository, stocks map[string]*sto
 
 	return nil
 }
+
+// staleIfMoved classifies a failed domain call on r. The stock was loaded
+// after r was read, so when another transaction moved r in between (expired,
+// released, committed), the stock no longer matches the status r was read in
+// and the aggregate fails with a domain error (e.g. commit_exceeds_reserved)
+// that is really a lost race. If r moved since it was loaded the error is
+// reservation.ErrStale — retryable, and the retry works from the new status;
+// otherwise cause is returned unchanged.
+func staleIfMoved(c context.Context, repo reservation.Repository, r *reservation.Reservation, cause error) error {
+	cur, err := repo.FindByOrderID(c, r.OrderID())
+	if err != nil || cur.Status() == r.LoadedStatus() {
+		return cause
+	}
+
+	return fmt.Errorf("reservation %s moved %s -> %s while it was handled: %w: %w", r.OrderID(), r.LoadedStatus(), cur.Status(), reservation.ErrStale, cause)
+}
