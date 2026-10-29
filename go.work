@@ -4,6 +4,7 @@ use (
 	./apps/migrate
 	./apps/rpc
 	./apps/worker
+	./pkgs/catalog
 	./pkgs/identity
 	./pkgs/inventory
 	./pkgs/kernel

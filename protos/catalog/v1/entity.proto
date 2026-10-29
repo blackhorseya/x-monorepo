@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package catalog.v1;
+
+import "common/v1/money.proto";
+import "google/protobuf/timestamp.proto";
+
+// Entity messages are the cross-language state schema of the catalog
+// aggregate. They are a wire contract, NOT the domain model: Go keeps the
+// hand-written aggregate in domain/product and maps at the adapter boundary.
+
+// Product is what one SKU sells for. The price carries its own currency (each
+// product has one); an inactive product is kept for history but cannot be quoted.
+message Product {
+  string sku = 1;
+  string name = 2;
+  common.v1.Money price = 3;
+  bool active = 4;
+  google.protobuf.Timestamp update_time = 5;
+}

@@ -7,6 +7,9 @@
 package main
 
 import (
+	"github.com/blackhorseya/x-monorepo/pkgs/catalog"
+	rpc4 "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
+	system4 "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
 	rpc3 "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
 	system3 "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
@@ -136,20 +139,28 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		ExternalIdentity: externalIdentitySource,
 	}
 	identityService := rpc3.NewIdentityService(useCases, auth)
+	productRepository := catalog.ProvideProductRepository(db, logger)
+	clock3 := system4.NewClock()
+	transactor3 := catalog.ProvideTransactor(db)
+	v26 := catalog.ProvideUpsertProduct(productRepository, clock3, transactor3, recorder)
+	v27 := catalog.ProvideGetProduct(productRepository, recorder)
+	v28 := catalog.ProvideListProducts(productRepository, recorder)
+	v29 := catalog.ProvideDeactivateProduct(productRepository, clock3, transactor3, recorder)
+	catalogService := rpc4.NewCatalogService(v26, v27, v28, v29, auth)
 	poisonService := NewPoisonService(db, auth)
-	v26 := NewRoutes(orderService, inventoryService, identityService, poisonService)
-	v27 := NewDocs()
+	v30 := NewRoutes(orderService, inventoryService, identityService, catalogService, poisonService)
+	v31 := NewDocs()
 	readiness := NewReadiness(db)
-	v28 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
-	v29 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
-	resolver, cleanup4, err := identity.ProvideResolver(v28, v29, clock2, auth, logger, meterProvider)
+	v32 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
+	v33 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
+	resolver, cleanup4, err := identity.ProvideResolver(v32, v33, clock2, auth, logger, meterProvider)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	serverServer, err := server.New(http, auth, logger, v26, v27, readiness, providers, resolver)
+	serverServer, err := server.New(http, auth, logger, v30, v31, readiness, providers, resolver)
 	if err != nil {
 		cleanup4()
 		cleanup3()

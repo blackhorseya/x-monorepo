@@ -3,7 +3,7 @@ import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import type { ListOrdersResponse } from "@repo/proto/ordering/v1/service_pb";
-import { admin, identity, inventory, isNotFound, orders } from "./client";
+import { admin, catalog, identity, inventory, isNotFound, orders } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
 export type ServerVersion = { version: string; commit: string; date: string; go: string };
@@ -21,6 +21,8 @@ export const keys = {
   ordersPage: (customerId: string, status: OrderStatus) => ["orders", customerId, status] as const,
   order: (id: string) => ["order", id] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
+  products: ["products"] as const,
+  productsPage: (skuPrefix: string) => ["products", skuPrefix] as const,
   stocks: ["stocks"] as const,
   stocksPage: (skuPrefix: string, onlyReserved: boolean) => ["stocks", skuPrefix, onlyReserved] as const,
   reservations: (status: ReservationStatus) => ["reservations", status] as const,
@@ -158,6 +160,18 @@ export const stocksQuery = (skuPrefix: string, onlyReserved: boolean) =>
     initialPageParam: "",
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
     refetchInterval: POLL_MS,
+    staleTime: LIST_STALE_MS,
+  });
+
+// Products ascending by SKU, 20 per page, by prefix (empty = every SKU), inactive ones included.
+// Nothing changes them behind the console's back, so no polling; the key starts with keys.products so
+// saving or deactivating a product refreshes every filter.
+export const productsQuery = (skuPrefix: string) =>
+  infiniteQueryOptions({
+    queryKey: keys.productsPage(skuPrefix),
+    queryFn: async ({ pageParam }) => catalog.listProducts({ skuPrefix, pageSize: 20, pageToken: pageParam }),
+    initialPageParam: "",
+    getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
     staleTime: LIST_STALE_MS,
   });
 

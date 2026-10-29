@@ -1,0 +1,414 @@
+openapi: 3.1.0
+info:
+  title: Catalog API
+  version: v1
+  description: |
+    Connect RPC contract of the catalog bounded context.
+    Every procedure is `POST /api/catalog.v1.CatalogService/<Method>` (the bare `/catalog.v1.CatalogService/<Method>` works too, for gRPC) with a JSON body;
+    errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
+    the stable domain code in the `X-Error-Code` response header.
+servers:
+  - url: /api
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Static key from `auth.api_keys` (`name=key[:role|role]`); the principal's subject is the name.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (HS256 secret or PEM public key); claims sub / name / roles.
+  schemas:
+    catalog.v1.DeactivateProductRequest:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+          minLength: 1
+      title: DeactivateProductRequest
+      additionalProperties: false
+    catalog.v1.DeactivateProductResponse:
+      type: object
+      properties:
+        product:
+          allOf:
+            - $ref: '#/components/schemas/catalog.v1.Product'
+          title: product
+      title: DeactivateProductResponse
+      additionalProperties: false
+    catalog.v1.GetProductRequest:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+          minLength: 1
+      title: GetProductRequest
+      additionalProperties: false
+    catalog.v1.GetProductResponse:
+      type: object
+      properties:
+        product:
+          allOf:
+            - $ref: '#/components/schemas/catalog.v1.Product'
+          title: product
+      title: GetProductResponse
+      additionalProperties: false
+    catalog.v1.ListProductsRequest:
+      type: object
+      properties:
+        pageSize:
+          type: integer
+          title: page_size
+          minimum: 0
+          format: int32
+          description: 0 = server default (20); values above the maximum (100) are clamped; negative = INVALID_ARGUMENT.
+        pageToken:
+          type: string
+          title: page_token
+          description: |-
+            Opaque; from the previous ListProductsResponse.next_page_token. It carries
+             the filter below: continuing it with a different one is INVALID_ARGUMENT.
+        skuPrefix:
+          type: string
+          title: sku_prefix
+          maxLength: 64
+          description: Only SKUs starting with this (case-sensitive); empty = every SKU.
+      title: ListProductsRequest
+      additionalProperties: false
+    catalog.v1.ListProductsResponse:
+      type: object
+      properties:
+        products:
+          type: array
+          items:
+            $ref: '#/components/schemas/catalog.v1.Product'
+          title: products
+        nextPageToken:
+          type: string
+          title: next_page_token
+          description: Empty when this is the last page.
+      title: ListProductsResponse
+      additionalProperties: false
+    catalog.v1.Product:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+        name:
+          type: string
+          title: name
+        price:
+          allOf:
+            - $ref: '#/components/schemas/common.v1.Money'
+          title: price
+        active:
+          type: boolean
+          title: active
+        updateTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: update_time
+      title: Product
+      additionalProperties: false
+      description: |-
+        Product is what one SKU sells for. The price carries its own currency (each
+         product has one); an inactive product is kept for history but cannot be quoted.
+    catalog.v1.UpsertProductRequest:
+      type: object
+      properties:
+        sku:
+          type: string
+          title: sku
+          maxLength: 64
+          minLength: 1
+        name:
+          type: string
+          title: name
+          maxLength: 200
+          minLength: 1
+        price:
+          allOf:
+            - $ref: '#/components/schemas/common.v1.Money'
+          title: price
+      title: UpsertProductRequest
+      required:
+        - price
+      additionalProperties: false
+    catalog.v1.UpsertProductResponse:
+      type: object
+      properties:
+        product:
+          allOf:
+            - $ref: '#/components/schemas/catalog.v1.Product'
+          title: product
+      title: UpsertProductResponse
+      additionalProperties: false
+    common.v1.Money:
+      type: object
+      properties:
+        amountMinor:
+          type: string
+          title: amount_minor
+          minimum: 0
+          format: int64
+          description: Amount in minor units (e.g. cents). Never negative on the wire.
+        currency:
+          type: string
+          title: currency
+          pattern: ^[A-Z]{3}$
+          description: ISO 4217 currency code, e.g. "USD".
+      title: Money
+      additionalProperties: false
+      description: Money is the wire representation of the kernel Money value object.
+    connect-protocol-version:
+      type: number
+      examples:
+        - 1
+      title: Connect-Protocol-Version
+      description: Define the version of the Connect protocol
+      const: 1
+    connect-timeout-header:
+      type: number
+      examples:
+        - 1000
+      title: Connect-Timeout-Ms
+      description: Define the timeout, in ms
+    connect.error:
+      type: object
+      properties:
+        code:
+          type: string
+          examples:
+            - not_found
+          enum:
+            - canceled
+            - unknown
+            - invalid_argument
+            - deadline_exceeded
+            - not_found
+            - already_exists
+            - permission_denied
+            - resource_exhausted
+            - failed_precondition
+            - aborted
+            - out_of_range
+            - unimplemented
+            - internal
+            - unavailable
+            - data_loss
+            - unauthenticated
+          description: The status code, which should be an enum value of [google.rpc.Code][google.rpc.Code].
+        message:
+          type: string
+          description: A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the [google.rpc.Status.details][google.rpc.Status.details] field, or localized by the client.
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/connect.error_details.Any'
+          description: A list of messages that carry the error details. There is no limit on the number of messages.
+      title: Connect Error
+      additionalProperties: true
+      description: 'Error type returned by Connect: https://connectrpc.com/docs/go/errors/#http-representation'
+    connect.error_details.Any:
+      type: object
+      properties:
+        type:
+          type: string
+          description: 'A URL that acts as a globally unique identifier for the type of the serialized message. For example: `type.googleapis.com/google.rpc.ErrorInfo`.'
+        value:
+          type: string
+          format: byte
+          description: The Protobuf message, serialized as bytes and base64-encoded. The specific message type is identified by the `type` field.
+        debug:
+          type: object
+          title: Debug
+          additionalProperties: true
+          description: Deserialized error detail payload. The 'type' field indicates the schema. This field is for easier debugging and should not be relied upon for application logic.
+      additionalProperties: true
+      description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message, with an additional debug field for ConnectRPC error details.
+    google.protobuf.Timestamp:
+      type: string
+      examples:
+        - "2023-01-15T01:30:15.01Z"
+        - "2024-12-25T12:00:00Z"
+      format: date-time
+      description: A point in time in RFC 3339 format, with up to nanosecond precision. Output uses UTC (`Z`); input may use an offset from UTC.
+security:
+  - apiKey: []
+  - bearer: []
+paths:
+  /catalog.v1.CatalogService/DeactivateProduct:
+    post:
+      tags:
+        - catalog.v1.CatalogService
+      summary: DeactivateProduct
+      description: |-
+        DeactivateProduct stops a product from being quoted. Deactivating an
+         inactive product succeeds and changes nothing. Requires the admin role
+         when auth is on (x-error-code: auth.permission_denied).
+      operationId: catalog.v1.CatalogService.DeactivateProduct
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/catalog.v1.DeactivateProductRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/catalog.v1.DeactivateProductResponse'
+  /catalog.v1.CatalogService/GetProduct:
+    post:
+      tags:
+        - catalog.v1.CatalogService
+      summary: GetProduct
+      operationId: catalog.v1.CatalogService.GetProduct
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/catalog.v1.GetProductRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/catalog.v1.GetProductResponse'
+  /catalog.v1.CatalogService/ListProducts:
+    post:
+      tags:
+        - catalog.v1.CatalogService
+      summary: ListProducts
+      description: |-
+        ListProducts pages through SKUs ascending, optionally narrowed by prefix.
+         Inactive products are listed too (check `active`).
+      operationId: catalog.v1.CatalogService.ListProducts
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/catalog.v1.ListProductsRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/catalog.v1.ListProductsResponse'
+  /catalog.v1.CatalogService/UpsertProduct:
+    post:
+      tags:
+        - catalog.v1.CatalogService
+      summary: UpsertProduct
+      description: |-
+        UpsertProduct creates a product or replaces the name and price of an
+         existing one; an inactive product is activated again. The price's
+         currency may change. Requires the admin role when auth is on
+         (x-error-code: auth.permission_denied).
+      operationId: catalog.v1.CatalogService.UpsertProduct
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/catalog.v1.UpsertProductRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/catalog.v1.UpsertProductResponse'
+tags:
+  - name: catalog.v1.CatalogService
+    description: |-
+      CatalogService is the public RPC contract of the catalog bounded context:
+       the server-side source of product prices. Ordering does not call it yet.
