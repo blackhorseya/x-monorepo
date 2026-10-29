@@ -328,6 +328,8 @@ case $step in
   q503v2plain) echo "Error: signing: adding rekor v2 entry: unexpected response: 503 upstream said adding rekor v2 entry: unexpected response: 409 x" >&2; exit 17 ;;
   q503v1) echo "Error: [POST /api/v1/log/entries][503] createLogEntryUnexpected {\"message\":\"see [POST /api/v1/log/entries][409] createLogEntryConflict\"}" >&2; exit 17 ;;
   q503v1plain) echo "Error: [POST /api/v1/log/entries][503] createLogEntryUnexpected see [POST /api/v1/log/entries][409] createLogEntryConflict" >&2; exit 17 ;;
+  v2brace) echo "Error: signing /tmp/artifact{build}.txt: signing bundle: error signing bundle: adding rekor v2 entry: unexpected response: 409 {\"code\":6}" >&2; exit 1 ;;
+  q503multi) printf 'Error: signing /tmp/a: adding rekor v2 entry: unexpected response: 503 upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n' >&2; exit 17 ;;
   inlog)  echo "note: Error: signing: adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 17 ;;
   mixed)  printf 'Using Rekor at https://rekor.sigstore.dev\nError: fetching signing config: HTTP 409 Conflict from https://config.example/config\n' >&2; exit 17 ;;
   url)   echo "Error: fetching signing config: GET https://config.example/409/config returned 503" >&2; exit 17 ;;
@@ -387,10 +389,12 @@ expect_eq    "sign: a gRPC-shaped AlreadyExists (cosign never prints one) is not
 sign_blob v2http "v2http ok"
 expect_eq    "sign: Rekor v2 HTTP 409 (unexpected response) is retried" 2 "$sb_tries"
 expect_eq    "sign: Rekor v2 HTTP 409 then success"          0 "$sb_rc"
+sign_blob v2brace "v2brace ok"
+expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"
 expect_eq    "sign: Rekor v2 HTTP 503 is not retried"        1 "$sb_tries"
 # Anchored to the outer error line (#256): a non-conflict whose body quotes a 409 is one call.
-for q in q503v2 q503v2plain q503v1 q503v1plain inlog; do
+for q in q503v2 q503v2plain q503v1 q503v1plain inlog q503multi; do
   sign_blob "$q" "$q $q $q"
   expect_eq    "sign: $q (409 text inside another status's line) is not retried" 1 "$sb_tries"
   if [ "$sb_rc" != 0 ]; then ok; else bad "sign: $q must fail"; fi

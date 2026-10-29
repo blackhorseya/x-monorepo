@@ -12,17 +12,19 @@ exec python3 -I - <<'PY'
 import json, os, subprocess, sys, tempfile, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-def run(status, want_posts, quoted=False):
+def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label=""):
     hits = []
     body = {409: b'{"code":6,"message":"an equivalent entry already exists with index 123"}',
             503: b'{"code":14,"message":"unavailable"}'}[status]
-    if quoted:  # a non-conflict whose body quotes the 409 error text (#256)
+    if body is not None:
+        pass
+    elif quoted:  # a non-conflict whose body quotes the 409 error text (#256)
         body = b'{"code":14,"message":"troubleshooting: adding rekor v2 entry: unexpected response: 409 {example}"}'
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
             hits.append(self.path)
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            self.send_response(status); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.send_response(status); self.send_header("Content-Type", ctype); self.end_headers()
             self.wfile.write(body)
         def log_message(self, *a): pass
     with tempfile.TemporaryDirectory(prefix="cosign-v2-") as d:
@@ -37,16 +39,16 @@ def run(status, want_posts, quoted=False):
                    "rekorTlogUrls": [{"url": "http://127.0.0.1:%d" % srv.server_port, "majorApiVersion": 2,
                                       "validFor": {"start": "2026-01-01T00:00:00Z"}, "operator": "fixture"}],
                    "rekorTlogConfig": {"selector": "ALL"}}
-            open(d + "/config.json", "w").write(json.dumps(cfg)); open(d + "/artifact", "w").write("fixture")
+            open(d + "/config.json", "w").write(json.dumps(cfg)); open(d + "/" + name, "w").write("fixture")
             r = subprocess.run(["scripts/cosign-sign-blob.sh", "sign-blob", "--bundle=" + d + "/bundle.json",
-                                d + "/artifact", "--yes", "--key", d + "/cosign.key",
+                                d + "/" + name, "--yes", "--key", d + "/cosign.key",
                                 "--signing-config", d + "/config.json"],
                                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, timeout=120)
         finally:
             srv.shutdown(); srv.server_close(); t.join()
         left = os.path.exists(d + "/bundle.json")
-    print("v2 HTTP %d%s: wrapper exit %d, POSTs %d (want %d), bundle left %s" % (status, " (body quotes a 409)" if quoted else "", r.returncode, len(hits), want_posts, left))
+    print("v2 HTTP %d%s: wrapper exit %d, POSTs %d (want %d), bundle left %s" % (status, (" (body quotes a 409)" if quoted else "") + label, r.returncode, len(hits), want_posts, left))
     ok = r.returncode != 0 and len(hits) == want_posts and not left
     if not ok:
         print("FAIL: v2 HTTP %d:\n%s" % (status, r.stdout)); sys.exit(1)
@@ -54,5 +56,8 @@ def run(status, want_posts, quoted=False):
 run(409, 3)
 run(503, 1)
 run(503, 1, quoted=True)
+run(409, 3, name="artifact{build}.txt", label=" (brace in the artifact path)")
+run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
+    label=" (multi-line body forging an Error line)")
 print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")
 PY
