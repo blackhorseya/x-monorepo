@@ -15,6 +15,7 @@ type Reservation struct {
 	orderID   string
 	lines     []Line
 	status    Status
+	loaded    Status   // status as stored when Reconstitute rebuilt it; zero for one never stored
 	shortfall []string // REJECTED only
 	createdAt time.Time
 	updatedAt time.Time
@@ -104,15 +105,23 @@ func Reconstitute(p ReconstituteParams) (*Reservation, error) {
 		orderID:   p.OrderID,
 		lines:     slices.Clone(p.Lines),
 		status:    p.Status,
+		loaded:    p.Status,
 		shortfall: slices.Clone(p.Shortfall),
 		createdAt: p.CreatedAt,
 		updatedAt: p.UpdatedAt,
 	}, nil
 }
 
-func (x *Reservation) OrderID() string      { return x.orderID }
-func (x *Reservation) Lines() []Line        { return slices.Clone(x.lines) }
-func (x *Reservation) Status() Status       { return x.status }
+func (x *Reservation) OrderID() string { return x.orderID }
+func (x *Reservation) Lines() []Line   { return slices.Clone(x.lines) }
+func (x *Reservation) Status() Status  { return x.status }
+
+// LoadedStatus is the status the reservation had when it was read from the
+// repository. Repository.Update only stores a change made on top of that
+// status (compare-and-swap): the reservation has no version, and the stock
+// version cannot see a reservation that changed after it was read.
+func (x *Reservation) LoadedStatus() Status { return x.loaded }
+
 func (x *Reservation) Shortfall() []string  { return slices.Clone(x.shortfall) }
 func (x *Reservation) CreatedAt() time.Time { return x.createdAt }
 func (x *Reservation) UpdatedAt() time.Time { return x.updatedAt }

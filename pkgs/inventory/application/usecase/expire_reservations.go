@@ -25,9 +25,10 @@ const (
 // CronJob) and InventoryService.ExpireReservations (operator: dry run, small run).
 //
 // One call is one transaction (decorateTx): every stock Save in it compares
-// the stock's version, which is the lock between this sweep and a concurrent
-// Commit / Release of the same reservation (Reservation itself has no version).
-// A lost race (stock.ErrStale) fails the whole batch, which rolls back; the
+// the stock's version, and Repository.Update compares the reservation's status
+// (Reservation itself has no version), which together are the lock between this
+// sweep and a concurrent Commit / Release of the same reservation.
+// A lost race (stock.ErrStale / reservation.ErrStale) fails the whole batch, which rolls back; the
 // caller retries — the CLI on its next run, the rpc with ABORTED to the operator.
 //
 // Race with CompleteOrder: between CompleteOrder committing and inventory

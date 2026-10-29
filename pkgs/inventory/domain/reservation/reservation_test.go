@@ -345,6 +345,10 @@ func TestReconstitute(t *testing.T) {
 	if r.Status() != reservation.StatusRejected || r.Shortfall()[0] != "A" || len(r.PullEvents()) != 0 {
 		t.Fatalf("reconstituted = %+v", r)
 	}
+	// A stored reservation remembers the status it was read in (Repository.Update's compare-and-swap).
+	if r.LoadedStatus() != reservation.StatusRejected {
+		t.Fatalf("loaded status = %s", r.LoadedStatus())
+	}
 
 	if _, err := reservation.Reconstitute(reservation.ReconstituteParams{Lines: lines, Status: reservation.StatusReserved}); !errors.Is(err, reservation.ErrInvalidOrderID) {
 		t.Fatalf("empty id: %v", err)

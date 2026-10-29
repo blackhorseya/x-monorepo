@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -42,6 +43,48 @@ func TestReservationRepository_List(t *testing.T) {
 	cancel()
 	if _, _, err := repo.List(cancelled, reservation.ListParams{Limit: 1}); err == nil {
 		t.Fatal("cancelled context must fail")
+	}
+}
+
+// Update is a compare-and-swap on the status the aggregate was loaded with, like
+// Postgres: of two copies read as RESERVED the first to write wins, the other is
+// stale (retryable), and an unknown order is NotFound.
+func TestReservationRepository_UpdateIsCompareAndSwap(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewReservationRepository()
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	line, _ := reservation.NewLine("A", 1)
+	st, _ := stock.New("A", 5, now)
+	stocks := map[string]*stock.Stock{"A": st}
+	r, err := reservation.Reserve(reservation.Params{OrderID: "o-1", Lines: []reservation.Line{line}, Now: now}, stocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Add(c, r); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := repo.FindByOrderID(c, "o-1")
+	second, _ := repo.FindByOrderID(c, "o-1")
+	if err := first.Release(stocks, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Update(c, first); err != nil {
+		t.Fatal(err)
+	}
+	// second ran in its own transaction, against stock as it was when it read.
+	own, _ := stock.Reconstitute(stock.ReconstituteParams{SKU: "A", OnHand: 5, Reserved: 1, UpdatedAt: now})
+	if err := second.Expire(map[string]*stock.Stock{"A": own}, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Update(c, second); !errors.Is(err, reservation.ErrStale) {
+		t.Fatalf("update over a moved reservation: %v", err)
+	}
+	if got, _ := repo.FindByOrderID(c, "o-1"); got.Status() != reservation.StatusReleased {
+		t.Fatalf("stored = %s, want the winner's RELEASED", got.Status())
+	}
+	never, _ := reservation.Tombstone("o-never", now)
+	if err := repo.Update(c, never); !errors.Is(err, reservation.ErrNotFound) {
+		t.Fatalf("update unknown: %v", err)
 	}
 }
 

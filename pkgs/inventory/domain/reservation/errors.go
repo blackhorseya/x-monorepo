@@ -1,6 +1,10 @@
 package reservation
 
-import "github.com/blackhorseya/x-monorepo/pkgs/kernel"
+import (
+	"fmt"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+)
 
 var (
 	ErrInvalidOrderID  = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_order_id", "order id must not be empty")
@@ -16,6 +20,10 @@ var (
 	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "reservation.not_found", "reservation not found")
 	// ErrDuplicate is returned by Repository.Save when the order already has a reservation.
 	ErrDuplicate = kernel.NewError(kernel.KindConflict, "reservation.duplicate", "reservation already exists for this order")
+	// ErrStale is returned by Repository.Update when the reservation is no longer in the status it
+	// was loaded in (another transaction moved it). It wraps kernel.ErrConcurrentUpdate and is
+	// deliberately NOT a kernel.Error, like stock.ErrStale: consumers retry it instead of dropping.
+	ErrStale = fmt.Errorf("reservation: reload and retry: %w", kernel.ErrConcurrentUpdate)
 	// ErrInvalidStatusFilter is a list filter naming a status this version does not know.
 	ErrInvalidStatusFilter = kernel.NewError(kernel.KindInvalidArgument, "reservation.invalid_status_filter", "unknown reservation status filter")
 	// ErrInvalidCursor is a list cursor missing its timestamp or order id.

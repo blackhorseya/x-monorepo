@@ -18,7 +18,8 @@ type Repository interface {
 	FindByOrderIDs(c context.Context, orderIDs []string) ([]*Reservation, error)
 	// Add inserts a new reservation; ErrDuplicate when the order already has one.
 	Add(c context.Context, r *Reservation) error
-	// Update stores a status change; ErrNotFound when it was never added.
+	// Update stores a status change; ErrNotFound when it was never added and
+	// ErrStale when the stored status is no longer r.LoadedStatus() (compare-and-swap).
 	Update(c context.Context, r *Reservation) error
 	// List returns up to p.Limit reservations newest first (created_at desc,
 	// order_id desc) and the cursor of the next page, or nil when this is the
