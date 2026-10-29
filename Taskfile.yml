@@ -105,9 +105,14 @@ tasks:
       - task: scripts-test
 
   scripts-test:
-    desc: 'scripts/test.sh: the CI / release decision scripts (ci-changes, releasable, next-version, release-gate-pr) against throwaway git repos'
+    desc: 'scripts/test.sh: the CI / release decision scripts (ci-changes, releasable, next-version, release-gate-pr, merge-ready with a stubbed gh, merge-tree-check) against throwaway git repos, and red-stage against sample go test output'
     cmds:
       - scripts/test.sh
+
+  merge-ready:
+    desc: 'before merging: is the PR green on main-as-of-now + its head? (task merge-ready -- 188 [--revalidate]; scripts/merge-ready.sh)'
+    cmds:
+      - scripts/merge-ready.sh {{.CLI_ARGS}}
 
   test-affected:
     desc: go test -race on affected modules only

@@ -43,6 +43,11 @@ type APIKey struct {
 	createdAt time.Time
 	expiresAt time.Time // zero: never
 	revokedAt time.Time // zero: not revoked
+	// lastUsedAt is when the key last resolved, as far as the (throttled,
+	// best-effort) writer got: zero means never. It is stamped by
+	// Repository.TouchLastUsed, outside the optimistic lock, so no use of the
+	// aggregate sets it.
+	lastUsedAt time.Time
 }
 
 // New mints an ACTIVE key for accountID from a freshly generated secret.
@@ -83,6 +88,8 @@ type ReconstituteParams struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 	RevokedAt time.Time
+	// LastUsedAt zero: never used.
+	LastUsedAt time.Time
 }
 
 // Reconstitute rebuilds an APIKey from persistence. Only repositories should call it.
@@ -102,7 +109,7 @@ func Reconstitute(p ReconstituteParams) (*APIKey, error) {
 
 	return &APIKey{
 		id: p.ID, accountID: p.AccountID, name: p.Name, prefix: p.Prefix, hash: p.Hash,
-		status: p.Status, version: p.Version, createdAt: p.CreatedAt, expiresAt: p.ExpiresAt, revokedAt: p.RevokedAt,
+		status: p.Status, version: p.Version, createdAt: p.CreatedAt, expiresAt: p.ExpiresAt, revokedAt: p.RevokedAt, lastUsedAt: p.LastUsedAt,
 	}, nil
 }
 
@@ -116,6 +123,9 @@ func (x *APIKey) Version() int64       { return x.version }
 func (x *APIKey) CreatedAt() time.Time { return x.createdAt }
 func (x *APIKey) ExpiresAt() time.Time { return x.expiresAt }
 func (x *APIKey) RevokedAt() time.Time { return x.revokedAt }
+
+// LastUsedAt is zero for a key that never resolved.
+func (x *APIKey) LastUsedAt() time.Time { return x.lastUsedAt }
 
 // Usable reports why the key must not resolve right now (ErrRevoked,
 // ErrExpired), or nil. The account's status is the account's business.

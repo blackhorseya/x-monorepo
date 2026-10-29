@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -94,13 +95,43 @@ func (i *APIKeyRepository) Save(c context.Context, k *apikey.APIKey) error {
 	if !exists || cur.Version() != k.Version() {
 		return apikey.ErrStale
 	}
+	// last_used_at belongs to TouchLastUsed, not to whoever loaded the aggregate earlier.
 	cp, err := cloneKey(k, k.Version()+1)
+	if err != nil {
+		return err
+	}
+	cp, err = withLastUsed(cp, cur.LastUsedAt())
 	if err != nil {
 		return err
 	}
 	i.data[k.ID()] = cp
 
 	return nil
+}
+
+func (i *APIKeyRepository) TouchLastUsed(c context.Context, id apikey.ID, at time.Time, minInterval time.Duration) (bool, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	cur, ok := i.data[id]
+	if !ok {
+		return false, nil
+	}
+	if last := cur.LastUsedAt(); !last.IsZero() && last.After(at.Add(-minInterval)) {
+		return false, nil
+	}
+	cp, err := withLastUsed(cur, at)
+	if err != nil {
+		return false, err
+	}
+	i.data[id] = cp
+
+	return true, nil
 }
 
 func (i *APIKeyRepository) ListByAccount(c context.Context, accountID string) ([]*apikey.APIKey, error) {
@@ -139,5 +170,15 @@ func cloneKey(k *apikey.APIKey, version int64) (*apikey.APIKey, error) {
 	return apikey.Reconstitute(apikey.ReconstituteParams{
 		ID: k.ID(), AccountID: k.AccountID(), Name: k.Name(), Prefix: k.Prefix(), Hash: k.Hash(),
 		Status: k.Status(), Version: version, CreatedAt: k.CreatedAt(), ExpiresAt: k.ExpiresAt(), RevokedAt: k.RevokedAt(),
+		LastUsedAt: k.LastUsedAt(),
+	})
+}
+
+// withLastUsed is k with last_used_at replaced (the stored copy is immutable).
+func withLastUsed(k *apikey.APIKey, at time.Time) (*apikey.APIKey, error) {
+	return apikey.Reconstitute(apikey.ReconstituteParams{
+		ID: k.ID(), AccountID: k.AccountID(), Name: k.Name(), Prefix: k.Prefix(), Hash: k.Hash(),
+		Status: k.Status(), Version: k.Version(), CreatedAt: k.CreatedAt(), ExpiresAt: k.ExpiresAt(), RevokedAt: k.RevokedAt(),
+		LastUsedAt: at,
 	})
 }

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -28,6 +29,19 @@ var _ server.CredentialResolver = (*Resolver)(nil)
 
 // ResolveAPIKeyUC is the use case behind the resolver.
 type ResolveAPIKeyUC = usecasex.UseCase[dto.ResolveAPIKeyInput, *dto.ResolveAPIKeyOutput]
+
+// TouchAPIKeyUC is the use case behind last_used_at.
+type TouchAPIKeyUC = usecasex.UseCase[dto.TouchAPIKeyInput, *dto.TouchAPIKeyOutput]
+
+// touchTimeout bounds one last_used_at write. It runs off the request path, so
+// this is not request latency; it only keeps a stuck database from pinning a
+// goroutine and a slot.
+const touchTimeout = 2 * time.Second
+
+// maxTouchesInFlight bounds the writes running at once. Past it a write is
+// dropped (the key is stamped by a later request), so a slow database cannot
+// grow goroutines with traffic.
+const maxTouchesInFlight = 8
 
 // DefaultCacheTTL bounds how long a resolved (or refused) key is served from
 // memory: a revoke, a disable or a role change takes effect within it, and a
@@ -78,6 +92,20 @@ type Resolver struct {
 
 	mu    sync.Mutex
 	cache map[apikey.Hash]entry
+
+	// last_used_at (TrackLastUsed): nil touch = off.
+	touch      TouchAPIKeyUC
+	touchEvery time.Duration
+	logger     *slog.Logger
+	inflight   chan struct{}
+	writes     sync.WaitGroup
+	// Claims, two generations: a claim is only ever consulted for touchEvery, so
+	// when the current generation is older than that it becomes the previous one
+	// and the old previous (every claim in it expired) is dropped. Never a
+	// wholesale reset, which would forget claims still inside their window.
+	touched    map[string]time.Time // key id → when this replica last claimed a write
+	touchedOld map[string]time.Time
+	touchedAt  time.Time // when touched started
 }
 
 type entry struct {
@@ -120,6 +148,130 @@ func NewResolverWithTTL(resolve ResolveAPIKeyUC, clock port.Clock, ttl time.Dura
 	return a, nil
 }
 
+// TrackLastUsed turns on last_used_at: a key that resolves is stamped through
+// touch, at most once per interval per key per replica (the first request of a
+// window claims it, the rest — cache hits included — pay one map lookup), and
+// the use case's own conditional write holds the same bound across replicas.
+// The write runs off the request path and is best-effort: it never fails or
+// delays a lookup, and a failure is logged by class only (no key, hash or driver
+// text — an error from the database may carry what was written) and retried on
+// a later request. interval <= 0 or a nil touch leaves it off. Call it before
+// the resolver serves.
+func (a *Resolver) TrackLastUsed(touch TouchAPIKeyUC, interval time.Duration, logger *slog.Logger) {
+	if touch == nil || interval <= 0 {
+		return
+	}
+	a.touch, a.touchEvery, a.logger = touch, interval, logger
+	a.inflight = make(chan struct{}, maxTouchesInFlight)
+	a.touched = make(map[string]time.Time)
+	a.touchedOld = make(map[string]time.Time)
+}
+
+// Wait blocks until the last_used_at writes started so far have finished: for
+// tests and for a shutdown that wants the final stamps.
+func (a *Resolver) Wait() { a.writes.Wait() }
+
+// WaitTimeout is Wait with a bound, for shutdown: it reports whether every write
+// finished within d. The writes carry their own timeout (touchTimeout), so a
+// stuck database costs a shutdown at most d, and the stamps that did not land
+// are lost (best-effort).
+func (a *Resolver) WaitTimeout(d time.Duration) bool {
+	done := make(chan struct{})
+	// fire-and-forget: only observes the WaitGroup; it ends when the writes do
+	// (each bounded by touchTimeout), and the caller stops waiting after d.
+	go func() {
+		a.writes.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// noteUse stamps the key behind a successful lookup, if it is due.
+func (a *Resolver) noteUse(c context.Context, keyID string, now time.Time) {
+	if a.touch == nil || keyID == "" || !a.claim(keyID, now) {
+		return
+	}
+	select {
+	case a.inflight <- struct{}{}:
+	default:
+		a.unclaim(keyID, now) // saturated: drop this one, a later request stamps it
+
+		return
+	}
+
+	a.writes.Add(1)
+	// fire-and-forget: last_used_at is best-effort and must not delay or fail the
+	// lookup; the WaitGroup lets Wait join it, the timeout bounds it, and a
+	// failure is logged and un-claimed so a later request retries.
+	go func() {
+		defer a.writes.Done()
+		defer func() { <-a.inflight }()
+
+		wc, cancel := context.WithTimeout(context.WithoutCancel(c), touchTimeout)
+		defer cancel()
+		if _, err := a.touch.Execute(wc, dto.TouchAPIKeyInput{KeyID: keyID}); err != nil {
+			a.unclaim(keyID, now)
+			if a.logger != nil {
+				a.logger.Warn("identity: last_used_at write failed", "class", errorClass(err))
+			}
+		}
+	}()
+}
+
+// claim reports whether keyID is due a write at now, and if so records it so
+// concurrent requests do not also write.
+func (a *Resolver) claim(keyID string, now time.Time) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.touchedAt.IsZero() || now.Sub(a.touchedAt) >= a.touchEvery {
+		a.touchedOld, a.touched, a.touchedAt = a.touched, make(map[string]time.Time), now
+	}
+	last, ok := a.touched[keyID]
+	if !ok {
+		last, ok = a.touchedOld[keyID]
+	}
+	if ok && now.Sub(last) < a.touchEvery {
+		return false
+	}
+	if len(a.touched) >= MaxCacheEntries {
+		// More than MaxCacheEntries distinct keys inside one window is not API-key
+		// traffic. Past it new keys wait for the next generation unstamped, rather
+		// than forgetting claims that still hold or sending every request to the DB.
+		return false
+	}
+	a.touched[keyID] = now
+
+	return true
+}
+
+func (a *Resolver) unclaim(keyID string, claimedAt time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, m := range []map[string]time.Time{a.touched, a.touchedOld} {
+		if t, ok := m[keyID]; ok && t.Equal(claimedAt) {
+			delete(m, keyID)
+		}
+	}
+}
+
+// errorClass is all a failed write reveals in the log: no error text, because a
+// driver error can quote the statement and its arguments.
+func errorClass(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "error"
+	}
+}
+
 func (a *Resolver) record(c context.Context, result string) {
 	a.lookups.Add(c, 1, metric.WithAttributes(attribute.String("result", result)))
 }
@@ -140,6 +292,9 @@ func (a *Resolver) ResolveAPIKey(c context.Context, key string) (contextx.Princi
 	now := a.clock.Now()
 	if e, ok := a.get(h, now); ok {
 		a.record(c, resultHit)
+		if e.found {
+			a.noteUse(c, e.principal.CredentialID, now)
+		}
 
 		return e.principal, e.found, nil
 	}
@@ -164,6 +319,9 @@ func (a *Resolver) ResolveAPIKey(c context.Context, key string) (contextx.Princi
 		return contextx.Principal{}, false, err
 	}
 	a.put(h, e)
+	if e.found {
+		a.noteUse(c, e.principal.CredentialID, now)
+	}
 
 	return e.principal, e.found, nil
 }

@@ -21,6 +21,7 @@ task gate-ci               # 與 CI 等價的全量檢查
 task breaking              # proto 對 main 做 buf breaking
 task compose-up            # 本機 Postgres :5432 + Redis :6379 + grafana/otel-lgtm（Grafana :3000、OTLP :4317）
 task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會自己跑
+task merge-ready -- <pr>   # merge 前必跑：PR 最新綠燈是不是對「現在的 main + 這個 head」跑的（列 main / merge / base / head SHA 與 check 數）；stale（main 已前進）exit 2，先 `-- <pr> --revalidate` 重驗，不要 update branch（head 一變就要重審）
 task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag；沒改到會進 artifact 的檔案就被 gate 跳過，task release-gate 先看：列 releasable 檔 + 預測版號；四個 image 與 checksums.txt 都由 cosign keyless 簽名、archive 另有 GitHub artifact attestation，發布後 verify job 跑 scripts/release-verify.sh 全驗一遍；snapshot 以 --skip=sign 跳過）
 task poison -- list        # 看各 BC 的 poison 表；requeue <bc> <offset>…|all 送回原 topic、drop 刪掉（worker poison 子命令）
 task expire -- --older-than 24h --dry-run   # reservation TTL：RESERVED 超過的還庫存 + 發 OrderCancellationRequested（worker expire；Helm expire CronJob 每 15 分鐘；rpc 版 InventoryService.ExpireReservations 給 console Expire 頁，要 admin role）
@@ -72,7 +73,7 @@ pkgs/kernel      shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 pkgs/platform    技術共用：contextx、config、server（gin + Connect）、usecasex、otel、postgres、archtest；
                  admin（admin.v1.AdminService：poison 操作 + Prune RPC，與 worker 的 CLI 同一組 eventbus 函式；contract 在 protos/admin，不屬於任何 BC）
 pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering；inventory 是第二個，消費 ordering 的 event，ordering 再消費它的 `StockReserved` 把 order 變 CONFIRMED；`CompleteOrder` RPC 發 `OrderCompleted`，inventory 消費它把 reservation COMMITTED、扣 on_hand；`worker expire` 把 RESERVED 超過 TTL 的變 EXPIRED、還庫存、發 `OrderCancellationRequested`；
-                 identity 是第三個：DB 管理的 account / API key，沒有 event；`adapters/auth` 實作 platform 的 `server.CredentialResolver`，auth interceptor 對 `X-API-Key` 先查 config `auth.api_keys` 再問它（TTL cache 30s）——`docs/identity.md`）
+                 identity 是第三個：DB 管理的 account / API key，沒有 event；`adapters/auth` 實作 platform 的 `server.CredentialResolver`，auth interceptor 對 `X-API-Key` 先查 config `auth.api_keys` 再問它（TTL cache 30s）；key 通過驗證會節流、best-effort 地寫 `last_used_at`（`auth.last_used_interval`，預設 1m，寫入失敗不影響驗證）——`docs/identity.md`）
   provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() / decorateTx() 包起來
   contract/v1/     buf 生成的 wire format（pb + Connect + openapi.yaml），只有 adapters / apps 可 import
   domain/<agg>/    aggregate、VO、Repository interface、domain errors（手寫，不是 proto）
@@ -166,3 +167,16 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - Receiver：domain `x`、usecase `uc`、infra `i`、handler `h`；interface 參數 `c context.Context`，
   實作內 `ctx := contextx.FromContext(c)`
 - PR title 遵循 Conventional Commits
+- **RED commit 要失敗在「目標」**：行為變更先提交失敗的測試，但「指令 exit 非零」不等於缺陷重現——typo、缺依賴、
+  fixture 建立失敗、上游 use case 先拒絕都會讓新測試變紅。
+  - behavioral fix（修 regression、改行為）：RED 必須失敗在**目標 assertion**（預期的 assertion 訊息）。
+    setup / fixture 失敗、上游先拒絕、compile failure 都不算這個行為的 RED。
+  - 新增 API / 型別的 feature：可以接受 compile-fail 型 RED，但要標明失敗類型（它只證明缺 API），
+    並另有 assertion 型測試在 GREEN 驗證行為、能拒絕錯誤的實作。不為了湊 assertion 對新 API 造無意義的測試。
+  - **RED evidence**（PR 描述或回報）：immutable SHA（完整 40 字元）、完整指令、target test、失敗類型
+    （`compile` / `runtime assertion` / `setup`）、預期的 assertion 訊息、實際失敗位置（`file:line` 與輸出）、
+    fixture 已成功的證據（失敗訊息在 seed 之後，或同 fixture 的另一個測試通過）、對應的 GREEN SHA。
+  - 純文件、註解、無可測行為的預設值變更，以及沒有可測邏輯的 CI 修正，免 RED。已凍結的 RED 歷史不重寫。
+  - `scripts/red-stage.sh -m '<預期訊息 regex>'` 讀 `go test` 輸出，分類成 `assertion` / `setup` / `compile` / `panic` / `pass`
+    （只有 `assertion` exit 0）。它只是候選分類：訊息有印出不代表那是對的 assertion，語意由 reviewer 判。
+    例（在固定 RED SHA 的 named worktree 裡跑，不要切換自己綁定 worktree 的 HEAD）：`cd <RED SHA 的 named worktree> && go test -run '^TestX$' ./pkgs/ordering/... 2>&1 | scripts/red-stage.sh -m 'want 1 call'`

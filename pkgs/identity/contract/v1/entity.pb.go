@@ -224,7 +224,12 @@ type ApiKey struct {
 	// Unset: the key does not expire.
 	ExpireTime *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
 	// Set once the key is REVOKED.
-	RevokeTime    *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=revoke_time,json=revokeTime,proto3" json:"revoke_time,omitempty"`
+	RevokeTime *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=revoke_time,json=revokeTime,proto3" json:"revoke_time,omitempty"`
+	// When the key last authenticated a request. Unset: never used (or used only
+	// before this was recorded). Best-effort and throttled: written at most once per
+	// auth.last_used_interval (default 1m) and dropped when the write fails, so it
+	// can trail the real last use by up to about two intervals (more while writes fail); it is not an audit log.
+	LastUseTime   *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_use_time,json=lastUseTime,proto3" json:"last_use_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -315,6 +320,13 @@ func (x *ApiKey) GetRevokeTime() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ApiKey) GetLastUseTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastUseTime
+	}
+	return nil
+}
+
 var File_identity_v1_entity_proto protoreflect.FileDescriptor
 
 const file_identity_v1_entity_proto_rawDesc = "" +
@@ -328,7 +340,7 @@ const file_identity_v1_entity_proto_rawDesc = "" +
 	"\vcreate_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime\"\xcd\x02\n" +
+	"updateTime\"\x8d\x03\n" +
 	"\x06ApiKey\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -341,7 +353,8 @@ const file_identity_v1_entity_proto_rawDesc = "" +
 	"\vexpire_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"expireTime\x12;\n" +
 	"\vrevoke_time\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"revokeTime*g\n" +
+	"revokeTime\x12>\n" +
+	"\rlast_use_time\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\vlastUseTime*g\n" +
 	"\rAccountStatus\x12\x1e\n" +
 	"\x1aACCOUNT_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15ACCOUNT_STATUS_ACTIVE\x10\x01\x12\x1b\n" +
@@ -381,11 +394,12 @@ var file_identity_v1_entity_proto_depIdxs = []int32{
 	4, // 4: identity.v1.ApiKey.create_time:type_name -> google.protobuf.Timestamp
 	4, // 5: identity.v1.ApiKey.expire_time:type_name -> google.protobuf.Timestamp
 	4, // 6: identity.v1.ApiKey.revoke_time:type_name -> google.protobuf.Timestamp
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	4, // 7: identity.v1.ApiKey.last_use_time:type_name -> google.protobuf.Timestamp
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_identity_v1_entity_proto_init() }

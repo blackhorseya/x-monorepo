@@ -9,13 +9,16 @@ package identity
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/google/wire"
+	"go.opentelemetry.io/otel/metric"
 	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/cli"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/account"
@@ -23,6 +26,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -53,13 +57,14 @@ var ProviderSet = wire.NewSet(
 	ProvideListAPIKeys,
 	ProvideRevokeAPIKey,
 	ProvideResolveAPIKey,
+	ProvideTouchAPIKey,
 	ProvideWhoAmI,
 	ProvideBootstrap,
 	wire.Struct(new(rpc.UseCases), "*"),
 
 	// adapters
 	rpc.NewIdentityService,
-	auth.NewResolver,
+	ProvideResolver,
 	cli.NewBootstrap,
 )
 
@@ -152,6 +157,34 @@ func ProvideRevokeAPIKey(keys apikey.Repository, clock port.Clock, tx port.Trans
 // resolver caches, so the access log is not doubled per request.
 func ProvideResolveAPIKey(accounts account.Repository, keys apikey.Repository, clock port.Clock, rec *usecasex.Recorder) auth.ResolveAPIKeyUC {
 	return decorate("identity.resolve_api_key", rec, usecase.NewResolveAPIKey(accounts, keys, clock))
+}
+
+// ProvideTouchAPIKey is the write behind auth.last_used_interval: one
+// conditional UPDATE per key per window, no transaction (a single statement) and
+// no Logging line per call (the resolver logs failures by class, and a success
+// is the common case).
+func ProvideTouchAPIKey(keys apikey.Repository, clock port.Clock, cfg config.Auth, rec *usecasex.Recorder) auth.TouchAPIKeyUC {
+	return usecasex.Chain[dto.TouchAPIKeyInput, *dto.TouchAPIKeyOutput](usecase.NewTouchAPIKey(keys, clock, cfg.LastUsedInterval),
+		usecasex.Metrics[dto.TouchAPIKeyInput, *dto.TouchAPIKeyOutput](rec, "identity.touch_api_key"),
+	)
+}
+
+// resolverDrain bounds how long shutdown waits for the last last_used_at writes
+// (each already bounded by the resolver's own timeout).
+const resolverDrain = 3 * time.Second
+
+// ProvideResolver is the auth path's resolver with last_used_at switched on as
+// configured (auth.last_used_interval, 0 = off). Its cleanup gives the stamps
+// still in flight a bounded moment to land; wire runs it before the database
+// handle it depends on is closed.
+func ProvideResolver(resolve auth.ResolveAPIKeyUC, touch auth.TouchAPIKeyUC, clock port.Clock, cfg config.Auth, logger *slog.Logger, mp metric.MeterProvider) (*auth.Resolver, func(), error) {
+	r, err := auth.NewResolver(resolve, clock, mp)
+	if err != nil {
+		return nil, nil, err
+	}
+	r.TrackLastUsed(touch, cfg.LastUsedInterval, logger)
+
+	return r, func() { r.WaitTimeout(resolverDrain) }, nil
 }
 
 func ProvideWhoAmI(rec *usecasex.Recorder) rpc.WhoAmIUC {
