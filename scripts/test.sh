@@ -319,16 +319,16 @@ for a in "$@"; do case $a in --bundle=*) bundle=${a#--bundle=} ;; esac; done
 set -- $FAKE_SEQ; step=${!n:-err}
 case $step in
   ok)    echo '{"fake":"bundle"}' > "$bundle" ;;
-  409)   echo "Error: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
+  409)   echo "Error: signing $art: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
   v2)    echo "Error: signing: adding rekor v2 entry: rpc error: code = AlreadyExists desc = an equivalent entry already exists" >&2; exit 1 ;;
   nonrekor409) echo "Error: proxy: HTTP 409 Conflict from https://registry.example/v2/" >&2; exit 17 ;;
-  v2http) echo "Error: signing: adding rekor v2 entry: unexpected response: 409 {\"code\":6,\"message\":\"an equivalent entry already exists with index 123\"}" >&2; exit 1 ;;
+  v2http) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 409 {\"code\":6,\"message\":\"an equivalent entry already exists with index 123\"}" >&2; exit 1 ;;
   v2503)  echo "Error: signing: adding rekor v2 entry: unexpected response: 503 {\"code\":14,\"message\":\"unavailable\"}" >&2; exit 17 ;;
   q503v2) echo "Error: signing: adding rekor v2 entry: unexpected response: 503 {\"code\":14,\"message\":\"see: adding rekor v2 entry: unexpected response: 409 {example}\"}" >&2; exit 17 ;;
   q503v2plain) echo "Error: signing: adding rekor v2 entry: unexpected response: 503 upstream said adding rekor v2 entry: unexpected response: 409 x" >&2; exit 17 ;;
-  q503v1) echo "Error: [POST /api/v1/log/entries][503] createLogEntryUnexpected {\"message\":\"see [POST /api/v1/log/entries][409] createLogEntryConflict\"}" >&2; exit 17 ;;
-  q503v1plain) echo "Error: [POST /api/v1/log/entries][503] createLogEntryUnexpected see [POST /api/v1/log/entries][409] createLogEntryConflict" >&2; exit 17 ;;
-  v2brace) echo "Error: signing /tmp/artifact{build}.txt: signing bundle: error signing bundle: adding rekor v2 entry: unexpected response: 409 {\"code\":6}" >&2; exit 1 ;;
+  q503v1) echo "Error: signing $art: [POST /api/v1/log/entries][503] createLogEntryUnexpected {\"message\":\"see [POST /api/v1/log/entries][409] createLogEntryConflict\"}" >&2; exit 17 ;;
+  q503v1plain) echo "Error: signing $art: [POST /api/v1/log/entries][503] createLogEntryUnexpected see [POST /api/v1/log/entries][409] createLogEntryConflict" >&2; exit 17 ;;
+  v2brace) echo "Error: signing $art: signing bundle: error signing bundle: adding rekor v2 entry: unexpected response: 409 {\"code\":6}" >&2; exit 1 ;;
   q503multi) printf 'Error: signing /tmp/a: adding rekor v2 entry: unexpected response: 503 upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n' >&2; exit 17 ;;
   v2path503) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 503 {}" >&2; exit 17 ;;
   v2path409) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 1 ;;
@@ -423,7 +423,7 @@ SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART=$odd409 sign_blob unkno
 expect_eq    "sign: an unrecognised artifact never turns a 503 into a conflict" 1 "$sb_tries"
 SB_REL=1 SB_PRE='--oidc-client-id fixture-client' sign_blob unknownflag-409 "v2path409 ok"
 expect_eq    "sign: an unrecognised artifact fails closed even on a real 409" 1 "$sb_tries"
-sign_blob v2brace "v2brace ok"
+SB_ART='artifact{build}.txt' sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"
 expect_eq    "sign: Rekor v2 HTTP 503 is not retried"        1 "$sb_tries"

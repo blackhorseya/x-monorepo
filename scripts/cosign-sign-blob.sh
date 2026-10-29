@@ -46,7 +46,8 @@ log=$(mktemp); trap 'rm -f "$log"' EXIT
 # On that line cosign's own context comes first: `Error: signing <artifact>: <what failed>: <status
 # marker><status> <body>`. The artifact is an argument of this script (identified below) and can hold any text (a status
 # marker, `entry`, `503 `), so exactly that prefix is cut off, anchored at the start of the line and
-# not by deleting the text everywhere. Then the FIRST (leftmost) status marker must carry exactly
+# not by deleting the text everywhere. A line without that prefix (or an artifact that could not be
+# identified) is not classified at all: fail closed. Then the FIRST (leftmost) status marker must carry exactly
 # 409 (a quoted marker in the body comes after the real one). Matching is per line, so lines of a
 # mixed log never combine.
 # No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
@@ -69,9 +70,10 @@ is_conflict() { # is_conflict <file>: the first `Error: ` line of it is a Rekor 
   local line
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in 'Error: '*) ;; *) continue ;; esac
-    if [ -n "$artifact" ]; then
-      case $line in "Error: signing $artifact: "*) line=${line#"Error: signing $artifact: "} ;; esac
-    fi
+    # Fail closed: without the exact `Error: signing <artifact>: ` context nothing is classified (an
+    # unknown value flag before the artifact, or an unexpected error shape, is a plain failure).
+    [ -n "$artifact" ] || return 1
+    case $line in "Error: signing $artifact: "*) line=${line#"Error: signing $artifact: "} ;; *) return 1 ;; esac
     [[ $line =~ $status_re ]] || return 1
     [ "${BASH_REMATCH[2]}${BASH_REMATCH[3]}" = 409 ]
     return
