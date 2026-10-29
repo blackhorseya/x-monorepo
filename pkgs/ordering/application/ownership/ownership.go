@@ -78,3 +78,10 @@ func (x *Policy) CanRead(c context.Context, customerID string) bool {
 
 	return !ok || customerID == p.Subject
 }
+
+// OwnOnly returns the customer the caller is confined to, and true when they
+// are: a known non-admin principal. Admin and anonymous callers are not
+// confined (false). RED stub.
+func (x *Policy) OwnOnly(_ context.Context) (string, bool) {
+	return "", false
+}

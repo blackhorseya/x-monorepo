@@ -69,6 +69,11 @@ func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order
 	return toDomain(row)
 }
 
+// FindByIDForCustomer: RED stub, ignores the customer.
+func (i *OrderRepository) FindByIDForCustomer(c context.Context, id order.ID, _ string) (*order.Order, error) {
+	return i.FindByID(c, id)
+}
+
 // Save writes the whole aggregate in one transaction. A never-saved order
 // (Version 0) is a plain INSERT, so an id collision surfaces as ErrDuplicate
 // instead of silently overwriting. A loaded order is an UPDATE guarded by

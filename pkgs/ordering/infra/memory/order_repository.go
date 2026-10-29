@@ -42,6 +42,11 @@ func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order
 	return clone(o)
 }
 
+// FindByIDForCustomer: RED stub, ignores the customer.
+func (i *OrderRepository) FindByIDForCustomer(c context.Context, id order.ID, _ string) (*order.Order, error) {
+	return i.FindByID(c, id)
+}
+
 // Save follows the Postgres contract: Version 0 inserts (ErrDuplicate if the id
 // is taken); anything else updates only if the stored version still matches
 // (ErrStale otherwise). The stored copy's version advances by one.

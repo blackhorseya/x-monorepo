@@ -197,3 +197,77 @@ func TestGetOrder_Ownership(t *testing.T) {
 		}
 	})
 }
+
+// spyRepo records which find the use case chose. GetOrder for a confined
+// caller must go through FindByIDForCustomer and never FindByID: FindByID
+// loads every item before the ownership check, which makes a foreign order
+// measurably slower than a missing one.
+type spyRepo struct {
+	order.Repository
+	findByID, findForCustomer []string
+}
+
+func (r *spyRepo) FindByID(c context.Context, id order.ID) (*order.Order, error) {
+	r.findByID = append(r.findByID, string(id))
+	return r.Repository.FindByID(c, id)
+}
+
+func (r *spyRepo) FindByIDForCustomer(c context.Context, id order.ID, customerID string) (*order.Order, error) {
+	r.findForCustomer = append(r.findForCustomer, string(id)+"/"+customerID)
+	return r.Repository.FindByIDForCustomer(c, id, customerID)
+}
+
+func TestGetOrder_ConfinedCallerNeverLoadsAForeignOrder(t *testing.T) {
+	repos(t, func(t *testing.T, repo order.Repository) {
+		mine := place(t, newCreate(repo), alice, "")
+		spy := &spyRepo{Repository: repo}
+		get := usecase.NewGetOrder(spy, ownership.New(adminRole))
+
+		// bob asks for alice's order and for one that does not exist: same path, same answer.
+		for _, id := range []string{mine.ID, "no-such-order"} {
+			if _, err := get.Execute(as(bob), dto.GetOrderInput{OrderID: id}); !errors.Is(err, order.ErrNotFound) {
+				t.Fatalf("bob get %s err = %v, want ErrNotFound", id, err)
+			}
+		}
+		if len(spy.findByID) != 0 {
+			t.Fatalf("FindByID called for a confined caller: %v", spy.findByID)
+		}
+		if want := []string{mine.ID + "/" + bob.Subject, "no-such-order/" + bob.Subject}; len(spy.findForCustomer) != 2 || spy.findForCustomer[0] != want[0] || spy.findForCustomer[1] != want[1] {
+			t.Fatalf("FindByIDForCustomer calls = %v, want %v", spy.findForCustomer, want)
+		}
+
+		// The owner still reads it; admin and anonymous keep the plain find.
+		spy.findByID, spy.findForCustomer = nil, nil
+		if _, err := get.Execute(as(alice), dto.GetOrderInput{OrderID: mine.ID}); err != nil || len(spy.findForCustomer) != 1 || len(spy.findByID) != 0 {
+			t.Fatalf("owner: err %v, forCustomer %v, byID %v", err, spy.findForCustomer, spy.findByID)
+		}
+		spy.findByID, spy.findForCustomer = nil, nil
+		for name, ctx := range map[string]context.Context{"admin": as(ops), "anonymous": context.Background()} {
+			if _, err := get.Execute(ctx, dto.GetOrderInput{OrderID: mine.ID}); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		}
+		if len(spy.findByID) != 2 || len(spy.findForCustomer) != 0 {
+			t.Fatalf("admin/anonymous: byID %v, forCustomer %v, want 2 plain finds", spy.findByID, spy.findForCustomer)
+		}
+	})
+}
+
+// The store itself decides ownership.
+func TestRepository_FindByIDForCustomer(t *testing.T) {
+	repos(t, func(t *testing.T, repo order.Repository) {
+		mine := place(t, newCreate(repo), alice, "")
+		c := context.Background()
+
+		got, err := repo.FindByIDForCustomer(c, order.ID(mine.ID), alice.Subject)
+		if err != nil || got.ID().String() != mine.ID || len(got.Items()) != 1 {
+			t.Fatalf("owner = %v, %v", got, err)
+		}
+		if _, err := repo.FindByIDForCustomer(c, order.ID(mine.ID), bob.Subject); !errors.Is(err, order.ErrNotFound) {
+			t.Fatalf("foreign = %v, want ErrNotFound", err)
+		}
+		if _, err := repo.FindByIDForCustomer(c, "no-such-order", alice.Subject); !errors.Is(err, order.ErrNotFound) {
+			t.Fatalf("missing = %v, want ErrNotFound", err)
+		}
+	})
+}
