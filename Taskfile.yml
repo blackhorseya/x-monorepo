@@ -388,7 +388,7 @@ tasks:
         msg: needs k6 (brew install k6), psql and python3
 
   k6-bench-test:
-    desc: 'the bench tooling's own tests: bench_report_test.py (throughput and drain definitions), bench_fixture_test.sh (seeded SKUs, end-to-end latency includes CreateOrder, throughput not diluted by setup — against tests/k6/bench_stub.py), bench_db_test.sh (bench.sh never drops a database it did not create). Needs Postgres (DATABASE_URL), k6 and psql; not in CI'
+    desc: 'tests of the bench tooling: bench_report_test.py (throughput and drain definitions), bench_fixture_test.sh (seeded SKUs, end-to-end latency includes CreateOrder, throughput not diluted by setup — against tests/k6/bench_stub.py), bench_db_test.sh (bench.sh never drops a database it did not create). Needs Postgres (DATABASE_URL), k6 and psql; not in CI'
     deps: [build]
     cmds:
       - 'python3 -I tests/k6/bench_report_test.py'
