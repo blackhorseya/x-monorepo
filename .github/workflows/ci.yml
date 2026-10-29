@@ -230,8 +230,8 @@ jobs:
   # ── release config: the snapshot must build before anyone tags ─────────────
   # release.yml itself only ever runs on main (workflow_run), so this job also exercises the two
   # things that broke v0.26.0's first attempts after green PRs: the signing flags against the
-  # cosign that cosign-installer actually installs (#119) — same cosign-installer tag as
-  # release.yml, keep them equal — and, in actions-resolve below, that every action ref exists.
+  # cosign that cosign-installer actually installs (#119) — same cosign-installer tag and
+  # cosign-release as release.yml, keep them equal — and, in actions-resolve below, that every action ref exists.
   release-snapshot:
     needs: affected
     if: needs.affected.outputs.run_release_snapshot == 'true'
@@ -244,6 +244,8 @@ jobs:
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with: { version: "~> v2.18", install-only: true }
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
       - run: task release-check release-snapshot
       - name: .goreleaser.yaml's signs command works with this cosign (throwaway key)
         run: scripts/cosign-smoke.sh
