@@ -42,15 +42,23 @@ log=$(mktemp); trap 'rm -f "$log"' EXIT
 #       runs the real cosign against a loopback v2 server to keep this string honest)
 # Only the FIRST `Error: ` line of the output is the outer error: cosign prints its error once and a
 # multi-line response body follows it, so a later line that looks like `Error: ...409` is body text.
-# On that line the FIRST (leftmost) status marker must carry exactly 409 (a quoted marker in the body
-# comes after the real one). Nothing else about the context is assumed: it holds the artifact path,
-# which may contain any character. Matching is per line, so lines of a mixed log never combine.
+# On that line the values this script passes to cosign (the artifact path, the bundle path, a key
+# file: it knows them exactly, and they can hold any text, a status marker included) are removed
+# first, then the FIRST (leftmost) status marker must carry exactly 409 (a quoted marker in the body
+# comes after the real one). Matching is per line, so lines of a mixed log never combine.
 # No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
 status_re='(log/entries\]\[([0-9]+)\]|adding rekor v2 entry: unexpected response: ([0-9]+)([^0-9]|$))'
+# Values to cut out of the error line: every argument that is not a flag, and the bundle path.
+# Under four characters a value is left in place (it could be part of the marker itself).
+strip=()
+for a in "$@" "$bundle"; do
+  case $a in -*|???) ;; ?*) strip+=("$a") ;; esac
+done
 is_conflict() { # is_conflict <file>: the first `Error: ` line of it is a Rekor conflict error
-  local line
+  local line v
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in 'Error: '*) ;; *) continue ;; esac
+    for v in "${strip[@]}"; do line=${line//"$v"/}; done
     [[ $line =~ $status_re ]] || return 1
     [ "${BASH_REMATCH[2]}${BASH_REMATCH[3]}" = 409 ]
     return
