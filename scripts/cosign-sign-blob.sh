@@ -9,8 +9,9 @@
 # Rekor entry, never a reuse of the one that conflicted.
 #
 # Fail-closed:
-#  - only output that names a Rekor conflict (409 / createLogEntryConflict / AlreadyExists) is
-#    retried, at most COSIGN_SIGN_RETRIES (2) more times; any other failure exits at once;
+#  - only output that is a Rekor conflict (v1 `[409] createLogEntryConflict`, `409 Conflict`, v2
+#    gRPC `code = AlreadyExists`, and it must name Rekor) is retried, at most 2 more times (a
+#    constant, not configurable); any other failure exits at once;
 #  - a 409 is never success: a failed attempt stays failed, and when the retries run out the
 #    script exits non-zero;
 #  - the bundle is removed before every attempt and after every failure, and a "successful" cosign
@@ -20,9 +21,9 @@
 #   scripts/cosign-sign-blob.sh sign-blob --bundle=<file> <artifact> --yes [--key <key>]
 set -euo pipefail
 
-retries=${COSIGN_SIGN_RETRIES:-2}
+max=3   # 1 sign + at most 2 re-signs
 delay=${COSIGN_SIGN_RETRY_DELAY:-5}
-max=$((retries + 1))
+case $delay in ''|*[!0-9]*) echo "cosign-sign-blob: COSIGN_SIGN_RETRY_DELAY must be whole seconds, got '$delay'" >&2; exit 2 ;; esac
 
 bundle=
 for a in "$@"; do
@@ -31,10 +32,14 @@ done
 [ -n "$bundle" ] || { echo "cosign-sign-blob: no --bundle=<file> in the arguments" >&2; exit 2; }
 
 log=$(mktemp); trap 'rm -f "$log"' EXIT
-# 409 as its own token, so a digest or timestamp that merely contains the digits does not count.
-conflict='(^|[^0-9A-Za-z])409([^0-9A-Za-z]|$)|createLogEntryConflict|AlreadyExists'
+# A conflict is a Rekor error shape, not a substring: a URL or id containing 409, or an AlreadyExists
+# from something else, is an ordinary failure.
+conflict='\]\[409\]|[Hh][Tt][Tt][Pp] 409|409 Conflict|(^|[^/A-Za-z0-9_.-])createLogEntryConflict|code = AlreadyExists|codes\.AlreadyExists'
+rekor='[Rr]ekor|log/entries'
 
-for attempt in $(seq 1 "$max"); do
+attempt=0
+while [ "$attempt" -lt "$max" ]; do
+  attempt=$((attempt + 1))
   rm -f "$bundle"
   echo "cosign-sign-blob: attempt $attempt/$max"
   rc=0
@@ -47,7 +52,7 @@ for attempt in $(seq 1 "$max"); do
     exit 1
   fi
   rm -f "$bundle"
-  if ! grep -Eq -- "$conflict" "$log"; then
+  if ! grep -Eq -- "$conflict" "$log" || ! grep -Eq -- "$rekor" "$log"; then
     echo "cosign-sign-blob: FAIL: attempt $attempt/$max failed (exit $rc), not a Rekor conflict: not retrying" >&2
     exit "$rc"
   fi
@@ -58,3 +63,5 @@ for attempt in $(seq 1 "$max"); do
   echo "cosign-sign-blob: Rekor conflict, signing again with a fresh key in ${delay}s" >&2
   sleep "$delay"
 done
+# Not reachable (the last attempt exits above), but a loop that ends is never success.
+exit 1
