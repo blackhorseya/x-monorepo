@@ -85,7 +85,7 @@ task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一
 
 | `K6_CUSTOMER_MODE` | 行為 |
 |---|---|
-| `auto`（預設） | 每個 VU 的第一個 CreateOrder 不帶 `customer_id`：200 → 之後都不帶；`400 order.empty_customer` → 改帶腳本自己的 customer（名字含 `RUN_ID`）重送，之後都帶（沒寫入任何東西，那次 400 不算 `http_req_failed` 也不進 CreateOrder 的延遲）。**只快取這兩種答案**；其他任何回應（503、401、403…）都不快取，整個 run 立刻 abort，訊息是 `customer probe: …CreateOrder answered status <N> code <code>`，錯誤來源就是那一次真實呼叫（只印 RPC / status / Connect code，不印 response body 或其他 header：上游或 proxy 可能把 `X-API-Key` 反射進去，code 若不像 code 也只印 `(unrecognised code)`）。ListOrders 跟 CreateOrder 解出來的結果走（auth off 篩腳本的 customer、有 principal 看自己的，admin 看全部） |
+| `auto`（預設） | 每個 VU 的第一個 CreateOrder 不帶 `customer_id`：200 → 之後都不帶；`400 order.empty_customer` → 改帶腳本自己的 customer（名字含 `RUN_ID`）重送，之後都帶（沒寫入任何東西，那次 400 不算 `http_req_failed` 也不進 CreateOrder 的延遲）。**只快取這兩種答案**；其他任何回應（503、401、403…）都不快取，整個 run 立刻 abort，訊息是 `customer probe: …CreateOrder answered status <N> code <code>`，錯誤來源就是那一次真實呼叫（只印 RPC / status / Connect code，不印 response body 或其他 header：上游或 proxy 可能把 `X-API-Key` 反射進去，code 只印已知值（16 個 Connect code 和平台的 x-error-code，見 `tests/k6/codes.js`），其他一律 `<unrecognized>`；輸出前再把這次用的 `API_KEY` 值換成 `<redacted>`）。ListOrders 跟 CreateOrder 解出來的結果走（auth off 篩腳本的 customer、有 principal 看自己的，admin 看全部） |
 | `include` / `omit` | 不探測，一律帶 / 一律不帶 `customer_id`（探測的那一次 CreateOrder 有顧慮、或要固定行為時用） |
 
 `task k6-auth-matrix` 驗證的組合（`tests/k6/auth-matrix.sh`，真的 rpc + Postgres，reservation 旁有 worker，各自的 `RUN_ID` / SKU / customer；腳本原本的 thresholds 不動，另外要求 `rpc_ok`（成功的 CreateOrder / GetOrder / ListOrders，reservation 是 CreateOrder / CompleteOrder / GetReservation）都 > 0）：

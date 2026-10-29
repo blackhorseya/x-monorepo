@@ -8,6 +8,7 @@
 //             even with a key sent; a public procedure) needs customer_id.
 import http from "k6/http";
 import exec from "k6/execution";
+import { KNOWN_CODES } from "./codes.js";
 import { check } from "k6";
 import { Counter, Trend } from "k6/metrics";
 
@@ -83,8 +84,10 @@ export function createOrder(body, name) {
     return rpc(method, { ...body, ...customerId(name) });
   }
   exec.test.abort(
-    `customer probe: ${method} answered status ${res.status} code ${errorCode(res)}; ` +
-      "not cached, not a customer answer (K6_CUSTOMER_MODE=include|omit skips the probe)"
+    redact(
+      `customer probe: ${method} answered status ${res.status} code ${errorCode(res)}; ` +
+        "not cached, not a customer answer (K6_CUSTOMER_MODE=include|omit skips the probe)"
+    )
   );
 }
 
@@ -95,7 +98,7 @@ export function ok(res, what) {
     rpcErrors.add(1, { rpc: what, code: errorCode(res) });
     // the counter tags are not in the summary; say which RPC was refused, and how, a few times
     if (shown++ < 3) {
-      console.error(`${what}: status ${res.status} code ${errorCode(res)}`);
+      console.error(redact(`${what}: status ${res.status} code ${errorCode(res)}`));
     }
   } else {
     rpcOk.add(1, { rpc: what });
@@ -103,21 +106,30 @@ export function ok(res, what) {
   return good ? res.json() : null;
 }
 
-// What a response says about itself, for logs, messages and tags: the Connect code only, and only
-// if it looks like one. The body and any other header are never echoed — a misbehaving upstream or
-// proxy can reflect the request's X-API-Key into them, and a log must not carry a credential.
-const CODE = /^[A-Za-z0-9_.-]{1,64}$/;
+// What a response says about itself, for logs, messages and tags: the Connect / x-error-code
+// value only, and only if it is a known one (codes.js); else <unrecognized>. The body and any other
+// header are never echoed — a misbehaving upstream or proxy can reflect the request's X-API-Key
+// into them, into a code that merely looks like a code included. A response without any code is
+// its HTTP status.
 export function errorCode(res) {
-  const code = res.headers["X-Error-Code"] || (res.status === 200 ? "" : safeCode(res));
-  return code === "" || CODE.test(code) ? code : "(unrecognised code)";
+  if (res.status === 200) return "";
+  const code = res.headers["X-Error-Code"] || jsonCode(res);
+  if (!code) return String(res.status);
+  return KNOWN_CODES.has(code) ? code : "<unrecognized>";
 }
 
-function safeCode(res) {
+function jsonCode(res) {
   try {
-    return res.json("code") || String(res.status);
+    return res.json("code") || "";
   } catch (_) {
-    return String(res.status);
+    return "";
   }
+}
+
+// redact is the second layer: no diagnostic leaves with the key this run uses in it.
+export function redact(text) {
+  const key = __ENV.API_KEY;
+  return key ? String(text).split(key).join("<redacted>") : String(text);
 }
 
 // setStock for setup(): SetStock is a read-modify-write under optimistic locking, so a
