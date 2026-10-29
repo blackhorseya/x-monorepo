@@ -10,8 +10,9 @@
 #
 # Fail-closed:
 #  - only an `Error: ` output line whose outer status is a Rekor conflict (v1 `log/entries][409]`, v2
-#    `adding rekor v2 entry: unexpected response: 409`, the first status on the first `Error: ` line: a
-#    409 quoted in another status's body does not count, #256) is retried, at most 2 more times (a constant,
+#    `adding rekor v2 entry: unexpected response: 409`, the first status on the first `Error: ` line, after
+#    the leading `Error: signing <argument>: `: a 409 quoted in another status's body does not
+#    count, #256) is retried, at most 2 more times (a constant,
 #    not configurable); any other failure exits at once;
 #  - a 409 is never success: a failed attempt stays failed, and when the retries run out the
 #    script exits non-zero;
@@ -42,23 +43,22 @@ log=$(mktemp); trap 'rm -f "$log"' EXIT
 #       runs the real cosign against a loopback v2 server to keep this string honest)
 # Only the FIRST `Error: ` line of the output is the outer error: cosign prints its error once and a
 # multi-line response body follows it, so a later line that looks like `Error: ...409` is body text.
-# On that line the values this script passes to cosign (the artifact path, the bundle path, a key
-# file: it knows them exactly, and they can hold any text, a status marker included) are removed
-# first, then the FIRST (leftmost) status marker must carry exactly 409 (a quoted marker in the body
-# comes after the real one). Matching is per line, so lines of a mixed log never combine.
+# On that line cosign's own context comes first: `Error: signing <artifact>: <what failed>: <status
+# marker><status> <body>`. The artifact is an argument of this script and can hold any text (a status
+# marker, `entry`, `503 `), so exactly that prefix is cut off, anchored at the start of the line and
+# not by deleting the text everywhere. Then the FIRST (leftmost) status marker must carry exactly
+# 409 (a quoted marker in the body comes after the real one). Matching is per line, so lines of a
+# mixed log never combine.
 # No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
 status_re='(log/entries\]\[([0-9]+)\]|adding rekor v2 entry: unexpected response: ([0-9]+)([^0-9]|$))'
-# Values to cut out of the error line: every argument that is not a flag, and the bundle path.
-# Under four characters a value is left in place (it could be part of the marker itself).
-strip=()
-for a in "$@" "$bundle"; do
-  case $a in -*|???) ;; ?*) strip+=("$a") ;; esac
-done
+args=("$@")
 is_conflict() { # is_conflict <file>: the first `Error: ` line of it is a Rekor conflict error
   local line v
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in 'Error: '*) ;; *) continue ;; esac
-    for v in "${strip[@]}"; do line=${line//"$v"/}; done
+    for v in "${args[@]}"; do
+      case $line in "Error: signing $v: "*) line=${line#"Error: signing $v: "}; break ;; esac
+    done
     [[ $line =~ $status_re ]] || return 1
     [ "${BASH_REMATCH[2]}${BASH_REMATCH[3]}" = 409 ]
     return
