@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -78,16 +79,16 @@ func (w *extWorld) newAccount(t *testing.T, id string, roles ...string) {
 	}
 }
 
-// invite stores a pending invite through the repository, not CreateInvite: the
-// ClaimInvite tests must reach ClaimInvite's own behaviour even while
-// CreateInvite is unimplemented.
+// invite stores a pending invite with plain SQL, not CreateInvite nor the
+// invite domain: the ClaimInvite tests must reach ClaimInvite's own behaviour
+// even while those are unimplemented (the RED commit stubs them).
 func (w *extWorld) invite(t *testing.T, accountID, email string) {
 	t.Helper()
-	v, err := invite.New(invite.ID(randomName(t)), email, accountID, w.clock.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := w.invites.Add(w.ctx, v); err != nil {
+	now := w.clock.Now()
+	if err := w.db.WithContext(w.ctx).Exec(
+		"INSERT INTO identity.invites (id, email, account_id, version, created_at, expires_at) VALUES (?, ?, ?, 1, ?, ?)",
+		randomName(t), strings.ToLower(strings.TrimSpace(email)), accountID, now, now.Add(7*24*time.Hour),
+	).Error; err != nil {
 		t.Fatal(err)
 	}
 }
