@@ -245,12 +245,25 @@ archtest 的形狀規則照舊（private 欄位、constructor、無 `Set*`、不
 
 取消可能因 429／5xx／網路中斷／回應遺失而沒有完成；此時清空 JS credential **不等於** server 已撤銷（HttpOnly cookie 仍在，晚到的 Login body 雖被丟棄，cookie 仍會被瀏覽器收下）。契約：
 
-1. **先持久化、後送出**：Clear／Logout 先把 `pendingCancel = {tickets: [...≤8], cookie: true|false, since}` 寫入 `localStorage`（鍵 `console.pendingCancel`；只存取消用的 opaque ticket 與旗標，**不存任何 credential**），再送 `Logout`。成功（2xx）才清除；收到成功回應之前 reload 或關閉分頁，狀態仍在。
+1. **先持久化、後送出**：Clear／Logout 先把待取消意圖寫入 `localStorage` 的取消 journal（鍵 `console.pendingCancel`），再送 `Logout`。journal 是 **per-attempt 條目的集合**（`ticket → {state, since}`，另加一個 `cookie` 意圖旗標），**不是單一整體標記**；只存取消用的 opaque ticket 與旗標，**不存可認證的 credential**（access／refresh token 不進 Web Storage）。ticket 是取消能力，按 credential 級機密處理：不進 log／telemetry，禁止收集這個鍵。成功（2xx）才移除對應條目；收到成功回應之前 reload 或關閉分頁，條目仍在。
 2. **有界重試**：失敗（含 429、5xx、網路錯誤、逾時）後以 1/2/4/8/16 s 退避重試最多 5 次，尊重 `Retry-After`；之後停止自動重試，進入「登出尚未完成」狀態，UI 以固定橫幅顯示並提供「重試」按鈕。
 3. **取消完成前禁止自動 `Refresh`**：只要 `pendingCancel` 存在，**reload 靜默 Refresh、401 自動重試、跨分頁通知後的 Refresh 全部停用**，也不允許開始新的登入（`StartLogin` 被擋）。reload 時**先送待取消的 `Logout`（連同 cookie），成功後才決定要不要 Refresh**；仍失敗就維持 anonymous 並顯示橫幅。Web Locks `console.cancel` 序列化各分頁的重試。
-4. `Logout` 同時帶 cookie 時，server 也依 cookie 找到 family 一併撤銷（cookie 沒有 ticket 也能取消）；所以 `tickets` 為空、只有 cookie 的待取消也成立。
-5. **in-flight attempt 上限 ≤ 8**：client 同時進行中的 attempt 最多 8 個（超過時 `StartLogin` 被擋，或把舊 ticket 先分批取消），才能滿足「帶上所有 in-flight ticket」與單一 `Logout` ≤ 8 張。
-6. 取捨：伺服器長時間不可用時，使用者在取消完成前無法重新登入（fail-closed）；cookie 本身最終以 idle 8h 失效。這比「靜默復活已登出的 session」可接受。
+4. **跨分頁共享 journal 的原子規則**（細節列為 PR6 的 RED 驗收，見下）：journal 的 read-merge-write 與 ack 都在同一個 Web Lock `console.cancel` 內做；新增條目是**合併**（不覆寫既有條目）；每個 `Logout` request 只 **ack 它實際送出的 snapshot**（compare-and-remove：移除 snapshot 內且仍未變更的條目），**絕不清掉 request 送出之後才加入的條目**；失敗不移除任何條目。總集合超過 8 張時分批送，未完成批次持續阻擋 Refresh 與新的 `StartLogin`。
+5. `Logout` 同時帶 cookie 時，server 也依 cookie 找到 family 一併撤銷（cookie 沒有 ticket 也能取消）；所以 `tickets` 為空、只有 cookie 的待取消也成立。
+6. **in-flight attempt 上限 ≤ 8**：client 同時進行中的 attempt 最多 8 個（超過時 `StartLogin` 被擋，或把舊 ticket 先分批取消），才能滿足「帶上所有 in-flight ticket」與單一 `Logout` ≤ 8 張。
+7. 取捨：伺服器長時間不可用時，使用者在取消完成前無法重新登入（fail-closed）；cookie 本身最終以 idle 8h 失效。這比「靜默復活已登出的 session」可接受。
+
+**PR6 的 RED 驗收（client 時序，不是設計的阻擋條件）**——全部以真 Chromium＋真 rpc 驗證：
+- 兩分頁 lost-ack：A 已送出且 ack 暫停 → B 加入待取消 → A 收到 2xx → B 的 `Logout` 回 429／5xx → 晚到 B 的 cookie → reload：B 條目仍在、reload 先重送 `Logout`、仍失敗時不送 `Refresh`、`authenticated=false`。
+- 反向失落更新：A 失敗、B 成功 → A 的條目不得被 B 的 ack 或覆寫清掉。
+- 同一把 Web Lock 內的 journal 讀、合併、寫、ack 順序（barrier 固定在 A 送出後、B 寫入前後）。
+- 總集合 > 8 時分批、未完成批次持續阻擋 `Refresh`。
+- 單頁：429、503、寫入前斷線、已 commit 但回應遺失 → pending 保留、reload 先 `Logout` 再決定 `Refresh`、恢復後才解除。
+- 同一瀏覽器換帳號：有待取消條目時 `StartLogin` 被擋，取消成功後才放行。
+
+**`Logout` 的 server 端 CSRF 規則**（與 `Login` 相同，列入 PR5 RED）：`Logout` 依 cookie 撤銷，`SameSite=Strict` 只保證 same-site、不保證 same-origin，所以必須同樣要求同源 `Origin`（缺少或 `null` 一律拒絕）與 `Content-Type: application/json`／`Connect-Protocol-Version` 非簡單請求；不寫入、不撤銷。
+
+**取消路徑的容量**：`Logout` 單一 request 最多 8 張，8 個既有 id 重送仍會造成 8 個 attempt 列 UPDATE（另加對應 family 的 UPDATE 與 row lock 等待），在 `cancel_rate_limit` 50 rps 下單一 proxy／process 理論上可達 400 個列 UPDATE／秒（peer／replica 相乘）。這是算術，不是量測；PR5/PR7 的容量驗收要同時量測取消路徑的 UPDATE 與鎖等待，不只量 `StartLogin` 與 prune。
 
 - `attempt_id` 是不可猜的 128-bit 值，等同取消能力：**按 credential 保密，不進 log / span / metrics**；它只能取消自己的嘗試，不是 account ownership 的證明，也沒有任何用 account id 撤銷他人 session 的路徑。同一個 `attempt_id` 只能用一次（在 ticket 有效期內由列的 state 保證；期限後由 `not_after` 保證）。
 - 取消只作用於該瀏覽器的 attempt / family，**不是全裝置登出**；跨裝置不共享 cookie 與 attempt。收到「其他分頁登出」通知的分頁必須**取消自己的 pending attempts（送 `Logout`）並 bump generation**，不能只導回登入頁。
