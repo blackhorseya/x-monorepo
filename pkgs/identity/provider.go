@@ -68,6 +68,7 @@ var ProviderSet = wire.NewSet(
 	ProvideWhoAmI,
 	ProvideCreateInvite,
 	ProvideClaimInvite,
+	ProvideExternalIdentitySource,
 	ProvideRevokeSessions,
 	ProvideResolveExternalIdentity,
 	ProvideProvisionExternalIdentity,
@@ -279,3 +280,9 @@ func ProvideResolveExternalIdentity(bindings externalidentity.Repository, accoun
 func ProvideProvisionExternalIdentity(accounts account.Repository, bindings externalidentity.Repository, ids port.IDGenerator, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) auth.ProvisionExternalUC {
 	return decorateTx("identity.provision_external_identity", rec, tx, usecase.NewProvisionExternalIdentity(accounts, bindings, ids, clock))
 }
+
+// ProvideExternalIdentitySource is where ClaimInvite finds the caller's
+// verified external identity. Until the auth interceptor can verify OIDC
+// tokens (#272) there is none: ClaimInvite answers UNAUTHENTICATED. #272
+// replaces this provider with one that reads the interceptor's context value.
+func ProvideExternalIdentitySource() rpc.ExternalIdentitySource { return rpc.NoExternalIdentity{} }

@@ -35,6 +35,15 @@ service IdentityService {
   // email and claims it; the claim binds their (issuer, subject) to the account,
   // after which only the subject counts. Audited.
   rpc CreateInvite(CreateInviteRequest) returns (CreateInviteResponse);
+  // ClaimInvite binds the caller's own verified external identity (issuer,
+  // subject) to the account its email was invited for, and spends the invite.
+  // It is the one procedure a verified-but-unbound identity may call. The
+  // request is empty on purpose: the issuer, subject, email and email_verified
+  // come from the token the server verified, never from the client. It is NOT
+  // admin-only. Refused (x-error-code): invite.not_found, invite.expired,
+  // invite.already_claimed, invite.email_unverified, invite.email_mismatch,
+  // identity.already_bound.
+  rpc ClaimInvite(ClaimInviteRequest) returns (ClaimInviteResponse);
   // RevokeSessions refuses every access token of the account issued before now
   // (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
   // NOTHING MORE: it does not touch the identity provider's refresh tokens, so
@@ -164,6 +173,13 @@ message CreateInviteRequest {
 
 message CreateInviteResponse {
   Invite invite = 1;
+}
+
+message ClaimInviteRequest {}
+
+message ClaimInviteResponse {
+  // The account the caller's identity is now bound to.
+  Account account = 1;
 }
 
 message RevokeSessionsRequest {

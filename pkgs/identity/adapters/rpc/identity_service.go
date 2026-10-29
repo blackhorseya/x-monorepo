@@ -3,6 +3,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"connectrpc.com/connect"
@@ -36,6 +37,32 @@ type (
 	RevokeSessionsUC = usecasex.UseCase[dto.RevokeSessionsInput, *dto.AccountOutput]
 )
 
+// ExternalIdentity is the verified external identity of one call: what the
+// token said, after the server verified its signature and claims. It is a
+// plain value defined here, at the consumer; the handler never trusts a client
+// to supply it.
+type ExternalIdentity struct {
+	Issuer        string
+	Subject       string
+	Email         string
+	EmailVerified bool
+}
+
+// ExternalIdentitySource hands the handler the verified external identity of
+// the call, if the request carried one. The auth interceptor (#272) provides
+// the real one; until then NoExternalIdentity answers "none" and ClaimInvite
+// is UNAUTHENTICATED (fail-closed).
+type ExternalIdentitySource interface {
+	ExternalIdentityFrom(c context.Context) (ExternalIdentity, bool)
+}
+
+// NoExternalIdentity is the source of a server with OIDC off: nobody has one.
+type NoExternalIdentity struct{}
+
+func (NoExternalIdentity) ExternalIdentityFrom(context.Context) (ExternalIdentity, bool) {
+	return ExternalIdentity{}, false
+}
+
 // UseCases groups what the service needs; wire fills it by field.
 type UseCases struct {
 	CreateAccount  CreateAccountUC
@@ -50,6 +77,9 @@ type UseCases struct {
 	WhoAmI         WhoAmIUC
 	CreateInvite   CreateInviteUC
 	RevokeSessions RevokeSessionsUC
+	ClaimInvite    ClaimInviteUC
+	// ExternalIdentity is where ClaimInvite learns who is calling.
+	ExternalIdentity ExternalIdentitySource
 }
 
 // IdentityService implements the generated IdentityServiceHandler. Every
@@ -221,6 +251,30 @@ func (h *IdentityService) RevokeSessions(c context.Context, req *connect.Request
 	}
 
 	return connect.NewResponse(&identityv1.RevokeSessionsResponse{Account: toProtoAccount(out)}), nil
+}
+
+// ClaimInvite binds the caller's verified external identity through the
+// invite for its email. Not admin-only: it is what an unbound identity calls.
+func (h *IdentityService) ClaimInvite(c context.Context, _ *connect.Request[identityv1.ClaimInviteRequest]) (*connect.Response[identityv1.ClaimInviteResponse], error) {
+	var (
+		id ExternalIdentity
+		ok bool
+	)
+	if h.uc.ExternalIdentity != nil {
+		id, ok = h.uc.ExternalIdentity.ExternalIdentityFrom(c)
+	}
+	if !ok {
+		ce := connect.NewError(connect.CodeUnauthenticated, errors.New("a verified external identity is required"))
+		ce.Meta().Set("x-error-code", server.UnauthenticatedCode)
+
+		return nil, ce
+	}
+	out, err := h.uc.ClaimInvite.Execute(c, dto.ClaimInviteInput{Issuer: id.Issuer, Subject: id.Subject, Email: id.Email, EmailVerified: id.EmailVerified})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&identityv1.ClaimInviteResponse{Account: toProtoAccount(out)}), nil
 }
 
 func (h *IdentityService) WhoAmI(c context.Context, _ *connect.Request[identityv1.WhoAmIRequest]) (*connect.Response[identityv1.WhoAmIResponse], error) {

@@ -46,7 +46,7 @@ metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有
 全部 `server.RequireRole(auth.admin_role)`，**除了 `WhoAmI`**（回 caller 自己的 principal；anonymous 時 `anonymous: true`）：
 `CreateAccount` / `GetAccount` / `ListAccounts`（id 升冪，opaque page token）/ `DisableAccount` / `EnableAccount` / `AssignRoles` /
 `CreateApiKey`（回 secret 一次）/ `ListApiKeys`（含 REVOKED，新到舊）/ `RevokeApiKey` /
-`CreateInvite`（email 邀請，7 天、單次、不含 secret，寫 audit）/ `RevokeSessions`（見下）。
+`CreateInvite`（email 邀請，7 天、單次、不含 secret，寫 audit）/ `RevokeSessions`（見下）；`ClaimInvite` 不要 admin role（見「外部身分綁定」）。
 
 **`RevokeSessions` 只是「登出所有裝置」**：它設 `accounts.sessions_revoked_at = now`，`iat` 早於這個時間的 access token 在 resolver cache 過期後（≤ 30 秒）被拒；寫 audit（誰、哪個 account、何時，不記 token）。它**擋不住持有 IdP refresh token 的人**——對方能向 IdP 換到新 `iat` 的 token。**懷疑帳號被盜要用 `DisableAccount`**（對每個 token 都有效，包括 refresh 換出來的），再到 IdP 撤銷 refresh token 或重設憑證。proto 註解與 Console 文案都必須這樣寫（#273）。它不改 status / roles / key，所以沒有 last-admin guard。
 
@@ -121,7 +121,7 @@ Dashboard「x-monorepo / service」的 Identity row 有四張圖（lookups/s by 
 這支 PR 只做 identity BC 與 `worker bootstrap`；**不碰 auth interceptor**（#272）。resolver 的輸入是一個值型別 `auth.ExternalIdentity{Issuer, Subject, Email, EmailVerified, IssuedAt}`，定義在 consumer 端，不依賴 #270。
 
 - **綁定**：`identity.external_identities`，主鍵 `(issuer, subject)` → account；一個 account 可有多個。綁定鍵永遠是 `(iss, sub)`，不用 email。
-- **邀請**：`identity.invites`（只記 email，無 secret）。`ClaimInvite` use case 在一個 transaction 內 `SELECT … FOR UPDATE` 鎖住該 email 最新的 invite，**拿到鎖之後**才讀 clock 判斷過期：兩個不同 sub 同時 claim 同一張，第二個等鎖、看到已用、拿 `invite.already_claimed`。檢查順序：已用 → 過期 → `email_verified` → email 相符；被拒不花掉 invite。重發邀請就是再 `CreateInvite`（取該 email 最新一張）。`ClaimInvite` 的 RPC 由 #272 接（它需要 interceptor 驗過的 token claims）。
+- **邀請**：`identity.invites`（只記 email，無 secret）。`ClaimInvite` use case 在一個 transaction 內 `SELECT … FOR UPDATE` 鎖住該 email 最新的 invite，**拿到鎖之後**才讀 clock 判斷過期：兩個不同 sub 同時 claim 同一張，第二個等鎖、看到已用、拿 `invite.already_claimed`。檢查順序：已用 → 過期 → `email_verified` → email 相符；被拒不花掉 invite。重發邀請就是再 `CreateInvite`（取該 email 最新一張）。`ClaimInvite` RPC 在 contract 裡（**不是** admin-only；request 是空的，issuer / sub / email / `email_verified` 一律來自 server 驗過的 token，不信 client）。handler 透過 consumer 端的 `rpc.ExternalIdentitySource` 取得這組值；在 #272 的 interceptor 能驗 OIDC token 之前，`identity.ProvideExternalIdentitySource` 回「沒有」，所以呼叫一律 `UNAUTHENTICATED`（fail-closed）。#272 只要換掉那個 provider、並把 `ClaimInvite` 加進未綁定身分的 procedure 白名單，不用再動 identity 的 contract。
 - **mapping**（`port.IssuerMapping`，預設 `bound`）：`bound` 未綁定 → resolver 回 `identity.unbound`；`auto_provision` 第一次見到就建 account（**沒有 role**，名稱 = email 或 sub）並綁定，同一身分並發時輸家 rollback、resolver 重讀。每個 issuer 的設定從哪來（`auth.oidc.issuers[]`）由 #270/#272 定案，這支 PR 提供 `auth.StaticMapping`，未知 issuer 一律 `bound`。
 - **resolver**（`adapters/auth.ExternalResolver`，沿用 API key resolver 的模式）：`(iss, sub)` → account_id / roles / disabled / `sessions_revoked_at`，cache **30 秒**。fail-closed，拒絕都是 error：`identity.unbound`、`account.disabled`、`account.session_revoked`、`account.missing_iat`；其餘（DB 錯誤）原樣回傳。**只有找到的 account 進 cache**（錯誤與未綁定不進，所以 claim 成功後下個請求就通）。`iat` 的比對在每個請求跑、cache hit 也跑（cache key 是 `(iss, sub)`，同一人不同 token 的 `iat` 不同）。停用 / 改 role / 撤銷最慢 30 秒生效。Metrics：`identity_external_resolver_lookups_total{result}`（hit / miss / db_ok / unbound / provisioned / error）與 `identity_external_resolver_cache_entries`。
 - **audit**：`identity.audit_events`（actor、action、target_account_id、occurred_at），與動作同一個 transaction；目前寫 `identity.revoke_sessions` 與 `identity.create_invite`。auth 關閉時 actor 是 `anonymous`。

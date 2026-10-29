@@ -224,6 +224,20 @@ components:
           title: account
       title: AssignRolesResponse
       additionalProperties: false
+    identity.v1.ClaimInviteRequest:
+      type: object
+      title: ClaimInviteRequest
+      additionalProperties: false
+    identity.v1.ClaimInviteResponse:
+      type: object
+      properties:
+        account:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.Account'
+          title: account
+          description: The account the caller's identity is now bound to.
+      title: ClaimInviteResponse
+      additionalProperties: false
     identity.v1.CreateAccountRequest:
       type: object
       properties:
@@ -552,6 +566,53 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/identity.v1.AssignRolesResponse'
+  /identity.v1.IdentityService/ClaimInvite:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: ClaimInvite
+      description: |-
+        ClaimInvite binds the caller's own verified external identity (issuer,
+         subject) to the account its email was invited for, and spends the invite.
+         It is the one procedure a verified-but-unbound identity may call. The
+         request is empty on purpose: the issuer, subject, email and email_verified
+         come from the token the server verified, never from the client. It is NOT
+         admin-only. Refused (x-error-code): invite.not_found, invite.expired,
+         invite.already_claimed, invite.email_unverified, invite.email_mismatch,
+         identity.already_bound.
+      operationId: identity.v1.IdentityService.ClaimInvite
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.ClaimInviteRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.ClaimInviteResponse'
   /identity.v1.IdentityService/CreateAccount:
     post:
       tags:

@@ -116,35 +116,40 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	auditLog := identity.ProvideAuditLog(db)
 	v23 := identity.ProvideCreateInvite(accountRepository, inviteRepository, systemUUIDGenerator, auditLog, clock2, transactor2, recorder)
 	v24 := identity.ProvideRevokeSessions(accountRepository, auditLog, clock2, transactor2, recorder)
+	externalidentityRepository := identity.ProvideExternalIdentityRepository(db)
+	v25 := identity.ProvideClaimInvite(inviteRepository, externalidentityRepository, accountRepository, clock2, transactor2, recorder)
+	externalIdentitySource := identity.ProvideExternalIdentitySource()
 	useCases := rpc3.UseCases{
-		CreateAccount:  v13,
-		GetAccount:     v14,
-		ListAccounts:   v15,
-		DisableAccount: v16,
-		EnableAccount:  v17,
-		AssignRoles:    v18,
-		CreateAPIKey:   v19,
-		ListAPIKeys:    v20,
-		RevokeAPIKey:   v21,
-		WhoAmI:         v22,
-		CreateInvite:   v23,
-		RevokeSessions: v24,
+		CreateAccount:    v13,
+		GetAccount:       v14,
+		ListAccounts:     v15,
+		DisableAccount:   v16,
+		EnableAccount:    v17,
+		AssignRoles:      v18,
+		CreateAPIKey:     v19,
+		ListAPIKeys:      v20,
+		RevokeAPIKey:     v21,
+		WhoAmI:           v22,
+		CreateInvite:     v23,
+		RevokeSessions:   v24,
+		ClaimInvite:      v25,
+		ExternalIdentity: externalIdentitySource,
 	}
 	identityService := rpc3.NewIdentityService(useCases, auth)
 	poisonService := NewPoisonService(db, auth)
-	v25 := NewRoutes(orderService, inventoryService, identityService, poisonService)
-	v26 := NewDocs()
+	v26 := NewRoutes(orderService, inventoryService, identityService, poisonService)
+	v27 := NewDocs()
 	readiness := NewReadiness(db)
-	v27 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
-	v28 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
-	resolver, cleanup4, err := identity.ProvideResolver(v27, v28, clock2, auth, logger, meterProvider)
+	v28 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
+	v29 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
+	resolver, cleanup4, err := identity.ProvideResolver(v28, v29, clock2, auth, logger, meterProvider)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	serverServer, err := server.New(http, auth, logger, v25, v26, readiness, providers, resolver)
+	serverServer, err := server.New(http, auth, logger, v26, v27, readiness, providers, resolver)
 	if err != nil {
 		cleanup4()
 		cleanup3()

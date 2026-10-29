@@ -63,6 +63,9 @@ const (
 	// IdentityServiceCreateInviteProcedure is the fully-qualified name of the IdentityService's
 	// CreateInvite RPC.
 	IdentityServiceCreateInviteProcedure = "/identity.v1.IdentityService/CreateInvite"
+	// IdentityServiceClaimInviteProcedure is the fully-qualified name of the IdentityService's
+	// ClaimInvite RPC.
+	IdentityServiceClaimInviteProcedure = "/identity.v1.IdentityService/ClaimInvite"
 	// IdentityServiceRevokeSessionsProcedure is the fully-qualified name of the IdentityService's
 	// RevokeSessions RPC.
 	IdentityServiceRevokeSessionsProcedure = "/identity.v1.IdentityService/RevokeSessions"
@@ -95,6 +98,15 @@ type IdentityServiceClient interface {
 	// email and claims it; the claim binds their (issuer, subject) to the account,
 	// after which only the subject counts. Audited.
 	CreateInvite(context.Context, *connect.Request[v1.CreateInviteRequest]) (*connect.Response[v1.CreateInviteResponse], error)
+	// ClaimInvite binds the caller's own verified external identity (issuer,
+	// subject) to the account its email was invited for, and spends the invite.
+	// It is the one procedure a verified-but-unbound identity may call. The
+	// request is empty on purpose: the issuer, subject, email and email_verified
+	// come from the token the server verified, never from the client. It is NOT
+	// admin-only. Refused (x-error-code): invite.not_found, invite.expired,
+	// invite.already_claimed, invite.email_unverified, invite.email_mismatch,
+	// identity.already_bound.
+	ClaimInvite(context.Context, *connect.Request[v1.ClaimInviteRequest]) (*connect.Response[v1.ClaimInviteResponse], error)
 	// RevokeSessions refuses every access token of the account issued before now
 	// (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
 	// NOTHING MORE: it does not touch the identity provider's refresh tokens, so
@@ -181,6 +193,12 @@ func NewIdentityServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(identityServiceMethods.ByName("CreateInvite")),
 			connect.WithClientOptions(opts...),
 		),
+		claimInvite: connect.NewClient[v1.ClaimInviteRequest, v1.ClaimInviteResponse](
+			httpClient,
+			baseURL+IdentityServiceClaimInviteProcedure,
+			connect.WithSchema(identityServiceMethods.ByName("ClaimInvite")),
+			connect.WithClientOptions(opts...),
+		),
 		revokeSessions: connect.NewClient[v1.RevokeSessionsRequest, v1.RevokeSessionsResponse](
 			httpClient,
 			baseURL+IdentityServiceRevokeSessionsProcedure,
@@ -208,6 +226,7 @@ type identityServiceClient struct {
 	listApiKeys    *connect.Client[v1.ListApiKeysRequest, v1.ListApiKeysResponse]
 	revokeApiKey   *connect.Client[v1.RevokeApiKeyRequest, v1.RevokeApiKeyResponse]
 	createInvite   *connect.Client[v1.CreateInviteRequest, v1.CreateInviteResponse]
+	claimInvite    *connect.Client[v1.ClaimInviteRequest, v1.ClaimInviteResponse]
 	revokeSessions *connect.Client[v1.RevokeSessionsRequest, v1.RevokeSessionsResponse]
 	whoAmI         *connect.Client[v1.WhoAmIRequest, v1.WhoAmIResponse]
 }
@@ -262,6 +281,11 @@ func (c *identityServiceClient) CreateInvite(ctx context.Context, req *connect.R
 	return c.createInvite.CallUnary(ctx, req)
 }
 
+// ClaimInvite calls identity.v1.IdentityService.ClaimInvite.
+func (c *identityServiceClient) ClaimInvite(ctx context.Context, req *connect.Request[v1.ClaimInviteRequest]) (*connect.Response[v1.ClaimInviteResponse], error) {
+	return c.claimInvite.CallUnary(ctx, req)
+}
+
 // RevokeSessions calls identity.v1.IdentityService.RevokeSessions.
 func (c *identityServiceClient) RevokeSessions(ctx context.Context, req *connect.Request[v1.RevokeSessionsRequest]) (*connect.Response[v1.RevokeSessionsResponse], error) {
 	return c.revokeSessions.CallUnary(ctx, req)
@@ -297,6 +321,15 @@ type IdentityServiceHandler interface {
 	// email and claims it; the claim binds their (issuer, subject) to the account,
 	// after which only the subject counts. Audited.
 	CreateInvite(context.Context, *connect.Request[v1.CreateInviteRequest]) (*connect.Response[v1.CreateInviteResponse], error)
+	// ClaimInvite binds the caller's own verified external identity (issuer,
+	// subject) to the account its email was invited for, and spends the invite.
+	// It is the one procedure a verified-but-unbound identity may call. The
+	// request is empty on purpose: the issuer, subject, email and email_verified
+	// come from the token the server verified, never from the client. It is NOT
+	// admin-only. Refused (x-error-code): invite.not_found, invite.expired,
+	// invite.already_claimed, invite.email_unverified, invite.email_mismatch,
+	// identity.already_bound.
+	ClaimInvite(context.Context, *connect.Request[v1.ClaimInviteRequest]) (*connect.Response[v1.ClaimInviteResponse], error)
 	// RevokeSessions refuses every access token of the account issued before now
 	// (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
 	// NOTHING MORE: it does not touch the identity provider's refresh tokens, so
@@ -379,6 +412,12 @@ func NewIdentityServiceHandler(svc IdentityServiceHandler, opts ...connect.Handl
 		connect.WithSchema(identityServiceMethods.ByName("CreateInvite")),
 		connect.WithHandlerOptions(opts...),
 	)
+	identityServiceClaimInviteHandler := connect.NewUnaryHandler(
+		IdentityServiceClaimInviteProcedure,
+		svc.ClaimInvite,
+		connect.WithSchema(identityServiceMethods.ByName("ClaimInvite")),
+		connect.WithHandlerOptions(opts...),
+	)
 	identityServiceRevokeSessionsHandler := connect.NewUnaryHandler(
 		IdentityServiceRevokeSessionsProcedure,
 		svc.RevokeSessions,
@@ -413,6 +452,8 @@ func NewIdentityServiceHandler(svc IdentityServiceHandler, opts ...connect.Handl
 			identityServiceRevokeApiKeyHandler.ServeHTTP(w, r)
 		case IdentityServiceCreateInviteProcedure:
 			identityServiceCreateInviteHandler.ServeHTTP(w, r)
+		case IdentityServiceClaimInviteProcedure:
+			identityServiceClaimInviteHandler.ServeHTTP(w, r)
 		case IdentityServiceRevokeSessionsProcedure:
 			identityServiceRevokeSessionsHandler.ServeHTTP(w, r)
 		case IdentityServiceWhoAmIProcedure:
@@ -464,6 +505,10 @@ func (UnimplementedIdentityServiceHandler) RevokeApiKey(context.Context, *connec
 
 func (UnimplementedIdentityServiceHandler) CreateInvite(context.Context, *connect.Request[v1.CreateInviteRequest]) (*connect.Response[v1.CreateInviteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.CreateInvite is not implemented"))
+}
+
+func (UnimplementedIdentityServiceHandler) ClaimInvite(context.Context, *connect.Request[v1.ClaimInviteRequest]) (*connect.Response[v1.ClaimInviteResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.ClaimInvite is not implemented"))
 }
 
 func (UnimplementedIdentityServiceHandler) RevokeSessions(context.Context, *connect.Request[v1.RevokeSessionsRequest]) (*connect.Response[v1.RevokeSessionsResponse], error) {

@@ -970,6 +970,87 @@ func (x *CreateInviteResponse) GetInvite() *Invite {
 	return nil
 }
 
+type ClaimInviteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClaimInviteRequest) Reset() {
+	*x = ClaimInviteRequest{}
+	mi := &file_identity_v1_service_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClaimInviteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClaimInviteRequest) ProtoMessage() {}
+
+func (x *ClaimInviteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_service_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClaimInviteRequest.ProtoReflect.Descriptor instead.
+func (*ClaimInviteRequest) Descriptor() ([]byte, []int) {
+	return file_identity_v1_service_proto_rawDescGZIP(), []int{20}
+}
+
+type ClaimInviteResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The account the caller's identity is now bound to.
+	Account       *Account `protobuf:"bytes,1,opt,name=account,proto3" json:"account,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClaimInviteResponse) Reset() {
+	*x = ClaimInviteResponse{}
+	mi := &file_identity_v1_service_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClaimInviteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClaimInviteResponse) ProtoMessage() {}
+
+func (x *ClaimInviteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_service_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClaimInviteResponse.ProtoReflect.Descriptor instead.
+func (*ClaimInviteResponse) Descriptor() ([]byte, []int) {
+	return file_identity_v1_service_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ClaimInviteResponse) GetAccount() *Account {
+	if x != nil {
+		return x.Account
+	}
+	return nil
+}
+
 type RevokeSessionsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AccountId     string                 `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
@@ -979,7 +1060,7 @@ type RevokeSessionsRequest struct {
 
 func (x *RevokeSessionsRequest) Reset() {
 	*x = RevokeSessionsRequest{}
-	mi := &file_identity_v1_service_proto_msgTypes[20]
+	mi := &file_identity_v1_service_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -991,7 +1072,7 @@ func (x *RevokeSessionsRequest) String() string {
 func (*RevokeSessionsRequest) ProtoMessage() {}
 
 func (x *RevokeSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_v1_service_proto_msgTypes[20]
+	mi := &file_identity_v1_service_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1004,7 +1085,7 @@ func (x *RevokeSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeSessionsRequest.ProtoReflect.Descriptor instead.
 func (*RevokeSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_identity_v1_service_proto_rawDescGZIP(), []int{20}
+	return file_identity_v1_service_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RevokeSessionsRequest) GetAccountId() string {
@@ -1023,7 +1104,7 @@ type RevokeSessionsResponse struct {
 
 func (x *RevokeSessionsResponse) Reset() {
 	*x = RevokeSessionsResponse{}
-	mi := &file_identity_v1_service_proto_msgTypes[21]
+	mi := &file_identity_v1_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1035,7 +1116,7 @@ func (x *RevokeSessionsResponse) String() string {
 func (*RevokeSessionsResponse) ProtoMessage() {}
 
 func (x *RevokeSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_v1_service_proto_msgTypes[21]
+	mi := &file_identity_v1_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1048,7 +1129,7 @@ func (x *RevokeSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeSessionsResponse.ProtoReflect.Descriptor instead.
 func (*RevokeSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_identity_v1_service_proto_rawDescGZIP(), []int{21}
+	return file_identity_v1_service_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RevokeSessionsResponse) GetAccount() *Account {
@@ -1066,7 +1147,7 @@ type WhoAmIRequest struct {
 
 func (x *WhoAmIRequest) Reset() {
 	*x = WhoAmIRequest{}
-	mi := &file_identity_v1_service_proto_msgTypes[22]
+	mi := &file_identity_v1_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1078,7 +1159,7 @@ func (x *WhoAmIRequest) String() string {
 func (*WhoAmIRequest) ProtoMessage() {}
 
 func (x *WhoAmIRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_v1_service_proto_msgTypes[22]
+	mi := &file_identity_v1_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1091,7 +1172,7 @@ func (x *WhoAmIRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WhoAmIRequest.ProtoReflect.Descriptor instead.
 func (*WhoAmIRequest) Descriptor() ([]byte, []int) {
-	return file_identity_v1_service_proto_rawDescGZIP(), []int{22}
+	return file_identity_v1_service_proto_rawDescGZIP(), []int{24}
 }
 
 type WhoAmIResponse struct {
@@ -1114,7 +1195,7 @@ type WhoAmIResponse struct {
 
 func (x *WhoAmIResponse) Reset() {
 	*x = WhoAmIResponse{}
-	mi := &file_identity_v1_service_proto_msgTypes[23]
+	mi := &file_identity_v1_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1126,7 +1207,7 @@ func (x *WhoAmIResponse) String() string {
 func (*WhoAmIResponse) ProtoMessage() {}
 
 func (x *WhoAmIResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_v1_service_proto_msgTypes[23]
+	mi := &file_identity_v1_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1139,7 +1220,7 @@ func (x *WhoAmIResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WhoAmIResponse.ProtoReflect.Descriptor instead.
 func (*WhoAmIResponse) Descriptor() ([]byte, []int) {
-	return file_identity_v1_service_proto_rawDescGZIP(), []int{23}
+	return file_identity_v1_service_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *WhoAmIResponse) GetAnonymous() bool {
@@ -1244,7 +1325,10 @@ const file_identity_v1_service_proto_rawDesc = "" +
 	"\x05email\x18\x02 \x01(\tB\n" +
 	"\xbaH\ar\x05\x10\x03\x18\xfe\x01R\x05email\"C\n" +
 	"\x14CreateInviteResponse\x12+\n" +
-	"\x06invite\x18\x01 \x01(\v2\x13.identity.v1.InviteR\x06invite\"?\n" +
+	"\x06invite\x18\x01 \x01(\v2\x13.identity.v1.InviteR\x06invite\"\x14\n" +
+	"\x12ClaimInviteRequest\"E\n" +
+	"\x13ClaimInviteResponse\x12.\n" +
+	"\aaccount\x18\x01 \x01(\v2\x14.identity.v1.AccountR\aaccount\"?\n" +
 	"\x15RevokeSessionsRequest\x12&\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\taccountId\"H\n" +
@@ -1257,7 +1341,7 @@ const file_identity_v1_service_proto_rawDesc = "" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x14\n" +
 	"\x05roles\x18\x04 \x03(\tR\x05roles\x12\x16\n" +
 	"\x06method\x18\x05 \x01(\tR\x06method\x12#\n" +
-	"\rcredential_id\x18\x06 \x01(\tR\fcredentialId2\x81\b\n" +
+	"\rcredential_id\x18\x06 \x01(\tR\fcredentialId2\xd3\b\n" +
 	"\x0fIdentityService\x12V\n" +
 	"\rCreateAccount\x12!.identity.v1.CreateAccountRequest\x1a\".identity.v1.CreateAccountResponse\x12M\n" +
 	"\n" +
@@ -1269,7 +1353,8 @@ const file_identity_v1_service_proto_rawDesc = "" +
 	"\fCreateApiKey\x12 .identity.v1.CreateApiKeyRequest\x1a!.identity.v1.CreateApiKeyResponse\x12P\n" +
 	"\vListApiKeys\x12\x1f.identity.v1.ListApiKeysRequest\x1a .identity.v1.ListApiKeysResponse\x12S\n" +
 	"\fRevokeApiKey\x12 .identity.v1.RevokeApiKeyRequest\x1a!.identity.v1.RevokeApiKeyResponse\x12S\n" +
-	"\fCreateInvite\x12 .identity.v1.CreateInviteRequest\x1a!.identity.v1.CreateInviteResponse\x12Y\n" +
+	"\fCreateInvite\x12 .identity.v1.CreateInviteRequest\x1a!.identity.v1.CreateInviteResponse\x12P\n" +
+	"\vClaimInvite\x12\x1f.identity.v1.ClaimInviteRequest\x1a .identity.v1.ClaimInviteResponse\x12Y\n" +
 	"\x0eRevokeSessions\x12\".identity.v1.RevokeSessionsRequest\x1a#.identity.v1.RevokeSessionsResponse\x12A\n" +
 	"\x06WhoAmI\x12\x1a.identity.v1.WhoAmIRequest\x1a\x1b.identity.v1.WhoAmIResponseB\xb5\x01\n" +
 	"\x0fcom.identity.v1B\fServiceProtoP\x01ZGgithub.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1;identityv1\xa2\x02\x03IXX\xaa\x02\vIdentity.V1\xca\x02\vIdentity\\V1\xe2\x02\x17Identity\\V1\\GPBMetadata\xea\x02\fIdentity::V1b\x06proto3"
@@ -1286,7 +1371,7 @@ func file_identity_v1_service_proto_rawDescGZIP() []byte {
 	return file_identity_v1_service_proto_rawDescData
 }
 
-var file_identity_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_identity_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_identity_v1_service_proto_goTypes = []any{
 	(*CreateAccountRequest)(nil),   // 0: identity.v1.CreateAccountRequest
 	(*CreateAccountResponse)(nil),  // 1: identity.v1.CreateAccountResponse
@@ -1308,57 +1393,62 @@ var file_identity_v1_service_proto_goTypes = []any{
 	(*RevokeApiKeyResponse)(nil),   // 17: identity.v1.RevokeApiKeyResponse
 	(*CreateInviteRequest)(nil),    // 18: identity.v1.CreateInviteRequest
 	(*CreateInviteResponse)(nil),   // 19: identity.v1.CreateInviteResponse
-	(*RevokeSessionsRequest)(nil),  // 20: identity.v1.RevokeSessionsRequest
-	(*RevokeSessionsResponse)(nil), // 21: identity.v1.RevokeSessionsResponse
-	(*WhoAmIRequest)(nil),          // 22: identity.v1.WhoAmIRequest
-	(*WhoAmIResponse)(nil),         // 23: identity.v1.WhoAmIResponse
-	(*Account)(nil),                // 24: identity.v1.Account
-	(*timestamppb.Timestamp)(nil),  // 25: google.protobuf.Timestamp
-	(*ApiKey)(nil),                 // 26: identity.v1.ApiKey
-	(*Invite)(nil),                 // 27: identity.v1.Invite
+	(*ClaimInviteRequest)(nil),     // 20: identity.v1.ClaimInviteRequest
+	(*ClaimInviteResponse)(nil),    // 21: identity.v1.ClaimInviteResponse
+	(*RevokeSessionsRequest)(nil),  // 22: identity.v1.RevokeSessionsRequest
+	(*RevokeSessionsResponse)(nil), // 23: identity.v1.RevokeSessionsResponse
+	(*WhoAmIRequest)(nil),          // 24: identity.v1.WhoAmIRequest
+	(*WhoAmIResponse)(nil),         // 25: identity.v1.WhoAmIResponse
+	(*Account)(nil),                // 26: identity.v1.Account
+	(*timestamppb.Timestamp)(nil),  // 27: google.protobuf.Timestamp
+	(*ApiKey)(nil),                 // 28: identity.v1.ApiKey
+	(*Invite)(nil),                 // 29: identity.v1.Invite
 }
 var file_identity_v1_service_proto_depIdxs = []int32{
-	24, // 0: identity.v1.CreateAccountResponse.account:type_name -> identity.v1.Account
-	24, // 1: identity.v1.GetAccountResponse.account:type_name -> identity.v1.Account
-	24, // 2: identity.v1.ListAccountsResponse.accounts:type_name -> identity.v1.Account
-	24, // 3: identity.v1.DisableAccountResponse.account:type_name -> identity.v1.Account
-	24, // 4: identity.v1.EnableAccountResponse.account:type_name -> identity.v1.Account
-	24, // 5: identity.v1.AssignRolesResponse.account:type_name -> identity.v1.Account
-	25, // 6: identity.v1.CreateApiKeyRequest.expire_time:type_name -> google.protobuf.Timestamp
-	26, // 7: identity.v1.CreateApiKeyResponse.api_key:type_name -> identity.v1.ApiKey
-	26, // 8: identity.v1.ListApiKeysResponse.api_keys:type_name -> identity.v1.ApiKey
-	26, // 9: identity.v1.RevokeApiKeyResponse.api_key:type_name -> identity.v1.ApiKey
-	27, // 10: identity.v1.CreateInviteResponse.invite:type_name -> identity.v1.Invite
-	24, // 11: identity.v1.RevokeSessionsResponse.account:type_name -> identity.v1.Account
-	0,  // 12: identity.v1.IdentityService.CreateAccount:input_type -> identity.v1.CreateAccountRequest
-	2,  // 13: identity.v1.IdentityService.GetAccount:input_type -> identity.v1.GetAccountRequest
-	4,  // 14: identity.v1.IdentityService.ListAccounts:input_type -> identity.v1.ListAccountsRequest
-	6,  // 15: identity.v1.IdentityService.DisableAccount:input_type -> identity.v1.DisableAccountRequest
-	8,  // 16: identity.v1.IdentityService.EnableAccount:input_type -> identity.v1.EnableAccountRequest
-	10, // 17: identity.v1.IdentityService.AssignRoles:input_type -> identity.v1.AssignRolesRequest
-	12, // 18: identity.v1.IdentityService.CreateApiKey:input_type -> identity.v1.CreateApiKeyRequest
-	14, // 19: identity.v1.IdentityService.ListApiKeys:input_type -> identity.v1.ListApiKeysRequest
-	16, // 20: identity.v1.IdentityService.RevokeApiKey:input_type -> identity.v1.RevokeApiKeyRequest
-	18, // 21: identity.v1.IdentityService.CreateInvite:input_type -> identity.v1.CreateInviteRequest
-	20, // 22: identity.v1.IdentityService.RevokeSessions:input_type -> identity.v1.RevokeSessionsRequest
-	22, // 23: identity.v1.IdentityService.WhoAmI:input_type -> identity.v1.WhoAmIRequest
-	1,  // 24: identity.v1.IdentityService.CreateAccount:output_type -> identity.v1.CreateAccountResponse
-	3,  // 25: identity.v1.IdentityService.GetAccount:output_type -> identity.v1.GetAccountResponse
-	5,  // 26: identity.v1.IdentityService.ListAccounts:output_type -> identity.v1.ListAccountsResponse
-	7,  // 27: identity.v1.IdentityService.DisableAccount:output_type -> identity.v1.DisableAccountResponse
-	9,  // 28: identity.v1.IdentityService.EnableAccount:output_type -> identity.v1.EnableAccountResponse
-	11, // 29: identity.v1.IdentityService.AssignRoles:output_type -> identity.v1.AssignRolesResponse
-	13, // 30: identity.v1.IdentityService.CreateApiKey:output_type -> identity.v1.CreateApiKeyResponse
-	15, // 31: identity.v1.IdentityService.ListApiKeys:output_type -> identity.v1.ListApiKeysResponse
-	17, // 32: identity.v1.IdentityService.RevokeApiKey:output_type -> identity.v1.RevokeApiKeyResponse
-	19, // 33: identity.v1.IdentityService.CreateInvite:output_type -> identity.v1.CreateInviteResponse
-	21, // 34: identity.v1.IdentityService.RevokeSessions:output_type -> identity.v1.RevokeSessionsResponse
-	23, // 35: identity.v1.IdentityService.WhoAmI:output_type -> identity.v1.WhoAmIResponse
-	24, // [24:36] is the sub-list for method output_type
-	12, // [12:24] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	26, // 0: identity.v1.CreateAccountResponse.account:type_name -> identity.v1.Account
+	26, // 1: identity.v1.GetAccountResponse.account:type_name -> identity.v1.Account
+	26, // 2: identity.v1.ListAccountsResponse.accounts:type_name -> identity.v1.Account
+	26, // 3: identity.v1.DisableAccountResponse.account:type_name -> identity.v1.Account
+	26, // 4: identity.v1.EnableAccountResponse.account:type_name -> identity.v1.Account
+	26, // 5: identity.v1.AssignRolesResponse.account:type_name -> identity.v1.Account
+	27, // 6: identity.v1.CreateApiKeyRequest.expire_time:type_name -> google.protobuf.Timestamp
+	28, // 7: identity.v1.CreateApiKeyResponse.api_key:type_name -> identity.v1.ApiKey
+	28, // 8: identity.v1.ListApiKeysResponse.api_keys:type_name -> identity.v1.ApiKey
+	28, // 9: identity.v1.RevokeApiKeyResponse.api_key:type_name -> identity.v1.ApiKey
+	29, // 10: identity.v1.CreateInviteResponse.invite:type_name -> identity.v1.Invite
+	26, // 11: identity.v1.ClaimInviteResponse.account:type_name -> identity.v1.Account
+	26, // 12: identity.v1.RevokeSessionsResponse.account:type_name -> identity.v1.Account
+	0,  // 13: identity.v1.IdentityService.CreateAccount:input_type -> identity.v1.CreateAccountRequest
+	2,  // 14: identity.v1.IdentityService.GetAccount:input_type -> identity.v1.GetAccountRequest
+	4,  // 15: identity.v1.IdentityService.ListAccounts:input_type -> identity.v1.ListAccountsRequest
+	6,  // 16: identity.v1.IdentityService.DisableAccount:input_type -> identity.v1.DisableAccountRequest
+	8,  // 17: identity.v1.IdentityService.EnableAccount:input_type -> identity.v1.EnableAccountRequest
+	10, // 18: identity.v1.IdentityService.AssignRoles:input_type -> identity.v1.AssignRolesRequest
+	12, // 19: identity.v1.IdentityService.CreateApiKey:input_type -> identity.v1.CreateApiKeyRequest
+	14, // 20: identity.v1.IdentityService.ListApiKeys:input_type -> identity.v1.ListApiKeysRequest
+	16, // 21: identity.v1.IdentityService.RevokeApiKey:input_type -> identity.v1.RevokeApiKeyRequest
+	18, // 22: identity.v1.IdentityService.CreateInvite:input_type -> identity.v1.CreateInviteRequest
+	20, // 23: identity.v1.IdentityService.ClaimInvite:input_type -> identity.v1.ClaimInviteRequest
+	22, // 24: identity.v1.IdentityService.RevokeSessions:input_type -> identity.v1.RevokeSessionsRequest
+	24, // 25: identity.v1.IdentityService.WhoAmI:input_type -> identity.v1.WhoAmIRequest
+	1,  // 26: identity.v1.IdentityService.CreateAccount:output_type -> identity.v1.CreateAccountResponse
+	3,  // 27: identity.v1.IdentityService.GetAccount:output_type -> identity.v1.GetAccountResponse
+	5,  // 28: identity.v1.IdentityService.ListAccounts:output_type -> identity.v1.ListAccountsResponse
+	7,  // 29: identity.v1.IdentityService.DisableAccount:output_type -> identity.v1.DisableAccountResponse
+	9,  // 30: identity.v1.IdentityService.EnableAccount:output_type -> identity.v1.EnableAccountResponse
+	11, // 31: identity.v1.IdentityService.AssignRoles:output_type -> identity.v1.AssignRolesResponse
+	13, // 32: identity.v1.IdentityService.CreateApiKey:output_type -> identity.v1.CreateApiKeyResponse
+	15, // 33: identity.v1.IdentityService.ListApiKeys:output_type -> identity.v1.ListApiKeysResponse
+	17, // 34: identity.v1.IdentityService.RevokeApiKey:output_type -> identity.v1.RevokeApiKeyResponse
+	19, // 35: identity.v1.IdentityService.CreateInvite:output_type -> identity.v1.CreateInviteResponse
+	21, // 36: identity.v1.IdentityService.ClaimInvite:output_type -> identity.v1.ClaimInviteResponse
+	23, // 37: identity.v1.IdentityService.RevokeSessions:output_type -> identity.v1.RevokeSessionsResponse
+	25, // 38: identity.v1.IdentityService.WhoAmI:output_type -> identity.v1.WhoAmIResponse
+	26, // [26:39] is the sub-list for method output_type
+	13, // [13:26] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_identity_v1_service_proto_init() }
@@ -1373,7 +1463,7 @@ func file_identity_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_identity_v1_service_proto_rawDesc), len(file_identity_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   24,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

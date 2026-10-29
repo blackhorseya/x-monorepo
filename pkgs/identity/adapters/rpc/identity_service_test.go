@@ -237,23 +237,30 @@ func TestIdentityService_AuthOff(t *testing.T) {
 
 // newService assembles the service the way provider.go / wire do.
 func newService(accounts account.Repository, keys apikey.Repository, tx port.Transactor, clock port.Clock, ids port.IDGenerator, secrets port.SecretGenerator, rec *usecasex.Recorder, auth config.Auth) *rpc.IdentityService {
+	return newServiceWithSource(accounts, keys, tx, clock, ids, secrets, rec, auth, identity.ProvideExternalIdentitySource())
+}
+
+func newServiceWithSource(accounts account.Repository, keys apikey.Repository, tx port.Transactor, clock port.Clock, ids port.IDGenerator, secrets port.SecretGenerator, rec *usecasex.Recorder, auth config.Auth, src rpc.ExternalIdentitySource) *rpc.IdentityService {
 	census := identity.ProvideAdminCensus(nil, accounts, keys, clock)
 	invites := identity.ProvideInviteRepository(nil)
 	audit := identity.ProvideAuditLog(nil)
+	bindings := identity.ProvideExternalIdentityRepository(nil)
 
 	return rpc.NewIdentityService(rpc.UseCases{
-		CreateInvite:   identity.ProvideCreateInvite(accounts, invites, ids, audit, clock, tx, rec),
-		RevokeSessions: identity.ProvideRevokeSessions(accounts, audit, clock, tx, rec),
-		CreateAccount:  identity.ProvideCreateAccount(accounts, ids, clock, tx, rec),
-		GetAccount:     identity.ProvideGetAccount(accounts, rec),
-		ListAccounts:   identity.ProvideListAccounts(accounts, rec),
-		DisableAccount: identity.ProvideDisableAccount(accounts, census, auth, clock, tx, rec),
-		EnableAccount:  identity.ProvideEnableAccount(accounts, clock, tx, rec),
-		AssignRoles:    identity.ProvideAssignRoles(accounts, census, auth, clock, tx, rec),
-		CreateAPIKey:   identity.ProvideCreateAPIKey(accounts, keys, ids, secrets, clock, tx, rec),
-		ListAPIKeys:    identity.ProvideListAPIKeys(accounts, keys, rec),
-		RevokeAPIKey:   identity.ProvideRevokeAPIKey(keys, census, auth, clock, tx, rec),
-		WhoAmI:         identity.ProvideWhoAmI(rec),
+		CreateInvite:     identity.ProvideCreateInvite(accounts, invites, ids, audit, clock, tx, rec),
+		RevokeSessions:   identity.ProvideRevokeSessions(accounts, audit, clock, tx, rec),
+		ClaimInvite:      identity.ProvideClaimInvite(invites, bindings, accounts, clock, tx, rec),
+		ExternalIdentity: src,
+		CreateAccount:    identity.ProvideCreateAccount(accounts, ids, clock, tx, rec),
+		GetAccount:       identity.ProvideGetAccount(accounts, rec),
+		ListAccounts:     identity.ProvideListAccounts(accounts, rec),
+		DisableAccount:   identity.ProvideDisableAccount(accounts, census, auth, clock, tx, rec),
+		EnableAccount:    identity.ProvideEnableAccount(accounts, clock, tx, rec),
+		AssignRoles:      identity.ProvideAssignRoles(accounts, census, auth, clock, tx, rec),
+		CreateAPIKey:     identity.ProvideCreateAPIKey(accounts, keys, ids, secrets, clock, tx, rec),
+		ListAPIKeys:      identity.ProvideListAPIKeys(accounts, keys, rec),
+		RevokeAPIKey:     identity.ProvideRevokeAPIKey(keys, census, auth, clock, tx, rec),
+		WhoAmI:           identity.ProvideWhoAmI(rec),
 	}, auth)
 }
 
@@ -350,5 +357,74 @@ func TestIdentityService_InviteAndRevokeSessions(t *testing.T) {
 	g, err := root.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: id}))
 	if err != nil || g.Msg.GetAccount().GetSessionsRevokeTime() == nil {
 		t.Fatalf("GetAccount = %+v, %v", g, err)
+	}
+}
+
+type fixedSource struct {
+	id rpc.ExternalIdentity
+	ok bool
+}
+
+func (s fixedSource) ExternalIdentityFrom(context.Context) (rpc.ExternalIdentity, bool) {
+	return s.id, s.ok
+}
+
+// ClaimInvite is not admin-only and takes nothing from the client: the
+// identity comes from the source (the verified token), and without one the
+// call is UNAUTHENTICATED.
+func TestIdentityService_ClaimInvite(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	rec, err := usecasex.NewRecorder(tel.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	accounts := identity.ProvideAccountRepository(nil, logger)
+	keys := identity.ProvideAPIKeyRepository(nil)
+	tx := identity.ProvideTransactor(nil)
+	clock := system.NewClock()
+	ids, secrets := system.NewUUIDGenerator(), system.NewSecretGenerator()
+	cfg := config.Auth{Mode: config.AuthOff}
+	c := context.Background()
+
+	// The default source (OIDC off): nobody has a verified identity.
+	off := newService(accounts, keys, tx, clock, ids, secrets, rec, cfg)
+	if _, err := off.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{})); connect.CodeOf(err) != connect.CodeUnauthenticated || errorCode(err) != server.UnauthenticatedCode {
+		t.Fatalf("no identity = %v", err)
+	}
+
+	src := &fixedSource{id: rpc.ExternalIdentity{Issuer: "https://idp.example", Subject: "sub-1", Email: "ops@example.com", EmailVerified: true}, ok: true}
+	svc := newServiceWithSource(accounts, keys, tx, clock, ids, secrets, rec, cfg, src)
+	acc, err := svc.CreateAccount(c, connect.NewRequest(&identityv1.CreateAccountRequest{Name: "ops", Roles: []string{"ops"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateInvite(c, connect.NewRequest(&identityv1.CreateInviteRequest{AccountId: acc.Msg.GetAccount().GetId(), Email: "ops@example.com"})); err != nil {
+		t.Fatal(err)
+	}
+
+	// An unverified email is refused and does not spend the invite.
+	src.id.EmailVerified = false
+	if _, err := svc.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{})); connect.CodeOf(err) != connect.CodeFailedPrecondition || errorCode(err) != "invite.email_unverified" {
+		t.Fatalf("unverified = %v", err)
+	}
+	src.id.EmailVerified = true
+	got, err := svc.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{}))
+	if err != nil || got.Msg.GetAccount().GetId() != acc.Msg.GetAccount().GetId() {
+		t.Fatalf("claim = %+v, %v", got, err)
+	}
+	// The invite is spent: a second sub gets already_claimed.
+	src.id.Subject = "sub-2"
+	if _, err := svc.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{})); connect.CodeOf(err) != connect.CodeFailedPrecondition || errorCode(err) != "invite.already_claimed" {
+		t.Fatalf("second claim = %v", err)
+	}
+	// A source that has nothing (token absent) is UNAUTHENTICATED.
+	src.ok = false
+	if _, err := svc.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{})); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("no token = %v", err)
 	}
 }
