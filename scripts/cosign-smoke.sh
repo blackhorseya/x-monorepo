@@ -12,6 +12,9 @@
 # client re-sent a POST Rekor had already committed. cosign v3.0.6 (sigstore-go v1.1.4) fails the
 # whole sign on it; v3.1.4 (sigstore-go v1.3.0, PR #647) fetches the existing entry and the
 # bundle still verifies. Hits the public Rekor, like the first case.
+#
+# The signs entry's cmd is scripts/cosign-sign-blob.sh (#215, bounded re-sign on a Rekor 409), so
+# both cases also run through that wrapper; its own retry cases are in scripts/test.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
