@@ -367,12 +367,20 @@ func (e *raceEnv) tryReserve(orderID string, clock clockAt, lines ...dto.Line) e
 	return nil
 }
 
-// victimLock identifies the victim's transaction from inside its context: its
-// backend pid, which an intruder's blocked statement must be waiting on.
+// bounded is a context for one observer or actor step: every statement the
+// matrix issues outside the provider has an end, so a stuck connection fails
+// the test instead of hanging it.
+func (e *raceEnv) bounded(d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(e.c, d)
+}
+
+// victimPID identifies the victim's backend from inside its transaction context.
 func (e *raceEnv) victimPID(c context.Context) int {
 	e.t.Helper()
+	ctx, cancel := e.bounded(10 * time.Second)
+	defer cancel()
 	var pid int
-	if err := platformpg.TxOrDB(c, e.db).Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
+	if err := platformpg.TxOrDB(c, e.db).WithContext(ctx).Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
 		e.t.Fatal(err)
 	}
 
@@ -383,8 +391,10 @@ func (e *raceEnv) victimPID(c context.Context) int {
 // waiter is the one session that counts, or 0 for any.
 func (e *raceEnv) blockedBy(holder, waiter int) int {
 	e.t.Helper()
+	ctx, cancel := e.bounded(10 * time.Second)
+	defer cancel()
 	var n int
-	if err := e.db.WithContext(e.c).Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND ? = ANY(pg_blocking_pids(pid)) AND (? = 0 OR pid = ?)`, holder, waiter, waiter).Scan(&n).Error; err != nil {
+	if err := e.db.WithContext(ctx).Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND ? = ANY(pg_blocking_pids(pid)) AND (? = 0 OR pid = ?)`, holder, waiter, waiter).Scan(&n).Error; err != nil {
 		e.t.Fatal(err)
 	}
 
@@ -392,9 +402,12 @@ func (e *raceEnv) blockedBy(holder, waiter int) int {
 }
 
 // on is e with its repositories, transactor and inbox bound to one pinned
-// connection, so everything run through it is one Postgres backend.
-func (e *raceEnv) on(conn *gorm.DB) *raceEnv {
+// connection, so everything run through it is one Postgres backend, and with
+// ctx as its context: the provider re-applies it on every statement, so the
+// deadline survives into the use case.
+func (e *raceEnv) on(conn *gorm.DB, ctx context.Context) *raceEnv {
 	c := *e
+	c.c = ctx
 	c.db = conn
 	c.stocks = inventory.ProvideStockRepository(conn, e.logger)
 	c.reservations = inventory.ProvideReservationRepository(conn)
@@ -404,26 +417,27 @@ func (e *raceEnv) on(conn *gorm.DB) *raceEnv {
 	return &c
 }
 
-// startIntruder runs in on its own goroutine, pinned to one connection, and
-// returns that connection's backend pid plus the channel the result arrives
-// on. Every way the start can fail (no connection, pid query error, timeout)
-// is returned as an error instead of leaving the caller waiting.
-func (e *raceEnv) startIntruder(in intruder) (pid int, done <-chan error, err error) {
-	// The context bounds connection acquisition and, generously, the intruder itself.
-	ctx, cancel := context.WithTimeout(e.c, time.Minute)
+// pinned runs fn on its own goroutine, on one pinned connection, under a
+// context that ends after a minute or when the test does (so a Fatal elsewhere
+// never strands it). It returns that connection's backend pid and the channel
+// fn's result arrives on. Every way the start can fail (no connection, pid
+// query error, 15s) comes back as an error instead of a hang.
+func (e *raceEnv) pinned(fn func(ctx context.Context, conn *gorm.DB) error) (int, <-chan error, error) {
+	ctx, cancel := e.bounded(time.Minute)
+	e.t.Cleanup(cancel)
 	result := make(chan error, 1)
 	pids := make(chan int, 1)
-	// fire-and-forget: joined by the caller, which reads result after the victim returns.
+	// fire-and-forget: joined by the caller through result; ctx is cancelled at test end.
 	go func() {
-		defer cancel()
 		result <- e.db.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+			conn = conn.WithContext(ctx)
 			var pid int
 			if err := conn.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
 				return err
 			}
 			pids <- pid
 
-			return in(e.on(conn))
+			return fn(ctx, conn)
 		})
 	}()
 
@@ -431,11 +445,51 @@ func (e *raceEnv) startIntruder(in intruder) (pid int, done <-chan error, err er
 	case pid := <-pids:
 		return pid, result, nil
 	case err := <-result:
-		return 0, nil, fmt.Errorf("intruder did not start: %w", err)
+		return 0, nil, fmt.Errorf("pinned actor did not start: %w", err)
 	case <-time.After(15 * time.Second):
 		cancel()
 
-		return 0, nil, errors.New("intruder did not start within 15s")
+		return 0, nil, errors.New("pinned actor did not start within 15s")
+	}
+}
+
+// startIntruder is pinned running in against this environment.
+func (e *raceEnv) startIntruder(in intruder) (int, <-chan error, error) {
+	return e.pinned(func(ctx context.Context, conn *gorm.DB) error { return in(e.on(conn, ctx)) })
+}
+
+// await waits for ready, failing with the actor's own error if it ends first.
+func (e *raceEnv) await(ready <-chan struct{}, done <-chan error) {
+	e.t.Helper()
+	select {
+	case <-ready:
+	case err := <-done:
+		e.t.Fatalf("actor ended (%v) before it was ready", err)
+	case <-time.After(15 * time.Second):
+		e.t.Fatal("actor was not ready within 15s")
+	}
+}
+
+// join waits for an actor's result.
+func (e *raceEnv) join(done <-chan error) error {
+	e.t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(30 * time.Second):
+		e.t.Fatal("actor did not finish within 30s")
+
+		return nil
+	}
+}
+
+// gate blocks until open is closed or the actor's context ends.
+func gate(ctx context.Context, open <-chan struct{}) error {
+	select {
+	case <-open:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -722,7 +776,7 @@ func TestInterleavingMatrix(t *testing.T) {
 			}
 			if parkedErr != nil {
 				// The intruder was released by the victim's commit and must have lost.
-				if got := classify(<-parkedErr); got != outStale {
+				if got := classify(e.join(parkedErr)); got != outStale {
 					t.Fatalf("intruder parked on the victim's lock ended %s; want stale", got)
 				}
 			}
@@ -912,42 +966,49 @@ func TestSweepDoesNotTouchOtherFixtures(t *testing.T) {
 func TestLockBarrierIgnoresUnrelatedWaiters(t *testing.T) {
 	e := newEnv(t, 2)
 	const key = 7231
+	acquired, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 
-	holderPID := make(chan int, 1)
-	release := make(chan struct{})
-	held := make(chan error, 1)
-	// fire-and-forget: joined below through held after release is closed.
-	go func() {
-		held <- e.db.WithContext(e.c).Connection(func(tx *gorm.DB) error {
-			var pid int
-			if err := tx.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
-				return err
-			}
-			if err := tx.Exec(`SELECT pg_advisory_lock(?)`, key).Error; err != nil {
-				return err
-			}
-			holderPID <- pid
-			<-release
+	holderPID, holderDone, err := e.pinned(func(ctx context.Context, conn *gorm.DB) error {
+		if err := conn.Exec(`SELECT pg_advisory_lock(?)`, key).Error; err != nil {
+			return err
+		}
+		close(acquired)
+		if err := gate(ctx, release); err != nil {
+			return err
+		}
 
-			return tx.Exec(`SELECT pg_advisory_unlock(?)`, key).Error
-		})
-	}()
-	pid := <-holderPID
+		return conn.Exec(`SELECT pg_advisory_unlock(?)`, key).Error
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.await(acquired, holderDone)
 
-	waiter := make(chan error, 1)
-	// fire-and-forget: joined below through waiter after release is closed.
-	go func() {
-		waiter <- e.db.WithContext(e.c).Connection(func(tx *gorm.DB) error {
-			if err := tx.Exec(`SELECT pg_advisory_lock(?)`, key).Error; err != nil {
-				return err
-			}
+	waiterPID, waiterDone, err := e.pinned(func(ctx context.Context, conn *gorm.DB) error {
+		if err := conn.Exec(`SELECT pg_advisory_lock(?)`, key).Error; err != nil {
+			return err
+		}
 
-			return tx.Exec(`SELECT pg_advisory_unlock(?)`, key).Error
-		})
-	}()
+		return conn.Exec(`SELECT pg_advisory_unlock(?)`, key).Error
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	deadline := time.Now().Add(15 * time.Second)
-	for e.blockedBy(pid, 0) == 0 {
+	for e.blockedBy(holderPID, waiterPID) == 0 {
+		select {
+		case err := <-waiterDone:
+			t.Fatalf("probe waiter ended (%v) instead of blocking", err)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatal("probe waiter never blocked")
 		}
@@ -959,10 +1020,10 @@ func TestLockBarrierIgnoresUnrelatedWaiters(t *testing.T) {
 	}
 
 	close(release)
-	if err := <-held; err != nil {
+	if err := e.join(holderDone); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-waiter; err != nil {
+	if err := e.join(waiterDone); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -972,57 +1033,61 @@ func TestLockBarrierIgnoresUnrelatedWaiters(t *testing.T) {
 // the victim's stock row while the intended intruder is still idle).
 func TestLockBarrierRequiresTheIntendedIntruder(t *testing.T) {
 	e := newEnv(t, 2)
-	pin := func(fn func(conn *gorm.DB) error) <-chan error {
-		done := make(chan error, 1)
-		// fire-and-forget: joined below through done.
-		go func() { done <- e.db.WithContext(e.c).Connection(fn) }()
-
-		return done
-	}
-	pidOf := func(conn *gorm.DB) int {
-		var pid int
-		if err := conn.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
-			t.Error(err)
-		}
-
-		return pid
-	}
-
-	victim, intended, unrelated := make(chan int, 1), make(chan int, 1), make(chan int, 1)
-	release, releaseIntended := make(chan struct{}), make(chan struct{})
 	update := `UPDATE inventory.stocks SET updated_at = updated_at WHERE sku = ?`
+	held, release, releaseIntended := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		for _, c := range []chan struct{}{release, releaseIntended} {
+			select {
+			case <-c:
+			default:
+				close(c)
+			}
+		}
+	})
 
-	vDone := pin(func(conn *gorm.DB) error {
+	vPID, vDone, err := e.pinned(func(ctx context.Context, conn *gorm.DB) error {
 		if err := conn.Exec(`BEGIN`).Error; err != nil {
 			return err
 		}
 		if err := conn.Exec(update, e.sku).Error; err != nil { // the victim holds the stock row
 			return err
 		}
-		victim <- pidOf(conn)
-		<-release
+		close(held)
+		if err := gate(ctx, release); err != nil {
+			return err
+		}
 
 		return conn.Exec(`COMMIT`).Error
 	})
-	vPID := <-victim
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.await(held, vDone)
 
-	iDone := pin(func(conn *gorm.DB) error { // the intended intruder: connected, not yet at the row
-		intended <- pidOf(conn)
-		<-releaseIntended
-
-		return conn.Exec(update, e.sku).Error
-	})
-	iPID := <-intended
-
-	uDone := pin(func(conn *gorm.DB) error { // an unrelated session blocked on the same row
-		unrelated <- pidOf(conn)
+	// The intended intruder: connected, not yet at the row.
+	iPID, iDone, err := e.pinned(func(ctx context.Context, conn *gorm.DB) error {
+		if err := gate(ctx, releaseIntended); err != nil {
+			return err
+		}
 
 		return conn.Exec(update, e.sku).Error
 	})
-	uPID := <-unrelated
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An unrelated session blocked on the same row.
+	uPID, uDone, err := e.pinned(func(ctx context.Context, conn *gorm.DB) error { return conn.Exec(update, e.sku).Error })
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	deadline := time.Now().Add(15 * time.Second)
 	for e.blockedBy(vPID, uPID) == 0 {
+		select {
+		case err := <-uDone:
+			t.Fatalf("unrelated session ended (%v) instead of blocking", err)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatal("unrelated waiter never blocked")
 		}
@@ -1038,7 +1103,7 @@ func TestLockBarrierRequiresTheIntendedIntruder(t *testing.T) {
 	close(release)
 	close(releaseIntended)
 	for _, d := range []<-chan error{vDone, iDone, uDone} {
-		if err := <-d; err != nil {
+		if err := e.join(d); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1080,5 +1145,25 @@ func TestIntruderStartFailureIsReported(t *testing.T) {
 	}
 	if d := time.Since(started); d > 5*time.Second {
 		t.Fatalf("start failure took %s to surface; want it prompt", d)
+	}
+}
+
+// The intruder's actor carries the bounded context into the provider, which
+// re-applies it on every statement; an unbounded one would let a stuck intruder
+// hang the matrix's join.
+func TestIntruderRunsUnderADeadline(t *testing.T) {
+	e := newEnv(t, 2)
+	_, done, err := e.startIntruder(func(a *raceEnv) error {
+		if _, ok := a.c.Deadline(); !ok {
+			return errors.New("intruder context has no deadline")
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.join(done); err != nil {
+		t.Fatal(err)
 	}
 }
