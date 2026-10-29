@@ -26,6 +26,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
@@ -38,6 +39,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountRepository,
 	ProvideAPIKeyRepository,
 	ProvideTransactor,
+	ProvideAdminCensus,
 	system.NewClock,
 	wire.Bind(new(port.Clock), new(*system.Clock)),
 	system.NewUUIDGenerator,
@@ -97,6 +99,26 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 	return postgres.NewTransactor(db)
 }
 
+// ProvideAdminCensus pairs with the repositories too: Postgres locks the admin
+// rows for the transaction, in memory the Transactor serialises writers.
+func ProvideAdminCensus(db *gorm.DB, accounts account.Repository, keys apikey.Repository, clock port.Clock) port.AdminCensus {
+	if db == nil {
+		return memory.NewAdminCensus(accounts, keys, clock)
+	}
+
+	return postgres.NewAdminCensus(db, clock)
+}
+
+// adminRole is the role the last-admin guard protects: auth.admin_role, the
+// same one IdentityService requires of its callers.
+func adminRole(auth config.Auth) string {
+	if auth.AdminRole == "" {
+		return admin.DefaultAdminRole // config.Load sets the same; this is for hand-built configs (tests)
+	}
+
+	return auth.AdminRole
+}
+
 // decorate is the one place that decides which cross-cutting decorators every
 // use case of this BC gets (outermost first). Reads use it as is.
 func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
@@ -128,16 +150,16 @@ func ProvideListAccounts(accounts account.Repository, rec *usecasex.Recorder) rp
 	return decorate("identity.list_accounts", rec, usecase.NewListAccounts(accounts))
 }
 
-func ProvideDisableAccount(accounts account.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.DisableAccountUC {
-	return decorateTx("identity.disable_account", rec, tx, usecase.NewDisableAccount(accounts, clock))
+func ProvideDisableAccount(accounts account.Repository, census port.AdminCensus, cfg config.Auth, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.DisableAccountUC {
+	return decorateTx("identity.disable_account", rec, tx, usecase.NewDisableAccount(accounts, census, adminRole(cfg), clock))
 }
 
 func ProvideEnableAccount(accounts account.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.EnableAccountUC {
 	return decorateTx("identity.enable_account", rec, tx, usecase.NewEnableAccount(accounts, clock))
 }
 
-func ProvideAssignRoles(accounts account.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.AssignRolesUC {
-	return decorateTx("identity.assign_roles", rec, tx, usecase.NewAssignRoles(accounts, clock))
+func ProvideAssignRoles(accounts account.Repository, census port.AdminCensus, cfg config.Auth, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.AssignRolesUC {
+	return decorateTx("identity.assign_roles", rec, tx, usecase.NewAssignRoles(accounts, census, adminRole(cfg), clock))
 }
 
 func ProvideCreateAPIKey(accounts account.Repository, keys apikey.Repository, ids port.IDGenerator, secrets port.SecretGenerator, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.CreateAPIKeyUC {
@@ -148,8 +170,8 @@ func ProvideListAPIKeys(accounts account.Repository, keys apikey.Repository, rec
 	return decorate("identity.list_api_keys", rec, usecase.NewListAPIKeys(accounts, keys))
 }
 
-func ProvideRevokeAPIKey(keys apikey.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.RevokeAPIKeyUC {
-	return decorateTx("identity.revoke_api_key", rec, tx, usecase.NewRevokeAPIKey(keys, clock))
+func ProvideRevokeAPIKey(keys apikey.Repository, census port.AdminCensus, cfg config.Auth, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.RevokeAPIKeyUC {
+	return decorateTx("identity.revoke_api_key", rec, tx, usecase.NewRevokeAPIKey(keys, census, adminRole(cfg), clock))
 }
 
 // ProvideResolveAPIKey is the auth path (adapters/auth.Resolver, in front of

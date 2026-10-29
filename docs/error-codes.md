@@ -8,7 +8,7 @@
 來源三種：**platform interceptor**（`request.*` / `auth.*`）、**admin**（`admin.*`，`pkgs/platform/admin` 自己設）、**domain error**
 （`kernel.NewError(kind, code, msg)`，`server.ToConnectError` 依 `Kind` 映射：InvalidArgument → `INVALID_ARGUMENT`、NotFound → `NOT_FOUND`、
 FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、PermissionDenied → `PERMISSION_DENIED`；其他 → `INTERNAL`，**沒有** `x-error-code`，訊息固定 `internal error`）。
-加新的 domain error 就在該 aggregate 的 `errors.go` 加一行，前綴 = aggregate 名；這張表是手寫的，改了記得同步。
+加新的 domain error 就在該 aggregate 的 `errors.go` 加一行，前綴 = aggregate 名（跨 aggregate 的 BC 層規則用 BC 名，如 `identity.last_admin`）；這張表是手寫的，改了記得同步。
 
 | `x-error-code` | Connect code | 誰設 | 什麼時候 |
 |---|---|---|---|
@@ -50,6 +50,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `account.invalid_id` / `account.invalid_name` / `account.invalid_role` | `INVALID_ARGUMENT` | identity domain | aggregate 不變量（role 不能是空字串；protovalidate 先擋 rpc 那條） |
 | `account.invalid_cursor` | `INVALID_ARGUMENT` | identity domain | ListAccounts 的 page token 解得開但沒有 id |
 | `account.already_disabled` / `account.already_active` | `FAILED_PRECONDITION` | identity domain | Disable 已 DISABLED / Enable 已 ACTIVE 的 account |
+| `identity.last_admin` | `FAILED_PRECONDITION` | identity domain（`account.GuardLastAdmin` / `GuardLastAdminKey`） | `DisableAccount` / `AssignRoles`（拿掉 `auth.admin_role`）/ `RevokeApiKey` 會讓最後一個有效 admin（ACTIVE、有 admin role、至少一把可用 key 的 account）失去資格；訊息固定。config `auth.api_keys` 的 static key 不算 |
 | `account.disabled` | `FAILED_PRECONDITION` | identity domain | ResolveAPIKey：key 沒事但 account 是 DISABLED（rpc 看到的是 `auth.invalid_credential`） |
 | `account.not_found` | `NOT_FOUND` | identity domain | 含 `CreateApiKey` / `ListApiKeys` 指到不存在的 account |
 | `account.duplicate` | `ALREADY_EXISTS` | identity domain | 同 id 再 Add（repo 層；id 是 UUID，實際上不會發生） |
