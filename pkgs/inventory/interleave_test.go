@@ -836,3 +836,80 @@ func TestOrderCompletedHandler_RereadFailureIsRetried(t *testing.T) {
 		t.Fatalf("state = %+v; want COMMITTED 0/0", got)
 	}
 }
+
+// The expiry sweep of one cell must not touch another cell's fixture (the
+// reviewer's probe: two independently prefixed fixtures, one sweep).
+func TestSweepDoesNotTouchOtherFixtures(t *testing.T) {
+	a, b := newRaceEnv(t, 2), newRaceEnv(t, 2)
+
+	if err := iExpire(a); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.read(false); got.o1 != reservation.StatusExpired {
+		t.Fatalf("a.o1 = %s; want EXPIRED", got.o1)
+	}
+	if got := b.read(false); got.o1 != reservation.StatusReserved || got.onHand != 2 || got.reserved != 2 {
+		t.Fatalf("b was touched by a's sweep: %+v", got)
+	}
+}
+
+// The @update barrier waits for a session blocked on the victim's backend, not
+// for any lock waiter in the database (the reviewer's probe: an unrelated
+// advisory-lock wait must not satisfy it).
+func TestLockBarrierIgnoresUnrelatedWaiters(t *testing.T) {
+	e := newEnv(t, 2)
+	const key = 7231
+
+	holderPID := make(chan int, 1)
+	release := make(chan struct{})
+	held := make(chan error, 1)
+	// fire-and-forget: joined below through held after release is closed.
+	go func() {
+		held <- e.db.WithContext(e.c).Connection(func(tx *gorm.DB) error {
+			var pid int
+			if err := tx.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec(`SELECT pg_advisory_lock(?)`, key).Error; err != nil {
+				return err
+			}
+			holderPID <- pid
+			<-release
+
+			return tx.Exec(`SELECT pg_advisory_unlock(?)`, key).Error
+		})
+	}()
+	pid := <-holderPID
+
+	waiter := make(chan error, 1)
+	// fire-and-forget: joined below through waiter after release is closed.
+	go func() {
+		waiter <- e.db.WithContext(e.c).Connection(func(tx *gorm.DB) error {
+			if err := tx.Exec(`SELECT pg_advisory_lock(?)`, key).Error; err != nil {
+				return err
+			}
+
+			return tx.Exec(`SELECT pg_advisory_unlock(?)`, key).Error
+		})
+	}()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for e.blockedBy(pid) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("probe waiter never blocked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// A real lock wait exists in the database, but not on this victim.
+	if n := e.blockedBy(e.victimPID(e.c)); n != 0 {
+		t.Fatalf("blockedBy(unrelated backend) = %d; want 0", n)
+	}
+
+	close(release)
+	if err := <-held; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-waiter; err != nil {
+		t.Fatal(err)
+	}
+}
