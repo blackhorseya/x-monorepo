@@ -21,12 +21,10 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
     hits = []
     sent = []   # the response bodies the fixture really wrote, to assert the payloads are the ones named
     want_body = QUOTED if quoted else body
-    body = {409: b'{"code":6,"message":"an equivalent entry already exists with index 123"}',
-            503: b'{"code":14,"message":"unavailable"}'}[status]
-    if body is not None:
-        pass
-    elif quoted:  # a non-conflict whose body quotes the 409 error text (#256)
-        body = b'{"code":14,"message":"troubleshooting: adding rekor v2 entry: unexpected response: 409 {example}"}'
+    # the default body only when the caller passed none; a quoted-409 case sends QUOTED (#256)
+    if body is None:
+        body = QUOTED if quoted else {409: b'{"code":6,"message":"an equivalent entry already exists with index 123"}',
+                                      503: b'{"code":14,"message":"unavailable"}'}[status]
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
             hits.append(self.path); sent.append(body)

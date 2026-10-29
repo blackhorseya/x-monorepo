@@ -27,12 +27,6 @@ max=3   # 1 sign + at most 2 re-signs
 delay=${COSIGN_SIGN_RETRY_DELAY:-5}
 case $delay in ''|*[!0-9]*) echo "cosign-sign-blob: COSIGN_SIGN_RETRY_DELAY must be whole seconds, got '$delay'" >&2; exit 2 ;; esac
 
-bundle=
-for a in "$@"; do
-  case $a in --bundle=*) bundle=${a#--bundle=} ;; esac
-done
-[ -n "$bundle" ] || { echo "cosign-sign-blob: no --bundle=<file> in the arguments" >&2; exit 2; }
-
 log=$(mktemp); trap 'rm -f "$log"' EXIT
 # A conflict is the OUTER status of one cosign error line (#256), not any 409 text on a line: a
 # non-conflict (HTTP 503, ...) whose body quotes a 409 is an ordinary failure. The two shapes of the
@@ -52,33 +46,43 @@ log=$(mktemp); trap 'rm -f "$log"' EXIT
 # mixed log never combine.
 # No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
 status_re='(log/entries\]\[([0-9]+)\]|adding rekor v2 entry: unexpected response: ([0-9]+)([^0-9]|$))'
-# Conflict classification needs the artifact, and the artifact is only certain when the whole argv
-# is understood: `sign-blob`, then only the flags below, then exactly one positional (the artifact).
-#   --bundle=<f> | --bundle <f>        goreleaser (.goreleaser.yaml signs.args), always present
-#   --yes | -y                         goreleaser
-#   --key=<k> | --key <k>              scripts/cosign-smoke.sh, scripts/cosign-v2-conflict-smoke.sh
+# One parser reads the argv: it pins down the bundle path (cleanup, success check) and, when the whole
+# argv is understood, the artifact (conflict classification). Accepted after `sign-blob`:
+#   --bundle=<f>                        exactly one, non-empty, equals form (goreleaser's), else exit 2
+#   --yes | -y                          goreleaser
+#   --key=<k> | --key <k>               scripts/cosign-smoke.sh, scripts/cosign-v2-conflict-smoke.sh
 #   --signing-config=<c> | --signing-config <c>   scripts/cosign-v2-conflict-smoke.sh
-# Anything else (another flag, `--`, no or several positionals, another subcommand) leaves `artifact`
-# empty and is_conflict says "not a conflict": the failure is propagated after one attempt. That is
-# intended: a string prefix cannot prove which argument is the artifact (a flag value that happens to
-# start the file name would pass), so an argument this script does not know turns the retry off.
-# Adding a flag to a caller means adding it here.
+#   exactly one positional              the artifact (after `--` everything is a positional and is
+#                                       never read as a flag, `--` itself is not understood: one attempt)
+# A bundle path the wrapper cannot pin down (`--bundle <f>`, a repeated or an empty --bundle) is a
+# usage error, exit 2, before cosign runs: cosign takes the last value, a cleanup or check on another
+# path would leave a stale or partial bundle. Any other argument (another flag, `--`, no or several
+# positionals, another subcommand) leaves `artifact` empty: is_conflict says "not a conflict" and the
+# failure is propagated after one attempt. That is intended: a string prefix cannot prove which
+# argument is the artifact (a flag value that happens to start the file name would pass), so an
+# argument this script does not know turns the retry off. Adding a flag to a caller means adding it here.
+bundle=
 artifact=
 parse_argv() {
-  local pos=()
-  [ "${1:-}" = sign-blob ] || return 0
-  shift
+  local pos=() nbundle=0 known=1
+  if [ "${1:-}" = sign-blob ]; then shift; else known=0; fi
   while [ $# -gt 0 ]; do
     case $1 in
-      --bundle=*|--key=*|--signing-config=*|--yes|-y) ;;
-      --bundle|--key|--signing-config) [ $# -ge 2 ] || return 0; shift ;;
-      -*) return 0 ;;
+      --bundle=*) nbundle=$((nbundle + 1)); bundle=${1#--bundle=} ;;
+      --bundle) nbundle=2 ;;
+      --yes|-y|--key=*|--signing-config=*) ;;
+      --key|--signing-config) if [ $# -ge 2 ]; then shift; else known=0; fi ;;
+      --) known=0; shift; pos+=("$@"); break ;; # everything after -- is a positional, never a flag
+      -*) known=0 ;;
       *) pos+=("$1") ;;
     esac
     shift
   done
-  [ "${#pos[@]}" = 1 ] || return 0
-  artifact=${pos[0]}
+  if [ "$nbundle" != 1 ] || [ -z "$bundle" ]; then
+    echo "cosign-sign-blob: need exactly one non-empty --bundle=<file> (equals form), got $nbundle" >&2
+    exit 2
+  fi
+  if [ "$known" = 1 ] && [ "${#pos[@]}" = 1 ]; then artifact=${pos[0]}; fi
 }
 parse_argv "$@"
 is_conflict() { # is_conflict <file>: the first `Error: ` line of it is a Rekor conflict error
