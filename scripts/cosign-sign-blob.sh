@@ -11,7 +11,7 @@
 # Fail-closed:
 #  - only an `Error: ` output line whose outer status is a Rekor conflict (v1 `log/entries][409]`, v2
 #    `adding rekor v2 entry: unexpected response: 409`, the first status on the first `Error: ` line, after
-#    the leading `Error: signing <argument>: `: a 409 quoted in another status's body does not
+#    the leading `Error: signing <artifact>: `: a 409 quoted in another status's body does not
 #    count, #256) is retried, at most 2 more times (a constant,
 #    not configurable); any other failure exits at once;
 #  - a 409 is never success: a failed attempt stays failed, and when the retries run out the
@@ -44,21 +44,34 @@ log=$(mktemp); trap 'rm -f "$log"' EXIT
 # Only the FIRST `Error: ` line of the output is the outer error: cosign prints its error once and a
 # multi-line response body follows it, so a later line that looks like `Error: ...409` is body text.
 # On that line cosign's own context comes first: `Error: signing <artifact>: <what failed>: <status
-# marker><status> <body>`. The artifact is an argument of this script and can hold any text (a status
+# marker><status> <body>`. The artifact is an argument of this script (identified below) and can hold any text (a status
 # marker, `entry`, `503 `), so exactly that prefix is cut off, anchored at the start of the line and
 # not by deleting the text everywhere. Then the FIRST (leftmost) status marker must carry exactly
 # 409 (a quoted marker in the body comes after the real one). Matching is per line, so lines of a
 # mixed log never combine.
 # No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
 status_re='(log/entries\]\[([0-9]+)\]|adding rekor v2 entry: unexpected response: ([0-9]+)([^0-9]|$))'
-args=("$@")
+# The artifact is the first positional argument after the subcommand (`sign-blob --bundle=<file>
+# <artifact> --yes ...`, goreleaser's order), skipping flags and the value of the flags that take a
+# separate one. The subcommand and every other argument are NOT candidates: a file named
+# `sign-blob: <marker>` must not be taken for the prefix.
+artifact=
+skip=0
+for a in "${@:2}"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case $a in
+    --key|--bundle|--signing-config|--output-signature|--output-certificate|--certificate) skip=1 ;;
+    -*) ;;
+    *) artifact=$a; break ;;
+  esac
+done
 is_conflict() { # is_conflict <file>: the first `Error: ` line of it is a Rekor conflict error
-  local line v
+  local line
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in 'Error: '*) ;; *) continue ;; esac
-    for v in "${args[@]}"; do
-      case $line in "Error: signing $v: "*) line=${line#"Error: signing $v: "}; break ;; esac
-    done
+    if [ -n "$artifact" ]; then
+      case $line in "Error: signing $artifact: "*) line=${line#"Error: signing $artifact: "} ;; esac
+    fi
     [[ $line =~ $status_re ]] || return 1
     [ "${BASH_REMATCH[2]}${BASH_REMATCH[3]}" = 409 ]
     return
