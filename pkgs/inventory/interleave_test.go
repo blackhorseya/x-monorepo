@@ -8,6 +8,8 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/port"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
@@ -38,14 +40,20 @@ func (x *beforeFind) FindBySKU(c context.Context, sku stock.SKU) (*stock.Stock, 
 	return x.Repository.FindBySKU(c, sku)
 }
 
-// The stock version cannot see a reservation that changed after it was read:
-// CommitStock reads o1 as RESERVED, then another transaction expires o1 and
-// o2 reserves the very units it gave back, and only then does CommitStock
-// load the (now fresh) stock. Without a lock on the reservation itself it
-// would sell o1 out of o2's hold. The commit must lose (retryable), and the
-// retry must see EXPIRED, find nothing available and end COMMIT_SHORT, with
-// o2's hold intact.
-func TestCommitStock_ReservationChangedUnderneath(t *testing.T) {
+type raceEnv struct {
+	c            context.Context
+	stocks       stock.Repository
+	reservations reservation.Repository
+	tx           port.Transactor
+	inbox        port.Inbox
+	rec          *usecasex.Recorder
+	now, old     clockAt
+}
+
+// newRaceEnv opens a database with SKU-RACE stocked with 2 and o-race-1
+// reserved (2 units) 25 hours ago, i.e. due for the expiry sweep.
+func newRaceEnv(t *testing.T) *raceEnv {
+	t.Helper()
 	url := pgtest.URL(t)
 
 	c := context.Background()
@@ -54,12 +62,12 @@ func TestCommitStock_ReservationChangedUnderneath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer telCleanup()
+	t.Cleanup(telCleanup)
 	db, cleanup, err := platformpg.NewDB(cfg, tel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
+	t.Cleanup(cleanup)
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
@@ -76,53 +84,109 @@ func TestCommitStock_ReservationChangedUnderneath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stocks := inventory.ProvideStockRepository(db, tel.Logger)
-	reservations := inventory.ProvideReservationRepository(db)
-	tx := inventory.ProvideTransactor(db)
-	inbox := inventory.ProvideInbox(db)
-	now := clockAt{at: time.Now().UTC()}
-	old := clockAt{at: now.at.Add(-25 * time.Hour)}
-
-	reserve := func(orderID string, clock clockAt) {
-		t.Helper()
-		uc := inventory.ProvideReserveStock(reservations, stocks, tx, inbox, publisher{}, clock, rec)
-		out, err := uc.Execute(c, dto.ReserveStockInput{OrderID: orderID, Lines: []dto.Line{{SKU: "SKU-RACE", Quantity: 2}}})
-		if err != nil || out.Status != "RESERVED" {
-			t.Fatalf("reserve %s = %+v, %v", orderID, out, err)
-		}
+	e := &raceEnv{
+		c:            c,
+		stocks:       inventory.ProvideStockRepository(db, tel.Logger),
+		reservations: inventory.ProvideReservationRepository(db),
+		tx:           inventory.ProvideTransactor(db),
+		inbox:        inventory.ProvideInbox(db),
+		rec:          rec,
+		now:          clockAt{at: time.Now().UTC()},
 	}
-	if _, err := inventory.ProvideSetStock(stocks, tx, inbox, now, rec).Execute(c, dto.SetStockInput{SKU: "SKU-RACE", OnHand: 2}); err != nil {
+	e.old = clockAt{at: e.now.at.Add(-25 * time.Hour)}
+	if _, err := inventory.ProvideSetStock(e.stocks, e.tx, e.inbox, e.now, rec).Execute(c, dto.SetStockInput{SKU: "SKU-RACE", OnHand: 2}); err != nil {
 		t.Fatal(err)
 	}
-	reserve("o-race-1", old)
+	e.reserve(t, "o-race-1", e.old)
 
-	interleaved := &beforeFind{Repository: stocks}
-	interleaved.hook = func() {
-		out, err := inventory.ProvideExpireReservations(reservations, stocks, tx, inbox, publisher{}, now, rec).Execute(c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour})
-		if err != nil || len(out.Expired) != 1 {
-			t.Fatalf("expire = %+v, %v", out, err)
-		}
-		reserve("o-race-2", now)
+	return e
+}
+
+func (e *raceEnv) reserve(t *testing.T, orderID string, clock clockAt) {
+	t.Helper()
+	uc := inventory.ProvideReserveStock(e.reservations, e.stocks, e.tx, e.inbox, publisher{}, clock, e.rec)
+	out, err := uc.Execute(e.c, dto.ReserveStockInput{OrderID: orderID, Lines: []dto.Line{{SKU: "SKU-RACE", Quantity: 2}}})
+	if err != nil || out.Status != "RESERVED" {
+		t.Fatalf("reserve %s = %+v, %v", orderID, out, err)
+	}
+}
+
+func (e *raceEnv) expire(t *testing.T) {
+	t.Helper()
+	out, err := inventory.ProvideExpireReservations(e.reservations, e.stocks, e.tx, e.inbox, publisher{}, e.now, e.rec).Execute(e.c, dto.ExpireReservationsInput{OlderThan: 24 * time.Hour})
+	if err != nil || len(out.Expired) != 1 {
+		t.Fatalf("expire = %+v, %v", out, err)
+	}
+}
+
+func (e *raceEnv) commit(stocks stock.Repository, orderID string) (*dto.ReservationOutput, error) {
+	return inventory.ProvideCommitStock(e.reservations, stocks, e.tx, e.inbox, publisher{}, e.now, e.rec).Execute(e.c, dto.CommitStockInput{OrderID: orderID})
+}
+
+func (e *raceEnv) stockNow(t *testing.T) *stock.Stock {
+	t.Helper()
+	s, err := e.stocks.FindBySKU(e.c, "SKU-RACE")
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	commit1 := inventory.ProvideCommitStock(reservations, interleaved, tx, inbox, publisher{}, now, rec)
-	out, err := commit1.Execute(c, dto.CommitStockInput{OrderID: "o-race-1"})
+	return s
+}
+
+// The stock version cannot see a reservation that changed after it was read:
+// CommitStock reads o1 as RESERVED, then another transaction expires o1 and
+// o2 reserves the very units it gave back, and only then does CommitStock
+// load the (now fresh) stock. Without a lock on the reservation itself it
+// would sell o1 out of o2's hold. The commit must lose (retryable), and the
+// retry must see EXPIRED, find nothing available and end COMMIT_SHORT, with
+// o2's hold intact.
+func TestCommitStock_ReservationChangedUnderneath(t *testing.T) {
+	e := newRaceEnv(t)
+	interleaved := &beforeFind{Repository: e.stocks}
+	interleaved.hook = func() {
+		e.expire(t)
+		e.reserve(t, "o-race-2", e.now)
+	}
+
+	out, err := e.commit(interleaved, "o-race-1")
 	if !errors.Is(err, kernel.ErrConcurrentUpdate) {
 		t.Fatalf("commit over a changed reservation = %+v, %v; want a retryable concurrent update", out, err)
 	}
 
 	// The failed attempt rolled back; the retry reloads and sees EXPIRED.
-	retry := inventory.ProvideCommitStock(reservations, stocks, tx, inbox, publisher{}, now, rec)
-	out, err = retry.Execute(c, dto.CommitStockInput{OrderID: "o-race-1"})
+	out, err = e.commit(e.stocks, "o-race-1")
 	if err != nil || out.Status != "COMMIT_SHORT" {
 		t.Fatalf("retry = %+v, %v; want COMMIT_SHORT", out, err)
 	}
-	s, err := stocks.FindBySKU(c, "SKU-RACE")
-	if err != nil || s.OnHand() != 2 || s.Reserved() != 2 {
-		t.Fatalf("stock = %+v, %v; want on_hand 2 reserved 2 (o2's hold intact)", s, err)
+	if s := e.stockNow(t); s.OnHand() != 2 || s.Reserved() != 2 {
+		t.Fatalf("stock = on_hand %d reserved %d; want 2/2 (o2's hold intact)", s.OnHand(), s.Reserved())
 	}
-	out, err = retry.Execute(c, dto.CommitStockInput{OrderID: "o-race-2"})
+	out, err = e.commit(e.stocks, "o-race-2")
 	if err != nil || out.Status != "COMMITTED" {
 		t.Fatalf("o2 commit = %+v, %v; want COMMITTED", out, err)
+	}
+}
+
+// Same window, nobody reserves the units the sweep gave back: the stock the
+// commit loads now says reserved 0, so selling "from the reservation" fails
+// in the stock aggregate before the reservation is ever written. That is the
+// same lost race, not a final domain error: it must be retryable, and the
+// retry sells o1 from what is available (COMMITTED).
+func TestCommitStock_ExpiredUnderneathWithoutRereserve(t *testing.T) {
+	e := newRaceEnv(t)
+	interleaved := &beforeFind{Repository: e.stocks}
+	interleaved.hook = func() { e.expire(t) }
+
+	out, err := e.commit(interleaved, "o-race-1")
+	if !errors.Is(err, kernel.ErrConcurrentUpdate) {
+		t.Fatalf("commit over an expired reservation = %+v, %v; want a retryable concurrent update, not a final domain error", out, err)
+	}
+
+	out, err = e.commit(e.stocks, "o-race-1")
+	if err != nil || out.Status != "COMMITTED" {
+		t.Fatalf("retry = %+v, %v; want COMMITTED", out, err)
+	}
+	if s := e.stockNow(t); s.OnHand() != 0 || s.Reserved() != 0 {
+		t.Fatalf("stock = on_hand %d reserved %d; want 0/0", s.OnHand(), s.Reserved())
 	}
 }
