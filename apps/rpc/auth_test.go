@@ -59,7 +59,8 @@ func TestAuth_Required(t *testing.T) {
 			}
 		}))
 	}
-	create := &orderingv1.CreateOrderRequest{CustomerId: "c-1", Items: []*orderingv1.LineItem{
+	// No customer_id: a non-admin always orders for themselves (see TestOrdering_Ownership).
+	create := &orderingv1.CreateOrderRequest{Items: []*orderingv1.LineItem{
 		{Sku: "SKU-1", Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 100, Currency: "USD"}},
 	}}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{

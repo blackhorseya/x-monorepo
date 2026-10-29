@@ -2,6 +2,10 @@
 // thresholds in each script can be per RPC. Environment:
 //   BASE_URL  server root (default http://127.0.0.1:8080); RPCs live under /api
 //   API_KEY   X-API-Key when the server runs with auth on (optional)
+//             Ordering is owned by the caller (docs/identity.md). Where the server
+//             knows the caller (WhoAmI.anonymous = false) the scripts name no
+//             customer and the server uses the caller's subject; where it does
+//             not (auth off, even with a key sent) they name their own customers.
 import http from "k6/http";
 import { check } from "k6";
 import { Counter, Trend } from "k6/metrics";
@@ -24,6 +28,22 @@ export function rpc(method, body, extra = {}) {
   });
   rpcDuration.add(res.timings.duration, { rpc: method.split("/")[1] });
   return res;
+}
+
+// customerId is the customer_id for a request body. Whether the server knows
+// who is calling is the server's answer (IdentityService/WhoAmI), not something
+// to read off the environment: auth off ignores an X-API-Key that is sent, and
+// then customer_id is required. Anonymous → the script's own name; a principal
+// → nothing, the server uses the caller's subject. If WhoAmI cannot be asked
+// (e.g. auth required and no key) the name is sent: the request will be
+// refused for the credential, which is the error worth seeing. Asked once per VU.
+let anonymous;
+export function customerId(name) {
+  if (anonymous === undefined) {
+    const res = rpc("identity.v1.IdentityService/WhoAmI", {});
+    anonymous = res.status !== 200 || res.json("anonymous") === true;
+  }
+  return anonymous ? { customer_id: name } : {};
 }
 
 export function ok(res, what) {

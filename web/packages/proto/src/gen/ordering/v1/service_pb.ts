@@ -13,13 +13,17 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/service.proto.
  */
 export const file_ordering_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChlvcmRlcmluZy92MS9zZXJ2aWNlLnByb3RvEgtvcmRlcmluZy52MSJiChJDcmVhdGVPcmRlclJlcXVlc3QSHAoLY3VzdG9tZXJfaWQYASABKAlCB7pIBHICEAESLgoFaXRlbXMYAiADKAsyFS5vcmRlcmluZy52MS5MaW5lSXRlbUIIukgFkgECCAEiOAoTQ3JlYXRlT3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiYKD0dldE9yZGVyUmVxdWVzdBITCgJpZBgBIAEoCUIHukgEcgIQASI1ChBHZXRPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiKQoSQ2FuY2VsT3JkZXJSZXF1ZXN0EhMKAmlkGAEgASgJQge6SARyAhABIjgKE0NhbmNlbE9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciIrChRDb21wbGV0ZU9yZGVyUmVxdWVzdBITCgJpZBgBIAEoCUIHukgEcgIQASI6ChVDb21wbGV0ZU9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciKCAQoRTGlzdE9yZGVyc1JlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSKAoGc3RhdHVzGAIgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSGgoJcGFnZV9zaXplGAMgASgFQge6SAQaAigAEhIKCnBhZ2VfdG9rZW4YBCABKAkiUQoSTGlzdE9yZGVyc1Jlc3BvbnNlEiIKBm9yZGVycxgBIAMoCzISLm9yZGVyaW5nLnYxLk9yZGVyEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCTKiAwoMT3JkZXJTZXJ2aWNlElAKC0NyZWF0ZU9yZGVyEh8ub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXF1ZXN0GiAub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXNwb25zZRJHCghHZXRPcmRlchIcLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVxdWVzdBodLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVzcG9uc2USUAoLQ2FuY2VsT3JkZXISHy5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlc3BvbnNlElYKDUNvbXBsZXRlT3JkZXISIS5vcmRlcmluZy52MS5Db21wbGV0ZU9yZGVyUmVxdWVzdBoiLm9yZGVyaW5nLnYxLkNvbXBsZXRlT3JkZXJSZXNwb25zZRJNCgpMaXN0T3JkZXJzEh4ub3JkZXJpbmcudjEuTGlzdE9yZGVyc1JlcXVlc3QaHy5vcmRlcmluZy52MS5MaXN0T3JkZXJzUmVzcG9uc2ViBnByb3RvMw", [file_buf_validate_validate, file_ordering_v1_entity]);
+  fileDesc("ChlvcmRlcmluZy92MS9zZXJ2aWNlLnByb3RvEgtvcmRlcmluZy52MSJZChJDcmVhdGVPcmRlclJlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSLgoFaXRlbXMYAiADKAsyFS5vcmRlcmluZy52MS5MaW5lSXRlbUIIukgFkgECCAEiOAoTQ3JlYXRlT3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiYKD0dldE9yZGVyUmVxdWVzdBITCgJpZBgBIAEoCUIHukgEcgIQASI1ChBHZXRPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiKQoSQ2FuY2VsT3JkZXJSZXF1ZXN0EhMKAmlkGAEgASgJQge6SARyAhABIjgKE0NhbmNlbE9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciIrChRDb21wbGV0ZU9yZGVyUmVxdWVzdBITCgJpZBgBIAEoCUIHukgEcgIQASI6ChVDb21wbGV0ZU9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciKCAQoRTGlzdE9yZGVyc1JlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSKAoGc3RhdHVzGAIgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSGgoJcGFnZV9zaXplGAMgASgFQge6SAQaAigAEhIKCnBhZ2VfdG9rZW4YBCABKAkiUQoSTGlzdE9yZGVyc1Jlc3BvbnNlEiIKBm9yZGVycxgBIAMoCzISLm9yZGVyaW5nLnYxLk9yZGVyEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCTKiAwoMT3JkZXJTZXJ2aWNlElAKC0NyZWF0ZU9yZGVyEh8ub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXF1ZXN0GiAub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXNwb25zZRJHCghHZXRPcmRlchIcLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVxdWVzdBodLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVzcG9uc2USUAoLQ2FuY2VsT3JkZXISHy5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlc3BvbnNlElYKDUNvbXBsZXRlT3JkZXISIS5vcmRlcmluZy52MS5Db21wbGV0ZU9yZGVyUmVxdWVzdBoiLm9yZGVyaW5nLnYxLkNvbXBsZXRlT3JkZXJSZXNwb25zZRJNCgpMaXN0T3JkZXJzEh4ub3JkZXJpbmcudjEuTGlzdE9yZGVyc1JlcXVlc3QaHy5vcmRlcmluZy52MS5MaXN0T3JkZXJzUmVzcG9uc2ViBnByb3RvMw", [file_buf_validate_validate, file_ordering_v1_entity]);
 
 /**
  * @generated from message ordering.v1.CreateOrderRequest
  */
 export type CreateOrderRequest = Message<"ordering.v1.CreateOrderRequest"> & {
   /**
+   * Optional. Empty = the caller (their principal's subject). A non-admin may
+   * only name themselves; an admin may name any customer; an anonymous caller
+   * (auth off) must name one, else INVALID_ARGUMENT (order.empty_customer).
+   *
    * @generated from field: string customer_id = 1;
    */
   customerId: string;
@@ -161,7 +165,8 @@ export const CompleteOrderResponseSchema: GenMessage<CompleteOrderResponse> = /*
  */
 export type ListOrdersRequest = Message<"ordering.v1.ListOrdersRequest"> & {
   /**
-   * Empty = any customer.
+   * Empty = any customer for an admin or anonymous caller, the caller's own
+   * orders for anyone else. A non-admin naming another customer is PERMISSION_DENIED.
    *
    * @generated from field: string customer_id = 1;
    */
@@ -229,6 +234,14 @@ export const ListOrdersResponseSchema: GenMessage<ListOrdersResponse> = /*@__PUR
  */
 export const OrderService: GenService<{
   /**
+   * CreateOrder places a PENDING order. Whose order it is depends on who calls
+   * (auth.mode on, principal = the caller's account id or JWT sub):
+   *   - a non-admin always orders for themselves; naming another customer_id is
+   *     PERMISSION_DENIED (x-error-code: order.permission_denied);
+   *   - an admin (auth.admin_role) may order on behalf of a customer, and without
+   *     customer_id orders for themselves;
+   *   - anonymous (auth.mode off, or a public procedure): customer_id is required.
+   *
    * @generated from rpc ordering.v1.OrderService.CreateOrder
    */
   createOrder: {
@@ -237,6 +250,9 @@ export const OrderService: GenService<{
     output: typeof CreateOrderResponseSchema;
   },
   /**
+   * GetOrder reads one order. A non-admin reading someone else's order gets
+   * NOT_FOUND, the same answer as for an order that does not exist.
+   *
    * @generated from rpc ordering.v1.OrderService.GetOrder
    */
   getOrder: {
@@ -268,6 +284,8 @@ export const OrderService: GenService<{
    * ListOrders pages through orders newest first (create_time desc, id desc).
    * Cursor pagination per AIP-158: pass next_page_token back unchanged with the
    * SAME filters; a token issued for other filters is rejected as INVALID_ARGUMENT.
+   * A non-admin lists only their own orders: customer_id empty means themselves,
+   * another customer is PERMISSION_DENIED. Admin and anonymous callers filter freely.
    *
    * @generated from rpc ordering.v1.OrderService.ListOrders
    */

@@ -28,6 +28,7 @@ export const keys = {
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
   version: ["version"] as const,
   adminProbe: (generation: number) => ["admin-probe", generation] as const,
+  whoAmI: (generation: number) => ["who-am-i", generation] as const,
   accounts: ["accounts"] as const,
   account: (id: string) => ["account", id] as const,
   apiKeys: (accountId: string) => ["api-keys", accountId] as const,
@@ -207,6 +208,19 @@ export const adminProbeQuery = (generation: number) =>
         throw err;
       }
     },
+    staleTime: 60_000,
+    gcTime: 60_000,
+    retry: false,
+  });
+
+// Who the server thinks the current credential is. The order form reads `anonymous` from it: an
+// anonymous caller (auth off / optional, nothing sent) has to name the customer, a known one is
+// the customer unless the admin probe says otherwise. Keyed by the credential generation like the
+// probe, so a late answer for the previous credential is never read for the new one.
+export const whoAmIQuery = (generation: number) =>
+  queryOptions({
+    queryKey: keys.whoAmI(generation),
+    queryFn: async () => identity.whoAmI({}),
     staleTime: 60_000,
     gcTime: 60_000,
     retry: false,

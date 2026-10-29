@@ -13,12 +13,15 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -41,6 +44,7 @@ var ProviderSet = wire.NewSet(
 
 	// application (decorated; see decorate). *usecasex.Recorder and the
 	// message.Publisher (outbox) are shared across BCs: apps provide them.
+	ProvideOwnership,
 	ProvideCreateOrder,
 	ProvideGetOrder,
 	ProvideCancelOrder,
@@ -56,6 +60,17 @@ var ProviderSet = wire.NewSet(
 	ProvideSubscriptions,
 	ProvideGauges,
 )
+
+// ProvideOwnership is the ownership policy of CreateOrder / GetOrder / ListOrders:
+// who counts as admin comes from config auth.admin_role.
+func ProvideOwnership(auth config.Auth) *ownership.Policy {
+	role := auth.AdminRole
+	if role == "" {
+		role = admin.DefaultAdminRole // config.Load sets the same; this is for hand-built configs (tests)
+	}
+
+	return ownership.New(role)
+}
 
 // ProvideOrderRepository picks the persistence backend from the composition
 // root's database handle: nil (APP_POSTGRES_URL unset) means in-memory — local dev
@@ -139,12 +154,12 @@ func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transacto
 	)
 }
 
-func ProvideCreateOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, rec *usecasex.Recorder) rpc.CreateOrderUC {
-	return decorateTx("ordering.create_order", rec, tx, inbox, usecase.NewCreateOrder(repo, events, ids, clock))
+func ProvideCreateOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy, rec *usecasex.Recorder) rpc.CreateOrderUC {
+	return decorateTx("ordering.create_order", rec, tx, inbox, usecase.NewCreateOrder(repo, events, ids, clock, own))
 }
 
-func ProvideGetOrder(repo order.Repository, rec *usecasex.Recorder) rpc.GetOrderUC {
-	return decorate("ordering.get_order", rec, usecase.NewGetOrder(repo))
+func ProvideGetOrder(repo order.Repository, own *ownership.Policy, rec *usecasex.Recorder) rpc.GetOrderUC {
+	return decorate("ordering.get_order", rec, usecase.NewGetOrder(repo, own))
 }
 
 func ProvideCancelOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) rpc.CancelOrderUC {
@@ -167,6 +182,6 @@ func ProvideOrderStats(repo order.Repository, rec *usecasex.Recorder) metrics.Or
 	return decorate("ordering.order_stats", rec, usecase.NewOrderStats(repo))
 }
 
-func ProvideListOrders(repo order.Repository, rec *usecasex.Recorder) rpc.ListOrdersUC {
-	return decorate("ordering.list_orders", rec, usecase.NewListOrders(repo))
+func ProvideListOrders(repo order.Repository, own *ownership.Policy, rec *usecasex.Recorder) rpc.ListOrdersUC {
+	return decorate("ordering.list_orders", rec, usecase.NewListOrders(repo, own))
 }

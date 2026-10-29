@@ -15,6 +15,11 @@ type ListParams struct {
 type Repository interface {
 	// FindByID returns ErrNotFound when the order does not exist.
 	FindByID(c context.Context, id ID) (*Order, error)
+	// FindByIDForCustomer is FindByID restricted to one customer's orders: an
+	// order of somebody else is ErrNotFound, decided where the row is selected
+	// (WHERE id AND customer_id), so a foreign order costs what a missing one
+	// costs — its items are never loaded.
+	FindByIDForCustomer(c context.Context, id ID, customerID string) (*Order, error)
 	// Save inserts a new order (Version 0; ErrDuplicate if the id is taken) or
 	// updates a loaded one, comparing Version: ErrStale when another writer saved
 	// it first. The stored version advances on every save, but the in-memory

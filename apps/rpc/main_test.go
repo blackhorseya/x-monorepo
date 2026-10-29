@@ -130,7 +130,7 @@ func TestOrderService_E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	violations, ok := detail.(*validate.Violations)
-	if !ok || len(violations.GetViolations()) != 2 { // customer_id, items
+	if !ok || len(violations.GetViolations()) != 1 { // items (customer_id is optional: the use case decides)
 		t.Fatalf("violations = %v", detail)
 	}
 

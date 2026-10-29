@@ -10,6 +10,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
@@ -45,7 +46,7 @@ func TestCreateOrder_Transactional(t *testing.T) {
 	}
 	repo := ordering.ProvideOrderRepository(db, tel.Logger)
 	create := func(fail bool) (*dto.OrderOutput, error) {
-		uc := ordering.ProvideCreateOrder(repo, ordering.ProvideTransactor(db), ordering.ProvideInbox(db), publisher{fail: fail}, system.NewUUIDGenerator(), system.NewClock(), rec)
+		uc := ordering.ProvideCreateOrder(repo, ordering.ProvideTransactor(db), ordering.ProvideInbox(db), publisher{fail: fail}, system.NewUUIDGenerator(), system.NewClock(), ownership.New("admin"), rec)
 		return uc.Execute(c, dto.CreateOrderInput{
 			CustomerID: "c-tx",
 			Items:      []dto.LineItem{{SKU: "A", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 100, Currency: "USD"}}},
