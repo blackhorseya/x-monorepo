@@ -39,11 +39,11 @@
 
 ## Review contracts
 
-review 反覆抓到、但現有 CI 擋不住的類別。PR template（`.github/pull_request_template.md`）把它們列成 checkbox；派工 brief 與 reviewer 也照這份對。不適用就在 PR 寫 `N/A` 與一句理由。
+review 反覆抓到、但現有 CI 擋不住的類別。PR template（`.github/pull_request_template.md`）把它們列成 checkbox；實作者的派工 brief、PR 驗證模板與 reviewer 的 brief 都照這份對（brief 要明示適用的小節）。不適用就在 PR 寫 `N/A` 與一句理由。
 
 ### proto 變更：本機驗證要明列 TS freshness（#229）
 - 驗證回報逐項列 Go、OpenAPI、Wire、TS 的指令與結果，不能只寫「gen 乾淨」。
-- `task check-gen-fresh` 只涵蓋 Go / OpenAPI / Wire，**不是** TS 的證據；TS 要用 `task check-gen-fresh-all`（= CI gen-freshness：`task gen wire gen-ts` 後不帶 pathspec 的 `git diff`，範圍與 CI 相同；先 `git add` 你的改動，否則未 stage 的修改也會被算成 diff）。
+- `task check-gen-fresh` 只涵蓋 Go / OpenAPI / Wire，**不是** TS 的證據；TS 要用 `task check-gen-fresh-all`（= CI gen-freshness（CI 直接呼叫這個 task，只有一份定義）：`task gen wire gen-ts` 後不帶 pathspec 的 `git diff`，範圍與 CI 相同；先 `git add` 你的改動，否則未 stage 的修改也會被算成 diff）。
 - `gen-ts` 需要網路：連不上就回報「TS 未驗證」，不要記成已新鮮。CI 的 gen-freshness 仍是 fail-closed gate。
 
 ### migration 宣稱線上可用：驗完整交易的鎖（#228）
@@ -64,6 +64,8 @@ review 反覆抓到、但現有 CI 擋不住的類別。PR template（`.github/p
 - 限流的預設值與啟用檢查：必要的限制為 0（如 `http.rate_limit.rps=0`）時是拒絕啟用還是靜默關閉？「沿用既有限流」不等於「一定有非零限制」。
 - 清理 eligibility、實際清理週期與批次預算；「單列會到期」不等於「總量有界」。
 - 測試：從真 entry point 送不存在且無有效簽章的隨機 ID，斷言拒絕／限流後 DB 新增列數有上限；同時保留合法路徑（先取消後 Login、prune 後取消、輪替後取消），避免防 DoS 修正破壞原子性。
+- 實作時：config tests 驗證必要限制為 0 會拒絕啟用；provider integration tests 驗證 batch 上限在寫入前檢查。
+- 不用任意字串 regex 掃文件取代設計判讀，也不把 SQL 模型當壓測。
 - 限流策略由設計者決定，不要求通用 quota framework；硬體吞吐與分散式限流另外量測。
 
 ### 為什麼只有 #229 有機器檢查

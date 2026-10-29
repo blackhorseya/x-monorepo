@@ -73,9 +73,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
         with: { tools: "true" }   # ./bin cached on the pinned tool versions
-      - run: task gen wire gen-ts
-      - name: generated code is stale → run `task gen wire gen-ts` and commit
-        run: git diff --exit-code
+      - run: task check-gen-fresh-all # one definition shared with local runs: gen wire gen-ts, then git diff
 
   lint:
     needs: affected

@@ -140,7 +140,7 @@ tasks:
         }
 
   check-gen-fresh-all:
-    desc: same as the CI gen-freshness job — task gen wire gen-ts, then any unstaged diff fails (same scope as CI's `git diff --exit-code`, incl. TS; stage your changes first; needs network)
+    desc: the CI gen-freshness job runs exactly this — task gen wire gen-ts, then any unstaged diff fails (same scope as CI's `git diff --exit-code`, incl. TS; stage your changes first; needs network)
     cmds:
       - task: gen
       - task: wire
