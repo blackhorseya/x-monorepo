@@ -134,13 +134,19 @@ func TestLastAdminGuard_ExpiryDuringLockWaitProviderPostgres(t *testing.T) {
 		revoke := identity.ProvideRevokeAPIKey(f.keys, census, cfg, clock, tx, rec)
 
 		return env{
-			run:     expiryRun{db: db, clock: clock},
-			disable: func(id account.ID) error { _, err := disable.Execute(c, dto.DisableAccountInput{ID: id.String()}); return err },
+			run: expiryRun{db: db, clock: clock},
+			disable: func(id account.ID) error {
+				_, err := disable.Execute(c, dto.DisableAccountInput{ID: id.String()})
+				return err
+			},
 			assign: func(id account.ID) error {
 				_, err := assign.Execute(c, dto.AssignRolesInput{ID: id.String(), Roles: []string{"viewer"}})
 				return err
 			},
-			revoke: func(id apikey.ID) error { _, err := revoke.Execute(c, dto.RevokeAPIKeyInput{ID: id.String()}); return err },
+			revoke: func(id apikey.ID) error {
+				_, err := revoke.Execute(c, dto.RevokeAPIKeyInput{ID: id.String()})
+				return err
+			},
 		}
 	}
 	soon := f.now.Add(time.Hour)
