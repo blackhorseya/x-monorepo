@@ -17,6 +17,13 @@ export const BASE_URL = __ENV.BASE_URL || "http://127.0.0.1:8080";
 // Connect answers an RPC with 200 + the response message, or a non-200 status
 // and {"code": "<connect code>", "message": ...}; the x-error-code header is
 // the platform's own code (request.rate_limited, request.timeout, a domain code).
+// options.systemTags of every script: k6's defaults without url (a request's URL is the one
+// place a followed redirect or a mistaken BASE_URL could put a secret into every sample).
+export const systemTags = [
+  "proto", "subproto", "status", "method", "name", "group", "check", "error",
+  "error_code", "tls_version", "scenario", "service", "expected_response",
+];
+
 export const rpcDuration = new Trend("rpc_duration", true);
 export const rpcErrors = new Counter("rpc_errors");
 // Successful operations per RPC: the scripts threshold on it (count>0) so a run that was
@@ -28,7 +35,10 @@ export function rpc(method, body, extra = {}) {
   if (__ENV.API_KEY) headers["X-API-Key"] = __ENV.API_KEY;
   const res = http.post(`${BASE_URL}/api/${method}`, JSON.stringify(body), {
     headers,
-    tags: { rpc: method.split("/")[1], ...extra.tags },
+    // name = the RPC, not the URL; redirects 0: a 3xx is an answer to report, never followed (the
+    // Location is the server's to choose, and a followed URL is logged and tagged)
+    tags: { name: method, rpc: method.split("/")[1], ...extra.tags },
+    redirects: 0,
     timeout: extra.timeout || "30s",
     responseCallback: extra.responseCallback,
   });
@@ -79,7 +89,7 @@ export function createOrder(body, name) {
     resolved = "omit";
     return res;
   }
-  if (res.status === 400 && errorCode(res) === "order.empty_customer") {
+  if (res.status === 400 && knownCode(res) === "order.empty_customer") {
     resolved = "include";
     return rpc(method, { ...body, ...customerId(name) });
   }
@@ -112,6 +122,13 @@ export function ok(res, what) {
 // into them, into a code that merely looks like a code included. A response without any code is
 // its HTTP status.
 export function errorCode(res) {
+  // the one exit for every output (abort, tag, console): known value only, redacted if the key
+  // happens to be one
+  return redact(knownCode(res));
+}
+
+// knownCode is for decisions (the empty_customer split), never printed: unredacted.
+function knownCode(res) {
   if (res.status === 200) return "";
   const code = res.headers["X-Error-Code"] || jsonCode(res);
   if (!code) return String(res.status);

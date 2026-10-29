@@ -9,7 +9,7 @@
 import http from "k6/http";
 import { check } from "k6";
 import { Counter, Rate } from "k6/metrics";
-import { rpc, errorCode } from "./lib.js";
+import { rpc, errorCode, systemTags } from "./lib.js";
 
 const RPS = Number(__ENV.RPS || 50);
 const FACTOR = Number(__ENV.FACTOR || 4);
@@ -24,6 +24,7 @@ const rejected = new Counter("rate_limited");
 const wellFormed = new Rate("rate_limited_well_formed");
 
 export const options = {
+  systemTags,
   scenarios: {
     flood: {
       executor: "constant-arrival-rate",
