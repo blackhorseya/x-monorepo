@@ -333,6 +333,19 @@ if command -v jq >/dev/null; then
   echo 'not json' > "$tmp/canary-garbage.json"
   expect_match "canary: unparseable config fails closed" '^1 '                     "$(canary "$tmp/canary-garbage.json")"
   expect_match "canary: missing config file fails closed" '^1 '                    "$(canary "$tmp/canary-absent.json")"
+  # cosign initialize only warns when it cannot fetch the signing config, so what lands in TUF_ROOT
+  # may be empty or the wrong shape: jq reads zero inputs without an error, and that must not pass.
+  : > "$tmp/canary-empty.json"; printf ' \n\t\n' > "$tmp/canary-blank.json"
+  echo '{}' > "$tmp/canary-noarray.json"; echo '{"rekorTlogUrls":"https://rekor.sigstore.dev"}' > "$tmp/canary-str.json"
+  echo '{"rekorTlogUrls":["https://rekor.sigstore.dev"]}' > "$tmp/canary-strentry.json"
+  { echo "{\"rekorTlogUrls\":[$v1]}"; echo "{\"rekorTlogUrls\":[$v1]}"; } > "$tmp/canary-two.json"
+  expect_match "canary: empty file fails closed"          '^1 '                     "$(canary "$tmp/canary-empty.json")"
+  expect_match "canary: whitespace-only file fails closed" '^1 '                    "$(canary "$tmp/canary-blank.json")"
+  expect_match "canary: {} fails closed"                  '^1 '                     "$(canary "$tmp/canary-noarray.json")"
+  expect_match "canary: rekorTlogUrls not an array fails" '^1 '                     "$(canary "$tmp/canary-str.json")"
+  expect_match "canary: non-object log entry fails"       '^1 [^ ]'                 "$(canary "$tmp/canary-strentry.json")"
+  expect_match "canary: two JSON documents fail"          '^1 '                     "$(canary "$tmp/canary-two.json")"
+  expect_match "canary: empty file says unreadable, not ok" 'FAIL' "$(canary "$tmp/canary-empty.json")"
 
   # Resolution through cosign: a fake `initialize` writes the config under TUF_ROOT/<mirror>/targets/.
   canary_fake="$tmp/cosign-canary"; mkdir -p "$canary_fake"
@@ -353,6 +366,8 @@ FAKE
   expect_match "canary via cosign: v1 default passes"   '^0 '        "$(canary_via FAKE_CONFIG="$(canary_cfg viav1 "[$v1]")")"
   expect_match "canary via cosign: v2 default fails"    '^1 '        "$(canary_via FAKE_CONFIG="$(canary_cfg viav2 "[$v1,$v2]")")"
   expect_match "canary via cosign: no signing config fails" '^1 '   "$(canary_via FAKE_CONFIG=)"
+  expect_match "canary via cosign: empty signing config target fails" '^1 ' "$(canary_via FAKE_CONFIG="$tmp/canary-empty.json")"
+  expect_match "canary via cosign: whitespace target fails"  '^1 ' "$(canary_via FAKE_CONFIG="$tmp/canary-blank.json")"
   tuf_down=$(canary_via FAKE_TUF_DOWN=1)
   expect_match "canary via cosign: TUF unreachable fails closed" '^1 ' "$tuf_down"
   expect_match "canary via cosign: TUF outage is not called v2"  'TUF|initialize' "$tuf_down"
