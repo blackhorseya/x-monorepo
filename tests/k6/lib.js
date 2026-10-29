@@ -83,8 +83,8 @@ export function createOrder(body, name) {
     return rpc(method, { ...body, ...customerId(name) });
   }
   exec.test.abort(
-    `customer probe: ${method} answered status ${res.status} code ${errorCode(res)} ` +
-      `body ${String(res.body).slice(0, 200)}; not cached, not a customer answer (K6_CUSTOMER_MODE=include|omit skips the probe)`
+    `customer probe: ${method} answered status ${res.status} code ${errorCode(res)}; ` +
+      "not cached, not a customer answer (K6_CUSTOMER_MODE=include|omit skips the probe)"
   );
 }
 
@@ -103,10 +103,13 @@ export function ok(res, what) {
   return good ? res.json() : null;
 }
 
+// What a response says about itself, for logs, messages and tags: the Connect code only, and only
+// if it looks like one. The body and any other header are never echoed — a misbehaving upstream or
+// proxy can reflect the request's X-API-Key into them, and a log must not carry a credential.
+const CODE = /^[A-Za-z0-9_.-]{1,64}$/;
 export function errorCode(res) {
-  return (
-    res.headers["X-Error-Code"] || (res.status === 200 ? "" : safeCode(res))
-  );
+  const code = res.headers["X-Error-Code"] || (res.status === 200 ? "" : safeCode(res));
+  return code === "" || CODE.test(code) ? code : "(unrecognised code)";
 }
 
 function safeCode(res) {
