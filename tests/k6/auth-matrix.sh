@@ -31,7 +31,7 @@ stop() {
 trap stop EXIT
 
 fails=()
-# cell <name> <script> <expect: pass|fail> <match: text the k6 output must contain, or -> <key|-> <server env…>
+# cell <name> <script> <expect: the k6 exit code> <match: text the k6 output must contain, or -> <key|-> <server env…>
 #   env knobs: FAIL_PATH=<procedure> → a fault proxy in front of the rpc answers that procedure's
 #   first call 503 (once), REFLECT=1 → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
 #   k6 -e; FORBID=<text> → the k6 output must not contain it (a key must never be printed).
@@ -42,7 +42,7 @@ cell() {
     [ -n "$hit" ] || return 0
   fi
   local log="$bin/k6-auth-$name" id="auth-$$-$name" target="http://127.0.0.1:$port" t0=$SECONDS
-  echo "== $name ($s, expect $expect)"
+  echo "== $name ($s, expect exit $expect)"
   env "$@" "$bin/rpc" > "$log-rpc.log" 2>&1 & pid=$!
   # a worker in every cell: orders cells leave their outbox for it too, so the next cell's worker
   # does not start on a backlog (that is what stretches reservation_latency on a reused database)
@@ -63,9 +63,8 @@ cell() {
   local rc=0
   k6 run --quiet "tests/k6/$s.js" "${kenv[@]}" > "$log.log" 2>&1 || rc=$?
   stop
-  local got=pass; [ $rc -eq 0 ] || got=fail
-  if [ "$got" != "$expect" ]; then
-    echo "   ✗ $name: expected $expect, k6 exit $rc"; tail -n 25 "$log.log"; fails+=("$name")
+  if [ "$rc" != "$expect" ]; then
+    echo "   ✗ $name: expected k6 exit $expect, got $rc"; tail -n 25 "$log.log"; fails+=("$name")
   elif [ -n "${FORBID:-}" ] && grep -q -- "$FORBID" "$log.log"; then
     echo "   ✗ $name: k6 output contains the forbidden text (a credential?)"; fails+=("$name")
   elif [ "$match" != - ] && ! grep -q -- "$match" "$log.log"; then
@@ -78,27 +77,27 @@ cell() {
 # ── the 8 cells: {auth on, role-less key | auth on, admin key | auth off, no key | auth off, key sent} × script ──
 ON=(APP_AUTH_MODE=required)
 for s in reservation orders; do
-  cell "on-roleless-$s" "$s" pass - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
-  cell "on-admin-$s"    "$s" pass - "$ADMIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-admin=$ADMIN_KEY:admin"
-  cell "off-nokey-$s"   "$s" pass - -            APP_AUTH_MODE=off
-  cell "off-key-$s"     "$s" pass - "$PLAIN_KEY" APP_AUTH_MODE=off "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+  cell "on-roleless-$s" "$s" 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+  cell "on-admin-$s"    "$s" 0 - "$ADMIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-admin=$ADMIN_KEY:admin"
+  cell "off-nokey-$s"   "$s" 0 - -            APP_AUTH_MODE=off
+  cell "off-key-$s"     "$s" 0 - "$PLAIN_KEY" APP_AUTH_MODE=off "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 done
 
 # ── fixtures: per-procedure public, and a call that fails once ──
 # Only WhoAmI public: WhoAmI answers anonymous for everyone, but the key still authenticates every
 # other procedure — the script must not read "anonymous" off WhoAmI.
-cell whoami-public orders pass - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY" "APP_AUTH_PUBLIC=$WHOAMI"
+cell whoami-public orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY" "APP_AUTH_PUBLIC=$WHOAMI"
 # Only CreateOrder public with a role-less key: CreateOrder is anonymous (needs a customer), then
 # the key's GetOrder cannot see that customer's order. Not a supported combination (docs/operations.md):
-# it must fail, and with the server's real answer in the output.
-cell create-public orders fail order.not_found "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY" "APP_AUTH_PUBLIC=$CREATE"
+# it must fail (99: thresholds crossed), and with the server's real answer in the output.
+cell create-public orders 99 order.not_found "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY" "APP_AUTH_PUBLIC=$CREATE"
 # WhoAmI fails once (503): nothing may be decided from it, so the run is unaffected.
-FAIL_PATH=$WHOAMI cell whoami-503 orders pass - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
-# The deciding CreateOrder fails once (503): never cached as an answer, aborts naming the source.
-FAIL_PATH=$CREATE cell create-503 orders fail "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$WHOAMI cell whoami-503 orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+# The deciding CreateOrder fails once (503): never cached as an answer, aborts (108) naming the source.
+FAIL_PATH=$CREATE cell create-503 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 
 # The same failure with a body that echoes the key: abort names RPC, status and code, never the body.
-FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect orders fail "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
+FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 
 if [ ${#fails[@]} -gt 0 ]; then echo "auth matrix FAILED: ${fails[*]}"; exit 1; fi
 echo "auth matrix ok"
