@@ -105,7 +105,7 @@ tasks:
       - task: scripts-test
 
   scripts-test:
-    desc: 'scripts/test.sh: the CI / release decision scripts (ci-changes, releasable, next-version, release-gate-pr) against throwaway git repos'
+    desc: 'scripts/test.sh: the CI / release decision scripts (ci-changes, releasable, next-version, release-gate-pr) against throwaway git repos, and red-stage against sample go test output'
     cmds:
       - scripts/test.sh
 

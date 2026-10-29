@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the release / CI decision scripts: scripts/ci-changes.sh (which ci.yml jobs a change
 # runs), scripts/releasable.sh (does a change cut a release), scripts/next-version.sh (which
-# version) and scripts/release-gate-pr.sh (the PR comment built from the three). A wrong rule in
+# version), scripts/release-gate-pr.sh (the PR comment built from the three) and
+# scripts/red-stage.sh (where a RED `go test` run failed). A wrong rule in
 # ci-changes.sh skips a job silently — CI stays green — so the rules are pinned here.
 #
 #   scripts/test.sh          # task scripts-test; CI's scripts-test job

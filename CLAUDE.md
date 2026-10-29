@@ -166,3 +166,16 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - Receiver：domain `x`、usecase `uc`、infra `i`、handler `h`；interface 參數 `c context.Context`，
   實作內 `ctx := contextx.FromContext(c)`
 - PR title 遵循 Conventional Commits
+- **RED commit 要失敗在「目標」**：行為變更先提交失敗的測試，但「指令 exit 非零」不等於缺陷重現——typo、缺依賴、
+  fixture 建立失敗、上游 use case 先拒絕都會讓新測試變紅。
+  - behavioral fix（修 regression、改行為）：RED 必須失敗在**目標 assertion**（預期的 assertion 訊息）。
+    setup / fixture 失敗、上游先拒絕、compile failure 都不算這個行為的 RED。
+  - 新增 API / 型別的 feature：可以接受 compile-fail 型 RED，但要標明失敗類型（它只證明缺 API），
+    並另有 assertion 型測試在 GREEN 驗證行為、能拒絕錯誤的實作。不為了湊 assertion 對新 API 造無意義的測試。
+  - **RED evidence**（PR 描述或回報）：immutable SHA（完整 40 字元）、完整指令、target test、失敗類型
+    （`compile` / `runtime assertion` / `setup`）、預期的 assertion 訊息、實際失敗位置（`file:line` 與輸出）、
+    fixture 已成功的證據（失敗訊息在 seed 之後，或同 fixture 的另一個測試通過）、對應的 GREEN SHA。
+  - 純文件、註解、無可測行為的預設值變更，以及沒有可測邏輯的 CI 修正，免 RED。已凍結的 RED 歷史不重寫。
+  - `scripts/red-stage.sh -m '<預期訊息 regex>'` 讀 `go test` 輸出，分類成 `assertion` / `setup` / `compile` / `panic` / `pass`
+    （只有 `assertion` exit 0）。它只是候選分類：訊息有印出不代表那是對的 assertion，語意由 reviewer 判。
+    例：`git switch --detach <RED SHA> && go test -run '^TestX$' ./pkgs/ordering/... 2>&1 | scripts/red-stage.sh -m 'want 1 call'`
