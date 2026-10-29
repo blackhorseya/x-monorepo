@@ -70,18 +70,13 @@ func (x *Policy) ForList(c context.Context, requested string) (string, error) {
 	return p.Subject, nil
 }
 
-// CanRead reports whether the caller may see an order of customerID. Callers
-// that may not get "not found" from the use case, so an order's existence is
-// not revealed.
-func (x *Policy) CanRead(c context.Context, customerID string) bool {
-	p, ok := x.restricted(c)
-
-	return !ok || customerID == p.Subject
-}
-
 // OwnOnly returns the customer the caller is confined to, and true when they
 // are: a known non-admin principal. Admin and anonymous callers are not
-// confined (false). RED stub.
-func (x *Policy) OwnOnly(_ context.Context) (string, bool) {
-	return "", false
+// confined (false). Reads of a single order use it to put the owner into the
+// repository query itself, so somebody else's order is as cheap to refuse as a
+// missing one (nothing of it is loaded) and the two cannot be told apart.
+func (x *Policy) OwnOnly(c context.Context) (string, bool) {
+	p, ok := x.restricted(c)
+
+	return p.Subject, ok
 }

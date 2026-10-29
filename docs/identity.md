@@ -89,6 +89,7 @@ admin role 名稱是注入的 `auth.admin_role`（`ProvideOwnership`），不是
 | `GetOrder` | 讀別人的訂單 → `NOT_FOUND`（`order.not_found`，跟不存在的 id 一樣，不洩漏存在與否） | 現行 | 現行 |
 | `CancelOrder` / `CompleteOrder` | **這次沒改**（任何 caller 都能操作任何訂單；Follow-up） | 同 | 同 |
 
+- 非 admin 的 `GetOrder` 走 `Repository.FindByIDForCustomer`（postgres：`WHERE id = ? AND customer_id = ?`，不符就在載入 items 之前結束）：「不存在」與「不是你的」走同一條查詢路徑，回應與成本都一樣，不能靠回應時間分辨。admin / anonymous 照舊 `FindByID`。
 - page token 綁的是**解析後**的 customer，所以非 admin 不帶 filter 翻頁、token 跟自己的 Subject 一致。
 - `auth.mode: off` 時沒有 principal，整張表只剩 anonymous 那欄；consumer path 永遠是 anonymous，不受影響。
 - `auth.public` 列進去的 procedure 不跑 auth，也就是 anonymous：公開的 `GetOrder` 任何人都讀得到任何訂單。ownership 保護的是「帶了 credential 的人」。

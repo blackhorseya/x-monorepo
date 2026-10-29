@@ -27,14 +27,18 @@ func (uc *GetOrder) Execute(c context.Context, in dto.GetOrderInput) (*dto.Order
 		return nil, order.ErrInvalidID
 	}
 
-	o, err := uc.repo.FindByID(ctx, order.ID(in.OrderID))
+	// A confined caller's owner condition goes into the query, so somebody
+	// else's order is refused where the row is selected, before its items are
+	// loaded: indistinguishable from a missing one, in the answer and in the cost.
+	find := func() (*order.Order, error) { return uc.repo.FindByID(ctx, order.ID(in.OrderID)) }
+	if customer, confined := uc.own.OwnOnly(ctx); confined {
+		find = func() (*order.Order, error) {
+			return uc.repo.FindByIDForCustomer(ctx, order.ID(in.OrderID), customer)
+		}
+	}
+	o, err := find()
 	if err != nil {
 		return nil, err
-	}
-
-	// Somebody else's order is indistinguishable from a missing one.
-	if !uc.own.CanRead(ctx, o.CustomerID()) {
-		return nil, order.ErrNotFound
 	}
 
 	return mapper.ToOrderOutput(o), nil

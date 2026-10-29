@@ -69,9 +69,25 @@ func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order
 	return toDomain(row)
 }
 
-// FindByIDForCustomer: RED stub, ignores the customer.
-func (i *OrderRepository) FindByIDForCustomer(c context.Context, id order.ID, _ string) (*order.Order, error) {
-	return i.FindByID(c, id)
+// FindByIDForCustomer is FindByID for one customer's orders. The owner is part
+// of the row selection (WHERE id AND customer_id), so another customer's order
+// ends at "record not found" before the items are preloaded: it costs what a
+// missing id costs, and ErrNotFound is the only thing it can say.
+func (i *OrderRepository) FindByIDForCustomer(c context.Context, id order.ID, customerID string) (*order.Order, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var row orderRow
+	err := platformpg.TxOrDB(ctx, i.db).
+		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
+		Take(&row, "id = ? AND customer_id = ?", string(id), customerID).Error
+	if err != nil {
+		return nil, translate(fmt.Errorf("find order %s: %w", id, err))
+	}
+
+	return toDomain(row)
 }
 
 // Save writes the whole aggregate in one transaction. A never-saved order
