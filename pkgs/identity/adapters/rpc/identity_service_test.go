@@ -136,6 +136,18 @@ func TestIdentityService_EndToEnd(t *testing.T) {
 		t.Fatalf("last_use_time = %v, want just now", lu)
 	}
 
+	// A second DB admin, so the changes below are never about the last one. (The
+	// static root key is a break-glass outside the guard: it does not count.)
+	acc2, err := root.CreateAccount(c, connect.NewRequest(&identityv1.CreateAccountRequest{Name: "ops bot 2", Roles: []string{"admin"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2 := acc2.Msg.GetAccount().GetId()
+	minted2, err := root.CreateApiKey(c, connect.NewRequest(&identityv1.CreateApiKeyRequest{AccountId: id2, Name: "laptop"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// Roles change → next request sees it (TTL 0 here; DefaultCacheTTL in production).
 	if _, err := root.AssignRoles(c, connect.NewRequest(&identityv1.AssignRolesRequest{Id: id, Roles: []string{"viewer"}})); err != nil {
 		t.Fatal(err)
@@ -174,6 +186,24 @@ func TestIdentityService_EndToEnd(t *testing.T) {
 	keysOf, _ = root.ListApiKeys(c, connect.NewRequest(&identityv1.ListApiKeysRequest{AccountId: id}))
 	if len(keysOf.Msg.GetApiKeys()) != 1 || keysOf.Msg.GetApiKeys()[0].GetStatus() != identityv1.ApiKeyStatus_API_KEY_STATUS_REVOKED {
 		t.Fatalf("keys after revoke = %+v", keysOf)
+	}
+
+	// The remaining DB admin cannot be locked out, by any of the three writes:
+	// FAILED_PRECONDITION identity.last_admin, and nothing changed.
+	lastAdmin := func(what string, err error) {
+		t.Helper()
+		if connect.CodeOf(err) != connect.CodeFailedPrecondition || errorCode(err) != "identity.last_admin" {
+			t.Fatalf("%s: code = %v / %q, err = %v", what, connect.CodeOf(err), errorCode(err), err)
+		}
+	}
+	_, err = root.DisableAccount(c, connect.NewRequest(&identityv1.DisableAccountRequest{Id: id2}))
+	lastAdmin("disable last admin", err)
+	_, err = root.AssignRoles(c, connect.NewRequest(&identityv1.AssignRolesRequest{Id: id2, Roles: []string{"viewer"}}))
+	lastAdmin("drop last admin role", err)
+	_, err = root.RevokeApiKey(c, connect.NewRequest(&identityv1.RevokeApiKeyRequest{Id: minted2.Msg.GetApiKey().GetId()}))
+	lastAdmin("revoke last admin key", err)
+	if _, err := client(minted2.Msg.GetSecret()).ListAccounts(c, connect.NewRequest(&identityv1.ListAccountsRequest{})); err != nil {
+		t.Fatalf("the last admin still manages: %v", err)
 	}
 }
 
