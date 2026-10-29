@@ -56,3 +56,8 @@ func (h *Bootstrap) Run(c context.Context, out io.Writer, name string, roles []s
 
 	return nil
 }
+
+// RunInvite is Run for `worker bootstrap --admin-email` (RED stub).
+func (h *Bootstrap) RunInvite(c context.Context, out io.Writer, name string, roles []string, adminEmail string) error {
+	return fmt.Errorf("not implemented")
+}

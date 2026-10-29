@@ -117,3 +117,49 @@ func TestStatus(t *testing.T) {
 		t.Fatalf("unknown: %v", err)
 	}
 }
+
+func TestRevokeSessions(t *testing.T) {
+	a, _ := account.New("acc-1", "ops", []string{"admin"}, now)
+	if !a.SessionsRevokedAt().IsZero() {
+		t.Fatalf("a new account has never revoked: %v", a.SessionsRevokedAt())
+	}
+	later := now.Add(time.Hour)
+	if err := a.RevokeSessions(later); err != nil {
+		t.Fatal(err)
+	}
+	if !a.SessionsRevokedAt().Equal(later) || !a.UpdatedAt().Equal(later) {
+		t.Fatalf("revoked at %v updated at %v, want %v", a.SessionsRevokedAt(), a.UpdatedAt(), later)
+	}
+	// It touches nothing else: status and roles keep standing.
+	if !a.IsActive() || !a.HasRole("admin") {
+		t.Fatalf("RevokeSessions must not disable or strip roles: %+v", a)
+	}
+	// A second revocation moves the line forward, never back.
+	if err := a.RevokeSessions(now); err != nil || !a.SessionsRevokedAt().Equal(later) {
+		t.Fatalf("an earlier time must not move the line back: %v %v", err, a.SessionsRevokedAt())
+	}
+
+	r, err := account.Reconstitute(account.ReconstituteParams{ID: "acc-2", Name: "x", Status: account.StatusActive, CreatedAt: now, UpdatedAt: now, SessionsRevokedAt: later})
+	if err != nil || !r.SessionsRevokedAt().Equal(later) {
+		t.Fatalf("reconstitute keeps sessions_revoked_at: %v %v", r, err)
+	}
+}
+
+func TestCheckSession(t *testing.T) {
+	revoked := now
+	for name, tc := range map[string]struct {
+		revokedAt, issuedAt time.Time
+		want                error
+	}{
+		"never revoked":            {time.Time{}, now.Add(-24 * time.Hour), nil},
+		"never revoked, no iat":    {time.Time{}, time.Time{}, account.ErrMissingIssuedAt},
+		"issued before revocation": {revoked, now.Add(-time.Second), account.ErrSessionRevoked},
+		"issued at revocation":     {revoked, now, nil}, // "earlier than" is the rule: a re-login at that very second passes
+		"issued after revocation":  {revoked, now.Add(time.Second), nil},
+		"revoked, no iat":          {revoked, time.Time{}, account.ErrMissingIssuedAt},
+	} {
+		if err := account.CheckSession(tc.revokedAt, tc.issuedAt); !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
+		}
+	}
+}

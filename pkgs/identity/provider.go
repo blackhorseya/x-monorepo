@@ -23,6 +23,8 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/account"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/externalidentity"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/invite"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
@@ -38,6 +40,9 @@ var ProviderSet = wire.NewSet(
 	// infra → ports / repositories
 	ProvideAccountRepository,
 	ProvideAPIKeyRepository,
+	ProvideInviteRepository,
+	ProvideExternalIdentityRepository,
+	ProvideAuditLog,
 	ProvideTransactor,
 	ProvideAdminCensus,
 	system.NewClock,
@@ -61,6 +66,11 @@ var ProviderSet = wire.NewSet(
 	ProvideResolveAPIKey,
 	ProvideTouchAPIKey,
 	ProvideWhoAmI,
+	ProvideCreateInvite,
+	ProvideClaimInvite,
+	ProvideRevokeSessions,
+	ProvideResolveExternalIdentity,
+	ProvideProvisionExternalIdentity,
 	ProvideBootstrap,
 	wire.Struct(new(rpc.UseCases), "*"),
 
@@ -87,6 +97,32 @@ func ProvideAPIKeyRepository(db *gorm.DB) apikey.Repository {
 	}
 
 	return postgres.NewAPIKeyRepository(db)
+}
+
+func ProvideInviteRepository(db *gorm.DB) invite.Repository {
+	if db == nil {
+		return memory.NewInviteRepository()
+	}
+
+	return postgres.NewInviteRepository(db)
+}
+
+func ProvideExternalIdentityRepository(db *gorm.DB) externalidentity.Repository {
+	if db == nil {
+		return memory.NewExternalIdentityRepository()
+	}
+
+	return postgres.NewExternalIdentityRepository(db)
+}
+
+// ProvideAuditLog pairs with the repositories: a row in the caller's
+// transaction on Postgres, a slice in memory.
+func ProvideAuditLog(db *gorm.DB) port.AuditLog {
+	if db == nil {
+		return memory.NewAuditLog()
+	}
+
+	return postgres.NewAuditLog(db)
 }
 
 // ProvideTransactor pairs with the repositories: a real transaction on
@@ -215,6 +251,31 @@ func ProvideWhoAmI(rec *usecasex.Recorder) rpc.WhoAmIUC {
 
 // ProvideBootstrap is `worker bootstrap` (adapters/cli): first account + first
 // key in one transaction on an empty store.
-func ProvideBootstrap(accounts account.Repository, keys apikey.Repository, ids port.IDGenerator, secrets port.SecretGenerator, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) cli.BootstrapUC {
-	return decorateTx("identity.bootstrap", rec, tx, usecase.NewBootstrap(accounts, keys, ids, secrets, clock))
+func ProvideBootstrap(accounts account.Repository, keys apikey.Repository, invites invite.Repository, ids port.IDGenerator, secrets port.SecretGenerator, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) cli.BootstrapUC {
+	return decorateTx("identity.bootstrap", rec, tx, usecase.NewBootstrap(accounts, keys, invites, ids, secrets, clock))
+}
+
+func ProvideCreateInvite(accounts account.Repository, invites invite.Repository, ids port.IDGenerator, audit port.AuditLog, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.CreateInviteUC {
+	return decorateTx("identity.create_invite", rec, tx, usecase.NewCreateInvite(accounts, invites, ids, audit, clock))
+}
+
+// ProvideClaimInvite is one transaction: the invite row stays locked until the
+// binding commits, which is what lets only one of two claimants win.
+func ProvideClaimInvite(invites invite.Repository, bindings externalidentity.Repository, accounts account.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.ClaimInviteUC {
+	return decorateTx("identity.claim_invite", rec, tx, usecase.NewClaimInvite(invites, bindings, accounts, clock))
+}
+
+func ProvideRevokeSessions(accounts account.Repository, audit port.AuditLog, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.RevokeSessionsUC {
+	return decorateTx("identity.revoke_sessions", rec, tx, usecase.NewRevokeSessions(accounts, audit, clock))
+}
+
+// ProvideResolveExternalIdentity is the read behind the external resolver.
+func ProvideResolveExternalIdentity(bindings externalidentity.Repository, accounts account.Repository, rec *usecasex.Recorder) auth.ResolveExternalUC {
+	return decorate("identity.resolve_external_identity", rec, usecase.NewResolveExternalIdentity(bindings, accounts))
+}
+
+// ProvideProvisionExternalIdentity is auto_provision's first-sight write, in
+// one transaction (a lost race rolls it back whole).
+func ProvideProvisionExternalIdentity(accounts account.Repository, bindings externalidentity.Repository, ids port.IDGenerator, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) auth.ProvisionExternalUC {
+	return decorateTx("identity.provision_external_identity", rec, tx, usecase.NewProvisionExternalIdentity(accounts, bindings, ids, clock))
 }

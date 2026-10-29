@@ -138,3 +138,92 @@ func hex(b []byte) string {
 	}
 	return string(out)
 }
+
+// Integration (pgtest): `worker bootstrap --admin-email` on the real tables —
+// an admin account and an invite for that email, no API key, no secret in the
+// output or the log; the second run is a no-op.
+func TestBootstrapCommand_AdminEmail(t *testing.T) {
+	c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cfg := &config.AppConfig{Postgres: config.Postgres{URL: pgtest.URL(t)}, Log: config.Log{Level: "debug", Format: "text"}, Auth: config.Auth{AdminRole: "admin"}}
+	tel, telCleanup, err := otel.New(cfg.OTel, cfg.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	db, dbCleanup, err := postgres.NewDB(cfg.Postgres, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbCleanup()
+	if err := postgres.Up(c, cfg.Postgres, identitypg.Migration()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WithContext(c).Exec("TRUNCATE identity.api_keys, identity.accounts CASCADE").Error; err != nil {
+		t.Fatal(err)
+	}
+	count := func(tbl, where string) int64 {
+		var n int64
+		if err := db.WithContext(c).Raw("SELECT count(*) FROM " + tbl + " WHERE " + where).Scan(&n).Error; err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	pc, err := pgx.ParseConfig(cfg.Postgres.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := net.JoinHostPort(pc.Host, strconv.Itoa(int(pc.Port)))
+	exec := func(args ...string) (out, logged string, err error) {
+		var buf, logBuf bytes.Buffer
+		cmd := newRootCmd(func() (*config.AppConfig, error) { return cfg, nil })
+		cmd.SetOut(&buf)
+		cmd.SetErr(io.Discard)
+		cmd.SetArgs(append([]string{"bootstrap", "--insecure-allow-plaintext", "--expect-target", target}, args...))
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		defer slog.SetDefault(prev)
+		err = cmd.ExecuteContext(c)
+		return buf.String(), logBuf.String(), err
+	}
+
+	// The key flags belong to the API-key path; mixing them in is a usage error
+	// that never opens the database.
+	for _, args := range [][]string{{"--admin-email", "a@b.co", "--key-name", "k"}, {"--admin-email", "a@b.co", "--expires-in", "1h"}} {
+		if _, _, err := exec(args...); err == nil || !strings.Contains(err.Error(), "--admin-email") {
+			t.Fatalf("bootstrap %v = %v, want a usage error naming --admin-email", args, err)
+		}
+	}
+	if count("identity.accounts", "true") != 0 {
+		t.Fatal("a usage error wrote rows")
+	}
+	// A malformed email writes nothing.
+	if _, _, err := exec("--admin-email", "not-an-email"); err == nil || count("identity.accounts", "true") != 0 {
+		t.Fatalf("bad email = %v, accounts %d", err, count("identity.accounts", "true"))
+	}
+
+	out, logged, err := exec("--admin-email", "Admin@Example.com", "--name", "root")
+	if err != nil {
+		t.Fatalf("bootstrap: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "(root) roles=[admin]") || !strings.Contains(out, "for admin@example.com") || strings.Contains(out, "X-API-Key") || strings.Contains(out, "xk_") {
+		t.Fatalf("bootstrap output:\n%s", out)
+	}
+	if strings.Contains(logged, "xk_") || strings.Contains(logged, "X-API-Key") {
+		t.Fatalf("a secret reached the log:\n%s", logged)
+	}
+	if count("identity.accounts", "name = 'root' AND status = 'ACTIVE' AND roles = '[\"admin\"]'::jsonb") != 1 ||
+		count("identity.api_keys", "true") != 0 ||
+		count("identity.invites", "email = 'admin@example.com' AND claimed_at IS NULL AND expires_at = created_at + interval '7 days'") != 1 {
+		t.Fatalf("rows: accounts=%d keys=%d invites=%d", count("identity.accounts", "true"), count("identity.api_keys", "true"), count("identity.invites", "true"))
+	}
+
+	// Second run: nothing written, exit 0.
+	out, _, err = exec("--admin-email", "admin@example.com")
+	if err != nil || !strings.Contains(out, "already bootstrapped") {
+		t.Fatalf("second bootstrap = %v\n%s", err, out)
+	}
+	if count("identity.accounts", "true") != 1 || count("identity.invites", "true") != 1 {
+		t.Fatal("second bootstrap wrote rows")
+	}
+}

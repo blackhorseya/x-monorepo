@@ -31,6 +31,9 @@ type (
 	ListAPIKeysUC    = usecasex.UseCase[dto.ListAPIKeysInput, *dto.ListAPIKeysOutput]
 	RevokeAPIKeyUC   = usecasex.UseCase[dto.RevokeAPIKeyInput, *dto.APIKeyOutput]
 	WhoAmIUC         = usecasex.UseCase[dto.WhoAmIInput, *dto.WhoAmIOutput]
+	CreateInviteUC   = usecasex.UseCase[dto.CreateInviteInput, *dto.InviteOutput]
+	ClaimInviteUC    = usecasex.UseCase[dto.ClaimInviteInput, *dto.AccountOutput]
+	RevokeSessionsUC = usecasex.UseCase[dto.RevokeSessionsInput, *dto.AccountOutput]
 )
 
 // UseCases groups what the service needs; wire fills it by field.

@@ -62,6 +62,8 @@ type accountRow struct {
 	Version   int64     `gorm:"not null"`
 	CreatedAt time.Time `gorm:"not null;autoCreateTime:false"`
 	UpdatedAt time.Time `gorm:"not null;autoUpdateTime:false"`
+	// SessionsRevokedAt NULL: never revoked.
+	SessionsRevokedAt *time.Time `gorm:"autoUpdateTime:false"`
 }
 
 func (accountRow) TableName() string { return Schema + ".accounts" }
@@ -72,9 +74,15 @@ func toAccount(row accountRow) (*account.Account, error) {
 		return nil, fmt.Errorf("account %s: %w", row.ID, err)
 	}
 
+	var revoked time.Time
+	if row.SessionsRevokedAt != nil {
+		revoked = row.SessionsRevokedAt.UTC()
+	}
+
 	return account.Reconstitute(account.ReconstituteParams{
 		ID: account.ID(row.ID), Name: row.Name, Roles: row.Roles, Status: status,
 		Version: row.Version, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC(),
+		SessionsRevokedAt: revoked,
 	})
 }
 
@@ -98,7 +106,7 @@ func (i *AccountRepository) Add(c context.Context, a *account.Account) error {
 		return err
 	}
 
-	row := accountRow{ID: a.ID().String(), Name: a.Name(), Roles: a.Roles(), Status: a.Status().String(), Version: 1, CreatedAt: a.CreatedAt(), UpdatedAt: a.UpdatedAt()}
+	row := accountRow{ID: a.ID().String(), Name: a.Name(), Roles: a.Roles(), Status: a.Status().String(), Version: 1, CreatedAt: a.CreatedAt(), UpdatedAt: a.UpdatedAt(), SessionsRevokedAt: nullTime(a.SessionsRevokedAt())}
 	if err := platformpg.TxOrDB(ctx, i.db).Create(&row).Error; err != nil {
 		return translate(fmt.Errorf("insert account %s: %w", a.ID(), err), nil, account.ErrDuplicate)
 	}
@@ -117,11 +125,12 @@ func (i *AccountRepository) Save(c context.Context, a *account.Account) error {
 	res := platformpg.TxOrDB(ctx, i.db).Model(&accountRow{}).
 		Where("id = ? AND version = ?", a.ID().String(), a.Version()).
 		Updates(map[string]any{
-			"name":       a.Name(),
-			"roles":      roles(a.Roles()),
-			"status":     a.Status().String(),
-			"updated_at": a.UpdatedAt(),
-			"version":    gorm.Expr("version + 1"),
+			"name":                a.Name(),
+			"roles":               roles(a.Roles()),
+			"status":              a.Status().String(),
+			"updated_at":          a.UpdatedAt(),
+			"sessions_revoked_at": nullTime(a.SessionsRevokedAt()),
+			"version":             gorm.Expr("version + 1"),
 		})
 	if res.Error != nil {
 		return fmt.Errorf("update account %s: %w", a.ID(), res.Error)
@@ -168,4 +177,13 @@ func (i *AccountRepository) List(c context.Context, p account.ListParams) ([]*ac
 	}
 
 	return out, next, nil
+}
+
+// nullTime maps the domain's zero time to NULL.
+func nullTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+
+	return &t
 }

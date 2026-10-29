@@ -4,6 +4,7 @@
 package account
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -26,6 +27,8 @@ type Account struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
+	// sessionsRevokedAt: access tokens issued before it are refused. Zero: never revoked.
+	sessionsRevokedAt time.Time
 }
 
 // New creates an ACTIVE account. Roles are trimmed, de-duplicated and sorted;
@@ -56,6 +59,8 @@ type ReconstituteParams struct {
 	Version   int64
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// SessionsRevokedAt zero: never revoked.
+	SessionsRevokedAt time.Time
 }
 
 // Reconstitute rebuilds an Account from persistence. Only repositories should call it.
@@ -77,15 +82,16 @@ func Reconstitute(p ReconstituteParams) (*Account, error) {
 	return &Account{id: p.ID, name: p.Name, roles: roles, status: p.Status, version: p.Version, createdAt: p.CreatedAt, updatedAt: p.UpdatedAt}, nil
 }
 
-func (x *Account) ID() ID                { return x.id }
-func (x *Account) Name() string          { return x.name }
-func (x *Account) Roles() []string       { return slices.Clone(x.roles) }
-func (x *Account) Status() Status        { return x.status }
-func (x *Account) Version() int64        { return x.version }
-func (x *Account) CreatedAt() time.Time  { return x.createdAt }
-func (x *Account) UpdatedAt() time.Time  { return x.updatedAt }
-func (x *Account) IsActive() bool        { return x.status == StatusActive }
-func (x *Account) HasRole(r string) bool { return slices.Contains(x.roles, r) }
+func (x *Account) ID() ID                       { return x.id }
+func (x *Account) Name() string                 { return x.name }
+func (x *Account) Roles() []string              { return slices.Clone(x.roles) }
+func (x *Account) Status() Status               { return x.status }
+func (x *Account) Version() int64               { return x.version }
+func (x *Account) CreatedAt() time.Time         { return x.createdAt }
+func (x *Account) UpdatedAt() time.Time         { return x.updatedAt }
+func (x *Account) SessionsRevokedAt() time.Time { return time.Time{} }
+func (x *Account) IsActive() bool               { return x.status == StatusActive }
+func (x *Account) HasRole(r string) bool        { return slices.Contains(x.roles, r) }
 
 // Disable refuses every credential of the account from now on. The keys are
 // untouched: Enable brings them back.
@@ -110,6 +116,9 @@ func (x *Account) Enable(now time.Time) error {
 	return nil
 }
 
+// RevokeSessions refuses every access token issued before now (RED stub).
+func (x *Account) RevokeSessions(now time.Time) error { return errNotImplemented }
+
 // AssignRoles replaces the roles (an empty list clears them). The change
 // reaches resolved principals within the resolver cache TTL.
 func (x *Account) AssignRoles(roles []string, now time.Time) error {
@@ -122,6 +131,11 @@ func (x *Account) AssignRoles(roles []string, now time.Time) error {
 
 	return nil
 }
+
+// CheckSession decides whether an access token issued at issuedAt may still be
+// used by an account whose sessions were revoked at revokedAt (zero: never).
+// RED stub.
+func CheckSession(revokedAt, issuedAt time.Time) error { return nil }
 
 // normalizeRoles trims, rejects empties, de-duplicates and sorts, so two
 // accounts with the same roles compare equal whatever order a client sent.
@@ -140,3 +154,5 @@ func normalizeRoles(roles []string) ([]string, error) {
 
 	return out, nil
 }
+
+var errNotImplemented = errors.New("not implemented")

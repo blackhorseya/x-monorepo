@@ -9,6 +9,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/account"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/invite"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
 
@@ -22,13 +23,14 @@ import (
 type Bootstrap struct {
 	accounts account.Repository
 	keys     apikey.Repository
+	invites  invite.Repository
 	ids      port.IDGenerator
 	secrets  port.SecretGenerator
 	clock    port.Clock
 }
 
-func NewBootstrap(accounts account.Repository, keys apikey.Repository, ids port.IDGenerator, secrets port.SecretGenerator, clock port.Clock) *Bootstrap {
-	return &Bootstrap{accounts: accounts, keys: keys, ids: ids, secrets: secrets, clock: clock}
+func NewBootstrap(accounts account.Repository, keys apikey.Repository, invites invite.Repository, ids port.IDGenerator, secrets port.SecretGenerator, clock port.Clock) *Bootstrap {
+	return &Bootstrap{accounts: accounts, keys: keys, invites: invites, ids: ids, secrets: secrets, clock: clock}
 }
 
 func (uc *Bootstrap) Execute(c context.Context, in dto.BootstrapInput) (*dto.BootstrapOutput, error) {
