@@ -46,26 +46,41 @@ log=$(mktemp); trap 'rm -f "$log"' EXIT
 # On that line cosign's own context comes first: `Error: signing <artifact>: <what failed>: <status
 # marker><status> <body>`. The artifact is an argument of this script (identified below) and can hold any text (a status
 # marker, `entry`, `503 `), so exactly that prefix is cut off, anchored at the start of the line and
-# not by deleting the text everywhere. A line without that prefix (or an artifact that could not be
-# identified) is not classified at all: fail closed. Then the FIRST (leftmost) status marker must carry exactly
+# not by deleting the text everywhere. A line without that prefix (or an argv that is not fully understood, see
+# parse_argv) is not classified at all: fail closed. Then the FIRST (leftmost) status marker must carry exactly
 # 409 (a quoted marker in the body comes after the real one). Matching is per line, so lines of a
 # mixed log never combine.
 # No gRPC `AlreadyExists` shape: cosign does not print one, so it is not retried.
 status_re='(log/entries\]\[([0-9]+)\]|adding rekor v2 entry: unexpected response: ([0-9]+)([^0-9]|$))'
-# The artifact is the first positional argument after the subcommand (`sign-blob --bundle=<file>
-# <artifact> --yes ...`, goreleaser's order), skipping flags and the value of the flags that take a
-# separate one. The subcommand and every other argument are NOT candidates: a file named
-# `sign-blob: <marker>` must not be taken for the prefix.
+# Conflict classification needs the artifact, and the artifact is only certain when the whole argv
+# is understood: `sign-blob`, then only the flags below, then exactly one positional (the artifact).
+#   --bundle=<f> | --bundle <f>        goreleaser (.goreleaser.yaml signs.args), always present
+#   --yes | -y                         goreleaser
+#   --key=<k> | --key <k>              scripts/cosign-smoke.sh, scripts/cosign-v2-conflict-smoke.sh
+#   --signing-config=<c> | --signing-config <c>   scripts/cosign-v2-conflict-smoke.sh
+# Anything else (another flag, `--`, no or several positionals, another subcommand) leaves `artifact`
+# empty and is_conflict says "not a conflict": the failure is propagated after one attempt. That is
+# intended: a string prefix cannot prove which argument is the artifact (a flag value that happens to
+# start the file name would pass), so an argument this script does not know turns the retry off.
+# Adding a flag to a caller means adding it here.
 artifact=
-skip=0
-for a in "${@:2}"; do
-  if [ "$skip" = 1 ]; then skip=0; continue; fi
-  case $a in
-    --key|--bundle|--signing-config|--output-signature|--output-certificate|--certificate) skip=1 ;;
-    -*) ;;
-    *) artifact=$a; break ;;
-  esac
-done
+parse_argv() {
+  local pos=()
+  [ "${1:-}" = sign-blob ] || return 0
+  shift
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --bundle=*|--key=*|--signing-config=*|--yes|-y) ;;
+      --bundle|--key|--signing-config) [ $# -ge 2 ] || return 0; shift ;;
+      -*) return 0 ;;
+      *) pos+=("$1") ;;
+    esac
+    shift
+  done
+  [ "${#pos[@]}" = 1 ] || return 0
+  artifact=${pos[0]}
+}
+parse_argv "$@"
 is_conflict() { # is_conflict <file>: the first `Error: ` line of it is a Rekor conflict error
   local line
   while IFS= read -r line || [ -n "$line" ]; do

@@ -427,6 +427,13 @@ SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART='fixture-client: adding
 expect_eq    "sign: an unknown flag whose value prefixes the file name never makes a conflict" 1 "$sb_tries"
 SB_REL=1 SB_PRE='--oidc-client-id fixture-client' sign_blob unknownflag-409 "v2path409 ok"
 expect_eq    "sign: an unrecognised artifact fails closed even on a real 409" 1 "$sb_tries"
+# The argv whitelist (parse_argv): known flags keep the retry, anything else turns it off.
+SB_REL=1 SB_PRE='-y' sign_blob argv-y "v2path409 ok"
+expect_eq    "sign: -y is a known flag, a real 409 is still retried" 2 "$sb_tries"
+SB_REL=1 SB_PRE='--' sign_blob argv-dashdash "v2path409 ok"
+expect_eq    "sign: -- is not understood, no retry" 1 "$sb_tries"
+SB_REL=1 SB_PRE='second-positional' sign_blob argv-two "v2path409 ok"
+expect_eq    "sign: two positionals are not understood, no retry" 1 "$sb_tries"
 SB_ART='artifact{build}.txt' sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"
