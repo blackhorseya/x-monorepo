@@ -32,5 +32,10 @@ func (uc *GetOrder) Execute(c context.Context, in dto.GetOrderInput) (*dto.Order
 		return nil, err
 	}
 
+	// Somebody else's order is indistinguishable from a missing one.
+	if !uc.own.CanRead(ctx, o.CustomerID()) {
+		return nil, order.ErrNotFound
+	}
+
 	return mapper.ToOrderOutput(o), nil
 }

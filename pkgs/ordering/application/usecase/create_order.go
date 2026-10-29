@@ -33,6 +33,11 @@ func NewCreateOrder(repo order.Repository, events port.EventPublisher, ids port.
 func (uc *CreateOrder) Execute(c context.Context, in dto.CreateOrderInput) (*dto.OrderOutput, error) {
 	ctx := contextx.FromContext(c)
 
+	customerID, err := uc.own.ForCreate(ctx, in.CustomerID)
+	if err != nil {
+		return nil, err
+	}
+
 	items := make([]order.LineItem, 0, len(in.Items))
 	for _, it := range in.Items {
 		price, err := kernel.NewMoney(it.UnitPrice.AmountMinor, it.UnitPrice.Currency)
@@ -51,7 +56,7 @@ func (uc *CreateOrder) Execute(c context.Context, in dto.CreateOrderInput) (*dto
 		return nil, fmt.Errorf("generate order id: %w", err)
 	}
 
-	o, err := order.New(order.Params{ID: order.ID(id), CustomerID: in.CustomerID, Items: items, Now: uc.clock.Now()})
+	o, err := order.New(order.Params{ID: order.ID(id), CustomerID: customerID, Items: items, Now: uc.clock.Now()})
 	if err != nil {
 		return nil, err
 	}

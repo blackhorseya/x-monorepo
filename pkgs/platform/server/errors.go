@@ -37,6 +37,8 @@ func ToConnectError(err error) error {
 		code = connect.CodeFailedPrecondition
 	case kernel.KindConflict:
 		code = connect.CodeAlreadyExists
+	case kernel.KindPermissionDenied:
+		code = connect.CodePermissionDenied
 	}
 
 	ce := connect.NewError(code, errors.New(de.Message()))

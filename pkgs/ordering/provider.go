@@ -20,6 +20,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -63,7 +64,12 @@ var ProviderSet = wire.NewSet(
 // ProvideOwnership is the ownership policy of CreateOrder / GetOrder / ListOrders:
 // who counts as admin comes from config auth.admin_role.
 func ProvideOwnership(auth config.Auth) *ownership.Policy {
-	return ownership.New(auth.AdminRole)
+	role := auth.AdminRole
+	if role == "" {
+		role = admin.DefaultAdminRole // config.Load sets the same; this is for hand-built configs (tests)
+	}
+
+	return ownership.New(role)
 }
 
 // ProvideOrderRepository picks the persistence backend from the composition
