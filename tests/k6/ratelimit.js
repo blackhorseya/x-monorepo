@@ -9,7 +9,7 @@
 import http from "k6/http";
 import { check } from "k6";
 import { Counter, Rate } from "k6/metrics";
-import { rpc, errorCode, systemTags } from "./lib.js";
+import { rpc, knownCode, systemTags } from "./lib.js";
 
 const RPS = Number(__ENV.RPS || 50);
 const FACTOR = Number(__ENV.FACTOR || 4);
@@ -64,7 +64,7 @@ export default function () {
       429: (r) => r.status === 429,
       "code resource_exhausted": (r) => r.json("code") === "resource_exhausted",
       "x-error-code request.rate_limited": (r) =>
-        errorCode(r) === "request.rate_limited",
+        knownCode(r) === "request.rate_limited",
       "Retry-After integer >= 1": () =>
         Number.isInteger(retryAfter) && retryAfter >= 1,
     })

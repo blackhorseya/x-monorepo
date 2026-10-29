@@ -127,8 +127,9 @@ export function errorCode(res) {
   return redact(knownCode(res));
 }
 
-// knownCode is for decisions (the empty_customer split), never printed: unredacted.
-function knownCode(res) {
+// knownCode is for decisions (the empty_customer split, the 429 / 504 checks), never printed or
+// tagged: unredacted. errorCode() is for output.
+export function knownCode(res) {
   if (res.status === 200) return "";
   const code = res.headers["X-Error-Code"] || jsonCode(res);
   if (!code) return String(res.status);
