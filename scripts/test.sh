@@ -299,7 +299,7 @@ smoke() { # smoke <skip-sign-n> -> prints "<exit> <FAIL line, if any>"
 }
 if python3 -c 'import yaml' 2>/dev/null; then
   expect_match "smoke: every sign writes a bundle passes"            '^0 $' "$(smoke 0)"
-  expect_match "smoke: 2nd sign of the artifact leaves no bundle fails" '^1 FAIL: .*bundle' "$(smoke 3)"
+  expect_match "smoke: 2nd sign of the artifact leaves no bundle fails" '^1 FAIL: signing the same artifact again' "$(smoke 3)"
 else
   echo "skip: cosign-smoke cases need python3 -c 'import yaml'"
 fi

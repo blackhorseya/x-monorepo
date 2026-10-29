@@ -82,8 +82,11 @@ checksum:
 # so verify with --bundle. See README → Release → 驗證. Snapshots skip this (`--skip=sign`).
 # cosign is pinned to >= v3.1.4 (release.yml / ci.yml `cosign-release`): v3.0.6 fails the whole
 # sign when Rekor answers 409 "equivalent entry already exists" (#195), v3.1.4 fetches that entry.
+# That is Rekor v1 only (#215): scripts/cosign-sign-blob.sh runs the same `cosign sign-blob` and, on
+# a Rekor 409 only, signs again (fresh keyless key) at most twice more; anything else, or the
+# retries running out, or an empty bundle, fails the release.
 signs:
-  - cmd: cosign
+  - cmd: scripts/cosign-sign-blob.sh
     artifacts: checksum
     signature: "${artifact}.sigstore.json"
     args:
