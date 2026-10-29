@@ -53,3 +53,21 @@ test("no admin role: Stock has no Set form, an admin does", async ({ page }) => 
   await useKey(page, ADMIN_KEY);
   await expect(page.getByRole("button", { name: "Set", exact: true })).toBeVisible();
 });
+
+// "Not an admin" is an answer (PERMISSION_DENIED), not a failure: it is not retried.
+test("no admin role: the probe is not retried", async ({ page }) => {
+  let probes = 0;
+  await page.route("**/identity.v1.IdentityService/ListAccounts", (route) => {
+    if (route.request().headers()["x-api-key"] === OPS_KEY) probes++;
+    return route.continue();
+  });
+  await page.goto("/orders");
+  await useKey(page, OPS_KEY);
+  await expect(navLink(page, "Orders")).toBeVisible();
+  await expect.poll(() => probes).toBeGreaterThan(0);
+  await page.waitForTimeout(500);
+  const settled = probes;
+  await page.waitForTimeout(3_000); // longer than any retry delay would be
+  expect(probes).toBe(settled);
+  await expect(page.getByText("Could not confirm admin access")).toHaveCount(0);
+});
