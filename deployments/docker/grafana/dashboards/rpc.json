@@ -986,13 +986,108 @@
       }
     },
     {
+      "id": 42,
+      "title": "CreateOrder results / s",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "ordering_create_order_total{result}: what CreateOrder ended in, counted after the transaction committed (a counter: sum across replicas). created = a new order was written; replayed = the idempotency key had already created this very request and the original order came back (nothing written, no event); key_reused = the key was already spent on different items (ALREADY_EXISTS order.idempotency_key_reused). Other failures (validation, permission, infrastructure) are not here: see 'Non-ok outcomes by kind' for usecase ordering.create_order.",
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (result)(rate(ordering_create_order_total{job=\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 43,
+      "title": "CreateOrder retries and key conflicts (share of results)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "replayed / all results and key_reused / all results over the window. replayed is the retry protection doing its job (clients retrying after timeouts); a rising replayed share with flat latency is client or gateway retries, a rising one with rising CreateOrder latency means clients are timing out and retrying. key_reused is a client bug (one key sent for two different requests): it should be ~0, and a steady non-zero share points at one integration reusing keys.",
+      "gridPos": {
+        "x": 12,
+        "y": 49,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(ordering_create_order_total{job=\"$service\",result=\"replayed\"}[$__rate_interval])) / clamp_min(sum(rate(ordering_create_order_total{job=\"$service\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "replayed"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(ordering_create_order_total{job=\"$service\",result=\"key_reused\"}[$__rate_interval])) / clamp_min(sum(rate(ordering_create_order_total{job=\"$service\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "key_reused"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "id": 14,
       "type": "row",
       "title": "Plain HTTP routes (docs / openapi / 404) \u2014 otelgin; RPCs are above (otelconnect)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 49,
+        "y": 57,
         "w": 24,
         "h": 1
       },
@@ -1008,7 +1103,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 58,
         "w": 12,
         "h": 8
       },
@@ -1050,7 +1145,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 50,
+        "y": 58,
         "w": 12,
         "h": 8
       },
@@ -1089,7 +1184,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 58,
+        "y": 66,
         "w": 24,
         "h": 1
       },
@@ -1105,7 +1200,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 59,
+        "y": 67,
         "w": 6,
         "h": 8
       },
@@ -1147,7 +1242,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 59,
+        "y": 67,
         "w": 6,
         "h": 8
       },
@@ -1189,7 +1284,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 59,
+        "y": 67,
         "w": 6,
         "h": 8
       },
@@ -1231,7 +1326,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 59,
+        "y": 67,
         "w": 6,
         "h": 8
       },
@@ -1270,7 +1365,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 67,
+        "y": 75,
         "w": 24,
         "h": 1
       },
@@ -1286,7 +1381,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 68,
+        "y": 76,
         "w": 24,
         "h": 10
       },
@@ -1320,7 +1415,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 78,
+        "y": 86,
         "w": 24,
         "h": 1
       },
@@ -1337,7 +1432,7 @@
       "description": "auth_decisions_total{result, method}: every pass through the auth interceptor (auth.mode optional / required; nothing with mode off). ok = credential verified, public = auth.public procedure, anonymous = no credential in optional mode, missing = no credential in required mode, invalid = credential sent and rejected. method is the header sent (api_key / jwt / none), never who.",
       "gridPos": {
         "x": 0,
-        "y": 79,
+        "y": 87,
         "w": 12,
         "h": 8
       },
@@ -1380,7 +1475,7 @@
       "description": "What callers are being refused. missing / invalid come from auth_decisions_total; permission_denied is the RPC status otelconnect records when a handler's RequireRole refuses a known principal (the auth interceptor only authenticates). A step in `invalid` is a guessed or rotated key; `missing` after a deploy is a client that lost its header.",
       "gridPos": {
         "x": 12,
-        "y": 79,
+        "y": 87,
         "w": 12,
         "h": 8
       },
@@ -1428,7 +1523,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 87,
+        "y": 95,
         "w": 24,
         "h": 1
       },
@@ -1445,7 +1540,7 @@
       "description": "identity_resolver_lookups_total{result}: hit | miss are the cache (hit+miss = every lookup); every miss ends in exactly one of db_ok (key resolved), db_miss (refused: unknown, revoked, expired, account disabled) or error (database failure, not cached). The only label is result — never a key, prefix, account or key id.",
       "gridPos": {
         "x": 0,
-        "y": 88,
+        "y": 96,
         "w": 6,
         "h": 8
       },
@@ -1488,7 +1583,7 @@
       "description": "hit / (hit + miss). Cached refusals count as hits. Near 1 in steady state (one DB lookup per key per 30s TTL); a drop means many distinct keys (guessing) or a cache reset at 10k entries.",
       "gridPos": {
         "x": 6,
-        "y": 88,
+        "y": 96,
         "w": 6,
         "h": 8
       },
@@ -1533,7 +1628,7 @@
       "description": "error is a database failure or timeout while resolving a key (the request is rejected as auth.invalid_credential; keys verified within the TTL are still served from cache). Healthy = 0. The share is error / (db_ok + db_miss + error): the alert x-monorepo-identity-resolver-errors fires above 5% for 5m.",
       "gridPos": {
         "x": 12,
-        "y": 88,
+        "y": 96,
         "w": 6,
         "h": 8
       },
@@ -1602,7 +1697,7 @@
       "description": "identity_resolver_cache_entries: this replica's key cache. Each replica has its own cache (no sum); it is dropped whole at 10k entries (MaxCacheEntries), so a sawtooth to that ceiling is a flood of distinct keys. Expired entries linger until looked up again, so it does not fall on its own.",
       "gridPos": {
         "x": 18,
-        "y": 88,
+        "y": 96,
         "w": 6,
         "h": 8
       },

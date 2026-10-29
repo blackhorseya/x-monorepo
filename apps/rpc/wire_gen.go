@@ -16,6 +16,7 @@ import (
 	system2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -67,7 +68,14 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v := ordering.ProvideCreateOrder(repository, transactor, inbox, eventsPublisher, uuidGenerator, clock, policy, recorder)
+	createOrderResults, err := metrics.NewCreateOrderResults(meterProvider)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	v := ordering.ProvideCreateOrder(repository, transactor, inbox, eventsPublisher, uuidGenerator, clock, policy, recorder, createOrderResults)
 	v2 := ordering.ProvideGetOrder(repository, policy, recorder)
 	v3 := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)
 	v4 := ordering.ProvideCompleteOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)

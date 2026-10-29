@@ -54,6 +54,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOrderStats,
 
 	// adapters
+	metrics.NewCreateOrderResults, // needs the process's metric.MeterProvider (platform/otel)
 	rpc.NewOrderService,
 	consumer.NewOrderCancellationHandler,
 	consumer.NewStockReservedHandler,
@@ -154,8 +155,13 @@ func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transacto
 	)
 }
 
-func ProvideCreateOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy, rec *usecasex.Recorder) rpc.CreateOrderUC {
-	return decorateTx("ordering.create_order", rec, tx, inbox, usecase.NewCreateOrder(repo, events, ids, clock, own))
+// ProvideCreateOrder is decorateTx plus the result counter on the outside: it
+// counts after the transaction committed, so a rolled-back create is never "created".
+func ProvideCreateOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy, rec *usecasex.Recorder, results *metrics.CreateOrderResults) rpc.CreateOrderUC {
+	return usecasex.Chain(
+		decorateTx("ordering.create_order", rec, tx, inbox, usecase.NewCreateOrder(repo, events, ids, clock, own)),
+		results.Decorator(),
+	)
 }
 
 func ProvideGetOrder(repo order.Repository, own *ownership.Policy, rec *usecasex.Recorder) rpc.GetOrderUC {
