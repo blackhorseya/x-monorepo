@@ -86,6 +86,8 @@ def write(out, env, runs, create, reserve, drain):
             "cpus": int(env["BENCH_NCPU"]),
             "os": env["BENCH_OS"],
             "taken_at": env["BENCH_STAMP"],
+        "load_avg_1m_start": float(env["BENCH_LOAD_START"]),
+        "load_avg_1m_end": round(os.getloadavg()[0], 2),
         },
         "parameters": {
             "runs": runs,
@@ -133,7 +135,7 @@ def write(out, env, runs, create, reserve, drain):
         "",
         f"- commit `{e['commit']}`{' (dirty)' if e['dirty'] else ''}",
         f"- {e['go']}; Postgres {e['postgres']}; {e['k6']}",
-        f"- {e['cpu']} ({e['cpus']} cores), {e['os']}",
+        f"- {e['cpu']} ({e['cpus']} cores), {e['os']}; load average (1m) {e['load_avg_1m_start']} at start, {e['load_avg_1m_end']} at end",
         f"- {p['runs']} runs; create: {p['create']['vus']} VUs × {p['create']['duration']}; "
         f"reserve: {p['reserve']['rate_per_s']} orders/s × {p['reserve']['duration']}; "
         f"{p['skus']} SKUs, poll {p['poll_ms']}ms, seed {p['seed']}",

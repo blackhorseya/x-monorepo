@@ -58,6 +58,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# the machine is shared: the load average (1m) before the first run and after the last is part of the
+# environment, a number taken at 14 on 10 cores is not comparable to one taken at 2
+load_start=$(python3 -I -c 'import os; print(round(os.getloadavg()[0], 2))')
+
 for n in $(seq 1 "$RUNS"); do
   name="k6_bench_$(printf %s "$stamp" | tr A-Z a-z)_${suffix}_$n"
   run_id="bench-$stamp-$suffix-$n"
@@ -115,7 +119,7 @@ ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 pgv=$(psql "$base_url" -qAt -c "show server_version")
 BENCH_COMMIT=$(git rev-parse HEAD) BENCH_DIRTY=$(git status --porcelain -- . ':!bin' | head -c1) \
 BENCH_GO=$(go version) BENCH_PG=$pgv BENCH_K6=$(k6 version | head -n1) BENCH_CPU=$cpu BENCH_NCPU=$ncpu \
-BENCH_OS=$(uname -srm) BENCH_STAMP=$stamp BENCH_RUNS=$RUNS BENCH_SKUS=$SKUS BENCH_POLL=$POLL BENCH_SEED=$SEED \
+BENCH_OS=$(uname -srm) BENCH_STAMP=$stamp BENCH_LOAD_START=$load_start BENCH_RUNS=$RUNS BENCH_SKUS=$SKUS BENCH_POLL=$POLL BENCH_SEED=$SEED \
 BENCH_CREATE_VUS=$CREATE_VUS BENCH_CREATE_DURATION=$CREATE_DURATION \
 BENCH_RESERVE_RATE=$RESERVE_RATE BENCH_RESERVE_DURATION=$RESERVE_DURATION \
   python3 -I tests/k6/bench_report.py "$out"
