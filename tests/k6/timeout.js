@@ -8,7 +8,7 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
 import { Rate } from "k6/metrics";
-import { rpc, errorCode } from "./lib.js";
+import { rpc, knownCode, systemTags } from "./lib.js";
 
 // 504 is the expected answer; a connection error or anything else is a failed request.
 http.setResponseCallback(http.expectedStatuses(504));
@@ -16,6 +16,7 @@ http.setResponseCallback(http.expectedStatuses(504));
 const timedOut = new Rate("timed_out");
 
 export const options = {
+  systemTags,
   scenarios: {
     deadline: {
       executor: "constant-vus",
@@ -36,7 +37,7 @@ export default function () {
     check(res, {
       504: (r) => r.status === 504,
       "code deadline_exceeded": (r) => r.json("code") === "deadline_exceeded",
-      "x-error-code request.timeout": (r) => errorCode(r) === "request.timeout",
+      "x-error-code request.timeout": (r) => knownCode(r) === "request.timeout",
     })
   );
   sleep(0.01);
