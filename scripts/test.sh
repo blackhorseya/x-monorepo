@@ -313,17 +313,27 @@ signfake="$tmp/cosign-sign"; mkdir -p "$signfake"
 cat > "$signfake/cosign" <<'FAKE'
 #!/usr/bin/env bash
 n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_COUNT"
-echo "$*" >> "$FAKE_ARGS"; echo "token=${SIGSTORE_ID_TOKEN:-}" >> "$FAKE_ARGS"
+art=${FAKE_ART:-$3}; echo "$*" >> "$FAKE_ARGS"; echo "token=${SIGSTORE_ID_TOKEN:-}" >> "$FAKE_ARGS"
 for a in "$@"; do case $a in --bundle=*) bundle=${a#--bundle=} ;; esac; done
 [ -s "$bundle" ] && echo "STALE: attempt $n found a bundle left by an earlier one" >> "$FAKE_ARGS"
 set -- $FAKE_SEQ; step=${!n:-err}
 case $step in
   ok)    echo '{"fake":"bundle"}' > "$bundle" ;;
-  409)   echo "Error: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
+  409)   echo "Error: signing $art: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
   v2)    echo "Error: signing: adding rekor v2 entry: rpc error: code = AlreadyExists desc = an equivalent entry already exists" >&2; exit 1 ;;
   nonrekor409) echo "Error: proxy: HTTP 409 Conflict from https://registry.example/v2/" >&2; exit 17 ;;
-  v2http) echo "Error: signing: adding rekor v2 entry: unexpected response: 409 {\"code\":6,\"message\":\"an equivalent entry already exists with index 123\"}" >&2; exit 1 ;;
+  v2http) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 409 {\"code\":6,\"message\":\"an equivalent entry already exists with index 123\"}" >&2; exit 1 ;;
   v2503)  echo "Error: signing: adding rekor v2 entry: unexpected response: 503 {\"code\":14,\"message\":\"unavailable\"}" >&2; exit 17 ;;
+  q503v2) echo "Error: signing: adding rekor v2 entry: unexpected response: 503 {\"code\":14,\"message\":\"see: adding rekor v2 entry: unexpected response: 409 {example}\"}" >&2; exit 17 ;;
+  q503v2plain) echo "Error: signing: adding rekor v2 entry: unexpected response: 503 upstream said adding rekor v2 entry: unexpected response: 409 x" >&2; exit 17 ;;
+  q503v1) echo "Error: signing $art: [POST /api/v1/log/entries][503] createLogEntryUnexpected {\"message\":\"see [POST /api/v1/log/entries][409] createLogEntryConflict\"}" >&2; exit 17 ;;
+  q503v1plain) echo "Error: signing $art: [POST /api/v1/log/entries][503] createLogEntryUnexpected see [POST /api/v1/log/entries][409] createLogEntryConflict" >&2; exit 17 ;;
+  v2brace) echo "Error: signing $art: signing bundle: error signing bundle: adding rekor v2 entry: unexpected response: 409 {\"code\":6}" >&2; exit 1 ;;
+  q503multi) printf 'Error: signing /tmp/a: adding rekor v2 entry: unexpected response: 503 upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n' >&2; exit 17 ;;
+  v2path503) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 503 {}" >&2; exit 17 ;;
+  v2path409) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 1 ;;
+  v2path503q) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 503 adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 17 ;;
+  inlog)  echo "note: Error: signing: adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 17 ;;
   mixed)  printf 'Using Rekor at https://rekor.sigstore.dev\nError: fetching signing config: HTTP 409 Conflict from https://config.example/config\n' >&2; exit 17 ;;
   url)   echo "Error: fetching signing config: GET https://config.example/409/config returned 503" >&2; exit 17 ;;
   exists) echo "Error: creating output: file AlreadyExists" >&2; exit 17 ;;
@@ -334,13 +344,21 @@ esac
 FAKE
 chmod +x "$signfake/cosign"
 # sign_blob <name> "<FAKE_SEQ>": runs the wrapper with goreleaser's args; sets sb_rc, sb_out, sb_tries, sb_bundle.
-sign_blob() {
-  local d="$tmp/sb-$1"; mkdir -p "$d"; echo artifact > "$d/checksums.txt"
+sign_blob() { # SB_ART=<file name> overrides the artifact name; SB_BUNDLE_ARGS (@B@ = the bundle path) the --bundle arguments
+  local d="$tmp/sb-$1" art="${SB_ART:-checksums.txt}"; mkdir -p "$d"; echo artifact > "$d/$art"
+  if [ -n "${SB_SENTINEL:-}" ]; then echo keep > "$d/$SB_SENTINEL"; fi
   : > "$d/args"; rm -f "$d/count"
   sb_bundle="$d/checksums.txt.sigstore.json"
+  local bargs="${SB_BUNDLE_ARGS:---bundle=@B@}" bundle_args
+  bargs=${bargs//@B@/$sb_bundle}; read -r -a bundle_args <<<"$bargs"
   set +e
-  sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-    COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/checksums.txt" --yes 2>&1)
+  if [ -n "${SB_REL:-}" ]; then # a bare relative artifact name, as cosign prints it
+    sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token FAKE_ART="$art" \
+      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "${bundle_args[@]}" ${SB_PRE:-} "$art" --yes 2>&1)
+  else
+    sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
+      COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "${bundle_args[@]}" "$d/$art" --yes 2>&1)
+  fi
   sb_rc=$?
   set -e
   sb_tries=$(cat "$d/count" 2>/dev/null || echo 0); sb_args=$d/args
@@ -382,8 +400,71 @@ expect_eq    "sign: a gRPC-shaped AlreadyExists (cosign never prints one) is not
 sign_blob v2http "v2http ok"
 expect_eq    "sign: Rekor v2 HTTP 409 (unexpected response) is retried" 2 "$sb_tries"
 expect_eq    "sign: Rekor v2 HTTP 409 then success"          0 "$sb_rc"
+# The artifact path is part of the error line: strip it before reading the status (#256).
+odd='a{b] adding rekor v2 entry: unexpected response: 409.txt'
+SB_ART=$odd sign_blob v2path503 "v2path503 v2path503 v2path503"
+expect_eq    "sign: a 503 for an artifact named like a 409 is not retried" 1 "$sb_tries"
+SB_ART=$odd sign_blob v2path409 "v2path409 ok"
+expect_eq    "sign: a real 409 for an odd artifact name is retried" 2 "$sb_tries"
+# Names that overlap the fixed error text, or the status itself, must not change how it is read.
+for nm in entry a v2 api; do
+  SB_REL=1 SB_ART=$nm sign_blob "short-$nm" "v2path409 ok"
+  expect_eq  "sign: a real v2 409 for an artifact named '$nm' is retried" 2 "$sb_tries"
+done
+SB_REL=1 SB_ART='503 ' sign_blob short-503sp "v2path503q v2path503q v2path503q"
+expect_eq    "sign: a 503 quoting a 409, artifact named '503 ', is not retried" 1 "$sb_tries"
+# The subcommand is an argument too, but not the artifact: a file named like `sign-blob: <marker>` must not
+# be taken for the context prefix (PR #259 review).
+SB_REL=1 SB_ART='sign-blob: adding rekor v2 entry: unexpected response: 503 x' sign_blob subcmd-409 "v2path409 ok"
+expect_eq    "sign: a real 409, artifact named 'sign-blob: ...503 x', is retried" 2 "$sb_tries"
+SB_REL=1 SB_ART='sign-blob: adding rekor v2 entry: unexpected response: 409 x' sign_blob subcmd-503 "v2path503 v2path503 v2path503"
+expect_eq    "sign: a 503, artifact named 'sign-blob: ...409 x', is not retried" 1 "$sb_tries"
+# A value flag the wrapper does not know, before the artifact: the artifact cannot be identified, so
+# nothing is classified (fail closed: one attempt), whatever the file name says (PR #259 review).
+odd409='adding rekor v2 entry: unexpected response: 409 artifact'
+SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART=$odd409 sign_blob unknownflag-503 "v2path503 v2path503 v2path503"
+expect_eq    "sign: an unrecognised artifact never turns a 503 into a conflict" 1 "$sb_tries"
+# The flag value equals the start of the file name: a string-prefix match cannot prove the artifact was
+# identified (PR #259 r5), so an unknown flag disables the classification altogether.
+SB_REL=1 SB_PRE='--oidc-client-id fixture-client' SB_ART='fixture-client: adding rekor v2 entry: unexpected response: 409 artifact' sign_blob unknownflag-collide "v2path503 v2path503 v2path503"
+expect_eq    "sign: an unknown flag whose value prefixes the file name never makes a conflict" 1 "$sb_tries"
+SB_REL=1 SB_PRE='--oidc-client-id fixture-client' sign_blob unknownflag-409 "v2path409 ok"
+expect_eq    "sign: an unrecognised artifact fails closed even on a real 409" 1 "$sb_tries"
+# The argv whitelist (parse_argv): known flags keep the retry, anything else turns it off.
+SB_REL=1 SB_PRE='-y' sign_blob argv-y "v2path409 ok"
+expect_eq    "sign: -y is a known flag, a real 409 is still retried" 2 "$sb_tries"
+SB_REL=1 SB_PRE='--' sign_blob argv-dashdash "v2path409 ok"
+expect_eq    "sign: -- is not understood, no retry" 1 "$sb_tries"
+SB_REL=1 SB_PRE='second-positional' sign_blob argv-two "v2path409 ok"
+expect_eq    "sign: two positionals are not understood, no retry" 1 "$sb_tries"
+# One parser, one bundle path (PR #259 r6): a --bundle the wrapper cannot pin down is a usage error
+# (exit 2) before cosign runs, never a retry with a stale or unknown bundle.
+bundle_usage() { # bundle_usage <name> "<--bundle args, @B@ = bundle path>" [extra args]
+  SB_BUNDLE_ARGS=$2 sign_blob "$1" "409 409 409"
+  expect_eq    "sign: $1 exits 2" 2 "$sb_rc"
+  expect_eq    "sign: $1 never calls cosign" 0 "$sb_tries"
+  if [ ! -e "$sb_bundle" ] && [ ! -e "$sb_bundle.old" ]; then ok; else bad "sign: $1 left a bundle"; fi
+}
+bundle_usage bundle-twice-old-first "--bundle=@B@.old --bundle=@B@"
+bundle_usage bundle-twice-new-first "--bundle=@B@ --bundle=@B@.old"
+bundle_usage bundle-separate        "--bundle @B@"
+bundle_usage bundle-empty           "--bundle="
+# After `--` everything is a positional: a file named `--bundle=decoy` is the artifact, never the bundle,
+# so the unrelated file `decoy` is not removed and, as `--` is not understood, there is one attempt.
+SB_REL=1 SB_PRE='--' SB_ART='--bundle=decoy' SB_SENTINEL=decoy sign_blob dashdash-decoy "v2path409 ok"
+expect_eq    "sign: after -- a --bundle=... artifact makes exactly one attempt" 1 "$sb_tries"
+if [ -e "$tmp/sb-dashdash-decoy/decoy" ]; then ok; else bad "sign: the file named by a --bundle=decoy artifact after -- was deleted"; fi
+SB_PRE='--oidc-client-id fixture-client' bundle_usage bundle-twice-unknown-flag "--bundle=@B@.old --bundle=@B@"
+SB_ART='artifact{build}.txt' sign_blob v2brace "v2brace ok"
+expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"
 expect_eq    "sign: Rekor v2 HTTP 503 is not retried"        1 "$sb_tries"
+# Anchored to the outer error line (#256): a non-conflict whose body quotes a 409 is one call.
+for q in q503v2 q503v2plain q503v1 q503v1plain inlog q503multi; do
+  sign_blob "$q" "$q $q $q"
+  expect_eq    "sign: $q (409 text inside another status's line) is not retried" 1 "$sb_tries"
+  if [ "$sb_rc" != 0 ]; then ok; else bad "sign: $q must fail"; fi
+done
 sign_blob mixed "mixed mixed mixed"
 expect_eq    "sign: a 409 from another service next to a Rekor line is not retried" 1 "$sb_tries"
 sign_blob url "url url url"
