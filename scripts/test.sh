@@ -313,7 +313,7 @@ signfake="$tmp/cosign-sign"; mkdir -p "$signfake"
 cat > "$signfake/cosign" <<'FAKE'
 #!/usr/bin/env bash
 n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_COUNT"
-echo "$*" >> "$FAKE_ARGS"; echo "token=${SIGSTORE_ID_TOKEN:-}" >> "$FAKE_ARGS"
+art=$3; echo "$*" >> "$FAKE_ARGS"; echo "token=${SIGSTORE_ID_TOKEN:-}" >> "$FAKE_ARGS"
 for a in "$@"; do case $a in --bundle=*) bundle=${a#--bundle=} ;; esac; done
 [ -s "$bundle" ] && echo "STALE: attempt $n found a bundle left by an earlier one" >> "$FAKE_ARGS"
 set -- $FAKE_SEQ; step=${!n:-err}
@@ -330,6 +330,8 @@ case $step in
   q503v1plain) echo "Error: [POST /api/v1/log/entries][503] createLogEntryUnexpected see [POST /api/v1/log/entries][409] createLogEntryConflict" >&2; exit 17 ;;
   v2brace) echo "Error: signing /tmp/artifact{build}.txt: signing bundle: error signing bundle: adding rekor v2 entry: unexpected response: 409 {\"code\":6}" >&2; exit 1 ;;
   q503multi) printf 'Error: signing /tmp/a: adding rekor v2 entry: unexpected response: 503 upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n' >&2; exit 17 ;;
+  v2path503) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 503 {}" >&2; exit 17 ;;
+  v2path409) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 1 ;;
   inlog)  echo "note: Error: signing: adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 17 ;;
   mixed)  printf 'Using Rekor at https://rekor.sigstore.dev\nError: fetching signing config: HTTP 409 Conflict from https://config.example/config\n' >&2; exit 17 ;;
   url)   echo "Error: fetching signing config: GET https://config.example/409/config returned 503" >&2; exit 17 ;;
@@ -341,13 +343,13 @@ esac
 FAKE
 chmod +x "$signfake/cosign"
 # sign_blob <name> "<FAKE_SEQ>": runs the wrapper with goreleaser's args; sets sb_rc, sb_out, sb_tries, sb_bundle.
-sign_blob() {
-  local d="$tmp/sb-$1"; mkdir -p "$d"; echo artifact > "$d/checksums.txt"
+sign_blob() { # SB_ART=<file name> overrides the artifact name
+  local d="$tmp/sb-$1" art="${SB_ART:-checksums.txt}"; mkdir -p "$d"; echo artifact > "$d/$art"
   : > "$d/args"; rm -f "$d/count"
   sb_bundle="$d/checksums.txt.sigstore.json"
   set +e
   sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-    COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/checksums.txt" --yes 2>&1)
+    COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/$art" --yes 2>&1)
   sb_rc=$?
   set -e
   sb_tries=$(cat "$d/count" 2>/dev/null || echo 0); sb_args=$d/args
@@ -389,6 +391,12 @@ expect_eq    "sign: a gRPC-shaped AlreadyExists (cosign never prints one) is not
 sign_blob v2http "v2http ok"
 expect_eq    "sign: Rekor v2 HTTP 409 (unexpected response) is retried" 2 "$sb_tries"
 expect_eq    "sign: Rekor v2 HTTP 409 then success"          0 "$sb_rc"
+# The artifact path is part of the error line: strip it before reading the status (#256).
+odd='a{b] adding rekor v2 entry: unexpected response: 409.txt'
+SB_ART=$odd sign_blob v2path503 "v2path503 v2path503 v2path503"
+expect_eq    "sign: a 503 for an artifact named like a 409 is not retried" 1 "$sb_tries"
+SB_ART=$odd sign_blob v2path409 "v2path409 ok"
+expect_eq    "sign: a real 409 for an odd artifact name is retried" 2 "$sb_tries"
 sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"

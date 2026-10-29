@@ -57,6 +57,8 @@ run(409, 3)
 run(503, 1)
 run(503, 1, quoted=True)
 run(409, 3, name="artifact{build}.txt", label=" (brace in the artifact path)")
+run(503, 1, name="a{b] adding rekor v2 entry: unexpected response: 409.txt", label=" (artifact named like a 409)")
+run(409, 3, name="a{b] adding rekor v2 entry: unexpected response: 503.txt", label=" (artifact named like a 503)")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")
 print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")
