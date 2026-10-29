@@ -18,6 +18,8 @@ type LineItem struct {
 type CreateOrderInput struct {
 	CustomerID string
 	Items      []LineItem
+	// IdempotencyKey, when set, makes CreateOrder safe to retry: see usecase.CreateOrder.
+	IdempotencyKey string
 }
 
 type GetOrderInput struct {

@@ -89,3 +89,62 @@ func TestOrderRepository_CountByStatus(t *testing.T) {
 		t.Fatalf("cancelled = %+v", got[1])
 	}
 }
+
+// The (customer, key) uniqueness is the same contract the Postgres partial
+// unique index enforces.
+func TestOrderRepository_IdempotencyKey(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewOrderRepository()
+	now := time.Now()
+	usd, _ := kernel.NewMoney(100, "USD")
+	item, _ := order.NewLineItem("A", 1, usd)
+	mk := func(id, customer, key string) *order.Order {
+		o, err := order.New(order.Params{ID: order.ID(id), CustomerID: customer, Items: []order.LineItem{item}, Now: now, IdempotencyKey: key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+
+	if err := repo.Save(c, mk("o-1", "c-1", "k")); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(c, mk("o-2", "c-1", "k")); !errors.Is(err, order.ErrIdempotencyConflict) {
+		t.Fatalf("same customer, same key: err = %v, want ErrIdempotencyConflict", err)
+	}
+	if err := repo.Save(c, mk("o-1", "c-1", "k2")); !errors.Is(err, order.ErrDuplicate) {
+		t.Fatalf("taken id: err = %v, want ErrDuplicate", err)
+	}
+	for _, o := range []*order.Order{mk("o-3", "c-2", "k"), mk("o-4", "c-1", ""), mk("o-5", "c-1", "")} {
+		if err := repo.Save(c, o); err != nil {
+			t.Fatalf("%s: %v", o.ID(), err)
+		}
+	}
+
+	got, err := repo.FindByIdempotencyKey(c, "c-1", "k")
+	if err != nil || got.ID() != "o-1" || got.IdempotencyKey() != "k" || got.RequestHash() == "" {
+		t.Fatalf("lookup = %v, %v", got, err)
+	}
+	if _, err := repo.FindByIdempotencyKey(c, "c-9", "k"); !errors.Is(err, order.ErrNotFound) {
+		t.Fatalf("other customer's key: err = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.FindByIdempotencyKey(c, "c-1", ""); !errors.Is(err, order.ErrNotFound) {
+		t.Fatalf("empty key matches keyless orders: err = %v", err)
+	}
+
+	// A later update keeps the key.
+	got, _ = repo.FindByID(c, "o-1")
+	_ = got.Cancel(now)
+	if err := repo.Save(c, got); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := repo.FindByIdempotencyKey(c, "c-1", "k"); again == nil || again.Status() != order.StatusCancelled {
+		t.Fatalf("after update: %v", again)
+	}
+
+	cancelled, cancel := context.WithCancel(c)
+	cancel()
+	if _, err := repo.FindByIdempotencyKey(cancelled, "c-1", "k"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled ctx: err = %v", err)
+	}
+}

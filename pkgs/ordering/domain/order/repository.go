@@ -20,7 +20,12 @@ type Repository interface {
 	// (WHERE id AND customer_id), so a foreign order costs what a missing one
 	// costs — its items are never loaded.
 	FindByIDForCustomer(c context.Context, id ID, customerID string) (*Order, error)
-	// Save inserts a new order (Version 0; ErrDuplicate if the id is taken) or
+	// FindByIdempotencyKey returns the customer's order created with key, or
+	// ErrNotFound. The scope is (customer, key): another customer's key is not visible.
+	FindByIdempotencyKey(c context.Context, customerID, key string) (*Order, error)
+	// Save inserts a new order (Version 0; ErrDuplicate if the id is taken,
+	// ErrIdempotencyConflict if it carries a key the customer already used —
+	// nothing is written then, and the surrounding transaction stays usable) or
 	// updates a loaded one, comparing Version: ErrStale when another writer saved
 	// it first. The stored version advances on every save, but the in-memory
 	// aggregate does not: reload before saving it again.

@@ -27,10 +27,17 @@ type CreateOrderRequest struct {
 	// Optional. Empty = the caller (their principal's subject). A non-admin may
 	// only name themselves; an admin may name any customer; an anonymous caller
 	// (auth off) must name one, else INVALID_ARGUMENT (order.empty_customer).
-	CustomerId    string      `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
-	Items         []*LineItem `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CustomerId string      `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	Items      []*LineItem `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
+	// Optional retry token (1-64 visible ASCII characters). Empty = no protection:
+	// every call creates an order. With a key, retrying the same items returns the
+	// original order as it is now (nothing is created or published again), and the
+	// same key with different items (item order counts) is ALREADY_EXISTS
+	// (order.idempotency_key_reused). The key is scoped to the customer the order
+	// is placed for, so an admin acting for a customer shares that customer's keys.
+	IdempotencyKey string `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CreateOrderRequest) Reset() {
@@ -75,6 +82,13 @@ func (x *CreateOrderRequest) GetItems() []*LineItem {
 		return x.Items
 	}
 	return nil
+}
+
+func (x *CreateOrderRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
 }
 
 type CreateOrderResponse struct {
@@ -515,11 +529,12 @@ var File_ordering_v1_service_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x19ordering/v1/service.proto\x12\vordering.v1\x1a\x1bbuf/validate/validate.proto\x1a\x18ordering/v1/entity.proto\"l\n" +
+	"\x19ordering/v1/service.proto\x12\vordering.v1\x1a\x1bbuf/validate/validate.proto\x1a\x18ordering/v1/entity.proto\"\xae\x01\n" +
 	"\x12CreateOrderRequest\x12\x1f\n" +
 	"\vcustomer_id\x18\x01 \x01(\tR\n" +
 	"customerId\x125\n" +
-	"\x05items\x18\x02 \x03(\v2\x15.ordering.v1.LineItemB\b\xbaH\x05\x92\x01\x02\b\x01R\x05items\"?\n" +
+	"\x05items\x18\x02 \x03(\v2\x15.ordering.v1.LineItemB\b\xbaH\x05\x92\x01\x02\b\x01R\x05items\x12@\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tB\x17\xbaH\x14r\x12\x18@2\x0e^[\\x21-\\x7E]*$R\x0eidempotencyKey\"?\n" +
 	"\x13CreateOrderResponse\x12(\n" +
 	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"*\n" +
 	"\x0fGetOrderRequest\x12\x17\n" +
