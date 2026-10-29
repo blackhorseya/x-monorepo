@@ -4,14 +4,13 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv1";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv1";
-import { file_buf_validate_validate } from "../../buf/validate/validate_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file common/v1/money.proto.
  */
 export const file_common_v1_money: GenFile = /*@__PURE__*/
-  fileDesc("ChVjb21tb24vdjEvbW9uZXkucHJvdG8SCWNvbW1vbi52MSJLCgVNb25leRIdCgxhbW91bnRfbWlub3IYASABKANCB7pIBCICKAASIwoIY3VycmVuY3kYAiABKAlCEbpIDnIMMgpeW0EtWl17M30kYgZwcm90bzM", [file_buf_validate_validate]);
+  fileDesc("ChVjb21tb24vdjEvbW9uZXkucHJvdG8SCWNvbW1vbi52MSIzCgVNb25leRIWCgxhbW91bnRfbWlub3IYASABKANCABISCghjdXJyZW5jeRgCIAEoCUIAYgZwcm90bzM");
 
 /**
  * Money is the wire representation of the kernel Money value object.

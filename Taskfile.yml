@@ -37,7 +37,7 @@ vars:
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
   BCS: ordering inventory identity
   # Every Go module in the workspace (keep in sync with go.work).
-  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity apps/rpc apps/migrate apps/worker
+  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity apps/rpc apps/migrate apps/worker tools/stripvalidate
   APPS: rpc migrate worker
 
 tasks:
@@ -193,8 +193,12 @@ tasks:
   gen-ts:
     desc: protos → web/packages/proto (remote plugin, needs network)
     cmds:
-      # --include-imports also emits deps (buf/validate) the generated files import; WKT are skipped.
-      - '{{.BUF}} generate --template buf.gen.ts.yaml --include-imports'
+      # tools/stripvalidate drops buf.validate's rule options and validate.proto (~70 kB of
+      # descriptor in the console bundle), keeping only Violations; see web/packages/proto/README.md.
+      # --include-imports emits that kept file (buf/validate/violations.proto); WKT are skipped.
+      - |
+        set -o pipefail
+        {{.BUF}} build -o - | go run ./tools/stripvalidate | {{.BUF}} generate --template buf.gen.ts.yaml --include-imports -
 
   wire:
     desc: regenerate DI graph for every app
