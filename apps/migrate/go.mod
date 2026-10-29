@@ -3,6 +3,7 @@ module github.com/blackhorseya/x-monorepo/apps/migrate
 go 1.27
 
 require (
+	github.com/blackhorseya/x-monorepo/pkgs/catalog v0.0.0-00010101000000-000000000000
 	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
@@ -121,5 +122,7 @@ replace (
 )
 
 replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory
+
+replace github.com/blackhorseya/x-monorepo/pkgs/catalog => ../../pkgs/catalog
 
 replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity

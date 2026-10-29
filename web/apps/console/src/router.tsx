@@ -10,6 +10,7 @@ import { queryClient } from "./queryClient";
 import { adminProbeQuery } from "./queries";
 import type { ExpireSearch } from "./routes/expire";
 import type { OrdersSearch } from "./routes/orders";
+import type { ProductsSearch } from "./routes/products";
 import type { PruneSearch } from "./routes/prune";
 import type { ReservationsSearch } from "./routes/reservations";
 import type { StockSearch } from "./routes/stock";
@@ -29,6 +30,7 @@ const adminLinks = [
   { to: "/prune", label: "Prune" },
   { to: "/expire", label: "Expire" },
   { to: "/accounts", label: "Accounts" },
+  { to: "/products", label: "Products" },
 ] as const;
 
 // An admin page behind AdminGate: for anyone else the page never mounts, so it asks the server
@@ -121,6 +123,14 @@ const stockRoute = createRoute({
 const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: lazyRouteComponent(() => import("./routes/accounts"), "AccountsPage") });
 // A sibling of /accounts, like /orders/$id: the nav's prefix match lights Accounts up here too.
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: lazyRouteComponent(() => import("./routes/account"), "AccountPage") });
+const productsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/products",
+  component: gated(lazyRouteComponent(() => import("./routes/products"), "ProductsPage")),
+  validateSearch: (raw: Record<string, unknown>): ProductsSearch => ({
+    prefix: typeof raw.prefix === "string" && raw.prefix !== "" ? raw.prefix : undefined,
+  }),
+});
 const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: gated(lazyRouteComponent(() => import("./routes/poison"), "PoisonPage")) });
 const pruneRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -143,7 +153,7 @@ const expireRoute = createRoute({
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, poisonRoute, pruneRoute, expireRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, productsRoute, poisonRoute, pruneRoute, expireRoute]),
   defaultPreload: "intent",
   defaultPendingComponent: RoutePending,
   defaultErrorComponent: RouteError,

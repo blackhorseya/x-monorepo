@@ -17,8 +17,8 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `request.rate_limited` | `RESOURCE_EXHAUSTED` | rate limit interceptor | 超過 `http.rate_limit`，另帶 `Retry-After` |
 | `auth.unauthenticated` | `UNAUTHENTICATED` | auth interceptor | `auth.mode=required` 且沒帶 credential |
 | `auth.invalid_credential` | `UNAUTHENTICATED` | auth interceptor | 帶了但對不上（未知 API key、JWT 簽章 / exp / iss / aud 不對）。identity 的 key 被 revoke / 過期 / account disabled、或 resolver 查 DB 失敗，client 看到的也是這個（不洩漏原因；resolver 失敗另有 error log） |
-| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`InventoryService.SetStock` 與 `ExpireReservations`、`IdentityService` 除 `WhoAmI` 外都要 `auth.admin_role`） |
-| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`order.ErrStale` / `stock.ErrStale` / `account.ErrStale` / `apikey.ErrStale` / `reservation.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；Order 的 cancel / confirm / complete 已先在 use case 內重試 3 次，仍撞才會出現；重送即可，刻意沒有前綴也不是 `kernel.Error` |
+| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`InventoryService.SetStock` 與 `ExpireReservations`、`CatalogService.UpsertProduct` 與 `DeactivateProduct`、`IdentityService` 除 `WhoAmI` 外都要 `auth.admin_role`） |
+| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`order.ErrStale` / `stock.ErrStale` / `product.ErrStale` / `account.ErrStale` / `apikey.ErrStale` / `reservation.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；Order 的 cancel / confirm / complete 已先在 use case 內重試 3 次，仍撞才會出現；重送即可，刻意沒有前綴也不是 `kernel.Error` |
 | `pagination.invalid_page_size` | `INVALID_ARGUMENT` | `platform/pagination` | `page_size` 負數 |
 | `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（ListOrders / ListStocks 把 filter 編進 token） |
 | `admin.no_database` | `FAILED_PRECONDITION` | admin | server 沒接 Postgres（`postgres.url` 空）：poison 表與 outbox / inbox 都在 DB |
@@ -39,6 +39,10 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `stock.release_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Release 超過 reserved |
 | `stock.commit_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Commit 超過 reserved（stock 列與 reservation 不一致：資料壞了） |
 | `stock.not_found` | `NOT_FOUND` | inventory domain | |
+| `product.invalid_sku` / `product.invalid_name` / `product.invalid_price` | `INVALID_ARGUMENT` | catalog domain | UpsertProduct / GetProduct / DeactivateProduct / 批次報價的參數：sku 1–64 bytes、name 1–200 字元且不能全是空白（`strings.TrimSpace` 的定義）、price 必須是非負金額加 3 個大寫字母的幣別——domain 對 `Money` 重新檢查（`Multiply(-1)`、`ZeroMoney("usd")` 這類繞過 `NewMoney` 的值也擋）（rpc 先被 protovalidate 擋，這是直呼 use case 的那條） |
+| `product.unsupported_currency` | `INVALID_ARGUMENT` | catalog domain | 幣別格式對但不是已指派的 ISO 4217 代碼（`AAA`、`ZZZ`…）；白名單是 SIX List One（`domain/product/currency_codes.go`，與 `catalog.currencies` 同一份）。protovalidate 只擋格式，所以這個一定走到 domain |
+| `money.invalid_amount` / `money.invalid_currency` | `INVALID_ARGUMENT` | kernel `Money` | 金額為負、幣別不是 3 個大寫英文字母（ISO 4217 形狀）；`UpsertProduct` 的價格（rpc 先被 protovalidate 擋） |
+| `product.not_found` | `NOT_FOUND` | catalog domain | `GetProduct` / `DeactivateProduct` 的 SKU 沒有 product（`UpsertProduct` 會建立它，不會回這個） |
 | `reservation.invalid_order_id` / `reservation.no_lines` / `reservation.invalid_sku` / `reservation.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | aggregate 不變量 |
 | `reservation.invalid_status_filter` / `reservation.invalid_cursor` | `INVALID_ARGUMENT` | inventory domain | ListReservations 的 filter / cursor |
 | `reservation.too_many_order_ids` | `INVALID_ARGUMENT` | inventory domain | `BatchGetReservations` 一次超過 100 個 order id（rpc 先被 protovalidate 擋，這是直呼 use case 的那條）；空清單與空字串 id 走 `reservation.invalid_order_id` |
