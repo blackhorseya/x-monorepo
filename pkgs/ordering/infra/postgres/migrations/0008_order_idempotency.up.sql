@@ -2,9 +2,11 @@
 -- spent on live on the order itself, so they live exactly as long as the order. NULL = created
 -- without a key (every pre-0008 row); nothing is backfilled.
 --
--- NOTE the index build takes a SHARE lock on ordering.orders (writes wait, reads don't): migrations
--- run inside a transaction, so it cannot be CONCURRENTLY. On a large table run migrate in a
--- maintenance window; the partial predicate keeps the index itself empty until clients send keys.
+-- NOTE the whole migration runs in ONE transaction. ALTER TABLE takes ACCESS EXCLUSIVE on
+-- ordering.orders and holds it until commit, so the index build below (a table scan; it cannot be
+-- CONCURRENTLY inside a transaction) runs under it: reads AND writes of the table wait for the
+-- whole migration, not just the index. On a large table run migrate in a maintenance window that
+-- covers read traffic too; the partial predicate keeps the index itself empty until clients send keys.
 ALTER TABLE ordering.orders
     ADD COLUMN idempotency_key text,
     ADD COLUMN request_hash    text;
