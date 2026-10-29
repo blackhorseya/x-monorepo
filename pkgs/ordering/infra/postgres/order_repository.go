@@ -30,13 +30,16 @@ func NewOrderRepository(db *gorm.DB) *OrderRepository {
 // aggregate. Timestamps come from the domain (port.Clock), so gorm's automatic
 // created_at/updated_at tracking is switched off.
 type orderRow struct {
-	ID         string         `gorm:"primaryKey"`
-	CustomerID string         `gorm:"not null"`
-	Status     string         `gorm:"not null"`
-	CreatedAt  time.Time      `gorm:"not null;autoCreateTime:false"`
-	UpdatedAt  time.Time      `gorm:"not null;autoUpdateTime:false"`
-	Version    int64          `gorm:"not null"`
-	Items      []orderItemRow `gorm:"foreignKey:OrderID;references:ID"`
+	ID         string    `gorm:"primaryKey"`
+	CustomerID string    `gorm:"not null"`
+	Status     string    `gorm:"not null"`
+	CreatedAt  time.Time `gorm:"not null;autoCreateTime:false"`
+	UpdatedAt  time.Time `gorm:"not null;autoUpdateTime:false"`
+	Version    int64     `gorm:"not null"`
+	// NULL (not "") for an order created without a key: the unique index is partial on NOT NULL.
+	IdempotencyKey *string
+	RequestHash    *string
+	Items          []orderItemRow `gorm:"foreignKey:OrderID;references:ID"`
 }
 
 func (orderRow) TableName() string { return Schema + ".orders" }
@@ -73,6 +76,25 @@ func (i *OrderRepository) FindByID(c context.Context, id order.ID) (*order.Order
 // of the row selection (WHERE id AND customer_id), so another customer's order
 // ends at "record not found" before the items are preloaded: it costs what a
 // missing id costs, and ErrNotFound is the only thing it can say.
+// FindByIdempotencyKey reads through the (customer_id, idempotency_key) unique index.
+func (i *OrderRepository) FindByIdempotencyKey(c context.Context, customerID, key string) (*order.Order, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var row orderRow
+	err := platformpg.TxOrDB(ctx, i.db).
+		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("position") }).
+		Take(&row, "customer_id = ? AND idempotency_key = ?", customerID, key).Error
+	if err != nil {
+		// Not wrapped with the key: it must not reach logs or error messages.
+		return nil, translate(fmt.Errorf("find order of customer %s by idempotency key: %w", customerID, err))
+	}
+
+	return toDomain(row)
+}
+
 func (i *OrderRepository) FindByIDForCustomer(c context.Context, id order.ID, customerID string) (*order.Order, error) {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
@@ -92,7 +114,11 @@ func (i *OrderRepository) FindByIDForCustomer(c context.Context, id order.ID, cu
 
 // Save writes the whole aggregate in one transaction. A never-saved order
 // (Version 0) is a plain INSERT, so an id collision surfaces as ErrDuplicate
-// instead of silently overwriting. A loaded order is an UPDATE guarded by
+// instead of silently overwriting; with an idempotency key the INSERT is
+// ON CONFLICT (customer_id, idempotency_key) DO NOTHING, so losing the race for
+// a key writes nothing, leaves the transaction usable and returns
+// ErrIdempotencyConflict (a taken id still fails with ErrDuplicate: the
+// conflict target is the key only). A loaded order is an UPDATE guarded by
 // `version = <loaded>` that bumps the version; zero rows means another writer
 // saved first → ErrStale. Items are replaced (delete + insert keeps positions
 // authoritative).
@@ -103,12 +129,27 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	}
 
 	row := toRow(o)
+	taken := false
 	// Joins the use case's transaction when there is one (Transactor), else opens its own.
 	err := platformpg.Transaction(ctx, i.db, func(_ context.Context, tx *gorm.DB) error {
 		if o.Version() == 0 {
 			row.Version = 1
-			if err := tx.Omit(clause.Associations).Create(&row).Error; err != nil {
-				return fmt.Errorf("insert order %s: %w", o.ID(), err)
+			insert := tx.Omit(clause.Associations)
+			if row.IdempotencyKey != nil {
+				insert = insert.Clauses(clause.OnConflict{
+					Columns:     []clause.Column{{Name: "customer_id"}, {Name: "idempotency_key"}},
+					TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "idempotency_key IS NOT NULL"}}},
+					DoNothing:   true,
+				})
+			}
+			res := insert.Create(&row)
+			if res.Error != nil {
+				return fmt.Errorf("insert order %s: %w", o.ID(), res.Error)
+			}
+			if row.IdempotencyKey != nil && res.RowsAffected == 0 {
+				taken = true
+
+				return nil // no order row, so no items either
 			}
 		} else {
 			res := tx.Model(&orderRow{}).
@@ -134,6 +175,10 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 		}
 		return nil
 	})
+
+	if err == nil && taken {
+		return order.ErrIdempotencyConflict
+	}
 
 	return translate(err)
 }
@@ -202,6 +247,10 @@ func toRow(o *order.Order) orderRow {
 		Version:    o.Version(),
 		Items:      make([]orderItemRow, 0, len(items)),
 	}
+	if o.IdempotencyKey() != "" {
+		key, hash := o.IdempotencyKey(), o.RequestHash()
+		row.IdempotencyKey, row.RequestHash = &key, &hash
+	}
 	for pos, it := range items {
 		row.Items = append(row.Items, orderItemRow{
 			OrderID:        row.ID,
@@ -235,6 +284,14 @@ func toDomain(row orderRow) (*order.Order, error) {
 		return nil, fmt.Errorf("load order %s: %w", row.ID, err)
 	}
 
+	var key, hash string
+	if row.IdempotencyKey != nil {
+		key = *row.IdempotencyKey
+	}
+	if row.RequestHash != nil {
+		hash = *row.RequestHash
+	}
+
 	return order.Reconstitute(order.ReconstituteParams{
 		ID:         order.ID(row.ID),
 		CustomerID: row.CustomerID,
@@ -243,6 +300,9 @@ func toDomain(row orderRow) (*order.Order, error) {
 		CreatedAt:  row.CreatedAt.UTC(),
 		UpdatedAt:  row.UpdatedAt.UTC(),
 		Version:    row.Version,
+
+		IdempotencyKey: key,
+		RequestHash:    hash,
 	})
 }
 

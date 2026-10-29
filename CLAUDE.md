@@ -122,6 +122,10 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
   （例如 inventory 缺貨）要做成 aggregate 狀態 + event，不能做成 error；反過來 optimistic-lock 的 `stock.ErrStale` / `order.ErrStale` 刻意不是 `kernel.Error`：
   它們 wrap `kernel.ErrConcurrentUpdate`，consumer 會 retry，rpc 回 `Aborted`（`x-error-code: concurrent_update`），metrics 記 `kind=aborted`。
 - **Optimistic lock**：aggregate 帶 `version`，`Save` 比對後 +1。存完後記憶體中的 aggregate 版本**不會**前進，要再存一次請先 reload。
+- **CreateOrder 冪等**：`CreateOrderRequest.idempotency_key`（選填，1–64 個可見 ASCII）。範圍是 `unique(customer_id, key)`，customer 是 `ownership.ForCreate` 解析後的（admin 代客 = 被代下單的 customer）；
+  key + `request_hash`（`order.Fingerprint(items)`，**不正規化**：順序、重複 SKU 都算內容）存在 `ordering.orders`（migration `0008`，partial unique index），與訂單同壽、不另設 TTL。
+  同 key 同內容 → 回原訂單**目前**狀態、不寫不發 event；同 key 不同內容 → `ALREADY_EXISTS` / `order.idempotency_key_reused`（訊息固定，不帶任何資料）。
+  併發靠 `INSERT … ON CONFLICT (customer_id, idempotency_key) DO NOTHING`（不 abort tx、不靠鎖）：`Save` 回 `ErrIdempotencyConflict`，use case 在**同一個 tx** 回讀勝出者；衝突路徑在 `Publish` 之前返回，所以 outbox 不會多一列。key 值不進 log / error / metric / span（R4）。空 key = 舊行為。
 - **Validation**：request 形狀由 protovalidate interceptor 擋（`x-error-code: request.validation_failed` + `Violations` detail），
   consumer path 沒有它，所以 domain 的檢查不能拿掉。
 - **Auth 只做 authentication**：`auth.mode` 預設 `off`（`task run`、E2E、console 都沒帶 credential）；開了之後 `server.NewAuthInterceptor`

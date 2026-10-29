@@ -77,6 +77,8 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	switch {
 	case o.Version() == 0 && exists:
 		return order.ErrDuplicate
+	case o.Version() == 0 && i.keyTaken(o):
+		return order.ErrIdempotencyConflict
 	case o.Version() != 0 && (!exists || cur.Version() != o.Version()):
 		return order.ErrStale
 	}
@@ -90,6 +92,44 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	return nil
 }
 
+// keyTaken reports whether another order of the same customer already owns o's idempotency key.
+func (i *OrderRepository) keyTaken(o *order.Order) bool {
+	if o.IdempotencyKey() == "" {
+		return false
+	}
+	_, taken := i.byKey(o.CustomerID(), o.IdempotencyKey())
+
+	return taken
+}
+
+func (i *OrderRepository) byKey(customerID, key string) (*order.Order, bool) {
+	for _, o := range i.data {
+		if o.CustomerID() == customerID && o.IdempotencyKey() == key {
+			return o, true
+		}
+	}
+
+	return nil, false
+}
+
+// FindByIdempotencyKey is the (customer, key) lookup of the Postgres unique index.
+func (i *OrderRepository) FindByIdempotencyKey(c context.Context, customerID, key string) (*order.Order, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	o, ok := i.byKey(customerID, key)
+	if !ok || key == "" {
+		return nil, order.ErrNotFound
+	}
+
+	return clone(o)
+}
+
 func clone(o *order.Order) (*order.Order, error) { return cloneAt(o, o.Version()) }
 
 func cloneAt(o *order.Order, version int64) (*order.Order, error) {
@@ -101,6 +141,9 @@ func cloneAt(o *order.Order, version int64) (*order.Order, error) {
 		CreatedAt:  o.CreatedAt(),
 		UpdatedAt:  o.UpdatedAt(),
 		Version:    version,
+
+		IdempotencyKey: o.IdempotencyKey(),
+		RequestHash:    o.RequestHash(),
 	})
 }
 

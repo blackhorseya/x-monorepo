@@ -4,16 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
+	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
 // idemSeq is process-wide: subtests share one database, so ids must never repeat.
@@ -66,6 +75,8 @@ type idemFixture struct {
 	create *usecase.CreateOrder
 	list   *usecase.ListOrders
 	events *lockedRecorder
+	// base is how many orders the shared database already held: subtests count only their own.
+	base int
 }
 
 func newIdemFixture(repo order.Repository) idemFixture {
@@ -73,21 +84,30 @@ func newIdemFixture(repo order.Repository) idemFixture {
 	clock := fixedClock{t: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)}
 	own := ownership.New(adminRole)
 
-	return idemFixture{
+	f := idemFixture{
 		create: usecase.NewCreateOrder(repo, events, atomicIDs{}, clock, own),
 		list:   usecase.NewListOrders(repo, own),
 		events: events,
 	}
+	f.base = f.count()
+
+	return f
 }
 
-func (f idemFixture) total(t *testing.T, ctx context.Context) int {
-	t.Helper()
-	out, err := f.list.Execute(ctx, dto.ListOrdersInput{})
+func (f idemFixture) count() int {
+	out, err := f.list.Execute(as(ops), dto.ListOrdersInput{})
 	if err != nil {
-		t.Fatalf("list: %v", err)
+		panic(err)
 	}
 
 	return len(out.Orders)
+}
+
+// total is the number of orders this subtest created.
+func (f idemFixture) total(t *testing.T, _ context.Context) int {
+	t.Helper()
+
+	return f.count() - f.base
 }
 
 func TestCreateOrder_IdempotencyKey(t *testing.T) {
@@ -325,4 +345,86 @@ func TestCreateOrder_IdempotencyKey(t *testing.T) {
 			}
 		})
 	})
+}
+
+// The outbox row is written in the same transaction as the order, so the proof
+// that a replay does not publish again has to run through the real Transactional
+// decorator, Postgres publisher and the outbox table, not a recording fake.
+func TestCreateOrder_IdempotencyKey_Outbox(t *testing.T) {
+	url := pgtest.URL(t)
+	cfg := config.Postgres{URL: url}
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	db, cleanup, err := platformpg.NewDB(cfg, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if err := platformpg.Up(context.Background(), cfg, postgres.Migration()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`TRUNCATE ordering.orders, ordering.events_v1_ordercreated CASCADE`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	pub, err := eventbus.NewPostgresPublisher(db, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := ownership.New(adminRole)
+	clock := fixedClock{t: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)}
+	create := usecasex.Chain[dto.CreateOrderInput, *dto.OrderOutput](
+		usecase.NewCreateOrder(postgres.NewOrderRepository(db), events.NewPublisher(pub), atomicIDs{}, clock, own),
+		usecasex.Transactional[dto.CreateOrderInput, *dto.OrderOutput](postgres.NewTransactor(db)),
+	)
+
+	outbox := func() int64 {
+		var n int64
+		if err := db.Raw(`SELECT count(*) FROM ordering.events_v1_ordercreated`).Scan(&n).Error; err != nil {
+			t.Fatal(err)
+		}
+
+		return n
+	}
+
+	in := dto.CreateOrderInput{Items: items("SKU-1"), IdempotencyKey: "k-outbox"}
+	first, err := create.Execute(as(alice), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		again, err := create.Execute(as(alice), in)
+		if err != nil || again.ID != first.ID {
+			t.Fatalf("replay = %+v, %v; want %s", again, err, first.ID)
+		}
+	}
+	if _, err := create.Execute(as(alice), dto.CreateOrderInput{Items: items("SKU-2"), IdempotencyKey: "k-outbox"}); !errors.Is(err, order.ErrIdempotencyKeyReused) {
+		t.Fatalf("reuse err = %v", err)
+	}
+	if n := outbox(); n != 1 {
+		t.Fatalf("outbox holds %d OrderCreated after 1 create + 3 replays + 1 reuse, want 1", n)
+	}
+
+	// Concurrent first use: still exactly one more row.
+	race := dto.CreateOrderInput{Items: items("SKU-3"), IdempotencyKey: "k-outbox-race"}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := create.Execute(as(alice), race); err != nil {
+				t.Errorf("race: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if n := outbox(); n != 2 {
+		t.Fatalf("outbox holds %d OrderCreated after the race, want 2", n)
+	}
 }

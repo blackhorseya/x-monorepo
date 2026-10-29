@@ -164,6 +164,18 @@ components:
             $ref: '#/components/schemas/ordering.v1.LineItem'
           title: items
           minItems: 1
+        idempotencyKey:
+          type: string
+          title: idempotency_key
+          maxLength: 64
+          pattern: ^[\x21-\x7E]*$
+          description: |-
+            Optional retry token (1-64 visible ASCII characters). Empty = no protection:
+             every call creates an order. With a key, retrying the same items returns the
+             original order as it is now (nothing is created or published again), and the
+             same key with different items (item order counts) is ALREADY_EXISTS
+             (order.idempotency_key_reused). The key is scoped to the customer the order
+             is placed for, so an admin acting for a customer shares that customer's keys.
       title: CreateOrderRequest
       additionalProperties: false
     ordering.v1.CreateOrderResponse:

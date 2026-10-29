@@ -134,6 +134,7 @@ admin role 名稱是注入的 `auth.admin_role`（`ProvideOwnership`），不是
 - page token 綁的是**解析後**的 customer，所以非 admin 不帶 filter 翻頁、token 跟自己的 Subject 一致。
 - `auth.mode: off` 時沒有 principal，整張表只剩 anonymous 那欄；consumer path 永遠是 anonymous，不受影響。
 - `auth.public` 列進去的 procedure 不跑 auth，也就是 anonymous：公開的 `GetOrder` 任何人都讀得到任何訂單。ownership 保護的是「帶了 credential 的人」。
+- **冪等（`idempotency_key`）**：`CreateOrder` 的重送保護，範圍是**解析後的 customer**——語意見 README 的「CreateOrder 冪等」。
 - **行為變更**：以前任何 credential 都能替任何 customer 下單。現在 role-less 的 static key / JWT 只能替自己下單，要代客下單的整合（例如後台系統）需要 `auth.admin_role`。
   proto 的 `CreateOrderRequest.customer_id` 拿掉 `min_len`（沒用 `optional` 關鍵字，Go 型別不變、`buf breaking` 無差異）；空值的語意由 use case 決定。
 - Console 的下單表單：Customer 選填；admin（以 `ListAccounts` 探測，跟 Accounts 導覽同一個判斷）或 anonymous（`WhoAmI.anonymous`）才可填，其他人欄位鎖住、不送 `customer_id`。這只是便利，伺服器才是關卡。

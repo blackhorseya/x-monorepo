@@ -26,7 +26,11 @@ type Order struct {
 	// version is the optimistic-concurrency token Repository.Save compares:
 	// 0 for an order never saved, then the number of saves.
 	version int64
-	events  []Event // raised, not yet pulled (see events.go)
+	// idempotencyKey / requestHash are set only on an order created with a key:
+	// the caller's retry token and the Fingerprint of the items it was spent on.
+	idempotencyKey string
+	requestHash    string
+	events         []Event // raised, not yet pulled (see events.go)
 }
 
 // Params are the inputs of New. A parameter object (not state: every field is exported
@@ -37,6 +41,8 @@ type Params struct {
 	CustomerID string
 	Items      []LineItem
 	Now        time.Time
+	// IdempotencyKey is optional; "" = the order is not retry-protected.
+	IdempotencyKey string
 }
 
 // New creates a pending Order and enforces creation invariants.
@@ -62,6 +68,10 @@ func New(p Params) (*Order, error) {
 		createdAt:  p.Now,
 		updatedAt:  p.Now,
 	}
+	if p.IdempotencyKey != "" {
+		o.idempotencyKey = p.IdempotencyKey
+		o.requestHash = Fingerprint(o.items)
+	}
 	o.record(NewCreated(o))
 
 	return o, nil
@@ -76,6 +86,9 @@ type ReconstituteParams struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	Version    int64
+	// IdempotencyKey / RequestHash are "" for an order created without a key.
+	IdempotencyKey string
+	RequestHash    string
 }
 
 // Reconstitute rebuilds an Order from persistence. Only repositories should call it.
@@ -94,6 +107,9 @@ func Reconstitute(p ReconstituteParams) (*Order, error) {
 		createdAt:  p.CreatedAt,
 		updatedAt:  p.UpdatedAt,
 		version:    p.Version,
+
+		idempotencyKey: p.IdempotencyKey,
+		requestHash:    p.RequestHash,
 	}, nil
 }
 
@@ -148,6 +164,18 @@ func (x *Order) Status() Status       { return x.status }
 func (x *Order) CreatedAt() time.Time { return x.createdAt }
 func (x *Order) UpdatedAt() time.Time { return x.updatedAt }
 func (x *Order) Version() int64       { return x.version }
+
+// IdempotencyKey is the retry token the order was created with, "" if none.
+func (x *Order) IdempotencyKey() string { return x.idempotencyKey }
+
+// RequestHash is the Fingerprint of the items the idempotency key was spent on, "" if no key.
+func (x *Order) RequestHash() string { return x.requestHash }
+
+// IsReplayOf reports whether items are the request this order's idempotency key
+// was first spent on (same Fingerprint). An order without a key replays nothing.
+func (x *Order) IsReplayOf(items []LineItem) bool {
+	return x.requestHash != "" && x.requestHash == Fingerprint(items)
+}
 
 func sumItems(items []LineItem) (kernel.Money, error) {
 	if len(items) == 0 {

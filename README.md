@@ -259,6 +259,13 @@ worker expire ─► inventory ExpireReservations（RESERVED 超過 TTL → EXPI
 Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED | CANCELLED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）；COMPLETED 是終點，不能再取消。
 `ConfirmOrder` 沒有 RPC：確認是 inventory 的答覆，不是 client 的呼叫；`CompleteOrder` 只有 RPC（只有 CONFIRMED 能完成，`order.cannot_complete`）。
 cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的那邊 reload 後被狀態機拒絕，所以每張 order 只會有 `OrderCancelled` / `OrderCompleted` 其一。
+**CreateOrder 冪等**：`CreateOrderRequest.idempotency_key`（選填、1–64 個可見 ASCII；放在 request 欄位而不是 header，因為它在 proto / openapi 契約裡、所有協定長一樣、可被 protovalidate 驗證，也不必為它多一個把 header 塞進 context 的 interceptor）讓 client 逾時重送不會下出兩張單：
+- **範圍**：`(customer_id, key)`，customer 是 `ownership` 解析後的那個——admin 代客下單時就是被代下單的 customer，所以同一個 key 在不同 customer 之間互不相干，也看不到彼此。
+- **同 key 同內容**回原訂單，狀態是**現在**的（可能已經 CONFIRMED，不是建單當下的快照），不寫入、不發 `OrderCreated`。「內容」= items 的 sku / quantity / 單價 / 幣別，**依序**（`order.Fingerprint`，sha256，不正規化）：同樣的行換個順序、或把同 SKU 拆成兩行，都算不同內容——順序就是訂單的 position，悄悄回一張跟你這次送的不一樣的單比報錯更糟。
+- **同 key 不同內容**：`ALREADY_EXISTS` + `x-error-code: order.idempotency_key_reused`，沒寫入；訊息固定，不帶訂單 id、items 或 key。換 key 才能下新單。
+- **保存期 = 訂單的壽命**：key 與 `request_hash` 是 `ordering.orders` 的兩個 nullable 欄位（migration `0008`，partial unique index），沒有 TTL 表，key 不會比訂單先過期。空 key = 不保護，行為與以前完全相同（舊 client 不受影響）。
+- **併發**：兩個同 key 請求同時到，靠 `INSERT … ON CONFLICT (customer_id, idempotency_key) DO NOTHING` 決勝負，不靠應用層鎖；輸家（`Save` → `ErrIdempotencyConflict`）在**同一個交易**回讀勝出者再決定回放或 reused（DO NOTHING 不會讓交易 abort）。衝突路徑在 `Publish` 之前返回，outbox 不會多一列。
+- key 值不進 log、error、metric label、span。
 **Reservation TTL**：客戶既不完成也不取消，庫存不能一直被扣著——`worker expire --older-than 24h`（Helm `expire` CronJob 每 15 分鐘；`task expire -- --older-than 24h --dry-run` 先看）掃 RESERVED 超過 TTL 的 reservation，一批一個交易、最老的先。
 Reservation 沒有 version：它和同一張 order 的 Commit / Release 之間的鎖是 **stock 列的 version**（同一交易裡一起 Save），輸的那批整批 rollback 重跑。
 已知的窗口：`CompleteOrder` commit 到 inventory 消費 `OrderCompleted` 之間 reservation 仍是 RESERVED，sweep 剛好掃到會把庫存還回去並請求取消，ordering 拒絕（COMPLETED 是終點）、`OrderCompleted` 到了找到 EXPIRED 也 drop——結果是 order COMPLETED 但沒賣出。窗口是一跳 consumer 對上以小時計的 TTL，守的是 eventbus lag 的 alert，不是 use case。
