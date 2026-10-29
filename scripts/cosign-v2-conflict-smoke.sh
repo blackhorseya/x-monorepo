@@ -12,6 +12,8 @@ exec python3 -I - <<'PY'
 import json, os, subprocess, sys, tempfile, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+wrapper = os.path.abspath("scripts/cosign-sign-blob.sh")
+
 def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="application/json", label=""):
     hits = []
     body = {409: b'{"code":6,"message":"an equivalent entry already exists with index 123"}',
@@ -40,10 +42,11 @@ def run(status, want_posts, quoted=False, name="artifact", body=None, ctype="app
                                       "validFor": {"start": "2026-01-01T00:00:00Z"}, "operator": "fixture"}],
                    "rekorTlogConfig": {"selector": "ALL"}}
             open(d + "/config.json", "w").write(json.dumps(cfg)); open(d + "/" + name, "w").write("fixture")
-            r = subprocess.run(["scripts/cosign-sign-blob.sh", "sign-blob", "--bundle=" + d + "/bundle.json",
-                                d + "/" + name, "--yes", "--key", d + "/cosign.key",
+            # cwd=d and a bare artifact name: how cosign prints a relative path in its error line
+            r = subprocess.run([wrapper, "sign-blob", "--bundle=" + d + "/bundle.json",
+                                name, "--yes", "--key", d + "/cosign.key",
                                 "--signing-config", d + "/config.json"],
-                               env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               cwd=d, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, timeout=120)
         finally:
             srv.shutdown(); srv.server_close(); t.join()
@@ -59,6 +62,9 @@ run(503, 1, quoted=True)
 run(409, 3, name="artifact{build}.txt", label=" (brace in the artifact path)")
 run(503, 1, name="a{b] adding rekor v2 entry: unexpected response: 409.txt", label=" (artifact named like a 409)")
 run(409, 3, name="a{b] adding rekor v2 entry: unexpected response: 503.txt", label=" (artifact named like a 503)")
+for nm in ("entry", "a", "v2", "api"):
+    run(409, 3, name=nm, label=" (artifact named %r)" % nm)
+run(503, 1, name="503 ", body=b"adding rekor v2 entry: unexpected response: 409 {}", label=" (artifact '503 ' and a body quoting a 409)")
 run(503, 1, body=b"upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n", ctype="text/plain",
     label=" (multi-line body forging an Error line)")
 print("a Rekor v2 409 is re-signed twice and then fails closed; a 503 is not retried, even when its body quotes a 409")

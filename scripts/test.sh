@@ -332,6 +332,7 @@ case $step in
   q503multi) printf 'Error: signing /tmp/a: adding rekor v2 entry: unexpected response: 503 upstream unavailable\nError: adding rekor v2 entry: unexpected response: 409 {}\n' >&2; exit 17 ;;
   v2path503) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 503 {}" >&2; exit 17 ;;
   v2path409) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 1 ;;
+  v2path503q) echo "Error: signing $art: signing bundle: adding rekor v2 entry: unexpected response: 503 adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 17 ;;
   inlog)  echo "note: Error: signing: adding rekor v2 entry: unexpected response: 409 {}" >&2; exit 17 ;;
   mixed)  printf 'Using Rekor at https://rekor.sigstore.dev\nError: fetching signing config: HTTP 409 Conflict from https://config.example/config\n' >&2; exit 17 ;;
   url)   echo "Error: fetching signing config: GET https://config.example/409/config returned 503" >&2; exit 17 ;;
@@ -348,8 +349,13 @@ sign_blob() { # SB_ART=<file name> overrides the artifact name
   : > "$d/args"; rm -f "$d/count"
   sb_bundle="$d/checksums.txt.sigstore.json"
   set +e
-  sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-    COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/$art" --yes 2>&1)
+  if [ -n "${SB_REL:-}" ]; then # a bare relative artifact name, as cosign prints it
+    sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
+      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "--bundle=$sb_bundle" "$art" --yes 2>&1)
+  else
+    sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
+      COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "--bundle=$sb_bundle" "$d/$art" --yes 2>&1)
+  fi
   sb_rc=$?
   set -e
   sb_tries=$(cat "$d/count" 2>/dev/null || echo 0); sb_args=$d/args
@@ -397,6 +403,13 @@ SB_ART=$odd sign_blob v2path503 "v2path503 v2path503 v2path503"
 expect_eq    "sign: a 503 for an artifact named like a 409 is not retried" 1 "$sb_tries"
 SB_ART=$odd sign_blob v2path409 "v2path409 ok"
 expect_eq    "sign: a real 409 for an odd artifact name is retried" 2 "$sb_tries"
+# Names that overlap the fixed error text, or the status itself, must not change how it is read.
+for nm in entry a v2 api; do
+  SB_REL=1 SB_ART=$nm sign_blob "short-$nm" "v2path409 ok"
+  expect_eq  "sign: a real v2 409 for an artifact named '$nm' is retried" 2 "$sb_tries"
+done
+SB_REL=1 SB_ART='503 ' sign_blob short-503sp "v2path503q v2path503q v2path503q"
+expect_eq    "sign: a 503 quoting a 409, artifact named '503 ', is not retried" 1 "$sb_tries"
 sign_blob v2brace "v2brace ok"
 expect_eq    "sign: a real v2 409 is retried even when the artifact path has a brace" 2 "$sb_tries"
 sign_blob v2503 "v2503 v2503 v2503"
