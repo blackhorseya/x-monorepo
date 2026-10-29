@@ -140,15 +140,15 @@ tasks:
         }
 
   check-gen-fresh-all:
-    desc: same as the CI gen-freshness job — task gen wire gen-ts, then any diff fails (includes web/packages/proto TS; needs network)
+    desc: same as the CI gen-freshness job — task gen wire gen-ts, then any unstaged diff fails (same scope as CI's `git diff --exit-code`, incl. TS; stage your changes first; needs network)
     cmds:
       - task: gen
       - task: wire
       - task: gen-ts
       - |
-        git diff --quiet -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml' 'web/packages/proto/src/gen' || {
+        git diff --quiet || {
           echo "generated code is stale — commit the result of: task gen wire gen-ts"
-          git --no-pager diff --stat -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml' 'web/packages/proto/src/gen'
+          git --no-pager diff --stat
           exit 1
         }
 
