@@ -33,6 +33,10 @@ cp "$work/bin/rpc" "$work/bin/worker"
 #   both       rpc_errors (all timeouts) and reservation_wrong_status crossed
 #   other      rpc_errors crossed, 4 of the 7 errors are not timeouts
 #   nosummary  exit 99 and no summary file at all
+#   emptycount like timeouts, but rpc_errors{code:transport.timeout} is {} (no count)
+#   negative   like timeouts, but request.timeout is 9 and transport.timeout -2 (they add up to the 7 rpc_errors)
+#   rpcnocount like timeouts, but rpc_errors itself has no count
+#   okless     k6 exits 0 and writes no summary
 #   onlyreq    like timeouts, but the summary has no rpc_errors{code:transport.timeout} sub-metric
 cat > "$work/fakebin/k6" <<'EOF'
 #!/usr/bin/env python3
@@ -57,14 +61,23 @@ m = {
 }
 if phase == "create":
     setload(os.environ["FAKE_K6_BUSY"]); time.sleep(2)
+if mode == "okless":
+    setload(os.environ["FAKE_K6_QUIET"]); sys.exit(0)
 if mode == "script":
     setload(os.environ["FAKE_K6_QUIET"]); print("GoError: fake script error"); sys.exit(107)
-if mode in ("timeouts", "wrong", "both", "other", "nosummary", "onlyreq"):
-    if mode in ("timeouts", "both", "other", "onlyreq"):
+if mode in ("timeouts", "wrong", "both", "other", "nosummary", "onlyreq", "emptycount", "negative", "rpcnocount"):
+    if mode in ("timeouts", "both", "other", "onlyreq", "emptycount", "negative", "rpcnocount"):
         m["rpc_errors"] = {"count": 7, "thresholds": {"count==0": True}}
         m["rpc_errors{code:request.timeout}"] = {"count": 3 if mode == "other" else 7, "thresholds": {"count>=0": False}}
         if mode != "onlyreq":
             m["rpc_errors{code:transport.timeout}"] = {"count": 0, "thresholds": {"count>=0": False}}
+        if mode == "emptycount":
+            m["rpc_errors{code:transport.timeout}"] = {}
+        if mode == "negative":
+            m["rpc_errors{code:request.timeout}"]["count"] = 9
+            m["rpc_errors{code:transport.timeout}"]["count"] = -2
+        if mode == "rpcnocount":
+            m["rpc_errors"] = {"thresholds": {"count==0": True}}
     if mode in ("wrong", "both"):
         m["reservation_wrong_status"] = {"count": 2, "thresholds": {"count==0": True}}
     if mode != "nosummary":
@@ -104,7 +117,7 @@ grep -q "rpc_errors" "$work/thr.out/run1-invalid.txt" 2>/dev/null && r=ok || r=b
 # 1b. anything that is not provably overload is a failure, never exit 3 and never "try again": a correctness
 # threshold, a correctness threshold together with an overload one (correctness wins), rpc_errors that are not
 # all timeouts, and a summary that is missing (fail-closed)
-for mode in wrong both other nosummary onlyreq; do
+for mode in wrong both other nosummary onlyreq emptycount negative rpcnocount okless; do
   bench "f-$mode" 0.5 "$mode"
   rc=$(rc_of "f-$mode"); { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad
   check $r "$mode: a failure (not exit 0, not exit 3), got exit $rc"
