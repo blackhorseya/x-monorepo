@@ -262,3 +262,68 @@ test("an access token that has expired while the IdP is unreachable is not shown
   await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
   await expect(page).not.toHaveURL(/\/login/);
 });
+
+test("the access token's expiry is acted on at the moment it passes, even with a refresh still pending", async ({ page }) => {
+  await stubConfig(page);
+  const idp = await mockIdp(page, { expiresIn: 10 });
+  let release!: () => void;
+  idp.gate = new Promise<void>((r) => (release = r));
+  await page.goto("/login");
+  await signIn(page);
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+  await expect.poll(() => refreshGrants(idp).length, { timeout: 12_000 }).toBe(1); // asked at ~5 s, not answered
+
+  // 10 s are over and the refresh is still out: that token is no credential any more.
+  await expect(page).toHaveURL(/\/login(\?|$)/, { timeout: 12_000 });
+  await expect(subject(page)).toHaveText("anonymous");
+
+  // The answer that arrives late is still good (it is the same session), and signs the user back in.
+  release();
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+  expect(await page.evaluate(() => JSON.stringify({ ...sessionStorage }))).toContain(idp.refreshTokens[1]);
+});
+
+// Without expires_in the console used to assume 300 s, longer than the token's own exp.
+const soon = () => Math.floor(Date.now() / 1000) + 3;
+for (const [label, raw] of [["no expires_in", undefined], ["expires_in 300", 300]] as const) {
+  test(`a token whose own exp is 3 s away is refused (${label}): the earlier of the two counts`, async ({ page }) => {
+    await stubConfig(page);
+    const idp = await mockIdp(page);
+    idp.claims = { exp: soon() };
+    idp.expiresInRaw = raw;
+    await page.goto("/login");
+    await signIn(page);
+    await expect(page.getByRole("alert")).toContainText(/expire/i);
+    await expect(subject(page)).toHaveText("anonymous");
+    expect(idp.tokenRequests).toHaveLength(1);
+  });
+}
+
+test("no expires_in and an exp 120 s away: accepted, and the session restores after a reload", async ({ page }) => {
+  await stubConfig(page);
+  const idp = await mockIdp(page);
+  idp.claims = { exp: Math.floor(Date.now() / 1000) + 120 };
+  idp.expiresInRaw = undefined;
+  await page.goto("/login");
+  await signIn(page);
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+  await page.reload();
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+});
+
+test("an IdP that never answers a refresh is given up on: the page still comes up, with the recovery notice", async ({ page }) => {
+  await stubConfig(page);
+  const idp = await mockIdp(page);
+  await page.goto("/login");
+  await signIn(page);
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+  let release!: () => void;
+  idp.gate = new Promise<void>((r) => (release = r)); // restore on reload is asked, never answered
+  try {
+    await page.goto("/orders", { waitUntil: "commit" });
+    await expect(page.getByRole("status").filter({ hasText: /identity provider/i })).toBeVisible({ timeout: 20_000 });
+    expect(await page.evaluate(() => JSON.stringify({ ...sessionStorage }))).toContain(idp.refreshTokens[0]); // kept
+  } finally {
+    release();
+  }
+});
