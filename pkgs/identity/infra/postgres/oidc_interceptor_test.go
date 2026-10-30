@@ -81,6 +81,7 @@ type flakyResolve struct {
 	inner auth.ResolveExternalUC
 	down  atomic.Bool
 	calls atomic.Int64
+	late  atomic.Int64 // nanoseconds the answer is held back, ignoring the context
 }
 
 func (f *flakyResolve) Execute(c context.Context, in dto.ResolveExternalInput) (*dto.ResolveExternalOutput, error) {
@@ -88,8 +89,10 @@ func (f *flakyResolve) Execute(c context.Context, in dto.ResolveExternalInput) (
 	if f.down.Load() {
 		return nil, errors.New("connection refused")
 	}
+	out, err := f.inner.Execute(c, in)
+	time.Sleep(time.Duration(f.late.Load()))
 
-	return f.inner.Execute(c, in)
+	return out, err
 }
 
 type oidcRequest struct {
@@ -113,7 +116,7 @@ type seen struct {
 	claimed   bool // ClaimInvite ran and bound the identity
 }
 
-func newOIDCWorld(t *testing.T) *oidcWorld {
+func newOIDCWorld(t *testing.T, resolverTimeout time.Duration) *oidcWorld {
 	t.Helper()
 	w := &oidcWorld{extWorld: newExtWorld(t), idp: newIdP(t)}
 	w.iss = w.idp.srv.URL
@@ -129,7 +132,7 @@ func newOIDCWorld(t *testing.T) *oidcWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, AdminRole: "admin", APIKeys: "ops=ops-key-0123456789abc:admin"}, noop.NewMeterProvider(), nil,
+	in, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, AdminRole: "admin", APIKeys: "ops=ops-key-0123456789abc:admin", ResolverTimeout: resolverTimeout}, noop.NewMeterProvider(), nil,
 		server.OIDCAuth{Verifier: v, Resolver: auth.NewExternalCredentials(ext)})
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +206,7 @@ const orderProc = "/ordering.v1.OrderService/CreateOrder"
 // same token is the account's principal, with the account's roles and not the
 // token's.
 func TestOIDCInterceptor_UnboundThenClaimedOnPostgres(t *testing.T) {
-	w := newOIDCWorld(t)
+	w := newOIDCWorld(t, 0)
 	w.newAccount(t, "acc-1", "viewer")
 	w.invite(t, "acc-1", "sub-1@example.com")
 	// The token claims admin; the account does not have it.
@@ -238,7 +241,7 @@ func TestOIDCInterceptor_UnboundThenClaimedOnPostgres(t *testing.T) {
 // A disabled account and a session revoked after the token was issued are
 // refused; the database error is refused and not remembered.
 func TestOIDCInterceptor_DisabledRevokedAndDBErrorOnPostgres(t *testing.T) {
-	w := newOIDCWorld(t)
+	w := newOIDCWorld(t, 0)
 	w.newAccount(t, "acc-1", "viewer")
 	w.invite(t, "acc-1", "sub-1@example.com")
 	if _, err := w.claim.Execute(w.ctx, dto.ClaimInviteInput{Issuer: w.iss, Subject: "sub-1", Email: "sub-1@example.com", EmailVerified: true}); err != nil {
@@ -281,4 +284,25 @@ func TestOIDCInterceptor_DisabledRevokedAndDBErrorOnPostgres(t *testing.T) {
 	}
 	w.clock.advance(auth.DefaultCacheTTL)
 	w.wantRejected(t, "disabled", orderProc, w.jwt(t, "sub-1", nil), connect.CodeUnauthenticated, server.InvalidCredentialCode)
+}
+
+// An answer that arrives after auth.resolver_timeout is not trusted, even
+// "unbound": it must not reach ClaimInvite nor write a binding (reviewer F1 of #290).
+func TestOIDCInterceptor_LateUnboundDoesNotClaimOnPostgres(t *testing.T) {
+	w := newOIDCWorld(t, 150*time.Millisecond)
+	w.newAccount(t, "acc-1", "viewer")
+	w.invite(t, "acc-1", "sub-1@example.com")
+	w.flaky.late.Store(int64(500 * time.Millisecond))
+
+	w.wantRejected(t, "late unbound, ClaimInvite", identityv1connect.IdentityServiceClaimInviteProcedure, w.jwt(t, "sub-1", nil), connect.CodeUnauthenticated, server.InvalidCredentialCode)
+	w.wantRejected(t, "late unbound, other procedure", orderProc, w.jwt(t, "sub-1", nil), connect.CodeUnauthenticated, server.InvalidCredentialCode)
+	if n := w.count(t, "SELECT count(*) FROM identity.external_identities"); n != 0 {
+		t.Fatalf("a late answer bound %d identities", n)
+	}
+
+	// In time, the same call claims the invite.
+	w.flaky.late.Store(0)
+	if _, err := w.call(identityv1connect.IdentityServiceClaimInviteProcedure, w.jwt(t, "sub-1", nil)); err != nil {
+		t.Fatalf("ClaimInvite in time: %v", err)
+	}
 }

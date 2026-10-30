@@ -222,6 +222,34 @@ func TestOIDC_ResolverTimeout(t *testing.T) {
 	wantReject(t, out, connect.CodeUnauthenticated, server.InvalidCredentialCode)
 }
 
+// A refusal is a refusal whatever the resolver answered: an answer that
+// arrives after auth.resolver_timeout is not trusted, and that includes "this
+// identity is unbound", which would otherwise let a ClaimInvite through
+// (reviewer F1 of #290).
+func TestOIDC_LateAnswerIsRejectedWhateverItSays(t *testing.T) {
+	cfg := requiredCfg
+	cfg.ResolverTimeout = 20 * time.Millisecond
+	for name, c := range map[string]struct {
+		err       error
+		procedure string
+	}{
+		"unbound on ClaimInvite":     {server.ErrUnboundIdentity, claimInvite},
+		"unbound on another":         {server.ErrUnboundIdentity, otherProc},
+		"refused":                    {server.ErrCredentialRefused, otherProc},
+		"infrastructure failure":     {errors.New("db down"), otherProc},
+		"unbound, resolver honoured": {context.DeadlineExceeded, claimInvite},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := &fakeExternal{err: c.err, delay: 200 * time.Millisecond, unbind: map[string]bool{claimInvite: true}}
+			out := runOIDC(t, cfg, &fakeVerifier{}, r, c.procedure, bearer(oidcToken))
+			wantReject(t, out, connect.CodeUnauthenticated, server.InvalidCredentialCode)
+			if out.hasExt {
+				t.Error("a rejected call must not carry the external identity")
+			}
+		})
+	}
+}
+
 // Credential precedence: with an X-API-Key the bearer is never looked at —
 // not on success and not on failure (no fallback either way).
 func TestOIDC_APIKeyWins(t *testing.T) {
