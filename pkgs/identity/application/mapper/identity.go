@@ -10,12 +10,13 @@ import (
 
 func ToAccountOutput(a *account.Account) *dto.AccountOutput {
 	return &dto.AccountOutput{
-		ID:        a.ID().String(),
-		Name:      a.Name(),
-		Roles:     a.Roles(),
-		Status:    a.Status().String(),
-		CreatedAt: a.CreatedAt(),
-		UpdatedAt: a.UpdatedAt(),
+		ID:                a.ID().String(),
+		Name:              a.Name(),
+		Roles:             a.Roles(),
+		Status:            a.Status().String(),
+		CreatedAt:         a.CreatedAt(),
+		UpdatedAt:         a.UpdatedAt(),
+		SessionsRevokedAt: a.SessionsRevokedAt(),
 	}
 }
 

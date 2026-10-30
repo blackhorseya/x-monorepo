@@ -17,6 +17,12 @@ var (
 	// holding a usable key. The message names nobody: the caller may not be
 	// allowed to know who the other admins are.
 	ErrLastAdmin = kernel.NewError(kernel.KindFailedPrecondition, "identity.last_admin", "operation would leave no active admin with a usable api key")
+	// ErrSessionRevoked: the access token was issued before the account's
+	// sessions were revoked (sessions_revoked_at).
+	ErrSessionRevoked = kernel.NewError(kernel.KindPermissionDenied, "account.session_revoked", "session was revoked")
+	// ErrMissingIssuedAt: a token without iat cannot be compared with
+	// sessions_revoked_at, so it is refused.
+	ErrMissingIssuedAt = kernel.NewError(kernel.KindPermissionDenied, "account.missing_iat", "token has no issued-at time")
 	// ErrDisabled is why a credential of a disabled account does not resolve.
 	ErrDisabled  = kernel.NewError(kernel.KindFailedPrecondition, "account.disabled", "account is disabled")
 	ErrNotFound  = kernel.NewError(kernel.KindNotFound, "account.not_found", "account not found")
