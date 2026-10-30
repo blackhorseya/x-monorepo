@@ -15,7 +15,8 @@ src=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 # The fixtures must not inherit the developer's signing / hook settings.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
-trap 'rm -rf "$tmp"' EXIT
+PB_PIDS=""   # dex-prebind stubs; killed by the one EXIT trap set below the prepull helpers
+trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; rm -rf "$tmp"' EXIT
 fail=0 pass=0
 
 # fixture <name>: a fresh repo at $repo with scripts/ committed on main and tag v0.1.0.
@@ -158,7 +159,7 @@ prepull_stop() {
   wait "$prepull_pid" 2>/dev/null || true
   prepull_pid=""
 }
-trap 'prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
+trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 cat > "$fake_engine" <<'ENGINE'
@@ -876,6 +877,203 @@ fi
 # Task 3.x maps a failing command to 201 unless --exit-code; the workflow must pass it or 3 never reaches the verdict
 if grep -Eq 'task --exit-code k6-bench' "$src/.github/workflows/k6-bench.yml"; then ok; else bad "k6-bench.yml must run task --exit-code k6-bench"; fi
 if grep -Eq 'scripts/k6-bench-verdict.sh' "$src/.github/workflows/k6-bench.yml"; then ok; else bad "k6-bench.yml must classify with scripts/k6-bench-verdict.sh"; fi
+
+# ── scripts/dex-prebind.sh ───────────────────────────────────────────────────
+# Against tests/dex-prebind/stub_rpc.py (an in-memory IdentityService) and a fake dex-token.sh: the
+# first run binds both Dex accounts through CreateAccount → CreateInvite → ClaimInvite, a rerun
+# changes nothing, a non-dev issuer or a non-local server is refused before any request, and
+# neither the API key nor a token reaches the output (#274 part 2).
+pb_key="xk_stub-admin-secret-9f3a"
+pb_dev=http://dex.localtest.me:5556/dex
+pb_fake="$tmp/fake-dex-token.sh"
+cat > "$pb_fake" <<'FAKE'
+#!/usr/bin/env bash
+echo "$1" >> "$PB_TOKEN_CALLS"
+if [ -n "${PB_TOKEN_PLAIN:-}" ]; then echo "tokplain$(printf %s "$1" | tr -c 'a-z0-9' x)"; else echo "tok-secret-$1"; fi
+FAKE
+chmod +x "$pb_fake"
+# pb_up <name> [VAR=value...]: starts a stub (extra env for it); sets pb_dir, pb_url.
+pb_up() {
+  pb_dir="$tmp/pb-$1"; mkdir -p "$pb_dir"; shift
+  rm -f "$pb_dir/port"; : > "$pb_dir/log"; : > "$pb_dir/tokens"   # a stale port file would point at the previous stub of the same name
+  env STUB_ADMIN_KEY="$pb_key" STUB_ISSUER="$pb_dev" "$@" python3 "$src/tests/dex-prebind/stub_rpc.py" "$pb_dir/port" "$pb_dir/log" >/dev/null 2>&1 &
+  PB_PIDS="$PB_PIDS $!"
+  local i=0; while [ ! -s "$pb_dir/port" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  pb_url="http://127.0.0.1:$(cat "$pb_dir/port")"
+}
+# pb_run [VAR=value...]: runs the script against the current stub; sets out (stdout+stderr) and rc.
+pb_run() {
+  rc=0
+  out=$(env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" 2>&1) || rc=$?
+}
+pb_state() { curl -fsS "$pb_url/_state"; }
+pb_calls() { grep -c "^$1 " "$pb_dir/log" || true; }
+
+pb_up first
+pb_run
+expect_eq "dex-prebind: first run succeeds" "0" "$rc"
+st=$(pb_state)
+expect_eq "dex-prebind: admin account has the admin role" '["admin"]' "$(echo "$st" | jq -c '[.accounts[] | select(.name=="admin@example.com") | .roles[]]')"
+expect_eq "dex-prebind: user account has no role"         '[]'        "$(echo "$st" | jq -c '[.accounts[] | select(.name=="user@example.com") | .roles[]]')"
+expect_eq "dex-prebind: two accounts, two claimed invites, two bindings" "2 2 2" \
+  "$(echo "$st" | jq -r '[(.accounts|length), ([.invites[]|select(.status=="INVITE_STATUS_CLAIMED")]|length), (.identities|length)] | join(" ")')"
+expect_eq "dex-prebind: bindings are for the dev issuer" "[\"$pb_dev\"]" "$(echo "$st" | jq -c '[.identities[].issuer] | unique')"
+expect_eq "dex-prebind: CreateInvite uses the admin key"  "2 admin" "$(pb_calls CreateInvite) $(grep '^CreateInvite ' "$pb_dir/log" | sort -u | cut -d' ' -f2)"
+expect_eq "dex-prebind: ClaimInvite uses the bearer token" "2 bearer" "$(pb_calls ClaimInvite) $(grep '^ClaimInvite ' "$pb_dir/log" | sort -u | cut -d' ' -f2)"
+expect_eq "dex-prebind: one token per account" "admin@example.com user@example.com" "$(sort "$pb_dir/tokens" | tr '\n' ' ' | sed 's/ $//')"
+first_out=$out
+
+before=$(wc -l < "$pb_dir/log" | tr -d ' ') ; st_before=$(pb_state); tokens_before=$(wc -l < "$pb_dir/tokens" | tr -d ' ')
+pb_run
+expect_eq "dex-prebind: rerun succeeds" "0" "$rc"
+expect_eq "dex-prebind: rerun writes nothing (state identical)" "$st_before" "$(pb_state)"
+expect_eq "dex-prebind: rerun calls no mutation" "0" "$(grep -cE '^(CreateAccount|CreateInvite|ClaimInvite) ' <(tail -n +$((before + 1)) "$pb_dir/log") || true)"
+expect_eq "dex-prebind: rerun asks Dex for no token" "$tokens_before" "$(wc -l < "$pb_dir/tokens" | tr -d ' ')"
+expect_match "dex-prebind: rerun says already bound" 'already bound' "$out"
+rerun_out=$out
+
+# a wrong key is refused by the server: non-zero, and the key is not echoed
+pb_run ADMIN_API_KEY=xk_wrong-key-secret
+bad_key_rc=$rc bad_key_out=$out
+if [ "$bad_key_rc" != 0 ]; then ok; else bad "dex-prebind: a rejected admin key must fail"; fi
+
+# an issuer that is not the dev Dex is refused before anything is sent
+before=$(wc -l < "$pb_dir/log" | tr -d ' ')
+pb_run ISSUER=https://accounts.example.com
+if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a non-dev issuer must be refused"; fi
+expect_match "dex-prebind: the refusal names the issuer rule" 'issuer' "$out"
+expect_eq "dex-prebind: a non-dev issuer sends no request" "$before" "$(wc -l < "$pb_dir/log" | tr -d ' ')"
+expect_eq "dex-prebind: a non-dev issuer asks Dex for no token" "$tokens_before" "$(wc -l < "$pb_dir/tokens" | tr -d ' ')"
+pb_run ISSUER="${pb_dev}/"
+if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: the issuer must match exactly (trailing slash)"; fi
+# the admin key must not be sent to a non-local server
+pb_run BASE_URL=https://rpc.example.com
+if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a non-local BASE_URL must be refused"; fi
+expect_match "dex-prebind: the refusal names BASE_URL" 'BASE_URL' "$out"
+pb_run ADMIN_API_KEY=
+if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a missing ADMIN_API_KEY must fail"; fi
+expect_match "dex-prebind: the refusal names ADMIN_API_KEY" 'ADMIN_API_KEY' "$out"
+expect_eq "dex-prebind: refusals sent nothing" "$before" "$(wc -l < "$pb_dir/log" | tr -d ' ')"
+
+# BASE_URL is parsed, not prefix-matched: userinfo and look-alike hosts must not carry the key to a
+# server the guard did not name. The stub on 127.0.0.1 stands in for the "remote" one.
+before=$(wc -l < "$pb_dir/log" | tr -d ' ')
+pb_port=${pb_url##*:}
+for u in "http://localhost:unused@127.0.0.1:$pb_port" "http://user@127.0.0.1:$pb_port" "http://127.0.0.1@127.0.0.1:$pb_port" \
+  "http://127.0.0.1:$pb_port@127.0.0.1:$pb_port" "http://127.0.0.1:$pb_port?@x" "http://127.0.0.1:$pb_port#@x" \
+  "http://localhost.example.com" "http://127.0.0.1.example.com:$pb_port" "http://localhost:0" "http://localhost:65536" "http://localhost:99999" \
+  "http://localhost:" "http://LOCALHOST:$pb_port" "http://127.0.0.1:$pb_port/x" "http://127.0.0.1:$pb_port\\@evil" "http://[::1]x" " http://127.0.0.1:$pb_port"; do
+  pb_run BASE_URL="$u"
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: BASE_URL [$u] must be refused"; fi
+done
+# the same attack through a real name: a curl wrapper maps remote.invalid to the stub (curl's own --resolve),
+# so a guard that let the userinfo URL through would really connect to the "remote" host and send the key
+pb_curlbin="$tmp/pb-curlbin"; mkdir -p "$pb_curlbin"
+printf '#!/usr/bin/env bash\nexec "%s" --resolve "remote.invalid:%s:127.0.0.1" "$@"\n' "$(command -v curl)" "$pb_port" > "$pb_curlbin/curl"
+chmod +x "$pb_curlbin/curl"
+for u in "http://localhost:unused@remote.invalid:$pb_port" "http://remote.invalid:$pb_port" "http://localhost:unused@remote.invalid:$pb_port/"; do
+  pb_run PATH="$pb_curlbin:$PATH" BASE_URL="$u"
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: remote.invalid BASE_URL [$u] must be refused"; fi
+done
+expect_eq "dex-prebind: refused BASE_URLs sent nothing" "$before" "$(wc -l < "$pb_dir/log" | tr -d ' ')"
+pb_run BASE_URL="$pb_url/"
+expect_eq "dex-prebind: a plain local BASE_URL (trailing slash) still works" "0" "$rc"
+
+# a server that echoes the key (or a token, or a long text) as its error code must not get it printed
+refl_out=""
+for r in "$pb_key" xk_wrong-key-secret tok-secret-admin@example.com "$(printf 'a%.0s' $(seq 1 80))" 'A_B'; do
+  pb_up refl STUB_REFLECT="$r"
+  pb_run
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: an error answer must fail the run"; fi
+  refl_out="$refl_out
+$out"
+  expect_match "dex-prebind: a reflected error code is redacted" '<redacted>' "$out"
+  if printf '%s' "$out" | grep -qF -- "$r"; then bad "dex-prebind: output echoes the server's [$r]"; else ok; fi
+done
+# a code that is harmless on its own but is the key itself
+pb_up refl2 STUB_REFLECT=lowerkey123
+pb_run ADMIN_API_KEY=lowerkey123
+if printf '%s' "$out" | grep -qF -- lowerkey123; then bad "dex-prebind: output echoes a whitelist-shaped key"; else ok; fi
+# the credential the server really received, echoed back as code and/or x-error-code, in a shape the
+# code whitelist would accept: the raw bearer token (not "Bearer <token>") and the raw API key
+for where in code header both; do
+  pb_up reflbearer STUB_REFLECT_AUTH=$where STUB_REFLECT_ON=ClaimInvite
+  pb_run PB_TOKEN_PLAIN=1
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a reflected bearer ($where) must fail the run"; fi
+  if printf '%s' "$out" | grep -qF -- tokplain; then bad "dex-prebind: output echoes the reflected bearer token ($where)"; else ok; fi
+  refl_out="$refl_out
+$out"
+  pb_up reflkey STUB_ADMIN_KEY=lowerkey123 STUB_REFLECT_AUTH=$where STUB_REFLECT_ON=ListAccounts
+  pb_run ADMIN_API_KEY=lowerkey123
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a reflected API key ($where) must fail the run"; fi
+  if printf '%s' "$out" | grep -qF -- lowerkey123; then bad "dex-prebind: output echoes the reflected API key ($where)"; else ok; fi
+  refl_out="$refl_out
+$out"
+done
+# an ordinary error keeps its (whitelisted) code
+pb_up plain
+pb_run ADMIN_API_KEY=xk_wrong-key-secret
+expect_match "dex-prebind: an ordinary error still names its codes" 'code unauthenticated, x-error-code auth.invalid_credential' "$out"
+
+# a failed claim leaves the account and the pending invite; the rerun claims it without a second invite
+pb_up partial STUB_FAIL_CLAIM=1
+pb_run
+if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a failed ClaimInvite must fail the run"; fi
+fail_out=$out
+cp "$pb_dir/port" "$pb_dir/port.failing"
+kill "${PB_PIDS##* }" 2>/dev/null || true
+pb_dir2=$pb_dir
+pb_up partial2
+# the new stub starts empty: replay the half-done state (accounts + pending invites, no bindings) through the RPC itself
+for e in admin@example.com user@example.com; do
+  role='[]'; [ "$e" = admin@example.com ] && role='["admin"]'
+  aid=$(curl -fsS -H "X-API-Key: $pb_key" -H 'Content-Type: application/json' -d "{\"name\":\"$e\",\"roles\":$role}" "$pb_url/identity.v1.IdentityService/CreateAccount" | jq -r .account.id)
+  curl -fsS -H "X-API-Key: $pb_key" -H 'Content-Type: application/json' -d "{\"accountId\":\"$aid\",\"email\":\"$e\"}" "$pb_url/identity.v1.IdentityService/CreateInvite" >/dev/null
+done
+: > "$pb_dir/log"
+pb_run
+expect_eq "dex-prebind: resume after a failed claim succeeds" "0" "$rc"
+expect_eq "dex-prebind: resume creates no second account or invite" "0 0" "$(pb_calls CreateAccount) $(pb_calls CreateInvite)"
+expect_eq "dex-prebind: resume binds both" "2" "$(pb_state | jq '.identities | length')"
+
+# an existing account is reused only if it is what the Dex account should be: a wrong role set or a
+# disabled account fails closed (non-zero, names the email), changes nothing, grants nothing
+pb_call() { curl -fsS -H "X-API-Key: $pb_key" -H 'Content-Type: application/json' -d "$2" "$pb_url/identity.v1.IdentityService/$1"; }
+for case in "admin@example.com|[]|admin role missing" "user@example.com|[\"admin\"]|user holds a role" "admin@example.com|[\"admin\",\"ops\"]|admin has an extra role"; do
+  IFS='|' read -r who roles why <<<"$case"
+  pb_up mismatch
+  pb_call CreateAccount "{\"name\":\"$who\",\"roles\":$roles}" >/dev/null
+  pb_run
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: existing account mismatch ($why) must fail"; fi
+  expect_match "dex-prebind: the mismatch names the email ($why)" "$who" "$out"
+  expect_eq "dex-prebind: a mismatch binds and invites nothing ($why)" "0" "$(pb_state | jq '(.invites|length) + (.identities|length)')"
+  expect_eq "dex-prebind: a mismatch asks Dex for no token ($why)" "0" "$(wc -l < "$pb_dir/tokens" | tr -d ' ')"
+done
+pb_up disabled
+pb_run
+acct=$(pb_state | jq -r '.accounts[] | select(.name=="user@example.com") | .id')
+pb_call DisableAccount "{\"id\":\"$acct\"}" >/dev/null
+pb_run
+if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a disabled account must fail the run, even when bound"; fi
+expect_match "dex-prebind: the disabled account is named" 'user@example.com' "$out"
+
+# no stub outlives the suite: its processes are in PB_PIDS and the EXIT trap (the later prepull trap
+# must not replace the one that kills them)
+expect_match "test.sh's EXIT trap kills the dex-prebind stubs" 'PB_PIDS' "$(trap -p EXIT)"
+
+# nothing secret in any output: not the admin key (right or wrong), not a token
+all_out="$first_out
+$rerun_out
+$bad_key_out
+$fail_out
+$refl_out
+$out"
+for secret in "$pb_key" xk_wrong-key-secret tok-secret- tokplain lowerkey123; do
+  if printf '%s' "$all_out" | grep -qF -- "$secret"; then bad "dex-prebind: output leaks [$secret]"; else ok; fi
+done
+
+# tests/dex-prebind/ is a scripts-test input outside scripts/ (ci-changes.sh scripts_src)
+expect_eq "dex-prebind stub also runs scripts-test" "scripts_test" "$(jobs_on dexstub tests/dex-prebind/stub_rpc.py)"
 
 # ── web/apps/console/deploy/18-console-env.envsh: the console image's OIDC env gate (#273) ──
 # The same URL judgement as the SPA's parseConfig (new URL): what the container accepts the browser
