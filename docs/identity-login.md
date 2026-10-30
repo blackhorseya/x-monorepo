@@ -119,16 +119,30 @@
 
 ## 8. Console（Q3）
 
-- **SPA 自己跑 Authorization Code + PKCE**：`state`、`nonce`、`code_verifier` 由 SPA 產生與驗證；scope 含 `openid profile email offline_access`（Dex 需要 `offline_access` 才發 refresh token）。
+> 實作於 #273（`web/apps/console/src/oidc/`、`routes/login.tsx`、`routes/auth-callback.tsx`）。
+
+- **SPA 自己跑 Authorization Code + PKCE**：`state`、`nonce`、`code_verifier` 由 SPA 產生與驗證（PKCE 一律 `S256`）；scope 含 `openid profile email offline_access`（Dex 需要 `offline_access` 才發 refresh token）。**redirect URI = `<console origin>/auth/callback`**（IdP 的 client 要登記它；dev 的 Dex 見 `deployments/docker/dex/config.yaml`）。
+- **設定走 runtime，不是 build time**：console image 只 build 一次，issuer 隨部署不同，所以 SPA 啟動時 fetch 同源的 `/config.json`（只放公開值，沒有 secret）：`oidcIssuer`、`oidcClientId`、`apiKeyLogin`。nginx image 的 entrypoint 從環境變數 `CONSOLE_OIDC_ISSUER`、`CONSOLE_OIDC_CLIENT_ID`、`CONSOLE_API_KEY_LOGIN`（對應 `console.apiKeyLogin`；只有字面 `false` 會關掉，其他值＝開）用 envsubst 渲染它（`deploy/config.json.template`）。envsubst 的 filter 是**精確白名單**，容器的其他環境變數不會進任何 template。Helm 先用 `console.extraEnv` 傳這三個。`CONSOLE_OIDC_ISSUER` / `CONSOLE_OIDC_CLIENT_ID` 沒有同時設、或格式不合（`deploy/18-console-env.envsh`：issuer 只能是 http(s) origin 加路徑，client id 只能是一般識別字）→ **OIDC 關閉**（fail closed），不會把值帶進 JSON 或 CSP。OIDC 關閉時 console 與以前完全相同（沒有登入頁、保留 Credential 對話框）。
+- **CSP**：nginx 的 `connect-src` 預設 `'self'`；OIDC 開啟時加上 **issuer 的精確 origin**（不用萬用字元），SPA 才能 fetch discovery 與 token endpoint。IdP 本身要允許 console origin 的 CORS（token endpoint 的跨來源 `POST`）。
+- **登入流程**：未登入（沒有 credential）的任何頁面導到 `/login`，並記住要去的路徑（只接受 app 內的路徑，其他一律回 `/orders`）。`/login` 的「Sign in」導去 IdP；`/auth/callback` 驗證 `state`（對不上就拒絕、**不**呼叫 token endpoint）→ 用 `code_verifier` 換 token → 檢查 id token 的 `iss`／`aud`／`nonce`（id token 直接來自 token endpoint 的 TLS，不重驗簽章；access token 由 server 驗）。callback 一進來就把 `code`／`state` 從網址列（與 history）拿掉；PKCE verifier、state、nonce 在 callback 讀取的當下就從 `sessionStorage` 刪除，不論成功或失敗。IdP 回 `error=` 也終止該次嘗試並顯示。
 - **token 存放**：
-  - **access token 只放記憶體**（reload 就消失，靠 refresh token 靜默取得）。
-  - **refresh token 採 rotation，存 `sessionStorage`**（同分頁 reload 可延續，關分頁就消失；每個分頁各自一份）。
+  - **access token 只放記憶體**（reload 就消失，靠 refresh token 靜默取得）。從不寫入 `localStorage`、log 或 URL；也不留 id token。
+  - **refresh token 採 rotation，存 `sessionStorage`**（單一 key；同分頁 reload 可延續，關分頁就消失；每個分頁各自一份）。每次使用都換成 IdP 回的新值。
   - 誠實的取捨：`sessionStorage` 可被同源 XSS 讀取。緩解是 refresh rotation、CSP `script-src 'self'`、access token 短命；不是密碼學上的不可能。
+- **靜默更新**：access token 到期前 60 秒（至少 5 秒後）自動 refresh；rpc 回 `UNAUTHENTICATED` 且該呼叫確實帶著 session 的 token 時，refresh 一次並重送（同時多個失敗共用同一次 refresh；已經被別的 refresh 換掉的 token 只重送、不再 refresh）。reload 時在第一次 render 之前先用 refresh token 取回 session。
+- **refresh 失敗的處理**（本文原留給 #273 定）：
+  - IdP **有回應並拒絕**（HTTP 400／401／403，例如 `invalid_grant`：被撤銷、過期、已被 rotation 作廢）→ refresh token 已死：清掉整個 session，回 `/login` 並說明 session 已結束。重試無用。
+  - IdP **沒有回應**（網路錯誤）或 5xx／408／429 → 是 IdP 不舒服，不是 session 結束：**保留 refresh token** 與目前的 access token，以 5 秒起、每次加倍、上限 60 秒的 backoff 重試；`/login` 顯示「無法連線 identity provider」與 **Retry**。不能因為 IdP 掛了就把使用者登出。
 - **BFF 是升級路徑，不在這個範圍**：之後若要把 refresh token 移出瀏覽器，改由 BFF 持有並以 `HttpOnly` cookie 與 SPA 溝通；此時需要另訂 CSRF 規則。現在不做，只記錄。
-- **API key 入口保留**為次要的 break-glass（貼 key，維持現狀存放方式），可用 `console.apiKeyLogin` 關閉。OIDC 與 API key 兩種 credential 互斥：設定其中一種就清掉另一種。
-- 沿用既有 `generation` 機制：登入 / refresh 回應到達時若 generation 已變（期間登出或換 credential）就丟棄，不寫入 credential。
-- **待決實作細節（#273 定）**：refresh 失敗時的處理，包括暫時性錯誤（例如 IdP 503）與 refresh token 失效的區分。本文不規定。
-- 新增 accounts UI（admin）：邀請、綁定狀態、`AssignRoles`、撤銷 session（§11）。
+- **API key 入口保留**為次要的 break-glass（`/login` 下方貼 key，維持現狀存放方式：`localStorage`），可用 `console.apiKeyLogin=false` 關閉——關閉時入口**不在 DOM 裡**（不是隱藏）。OIDC 與 API key 兩種 credential 互斥：設定其中一種就清掉另一種。OIDC 開啟時 header 只剩身分與「Sign out」，不再有貼 JWT 的選項（那會把 token 寫進 `localStorage`）。
+- 沿用既有 `generation` 機制：登入 / refresh 回應到達時若 generation 已變（期間登出或換 credential）就丟棄，不寫入 credential。靜默 refresh 換的是同一個身分的 token，不增加 generation（admin probe 等快取不失效）。
+- **登出**：清掉記憶體與 `sessionStorage` 的 token、停掉 refresh、generation 加一、使所有 query 失效，並回 `/login`。IdP 的 discovery 有 `end_session_endpoint` 才導過去，帶 `client_id` 與 `post_logout_redirect_uri=<console origin>/login`——**不帶 `id_token_hint`**（那是 URL 裡的 token；console 也不保留 id token）。Dex 沒有，所以本機只清本機。
+- **未綁定的身分**：任何 RPC 回 `PERMISSION_DENIED` + `x-error-code: auth.unbound_identity`（#272）就以 ClaimInvite 畫面取代頁面：一個「Claim invite」按鈕（request 是空的，issuer／sub／email 由 server 從驗過的 token 取，client 不送任何東西）。成功後所有 query 失效、進入 console；`invite.not_found`／`invite.expired`／`invite.already_claimed`／`invite.email_unverified`／`invite.email_mismatch`／`identity.already_bound` 顯示代碼與白話說明，可重試。可從該畫面登出。其他原因的 `PERMISSION_DENIED` 不是這條路。
+- **accounts UI（admin，`/accounts/$id`）**：
+  - **Invite**：用 email 發邀請（`CreateInvite`）；不寄信、沒有 secret，頁面說明對方要用該 email 登入再認領。本次造訪建立的邀請列在卡片裡（email、到期、單次）。
+  - **Sessions**：顯示 `sessions_revoke_time`（或「Never revoked」）；「Revoke sessions」先確認，對話框明講這是「登出所有裝置」、不碰 IdP 的 refresh token、不是帳號遭盜用的處置（§11）。
+  - **Sign-in bindings**：**沒有任何 RPC 能列出帳號綁定的 `(iss, sub)` 或尚未使用的邀請**，所以頁面只能如實說明這點。要真的「查看綁定」需要新增列表 RPC（proto + identity BC），另開 issue。
+  - `AssignRoles`（既有的「Save roles」）不變。
 
 ## 9. 第一個 admin（Q5）
 
