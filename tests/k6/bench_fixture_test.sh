@@ -64,6 +64,13 @@ assert count > 20, f"only {count} CreateOrders"
 assert t >= 0.75 * count, f"throughput {t:.1f}/s for {count} CreateOrders in a ~1s scenario"
 PY
 check $r "throughput: not diluted by a 1s setup()"
+python3 -I - "$work/c1.json" <<'PY' && r=ok || r=bad
+import json, sys
+m = json.load(open(sys.argv[1]))["metrics"]
+for k in ("rpc_errors{code:request.timeout}", "rpc_errors{code:transport.timeout}"):
+    assert k in m and m[k]["count"] == 0, f"{k} is not in the k6 summary: bench_report.py cannot tell timeouts from other errors"
+PY
+check $r "summary: rpc_errors per timeout code are exported (classify_threshold_failure needs them)"
 
 # 4. a created order whose reservation never shows up (CreateOrder takes 6.5s, the wait is 1s, the test
 # lasts 1s): the iteration is not cut off by gracefulStop but runs to its own timeout, and k6 fails the

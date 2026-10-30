@@ -22,11 +22,22 @@ RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變�
   - **reserve**：每秒 100 張單、30 秒（open model），每張 CreateOrder 後輪詢 GetReservation（`POLL`=50ms）到 RESERVED。兩個延遲，名稱即定義：`order → RESERVED` 從**送出 CreateOrder 之前**算到看到 RESERVED（端到端）；`CreateOrder returned → RESERVED` 從 CreateOrder 回傳後算起（worker 負責的那段）。輪詢間隔使每筆觀測值最多晚 50ms（平均約 25ms）看到 RESERVED，是量測誤差而非延遲的一部分；不要把兩個分布的 percentile 相加或相減當修正值。
 - 吞吐的分母：第一個 iteration 開始到最後一次 CreateOrder 回傳（k6 腳本自己記的 `bench_iter_start_ms` / `bench_create_end_ms` 的 min / max），不用 k6 Counter 的 rate（它的分母是整個 test，包含 setup() 的 SetStock）。
 - 可重跑的輸入：SKU 由 `SEED`（預設 1，記在 `result.json` 的 `parameters.seed`）和 iteration 序號決定的 PRNG（mulberry32）選，不用 `Math.random`；同參數、單 VU 時序列逐筆相同，多 VU 時交錯順序由排程決定。
-- **哪些 attempt 算數，由工具依事前固定的規則判定**，不是看過數字的人：量測期間每 5 秒取樣一次 1 分鐘 load average，任何一個樣本超過 `MAX_LOAD_PER_CORE`（預設 1.0）× 核心數，該 attempt 就是 invalid。attempt 一直跑到有 `RUNS`（3）個 valid 或達 `MAX_ATTEMPTS`（預設 6）；**所有 attempt 的檔案都留在輸出目錄**，統計只用 valid 的，invalid 的列在 `summary.md` / `result.json` 的 attempts 表；湊不滿 3 個 valid 就在 summary 最上面印「NOT A VALID BASELINE」並以 exit 3 結束。門檻 1.0 的意思：load average 含 bench 自己的 rpc / worker / k6 / Postgres，超過核心數代表可執行的工作比核心還多；這個數字是預設值，不是由實測結果推導的，要換就在跑之前用環境變數指定（會記進 `result.json`）。
+- **哪些 attempt 算數，由工具依事前固定的規則判定**，不是看過數字的人：每個 attempt **開始前**先取樣 1 分鐘 load average（每 5 秒一次，寫進 `run<n>-baseline.csv`），最多等 `BASELINE_WAIT`（預設 180 秒）直到**最後一個樣本** ≤ `MAX_LOAD_PER_CORE`（預設 1.0）× 核心數，才開始量；等不到＝這個 attempt invalid（不執行，`run<n>-invalid.txt` 記 `environment not quiet`）。**量測進行中的 load 只記錄、不判定**（`run<n>-load.csv`，每 5 秒一筆，report 的 attempt 表「load while running」欄）：rpc、worker、Postgres、k6 都跑在同一台機器上，那是 bench 自己製造的 load（#288：4 核 runner 開跑時 1.70，bench 進行中爬到 5.39，舊規則因此把 5 次 attempt 全判 invalid）。另一種 invalid：**過載造成的失敗**——k6 exit 99（越過 threshold）時，工具讀該階段的 `--summary-export`，依 threshold **名稱白名單**分類（`bench_report.py` 的 `classify_threshold_failure`）；只有「能證明是過載」的才是無效 attempt（`run<n>-invalid.txt` 記哪些 threshold，後面的階段不再執行，算一次無效 attempt，最後 exit 3），**其餘一律是真正的失敗（fail-closed）**：
+
+  | threshold | 被突破時 |
+  |---|---|
+  | `reservation_timeouts` | 過載 → invalid attempt |
+  | `rpc_errors` | **只有每一個 error 都是逾時**（`rpc_errors{code:request.timeout}` + `rpc_errors{code:transport.timeout}` 的 count 等於 `rpc_errors` 的 count；`bench.js` 用永遠為真的 threshold 讓 k6 匯出這兩個子指標）才是過載；有任何非逾時的 error，或子指標不存在 → 失敗 |
+  | `http_req_failed` | 只有同時有上一列的「全是逾時」`rpc_errors` 被突破才跟著算過載；單獨被突破 → 失敗 |
+  | `reservation_wrong_status`、`rpc_ok{…}`、`rpc_duration{…}`、任何不在上表的 threshold | 失敗（正確性或無法解釋；**不是**「重試就好」） |
+  | summary 讀不到／壞掉、或 exit 99 卻沒有任何 threshold 標為 crossed | 失敗（無法判斷） |
+
+  同時突破過載類與非過載類 → 以失敗為準。失敗時 `bench.sh` 以 exit 99 結束（不是 0、不是 3），verdict 是 `INVALID: bench.sh failed (exit 99)…`，不能被當成無效 attempt 而重派送。
+- attempt 一直跑到有 `RUNS`（3）個 valid 或達 `MAX_ATTEMPTS`（預設 6）；**所有 attempt 的檔案都留在輸出目錄**，統計只用 valid 的，invalid 的列在 `summary.md` / `result.json` 的 attempts 表（含原因）；湊不滿 3 個 valid 就在 summary 最上面印「NOT A VALID BASELINE」並以 exit 3 結束（全部 attempt 都被中止、沒有任何 k6 數字時只有 attempts 表）。門檻 1.0 的意思：開跑前 load average 已超過核心數，代表機器上有別的東西在搶；這個數字與 `BASELINE_WAIT` 都是預設值，不是由實測結果推導的，要換就在跑之前用環境變數指定（會記進 `result.json`）。真正的工具故障（找不到 binary、migrate 失敗、rpc / worker 起不來、k6 腳本錯誤、backlog 排空逾時或對帳不符、上表的非過載 threshold）維持非 0、非 3 的 exit code。
 - **對帳**：reserve 階段每個 attempt 必須「CreateOrder 成功數 = 看到 RESERVED 的數量」（`reserved_ok`），`gracefulStop` 涵蓋 CreateOrder 逾時加等待的上限；k6 印出 `No script iterations fully finished` 也算失敗。已建立但沒完成的單不會被算成成功或延遲 0ms；reservation 的成功率 = 看到 RESERVED 的訂單 ÷ 建立成功的訂單（不是 CreateOrder 的成功率）。
 - 輸出：`result.json`（機器可讀：每個指標的 median / min / max / CV / 各 run 數值，加上 commit、Go / Postgres / k6 版本、CPU、OS、每個 attempt 的 load 取樣統計與是否 valid、參數）、`summary.md`、以及每個 attempt 的 k6 `--summary-export`、load 取樣 csv 與 log。
 - API key：腳本送一把假 key（auth off 會忽略），`bench.sh` 結束時 grep 輸出目錄所有檔案，找到就整個 bench 失敗；k6 腳本沿用 `lib.js` 的規則（不印 body / URL，`systemTags` 不含 `url`、`error`）。
-- 量測工具本身的測試：`task k6-bench-test`（報告定義與有效性/對帳的單元測試、drain 起算時間（fake psql）、對 stub server 的 fixture：seed 可重現、端到端延遲含 CreateOrder、吞吐不被 setup 稀釋、被中斷的 reservation 不會悄悄通過、sentinel 資料庫不會被 drop）；不進 CI。
+- 量測工具本身的測試：`task k6-bench-test`（報告定義與有效性/對帳的單元測試（含 run 41000071677 的真實 load 樣本）、`bench_overload_test.sh`：假 k6 / psql 驗證 bench 自己的 load 不判無效、機器忙時等到安靜、等不到就 exit 3、k6 threshold 失敗 exit 3 而 k6 腳本錯誤仍是工具故障、drain 起算時間（fake psql）、對 stub server 的 fixture：seed 可重現、端到端延遲含 CreateOrder、吞吐不被 setup 稀釋、被中斷的 reservation 不會悄悄通過、sentinel 資料庫不會被 drop）；不進 CI。
 
 ## 在 GitHub runner 上跑（#280）
 
@@ -45,10 +56,10 @@ gh run download <run-id> --repo blackhorseya/x-monorepo -n k6-bench-<run-id>-1  
   | 結果 | 意思 | 該怎麼做 |
   |---|---|---|
   | job 綠，`verdict.txt` = `VALID` | `bench.sh` exit 0：有 `RUNS` 個 valid attempt | 取 artifact 的 `result.json` / `summary.md`，開另一支 docs PR 更新「Baseline」 |
-  | job 紅，`verdict.txt` = `INVALID: NOT A VALID BASELINE` | `bench.sh` exit 3：valid attempt 不足 `RUNS`；summary 最上面也有同樣的 banner | **照實記錄，不寫入 baseline**；可在清單加一列 run URL + 每個 attempt 的 load 最大值。可再派送一次，但「再跑到過為止」要先講好上限，不要事後挑 |
-  | job 紅，`verdict.txt` = `INVALID: bench.sh failed (exit N)` | 量測本身壞了（對帳失敗、API key 洩漏檢查、rpc / worker 起不來…） | 看 `bench.log`，修工具，不是 baseline |
+  | job 紅，`verdict.txt` = `INVALID: NOT A VALID BASELINE` | `bench.sh` exit 3：valid attempt 不足 `RUNS`（開跑前機器不夠安靜，或過載造成 k6 threshold / timeout 失敗）；summary 最上面也有同樣的 banner，attempts 表逐個列原因 | **照實記錄，不寫入 baseline**；可在清單加一列 run URL + 每個 attempt 的 load 最大值。可再派送一次，但「再跑到過為止」要先講好上限，不要事後挑 |
+  | job 紅，`verdict.txt` = `INVALID: bench.sh failed (exit N)` | 量測本身壞了（對帳失敗、API key 洩漏檢查、rpc / worker 起不來、k6 腳本錯誤、非過載類 threshold 被突破〔exit 99，例如 `reservation_wrong_status`〕…；**不含**證明是過載的 threshold 失敗，那是 exit 3） | 看 `bench.log`，修工具，不是 baseline |
 
-- **artifact**（`k6-bench-<run-id>-<attempt>`，保留 90 天；invalid 也會上傳）：`runner.txt`（run URL、commit、runner 名稱 / image 版本、核心數、CPU、記憶體、kernel、Go / k6 / psql 版本、開跑時的 load）、`verdict.txt`、`bench.log`、`summary.md`、`result.json`，以及每個 attempt 的 `run<n>-load.csv`（每 5 秒一筆 1 分鐘 load average）、`run<n>-create.json` / `run<n>-reserve.json`（k6 `--summary-export`）和 rpc / worker / k6 log。`result.json` 的 `attempts` 逐個列出 load 取樣統計與 valid 判定；valid 的 attempt 才進統計，invalid 的留著但不算。
+- **artifact**（`k6-bench-<run-id>-<attempt>`，保留 90 天；invalid 也會上傳）：`runner.txt`（run URL、commit、runner 名稱 / image 版本、核心數、CPU、記憶體、kernel、Go / k6 / psql 版本、開跑時的 load）、`verdict.txt`、`bench.log`、`summary.md`、`result.json`，以及每個 attempt 的 `run<n>-baseline.csv`（開跑前）、`run<n>-load.csv`（進行中，每 5 秒一筆 1 分鐘 load average）、`run<n>-invalid.txt`（invalid 的原因，有才有）、`run<n>-create.json` / `run<n>-reserve.json`（k6 `--summary-export`）和 rpc / worker / k6 log。`result.json` 的 `attempts` 逐個列出開跑前 load、進行中 load 統計、valid 判定與原因；valid 的 attempt 才進統計，invalid 的留著但不算。
 - **把 valid 結果寫回 docs**：另開 docs PR（本 workflow 不做），把 `summary.md` 的數字放進「Baseline」，並註明 run URL、被量的 commit SHA、runner 規格（`runner.txt`）與 attempt 清單。GitHub-hosted runner 的規格與鄰居會變，所以這個數字只能和**同一類 runner、同參數**的下一次比較，不能拿來和開發機的數字比。
 
 ## Baseline
@@ -63,6 +74,8 @@ gh run download <run-id> --repo blackhorseya/x-monorepo -n k6-bench-<run-id>-1  
 | `perf-baseline-20261029T220610Z-DISCARDED` | 22:06–22:12 | 1675b0d | 當時未取樣；結束後 `uptime` 約 14 | **事後棄用**：先看到 reserve p95 約 7 秒、丟 446 個 iteration，才去查 load，理由是看過結果後才決定的 |
 | `perf-baseline-20261029T221617Z` | 22:16–22:22 | 1675b0d | 只有起訖兩點：6.11 → 8.54 | 下表來源。跑之前我寫了「等 load < 6」的等待迴圈，**這個門檻是看過上一組之後才訂的**，而且實際開始時是 6.11；中間沒有取樣，無法證明整段符合任何規則 |
 | `perf-baseline-r3-attempts/out`（attempt 1–6） | 22:48–22:59 | e0219ec（規則出現後的第一次） | 每個 attempt 的最大值 23.08 / 19.19 / 15.84 / 15.28 / 18.32 / 25.71（上限 10.0） | **6 組全部 invalid**，工具印「NOT A VALID BASELINE」 |
+
+> 上表的 invalid 判定是舊規則（bench 進行中的 load ≤ 1.0 × 核心數）下做的；因為進行中的 load 含 bench 自己的 rpc / worker / Postgres / k6，這些判定可能是 bench 自己造成的（#288 起改為只看開跑前的 load）。數字仍然不能當 baseline，只是「機器忙」不再是唯一的解釋。
 
 最後一列是第一次在規則之下跑：這台機器當時的 load 15–26，其他程式同時在跑，一組都沒達標。它的統計表（不是 baseline）顯示 load 高時尾端會差多遠：reserve 端到端 p95 的中位數 4360ms（min–max 277–14365ms），而下表（load 較低的一組）是 308ms。
 

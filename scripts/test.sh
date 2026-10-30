@@ -859,6 +859,7 @@ expect_match "k6-bench: exit 0 is the only valid one"        '^0 VALID'         
 expect_match "k6-bench: exit 3 is NOT A VALID BASELINE, red" '^1 INVALID: NOT A VALID BASELINE'        "$(kv 3)"
 expect_match "k6-bench: exit 1 is a failed bench, red"       '^1 INVALID: bench.sh failed \(exit 1\)'  "$(kv 1)"
 expect_match "k6-bench: exit 42 keeps its code"              '^1 INVALID: bench.sh failed \(exit 42\)' "$(kv 42)"
+expect_match "k6-bench: exit 99 (correctness threshold) is a failed bench, red" '^1 INVALID: bench.sh failed \(exit 99\): a k6 threshold that is not overload' "$(kv 99)"
 expect_match "k6-bench: Task's own 201 is a failed bench"    '^1 INVALID: bench.sh failed \(exit 201\)' "$(kv 201)"
 expect_match "k6-bench: no exit code = did not finish, red"  '^1 INVALID: the bench step did not finish' "$(kv '')"
 # the same thing against the real Task: a failing command is 201 unless --exit-code (skipped without task on PATH)

@@ -11,10 +11,15 @@ bench.sh sets. Definitions (also in docs/perf-baseline.md):
               Counter.rate (its denominator is the whole test, setup() included)
   drain       orders still PENDING when the create phase ended / seconds until none is
               (numerator and denominator cover the same window)
-  valid       an attempt is valid iff every load-average sample taken while it ran is
-              <= MAX_LOAD_PER_CORE x cores (fixed before the run, judged here, not by a person who has
-              seen the numbers). Statistics use the valid attempts only; invalid ones are listed, never
-              dropped from the directory. Fewer valid attempts than RUNS = not a baseline (exit 3).
+  valid       an attempt is valid iff the machine was quiet BEFORE it started: the last 1m load-average
+              sample of run<n>-baseline.csv (taken right before the attempt, after waiting for it to settle) is
+              <= MAX_LOAD_PER_CORE x cores, and bench.sh did not cut the attempt short (run<n>-invalid.txt:
+              the environment never got quiet, or k6 crossed a threshold — the CreateOrder timeouts and
+              errors an overloaded machine produces). Fixed before the run, judged here, not by a person who
+              has seen the numbers. The load while the attempt ran (run<n>-load.csv) is the bench's own
+              (rpc, worker, Postgres and k6 share the machine): recorded, never judged. Statistics use the
+              valid attempts only; invalid ones are listed, never dropped from the directory. Fewer valid
+              attempts than RUNS = not a baseline (exit 3).
   reconcile   per attempt, CreateOrders that succeeded == reservations seen RESERVED. An order that was
               created but whose wait was cut off (k6's gracefulStop) is neither a success nor a
               timeout; k6 exits 0 and says only "No script iterations fully finished" — also a failure.
@@ -29,6 +34,16 @@ import sys
 
 INTERRUPTED = "No script iterations fully finished"
 NOT_A_BASELINE = "not a baseline"
+
+# k6 exits 99 when a threshold is crossed. Which one decides what it means (docs/perf-baseline.md, #288):
+#   overload   reservation_timeouts; rpc_errors when EVERY error is a timeout (the k6 summary has the per-code
+#              counts: rpc_errors{code:...} thresholds in bench.js); http_req_failed only together with such an
+#              rpc_errors crossing. An overloaded machine produces these, so the attempt is invalid (exit 3).
+#   anything else is a real failure (fail-closed): reservation_wrong_status, rpc_ok / rpc_duration, rpc_errors
+#   that are not all timeouts, a threshold this list has never heard of, no threshold marked crossed, a summary
+#   that cannot be read.
+OVERLOAD_THRESHOLDS = ("reservation_timeouts",)
+TIMEOUT_CODES = ("request.timeout", "transport.timeout")
 
 
 def load(out, name):
@@ -92,23 +107,81 @@ def reconcile_problem(summary):
     return None
 
 
-def load_samples(out, n):
+def count_of(metrics, name):
+    """metrics[name]["count"] if it is a non-negative integer, else None (absent, {}, negative, float, string, bool)."""
+    c = metrics.get(name, {}).get("count") if isinstance(metrics.get(name), dict) else None
+    return c if isinstance(c, int) and not isinstance(c, bool) and c >= 0 else None
+
+
+def classify_threshold_failure(summary_path, phase):
+    """("overload" | "failure", why) for a k6 run that exited 99, from its --summary-export file."""
     try:
-        with open(os.path.join(out, f"run{n}-load.csv")) as f:
+        with open(summary_path) as f:
+            metrics = json.load(f)["metrics"]
+        crossed = sorted(n for n, m in metrics.items() if any(m.get("thresholds", {}).values()))
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
+        return "failure", f"k6 {phase} exited 99 and its summary is unreadable ({type(e).__name__}): cannot tell which threshold"
+    if not crossed:
+        return "failure", f"k6 {phase} exited 99 but the summary marks no threshold as crossed: cannot tell which"
+    unexplained = []
+    for name in crossed:
+        if name in OVERLOAD_THRESHOLDS:
+            continue
+        if name == "rpc_errors":
+            counts = {c: count_of(metrics, f"rpc_errors{{code:{c}}}") for c in TIMEOUT_CODES}
+            total = count_of(metrics, "rpc_errors")
+            bad = [n for n, v in (("rpc_errors", total), *((f"rpc_errors{{code:{c}}}", v) for c, v in counts.items())) if v is None]
+            if bad:  # a count that is absent, negative or not an integer is unknown, not 0: fail-closed
+                unexplained.append(f"rpc_errors (no valid count in {', '.join(bad)})")
+                continue
+            timeouts = sum(counts.values())
+            if total > 0 and timeouts == total:
+                continue
+            unexplained.append(f"rpc_errors ({total - timeouts} of {total} are not timeouts)")
+        elif name != "http_req_failed":
+            unexplained.append(name)
+    if "http_req_failed" in crossed and "rpc_errors" not in crossed:
+        unexplained.append("http_req_failed (not explained by timeout-only rpc_errors)")
+    if unexplained:
+        return "failure", f"k6 {phase}: threshold(s) crossed that are not overload: {', '.join(unexplained)} (all crossed: {', '.join(crossed)})"
+    return "overload", f"k6 {phase}: overload thresholds crossed: {', '.join(crossed)}"
+
+
+def samples(out, n, kind):
+    """The 1m load averages of run<n>-<kind>.csv (epoch,load per line); [] if there is no such file."""
+    try:
+        with open(os.path.join(out, f"run{n}-{kind}.csv")) as f:
             return [float(line.split(",")[1]) for line in f if line.strip()]
     except FileNotFoundError:
         return []
 
 
-def validity(samples, limit):
-    """valid iff there are samples and none exceeds the limit (no samples = no proof)."""
-    top = max(samples) if samples else None
+def cut_short(out, n):
+    """Why bench.sh ended attempt n early (run<n>-invalid.txt), or None if it ran to the end."""
+    try:
+        with open(os.path.join(out, f"run{n}-invalid.txt")) as f:
+            return f.read().strip() or "cut short"
+    except FileNotFoundError:
+        return None
+
+
+def attempt_status(out, n, limit):
+    """Is attempt n valid, and if not why. No sample before the attempt = no proof the machine was quiet."""
+    before, during = samples(out, n, "baseline"), samples(out, n, "load")
+    reason = cut_short(out, n)
+    if reason is None and not before:
+        reason = "no load sample before the attempt"
+    if reason is None and before[-1] > limit:
+        reason = f"environment not quiet before the attempt: load {before[-1]} > {limit}"
     return {
-        "samples": len(samples),
-        "max": top,
-        "mean": round(statistics.fmean(samples), 2) if samples else None,
+        "baseline_samples": len(before),
+        "baseline": before[-1] if before else None,
+        "samples": len(during),
+        "max": max(during) if during else None,
+        "mean": round(statistics.fmean(during), 2) if during else None,
         "limit": limit,
-        "valid": bool(samples) and top <= limit,
+        "valid": reason is None,
+        "reason": reason,
     }
 
 
@@ -142,20 +215,21 @@ def report(out, env, attempts):
     cpus = int(env["BENCH_NCPU"])
     limit = float(env["BENCH_MAX_LOAD_PER_CORE"]) * cpus
     idx = list(range(1, attempts + 1))
-    create = {n: load(out, f"run{n}-create.json") for n in idx}
-    reserve = {n: load(out, f"run{n}-reserve.json") for n in idx}
-    drain = {n: load(out, f"run{n}-drain.json") for n in idx}
-    valid_of = {n: validity(load_samples(out, n), limit) for n in idx}
+    status = {n: attempt_status(out, n, limit) for n in idx}
+    ran = [n for n in idx if cut_short(out, n) is None]  # attempts that ran to the end have all of k6's output
+    create = {n: load(out, f"run{n}-create.json") for n in ran}
+    reserve = {n: load(out, f"run{n}-reserve.json") for n in ran}
+    drain = {n: load(out, f"run{n}-drain.json") for n in ran}
 
     problems = []
-    for n in idx:
+    for n in ran:
         p = reconcile_problem(reserve[n]) or log_problem(out, n)
         if p:
             problems.append(f"attempt {n}: {p}")
     failed = bool(problems)
 
-    valid = [n for n in idx if valid_of[n]["valid"]]
-    used = valid or idx  # nothing valid: the numbers are still shown, under a banner saying they are not a baseline
+    valid = [n for n in idx if status[n]["valid"]]
+    used = valid or ran  # nothing valid: the numbers are still shown, under a banner saying they are not a baseline
     if len(valid) < runs:
         problems.append(f"{len(valid)} valid attempt(s) of the {runs} required: {NOT_A_BASELINE}")
 
@@ -168,8 +242,10 @@ def report(out, env, attempts):
 
     result = {
         "valid": not problems,
-        "validity_rule": f"every load-average (1m) sample while an attempt ran <= {env['BENCH_MAX_LOAD_PER_CORE']} per core x {cpus} cores = {limit}",
-        "attempts": [{"attempt": n, **valid_of[n], "used_in_statistics": n in used} for n in idx],
+        "validity_rule": f"1m load average right before an attempt <= {env['BENCH_MAX_LOAD_PER_CORE']} per core x {cpus} cores = {limit} "
+        "(waited for, up to BASELINE_WAIT); the load while an attempt runs is recorded, not judged; "
+        "an attempt on which k6 crossed a threshold (timeouts / errors under load) is invalid",
+        "attempts": [{"attempt": n, **status[n], "used_in_statistics": n in used} for n in idx],
         "environment": {
             "commit": env["BENCH_COMMIT"],
             "dirty": bool(env["BENCH_DIRTY"]),
@@ -185,30 +261,35 @@ def report(out, env, attempts):
             "runs": runs,
             "attempts": attempts,
             "max_load_per_core": float(env["BENCH_MAX_LOAD_PER_CORE"]),
+            "baseline_wait_s": int(env["BENCH_BASELINE_WAIT"]) if "BENCH_BASELINE_WAIT" in env else None,
+            "load_interval_s": float(env["BENCH_LOAD_INTERVAL"]) if "BENCH_LOAD_INTERVAL" in env else None,
             "skus": int(env["BENCH_SKUS"]),
             "poll_ms": int(env["BENCH_POLL"]),
             "seed": int(env["BENCH_SEED"]),
             "create": {"vus": int(env["BENCH_CREATE_VUS"]), "duration": env["BENCH_CREATE_DURATION"]},
             "reserve": {"rate_per_s": int(env["BENCH_RESERVE_RATE"]), "duration": env["BENCH_RESERVE_DURATION"]},
         },
-        "create_order": {
-            "throughput_per_s": spread([throughput(r, "CreateOrder") for r in c_]),
-            "success_pct": spread([success_pct(r, "CreateOrder") for r in c_]),
-            "latency_ms": latency(c_, "rpc_duration{rpc:CreateOrder}"),
-        },
-        "backlog_drain": {
-            "pending_at_end_of_create": spread([d["pending_at_end"] for d in d_]),
-            "orders_per_s": spread([drain_rate(d) for d in d_ if drain_rate(d) is not None] or [0.0]),
-            "seconds": spread([d["seconds"] for d in d_]),
-        },
-        "reservation": {
-            "orders_per_s": spread([throughput(r, "CreateOrder") for r in r_]),
-            "success_pct": spread([reserve_success_pct(r) for r in r_]),
-            "dropped_iterations": spread([r["metrics"].get("dropped_iterations", {}).get("count", 0) for r in r_]),
-            "order_to_reserved_ms": latency(r_, "order_to_reserved"),
-            "reserved_after_create_ms": latency(r_, "reserved_after_create"),
-        },
     }
+    if used:  # every attempt cut short = no k6 numbers at all, only the attempts table
+        result |= {
+            "create_order": {
+                "throughput_per_s": spread([throughput(r, "CreateOrder") for r in c_]),
+                "success_pct": spread([success_pct(r, "CreateOrder") for r in c_]),
+                "latency_ms": latency(c_, "rpc_duration{rpc:CreateOrder}"),
+            },
+            "backlog_drain": {
+                "pending_at_end_of_create": spread([d["pending_at_end"] for d in d_]),
+                "orders_per_s": spread([drain_rate(d) for d in d_ if drain_rate(d) is not None] or [0.0]),
+                "seconds": spread([d["seconds"] for d in d_]),
+            },
+            "reservation": {
+                "orders_per_s": spread([throughput(r, "CreateOrder") for r in r_]),
+                "success_pct": spread([reserve_success_pct(r) for r in r_]),
+                "dropped_iterations": spread([r["metrics"].get("dropped_iterations", {}).get("count", 0) for r in r_]),
+                "order_to_reserved_ms": latency(r_, "order_to_reserved"),
+                "reserved_after_create_ms": latency(r_, "reserved_after_create"),
+            },
+        }
     return result, problems, (1 if failed else (3 if problems else 0))
 
 
@@ -231,14 +312,17 @@ def summary_md(result, problems):
         f"reserve: {p['reserve']['rate_per_s']} orders/s × {p['reserve']['duration']}; "
         f"{p['skus']} SKUs, poll {p['poll_ms']}ms, seed {p['seed']}",
         "",
-        "| attempt | load samples | max | mean | valid | in statistics |",
-        "|---|---|---|---|---|---|",
+        "| attempt | load before (judged) | load while running: max (recorded) | mean | valid | in statistics | why not valid |",
+        "|---|---|---|---|---|---|---|",
     ]
+    na = lambda v: "n/a" if v is None else v  # noqa: E731
     for a in result["attempts"]:
         lines.append(
-            f"| {a['attempt']} | {a['samples']} | {a['max']} | {a['mean']} | {'yes' if a['valid'] else '**NO**'} "
-            f"| {'yes' if a['used_in_statistics'] else 'no'} |"
+            f"| {a['attempt']} | {na(a['baseline'])} | {na(a['max'])} | {na(a['mean'])} | {'yes' if a['valid'] else '**NO**'} "
+            f"| {'yes' if a['used_in_statistics'] else 'no'} | {a['reason'] or ''} |"
         )
+    if "create_order" not in result:
+        return "\n".join(lines) + "\n"
     lines += [
         "",
         "Median over the attempts in statistics, min–max and coefficient of variation (stdev/mean).",
