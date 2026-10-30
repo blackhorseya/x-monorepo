@@ -353,7 +353,14 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: task build web-install
       - uses: ./.github/actions/playwright
+      # The dev Dex for the oidc-dex project (E2E_DEX=1): the compose service, so CI runs the same
+      # image and deployments/docker/dex/config.yaml as a developer. *.localtest.me is public DNS → 127.0.0.1.
+      - run: |
+          docker compose -f deployments/docker/docker-compose.yaml up -d dex
+          for _ in $(seq 30); do curl -fsS http://dex.localtest.me:5556/dex/.well-known/openid-configuration >/dev/null && exit 0; sleep 1; done
+          docker compose -f deployments/docker/docker-compose.yaml logs dex; exit 1
       - run: task web-e2e
+        env: { E2E_DEX: "1" }
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

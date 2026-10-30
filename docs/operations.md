@@ -68,7 +68,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 | | |
 |---|---|
 | issuer | `http://dex.localtest.me:5556/dex`（`auth.oidc.issuers[].issuer` 要與 token 的 `iss` **一字不差**） |
-| client | `x-console`（public client、PKCE，沒有 secret）→ `auth.oidc.issuers[].audience: x-console`；redirect URI 目前列 `http://localhost:{5173,4173,8080}/auth/callback`，Console 登入（#273）定路徑後在 `config.yaml` 一起調整 |
+| client | `x-console`（public client、PKCE，沒有 secret）→ `auth.oidc.issuers[].audience: x-console`；redirect URI 列 `http://localhost:{5173,4173,8080,4203}/auth/callback`（4203＝Playwright 的 `oidc-dex` project 專用）；`web.allowedOrigins` 是同一組 origin——Console 是瀏覽器 SPA，discovery 與 token endpoint 都是跨來源 fetch，Dex 沒回 CORS 標頭時登入會停在「Sign-in failed / Failed to fetch」。新增 Console 的 origin 時兩處一起加 |
 | 帳號 | `admin@example.com`、`user@example.com`，密碼都是 `password`，`email_verified=true`；`sub` 由固定的 `userID` 推出來（compose 與 kind 相同、重啟不變） |
 | 本機 rpc | `configs/local.yaml` 加 `auth.oidc: {enabled: true, issuers: [{issuer: http://dex.localtest.me:5556/dex, audience: x-console, allow_insecure_issuer: true}]}`（`localtest.me` 不是 loopback 字面值，所以 http 要這個旗標；見 [config.md](config.md)） |
 
@@ -89,6 +89,8 @@ curl -H "Authorization: Bearer $(scripts/dex-token.sh)" http://localhost:8080/ap
 | 瀏覽器、host 上跑的 rpc / `scripts/dex-token.sh` | `*.localtest.me` 的公開 DNS 是 `127.0.0.1`，加上 compose 發佈的 `5556` |
 | compose 內的容器 | 容器裡的 `127.0.0.1` 是自己，不是 host。要驗 token 的容器（例如自己把 rpc 包進 compose）照 `dex` 服務的寫法加 `extra_hosts: ["dex.localtest.me:host-gateway"]`。實測：同一個 compose network 的 curl 容器不加時連不到（`000`），加了回 `200` 且 `issuer` 相同 |
 | kind 的 Pod | `deployments/helm/kind/coredns-dex.sh <ns>`（`task helm-kind-up` 會跑，可重跑）在 CoreDNS 加 `rewrite name exact dex.localtest.me dex.<ns>.svc.cluster.local`；Dex 本身是 `deployments/helm/kind/dex.yaml`，ConfigMap `dex` 由 task 從同一份 `config.yaml` 建。`deployments/helm/kind/smoke.sh` 在叢集內驗 discovery 的 `issuer` 就是這個字串 |
+
+**真 Dex 的登入 E2E**：`task web-e2e-dex`（需要 `dex.localtest.me` 解得出來，離線見下）。它在需要時用 compose 起 `dex`，Playwright 的 `oidc-dex` project 再起一個只信任這顆 Dex 的 `bin/rpc`（`web/apps/console/e2e/oidc-dex/rpc.yaml`）與 port 4203 的 console，從 Dex 登入表單走到 `ClaimInvite` 綁定；帳號用 `CreateInvite` + `ClaimInvite` 真流程綁，不依賴預先綁定。CI 的 `console-e2e` job 同樣起 compose 的 `dex` 並以 `E2E_DEX=1` 跑 `task web-e2e`；`deployments/docker/dex/*` 或 compose 檔有變也會觸發該 job。
 
 **離線**（沒有公開 DNS，`dex.localtest.me` 解不出來）：在 host 的 `/etc/hosts` 加一行
 

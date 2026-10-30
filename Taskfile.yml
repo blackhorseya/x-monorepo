@@ -519,6 +519,15 @@ tasks:
     deps: [build, web-build]
     cmds: ['web/apps/console/e2e/image.sh {{.CLI_ARGS}}']
 
+  web-e2e-dex:
+    desc: 'the oidc-dex Playwright project: the console signs in through the real dev Dex (compose service dex, started here if it is not up) against a real ./bin/rpc whose only OIDC issuer is that Dex; binding goes through CreateInvite + ClaimInvite. Needs dex.localtest.me to resolve (public DNS, or /etc/hosts offline: docs/operations.md "Dex dev IdP"). Other CI runs it with E2E_DEX=1 task web-e2e'
+    deps: [build, web-build]
+    dir: web/apps/console
+    cmds:
+      - '{{.COMPOSE}} -f ../../../deployments/docker/docker-compose.yaml up -d dex'
+      - for _ in $(seq 30); do curl -fsS http://dex.localtest.me:5556/dex/.well-known/openid-configuration >/dev/null && exit 0; sleep 1; done; echo "dex.localtest.me:5556 did not come up (DNS? docs/operations.md)" >&2; exit 1
+      - E2E_DEX=1 pnpm exec playwright test --project oidc-dex {{.CLI_ARGS}}
+
   config:
     desc: 'create configs/local.yaml from configs/config.example.yaml if missing'
     status: ['test -f {{.CONFIG}}']

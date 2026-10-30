@@ -199,7 +199,7 @@
 - PR 2：`iss` 不符、`aud` 不含 client id、過期超過 60 秒、`alg=none` / HS256、`alg` 與 JWK 不一致、未知 `kid` 30 秒內重抓不超過一次、重抓失敗沿用舊 key 且滿 24 小時後拒絕、非 https 且非 loopback 且無旗標 → 拒絕啟動。
 - PR 3（真 Postgres）：同一 `(iss, sub)` 並發綁定只有一個成功；邀請過期 / 重用 / `email_verified=false` / email 不符皆拒絕；`auto_provision` 建出的帳號沒有 role；`iat` 早於 `sessions_revoked_at` 拒絕、缺 `iat` 拒絕；撤銷寫入 audit。
 - PR 4：DB 錯誤拒絕且不 cache；停用 account 後 30 秒內拒絕；未綁定身分呼叫非 `ClaimInvite` → `PERMISSION_DENIED`；OIDC 關閉時既有行為逐字不變。
-- PR 5：Playwright（真 Chromium + 真 rpc；IdP 以 `page.route()` 模擬（`auth` project），另有 `oidc-backend` project 用 loopback ES256 IdP 對**真 rpc** 驗 token 接受、未綁定 → ClaimInvite、撤銷 session；真 Dex 在 #274）；登入、reload 靜默 refresh、登出後 access token 不在任何 Web Storage、`console.apiKeyLogin` 關閉時入口消失。
+- PR 5：Playwright（真 Chromium + 真 rpc；IdP 以 `page.route()` 模擬（`auth` project），另有 `oidc-backend` project 用 loopback ES256 IdP 對**真 rpc** 驗 token 接受、未綁定 → ClaimInvite、撤銷 session；真 Dex 由 `oidc-dex` project（`E2E_DEX=1`，`task web-e2e-dex`）：真 Chromium 走 Dex 登入表單 → 未綁定 → `CreateInvite` + `ClaimInvite` 綁定 → 再登入直接進；錯密碼留在 Dex）；登入、reload 靜默 refresh、登出後 access token 不在任何 Web Storage、`console.apiKeyLogin` 關閉時入口消失。
 - PR 6：kind 內 issuer 解析一致；JWKS stale alert 觸發；E2E 走完 bootstrap → 邀請 → 登入。
 
 ## 13. 可選模組：方案 A，自建帳密 issuer（未排程）
