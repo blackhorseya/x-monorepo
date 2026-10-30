@@ -22,3 +22,52 @@
 - `scripts/cover-gate.sh`：所有 `*/domain/*` package 必須 100% 覆蓋
 - hook 失敗時 exit 2，stderr 會回到 agent 讓它自己修；`stop_hook_active` 防止無限循環
 - dependabot 只掃單一 module 目錄、不懂 go.work：Go bump 會讓其他 module 漂移，`dependabot-sync.yml` 在它的分支跑 `task tidy` 補 commit 再觸發 CI，否則 `work-sync` 會擋。`.github/dependabot.yml` 三組每週各一支 PR：gomod（所有 module 一組）、github-actions、npm（`web/` pnpm workspace 一組；lockfile 算 releasable，merge 會切 patch 版）
+
+## 本機 hook 證據：AgEnD hooks ≠ lefthook（#300）
+
+`git commit` / `git push` 成功，不代表 `lefthook.yml` 的 `gate-fast` / `gate-local` 跑過：git 只執行 active `core.hooksPath` 底下**同名**的 hook。AgEnD 管理的 worktree 會把 `core.hooksPath` 指向 `~/.agend/hooks`，那裡只有 `prepare-commit-msg`、`reference-transaction` 等 AgEnD hooks，沒有 `pre-commit` / `pre-push`，也不呼叫 lefthook。`task tools:hooks` 裝的 lefthook 因此不會被觸發。
+
+### 1. 先驗證 hook 有沒有真的掛上
+
+```bash
+git config --show-origin --get core.hooksPath   # 空 = 預設 .git/hooks；有值 = 看來源檔與路徑
+ls -l "$(git rev-parse --git-path hooks)"       # 預設路徑
+ls -l "$(git config --get core.hooksPath)"      # 有設 hooksPath 時看這個
+```
+
+要看到 `pre-commit` / `pre-push` 且內容呼叫 lefthook（`grep -l lefthook <hook>`），才能說 lefthook 掛上。找不到就視為**沒掛上**。AgEnD 的 hooks 與 Claude Code 的 `.claude/settings.json` hooks（`PostToolUse` / `Stop`）也各自獨立，不能互相當證據。
+
+### 2. 沒掛上時：在 exact head 手動跑門檻
+
+在要回報的 commit（`git rev-parse HEAD`）上跑 `task gate-local`（commit 前的檔案檢查用 `task gate-fast FILE=…`），回報要留命令、exit code 與輸出摘要。措辭固定：
+
+| 情況 | 可以寫 | 不可以寫 |
+|---|---|---|
+| lefthook 掛上，hook 跑過（有 hook 輸出） | lefthook 通過 | — |
+| 沒掛上，手動跑 gate 且 exit 0 | **手動 gate 通過，hook 未執行**（附 head SHA、命令、exit code） | lefthook 通過、hooks 通過 |
+| 沒掛上，沒跑 gate | 本機 gate 未執行 | 任何「通過」 |
+
+範例：
+
+```text
+head: 0b95a126…（git rev-parse HEAD）
+core.hooksPath: /Users/sean/.agend/hooks（file:…/.git/config）；hooks 目錄無 pre-commit / pre-push
+$ task gate-local → exit 0（check-gen-fresh 乾淨、buf lint 乾淨、affected modules go test -race ok）
+結論：手動 gate 通過，hook 未執行
+```
+
+### 3. 每個 head 各自驗證
+
+merge commit、rebase 後或任何新 head 都要在**該 head** 重驗，不沿用 parent 的結果。回報裡的 SHA 要與最後 push 的 head 一致。
+
+### 4. 已由 exact-head CI 證明的不必重跑
+
+CI 在 `refs/pull/N/merge` 上跑（見 `task merge-ready`），綠燈對得上目前 head 時，下列門檻不必本機重複：gen-freshness（含 TS）、`task lint`、work-sync、`go test -race`（test matrix）、coverage、build、helm、k6 / helm-kind、release-snapshot、web。哪些 job 實際執行取決於改動路徑（`scripts/ci-changes.sh`）；被跳過的 job 不是證據。本機手動 gate 的價值在於「push 前就知道」，**不取代** CI；CI 也無法證明本機 hook 曾經執行。
+
+### 5. 不要繞過 hook
+
+不用 `-c core.hooksPath=/dev/null`、`--no-verify` 跳過 hook，除非 lead 明確授權；授權時要在回報裡寫明被跳過的 commit 與理由。也不要為了讓 lefthook 跑起來去改全域 `core.hooksPath` 或 `~/.agend/hooks`（影響其他 worktree 與 daemon 保護）；缺 hook 就走第 2 點手動跑。
+
+### Claude-Session trailer
+
+repo 沒有這個規範：`CLAUDE.md`、`docs/`、`.github/`、`scripts/` 都沒有 `Claude-Session`，近 60 筆 commit 也沒有；commit 規則只有 Conventional Commits。#297 提到的 trailer 來自當次派工 brief，不是 repo 要求。AgEnD 的 `prepare-commit-msg` 注入的是 `Agend-*` 與選用的 `Signed-off-by`，且 hook 失敗不擋 commit。
