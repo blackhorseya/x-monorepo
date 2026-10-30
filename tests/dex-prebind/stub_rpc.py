@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A stand-in for the rpc server's identity.v1.IdentityService (Connect over JSON), just enough for
-scripts/dex-prebind.sh: CreateAccount, ListAccounts, ListAccountIdentities, CreateInvite (admin API
+scripts/dex-prebind.sh: CreateAccount, ListAccounts, ListAccountIdentities, GetAccount, DisableAccount, CreateInvite (admin API
 key) and ClaimInvite (a bearer token). It keeps its state in memory, appends one line per call to
 the log file ("<Method> <admin|bearer|none>", never a credential), and serves GET /_state (the
 whole state as JSON) for the test to assert on. Tokens are "tok-secret-<email>"; scripts/test.sh
@@ -25,7 +25,7 @@ state = {"accounts": [], "invites": [], "identities": []}
 
 
 def account(a):
-    return {"id": a["id"], "name": a["name"], "roles": a["roles"], "status": "ACCOUNT_STATUS_ACTIVE"}
+    return {"id": a["id"], "name": a["name"], "roles": a["roles"], "status": a.get("status", "ACCOUNT_STATUS_ACTIVE")}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -61,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(500, {"code": REFLECT, "message": REFLECT}, REFLECT)
         if method == "ClaimInvite":
             return self.claim(bearer)
-        if method not in ("CreateAccount", "ListAccounts", "ListAccountIdentities", "CreateInvite"):
+        if method not in ("CreateAccount", "GetAccount", "DisableAccount", "ListAccounts", "ListAccountIdentities", "CreateInvite"):
             return self.reply(404, {"code": "unimplemented"})
         if not admin:
             return self.reply(401, {"code": "unauthenticated", "message": "bad key"}, "auth.invalid_credential")
@@ -70,6 +70,15 @@ class Handler(BaseHTTPRequestHandler):
     def CreateAccount(self, req):
         a = {"id": f"acc-{len(state['accounts']) + 1}", "name": req["name"], "roles": req.get("roles", [])}
         state["accounts"].append(a)
+        self.reply(200, {"account": account(a)})
+
+    def GetAccount(self, req):
+        a = next((a for a in state["accounts"] if a["id"] == req["id"]), None)
+        self.reply(200, {"account": account(a)}) if a else self.reply(404, {"code": "not_found"}, "account.not_found")
+
+    def DisableAccount(self, req):
+        a = next(a for a in state["accounts"] if a["id"] == req["id"])
+        a["status"] = "ACCOUNT_STATUS_DISABLED"
         self.reply(200, {"account": account(a)})
 
     def ListAccounts(self, req):

@@ -1011,6 +1011,31 @@ expect_eq "dex-prebind: resume after a failed claim succeeds" "0" "$rc"
 expect_eq "dex-prebind: resume creates no second account or invite" "0 0" "$(pb_calls CreateAccount) $(pb_calls CreateInvite)"
 expect_eq "dex-prebind: resume binds both" "2" "$(pb_state | jq '.identities | length')"
 
+# an existing account is reused only if it is what the Dex account should be: a wrong role set or a
+# disabled account fails closed (non-zero, names the email), changes nothing, grants nothing
+pb_call() { curl -fsS -H "X-API-Key: $pb_key" -H 'Content-Type: application/json' -d "$2" "$pb_url/identity.v1.IdentityService/$1"; }
+for case in "admin@example.com|[]|admin role missing" "user@example.com|[\"admin\"]|user holds a role" "admin@example.com|[\"admin\",\"ops\"]|admin has an extra role"; do
+  IFS='|' read -r who roles why <<<"$case"
+  pb_up mismatch
+  pb_call CreateAccount "{\"name\":\"$who\",\"roles\":$roles}" >/dev/null
+  pb_run
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: existing account mismatch ($why) must fail"; fi
+  expect_match "dex-prebind: the mismatch names the email ($why)" "$who" "$out"
+  expect_eq "dex-prebind: a mismatch binds and invites nothing ($why)" "0" "$(pb_state | jq '(.invites|length) + (.identities|length)')"
+  expect_eq "dex-prebind: a mismatch asks Dex for no token ($why)" "0" "$(wc -l < "$pb_dir/tokens" | tr -d ' ')"
+done
+pb_up disabled
+pb_run
+acct=$(pb_state | jq -r '.accounts[] | select(.name=="user@example.com") | .id')
+pb_call DisableAccount "{\"id\":\"$acct\"}" >/dev/null
+pb_run
+if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a disabled account must fail the run, even when bound"; fi
+expect_match "dex-prebind: the disabled account is named" 'user@example.com' "$out"
+
+# no stub outlives the suite: its processes are in PB_PIDS and the EXIT trap (the later prepull trap
+# must not replace the one that kills them)
+expect_match "test.sh's EXIT trap kills the dex-prebind stubs" 'PB_PIDS' "$(trap -p EXIT)"
+
 # nothing secret in any output: not the admin key (right or wrong), not a token
 all_out="$first_out
 $rerun_out
