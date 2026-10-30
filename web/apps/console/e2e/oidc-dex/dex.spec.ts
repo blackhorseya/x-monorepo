@@ -132,10 +132,11 @@ test("a wrong password stays at Dex and never reaches the console", async ({
   expect(page.url()).toContain(ISSUER);
 });
 
-// The fixture's rpc is only used once it proves it is this attempt's process (rpc.ts): a listener that
-// took the port after it was picked, whatever it answers, is not it. Each variant is a listener that
-// answers the admin key one way and any other key another way; startRpc must fail in setup for every one
-// (a listener on 127.0.0.1 shadows the real rpc, which may still bind the port on another address).
+// The fixture never adopts an address it was not told by its own child (rpc.ts): the rpc binds the port
+// itself and reports it, so there is no free port to lose in between. This holds a port with a
+// listener that imitates an rpc in a number of ways (answers the admin key one way and any other key
+// another way) and starts the fixture on exactly that port: whatever the listener says, startRpc must
+// fail in setup, because the real rpc cannot bind there and so reports no address.
 const json = (status: number, body: unknown) => ({
   status,
   body: JSON.stringify(body),
