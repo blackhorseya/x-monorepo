@@ -13,6 +13,14 @@ storage:
 
 web:
   http: 0.0.0.0:5556
+  # The console is a browser SPA: it fetches discovery and POSTs to the token endpoint cross-origin,
+  # so Dex must answer CORS for the console origins (the redirectURIs below, one per way to run it).
+  # Without this the sign-in ends in "Failed to fetch" (found by the oidc-dex Playwright project).
+  allowedOrigins:
+    - http://localhost:5173
+    - http://localhost:4173
+    - http://localhost:8080
+    - http://localhost:4203
 
 oauth2:
   # Console is the only client; skip the "grant access" page so the login E2E is one form.
@@ -29,6 +37,7 @@ staticClients:
       - http://localhost:5173/auth/callback   # task web-dev (vite)
       - http://localhost:4173/auth/callback   # vite preview (Playwright)
       - http://localhost:8080/auth/callback   # console image / kind port-forward
+      - http://localhost:4203/auth/callback   # Playwright oidc-dex project (web/apps/console/playwright.config.ts)
 
 staticPasswords:
   # Both passwords are "password". Dex hashes are bcrypt; Dex marks email_verified=true for

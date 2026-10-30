@@ -44,6 +44,8 @@ helm=false;   has 'deployments/helm/*' && helm=true
 release=false; has '.github/workflows/release.yml' && release=true   # pins cosign-release: the smoke + Rekor canary must run on a bump (#215)
 images=false; has 'deployments/docker/Dockerfile*' 'web/apps/console/Dockerfile' 'web/apps/console/deploy/*' '.goreleaser.yaml' '.dockerignore' && images=true
 k6=false;     has 'tests/k6/*' && k6=true
+# The oidc-dex Playwright project signs in through the compose Dex (#274): its config or the service is a console-e2e input.
+dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.yaml' && dex=true
 # Inputs of scripts/test.sh outside scripts/ (#287, #298): coredns-dex.sh is run by its coredns: cases,
 # k6-bench.yml is grepped by its wiring assertions, .goreleaser.yaml is copied into the cosign-smoke
 # fixture, tests/dex-prebind/ is the rpc stub of the dex-prebind: cases. Add a path here (and a sole-path case in test.sh) whenever test.sh starts reading a new one.
@@ -61,7 +63,7 @@ out breaking         "$proto" "$ci"
 out release_snapshot "$go" "$images" "$release" "$ci"
 out actions_resolve  "$actions" "$ci"
 out web              "$web" "$proto" "$ci"
-out console_e2e      "$go" "$web" "$ci"
+out console_e2e      "$go" "$web" "$dex" "$ci"
 out console_image    "$go" "$web" "$images" "$ci"
 out helm             "$helm" "$ci"
 out scripts_test     "$ci" "$scripts_src"

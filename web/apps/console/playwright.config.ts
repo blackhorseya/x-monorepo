@@ -31,6 +31,13 @@ const roleWebPort = webPort + 10;
 export const BACKEND_RPC_PORT = rpcPort + 20;
 export const BACKEND_IDP_PORT = rpcPort + 30; // keep in sync with e2e/oidc-backend/rpc.yaml
 const backendWebPort = webPort + 20;
+// The "oidc-dex" project (E2E_DEX=1): the dev Dex as the IdP (e2e/oidc-dex/). The console's origin must
+// be a redirect URI registered in deployments/docker/dex/config.yaml, so its port is fixed, not derived
+// (and not one of the three already registered for `task web-dev`, vite preview and the console image,
+// which a developer's own stack is likely to hold). Its rpc is not a webServer: Dex's two accounts are
+// fixed, so each test starts its own rpc (e2e/oidc-dex/rpc.ts) and its bindings die with the attempt.
+const DEX_WEB_PORT = 4203;
+const withDex = !!process.env.E2E_DEX;
 const rpc = `http://127.0.0.1:${rpcPort}`;
 const authRpc = `http://127.0.0.1:${authRpcPort}`;
 const roleRpc = `http://127.0.0.1:${roleRpcPort}`;
@@ -70,7 +77,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: /\/(auth(-role)?|oidc-backend)\//,
+      testIgnore: /\/(auth(-role)?|oidc-backend|oidc-dex)\//,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: consoleURL ?? `http://localhost:${webPort}`,
@@ -100,6 +107,18 @@ export default defineConfig({
         baseURL: `http://localhost:${backendWebPort}`,
       },
     },
+    ...(withDex
+      ? [
+          {
+            name: "oidc-dex",
+            testMatch: /\/oidc-dex\/.*\.spec\.ts$/,
+            use: {
+              ...devices["Desktop Chrome"],
+              baseURL: `http://localhost:${DEX_WEB_PORT}`,
+            },
+          },
+        ]
+      : []),
   ],
   webServer: [
     {
@@ -195,5 +214,15 @@ export default defineConfig({
       env: { CONSOLE_API: `http://127.0.0.1:${BACKEND_RPC_PORT}` },
       reuseExistingServer: !process.env.CI,
     },
+    ...(withDex
+      ? [
+          {
+            command: `pnpm exec vite preview --port ${DEX_WEB_PORT} --strictPort`,
+            url: `http://localhost:${DEX_WEB_PORT}/`,
+            env: { CONSOLE_API: "http://127.0.0.1:1" }, // unused: the tests route /api to their own rpc
+            reuseExistingServer: !process.env.CI,
+          },
+        ]
+      : []),
   ],
 });

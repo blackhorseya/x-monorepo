@@ -81,6 +81,10 @@ expect_eq "other kind scripts do not run scripts-test" "helm helm_kind" "$(jobs_
 # test.sh also reads .github/workflows/k6-bench.yml (wiring assertions) and copies .goreleaser.yaml
 # into the cosign-smoke fixture (#298): each alone must run scripts-test; no other workflow does.
 expect_eq "k6-bench.yml also runs scripts-test" "actions_resolve scripts_test" "$(jobs_on k6bench .github/workflows/k6-bench.yml)"
+# The oidc-dex Playwright project runs against the compose Dex (#274): its config or the compose file alone
+# must run console-e2e, or a Dex change (CORS origins, redirect URIs) is only found after merge.
+expect_eq "dex config runs console-e2e" "console_e2e" "$(jobs_on dexcfg deployments/docker/dex/config.yaml)"
+expect_eq "compose file runs console-e2e" "console_e2e" "$(jobs_on composefile deployments/docker/docker-compose.yaml)"
 expect_eq "k6 only" "k6" "$(jobs_on k6 tests/k6/orders.js)"
 expect_eq "Dockerfile is an image change" \
   "release_snapshot console_image helm_kind" \

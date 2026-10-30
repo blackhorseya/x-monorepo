@@ -369,6 +369,7 @@ task run            # rpc :8080（要看到 reservation 還需要 Postgres + tas
 task web-dev        # http://localhost:5173；CONSOLE_API=http://host:port 可改 proxy 目標
 task web-typecheck  # @repo/proto + @repo/console 的 tsc --noEmit（CI 的 web job 也跑這個 + web-build）
 task web-e2e        # Playwright smoke：建好的 console（vite preview）打真的 ./bin/rpc；orders / stock / poison / prune 各頁走一遍。E2E_DATABASE_URL=postgres://… 先 migrate up 再接那個 DB，並多起一個 bin/worker（CI 的 console-e2e job 這樣跑：poison / prune 真的執行，建單後 Reservation 欄真的變 RESERVED、Cancel 後 RELEASED），沒設就 in-memory、admin 頁驗 admin.no_database；另一組 project auth 起 auth.mode=required（API key + HS256 JWT）的 rpc 驗 401 / 403 / 設 key 或 JWT 恢復、過期 / 錯 issuer 的 token、roles claim 過 admin gate、寫入也帶 credential。第一次要 cd web/apps/console && pnpm exec playwright install chromium（CI 的兩個 console job 走 .github/actions/playwright：chromium 以 @playwright/test 版本為 key 快取在 ~/.cache/ms-playwright，命中只裝 apt deps）
+task web-e2e-dex    # oidc-dex project：Console 經真 Dex 登入（compose 的 dex 沒起就先起；需 dex.localtest.me 解析得出來，離線見 docs/operations.md「Dex dev IdP」）→ 未綁定 → CreateInvite + ClaimInvite → 進 Console，打只信任 Dex 的真 bin/rpc；CI 的 console-e2e 以 E2E_DEX=1 task web-e2e 一起跑
 task web-e2e-image  # 同一套 chromium spec 改打真的 console image（e2e/image.sh：build web/apps/console/Dockerfile、容器的 RPC_UPSTREAM 回指 host 上 Playwright 起的 bin/rpc；docker 或 podman），外加 e2e/image.spec.ts 驗 nginx 本身：deep link 回 index.html + no-cache、assets immutable、不存在的 asset 是 404、/api 經 proxy、/healthz。CI 的 console-image job
 ```
 
