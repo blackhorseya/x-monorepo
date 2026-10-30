@@ -143,7 +143,7 @@
 - **accounts UI（admin，`/accounts/$id`）**：
   - **Invite**：用 email 發邀請（`CreateInvite`）；不寄信、沒有 secret，頁面說明對方要用該 email 登入再認領。本次造訪建立的邀請列在卡片裡（email、到期、單次）。
   - **Sessions**：顯示 `sessions_revoke_time`（或「Never revoked」）；「Revoke sessions」先確認，對話框明講這是「登出所有裝置」、不碰 IdP 的 refresh token、不是帳號遭盜用的處置（§11）。
-  - **Sign-in bindings**：**沒有任何 RPC 能列出帳號綁定的 `(iss, sub)` 或尚未使用的邀請**，所以頁面只能如實說明這點。要真的「查看綁定」需要新增列表 RPC（proto + identity BC），另開 issue。
+  - **Sign-in bindings**：後端現在有 `ListAccountIdentities`（#297），但 console 這一版**還沒接**（#289）；頁面如實寫「尚未顯示」，不假裝沒有綁定。未使用的邀請仍沒有列表 RPC。
   - `AssignRoles`（既有的「Save roles」）不變。
 
 ## 9. 第一個 admin（Q5）

@@ -42,7 +42,7 @@ test("admin: create an invite for an email — shown with its 7-day expiry, noth
   await page.getByRole("button", { name: "Create invite" }).click();
   await expect(page.getByTestId("invite-made")).toHaveCount(2);
   await expect(title(page, "Sign-in bindings")).toBeVisible();
-  await expect(page.getByText(/no rpc lists/i)).toBeVisible();
+  await expect(page.getByText(/not shown in the console yet/i)).toBeVisible();
 });
 
 test("an invalid invite email is refused by the server and shown", async ({ page }) => {

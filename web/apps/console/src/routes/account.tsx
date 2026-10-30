@@ -362,8 +362,8 @@ function BindingsCard() {
       <CardHeader>
         <CardTitle>Sign-in bindings</CardTitle>
         <CardDescription>
-          No RPC lists the identity-provider sign-ins (issuer and subject) bound to an account, or the invites still open, so they cannot be
-          shown here. An invite made on this page is listed above until you leave it.
+          The identity-provider sign-ins (issuer and subject) bound to this account are not shown in the console yet, and neither are the invites
+          still open. An invite made on this page is listed above until you leave it.
         </CardDescription>
       </CardHeader>
     </Card>
