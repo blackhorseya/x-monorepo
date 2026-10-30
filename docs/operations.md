@@ -88,7 +88,7 @@ ADMIN_API_KEY=<admin key> task dex-prebind      # rpc 要在跑，auth.oidc 要�
 
 - `admin@example.com` → 自己的 account `admin@example.com`，role 為 `admin`（`PREBIND_ADMIN_ROLE` 可改成非預設的 `auth.admin_role`）；`user@example.com` → 自己的 account，**沒有任何 role**。刻意不綁到 `task bootstrap` 的 root：root 是 API key 的 break-glass 帳號，混在一起之後撤銷一邊會連到另一邊。
 - `ADMIN_API_KEY` 是有 admin role 的 key：`task bootstrap` 印的那把，或 config `auth.api_keys` 的 break-glass key。
-- **可重跑**：以 `ListAccountIdentities` 判斷，該 email 已綁定（issuer 是 dev Dex）就跳過、不問 Dex 要 token；account 用名稱找，已有的不重建；已有 pending invite 就沿用、不重發。中途失敗（例如 Dex 沒起）重跑會接著做完。
+- **可重跑**：以 `ListAccountIdentities` 判斷，該 email 已綁定（issuer 是 dev Dex）就跳過、不問 Dex 要 token；account 用名稱找，已有的不重建，但**先驗證**：既有 account 必須是 active 且 roles 恰為預期（admin 只有 `admin`、user 為空），否則 fail-closed（非零退出、指名是哪個 email），不改權限也不默默接受；兩個 account 都先檢查完才開始綁定；已有 pending invite 就沿用、不重發。中途失敗（例如 Dex 沒起）重跑會接著做完。
 - **只能用在 dev**：`ISSUER` 不是 `http://dex.localtest.me:5556/dex` 就拒絕；`BASE_URL`（預設 `http://127.0.0.1:8080`）必須是本機（host 精確為 `localhost` / `127.0.0.1` / `[::1]`，可帶 1–65535 的 port，不得有 userinfo、path、query、fragment；整串比對而非前綴），因為 admin key 會送去那裡。要對 kind 跑就 `kubectl port-forward` 後用本機 URL。
 - 不印 API key、token：key 與 token 只走 curl 的 stdin config（不進 argv / `ps`），RPC 失敗只印 HTTP status、Connect code 與 `x-error-code`，不印 response body；這三個值也只在像 code（小寫英數 `_` `.`、≤64 字）且不含剛送出的 credential 時才原樣印，否則印 `<redacted>`（server 把 key 當錯誤碼反射回來也不外洩）。
 

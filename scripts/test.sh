@@ -15,7 +15,7 @@ src=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 # The fixtures must not inherit the developer's signing / hook settings.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
-PB_PIDS=""
+PB_PIDS=""   # dex-prebind stubs; killed by the one EXIT trap set below the prepull helpers
 trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; rm -rf "$tmp"' EXIT
 fail=0 pass=0
 
@@ -159,7 +159,7 @@ prepull_stop() {
   wait "$prepull_pid" 2>/dev/null || true
   prepull_pid=""
 }
-trap 'prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
+trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 cat > "$fake_engine" <<'ENGINE'
@@ -895,7 +895,7 @@ chmod +x "$pb_fake"
 # pb_up <name> [VAR=value...]: starts a stub (extra env for it); sets pb_dir, pb_url.
 pb_up() {
   pb_dir="$tmp/pb-$1"; mkdir -p "$pb_dir"; shift
-  : > "$pb_dir/log"; : > "$pb_dir/tokens"
+  rm -f "$pb_dir/port"; : > "$pb_dir/log"; : > "$pb_dir/tokens"   # a stale port file would point at the previous stub of the same name
   env STUB_ADMIN_KEY="$pb_key" STUB_ISSUER="$pb_dev" "$@" python3 "$src/tests/dex-prebind/stub_rpc.py" "$pb_dir/port" "$pb_dir/log" >/dev/null 2>&1 &
   PB_PIDS="$PB_PIDS $!"
   local i=0; while [ ! -s "$pb_dir/port" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done

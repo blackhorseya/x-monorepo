@@ -85,6 +85,15 @@ find_account() {
   done
 }
 
+# expect_account <id> <email> <roles-json>: fails closed unless the existing account is active and has
+# exactly the expected roles. A same-named account made by hand (admin without its role, user holding
+# admin) is never adopted, and its roles are never changed here.
+expect_account() {
+  admin GetAccount "$(jq -nc --arg i "$1" '{id: $i}')"
+  jq -e --argjson want "$3" '.account | (.status // "ACCOUNT_STATUS_ACTIVE") == "ACCOUNT_STATUS_ACTIVE" and ((.roles // []) | sort) == ($want | sort)' <<<"$resp" >/dev/null \
+    || die "the existing account $2 is disabled or its roles differ from $3; fix or rename it by hand (AssignRoles / EnableAccount) and rerun"
+}
+
 # prebind <email> <role...>: leaves the email's Dex identity bound to its account.
 prebind() {
   local email=$1; shift
@@ -95,6 +104,8 @@ prebind() {
     admin CreateAccount "$(jq -nc --arg n "$email" --argjson r "$roles" '{name: $n, roles: $r}')"
     id=$(jq -er '.account.id' <<<"$resp") || die "CreateAccount: no account id in the response"
     echo "created account for $email"
+  else
+    expect_account "$id" "$email" "$roles"
   fi
   admin ListAccountIdentities "$(jq -nc --arg a "$id" '{accountId: $a}')"
   if jq -e --arg i "$issuer" '[.identities[]? | select(.issuer == $i)] | length > 0' <<<"$resp" >/dev/null; then
@@ -114,5 +125,13 @@ prebind() {
   echo "bound $email"
 }
 
+# Check every existing account before changing anything, so a bad one stops the run with nothing bound.
+preflight() {
+  local id
+  id=$(find_account "$1")
+  [ -z "$id" ] || expect_account "$id" "$1" "$(jq -nc '$ARGS.positional' --args "${@:2}")"
+}
+preflight admin@example.com "$role"
+preflight user@example.com
 prebind admin@example.com "$role"
 prebind user@example.com
