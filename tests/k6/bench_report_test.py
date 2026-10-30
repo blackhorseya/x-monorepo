@@ -232,5 +232,75 @@ class EnvironmentLoadNotOwnLoad(unittest.TestCase):
         self.assertIn("not a baseline", problems[-1])
 
 
+class ThresholdClassification(unittest.TestCase):
+    """k6 exit 99: only provable overload is an invalid attempt; everything else is a failure (fail-closed)."""
+
+    def classify(self, metrics):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "s.json")
+            if metrics is not None:
+                with open(path, "w") as f:
+                    f.write(metrics if isinstance(metrics, str) else __import__("json").dumps({"metrics": metrics}))
+            return r.classify_threshold_failure(path, "create")
+
+    @staticmethod
+    def crossed(count, **extra):
+        return {"count": count, "thresholds": {"x": True}, **extra}
+
+    TIMEOUTS = {
+        "rpc_errors": {"count": 7, "thresholds": {"count==0": True}},
+        "rpc_errors{code:request.timeout}": {"count": 4, "thresholds": {"count>=0": False}},
+        "rpc_errors{code:transport.timeout}": {"count": 3, "thresholds": {"count>=0": False}},
+        "rpc_ok{rpc:CreateOrder}": {"count": 9, "thresholds": {"count>0": False}},
+    }
+
+    def test_rpc_errors_that_are_all_timeouts_are_overload(self):
+        kind, why = self.classify(self.TIMEOUTS)
+        self.assertEqual(kind, "overload", why)
+        self.assertIn("rpc_errors", why)
+
+    def test_the_real_run_41000071677_attempt_6_is_overload(self):
+        # create phase of attempt 6 (20 x request.timeout): the sub-metrics did not exist yet, so build them from the log's 20 errors
+        with open(os.path.join(FIXTURE, "run6-create.json")) as f:
+            m = __import__("json").load(f)["metrics"]
+        self.assertTrue(m["rpc_errors"]["thresholds"]["count==0"], "k6 marks a crossed threshold True")
+        m["rpc_errors{code:request.timeout}"] = {"count": m["rpc_errors"]["count"], "thresholds": {"count>=0": False}}
+        self.assertEqual(self.classify(m)[0], "overload")
+
+    def test_reservation_timeouts_are_overload(self):
+        self.assertEqual(self.classify({"reservation_timeouts": self.crossed(2)})[0], "overload")
+
+    def test_a_correctness_threshold_is_a_failure(self):
+        kind, why = self.classify({"reservation_wrong_status": self.crossed(1)})
+        self.assertEqual(kind, "failure")
+        self.assertIn("reservation_wrong_status", why)
+
+    def test_correctness_wins_over_an_overload_threshold_crossed_at_the_same_time(self):
+        kind, why = self.classify({**self.TIMEOUTS, "reservation_wrong_status": self.crossed(1)})
+        self.assertEqual(kind, "failure")
+        self.assertIn("reservation_wrong_status", why)
+
+    def test_rpc_errors_that_are_not_all_timeouts_are_a_failure(self):
+        m = {**self.TIMEOUTS, "rpc_errors{code:transport.timeout}": {"count": 0, "thresholds": {"count>=0": False}}}
+        kind, why = self.classify(m)
+        self.assertEqual(kind, "failure")
+        self.assertIn("3 of 7 are not timeouts", why)
+
+    def test_without_the_per_code_metrics_rpc_errors_cannot_be_called_overload(self):
+        kind, _ = self.classify({"rpc_errors": {"count": 7, "thresholds": {"count==0": True}}})
+        self.assertEqual(kind, "failure")
+
+    def test_http_req_failed_alone_or_an_unknown_threshold_is_a_failure(self):
+        self.assertEqual(self.classify({"http_req_failed": self.crossed(1)})[0], "failure")
+        self.assertEqual(self.classify({"something_new": self.crossed(1)})[0], "failure")
+        self.assertEqual(self.classify({**self.TIMEOUTS, "http_req_failed": self.crossed(1)})[0], "overload")
+
+    def test_no_crossed_threshold_missing_or_broken_summary_is_a_failure(self):
+        self.assertEqual(self.classify({"rpc_ok{rpc:CreateOrder}": {"count": 1, "thresholds": {"count>0": False}}})[0], "failure")
+        self.assertEqual(self.classify(None)[0], "failure")
+        self.assertEqual(self.classify("not json")[0], "failure")
+        self.assertEqual(self.classify('{"metrics": []}')[0], "failure")
+
+
 if __name__ == "__main__":
     unittest.main()

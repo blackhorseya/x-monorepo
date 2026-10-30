@@ -11,8 +11,9 @@
 # quiet machine and ran to the end. The load while an attempt runs is the bench's own (rpc, worker, Postgres and
 # k6 share the machine): it is sampled into run<n>-load.csv and reported, never judged. Two things end an attempt
 # as INVALID instead of the bench as failed, both written to run<n>-invalid.txt: the machine never got quiet
-# (the attempt is not run), and k6 crossing a threshold (exit 99: the CreateOrder timeouts / rpc_errors an
-# overloaded machine produces). Any other failure (no binary, migrate, a k6 script error, drain) is the tool's
+# (the attempt is not run), and k6 crossing an OVERLOAD threshold (exit 99; only reservation_timeouts and rpc_errors
+# that are all timeouts count, judged from the k6 summary by a name list in bench_report.py; a correctness threshold
+# such as reservation_wrong_status, an unknown one or an unreadable summary is a failure, exit 99, never exit 3). Any other failure (no binary, migrate, a k6 script error, drain) is the tool's
 # and ends the bench with a non-0, non-3 exit. Attempts go on until RUNS valid ones exist or MAX_ATTEMPTS is
 # reached; every attempt stays in the output directory; the statistics use the valid ones only; fewer than
 # RUNS valid = "NOT A VALID BASELINE" and exit 3 (the numbers that exist are still printed, under that banner).
@@ -82,17 +83,23 @@ wait_quiet() {
     sleep "$LOAD_INTERVAL"
   done
 }
-# <attempt> <phase> <k6 args…>: a crossed threshold (exit 99: rpc_errors, reservation_timeouts… what an overloaded machine
-# produces) sets $overload and returns 1 — the attempt is invalid, the tool is not broken; any other failure ends the bench
+# <attempt> <phase> <k6 args…>: a crossed threshold (exit 99) is looked at (bench_report.py classify_threshold_failure,
+# docs/perf-baseline.md): provably overload (timeouts) sets $overload and returns 1 — the attempt is invalid, the
+# tool is not broken; every other crossing, and anything the classifier cannot read, is a failure (exit 99, fail-closed).
+# Any other k6 failure ends the bench too.
 k6_phase() {
-  local n=$1 phase=$2 rc=0; shift 2
+  local n=$1 phase=$2 rc=0 verdict; shift 2
   k6 run --quiet --summary-export "$out/run$n-$phase.json" tests/k6/bench.js "${k6env[@]}" -e "PHASE=$phase" "$@" \
     > "$out/run$n-$phase.log" 2>&1 || rc=$?
   [ "$rc" != 0 ] || return 0
   if [ "$rc" != 99 ]; then echo "k6 $phase failed (exit $rc):" >&2; tail -n 5 "$out/run$n-$phase.log" >&2; exit "$rc"; fi
-  overload="k6 $phase: $(grep -o 'thresholds on metrics.*crossed' "$out/run$n-$phase.log" | head -n 1)"
-  [ "$overload" != "k6 $phase: " ] || overload="k6 $phase: a threshold was crossed (exit 99)"
-  return 1
+  verdict=$(python3 -I -c 'import sys; sys.path.insert(0, "tests/k6"); import bench_report as r
+kind, why = r.classify_threshold_failure(sys.argv[1], sys.argv[2]); print(kind, why)' "$out/run$n-$phase.json" "$phase" 2>&1) \
+    || verdict="failure k6 $phase exited 99 and the classifier failed: $verdict"
+  case "$verdict" in
+    "overload "*) overload=${verdict#overload }; return 1 ;;
+    *) echo "bench failed: ${verdict#failure }" >&2; exit 99 ;;
+  esac
 }
 
 cleanup() {

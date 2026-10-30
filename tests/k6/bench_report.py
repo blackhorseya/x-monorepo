@@ -35,6 +35,16 @@ import sys
 INTERRUPTED = "No script iterations fully finished"
 NOT_A_BASELINE = "not a baseline"
 
+# k6 exits 99 when a threshold is crossed. Which one decides what it means (docs/perf-baseline.md, #288):
+#   overload   reservation_timeouts; rpc_errors when EVERY error is a timeout (the k6 summary has the per-code
+#              counts: rpc_errors{code:...} thresholds in bench.js); http_req_failed only together with such an
+#              rpc_errors crossing. An overloaded machine produces these, so the attempt is invalid (exit 3).
+#   anything else is a real failure (fail-closed): reservation_wrong_status, rpc_ok / rpc_duration, rpc_errors
+#   that are not all timeouts, a threshold this list has never heard of, no threshold marked crossed, a summary
+#   that cannot be read.
+OVERLOAD_THRESHOLDS = ("reservation_timeouts",)
+TIMEOUT_CODES = ("request.timeout", "transport.timeout")
+
 
 def load(out, name):
     with open(os.path.join(out, name)) as f:
@@ -95,6 +105,35 @@ def reconcile_problem(summary):
     if created != reserved:
         return f"{created} CreateOrder succeeded but {reserved} were seen RESERVED ({created - reserved} unfinished)"
     return None
+
+
+def classify_threshold_failure(summary_path, phase):
+    """("overload" | "failure", why) for a k6 run that exited 99, from its --summary-export file."""
+    try:
+        with open(summary_path) as f:
+            metrics = json.load(f)["metrics"]
+        crossed = sorted(n for n, m in metrics.items() if any(m.get("thresholds", {}).values()))
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
+        return "failure", f"k6 {phase} exited 99 and its summary is unreadable ({type(e).__name__}): cannot tell which threshold"
+    if not crossed:
+        return "failure", f"k6 {phase} exited 99 but the summary marks no threshold as crossed: cannot tell which"
+    unexplained = []
+    for name in crossed:
+        if name in OVERLOAD_THRESHOLDS:
+            continue
+        if name == "rpc_errors":
+            total = metrics["rpc_errors"].get("count", 0)
+            timeouts = sum(metrics.get(f"rpc_errors{{code:{c}}}", {}).get("count", 0) for c in TIMEOUT_CODES)
+            if total > 0 and timeouts == total:
+                continue
+            unexplained.append(f"rpc_errors ({total - timeouts} of {total} are not timeouts)")
+        elif name != "http_req_failed":
+            unexplained.append(name)
+    if "http_req_failed" in crossed and "rpc_errors" not in crossed:
+        unexplained.append("http_req_failed (not explained by timeout-only rpc_errors)")
+    if unexplained:
+        return "failure", f"k6 {phase}: threshold(s) crossed that are not overload: {', '.join(unexplained)} (all crossed: {', '.join(crossed)})"
+    return "overload", f"k6 {phase}: overload thresholds crossed: {', '.join(crossed)}"
 
 
 def samples(out, n, kind):
