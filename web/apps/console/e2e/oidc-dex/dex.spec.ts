@@ -134,7 +134,8 @@ test("a wrong password stays at Dex and never reaches the console", async ({
 
 // The fixture's rpc is only used once it proves it is this attempt's process (rpc.ts): a listener that
 // took the port after it was picked, whatever it answers, is not it. Each variant is a listener that
-// answers the admin key one way and any other key another way; startRpc must refuse every one.
+// answers the admin key one way and any other key another way; startRpc must fail in setup for every one
+// (a listener on 127.0.0.1 shadows the real rpc, which may still bind the port on another address).
 const json = (status: number, body: unknown) => ({
   status,
   body: JSON.stringify(body),
@@ -199,7 +200,9 @@ for (const [name, rootAnswer, strangerAnswer] of foreigners) {
     );
     try {
       const { port } = foreign.address() as { port: number };
-      await expect(startRpc(port)).rejects.toThrow(/not this rpc|exited with/);
+      await expect(startRpc(port)).rejects.toThrow(
+        /not this rpc|exited with|did not become ready/
+      );
     } finally {
       await new Promise((resolve) => foreign.close(resolve));
     }

@@ -29,12 +29,44 @@ const whoAmI = (origin: string, key: string) =>
     body: "{}",
   });
 
+/** The rpc's answer to its own admin key: 200, subject "root", the admin role. */
+async function isAdmin(origin: string, key: string) {
+  try {
+    const res = await whoAmI(origin, key);
+    if (res.status !== 200) return false;
+    const who = await res.json();
+    return (
+      who?.subject === "root" &&
+      Array.isArray(who.roles) &&
+      who.roles.includes("admin")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The rpc's refusal of an unknown key: 401 with Connect code "unauthenticated". Anything else is "not proven". */
+async function isRefused(origin: string, key: string) {
+  try {
+    const res = await whoAmI(origin, key);
+    if (res.status !== 401) return false;
+    return (await res.json())?.code === "unauthenticated";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * startRpc starts bin/rpc on port (a free one by default) and resolves once THIS process answers.
  * The port is free only until it is handed to the rpc, so another service can take it in between:
  * "readyz answered 200" would then be that service. Instead the rpc gets an admin key nobody else
- * knows (this attempt's own), and it counts as ours only when that key is accepted as the admin and
- * a different key is refused. A listener that answers everything the same way fails the second check.
+ * knows (this attempt's own), and it counts as ours only when
+ *   - that key is accepted exactly as the rpc does: 200 and subject "root" with the admin role, and
+ *   - a different key gets the rpc's own refusal: 401 with Connect code "unauthenticated"
+ *     (any other status, 2xx included, body or transport failure is not a proven refusal), and
+ *   - the process is still running.
+ * A listener that does not behave like an auth-enforcing rpc therefore fails; one that imitates both
+ * answers exactly is outside what a port race can produce.
  */
 export async function startRpc(port?: number) {
   port ??= await freePort();
@@ -65,17 +97,11 @@ export async function startRpc(port?: number) {
         throw new Error(
           `rpc exited with ${proc.exitCode} (port ${port} taken?)`
         );
-      const mine = await whoAmI(origin, key).then(
-        async (r) => r.ok && (await r.json()).subject === "root",
-        () => false
-      );
-      if (mine) {
-        const stranger = await whoAmI(origin, `not-${key}`).then(
-          (r) => r.status,
-          () => 0
-        );
-        if (stranger === 200)
-          throw new Error(`port ${port} answers any credential: not this rpc`);
+      if (await isAdmin(origin, key)) {
+        if (!(await isRefused(origin, `not-${key}`)))
+          throw new Error(
+            `port ${port} does not refuse an unknown key: not this rpc`
+          );
         if (proc.exitCode !== null)
           throw new Error(
             `rpc exited with ${proc.exitCode} (port ${port} taken?)`
