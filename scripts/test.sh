@@ -1104,5 +1104,65 @@ if command -v node >/dev/null 2>&1; then
   done
 fi
 
+# ── scripts/suite-guard.sh ─────────────────────────────────────────────────────────
+# The outer gate of this suite (#307): test.sh re-executes itself under suite-guard.sh, which runs it
+# in a process group of its own and, when it ends — normally, failed, or interrupted — fails if
+# anything is still alive in that group, then kills (TERM, then KILL) and waits for it. Exercised here
+# with fake suites that leave a background process behind; the pid of the leftover is in $PIDF.
+guard="$src/scripts/suite-guard.sh"
+gfake="$tmp/guard-fake.sh"
+cat > "$gfake" <<'FAKE'
+#!/usr/bin/env bash
+# $1 = clean | leak | leak-fail | exit3 | stubborn | hang
+case $1 in
+  leak|leak-fail|hang) sleep 300 & echo $! > "$PIDF" ;;
+  stubborn) ( trap '' TERM HUP INT; exec sleep 300 ) & echo $! > "$PIDF" ;;
+esac
+case $1 in
+  leak-fail) exit 1 ;;
+  exit3) exit 3 ;;
+  hang|stubborn) sleep 300 ;;
+esac
+exit 0
+FAKE
+chmod +x "$gfake"
+# gone <pid-file>: true when the recorded pid no longer exists
+gone() { ! kill -0 "$(cat "$1")" 2>/dev/null; }
+# guard_run <mode>: runs the guard over the fake; sets out, rc and gpid (file) for the leftover.
+guard_run() {
+  gpid="$tmp/guard-pid-$1"; rm -f "$gpid"; rc=0
+  out=$(PIDF="$gpid" "$guard" "$gfake" "$1" 2>&1) || rc=$?
+}
+# a bystander outside the suite's group must survive every case below
+sleep 300 & bystander=$!
+guard_run clean
+expect_eq "guard: a clean suite passes"                            "0" "$rc"
+expect_eq "guard: a suite's own exit code is kept"                 "3" "$(guard_run exit3; echo $rc)"
+guard_run leak
+if [ "$rc" != 0 ]; then ok; else bad "guard: a suite that leaves a process behind must fail"; fi
+expect_match "guard: the leftover is reported"                     'left .* running' "$out"
+if [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: the leftover must be killed and waited for"; fi
+guard_run leak-fail
+expect_eq "guard: a failed suite with a leftover keeps its failure" "1" "$rc"
+expect_match "guard: a failed suite's leftover is reported too"    'left .* running' "$out"
+if [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: a failed suite's leftover must be killed"; fi
+guard_run stubborn
+if [ "$rc" != 0 ] && [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: a leftover that ignores TERM must still be killed (rc=$rc)"; fi
+# interrupted: INT / TERM to the guard stop the suite and everything it started
+for sig in INT TERM; do
+  gpid="$tmp/guard-pid-hang-$sig"; rm -f "$gpid"
+  PIDF="$gpid" "$guard" "$gfake" hang >/dev/null 2>&1 &
+  g=$!
+  i=0; while [ ! -s "$gpid" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  kill -$sig "$g" 2>/dev/null || true
+  rc=0; wait "$g" || rc=$?
+  if [ "$sig" = INT ]; then want=130; else want=143; fi
+  expect_eq "guard: $sig stops the guard with $want" "$want" "$rc"
+  if [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: $sig must take the suite's leftover with it"; fi
+done
+if kill -0 "$bystander" 2>/dev/null; then ok; else bad "guard: a process outside the suite's group was killed"; fi
+kill "$bystander" 2>/dev/null || true
+for f in "$tmp"/guard-pid-*; do if [ -s "$f" ]; then kill -9 "$(cat "$f")" 2>/dev/null || true; fi; done
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
