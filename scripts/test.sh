@@ -800,5 +800,50 @@ else
   echo "scripts/test.sh: go not found — merge-tree-check.sh fixture skipped" >&2
 fi
 
+# ── deployments/helm/kind/coredns-dex.sh ──────────────────────────────────────
+# Run the real script against a stub kubectl whose "cluster" is one Corefile file; the patch the
+# script sends is written back, so every case sees what a real CoreDNS would be given.
+dns_dir="$tmp/coredns"; mkdir -p "$dns_dir/bin"
+cat > "$dns_dir/bin/kubectl" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+  *" get configmap coredns "*) cat "$COREFILE" ;;
+  *" patch configmap coredns "*) jq -j '.data.Corefile' <<<"${*: -1}" > "$COREFILE"; echo patch >> "$KLOG" ;;
+  *" rollout "*) echo rollout >> "$KLOG" ;;
+  *) echo "stub kubectl: unexpected $*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$dns_dir/bin/kubectl"
+# dns <namespace> : runs the script, prints "<exit> <patches>"; the Corefile is left in $dns_dir/Corefile
+dns() {
+  : > "$dns_dir/klog"
+  local rc=0
+  COREFILE="$dns_dir/Corefile" KLOG="$dns_dir/klog" PATH="$dns_dir/bin:$PATH" "$src/deployments/helm/kind/coredns-dex.sh" "$1" >/dev/null 2>&1 || rc=$?
+  echo "$rc $(grep -c '^patch$' "$dns_dir/klog" || true)"
+}
+corefile_with() { # corefile_with <extra lines after ready...>
+  { printf '.:53 {\n    errors\n    ready\n'; for l in "$@"; do printf '    %s\n' "$l"; done
+    printf '    kubernetes cluster.local in-addr.arpa ip6.arpa {\n        pods insecure\n    }\n    forward . /etc/resolv.conf\n}\n'; } > "$dns_dir/Corefile"
+}
+rule_shop="rewrite name exact dex.localtest.me dex.shop.svc.cluster.local"
+corefile_with
+expect_eq "coredns: first run patches once"        "0 1" "$(dns shop)"
+expect_eq "coredns: rule lands after ready"        "ready $rule_shop" "$(grep -A1 '^ *ready$' "$dns_dir/Corefile" | tr -s ' \n' ' ' | sed 's/^ *//;s/ *$//;s/^ready  */ready /')"
+expect_eq "coredns: second run is a no-op"         "0 0" "$(dns shop)"
+expect_eq "coredns: namespace change replaces"     "0 1" "$(dns other)"
+expect_eq "coredns: exactly one dex rule remains"  "1" "$(grep -c 'exact dex.localtest.me ' "$dns_dir/Corefile")"
+expect_eq "coredns: new target is in place"        "1" "$(grep -c 'dex.other.svc.cluster.local' "$dns_dir/Corefile")"
+corefile_with "rewrite name exact dex.localtest.me.backup backup.shop.svc.cluster.local" "rewrite name exact other.localtest.me o.shop.svc.cluster.local"
+expect_eq "coredns: similar names get their own rule" "0 1" "$(dns shop)"
+expect_eq "coredns: similar-name rewrite survives"  "1" "$(grep -c 'dex.localtest.me.backup backup.shop' "$dns_dir/Corefile")"
+expect_eq "coredns: unrelated rewrite survives"     "1" "$(grep -c 'other.localtest.me o.shop' "$dns_dir/Corefile")"
+expect_eq "coredns: our rule added beside them"     "1" "$(grep -c "^    $rule_shop\$" "$dns_dir/Corefile")"
+corefile_with "# $rule_shop"
+expect_eq "coredns: a commented rule is not the rule" "0 1" "$(dns shop)"
+expect_eq "coredns: the comment is kept"            "1" "$(grep -c "^    # $rule_shop\$" "$dns_dir/Corefile")"
+expect_eq "coredns: and a live rule was added"      "1" "$(grep -c "^    $rule_shop\$" "$dns_dir/Corefile")"
+printf '.:53 {\n    errors\n}\n' > "$dns_dir/Corefile"
+expect_eq "coredns: no ready line refuses, no patch" "1 0" "$(dns shop)"
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
