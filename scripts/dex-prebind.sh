@@ -47,11 +47,21 @@ command -v jq >/dev/null || die "jq is required"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# printable <text> <secret>: the server's words are only echoed when they look like a code
-# (lowercase, digits, _ . ? and at most 64 of them) and do not contain the credential just sent;
-# a server that reflects the key or a token as its error code gets <redacted>.
+# printable <kind> <text> <secret>: what of the server's answer may be echoed. Only known shapes:
+# status = three digits; code = one of the Connect codes; xcode = a dotted platform code
+# (auth.invalid_credential). Anything else (a reflected key or token, free text) is <redacted>, and so
+# is a value containing the credential just sent or its bare value (the token without "Bearer ").
 printable() {
-  if [[ $1 =~ ^[a-z0-9_.?]{1,64}$ ]] && [[ $1 != *"$2"* ]]; then printf '%s' "$1"; else printf '<redacted>'; fi
+  local kind=$1 text=$2 raw=${3#Bearer }
+  case $kind in
+    status) [[ $text =~ ^[0-9]{3}$ ]] || { printf '<redacted>'; return; } ;;
+    code) case $text in
+      canceled|unknown|invalid_argument|deadline_exceeded|not_found|already_exists|permission_denied|resource_exhausted|failed_precondition|aborted|out_of_range|unimplemented|internal|unavailable|data_loss|unauthenticated) ;;
+      *) printf '<redacted>'; return ;;
+    esac ;;
+    xcode) [[ $text =~ ^[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31}){1,3}$ ]] || { printf '<redacted>'; return; } ;;
+  esac
+  if [[ $text == *"$3"* || ( -n $raw && $text == *"$raw"* ) ]]; then printf '<redacted>'; else printf '%s' "$text"; fi
 }
 
 # rpc <Method> <json> <header-name> <header-value>: POSTs to the Connect endpoint and leaves the
@@ -67,7 +77,7 @@ rpc() {
     local code xcode
     code=$(jq -r '.code // empty' "$work/body" 2>/dev/null || true)
     xcode=$(tr -d '\r' < "$work/headers" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p' | head -1)
-    die "$method failed: http $(printable "$status" "$value"), code $(printable "${code:-?}" "$value"), x-error-code $(printable "${xcode:-?}" "$secret")"
+    die "$method failed: http $(printable status "$status" "$secret"), code $(printable code "${code:-none}" "$secret"), x-error-code $(printable xcode "${xcode:-none.none}" "$secret")"
   fi
   resp=$(cat "$work/body")
 }
