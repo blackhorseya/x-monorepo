@@ -295,6 +295,18 @@ class ThresholdClassification(unittest.TestCase):
         self.assertEqual(kind, "failure")
         self.assertIn("transport.timeout", why)
 
+    def test_a_per_code_count_must_be_a_non_negative_integer(self):
+        for label, bad in (("empty", {}), ("negative", {"count": -2}), ("string", {"count": "0"}), ("float", {"count": 0.0}), ("bool", {"count": False})):
+            with self.subTest(label):
+                m = {**self.TIMEOUTS, "rpc_errors{code:request.timeout}": {"count": 9 if label == "negative" else 7}, "rpc_errors{code:transport.timeout}": bad}
+                self.assertEqual(self.classify(m)[0], "failure")
+
+    def test_rpc_errors_itself_without_a_valid_count_is_a_failure(self):
+        m = {**self.TIMEOUTS, "rpc_errors": {"thresholds": {"count==0": True}}}
+        kind, why = self.classify(m)
+        self.assertEqual(kind, "failure")
+        self.assertIn("rpc_errors", why)
+
     def test_without_the_per_code_metrics_rpc_errors_cannot_be_called_overload(self):
         kind, _ = self.classify({"rpc_errors": {"count": 7, "thresholds": {"count==0": True}}})
         self.assertEqual(kind, "failure")

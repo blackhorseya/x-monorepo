@@ -143,6 +143,27 @@ env PATH="$work/fakebin:$PATH" BENCH_LOADAVG_FILE="$work/load" LOAD_INTERVAL=1 R
 { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad; check $r "stale summary: a failure (not exit 0, not exit 3), got exit $rc"
 [ "$(wc -l < "$work/stale.k6" | tr -d ' ')" = 1 ] && r=ok || r=bad; check $r "stale summary: the bench stopped at the first attempt, no retry"
 
+# 1c2. nor may an earlier bench's complete, VALID-looking output stand in for a k6 that exited 0 and wrote nothing
+mkdir "$work/stale0.out"
+python3 -I - "$work/stale0.out" <<'PY'
+import json, sys
+m = {"bench_iter_start_ms": {"min": 0, "max": 0}, "bench_create_end_ms": {"min": 0, "max": 1000},
+     "rpc_ok{rpc:CreateOrder}": {"count": 10}, "rpc_errors": {"count": 0}, "reserved_ok": {"count": 10},
+     "rpc_duration{rpc:CreateOrder}": {"med": 5.0, "p(95)": 9.0, "p(99)": 12.0},
+     "order_to_reserved": {"med": 150.0, "p(95)": 250.0, "p(99)": 300.0},
+     "reserved_after_create": {"med": 148.0, "p(95)": 240.0, "p(99)": 290.0}}
+for n in (1, 2, 3):
+    for phase in ("create", "reserve"):
+        json.dump({"metrics": m}, open(f"{sys.argv[1]}/run{n}-{phase}.json", "w"))
+    json.dump({"total_orders": 10, "pending_at_end": 0, "seconds": 0.1}, open(f"{sys.argv[1]}/run{n}-drain.json", "w"))
+PY
+echo 0.5 > "$work/load"; : > "$work/stale0.k6"; rc=0
+env PATH="$work/fakebin:$PATH" BENCH_LOADAVG_FILE="$work/load" LOAD_INTERVAL=1 RUNS=3 MAX_ATTEMPTS=3 \
+  FAKE_K6=okless FAKE_K6_LOG="$work/stale0.k6" FAKE_K6_BUSY=1000 FAKE_K6_QUIET=0.5 \
+  tests/k6/bench.sh "$work/bin" "$work/stale0.out" > "$work/stale0.log" 2>&1 || rc=$?
+{ [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad; check $r "stale valid summaries: k6 exit 0 without a summary is a failure, got exit $rc"
+[ "$(wc -l < "$work/stale0.k6" | tr -d ' ')" = 1 ] && r=ok || r=bad; check $r "stale valid summaries: the bench stopped at the first attempt"
+
 # 1d. nor may an earlier bench's other leftovers speak for this run: a stale run1-invalid.txt and a stale
 # baseline sample must not make a clean attempt 1 invalid
 mkdir "$work/old.out"; echo "k6 create: stale" > "$work/old.out/run1-invalid.txt"; echo "1,1000" > "$work/old.out/run1-baseline.csv"

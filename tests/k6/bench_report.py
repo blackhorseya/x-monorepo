@@ -107,6 +107,12 @@ def reconcile_problem(summary):
     return None
 
 
+def count_of(metrics, name):
+    """metrics[name]["count"] if it is a non-negative integer, else None (absent, {}, negative, float, string, bool)."""
+    c = metrics.get(name, {}).get("count") if isinstance(metrics.get(name), dict) else None
+    return c if isinstance(c, int) and not isinstance(c, bool) and c >= 0 else None
+
+
 def classify_threshold_failure(summary_path, phase):
     """("overload" | "failure", why) for a k6 run that exited 99, from its --summary-export file."""
     try:
@@ -122,12 +128,13 @@ def classify_threshold_failure(summary_path, phase):
         if name in OVERLOAD_THRESHOLDS:
             continue
         if name == "rpc_errors":
-            total = metrics["rpc_errors"].get("count", 0)
-            missing = [c for c in TIMEOUT_CODES if f"rpc_errors{{code:{c}}}" not in metrics]
-            if missing:  # without every per-code count the split is unknown: fail-closed
-                unexplained.append(f"rpc_errors (no per-code count for {', '.join(missing)})")
+            counts = {c: count_of(metrics, f"rpc_errors{{code:{c}}}") for c in TIMEOUT_CODES}
+            total = count_of(metrics, "rpc_errors")
+            bad = [n for n, v in (("rpc_errors", total), *((f"rpc_errors{{code:{c}}}", v) for c, v in counts.items())) if v is None]
+            if bad:  # a count that is absent, negative or not an integer is unknown, not 0: fail-closed
+                unexplained.append(f"rpc_errors (no valid count in {', '.join(bad)})")
                 continue
-            timeouts = sum(metrics[f"rpc_errors{{code:{c}}}"].get("count", 0) for c in TIMEOUT_CODES)
+            timeouts = sum(counts.values())
             if total > 0 and timeouts == total:
                 continue
             unexplained.append(f"rpc_errors ({total - timeouts} of {total} are not timeouts)")

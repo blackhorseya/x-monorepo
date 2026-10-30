@@ -91,7 +91,10 @@ k6_phase() {
   local n=$1 phase=$2 rc=0 verdict; shift 2
   k6 run --quiet --summary-export "$out/run$n-$phase.json" tests/k6/bench.js "${k6env[@]}" -e "PHASE=$phase" "$@" \
     > "$out/run$n-$phase.log" 2>&1 || rc=$?
-  [ "$rc" != 0 ] || return 0
+  if [ "$rc" = 0 ]; then  # exit 0 is only a success with this run's summary: the file was removed before the attempt
+    [ -s "$out/run$n-$phase.json" ] || { echo "bench failed: k6 $phase exited 0 but wrote no summary (run$n-$phase.json)" >&2; exit 1; }
+    return 0
+  fi
   if [ "$rc" != 99 ]; then echo "k6 $phase failed (exit $rc):" >&2; tail -n 5 "$out/run$n-$phase.log" >&2; exit "$rc"; fi
   verdict=$(python3 -I -c 'import sys; sys.path.insert(0, "tests/k6"); import bench_report as r
 kind, why = r.classify_threshold_failure(sys.argv[1], sys.argv[2]); print(kind, why)' "$out/run$n-$phase.json" "$phase" 2>&1) \
