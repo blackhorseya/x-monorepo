@@ -1,0 +1,38 @@
+# Dev IdP for `task helm-kind-up` — the same Dex and config as compose (deployments/docker/dex).
+# ConfigMap `dex` is NOT in this file: the task creates it from deployments/docker/dex/config.yaml
+# so the issuer, client and accounts have one source. The chart does not include an IdP; this file
+# only exists so the Console login and the rpc's auth.oidc have something to talk to in kind.
+# Reached as http://dex.localtest.me:5556/dex from pods through the CoreDNS rewrite
+# (coredns-dex.sh): dex.localtest.me → Service dex.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+spec:
+  selector: { app: dex }
+  ports: [{ port: 5556, targetPort: 5556 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dex }
+  template:
+    metadata:
+      labels: { app: dex }
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.44.0
+          args: ["dex", "serve", "/etc/dex/config.yaml"]
+          ports: [{ containerPort: 5556 }]
+          readinessProbe:
+            httpGet: { path: /dex/.well-known/openid-configuration, port: 5556 }
+            periodSeconds: 2
+          volumeMounts: [{ name: config, mountPath: /etc/dex, readOnly: true }]
+      volumes:
+        - name: config
+          configMap: { name: dex }

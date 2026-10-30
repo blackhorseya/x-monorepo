@@ -61,6 +61,45 @@ Retention 預設 72h（compose 的 `LGTM_RETENTION`，透過 image 的 `LOKI/TEM
 還沒有時間型 retention）。Loki 突然沒 log 但 metrics / traces 正常，先看 `podman machine ssh df -h /`：VM 磁碟快滿時 Loki 的
 WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_disk_full_failures_total`），跟 app 無關，`podman system prune` 就好。
 
+### Dex dev IdP（compose / kind）
+
+本機登入用的 OIDC IdP（[identity-login.md](identity-login.md) §10）：Dex，**只給開發與測試**——in-memory storage、固定兩個帳號、公開的密碼、沒有 TLS。`task compose-up` 會一起起（服務 `dex`，port **5556 固定**，因為 port 是 issuer 字串的一部分）；設定只有一份 `deployments/docker/dex/config.yaml`，kind 也讀它。
+
+| | |
+|---|---|
+| issuer | `http://dex.localtest.me:5556/dex`（`auth.oidc.issuers[].issuer` 要與 token 的 `iss` **一字不差**） |
+| client | `x-console`（public client、PKCE，沒有 secret）→ `auth.oidc.issuers[].audience: x-console`；redirect URI 目前列 `http://localhost:{5173,4173,8080}/auth/callback`，Console 登入（#273）定路徑後在 `config.yaml` 一起調整 |
+| 帳號 | `admin@example.com`、`user@example.com`，密碼都是 `password`，`email_verified=true`；`sub` 由固定的 `userID` 推出來（compose 與 kind 相同、重啟不變） |
+| 本機 rpc | `configs/local.yaml` 加 `auth.oidc: {enabled: true, issuers: [{issuer: http://dex.localtest.me:5556/dex, audience: x-console, allow_insecure_issuer: true}]}`（`localtest.me` 不是 loopback 字面值，所以 http 要這個旗標；見 [config.md](config.md)） |
+
+拿一顆真 token（authorization code + PKCE，與 Console 同一條路，不開 password grant）：
+
+```bash
+scripts/dex-token.sh                      # admin@example.com 的 access token（JWT），stdout
+scripts/dex-token.sh user@example.com --id-token
+curl -H "Authorization: Bearer $(scripts/dex-token.sh)" http://localhost:8080/api/...   # 需 auth.oidc.enabled；帳號要先綁定（見下），未綁定只能 ClaimInvite
+```
+
+**帳號預先綁定（尚未提供，#274 part 2）**：`task bootstrap` 目前**不會**把這兩個 Dex 帳號綁進 identity。綁定只走真流程——`worker bootstrap --admin-email` 建 admin account 與邀請，Dex 登入後呼叫 `ClaimInvite`——`ClaimInvite` 現在可以領（#272：auth interceptor 驗 OIDC token，未綁定的身分只能呼叫它）。刻意不加直接寫 `external_identities` 的 CLI（那會繞過 `CreateInvite` / `ClaimInvite`，是身分邊界上的後門）。part 2 等 #272 之後，用 `scripts/dex-token.sh` 走完 bootstrap → 邀請 → 領取，並和 Playwright OIDC 登入 E2E 一起做。
+
+**名稱怎麼解析**——三個地方都必須看到同一個 issuer 字串，所以不能改寫成 `localhost` 或 service 名：
+
+| 誰 | 怎麼到 Dex |
+|---|---|
+| 瀏覽器、host 上跑的 rpc / `scripts/dex-token.sh` | `*.localtest.me` 的公開 DNS 是 `127.0.0.1`，加上 compose 發佈的 `5556` |
+| compose 內的容器 | 容器裡的 `127.0.0.1` 是自己，不是 host。要驗 token 的容器（例如自己把 rpc 包進 compose）照 `dex` 服務的寫法加 `extra_hosts: ["dex.localtest.me:host-gateway"]`。實測：同一個 compose network 的 curl 容器不加時連不到（`000`），加了回 `200` 且 `issuer` 相同 |
+| kind 的 Pod | `deployments/helm/kind/coredns-dex.sh <ns>`（`task helm-kind-up` 會跑，可重跑）在 CoreDNS 加 `rewrite name exact dex.localtest.me dex.<ns>.svc.cluster.local`；Dex 本身是 `deployments/helm/kind/dex.yaml`，ConfigMap `dex` 由 task 從同一份 `config.yaml` 建。`deployments/helm/kind/smoke.sh` 在叢集內驗 discovery 的 `issuer` 就是這個字串 |
+
+**離線**（沒有公開 DNS，`dex.localtest.me` 解不出來）：在 host 的 `/etc/hosts` 加一行
+
+```
+127.0.0.1 dex.localtest.me
+```
+
+host 上的瀏覽器、rpc、`dex-token.sh` 就都能用；容器與 kind 不受影響（它們走 `extra_hosts` / CoreDNS，本來就不靠公開 DNS）。用完刪掉那一行。
+
+**排錯**：`scripts/dex-token.sh` 卡在 `login did not reach redirect_uri` ＝ 密碼錯，或 `CLIENT_ID` / `REDIRECT_URI` 不在 `config.yaml` 的 `staticClients`；改過 `config.yaml` 要 `podman compose -f deployments/docker/docker-compose.yaml up -d --force-recreate dex`（kind：重跑 `task helm-kind-up` 後 `kubectl -n x-monorepo rollout restart deploy/dex`）。token 的 `iss` 與設定不符（多一個 `/`、`localhost` 對 `dex.localtest.me`）→ verifier 以 `oidc: invalid token` 拒絕，細節只在 log。
+
 ### COMMIT_SHORT 處置
 
 `COMMIT_SHORT` = 訂單已 COMPLETED，但 inventory 沒有賣出對應庫存：expire sweep 在 `CompleteOrder` 之後、`OrderCompleted` 被消費之前把 reservation 轉 EXPIRED 還了庫存，`OrderCompleted` 到時 `available` 已被別張單訂走（全部不動，stock 不會變負）。TTL 以小時計、窗口只有一個 consumer 跳，所以這條應該很少響；響了不是 bug，是需要人處理的缺貨。
@@ -193,6 +232,7 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 | prune CronJob | `worker prune --older-than <prune.olderThan>`（預設 720h、每天一次、`concurrencyPolicy: Forbid`）；`prune.forgetGroups` 對應 `--forget-group`。alert「retention overdue」的 45d 是 720h 的 1.5×，改一個要一起改 |
 | expire CronJob | `worker expire --older-than <expire.olderThan>`（預設 24h、每 15 分鐘、`Forbid`）：reservation TTL，RESERVED 超過就還庫存 + 請 ordering 取消。alert「expiry overdue」的 36h 是 24h 的 1.5×，改一個要一起改；dry run / 小量跑走 `InventoryService.ExpireReservations`（console Expire 頁，要 admin role） |
 | identity bootstrap（不在 chart 裡） | 第一個 account + API key：在**操作者本機**跑一次 `worker bootstrap`，經 `kubectl port-forward` 連 release 的 DB，secret 只印在你自己的 terminal 一次（做法見下面「identity bootstrap」）；**不要在叢集裡跑**——Pod 的 stdout 會進 Pod log、也可能被 log collector 收走。config `auth.api_keys` 留作 break-glass。已有 account 就是 no-op，但不要同時跑兩個 |
+| auth.oidc（`config.auth.oidc`） | 外部 OIDC 登入的 values，原樣進 ConfigMap：`enabled`（預設 `false`，關著時整段不讀）、`issuers[]`（`issuer` https、`audience`＝我們的 client id、`mapping` `bound`\|`auto_provision`、dev 才用的 `allow_insecure_issuer`）。**chart 不含 IdP**——Keycloak / Auth0 / Entra 自備；Dex 只在 kind（`deployments/helm/kind/dex.yaml`，見「Dex dev IdP」）。`auth.jwt` 也有設時，`auth.jwt.issuer` 要釘住且不得等於任一 OIDC issuer，否則 Pod 起不來。list 不能用 env 覆蓋，只能寫在 values。開著時 auth interceptor 用 verifier 驗 Bearer、再以 `(iss, sub)` 對應 account（未綁定只能 `ClaimInvite`，見 `docs/identity.md`「外部身分綁定」） |
 | HPA / PDB / Ingress | rpc：CPU HPA（開了就不 render `replicas`、要有 `resources.requests.cpu`）、PDB 只在可能 >1 replica 時 render、Ingress 走 HTTP/1.1（Connect / gRPC-Web），原生 gRPC 要另外 h2c |
 | console Deployment（`console.enabled`，預設 off） | `web/apps/console` 的 nginx image：chart 算出來的 env 只有 `RPC_UPSTREAM=http://<release>-rpc:<rpc.service.port>`，**沒有** `APP_CONFIG`、沒有 Secret——nginx 看不到 Postgres URL 和 API key；auth 開著且沒有 OIDC 時使用者在 console 的 Credential 對話框貼自己的 key / JWT。OIDC 登入的設定（#273）走 `console.extraEnv`：`CONSOLE_OIDC_ISSUER`、`CONSOLE_OIDC_CLIENT_ID`、`CONSOLE_API_KEY_LOGIN`（`false` 關掉 API key 入口）——entrypoint 渲染成 `/config.json`（只有這三個公開值），並把 issuer 的精確 origin 加進 CSP `connect-src`；沒設或格式不合就是 OIDC 關閉。IdP 的 client 要登記 redirect URI `https://<console host>/auth/callback`，並允許 console origin 的 CORS（見 [identity-login.md](identity-login.md) §8）；probe 打 nginx 自己的 `/healthz`（rpc 的健康是 rpc probe 的事）；同一組 `podSecurityContext`（uid 65532、read-only rootfs）+ `/tmp` emptyDir 就夠。自己的 Service / Ingress（`console.ingress`，純 HTTP/1.1） |
 | ServiceMonitor（`rpc.serviceMonitor.enabled`，預設 off） | Prometheus Operator 抓 rpc Service 的 `http` port、path `/api/metrics`（gin route，auth 開著也不擋）；operator 靠 label 選 ServiceMonitor，`serviceMonitor.labels` 放它要的（kube-prometheus-stack 是 `release: <name>`）。只管 rpc——worker 沒 HTTP server，它的 metrics 只能走 `config.otel.endpoint` |
@@ -256,7 +296,7 @@ helm install api deployments/helm/x-monorepo -n app --create-namespace \
 ```
 
 `check.py` 是 chart 裡唯一有邏輯的地方的測試：rpc 的 grace period 算式與 env、readiness period 的關係、worker 沒 probe、migrate hook
-與它的 Secret 的順序、prune 的 args、console 的 `RPC_UPSTREAM` 指到這個 release 的 rpc Service 且沒有 `APP_*` / Secret。ServiceMonitor 選到 rpc Service 的 port、NetworkPolicy 的 peers（console 一定在、`ingressFrom` 原樣、空就不出 `from`）。`ci/` 六個 profile（預設 + DB、redis broker + HPA + ingress + auth required、existingSecret、無 DB + 沒列 peer 的 NetworkPolicy、console + 自己的 ingress、hardened：NetworkPolicy 列 ingress-nginx / monitoring + ServiceMonitor + console）
+與它的 Secret 的順序、prune 的 args、console 的 `RPC_UPSTREAM` 指到這個 release 的 rpc Service 且沒有 `APP_*` / Secret。ServiceMonitor 選到 rpc Service 的 port、NetworkPolicy 的 peers（console 一定在、`ingressFrom` 原樣、空就不出 `from`）。`ci/` 七個 profile（預設 + DB、redis broker + HPA + ingress + auth required、existingSecret、無 DB + 沒列 peer 的 NetworkPolicy、console + 自己的 ingress、hardened：NetworkPolicy 列 ingress-nginx / monitoring + ServiceMonitor + console、oidc：auth required + 兩個 issuer，驗 `auth.oidc` 原樣進 ConfigMap、布林沒被 YAML 1.1 吃掉）
 在 CI 的 `helm` job 跑。真的裝一次是 `task helm-kind`（CI 的 `helm-kind` job）：起 kind cluster、`deployments/helm/kind/deps.yaml`
 放一個拋棄式 Postgres + Redis（chart 沒有 subchart dependency，production 接 managed DB，這份只給 smoke 用）、從 working tree build 三個 Go image + console image（`web-build` → nginx）
 `kind load` 進去、`helm upgrade --install --wait` 兩次（第一次走 pre-install hook、第二次走 pre-upgrade），每次跑 `kind/smoke.sh`：

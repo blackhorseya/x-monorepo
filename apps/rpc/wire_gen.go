@@ -11,6 +11,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
 	system2 "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
 	rpc4 "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
 	system4 "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
@@ -37,7 +38,7 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	http := cfg.HTTP
-	auth := cfg.Auth
+	configAuth := cfg.Auth
 	oTel := cfg.OTel
 	log := cfg.Log
 	providers, cleanup, err := otel.New(oTel, log)
@@ -63,7 +64,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	eventsPublisher := events.NewPublisher(publisher)
 	uuidGenerator := system.NewUUIDGenerator()
 	clock := system.NewClock()
-	policy := ordering.ProvideOwnership(auth)
+	policy := ordering.ProvideOwnership(configAuth)
 	productRepository := catalog.ProvideProductRepository(db, logger)
 	systemClock := system2.NewClock()
 	portTransactor := catalog.ProvideTransactor(db)
@@ -80,7 +81,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v3 := catalog.ProvideListProducts(productRepository, recorder)
 	v4 := catalog.ProvideDeactivateProduct(productRepository, systemClock, portTransactor, recorder)
 	v5 := catalog.ProvideQuotePrices(productRepository, recorder)
-	catalogService := rpc.NewCatalogService(v, v2, v3, v4, v5, auth)
+	catalogService := rpc.NewCatalogService(v, v2, v3, v4, v5, configAuth)
 	quoter := pricing.NewQuoter(catalogService)
 	createOrderResults, err := metrics.NewCreateOrderResults(meterProvider)
 	if err != nil {
@@ -108,7 +109,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v16 := inventory.ProvideListReservations(reservationRepository, recorder)
 	publisher2 := events2.NewPublisher(publisher)
 	v17 := inventory.ProvideExpireReservations(reservationRepository, stockRepository, transactor2, portInbox, publisher2, clock2, recorder)
-	inventoryService := rpc3.NewInventoryService(v11, v12, v13, v14, v15, v16, v17, auth)
+	inventoryService := rpc3.NewInventoryService(v11, v12, v13, v14, v15, v16, v17, configAuth)
 	accountRepository := identity.ProvideAccountRepository(db, logger)
 	systemUUIDGenerator := system4.NewUUIDGenerator()
 	clock3 := system4.NewClock()
@@ -118,13 +119,13 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v20 := identity.ProvideListAccounts(accountRepository, recorder)
 	apikeyRepository := identity.ProvideAPIKeyRepository(db)
 	adminCensus := identity.ProvideAdminCensus(db, accountRepository, apikeyRepository, clock3)
-	v21 := identity.ProvideDisableAccount(accountRepository, adminCensus, auth, clock3, transactor3, recorder)
+	v21 := identity.ProvideDisableAccount(accountRepository, adminCensus, configAuth, clock3, transactor3, recorder)
 	v22 := identity.ProvideEnableAccount(accountRepository, clock3, transactor3, recorder)
-	v23 := identity.ProvideAssignRoles(accountRepository, adminCensus, auth, clock3, transactor3, recorder)
+	v23 := identity.ProvideAssignRoles(accountRepository, adminCensus, configAuth, clock3, transactor3, recorder)
 	secretGenerator := system4.NewSecretGenerator()
 	v24 := identity.ProvideCreateAPIKey(accountRepository, apikeyRepository, systemUUIDGenerator, secretGenerator, clock3, transactor3, recorder)
 	v25 := identity.ProvideListAPIKeys(accountRepository, apikeyRepository, recorder)
-	v26 := identity.ProvideRevokeAPIKey(apikeyRepository, adminCensus, auth, clock3, transactor3, recorder)
+	v26 := identity.ProvideRevokeAPIKey(apikeyRepository, adminCensus, configAuth, clock3, transactor3, recorder)
 	v27 := identity.ProvideWhoAmI(recorder)
 	inviteRepository := identity.ProvideInviteRepository(db)
 	auditLog := identity.ProvideAuditLog(db)
@@ -149,21 +150,24 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		ClaimInvite:      v30,
 		ExternalIdentity: externalIdentitySource,
 	}
-	identityService := rpc4.NewIdentityService(useCases, auth)
-	poisonService := NewPoisonService(db, auth)
+	identityService := rpc4.NewIdentityService(useCases, configAuth)
+	poisonService := NewPoisonService(db, configAuth)
 	v31 := NewRoutes(orderService, inventoryService, identityService, catalogService, poisonService)
 	v32 := NewDocs()
 	readiness := NewReadiness(db)
 	v33 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock3, recorder)
-	v34 := identity.ProvideTouchAPIKey(apikeyRepository, clock3, auth, recorder)
-	resolver, cleanup4, err := identity.ProvideResolver(v33, v34, clock3, auth, logger, meterProvider)
+	v34 := identity.ProvideTouchAPIKey(apikeyRepository, clock3, configAuth, recorder)
+	resolver, cleanup4, err := identity.ProvideResolver(v33, v34, clock3, configAuth, logger, meterProvider)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	serverServer, err := server.New(http, auth, logger, v31, v32, readiness, providers, resolver)
+	v35 := identity.ProvideResolveExternalIdentity(externalidentityRepository, accountRepository, recorder)
+	v36 := identity.ProvideProvisionExternalIdentity(accountRepository, externalidentityRepository, systemUUIDGenerator, clock3, transactor3, recorder)
+	issuerMapping := identity.ProvideIssuerMapping(configAuth)
+	externalResolver, err := auth.NewExternalResolver(v35, v36, issuerMapping, clock3, meterProvider)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -171,7 +175,26 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
+	externalCredentials := auth.NewExternalCredentials(externalResolver)
+	oidcAuth, cleanup5, err := NewOIDCAuth(configAuth, externalCredentials, meterProvider)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	serverServer, err := server.New(http, configAuth, logger, v31, v32, readiness, providers, resolver, oidcAuth)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	return serverServer, func() {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()

@@ -34,6 +34,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewPoisonService,
 		NewDocs,
 		NewReadiness,
+		NewOIDCAuth,
 		ordering.ProviderSet,
 		inventory.ProviderSet,
 		identity.ProviderSet,
@@ -43,6 +44,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		wire.Bind(new(catalogv1connect.CatalogServiceHandler), new(*catalogrpc.CatalogService)),
 		// The auth interceptor asks identity for keys the config does not know.
 		wire.Bind(new(server.CredentialResolver), new(*identityauth.Resolver)),
+		// ...and for the people behind an OIDC token (auth.oidc).
+		wire.Bind(new(server.ExternalIdentityResolver), new(*identityauth.ExternalCredentials)),
 	)
 
 	return nil, nil, nil
