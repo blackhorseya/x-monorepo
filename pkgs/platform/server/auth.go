@@ -275,7 +275,8 @@ type outcome struct {
 // rejects fast instead of holding every request and the shutdown drain. The
 // bound is only a bound for resolvers that honour their context; a late answer
 // is not a verified credential either way (the resolver may have ignored the
-// context, or won a race with it), so it is an errResolver failure.
+// context, or won a race with it), so it is an errResolver failure — whatever
+// it said, "unbound" included: a late "not bound" must not let ClaimInvite run.
 func bounded[T any](c context.Context, timeout time.Duration, call func(context.Context) (T, error)) (T, error) {
 	rc, cancel := c, func() {}
 	if timeout > 0 {
@@ -284,7 +285,7 @@ func bounded[T any](c context.Context, timeout time.Duration, call func(context.
 	v, err := call(rc)
 	deadlineErr := rc.Err() // read BEFORE cancel(): cancel() itself makes rc.Err() non-nil
 	cancel()
-	if err == nil && deadlineErr != nil {
+	if deadlineErr != nil {
 		var zero T
 
 		return zero, fmt.Errorf("%w: %w", errResolver, deadlineErr)
