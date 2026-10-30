@@ -33,6 +33,7 @@ cp "$work/bin/rpc" "$work/bin/worker"
 #   both       rpc_errors (all timeouts) and reservation_wrong_status crossed
 #   other      rpc_errors crossed, 4 of the 7 errors are not timeouts
 #   nosummary  exit 99 and no summary file at all
+#   onlyreq    like timeouts, but the summary has no rpc_errors{code:transport.timeout} sub-metric
 cat > "$work/fakebin/k6" <<'EOF'
 #!/usr/bin/env python3
 import json, os, sys, time
@@ -58,11 +59,12 @@ if phase == "create":
     setload(os.environ["FAKE_K6_BUSY"]); time.sleep(2)
 if mode == "script":
     setload(os.environ["FAKE_K6_QUIET"]); print("GoError: fake script error"); sys.exit(107)
-if mode in ("timeouts", "wrong", "both", "other", "nosummary"):
-    if mode in ("timeouts", "both", "other"):
+if mode in ("timeouts", "wrong", "both", "other", "nosummary", "onlyreq"):
+    if mode in ("timeouts", "both", "other", "onlyreq"):
         m["rpc_errors"] = {"count": 7, "thresholds": {"count==0": True}}
         m["rpc_errors{code:request.timeout}"] = {"count": 3 if mode == "other" else 7, "thresholds": {"count>=0": False}}
-        m["rpc_errors{code:transport.timeout}"] = {"count": 0, "thresholds": {"count>=0": False}}
+        if mode != "onlyreq":
+            m["rpc_errors{code:transport.timeout}"] = {"count": 0, "thresholds": {"count>=0": False}}
     if mode in ("wrong", "both"):
         m["reservation_wrong_status"] = {"count": 2, "thresholds": {"count==0": True}}
     if mode != "nosummary":
@@ -102,13 +104,40 @@ grep -q "rpc_errors" "$work/thr.out/run1-invalid.txt" 2>/dev/null && r=ok || r=b
 # 1b. anything that is not provably overload is a failure, never exit 3 and never "try again": a correctness
 # threshold, a correctness threshold together with an overload one (correctness wins), rpc_errors that are not
 # all timeouts, and a summary that is missing (fail-closed)
-for mode in wrong both other nosummary; do
+for mode in wrong both other nosummary onlyreq; do
   bench "f-$mode" 0.5 "$mode"
   rc=$(rc_of "f-$mode"); { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad
   check $r "$mode: a failure (not exit 0, not exit 3), got exit $rc"
   [ "$(wc -l < "$work/f-$mode.k6" | tr -d ' ')" = 1 ] && r=ok || r=bad; check $r "$mode: the bench stopped at the first attempt, no retry"
   [ ! -e "$work/f-$mode.out/run1-invalid.txt" ] && r=ok || r=bad; check $r "$mode: the attempt was not written off as invalid"
 done
+
+# 1c. a summary left in a reused out dir by an earlier bench (a clean timeouts-only one) must not be taken for
+# this run's: k6 exits 99 without writing a summary, so there is none, and that is a failure
+mkdir "$work/stale.out"
+python3 -I - "$work/stale.out" <<'PY'
+import json, sys
+m = {"rpc_errors": {"count": 7, "thresholds": {"count==0": True}},
+     "rpc_errors{code:request.timeout}": {"count": 7, "thresholds": {"count>=0": False}},
+     "rpc_errors{code:transport.timeout}": {"count": 0, "thresholds": {"count>=0": False}}}
+for n in (1, 2, 3):
+    json.dump({"metrics": m}, open(f"{sys.argv[1]}/run{n}-create.json", "w"))
+PY
+echo 0.5 > "$work/load"; : > "$work/stale.k6"; rc=0
+env PATH="$work/fakebin:$PATH" BENCH_LOADAVG_FILE="$work/load" LOAD_INTERVAL=1 RUNS=3 MAX_ATTEMPTS=3 \
+  FAKE_K6=nosummary FAKE_K6_LOG="$work/stale.k6" FAKE_K6_BUSY=1000 FAKE_K6_QUIET=0.5 \
+  tests/k6/bench.sh "$work/bin" "$work/stale.out" > "$work/stale.log" 2>&1 || rc=$?
+{ [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad; check $r "stale summary: a failure (not exit 0, not exit 3), got exit $rc"
+[ "$(wc -l < "$work/stale.k6" | tr -d ' ')" = 1 ] && r=ok || r=bad; check $r "stale summary: the bench stopped at the first attempt, no retry"
+
+# 1d. nor may an earlier bench's other leftovers speak for this run: a stale run1-invalid.txt and a stale
+# baseline sample must not make a clean attempt 1 invalid
+mkdir "$work/old.out"; echo "k6 create: stale" > "$work/old.out/run1-invalid.txt"; echo "1,1000" > "$work/old.out/run1-baseline.csv"
+echo 0.5 > "$work/load"; : > "$work/old.k6"; rc=0
+env PATH="$work/fakebin:$PATH" BENCH_LOADAVG_FILE="$work/load" LOAD_INTERVAL=1 RUNS=3 MAX_ATTEMPTS=3 \
+  FAKE_K6=ok FAKE_K6_LOG="$work/old.k6" FAKE_K6_BUSY=1000 FAKE_K6_QUIET=0.5 \
+  tests/k6/bench.sh "$work/bin" "$work/old.out" > "$work/old.log" 2>&1 || rc=$?
+[ "$rc" = 0 ] && r=ok || r=bad; check $r "leftovers: stale run1-invalid.txt / baseline do not invalidate attempt 1, exit 0, got $rc"
 
 # 2. a real tool failure (k6 script error, exit 107) stays a failure: neither 0 nor 3
 bench scr 0.5 script
