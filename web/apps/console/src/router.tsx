@@ -2,13 +2,15 @@ import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComp
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
-import { getCredentialGeneration } from "./auth";
+import { getCredential, getCredentialGeneration } from "./auth";
+import { getConfig } from "./oidc/config";
 import { CredentialControl } from "./components/credential";
 import { RouteError, RoutePending } from "./components/route-status";
 import { ServerVersion } from "./components/version";
 import { queryClient } from "./queryClient";
 import { adminProbeQuery } from "./queries";
 import type { ExpireSearch } from "./routes/expire";
+import type { LoginSearch } from "./routes/login";
 import type { OrdersSearch } from "./routes/orders";
 import type { ProductsSearch } from "./routes/products";
 import type { PruneSearch } from "./routes/prune";
@@ -80,7 +82,30 @@ function Root() {
   );
 }
 
-const rootRoute = createRootRoute({ component: Root });
+// With OIDC on, the console is for signed-in people: anything but the login pages goes to /login
+// (remembering where it was headed). With OIDC off the console is open as before.
+const publicPaths = ["/login", "/auth/callback"];
+const rootRoute = createRootRoute({
+  component: Root,
+  beforeLoad: ({ location }) => {
+    if (!getConfig().oidc || getCredential() || publicPaths.includes(location.pathname)) return;
+    throw redirect({ to: "/login", search: { returnTo: location.pathname === "/" ? undefined : location.href } });
+  },
+});
+
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: lazyRouteComponent(() => import("./routes/login"), "LoginPage"),
+  validateSearch: (raw: Record<string, unknown>): LoginSearch => ({
+    returnTo: typeof raw.returnTo === "string" && raw.returnTo !== "" ? raw.returnTo : undefined,
+  }),
+});
+const authCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/auth/callback",
+  component: lazyRouteComponent(() => import("./routes/auth-callback"), "AuthCallbackPage"),
+});
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -153,7 +178,7 @@ const expireRoute = createRoute({
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, productsRoute, poisonRoute, pruneRoute, expireRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, loginRoute, authCallbackRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, productsRoute, poisonRoute, pruneRoute, expireRoute]),
   defaultPreload: "intent",
   defaultPendingComponent: RoutePending,
   defaultErrorComponent: RouteError,

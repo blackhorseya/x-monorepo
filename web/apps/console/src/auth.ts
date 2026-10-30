@@ -45,10 +45,27 @@ export function getCredential(): Credential | null {
 }
 
 export function setCredential(c: Credential | null): void {
-  current = c && c.value.trim() ? { kind: c.kind, value: c.value.trim() } : null;
+  install(c && c.value.trim() ? { kind: c.kind, value: c.value.trim() } : null, true);
+}
+
+// The access token of an OIDC login (src/oidc/session.ts): the same bearer credential, but memory
+// only. localStorage is told "none" (which also drops any API key stored there: one credential at
+// a time, docs/identity-login.md §8) and never sees the token.
+export function setSessionCredential(token: string | null): void {
+  install(token ? { kind: "bearer", value: token } : null, false);
+}
+
+// A refreshed access token for the same session: the credential's value changes, who it is does
+// not, so the generation stays (the admin probe and every cached answer remain valid).
+export function rotateSessionToken(token: string): void {
+  current = { kind: "bearer", value: token };
+}
+
+function install(c: Credential | null, persist: boolean): void {
+  current = c;
   generation++;
   try {
-    if (current) localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+    if (current && persist) localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
     else localStorage.setItem(STORAGE_KEY, "null"); // explicit "none" beats the env seed
   } catch {
     // storage unavailable: in-memory only

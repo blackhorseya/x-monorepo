@@ -11,8 +11,23 @@ test("signed out with OIDC on: every page goes to /login, which offers the IdP",
   await stubConfig(page);
   await mockIdp(page);
   await page.goto("/orders");
-  await expect(page).toHaveURL(/\/login$/);
+  await expect(page).toHaveURL(/\/login(\?|$)/);
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+});
+
+test("after signing in you land where you were going; a returnTo to another origin is ignored", async ({ page }) => {
+  await stubConfig(page);
+  await mockIdp(page);
+  await page.goto("/stock");
+  await signIn(page);
+  await expect(page).toHaveURL(/\/stock$/);
+
+  const other = await page.context().newPage();
+  await stubConfig(other);
+  await mockIdp(other);
+  await other.goto("/login?returnTo=https://evil.example/phish");
+  await signIn(other);
+  await expect(other).toHaveURL(/\/orders$/);
 });
 
 test("sign in: authorization code + PKCE (S256), state and nonce, callback path /auth/callback", async ({ page }) => {
