@@ -1,5 +1,7 @@
 // OIDC discovery (<issuer>/.well-known/openid-configuration): where to authorize, where to get
 // tokens, and, when the IdP has one, where to end its session (Dex has none).
+export const REQUEST_TIMEOUT_MS = 10_000;
+
 export type Endpoints = {
   authorization: string;
   token: string;
@@ -10,6 +12,7 @@ export async function discover(issuer: string, fetcher: typeof fetch = fetch): P
   const res = await fetcher(`${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, {
     cache: "no-store",
     credentials: "omit",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), // an IdP that never answers must not hang the page
   });
   if (!res.ok) throw new Error(`identity provider discovery failed (HTTP ${res.status})`);
   const doc = (await res.json()) as Record<string, unknown>;

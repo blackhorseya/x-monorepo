@@ -34,6 +34,29 @@ if [ -n "$console_issuer$console_client" ]; then
   esac
   # One origin plus an optional path: no userinfo, query, fragment, quotes or spaces.
   printf '%s' "$console_issuer" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$' || console_refuse "CONSOLE_OIDC_ISSUER is not a plain origin plus path"
+  # The browser parses this same string with new URL(): whatever it would reject must be rejected
+  # here too, or the container starts and the SPA silently turns OIDC off. So the host must be
+  # dot-separated DNS labels (or a canonical IPv4: four octets 0-255, no leading zeros, since a numeric
+  # last label makes the URL parser read it as IPv4), and a port must be 1-65535.
+  console_hostport=${console_issuer#*://}
+  console_hostport=${console_hostport%%/*}
+  console_host=${console_hostport%%:*}
+  printf '%s' "$console_host" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$' || console_refuse "CONSOLE_OIDC_ISSUER has an invalid host"
+  case "$console_hostport" in
+    *:*)
+      console_port=${console_hostport#*:}
+      [ "$console_port" -ge 1 ] 2>/dev/null && [ "$console_port" -le 65535 ] || console_refuse "CONSOLE_OIDC_ISSUER has an invalid port (1-65535)"
+      ;;
+  esac
+  case "${console_host##*.}" in
+    *[!0-9]*) ;;
+    *)
+      printf '%s' "$console_host" | grep -Eq '^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$' || console_refuse "CONSOLE_OIDC_ISSUER has an invalid IPv4 host"
+      for console_octet in $(printf '%s' "$console_host" | tr . ' '); do
+        [ "$console_octet" -le 255 ] || console_refuse "CONSOLE_OIDC_ISSUER has an invalid IPv4 host"
+      done
+      ;;
+  esac
   printf '%s' "$console_client" | grep -Eq '^[A-Za-z0-9._~-]+$' || console_refuse "CONSOLE_OIDC_CLIENT_ID is not a plain identifier"
   CONSOLE_CSP_CONNECT_SRC="'self' $(printf '%s' "$console_issuer" | sed -E 's#^(https?://[^/]+).*#\1#')"
 else
@@ -43,4 +66,4 @@ CONSOLE_OIDC_ISSUER=$console_issuer
 CONSOLE_OIDC_CLIENT_ID=$console_client
 if [ "${CONSOLE_API_KEY_LOGIN:-true}" = false ]; then CONSOLE_API_KEY_LOGIN=false; else CONSOLE_API_KEY_LOGIN=true; fi
 export CONSOLE_OIDC_ISSUER CONSOLE_OIDC_CLIENT_ID CONSOLE_API_KEY_LOGIN CONSOLE_CSP_CONNECT_SRC
-unset console_issuer console_client
+unset console_issuer console_client console_hostport console_host console_port console_octet

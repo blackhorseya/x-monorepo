@@ -88,9 +88,9 @@ test("the access token is renewed before it expires, without a page reload", asy
 
 test("an access token the server refuses (UNAUTHENTICATED) is renewed once and the call retried", async ({ page }) => {
   await stubConfig(page);
-  const expired = Math.floor(Date.now() / 1000) - 600;
   const idp = await mockIdp(page, { claims: { roles: ["admin"] } });
-  idp.claimsQueue.push({ exp: expired, roles: ["admin"] });
+  // The console thinks this token is fine (exp is ahead), the server does not (wrong audience).
+  idp.claimsQueue.push({ aud: "someone-else", roles: ["admin"] });
   await page.goto("/login");
   await signIn(page);
   await expect(page.locator("header nav").getByRole("link", { name: "Accounts" })).toBeVisible();
@@ -224,7 +224,7 @@ for (const bad of ["soon", 0, -5, 1.5, "300", null, 9, 86_401, 1e12]) {
 test("many calls refused at once ask the IdP once; while it is unreachable the backoff holds for later ones too", async ({ page }) => {
   await stubConfig(page);
   const idp = await mockIdp(page, { claims: { roles: ["admin"] } });
-  idp.claimsQueue.push({ exp: Math.floor(Date.now() / 1000) - 600, roles: ["admin"] }); // the first token is already expired
+  idp.claimsQueue.push({ aud: "someone-else", roles: ["admin"] }); // the first token is one the server refuses
   idp.failRefreshWith = 503;
   await page.goto("/login");
   await signIn(page);

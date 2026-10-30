@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { getCredential, getCredentialGeneration, rotateSessionToken, setCredential, setSessionCredential } from "../auth";
 import { getConfig } from "./config";
-import { discover, type Endpoints } from "./discovery";
+import { discover, REQUEST_TIMEOUT_MS, type Endpoints } from "./discovery";
 import { challengeFor, newVerifier, randomToken } from "./pkce";
 
 // The console's OIDC session (docs/identity-login.md §8). The SPA runs Authorization Code + PKCE
@@ -147,7 +147,8 @@ async function exchange(params: URLSearchParams): Promise<string> {
   }
 }
 
-export type TokenResponse = { access_token: string; refresh_token?: string; id_token?: string; expires_in?: number };
+// lifetime: seconds this access token may be used for, from the response (see lifetimeOf).
+export type TokenResponse = { access_token: string; refresh_token?: string; id_token?: string; expires_in?: number; lifetime: number };
 
 // 10 s .. 24 h, whole seconds: below the floor the early-refresh arithmetic (60 s early, never
 // sooner than 5 s) could not keep a refresh ahead of the expiry; above the ceiling it is not a
@@ -155,6 +156,21 @@ export type TokenResponse = { access_token: string; refresh_token?: string; id_t
 const MIN_LIFETIME = 10;
 const MAX_LIFETIME = 86_400;
 const validLifetime = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= MIN_LIFETIME && v <= MAX_LIFETIME;
+
+// How long the access token may be used: the earlier of expires_in and the token's own exp claim.
+// A default for a missing expires_in is not the IdP's word (RFC 6749 5.1 only lets it be omitted when
+// the server states a default elsewhere), so without either number the lifetime is a conservative 60 s
+// (refreshed early, never presented as valid for longer than the token itself says).
+function lifetimeOf(accessToken: string, expiresIn: number | undefined): number {
+  let exp: number | undefined;
+  try {
+    const claims = JSON.parse(atob(accessToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: unknown };
+    if (typeof claims.exp === "number" && Number.isFinite(claims.exp)) exp = Math.floor(claims.exp - Date.now() / 1000);
+  } catch {
+    // opaque token: no exp to read
+  }
+  return Math.min(expiresIn ?? Infinity, exp ?? Infinity, expiresIn === undefined && exp === undefined ? 60 : Infinity);
+}
 
 export class TokenError extends Error {
   constructor(
@@ -175,6 +191,7 @@ export async function tokenRequest(endpoint: string, form: Record<string, string
       body: new URLSearchParams(form),
       cache: "no-store",
       credentials: "omit",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), // no answer in time = unreachable, retried with backoff
     });
   } catch {
     throw new TokenError("the identity provider could not be reached", false);
@@ -191,7 +208,9 @@ export async function tokenRequest(endpoint: string, form: Record<string, string
   if ("expires_in" in body && !validLifetime(body.expires_in)) {
     throw new TokenError("the identity provider returned an invalid expires_in", true);
   }
-  return body as TokenResponse;
+  const lifetime = lifetimeOf(body.access_token, body.expires_in);
+  if (lifetime < MIN_LIFETIME) throw new TokenError("the identity provider returned an access token that expires too soon", true);
+  return { ...body, access_token: body.access_token, lifetime };
 }
 
 // The id token came straight from the token endpoint over TLS, so (OIDC Core 3.1.3.7) its signature
@@ -236,13 +255,11 @@ function accept(tokens: TokenResponse): void {
   if (tokens.refresh_token) sessionStorage.setItem(REFRESH_KEY, tokens.refresh_token);
   backoff = 5_000;
   notBefore = 0;
-  const lifetime = tokens.expires_in ?? 300;
+  const lifetime = tokens.lifetime;
   schedule(Math.max(5, lifetime - 60) * 1000);
   clearTimeout(expiryTimer);
   accessExpiresAt = Date.now() + lifetime * 1000;
-  expiryTimer = setTimeout(() => {
-    if (!refreshing) dropAccessToken();
-  }, lifetime * 1000);
+  expiryTimer = setTimeout(dropAccessToken, lifetime * 1000);
   emit({ error: null, unreachable: false });
 }
 
@@ -257,6 +274,9 @@ function dropAccessToken(): void {
   if (!sessionActive) return;
   sessionActive = false;
   setSessionCredential(null);
+  // A refresh already out is for this very session: its answer, if it comes, still counts (the
+  // generation bump above is ours, not a sign-out or a new identity). Only those two bump it later.
+  if (refreshing) refreshGen = getCredentialGeneration();
   emit({ unreachable: true });
 }
 
@@ -272,6 +292,8 @@ let refreshing: Promise<RefreshResult> | null = null;
 // again before this instant: the backoff is global, not per caller. Only the user's own Retry and the
 // scheduled retry itself (force) go through.
 let notBefore = 0;
+// The credential generation the pending refresh answers to; dropAccessToken moves it forward.
+let refreshGen = 0;
 
 // refreshNow trades the refresh token for new tokens. Concurrent callers (the timer, a 401 retry,
 // the Retry button) share one request: a refresh token is single use.
@@ -288,15 +310,15 @@ async function doRefresh(): Promise<RefreshResult> {
   // An API key is the credential now (signInWithApiKey drops the session; this is the backstop):
   // an OIDC refresh must never replace it.
   if (getCredential()?.kind === "api_key") return "none";
-  const generation = getCredentialGeneration();
+  refreshGen = getCredentialGeneration();
   try {
     const ep = await endpointsFor(oidc.issuer);
     const tokens = await tokenRequest(ep.token, { grant_type: "refresh_token", refresh_token: refreshToken, client_id: oidc.clientId });
-    if (generation !== getCredentialGeneration()) return "superseded";
+    if (refreshGen !== getCredentialGeneration()) return "superseded";
     accept(tokens);
     return "ok";
   } catch (err) {
-    if (generation !== getCredentialGeneration()) return "superseded";
+    if (refreshGen !== getCredentialGeneration()) return "superseded";
     if (err instanceof TokenError && err.rejected) {
       endLocal();
       emit({ error: "Your session has ended. Sign in again." });
