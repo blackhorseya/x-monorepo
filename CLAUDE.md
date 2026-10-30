@@ -123,7 +123,9 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - **decorator 只在 `provider.go` 加**：`decorate()` = metrics + logging，給讀取；`decorateTx()` 再多 `usecasex.Transactional` + 最內層的 `usecasex.Idempotent`（consumer inbox：
   `<bc>.inbox` 表記 message id，重送在 usecase 之前以 `message.duplicate` drop；rpc path 沒 message id、沒 DB 時 inbox 是 nil，都是 pass-through），給寫入。
   rpc 與 consumer 自動都有。**usecase 不自己開 transaction**，也不持有 `port.Transactor`；直接用收到的 `c` 呼叫 repo / publisher，
-  它們從 context 拿到 tx。
+  它們從 context 拿到 tx。唯一例外是 ordering 的 `CreateOrder`（#320）：它持有 `port.Transactor`，只用它包 `Save` + `Publish`，
+  因為寫入前要先問 catalog（查價），不能佔著 DB 連線等；它走 `decorateNoTx()`（metrics + logging + Idempotent，無 `Transactional`）。
+  限 rpc 路徑的 `CreateOrder`，其他寫入 usecase 與 consumer inbox 的 atomicity 規則不變。
 - **Domain error** 用 `kernel.NewError(kind, code, msg)`；`server.ToConnectError` 依 `Kind` 映射 Connect code，
   `Code` 放 `x-error-code` header。consumer 把 domain error 視為 drop（不重試），infra error 才 retry——所以「業務上的失敗結果」
   （例如 inventory 缺貨）要做成 aggregate 狀態 + event，不能做成 error；反過來 optimistic-lock 的 `stock.ErrStale` / `reservation.ErrStale` / `order.ErrStale` 刻意不是 `kernel.Error`：

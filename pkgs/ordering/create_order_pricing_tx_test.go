@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
@@ -40,13 +41,14 @@ func (s spyTransactor) Do(c context.Context, fn func(c context.Context) error) e
 type spyQuoter struct {
 	inner port.PriceQuoter
 	log   *eventLog
-	probe func(c context.Context)
+	probe func(c context.Context, db *gorm.DB)
+	db    *gorm.DB
 }
 
 func (s spyQuoter) QuotePrices(c context.Context, skus []string) (*dto.PriceQuote, error) {
 	s.log.add("quote")
 	if s.probe != nil {
-		s.probe(c)
+		s.probe(c, s.db)
 	}
 
 	return s.inner.QuotePrices(c, skus)
@@ -90,8 +92,9 @@ type pricingTxFixture struct {
 }
 
 // newPricingTxFixture wires CreateOrder through the provider on real Postgres, with a spy
-// on the transactor and on the quoter. probe runs inside every QuotePrices call.
-func newPricingTxFixture(t *testing.T, probe func(c context.Context)) pricingTxFixture {
+// on the transactor and on the quoter. probe runs inside every QuotePrices call with the
+// fixture's own pool, the one the repository and the transactor use.
+func newPricingTxFixture(t *testing.T, probe func(c context.Context, db *gorm.DB)) pricingTxFixture {
 	t.Helper()
 	_, db, tel := openDB(t)
 	rec, err := usecasex.NewRecorder(tel.Meter)
@@ -113,7 +116,7 @@ func newPricingTxFixture(t *testing.T, probe func(c context.Context)) pricingTxF
 		system.NewUUIDGenerator(),
 		system.NewClock(),
 		ownership.New("admin"),
-		spyQuoter{inner: prices, log: log, probe: probe},
+		spyQuoter{inner: prices, log: log, probe: probe, db: db},
 		rec,
 		results,
 	)
@@ -128,7 +131,7 @@ func createA(customer, key string) dto.CreateOrderInput {
 // The catalog is a network call away: it must be asked before the transaction opens, not
 // while a database connection is held waiting for it.
 func TestCreateOrder_PricesBeforeTheTransactionOpens(t *testing.T) {
-	f := newPricingTxFixture(t, func(c context.Context) {
+	f := newPricingTxFixture(t, func(c context.Context, _ *gorm.DB) {
 		if c.Value(inTxKey{}) != nil {
 			t.Error("the catalog was asked inside the transaction's context")
 		}
@@ -145,14 +148,14 @@ func TestCreateOrder_PricesBeforeTheTransactionOpens(t *testing.T) {
 // While the catalog is being asked, no connection of the pool is checked out and no
 // backend sits in an open transaction: a slow catalog cannot starve the database.
 func TestCreateOrder_HoldsNoConnectionWhilePricing(t *testing.T) {
-	_, db, _ := openDB(t)
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	var inUse, openTx int
-	f := newPricingTxFixture(t, func(c context.Context) {
+	f := newPricingTxFixture(t, func(c context.Context, db *gorm.DB) {
+		sqlDB, err := db.DB()
+		if err != nil {
+			t.Error(err)
+
+			return
+		}
 		inUse = sqlDB.Stats().InUse
 		if err := db.WithContext(c).Raw(`SELECT count(*) FROM pg_stat_activity
 			WHERE datname = current_database() AND pid <> pg_backend_pid() AND state IN ('idle in transaction', 'idle in transaction (aborted)')`).Scan(&openTx).Error; err != nil {
