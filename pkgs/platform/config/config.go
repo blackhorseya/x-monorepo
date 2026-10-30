@@ -14,6 +14,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -87,6 +89,9 @@ type Auth struct {
 	// (default "admin"); with auth.mode off it is not checked.
 	AdminRole string `mapstructure:"admin_role"`
 	JWT       JWT    `mapstructure:"jwt"`
+	// OIDC is the external-login verifier (docs/identity-login.md). Off by
+	// default; while off, nothing about it is read or validated.
+	OIDC OIDC `mapstructure:"oidc"`
 	// Public lists procedures ("/<pkg>.<Service>/<Method>") that never need a
 	// credential, whatever the mode.
 	Public []string `mapstructure:"public"`
@@ -112,6 +117,96 @@ type JWT struct {
 	Audience    string `mapstructure:"audience"`
 	HS256Secret string `mapstructure:"hs256_secret"`
 	PublicKey   string `mapstructure:"public_key"`
+}
+
+// OIDC configures the multi-issuer OIDC token verifier (platform/oidc). Login
+// itself happens at the IdP; the verifier only turns a bearer token into a
+// verified external identity. The issuer list comes from the config file (a
+// list does not fit an env var); enabled can still be flipped by APP_AUTH_OIDC_ENABLED.
+type OIDC struct {
+	Enabled bool         `mapstructure:"enabled"`
+	Issuers []OIDCIssuer `mapstructure:"issuers"`
+}
+
+// OIDCIssuer is one trusted issuer and how its identities are used.
+type OIDCIssuer struct {
+	// Issuer must equal the token's iss exactly (a trailing slash matters). It
+	// is also where /.well-known/openid-configuration lives.
+	Issuer string `mapstructure:"issuer"`
+	// Audience is our client id at this issuer; a token's aud must contain it.
+	Audience string `mapstructure:"audience"`
+	// Mapping decides what an identity with no account yet may do (bound |
+	// auto_provision, default bound). The verifier only carries it; the
+	// identity BC and the interceptor use it.
+	Mapping string `mapstructure:"mapping"`
+	// AllowInsecureIssuer lets an http:// issuer on a non-loopback host through
+	// (dev compose / kind, where the name resolves inside the cluster). Never
+	// set it in production.
+	AllowInsecureIssuer bool `mapstructure:"allow_insecure_issuer"`
+}
+
+// Mapping values of OIDCIssuer.Mapping.
+const (
+	MappingBound         = "bound"
+	MappingAutoProvision = "auto_provision"
+)
+
+// EffectiveMapping is Mapping with the fail-closed default applied.
+func (i OIDCIssuer) EffectiveMapping() string {
+	if i.Mapping == "" {
+		return MappingBound
+	}
+
+	return i.Mapping
+}
+
+// CheckIssuerURL is the issuer policy of docs/identity-login.md §10: an
+// absolute https URL, or http only when the host is a loopback literal
+// (localhost, 127.0.0.0/8, ::1) or insecure is true; no query or fragment.
+// "Loopback" is judged on the host as written, never on what it resolves to.
+func CheckIssuerURL(issuer string, insecure bool) error {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("issuer %q is not an absolute URL with a host", issuer)
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return fmt.Errorf("issuer %q must not carry a query", issuer)
+	}
+	if u.Fragment != "" || strings.Contains(issuer, "#") {
+		return fmt.Errorf("issuer %q must not carry a fragment", issuer)
+	}
+
+	return CheckEndpointURL(issuer, insecure)
+}
+
+// CheckEndpointURL is the scheme/host half of the issuer policy, also applied
+// to the endpoints an issuer's discovery document points at (jwks_uri): https,
+// or http only for a loopback host or when insecure is true.
+func CheckEndpointURL(raw string, insecure bool) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("%q is not an absolute URL with a host", raw)
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !insecure && !isLoopbackHost(u.Hostname()) {
+			return fmt.Errorf("%q uses http on a non-loopback host: use https, or set allow_insecure_issuer for a dev issuer", raw)
+		}
+	default:
+		return fmt.Errorf("%q has scheme %q (want https, or http for loopback / allow_insecure_issuer)", raw, u.Scheme)
+	}
+
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }
 
 // Mode values of Auth.Mode.
@@ -243,6 +338,50 @@ func Load() (*AppConfig, error) {
 	return &cfg, cfg.validate()
 }
 
+// validateOIDC checks auth.oidc only when it is enabled. With a legacy auth.jwt
+// verifier configured, its issuer must be pinned and differ from every OIDC
+// issuer (docs/identity-login.md §3): a wildcard legacy verifier would
+// otherwise share a trust boundary with the OIDC one.
+func (a Auth) validateOIDC() error {
+	if !a.OIDC.Enabled {
+		return nil
+	}
+	if len(a.OIDC.Issuers) == 0 {
+		return errors.New("auth.oidc.enabled needs at least one entry in auth.oidc.issuers")
+	}
+	seen := map[string]bool{}
+	for n, is := range a.OIDC.Issuers {
+		if is.Issuer == "" {
+			return fmt.Errorf("auth.oidc.issuers[%d]: issuer must not be empty", n)
+		}
+		if err := CheckIssuerURL(is.Issuer, is.AllowInsecureIssuer); err != nil {
+			return fmt.Errorf("auth.oidc.issuers[%d]: %w", n, err)
+		}
+		if is.Audience == "" {
+			return fmt.Errorf("auth.oidc.issuers[%d] (%s): audience (our client id) must not be empty", n, is.Issuer)
+		}
+		switch is.EffectiveMapping() {
+		case MappingBound, MappingAutoProvision:
+		default:
+			return fmt.Errorf("auth.oidc.issuers[%d] (%s): invalid mapping %q (want bound|auto_provision)", n, is.Issuer, is.Mapping)
+		}
+		if seen[is.Issuer] {
+			return fmt.Errorf("auth.oidc.issuers[%d]: duplicate issuer %s", n, is.Issuer)
+		}
+		seen[is.Issuer] = true
+	}
+	if a.JWT.HS256Secret != "" || a.JWT.PublicKey != "" {
+		switch {
+		case a.JWT.Issuer == "":
+			return errors.New("auth.jwt.issuer must be set (and pinned to the legacy issuer) when auth.oidc is enabled and auth.jwt is configured")
+		case seen[a.JWT.Issuer]:
+			return fmt.Errorf("auth.jwt.issuer %q must differ from every auth.oidc issuer", a.JWT.Issuer)
+		}
+	}
+
+	return nil
+}
+
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("http.addr", ":8080")
 	v.SetDefault("http.docs", false)
@@ -260,6 +399,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.jwt.hs256_secret", "")
 	v.SetDefault("auth.jwt.public_key", "")
 	v.SetDefault("auth.public", []string{})
+	v.SetDefault("auth.oidc.enabled", false)
+	v.SetDefault("auth.oidc.issuers", []OIDCIssuer{})
 	v.SetDefault("auth.resolver_timeout", 2*time.Second)
 	v.SetDefault("auth.last_used_interval", time.Minute)
 	v.SetDefault("log.level", "info")
@@ -354,6 +495,9 @@ func (x *AppConfig) validate() error {
 	}
 	if x.Auth.JWT.HS256Secret != "" && x.Auth.JWT.PublicKey != "" {
 		return errors.New("auth.jwt.hs256_secret and auth.jwt.public_key are exclusive")
+	}
+	if err := x.Auth.validateOIDC(); err != nil {
+		return err
 	}
 	switch x.Worker.Broker {
 	case BrokerPostgres:

@@ -38,6 +38,16 @@ auth:
     audience: ""
     hs256_secret: ""
     public_key: ""
+  # External OIDC token verifier (docs/identity-login.md). Off: nothing below is read. When on, every
+  # issuer needs its audience (our client id); http issuers pass only on a loopback host or with
+  # allow_insecure_issuer (dev only). auth.jwt above, if also set, must pin its own issuer.
+  oidc:
+    enabled: false
+    issuers: []
+    #  - issuer: http://dex.localtest.me:5556/dex
+    #    audience: x-console
+    #    mapping: bound              # bound (default) | auto_provision
+    #    allow_insecure_issuer: true # dev Dex only
   # Procedures that never need a credential: ["/ordering.v1.OrderService/GetOrder"]
   public: []
   # Bound on one identity-BC key lookup (X-API-Key the config does not know; auth runs outside

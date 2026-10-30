@@ -388,6 +388,42 @@ groups:
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "32"
 
+      # An OIDC issuer's signing keys have not been refreshed for 2 hours (auth_jwks_age_seconds counts from startup
+      # while there has been no successful fetch). Cached keys keep verifying for up to 24 h, then every token from that
+      # issuer is rejected, so this is the warning that a login outage is coming. Nothing is exported while auth.oidc is off.
+      - uid: x-monorepo-auth-jwks-stale
+        title: OIDC JWKS not refreshed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max by (issuer) (auth_jwks_age_seconds)
+              legendFormat: "{{issuer}}"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [7200] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: rpc }
+        annotations:
+          summary: "{{ $labels.issuer }} signing keys were last refreshed {{ $values.A }}s ago"
+          description: >-
+            auth_jwks_age_seconds is the time since the last successful JWKS fetch for the issuer. The rpc log has one
+            `oidc: jwks fetch failed` Warn per failed attempt (at most one attempt per issuer every 30 s) with the cause
+            (discovery unreachable, issuer mismatch in the discovery document, HTTP status), and
+            auth_jwks_fetch_total{result="error"} shows the rate. Keys already cached keep verifying for 24 hours after
+            the last success, after which every token from this issuer is rejected.
+
       # Known principals are being refused by a role gate: either a client was given a key without the role it
       # needs (admin RPCs want auth.admin_role) or something is probing the admin surface with a valid low-role key.
       - uid: x-monorepo-auth-denied
