@@ -4,10 +4,9 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { setCredential } from "../auth";
 import { Field } from "../components/field";
 import { getConfig } from "../oidc/config";
-import { refreshNow, safeReturnTo, startLogin, useSessionState } from "../oidc/session";
+import { refreshNow, safeReturnTo, signInWithApiKey, startLogin, useSessionState } from "../oidc/session";
 
 export type LoginSearch = { returnTo?: string };
 
@@ -88,7 +87,7 @@ function ApiKeyCard({ returnTo }: { returnTo: string }) {
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            setCredential({ kind: "api_key", value });
+            signInWithApiKey(value);
             setValue("");
             void navigate({ to: returnTo, replace: true });
           }}

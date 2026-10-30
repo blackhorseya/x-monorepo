@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { getCredential, getCredentialGeneration, rotateSessionToken, setSessionCredential } from "../auth";
+import { getCredential, getCredentialGeneration, rotateSessionToken, setCredential, setSessionCredential } from "../auth";
 import { getConfig } from "./config";
 import { discover, type Endpoints } from "./discovery";
 import { challengeFor, newVerifier, randomToken } from "./pkce";
@@ -245,6 +245,9 @@ async function doRefresh(): Promise<RefreshResult> {
   const oidc = getConfig().oidc;
   const refreshToken = readRefreshToken();
   if (!oidc || !refreshToken) return "none";
+  // An API key is the credential now (signInWithApiKey drops the session; this is the backstop):
+  // an OIDC refresh must never replace it.
+  if (getCredential()?.kind === "api_key") return "none";
   const generation = getCredentialGeneration();
   try {
     const ep = await endpointsFor(oidc.issuer);
@@ -295,6 +298,13 @@ function endLocal(): void {
   }
   setSessionCredential(null);
   emit({ unreachable: false });
+}
+
+// Choosing an API key ends any OIDC session (one credential at a time, §8): the refresh token goes
+// with it, so neither the refresh timer nor a reload can put the session back over the key.
+export function signInWithApiKey(value: string): void {
+  endLocal();
+  setCredential({ kind: "api_key", value });
 }
 
 // Sign out. Local state goes first and unconditionally; the IdP's own session is only touched when

@@ -123,7 +123,7 @@
 
 - **SPA 自己跑 Authorization Code + PKCE**：`state`、`nonce`、`code_verifier` 由 SPA 產生與驗證（PKCE 一律 `S256`）；scope 含 `openid profile email offline_access`（Dex 需要 `offline_access` 才發 refresh token）。**redirect URI = `<console origin>/auth/callback`**（IdP 的 client 要登記它；dev 的 Dex 見 `deployments/docker/dex/config.yaml`）。
 - **設定走 runtime，不是 build time**：console image 只 build 一次，issuer 隨部署不同，所以 SPA 啟動時 fetch 同源的 `/config.json`（只放公開值，沒有 secret）：`oidcIssuer`、`oidcClientId`、`apiKeyLogin`。nginx image 的 entrypoint 從環境變數 `CONSOLE_OIDC_ISSUER`、`CONSOLE_OIDC_CLIENT_ID`、`CONSOLE_API_KEY_LOGIN`（對應 `console.apiKeyLogin`；只有字面 `false` 會關掉，其他值＝開）用 envsubst 渲染它（`deploy/config.json.template`）。envsubst 的 filter 是**精確白名單**，容器的其他環境變數不會進任何 template。Helm 先用 `console.extraEnv` 傳這三個。`CONSOLE_OIDC_ISSUER` / `CONSOLE_OIDC_CLIENT_ID` 沒有同時設、或格式不合（`deploy/18-console-env.envsh`：issuer 只能是 http(s) origin 加路徑，client id 只能是一般識別字）→ **OIDC 關閉**（fail closed），不會把值帶進 JSON 或 CSP。OIDC 關閉時 console 與以前完全相同（沒有登入頁、保留 Credential 對話框）。
-- **CSP**：nginx 的 `connect-src` 預設 `'self'`；OIDC 開啟時加上 **issuer 的精確 origin**（不用萬用字元），SPA 才能 fetch discovery 與 token endpoint。IdP 本身要允許 console origin 的 CORS（token endpoint 的跨來源 `POST`）。
+- **CSP**：nginx 的 `connect-src` 預設 `'self'`；OIDC 開啟時加上 **issuer 的精確 origin**（不用萬用字元），SPA 才能 fetch discovery 與 token endpoint。因此 **token endpoint 必須與 issuer 同 origin**（Dex、Keycloak、Auth0、Entra 皆如此）；token endpoint 在別的 origin 的 IdP（例如 Google）會被 CSP 擋下，表現為「無法連線 identity provider」——這是刻意的 fail closed，要支援需另訂規則。IdP 本身要允許 console origin 的 CORS（token endpoint 的跨來源 `POST`）。
 - **登入流程**：未登入（沒有 credential）的任何頁面導到 `/login`，並記住要去的路徑（只接受 app 內的路徑，其他一律回 `/orders`）。`/login` 的「Sign in」導去 IdP；`/auth/callback` 驗證 `state`（對不上就拒絕、**不**呼叫 token endpoint）→ 用 `code_verifier` 換 token → 檢查 id token 的 `iss`／`aud`／`nonce`（id token 直接來自 token endpoint 的 TLS，不重驗簽章；access token 由 server 驗）。callback 一進來就把 `code`／`state` 從網址列（與 history）拿掉；PKCE verifier、state、nonce 在 callback 讀取的當下就從 `sessionStorage` 刪除，不論成功或失敗。IdP 回 `error=` 也終止該次嘗試並顯示。
 - **token 存放**：
   - **access token 只放記憶體**（reload 就消失，靠 refresh token 靜默取得）。從不寫入 `localStorage`、log 或 URL；也不留 id token。
@@ -197,7 +197,7 @@
 - PR 2：`iss` 不符、`aud` 不含 client id、過期超過 60 秒、`alg=none` / HS256、`alg` 與 JWK 不一致、未知 `kid` 30 秒內重抓不超過一次、重抓失敗沿用舊 key 且滿 24 小時後拒絕、非 https 且非 loopback 且無旗標 → 拒絕啟動。
 - PR 3（真 Postgres）：同一 `(iss, sub)` 並發綁定只有一個成功；邀請過期 / 重用 / `email_verified=false` / email 不符皆拒絕；`auto_provision` 建出的帳號沒有 role；`iat` 早於 `sessions_revoked_at` 拒絕、缺 `iat` 拒絕；撤銷寫入 audit。
 - PR 4：DB 錯誤拒絕且不 cache；停用 account 後 30 秒內拒絕；未綁定身分呼叫非 `ClaimInvite` → `PERMISSION_DENIED`；OIDC 關閉時既有行為逐字不變。
-- PR 5：Playwright（真 Chromium + 真 rpc + Dex）；登入、reload 靜默 refresh、登出後 access token 不在任何 Web Storage、`console.apiKeyLogin` 關閉時入口消失。
+- PR 5：Playwright（真 Chromium + 真 rpc；IdP 以 `page.route()` 模擬，真 Dex 在 #274）；登入、reload 靜默 refresh、登出後 access token 不在任何 Web Storage、`console.apiKeyLogin` 關閉時入口消失。
 - PR 6：kind 內 issuer 解析一致；JWKS stale alert 觸發；E2E 走完 bootstrap → 邀請 → 登入。
 
 ## 13. 可選模組：方案 A，自建帳密 issuer（未排程）
