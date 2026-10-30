@@ -24,6 +24,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -62,7 +63,7 @@ func TestIdentityService_EndToEnd(t *testing.T) {
 
 	// ResolverTimeout as config.Load defaults it: the resolver path under test is the production one.
 	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "root=root-key-0123456789abcdef:admin, viewer=viewer-key-0123456789abcdef", ResolverTimeout: 2 * time.Second}
-	srv, err := server.New(config.HTTP{Addr: ":0"}, cfg, logger, []server.Route{svc}, nil, nil, tel, resolver)
+	srv, err := server.New(config.HTTP{Addr: ":0"}, cfg, logger, []server.Route{svc}, nil, nil, tel, resolver, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +219,7 @@ func TestIdentityService_AuthOff(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	accounts := identity.ProvideAccountRepository(nil, logger)
 	svc := newService(accounts, identity.ProvideAPIKeyRepository(nil), identity.ProvideTransactor(nil), system.NewClock(), system.NewUUIDGenerator(), system.NewSecretGenerator(), rec, config.Auth{})
-	srv, err := server.New(config.HTTP{Addr: ":0"}, config.Auth{}, logger, []server.Route{svc}, nil, nil, tel, nil)
+	srv, err := server.New(config.HTTP{Addr: ":0"}, config.Auth{}, logger, []server.Route{svc}, nil, nil, tel, nil, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +302,7 @@ func TestIdentityService_InviteAndRevokeSessions(t *testing.T) {
 	clock := system.NewClock()
 	svc := newService(accounts, keys, identity.ProvideTransactor(nil), clock, system.NewUUIDGenerator(), system.NewSecretGenerator(), rec, config.Auth{Mode: config.AuthRequired})
 	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "root=root-key-0123456789abcdef:admin, viewer=viewer-key-0123456789abcdef", ResolverTimeout: 2 * time.Second}
-	srv, err := server.New(config.HTTP{Addr: ":0"}, cfg, logger, []server.Route{svc}, nil, nil, tel, nil)
+	srv, err := server.New(config.HTTP{Addr: ":0"}, cfg, logger, []server.Route{svc}, nil, nil, tel, nil, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,5 +427,19 @@ func TestIdentityService_ClaimInvite(t *testing.T) {
 	src.ok = false
 	if _, err := svc.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{})); connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Fatalf("no token = %v", err)
+	}
+}
+
+// ClaimInvite learns who is calling from the identity the auth interceptor
+// verified and put in the context — not from the request.
+func TestContextExternalIdentity(t *testing.T) {
+	src := rpc.ContextExternalIdentity{}
+	if _, ok := src.ExternalIdentityFrom(context.Background()); ok {
+		t.Fatal("a call without a verified OIDC token has no external identity")
+	}
+	c := contextx.WithExternalIdentity(context.Background(), contextx.ExternalIdentity{Issuer: "https://idp.example", Subject: "sub-1", Email: "a@example.com", EmailVerified: true})
+	id, ok := src.ExternalIdentityFrom(c)
+	if !ok || id.Issuer != "https://idp.example" || id.Subject != "sub-1" || id.Email != "a@example.com" || !id.EmailVerified {
+		t.Fatalf("identity = %+v, %v", id, ok)
 	}
 }

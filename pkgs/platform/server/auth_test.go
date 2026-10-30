@@ -26,7 +26,7 @@ const secret = "0123456789abcdef0123456789abcdef" // 32 bytes
 // principal the next function saw, and the error.
 func call(t *testing.T, cfg config.Auth, procedure string, headers map[string]string) (contextx.Principal, error) {
 	t.Helper()
-	in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), nil)
+	in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), nil, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,18 +75,18 @@ func errCode(err error) (connect.Code, string) {
 
 func TestAuthInterceptor_Off(t *testing.T) {
 	for _, mode := range []string{"", config.AuthOff} {
-		in, err := server.NewAuthInterceptor(config.Auth{Mode: mode}, noop.NewMeterProvider(), nil)
+		in, err := server.NewAuthInterceptor(config.Auth{Mode: mode}, noop.NewMeterProvider(), nil, server.OIDCAuth{})
 		if err != nil || in != nil {
 			t.Fatalf("mode %q: %v, %v", mode, in, err)
 		}
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), nil); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), nil, server.OIDCAuth{}); err == nil {
 		t.Fatal("required with nothing configured must fail")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, APIKeys: "ci=short"}, noop.NewMeterProvider(), nil); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, APIKeys: "ci=short"}, noop.NewMeterProvider(), nil, server.OIDCAuth{}); err == nil {
 		t.Fatal("short api key must fail")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{HS256Secret: "short"}}, noop.NewMeterProvider(), nil); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{HS256Secret: "short"}}, noop.NewMeterProvider(), nil, server.OIDCAuth{}); err == nil {
 		t.Fatal("short hs256 secret must fail")
 	}
 }
@@ -181,7 +181,7 @@ func TestAuthInterceptor_AlgorithmPinned(t *testing.T) {
 	if _, err := call(t, cfg, "/a.v1.S/Get", map[string]string{server.AuthorizationHeader: "Bearer " + confused}); err == nil {
 		t.Fatal("HS256 token signed with the public key must be rejected")
 	}
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{PublicKey: "not pem"}}, noop.NewMeterProvider(), nil); err == nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired, JWT: config.JWT{PublicKey: "not pem"}}, noop.NewMeterProvider(), nil, server.OIDCAuth{}); err == nil {
 		t.Fatal("bad pem must fail")
 	}
 	// Only api keys configured: a bearer token is a credential that cannot verify.
@@ -239,7 +239,7 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 	}}
 	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "ci=ci-key-0123456789abcdef:viewer"}
 	callWith := func(key string) (contextx.Principal, error) {
-		in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), r)
+		in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), r, server.OIDCAuth{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +298,7 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 	// outside http.timeout.
 	slow := &hangingResolver{}
 	cfgTimeout := config.Auth{Mode: config.AuthRequired, APIKeys: cfg.APIKeys, ResolverTimeout: 20 * time.Millisecond}
-	in, err := server.NewAuthInterceptor(cfgTimeout, noop.NewMeterProvider(), slow)
+	in, err := server.NewAuthInterceptor(cfgTimeout, noop.NewMeterProvider(), slow, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 	// deadline is still rejected: a late success is not a verified credential
 	// (regression: only the resolver's own error used to be checked).
 	late := &lateResolver{delay: 60 * time.Millisecond}
-	in, err = server.NewAuthInterceptor(cfgTimeout, noop.NewMeterProvider(), late)
+	in, err = server.NewAuthInterceptor(cfgTimeout, noop.NewMeterProvider(), late, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 	}
 
 	// Resolver only: no static key, no jwt, still a valid configuration.
-	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), r); err != nil {
+	if _, err := server.NewAuthInterceptor(config.Auth{Mode: config.AuthRequired}, noop.NewMeterProvider(), r, server.OIDCAuth{}); err != nil {
 		t.Fatalf("resolver-only config: %v", err)
 	}
 }

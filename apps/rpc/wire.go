@@ -34,6 +34,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewPoisonService,
 		NewDocs,
 		NewReadiness,
+		NewOIDCAuth,
 		ordering.ProviderSet,
 		inventory.ProviderSet,
 		identity.ProviderSet,

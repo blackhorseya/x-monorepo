@@ -163,7 +163,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	serverServer, err := server.New(http, auth, logger, v31, v32, readiness, providers, resolver)
+	oidcAuth := NewOIDCAuth(auth)
+	serverServer, err := server.New(http, auth, logger, v31, v32, readiness, providers, resolver, oidcAuth)
 	if err != nil {
 		cleanup4()
 		cleanup3()

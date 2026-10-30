@@ -351,3 +351,11 @@ func toProtoAPIKeyStatus(s string) identityv1.ApiKeyStatus {
 		return identityv1.ApiKeyStatus_API_KEY_STATUS_UNSPECIFIED
 	}
 }
+
+// ContextExternalIdentity reads the identity the auth interceptor verified.
+// RED stub.
+type ContextExternalIdentity struct{}
+
+func (ContextExternalIdentity) ExternalIdentityFrom(context.Context) (ExternalIdentity, bool) {
+	return ExternalIdentity{}, false
+}

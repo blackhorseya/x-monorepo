@@ -68,3 +68,7 @@ func NewDocs() []server.Doc {
 		{Name: "admin", Spec: adminv1.OpenAPI},
 	}
 }
+
+// NewOIDCAuth is the external-login half of the auth interceptor.
+// RED stub: always off.
+func NewOIDCAuth(_ config.Auth) server.OIDCAuth { return server.OIDCAuth{} }

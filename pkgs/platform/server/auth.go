@@ -105,7 +105,7 @@ const (
 // (enduser.id, enduser.roles, auth.method) — the audit trail across Loki and
 // Tempo. Names and credentials are never recorded. Every decision is counted
 // on mp's auth.decisions{result, method} (see the Result* constants).
-func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver CredentialResolver) (connect.UnaryInterceptorFunc, error) {
+func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver CredentialResolver, oidcAuth OIDCAuth) (connect.UnaryInterceptorFunc, error) {
 	switch cfg.Mode {
 	case config.AuthOff, "":
 		return nil, nil
