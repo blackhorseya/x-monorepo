@@ -7,7 +7,9 @@ import { InventoryService } from "@repo/proto/inventory/v1/service_pb";
 import { OrderService } from "@repo/proto/ordering/v1/service_pb";
 import { ViolationsSchema } from "@repo/proto/buf/validate/violations_pb";
 import { credentialHeaders, getCredential, getCredentialGeneration } from "./auth";
+import { getConfig } from "./oidc/config";
 import { canRefresh, refreshNow } from "./oidc/session";
+import { UNBOUND_CODE, markUnbound } from "./oidc/unbound";
 
 // Same origin, under /api: vite proxies /api to the Go server, and in production
 // one ingress rule for /api covers RPCs, docs, healthz and metrics alike.
@@ -35,9 +37,21 @@ const renewOnUnauthenticated: Interceptor = (next) => async (req) => {
     return next(req);
   }
 };
+// A verified token the server has no account for: remember it for the credential it was seen with,
+// so the layout can offer ClaimInvite instead of pages that can only fail.
+const detectUnbound: Interceptor = (next) => async (req) => {
+  const generation = getCredentialGeneration();
+  try {
+    return await next(req);
+  } catch (err) {
+    const e = ConnectError.from(err);
+    if (getConfig().oidc && e.code === Code.PermissionDenied && e.metadata.get("x-error-code") === UNBOUND_CODE) markUnbound(generation);
+    throw err;
+  }
+};
 const transport = createConnectTransport({
   baseUrl: `${window.location.origin}/api`,
-  interceptors: [renewOnUnauthenticated, withCredential],
+  interceptors: [detectUnbound, renewOnUnauthenticated, withCredential],
 });
 
 export const orders = createClient(OrderService, transport);

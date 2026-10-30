@@ -6,7 +6,9 @@ import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
 import { getCredential, getCredentialGeneration, useCredential } from "./auth";
 import { getConfig } from "./oidc/config";
 import { CredentialControl } from "./components/credential";
+import { ClaimInvite } from "./components/claim-invite";
 import { RouteError, RoutePending } from "./components/route-status";
+import { useUnbound } from "./oidc/unbound";
 import { ServerVersion } from "./components/version";
 import { queryClient } from "./queryClient";
 import { adminProbeQuery } from "./queries";
@@ -71,7 +73,8 @@ function Root() {
   useEffect(() => {
     if (getConfig().oidc && !credential && !publicPaths.includes(path)) void navigate({ to: "/login", replace: true });
   }, [credential, path, navigate]);
-  const links = isAdmin ? [...navLinks, ...adminLinks] : navLinks;
+  const unbound = useUnbound();
+  const links = unbound ? [] : isAdmin ? [...navLinks, ...adminLinks] : navLinks;
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
       <header className="mb-6 flex flex-wrap items-baseline gap-6">
@@ -86,7 +89,7 @@ function Root() {
         <CredentialControl />
       </header>
       <AdminProbeNotice />
-      <Outlet />
+      {unbound && !publicPaths.includes(path) ? <ClaimInvite /> : <Outlet />}
       <footer className="mt-10 flex justify-end text-xs text-muted-foreground">
         <ServerVersion />
       </footer>
