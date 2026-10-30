@@ -39,6 +39,26 @@ services:
       timeout: 3s
       retries: 20
 
+  # Dev OIDC IdP (docs/identity-login.md §10, docs/operations.md "Dex dev IdP"). Issuer
+  # http://dex.localtest.me:5556/dex: the browser and a host-run rpc reach it through public DNS
+  # (*.localtest.me → 127.0.0.1) and the published port. A container that must verify tokens
+  # (a containerised rpc) needs the same name pointing at the host: copy the extra_hosts below.
+  # Static accounts admin@example.com / user@example.com, password "password".
+  dex:
+    image: ghcr.io/dexidp/dex:v2.44.0
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      - "5556:5556"   # fixed: the port is part of the issuer string
+    volumes:
+      - ./dex/config.yaml:/etc/dex/config.yaml:ro
+    extra_hosts:
+      - "dex.localtest.me:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5556/dex/.well-known/openid-configuration"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
   # Grafana + Loki + Tempo + Prometheus(Mimir) + an OTel collector in one container.
   # Apps export OTLP/gRPC to :4317; otel.endpoint in configs/local.yaml already points here.
   lgtm:

@@ -59,6 +59,20 @@ config:
     mode: "off"
     admin_role: admin
     jwt: { issuer: "", audience: "", public_key: "" }
+    # External OIDC login (docs/identity-login.md). The chart ships no IdP: point `issuers` at yours
+    # (Keycloak, Auth0, Entra, Dex ...). Off = nothing below is read, behaviour unchanged. On =
+    # at least one issuer, each with `issuer` (https, must equal the token's iss exactly) and
+    # `audience` (our client id); `mapping` bound (default, fail-closed) | auto_provision. An http
+    # issuer is accepted only on a loopback host or with `allow_insecure_issuer: true` (dev
+    # only; deployments/helm/kind/values.yaml). When auth.jwt above is also set, its `issuer`
+    # must be pinned and differ from every issuer here, or the pods refuse to start.
+    # Lists are not env-overridable: keep issuers here, flip APP_AUTH_OIDC_ENABLED if needed.
+    oidc:
+      enabled: false
+      issuers: []
+      # - issuer: https://idp.example.com/realms/shop
+      #   audience: x-console
+      #   mapping: bound
     public: []
     resolver_timeout: 2s
     last_used_interval: 1m

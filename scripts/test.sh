@@ -198,6 +198,7 @@ touch_file deployments/helm/x-monorepo/Chart.yaml; touch_file web/apps/console/e
 touch_file pkgs/ordering/domain/order/order_test.go; touch_file .github/workflows/ci.yml
 touch_file scripts/x.sh; touch_file Taskfile.yml; touch_file tests/k6/a.js
 touch_file deployments/docker/docker-compose.yaml; touch_file deployments/docker/grafana/d.json
+touch_file deployments/docker/dex/config.yaml
 commit "docs: nothing shipped"
 expect_eq "docs / chart / tests / CI are not releasable" "" "$(in_repo scripts/releasable.sh)"
 touch_file pkgs/ordering/domain/order/order.go; touch_file deployments/docker/Dockerfile.rpc

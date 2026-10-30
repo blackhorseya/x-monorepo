@@ -29,6 +29,14 @@ curl -fsSI "$console/api/readyz" | grep -qi '^content-security-policy' \
 curl -fsS "$console/api/readyz" >/dev/null || { echo "smoke: console /api proxy to the rpc failed"; exit 1; }
 echo "smoke: console serves the UI and proxies /api → $(curl -fsS "$console/api/version")"
 
+# Dex (dex.yaml): the issuer URL the rpc's auth.oidc names must resolve inside the cluster (the
+# CoreDNS rewrite) and its discovery document must name exactly that issuer.
+issuer=http://dex.localtest.me:5556/dex
+got=$(kubectl -n "$ns" exec deploy/dex -- wget -qO- "$issuer/.well-known/openid-configuration" | jq -r .issuer) \
+  || { echo "smoke: $issuer is not reachable from inside the cluster (CoreDNS rewrite?)"; exit 1; }
+[ "$got" = "$issuer" ] || { echo "smoke: dex discovery issuer is '$got', want '$issuer'"; exit 1; }
+echo "smoke: dex discovery resolves in-cluster as $issuer"
+
 rpc() { curl -fsS -H 'Content-Type: application/json' "$api/$1" -d "$2"; }
 sku="kind-$(date +%s)"
 rpc inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}" >/dev/null

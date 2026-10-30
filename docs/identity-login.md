@@ -142,8 +142,8 @@
 ## 10. 本機 issuer（Q6）
 
 - 統一 issuer：**`http://dex.localtest.me:5556/dex`**（`localtest.me` 的公開 DNS 解析到 `127.0.0.1`）。
-- 容器內的解析：compose 用 `extra_hosts`、kind 用 CoreDNS rewrite，把 `dex.localtest.me` 指到 Dex 服務，讓瀏覽器（host）與 rpc（容器 / Pod）看到**同一個 issuer 字串**（`iss` 必須完全相符）。
-- **離線時** `localtest.me` 解不出來：退回 `/etc/hosts` 加一行 `127.0.0.1 dex.localtest.me`（runbook 寫明，PR 6）。
+- 容器內的解析：compose 用 `extra_hosts`、kind 用 CoreDNS rewrite，把 `dex.localtest.me` 指到 Dex 服務，讓瀏覽器（host）與 rpc（容器 / Pod）看到**同一個 issuer 字串**（`iss` 必須完全相符）。實作與做法見 `docs/operations.md`「Dex dev IdP」（#274 part 1）。
+- **離線時** `localtest.me` 解不出來：退回 `/etc/hosts` 加一行 `127.0.0.1 dex.localtest.me`（做法寫在 `docs/operations.md`「Dex dev IdP」）。
 - **非 https 的 issuer 只在兩種情況放行**：host 是 loopback，或該 issuer 的 dev 設定明確開啟 `allow_insecure_issuer`。所以 compose / kind 的 dev 設定明確開這個旗標（「loopback」是字面 host 還是解析後位址，PR 2 定義）；正式環境永遠不開，非 https 的 issuer 在兩個條件都不成立時拒絕啟動。
 - **不提供 `jwks_url` override**：JWKS 一律從 discovery 取，避免 issuer 與金鑰來源脫鉤。
 

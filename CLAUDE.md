@@ -27,6 +27,7 @@ task release-snapshot      # goreleaser dry run → bin/dist（真的 release �
 task poison -- list        # 看各 BC 的 poison 表；requeue <bc> <offset>…|all 送回原 topic、drop 刪掉（worker poison 子命令）
 task expire -- --older-than 24h --dry-run   # reservation TTL：RESERVED 超過的還庫存 + 發 OrderCancellationRequested（worker expire；Helm expire CronJob 每 15 分鐘；rpc 版 InventoryService.ExpireReservations 給 console Expire 頁，要 admin role；`InventoryService.SetStock` 同樣要 admin role，auth 開著時非 admin 是 `PERMISSION_DENIED`）
 task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 outbox 列 + 消費過的 inbox 列（worker prune；先 dry-run；NOTE 列出每個落後的 group 與最老未讀年齡：held back by = 過了 retention、behind = 還沒，--forget-group 刪掉不會再跑的）
+scripts/dex-token.sh [email] [--id-token]    # 本機 Dex（compose 的 `dex` 服務；kind 的 dex.yaml）：authorization code + PKCE 登入拿一顆真 JWT；issuer / 帳號 / 離線 /etc/hosts 見 docs/operations.md「Dex dev IdP」
 task bootstrap                              # identity 第一個 account + API key（空 store 才建；worker bootstrap；secret 只印一次）
 task helm-check            # deployments/helm/x-monorepo：每個 ci/*.yaml profile 跑 helm lint + kubeconform + check.py（derived 數字：grace period、hook 順序、prune args、console 的 RPC_UPSTREAM、ServiceMonitor / NetworkPolicy 的選擇器）
 task k6-wire               # tests/k6/wire.sh：四支腳本打一個回壞掉 HTTP response（status code / version / header 行帶著請求的 X-API-Key、body 被截斷、連線直接關）的假 server；每個 run 必須失敗，且 key 不在 k6 輸出、summary、metrics tag 任何地方（不需要 Postgres；CI 的 k6-auth job）
