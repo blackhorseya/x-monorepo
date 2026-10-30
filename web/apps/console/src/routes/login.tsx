@@ -44,7 +44,7 @@ export function LoginPage() {
                 disabled={busy}
                 onClick={() => {
                   setBusy(true);
-                  void refreshNow()
+                  void refreshNow({ force: true })
                     .then((r) => {
                       if (r === "ok") void navigate({ to: safeReturnTo(returnTo), replace: true });
                     })

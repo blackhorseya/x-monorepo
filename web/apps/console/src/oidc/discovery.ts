@@ -18,6 +18,12 @@ export async function discover(issuer: string, fetcher: typeof fetch = fetch): P
   const authorization = httpsOrSame(doc.authorization_endpoint, issuer);
   const token = httpsOrSame(doc.token_endpoint, issuer);
   if (!authorization || !token) throw new Error("identity provider discovery document is incomplete");
+  // The token endpoint receives the authorization code and the PKCE verifier. The CSP cannot be
+  // the only guard (it must allow 'self' for the RPCs, which would also admit a token endpoint
+  // pointing at the console itself), so the endpoint has to be on the issuer's own origin.
+  if (new URL(token).origin !== new URL(issuer).origin) {
+    throw new Error("identity provider token endpoint is not on the issuer's origin; refusing to sign in");
+  }
   return { authorization, token, endSession: httpsOrSame(doc.end_session_endpoint, issuer) };
 }
 

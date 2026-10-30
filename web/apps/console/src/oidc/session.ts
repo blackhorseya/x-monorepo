@@ -149,6 +149,13 @@ async function exchange(params: URLSearchParams): Promise<string> {
 
 export type TokenResponse = { access_token: string; refresh_token?: string; id_token?: string; expires_in?: number };
 
+// 10 s .. 24 h, whole seconds: below the floor the early-refresh arithmetic (60 s early, never
+// sooner than 5 s) could not keep a refresh ahead of the expiry; above the ceiling it is not a
+// short-lived access token and a single typo would keep a dead token "valid" for years.
+const MIN_LIFETIME = 10;
+const MAX_LIFETIME = 86_400;
+const validLifetime = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= MIN_LIFETIME && v <= MAX_LIFETIME;
+
 export class TokenError extends Error {
   constructor(
     message: string,
@@ -178,6 +185,12 @@ export async function tokenRequest(endpoint: string, form: Record<string, string
   }
   const body = (await res.json()) as Partial<TokenResponse>;
   if (typeof body.access_token !== "string" || body.access_token === "") throw new TokenError("the identity provider returned no access token", true);
+  // expires_in drives when we ask again: only a positive whole number of seconds is a lifetime. A
+  // string, 0, a fraction or null would become NaN / 0 in the timer and a refresh loop, so the whole
+  // response is refused instead (absent is allowed and means the default).
+  if ("expires_in" in body && !validLifetime(body.expires_in)) {
+    throw new TokenError("the identity provider returned an invalid expires_in", true);
+  }
   return body as TokenResponse;
 }
 
@@ -222,23 +235,50 @@ function accept(tokens: TokenResponse): void {
   sessionActive = true;
   if (tokens.refresh_token) sessionStorage.setItem(REFRESH_KEY, tokens.refresh_token);
   backoff = 5_000;
-  schedule(Math.max(5, (tokens.expires_in ?? 300) - 60) * 1000);
+  notBefore = 0;
+  const lifetime = tokens.expires_in ?? 300;
+  schedule(Math.max(5, lifetime - 60) * 1000);
+  clearTimeout(expiryTimer);
+  accessExpiresAt = Date.now() + lifetime * 1000;
+  expiryTimer = setTimeout(() => {
+    if (!refreshing) dropAccessToken();
+  }, lifetime * 1000);
   emit({ error: null, unreachable: false });
+}
+
+// The access token's own lifetime ran out and no refresh has replaced it: it is not a credential
+// any more, so stop presenting it (and showing the user as signed in). The refresh token stays and
+// so does the scheduled retry: the user lands on /login with the "identity provider unreachable"
+// notice and a Retry, and a successful refresh signs them straight back in. A refresh that is in
+// flight right now decides instead (doRefresh), so its answer is not thrown away.
+let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+let accessExpiresAt = 0;
+function dropAccessToken(): void {
+  if (!sessionActive) return;
+  sessionActive = false;
+  setSessionCredential(null);
+  emit({ unreachable: true });
 }
 
 function schedule(ms: number): void {
   clearTimeout(timer);
-  timer = setTimeout(() => void refreshNow(), ms);
+  timer = setTimeout(() => void refreshNow({ force: true }), ms);
 }
 
 export type RefreshResult = "ok" | "none" | "rejected" | "unreachable" | "superseded";
 
 let refreshing: Promise<RefreshResult> | null = null;
+// While the IdP is unreachable no caller (a burst of refused calls, the timer's neighbours) may ask
+// again before this instant: the backoff is global, not per caller. Only the user's own Retry and the
+// scheduled retry itself (force) go through.
+let notBefore = 0;
 
 // refreshNow trades the refresh token for new tokens. Concurrent callers (the timer, a 401 retry,
 // the Retry button) share one request: a refresh token is single use.
-export function refreshNow(): Promise<RefreshResult> {
-  return (refreshing ??= doRefresh().finally(() => (refreshing = null)));
+export function refreshNow({ force = false }: { force?: boolean } = {}): Promise<RefreshResult> {
+  if (refreshing) return refreshing;
+  if (!force && Date.now() < notBefore) return Promise.resolve("unreachable");
+  return (refreshing = doRefresh().finally(() => (refreshing = null)));
 }
 
 async function doRefresh(): Promise<RefreshResult> {
@@ -262,7 +302,9 @@ async function doRefresh(): Promise<RefreshResult> {
       emit({ error: "Your session has ended. Sign in again." });
       return "rejected";
     }
+    if (Date.now() >= accessExpiresAt) dropAccessToken();
     emit({ unreachable: true });
+    notBefore = Date.now() + backoff;
     schedule(backoff);
     backoff = Math.min(backoff * 2, 60_000);
     return "unreachable";
@@ -280,7 +322,7 @@ function readRefreshToken(): string | null {
 // Called once before the first render: a reload (refresh token in sessionStorage) is signed back in
 // before any page asks the server anything.
 export async function initSession(): Promise<void> {
-  if (getConfig().oidc && readRefreshToken()) await refreshNow();
+  if (getConfig().oidc && readRefreshToken()) await refreshNow({ force: true });
 }
 
 // Is the current credential an OIDC session whose access token a refresh could replace?
@@ -289,6 +331,8 @@ export const canRefresh = (): boolean => sessionActive && readRefreshToken() !==
 // Drops everything local: the credential (any kind), both tokens, the timer, a half-done login.
 function endLocal(): void {
   clearTimeout(timer);
+  clearTimeout(expiryTimer);
+  notBefore = 0;
   sessionActive = false;
   try {
     sessionStorage.removeItem(REFRESH_KEY);

@@ -3,7 +3,8 @@
 # Turns the operator's CONSOLE_* environment into the values the templates may use, and refuses
 # anything that could break out of them: the issuer ends up in /config.json and in the CSP, so it
 # has to look like a plain http(s) origin plus path, the client id like a plain identifier.
-# Anything unusable switches OIDC off (fail closed); it is never passed through.
+# Anything unusable stops the container (a misconfigured login must be noticed, not silently off);
+# nothing from a rejected value is ever rendered.
 #
 #   CONSOLE_OIDC_ISSUER      e.g. https://idp.example.com/dex   (empty = OIDC off)
 #   CONSOLE_OIDC_CLIENT_ID   the public client id               (empty = OIDC off)
@@ -13,22 +14,33 @@
 
 console_issuer=${CONSOLE_OIDC_ISSUER:-}
 console_client=${CONSOLE_OIDC_CLIENT_ID:-}
-console_ok=1
-[ -n "$console_issuer" ] && [ -n "$console_client" ] || console_ok=0
-if [ "$console_ok" = 1 ]; then
-  printf '%s' "$console_issuer" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$' || console_ok=0
-  printf '%s' "$console_client" | grep -Eq '^[A-Za-z0-9._~-]+$' || console_ok=0
-fi
-if [ "$console_ok" = 1 ]; then
-  CONSOLE_OIDC_ISSUER=$console_issuer
-  CONSOLE_OIDC_CLIENT_ID=$console_client
+
+console_refuse() {
+  echo "console-env: $1; refusing to start" >&2
+  exit 1
+}
+
+# Both or neither: an issuer without a client id (or the reverse) is half a login.
+if [ -n "$console_issuer$console_client" ]; then
+  [ -n "$console_issuer" ] && [ -n "$console_client" ] || console_refuse "CONSOLE_OIDC_ISSUER and CONSOLE_OIDC_CLIENT_ID must be set together"
+  # No control character at all (a newline would slip past a line-oriented grep and split the
+  # rendered JSON / CSP header); checked with a shell pattern, which sees the whole value.
+  case "$console_issuer$console_client" in
+    *[![:print:]]*) console_refuse "CONSOLE_OIDC_ISSUER / CONSOLE_OIDC_CLIENT_ID contain a control character" ;;
+  esac
+  case "$console_issuer" in
+    http://* | https://*) ;;
+    *) console_refuse "CONSOLE_OIDC_ISSUER must be an http(s) URL" ;;
+  esac
+  # One origin plus an optional path: no userinfo, query, fragment, quotes or spaces.
+  printf '%s' "$console_issuer" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$' || console_refuse "CONSOLE_OIDC_ISSUER is not a plain origin plus path"
+  printf '%s' "$console_client" | grep -Eq '^[A-Za-z0-9._~-]+$' || console_refuse "CONSOLE_OIDC_CLIENT_ID is not a plain identifier"
   CONSOLE_CSP_CONNECT_SRC="'self' $(printf '%s' "$console_issuer" | sed -E 's#^(https?://[^/]+).*#\1#')"
 else
-  [ -z "$console_issuer$console_client" ] || echo "console-env: CONSOLE_OIDC_ISSUER / CONSOLE_OIDC_CLIENT_ID are not both set and well formed; OIDC login stays off" >&2
-  CONSOLE_OIDC_ISSUER=
-  CONSOLE_OIDC_CLIENT_ID=
   CONSOLE_CSP_CONNECT_SRC="'self'"
 fi
+CONSOLE_OIDC_ISSUER=$console_issuer
+CONSOLE_OIDC_CLIENT_ID=$console_client
 if [ "${CONSOLE_API_KEY_LOGIN:-true}" = false ]; then CONSOLE_API_KEY_LOGIN=false; else CONSOLE_API_KEY_LOGIN=true; fi
 export CONSOLE_OIDC_ISSUER CONSOLE_OIDC_CLIENT_ID CONSOLE_API_KEY_LOGIN CONSOLE_CSP_CONNECT_SRC
-unset console_issuer console_client console_ok
+unset console_issuer console_client
