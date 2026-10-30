@@ -26,6 +26,8 @@ require (
 	connectrpc.com/otelconnect v0.12.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
+	github.com/MicahParks/jwkset v0.11.3 // indirect
+	github.com/MicahParks/keyfunc/v3 v3.8.2 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/Rican7/retry v0.3.1 // indirect
 	github.com/ThreeDotsLabs/watermill-redisstream v1.4.5 // indirect
