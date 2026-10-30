@@ -141,9 +141,9 @@
 - **登出**：清掉記憶體與 `sessionStorage` 的 token、停掉 refresh、generation 加一、使所有 query 失效，並回 `/login`。IdP 的 discovery 有 `end_session_endpoint` 才導過去，帶 `client_id` 與 `post_logout_redirect_uri=<console origin>/login`——**不帶 `id_token_hint`**（那是 URL 裡的 token；console 也不保留 id token）。Dex 沒有，所以本機只清本機。
 - **未綁定的身分**：任何 RPC 回 `PERMISSION_DENIED` + `x-error-code: auth.unbound_identity`（#272）就以 ClaimInvite 畫面取代頁面：一個「Claim invite」按鈕（request 是空的，issuer／sub／email 由 server 從驗過的 token 取，client 不送任何東西）。成功後所有 query 失效、進入 console；`invite.not_found`／`invite.expired`／`invite.already_claimed`／`invite.email_unverified`／`invite.email_mismatch`／`identity.already_bound` 顯示代碼與白話說明，可重試。可從該畫面登出。其他原因的 `PERMISSION_DENIED` 不是這條路。
 - **accounts UI（admin，`/accounts/$id`）**：
-  - **Invite**：用 email 發邀請（`CreateInvite`）；不寄信、沒有 secret，頁面說明對方要用該 email 登入再認領。本次造訪建立的邀請列在卡片裡（email、到期、單次）。
+  - **Invite**：用 email 發邀請（`CreateInvite`）；不寄信、沒有 secret，頁面說明對方要用該 email 登入再認領。建立後的邀請也會出現在 Sign-in bindings 的清單。
   - **Sessions**：顯示 `sessions_revoke_time`（或「Never revoked」）；「Revoke sessions」先確認，對話框明講這是「登出所有裝置」、不碰 IdP 的 refresh token、不是帳號遭盜用的處置（§11）。
-  - **Sign-in bindings**：後端現在有 `ListAccountIdentities`（#297），但 console 這一版**還沒接**（#289）；頁面如實寫「尚未顯示」，不假裝沒有綁定。未使用的邀請仍沒有列表 RPC。
+  - **Sign-in bindings**（#289）：`ListAccountIdentities`（admin only，不分頁）列出帳號綁定的 external identity（issuer、subject、綁定時間）與邀請（email、狀態 PENDING／CLAIMED／EXPIRED、到期）。只渲染 RPC 實際回傳且 contract 命名的欄位（邀請本來就沒有 token／secret，回應多出的欄位也不顯示）；這張卡在 `AdminGate` 之後，非 admin 不掛載、不呼叫。建立邀請後自動重抓。**不做**撤銷單一綁定／撤銷邀請（待 Sean 決定）。
   - `AssignRoles`（既有的「Save roles」）不變。
 
 ## 9. 第一個 admin（Q5）

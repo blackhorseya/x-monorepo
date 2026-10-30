@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { useEffect, useState } from "react";
-import { AccountStatus, ApiKeyStatus, type Account, type ApiKey, type Invite } from "@repo/proto/identity/v1/entity_pb";
+import { AccountStatus, ApiKeyStatus, InviteStatus, type Account, type ApiKey, type Invite } from "@repo/proto/identity/v1/entity_pb";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import { AdminGate } from "../components/admin";
 import { ConfirmButton } from "../components/confirm";
 import { useResetOnCredentialChange } from "../auth";
 import { identity } from "../client";
-import { accountQuery, apiKeysQuery, keys } from "../queries";
+import { accountIdentitiesQuery, accountQuery, apiKeysQuery, keys } from "../queries";
 import { ErrorAlert } from "../components/error-alert";
 import { Field } from "../components/field";
 import { AccountToggle, accountBadge, at, parseRoles } from "./accounts";
@@ -31,7 +31,7 @@ export function AccountPage() {
         </Link>
         <AccountCard id={id} />
         <InviteCard accountId={id} />
-        <BindingsCard />
+        <BindingsCard accountId={id} />
         <SessionsCard accountId={id} />
         <KeysCard accountId={id} />
       </div>
@@ -305,6 +305,7 @@ function NewKeyBody({ accountId, onDone }: { accountId: string; onDone: () => vo
 // there is no secret: the person signs in at the identity provider with that verified address and
 // claims it. The invites made here are kept for this visit only: no RPC lists them.
 function InviteCard({ accountId }: { accountId: string }) {
+  const qc = useQueryClient();
   const [email, setEmail] = useState("");
   const [made, setMade] = useState<Invite[]>([]);
   const create = useMutation({
@@ -312,6 +313,7 @@ function InviteCard({ accountId }: { accountId: string }) {
     onSuccess: (res) => {
       if (res.invite) setMade((m) => [res.invite!, ...m]);
       setEmail("");
+      return qc.invalidateQueries({ queryKey: keys.identities(accountId) });
     },
   });
   useResetOnCredentialChange(create);
@@ -355,17 +357,88 @@ function InviteCard({ accountId }: { accountId: string }) {
   );
 }
 
-// What the contract cannot show yet, said plainly instead of an empty table that looks like "none".
-function BindingsCard() {
+const inviteBadge: Record<InviteStatus, "default" | "secondary" | "destructive" | "outline"> = {
+  [InviteStatus.UNSPECIFIED]: "outline",
+  [InviteStatus.PENDING]: "default",
+  [InviteStatus.CLAIMED]: "secondary",
+  [InviteStatus.EXPIRED]: "destructive",
+};
+
+// Sign-in bindings (IdentityService.ListAccountIdentities, admin only; this page is behind AdminGate, so a
+// non-admin never mounts it and never asks): the external identities (issuer, subject) bound to the
+// account and its invites with their status. Only the fields the contract names are rendered: there
+// is no token or secret in the reply, and none is read.
+function BindingsCard({ accountId }: { accountId: string }) {
+  const list = useQuery(accountIdentitiesQuery(accountId));
+  const identities = list.data?.identities ?? [];
+  const invites = list.data?.invites ?? [];
   return (
     <Card>
       <CardHeader>
         <CardTitle>Sign-in bindings</CardTitle>
         <CardDescription>
-          The identity-provider sign-ins (issuer and subject) bound to this account are not shown in the console yet, and neither are the invites
-          still open. An invite made on this page is listed above until you leave it.
+          Who can sign in as this account: the identity-provider sign-ins (issuer and subject) bound to it, and its invites. Newest first.
         </CardDescription>
       </CardHeader>
+      <CardContent className="grid gap-4">
+        {list.isError && <ErrorAlert error={list.error} />}
+        {list.isSuccess && (
+          <>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Issuer</TableHead>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Bound</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {identities.map((i) => (
+                  <TableRow key={`${i.issuer}\n${i.subject}`} data-testid="identity-row">
+                    <TableCell className="font-mono text-xs">{i.issuer}</TableCell>
+                    <TableCell className="font-mono text-xs">{i.subject}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{at(i.bindTime)}</TableCell>
+                  </TableRow>
+                ))}
+                {identities.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center text-muted-foreground">
+                      No sign-ins bound yet
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Invite for</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Expires</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {invites.map((i) => (
+                  <TableRow key={i.id} data-testid="invite-row">
+                    <TableCell>{i.email}</TableCell>
+                    <TableCell>
+                      <Badge variant={inviteBadge[i.status]}>{InviteStatus[i.status]}</Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{at(i.expireTime)}</TableCell>
+                  </TableRow>
+                ))}
+                {invites.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center text-muted-foreground">
+                      No invites yet
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </>
+        )}
+      </CardContent>
     </Card>
   );
 }

@@ -35,6 +35,7 @@ export const keys = {
   accounts: ["accounts"] as const,
   account: (id: string) => ["account", id] as const,
   apiKeys: (accountId: string) => ["api-keys", accountId] as const,
+  identities: (accountId: string) => ["account-identities", accountId] as const,
 };
 
 // The build never changes while a tab is open; refetch only on a reload or
@@ -277,6 +278,19 @@ export const accountQuery = (id: string) =>
         if (isNotFound(err)) return null;
         throw err;
       }
+    },
+    staleTime: LIST_STALE_MS,
+  });
+
+// Who can sign in as one account: its bound external identities and its invites (any status), one
+// response, no paging. Admin only on the server; only the admin account pages ask for it. The reply
+// carries no secret (an invite has none), and the page shows only the fields it names.
+export const accountIdentitiesQuery = (accountId: string) =>
+  queryOptions({
+    queryKey: keys.identities(accountId),
+    queryFn: async () => {
+      const res = await identity.listAccountIdentities({ accountId });
+      return { identities: res.identities, invites: res.invites };
     },
     staleTime: LIST_STALE_MS,
   });

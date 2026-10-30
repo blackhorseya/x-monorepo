@@ -61,7 +61,6 @@ test("admin: identities (issuer, subject, when bound) and invites (email, status
   await expect(invites.filter({ hasText: "pending@example.com" })).toContainText("PENDING");
   await expect(invites.filter({ hasText: "claimed@example.com" })).toContainText("CLAIMED");
   await expect(invites.filter({ hasText: "old@example.com" })).toContainText("EXPIRED");
-  for (const row of [identity, invites]) await expect(row).not.toContainText(/SECRET/);
   await expect(page.locator("body")).not.toContainText("SECRET");
 });
 
