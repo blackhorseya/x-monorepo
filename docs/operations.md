@@ -253,6 +253,33 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 | NetworkPolicy（`networkPolicy.enabled`，預設 off） | 每個 Deployment 一張、只管 ingress（egress 不碰：DB / Redis / collector 在哪是 cluster 的事）。rpc 永遠放行同 release 的 console pod，加上 `networkPolicy.rpc.ingressFrom`（NetworkPolicyPeer list；**空 = 該 port 對任何來源開**，要收緊就列 ingress controller 與 Prometheus 的 namespace）；worker 不收任何 ingress；console 同一套 `console.ingressFrom`。要 CNI 真的實作 NetworkPolicy 才有效，kind 預設的 kindnet 不會，所以 helm-kind 驗不了，check.py 驗形狀 |
 | worker autoscaling | replica 共用 `consumer_group` 就是分工，但 handler 是 DB-bound，CPU 低時 lag 照樣長，所以 `worker.autoscaling.metric` 預設 `lag`：KEDA `ScaledObject` 用 Prometheus trigger 查 `max(eventbus_consumer_lag{consumer_group=~"<group>\\..*"})`（gauge 是 per replica，取 max 不 sum；要 `config.otel.endpoint`，否則拒絕 render）；沒 KEDA 的 cluster 用 `metric: cpu` 出普通 HPA。實測踩到的三件事都做成 render 時就擋：`lag.prometheusAddress` 要 `http://<svc>.<ns>.svc:<port>`（KEDA operator 從**它自己的** namespace 解析，裸 Service 名不通）；`minReplicas` 必須 ≥ 1（lag gauge 是 worker 自己報的，0 個 replica 就沒人報）；`pollingInterval` / `cooldownPeriod` 只對 scale-to-zero 有效，縮回去的節奏是 HPA 的 `behavior.scaleDown`（預設 stabilization 300s，`worker.autoscaling.behavior` 透傳） |
 
+**migration 的鎖與前置查詢（inventory `0009`，SKU 1–64 bytes）**：`0009_stocks_sku_length` 對 `inventory.stocks` 加 `CHECK (octet_length(sku) BETWEEN 1 AND 64)`，單一 `ADD CONSTRAINT`（沒有 `NOT VALID` / `VALIDATE`：migration 在**一個交易**裡跑，取得的 ACCESS EXCLUSIVE lock 本來就持有到 commit，拆成兩句不會減少持鎖）。`ALTER TABLE` 取 **ACCESS EXCLUSIVE lock 並持有到整個 migration commit**，驗證所有既有列的整表掃描也在這把鎖底下：`inventory.stocks` 的**讀與寫**（GetStock / ListStocks / SetStock / reserve / release / commit / expire）都會等到 migration 結束，不只是寫入。stocks 每個 SKU 一筆，表預期很小，掃描是短暫的；列數很大才需要排維護窗口（與下面 ordering `0008` 同理，窗口要涵蓋讀流量）。順序：先 migrate 再升 rpc（chart 的 `pre-upgrade` hook 已保證）。
+
+**部署前**先在 inventory 的資料庫查有沒有超長（或空）的 SKU，**這是必要步驟**；有列就不要啟動 migrate：
+
+```sql
+SELECT sku, octet_length(sku) AS bytes, on_hand, reserved FROM inventory.stocks
+WHERE octet_length(sku) NOT BETWEEN 1 AND 64;
+```
+
+沒有列 = migration 直接過。這個查詢與 migration 之間仍有 race：查完到 migrate 取得鎖之前，若有人用舊版 rpc 寫進超長 SKU，migration 還是會失敗；所以查詢要緊接在 migrate 之前，且 rpc 先升級到會擋超長 SKU 的版本（proto `max_len` 與 `stock.New` 一起擋）或先擋掉 `SetStock`。
+
+**查過不等於不會 dirty，dirty recovery 永遠要備好**：查詢回 0 筆之後，仍可能有寫入在 migrate 取得鎖之前插入超長 SKU（上面的 race）；略過前置查詢直接跑 migrate 當然也一樣。遇到時 `ADD CONSTRAINT` 報 `violates check constraint`，語句是原子的所以**不會留下 constraint**，但 golang-migrate 在執行前就已把 `inventory.schema_migrations` 標成 `version=9, dirty=true`，之後每次 `migrate up` 都拒絕（`Dirty database version 9`）。處理（版本卡在 9 dirty、沒有 CHECK）：
+1. 這些 SKU 本來就不能下單（catalog 不收 > 64 bytes），先確認 `reserved = 0`，且沒有 RESERVED 的 reservation 指著它：`SELECT l.order_id, l.sku FROM inventory.reservation_lines l JOIN inventory.reservations r USING (order_id) WHERE r.status = 'RESERVED' AND octet_length(l.sku) NOT BETWEEN 1 AND 64;`；有列就先讓那些訂單走完（COMPLETED / CANCELLED / EXPIRED），不要直接刪庫存。
+2. 刪除或改名那些列（`DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`，刪之前把查詢結果存起來）。
+3. 重設版本再重跑：`UPDATE inventory.schema_migrations SET version = 8, dirty = false;`，然後 `task migrate -- up`。這個 reset 只適用於上面這種「`0009` 失敗後 dirty」的狀態，不是任意 dirty 版本的通用解（只是不想升級而要退掉時，直接用下面的 Rollback，同一段 SQL 在這個狀態也成立）。
+
+**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：catalog、identity、inventory、ordering），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行。兩種狀態用同一段 SQL：9 clean（CHECK 存在）會移除 CHECK 並退回 8；9 dirty（`0009` 失敗，沒有 CHECK）`IF EXISTS` 讓 DROP 略過，只把版本設回 8 clean（超長的列仍在，要再 migrate 先照上面第 1–2 步處理）：
+
+```sql
+BEGIN;
+ALTER TABLE inventory.stocks DROP CONSTRAINT IF EXISTS stocks_sku_length;
+UPDATE inventory.schema_migrations SET version = 8, dirty = false;
+COMMIT;
+```
+
+這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，兩種狀態（9 clean、9 dirty 且無 CHECK）都驗證 catalog / identity / ordering 的版本、schema 與資料不動。
+
 **migration 的鎖（ordering `0008`，`CreateOrder` 冪等）**：`0008_order_idempotency` 對 `ordering.orders` 加兩個 nullable 欄位（不重寫表、不回填），再建 partial unique index（`CREATE UNIQUE INDEX`，不是 `CONCURRENTLY`——migration 在**一個交易**裡跑）。`ALTER TABLE` 取 **ACCESS EXCLUSIVE lock 並持有到整個 migration commit**，建 index 的整表掃描也在這把鎖底下：`ordering.orders` 的**讀與寫**（GetOrder / ListOrders / CreateOrder / Cancel / Complete / Confirm）都會等到整個 migration 結束，不只是寫入；讀流量照進來會逾時。表小（本機、staging）是毫秒級，可忽略；**大表請排維護窗口，且窗口要涵蓋讀流量**（先把 rpc / worker `kubectl scale` 到 0 或擋掉流量，再讓 migrate hook 跑）。順序：先 migrate 再升 rpc（chart 的 `pre-upgrade` hook 已保證）；舊 rpc 不認識新欄位也不寫它們，新 rpc 對 NULL 的列照舊，所以 rolling upgrade 期間兩種版本可並存。回滾：`migrate down` 一步會丟掉 key 與 hash（已記住的冪等保護隨之消失，訂單不受影響）；`down` 同樣在一個交易裡取 ACCESS EXCLUSIVE。
 
 **identity bootstrap（在操作者本機跑，不要在叢集裡跑）**：secret 是 `worker bootstrap` 的 stdout，叢集裡任何 Pod（Job、`kubectl run`、`kubectl exec`）的 stdout 都會進 Pod log，也可能被 log collector 收走——所以只在你自己的 terminal 跑，經 port-forward 連 DB。chart 本身沒有 Postgres（`secrets.postgresUrl` 指到哪就是哪；kind 的 `deps.yaml` 才有 Service `postgres`），`<fullname>` 是 chart 的 fullname（release `api` 就是 `api-x-monorepo`），`<release-ns>` 是 release 裝的 namespace（跟 `<db-ns>` 不一定同一個）：

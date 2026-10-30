@@ -359,6 +359,7 @@ components:
         sku:
           type: string
           title: sku
+          maxLength: 64
           minLength: 1
         onHand:
           type: integer

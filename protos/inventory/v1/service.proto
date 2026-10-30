@@ -37,7 +37,10 @@ service InventoryService {
 }
 
 message SetStockRequest {
-  string sku = 1 [(buf.validate.field).string.min_len = 1];
+  string sku = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
   int32 on_hand = 2 [(buf.validate.field).int32.gte = 0];
 }
 

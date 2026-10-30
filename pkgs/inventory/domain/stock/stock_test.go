@@ -2,6 +2,7 @@ package stock_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,5 +163,40 @@ func TestRelease(t *testing.T) {
 	}
 	if s.Reserved() != 0 || s.Available() != 5 || !s.UpdatedAt().Equal(later) {
 		t.Fatalf("reserved=%d available=%d", s.Reserved(), s.Available())
+	}
+}
+
+// A SKU is 1–64 bytes, the same rule as catalog's Product: a longer one could be
+// stocked here but never ordered (order.unknown_sku). Bytes, not characters.
+func TestNew_SKULength(t *testing.T) {
+	cases := map[string]struct {
+		sku string
+		ok  bool
+	}{
+		"1 byte":                          {"A", true},
+		"64 bytes":                        {strings.Repeat("a", 64), true},
+		"65 bytes":                        {strings.Repeat("a", 65), false},
+		"21 chars of 3 bytes = 63":        {strings.Repeat("中", 21), true},
+		"22 chars of 3 bytes = 66":        {strings.Repeat("中", 22), false},
+		"64 chars but more than 64 bytes": {strings.Repeat("é", 64), false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := stock.New(stock.SKU(tc.sku), 1, now)
+			if tc.ok && err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, stock.ErrInvalidSKU) {
+				t.Fatalf("err = %v, want ErrInvalidSKU", err)
+			}
+		})
+	}
+}
+
+// Reads stay lenient: rows that predate the rule must still load (the migration, not
+// Reconstitute, is the guard for old data).
+func TestReconstitute_LongSKUStillLoads(t *testing.T) {
+	if _, err := stock.Reconstitute(stock.ReconstituteParams{SKU: stock.SKU(strings.Repeat("a", 65)), OnHand: 1, UpdatedAt: now}); err != nil {
+		t.Fatalf("err = %v, want nil", err)
 	}
 }

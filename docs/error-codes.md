@@ -37,7 +37,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `order.mixed_currency` | `INVALID_ARGUMENT` | ordering domain（`CreateOrder`） | 同一張單的行落在兩種幣別（每個 product 各自的幣別，一張單只能一種）；沒寫入 |
 | `order.idempotency_key_reused` | `ALREADY_EXISTS` | ordering domain（`CreateOrder`） | 同一個 customer 的 `idempotency_key` 已用在**內容不同**的請求上（items 的 sku / quantity / **順序**任一不同；價格不是請求內容，是 catalog 的）；沒寫入、沒發 event。訊息固定，不帶訂單、items、key；要換 key 才能下新單。內容相同的重送不是錯誤，回原訂單 |
 | `order.idempotency_conflict` | （不到 rpc） | ordering repo（`Save`） | 新單的 (customer, key) 被別人先佔了：use case 接住、回讀勝出的那筆再決定回放或 `order.idempotency_key_reused`；`INTERNAL` Kind 只是保險，正常不會到 `ToConnectError` |
-| `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數 |
+| `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數；`stock.invalid_sku` = SKU 空或超過 64 **bytes**（與 catalog 同規則；超過 64 字元的請求先被 proto 擋成 `request.validation_failed`，64 字元以內但超過 64 bytes 的多位元組 SKU 才走這個 code） |
 | `stock.below_reserved` | `FAILED_PRECONDITION` | inventory domain | SetStock 想把 on-hand 壓到低於已 reserved |
 | `stock.release_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Release 超過 reserved |
 | `stock.commit_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Commit 超過 reserved（stock 列與 reservation 不一致：資料壞了） |
