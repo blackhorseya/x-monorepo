@@ -889,7 +889,7 @@ pb_fake="$tmp/fake-dex-token.sh"
 cat > "$pb_fake" <<'FAKE'
 #!/usr/bin/env bash
 echo "$1" >> "$PB_TOKEN_CALLS"
-echo "tok-secret-$1"
+if [ -n "${PB_TOKEN_PLAIN:-}" ]; then echo "tokplain$(printf %s "$1" | tr -c 'a-z0-9' x)"; else echo "tok-secret-$1"; fi
 FAKE
 chmod +x "$pb_fake"
 # pb_up <name> [VAR=value...]: starts a stub (extra env for it); sets pb_dir, pb_url.
@@ -994,6 +994,22 @@ done
 pb_up refl2 STUB_REFLECT=lowerkey123
 pb_run ADMIN_API_KEY=lowerkey123
 if printf '%s' "$out" | grep -qF -- lowerkey123; then bad "dex-prebind: output echoes a whitelist-shaped key"; else ok; fi
+# the credential the server really received, echoed back as code and/or x-error-code, in a shape the
+# code whitelist would accept: the raw bearer token (not "Bearer <token>") and the raw API key
+for where in code header both; do
+  pb_up reflbearer STUB_REFLECT_AUTH=$where STUB_REFLECT_ON=ClaimInvite
+  pb_run PB_TOKEN_PLAIN=1
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a reflected bearer ($where) must fail the run"; fi
+  if printf '%s' "$out" | grep -qF -- tokplain; then bad "dex-prebind: output echoes the reflected bearer token ($where)"; else ok; fi
+  refl_out="$refl_out
+$out"
+  pb_up reflkey STUB_ADMIN_KEY=lowerkey123 STUB_REFLECT_AUTH=$where STUB_REFLECT_ON=ListAccounts
+  pb_run ADMIN_API_KEY=lowerkey123
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a reflected API key ($where) must fail the run"; fi
+  if printf '%s' "$out" | grep -qF -- lowerkey123; then bad "dex-prebind: output echoes the reflected API key ($where)"; else ok; fi
+  refl_out="$refl_out
+$out"
+done
 # an ordinary error keeps its (whitelisted) code
 pb_up plain
 pb_run ADMIN_API_KEY=xk_wrong-key-secret
@@ -1052,7 +1068,7 @@ $bad_key_out
 $fail_out
 $refl_out
 $out"
-for secret in "$pb_key" xk_wrong-key-secret tok-secret-; do
+for secret in "$pb_key" xk_wrong-key-secret tok-secret- tokplain lowerkey123; do
   if printf '%s' "$all_out" | grep -qF -- "$secret"; then bad "dex-prebind: output leaks [$secret]"; else ok; fi
 done
 
