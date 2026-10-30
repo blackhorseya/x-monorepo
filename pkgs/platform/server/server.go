@@ -67,7 +67,7 @@ type Server struct {
 // the caller to a contextx.Principal; the timeout (limits.go, cfg.Timeout)
 // bounds the rest; plain HTTP routes (docs, openapi) get spans from otelgin,
 // which skips RPC prefixes, the probes and /api/metrics so nothing is traced twice.
-func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers, resolver CredentialResolver) (*Server, error) {
+func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers, resolver CredentialResolver, oidcAuth OIDCAuth) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	// Connect routes are "/<pkg>.<Service>/" prefixes; a procedure is the next segment.
@@ -88,7 +88,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if err != nil {
 		return nil, err
 	}
-	authn, err := NewAuthInterceptor(auth, tel.Meter, resolver)
+	authn, err := NewAuthInterceptor(auth, tel.Meter, resolver, oidcAuth)
 	if err != nil {
 		return nil, err
 	}

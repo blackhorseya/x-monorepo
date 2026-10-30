@@ -106,7 +106,7 @@ func TestPruneRPC(t *testing.T) {
 
 	auth := config.Auth{Mode: config.AuthRequired, AdminRole: "admin", APIKeys: "ops=ops-key-0123456789abcdef:admin, viewer=viewer-key-0123456789"}
 	svc := admin.NewPoisonService(db, auth, []string{"prunea", "pruneb"})
-	srv, err := server.New(config.HTTP{Addr: ":0"}, auth, tel.Logger, []server.Route{svc}, nil, nil, tel, nil)
+	srv, err := server.New(config.HTTP{Addr: ":0"}, auth, tel.Logger, []server.Route{svc}, nil, nil, tel, nil, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
