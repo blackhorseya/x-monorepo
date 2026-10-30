@@ -186,7 +186,7 @@ func TestInventory0009Rollback_FromDirtyFailedUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = conn.Close(c) }()
+	t.Cleanup(func() { _ = conn.Close(c) }) // registered first, so it runs after the cleanup below
 	t.Cleanup(func() {
 		ctx := context.Background()
 		_, _ = conn.Exec(ctx, `TRUNCATE inventory.stocks CASCADE`)
