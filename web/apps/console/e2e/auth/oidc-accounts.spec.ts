@@ -37,12 +37,16 @@ test("admin: create an invite for an email — shown with its 7-day expiry, noth
   await expect(made).toContainText(/single use|once/i);
   await expect(page.getByLabel("Invite email")).toHaveValue("");
 
-  // A second one is listed too; the page says what it cannot show.
+  // A second one is listed too, and both show up in the bindings card straight from the server.
   await page.getByLabel("Invite email").fill("sam@example.com");
   await page.getByRole("button", { name: "Create invite" }).click();
   await expect(page.getByTestId("invite-made")).toHaveCount(2);
   await expect(title(page, "Sign-in bindings")).toBeVisible();
-  await expect(page.getByText(/not shown in the console yet/i)).toBeVisible();
+  const invites = page.getByTestId("invite-row");
+  await expect(invites).toHaveCount(2);
+  await expect(invites.filter({ hasText: "pat@example.com" })).toContainText("PENDING");
+  await expect(invites.filter({ hasText: "sam@example.com" })).toContainText("PENDING");
+  await expect(page.getByText("No sign-ins bound yet")).toBeVisible();
 });
 
 test("an invalid invite email is refused by the server and shown", async ({ page }) => {
