@@ -111,7 +111,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 
 | 檔 | 內容 |
 |---|---|
-| [`docs/perf-baseline.md`](docs/perf-baseline.md) | 效能 baseline：`task k6-bench` 的重跑方法與 CreateOrder / reservation 的實測數字（不進 CI） |
+| [`docs/perf-baseline.md`](docs/perf-baseline.md) | 效能 baseline：`task k6-bench` 的重跑方法與 CreateOrder / reservation 的實測數字（不進 CI；乾淨環境用 `k6-bench` workflow_dispatch 取得） |
 | [`docs/ci.md`](docs/ci.md) | gates：hooks / lefthook / CI 各跑什麼、CI 的 job 與依路徑的 gating、相關 scripts |
 | [`docs/release.md`](docs/release.md) | release-drafter + goreleaser 的 release 鏈、release gate、簽名 / attestation 與驗證 |
 | [`docs/operations.md`](docs/operations.md) | Compose 本機環境（Grafana dashboards / alerts）、k6 load test、Helm 部署與 kind 實測 |

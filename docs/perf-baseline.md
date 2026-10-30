@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-之後優化 CreateOrder 或 reservation batching 時的對照組（#263）。`tests/k6/orders.js` / `reservation.js` 是功能與閾值的 smoke，沒有可比較的數字；這裡是固定參數、跑 N 次、有離散程度的量測。**不進 PR 的 CI gate**（shared runner 的數字是雜訊）。
+之後優化 CreateOrder 或 reservation batching 時的對照組（#263）。`tests/k6/orders.js` / `reservation.js` 是功能與閾值的 smoke，沒有可比較的數字；這裡是固定參數、跑 N 次、有離散程度的量測。**不進 PR 的 CI gate**（shared runner 的數字是雜訊）；要在乾淨環境取得 valid 數字，手動派送 `k6-bench` workflow（見下方「在 GitHub runner 上跑」）。
 
 > **下面的數字量測於 server 定價之前**（#267 以前，CreateOrder 的單價由呼叫端給）。之後 `CreateOrder` 每張單多一次 catalog 批次查價（同一個 process、同一個 transaction），`bench.js` 的 setup 也多一步 `UpsertProduct`：這些數字不能當作現在的對照組，要重跑 `task k6-bench` 取代它們（尚未重跑）。
 
@@ -27,6 +27,29 @@ RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變�
 - 輸出：`result.json`（機器可讀：每個指標的 median / min / max / CV / 各 run 數值，加上 commit、Go / Postgres / k6 版本、CPU、OS、每個 attempt 的 load 取樣統計與是否 valid、參數）、`summary.md`、以及每個 attempt 的 k6 `--summary-export`、load 取樣 csv 與 log。
 - API key：腳本送一把假 key（auth off 會忽略），`bench.sh` 結束時 grep 輸出目錄所有檔案，找到就整個 bench 失敗；k6 腳本沿用 `lib.js` 的規則（不印 body / URL，`systemTags` 不含 `url`、`error`）。
 - 量測工具本身的測試：`task k6-bench-test`（報告定義與有效性/對帳的單元測試、drain 起算時間（fake psql）、對 stub server 的 fixture：seed 可重現、端到端延遲含 CreateOrder、吞吐不被 setup 稀釋、被中斷的 reservation 不會悄悄通過、sentinel 資料庫不會被 drop）；不進 CI。
+
+## 在 GitHub runner 上跑（#280）
+
+共用開發機拿不到 valid 數字（見下方 attempt 清單），所以有一個只靠 `workflow_dispatch` 觸發的 workflow：`.github/workflows/k6-bench.yml`，在乾淨的 GitHub-hosted `ubuntu-latest` 上跑**同一個** `task k6-bench`。不進 PR / main 的 check，不自動寫回任何東西。
+
+```bash
+GH_CONFIG_DIR=… gh workflow run k6-bench.yml --repo blackhorseya/x-monorepo --ref main   # 或 Actions 頁 → k6-bench → Run workflow
+gh run list --workflow k6-bench.yml --repo blackhorseya/x-monorepo --limit 3
+gh run download <run-id> --repo blackhorseya/x-monorepo -n k6-bench-<run-id>-1            # 原始檔 + summary
+```
+
+- **沒有 input**：有效性規則（`MAX_LOAD_PER_CORE` 1.0、`RUNS` 3、`MAX_ATTEMPTS` 6、負載參數）就是被派送的那個 commit 上 `tests/k6/bench.sh` 的預設值，workflow 不能放寬它。要換參數＝改腳本＝走 PR。`ref` 要選你想量的 commit；run 頁與 `runner.txt` 都會記 SHA。
+- Postgres 是同一台 runner 上的 `postgres:16-alpine` service container（load average 也算它）；`k6`、`psql`、`python3` 在 runner 上。同一時間只跑一個（`concurrency: k6-bench`）。
+- **判讀 run 狀態**（`task --exit-code` 把 `bench.sh` 的 exit code 原樣交給 `scripts/k6-bench-verdict.sh`；Task 預設會把任何失敗轉成 201，所以不能省；job 綠 = 工具判定 valid，其餘一律紅，不會有「綠但無效」）：
+
+  | 結果 | 意思 | 該怎麼做 |
+  |---|---|---|
+  | job 綠，`verdict.txt` = `VALID` | `bench.sh` exit 0：有 `RUNS` 個 valid attempt | 取 artifact 的 `result.json` / `summary.md`，開另一支 docs PR 更新「Baseline」 |
+  | job 紅，`verdict.txt` = `INVALID: NOT A VALID BASELINE` | `bench.sh` exit 3：valid attempt 不足 `RUNS`；summary 最上面也有同樣的 banner | **照實記錄，不寫入 baseline**；可在清單加一列 run URL + 每個 attempt 的 load 最大值。可再派送一次，但「再跑到過為止」要先講好上限，不要事後挑 |
+  | job 紅，`verdict.txt` = `INVALID: bench.sh failed (exit N)` | 量測本身壞了（對帳失敗、API key 洩漏檢查、rpc / worker 起不來…） | 看 `bench.log`，修工具，不是 baseline |
+
+- **artifact**（`k6-bench-<run-id>-<attempt>`，保留 90 天；invalid 也會上傳）：`runner.txt`（run URL、commit、runner 名稱 / image 版本、核心數、CPU、記憶體、kernel、Go / k6 / psql 版本、開跑時的 load）、`verdict.txt`、`bench.log`、`summary.md`、`result.json`，以及每個 attempt 的 `run<n>-load.csv`（每 5 秒一筆 1 分鐘 load average）、`run<n>-create.json` / `run<n>-reserve.json`（k6 `--summary-export`）和 rpc / worker / k6 log。`result.json` 的 `attempts` 逐個列出 load 取樣統計與 valid 判定；valid 的 attempt 才進統計，invalid 的留著但不算。
+- **把 valid 結果寫回 docs**：另開 docs PR（本 workflow 不做），把 `summary.md` 的數字放進「Baseline」，並註明 run URL、被量的 commit SHA、runner 規格（`runner.txt`）與 attempt 清單。GitHub-hosted runner 的規格與鄰居會變，所以這個數字只能和**同一類 runner、同參數**的下一次比較，不能拿來和開發機的數字比。
 
 ## Baseline
 
