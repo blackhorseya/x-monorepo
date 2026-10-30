@@ -79,6 +79,9 @@ var ProviderSet = wire.NewSet(
 	// adapters
 	rpc.NewIdentityService,
 	ProvideResolver,
+	ProvideIssuerMapping,
+	auth.NewExternalResolver,
+	auth.NewExternalCredentials,
 	cli.NewBootstrap,
 )
 
@@ -287,8 +290,22 @@ func ProvideProvisionExternalIdentity(accounts account.Repository, bindings exte
 	return decorateTx("identity.provision_external_identity", rec, tx, usecase.NewProvisionExternalIdentity(accounts, bindings, ids, clock))
 }
 
+// ProvideIssuerMapping reads each configured OIDC issuer's mapping (auth.oidc.issuers[].mapping);
+// an issuer it does not list is bound (fail-closed).
+func ProvideIssuerMapping(cfg config.Auth) port.IssuerMapping {
+	m := make(auth.StaticMapping, len(cfg.OIDC.Issuers))
+	for _, is := range cfg.OIDC.Issuers {
+		if is.EffectiveMapping() == config.MappingAutoProvision {
+			m[is.Issuer] = externalidentity.MappingAutoProvision
+		} else {
+			m[is.Issuer] = externalidentity.MappingBound
+		}
+	}
+
+	return m
+}
+
 // ProvideExternalIdentitySource is where ClaimInvite finds the caller's
-// verified external identity. Until the auth interceptor can verify OIDC
-// tokens (#272) there is none: ClaimInvite answers UNAUTHENTICATED. #272
-// replaces this provider with one that reads the interceptor's context value.
-func ProvideExternalIdentitySource() rpc.ExternalIdentitySource { return rpc.NoExternalIdentity{} }
+// verified external identity: the context value the auth interceptor sets for
+// a call that carried a verified OIDC token (none otherwise: UNAUTHENTICATED).
+func ProvideExternalIdentitySource() rpc.ExternalIdentitySource { return rpc.ContextExternalIdentity{} }

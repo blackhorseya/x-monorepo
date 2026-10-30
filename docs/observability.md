@@ -11,7 +11,7 @@
   `usecasex.Metrics` 記 `usecase.duration`（exposition：`usecase_duration_seconds{usecase, kind}`），
   `otelconnect` 產 `rpc.server.call.duration`，`contrib/instrumentation/runtime` 產 Go runtime metrics，
   auth interceptor 記 `auth.decisions`（`auth_decisions_total{result, method}`：`ok` / `public` / `anonymous` / `missing` / `invalid` × `api_key` / `jwt` / `none`——
-  RPC status 只會說 `unauthenticated`，分不出「沒帶」和「帶了被拒」；label 只有這兩個有限集合，沒有 subject）；
+  RPC status 只會說 `unauthenticated`，分不出「沒帶」和「帶了被拒」；label 只有這兩個有限集合，沒有 subject；OIDC 的 `method` 仍是 `jwt`：未綁定的身分放行 `ClaimInvite` 記 `ok`，被擋或其他拒絕記 `invalid`）；
   `auth.oidc` 開著時另有 `auth_jwks_fetch_total{issuer, result}`（`ok` / `error`）與 `auth_jwks_age_seconds{issuer}`（距上次成功抓 JWKS 的秒數，沒成功過就從啟動算起），alert `x-monorepo-auth-jwks-stale` 在超過 2 小時時觸發；issuer 來自設定，沒有高基數
 - **identity 的 key resolver**（`identity/adapters/auth`，`apps/rpc` 用注入的 MeterProvider 建）：
   `identity_resolver_lookups_total{result}`，result 只有五個值，一次 lookup 一定落在 `hit` 或 `miss`，`miss` 之後再落在 `db_ok` / `db_miss` / `error` 其中一個：

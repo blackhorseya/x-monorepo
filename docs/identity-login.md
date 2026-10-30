@@ -98,7 +98,7 @@
 - **account_id 與 roles 不放進 token**，也**不做** `roles_from: claim`。停用 account 與 `AssignRoles` 最慢 30 秒生效。
 - platform 不 import BC：platform 宣告 port，`identity` 的 `adapters/auth` 實作，`apps/rpc/wire.go` 用 `wire.Bind` 接（與 `CredentialResolver` 同模式）。
 
-**未綁定的身分**：token 合法但 `(iss, sub)` 沒有 account（`bound` 模式）→ **只能呼叫 `ClaimInvite`，其他一律 `PERMISSION_DENIED`**（interceptor 依 procedure 白名單擋，不是每個 handler 各自判斷）。
+**未綁定的身分**：token 合法但 `(iss, sub)` 沒有 account（`bound` 模式）→ **只能呼叫 `ClaimInvite`，其他一律 `PERMISSION_DENIED`**，`x-error-code: auth.unbound_identity`（interceptor 依 procedure 白名單擋，不是每個 handler 各自判斷；白名單由 identity BC 提供，platform 不寫死）。token 本身無效（簽章、`iss`、`aud`、過期）仍是 `UNAUTHENTICATED` `auth.invalid_credential`；帳號已停用、`iat` 早於 `sessions_revoked_at`、查 DB 失敗也是它（固定訊息，原因只進 log）。
 
 **關閉時**：`auth.oidc` 沒開，所有 Bearer 走既有 verifier，`method` label 仍只有 `api_key / jwt / none`。
 
@@ -172,7 +172,7 @@
 | 1 | #269 | `docs(identity)` | 本文件；`identity.md` 擴充路徑與 README 指標 |
 | 2 | #270 | `feat(platform)` | 多 issuer OIDC verifier + JWKS cache（§6 驗簽規則、§7）；§3 啟動檢查 |
 | 3 | #271 | `feat(identity)` | external identity 綁定、邀請、`ClaimInvite`、`sessions_revoked_at`、resolver、`bootstrap --admin-email` |
-| 4 | #272 | `feat(platform)` | interceptor 串接：verifier → resolver → Principal；未綁定只放行 `ClaimInvite` |
+| 4 | #272 | `feat(platform)` | interceptor 串接：verifier → resolver → Principal；未綁定只放行 `ClaimInvite`（已實作） |
 | 5 | #273 | `feat(console)` | PKCE 登入、邀請認領、accounts UI、撤銷 session UI |
 | 6 | #274 | `chore(dev)` | Dex（compose / kind）、E2E、Helm、runbook、dashboard（alert 已隨 PR 2 上線） |
 

@@ -14,6 +14,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
@@ -50,14 +51,14 @@ type ExternalIdentity struct {
 }
 
 // ExternalIdentitySource hands the handler the verified external identity of
-// the call, if the request carried one. The auth interceptor (#272) provides
-// the real one; until then NoExternalIdentity answers "none" and ClaimInvite
-// is UNAUTHENTICATED (fail-closed).
+// the call, if the request carried one: ContextExternalIdentity reads what the
+// auth interceptor verified. Without one ClaimInvite is UNAUTHENTICATED
+// (fail-closed); NoExternalIdentity is the source for a caller that has none.
 type ExternalIdentitySource interface {
 	ExternalIdentityFrom(c context.Context) (ExternalIdentity, bool)
 }
 
-// NoExternalIdentity is the source of a server with OIDC off: nobody has one.
+// NoExternalIdentity is the source that never has one (hand-built services in tests).
 type NoExternalIdentity struct{}
 
 func (NoExternalIdentity) ExternalIdentityFrom(context.Context) (ExternalIdentity, bool) {
@@ -388,4 +389,18 @@ func toProtoAPIKeyStatus(s string) identityv1.ApiKeyStatus {
 	default:
 		return identityv1.ApiKeyStatus_API_KEY_STATUS_UNSPECIFIED
 	}
+}
+
+// ContextExternalIdentity is the source of a server with OIDC on: the auth
+// interceptor verified the call's bearer token and put the identity in the
+// context. A call without one (API key, auth.jwt, anonymous) has none.
+type ContextExternalIdentity struct{}
+
+func (ContextExternalIdentity) ExternalIdentityFrom(c context.Context) (ExternalIdentity, bool) {
+	id, ok := contextx.ExternalIdentityFrom(c)
+	if !ok {
+		return ExternalIdentity{}, false
+	}
+
+	return ExternalIdentity{Issuer: id.Issuer, Subject: id.Subject, Email: id.Email, EmailVerified: id.EmailVerified}, true
 }

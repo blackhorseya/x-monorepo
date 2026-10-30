@@ -77,10 +77,10 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 ```bash
 scripts/dex-token.sh                      # admin@example.com 的 access token（JWT），stdout
 scripts/dex-token.sh user@example.com --id-token
-curl -H "Authorization: Bearer $(scripts/dex-token.sh)" http://localhost:8080/api/...   # 掛進 interceptor 之後（#272）
+curl -H "Authorization: Bearer $(scripts/dex-token.sh)" http://localhost:8080/api/...   # 需 auth.oidc.enabled；帳號要先綁定（見下），未綁定只能 ClaimInvite
 ```
 
-**帳號預先綁定（尚未提供，#274 part 2）**：`task bootstrap` 目前**不會**把這兩個 Dex 帳號綁進 identity。綁定只走真流程——`worker bootstrap --admin-email` 建 admin account 與邀請，Dex 登入後呼叫 `ClaimInvite`——而 `ClaimInvite` 在 auth interceptor 能驗 OIDC token 之前（#272）一律回 `UNAUTHENTICATED`，所以現在領不了。刻意不加直接寫 `external_identities` 的 CLI（那會繞過 `CreateInvite` / `ClaimInvite`，是身分邊界上的後門）。part 2 等 #272 之後，用 `scripts/dex-token.sh` 走完 bootstrap → 邀請 → 領取，並和 Playwright OIDC 登入 E2E 一起做。
+**帳號預先綁定（尚未提供，#274 part 2）**：`task bootstrap` 目前**不會**把這兩個 Dex 帳號綁進 identity。綁定只走真流程——`worker bootstrap --admin-email` 建 admin account 與邀請，Dex 登入後呼叫 `ClaimInvite`——`ClaimInvite` 現在可以領（#272：auth interceptor 驗 OIDC token，未綁定的身分只能呼叫它）。刻意不加直接寫 `external_identities` 的 CLI（那會繞過 `CreateInvite` / `ClaimInvite`，是身分邊界上的後門）。part 2 等 #272 之後，用 `scripts/dex-token.sh` 走完 bootstrap → 邀請 → 領取，並和 Playwright OIDC 登入 E2E 一起做。
 
 **名稱怎麼解析**——三個地方都必須看到同一個 issuer 字串，所以不能改寫成 `localhost` 或 service 名：
 
@@ -232,7 +232,7 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 | prune CronJob | `worker prune --older-than <prune.olderThan>`（預設 720h、每天一次、`concurrencyPolicy: Forbid`）；`prune.forgetGroups` 對應 `--forget-group`。alert「retention overdue」的 45d 是 720h 的 1.5×，改一個要一起改 |
 | expire CronJob | `worker expire --older-than <expire.olderThan>`（預設 24h、每 15 分鐘、`Forbid`）：reservation TTL，RESERVED 超過就還庫存 + 請 ordering 取消。alert「expiry overdue」的 36h 是 24h 的 1.5×，改一個要一起改；dry run / 小量跑走 `InventoryService.ExpireReservations`（console Expire 頁，要 admin role） |
 | identity bootstrap（不在 chart 裡） | 第一個 account + API key：在**操作者本機**跑一次 `worker bootstrap`，經 `kubectl port-forward` 連 release 的 DB，secret 只印在你自己的 terminal 一次（做法見下面「identity bootstrap」）；**不要在叢集裡跑**——Pod 的 stdout 會進 Pod log、也可能被 log collector 收走。config `auth.api_keys` 留作 break-glass。已有 account 就是 no-op，但不要同時跑兩個 |
-| auth.oidc（`config.auth.oidc`） | 外部 OIDC 登入的 values，原樣進 ConfigMap：`enabled`（預設 `false`，關著時整段不讀）、`issuers[]`（`issuer` https、`audience`＝我們的 client id、`mapping` `bound`\|`auto_provision`、dev 才用的 `allow_insecure_issuer`）。**chart 不含 IdP**——Keycloak / Auth0 / Entra 自備；Dex 只在 kind（`deployments/helm/kind/dex.yaml`，見「Dex dev IdP」）。`auth.jwt` 也有設時，`auth.jwt.issuer` 要釘住且不得等於任一 OIDC issuer，否則 Pod 起不來。list 不能用 env 覆蓋，只能寫在 values。這一版 verifier 還沒掛進 interceptor（#272） |
+| auth.oidc（`config.auth.oidc`） | 外部 OIDC 登入的 values，原樣進 ConfigMap：`enabled`（預設 `false`，關著時整段不讀）、`issuers[]`（`issuer` https、`audience`＝我們的 client id、`mapping` `bound`\|`auto_provision`、dev 才用的 `allow_insecure_issuer`）。**chart 不含 IdP**——Keycloak / Auth0 / Entra 自備；Dex 只在 kind（`deployments/helm/kind/dex.yaml`，見「Dex dev IdP」）。`auth.jwt` 也有設時，`auth.jwt.issuer` 要釘住且不得等於任一 OIDC issuer，否則 Pod 起不來。list 不能用 env 覆蓋，只能寫在 values。開著時 auth interceptor 用 verifier 驗 Bearer、再以 `(iss, sub)` 對應 account（未綁定只能 `ClaimInvite`，見 `docs/identity.md`「外部身分綁定」） |
 | HPA / PDB / Ingress | rpc：CPU HPA（開了就不 render `replicas`、要有 `resources.requests.cpu`）、PDB 只在可能 >1 replica 時 render、Ingress 走 HTTP/1.1（Connect / gRPC-Web），原生 gRPC 要另外 h2c |
 | console Deployment（`console.enabled`，預設 off） | `web/apps/console` 的 nginx image：唯一的 env 是 `RPC_UPSTREAM=http://<release>-rpc:<rpc.service.port>`（chart 算出來），**沒有** `APP_CONFIG`、沒有 Secret——nginx 看不到 Postgres URL 和 API key，auth 開著時使用者在 console 的 Credential 對話框貼自己的 key / JWT；probe 打 nginx 自己的 `/healthz`（rpc 的健康是 rpc probe 的事）；同一組 `podSecurityContext`（uid 65532、read-only rootfs）+ `/tmp` emptyDir 就夠。自己的 Service / Ingress（`console.ingress`，純 HTTP/1.1） |
 | ServiceMonitor（`rpc.serviceMonitor.enabled`，預設 off） | Prometheus Operator 抓 rpc Service 的 `http` port、path `/api/metrics`（gin route，auth 開著也不擋）；operator 靠 label 選 ServiceMonitor，`serviceMonitor.labels` 放它要的（kube-prometheus-stack 是 `release: <name>`）。只管 rpc——worker 沒 HTTP server，它的 metrics 只能走 `config.otel.endpoint` |
