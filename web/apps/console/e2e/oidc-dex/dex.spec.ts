@@ -2,7 +2,8 @@ import { expect, type Browser, type Page } from "@playwright/test";
 import { stubConfig } from "../auth/oidc";
 import { subject } from "../auth/helpers";
 import { uid } from "../uid";
-import { test, type TestRpc } from "./rpc";
+import { createServer } from "node:http";
+import { startRpc, test, type TestRpc } from "./rpc";
 
 // The console signing in through the REAL dev Dex (deployments/docker/dex/config.yaml, issuer
 // http://dex.localtest.me:5556/dex), against a real rpc whose only OIDC issuer is that Dex
@@ -129,4 +130,21 @@ test("a wrong password stays at Dex and never reaches the console", async ({
   await signInAtDex(page, "admin@example.com", "not-the-password");
   await expect(page.getByText(/invalid/i)).toBeVisible();
   expect(page.url()).toContain(ISSUER);
+});
+
+// The fixture's rpc is only used once it proves it is this attempt's process (rpc.ts): a listener that
+// took the port after it was picked and answers 200 to everything, readyz and WhoAmI included, is not it.
+test("a foreign listener on the rpc's port is not mistaken for the rpc", async () => {
+  const foreign = createServer((_, res) =>
+    res
+      .writeHead(200, { "content-type": "application/json" })
+      .end('{"subject":"root"}')
+  );
+  await new Promise<void>((resolve) => foreign.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = foreign.address() as { port: number };
+    await expect(startRpc(port)).rejects.toThrow(/not this rpc|exited with/);
+  } finally {
+    await new Promise((resolve) => foreign.close(resolve));
+  }
 });

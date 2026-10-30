@@ -1,10 +1,10 @@
-# The rpc of the "oidc-dex" project: auth required, one static admin key (to set accounts up), and
-# the dev Dex (deployments/docker/dex/config.yaml) as the only OIDC issuer. Port 18131 is
-# rpcPort + 40 in playwright.config.ts. The issuer is plain http on a non-loopback host, so
-# allow_insecure_issuer is needed (dev only; the same setting as deployments/helm/kind/values.yaml).
+# The rpc of the "oidc-dex" project (started per test by rpc.ts): auth required, and the dev Dex
+# (deployments/docker/dex/config.yaml) as the only OIDC issuer. The issuer is plain http on a
+# non-loopback host, so allow_insecure_issuer is needed (dev only; the same setting as
+# deployments/helm/kind/values.yaml).
 auth:
   mode: required
-  api_keys: "root=e2e-dex-admin-key-0123456789abcdef:admin"
+  # The static admin key that sets accounts up is per attempt: rpc.ts passes APP_AUTH_API_KEYS.
   oidc:
     enabled: true
     issuers:
