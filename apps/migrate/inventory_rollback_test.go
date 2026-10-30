@@ -54,7 +54,7 @@ func TestInventory0009Rollback_LeavesOtherBCsAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close(c)
+	defer func() { _ = conn.Close(c) }()
 
 	versions := func() map[string]string {
 		t.Helper()
