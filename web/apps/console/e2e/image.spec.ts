@@ -57,3 +57,62 @@ test("/api is the rpc behind nginx; /healthz is nginx itself", async ({
   expect(health.status()).toBe(200);
   expect(await health.text()).toBe("ok\n");
 });
+
+// Runtime configuration (docs/identity-login.md §8): CONSOLE_* env → /config.json for the SPA, and
+// the issuer's origin (exactly that, nothing wider) → the CSP's connect-src. image.sh starts three
+// containers: the default (nothing set), one configured for OIDC, one with an unusable issuer.
+const connectSrc = (csp: string) => csp.split(";").map((d) => d.trim()).find((d) => d.startsWith("connect-src"));
+
+test("no CONSOLE_* env: /config.json says OIDC is off, API key login on, never cached; connect-src stays 'self'", async ({
+  request,
+}) => {
+  const res = await request.get("/config.json");
+  expect(res.status()).toBe(200);
+  expect(res.headers()["content-type"]).toContain("application/json");
+  expect(res.headers()["cache-control"]).toBe("no-store");
+  expect(await res.json()).toEqual({ apiKeyLogin: true });
+  const page = (await request.get("/orders")).headers();
+  expect(connectSrc(page["content-security-policy"])).toBe("connect-src 'self'");
+});
+
+test.describe("configured for OIDC", () => {
+  test.skip(!process.env.E2E_CONSOLE_OIDC_URL, "needs the OIDC-configured container (e2e/image.sh)");
+  const base = () => process.env.E2E_CONSOLE_OIDC_URL!;
+
+  test("/config.json carries only the three public values; connect-src gains the issuer's exact origin", async ({
+    request,
+  }) => {
+    const res = await request.get(`${base()}/config.json`);
+    expect(await res.json()).toEqual({
+      oidcIssuer: "https://idp.e2e.example/dex",
+      oidcClientId: "x-console-e2e",
+      apiKeyLogin: false,
+    });
+    const text = await res.text();
+    expect(text).not.toContain("s3cr3t-must-not-leak"); // another env var of the container: not on the whitelist
+    const csp = (await request.get(`${base()}/orders`)).headers()["content-security-policy"];
+    expect(connectSrc(csp)).toBe("connect-src 'self' https://idp.e2e.example");
+    expect(csp).not.toContain("*");
+    expect(csp).not.toContain("s3cr3t-must-not-leak");
+    expect(csp).toContain("script-src 'self'"); // the rest of the policy is untouched
+  });
+
+  test("/config.json also carries the security headers' sibling cache rule, and /api has no CSP", async ({ request }) => {
+    const res = await request.get(`${base()}/config.json`);
+    expect(res.headers()["cache-control"]).toBe("no-store");
+    expect((await request.get(`${base()}/api/version`)).headers()["content-security-policy"]).toBeUndefined();
+  });
+});
+
+test.describe("an unusable issuer", () => {
+  test.skip(!process.env.E2E_CONSOLE_BAD_URL, "needs the bad-issuer container (e2e/image.sh)");
+  const base = () => process.env.E2E_CONSOLE_BAD_URL!;
+
+  test("fails closed: OIDC off in /config.json, nothing from the value reaches the CSP or the JSON", async ({ request }) => {
+    const res = await request.get(`${base()}/config.json`);
+    expect(await res.json()).toEqual({ apiKeyLogin: true });
+    const csp = (await request.get(`${base()}/orders`)).headers()["content-security-policy"];
+    expect(connectSrc(csp)).toBe("connect-src 'self'");
+    expect(csp).not.toContain("evil.example");
+  });
+});
