@@ -356,6 +356,28 @@ components:
           title: account
       title: EnableAccountResponse
       additionalProperties: false
+    identity.v1.ExternalIdentity:
+      type: object
+      properties:
+        issuer:
+          type: string
+          title: issuer
+        subject:
+          type: string
+          title: subject
+        accountId:
+          type: string
+          title: account_id
+        bindTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: bind_time
+          description: When the identity was bound to the account.
+      title: ExternalIdentity
+      additionalProperties: false
+      description: |-
+        ExternalIdentity is an (issuer, subject) the identity provider vouches for,
+         bound to one account. It is the binding itself: no token, no claim, no email.
     identity.v1.GetAccountRequest:
       type: object
       properties:
@@ -399,11 +421,48 @@ components:
             - $ref: '#/components/schemas/google.protobuf.Timestamp'
           title: claim_time
           description: Set once the invite has been claimed.
+        status:
+          allOf:
+            - $ref: '#/components/schemas/identity.v1.InviteStatus'
+          title: status
+          description: Where the invite stands when the response was made.
       title: Invite
       additionalProperties: false
       description: |-
         Invite pre-binds an email to an account. It is single use, valid for 7 days,
          and carries no secret: the person signs in at the identity provider and claims it.
+    identity.v1.InviteStatus:
+      type: string
+      title: InviteStatus
+      enum:
+        - INVITE_STATUS_UNSPECIFIED
+        - INVITE_STATUS_PENDING
+        - INVITE_STATUS_CLAIMED
+        - INVITE_STATUS_EXPIRED
+    identity.v1.ListAccountIdentitiesRequest:
+      type: object
+      properties:
+        accountId:
+          type: string
+          title: account_id
+          minLength: 1
+      title: ListAccountIdentitiesRequest
+      additionalProperties: false
+    identity.v1.ListAccountIdentitiesResponse:
+      type: object
+      properties:
+        identities:
+          type: array
+          items:
+            $ref: '#/components/schemas/identity.v1.ExternalIdentity'
+          title: identities
+        invites:
+          type: array
+          items:
+            $ref: '#/components/schemas/identity.v1.Invite'
+          title: invites
+      title: ListAccountIdentitiesResponse
+      additionalProperties: false
     identity.v1.ListAccountsRequest:
       type: object
       properties:
@@ -855,6 +914,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/identity.v1.GetAccountResponse'
+  /identity.v1.IdentityService/ListAccountIdentities:
+    post:
+      tags:
+        - identity.v1.IdentityService
+      summary: ListAccountIdentities
+      description: |-
+        ListAccountIdentities shows who can sign in as an account: the external
+         identities (issuer, subject) bound to it and its invites with their status
+         (pending, claimed, expired), each newest first. Admin only. It never returns
+         an invite token, a hash or any other secret (an invite has none), and it is
+         not paged: like ListApiKeys it lists one account's handful, not a collection.
+         Refused (x-error-code): account.not_found.
+      operationId: identity.v1.IdentityService.ListAccountIdentities
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/identity.v1.ListAccountIdentitiesRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/identity.v1.ListAccountIdentitiesResponse'
   /identity.v1.IdentityService/ListAccounts:
     post:
       tags:

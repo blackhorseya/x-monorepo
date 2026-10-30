@@ -46,7 +46,15 @@ metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有
 全部 `server.RequireRole(auth.admin_role)`，**除了 `WhoAmI` 與 `ClaimInvite`**（回 caller 自己的 principal；anonymous 時 `anonymous: true`）：
 `CreateAccount` / `GetAccount` / `ListAccounts`（id 升冪，opaque page token）/ `DisableAccount` / `EnableAccount` / `AssignRoles` /
 `CreateApiKey`（回 secret 一次）/ `ListApiKeys`（含 REVOKED，新到舊）/ `RevokeApiKey` /
-`CreateInvite`（email 邀請，7 天、單次、不含 secret，寫 audit）/ `RevokeSessions`（見下）；`ClaimInvite` 不要 admin role（見「外部身分綁定」）。
+`CreateInvite`（email 邀請，7 天、單次、不含 secret，寫 audit）/ `ListAccountIdentities`（見下）/ `RevokeSessions`（見下）；`ClaimInvite` 不要 admin role（見「外部身分綁定」）。
+
+**`ListAccountIdentities(account_id)`**（#289，admin only，唯讀、不寫 audit）：列出一個 account 現在有誰能登入——`identities`（external identity 綁定：`issuer`、`subject`、`account_id`、`bind_time`）與 `invites`（`email`、`expire_time`、`claim_time`、`status`），都是新到舊（`created_at desc`；綁定同時間以 issuer、subject 排，invite 以 id desc）。
+- **`status` 由 server 在回應當下判斷**（domain `Invite.Status(now)`，順序同 `Claim`）：已領 → `CLAIMED`（過了 `expire_time` 仍是 `CLAIMED`）；未領且 `now >= expire_time` → `EXPIRED`（到期那一刻就算過期）；其餘 `PENDING`。`Invite` 訊息新增 `status`，`CreateInvite` / `bootstrap` 的回應也帶（剛建的一律 `PENDING`）。
+- **不回任何 secret**：invite 本來就沒有 token 或 hash，回應也沒有這類欄位；測試走 response descriptor 遞迴檢查沒有名字含 `token` / `hash` / `secret` 的欄位，並檢查實際序列化出來的 JSON 沒有這些字。
+- **account 不存在** → `NOT_FOUND` + `account.not_found`（同 `ListApiKeys` / `CreateInvite`）；`account_id` 為空由 protovalidate 擋（`INVALID_ARGUMENT`）；非 admin → `PERMISSION_DENIED`（先於 account 是否存在，不洩漏有無）。
+- **不分頁**：和 `ListApiKeys` 一樣是「單一 account 底下的子資源清單」，不是 `ListAccounts` 那種整體 collection（opaque page token）；一次回兩個清單也沒有單一 cursor 可用。綁定只在 claim / auto_provision 時新增；invite 則每次 `CreateInvite` 都多一筆，目前沒有上限也沒有清理，量大時要補分頁或清理（後續）。
+- `invites` 沒有 `account_id` 索引（只有 `(email, created_at desc, id desc)`），這支查詢會掃 `identity.invites`；表目前很小，所以不為它加 migration，量大再補 `(account_id, created_at desc, id desc)`。
+- 撤銷單一綁定／邀請**不在這支**（先經 Sean 決定）；Console `/accounts` 等 #273 合併後再接。
 
 **`RevokeSessions` 只是「登出所有裝置」**：它設 `accounts.sessions_revoked_at = now`，`iat` 早於這個時間的 access token 在 resolver cache 過期後（≤ 30 秒）被拒；寫 audit（誰、哪個 account、何時，不記 token）。它**擋不住持有 IdP refresh token 的人**——對方能向 IdP 換到新 `iat` 的 token。**懷疑帳號被盜要用 `DisableAccount`**（對每個 token 都有效，包括 refresh 換出來的），再到 IdP 撤銷 refresh token 或重設憑證。proto 註解與 Console 文案都必須這樣寫（#273）。它不改 status / roles / key，所以沒有 last-admin guard。
 

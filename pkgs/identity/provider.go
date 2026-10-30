@@ -68,6 +68,7 @@ var ProviderSet = wire.NewSet(
 	ProvideWhoAmI,
 	ProvideCreateInvite,
 	ProvideClaimInvite,
+	ProvideListAccountIdentities,
 	ProvideExternalIdentitySource,
 	ProvideRevokeSessions,
 	ProvideResolveExternalIdentity,
@@ -264,6 +265,11 @@ func ProvideCreateInvite(accounts account.Repository, invites invite.Repository,
 // binding commits, which is what lets only one of two claimants win.
 func ProvideClaimInvite(invites invite.Repository, bindings externalidentity.Repository, accounts account.Repository, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.ClaimInviteUC {
 	return decorateTx("identity.claim_invite", rec, tx, usecase.NewClaimInvite(invites, bindings, accounts, clock))
+}
+
+// ProvideListAccountIdentities is a read: no transaction, no audit line.
+func ProvideListAccountIdentities(accounts account.Repository, bindings externalidentity.Repository, invites invite.Repository, clock port.Clock, rec *usecasex.Recorder) rpc.ListAccountIdentitiesUC {
+	return decorate("identity.list_account_identities", rec, usecase.NewListAccountIdentities(accounts, bindings, invites, clock))
 }
 
 func ProvideRevokeSessions(accounts account.Repository, audit port.AuditLog, clock port.Clock, tx port.Transactor, rec *usecasex.Recorder) rpc.RevokeSessionsUC {

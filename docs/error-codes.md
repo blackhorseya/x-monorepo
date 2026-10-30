@@ -58,7 +58,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `account.already_disabled` / `account.already_active` | `FAILED_PRECONDITION` | identity domain | Disable 已 DISABLED / Enable 已 ACTIVE 的 account |
 | `identity.last_admin` | `FAILED_PRECONDITION` | identity domain（`account.GuardLastAdmin` / `GuardLastAdminKey`） | `DisableAccount` / `AssignRoles`（拿掉 `auth.admin_role`）/ `RevokeApiKey` 會讓最後一個有效 admin（ACTIVE、有 admin role、至少一把可用 key 的 account）失去資格；訊息固定。config `auth.api_keys` 的 static key 不算 |
 | `account.disabled` | `FAILED_PRECONDITION` | identity domain | ResolveAPIKey：key 沒事但 account 是 DISABLED（rpc 看到的是 `auth.invalid_credential`） |
-| `account.not_found` | `NOT_FOUND` | identity domain | 含 `CreateApiKey` / `ListApiKeys` 指到不存在的 account |
+| `account.not_found` | `NOT_FOUND` | identity domain | 含 `CreateApiKey` / `ListApiKeys` / `ListAccountIdentities` 指到不存在的 account |
 | `account.duplicate` | `ALREADY_EXISTS` | identity domain | 同 id 再 Add（repo 層；id 是 UUID，實際上不會發生） |
 | `api_key.invalid_id` / `api_key.invalid_account_id` / `api_key.invalid_name` / `api_key.invalid_secret` | `INVALID_ARGUMENT` | identity domain | aggregate 不變量；`invalid_secret` 也是 ResolveAPIKey 對太短的 key 的答案 |
 | `api_key.invalid_expiry` | `INVALID_ARGUMENT` | identity domain | `CreateApiKey.expire_time` 不在未來 |

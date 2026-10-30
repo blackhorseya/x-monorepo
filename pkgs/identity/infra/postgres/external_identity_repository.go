@@ -60,3 +60,26 @@ func (i *ExternalIdentityRepository) Add(c context.Context, e *externalidentity.
 
 	return nil
 }
+
+func (i *ExternalIdentityRepository) ListByAccount(c context.Context, accountID string) ([]*externalidentity.Identity, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var rows []externalIdentityRow
+	if err := platformpg.TxOrDB(ctx, i.db).Where("account_id = ?", accountID).
+		Order("created_at DESC, issuer ASC, subject ASC").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list external identities of account %s: %w", accountID, err)
+	}
+	out := make([]*externalidentity.Identity, 0, len(rows))
+	for _, row := range rows {
+		e, err := externalidentity.New(row.Issuer, row.Subject, row.AccountID, row.CreatedAt.UTC())
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+
+	return out, nil
+}

@@ -105,5 +105,5 @@ func (uc *Bootstrap) withInvite(ctx context.Context, a *account.Account, email s
 		return nil, fmt.Errorf("add invite %s: %w", inviteID, err)
 	}
 
-	return &dto.BootstrapOutput{Created: true, Account: *mapper.ToAccountOutput(a), Invite: *toInviteOutput(v)}, nil
+	return &dto.BootstrapOutput{Created: true, Account: *mapper.ToAccountOutput(a), Invite: *toInviteOutput(v, now)}, nil
 }

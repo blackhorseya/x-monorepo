@@ -22,6 +22,7 @@ func TestListAccountIdentities_OnPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	boundAt := w.clock.Now()
+	w.clock.advance(time.Hour) // distinct created_at: the order under test is by time, not by random id
 	w.invite(t, "acc-1", "expired@example.com")
 	w.clock.advance(8 * 24 * time.Hour)
 	w.invite(t, "acc-1", "pending@example.com")
