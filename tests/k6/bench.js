@@ -86,6 +86,10 @@ export const options = {
     rpc_errors: ["count==0"],
     reservation_timeouts: ["count==0"],
     reservation_wrong_status: ["count==0"],
+    // always true: makes k6 export how many rpc_errors were timeouts, so bench_report.py can tell an
+    // overloaded machine (every error a timeout) from a real failure (#288)
+    "rpc_errors{code:request.timeout}": ["count>=0"],
+    "rpc_errors{code:transport.timeout}": ["count>=0"],
     // always true: makes k6 export these sub-metrics, and fails a run that did nothing
     "rpc_duration{rpc:CreateOrder}": ["max>=0"],
     "rpc_ok{rpc:CreateOrder}": ["count>0"],

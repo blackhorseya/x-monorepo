@@ -71,6 +71,10 @@ expect_eq "web only: no lint, no k6" \
   "gen_freshness web console_e2e console_image helm_kind" \
   "$(jobs_on web web/apps/console/src/routes/orders.tsx)"
 expect_eq "helm only" "helm helm_kind" "$(jobs_on helm deployments/helm/x-monorepo/values.yaml)"
+# scripts/test.sh drives deployments/helm/kind/coredns-dex.sh itself (#287): a change to only that
+# file must run scripts-test, or its fixtures cannot catch a regression in it at PR time.
+expect_eq "coredns-dex.sh also runs scripts-test" "helm scripts_test helm_kind" "$(jobs_on coredns deployments/helm/kind/coredns-dex.sh)"
+expect_eq "other kind scripts do not run scripts-test" "helm helm_kind" "$(jobs_on kindsmoke deployments/helm/kind/smoke.sh)"
 expect_eq "k6 only" "k6" "$(jobs_on k6 tests/k6/orders.js)"
 expect_eq "Dockerfile is an image change" \
   "release_snapshot console_image helm_kind" \
@@ -855,6 +859,7 @@ expect_match "k6-bench: exit 0 is the only valid one"        '^0 VALID'         
 expect_match "k6-bench: exit 3 is NOT A VALID BASELINE, red" '^1 INVALID: NOT A VALID BASELINE'        "$(kv 3)"
 expect_match "k6-bench: exit 1 is a failed bench, red"       '^1 INVALID: bench.sh failed \(exit 1\)'  "$(kv 1)"
 expect_match "k6-bench: exit 42 keeps its code"              '^1 INVALID: bench.sh failed \(exit 42\)' "$(kv 42)"
+expect_match "k6-bench: exit 99 (correctness threshold) is a failed bench, red" '^1 INVALID: bench.sh failed \(exit 99\): a k6 threshold that is not overload' "$(kv 99)"
 expect_match "k6-bench: Task's own 201 is a failed bench"    '^1 INVALID: bench.sh failed \(exit 201\)' "$(kv 201)"
 expect_match "k6-bench: no exit code = did not finish, red"  '^1 INVALID: the bench step did not finish' "$(kv '')"
 # the same thing against the real Task: a failing command is 201 unless --exit-code (skipped without task on PATH)
