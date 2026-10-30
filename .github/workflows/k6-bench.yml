@@ -69,7 +69,8 @@ jobs:
         id: bench
         run: |
           set +e   # keep the exit code: the verdict step decides what it means
-          task k6-bench -- "$OUT" 2>&1 | tee "$OUT/bench.log"
+          # --exit-code: without it Task turns every failing command into its own 201 and bench.sh's 3 is lost
+          task --exit-code k6-bench -- "$OUT" 2>&1 | tee "$OUT/bench.log"
           rc=${PIPESTATUS[0]}
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
@@ -80,27 +81,7 @@ jobs:
         if: always()
         env:
           RC: ${{ steps.bench.outputs.rc }}
-        run: |
-          case "${RC:-}" in
-            0)
-              verdict="VALID: bench.sh found enough valid attempts (exit 0)" ;;
-            3)
-              verdict="INVALID: NOT A VALID BASELINE — fewer valid attempts than RUNS (bench.sh exit 3). Do not write these numbers into docs/perf-baseline.md" ;;
-            "")
-              verdict="INVALID: the bench step did not finish (cancelled, timed out, or failed before it ran). No baseline" ;;
-            *)
-              verdict="INVALID: bench.sh failed (exit $RC). No baseline" ;;
-          esac
-          mkdir -p "$OUT"
-          echo "$verdict" | tee "$OUT/verdict.txt"
-          {
-            echo "## k6-bench: $verdict"
-            if [ -f "$OUT/summary.md" ]; then cat "$OUT/summary.md"; else echo "(no summary.md was written)"; fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "${RC:-}" != 0 ]; then
-            echo "::error title=k6-bench is not a valid baseline::$verdict"
-            exit 1
-          fi
+        run: scripts/k6-bench-verdict.sh "${RC:-}" "$OUT"
 
       - name: upload raw results and summary
         if: always()

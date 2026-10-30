@@ -799,5 +799,29 @@ else
   echo "scripts/test.sh: go not found — merge-tree-check.sh fixture skipped" >&2
 fi
 
+# ── k6-bench-verdict.sh: bench.sh's exit code → the verdict of a k6-bench run (#280) ──
+kv() { # <rc> → "<script exit> <verdict.txt>" for a fresh out dir
+  local d; d=$(mktemp -d -p "$tmp"); local rc=0
+  "$src/scripts/k6-bench-verdict.sh" "$1" "$d" >/dev/null 2>&1 || rc=$?
+  echo "$rc $(cat "$d/verdict.txt")"
+}
+expect_match "k6-bench: exit 0 is the only valid one"        '^0 VALID'                                "$(kv 0)"
+expect_match "k6-bench: exit 3 is NOT A VALID BASELINE, red" '^1 INVALID: NOT A VALID BASELINE'        "$(kv 3)"
+expect_match "k6-bench: exit 1 is a failed bench, red"       '^1 INVALID: bench.sh failed \(exit 1\)'  "$(kv 1)"
+expect_match "k6-bench: exit 42 keeps its code"              '^1 INVALID: bench.sh failed \(exit 42\)' "$(kv 42)"
+expect_match "k6-bench: Task's own 201 is a failed bench"    '^1 INVALID: bench.sh failed \(exit 201\)' "$(kv 201)"
+expect_match "k6-bench: no exit code = did not finish, red"  '^1 INVALID: the bench step did not finish' "$(kv '')"
+# the same thing against the real Task: a failing command is 201 unless --exit-code (skipped without task on PATH)
+if command -v task >/dev/null 2>&1; then
+  tf=$(mktemp -d -p "$tmp"); printf 'version: "3"\ntasks:\n  t:\n    cmds: ["exit 3"]\n' > "$tf/Taskfile.yml"
+  plain=0; (cd "$tf" && task t >/dev/null 2>&1) || plain=$?
+  kept=0;  (cd "$tf" && task --exit-code t >/dev/null 2>&1) || kept=$?
+  expect_eq "task without --exit-code hides bench.sh's 3"  "201" "$plain"
+  expect_eq "task --exit-code hands bench.sh's 3 through" "3"   "$kept"
+fi
+# Task 3.x maps a failing command to 201 unless --exit-code; the workflow must pass it or 3 never reaches the verdict
+if grep -Eq 'task --exit-code k6-bench' "$src/.github/workflows/k6-bench.yml"; then ok; else bad "k6-bench.yml must run task --exit-code k6-bench"; fi
+if grep -Eq 'scripts/k6-bench-verdict.sh' "$src/.github/workflows/k6-bench.yml"; then ok; else bad "k6-bench.yml must classify with scripts/k6-bench-verdict.sh"; fi
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

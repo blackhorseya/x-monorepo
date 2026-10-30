@@ -38,7 +38,7 @@ gh run download <run-id> --repo blackhorseya/x-monorepo -n k6-bench-<run-id>-1  
 
 - **沒有 input**：有效性規則（`MAX_LOAD_PER_CORE` 1.0、`RUNS` 3、`MAX_ATTEMPTS` 6、負載參數）就是被派送的那個 commit 上 `tests/k6/bench.sh` 的預設值，workflow 不能放寬它。要換參數＝改腳本＝走 PR。`ref` 要選你想量的 commit；run 頁與 `runner.txt` 都會記 SHA。
 - Postgres 是同一台 runner 上的 `postgres:16-alpine` service container（load average 也算它）；`k6`、`psql`、`python3` 在 runner 上。同一時間只跑一個（`concurrency: k6-bench`）。
-- **判讀 run 狀態**（job 綠 = 工具判定 valid，其餘一律紅，不會有「綠但無效」）：
+- **判讀 run 狀態**（`task --exit-code` 把 `bench.sh` 的 exit code 原樣交給 `scripts/k6-bench-verdict.sh`；Task 預設會把任何失敗轉成 201，所以不能省；job 綠 = 工具判定 valid，其餘一律紅，不會有「綠但無效」）：
 
   | 結果 | 意思 | 該怎麼做 |
   |---|---|---|
