@@ -43,6 +43,7 @@ RUNS=${RUNS:-3}
 CREATE_VUS=${CREATE_VUS:-20}; CREATE_DURATION=${CREATE_DURATION:-10s}
 RESERVE_RATE=${RESERVE_RATE:-100}; RESERVE_DURATION=${RESERVE_DURATION:-30s}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-$((RUNS * 2))}; MAX_LOAD_PER_CORE=${MAX_LOAD_PER_CORE:-1.0}
+LOAD_INTERVAL=${LOAD_INTERVAL:-5}
 SKUS=${SKUS:-50}; POLL=${POLL:-50}; SEED=${SEED:-1}; DRAIN_TIMEOUT=${DRAIN_TIMEOUT:-300}
 port=${PORT:-18090}
 base_url=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
@@ -56,14 +57,9 @@ export APP_CONFIG=/dev/null APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false APP_LOG_L
 
 ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 
-# 1m load average every 5s into $1 (epoch,load) until stopped
+# 1m load average every LOAD_INTERVAL seconds into $1 (epoch,load) until stopped (tests/k6/loadavg.py)
 pid="" wpid="" db="" lpid=""
-sample_load() {
-  python3 -I -c 'import os, sys, time
-while True:
-    print(f"{int(time.time())},{round(os.getloadavg()[0], 2)}", flush=True)
-    time.sleep(5)' >> "$1" & lpid=$!
-}
+sample_load() { python3 -I tests/k6/loadavg.py "$LOAD_INTERVAL" >> "$1" & lpid=$!; }
 stop_load() { [ -n "$lpid" ] && kill "$lpid" 2>/dev/null && wait "$lpid" 2>/dev/null || true; lpid=""; }
 # <attempt>: valid iff it has a load sample and none is over the limit (bench_report.py's rule, same code)
 attempt_valid() {
@@ -118,7 +114,7 @@ while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
   k6 run --quiet --summary-export "$out/run$n-reserve.json" tests/k6/bench.js "${k6env[@]}" \
     -e PHASE=reserve -e "RATE=$RESERVE_RATE" -e "DURATION=$RESERVE_DURATION" > "$out/run$n-reserve.log" 2>&1
   stop_load
-  python3 -I -c 'import os, time; print(f"{int(time.time())},{round(os.getloadavg()[0], 2)}")' >> "$out/run$n-load.csv"
+  python3 -I tests/k6/loadavg.py >> "$out/run$n-load.csv"
   cleanup
   if attempt_valid "$n"; then valid=$((valid + 1)); echo "   attempt $n valid"; else echo "   attempt $n INVALID (load over $(python3 -I -c "print($MAX_LOAD_PER_CORE * $ncpu)")): kept, not counted"; fi
 done
