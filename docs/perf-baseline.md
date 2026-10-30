@@ -4,7 +4,7 @@
 
 之後優化 CreateOrder 或 reservation batching 時的對照組（#263）。`tests/k6/orders.js` / `reservation.js` 是功能與閾值的 smoke，沒有可比較的數字；這裡是固定參數、跑 N 次、有離散程度的量測。**不進 PR 的 CI gate**（shared runner 的數字是雜訊）；要在乾淨環境取得 valid 數字，手動派送 `k6-bench` workflow（見下方「在 GitHub runner 上跑」）。
 
-> **下面的數字量測於 server 定價之前**（#267 以前，CreateOrder 的單價由呼叫端給）。之後 `CreateOrder` 每張單多一次 catalog 批次查價（同一個 process、同一個 transaction），`bench.js` 的 setup 也多一步 `UpsertProduct`：本機（開發機）的這些數字不能當作現在的對照組。server 定價之後的 valid baseline 見下方「CI baseline」（GitHub runner，run 41005829640）。
+> **下面的數字量測於 server 定價之前**（#267 以前，CreateOrder 的單價由呼叫端給）。之後 `CreateOrder` 每張單多一次 catalog 批次查價（同一個 process；#320 之後在 transaction 之外），`bench.js` 的 setup 也多一步 `UpsertProduct`：本機（開發機）的這些數字不能當作現在的對照組。server 定價之後的 valid baseline 見下方「CI baseline」（GitHub runner，run 41005829640）。
 
 ## 重跑
 

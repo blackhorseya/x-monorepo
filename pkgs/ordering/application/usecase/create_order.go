@@ -16,9 +16,11 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
 
-// CreateOrder places a new pending order and publishes OrderCreated. The
-// provider runs it inside one transaction (usecasex.Transactional), so the
-// order row and the outbox message commit together.
+// CreateOrder places a new pending order and publishes OrderCreated. The order
+// row and the outbox message are written inside one transaction (port.Transactor),
+// so they commit together. Everything before the write (the idempotency replay
+// check and the catalog's quote) runs outside it: the catalog is a call away, and
+// no database connection is held while waiting for it.
 //
 // The price of every line is the catalog's (port.PriceQuoter), read when the order is
 // placed and stored on the line as a snapshot; the caller supplies only sku and quantity.
@@ -26,12 +28,14 @@ import (
 //
 // With an IdempotencyKey the call is safe to retry. The key is scoped to the
 // resolved customer: the same key and lines return the original order (as it is
-// now) without writing, publishing or asking the catalog; the same key with other lines is
-// ErrIdempotencyKeyReused. Two concurrent first uses are settled by the store's
+// now) without writing, publishing, asking the catalog or opening a transaction; the
+// same key with other lines is ErrIdempotencyKeyReused. A refused quote writes nothing,
+// so it does not spend the key. Two concurrent first uses are settled by the store's
 // unique constraint (Save → ErrIdempotencyConflict), never by a lock here.
 // The key itself is never logged or put in an error.
 type CreateOrder struct {
 	repo   order.Repository
+	tx     port.Transactor
 	events port.EventPublisher
 	ids    port.IDGenerator
 	clock  port.Clock
@@ -39,8 +43,8 @@ type CreateOrder struct {
 	prices port.PriceQuoter
 }
 
-func NewCreateOrder(repo order.Repository, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy, prices port.PriceQuoter) *CreateOrder {
-	return &CreateOrder{repo: repo, events: events, ids: ids, clock: clock, own: own, prices: prices}
+func NewCreateOrder(repo order.Repository, tx port.Transactor, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy, prices port.PriceQuoter) *CreateOrder {
+	return &CreateOrder{repo: repo, tx: tx, events: events, ids: ids, clock: clock, own: own, prices: prices}
 }
 
 func (uc *CreateOrder) Execute(c context.Context, in dto.CreateOrderInput) (*dto.OrderOutput, error) {
@@ -88,21 +92,31 @@ func (uc *CreateOrder) Execute(c context.Context, in dto.CreateOrderInput) (*dto
 		return nil, err
 	}
 
-	if err := uc.repo.Save(ctx, o); err != nil {
-		if !errors.Is(err, order.ErrIdempotencyConflict) {
-			return nil, fmt.Errorf("save order: %w", err)
-		}
-		// Lost the race for this key: the winner is committed (the store waited
-		// for it), so read it back instead of creating a second order.
-		prior, err := uc.repo.FindByIdempotencyKey(ctx, customerID, in.IdempotencyKey)
-		if err != nil {
-			return nil, fmt.Errorf("read back idempotent order: %w", err)
+	// The transaction opens only now: the order and its OrderCreated commit together,
+	// or, when another request won the key, neither is written and the winner is read back.
+	var prior *order.Order
+	err = uc.tx.Do(ctx, func(c context.Context) error {
+		if err := uc.repo.Save(c, o); err != nil {
+			if !errors.Is(err, order.ErrIdempotencyConflict) {
+				return fmt.Errorf("save order: %w", err)
+			}
+			// Lost the race for this key: the winner is committed (the store waited
+			// for it), so read it back instead of creating a second order.
+			prior, err = uc.repo.FindByIdempotencyKey(c, customerID, in.IdempotencyKey)
+			if err != nil {
+				return fmt.Errorf("read back idempotent order: %w", err)
+			}
+
+			return nil
 		}
 
-		return replay(prior, lines)
-	}
-	if err := uc.events.Publish(ctx, o.PullEvents()...); err != nil {
+		return uc.events.Publish(c, o.PullEvents()...)
+	})
+	if err != nil {
 		return nil, err
+	}
+	if prior != nil {
+		return replay(prior, lines)
 	}
 
 	return mapper.ToOrderOutput(o), nil

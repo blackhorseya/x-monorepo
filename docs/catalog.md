@@ -52,10 +52,10 @@ Domain 方法反映行為：`Rename`、`Reprice`、`Deactivate`、`Activate`。`
 
 - ordering 在 `application/port` 定義 consumer 端的 `PriceQuoter`；`ordering/adapters/pricing` 實作它，**只 import catalog 的 `contract/`**：它呼叫的是 `catalogv1connect.CatalogServiceHandler`。
   `apps/rpc/wire.go` 把這個 interface `wire.Bind` 到 catalog 自己的 `*rpc.CatalogService`——同一個 process 內直接呼叫，沒有網路、沒有 interceptor（讀取本來就不檢查 role），
-  而且和 `CreateOrder` 在同一個 transaction（catalog 的 repo 從 context 拿到同一個 tx）。BC 之間仍沒有任何 domain / application / infra 的 import。
+  而且在 `CreateOrder` 的 transaction **之外**：`CreateOrder` 先驗證、查冪等 replay、問 catalog，之後才開 transaction 寫入訂單與 outbox，所以查價（之後會是網路呼叫）不會佔著 DB 連線。catalog 的 repo 因此讀的是自己的連線，不是訂單那個 tx。BC 之間仍沒有任何 domain / application / infra 的 import。
 - 一張單問 catalog **一次**（去重後的 SKU）。任何 SKU 報不出價 → 整張單被拒：`order.unknown_sku` / `order.inactive_sku`（`INVALID_ARGUMENT`，沒寫入）；兩種幣別 → `order.mixed_currency`。catalog 自己壞了 → infra error（不是 domain error，client 看到 `INTERNAL`、可重試）。
 - 價格寫進訂單明細（`ordering.order_items`）當**快照**：之後 `UpsertProduct` 改價（甚至換幣別）不影響已成立的訂單，`GetOrder` 永遠回成交當下的價格。
-- **冪等**：`request_hash` 現在是 v2 指紋（`"v2:" + sha256(sku, quantity, …)`，價格不在請求裡所以不在指紋裡）。重送時**先**用 key 找原訂單，找到就直接回放，**不問 catalog**——商品之後被改價或下架也一樣回原單。
+- **冪等**：`request_hash` 現在是 v2 指紋（`"v2:" + sha256(sku, quantity, …)`，價格不在請求裡所以不在指紋裡）。重送時**先**用 key 找原訂單（在 transaction 之外），找到就直接回放，**不問 catalog、也不開 transaction**——商品之後被改價或下架也一樣回原單。
   建單前被拒（`unknown_sku` 等）不花 key。v2 之前的訂單存的是 v1 指紋（含呼叫端給的單價）：`Order.IsReplayOf` 看到沒有 `v2:` 前綴的 hash，就拿重送的 sku / quantity 加上**這張訂單自己的快照價**重算 v1 比對，所以舊 key 的重送行為完全不變（同樣的 sku / quantity 序列 → 回放，其他 → `order.idempotency_key_reused`）。
 
 ## Breaking：舊 client 還送 `unit_price` 會怎樣

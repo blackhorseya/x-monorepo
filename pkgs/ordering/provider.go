@@ -160,11 +160,26 @@ func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transacto
 	)
 }
 
-// ProvideCreateOrder is decorateTx plus the result counter on the outside: it
-// counts after the transaction committed, so a rolled-back create is never "created".
+// decorateNoTx is decorateTx for a use case that opens its own transaction (port.Transactor) for
+// just the write, because it has work to do first that must not hold a connection (CreateOrder
+// asks the catalog). Metrics and Logging still wrap the whole call, so a failed commit is logged
+// and counted as the use case's failure. Idempotent has no transaction to join: it is a
+// pass-through on the rpc path (no message id), and no consumer drives such a use case.
+func decorateNoTx[I, O any](name string, rec *usecasex.Recorder, inbox port.Inbox, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc,
+		usecasex.Metrics[I, O](rec, name),
+		usecasex.Logging[I, O](name),
+		usecasex.Idempotent[I, O](inbox),
+	)
+}
+
+// ProvideCreateOrder is decorateTx's decorators minus Transactional, plus the result counter
+// on the outside. CreateOrder opens its transaction itself (tx), after it has priced the
+// order, so no connection is held while the catalog is asked. The counter still counts after
+// that transaction committed, so a rolled-back create is never "created".
 func ProvideCreateOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, ids port.IDGenerator, clock port.Clock, own *ownership.Policy, prices port.PriceQuoter, rec *usecasex.Recorder, results *metrics.CreateOrderResults) rpc.CreateOrderUC {
 	return usecasex.Chain(
-		decorateTx("ordering.create_order", rec, tx, inbox, usecase.NewCreateOrder(repo, events, ids, clock, own, prices)),
+		decorateNoTx("ordering.create_order", rec, inbox, usecase.NewCreateOrder(repo, tx, events, ids, clock, own, prices)),
 		results.Decorator(),
 	)
 }

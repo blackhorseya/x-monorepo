@@ -31,7 +31,7 @@ func TestOrderStats_ZeroFills(t *testing.T) {
 	}
 
 	for i, id := range []string{"o-1", "o-2", "o-3"} {
-		create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: id}, fixedClock{t: t0.Add(time.Duration(i) * time.Minute)}, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
+		create := usecase.NewCreateOrder(repo, memory.NewTransactor(), rec, fixedIDs{id: id}, fixedClock{t: t0.Add(time.Duration(i) * time.Minute)}, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 		if _, err := create.Execute(c, dto.CreateOrderInput{CustomerID: "c-1", Items: []dto.OrderLine{{SKU: "S", Quantity: 1}}}); err != nil {
 			t.Fatal(err)
 		}

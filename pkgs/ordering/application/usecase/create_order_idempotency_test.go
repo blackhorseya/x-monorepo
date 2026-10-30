@@ -23,7 +23,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
 // idemSeq is process-wide: subtests share one database, so ids must never repeat.
@@ -86,7 +85,7 @@ func newIdemFixture(repo order.Repository) idemFixture {
 	own := ownership.New(adminRole)
 
 	f := idemFixture{
-		create: usecase.NewCreateOrder(repo, events, atomicIDs{}, clock, own, memory.NewFlatPriceList(500, "USD")),
+		create: usecase.NewCreateOrder(repo, memory.NewTransactor(), events, atomicIDs{}, clock, own, memory.NewFlatPriceList(500, "USD")),
 		list:   usecase.NewListOrders(repo, own),
 		events: events,
 	}
@@ -361,8 +360,8 @@ func TestCreateOrder_IdempotencyKey(t *testing.T) {
 }
 
 // The outbox row is written in the same transaction as the order, so the proof
-// that a replay does not publish again has to run through the real Transactional
-// decorator, Postgres publisher and the outbox table, not a recording fake.
+// that a replay does not publish again has to run through the real Postgres
+// transactor, Postgres publisher and the outbox table, not a recording fake.
 func TestCreateOrder_IdempotencyKey_Outbox(t *testing.T) {
 	url := pgtest.URL(t)
 	cfg := config.Postgres{URL: url}
@@ -389,10 +388,7 @@ func TestCreateOrder_IdempotencyKey_Outbox(t *testing.T) {
 	}
 	own := ownership.New(adminRole)
 	clock := fixedClock{t: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)}
-	create := usecasex.Chain[dto.CreateOrderInput, *dto.OrderOutput](
-		usecase.NewCreateOrder(postgres.NewOrderRepository(db), events.NewPublisher(pub), atomicIDs{}, clock, own, memory.NewFlatPriceList(500, "USD")),
-		usecasex.Transactional[dto.CreateOrderInput, *dto.OrderOutput](postgres.NewTransactor(db)),
-	)
+	create := usecase.NewCreateOrder(postgres.NewOrderRepository(db), postgres.NewTransactor(db), events.NewPublisher(pub), atomicIDs{}, clock, own, memory.NewFlatPriceList(500, "USD"))
 
 	outbox := func() int64 {
 		var n int64

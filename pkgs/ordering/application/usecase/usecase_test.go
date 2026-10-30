@@ -34,7 +34,7 @@ func TestConfirmThenCancel(t *testing.T) {
 	repo := memory.NewOrderRepository()
 	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
+	create := usecase.NewCreateOrder(repo, memory.NewTransactor(), rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	confirm := usecase.NewConfirmOrder(repo, rec, clock)
 	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
 
@@ -82,7 +82,7 @@ func TestCompleteOrder(t *testing.T) {
 	repo := memory.NewOrderRepository()
 	clock := fixedClock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
+	create := usecase.NewCreateOrder(repo, memory.NewTransactor(), rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	confirm := usecase.NewConfirmOrder(repo, rec, clock)
 	complete := usecase.NewCompleteOrder(repo, rec, clock, ownership.New("admin"))
 	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
@@ -134,7 +134,7 @@ func TestCreateGetCancel(t *testing.T) {
 	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
 
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
+	create := usecase.NewCreateOrder(repo, memory.NewTransactor(), rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	get := usecase.NewGetOrder(repo, ownership.New("admin"))
 	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
 
