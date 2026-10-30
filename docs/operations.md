@@ -264,21 +264,21 @@ WHERE octet_length(sku) NOT BETWEEN 1 AND 64;
 
 沒有列 = migration 直接過。這個查詢與 migration 之間仍有 race：查完到 migrate 取得鎖之前，若有人用舊版 rpc 寫進超長 SKU，migration 還是會失敗；所以查詢要緊接在 migrate 之前，且 rpc 先升級到會擋超長 SKU 的版本（proto `max_len` 與 `stock.New` 一起擋）或先擋掉 `SetStock`。
 
-只有**略過前置查詢、直接跑 migrate** 而撞到超長列時才會 dirty：`ADD CONSTRAINT` 報 `violates check constraint`，語句是原子的所以**不會留下 constraint**，但 golang-migrate 在執行前就已把 `inventory.schema_migrations` 標成 `version=9, dirty=true`，之後每次 `migrate up` 都拒絕（`Dirty database version 9`）。處理：
+**查過不等於不會 dirty，dirty recovery 永遠要備好**：查詢回 0 筆之後，仍可能有寫入在 migrate 取得鎖之前插入超長 SKU（上面的 race）；略過前置查詢直接跑 migrate 當然也一樣。遇到時 `ADD CONSTRAINT` 報 `violates check constraint`，語句是原子的所以**不會留下 constraint**，但 golang-migrate 在執行前就已把 `inventory.schema_migrations` 標成 `version=9, dirty=true`，之後每次 `migrate up` 都拒絕（`Dirty database version 9`）。處理（版本卡在 9 dirty、沒有 CHECK）：
 1. 這些 SKU 本來就不能下單（catalog 不收 > 64 bytes），先確認 `reserved = 0`，且沒有 RESERVED 的 reservation 指著它：`SELECT l.order_id, l.sku FROM inventory.reservation_lines l JOIN inventory.reservations r USING (order_id) WHERE r.status = 'RESERVED' AND octet_length(l.sku) NOT BETWEEN 1 AND 64;`；有列就先讓那些訂單走完（COMPLETED / CANCELLED / EXPIRED），不要直接刪庫存。
 2. 刪除或改名那些列（`DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`，刪之前把查詢結果存起來）。
-3. 重設版本再重跑：`UPDATE inventory.schema_migrations SET version = 8, dirty = false;`，然後 `task migrate -- up`。這個 reset 只適用於上面這種「`0009` 失敗後 dirty」的狀態，不是任意 dirty 版本的通用解。
+3. 重設版本再重跑：`UPDATE inventory.schema_migrations SET version = 8, dirty = false;`，然後 `task migrate -- up`。這個 reset 只適用於上面這種「`0009` 失敗後 dirty」的狀態，不是任意 dirty 版本的通用解（只是不想升級而要退掉時，直接用下面的 Rollback，同一段 SQL 在這個狀態也成立）。
 
-**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：catalog、identity、inventory、ordering），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行（版本是 dirty 時也適用）：
+**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：catalog、identity、inventory、ordering），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行。兩種狀態用同一段 SQL：9 clean（CHECK 存在）會移除 CHECK 並退回 8；9 dirty（`0009` 失敗，沒有 CHECK）`IF EXISTS` 讓 DROP 略過，只把版本設回 8 clean（超長的列仍在，要再 migrate 先照上面第 1–2 步處理）：
 
 ```sql
 BEGIN;
-ALTER TABLE inventory.stocks DROP CONSTRAINT stocks_sku_length;
+ALTER TABLE inventory.stocks DROP CONSTRAINT IF EXISTS stocks_sku_length;
 UPDATE inventory.schema_migrations SET version = 8, dirty = false;
 COMMIT;
 ```
 
-這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，驗證 catalog / identity / ordering 的版本、schema 與資料都不動。
+這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，兩種狀態（9 clean、9 dirty 且無 CHECK）都驗證 catalog / identity / ordering 的版本、schema 與資料不動。
 
 **migration 的鎖（ordering `0008`，`CreateOrder` 冪等）**：`0008_order_idempotency` 對 `ordering.orders` 加兩個 nullable 欄位（不重寫表、不回填），再建 partial unique index（`CREATE UNIQUE INDEX`，不是 `CONCURRENTLY`——migration 在**一個交易**裡跑）。`ALTER TABLE` 取 **ACCESS EXCLUSIVE lock 並持有到整個 migration commit**，建 index 的整表掃描也在這把鎖底下：`ordering.orders` 的**讀與寫**（GetOrder / ListOrders / CreateOrder / Cancel / Complete / Confirm）都會等到整個 migration 結束，不只是寫入；讀流量照進來會逾時。表小（本機、staging）是毫秒級，可忽略；**大表請排維護窗口，且窗口要涵蓋讀流量**（先把 rpc / worker `kubectl scale` 到 0 或擋掉流量，再讓 migrate hook 跑）。順序：先 migrate 再升 rpc（chart 的 `pre-upgrade` hook 已保證）；舊 rpc 不認識新欄位也不寫它們，新 rpc 對 NULL 的列照舊，所以 rolling upgrade 期間兩種版本可並存。回滾：`migrate down` 一步會丟掉 key 與 hash（已記住的冪等保護隨之消失，訂單不受影響）；`down` 同樣在一個交易裡取 ACCESS EXCLUSIVE。
 

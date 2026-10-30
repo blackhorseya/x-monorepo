@@ -43,7 +43,7 @@ func docRollbackSQLFrom(t *testing.T, doc string) string {
 }
 
 // runbookFile is the runbook whose inventory 0009 rollback entry the test runs.
-var runbookFile = "testdata/runbook_d2f4035.md"
+var runbookFile = "../../docs/operations.md"
 
 // runRunbookRollback runs the rollback entry the runbook gives: the ```sql block after the
 // rollback marker, or — the first runbook — `task migrate -- down`, which is migrate's real
