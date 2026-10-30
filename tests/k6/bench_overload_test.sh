@@ -25,8 +25,14 @@ printf '#!/bin/sh\nexit 0\n' > "$work/fakebin/curl"
 printf '#!/bin/sh\nexit 0\n' > "$work/bin/migrate"
 printf '#!/bin/sh\nexec sleep 600\n' > "$work/bin/rpc"
 cp "$work/bin/rpc" "$work/bin/worker"
-# FAKE_K6=ok|threshold|script. A run raises the machine's load to FAKE_K6_BUSY for 2s (the create phase) and
-# puts it back to FAKE_K6_QUIET when it ends; threshold = k6's exit 99 in the create phase, script = exit 107.
+# FAKE_K6=ok|script|<crossing>. A run raises the machine's load to FAKE_K6_BUSY for 2s (the create phase) and
+# puts it back to FAKE_K6_QUIET when it ends; script = exit 107; a crossing is k6's exit 99 in the create phase,
+# with the --summary-export k6 writes for it (a crossed threshold is `"thresholds": {expr: true}`):
+#   timeouts   rpc_errors crossed, every error is request.timeout (what an overloaded machine produces)
+#   wrong      reservation_wrong_status crossed (a correctness threshold)
+#   both       rpc_errors (all timeouts) and reservation_wrong_status crossed
+#   other      rpc_errors crossed, 4 of the 7 errors are not timeouts
+#   nosummary  exit 99 and no summary file at all
 cat > "$work/fakebin/k6" <<'EOF'
 #!/usr/bin/env python3
 import json, os, sys, time
@@ -52,9 +58,15 @@ if phase == "create":
     setload(os.environ["FAKE_K6_BUSY"]); time.sleep(2)
 if mode == "script":
     setload(os.environ["FAKE_K6_QUIET"]); print("GoError: fake script error"); sys.exit(107)
-if mode == "threshold":
-    m["rpc_errors"] = {"count": 7}
-    json.dump({"metrics": m}, open(out, "w"))
+if mode in ("timeouts", "wrong", "both", "other", "nosummary"):
+    if mode in ("timeouts", "both", "other"):
+        m["rpc_errors"] = {"count": 7, "thresholds": {"count==0": True}}
+        m["rpc_errors{code:request.timeout}"] = {"count": 3 if mode == "other" else 7, "thresholds": {"count>=0": False}}
+        m["rpc_errors{code:transport.timeout}"] = {"count": 0, "thresholds": {"count>=0": False}}
+    if mode in ("wrong", "both"):
+        m["reservation_wrong_status"] = {"count": 2, "thresholds": {"count==0": True}}
+    if mode != "nosummary":
+        json.dump({"metrics": m}, open(out, "w"))
     setload(os.environ["FAKE_K6_QUIET"])
     print("time=\"2026-10-30T04:02:49Z\" level=error msg=\"thresholds on metrics 'rpc_errors' have been crossed\"", file=sys.stderr)
     sys.exit(99)
@@ -79,13 +91,24 @@ bench() {
 }
 rc_of() { cat "$work/$1.rc"; }
 
-# 1. k6 crosses a threshold (rpc_errors, the 10s CreateOrder timeouts of an overloaded machine): the attempt
-# is an invalid attempt, the bench ends "NOT A VALID BASELINE" with exit 3 — not k6's 99, not a tool failure
-bench thr 0.5 threshold
-[ "$(rc_of thr)" = 3 ] && r=ok || r=bad; check $r "threshold: exit 3 (NOT A VALID BASELINE), got $(rc_of thr)"
-grep -q "NOT A VALID BASELINE" "$work/thr.out/summary.md" 2>/dev/null && r=ok || r=bad; check $r "threshold: summary.md says NOT A VALID BASELINE"
-grep -q "rpc_errors" "$work/thr.out/run1-invalid.txt" 2>/dev/null && r=ok || r=bad; check $r "threshold: run1-invalid.txt names the crossed threshold"
-[ "$(wc -l < "$work/thr.k6" | tr -d ' ')" = 3 ] && r=ok || r=bad; check $r "threshold: all 3 attempts were made (each one a create phase)"
+# 1. k6 crosses an overload threshold (rpc_errors, every error a timeout: the 10s CreateOrder timeouts of an
+# overloaded machine): the attempt is an invalid attempt, the bench ends "NOT A VALID BASELINE" with exit 3
+bench thr 0.5 timeouts
+[ "$(rc_of thr)" = 3 ] && r=ok || r=bad; check $r "overload threshold: exit 3 (NOT A VALID BASELINE), got $(rc_of thr)"
+grep -q "NOT A VALID BASELINE" "$work/thr.out/summary.md" 2>/dev/null && r=ok || r=bad; check $r "overload threshold: summary.md says NOT A VALID BASELINE"
+grep -q "rpc_errors" "$work/thr.out/run1-invalid.txt" 2>/dev/null && r=ok || r=bad; check $r "overload threshold: run1-invalid.txt names the crossed threshold"
+[ "$(wc -l < "$work/thr.k6" | tr -d ' ')" = 3 ] && r=ok || r=bad; check $r "overload threshold: all 3 attempts were made (each one a create phase)"
+
+# 1b. anything that is not provably overload is a failure, never exit 3 and never "try again": a correctness
+# threshold, a correctness threshold together with an overload one (correctness wins), rpc_errors that are not
+# all timeouts, and a summary that is missing (fail-closed)
+for mode in wrong both other nosummary; do
+  bench "f-$mode" 0.5 "$mode"
+  rc=$(rc_of "f-$mode"); { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad
+  check $r "$mode: a failure (not exit 0, not exit 3), got exit $rc"
+  [ "$(wc -l < "$work/f-$mode.k6" | tr -d ' ')" = 1 ] && r=ok || r=bad; check $r "$mode: the bench stopped at the first attempt, no retry"
+  [ ! -e "$work/f-$mode.out/run1-invalid.txt" ] && r=ok || r=bad; check $r "$mode: the attempt was not written off as invalid"
+done
 
 # 2. a real tool failure (k6 script error, exit 107) stays a failure: neither 0 nor 3
 bench scr 0.5 script
