@@ -186,7 +186,9 @@ bench own 0.5 ok
 [ "$(rc_of own)" = 0 ] && r=ok || r=bad; check $r "own load: 3 valid attempts, exit 0, got $(rc_of own)"
 python3 -I - "$work/own.out/result.json" <<'PY' && r=ok || r=bad
 import json, sys
-a = json.load(open(sys.argv[1]))["attempts"]
+doc = json.load(open(sys.argv[1]))
+assert doc["parameters"]["baseline_wait_s"] == 180 and doc["parameters"]["load_interval_s"] == 1, doc["parameters"]
+a = doc["attempts"]
 assert [x["valid"] for x in a] == [True] * 3, [x["valid"] for x in a]
 assert all(x["max"] >= 1000 for x in a), "the load while the bench ran is not recorded: " + str([x["max"] for x in a])
 PY

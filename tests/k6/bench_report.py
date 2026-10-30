@@ -261,6 +261,8 @@ def report(out, env, attempts):
             "runs": runs,
             "attempts": attempts,
             "max_load_per_core": float(env["BENCH_MAX_LOAD_PER_CORE"]),
+            "baseline_wait_s": int(env["BENCH_BASELINE_WAIT"]) if "BENCH_BASELINE_WAIT" in env else None,
+            "load_interval_s": float(env["BENCH_LOAD_INTERVAL"]) if "BENCH_LOAD_INTERVAL" in env else None,
             "skus": int(env["BENCH_SKUS"]),
             "poll_ms": int(env["BENCH_POLL"]),
             "seed": int(env["BENCH_SEED"]),
