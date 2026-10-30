@@ -23,7 +23,7 @@ import (
 func TestStockReservedHandler(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
-	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
+	create := usecase.NewCreateOrder(repo, memory.NewTransactor(), noEvents{}, ids{}, clock{}, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	get := usecase.NewGetOrder(repo, ownership.New("admin"))
 	cancel := usecase.NewCancelOrder(repo, noEvents{}, clock{}, ownership.New("admin"))
 	h := consumer.NewStockReservedHandler(usecase.NewConfirmOrder(repo, noEvents{}, clock{}))

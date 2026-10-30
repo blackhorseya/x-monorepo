@@ -38,7 +38,7 @@ func (r *racyRepo) Save(c context.Context, o *order.Order) error {
 func seedOrder(t *testing.T, inner order.Repository, clock fixedClock) {
 	t.Helper()
 
-	create := usecase.NewCreateOrder(inner, &recorder{}, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
+	create := usecase.NewCreateOrder(inner, memory.NewTransactor(), &recorder{}, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	if _, err := create.Execute(context.Background(), dto.CreateOrderInput{
 		CustomerID: "c-1",
 		Items:      []dto.OrderLine{{SKU: "SKU-1", Quantity: 1}},

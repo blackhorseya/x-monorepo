@@ -29,7 +29,7 @@ func newPricingFixture(repo order.Repository, prices *memory.PriceList) pricingF
 	own := ownership.New(adminRole)
 
 	return pricingFixture{
-		create: usecase.NewCreateOrder(repo, events, atomicIDs{}, clock, own, prices),
+		create: usecase.NewCreateOrder(repo, memory.NewTransactor(), events, atomicIDs{}, clock, own, prices),
 		get:    usecase.NewGetOrder(repo, own),
 		list:   usecase.NewListOrders(repo, own),
 		prices: prices,

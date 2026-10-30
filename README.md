@@ -207,7 +207,7 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 |---|---|---|
 | kernel | `kernel.Event`（`AggregateID()`、`OccurredAt()`）是所有 BC 事件的 base interface | `pkgs/kernel/event.go` |
 | domain | aggregate 在行為裡 `record()`（`New` → `Created`、`Cancel` → `Cancelled`），`PullEvents()` 取出並清空；`order.Event` embed `kernel.Event`，實作共用 embedded `base` struct | `domain/order/events.go` |
-| application | usecase 只依序呼叫 `repo.Save` 與 `port.EventPublisher.Publish`；`provider.go` 的 `decorateTx()` 用 `usecasex.Transactional` 把整個 usecase 包進 `port.Transactor.Do`，兩者同一個交易 | `provider.go`、`usecase/create_order.go` |
+| application | usecase 只依序呼叫 `repo.Save` 與 `port.EventPublisher.Publish`；`provider.go` 的 `decorateTx()` 用 `usecasex.Transactional` 把整個 usecase 包進 `port.Transactor.Do`，兩者同一個交易（`CreateOrder` 是 #320 的窄例外：先查價，再自己用 `port.Transactor` 只包 `Save` + `Publish`，見 `decorateNoTx()`） | `provider.go`、`usecase/cancel_order.go` |
 | adapters/events | domain event → `ordering.v1.OrderCreated` / `OrderCancelled` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
 | platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → 把帶 topic / message_id / trace_id 的 logger 放進 context，usecase log 才會進 Loki）+ `Register`（每個 BC：PoisonQueue → Retry → drop → access → timeout：每則訊息一行 Info `message`，對應 rpc 的 `rpc` access log；`worker.handler_timeout` 給每次 attempt 一個 deadline）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
 | infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
@@ -317,7 +317,7 @@ type UseCase[I, O any] interface { Execute(c context.Context, in I) (O, error) }
 
 adapter 只依賴 `UseCase[I, O]`，不依賴具體 struct。`provider.go` 的 `decorate()` 用 `usecasex.Chain` 把
 metrics + logging 包在每個 usecase 外面，rpc 和 consumer 兩邊自動都有。寫入的 usecase 改用 `decorateTx()`，多包一層
-transaction。Connect
+transaction（例外：`CreateOrder` 要先問 catalog，改用 `decorateNoTx()` 並自己開只包寫入的 transaction，#320）。Connect
 interceptor 只管 transport 層的事（procedure、protocol、code）。
 
 - `usecasex.Logging`：一行 log。成功是 `Debug`（rpc 路徑已有 interceptor 的 `rpc` access log，成功次數看 metrics），domain error 是 `Info`（預期結果），
