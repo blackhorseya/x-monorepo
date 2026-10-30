@@ -1117,10 +1117,11 @@ expect_eq "guard: this suite runs under suite-guard.sh" "1" "${SUITE_GUARD:-0}"
 gfake="$tmp/guard-fake.sh"
 cat > "$gfake" <<'FAKE'
 #!/usr/bin/env bash
-# $1 = clean | leak | leak-fail | exit3 | stubborn | hang
+# $1 = clean | leak | leak-fail | exit3 | stubborn | hang | deaf
 case $1 in
   leak|leak-fail|hang) sleep 300 & echo $! > "$PIDF" ;;
   stubborn) ( trap '' TERM HUP INT; exec sleep 300 ) & echo $! > "$PIDF" ;;
+  deaf) trap '' TERM INT HUP; sleep 300 & echo $! > "$PIDF"; echo $$ > "$PIDF.leader"; while :; do sleep 1; done ;;   # the suite itself ignores TERM / INT and keeps going
 esac
 case $1 in
   leak-fail) exit 1 ;;
@@ -1165,6 +1166,22 @@ for sig in INT TERM; do
   if [ "$sig" = INT ]; then want=130; else want=143; fi
   expect_eq "guard: $sig stops the guard with $want" "$want" "$rc"
   if [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: $sig must take the suite's leftover with it"; fi
+done
+# the suite (the group's leader) ignoring TERM / INT must not stop the guard from finishing: after a
+# short grace the guard escalates to KILL for the whole group (SUITE_GUARD_GRACE seconds, 1 here)
+for sig in INT TERM; do
+  gpid="$tmp/guard-pid-deaf-$sig"; rm -f "$gpid" "$gpid.leader"
+  SUITE_GUARD_GRACE=1 PIDF="$gpid" python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' "$guard" "$gfake" deaf >/dev/null 2>&1 &
+  g=$!
+  i=0; while [ ! -s "$gpid.leader" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  kill -$sig "$g" 2>/dev/null || true
+  i=0; while kill -0 "$g" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done   # at most 10 s
+  if kill -0 "$g" 2>/dev/null; then bad "guard: $sig to a suite that ignores it must still end within the grace (guard still running after 10 s)"; kill -9 "$g" 2>/dev/null || true; else ok; fi
+  rc=0; wait "$g" 2>/dev/null || rc=$?
+  if [ "$sig" = INT ]; then want=130; else want=143; fi
+  expect_eq "guard: $sig to a deaf suite exits $want" "$want" "$rc"
+  if [ -s "$gpid" ] && gone "$gpid" && gone "$gpid.leader"; then ok; else bad "guard: $sig must take a deaf suite and its child down"; fi
+  for f in "$gpid" "$gpid.leader"; do if [ -s "$f" ]; then kill -9 "$(cat "$f")" 2>/dev/null || true; fi; done
 done
 if kill -0 "$bystander" 2>/dev/null; then ok; else bad "guard: a process outside the suite's group was killed"; fi
 kill "$bystander" 2>/dev/null || true
