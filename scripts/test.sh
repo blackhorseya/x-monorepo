@@ -78,15 +78,12 @@ expect_eq "other kind scripts do not run scripts-test" "helm helm_kind" "$(jobs_
 # test.sh also reads .github/workflows/k6-bench.yml (wiring assertions) and copies .goreleaser.yaml
 # into the cosign-smoke fixture (#298): each alone must run scripts-test; no other workflow does.
 expect_eq "k6-bench.yml also runs scripts-test" "actions_resolve scripts_test" "$(jobs_on k6bench .github/workflows/k6-bench.yml)"
-expect_eq ".goreleaser.yaml also runs scripts-test" \
-  "release_snapshot console_image scripts_test helm_kind" \
-  "$(jobs_on goreleaser_st .goreleaser.yaml)"
 expect_eq "k6 only" "k6" "$(jobs_on k6 tests/k6/orders.js)"
 expect_eq "Dockerfile is an image change" \
   "release_snapshot console_image helm_kind" \
   "$(jobs_on image deployments/docker/Dockerfile.rpc)"
-expect_eq ".goreleaser.yaml is an image change" \
-  "release_snapshot console_image helm_kind" \
+expect_eq ".goreleaser.yaml is an image change, and a scripts-test input (cosign-smoke fixture)" \
+  "release_snapshot console_image scripts_test helm_kind" \
   "$(jobs_on goreleaser .goreleaser.yaml)"
 expect_eq "another workflow is actions-resolve only" "actions_resolve" "$(jobs_on wf .github/workflows/labeler.yml)"
 # release.yml pins cosign-release (#215): a bump there must run release-snapshot's cosign smoke and
