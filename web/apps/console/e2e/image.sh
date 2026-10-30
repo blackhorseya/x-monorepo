@@ -72,6 +72,8 @@ expect_refused 'port 99999' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example:99999
 expect_refused 'port 0' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example:0/dex -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
 expect_refused 'IPv4 octet 256' -e CONSOLE_OIDC_ISSUER=https://10.0.0.256/dex -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
 expect_refused 'numeric last label that is not an IPv4' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example.123/dex -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
+expect_refused 'hex last label (.0x1)' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example.0x1/dex -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
+expect_refused 'hex last label (.0XFF)' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example.0XFF/dex -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
 expect_refused 'empty host label' -e CONSOLE_OIDC_ISSUER=https://idp..e2e.example/dex -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
 expect_refused 'issuer without a client id' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example/dex
 expect_refused 'client id without an issuer' -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e

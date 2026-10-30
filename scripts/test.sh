@@ -889,7 +889,7 @@ envsh_rc() { # <issuer> <client id> → exit code of sourcing the gate
 for good in https://idp.example.com https://idp.example.com/dex http://127.0.0.1:18121/idp http://dex.localtest.me:5556/dex https://idp.example.com:65535/a/b https://10.0.0.255:1/x; do
   expect_eq "envsh accepts $good" 0 "$(envsh_rc "$good" x-console)"
 done
-for badv in 'https://idp.example.com:65536/dex' 'https://idp.example.com:99999' 'https://idp.example.com:0/dex' 'https://10.0.0.256/dex' 'https://idp.example.com.123/dex' 'https://idp..example.com' 'https://-idp.example.com' 'https://idp.example.com/dex?x=1' 'https://u@idp.example.com' 'ftp://idp.example.com' 'https://idp.example.com/de x'; do
+for badv in 'https://idp.example.com:65536/dex' 'https://idp.example.com:99999' 'https://idp.example.com:0/dex' 'https://10.0.0.256/dex' 'https://idp.example.com.123/dex' 'https://idp.example.com.0x1' 'https://idp.example.com.0XFF/dex' 'https://0x7f.0x1' 'https://idp.example.com.0x' 'https://idp..example.com' 'https://-idp.example.com' 'https://idp.example.com/dex?x=1' 'https://u@idp.example.com' 'ftp://idp.example.com' 'https://idp.example.com/de x'; do
   expect_eq "envsh refuses $badv" 1 "$(envsh_rc "$badv" x-console)"
 done
 expect_eq "envsh refuses an issuer with a newline"          1 "$(envsh_rc "$(printf 'https://idp.example.com/dex\njunk')" x-console)"
@@ -899,7 +899,7 @@ expect_eq "envsh refuses an issuer without a client id"     1 "$(envsh_rc https:
 expect_eq "envsh: nothing set is OIDC off, not an error"    0 "$(envsh_rc '' '')"
 # Whatever the gate accepts, the browser's URL parser accepts with the same origin (needs node).
 if command -v node >/dev/null 2>&1; then
-  for cand in https://idp.example.com:65536/dex https://10.0.0.256/dex https://idp.example.com.123/dex https://idp..example.com https://idp.example.com:0/dex https://idp.example.com:65535/dex http://127.0.0.1:18121/idp; do
+  for cand in https://idp.example.com.0x1 https://idp.example.com.0XFF/dex https://idp.example.com:65536/dex https://10.0.0.256/dex https://idp.example.com.123/dex https://idp..example.com https://idp.example.com:0/dex https://idp.example.com:65535/dex http://127.0.0.1:18121/idp; do
     gate=$(envsh_rc "$cand" x-console)
     url=$(node -e 'try { const u = new URL(process.argv[1]); console.log(u.origin === "null" ? "bad" : "ok") } catch { console.log("bad") }' "$cand")
     if [ "$gate" = 0 ] && [ "$url" != ok ]; then bad "envsh accepts $cand but the SPA's URL parser rejects it (OIDC would be silently off)"; else ok; fi

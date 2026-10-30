@@ -327,3 +327,16 @@ test("an IdP that never answers a refresh is given up on: the page still comes u
     release();
   }
 });
+
+test("a token valid for 30 days (no expires_in) is scheduled within the timer's range: no refresh loop", async ({ page }) => {
+  await stubConfig(page);
+  const idp = await mockIdp(page);
+  idp.claims = { exp: Math.floor(Date.now() / 1000) + 30 * 86400 };
+  idp.expiresInRaw = undefined;
+  await page.goto("/login");
+  await signIn(page);
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+  await page.waitForTimeout(1500);
+  expect(refreshGrants(idp)).toHaveLength(0);
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+});
