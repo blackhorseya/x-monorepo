@@ -326,7 +326,7 @@ func TestWhoAmI(t *testing.T) {
 func TestBootstrap(t *testing.T) {
 	f := newFixture()
 	c := context.Background()
-	boot := usecase.NewBootstrap(f.accounts, f.keys, f.ids, f.secrets, f.clock)
+	boot := usecase.NewBootstrap(f.accounts, f.keys, memory.NewInviteRepository(), f.ids, f.secrets, f.clock)
 	exp := f.clock.t.Add(24 * time.Hour)
 
 	// Validation happens before anything is written: a bad role leaves the store empty.
@@ -368,12 +368,12 @@ func TestBootstrap(t *testing.T) {
 	// Generator failures surface with their step.
 	g := newFixture()
 	g.ids.err = errors.New("entropy exhausted")
-	if _, err := usecase.NewBootstrap(g.accounts, g.keys, g.ids, g.secrets, g.clock).Execute(c, dto.BootstrapInput{Name: "root", KeyName: "k"}); err == nil || !strings.Contains(err.Error(), "generate account id") {
+	if _, err := usecase.NewBootstrap(g.accounts, g.keys, memory.NewInviteRepository(), g.ids, g.secrets, g.clock).Execute(c, dto.BootstrapInput{Name: "root", KeyName: "k"}); err == nil || !strings.Contains(err.Error(), "generate account id") {
 		t.Fatalf("id failure: %v", err)
 	}
 	g.ids.err = nil
 	g.secrets.err = errors.New("entropy exhausted")
-	if _, err := usecase.NewBootstrap(g.accounts, g.keys, g.ids, g.secrets, g.clock).Execute(c, dto.BootstrapInput{Name: "root", KeyName: "k"}); err == nil || !strings.Contains(err.Error(), "generate api key secret") {
+	if _, err := usecase.NewBootstrap(g.accounts, g.keys, memory.NewInviteRepository(), g.ids, g.secrets, g.clock).Execute(c, dto.BootstrapInput{Name: "root", KeyName: "k"}); err == nil || !strings.Contains(err.Error(), "generate api key secret") {
 		t.Fatalf("secret failure: %v", err)
 	}
 }

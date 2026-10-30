@@ -80,3 +80,54 @@ func TestBootstrap_PrintsSecretOnce(t *testing.T) {
 		t.Fatalf("output lacks the secret:\n%s", out.String())
 	}
 }
+
+func inviteUC(created bool) cli.BootstrapUC {
+	return usecasex.Func[dto.BootstrapInput, *dto.BootstrapOutput](func(_ context.Context, in dto.BootstrapInput) (*dto.BootstrapOutput, error) {
+		if !created {
+			return &dto.BootstrapOutput{}, nil
+		}
+
+		return &dto.BootstrapOutput{
+			Created: true,
+			Account: dto.AccountOutput{ID: "acc-1", Name: "root", Roles: []string{"admin"}},
+			Invite:  dto.InviteOutput{ID: "inv-1", Email: in.AdminEmail, AccountID: "acc-1", ExpiresAt: time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)},
+		}, nil
+	})
+}
+
+// --admin-email prints what the deployer needs to sign in (who, which email,
+// until when) and nothing that could be a secret: the invite holds none.
+func TestBootstrap_RunInvite(t *testing.T) {
+	var buf bytes.Buffer
+	if err := cli.NewBootstrap(inviteUC(true)).RunInvite(context.Background(), &buf, "root", []string{"admin"}, "admin@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	for _, want := range []string{"account acc-1 (root) roles=[admin]", "invite inv-1 for admin@example.com", "expires=2026-11-06T09:00:00Z", "ClaimInvite"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	for _, banned := range []string{"X-API-Key", "xk_", "secret"} {
+		if strings.Contains(got, banned) {
+			t.Errorf("output must not mention %q:\n%s", banned, got)
+		}
+	}
+
+	// Second run: nothing written, exit 0.
+	buf.Reset()
+	if err := cli.NewBootstrap(inviteUC(false)).RunInvite(context.Background(), &buf, "root", []string{"admin"}, "admin@example.com"); err != nil || !strings.Contains(buf.String(), "already bootstrapped") {
+		t.Fatalf("second run = %v\n%s", err, buf.String())
+	}
+
+	// A use case error is returned as is.
+	boom := errors.New("boom")
+	failing := usecasex.Func[dto.BootstrapInput, *dto.BootstrapOutput](func(context.Context, dto.BootstrapInput) (*dto.BootstrapOutput, error) { return nil, boom })
+	if err := cli.NewBootstrap(failing).RunInvite(context.Background(), io.Discard, "root", nil, "a@b.co"); !errors.Is(err, boom) {
+		t.Fatalf("use case error = %v", err)
+	}
+	// The invite is committed by the time it is printed: a failed write is an error.
+	if err := cli.NewBootstrap(inviteUC(true)).RunInvite(context.Background(), failWriter{}, "root", []string{"admin"}, "a@b.co"); err == nil || !strings.Contains(err.Error(), "inv-1") {
+		t.Fatalf("writer failure = %v, want an error naming the invite", err)
+	}
+}

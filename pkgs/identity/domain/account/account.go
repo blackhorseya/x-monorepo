@@ -26,6 +26,8 @@ type Account struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
+	// sessionsRevokedAt: access tokens issued before it are refused. Zero: never revoked.
+	sessionsRevokedAt time.Time
 }
 
 // New creates an ACTIVE account. Roles are trimmed, de-duplicated and sorted;
@@ -56,6 +58,8 @@ type ReconstituteParams struct {
 	Version   int64
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// SessionsRevokedAt zero: never revoked.
+	SessionsRevokedAt time.Time
 }
 
 // Reconstitute rebuilds an Account from persistence. Only repositories should call it.
@@ -74,18 +78,19 @@ func Reconstitute(p ReconstituteParams) (*Account, error) {
 		return nil, err
 	}
 
-	return &Account{id: p.ID, name: p.Name, roles: roles, status: p.Status, version: p.Version, createdAt: p.CreatedAt, updatedAt: p.UpdatedAt}, nil
+	return &Account{id: p.ID, name: p.Name, roles: roles, status: p.Status, version: p.Version, createdAt: p.CreatedAt, updatedAt: p.UpdatedAt, sessionsRevokedAt: p.SessionsRevokedAt}, nil
 }
 
-func (x *Account) ID() ID                { return x.id }
-func (x *Account) Name() string          { return x.name }
-func (x *Account) Roles() []string       { return slices.Clone(x.roles) }
-func (x *Account) Status() Status        { return x.status }
-func (x *Account) Version() int64        { return x.version }
-func (x *Account) CreatedAt() time.Time  { return x.createdAt }
-func (x *Account) UpdatedAt() time.Time  { return x.updatedAt }
-func (x *Account) IsActive() bool        { return x.status == StatusActive }
-func (x *Account) HasRole(r string) bool { return slices.Contains(x.roles, r) }
+func (x *Account) ID() ID                       { return x.id }
+func (x *Account) Name() string                 { return x.name }
+func (x *Account) Roles() []string              { return slices.Clone(x.roles) }
+func (x *Account) Status() Status               { return x.status }
+func (x *Account) Version() int64               { return x.version }
+func (x *Account) CreatedAt() time.Time         { return x.createdAt }
+func (x *Account) UpdatedAt() time.Time         { return x.updatedAt }
+func (x *Account) SessionsRevokedAt() time.Time { return x.sessionsRevokedAt }
+func (x *Account) IsActive() bool               { return x.status == StatusActive }
+func (x *Account) HasRole(r string) bool        { return slices.Contains(x.roles, r) }
 
 // Disable refuses every credential of the account from now on. The keys are
 // untouched: Enable brings them back.
@@ -110,6 +115,20 @@ func (x *Account) Enable(now time.Time) error {
 	return nil
 }
 
+// RevokeSessions refuses every access token issued before now: "sign out
+// everywhere". It touches neither status, roles nor API keys, and it cannot
+// reach a refresh token held at the identity provider: whoever holds one
+// obtains a token with a newer iat. For a suspected compromise, Disable the
+// account and revoke at the provider instead. The line only moves forward.
+func (x *Account) RevokeSessions(now time.Time) error {
+	if now.After(x.sessionsRevokedAt) {
+		x.sessionsRevokedAt = now
+	}
+	x.updatedAt = now
+
+	return nil
+}
+
 // AssignRoles replaces the roles (an empty list clears them). The change
 // reaches resolved principals within the resolver cache TTL.
 func (x *Account) AssignRoles(roles []string, now time.Time) error {
@@ -119,6 +138,22 @@ func (x *Account) AssignRoles(roles []string, now time.Time) error {
 	}
 	x.roles = normalized
 	x.updatedAt = now
+
+	return nil
+}
+
+// CheckSession decides whether an access token issued at issuedAt may still be
+// used by an account whose sessions were revoked at revokedAt (zero: never).
+// A token without iat is refused whether or not the account was ever revoked:
+// it could not be compared once one is. A token issued before revokedAt is
+// refused; one issued at that very instant is not ("earlier than" is the rule).
+func CheckSession(revokedAt, issuedAt time.Time) error {
+	if issuedAt.IsZero() {
+		return ErrMissingIssuedAt
+	}
+	if issuedAt.Before(revokedAt) {
+		return ErrSessionRevoked
+	}
 
 	return nil
 }

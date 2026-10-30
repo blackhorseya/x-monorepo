@@ -121,6 +121,6 @@ func (i *AccountRepository) List(c context.Context, p account.ListParams) ([]*ac
 func cloneAccount(a *account.Account, version int64) (*account.Account, error) {
 	return account.Reconstitute(account.ReconstituteParams{
 		ID: a.ID(), Name: a.Name(), Roles: a.Roles(), Status: a.Status(),
-		Version: version, CreatedAt: a.CreatedAt(), UpdatedAt: a.UpdatedAt(),
+		Version: version, CreatedAt: a.CreatedAt(), UpdatedAt: a.UpdatedAt(), SessionsRevokedAt: a.SessionsRevokedAt(),
 	})
 }

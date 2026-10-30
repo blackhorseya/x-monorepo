@@ -179,6 +179,7 @@ func InitializeBootstrap(cfg *config.AppConfig) (*cli2.Bootstrap, func(), error)
 	logger := providers.Logger
 	repository := identity.ProvideAccountRepository(db, logger)
 	apikeyRepository := identity.ProvideAPIKeyRepository(db)
+	inviteRepository := identity.ProvideInviteRepository(db)
 	uuidGenerator := system3.NewUUIDGenerator()
 	secretGenerator := system3.NewSecretGenerator()
 	clock := system3.NewClock()
@@ -190,7 +191,7 @@ func InitializeBootstrap(cfg *config.AppConfig) (*cli2.Bootstrap, func(), error)
 		cleanup()
 		return nil, nil, err
 	}
-	v := identity.ProvideBootstrap(repository, apikeyRepository, uuidGenerator, secretGenerator, clock, transactor, recorder)
+	v := identity.ProvideBootstrap(repository, apikeyRepository, inviteRepository, uuidGenerator, secretGenerator, clock, transactor, recorder)
 	bootstrap := cli2.NewBootstrap(v)
 	return bootstrap, func() {
 		cleanup2()
