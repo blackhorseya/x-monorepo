@@ -63,17 +63,40 @@ class Reconcile(unittest.TestCase):
 
 
 class Validity(unittest.TestCase):
-    def test_one_sample_over_the_limit_invalidates_the_attempt(self):
-        self.assertTrue(r.validity([3.0, 7.9, 8.0], 8.0)["valid"])
-        v = r.validity([3.0, 8.1, 2.0], 8.0)
+    def status(self, before, during=(), marker=None, limit=8.0):
+        with tempfile.TemporaryDirectory() as d:
+            for kind, xs in (("baseline", before), ("load", during)):
+                if xs is not None:
+                    with open(os.path.join(d, f"run1-{kind}.csv"), "w") as f:
+                        f.write("".join(f"{i},{x}\n" for i, x in enumerate(xs)))
+            if marker:
+                with open(os.path.join(d, "run1-invalid.txt"), "w") as f:
+                    f.write(marker)
+            return r.attempt_status(d, 1, limit)
+
+    def test_the_last_sample_before_the_attempt_is_judged_against_the_limit(self):
+        self.assertTrue(self.status([9.0, 8.0])["valid"])
+        v = self.status([3.0, 8.1])
         self.assertFalse(v["valid"])
-        self.assertEqual(v["max"], 8.1)
+        self.assertIn("not quiet", v["reason"])
+        self.assertEqual(v["baseline"], 8.1)
 
-    def test_no_samples_is_no_proof(self):
-        self.assertFalse(r.validity([], 8.0)["valid"])
+    def test_load_while_the_attempt_ran_is_recorded_not_judged(self):
+        v = self.status([1.0], [3.0, 50.0])
+        self.assertTrue(v["valid"])
+        self.assertEqual((v["max"], v["mean"], v["samples"]), (50.0, 26.5, 2))
+
+    def test_no_sample_is_no_proof(self):
+        self.assertFalse(self.status([])["valid"])
+        self.assertFalse(self.status(None)["valid"])
+
+    def test_an_attempt_bench_sh_cut_short_is_invalid_with_its_reason(self):
+        v = self.status([1.0], [1.0], marker="k6 create: thresholds on metrics 'rpc_errors' have been crossed\n")
+        self.assertFalse(v["valid"])
+        self.assertIn("rpc_errors", v["reason"])
 
 
-def write_attempt(d, n, load, created=10, reserved=10, rate_ms=1000, baseline=None):
+def write_attempt(d, n, load, created=10, reserved=10, rate_ms=1000, baseline=(0.1,)):
     def dump(name, obj):
         with open(os.path.join(d, f"run{n}-{name}"), "w") as f:
             f.write(obj if isinstance(obj, str) else __import__("json").dumps(obj))
@@ -107,9 +130,9 @@ ENV = {
 class Selection(unittest.TestCase):
     def test_statistics_use_valid_attempts_only_and_invalid_ones_are_listed(self):
         with tempfile.TemporaryDirectory() as d:
-            write_attempt(d, 1, [5.0, 7.0])    # valid (limit 8.0)
-            write_attempt(d, 2, [5.0, 14.0])   # invalid
-            write_attempt(d, 3, [6.0, 7.5])    # valid
+            write_attempt(d, 1, [5.0, 7.0], baseline=[2.0])    # valid (limit 8.0)
+            write_attempt(d, 2, [5.0, 7.0], baseline=[14.0])   # started on a busy machine: invalid
+            write_attempt(d, 3, [6.0, 50.0], baseline=[7.5])   # the bench's own load is not judged: valid
             result, problems, code = r.report(d, ENV, 3)
         self.assertEqual(code, 0)
         self.assertEqual(problems, [])
@@ -121,7 +144,7 @@ class Selection(unittest.TestCase):
     def test_too_few_valid_attempts_is_not_a_baseline(self):
         with tempfile.TemporaryDirectory() as d:
             write_attempt(d, 1, [5.0, 7.0])
-            write_attempt(d, 2, [5.0, 14.0])
+            write_attempt(d, 2, [5.0, 7.0], baseline=[14.0])
             result, problems, code = r.report(d, ENV, 2)
         self.assertEqual(code, 3)
         self.assertFalse(result["valid"])
@@ -171,7 +194,7 @@ class EnvironmentLoadNotOwnLoad(unittest.TestCase):
 
     def test_no_baseline_sample_is_no_proof(self):
         with tempfile.TemporaryDirectory() as d:
-            write_attempt(d, 1, [0.5, 0.6])
+            write_attempt(d, 1, [0.5, 0.6], baseline=None)
             result, _, _ = r.report(d, self.ENV4, 1)
         self.assertFalse(result["attempts"][0]["valid"], "no load was measured before the attempt")
 
