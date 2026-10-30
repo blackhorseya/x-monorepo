@@ -290,7 +290,7 @@ var inventory0009Dirty = rollbackCase{
 }
 
 // orderingRunbook is where the ordering 0008 entry is read from.
-var orderingRunbook = "testdata/runbook_ordering_a67465d.md"
+var orderingRunbook = "../../docs/operations.md"
 
 var ordering0008Clean = rollbackCase{
 	name:       "ordering 0008 from 8 clean",
@@ -325,8 +325,66 @@ var ordering0008Clean = rollbackCase{
 	},
 }
 
+var ordering0008Dirty = rollbackCase{
+	name:    "ordering 0008 from 8 dirty (no columns)",
+	runbook: orderingRunbook,
+	marker:  orderingMarker,
+	bc:      0,
+	latest:  8,
+	prepare: func(t *testing.T, e *rollbackEnv) { // a real failed 0008: ALTER TABLE cannot get its lock within lock_timeout
+		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
+		holder, err := pgx.Connect(e.c, e.url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = holder.Close(e.c) }()
+		tx, err := holder.Begin(e.c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(e.c, `LOCK TABLE ordering.orders IN ACCESS SHARE MODE`); err != nil {
+			t.Fatal(err)
+		}
+		sep := "?"
+		if strings.Contains(e.url, "?") {
+			sep = "&"
+		}
+		short := config.Postgres{URL: e.url + sep + "lock_timeout=200"}
+		if err := postgres.Up(e.c, short, migrations[0]); err == nil {
+			t.Fatal("0008 got its lock while another session held the table")
+		}
+		if err := tx.Rollback(e.c); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 0); got != "8 dirty=true" {
+			t.Fatalf("ordering = %s, want 8 dirty=true", got)
+		}
+		if e.count(t, ordering0008Cols) != 0 || e.count(t, ordering0008Index) != 0 {
+			t.Fatal("the failed 0008 left its columns or index behind")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		if n := e.count(t, ordering0008Cols); n != 0 {
+			t.Errorf("idempotency columns after the rollback: %d", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.orders WHERE id = 'rollback-order'`); n != 1 {
+			t.Errorf("ordering.orders rows = %d, want the order kept", n)
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) { // the lock is free again, so up applies
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 0); got != "8 dirty=false" || e.count(t, ordering0008Cols) != 2 || e.count(t, ordering0008Index) != 1 {
+			t.Errorf("after up: %s, columns=%d, index=%d", got, e.count(t, ordering0008Cols), e.count(t, ordering0008Index))
+		}
+	},
+}
+
 func TestRollbackRunbooks(t *testing.T) {
-	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0008Clean} {
+	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0008Clean, ordering0008Dirty} {
 		t.Run(tc.name, func(t *testing.T) { runRollbackCase(t, tc) })
 	}
 }

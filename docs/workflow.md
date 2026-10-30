@@ -46,6 +46,10 @@ review 反覆抓到、但現有 CI 擋不住的類別。PR template（`.github/p
 - `task check-gen-fresh` 只涵蓋 Go / OpenAPI / Wire，**不是** TS 的證據；TS 要用 `task check-gen-fresh-all`（= CI gen-freshness（CI 直接呼叫這個 task，只有一份定義）：`task gen wire gen-ts` 後不帶 pathspec 的 `git diff`，範圍與 CI 相同；先 `git add` 你的改動，否則未 stage 的修改也會被算成 diff）。
 - `gen-ts` 需要網路：連不上就回報「TS 未驗證」，不要記成已新鮮。CI 的 gen-freshness 仍是 fail-closed gate。
 
+### 單一 BC 的 rollback runbook：驗其他 BC 不動（#319）
+- 新增或修改 BC 的 rollback runbook（`docs/operations.md`），PR 要附 `apps/migrate/rollback_runbook_test.go` 的 `rollbackCase`：測試從文件取出 runbook 實際給的入口（marker 後第一個 ```sql 區塊，或它指向的指令）在隔離 Postgres 執行，斷言目標 BC 只退一版、其他 BC 的版本、表、欄位與資料不變。不可用 `postgres.Down(<某 BC>)` 代替文件入口。
+- runbook 聲稱適用的每個狀態（clean、dirty……）各一個 `rollbackCase`；文件沒寫、也寫不出測試的狀態就不要聲稱。全域 `task migrate -- down` 讓每個 BC 各退一步，語意不改；runbook 不得用它當單一 BC 的 rollback。
+
 ### migration 宣稱線上可用：驗完整交易的鎖（#228）
 - 文件或 migration 註解若宣稱遷移期間讀／寫可用，必須用**完整 migration 交易**驗證，不能由單一 SQL 的 lock 級別推論（例：`CREATE INDEX` 只持 SHARE，但同交易前面的 `ALTER TABLE` 會持 AccessExclusive 到 commit）。
 - 做法（拋棄式 DB）：session A 執行完整 migration、先不 commit；session B 查 `pg_locks`，並以短 `lock_timeout` 執行代表性 SELECT／寫入；記錄結果，部署文件與結果一致；最後 rollback／commit 並關閉兩個 session。
