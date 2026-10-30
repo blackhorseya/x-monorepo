@@ -12,25 +12,49 @@
 set -u
 [ $# -gt 0 ] || { echo "usage: $0 <command> [args...]" >&2; exit 2; }
 
+pgid=
+signaled=0
+escalator=
+grace=${SUITE_GUARD_GRACE:-5}
+
+# stop: the signal reached the guard (the suite is in another group, so the terminal's Ctrl-C does
+# not reach it); pass TERM on to the whole group, and if the suite ignores it, KILL the group after
+# `grace` seconds — the wait loop below ends when the suite does, so without this a suite that traps
+# TERM would keep the guard (and its fixtures) alive for ever.
+# shellcheck disable=SC2329 # runs from the traps below
+stop() {
+  signaled=$1
+  [ -n "$pgid" ] || return 0
+  kill -TERM -- "-$pgid" 2>/dev/null
+  if [ -z "$escalator" ]; then
+    ( sleep "$grace"; kill -KILL -- "-$pgid" 2>/dev/null ) &
+    escalator=$!
+  fi
+}
+# the traps first: a signal between the spawn and the trap would otherwise take the default action
+# and orphan the suite
+trap 'stop 130' INT
+trap 'stop 143' TERM
+
 set -m
 SUITE_GUARD=1 "$@" &
 child=$!
 set +m
 pgid=$child
-signaled=0
-
-# stop: the signal reached the guard (the suite is in another group, so the terminal's Ctrl-C does
-# not reach it); pass it on to the whole group and keep waiting for the suite to finish.
-# shellcheck disable=SC2329 # runs from the traps below
-stop() { signaled=$1; kill -TERM -- "-$pgid" 2>/dev/null; }
-trap 'stop 130' INT
-trap 'stop 143' TERM
+# a signal that arrived before pgid was known
+[ "$signaled" = 0 ] || stop "$signaled"
 
 rc=0
 while :; do
   wait "$child" 2>/dev/null; rc=$?
   kill -0 "$child" 2>/dev/null || break
 done
+
+if [ -n "$escalator" ]; then   # the suite ended by itself in time: drop the pending KILL and its sleep
+  # shellcheck disable=SC2046
+  kill $(pgrep -P "$escalator") "$escalator" 2>/dev/null
+  wait "$escalator" 2>/dev/null
+fi
 
 # group_alive: any member left? (the group id stays taken while a member lives, so a stale id
 # cannot name somebody else's group)
