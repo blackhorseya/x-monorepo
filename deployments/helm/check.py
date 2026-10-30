@@ -26,7 +26,16 @@ def main(profile: str) -> None:
     cfg = yaml.safe_load(one(docs, "ConfigMap", "")["data"]["config.yaml"])
     check(cfg["auth"]["mode"] in ("off", "optional", "required"), f'auth.mode rendered as {cfg["auth"]["mode"]!r}')
     for path, v in walk(cfg):
-        check(not isinstance(v, bool) or path[-1] in ("docs", "insecure"), f"{'.'.join(path)} rendered as boolean {v!r}")
+        check(not isinstance(v, bool) or path[-1] in ("docs", "insecure", "enabled"), f"{'.'.join(path)} rendered as boolean {v!r}")
+
+    # auth.oidc: the list reaches the app as written (a mangled issuer or an off-by-default
+    # `enabled` would turn the verifier on or off silently); lists are not walked above.
+    oidc = cfg["auth"]["oidc"]
+    expect(oidc["enabled"], values["config"]["auth"]["oidc"]["enabled"], "auth.oidc.enabled")
+    expect(oidc["issuers"], values["config"]["auth"]["oidc"]["issuers"], "auth.oidc.issuers")
+    for n, issuer in enumerate(oidc["issuers"]):
+        check(issuer.get("issuer") and issuer.get("audience"), f"auth.oidc.issuers[{n}] needs issuer and audience")
+        check(isinstance(issuer.get("allow_insecure_issuer", False), bool), f"auth.oidc.issuers[{n}].allow_insecure_issuer rendered as {issuer.get('allow_insecure_issuer')!r}")
 
     rpc = one(docs, "Deployment", "-rpc")
     worker = one(docs, "Deployment", "-worker")
