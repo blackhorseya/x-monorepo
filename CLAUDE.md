@@ -7,7 +7,7 @@ Connect 對外、Wire 組裝、Turborepo 前端（`web/`）。細節以 `README.
 
 ## 常用指令
 
-所有檢查的單一事實來源是 `Taskfile.yml`；hooks、lefthook、CI 都只是呼叫它。
+所有檢查的單一事實來源是 `Taskfile.yml`；hooks、lefthook、CI 都只是呼叫它。但「呼叫它」不等於「跑過」：AgEnD worktree 的 `core.hooksPath` 指向 `~/.agend/hooks`，lefthook 通常沒掛上。回報要分開寫，沒掛上就在 exact head 手動跑 `task gate-local`，寫「手動 gate 通過，hook 未執行」，不寫成 lefthook 通過；驗證與措辭見 `docs/ci.md`「本機 hook 證據」。
 
 ```bash
 task tools                 # 固定版本工具鏈（buf / wire / golangci-lint / protoc-gen-*）→ ./bin，第一次必跑
