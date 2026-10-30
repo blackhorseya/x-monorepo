@@ -77,10 +77,10 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 ```bash
 scripts/dex-token.sh                      # admin@example.com 的 access token（JWT），stdout
 scripts/dex-token.sh user@example.com --id-token
-curl -H "Authorization: Bearer $(scripts/dex-token.sh)" http://localhost:8080/api/...   # 掛進 interceptor 之後（#272）
+curl -H "Authorization: Bearer $(scripts/dex-token.sh)" http://localhost:8080/api/...   # 需 auth.oidc.enabled；帳號要先綁定（見下），未綁定只能 ClaimInvite
 ```
 
-**帳號預先綁定（尚未提供，#274 part 2）**：`task bootstrap` 目前**不會**把這兩個 Dex 帳號綁進 identity。綁定只走真流程——`worker bootstrap --admin-email` 建 admin account 與邀請，Dex 登入後呼叫 `ClaimInvite`——而 `ClaimInvite` 在 auth interceptor 能驗 OIDC token 之前（#272）一律回 `UNAUTHENTICATED`，所以現在領不了。刻意不加直接寫 `external_identities` 的 CLI（那會繞過 `CreateInvite` / `ClaimInvite`，是身分邊界上的後門）。part 2 等 #272 之後，用 `scripts/dex-token.sh` 走完 bootstrap → 邀請 → 領取，並和 Playwright OIDC 登入 E2E 一起做。
+**帳號預先綁定（尚未提供，#274 part 2）**：`task bootstrap` 目前**不會**把這兩個 Dex 帳號綁進 identity。綁定只走真流程——`worker bootstrap --admin-email` 建 admin account 與邀請，Dex 登入後呼叫 `ClaimInvite`——`ClaimInvite` 現在可以領（#272：auth interceptor 驗 OIDC token，未綁定的身分只能呼叫它）。刻意不加直接寫 `external_identities` 的 CLI（那會繞過 `CreateInvite` / `ClaimInvite`，是身分邊界上的後門）。part 2 等 #272 之後，用 `scripts/dex-token.sh` 走完 bootstrap → 邀請 → 領取，並和 Playwright OIDC 登入 E2E 一起做。
 
 **名稱怎麼解析**——三個地方都必須看到同一個 issuer 字串，所以不能改寫成 `localhost` 或 service 名：
 
