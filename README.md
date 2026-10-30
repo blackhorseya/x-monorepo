@@ -232,6 +232,8 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   擋住的 group），console 的 **Prune** 頁就是打它——alert 響了之後不用進 pod：dry run 看 NOTE、填 forget、再跑；
 bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`，Poison 頁的 BC badge 與 alert 說明都連過來），dry run 永遠從開著開始。它跑在 `http.timeout` 底下，
   所以是 dry-run / forget-group / 例行小量的入口；第一次清大 backlog 用 CLI / CronJob（逾時只是回應掉了，已刪的 batch 都已 commit，重跑無害）。
+- **SKU 格式（inventory 與 catalog 同一條規則）**：1–64 **bytes**。`SetStockRequest.sku` 有 `max_len: 64`（字元）、`stock.New` 再擋 bytes（`stock.invalid_sku`）、`inventory.stocks` 有 `CHECK (octet_length(sku) BETWEEN 1 AND 64)`（migration `0009`）。
+  以前 `SetStock` 能寫入 catalog 永遠不收的 SKU，那筆庫存下不了單（`order.unknown_sku`）。`Reconstitute` 與 `reservation.NewLine` 刻意不檢查：舊資料與舊事件仍能讀、能走 stock missing，不會變 poison；舊資料的防線是 migration。部署前的查詢與失敗處理見 `docs/operations.md`「inventory `0009`」。
 - **Inventory 寫入要 admin**：`inventory.v1.InventoryService` 的 `SetStock`（覆寫 on-hand）與 `ExpireReservations` auth 開著時要 `auth.admin_role`
   （非 admin → `PERMISSION_DENIED` + `auth.permission_denied`，沒帶 credential → `UNAUTHENTICATED`；`auth.mode: off` 全開）；`GetStock` / `ListStocks` /
   reservation 的讀取不檢查 role。console 的 Stock 頁 Set 要用 admin key / JWT。

@@ -4,6 +4,10 @@ package stock
 
 import "time"
 
+// maxSKUBytes is the longest SKU in bytes; catalog's Product has the same rule, so a stocked
+// SKU can always be priced and ordered.
+const maxSKUBytes = 64
+
 // SKU identifies a Stock.
 type SKU string
 
@@ -22,7 +26,7 @@ type Stock struct {
 
 // New creates a Stock with nothing reserved.
 func New(sku SKU, onHand int32, now time.Time) (*Stock, error) {
-	if sku == "" {
+	if sku == "" || len(sku) > maxSKUBytes {
 		return nil, ErrInvalidSKU
 	}
 	if onHand < 0 {

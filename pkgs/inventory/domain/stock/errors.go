@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	ErrInvalidSKU             = kernel.NewError(kernel.KindInvalidArgument, "stock.invalid_sku", "sku must not be empty")
+	ErrInvalidSKU             = kernel.NewError(kernel.KindInvalidArgument, "stock.invalid_sku", "sku must be 1 to 64 bytes")
 	ErrNegativeQuantity       = kernel.NewError(kernel.KindInvalidArgument, "stock.negative_quantity", "quantity must not be negative")
 	ErrInvalidQuantity        = kernel.NewError(kernel.KindInvalidArgument, "stock.invalid_quantity", "quantity must be positive")
 	ErrBelowReserved          = kernel.NewError(kernel.KindFailedPrecondition, "stock.below_reserved", "on-hand quantity cannot drop below the reserved quantity")

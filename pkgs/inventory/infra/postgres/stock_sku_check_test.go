@@ -46,8 +46,9 @@ func upTo(t *testing.T, m platformpg.Migration, n int) platformpg.Migration {
 
 // 0009 gives inventory.stocks catalog's SKU rule (1–64 bytes) as a CHECK. Real Postgres:
 // the CHECK refuses 65 bytes (and counts bytes, not characters); a table that already
-// holds an over-long SKU fails the migration and keeps the previous version, clean and
-// without the constraint; once the row is dealt with, up, down and up again all work.
+// holds an over-long SKU fails the migration, leaves no constraint behind (golang-migrate
+// marks the version dirty; docs/operations.md has the reset); once the row is dealt with
+// and the version reset, up, down and up again all work.
 func TestStocksSKUCheck_Postgres(t *testing.T) {
 	url := pgtest.URL(t)
 
@@ -106,15 +107,21 @@ func TestStocksSKUCheck_Postgres(t *testing.T) {
 	if err := platformpg.Up(c, cfg, full); err == nil {
 		t.Fatal("migration 0009 succeeded over a 65-byte SKU")
 	}
-	if v, dirty := version(); v != 8 || dirty {
-		t.Fatalf("after the failed migration: version = %d dirty=%v, want 8 clean", v, dirty)
+	if v, dirty := version(); v != 9 || !dirty {
+		t.Fatalf("after the failed migration: version = %d dirty=%v, want 9 dirty", v, dirty)
 	}
 	if hasCheck() {
 		t.Fatal("the failed migration left the CHECK behind")
 	}
+	if err := platformpg.Up(c, cfg, full); err == nil {
+		t.Fatal("up on a dirty version succeeded")
+	}
 
-	// Clean up the row, then 0009 applies.
+	// Fix the data and reset the version (the documented recovery), then 0009 applies.
 	if err := db.WithContext(c).Exec("TRUNCATE inventory.stocks CASCADE").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WithContext(c).Exec("UPDATE inventory.schema_migrations SET version = 8, dirty = false").Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := platformpg.Up(c, cfg, full); err != nil {
