@@ -23,7 +23,12 @@ func docRollbackSQL(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := string(b)
+
+	return docRollbackSQLFrom(t, string(b))
+}
+
+func docRollbackSQLFrom(t *testing.T, doc string) string {
+	t.Helper()
 	const marker = "**Rollback（只退 inventory `0009`）**"
 	i := strings.Index(doc, marker)
 	if i < 0 {
@@ -35,6 +40,34 @@ func docRollbackSQL(t *testing.T) string {
 	}
 
 	return m[1]
+}
+
+// runbookFile is the runbook whose inventory 0009 rollback entry the test runs.
+var runbookFile = "testdata/runbook_d2f4035.md"
+
+// runRunbookRollback runs the rollback entry the runbook gives: the ```sql block after the
+// rollback marker, or — the first runbook — `task migrate -- down`, which is migrate's real
+// "down" command (every BC steps back one).
+func runRunbookRollback(t *testing.T, conn *pgx.Conn, url string) {
+	t.Helper()
+	b, err := os.ReadFile(runbookFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(b)
+	switch {
+	case strings.Contains(doc, "**Rollback（只退 inventory `0009`）**"):
+		if _, err := conn.Exec(context.Background(), docRollbackSQLFrom(t, doc)); err != nil {
+			t.Fatalf("documented rollback: %v", err)
+		}
+	case strings.Contains(doc, "Rollback：`task migrate -- down`"):
+		t.Setenv("APP_POSTGRES_URL", url)
+		if err := run([]string{"down"}); err != nil {
+			t.Fatalf("migrate down: %v", err)
+		}
+	default:
+		t.Fatalf("%s has no inventory 0009 rollback entry", runbookFile)
+	}
 }
 
 // The documented inventory 0009 rollback (docs/operations.md) moves only inventory: the CHECK
@@ -95,9 +128,12 @@ func TestInventory0009Rollback_LeavesOtherBCsAlone(t *testing.T) {
 	}
 	tables := count(`SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('catalog','identity','ordering','inventory')`)
 
-	if _, err := conn.Exec(c, docRollbackSQL(t)); err != nil {
-		t.Fatalf("documented rollback: %v", err)
-	}
+	t.Cleanup(func() { // a destructive entry must not break the tests after this one
+		for _, m := range migrations {
+			_ = postgres.Up(context.Background(), cfg, m)
+		}
+	})
+	runRunbookRollback(t, conn, url)
 
 	after := versions()
 	for schema, v := range before {
@@ -112,7 +148,9 @@ func TestInventory0009Rollback_LeavesOtherBCsAlone(t *testing.T) {
 	if count(checkQ) != 0 {
 		t.Error("the rollback left stocks_sku_length behind")
 	}
-	if n := count(`SELECT count(*) FROM catalog.products WHERE sku = 'ROLLBACK-SENTINEL'`); n != 1 {
+	if count(`SELECT count(*) FROM pg_class WHERE oid = to_regclass('catalog.products')`) == 0 {
+		t.Error("catalog.products was dropped")
+	} else if n := count(`SELECT count(*) FROM catalog.products WHERE sku = 'ROLLBACK-SENTINEL'`); n != 1 {
 		t.Errorf("catalog.products sentinel rows = %d, want 1", n)
 	}
 	if n := count(`SELECT count(*) FROM inventory.stocks WHERE sku = 'ROLLBACK-STOCK'`); n != 1 {
@@ -128,5 +166,78 @@ func TestInventory0009Rollback_LeavesOtherBCsAlone(t *testing.T) {
 	}
 	if count(checkQ) != 1 {
 		t.Error("up did not re-add the CHECK")
+	}
+}
+
+// The same rollback also has to work from the state a failed 0009 leaves behind: version 9,
+// dirty, and no CHECK (the over-long row made ADD CONSTRAINT fail). The docs say it applies
+// "when the version is dirty too", so the documented SQL must not trip over the missing CHECK.
+func TestInventory0009Rollback_FromDirtyFailedUp(t *testing.T) {
+	url := pgtest.URL(t)
+	c := context.Background()
+	cfg := config.Postgres{URL: url}
+
+	for _, m := range migrations {
+		if err := postgres.Up(c, cfg, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conn, err := pgx.Connect(c, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(c) }()
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = conn.Exec(ctx, `TRUNCATE inventory.stocks CASCADE`)
+		_, _ = conn.Exec(ctx, `UPDATE inventory.schema_migrations SET version = 8, dirty = false`)
+		_ = postgres.Up(ctx, cfg, migrations[1])
+	})
+
+	versions := func() map[string]string {
+		t.Helper()
+		got := map[string]string{}
+		for _, m := range migrations {
+			v, dirty, err := postgres.Version(c, cfg, m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got[m.Schema] = fmt.Sprintf("%d dirty=%v", v, dirty)
+		}
+
+		return got
+	}
+
+	// Build the failed-0009 state: inventory at 8, an over-long row, up fails.
+	if err := postgres.Down(c, cfg, migrations[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(c, `TRUNCATE inventory.stocks CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(c, `INSERT INTO inventory.stocks (sku, on_hand, reserved, version, updated_at) VALUES ($1, 1, 0, 1, now())`, strings.Repeat("a", 65)); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgres.Up(c, cfg, migrations[1]); err == nil {
+		t.Fatal("0009 succeeded over a 65-byte SKU")
+	}
+	before := versions()
+	if before["inventory"] != "9 dirty=true" {
+		t.Fatalf("inventory = %s, want 9 dirty=true", before["inventory"])
+	}
+
+	if _, err := conn.Exec(c, docRollbackSQL(t)); err != nil {
+		t.Fatalf("documented rollback from 9 dirty: %v", err)
+	}
+
+	after := versions()
+	for schema, v := range before {
+		want := v
+		if schema == "inventory" {
+			want = "8 dirty=false"
+		}
+		if after[schema] != want {
+			t.Errorf("%s: %s, want %s", schema, after[schema], want)
+		}
 	}
 }
