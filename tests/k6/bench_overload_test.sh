@@ -125,6 +125,9 @@ for mode in wrong both other nosummary onlyreq emptycount negative rpcnocount ok
   [ ! -e "$work/f-$mode.out/run1-invalid.txt" ] && r=ok || r=bad; check $r "$mode: the attempt was not written off as invalid"
 done
 
+# 1b2. the unknown-split case the reviewer reproduced ends in exactly exit 99
+[ "$(rc_of f-emptycount)" = 99 ] && r=ok || r=bad; check $r "emptycount: exit 99 exactly, got $(rc_of f-emptycount)"
+
 # 1c. a summary left in a reused out dir by an earlier bench (a clean timeouts-only one) must not be taken for
 # this run's: k6 exits 99 without writing a summary, so there is none, and that is a failure
 mkdir "$work/stale.out"

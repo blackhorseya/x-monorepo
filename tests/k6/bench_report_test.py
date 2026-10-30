@@ -232,6 +232,14 @@ class EnvironmentLoadNotOwnLoad(unittest.TestCase):
         self.assertIn("not a baseline", problems[-1])
 
 
+class RecordedParameters(unittest.TestCase):
+    def test_the_wait_and_sampling_interval_are_recorded_in_result_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_attempt(d, 1, [0.5])
+            result, _, _ = r.report(d, {**ENV, "BENCH_RUNS": "1", "BENCH_BASELINE_WAIT": "180", "BENCH_LOAD_INTERVAL": "5"}, 1)
+        self.assertEqual((result["parameters"].get("baseline_wait_s"), result["parameters"].get("load_interval_s")), (180, 5))
+
+
 class ThresholdClassification(unittest.TestCase):
     """k6 exit 99: only provable overload is an invalid attempt; everything else is a failure (fail-closed)."""
 
@@ -300,6 +308,22 @@ class ThresholdClassification(unittest.TestCase):
             with self.subTest(label):
                 m = {**self.TIMEOUTS, "rpc_errors{code:request.timeout}": {"count": 9 if label == "negative" else 7}, "rpc_errors{code:transport.timeout}": bad}
                 self.assertEqual(self.classify(m)[0], "failure")
+
+    def test_the_shapes_reviewer_19_found_are_failures(self):
+        crossed = {"thresholds": {"count==0": True}}
+        ok0 = {"count": 0, "thresholds": {"count>=0": False}}
+        shapes = {
+            "missing count ({})": {"rpc_errors": {**crossed, "count": 7}, "rpc_errors{code:request.timeout}": {"count": 7}, "rpc_errors{code:transport.timeout}": {}},
+            "req=8 transport=-1 total=7": {"rpc_errors": {**crossed, "count": 7}, "rpc_errors{code:request.timeout}": {"count": 8}, "rpc_errors{code:transport.timeout}": {"count": -1}},
+            "req=True transport=0 total=1": {"rpc_errors": {**crossed, "count": 1}, "rpc_errors{code:request.timeout}": {"count": True}, "rpc_errors{code:transport.timeout}": ok0},
+        }
+        for label, m in shapes.items():
+            with self.subTest(label):
+                self.assertEqual(self.classify(m)[0], "failure")
+        # json.load turns the bare token Infinity into float('inf'): not an integer count
+        raw = ('{"metrics": {"rpc_errors": {"count": Infinity, "thresholds": {"count==0": true}}, '
+               '"rpc_errors{code:request.timeout}": {"count": Infinity}, "rpc_errors{code:transport.timeout}": {"count": 0}}}')
+        self.assertEqual(self.classify(raw)[0], "failure", "req=total=Infinity")
 
     def test_rpc_errors_itself_without_a_valid_count_is_a_failure(self):
         m = {**self.TIMEOUTS, "rpc_errors": {"thresholds": {"count==0": True}}}
