@@ -3,6 +3,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"connectrpc.com/connect"
@@ -31,7 +32,36 @@ type (
 	ListAPIKeysUC    = usecasex.UseCase[dto.ListAPIKeysInput, *dto.ListAPIKeysOutput]
 	RevokeAPIKeyUC   = usecasex.UseCase[dto.RevokeAPIKeyInput, *dto.APIKeyOutput]
 	WhoAmIUC         = usecasex.UseCase[dto.WhoAmIInput, *dto.WhoAmIOutput]
+	CreateInviteUC   = usecasex.UseCase[dto.CreateInviteInput, *dto.InviteOutput]
+	ClaimInviteUC    = usecasex.UseCase[dto.ClaimInviteInput, *dto.AccountOutput]
+	RevokeSessionsUC = usecasex.UseCase[dto.RevokeSessionsInput, *dto.AccountOutput]
 )
+
+// ExternalIdentity is the verified external identity of one call: what the
+// token said, after the server verified its signature and claims. It is a
+// plain value defined here, at the consumer; the handler never trusts a client
+// to supply it.
+type ExternalIdentity struct {
+	Issuer        string
+	Subject       string
+	Email         string
+	EmailVerified bool
+}
+
+// ExternalIdentitySource hands the handler the verified external identity of
+// the call, if the request carried one. The auth interceptor (#272) provides
+// the real one; until then NoExternalIdentity answers "none" and ClaimInvite
+// is UNAUTHENTICATED (fail-closed).
+type ExternalIdentitySource interface {
+	ExternalIdentityFrom(c context.Context) (ExternalIdentity, bool)
+}
+
+// NoExternalIdentity is the source of a server with OIDC off: nobody has one.
+type NoExternalIdentity struct{}
+
+func (NoExternalIdentity) ExternalIdentityFrom(context.Context) (ExternalIdentity, bool) {
+	return ExternalIdentity{}, false
+}
 
 // UseCases groups what the service needs; wire fills it by field.
 type UseCases struct {
@@ -45,10 +75,15 @@ type UseCases struct {
 	ListAPIKeys    ListAPIKeysUC
 	RevokeAPIKey   RevokeAPIKeyUC
 	WhoAmI         WhoAmIUC
+	CreateInvite   CreateInviteUC
+	RevokeSessions RevokeSessionsUC
+	ClaimInvite    ClaimInviteUC
+	// ExternalIdentity is where ClaimInvite learns who is calling.
+	ExternalIdentity ExternalIdentitySource
 }
 
 // IdentityService implements the generated IdentityServiceHandler. Every
-// procedure but WhoAmI is behind server.RequireRole(auth.AdminRole): managing
+// procedure but WhoAmI and ClaimInvite is behind server.RequireRole(auth.AdminRole): managing
 // who may call is the operator's job.
 type IdentityService struct {
 	uc   UseCases
@@ -192,6 +227,56 @@ func (h *IdentityService) RevokeApiKey(c context.Context, req *connect.Request[i
 	return connect.NewResponse(&identityv1.RevokeApiKeyResponse{ApiKey: toProtoAPIKey(out)}), nil
 }
 
+func (h *IdentityService) CreateInvite(c context.Context, req *connect.Request[identityv1.CreateInviteRequest]) (*connect.Response[identityv1.CreateInviteResponse], error) {
+	if err := h.admin(c); err != nil {
+		return nil, err
+	}
+	out, err := h.uc.CreateInvite.Execute(c, dto.CreateInviteInput{AccountID: req.Msg.GetAccountId(), Email: req.Msg.GetEmail()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&identityv1.CreateInviteResponse{Invite: toProtoInvite(out)}), nil
+}
+
+// RevokeSessions is "sign out of all devices", not a compromise response; the
+// contract comment on the RPC says so, and so must any UI that offers it.
+func (h *IdentityService) RevokeSessions(c context.Context, req *connect.Request[identityv1.RevokeSessionsRequest]) (*connect.Response[identityv1.RevokeSessionsResponse], error) {
+	if err := h.admin(c); err != nil {
+		return nil, err
+	}
+	out, err := h.uc.RevokeSessions.Execute(c, dto.RevokeSessionsInput{AccountID: req.Msg.GetAccountId()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&identityv1.RevokeSessionsResponse{Account: toProtoAccount(out)}), nil
+}
+
+// ClaimInvite binds the caller's verified external identity through the
+// invite for its email. Not admin-only: it is what an unbound identity calls.
+func (h *IdentityService) ClaimInvite(c context.Context, _ *connect.Request[identityv1.ClaimInviteRequest]) (*connect.Response[identityv1.ClaimInviteResponse], error) {
+	var (
+		id ExternalIdentity
+		ok bool
+	)
+	if h.uc.ExternalIdentity != nil {
+		id, ok = h.uc.ExternalIdentity.ExternalIdentityFrom(c)
+	}
+	if !ok {
+		ce := connect.NewError(connect.CodeUnauthenticated, errors.New("a verified external identity is required"))
+		ce.Meta().Set("x-error-code", server.UnauthenticatedCode)
+
+		return nil, ce
+	}
+	out, err := h.uc.ClaimInvite.Execute(c, dto.ClaimInviteInput{Issuer: id.Issuer, Subject: id.Subject, Email: id.Email, EmailVerified: id.EmailVerified})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&identityv1.ClaimInviteResponse{Account: toProtoAccount(out)}), nil
+}
+
 func (h *IdentityService) WhoAmI(c context.Context, _ *connect.Request[identityv1.WhoAmIRequest]) (*connect.Response[identityv1.WhoAmIResponse], error) {
 	out, err := h.uc.WhoAmI.Execute(c, dto.WhoAmIInput{})
 	if err != nil {
@@ -204,10 +289,27 @@ func (h *IdentityService) WhoAmI(c context.Context, _ *connect.Request[identityv
 }
 
 func toProtoAccount(a *dto.AccountOutput) *identityv1.Account {
-	return &identityv1.Account{
+	out := &identityv1.Account{
 		Id: a.ID, Name: a.Name, Roles: a.Roles, Status: toProtoAccountStatus(a.Status),
 		CreateTime: timestamppb.New(a.CreatedAt), UpdateTime: timestamppb.New(a.UpdatedAt),
 	}
+	if !a.SessionsRevokedAt.IsZero() {
+		out.SessionsRevokeTime = timestamppb.New(a.SessionsRevokedAt)
+	}
+
+	return out
+}
+
+func toProtoInvite(v *dto.InviteOutput) *identityv1.Invite {
+	out := &identityv1.Invite{
+		Id: v.ID, Email: v.Email, AccountId: v.AccountID,
+		CreateTime: timestamppb.New(v.CreatedAt), ExpireTime: timestamppb.New(v.ExpiresAt),
+	}
+	if !v.ClaimedAt.IsZero() {
+		out.ClaimTime = timestamppb.New(v.ClaimedAt)
+	}
+
+	return out
 }
 
 func toProtoAccountStatus(s string) identityv1.AccountStatus {

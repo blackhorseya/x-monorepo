@@ -115,41 +115,52 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	v20 := identity.ProvideListAPIKeys(accountRepository, apikeyRepository, recorder)
 	v21 := identity.ProvideRevokeAPIKey(apikeyRepository, adminCensus, auth, clock2, transactor2, recorder)
 	v22 := identity.ProvideWhoAmI(recorder)
+	inviteRepository := identity.ProvideInviteRepository(db)
+	auditLog := identity.ProvideAuditLog(db)
+	v23 := identity.ProvideCreateInvite(accountRepository, inviteRepository, systemUUIDGenerator, auditLog, clock2, transactor2, recorder)
+	v24 := identity.ProvideRevokeSessions(accountRepository, auditLog, clock2, transactor2, recorder)
+	externalidentityRepository := identity.ProvideExternalIdentityRepository(db)
+	v25 := identity.ProvideClaimInvite(inviteRepository, externalidentityRepository, accountRepository, clock2, transactor2, recorder)
+	externalIdentitySource := identity.ProvideExternalIdentitySource()
 	useCases := rpc3.UseCases{
-		CreateAccount:  v13,
-		GetAccount:     v14,
-		ListAccounts:   v15,
-		DisableAccount: v16,
-		EnableAccount:  v17,
-		AssignRoles:    v18,
-		CreateAPIKey:   v19,
-		ListAPIKeys:    v20,
-		RevokeAPIKey:   v21,
-		WhoAmI:         v22,
+		CreateAccount:    v13,
+		GetAccount:       v14,
+		ListAccounts:     v15,
+		DisableAccount:   v16,
+		EnableAccount:    v17,
+		AssignRoles:      v18,
+		CreateAPIKey:     v19,
+		ListAPIKeys:      v20,
+		RevokeAPIKey:     v21,
+		WhoAmI:           v22,
+		CreateInvite:     v23,
+		RevokeSessions:   v24,
+		ClaimInvite:      v25,
+		ExternalIdentity: externalIdentitySource,
 	}
 	identityService := rpc3.NewIdentityService(useCases, auth)
 	productRepository := catalog.ProvideProductRepository(db, logger)
 	clock3 := system4.NewClock()
 	transactor3 := catalog.ProvideTransactor(db)
-	v23 := catalog.ProvideUpsertProduct(productRepository, clock3, transactor3, recorder)
-	v24 := catalog.ProvideGetProduct(productRepository, recorder)
-	v25 := catalog.ProvideListProducts(productRepository, recorder)
-	v26 := catalog.ProvideDeactivateProduct(productRepository, clock3, transactor3, recorder)
-	catalogService := rpc4.NewCatalogService(v23, v24, v25, v26, auth)
+	v26 := catalog.ProvideUpsertProduct(productRepository, clock3, transactor3, recorder)
+	v27 := catalog.ProvideGetProduct(productRepository, recorder)
+	v28 := catalog.ProvideListProducts(productRepository, recorder)
+	v29 := catalog.ProvideDeactivateProduct(productRepository, clock3, transactor3, recorder)
+	catalogService := rpc4.NewCatalogService(v26, v27, v28, v29, auth)
 	poisonService := NewPoisonService(db, auth)
-	v27 := NewRoutes(orderService, inventoryService, identityService, catalogService, poisonService)
-	v28 := NewDocs()
+	v30 := NewRoutes(orderService, inventoryService, identityService, catalogService, poisonService)
+	v31 := NewDocs()
 	readiness := NewReadiness(db)
-	v29 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
-	v30 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
-	resolver, cleanup4, err := identity.ProvideResolver(v29, v30, clock2, auth, logger, meterProvider)
+	v32 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
+	v33 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, auth, recorder)
+	resolver, cleanup4, err := identity.ProvideResolver(v32, v33, clock2, auth, logger, meterProvider)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	serverServer, err := server.New(http, auth, logger, v27, v28, readiness, providers, resolver)
+	serverServer, err := server.New(http, auth, logger, v30, v31, readiness, providers, resolver)
 	if err != nil {
 		cleanup4()
 		cleanup3()

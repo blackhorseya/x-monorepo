@@ -6,7 +6,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/account"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/externalidentity"
 )
 
 // Clock abstracts time for deterministic tests.
@@ -46,4 +48,16 @@ type Transactor interface {
 // operation, so the census and the decision never disagree about expiry.
 type AdminCensus interface {
 	LockAdmins(c context.Context, role string) ([]account.AdminStanding, time.Time, error)
+}
+
+// IssuerMapping says how an issuer's unbound identities are treated. An
+// issuer it does not know is externalidentity.MappingBound (fail-closed).
+type IssuerMapping interface {
+	MappingFor(issuer string) externalidentity.Mapping
+}
+
+// AuditLog records AuditEvents. Record joins the caller's transaction, so an
+// action and its audit line commit or roll back together.
+type AuditLog interface {
+	Record(c context.Context, e dto.AuditEvent) error
 }

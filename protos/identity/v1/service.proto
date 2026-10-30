@@ -8,7 +8,7 @@ import "identity/v1/entity.proto";
 
 // IdentityService manages the accounts and API keys the rpc server's auth
 // interceptor resolves X-API-Key against (next to the static auth.api_keys of
-// the config, which stay the break-glass path). Every procedure but WhoAmI
+// the config, which stay the break-glass path). Every procedure but WhoAmI and ClaimInvite
 // requires the admin role when auth is on (x-error-code: auth.permission_denied).
 // It only verifies: JWTs keep coming from the external issuer of auth.jwt.
 service IdentityService {
@@ -30,6 +30,30 @@ service IdentityService {
   // ListApiKeys lists every key of an account, revoked ones included, newest first.
   rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
   rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
+  // CreateInvite pre-binds an email to an account (valid 7 days, single use,
+  // no secret). The person signs in at the identity provider with that verified
+  // email and claims it; the claim binds their (issuer, subject) to the account,
+  // after which only the subject counts. Audited.
+  rpc CreateInvite(CreateInviteRequest) returns (CreateInviteResponse);
+  // ClaimInvite binds the caller's own verified external identity (issuer,
+  // subject) to the account its email was invited for, and spends the invite.
+  // It is the one procedure a verified-but-unbound identity may call. The
+  // request is empty on purpose: the issuer, subject, email and email_verified
+  // come from the token the server verified, never from the client. It is NOT
+  // admin-only. Refused (x-error-code): invite.not_found, invite.expired,
+  // invite.already_claimed, invite.email_unverified, invite.email_mismatch,
+  // identity.already_bound.
+  rpc ClaimInvite(ClaimInviteRequest) returns (ClaimInviteResponse);
+  // RevokeSessions refuses every access token of the account issued before now
+  // (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
+  // NOTHING MORE: it does not touch the identity provider's refresh tokens, so
+  // whoever holds one can still obtain a token with a newer issue time. It is
+  // NOT a response to a stolen account. If an account is suspected stolen,
+  // DisableAccount it (effective for every token, refresh-derived ones
+  // included) and revoke the user's refresh tokens or reset their credentials
+  // at the identity provider. Requires the admin role; audited (who, which
+  // account, when; never a token).
+  rpc RevokeSessions(RevokeSessionsRequest) returns (RevokeSessionsResponse);
   // WhoAmI returns the principal the caller's credential resolved to (no role
   // needed; anonymous when auth is off or optional and nothing was sent).
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
@@ -137,6 +161,33 @@ message RevokeApiKeyRequest {
 
 message RevokeApiKeyResponse {
   ApiKey api_key = 1;
+}
+
+message CreateInviteRequest {
+  string account_id = 1 [(buf.validate.field).string.min_len = 1];
+  string email = 2 [(buf.validate.field).string = {
+    min_len: 3
+    max_len: 254
+  }];
+}
+
+message CreateInviteResponse {
+  Invite invite = 1;
+}
+
+message ClaimInviteRequest {}
+
+message ClaimInviteResponse {
+  // The account the caller's identity is now bound to.
+  Account account = 1;
+}
+
+message RevokeSessionsRequest {
+  string account_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message RevokeSessionsResponse {
+  Account account = 1;
 }
 
 message WhoAmIRequest {}

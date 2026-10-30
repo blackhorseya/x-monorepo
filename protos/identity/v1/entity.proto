@@ -27,6 +27,22 @@ message Account {
   AccountStatus status = 4;
   google.protobuf.Timestamp create_time = 5;
   google.protobuf.Timestamp update_time = 6;
+  // Access tokens issued before this are refused (RevokeSessions). Unset: never
+  // revoked. It is "sign out everywhere", not a compromise response: see
+  // IdentityService.RevokeSessions.
+  google.protobuf.Timestamp sessions_revoke_time = 7;
+}
+
+// Invite pre-binds an email to an account. It is single use, valid for 7 days,
+// and carries no secret: the person signs in at the identity provider and claims it.
+message Invite {
+  string id = 1;
+  string email = 2;
+  string account_id = 3;
+  google.protobuf.Timestamp create_time = 4;
+  google.protobuf.Timestamp expire_time = 5;
+  // Set once the invite has been claimed.
+  google.protobuf.Timestamp claim_time = 6;
 }
 
 enum ApiKeyStatus {

@@ -5,12 +5,13 @@ package dto
 import "time"
 
 type AccountOutput struct {
-	ID        string
-	Name      string
-	Roles     []string
-	Status    string // ACTIVE | DISABLED
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID                string
+	Name              string
+	Roles             []string
+	Status            string // ACTIVE | DISABLED
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	SessionsRevokedAt time.Time // zero: never revoked
 }
 
 type CreateAccountInput struct {
@@ -127,6 +128,9 @@ type BootstrapInput struct {
 	Roles     []string
 	KeyName   string
 	ExpiresAt time.Time // zero: never
+	// AdminEmail switches bootstrap to the OIDC path: the admin account gets an
+	// invite for this email instead of an API key (no secret exists to print).
+	AdminEmail string
 }
 
 // BootstrapOutput: Created false means an account already existed and
@@ -137,4 +141,74 @@ type BootstrapOutput struct {
 	Account AccountOutput
 	Key     APIKeyOutput
 	Secret  string
+	// Invite is set when BootstrapInput.AdminEmail was; Key and Secret are then empty.
+	Invite InviteOutput
+}
+
+// InviteOutput is an invite as the admin sees it: it carries no secret.
+type InviteOutput struct {
+	ID        string
+	Email     string
+	AccountID string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	ClaimedAt time.Time // zero: still pending
+}
+
+type CreateInviteInput struct {
+	AccountID string
+	Email     string
+}
+
+// ClaimInviteInput is a verified external identity asking to be bound; the
+// caller (the auth interceptor) has already verified the token.
+type ClaimInviteInput struct {
+	Issuer        string
+	Subject       string
+	Email         string
+	EmailVerified bool
+}
+
+type RevokeSessionsInput struct {
+	AccountID string
+}
+
+// ResolveExternalInput is the (issuer, subject) of a verified token.
+type ResolveExternalInput struct {
+	Issuer  string
+	Subject string
+}
+
+// ResolveExternalOutput is what a request's principal is built from. A
+// disabled account still resolves (Disabled true): refusing it is the
+// resolver adapter's decision.
+type ResolveExternalOutput struct {
+	AccountID         string
+	Name              string
+	Roles             []string
+	Disabled          bool
+	SessionsRevokedAt time.Time // zero: never revoked
+}
+
+// ProvisionExternalInput creates a role-less account for a first-seen
+// identity of an auto_provision issuer. Email only names the account.
+type ProvisionExternalInput struct {
+	Issuer  string
+	Subject string
+	Email   string
+}
+
+// Audit actions.
+const (
+	AuditRevokeSessions = "identity.revoke_sessions"
+	AuditCreateInvite   = "identity.create_invite"
+)
+
+// AuditEvent is who did what to which account, and when. It never carries a
+// token or a secret.
+type AuditEvent struct {
+	Actor           string // the calling principal's subject; "anonymous" when auth is off
+	Action          string
+	TargetAccountID string
+	At              time.Time
 }
