@@ -518,6 +518,7 @@ test-results/
 playwright-report/
 
 # `go build ./...` inside a single-package app module drops the binary in its root; binaries belong in /bin
+/apps/catalog-rpc/catalog-rpc
 /apps/migrate/migrate
 /apps/rpc/rpc
 /apps/worker/worker

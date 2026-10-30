@@ -37,8 +37,8 @@ vars:
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
   BCS: ordering inventory identity catalog
   # Every Go module in the workspace (keep in sync with go.work).
-  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity pkgs/catalog apps/rpc apps/migrate apps/worker tools/stripvalidate
-  APPS: rpc migrate worker
+  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity pkgs/catalog apps/catalog-rpc apps/rpc apps/migrate apps/worker tools/stripvalidate
+  APPS: rpc migrate worker catalog-rpc
 
 tasks:
   default:
