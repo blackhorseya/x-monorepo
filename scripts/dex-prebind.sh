@@ -28,30 +28,46 @@ svc=identity.v1.IdentityService
 die() { echo "dex-prebind: $*" >&2; exit 1; }
 
 [ "$issuer" = "$dev_issuer" ] || die "the issuer must be the dev Dex ($dev_issuer); this only runs against the dev IdP"
-case $base in
-  http://localhost|http://localhost:*|http://localhost/*|http://127.0.0.1|http://127.0.0.1:*|http://127.0.0.1/*|http://\[::1\]|http://\[::1\]:*|http://\[::1\]/*) ;;
-  *) die "BASE_URL must be a local http server (localhost, 127.0.0.1, [::1]); the admin key is sent there" ;;
-esac
+# BASE_URL is matched whole, not by prefix: a prefix test lets "http://localhost:x@evil.example" through
+# (curl reads that as userinfo and connects to evil.example). Only scheme + an exact local host +
+# an optional port in 1-65535 (+ one trailing slash) pass; userinfo, path, query, fragment and any
+# look-alike host do not.
+host_re='^http://(localhost|127\.0\.0\.1|\[::1\])(:([0-9]{1,5}))?/?$'
+if [[ $base =~ $host_re ]]; then
+  port=${BASH_REMATCH[3]}
+  { [ -z "${BASH_REMATCH[2]}" ] || { [ $((10#$port)) -ge 1 ] && [ $((10#$port)) -le 65535 ]; }; } || port=bad
+else
+  port=bad
+fi
+[ "$port" != bad ] || die "BASE_URL must be http://localhost, http://127.0.0.1 or http://[::1] with an optional port and nothing else; the admin key is sent there"
+base=${base%/}
 [ -n "${ADMIN_API_KEY:-}" ] || die "ADMIN_API_KEY is required (an admin API key: task bootstrap's, or a break-glass auth.api_keys entry)"
 command -v jq >/dev/null || die "jq is required"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# printable <text> <secret>: the server's words are only echoed when they look like a code
+# (lowercase, digits, _ . ? and at most 64 of them) and do not contain the credential just sent;
+# a server that reflects the key or a token as its error code gets <redacted>.
+printable() {
+  if [[ $1 =~ ^[a-z0-9_.?]{1,64}$ ]] && [[ $1 != *"$2"* ]]; then printf '%s' "$1"; else printf '<redacted>'; fi
+}
+
 # rpc <Method> <json> <header-name> <header-value>: POSTs to the Connect endpoint and leaves the
 # response in $resp. The credential header goes through curl's stdin config, so it never shows in a
 # process list. On failure only the HTTP status, Connect code and x-error-code are reported.
 resp=
 rpc() {
-  local method=$1 body=$2 name=$3 value=$4 status
-  value=${value//\\/\\\\}; value=${value//\"/\\\"}
+  local method=$1 body=$2 name=$3 secret=$4 value status
+  value=${secret//\\/\\\\}; value=${value//\"/\\\"}
   status=$(printf 'header = "%s: %s"\n' "$name" "$value" | curl -sS -K - -o "$work/body" -D "$work/headers" -w '%{http_code}' \
     -H 'Content-Type: application/json' --data-binary "$body" "$base/$svc/$method") || die "$method: cannot reach $base"
   if [ "$status" != 200 ]; then
     local code xcode
     code=$(jq -r '.code // empty' "$work/body" 2>/dev/null || true)
     xcode=$(tr -d '\r' < "$work/headers" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p' | head -1)
-    die "$method failed: http $status, code ${code:-?}, x-error-code ${xcode:-?}"
+    die "$method failed: http $(printable "$status" "$value"), code $(printable "${code:-?}" "$value"), x-error-code $(printable "${xcode:-?}" "$secret")"
   fi
   resp=$(cat "$work/body")
 }
