@@ -1,8 +1,9 @@
-import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from "@tanstack/react-router";
+import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
-import { getCredential, getCredentialGeneration } from "./auth";
+import { getCredential, getCredentialGeneration, useCredential } from "./auth";
 import { getConfig } from "./oidc/config";
 import { CredentialControl } from "./components/credential";
 import { RouteError, RoutePending } from "./components/route-status";
@@ -54,11 +55,22 @@ const gated = (Page: LazyPage): LazyPage => {
   return Gated;
 };
 
+// With OIDC on, the console is for signed-in people: anything but the login pages goes to /login
+// (remembering where it was headed). With OIDC off the console is open as before.
+const publicPaths = ["/login", "/auth/callback"];
+
 // Layout: the nav shows the admin pages only to a caller the server's admin check lets through
 // (with auth.mode=off that is everyone, as on the server). That is a courtesy, not a gate: the
 // server checks the role on every admin RPC.
 function Root() {
   const isAdmin = useIsAdmin();
+  // Signing out (or a session that ends) leaves the page that needed the credential.
+  const credential = useCredential();
+  const path = useRouterState({ select: (s) => s.location.pathname });
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (getConfig().oidc && !credential && !publicPaths.includes(path)) void navigate({ to: "/login", replace: true });
+  }, [credential, path, navigate]);
   const links = isAdmin ? [...navLinks, ...adminLinks] : navLinks;
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
@@ -82,9 +94,6 @@ function Root() {
   );
 }
 
-// With OIDC on, the console is for signed-in people: anything but the login pages goes to /login
-// (remembering where it was headed). With OIDC off the console is open as before.
-const publicPaths = ["/login", "/auth/callback"];
 const rootRoute = createRootRoute({
   component: Root,
   beforeLoad: ({ location }) => {

@@ -56,7 +56,7 @@ test("an unreachable IdP (5xx) is not a sign-out: the refresh token is kept and 
   idp.failRefreshWith = 503;
 
   await page.reload();
-  await expect(page.getByRole("status")).toContainText(/identity provider/i);
+  await expect(page.getByRole("status").filter({ hasText: /identity provider/i })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   expect(await page.evaluate(() => JSON.stringify({ ...sessionStorage }))).toContain(kept);
 

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { setCredential } from "../auth";
 import { Field } from "../components/field";
 import { getConfig } from "../oidc/config";
-import { safeReturnTo, startLogin, useSessionState } from "../oidc/session";
+import { refreshNow, safeReturnTo, startLogin, useSessionState } from "../oidc/session";
 
 export type LoginSearch = { returnTo?: string };
 
@@ -16,7 +16,8 @@ export type LoginSearch = { returnTo?: string };
 export function LoginPage() {
   const { oidc, apiKeyLogin } = getConfig();
   const { returnTo } = useSearch({ from: "/login" });
-  const { error } = useSessionState();
+  const { error, unreachable } = useSessionState();
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   return (
     <div className="mx-auto grid max-w-md gap-6">
@@ -31,6 +32,29 @@ export function LoginPage() {
               <AlertTitle>Sign-in failed</AlertTitle>
               <AlertDescription>{error}</AlertDescription>
             </Alert>
+          )}
+          {unreachable && (
+            <div role="status" className="grid gap-2 rounded-md border px-3 py-2 text-sm">
+              <span>
+                The identity provider could not be reached. Your session is kept and the console keeps trying; you can try now.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="justify-self-start"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  void refreshNow()
+                    .then((r) => {
+                      if (r === "ok") void navigate({ to: safeReturnTo(returnTo), replace: true });
+                    })
+                    .finally(() => setBusy(false));
+                }}
+              >
+                Retry
+              </Button>
+            </div>
           )}
           {oidc && (
             <Button

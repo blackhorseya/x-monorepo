@@ -3,6 +3,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { loadConfig } from "./oidc/config";
+import { initSession } from "./oidc/session";
 import { queryClient } from "./queryClient";
 import { router } from "./router";
 import "./index.css";
@@ -15,6 +16,7 @@ dark.addEventListener("change", applyTheme);
 
 // The runtime config (OIDC on/off, issuer, apiKeyLogin) decides what the first render redirects to.
 await loadConfig();
+await initSession();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

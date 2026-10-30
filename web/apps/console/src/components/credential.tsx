@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { setCredential, subject, useCredential, type Credential } from "../auth";
 import { getConfig } from "../oidc/config";
+import { signOut } from "../oidc/session";
 
 // Header control: who the console calls as. Set an API key or a JWT, or clear
 // it to go anonymous. Every query is invalidated on the spot so an
@@ -29,7 +30,7 @@ function SessionControl() {
           variant="ghost"
           size="sm"
           onClick={() => {
-            setCredential(null);
+            void signOut();
             void qc.invalidateQueries();
           }}
         >

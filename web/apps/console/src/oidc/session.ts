@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { getCredentialGeneration, setSessionCredential } from "../auth";
+import { getCredential, getCredentialGeneration, rotateSessionToken, setSessionCredential } from "../auth";
 import { getConfig } from "./config";
 import { discover, type Endpoints } from "./discovery";
 import { challengeFor, newVerifier, randomToken } from "./pkce";
@@ -22,9 +22,12 @@ type Pending = { state: string; nonce: string; verifier: string; returnTo: strin
 export type SessionState = {
   // The last login attempt failed: shown on /login and /auth/callback until the next attempt.
   error: string | null;
+  // The refresh token is kept but the IdP could not be asked (network, 5xx, 429): the session is
+  // not over, the console retries with backoff and /login offers a Retry.
+  unreachable: boolean;
 };
 
-let state: SessionState = { error: null };
+let state: SessionState = { error: null, unreachable: false };
 const listeners = new Set<() => void>();
 const emit = (next: Partial<SessionState>) => {
   state = { ...state, ...next };
@@ -137,9 +140,7 @@ async function exchange(params: URLSearchParams): Promise<string> {
     // A credential was set or cleared while the exchange ran (another sign-in, a sign-out): the
     // answer is for a login that is no longer wanted.
     if (generation !== getCredentialGeneration()) throw new Error("sign-in superseded");
-    setSessionCredential(tokens.access_token);
-    if (tokens.refresh_token) sessionStorage.setItem(REFRESH_KEY, tokens.refresh_token);
-    emit({ error: null });
+    accept(tokens);
     return pending.returnTo;
   } catch (err) {
     return fail(message(err));
@@ -197,3 +198,121 @@ function checkIdToken(idToken: string | undefined, oidc: { issuer: string; clien
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : "sign-in failed");
+
+// ── Session lifetime ────────────────────────────────────────────────────────────────────────────
+//
+// Failure policy of a refresh (the part §8 left to this implementation):
+//   - the IdP answered 400 / 401 / 403 (invalid_grant, revoked, expired, rotated away): the refresh
+//     token is dead. Clear the session and send the user to /login. Retrying cannot help.
+//   - no answer (network error), 5xx, 408, 429: the IdP is unwell, not the session. Keep the refresh
+//     token and the current access token, say so, retry with backoff (5 s doubling to 60 s), and let
+//     /login offer an explicit Retry. Signing the user out for an IdP outage would turn it into ours.
+// Every response is checked against the credential generation first: a sign-out (or another
+// sign-in) that happened while the request was out wins, and the response is thrown away.
+
+let sessionActive = false; // is the credential an OIDC access token (as opposed to an API key)
+let timer: ReturnType<typeof setTimeout> | undefined;
+let backoff = 5_000;
+
+// accept installs a token response: the access token to memory, the (rotated) refresh token to
+// sessionStorage, and the next silent refresh.
+function accept(tokens: TokenResponse): void {
+  if (sessionActive && getCredential()?.kind === "bearer") rotateSessionToken(tokens.access_token);
+  else setSessionCredential(tokens.access_token);
+  sessionActive = true;
+  if (tokens.refresh_token) sessionStorage.setItem(REFRESH_KEY, tokens.refresh_token);
+  backoff = 5_000;
+  schedule(Math.max(5, (tokens.expires_in ?? 300) - 60) * 1000);
+  emit({ error: null, unreachable: false });
+}
+
+function schedule(ms: number): void {
+  clearTimeout(timer);
+  timer = setTimeout(() => void refreshNow(), ms);
+}
+
+export type RefreshResult = "ok" | "none" | "rejected" | "unreachable" | "superseded";
+
+let refreshing: Promise<RefreshResult> | null = null;
+
+// refreshNow trades the refresh token for new tokens. Concurrent callers (the timer, a 401 retry,
+// the Retry button) share one request: a refresh token is single use.
+export function refreshNow(): Promise<RefreshResult> {
+  return (refreshing ??= doRefresh().finally(() => (refreshing = null)));
+}
+
+async function doRefresh(): Promise<RefreshResult> {
+  const oidc = getConfig().oidc;
+  const refreshToken = readRefreshToken();
+  if (!oidc || !refreshToken) return "none";
+  const generation = getCredentialGeneration();
+  try {
+    const ep = await endpointsFor(oidc.issuer);
+    const tokens = await tokenRequest(ep.token, { grant_type: "refresh_token", refresh_token: refreshToken, client_id: oidc.clientId });
+    if (generation !== getCredentialGeneration()) return "superseded";
+    accept(tokens);
+    return "ok";
+  } catch (err) {
+    if (generation !== getCredentialGeneration()) return "superseded";
+    if (err instanceof TokenError && err.rejected) {
+      endLocal();
+      emit({ error: "Your session has ended. Sign in again." });
+      return "rejected";
+    }
+    emit({ unreachable: true });
+    schedule(backoff);
+    backoff = Math.min(backoff * 2, 60_000);
+    return "unreachable";
+  }
+}
+
+function readRefreshToken(): string | null {
+  try {
+    return sessionStorage.getItem(REFRESH_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// Called once before the first render: a reload (refresh token in sessionStorage) is signed back in
+// before any page asks the server anything.
+export async function initSession(): Promise<void> {
+  if (getConfig().oidc && readRefreshToken()) await refreshNow();
+}
+
+// Is the current credential an OIDC session whose access token a refresh could replace?
+export const canRefresh = (): boolean => sessionActive && readRefreshToken() !== null;
+
+// Drops everything local: the credential (any kind), both tokens, the timer, a half-done login.
+function endLocal(): void {
+  clearTimeout(timer);
+  sessionActive = false;
+  try {
+    sessionStorage.removeItem(REFRESH_KEY);
+    sessionStorage.removeItem(PENDING_KEY);
+  } catch {
+    // storage unavailable: nothing was kept there
+  }
+  setSessionCredential(null);
+  emit({ unreachable: false });
+}
+
+// Sign out. Local state goes first and unconditionally; the IdP's own session is only touched when
+// its discovery document names an end_session_endpoint (Dex has none, so there it stays local).
+// The redirect carries client_id and post_logout_redirect_uri, not id_token_hint: no token in a URL.
+export async function signOut(): Promise<void> {
+  endLocal();
+  emit({ error: null });
+  const oidc = getConfig().oidc;
+  if (!oidc) return;
+  try {
+    const ep = await endpointsFor(oidc.issuer);
+    if (!ep.endSession) return;
+    const url = new URL(ep.endSession);
+    url.searchParams.set("client_id", oidc.clientId);
+    url.searchParams.set("post_logout_redirect_uri", new URL("/login", window.location.origin).toString());
+    window.location.assign(url.toString());
+  } catch {
+    // IdP unreachable: already signed out here
+  }
+}
