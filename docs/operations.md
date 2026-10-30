@@ -77,10 +77,22 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 ```bash
 scripts/dex-token.sh                      # admin@example.com 的 access token（JWT），stdout
 scripts/dex-token.sh user@example.com --id-token
-curl -H "Authorization: Bearer $(scripts/dex-token.sh)" http://localhost:8080/api/...   # 需 auth.oidc.enabled；帳號要先綁定（見下），未綁定只能 ClaimInvite
+curl -H "Authorization: Bearer $(scripts/dex-token.sh)" http://localhost:8080/api/...   # 需 auth.oidc.enabled；帳號要先綁定（`task dex-prebind`，見下），未綁定只能 ClaimInvite
 ```
 
-**帳號預先綁定（尚未提供，#274 part 2）**：`task bootstrap` 目前**不會**把這兩個 Dex 帳號綁進 identity。綁定只走真流程——`worker bootstrap --admin-email` 建 admin account 與邀請，Dex 登入後呼叫 `ClaimInvite`——`ClaimInvite` 現在可以領（#272：auth interceptor 驗 OIDC token，未綁定的身分只能呼叫它）。刻意不加直接寫 `external_identities` 的 CLI（那會繞過 `CreateInvite` / `ClaimInvite`，是身分邊界上的後門）。part 2 等 #272 之後，用 `scripts/dex-token.sh` 走完 bootstrap → 邀請 → 領取，並和 Playwright OIDC 登入 E2E 一起做。
+**帳號預先綁定**（`task dex-prebind`，#274 part 2）：把兩個 Dex 帳號綁進 identity，**只走真流程、只打 RPC**——對每個 email：用 admin API key 找或建 account（名稱就是 email）→ `CreateInvite` → `scripts/dex-token.sh <email>` 登入 Dex → 以該 bearer 呼叫 `ClaimInvite`。刻意不加直接寫 `external_identities` 的 CLI（那會繞過 `CreateInvite` / `ClaimInvite`，是身分邊界上的後門）。
+
+```bash
+ADMIN_API_KEY=<admin key> task dex-prebind      # rpc 要在跑，auth.oidc 要開（上表）
+```
+
+- `admin@example.com` → 自己的 account `admin@example.com`，role 為 `admin`（`PREBIND_ADMIN_ROLE` 可改成非預設的 `auth.admin_role`）；`user@example.com` → 自己的 account，**沒有任何 role**。刻意不綁到 `task bootstrap` 的 root：root 是 API key 的 break-glass 帳號，混在一起之後撤銷一邊會連到另一邊。
+- `ADMIN_API_KEY` 是有 admin role 的 key：`task bootstrap` 印的那把，或 config `auth.api_keys` 的 break-glass key。
+- **可重跑**：以 `ListAccountIdentities` 判斷，該 email 已綁定（issuer 是 dev Dex）就跳過、不問 Dex 要 token；account 用名稱找，已有的不重建；已有 pending invite 就沿用、不重發。中途失敗（例如 Dex 沒起）重跑會接著做完。
+- **只能用在 dev**：`ISSUER` 不是 `http://dex.localtest.me:5556/dex` 就拒絕；`BASE_URL`（預設 `http://127.0.0.1:8080`）必須是本機（`localhost` / `127.0.0.1` / `[::1]`），因為 admin key 會送去那裡。要對 kind 跑就 `kubectl port-forward` 後用本機 URL。
+- 不印 API key、token：key 與 token 只走 curl 的 stdin config（不進 argv / `ps`），RPC 失敗只印 HTTP status、Connect code 與 `x-error-code`，不印 response body。
+
+測試：`task scripts-test` 的 `dex-prebind:` 案例用 `tests/dex-prebind/stub_rpc.py`（記憶體版 IdentityService）驅動，涵蓋首次綁定、零變更重跑、claim 失敗後接續、錯的 issuer / 非本機 server 被拒、輸出不含 key 與 token。Playwright 走真 Dex 的 OIDC E2E 等 #295。
 
 **名稱怎麼解析**——三個地方都必須看到同一個 issuer 字串，所以不能改寫成 `localhost` 或 service 名：
 

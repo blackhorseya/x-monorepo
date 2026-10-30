@@ -896,7 +896,7 @@ chmod +x "$pb_fake"
 pb_up() {
   pb_dir="$tmp/pb-$1"; mkdir -p "$pb_dir"; shift
   : > "$pb_dir/log"; : > "$pb_dir/tokens"
-  env STUB_ADMIN_KEY="$pb_key" STUB_ISSUER="$pb_dev" "$@" python3 "$src/tests/dex-prebind/stub_rpc.py" "$pb_dir/port" "$pb_dir/log" &
+  env STUB_ADMIN_KEY="$pb_key" STUB_ISSUER="$pb_dev" "$@" python3 "$src/tests/dex-prebind/stub_rpc.py" "$pb_dir/port" "$pb_dir/log" >/dev/null 2>&1 &
   PB_PIDS="$PB_PIDS $!"
   local i=0; while [ ! -s "$pb_dir/port" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
   pb_url="http://127.0.0.1:$(cat "$pb_dir/port")"
