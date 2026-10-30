@@ -26,6 +26,8 @@ export type Idp = {
   failRefreshWith: number | null;
   /** Access token lifetime in seconds. */
   expiresIn: number;
+  /** When set (even to null), sent as expires_in instead of `expiresIn`: the IdP being wrong or hostile. */
+  expiresInRaw?: unknown;
   /** Claims for the access token (roles etc.). */
   claims: Record<string, unknown>;
   /** Claims for the next access tokens, one entry per issue; once empty, `claims` applies. */
@@ -130,7 +132,7 @@ export async function mockIdp(page: Page, options: IdpOptions = {}): Promise<Idp
       access_token: access,
       id_token: idToken,
       refresh_token: refresh,
-      expires_in: idp.expiresIn,
+      expires_in: "expiresInRaw" in idp ? idp.expiresInRaw : idp.expiresIn,
     };
   };
 

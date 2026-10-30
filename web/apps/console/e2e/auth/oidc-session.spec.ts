@@ -188,3 +188,56 @@ test("an API key chosen on top of an OIDC session replaces it: refresh token dro
   await expect(subject(page)).toHaveText("api key");
   expect(refreshGrants(idp)).toHaveLength(grants); // no silent OIDC refresh behind the key's back
 });
+
+// expires_in is the IdP's word for when to refresh next; anything but a positive whole number of
+// seconds is not a lifetime. It must fail closed, never become 0 / NaN and a refresh loop.
+for (const bad of ["soon", 0, -5, 1.5, "300", null]) {
+  test(`a refresh answered with expires_in ${JSON.stringify(bad)} ends the session and is not retried in a loop`, async ({ page }) => {
+    await stubConfig(page);
+    const idp = await mockIdp(page);
+    await page.goto("/login");
+    await signIn(page);
+    await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+    idp.expiresInRaw = bad;
+
+    await page.reload();
+    await expect(page).toHaveURL(/\/login(\?|$)/);
+    await page.waitForTimeout(1500);
+    expect(refreshGrants(idp)).toHaveLength(1);
+    await expect(subject(page)).toHaveText("anonymous");
+    expect(await page.evaluate(() => sessionStorage.length)).toBe(0);
+  });
+
+  test(`a sign-in whose token response has expires_in ${JSON.stringify(bad)} is refused`, async ({ page }) => {
+    await stubConfig(page);
+    const idp = await mockIdp(page);
+    idp.expiresInRaw = bad;
+    await page.goto("/login");
+    await signIn(page);
+    await expect(page.getByRole("alert")).toContainText(/expires_in/);
+    await page.waitForTimeout(500);
+    expect(idp.tokenRequests).toHaveLength(1);
+    await expect(subject(page)).toHaveText("anonymous");
+  });
+}
+
+test("many calls refused at once ask the IdP once; while it is unreachable the backoff holds for later ones too", async ({ page }) => {
+  await stubConfig(page);
+  const idp = await mockIdp(page, { claims: { roles: ["admin"] } });
+  idp.claimsQueue.push({ exp: Math.floor(Date.now() / 1000) - 600, roles: ["admin"] }); // the first token is already expired
+  idp.failRefreshWith = 503;
+  await page.goto("/login");
+  await signIn(page);
+  await expect.poll(() => refreshGrants(idp).length).toBeGreaterThanOrEqual(1);
+  await page.waitForTimeout(2500); // well inside the first 5 s backoff
+  expect(refreshGrants(idp)).toHaveLength(1);
+
+  // The user's own Retry is not held back by the backoff.
+  idp.failRefreshWith = null;
+  await page.goto("/login");
+  await expect(page.getByRole("status").filter({ hasText: /identity provider/i })).toBeVisible();
+  const before = refreshGrants(idp).length;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect.poll(() => refreshGrants(idp).length).toBeGreaterThan(before);
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+});

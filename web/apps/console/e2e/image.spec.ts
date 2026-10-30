@@ -60,8 +60,8 @@ test("/api is the rpc behind nginx; /healthz is nginx itself", async ({
 });
 
 // Runtime configuration (docs/identity-login.md §8): CONSOLE_* env → /config.json for the SPA, and
-// the issuer's origin (exactly that, nothing wider) → the CSP's connect-src. image.sh starts three
-// containers: the default (nothing set), one configured for OIDC, one with an unusable issuer.
+// the issuer's origin (exactly that, nothing wider) → the CSP's connect-src. image.sh starts two
+// containers (the default, one configured for OIDC) and checks that misconfigured ones refuse to start.
 const connectSrc = (csp: string) => csp.split(";").map((d) => d.trim()).find((d) => d.startsWith("connect-src"));
 
 test("no CONSOLE_* env: /config.json has an empty issuer (OIDC off), API key login on, never cached; connect-src stays 'self'", async ({
@@ -116,18 +116,5 @@ test.describe("configured for OIDC", () => {
     const res = await request.get(`${base()}/config.json`);
     expect(res.headers()["cache-control"]).toBe("no-store");
     expect((await request.get(`${base()}/api/version`)).headers()["content-security-policy"]).toBeUndefined();
-  });
-});
-
-test.describe("an unusable issuer", () => {
-  test.skip(!process.env.E2E_CONSOLE_BAD_URL, "needs the bad-issuer container (e2e/image.sh)");
-  const base = () => process.env.E2E_CONSOLE_BAD_URL!;
-
-  test("fails closed: empty issuer in /config.json (OIDC off), nothing from the value reaches the CSP or the JSON", async ({ request }) => {
-    const res = await request.get(`${base()}/config.json`);
-    expect(await res.json()).toEqual({ oidcIssuer: "", oidcClientId: "", apiKeyLogin: true });
-    const csp = (await request.get(`${base()}/orders`)).headers()["content-security-policy"];
-    expect(connectSrc(csp)).toBe("connect-src 'self'");
-    expect(csp).not.toContain("evil.example");
   });
 });
