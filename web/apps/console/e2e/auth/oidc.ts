@@ -28,6 +28,10 @@ export type Idp = {
   expiresIn: number;
   /** Claims for the access token (roles etc.). */
   claims: Record<string, unknown>;
+  /** Claims for the next access tokens, one entry per issue; once empty, `claims` applies. */
+  claimsQueue: Record<string, unknown>[];
+  /** While set, refresh_token grants wait for it before being answered. */
+  gate: Promise<void> | null;
   /** Answer the next authorization request with a state the console never sent (a forged callback). */
   tamperState: boolean;
   accessTokens: string[];
@@ -78,6 +82,8 @@ export async function mockIdp(page: Page, options: IdpOptions = {}): Promise<Idp
     failRefreshWith: null,
     expiresIn: options.expiresIn ?? 300,
     claims: options.claims ?? {},
+    claimsQueue: [],
+    gate: null,
     tamperState: false,
     accessTokens: [],
     idTokens: [],
@@ -112,7 +118,7 @@ export async function mockIdp(page: Page, options: IdpOptions = {}): Promise<Idp
   );
 
   const issue = (nonce: string) => {
-    const access = mintJWT("e2e-oidc-user", { ...idp.claims });
+    const access = mintJWT("e2e-oidc-user", { ...(idp.claimsQueue.shift() ?? idp.claims) });
     const refresh = `refresh-${++seq}`;
     idp.validRefreshTokens.add(refresh);
     const idToken = `${b64url(JSON.stringify({ alg: "none" }))}.${b64url(JSON.stringify({ iss: ISSUER, aud: CLIENT_ID, sub: "e2e-oidc-user", nonce }))}.`;
@@ -144,6 +150,7 @@ export async function mockIdp(page: Page, options: IdpOptions = {}): Promise<Idp
       return json(route, issue(issued.nonce));
     }
     if (grant === "refresh_token") {
+      if (idp.gate) await idp.gate;
       if (idp.failRefreshWith) return route.fulfill({ status: idp.failRefreshWith, headers: cors });
       const presented = form.get("refresh_token") ?? "";
       if (!idp.validRefreshTokens.delete(presented)) return json(route, { error: "invalid_grant" }, 400);
