@@ -9,9 +9,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { AdminGate } from "../components/admin";
+import { AdminGate, useIsAdmin } from "../components/admin";
 import { ConfirmButton } from "../components/confirm";
-import { useResetOnCredentialChange } from "../auth";
+import { useCredentialGeneration, useResetOnCredentialChange } from "../auth";
 import { identity } from "../client";
 import { accountIdentitiesQuery, accountQuery, apiKeysQuery, keys } from "../queries";
 import { ErrorAlert } from "../components/error-alert";
@@ -303,7 +303,7 @@ function NewKeyBody({ accountId, onDone }: { accountId: string; onDone: () => vo
 
 // Invite: pre-bind an email to this account (IdentityService.CreateInvite). No mail is sent and
 // there is no secret: the person signs in at the identity provider with that verified address and
-// claims it. The invites made here are kept for this visit only: no RPC lists them.
+// claims it. The invites made here are also listed, with their status, in the Sign-in bindings card below.
 function InviteCard({ accountId }: { accountId: string }) {
   const qc = useQueryClient();
   const [email, setEmail] = useState("");
@@ -313,7 +313,7 @@ function InviteCard({ accountId }: { accountId: string }) {
     onSuccess: (res) => {
       if (res.invite) setMade((m) => [res.invite!, ...m]);
       setEmail("");
-      return qc.invalidateQueries({ queryKey: keys.identities(accountId) });
+      return qc.invalidateQueries({ queryKey: keys.identitiesOf(accountId) });
     },
   });
   useResetOnCredentialChange(create);
@@ -369,7 +369,10 @@ const inviteBadge: Record<InviteStatus, "default" | "secondary" | "destructive" 
 // account and its invites with their status. Only the fields the contract names are rendered: there
 // is no token or secret in the reply, and none is read.
 function BindingsCard({ accountId }: { accountId: string }) {
-  const list = useQuery(accountIdentitiesQuery(accountId));
+  // Only once the admin probe has answered true for the current credential (see accountIdentitiesQuery).
+  const generation = useCredentialGeneration();
+  const isAdmin = useIsAdmin();
+  const list = useQuery(accountIdentitiesQuery(accountId, generation, isAdmin));
   const identities = list.data?.identities ?? [];
   const invites = list.data?.invites ?? [];
   return (

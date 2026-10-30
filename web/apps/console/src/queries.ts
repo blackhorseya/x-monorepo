@@ -1,8 +1,9 @@
 import { Code, ConnectError } from "@connectrpc/connect";
-import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
+import { CancelledError, infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import type { ListOrdersResponse } from "@repo/proto/ordering/v1/service_pb";
+import { getCredentialGeneration } from "./auth";
 import { admin, catalog, identity, inventory, isNotFound, orders } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
@@ -35,7 +36,8 @@ export const keys = {
   accounts: ["accounts"] as const,
   account: (id: string) => ["account", id] as const,
   apiKeys: (accountId: string) => ["api-keys", accountId] as const,
-  identities: (accountId: string) => ["account-identities", accountId] as const,
+  identities: (accountId: string, generation: number) => ["account-identities", accountId, generation] as const,
+  identitiesOf: (accountId: string) => ["account-identities", accountId] as const,
 };
 
 // The build never changes while a tab is open; refetch only on a reload or
@@ -285,13 +287,22 @@ export const accountQuery = (id: string) =>
 // Who can sign in as one account: its bound external identities and its invites (any status), one
 // response, no paging. Admin only on the server; only the admin account pages ask for it. The reply
 // carries no secret (an invite has none), and the page shows only the fields it names.
-export const accountIdentitiesQuery = (accountId: string) =>
+//
+// Keyed by the credential generation like the admin probe, and refused to run for any other one:
+// the credential control invalidates every query the moment it changes the credential, before the
+// admin gate has re-asked who the new credential is, so an active admin-only query would refetch
+// with the new (possibly role-less) credential. The guard makes that refetch a silent no-op, and
+// `enabled` (the caller passes the admin probe's answer for this generation) keeps the new key
+// from running until the new credential is known to be admin.
+export const accountIdentitiesQuery = (accountId: string, generation: number, enabled: boolean) =>
   queryOptions({
-    queryKey: keys.identities(accountId),
+    queryKey: keys.identities(accountId, generation),
     queryFn: async () => {
+      if (generation !== getCredentialGeneration()) throw new CancelledError({ silent: true });
       const res = await identity.listAccountIdentities({ accountId });
       return { identities: res.identities, invites: res.invites };
     },
+    enabled,
     staleTime: LIST_STALE_MS,
   });
 

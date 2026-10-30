@@ -143,7 +143,7 @@
 - **accounts UI（admin，`/accounts/$id`）**：
   - **Invite**：用 email 發邀請（`CreateInvite`）；不寄信、沒有 secret，頁面說明對方要用該 email 登入再認領。建立後的邀請也會出現在 Sign-in bindings 的清單。
   - **Sessions**：顯示 `sessions_revoke_time`（或「Never revoked」）；「Revoke sessions」先確認，對話框明講這是「登出所有裝置」、不碰 IdP 的 refresh token、不是帳號遭盜用的處置（§11）。
-  - **Sign-in bindings**（#289）：`ListAccountIdentities`（admin only，不分頁）列出帳號綁定的 external identity（issuer、subject、綁定時間）與邀請（email、狀態 PENDING／CLAIMED／EXPIRED、到期）。只渲染 RPC 實際回傳且 contract 命名的欄位（邀請本來就沒有 token／secret，回應多出的欄位也不顯示）；這張卡在 `AdminGate` 之後，非 admin 不掛載、不呼叫。建立邀請後自動重抓。**不做**撤銷單一綁定／撤銷邀請（待 Sean 決定）。
+  - **Sign-in bindings**（#289）：`ListAccountIdentities`（admin only，不分頁）列出帳號綁定的 external identity（issuer、subject、綁定時間）與邀請（email、狀態 PENDING／CLAIMED／EXPIRED、到期）。只渲染 RPC 實際回傳且 contract 命名的欄位（邀請本來就沒有 token／secret，回應多出的欄位也不顯示）；這張卡在 `AdminGate` 之後，非 admin 不掛載、不呼叫。建立邀請後自動重抓。換 credential（換成沒有 admin role 的 key、Clear、登出）時，credential 變更先 flush 到畫面（`AdminGate` 關閉、admin 頁的 query 卸載）才 invalidate，另外此 query 以 credential generation 為 key 並在 queryFn 守門，所以**不會有任何 admin-only RPC 用新 credential 送出**（`admin-switch.spec.ts` 對每個 admin 頁檢查）。**不做**撤銷單一綁定／撤銷邀請（待 Sean 決定）。
   - `AssignRoles`（既有的「Save roles」）不變。
 
 ## 9. 第一個 admin（Q5）
