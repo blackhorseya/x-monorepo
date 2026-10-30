@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { useEffect, useState } from "react";
-import { AccountStatus, ApiKeyStatus, type Account, type ApiKey } from "@repo/proto/identity/v1/entity_pb";
+import { AccountStatus, ApiKeyStatus, type Account, type ApiKey, type Invite } from "@repo/proto/identity/v1/entity_pb";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,6 +30,9 @@ export function AccountPage() {
           ← All accounts
         </Link>
         <AccountCard id={id} />
+        <InviteCard accountId={id} />
+        <BindingsCard />
+        <SessionsCard accountId={id} />
         <KeysCard accountId={id} />
       </div>
     </AdminGate>
@@ -295,5 +298,110 @@ function NewKeyBody({ accountId, onDone }: { accountId: string; onDone: () => vo
         </DialogFooter>
       </form>
     </>
+  );
+}
+
+// Invite: pre-bind an email to this account (IdentityService.CreateInvite). No mail is sent and
+// there is no secret: the person signs in at the identity provider with that verified address and
+// claims it. The invites made here are kept for this visit only: no RPC lists them.
+function InviteCard({ accountId }: { accountId: string }) {
+  const [email, setEmail] = useState("");
+  const [made, setMade] = useState<Invite[]>([]);
+  const create = useMutation({
+    mutationFn: () => identity.createInvite({ accountId, email: email.trim() }),
+    onSuccess: (res) => {
+      if (res.invite) setMade((m) => [res.invite!, ...m]);
+      setEmail("");
+    },
+  });
+  useResetOnCredentialChange(create);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Invite</CardTitle>
+        <CardDescription>
+          Binds an email address to this account. It is valid for 7 days and single use, and carries no secret. Nothing is sent: tell the person to
+          sign in with that address, and the console will offer to claim it.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <form
+          className="flex flex-wrap items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            create.mutate();
+          }}
+        >
+          <Field label="Invite email" className="w-72">
+            <Input inputMode="email" autoComplete="off" value={email} placeholder="person@example.com" onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+          <Button type="submit" disabled={create.isPending || email.trim() === ""}>
+            Create invite
+          </Button>
+        </form>
+        {create.isError && <ErrorAlert error={create.error} />}
+        {made.length > 0 && (
+          <ul className="grid gap-2 text-sm">
+            {made.map((i) => (
+              <li key={i.id} data-testid="invite-made" className="rounded-md border px-3 py-2">
+                <strong>{i.email}</strong> · expires {at(i.expireTime)} · single use
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// What the contract cannot show yet, said plainly instead of an empty table that looks like "none".
+function BindingsCard() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Sign-in bindings</CardTitle>
+        <CardDescription>
+          No RPC lists the identity-provider sign-ins (issuer and subject) bound to an account, or the invites still open, so they cannot be
+          shown here. An invite made on this page is listed above until you leave it.
+        </CardDescription>
+      </CardHeader>
+    </Card>
+  );
+}
+
+// Sessions: "sign out of all devices" (IdentityService.RevokeSessions). It refuses access tokens issued
+// before now within 30 s; it cannot touch the identity provider's refresh tokens, so it is not the
+// answer to a stolen account (disable the account and revoke at the IdP for that).
+function SessionsCard({ accountId }: { accountId: string }) {
+  const qc = useQueryClient();
+  const { data } = useQuery(accountQuery(accountId));
+  const revoke = useMutation({
+    mutationFn: () => identity.revokeSessions({ accountId }),
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: keys.account(accountId) }), qc.invalidateQueries({ queryKey: keys.accounts })]),
+  });
+  useResetOnCredentialChange(revoke);
+  if (!data) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Sessions</CardTitle>
+        <CardDescription>
+          {data.sessionsRevokeTime ? `Revoked at ${at(data.sessionsRevokeTime)}` : "Never revoked"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div>
+          <ConfirmButton
+            label="Revoke sessions"
+            title={`Revoke all sessions of ${data.name}?`}
+            description="Access tokens issued before now stop working within 30s, on every device. This is sign out everywhere, not a response to a stolen account: the identity provider's refresh tokens are untouched, so they can get a new token. For that, disable the account and revoke its refresh tokens at the identity provider."
+            action="Revoke all sessions"
+            onConfirm={() => revoke.mutateAsync()}
+          />
+        </div>
+        {revoke.isError && <ErrorAlert error={revoke.error} />}
+      </CardContent>
+    </Card>
   );
 }
