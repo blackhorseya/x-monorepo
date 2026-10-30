@@ -1,6 +1,7 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { KeyRound, LogOut } from "lucide-react";
 import { useState } from "react";
+import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +13,16 @@ import { signOut } from "../oidc/session";
 // it to go anonymous. Every query is invalidated on the spot so an
 // UNAUTHENTICATED / PERMISSION_DENIED page recovers (or appears) at once instead
 // of on its next poll — the slowest one (poison) is 5s.
+// Change the credential, then refresh every query. The change is flushed to the screen first
+// (flushSync): the admin pages sit behind AdminGate, which closes the moment the credential changes
+// (its probe has no answer for the new one yet) and unmounts their queries. Invalidating in the same
+// tick, before that render, would refetch every still-mounted admin-only query with the NEW
+// credential: a role-less key, or no key at all, asking for something only an admin may.
+function changeCredential(qc: QueryClient, change: () => void): void {
+  flushSync(change);
+  void qc.invalidateQueries();
+}
+
 export function CredentialControl() {
   // With OIDC on, credentials come from /login and there is nothing to paste here.
   return getConfig().oidc ? <SessionControl /> : <PasteCredentialControl />;
@@ -29,10 +40,7 @@ function SessionControl() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => {
-            void signOut();
-            void qc.invalidateQueries();
-          }}
+          onClick={() => changeCredential(qc, () => void signOut())}
         >
           <LogOut /> Sign out
         </Button>
@@ -48,10 +56,7 @@ function PasteCredentialControl() {
   const [kind, setKind] = useState<Credential["kind"]>(current?.kind ?? "api_key");
   const [value, setValue] = useState("");
 
-  const apply = (c: Credential | null) => {
-    setCredential(c);
-    void qc.invalidateQueries();
-  };
+  const apply = (c: Credential | null) => changeCredential(qc, () => setCredential(c));
   const save = () => {
     apply({ kind, value });
     setValue("");

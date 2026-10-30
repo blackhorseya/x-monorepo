@@ -48,8 +48,8 @@ k6=false;     has 'tests/k6/*' && k6=true
 dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.yaml' && dex=true
 # Inputs of scripts/test.sh outside scripts/ (#287, #298): coredns-dex.sh is run by its coredns: cases,
 # k6-bench.yml is grepped by its wiring assertions, .goreleaser.yaml is copied into the cosign-smoke
-# fixture. Add a path here (and a sole-path case in test.sh) whenever test.sh starts reading a new one.
-scripts_src=false; has 'deployments/helm/kind/coredns-dex.sh' '.github/workflows/k6-bench.yml' '.goreleaser.yaml' && scripts_src=true
+# fixture, tests/dex-prebind/ is the rpc stub of the dex-prebind: cases. Add a path here (and a sole-path case in test.sh) whenever test.sh starts reading a new one.
+scripts_src=false; has 'deployments/helm/kind/coredns-dex.sh' '.github/workflows/k6-bench.yml' '.goreleaser.yaml' 'tests/dex-prebind/*' && scripts_src=true
 
 any() { for v in "$@"; do [ "$v" = true ] && return 0; done; return 1; }
 out() { if any "${@:2}"; then echo "run_$1=true"; else echo "run_$1=false"; fi; }

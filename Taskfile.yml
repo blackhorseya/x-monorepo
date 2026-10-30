@@ -105,7 +105,7 @@ tasks:
       - task: scripts-test
 
   scripts-test:
-    desc: 'scripts/test.sh: the CI / release decision scripts (ci-changes, releasable, next-version, release-gate-pr, merge-ready with a stubbed gh, merge-tree-check) against throwaway git repos, and red-stage against sample go test output'
+    desc: 'scripts/test.sh: the CI / release decision scripts (ci-changes, releasable, next-version, release-gate-pr, merge-ready with a stubbed gh, merge-tree-check) against throwaway git repos, and red-stage against sample go test output; runs under scripts/suite-guard.sh, which fails on any process the suite leaves behind'
     cmds:
       - scripts/test.sh
 
@@ -471,6 +471,10 @@ tasks:
     deps: [build, config]
     env: { APP_CONFIG: '{{.CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/worker bootstrap --insecure-allow-plaintext --expect-target "127.0.0.1:${POSTGRES_PORT:-5432}" {{.CLI_ARGS}}']
+
+  dex-prebind:
+    desc: 'ADMIN_API_KEY=<admin key> task dex-prebind → binds the dev Dex accounts (admin@example.com with the admin role, user@example.com with none) through CreateInvite → ClaimInvite; rerunnable, dev Dex issuer and a local rpc only (scripts/dex-prebind.sh, docs/operations.md "Dex dev IdP")'
+    cmds: ['scripts/dex-prebind.sh']
 
   prune:
     desc: 'task prune -- --older-than 720h [--dry-run] [--unconsumed] [<bc>] → delete acked outbox rows + consumed inbox rows via ./bin/worker prune'

@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { BACKEND_IDP_PORT, BACKEND_RPC_PORT } from "../../playwright.config";
 import { stubConfig } from "../auth/oidc";
-import { subject } from "../auth/helpers";
+import { subject, useKey } from "../auth/helpers";
 import { uid } from "../uid";
 
 // The console against the REAL rpc with auth.oidc on (e2e/oidc-backend/rpc.yaml) and a loopback IdP
@@ -106,4 +106,38 @@ test("RevokeSessions: the server refuses the old access token (within the 30 s r
   await page.getByRole("link", { name: "Stock" }).click();
   await expect(page.getByText("Not authenticated")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+// Bindings card: after a real claim an admin sees the bound identity and the CLAIMED invite (no stubs on the admin side).
+test("after a real claim the admin sees the bound identity and the CLAIMED invite", async ({ browser, request, baseURL }) => {
+  const id = uid();
+  const email = `bind-${id}@example.com`;
+  const sub = `sub-bind-${id}`;
+  const { account } = await admin(request, "CreateAccount", { name: `e2e-bind-${id}`, roles: [] });
+  await admin(request, "CreateInvite", { accountId: account.id, email });
+
+  // 1. the invited person signs in and claims.
+  idp.user = await setUser(request, { sub, email, emailVerified: true });
+  const user = await browser.newPage({ baseURL });
+  await stubConfig(user, { issuer: idp.issuer, clientId: CLIENT_ID, apiKeyLogin: false });
+  await user.goto("/login");
+  await user.getByRole("button", { name: "Sign in" }).click();
+  await user.getByRole("button", { name: "Claim invite" }).click();
+  await expect(user.getByRole("heading", { name: "Link your account" })).toHaveCount(0);
+  await user.close();
+
+  // 2. an admin looks at the account.
+  const adminPage = await browser.newPage({ baseURL });
+  await stubConfig(adminPage, { oidc: false });
+  await adminPage.goto(`/accounts/${account.id}`);
+  await useKey(adminPage, ADMIN_KEY);
+  const identity = adminPage.getByTestId("identity-row");
+  await expect(identity).toHaveCount(1);
+  await expect(identity).toContainText(idp.issuer);
+  await expect(identity).toContainText(sub);
+  const invite = adminPage.getByTestId("invite-row");
+  await expect(invite).toHaveCount(1);
+  await expect(invite).toContainText(email);
+  await expect(invite).toContainText("CLAIMED");
+  await adminPage.close();
 });
