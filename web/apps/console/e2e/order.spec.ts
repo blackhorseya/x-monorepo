@@ -3,6 +3,7 @@ import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { confirm, createCard, filterCard } from "./orders-ui";
+import { setStock } from "./stock-ui";
 
 // /orders/$id: the id cell of the list links here; the page shows every line,
 // the total, the reservation, and cancels. A deep link to an unknown id says so.
@@ -20,10 +21,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   await seedProduct(request, sku);
   if (withDB) {
     await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
-    await page.getByLabel("SKU", { exact: true }).fill(sku);
-    await page.getByLabel("On hand").fill("5");
-    await page.getByRole("button", { name: "Set", exact: true }).click();
-    await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
+    await setStock(page, sku, 5);
   }
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(customer);

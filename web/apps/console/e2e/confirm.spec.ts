@@ -3,6 +3,7 @@ import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { cellUnder, createCard, filterCard } from "./orders-ui";
+import { setStock } from "./stock-ui";
 
 // Cancel and Complete on an order ask first: Cancel gives the reservation back, Complete commits
 // it (stock sold) and cannot be undone. Declining must send nothing.
@@ -74,10 +75,7 @@ test("list: Cancel asks first; declining leaves the order PENDING", async ({ pag
   await seedProduct(request, sku);
   if (withDB) {
     await page.goto(`/stock?prefix=${sku}`);
-    await page.getByLabel("SKU", { exact: true }).fill(sku);
-    await page.getByLabel("On hand").fill("5");
-    await page.getByRole("button", { name: "Set", exact: true }).click();
-    await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
+    await setStock(page, sku, 5);
   }
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(customer);
