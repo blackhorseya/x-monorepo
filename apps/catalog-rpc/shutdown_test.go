@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -83,4 +84,45 @@ func freeAddr(t *testing.T) string {
 	_ = ln.Close()
 
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
+
+// The real entry point refuses a legacy auth.jwt: catalog-rpc authenticates
+// static auth.api_keys only, so a configured JWT secret must stop the process
+// before it serves, with or without keys beside it. A process that started
+// anyway is told to stop, and the test fails.
+func TestRun_RefusesLegacyJWT(t *testing.T) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM)
+	defer signal.Stop(sig)
+
+	for name, apiKeys := range map[string]string{
+		"jwt only":         "",
+		"jwt with api key": "ops=ops-key-0123456789abc:admin",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := freshDB(t)
+			addr := freeAddr(t)
+			t.Setenv("APP_POSTGRES_URL", cfg.URL)
+			t.Setenv("APP_HTTP_ADDR", addr)
+			t.Setenv("APP_LOG_LEVEL", "error")
+			t.Setenv("APP_HTTP_SHUTDOWN_DELAY", "0")
+			t.Setenv("APP_AUTH_MODE", "required")
+			t.Setenv("APP_AUTH_API_KEYS", apiKeys)
+			t.Setenv("APP_AUTH_JWT_HS256_SECRET", "0123456789abcdef0123456789abcdef")
+
+			done := make(chan error, 1)
+			go func() { done <- run() }()
+
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), "auth.jwt") {
+					t.Fatalf("run = %v, want an error naming auth.jwt", err)
+				}
+			case <-time.After(5 * time.Second):
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM) // it started: stop it
+				<-done
+				t.Fatal("run kept serving with auth.jwt configured, want a refused start")
+			}
+		})
+	}
 }

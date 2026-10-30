@@ -312,3 +312,28 @@ func TestCatalog_ReadyzFollowsPostgres(t *testing.T) {
 		t.Fatalf("readyz after the pool closed = %d, want 503", code)
 	}
 }
+
+// A legacy auth.jwt (secret or public key) is refused at build time, whatever
+// the keys beside it: the only credentials here are auth.api_keys.
+func TestCatalog_LegacyJWTFailsToStart(t *testing.T) {
+	for name, jwt := range map[string]config.JWT{
+		"hs256 secret": {HS256Secret: "0123456789abcdef0123456789abcdef"},
+		"public key":   {PublicKey: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----"},
+	} {
+		for _, keys := range []string{"", "ops=ops-key-0123456789abc:admin"} {
+			_, cleanup, err := Initialize(&config.AppConfig{
+				HTTP:     config.HTTP{Addr: ":0"},
+				Log:      config.Log{Level: "error", Format: "text"},
+				Auth:     config.Auth{Mode: config.AuthRequired, APIKeys: keys, JWT: jwt},
+				Postgres: freshDB(t),
+			})
+			if err == nil {
+				cleanup()
+				t.Fatalf("%s with api_keys=%q started", name, keys)
+			}
+			if !strings.Contains(err.Error(), "auth.jwt") {
+				t.Fatalf("%s with api_keys=%q: err = %v, want it to name auth.jwt", name, keys, err)
+			}
+		}
+	}
+}
