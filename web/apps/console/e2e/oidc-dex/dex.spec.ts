@@ -133,18 +133,75 @@ test("a wrong password stays at Dex and never reaches the console", async ({
 });
 
 // The fixture's rpc is only used once it proves it is this attempt's process (rpc.ts): a listener that
-// took the port after it was picked and answers 200 to everything, readyz and WhoAmI included, is not it.
-test("a foreign listener on the rpc's port is not mistaken for the rpc", async () => {
-  const foreign = createServer((_, res) =>
-    res
-      .writeHead(200, { "content-type": "application/json" })
-      .end('{"subject":"root"}')
-  );
-  await new Promise<void>((resolve) => foreign.listen(0, "127.0.0.1", resolve));
-  try {
-    const { port } = foreign.address() as { port: number };
-    await expect(startRpc(port)).rejects.toThrow(/not this rpc|exited with/);
-  } finally {
-    await new Promise((resolve) => foreign.close(resolve));
-  }
+// took the port after it was picked, whatever it answers, is not it. Each variant is a listener that
+// answers the admin key one way and any other key another way; startRpc must refuse every one.
+const json = (status: number, body: unknown) => ({
+  status,
+  body: JSON.stringify(body),
 });
+const root = json(200, {
+  subject: "root",
+  roles: ["admin"],
+  method: "api_key",
+});
+const refused = json(401, {
+  code: "unauthenticated",
+  message: "unknown api key",
+});
+const foreigners: [string, ReturnType<typeof json>, ReturnType<typeof json>][] =
+  [
+    ["answers 200 to every key", root, root],
+    ["answers 201 to a stranger", root, json(201, root)],
+    ["answers 202 to a stranger", root, json(202, {})],
+    ["answers 204 with no body to a stranger", root, { status: 204, body: "" }],
+    [
+      "refuses a stranger with 403",
+      root,
+      json(403, { code: "permission_denied" }),
+    ],
+    ["fails a stranger with 500", root, json(500, { code: "internal" })],
+    [
+      "refuses a stranger with 401 but another code",
+      root,
+      json(401, { code: "internal" }),
+    ],
+    [
+      "refuses a stranger with 401 and no JSON",
+      root,
+      { status: 401, body: "nope" },
+    ],
+    [
+      "knows the key but is not an admin",
+      json(200, { subject: "root", roles: [], method: "api_key" }),
+      refused,
+    ],
+    [
+      "knows the key but is another subject",
+      json(200, { subject: "someone", roles: ["admin"], method: "api_key" }),
+      refused,
+    ],
+    ["returns the admin as an empty 200", { status: 200, body: "" }, refused],
+  ];
+for (const [name, rootAnswer, strangerAnswer] of foreigners) {
+  test(`a foreign listener on the rpc's port that ${name} is not mistaken for the rpc`, async () => {
+    const foreign = createServer((req, res) => {
+      const a =
+        req.headers["x-api-key"] === undefined ||
+        String(req.headers["x-api-key"]).startsWith("not-")
+          ? strangerAnswer
+          : rootAnswer;
+      res
+        .writeHead(a.status, { "content-type": "application/json" })
+        .end(a.body);
+    });
+    await new Promise<void>((resolve) =>
+      foreign.listen(0, "127.0.0.1", resolve)
+    );
+    try {
+      const { port } = foreign.address() as { port: number };
+      await expect(startRpc(port)).rejects.toThrow(/not this rpc|exited with/);
+    } finally {
+      await new Promise((resolve) => foreign.close(resolve));
+    }
+  });
+}
