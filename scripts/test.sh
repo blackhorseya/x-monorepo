@@ -966,6 +966,15 @@ for u in "http://localhost:unused@127.0.0.1:$pb_port" "http://user@127.0.0.1:$pb
   pb_run BASE_URL="$u"
   if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: BASE_URL [$u] must be refused"; fi
 done
+# the same attack through a real name: a curl wrapper maps remote.invalid to the stub (curl's own --resolve),
+# so a guard that let the userinfo URL through would really connect to the "remote" host and send the key
+pb_curlbin="$tmp/pb-curlbin"; mkdir -p "$pb_curlbin"
+printf '#!/usr/bin/env bash\nexec "%s" --resolve "remote.invalid:%s:127.0.0.1" "$@"\n' "$(command -v curl)" "$pb_port" > "$pb_curlbin/curl"
+chmod +x "$pb_curlbin/curl"
+for u in "http://localhost:unused@remote.invalid:$pb_port" "http://remote.invalid:$pb_port" "http://localhost:unused@remote.invalid:$pb_port/"; do
+  pb_run PATH="$pb_curlbin:$PATH" BASE_URL="$u"
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: remote.invalid BASE_URL [$u] must be refused"; fi
+done
 expect_eq "dex-prebind: refused BASE_URLs sent nothing" "$before" "$(wc -l < "$pb_dir/log" | tr -d ' ')"
 pb_run BASE_URL="$pb_url/"
 expect_eq "dex-prebind: a plain local BASE_URL (trailing slash) still works" "0" "$rc"
