@@ -337,3 +337,23 @@ func TestCatalog_LegacyJWTFailsToStart(t *testing.T) {
 		}
 	}
 }
+
+// auth.mode off does not excuse an auth.jwt: the setting is refused whatever
+// the mode (it is dead config that looks like protection), and the message
+// never carries the secret.
+func TestCatalog_LegacyJWTRefusedWithAuthOff(t *testing.T) {
+	const secret = "0123456789abcdef0123456789abcdef"
+	_, cleanup, err := Initialize(&config.AppConfig{
+		HTTP:     config.HTTP{Addr: ":0"},
+		Log:      config.Log{Level: "error", Format: "text"},
+		Auth:     config.Auth{Mode: config.AuthOff, JWT: config.JWT{HS256Secret: secret}},
+		Postgres: freshDB(t),
+	})
+	if err == nil {
+		cleanup()
+		t.Fatal("auth.jwt with auth.mode off started")
+	}
+	if !strings.Contains(err.Error(), "auth.jwt") || strings.Contains(err.Error(), secret) {
+		t.Fatalf("err = %v, want it to name auth.jwt and not carry the secret", err)
+	}
+}
