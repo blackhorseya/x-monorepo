@@ -1,14 +1,19 @@
-import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from "@tanstack/react-router";
+import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
-import { getCredentialGeneration } from "./auth";
+import { getCredential, getCredentialGeneration, useCredential } from "./auth";
+import { getConfig } from "./oidc/config";
 import { CredentialControl } from "./components/credential";
+import { ClaimInvite } from "./components/claim-invite";
 import { RouteError, RoutePending } from "./components/route-status";
+import { useUnbound } from "./oidc/unbound";
 import { ServerVersion } from "./components/version";
 import { queryClient } from "./queryClient";
 import { adminProbeQuery } from "./queries";
 import type { ExpireSearch } from "./routes/expire";
+import type { LoginSearch } from "./routes/login";
 import type { OrdersSearch } from "./routes/orders";
 import type { ProductsSearch } from "./routes/products";
 import type { PruneSearch } from "./routes/prune";
@@ -52,12 +57,24 @@ const gated = (Page: LazyPage): LazyPage => {
   return Gated;
 };
 
+// With OIDC on, the console is for signed-in people: anything but the login pages goes to /login
+// (remembering where it was headed). With OIDC off the console is open as before.
+const publicPaths = ["/login", "/auth/callback"];
+
 // Layout: the nav shows the admin pages only to a caller the server's admin check lets through
 // (with auth.mode=off that is everyone, as on the server). That is a courtesy, not a gate: the
 // server checks the role on every admin RPC.
 function Root() {
   const isAdmin = useIsAdmin();
-  const links = isAdmin ? [...navLinks, ...adminLinks] : navLinks;
+  // Signing out (or a session that ends) leaves the page that needed the credential.
+  const credential = useCredential();
+  const path = useRouterState({ select: (s) => s.location.pathname });
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (getConfig().oidc && !credential && !publicPaths.includes(path)) void navigate({ to: "/login", replace: true });
+  }, [credential, path, navigate]);
+  const unbound = useUnbound();
+  const links = unbound ? [] : isAdmin ? [...navLinks, ...adminLinks] : navLinks;
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
       <header className="mb-6 flex flex-wrap items-baseline gap-6">
@@ -72,7 +89,7 @@ function Root() {
         <CredentialControl />
       </header>
       <AdminProbeNotice />
-      <Outlet />
+      {unbound && !publicPaths.includes(path) ? <ClaimInvite /> : <Outlet />}
       <footer className="mt-10 flex justify-end text-xs text-muted-foreground">
         <ServerVersion />
       </footer>
@@ -80,7 +97,27 @@ function Root() {
   );
 }
 
-const rootRoute = createRootRoute({ component: Root });
+const rootRoute = createRootRoute({
+  component: Root,
+  beforeLoad: ({ location }) => {
+    if (!getConfig().oidc || getCredential() || publicPaths.includes(location.pathname)) return;
+    throw redirect({ to: "/login", search: { returnTo: location.pathname === "/" ? undefined : location.href } });
+  },
+});
+
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: lazyRouteComponent(() => import("./routes/login"), "LoginPage"),
+  validateSearch: (raw: Record<string, unknown>): LoginSearch => ({
+    returnTo: typeof raw.returnTo === "string" && raw.returnTo !== "" ? raw.returnTo : undefined,
+  }),
+});
+const authCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/auth/callback",
+  component: lazyRouteComponent(() => import("./routes/auth-callback"), "AuthCallbackPage"),
+});
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -153,7 +190,7 @@ const expireRoute = createRoute({
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, productsRoute, poisonRoute, pruneRoute, expireRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, loginRoute, authCallbackRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, productsRoute, poisonRoute, pruneRoute, expireRoute]),
   defaultPreload: "intent",
   defaultPendingComponent: RoutePending,
   defaultErrorComponent: RouteError,

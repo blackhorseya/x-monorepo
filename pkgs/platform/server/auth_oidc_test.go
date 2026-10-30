@@ -49,18 +49,29 @@ func (v *fakeVerifier) Verify(_ context.Context, token string) (oidc.Identity, e
 
 // fakeExternal answers ResolveExternal from a canned result.
 type fakeExternal struct {
-	calls  int
-	seen   contextx.ExternalIdentity
-	p      contextx.Principal
-	err    error
-	delay  time.Duration // answers this late, ignoring the context (a driver that does not honour it)
+	calls int
+	seen  contextx.ExternalIdentity
+	p     contextx.Principal
+	err   error
+	// lateAnswer holds the canned answer back until the context is done, then
+	// gives it anyway: a lookup that finished but replied after the deadline (or
+	// a driver that ignores its context). Waiting on the context, not on a
+	// sleep, makes "the answer is late" true by construction.
+	lateAnswer bool
+	// honour returns the context's error instead of the canned answer once it is done.
+	honour bool
 	unbind map[string]bool
 }
 
-func (r *fakeExternal) ResolveExternal(_ context.Context, id contextx.ExternalIdentity) (contextx.Principal, error) {
+func (r *fakeExternal) ResolveExternal(c context.Context, id contextx.ExternalIdentity) (contextx.Principal, error) {
 	r.calls++
 	r.seen = id
-	time.Sleep(r.delay)
+	if r.lateAnswer {
+		<-c.Done()
+		if r.honour {
+			return contextx.Principal{}, c.Err()
+		}
+	}
 
 	return r.p, r.err
 }
@@ -81,6 +92,13 @@ type oidcRun struct {
 
 func runOIDC(t *testing.T, cfg config.Auth, v server.TokenVerifier, r server.ExternalIdentityResolver, procedure string, headers map[string]string) oidcRun {
 	t.Helper()
+
+	return runOIDCCtx(t, context.Background(), cfg, v, r, procedure, headers)
+}
+
+// runOIDCCtx is runOIDC with the caller's context (a cancelled one, say).
+func runOIDCCtx(t *testing.T, parent context.Context, cfg config.Auth, v server.TokenVerifier, r server.ExternalIdentityResolver, procedure string, headers map[string]string) oidcRun {
+	t.Helper()
 	in, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), nil, server.OIDCAuth{Verifier: v, Resolver: r})
 	if err != nil {
 		t.Fatalf("NewAuthInterceptor: %v", err)
@@ -98,7 +116,7 @@ func runOIDC(t *testing.T, cfg config.Auth, v server.TokenVerifier, r server.Ext
 		req.Header().Set(k, val)
 	}
 	var logs bytes.Buffer
-	c := contextx.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	c := contextx.WithLogger(parent, slog.New(slog.NewJSONHandler(&logs, nil)))
 	_, out.err = next(c, request{AnyRequest: req, procedure: procedure})
 	out.logs = logs.String()
 
@@ -212,42 +230,104 @@ func TestOIDC_ResolverFailureRejects(t *testing.T) {
 	wantReject(t, out, connect.CodeUnauthenticated, server.InvalidCredentialCode)
 }
 
-// auth.resolver_timeout bounds the external lookup too, and a success that
-// arrives after the deadline is not a verified credential.
-func TestOIDC_ResolverTimeout(t *testing.T) {
-	cfg := requiredCfg
-	cfg.ResolverTimeout = 20 * time.Millisecond
-	r := &fakeExternal{p: boundPrincipal, delay: 200 * time.Millisecond}
-	out := runOIDC(t, cfg, &fakeVerifier{}, r, otherProc, bearer(oidcToken))
-	wantReject(t, out, connect.CodeUnauthenticated, server.InvalidCredentialCode)
+// The deadline outranks the answer. For every way the lookup's context can be
+// over — in time, timed out (the answer arrives after auth.resolver_timeout),
+// cancelled by the caller — against every way the resolver can answer, an
+// expired context is a refusal and the answer is not read: not "success", and
+// not "unbound" either, which would otherwise let a ClaimInvite through
+// (reviewer F1 of #290, #294). In time, each answer keeps its own class.
+func TestOIDC_ResolverOutcomeMatrix(t *testing.T) {
+	type verdict struct {
+		allowed bool
+		code    connect.Code
+		errCode string
+	}
+	reject := verdict{code: connect.CodeUnauthenticated, errCode: server.InvalidCredentialCode}
+	allow := verdict{allowed: true}
+	denyUnbound := verdict{code: connect.CodePermissionDenied, errCode: server.UnboundIdentityCode}
+
+	results := []struct {
+		name string
+		p    contextx.Principal
+		err  error
+		// inTime is what each procedure gets when the context is alive.
+		inTime map[string]verdict
+	}{
+		{"success", boundPrincipal, nil, map[string]verdict{claimInvite: allow, otherProc: allow}},
+		{"unbound", contextx.Principal{}, server.ErrUnboundIdentity, map[string]verdict{claimInvite: allow, otherProc: denyUnbound}},
+		{"refused", contextx.Principal{}, fmt.Errorf("%w: account is disabled", server.ErrCredentialRefused), map[string]verdict{claimInvite: reject, otherProc: reject}},
+		{"infra error", contextx.Principal{}, errors.New("db down"), map[string]verdict{claimInvite: reject, otherProc: reject}},
+	}
+	timings := []struct {
+		name    string
+		expired bool
+		run     func(t *testing.T, r *fakeExternal, procedure string) oidcRun
+	}{
+		{"in time", false, func(t *testing.T, r *fakeExternal, procedure string) oidcRun {
+			cfg := requiredCfg
+			cfg.ResolverTimeout = time.Minute
+
+			return runOIDC(t, cfg, &fakeVerifier{}, r, procedure, bearer(oidcToken))
+		}},
+		{"timed out", true, func(t *testing.T, r *fakeExternal, procedure string) oidcRun {
+			cfg := requiredCfg
+			cfg.ResolverTimeout = 10 * time.Millisecond
+			r.lateAnswer = true
+
+			return runOIDC(t, cfg, &fakeVerifier{}, r, procedure, bearer(oidcToken))
+		}},
+		{"cancelled", true, func(t *testing.T, r *fakeExternal, procedure string) oidcRun {
+			cfg := requiredCfg
+			cfg.ResolverTimeout = time.Minute
+			c, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			return runOIDCCtx(t, c, cfg, &fakeVerifier{}, r, procedure, bearer(oidcToken))
+		}},
+	}
+
+	for _, tm := range timings {
+		for _, res := range results {
+			for _, procedure := range []string{claimInvite, otherProc} {
+				t.Run(tm.name+"/"+res.name+"/"+procedure, func(t *testing.T) {
+					r := &fakeExternal{p: res.p, err: res.err, unbind: map[string]bool{claimInvite: true}}
+					out := tm.run(t, r, procedure)
+
+					want := res.inTime[procedure]
+					if tm.expired {
+						want = reject
+					}
+					if want.allowed {
+						if out.err != nil || out.nextCalls != 1 {
+							t.Fatalf("err %v, handler ran %d times, want it to run once", out.err, out.nextCalls)
+						}
+						if res.err == nil && out.principal.Subject != boundPrincipal.Subject {
+							t.Errorf("principal = %+v, want the account's", out.principal)
+						}
+						if res.err != nil && (!out.principal.IsAnonymous() || !out.hasExt) {
+							t.Errorf("an unbound ClaimInvite carries the verified identity and no principal, got %+v (identity %v)", out.principal, out.hasExt)
+						}
+
+						return
+					}
+					wantReject(t, out, want.code, want.errCode)
+					if out.hasExt {
+						t.Error("a rejected call must not carry the external identity")
+					}
+				})
+			}
+		}
+	}
 }
 
-// A refusal is a refusal whatever the resolver answered: an answer that
-// arrives after auth.resolver_timeout is not trusted, and that includes "this
-// identity is unbound", which would otherwise let a ClaimInvite through
-// (reviewer F1 of #290).
-func TestOIDC_LateAnswerIsRejectedWhateverItSays(t *testing.T) {
+// A resolver that honours its context answers with the context's error; that
+// is the same refusal, "unbound" semantics included.
+func TestOIDC_ResolverHonouringTheDeadlineIsRefused(t *testing.T) {
 	cfg := requiredCfg
-	cfg.ResolverTimeout = 20 * time.Millisecond
-	for name, c := range map[string]struct {
-		err       error
-		procedure string
-	}{
-		"unbound on ClaimInvite":     {server.ErrUnboundIdentity, claimInvite},
-		"unbound on another":         {server.ErrUnboundIdentity, otherProc},
-		"refused":                    {server.ErrCredentialRefused, otherProc},
-		"infrastructure failure":     {errors.New("db down"), otherProc},
-		"unbound, resolver honoured": {context.DeadlineExceeded, claimInvite},
-	} {
-		t.Run(name, func(t *testing.T) {
-			r := &fakeExternal{err: c.err, delay: 200 * time.Millisecond, unbind: map[string]bool{claimInvite: true}}
-			out := runOIDC(t, cfg, &fakeVerifier{}, r, c.procedure, bearer(oidcToken))
-			wantReject(t, out, connect.CodeUnauthenticated, server.InvalidCredentialCode)
-			if out.hasExt {
-				t.Error("a rejected call must not carry the external identity")
-			}
-		})
-	}
+	cfg.ResolverTimeout = 10 * time.Millisecond
+	r := &fakeExternal{lateAnswer: true, honour: true, unbind: map[string]bool{claimInvite: true}}
+	out := runOIDC(t, cfg, &fakeVerifier{}, r, claimInvite, bearer(oidcToken))
+	wantReject(t, out, connect.CodeUnauthenticated, server.InvalidCredentialCode)
 }
 
 // Credential precedence: with an X-API-Key the bearer is never looked at —

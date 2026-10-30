@@ -22,6 +22,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
 	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/externalidentity"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/oidc"
@@ -81,7 +82,15 @@ type flakyResolve struct {
 	inner auth.ResolveExternalUC
 	down  atomic.Bool
 	calls atomic.Int64
-	late  atomic.Int64 // nanoseconds the answer is held back, ignoring the context
+	// holdPastDeadline keeps a finished lookup's answer back until the context
+	// is done, then returns it as it was: the lookup completed, the reply is late.
+	holdPastDeadline atomic.Bool
+	// heldUnbound counts held lookups whose real answer was externalidentity.ErrNotFound
+	// (the identity is unbound) while the context was still alive: the lookup read
+	// the database to the end, so the reply that follows is late, not a failure.
+	// heldOther counts every other held lookup (an error of another kind, or an
+	// answer that already came after the deadline).
+	heldUnbound, heldOther atomic.Int64
 }
 
 func (f *flakyResolve) Execute(c context.Context, in dto.ResolveExternalInput) (*dto.ResolveExternalOutput, error) {
@@ -90,7 +99,14 @@ func (f *flakyResolve) Execute(c context.Context, in dto.ResolveExternalInput) (
 		return nil, errors.New("connection refused")
 	}
 	out, err := f.inner.Execute(c, in)
-	time.Sleep(time.Duration(f.late.Load()))
+	if f.holdPastDeadline.Load() {
+		if errors.Is(err, externalidentity.ErrNotFound) && c.Err() == nil {
+			f.heldUnbound.Add(1)
+		} else {
+			f.heldOther.Add(1)
+		}
+		<-c.Done()
+	}
 
 	return out, err
 }
@@ -287,22 +303,34 @@ func TestOIDCInterceptor_DisabledRevokedAndDBErrorOnPostgres(t *testing.T) {
 }
 
 // An answer that arrives after auth.resolver_timeout is not trusted, even
-// "unbound": it must not reach ClaimInvite nor write a binding (reviewer F1 of #290).
+// "unbound": it must not reach ClaimInvite nor write a binding (reviewer F1 of
+// #290, #294). The lookup runs to the end against the real database; only its
+// reply is held back, until the deadline has passed (no sleep to tune).
 func TestOIDCInterceptor_LateUnboundDoesNotClaimOnPostgres(t *testing.T) {
-	w := newOIDCWorld(t, 150*time.Millisecond)
+	w := newOIDCWorld(t, 500*time.Millisecond)
 	w.newAccount(t, "acc-1", "viewer")
 	w.invite(t, "acc-1", "sub-1@example.com")
-	w.flaky.late.Store(int64(500 * time.Millisecond))
+	w.flaky.holdPastDeadline.Store(true)
 
 	w.wantRejected(t, "late unbound, ClaimInvite", identityv1connect.IdentityServiceClaimInviteProcedure, w.jwt(t, "sub-1", nil), connect.CodeUnauthenticated, server.InvalidCredentialCode)
 	w.wantRejected(t, "late unbound, other procedure", orderProc, w.jwt(t, "sub-1", nil), connect.CodeUnauthenticated, server.InvalidCredentialCode)
+	// Each request is a lookup whose real answer was "unbound", read before the
+	// deadline, and replied after it. Without this the test would also pass on a
+	// lookup that failed (a broken query, a slow database) and was refused for
+	// that reason, which says nothing about a late unbound answer.
+	if unbound, other := w.flaky.heldUnbound.Load(), w.flaky.heldOther.Load(); unbound != 2 || other != 0 {
+		t.Fatalf("held lookups: %d answered unbound in time, %d did not, want 2 and 0", unbound, other)
+	}
 	if n := w.count(t, "SELECT count(*) FROM identity.external_identities"); n != 0 {
 		t.Fatalf("a late answer bound %d identities", n)
 	}
 
 	// In time, the same call claims the invite.
-	w.flaky.late.Store(0)
+	w.flaky.holdPastDeadline.Store(false)
 	if _, err := w.call(identityv1connect.IdentityServiceClaimInviteProcedure, w.jwt(t, "sub-1", nil)); err != nil {
 		t.Fatalf("ClaimInvite in time: %v", err)
+	}
+	if n := w.count(t, "SELECT count(*) FROM identity.external_identities"); n != 1 {
+		t.Fatalf("the in-time ClaimInvite bound %d identities, want 1", n)
 	}
 }

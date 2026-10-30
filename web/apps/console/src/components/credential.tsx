@@ -5,12 +5,43 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { setCredential, subject, useCredential, type Credential } from "../auth";
+import { getConfig } from "../oidc/config";
+import { signOut } from "../oidc/session";
 
 // Header control: who the console calls as. Set an API key or a JWT, or clear
 // it to go anonymous. Every query is invalidated on the spot so an
 // UNAUTHENTICATED / PERMISSION_DENIED page recovers (or appears) at once instead
 // of on its next poll — the slowest one (poison) is 5s.
 export function CredentialControl() {
+  // With OIDC on, credentials come from /login and there is nothing to paste here.
+  return getConfig().oidc ? <SessionControl /> : <PasteCredentialControl />;
+}
+
+// Who the console calls as, and the way out. Signing out clears the local session; the way back in
+// is /login (the router sends every page there once there is no credential).
+function SessionControl() {
+  const qc = useQueryClient();
+  const current = useCredential();
+  return (
+    <div className="ml-auto flex flex-wrap items-center gap-2 text-sm">
+      <span className="text-muted-foreground">{subject(current)}</span>
+      {current && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            void signOut();
+            void qc.invalidateQueries();
+          }}
+        >
+          <LogOut /> Sign out
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function PasteCredentialControl() {
   const qc = useQueryClient();
   const current = useCredential();
   const [open, setOpen] = useState(false);
