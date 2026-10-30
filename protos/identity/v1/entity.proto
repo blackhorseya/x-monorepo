@@ -33,6 +33,16 @@ message Account {
   google.protobuf.Timestamp sessions_revoke_time = 7;
 }
 
+enum InviteStatus {
+  INVITE_STATUS_UNSPECIFIED = 0;
+  // Not claimed, and the 7 days have not run out.
+  INVITE_STATUS_PENDING = 1;
+  // Spent: an identity was bound through it (stays CLAIMED after expire_time).
+  INVITE_STATUS_CLAIMED = 2;
+  // Not claimed, and expire_time has passed. A new CreateInvite replaces it.
+  INVITE_STATUS_EXPIRED = 3;
+}
+
 // Invite pre-binds an email to an account. It is single use, valid for 7 days,
 // and carries no secret: the person signs in at the identity provider and claims it.
 message Invite {
@@ -43,6 +53,18 @@ message Invite {
   google.protobuf.Timestamp expire_time = 5;
   // Set once the invite has been claimed.
   google.protobuf.Timestamp claim_time = 6;
+  // Where the invite stands when the response was made.
+  InviteStatus status = 7;
+}
+
+// ExternalIdentity is an (issuer, subject) the identity provider vouches for,
+// bound to one account. It is the binding itself: no token, no claim, no email.
+message ExternalIdentity {
+  string issuer = 1;
+  string subject = 2;
+  string account_id = 3;
+  // When the identity was bound to the account.
+  google.protobuf.Timestamp bind_time = 4;
 }
 
 enum ApiKeyStatus {

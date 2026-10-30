@@ -107,6 +107,11 @@ func TestAuth_OIDCLogin(t *testing.T) {
 	if !errAs(err, &ce) || ce.Code() != connect.CodePermissionDenied || ce.Meta().Get("x-error-code") != server.UnboundIdentityCode {
 		t.Fatalf("unbound WhoAmI = %v, want permission denied %s", err, server.UnboundIdentityCode)
 	}
+	// ListAccountIdentities is not on the unbound allow-list either: it never reaches the handler.
+	_, err = alice.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{AccountId: accountID}))
+	if !errAs(err, &ce) || ce.Code() != connect.CodePermissionDenied || ce.Meta().Get("x-error-code") != server.UnboundIdentityCode {
+		t.Fatalf("unbound ListAccountIdentities = %v, want permission denied %s", err, server.UnboundIdentityCode)
+	}
 	claimed, err := alice.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{}))
 	if err != nil || claimed.Msg.GetAccount().GetId() != accountID {
 		t.Fatalf("ClaimInvite = %v, %v", claimed, err)
@@ -123,6 +128,20 @@ func TestAuth_OIDCLogin(t *testing.T) {
 	_, err = alice.ListAccounts(c, connect.NewRequest(&identityv1.ListAccountsRequest{}))
 	if !errAs(err, &ce) || ce.Code() != connect.CodePermissionDenied || ce.Meta().Get("x-error-code") != server.PermissionDeniedCode {
 		t.Fatalf("ListAccounts with the token's admin claim = %v, want permission denied %s", err, server.PermissionDeniedCode)
+	}
+	// Bound, but a viewer: the admin role is checked on the account's roles, not the token's.
+	_, err = alice.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{AccountId: accountID}))
+	if !errAs(err, &ce) || ce.Code() != connect.CodePermissionDenied || ce.Meta().Get("x-error-code") != server.PermissionDeniedCode {
+		t.Fatalf("viewer ListAccountIdentities = %v, want permission denied %s", err, server.PermissionDeniedCode)
+	}
+	// An admin sees the binding the login just made, and the spent invite.
+	listed, err := admin.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{AccountId: accountID}))
+	if err != nil {
+		t.Fatalf("admin ListAccountIdentities: %v", err)
+	}
+	ids, invites := listed.Msg.GetIdentities(), listed.Msg.GetInvites()
+	if len(ids) != 1 || ids[0].GetIssuer() != idp.URL || ids[0].GetSubject() != "alice-sub" || len(invites) != 1 || invites[0].GetStatus() != identityv1.InviteStatus_INVITE_STATUS_CLAIMED {
+		t.Fatalf("listed = %+v", listed.Msg)
 	}
 }
 

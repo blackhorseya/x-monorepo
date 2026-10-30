@@ -88,4 +88,8 @@ type Repository interface {
 	Find(c context.Context, issuer, subject string) (*Identity, error)
 	// Add inserts a binding; ErrDuplicate when (issuer, subject) is bound.
 	Add(c context.Context, i *Identity) error
+	// ListByAccount returns every binding of the account, newest first
+	// (created_at desc, issuer, subject). An account holds a handful, so there
+	// is no paging.
+	ListByAccount(c context.Context, accountID string) ([]*Identity, error)
 }

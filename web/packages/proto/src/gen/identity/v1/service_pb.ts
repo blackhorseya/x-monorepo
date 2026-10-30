@@ -6,7 +6,7 @@ import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegen
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv1";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
-import type { Account, ApiKey, Invite } from "./entity_pb";
+import type { Account, ApiKey, ExternalIdentity, Invite } from "./entity_pb";
 import { file_identity_v1_entity } from "./entity_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file identity/v1/service.proto.
  */
 export const file_identity_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChlpZGVudGl0eS92MS9zZXJ2aWNlLnByb3RvEgtpZGVudGl0eS52MSI3ChRDcmVhdGVBY2NvdW50UmVxdWVzdBIOCgRuYW1lGAEgASgJQgASDwoFcm9sZXMYAiADKAlCACI+ChVDcmVhdGVBY2NvdW50UmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQiIQoRR2V0QWNjb3VudFJlcXVlc3QSDAoCaWQYASABKAlCACI7ChJHZXRBY2NvdW50UmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQiPgoTTGlzdEFjY291bnRzUmVxdWVzdBITCglwYWdlX3NpemUYASABKAVCABISCgpwYWdlX3Rva2VuGAIgASgJIlcKFExpc3RBY2NvdW50c1Jlc3BvbnNlEiYKCGFjY291bnRzGAEgAygLMhQuaWRlbnRpdHkudjEuQWNjb3VudBIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiJQoVRGlzYWJsZUFjY291bnRSZXF1ZXN0EgwKAmlkGAEgASgJQgAiPwoWRGlzYWJsZUFjY291bnRSZXNwb25zZRIlCgdhY2NvdW50GAEgASgLMhQuaWRlbnRpdHkudjEuQWNjb3VudCIkChRFbmFibGVBY2NvdW50UmVxdWVzdBIMCgJpZBgBIAEoCUIAIj4KFUVuYWJsZUFjY291bnRSZXNwb25zZRIlCgdhY2NvdW50GAEgASgLMhQuaWRlbnRpdHkudjEuQWNjb3VudCIzChJBc3NpZ25Sb2xlc1JlcXVlc3QSDAoCaWQYASABKAlCABIPCgVyb2xlcxgCIAMoCUIAIjwKE0Fzc2lnblJvbGVzUmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQibAoTQ3JlYXRlQXBpS2V5UmVxdWVzdBIUCgphY2NvdW50X2lkGAEgASgJQgASDgoEbmFtZRgCIAEoCUIAEi8KC2V4cGlyZV90aW1lGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJMChRDcmVhdGVBcGlLZXlSZXNwb25zZRIkCgdhcGlfa2V5GAEgASgLMhMuaWRlbnRpdHkudjEuQXBpS2V5Eg4KBnNlY3JldBgCIAEoCSIqChJMaXN0QXBpS2V5c1JlcXVlc3QSFAoKYWNjb3VudF9pZBgBIAEoCUIAIjwKE0xpc3RBcGlLZXlzUmVzcG9uc2USJQoIYXBpX2tleXMYASADKAsyEy5pZGVudGl0eS52MS5BcGlLZXkiIwoTUmV2b2tlQXBpS2V5UmVxdWVzdBIMCgJpZBgBIAEoCUIAIjwKFFJldm9rZUFwaUtleVJlc3BvbnNlEiQKB2FwaV9rZXkYASABKAsyEy5pZGVudGl0eS52MS5BcGlLZXkiPAoTQ3JlYXRlSW52aXRlUmVxdWVzdBIUCgphY2NvdW50X2lkGAEgASgJQgASDwoFZW1haWwYAiABKAlCACI7ChRDcmVhdGVJbnZpdGVSZXNwb25zZRIjCgZpbnZpdGUYASABKAsyEy5pZGVudGl0eS52MS5JbnZpdGUiFAoSQ2xhaW1JbnZpdGVSZXF1ZXN0IjwKE0NsYWltSW52aXRlUmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQiLQoVUmV2b2tlU2Vzc2lvbnNSZXF1ZXN0EhQKCmFjY291bnRfaWQYASABKAlCACI/ChZSZXZva2VTZXNzaW9uc1Jlc3BvbnNlEiUKB2FjY291bnQYASABKAsyFC5pZGVudGl0eS52MS5BY2NvdW50Ig8KDVdob0FtSVJlcXVlc3QieAoOV2hvQW1JUmVzcG9uc2USEQoJYW5vbnltb3VzGAEgASgIEg8KB3N1YmplY3QYAiABKAkSDAoEbmFtZRgDIAEoCRINCgVyb2xlcxgEIAMoCRIOCgZtZXRob2QYBSABKAkSFQoNY3JlZGVudGlhbF9pZBgGIAEoCTLTCAoPSWRlbnRpdHlTZXJ2aWNlElYKDUNyZWF0ZUFjY291bnQSIS5pZGVudGl0eS52MS5DcmVhdGVBY2NvdW50UmVxdWVzdBoiLmlkZW50aXR5LnYxLkNyZWF0ZUFjY291bnRSZXNwb25zZRJNCgpHZXRBY2NvdW50Eh4uaWRlbnRpdHkudjEuR2V0QWNjb3VudFJlcXVlc3QaHy5pZGVudGl0eS52MS5HZXRBY2NvdW50UmVzcG9uc2USUwoMTGlzdEFjY291bnRzEiAuaWRlbnRpdHkudjEuTGlzdEFjY291bnRzUmVxdWVzdBohLmlkZW50aXR5LnYxLkxpc3RBY2NvdW50c1Jlc3BvbnNlElkKDkRpc2FibGVBY2NvdW50EiIuaWRlbnRpdHkudjEuRGlzYWJsZUFjY291bnRSZXF1ZXN0GiMuaWRlbnRpdHkudjEuRGlzYWJsZUFjY291bnRSZXNwb25zZRJWCg1FbmFibGVBY2NvdW50EiEuaWRlbnRpdHkudjEuRW5hYmxlQWNjb3VudFJlcXVlc3QaIi5pZGVudGl0eS52MS5FbmFibGVBY2NvdW50UmVzcG9uc2USUAoLQXNzaWduUm9sZXMSHy5pZGVudGl0eS52MS5Bc3NpZ25Sb2xlc1JlcXVlc3QaIC5pZGVudGl0eS52MS5Bc3NpZ25Sb2xlc1Jlc3BvbnNlElMKDENyZWF0ZUFwaUtleRIgLmlkZW50aXR5LnYxLkNyZWF0ZUFwaUtleVJlcXVlc3QaIS5pZGVudGl0eS52MS5DcmVhdGVBcGlLZXlSZXNwb25zZRJQCgtMaXN0QXBpS2V5cxIfLmlkZW50aXR5LnYxLkxpc3RBcGlLZXlzUmVxdWVzdBogLmlkZW50aXR5LnYxLkxpc3RBcGlLZXlzUmVzcG9uc2USUwoMUmV2b2tlQXBpS2V5EiAuaWRlbnRpdHkudjEuUmV2b2tlQXBpS2V5UmVxdWVzdBohLmlkZW50aXR5LnYxLlJldm9rZUFwaUtleVJlc3BvbnNlElMKDENyZWF0ZUludml0ZRIgLmlkZW50aXR5LnYxLkNyZWF0ZUludml0ZVJlcXVlc3QaIS5pZGVudGl0eS52MS5DcmVhdGVJbnZpdGVSZXNwb25zZRJQCgtDbGFpbUludml0ZRIfLmlkZW50aXR5LnYxLkNsYWltSW52aXRlUmVxdWVzdBogLmlkZW50aXR5LnYxLkNsYWltSW52aXRlUmVzcG9uc2USWQoOUmV2b2tlU2Vzc2lvbnMSIi5pZGVudGl0eS52MS5SZXZva2VTZXNzaW9uc1JlcXVlc3QaIy5pZGVudGl0eS52MS5SZXZva2VTZXNzaW9uc1Jlc3BvbnNlEkEKBldob0FtSRIaLmlkZW50aXR5LnYxLldob0FtSVJlcXVlc3QaGy5pZGVudGl0eS52MS5XaG9BbUlSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp, file_identity_v1_entity]);
+  fileDesc("ChlpZGVudGl0eS92MS9zZXJ2aWNlLnByb3RvEgtpZGVudGl0eS52MSI3ChRDcmVhdGVBY2NvdW50UmVxdWVzdBIOCgRuYW1lGAEgASgJQgASDwoFcm9sZXMYAiADKAlCACI+ChVDcmVhdGVBY2NvdW50UmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQiIQoRR2V0QWNjb3VudFJlcXVlc3QSDAoCaWQYASABKAlCACI7ChJHZXRBY2NvdW50UmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQiPgoTTGlzdEFjY291bnRzUmVxdWVzdBITCglwYWdlX3NpemUYASABKAVCABISCgpwYWdlX3Rva2VuGAIgASgJIlcKFExpc3RBY2NvdW50c1Jlc3BvbnNlEiYKCGFjY291bnRzGAEgAygLMhQuaWRlbnRpdHkudjEuQWNjb3VudBIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiJQoVRGlzYWJsZUFjY291bnRSZXF1ZXN0EgwKAmlkGAEgASgJQgAiPwoWRGlzYWJsZUFjY291bnRSZXNwb25zZRIlCgdhY2NvdW50GAEgASgLMhQuaWRlbnRpdHkudjEuQWNjb3VudCIkChRFbmFibGVBY2NvdW50UmVxdWVzdBIMCgJpZBgBIAEoCUIAIj4KFUVuYWJsZUFjY291bnRSZXNwb25zZRIlCgdhY2NvdW50GAEgASgLMhQuaWRlbnRpdHkudjEuQWNjb3VudCIzChJBc3NpZ25Sb2xlc1JlcXVlc3QSDAoCaWQYASABKAlCABIPCgVyb2xlcxgCIAMoCUIAIjwKE0Fzc2lnblJvbGVzUmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQibAoTQ3JlYXRlQXBpS2V5UmVxdWVzdBIUCgphY2NvdW50X2lkGAEgASgJQgASDgoEbmFtZRgCIAEoCUIAEi8KC2V4cGlyZV90aW1lGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJMChRDcmVhdGVBcGlLZXlSZXNwb25zZRIkCgdhcGlfa2V5GAEgASgLMhMuaWRlbnRpdHkudjEuQXBpS2V5Eg4KBnNlY3JldBgCIAEoCSIqChJMaXN0QXBpS2V5c1JlcXVlc3QSFAoKYWNjb3VudF9pZBgBIAEoCUIAIjwKE0xpc3RBcGlLZXlzUmVzcG9uc2USJQoIYXBpX2tleXMYASADKAsyEy5pZGVudGl0eS52MS5BcGlLZXkiIwoTUmV2b2tlQXBpS2V5UmVxdWVzdBIMCgJpZBgBIAEoCUIAIjwKFFJldm9rZUFwaUtleVJlc3BvbnNlEiQKB2FwaV9rZXkYASABKAsyEy5pZGVudGl0eS52MS5BcGlLZXkiPAoTQ3JlYXRlSW52aXRlUmVxdWVzdBIUCgphY2NvdW50X2lkGAEgASgJQgASDwoFZW1haWwYAiABKAlCACI7ChRDcmVhdGVJbnZpdGVSZXNwb25zZRIjCgZpbnZpdGUYASABKAsyEy5pZGVudGl0eS52MS5JbnZpdGUiFAoSQ2xhaW1JbnZpdGVSZXF1ZXN0IjwKE0NsYWltSW52aXRlUmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQiNAocTGlzdEFjY291bnRJZGVudGl0aWVzUmVxdWVzdBIUCgphY2NvdW50X2lkGAEgASgJQgAieAodTGlzdEFjY291bnRJZGVudGl0aWVzUmVzcG9uc2USMQoKaWRlbnRpdGllcxgBIAMoCzIdLmlkZW50aXR5LnYxLkV4dGVybmFsSWRlbnRpdHkSJAoHaW52aXRlcxgCIAMoCzITLmlkZW50aXR5LnYxLkludml0ZSItChVSZXZva2VTZXNzaW9uc1JlcXVlc3QSFAoKYWNjb3VudF9pZBgBIAEoCUIAIj8KFlJldm9rZVNlc3Npb25zUmVzcG9uc2USJQoHYWNjb3VudBgBIAEoCzIULmlkZW50aXR5LnYxLkFjY291bnQiDwoNV2hvQW1JUmVxdWVzdCJ4Cg5XaG9BbUlSZXNwb25zZRIRCglhbm9ueW1vdXMYASABKAgSDwoHc3ViamVjdBgCIAEoCRIMCgRuYW1lGAMgASgJEg0KBXJvbGVzGAQgAygJEg4KBm1ldGhvZBgFIAEoCRIVCg1jcmVkZW50aWFsX2lkGAYgASgJMsMJCg9JZGVudGl0eVNlcnZpY2USVgoNQ3JlYXRlQWNjb3VudBIhLmlkZW50aXR5LnYxLkNyZWF0ZUFjY291bnRSZXF1ZXN0GiIuaWRlbnRpdHkudjEuQ3JlYXRlQWNjb3VudFJlc3BvbnNlEk0KCkdldEFjY291bnQSHi5pZGVudGl0eS52MS5HZXRBY2NvdW50UmVxdWVzdBofLmlkZW50aXR5LnYxLkdldEFjY291bnRSZXNwb25zZRJTCgxMaXN0QWNjb3VudHMSIC5pZGVudGl0eS52MS5MaXN0QWNjb3VudHNSZXF1ZXN0GiEuaWRlbnRpdHkudjEuTGlzdEFjY291bnRzUmVzcG9uc2USWQoORGlzYWJsZUFjY291bnQSIi5pZGVudGl0eS52MS5EaXNhYmxlQWNjb3VudFJlcXVlc3QaIy5pZGVudGl0eS52MS5EaXNhYmxlQWNjb3VudFJlc3BvbnNlElYKDUVuYWJsZUFjY291bnQSIS5pZGVudGl0eS52MS5FbmFibGVBY2NvdW50UmVxdWVzdBoiLmlkZW50aXR5LnYxLkVuYWJsZUFjY291bnRSZXNwb25zZRJQCgtBc3NpZ25Sb2xlcxIfLmlkZW50aXR5LnYxLkFzc2lnblJvbGVzUmVxdWVzdBogLmlkZW50aXR5LnYxLkFzc2lnblJvbGVzUmVzcG9uc2USUwoMQ3JlYXRlQXBpS2V5EiAuaWRlbnRpdHkudjEuQ3JlYXRlQXBpS2V5UmVxdWVzdBohLmlkZW50aXR5LnYxLkNyZWF0ZUFwaUtleVJlc3BvbnNlElAKC0xpc3RBcGlLZXlzEh8uaWRlbnRpdHkudjEuTGlzdEFwaUtleXNSZXF1ZXN0GiAuaWRlbnRpdHkudjEuTGlzdEFwaUtleXNSZXNwb25zZRJTCgxSZXZva2VBcGlLZXkSIC5pZGVudGl0eS52MS5SZXZva2VBcGlLZXlSZXF1ZXN0GiEuaWRlbnRpdHkudjEuUmV2b2tlQXBpS2V5UmVzcG9uc2USUwoMQ3JlYXRlSW52aXRlEiAuaWRlbnRpdHkudjEuQ3JlYXRlSW52aXRlUmVxdWVzdBohLmlkZW50aXR5LnYxLkNyZWF0ZUludml0ZVJlc3BvbnNlElAKC0NsYWltSW52aXRlEh8uaWRlbnRpdHkudjEuQ2xhaW1JbnZpdGVSZXF1ZXN0GiAuaWRlbnRpdHkudjEuQ2xhaW1JbnZpdGVSZXNwb25zZRJuChVMaXN0QWNjb3VudElkZW50aXRpZXMSKS5pZGVudGl0eS52MS5MaXN0QWNjb3VudElkZW50aXRpZXNSZXF1ZXN0GiouaWRlbnRpdHkudjEuTGlzdEFjY291bnRJZGVudGl0aWVzUmVzcG9uc2USWQoOUmV2b2tlU2Vzc2lvbnMSIi5pZGVudGl0eS52MS5SZXZva2VTZXNzaW9uc1JlcXVlc3QaIy5pZGVudGl0eS52MS5SZXZva2VTZXNzaW9uc1Jlc3BvbnNlEkEKBldob0FtSRIaLmlkZW50aXR5LnYxLldob0FtSVJlcXVlc3QaGy5pZGVudGl0eS52MS5XaG9BbUlSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp, file_identity_v1_entity]);
 
 /**
  * @generated from message identity.v1.CreateAccountRequest
@@ -435,6 +435,45 @@ export const ClaimInviteResponseSchema: GenMessage<ClaimInviteResponse> = /*@__P
   messageDesc(file_identity_v1_service, 21);
 
 /**
+ * @generated from message identity.v1.ListAccountIdentitiesRequest
+ */
+export type ListAccountIdentitiesRequest = Message<"identity.v1.ListAccountIdentitiesRequest"> & {
+  /**
+   * @generated from field: string account_id = 1;
+   */
+  accountId: string;
+};
+
+/**
+ * Describes the message identity.v1.ListAccountIdentitiesRequest.
+ * Use `create(ListAccountIdentitiesRequestSchema)` to create a new message.
+ */
+export const ListAccountIdentitiesRequestSchema: GenMessage<ListAccountIdentitiesRequest> = /*@__PURE__*/
+  messageDesc(file_identity_v1_service, 22);
+
+/**
+ * @generated from message identity.v1.ListAccountIdentitiesResponse
+ */
+export type ListAccountIdentitiesResponse = Message<"identity.v1.ListAccountIdentitiesResponse"> & {
+  /**
+   * @generated from field: repeated identity.v1.ExternalIdentity identities = 1;
+   */
+  identities: ExternalIdentity[];
+
+  /**
+   * @generated from field: repeated identity.v1.Invite invites = 2;
+   */
+  invites: Invite[];
+};
+
+/**
+ * Describes the message identity.v1.ListAccountIdentitiesResponse.
+ * Use `create(ListAccountIdentitiesResponseSchema)` to create a new message.
+ */
+export const ListAccountIdentitiesResponseSchema: GenMessage<ListAccountIdentitiesResponse> = /*@__PURE__*/
+  messageDesc(file_identity_v1_service, 23);
+
+/**
  * @generated from message identity.v1.RevokeSessionsRequest
  */
 export type RevokeSessionsRequest = Message<"identity.v1.RevokeSessionsRequest"> & {
@@ -449,7 +488,7 @@ export type RevokeSessionsRequest = Message<"identity.v1.RevokeSessionsRequest">
  * Use `create(RevokeSessionsRequestSchema)` to create a new message.
  */
 export const RevokeSessionsRequestSchema: GenMessage<RevokeSessionsRequest> = /*@__PURE__*/
-  messageDesc(file_identity_v1_service, 22);
+  messageDesc(file_identity_v1_service, 24);
 
 /**
  * @generated from message identity.v1.RevokeSessionsResponse
@@ -466,7 +505,7 @@ export type RevokeSessionsResponse = Message<"identity.v1.RevokeSessionsResponse
  * Use `create(RevokeSessionsResponseSchema)` to create a new message.
  */
 export const RevokeSessionsResponseSchema: GenMessage<RevokeSessionsResponse> = /*@__PURE__*/
-  messageDesc(file_identity_v1_service, 23);
+  messageDesc(file_identity_v1_service, 25);
 
 /**
  * @generated from message identity.v1.WhoAmIRequest
@@ -479,7 +518,7 @@ export type WhoAmIRequest = Message<"identity.v1.WhoAmIRequest"> & {
  * Use `create(WhoAmIRequestSchema)` to create a new message.
  */
 export const WhoAmIRequestSchema: GenMessage<WhoAmIRequest> = /*@__PURE__*/
-  messageDesc(file_identity_v1_service, 24);
+  messageDesc(file_identity_v1_service, 26);
 
 /**
  * @generated from message identity.v1.WhoAmIResponse
@@ -531,7 +570,7 @@ export type WhoAmIResponse = Message<"identity.v1.WhoAmIResponse"> & {
  * Use `create(WhoAmIResponseSchema)` to create a new message.
  */
 export const WhoAmIResponseSchema: GenMessage<WhoAmIResponse> = /*@__PURE__*/
-  messageDesc(file_identity_v1_service, 25);
+  messageDesc(file_identity_v1_service, 27);
 
 /**
  * IdentityService manages the accounts and API keys the rpc server's auth
@@ -659,6 +698,21 @@ export const IdentityService: GenService<{
     methodKind: "unary";
     input: typeof ClaimInviteRequestSchema;
     output: typeof ClaimInviteResponseSchema;
+  },
+  /**
+   * ListAccountIdentities shows who can sign in as an account: the external
+   * identities (issuer, subject) bound to it and its invites with their status
+   * (pending, claimed, expired), each newest first. Admin only. It never returns
+   * an invite token, a hash or any other secret (an invite has none), and it is
+   * not paged: like ListApiKeys it lists one account's handful, not a collection.
+   * Refused (x-error-code): account.not_found.
+   *
+   * @generated from rpc identity.v1.IdentityService.ListAccountIdentities
+   */
+  listAccountIdentities: {
+    methodKind: "unary";
+    input: typeof ListAccountIdentitiesRequestSchema;
+    output: typeof ListAccountIdentitiesResponseSchema;
   },
   /**
    * RevokeSessions refuses every access token of the account issued before now

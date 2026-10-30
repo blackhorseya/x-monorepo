@@ -153,6 +153,26 @@ type InviteOutput struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 	ClaimedAt time.Time // zero: still pending
+	Status    string    // PENDING | CLAIMED | EXPIRED, judged when the output was made
+}
+
+// ExternalIdentityOutput is one (issuer, subject) bound to an account.
+type ExternalIdentityOutput struct {
+	Issuer    string
+	Subject   string
+	AccountID string
+	BoundAt   time.Time
+}
+
+type ListAccountIdentitiesInput struct {
+	AccountID string
+}
+
+// ListAccountIdentitiesOutput is an account's bindings and invites, newest
+// first. Neither carries a token, hash or secret: invites hold none.
+type ListAccountIdentitiesOutput struct {
+	Identities []ExternalIdentityOutput
+	Invites    []InviteOutput
 }
 
 type CreateInviteInput struct {

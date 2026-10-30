@@ -23,19 +23,20 @@ var _ identityv1connect.IdentityServiceHandler = (*IdentityService)(nil)
 
 // Use-case aliases keep handler signatures readable.
 type (
-	CreateAccountUC  = usecasex.UseCase[dto.CreateAccountInput, *dto.AccountOutput]
-	GetAccountUC     = usecasex.UseCase[dto.GetAccountInput, *dto.AccountOutput]
-	ListAccountsUC   = usecasex.UseCase[dto.ListAccountsInput, *dto.ListAccountsOutput]
-	DisableAccountUC = usecasex.UseCase[dto.DisableAccountInput, *dto.AccountOutput]
-	EnableAccountUC  = usecasex.UseCase[dto.EnableAccountInput, *dto.AccountOutput]
-	AssignRolesUC    = usecasex.UseCase[dto.AssignRolesInput, *dto.AccountOutput]
-	CreateAPIKeyUC   = usecasex.UseCase[dto.CreateAPIKeyInput, *dto.CreateAPIKeyOutput]
-	ListAPIKeysUC    = usecasex.UseCase[dto.ListAPIKeysInput, *dto.ListAPIKeysOutput]
-	RevokeAPIKeyUC   = usecasex.UseCase[dto.RevokeAPIKeyInput, *dto.APIKeyOutput]
-	WhoAmIUC         = usecasex.UseCase[dto.WhoAmIInput, *dto.WhoAmIOutput]
-	CreateInviteUC   = usecasex.UseCase[dto.CreateInviteInput, *dto.InviteOutput]
-	ClaimInviteUC    = usecasex.UseCase[dto.ClaimInviteInput, *dto.AccountOutput]
-	RevokeSessionsUC = usecasex.UseCase[dto.RevokeSessionsInput, *dto.AccountOutput]
+	CreateAccountUC         = usecasex.UseCase[dto.CreateAccountInput, *dto.AccountOutput]
+	GetAccountUC            = usecasex.UseCase[dto.GetAccountInput, *dto.AccountOutput]
+	ListAccountsUC          = usecasex.UseCase[dto.ListAccountsInput, *dto.ListAccountsOutput]
+	DisableAccountUC        = usecasex.UseCase[dto.DisableAccountInput, *dto.AccountOutput]
+	EnableAccountUC         = usecasex.UseCase[dto.EnableAccountInput, *dto.AccountOutput]
+	AssignRolesUC           = usecasex.UseCase[dto.AssignRolesInput, *dto.AccountOutput]
+	CreateAPIKeyUC          = usecasex.UseCase[dto.CreateAPIKeyInput, *dto.CreateAPIKeyOutput]
+	ListAPIKeysUC           = usecasex.UseCase[dto.ListAPIKeysInput, *dto.ListAPIKeysOutput]
+	RevokeAPIKeyUC          = usecasex.UseCase[dto.RevokeAPIKeyInput, *dto.APIKeyOutput]
+	WhoAmIUC                = usecasex.UseCase[dto.WhoAmIInput, *dto.WhoAmIOutput]
+	CreateInviteUC          = usecasex.UseCase[dto.CreateInviteInput, *dto.InviteOutput]
+	ClaimInviteUC           = usecasex.UseCase[dto.ClaimInviteInput, *dto.AccountOutput]
+	ListAccountIdentitiesUC = usecasex.UseCase[dto.ListAccountIdentitiesInput, *dto.ListAccountIdentitiesOutput]
+	RevokeSessionsUC        = usecasex.UseCase[dto.RevokeSessionsInput, *dto.AccountOutput]
 )
 
 // ExternalIdentity is the verified external identity of one call: what the
@@ -66,19 +67,20 @@ func (NoExternalIdentity) ExternalIdentityFrom(context.Context) (ExternalIdentit
 
 // UseCases groups what the service needs; wire fills it by field.
 type UseCases struct {
-	CreateAccount  CreateAccountUC
-	GetAccount     GetAccountUC
-	ListAccounts   ListAccountsUC
-	DisableAccount DisableAccountUC
-	EnableAccount  EnableAccountUC
-	AssignRoles    AssignRolesUC
-	CreateAPIKey   CreateAPIKeyUC
-	ListAPIKeys    ListAPIKeysUC
-	RevokeAPIKey   RevokeAPIKeyUC
-	WhoAmI         WhoAmIUC
-	CreateInvite   CreateInviteUC
-	RevokeSessions RevokeSessionsUC
-	ClaimInvite    ClaimInviteUC
+	CreateAccount         CreateAccountUC
+	GetAccount            GetAccountUC
+	ListAccounts          ListAccountsUC
+	DisableAccount        DisableAccountUC
+	EnableAccount         EnableAccountUC
+	AssignRoles           AssignRolesUC
+	CreateAPIKey          CreateAPIKeyUC
+	ListAPIKeys           ListAPIKeysUC
+	RevokeAPIKey          RevokeAPIKeyUC
+	WhoAmI                WhoAmIUC
+	CreateInvite          CreateInviteUC
+	RevokeSessions        RevokeSessionsUC
+	ClaimInvite           ClaimInviteUC
+	ListAccountIdentities ListAccountIdentitiesUC
 	// ExternalIdentity is where ClaimInvite learns who is calling.
 	ExternalIdentity ExternalIdentitySource
 }
@@ -240,6 +242,28 @@ func (h *IdentityService) CreateInvite(c context.Context, req *connect.Request[i
 	return connect.NewResponse(&identityv1.CreateInviteResponse{Invite: toProtoInvite(out)}), nil
 }
 
+func (h *IdentityService) ListAccountIdentities(c context.Context, req *connect.Request[identityv1.ListAccountIdentitiesRequest]) (*connect.Response[identityv1.ListAccountIdentitiesResponse], error) {
+	if err := h.admin(c); err != nil {
+		return nil, err
+	}
+	out, err := h.uc.ListAccountIdentities.Execute(c, dto.ListAccountIdentitiesInput{AccountID: req.Msg.GetAccountId()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+	identities := make([]*identityv1.ExternalIdentity, 0, len(out.Identities))
+	for _, e := range out.Identities {
+		identities = append(identities, &identityv1.ExternalIdentity{
+			Issuer: e.Issuer, Subject: e.Subject, AccountId: e.AccountID, BindTime: timestamppb.New(e.BoundAt),
+		})
+	}
+	invites := make([]*identityv1.Invite, 0, len(out.Invites))
+	for i := range out.Invites {
+		invites = append(invites, toProtoInvite(&out.Invites[i]))
+	}
+
+	return connect.NewResponse(&identityv1.ListAccountIdentitiesResponse{Identities: identities, Invites: invites}), nil
+}
+
 // RevokeSessions is "sign out of all devices", not a compromise response; the
 // contract comment on the RPC says so, and so must any UI that offers it.
 func (h *IdentityService) RevokeSessions(c context.Context, req *connect.Request[identityv1.RevokeSessionsRequest]) (*connect.Response[identityv1.RevokeSessionsResponse], error) {
@@ -305,12 +329,26 @@ func toProtoInvite(v *dto.InviteOutput) *identityv1.Invite {
 	out := &identityv1.Invite{
 		Id: v.ID, Email: v.Email, AccountId: v.AccountID,
 		CreateTime: timestamppb.New(v.CreatedAt), ExpireTime: timestamppb.New(v.ExpiresAt),
+		Status: toProtoInviteStatus(v.Status),
 	}
 	if !v.ClaimedAt.IsZero() {
 		out.ClaimTime = timestamppb.New(v.ClaimedAt)
 	}
 
 	return out
+}
+
+func toProtoInviteStatus(s string) identityv1.InviteStatus {
+	switch s {
+	case "PENDING":
+		return identityv1.InviteStatus_INVITE_STATUS_PENDING
+	case "CLAIMED":
+		return identityv1.InviteStatus_INVITE_STATUS_CLAIMED
+	case "EXPIRED":
+		return identityv1.InviteStatus_INVITE_STATUS_EXPIRED
+	default:
+		return identityv1.InviteStatus_INVITE_STATUS_UNSPECIFIED
+	}
 }
 
 func toProtoAccountStatus(s string) identityv1.AccountStatus {

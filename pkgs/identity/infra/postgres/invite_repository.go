@@ -95,3 +95,26 @@ func (i *InviteRepository) Save(c context.Context, v *invite.Invite) error {
 
 	return nil
 }
+
+func (i *InviteRepository) ListByAccount(c context.Context, accountID string) ([]*invite.Invite, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var rows []inviteRow
+	if err := platformpg.TxOrDB(ctx, i.db).Where("account_id = ?", accountID).
+		Order("created_at DESC, id DESC").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list invites of account %s: %w", accountID, err)
+	}
+	out := make([]*invite.Invite, 0, len(rows))
+	for _, row := range rows {
+		v, err := toInvite(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+
+	return out, nil
+}
