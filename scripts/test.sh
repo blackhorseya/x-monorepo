@@ -955,6 +955,41 @@ if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a missing ADMIN_API_KEY must 
 expect_match "dex-prebind: the refusal names ADMIN_API_KEY" 'ADMIN_API_KEY' "$out"
 expect_eq "dex-prebind: refusals sent nothing" "$before" "$(wc -l < "$pb_dir/log" | tr -d ' ')"
 
+# BASE_URL is parsed, not prefix-matched: userinfo and look-alike hosts must not carry the key to a
+# server the guard did not name. The stub on 127.0.0.1 stands in for the "remote" one.
+before=$(wc -l < "$pb_dir/log" | tr -d ' ')
+pb_port=${pb_url##*:}
+for u in "http://localhost:unused@127.0.0.1:$pb_port" "http://user@127.0.0.1:$pb_port" "http://127.0.0.1@127.0.0.1:$pb_port" \
+  "http://127.0.0.1:$pb_port@127.0.0.1:$pb_port" "http://127.0.0.1:$pb_port?@x" "http://127.0.0.1:$pb_port#@x" \
+  "http://localhost.example.com" "http://127.0.0.1.example.com:$pb_port" "http://localhost:0" "http://localhost:65536" "http://localhost:99999" \
+  "http://localhost:" "http://LOCALHOST:$pb_port" "http://127.0.0.1:$pb_port/x" "http://127.0.0.1:$pb_port\\@evil" "http://[::1]x" " http://127.0.0.1:$pb_port"; do
+  pb_run BASE_URL="$u"
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: BASE_URL [$u] must be refused"; fi
+done
+expect_eq "dex-prebind: refused BASE_URLs sent nothing" "$before" "$(wc -l < "$pb_dir/log" | tr -d ' ')"
+pb_run BASE_URL="$pb_url/"
+expect_eq "dex-prebind: a plain local BASE_URL (trailing slash) still works" "0" "$rc"
+
+# a server that echoes the key (or a token, or a long text) as its error code must not get it printed
+refl_out=""
+for r in "$pb_key" xk_wrong-key-secret tok-secret-admin@example.com "$(printf 'a%.0s' $(seq 1 80))" 'A_B'; do
+  pb_up refl STUB_REFLECT="$r"
+  pb_run
+  if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: an error answer must fail the run"; fi
+  refl_out="$refl_out
+$out"
+  expect_match "dex-prebind: a reflected error code is redacted" '<redacted>' "$out"
+  if printf '%s' "$out" | grep -qF -- "$r"; then bad "dex-prebind: output echoes the server's [$r]"; else ok; fi
+done
+# a code that is harmless on its own but is the key itself
+pb_up refl2 STUB_REFLECT=lowerkey123
+pb_run ADMIN_API_KEY=lowerkey123
+if printf '%s' "$out" | grep -qF -- lowerkey123; then bad "dex-prebind: output echoes a whitelist-shaped key"; else ok; fi
+# an ordinary error keeps its (whitelisted) code
+pb_up plain
+pb_run ADMIN_API_KEY=xk_wrong-key-secret
+expect_match "dex-prebind: an ordinary error still names its codes" 'code unauthenticated, x-error-code auth.invalid_credential' "$out"
+
 # a failed claim leaves the account and the pending invite; the rerun claims it without a second invite
 pb_up partial STUB_FAIL_CLAIM=1
 pb_run
@@ -981,6 +1016,7 @@ all_out="$first_out
 $rerun_out
 $bad_key_out
 $fail_out
+$refl_out
 $out"
 for secret in "$pb_key" xk_wrong-key-secret tok-secret-; do
   if printf '%s' "$all_out" | grep -qF -- "$secret"; then bad "dex-prebind: output leaks [$secret]"; else ok; fi

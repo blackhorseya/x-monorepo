@@ -9,7 +9,7 @@ uses a fake dex-token.sh that prints the same.
   stub_rpc.py <port-file> <log-file>      # binds 127.0.0.1:0, writes the port to <port-file>
 
 STUB_ADMIN_KEY (the admin key), STUB_ISSUER (the issuer a claim binds), STUB_FAIL_CLAIM=1 (every
-ClaimInvite answers 500) come from the environment.
+ClaimInvite answers 500), STUB_REFLECT=<text> (every call answers 500 echoing it) come from the environment.
 """
 import json
 import os
@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ADMIN_KEY = os.environ["STUB_ADMIN_KEY"]
 ISSUER = os.environ["STUB_ISSUER"]
 FAIL_CLAIM = os.environ.get("STUB_FAIL_CLAIM") == "1"
+REFLECT = os.environ.get("STUB_REFLECT")  # answers every call 500 with this text as code, message and x-error-code
 PREFIX = "/identity.v1.IdentityService/"
 state = {"accounts": [], "invites": [], "identities": []}
 
@@ -56,6 +57,8 @@ class Handler(BaseHTTPRequestHandler):
         kind = "admin" if admin else "bearer" if bearer else "none"
         with open(LOG, "a") as f:
             f.write(f"{method} {kind}\n")
+        if REFLECT:
+            return self.reply(500, {"code": REFLECT, "message": REFLECT}, REFLECT)
         if method == "ClaimInvite":
             return self.claim(bearer)
         if method not in ("CreateAccount", "ListAccounts", "ListAccountIdentities", "CreateInvite"):
