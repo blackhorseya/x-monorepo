@@ -127,7 +127,7 @@ func New(cfg config.OIDC, opts ...Option) (*Verifier, error) {
 			base = http.DefaultTransport
 		}
 		jc := client
-		jc.Transport = countingTransport{base: base, ks: ks}
+		jc.Transport = checkingTransport{base: base}
 		ks.jwks = &jc
 		v.issuers[is.Issuer] = ks
 	}
@@ -174,6 +174,9 @@ func (v *Verifier) Warm(c context.Context) {
 func (v *Verifier) Close() {
 	v.closed.Do(func() {
 		v.cancel()
+		for _, ks := range v.issuers {
+			ks.shutdown() // waits for a commit in progress; none starts afterwards
+		}
 		if v.reg != nil {
 			_ = v.reg.Unregister()
 		}
