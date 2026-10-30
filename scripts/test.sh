@@ -198,6 +198,7 @@ touch_file deployments/helm/x-monorepo/Chart.yaml; touch_file web/apps/console/e
 touch_file pkgs/ordering/domain/order/order_test.go; touch_file .github/workflows/ci.yml
 touch_file scripts/x.sh; touch_file Taskfile.yml; touch_file tests/k6/a.js
 touch_file deployments/docker/docker-compose.yaml; touch_file deployments/docker/grafana/d.json
+touch_file deployments/docker/dex/config.yaml
 commit "docs: nothing shipped"
 expect_eq "docs / chart / tests / CI are not releasable" "" "$(in_repo scripts/releasable.sh)"
 touch_file pkgs/ordering/domain/order/order.go; touch_file deployments/docker/Dockerfile.rpc
@@ -798,6 +799,75 @@ if command -v go >/dev/null 2>&1; then
 else
   echo "scripts/test.sh: go not found — merge-tree-check.sh fixture skipped" >&2
 fi
+
+# ── deployments/helm/kind/coredns-dex.sh ──────────────────────────────────────
+# Run the real script against a stub kubectl whose "cluster" is one Corefile file; the patch the
+# script sends is written back, so every case sees what a real CoreDNS would be given.
+dns_dir="$tmp/coredns"; mkdir -p "$dns_dir/bin"
+cat > "$dns_dir/bin/kubectl" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+  *" get configmap coredns "*) cat "$COREFILE" ;;
+  *" patch configmap coredns "*) jq -j '.data.Corefile' <<<"${*: -1}" > "$COREFILE"; echo patch >> "$KLOG" ;;
+  *" rollout "*) echo rollout >> "$KLOG" ;;
+  *) echo "stub kubectl: unexpected $*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$dns_dir/bin/kubectl"
+# dns <namespace> : runs the script, prints "<exit> <patches>"; the Corefile is left in $dns_dir/Corefile
+dns() {
+  : > "$dns_dir/klog"
+  local rc=0
+  COREFILE="$dns_dir/Corefile" KLOG="$dns_dir/klog" PATH="$dns_dir/bin:$PATH" "$src/deployments/helm/kind/coredns-dex.sh" "$1" >/dev/null 2>&1 || rc=$?
+  echo "$rc $(grep -c '^patch$' "$dns_dir/klog" || true)"
+}
+corefile_with() { # corefile_with <extra lines after ready...>
+  { printf '.:53 {\n    errors\n    ready\n'; for l in "$@"; do printf '    %s\n' "$l"; done
+    printf '    kubernetes cluster.local in-addr.arpa ip6.arpa {\n        pods insecure\n    }\n    forward . /etc/resolv.conf\n}\n'; } > "$dns_dir/Corefile"
+}
+rule_shop="rewrite name exact dex.localtest.me dex.shop.svc.cluster.local"
+corefile_with
+expect_eq "coredns: first run patches once"        "0 1" "$(dns shop)"
+expect_eq "coredns: rule lands after ready"        "ready $rule_shop" "$(grep -A1 '^ *ready$' "$dns_dir/Corefile" | tr -s ' \n' ' ' | sed 's/^ *//;s/ *$//;s/^ready  */ready /')"
+expect_eq "coredns: second run is a no-op"         "0 0" "$(dns shop)"
+expect_eq "coredns: namespace change replaces"     "0 1" "$(dns other)"
+expect_eq "coredns: exactly one dex rule remains"  "1" "$(grep -c 'exact dex.localtest.me ' "$dns_dir/Corefile")"
+expect_eq "coredns: new target is in place"        "1" "$(grep -c 'dex.other.svc.cluster.local' "$dns_dir/Corefile")"
+corefile_with "rewrite name exact dex.localtest.me.backup backup.shop.svc.cluster.local" "rewrite name exact other.localtest.me o.shop.svc.cluster.local"
+expect_eq "coredns: similar names get their own rule" "0 1" "$(dns shop)"
+expect_eq "coredns: similar-name rewrite survives"  "1" "$(grep -c 'dex.localtest.me.backup backup.shop' "$dns_dir/Corefile")"
+expect_eq "coredns: unrelated rewrite survives"     "1" "$(grep -c 'other.localtest.me o.shop' "$dns_dir/Corefile")"
+expect_eq "coredns: our rule added beside them"     "1" "$(grep -c "^    $rule_shop\$" "$dns_dir/Corefile")"
+corefile_with "# $rule_shop"
+expect_eq "coredns: a commented rule is not the rule" "0 1" "$(dns shop)"
+expect_eq "coredns: the comment is kept"            "1" "$(grep -c "^    # $rule_shop\$" "$dns_dir/Corefile")"
+expect_eq "coredns: and a live rule was added"      "1" "$(grep -c "^    $rule_shop\$" "$dns_dir/Corefile")"
+printf '.:53 {\n    errors\n}\n' > "$dns_dir/Corefile"
+expect_eq "coredns: no ready line refuses, no patch" "1 0" "$(dns shop)"
+
+# ── k6-bench-verdict.sh: bench.sh's exit code → the verdict of a k6-bench run (#280) ──
+kv() { # <rc> → "<script exit> <verdict.txt>" for a fresh out dir
+  local d; d=$(mktemp -d -p "$tmp"); local rc=0
+  "$src/scripts/k6-bench-verdict.sh" "$1" "$d" >/dev/null 2>&1 || rc=$?
+  echo "$rc $(cat "$d/verdict.txt")"
+}
+expect_match "k6-bench: exit 0 is the only valid one"        '^0 VALID'                                "$(kv 0)"
+expect_match "k6-bench: exit 3 is NOT A VALID BASELINE, red" '^1 INVALID: NOT A VALID BASELINE'        "$(kv 3)"
+expect_match "k6-bench: exit 1 is a failed bench, red"       '^1 INVALID: bench.sh failed \(exit 1\)'  "$(kv 1)"
+expect_match "k6-bench: exit 42 keeps its code"              '^1 INVALID: bench.sh failed \(exit 42\)' "$(kv 42)"
+expect_match "k6-bench: Task's own 201 is a failed bench"    '^1 INVALID: bench.sh failed \(exit 201\)' "$(kv 201)"
+expect_match "k6-bench: no exit code = did not finish, red"  '^1 INVALID: the bench step did not finish' "$(kv '')"
+# the same thing against the real Task: a failing command is 201 unless --exit-code (skipped without task on PATH)
+if command -v task >/dev/null 2>&1; then
+  tf=$(mktemp -d -p "$tmp"); printf 'version: "3"\ntasks:\n  t:\n    cmds: ["exit 3"]\n' > "$tf/Taskfile.yml"
+  plain=0; (cd "$tf" && task t >/dev/null 2>&1) || plain=$?
+  kept=0;  (cd "$tf" && task --exit-code t >/dev/null 2>&1) || kept=$?
+  expect_eq "task without --exit-code hides bench.sh's 3"  "201" "$plain"
+  expect_eq "task --exit-code hands bench.sh's 3 through" "3"   "$kept"
+fi
+# Task 3.x maps a failing command to 201 unless --exit-code; the workflow must pass it or 3 never reaches the verdict
+if grep -Eq 'task --exit-code k6-bench' "$src/.github/workflows/k6-bench.yml"; then ok; else bad "k6-bench.yml must run task --exit-code k6-bench"; fi
+if grep -Eq 'scripts/k6-bench-verdict.sh' "$src/.github/workflows/k6-bench.yml"; then ok; else bad "k6-bench.yml must classify with scripts/k6-bench-verdict.sh"; fi
 
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

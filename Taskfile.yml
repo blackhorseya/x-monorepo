@@ -285,7 +285,7 @@ tasks:
 
   helm-kind-up:
     deps: [web-build]
-    desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster (reused if it exists), images built from the tree (rpc / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
+    desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster (reused if it exists), images built from the tree (rpc / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) and dex.yaml (Dex dev IdP + CoreDNS rewrite for dex.localtest.me) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
     vars:
       CLUSTER: x-monorepo
       NS: x-monorepo
@@ -311,7 +311,12 @@ tasks:
       - kind load image-archive --name {{.CLUSTER}} {{.BIN_DIR}}/kind/images.tar
       - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f - >/dev/null
       - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null
-      - kubectl -n {{.NS}} rollout status deploy/postgres deploy/redis --timeout=2m
+      # Dex dev IdP: same config file as compose (one source for issuer / client / accounts), and a
+      # CoreDNS rewrite so dex.localtest.me resolves to it inside the cluster (docs/operations.md).
+      - kubectl -n {{.NS}} create configmap dex --from-file=config.yaml=deployments/docker/dex/config.yaml --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+      - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/dex.yaml >/dev/null
+      - '{{.KIND_DIR}}/coredns-dex.sh {{.NS}}'
+      - kubectl -n {{.NS}} rollout status deploy/postgres deploy/redis deploy/dex --timeout=2m
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
