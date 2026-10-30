@@ -92,7 +92,7 @@ task k6 -- ratelimit -e RPS=50    # server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 
 task k6 -- reservation            # server 旁要有 bin/worker 在跑（同一個 Postgres），不然每筆都 timeout
 task k6-auth-matrix               # tests/k6/auth-matrix.sh：orders / reservation 在每一種 auth 狀態各跑一次（2 VU × 5s）加上 fixtures，見下方「Auth 組合」；CI 的 k6-auth job 就是它
 task k6-wire                      # tests/k6/wire.sh：四個腳本打 tests/k6/wire_server.py（回壞掉的 HTTP response），驗 key 不進 k6 的輸出 / summary / metrics tag，見下方「壞掉的 HTTP response」；不需要 Postgres 和 rpc，CI 的 k6-auth job 跑它
-task k6-bench                    # tests/k6/bench.sh：效能 baseline，N≥3 次、每次一個專屬資料庫（跑完 drop），輸出 result.json / summary.md；數字與方法見 [perf-baseline.md](perf-baseline.md)；不進 CI
+task k6-bench                    # tests/k6/bench.sh：效能 baseline，N≥3 次、每次一個專屬資料庫（跑完 drop），輸出 result.json / summary.md；數字與方法見 [perf-baseline.md](perf-baseline.md)；不進 CI（乾淨 runner 上手動派送 `.github/workflows/k6-bench.yml`，見該文件「在 GitHub runner 上跑」）
 task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一個 bin/rpc（:18090、local Postgres、對應的 env；reservation 排第一且多起一個 bin/worker，讓它面對空的 outbox；RUN_ID 每個腳本不同，SKU 才不會互撞），10s × 10 VU；CI 的 k6 job 就是它；CreateOrder 的 p95 門檻放寬到 CREATE_P95（預設 500ms；腳本本身預設 300）、reservation 的放寬到 RESERVE_P95（預設 5000ms；腳本 3000），shared runner 的尾巴比筆電寬
 ```
 
