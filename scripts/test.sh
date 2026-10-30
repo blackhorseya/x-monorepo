@@ -11,6 +11,8 @@
 # (ci-changes.sh cd's to its own repo root; release-gate-pr.sh calls scripts/ relative to cwd).
 # Plain bash 3.2 (macOS) and 5 (ubuntu): no mapfile, no associative arrays.
 set -euo pipefail
+# Run under the outer gate (#307): a process group of its own, checked for leftovers on any exit.
+[ -n "${SUITE_GUARD:-}" ] || exec "$(dirname "$0")/suite-guard.sh" "$0" "$@"
 src=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 # The fixtures must not inherit the developer's signing / hook settings.
@@ -1103,6 +1105,87 @@ if command -v node >/dev/null 2>&1; then
     if [ "$gate" = 0 ] && [ "$url" != ok ]; then bad "envsh accepts $cand but the SPA's URL parser rejects it (OIDC would be silently off)"; else ok; fi
   done
 fi
+
+# ── scripts/suite-guard.sh ─────────────────────────────────────────────────────────
+# The outer gate of this suite (#307): test.sh re-executes itself under suite-guard.sh, which runs it
+# in a process group of its own and, when it ends — normally, failed, or interrupted — fails if
+# anything is still alive in that group, then kills (TERM, then KILL) and waits for it. Exercised here
+# with fake suites that leave a background process behind; the pid of the leftover is in $PIDF.
+guard="$src/scripts/suite-guard.sh"
+# this very run is inside the gate (test.sh re-executed itself through it)
+expect_eq "guard: this suite runs under suite-guard.sh" "1" "${SUITE_GUARD:-0}"
+gfake="$tmp/guard-fake.sh"
+cat > "$gfake" <<'FAKE'
+#!/usr/bin/env bash
+# $1 = clean | leak | leak-fail | exit3 | stubborn | hang | deaf
+case $1 in
+  leak|leak-fail|hang) sleep 300 & echo $! > "$PIDF" ;;
+  stubborn) ( trap '' TERM HUP INT; exec sleep 300 ) & echo $! > "$PIDF" ;;
+  deaf) trap '' TERM INT HUP; sleep 300 & echo $! > "$PIDF"; echo $$ > "$PIDF.leader"; while :; do sleep 1; done ;;   # the suite itself ignores TERM / INT and keeps going
+esac
+case $1 in
+  leak-fail) exit 1 ;;
+  exit3) exit 3 ;;
+  hang) sleep 300 ;;
+esac
+exit 0
+FAKE
+chmod +x "$gfake"
+# gone <pid-file>: true when the recorded pid no longer exists
+gone() { ! kill -0 "$(cat "$1")" 2>/dev/null; }
+# guard_run <mode>: runs the guard over the fake; sets out, rc and gpid (file) for the leftover.
+guard_run() {
+  gpid="$tmp/guard-pid-$1"; rm -f "$gpid"; rc=0
+  out=$(PIDF="$gpid" "$guard" "$gfake" "$1" 2>&1) || rc=$?
+}
+# a bystander outside the suite's group must survive every case below
+sleep 300 & bystander=$!
+guard_run clean
+expect_eq "guard: a clean suite passes"                            "0" "$rc"
+expect_eq "guard: a suite's own exit code is kept"                 "3" "$(guard_run exit3; echo $rc)"
+guard_run leak
+if [ "$rc" != 0 ]; then ok; else bad "guard: a suite that leaves a process behind must fail"; fi
+expect_match "guard: the leftover is reported"                     'left .* running' "$out"
+if [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: the leftover must be killed and waited for"; fi
+guard_run leak-fail
+expect_eq "guard: a failed suite with a leftover keeps its failure" "1" "$rc"
+expect_match "guard: a failed suite's leftover is reported too"    'left .* running' "$out"
+if [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: a failed suite's leftover must be killed"; fi
+guard_run stubborn
+if [ "$rc" != 0 ] && [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: a leftover that ignores TERM must still be killed (rc=$rc)"; fi
+# interrupted: INT / TERM to the guard stop the suite and everything it started
+for sig in INT TERM; do
+  gpid="$tmp/guard-pid-hang-$sig"; rm -f "$gpid"
+  # python restores the default SIGINT: a non-interactive shell started as a background job (a CI
+  # runner, this suite run from another script) has SIGINT ignored, which nothing downstream can trap
+  PIDF="$gpid" python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' "$guard" "$gfake" hang >/dev/null 2>&1 &
+  g=$!
+  i=0; while [ ! -s "$gpid" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  kill -$sig "$g" 2>/dev/null || true
+  rc=0; wait "$g" || rc=$?
+  if [ "$sig" = INT ]; then want=130; else want=143; fi
+  expect_eq "guard: $sig stops the guard with $want" "$want" "$rc"
+  if [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: $sig must take the suite's leftover with it"; fi
+done
+# the suite (the group's leader) ignoring TERM / INT must not stop the guard from finishing: after a
+# short grace the guard escalates to KILL for the whole group (SUITE_GUARD_GRACE seconds, 1 here)
+for sig in INT TERM; do
+  gpid="$tmp/guard-pid-deaf-$sig"; rm -f "$gpid" "$gpid.leader"
+  SUITE_GUARD_GRACE=1 PIDF="$gpid" python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' "$guard" "$gfake" deaf >/dev/null 2>&1 &
+  g=$!
+  i=0; while [ ! -s "$gpid.leader" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  kill -$sig "$g" 2>/dev/null || true
+  i=0; while kill -0 "$g" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done   # at most 10 s
+  if kill -0 "$g" 2>/dev/null; then bad "guard: $sig to a suite that ignores it must still end within the grace (guard still running after 10 s)"; kill -9 "$g" 2>/dev/null || true; else ok; fi
+  rc=0; wait "$g" 2>/dev/null || rc=$?
+  if [ "$sig" = INT ]; then want=130; else want=143; fi
+  expect_eq "guard: $sig to a deaf suite exits $want" "$want" "$rc"
+  if [ -s "$gpid" ] && gone "$gpid" && gone "$gpid.leader"; then ok; else bad "guard: $sig must take a deaf suite and its child down"; fi
+  for f in "$gpid" "$gpid.leader"; do if [ -s "$f" ]; then kill -9 "$(cat "$f")" 2>/dev/null || true; fi; done
+done
+if kill -0 "$bystander" 2>/dev/null; then ok; else bad "guard: a process outside the suite's group was killed"; fi
+kill "$bystander" 2>/dev/null || true
+for f in "$tmp"/guard-pid-*; do if [ -s "$f" ]; then kill -9 "$(cat "$f")" 2>/dev/null || true; fi; done
 
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
