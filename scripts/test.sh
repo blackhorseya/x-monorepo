@@ -11,6 +11,8 @@
 # (ci-changes.sh cd's to its own repo root; release-gate-pr.sh calls scripts/ relative to cwd).
 # Plain bash 3.2 (macOS) and 5 (ubuntu): no mapfile, no associative arrays.
 set -euo pipefail
+# Run under the outer gate (#307): a process group of its own, checked for leftovers on any exit.
+[ -n "${SUITE_GUARD:-}" ] || exec "$(dirname "$0")/suite-guard.sh" "$0" "$@"
 src=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 # The fixtures must not inherit the developer's signing / hook settings.
@@ -1110,6 +1112,8 @@ fi
 # anything is still alive in that group, then kills (TERM, then KILL) and waits for it. Exercised here
 # with fake suites that leave a background process behind; the pid of the leftover is in $PIDF.
 guard="$src/scripts/suite-guard.sh"
+# this very run is inside the gate (test.sh re-executed itself through it)
+expect_eq "guard: this suite runs under suite-guard.sh" "1" "${SUITE_GUARD:-0}"
 gfake="$tmp/guard-fake.sh"
 cat > "$gfake" <<'FAKE'
 #!/usr/bin/env bash
@@ -1121,7 +1125,7 @@ esac
 case $1 in
   leak-fail) exit 1 ;;
   exit3) exit 3 ;;
-  hang|stubborn) sleep 300 ;;
+  hang) sleep 300 ;;
 esac
 exit 0
 FAKE
@@ -1151,7 +1155,9 @@ if [ "$rc" != 0 ] && [ -s "$gpid" ] && gone "$gpid"; then ok; else bad "guard: a
 # interrupted: INT / TERM to the guard stop the suite and everything it started
 for sig in INT TERM; do
   gpid="$tmp/guard-pid-hang-$sig"; rm -f "$gpid"
-  PIDF="$gpid" "$guard" "$gfake" hang >/dev/null 2>&1 &
+  # python restores the default SIGINT: a non-interactive shell started as a background job (a CI
+  # runner, this suite run from another script) has SIGINT ignored, which nothing downstream can trap
+  PIDF="$gpid" python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' "$guard" "$gfake" hang >/dev/null 2>&1 &
   g=$!
   i=0; while [ ! -s "$gpid" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
   kill -$sig "$g" 2>/dev/null || true
