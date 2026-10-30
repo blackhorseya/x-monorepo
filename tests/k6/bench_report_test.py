@@ -265,6 +265,7 @@ class ThresholdClassification(unittest.TestCase):
             m = __import__("json").load(f)["metrics"]
         self.assertTrue(m["rpc_errors"]["thresholds"]["count==0"], "k6 marks a crossed threshold True")
         m["rpc_errors{code:request.timeout}"] = {"count": m["rpc_errors"]["count"], "thresholds": {"count>=0": False}}
+        m["rpc_errors{code:transport.timeout}"] = {"count": 0, "thresholds": {"count>=0": False}}
         self.assertEqual(self.classify(m)[0], "overload")
 
     def test_reservation_timeouts_are_overload(self):
@@ -285,6 +286,14 @@ class ThresholdClassification(unittest.TestCase):
         kind, why = self.classify(m)
         self.assertEqual(kind, "failure")
         self.assertIn("3 of 7 are not timeouts", why)
+
+    def test_one_missing_per_code_metric_is_enough_to_fail_closed(self):
+        # request.timeout alone adds up to rpc_errors, but a missing transport.timeout metric means the split is unknown
+        m = {k: v for k, v in self.TIMEOUTS.items() if k != "rpc_errors{code:transport.timeout}"}
+        m["rpc_errors{code:request.timeout}"] = {"count": 7, "thresholds": {"count>=0": False}}
+        kind, why = self.classify(m)
+        self.assertEqual(kind, "failure")
+        self.assertIn("transport.timeout", why)
 
     def test_without_the_per_code_metrics_rpc_errors_cannot_be_called_overload(self):
         kind, _ = self.classify({"rpc_errors": {"count": 7, "thresholds": {"count==0": True}}})

@@ -122,6 +122,8 @@ while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
   run_id="bench-$stamp-$suffix-$n"
   url=$(dburl "$name")
   echo "== attempt $n ($valid/$RUNS valid so far; $run_id, database $name)"
+  # whatever an earlier bench left under this attempt's names (a reused out dir) is not this run's evidence
+  rm -f "$out"/run"$n"-*
   if ! wait_quiet "$n"; then
     echo "environment not quiet: 1m load $(tail -n 1 "$out/run$n-baseline.csv" | cut -d, -f2) > $limit after waiting ${BASELINE_WAIT}s" > "$out/run$n-invalid.txt"
     echo "   attempt $n INVALID ($(cat "$out/run$n-invalid.txt")): not run, kept, not counted"

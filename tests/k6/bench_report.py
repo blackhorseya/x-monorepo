@@ -123,7 +123,11 @@ def classify_threshold_failure(summary_path, phase):
             continue
         if name == "rpc_errors":
             total = metrics["rpc_errors"].get("count", 0)
-            timeouts = sum(metrics.get(f"rpc_errors{{code:{c}}}", {}).get("count", 0) for c in TIMEOUT_CODES)
+            missing = [c for c in TIMEOUT_CODES if f"rpc_errors{{code:{c}}}" not in metrics]
+            if missing:  # without every per-code count the split is unknown: fail-closed
+                unexplained.append(f"rpc_errors (no per-code count for {', '.join(missing)})")
+                continue
+            timeouts = sum(metrics[f"rpc_errors{{code:{c}}}"].get("count", 0) for c in TIMEOUT_CODES)
             if total > 0 and timeouts == total:
                 continue
             unexplained.append(f"rpc_errors ({total - timeouts} of {total} are not timeouts)")
