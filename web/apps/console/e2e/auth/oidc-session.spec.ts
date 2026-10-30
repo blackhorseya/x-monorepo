@@ -191,7 +191,7 @@ test("an API key chosen on top of an OIDC session replaces it: refresh token dro
 
 // expires_in is the IdP's word for when to refresh next; anything but a positive whole number of
 // seconds is not a lifetime. It must fail closed, never become 0 / NaN and a refresh loop.
-for (const bad of ["soon", 0, -5, 1.5, "300", null]) {
+for (const bad of ["soon", 0, -5, 1.5, "300", null, 9, 86_401, 1e12]) {
   test(`a refresh answered with expires_in ${JSON.stringify(bad)} ends the session and is not retried in a loop`, async ({ page }) => {
     await stubConfig(page);
     const idp = await mockIdp(page);
@@ -232,12 +232,33 @@ test("many calls refused at once ask the IdP once; while it is unreachable the b
   await page.waitForTimeout(2500); // well inside the first 5 s backoff
   expect(refreshGrants(idp)).toHaveLength(1);
 
-  // The user's own Retry is not held back by the backoff.
-  idp.failRefreshWith = null;
+  // The user's own Retry is not held back by the backoff (the reload's own restore is refused by the IdP, too).
   await page.goto("/login");
   await expect(page.getByRole("status").filter({ hasText: /identity provider/i })).toBeVisible();
+  idp.failRefreshWith = null;
   const before = refreshGrants(idp).length;
   await page.getByRole("button", { name: "Retry" }).click();
   await expect.poll(() => refreshGrants(idp).length).toBeGreaterThan(before);
   await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+});
+
+test("an access token that has expired while the IdP is unreachable is not shown as signed in: recovery notice with Retry, refresh token kept", async ({ page }) => {
+  await stubConfig(page);
+  const idp = await mockIdp(page, { expiresIn: 10 });
+  idp.failRefreshWith = 503;
+  await page.goto("/login");
+  await signIn(page);
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+  const kept = idp.refreshTokens[0];
+
+  // 10 s lifetime, the IdP refuses to renew: once it is over the console must say so.
+  await expect(page).toHaveURL(/\/login(\?|$)/, { timeout: 15_000 });
+  await expect(subject(page)).toHaveText("anonymous");
+  await expect(page.getByRole("status").filter({ hasText: /identity provider/i })).toBeVisible();
+  expect(await page.evaluate(() => JSON.stringify({ ...sessionStorage }))).toContain(kept);
+
+  idp.failRefreshWith = null;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+  await expect(page).not.toHaveURL(/\/login/);
 });

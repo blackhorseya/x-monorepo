@@ -42,6 +42,10 @@ export type Idp = {
 };
 
 export type IdpOptions = {
+  /** The issuer to serve (default ISSUER). */
+  issuer?: string;
+  /** token_endpoint to advertise in discovery (default <issuer>/token). */
+  tokenEndpoint?: string;
   endSession?: boolean;
   claims?: Record<string, unknown>;
   expiresIn?: number;
@@ -91,20 +95,24 @@ export async function mockIdp(page: Page, options: IdpOptions = {}): Promise<Idp
     idTokens: [],
     refreshTokens: [],
   };
+  const issuer = options.issuer ?? ISSUER;
+  const authorize = `${issuer}/auth`;
+  const tokenUrl = options.tokenEndpoint ?? `${issuer}/token`;
+  const endSessionUrl = `${issuer}/logout`;
   let seq = 0;
   // code → { challenge, nonce } of the authorization request that issued it.
   const codes = new Map<string, { challenge: string; nonce: string }>();
 
-  await page.route(`${ISSUER}/.well-known/openid-configuration`, (route) =>
+  await page.route(`${issuer}/.well-known/openid-configuration`, (route) =>
     json(route, {
-      issuer: ISSUER,
-      authorization_endpoint: AUTHORIZE,
-      token_endpoint: TOKEN,
-      ...(options.endSession ? { end_session_endpoint: END_SESSION } : {}),
+      issuer,
+      authorization_endpoint: authorize,
+      token_endpoint: tokenUrl,
+      ...(options.endSession ? { end_session_endpoint: endSessionUrl } : {}),
     }),
   );
 
-  await page.route(`${AUTHORIZE}?**`, (route) => {
+  await page.route(`${authorize}?**`, (route) => {
     const q = new URL(route.request().url()).searchParams;
     idp.authorizeRequests.push(q);
     const code = `code-${++seq}`;
@@ -115,7 +123,7 @@ export async function mockIdp(page: Page, options: IdpOptions = {}): Promise<Idp
     return route.fulfill({ status: 302, headers: { location: back.toString() } });
   });
 
-  await page.route(END_SESSION + "**", (route) =>
+  await page.route(endSessionUrl + "**", (route) =>
     route.fulfill({ status: 200, headers: { "content-type": "text/html" }, body: "<title>idp logged out</title>" }),
   );
 
@@ -123,7 +131,7 @@ export async function mockIdp(page: Page, options: IdpOptions = {}): Promise<Idp
     const access = mintJWT("e2e-oidc-user", { ...(idp.claimsQueue.shift() ?? idp.claims) });
     const refresh = `refresh-${++seq}`;
     idp.validRefreshTokens.add(refresh);
-    const idToken = `${b64url(JSON.stringify({ alg: "none" }))}.${b64url(JSON.stringify({ iss: ISSUER, aud: CLIENT_ID, sub: "e2e-oidc-user", nonce }))}.`;
+    const idToken = `${b64url(JSON.stringify({ alg: "none" }))}.${b64url(JSON.stringify({ iss: issuer, aud: CLIENT_ID, sub: "e2e-oidc-user", nonce }))}.`;
     idp.accessTokens.push(access);
     idp.idTokens.push(idToken);
     idp.refreshTokens.push(refresh);
@@ -136,7 +144,7 @@ export async function mockIdp(page: Page, options: IdpOptions = {}): Promise<Idp
     };
   };
 
-  await page.route(TOKEN, async (route) => {
+  await page.route(tokenUrl, async (route) => {
     if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
     const form = new URLSearchParams(route.request().postData() ?? "");
     idp.tokenRequests.push(form);

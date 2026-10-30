@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { CLIENT_ID, collectConsole, mockIdp, signIn, stubConfig, webStorage } from "./oidc";
+import { CLIENT_ID, ISSUER, collectConsole, mockIdp, signIn, stubConfig, webStorage } from "./oidc";
 import { subject } from "./helpers";
 import { ADMIN_KEY } from "../../playwright.config";
 
@@ -177,3 +177,26 @@ test("without OIDC in the runtime config nothing changes: no login page, the cre
   await expect(page.getByRole("button", { name: "Credential" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign in" })).toHaveCount(0);
 });
+
+// The token endpoint receives the authorization code and the PKCE verifier. The CSP allows the
+// console's own origin (the RPCs) and the issuer's, so the check that the endpoint belongs to the
+// issuer has to be the console's own: any other origin is refused before a code is ever requested.
+for (const [label, issuer, tokenEndpoint] of [
+  ["https issuer, token endpoint on another origin", ISSUER, "https://tokens.e2e.example/token"],
+  ["https issuer, token endpoint on the same host but another port", ISSUER, "https://idp.e2e.example:8443/token"],
+  ["http issuer, token endpoint on the console's own origin", "http://idp.e2e.example/dex", "http://localhost:4174/review-token"],
+  ["http issuer, token endpoint on another http origin", "http://idp.e2e.example/dex", "http://tokens.e2e.example/token"],
+] as const) {
+  test(`discovery with ${label} is refused: nothing is sent to it`, async ({ page }) => {
+    await stubConfig(page, { issuer });
+    const idp = await mockIdp(page, { issuer, tokenEndpoint });
+    await page.goto("/login");
+    await signIn(page);
+    await expect(page.getByRole("alert")).toContainText(/origin/i);
+    await page.waitForTimeout(300);
+    expect(idp.authorizeRequests).toHaveLength(0); // never even sent to the IdP to sign in
+    expect(idp.tokenRequests).toHaveLength(0);
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+    await expect(page).toHaveURL(/\/login/);
+  });
+}
