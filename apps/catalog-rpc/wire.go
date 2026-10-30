@@ -17,11 +17,12 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	wire.Build(
-		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Auth", "Log", "Postgres", "OTel"),
+		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Log", "Postgres", "OTel"),
 		postgres.NewDB,
 		server.New,
 		otel.ProviderSet,
 		usecasex.NewRecorder,
+		NewAuth,
 		NewRoutes,
 		NewDocs,
 		NewReadiness,

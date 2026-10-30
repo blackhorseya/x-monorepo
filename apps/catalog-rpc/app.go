@@ -10,11 +10,13 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"gorm.io/gorm"
 
 	catalogrpc "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
 	catalogv1 "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
@@ -49,5 +51,24 @@ func NewDocs() []server.Doc {
 func NoCredentialResolver() server.CredentialResolver { return nil }
 
 // NoOIDC is the zero value of the external-login half of the auth interceptor:
-// bearer tokens go to auth.jwt as before, auth.oidc is not read.
+// auth.oidc is not read. Bearer tokens are not accepted at all: NewAuth has
+// already refused any auth.jwt, so the interceptor holds no verifier for them.
 func NoOIDC() server.OIDCAuth { return server.OIDCAuth{} }
+
+// NewAuth is the only config.Auth in the graph: apps/catalog-rpc accepts
+// static auth.api_keys and nothing else, so it refuses to start on a legacy
+// auth.jwt (a valid token would pass the interceptor, and nothing here maps a
+// token to the admin role the way identity does) and, with auth on, on an
+// empty auth.api_keys. This is the composition root's rule: platform's
+// defaults, which apps/rpc relies on, stay as they are.
+func NewAuth(cfg *config.AppConfig) (config.Auth, error) {
+	auth := cfg.Auth
+	if auth.JWT != (config.JWT{}) {
+		return config.Auth{}, errors.New("catalog-rpc: auth.jwt is not supported, only auth.api_keys; unset auth.jwt")
+	}
+	if (auth.Mode == config.AuthOptional || auth.Mode == config.AuthRequired) && auth.APIKeys == "" {
+		return config.Auth{}, errors.New("catalog-rpc: auth.mode is on but auth.api_keys is empty")
+	}
+
+	return auth, nil
+}

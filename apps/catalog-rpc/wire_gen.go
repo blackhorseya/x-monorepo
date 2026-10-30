@@ -23,7 +23,10 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	http := cfg.HTTP
-	auth := cfg.Auth
+	auth, err := NewAuth(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	oTel := cfg.OTel
 	log := cfg.Log
 	providers, cleanup, err := otel.New(oTel, log)
