@@ -151,6 +151,12 @@ const refused = json(401, {
 });
 const foreigners: [string, ReturnType<typeof json>, ReturnType<typeof json>][] =
   [
+    // The reviewer's spoof: tells "not-…" keys from the rest, needs no knowledge of the real key.
+    [
+      "imitates the rpc: admin 200 for any key but not-…, 401 unauthenticated for not-…",
+      root,
+      refused,
+    ],
     ["answers 200 to every key", root, root],
     ["answers 201 to a stranger", root, json(201, root)],
     ["answers 202 to a stranger", root, json(202, {})],
