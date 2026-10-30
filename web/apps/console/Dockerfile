@@ -12,11 +12,17 @@
 # The base is pinned tag@sha256 (the multi-arch index, so linux/amd64 and linux/arm64 both resolve);
 # dependabot's docker ecosystem moves the tag and the digest together.
 FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
+# Runtime configuration (docs/identity-login.md §8): CONSOLE_OIDC_ISSUER / CONSOLE_OIDC_CLIENT_ID /
+# CONSOLE_API_KEY_LOGIN become /config.json for the SPA, and the issuer's exact origin joins the CSP's
+# connect-src. The envsubst filter is an exact whitelist: no other variable of the container is ever
+# substituted into a template. 18-console-env.envsh (sourced first) validates the values.
 ENV RPC_UPSTREAM=http://rpc:8080 \
-    NGINX_ENVSUBST_FILTER=^RPC_ \
+    NGINX_ENVSUBST_FILTER=^(RPC_UPSTREAM|CONSOLE_OIDC_ISSUER|CONSOLE_OIDC_CLIENT_ID|CONSOLE_API_KEY_LOGIN|CONSOLE_CSP_CONNECT_SRC)$ \
     NGINX_ENVSUBST_OUTPUT_DIR=/tmp
 COPY deploy/default.conf.template /etc/nginx/templates/default.conf.template
+COPY deploy/config.json.template /etc/nginx/templates/config.json.template
+COPY deploy/security-headers.inc.template /etc/nginx/templates/security-headers.inc.template
 COPY deploy/console.conf /etc/nginx/conf.d/default.conf
-COPY deploy/security-headers.conf /etc/nginx/security-headers.conf
+COPY --chmod=755 deploy/18-console-env.envsh /docker-entrypoint.d/18-console-env.envsh
 COPY dist/ /usr/share/nginx/html/
 EXPOSE 8080

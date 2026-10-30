@@ -27,6 +27,10 @@ const authWebPort = webPort + 1;
 // +10, not +2: e2e/image.sh publishes the console container on 18093 (= rpcPort + 2).
 const roleRpcPort = rpcPort + 10;
 const roleWebPort = webPort + 10;
+// The "oidc-backend" pair: a real rpc with auth.oidc on, its own loopback IdP (e2e/oidc-backend/idp.ts).
+export const BACKEND_RPC_PORT = rpcPort + 20;
+export const BACKEND_IDP_PORT = rpcPort + 30; // keep in sync with e2e/oidc-backend/rpc.yaml
+const backendWebPort = webPort + 20;
 const rpc = `http://127.0.0.1:${rpcPort}`;
 const authRpc = `http://127.0.0.1:${authRpcPort}`;
 const roleRpc = `http://127.0.0.1:${roleRpcPort}`;
@@ -66,7 +70,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: /\/auth(-role)?\//,
+      testIgnore: /\/(auth(-role)?|oidc-backend)\//,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: consoleURL ?? `http://localhost:${webPort}`,
@@ -86,6 +90,14 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         baseURL: `http://localhost:${roleWebPort}`,
+      },
+    },
+    {
+      name: "oidc-backend",
+      testMatch: /\/oidc-backend\/.*\.spec\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: `http://localhost:${backendWebPort}`,
       },
     },
   ],
@@ -159,6 +171,28 @@ export default defineConfig({
       command: `pnpm exec vite preview --port ${roleWebPort} --strictPort`,
       url: `http://localhost:${roleWebPort}/`,
       env: { CONSOLE_API: roleRpc },
+      reuseExistingServer: !process.env.CI,
+    },
+    {
+      // The loopback IdP, before the rpc that fetches its discovery / JWKS.
+      command: "node --experimental-strip-types e2e/oidc-backend/idp-server.ts",
+      url: `http://127.0.0.1:${BACKEND_IDP_PORT}/idp/.well-known/openid-configuration`,
+      env: { IDP_PORT: String(BACKEND_IDP_PORT), IDP_CLIENT_ID: "x-console-e2e" },
+      reuseExistingServer: !process.env.CI,
+    },
+    {
+      // auth required + auth.oidc on (config file: list settings cannot come from env), IdP in the test process.
+      command: `${bin}/rpc`,
+      url: `http://127.0.0.1:${BACKEND_RPC_PORT}/api/readyz`,
+      env: { ...baseEnv, APP_CONFIG: "./e2e/oidc-backend/rpc.yaml", APP_HTTP_ADDR: `:${BACKEND_RPC_PORT}` },
+      reuseExistingServer: !process.env.CI,
+      stdout: "ignore",
+      stderr: "pipe",
+    },
+    {
+      command: `pnpm exec vite preview --port ${backendWebPort} --strictPort`,
+      url: `http://localhost:${backendWebPort}/`,
+      env: { CONSOLE_API: `http://127.0.0.1:${BACKEND_RPC_PORT}` },
       reuseExistingServer: !process.env.CI,
     },
   ],

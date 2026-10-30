@@ -1,0 +1,1 @@
+{"oidcIssuer":"${CONSOLE_OIDC_ISSUER}","oidcClientId":"${CONSOLE_OIDC_CLIENT_ID}","apiKeyLogin":${CONSOLE_API_KEY_LOGIN}}

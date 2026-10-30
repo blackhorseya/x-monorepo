@@ -1,4 +1,4 @@
-# Rendered by the nginx image entrypoint (envsubst, RPC_UPSTREAM only) into
+# Rendered by the nginx image entrypoint (envsubst, the whitelisted variables only) into
 # /tmp/default.conf. One server: the Vite build at /, the rpc at /api.
 server {
     listen 8080;
@@ -26,15 +26,25 @@ server {
         proxy_buffering off;
     }
 
+    # Runtime configuration of the SPA (public values only: issuer, client id, apiKeyLogin), rendered
+    # from the CONSOLE_* env at start (deploy/config.json.template). Never cached: a redeploy with a
+    # new issuer is picked up on reload.
+    location = /config.json {
+        include /tmp/security-headers.inc;
+        add_header Cache-Control "no-store";
+        default_type application/json;
+        alias /tmp/config.json;
+    }
+
     # Hashed assets: cache forever. index.html: never, so a deploy is picked up on reload.
     # Both carry the security headers (CSP etc., deploy/security-headers.conf).
     location /assets/ {
-        include /etc/nginx/security-headers.conf;
+        include /tmp/security-headers.inc;
         add_header Cache-Control "public, max-age=31536000, immutable";
         try_files $uri =404;
     }
     location / {
-        include /etc/nginx/security-headers.conf;
+        include /tmp/security-headers.inc;
         add_header Cache-Control "no-cache";
         try_files $uri /index.html;
     }
