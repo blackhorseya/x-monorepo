@@ -44,6 +44,13 @@ service IdentityService {
   // invite.already_claimed, invite.email_unverified, invite.email_mismatch,
   // identity.already_bound.
   rpc ClaimInvite(ClaimInviteRequest) returns (ClaimInviteResponse);
+  // ListAccountIdentities shows who can sign in as an account: the external
+  // identities (issuer, subject) bound to it and its invites with their status
+  // (pending, claimed, expired), each newest first. Admin only. It never returns
+  // an invite token, a hash or any other secret (an invite has none), and it is
+  // not paged: like ListApiKeys it lists one account's handful, not a collection.
+  // Refused (x-error-code): account.not_found.
+  rpc ListAccountIdentities(ListAccountIdentitiesRequest) returns (ListAccountIdentitiesResponse);
   // RevokeSessions refuses every access token of the account issued before now
   // (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
   // NOTHING MORE: it does not touch the identity provider's refresh tokens, so
@@ -180,6 +187,15 @@ message ClaimInviteRequest {}
 message ClaimInviteResponse {
   // The account the caller's identity is now bound to.
   Account account = 1;
+}
+
+message ListAccountIdentitiesRequest {
+  string account_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ListAccountIdentitiesResponse {
+  repeated ExternalIdentity identities = 1;
+  repeated Invite invites = 2;
 }
 
 message RevokeSessionsRequest {

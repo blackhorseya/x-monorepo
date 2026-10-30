@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
@@ -248,20 +251,21 @@ func newServiceWithSource(accounts account.Repository, keys apikey.Repository, t
 	bindings := identity.ProvideExternalIdentityRepository(nil)
 
 	return rpc.NewIdentityService(rpc.UseCases{
-		CreateInvite:     identity.ProvideCreateInvite(accounts, invites, ids, audit, clock, tx, rec),
-		RevokeSessions:   identity.ProvideRevokeSessions(accounts, audit, clock, tx, rec),
-		ClaimInvite:      identity.ProvideClaimInvite(invites, bindings, accounts, clock, tx, rec),
-		ExternalIdentity: src,
-		CreateAccount:    identity.ProvideCreateAccount(accounts, ids, clock, tx, rec),
-		GetAccount:       identity.ProvideGetAccount(accounts, rec),
-		ListAccounts:     identity.ProvideListAccounts(accounts, rec),
-		DisableAccount:   identity.ProvideDisableAccount(accounts, census, auth, clock, tx, rec),
-		EnableAccount:    identity.ProvideEnableAccount(accounts, clock, tx, rec),
-		AssignRoles:      identity.ProvideAssignRoles(accounts, census, auth, clock, tx, rec),
-		CreateAPIKey:     identity.ProvideCreateAPIKey(accounts, keys, ids, secrets, clock, tx, rec),
-		ListAPIKeys:      identity.ProvideListAPIKeys(accounts, keys, rec),
-		RevokeAPIKey:     identity.ProvideRevokeAPIKey(keys, census, auth, clock, tx, rec),
-		WhoAmI:           identity.ProvideWhoAmI(rec),
+		CreateInvite:          identity.ProvideCreateInvite(accounts, invites, ids, audit, clock, tx, rec),
+		RevokeSessions:        identity.ProvideRevokeSessions(accounts, audit, clock, tx, rec),
+		ClaimInvite:           identity.ProvideClaimInvite(invites, bindings, accounts, clock, tx, rec),
+		ListAccountIdentities: identity.ProvideListAccountIdentities(accounts, bindings, invites, clock, rec),
+		ExternalIdentity:      src,
+		CreateAccount:         identity.ProvideCreateAccount(accounts, ids, clock, tx, rec),
+		GetAccount:            identity.ProvideGetAccount(accounts, rec),
+		ListAccounts:          identity.ProvideListAccounts(accounts, rec),
+		DisableAccount:        identity.ProvideDisableAccount(accounts, census, auth, clock, tx, rec),
+		EnableAccount:         identity.ProvideEnableAccount(accounts, clock, tx, rec),
+		AssignRoles:           identity.ProvideAssignRoles(accounts, census, auth, clock, tx, rec),
+		CreateAPIKey:          identity.ProvideCreateAPIKey(accounts, keys, ids, secrets, clock, tx, rec),
+		ListAPIKeys:           identity.ProvideListAPIKeys(accounts, keys, rec),
+		RevokeAPIKey:          identity.ProvideRevokeAPIKey(keys, census, auth, clock, tx, rec),
+		WhoAmI:                identity.ProvideWhoAmI(rec),
 	}, auth)
 }
 
@@ -427,6 +431,129 @@ func TestIdentityService_ClaimInvite(t *testing.T) {
 	src.ok = false
 	if _, err := svc.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{})); connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Fatalf("no token = %v", err)
+	}
+}
+
+// ListAccountIdentities is admin-only, answers NOT_FOUND for an unknown
+// account, shows bindings and invites with their status, and its response has
+// no field that could carry a token, hash or secret.
+func TestIdentityService_ListAccountIdentities(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	rec, err := usecasex.NewRecorder(tel.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	accounts := identity.ProvideAccountRepository(nil, logger)
+	keys := identity.ProvideAPIKeyRepository(nil)
+	src := &fixedSource{id: rpc.ExternalIdentity{Issuer: "https://idp.example", Subject: "sub-1", Email: "ops@example.com", EmailVerified: true}, ok: true}
+	svc := newServiceWithSource(accounts, keys, identity.ProvideTransactor(nil), system.NewClock(), system.NewUUIDGenerator(), system.NewSecretGenerator(), rec, config.Auth{Mode: config.AuthRequired}, src)
+	cfg := config.Auth{Mode: config.AuthRequired, APIKeys: "root=root-key-0123456789abcdef:admin, viewer=viewer-key-0123456789abcdef", ResolverTimeout: 2 * time.Second}
+	srv, err := server.New(config.HTTP{Addr: ":0"}, cfg, logger, []server.Route{svc}, nil, nil, tel, nil, server.OIDCAuth{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	client := func(key string) identityv1connect.IdentityServiceClient {
+		return identityv1connect.NewIdentityServiceClient(&http.Client{Transport: keyTransport{key: key}}, ts.URL)
+	}
+	c := context.Background()
+	root, viewer := client("root-key-0123456789abcdef"), client("viewer-key-0123456789abcdef")
+
+	acc, err := root.CreateAccount(c, connect.NewRequest(&identityv1.CreateAccountRequest{Name: "ops", Roles: []string{"ops"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := acc.Msg.GetAccount().GetId()
+	for _, email := range []string{"ops@example.com", "later@example.com"} {
+		if _, err := root.CreateInvite(c, connect.NewRequest(&identityv1.CreateInviteRequest{AccountId: id, Email: email})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Claim ops@example.com: the direct call stands in for the interceptor, which hands the handler the verified identity.
+	if _, err := svc.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Not admin: PERMISSION_DENIED, however the account is named.
+	if _, err := viewer.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{AccountId: id})); connect.CodeOf(err) != connect.CodePermissionDenied || errorCode(err) != server.PermissionDeniedCode {
+		t.Fatalf("viewer = %v", err)
+	}
+	if _, err := viewer.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{AccountId: "nope"})); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Fatalf("viewer, unknown account = %v", err)
+	}
+	// No credential at all.
+	anon := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
+	if _, err := anon.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{AccountId: id})); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("anonymous = %v", err)
+	}
+	// Admin: unknown account is NOT_FOUND, an empty id fails validation.
+	if _, err := root.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{AccountId: "nope"})); connect.CodeOf(err) != connect.CodeNotFound || errorCode(err) != "account.not_found" {
+		t.Fatalf("unknown account = %v", err)
+	}
+	if _, err := root.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("empty account id = %v", err)
+	}
+
+	got, err := root.ListAccountIdentities(c, connect.NewRequest(&identityv1.ListAccountIdentitiesRequest{AccountId: id}))
+	if err != nil {
+		t.Fatalf("ListAccountIdentities: %v", err)
+	}
+	ids := got.Msg.GetIdentities()
+	if len(ids) != 1 || ids[0].GetIssuer() != "https://idp.example" || ids[0].GetSubject() != "sub-1" || ids[0].GetAccountId() != id || ids[0].GetBindTime() == nil {
+		t.Fatalf("identities = %+v", ids)
+	}
+	status := map[string]identityv1.InviteStatus{}
+	for _, v := range got.Msg.GetInvites() {
+		status[v.GetEmail()] = v.GetStatus()
+		if v.GetAccountId() != id || v.GetExpireTime() == nil {
+			t.Fatalf("invite = %+v", v)
+		}
+	}
+	if len(status) != 2 || status["ops@example.com"] != identityv1.InviteStatus_INVITE_STATUS_CLAIMED || status["later@example.com"] != identityv1.InviteStatus_INVITE_STATUS_PENDING {
+		t.Fatalf("invite statuses = %v", status)
+	}
+	for _, v := range got.Msg.GetInvites() {
+		if (v.GetStatus() == identityv1.InviteStatus_INVITE_STATUS_CLAIMED) != (v.GetClaimTime() != nil) {
+			t.Fatalf("claim_time does not follow status: %+v", v)
+		}
+	}
+
+	// No secret, structurally: nothing in the response schema is named like a
+	// credential, and the serialized response (a real one, with a claimed and a
+	// pending invite) has no such key either.
+	var walk func(protoreflect.MessageDescriptor, map[protoreflect.FullName]bool)
+	walk = func(md protoreflect.MessageDescriptor, seen map[protoreflect.FullName]bool) {
+		if seen[md.FullName()] {
+			return
+		}
+		seen[md.FullName()] = true
+		for i := range md.Fields().Len() {
+			f := md.Fields().Get(i)
+			for _, banned := range []string{"token", "hash", "secret"} {
+				if strings.Contains(strings.ToLower(string(f.Name())), banned) {
+					t.Errorf("%s.%s looks like a credential", md.FullName(), f.Name())
+				}
+			}
+			if f.Message() != nil {
+				walk(f.Message(), seen)
+			}
+		}
+	}
+	walk((&identityv1.ListAccountIdentitiesResponse{}).ProtoReflect().Descriptor(), map[protoreflect.FullName]bool{})
+	raw, err := protojson.Marshal(got.Msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{"token", "hash", "secret"} {
+		if strings.Contains(strings.ToLower(string(raw)), banned) {
+			t.Errorf("response JSON mentions %q: %s", banned, raw)
+		}
 	}
 }
 

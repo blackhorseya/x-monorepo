@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/mapper"
@@ -25,10 +26,11 @@ func actor(c context.Context) string {
 	return "anonymous"
 }
 
-func toInviteOutput(v *invite.Invite) *dto.InviteOutput {
+func toInviteOutput(v *invite.Invite, now time.Time) *dto.InviteOutput {
 	return &dto.InviteOutput{
 		ID: v.ID().String(), Email: v.Email(), AccountID: v.AccountID(),
 		CreatedAt: v.CreatedAt(), ExpiresAt: v.ExpiresAt(), ClaimedAt: v.ClaimedAt(),
+		Status: v.Status(now).String(),
 	}
 }
 
@@ -70,7 +72,53 @@ func (uc *CreateInvite) Execute(c context.Context, in dto.CreateInviteInput) (*d
 		return nil, fmt.Errorf("audit create invite: %w", err)
 	}
 
-	return toInviteOutput(v), nil
+	return toInviteOutput(v, now), nil
+}
+
+// ListAccountIdentities shows an admin who can sign in as an account: its
+// external identity bindings and its invites (pending, claimed, expired),
+// newest first. Like ListAPIKeys it is not paged: both lists are per account
+// and small. It is a read and returns nothing secret; an invite has no token.
+type ListAccountIdentities struct {
+	accounts account.Repository
+	bindings externalidentity.Repository
+	invites  invite.Repository
+	clock    port.Clock
+}
+
+func NewListAccountIdentities(accounts account.Repository, bindings externalidentity.Repository, invites invite.Repository, clock port.Clock) *ListAccountIdentities {
+	return &ListAccountIdentities{accounts: accounts, bindings: bindings, invites: invites, clock: clock}
+}
+
+func (uc *ListAccountIdentities) Execute(c context.Context, in dto.ListAccountIdentitiesInput) (*dto.ListAccountIdentitiesOutput, error) {
+	ctx := contextx.FromContext(c)
+	if in.AccountID == "" {
+		return nil, account.ErrInvalidID
+	}
+	if _, err := uc.accounts.FindByID(ctx, account.ID(in.AccountID)); err != nil {
+		return nil, err
+	}
+	bindings, err := uc.bindings.ListByAccount(ctx, in.AccountID)
+	if err != nil {
+		return nil, fmt.Errorf("list external identities of account %s: %w", in.AccountID, err)
+	}
+	invites, err := uc.invites.ListByAccount(ctx, in.AccountID)
+	if err != nil {
+		return nil, fmt.Errorf("list invites of account %s: %w", in.AccountID, err)
+	}
+	now := uc.clock.Now()
+	out := &dto.ListAccountIdentitiesOutput{
+		Identities: make([]dto.ExternalIdentityOutput, 0, len(bindings)),
+		Invites:    make([]dto.InviteOutput, 0, len(invites)),
+	}
+	for _, b := range bindings {
+		out.Identities = append(out.Identities, dto.ExternalIdentityOutput{Issuer: b.Issuer(), Subject: b.Subject(), AccountID: b.AccountID(), BoundAt: b.CreatedAt()})
+	}
+	for _, v := range invites {
+		out.Invites = append(out.Invites, *toInviteOutput(v, now))
+	}
+
+	return out, nil
 }
 
 // ClaimInvite binds a verified external identity to the account its email was

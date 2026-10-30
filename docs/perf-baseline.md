@@ -4,7 +4,7 @@
 
 之後優化 CreateOrder 或 reservation batching 時的對照組（#263）。`tests/k6/orders.js` / `reservation.js` 是功能與閾值的 smoke，沒有可比較的數字；這裡是固定參數、跑 N 次、有離散程度的量測。**不進 PR 的 CI gate**（shared runner 的數字是雜訊）；要在乾淨環境取得 valid 數字，手動派送 `k6-bench` workflow（見下方「在 GitHub runner 上跑」）。
 
-> **下面的數字量測於 server 定價之前**（#267 以前，CreateOrder 的單價由呼叫端給）。之後 `CreateOrder` 每張單多一次 catalog 批次查價（同一個 process、同一個 transaction），`bench.js` 的 setup 也多一步 `UpsertProduct`：這些數字不能當作現在的對照組，要重跑 `task k6-bench` 取代它們（尚未重跑）。
+> **下面的數字量測於 server 定價之前**（#267 以前，CreateOrder 的單價由呼叫端給）。之後 `CreateOrder` 每張單多一次 catalog 批次查價（同一個 process、同一個 transaction），`bench.js` 的 setup 也多一步 `UpsertProduct`：本機（開發機）的這些數字不能當作現在的對照組。server 定價之後的 valid baseline 見下方「CI baseline」（GitHub runner，run 41005829640）。
 
 ## 重跑
 
@@ -64,7 +64,66 @@ gh run download <run-id> --repo blackhorseya/x-monorepo -n k6-bench-<run-id>-1  
 
 ## Baseline
 
-**目前沒有符合規則的 valid baseline。** 下面的表是探索性結果：在共用的開發機上、條件受限、而且挑選過程有事後成分（見 attempt 清單），**不是乾淨的 baseline**，只能當量級參考，不要拿來判定優化有沒有效。要得到 valid 的數字，在機器安靜時重跑 `task k6-bench`；工具會自己判定。
+### CI baseline（GitHub runner，run 41005829640）
+
+目前唯一符合規則的 valid baseline，來自 `k6-bench` workflow 的一次 `workflow_dispatch`：<https://github.com/blackhorseya/x-monorepo/actions/runs/41005829640>（main @ `cffc8033d2df4b49e9a4e88d3a6b8de1c62d3cea`，attempt 1）。verdict：`VALID: bench.sh found enough valid attempts (exit 0)`。以下數字原樣抄自該 run 的 artifact（`k6-bench-41005829640-1` 的 `runner.txt`、`summary.md`），未重算、未四捨五入。
+
+> **和下方本機數字的關係：環境不同，不能直接比較。** 這組是 GitHub-hosted `ubuntu-latest`（4 核 AMD EPYC 7763）上、server 定價之後（含 catalog 批次查價）的數字；下方「探索性結果」是 Apple M1 Max（10 核）、server 定價之前（#265 的本機 N=3）、非 valid 的數字。兩者的硬體、Postgres 版本與部署方式（runner 上是 `postgres:16-alpine` service container）、程式 commit 都不同，**不要拿來算改善或退步**。之後的優化只能和**同一類 runner、同參數**的下一次 CI 結果比。
+
+**環境**（`runner.txt`）
+
+| 項目 | 值 |
+|---|---|
+| runner | GitHub Actions 1000016430（github-hosted, Linux X64），`ubuntu-latest` |
+| image | ubuntu26 20261026.180.1 |
+| cores | 4 |
+| CPU | AMD EPYC 7763 64-Core Processor |
+| memory | 15983 MiB |
+| kernel | Linux 7.0.0-1017-azure x86_64 |
+| Go | go1.27.3 linux/amd64 |
+| k6 | v2.3.0（commit/e088784614, go1.26.8, linux/amd64） |
+| psql / Postgres | psql 18.6；server 為 Postgres 16.15（`postgres:16-alpine` service container，與 bench 同一台 runner） |
+| 開跑時 load（1m/5m/15m） | 6.45 2.25 0.81 |
+
+**參數**：create 20 VUs × 10s；reserve 100 orders/s × 30s；50 SKUs；poll 50ms；seed 1；3 個 valid attempt（實際跑 3 個）。
+
+**有效性規則**（d-47 / #288）：每個 attempt 開跑前的 1 分鐘 load average ≤ 1.0 × 4 核 = 4.0（最多等 `BASELINE_WAIT`）；量測進行中的 load 只記錄、不判定；k6 越過 threshold（過載造成的 timeout / error）的 attempt 為 invalid。規則來自該 commit 上 `tests/k6/bench.sh` 的預設值，workflow 沒有 input、不能放寬。
+
+**3 個 attempt 的 load**（開跑前＝判定依據；進行中＝只記錄）
+
+| attempt | load before (judged) | load while running: max (recorded) | mean | valid | in statistics | why not valid |
+|---|---|---|---|---|---|---|
+| 1 | 3.99 | 6.1 | 4.87 | yes | yes |  |
+| 2 | 3.51 | 7.57 | 5.68 | yes | yes |  |
+| 3 | 3.77 | 6.75 | 5.43 | yes | yes |  |
+
+**統計**（3 個 valid attempt 的 median、min–max、CV＝stdev/mean）
+
+| metric | median | min–max | CV |
+|---|---|---|---|
+| CreateOrder throughput (req/s) | 1024 | 1023–1097 | 3.3% |
+| CreateOrder success | 100.00% | 100.00–100.00% | 0.0% |
+| CreateOrder p50 (ms) | 15.02 | 14.50–15.31 | 2.2% |
+| CreateOrder p95 (ms) | 34.52 | 32.24–34.84 | 3.4% |
+| CreateOrder p99 (ms) | 95.87 | 82.49–97.57 | 7.3% |
+| PENDING when create ended (orders) | 9592 | 9581–10286 | 3.4% |
+| backlog drain (orders/s) | 316 | 311–317 | 0.8% |
+| backlog drain (s) | 30.4 | 30.2–33.1 | 4.1% |
+| reserve: orders created (req/s) | 100.0 | 100.0–100.0 | 0.0% |
+| reserve: created orders seen RESERVED | 100.00% | 100.00–100.00% | 0.0% |
+| reserve: dropped iterations (never started) | 0 | 0–0 | 0.0% |
+| order → RESERVED p50 (ms, from before CreateOrder) | 157 | 157–158 | 0.3% |
+| order → RESERVED p95 (ms, from before CreateOrder) | 262 | 262–263 | 0.2% |
+| order → RESERVED p99 (ms, from before CreateOrder) | 362 | 360–364 | 0.5% |
+| CreateOrder returned → RESERVED p50 (ms) | 155 | 155–155 | 0.0% |
+| CreateOrder returned → RESERVED p95 (ms) | 259 | 259–259 | 0.0% |
+| CreateOrder returned → RESERVED p99 (ms) | 359 | 357–361 | 0.5% |
+
+原始檔在該 run 的 artifact `k6-bench-41005829640-1`（保留 90 天）。
+
+### 本機探索性結果（非 valid）
+
+**開發機上沒有符合規則的 valid baseline。** 下面的表是探索性結果：在共用的開發機上、條件受限、而且挑選過程有事後成分（見 attempt 清單），**不是乾淨的 baseline**，只能當量級參考，不要拿來判定優化有沒有效。要得到 valid 的數字，在機器安靜時重跑 `task k6-bench`；工具會自己判定。
 
 ### 所有 attempt（都保留，副本在 `/Users/sean/.agend/workspace/x-monorepo-worker-45/`）
 

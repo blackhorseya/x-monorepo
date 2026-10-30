@@ -83,6 +83,42 @@ func (x *Invite) ExpiresAt() time.Time { return x.expiresAt }
 func (x *Invite) ClaimedAt() time.Time { return x.claimedAt }
 func (x *Invite) Version() int64       { return x.version }
 
+// Status is where the invite stands at now. A spent invite stays CLAIMED after
+// its expiry: the claim happened, and expiry only matters to one still waiting.
+type Status uint8
+
+const (
+	StatusPending Status = iota + 1
+	StatusClaimed
+	StatusExpired
+)
+
+func (x Status) String() string {
+	switch x {
+	case StatusPending:
+		return "PENDING"
+	case StatusClaimed:
+		return "CLAIMED"
+	case StatusExpired:
+		return "EXPIRED"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// Status judges the invite at now, in the order Claim refuses: claimed, then
+// expired (the expiry instant itself is already expired), else pending.
+func (x *Invite) Status(now time.Time) Status {
+	switch {
+	case !x.claimedAt.IsZero():
+		return StatusClaimed
+	case !now.Before(x.expiresAt):
+		return StatusExpired
+	default:
+		return StatusPending
+	}
+}
+
 // Claim spends the invite for a token whose email is verified and matches.
 //
 // The refusals, in order: already spent, expired, email not verified by the
@@ -138,6 +174,9 @@ type Repository interface {
 	// FindLatestByEmail returns the newest invite for the (normalized) email,
 	// locking its row for the rest of the transaction; ErrNotFound when none.
 	FindLatestByEmail(c context.Context, email string) (*Invite, error)
+	// ListByAccount returns every invite of the account, spent and expired ones
+	// included, newest first (created_at desc, id desc). It does not lock rows.
+	ListByAccount(c context.Context, accountID string) ([]*Invite, error)
 	// Save updates a loaded invite, comparing Version: ErrStale when another writer won.
 	Save(c context.Context, i *Invite) error
 }

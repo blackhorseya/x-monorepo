@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/invite"
@@ -90,4 +92,29 @@ func (i *InviteRepository) Save(c context.Context, v *invite.Invite) error {
 	}
 
 	return invite.ErrNotFound
+}
+
+func (i *InviteRepository) ListByAccount(c context.Context, accountID string) ([]*invite.Invite, error) {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	out := make([]*invite.Invite, 0)
+	for _, v := range i.data {
+		if v.AccountID() != accountID {
+			continue
+		}
+		cp, err := cloneInvite(v, v.Version())
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cp)
+	}
+	slices.SortFunc(out, func(a, b *invite.Invite) int {
+		return cmp.Or(b.CreatedAt().Compare(a.CreatedAt()), cmp.Compare(b.ID(), a.ID()))
+	})
+
+	return out, nil
 }

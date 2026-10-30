@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file identity/v1/entity.proto.
  */
 export const file_identity_v1_entity: GenFile = /*@__PURE__*/
-  fileDesc("ChhpZGVudGl0eS92MS9lbnRpdHkucHJvdG8SC2lkZW50aXR5LnYxIvoBCgdBY2NvdW50EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFcm9sZXMYAyADKAkSKgoGc3RhdHVzGAQgASgOMhouaWRlbnRpdHkudjEuQWNjb3VudFN0YXR1cxIvCgtjcmVhdGVfdGltZRgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLdXBkYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjgKFHNlc3Npb25zX3Jldm9rZV90aW1lGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLJAQoGSW52aXRlEgoKAmlkGAEgASgJEg0KBWVtYWlsGAIgASgJEhIKCmFjY291bnRfaWQYAyABKAkSLwoLY3JlYXRlX3RpbWUYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2V4cGlyZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjbGFpbV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCK3AgoGQXBpS2V5EgoKAmlkGAEgASgJEhIKCmFjY291bnRfaWQYAiABKAkSDAoEbmFtZRgDIAEoCRIOCgZwcmVmaXgYBCABKAkSKQoGc3RhdHVzGAUgASgOMhkuaWRlbnRpdHkudjEuQXBpS2V5U3RhdHVzEi8KC2NyZWF0ZV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtleHBpcmVfdGltZRgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLcmV2b2tlX3RpbWUYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjEKDWxhc3RfdXNlX3RpbWUYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wKmcKDUFjY291bnRTdGF0dXMSHgoaQUNDT1VOVF9TVEFUVVNfVU5TUEVDSUZJRUQQABIZChVBQ0NPVU5UX1NUQVRVU19BQ1RJVkUQARIbChdBQ0NPVU5UX1NUQVRVU19ESVNBQkxFRBACKmUKDEFwaUtleVN0YXR1cxIeChpBUElfS0VZX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFUFQSV9LRVlfU1RBVFVTX0FDVElWRRABEhoKFkFQSV9LRVlfU1RBVFVTX1JFVk9LRUQQAmIGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("ChhpZGVudGl0eS92MS9lbnRpdHkucHJvdG8SC2lkZW50aXR5LnYxIvoBCgdBY2NvdW50EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFcm9sZXMYAyADKAkSKgoGc3RhdHVzGAQgASgOMhouaWRlbnRpdHkudjEuQWNjb3VudFN0YXR1cxIvCgtjcmVhdGVfdGltZRgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLdXBkYXRlX3RpbWUYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjgKFHNlc3Npb25zX3Jldm9rZV90aW1lGAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCL0AQoGSW52aXRlEgoKAmlkGAEgASgJEg0KBWVtYWlsGAIgASgJEhIKCmFjY291bnRfaWQYAyABKAkSLwoLY3JlYXRlX3RpbWUYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2V4cGlyZV90aW1lGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjbGFpbV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIpCgZzdGF0dXMYByABKA4yGS5pZGVudGl0eS52MS5JbnZpdGVTdGF0dXMidgoQRXh0ZXJuYWxJZGVudGl0eRIOCgZpc3N1ZXIYASABKAkSDwoHc3ViamVjdBgCIAEoCRISCgphY2NvdW50X2lkGAMgASgJEi0KCWJpbmRfdGltZRgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAitwIKBkFwaUtleRIKCgJpZBgBIAEoCRISCgphY2NvdW50X2lkGAIgASgJEgwKBG5hbWUYAyABKAkSDgoGcHJlZml4GAQgASgJEikKBnN0YXR1cxgFIAEoDjIZLmlkZW50aXR5LnYxLkFwaUtleVN0YXR1cxIvCgtjcmVhdGVfdGltZRgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZXhwaXJlX3RpbWUYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC3Jldm9rZV90aW1lGAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIxCg1sYXN0X3VzZV90aW1lGAkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCpnCg1BY2NvdW50U3RhdHVzEh4KGkFDQ09VTlRfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGQoVQUNDT1VOVF9TVEFUVVNfQUNUSVZFEAESGwoXQUNDT1VOVF9TVEFUVVNfRElTQUJMRUQQAip+CgxJbnZpdGVTdGF0dXMSHQoZSU5WSVRFX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFUlOVklURV9TVEFUVVNfUEVORElORxABEhkKFUlOVklURV9TVEFUVVNfQ0xBSU1FRBACEhkKFUlOVklURV9TVEFUVVNfRVhQSVJFRBADKmUKDEFwaUtleVN0YXR1cxIeChpBUElfS0VZX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFUFQSV9LRVlfU1RBVFVTX0FDVElWRRABEhoKFkFQSV9LRVlfU1RBVFVTX1JFVk9LRUQQAmIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * Account is who an API key speaks for. The id is the principal's subject
@@ -106,6 +106,13 @@ export type Invite = Message<"identity.v1.Invite"> & {
    * @generated from field: google.protobuf.Timestamp claim_time = 6;
    */
   claimTime?: Timestamp;
+
+  /**
+   * Where the invite stands when the response was made.
+   *
+   * @generated from field: identity.v1.InviteStatus status = 7;
+   */
+  status: InviteStatus;
 };
 
 /**
@@ -114,6 +121,43 @@ export type Invite = Message<"identity.v1.Invite"> & {
  */
 export const InviteSchema: GenMessage<Invite> = /*@__PURE__*/
   messageDesc(file_identity_v1_entity, 1);
+
+/**
+ * ExternalIdentity is an (issuer, subject) the identity provider vouches for,
+ * bound to one account. It is the binding itself: no token, no claim, no email.
+ *
+ * @generated from message identity.v1.ExternalIdentity
+ */
+export type ExternalIdentity = Message<"identity.v1.ExternalIdentity"> & {
+  /**
+   * @generated from field: string issuer = 1;
+   */
+  issuer: string;
+
+  /**
+   * @generated from field: string subject = 2;
+   */
+  subject: string;
+
+  /**
+   * @generated from field: string account_id = 3;
+   */
+  accountId: string;
+
+  /**
+   * When the identity was bound to the account.
+   *
+   * @generated from field: google.protobuf.Timestamp bind_time = 4;
+   */
+  bindTime?: Timestamp;
+};
+
+/**
+ * Describes the message identity.v1.ExternalIdentity.
+ * Use `create(ExternalIdentitySchema)` to create a new message.
+ */
+export const ExternalIdentitySchema: GenMessage<ExternalIdentity> = /*@__PURE__*/
+  messageDesc(file_identity_v1_entity, 2);
 
 /**
  * ApiKey is one credential of an account. The secret is returned once, by
@@ -183,7 +227,7 @@ export type ApiKey = Message<"identity.v1.ApiKey"> & {
  * Use `create(ApiKeySchema)` to create a new message.
  */
 export const ApiKeySchema: GenMessage<ApiKey> = /*@__PURE__*/
-  messageDesc(file_identity_v1_entity, 2);
+  messageDesc(file_identity_v1_entity, 3);
 
 /**
  * @generated from enum identity.v1.AccountStatus
@@ -217,6 +261,43 @@ export const AccountStatusSchema: GenEnum<AccountStatus> = /*@__PURE__*/
   enumDesc(file_identity_v1_entity, 0);
 
 /**
+ * @generated from enum identity.v1.InviteStatus
+ */
+export enum InviteStatus {
+  /**
+   * @generated from enum value: INVITE_STATUS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * Not claimed, and the 7 days have not run out.
+   *
+   * @generated from enum value: INVITE_STATUS_PENDING = 1;
+   */
+  PENDING = 1,
+
+  /**
+   * Spent: an identity was bound through it (stays CLAIMED after expire_time).
+   *
+   * @generated from enum value: INVITE_STATUS_CLAIMED = 2;
+   */
+  CLAIMED = 2,
+
+  /**
+   * Not claimed, and expire_time has passed. A new CreateInvite replaces it.
+   *
+   * @generated from enum value: INVITE_STATUS_EXPIRED = 3;
+   */
+  EXPIRED = 3,
+}
+
+/**
+ * Describes the enum identity.v1.InviteStatus.
+ */
+export const InviteStatusSchema: GenEnum<InviteStatus> = /*@__PURE__*/
+  enumDesc(file_identity_v1_entity, 1);
+
+/**
  * @generated from enum identity.v1.ApiKeyStatus
  */
 export enum ApiKeyStatus {
@@ -242,5 +323,5 @@ export enum ApiKeyStatus {
  * Describes the enum identity.v1.ApiKeyStatus.
  */
 export const ApiKeyStatusSchema: GenEnum<ApiKeyStatus> = /*@__PURE__*/
-  enumDesc(file_identity_v1_entity, 1);
+  enumDesc(file_identity_v1_entity, 2);
 

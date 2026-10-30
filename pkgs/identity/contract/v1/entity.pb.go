@@ -74,6 +74,61 @@ func (AccountStatus) EnumDescriptor() ([]byte, []int) {
 	return file_identity_v1_entity_proto_rawDescGZIP(), []int{0}
 }
 
+type InviteStatus int32
+
+const (
+	InviteStatus_INVITE_STATUS_UNSPECIFIED InviteStatus = 0
+	// Not claimed, and the 7 days have not run out.
+	InviteStatus_INVITE_STATUS_PENDING InviteStatus = 1
+	// Spent: an identity was bound through it (stays CLAIMED after expire_time).
+	InviteStatus_INVITE_STATUS_CLAIMED InviteStatus = 2
+	// Not claimed, and expire_time has passed. A new CreateInvite replaces it.
+	InviteStatus_INVITE_STATUS_EXPIRED InviteStatus = 3
+)
+
+// Enum value maps for InviteStatus.
+var (
+	InviteStatus_name = map[int32]string{
+		0: "INVITE_STATUS_UNSPECIFIED",
+		1: "INVITE_STATUS_PENDING",
+		2: "INVITE_STATUS_CLAIMED",
+		3: "INVITE_STATUS_EXPIRED",
+	}
+	InviteStatus_value = map[string]int32{
+		"INVITE_STATUS_UNSPECIFIED": 0,
+		"INVITE_STATUS_PENDING":     1,
+		"INVITE_STATUS_CLAIMED":     2,
+		"INVITE_STATUS_EXPIRED":     3,
+	}
+)
+
+func (x InviteStatus) Enum() *InviteStatus {
+	p := new(InviteStatus)
+	*p = x
+	return p
+}
+
+func (x InviteStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (InviteStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_identity_v1_entity_proto_enumTypes[1].Descriptor()
+}
+
+func (InviteStatus) Type() protoreflect.EnumType {
+	return &file_identity_v1_entity_proto_enumTypes[1]
+}
+
+func (x InviteStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use InviteStatus.Descriptor instead.
+func (InviteStatus) EnumDescriptor() ([]byte, []int) {
+	return file_identity_v1_entity_proto_rawDescGZIP(), []int{1}
+}
+
 type ApiKeyStatus int32
 
 const (
@@ -108,11 +163,11 @@ func (x ApiKeyStatus) String() string {
 }
 
 func (ApiKeyStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_identity_v1_entity_proto_enumTypes[1].Descriptor()
+	return file_identity_v1_entity_proto_enumTypes[2].Descriptor()
 }
 
 func (ApiKeyStatus) Type() protoreflect.EnumType {
-	return &file_identity_v1_entity_proto_enumTypes[1]
+	return &file_identity_v1_entity_proto_enumTypes[2]
 }
 
 func (x ApiKeyStatus) Number() protoreflect.EnumNumber {
@@ -121,7 +176,7 @@ func (x ApiKeyStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ApiKeyStatus.Descriptor instead.
 func (ApiKeyStatus) EnumDescriptor() ([]byte, []int) {
-	return file_identity_v1_entity_proto_rawDescGZIP(), []int{1}
+	return file_identity_v1_entity_proto_rawDescGZIP(), []int{2}
 }
 
 // Account is who an API key speaks for. The id is the principal's subject
@@ -231,7 +286,9 @@ type Invite struct {
 	CreateTime *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	ExpireTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
 	// Set once the invite has been claimed.
-	ClaimTime     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=claim_time,json=claimTime,proto3" json:"claim_time,omitempty"`
+	ClaimTime *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=claim_time,json=claimTime,proto3" json:"claim_time,omitempty"`
+	// Where the invite stands when the response was made.
+	Status        InviteStatus `protobuf:"varint,7,opt,name=status,proto3,enum=identity.v1.InviteStatus" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -308,6 +365,84 @@ func (x *Invite) GetClaimTime() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Invite) GetStatus() InviteStatus {
+	if x != nil {
+		return x.Status
+	}
+	return InviteStatus_INVITE_STATUS_UNSPECIFIED
+}
+
+// ExternalIdentity is an (issuer, subject) the identity provider vouches for,
+// bound to one account. It is the binding itself: no token, no claim, no email.
+type ExternalIdentity struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Issuer    string                 `protobuf:"bytes,1,opt,name=issuer,proto3" json:"issuer,omitempty"`
+	Subject   string                 `protobuf:"bytes,2,opt,name=subject,proto3" json:"subject,omitempty"`
+	AccountId string                 `protobuf:"bytes,3,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	// When the identity was bound to the account.
+	BindTime      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=bind_time,json=bindTime,proto3" json:"bind_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExternalIdentity) Reset() {
+	*x = ExternalIdentity{}
+	mi := &file_identity_v1_entity_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExternalIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExternalIdentity) ProtoMessage() {}
+
+func (x *ExternalIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_identity_v1_entity_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExternalIdentity.ProtoReflect.Descriptor instead.
+func (*ExternalIdentity) Descriptor() ([]byte, []int) {
+	return file_identity_v1_entity_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ExternalIdentity) GetIssuer() string {
+	if x != nil {
+		return x.Issuer
+	}
+	return ""
+}
+
+func (x *ExternalIdentity) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *ExternalIdentity) GetAccountId() string {
+	if x != nil {
+		return x.AccountId
+	}
+	return ""
+}
+
+func (x *ExternalIdentity) GetBindTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.BindTime
+	}
+	return nil
+}
+
 // ApiKey is one credential of an account. The secret is returned once, by
 // CreateApiKey; only its SHA-256 is stored. prefix is the first characters of
 // the secret, enough to tell keys apart in a listing and in a client's config.
@@ -334,7 +469,7 @@ type ApiKey struct {
 
 func (x *ApiKey) Reset() {
 	*x = ApiKey{}
-	mi := &file_identity_v1_entity_proto_msgTypes[2]
+	mi := &file_identity_v1_entity_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -346,7 +481,7 @@ func (x *ApiKey) String() string {
 func (*ApiKey) ProtoMessage() {}
 
 func (x *ApiKey) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_v1_entity_proto_msgTypes[2]
+	mi := &file_identity_v1_entity_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -359,7 +494,7 @@ func (x *ApiKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApiKey.ProtoReflect.Descriptor instead.
 func (*ApiKey) Descriptor() ([]byte, []int) {
-	return file_identity_v1_entity_proto_rawDescGZIP(), []int{2}
+	return file_identity_v1_entity_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ApiKey) GetId() string {
@@ -439,7 +574,7 @@ const file_identity_v1_entity_proto_rawDesc = "" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"updateTime\x12L\n" +
-	"\x14sessions_revoke_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x12sessionsRevokeTime\"\x82\x02\n" +
+	"\x14sessions_revoke_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x12sessionsRevokeTime\"\xb5\x02\n" +
 	"\x06Invite\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12\x1d\n" +
@@ -450,7 +585,14 @@ const file_identity_v1_entity_proto_rawDesc = "" +
 	"\vexpire_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"expireTime\x129\n" +
 	"\n" +
-	"claim_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tclaimTime\"\x8d\x03\n" +
+	"claim_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tclaimTime\x121\n" +
+	"\x06status\x18\a \x01(\x0e2\x19.identity.v1.InviteStatusR\x06status\"\x9c\x01\n" +
+	"\x10ExternalIdentity\x12\x16\n" +
+	"\x06issuer\x18\x01 \x01(\tR\x06issuer\x12\x18\n" +
+	"\asubject\x18\x02 \x01(\tR\asubject\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x03 \x01(\tR\taccountId\x127\n" +
+	"\tbind_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\bbindTime\"\x8d\x03\n" +
 	"\x06ApiKey\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -468,7 +610,12 @@ const file_identity_v1_entity_proto_rawDesc = "" +
 	"\rAccountStatus\x12\x1e\n" +
 	"\x1aACCOUNT_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15ACCOUNT_STATUS_ACTIVE\x10\x01\x12\x1b\n" +
-	"\x17ACCOUNT_STATUS_DISABLED\x10\x02*e\n" +
+	"\x17ACCOUNT_STATUS_DISABLED\x10\x02*~\n" +
+	"\fInviteStatus\x12\x1d\n" +
+	"\x19INVITE_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15INVITE_STATUS_PENDING\x10\x01\x12\x19\n" +
+	"\x15INVITE_STATUS_CLAIMED\x10\x02\x12\x19\n" +
+	"\x15INVITE_STATUS_EXPIRED\x10\x03*e\n" +
 	"\fApiKeyStatus\x12\x1e\n" +
 	"\x1aAPI_KEY_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15API_KEY_STATUS_ACTIVE\x10\x01\x12\x1a\n" +
@@ -487,34 +634,38 @@ func file_identity_v1_entity_proto_rawDescGZIP() []byte {
 	return file_identity_v1_entity_proto_rawDescData
 }
 
-var file_identity_v1_entity_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_identity_v1_entity_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_identity_v1_entity_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_identity_v1_entity_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_identity_v1_entity_proto_goTypes = []any{
 	(AccountStatus)(0),            // 0: identity.v1.AccountStatus
-	(ApiKeyStatus)(0),             // 1: identity.v1.ApiKeyStatus
-	(*Account)(nil),               // 2: identity.v1.Account
-	(*Invite)(nil),                // 3: identity.v1.Invite
-	(*ApiKey)(nil),                // 4: identity.v1.ApiKey
-	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
+	(InviteStatus)(0),             // 1: identity.v1.InviteStatus
+	(ApiKeyStatus)(0),             // 2: identity.v1.ApiKeyStatus
+	(*Account)(nil),               // 3: identity.v1.Account
+	(*Invite)(nil),                // 4: identity.v1.Invite
+	(*ExternalIdentity)(nil),      // 5: identity.v1.ExternalIdentity
+	(*ApiKey)(nil),                // 6: identity.v1.ApiKey
+	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
 }
 var file_identity_v1_entity_proto_depIdxs = []int32{
 	0,  // 0: identity.v1.Account.status:type_name -> identity.v1.AccountStatus
-	5,  // 1: identity.v1.Account.create_time:type_name -> google.protobuf.Timestamp
-	5,  // 2: identity.v1.Account.update_time:type_name -> google.protobuf.Timestamp
-	5,  // 3: identity.v1.Account.sessions_revoke_time:type_name -> google.protobuf.Timestamp
-	5,  // 4: identity.v1.Invite.create_time:type_name -> google.protobuf.Timestamp
-	5,  // 5: identity.v1.Invite.expire_time:type_name -> google.protobuf.Timestamp
-	5,  // 6: identity.v1.Invite.claim_time:type_name -> google.protobuf.Timestamp
-	1,  // 7: identity.v1.ApiKey.status:type_name -> identity.v1.ApiKeyStatus
-	5,  // 8: identity.v1.ApiKey.create_time:type_name -> google.protobuf.Timestamp
-	5,  // 9: identity.v1.ApiKey.expire_time:type_name -> google.protobuf.Timestamp
-	5,  // 10: identity.v1.ApiKey.revoke_time:type_name -> google.protobuf.Timestamp
-	5,  // 11: identity.v1.ApiKey.last_use_time:type_name -> google.protobuf.Timestamp
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	7,  // 1: identity.v1.Account.create_time:type_name -> google.protobuf.Timestamp
+	7,  // 2: identity.v1.Account.update_time:type_name -> google.protobuf.Timestamp
+	7,  // 3: identity.v1.Account.sessions_revoke_time:type_name -> google.protobuf.Timestamp
+	7,  // 4: identity.v1.Invite.create_time:type_name -> google.protobuf.Timestamp
+	7,  // 5: identity.v1.Invite.expire_time:type_name -> google.protobuf.Timestamp
+	7,  // 6: identity.v1.Invite.claim_time:type_name -> google.protobuf.Timestamp
+	1,  // 7: identity.v1.Invite.status:type_name -> identity.v1.InviteStatus
+	7,  // 8: identity.v1.ExternalIdentity.bind_time:type_name -> google.protobuf.Timestamp
+	2,  // 9: identity.v1.ApiKey.status:type_name -> identity.v1.ApiKeyStatus
+	7,  // 10: identity.v1.ApiKey.create_time:type_name -> google.protobuf.Timestamp
+	7,  // 11: identity.v1.ApiKey.expire_time:type_name -> google.protobuf.Timestamp
+	7,  // 12: identity.v1.ApiKey.revoke_time:type_name -> google.protobuf.Timestamp
+	7,  // 13: identity.v1.ApiKey.last_use_time:type_name -> google.protobuf.Timestamp
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_identity_v1_entity_proto_init() }
@@ -527,8 +678,8 @@ func file_identity_v1_entity_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_identity_v1_entity_proto_rawDesc), len(file_identity_v1_entity_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   3,
+			NumEnums:      3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
