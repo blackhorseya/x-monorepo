@@ -49,6 +49,9 @@ if [ -n "$console_issuer$console_client" ]; then
       ;;
   esac
   case "${console_host##*.}" in
+    # 0x.. is a hexadecimal IPv4 part to the URL parser (WHATWG): it rejects such a host unless it is a
+    # complete IPv4 address, and the dotted-decimal form is the only one this gate allows.
+    0[xX]*) console_refuse "CONSOLE_OIDC_ISSUER has a numeric (hex) last host label" ;;
     *[!0-9]*) ;;
     *)
       printf '%s' "$console_host" | grep -Eq '^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$' || console_refuse "CONSOLE_OIDC_ISSUER has an invalid IPv4 host"

@@ -169,7 +169,10 @@ function lifetimeOf(accessToken: string, expiresIn: number | undefined): number 
   } catch {
     // opaque token: no exp to read
   }
-  return Math.min(expiresIn ?? Infinity, exp ?? Infinity, expiresIn === undefined && exp === undefined ? 60 : Infinity);
+  // Capped at MAX_LIFETIME: a longer-lived token (a 30-day exp) must not be scheduled past what setTimeout
+  // can hold (2^31-1 ms, ~24.8 days, beyond which it fires at once and loops); it is simply refreshed
+  // every 24 h at the latest.
+  return Math.min(expiresIn ?? Infinity, exp ?? Infinity, expiresIn === undefined && exp === undefined ? 60 : Infinity, MAX_LIFETIME);
 }
 
 export class TokenError extends Error {
