@@ -4,6 +4,8 @@
 
 之後優化 CreateOrder 或 reservation batching 時的對照組（#263）。`tests/k6/orders.js` / `reservation.js` 是功能與閾值的 smoke，沒有可比較的數字；這裡是固定參數、跑 N 次、有離散程度的量測。**不進 PR 的 CI gate**（shared runner 的數字是雜訊）。
 
+> **下面的數字量測於 server 定價之前**（#267 以前，CreateOrder 的單價由呼叫端給）。之後 `CreateOrder` 每張單多一次 catalog 批次查價（同一個 process、同一個 transaction），`bench.js` 的 setup 也多一步 `UpsertProduct`：這些數字不能當作現在的對照組，要重跑 `task k6-bench` 取代它們（尚未重跑）。
+
 ## 重跑
 
 ```bash

@@ -16,6 +16,11 @@ var (
 	ErrCannotConfirm   = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_confirm", "order cannot be confirmed in its current status")
 	ErrCannotComplete  = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_complete", "only a confirmed order can be completed")
 	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "order.not_found", "order not found")
+	// The three ways the catalog's answer refuses an order. The message is fixed: the caller
+	// knows which SKUs it asked for, and nothing about the catalog is echoed back.
+	ErrUnknownSKU    = kernel.NewError(kernel.KindInvalidArgument, "order.unknown_sku", "an item names a sku the catalog does not have")
+	ErrInactiveSKU   = kernel.NewError(kernel.KindInvalidArgument, "order.inactive_sku", "an item names a product that is no longer sold")
+	ErrMixedCurrency = kernel.NewError(kernel.KindInvalidArgument, "order.mixed_currency", "all items of an order must be priced in one currency")
 	// ErrInvalidStatusFilter is a list filter naming a status this version does not know.
 	ErrInvalidStatusFilter = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_status_filter", "unknown order status filter")
 	ErrInvalidCursor       = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_cursor", "cursor must carry a timestamp and an id")

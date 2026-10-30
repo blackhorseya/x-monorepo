@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -17,10 +17,54 @@ import { Field } from "../components/field";
 import { formatMoney, statusVariant } from "../components/order-status";
 import { describe, orders } from "../client";
 import { useOrderReservations, type RowReservation } from "../orderReservations";
-import { keys, ordersQuery, refreshFirstPage } from "../queries";
+import { keys, ordersQuery, quoteQuery, refreshFirstPage } from "../queries";
 import { reservationBadge } from "./reservations";
 
-type Line = { sku: string; quantity: number; priceMinor: number };
+type Line = { sku: string; quantity: number };
+
+// useDebounced follows value after it has stopped changing for ms: the quote is asked once the
+// user stops typing, not once per keystroke.
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+// What a line shows: the catalog's price, or why there is none. "pending" covers both the first
+// read and a SKU the last answer did not cover yet.
+type Quoted = { kind: "price"; amountMinor: bigint; currency: string } | { kind: "missing" } | { kind: "inactive" } | { kind: "pending" } | { kind: "unavailable" };
+
+function quoteLabel(q: Quoted): string {
+  switch (q.kind) {
+    case "price":
+      return `${formatMoney(q.amountMinor, q.currency)} each`;
+    case "missing":
+      return "not in the catalog";
+    case "inactive":
+      return "not on sale";
+    case "unavailable":
+      return "price unavailable";
+    default:
+      return "…";
+  }
+}
+
+// totalLabel is the preview of the order's total: only when every named line has a price in one
+// currency (an order takes one, the server refuses a mix).
+function totalLabel(lines: Line[], quoted: Quoted[]): string {
+  const named = quoted.map((q, i) => ({ q, qty: lines[i].quantity })).filter((_, i) => lines[i].sku !== "");
+  if (named.length === 0) return "";
+  if (named.some(({ q }) => q.kind !== "price")) return "Total once every line has a price";
+  const priced = named as { q: Extract<Quoted, { kind: "price" }>; qty: number }[];
+  const currency = priced[0].q.currency;
+  if (priced.some(({ q }) => q.currency !== currency)) return "An order takes one currency: these lines are priced in more than one";
+  if (priced.some(({ qty }) => !Number.isInteger(qty) || qty <= 0)) return "Total once every quantity is a positive whole number";
+  const total = priced.reduce((sum, { q, qty }) => sum + q.amountMinor * BigInt(qty), 0n);
+  return `Estimated total ${formatMoney(total, currency)}`;
+}
 
 // Search params of /orders: a status filter and a customer id filter.
 export type OrdersSearch = { status?: "PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED"; customer?: string };
@@ -41,18 +85,36 @@ function CreateOrderCard() {
   // subject and refuses another, so the field is locked and nothing is sent.
   const canChoose = useCanChooseCustomer();
   const [customerId, setCustomerId] = useState("");
-  const [currency, setCurrency] = useState("USD");
-  const [lines, setLines] = useState<Line[]>([{ sku: "SKU-1", quantity: 2, priceMinor: 1299 }]);
+  const [lines, setLines] = useState<Line[]>([{ sku: "SKU-1", quantity: 2 }]);
+
+  // Read-only preview of what each line costs now. It never goes back to the server as a price:
+  // CreateOrder sends sku and quantity only, and the order keeps the price found when it is placed.
+  const asked = useDebounced(
+    [...new Set(lines.map((l) => l.sku).filter((s) => s !== ""))].sort(),
+    250,
+  );
+  const quote = useQuery(quoteQuery(asked));
+  const quoted: Quoted[] = lines.map((l) => {
+    // The SKU is an exact key: the string quoted here is the one CreateOrder sends below, spaces
+    // included ("A" and " A " are two products).
+    const sku = l.sku;
+    const data = quote.data;
+    if (sku === "") return { kind: "pending" };
+    // A refresh that failed outranks the older answer still in the cache: that price is no
+    // longer known to be current, so it is not shown as one.
+    if (quote.isError) return { kind: "unavailable" };
+    if (data?.prices[sku]) return { kind: "price", amountMinor: data.prices[sku].amountMinor, currency: data.prices[sku].currency };
+    if (data?.missing.includes(sku)) return { kind: "missing" };
+    if (data?.inactive.includes(sku)) return { kind: "inactive" };
+    return { kind: "pending" };
+  });
+  const total = totalLabel(lines, quoted);
 
   const create = useMutation({
     mutationFn: () =>
       orders.createOrder({
         customerId: canChoose ? customerId.trim() : "",
-        items: lines.map((l) => ({
-          sku: l.sku,
-          quantity: l.quantity,
-          unitPrice: { amountMinor: BigInt(l.priceMinor), currency },
-        })),
+        items: lines.map((l) => ({ sku: l.sku, quantity: l.quantity })),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.orders }),
   });
@@ -66,6 +128,7 @@ function CreateOrderCard() {
       <CardHeader>
         <CardTitle>Create order</CardTitle>
         <CardDescription>
+          Prices come from the catalog (Products), not from you: the order keeps the price each SKU had when it was placed.
           Inventory reserves stock asynchronously; reservations need <code>apps/worker</code> and Postgres.
         </CardDescription>
       </CardHeader>
@@ -79,9 +142,6 @@ function CreateOrderCard() {
               onChange={(e) => setCustomerId(e.target.value)}
             />
           </Field>
-          <Field label="Currency" className="w-24">
-            <Input value={currency} onChange={(e) => setCurrency(e.target.value)} />
-          </Field>
         </div>
         {lines.map((l, i) => (
           <div key={i} className="flex flex-wrap items-end gap-2">
@@ -91,26 +151,29 @@ function CreateOrderCard() {
             <Field label="Qty" className="w-20">
               <Input type="number" value={l.quantity} onChange={(e) => setLine(i, { quantity: Number(e.target.value) })} />
             </Field>
-            <Field label="Unit price (minor)" className="w-36">
-              <Input
-                type="number"
-                value={l.priceMinor}
-                onChange={(e) => setLine(i, { priceMinor: Number(e.target.value) })}
-              />
-            </Field>
+            {l.sku !== "" && (
+              <span data-testid="line-price" className="pb-2 text-sm tabular-nums text-muted-foreground">
+                {quoteLabel(quoted[i])}
+              </span>
+            )}
             <Button variant="ghost" size="icon" aria-label="remove line" onClick={() => setLines(lines.filter((_, j) => j !== i))}>
               <Trash2 />
             </Button>
           </div>
         ))}
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setLines([...lines, { sku: "", quantity: 1, priceMinor: 100 }])}>
+          <Button variant="outline" onClick={() => setLines([...lines, { sku: "", quantity: 1 }])}>
             <Plus /> Line
           </Button>
           <Button onClick={() => create.mutate()} disabled={create.isPending}>
             Create order
           </Button>
         </div>
+        {total !== "" && (
+          <p data-testid="quote-total" className="text-sm text-muted-foreground">
+            {total}
+          </p>
+        )}
         {create.isError && <ErrorAlert error={create.error} />}
       </CardContent>
     </Card>

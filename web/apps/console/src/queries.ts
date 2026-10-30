@@ -21,6 +21,7 @@ export const keys = {
   ordersPage: (customerId: string, status: OrderStatus) => ["orders", customerId, status] as const,
   order: (id: string) => ["order", id] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
+  quote: (skus: string[]) => ["quote", ...skus] as const,
   products: ["products"] as const,
   productsPage: (skuPrefix: string) => ["products", skuPrefix] as const,
   stocks: ["stocks"] as const,
@@ -161,6 +162,18 @@ export const stocksQuery = (skuPrefix: string, onlyReserved: boolean) =>
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
     refetchInterval: POLL_MS,
     staleTime: LIST_STALE_MS,
+  });
+
+// What the catalog would charge for these SKUs right now (CatalogService.QuotePrices, a read
+// open to every caller). Only the order form's preview: CreateOrder asks the catalog again and the
+// price it finds then is the one the order keeps.
+export const quoteQuery = (skus: string[]) =>
+  queryOptions({
+    queryKey: keys.quote(skus),
+    queryFn: () => catalog.quotePrices({ skus }),
+    enabled: skus.length > 0,
+    staleTime: LIST_STALE_MS,
+    retry: false,
   });
 
 // Products ascending by SKU, 20 per page, by prefix (empty = every SKU), inactive ones included.

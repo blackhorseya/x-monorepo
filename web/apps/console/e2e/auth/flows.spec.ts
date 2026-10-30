@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
 import { subject, useJWT, useKey } from "./helpers";
 import { mintJWT } from "./jwt";
+import { seedProduct } from "../catalog";
 import { uid } from "../uid";
 import { confirm, createCard, filterCard } from "../orders-ui";
 
@@ -61,8 +62,11 @@ test("JWT roles claim drives the admin gate", async ({ page }) => {
 
 test("mutations carry the credential set after the page loaded", async ({
   page,
+  request,
 }) => {
   const id = customer("write");
+  const sku = `E2E-AUTH-W-${uid()}`;
+  await seedProduct(request, sku, { headers: { "X-API-Key": ADMIN_KEY } });
   await page.goto("/orders");
   await expect(page.getByRole("alert").first()).toContainText(
     "auth.unauthenticated"
@@ -89,6 +93,7 @@ test("mutations carry the credential set after the page loaded", async ({
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(createCard(page).getByLabel("Customer")).toBeEnabled();
   await createCard(page).getByLabel("Customer").fill(id);
+  await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByRole("button", { name: "Create order" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await filterCard(page).getByLabel("Customer").fill(id);

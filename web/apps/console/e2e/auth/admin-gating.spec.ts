@@ -25,7 +25,7 @@ for (const path of ["/poison", "/prune", "/expire", "/products"]) {
   test(`no admin role: ${path} shows the gate and sends no admin RPC`, async ({ page }) => {
     const adminCalls: string[] = [];
     page.on("request", (req) => {
-      if (req.method() === "POST" && /\/(admin\.v1\.AdminService|catalog\.v1\.CatalogService|inventory\.v1\.InventoryService\/ExpireReservations)/.test(req.url())) {
+      if (req.method() === "POST" && /\/(admin\.v1\.AdminService|catalog\.v1\.CatalogService\/(UpsertProduct|DeactivateProduct|ListProducts)|inventory\.v1\.InventoryService\/ExpireReservations)/.test(req.url())) {
         adminCalls.push(req.url());
       }
     });

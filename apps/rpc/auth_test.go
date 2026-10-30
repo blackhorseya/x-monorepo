@@ -16,7 +16,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1/adminv1connect"
-	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
@@ -60,8 +59,8 @@ func TestAuth_Required(t *testing.T) {
 		}))
 	}
 	// No customer_id: a non-admin always orders for themselves (see TestOrdering_Ownership).
-	create := &orderingv1.CreateOrderRequest{Items: []*orderingv1.LineItem{
-		{Sku: "SKU-1", Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 100, Currency: "USD"}},
+	create := &orderingv1.CreateOrderRequest{Items: []*orderingv1.CreateOrderItem{
+		{Sku: "SKU-1", Quantity: 1},
 	}}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": "u-1", "iss": "x-monorepo", "exp": time.Now().Add(time.Minute).Unix(),
@@ -69,6 +68,8 @@ func TestAuth_Required(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	seedProduct(t, ts.URL, "ops-key-0123456789abc", "SKU-1", 100, "USD")
 
 	anon := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
 	_, err = anon.CreateOrder(c, connect.NewRequest(create))

@@ -23,14 +23,14 @@ import (
 func TestStockReservedHandler(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
-	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"))
+	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	get := usecase.NewGetOrder(repo, ownership.New("admin"))
 	cancel := usecase.NewCancelOrder(repo, noEvents{}, clock{}, ownership.New("admin"))
 	h := consumer.NewStockReservedHandler(usecase.NewConfirmOrder(repo, noEvents{}, clock{}))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
-		Items:      []dto.LineItem{{SKU: "S", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 1, Currency: "USD"}}},
+		Items:      []dto.OrderLine{{SKU: "S", Quantity: 1}},
 	}); err != nil {
 		t.Fatal(err)
 	}

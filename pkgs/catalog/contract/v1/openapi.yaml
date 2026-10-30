@@ -119,6 +119,46 @@ components:
       description: |-
         Product is what one SKU sells for. The price carries its own currency (each
          product has one); an inactive product is kept for history but cannot be quoted.
+    catalog.v1.QuotePricesRequest:
+      type: object
+      properties:
+        skus:
+          type: array
+          items:
+            type: string
+            maxLength: 64
+            minLength: 1
+          title: skus
+          maxItems: 100
+          minItems: 1
+          description: 1 to 100 SKUs; duplicates are allowed and answered once.
+      title: QuotePricesRequest
+      additionalProperties: false
+    catalog.v1.QuotePricesResponse:
+      type: object
+      properties:
+        prices:
+          type: object
+          title: prices
+          additionalProperties:
+            allOf:
+              - $ref: '#/components/schemas/common.v1.Money'
+            title: value
+          description: Active products only, by SKU.
+        missing:
+          type: array
+          items:
+            type: string
+          title: missing
+          description: SKUs no product exists for, in request order.
+        inactive:
+          type: array
+          items:
+            type: string
+          title: inactive
+          description: SKUs whose product was deactivated, in request order.
+      title: QuotePricesResponse
+      additionalProperties: false
     catalog.v1.UpsertProductRequest:
       type: object
       properties:
@@ -364,6 +404,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/catalog.v1.ListProductsResponse'
+  /catalog.v1.CatalogService/QuotePrices:
+    post:
+      tags:
+        - catalog.v1.CatalogService
+      summary: QuotePrices
+      description: |-
+        QuotePrices answers, for up to 100 SKUs in one query, what each sells for
+         now: the price of every active product, and the SKUs that cannot be quoted,
+         split into those with no product and those that were deactivated. Same
+         access as GetProduct. Ordering calls it (in process) to price an order.
+      operationId: catalog.v1.CatalogService.QuotePrices
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/catalog.v1.QuotePricesRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/catalog.v1.QuotePricesResponse'
   /catalog.v1.CatalogService/UpsertProduct:
     post:
       tags:
@@ -411,4 +494,4 @@ tags:
   - name: catalog.v1.CatalogService
     description: |-
       CatalogService is the public RPC contract of the catalog bounded context:
-       the server-side source of product prices. Ordering does not call it yet.
+       the server-side source of product prices. Ordering prices every order with it (QuotePrices).

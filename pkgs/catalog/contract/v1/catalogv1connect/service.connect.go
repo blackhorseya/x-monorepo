@@ -45,6 +45,9 @@ const (
 	// CatalogServiceDeactivateProductProcedure is the fully-qualified name of the CatalogService's
 	// DeactivateProduct RPC.
 	CatalogServiceDeactivateProductProcedure = "/catalog.v1.CatalogService/DeactivateProduct"
+	// CatalogServiceQuotePricesProcedure is the fully-qualified name of the CatalogService's
+	// QuotePrices RPC.
+	CatalogServiceQuotePricesProcedure = "/catalog.v1.CatalogService/QuotePrices"
 )
 
 // CatalogServiceClient is a client for the catalog.v1.CatalogService service.
@@ -62,6 +65,11 @@ type CatalogServiceClient interface {
 	// inactive product succeeds and changes nothing. Requires the admin role
 	// when auth is on (x-error-code: auth.permission_denied).
 	DeactivateProduct(context.Context, *connect.Request[v1.DeactivateProductRequest]) (*connect.Response[v1.DeactivateProductResponse], error)
+	// QuotePrices answers, for up to 100 SKUs in one query, what each sells for
+	// now: the price of every active product, and the SKUs that cannot be quoted,
+	// split into those with no product and those that were deactivated. Same
+	// access as GetProduct. Ordering calls it (in process) to price an order.
+	QuotePrices(context.Context, *connect.Request[v1.QuotePricesRequest]) (*connect.Response[v1.QuotePricesResponse], error)
 }
 
 // NewCatalogServiceClient constructs a client for the catalog.v1.CatalogService service. By
@@ -99,6 +107,12 @@ func NewCatalogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(catalogServiceMethods.ByName("DeactivateProduct")),
 			connect.WithClientOptions(opts...),
 		),
+		quotePrices: connect.NewClient[v1.QuotePricesRequest, v1.QuotePricesResponse](
+			httpClient,
+			baseURL+CatalogServiceQuotePricesProcedure,
+			connect.WithSchema(catalogServiceMethods.ByName("QuotePrices")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -108,6 +122,7 @@ type catalogServiceClient struct {
 	getProduct        *connect.Client[v1.GetProductRequest, v1.GetProductResponse]
 	listProducts      *connect.Client[v1.ListProductsRequest, v1.ListProductsResponse]
 	deactivateProduct *connect.Client[v1.DeactivateProductRequest, v1.DeactivateProductResponse]
+	quotePrices       *connect.Client[v1.QuotePricesRequest, v1.QuotePricesResponse]
 }
 
 // UpsertProduct calls catalog.v1.CatalogService.UpsertProduct.
@@ -130,6 +145,11 @@ func (c *catalogServiceClient) DeactivateProduct(ctx context.Context, req *conne
 	return c.deactivateProduct.CallUnary(ctx, req)
 }
 
+// QuotePrices calls catalog.v1.CatalogService.QuotePrices.
+func (c *catalogServiceClient) QuotePrices(ctx context.Context, req *connect.Request[v1.QuotePricesRequest]) (*connect.Response[v1.QuotePricesResponse], error) {
+	return c.quotePrices.CallUnary(ctx, req)
+}
+
 // CatalogServiceHandler is an implementation of the catalog.v1.CatalogService service.
 type CatalogServiceHandler interface {
 	// UpsertProduct creates a product or replaces the name and price of an
@@ -145,6 +165,11 @@ type CatalogServiceHandler interface {
 	// inactive product succeeds and changes nothing. Requires the admin role
 	// when auth is on (x-error-code: auth.permission_denied).
 	DeactivateProduct(context.Context, *connect.Request[v1.DeactivateProductRequest]) (*connect.Response[v1.DeactivateProductResponse], error)
+	// QuotePrices answers, for up to 100 SKUs in one query, what each sells for
+	// now: the price of every active product, and the SKUs that cannot be quoted,
+	// split into those with no product and those that were deactivated. Same
+	// access as GetProduct. Ordering calls it (in process) to price an order.
+	QuotePrices(context.Context, *connect.Request[v1.QuotePricesRequest]) (*connect.Response[v1.QuotePricesResponse], error)
 }
 
 // NewCatalogServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -178,6 +203,12 @@ func NewCatalogServiceHandler(svc CatalogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(catalogServiceMethods.ByName("DeactivateProduct")),
 		connect.WithHandlerOptions(opts...),
 	)
+	catalogServiceQuotePricesHandler := connect.NewUnaryHandler(
+		CatalogServiceQuotePricesProcedure,
+		svc.QuotePrices,
+		connect.WithSchema(catalogServiceMethods.ByName("QuotePrices")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/catalog.v1.CatalogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case CatalogServiceUpsertProductProcedure:
@@ -188,6 +219,8 @@ func NewCatalogServiceHandler(svc CatalogServiceHandler, opts ...connect.Handler
 			catalogServiceListProductsHandler.ServeHTTP(w, r)
 		case CatalogServiceDeactivateProductProcedure:
 			catalogServiceDeactivateProductHandler.ServeHTTP(w, r)
+		case CatalogServiceQuotePricesProcedure:
+			catalogServiceQuotePricesHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -211,4 +244,8 @@ func (UnimplementedCatalogServiceHandler) ListProducts(context.Context, *connect
 
 func (UnimplementedCatalogServiceHandler) DeactivateProduct(context.Context, *connect.Request[v1.DeactivateProductRequest]) (*connect.Response[v1.DeactivateProductResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("catalog.v1.CatalogService.DeactivateProduct is not implemented"))
+}
+
+func (UnimplementedCatalogServiceHandler) QuotePrices(context.Context, *connect.Request[v1.QuotePricesRequest]) (*connect.Response[v1.QuotePricesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("catalog.v1.CatalogService.QuotePrices is not implemented"))
 }

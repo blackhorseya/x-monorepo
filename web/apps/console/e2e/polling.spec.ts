@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { withDB } from "./mode";
+import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { confirm } from "./orders-ui";
 
@@ -22,12 +23,8 @@ const post = (page: Page, method: string, body: object) =>
 test("terminal rows and later pages stop polling", async ({ page }) => {
   const customer = `e2e-poll-${uid()}`;
   for (let i = 0; i < TOTAL; i++) {
-    const res = await post(page, "ordering.v1.OrderService/CreateOrder", {
-      customerId: customer,
-      items: [{ sku: "SKU-1", quantity: 1, unitPrice: { amountMinor: "100", currency: "USD" } }],
-    });
-    const { order } = (await res.json()) as { order: { id: string } };
-    await post(page, "ordering.v1.OrderService/CancelOrder", { id: order.id });
+    const id = await createOrder(page, customer);
+    await post(page, "ordering.v1.OrderService/CancelOrder", { id });
   }
 
   // What a worker leaves behind for a cancelled order: a CANCELLED tombstone, the final state.
@@ -114,10 +111,17 @@ test("PENDING rows share one batch request per tick", async ({ page }) => {
   expect(batchSizes.every((n) => n === TOTAL)).toBe(true);
 });
 
+// The price is the catalog's, so the SKU has to be a product: one per customer, seeded on first use.
+const seeded = new Set<string>();
 const createOrder = async (page: Page, customer: string) => {
+  const sku = `E2E-P-${customer}`;
+  if (!seeded.has(sku)) {
+    await seedProduct(page.request, sku, { amountMinor: 100 });
+    seeded.add(sku);
+  }
   const res = await post(page, "ordering.v1.OrderService/CreateOrder", {
     customerId: customer,
-    items: [{ sku: "SKU-1", quantity: 1, unitPrice: { amountMinor: "100", currency: "USD" } }],
+    items: [{ sku, quantity: 1 }],
   });
   return ((await res.json()) as { order: { id: string } }).order.id;
 };

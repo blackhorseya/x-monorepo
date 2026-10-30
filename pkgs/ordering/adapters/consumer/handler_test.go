@@ -37,12 +37,12 @@ func (noEvents) Publish(context.Context, ...order.Event) error { return nil }
 func TestOrderCancellationHandler(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewOrderRepository()
-	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"))
+	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	h := consumer.NewOrderCancellationHandler(usecase.NewCancelOrder(repo, noEvents{}, clock{}, ownership.New("admin")))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
-		Items:      []dto.LineItem{{SKU: "S", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 1, Currency: "USD"}}},
+		Items:      []dto.OrderLine{{SKU: "S", Quantity: 1}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +81,12 @@ func TestOrderCancellationHandler_StaleIsRetried(t *testing.T) {
 // policy that confines every named caller.
 func TestOrderCancellationHandler_CancelsAnyCustomersOrder(t *testing.T) {
 	repo := memory.NewOrderRepository()
-	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"))
+	create := usecase.NewCreateOrder(repo, noEvents{}, ids{}, clock{}, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	cancel := usecase.NewCancelOrder(repo, noEvents{}, clock{}, ownership.New("admin"))
 	alice := contextx.WithPrincipal(context.Background(), contextx.Principal{Subject: "acct-alice", Roles: []string{"user"}, Method: "api_key"})
 
 	if _, err := create.Execute(alice, dto.CreateOrderInput{
-		Items: []dto.LineItem{{SKU: "S", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 1, Currency: "USD"}}},
+		Items: []dto.OrderLine{{SKU: "S", Quantity: 1}},
 	}); err != nil {
 		t.Fatal(err)
 	}

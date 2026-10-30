@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file catalog/v1/service.proto.
  */
 export const file_catalog_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChhjYXRhbG9nL3YxL3NlcnZpY2UucHJvdG8SCmNhdGFsb2cudjEiWAoUVXBzZXJ0UHJvZHVjdFJlcXVlc3QSDQoDc2t1GAEgASgJQgASDgoEbmFtZRgCIAEoCUIAEiEKBXByaWNlGAMgASgLMhAuY29tbW9uLnYxLk1vbmV5QgAiPQoVVXBzZXJ0UHJvZHVjdFJlc3BvbnNlEiQKB3Byb2R1Y3QYASABKAsyEy5jYXRhbG9nLnYxLlByb2R1Y3QiIgoRR2V0UHJvZHVjdFJlcXVlc3QSDQoDc2t1GAEgASgJQgAiOgoSR2V0UHJvZHVjdFJlc3BvbnNlEiQKB3Byb2R1Y3QYASABKAsyEy5jYXRhbG9nLnYxLlByb2R1Y3QiVAoTTGlzdFByb2R1Y3RzUmVxdWVzdBITCglwYWdlX3NpemUYASABKAVCABISCgpwYWdlX3Rva2VuGAIgASgJEhQKCnNrdV9wcmVmaXgYAyABKAlCACJWChRMaXN0UHJvZHVjdHNSZXNwb25zZRIlCghwcm9kdWN0cxgBIAMoCzITLmNhdGFsb2cudjEuUHJvZHVjdBIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiKQoYRGVhY3RpdmF0ZVByb2R1Y3RSZXF1ZXN0Eg0KA3NrdRgBIAEoCUIAIkEKGURlYWN0aXZhdGVQcm9kdWN0UmVzcG9uc2USJAoHcHJvZHVjdBgBIAEoCzITLmNhdGFsb2cudjEuUHJvZHVjdDLoAgoOQ2F0YWxvZ1NlcnZpY2USVAoNVXBzZXJ0UHJvZHVjdBIgLmNhdGFsb2cudjEuVXBzZXJ0UHJvZHVjdFJlcXVlc3QaIS5jYXRhbG9nLnYxLlVwc2VydFByb2R1Y3RSZXNwb25zZRJLCgpHZXRQcm9kdWN0Eh0uY2F0YWxvZy52MS5HZXRQcm9kdWN0UmVxdWVzdBoeLmNhdGFsb2cudjEuR2V0UHJvZHVjdFJlc3BvbnNlElEKDExpc3RQcm9kdWN0cxIfLmNhdGFsb2cudjEuTGlzdFByb2R1Y3RzUmVxdWVzdBogLmNhdGFsb2cudjEuTGlzdFByb2R1Y3RzUmVzcG9uc2USYAoRRGVhY3RpdmF0ZVByb2R1Y3QSJC5jYXRhbG9nLnYxLkRlYWN0aXZhdGVQcm9kdWN0UmVxdWVzdBolLmNhdGFsb2cudjEuRGVhY3RpdmF0ZVByb2R1Y3RSZXNwb25zZWIGcHJvdG8z", [file_catalog_v1_entity, file_common_v1_money]);
+  fileDesc("ChhjYXRhbG9nL3YxL3NlcnZpY2UucHJvdG8SCmNhdGFsb2cudjEiWAoUVXBzZXJ0UHJvZHVjdFJlcXVlc3QSDQoDc2t1GAEgASgJQgASDgoEbmFtZRgCIAEoCUIAEiEKBXByaWNlGAMgASgLMhAuY29tbW9uLnYxLk1vbmV5QgAiPQoVVXBzZXJ0UHJvZHVjdFJlc3BvbnNlEiQKB3Byb2R1Y3QYASABKAsyEy5jYXRhbG9nLnYxLlByb2R1Y3QiIgoRR2V0UHJvZHVjdFJlcXVlc3QSDQoDc2t1GAEgASgJQgAiOgoSR2V0UHJvZHVjdFJlc3BvbnNlEiQKB3Byb2R1Y3QYASABKAsyEy5jYXRhbG9nLnYxLlByb2R1Y3QiVAoTTGlzdFByb2R1Y3RzUmVxdWVzdBITCglwYWdlX3NpemUYASABKAVCABISCgpwYWdlX3Rva2VuGAIgASgJEhQKCnNrdV9wcmVmaXgYAyABKAlCACJWChRMaXN0UHJvZHVjdHNSZXNwb25zZRIlCghwcm9kdWN0cxgBIAMoCzITLmNhdGFsb2cudjEuUHJvZHVjdBIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAkiKQoYRGVhY3RpdmF0ZVByb2R1Y3RSZXF1ZXN0Eg0KA3NrdRgBIAEoCUIAIkEKGURlYWN0aXZhdGVQcm9kdWN0UmVzcG9uc2USJAoHcHJvZHVjdBgBIAEoCzITLmNhdGFsb2cudjEuUHJvZHVjdCIkChJRdW90ZVByaWNlc1JlcXVlc3QSDgoEc2t1cxgBIAMoCUIAIrYBChNRdW90ZVByaWNlc1Jlc3BvbnNlEjsKBnByaWNlcxgBIAMoCzIrLmNhdGFsb2cudjEuUXVvdGVQcmljZXNSZXNwb25zZS5QcmljZXNFbnRyeRIPCgdtaXNzaW5nGAIgAygJEhAKCGluYWN0aXZlGAMgAygJGj8KC1ByaWNlc0VudHJ5EgsKA2tleRgBIAEoCRIfCgV2YWx1ZRgCIAEoCzIQLmNvbW1vbi52MS5Nb25leToCOAEyuAMKDkNhdGFsb2dTZXJ2aWNlElQKDVVwc2VydFByb2R1Y3QSIC5jYXRhbG9nLnYxLlVwc2VydFByb2R1Y3RSZXF1ZXN0GiEuY2F0YWxvZy52MS5VcHNlcnRQcm9kdWN0UmVzcG9uc2USSwoKR2V0UHJvZHVjdBIdLmNhdGFsb2cudjEuR2V0UHJvZHVjdFJlcXVlc3QaHi5jYXRhbG9nLnYxLkdldFByb2R1Y3RSZXNwb25zZRJRCgxMaXN0UHJvZHVjdHMSHy5jYXRhbG9nLnYxLkxpc3RQcm9kdWN0c1JlcXVlc3QaIC5jYXRhbG9nLnYxLkxpc3RQcm9kdWN0c1Jlc3BvbnNlEmAKEURlYWN0aXZhdGVQcm9kdWN0EiQuY2F0YWxvZy52MS5EZWFjdGl2YXRlUHJvZHVjdFJlcXVlc3QaJS5jYXRhbG9nLnYxLkRlYWN0aXZhdGVQcm9kdWN0UmVzcG9uc2USTgoLUXVvdGVQcmljZXMSHi5jYXRhbG9nLnYxLlF1b3RlUHJpY2VzUmVxdWVzdBofLmNhdGFsb2cudjEuUXVvdGVQcmljZXNSZXNwb25zZWIGcHJvdG8z", [file_catalog_v1_entity, file_common_v1_money]);
 
 /**
  * @generated from message catalog.v1.UpsertProductRequest
@@ -187,8 +187,60 @@ export const DeactivateProductResponseSchema: GenMessage<DeactivateProductRespon
   messageDesc(file_catalog_v1_service, 7);
 
 /**
+ * @generated from message catalog.v1.QuotePricesRequest
+ */
+export type QuotePricesRequest = Message<"catalog.v1.QuotePricesRequest"> & {
+  /**
+   * 1 to 100 SKUs; duplicates are allowed and answered once.
+   *
+   * @generated from field: repeated string skus = 1;
+   */
+  skus: string[];
+};
+
+/**
+ * Describes the message catalog.v1.QuotePricesRequest.
+ * Use `create(QuotePricesRequestSchema)` to create a new message.
+ */
+export const QuotePricesRequestSchema: GenMessage<QuotePricesRequest> = /*@__PURE__*/
+  messageDesc(file_catalog_v1_service, 8);
+
+/**
+ * @generated from message catalog.v1.QuotePricesResponse
+ */
+export type QuotePricesResponse = Message<"catalog.v1.QuotePricesResponse"> & {
+  /**
+   * Active products only, by SKU.
+   *
+   * @generated from field: map<string, common.v1.Money> prices = 1;
+   */
+  prices: { [key: string]: Money };
+
+  /**
+   * SKUs no product exists for, in request order.
+   *
+   * @generated from field: repeated string missing = 2;
+   */
+  missing: string[];
+
+  /**
+   * SKUs whose product was deactivated, in request order.
+   *
+   * @generated from field: repeated string inactive = 3;
+   */
+  inactive: string[];
+};
+
+/**
+ * Describes the message catalog.v1.QuotePricesResponse.
+ * Use `create(QuotePricesResponseSchema)` to create a new message.
+ */
+export const QuotePricesResponseSchema: GenMessage<QuotePricesResponse> = /*@__PURE__*/
+  messageDesc(file_catalog_v1_service, 9);
+
+/**
  * CatalogService is the public RPC contract of the catalog bounded context:
- * the server-side source of product prices. Ordering does not call it yet.
+ * the server-side source of product prices. Ordering prices every order with it (QuotePrices).
  *
  * @generated from service catalog.v1.CatalogService
  */
@@ -236,6 +288,19 @@ export const CatalogService: GenService<{
     methodKind: "unary";
     input: typeof DeactivateProductRequestSchema;
     output: typeof DeactivateProductResponseSchema;
+  },
+  /**
+   * QuotePrices answers, for up to 100 SKUs in one query, what each sells for
+   * now: the price of every active product, and the SKUs that cannot be quoted,
+   * split into those with no product and those that were deactivated. Same
+   * access as GetProduct. Ordering calls it (in process) to price an order.
+   *
+   * @generated from rpc catalog.v1.CatalogService.QuotePrices
+   */
+  quotePrices: {
+    methodKind: "unary";
+    input: typeof QuotePricesRequestSchema;
+    output: typeof QuotePricesResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_catalog_v1_service, 0);

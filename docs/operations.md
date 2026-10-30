@@ -81,13 +81,13 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 
 | 腳本 | 打什麼 | 驗什麼 |
 |---|---|---|
-| `orders.js` | setup 先 `SetStock` 20 個 SKU，每個 VU 迴圈 CreateOrder（1–3 行）→ GetOrder → ListOrders(customer) | `http_req_failed < 1%`、CreateOrder p95 < 300ms / p99 < 800ms、GetOrder p95 < 100ms、ListOrders p95 < 200ms、`rpc_errors == 0`（門檻是「筆電 + Docker Postgres 輕鬆過」的數字，要調是刻意調，不是失敗了改） |
+| `orders.js` | setup 先 `SetStock` 並 `UpsertProduct`（定價；CreateOrder 的價格是 catalog 的）20 個 SKU，每個 VU 迴圈 CreateOrder（1–3 行）→ GetOrder → ListOrders(customer) | `http_req_failed < 1%`、CreateOrder p95 < 300ms / p99 < 800ms、GetOrder p95 < 100ms、ListOrders p95 < 200ms、`rpc_errors == 0`（門檻是「筆電 + Docker Postgres 輕鬆過」的數字，要調是刻意調，不是失敗了改） |
 | `ratelimit.js` | server 開 `http.rate_limit.rps=RPS`，以 `RPS × FACTOR`（預設 4）的 constant-arrival-rate 打 ListOrders | 被拒的每一筆都是 429 + `code: resource_exhausted` + `x-error-code: request.rate_limited` + 整數 `Retry-After ≥ 1`；放行數 ≈ `RPS × 秒數`（+ 一個 burst）、其餘全拒——limiter 是拒絕不是排隊 |
 | `timeout.js` | server 開 `http.timeout=1ns`（要有 `postgres.url`：context 過期是在 DB call 才浮上來，in-memory repo 不看它） | 每一筆都是 504 + `code: deadline_exceeded` + `x-error-code: request.timeout`，不是 INTERNAL（pgx 包過的 context error 也要被對應到）；server 沒斷線 |
 | `reservation.js` | 旁邊要有一個 `worker`（同一個 Postgres）：每個 VU CreateOrder（1 行、qty 1）後每 `POLL`（100ms）打一次 GetReservation，404 視為「還沒消費」 | `reservation_latency`（CreateOrder 回來 → 看到 RESERVED）p95 < `RESERVE_P95`（預設 3000ms；outbox 是 polling，空輪詢之後最多再等約一個 `worker.poll_interval`（預設 200ms）才看到新事件，筆電 10 VU 實測 p50 ≈ 0.2s / p95 ≈ 0.25s；改這項之前是 library 預設的 1s，p50 ≈ 0.9s / p95 ≈ 1.1s。腳本的 `POLL`（100ms）也佔解析度，所以數字會落在 100ms 的倍數附近）、`RESERVE_TIMEOUT`（30s）內沒等到算 `reservation_timeouts`、不是 RESERVED 算 `reservation_wrong_status`，兩者都要 0 |
 
 ```bash
-task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 60s × 20 VU；BASE_URL / API_KEY / VUS / DURATION / RPS 用 env 蓋（auth 開著就帶 API_KEY；`orders` / `reservation` 的 setup 呼叫 `SetStock`，auth 開著時要 admin role：API_KEY 本身是 admin key 就夠，否則另帶 `ADMIN_API_KEY` 只給 setup 用）
+task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 60s × 20 VU；BASE_URL / API_KEY / VUS / DURATION / RPS 用 env 蓋（auth 開著就帶 API_KEY；`orders` / `reservation` 的 setup 呼叫 `SetStock` 與 `UpsertProduct`，auth 開著時要 admin role：API_KEY 本身是 admin key 就夠，否則另帶 `ADMIN_API_KEY` 只給 setup 用）
 task k6 -- ratelimit -e RPS=50    # server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50 起
 task k6 -- reservation            # server 旁要有 bin/worker 在跑（同一個 Postgres），不然每筆都 timeout
 task k6-auth-matrix               # tests/k6/auth-matrix.sh：orders / reservation 在每一種 auth 狀態各跑一次（2 VU × 5s）加上 fixtures，見下方「Auth 組合」；CI 的 k6-auth job 就是它
@@ -109,7 +109,7 @@ task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一
 
 | auth | key | orders / reservation |
 |---|---|---|
-| on（`required`） | role-less key（setup 的 SetStock 用另帶的 `ADMIN_API_KEY`） | 支援（`auto` → 不帶 customer，只能下自己的單） |
+| on（`required`） | role-less key（setup 的 SetStock / UpsertProduct 用另帶的 `ADMIN_API_KEY`） | 支援（`auto` → 不帶 customer，只能下自己的單） |
 | on | admin key | 支援（`auto` → 不帶 customer；ListOrders 會列全部） |
 | off | 不帶 | 支援（`auto` → 帶腳本的 customer） |
 | off | 帶 key（server 忽略） | 支援（同上，不看 `API_KEY`） |
@@ -260,7 +260,7 @@ helm install api deployments/helm/x-monorepo -n app --create-namespace \
 在 CI 的 `helm` job 跑。真的裝一次是 `task helm-kind`（CI 的 `helm-kind` job）：起 kind cluster、`deployments/helm/kind/deps.yaml`
 放一個拋棄式 Postgres + Redis（chart 沒有 subchart dependency，production 接 managed DB，這份只給 smoke 用）、從 working tree build 三個 Go image + console image（`web-build` → nginx）
 `kind load` 進去、`helm upgrade --install --wait` 兩次（第一次走 pre-install hook、第二次走 pre-upgrade），每次跑 `kind/smoke.sh`：
-SetStock → CreateOrder → worker 透過 Redis Streams 消費 OrderCreated → GetStock 看到 reserved；console 的 `/reservations` 回 `index.html`、`/api/readyz` 經 nginx proxy 到 rpc。本機約 1 分鐘（cluster 已存在時），`task helm-kind-down` 刪 cluster。
+SetStock → UpsertProduct → CreateOrder → worker 透過 Redis Streams 消費 OrderCreated → GetStock 看到 reserved；console 的 `/reservations` 回 `index.html`、`/api/readyz` 經 nginx proxy 到 rpc。本機約 1 分鐘（cluster 已存在時），`task helm-kind-down` 刪 cluster。
 另一條 `task helm-kind-keda`（CI 同一個 job 的另一個 matrix leg，和 `helm-kind` 平行、各自一個 cluster；兩者共用的底座是 `task helm-kind-up`：cluster、image、Postgres / Redis）：裝 KEDA、`kind/monitoring.yaml` 放一個 OTLP collector（gRPC :4317 → Prometheus exporter :8889）
 和一個 5s scrape 的 Prometheus，用 `kind/keda-values.yaml` 重裝 chart（`OTEL_METRIC_EXPORT_INTERVAL=5000`、threshold 50、scaleDown stabilization 30s），
 `kind/scale.sh` 用 `tests/k6/orders.js` 灌 45 秒訂單：實測 lag 0 → 2000+，worker 13 秒內 1 → 4 replica，backlog 消化完縮回 1。

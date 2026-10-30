@@ -166,3 +166,57 @@ func TestCatalog_UnassignedCurrency(t *testing.T) {
 		t.Fatalf("assigned currency: %v", err)
 	}
 }
+
+func TestCatalog_QuotePrices(t *testing.T) {
+	c := context.Background()
+	cl := startCatalog(t, config.Auth{Mode: config.AuthOff})("")
+	for sku, price := range map[string]int64{"A": 150, "B": 90, "OLD": 5} {
+		if _, err := cl.UpsertProduct(c, upsertReq(sku, price, "USD")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := cl.DeactivateProduct(c, connect.NewRequest(&catalogv1.DeactivateProductRequest{Sku: "OLD"})); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := cl.QuotePrices(c, connect.NewRequest(&catalogv1.QuotePricesRequest{Skus: []string{"B", "NOPE", "A", "OLD", "A", "GONE"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := res.Msg
+	if len(m.GetPrices()) != 2 || m.GetPrices()["A"].GetAmountMinor() != 150 || m.GetPrices()["B"].GetCurrency() != "USD" {
+		t.Fatalf("prices = %v", m.GetPrices())
+	}
+	if got := m.GetMissing(); len(got) != 2 || got[0] != "NOPE" || got[1] != "GONE" {
+		t.Fatalf("missing = %v, want [NOPE GONE]", got)
+	}
+	if got := m.GetInactive(); len(got) != 1 || got[0] != "OLD" {
+		t.Fatalf("inactive = %v, want [OLD]", got)
+	}
+
+	// request shape: 1 to 100 SKUs, none empty
+	_, err = cl.QuotePrices(c, connect.NewRequest(&catalogv1.QuotePricesRequest{}))
+	wantConnectCode(t, err, connect.CodeInvalidArgument, "request.validation_failed")
+	_, err = cl.QuotePrices(c, connect.NewRequest(&catalogv1.QuotePricesRequest{Skus: []string{"A", ""}}))
+	wantConnectCode(t, err, connect.CodeInvalidArgument, "request.validation_failed")
+	many := make([]string, 101)
+	for i := range many {
+		many[i] = "A"
+	}
+	_, err = cl.QuotePrices(c, connect.NewRequest(&catalogv1.QuotePricesRequest{Skus: many}))
+	wantConnectCode(t, err, connect.CodeInvalidArgument, "request.validation_failed")
+}
+
+// Reads stay open: a credential without the admin role may ask what things cost.
+func TestCatalog_QuotePricesIsARead(t *testing.T) {
+	client := startCatalog(t, config.Auth{Mode: config.AuthRequired, APIKeys: "plain=plain-key-0123456789ab,ops=ops-key-0123456789abc:admin"})
+	if _, err := client("ops-key-0123456789abc").UpsertProduct(context.Background(), upsertReq("A", 150, "USD")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := client("plain-key-0123456789ab").QuotePrices(context.Background(), connect.NewRequest(&catalogv1.QuotePricesRequest{Skus: []string{"A"}}))
+	if err != nil || res.Msg.GetPrices()["A"].GetAmountMinor() != 150 {
+		t.Fatalf("role-less quote = %v, %v", res, err)
+	}
+	_, err = client("").QuotePrices(context.Background(), connect.NewRequest(&catalogv1.QuotePricesRequest{Skus: []string{"A"}}))
+	wantConnectCode(t, err, connect.CodeUnauthenticated, "auth.unauthenticated")
+}

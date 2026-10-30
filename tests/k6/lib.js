@@ -2,7 +2,7 @@
 // thresholds in each script can be per RPC. Environment:
 //   BASE_URL  server root (default http://127.0.0.1:8080); RPCs live under /api
 //   API_KEY   X-API-Key when the server runs with auth on (optional)
-//   ADMIN_API_KEY  X-API-Key for setup()'s SetStock only (default API_KEY): SetStock takes the
+//   ADMIN_API_KEY  X-API-Key for setup()'s SetStock and UpsertProduct only (default API_KEY): both take the
 //             admin role when auth is on (docs/identity.md), CreateOrder etc. do not need it
 //   K6_CUSTOMER_MODE  who names the customer (default auto), see customerId below
 //             Ordering is owned by the caller (docs/identity.md): a server that knows the
@@ -230,6 +230,22 @@ export function setStock(i, onHand) {
     if (res.status !== 409) break;
   }
   return ok(res, "SetStock");
+}
+
+// upsertProduct for setup(): CreateOrder prices its lines from the catalog, so every SKU a script
+// orders has to be a product first. Admin role when auth is on, like setStock. UpsertProduct is
+// also a read-modify-write under optimistic locking: 409 Aborted means send it again.
+export function upsertProduct(i, amountMinor) {
+  let res;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    res = rpc(
+      "catalog.v1.CatalogService/UpsertProduct",
+      { sku: sku(i), name: sku(i), price: { amount_minor: amountMinor, currency: "USD" } },
+      { apiKey: __ENV.ADMIN_API_KEY }
+    );
+    if (res.status !== 409) break;
+  }
+  return ok(res, "UpsertProduct");
 }
 
 // customer name for a script's own customers (auth off, or a server that does not know the

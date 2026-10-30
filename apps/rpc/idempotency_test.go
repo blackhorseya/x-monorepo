@@ -14,7 +14,6 @@ import (
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
@@ -43,8 +42,11 @@ func TestOrdering_IdempotencyKey(t *testing.T) {
 		})))
 	}
 	alice, bob, ops := client("alice-key-0123456789"), client("bob-key-0123456789"), client("ops-key-0123456789abc")
-	line := func(sku string) []*orderingv1.LineItem {
-		return []*orderingv1.LineItem{{Sku: sku, Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 100, Currency: "USD"}}}
+	for _, sku := range []string{"SKU-1", "SKU-OTHER"} {
+		seedProduct(t, ts.URL, "ops-key-0123456789abc", sku, 100, "USD")
+	}
+	line := func(sku string) []*orderingv1.CreateOrderItem {
+		return []*orderingv1.CreateOrderItem{{Sku: sku, Quantity: 1}}
 	}
 	place := func(cl orderingv1connect.OrderServiceClient, customer, key, sku string) (*orderingv1.Order, error) {
 		res, err := cl.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: customer, Items: line(sku), IdempotencyKey: key}))
@@ -125,12 +127,15 @@ func TestOrdering_CreateOrderResultMetric(t *testing.T) {
 	defer ts.Close()
 	c := context.Background()
 	cl := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
+	for _, sku := range []string{"SKU-1", "SKU-OTHER"} {
+		seedProduct(t, ts.URL, "", sku, 100, "USD")
+	}
 
 	place := func(key, sku string, qty int32) error {
 		_, err := cl.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
 			CustomerId:     "metric-customer",
 			IdempotencyKey: key,
-			Items:          []*orderingv1.LineItem{{Sku: sku, Quantity: qty, UnitPrice: &commonv1.Money{AmountMinor: 100, Currency: "USD"}}},
+			Items:          []*orderingv1.CreateOrderItem{{Sku: sku, Quantity: qty}},
 		}))
 		return err
 	}
