@@ -11,7 +11,9 @@ package main
 
 import (
 	"context"
+	"time"
 
+	"go.opentelemetry.io/otel/metric"
 	"gorm.io/gorm"
 
 	catalogrpc "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
@@ -27,6 +29,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/oidc"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
@@ -69,6 +72,29 @@ func NewDocs() []server.Doc {
 	}
 }
 
-// NewOIDCAuth is the external-login half of the auth interceptor.
-// RED stub: always off.
-func NewOIDCAuth(_ config.Auth) server.OIDCAuth { return server.OIDCAuth{} }
+// warmTimeout bounds the startup warm-up of the OIDC keys.
+const warmTimeout = 15 * time.Second
+
+// NewOIDCAuth is the external-login half of the auth interceptor: with
+// auth.oidc.enabled the multi-issuer verifier plus the identity BC's resolver,
+// otherwise the zero value and bearer tokens go to auth.jwt as before. The
+// verifier is built without network I/O; warming its keys runs in the
+// background, so an IdP that is down does not stop rpc from starting.
+func NewOIDCAuth(cfg config.Auth, ext server.ExternalIdentityResolver, mp metric.MeterProvider) (server.OIDCAuth, func(), error) {
+	if !cfg.OIDC.Enabled {
+		return server.OIDCAuth{}, func() {}, nil
+	}
+	v, err := oidc.New(cfg.OIDC, oidc.WithMeterProvider(mp))
+	if err != nil {
+		return server.OIDCAuth{}, nil, err
+	}
+	c, cancel := context.WithTimeout(context.Background(), warmTimeout)
+	// fire-and-forget: best-effort key warm-up bounded by warmTimeout; the
+	// verifier refetches on its own and Close (below) aborts it in flight.
+	go func() {
+		defer cancel()
+		v.Warm(c)
+	}()
+
+	return server.OIDCAuth{Verifier: v, Resolver: ext}, func() { cancel(); v.Close() }, nil
+}

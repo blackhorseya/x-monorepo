@@ -22,6 +22,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/oidc"
 )
 
 // Authentication is transport-level, like validation: the interceptor
@@ -66,6 +67,7 @@ type authenticator struct {
 	resolver        CredentialResolver  // keys managed elsewhere, asked after keys
 	resolverTimeout time.Duration       // bound on one resolver call (auth.resolver_timeout; 0 = none)
 	jwt             *jwtVerifier
+	oidc            OIDCAuth // external OIDC tokens; the zero value is off
 }
 
 type apiKey struct {
@@ -120,7 +122,10 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 	if err != nil {
 		return nil, fmt.Errorf("auth: decisions counter: %w", err)
 	}
-	a := &authenticator{resolver: resolver, resolverTimeout: cfg.ResolverTimeout}
+	if (oidcAuth.Verifier == nil) != (oidcAuth.Resolver == nil) {
+		return nil, errors.New("auth: the oidc verifier and the external identity resolver are set together or not at all")
+	}
+	a := &authenticator{resolver: resolver, resolverTimeout: cfg.ResolverTimeout, oidc: oidcAuth}
 	if cfg.APIKeys != "" {
 		keys, err := parseAPIKeys(cfg.APIKeys)
 		if err != nil {
@@ -135,8 +140,8 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 		}
 		a.jwt = v
 	}
-	if a.keys == nil && a.jwt == nil && a.resolver == nil {
-		return nil, errors.New("auth: mode is on but neither api_keys nor jwt is configured")
+	if a.keys == nil && a.jwt == nil && a.resolver == nil && !a.oidc.enabled() {
+		return nil, errors.New("auth: mode is on but neither api_keys, jwt nor oidc is configured")
 	}
 	public := make(map[string]bool, len(cfg.Public))
 	for _, p := range cfg.Public {
@@ -158,7 +163,8 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 				return next(c, req)
 			}
 			apiKey, authorization := req.Header().Get(APIKeyHeader), req.Header().Get(AuthorizationHeader)
-			p, found, err := a.authenticate(c, apiKey, authorization)
+			res, found, err := a.authenticate(c, req.Spec().Procedure, apiKey, authorization)
+			p := res.principal
 			switch {
 			case errors.Is(err, errResolver):
 				// The lookup failed, not the credential: say so in the log (the
@@ -167,6 +173,17 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 				contextx.FromContext(c).Error("auth: credential resolver failed", "error", err)
 
 				return nil, authError(connect.CodeUnauthenticated, InvalidCredentialCode, errors.New("credential could not be verified"))
+			case errors.Is(err, errTokenRejected):
+				// Verified or not, the client learns one thing: it was not accepted.
+				// The reason (expired, bad signature, disabled, revoked...) is for the log.
+				count(c, ResultInvalid, MethodJWT)
+				contextx.FromContext(c).Debug("auth: bearer token rejected", "reason", err)
+
+				return nil, authError(connect.CodeUnauthenticated, InvalidCredentialCode, errors.New("token could not be verified"))
+			case errors.Is(err, errUnboundDenied):
+				count(c, ResultInvalid, MethodJWT)
+
+				return nil, authError(connect.CodePermissionDenied, UnboundIdentityCode, errors.New("identity is not bound to an account"))
 			case err != nil:
 				count(c, ResultInvalid, credentialMethod(apiKey, authorization))
 
@@ -181,6 +198,15 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 
 				return next(c, req)
 			}
+			if res.unbound {
+				// A verified token no account is bound to, on a procedure that lets
+				// it in (ClaimInvite): there is an identity and no principal.
+				count(c, ResultOK, MethodJWT)
+				recordAuth(c, MethodJWT, "")
+				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(MethodJWT))
+
+				return next(contextx.WithExternalIdentity(c, *res.external), req)
+			}
 			count(c, ResultOK, p.Method)
 			recordAuth(c, p.Method, p.Subject)
 			trace.SpanFromContext(c).SetAttributes(
@@ -190,6 +216,10 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 			)
 			ctx := contextx.FromContext(c)
 			ctx = contextx.FromContext(contextx.WithLogger(ctx, ctx.With("sub", p.Subject)))
+
+			if res.external != nil {
+				ctx = contextx.FromContext(contextx.WithExternalIdentity(ctx, *res.external))
+			}
 
 			return next(contextx.WithPrincipal(ctx, p), req)
 		}
@@ -219,62 +249,140 @@ func credentialMethod(apiKey, authorization string) string {
 // errResolver marks a CredentialResolver failure (infrastructure, not the credential).
 var errResolver = errors.New("credential resolver")
 
+// errTokenRejected marks a bearer token the OIDC path refused (it did not
+// verify, or its account may not log in); errUnboundDenied marks a verified
+// token no account is bound to on a procedure that does not admit one. The
+// wrapped detail is for the log only.
+var (
+	errTokenRejected = errors.New("token rejected")
+	errUnboundDenied = errors.New("identity is not bound")
+)
+
+// outcome is what authenticate learned about a credential that verified.
+type outcome struct {
+	principal contextx.Principal
+	// external is the verified OIDC identity, set whenever the credential was an
+	// OIDC token (bound or not): ClaimInvite reads it from the context.
+	external *contextx.ExternalIdentity
+	// unbound: the token verified but no account is bound to it and the
+	// procedure admits that. principal is then the zero (anonymous) value.
+	unbound bool
+}
+
+// bounded runs one resolver call under auth.resolver_timeout. Auth sits
+// outside the timeout interceptor (the deadline is for validation + use
+// case), so the resolver's database read gets its own bound: a stuck database
+// rejects fast instead of holding every request and the shutdown drain. The
+// bound is only a bound for resolvers that honour their context; a late answer
+// is not a verified credential either way (the resolver may have ignored the
+// context, or won a race with it), so it is an errResolver failure.
+func bounded[T any](c context.Context, timeout time.Duration, call func(context.Context) (T, error)) (T, error) {
+	rc, cancel := c, func() {}
+	if timeout > 0 {
+		rc, cancel = context.WithTimeout(c, timeout)
+	}
+	v, err := call(rc)
+	deadlineErr := rc.Err() // read BEFORE cancel(): cancel() itself makes rc.Err() non-nil
+	cancel()
+	if err == nil && deadlineErr != nil {
+		var zero T
+
+		return zero, fmt.Errorf("%w: %w", errResolver, deadlineErr)
+	}
+
+	return v, err
+}
+
 // authenticate resolves the headers to a principal. found is false when no
 // credential was sent; err is set when one was sent and is invalid (or, wrapped
-// in errResolver, when the resolver could not answer).
-func (a *authenticator) authenticate(c context.Context, apiKey, authorization string) (contextx.Principal, bool, error) {
+// in errResolver, when a resolver could not answer). An API key wins over a
+// bearer token: with one present the bearer is never looked at.
+func (a *authenticator) authenticate(c context.Context, procedure, apiKey, authorization string) (outcome, bool, error) {
 	if apiKey != "" {
 		if a.keys == nil && a.resolver == nil {
-			return contextx.Principal{}, true, errors.New("api keys are not accepted")
+			return outcome{}, true, errors.New("api keys are not accepted")
 		}
 		if k, ok := a.keys[sha256.Sum256([]byte(apiKey))]; ok {
-			return contextx.Principal{Subject: k.name, Roles: k.roles, Method: MethodAPIKey}, true, nil
+			return outcome{principal: contextx.Principal{Subject: k.name, Roles: k.roles, Method: MethodAPIKey}}, true, nil
 		}
 		if a.resolver != nil {
-			// Auth sits outside the timeout interceptor (the deadline is for
-			// validation + use case), so the resolver's database read gets
-			// its own bound: a stuck database rejects fast instead of holding
-			// every request and the shutdown drain.
-			rc, cancel := c, func() {}
-			if a.resolverTimeout > 0 {
-				rc, cancel = context.WithTimeout(c, a.resolverTimeout)
+			type found struct {
+				p  contextx.Principal
+				ok bool
 			}
-			p, ok, err := a.resolver.ResolveAPIKey(rc, apiKey)
-			deadlineErr := rc.Err() // read BEFORE cancel(): cancel() itself makes rc.Err() non-nil
-			cancel()
-			switch {
-			case err != nil:
-				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, err)
-			case deadlineErr != nil:
-				// The deadline passed while the resolver was answering: a late
-				// success is not a verified credential (the resolver may have
-				// ignored the context, or won a race with it). The bound is only
-				// a bound for resolvers that honour their context; this keeps
-				// the decision honest either way.
-				return contextx.Principal{}, true, fmt.Errorf("%w: %w", errResolver, deadlineErr)
-			case ok:
-				p.Method = MethodAPIKey
+			f, err := bounded(c, a.resolverTimeout, func(rc context.Context) (found, error) {
+				p, ok, err := a.resolver.ResolveAPIKey(rc, apiKey)
 
-				return p, true, nil
+				return found{p, ok}, err
+			})
+			switch {
+			case errors.Is(err, errResolver):
+				return outcome{}, true, err
+			case err != nil:
+				return outcome{}, true, fmt.Errorf("%w: %w", errResolver, err)
+			case f.ok:
+				f.p.Method = MethodAPIKey
+
+				return outcome{principal: f.p}, true, nil
 			}
 		}
 
-		return contextx.Principal{}, true, errors.New("unknown api key")
+		return outcome{}, true, errors.New("unknown api key")
 	}
 	if authorization != "" {
 		scheme, token, _ := strings.Cut(authorization, " ")
-		if !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
-			return contextx.Principal{}, true, errors.New("authorization header is not a bearer token")
+		token = strings.TrimSpace(token)
+		if !strings.EqualFold(scheme, "Bearer") || token == "" {
+			return outcome{}, true, errors.New("authorization header is not a bearer token")
+		}
+		if a.oidc.enabled() {
+			id, err := a.oidc.Verifier.Verify(c, token)
+			switch {
+			case err == nil:
+				res, err := a.resolveExternal(c, procedure, id)
+
+				return res, true, err
+			case !errors.Is(err, oidc.ErrUnknownIssuer):
+				// The issuer is ours and the token is bad: final, never retried on auth.jwt.
+				return outcome{}, true, fmt.Errorf("%w: %w", errTokenRejected, err)
+			}
+			// An issuer OIDC does not know is auth.jwt's token (or nobody's).
 		}
 		if a.jwt == nil {
-			return contextx.Principal{}, true, errors.New("bearer tokens are not accepted")
+			return outcome{}, true, errors.New("bearer tokens are not accepted")
 		}
-		p, err := a.jwt.verify(strings.TrimSpace(token))
+		p, err := a.jwt.verify(token)
 
-		return p, true, err
+		return outcome{principal: p}, true, err
 	}
 
-	return contextx.Principal{}, false, nil
+	return outcome{}, false, nil
+}
+
+// resolveExternal maps a verified OIDC identity to its account's principal.
+func (a *authenticator) resolveExternal(c context.Context, procedure string, id oidc.Identity) (outcome, error) {
+	ext := contextx.ExternalIdentity{Issuer: id.Issuer, Subject: id.Subject, Email: id.Email, EmailVerified: id.EmailVerified, IssuedAt: id.IssuedAt}
+	p, err := bounded(c, a.resolverTimeout, func(rc context.Context) (contextx.Principal, error) {
+		return a.oidc.Resolver.ResolveExternal(rc, ext)
+	})
+	switch {
+	case err == nil:
+		p.Method = MethodJWT
+
+		return outcome{principal: p, external: &ext}, nil
+	case errors.Is(err, ErrUnboundIdentity):
+		if a.oidc.Resolver.AllowsUnbound(procedure) {
+			return outcome{external: &ext, unbound: true}, nil
+		}
+
+		return outcome{}, errUnboundDenied
+	case errors.Is(err, ErrCredentialRefused):
+		return outcome{}, fmt.Errorf("%w: %w", errTokenRejected, err)
+	case errors.Is(err, errResolver):
+		return outcome{}, err
+	default:
+		return outcome{}, fmt.Errorf("%w: %w", errResolver, err)
+	}
 }
 
 // parseAPIKeys reads "name=key[:role|role…][,name=key…]". Keys are kept and
