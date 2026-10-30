@@ -135,7 +135,7 @@ func TestStocksSKUCheck_Postgres(t *testing.T) {
 	}
 	var validated bool
 	if err := db.WithContext(c).Raw(`SELECT bool_and(convalidated) FROM pg_constraint WHERE conrelid = 'inventory.stocks'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%octet_length%'`).Scan(&validated).Error; err != nil || !validated {
-		t.Fatalf("CHECK validated = %v, %v; want VALIDATE CONSTRAINT to have run", validated, err)
+		t.Fatalf("CHECK validated = %v, %v; want a validated constraint", validated, err)
 	}
 
 	for name, sku := range map[string]string{"1 byte": "A", "64 bytes": strings.Repeat("a", 64), "21 chars of 3 bytes": strings.Repeat("中", 21)} {
