@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { CLIENT_ID, END_SESSION, collectConsole, mockIdp, signIn, stubConfig, webStorage } from "./oidc";
 import { subject } from "./helpers";
+import { ADMIN_KEY } from "../../playwright.config";
 
 // The life of an OIDC session (docs/identity-login.md §8): reload restores it from the refresh
 // token (rotation), the access token is renewed before it expires, a dead or unreachable IdP is
@@ -166,4 +167,24 @@ test("sign out without an end_session_endpoint (Dex) stays in the console", asyn
   await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/localhost:4174\/login/);
+});
+
+test("an API key chosen on top of an OIDC session replaces it: refresh token dropped, the key survives a reload", async ({ page }) => {
+  await stubConfig(page, { apiKeyLogin: true });
+  const idp = await mockIdp(page);
+  await page.goto("/login");
+  await signIn(page);
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+
+  await page.goto("/login"); // reachable while signed in (restored from the refresh token)
+  await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
+  await page.getByLabel("API key").fill(ADMIN_KEY);
+  await page.getByRole("button", { name: "Use API key" }).click();
+  await expect(subject(page)).toHaveText("api key");
+  for (const r of idp.refreshTokens) expect(await webStorage(page)).not.toContain(r);
+
+  const grants = refreshGrants(idp).length;
+  await page.reload();
+  await expect(subject(page)).toHaveText("api key");
+  expect(refreshGrants(idp)).toHaveLength(grants); // no silent OIDC refresh behind the key's back
 });
