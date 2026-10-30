@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
+import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { confirm, createCard, filterCard } from "./orders-ui";
 
@@ -8,12 +9,15 @@ import { confirm, createCard, filterCard } from "./orders-ui";
 
 test("the list links to the order; the page shows lines, cancels, and polls the status", async ({
   page,
+  request,
 }) => {
   const customer = `e2e-detail-${uid()}`;
   // With a worker, an order for a SKU nobody stocked is REJECTED and cancelled
   // by inventory before this test reaches its Cancel button — so seed stock for
   // a SKU of our own and the Reservation card gets to show RESERVED.
-  const sku = withDB ? `E2E-D-${uid()}` : "SKU-1";
+  // The price is the catalog's: a product of our own at 1299 minor USD.
+  const sku = `E2E-D-${uid()}`;
+  await seedProduct(request, sku);
   if (withDB) {
     await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
     await page.getByLabel("SKU", { exact: true }).fill(sku);
@@ -100,10 +104,14 @@ test("an unknown id is a not-found page, not an error", async ({ page }) => {
 
 test("the Order id box on /orders opens the page for a pasted id", async ({
   page,
+  request,
 }) => {
   const customer = `e2e-jump-${uid()}`;
+  const sku = `E2E-J-${uid()}`;
+  await seedProduct(request, sku);
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(customer);
+  await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByRole("button", { name: "Create order" }).click();
   await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();

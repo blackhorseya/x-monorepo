@@ -299,7 +299,7 @@ func TestOrderRepository_IdempotencyKey_Postgres(t *testing.T) {
 	}
 
 	got, err := repo.FindByIdempotencyKey(c, "c-1", "k")
-	if err != nil || got.ID() != "o-1" || got.IdempotencyKey() != "k" || got.RequestHash() != order.Fingerprint(got.Items()) {
+	if err != nil || got.ID() != "o-1" || got.IdempotencyKey() != "k" || got.RequestHash() != order.FingerprintV2([]order.RequestLine{mustLine(t, "A", 1)}) {
 		t.Fatalf("lookup = %v, %v", got, err)
 	}
 	if _, err := repo.FindByIdempotencyKey(c, "c-9", "k"); !errors.Is(err, order.ErrNotFound) {
@@ -332,4 +332,14 @@ func TestOrderRepository_IdempotencyKey_Postgres(t *testing.T) {
 	if again, err := repo.FindByIdempotencyKey(c, "c-1", "k"); err != nil || again.Status() != order.StatusCancelled {
 		t.Fatalf("after update: %v, %v", again, err)
 	}
+}
+
+func mustLine(t *testing.T, sku string, qty int32) order.RequestLine {
+	t.Helper()
+	l, err := order.NewRequestLine(sku, qty)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return l
 }

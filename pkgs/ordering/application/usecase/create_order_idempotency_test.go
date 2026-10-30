@@ -16,6 +16,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -62,10 +63,10 @@ func (r *lockedRecorder) created() int {
 	return n
 }
 
-func items(skus ...string) []dto.LineItem {
-	out := make([]dto.LineItem, 0, len(skus))
+func items(skus ...string) []dto.OrderLine {
+	out := make([]dto.OrderLine, 0, len(skus))
 	for _, s := range skus {
-		out = append(out, dto.LineItem{SKU: s, Quantity: 1, UnitPrice: dto.Money{AmountMinor: 500, Currency: "USD"}})
+		out = append(out, dto.OrderLine{SKU: s, Quantity: 1})
 	}
 
 	return out
@@ -85,7 +86,7 @@ func newIdemFixture(repo order.Repository) idemFixture {
 	own := ownership.New(adminRole)
 
 	f := idemFixture{
-		create: usecase.NewCreateOrder(repo, events, atomicIDs{}, clock, own),
+		create: usecase.NewCreateOrder(repo, events, atomicIDs{}, clock, own, memory.NewFlatPriceList(500, "USD")),
 		list:   usecase.NewListOrders(repo, own),
 		events: events,
 	}
@@ -196,7 +197,7 @@ func TestCreateOrder_IdempotencyKey(t *testing.T) {
 			}
 		})
 
-		t.Run("quantity and price are part of the request", func(t *testing.T) {
+		t.Run("quantity is part of the request", func(t *testing.T) {
 			f := newIdemFixture(repo)
 			base := dto.CreateOrderInput{Items: items("SKU-1"), IdempotencyKey: "k-fields"}
 			if _, err := f.create.Execute(as(alice), base); err != nil {
@@ -205,9 +206,7 @@ func TestCreateOrder_IdempotencyKey(t *testing.T) {
 
 			qty := dto.CreateOrderInput{Items: items("SKU-1"), IdempotencyKey: "k-fields"}
 			qty.Items[0].Quantity = 2
-			price := dto.CreateOrderInput{Items: items("SKU-1"), IdempotencyKey: "k-fields"}
-			price.Items[0].UnitPrice.AmountMinor = 501
-			for name, in := range map[string]dto.CreateOrderInput{"quantity": qty, "price": price} {
+			for name, in := range map[string]dto.CreateOrderInput{"quantity": qty} {
 				if _, err := f.create.Execute(as(alice), in); !errors.Is(err, order.ErrIdempotencyKeyReused) {
 					t.Fatalf("%s change err = %v, want ErrIdempotencyKeyReused", name, err)
 				}
@@ -391,7 +390,7 @@ func TestCreateOrder_IdempotencyKey_Outbox(t *testing.T) {
 	own := ownership.New(adminRole)
 	clock := fixedClock{t: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)}
 	create := usecasex.Chain[dto.CreateOrderInput, *dto.OrderOutput](
-		usecase.NewCreateOrder(postgres.NewOrderRepository(db), events.NewPublisher(pub), atomicIDs{}, clock, own),
+		usecase.NewCreateOrder(postgres.NewOrderRepository(db), events.NewPublisher(pub), atomicIDs{}, clock, own, memory.NewFlatPriceList(500, "USD")),
 		usecasex.Transactional[dto.CreateOrderInput, *dto.OrderOutput](postgres.NewTransactor(db)),
 	)
 

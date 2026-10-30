@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { withDB } from "./mode";
+import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { cellUnder, createCard, filterCard } from "./orders-ui";
 
@@ -64,12 +65,13 @@ test("detail: Complete asks first and declining sends nothing", async ({ page })
   await expect.poll(() => completes.length).toBe(1);
 });
 
-test("list: Cancel asks first; declining leaves the order PENDING", async ({ page }) => {
+test("list: Cancel asks first; declining leaves the order PENDING", async ({ page, request }) => {
   const customer = `e2e-confirm-${uid()}`;
   // With a worker, an order for a SKU nobody stocked is REJECTED and cancelled by inventory, so
   // its Cancel button vanishes whenever the worker beats the click. Stock a SKU of our own, as
   // orders.spec.ts does; the order then settles at CONFIRMED and stays cancellable.
-  const sku = withDB ? `E2E-C-${uid()}` : "SKU-1";
+  const sku = `E2E-C-${uid()}`;
+  await seedProduct(request, sku);
   if (withDB) {
     await page.goto(`/stock?prefix=${sku}`);
     await page.getByLabel("SKU", { exact: true }).fill(sku);

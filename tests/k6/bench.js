@@ -28,7 +28,7 @@ import http from "k6/http";
 import exec from "k6/execution";
 import { sleep } from "k6";
 import { Counter, Trend } from "k6/metrics";
-import { rpc, ok, sku, setStock, createOrder, customer, statusTag, systemTags, throwOnError } from "./lib.js";
+import { rpc, ok, sku, setStock, upsertProduct, createOrder, customer, statusTag, systemTags, throwOnError } from "./lib.js";
 import { RESERVATION_STATUSES } from "./codes.js";
 
 // GetReservation is 404 until the worker has consumed the order: the poll's "not yet".
@@ -97,6 +97,7 @@ export const options = {
 export function setup() {
   for (let i = 0; i < SKUS; i++) {
     setStock(i, 10_000_000);
+    upsertProduct(i, 1000); // CreateOrder prices its lines from the catalog
   }
 }
 
@@ -118,7 +119,6 @@ function order() {
       {
         sku: sku(Math.floor(rand() * SKUS)),
         quantity: 1,
-        unit_price: { amount_minor: 1000, currency: "USD" },
       },
     ],
   };

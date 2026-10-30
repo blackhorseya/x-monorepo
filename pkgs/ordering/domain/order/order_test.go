@@ -76,7 +76,7 @@ func TestNew(t *testing.T) {
 		{name: "empty id", id: "", customer: "c-1", items: []order.LineItem{mustItem(t, "SKU-1", 1, usd)}, wantErr: order.ErrInvalidID},
 		{name: "empty customer", id: "o-1", customer: "", items: []order.LineItem{mustItem(t, "SKU-1", 1, usd)}, wantErr: order.ErrEmptyCustomer},
 		{name: "no items", id: "o-1", customer: "c-1", wantErr: order.ErrNoItems},
-		{name: "mixed currency", id: "o-1", customer: "c-1", items: []order.LineItem{mustItem(t, "SKU-1", 1, usd), mustItem(t, "SKU-2", 1, twd)}, wantErr: kernel.ErrCurrencyMismatch},
+		{name: "mixed currency", id: "o-1", customer: "c-1", items: []order.LineItem{mustItem(t, "SKU-1", 1, usd), mustItem(t, "SKU-2", 1, twd)}, wantErr: order.ErrMixedCurrency},
 	}
 
 	for _, tt := range tests {

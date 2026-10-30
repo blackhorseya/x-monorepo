@@ -34,13 +34,13 @@ func TestConfirmThenCancel(t *testing.T) {
 	repo := memory.NewOrderRepository()
 	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
+	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	confirm := usecase.NewConfirmOrder(repo, rec, clock)
 	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
-		Items:      []dto.LineItem{{SKU: "SKU-1", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 500, Currency: "USD"}}},
+		Items:      []dto.OrderLine{{SKU: "SKU-1", Quantity: 1}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -82,14 +82,14 @@ func TestCompleteOrder(t *testing.T) {
 	repo := memory.NewOrderRepository()
 	clock := fixedClock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
+	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	confirm := usecase.NewConfirmOrder(repo, rec, clock)
 	complete := usecase.NewCompleteOrder(repo, rec, clock, ownership.New("admin"))
 	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
 
 	if _, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
-		Items:      []dto.LineItem{{SKU: "SKU-1", Quantity: 1, UnitPrice: dto.Money{AmountMinor: 500, Currency: "USD"}}},
+		Items:      []dto.OrderLine{{SKU: "SKU-1", Quantity: 1}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -134,14 +134,14 @@ func TestCreateGetCancel(t *testing.T) {
 	clock := fixedClock{t: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
 
 	rec := &recorder{}
-	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"))
+	create := usecase.NewCreateOrder(repo, rec, fixedIDs{id: "o-1"}, clock, ownership.New("admin"), memory.NewFlatPriceList(500, "USD"))
 	get := usecase.NewGetOrder(repo, ownership.New("admin"))
 	cancel := usecase.NewCancelOrder(repo, rec, clock, ownership.New("admin"))
 
 	created, err := create.Execute(c, dto.CreateOrderInput{
 		CustomerID: "c-1",
-		Items: []dto.LineItem{
-			{SKU: "SKU-1", Quantity: 3, UnitPrice: dto.Money{AmountMinor: 500, Currency: "USD"}},
+		Items: []dto.OrderLine{
+			{SKU: "SKU-1", Quantity: 3},
 		},
 	})
 	if err != nil {

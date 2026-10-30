@@ -5,7 +5,7 @@
 `pkgs/catalog` 是第四個 bounded context：**商品價格的 server 端來源**。`Product` = SKU + 名稱 + 價格（`kernel.Money`，每個 product 各自的幣別）+ 是否在售。
 和 identity 一樣沒有 event（沒有 consumer / events adapter / outbox / inbox / poison），所以 `apps/worker` 與 `NewPoisonService` 都不用碰它。
 
-> 目前 **ordering 還沒接它**：`CreateOrder` 的單價仍由呼叫端提供（`LineItem.unit_price`）。這個 BC 先獨立上線；ordering 改用 server 定價是後續的變更。
+> **ordering 用它定價**：`CreateOrder` 只收 sku 和 quantity，單價由 `QuotePrices` 查出來、寫成訂單明細上的快照（見下面「ordering 怎麼用它」）。
 
 ## 模型
 
@@ -31,7 +31,7 @@ Domain 方法反映行為：`Rename`、`Reprice`、`Deactivate`、`Activate`。`
 非 admin → `PERMISSION_DENIED` + `auth.permission_denied`，沒帶 credential → `UNAUTHENTICATED`，`auth.mode: off` 全開（和 `InventoryService.SetStock` 同一個 gate：`server.RequireRole`）。
 請求的形狀（金額不得為負、幣別 `^[A-Z]{3}$`、價格必填、sku / name 長度）由 protovalidate 擋（`request.validation_failed`），domain 仍保留同樣的不變量。
 
-## 批次報價（給 ordering 用的 port 來源）
+## 批次報價 `QuotePrices`
 
 `usecase.QuotePrices`（`provider.go` 的 `ProvideQuotePrices`，型別 `catalog.QuotePricesUC`）一次查多個 SKU（一次 query：`sku IN (…)`），
 回答每個被問到的 SKU **恰好一次**，而且分得出三種結果：
@@ -42,8 +42,34 @@ Domain 方法反映行為：`Rename`、`Reprice`、`Deactivate`、`Activate`。`
 | `Missing` | 沒有任何 product 的 SKU（多半是打錯） |
 | `Inactive` | product 存在但已下架 |
 
-`Missing` / `Inactive` 保持輸入順序、重複的 SKU 只算一次；空 SKU 字串 → `product.invalid_sku`。ordering 要用時，在它的 application/port 定義自己的報價 interface，
-由 apps 或 ordering 的 adapter 接到這個 use case（BC 之間不直接 import，見 README 的 Dependency rules）。
+`Missing` / `Inactive` 保持輸入順序、重複的 SKU 只算一次；空 SKU 字串 → `product.invalid_sku`。
+
+它也是一支 RPC：`CatalogService.QuotePrices`（1–100 個 SKU，回 `prices` map、`missing`、`inactive`），**讀取，不檢查 role**。
+
+## ordering 怎麼用它
+
+`CreateOrder` 的 request 行是 `ordering.v1.CreateOrderItem {sku, quantity}`；舊的 `unit_price`（欄位 3、名稱 `unit_price`）已 `reserved`。
+
+- ordering 在 `application/port` 定義 consumer 端的 `PriceQuoter`；`ordering/adapters/pricing` 實作它，**只 import catalog 的 `contract/`**：它呼叫的是 `catalogv1connect.CatalogServiceHandler`。
+  `apps/rpc/wire.go` 把這個 interface `wire.Bind` 到 catalog 自己的 `*rpc.CatalogService`——同一個 process 內直接呼叫，沒有網路、沒有 interceptor（讀取本來就不檢查 role），
+  而且和 `CreateOrder` 在同一個 transaction（catalog 的 repo 從 context 拿到同一個 tx）。BC 之間仍沒有任何 domain / application / infra 的 import。
+- 一張單問 catalog **一次**（去重後的 SKU）。任何 SKU 報不出價 → 整張單被拒：`order.unknown_sku` / `order.inactive_sku`（`INVALID_ARGUMENT`，沒寫入）；兩種幣別 → `order.mixed_currency`。catalog 自己壞了 → infra error（不是 domain error，client 看到 `INTERNAL`、可重試）。
+- 價格寫進訂單明細（`ordering.order_items`）當**快照**：之後 `UpsertProduct` 改價（甚至換幣別）不影響已成立的訂單，`GetOrder` 永遠回成交當下的價格。
+- **冪等**：`request_hash` 現在是 v2 指紋（`"v2:" + sha256(sku, quantity, …)`，價格不在請求裡所以不在指紋裡）。重送時**先**用 key 找原訂單，找到就直接回放，**不問 catalog**——商品之後被改價或下架也一樣回原單。
+  建單前被拒（`unknown_sku` 等）不花 key。v2 之前的訂單存的是 v1 指紋（含呼叫端給的單價）：`Order.IsReplayOf` 看到沒有 `v2:` 前綴的 hash，就拿重送的 sku / quantity 加上**這張訂單自己的快照價**重算 v1 比對，所以舊 key 的重送行為完全不變（同樣的 sku / quantity 序列 → 回放，其他 → `order.idempotency_key_reused`）。
+
+## Breaking：舊 client 還送 `unit_price` 會怎樣
+
+實測（`apps/rpc/order_pricing_test.go`，connect-go 的實際行為）：**呼叫成功，單價被忽略，價格是 catalog 的**。
+
+| 協定 | 舊 client 送 | server 的行為 |
+|---|---|---|
+| JSON（`unit_price` 或 `unitPrice`） | 多一個 `unit_price` 物件 | connect-go 的 JSON codec 丟棄未知欄位（`DiscardUnknown`）→ 200，價格取自 catalog |
+| binary（proto / gRPC / gRPC-Web） | 欄位 3 | 當作未知欄位保留不讀 → 200，價格取自 catalog |
+
+編號 1、2（`sku`、`quantity`）沒變，所以 wire 相容；壞掉的是**編譯期**：Go / TS 的型別從 `LineItem` 變成 `CreateOrderItem`，沒有 `unit_price` 欄位可填（`buf breaking` 會警告）。
+真正會讓舊 client 失敗的是：它下單的 SKU 在 catalog 裡不存在或已下架（`order.unknown_sku` / `order.inactive_sku`）——**上線前先用 `UpsertProduct` 把在賣的 SKU 都建起來**。
+`task run` 的 in-memory 模式也一樣：沒有 product 就下不了單。
 
 ## 儲存
 

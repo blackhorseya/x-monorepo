@@ -17,6 +17,9 @@ export const file_ordering_v1_entity: GenFile = /*@__PURE__*/
   fileDesc("ChhvcmRlcmluZy92MS9lbnRpdHkucHJvdG8SC29yZGVyaW5nLnYxIlUKCExpbmVJdGVtEg0KA3NrdRgBIAEoCUIAEhIKCHF1YW50aXR5GAIgASgFQgASJgoKdW5pdF9wcmljZRgDIAEoCzIQLmNvbW1vbi52MS5Nb25leUIAIvsBCgVPcmRlchIKCgJpZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIkCgVpdGVtcxgDIAMoCzIVLm9yZGVyaW5nLnYxLkxpbmVJdGVtEh8KBXRvdGFsGAQgASgLMhAuY29tbW9uLnYxLk1vbmV5EigKBnN0YXR1cxgFIAEoDjIYLm9yZGVyaW5nLnYxLk9yZGVyU3RhdHVzEi8KC2NyZWF0ZV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAqmQEKC09yZGVyU3RhdHVzEhwKGE9SREVSX1NUQVRVU19VTlNQRUNJRklFRBAAEhgKFE9SREVSX1NUQVRVU19QRU5ESU5HEAESGgoWT1JERVJfU1RBVFVTX0NBTkNFTExFRBACEhoKFk9SREVSX1NUQVRVU19DT05GSVJNRUQQAxIaChZPUkRFUl9TVEFUVVNfQ09NUExFVEVEEARiBnByb3RvMw", [file_common_v1_money, file_google_protobuf_timestamp]);
 
 /**
+ * LineItem is one line of an Order. unit_price is the snapshot of the catalog
+ * price at the moment the order was placed: a later reprice does not change it.
+ *
  * @generated from message ordering.v1.LineItem
  */
 export type LineItem = Message<"ordering.v1.LineItem"> & {

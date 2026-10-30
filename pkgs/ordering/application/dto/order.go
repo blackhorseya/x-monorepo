@@ -15,11 +15,27 @@ type LineItem struct {
 	UnitPrice Money
 }
 
+// OrderLine is one line of a CreateOrder request: what and how many. The price is not the
+// caller's to give; the use case asks the catalog.
+type OrderLine struct {
+	SKU      string
+	Quantity int32
+}
+
 type CreateOrderInput struct {
 	CustomerID string
-	Items      []LineItem
+	Items      []OrderLine
 	// IdempotencyKey, when set, makes CreateOrder safe to retry: see usecase.CreateOrder.
 	IdempotencyKey string
+}
+
+// PriceQuote is the catalog's answer for a set of SKUs: the price of each active product,
+// and the SKUs it cannot quote, split into those it has no product for (Missing) and those
+// taken off sale (Inactive), in the order asked.
+type PriceQuote struct {
+	Prices   map[string]Money
+	Missing  []string
+	Inactive []string
 }
 
 type GetOrderInput struct {

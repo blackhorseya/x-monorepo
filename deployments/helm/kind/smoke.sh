@@ -40,8 +40,10 @@ echo "smoke: dex discovery resolves in-cluster as $issuer"
 rpc() { curl -fsS -H 'Content-Type: application/json' "$api/$1" -d "$2"; }
 sku="kind-$(date +%s)"
 rpc inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}" >/dev/null
+# CreateOrder prices its lines from the catalog: the SKU has to be a product first.
+rpc catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}" >/dev/null
 order=$(rpc ordering.v1.OrderService/CreateOrder \
-  "{\"customer_id\":\"smoke\",\"items\":[{\"sku\":\"$sku\",\"quantity\":3,\"unit_price\":{\"amount_minor\":100,\"currency\":\"USD\"}}]}" \
+  "{\"customer_id\":\"smoke\",\"items\":[{\"sku\":\"$sku\",\"quantity\":3}]}" \
   | jq -r .order.id)
 [ -n "$order" ] && [ "$order" != null ] || { echo "smoke: CreateOrder returned no id"; exit 1; }
 

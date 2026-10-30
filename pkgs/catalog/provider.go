@@ -1,6 +1,7 @@
 // Package catalog is the catalog bounded context: the server-side source of
 // product prices (SKU, name, price with its own currency, active). It
-// publishes no events and consumes none. ProviderSet is its only export to
+// publishes no events and consumes none; ordering prices its orders through its
+// QuotePrices RPC. ProviderSet is its only export to
 // composition roots (apps/*).
 package catalog
 
@@ -11,7 +12,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
-	"github.com/blackhorseya/x-monorepo/pkgs/catalog/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/application/usecase"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/domain/product"
@@ -99,10 +99,8 @@ func ProvideDeactivateProduct(products product.Repository, clock port.Clock, tx 
 	return decorateTx("catalog.deactivate_product", rec, tx, usecase.NewDeactivateProduct(products, clock))
 }
 
-// QuotePricesUC is the batch price lookup other bounded contexts will be wired
-// to through a port of their own (a later change: ordering does not use it yet).
-type QuotePricesUC = usecasex.UseCase[dto.QuotePricesInput, *dto.QuotePricesOutput]
-
-func ProvideQuotePrices(products product.Repository, rec *usecasex.Recorder) QuotePricesUC {
+// ProvideQuotePrices is the batch price lookup other bounded contexts ask for through
+// CatalogService.QuotePrices (ordering's adapters/pricing, in process).
+func ProvideQuotePrices(products product.Repository, rec *usecasex.Recorder) rpc.QuotePricesUC {
 	return decorate("catalog.quote_prices", rec, usecase.NewQuotePrices(products))
 }

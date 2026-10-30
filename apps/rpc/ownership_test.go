@@ -12,7 +12,6 @@ import (
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
@@ -50,8 +49,9 @@ func TestOrdering_Ownership(t *testing.T) {
 		}
 		return orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL, opts...)
 	}
+	seedProduct(t, ts.URL, "ops-key-0123456789abc", "SKU-1", 100, "USD")
 	alice, bob, ops, decoy, anon := client("alice-key-0123456789"), client("bob-key-0123456789"), client("ops-key-0123456789abc"), client("decoy-key-0123456789ab"), client("")
-	items := []*orderingv1.LineItem{{Sku: "SKU-1", Quantity: 1, UnitPrice: &commonv1.Money{AmountMinor: 100, Currency: "USD"}}}
+	items := []*orderingv1.CreateOrderItem{{Sku: "SKU-1", Quantity: 1}}
 	place := func(cl orderingv1connect.OrderServiceClient, customer string) (*orderingv1.Order, error) {
 		res, err := cl.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: customer, Items: items}))
 		if err != nil {

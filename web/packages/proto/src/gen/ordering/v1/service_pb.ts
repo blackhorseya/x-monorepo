@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv1";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv1";
-import type { LineItem, Order, OrderStatus } from "./entity_pb";
+import type { Order, OrderStatus } from "./entity_pb";
 import { file_ordering_v1_entity } from "./entity_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/service.proto.
  */
 export const file_ordering_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChlvcmRlcmluZy92MS9zZXJ2aWNlLnByb3RvEgtvcmRlcmluZy52MSJsChJDcmVhdGVPcmRlclJlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSJgoFaXRlbXMYAiADKAsyFS5vcmRlcmluZy52MS5MaW5lSXRlbUIAEhkKD2lkZW1wb3RlbmN5X2tleRgDIAEoCUIAIjgKE0NyZWF0ZU9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciIfCg9HZXRPcmRlclJlcXVlc3QSDAoCaWQYASABKAlCACI1ChBHZXRPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiIgoSQ2FuY2VsT3JkZXJSZXF1ZXN0EgwKAmlkGAEgASgJQgAiOAoTQ2FuY2VsT3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiQKFENvbXBsZXRlT3JkZXJSZXF1ZXN0EgwKAmlkGAEgASgJQgAiOgoVQ29tcGxldGVPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiewoRTGlzdE9yZGVyc1JlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSKAoGc3RhdHVzGAIgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSEwoJcGFnZV9zaXplGAMgASgFQgASEgoKcGFnZV90b2tlbhgEIAEoCSJRChJMaXN0T3JkZXJzUmVzcG9uc2USIgoGb3JkZXJzGAEgAygLMhIub3JkZXJpbmcudjEuT3JkZXISFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJMqIDCgxPcmRlclNlcnZpY2USUAoLQ3JlYXRlT3JkZXISHy5vcmRlcmluZy52MS5DcmVhdGVPcmRlclJlcXVlc3QaIC5vcmRlcmluZy52MS5DcmVhdGVPcmRlclJlc3BvbnNlEkcKCEdldE9yZGVyEhwub3JkZXJpbmcudjEuR2V0T3JkZXJSZXF1ZXN0Gh0ub3JkZXJpbmcudjEuR2V0T3JkZXJSZXNwb25zZRJQCgtDYW5jZWxPcmRlchIfLm9yZGVyaW5nLnYxLkNhbmNlbE9yZGVyUmVxdWVzdBogLm9yZGVyaW5nLnYxLkNhbmNlbE9yZGVyUmVzcG9uc2USVgoNQ29tcGxldGVPcmRlchIhLm9yZGVyaW5nLnYxLkNvbXBsZXRlT3JkZXJSZXF1ZXN0GiIub3JkZXJpbmcudjEuQ29tcGxldGVPcmRlclJlc3BvbnNlEk0KCkxpc3RPcmRlcnMSHi5vcmRlcmluZy52MS5MaXN0T3JkZXJzUmVxdWVzdBofLm9yZGVyaW5nLnYxLkxpc3RPcmRlcnNSZXNwb25zZWIGcHJvdG8z", [file_ordering_v1_entity]);
+  fileDesc("ChlvcmRlcmluZy92MS9zZXJ2aWNlLnByb3RvEgtvcmRlcmluZy52MSJzChJDcmVhdGVPcmRlclJlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSLQoFaXRlbXMYAiADKAsyHC5vcmRlcmluZy52MS5DcmVhdGVPcmRlckl0ZW1CABIZCg9pZGVtcG90ZW5jeV9rZXkYAyABKAlCACJGCg9DcmVhdGVPcmRlckl0ZW0SDQoDc2t1GAEgASgJQgASEgoIcXVhbnRpdHkYAiABKAVCAEoECAMQBFIKdW5pdF9wcmljZSI4ChNDcmVhdGVPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiHwoPR2V0T3JkZXJSZXF1ZXN0EgwKAmlkGAEgASgJQgAiNQoQR2V0T3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiIKEkNhbmNlbE9yZGVyUmVxdWVzdBIMCgJpZBgBIAEoCUIAIjgKE0NhbmNlbE9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciIkChRDb21wbGV0ZU9yZGVyUmVxdWVzdBIMCgJpZBgBIAEoCUIAIjoKFUNvbXBsZXRlT3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyInsKEUxpc3RPcmRlcnNSZXF1ZXN0EhMKC2N1c3RvbWVyX2lkGAEgASgJEigKBnN0YXR1cxgCIAEoDjIYLm9yZGVyaW5nLnYxLk9yZGVyU3RhdHVzEhMKCXBhZ2Vfc2l6ZRgDIAEoBUIAEhIKCnBhZ2VfdG9rZW4YBCABKAkiUQoSTGlzdE9yZGVyc1Jlc3BvbnNlEiIKBm9yZGVycxgBIAMoCzISLm9yZGVyaW5nLnYxLk9yZGVyEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCTKiAwoMT3JkZXJTZXJ2aWNlElAKC0NyZWF0ZU9yZGVyEh8ub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXF1ZXN0GiAub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXNwb25zZRJHCghHZXRPcmRlchIcLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVxdWVzdBodLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVzcG9uc2USUAoLQ2FuY2VsT3JkZXISHy5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlc3BvbnNlElYKDUNvbXBsZXRlT3JkZXISIS5vcmRlcmluZy52MS5Db21wbGV0ZU9yZGVyUmVxdWVzdBoiLm9yZGVyaW5nLnYxLkNvbXBsZXRlT3JkZXJSZXNwb25zZRJNCgpMaXN0T3JkZXJzEh4ub3JkZXJpbmcudjEuTGlzdE9yZGVyc1JlcXVlc3QaHy5vcmRlcmluZy52MS5MaXN0T3JkZXJzUmVzcG9uc2ViBnByb3RvMw", [file_ordering_v1_entity]);
 
 /**
  * @generated from message ordering.v1.CreateOrderRequest
@@ -28,9 +28,15 @@ export type CreateOrderRequest = Message<"ordering.v1.CreateOrderRequest"> & {
   customerId: string;
 
   /**
-   * @generated from field: repeated ordering.v1.LineItem items = 2;
+   * What to buy: sku and quantity only. The unit price is the catalog's
+   * (catalog.v1.CatalogService), read when the order is placed and stored on
+   * the order's lines as a snapshot; an unknown or inactive SKU is
+   * INVALID_ARGUMENT (order.unknown_sku / order.inactive_sku) and one order
+   * cannot mix currencies (order.mixed_currency).
+   *
+   * @generated from field: repeated ordering.v1.CreateOrderItem items = 2;
    */
-  items: LineItem[];
+  items: CreateOrderItem[];
 
   /**
    * Optional retry token (1-64 visible ASCII characters). Empty = no protection:
@@ -53,6 +59,35 @@ export const CreateOrderRequestSchema: GenMessage<CreateOrderRequest> = /*@__PUR
   messageDesc(file_ordering_v1_service, 0);
 
 /**
+ * CreateOrderItem is one line of a CreateOrder request. It used to be
+ * ordering.v1.LineItem with a caller-supplied unit_price (field 3); the price now
+ * comes from the catalog, so the field is gone. The numbers of sku and quantity
+ * are unchanged, so an old client keeps working on the wire: a field 3 it still
+ * sends is an unknown field, ignored by the binary codecs, and discarded by
+ * connect-go's JSON codec (see apps/rpc/order_pricing_test.go).
+ *
+ * @generated from message ordering.v1.CreateOrderItem
+ */
+export type CreateOrderItem = Message<"ordering.v1.CreateOrderItem"> & {
+  /**
+   * @generated from field: string sku = 1;
+   */
+  sku: string;
+
+  /**
+   * @generated from field: int32 quantity = 2;
+   */
+  quantity: number;
+};
+
+/**
+ * Describes the message ordering.v1.CreateOrderItem.
+ * Use `create(CreateOrderItemSchema)` to create a new message.
+ */
+export const CreateOrderItemSchema: GenMessage<CreateOrderItem> = /*@__PURE__*/
+  messageDesc(file_ordering_v1_service, 1);
+
+/**
  * @generated from message ordering.v1.CreateOrderResponse
  */
 export type CreateOrderResponse = Message<"ordering.v1.CreateOrderResponse"> & {
@@ -67,7 +102,7 @@ export type CreateOrderResponse = Message<"ordering.v1.CreateOrderResponse"> & {
  * Use `create(CreateOrderResponseSchema)` to create a new message.
  */
 export const CreateOrderResponseSchema: GenMessage<CreateOrderResponse> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 1);
+  messageDesc(file_ordering_v1_service, 2);
 
 /**
  * @generated from message ordering.v1.GetOrderRequest
@@ -84,7 +119,7 @@ export type GetOrderRequest = Message<"ordering.v1.GetOrderRequest"> & {
  * Use `create(GetOrderRequestSchema)` to create a new message.
  */
 export const GetOrderRequestSchema: GenMessage<GetOrderRequest> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 2);
+  messageDesc(file_ordering_v1_service, 3);
 
 /**
  * @generated from message ordering.v1.GetOrderResponse
@@ -101,7 +136,7 @@ export type GetOrderResponse = Message<"ordering.v1.GetOrderResponse"> & {
  * Use `create(GetOrderResponseSchema)` to create a new message.
  */
 export const GetOrderResponseSchema: GenMessage<GetOrderResponse> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 3);
+  messageDesc(file_ordering_v1_service, 4);
 
 /**
  * @generated from message ordering.v1.CancelOrderRequest
@@ -118,7 +153,7 @@ export type CancelOrderRequest = Message<"ordering.v1.CancelOrderRequest"> & {
  * Use `create(CancelOrderRequestSchema)` to create a new message.
  */
 export const CancelOrderRequestSchema: GenMessage<CancelOrderRequest> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 4);
+  messageDesc(file_ordering_v1_service, 5);
 
 /**
  * @generated from message ordering.v1.CancelOrderResponse
@@ -135,7 +170,7 @@ export type CancelOrderResponse = Message<"ordering.v1.CancelOrderResponse"> & {
  * Use `create(CancelOrderResponseSchema)` to create a new message.
  */
 export const CancelOrderResponseSchema: GenMessage<CancelOrderResponse> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 5);
+  messageDesc(file_ordering_v1_service, 6);
 
 /**
  * @generated from message ordering.v1.CompleteOrderRequest
@@ -152,7 +187,7 @@ export type CompleteOrderRequest = Message<"ordering.v1.CompleteOrderRequest"> &
  * Use `create(CompleteOrderRequestSchema)` to create a new message.
  */
 export const CompleteOrderRequestSchema: GenMessage<CompleteOrderRequest> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 6);
+  messageDesc(file_ordering_v1_service, 7);
 
 /**
  * @generated from message ordering.v1.CompleteOrderResponse
@@ -169,7 +204,7 @@ export type CompleteOrderResponse = Message<"ordering.v1.CompleteOrderResponse">
  * Use `create(CompleteOrderResponseSchema)` to create a new message.
  */
 export const CompleteOrderResponseSchema: GenMessage<CompleteOrderResponse> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 7);
+  messageDesc(file_ordering_v1_service, 8);
 
 /**
  * @generated from message ordering.v1.ListOrdersRequest
@@ -210,7 +245,7 @@ export type ListOrdersRequest = Message<"ordering.v1.ListOrdersRequest"> & {
  * Use `create(ListOrdersRequestSchema)` to create a new message.
  */
 export const ListOrdersRequestSchema: GenMessage<ListOrdersRequest> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 8);
+  messageDesc(file_ordering_v1_service, 9);
 
 /**
  * @generated from message ordering.v1.ListOrdersResponse
@@ -234,7 +269,7 @@ export type ListOrdersResponse = Message<"ordering.v1.ListOrdersResponse"> & {
  * Use `create(ListOrdersResponseSchema)` to create a new message.
  */
 export const ListOrdersResponseSchema: GenMessage<ListOrdersResponse> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 9);
+  messageDesc(file_ordering_v1_service, 10);
 
 /**
  * OrderService is the public RPC contract of the ordering bounded context.

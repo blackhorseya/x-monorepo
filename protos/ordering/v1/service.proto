@@ -38,7 +38,12 @@ message CreateOrderRequest {
   // only name themselves; an admin may name any customer; an anonymous caller
   // (auth off) must name one, else INVALID_ARGUMENT (order.empty_customer).
   string customer_id = 1;
-  repeated LineItem items = 2 [(buf.validate.field).repeated.min_items = 1];
+  // What to buy: sku and quantity only. The unit price is the catalog's
+  // (catalog.v1.CatalogService), read when the order is placed and stored on
+  // the order's lines as a snapshot; an unknown or inactive SKU is
+  // INVALID_ARGUMENT (order.unknown_sku / order.inactive_sku) and one order
+  // cannot mix currencies (order.mixed_currency).
+  repeated CreateOrderItem items = 2 [(buf.validate.field).repeated.min_items = 1];
   // Optional retry token (1-64 visible ASCII characters). Empty = no protection:
   // every call creates an order. With a key, retrying the same items returns the
   // original order as it is now (nothing is created or published again), and the
@@ -49,6 +54,20 @@ message CreateOrderRequest {
     max_len: 64
     pattern: "^[\\x21-\\x7E]*$"
   }];
+}
+
+// CreateOrderItem is one line of a CreateOrder request. It used to be
+// ordering.v1.LineItem with a caller-supplied unit_price (field 3); the price now
+// comes from the catalog, so the field is gone. The numbers of sku and quantity
+// are unchanged, so an old client keeps working on the wire: a field 3 it still
+// sends is an unknown field, ignored by the binary codecs, and discarded by
+// connect-go's JSON codec (see apps/rpc/order_pricing_test.go).
+message CreateOrderItem {
+  reserved 3;
+  reserved "unit_price";
+
+  string sku = 1 [(buf.validate.field).string.min_len = 1];
+  int32 quantity = 2 [(buf.validate.field).int32.gt = 0];
 }
 
 message CreateOrderResponse {

@@ -16,7 +16,7 @@
 import http from "k6/http";
 import { sleep } from "k6";
 import { Counter, Trend } from "k6/metrics";
-import { rpc, ok, sku, setStock, createOrder, customer, statusTag, systemTags, throwOnError } from "./lib.js";
+import { rpc, ok, sku, setStock, upsertProduct, createOrder, customer, statusTag, systemTags, throwOnError } from "./lib.js";
 import { ORDER_STATUSES, RESERVATION_STATUSES } from "./codes.js";
 
 // GetReservation is 404 (not_found) until the worker has consumed the order;
@@ -64,6 +64,7 @@ export const options = {
 export function setup() {
   for (let i = 0; i < SKUS; i++) {
     setStock(i, 1_000_000);
+    upsertProduct(i, 1000);
   }
 }
 
@@ -75,7 +76,6 @@ export default function () {
           {
             sku: sku(Math.floor(Math.random() * SKUS)),
             quantity: 1,
-            unit_price: { amount_minor: 1000, currency: "USD" },
           },
         ],
       },

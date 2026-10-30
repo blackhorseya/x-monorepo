@@ -10,17 +10,10 @@ import (
 
 // pb ↔ dto mapping. Validation is NOT done here; the use case / domain owns it.
 
-func toDTOItems(items []*orderingv1.LineItem) []dto.LineItem {
-	out := make([]dto.LineItem, 0, len(items))
+func toDTOItems(items []*orderingv1.CreateOrderItem) []dto.OrderLine {
+	out := make([]dto.OrderLine, 0, len(items))
 	for _, it := range items {
-		out = append(out, dto.LineItem{
-			SKU:      it.GetSku(),
-			Quantity: it.GetQuantity(),
-			UnitPrice: dto.Money{
-				AmountMinor: it.GetUnitPrice().GetAmountMinor(),
-				Currency:    it.GetUnitPrice().GetCurrency(),
-			},
-		})
+		out = append(out, dto.OrderLine{SKU: it.GetSku(), Quantity: it.GetQuantity()})
 	}
 
 	return out

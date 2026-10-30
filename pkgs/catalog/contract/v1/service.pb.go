@@ -420,6 +420,114 @@ func (x *DeactivateProductResponse) GetProduct() *Product {
 	return nil
 }
 
+type QuotePricesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 1 to 100 SKUs; duplicates are allowed and answered once.
+	Skus          []string `protobuf:"bytes,1,rep,name=skus,proto3" json:"skus,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QuotePricesRequest) Reset() {
+	*x = QuotePricesRequest{}
+	mi := &file_catalog_v1_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuotePricesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuotePricesRequest) ProtoMessage() {}
+
+func (x *QuotePricesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_catalog_v1_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuotePricesRequest.ProtoReflect.Descriptor instead.
+func (*QuotePricesRequest) Descriptor() ([]byte, []int) {
+	return file_catalog_v1_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *QuotePricesRequest) GetSkus() []string {
+	if x != nil {
+		return x.Skus
+	}
+	return nil
+}
+
+type QuotePricesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Active products only, by SKU.
+	Prices map[string]*v1.Money `protobuf:"bytes,1,rep,name=prices,proto3" json:"prices,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// SKUs no product exists for, in request order.
+	Missing []string `protobuf:"bytes,2,rep,name=missing,proto3" json:"missing,omitempty"`
+	// SKUs whose product was deactivated, in request order.
+	Inactive      []string `protobuf:"bytes,3,rep,name=inactive,proto3" json:"inactive,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QuotePricesResponse) Reset() {
+	*x = QuotePricesResponse{}
+	mi := &file_catalog_v1_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuotePricesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuotePricesResponse) ProtoMessage() {}
+
+func (x *QuotePricesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_catalog_v1_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuotePricesResponse.ProtoReflect.Descriptor instead.
+func (*QuotePricesResponse) Descriptor() ([]byte, []int) {
+	return file_catalog_v1_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *QuotePricesResponse) GetPrices() map[string]*v1.Money {
+	if x != nil {
+		return x.Prices
+	}
+	return nil
+}
+
+func (x *QuotePricesResponse) GetMissing() []string {
+	if x != nil {
+		return x.Missing
+	}
+	return nil
+}
+
+func (x *QuotePricesResponse) GetInactive() []string {
+	if x != nil {
+		return x.Inactive
+	}
+	return nil
+}
+
 var File_catalog_v1_service_proto protoreflect.FileDescriptor
 
 const file_catalog_v1_service_proto_rawDesc = "" +
@@ -449,13 +557,23 @@ const file_catalog_v1_service_proto_rawDesc = "" +
 	"\x18DeactivateProductRequest\x12\x19\n" +
 	"\x03sku\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x03sku\"J\n" +
 	"\x19DeactivateProductResponse\x12-\n" +
-	"\aproduct\x18\x01 \x01(\v2\x13.catalog.v1.ProductR\aproduct2\xe8\x02\n" +
+	"\aproduct\x18\x01 \x01(\v2\x13.catalog.v1.ProductR\aproduct\"<\n" +
+	"\x12QuotePricesRequest\x12&\n" +
+	"\x04skus\x18\x01 \x03(\tB\x12\xbaH\x0f\x92\x01\f\b\x01\x10d\"\x06r\x04\x10\x01\x18@R\x04skus\"\xdd\x01\n" +
+	"\x13QuotePricesResponse\x12C\n" +
+	"\x06prices\x18\x01 \x03(\v2+.catalog.v1.QuotePricesResponse.PricesEntryR\x06prices\x12\x18\n" +
+	"\amissing\x18\x02 \x03(\tR\amissing\x12\x1a\n" +
+	"\binactive\x18\x03 \x03(\tR\binactive\x1aK\n" +
+	"\vPricesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12&\n" +
+	"\x05value\x18\x02 \x01(\v2\x10.common.v1.MoneyR\x05value:\x028\x012\xb8\x03\n" +
 	"\x0eCatalogService\x12T\n" +
 	"\rUpsertProduct\x12 .catalog.v1.UpsertProductRequest\x1a!.catalog.v1.UpsertProductResponse\x12K\n" +
 	"\n" +
 	"GetProduct\x12\x1d.catalog.v1.GetProductRequest\x1a\x1e.catalog.v1.GetProductResponse\x12Q\n" +
 	"\fListProducts\x12\x1f.catalog.v1.ListProductsRequest\x1a .catalog.v1.ListProductsResponse\x12`\n" +
-	"\x11DeactivateProduct\x12$.catalog.v1.DeactivateProductRequest\x1a%.catalog.v1.DeactivateProductResponseB\xae\x01\n" +
+	"\x11DeactivateProduct\x12$.catalog.v1.DeactivateProductRequest\x1a%.catalog.v1.DeactivateProductResponse\x12N\n" +
+	"\vQuotePrices\x12\x1e.catalog.v1.QuotePricesRequest\x1a\x1f.catalog.v1.QuotePricesResponseB\xae\x01\n" +
 	"\x0ecom.catalog.v1B\fServiceProtoP\x01ZEgithub.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1;catalogv1\xa2\x02\x03CXX\xaa\x02\n" +
 	"Catalog.V1\xca\x02\n" +
 	"Catalog\\V1\xe2\x02\x16Catalog\\V1\\GPBMetadata\xea\x02\vCatalog::V1b\x06proto3"
@@ -472,7 +590,7 @@ func file_catalog_v1_service_proto_rawDescGZIP() []byte {
 	return file_catalog_v1_service_proto_rawDescData
 }
 
-var file_catalog_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_catalog_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_catalog_v1_service_proto_goTypes = []any{
 	(*UpsertProductRequest)(nil),      // 0: catalog.v1.UpsertProductRequest
 	(*UpsertProductResponse)(nil),     // 1: catalog.v1.UpsertProductResponse
@@ -482,28 +600,35 @@ var file_catalog_v1_service_proto_goTypes = []any{
 	(*ListProductsResponse)(nil),      // 5: catalog.v1.ListProductsResponse
 	(*DeactivateProductRequest)(nil),  // 6: catalog.v1.DeactivateProductRequest
 	(*DeactivateProductResponse)(nil), // 7: catalog.v1.DeactivateProductResponse
-	(*v1.Money)(nil),                  // 8: common.v1.Money
-	(*Product)(nil),                   // 9: catalog.v1.Product
+	(*QuotePricesRequest)(nil),        // 8: catalog.v1.QuotePricesRequest
+	(*QuotePricesResponse)(nil),       // 9: catalog.v1.QuotePricesResponse
+	nil,                               // 10: catalog.v1.QuotePricesResponse.PricesEntry
+	(*v1.Money)(nil),                  // 11: common.v1.Money
+	(*Product)(nil),                   // 12: catalog.v1.Product
 }
 var file_catalog_v1_service_proto_depIdxs = []int32{
-	8, // 0: catalog.v1.UpsertProductRequest.price:type_name -> common.v1.Money
-	9, // 1: catalog.v1.UpsertProductResponse.product:type_name -> catalog.v1.Product
-	9, // 2: catalog.v1.GetProductResponse.product:type_name -> catalog.v1.Product
-	9, // 3: catalog.v1.ListProductsResponse.products:type_name -> catalog.v1.Product
-	9, // 4: catalog.v1.DeactivateProductResponse.product:type_name -> catalog.v1.Product
-	0, // 5: catalog.v1.CatalogService.UpsertProduct:input_type -> catalog.v1.UpsertProductRequest
-	2, // 6: catalog.v1.CatalogService.GetProduct:input_type -> catalog.v1.GetProductRequest
-	4, // 7: catalog.v1.CatalogService.ListProducts:input_type -> catalog.v1.ListProductsRequest
-	6, // 8: catalog.v1.CatalogService.DeactivateProduct:input_type -> catalog.v1.DeactivateProductRequest
-	1, // 9: catalog.v1.CatalogService.UpsertProduct:output_type -> catalog.v1.UpsertProductResponse
-	3, // 10: catalog.v1.CatalogService.GetProduct:output_type -> catalog.v1.GetProductResponse
-	5, // 11: catalog.v1.CatalogService.ListProducts:output_type -> catalog.v1.ListProductsResponse
-	7, // 12: catalog.v1.CatalogService.DeactivateProduct:output_type -> catalog.v1.DeactivateProductResponse
-	9, // [9:13] is the sub-list for method output_type
-	5, // [5:9] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	11, // 0: catalog.v1.UpsertProductRequest.price:type_name -> common.v1.Money
+	12, // 1: catalog.v1.UpsertProductResponse.product:type_name -> catalog.v1.Product
+	12, // 2: catalog.v1.GetProductResponse.product:type_name -> catalog.v1.Product
+	12, // 3: catalog.v1.ListProductsResponse.products:type_name -> catalog.v1.Product
+	12, // 4: catalog.v1.DeactivateProductResponse.product:type_name -> catalog.v1.Product
+	10, // 5: catalog.v1.QuotePricesResponse.prices:type_name -> catalog.v1.QuotePricesResponse.PricesEntry
+	11, // 6: catalog.v1.QuotePricesResponse.PricesEntry.value:type_name -> common.v1.Money
+	0,  // 7: catalog.v1.CatalogService.UpsertProduct:input_type -> catalog.v1.UpsertProductRequest
+	2,  // 8: catalog.v1.CatalogService.GetProduct:input_type -> catalog.v1.GetProductRequest
+	4,  // 9: catalog.v1.CatalogService.ListProducts:input_type -> catalog.v1.ListProductsRequest
+	6,  // 10: catalog.v1.CatalogService.DeactivateProduct:input_type -> catalog.v1.DeactivateProductRequest
+	8,  // 11: catalog.v1.CatalogService.QuotePrices:input_type -> catalog.v1.QuotePricesRequest
+	1,  // 12: catalog.v1.CatalogService.UpsertProduct:output_type -> catalog.v1.UpsertProductResponse
+	3,  // 13: catalog.v1.CatalogService.GetProduct:output_type -> catalog.v1.GetProductResponse
+	5,  // 14: catalog.v1.CatalogService.ListProducts:output_type -> catalog.v1.ListProductsResponse
+	7,  // 15: catalog.v1.CatalogService.DeactivateProduct:output_type -> catalog.v1.DeactivateProductResponse
+	9,  // 16: catalog.v1.CatalogService.QuotePrices:output_type -> catalog.v1.QuotePricesResponse
+	12, // [12:17] is the sub-list for method output_type
+	7,  // [7:12] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_catalog_v1_service_proto_init() }
@@ -518,7 +643,7 @@ func file_catalog_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_catalog_v1_service_proto_rawDesc), len(file_catalog_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

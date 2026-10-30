@@ -36,9 +36,13 @@ task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自�
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
 
+# 下單的價格是 catalog 的：先讓 SKU 成為 product（寫入要 admin role；auth 關著就直接打）
+curl -X POST localhost:8080/api/catalog.v1.CatalogService/UpsertProduct \
+  -H 'Content-Type: application/json' \
+  -d '{"sku":"SKU-1","name":"Sample","price":{"amountMinor":"9000","currency":"USD"}}'
 curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
   -H 'Content-Type: application/json' \
-  -d '{"customerId":"c-1","items":[{"sku":"SKU-1","quantity":2,"unitPrice":{"amountMinor":"18000","currency":"USD"}}]}'
+  -d '{"customerId":"c-1","items":[{"sku":"SKU-1","quantity":2}]}'
 ```
 
 ## Layout
@@ -87,7 +91,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │       └── adapters/auth/         # 實作 platform 的 server.CredentialResolver（TTL cache），apps/rpc 以 wire.Bind 接上
 │   └── catalog/                   # ── 第四個 BC：商品價格的 server 端來源，沒有 event（docs/catalog.md）──
 │       ├── domain/product/        # Product aggregate（sku、name、price（每個 product 各自的幣別）、active、optimistic version）
-│       └── application/usecase/   # Upsert / Get / List / Deactivate + QuotePrices（批次報價，分得出不存在與已下架；ordering 尚未接）
+│       └── application/usecase/   # Upsert / Get / List / Deactivate + QuotePrices（批次報價，分得出不存在與已下架；ordering 的 `adapters/pricing` 經 contract 呼叫它）
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
@@ -107,7 +111,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 
 | 檔 | 內容 |
 |---|---|
-| [`docs/perf-baseline.md`](docs/perf-baseline.md) | 效能 baseline：`task k6-bench` 的重跑方法與 CreateOrder / reservation 的實測數字（不進 CI） |
+| [`docs/perf-baseline.md`](docs/perf-baseline.md) | 效能 baseline：`task k6-bench` 的重跑方法與 CreateOrder / reservation 的實測數字（不進 CI；乾淨環境用 `k6-bench` workflow_dispatch 取得） |
 | [`docs/ci.md`](docs/ci.md) | gates：hooks / lefthook / CI 各跑什麼、CI 的 job 與依路徑的 gating、相關 scripts |
 | [`docs/release.md`](docs/release.md) | release-drafter + goreleaser 的 release 鏈、release gate、簽名 / attestation 與驗證 |
 | [`docs/operations.md`](docs/operations.md) | Compose 本機環境（Grafana dashboards / alerts）、k6 load test、Helm 部署與 kind 實測 |
@@ -116,7 +120,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
-| [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、Console 的 Products 頁（ordering 尚未接） |
+| [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、ordering 怎麼用它定價、舊 client 還送 `unit_price` 會怎樣、Console 的 Products 頁 |
 | [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
@@ -232,7 +236,7 @@ bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`�
   （非 admin → `PERMISSION_DENIED` + `auth.permission_denied`，沒帶 credential → `UNAUTHENTICATED`；`auth.mode: off` 全開）；`GetStock` / `ListStocks` /
   reservation 的讀取不檢查 role。console 的 Stock 頁 Set 要用 admin key / JWT。
 - **Catalog 寫入要 admin**：`catalog.v1.CatalogService` 的 `UpsertProduct` 與 `DeactivateProduct`（它們決定客人被收多少錢）同一個 gate；`GetProduct` / `ListProducts` 不檢查 role。
-  console 的 Products 頁是 admin 頁。ordering 還沒用 catalog 的價格（見 `docs/catalog.md`）。
+  console 的 Products 頁是 admin 頁。**ordering 用 catalog 的價格**：`CreateOrder` 只收 sku / quantity，價格在建單時查出來、寫成明細快照（見 `docs/catalog.md`）。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `auth.admin_role`
@@ -274,7 +278,7 @@ Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED
 cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的那邊 reload 後被狀態機拒絕，所以每張 order 只會有 `OrderCancelled` / `OrderCompleted` 其一。
 **CreateOrder 冪等**：`CreateOrderRequest.idempotency_key`（選填、1–64 個可見 ASCII；放在 request 欄位而不是 header，因為它在 proto / openapi 契約裡、所有協定長一樣、可被 protovalidate 驗證，也不必為它多一個把 header 塞進 context 的 interceptor）讓 client 逾時重送不會下出兩張單：
 - **範圍**：`(customer_id, key)`，customer 是 `ownership` 解析後的那個——admin 代客下單時就是被代下單的 customer，所以同一個 key 在不同 customer 之間互不相干，也看不到彼此。
-- **同 key 同內容**回原訂單，狀態是**現在**的（可能已經 CONFIRMED，不是建單當下的快照），不寫入、不發 `OrderCreated`。「內容」= items 的 sku / quantity / 單價 / 幣別，**依序**（`order.Fingerprint`，sha256，不正規化）：同樣的行換個順序、或把同 SKU 拆成兩行，都算不同內容——順序就是訂單的 position，悄悄回一張跟你這次送的不一樣的單比報錯更糟。
+- **同 key 同內容**回原訂單，狀態是**現在**的（可能已經 CONFIRMED，不是建單當下的快照），不寫入、不發 `OrderCreated`、**不問 catalog**（商品之後改價或下架也一樣回原單）。「內容」= items 的 sku / quantity，**依序**（`order.FingerprintV2`，`"v2:"` + sha256，不正規化；價格是 catalog 的，不是請求的一部分，所以不在裡面。v2 之前的訂單存 v1 指紋〔含呼叫端給的單價〕，重送時以該訂單自己的快照價重算 v1 比對，行為不變）：同樣的行換個順序、或把同 SKU 拆成兩行，都算不同內容——順序就是訂單的 position，悄悄回一張跟你這次送的不一樣的單比報錯更糟。
 - **同 key 不同內容**：`ALREADY_EXISTS` + `x-error-code: order.idempotency_key_reused`，沒寫入；訊息固定，不帶訂單 id、items 或 key。換 key 才能下新單。
 - **保存期 = 訂單的壽命**：key 與 `request_hash` 是 `ordering.orders` 的兩個 nullable 欄位（migration `0008`，partial unique index），沒有 TTL 表，key 不會比訂單先過期。空 key = 不保護，行為與以前完全相同（舊 client 不受影響）。
 - **併發**：兩個同 key 請求同時到，靠 `INSERT … ON CONFLICT (customer_id, idempotency_key) DO NOTHING` 決勝負，不靠應用層鎖；輸家（`Save` → `ErrIdempotencyConflict`）在**同一個交易**回讀勝出者再決定回放或 reused（DO NOTHING 不會讓交易 abort）。衝突路徑在 `Publish` 之前返回，outbox 不會多一列。

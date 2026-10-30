@@ -1,0 +1,93 @@
+# The performance baseline (#263) on a clean GitHub-hosted runner (#280): `task k6-bench` as is.
+# Dispatch only — never a PR / main check (a shared runner's numbers are noise for a gate), and it
+# has no inputs on purpose: the validity rule (MAX_LOAD_PER_CORE 1.0, RUNS 3, MAX_ATTEMPTS 6, fixed
+# load / reserve parameters) is whatever tests/k6/bench.sh says at the dispatched commit, so a run
+# cannot loosen it after the fact.
+#
+# The job is green only when bench.sh exits 0, i.e. it found RUNS valid attempts. Anything else is
+# red, with an error annotation and a banner in the step summary: exit 3 = "NOT A VALID BASELINE"
+# (fewer than RUNS valid attempts — recorded as such, not a baseline), any other code = the bench
+# itself failed. Artifacts are uploaded either way (raw per-attempt files, load samples, result.json,
+# summary.md, runner spec) so an invalid run is still on record.
+#
+# Nothing is written back to the repository: taking numbers into docs/perf-baseline.md is a separate
+# docs PR that cites this run's URL and commit SHA (docs/perf-baseline.md, "在 GitHub runner 上跑").
+name: k6-bench
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k6-bench   # two benches on one runner pool are not a clean environment for each other
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90   # worst case 6 attempts x (create 10s + drain <= 300s + reserve 30s + setup)
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+      OUT: bin/k6-bench/run-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup
+      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
+      - run: task build
+
+      # Where the numbers were taken, next to the numbers (artifact + step summary).
+      - name: runner spec
+        run: |
+          mkdir -p "$OUT"
+          {
+            echo "run:        $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+            echo "commit:     $GITHUB_SHA"
+            echo "ref:        $GITHUB_REF"
+            echo "runner:     $RUNNER_NAME ($RUNNER_ENVIRONMENT, $RUNNER_OS $RUNNER_ARCH)"
+            echo "image:      ${ImageOS:-?} ${ImageVersion:-?}"
+            echo "cores:      $(nproc)"
+            echo "cpu:        $(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)"
+            echo "memory:     $(free -m | awk '/^Mem:/{print $2" MiB"}')"
+            echo "kernel:     $(uname -srm)"
+            echo "go:         $(go version)"
+            echo "k6:         $(k6 version | head -n1)"
+            echo "psql:       $(psql --version)"
+            echo "postgres:   postgres:16-alpine service container on the same runner"
+            echo "load at start (1m/5m/15m): $(cut -d' ' -f1-3 /proc/loadavg)"
+          } | tee "$OUT/runner.txt"
+          { echo '### runner'; echo '```'; cat "$OUT/runner.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: task k6-bench
+        id: bench
+        run: |
+          set +e   # keep the exit code: the verdict step decides what it means
+          # --exit-code: without it Task turns every failing command into its own 201 and bench.sh's 3 is lost
+          task --exit-code k6-bench -- "$OUT" 2>&1 | tee "$OUT/bench.log"
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # summary.md already opens with "NOT A VALID BASELINE" when it is not one; the verdict is
+      # repeated here so neither the annotation nor the job status can be read as a success.
+      - name: verdict
+        if: always()
+        env:
+          RC: ${{ steps.bench.outputs.rc }}
+        run: scripts/k6-bench-verdict.sh "${RC:-}" "$OUT"
+
+      - name: upload raw results and summary
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: k6-bench-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 90

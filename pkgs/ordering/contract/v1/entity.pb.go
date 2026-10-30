@@ -82,6 +82,8 @@ func (OrderStatus) EnumDescriptor() ([]byte, []int) {
 	return file_ordering_v1_entity_proto_rawDescGZIP(), []int{0}
 }
 
+// LineItem is one line of an Order. unit_price is the snapshot of the catalog
+// price at the moment the order was placed: a later reprice does not change it.
 type LineItem struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sku           string                 `protobuf:"bytes,1,opt,name=sku,proto3" json:"sku,omitempty"`

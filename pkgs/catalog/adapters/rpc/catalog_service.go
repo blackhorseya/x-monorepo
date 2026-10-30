@@ -26,6 +26,7 @@ type (
 	GetProductUC        = usecasex.UseCase[dto.GetProductInput, *dto.ProductOutput]
 	ListProductsUC      = usecasex.UseCase[dto.ListProductsInput, *dto.ListProductsOutput]
 	DeactivateProductUC = usecasex.UseCase[dto.DeactivateProductInput, *dto.ProductOutput]
+	QuotePricesUC       = usecasex.UseCase[dto.QuotePricesInput, *dto.QuotePricesOutput]
 )
 
 // CatalogService implements the generated CatalogServiceHandler. auth is read
@@ -37,6 +38,7 @@ type CatalogService struct {
 	getProduct        GetProductUC
 	listProducts      ListProductsUC
 	deactivateProduct DeactivateProductUC
+	quotePrices       QuotePricesUC
 	auth              config.Auth
 }
 
@@ -45,6 +47,7 @@ func NewCatalogService(
 	getProduct GetProductUC,
 	listProducts ListProductsUC,
 	deactivateProduct DeactivateProductUC,
+	quotePrices QuotePricesUC,
 	auth config.Auth,
 ) *CatalogService {
 	if auth.AdminRole == "" {
@@ -53,7 +56,7 @@ func NewCatalogService(
 
 	return &CatalogService{
 		upsertProduct: upsertProduct, getProduct: getProduct, listProducts: listProducts,
-		deactivateProduct: deactivateProduct, auth: auth,
+		deactivateProduct: deactivateProduct, quotePrices: quotePrices, auth: auth,
 	}
 }
 
@@ -127,6 +130,28 @@ func (h *CatalogService) DeactivateProduct(
 	}
 
 	return connect.NewResponse(&catalogv1.DeactivateProductResponse{Product: toProtoProduct(out)}), nil
+}
+
+// QuotePrices is a read: any caller the auth interceptor lets in may ask what things cost.
+// Ordering calls it in process, past the interceptors, to price an order.
+func (h *CatalogService) QuotePrices(
+	c context.Context,
+	req *connect.Request[catalogv1.QuotePricesRequest],
+) (*connect.Response[catalogv1.QuotePricesResponse], error) {
+	out, err := h.quotePrices.Execute(c, dto.QuotePricesInput{SKUs: req.Msg.GetSkus()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+	res := &catalogv1.QuotePricesResponse{
+		Prices:   make(map[string]*commonv1.Money, len(out.Prices)),
+		Missing:  out.Missing,
+		Inactive: out.Inactive,
+	}
+	for sku, p := range out.Prices {
+		res.Prices[sku] = &commonv1.Money{AmountMinor: p.Amount, Currency: p.Currency}
+	}
+
+	return connect.NewResponse(res), nil
 }
 
 func toProtoProduct(p *dto.ProductOutput) *catalogv1.Product {
