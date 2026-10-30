@@ -58,14 +58,14 @@ const b64url = (s: string) => Buffer.from(s).toString("base64url");
 const challengeOf = (verifier: string) => createHash("sha256").update(verifier).digest("base64url");
 
 /** What the console reads at start-up to know whether OIDC is on (runtime config, /config.json). */
-export async function stubConfig(page: Page, config: { oidc?: boolean; apiKeyLogin?: boolean } = {}) {
-  const { oidc = true, apiKeyLogin = true } = config;
+export async function stubConfig(page: Page, config: { oidc?: boolean; apiKeyLogin?: boolean; issuer?: string; clientId?: string } = {}) {
+  const { oidc = true, apiKeyLogin = true, issuer = ISSUER, clientId = CLIENT_ID } = config;
   await page.route("**/config.json", (route) =>
     route.fulfill({
       status: 200,
       headers: { "content-type": "application/json", "cache-control": "no-store" },
       body: JSON.stringify({
-        ...(oidc ? { oidcIssuer: ISSUER, oidcClientId: CLIENT_ID } : {}),
+        ...(oidc ? { oidcIssuer: issuer, oidcClientId: clientId } : {}),
         apiKeyLogin,
       }),
     }),
