@@ -22,6 +22,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
 	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/externalidentity"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/oidc"
@@ -84,10 +85,12 @@ type flakyResolve struct {
 	// holdPastDeadline keeps a finished lookup's answer back until the context
 	// is done, then returns it as it was: the lookup completed, the reply is late.
 	holdPastDeadline atomic.Bool
-	// answered counts lookups that read the database to the end, and answeredInTime
-	// those that did so before the context was done; the first minus the second
-	// are the replies that were late.
-	answered, answeredInTime atomic.Int64
+	// heldUnbound counts held lookups whose real answer was externalidentity.ErrNotFound
+	// (the identity is unbound) while the context was still alive: the lookup read
+	// the database to the end, so the reply that follows is late, not a failure.
+	// heldOther counts every other held lookup (an error of another kind, or an
+	// answer that already came after the deadline).
+	heldUnbound, heldOther atomic.Int64
 }
 
 func (f *flakyResolve) Execute(c context.Context, in dto.ResolveExternalInput) (*dto.ResolveExternalOutput, error) {
@@ -97,9 +100,10 @@ func (f *flakyResolve) Execute(c context.Context, in dto.ResolveExternalInput) (
 	}
 	out, err := f.inner.Execute(c, in)
 	if f.holdPastDeadline.Load() {
-		f.answered.Add(1)
-		if c.Err() == nil {
-			f.answeredInTime.Add(1)
+		if errors.Is(err, externalidentity.ErrNotFound) && c.Err() == nil {
+			f.heldUnbound.Add(1)
+		} else {
+			f.heldOther.Add(1)
 		}
 		<-c.Done()
 	}
@@ -310,11 +314,12 @@ func TestOIDCInterceptor_LateUnboundDoesNotClaimOnPostgres(t *testing.T) {
 
 	w.wantRejected(t, "late unbound, ClaimInvite", identityv1connect.IdentityServiceClaimInviteProcedure, w.jwt(t, "sub-1", nil), connect.CodeUnauthenticated, server.InvalidCredentialCode)
 	w.wantRejected(t, "late unbound, other procedure", orderProc, w.jwt(t, "sub-1", nil), connect.CodeUnauthenticated, server.InvalidCredentialCode)
-	// Each request is a lookup that finished its read before the deadline and
-	// replied after it. Without this the test could pass on a lookup that never
-	// completed (a slow database), which says nothing about a late answer.
-	if got, inTime := w.flaky.answered.Load(), w.flaky.answeredInTime.Load(); got != 2 || inTime != 2 {
-		t.Fatalf("lookups that read to the end: %d, of which before the deadline: %d, want 2 and 2", got, inTime)
+	// Each request is a lookup whose real answer was "unbound", read before the
+	// deadline, and replied after it. Without this the test would also pass on a
+	// lookup that failed (a broken query, a slow database) and was refused for
+	// that reason, which says nothing about a late unbound answer.
+	if unbound, other := w.flaky.heldUnbound.Load(), w.flaky.heldOther.Load(); unbound != 2 || other != 0 {
+		t.Fatalf("held lookups: %d answered unbound in time, %d did not, want 2 and 0", unbound, other)
 	}
 	if n := w.count(t, "SELECT count(*) FROM identity.external_identities"); n != 0 {
 		t.Fatalf("a late answer bound %d identities", n)
