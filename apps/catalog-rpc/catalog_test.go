@@ -357,3 +357,31 @@ func TestCatalog_LegacyJWTRefusedWithAuthOff(t *testing.T) {
 		t.Fatalf("err = %v, want it to name auth.jwt and not carry the secret", err)
 	}
 }
+
+// auth.oidc.enabled is refused like auth.jwt: an unsupported credential source
+// fails closed instead of being silently ignored (an operator would think OIDC
+// is on). Alone, beside a static key, and with auth.mode off.
+func TestCatalog_OIDCFailsToStart(t *testing.T) {
+	for name, auth := range map[string]config.Auth{
+		"oidc alone":         {Mode: config.AuthRequired},
+		"oidc with api key":  {Mode: config.AuthRequired, APIKeys: "ops=ops-key-0123456789abc:admin"},
+		"oidc with auth off": {Mode: config.AuthOff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			auth.OIDC.Enabled = true
+			_, cleanup, err := Initialize(&config.AppConfig{
+				HTTP:     config.HTTP{Addr: ":0"},
+				Log:      config.Log{Level: "error", Format: "text"},
+				Auth:     auth,
+				Postgres: freshDB(t),
+			})
+			if err == nil {
+				cleanup()
+				t.Fatal("auth.oidc.enabled started")
+			}
+			if !strings.Contains(err.Error(), "auth.oidc") {
+				t.Fatalf("err = %v, want it to name auth.oidc", err)
+			}
+		})
+	}
+}

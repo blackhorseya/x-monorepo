@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -86,18 +87,20 @@ func freeAddr(t *testing.T) string {
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 }
 
-// The real entry point refuses a legacy auth.jwt: catalog-rpc authenticates
-// static auth.api_keys only, so a configured JWT secret must stop the process
+// The real entry point refuses a legacy auth.jwt or auth.oidc: catalog-rpc
+// authenticates static auth.api_keys only, so either must stop the process
 // before it serves, with or without keys beside it. A process that started
 // anyway is told to stop, and the test fails.
-func TestRun_RefusesLegacyJWT(t *testing.T) {
+func TestRun_RefusesUnsupportedCredentialSources(t *testing.T) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM)
 	defer signal.Stop(sig)
 
-	for name, apiKeys := range map[string]string{
-		"jwt only":         "",
-		"jwt with api key": "ops=ops-key-0123456789abc:admin",
+	for name, c := range map[string]struct{ apiKeys, env, value, want string }{
+		"jwt only":          {"", "APP_AUTH_JWT_HS256_SECRET", "0123456789abcdef0123456789abcdef", "auth.jwt"},
+		"jwt with api key":  {"ops=ops-key-0123456789abc:admin", "APP_AUTH_JWT_HS256_SECRET", "0123456789abcdef0123456789abcdef", "auth.jwt"},
+		"oidc only":         {"", "APP_AUTH_OIDC_ENABLED", "true", "auth.oidc"},
+		"oidc with api key": {"ops=ops-key-0123456789abc:admin", "APP_AUTH_OIDC_ENABLED", "true", "auth.oidc"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := freshDB(t)
@@ -107,21 +110,33 @@ func TestRun_RefusesLegacyJWT(t *testing.T) {
 			t.Setenv("APP_LOG_LEVEL", "error")
 			t.Setenv("APP_HTTP_SHUTDOWN_DELAY", "0")
 			t.Setenv("APP_AUTH_MODE", "required")
-			t.Setenv("APP_AUTH_API_KEYS", apiKeys)
-			t.Setenv("APP_AUTH_JWT_HS256_SECRET", "0123456789abcdef0123456789abcdef")
+			t.Setenv("APP_AUTH_API_KEYS", c.apiKeys)
+			if c.env == "APP_AUTH_OIDC_ENABLED" {
+				// config.Load already insists on a well-formed issuer list, which
+				// only a file can carry: give it one, so the refusal under test is
+				// catalog-rpc's own and not the loader's.
+				file := filepath.Join(t.TempDir(), "config.yaml")
+				yaml := "auth:\n  oidc:\n    enabled: true\n    issuers:\n      - issuer: https://idp.example.com\n        audience: catalog-rpc\n"
+				if err := os.WriteFile(file, []byte(yaml), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("APP_CONFIG", file)
+			} else {
+				t.Setenv(c.env, c.value)
+			}
 
 			done := make(chan error, 1)
 			go func() { done <- run() }()
 
 			select {
 			case err := <-done:
-				if err == nil || !strings.Contains(err.Error(), "auth.jwt") {
-					t.Fatalf("run = %v, want an error naming auth.jwt", err)
+				if err == nil || !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("run = %v, want an error naming %s", err, c.want)
 				}
 			case <-time.After(5 * time.Second):
 				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM) // it started: stop it
 				<-done
-				t.Fatal("run kept serving with auth.jwt configured, want a refused start")
+				t.Fatal("run kept serving with an unsupported credential source configured, want a refused start")
 			}
 		})
 	}
