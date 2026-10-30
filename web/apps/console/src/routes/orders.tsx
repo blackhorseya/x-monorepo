@@ -55,7 +55,7 @@ function quoteLabel(q: Quoted): string {
 // totalLabel is the preview of the order's total: only when every named line has a price in one
 // currency (an order takes one, the server refuses a mix).
 function totalLabel(lines: Line[], quoted: Quoted[]): string {
-  const named = quoted.map((q, i) => ({ q, qty: lines[i].quantity })).filter((_, i) => lines[i].sku.trim() !== "");
+  const named = quoted.map((q, i) => ({ q, qty: lines[i].quantity })).filter((_, i) => lines[i].sku !== "");
   if (named.length === 0) return "";
   if (named.some(({ q }) => q.kind !== "price")) return "Total once every line has a price";
   const priced = named as { q: Extract<Quoted, { kind: "price" }>; qty: number }[];
@@ -90,18 +90,23 @@ function CreateOrderCard() {
   // Read-only preview of what each line costs now. It never goes back to the server as a price:
   // CreateOrder sends sku and quantity only, and the order keeps the price found when it is placed.
   const asked = useDebounced(
-    [...new Set(lines.map((l) => l.sku.trim()).filter((s) => s !== ""))].sort(),
+    [...new Set(lines.map((l) => l.sku).filter((s) => s !== ""))].sort(),
     250,
   );
   const quote = useQuery(quoteQuery(asked));
   const quoted: Quoted[] = lines.map((l) => {
-    const sku = l.sku.trim();
+    // The SKU is an exact key: the string quoted here is the one CreateOrder sends below, spaces
+    // included ("A" and " A " are two products).
+    const sku = l.sku;
     const data = quote.data;
     if (sku === "") return { kind: "pending" };
+    // A refresh that failed outranks the older answer still in the cache: that price is no
+    // longer known to be current, so it is not shown as one.
+    if (quote.isError) return { kind: "unavailable" };
     if (data?.prices[sku]) return { kind: "price", amountMinor: data.prices[sku].amountMinor, currency: data.prices[sku].currency };
     if (data?.missing.includes(sku)) return { kind: "missing" };
     if (data?.inactive.includes(sku)) return { kind: "inactive" };
-    return quote.isError ? { kind: "unavailable" } : { kind: "pending" };
+    return { kind: "pending" };
   });
   const total = totalLabel(lines, quoted);
 
@@ -146,7 +151,7 @@ function CreateOrderCard() {
             <Field label="Qty" className="w-20">
               <Input type="number" value={l.quantity} onChange={(e) => setLine(i, { quantity: Number(e.target.value) })} />
             </Field>
-            {l.sku.trim() !== "" && (
+            {l.sku !== "" && (
               <span data-testid="line-price" className="pb-2 text-sm tabular-nums text-muted-foreground">
                 {quoteLabel(quoted[i])}
               </span>
