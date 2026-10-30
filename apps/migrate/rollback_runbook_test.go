@@ -120,9 +120,10 @@ func (e *rollbackEnv) runbookEntry(t *testing.T, tc rollbackCase) {
 		t.Fatal(err)
 	}
 	doc := string(b)
+	_, section, hasMarker := strings.Cut(doc, tc.marker)
 	switch {
-	case strings.Contains(doc, tc.marker):
-		m := regexp.MustCompile("(?s)```sql\n(.*?)```").FindStringSubmatch(doc[strings.Index(doc, tc.marker):])
+	case hasMarker:
+		m := regexp.MustCompile("(?s)```sql\n(.*?)```").FindStringSubmatch(section)
 		if m == nil {
 			t.Fatalf("%s: no ```sql block after %q", tc.runbook, tc.marker)
 		}
