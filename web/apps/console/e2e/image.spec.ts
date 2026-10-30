@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { mockIdp } from "./auth/oidc";
 
 // What only the real image can show: nginx's own behaviour from deploy/default.conf.template.
 // vite preview also serves the SPA and proxies /api, but with its own headers, so these run
@@ -63,14 +64,14 @@ test("/api is the rpc behind nginx; /healthz is nginx itself", async ({
 // containers: the default (nothing set), one configured for OIDC, one with an unusable issuer.
 const connectSrc = (csp: string) => csp.split(";").map((d) => d.trim()).find((d) => d.startsWith("connect-src"));
 
-test("no CONSOLE_* env: /config.json says OIDC is off, API key login on, never cached; connect-src stays 'self'", async ({
+test("no CONSOLE_* env: /config.json has an empty issuer (OIDC off), API key login on, never cached; connect-src stays 'self'", async ({
   request,
 }) => {
   const res = await request.get("/config.json");
   expect(res.status()).toBe(200);
   expect(res.headers()["content-type"]).toContain("application/json");
   expect(res.headers()["cache-control"]).toBe("no-store");
-  expect(await res.json()).toEqual({ apiKeyLogin: true });
+  expect(await res.json()).toEqual({ oidcIssuer: "", oidcClientId: "", apiKeyLogin: true });
   const page = (await request.get("/orders")).headers();
   expect(connectSrc(page["content-security-policy"])).toBe("connect-src 'self'");
 });
@@ -97,6 +98,20 @@ test.describe("configured for OIDC", () => {
     expect(csp).toContain("script-src 'self'"); // the rest of the policy is untouched
   });
 
+  // The browser enforces the CSP, so this is the check that connect-src really lets the SPA reach
+  // the issuer (discovery, token) while page.route() stands in for the IdP's network side.
+  test("a browser signs in against the configured issuer under the image's CSP; no API key entry", async ({ page }) => {
+    await mockIdp(page);
+    const violations: string[] = [];
+    page.on("console", (m) => /content security policy/i.test(m.text()) && violations.push(m.text()));
+    await page.goto(`${base()}/orders`);
+    await expect(page).toHaveURL(/\/login/);
+    await expect(page.getByLabel("API key")).toHaveCount(0);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.locator("header").getByText(/^jwt · /)).toBeVisible();
+    expect(violations).toEqual([]);
+  });
+
   test("/config.json also carries the security headers' sibling cache rule, and /api has no CSP", async ({ request }) => {
     const res = await request.get(`${base()}/config.json`);
     expect(res.headers()["cache-control"]).toBe("no-store");
@@ -108,9 +123,9 @@ test.describe("an unusable issuer", () => {
   test.skip(!process.env.E2E_CONSOLE_BAD_URL, "needs the bad-issuer container (e2e/image.sh)");
   const base = () => process.env.E2E_CONSOLE_BAD_URL!;
 
-  test("fails closed: OIDC off in /config.json, nothing from the value reaches the CSP or the JSON", async ({ request }) => {
+  test("fails closed: empty issuer in /config.json (OIDC off), nothing from the value reaches the CSP or the JSON", async ({ request }) => {
     const res = await request.get(`${base()}/config.json`);
-    expect(await res.json()).toEqual({ apiKeyLogin: true });
+    expect(await res.json()).toEqual({ oidcIssuer: "", oidcClientId: "", apiKeyLogin: true });
     const csp = (await request.get(`${base()}/orders`)).headers()["content-security-policy"];
     expect(connectSrc(csp)).toBe("connect-src 'self'");
     expect(csp).not.toContain("evil.example");

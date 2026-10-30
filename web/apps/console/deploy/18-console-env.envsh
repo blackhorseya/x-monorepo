@@ -1,0 +1,34 @@
+#!/bin/sh
+# Sourced by the nginx image entrypoint before the templates are rendered (docker-entrypoint.d/*.envsh).
+# Turns the operator's CONSOLE_* environment into the values the templates may use, and refuses
+# anything that could break out of them: the issuer ends up in /config.json and in the CSP, so it
+# has to look like a plain http(s) origin plus path, the client id like a plain identifier.
+# Anything unusable switches OIDC off (fail closed); it is never passed through.
+#
+#   CONSOLE_OIDC_ISSUER      e.g. https://idp.example.com/dex   (empty = OIDC off)
+#   CONSOLE_OIDC_CLIENT_ID   the public client id               (empty = OIDC off)
+#   CONSOLE_API_KEY_LOGIN    "false" removes the API key entry; anything else keeps it
+# Derived: CONSOLE_CSP_CONNECT_SRC = 'self' [+ the issuer's exact origin].
+# None of it is a secret: /config.json is public.
+
+console_issuer=${CONSOLE_OIDC_ISSUER:-}
+console_client=${CONSOLE_OIDC_CLIENT_ID:-}
+console_ok=1
+[ -n "$console_issuer" ] && [ -n "$console_client" ] || console_ok=0
+if [ "$console_ok" = 1 ]; then
+  printf '%s' "$console_issuer" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$' || console_ok=0
+  printf '%s' "$console_client" | grep -Eq '^[A-Za-z0-9._~-]+$' || console_ok=0
+fi
+if [ "$console_ok" = 1 ]; then
+  CONSOLE_OIDC_ISSUER=$console_issuer
+  CONSOLE_OIDC_CLIENT_ID=$console_client
+  CONSOLE_CSP_CONNECT_SRC="'self' $(printf '%s' "$console_issuer" | sed -E 's#^(https?://[^/]+).*#\1#')"
+else
+  [ -z "$console_issuer$console_client" ] || echo "console-env: CONSOLE_OIDC_ISSUER / CONSOLE_OIDC_CLIENT_ID are not both set and well formed; OIDC login stays off" >&2
+  CONSOLE_OIDC_ISSUER=
+  CONSOLE_OIDC_CLIENT_ID=
+  CONSOLE_CSP_CONNECT_SRC="'self'"
+fi
+if [ "${CONSOLE_API_KEY_LOGIN:-true}" = false ]; then CONSOLE_API_KEY_LOGIN=false; else CONSOLE_API_KEY_LOGIN=true; fi
+export CONSOLE_OIDC_ISSUER CONSOLE_OIDC_CLIENT_ID CONSOLE_API_KEY_LOGIN CONSOLE_CSP_CONNECT_SRC
+unset console_issuer console_client console_ok
