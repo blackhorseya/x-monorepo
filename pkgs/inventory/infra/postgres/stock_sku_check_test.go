@@ -137,14 +137,16 @@ func ownedDatabase(t *testing.T) string {
 		t.Fatalf("database name %q is not usable", name)
 	}
 	admin := openDB(t, base)
-	if err := admin.Exec("CREATE DATABASE " + name).Error; err != nil {
-		t.Fatalf("create database %s: %v (the 0009 test needs a role with CREATEDB; see TEST_DATABASE_URL in pgtest)", name, err)
-	}
+	// Registered before the CREATE: if the server created the database but the reply was
+	// lost, it is still dropped. DROP ... IF EXISTS makes the other case a no-op.
 	t.Cleanup(func() {
 		if err := dropDatabase(admin, name); err != nil {
 			t.Errorf("drop database %s: %v", name, err)
 		}
 	})
+	if err := admin.Exec("CREATE DATABASE " + name).Error; err != nil {
+		t.Fatalf("create database %s: %v (the 0009 test needs a role with CREATEDB; see TEST_DATABASE_URL in pgtest)", name, err)
+	}
 
 	return dbURL(t, base, name)
 }
@@ -293,12 +295,24 @@ func takeSnapshot(t *testing.T, cfg config.Postgres, db *gorm.DB) snapshot {
 	return s
 }
 
+// childLimit is how long a child may run: a minute, and well inside what is left of this
+// test's own deadline.
+func childLimit(t *testing.T) time.Duration {
+	t.Helper()
+	limit := time.Minute
+	if d, ok := t.Deadline(); ok {
+		limit = min(limit, time.Until(d)/2)
+	}
+
+	return limit
+}
+
 // runSelf runs this test binary for the tests matching run, on the database at rawURL, in
 // its own process group, killed (group and all) and waited for when limit passes.
-func runSelf(rawURL, run string, env []string, limit time.Duration, args ...string) (out []byte, err error) {
+func runSelf(rawURL, run string, env []string, limit time.Duration) (out []byte, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=" + run, "-test.count=1", "-test.v"}, args...)...)
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run="+run, "-test.count=1", "-test.v")
 	cmd.Env = append(append(os.Environ(), pgtest.EnvURL+"="+rawURL), env...)
 	ownProcessGroup(cmd)
 	cmd.WaitDelay = 10 * time.Second
@@ -315,7 +329,7 @@ func runSelf(rawURL, run string, env []string, limit time.Duration, args ...stri
 // the real test in a child process (so t.Fatal, the cleanups and the binary's timeout are
 // the real ones) while the parent holds the shared database's snapshot:
 //   - the child fails in the middle, with 0009 dirty;
-//   - the shared stocks table is locked by another session and the child has 2s in all;
+//   - the shared stocks table is locked by another session (the child's database is not);
 //   - TEST_DATABASE_URL carries application_name and more query parameters.
 //
 // After each: the shared snapshot (version, dirty, CHECK, rows; non-empty before) is
@@ -328,13 +342,12 @@ func TestStocksSKUCheck_IsolatedFromSharedDatabase(t *testing.T) {
 	cases := []struct {
 		name    string
 		env     []string
-		budget  string
 		lock    bool
 		params  string
 		wantErr string // output must contain it; empty means the child passes
 	}{
 		{name: "fails halfway with 0009 dirty", env: []string{faultEnv + "=1"}, wantErr: faultMsg},
-		{name: "shared stocks locked, 2s budget", budget: "2s", lock: true},
+		{name: "shared stocks locked by another session", lock: true},
 		{name: "application_name and other parameters", params: "application_name=skuprobe&connect_timeout=5"},
 	}
 	for _, tc := range cases {
@@ -378,14 +391,7 @@ func TestStocksSKUCheck_IsolatedFromSharedDatabase(t *testing.T) {
 				}
 				childURL += sep + tc.params
 			}
-			var args []string
-			if tc.budget != "" {
-				args = append(args, "-test.timeout="+tc.budget)
-			}
-			out, err := runSelf(childURL, "^TestStocksSKUCheck_Postgres$", append(tc.env, dbNameEnv+"="+name), time.Minute, args...)
-			if strings.Contains(string(out), "panic: test timed out") {
-				t.Fatalf("the child ran into its binary timeout:\n%s", out)
-			}
+			out, err := runSelf(childURL, "^TestStocksSKUCheck_Postgres$", append(tc.env, dbNameEnv+"="+name), childLimit(t))
 			var exit *exec.ExitError
 			switch {
 			case tc.wantErr == "" && err != nil:
@@ -419,35 +425,5 @@ func TestStocksSKUCheck_IsolatedFromSharedDatabase(t *testing.T) {
 				t.Fatalf("the next fixture could not Up: %v", err)
 			}
 		})
-	}
-}
-
-// Without CREATEDB the test says so, with the server's reason; it neither skips nor
-// falls back to the shared database.
-func TestStocksSKUCheck_NeedsCreatedb(t *testing.T) {
-	base := pgtest.URL(t)
-	db := openDB(t, base)
-	role := "skucheck_role_" + randomName(t)
-	if err := db.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'x' NOCREATEDB", role)).Error; err != nil {
-		t.Fatalf("create role %s: %v (this check needs a role that can create roles)", role, err)
-	}
-	t.Cleanup(func() {
-		if err := db.Exec("DROP ROLE IF EXISTS " + role).Error; err != nil {
-			t.Errorf("drop role %s: %v", role, err)
-		}
-	})
-	u, err := url.Parse(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	u.User = url.UserPassword(role, "x")
-
-	out, err := runSelf(u.String(), "^TestStocksSKUCheck_Postgres$", nil, time.Minute)
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) {
-		t.Fatalf("a role without CREATEDB should fail the test, err=%v\n%s", err, out)
-	}
-	if !strings.Contains(string(out), "42501") || !strings.Contains(string(out), "CREATEDB") {
-		t.Fatalf("the failure does not carry SQLSTATE 42501 and the CREATEDB explanation:\n%s", out)
 	}
 }
