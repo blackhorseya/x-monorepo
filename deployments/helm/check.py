@@ -263,7 +263,8 @@ def check_catalog_rpc(docs, values, dep, cr):
         check(len(rules) == 1, "catalog-rpc NetworkPolicy has one ingress rule")
         expect(rules[0]["ports"], [{"protocol": "TCP", "port": c["ports"][0]["containerPort"]}], "catalog-rpc NetworkPolicy port = http.addr")
         peers = rules[0].get("from")
-        check(peers is not None and len(peers) == 1, "catalog-rpc NetworkPolicy lists exactly one peer (empty would mean any source)")
+        extra = values["networkPolicy"].get("catalogRpc", {}).get("ingressFrom", [])
+        check(peers is not None and len(peers) == 1 + len(extra), "catalog-rpc NetworkPolicy peers = rpc + networkPolicy.catalogRpc.ingressFrom (never empty: empty would mean any source)")
         sel = peers[0]["podSelector"]["matchLabels"]
         expect(sel.get("app.kubernetes.io/component"), "rpc", "catalog-rpc NetworkPolicy admits the rpc pods")
         expect(sel.get("app.kubernetes.io/instance"), dep["metadata"]["labels"]["app.kubernetes.io/instance"], "...of this release only")

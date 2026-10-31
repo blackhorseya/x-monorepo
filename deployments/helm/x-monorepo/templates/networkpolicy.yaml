@@ -36,6 +36,36 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- end }}
+{{- if .Values.catalogRpc.enabled }}
+---
+# catalog-rpc: the rpc pods of this release and nobody else (not the console, not an ingress
+# controller). The list is never empty, so it never means "any source". Prometheus scrapes the
+# same port: list its namespace in networkPolicy.catalogRpc.ingressFrom to let the ServiceMonitor in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-catalog-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: catalog-rpc
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: catalog-rpc
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: {{ $httpPort }} }
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "x-monorepo.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: rpc
+        {{- with $np.catalogRpc.ingressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -3,7 +3,7 @@
 #     and pointed at with APP_CONFIG (same keys as configs/config.example.yaml);
 #   - APP_* env vars for secrets (postgres / redis URL, API keys, JWT secret) and for the
 #     values this chart derives (http.shutdown_*). env beats file beats built-in defaults.
-# Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<tag>.
+# Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,catalog-rpc,worker,migrate}:<tag>.
 # They are distroless (no shell): no exec probes, no preStop sleep — the apps' own graceful
 # shutdown does that job (see rpc.shutdown / worker.terminationGracePeriodSeconds).
 # The optional console (web/apps/console/Dockerfile, nginx) is .../console:<tag>.
@@ -112,6 +112,17 @@ secrets:
   redisUrl: ""
   apiKeys: ""          # "name=key[:role|role],name=key"
   jwtHs256Secret: ""
+  # catalog-rpc reads NONE of the above: it refuses to start with auth.jwt / auth.oidc, and these
+  # carry rpc's JWT secret and user api keys. It gets its own Secret (<release>-catalog-rpc-env):
+  # APP_POSTGRES_URL from postgresUrl above, and APP_AUTH_API_KEYS "rpc=<apiKey>:<config.auth.admin_role>".
+  # secrets.existingSecret is the release-wide Secret and is NOT a source for catalog-rpc.
+  catalogRpc:
+    # The one service key rpc presents. Without it (and without existingSecret) the chart refuses to
+    # render catalogRpc.enabled. No ',' ':' '=' or whitespace.
+    apiKey: ""
+    # Or a Secret you manage, with the keys APP_POSTGRES_URL and APP_AUTH_API_KEYS
+    # ("rpc=<key>:<admin role>"). Mutually exclusive with apiKey.
+    existingSecret: ""
 
 rpc:
   replicaCount: 2
@@ -169,6 +180,57 @@ rpc:
   # put what its serviceMonitorSelector wants in labels (kube-prometheus-stack: release: <name>).
   # Without the operator, scrape the Service yourself; without any Prometheus the worker still
   # needs config.otel.endpoint — this only covers the rpc.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    relabelings: []
+    metricRelabelings: []
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+# catalog-rpc (apps/catalog-rpc): the catalog bounded context as its own Deployment (#320). Off
+# by default for two reasons: the image of that name exists only from the first release built after
+# it was added (the default tag is .Chart.appVersion, so an older chart would pull a tag that is not
+# there), and rpc does not call it yet (the forwarding slice). Turning it on needs a Postgres URL and
+# secrets.catalogRpc.apiKey or existingSecret, else the chart does not render: without a URL the
+# binary would serve from memory. It runs with auth.mode required and ONLY the static key rpc=...:<admin
+# role>; its own ConfigMap and Secret carry no auth.jwt / auth.oidc. Same probes and shutdown contract
+# as rpc; /api/readyz probes Postgres. Schema: `migrate up` (the hook above), never this pod.
+# In-cluster address for the forwarding slice: <release>-catalog-rpc:<service.port>.
+catalogRpc:
+  enabled: false
+  replicaCount: 2
+  shutdown:
+    delaySeconds: 5
+    timeoutSeconds: 15
+    graceMarginSeconds: 5
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+    successThreshold: 1
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+  podDisruptionBudget:
+    enabled: true    # rendered only when more than one replica
+    maxUnavailable: 1
   serviceMonitor:
     enabled: false
     interval: 30s
@@ -289,6 +351,10 @@ networkPolicy:
     #  - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
     #  - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
   console:
+    ingressFrom: []
+  # catalog-rpc admits the rpc pods of this release (when catalogRpc.enabled); ingressFrom is ON TOP
+  # of that, e.g. Prometheus's namespace for the ServiceMonitor. Never empty = any source.
+  catalogRpc:
     ingressFrom: []
 
 # `migrate up` as a pre-install / pre-upgrade hook: new code never starts against an old

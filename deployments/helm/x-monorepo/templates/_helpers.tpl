@@ -24,7 +24,7 @@
 {{- end -}}
 {{- end -}}
 
-{{/* Labels. component: rpc | worker | migrate | prune */}}
+{{/* Labels. component: rpc | catalog-rpc | worker | migrate | prune */}}
 {{- define "x-monorepo.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 app.kubernetes.io/name: {{ include "x-monorepo.name" . }}
@@ -129,4 +129,69 @@ checksum/secrets: {{ include "x-monorepo.secretData" . | sha256sum }}
 {{/* Where the console's nginx sends /api: the rpc Service of this release, in-cluster. */}}
 {{- define "x-monorepo.console.rpcUpstream" -}}
 {{- printf "http://%s-rpc:%d" (include "x-monorepo.fullname" .) (int .Values.rpc.service.port) -}}
+{{- end -}}
+
+{{/*
+catalog-rpc (apps/catalog-rpc) authenticates static auth.api_keys only and refuses to start on
+auth.jwt, auth.oidc.enabled, or auth on without api_keys. So it never reads the release-wide
+ConfigMap and Secret (they carry rpc's JWT secret, OIDC issuers and user api keys): it has its
+own, built here. Rendered only when catalogRpc.enabled; every misconfiguration fails at template
+time, before a pod can come up in the in-memory mode an unset Postgres URL would give it.
+*/}}
+{{- define "x-monorepo.catalogRpc.validate" -}}
+{{- $own := .Values.secrets.catalogRpc.existingSecret -}}
+{{- $key := .Values.secrets.catalogRpc.apiKey -}}
+{{- if $own -}}
+{{- if $key -}}
+{{- fail "secrets.catalogRpc.existingSecret and secrets.catalogRpc.apiKey are both set: pick one source for catalog-rpc's APP_AUTH_API_KEYS" -}}
+{{- end -}}
+{{- else -}}
+{{- if not .Values.secrets.postgresUrl -}}
+{{- fail "catalogRpc.enabled needs secrets.postgresUrl (or secrets.catalogRpc.existingSecret holding APP_POSTGRES_URL): without a Postgres URL catalog-rpc would serve from memory and lose its prices on restart. secrets.existingSecret is the release-wide Secret and does not count: it may carry rpc's JWT secret, which catalog-rpc refuses to start with" -}}
+{{- end -}}
+{{- if not $key -}}
+{{- fail "catalogRpc.enabled needs secrets.catalogRpc.apiKey (or secrets.catalogRpc.existingSecret holding APP_AUTH_API_KEYS): catalog-rpc runs with auth.mode required and accepts only this key" -}}
+{{- end -}}
+{{- if regexMatch "[,:=\\s]" $key -}}
+{{- fail "secrets.catalogRpc.apiKey must not contain ',', ':', '=' or whitespace: it is embedded in APP_AUTH_API_KEYS (name=key:role,...)" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "x-monorepo.catalogRpc.secretName" -}}
+{{- default (printf "%s-catalog-rpc-env" (include "x-monorepo.fullname" .)) .Values.secrets.catalogRpc.existingSecret -}}
+{{- end -}}
+
+{{/* catalog-rpc's config.yaml: the release's http / postgres / log / otel, auth required, and no auth.jwt / auth.oidc. otel.service_name is dropped (it would report as rpc; the binary defaults to catalog-rpc). */}}
+{{- define "x-monorepo.catalogRpc.config" -}}
+{{- $c := .Values.config -}}
+{{- toYaml (dict
+      "http" $c.http
+      "postgres" $c.postgres
+      "log" $c.log
+      "otel" (omit $c.otel "service_name")
+      "auth" (dict "mode" "required" "admin_role" $c.auth.admin_role)) -}}
+{{- end -}}
+
+{{- define "x-monorepo.catalogRpc.secretData" -}}
+APP_POSTGRES_URL: {{ .Values.secrets.postgresUrl | quote }}
+APP_AUTH_API_KEYS: {{ printf "rpc=%s:%s" .Values.secrets.catalogRpc.apiKey .Values.config.auth.admin_role | quote }}
+{{- end -}}
+
+{{- define "x-monorepo.catalogRpc.checksums" -}}
+checksum/config: {{ include "x-monorepo.catalogRpc.config" . | sha256sum }}
+checksum/secrets: {{ include "x-monorepo.catalogRpc.secretData" . | sha256sum }}
+{{- end -}}
+
+{{- define "x-monorepo.catalogRpc.terminationGracePeriodSeconds" -}}
+{{- $s := .Values.catalogRpc.shutdown -}}
+{{- if lt (int $s.delaySeconds) (int .Values.catalogRpc.readiness.periodSeconds) -}}
+{{- fail (printf "catalogRpc.shutdown.delaySeconds (%d) must be >= catalogRpc.readiness.periodSeconds (%d): endpoints must see the 503 before the listener closes" (int $s.delaySeconds) (int .Values.catalogRpc.readiness.periodSeconds)) -}}
+{{- end -}}
+{{- add (int $s.delaySeconds) (int $s.timeoutSeconds) (int $s.graceMarginSeconds) -}}
+{{- end -}}
+
+{{/* Where rpc reaches catalog-rpc (the forwarding slice): the catalog-rpc Service of this release, in-cluster. */}}
+{{- define "x-monorepo.catalogRpc.upstream" -}}
+{{- printf "http://%s-catalog-rpc:%d" (include "x-monorepo.fullname" .) (int .Values.catalogRpc.service.port) -}}
 {{- end -}}
