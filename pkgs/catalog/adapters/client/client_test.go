@@ -150,25 +150,19 @@ func TestClient_PropagatesTheTrace(t *testing.T) {
 
 // The classification matrix: what each way of failing becomes for the caller.
 func TestClient_ErrorClassification(t *testing.T) {
-	business := map[string]struct {
-		err  error
-		code connect.Code
-	}{
-		"NotFound":           {connect.NewError(connect.CodeNotFound, errors.New("no such product")), connect.CodeNotFound},
-		"InvalidArgument":    {connect.NewError(connect.CodeInvalidArgument, errors.New("bad sku")), connect.CodeInvalidArgument},
-		"FailedPrecondition": {connect.NewError(connect.CodeFailedPrecondition, errors.New("not now")), connect.CodeFailedPrecondition},
-		"AlreadyExists":      {connect.NewError(connect.CodeAlreadyExists, errors.New("dup")), connect.CodeAlreadyExists},
-	}
-	for name, tc := range business {
+	for name, code := range map[string]connect.Code{
+		"NotFound": connect.CodeNotFound, "InvalidArgument": connect.CodeInvalidArgument,
+		"FailedPrecondition": connect.CodeFailedPrecondition, "AlreadyExists": connect.CodeAlreadyExists,
+	} {
 		t.Run("passes through "+name, func(t *testing.T) {
-			ce := tc.err.(*connect.Error)
+			ce := connect.NewError(code, errors.New("the catalog said so"))
 			ce.Meta().Set("x-error-code", "product.some_code")
 			cl := newClient(t, serve(t, &upstream{getErr: ce}), time.Second)
 
 			err := get(cl, context.Background())
 			var got *connect.Error
-			if !errors.As(err, &got) || got.Code() != tc.code || got.Meta().Get("x-error-code") != "product.some_code" {
-				t.Fatalf("err = %v, want %s with x-error-code product.some_code unchanged", err, tc.code)
+			if !errors.As(err, &got) || got.Code() != code || got.Meta().Get("x-error-code") != "product.some_code" {
+				t.Fatalf("err = %v, want %s with x-error-code product.some_code unchanged", err, code)
 			}
 		})
 	}
