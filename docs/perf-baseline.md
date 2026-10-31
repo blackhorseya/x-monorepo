@@ -4,7 +4,7 @@
 
 之後優化 CreateOrder 或 reservation batching 時的對照組（#263）。`tests/k6/orders.js` / `reservation.js` 是功能與閾值的 smoke，沒有可比較的數字；這裡是固定參數、跑 N 次、有離散程度的量測。**不進 PR 的 CI gate**（shared runner 的數字是雜訊）；要在乾淨環境取得 valid 數字，手動派送 `k6-bench` workflow（見下方「在 GitHub runner 上跑」）。
 
-> **下面的數字量測於 server 定價之前**（#267 以前，CreateOrder 的單價由呼叫端給）。之後 `CreateOrder` 每張單多一次 catalog 批次查價（同一個 process；#320 之後在 transaction 之外），`bench.js` 的 setup 也多一步 `UpsertProduct`：本機（開發機）的這些數字不能當作現在的對照組。server 定價之後的 valid baseline 見下方「CI baseline」（GitHub runner，run 41005829640）。
+> **下面的數字量測於 server 定價之前**（#267 以前，CreateOrder 的單價由呼叫端給）。之後 `CreateOrder` 每張單多一次 catalog 批次查價（#347 以前是 rpc 內的函式呼叫、同一個 process；#347 起是對獨立的 `catalog-rpc` 的 Connect 呼叫；查價在 transaction 之外），`bench.js` 的 setup 也多一步 `UpsertProduct`：本機（開發機）的這些數字不能當作現在的對照組。server 定價之後的 valid baseline 見下方「CI baseline」（GitHub runner，run 41005829640）。
 
 ## 重跑
 
@@ -15,7 +15,7 @@ task k6-bench -- /tmp/my-out       # 指定輸出目錄
 RUNS=5 task k6-bench               # 次數（≥ 3）；參數都是環境變數，見 tests/k6/bench.sh 檔頭
 ```
 
-- 每個 run 在 Postgres 建一個專屬資料庫（`k6_bench_<stamp>_<pid+random>_<n>`；只 drop 自己 CREATE 成功的，名稱已存在就失敗退出、不碰它，`task k6-bench-test` 用 sentinel 資料庫驗證）、用 `./bin/migrate up` 建 schema、起 `./bin/rpc` + `./bin/worker`（auth off、telemetry off、log warn），跑完 drop（失敗或 ^C 也會）。所以每個 run 從空的 outbox 起跳，寫入量由參數決定（create：約 2.5–3 萬張單；reserve：100 × 30 = 3000 張），也不會留東西在你的資料庫裡（#238）。每個 run 另有獨立的 `RUN_ID`。
+- 每個 run 在 Postgres 建一個專屬資料庫（`k6_bench_<stamp>_<pid+random>_<n>`；只 drop 自己 CREATE 成功的，名稱已存在就失敗退出、不碰它，`task k6-bench-test` 用 sentinel 資料庫驗證）、用 `./bin/migrate up` 建 schema、起 `./bin/rpc` + `./bin/worker`（auth off、telemetry off、log warn；#347 起每個 attempt 另起一個 `./bin/catalog-rpc` 接同一個資料庫，rpc 以 `catalog.upstream` 問它，見 `tests/k6/catalog.sh`；v0.54.0 以前的 `bench.sh` 沒有這一步，catalog 在 rpc 內），跑完 drop（失敗或 ^C 也會）。所以每個 run 從空的 outbox 起跳，寫入量由參數決定（create：約 2.5–3 萬張單；reserve：100 × 30 = 3000 張），也不會留東西在你的資料庫裡（#238）。每個 run 另有獨立的 `RUN_ID`。
 - 階段（`tests/k6/bench.js`，`PHASE=create|reserve`；setup、負載、排空各自獨立計時）：
   - **create**：20 VU 不停頓連打 CreateOrder 10 秒（closed model，飽和狀態的吞吐與延遲）。
   - **backlog drain**：create 結束的瞬間，worker 還欠一堆 reservation。`PENDING when create ended` = 那一刻仍是 PENDING 的訂單數；`backlog drain (orders/s)` = 這個數字 ÷ 到 PENDING 歸零的秒數（分子分母同一個時間窗；create 期間 worker 已處理的訂單兩邊都不算）。歸零後還要驗證每張訂單都是 CONFIRMED、RESERVED 的 reservation 數等於訂單總數，否則整個 bench 失敗（PENDING 消失不代表成功）。create 結束時沒有積壓則記為 0 / n/a，不會算出不存在的吞吐。
@@ -120,6 +120,63 @@ gh run download <run-id> --repo blackhorseya/x-monorepo -n k6-bench-<run-id>-1  
 | CreateOrder returned → RESERVED p99 (ms) | 359 | 357–361 | 0.5% |
 
 原始檔在該 run 的 artifact `k6-bench-41005829640-1`（保留 90 天）。
+
+### catalog 拆出前後（#320 第 5 片）
+
+同一個 `k6-bench` workflow、各派送一次（無 input），兩次都是 `VALID`（`bench.sh` exit 0；各 3 次 attempt、3 個 valid）。數字原樣抄自兩個 run 的 artifact `summary.md`，未重算：
+
+| | 切換前 | 切換後 |
+|---|---|---|
+| run | <https://github.com/blackhorseya/x-monorepo/actions/runs/41162571838> | <https://github.com/blackhorseya/x-monorepo/actions/runs/41162587345> |
+| ref / commit | tag `v0.54.0` / `fdf4602cf301bdcc7e8ecc6bf4eddcbb8eb6a7d6` | `main` / `9664a02934113d4dc137faefc1a58e0926567814` |
+| catalog | `rpc` 內的函式呼叫（同一個 process） | 獨立的 `catalog-rpc`（同一台 runner、loopback，Connect + service key，#347） |
+| runner | GitHub Actions 1000019021，`ubuntu-latest`，4 核，**Intel Xeon Platinum 8370C** | GitHub Actions 1000019024，`ubuntu-latest`，4 核，**AMD EPYC 7763** |
+| image / kernel / Go / k6 / Postgres | ubuntu26 20261026.180.1 / 7.0.0-1017-azure / go1.27.3 / k6 v2.3.0 / 16.15 | 同左 |
+| 參數（兩份 `result.json` 的 `parameters` 逐欄相同） | create 20 VUs × 10s；reserve 100 orders/s × 30s；50 SKUs；poll 50ms；seed 1；`runs` 3、`attempts` 3；`max_load_per_core` 1.0、`baseline_wait_s` 180 | 同左 |
+| 開跑前 load（attempt 1/2/3，判定依據） | 1.67 / 3.83 / 3.86 | 2.0 / 3.96 / 3.93 |
+
+**CreateOrder**（3 個 valid attempt 的 median、min–max、CV）
+
+| metric | 切換前 | 切換後 |
+|---|---|---|
+| throughput (req/s) | 1300（1182–1327，CV 5.0%） | 729（657–750，CV 5.6%） |
+| success | 100.00% | 100.00% |
+| p50 (ms) | 12.05（11.69–12.97，CV 4.4%） | 20.85（20.55–22.11，CV 3.2%） |
+| p95 (ms) | 30.11（29.35–38.59，CV 12.8%） | 75.93（72.05–81.27，CV 5.0%） |
+| p99 (ms) | 70.20（68.34–74.42，CV 3.6%） | 118.26（112.08–127.01，CV 5.1%） |
+
+其他階段（只列出，不做比較判讀；完整表在各自 artifact 的 `summary.md`）：
+
+| metric（median） | 切換前 | 切換後 |
+|---|---|---|
+| PENDING when create ended (orders) | 12049 | 6689 |
+| backlog drain (orders/s) | 438 | 320 |
+| backlog drain (s) | 27.5 | 21.1 |
+| reserve: created orders seen RESERVED | 100.00% | 100.00% |
+| reserve: dropped iterations | 0 | 0 |
+| order → RESERVED p50 / p95 / p99 (ms) | 156 / 260 / 311 | 158 / 262 / 362 |
+| CreateOrder returned → RESERVED p50 / p95 / p99 (ms) | 154 / 257 / 309 | 155 / 259 / 359 |
+
+**判定 CPU 是否相同的依據**是各 run artifact `runner.txt` 的 `cpu:` 欄，不是推測。切換前（Xeon 8370C）與切換後（EPYC 7763）**不同**，所以上表是「不同 CPU 的兩次量測」，**不能當成同條件比較**。
+
+為了拿到與切換後同為 EPYC 7763 的切換前 run，在 `v0.54.0` 上又派送 3 次（循序，一次一個；`runs-on: ubuntu-latest` 無法指定 CPU，上限 3 次是事前定的）。**3 次都沒有派到 EPYC 7763**，所以沒有同 CPU 的配對。三次都是 VALID，CreateOrder median（min–max, CV）：
+
+| run（`v0.54.0` @ `fdf4602`） | runner CPU | throughput (req/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+|---|---|---|---|---|---|
+| [41163673581](https://github.com/blackhorseya/x-monorepo/actions/runs/41163673581) | AMD EPYC 9V74 | 1017（988–1408，CV 16.8%） | 10.96（CV 2.2%） | 70.71（35.77–92.44，CV 35.2%） | 133.05（72.24–173.89，CV 33.0%） |
+| [41164041016](https://github.com/blackhorseya/x-monorepo/actions/runs/41164041016) | AMD EPYC 9V45 | 1682（1480–1816，CV 8.3%） | 8.78（CV 7.2%） | 26.57（21.90–32.58，CV 16.2%） | 62.08（57.77–69.36，CV 7.6%） |
+| [41164384315](https://github.com/blackhorseya/x-monorepo/actions/runs/41164384315) | AMD EPYC 9V74 | 1184（1145–1196，CV 1.8%） | 13.11（CV 0.6%） | 33.31（30.13–35.03，CV 6.2%） | 83.83（83.25–84.58，CV 0.6%） |
+
+加上上面的 Xeon 8370C 那次，**同一個 commit（`v0.54.0`）在 4 個 run 上**：CreateOrder p50 8.78–13.11 ms、p95 26.57–70.71 ms、throughput 1017–1682 req/s。run 與 run 之間（不同 runner、不同 CPU）的差，和切換後 vs 切換前的差（p95 75.93 vs 30.11 ms）在同一個量級，所以這份資料**不能**把差異歸因給 catalog 拆出。
+
+**這份比較的限制**（照實寫，不往外推）：
+
+- 沒有同 CPU 的切換前／切換後配對。切換後只有一次（EPYC 7763，run 41162587345）；切換前沒有 EPYC 7763 的 run。
+- 同 CPU 型號也不保證同條件：run 41162587345 與 run 41005829640（EPYC 7763，main @ `cffc8033d2df4b49e9a4e88d3a6b8de1c62d3cea`，catalog 仍在 rpc 內，上一節）是目前唯一同型號的一對，後者 CreateOrder p50 15.02 ms、p95 34.52 ms、p99 95.87 ms、1024 req/s（median）。但它的 commit 早於 `v0.54.0`，兩者之間有其他變更，只能當佐證。
+- 每個 run 的 N = 3（3 個 valid attempt）；median 與 min–max 只描述那 3 次，沒有做顯著性檢定。run 內的離散程度也不小（上表 p95 CV 最高 35.2%）。
+- **`v0.54.0` 與 `9664a02` 之間的 commit**（`git log v0.54.0..9664a02`，共 3 個，77 個檔案）：`721614d` chart 0.3.37（#346，只動 chart）、`081b0f3` inventory 測試（#342，只動測試）、`9664a02` rpc 改問 `catalog-rpc`（#347，拆分本身）。除了 #347，沒有其他 production 程式變更；#347 本身同時包含拆分以外的東西（`tests/k6/catalog.sh`、Helm、docs），bench 的啟動流程因此也不同（切換後每個 attempt 多起一個 `catalog-rpc` process）。
+- 切換後的 `catalog-rpc` 與 rpc、worker、Postgres、k6 跑在同一台 4 核機器上（loopback，沒有跨機網路），它的 CPU 用量也算進切換後的數字；跨機部署的網路延遲不在量測範圍。
+- #320 明寫「幅度要實測，不預設目標值」，這裡不下好壞結論，也不外推到其他硬體或 production。要得到可比的數字，得有可指定 CPU 的 runner（例如固定規格的 larger runner 或 self-hosted），或在同一型號 CPU 上各跑；目前沒有。
 
 ### 本機探索性結果（非 valid）
 
