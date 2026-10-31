@@ -15,6 +15,7 @@ import (
 const (
 	durableKey    = "catalog-rpc-key-0123456789ab"
 	durablePGPass = "s3cretpgpass"
+	otherKey      = "console-user-key-0123456789"
 )
 
 // outcome of one run(args) under a given environment.
@@ -106,13 +107,22 @@ func TestRun_RequireDurable(t *testing.T) {
 	flag := []string{"--require-durable"}
 
 	refused := map[string]map[string]*string{
-		"postgres url empty":      {"APP_POSTGRES_URL": s("")},
-		"postgres url unset":      {"APP_POSTGRES_URL": nil},
-		"postgres url blank":      {"APP_POSTGRES_URL": s("   ")},
-		"auth off":                {"APP_AUTH_MODE": s("off")},
-		"auth unset (default)":    {"APP_AUTH_MODE": nil},
-		"auth optional":           {"APP_AUTH_MODE": s("optional")},
-		"auth off with a key set": {"APP_AUTH_MODE": s("off"), "APP_AUTH_API_KEYS": s("rpc=" + durableKey + ":admin")},
+		"postgres url empty":   {"APP_POSTGRES_URL": s("")},
+		"postgres url unset":   {"APP_POSTGRES_URL": nil},
+		"postgres url blank":   {"APP_POSTGRES_URL": s("   ")},
+		"auth off":             {"APP_AUTH_MODE": s("off")},
+		"auth unset (default)": {"APP_AUTH_MODE": nil},
+		"auth optional":        {"APP_AUTH_MODE": s("optional")},
+		// The service key contract: exactly one key, named rpc. A Secret shared with rpc's user keys
+		// (console, ops...) must not authenticate those users against catalog-rpc.
+		"api keys: rpc and a user key":   {"APP_AUTH_API_KEYS": s("rpc=" + durableKey + ":admin,console=" + otherKey + ":admin")},
+		"api keys: only a user key":      {"APP_AUTH_API_KEYS": s("console=" + otherKey + ":admin")},
+		"api keys: a user key first":     {"APP_AUTH_API_KEYS": s("console=" + otherKey + ":admin,rpc=" + durableKey + ":admin")},
+		"api keys: rpc twice":            {"APP_AUTH_API_KEYS": s("rpc=" + durableKey + ":admin,rpc=" + otherKey + ":admin")},
+		"api keys: name is not rpc":      {"APP_AUTH_API_KEYS": s("catalog=" + durableKey + ":admin")},
+		"api keys: name differs in case": {"APP_AUTH_API_KEYS": s("RPC=" + durableKey + ":admin")},
+		"api keys: none":                 {"APP_AUTH_API_KEYS": nil},
+		"auth off with a key set":        {"APP_AUTH_MODE": s("off"), "APP_AUTH_API_KEYS": s("rpc=" + durableKey + ":admin")},
 	}
 	for name, override := range refused {
 		t.Run("refuses "+name, func(t *testing.T) {
@@ -123,7 +133,7 @@ func TestRun_RequireDurable(t *testing.T) {
 			if out.err == nil || !strings.Contains(out.err.Error(), "require-durable") {
 				t.Fatalf("run = %v, want an error naming --require-durable", out.err)
 			}
-			for _, secret := range []string{durableKey, durablePGPass} {
+			for _, secret := range []string{durableKey, otherKey, durablePGPass} {
 				if strings.Contains(out.err.Error(), secret) {
 					t.Fatalf("the refusal prints a secret: %v", out.err)
 				}
@@ -133,6 +143,13 @@ func TestRun_RequireDurable(t *testing.T) {
 
 	t.Run("accepts a durable configuration", func(t *testing.T) {
 		out := start(t, flag, durableEnv(t, nil))
+		if !out.served || out.err != nil {
+			t.Fatalf("run = %+v, want a clean start and stop", out)
+		}
+	})
+
+	t.Run("accepts the single rpc key with the platform's own spacing", func(t *testing.T) {
+		out := start(t, flag, durableEnv(t, map[string]*string{"APP_AUTH_API_KEYS": s(" rpc = " + durableKey + " : admin , ")}))
 		if !out.served || out.err != nil {
 			t.Fatalf("run = %+v, want a clean start and stop", out)
 		}
