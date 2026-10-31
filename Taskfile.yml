@@ -433,7 +433,7 @@ tasks:
         echo "→ release $(scripts/next-version.sh {{.CLI_ARGS}})"
 
   release-verify:
-    desc: 'scripts/release-verify.sh vX.Y.Z: verify a published release the way its notes say (checksums bundle, archive attestation, four image signatures; needs gh + cosign + ghcr login)'
+    desc: 'scripts/release-verify.sh vX.Y.Z: verify a published release the way its notes say (checksums bundle, archive attestation, five image signatures; needs gh + cosign + ghcr login)'
     cmds:
       - scripts/release-verify.sh {{.CLI_ARGS}}
 
