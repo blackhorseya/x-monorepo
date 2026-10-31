@@ -31,6 +31,7 @@ func TestInventory_SetStockSKUFormat(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	client := inventoryv1connect.NewInventoryServiceClient(http.DefaultClient, ts.URL)
+	seedProduct(t, ts.URL, "", strings.Repeat("a", 64), 100, "USD") // the catalog takes the same 64 bytes
 
 	set := func(sku string) error {
 		_, err := client.SetStock(context.Background(), connect.NewRequest(&inventoryv1.SetStockRequest{Sku: sku, OnHand: 1}))

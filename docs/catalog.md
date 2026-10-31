@@ -71,6 +71,13 @@ Domain 方法反映行為：`Rename`、`Reprice`、`Deactivate`、`Activate`。`
 真正會讓舊 client 失敗的是：它下單的 SKU 在 catalog 裡不存在或已下架（`order.unknown_sku` / `order.inactive_sku`）——**上線前先用 `UpsertProduct` 把在賣的 SKU 都建起來**。
 `task run` 的 in-memory 模式也一樣：沒有 product 就下不了單。
 
+## 庫存跟著 catalog（#326）
+
+catalog 是 SKU 的唯一來源，inventory 只替 catalog 裡有的商品記庫存：`InventoryService.SetStock` 先問 catalog（`GetProduct`，經 catalog 的 `contract/`，apps/rpc 內 in process），
+SKU 沒有 product → `stock.unknown_sku`（`INVALID_ARGUMENT`），catalog 沒答覆 → `catalog.unavailable`（`UNAVAILABLE`），兩者都不寫入；**已下架的 product 放行**（`SetStock` 不看 `active`，下架後仍要能盤點、出清）。
+catalog 沒有刪除商品、只有 `DeactivateProduct`，所以商品存在過就不會消失，檢查之後不會有商品被刪的 race。只有 `SetStock` 問 catalog：`GetStock` / `ListStocks` 與 reserve / release / commit / expire 不問（訂單在 `CreateOrder` 已驗過，舊事件不會因此變 poison）。
+所以呼叫順序是**先 `UpsertProduct` 再 `SetStock`**；部署前的孤兒庫存查詢與處理見 `docs/operations.md`「部署前查孤兒庫存」。
+
 ## 儲存
 
 - Postgres：schema `catalog`，表 `catalog.products`（migration `0001_catalog`，已接進 `apps/migrate`）。欄位 `price_amount bigint`、`price_currency char(3)`，

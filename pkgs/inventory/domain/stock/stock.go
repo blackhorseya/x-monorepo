@@ -8,6 +8,16 @@ import "time"
 // SKU can always be priced and ordered.
 const maxSKUBytes = 64
 
+// ValidateSKU is the one SKU format rule (1 to 64 bytes): New applies it, and so does anything
+// that must refuse a malformed SKU before it asks another context about it.
+func ValidateSKU(sku SKU) error {
+	if sku == "" || len(sku) > maxSKUBytes {
+		return ErrInvalidSKU
+	}
+
+	return nil
+}
+
 // SKU identifies a Stock.
 type SKU string
 
@@ -26,8 +36,8 @@ type Stock struct {
 
 // New creates a Stock with nothing reserved.
 func New(sku SKU, onHand int32, now time.Time) (*Stock, error) {
-	if sku == "" || len(sku) > maxSKUBytes {
-		return nil, ErrInvalidSKU
+	if err := ValidateSKU(sku); err != nil {
+		return nil, err
 	}
 	if onHand < 0 {
 		return nil, ErrNegativeQuantity

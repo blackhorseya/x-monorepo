@@ -100,8 +100,8 @@ export const options = {
 
 export function setup() {
   for (let i = 0; i < SKUS; i++) {
+    upsertProduct(i, 1000); // first: SetStock refuses a SKU the catalog does not have, and CreateOrder prices from it
     setStock(i, 10_000_000);
-    upsertProduct(i, 1000); // CreateOrder prices its lines from the catalog
   }
 }
 

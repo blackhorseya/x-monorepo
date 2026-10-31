@@ -22,6 +22,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/stock"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
@@ -297,7 +298,7 @@ func newRaceEnv(t *testing.T, onHand int32) *raceEnv {
 
 func (e *raceEnv) setStock(sku string, onHand int32) {
 	e.t.Helper()
-	if _, err := inventory.ProvideSetStock(e.stocks, e.tx, e.inbox, e.now, e.rec).Execute(e.c, dto.SetStockInput{SKU: sku, OnHand: onHand}); err != nil {
+	if _, err := inventory.ProvideSetStock(e.stocks, e.tx, e.inbox, e.now, memory.NewAnyProductCatalog(), e.rec).Execute(e.c, dto.SetStockInput{SKU: sku, OnHand: onHand}); err != nil {
 		e.t.Fatal(err)
 	}
 }

@@ -216,7 +216,8 @@ export function redact(text) {
   return out;
 }
 
-// setStock for setup(): needs the admin role when auth is on (ADMIN_API_KEY, else API_KEY). SetStock is a read-modify-write under optimistic locking, so a
+// setStock for setup(): needs the admin role when auth is on (ADMIN_API_KEY, else API_KEY), and the SKU has to
+// be a catalog product already (upsertProduct first; stock.unknown_sku otherwise). SetStock is a read-modify-write under optimistic locking, so a
 // worker touching the same SKU at that moment answers 409 Aborted + concurrent_update —
 // "reload and retry", which for an absolute on_hand means: send it again.
 export function setStock(i, onHand) {
@@ -233,7 +234,7 @@ export function setStock(i, onHand) {
 }
 
 // upsertProduct for setup(): CreateOrder prices its lines from the catalog, so every SKU a script
-// orders has to be a product first. Admin role when auth is on, like setStock. UpsertProduct is
+// orders (and every SKU setStock stocks) has to be a product first. Admin role when auth is on, like setStock. UpsertProduct is
 // also a read-modify-write under optimistic locking: 409 Aborted means send it again.
 export function upsertProduct(i, amountMinor) {
   let res;

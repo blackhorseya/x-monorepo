@@ -38,6 +38,8 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `order.idempotency_key_reused` | `ALREADY_EXISTS` | ordering domain（`CreateOrder`） | 同一個 customer 的 `idempotency_key` 已用在**內容不同**的請求上（items 的 sku / quantity / **順序**任一不同；價格不是請求內容，是 catalog 的）；沒寫入、沒發 event。訊息固定，不帶訂單、items、key；要換 key 才能下新單。內容相同的重送不是錯誤，回原訂單 |
 | `order.idempotency_conflict` | （不到 rpc） | ordering repo（`Save`） | 新單的 (customer, key) 被別人先佔了：use case 接住、回讀勝出的那筆再決定回放或 `order.idempotency_key_reused`；`INTERNAL` Kind 只是保險，正常不會到 `ToConnectError` |
 | `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數；`stock.invalid_sku` = SKU 空或超過 64 **bytes**（與 catalog 同規則；超過 64 字元的請求先被 proto 擋成 `request.validation_failed`，64 字元以內但超過 64 bytes 的多位元組 SKU 才走這個 code） |
+| `stock.unknown_sku` | `INVALID_ARGUMENT` | inventory domain（`SetStock`） | catalog 沒有這個 SKU 的 product：庫存只替 catalog 裡有的商品記，**沒寫入**。已下架的 product 放行（下架後仍要能盤點、出清）。訊息固定，不回 catalog 的任何內容。孤兒庫存（升級前就有、沒有 product 的列）仍讀得到、reserve / release / commit / expire 照舊，只有 `SetStock` 回這個 code，補上 product 後恢復（部署前查詢見 `docs/operations.md`「部署前查孤兒庫存」） |
+| `catalog.unavailable` | `UNAVAILABLE` | inventory rpc adapter（`SetStock`） | catalog 沒有答覆（`GetProduct` 回了 `NOT_FOUND` 以外的失敗）：**fail closed，沒寫入**，同一個請求可以重送。不是 domain error（請求本身沒錯），所以沒有 `kernel.Kind`；訊息固定，catalog 的錯誤只進 log。`GetStock` / `ListStocks` 不問 catalog，不受影響 |
 | `stock.below_reserved` | `FAILED_PRECONDITION` | inventory domain | SetStock 想把 on-hand 壓到低於已 reserved |
 | `stock.release_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Release 超過 reserved |
 | `stock.commit_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Commit 超過 reserved（stock 列與 reservation 不一致：資料壞了） |

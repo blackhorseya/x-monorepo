@@ -13,7 +13,9 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
 
-// SetStock sets the on-hand count of a SKU, creating it on first use.
+// SetStock sets the on-hand count of a SKU, creating its stock on the first call. Whether the SKU
+// is a catalog product is not asked here: ProvideSetStock puts that check in front of the
+// transaction, so this use case holds neither the catalog nor a transactor.
 type SetStock struct {
 	stocks stock.Repository
 	clock  port.Clock

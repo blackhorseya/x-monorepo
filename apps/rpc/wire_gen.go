@@ -15,6 +15,7 @@ import (
 	rpc4 "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
 	system4 "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
+	catalog2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/catalog"
 	events2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
 	rpc3 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
 	system3 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
@@ -100,7 +101,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	transactor2 := inventory.ProvideTransactor(db)
 	portInbox := inventory.ProvideInbox(db)
 	clock2 := system3.NewClock()
-	v11 := inventory.ProvideSetStock(stockRepository, transactor2, portInbox, clock2, recorder)
+	catalogCatalog := catalog2.NewCatalog(catalogService)
+	v11 := inventory.ProvideSetStock(stockRepository, transactor2, portInbox, clock2, catalogCatalog, recorder)
 	v12 := inventory.ProvideGetStock(stockRepository, recorder)
 	v13 := inventory.ProvideListStocks(stockRepository, recorder)
 	reservationRepository := inventory.ProvideReservationRepository(db)
