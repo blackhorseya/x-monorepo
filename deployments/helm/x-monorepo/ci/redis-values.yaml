@@ -4,6 +4,7 @@ secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
   redisUrl: redis://redis:6379/0
   apiKeys: "console=0123456789abcdef0123456789abcdef:admin"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
 config:
   auth: { mode: required }
   otel: { endpoint: otel-collector:4317 }

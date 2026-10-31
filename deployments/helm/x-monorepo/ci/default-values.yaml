@@ -2,6 +2,7 @@
 imagePullSecrets: [{ name: ghcr }]   # exercises the field; the real packages are public
 secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
 config:
   otel: { endpoint: otel-collector:4317 }
 worker:

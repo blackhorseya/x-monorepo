@@ -180,6 +180,12 @@ def main(profile: str) -> None:
     if cdep and cr.get("enabled"):
         check_catalog_rpc(docs, values, cdep, cr)
 
+    # rpc asks catalog-rpc (#320 slice 4): where it is, which key it presents, and a best-effort wait before
+    # it starts. rpc has no in-process catalog any more, so catalog-rpc is on in every profile.
+    cr0 = values.get("catalogRpc", {})
+    check(cr0.get("enabled"), "catalogRpc is on: rpc has no in-process catalog to fall back on")
+    check_rpc_to_catalog(docs, values, rpc, c, spec)
+
     # Every app pod reads the same config file and, when there is one, the same Secret.
     for d in (rpc, worker):
         cc = d["spec"]["template"]["spec"]["containers"][0]
@@ -187,6 +193,47 @@ def main(profile: str) -> None:
         check(("envFrom" in cc) == has_db or bool(values["secrets"].get("existingSecret")), f'{d["metadata"]["name"]}: envFrom iff secrets')
 
     print(f"helm check {profile}: ok")
+
+
+def check_rpc_to_catalog(docs, values, rpc, c, spec):
+    cr = values["catalogRpc"]
+    renv = {e["name"]: e for e in c["env"]}
+    svc = one(docs, "Service", "-catalog-rpc")
+    check("APP_CATALOG_UPSTREAM" in renv and "APP_CATALOG_API_KEY" in renv, "rpc is told where catalog-rpc is and with which key (APP_CATALOG_UPSTREAM, APP_CATALOG_API_KEY)")
+    expect(renv["APP_CATALOG_UPSTREAM"].get("value"), f'http://{svc["metadata"]["name"]}:{cr["service"]["port"]}', "rpc APP_CATALOG_UPSTREAM = the catalog-rpc Service of this release")
+
+    # the service key: the SAME Secret and key catalog-rpc is configured from, never a copy typed twice
+    own = cr_secret_name(values, docs)
+    ref = renv["APP_CATALOG_API_KEY"]["valueFrom"]["secretKeyRef"]
+    expect(ref.get("name"), own, "rpc APP_CATALOG_API_KEY comes from catalog-rpc's own Secret")
+    expect(ref.get("key"), "APP_CATALOG_API_KEY", "rpc APP_CATALOG_API_KEY secretKeyRef key")
+    expect(ref.get("optional"), False, "rpc APP_CATALOG_API_KEY optional: false (a Secret without it keeps the pod from starting)")
+    if not values["secrets"]["catalogRpc"].get("existingSecret"):
+        data = one(docs, "Secret", "-catalog-rpc-env")["stringData"]
+        k = values["secrets"]["catalogRpc"]["apiKey"]
+        expect(data["APP_CATALOG_API_KEY"], k, "rpc's key is the catalogRpc.apiKey value")
+        expect(data["APP_AUTH_API_KEYS"], f'rpc={k}:{values["config"]["auth"]["admin_role"]}', "...and catalog-rpc accepts exactly that key, named rpc")
+    # nothing else of catalog-rpc's Secret reaches rpc, and the shared Secret is not catalog-rpc's
+    check(not any("secretRef" in e and e["secretRef"].get("name") == own for e in c.get("envFrom", [])), "rpc does not envFrom catalog-rpc's Secret (only the one key by secretKeyRef)")
+    names = [e["name"] for e in c["env"]]
+    check(len(names) == len(set(names)), f"rpc env has no duplicate names: {names}")
+
+    # the best-effort wait: an initContainer on the rpc image that cannot hold a rollout longer than its budget
+    w = values["rpc"].get("waitForCatalog", {})
+    inits = spec.get("initContainers", [])
+    check(bool(inits) == bool(w.get("enabled")), "rpc initContainer iff rpc.waitForCatalog.enabled")
+    if w.get("enabled"):
+        check(len(inits) == 1, "one initContainer")
+        ic = inits[0]
+        expect(ic["name"], "wait-for-catalog", "initContainer name")
+        expect(ic["image"], c["image"], "the wait runs the rpc image (distroless: the binary does the waiting)")
+        expect(ic.get("args"), [f'--wait-catalog={w["timeoutSeconds"]}s'], "initContainer args")
+        ienv = {e["name"]: e.get("value") for e in ic.get("env", [])}
+        expect(ienv.get("APP_CATALOG_UPSTREAM"), renv["APP_CATALOG_UPSTREAM"]["value"], "initContainer waits for the same upstream")
+        check("APP_CATALOG_API_KEY" not in ienv and "envFrom" not in ic, "the wait presents no credential (the probe path is open)")
+        check(ic["securityContext"].get("readOnlyRootFilesystem") is True, "initContainer rootfs read-only")
+        deadline = rpc["spec"].get("progressDeadlineSeconds")
+        check(deadline is not None and w["timeoutSeconds"] < deadline, f'wait {w["timeoutSeconds"]}s < progressDeadlineSeconds {deadline}')
 
 
 def check_catalog_rpc(docs, values, dep, cr):
@@ -255,7 +302,7 @@ def check_catalog_rpc(docs, values, dep, cr):
     if not values["secrets"]["catalogRpc"].get("existingSecret"):
         sec = one(docs, "Secret", "-catalog-rpc-env")
         data = sec["stringData"]
-        expect(sorted(data), ["APP_AUTH_API_KEYS", "APP_POSTGRES_URL"], "catalog-rpc Secret keys")
+        expect(sorted(data), ["APP_AUTH_API_KEYS", "APP_CATALOG_API_KEY", "APP_POSTGRES_URL"], "catalog-rpc Secret keys (catalog-rpc itself reads two; the third is rpc's copy of the same key)")
         expect(data["APP_AUTH_API_KEYS"], f'rpc={values["secrets"]["catalogRpc"]["apiKey"]}:{values["config"]["auth"]["admin_role"]}', "catalog-rpc service key is rpc=<key>:<admin role>")
         expect(data["APP_POSTGRES_URL"], values["secrets"]["postgresUrl"], "catalog-rpc Postgres URL")
     else:

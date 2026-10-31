@@ -1,0 +1,6 @@
+# expect: catalogRpc.enabled
+# rpc has no in-process catalog fallback: turning catalog-rpc off would leave rpc without a catalog.
+catalogRpc: { enabled: false }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }

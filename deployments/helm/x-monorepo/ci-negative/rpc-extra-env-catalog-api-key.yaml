@@ -1,0 +1,7 @@
+# expect: rpc.extraEnv
+# The chart sets where rpc finds the catalog and with which key; extraEnv must not repoint or replace them (APP_CATALOG_API_KEY).
+rpc:
+  extraEnv: [{ name: APP_CATALOG_API_KEY, value: "x" }]
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
