@@ -47,8 +47,8 @@ up="{\"sku\":\"$catsku\",\"name\":\"$catsku\",\"price\":{\"amount_minor\":250,\"
 # it to catalog-rpc over Connect. (The rpc has no catalog repository of its own, so a 404 here means
 # the Forwarder or catalog-rpc is broken.)
 got=$(curl -fsS -H 'Content-Type: application/json' "$api/catalog.v1.CatalogService/GetProduct" -d "{\"sku\":\"$catsku\"}" | jq -r '.product.price.amountMinor // .product.price.amount_minor')
-[ "$got" = 250 ] || { echo "smoke: rpc did not read catalog-rpc's write back from Postgres (got '$got')"; exit 1; }
-echo "smoke: catalog-rpc requires its service key (401 without, 401 unknown, 200 with) and persists to the shared Postgres"
+[ "$got" = 250 ] || { echo "smoke: rpc did not read catalog-rpc's write back (got '$got')"; exit 1; }
+echo "smoke: catalog-rpc requires its service key (401 without, 401 unknown, 200 with) and the rpc reads back through to catalog-rpc what catalog-rpc wrote"
 
 # Console: the SPA for any route (TanStack Router handles /reservations client-side), the rpc
 # through nginx's /api proxy — what the browser does.
