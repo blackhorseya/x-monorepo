@@ -112,6 +112,46 @@ func (e *rollbackEnv) snapshot(t *testing.T, schemas []string) map[string]string
 	return out
 }
 
+// bcSchemas are the schemas whose tables the snapshots cover.
+var bcSchemas = []string{"catalog", "identity", "inventory", "ordering"}
+
+// dataTables lists every base table of the BC schemas except the version tables and the
+// catalog.currencies list migration 0001 seeds.
+func (e *rollbackEnv) dataTables(t *testing.T) []string {
+	t.Helper()
+	rows, err := e.conn.Query(e.c, `SELECT table_schema || '.' || table_name FROM information_schema.tables
+		WHERE table_schema = ANY($1) AND table_type = 'BASE TABLE' AND table_name <> 'schema_migrations' AND table_schema || '.' || table_name <> 'catalog.currencies'
+		ORDER BY 1`, bcSchemas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, name)
+	}
+
+	return out
+}
+
+// requireEveryTableSeeded fails when any data table is empty.
+func (e *rollbackEnv) requireEveryTableSeeded(t *testing.T) {
+	t.Helper()
+	var empty []string
+	for _, table := range e.dataTables(t) {
+		if e.count(t, `SELECT count(*) FROM `+table) == 0 {
+			empty = append(empty, table)
+		}
+	}
+	if len(empty) > 0 {
+		t.Fatalf("tables with no sentinel row (the snapshot would compare nothing): %s", strings.Join(empty, ", "))
+	}
+}
+
 // runbookEntry runs the rollback entry the runbook file gives.
 func (e *rollbackEnv) runbookEntry(t *testing.T, tc rollbackCase) {
 	t.Helper()
@@ -171,6 +211,7 @@ func runRollbackCase(t *testing.T, tc rollbackCase) {
 	if tc.prepare != nil {
 		tc.prepare(t, e)
 	}
+	e.requireEveryTableSeeded(t) // an empty table would compare equal whatever the runbook did to it
 
 	target := migrations[tc.bc].Schema
 	var others []string
