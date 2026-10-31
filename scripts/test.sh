@@ -161,6 +161,11 @@ expect_eq "apps/rpc: k6, k6-auth"       "$go_checks $go_prod_pre k6 k6_auth k6_w
 expect_eq "apps/worker: k6, keda"       "$go_checks $go_prod_pre helm_kind_keda k6 k6_wire" "$(jobs_on worker apps/worker/main.go)"
 expect_eq "configs: k6 and k6-auth, not keda" \
   "$go_checks $go_prod_pre k6 k6_auth k6_wire" "$(jobs_on configs configs/config.example.yaml)"
+expect_eq "apps/catalog-rpc: k6, k6-auth (rpc asks it for every order)" \
+  "$go_checks $go_prod_pre k6 k6_auth k6_wire" "$(jobs_on catalogrpc apps/catalog-rpc/main.go)"
+expect_eq "pkgs/catalog (the client adapter, the forwarder): k6, k6-auth" \
+  "$go_checks $go_prod_pre k6 k6_auth k6_wire" "$(jobs_on catalogpkg pkgs/catalog/adapters/client/client.go)"
+expect_eq "a catalog test alone is no k6 input" "$go_checks" "$(jobs_on catalogtest pkgs/catalog/adapters/client/client_test.go)"
 expect_eq "ordering is not a k6 input"  "$go_checks $go_prod" "$(jobs_on ordering pkgs/ordering/adapters/rpc/handler.go)"
 expect_eq "inventory is not a k6 input" "$go_checks $go_prod" "$(jobs_on inventory pkgs/inventory/usecase/x.go)"
 
