@@ -11,6 +11,7 @@ import (
 	"github.com/google/wire"
 	"gorm.io/gorm"
 
+	catalogadapter "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/catalog"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/cli"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
@@ -41,6 +42,10 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),
 	system.NewClock,
 	wire.Bind(new(port.Clock), new(*system.Clock)),
+	// SetStock asks the catalog, in process, whether a SKU is a product. Only apps/rpc binds
+	// the catalog's handler; apps/worker never builds SetStock and so never needs it.
+	catalogadapter.NewCatalog,
+	wire.Bind(new(port.ProductCatalog), new(*catalogadapter.Catalog)),
 
 	// application (decorated; see decorate). *usecasex.Recorder and the
 	// message.Publisher (outbox) are shared across BCs: apps provide them.
@@ -140,17 +145,23 @@ func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase
 // the consumed message id in this BC's inbox (same transaction: it rolls back
 // with a failed attempt) and drops a redelivery before any aggregate is
 // loaded. On the rpc path there is no message id and it is a pass-through.
-func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, inbox port.Inbox, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
-	return usecasex.Chain(uc,
+//
+// guards run after Logging and before the transaction opens: they may refuse without ever taking
+// a connection, and Metrics and Logging still see what they refuse.
+func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor, inbox port.Inbox, uc usecasex.UseCase[I, O], guards ...usecasex.Decorator[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc, append(append([]usecasex.Decorator[I, O]{
 		usecasex.Metrics[I, O](rec, name),
 		usecasex.Logging[I, O](name),
+	}, guards...),
 		usecasex.Transactional[I, O](tx),
 		usecasex.Idempotent[I, O](inbox),
-	)
+	)...)
 }
 
-func ProvideSetStock(stocks stock.Repository, tx port.Transactor, inbox port.Inbox, clock port.Clock, rec *usecasex.Recorder) rpc.SetStockUC {
-	return decorateTx("inventory.set_stock", rec, tx, inbox, usecase.NewSetStock(stocks, clock))
+// ProvideSetStock stocks only what the catalog has: requireProduct asks it before the
+// transaction opens.
+func ProvideSetStock(stocks stock.Repository, tx port.Transactor, inbox port.Inbox, clock port.Clock, products port.ProductCatalog, rec *usecasex.Recorder) rpc.SetStockUC {
+	return decorateTx("inventory.set_stock", rec, tx, inbox, usecase.NewSetStock(stocks, clock), requireProduct(products))
 }
 
 func ProvideGetStock(stocks stock.Repository, rec *usecasex.Recorder) rpc.GetStockUC {

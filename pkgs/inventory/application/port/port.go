@@ -4,6 +4,7 @@ package port
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
@@ -34,4 +35,17 @@ type Inbox interface {
 // Transactor.Do so the events share the state change's transaction.
 type EventPublisher interface {
 	Publish(c context.Context, events ...reservation.Event) error
+}
+
+// ErrCatalogUnavailable marks a failure to get an answer from the catalog (as opposed to the
+// catalog answering "no such product"). Adapters wrap the cause with it; the rpc edge maps it
+// to UNAVAILABLE. It is deliberately not a kernel.Error: nothing about the request is wrong.
+var ErrCatalogUnavailable = errors.New("catalog unavailable")
+
+// ProductCatalog is what SetStock needs from the catalog: whether a SKU is a product, active
+// or not. Defined here, on the consumer's side; adapters/catalog implements it over the
+// catalog's contract. A SKU the catalog does not have is (false, nil); the catalog failing to
+// answer is an error wrapping ErrCatalogUnavailable.
+type ProductCatalog interface {
+	HasProduct(c context.Context, sku string) (bool, error)
 }

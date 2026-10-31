@@ -9,6 +9,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -77,7 +78,7 @@ func TestReserveStock_Transactional(t *testing.T) {
 	}
 	getStock := inventory.ProvideGetStock(stocks, rec)
 
-	if _, err := inventory.ProvideSetStock(stocks, tx, inbox, clock, rec).Execute(c, dto.SetStockInput{SKU: "SKU-TX", OnHand: 5}); err != nil {
+	if _, err := inventory.ProvideSetStock(stocks, tx, inbox, clock, memory.NewAnyProductCatalog(), rec).Execute(c, dto.SetStockInput{SKU: "SKU-TX", OnHand: 5}); err != nil {
 		t.Fatalf("set stock: %v", err)
 	}
 

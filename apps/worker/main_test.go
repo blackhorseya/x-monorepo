@@ -23,6 +23,7 @@ import (
 	inventoryevents "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
 	inventorydto "github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
+	inventorymemory "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/memory"
 	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	inventorysys "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
@@ -170,7 +171,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	iinbox := inventory.ProvideInbox(db)
 	iev := inventoryevents.NewPublisher(publisher)
 	iclock := inventorysys.NewClock()
-	setStock := inventory.ProvideSetStock(stocks, itx, iinbox, iclock, rec)
+	setStock := inventory.ProvideSetStock(stocks, itx, iinbox, iclock, inventorymemory.NewAnyProductCatalog(), rec)
 	getStock := inventory.ProvideGetStock(stocks, rec)
 	getReservation := inventory.ProvideGetReservation(reservations, rec)
 	orderingGauges := ordering.ProvideGauges(ordering.ProvideOrderStats(orders, rec))

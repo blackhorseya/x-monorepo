@@ -7,7 +7,10 @@ import (
 )
 
 var (
-	ErrInvalidSKU             = kernel.NewError(kernel.KindInvalidArgument, "stock.invalid_sku", "sku must be 1 to 64 bytes")
+	ErrInvalidSKU = kernel.NewError(kernel.KindInvalidArgument, "stock.invalid_sku", "sku must be 1 to 64 bytes")
+	// ErrUnknownSKU is SetStock's answer to a SKU the catalog does not have: stock is only
+	// kept for products. The message is fixed; nothing about the catalog is echoed back.
+	ErrUnknownSKU             = kernel.NewError(kernel.KindInvalidArgument, "stock.unknown_sku", "the catalog has no product with this sku")
 	ErrNegativeQuantity       = kernel.NewError(kernel.KindInvalidArgument, "stock.negative_quantity", "quantity must not be negative")
 	ErrInvalidQuantity        = kernel.NewError(kernel.KindInvalidArgument, "stock.invalid_quantity", "quantity must be positive")
 	ErrBelowReserved          = kernel.NewError(kernel.KindFailedPrecondition, "stock.below_reserved", "on-hand quantity cannot drop below the reserved quantity")

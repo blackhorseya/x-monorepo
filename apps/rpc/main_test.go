@@ -62,6 +62,7 @@ func TestOrderService_E2E(t *testing.T) {
 	c := context.Background()
 	seedProduct(t, ts.URL, "", "SKU-1", 1299, "USD")
 	seedProduct(t, ts.URL, "", "S", 1, "USD")
+	seedProduct(t, ts.URL, "", "SKU-0", 1, "USD")
 
 	created, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
 		CustomerId: "c-1",
@@ -226,6 +227,13 @@ func TestOrderService_E2E(t *testing.T) {
 		t.Fatalf("SetStock negative (protovalidate): err = %v", err)
 	}
 
+	// A SKU the catalog does not have is refused by the guard in front of SetStock, and the
+	// refusal is counted: Metrics wraps the guard.
+	_, err = inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-NOT-IN-CATALOG", OnHand: 1}))
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != "stock.unknown_sku" {
+		t.Fatalf("SetStock unknown sku: err = %v", err)
+	}
+
 	// Metrics decorator is wired for every use case and exposed on /api/metrics.
 	res, err := http.Get(ts.URL + server.MetricsPath)
 	if err != nil {
@@ -245,6 +253,7 @@ func TestOrderService_E2E(t *testing.T) {
 		`usecase_duration_seconds_count{kind="ok",usecase="ordering.list_orders"} 3`,
 		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.list_orders"} 1`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.set_stock"} 2`,
+		`usecase_duration_seconds_count{kind="invalid_argument",usecase="inventory.set_stock"} 1`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.list_stocks"} 4`,
 		`usecase_duration_seconds_count{kind="ok",usecase="inventory.get_stock"} 1`,
 		`usecase_duration_seconds_count{kind="not_found",usecase="inventory.get_reservation"} 1`,

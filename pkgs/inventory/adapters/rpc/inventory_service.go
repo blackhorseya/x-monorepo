@@ -3,6 +3,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/port"
 	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1/inventoryv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
@@ -73,7 +75,22 @@ func (h *InventoryService) Route(opts ...connect.HandlerOption) (string, http.Ha
 	return inventoryv1connect.NewInventoryServiceHandler(h, opts...)
 }
 
-// SetStock overwrites a SKU's on-hand count. Admin role when auth is on.
+// CatalogUnavailableCode is the x-error-code of SetStock failing closed because the catalog did
+// not answer: nothing was written, and the same request can be retried.
+const CatalogUnavailableCode = "catalog.unavailable"
+
+// catalogUnavailable is UNAVAILABLE with a fixed message: the cause (the catalog's own error)
+// is logged by the use case's Logging decorator and never echoed to the caller.
+func catalogUnavailable() error {
+	ce := connect.NewError(connect.CodeUnavailable, errors.New("the catalog could not be reached, retry the request"))
+	ce.Meta().Set("x-error-code", CatalogUnavailableCode)
+
+	return ce
+}
+
+// SetStock overwrites a SKU's on-hand count, creating the stock when the SKU has none yet. The
+// SKU must be a catalog product (stock.unknown_sku otherwise); a deactivated product is fine.
+// Admin role when auth is on.
 func (h *InventoryService) SetStock(
 	c context.Context,
 	req *connect.Request[inventoryv1.SetStockRequest],
@@ -83,6 +100,10 @@ func (h *InventoryService) SetStock(
 	}
 	out, err := h.setStock.Execute(c, dto.SetStockInput{SKU: req.Msg.GetSku(), OnHand: req.Msg.GetOnHand()})
 	if err != nil {
+		if errors.Is(err, port.ErrCatalogUnavailable) {
+			return nil, catalogUnavailable()
+		}
+
 		return nil, server.ToConnectError(err)
 	}
 

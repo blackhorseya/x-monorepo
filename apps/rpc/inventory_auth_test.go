@@ -22,7 +22,7 @@ import (
 // credential is PERMISSION_DENIED, no credential is UNAUTHENTICATED, the
 // admin role is whatever auth.admin_role says; with auth off it is open.
 func TestInventory_SetStockAdminRole(t *testing.T) {
-	start := func(t *testing.T, auth config.Auth) func(key string) inventoryv1connect.InventoryServiceClient {
+	start := func(t *testing.T, auth config.Auth) (client func(key string) inventoryv1connect.InventoryServiceClient, baseURL string) {
 		t.Helper()
 		srv, cleanup, err := Initialize(&config.AppConfig{
 			HTTP: config.HTTP{Addr: ":0"},
@@ -48,7 +48,7 @@ func TestInventory_SetStockAdminRole(t *testing.T) {
 			}
 
 			return inventoryv1connect.NewInventoryServiceClient(http.DefaultClient, ts.URL, opts...)
-		}
+		}, ts.URL
 	}
 	wantCode := func(t *testing.T, err error, code connect.Code, errorCode string) {
 		t.Helper()
@@ -68,12 +68,15 @@ func TestInventory_SetStockAdminRole(t *testing.T) {
 	}
 
 	t.Run("auth required: only the admin role may set stock", func(t *testing.T) {
-		client := start(t, config.Auth{
+		client, url := start(t, config.Auth{
 			Mode:      config.AuthRequired,
 			AdminRole: "root", // not the default: the role name must come from config
 			APIKeys:   "plain=plain-key-0123456789ab,ops=ops-key-0123456789abc:root,decoy=decoy-key-0123456789ab:admin",
 		})
 		plain, ops, decoy := client("plain-key-0123456789ab"), client("ops-key-0123456789abc"), client("decoy-key-0123456789ab")
+		// both SKUs are catalog products, so a refusal below is the role's, not the catalog's
+		seedProduct(t, url, "ops-key-0123456789abc", "SKU-DENIED", 100, "USD")
+		seedProduct(t, url, "ops-key-0123456789abc", "SKU-OPS", 100, "USD")
 
 		for _, cl := range []inventoryv1connect.InventoryServiceClient{plain, decoy} { // role-less, and a role that is not auth.admin_role
 			wantCode(t, set(cl, "SKU-DENIED"), connect.CodePermissionDenied, "auth.permission_denied")
@@ -92,12 +95,13 @@ func TestInventory_SetStockAdminRole(t *testing.T) {
 	})
 
 	t.Run("auth optional: a call without a credential is unauthenticated", func(t *testing.T) {
-		client := start(t, config.Auth{Mode: config.AuthOptional, APIKeys: "ops=ops-key-0123456789abc:admin"})
+		client, _ := start(t, config.Auth{Mode: config.AuthOptional, APIKeys: "ops=ops-key-0123456789abc:admin"})
 		wantCode(t, set(client(""), "SKU-ANON"), connect.CodeUnauthenticated, "auth.unauthenticated")
 	})
 
 	t.Run("auth off: open, as ExpireReservations", func(t *testing.T) {
-		client := start(t, config.Auth{Mode: config.AuthOff})
+		client, url := start(t, config.Auth{Mode: config.AuthOff})
+		seedProduct(t, url, "", "SKU-OFF", 100, "USD")
 		anon := client("")
 		if err := set(anon, "SKU-OFF"); err != nil {
 			t.Fatalf("anonymous SetStock with auth off: %v", err)

@@ -280,6 +280,21 @@ COMMIT;
 
 這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，兩種狀態（9 clean、9 dirty 且無 CHECK）都驗證 catalog / identity / ordering 的版本、schema 與資料不動。
 
+**部署前查孤兒庫存（`SetStock` 要先有 product，#326）**：`SetStock` 只替 catalog 裡有的商品記庫存。SKU 沒有 product → `INVALID_ARGUMENT` + `stock.unknown_sku`，不寫入；catalog 沒回答（任何非 `NOT_FOUND` 的失敗）→ `UNAVAILABLE` + `catalog.unavailable`，不寫入（fail closed，不是「查不到就放行」）；已下架的 product 照常 `SetStock`（下架後仍要能盤點、出清）。檢查在 transaction 之外，等 catalog 時不佔 DB 連線。
+
+不做 migration、不刪資料：升級前就存在、但 catalog 沒有 product 的庫存（孤兒庫存）還讀得到（`GetStock`、`ListStocks`），reserve / release / commit / expire 照舊，只是不能再 `SetStock`，要先補 product。catalog 故障時 `GetStock` / `ListStocks` 也不受影響。升級前在 catalog 與 inventory 同一個資料庫裡查（跨 schema 不能設 FK，所以這是唯一的對帳方式）：
+
+```sql
+SELECT s.sku, s.on_hand, s.reserved FROM inventory.stocks s
+LEFT JOIN catalog.products p ON p.sku = s.sku COLLATE "C"
+WHERE p.sku IS NULL
+ORDER BY s.sku;
+```
+
+沒有列 = 沒有孤兒庫存。有列的，對每個還要賣的 SKU 先 `UpsertProduct`（admin role）補 product，之後 `SetStock` 照常；不賣的就留著，它們不影響其他 SKU。這段 SQL 由 `apps/rpc` 的測試在真實 Postgres 上直接從本文件取出執行，不是另外抄一份。
+
+**行為變更（順序）**：自動化要先 `UpsertProduct` 再 `SetStock`（k6 setup、kind smoke、腳本都已照這個順序）；先 `SetStock` 的舊順序升級後會得到 `stock.unknown_sku`。`UpsertProduct` 與 `SetStock` 都要 admin role，auth 開著時 setup 兩步都用 admin key。
+
 **migration 的鎖（ordering `0008`，`CreateOrder` 冪等）**：`0008_order_idempotency` 對 `ordering.orders` 加兩個 nullable 欄位（不重寫表、不回填），再建 partial unique index（`CREATE UNIQUE INDEX`，不是 `CONCURRENTLY`——migration 在**一個交易**裡跑）。`ALTER TABLE` 取 **ACCESS EXCLUSIVE lock 並持有到整個 migration commit**，建 index 的整表掃描也在這把鎖底下：`ordering.orders` 的**讀與寫**（GetOrder / ListOrders / CreateOrder / Cancel / Complete / Confirm）都會等到整個 migration 結束，不只是寫入；讀流量照進來會逾時。表小（本機、staging）是毫秒級，可忽略；**大表請排維護窗口，且窗口要涵蓋讀流量**（先把 rpc / worker `kubectl scale` 到 0 或擋掉流量，再讓 migrate hook 跑）。順序：先 migrate 再升 rpc（chart 的 `pre-upgrade` hook 已保證）；舊 rpc 不認識新欄位也不寫它們，新 rpc 對 NULL 的列照舊，所以 rolling upgrade 期間兩種版本可並存。回滾：`migrate down` 一步會丟掉 key 與 hash（已記住的冪等保護隨之消失，訂單不受影響）；`down` 同樣在一個交易裡取 ACCESS EXCLUSIVE。
 
 **identity bootstrap（在操作者本機跑，不要在叢集裡跑）**：secret 是 `worker bootstrap` 的 stdout，叢集裡任何 Pod（Job、`kubectl run`、`kubectl exec`）的 stdout 都會進 Pod log，也可能被 log collector 收走——所以只在你自己的 terminal 跑，經 port-forward 連 DB。chart 本身沒有 Postgres（`secrets.postgresUrl` 指到哪就是哪；kind 的 `deps.yaml` 才有 Service `postgres`），`<fullname>` 是 chart 的 fullname（release `api` 就是 `api-x-monorepo`），`<release-ns>` 是 release 裝的 namespace（跟 `<db-ns>` 不一定同一個）：
