@@ -42,7 +42,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),
 	system.NewClock,
 	wire.Bind(new(port.Clock), new(*system.Clock)),
-	// SetStock asks the catalog, in process, whether a SKU is a product. Only apps/rpc binds
+	// SetStock asks the catalog (a Connect call to catalog-rpc) whether a SKU is a product. Only apps/rpc binds
 	// the catalog's handler; apps/worker never builds SetStock and so never needs it.
 	catalogadapter.NewCatalog,
 	wire.Bind(new(port.ProductCatalog), new(*catalogadapter.Catalog)),

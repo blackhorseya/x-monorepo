@@ -133,7 +133,8 @@ func (h *CatalogService) DeactivateProduct(
 }
 
 // QuotePrices is a read: any caller the auth interceptor lets in may ask what things cost.
-// Ordering calls it in process, past the interceptors, to price an order.
+// Ordering asks it to price an order: through apps/rpc's Connect client to catalog-rpc, which presents
+// rpc's service key (a read, so any verified credential may).
 func (h *CatalogService) QuotePrices(
 	c context.Context,
 	req *connect.Request[catalogv1.QuotePricesRequest],

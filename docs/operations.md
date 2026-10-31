@@ -370,11 +370,13 @@ kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 ki
 ```bash
 task helm-check    # 每個 ci/*.yaml profile：helm lint --strict → helm template | kubeconform -strict → deployments/helm/check.py
 helm install api deployments/helm/x-monorepo -n app --create-namespace \
-  --set-string secrets.postgresUrl='postgres://…' --set config.otel.endpoint=otel-collector:4317   # image 是 public 的 ghcr，不用 pull secret
+  --set-string secrets.postgresUrl='postgres://…' \
+  --set-string secrets.catalogRpc.apiKey="$(openssl rand -hex 24)" \
+  --set config.otel.endpoint=otel-collector:4317   # image 是 public 的 ghcr，不用 pull secret；catalogRpc.apiKey 是 rpc 與 catalog-rpc 共用的 service key（必填，不能含 , : = 或空白）
 ```
 
 `check.py` 是 chart 裡唯一有邏輯的地方的測試：rpc 的 grace period 算式與 env、readiness period 的關係、worker 沒 probe、migrate hook
-與它的 Secret 的順序、prune 的 args、console 的 `RPC_UPSTREAM` 指到這個 release 的 rpc Service 且沒有 `APP_*` / Secret。ServiceMonitor 選到 rpc Service 的 port、NetworkPolicy 的 peers（console 一定在、`ingressFrom` 原樣、空就不出 `from`）。`ci/` 原本七個 profile（另有 `catalog-rpc-values`：rpc 的 OIDC / JWT / 使用者 key 全開，catalog-rpc 的 ConfigMap 與 Secret 仍不含；`catalog-rpc-existing-secret-values`：外部 Secret；`ci-negative/` 的 16 個案例由 `check-negative.sh` 要求 `helm template` 失敗並點名原因）（預設 + DB、redis broker + HPA + ingress + auth required、existingSecret、無 DB + 沒列 peer 的 NetworkPolicy、console + 自己的 ingress、hardened：NetworkPolicy 列 ingress-nginx / monitoring + ServiceMonitor + console、oidc：auth required + 兩個 issuer，驗 `auth.oidc` 原樣進 ConfigMap、布林沒被 YAML 1.1 吃掉）
+與它的 Secret 的順序、prune 的 args、console 的 `RPC_UPSTREAM` 指到這個 release 的 rpc Service 且沒有 `APP_*` / Secret。ServiceMonitor 選到 rpc Service 的 port、NetworkPolicy 的 peers（console 一定在、`ingressFrom` 原樣、空就不出 `from`）。`ci/` 八個 profile（預設 + DB；redis broker + HPA + ingress + auth required；existingSecret（rpc 的共用 Secret 與 catalog-rpc 自己的各一）；console + 自己的 ingress；hardened：NetworkPolicy 列 ingress-nginx / monitoring + ServiceMonitor + console；oidc：auth required + 兩個 issuer，驗 `auth.oidc` 原樣進 ConfigMap、布林沒被 YAML 1.1 吃掉；`catalog-rpc-values`：rpc 的 OIDC / JWT / 使用者 key 全開，catalog-rpc 的 ConfigMap 與 Secret 仍不含；`catalog-rpc-existing-secret-values`：外部 Secret）。每個 profile 都帶 `secrets.catalogRpc.apiKey`（或 existingSecret），因為 rpc 沒有 catalog-rpc 就不啟動；原本的「無 DB」profile 不存在了，`ci-negative/` 的 30 個案例（含 `rpc-without-database.yaml`）由 `check-negative.sh` 要求 `helm template` 失敗並點名原因。
 在 CI 的 `helm` job 跑。真的裝一次是 `task helm-kind`（CI 的 `helm-kind` job）：起 kind cluster、`deployments/helm/kind/deps.yaml`
 放一個拋棄式 Postgres + Redis（chart 沒有 subchart dependency，production 接 managed DB，這份只給 smoke 用）、從 working tree build 四個 Go image（rpc / catalog-rpc / worker / migrate）+ console image（`web-build` → nginx）
 `kind load` 進去、`helm upgrade --install --wait` 兩次（第一次走 pre-install hook、第二次走 pre-upgrade），每次跑 `kind/smoke.sh`：

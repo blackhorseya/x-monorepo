@@ -114,7 +114,7 @@ func ProvideDeactivateProduct(products product.Repository, clock port.Clock, tx 
 }
 
 // ProvideQuotePrices is the batch price lookup other bounded contexts ask for through
-// CatalogService.QuotePrices (ordering's adapters/pricing, in process).
+// CatalogService.QuotePrices (ordering's adapters/pricing, over Connect from apps/rpc).
 func ProvideQuotePrices(products product.Repository, rec *usecasex.Recorder) rpc.QuotePricesUC {
 	return decorate("catalog.quote_prices", rec, usecase.NewQuotePrices(products))
 }
