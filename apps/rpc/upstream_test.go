@@ -37,7 +37,7 @@ func catalogBinary(t *testing.T) string {
 		binPath = filepath.Join(dir, "catalog-rpc")
 		out, err := exec.Command("go", "build", "-o", binPath, "github.com/blackhorseya/x-monorepo/apps/catalog-rpc").CombinedOutput()
 		if err != nil {
-			buildErr = fmt.Errorf("build catalog-rpc: %v\n%s", err, out)
+			buildErr = fmt.Errorf("build catalog-rpc: %w\n%s", err, out)
 		}
 	})
 	if buildErr != nil {

@@ -28,14 +28,7 @@ func main() {
 		// `rpc --wait-catalog[=60s]`: the initContainer of the Helm chart. It reads the same config as the
 		// server (catalog.upstream), waits best-effort for the catalog and exits 0, so the server starts
 		// either way. A config it cannot load is a failure: the server would refuse to start on it too.
-		c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		cfg, err := config.Load()
-		if err != nil {
-			slog.Error("rpc --wait-catalog", "error", err)
-			os.Exit(1)
-		}
-		if err := waitForCatalog(c, cfg.Catalog, opts.waitBudget, time.Second, slog.Default()); err != nil {
+		if err := waitCommand(opts.waitBudget); err != nil {
 			slog.Error("rpc --wait-catalog", "error", err)
 			os.Exit(1)
 		}
@@ -45,6 +38,18 @@ func main() {
 		slog.Error("rpc exited", "error", err)
 		os.Exit(1)
 	}
+}
+
+// waitCommand is `rpc --wait-catalog`: load the config, wait for the catalog (best effort), return.
+func waitCommand(budget time.Duration) error {
+	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	return waitForCatalog(c, cfg.Catalog, budget, time.Second, slog.Default())
 }
 
 func run() error {
