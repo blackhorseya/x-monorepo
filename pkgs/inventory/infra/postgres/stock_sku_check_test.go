@@ -35,7 +35,9 @@ const (
 	dbNameEnv = "SKU_CHECK_DB_NAME"
 )
 
-var dbNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,40}$`)
+// Only names this test makes up are ever created or dropped; the prefix keeps a wrong
+// SKU_CHECK_DB_NAME from pointing the DROP at someone else's database.
+var dbNamePattern = regexp.MustCompile(`^skucheck_[a-z0-9_]{1,30}$`)
 
 // upTo keeps the migration files up to and including version n.
 func upTo(t *testing.T, m platformpg.Migration, n int) platformpg.Migration {
@@ -81,7 +83,7 @@ func dbURL(t *testing.T, rawURL, name string) string {
 
 func randomName(t *testing.T) string {
 	t.Helper()
-	b := make([]byte, 6)
+	b := make([]byte, 8) // 64 bits: a made-up name never meets someone else's database
 	if _, err := rand.Read(b); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +272,8 @@ func TestDBURL_KeepsEverythingButTheDatabase(t *testing.T) {
 	}
 }
 
-// snapshot is what another test would see of the shared database.
+// snapshot is what another test would see of the shared database, as far as these four
+// values go: it does not notice a changed row, only a changed count.
 type snapshot struct {
 	Version uint
 	Dirty   bool
