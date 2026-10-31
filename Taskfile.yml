@@ -172,7 +172,7 @@ tasks:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
       - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
       - go install github.com/yannh/kubeconform/cmd/kubeconform@{{.KUBECONFORM_VERSION}}
-      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py
+      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-negative.sh
 
   tools:hooks:
     desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
@@ -279,6 +279,7 @@ tasks:
           helm lint --strict {{.CHART}} -f {{.ITEM}} >/dev/null
           helm template t {{.CHART}} -f {{.ITEM}} | {{.KUBECONFORM}} -strict -summary -kubernetes-version 1.30.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{"}}.Group{{"}}"}}/{{"{{"}}.ResourceKind{{"}}"}}_{{"{{"}}.ResourceAPIVersion{{"}}"}}.json' >/dev/null
           helm template t {{.CHART}} -f {{.ITEM}} | deployments/helm/check.py {{.ITEM}}
+      - deployments/helm/check-negative.sh
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
