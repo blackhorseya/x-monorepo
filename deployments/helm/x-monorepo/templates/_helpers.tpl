@@ -141,7 +141,16 @@ time, before a pod can come up in the in-memory mode an unset Postgres URL would
 {{- define "x-monorepo.catalogRpc.validate" -}}
 {{- $own := .Values.secrets.catalogRpc.existingSecret -}}
 {{- $key := .Values.secrets.catalogRpc.apiKey -}}
+{{- range $e := .Values.catalogRpc.extraEnv -}}
+{{- $n := upper (toString $e.name) -}}
+{{- if or (hasPrefix "APP_AUTH_" $n) (eq $n "APP_POSTGRES_URL") (eq $n "APP_CONFIG") -}}
+{{- fail (printf "catalogRpc.extraEnv must not set %s: auth, catalog-rpc's Postgres URL and its config file come from the chart (an env var here would turn auth off or move the service off Postgres)" $e.name) -}}
+{{- end -}}
+{{- end -}}
 {{- if $own -}}
+{{- if eq $own .Values.secrets.existingSecret -}}
+{{- fail "secrets.catalogRpc.existingSecret is the same Secret as secrets.existingSecret: that one is release-wide and may carry rpc's JWT secret, which catalog-rpc refuses to start with; give catalog-rpc its own Secret" -}}
+{{- end -}}
 {{- if $key -}}
 {{- fail "secrets.catalogRpc.existingSecret and secrets.catalogRpc.apiKey are both set: pick one source for catalog-rpc's APP_AUTH_API_KEYS" -}}
 {{- end -}}

@@ -46,20 +46,33 @@ spec:
             - name: http
               containerPort: {{ (splitList ":" .Values.config.http.addr) | last | int }}
               protocol: TCP
+          # Operator extraEnv first (it cannot name APP_AUTH_* / APP_POSTGRES_URL / APP_CONFIG: the chart
+          # refuses), then what the chart sets. The two Secret keys are secretKeyRef with optional:
+          # false, never envFrom: an external Secret without APP_POSTGRES_URL keeps the pod from
+          # starting instead of letting it serve from memory with readyz 200. Its own Secret only:
+          # never the release-wide one (rpc's JWT secret and user api keys).
           env:
+            {{- with $c.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             - name: APP_CONFIG
               value: /etc/x-monorepo/config.yaml
             - name: APP_HTTP_SHUTDOWN_DELAY
               value: {{ printf "%ds" (int $c.shutdown.delaySeconds) | quote }}
             - name: APP_HTTP_SHUTDOWN_TIMEOUT
               value: {{ printf "%ds" (int $c.shutdown.timeoutSeconds) | quote }}
-            {{- with $c.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          # Its own Secret only: never the release-wide one (rpc's JWT secret and user api keys).
-          envFrom:
-            - secretRef:
-                name: {{ include "x-monorepo.catalogRpc.secretName" . }}
+            - name: APP_POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "x-monorepo.catalogRpc.secretName" . }}
+                  key: APP_POSTGRES_URL
+                  optional: false
+            - name: APP_AUTH_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "x-monorepo.catalogRpc.secretName" . }}
+                  key: APP_AUTH_API_KEYS
+                  optional: false
           livenessProbe:
             httpGet: { path: /api/healthz, port: http }
             {{- toYaml $c.liveness | nindent 12 }}

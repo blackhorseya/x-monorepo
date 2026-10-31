@@ -121,7 +121,9 @@ secrets:
     # render catalogRpc.enabled. No ',' ':' '=' or whitespace.
     apiKey: ""
     # Or a Secret you manage, with the keys APP_POSTGRES_URL and APP_AUTH_API_KEYS
-    # ("rpc=<key>:<admin role>"). Mutually exclusive with apiKey.
+    # ("rpc=<key>:<admin role>"). Mutually exclusive with apiKey, and not the release-wide
+    # secrets.existingSecret. Both keys are read by secretKeyRef (optional: false): a Secret that
+    # lacks one keeps the pod from starting (CreateContainerConfigError), it does not fall back to memory.
     existingSecret: ""
 
 rpc:
@@ -238,6 +240,8 @@ catalogRpc:
     labels: {}
     relabelings: []
     metricRelabelings: []
+  # Refused at render time when it names APP_AUTH_*, APP_POSTGRES_URL or APP_CONFIG (any case):
+  # those make catalog-rpc safe and are the chart's to set.
   extraEnv: []
   podAnnotations: {}
   nodeSelector: {}
