@@ -3,7 +3,6 @@
 package postgres_test
 
 import (
-	"errors"
 	"os/exec"
 	"syscall"
 )
@@ -13,9 +12,4 @@ import (
 func ownProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-}
-
-// groupAlive reports whether any process of the group led by pid still exists.
-func groupAlive(pid int) bool {
-	return !errors.Is(syscall.Kill(-pid, 0), syscall.ESRCH)
 }
