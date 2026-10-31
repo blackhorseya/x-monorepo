@@ -16,8 +16,8 @@ import (
 
 var _ port.PriceQuoter = (*Quoter)(nil)
 
-// Quoter asks the catalog's service handler in process (no network hop, no interceptors):
-// apps/rpc binds the catalog's own CatalogService to catalogv1connect.CatalogServiceHandler.
+// Quoter asks the catalog through catalogv1connect.CatalogServiceHandler: apps/rpc binds it to the
+// Connect client of catalog-rpc (its UNAVAILABLE is "the catalog did not answer").
 // Only the generated contract is imported, never the catalog's domain or application.
 type Quoter struct {
 	catalog catalogv1connect.CatalogServiceHandler
@@ -35,6 +35,12 @@ func (i *Quoter) QuotePrices(c context.Context, skus []string) (*dto.PriceQuote,
 
 	res, err := i.catalog.QuotePrices(c, connect.NewRequest(&catalogv1.QuotePricesRequest{Skus: skus}))
 	if err != nil {
+		if connect.CodeOf(err) == connect.CodeUnavailable {
+			// The catalog did not answer (the client adapter says so with UNAVAILABLE): the order is not
+			// wrong, it cannot be priced right now. Wrapped, the cause stays for the log.
+			return nil, fmt.Errorf("catalog quote: %w: %w", port.ErrCatalogUnavailable, err)
+		}
+
 		return nil, fmt.Errorf("catalog quote: %w", err)
 	}
 	for sku, m := range res.Msg.GetPrices() {
