@@ -115,6 +115,30 @@ expect_eq "another doc runs nothing"          ""             "$(jobs_on otherdoc
 expect_eq "dex config runs console-e2e" "console_e2e" "$(jobs_on dexcfg deployments/docker/dex/config.yaml)"
 expect_eq "compose file runs console-e2e" "console_e2e" "$(jobs_on composefile deployments/docker/docker-compose.yaml)"
 
+# A rename is a delete plus an add. `git diff --name-only` pairs them and prints only the new path, so
+# helper.go -> helper_test.go would look test-only while it removed a product file: ci-changes.sh
+# diffs with --no-renames and has_prod sees both paths. rename_jobs_on <name> <old> <new>.
+rename_jobs_on() {
+  local name=$1 old=$2 new=$3
+  fixture "$name"
+  touch_file "$old" "package x"; commit "chore: $old"
+  git -C "$repo" update-ref refs/remotes/origin/main main
+  git -C "$repo" checkout -q -b change
+  mkdir -p "$repo/$(dirname "$new")"
+  git -C "$repo" mv "$old" "$new"
+  commit "chore: rename"
+  in_repo scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//'
+}
+expect_eq "renaming a product file to _test.go removed a product input" \
+  "$go_checks $go_prod" "$(rename_jobs_on torename pkgs/ordering/helper.go pkgs/ordering/helper_test.go)"
+expect_eq "renaming a _test.go to a product file added a product input" \
+  "$go_checks $go_prod" "$(rename_jobs_on fromtest pkgs/ordering/helper_test.go pkgs/ordering/helper.go)"
+expect_eq "renaming a _test.go to another _test.go stays test-only" \
+  "$go_checks" "$(rename_jobs_on testtotest pkgs/ordering/a_test.go pkgs/ordering/b_test.go)"
+expect_eq "moving a product file into pkgs/platform/server counts both ends (k6, k6-auth, keda)" \
+  "$go_checks $go_prod_pre helm_kind_keda k6 k6_auth k6_wire" \
+  "$(rename_jobs_on movesrv pkgs/ordering/limits.go pkgs/platform/server/limits.go)"
+
 # k6 (the smoke: rate limit, timeout, load): tests/k6, pkgs/platform/server (interceptors, limits.go),
 # pkgs/platform/config (their env and defaults), apps/rpc, apps/worker, configs, go.mod. A business-flow
 # change (pkgs/ordering…) is covered by helm-kind, not by k6 (#328). k6-auth is the auth subset, k6-wire follows product Go.
@@ -223,6 +247,17 @@ expect_eq "affected: ci.yml is every module"         "pkgs/a pkgs/b" "$(affected
 expect_eq "affected: .github/actions is every module" "pkgs/a pkgs/b" "$(affected_on aact .github/actions/setup/action.yml)"
 expect_eq "affected: scripts/ is every module"       "pkgs/a pkgs/b" "$(affected_on ascripts scripts/new.sh)"
 expect_eq "affected: another workflow is no module"  ""              "$(affected_on awf .github/workflows/release.yml)"
+# A module file renamed out of the module still changes that module (--no-renames: both paths are listed).
+affected_rename() {
+  affected_fixture "$1"
+  touch_file pkgs/a/x.go; commit "chore: a/x.go"
+  git -C "$repo" update-ref refs/remotes/origin/main main
+  git -C "$repo" checkout -q -b change
+  git -C "$repo" mv pkgs/a/x.go pkgs/b/x.go
+  commit "chore: move"
+  in_repo scripts/affected.sh | tr '\n' ' ' | sed 's/ $//'
+}
+expect_eq "affected: a file moved out of a module still affects it" "pkgs/a pkgs/b" "$(affected_rename amove)"
 affected_fixture aall
 expect_eq "affected: --all ignores the diff"         "pkgs/a pkgs/b" "$(in_repo scripts/affected.sh --all | tr '\n' ' ' | sed 's/ $//')"
 
