@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -104,10 +107,10 @@ func TestStocksSKUCheck_FailureLeavesCleanDatabase(t *testing.T) {
 	cfg := config.Postgres{URL: url}
 	full := postgres.Migration()
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestStocksSKUCheck_Postgres$", "-test.count=1", "-test.v")
-	// url comes from pgtest: the testcontainers database (or the one the caller opted into).
-	cmd.Env = append(os.Environ(), faultEnv+"=1", pgtest.EnvURL+"="+url)
-	out, err := cmd.CombinedOutput()
+	out, _, err := runFaultHelper(url, helperLimit(t))
+	if errors.Is(err, errHelperTimeout) {
+		t.Fatalf("the helper did not finish in time (this is not the injected fault): %v\n%s", err, out)
+	}
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
 		t.Fatalf("the helper should have failed on the injected fault, err=%v\n%s", err, out)
@@ -148,6 +151,129 @@ func TestStocksSKUCheck_FailureLeavesCleanDatabase(t *testing.T) {
 	}
 }
 
+// With a session holding ACCESS EXCLUSIVE on inventory.stocks the helper blocks on its
+// first DROP CONSTRAINT. The run has to end at the limit as a timeout (not as the
+// injected fault), and neither the helper nor anything it forked may be left running.
+func TestStocksSKUCheck_HelperIsBoundedAndReaped(t *testing.T) {
+	url := pgtest.URL(t)
+	cfg := config.Postgres{URL: url}
+	full := postgres.Migration()
+	c := context.Background()
+
+	if err := platformpg.Up(c, cfg, full); err != nil {
+		t.Fatal(err)
+	}
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(telCleanup)
+	db, closeDB, err := platformpg.NewDB(cfg, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(closeDB)
+	// The killed helper can leave a dirty version; restore after the lock is released.
+	t.Cleanup(func() { restoreSKUState(t, cfg, db, full) })
+
+	tx := db.WithContext(c).Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { tx.Rollback() })
+	if err := tx.Exec("LOCK TABLE inventory.stocks IN ACCESS EXCLUSIVE MODE").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	out, pid, err := runFaultHelper(url, 5*time.Second)
+	if !errors.Is(err, errHelperTimeout) {
+		t.Fatalf("a helper stuck behind the lock should time out, err=%v\n%s", err, out)
+	}
+	if took := time.Since(start); took > 30*time.Second {
+		t.Fatalf("the helper was not stopped at its limit: took %v", took)
+	}
+	if strings.Contains(string(out), faultMsg) {
+		t.Fatalf("the helper reached the injected fault despite the lock:\n%s", out)
+	}
+	if pid == 0 || groupAlive(pid) {
+		t.Fatalf("the helper (pid %d) or a process of its group is still running", pid)
+	}
+}
+
+var errHelperTimeout = errors.New("helper timed out")
+
+// helperLimit bounds the helper well inside what the test binary has left (so the parent
+// is never killed first, orphaning the helper), and to a fixed cap with no deadline.
+func helperLimit(t *testing.T) time.Duration {
+	t.Helper()
+	limit := 2 * time.Minute
+	if d, ok := t.Deadline(); ok {
+		if half := time.Until(d) / 2; half < limit {
+			limit = half
+		}
+	}
+	if limit <= 0 {
+		t.Fatal("no time left to run the helper process")
+	}
+
+	return limit
+}
+
+// runFaultHelper runs the real TestStocksSKUCheck_Postgres with the fault on, in its own
+// process group, and returns its output and pid. On limit it kills the whole group and
+// waits for it, and reports errHelperTimeout instead of the helper's exit error.
+func runFaultHelper(url string, limit time.Duration) (out []byte, pid int, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestStocksSKUCheck_Postgres$", "-test.count=1", "-test.v")
+	// url comes from pgtest: the testcontainers database (or the one the caller opted into).
+	cmd.Env = append(os.Environ(), faultEnv+"=1", pgtest.EnvURL+"="+url)
+	ownProcessGroup(cmd)
+	cmd.WaitDelay = 10 * time.Second
+	out, err = cmd.CombinedOutput()
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	if ctx.Err() != nil {
+		return out, pid, fmt.Errorf("%w after %v: %w", errHelperTimeout, limit, err)
+	}
+
+	return out, pid, err
+}
+
+// restoreSKUState leaves the shared database at the latest version, clean, whatever
+// happened before: after a failure (or a killed helper) the version may be dirty, an
+// over-long row may remain and the CHECK may be missing. Errors fail the test.
+func restoreSKUState(t *testing.T, cfg config.Postgres, db *gorm.DB, full platformpg.Migration) {
+	t.Helper()
+	ctx := context.Background()
+	v, dirty, err := platformpg.Version(ctx, cfg, full)
+	if err != nil {
+		t.Errorf("restore: read version: %v", err)
+
+		return
+	}
+	if dirty {
+		// A migration step is atomic, so the schema is at 9 exactly when 0009's CHECK exists.
+		if err := db.WithContext(ctx).Exec(`UPDATE inventory.schema_migrations SET version = CASE WHEN EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'inventory.stocks'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%octet_length%') THEN 9 ELSE 8 END, dirty = false`).Error; err != nil {
+			t.Errorf("restore: clear dirty version %d: %v", v, err)
+
+			return
+		}
+	}
+	if v > 0 {
+		if err := db.WithContext(ctx).Exec("TRUNCATE inventory.stocks CASCADE").Error; err != nil {
+			t.Errorf("restore: truncate stocks: %v", err)
+
+			return
+		}
+	}
+	if err := platformpg.Up(ctx, cfg, full); err != nil {
+		t.Errorf("restore: up to latest: %v", err)
+	}
+}
+
 func stocksSKUCheck(t *testing.T, url string, afterDirty func()) {
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
@@ -165,36 +291,7 @@ func stocksSKUCheck(t *testing.T, url string, afterDirty func()) {
 
 	full := postgres.Migration()
 	before := upTo(t, full, 8)
-	// Leave the shared database at the latest version, clean, whatever happened above.
-	// A failure after the dirty 0009 would otherwise hand the next migration test a
-	// dirty version, an over-long row and no CHECK. Errors fail the test.
-	t.Cleanup(func() {
-		ctx := context.Background()
-		v, dirty, err := platformpg.Version(ctx, cfg, full)
-		if err != nil {
-			t.Errorf("restore: read version: %v", err)
-
-			return
-		}
-		if dirty {
-			// The failed migration left nothing behind, so the previous version is the truth.
-			if err := db.WithContext(ctx).Exec("UPDATE inventory.schema_migrations SET version = ?, dirty = false", v-1).Error; err != nil {
-				t.Errorf("restore: clear dirty version %d: %v", v, err)
-
-				return
-			}
-		}
-		if v > 0 {
-			if err := db.WithContext(ctx).Exec("TRUNCATE inventory.stocks CASCADE").Error; err != nil {
-				t.Errorf("restore: truncate stocks: %v", err)
-
-				return
-			}
-		}
-		if err := platformpg.Up(ctx, cfg, full); err != nil {
-			t.Errorf("restore: up to latest: %v", err)
-		}
-	})
+	t.Cleanup(func() { restoreSKUState(t, cfg, db, full) })
 
 	version := func() (uint, bool) {
 		t.Helper()
