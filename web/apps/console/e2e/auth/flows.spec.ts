@@ -4,7 +4,7 @@ import { subject, useJWT, useKey } from "./helpers";
 import { mintJWT } from "./jwt";
 import { seedProduct } from "../catalog";
 import { uid } from "../uid";
-import { confirm, createCard, filterCard } from "../orders-ui";
+import { confirm, createCard, filterCard, expectOrderStatus } from "../orders-ui";
 import { pickProduct } from "../stock-ui";
 
 // The parts of the credential story auth.spec.ts leaves out: the JWT kind
@@ -101,14 +101,14 @@ test("mutations carry the credential set after the page loaded", async ({
   await page.getByRole("button", { name: "Filter" }).click();
   const row = page.getByRole("row").filter({ hasText: id });
   await expect(row).toHaveCount(1);
-  await expect(row.getByText("PENDING")).toBeVisible();
+  await expectOrderStatus(page, row, "PENDING");
 
   // Cancel too, and with the other kind of credential (an admin one: the list is
   // filtered by another customer's id, which a role-less caller may not do).
   await useJWT(page, mintJWT("dave", { roles: ["admin"] }));
   await row.getByRole("button", { name: "Cancel" }).click();
   await confirm(page, "Cancel order");
-  await expect(row.getByText("CANCELLED")).toBeVisible();
+  await expectOrderStatus(page, row, "CANCELLED");
 
   // Clear (the header's; the filter form has its own): the next write is anonymous again.
   await page.locator("header").getByRole("button", { name: "Clear" }).click();

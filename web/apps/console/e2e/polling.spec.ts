@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { confirm } from "./orders-ui";
+import { confirm, expectOrderStatus } from "./orders-ui";
 
 // Request budget of the orders list. The server only has unary RPCs, so the console polls;
 // this pins down what is allowed to poll. The list never calls GetReservation: the rows still
@@ -170,13 +170,13 @@ test("a late poll response does not undo a cancel", async ({ page }) => {
 
   await page.goto(`/orders?customer=${customer}`);
   const row = page.getByRole("row").filter({ hasText: customer });
-  await expect(row.getByText("PENDING")).toBeVisible();
+  await expectOrderStatus(page, row, "PENDING");
 
   hold = true;
   await captured;
   await row.getByRole("button", { name: "Cancel" }).click();
   await confirm(page, "Cancel order");
-  await expect(row.getByText("CANCELLED")).toBeVisible();
+  await expectOrderStatus(page, row, "CANCELLED");
   release();
   await page.waitForTimeout(300); // far below the 2s tick: only the stale response can act now
   // A snapshot, not a retrying expect: the next poll tick would repair a regression and hide it.
@@ -214,7 +214,7 @@ test("a cancelled order still waits for its reservation after many fetches while
 
   await row.getByRole("button", { name: "Cancel" }).click();
   await confirm(page, "Cancel order");
-  await expect(row.getByText("CANCELLED")).toBeVisible();
+  await expectOrderStatus(page, row, "CANCELLED");
   late = true; // the worker comes back
   await expect(row.getByTitle("Open in Reservations")).toHaveText("CANCELLED", { timeout: 8_000 });
 });

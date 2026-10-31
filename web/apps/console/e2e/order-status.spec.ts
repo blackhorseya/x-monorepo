@@ -38,8 +38,8 @@ test("Order PENDING next to Reservation CANCELLED is not a cancelled order", asy
   await page.goto(`/orders?customer=${customer}`);
   const row = page.getByRole("row").filter({ hasText: customer });
   await expect(row.getByTestId("reservation-status")).toHaveText("CANCELLED");
-  await expectOrderStatus(row, "PENDING");
-  await expect(expectOrderStatus(row, "CANCELLED", SHORT), "CANCELLED for an order that is PENDING").rejects.toThrow();
+  await expectOrderStatus(page, row, "PENDING");
+  await expect(expectOrderStatus(page, row, "CANCELLED", SHORT), "CANCELLED for an order that is PENDING").rejects.toThrow();
 });
 
 test("an order that is cancelled is CANCELLED, whatever its reservation says", async ({ page, request }) => {
@@ -56,6 +56,6 @@ test("an order that is cancelled is CANCELLED, whatever its reservation says", a
   await page.goto(`/orders?customer=${customer}`);
   const row = page.getByRole("row").filter({ hasText: customer });
   await expect(row.getByTestId("reservation-status")).toHaveText("RESERVED");
-  await expectOrderStatus(row, "CANCELLED");
-  await expect(expectOrderStatus(row, "PENDING", SHORT), "PENDING for an order that is CANCELLED").rejects.toThrow();
+  await expectOrderStatus(page, row, "CANCELLED");
+  await expect(expectOrderStatus(page, row, "PENDING", SHORT), "PENDING for an order that is CANCELLED").rejects.toThrow();
 });
