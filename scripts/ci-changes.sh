@@ -30,7 +30,8 @@ if [ -n "${CI_ALL:-}" ]; then
   files=ALL
 else
   base=${1:-origin/main} head=${2:-HEAD}
-  files=$(git diff --name-only "$base...$head")
+  # --no-renames: a rename is a delete plus an add, both paths count (helper.go -> helper_test.go removes a product file).
+  files=$(git diff --no-renames --name-only "$base...$head")
 fi
 
 # has <glob>...: does any changed file match one of the globs (bash pattern, anchored at the root)?

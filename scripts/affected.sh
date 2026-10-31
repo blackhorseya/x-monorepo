@@ -25,7 +25,7 @@ if [[ "${1:-}" == "--files" ]]; then
 else
   BASE="${BASE_REF:-origin/main}"
   git rev-parse --verify -q "$BASE" >/dev/null || BASE=HEAD
-  FILES=$( (git diff --name-only "$BASE"...HEAD 2>/dev/null || true; git diff --name-only HEAD; git ls-files --others --exclude-standard) | sort -u)
+  FILES=$( (git diff --no-renames --name-only "$BASE"...HEAD 2>/dev/null || true; git diff --no-renames --name-only HEAD; git ls-files --others --exclude-standard) | sort -u)
 fi
 
 [[ -z "$FILES" ]] && exit 0
