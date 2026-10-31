@@ -1,0 +1,6 @@
+# expect: secrets.catalogRpc.apiKey must not contain
+# "name=key:role,name=key" — a ':' in the key would end it early and turn the rest into a role.
+catalogRpc: { enabled: true }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "key:admin" }

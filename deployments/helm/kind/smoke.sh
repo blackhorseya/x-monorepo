@@ -17,6 +17,38 @@ for _ in $(seq 1 30); do curl -fsS "$api/readyz" >/dev/null 2>&1 && break; sleep
 curl -fsS "$api/readyz" >/dev/null || { echo "smoke: /api/readyz never answered 200"; exit 1; }
 echo "smoke: running $(curl -fsS "$api/version")"
 
+# catalog-rpc (catalogRpc.enabled in kind/values.yaml): its own pod, ConfigMap and Secret. It refuses to
+# start on auth.jwt / auth.oidc.enabled, and this release's rpc config has auth.oidc on, so a pod
+# that is Ready proves it did not inherit that. Auth is required with ONE static key, rpc=<key>:admin.
+cport_cat=${SMOKE_CATALOG_PORT:-18082}
+kubectl -n "$ns" port-forward "svc/$release-catalog-rpc" "$cport_cat:80" >/dev/null 2>&1 &
+pfk=$!
+trap 'kill $pf $pfc $pfk 2>/dev/null || true' EXIT
+cat="http://127.0.0.1:$cport_cat/api"
+for _ in $(seq 1 30); do curl -fsS "$cat/readyz" >/dev/null 2>&1 && break; sleep 1; done
+curl -fsS "$cat/readyz" >/dev/null || { echo "smoke: catalog-rpc /api/readyz never answered 200"; exit 1; }
+curl -fsS "$cat/version" >/dev/null || { echo "smoke: catalog-rpc /api/version failed"; exit 1; }
+catimg=$(kubectl -n "$ns" get deploy -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].spec.template.spec.containers[0].image}')
+case $catimg in */catalog-rpc:*) ;; *) echo "smoke: the catalog-rpc Deployment runs '$catimg', not the catalog-rpc image"; exit 1 ;; esac
+echo "smoke: catalog-rpc running $catimg $(curl -fsS "$cat/version")"
+catcfg=$(kubectl -n "$ns" get configmap -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.config\.yaml}')
+echo "$catcfg" | grep -q 'oidc\|jwt' && { echo "smoke: catalog-rpc ConfigMap carries auth.jwt/auth.oidc"; exit 1; }
+echo "$catcfg" | grep -q 'mode: required' || { echo "smoke: catalog-rpc ConfigMap is not auth.mode required"; exit 1; }
+catkey=$(kubectl -n "$ns" get secret -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.APP_AUTH_API_KEYS}' | base64 -d)
+case $catkey in rpc=*:admin) catkey=${catkey#rpc=}; catkey=${catkey%:admin} ;; *) echo "smoke: catalog-rpc service key is not rpc=<key>:admin"; exit 1 ;; esac
+catrpc() { curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' ${3:+-H "X-API-Key: $3"} "$cat/$1" -d "$2"; }
+catsku="kind-cat-$(date +%s)"
+up="{\"sku\":\"$catsku\",\"name\":\"$catsku\",\"price\":{\"amount_minor\":250,\"currency\":\"USD\"}}"
+[ "$(catrpc catalog.v1.CatalogService/UpsertProduct "$up")" = 401 ] || { echo "smoke: catalog-rpc accepted a write with no credential"; exit 1; }
+[ "$(catrpc catalog.v1.CatalogService/GetProduct "{\"sku\":\"$catsku\"}")" = 401 ] || { echo "smoke: catalog-rpc accepted a read with no credential"; exit 1; }
+[ "$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" not-the-service-key-0123456789)" = 401 ] || { echo "smoke: catalog-rpc accepted an unknown key"; exit 1; }
+[ "$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" "$catkey")" = 200 ] || { echo "smoke: catalog-rpc refused its own service key"; exit 1; }
+# Same Postgres, catalog schema: what catalog-rpc wrote is what the rpc's in-process catalog reads.
+# (In-memory fallback would make this 404.)
+got=$(curl -fsS -H 'Content-Type: application/json' "$api/catalog.v1.CatalogService/GetProduct" -d "{\"sku\":\"$catsku\"}" | jq -r '.product.price.amountMinor // .product.price.amount_minor')
+[ "$got" = 250 ] || { echo "smoke: rpc did not read catalog-rpc's write back from Postgres (got '$got')"; exit 1; }
+echo "smoke: catalog-rpc requires its service key (401 without, 401 unknown, 200 with) and persists to the shared Postgres"
+
 # Console: the SPA for any route (TanStack Router handles /reservations client-side), the rpc
 # through nginx's /api proxy — what the browser does.
 for _ in $(seq 1 30); do curl -fsS "$console/healthz" >/dev/null 2>&1 && break; sleep 1; done

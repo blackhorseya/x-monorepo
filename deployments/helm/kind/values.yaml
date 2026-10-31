@@ -9,6 +9,8 @@ image:
 secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
   redisUrl: redis://redis:6379/0
+  # catalog-rpc's own service key (rpc=<this>:admin); a throwaway value for the throwaway cluster.
+  catalogRpc: { apiKey: kind-catalog-rpc-key-0123456789 }
 config:
   http: { docs: true }
   # Dex from dex.yaml, reached through the CoreDNS rewrite (coredns-dex.sh). Plain http on a
@@ -23,6 +25,13 @@ config:
           mapping: bound
           allow_insecure_issuer: true
   worker: { broker: redis }
+# catalog-rpc on, so the real install proves its own ConfigMap / Secret: this file's auth.oidc above
+# is exactly what it refuses to start with, and the shared Secret would carry rpc's keys.
+catalogRpc:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
 rpc:
   replicaCount: 1
   resources:
