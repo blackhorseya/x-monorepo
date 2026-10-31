@@ -50,7 +50,7 @@ expect_eq() { if [ "$2" = "$3" ]; then ok; else bad "$1: want [$2] got [$3]"; fi
 expect_match() { if printf '%s' "$3" | grep -Eq -- "$2"; then ok; else bad "$1: [$3] !~ /$2/"; fi; }
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
-all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind k6"
+all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind helm_kind_keda k6 k6_auth k6_wire"
 # jobs_on <name> <files...>: commits the files on a branch off main and returns the jobs set to true.
 jobs_on() {
   local name=$1; shift
@@ -60,37 +60,95 @@ jobs_on() {
   commit "chore: $name"
   in_repo scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//'
 }
+# Shorthands for the sets below (#328): the Go checks every Go change runs, and what only product code adds.
+go_checks="gen_freshness lint work_sync coverage"
+go_prod="build console_e2e helm_kind k6_wire"
 expect_eq "docs only runs nothing"            "" "$(jobs_on docs README.md docs/a.md deployments/docker/grafana/x.json)"
-expect_eq "go runs the Go jobs, kind and k6" \
-  "gen_freshness lint work_sync coverage build release_snapshot console_e2e console_image helm_kind k6" \
+
+# A change to *_test.go alone runs the Go checks and the test matrix, no integration job (#328).
+expect_eq "a _test.go alone runs only the Go checks" "$go_checks" "$(jobs_on gotest pkgs/ordering/domain/order/order_test.go)"
+expect_eq "a platform/server _test.go is still test-only"  "$go_checks" "$(jobs_on servertest pkgs/platform/server/limits_test.go)"
+expect_eq "an identity _test.go is still test-only"        "$go_checks" "$(jobs_on idtest pkgs/identity/x_test.go)"
+expect_eq "an apps/worker _test.go is still test-only"     "$go_checks" "$(jobs_on workertest apps/worker/x_test.go)"
+expect_eq "an apps/rpc _test.go is still test-only"        "$go_checks" "$(jobs_on rpctest apps/rpc/x_test.go)"
+# A test helper that is not named *_test.go is product code: it can be imported by a binary.
+expect_eq "a non-_test.go test helper is product code" \
+  "$go_checks build console_e2e helm_kind helm_kind_keda k6_wire" \
+  "$(jobs_on pgtest pkgs/platform/postgres/pgtest/pgtest.go)"
+expect_eq "a _test.go next to a product file changes nothing about the product file" \
+  "$go_checks $go_prod" \
+  "$(jobs_on gomixed pkgs/ordering/domain/order/order.go pkgs/ordering/domain/order/order_test.go)"
+
+# Product Go outside the auth / k6 / worker paths: no release-snapshot, console-image, keda, k6, k6-auth.
+expect_eq "go runs the Go checks, kind and k6-wire" \
+  "$go_checks $go_prod" \
   "$(jobs_on go pkgs/ordering/domain/order/order.go)"
-expect_eq "go.mod counts as go" \
-  "gen_freshness lint work_sync coverage build release_snapshot console_e2e console_image helm_kind k6" \
-  "$(jobs_on gomod pkgs/ordering/go.mod)"
-expect_eq "proto is go + breaking + web" \
-  "gen_freshness lint work_sync coverage build breaking release_snapshot web console_e2e console_image helm_kind k6" \
+# go.mod / go.sum / go.work change the dependency graph of every binary: release-snapshot, keda and k6 run too.
+gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind helm_kind_keda k6 k6_wire"
+expect_eq "go.mod counts as go, and as a release / keda / k6 input" "$gomod_jobs" "$(jobs_on gomod pkgs/ordering/go.mod)"
+expect_eq "go.sum likewise"  "$gomod_jobs" "$(jobs_on gosum pkgs/ordering/go.sum)"
+expect_eq "go.work likewise" "$gomod_jobs" "$(jobs_on gowork go.work)"
+expect_eq "go.work.sum likewise" "$gomod_jobs" "$(jobs_on goworksum go.work.sum)"
+expect_eq ".golangci.yml is product code (not test-only)" "$go_checks $go_prod" "$(jobs_on golangci .golangci.yml)"
+# proto: generated Go is committed (a Go change) and the TS client is generated from it (a web change),
+# so console-image keeps the trigger; it is not a release-snapshot input.
+expect_eq "proto is go + breaking + web, console-image included" \
+  "$go_checks build breaking web console_e2e console_image helm_kind k6_wire" \
   "$(jobs_on proto protos/ordering/v1/service.proto)"
-expect_eq "web only: no lint, no k6" \
+expect_eq "web only: no lint, no k6, no keda" \
   "gen_freshness web console_e2e console_image helm_kind" \
   "$(jobs_on web web/apps/console/src/routes/orders.tsx)"
-expect_eq "helm only" "helm helm_kind" "$(jobs_on helm deployments/helm/x-monorepo/values.yaml)"
+expect_eq "helm only" "helm helm_kind helm_kind_keda" "$(jobs_on helm deployments/helm/x-monorepo/values.yaml)"
 # scripts/test.sh drives deployments/helm/kind/coredns-dex.sh itself (#287): a change to only that
 # file must run scripts-test, or its fixtures cannot catch a regression in it at PR time.
-expect_eq "coredns-dex.sh also runs scripts-test" "helm scripts_test helm_kind" "$(jobs_on coredns deployments/helm/kind/coredns-dex.sh)"
-expect_eq "other kind scripts do not run scripts-test" "helm helm_kind" "$(jobs_on kindsmoke deployments/helm/kind/smoke.sh)"
+expect_eq "coredns-dex.sh also runs scripts-test" "helm scripts_test helm_kind helm_kind_keda" "$(jobs_on coredns deployments/helm/kind/coredns-dex.sh)"
+expect_eq "other kind scripts do not run scripts-test" "helm helm_kind helm_kind_keda" "$(jobs_on kindsmoke deployments/helm/kind/smoke.sh)"
 # test.sh also reads .github/workflows/k6-bench.yml (wiring assertions) and copies .goreleaser.yaml
 # into the cosign-smoke fixture (#298): each alone must run scripts-test; no other workflow does.
 expect_eq "k6-bench.yml also runs scripts-test" "actions_resolve scripts_test" "$(jobs_on k6bench .github/workflows/k6-bench.yml)"
+# test.sh reads docs/ci.md too (#328: every job named there, every ci.yml flag wired): a docs-only
+# change to it must run scripts-test, and no other doc does.
+expect_eq "docs/ci.md also runs scripts-test" "scripts_test" "$(jobs_on cidoc docs/ci.md)"
+expect_eq "another doc runs nothing"          ""             "$(jobs_on otherdoc docs/operations.md)"
 # The oidc-dex Playwright project runs against the compose Dex (#274): its config or the compose file alone
 # must run console-e2e, or a Dex change (CORS origins, redirect URIs) is only found after merge.
 expect_eq "dex config runs console-e2e" "console_e2e" "$(jobs_on dexcfg deployments/docker/dex/config.yaml)"
 expect_eq "compose file runs console-e2e" "console_e2e" "$(jobs_on composefile deployments/docker/docker-compose.yaml)"
-expect_eq "k6 only" "k6" "$(jobs_on k6 tests/k6/orders.js)"
+
+# k6 (the smoke: rate limit, timeout, load): tests/k6, pkgs/platform/server (interceptors, limits.go),
+# pkgs/platform/config (their env and defaults), apps/rpc, apps/worker, configs, go.mod. A business-flow
+# change (pkgs/ordering…) is covered by helm-kind, not by k6 (#328). k6-auth is the auth subset, k6-wire follows product Go.
+expect_eq "k6 scripts: all three k6 jobs"  "k6 k6_auth k6_wire" "$(jobs_on k6 tests/k6/orders.js)"
+expect_eq "platform/server: k6, k6-auth, keda, k6-wire" \
+  "$go_checks $go_prod helm_kind_keda k6 k6_auth" "$(jobs_on server pkgs/platform/server/limits.go)"
+expect_eq "platform/config carries the limits' env: k6, k6-auth, keda" \
+  "$go_checks $go_prod helm_kind_keda k6 k6_auth" "$(jobs_on config pkgs/platform/config/config.go)"
+expect_eq "platform elsewhere: keda, no k6" \
+  "$go_checks $go_prod helm_kind_keda" "$(jobs_on platform pkgs/platform/usecasex/usecasex.go)"
+expect_eq "identity: k6-auth only"      "$go_checks $go_prod k6_auth" "$(jobs_on identity pkgs/identity/provider.go)"
+expect_eq "apps/rpc: k6, k6-auth"       "$go_checks $go_prod k6 k6_auth" "$(jobs_on rpc apps/rpc/main.go)"
+expect_eq "apps/worker: k6, keda"       "$go_checks $go_prod helm_kind_keda k6" "$(jobs_on worker apps/worker/main.go)"
+expect_eq "configs: k6 and k6-auth, not keda" \
+  "$go_checks $go_prod k6 k6_auth" "$(jobs_on configs configs/config.example.yaml)"
+expect_eq "ordering is not a k6 input"  "$go_checks $go_prod" "$(jobs_on ordering pkgs/ordering/adapters/rpc/handler.go)"
+expect_eq "inventory is not a k6 input" "$go_checks $go_prod" "$(jobs_on inventory pkgs/inventory/usecase/x.go)"
+
+# release-snapshot: goreleaser, a Dockerfile, .dockerignore, release.yml, go.mod / go.sum / go.work. Not the console image
+# (.goreleaser.yaml: the console has no Go binary, release.yml pushes it with buildx).
 expect_eq "Dockerfile is an image change" \
-  "release_snapshot console_image helm_kind" \
+  "release_snapshot console_image helm_kind helm_kind_keda" \
   "$(jobs_on image deployments/docker/Dockerfile.rpc)"
+expect_eq ".dockerignore is an image change" \
+  "release_snapshot console_image helm_kind helm_kind_keda" \
+  "$(jobs_on dockerignore .dockerignore)"
+expect_eq "the console Dockerfile is not a release-snapshot input" \
+  "gen_freshness web console_e2e console_image helm_kind helm_kind_keda" \
+  "$(jobs_on consoleimg web/apps/console/Dockerfile)"
+expect_eq "the console nginx config is not a release-snapshot input" \
+  "gen_freshness web console_e2e console_image helm_kind helm_kind_keda" \
+  "$(jobs_on consolenginx web/apps/console/deploy/nginx.conf)"
 expect_eq ".goreleaser.yaml is an image change, and a scripts-test input (cosign-smoke fixture)" \
-  "release_snapshot console_image scripts_test helm_kind" \
+  "release_snapshot console_image scripts_test helm_kind helm_kind_keda" \
   "$(jobs_on goreleaser .goreleaser.yaml)"
 expect_eq "another workflow is actions-resolve only" "actions_resolve" "$(jobs_on wf .github/workflows/labeler.yml)"
 # release.yml pins cosign-release (#215): a bump there must run release-snapshot's cosign smoke and
@@ -99,13 +157,31 @@ expect_eq "release.yml runs release-snapshot too" "release_snapshot actions_reso
 expect_eq "ci.yml runs everything"   "$all_jobs" "$(jobs_on ciyml .github/workflows/ci.yml)"
 expect_eq "Taskfile runs everything" "$all_jobs" "$(jobs_on taskfile Taskfile.yml)"
 expect_eq "scripts/ runs everything" "$all_jobs" "$(jobs_on scripts scripts/new.sh)"
-expect_eq "configs/ is go" \
-  "gen_freshness lint work_sync coverage build release_snapshot console_e2e console_image helm_kind k6" \
-  "$(jobs_on configs configs/config.example.yaml)"
 
 fixture ciall
 expect_eq "CI_ALL=1 runs everything" "$all_jobs" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 expect_eq "CI_ALL prints one flag per job" "$(echo "$all_jobs" | wc -w | tr -d ' ')" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | wc -l | tr -d ' ')"
+expect_eq "CI_ALL=1 prints no false" "0" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | grep -c '=false$' || true)"
+# Every flag is a job's `if:` in ci.yml, declared once as an output of `affected` (a flag nobody reads skips nothing).
+for j in $all_jobs; do
+  expect_eq "ci.yml declares run_$j as an output of affected" 1 "$(grep -c "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml")"
+  expect_eq "ci.yml has exactly one job gated on run_$j"       1 "$(grep -c "^    if: needs.affected.outputs.run_$j == 'true'\$" "$src/.github/workflows/ci.yml")"
+  expect_match "docs/ci.md names the $j job" "(^|[^a-z0-9-])$(echo "$j" | tr _ -)([^a-z0-9-]|\$)" "$(cat "$src/docs/ci.md")"
+done
+# ci_job <name>: the lines of that top-level job in ci.yml.
+ci_job() { awk -v n="  $1:" '$0 == n {f=1; next} /^  [a-z0-9-]+:/ {f=0} f' "$src/.github/workflows/ci.yml"; }
+# helm-kind, helm-kind-keda and k6-auth / k6-wire are jobs of their own, not matrix legs: a skipped one
+# leaves a skipped check, a dynamic matrix would leave none (#328).
+expect_eq "no matrix over the kind tasks" 0 "$(grep -c 'task: \[helm-kind' "$src/.github/workflows/ci.yml")"
+expect_eq "helm-kind job runs task helm-kind"            1 "$(ci_job helm-kind | grep -c '^      - run: task helm-kind$')"
+expect_eq "helm-kind-keda job runs task helm-kind-keda"  1 "$(ci_job helm-kind-keda | grep -c '^      - run: task helm-kind-keda$')"
+expect_eq "helm-kind has no matrix"      0 "$(ci_job helm-kind | grep -c 'matrix')"
+expect_eq "helm-kind-keda has no matrix" 0 "$(ci_job helm-kind-keda | grep -c 'matrix')"
+expect_eq "k6-auth job runs task k6-auth-matrix"        1 "$(ci_job k6-auth | grep -c '^      - run: task k6-auth-matrix$')"
+expect_eq "k6-auth job no longer runs task k6-wire"     0 "$(ci_job k6-auth | grep -c 'task k6-wire')"
+# #209: the key must stay out of k6's output and tags — k6-wire is the job that proves it, on its own now.
+expect_eq "k6-wire job runs task k6-wire"               1 "$(ci_job k6-wire | grep -c '^      - run: task k6-wire$')"
+expect_eq "k6-wire needs no Postgres (docs/ci.md says so)" 0 "$(ci_job k6-wire | grep -ci 'postgres')"
 
 # A branch behind main must see only its own files (three-dot diff), not main's newer ones.
 fixture behind
@@ -115,7 +191,7 @@ git -C "$repo" checkout -q main
 touch_file pkgs/x/a.go; commit "feat: go on main"
 git -C "$repo" update-ref refs/remotes/origin/main main
 git -C "$repo" checkout -q change
-expect_eq "branch behind main sees only its own files" "k6" "$(in_repo scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+expect_eq "branch behind main sees only its own files" "k6 k6_auth k6_wire" "$(in_repo scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 
 # ── affected.sh ─────────────────────────────────────────────────────────────────
 # The test matrix runs the modules this prints. A file no module claims must still run all of them
