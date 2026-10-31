@@ -19,13 +19,16 @@ func main() {
 		fmt.Println("catalog-rpc version " + buildinfo.Get().String())
 		return
 	}
-	if err := run(); err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		slog.Error("catalog-rpc exited", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+// run is the process after flag handling: args are the command line without the program name.
+func run(args []string) error {
+	_ = args // flags arrive with --require-durable
+
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
