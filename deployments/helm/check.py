@@ -222,6 +222,9 @@ def check_catalog_rpc(docs, values, dep, cr):
     # env var or Secret can change. Nothing else is passed.
     expect(c.get("args"), ["--require-durable"], "catalog-rpc container args = --require-durable (refuses in-memory / non-required auth at start)")
     check("command" not in c, "catalog-rpc keeps the image ENTRYPOINT (no command override)")
+    # A refusal must be readable after the container is gone: the last log lines are copied into the Pod
+    # status (terminated.message), which does not depend on the node still holding the log file.
+    expect(c.get("terminationMessagePolicy"), "FallbackToLogsOnError", "catalog-rpc terminationMessagePolicy (a refusal stays readable in the Pod status)")
     check("envFrom" not in c, "catalog-rpc has no envFrom (a missing key would be silently skipped)")
     own = cr_secret_name(values, docs)
     check(own is not None, "catalog-rpc has a Secret to read")
