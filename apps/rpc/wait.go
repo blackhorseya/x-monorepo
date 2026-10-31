@@ -60,8 +60,9 @@ func parseArgs(args []string) (cliOptions, error) {
 // catalog is back), so the wait can order a rollout in the normal case and never block one in the bad
 // case. The log names the upstream URL and never the service key.
 func waitForCatalog(c context.Context, cfg config.Catalog, budget, every time.Duration, logger *slog.Logger) error {
-	if u, err := url.Parse(cfg.Upstream); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return errors.New("rpc --wait-catalog: catalog.upstream must be an http(s) URL")
+	if u, err := url.Parse(cfg.Upstream); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		// no userinfo either: the URL goes into the log line below, and a credential belongs in APP_CATALOG_API_KEY
+		return errors.New("rpc --wait-catalog: catalog.upstream must be an http(s) URL without credentials")
 	}
 	c, cancel := context.WithTimeout(c, budget)
 	defer cancel()

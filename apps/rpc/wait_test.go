@@ -162,12 +162,15 @@ func TestWaitForCatalog_StopsWhenTheContextEnds(t *testing.T) {
 // No upstream to wait for is a misconfiguration the server would refuse to start on too: that is an
 // error (the initContainer fails and says so), unlike a catalog that is merely not up yet.
 func TestWaitForCatalog_AMissingUpstreamIsAnError(t *testing.T) {
-	for name, up := range map[string]string{"empty": "", "not a url": "catalog-rpc", "wrong scheme": "ftp://catalog-rpc"} {
+	for name, up := range map[string]string{"empty": "", "not a url": "catalog-rpc", "wrong scheme": "ftp://catalog-rpc", "credentials in it": "http://user:hunter2@catalog-rpc:80"} {
 		t.Run(name, func(t *testing.T) {
 			start := time.Now()
 			err := waitForCatalog(context.Background(), config.Catalog{Upstream: up}, time.Minute, 50*time.Millisecond, quietLogger(&bytes.Buffer{}))
 			if err == nil || time.Since(start) > time.Second {
 				t.Fatalf("err = %v after %s, want an immediate error", err, time.Since(start))
+			}
+			if strings.Contains(err.Error(), "hunter2") {
+				t.Fatalf("the error carries the password: %v", err)
 			}
 		})
 	}
