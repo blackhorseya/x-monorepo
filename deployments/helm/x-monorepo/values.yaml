@@ -117,8 +117,10 @@ secrets:
   # APP_POSTGRES_URL from postgresUrl above, and APP_AUTH_API_KEYS "rpc=<apiKey>:<config.auth.admin_role>".
   # secrets.existingSecret is the release-wide Secret and is NOT a source for catalog-rpc.
   catalogRpc:
-    # The one service key rpc presents. Without it (and without existingSecret) the chart refuses to
-    # render catalogRpc.enabled. No ',' ':' '=' or whitespace.
+    # The one service key rpc presents (catalog-rpc --require-durable accepts exactly one key, named rpc,
+    # so it is always rpc=<this>:<admin role>; with your own Secret, APP_AUTH_API_KEYS must be that single entry).
+    # Without it (and without existingSecret) the chart refuses to render catalogRpc.enabled.
+    # No ',' ':' '=' or whitespace.
     apiKey: ""
     # Or a Secret you manage, with the keys APP_POSTGRES_URL and APP_AUTH_API_KEYS
     # ("rpc=<key>:<admin role>"). Mutually exclusive with apiKey, and not the release-wide
