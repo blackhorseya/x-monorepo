@@ -20,7 +20,7 @@ import (
 // CreateOrder.idempotency_key through the wired server: the proto rules, the
 // Connect code of a reused key, and the scope (a customer's own keys).
 func TestOrdering_IdempotencyKey(t *testing.T) {
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 		Auth: config.Auth{Mode: config.AuthRequired, AdminRole: "root", APIKeys: "alice=alice-key-0123456789,bob=bob-key-0123456789,ops=ops-key-0123456789abc:root"},
@@ -115,7 +115,7 @@ func TestOrdering_IdempotencyKey(t *testing.T) {
 // outermost decorator (after the transaction committed). Only the result label:
 // no key, customer or order id (R4, cardinality).
 func TestOrdering_CreateOrderResultMetric(t *testing.T) {
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 	})

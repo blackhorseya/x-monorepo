@@ -295,3 +295,39 @@ func TestLoad_PostgresIdleMessageDescribesZero(t *testing.T) {
 		t.Fatalf("error misdescribes max_idle_conns=0: %v", err)
 	}
 }
+
+func TestLoad_Catalog(t *testing.T) {
+	chdirTemp(t)
+	for _, k := range []string{"APP_CATALOG_UPSTREAM", "APP_CATALOG_API_KEY", "APP_CATALOG_TIMEOUT"} {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Catalog; c.Upstream != "" || c.APIKey != "" || c.Timeout != 3*time.Second {
+		t.Fatalf("catalog defaults = %+v, want empty upstream and key, 3s timeout", c)
+	}
+
+	t.Setenv("APP_CATALOG_UPSTREAM", "http://catalog-rpc:80")
+	t.Setenv("APP_CATALOG_API_KEY", "catalog-key-0123456789ab")
+	t.Setenv("APP_CATALOG_TIMEOUT", "1500ms")
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Catalog; c.Upstream != "http://catalog-rpc:80" || c.APIKey != "catalog-key-0123456789ab" || c.Timeout != 1500*time.Millisecond {
+		t.Fatalf("catalog env = %+v", c)
+	}
+
+	// a non-positive budget is a typo, not "no timeout": the catalog is on the request path
+	for _, bad := range []string{"0", "-1s"} {
+		t.Setenv("APP_CATALOG_TIMEOUT", bad)
+		if _, err := config.Load(); err == nil {
+			t.Fatalf("catalog.timeout=%s must fail", bad)
+		} else if strings.Contains(err.Error(), "catalog-key-0123456789ab") {
+			t.Fatalf("the error carries the key: %v", err)
+		}
+	}
+}

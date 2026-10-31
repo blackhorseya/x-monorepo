@@ -20,8 +20,9 @@
 #   helm-kind           product Go, web, helm, image files.
 #   helm-kind-keda      helm, apps/worker, pkgs/platform, image files, go.mod / go.sum / go.work.
 #   k6 (the smoke)      tests/k6, pkgs/platform/server + config (rate limit, timeout), apps/rpc, apps/worker,
-#                       configs, go.mod / go.sum / go.work. Business flows are helm-kind's.
-#   k6-auth             tests/k6, pkgs/platform/server + config, pkgs/identity, apps/rpc, configs.
+#                       apps/catalog-rpc + pkgs/catalog (rpc asks catalog-rpc for every order), configs,
+#                       go.mod / go.sum / go.work. Business flows are helm-kind's.
+#   k6-auth             tests/k6, pkgs/platform/server + config, pkgs/identity, apps/rpc, apps/catalog-rpc + pkgs/catalog, configs.
 #   k6-wire             any product Go, tests/k6: it guards against the API key leaking (#209).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -82,11 +83,11 @@ images=false; has 'deployments/docker/Dockerfile*' 'web/apps/console/Dockerfile'
 # with buildx (.goreleaser.yaml says so), so its Dockerfile and nginx config are not a release-snapshot input.
 snapshot_src=false; has 'deployments/docker/Dockerfile*' '.goreleaser.yaml' '.dockerignore' && snapshot_src=true
 k6=false;     has 'tests/k6/*' && k6=true
-# What the k6 jobs run is a ./bin/rpc (+ ./bin/worker): the limits and timeout interceptors live in pkgs/platform/server
+# What the k6 jobs run is a ./bin/rpc (+ ./bin/worker, + the ./bin/catalog-rpc rpc asks for every order, tests/k6/catalog.sh): the limits and timeout interceptors live in pkgs/platform/server
 # (limits.go, server.go) and are configured from pkgs/platform/config; auth in the same server package, pkgs/identity
 # and apps/rpc. Test files are no input (has_prod).
-k6_src=false;   { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'apps/rpc/*' 'apps/worker/*' || has 'configs/*'; } && k6_src=true
-auth_src=false; { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'pkgs/identity/*' 'apps/rpc/*' || has 'configs/*'; } && auth_src=true
+k6_src=false;   { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'apps/rpc/*' 'apps/worker/*' 'apps/catalog-rpc/*' 'pkgs/catalog/*' || has 'configs/*'; } && k6_src=true
+auth_src=false; { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'pkgs/identity/*' 'apps/rpc/*' 'apps/catalog-rpc/*' 'pkgs/catalog/*' || has 'configs/*'; } && auth_src=true
 # helm-kind-keda scales the worker on eventbus_consumer_lag: the worker, the platform (eventbus, otel), the images it runs.
 keda_src=false; has_prod 'apps/worker/*' 'pkgs/platform/*' && keda_src=true
 # The oidc-dex Playwright project signs in through the compose Dex (#274): its config or the service is a console-e2e input.

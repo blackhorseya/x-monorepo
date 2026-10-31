@@ -31,6 +31,20 @@ type AppConfig struct {
 	Redis    Redis    `mapstructure:"redis"`
 	OTel     OTel     `mapstructure:"otel"`
 	Worker   Worker   `mapstructure:"worker"`
+	Catalog  Catalog  `mapstructure:"catalog"`
+}
+
+// Catalog is how apps/rpc reaches the catalog service (apps/catalog-rpc): the base URL, the one
+// service credential it presents (the key named rpc in catalog-rpc's auth.api_keys; never a user's),
+// and the budget of one call. Only apps/rpc reads it; there is no in-process fallback, so rpc
+// refuses to start without upstream and api_key.
+type Catalog struct {
+	// Upstream is the base URL of catalog-rpc, e.g. http://x-monorepo-catalog-rpc:80.
+	Upstream string `mapstructure:"upstream"`
+	// APIKey is the service credential (secret: APP_CATALOG_API_KEY, never in the file or a log).
+	APIKey string `mapstructure:"api_key"`
+	// Timeout bounds one call to the catalog (default 3s); a slower catalog is UNAVAILABLE.
+	Timeout time.Duration `mapstructure:"timeout"`
 }
 
 // HTTP configures the Connect/gRPC/HTTP server.
@@ -415,6 +429,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("otel.endpoint", "")
 	v.SetDefault("otel.insecure", false)
 	v.SetDefault("otel.service_name", "")
+	v.SetDefault("catalog.upstream", "")
+	v.SetDefault("catalog.api_key", "")
+	v.SetDefault("catalog.timeout", 3*time.Second)
 	v.SetDefault("worker.consumer_group", "worker")
 	v.SetDefault("worker.broker", BrokerPostgres)
 	v.SetDefault("worker.start_from", StartFromBeginning)
@@ -461,6 +478,9 @@ func (x *AppConfig) validate() error {
 	}
 	if by := x.HTTP.RateLimit.By; by != RateLimitGlobal && by != RateLimitPeer {
 		return fmt.Errorf("invalid http.rate_limit.by %q (want global|peer)", by)
+	}
+	if x.Catalog.Timeout <= 0 {
+		return fmt.Errorf("invalid catalog.timeout %s (want > 0: the catalog is on the request path)", x.Catalog.Timeout)
 	}
 	if x.Log.Format != "json" && x.Log.Format != "text" {
 		return fmt.Errorf("invalid log.format %q (want json|text)", x.Log.Format)

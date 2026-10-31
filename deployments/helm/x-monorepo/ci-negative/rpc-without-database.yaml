@@ -1,0 +1,7 @@
+# expect: secrets.postgresUrl
+# The old "no database" smoke profile: rpc has no in-process catalog any more, catalog-rpc needs Postgres
+# (an unset URL would serve prices from memory), so a release without a database does not render.
+rpc: { replicaCount: 1 }
+worker: { replicaCount: 1 }
+prune: { enabled: false }
+expire: { enabled: false }

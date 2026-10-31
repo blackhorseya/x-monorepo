@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# catalog-rpc must not come up on a Secret that cannot make it durable. Two cases, each installed for
+# catalog-rpc must not come up on a Secret that cannot make it durable, and rpc must not come up on one that lacks
+# its copy of the key. Three cases, each installed for
 # real over the running release (helm upgrade, no --wait) and watched on the new pod:
 #   1. the Secret has no APP_POSTGRES_URL   → CreateContainerConfigError (secretKeyRef optional: false)
 #   2. APP_POSTGRES_URL is present but ""   → the container starts, then exits non-zero and never gets
 #      Ready (--require-durable); its log names the flag and carries no secret
+#   3. the Secret has no APP_CATALOG_API_KEY → the RPC pod does not start (CreateContainerConfigError): rpc
+#      presents that key to catalog-rpc and reads it by secretKeyRef optional: false
 # The release is restored (helm upgrade --wait) and the Secrets deleted on the way out, whatever happens.
 #   negative.sh <namespace> <release> <chart-dir> <values-file>
 set -euo pipefail
@@ -12,7 +15,7 @@ sel="app.kubernetes.io/component=catalog-rpc"
 key="kind-neg-key-0123456789abcd"
 
 restore() {
-  kubectl -n "$ns" delete secret catalog-rpc-no-url catalog-rpc-empty-url --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$ns" delete secret catalog-rpc-no-url catalog-rpc-empty-url catalog-rpc-no-rpc-key --ignore-not-found >/dev/null 2>&1 || true
   helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
 }
 trap restore EXIT
@@ -31,14 +34,14 @@ poll() {
   return 1
 }
 
-kubectl -n "$ns" create secret generic catalog-rpc-no-url --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" >/dev/null
+kubectl -n "$ns" create secret generic catalog-rpc-no-url --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" --from-literal=APP_CATALOG_API_KEY="$key" >/dev/null
 upgrade_with catalog-rpc-no-url
 poll 90 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end' \
   || { echo "negative: a Secret without APP_POSTGRES_URL did not stop the catalog-rpc pod (CreateContainerConfigError)"; kubectl -n "$ns" get pods -l "$sel"; exit 1; }
 echo "negative ok: a Secret without APP_POSTGRES_URL keeps the catalog-rpc pod from starting (CreateContainerConfigError)"
 
 kubectl -n "$ns" create secret generic catalog-rpc-empty-url \
-  --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" --from-literal=APP_POSTGRES_URL= >/dev/null
+  --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" --from-literal=APP_CATALOG_API_KEY="$key" --from-literal=APP_POSTGRES_URL= >/dev/null
 upgrade_with catalog-rpc-empty-url
 # a pod of the new ReplicaSet that ran and exited non-zero, and is not Ready
 poll 120 'if any(.items[]; (.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0 and (.status.containerStatuses[0].ready | not)) then "yes" else "no" end' \
@@ -65,3 +68,18 @@ done
 [ -n "$refusal" ] || { echo "negative: no readable --require-durable refusal from the failing catalog-rpc pod (Pod status or logs) within 2 minutes"; kubectl -n "$ns" get pods -l "$sel"; exit 1; }
 grep -q "$key" <<<"$refusal" && { echo "negative: the failing pod's refusal carries the service key"; exit 1; }
 echo "negative ok: an empty APP_POSTGRES_URL makes catalog-rpc exit non-zero and never Ready (--require-durable)"
+
+# 3. rpc's copy of the key is missing from the Secret catalog-rpc is otherwise happy with
+pgurl=$(sed -n 's/^  postgresUrl: //p' "$values" | head -n 1)
+[ -n "$pgurl" ] || { echo "negative: no secrets.postgresUrl in $values"; exit 1; }
+kubectl -n "$ns" create secret generic catalog-rpc-no-rpc-key \
+  --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" --from-literal=APP_POSTGRES_URL="$pgurl" >/dev/null
+upgrade_with catalog-rpc-no-rpc-key
+# bounded like every read here (NEGATIVE_TRIES x NEGATIVE_SLEEP, default 90 x 1s); a failed read is a retry
+found=""
+for _ in $(seq 1 "${NEGATIVE_RPC_TRIES:-90}"); do
+  if [ "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o json 2>/dev/null | jq -r 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end' 2>/dev/null || echo no)" = yes ]; then found=yes; break; fi
+  sleep "${NEGATIVE_RPC_SLEEP:-1}"
+done
+[ "$found" = yes ] || { echo "negative: a Secret without APP_CATALOG_API_KEY did not stop the rpc pod (CreateContainerConfigError)"; kubectl -n "$ns" get pods; exit 1; }
+echo "negative ok: a Secret without APP_CATALOG_API_KEY keeps the rpc pod from starting (CreateContainerConfigError)"

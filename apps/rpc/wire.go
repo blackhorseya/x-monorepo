@@ -6,8 +6,6 @@ import (
 	"github.com/google/wire"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog"
-	catalogrpc "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
-	"github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1/catalogv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
 	identityauth "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
@@ -24,7 +22,7 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	wire.Build(
-		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Auth", "Log", "Postgres", "OTel"),
+		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Auth", "Log", "Postgres", "OTel", "Catalog"),
 		postgres.NewDB,
 		server.New,
 		otel.ProviderSet,
@@ -38,10 +36,10 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		ordering.ProviderSet,
 		inventory.ProviderSet,
 		identity.ProviderSet,
-		catalog.ProviderSet,
-		// Ordering prices its orders with the catalog, in process: its adapters/pricing
-		// asks the catalog's own service (it imports the contract only).
-		wire.Bind(new(catalogv1connect.CatalogServiceHandler), new(*catalogrpc.CatalogService)),
+		// The catalog is its own process (apps/catalog-rpc): rpc asks it over Connect with its service key.
+		// That client is the catalogv1connect.CatalogServiceHandler ordering's pricing and inventory's
+		// product check ask, and the Forwarder serves catalog.v1 here on top of it.
+		catalog.ClientProviderSet,
 		// The auth interceptor asks identity for keys the config does not know.
 		wire.Bind(new(server.CredentialResolver), new(*identityauth.Resolver)),
 		// ...and for the people behind an OIDC token (auth.oidc).

@@ -20,7 +20,7 @@ import (
 // for themselves only, an admin orders on behalf of a customer, an anonymous
 // caller keeps the pre-auth behaviour.
 func TestOrdering_Ownership(t *testing.T) {
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 		Auth: config.Auth{

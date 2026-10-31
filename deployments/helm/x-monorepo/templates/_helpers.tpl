@@ -190,9 +190,32 @@ time, before a pod can come up in the in-memory mode an unset Postgres URL would
       "auth" (dict "mode" "required" "admin_role" $c.auth.admin_role)) -}}
 {{- end -}}
 
+{{/* catalog-rpc's own Secret. APP_CATALOG_API_KEY is rpc's copy of the SAME key (rpc reads only that one key from here, by secretKeyRef): one value feeds both sides, so they cannot drift. catalog-rpc itself reads APP_POSTGRES_URL and APP_AUTH_API_KEYS. */}}
 {{- define "x-monorepo.catalogRpc.secretData" -}}
 APP_POSTGRES_URL: {{ .Values.secrets.postgresUrl | quote }}
 APP_AUTH_API_KEYS: {{ printf "rpc=%s:%s" .Values.secrets.catalogRpc.apiKey .Values.config.auth.admin_role | quote }}
+APP_CATALOG_API_KEY: {{ .Values.secrets.catalogRpc.apiKey | quote }}
+{{- end -}}
+
+{{/*
+rpc has no in-process catalog any more: it asks catalog-rpc (rpc.go: catalog.upstream + APP_CATALOG_API_KEY) and
+does not start without them. So catalog-rpc is not optional, and what tells rpc where the catalog is and with which
+key is the chart's, not the operator's extraEnv. The wait before rpc starts is best-effort (the binary logs a WARN and
+starts anyway after its budget), but the budget itself must end before the Deployment gives up on the rollout.
+*/}}
+{{- define "x-monorepo.rpc.validateCatalog" -}}
+{{- if not .Values.catalogRpc.enabled -}}
+{{- fail "catalogRpc.enabled must be true: rpc has no in-process catalog to fall back on (it does not start without catalog-rpc)" -}}
+{{- end -}}
+{{- range $e := .Values.rpc.extraEnv -}}
+{{- if hasPrefix "APP_CATALOG_" (upper (toString $e.name)) -}}
+{{- fail (printf "rpc.extraEnv must not set %s: where rpc finds the catalog and the key it presents come from the chart (catalogRpc.*, secrets.catalogRpc.*)" $e.name) -}}
+{{- end -}}
+{{- end -}}
+{{- $w := .Values.rpc.waitForCatalog -}}
+{{- if and $w.enabled (ge (int $w.timeoutSeconds) (int .Values.rpc.progressDeadlineSeconds)) -}}
+{{- fail (printf "rpc.waitForCatalog.timeoutSeconds (%d) must be < rpc.progressDeadlineSeconds (%d): the wait must end before the rollout is declared stuck" (int $w.timeoutSeconds) (int .Values.rpc.progressDeadlineSeconds)) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "x-monorepo.catalogRpc.checksums" -}}

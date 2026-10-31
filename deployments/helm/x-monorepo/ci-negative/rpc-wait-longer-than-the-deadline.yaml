@@ -1,0 +1,8 @@
+# expect: rpc.waitForCatalog
+# The wait must end before the Deployment gives up on the rollout: timeoutSeconds < progressDeadlineSeconds.
+rpc:
+  progressDeadlineSeconds: 120
+  waitForCatalog: { enabled: true, timeoutSeconds: 120 }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }

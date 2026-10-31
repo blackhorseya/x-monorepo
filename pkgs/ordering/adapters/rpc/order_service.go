@@ -4,11 +4,13 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"connectrpc.com/connect"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -25,6 +27,19 @@ type (
 	CompleteOrderUC = usecasex.UseCase[dto.CompleteOrderInput, *dto.OrderOutput]
 	ListOrdersUC    = usecasex.UseCase[dto.ListOrdersInput, *dto.ListOrdersOutput]
 )
+
+// CatalogUnavailableCode is the x-error-code of CreateOrder failing closed because the catalog did
+// not answer: nothing was written, and the same request (same idempotency key) can be retried.
+const CatalogUnavailableCode = "catalog.unavailable"
+
+// catalogUnavailable is UNAVAILABLE with a fixed message: the cause (the catalog client's error) is
+// logged by the use case's Logging decorator and never echoed to the caller.
+func catalogUnavailable() error {
+	ce := connect.NewError(connect.CodeUnavailable, errors.New("the catalog could not be reached, retry the request"))
+	ce.Meta().Set("x-error-code", CatalogUnavailableCode)
+
+	return ce
+}
 
 // OrderService implements the generated OrderServiceHandler.
 type OrderService struct {
@@ -54,6 +69,10 @@ func (h *OrderService) CreateOrder(
 		IdempotencyKey: req.Msg.GetIdempotencyKey(),
 	})
 	if err != nil {
+		if errors.Is(err, port.ErrCatalogUnavailable) {
+			return nil, catalogUnavailable()
+		}
+
 		return nil, server.ToConnectError(err)
 	}
 

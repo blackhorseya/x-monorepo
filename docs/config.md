@@ -45,6 +45,9 @@
 | `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
 | `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |
 | `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |
+| `catalog.upstream` | `APP_CATALOG_UPSTREAM` | 空 | **只有 `apps/rpc` 讀**。catalog-rpc 的 base URL（http／https，例如 `http://x-monorepo-catalog-rpc:80`）。空或格式不對 → rpc **拒絕啟動**，沒有 in-process fallback |
+| `catalog.api_key` | `APP_CATALOG_API_KEY` | 空 | **只有 `apps/rpc` 讀**。rpc 對 catalog-rpc 出示的 service credential（catalog-rpc 的 `auth.api_keys` 裡名為 `rpc` 的那把）；**機密**：只走 env，不寫進檔案或 log。rpc 永遠只送這把，不轉傳使用者的 credential。空 → rpc 拒絕啟動，訊息不含 key |
+| `catalog.timeout` | `APP_CATALOG_TIMEOUT` | `3s` | 對 catalog 的單次呼叫預算，必須 > 0；逾時 → `UNAVAILABLE`（`catalog.unavailable`），CreateOrder／SetStock 不寫入 |
 | `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 前綴，實際 group 是 `<值>.<bc>`（每個 BC 各自讀完整個 topic）；同名 replica 分工，新名字從哪開始看 `worker.start_from` |
 | `worker.start_from` | `APP_WORKER_START_FROM` | `beginning` | **還沒有 cursor** 的 group 從哪開始：`beginning` 重播所有留存的訊息，`latest` 只收建立之後的。已有 cursor 的 group 不會被移動；redis 模式也套用到 forwarder 的 SQL group 與 stream group |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |

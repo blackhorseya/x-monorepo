@@ -19,7 +19,7 @@ import (
 // characters before the handler runs; a SKU of at most 64 characters but more
 // than 64 bytes gets past the proto and is refused by the domain.
 func TestInventory_SetStockSKUFormat(t *testing.T) {
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 		Auth: config.Auth{Mode: config.AuthOff},

@@ -26,7 +26,75 @@ export type TestRpc = {
  * `port` pins the port instead of 0. It is for the regression that holds a port and checks that
  * the fixture fails rather than adopt whatever answers there.
  */
+/**
+ * spawnServer starts bin/<name> on addr and resolves with the origin it logged (`server listening addr=…`),
+ * once its readiness answers. Used for the catalog-rpc an rpc needs; the rpc itself reads the same line below.
+ */
+async function spawnServer(name: string, addr: string, env: Record<string, string>) {
+  const proc = spawn(`${bin}/${name}`, [], {
+    env: {
+      ...process.env,
+      APP_CONFIG: "/dev/null",
+      APP_HTTP_ADDR: addr,
+      APP_HTTP_DOCS: "false",
+      APP_LOG_LEVEL: "info", // the "server listening" line is Info
+      APP_LOG_FORMAT: "json",
+      ...env,
+    },
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const exited = new Promise<number | null>((resolve) => proc.once("exit", resolve));
+  const stop = async () => {
+    proc.kill("SIGTERM");
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
+    if (proc.exitCode === null) proc.kill("SIGKILL");
+  };
+  try {
+    const listening = new Promise<string>((resolve, reject) => {
+      let buf = "";
+      let found = false;
+      proc.stdout!.setEncoding("utf8");
+      proc.stdout!.on("data", (chunk: string) => {
+        if (found) return;
+        buf += chunk;
+        for (const line of buf.split("\n").slice(0, -1)) {
+          try {
+            const entry = JSON.parse(line);
+            if (entry.msg === "server listening" && typeof entry.addr === "string") {
+              found = true;
+              resolve(entry.addr);
+              return;
+            }
+          } catch {
+            // not a JSON log line
+          }
+        }
+        buf = buf.slice(buf.lastIndexOf("\n") + 1);
+      });
+      proc.once("exit", (code) => reject(new Error(`${name} exited with ${code} before it reported an address`)));
+      setTimeout(() => reject(new Error(`${name} did not report an address`)), 15_000).unref();
+    });
+    const origin = `http://${await listening}`;
+    for (let i = 0; ; i++) {
+      if (proc.exitCode !== null) throw new Error(`${name} exited with ${proc.exitCode}`);
+      if (await fetch(`${origin}/api/readyz`).then((r) => r.ok, () => false)) return { origin, stop };
+      if (i > 100) throw new Error(`${name} did not become ready`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  } catch (e) {
+    await stop();
+    throw e;
+  }
+}
+
 export async function startRpc(port = 0) {
+  // rpc has no catalog of its own: this attempt's rpc gets a catalog-rpc of its own too (in memory), reached
+  // with the service key rpc=catalogKey:admin. Its address is read from its log like the rpc's below.
+  const catalogKey = `e2e-dex-catalog-${randomUUID()}`;
+  const catalog = await spawnServer("catalog-rpc", "127.0.0.1:0", {
+    APP_AUTH_MODE: "required",
+    APP_AUTH_API_KEYS: `rpc=${catalogKey}:admin`,
+  });
   const key = `e2e-dex-${randomUUID()}`; // this attempt's admin key, for the setup calls
   const proc = spawn(`${bin}/rpc`, [], {
     env: {
@@ -37,6 +105,8 @@ export async function startRpc(port = 0) {
       APP_LOG_LEVEL: "info", // the "server listening" line is Info
       APP_LOG_FORMAT: "json",
       APP_AUTH_API_KEYS: `root=${key}:admin`,
+      APP_CATALOG_UPSTREAM: catalog.origin,
+      APP_CATALOG_API_KEY: catalogKey,
     },
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -47,6 +117,7 @@ export async function startRpc(port = 0) {
     proc.kill("SIGTERM");
     await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
     if (proc.exitCode === null) proc.kill("SIGKILL");
+    await catalog.stop();
   };
 
   // The address from the rpc's own log. The pipe is read to the end so the child never blocks on it.

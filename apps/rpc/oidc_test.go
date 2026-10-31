@@ -56,7 +56,7 @@ func TestAuth_OIDCLogin(t *testing.T) {
 		return s
 	}
 
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 		Auth: config.Auth{

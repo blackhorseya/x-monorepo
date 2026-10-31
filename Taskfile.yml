@@ -23,6 +23,10 @@ vars:
   # Config file `task run` / `task migrate` load (APP_CONFIG). Gitignored; seeded from
   # configs/config.example.yaml on first use. Override: task run CONFIG=<file>
   CONFIG: '{{.CONFIG | default (printf "%s/configs/local.yaml" .ROOT_DIR)}}'
+  # `task run` talks to the catalog service `task catalog-rpc` runs (rpc has no catalog of its own). The
+  # key is the local dev one (rpc=<key>:admin in catalog-rpc's auth.api_keys); nothing here is a credential.
+  CATALOG_PORT: '{{.CATALOG_PORT | default "8081"}}'
+  CATALOG_DEV_KEY: dev-catalog-service-key-0123456789abcdef
 
   BUF_VERSION: v1.74.0
   PROTOC_GEN_GO_VERSION: v1.36.12
@@ -339,6 +343,8 @@ tasks:
       - '{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
       # catalog-rpc on a Secret that cannot make it durable: no start (missing key) / exit (empty URL). Restores the release.
       - '{{.KIND_DIR}}/negative.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
+      # rpc without its catalog: the wait is best effort, CreateOrder / SetStock answer UNAVAILABLE and write nothing, recovery needs no restart.
+      - '{{.KIND_DIR}}/outage.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
       - helm -n {{.NS}} status x-monorepo | head -5
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
@@ -376,7 +382,7 @@ tasks:
         msg: k6 not found (brew install k6)
 
   k6-auth-matrix:
-    desc: 'tests/k6/auth-matrix.sh: orders.js and reservation.js (2 VU, 5s) against a real ./bin/rpc + ./bin/worker + Postgres (DATABASE_URL) in every auth state — auth on with a role-less key / an admin key, auth off with no key / a key sent — plus the per-procedure-public and fails-once fixtures. Each cell has its own RUN_ID; task k6-auth-matrix -- <cell…> runs some. The `k6-auth` job in CI'
+    desc: 'tests/k6/auth-matrix.sh: orders.js and reservation.js (2 VU, 5s) against a real ./bin/rpc + ./bin/catalog-rpc + ./bin/worker + Postgres (DATABASE_URL) in every auth state — auth on with a role-less key / an admin key, auth off with no key / a key sent — plus the per-procedure-public and fails-once fixtures. Each cell has its own RUN_ID; task k6-auth-matrix -- <cell…> runs some. The `k6-auth` job in CI'
     cmds: ['tests/k6/auth-matrix.sh {{.BIN_DIR}} {{.CLI_ARGS}}']
     preconditions:
       - sh: command -v k6 >/dev/null && command -v python3 >/dev/null
@@ -411,7 +417,7 @@ tasks:
         msg: needs k6 (brew install k6), psql and python3
 
   k6-smoke:
-    desc: 'tests/k6/smoke.sh: the four k6 scripts, short, each against its own ./bin/rpc on :18090 with the local Postgres (DATABASE_URL) — load thresholds, rate limit at 50 rps, timeout at 1ns, reservation with a ./bin/worker next to the rpc. What CI runs'
+    desc: 'tests/k6/smoke.sh: the four k6 scripts, short, each against its own ./bin/rpc on :18090 with the local Postgres (DATABASE_URL), one ./bin/catalog-rpc beside them (rpc has no catalog of its own) — load thresholds, rate limit at 50 rps, timeout at 1ns, reservation with a ./bin/worker next to the rpc. What CI runs'
     deps: [build]
     cmds: ['tests/k6/smoke.sh {{.BIN_DIR}} {{.CLI_ARGS}}']
     preconditions:
@@ -442,10 +448,24 @@ tasks:
       - scripts/release-verify.sh {{.CLI_ARGS}}
 
   run:
-    desc: 'build and run ./bin/rpc with configs/local.yaml (gitignored; seeded from the example); task run CONFIG=<file> to use another'
+    desc: 'build and run ./bin/rpc with configs/local.yaml (gitignored; seeded from the example); task run CONFIG=<file> to use another. It asks the catalog service for prices: run `task catalog-rpc` in another terminal first (rpc does not start without a catalog upstream)'
     deps: [build, config]
-    env: { APP_CONFIG: '{{.CONFIG}}' }
+    env:
+      APP_CONFIG: '{{.CONFIG}}'
+      APP_CATALOG_UPSTREAM: 'http://127.0.0.1:{{.CATALOG_PORT}}'
+      APP_CATALOG_API_KEY: '{{.CATALOG_DEV_KEY}}'
     cmds: ['{{.BIN_DIR}}/rpc']
+
+  catalog-rpc:
+    desc: 'build and run ./bin/catalog-rpc on :8081 (CATALOG_PORT) for `task run`: Postgres from CATALOG_DATABASE_URL (default the compose one), auth required, the one dev key rpc=…:admin; defaults only (APP_CONFIG=/dev/null), so nothing of configs/local.yaml (OIDC, JWT, your keys) reaches it. Needs `task migrate -- up` first (the catalog schema)'
+    deps: [build]
+    env:
+      APP_CONFIG: /dev/null
+      APP_HTTP_ADDR: ':{{.CATALOG_PORT}}'
+      APP_AUTH_MODE: required
+      APP_AUTH_API_KEYS: 'rpc={{.CATALOG_DEV_KEY}}:admin'
+    cmds:
+      - APP_POSTGRES_URL="${CATALOG_DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}" {{.BIN_DIR}}/catalog-rpc --require-durable
 
   worker:
     desc: 'build and run ./bin/worker (event consumers) with configs/local.yaml; needs postgres.url'

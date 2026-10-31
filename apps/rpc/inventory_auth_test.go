@@ -24,7 +24,7 @@ import (
 func TestInventory_SetStockAdminRole(t *testing.T) {
 	start := func(t *testing.T, auth config.Auth) (client func(key string) inventoryv1connect.InventoryServiceClient, baseURL string) {
 		t.Helper()
-		srv, cleanup, err := Initialize(&config.AppConfig{
+		srv, cleanup, err := initialize(t, &config.AppConfig{
 			HTTP: config.HTTP{Addr: ":0"},
 			Log:  config.Log{Level: "error", Format: "text"},
 			Auth: auth,

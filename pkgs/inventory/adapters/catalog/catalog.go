@@ -15,8 +15,8 @@ import (
 
 var _ port.ProductCatalog = (*Catalog)(nil)
 
-// Catalog asks the catalog's service handler in process (no network hop, no interceptors):
-// apps/rpc binds the catalog's own CatalogService to catalogv1connect.CatalogServiceHandler.
+// Catalog asks the catalog through catalogv1connect.CatalogServiceHandler: apps/rpc binds it to the Connect
+// client of catalog-rpc (UNAVAILABLE from it is "the catalog did not answer").
 // Only the generated contract is imported, never the catalog's domain or application.
 type Catalog struct {
 	catalog catalogv1connect.CatalogServiceHandler

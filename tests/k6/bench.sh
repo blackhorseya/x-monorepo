@@ -59,6 +59,8 @@ dburl() { python3 -I -c 'import sys, urllib.parse as u
 p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base_url" "$1"; }
 
 export APP_CONFIG=/dev/null APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false APP_LOG_LEVEL=${APP_LOG_LEVEL:-warn}
+# shellcheck source=tests/k6/catalog.sh
+. tests/k6/catalog.sh   # rpc has no catalog of its own: a catalog-rpc per attempt, on that attempt's database
 
 ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 limit=$(python3 -I -c "print($MAX_LOAD_PER_CORE * $ncpu)")
@@ -107,6 +109,7 @@ kind, why = r.classify_threshold_failure(sys.argv[1], sys.argv[2]); print(kind, 
 
 cleanup() {
   stop_load
+  catalog_stop
   [ -n "$wpid" ] && kill "$wpid" 2>/dev/null && wait "$wpid" 2>/dev/null || true; wpid=""
   [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true; pid=""
   if [ -n "$db" ]; then
@@ -137,6 +140,7 @@ while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
   psql "$base_url" -qAt -c "create database $name" >/dev/null || { echo "cannot create $name: not touching it" >&2; exit 1; }
   db=$name
   APP_POSTGRES_URL=$url "$bin/migrate" up > "$out/run$n-migrate.log" 2>&1
+  APP_POSTGRES_URL=$url catalog_start "$bin" "$((port + 2))" "$out/run$n-catalog.log"
   APP_POSTGRES_URL=$url "$bin/rpc" > "$out/run$n-rpc.log" 2>&1 & pid=$!
   APP_POSTGRES_URL=$url "$bin/worker" > "$out/run$n-worker.log" 2>&1 & wpid=$!
   for _ in $(seq 1 100); do

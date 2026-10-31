@@ -5,6 +5,7 @@ package port
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
@@ -41,3 +42,8 @@ type Inbox interface {
 type EventPublisher interface {
 	Publish(c context.Context, events ...order.Event) error
 }
+
+// ErrCatalogUnavailable marks a failure to get an answer from the catalog (as opposed to the
+// catalog answering "no such sku"). PriceQuoter implementations wrap the cause with it; the rpc
+// edge maps it to UNAVAILABLE. It is deliberately not a kernel.Error: nothing about the order is wrong.
+var ErrCatalogUnavailable = errors.New("catalog unavailable")

@@ -24,7 +24,7 @@ import (
 // API key and a JWT both get through, a public procedure needs nothing.
 func TestAuth_Required(t *testing.T) {
 	const secret = "e2e-secret-e2e-secret-e2e-secret"
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0", Docs: true},
 		Log:  config.Log{Level: "error", Format: "text"},
 		Auth: config.Auth{

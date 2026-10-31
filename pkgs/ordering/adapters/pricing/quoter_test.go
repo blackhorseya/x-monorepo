@@ -11,6 +11,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1/catalogv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/pricing"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 )
 
@@ -69,5 +70,26 @@ func TestQuoter_NoSKUsAsksNothing(t *testing.T) {
 	got, err := pricing.NewQuoter(cat).QuotePrices(context.Background(), nil)
 	if err != nil || len(got.Prices) != 0 || cat.got != nil {
 		t.Fatalf("got %+v, %v; asked %v", got, err, cat.got)
+	}
+}
+
+// A catalog that does not answer is not "an order we cannot price": the quoter says so with
+// port.ErrCatalogUnavailable (keeping the cause), so CreateOrder can fail closed with UNAVAILABLE.
+// Anything the catalog answered with is not that.
+func TestQuoter_ACatalogThatDoesNotAnswerIsUnavailable(t *testing.T) {
+	unavailable := connect.NewError(connect.CodeUnavailable, errors.New("the catalog could not be reached"))
+	q := pricing.NewQuoter(&fakeCatalog{err: unavailable})
+
+	_, err := q.QuotePrices(context.Background(), []string{"A"})
+	if !errors.Is(err, port.ErrCatalogUnavailable) || !errors.Is(err, unavailable) {
+		t.Fatalf("err = %v, want one wrapping port.ErrCatalogUnavailable and the cause", err)
+	}
+
+	for _, code := range []connect.Code{connect.CodeInvalidArgument, connect.CodeNotFound, connect.CodeFailedPrecondition} {
+		answered := connect.NewError(code, errors.New("the catalog answered"))
+		_, err := pricing.NewQuoter(&fakeCatalog{err: answered}).QuotePrices(context.Background(), []string{"A"})
+		if err == nil || errors.Is(err, port.ErrCatalogUnavailable) {
+			t.Fatalf("code %s: err = %v, want an error that is not ErrCatalogUnavailable", code, err)
+		}
 	}
 }
