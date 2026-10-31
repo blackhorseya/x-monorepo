@@ -31,6 +31,20 @@ type AppConfig struct {
 	Redis    Redis    `mapstructure:"redis"`
 	OTel     OTel     `mapstructure:"otel"`
 	Worker   Worker   `mapstructure:"worker"`
+	Catalog  Catalog  `mapstructure:"catalog"`
+}
+
+// Catalog is how apps/rpc reaches the catalog service (apps/catalog-rpc): the base URL, the one
+// service credential it presents (the key named rpc in catalog-rpc's auth.api_keys; never a user's),
+// and the budget of one call. Only apps/rpc reads it; there is no in-process fallback, so rpc
+// refuses to start without upstream and api_key.
+type Catalog struct {
+	// Upstream is the base URL of catalog-rpc, e.g. http://x-monorepo-catalog-rpc:80.
+	Upstream string `mapstructure:"upstream"`
+	// APIKey is the service credential (secret: APP_CATALOG_API_KEY, never in the file or a log).
+	APIKey string `mapstructure:"api_key"`
+	// Timeout bounds one call to the catalog (default 3s); a slower catalog is UNAVAILABLE.
+	Timeout time.Duration `mapstructure:"timeout"`
 }
 
 // HTTP configures the Connect/gRPC/HTTP server.
