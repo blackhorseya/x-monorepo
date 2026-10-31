@@ -217,6 +217,11 @@ def check_catalog_rpc(docs, values, dep, cr):
     # never envFrom: an external Secret missing APP_POSTGRES_URL must keep the pod from starting,
     # not let it serve from memory with readyz 200. The Secret is its own, never the release-wide one
     # (rpc's JWT secret and user api keys).
+    # The guarantee that cannot be made at template time (an external Secret holding an empty URL, an
+    # env var saying auth off) is made by the binary: --require-durable, as a container ARG, which no
+    # env var or Secret can change. Nothing else is passed.
+    expect(c.get("args"), ["--require-durable"], "catalog-rpc container args = --require-durable (refuses in-memory / non-required auth at start)")
+    check("command" not in c, "catalog-rpc keeps the image ENTRYPOINT (no command override)")
     check("envFrom" not in c, "catalog-rpc has no envFrom (a missing key would be silently skipped)")
     own = cr_secret_name(values, docs)
     check(own is not None, "catalog-rpc has a Secret to read")
