@@ -49,6 +49,30 @@ const baseEnv = {
   APP_LOG_LEVEL: "warn",
 };
 
+// rpc has no catalog of its own: every rpc below talks to a catalog-rpc of its own (so projects do not
+// share products), over the service key rpc=CATALOG_KEY:admin. Made up for this test; not a credential.
+export const CATALOG_KEY = "e2e-catalog-service-key-0123456789ab";
+const catalogPort = (rpcServerPort: number) => rpcServerPort + 40; // 18131, 18132, 18141, 18151, …
+const catalogEnv = (rpcServerPort: number) => ({
+  APP_CATALOG_UPSTREAM: `http://127.0.0.1:${catalogPort(rpcServerPort)}`,
+  APP_CATALOG_API_KEY: CATALOG_KEY,
+});
+// The catalog-rpc webServer of one rpc; Postgres when the rpc has it (E2E_DATABASE_URL), else in memory.
+const catalogServer = (rpcServerPort: number, postgresURL?: string) => ({
+  command: `${bin}/catalog-rpc`,
+  url: `http://127.0.0.1:${catalogPort(rpcServerPort)}/api/readyz`,
+  env: {
+    ...baseEnv,
+    APP_HTTP_ADDR: `:${catalogPort(rpcServerPort)}`,
+    APP_AUTH_MODE: "required",
+    APP_AUTH_API_KEYS: `rpc=${CATALOG_KEY}:admin`,
+    ...(postgresURL ? { APP_POSTGRES_URL: postgresURL } : {}),
+  },
+  reuseExistingServer: !process.env.CI,
+  stdout: "ignore" as const,
+  stderr: "pipe" as const,
+});
+
 // What the auth project's server accepts: two API keys (ops has no role, admin
 // has the admin role) and HS256 tokens signed with JWT_SECRET for JWT_ISSUER /
 // JWT_AUDIENCE (e2e/auth/jwt.ts mints them; the server requires exp and pins
@@ -121,6 +145,10 @@ export default defineConfig({
       : []),
   ],
   webServer: [
+    catalogServer(rpcPort, db),
+    catalogServer(authRpcPort),
+    catalogServer(roleRpcPort),
+    catalogServer(BACKEND_RPC_PORT),
     {
       // APP_CONFIG=/dev/null: defaults only, so postgres.url is exactly what
       // E2E_DATABASE_URL says (viper ignores empty env, so the example config
@@ -130,6 +158,7 @@ export default defineConfig({
       env: {
         ...baseEnv,
         APP_HTTP_ADDR: `:${rpcPort}`,
+        ...catalogEnv(rpcPort),
         ...(db ? { APP_POSTGRES_URL: db } : {}),
       },
       reuseExistingServer: !process.env.CI,
@@ -155,6 +184,7 @@ export default defineConfig({
       env: {
         ...baseEnv,
         APP_HTTP_ADDR: `:${authRpcPort}`,
+        ...catalogEnv(authRpcPort),
         APP_AUTH_MODE: "required",
         APP_AUTH_API_KEYS: `ops=${OPS_KEY},admin=${ADMIN_KEY}:admin`,
         APP_AUTH_JWT_HS256_SECRET: JWT_SECRET,
@@ -178,6 +208,7 @@ export default defineConfig({
       env: {
         ...baseEnv,
         APP_HTTP_ADDR: `:${roleRpcPort}`,
+        ...catalogEnv(roleRpcPort),
         APP_AUTH_MODE: "required",
         APP_AUTH_ADMIN_ROLE: "operator",
         APP_AUTH_API_KEYS: `boss=${OPERATOR_KEY}:operator,legacy=${NOT_OPERATOR_KEY}:admin`,
@@ -203,7 +234,7 @@ export default defineConfig({
       // auth required + auth.oidc on (config file: list settings cannot come from env), IdP in the test process.
       command: `${bin}/rpc`,
       url: `http://127.0.0.1:${BACKEND_RPC_PORT}/api/readyz`,
-      env: { ...baseEnv, APP_CONFIG: "./e2e/oidc-backend/rpc.yaml", APP_HTTP_ADDR: `:${BACKEND_RPC_PORT}` },
+      env: { ...baseEnv, ...catalogEnv(BACKEND_RPC_PORT), APP_CONFIG: "./e2e/oidc-backend/rpc.yaml", APP_HTTP_ADDR: `:${BACKEND_RPC_PORT}` },
       reuseExistingServer: !process.env.CI,
       stdout: "ignore",
       stderr: "pipe",

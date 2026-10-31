@@ -34,6 +34,8 @@ catalogRpc:
     requests: { cpu: 10m, memory: 32Mi }
 rpc:
   replicaCount: 1
+  # the kind stack waits for the catalog for this long (outage.sh makes it wait the whole time, so keep it short)
+  waitForCatalog: { timeoutSeconds: 20 }
   resources:
     requests: { cpu: 10m, memory: 32Mi }
 worker:
