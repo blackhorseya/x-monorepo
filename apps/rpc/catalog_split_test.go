@@ -286,13 +286,20 @@ func TestForwarding_RoleAtRPCAndBusinessErrorsUnchanged(t *testing.T) {
 func TestCatalogRPC_AcceptsOnlyTheServiceKey(t *testing.T) {
 	cat := startCatalogProc(t)
 	c := context.Background()
-	get := connect.NewRequest(&catalogv1.GetProductRequest{Sku: "A"})
-	for name, key := range map[string]string{"no credential": "", "a user's key": "ops-key-0123456789abcd", "rpc's key with a typo": serviceKey + "x"} {
-		_, err := catalogClientWithKey(cat.URL, key).GetProduct(c, get)
-		wantCode(t, err, connect.CodeUnauthenticated, map[bool]string{true: "auth.unauthenticated", false: "auth.invalid_credential"}[key == ""])
-		_ = name
+	// A request per call: the client's key interceptor sets X-API-Key ON the request, so a request shared
+	// across the map's (random) order would carry the previous case's key into "no credential".
+	get := func() *connect.Request[catalogv1.GetProductRequest] {
+		return connect.NewRequest(&catalogv1.GetProductRequest{Sku: "A"})
 	}
-	_, err := catalogClientWithKey(cat.URL, serviceKey).GetProduct(c, get)
+	for _, tc := range []struct{ key, code string }{
+		{"", "auth.unauthenticated"},
+		{"ops-key-0123456789abcd", "auth.invalid_credential"},
+		{serviceKey + "x", "auth.invalid_credential"},
+	} {
+		_, err := catalogClientWithKey(cat.URL, tc.key).GetProduct(c, get())
+		wantCode(t, err, connect.CodeUnauthenticated, tc.code)
+	}
+	_, err := catalogClientWithKey(cat.URL, serviceKey).GetProduct(c, get())
 	wantCode(t, err, connect.CodeNotFound, "product.not_found")
 }
 
