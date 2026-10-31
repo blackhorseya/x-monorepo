@@ -62,7 +62,7 @@ jobs_on() {
 }
 # Shorthands for the sets below (#328): the Go checks every Go change runs, and what only product code adds.
 go_checks="gen_freshness lint work_sync coverage"
-go_prod="build console_e2e helm_kind k6_wire"
+go_prod_pre="build console_e2e helm_kind"; go_prod="$go_prod_pre k6_wire"
 expect_eq "docs only runs nothing"            "" "$(jobs_on docs README.md docs/a.md deployments/docker/grafana/x.json)"
 
 # A change to *_test.go alone runs the Go checks and the test matrix, no integration job (#328).
@@ -120,16 +120,16 @@ expect_eq "compose file runs console-e2e" "console_e2e" "$(jobs_on composefile d
 # change (pkgs/ordering…) is covered by helm-kind, not by k6 (#328). k6-auth is the auth subset, k6-wire follows product Go.
 expect_eq "k6 scripts: all three k6 jobs"  "k6 k6_auth k6_wire" "$(jobs_on k6 tests/k6/orders.js)"
 expect_eq "platform/server: k6, k6-auth, keda, k6-wire" \
-  "$go_checks $go_prod helm_kind_keda k6 k6_auth" "$(jobs_on server pkgs/platform/server/limits.go)"
+  "$go_checks $go_prod_pre helm_kind_keda k6 k6_auth k6_wire" "$(jobs_on server pkgs/platform/server/limits.go)"
 expect_eq "platform/config carries the limits' env: k6, k6-auth, keda" \
-  "$go_checks $go_prod helm_kind_keda k6 k6_auth" "$(jobs_on config pkgs/platform/config/config.go)"
+  "$go_checks $go_prod_pre helm_kind_keda k6 k6_auth k6_wire" "$(jobs_on config pkgs/platform/config/config.go)"
 expect_eq "platform elsewhere: keda, no k6" \
-  "$go_checks $go_prod helm_kind_keda" "$(jobs_on platform pkgs/platform/usecasex/usecasex.go)"
-expect_eq "identity: k6-auth only"      "$go_checks $go_prod k6_auth" "$(jobs_on identity pkgs/identity/provider.go)"
-expect_eq "apps/rpc: k6, k6-auth"       "$go_checks $go_prod k6 k6_auth" "$(jobs_on rpc apps/rpc/main.go)"
-expect_eq "apps/worker: k6, keda"       "$go_checks $go_prod helm_kind_keda k6" "$(jobs_on worker apps/worker/main.go)"
+  "$go_checks $go_prod_pre helm_kind_keda k6_wire" "$(jobs_on platform pkgs/platform/usecasex/usecasex.go)"
+expect_eq "identity: k6-auth only"      "$go_checks $go_prod_pre k6_auth k6_wire" "$(jobs_on identity pkgs/identity/provider.go)"
+expect_eq "apps/rpc: k6, k6-auth"       "$go_checks $go_prod_pre k6 k6_auth k6_wire" "$(jobs_on rpc apps/rpc/main.go)"
+expect_eq "apps/worker: k6, keda"       "$go_checks $go_prod_pre helm_kind_keda k6 k6_wire" "$(jobs_on worker apps/worker/main.go)"
 expect_eq "configs: k6 and k6-auth, not keda" \
-  "$go_checks $go_prod k6 k6_auth" "$(jobs_on configs configs/config.example.yaml)"
+  "$go_checks $go_prod_pre k6 k6_auth k6_wire" "$(jobs_on configs configs/config.example.yaml)"
 expect_eq "ordering is not a k6 input"  "$go_checks $go_prod" "$(jobs_on ordering pkgs/ordering/adapters/rpc/handler.go)"
 expect_eq "inventory is not a k6 input" "$go_checks $go_prod" "$(jobs_on inventory pkgs/inventory/usecase/x.go)"
 
@@ -169,7 +169,7 @@ for j in $all_jobs; do
   expect_match "docs/ci.md names the $j job" "(^|[^a-z0-9-])$(echo "$j" | tr _ -)([^a-z0-9-]|\$)" "$(cat "$src/docs/ci.md")"
 done
 # ci_job <name>: the lines of that top-level job in ci.yml.
-ci_job() { awk -v n="  $1:" '$0 == n {f=1; next} /^  [a-z0-9-]+:/ {f=0} f' "$src/.github/workflows/ci.yml"; }
+ci_job() { awk -v n="  $1:" '$0 == n {f=1; next} /^  [a-z0-9-]+:/ || /^  #/ {f=0} f' "$src/.github/workflows/ci.yml"; }
 # helm-kind, helm-kind-keda and k6-auth / k6-wire are jobs of their own, not matrix legs: a skipped one
 # leaves a skipped check, a dynamic matrix would leave none (#328).
 expect_eq "no matrix over the kind tasks" 0 "$(grep -c 'task: \[helm-kind' "$src/.github/workflows/ci.yml")"
