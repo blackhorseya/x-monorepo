@@ -42,6 +42,10 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          # An arg, not env: extraEnv and a Secret cannot change it. The binary then refuses to start
+          # on an empty postgres.url (in-memory prices, readyz 200) or any auth.mode but required,
+          # judged on the final effective settings (apps/catalog-rpc CheckDurable).
+          args: ["--require-durable"]
           ports:
             - name: http
               containerPort: {{ (splitList ":" .Values.config.http.addr) | last | int }}

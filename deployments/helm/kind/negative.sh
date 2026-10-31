@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# catalog-rpc must not come up on a Secret that cannot make it durable. Two cases, each installed for
+# real over the running release (helm upgrade, no --wait) and watched on the new pod:
+#   1. the Secret has no APP_POSTGRES_URL   → CreateContainerConfigError (secretKeyRef optional: false)
+#   2. APP_POSTGRES_URL is present but ""   → the container starts, then exits non-zero and never gets
+#      Ready (--require-durable); its log names the flag and carries no secret
+# The release is restored (helm upgrade --wait) and the Secrets deleted on the way out, whatever happens.
+#   negative.sh <namespace> <release> <chart-dir> <values-file>
+set -euo pipefail
+ns=$1 release=$2 chart=$3 values=$4
+sel="app.kubernetes.io/component=catalog-rpc"
+key="kind-neg-key-0123456789abcd"
+
+restore() {
+  kubectl -n "$ns" delete secret catalog-rpc-no-url catalog-rpc-empty-url --ignore-not-found >/dev/null 2>&1 || true
+  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
+}
+trap restore EXIT
+
+upgrade_with() { # <secret name>
+  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" \
+    --set-string secrets.catalogRpc.apiKey= --set-string "secrets.catalogRpc.existingSecret=$1" >/dev/null
+}
+
+# poll <seconds> <jq filter over the catalog-rpc pods list that must print "yes">
+poll() {
+  for _ in $(seq 1 "$1"); do
+    [ "$(kubectl -n "$ns" get pods -l "$sel" -o json | jq -r "$2")" = yes ] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+kubectl -n "$ns" create secret generic catalog-rpc-no-url --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" >/dev/null
+upgrade_with catalog-rpc-no-url
+poll 90 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end' \
+  || { echo "negative: a Secret without APP_POSTGRES_URL did not stop the catalog-rpc pod (CreateContainerConfigError)"; kubectl -n "$ns" get pods -l "$sel"; exit 1; }
+echo "negative ok: a Secret without APP_POSTGRES_URL keeps the catalog-rpc pod from starting (CreateContainerConfigError)"
+
+kubectl -n "$ns" create secret generic catalog-rpc-empty-url \
+  --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" --from-literal=APP_POSTGRES_URL= >/dev/null
+upgrade_with catalog-rpc-empty-url
+# a pod of the new ReplicaSet that ran and exited non-zero, and is not Ready
+poll 120 'if any(.items[]; (.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0 and (.status.containerStatuses[0].ready | not)) then "yes" else "no" end' \
+  || { echo "negative: an empty APP_POSTGRES_URL did not make catalog-rpc exit (--require-durable)"; kubectl -n "$ns" get pods -l "$sel"; exit 1; }
+bad=$(kubectl -n "$ns" get pods -l "$sel" -o json | jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0]')
+log=$(kubectl -n "$ns" logs "$bad" --previous 2>&1 || true)
+echo "$log" | grep -q 'require-durable' || { echo "negative: the failing pod's log does not name --require-durable: $log"; exit 1; }
+echo "$log" | grep -q "$key" && { echo "negative: the failing pod's log carries the service key"; exit 1; }
+echo "negative ok: an empty APP_POSTGRES_URL makes catalog-rpc exit non-zero and never Ready (--require-durable)"
