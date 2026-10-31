@@ -378,7 +378,7 @@ tasks:
         msg: needs k6 (brew install k6) and python3
 
   k6-wire:
-    desc: 'tests/k6/wire.sh: the four k6 scripts against tests/k6/wire_server.py, which answers with a broken HTTP response (status code / version / header line / chunk quoting the request X-API-Key, a truncated body, a closed connection) — each run must fail, and the key must be in none of k6 output, --summary-export or --out json (no Postgres, no rpc, ~1 min). The `k6-auth` job in CI'
+    desc: 'tests/k6/wire.sh: the four k6 scripts against tests/k6/wire_server.py, which answers with a broken HTTP response (status code / version / header line / chunk quoting the request X-API-Key, a truncated body, a closed connection) — each run must fail, and the key must be in none of k6 output, --summary-export or --out json (no Postgres, no rpc, ~1 min). The `k6-wire` job in CI'
     cmds: ['tests/k6/wire.sh {{.BIN_DIR}} {{.CLI_ARGS}}']
     preconditions:
       - sh: command -v k6 >/dev/null && command -v python3 >/dev/null

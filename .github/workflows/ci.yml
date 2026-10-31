@@ -17,7 +17,10 @@ jobs:
   # ── affected: which modules and which jobs does this change need? ─────────────
   # scripts/affected.sh → the go.work modules for the test matrix; scripts/ci-changes.sh → one
   # run_<job> flag per job below, from the files the PR touches (a docs / Grafana / workflow-only
-  # PR runs almost nothing; Go runs the Go jobs, kind and k6; web runs web + e2e + image + kind…).
+  # PR runs almost nothing; a *_test.go-only PR runs the Go checks and the test matrix; product Go runs
+  # the Go jobs, helm-kind and k6-wire; the k6 / k6-auth / helm-kind-keda / release-snapshot / console-image
+  # jobs have narrower triggers, see the table in scripts/ci-changes.sh).
+  # Every job is its own job (no dynamic matrix over them) so a skipped one shows up as a skipped check.
   # On main (the release gate) and on dispatch every job runs: a skipped job must never be the
   # reason main is green. Skipped jobs count as success for required checks.
   affected:
@@ -40,7 +43,10 @@ jobs:
       run_helm: ${{ steps.jobs.outputs.run_helm }}
       run_scripts_test: ${{ steps.jobs.outputs.run_scripts_test }}
       run_helm_kind: ${{ steps.jobs.outputs.run_helm_kind }}
+      run_helm_kind_keda: ${{ steps.jobs.outputs.run_helm_kind_keda }}
       run_k6: ${{ steps.jobs.outputs.run_k6 }}
+      run_k6_auth: ${{ steps.jobs.outputs.run_k6_auth }}
+      run_k6_wire: ${{ steps.jobs.outputs.run_k6_wire }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
@@ -161,7 +167,9 @@ jobs:
   # The interceptors under traffic: tests/k6/smoke.sh runs the four k6 scripts, each against
   # its own ./bin/rpc on the service Postgres — load thresholds, rate limit at 50 rps (429 +
   # Retry-After, accepted ≈ rps), timeout at 1ns (every call DEADLINE_EXCEEDED), reservation
-  # with a ./bin/worker beside the rpc (order → RESERVED latency). ~3 min.
+  # with a ./bin/worker beside the rpc (order → RESERVED latency). ~3 min. Runs on tests/k6,
+  # pkgs/platform/server + config (the interceptors and their settings), apps/rpc, apps/worker,
+  # configs and go.mod / go.sum / go.work; business-flow changes are helm-kind's.
   k6:
     needs: affected
     if: needs.affected.outputs.run_k6 == 'true'
@@ -187,11 +195,11 @@ jobs:
 
   # The same scripts in every auth state (tests/k6/auth-matrix.sh): auth on with a role-less /
   # an admin key, auth off with no key / a key sent, × orders / reservation, 2 VU, plus the
-  # per-procedure-public and fails-once fixtures (#193), then tests/k6/wire.sh: the scripts against
-  # a broken HTTP response that quotes the key (#209). Parallel to `k6`, same trigger.
+  # per-procedure-public and fails-once fixtures (#193). Parallel to `k6`; it runs on the auth
+  # paths (pkgs/platform/server + config, pkgs/identity, apps/rpc, configs, tests/k6), not on every Go change.
   k6-auth:
     needs: affected
-    if: needs.affected.outputs.run_k6 == 'true'
+    if: needs.affected.outputs.run_k6_auth == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -209,27 +217,33 @@ jobs:
       - run: task build
       - run: APP_CONFIG=configs/config.example.yaml APP_POSTGRES_URL=$DATABASE_URL bin/migrate up
       - run: task k6-auth-matrix
-      # a broken HTTP response must not carry the key into k6's output or tags (#209)
+      - if: failure()
+        run: tail -n 50 bin/k6-auth-*.log
+
+  # tests/k6/wire.sh: the k6 scripts against a broken HTTP response that quotes the key — a broken
+  # response must not carry the key into k6's output or tags (#209). It needs k6 and python3 only
+  # (no Postgres, no ./bin/rpc), so it is a job of its own and follows every product Go change.
+  k6-wire:
+    needs: affected
+    if: needs.affected.outputs.run_k6_wire == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup
+      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
       - run: task k6-wire
       - if: failure()
-        run: tail -n 50 bin/k6-auth-*.log bin/k6-wire/*.log
+        run: tail -n 50 bin/k6-wire/*.log
 
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
   # commit (the console one needs node: pnpm build of web/apps/console), install → smoke →
-  # upgrade → smoke (task helm-kind), and, on a cluster of its own, KEDA + an OTLP collector +
-  # Prometheus and a k6 burst that must scale the worker out on eventbus_consumer_lag and back
-  # (task helm-kind-keda). The two never shared state beyond the base (helm-kind-up: cluster,
-  # images, Postgres / Redis), so they run as parallel matrix legs instead of back to back.
+  # upgrade → smoke (task helm-kind). Product Go, web, helm and image changes run it.
   helm-kind:
-    name: helm-kind (${{ matrix.task }})
     needs: affected
     if: needs.affected.outputs.run_helm_kind == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15 # p90 289s, max 382s (last 11 days)
-    strategy:
-      fail-fast: false
-      matrix:
-        task: [helm-kind, helm-kind-keda]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
@@ -245,7 +259,39 @@ jobs:
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with: { version: v0.33.0, install_only: true }
       - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
-      - run: task ${{ matrix.task }}
+      - run: task helm-kind
+      - if: failure()
+        run: |
+          kubectl -n x-monorepo get all
+          kubectl -n x-monorepo describe pods | tail -120
+          kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200 || true
+
+  # KEDA + an OTLP collector + Prometheus on a cluster of its own and a k6 burst that must scale the
+  # worker out on eventbus_consumer_lag and back (task helm-kind-keda). It shares nothing with helm-kind
+  # beyond the base (helm-kind-up: cluster, images, Postgres / Redis), so it is a parallel job of its
+  # own: skipped, it leaves a skipped check. Runs on helm, apps/worker, pkgs/platform, image
+  # files and go.mod / go.sum / go.work.
+  helm-kind-keda:
+    needs: affected
+    if: needs.affected.outputs.run_helm_kind_keda == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # p90 289s, max 382s (last 11 days)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with: { package_json_file: web/package.json }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with: { version: v4.3.0 }
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with: { version: v0.33.0, install_only: true }
+      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
+      - run: task helm-kind-keda
       - if: failure()
         run: |
           kubectl -n x-monorepo get all
