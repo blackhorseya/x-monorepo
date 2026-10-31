@@ -7,16 +7,38 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
 
 func main() {
-	// The only flag: `rpc --version` prints the stamped build and exits, like
-	// the cobra binaries. Everything else is configured through config.Load.
-	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+	opts, err := parseArgs(os.Args[1:])
+	if err != nil {
+		slog.Error("rpc", "error", err)
+		os.Exit(2)
+	}
+	switch {
+	case opts.version:
+		// `rpc --version` prints the stamped build and exits, like the cobra binaries.
 		fmt.Println("rpc version " + buildinfo.Get().String())
+		return
+	case opts.waitCatalog:
+		// `rpc --wait-catalog[=60s]`: the initContainer of the Helm chart. It reads the same config as the
+		// server (catalog.upstream), waits best-effort for the catalog and exits 0, so the server starts
+		// either way. A config it cannot load is a failure: the server would refuse to start on it too.
+		c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("rpc --wait-catalog", "error", err)
+			os.Exit(1)
+		}
+		if err := waitForCatalog(c, cfg.Catalog, opts.waitBudget, time.Second, slog.Default()); err != nil {
+			slog.Error("rpc --wait-catalog", "error", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if err := run(); err != nil {

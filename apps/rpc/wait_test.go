@@ -81,7 +81,9 @@ func TestWaitForCatalog_ReturnsAsSoonAsTheCatalogIsReady(t *testing.T) {
 	url, calls := readyzServer(t, 0)
 	var logs bytes.Buffer
 	start := time.Now()
-	waitForCatalog(context.Background(), config.Catalog{Upstream: url, APIKey: "k-0123456789abcdef"}, 10*time.Second, 50*time.Millisecond, quietLogger(&logs))
+	if err := waitForCatalog(context.Background(), config.Catalog{Upstream: url, APIKey: "k-0123456789abcdef"}, 10*time.Second, 50*time.Millisecond, quietLogger(&logs)); err != nil {
+		t.Fatal(err)
+	}
 	if d := time.Since(start); d > time.Second || calls.Load() != 1 {
 		t.Fatalf("a ready catalog: took %s with %d probes, want one probe and an immediate return", d, calls.Load())
 	}
@@ -93,7 +95,9 @@ func TestWaitForCatalog_ReturnsAsSoonAsTheCatalogIsReady(t *testing.T) {
 func TestWaitForCatalog_WaitsForACatalogThatIsComingUp(t *testing.T) {
 	url, calls := readyzServer(t, 400*time.Millisecond)
 	start := time.Now()
-	waitForCatalog(context.Background(), config.Catalog{Upstream: url, APIKey: "k-0123456789abcdef"}, 10*time.Second, 50*time.Millisecond, quietLogger(&bytes.Buffer{}))
+	if err := waitForCatalog(context.Background(), config.Catalog{Upstream: url, APIKey: "k-0123456789abcdef"}, 10*time.Second, 50*time.Millisecond, quietLogger(&bytes.Buffer{})); err != nil {
+		t.Fatal(err)
+	}
 	d := time.Since(start)
 	if d < 350*time.Millisecond || d > 3*time.Second || calls.Load() < 2 {
 		t.Fatalf("took %s with %d probes, want a return soon after the catalog became ready (~400ms)", d, calls.Load())
@@ -106,7 +110,9 @@ func TestWaitForCatalog_GivesUpAfterTheBudgetWithAWarning(t *testing.T) {
 	var logs bytes.Buffer
 	const key = "super-secret-service-key-0123456789"
 	start := time.Now()
-	waitForCatalog(context.Background(), config.Catalog{Upstream: url, APIKey: key}, 500*time.Millisecond, 50*time.Millisecond, quietLogger(&logs))
+	if err := waitForCatalog(context.Background(), config.Catalog{Upstream: url, APIKey: key}, 500*time.Millisecond, 50*time.Millisecond, quietLogger(&logs)); err != nil {
+		t.Fatalf("giving up after the budget is not an error: %v", err)
+	}
 	if d := time.Since(start); d < 450*time.Millisecond || d > 3*time.Second {
 		t.Fatalf("took %s, want about the 500ms budget", d)
 	}
@@ -130,7 +136,9 @@ func TestWaitForCatalog_NothingListening(t *testing.T) {
 
 	var logs bytes.Buffer
 	start := time.Now()
-	waitForCatalog(context.Background(), config.Catalog{Upstream: dead, APIKey: "k-0123456789abcdef"}, 400*time.Millisecond, 50*time.Millisecond, quietLogger(&logs))
+	if err := waitForCatalog(context.Background(), config.Catalog{Upstream: dead, APIKey: "k-0123456789abcdef"}, 400*time.Millisecond, 50*time.Millisecond, quietLogger(&logs)); err != nil {
+		t.Fatal(err)
+	}
 	if d := time.Since(start); d < 350*time.Millisecond || d > 3*time.Second {
 		t.Fatalf("took %s, want about the 400ms budget", d)
 	}
@@ -145,8 +153,22 @@ func TestWaitForCatalog_StopsWhenTheContextEnds(t *testing.T) {
 	c, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
 	start := time.Now()
-	waitForCatalog(c, config.Catalog{Upstream: url, APIKey: "k-0123456789abcdef"}, time.Minute, 50*time.Millisecond, quietLogger(&bytes.Buffer{}))
+	_ = waitForCatalog(c, config.Catalog{Upstream: url, APIKey: "k-0123456789abcdef"}, time.Minute, 50*time.Millisecond, quietLogger(&bytes.Buffer{}))
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("took %s after the context ended", d)
+	}
+}
+
+// No upstream to wait for is a misconfiguration the server would refuse to start on too: that is an
+// error (the initContainer fails and says so), unlike a catalog that is merely not up yet.
+func TestWaitForCatalog_AMissingUpstreamIsAnError(t *testing.T) {
+	for name, up := range map[string]string{"empty": "", "not a url": "catalog-rpc", "wrong scheme": "ftp://catalog-rpc"} {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			err := waitForCatalog(context.Background(), config.Catalog{Upstream: up}, time.Minute, 50*time.Millisecond, quietLogger(&bytes.Buffer{}))
+			if err == nil || time.Since(start) > time.Second {
+				t.Fatalf("err = %v after %s, want an immediate error", err, time.Since(start))
+			}
+		})
 	}
 }
