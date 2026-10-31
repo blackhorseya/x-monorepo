@@ -3,6 +3,7 @@ import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { cellUnder, confirm, createCard, filterCard } from "./orders-ui";
+import { setStock } from "./stock-ui";
 
 // The whole event chain through the UI: CreateOrder → ordering outbox → worker →
 // inventory reserves → GetReservation shows RESERVED → StockReserved → the order
@@ -22,10 +23,7 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
   await seedProduct(request, sku);
 
   await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
-  await page.getByLabel("SKU", { exact: true }).fill(sku);
-  await page.getByLabel("On hand").fill("5");
-  await page.getByRole("button", { name: "Set", exact: true }).click();
-  await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
+  await setStock(page, sku, 5);
 
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(customer);
@@ -69,10 +67,7 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
   await seedProduct(request, sku);
 
   await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
-  await page.getByLabel("SKU", { exact: true }).fill(sku);
-  await page.getByLabel("On hand").fill("5");
-  await page.getByRole("button", { name: "Set", exact: true }).click();
-  await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
+  await setStock(page, sku, 5);
 
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(customer);

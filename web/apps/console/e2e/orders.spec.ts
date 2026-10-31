@@ -3,6 +3,7 @@ import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { cellUnder, confirm, createCard, filterCard } from "./orders-ui";
+import { setStock } from "./stock-ui";
 
 // The server keeps orders in memory for the whole run and the tests run in
 // parallel, so each one works under its own customer id and filters by it.
@@ -23,10 +24,7 @@ test("create, see, cancel an order", async ({ page, request }) => {
   await seedProduct(request, sku);
   if (withDB) {
     await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
-    await page.getByLabel("SKU", { exact: true }).fill(sku);
-    await page.getByLabel("On hand").fill("5");
-    await page.getByRole("button", { name: "Set", exact: true }).click();
-    await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
+    await setStock(page, sku, 5);
   }
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(id);
