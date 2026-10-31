@@ -429,6 +429,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("otel.endpoint", "")
 	v.SetDefault("otel.insecure", false)
 	v.SetDefault("otel.service_name", "")
+	v.SetDefault("catalog.upstream", "")
+	v.SetDefault("catalog.api_key", "")
+	v.SetDefault("catalog.timeout", 3*time.Second)
 	v.SetDefault("worker.consumer_group", "worker")
 	v.SetDefault("worker.broker", BrokerPostgres)
 	v.SetDefault("worker.start_from", StartFromBeginning)
@@ -475,6 +478,9 @@ func (x *AppConfig) validate() error {
 	}
 	if by := x.HTTP.RateLimit.By; by != RateLimitGlobal && by != RateLimitPeer {
 		return fmt.Errorf("invalid http.rate_limit.by %q (want global|peer)", by)
+	}
+	if x.Catalog.Timeout <= 0 {
+		return fmt.Errorf("invalid catalog.timeout %s (want > 0: the catalog is on the request path)", x.Catalog.Timeout)
 	}
 	if x.Log.Format != "json" && x.Log.Format != "text" {
 		return fmt.Errorf("invalid log.format %q (want json|text)", x.Log.Format)
