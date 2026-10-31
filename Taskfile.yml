@@ -280,6 +280,8 @@ tasks:
           helm template t {{.CHART}} -f {{.ITEM}} | {{.KUBECONFORM}} -strict -summary -kubernetes-version 1.30.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{"}}.Group{{"}}"}}/{{"{{"}}.ResourceKind{{"}}"}}_{{"{{"}}.ResourceAPIVersion{{"}}"}}.json' >/dev/null
           helm template t {{.CHART}} -f {{.ITEM}} | deployments/helm/check.py {{.ITEM}}
       - deployments/helm/check-negative.sh
+      # negative.sh's reading of the refusal, against fake kubectl/helm (no cluster): retries, never asserts on a tool error
+      - deployments/helm/kind/negative-test.sh
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)

@@ -43,8 +43,24 @@ upgrade_with catalog-rpc-empty-url
 # a pod of the new ReplicaSet that ran and exited non-zero, and is not Ready
 poll 120 'if any(.items[]; (.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0 and (.status.containerStatuses[0].ready | not)) then "yes" else "no" end' \
   || { echo "negative: an empty APP_POSTGRES_URL did not make catalog-rpc exit (--require-durable)"; kubectl -n "$ns" get pods -l "$sel"; exit 1; }
-bad=$(kubectl -n "$ns" get pods -l "$sel" -o json | jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0]')
-log=$(kubectl -n "$ns" logs "$bad" --previous 2>&1 || true)
-echo "$log" | grep -q 'require-durable' || { echo "negative: the failing pod's log does not name --require-durable: $log"; exit 1; }
-echo "$log" | grep -q "$key" && { echo "negative: the failing pod's log carries the service key"; exit 1; }
+# The refusal, read from evidence that outlives the container: terminated.message in the Pod status
+# (the chart sets terminationMessagePolicy: FallbackToLogsOnError), else `kubectl logs` (previous, then
+# current). Bounded: NEGATIVE_TRIES (default 60) tries, NEGATIVE_SLEEP (default 2) seconds apart. A failed read is a retry, never "the log": only text
+# that a successful read returned is asserted on.
+refusal=""
+for _ in $(seq 1 "${NEGATIVE_TRIES:-60}"); do
+  pods=$(kubectl -n "$ns" get pods -l "$sel" -o json)
+  bad=$(jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0] // empty' <<<"$pods")
+  if [ -n "$bad" ]; then
+    msg=$(jq -r --arg n "$bad" '.items[] | select(.metadata.name == $n) | .status.containerStatuses[0].lastState.terminated.message // empty' <<<"$pods")
+    if grep -q 'require-durable' <<<"$msg"; then refusal=$msg; break; fi
+    for prev in --previous ""; do
+      # shellcheck disable=SC2086
+      if out=$(kubectl -n "$ns" logs "$bad" $prev 2>/dev/null) && grep -q 'require-durable' <<<"$out"; then refusal=$out; break 2; fi
+    done
+  fi
+  sleep "${NEGATIVE_SLEEP:-2}"
+done
+[ -n "$refusal" ] || { echo "negative: no readable --require-durable refusal from the failing catalog-rpc pod (Pod status or logs) within 2 minutes"; kubectl -n "$ns" get pods -l "$sel"; exit 1; }
+grep -q "$key" <<<"$refusal" && { echo "negative: the failing pod's refusal carries the service key"; exit 1; }
 echo "negative ok: an empty APP_POSTGRES_URL makes catalog-rpc exit non-zero and never Ready (--require-durable)"

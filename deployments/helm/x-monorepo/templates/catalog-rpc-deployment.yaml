@@ -46,6 +46,9 @@ spec:
           # on an empty postgres.url (in-memory prices, readyz 200) or any auth.mode but required,
           # judged on the final effective settings (apps/catalog-rpc CheckDurable).
           args: ["--require-durable"]
+          # The refusal is the last thing the container logs; copy those lines into the Pod status
+          # (terminated.message) so it can still be read once the node has recycled the container log.
+          terminationMessagePolicy: FallbackToLogsOnError
           ports:
             - name: http
               containerPort: {{ (splitList ":" .Values.config.http.addr) | last | int }}
