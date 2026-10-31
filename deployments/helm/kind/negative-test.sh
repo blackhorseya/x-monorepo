@@ -5,6 +5,7 @@
 #   2. Pod status empty, logs fail twice then answer  → ok (retried; the tool's error text is never "the log")
 #   3. Pod status empty, logs always fail             → fails, naming that no refusal was readable
 #   4. Refusal present but it carries the service key → fails
+#   6. `kubectl get pods` itself fails once in the refusal loop → retried, not fatal (set -e must not end the script)
 #   5. Failure text is the tool's error, not a refusal → fails (does not grep the error as app output)
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -23,6 +24,8 @@ args="$*"
 case $args in
   *"create secret"*|*"delete secret"*) exit 0 ;;
   *"get pods"*)
+    pn=$(cat "$tmp_pods" 2>/dev/null || echo 0); pn=$((pn+1)); echo "$pn" > "$tmp_pods"
+    if [ "${GETPODS_FAIL_AT:-0}" = "$pn" ]; then echo "error: the server is currently unable to handle the request" >&2; exit 1; fi
     # the first scenario (missing key) needs a CreateContainerConfigError pod; the second a terminated one
     if [ "${PHASE_FILE:-}" ] && [ ! -e "$PHASE_FILE" ]; then
       touch "$PHASE_FILE"
@@ -47,9 +50,9 @@ pod() { # <terminated.message>
 }
 
 run() { # <name> <want exit: 0|1> <want text in output> ; env set by caller
-  out=$(PATH="$tmp/bin:$PATH" PHASE_FILE="$tmp/phase" tmp_count="$tmp/count" POD_JSON="$tmp/pods.json" NEGATIVE_TRIES=4 NEGATIVE_SLEEP=0 \
+  out=$(PATH="$tmp/bin:$PATH" PHASE_FILE="$tmp/phase" tmp_count="$tmp/count" tmp_pods="$tmp/pods.count" POD_JSON="$tmp/pods.json" NEGATIVE_TRIES=4 NEGATIVE_SLEEP=0 \
     "$here/negative.sh" ns rel chart values 2>&1) && got=0 || got=1
-  rm -f "$tmp/phase" "$tmp/count"
+  rm -f "$tmp/phase" "$tmp/count" "$tmp/pods.count"
   [ "$got" = "$2" ] || { echo "negative-test: $1: exit $got, want $2"; echo "$out"; exit 1; }
   case $out in *"$3"*) ;; *) echo "negative-test: $1: output lacks '$3'"; echo "$out"; exit 1 ;; esac
   echo "negative-test ok: $1"
@@ -61,5 +64,9 @@ LOG_MODE=fail run "refusal in the Pod status" 0 "negative ok: an empty APP_POSTG
 pod '' > "$tmp/pods.json"
 LOG_MODE=flaky LOG_TEXT='error="catalog-rpc: --require-durable: postgres.url is empty"' run "empty status, flaky logs are retried" 0 "negative ok: an empty APP_POSTGRES_URL"
 LOG_MODE=fail run "empty status, logs always fail" 1 "no readable --require-durable refusal"
+# the Pod status read itself fails once (call #3 is the first `get pods` of the refusal loop): retried, not fatal
+pod 'level=ERROR msg="catalog-rpc exited" error="catalog-rpc: --require-durable: postgres.url is empty"' > "$tmp/pods.json"
+GETPODS_FAIL_AT=3 LOG_MODE=fail run "a failed pod-status read is retried" 0 "negative ok: an empty APP_POSTGRES_URL"
+pod '' > "$tmp/pods.json"
 LOG_MODE=tool-error run "the tool's error text is not the app's log" 1 "no readable --require-durable refusal"
 LOG_MODE=ok LOG_TEXT="error=\"--require-durable: postgres.url is empty key=$key\"" run "a refusal carrying the key" 1 "carries the service key"
