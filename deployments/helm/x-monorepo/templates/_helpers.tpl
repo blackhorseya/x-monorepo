@@ -148,8 +148,11 @@ time, before a pod can come up in the in-memory mode an unset Postgres URL would
 {{- end -}}
 {{- end -}}
 {{- if $own -}}
-{{- if eq $own .Values.secrets.existingSecret -}}
-{{- fail "secrets.catalogRpc.existingSecret is the same Secret as secrets.existingSecret: that one is release-wide and may carry rpc's JWT secret, which catalog-rpc refuses to start with; give catalog-rpc its own Secret" -}}
+{{- /* The release's own Secrets, by the names they RESOLVE to (nameOverride / fullnameOverride included), not by the values the operator typed: secrets.existingSecret, <fullname>-env (what x-monorepo.secretName picks when the chart renders it), and the hook-scoped <fullname>-migrate-env. These are exactly the Secrets the chart creates besides catalog-rpc's own. */ -}}
+{{- $fn := include "x-monorepo.fullname" . -}}
+{{- $release := list .Values.secrets.existingSecret (include "x-monorepo.secretName" .) (printf "%s-env" $fn) (printf "%s-migrate-env" $fn) -}}
+{{- if has $own $release -}}
+{{- fail (printf "secrets.catalogRpc.existingSecret %q is one of the release-wide Secrets (they may carry rpc's JWT secret and user api keys, which catalog-rpc must not read); give catalog-rpc its own Secret" $own) -}}
 {{- end -}}
 {{- if $key -}}
 {{- fail "secrets.catalogRpc.existingSecret and secrets.catalogRpc.apiKey are both set: pick one source for catalog-rpc's APP_AUTH_API_KEYS" -}}
