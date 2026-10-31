@@ -16,6 +16,8 @@ port=${PORT:-18090}
 export APP_CONFIG=configs/config.example.yaml APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false
 export APP_POSTGRES_URL=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
 export APP_LOG_LEVEL=${APP_LOG_LEVEL:-warn}
+# shellcheck source=tests/k6/catalog.sh
+. tests/k6/catalog.sh
 
 PLAIN_KEY=k6-fake-roleless-key-0001
 ADMIN_KEY=k6-fake-admin-key-000002
@@ -28,7 +30,9 @@ stop() {
   [ -n "$wpid" ] && kill "$wpid" 2>/dev/null && wait "$wpid" 2>/dev/null || true; wpid=""
   [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true; pid=""
 }
-trap stop EXIT
+trap 'stop; catalog_stop' EXIT
+# one catalog-rpc for every cell (the cells' rpc keys and roles are rpc's business; catalog-rpc only knows rpc's service key)
+catalog_start "$bin" "$((port + 2))" "$bin/k6-auth-catalog.log"
 
 fails=()
 # cell <name> <script> <expect: the k6 exit code> <match: text the k6 output must contain, or -> <key|-> <server env…>

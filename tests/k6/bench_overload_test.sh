@@ -25,6 +25,7 @@ printf '#!/bin/sh\nexit 0\n' > "$work/fakebin/curl"
 printf '#!/bin/sh\nexit 0\n' > "$work/bin/migrate"
 printf '#!/bin/sh\nexec sleep 600\n' > "$work/bin/rpc"
 cp "$work/bin/rpc" "$work/bin/worker"
+cp "$work/bin/rpc" "$work/bin/catalog-rpc"
 # FAKE_K6=ok|script|<crossing>. A run raises the machine's load to FAKE_K6_BUSY for 2s (the create phase) and
 # puts it back to FAKE_K6_QUIET when it ends; script = exit 107; a crossing is k6's exit 99 in the create phase,
 # with the --summary-export k6 writes for it (a crossed threshold is `"thresholds": {expr: true}`):

@@ -2,7 +2,8 @@
 # Runs each k6 script against its own ./bin/rpc (built already) on $PORT with the Postgres
 # at $DATABASE_URL: orders under its load thresholds, ratelimit with the server at 50 rps,
 # timeout with the server at a 1ns deadline, reservation with a ./bin/worker next to the
-# rpc (outbox → worker → RESERVED latency). `task k6-smoke` locally, the `k6` job in CI.
+# rpc (outbox → worker → RESERVED latency). A ./bin/catalog-rpc runs next to the rpc for the
+# whole run (rpc has no catalog of its own: tests/k6/catalog.sh). `task k6-smoke` locally, the `k6` job in CI.
 #   smoke.sh <bin dir> [script…]        (default: reservation orders ratelimit timeout — reservation
 #   first so its worker meets an empty outbox, not the backlog the others leave behind)
 set -euo pipefail
@@ -12,6 +13,8 @@ port=${PORT:-18090}
 export APP_CONFIG=configs/config.example.yaml APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false
 export APP_POSTGRES_URL=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
 export APP_LOG_LEVEL=${APP_LOG_LEVEL:-warn}
+# shellcheck source=tests/k6/catalog.sh
+. tests/k6/catalog.sh
 
 pid="" wpid=""
 stop() {
@@ -19,7 +22,8 @@ stop() {
   [ -n "$wpid" ] && kill "$wpid" 2>/dev/null && wait "$wpid" 2>/dev/null || true; wpid=""
   [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true; pid=""
 }
-trap stop EXIT
+trap 'stop; catalog_stop' EXIT
+catalog_start "$bin" "$((port + 2))" "$bin/k6-catalog.log"
 
 for s in "${scripts[@]}"; do
   echo "== $s"
