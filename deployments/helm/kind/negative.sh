@@ -75,9 +75,11 @@ pgurl=$(sed -n 's/^  postgresUrl: //p' "$values" | head -n 1)
 kubectl -n "$ns" create secret generic catalog-rpc-no-rpc-key \
   --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" --from-literal=APP_POSTGRES_URL="$pgurl" >/dev/null
 upgrade_with catalog-rpc-no-rpc-key
-for _ in $(seq 1 90); do
-  [ "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o json | jq -r 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end')" = yes ] && { found=yes; break; }
-  sleep 1
+# bounded like every read here (NEGATIVE_TRIES x NEGATIVE_SLEEP, default 90 x 1s); a failed read is a retry
+found=""
+for _ in $(seq 1 "${NEGATIVE_RPC_TRIES:-90}"); do
+  if [ "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o json 2>/dev/null | jq -r 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end' 2>/dev/null || echo no)" = yes ]; then found=yes; break; fi
+  sleep "${NEGATIVE_RPC_SLEEP:-1}"
 done
-[ "${found:-}" = yes ] || { echo "negative: a Secret without APP_CATALOG_API_KEY did not stop the rpc pod (CreateContainerConfigError)"; kubectl -n "$ns" get pods; exit 1; }
+[ "$found" = yes ] || { echo "negative: a Secret without APP_CATALOG_API_KEY did not stop the rpc pod (CreateContainerConfigError)"; kubectl -n "$ns" get pods; exit 1; }
 echo "negative ok: a Secret without APP_CATALOG_API_KEY keeps the rpc pod from starting (CreateContainerConfigError)"
