@@ -12,7 +12,7 @@ run-name: "[release] ${{ github.event.workflow_run.head_sha || github.sha }}"
 #             `gh attestation verify`)
 #   publish   gh release edit --draft=false → GitHub creates the tag and marks it latest
 #   verify    scripts/release-verify.sh on what was just published: the Verify block of the release
-#             notes, run for real (checksums bundle, archive attestation, four image signatures)
+#             notes, run for real (checksums bundle, archive attestation, five image signatures)
 #   chart     opens a chart-only PR moving deployments/helm's appVersion to the new tag (CI and the
 #             release-gate comment on it are dispatched by hand: GITHUB_TOKEN pushes start no workflows;
 #             the release-gate dispatch queues behind the approved pull_request run, see release-gate.yml). Needs the repo
@@ -104,7 +104,7 @@ jobs:
     timeout-minutes: 20 # p90 387s, max 394s (last 11 days)
     permissions:
       contents: write   # upload archives to the draft
-      packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate,console}
+      packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,catalog-rpc,worker,migrate,console}
       id-token: write   # cosign keyless + attest-build-provenance: the OIDC token names this workflow
       attestations: write   # store the archives' provenance attestation on the repo
     steps:
@@ -195,7 +195,7 @@ jobs:
       - run: |
           {
             echo "## ${{ needs.prepare.outputs.tag }} built from \`$HEAD_SHA\`"
-            for app in rpc worker migrate console; do
+            for app in rpc catalog-rpc worker migrate console; do
               echo "- \`ghcr.io/blackhorseya/x-monorepo/$app:${TAG#v}\`"
             done
           } >> "$GITHUB_STEP_SUMMARY"
