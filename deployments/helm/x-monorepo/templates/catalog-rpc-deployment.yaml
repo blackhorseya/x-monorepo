@@ -1,0 +1,115 @@
+{{- if .Values.catalogRpc.enabled }}
+{{- include "x-monorepo.catalogRpc.validate" . -}}
+{{- $c := .Values.catalogRpc -}}
+{{- $grace := include "x-monorepo.catalogRpc.terminationGracePeriodSeconds" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-catalog-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: catalog-rpc
+spec:
+  replicas: {{ $c.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: catalog-rpc
+  template:
+    metadata:
+      labels:
+        {{- include "x-monorepo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: catalog-rpc
+      annotations:
+        {{- include "x-monorepo.catalogRpc.checksums" . | nindent 8 }}
+        {{- with $c.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "x-monorepo.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Same shutdown contract as rpc: readyz 503 for delaySeconds while still serving, then
+      # timeoutSeconds of drain; the app does the waiting (distroless: no preStop).
+      terminationGracePeriodSeconds: {{ $grace }}
+      containers:
+        - name: catalog-rpc
+          image: {{ include "x-monorepo.image" (dict "root" . "app" "catalog-rpc") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          # An arg, not env: extraEnv and a Secret cannot change it. The binary then refuses to start
+          # on an empty postgres.url (in-memory prices, readyz 200) or any auth.mode but required,
+          # judged on the final effective settings (apps/catalog-rpc CheckDurable).
+          args: ["--require-durable"]
+          # The refusal is the last thing the container logs; copy those lines into the Pod status
+          # (terminated.message) so it can still be read once the node has recycled the container log.
+          terminationMessagePolicy: FallbackToLogsOnError
+          ports:
+            - name: http
+              containerPort: {{ (splitList ":" .Values.config.http.addr) | last | int }}
+              protocol: TCP
+          # Operator extraEnv first (it cannot name APP_AUTH_* / APP_POSTGRES_URL / APP_CONFIG: the chart
+          # refuses), then what the chart sets. The two Secret keys are secretKeyRef with optional:
+          # false, never envFrom: an external Secret without APP_POSTGRES_URL keeps the pod from
+          # starting instead of letting it serve from memory with readyz 200. Its own Secret only:
+          # never the release-wide one (rpc's JWT secret and user api keys).
+          env:
+            {{- with $c.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            - name: APP_CONFIG
+              value: /etc/x-monorepo/config.yaml
+            - name: APP_HTTP_SHUTDOWN_DELAY
+              value: {{ printf "%ds" (int $c.shutdown.delaySeconds) | quote }}
+            - name: APP_HTTP_SHUTDOWN_TIMEOUT
+              value: {{ printf "%ds" (int $c.shutdown.timeoutSeconds) | quote }}
+            - name: APP_POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "x-monorepo.catalogRpc.secretName" . }}
+                  key: APP_POSTGRES_URL
+                  optional: false
+            - name: APP_AUTH_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "x-monorepo.catalogRpc.secretName" . }}
+                  key: APP_AUTH_API_KEYS
+                  optional: false
+          livenessProbe:
+            httpGet: { path: /api/healthz, port: http }
+            {{- toYaml $c.liveness | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /api/readyz, port: http }
+            {{- toYaml $c.readiness | nindent 12 }}
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/x-monorepo
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "x-monorepo.fullname" . }}-catalog-rpc
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -172,7 +172,7 @@ tasks:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
       - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
       - go install github.com/yannh/kubeconform/cmd/kubeconform@{{.KUBECONFORM_VERSION}}
-      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py
+      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-negative.sh deployments/helm/kind/*.sh
 
   tools:hooks:
     desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
@@ -279,13 +279,16 @@ tasks:
           helm lint --strict {{.CHART}} -f {{.ITEM}} >/dev/null
           helm template t {{.CHART}} -f {{.ITEM}} | {{.KUBECONFORM}} -strict -summary -kubernetes-version 1.30.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{"}}.Group{{"}}"}}/{{"{{"}}.ResourceKind{{"}}"}}_{{"{{"}}.ResourceAPIVersion{{"}}"}}.json' >/dev/null
           helm template t {{.CHART}} -f {{.ITEM}} | deployments/helm/check.py {{.ITEM}}
+      - deployments/helm/check-negative.sh
+      # negative.sh's reading of the refusal, against fake kubectl/helm (no cluster): retries, never asserts on a tool error
+      - deployments/helm/kind/negative-test.sh
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
 
   helm-kind-up:
     deps: [web-build]
-    desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster (reused if it exists), images built from the tree (rpc / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) and dex.yaml (Dex dev IdP + CoreDNS rewrite for dex.localtest.me) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
+    desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster (reused if it exists), images built from the tree (rpc / catalog-rpc / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) and dex.yaml (Dex dev IdP + CoreDNS rewrite for dex.localtest.me) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
     vars:
       CLUSTER: x-monorepo
       NS: x-monorepo
@@ -297,17 +300,17 @@ tasks:
         sh: 'command -v docker >/dev/null && echo docker || echo podman'
     cmds:
       - kind get clusters 2>/dev/null | grep -qx {{.CLUSTER}} || kind create cluster --name {{.CLUSTER}} --wait 2m
-      - for: [rpc, worker, migrate]
+      - for: [rpc, catalog-rpc, worker, migrate]
         cmd: CGO_ENABLED=0 GOOS=linux GOARCH={{.ARCH}} go build -trimpath -o {{.BIN_DIR}}/kind/linux/{{.ARCH}}/{{.ITEM}} ./apps/{{.ITEM}}
       # Same Dockerfile as the release (context layout <os>/<arch>/<app>); TARGETPLATFORM is set by
       # hand because plain `docker build` / podman do not inject it the way buildx does.
       # `localhost/` prefix: podman qualifies bare names with it anyway, so this is the one
       # spelling docker, podman and the archive loaded into kind all agree on.
-      - for: [rpc, worker, migrate]
+      - for: [rpc, catalog-rpc, worker, migrate]
         cmd: '{{.DOCKER}} build -q -f deployments/docker/Dockerfile --build-arg APP={{.ITEM}} --build-arg TARGETPLATFORM=linux/{{.ARCH}} -t localhost/x-monorepo/{{.ITEM}}:kind {{.BIN_DIR}}/kind >/dev/null'
       # The console: nginx + web/apps/console/dist (built by the web-build dep), context = that dir.
       - '{{.DOCKER}} build -q -t localhost/x-monorepo/console:kind web/apps/console >/dev/null'
-      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind localhost/x-monorepo/console:kind'
+      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/catalog-rpc:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind localhost/x-monorepo/console:kind'
       - kind load image-archive --name {{.CLUSTER}} {{.BIN_DIR}}/kind/images.tar
       - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f - >/dev/null
       - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null
@@ -334,6 +337,8 @@ tasks:
       # Second pass is an upgrade: pre-upgrade hook re-runs migrate (no-op), pods roll, release stays ready.
       - helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null
       - '{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
+      # catalog-rpc on a Secret that cannot make it durable: no start (missing key) / exit (empty URL). Restores the release.
+      - '{{.KIND_DIR}}/negative.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
       - helm -n {{.NS}} status x-monorepo | head -5
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
@@ -432,7 +437,7 @@ tasks:
         echo "→ release $(scripts/next-version.sh {{.CLI_ARGS}})"
 
   release-verify:
-    desc: 'scripts/release-verify.sh vX.Y.Z: verify a published release the way its notes say (checksums bundle, archive attestation, four image signatures; needs gh + cosign + ghcr login)'
+    desc: 'scripts/release-verify.sh vX.Y.Z: verify a published release the way its notes say (checksums bundle, archive attestation, five image signatures; needs gh + cosign + ghcr login)'
     cmds:
       - scripts/release-verify.sh {{.CLI_ARGS}}
 

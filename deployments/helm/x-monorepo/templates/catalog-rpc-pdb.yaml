@@ -1,0 +1,16 @@
+{{- $c := .Values.catalogRpc -}}
+{{- if and $c.enabled $c.podDisruptionBudget.enabled (gt (int $c.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-catalog-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: catalog-rpc
+spec:
+  maxUnavailable: {{ $c.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: catalog-rpc
+{{- end }}

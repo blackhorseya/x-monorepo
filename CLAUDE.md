@@ -23,7 +23,7 @@ task breaking              # proto 對 main 做 buf breaking
 task compose-up            # 本機 Postgres :5432 + Redis :6379 + grafana/otel-lgtm（Grafana :3000、OTLP :4317）
 task migrate -- up         # 跑每個 BC 的 migrations；service 啟動不會自己跑
 task merge-ready -- <pr>   # merge 前必跑：PR 最新綠燈是不是對「現在的 main + 這個 head」跑的（列 main / merge / base / head SHA 與 check 數）；stale（main 已前進）exit 2，先 `-- <pr> --revalidate` 重驗，不要 update branch（head 一變就要重審）
-task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag；沒改到會進 artifact 的檔案就被 gate 跳過，task release-gate 先看：列 releasable 檔 + 預測版號；四個 image 與 checksums.txt 都由 cosign keyless 簽名、archive 另有 GitHub artifact attestation，發布後 verify job 跑 scripts/release-verify.sh 全驗一遍；snapshot 以 --skip=sign 跳過；CI 的 release-snapshot 另跑 scripts/rekor-v2-canary.sh——cosign 預設 signing config 出現非 v1 的 Rekor 就紅（#204 的 409 處理只適用 v1，見 #215），.github/workflows/rekor-canary.yml 每週再跑一次，紅了不要 rerun release）
+task release-snapshot      # goreleaser dry run → bin/dist（真的 release 由 main 上的 CI 綠燈自動觸發，不手動打 tag；沒改到會進 artifact 的檔案就被 gate 跳過，task release-gate 先看：列 releasable 檔 + 預測版號；五個 image 與 checksums.txt 都由 cosign keyless 簽名、archive 另有 GitHub artifact attestation，發布後 verify job 跑 scripts/release-verify.sh 全驗一遍；snapshot 以 --skip=sign 跳過；CI 的 release-snapshot 另跑 scripts/rekor-v2-canary.sh——cosign 預設 signing config 出現非 v1 的 Rekor 就紅（#204 的 409 處理只適用 v1，見 #215），.github/workflows/rekor-canary.yml 每週再跑一次，紅了不要 rerun release）
 task poison -- list        # 看各 BC 的 poison 表；requeue <bc> <offset>…|all 送回原 topic、drop 刪掉（worker poison 子命令）
 task expire -- --older-than 24h --dry-run   # reservation TTL：RESERVED 超過的還庫存 + 發 OrderCancellationRequested（worker expire；Helm expire CronJob 每 15 分鐘；rpc 版 InventoryService.ExpireReservations 給 console Expire 頁，要 admin role；`InventoryService.SetStock` 同樣要 admin role，auth 開著時非 admin 是 `PERMISSION_DENIED`）
 task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 outbox 列 + 消費過的 inbox 列（worker prune；先 dry-run；NOTE 列出每個落後的 group 與最老未讀年齡：held back by = 過了 retention、behind = 還沒，--forget-group 刪掉不會再跑的）
@@ -88,7 +88,7 @@ pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering
   infra/           driven：memory / postgres（gorm row model + embed migrations）/ system（clock、id）
   adapters/        driving：rpc（Connect handler，pb ↔ dto）、consumer（broker handler）
 apps/rpc         composition root：main + wire.go，無業務、無 mapping
-apps/catalog-rpc  composition root：只掛 catalog 的 rpc（同 apps/rpc 裁成一個 BC）；沒有 identity，不接 CredentialResolver，認證只認 `auth.api_keys`；schema 歸 apps/migrate
+apps/catalog-rpc  composition root：只掛 catalog 的 rpc（同 apps/rpc 裁成一個 BC）；沒有 identity，不接 CredentialResolver，認證只認 `auth.api_keys`（`auth.jwt` / `auth.oidc.enabled` 拒啟動）；`--require-durable`（Helm 以 container arg 傳）在 `postgres.url` 空、`auth.mode` 不是 required、或 `auth.api_keys` 不是恰好一個名為 `rpc` 的 key 時拒啟動；schema 歸 apps/migrate
 apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Watermill router，各 BC 自己的 consumer group / poison；
                  worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）；
                  `worker poison list|show|requeue|drop` 操作各 BC 的 poison 表（requeue = 重新 insert 回原 topic 的 outbox 表）；

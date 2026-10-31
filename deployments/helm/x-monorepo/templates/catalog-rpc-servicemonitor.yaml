@@ -1,0 +1,34 @@
+{{- $m := .Values.catalogRpc.serviceMonitor -}}
+{{- if and .Values.catalogRpc.enabled $m.enabled }}
+# Same scrape as the rpc's: GET /api/metrics on the http port, outside the auth chain.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-catalog-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: catalog-rpc
+    {{- with $m.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: catalog-rpc
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  endpoints:
+    - port: http
+      path: /api/metrics
+      interval: {{ $m.interval }}
+      scrapeTimeout: {{ $m.scrapeTimeout }}
+      {{- with $m.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

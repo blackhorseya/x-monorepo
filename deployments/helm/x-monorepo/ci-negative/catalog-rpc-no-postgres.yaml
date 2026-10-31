@@ -1,0 +1,3 @@
+# expect: secrets.postgresUrl
+catalogRpc: { enabled: true }
+secrets: { catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" } }

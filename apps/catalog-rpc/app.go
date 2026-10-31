@@ -11,6 +11,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -74,4 +76,51 @@ func NewAuth(cfg *config.AppConfig) (config.Auth, error) {
 	}
 
 	return auth, nil
+}
+
+// CheckDurable is --require-durable: judged on the FINAL effective settings (config.Load has
+// already applied env over the file), it refuses what the chart cannot rule out by itself: an
+// empty or blank postgres.url (an external Secret may hold an empty value; the BC would then fall
+// back to an in-memory repository, readyz 200, prices lost on restart), any auth.mode but
+// required (an env var can say off), and any auth.api_keys but the single service key "rpc".
+// Messages carry the setting's name and, for the mode and the key count, their values, never a URL
+// or key.
+func CheckDurable(cfg *config.AppConfig) error {
+	if strings.TrimSpace(cfg.Postgres.URL) == "" {
+		return errors.New("catalog-rpc: --require-durable: postgres.url is empty; refusing to serve from memory")
+	}
+	if cfg.Auth.Mode != config.AuthRequired {
+		return fmt.Errorf("catalog-rpc: --require-durable: auth.mode is %q, want %q", cfg.Auth.Mode, config.AuthRequired)
+	}
+
+	if n, only := apiKeyNames(cfg.Auth.APIKeys); n != 1 || only != serviceKeyName {
+		return fmt.Errorf("catalog-rpc: --require-durable: auth.api_keys must hold exactly one key, named %q (found %d)", serviceKeyName, n)
+	}
+
+	return nil
+}
+
+// serviceKeyName is the one credential catalog-rpc accepts: rpc's. Writing it down is the point:
+// rpc forwards catalog.v1 with this key (the forwarding slice), and a Secret shared with rpc's user
+// keys (console, ops...) would otherwise authenticate those users here too. It narrows the risk, it
+// does not prove it away: a shared Secret holding only "rpc=..." passes.
+const serviceKeyName = "rpc"
+
+// apiKeyNames counts the entries of auth.api_keys ("name=key[:role|role],name=key", read the way
+// platform/server reads it: split on ",", trim, skip blanks, the name is what precedes the first
+// "=") and returns the name of the first one. Names only; a key is never touched.
+func apiKeyNames(s string) (count int, first string) {
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		name, _, _ := strings.Cut(pair, "=")
+		if count == 0 {
+			first = strings.TrimSpace(name)
+		}
+		count++
+	}
+
+	return count, first
 }

@@ -1,0 +1,5 @@
+# expect: secrets.catalogRpc.apiKey must not contain
+catalogRpc: { enabled: true }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "a,b" }

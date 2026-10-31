@@ -34,7 +34,7 @@ func TestRun_SIGTERM(t *testing.T) {
 	t.Setenv("APP_HTTP_SHUTDOWN_DELAY", "0")
 
 	done := make(chan error, 1)
-	go func() { done <- run() }()
+	go func() { done <- run(nil) }()
 
 	base := "http://" + addr
 	deadline := time.Now().Add(10 * time.Second)
@@ -126,7 +126,7 @@ func TestRun_RefusesUnsupportedCredentialSources(t *testing.T) {
 			}
 
 			done := make(chan error, 1)
-			go func() { done <- run() }()
+			go func() { done <- run(nil) }()
 
 			select {
 			case err := <-done:

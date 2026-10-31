@@ -1,0 +1,14 @@
+{{- if .Values.catalogRpc.enabled }}
+{{- include "x-monorepo.catalogRpc.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-catalog-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: catalog-rpc
+data:
+  # catalog-rpc's own: no auth.jwt, no auth.oidc (it refuses to start with either). See _helpers.tpl.
+  config.yaml: |
+    {{- include "x-monorepo.catalogRpc.config" . | nindent 4 }}
+{{- end }}

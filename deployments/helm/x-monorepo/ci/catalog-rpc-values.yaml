@@ -1,0 +1,27 @@
+# Profile 8: catalog-rpc on, with everything it must NOT inherit set for rpc — an OIDC issuer, a
+# legacy JWT (secret and issuer), user api keys — and every hardening knob. catalog-rpc refuses to
+# start on auth.jwt / auth.oidc.enabled, so check.py asserts none of it reaches its ConfigMap or Secret.
+secrets:
+  postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
+  apiKeys: "console=console-key-0123456789abc:admin"
+  jwtHs256Secret: "0123456789abcdef0123456789abcdef"
+  catalogRpc:
+    apiKey: "catalog-rpc-key-0123456789ab"
+config:
+  otel: { endpoint: otel-collector:4317, service_name: x-monorepo-rpc }
+  auth:
+    mode: optional   # not "required": a catalog-rpc that inherits auth.mode is then visible to check.py
+    admin_role: operator
+    jwt: { issuer: https://legacy.example.com, audience: x-monorepo, public_key: "" }
+    oidc:
+      enabled: true
+      issuers:
+        - { issuer: https://idp.example.com/realms/shop, audience: x-console, mapping: bound }
+catalogRpc:
+  enabled: true
+  extraEnv:
+    - { name: APP_LOG_LEVEL, value: debug }   # allowed; APP_AUTH_* / APP_POSTGRES_URL / APP_CONFIG are not (ci-negative)
+  serviceMonitor:
+    enabled: true
+    labels: { release: monitoring }
+networkPolicy: { enabled: true }

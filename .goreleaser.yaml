@@ -4,8 +4,8 @@
 #   task release-snapshot      # local dry run: binaries + archives under bin/dist, no images, no publish
 #   task release-check         # validate this file
 # ci.yml runs the snapshot on PRs.
-# Three apps, one module each under go.work; goreleaser builds from each app dir, go.work is found
-# by walking up (no root go.mod, hence project_name is explicit). The fourth image, the web
+# Four apps (rpc, catalog-rpc, worker, migrate), one module each under go.work; goreleaser builds from each app dir, go.work is found
+# by walking up (no root go.mod, hence project_name is explicit). The fifth image, the web
 # console (web/apps/console/Dockerfile), has no Go binary: release.yml pushes it with docker buildx
 # right after this, same tags.
 version: 2
@@ -21,6 +21,20 @@ builds:
   - id: rpc
     binary: rpc
     dir: apps/rpc
+    main: .
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Version={{ .Version }}
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+  - id: catalog-rpc
+    binary: catalog-rpc
+    dir: apps/catalog-rpc
     main: .
     env: [CGO_ENABLED=0]
     goos: [linux, darwin]
@@ -61,7 +75,7 @@ builds:
       - -X github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo.Date={{ .CommitDate }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
-# One archive per OS/arch holding all three binaries: they ship together (migrate runs before rpc/worker).
+# One archive per OS/arch holding all four binaries: they ship together (migrate runs before rpc/catalog-rpc/worker).
 archives:
   - id: apps
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -116,6 +130,13 @@ dockers_v2:
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.licenses: MIT
+  - id: catalog-rpc
+    ids: [catalog-rpc]
+    images: [ghcr.io/blackhorseya/x-monorepo/catalog-rpc]
+    dockerfile: deployments/docker/Dockerfile
+    build_args: { APP: catalog-rpc }
+    tags: *image_tags
+    annotations: *image_annotations
   - id: worker
     ids: [worker]
     images: [ghcr.io/blackhorseya/x-monorepo/worker]

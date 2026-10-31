@@ -1,4 +1,4 @@
-{{ .Chart.Name }} {{ .Chart.Version }} → images {{ .Values.image.registry }}/{rpc,worker,migrate{{ if .Values.console.enabled }},console{{ end }}}:{{ include "x-monorepo.imageTag" . }}
+{{ .Chart.Name }} {{ .Chart.Version }} → images {{ .Values.image.registry }}/{rpc,worker,migrate{{ if .Values.catalogRpc.enabled }},catalog-rpc{{ end }}{{ if .Values.console.enabled }},console{{ end }}}:{{ include "x-monorepo.imageTag" . }}
 
 rpc      {{ include "x-monorepo.fullname" . }}-rpc  (Service port {{ .Values.rpc.service.port }} → /api/<pkg>.<Service>/<Method>, /api/healthz, /api/readyz, /api/metrics)
 worker   {{ include "x-monorepo.fullname" . }}-worker  broker={{ .Values.config.worker.broker }} group={{ .Values.config.worker.consumer_group }}

@@ -1,5 +1,5 @@
 # Used by goreleaser (dockers_v2) only: the binary is already cross-compiled, this just wraps it.
-# Build context layout: <os>/<arch>/<binary>; APP picks which one (rpc | worker | migrate).
+# Build context layout: <os>/<arch>/<binary>; APP picks which one (rpc | catalog-rpc | worker | migrate).
 # distroless/static has CA certs + tzdata and no shell — TLS to Postgres/Redis/OTLP works,
 # `docker exec sh` does not. Healthcheck from outside (GET /api/readyz), not HEALTHCHECK.
 # The base is pinned tag@sha256 (the multi-arch index, so linux/amd64 and linux/arm64 both resolve);
