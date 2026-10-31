@@ -1,7 +1,7 @@
 // Load: the ordering write path and the two reads behind the console.
 //   k6 run tests/k6/orders.js -e BASE_URL=http://127.0.0.1:8080 [-e API_KEY=…] [-e VUS=20] [-e DURATION=60s]
-// setup() stocks SKUS skus (SetStock is idempotent: on_hand is a count) and makes each a catalog
-// product (the server prices the lines; UpsertProduct replaces, so it is idempotent too), then each
+// setup() makes SKUS skus catalog products (the server prices the lines; UpsertProduct replaces, so it
+// is idempotent) and then stocks each (SetStock is idempotent: on_hand is a count, and it needs the product), then each
 // VU loops CreateOrder (1–3 lines) → GetOrder → ListOrders (who names the customer: K6_CUSTOMER_MODE, see lib.js). With the
 // worker running, inventory reserves stock for every order; this script does
 // not wait for that (see the worker's eventbus_consumer_lag for the backlog).
@@ -42,8 +42,8 @@ export const options = {
 
 export function setup() {
   for (let i = 0; i < SKUS; i++) {
+    upsertProduct(i, 100 + i * 10); // first: SetStock refuses a SKU the catalog does not have
     setStock(i, 1_000_000);
-    upsertProduct(i, 100 + i * 10);
   }
 }
 

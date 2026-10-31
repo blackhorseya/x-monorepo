@@ -119,8 +119,10 @@ test("mutations carry the credential set after the page loaded", async ({
 
 test("SetStock under auth: no form anonymous, ok with an admin key", async ({
   page,
+  request,
 }) => {
   const sku = `E2E-AUTH-${uid()}`;
+  await seedProduct(request, sku, { headers: { "X-API-Key": ADMIN_KEY } }); // SetStock only stocks what the catalog has
   await page.goto("/stock");
   // Anonymous is not admin: the list is refused (alert) and there is no Set form to try.
   await expect(

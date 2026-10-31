@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 
 const sku = `E2E-${uid()}`;
 
-test("set stock, filter by prefix and by reserved", async ({ page }) => {
+test("set stock, filter by prefix and by reserved", async ({ page, request }) => {
+  await seedProduct(request, sku); // SetStock only stocks what the catalog has
   await page.goto("/stock");
   await page.getByLabel("SKU", { exact: true }).fill(sku);
   await page.getByLabel("On hand").fill("7");

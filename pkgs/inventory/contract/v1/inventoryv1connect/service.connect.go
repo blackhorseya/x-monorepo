@@ -58,7 +58,11 @@ const (
 
 // InventoryServiceClient is a client for the inventory.v1.InventoryService service.
 type InventoryServiceClient interface {
-	// SetStock sets the on-hand quantity of a SKU (creates it when unknown).
+	// SetStock sets the on-hand quantity of a SKU, creating its stock on the first
+	// call. The SKU must be a catalog product (x-error-code: stock.unknown_sku,
+	// INVALID_ARGUMENT, nothing written otherwise); a deactivated product is fine.
+	// When the catalog does not answer it is UNAVAILABLE (catalog.unavailable) and
+	// nothing is written; GetStock and ListStocks do not ask the catalog.
 	// Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
 	// Requires the admin role when auth is on (x-error-code: auth.permission_denied).
 	SetStock(context.Context, *connect.Request[v1.SetStockRequest]) (*connect.Response[v1.SetStockResponse], error)
@@ -187,7 +191,11 @@ func (c *inventoryServiceClient) ExpireReservations(ctx context.Context, req *co
 
 // InventoryServiceHandler is an implementation of the inventory.v1.InventoryService service.
 type InventoryServiceHandler interface {
-	// SetStock sets the on-hand quantity of a SKU (creates it when unknown).
+	// SetStock sets the on-hand quantity of a SKU, creating its stock on the first
+	// call. The SKU must be a catalog product (x-error-code: stock.unknown_sku,
+	// INVALID_ARGUMENT, nothing written otherwise); a deactivated product is fine.
+	// When the catalog does not answer it is UNAVAILABLE (catalog.unavailable) and
+	// nothing is written; GetStock and ListStocks do not ask the catalog.
 	// Reserved quantity is untouched; on_hand below reserved is INVALID_ARGUMENT.
 	// Requires the admin role when auth is on (x-error-code: auth.permission_denied).
 	SetStock(context.Context, *connect.Request[v1.SetStockRequest]) (*connect.Response[v1.SetStockResponse], error)

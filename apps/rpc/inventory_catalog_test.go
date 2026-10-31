@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -96,6 +98,16 @@ func newCatalogStockServer(t *testing.T) catalogStockServer {
 	}
 }
 
+func connectMessage(t *testing.T, err error) string {
+	t.Helper()
+	var ce *connect.Error
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want a connect error", err)
+	}
+
+	return ce.Message()
+}
+
 func (s catalogStockServer) setStock(sku string, onHand int32) error {
 	_, err := s.inv.SetStock(context.Background(), connect.NewRequest(&inventoryv1.SetStockRequest{Sku: sku, OnHand: onHand}))
 
@@ -118,7 +130,11 @@ func (s catalogStockServer) upsert(t *testing.T, sku string) {
 func TestInventory_SetStockRefusesASKUTheCatalogLacks(t *testing.T) {
 	s := newCatalogStockServer(t)
 
-	wantConnectCode(t, s.setStock("NO-SUCH-PRODUCT", 5), connect.CodeInvalidArgument, "stock.unknown_sku")
+	err := s.setStock("NO-SUCH-PRODUCT", 5)
+	wantConnectCode(t, err, connect.CodeInvalidArgument, "stock.unknown_sku")
+	if msg := connectMessage(t, err); msg != "the catalog has no product with this sku" {
+		t.Fatalf("message = %q, want the fixed text", msg)
+	}
 	if n := s.stockRows(t, "NO-SUCH-PRODUCT"); n != 0 {
 		t.Fatalf("%d stock rows were written for a SKU the catalog does not have", n)
 	}
@@ -159,7 +175,12 @@ func TestInventory_SetStockFailsClosedWhenTheCatalogFails(t *testing.T) {
 		}
 	})
 
-	wantConnectCode(t, s.setStock("KNOWN", 99), connect.CodeUnavailable, "catalog.unavailable")
+	down := s.setStock("KNOWN", 99)
+	wantConnectCode(t, down, connect.CodeUnavailable, "catalog.unavailable")
+	// the catalog's own error (a missing relation) stays in the log, never in the answer
+	if msg := connectMessage(t, down); strings.Contains(msg, "relation") || strings.Contains(msg, "products") || strings.Contains(msg, "SQLSTATE") {
+		t.Fatalf("message %q leaks the catalog's error", msg)
+	}
 	wantConnectCode(t, s.setStock("NEW-SKU", 1), connect.CodeUnavailable, "catalog.unavailable")
 	if n := s.stockRows(t, "NEW-SKU"); n != 0 {
 		t.Fatalf("%d stock rows were written while the catalog was failing", n)

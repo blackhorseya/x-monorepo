@@ -46,7 +46,7 @@ export function StockPage() {
           <CardHeader>
             <CardTitle>Set stock</CardTitle>
             <CardDescription>
-              On hand is a count, not a delta, and creates the SKU when unknown; it cannot go below what pending orders
+              On hand is a count, not a delta. The SKU must already be a catalog product (add it on the Products page first); it cannot go below what pending orders
               hold. Reserved changes as orders are created and cancelled.
             </CardDescription>
           </CardHeader>
