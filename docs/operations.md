@@ -144,7 +144,7 @@ task k6 -- orders                 # 對 http://127.0.0.1:8080（task run）跑 6
 task k6 -- ratelimit -e RPS=50    # server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50 起
 task k6 -- reservation            # server 旁要有 bin/worker 在跑（同一個 Postgres），不然每筆都 timeout
 task k6-auth-matrix               # tests/k6/auth-matrix.sh：orders / reservation 在每一種 auth 狀態各跑一次（2 VU × 5s）加上 fixtures，見下方「Auth 組合」；CI 的 k6-auth job 就是它
-task k6-wire                      # tests/k6/wire.sh：四個腳本打 tests/k6/wire_server.py（回壞掉的 HTTP response），驗 key 不進 k6 的輸出 / summary / metrics tag，見下方「壞掉的 HTTP response」；不需要 Postgres 和 rpc，CI 的 k6-auth job 跑它
+task k6-wire                      # tests/k6/wire.sh：四個腳本打 tests/k6/wire_server.py（回壞掉的 HTTP response），驗 key 不進 k6 的輸出 / summary / metrics tag，見下方「壞掉的 HTTP response」；不需要 Postgres 和 rpc，CI 的 k6-wire job 跑它
 task k6-bench                    # tests/k6/bench.sh：效能 baseline，N≥3 次、每次一個專屬資料庫（跑完 drop），輸出 result.json / summary.md；數字與方法見 [perf-baseline.md](perf-baseline.md)；不進 CI（乾淨 runner 上手動派送 `.github/workflows/k6-bench.yml`，見該文件「在 GitHub runner 上跑」）
 task k6-smoke                     # tests/k6/smoke.sh：四個腳本各自起一個 bin/rpc（:18090、local Postgres、對應的 env；reservation 排第一且多起一個 bin/worker，讓它面對空的 outbox；RUN_ID 每個腳本不同，SKU 才不會互撞），10s × 10 VU；CI 的 k6 job 就是它；CreateOrder 的 p95 門檻放寬到 CREATE_P95（預設 500ms；腳本本身預設 300）、reservation 的放寬到 RESERVE_P95（預設 5000ms；腳本 3000），shared runner 的尾巴比筆電寬
 ```
@@ -198,7 +198,7 @@ HTTP 和 JSON 都合法、但 enum 欄位被上游或 proxy 填成請求的 `X-A
 
 `wire.sh` 在跑 `reservation` 時多四個 `wire-reservation-reflect-*` cell（`tests/k6/status_server.py`，合法 200 + JSON，不需要 Postgres）：三個 counter 各一個（status 是 key → `<unrecognized>`），加一個 key 設成合法 enum 值 `RESERVATION_STATUS_EXPIRED`（→ `<redacted>`）；每個 cell 要求 k6 非零退出、counter 真的有樣本且 tag 是固定值，key 不在 log、`--summary-export`、`--out json`。
 
-CI 的 `k6-auth` job 和 `k6` job 平行；matrix 的 cell 名字可以接在 task 後面只跑幾個：`task k6-auth-matrix -- on-admin-orders whoami-public`。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
+CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/platform/server`、`pkgs/platform/config`、`pkgs/identity`、`apps/rpc`、`configs`、`tests/k6`）變動時跑；壞掉的 HTTP response 那組由獨立的 `k6-wire` job 跑，跟所有產品 Go 變動；matrix 的 cell 名字可以接在 task 後面只跑幾個：`task k6-auth-matrix -- on-admin-orders whoami-public`。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
 
 worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等它——要看 consumer 追不追得上就看 `eventbus_consumer_lag`；這也是 Helm `worker.autoscaling.metric: lag` 的壓力源。`reservation.js` 才等：它量的是單筆訂單從下單到 RESERVED 的端到端延遲，是 worker 鏈的 benchmark 基準。
 
