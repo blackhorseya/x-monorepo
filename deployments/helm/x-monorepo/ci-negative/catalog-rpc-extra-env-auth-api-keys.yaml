@@ -1,0 +1,8 @@
+# expect: catalogRpc.extraEnv
+# extraEnv must not set or shadow what makes catalog-rpc safe (APP_AUTH_API_KEYS): auth, its Postgres URL, its config file.
+catalogRpc:
+  enabled: true
+  extraEnv: [{ name: APP_AUTH_API_KEYS, value: "a=b" }]
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }

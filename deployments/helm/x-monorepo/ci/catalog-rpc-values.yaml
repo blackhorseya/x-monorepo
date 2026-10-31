@@ -19,6 +19,8 @@ config:
         - { issuer: https://idp.example.com/realms/shop, audience: x-console, mapping: bound }
 catalogRpc:
   enabled: true
+  extraEnv:
+    - { name: APP_LOG_LEVEL, value: debug }   # allowed; APP_AUTH_* / APP_POSTGRES_URL / APP_CONFIG are not (ci-negative)
   serviceMonitor:
     enabled: true
     labels: { release: monitoring }

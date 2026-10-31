@@ -213,18 +213,33 @@ def check_catalog_rpc(docs, values, dep, cr):
         expect(cfg.get(k), {kk: vv for kk, vv in values["config"][k].items() if kk != "service_name"}, f"catalog-rpc {k} = the release's")
     check("worker" not in cfg, "catalog-rpc config has no worker section")
 
-    # Its own env: exactly the catalog-rpc Secret, never the release-wide one (which carries rpc's
-    # JWT secret / user api keys).
-    secret_ref = [e["secretRef"]["name"] for e in c.get("envFrom", [])]
-    if cr_secret := cr_secret_name(values, docs):
-        expect(secret_ref, [cr_secret], "catalog-rpc envFrom = its own Secret only")
+    # Its own env: the two Secret keys it cannot run without come in by secretKeyRef (optional: false),
+    # never envFrom: an external Secret missing APP_POSTGRES_URL must keep the pod from starting,
+    # not let it serve from memory with readyz 200. The Secret is its own, never the release-wide one
+    # (rpc's JWT secret and user api keys).
+    check("envFrom" not in c, "catalog-rpc has no envFrom (a missing key would be silently skipped)")
+    own = cr_secret_name(values, docs)
+    check(own is not None, "catalog-rpc has a Secret to read")
+    env_list = c["env"]
+    refs = {e["name"]: e["valueFrom"]["secretKeyRef"] for e in env_list if "valueFrom" in e}
+    expect(sorted(refs), ["APP_AUTH_API_KEYS", "APP_POSTGRES_URL"], "catalog-rpc reads exactly APP_POSTGRES_URL and APP_AUTH_API_KEYS from a Secret")
+    for k, ref in refs.items():
+        expect(ref.get("name"), own, f"catalog-rpc {k} comes from its own Secret")
+        expect(ref.get("key"), k, f"catalog-rpc {k} secretKeyRef key")
+        expect(ref.get("optional"), False, f"catalog-rpc {k} secretKeyRef optional: false (a missing key keeps the pod from starting)")
     shared = find(docs, "Secret", "-env")
-    check(shared is None or shared["metadata"]["name"] not in secret_ref, "catalog-rpc never reads the release-wide Secret")
+    check(shared is None or shared["metadata"]["name"] != own, "catalog-rpc never reads the release-wide Secret")
     if values["secrets"].get("existingSecret"):
-        check(values["secrets"]["existingSecret"] not in secret_ref, "catalog-rpc never reads secrets.existingSecret")
-    env = {e["name"]: e.get("value") for e in c["env"]}
-    check(not any(k.startswith("APP_AUTH_") for k in env), "catalog-rpc has no APP_AUTH_* env of its own making")
+        check(values["secrets"]["existingSecret"] != own, "catalog-rpc never reads secrets.existingSecret")
+    names = [e["name"] for e in env_list]
+    check(len(names) == len(set(names)), f"catalog-rpc env has no duplicate names: {names}")
+    env = {e["name"]: e.get("value") for e in env_list}
+    check(not any(k.startswith("APP_AUTH_") and k != "APP_AUTH_API_KEYS" for k in env), "catalog-rpc has no APP_AUTH_* env but its api key")
     expect(env["APP_CONFIG"], "/etc/x-monorepo/config.yaml", "catalog-rpc APP_CONFIG")
+    # operator extraEnv comes first; what the chart sets (secret refs, config path, shutdown) comes after it
+    for e in cr.get("extraEnv", []):
+        check(names.index(e["name"]) < names.index("APP_CONFIG") and names.index(e["name"]) < names.index("APP_AUTH_API_KEYS"),
+              f"catalog-rpc extraEnv {e['name']} is listed before the chart's own env")
     vols = {v["name"]: v for v in spec["volumes"]}
     expect(vols["config"]["configMap"]["name"], cm["metadata"]["name"], "catalog-rpc mounts its own ConfigMap")
 
