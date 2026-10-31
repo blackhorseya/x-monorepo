@@ -18,3 +18,10 @@ export async function cellUnder(page: Page, row: Locator, header: string): Promi
   const index = await page.getByRole("columnheader", { name: header, exact: true }).first().evaluate((th) => (th as HTMLTableCellElement).cellIndex);
   return row.getByRole("cell").nth(index);
 }
+
+// An order's own status on its row of the orders list: the whole text of the Order column's cell.
+// This was row.getByText(status), which also finds the Reservation column's badge, and the two
+// statuses share the word CANCELLED (a tombstone reservation next to a PENDING order passed it).
+export async function expectOrderStatus(page: Page, row: Locator, status: string, options?: { timeout?: number }) {
+  await expect(await cellUnder(page, row, "Order")).toHaveText(status, options);
+}

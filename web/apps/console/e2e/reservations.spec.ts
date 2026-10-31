@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { confirm, createCard, filterCard } from "./orders-ui";
+import { confirm, createCard, filterCard, expectOrderStatus } from "./orders-ui";
 import { setStock } from "./stock-ui";
 import { expectReservationStatus } from "./reservation-ui";
 
@@ -103,7 +103,7 @@ test.describe("with a worker", () => {
     await page.goto(`/orders?customer=${customer}`);
     await orderRow.getByRole("button", { name: "Cancel" }).click();
     await confirm(page, "Cancel order");
-    await expect(orderRow.getByText("CANCELLED")).toBeVisible();
+    await expectOrderStatus(page, orderRow, "CANCELLED");
 
     await page.goto(`/reservations?order=${orderId}&status=RELEASED`);
     await expectReservationStatus(pinned, "RELEASED", WORKER);

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { cellUnder, confirm, createCard, filterCard } from "./orders-ui";
+import { cellUnder, confirm, createCard, filterCard, expectOrderStatus } from "./orders-ui";
 import { setStock } from "./stock-ui";
 import { expectReservationStatus } from "./reservation-ui";
 
@@ -38,7 +38,7 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
   await expect(row).toHaveCount(1);
   await expectReservationStatus(row, "RESERVED", WORKER);
   // Ordering consumed inventory's StockReserved: the saga closes on the happy path too.
-  await expect(row.getByText("CONFIRMED")).toBeVisible(WORKER);
+  await expectOrderStatus(page, row, "CONFIRMED", WORKER);
 
   // Stock shows the hold.
   await page.goto(`/stock?prefix=${sku}`);
@@ -47,10 +47,10 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
   await expect(stockRow).toContainText("3"); // available
 
   await page.goto(`/orders?customer=${customer}`);
-  await expect(row.getByText("CONFIRMED")).toBeVisible();
+  await expectOrderStatus(page, row, "CONFIRMED");
   await row.getByRole("button", { name: "Cancel" }).click();
   await confirm(page, "Cancel order");
-  await expect(row.getByText("CANCELLED")).toBeVisible();
+  await expectOrderStatus(page, row, "CANCELLED");
   await expectReservationStatus(row, "RELEASED", WORKER);
 
   // The badge links to the reservation itself.
@@ -84,10 +84,10 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
   // Complete only shows once inventory answered (CONFIRMED). "No Complete while PENDING" is not
   // asserted here: the worker can confirm before the check runs, so it never settles to 0
   // (orders.spec.ts asserts it where no worker runs).
-  await expect(row.getByText("CONFIRMED")).toBeVisible(WORKER);
+  await expectOrderStatus(page, row, "CONFIRMED", WORKER);
   await row.getByRole("button", { name: "Complete" }).click();
   await confirm(page, "Complete order");
-  await expect(row.getByText("COMPLETED")).toBeVisible();
+  await expectOrderStatus(page, row, "COMPLETED");
   // Terminal: neither button is left.
   await expect(row.getByRole("button")).toHaveCount(0);
   await expectReservationStatus(row, "COMMITTED", WORKER);

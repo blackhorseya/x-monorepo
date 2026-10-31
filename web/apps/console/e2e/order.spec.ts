@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { confirm, createCard, filterCard } from "./orders-ui";
+import { confirm, createCard, filterCard, expectOrderStatus } from "./orders-ui";
 import { setStock } from "./stock-ui";
 import { expectReservationStatus } from "./reservation-ui";
 
@@ -81,7 +81,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   await expect(page).toHaveURL(/\/orders$/);
   await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
-  await expect(row.getByText("CANCELLED")).toBeVisible();
+  await expectOrderStatus(page, row, "CANCELLED");
 });
 
 test("an unknown id is a not-found page, not an error", async ({ page }) => {
