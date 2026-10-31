@@ -68,6 +68,9 @@ func TestStocksSKUCheck_Postgres(t *testing.T) {
 	full := postgres.Migration()
 	before := upTo(t, full, 8)
 	t.Cleanup(func() {
+		// A failure between the dirty 0009 and the reset would leave the version dirty
+		// for every later test; step back to 8 (the failed migration left no CHECK).
+		db.Exec("UPDATE inventory.schema_migrations SET version = version - 1, dirty = false WHERE dirty")
 		db.Exec("TRUNCATE inventory.stocks CASCADE")
 		_ = platformpg.Up(context.Background(), cfg, full)
 	})
@@ -94,7 +97,12 @@ func TestStocksSKUCheck_Postgres(t *testing.T) {
 		return db.WithContext(c).Exec(`INSERT INTO inventory.stocks (sku, on_hand, reserved, version, updated_at) VALUES (?, 1, 0, 1, now())`, sku).Error
 	}
 
-	// An over-long SKU from before the rule blocks the migration.
+	// An over-long SKU from before the rule blocks the migration. Down steps back from the
+	// recorded version, so start by bringing a fresh database to the latest one rather
+	// than relying on an earlier test having run Up.
+	if err := platformpg.Up(c, cfg, full); err != nil {
+		t.Fatal(err)
+	}
 	if err := platformpg.Down(c, cfg, full); err != nil {
 		t.Fatal(err)
 	}
