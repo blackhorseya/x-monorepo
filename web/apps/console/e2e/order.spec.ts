@@ -4,6 +4,7 @@ import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { confirm, createCard, filterCard } from "./orders-ui";
 import { setStock } from "./stock-ui";
+import { expectReservationStatus } from "./reservation-ui";
 
 // /orders/$id: the id cell of the list links here; the page shows every line,
 // the total, the reservation, and cancels. A deep link to an unknown id says so.
@@ -55,9 +56,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
     .locator('[data-slot="card"]', { hasText: "Reservation" })
     .last();
   if (withDB) {
-    await expect(reservation.getByText("RESERVED")).toBeVisible({
-      timeout: 30_000,
-    });
+    await expectReservationStatus(reservation, "RESERVED", { timeout: 30_000 });
     await expect(reservation).toContainText(`${sku} × 2`);
     // CONFIRMED is the only state that can be completed; the button appears with it.
     await expect(page.getByTestId("order-status")).toHaveText("CONFIRMED", {
@@ -75,9 +74,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   await expect(page.getByTestId("order-status")).toHaveText("CANCELLED");
   await expect(page.getByRole("button", { name: "Cancel" })).toHaveCount(0);
   if (withDB)
-    await expect(reservation.getByText("RELEASED")).toBeVisible({
-      timeout: 30_000,
-    });
+    await expectReservationStatus(reservation, "RELEASED", { timeout: 30_000 });
 
   // Back on the list the row agrees (same cache key prefix, invalidated).
   await page.getByRole("link", { name: "All orders" }).click();
