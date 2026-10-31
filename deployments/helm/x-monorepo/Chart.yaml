@@ -9,8 +9,8 @@ type: application
 # Chart version: bump on any template / values change. appVersion: the image tag deployed
 # when image.tag is empty — a published release (ghcr.io/blackhorseya/x-monorepo/*); release.yml's
 # chart job opens a PR moving it (and bumping the patch here) after every release.
-version: 0.3.33
-appVersion: "0.49.2"
+version: 0.3.34
+appVersion: "0.50.0"
 kubeVersion: ">=1.26.0-0"
 home: https://github.com/blackhorseya/x-monorepo
 sources:
