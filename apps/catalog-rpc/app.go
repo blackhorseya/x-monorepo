@@ -11,6 +11,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -74,4 +76,21 @@ func NewAuth(cfg *config.AppConfig) (config.Auth, error) {
 	}
 
 	return auth, nil
+}
+
+// CheckDurable is --require-durable: judged on the FINAL effective settings (config.Load has
+// already applied env over the file), it refuses what the chart cannot rule out by itself: an
+// empty or blank postgres.url (an external Secret may hold an empty value; the BC would then fall
+// back to an in-memory repository, readyz 200, prices lost on restart) and any auth.mode but
+// required (an env var can say off). Messages carry the setting's name and, for the mode, its
+// value, never a URL or key.
+func CheckDurable(cfg *config.AppConfig) error {
+	if strings.TrimSpace(cfg.Postgres.URL) == "" {
+		return errors.New("catalog-rpc: --require-durable: postgres.url is empty; refusing to serve from memory")
+	}
+	if cfg.Auth.Mode != config.AuthRequired {
+		return fmt.Errorf("catalog-rpc: --require-durable: auth.mode is %q, want %q", cfg.Auth.Mode, config.AuthRequired)
+	}
+
+	return nil
 }
