@@ -26,6 +26,21 @@ var (
 	buildErr  error
 )
 
+// childBudget is how long a child process may live: the budget asked for, but never past the test's own
+// deadline (go test -timeout) less a margin, so the child is killed and reaped by its context BEFORE the
+// parent's alarm panics the binary and strands it. A parent without a deadline gives the child the whole budget.
+func childBudget(t *testing.T, want, margin time.Duration) time.Duration {
+	t.Helper()
+	d, ok := t.Deadline()
+
+	return clampBudget(time.Now(), d, ok, want, margin)
+}
+
+// clampBudget is childBudget's arithmetic with the clock as arguments (0 means the parent has no time left).
+func clampBudget(now, deadline time.Time, hasDeadline bool, want, margin time.Duration) time.Duration {
+	return want
+}
+
 func catalogBinary(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(func() {
