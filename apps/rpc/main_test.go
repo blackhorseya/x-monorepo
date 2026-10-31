@@ -27,7 +27,7 @@ import (
 // End-to-end through the wired graph: proto client → rpc adapter → decorated
 // usecase → domain → infra.
 func TestOrderService_E2E(t *testing.T) {
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 	})
@@ -268,7 +268,7 @@ func TestOrderService_E2E(t *testing.T) {
 // gRPC needs HTTP/2 and gRPC-Web is a distinct wire format; both must survive the
 // router (gin wildcard routes + h2c) exactly like the Connect protocol does.
 func TestOrderService_Protocols(t *testing.T) {
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 	})
@@ -356,7 +356,7 @@ func TestDocs(t *testing.T) {
 	}
 	newServer := func(t *testing.T, docs bool) http.Handler {
 		t.Helper()
-		srv, cleanup, err := Initialize(&config.AppConfig{
+		srv, cleanup, err := initialize(t, &config.AppConfig{
 			HTTP: config.HTTP{Addr: ":0", Docs: docs},
 			Log:  config.Log{Level: "error", Format: "text"},
 		})

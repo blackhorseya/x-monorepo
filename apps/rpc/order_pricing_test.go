@@ -23,7 +23,7 @@ import (
 
 func startPricing(t *testing.T) (string, orderingv1connect.OrderServiceClient, catalogv1connect.CatalogServiceClient) {
 	t.Helper()
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 	})

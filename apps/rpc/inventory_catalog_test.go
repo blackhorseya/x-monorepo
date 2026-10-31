@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -28,6 +29,9 @@ import (
 func TestMain(m *testing.M) {
 	code := m.Run()
 	pgtest.Terminate()
+	if binPath != "" {
+		_ = os.RemoveAll(filepath.Dir(binPath)) // the catalog-rpc binary the tests built
+	}
 	os.Exit(code)
 }
 
@@ -68,7 +72,7 @@ func newCatalogStockServer(t *testing.T) catalogStockServer {
 		}
 	}
 
-	srv, cleanup, err := Initialize(&config.AppConfig{
+	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP:     config.HTTP{Addr: ":0"},
 		Log:      config.Log{Level: "error", Format: "text"},
 		Auth:     config.Auth{Mode: config.AuthOff},
