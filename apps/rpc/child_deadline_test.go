@@ -44,7 +44,12 @@ func TestChildDoesNotOutliveItsParent(t *testing.T) {
 	if os.Getenv("CHILD_DEADLINE_HELPER") != "" {
 		t.Skip("the helper below is the one that runs inside the short-lived binary")
 	}
-	c, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// the helper binary we start is a child too: its budget is bounded by OUR deadline like any other child's
+	budget := childBudget(t, 2*time.Minute, childMargin)
+	if budget < 40*time.Second {
+		t.Skipf("only %s of this test binary's budget is left; the parent-first scenario needs about 40s", budget)
+	}
+	c, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	cmd := exec.CommandContext(c, "go", "test", "-count=1", "-timeout", "25s", "-run", "^TestChildHelperHoldsAChild$", ".")
 	cmd.Env = append(os.Environ(), "CHILD_DEADLINE_HELPER=1")
