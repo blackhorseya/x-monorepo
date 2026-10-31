@@ -337,6 +337,18 @@ pkgs/ordering/domain/order/order.go
 web/apps/console/src/main.tsx" \
   "$(in_repo scripts/releasable.sh)"
 expect_eq "explicit range sees only that range" "" "$(in_repo scripts/releasable.sh HEAD~2 HEAD~1)"
+# A rename between a shipped file and a _test.go still changes what ships (--no-renames: the shipped path is listed
+# either way; the pathspec already splits the pair, this pins it).
+fixture relrename
+touch_file pkgs/ordering/helper.go "package x"; touch_file pkgs/ordering/other_test.go "package x"
+commit "chore: files at the tag"
+git -C "$repo" tag -f v0.1.0 >/dev/null
+git -C "$repo" mv pkgs/ordering/helper.go pkgs/ordering/helper_test.go
+git -C "$repo" mv pkgs/ordering/other_test.go pkgs/ordering/other.go
+commit "chore: swap"
+expect_eq "renames between product and _test.go list the product path" \
+  "pkgs/ordering/helper.go
+pkgs/ordering/other.go" "$(in_repo scripts/releasable.sh)"
 fixture notag
 git -C "$repo" tag -d v0.1.0 >/dev/null
 set +e; in_repo scripts/releasable.sh >/dev/null 2>&1; rc=$?; set -e
