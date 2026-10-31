@@ -80,6 +80,10 @@ config:
   # (rpc + worker + CronJob pods) x max_open_conns, below Postgres max_connections
   # (docs/operations.md). The worker needs >= 2 x subscribers + 1 (11); to give it less than
   # rpc, set APP_POSTGRES_MAX_OPEN_CONNS in worker.extraEnv.
+  # Where rpc finds the catalog is the chart's (APP_CATALOG_UPSTREAM, the catalog-rpc Service of this release)
+  # and the key it presents is secrets.catalogRpc.*; only the budget of one call is tunable here.
+  catalog:
+    timeout: 3s
   postgres:
     max_open_conns: 25
     max_idle_conns: 10
@@ -130,6 +134,21 @@ secrets:
 
 rpc:
   replicaCount: 2
+  # The Deployment gives up on a rollout that makes no progress for this long. The best-effort wait for the
+  # catalog below must end before it (the chart refuses otherwise).
+  progressDeadlineSeconds: 600
+  # An initContainer on the rpc image (`rpc --wait-catalog=<n>s`): waits up to timeoutSeconds for catalog-rpc's
+  # /api/readyz so that on a rollout the catalog is normally up before this rpc takes traffic. BEST EFFORT, not a
+  # hard dependency: when the catalog does not come in time the binary logs a WARN and exits 0, the rpc starts, its
+  # own readyz does not depend on the catalog, and CreateOrder / SetStock answer UNAVAILABLE (catalog.unavailable)
+  # until it is back. It only orders a normal upgrade; on an upgrade it can see an OLD catalog-rpc pod as ready
+  # (the contract is unchanged, so a version in between is fine). enabled: false skips the wait.
+  waitForCatalog:
+    enabled: true
+    timeoutSeconds: 60
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { memory: 64Mi }
   # Graceful shutdown, in seconds (the app takes Go durations; the chart renders "<n>s").
   # After SIGTERM the pod answers /api/readyz with 503 for delaySeconds while still serving,
   # so endpoints drop it before the listener closes; in-flight requests then get timeoutSeconds.
@@ -198,17 +217,16 @@ rpc:
   affinity: {}
   topologySpreadConstraints: []
 
-# catalog-rpc (apps/catalog-rpc): the catalog bounded context as its own Deployment (#320). Off
-# by default for two reasons: the image of that name exists only from the first release built after
-# it was added (the default tag is .Chart.appVersion, so an older chart would pull a tag that is not
-# there), and rpc does not call it yet (the forwarding slice). Turning it on needs a Postgres URL and
-# secrets.catalogRpc.apiKey or existingSecret, else the chart does not render: without a URL the
-# binary would serve from memory. It runs with auth.mode required and ONLY the static key rpc=...:<admin
+# catalog-rpc (apps/catalog-rpc): the catalog bounded context as its own Deployment (#320). rpc has no
+# in-process catalog any more: it asks this service for every price and every SKU check, and does not start
+# without it, so it is on and `catalogRpc.enabled: false` does not render. It needs a Postgres URL and
+# secrets.catalogRpc.apiKey or existingSecret, else the chart does not render: without a URL the binary
+# would serve from memory. It runs with auth.mode required and ONLY the static key rpc=...:<admin
 # role>; its own ConfigMap and Secret carry no auth.jwt / auth.oidc. Same probes and shutdown contract
 # as rpc; /api/readyz probes Postgres. Schema: `migrate up` (the hook above), never this pod.
 # In-cluster address for the forwarding slice: <release>-catalog-rpc:<service.port>.
 catalogRpc:
-  enabled: false
+  enabled: true
   replicaCount: 2
   shutdown:
     delaySeconds: 5

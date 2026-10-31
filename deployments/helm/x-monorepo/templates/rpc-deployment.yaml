@@ -1,4 +1,5 @@
 {{- $rpc := .Values.rpc -}}
+{{- include "x-monorepo.rpc.validateCatalog" . -}}
 {{- $grace := include "x-monorepo.rpc.terminationGracePeriodSeconds" . -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -8,6 +9,8 @@ metadata:
     {{- include "x-monorepo.labels" . | nindent 4 }}
     app.kubernetes.io/component: rpc
 spec:
+  # The best-effort wait below must end well before this.
+  progressDeadlineSeconds: {{ $rpc.progressDeadlineSeconds }}
   {{- if not $rpc.autoscaling.enabled }}
   replicas: {{ $rpc.replicaCount }}
   {{- end }}
@@ -36,6 +39,26 @@ spec:
       # shutdown.delaySeconds (readyz 503, still serving) + shutdown.timeoutSeconds (in-flight
       # drain) + graceMarginSeconds. The app does the waiting; there is no preStop (no shell).
       terminationGracePeriodSeconds: {{ $grace }}
+      {{- if $rpc.waitForCatalog.enabled }}
+      # Best effort, bounded: wait for catalog-rpc's readyz so that on a rollout the catalog is normally up before
+      # this rpc takes traffic. After the budget the binary logs a WARN and exits 0, so a catalog outage never keeps
+      # a new rpc pod from starting (its own readyz does not depend on the catalog; CreateOrder answers UNAVAILABLE
+      # until the catalog is back). Not a hard dependency. Same image as rpc (distroless: the binary does the waiting).
+      initContainers:
+        - name: wait-for-catalog
+          image: {{ include "x-monorepo.image" (dict "root" . "app" "rpc") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--wait-catalog={{ int $rpc.waitForCatalog.timeoutSeconds }}s"]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: APP_CONFIG
+              value: /dev/null
+            - name: APP_CATALOG_UPSTREAM
+              value: {{ include "x-monorepo.catalogRpc.upstream" . | quote }}
+          resources:
+            {{- toYaml $rpc.waitForCatalog.resources | nindent 12 }}
+      {{- end }}
       containers:
         - name: rpc
           image: {{ include "x-monorepo.image" (dict "root" . "app" "rpc") }}
@@ -48,7 +71,9 @@ spec:
               protocol: TCP
           {{- $env := list
                 (dict "name" "APP_HTTP_SHUTDOWN_DELAY" "value" (printf "%ds" (int $rpc.shutdown.delaySeconds)))
-                (dict "name" "APP_HTTP_SHUTDOWN_TIMEOUT" "value" (printf "%ds" (int $rpc.shutdown.timeoutSeconds))) }}
+                (dict "name" "APP_HTTP_SHUTDOWN_TIMEOUT" "value" (printf "%ds" (int $rpc.shutdown.timeoutSeconds)))
+                (dict "name" "APP_CATALOG_UPSTREAM" "value" (include "x-monorepo.catalogRpc.upstream" .))
+                (dict "name" "APP_CATALOG_API_KEY" "valueFrom" (dict "secretKeyRef" (dict "name" (include "x-monorepo.catalogRpc.secretName" .) "key" "APP_CATALOG_API_KEY" "optional" false))) }}
           {{- include "x-monorepo.commonEnv" (dict "root" . "extra" (concat $env $rpc.extraEnv)) | nindent 10 }}
           livenessProbe:
             httpGet: { path: /api/healthz, port: http }
