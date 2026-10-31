@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -54,6 +55,9 @@ func New(cfg config.Catalog, tel *otel.Providers) (*Client, error) {
 	u, err := url.Parse(cfg.Upstream)
 	if cfg.Upstream == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, errors.New("catalog client: catalog.upstream must be an http(s) URL")
+	}
+	if u.User != nil {
+		return nil, errors.New("catalog client: catalog.upstream must not carry credentials (userinfo): the key is APP_CATALOG_API_KEY")
 	}
 	if cfg.APIKey == "" {
 		return nil, errors.New("catalog client: catalog.api_key (APP_CATALOG_API_KEY) is empty")
@@ -117,13 +121,29 @@ func classify(c context.Context, op string, err error) error {
 
 			return unavailable()
 		}
-		contextx.FromContext(c).Warn("catalog call failed", "op", op, "code", ce.Code().String(), "error", ce.Message())
+		// The log carries the operation, a fixed line and the Connect code, never what the remote wrote (its
+		// message may reflect a credential) and never the transport error (it carries the address).
+		contextx.FromContext(c).Warn("catalog call failed", "op", op, "code", ce.Code().String())
 
 		return unavailable()
 	}
-	contextx.FromContext(c).Warn("catalog call failed", "op", op, "error", err.Error())
+	contextx.FromContext(c).Warn("catalog call failed", "op", op, "reason", reasonOf(err))
 
 	return unavailable()
+}
+
+// reasonOf names a transport failure that is not a Connect error with a fixed word. The error text itself
+// stays out of the log: it carries the URL and, for a misbehaving upstream, whatever it sent back.
+func reasonOf(err error) string {
+	var ne net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()):
+		return "timeout"
+	case errors.As(err, &ne):
+		return "unreachable"
+	default:
+		return "transport"
+	}
 }
 
 func unavailable() error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -37,12 +38,17 @@ type upstream struct {
 	headers http.Header
 	getErr  error
 	delay   time.Duration
+	// reflect makes GetProduct fail with this code and a message that contains the credential it received.
+	reflect connect.Code
 }
 
 func (u *upstream) GetProduct(c context.Context, req *connect.Request[catalogv1.GetProductRequest]) (*connect.Response[catalogv1.GetProductResponse], error) {
 	u.mu.Lock()
 	u.headers = req.Header().Clone()
 	err, delay := u.getErr, u.delay
+	if u.reflect != 0 {
+		err = connect.NewError(u.reflect, fmt.Errorf("upstream saw credential %q and the authorization %q", req.Header().Get("X-API-Key"), req.Header().Get("Authorization")))
+	}
 	u.mu.Unlock()
 	if delay > 0 {
 		select {
@@ -261,46 +267,53 @@ func TestNew_RefusesWhatItCannotUse(t *testing.T) {
 	}
 }
 
-// What the catalog says about a failure is its text, not ours: a catalog that reflects the service key (or
-// anything else) in an error message must not get it into this process's log. The failure log carries the
-// operation, a fixed category and the Connect code, nothing the remote wrote, and not the upstream address.
-func TestClient_FailureLogsCarryNoRemoteText(t *testing.T) {
-	logOf := func(t *testing.T, url string, u *upstream) string {
-		t.Helper()
-		var logs bytes.Buffer
-		c := contextx.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
-		wantUnavailable(t, get(newClient(t, url, time.Second), c))
-
-		return logs.String()
-	}
-	const reflected = "boom: got key " + serviceKey + " and Authorization: Bearer user-token-0123456789"
-
+// What the catalog says about a failure is its text, not ours: an upstream that echoes the credential it was
+// sent (a proxy, a debug handler) must not get it into the caller's error or this process's log. The log carries
+// the operation, a fixed line and the Connect code; not the remote text, not the transport error, not the address.
+// A failure message never prints the log it checked: it names the leak and the code.
+func TestClient_AnUpstreamThatEchoesTheCredentialLeaksItNowhere(t *testing.T) {
 	for name, code := range map[string]connect.Code{
 		"Internal": connect.CodeInternal, "Unknown": connect.CodeUnknown, "Unavailable": connect.CodeUnavailable,
-		"ResourceExhausted": connect.CodeResourceExhausted,
+		"ResourceExhausted": connect.CodeResourceExhausted, "DeadlineExceeded": connect.CodeDeadlineExceeded,
+		"Unauthenticated": connect.CodeUnauthenticated, "PermissionDenied": connect.CodePermissionDenied,
 	} {
-		t.Run(name+" with a reflected key", func(t *testing.T) {
-			u := &upstream{getErr: connect.NewError(code, errors.New(reflected))}
-			out := logOf(t, serve(t, u), u)
-			for _, leak := range []string{serviceKey, "user-token", "boom", "Authorization"} {
-				if strings.Contains(out, leak) {
-					t.Fatalf("the log carries remote text %q: %s", leak, out)
+		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			c := contextx.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
+			// the user's own credentials ride the incoming request; none of them may come back either
+			req := connect.NewRequest(&catalogv1.GetProductRequest{Sku: "A"})
+			req.Header().Set("X-API-Key", "the-users-own-key-0123456789")
+			req.Header().Set("Authorization", "Bearer the-users-own-token")
+			_, err := newClient(t, serve(t, &upstream{reflect: code}), time.Second).GetProduct(c, req)
+
+			wantUnavailable(t, err)
+			for _, secret := range []string{serviceKey, "the-users-own-key", "the-users-own-token", "upstream saw"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("code %s: the caller's error carries %q", code, secret)
+				}
+				if strings.Contains(logs.String(), secret) {
+					t.Fatalf("code %s: the log carries %q (%d bytes of log not shown)", code, secret, logs.Len())
 				}
 			}
-			if !strings.Contains(out, "catalog call failed") || !strings.Contains(out, code.String()) {
-				t.Fatalf("log = %q, want the fixed line with the code %s", out, code)
+			if !strings.Contains(logs.String(), code.String()) {
+				t.Fatalf("code %s: the log does not name the code", code)
 			}
 		})
 	}
 
 	t.Run("a non-Connect 5xx whose body reflects the key", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "<html>"+reflected+"</html>", http.StatusBadGateway)
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "<html>boom "+r.Header.Get("X-API-Key")+"</html>", http.StatusBadGateway)
 		}))
 		t.Cleanup(ts.Close)
-		out := logOf(t, ts.URL, nil)
-		if strings.Contains(out, serviceKey) || strings.Contains(out, "html") || strings.Contains(out, "boom") {
-			t.Fatalf("the log carries the body of the 502: %s", out)
+		var logs bytes.Buffer
+		c := contextx.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
+		err := get(newClient(t, ts.URL, time.Second), c)
+		wantUnavailable(t, err)
+		for _, secret := range []string{serviceKey, "html", "boom"} {
+			if strings.Contains(err.Error(), secret) || strings.Contains(logs.String(), secret) {
+				t.Fatalf("the 502 body leaked (%q) into the error or the log", secret)
+			}
 		}
 	})
 
@@ -311,9 +324,13 @@ func TestClient_FailureLogsCarryNoRemoteText(t *testing.T) {
 		}
 		addr := ln.Addr().String()
 		_ = ln.Close()
-		out := logOf(t, "http://"+addr, nil)
-		if strings.Contains(out, addr) || strings.Contains(out, "dial tcp") || strings.Contains(out, "refused") {
-			t.Fatalf("the log carries the transport error / address: %s", out)
+		var logs bytes.Buffer
+		c := contextx.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
+		wantUnavailable(t, get(newClient(t, "http://"+addr, time.Second), c))
+		for _, leak := range []string{addr, "dial tcp", "refused"} {
+			if strings.Contains(logs.String(), leak) {
+				t.Fatalf("the log carries the transport error / address (%q)", leak)
+			}
 		}
 	})
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -38,8 +39,16 @@ func childBudget(t *testing.T, want, margin time.Duration) time.Duration {
 
 // clampBudget is childBudget's arithmetic with the clock as arguments (0 means the parent has no time left).
 func clampBudget(now, deadline time.Time, hasDeadline bool, want, margin time.Duration) time.Duration {
-	return want
+	if !hasDeadline {
+		return want
+	}
+	left := max(deadline.Sub(now)-margin, 0)
+
+	return min(want, left)
 }
+
+// childMargin is how long before the test binary's own deadline a child is gone: time to be killed and waited for.
+const childMargin = 5 * time.Second
 
 func catalogBinary(t *testing.T) string {
 	t.Helper()
@@ -50,7 +59,14 @@ func catalogBinary(t *testing.T) string {
 			return
 		}
 		binPath = filepath.Join(dir, "catalog-rpc")
-		out, err := exec.Command("go", "build", "-o", binPath, "github.com/blackhorseya/x-monorepo/apps/catalog-rpc").CombinedOutput()
+		budget := childBudget(t, 3*time.Minute, childMargin)
+		if budget <= 0 {
+			buildErr = errors.New("the test binary is about to hit its own -timeout: no time left to build catalog-rpc")
+			return
+		}
+		c, cancel := context.WithTimeout(context.Background(), budget)
+		defer cancel()
+		out, err := exec.CommandContext(c, "go", "build", "-o", binPath, "github.com/blackhorseya/x-monorepo/apps/catalog-rpc").CombinedOutput()
 		if err != nil {
 			buildErr = fmt.Errorf("build catalog-rpc: %w\n%s", err, out)
 		}
@@ -123,9 +139,14 @@ func startCatalogProcWith(t *testing.T, deadline time.Duration, extra ...string)
 
 func (p *catalogProc) start() {
 	p.t.Helper()
+	bin := catalogBinary(p.t) // built (once) before the child's clock starts: the build is not the child's time
+	budget := childBudget(p.t, p.deadline, childMargin)
+	if budget <= 0 {
+		p.t.Fatalf("the test binary is about to hit its own -timeout: no time left to start catalog-rpc")
+	}
 	var ctx context.Context
-	ctx, p.cancel = context.WithTimeout(context.Background(), p.deadline)
-	p.cmd = exec.CommandContext(ctx, catalogBinary(p.t))
+	ctx, p.cancel = context.WithTimeout(context.Background(), budget)
+	p.cmd = exec.CommandContext(ctx, bin)
 	p.cmd.WaitDelay = 2 * time.Second
 	p.cmd.Env = p.env
 	p.cmd.Stdout, p.cmd.Stderr = p.logs, p.logs
