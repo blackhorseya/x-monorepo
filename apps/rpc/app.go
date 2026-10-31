@@ -34,7 +34,7 @@ import (
 )
 
 // NewRoutes lists every mounted service: the BCs' and the platform's admin surface.
-func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, identity *identityrpc.IdentityService, catalog *catalogrpc.CatalogService, poison *admin.PoisonService) []server.Route {
+func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, identity *identityrpc.IdentityService, catalog *catalogrpc.Forwarder, poison *admin.PoisonService) []server.Route {
 	return []server.Route{ordering, inventory, identity, catalog, poison}
 }
 

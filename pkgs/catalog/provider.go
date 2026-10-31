@@ -11,9 +11,11 @@ import (
 	"github.com/google/wire"
 	"gorm.io/gorm"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/client"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/application/usecase"
+	"github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1/catalogv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/domain/product"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/infra/postgres"
@@ -41,6 +43,18 @@ var ProviderSet = wire.NewSet(
 
 	// adapters
 	rpc.NewCatalogService,
+)
+
+// ClientProviderSet is the catalog as another process's service: the composition root that does not
+// own the catalog (apps/rpc) asks catalog-rpc over Connect instead of loading the BC. It provides the
+// catalogv1connect.CatalogServiceHandler the other BCs' adapters ask (ordering's pricing, inventory's
+// product check) and the Forwarder that serves catalog.v1 on the caller's own port. Needs config.Catalog
+// (upstream, service key) and the otel providers; builds nothing of the BC itself, so there is no
+// repository, no database and no catalog schema on that side.
+var ClientProviderSet = wire.NewSet(
+	client.New,
+	wire.Bind(new(catalogv1connect.CatalogServiceHandler), new(*client.Client)),
+	rpc.NewForwarder,
 )
 
 // ProvideProductRepository picks the persistence backend from the composition

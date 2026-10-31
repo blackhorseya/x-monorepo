@@ -72,12 +72,14 @@ func newCatalogStockServer(t *testing.T) catalogStockServer {
 		}
 	}
 
-	srv, cleanup, err := initialize(t, &config.AppConfig{
+	// the catalog is its own process on the same database, as in production
+	cat := startCatalogProc(t, "APP_POSTGRES_URL="+pgCfg.URL)
+	srv, cleanup, err := initialize(t, withCatalog(&config.AppConfig{
 		HTTP:     config.HTTP{Addr: ":0"},
 		Log:      config.Log{Level: "error", Format: "text"},
 		Auth:     config.Auth{Mode: config.AuthOff},
 		Postgres: pgCfg,
-	})
+	}, cat))
 	if err != nil {
 		t.Fatal(err)
 	}

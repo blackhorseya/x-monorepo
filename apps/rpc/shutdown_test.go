@@ -26,6 +26,9 @@ func TestRun_SIGTERM(t *testing.T) {
 
 	addr := freeAddr(t)
 	t.Setenv("APP_HTTP_ADDR", addr)
+	cat := startCatalogProc(t) // rpc refuses to start without a catalog upstream
+	t.Setenv("APP_CATALOG_UPSTREAM", cat.URL)
+	t.Setenv("APP_CATALOG_API_KEY", serviceKey)
 	t.Setenv("APP_LOG_LEVEL", "error")
 	t.Setenv("APP_HTTP_SHUTDOWN_DELAY", "0")
 
