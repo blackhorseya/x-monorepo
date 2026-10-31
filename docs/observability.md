@@ -47,6 +47,11 @@
   `usecase_duration_seconds{usecase="ordering.create_order", kind}` 已經依 kernel error kind 拆開，再加一個 `rejected` 只會把不同負責人的原因混在一起。
   Grafana「Saga」row 的兩個面板看 results/s 與 replayed / key_reused 佔比。沒設 alert：`replayed` 是重試保護正常運作（client 逾時重送），
   `key_reused` 是單一整合的 bug（同一把 key 送兩個請求），都沒有可靠的服務水準線可設門檻；真的有疑慮時看面板，再用 `x-error-code` 的 access line 找是哪個 client。
+- **catalog 是另一個 process（#320）**：rpc 問 catalog-rpc（`QuotePrices` / `GetProduct`）的 Connect client 掛 `otelconnect`，把 `traceparent` 帶過去（`pkgs/catalog/adapters/client/client_test.go`）。
+  catalog-rpc 自己的 access log 多一行 `msg=rpc`、`procedure=…/QuotePrices`，`trace_id` 就是呼叫它的那個 `CreateOrder` 的 trace（`apps/rpc/catalog_split_test.go` 的 `TestTrace_QuotePricesIsServedUnderTheCallersTrace`，真的起兩個 process 驗）。
+  所以一張單的 trace 在 Tempo 裡跨兩個服務；`service.name` 沒設時取執行檔名（`pkgs/platform/otel/otel.go` 的 `serviceName`），所以 catalog-rpc 上報為 `catalog-rpc`，查 Loki 時 `{service_name="catalog-rpc"} | trace_id="…"` 與 rpc 的那份用同一個 trace_id。
+  catalog-rpc 是獨立的 metrics／`/api/metrics` 來源（它自己的 `usecase_duration_seconds`、`rpc.server.call.duration`），Helm 的 ConfigMap 不帶 `otel.service_name`，以免用 rpc 的名字上報（`docs/operations.md`）。
+  catalog 不通時 rpc 回使用者 `UNAVAILABLE` + `catalog.unavailable`，log 只寫固定的一行 `catalog call failed`＋`op` 與 Connect `code`（或傳輸層的 `reason`：`timeout` / `unreachable` / `transport`），不含上游回的文字、位址或 key（`pkgs/catalog/adapters/client/client.go` 的 `classify`）；service key 被拒使用者端同樣是 `catalog.unavailable`，要看 rpc log 的 `catalog service credential rejected`（Error）才分得出（`TestCatalogServiceKeyMismatch_LooksLikeAnOutageToUsers`）
 - **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader、logs 走 batch processor；`otelconnect`
   interceptor 掛最外層，每個 RPC 一個 span。endpoint 空 = tracer no-op、logger 只寫 stdout、不 dial
 - **span 的來源**：RPC 由 `otelconnect`；`/api/docs`、`/api/openapi/*` 等普通 route 由 `otelgin`（filter 掉 RPC prefix、

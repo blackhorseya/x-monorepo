@@ -93,11 +93,12 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │       ├── domain/product/        # Product aggregate（sku、name、price（每個 product 各自的幣別）、active、optimistic version）
 │       └── application/usecase/   # Upsert / Get / List / Deactivate + QuotePrices（批次報價，分得出不存在與已下架；ordering 的 `adapters/pricing` 經 contract 呼叫它）
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
-├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
+├── deployments/helm/x-monorepo/   # Helm chart：rpc / catalog-rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
 ├── tests/k6/                      # k6：orders（load + thresholds）、ratelimit、timeout、reservation（worker 鏈延遲）；task k6 -- <script>、task k6-smoke、task k6-auth-matrix（各 auth 組合）
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
+│   ├── catalog-rpc/               # catalog 的獨立服務（#320）：只掛 catalog 的 rpc；rpc 以 Connect 問它查價與檢查 SKU（`catalog.upstream`）
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）
@@ -120,7 +121,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
-| [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、ordering 怎麼用它定價、舊 client 還送 `unit_price` 會怎樣、Console 的 Products 頁 |
+| [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、ordering 怎麼用它定價（rpc 經 Connect 問獨立的 catalog-rpc）、舊 client 還送 `unit_price` 會怎樣、Console 的 Products 頁 |
 | [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
@@ -240,6 +241,7 @@ bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`�
   reservation 的讀取不檢查 role。console 的 Stock 頁 Set 要用 admin key / JWT。
 - **Catalog 寫入要 admin**：`catalog.v1.CatalogService` 的 `UpsertProduct` 與 `DeactivateProduct`（它們決定客人被收多少錢）同一個 gate；`GetProduct` / `ListProducts` 不檢查 role。
   console 的 Products 頁是 admin 頁。**ordering 用 catalog 的價格**：`CreateOrder` 只收 sku / quantity，價格在建單時查出來、寫成明細快照（見 `docs/catalog.md`）。
+  **catalog 是獨立 process（#320）**：`apps/rpc` 不載入 catalog，經 `catalog.upstream` 以 service key（`APP_CATALOG_API_KEY`）問 `apps/catalog-rpc`；`catalog.v1` 的對外入口仍是 rpc（Console、ingress、URL 不變）。catalog 沒答覆 → `UNAVAILABLE` + `catalog.unavailable`、沒寫入；同 key 重送不問 catalog；rpc 的 `readyz` 不依賴 catalog（見 `docs/catalog.md`、`docs/operations.md`）。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `auth.admin_role`
