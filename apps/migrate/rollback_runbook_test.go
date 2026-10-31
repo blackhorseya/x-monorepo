@@ -138,6 +138,40 @@ func (e *rollbackEnv) dataTables(t *testing.T) []string {
 	return out
 }
 
+// seedEveryTable empties the data tables and puts one row in each, so no table the snapshot
+// compares is empty. events_* / *_offsets tables get a generic row; the rest are listed.
+func (e *rollbackEnv) seedEveryTable(t *testing.T) {
+	t.Helper()
+	tables := e.dataTables(t)
+	e.exec(t, `TRUNCATE `+strings.Join(tables, ", ")+` CASCADE`)
+
+	e.exec(t, `INSERT INTO catalog.products (sku, name, price_amount, price_currency, active, updated_at) VALUES ('ROLLBACK-SENTINEL', 'sentinel', 100, 'USD', true, now())`)
+
+	e.exec(t, `INSERT INTO identity.accounts (id, name, status, created_at, updated_at) VALUES ('acct-sentinel', 'sentinel', 'ACTIVE', now(), now())`)
+	e.exec(t, `INSERT INTO identity.api_keys (id, account_id, name, prefix, hash, status, created_at) VALUES ('key-sentinel', 'acct-sentinel', 'sentinel', 'pfx', decode(repeat('00', 32), 'hex'), 'ACTIVE', now())`)
+	e.exec(t, `INSERT INTO identity.audit_events (actor, action, target_account_id, occurred_at) VALUES ('sentinel', 'sentinel', 'acct-sentinel', now())`)
+	e.exec(t, `INSERT INTO identity.external_identities (issuer, subject, account_id, created_at) VALUES ('https://sentinel.example', 'sub-sentinel', 'acct-sentinel', now())`)
+	e.exec(t, `INSERT INTO identity.invites (id, email, account_id, created_at, expires_at) VALUES ('invite-sentinel', 'sentinel@example.com', 'acct-sentinel', now(), now() + interval '1 day')`)
+
+	e.exec(t, `INSERT INTO inventory.stocks (sku, on_hand, reserved, version, updated_at) VALUES ('ROLLBACK-STOCK', 3, 0, 1, now())`)
+	e.exec(t, `INSERT INTO inventory.reservations (order_id, status, created_at, updated_at) VALUES ('rollback-order', 'RESERVED', now(), now())`)
+	e.exec(t, `INSERT INTO inventory.reservation_lines (order_id, position, sku, quantity) VALUES ('rollback-order', 0, 'ROLLBACK-STOCK', 1)`)
+	e.exec(t, `INSERT INTO inventory.inbox (message_id) VALUES ('sentinel')`)
+
+	e.exec(t, `INSERT INTO ordering.orders (id, customer_id, status, created_at, updated_at) VALUES ('rollback-order', 'rollback-customer', 'PENDING', now(), now())`)
+	e.exec(t, `INSERT INTO ordering.order_items (order_id, position, sku, quantity, unit_price_minor, currency) VALUES ('rollback-order', 0, 'ROLLBACK-STOCK', 1, 100, 'USD')`)
+	e.exec(t, `INSERT INTO ordering.inbox (message_id) VALUES ('sentinel')`)
+
+	for _, table := range tables {
+		switch {
+		case strings.Contains(table, ".events_") && strings.HasSuffix(table, "_offsets"):
+			e.exec(t, `INSERT INTO `+table+` (consumer_group, offset_acked, last_processed_transaction_id) VALUES ('sentinel', 0, pg_current_xact_id())`)
+		case strings.Contains(table, ".events_"):
+			e.exec(t, `INSERT INTO `+table+` (uuid, payload, metadata, transaction_id) VALUES ('sentinel', '\x00'::bytea, '{}', pg_current_xact_id())`)
+		}
+	}
+}
+
 // requireEveryTableSeeded fails when any data table is empty.
 func (e *rollbackEnv) requireEveryTableSeeded(t *testing.T) {
 	t.Helper()
@@ -193,20 +227,26 @@ func runRollbackCase(t *testing.T, tc rollbackCase) {
 		t.Fatal(err)
 	}
 	e.conn = conn
-	t.Cleanup(func() { _ = conn.Close(e.c) }) // registered first: runs after the restore below
-	t.Cleanup(func() {                        // leave every BC applied and clean for the next test
+	t.Cleanup(func() { // leave every BC applied and clean for the next test, whatever the runbook SQL left behind
 		ctx := context.Background()
+		_ = conn.Close(ctx) // first: a runbook that failed halfway leaves its transaction (and locks) open on it
+		fresh, err := pgx.Connect(ctx, url)
+		if err != nil {
+			t.Errorf("restore: %v", err)
+
+			return
+		}
+		defer func() { _ = fresh.Close(ctx) }()
+		_, _ = fresh.Exec(ctx, `DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`) // the dirty case's over-long row would fail 0009 again
 		for _, m := range migrations {
-			_, _ = conn.Exec(ctx, fmt.Sprintf(`UPDATE %s.schema_migrations SET version = version - 1, dirty = false WHERE dirty`, pgx.Identifier{m.Schema}.Sanitize()))
-			_ = postgres.Up(ctx, e.cfg, m)
+			_, _ = fresh.Exec(ctx, fmt.Sprintf(`UPDATE %s.schema_migrations SET version = version - 1, dirty = false WHERE dirty`, pgx.Identifier{m.Schema}.Sanitize()))
+			if err := postgres.Up(ctx, e.cfg, m); err != nil {
+				t.Errorf("restore %s: %v", m.Schema, err)
+			}
 		}
 	})
 
-	// a row in each BC that has one to lose
-	e.exec(t, `TRUNCATE catalog.products, inventory.stocks, ordering.orders CASCADE`)
-	e.exec(t, `INSERT INTO catalog.products (sku, name, price_amount, price_currency, active, updated_at) VALUES ('ROLLBACK-SENTINEL', 'sentinel', 100, 'USD', true, now())`)
-	e.exec(t, `INSERT INTO inventory.stocks (sku, on_hand, reserved, version, updated_at) VALUES ('ROLLBACK-STOCK', 3, 0, 1, now())`)
-	e.exec(t, `INSERT INTO ordering.orders (id, customer_id, status, created_at, updated_at) VALUES ('rollback-order', 'rollback-customer', 'PENDING', now(), now())`)
+	e.seedEveryTable(t)
 
 	if tc.prepare != nil {
 		tc.prepare(t, e)
