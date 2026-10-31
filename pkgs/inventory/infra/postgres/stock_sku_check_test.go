@@ -107,7 +107,7 @@ func TestStocksSKUCheck_FailureLeavesCleanDatabase(t *testing.T) {
 	cfg := config.Postgres{URL: url}
 	full := postgres.Migration()
 
-	out, _, err := runFaultHelper(url, helperLimit(t))
+	out, _, _, err := runHelperReaped(t, url, helperLimit(t))
 	if errors.Is(err, errHelperTimeout) {
 		t.Fatalf("the helper did not finish in time (this is not the injected fault): %v\n%s", err, out)
 	}
@@ -173,8 +173,6 @@ func TestStocksSKUCheck_HelperIsBoundedAndReaped(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(closeDB)
-	// The killed helper can leave a dirty version; restore after the lock is released.
-	t.Cleanup(func() { restoreSKUState(t, cfg, db, full) })
 
 	tx := db.WithContext(c).Begin()
 	if tx.Error != nil {
@@ -186,7 +184,7 @@ func TestStocksSKUCheck_HelperIsBoundedAndReaped(t *testing.T) {
 	}
 
 	start := time.Now()
-	out, pid, err := runFaultHelper(url, 5*time.Second)
+	out, pid, terminated, err := runHelperReaped(t, url, 5*time.Second)
 	if !errors.Is(err, errHelperTimeout) {
 		t.Fatalf("a helper stuck behind the lock should time out, err=%v\n%s", err, out)
 	}
@@ -198,6 +196,22 @@ func TestStocksSKUCheck_HelperIsBoundedAndReaped(t *testing.T) {
 	}
 	if pid == 0 || groupAlive(pid) {
 		t.Fatalf("the helper (pid %d) or a process of its group is still running", pid)
+	}
+	if terminated == 0 {
+		t.Fatal("no server backend of the helper was found: it should have been waiting on the lock")
+	}
+
+	// Killing the client must not leave its DDL queued on the server: once the lock is
+	// released, 0009's CHECK has to still be there, and after the restore the next
+	// fixture finds a clean latest version.
+	if err := tx.Rollback().Error; err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		var n int
+		if err := db.Raw(`SELECT count(*) FROM pg_constraint WHERE conrelid = 'inventory.stocks'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%octet_length%'`).Scan(&n).Error; err != nil || n == 0 {
+			t.Fatalf("after the lock was released the CHECK count = %d, err=%v: the killed helper's DROP CONSTRAINT still ran on the server", n, err)
+		}
 	}
 }
 
@@ -221,14 +235,14 @@ func helperLimit(t *testing.T) time.Duration {
 }
 
 // runFaultHelper runs the real TestStocksSKUCheck_Postgres with the fault on, in its own
-// process group, and returns its output and pid. On limit it kills the whole group and
+// process group, with application_name app on its connections, and returns its output and pid. On limit it kills the whole group and
 // waits for it, and reports errHelperTimeout instead of the helper's exit error.
-func runFaultHelper(url string, limit time.Duration) (out []byte, pid int, err error) {
+func runFaultHelper(url, app string, limit time.Duration) (out []byte, pid int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestStocksSKUCheck_Postgres$", "-test.count=1", "-test.v")
 	// url comes from pgtest: the testcontainers database (or the one the caller opted into).
-	cmd.Env = append(os.Environ(), faultEnv+"=1", pgtest.EnvURL+"="+url)
+	cmd.Env = append(os.Environ(), faultEnv+"=1", pgtest.EnvURL+"="+url, "PGAPPNAME="+app)
 	ownProcessGroup(cmd)
 	cmd.WaitDelay = 10 * time.Second
 	out, err = cmd.CombinedOutput()
@@ -240,6 +254,58 @@ func runFaultHelper(url string, limit time.Duration) (out []byte, pid int, err e
 	}
 
 	return out, pid, err
+}
+
+// runHelperReaped is the only way a test starts the helper. Before it starts, it
+// registers the restore (which runs before the pool closes, errors reported), so no
+// path out of the test, a timeout included, can skip it. After the helper ends, however
+// it ended, its server backends are terminated and waited for: killing the client does
+// not cancel a DDL the server is already waiting to run, and once the lock went away it
+// would drop 0009's CHECK behind the restore's back. terminated is how many it found.
+func runHelperReaped(t *testing.T, url string, limit time.Duration) (out []byte, pid, terminated int, err error) {
+	t.Helper()
+	cfg := config.Postgres{URL: url}
+	tel, telCleanup, terr := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	t.Cleanup(telCleanup)
+	db, closeDB, derr := platformpg.NewDB(cfg, tel)
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	t.Cleanup(closeDB)
+	full := postgres.Migration()
+	t.Cleanup(func() { restoreSKUState(t, cfg, db, full) })
+
+	app := fmt.Sprintf("sku-helper-%d-%d", os.Getpid(), time.Now().UnixNano())
+	out, pid, err = runFaultHelper(url, app, limit)
+	terminated, rerr := reapBackends(db, app)
+	if rerr != nil {
+		t.Errorf("reap helper backends: %v", rerr)
+	}
+
+	return out, pid, terminated, err
+}
+
+// reapBackends terminates the server backends with application_name app and waits, up to
+// 10s, until none is left. Not finding them gone is an error, never skipped.
+func reapBackends(db *gorm.DB, app string) (terminated int, err error) {
+	if err := db.Raw(`SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = ? AND pid <> pg_backend_pid()) t`, app).Scan(&terminated).Error; err != nil {
+		return 0, fmt.Errorf("terminate: %w", err)
+	}
+	var left int
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if err := db.Raw(`SELECT count(*) FROM pg_stat_activity WHERE application_name = ? AND pid <> pg_backend_pid()`, app).Scan(&left).Error; err != nil {
+			return terminated, fmt.Errorf("count: %w", err)
+		}
+		if left == 0 {
+			return terminated, nil
+		}
+		if time.Now().After(deadline) {
+			return terminated, fmt.Errorf("%d backends of %q still present after 10s", left, app)
+		}
+	}
 }
 
 // restoreSKUState leaves the shared database at the latest version, clean, whatever
