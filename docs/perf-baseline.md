@@ -157,13 +157,26 @@ gh run download <run-id> --repo blackhorseya/x-monorepo -n k6-bench-<run-id>-1  
 | order → RESERVED p50 / p95 / p99 (ms) | 156 / 260 / 311 | 158 / 262 / 362 |
 | CreateOrder returned → RESERVED p50 / p95 / p99 (ms) | 154 / 257 / 309 | 155 / 259 / 359 |
 
+**判定 CPU 是否相同的依據**是各 run artifact `runner.txt` 的 `cpu:` 欄，不是推測。切換前（Xeon 8370C）與切換後（EPYC 7763）**不同**，所以上表是「不同 CPU 的兩次量測」，**不能當成同條件比較**。
+
+為了拿到與切換後同為 EPYC 7763 的切換前 run，在 `v0.54.0` 上又派送 3 次（循序，一次一個；`runs-on: ubuntu-latest` 無法指定 CPU，上限 3 次是事前定的）。**3 次都沒有派到 EPYC 7763**，所以沒有同 CPU 的配對。三次都是 VALID，CreateOrder median（min–max, CV）：
+
+| run（`v0.54.0` @ `fdf4602`） | runner CPU | throughput (req/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+|---|---|---|---|---|---|
+| [41163673581](https://github.com/blackhorseya/x-monorepo/actions/runs/41163673581) | AMD EPYC 9V74 | 1017（988–1408，CV 16.8%） | 10.96（CV 2.2%） | 70.71（35.77–92.44，CV 35.2%） | 133.05（72.24–173.89，CV 33.0%） |
+| [41164041016](https://github.com/blackhorseya/x-monorepo/actions/runs/41164041016) | AMD EPYC 9V45 | 1682（1480–1816，CV 8.3%） | 8.78（CV 7.2%） | 26.57（21.90–32.58，CV 16.2%） | 62.08（57.77–69.36，CV 7.6%） |
+| [41164384315](https://github.com/blackhorseya/x-monorepo/actions/runs/41164384315) | AMD EPYC 9V74 | 1184（1145–1196，CV 1.8%） | 13.11（CV 0.6%） | 33.31（30.13–35.03，CV 6.2%） | 83.83（83.25–84.58，CV 0.6%） |
+
+加上上面的 Xeon 8370C 那次，**同一個 commit（`v0.54.0`）在 4 個 run 上**：CreateOrder p50 8.78–13.11 ms、p95 26.57–70.71 ms、throughput 1017–1682 req/s。run 與 run 之間（不同 runner、不同 CPU）的差，和切換後 vs 切換前的差（p95 75.93 vs 30.11 ms）在同一個量級，所以這份資料**不能**把差異歸因給 catalog 拆出。
+
 **這份比較的限制**（照實寫，不往外推）：
 
-- **兩次的 runner CPU 不同**（Xeon 8370C vs EPYC 7763）。workflow 只寫 `runs-on: ubuntu-latest`，派到哪種 CPU 不是我們能選的，所以「同類 runner」只到「同 image、同 4 核規格」，CPU 世代不同。這份資料**無法**把差異歸因給 catalog 拆出，CPU 本身也可能造成差異。
-- 最接近的同 CPU 對照是上一節的 run 41005829640（EPYC 7763，main @ `cffc8033d2df4b49e9a4e88d3a6b8de1c62d3cea`，catalog 仍在 rpc 內）：CreateOrder throughput 1024 req/s、p50 15.02 ms、p95 34.52 ms、p99 95.87 ms（median）。它的 commit 早於 `v0.54.0`，兩者之間有其他變更，所以只能當佐證，不是第二次受控比較。
-- 每邊 **N = 3**（3 個 valid attempt）。median 與 min–max 只描述這 3 次；切換前 p95 的 CV 是 12.8%（max 38.59 ms 拉高了離散程度）。沒有做顯著性檢定。
+- 沒有同 CPU 的切換前／切換後配對。切換後只有一次（EPYC 7763，run 41162587345）；切換前沒有 EPYC 7763 的 run。
+- 同 CPU 型號也不保證同條件：run 41162587345 與 run 41005829640（EPYC 7763，main @ `cffc8033d2df4b49e9a4e88d3a6b8de1c62d3cea`，catalog 仍在 rpc 內，上一節）是目前唯一同型號的一對，後者 CreateOrder p50 15.02 ms、p95 34.52 ms、p99 95.87 ms、1024 req/s（median）。但它的 commit 早於 `v0.54.0`，兩者之間有其他變更，只能當佐證。
+- 每個 run 的 N = 3（3 個 valid attempt）；median 與 min–max 只描述那 3 次，沒有做顯著性檢定。run 內的離散程度也不小（上表 p95 CV 最高 35.2%）。
+- **`v0.54.0` 與 `9664a02` 之間的 commit**（`git log v0.54.0..9664a02`，共 3 個，77 個檔案）：`721614d` chart 0.3.37（#346，只動 chart）、`081b0f3` inventory 測試（#342，只動測試）、`9664a02` rpc 改問 `catalog-rpc`（#347，拆分本身）。除了 #347，沒有其他 production 程式變更；#347 本身同時包含拆分以外的東西（`tests/k6/catalog.sh`、Helm、docs），bench 的啟動流程因此也不同（切換後每個 attempt 多起一個 `catalog-rpc` process）。
 - 切換後的 `catalog-rpc` 與 rpc、worker、Postgres、k6 跑在同一台 4 核機器上（loopback，沒有跨機網路），它的 CPU 用量也算進切換後的數字；跨機部署的網路延遲不在量測範圍。
-- 兩個 ref 各派送一次，沒有重跑、也沒有挑選。#320 明寫「幅度要實測，不預設目標值」，這裡不下好壞結論，也不外推到其他硬體或 production。要拆出 CPU 的影響，得在同一種 CPU 上各重跑（目前沒有辦法指定）。
+- #320 明寫「幅度要實測，不預設目標值」，這裡不下好壞結論，也不外推到其他硬體或 production。要得到可比的數字，得有可指定 CPU 的 runner（例如固定規格的 larger runner 或 self-hosted），或在同一型號 CPU 上各跑；目前沒有。
 
 ### 本機探索性結果（非 valid）
 
