@@ -43,8 +43,9 @@ up="{\"sku\":\"$catsku\",\"name\":\"$catsku\",\"price\":{\"amount_minor\":250,\"
 [ "$(catrpc catalog.v1.CatalogService/GetProduct "{\"sku\":\"$catsku\"}")" = 401 ] || { echo "smoke: catalog-rpc accepted a read with no credential"; exit 1; }
 [ "$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" not-the-service-key-0123456789)" = 401 ] || { echo "smoke: catalog-rpc accepted an unknown key"; exit 1; }
 [ "$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" "$catkey")" = 200 ] || { echo "smoke: catalog-rpc refused its own service key"; exit 1; }
-# Same Postgres, catalog schema: what catalog-rpc wrote is what the rpc's in-process catalog reads.
-# (In-memory fallback would make this 404.)
+# What catalog-rpc wrote is what the rpc serves: this GetProduct hits the rpc, whose Forwarder passes
+# it to catalog-rpc over Connect. (The rpc has no catalog repository of its own, so a 404 here means
+# the Forwarder or catalog-rpc is broken.)
 got=$(curl -fsS -H 'Content-Type: application/json' "$api/catalog.v1.CatalogService/GetProduct" -d "{\"sku\":\"$catsku\"}" | jq -r '.product.price.amountMinor // .product.price.amount_minor')
 [ "$got" = 250 ] || { echo "smoke: rpc did not read catalog-rpc's write back from Postgres (got '$got')"; exit 1; }
 echo "smoke: catalog-rpc requires its service key (401 without, 401 unknown, 200 with) and persists to the shared Postgres"
