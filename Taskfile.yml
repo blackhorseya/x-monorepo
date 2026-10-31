@@ -23,6 +23,10 @@ vars:
   # Config file `task run` / `task migrate` load (APP_CONFIG). Gitignored; seeded from
   # configs/config.example.yaml on first use. Override: task run CONFIG=<file>
   CONFIG: '{{.CONFIG | default (printf "%s/configs/local.yaml" .ROOT_DIR)}}'
+  # `task run` talks to the catalog service `task catalog-rpc` runs (rpc has no catalog of its own). The
+  # key is the local dev one (rpc=<key>:admin in catalog-rpc's auth.api_keys); nothing here is a credential.
+  CATALOG_PORT: '{{.CATALOG_PORT | default "8081"}}'
+  CATALOG_DEV_KEY: dev-catalog-service-key-0123456789abcdef
 
   BUF_VERSION: v1.74.0
   PROTOC_GEN_GO_VERSION: v1.36.12
@@ -442,10 +446,24 @@ tasks:
       - scripts/release-verify.sh {{.CLI_ARGS}}
 
   run:
-    desc: 'build and run ./bin/rpc with configs/local.yaml (gitignored; seeded from the example); task run CONFIG=<file> to use another'
+    desc: 'build and run ./bin/rpc with configs/local.yaml (gitignored; seeded from the example); task run CONFIG=<file> to use another. It asks the catalog service for prices: run `task catalog-rpc` in another terminal first (rpc does not start without a catalog upstream)'
     deps: [build, config]
-    env: { APP_CONFIG: '{{.CONFIG}}' }
+    env:
+      APP_CONFIG: '{{.CONFIG}}'
+      APP_CATALOG_UPSTREAM: 'http://127.0.0.1:{{.CATALOG_PORT}}'
+      APP_CATALOG_API_KEY: '{{.CATALOG_DEV_KEY}}'
     cmds: ['{{.BIN_DIR}}/rpc']
+
+  catalog-rpc:
+    desc: 'build and run ./bin/catalog-rpc on :8081 (CATALOG_PORT) for `task run`: Postgres from CATALOG_DATABASE_URL (default the compose one), auth required, the one dev key rpc=…:admin; defaults only (APP_CONFIG=/dev/null), so nothing of configs/local.yaml (OIDC, JWT, your keys) reaches it. Needs `task migrate -- up` first (the catalog schema)'
+    deps: [build]
+    env:
+      APP_CONFIG: /dev/null
+      APP_HTTP_ADDR: ':{{.CATALOG_PORT}}'
+      APP_AUTH_MODE: required
+      APP_AUTH_API_KEYS: 'rpc={{.CATALOG_DEV_KEY}}:admin'
+    cmds:
+      - APP_POSTGRES_URL="${CATALOG_DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}" {{.BIN_DIR}}/catalog-rpc --require-durable
 
   worker:
     desc: 'build and run ./bin/worker (event consumers) with configs/local.yaml; needs postgres.url'

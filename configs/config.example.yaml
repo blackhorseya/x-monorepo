@@ -91,6 +91,13 @@ otel:
   insecure: true
   service_name: ""   # empty = executable name (rpc)
 
+# The catalog is its own service (apps/catalog-rpc, `task catalog-rpc`): rpc asks it over Connect and does
+# not start without upstream and the service key. Only apps/rpc reads this section. The key is a secret:
+# APP_CATALOG_API_KEY (`task run` sets the local dev one), never this file. See docs/config.md.
+catalog:
+  upstream: http://127.0.0.1:8081
+  timeout: 3s        # one call to the catalog; a slower one is UNAVAILABLE (catalog.unavailable)
+
 worker:
   # apps/worker: consumer group of this process (offset cursor per topic).
   consumer_group: worker
