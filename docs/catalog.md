@@ -51,9 +51,9 @@ Domain 方法反映行為：`Rename`、`Reprice`、`Deactivate`、`Activate`。`
 `CreateOrder` 的 request 行是 `ordering.v1.CreateOrderItem {sku, quantity}`；舊的 `unit_price`（欄位 3、名稱 `unit_price`）已 `reserved`。
 
 - ordering 在 `application/port` 定義 consumer 端的 `PriceQuoter`；`ordering/adapters/pricing` 實作它，**只 import catalog 的 `contract/`**：它呼叫的是 `catalogv1connect.CatalogServiceHandler`。
-  `apps/rpc/wire.go` 把這個 interface `wire.Bind` 到 catalog 自己的 `*rpc.CatalogService`——同一個 process 內直接呼叫，沒有網路、沒有 interceptor（讀取本來就不檢查 role），
-  而且在 `CreateOrder` 的 transaction **之外**：`CreateOrder` 先驗證、查冪等 replay、問 catalog，之後才開 transaction 寫入訂單與 outbox，所以查價（之後會是網路呼叫）不會佔著 DB 連線。catalog 的 repo 因此讀的是自己的連線，不是訂單那個 tx。BC 之間仍沒有任何 domain / application / infra 的 import。
-- 一張單問 catalog **一次**（去重後的 SKU）。任何 SKU 報不出價 → 整張單被拒：`order.unknown_sku` / `order.inactive_sku`（`INVALID_ARGUMENT`，沒寫入）；兩種幣別 → `order.mixed_currency`。catalog 自己壞了 → infra error（不是 domain error，client 看到 `INTERNAL`、可重試）。
+  `apps/rpc/wire.go` 把這個 interface 綁到 `pkgs/catalog/adapters/client` 的 Connect client（`catalog.ClientProviderSet`）——catalog 是另一個 process（`apps/catalog-rpc`），rpc 以 `catalog.upstream` 找到它、以 `APP_CATALOG_API_KEY`（`rpc=…:admin` 那把 service key）呼叫，**不轉傳使用者的 credential**，沒有 in-process fallback：沒有 upstream 或 key，rpc 不啟動。
+  查價在 `CreateOrder` 的 transaction **之外**：`CreateOrder` 先驗證、查冪等 replay、問 catalog，之後才開 transaction 寫入訂單與 outbox，所以網路呼叫不會佔著 DB 連線。catalog 的 repo 因此讀的是自己的連線，不是訂單那個 tx。BC 之間仍沒有任何 domain / application / infra 的 import。
+- 一張單問 catalog **一次**（去重後的 SKU）。任何 SKU 報不出價 → 整張單被拒：`order.unknown_sku` / `order.inactive_sku`（`INVALID_ARGUMENT`，沒寫入）；兩種幣別 → `order.mixed_currency`。catalog 沒有回答（連不上、逾時、5xx、或 service key 被拒）→ `UNAVAILABLE`＋`x-error-code: catalog.unavailable`、固定訊息（原因只在 server log）、沒有寫入，同一個請求可重試；service key 配錯對使用者看起來就是 catalog 掛了，只有 log 看得到 `catalog service credential rejected`。
 - 價格寫進訂單明細（`ordering.order_items`）當**快照**：之後 `UpsertProduct` 改價（甚至換幣別）不影響已成立的訂單，`GetOrder` 永遠回成交當下的價格。
 - **冪等**：`request_hash` 現在是 v2 指紋（`"v2:" + sha256(sku, quantity, …)`，價格不在請求裡所以不在指紋裡）。重送時**先**用 key 找原訂單（在 transaction 之外），找到就直接回放，**不問 catalog、也不開 transaction**——商品之後被改價或下架也一樣回原單。
   建單前被拒（`unknown_sku` 等）不花 key。v2 之前的訂單存的是 v1 指紋（含呼叫端給的單價）：`Order.IsReplayOf` 看到沒有 `v2:` 前綴的 hash，就拿重送的 sku / quantity 加上**這張訂單自己的快照價**重算 v1 比對，所以舊 key 的重送行為完全不變（同樣的 sku / quantity 序列 → 回放，其他 → `order.idempotency_key_reused`）。
@@ -73,7 +73,7 @@ Domain 方法反映行為：`Rename`、`Reprice`、`Deactivate`、`Activate`。`
 
 ## 庫存跟著 catalog（#326）
 
-catalog 是 SKU 的唯一來源，inventory 只替 catalog 裡有的商品記庫存：`InventoryService.SetStock` 先問 catalog（`GetProduct`，經 catalog 的 `contract/`，apps/rpc 內 in process），
+catalog 是 SKU 的唯一來源，inventory 只替 catalog 裡有的商品記庫存：`InventoryService.SetStock` 先問 catalog（`GetProduct`，經 catalog 的 `contract/`，由 rpc 的 Connect client 問 catalog-rpc），
 SKU 沒有 product → `stock.unknown_sku`（`INVALID_ARGUMENT`），catalog 沒答覆 → `catalog.unavailable`（`UNAVAILABLE`），兩者都不寫入；**已下架的 product 放行**（`SetStock` 不看 `active`，下架後仍要能盤點、出清）。
 catalog 沒有刪除商品、只有 `DeactivateProduct`，所以商品存在過就不會消失，檢查之後不會有商品被刪的 race。只有 `SetStock` 問 catalog：`GetStock` / `ListStocks` 與 reserve / release / commit / expire 不問（訂單在 `CreateOrder` 已驗過，舊事件不會因此變 poison）。
 所以呼叫順序是**先 `UpsertProduct` 再 `SetStock`**；部署前的孤兒庫存查詢與處理見 `docs/operations.md`「部署前查孤兒庫存」。
