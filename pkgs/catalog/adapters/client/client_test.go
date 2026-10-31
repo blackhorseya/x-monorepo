@@ -260,3 +260,72 @@ func TestNew_RefusesWhatItCannotUse(t *testing.T) {
 		})
 	}
 }
+
+// What the catalog says about a failure is its text, not ours: a catalog that reflects the service key (or
+// anything else) in an error message must not get it into this process's log. The failure log carries the
+// operation, a fixed category and the Connect code, nothing the remote wrote, and not the upstream address.
+func TestClient_FailureLogsCarryNoRemoteText(t *testing.T) {
+	logOf := func(t *testing.T, url string, u *upstream) string {
+		t.Helper()
+		var logs bytes.Buffer
+		c := contextx.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
+		wantUnavailable(t, get(newClient(t, url, time.Second), c))
+
+		return logs.String()
+	}
+	const reflected = "boom: got key " + serviceKey + " and Authorization: Bearer user-token-0123456789"
+
+	for name, code := range map[string]connect.Code{
+		"Internal": connect.CodeInternal, "Unknown": connect.CodeUnknown, "Unavailable": connect.CodeUnavailable,
+		"ResourceExhausted": connect.CodeResourceExhausted,
+	} {
+		t.Run(name+" with a reflected key", func(t *testing.T) {
+			u := &upstream{getErr: connect.NewError(code, errors.New(reflected))}
+			out := logOf(t, serve(t, u), u)
+			for _, leak := range []string{serviceKey, "user-token", "boom", "Authorization"} {
+				if strings.Contains(out, leak) {
+					t.Fatalf("the log carries remote text %q: %s", leak, out)
+				}
+			}
+			if !strings.Contains(out, "catalog call failed") || !strings.Contains(out, code.String()) {
+				t.Fatalf("log = %q, want the fixed line with the code %s", out, code)
+			}
+		})
+	}
+
+	t.Run("a non-Connect 5xx whose body reflects the key", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "<html>"+reflected+"</html>", http.StatusBadGateway)
+		}))
+		t.Cleanup(ts.Close)
+		out := logOf(t, ts.URL, nil)
+		if strings.Contains(out, serviceKey) || strings.Contains(out, "html") || strings.Contains(out, "boom") {
+			t.Fatalf("the log carries the body of the 502: %s", out)
+		}
+	})
+
+	t.Run("a catalog nothing listens on: the address is not logged either", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		out := logOf(t, "http://"+addr, nil)
+		if strings.Contains(out, addr) || strings.Contains(out, "dial tcp") || strings.Contains(out, "refused") {
+			t.Fatalf("the log carries the transport error / address: %s", out)
+		}
+	})
+}
+
+// The upstream URL is configuration, not a place for a credential: userinfo in it would travel in every
+// error text of the HTTP stack.
+func TestNew_RefusesCredentialsInTheUpstreamURL(t *testing.T) {
+	_, err := client.New(config.Catalog{Upstream: "http://user:hunter2@catalog-rpc:80", APIKey: serviceKey, Timeout: time.Second}, tel(t))
+	if err == nil {
+		t.Fatal("client.New accepted userinfo in catalog.upstream")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("the error carries the password: %v", err)
+	}
+}
