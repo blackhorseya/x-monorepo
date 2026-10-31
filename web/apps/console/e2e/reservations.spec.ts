@@ -3,6 +3,7 @@ import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { confirm, createCard, filterCard } from "./orders-ui";
+import { setStock } from "./stock-ui";
 
 // /reservations: the status filter buttons drive ?status=, ?order= pins one
 // reservation above the list. Works in both modes — in-memory just has nothing
@@ -61,10 +62,7 @@ test.describe("with a worker", () => {
     await seedProduct(request, sku);
 
     await page.goto(`/stock?prefix=${sku}`); // paged by SKU: filter, or older E2E-* rows push ours off page 1
-    await page.getByLabel("SKU", { exact: true }).fill(sku);
-    await page.getByLabel("On hand").fill("3");
-    await page.getByRole("button", { name: "Set", exact: true }).click();
-    await expect(page.getByRole("row").filter({ hasText: sku })).toHaveCount(1);
+    await setStock(page, sku, 3);
 
     await page.goto("/orders");
     await createCard(page).getByLabel("Customer").fill(customer);

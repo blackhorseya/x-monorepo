@@ -5,6 +5,7 @@ import { mintJWT } from "./jwt";
 import { seedProduct } from "../catalog";
 import { uid } from "../uid";
 import { confirm, createCard, filterCard } from "../orders-ui";
+import { pickProduct } from "../stock-ui";
 
 // The parts of the credential story auth.spec.ts leaves out: the JWT kind
 // (header shows the token's sub; expired / wrong issuer / wrong secret are
@@ -119,8 +120,10 @@ test("mutations carry the credential set after the page loaded", async ({
 
 test("SetStock under auth: no form anonymous, ok with an admin key", async ({
   page,
+  request,
 }) => {
   const sku = `E2E-AUTH-${uid()}`;
+  await seedProduct(request, sku, { headers: { "X-API-Key": ADMIN_KEY } });
   await page.goto("/stock");
   // Anonymous is not admin: the list is refused (alert) and there is no Set form to try.
   await expect(
@@ -130,7 +133,7 @@ test("SetStock under auth: no form anonymous, ok with an admin key", async ({
 
   await useKey(page, ADMIN_KEY);
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await page.getByLabel("SKU", { exact: true }).fill(sku);
+  await pickProduct(page, sku);
   await page.getByLabel("On hand").fill("3");
   await page.getByRole("button", { name: "Set", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);

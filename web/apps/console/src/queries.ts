@@ -25,6 +25,7 @@ export const keys = {
   quote: (skus: string[]) => ["quote", ...skus] as const,
   products: ["products"] as const,
   productsPage: (skuPrefix: string) => ["products", skuPrefix] as const,
+  productStatus: (skus: string[]) => ["products", "status", ...skus] as const,
   stocks: ["stocks"] as const,
   stocksPage: (skuPrefix: string, onlyReserved: boolean) => ["stocks", skuPrefix, onlyReserved] as const,
   reservations: (status: ReservationStatus) => ["reservations", status] as const,
@@ -189,6 +190,25 @@ export const productsQuery = (skuPrefix: string) =>
     initialPageParam: "",
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
     staleTime: LIST_STALE_MS,
+  });
+
+// Where each of these SKUs stands in the catalog, asked per SKU (QuotePrices: up to 100, a read
+// open to every caller) and not by scanning ListProducts, so a SKU's answer never depends on
+// which page of products it falls on. A SKU in neither list is an active product. The key starts
+// with keys.products, so saving or deactivating a product refreshes it; it also polls, since the
+// catalog changes behind the stock list's back.
+export const PRODUCT_STATUS_MAX = 100;
+export const productStatusQuery = (skus: string[]) =>
+  queryOptions({
+    queryKey: keys.productStatus(skus),
+    queryFn: async () => {
+      const res = await catalog.quotePrices({ skus });
+      return { missing: new Set(res.missing), inactive: new Set(res.inactive) };
+    },
+    enabled: skus.length > 0,
+    refetchInterval: 5000,
+    staleTime: LIST_STALE_MS,
+    retry: false,
   });
 
 // Reservations newest first, 20 per page, optionally one status (UNSPECIFIED =
