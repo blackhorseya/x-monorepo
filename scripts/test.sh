@@ -139,6 +139,13 @@ expect_eq "moving a product file into pkgs/platform/server counts both ends (k6,
   "$go_checks $go_prod_pre helm_kind_keda k6 k6_auth k6_wire" \
   "$(rename_jobs_on movesrv pkgs/ordering/limits.go pkgs/platform/server/limits.go)"
 
+expect_eq "moving a file out of apps/worker still runs keda and k6" \
+  "$go_checks $go_prod_pre helm_kind_keda k6 k6_wire" \
+  "$(rename_jobs_on moveworker apps/worker/main.go pkgs/ordering/main.go)"
+expect_eq "moving a file out of the chart still runs helm and the kind jobs" \
+  "helm helm_kind helm_kind_keda" \
+  "$(rename_jobs_on movehelm deployments/helm/x-monorepo/values.yaml docs/values.yaml)"
+
 # k6 (the smoke: rate limit, timeout, load): tests/k6, pkgs/platform/server (interceptors, limits.go),
 # pkgs/platform/config (their env and defaults), apps/rpc, apps/worker, configs, go.mod. A business-flow
 # change (pkgs/ordering…) is covered by helm-kind, not by k6 (#328). k6-auth is the auth subset, k6-wire follows product Go.
