@@ -286,20 +286,28 @@ func TestForwarding_RoleAtRPCAndBusinessErrorsUnchanged(t *testing.T) {
 func TestCatalogRPC_AcceptsOnlyTheServiceKey(t *testing.T) {
 	cat := startCatalogProc(t)
 	c := context.Background()
-	// A request per call: the client's key interceptor sets X-API-Key ON the request, so a request shared
-	// across the map's (random) order would carry the previous case's key into "no credential".
-	get := func() *connect.Request[catalogv1.GetProductRequest] {
+	// A request per case, from a factory: the client's key interceptor sets X-API-Key ON the request it is given,
+	// so one request shared across cases would carry the previous case's key into the next (#349). The order is
+	// fixed, and a credentialed case runs right BEFORE the anonymous one on purpose: that is the pairing that
+	// polluted the anonymous case in CI. Anonymous (auth.unauthenticated) and wrong (auth.invalid_credential)
+	// stay different assertions.
+	newRequest := func() *connect.Request[catalogv1.GetProductRequest] {
 		return connect.NewRequest(&catalogv1.GetProductRequest{Sku: "A"})
 	}
-	for _, tc := range []struct{ key, code string }{
-		{"", "auth.unauthenticated"},
-		{"ops-key-0123456789abcd", "auth.invalid_credential"},
-		{serviceKey + "x", "auth.invalid_credential"},
+	for _, tc := range []struct{ name, key, code string }{
+		{"a user's key", "ops-key-0123456789abcd", "auth.invalid_credential"},
+		{"no credential, right after a credentialed case", "", "auth.unauthenticated"},
+		{"rpc's key with a typo", serviceKey + "x", "auth.invalid_credential"},
+		{"no credential, again", "", "auth.unauthenticated"},
 	} {
-		_, err := catalogClientWithKey(cat.URL, tc.key).GetProduct(c, get())
+		req := newRequest()
+		if h := req.Header(); h.Get(server.APIKeyHeader) != "" || h.Get("Authorization") != "" {
+			t.Fatalf("%s: the request already carries a credential before it is sent (a shared request?)", tc.name)
+		}
+		_, err := catalogClientWithKey(cat.URL, tc.key).GetProduct(c, req)
 		wantCode(t, err, connect.CodeUnauthenticated, tc.code)
 	}
-	_, err := catalogClientWithKey(cat.URL, serviceKey).GetProduct(c, get())
+	_, err := catalogClientWithKey(cat.URL, serviceKey).GetProduct(c, newRequest())
 	wantCode(t, err, connect.CodeNotFound, "product.not_found")
 }
 
