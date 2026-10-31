@@ -4,6 +4,7 @@ import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { confirm, createCard, filterCard } from "./orders-ui";
 import { setStock } from "./stock-ui";
+import { expectReservationStatus } from "./reservation-ui";
 
 // /reservations: the status filter buttons drive ?status=, ?order= pins one
 // reservation above the list. Works in both modes — in-memory just has nothing
@@ -72,7 +73,7 @@ test.describe("with a worker", () => {
     await filterCard(page).getByLabel("Customer").fill(customer);
     await page.getByRole("button", { name: "Filter" }).click();
     const orderRow = page.getByRole("row").filter({ hasText: customer });
-    await expect(orderRow.getByText("RESERVED")).toBeVisible(WORKER);
+    await expectReservationStatus(orderRow, "RESERVED", WORKER);
     // The badge's link carries the full order id.
     const href = await orderRow
       .getByRole("link", { name: "RESERVED" })
@@ -97,7 +98,7 @@ test.describe("with a worker", () => {
     await page.goto(`/reservations?order=${orderId}`);
     await expect(title(page, orderId!)).toBeVisible();
     const pinned = page.locator('[data-slot="card"]').first();
-    await expect(pinned.getByText("RESERVED")).toBeVisible();
+    await expectReservationStatus(pinned, "RESERVED");
 
     await page.goto(`/orders?customer=${customer}`);
     await orderRow.getByRole("button", { name: "Cancel" }).click();
@@ -105,7 +106,7 @@ test.describe("with a worker", () => {
     await expect(orderRow.getByText("CANCELLED")).toBeVisible();
 
     await page.goto(`/reservations?order=${orderId}&status=RELEASED`);
-    await expect(pinned.getByText("RELEASED")).toBeVisible(WORKER);
+    await expectReservationStatus(pinned, "RELEASED", WORKER);
     await expect(row).toHaveCount(1);
   });
 });

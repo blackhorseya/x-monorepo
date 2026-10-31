@@ -196,7 +196,7 @@ function ReservationCard({ orderId }: { orderId: string }) {
         {data && (
           <div className="grid gap-2 text-sm">
             <span className="flex flex-wrap items-center gap-2">
-              <Badge variant={reservationBadge[data.status]}>
+              <Badge variant={reservationBadge[data.status]} data-testid="reservation-status">
                 {ReservationStatus[data.status]}
               </Badge>
               {data.shortfallSkus.length > 0 && (

@@ -4,6 +4,7 @@ import { seedProduct } from "./catalog";
 import { uid } from "./uid";
 import { cellUnder, confirm, createCard, filterCard } from "./orders-ui";
 import { setStock } from "./stock-ui";
+import { expectReservationStatus } from "./reservation-ui";
 
 // The whole event chain through the UI: CreateOrder → ordering outbox → worker →
 // inventory reserves → GetReservation shows RESERVED → StockReserved → the order
@@ -35,7 +36,7 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
 
   const row = page.getByRole("row").filter({ hasText: customer });
   await expect(row).toHaveCount(1);
-  await expect(row.getByText("RESERVED")).toBeVisible(WORKER);
+  await expectReservationStatus(row, "RESERVED", WORKER);
   // Ordering consumed inventory's StockReserved: the saga closes on the happy path too.
   await expect(row.getByText("CONFIRMED")).toBeVisible(WORKER);
 
@@ -50,12 +51,13 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
   await row.getByRole("button", { name: "Cancel" }).click();
   await confirm(page, "Cancel order");
   await expect(row.getByText("CANCELLED")).toBeVisible();
-  await expect(row.getByText("RELEASED")).toBeVisible(WORKER);
+  await expectReservationStatus(row, "RELEASED", WORKER);
 
   // The badge links to the reservation itself.
   await row.getByRole("link", { name: "RELEASED" }).click();
   await expect(page).toHaveURL(/\/reservations\?order=/);
-  await expect(page.getByText("RELEASED").first()).toBeVisible();
+  // The pinned card (the first card), not a search of the page: the status filter has a RELEASED button.
+  await expectReservationStatus(page.locator('[data-slot="card"]').first(), "RELEASED");
 });
 
 test("completing a confirmed order commits the reservation: the stock is sold", async ({
@@ -88,7 +90,7 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
   await expect(row.getByText("COMPLETED")).toBeVisible();
   // Terminal: neither button is left.
   await expect(row.getByRole("button")).toHaveCount(0);
-  await expect(row.getByText("COMMITTED")).toBeVisible(WORKER);
+  await expectReservationStatus(row, "COMMITTED", WORKER);
 
   // The stock was sold: on hand 5 → 3, nothing reserved.
   await page.goto(`/stock?prefix=${sku}`);

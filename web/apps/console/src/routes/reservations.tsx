@@ -141,7 +141,9 @@ function ReservationRow({ reservation: r }: { reservation: Reservation }) {
       </TableCell>
       <TableCell>
         <span className="flex flex-wrap items-center gap-2">
-          <Badge variant={reservationBadge[r.status]}>{ReservationStatus[r.status]}</Badge>
+          <Badge variant={reservationBadge[r.status]} data-testid="reservation-status">
+            {ReservationStatus[r.status]}
+          </Badge>
           {r.shortfallSkus.length > 0 && <span className="text-xs text-muted-foreground">short: {r.shortfallSkus.join(", ")}</span>}
         </span>
       </TableCell>

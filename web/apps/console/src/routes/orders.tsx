@@ -375,7 +375,9 @@ function ReservationCell({ orderId, state, error }: { orderId: string; state?: R
   return (
     <span className="flex flex-wrap items-center gap-2">
       <Link to="/reservations" search={{ order: orderId }} title="Open in Reservations">
-        <Badge variant={reservationBadge[data.status]}>{ReservationStatus[data.status]}</Badge>
+        <Badge variant={reservationBadge[data.status]} data-testid="reservation-status">
+          {ReservationStatus[data.status]}
+        </Badge>
       </Link>
       {data.shortfallSkus.length > 0 && (
         <span className="text-xs text-muted-foreground">short: {data.shortfallSkus.join(", ")}</span>
