@@ -2,8 +2,11 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -16,7 +19,7 @@ import (
 )
 
 // upTo keeps the migration files up to and including version n.
-func upTo(t skuT, m platformpg.Migration, n int) platformpg.Migration {
+func upTo(t *testing.T, m platformpg.Migration, n int) platformpg.Migration {
 	t.Helper()
 	files := fstest.MapFS{}
 	err := fs.WalkDir(m.Files, ".", func(path string, d fs.DirEntry, err error) error {
@@ -50,33 +53,76 @@ func upTo(t skuT, m platformpg.Migration, n int) platformpg.Migration {
 // marks the version dirty; docs/operations.md has the reset); once the row is dealt with
 // and the version reset, up, down and up again all work.
 func TestStocksSKUCheck_Postgres(t *testing.T) {
-	stocksSKUCheck(t, pgtest.URL(t), nil)
+	var afterDirty func()
+	if os.Getenv(faultEnv) == "1" {
+		afterDirty = func() { injectFault(t) }
+	}
+	stocksSKUCheck(t, pgtest.URL(t), afterDirty)
+}
+
+// faultEnv makes TestStocksSKUCheck_Postgres fail on purpose once 0009 is dirty. Only
+// the helper process below sets it, against the database the parent already owns.
+const faultEnv = "SKU_CHECK_INJECT_FAULT"
+
+const faultMsg = "injected failure while 0009 is dirty"
+
+// injectFault runs in the helper process. It first proves the state worth cleaning
+// exists (a dirty 9 and the over-long row, read over a connection of its own), so an
+// empty database cannot pass for a restored one, then fails the real test with t.Fatal.
+func injectFault(t *testing.T) {
+	t.Helper()
+	c := context.Background()
+	cfg := config.Postgres{URL: pgtest.URL(t)}
+	v, dirty, err := platformpg.Version(c, cfg, postgres.Migration())
+	if err != nil || v != 9 || !dirty {
+		t.Fatalf("before the fault: version = %d dirty=%v err=%v, want 9 dirty", v, dirty, err)
+	}
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer telCleanup()
+	db, closeDB, err := platformpg.NewDB(cfg, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	var rows int
+	if err := db.Raw(`SELECT count(*) FROM inventory.stocks WHERE octet_length(sku) = 65`).Scan(&rows).Error; err != nil || rows != 1 {
+		t.Fatalf("before the fault: over-long rows = %d err=%v, want 1", rows, err)
+	}
+	t.Fatal(faultMsg)
 }
 
 // A failure between the dirty 0009 and the documented reset must not leave the shared
-// database dirty for the next migration test of the process. The failure is injected
-// into the real test body; once its cleanups have run the schema has to be at the
-// latest version, clean, with the over-long row gone and the CHECK back.
+// database dirty for the next migration test. The real test is run in a helper process
+// with the fault on (so t.Fatal and its cleanups run exactly as in a failing run);
+// afterwards, over fresh connections, the schema has to be at the latest version, clean,
+// with the over-long row gone and a validated CHECK, and the next fixture's Up works.
 func TestStocksSKUCheck_FailureLeavesCleanDatabase(t *testing.T) {
 	url := pgtest.URL(t)
 	cfg := config.Postgres{URL: url}
 	full := postgres.Migration()
 
-	rec := &recT{}
-	rec.run(func() {
-		stocksSKUCheck(rec, url, func() { rec.Fatal("injected failure while 0009 is dirty") })
-	})
-	if len(rec.fatals) != 1 || rec.fatals[0] != "injected failure while 0009 is dirty" {
-		t.Fatalf("the injection did not stop the body as the only failure: %q", rec.fatals)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestStocksSKUCheck_Postgres$", "-test.count=1", "-test.v")
+	// url comes from pgtest: the testcontainers database (or the one the caller opted into).
+	cmd.Env = append(os.Environ(), faultEnv+"=1", pgtest.EnvURL+"="+url)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("the helper should have failed on the injected fault, err=%v\n%s", err, out)
 	}
-	if len(rec.errors) > 0 {
-		t.Fatalf("restore reported errors: %q", rec.errors)
+	if !strings.Contains(string(out), faultMsg) {
+		t.Fatalf("the helper failed, but not on the injected fault:\n%s", out)
+	}
+	if strings.Contains(string(out), "restore:") {
+		t.Fatalf("restore reported an error:\n%s", out)
 	}
 
 	c := context.Background()
 	v, dirty, err := platformpg.Version(c, cfg, full)
 	if err != nil || v != 9 || dirty {
-		t.Fatalf("after the failed body: version = %d dirty=%v err=%v, want 9 clean", v, dirty, err)
+		t.Fatalf("after the failed run: version = %d dirty=%v err=%v, want 9 clean\n%s", v, dirty, err, out)
 	}
 	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
 	if err != nil {
@@ -88,65 +134,21 @@ func TestStocksSKUCheck_FailureLeavesCleanDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	var rows, checks int
-	if err := db.Raw(`SELECT count(*) FROM inventory.stocks`).Scan(&rows).Error; err != nil || rows != 0 {
-		t.Fatalf("stocks rows = %d, err=%v; want the injected row gone", rows, err)
+	var rows int
+	if err := db.Raw(`SELECT count(*) FROM inventory.stocks WHERE octet_length(sku) > 64`).Scan(&rows).Error; err != nil || rows != 0 {
+		t.Fatalf("over-long rows = %d, err=%v; want them gone", rows, err)
 	}
-	if err := db.Raw(`SELECT count(*) FROM pg_constraint WHERE conrelid = 'inventory.stocks'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%octet_length%'`).Scan(&checks).Error; err != nil || checks == 0 {
-		t.Fatalf("CHECK count = %d, err=%v; want 0009's CHECK back", checks, err)
+	var checks int
+	var validated bool
+	if err := db.Raw(`SELECT count(*), COALESCE(bool_and(convalidated), false) FROM pg_constraint WHERE conrelid = 'inventory.stocks'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%octet_length%'`).Row().Scan(&checks, &validated); err != nil || checks == 0 || !validated {
+		t.Fatalf("CHECK count = %d validated = %v, err=%v; want 0009's CHECK, validated", checks, validated, err)
 	}
 	if err := platformpg.Up(c, cfg, full); err != nil {
-		t.Fatalf("the next migration test could not Up: %v", err)
+		t.Fatalf("the next fixture could not Up: %v", err)
 	}
 }
 
-// skuT is the slice of testing.TB the body uses, so a test can drive it with a recorder
-// and see what its cleanups leave behind after a failure.
-type skuT interface {
-	Helper()
-	Fatal(args ...any)
-	Fatalf(format string, args ...any)
-	Errorf(format string, args ...any)
-	Cleanup(f func())
-}
-
-// recT records failures instead of failing; Fatal* stop the running function the way
-// FailNow does, and the cleanups run LIFO like testing's.
-type recT struct {
-	fatals   []string
-	errors   []string
-	cleanups []func()
-}
-
-type recStop struct{}
-
-func (r *recT) Helper()                   {}
-func (r *recT) Cleanup(f func())          { r.cleanups = append(r.cleanups, f) }
-func (r *recT) Errorf(f string, a ...any) { r.errors = append(r.errors, fmt.Sprintf(f, a...)) }
-func (r *recT) Fatalf(f string, a ...any) { r.Fatal(fmt.Sprintf(f, a...)) }
-func (r *recT) Fatal(a ...any) {
-	r.fatals = append(r.fatals, fmt.Sprint(a...))
-	panic(recStop{})
-}
-
-func (r *recT) run(fn func()) {
-	guard := func(f func()) {
-		defer func() {
-			if v := recover(); v != nil {
-				if _, ok := v.(recStop); !ok {
-					panic(v)
-				}
-			}
-		}()
-		f()
-	}
-	guard(fn)
-	for i := len(r.cleanups) - 1; i >= 0; i-- {
-		guard(r.cleanups[i])
-	}
-}
-
-func stocksSKUCheck(t skuT, url string, afterDirty func()) {
+func stocksSKUCheck(t *testing.T, url string, afterDirty func()) {
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
 	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
