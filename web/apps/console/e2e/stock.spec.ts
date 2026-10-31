@@ -1,7 +1,4 @@
-import { create, toBinary } from "@bufbuild/protobuf";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { ListStocksResponseSchema, type ListStocksResponse } from "@repo/proto/inventory/v1/service_pb";
-import { StockSchema } from "@repo/proto/inventory/v1/entity_pb";
 import { deactivateProduct, seedProduct } from "./catalog";
 import { pickProduct, setStock } from "./stock-ui";
 import { uid } from "./uid";
@@ -13,11 +10,9 @@ const skuField = (page: Page) => page.getByLabel("SKU", { exact: true });
 // to produce (inventory no longer creates a SKU the catalog does not know, so an orphan can only
 // come from before that, or from a database edit). The catalog side stays real.
 async function showStocks(page: Page, skus: string[]) {
-  const body: ListStocksResponse = create(ListStocksResponseSchema, {
-    stocks: skus.map((sku) => create(StockSchema, { sku, onHand: 4, reserved: 0, available: 4 })),
-  });
+  const stocks = skus.map((sku) => ({ sku, onHand: 4, reserved: 0, available: 4 }));
   await page.route("**/inventory.v1.InventoryService/ListStocks", (route) =>
-    route.fulfill({ status: 200, contentType: "application/proto", body: Buffer.from(toBinary(ListStocksResponseSchema, body)) }),
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ stocks }) }),
   );
 }
 
