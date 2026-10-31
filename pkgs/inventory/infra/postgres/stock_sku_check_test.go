@@ -215,6 +215,81 @@ func TestStocksSKUCheck_HelperIsBoundedAndReaped(t *testing.T) {
 	}
 }
 
+// The timeout exit of the real entry point, TestStocksSKUCheck_FailureLeavesCleanDatabase,
+// with another session holding ACCESS EXCLUSIVE on inventory.stocks and a short budget for
+// the whole test binary: the entry has to end by itself (a failure, not the binary's
+// timeout panic), its helper and the helper's server backend have to be gone, and the
+// restore has to have run as far as the lock lets it, so the shared database is not left
+// dirty. After the lock is released the next fixture can Up, and the CHECK is validated.
+func TestStocksSKUCheck_EntryTimeoutWithHeldLock(t *testing.T) {
+	url := pgtest.URL(t)
+	cfg := config.Postgres{URL: url}
+	full := postgres.Migration()
+	c := context.Background()
+
+	if err := platformpg.Up(c, cfg, full); err != nil {
+		t.Fatal(err)
+	}
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(telCleanup)
+	db, closeDB, err := platformpg.NewDB(cfg, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(closeDB)
+	t.Cleanup(func() { restoreSKUState(t, cfg, db, full) })
+
+	if v, dirty, err := platformpg.Version(c, cfg, full); err != nil || v != 9 || dirty {
+		t.Fatalf("before the lock: version = %d dirty=%v err=%v, want 9 clean", v, dirty, err)
+	}
+	tx := db.WithContext(c).Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { tx.Rollback() })
+	if err := tx.Exec("LOCK TABLE inventory.stocks IN ACCESS EXCLUSIVE MODE").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	out, pid, err := runSelf(url, "^TestStocksSKUCheck_FailureLeavesCleanDatabase$", nil, 40*time.Second, "-test.timeout=8s")
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("the entry should fail on its own, err=%v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "panic: test timed out") {
+		t.Fatalf("the entry ran into the test binary's timeout instead of ending by itself:\n%s", out)
+	}
+	if !strings.Contains(string(out), "did not finish in time") {
+		t.Fatalf("the entry did not fail on the helper's timeout:\n%s", out)
+	}
+	if groupAlive(pid) {
+		t.Fatalf("a process of the entry's group (pid %d) is still running", pid)
+	}
+	var backends int
+	if err := db.Raw(`SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE 'sku-helper-%'`).Scan(&backends).Error; err != nil || backends != 0 {
+		t.Fatalf("helper backends left on the server = %d, err=%v\n%s", backends, err, out)
+	}
+	// The lock is still held: only the catalog and the migration table can be read.
+	if v, dirty, err := platformpg.Version(c, cfg, full); err != nil || v != 9 || dirty {
+		t.Fatalf("after the entry failed: version = %d dirty=%v err=%v, want 9 clean\n%s", v, dirty, err, out)
+	}
+
+	if err := tx.Rollback().Error; err != nil {
+		t.Fatal(err)
+	}
+	var checks int
+	var validated bool
+	if err := db.Raw(`SELECT count(*), COALESCE(bool_and(convalidated), false) FROM pg_constraint WHERE conrelid = 'inventory.stocks'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%octet_length%'`).Row().Scan(&checks, &validated); err != nil || checks == 0 || !validated {
+		t.Fatalf("CHECK count = %d validated = %v, err=%v; want 0009's CHECK, validated", checks, validated, err)
+	}
+	if err := platformpg.Up(c, cfg, full); err != nil {
+		t.Fatalf("the next fixture could not Up: %v", err)
+	}
+}
+
 var errHelperTimeout = errors.New("helper timed out")
 
 // helperLimit bounds the helper well inside what the test binary has left (so the parent
@@ -238,11 +313,17 @@ func helperLimit(t *testing.T) time.Duration {
 // process group, with application_name app on its connections, and returns its output and pid. On limit it kills the whole group and
 // waits for it, and reports errHelperTimeout instead of the helper's exit error.
 func runFaultHelper(url, app string, limit time.Duration) (out []byte, pid int, err error) {
+	return runSelf(url, "^TestStocksSKUCheck_Postgres$", []string{faultEnv + "=1", "PGAPPNAME=" + app}, limit)
+}
+
+// runSelf runs this test binary on the database at url for the tests matching run, in its
+// own process group, bounded by limit; see runFaultHelper.
+func runSelf(url, run string, env []string, limit time.Duration, args ...string) (out []byte, pid int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestStocksSKUCheck_Postgres$", "-test.count=1", "-test.v")
+	cmd := exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=" + run, "-test.count=1", "-test.v"}, args...)...)
 	// url comes from pgtest: the testcontainers database (or the one the caller opted into).
-	cmd.Env = append(os.Environ(), faultEnv+"=1", pgtest.EnvURL+"="+url, "PGAPPNAME="+app)
+	cmd.Env = append(append(os.Environ(), pgtest.EnvURL+"="+url), env...)
 	ownProcessGroup(cmd)
 	cmd.WaitDelay = 10 * time.Second
 	out, err = cmd.CombinedOutput()
@@ -313,7 +394,17 @@ func reapBackends(db *gorm.DB, app string) (terminated int, err error) {
 // over-long row may remain and the CHECK may be missing. Errors fail the test.
 func restoreSKUState(t *testing.T, cfg config.Postgres, db *gorm.DB, full platformpg.Migration) {
 	t.Helper()
-	ctx := context.Background()
+	// Bounded: another session may hold a lock on the table, and a restore that waits for
+	// it forever would turn this failure into the test binary's own timeout. It must also
+	// leave the binary time to finish, so it takes at most half of what is left.
+	limit := 10 * time.Second
+	if d, ok := t.Deadline(); ok {
+		if half := time.Until(d) / 2; half < limit {
+			limit = max(half, time.Second)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
 	v, dirty, err := platformpg.Version(ctx, cfg, full)
 	if err != nil {
 		t.Errorf("restore: read version: %v", err)
@@ -322,7 +413,7 @@ func restoreSKUState(t *testing.T, cfg config.Postgres, db *gorm.DB, full platfo
 	}
 	if dirty {
 		// A migration step is atomic, so the schema is at 9 exactly when 0009's CHECK exists.
-		if err := db.WithContext(ctx).Exec(`UPDATE inventory.schema_migrations SET version = CASE WHEN EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'inventory.stocks'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%octet_length%') THEN 9 ELSE 8 END, dirty = false`).Error; err != nil {
+		if err := db.WithContext(ctx).Exec(`UPDATE inventory.schema_migrations SET version = CASE WHEN EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = 'inventory' AND r.relname = 'stocks' AND c.conname = 'stocks_sku_length') THEN 9 ELSE 8 END, dirty = false`).Error; err != nil {
 			t.Errorf("restore: clear dirty version %d: %v", v, err)
 
 			return
