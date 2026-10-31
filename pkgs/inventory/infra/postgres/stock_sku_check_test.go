@@ -2,11 +2,21 @@ package postgres_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
+	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -14,6 +24,20 @@ import (
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
+
+const (
+	// faultEnv makes TestStocksSKUCheck_Postgres fail on purpose once 0009 is dirty; only the
+	// isolation test below sets it, on a child process.
+	faultEnv = "SKU_CHECK_INJECT_FAULT"
+	faultMsg = "injected failure while 0009 is dirty"
+	// dbNameEnv names the database the child creates, so the parent can drop it if the child
+	// is killed before its cleanup runs.
+	dbNameEnv = "SKU_CHECK_DB_NAME"
+)
+
+// Only names this test makes up are ever created or dropped; the prefix keeps a wrong
+// SKU_CHECK_DB_NAME from pointing the DROP at someone else's database.
+var dbNamePattern = regexp.MustCompile(`^skucheck_[a-z0-9_]{1,30}$`)
 
 // upTo keeps the migration files up to and including version n.
 func upTo(t *testing.T, m platformpg.Migration, n int) platformpg.Migration {
@@ -44,33 +68,105 @@ func upTo(t *testing.T, m platformpg.Migration, n int) platformpg.Migration {
 	return platformpg.Migration{Schema: m.Schema, Files: files}
 }
 
-// 0009 gives inventory.stocks catalog's SKU rule (1–64 bytes) as a CHECK. Real Postgres:
-// the CHECK refuses 65 bytes (and counts bytes, not characters); a table that already
-// holds an over-long SKU fails the migration, leaves no constraint behind (golang-migrate
-// marks the version dirty; docs/operations.md has the reset); once the row is dealt with
-// and the version reset, up, down and up again all work.
-func TestStocksSKUCheck_Postgres(t *testing.T) {
-	url := pgtest.URL(t)
+// dbURL points rawURL at database name and changes nothing else (credentials, host and
+// every query parameter, application_name included, stay).
+func dbURL(t *testing.T, rawURL, name string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" {
+		t.Fatalf("parse database url: %v", err)
+	}
+	u.Path = "/" + name
 
-	c := context.Background()
-	cfg := config.Postgres{URL: url}
+	return u.String()
+}
+
+func randomName(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 8) // 64 bits: a made-up name never meets someone else's database
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+
+	return hex.EncodeToString(b)
+}
+
+func openDB(t *testing.T, rawURL string) *gorm.DB {
+	t.Helper()
 	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer telCleanup()
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
+	t.Cleanup(telCleanup)
+	db, closeDB, err := platformpg.NewDB(config.Postgres{URL: rawURL}, tel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
+	t.Cleanup(closeDB)
+
+	return db
+}
+
+// dropDatabase drops name for good: WITH (FORCE) ends every session still on it, a lock
+// held or a statement waiting included, so there is nothing to restore afterwards.
+func dropDatabase(db *gorm.DB, name string) error {
+	if !dbNamePattern.MatchString(name) {
+		return fmt.Errorf("refusing to drop database %q", name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	return db.WithContext(ctx).Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)").Error
+}
+
+// ownedDatabase creates a database only this test uses, drops it when the test ends, and
+// returns its URL. The 0009 test steps migrations down and leaves the version dirty on
+// purpose, which on the shared TEST_DATABASE_URL would reach into other tests' fixtures,
+// and a failure halfway would hand them that state.
+//
+// This needs CREATEDB (the testcontainers default role has it; a supplied
+// TEST_DATABASE_URL must too, as for pkgs/identity's expiry matrix). Without it the test
+// fails with that explanation: sharing the supplied database instead would bring the
+// interference back, and skipping would hide it.
+func ownedDatabase(t *testing.T) string {
+	t.Helper()
+	base := pgtest.URL(t)
+	name := "skucheck_" + randomName(t)
+	if v := os.Getenv(dbNameEnv); v != "" {
+		name = v
+	}
+	if !dbNamePattern.MatchString(name) {
+		t.Fatalf("database name %q is not usable", name)
+	}
+	admin := openDB(t, base)
+	// Registered before the CREATE: if the server created the database but the reply was
+	// lost, it is still dropped. DROP ... IF EXISTS makes the other case a no-op.
+	t.Cleanup(func() {
+		if err := dropDatabase(admin, name); err != nil {
+			t.Errorf("drop database %s: %v", name, err)
+		}
+	})
+	if err := admin.Exec("CREATE DATABASE " + name).Error; err != nil {
+		t.Fatalf("create database %s: %v (the 0009 test needs a role with CREATEDB; see TEST_DATABASE_URL in pgtest)", name, err)
+	}
+
+	return dbURL(t, base, name)
+}
+
+// 0009 gives inventory.stocks catalog's SKU rule (1–64 bytes) as a CHECK. Real Postgres,
+// in a database of its own: the CHECK refuses 65 bytes (and counts bytes, not
+// characters); a table that already holds an over-long SKU fails the migration, leaves no
+// constraint behind (golang-migrate marks the version dirty; docs/operations.md has the
+// reset); once the row is dealt with and the version reset, up, down and up again all
+// work. It starts from an empty database, so it does not depend on another test having
+// run Up, and nothing it leaves behind reaches another test.
+func TestStocksSKUCheck_Postgres(t *testing.T) {
+	c := context.Background()
+	cfg := config.Postgres{URL: ownedDatabase(t)}
+	db := openDB(t, cfg.URL)
 
 	full := postgres.Migration()
 	before := upTo(t, full, 8)
-	t.Cleanup(func() {
-		db.Exec("TRUNCATE inventory.stocks CASCADE")
-		_ = platformpg.Up(context.Background(), cfg, full)
-	})
 
 	version := func() (uint, bool) {
 		t.Helper()
@@ -95,9 +191,6 @@ func TestStocksSKUCheck_Postgres(t *testing.T) {
 	}
 
 	// An over-long SKU from before the rule blocks the migration.
-	if err := platformpg.Down(c, cfg, full); err != nil {
-		t.Fatal(err)
-	}
 	if err := platformpg.Up(c, cfg, before); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +208,13 @@ func TestStocksSKUCheck_Postgres(t *testing.T) {
 	}
 	if err := platformpg.Up(c, cfg, full); err == nil {
 		t.Fatal("up on a dirty version succeeded")
+	}
+	if os.Getenv(faultEnv) == "1" {
+		var rows int
+		if err := db.WithContext(c).Raw(`SELECT count(*) FROM inventory.stocks WHERE octet_length(sku) = 65`).Scan(&rows).Error; err != nil || rows != 1 {
+			t.Fatalf("before the fault: over-long rows = %d err=%v, want 1", rows, err)
+		}
+		t.Fatal(faultMsg) // dirty 9, a bad row, no CHECK: all of it stays in this database
 	}
 
 	// Fix the data and reset the version (the documented recovery), then 0009 applies.
@@ -160,5 +260,173 @@ func TestStocksSKUCheck_Postgres(t *testing.T) {
 	}
 	if v, dirty := version(); v != 9 || dirty || !hasCheck() {
 		t.Fatalf("after down/up: version = %d dirty=%v check=%v", v, dirty, hasCheck())
+	}
+}
+
+// The URL the test derives keeps every parameter of TEST_DATABASE_URL.
+func TestDBURL_KeepsEverythingButTheDatabase(t *testing.T) {
+	got := dbURL(t, "postgres://u:p%40ss@h:5433/shared?sslmode=disable&application_name=probe&connect_timeout=5", "skucheck_x")
+	want := "postgres://u:p%40ss@h:5433/skucheck_x?sslmode=disable&application_name=probe&connect_timeout=5"
+	if got != want {
+		t.Fatalf("dbURL = %q, want %q", got, want)
+	}
+}
+
+// snapshot is what another test would see of the shared database, as far as these four
+// values go: it does not notice a changed row, only a changed count.
+type snapshot struct {
+	Version uint
+	Dirty   bool
+	Checks  int
+	Rows    int
+}
+
+func takeSnapshot(t *testing.T, cfg config.Postgres, db *gorm.DB) snapshot {
+	t.Helper()
+	v, dirty, err := platformpg.Version(context.Background(), cfg, postgres.Migration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := snapshot{Version: v, Dirty: dirty}
+	if err := db.Raw(`SELECT count(*) FROM pg_constraint WHERE conrelid = 'inventory.stocks'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%octet_length%'`).Scan(&s.Checks).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Raw(`SELECT count(*) FROM inventory.stocks`).Scan(&s.Rows).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	return s
+}
+
+// childLimit is how long a child may run: a minute, and well inside what is left of this
+// test's own deadline.
+func childLimit(t *testing.T) time.Duration {
+	t.Helper()
+	limit := time.Minute
+	if d, ok := t.Deadline(); ok {
+		limit = min(limit, time.Until(d)/2)
+	}
+
+	return limit
+}
+
+// runSelf runs this test binary for the tests matching run, on the database at rawURL, in
+// its own process group, killed (group and all) and waited for when limit passes.
+func runSelf(rawURL, run string, env []string, limit time.Duration) (out []byte, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run="+run, "-test.count=1", "-test.v")
+	cmd.Env = append(append(os.Environ(), pgtest.EnvURL+"="+rawURL), env...)
+	ownProcessGroup(cmd)
+	cmd.WaitDelay = 10 * time.Second
+	out, err = cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return out, fmt.Errorf("child still running after %v: %w", limit, err)
+	}
+
+	return out, err
+}
+
+// The 0009 test has dirty versions, bad rows and statements waiting on locks in its own
+// database; whatever happens to it, the shared database stays as it was. Each case runs
+// the real test in a child process (so t.Fatal, the cleanups and the binary's timeout are
+// the real ones) while the parent holds the shared database's snapshot:
+//   - the child fails in the middle, with 0009 dirty;
+//   - the shared stocks table is locked by another session (the child's database is not);
+//   - TEST_DATABASE_URL carries application_name and more query parameters.
+//
+// After each: the shared snapshot (version, dirty, CHECK, rows; non-empty before) is
+// unchanged, the child's database is gone, and the next fixture can Up.
+func TestStocksSKUCheck_IsolatedFromSharedDatabase(t *testing.T) {
+	cfg := config.Postgres{URL: pgtest.URL(t)}
+	full := postgres.Migration()
+	c := context.Background()
+
+	cases := []struct {
+		name    string
+		env     []string
+		lock    bool
+		params  string
+		wantErr string // output must contain it; empty means the child passes
+	}{
+		{name: "fails halfway with 0009 dirty", env: []string{faultEnv + "=1"}, wantErr: faultMsg},
+		{name: "shared stocks locked by another session", lock: true},
+		{name: "application_name and other parameters", params: "application_name=skuprobe&connect_timeout=5"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := platformpg.Up(c, cfg, full); err != nil {
+				t.Fatal(err)
+			}
+			db := openDB(t, cfg.URL)
+			if err := db.Exec(`INSERT INTO inventory.stocks (sku, on_hand, reserved, version, updated_at) VALUES ('sku-check-sentinel', 1, 0, 1, now())`).Error; err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { db.Exec(`DELETE FROM inventory.stocks WHERE sku = 'sku-check-sentinel'`) })
+			before := takeSnapshot(t, cfg, db)
+			if before.Version != 9 || before.Dirty || before.Checks == 0 || before.Rows == 0 {
+				t.Fatalf("the shared database is not a non-empty latest fixture to compare against: %+v", before)
+			}
+
+			name := "skucheck_" + randomName(t)
+			t.Cleanup(func() {
+				if err := dropDatabase(db, name); err != nil {
+					t.Errorf("drop database %s: %v", name, err)
+				}
+			})
+			var tx *gorm.DB
+			if tc.lock {
+				tx = db.Begin()
+				if tx.Error != nil {
+					t.Fatal(tx.Error)
+				}
+				t.Cleanup(func() { tx.Rollback() })
+				if err := tx.Exec("LOCK TABLE inventory.stocks IN ACCESS EXCLUSIVE MODE").Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			childURL := cfg.URL
+			if tc.params != "" {
+				sep := "?"
+				if strings.Contains(childURL, "?") {
+					sep = "&"
+				}
+				childURL += sep + tc.params
+			}
+			out, err := runSelf(childURL, "^TestStocksSKUCheck_Postgres$", append(tc.env, dbNameEnv+"="+name), childLimit(t))
+			var exit *exec.ExitError
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("the child should pass: %v\n%s", err, out)
+			case tc.wantErr == "" && !strings.Contains(string(out), "--- PASS: TestStocksSKUCheck_Postgres"):
+				t.Fatalf("the child did not run the test (exit 0 alone proves nothing):\n%s", out)
+			case tc.wantErr != "" && !errors.As(err, &exit):
+				t.Fatalf("the child should fail on %q, err=%v\n%s", tc.wantErr, err, out)
+			case tc.wantErr != "" && !strings.Contains(string(out), tc.wantErr):
+				t.Fatalf("the child failed, but not on %q:\n%s", tc.wantErr, out)
+			}
+
+			if tx != nil {
+				if err := tx.Rollback().Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if after := takeSnapshot(t, cfg, db); after != before {
+				t.Fatalf("the shared database changed: before %+v, after %+v\n%s", before, after, out)
+			}
+			// The child's own cleanup dropped its database; if it was killed first, the
+			// cleanup above does, and either way it must not be there at the end.
+			if err := dropDatabase(db, name); err != nil {
+				t.Fatal(err)
+			}
+			var left int
+			if err := db.Raw(`SELECT count(*) FROM pg_database WHERE datname = ?`, name).Scan(&left).Error; err != nil || left != 0 {
+				t.Fatalf("database %s left behind = %d, err=%v", name, left, err)
+			}
+			if err := platformpg.Up(c, cfg, full); err != nil {
+				t.Fatalf("the next fixture could not Up: %v", err)
+			}
+		})
 	}
 }
