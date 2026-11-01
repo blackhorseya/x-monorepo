@@ -305,10 +305,6 @@ type Worker struct {
 	// interval. Only the postgres broker (and the forwarder's SQL side) polls.
 	// Must be positive.
 	PollInterval time.Duration `mapstructure:"poll_interval"`
-	// SubscribeBatchSize is how many outbox rows one poll of a Postgres
-	// subscriber claims at most (watermill-sql SubscribeBatchSize). Must be
-	// positive.
-	SubscribeBatchSize int `mapstructure:"subscribe_batch_size"`
 }
 
 // Broker values of Worker.Broker.
@@ -441,7 +437,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("worker.start_from", StartFromBeginning)
 	v.SetDefault("worker.handler_timeout", 10*time.Second)
 	v.SetDefault("worker.poll_interval", 200*time.Millisecond)
-	v.SetDefault("worker.subscribe_batch_size", 100)
 }
 
 func readFile(v *viper.Viper) error {
@@ -538,9 +533,6 @@ func (x *AppConfig) validate() error {
 	}
 	if x.Worker.PollInterval <= 0 {
 		return fmt.Errorf("invalid worker.poll_interval %s (want > 0)", x.Worker.PollInterval)
-	}
-	if x.Worker.SubscribeBatchSize <= 0 {
-		return fmt.Errorf("invalid worker.subscribe_batch_size %d (want > 0)", x.Worker.SubscribeBatchSize)
 	}
 	if x.Worker.HandlerTimeout < 0 {
 		return fmt.Errorf("invalid worker.handler_timeout %s (want >= 0, 0 = none)", x.Worker.HandlerTimeout)

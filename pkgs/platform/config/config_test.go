@@ -46,7 +46,7 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	if p := cfg.Postgres; p.MaxOpenConns != 25 || p.MaxIdleConns != 10 || p.ConnMaxLifetime != 30*time.Minute || p.ConnMaxIdleTime != 5*time.Minute {
 		t.Fatalf("postgres pool defaults: %+v", p)
 	}
-	if cfg.Worker.HandlerTimeout != 10*time.Second || cfg.Worker.PollInterval != 200*time.Millisecond || cfg.Worker.SubscribeBatchSize != 100 {
+	if cfg.Worker.HandlerTimeout != 10*time.Second || cfg.Worker.PollInterval != 200*time.Millisecond {
 		t.Fatalf("worker defaults: %+v", cfg.Worker)
 	}
 }
@@ -140,19 +140,6 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatalf("worker.poll_interval override: %+v, %v", cfg.Worker, err)
 	}
 	t.Setenv("APP_WORKER_POLL_INTERVAL", "200ms")
-	t.Setenv("APP_WORKER_SUBSCRIBE_BATCH_SIZE", "0")
-	if _, err := config.Load(); err == nil {
-		t.Fatal("zero worker.subscribe_batch_size must fail")
-	}
-	t.Setenv("APP_WORKER_SUBSCRIBE_BATCH_SIZE", "-1")
-	if _, err := config.Load(); err == nil {
-		t.Fatal("negative worker.subscribe_batch_size must fail")
-	}
-	t.Setenv("APP_WORKER_SUBSCRIBE_BATCH_SIZE", "10")
-	if cfg, err := config.Load(); err != nil || cfg.Worker.SubscribeBatchSize != 10 {
-		t.Fatalf("worker.subscribe_batch_size override: %+v, %v", cfg.Worker, err)
-	}
-	t.Setenv("APP_WORKER_SUBSCRIBE_BATCH_SIZE", "100")
 	t.Setenv("APP_HTTP_RATE_LIMIT_RPS", "-1")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("negative http.rate_limit.rps must fail")
