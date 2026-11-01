@@ -1,19 +1,22 @@
 # Template for configs/catalog-rpc.yaml (gitignored): `task catalog-rpc` copies it there on first
-# use and loads it via APP_CONFIG. Another file: task catalog-rpc CATALOG_CONFIG=<file>.
+# use and loads it via APP_CONFIG, the way `task run` loads configs/local.yaml; another file:
+# task catalog-rpc CATALOG_CONFIG=<file>. Every key can also be set as APP_<SECTION>_<KEY>; env
+# beats file beats the built-in defaults, as for rpc.
 # This is catalog-rpc's own file, like its own ConfigMap in the Helm chart: it never reads
 # configs/local.yaml, whose rpc-only settings (OIDC, JWT, user keys) it would refuse or must not see.
-# `task catalog-rpc` pins APP_CONFIG (this file), APP_HTTP_ADDR (CATALOG_PORT), APP_AUTH_MODE=required
-# and APP_AUTH_API_KEYS (the one dev key rpc=…:admin, shared with `task run`'s APP_CATALOG_API_KEY): an
-# exported value of those changes nothing, so http.addr and auth below are not what runs. Every other
-# APP_* still beats this file (env > file > defaults); a non-empty CATALOG_DATABASE_URL beats both it and
-# APP_POSTGRES_URL. docs/operations.md has the full order.
-#
-# Deliberately absent: auth.jwt and auth.oidc. catalog-rpc accepts static auth.api_keys only and
-# refuses to start on either (a valid token would pass the interceptor, and nothing here maps a
-# token to a role); never put a user's key in auth.api_keys either.
 
 http:
-  addr: ":8081"
+  addr: ":8081"   # `task run` asks for the catalog here (catalog.upstream in configs/config.example.yaml, CATALOG_PORT in the Taskfile)
+
+auth:
+  mode: required
+  # The one service key rpc presents; `task run` sends the same one as APP_CATALOG_API_KEY
+  # (CATALOG_DEV_KEY in the Taskfile, kept equal by apps/catalog-rpc/config_example_test.go).
+  # A local dev key, nothing here is a credential; never put a user's key in auth.api_keys.
+  api_keys: "rpc=dev-catalog-service-key-0123456789abcdef:admin"
+  # Deliberately absent: auth.jwt and auth.oidc. catalog-rpc accepts static auth.api_keys only and
+  # refuses to start on either (a valid token would pass the interceptor, and nothing here maps a
+  # token to a role).
 
 postgres:
   # the compose Postgres; `task migrate -- up` creates the catalog schema in it

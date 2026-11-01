@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -11,9 +12,8 @@ import (
 
 const exampleConfig = "../../configs/catalog-rpc.example.yaml"
 
-// loadFile is `task catalog-rpc` as far as the config goes: APP_CONFIG points at path, and the
-// Taskfile's env (mode, the one dev key) sits on top of it; every other APP_* of the test
-// process is blanked so nothing but the file and those two decide.
+// loadFile is `task catalog-rpc` as far as the config goes: APP_CONFIG points at path and the file
+// alone decides; every other APP_* of the test process is blanked.
 func loadFile(t *testing.T, path string) (*config.AppConfig, error) {
 	t.Helper()
 	for _, kv := range os.Environ() {
@@ -22,10 +22,42 @@ func loadFile(t *testing.T, path string) (*config.AppConfig, error) {
 		}
 	}
 	t.Setenv(config.FileEnv, path)
-	t.Setenv("APP_AUTH_MODE", "required")
-	t.Setenv("APP_AUTH_API_KEYS", "rpc="+durableKey+":admin")
 
 	return config.Load()
+}
+
+// taskfileVar reads a value `task run` takes from the Taskfile: the file and the Taskfile are two
+// places that must agree, and this is the one test that says so.
+func taskfileVar(t *testing.T, pattern string) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../Taskfile.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(pattern).FindSubmatch(raw)
+	if m == nil {
+		t.Fatalf("Taskfile.yml has nothing matching %s", pattern)
+	}
+
+	return string(m[1])
+}
+
+// withAuth is the example with extra lines under its auth: section.
+func withAuth(t *testing.T, extra string) string {
+	t.Helper()
+	raw, err := os.ReadFile(exampleConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "\nauth:\n") {
+		t.Fatal("the example has no auth: section")
+	}
+	path := filepath.Join(t.TempDir(), "catalog-rpc.yaml")
+	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), "\nauth:\n", "\nauth:\n"+extra, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
 }
 
 // The template `task catalog-rpc` seeds is what a fresh clone runs on: through the real Load,
@@ -44,6 +76,16 @@ func TestExampleConfig_IsWhatCatalogRPCRunsOn(t *testing.T) {
 		t.Fatalf("CheckDurable: %v", err)
 	}
 
+	// `task run` and this file are two ends of one connection: the Taskfile's port and key are the file's.
+	if want := ":" + taskfileVar(t, `CATALOG_PORT: '\{\{\.CATALOG_PORT \| default "(\d+)"\}\}'`); cfg.HTTP.Addr != want {
+		t.Errorf("http.addr = %q, want %q (CATALOG_PORT of `task run`)", cfg.HTTP.Addr, want)
+	}
+	if want := "rpc=" + taskfileVar(t, `(?m)^  CATALOG_DEV_KEY: (\S+)$`) + ":admin"; cfg.Auth.APIKeys != want {
+		t.Errorf("auth.api_keys = %q, want %q (CATALOG_DEV_KEY of `task run`)", cfg.Auth.APIKeys, want)
+	}
+	if cfg.Auth.Mode != config.AuthRequired {
+		t.Errorf("auth.mode = %q, want %q", cfg.Auth.Mode, config.AuthRequired)
+	}
 	if cfg.OTel.Endpoint == "" {
 		t.Error("otel.endpoint is empty: catalog-rpc would not report to the local collector")
 	}
@@ -67,22 +109,13 @@ func TestExampleConfig_IsWhatCatalogRPCRunsOn(t *testing.T) {
 // A file that turns auth.oidc on is refused, and the message names the setting: with no issuer
 // (config.Load's own validation) and with one (NewAuth: catalog-rpc takes api_keys only).
 func TestExampleConfig_OIDCInTheFileIsRefused(t *testing.T) {
-	raw, err := os.ReadFile(exampleConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for name, extra := range map[string]string{
-		"enabled, no issuer": "\nauth:\n  oidc:\n    enabled: true\n",
-		"enabled, one issuer": "\nauth:\n  oidc:\n    enabled: true\n    issuers:\n" +
+		"enabled, no issuer": "  oidc:\n    enabled: true\n",
+		"enabled, one issuer": "  oidc:\n    enabled: true\n    issuers:\n" +
 			"      - issuer: https://issuer.example\n        audience: console\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "catalog-rpc.yaml")
-			if err := os.WriteFile(path, append(append([]byte{}, raw...), extra...), 0o600); err != nil {
-				t.Fatal(err)
-			}
-
-			cfg, err := loadFile(t, path)
+			cfg, err := loadFile(t, withAuth(t, extra))
 			if err == nil {
 				_, err = NewAuth(cfg)
 			}
@@ -95,17 +128,7 @@ func TestExampleConfig_OIDCInTheFileIsRefused(t *testing.T) {
 
 // ...and so is auth.jwt in the file.
 func TestExampleConfig_JWTInTheFileIsRefused(t *testing.T) {
-	raw, err := os.ReadFile(exampleConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "catalog-rpc.yaml")
-	extra := "\nauth:\n  jwt:\n    issuer: https://issuer.example\n    hs256_secret: 0123456789abcdef0123456789abcdef\n"
-	if err := os.WriteFile(path, append(append([]byte{}, raw...), extra...), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := loadFile(t, path)
+	cfg, err := loadFile(t, withAuth(t, "  jwt:\n    issuer: https://issuer.example\n    hs256_secret: 0123456789abcdef0123456789abcdef\n"))
 	if err == nil {
 		_, err = NewAuth(cfg)
 	}

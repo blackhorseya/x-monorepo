@@ -24,7 +24,8 @@ vars:
   # configs/config.example.yaml on first use. Override: task run CONFIG=<file>
   CONFIG: '{{.CONFIG | default (printf "%s/configs/local.yaml" .ROOT_DIR)}}'
   # `task run` talks to the catalog service `task catalog-rpc` runs (rpc has no catalog of its own). The
-  # key is the local dev one (rpc=<key>:admin in catalog-rpc's auth.api_keys); nothing here is a credential.
+  # key is the local dev one (rpc=<key>:admin in auth.api_keys of configs/catalog-rpc.example.yaml, which
+  # apps/catalog-rpc/config_example_test.go keeps equal to this one); nothing here is a credential.
   CATALOG_PORT: '{{.CATALOG_PORT | default "8081"}}'
   # Config file `task catalog-rpc` loads (APP_CONFIG). Gitignored; seeded from configs/catalog-rpc.example.yaml.
   # Override: task catalog-rpc CATALOG_CONFIG=<file>
@@ -467,16 +468,10 @@ tasks:
       - 'echo seeded {{shellQuote .CATALOG_CONFIG}} "from configs/catalog-rpc.example.yaml — edit it, it is gitignored"'
 
   catalog-rpc:
-    desc: 'build and run ./bin/catalog-rpc on :8081 (CATALOG_PORT) for `task run`, with configs/catalog-rpc.yaml (gitignored; seeded from the example; CATALOG_CONFIG=<file> to use another): postgres, log and otel come from that file, never from configs/local.yaml (OIDC, JWT, your keys). The task pins APP_CONFIG, APP_HTTP_ADDR, APP_AUTH_MODE (required) and APP_AUTH_API_KEYS (the one dev key rpc=…:admin): an exported value of those does not change it. Any other APP_* (APP_POSTGRES_URL, APP_OTEL_*…) still beats the file; a non-empty CATALOG_DATABASE_URL beats both. Needs `task migrate -- up` first (the catalog schema)'
+    desc: 'build and run ./bin/catalog-rpc with configs/catalog-rpc.yaml (gitignored; seeded from configs/catalog-rpc.example.yaml; CATALOG_CONFIG=<file> to use another), the way `task run` runs rpc with configs/local.yaml: the port, auth (the one dev key rpc=…:admin), Postgres, log and OTLP are all in that file, which never reads configs/local.yaml (OIDC, JWT, your keys). Env beats the file, as for `task run`. Needs `task migrate -- up` first (the catalog schema)'
     deps: [build, catalog-config]
-    cmds:
-      # export in the command, not `env:`: Task's env does not override the parent environment
-      # (an old shell's APP_CONFIG=configs/local.yaml would win), an export in the shell does.
-      - |
-        export APP_CONFIG={{shellQuote .CATALOG_CONFIG}} APP_HTTP_ADDR={{shellQuote (printf ":%s" .CATALOG_PORT)}} APP_AUTH_MODE=required APP_AUTH_API_KEYS={{shellQuote (printf "rpc=%s:admin" .CATALOG_DEV_KEY)}}
-        # only a non-empty CATALOG_DATABASE_URL overrides postgres.url (and APP_POSTGRES_URL)
-        if [ -n "${CATALOG_DATABASE_URL-}" ]; then export APP_POSTGRES_URL="$CATALOG_DATABASE_URL"; fi
-        exec {{shellQuote .BIN_DIR}}/catalog-rpc --require-durable
+    env: { APP_CONFIG: '{{.CATALOG_CONFIG}}' }
+    cmds: ['{{.BIN_DIR}}/catalog-rpc --require-durable']
 
   worker:
     desc: 'build and run ./bin/worker (event consumers) with configs/local.yaml; needs postgres.url'

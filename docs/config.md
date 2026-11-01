@@ -13,8 +13,8 @@
 |---|---|
 | `config.example.yaml` | 有 commit 的範本，內容就是本機開發 profile（text log、`/api/docs` 開、`postgres.url` 指向 compose） |
 | `local.yaml` | gitignored。`task run` / `task migrate` 第一次會從 example 複製過來（`task config`），之後透過 `APP_CONFIG` 載入；隨意改 |
-| `catalog-rpc.example.yaml` | `apps/catalog-rpc` 專屬的範本：`http`、`postgres`、`log`、`otel`（`127.0.0.1:4317`、`insecure: true`）。**沒有** `auth.jwt`、`auth.oidc`（catalog-rpc 遇到就拒啟動），也不放使用者的 key |
-| `catalog-rpc.yaml` | gitignored。`task catalog-rpc` 第一次從上面那份複製（`task catalog-config`），之後透過 `APP_CONFIG` 載入；`CATALOG_CONFIG=<file>` 換檔。`task catalog-rpc` 不讀 `local.yaml`。task 固定 `APP_CONFIG`、`APP_HTTP_ADDR`、`APP_AUTH_MODE`、`APP_AUTH_API_KEYS`（父 shell 匯出同名值也不改變）；非空的 `CATALOG_DATABASE_URL` 蓋過 `postgres.url` 與 `APP_POSTGRES_URL`；其餘 `APP_*` 維持 env > 檔案（優先序見 `docs/operations.md` 本機開發） |
+| `catalog-rpc.example.yaml` | `apps/catalog-rpc` 專屬的範本：`http`（`:8081`）、`auth`（`mode: required` 與唯一一把開發用 key `rpc=…:admin`）、`postgres`、`log`、`otel`（`127.0.0.1:4317`、`insecure: true`）。**沒有** `auth.jwt`、`auth.oidc`（catalog-rpc 遇到就拒啟動），也不放使用者的 key。key 與埠對應 Taskfile 的 `CATALOG_DEV_KEY`／`CATALOG_PORT`（`task run` 用），由 `apps/catalog-rpc/config_example_test.go` 釘住 |
+| `catalog-rpc.yaml` | gitignored。`task catalog-rpc` 第一次從上面那份複製（`task catalog-config`），之後透過 `APP_CONFIG` 載入，和 `task run` 載入 `local.yaml` 同形狀；`CATALOG_CONFIG=<file>` 換檔。`task catalog-rpc` 不讀 `local.yaml`。環境變數照一般規則 env > 檔案，沒有額外保證 |
 | 其他 | `configs/*` 全部 gitignored；`task run CONFIG=<file>` 可指定別的檔 |
 
 > 注意：env 不能把 key 清成空字串（viper 忽略空 env），所以要「不接 DB」請改 local.yaml 的 `postgres.url`，不要 `APP_POSTGRES_URL=`。
