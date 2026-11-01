@@ -129,7 +129,7 @@ func TestOrderRepository_Postgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Update path: new status, items replaced (not appended), version bumped once.
+	// Update path: new status, items untouched, version bumped once.
 	assertEqual(t, got, reloaded)
 	if reloaded.Status() != order.StatusCancelled || reloaded.Version() != 2 {
 		t.Fatalf("after update: status=%v version=%d, want CANCELLED 2", reloaded.Status(), reloaded.Version())

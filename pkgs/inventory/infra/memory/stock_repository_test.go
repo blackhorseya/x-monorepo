@@ -91,3 +91,40 @@ func TestStockRepository_List(t *testing.T) {
 		t.Fatalf("prefix + reserved = %v err=%v", page, err)
 	}
 }
+
+func TestStockRepository_FindBySKUs(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewStockRepository()
+	now := time.Now()
+	for _, sku := range []string{"A", "B", "C"} {
+		s, _ := stock.New(stock.SKU(sku), 5, now)
+		if err := repo.Save(c, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := repo.FindBySKUs(c, []stock.SKU{"C", "A", "A", "NEVER"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bySKU := map[stock.SKU]*stock.Stock{}
+	for _, s := range got {
+		bySKU[s.SKU()] = s
+	}
+	if len(got) != 2 || bySKU["A"] == nil || bySKU["C"] == nil {
+		t.Fatalf("FindBySKUs = %v, want A and C once each, NEVER left out", got)
+	}
+	if bySKU["A"].Version() != 1 || bySKU["A"].OnHand() != 5 {
+		t.Fatalf("A = version %d on_hand %d, want 1 and 5", bySKU["A"].Version(), bySKU["A"].OnHand())
+	}
+
+	// A copy: restocking it must not touch what is stored.
+	_ = bySKU["A"].Restock(99, now)
+	if again, _ := repo.FindBySKU(c, "A"); again.OnHand() != 5 {
+		t.Fatalf("stored A changed through the returned copy: on_hand=%d", again.OnHand())
+	}
+
+	if none, err := repo.FindBySKUs(c, nil); err != nil || len(none) != 0 {
+		t.Fatalf("no SKUs = %v, %v, want empty", none, err)
+	}
+}

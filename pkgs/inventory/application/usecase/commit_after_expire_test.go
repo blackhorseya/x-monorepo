@@ -123,6 +123,15 @@ func (i *onFirstLoad) FindBySKU(c context.Context, sku stock.SKU) (*stock.Stock,
 	return i.Repository.FindBySKU(c, sku)
 }
 
+func (i *onFirstLoad) FindBySKUs(c context.Context, skus []stock.SKU) ([]*stock.Stock, error) {
+	if h := i.hook; h != nil {
+		i.hook = nil
+		h()
+	}
+
+	return i.Repository.FindBySKUs(c, skus)
+}
+
 // A reservation that moved between being read and the stock being loaded makes
 // the aggregate fail on a stock that no longer matches (here: nothing reserved
 // any more). That is a lost race, retryable, not a final domain error.

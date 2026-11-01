@@ -41,6 +41,35 @@ func (i *StockRepository) FindBySKU(c context.Context, sku stock.SKU) (*stock.St
 	return cloneStock(s, s.Version())
 }
 
+// FindBySKUs follows the Postgres contract: unknown SKUs are left out and a
+// repeated SKU comes back once.
+func (i *StockRepository) FindBySKUs(c context.Context, skus []stock.SKU) ([]*stock.Stock, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	seen := make(map[stock.SKU]struct{}, len(skus))
+	out := make([]*stock.Stock, 0, len(skus))
+	for _, sku := range skus {
+		s, ok := i.data[sku]
+		if _, dup := seen[sku]; dup || !ok {
+			continue
+		}
+		seen[sku] = struct{}{}
+		cp, err := cloneStock(s, s.Version())
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cp)
+	}
+
+	return out, nil
+}
+
 // Save follows the Postgres contract: Version 0 inserts and loses (ErrStale)
 // if the SKU exists; anything else updates only if the stored version still
 // matches (ErrStale otherwise). The stored copy's version advances by one.

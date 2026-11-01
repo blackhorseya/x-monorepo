@@ -55,6 +55,44 @@ func (i *StockRepository) FindBySKU(c context.Context, sku stock.SKU) (*stock.St
 	})
 }
 
+// FindBySKUs reads every requested SKU in one SELECT. Like FindBySKU it takes
+// no lock: the optimistic lock is Save's `WHERE version = ?`.
+func (i *StockRepository) FindBySKUs(c context.Context, skus []stock.SKU) ([]*stock.Stock, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(skus) == 0 {
+		return nil, nil
+	}
+
+	keys := make([]string, 0, len(skus))
+	for _, sku := range skus {
+		keys = append(keys, sku.String())
+	}
+	var rows []stockRow
+	if err := platformpg.TxOrDB(ctx, i.db).Where("sku IN ?", keys).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("find stocks: %w", err)
+	}
+
+	out := make([]*stock.Stock, 0, len(rows))
+	for _, row := range rows {
+		s, err := stock.Reconstitute(stock.ReconstituteParams{
+			SKU:       stock.SKU(row.SKU),
+			OnHand:    row.OnHand,
+			Reserved:  row.Reserved,
+			Version:   row.Version,
+			UpdatedAt: row.UpdatedAt.UTC(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+
+	return out, nil
+}
+
 // likeEscape turns a literal string into a LIKE pattern fragment (ESCAPE '\').
 var likeEscape = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
