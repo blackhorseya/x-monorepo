@@ -1,0 +1,17 @@
+--- a/pkgs/platform/eventbus/postgres.go
++++ b/pkgs/platform/eventbus/postgres.go
+@@
+ // MEASUREMENT ONLY (#363 slice 2), applied on top of the knob commit to build the instrumented worker:
+ // with BATCHSTAT_FILE set, NewPostgresSubscriber wraps its OffsetsAdapter in batchStat, which appends
+ // "<topic> <rows claimed by the poll>" for every poll that claimed any. Not part of any PR head.
+ //
+ //   offsetsAdapter = batchStat{offsetsAdapter, os.Getenv("BATCHSTAT_FILE")}   // before wsql.NewSubscriber
+ //
+ //   type batchStat struct {
+ //       wsql.OffsetsAdapter
+ //       path string
+ //   }
+ //   func (b batchStat) AckMessageQuery(p wsql.AckMessageQueryParams) (wsql.Query, error) {
+ //       // append fmt.Sprintf("%s %d\n", p.Topic, len(p.Rows)) to b.path
+ //       return b.OffsetsAdapter.AckMessageQuery(p)
+ //   }
