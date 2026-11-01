@@ -28,6 +28,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewReadiness,
 		NoCredentialResolver,
 		NoOIDC,
+		TraceOptions,
 		catalog.ProviderSet,
 	)
 

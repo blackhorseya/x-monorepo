@@ -48,6 +48,28 @@ type Route interface {
 	Route(opts ...connect.HandlerOption) (string, http.Handler)
 }
 
+// Option is a composition-root decision about the server, made in code and
+// supplied by wire; none of them is a config key or an env var, so an operator
+// has no way to change one.
+type Option func(*options)
+
+type options struct{ trustRemoteTrace bool }
+
+// TrustRemoteTrace makes the server continue the trace named by an incoming
+// traceparent: the RPC's server span is a child of the caller's span and shares
+// its trace_id. Only a service whose callers are all trusted may say this
+// (catalog-rpc: reachable from rpc alone, by NetworkPolicy and a service key),
+// because the caller then picks the trace_id of everything logged and traced
+// under that request. The default, and what a service facing outside callers
+// must keep, is DistrustRemoteTrace.
+func TrustRemoteTrace() Option { return func(o *options) { o.trustRemoteTrace = true } }
+
+// DistrustRemoteTrace is the default, spelled out for composition roots to
+// declare: an incoming traceparent is not continued. The RPC's server span
+// starts a new root trace and keeps the caller's span only as a link, so the
+// X-Trace-Id of the response is this service's own.
+func DistrustRemoteTrace() Option { return func(o *options) { o.trustRemoteTrace = false } }
+
 // Server serves HTTP/1.1 + h2c (gRPC behind GKE/EKS ingress without TLS termination here).
 type Server struct {
 	srv             *http.Server
@@ -65,9 +87,10 @@ type Server struct {
 // X-Trace-Id (see meta.go); the rate limit (limits.go, when cfg.RateLimit.RPS
 // is set) drops a flood; auth (auth.go, when auth.Mode is not off) resolves
 // the caller to a contextx.Principal; the timeout (limits.go, cfg.Timeout)
-// bounds the rest; plain HTTP routes (docs, openapi) get spans from otelgin,
+// bounds the rest; opts (TrustRemoteTrace / DistrustRemoteTrace) decide whether
+// an incoming traceparent is continued, and none means it is not; plain HTTP routes (docs, openapi) get spans from otelgin,
 // which skips RPC prefixes, the probes and /api/metrics so nothing is traced twice.
-func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers, resolver CredentialResolver, oidcAuth OIDCAuth) (*Server, error) {
+func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers, resolver CredentialResolver, oidcAuth OIDCAuth, opts ...Option) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	// Connect routes are "/<pkg>.<Service>/" prefixes; a procedure is the next segment.
@@ -75,12 +98,21 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	engine.RedirectTrailingSlash = false
 	engine.RedirectFixedPath = false
 
-	tracing, err := otelconnect.NewInterceptor(
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	traceOpts := []otelconnect.Option{
 		otelconnect.WithTracerProvider(tel.Tracer),
 		otelconnect.WithMeterProvider(tel.Meter),
 		otelconnect.WithPropagator(tel.Propagator),
 		otelconnect.WithPropagateResponseHeader(), // traceparent on responses too
-	)
+	}
+	if o.trustRemoteTrace {
+		// otelconnect's default is a new root trace with the caller's span as a link.
+		traceOpts = append(traceOpts, otelconnect.WithTrustRemote())
+	}
+	tracing, err := otelconnect.NewInterceptor(traceOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("otelconnect interceptor: %w", err)
 	}
@@ -121,11 +153,11 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if deadline := NewTimeoutInterceptor(cfg.Timeout); deadline != nil {
 		interceptors = append(interceptors, deadline)
 	}
-	opts := connect.WithInterceptors(append(interceptors, validate)...)
+	handlerOpts := connect.WithInterceptors(append(interceptors, validate)...)
 	prefixes := make([]string, 0, len(routes))
 	handlers := make([]http.Handler, 0, len(routes))
 	for _, r := range routes {
-		prefix, h := r.Route(opts)
+		prefix, h := r.Route(handlerOpts)
 		prefixes = append(prefixes, prefix)
 		handlers = append(handlers, h)
 	}

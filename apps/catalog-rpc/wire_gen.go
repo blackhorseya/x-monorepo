@@ -61,7 +61,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	readiness := NewReadiness(db)
 	credentialResolver := NoCredentialResolver()
 	oidcAuth := NoOIDC()
-	serverServer, err := server.New(http, auth, logger, v6, v7, readiness, providers, credentialResolver, oidcAuth)
+	v8 := TraceOptions()
+	serverServer, err := server.New(http, auth, logger, v6, v7, readiness, providers, credentialResolver, oidcAuth, v8...)
 	if err != nil {
 		cleanup2()
 		cleanup()
