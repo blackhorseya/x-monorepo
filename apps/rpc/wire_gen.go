@@ -187,7 +187,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	serverServer, err := server.New(http, configAuth, logger, v27, v28, readiness, providers, resolver, oidcAuth)
+	v33 := TraceOptions()
+	serverServer, err := server.New(http, configAuth, logger, v27, v28, readiness, providers, resolver, oidcAuth, v33...)
 	if err != nil {
 		cleanup5()
 		cleanup4()

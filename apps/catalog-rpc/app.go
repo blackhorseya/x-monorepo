@@ -57,6 +57,12 @@ func NoCredentialResolver() server.CredentialResolver { return nil }
 // auth.jwt and auth.oidc.enabled, so the interceptor holds no verifier for them.
 func NoOIDC() server.OIDCAuth { return server.OIDCAuth{} }
 
+// TraceOptions: catalog-rpc continues the trace rpc started. Its callers are rpc alone (NetworkPolicy
+// admits only the rpc pod, the Service is ClusterIP, and the interceptor accepts nothing but rpc's service
+// key), so a traceparent is trusted here. A caller who reaches it directly could still choose its own
+// trace_id; that only affects observability data, never authorization.
+func TraceOptions() []server.Option { return []server.Option{server.TrustRemoteTrace()} }
+
 // NewAuth is the only config.Auth in the graph: apps/catalog-rpc accepts
 // static auth.api_keys and nothing else, so it refuses to start on a legacy
 // auth.jwt or auth.oidc.enabled (a valid token would pass the interceptor, and nothing here maps a

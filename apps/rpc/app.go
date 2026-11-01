@@ -75,6 +75,11 @@ func NewDocs() []server.Doc {
 // warmTimeout bounds the startup warm-up of the OIDC keys.
 const warmTimeout = 15 * time.Second
 
+// TraceOptions: rpc faces outside callers, so it does not continue an incoming traceparent (the server span is
+// a new root with the caller's span as a link, and X-Trace-Id is rpc's own). Declared here, in code, and not
+// configurable: no key, env var or Helm value can turn it on. catalog-rpc, whose only caller is rpc, trusts rpc's.
+func TraceOptions() []server.Option { return []server.Option{server.DistrustRemoteTrace()} }
+
 // NewOIDCAuth is the external-login half of the auth interceptor: with
 // auth.oidc.enabled the multi-issuer verifier plus the identity BC's resolver,
 // otherwise the zero value and bearer tokens go to auth.jwt as before. The
