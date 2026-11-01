@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -413,7 +414,15 @@ func TestTaskEntry_HeldDB(t *testing.T) {
 		t.Skip("driven by TestTaskEntry_ParentTimeoutLeavesNoChildren")
 	}
 	r := startTask(t, os.Getenv("TASK_ENTRY_BIN"), dedicatedFile(t, t.TempDir(), "catalog-rpc.yaml", url), nil)
-	r.settle(t)
+	if r.settle(t) {
+		t.Fatalf("catalog-rpc served: it was not stuck on its Postgres:\n%s", r.out)
+	}
+	// The one way out of this scenario is the harness's own deadline killing the group. An exit by
+	// itself (task's 201 after catalog-rpc refused to start) means the scenario never happened.
+	var ee *exec.ExitError
+	if !errors.As(r.err, &ee) || !ee.Sys().(syscall.WaitStatus).Signaled() || ee.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+		t.Fatalf("the run ended by itself (%v), not by the deadline kill:\n%s", r.err, r.out)
+	}
 }
 
 // psRows is pid -> (ppid, command) of every process.
@@ -442,15 +451,30 @@ func psRows(t *testing.T) map[int][2]string {
 // heldRun is what one run of TestTaskEntry_HeldDB as a process of its own (with a short
 // -test.timeout, so the go test alarm is what ends it) left behind.
 type heldRun struct {
-	seen  map[int]string // every descendant seen while it ran: pid -> command
-	alive []string       // those still alive 4s after it ended
-	out   string         // its output
+	seen     map[int]string // every descendant seen while it ran: pid -> command
+	alive    []string       // those still alive 4s after it ended
+	out      string         // its output
+	innerErr error          // how the inner test process ended (nil: it passed)
+	accepted int            // connections the never-answering Postgres accepted
 }
 
-// enteredStall says whether the run really went through the scenario it claims to test.
+// enteredStall says whether the run really went through the scenario it claims to test, so that
+// "nothing is left over" means the stuck catalog-rpc was cleaned up and not that it never existed:
+// the inner test passed (it only does when the harness's deadline killed the stuck group), the
+// catalog-rpc binary itself was seen running, and it connected to the Postgres that never answers.
 func (h heldRun) enteredStall() error {
-	if len(h.seen) == 0 {
-		return errors.New("no child was ever seen: the inner test did not start task")
+	if h.innerErr != nil {
+		return fmt.Errorf("the inner test did not pass (%w)", h.innerErr)
+	}
+	catalog := false
+	for _, cmdline := range h.seen {
+		catalog = catalog || strings.HasSuffix(cmdline, "/catalog-rpc --require-durable")
+	}
+	if !catalog {
+		return errors.New("the catalog-rpc binary was never seen: only task or go build ran")
+	}
+	if h.accepted == 0 {
+		return errors.New("the Postgres that never answers got no connection: catalog-rpc was not stuck on it")
 	}
 
 	return nil
@@ -471,6 +495,7 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
 		heldMu sync.Mutex
 		held   []net.Conn
 	)
+	accepted := 0
 	t.Cleanup(func() {
 		heldMu.Lock()
 		defer heldMu.Unlock()
@@ -486,6 +511,7 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
 			}
 			heldMu.Lock()
 			held = append(held, c) // accepted and never answered
+			accepted++
 			heldMu.Unlock()
 		}
 	}()
@@ -530,7 +556,7 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
 	giveUp := time.After(60 * time.Second)
 	for exited := false; !exited; {
 		select {
-		case <-done:
+		case h.innerErr = <-done:
 			exited = true
 		case <-giveUp:
 			_ = cmd.Process.Kill()
@@ -540,6 +566,9 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
 		}
 	}
 	h.out = out.String()
+	heldMu.Lock()
+	h.accepted = accepted
+	heldMu.Unlock()
 
 	for deadline := time.Now().Add(4 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		h.alive = h.alive[:0]
@@ -566,7 +595,7 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
 func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
 	h := runHeldDB(t, func(addr string) string { return "postgres://app:app@" + addr + "/app?sslmode=disable" })
 	if err := h.enteredStall(); err != nil {
-		t.Fatalf("%v:\n%s", err, h.out)
+		t.Errorf("the timeout scenario did not happen: %v:\n%s", err, h.out)
 	}
 	if len(h.alive) > 0 {
 		t.Errorf("children outlived the parent test's timeout:\n  %s\ninner output:\n%s", strings.Join(h.alive, "\n  "), h.out)
@@ -578,7 +607,9 @@ func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
 // left to leak) must not pass for that scenario: the check must reject it.
 func TestTaskEntry_ParentTimeoutScenarioRejectsAnEarlyEnd(t *testing.T) {
 	h := runHeldDB(t, func(string) string { return deadPG })
-	if err := h.enteredStall(); err == nil {
+	err := h.enteredStall()
+	if err == nil {
 		t.Fatalf("a Postgres that refuses at once passed as the stall scenario:\n%s", h.out)
 	}
+	t.Logf("rejected, as it must be: %v", err)
 }
