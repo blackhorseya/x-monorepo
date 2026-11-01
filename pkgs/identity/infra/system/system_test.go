@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 )
@@ -12,8 +14,12 @@ import (
 func TestGenerators(t *testing.T) {
 	c := context.Background()
 	id, err := system.NewUUIDGenerator().NewID(c)
-	if err != nil || len(id) != 36 || id[14] != '4' {
-		t.Fatalf("id = %q, %v", id, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := uuid.Parse(id)
+	if err != nil || len(id) != 36 || u.Version() != 7 {
+		t.Fatalf("id = %q, version %d, %v; want a canonical v7", id, u.Version(), err)
 	}
 	s1, err := system.NewSecretGenerator().NewSecret(c)
 	if err != nil || !strings.HasPrefix(s1, system.SecretPrefix) || len(s1) != len(system.SecretPrefix)+43 || len(s1) < apikey.MinSecretLen {
