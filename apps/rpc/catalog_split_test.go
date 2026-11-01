@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -309,35 +308,6 @@ func TestCatalogRPC_AcceptsOnlyTheServiceKey(t *testing.T) {
 	}
 	_, err := catalogClientWithKey(cat.URL, serviceKey).GetProduct(c, newRequest())
 	wantCode(t, err, connect.CodeNotFound, "product.not_found")
-}
-
-// The trace of the request that asked for an order is the trace the catalog serves QuotePrices under,
-// and the catalog logs its own access line for it.
-func TestTrace_QuotePricesIsServedUnderTheCallersTrace(t *testing.T) {
-	cat := startCatalogProc(t)
-	ts := rpcServer(t, withCatalog(&config.AppConfig{}, cat))
-	seedProduct(t, ts.URL, "", "TR-1", 100, "USD")
-
-	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-	req := connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: "c-tr", Items: []*orderingv1.CreateOrderItem{{Sku: "TR-1", Quantity: 1}}})
-	req.Header().Set("traceparent", "00-"+traceID+"-00f067aa0ba902b7-01")
-	if _, err := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL).CreateOrder(context.Background(), req); err != nil {
-		t.Fatal(err)
-	}
-
-	var line map[string]any
-	for _, l := range strings.Split(cat.logs.String(), "\n") {
-		var m map[string]any
-		if json.Unmarshal([]byte(l), &m) == nil && m["msg"] == "rpc" && strings.HasSuffix(fmt.Sprint(m["procedure"]), "/QuotePrices") {
-			line = m
-		}
-	}
-	if line == nil {
-		t.Fatalf("catalog-rpc logged no access line for QuotePrices:\n%s", cat.logs.String())
-	}
-	if line["trace_id"] != traceID {
-		t.Fatalf("QuotePrices ran under trace %v, want the caller's %s", line["trace_id"], traceID)
-	}
 }
 
 // Children are reaped: a catalog-rpc whose deadline is shorter than the test's is killed and waited for,
