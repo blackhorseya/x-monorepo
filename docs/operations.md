@@ -225,11 +225,45 @@ worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等
 
 **要不要調**：看 `eventbus_consumer_lag` 與 `eventbus_consumer_oldest_age_seconds`。
 - 平常 lag 為 0、`oldest_age` 幾乎都在一個間隔之內：剩下的主要延遲就是輪詢等待（最多約一個間隔），要更低才縮間隔（如 100ms）。
-- lag 持續 > 0 且 `oldest_age` 遠大於間隔：瓶頸是 handler 吞吐，不是輪詢；縮間隔沒用，該加 replica（Helm `worker.autoscaling`）或看 handler。
+- lag 持續 > 0 且 `oldest_age` 遠大於間隔：瓶頸是 handler 吞吐，不是輪詢；縮間隔沒用，先看 handler。`postgres` broker 下加 replica **沒有量到**變快（同一個 consumer group 的 2 個 replica 清 2000 筆積壓，中位數 6.00s，1 個是 5.72s，見下節「Subscriber 批次大小」）；要靠加 replica 擴充，改用 `worker.broker: redis`（本文沒有量 redis 模式的吞吐）。
 - Postgres 的 `pg_stat_database.xact_commit` 在閒置時就很高、或連線數吃緊：放大間隔（如 500ms–1s），延遲換 DB 負載。
 重送（nack）與查詢失敗後的等待仍是 library 的 1s：handler 失敗由 `Register` 的 Retry 在行程內重試，不靠 nack；DB 出錯時也不該更頻繁地打它。
 
 設定：`worker.poll_interval` / `APP_WORKER_POLL_INTERVAL`（Helm `config.worker.poll_interval`），必須 > 0。
+
+### Subscriber 批次大小（`SubscribeBatchSize`，量測結果：不調整，沒有設定）
+
+watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預設），這些訊息在同一個 transaction 裡一筆接一筆處理，cursor 最後才前進。#363 問：把它調小（10、1）能不能縮短 `reservation_latency`。**判定規則在量之前就固定**（#363），結果是**不達標，所以不加 `worker.subscribe_batch_size`、預設維持 100**。
+
+**方法**（同一台機器、同一個 commit、`worker.broker: postgres`、`worker.poll_interval` 預設 200ms；只有批次大小不同）：
+- 候選 100、10、1，照固定順序 `100→10→1→1→10→100→100→10→1` 跑三輪（每輪 3 個候選），每次執行都是新建的 database：`migrate up`、catalog-rpc、rpc、worker 起停，跑完 DROP。
+- 指標 A：`k6 run tests/k6/reservation.js -e VUS=50 -e DURATION=60s` 的 `reservation_latency` p95。
+- 指標 B：worker 停著，先建 2000 筆訂單（全部 PENDING），再啟動 worker；計時從啟動 worker 到「沒有 PENDING、全部 CONFIRMED、RESERVED 的 reservation 數等於訂單數」（`tests/k6/bench_drain.sh`，輪詢間隔 0.2s）。
+- **採用條件**：候選的 A 在三輪都比同一輪的 100 改善至少 20%，且 B 變慢不超過 25%。
+
+**批次確實有累積**（這個負載下才有意義）：另跑一次插了計數的 worker（batch 100，VUS=50，不在下面 9 輪裡），每次領到訊息的輪詢共 290 次，平均一次領 34.14 筆、97% 的輪詢領到 2 筆以上、最多 50 筆（= VUS）。
+
+**環境**：Apple M1 Max（10 核、32 GB）、macOS 26.6.2（Darwin 25.6.0）、Postgres 17.11（podman 上的 compose Postgres，與 rpc / worker / k6 同一台機器）、Go 1.27.1、k6 v2.2.0。量測 binary 建自 commit `cf828fcd94c714d63ff1e7cb70ccba8cb9384f62`（加上 `worker.subscribe_batch_size` 的暫時 knob，這個 PR 的最終內容**不含**；harness 在 `c3c7e4a0c56e7a830cbeade3ceee284ce5a940cf` 的 `tests/k6/subscribe_batch.sh`、`backlog.js`，兩者都在這個 PR 的 commit 歷史裡，隨後 revert）。**量測時這台機器不安靜**：1 分鐘 load average 在 13 到 35 之間（10 核），超過 `bench.sh` 的 1.0/核門檻；這是共用的開發機，沒有等到安靜。每次執行前後的 load 在下表。
+
+**指標 A：`reservation_latency` p95（ms）**，括號是相對同一輪的 100：
+
+| 輪 | 100 | 10 | 1 | load（各次執行前→後） |
+|---|---|---|---|---|
+| 1 | 431.05 | 412.00（-4%） | 731.10（+70%） | 13.39→14.47、14.67→15.85、15.38→23.36 |
+| 2 | 843.85 | 847.00（+0%） | 633.40（-25%） | 23.36→22.78（1）、22.78→27.59（10）、27.59→21.62（100） |
+| 3 | 9063.60 | 440.80（-95%） | 523.85（-94%） | 21.62→35.35（100）、32.92→22.67（10）、21.17→21.26（1） |
+
+**指標 B：2000 筆積壓清空秒數**，括號是相對同一輪的 100：
+
+| 輪 | 100 | 10 | 1 |
+|---|---|---|---|
+| 1 | 6.62 | 6.62（+0%） | 8.90（+34%） |
+| 2 | 6.66 | 6.66（+0%） | 10.77（+62%） |
+| 3 | 6.31 | 7.42（+18%） | 11.05（+75%） |
+
+**判定**：候選 10 在第 1 輪只改善 4%（< 20%）；候選 1 在第 1 輪反而慢 70%。兩者都沒有三輪都改善至少 20%，所以不採用，B 不必再判。候選 1 的 B 也三輪都慢了 34% 以上（超過 25%）。規則沒有允許剔除離群值，所以 100 在第 3 輪的 9063.60ms（load 35）照算；它讓 10 和 1 在第 3 輪看起來進步 94% 以上，**這一輪不能當進步的證據**，只說明在這個環境下 p95 的雜訊遠大於 20%。要再驗，得在安靜的機器上用同一組規則重跑。
+
+**順帶量：同一個 consumer group 開 2 個 replica 跑指標 B**（batch 100，順序 1、2、2、1、1、2 個 replica，秒）：1 個 replica 為 7.05、5.72、5.69（中位數 5.72）；2 個 replica 為 6.00、5.70、6.63（中位數 6.00）。**沒有量到 2 個 replica 比較快**。每個 replica 的 cursor 列是 `FOR UPDATE`（同一個 topic 的輪詢要輪流領），這是對機制的推演，沒有另外驗證；清完 2000 筆只要 6 秒左右、機器又不安靜，這組樣本也看不出小於一兩秒的差異。所以上面「要不要調」的 replica 建議改成指向 `worker.broker: redis`。
 
 ## Deploy（Helm）
 
