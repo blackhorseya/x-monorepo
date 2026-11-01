@@ -464,7 +464,7 @@ tasks:
     status: ['test -f {{shellQuote .CATALOG_CONFIG}}']
     cmds:
       - cp configs/catalog-rpc.example.yaml {{shellQuote .CATALOG_CONFIG}}
-      - 'echo "seeded {{.CATALOG_CONFIG}} from configs/catalog-rpc.example.yaml — edit it, it is gitignored"'
+      - 'echo seeded {{shellQuote .CATALOG_CONFIG}} "from configs/catalog-rpc.example.yaml — edit it, it is gitignored"'
 
   catalog-rpc:
     desc: 'build and run ./bin/catalog-rpc on :8081 (CATALOG_PORT) for `task run`, with configs/catalog-rpc.yaml (gitignored; seeded from the example; CATALOG_CONFIG=<file> to use another): postgres, log and otel come from that file, never from configs/local.yaml (OIDC, JWT, your keys). The task pins APP_CONFIG, APP_HTTP_ADDR, APP_AUTH_MODE (required) and APP_AUTH_API_KEYS (the one dev key rpc=…:admin): an exported value of those does not change it. Any other APP_* (APP_POSTGRES_URL, APP_OTEL_*…) still beats the file; a non-empty CATALOG_DATABASE_URL beats both. Needs `task migrate -- up` first (the catalog schema)'

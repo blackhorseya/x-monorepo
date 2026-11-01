@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -56,6 +57,40 @@ func (s *syncBuf) String() string {
 	return s.b.String()
 }
 
+// childBudget is how long a child process may run: never more than max, and shorter than what is
+// left of this test binary's own deadline. A `go test -timeout` panic runs no t.Cleanup, so the
+// child has to be cancelled by its own clock before that alarm, not by the test finishing.
+func childBudget(t *testing.T, max time.Duration) time.Duration {
+	t.Helper()
+	budget := max
+	if d, ok := t.Deadline(); ok {
+		if left := time.Until(d) * 3 / 4; left < budget {
+			budget = left
+		}
+	}
+	if budget <= 0 {
+		t.Fatal("no time left before the test binary's deadline")
+	}
+
+	return budget
+}
+
+// boundedCommand is exec.Command with a deadline (childBudget): at the deadline the child's whole
+// process group (task, its shell, what they started) is killed and Wait returns; WaitDelay bounds
+// the wait for an output pipe a grandchild may still hold open.
+func boundedCommand(t *testing.T, max time.Duration, dir, name string, args ...string) *exec.Cmd {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), childBudget(t, max))
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // one group: kill -pgid reaches every descendant
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
+
+	return cmd
+}
+
 // taskRun is one `task catalog-rpc` run.
 type taskRun struct {
 	port   string
@@ -97,13 +132,12 @@ func startTask(t *testing.T, binDir, config string, env map[string]string) *task
 		t.Fatal(err)
 	}
 	_, port, _ := net.SplitHostPort(freeAddr(t))
-	cmd := exec.Command("task", "-d", root, "catalog-rpc",
+	cmd := boundedCommand(t, 4*time.Minute, "", "task", "-d", root, "catalog-rpc",
 		"BIN_DIR="+binDir, "APPS=catalog-rpc", "CATALOG_PORT="+port,
 		"CATALOG_DEV_KEY="+taskDevKey, "CATALOG_CONFIG="+config)
 	cmd.Env = taskEnv(env)
 	r := &taskRun{port: port, out: &syncBuf{}, done: make(chan error, 1)}
 	cmd.Stdout, cmd.Stderr = r.out, r.out
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // one group: task, its shell and the binary
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -123,8 +157,7 @@ func startTask(t *testing.T, binDir, config string, env map[string]string) *task
 func prebuild(t *testing.T, binDir string) {
 	t.Helper()
 	root, _ := filepath.Abs("../..")
-	cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, "catalog-rpc"), "./apps/catalog-rpc")
-	cmd.Dir = root
+	cmd := boundedCommand(t, 4*time.Minute, root, "go", "build", "-o", filepath.Join(binDir, "catalog-rpc"), "./apps/catalog-rpc")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
