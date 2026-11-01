@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/application/mapper"
@@ -86,31 +88,39 @@ func (uc *ReserveStock) Execute(c context.Context, in dto.ReserveStockInput) (*d
 	return mapper.ToReservationOutput(r), nil
 }
 
-// loadStocks fetches the Stock of every distinct SKU in lines; SKUs that were
-// never stocked are left out of the map.
+// loadStocks fetches the Stock of every distinct SKU in lines in one read; SKUs
+// that were never stocked are left out of the map.
 func loadStocks(c context.Context, repo stock.Repository, lines []reservation.Line) (map[string]*stock.Stock, error) {
-	stocks := make(map[string]*stock.Stock, len(lines))
+	skus := make([]stock.SKU, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
 	for _, l := range lines {
-		if _, ok := stocks[l.SKU()]; ok {
+		if _, ok := seen[l.SKU()]; ok {
 			continue
 		}
-		s, err := repo.FindBySKU(c, stock.SKU(l.SKU()))
-		switch {
-		case err == nil:
-			stocks[l.SKU()] = s
-		case errors.Is(err, stock.ErrNotFound):
-			continue
-		default:
-			return nil, fmt.Errorf("find stock %s: %w", l.SKU(), err)
-		}
+		seen[l.SKU()] = struct{}{}
+		skus = append(skus, stock.SKU(l.SKU()))
+	}
+
+	found, err := repo.FindBySKUs(c, skus)
+	if err != nil {
+		return nil, fmt.Errorf("load stocks: %w", err)
+	}
+	stocks := make(map[string]*stock.Stock, len(found))
+	for _, s := range found {
+		stocks[s.SKU().String()] = s
 	}
 
 	return stocks, nil
 }
 
+// saveStocks writes in SKU order, so two transactions that share SKUs update
+// the rows in the same sequence instead of a random one per map iteration. That
+// orders the writes of this call only: a caller that saves for several
+// reservations in one transaction (ExpireReservations) gets the order within
+// each reservation, not across them.
 func saveStocks(c context.Context, repo stock.Repository, stocks map[string]*stock.Stock) error {
-	for sku, s := range stocks {
-		if err := repo.Save(c, s); err != nil {
+	for _, sku := range slices.Sorted(maps.Keys(stocks)) {
+		if err := repo.Save(c, stocks[sku]); err != nil {
 			return fmt.Errorf("save stock %s: %w", sku, err)
 		}
 	}

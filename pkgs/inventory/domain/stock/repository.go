@@ -16,6 +16,10 @@ type ListParams struct {
 type Repository interface {
 	// FindBySKU returns ErrNotFound when the SKU was never stocked.
 	FindBySKU(c context.Context, sku SKU) (*Stock, error)
+	// FindBySKUs returns the stocks of the given SKUs in one read, in no
+	// particular order. A SKU that was never stocked is left out, not an
+	// error; duplicates in skus are read once.
+	FindBySKUs(c context.Context, skus []SKU) ([]*Stock, error)
 	// Save inserts a never-saved stock (Version 0) or updates a loaded one,
 	// comparing Version. ErrStale when another writer won, including a second
 	// insert of the same SKU. The stored version advances on every save, but

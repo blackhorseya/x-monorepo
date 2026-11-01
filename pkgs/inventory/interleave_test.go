@@ -124,6 +124,15 @@ func (x *hookStocks) FindBySKU(c context.Context, sku stock.SKU) (*stock.Stock, 
 	return x.Repository.FindBySKU(c, sku)
 }
 
+func (x *hookStocks) FindBySKUs(c context.Context, skus []stock.SKU) ([]*stock.Stock, error) {
+	if f := x.onFind; f != nil {
+		x.onFind = nil
+		f()
+	}
+
+	return x.Repository.FindBySKUs(c, skus)
+}
+
 func (x *hookStocks) Save(c context.Context, s *stock.Stock) error {
 	if f := x.onSave; f != nil {
 		x.onSave = nil

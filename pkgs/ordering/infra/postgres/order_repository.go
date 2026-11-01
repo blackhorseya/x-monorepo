@@ -120,8 +120,9 @@ func (i *OrderRepository) FindByIDForCustomer(c context.Context, id order.ID, cu
 // ErrIdempotencyConflict (a taken id still fails with ErrDuplicate: the
 // conflict target is the key only). A loaded order is an UPDATE guarded by
 // `version = <loaded>` that bumps the version; zero rows means another writer
-// saved first → ErrStale. Items are replaced (delete + insert keeps positions
-// authoritative).
+// saved first → ErrStale. Only the orders row is updated: items are written once,
+// on insert, because no Order method changes them afterwards (Confirm, Complete
+// and Cancel move status only). A new method that edits items must write them here.
 func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
@@ -166,13 +167,13 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 			if res.RowsAffected == 0 {
 				return fmt.Errorf("update order %s: %w", o.ID(), order.ErrStale)
 			}
-			if err := tx.Where("order_id = ?", row.ID).Delete(&orderItemRow{}).Error; err != nil {
-				return fmt.Errorf("clear order items %s: %w", o.ID(), err)
-			}
+
+			return nil // items are fixed once the order exists: no domain path changes them
 		}
 		if err := tx.Create(&row.Items).Error; err != nil {
 			return fmt.Errorf("insert order items %s: %w", o.ID(), err)
 		}
+
 		return nil
 	})
 
