@@ -91,7 +91,7 @@ otel:
   insecure: true
   service_name: ""   # empty = executable name (rpc)
 
-# The catalog is its own service (apps/catalog-rpc, `task catalog-rpc`): rpc asks it over Connect and does
+# The catalog is its own service (apps/catalog-rpc, `task catalog-rpc`, which reads its own configs/catalog-rpc.yaml): rpc asks it over Connect and does
 # not start without upstream and the service key. Only apps/rpc reads this section. The key is a secret:
 # APP_CATALOG_API_KEY (`task run` sets the local dev one), never this file. See docs/config.md.
 catalog:

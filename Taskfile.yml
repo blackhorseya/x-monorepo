@@ -26,6 +26,9 @@ vars:
   # `task run` talks to the catalog service `task catalog-rpc` runs (rpc has no catalog of its own). The
   # key is the local dev one (rpc=<key>:admin in catalog-rpc's auth.api_keys); nothing here is a credential.
   CATALOG_PORT: '{{.CATALOG_PORT | default "8081"}}'
+  # Config file `task catalog-rpc` loads (APP_CONFIG). Gitignored; seeded from configs/catalog-rpc.example.yaml.
+  # Override: task catalog-rpc CATALOG_CONFIG=<file>
+  CATALOG_CONFIG: '{{.CATALOG_CONFIG | default (printf "%s/configs/catalog-rpc.yaml" .ROOT_DIR)}}'
   CATALOG_DEV_KEY: dev-catalog-service-key-0123456789abcdef
 
   BUF_VERSION: v1.74.0
@@ -456,17 +459,26 @@ tasks:
       APP_CATALOG_API_KEY: '{{.CATALOG_DEV_KEY}}'
     cmds: ['{{.BIN_DIR}}/rpc']
 
+  catalog-config:
+    desc: 'create configs/catalog-rpc.yaml from configs/catalog-rpc.example.yaml if missing'
+    status: ['test -f {{.CATALOG_CONFIG}}']
+    cmds:
+      - cp configs/catalog-rpc.example.yaml {{.CATALOG_CONFIG}}
+      - 'echo "seeded {{.CATALOG_CONFIG}} from configs/catalog-rpc.example.yaml — edit it, it is gitignored"'
+
   catalog-rpc:
-    desc: 'build and run ./bin/catalog-rpc on :8081 (CATALOG_PORT) for `task run`: Postgres from CATALOG_DATABASE_URL (default the compose one), auth required, the one dev key rpc=…:admin; defaults only (APP_CONFIG=/dev/null), so nothing of configs/local.yaml (OIDC, JWT, your keys) reaches it; OTLP goes to CATALOG_OTEL_ENDPOINT (default 127.0.0.1:4317, the compose otel-lgtm; set it empty to turn telemetry off). Needs `task migrate -- up` first (the catalog schema)'
-    deps: [build]
+    desc: 'build and run ./bin/catalog-rpc on :8081 (CATALOG_PORT) for `task run`, with configs/catalog-rpc.yaml (gitignored; seeded from the example; CATALOG_CONFIG=<file> to use another): postgres, log and otel come from that file, never from configs/local.yaml (OIDC, JWT, your keys). The Taskfile sets auth required, the one dev key rpc=…:admin and the port; CATALOG_DATABASE_URL, when set, beats postgres.url. Needs `task migrate -- up` first (the catalog schema)'
+    deps: [build, catalog-config]
     env:
-      APP_CONFIG: /dev/null
+      APP_CONFIG: '{{.CATALOG_CONFIG}}'
       APP_HTTP_ADDR: ':{{.CATALOG_PORT}}'
       APP_AUTH_MODE: required
       APP_AUTH_API_KEYS: 'rpc={{.CATALOG_DEV_KEY}}:admin'
     cmds:
-      # OTLP: ${VAR-default} (not :-) so CATALOG_OTEL_ENDPOINT= (set, empty) switches telemetry off. insecure because otel-lgtm is plaintext gRPC.
-      - APP_OTEL_ENDPOINT="${CATALOG_OTEL_ENDPOINT-127.0.0.1:4317}" APP_OTEL_INSECURE=true APP_POSTGRES_URL="${CATALOG_DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}" {{.BIN_DIR}}/catalog-rpc --require-durable
+      # Only a non-empty CATALOG_DATABASE_URL overrides the file's postgres.url (env beats file)
+      - |
+        if [ -n "${CATALOG_DATABASE_URL-}" ]; then export APP_POSTGRES_URL="$CATALOG_DATABASE_URL"; fi
+        exec {{.BIN_DIR}}/catalog-rpc --require-durable
 
   worker:
     desc: 'build and run ./bin/worker (event consumers) with configs/local.yaml; needs postgres.url'

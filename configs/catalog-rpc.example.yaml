@@ -1,12 +1,31 @@
-# Template for configs/catalog-rpc.yaml (gitignored). `task catalog-rpc` copies it there on first
-# use and loads it via APP_CONFIG (override: task catalog-rpc CATALOG_CONFIG=<file>).
+# Template for configs/catalog-rpc.yaml (gitignored): `task catalog-rpc` copies it there on first
+# use and loads it via APP_CONFIG. Another file: task catalog-rpc CATALOG_CONFIG=<file>.
+# This is catalog-rpc's own file, like its own ConfigMap in the Helm chart: it never reads
+# configs/local.yaml, whose rpc-only settings (OIDC, JWT, user keys) it would refuse or must not see.
+# env beats file beats the built-in defaults. The Taskfile sets, in env, what `task run` has to agree
+# on: http.addr (CATALOG_PORT), auth.mode=required and auth.api_keys (the one dev key rpc=…:admin,
+# shared with `task run`'s APP_CATALOG_API_KEY). CATALOG_DATABASE_URL, when set, beats postgres.url.
+#
+# Deliberately absent: auth.jwt and auth.oidc. catalog-rpc accepts static auth.api_keys only and
+# refuses to start on either (a valid token would pass the interceptor, and nothing here maps a
+# token to a role); never put a user's key in auth.api_keys either.
 
 http:
   addr: ":8081"
 
 postgres:
+  # the compose Postgres; `task migrate -- up` creates the catalog schema in it
   url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
 
 log:
   level: debug
   format: text
+
+otel:
+  # OTLP/gRPC — `task compose-up` runs grafana/otel-lgtm here (Grafana :3000). Empty = telemetry off
+  # (nothing is exported, no "otel exporting" log). A collector that is not up does not stop it
+  # from starting: readyz stays 200.
+  endpoint: 127.0.0.1:4317
+  insecure: true     # otel-lgtm is plaintext gRPC
+  # keep it empty: the service name is then the executable's (catalog-rpc), not rpc's
+  service_name: ""
