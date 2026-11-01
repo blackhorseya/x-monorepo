@@ -80,7 +80,7 @@ func childBudget(t *testing.T, max time.Duration) time.Duration {
 // boundedCommand is exec.Command with a deadline (childBudget): at the deadline the child's whole
 // process group (task, its shell, what they started) is killed and Wait returns; WaitDelay bounds
 // the wait for an output pipe a grandchild may still hold open.
-func boundedCommand(t *testing.T, max time.Duration, dir, name string, args ...string) *exec.Cmd {
+func boundedCommand(t *testing.T, max time.Duration, dir, name string, args ...string) (*exec.Cmd, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), childBudget(t, max))
 	t.Cleanup(cancel)
@@ -90,7 +90,7 @@ func boundedCommand(t *testing.T, max time.Duration, dir, name string, args ...s
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second
 
-	return cmd
+	return cmd, cancel
 }
 
 // taskRun is one `task catalog-rpc` run.
@@ -100,6 +100,7 @@ type taskRun struct {
 	done   chan error
 	exited bool
 	err    error
+	cancel context.CancelFunc // the same cancellation the deadline uses: kills the whole group
 }
 
 // taskEnv: the child's parent environment, without anything of the developer's own
@@ -134,11 +135,11 @@ func startTask(t *testing.T, binDir, config string, env map[string]string) *task
 		t.Fatal(err)
 	}
 	_, port, _ := net.SplitHostPort(freeAddr(t))
-	cmd := boundedCommand(t, 4*time.Minute, "", "task", "-d", root, "catalog-rpc",
+	cmd, cancel := boundedCommand(t, 4*time.Minute, "", "task", "-d", root, "catalog-rpc",
 		"BIN_DIR="+binDir, "APPS=catalog-rpc", "CATALOG_PORT="+port,
 		"CATALOG_DEV_KEY="+taskDevKey, "CATALOG_CONFIG="+config)
 	cmd.Env = taskEnv(env)
-	r := &taskRun{port: port, out: &syncBuf{}, done: make(chan error, 1)}
+	r := &taskRun{port: port, out: &syncBuf{}, done: make(chan error, 1), cancel: cancel}
 	cmd.Stdout, cmd.Stderr = r.out, r.out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -159,7 +160,7 @@ func startTask(t *testing.T, binDir, config string, env map[string]string) *task
 func prebuild(t *testing.T, binDir string) {
 	t.Helper()
 	root, _ := filepath.Abs("../..")
-	cmd := boundedCommand(t, 4*time.Minute, root, "go", "build", "-o", filepath.Join(binDir, "catalog-rpc"), "./apps/catalog-rpc")
+	cmd, _ := boundedCommand(t, 4*time.Minute, root, "go", "build", "-o", filepath.Join(binDir, "catalog-rpc"), "./apps/catalog-rpc")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
@@ -407,21 +408,42 @@ func TestTaskEntry_ConfigPath(t *testing.T) {
 }
 
 // TestTaskEntry_HeldDB is the inner half of the timeout tests below: a task run against the
-// Postgres in TASK_ENTRY_HELD_DB. It only runs when those tests drive it.
+// Postgres in TASK_ENTRY_HELD_DB. It only runs when those tests drive it. Its own clock is no part
+// of the scenario: it waits for the outer test to say catalog-rpc is stuck on that Postgres
+// (the marker file), then cancels the context the deadline would cancel, and the whole group must go.
 func TestTaskEntry_HeldDB(t *testing.T) {
-	url := os.Getenv("TASK_ENTRY_HELD_DB")
+	url, marker := os.Getenv("TASK_ENTRY_HELD_DB"), os.Getenv("TASK_ENTRY_STALL_MARKER")
 	if url == "" {
 		t.Skip("driven by TestTaskEntry_ParentTimeoutLeavesNoChildren")
 	}
 	r := startTask(t, os.Getenv("TASK_ENTRY_BIN"), dedicatedFile(t, t.TempDir(), "catalog-rpc.yaml", url), nil)
-	if r.settle(t) {
-		t.Fatalf("catalog-rpc served: it was not stuck on its Postgres:\n%s", r.out)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		select {
+		case r.err = <-r.done:
+			r.exited = true
+			t.Fatalf("the run ended by itself (%v) before the stall was observed:\n%s", r.err, r.out)
+		case <-time.After(50 * time.Millisecond):
+		}
+		if res, err := http.Get("http://127.0.0.1:" + r.port + "/api/readyz"); err == nil {
+			_ = res.Body.Close()
+			if res.StatusCode == http.StatusOK {
+				t.Fatalf("catalog-rpc served: it was not stuck on its Postgres:\n%s", r.out)
+			}
+		}
 	}
-	// The one way out of this scenario is the harness's own deadline killing the group. An exit by
-	// itself (task's 201 after catalog-rpc refused to start) means the scenario never happened.
+	r.cancel()
+	select {
+	case r.err = <-r.done:
+		r.exited = true
+	case <-time.After(15 * time.Second):
+		t.Fatalf("the group was not killed 15s after the cancel:\n%s", r.out)
+	}
 	var ee *exec.ExitError
 	if !errors.As(r.err, &ee) || !ee.Sys().(syscall.WaitStatus).Signaled() || ee.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
-		t.Fatalf("the run ended by itself (%v), not by the deadline kill:\n%s", r.err, r.out)
+		t.Fatalf("the run did not end by the group kill (%v):\n%s", r.err, r.out)
 	}
 }
 
@@ -456,6 +478,18 @@ type heldRun struct {
 	out      string         // its output
 	innerErr error          // how the inner test process ended (nil: it passed)
 	accepted int            // connections the never-answering Postgres accepted
+	notified bool           // the inner test was told that catalog-rpc is stuck on it
+}
+
+// sawCatalog: the catalog-rpc binary itself (not task, not go build) is among the descendants seen.
+func (h heldRun) sawCatalog() bool {
+	for _, cmdline := range h.seen {
+		if strings.HasSuffix(cmdline, "/catalog-rpc --require-durable") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // enteredStall says whether the run really went through the scenario it claims to test, so that
@@ -463,14 +497,13 @@ type heldRun struct {
 // the inner test passed (it only does when the harness's deadline killed the stuck group), the
 // catalog-rpc binary itself was seen running, and it connected to the Postgres that never answers.
 func (h heldRun) enteredStall() error {
+	if !h.notified {
+		return errors.New("never reached the held DB: catalog-rpc did not connect to the Postgres that never answers")
+	}
 	if h.innerErr != nil {
 		return fmt.Errorf("the inner test did not pass (%w)", h.innerErr)
 	}
-	catalog := false
-	for _, cmdline := range h.seen {
-		catalog = catalog || strings.HasSuffix(cmdline, "/catalog-rpc --require-durable")
-	}
-	if !catalog {
+	if !h.sawCatalog() {
 		return errors.New("the catalog-rpc binary was never seen: only task or go build ran")
 	}
 	if h.accepted == 0 {
@@ -533,8 +566,9 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string, slowBuild time.
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(exe, "-test.run=^TestTaskEntry_HeldDB$", "-test.timeout=10s", "-test.v")
-	cmd.Env = append(taskEnv(nil),
+	marker := filepath.Join(t.TempDir(), "stalled")
+	cmd := exec.Command(exe, "-test.run=^TestTaskEntry_HeldDB$", "-test.timeout=90s", "-test.v") // 90s: only a fail-safe
+	cmd.Env = append(taskEnv(nil), "TASK_ENTRY_STALL_MARKER="+marker,
 		"TASK_ENTRY_HELD_DB="+dbURL(hold.Addr().String()),
 		"TASK_ENTRY_BIN="+bin, "TEST_DATABASE_URL="+pgtest.URL(t), "PATH="+path)
 	var out syncBuf
@@ -566,16 +600,29 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string, slowBuild time.
 			}
 		}
 	}
-	giveUp := time.After(60 * time.Second)
+	// The clock is the events: startup (task, its build, catalog-rpc connecting to the held
+	// Postgres) gets up to 60s and then fails as "never reached the held DB"; once catalog-rpc is seen
+	// and the Postgres has accepted its connection, the inner test is told to cancel.
+	startup := time.After(60 * time.Second)
 	for exited := false; !exited; {
 		select {
 		case h.innerErr = <-done:
 			exited = true
-		case <-giveUp:
-			_ = cmd.Process.Kill()
-			t.Fatalf("the inner test did not end in 60s:\n%s", &out)
+		case <-startup:
+			if !h.notified {
+				_ = cmd.Process.Kill() // the run is reported as never having reached the held DB
+			}
 		case <-time.After(100 * time.Millisecond):
 			track()
+			heldMu.Lock()
+			h.accepted = accepted
+			heldMu.Unlock()
+			if !h.notified && h.accepted > 0 && h.sawCatalog() {
+				h.notified = true
+				if err := os.WriteFile(marker, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 		}
 	}
 	h.out = out.String()
