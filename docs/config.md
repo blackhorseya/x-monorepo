@@ -14,7 +14,7 @@
 | `config.example.yaml` | 有 commit 的範本，內容就是本機開發 profile（text log、`/api/docs` 開、`postgres.url` 指向 compose） |
 | `local.yaml` | gitignored。`task run` / `task migrate` 第一次會從 example 複製過來（`task config`），之後透過 `APP_CONFIG` 載入；隨意改 |
 | `catalog-rpc.example.yaml` | `apps/catalog-rpc` 專屬的範本：`http`、`postgres`、`log`、`otel`（`127.0.0.1:4317`、`insecure: true`）。**沒有** `auth.jwt`、`auth.oidc`（catalog-rpc 遇到就拒啟動），也不放使用者的 key |
-| `catalog-rpc.yaml` | gitignored。`task catalog-rpc` 第一次從上面那份複製（`task catalog-config`），之後透過 `APP_CONFIG` 載入；`CATALOG_CONFIG=<file>` 換檔。`task catalog-rpc` 不讀 `local.yaml`。Taskfile 的 env（`http.addr`、`auth.mode`、dev key）蓋過它，`CATALOG_DATABASE_URL` 有設才蓋過 `postgres.url` |
+| `catalog-rpc.yaml` | gitignored。`task catalog-rpc` 第一次從上面那份複製（`task catalog-config`），之後透過 `APP_CONFIG` 載入；`CATALOG_CONFIG=<file>` 換檔。`task catalog-rpc` 不讀 `local.yaml`。task 固定 `APP_CONFIG`、`APP_HTTP_ADDR`、`APP_AUTH_MODE`、`APP_AUTH_API_KEYS`（父 shell 匯出同名值也不改變）；非空的 `CATALOG_DATABASE_URL` 蓋過 `postgres.url` 與 `APP_POSTGRES_URL`；其餘 `APP_*` 維持 env > 檔案（優先序見 `docs/operations.md` 本機開發） |
 | 其他 | `configs/*` 全部 gitignored；`task run CONFIG=<file>` 可指定別的檔 |
 
 > 注意：env 不能把 key 清成空字串（viper 忽略空 env），所以要「不接 DB」請改 local.yaml 的 `postgres.url`，不要 `APP_POSTGRES_URL=`。

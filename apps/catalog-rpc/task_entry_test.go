@@ -168,7 +168,7 @@ func (r *taskRun) listProducts(t *testing.T, key string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	_, _ = io.Copy(io.Discard, res.Body)
 
 	return res.StatusCode

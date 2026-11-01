@@ -2,9 +2,11 @@
 # use and loads it via APP_CONFIG. Another file: task catalog-rpc CATALOG_CONFIG=<file>.
 # This is catalog-rpc's own file, like its own ConfigMap in the Helm chart: it never reads
 # configs/local.yaml, whose rpc-only settings (OIDC, JWT, user keys) it would refuse or must not see.
-# env beats file beats the built-in defaults. The Taskfile sets, in env, what `task run` has to agree
-# on: http.addr (CATALOG_PORT), auth.mode=required and auth.api_keys (the one dev key rpc=…:admin,
-# shared with `task run`'s APP_CATALOG_API_KEY). CATALOG_DATABASE_URL, when set, beats postgres.url.
+# `task catalog-rpc` pins APP_CONFIG (this file), APP_HTTP_ADDR (CATALOG_PORT), APP_AUTH_MODE=required
+# and APP_AUTH_API_KEYS (the one dev key rpc=…:admin, shared with `task run`'s APP_CATALOG_API_KEY): an
+# exported value of those changes nothing, so http.addr and auth below are not what runs. Every other
+# APP_* still beats this file (env > file > defaults); a non-empty CATALOG_DATABASE_URL beats both it and
+# APP_POSTGRES_URL. docs/operations.md has the full order.
 #
 # Deliberately absent: auth.jwt and auth.oidc. catalog-rpc accepts static auth.api_keys only and
 # refuses to start on either (a valid token would pass the interceptor, and nothing here maps a
