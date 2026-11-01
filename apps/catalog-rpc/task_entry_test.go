@@ -482,10 +482,23 @@ func (h heldRun) enteredStall() error {
 
 // runHeldDB runs TestTaskEntry_HeldDB as a process of its own, against the Postgres URL dbURL
 // builds from the address of a listener that accepts connections and never answers.
-func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
+func runHeldDB(t *testing.T, dbURL func(heldAddr string) string, slowBuild time.Duration) heldRun {
 	t.Helper()
 	bin := t.TempDir()
 	prebuild(t, bin)
+	path := os.Getenv("PATH")
+	if slowBuild > 0 { // the inner task's own `go build` is slow: a legal, merely slow start
+		goBin, err := exec.LookPath("go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrap := t.TempDir()
+		script := "#!/bin/sh\nif [ \"$1\" = build ]; then sleep " + strconv.Itoa(int(slowBuild.Seconds())) + "; fi\nexec " + goBin + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(wrap, "go"), []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path = wrap + string(os.PathListSeparator) + path
+	}
 	hold, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -523,7 +536,7 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
 	cmd := exec.Command(exe, "-test.run=^TestTaskEntry_HeldDB$", "-test.timeout=10s", "-test.v")
 	cmd.Env = append(taskEnv(nil),
 		"TASK_ENTRY_HELD_DB="+dbURL(hold.Addr().String()),
-		"TASK_ENTRY_BIN="+bin, "TEST_DATABASE_URL="+pgtest.URL(t))
+		"TASK_ENTRY_BIN="+bin, "TEST_DATABASE_URL="+pgtest.URL(t), "PATH="+path)
 	var out syncBuf
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
@@ -586,6 +599,20 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
 	return h
 }
 
+func heldURL(addr string) string { return "postgres://app:app@" + addr + "/app?sslmode=disable" }
+
+// A legal but slow start (the inner task's go build takes 9s here) is the same scenario, only
+// later: the stall is cleaned up all the same, and the run must not fail for being slow.
+func TestTaskEntry_ParentTimeoutWithASlowBuild(t *testing.T) {
+	h := runHeldDB(t, heldURL, 9*time.Second)
+	if err := h.enteredStall(); err != nil {
+		t.Errorf("the timeout scenario did not happen: %v:\n%s", err, h.out)
+	}
+	if len(h.alive) > 0 {
+		t.Errorf("children outlived the parent test's timeout:\n  %s", strings.Join(h.alive, "\n  "))
+	}
+}
+
 // The harness starts task, its shell and catalog-rpc in a process group of their own. When the
 // test binary is killed by `go test -timeout` (a panic: no t.Cleanup runs) they must not outlive
 // it: the children's budget is shorter than the parent's remaining deadline, and at the deadline
@@ -593,7 +620,7 @@ func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
 // connections and never answers, so catalog-rpc is stuck; what is left of that process tree
 // afterwards is what the harness leaked.
 func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
-	h := runHeldDB(t, func(addr string) string { return "postgres://app:app@" + addr + "/app?sslmode=disable" })
+	h := runHeldDB(t, heldURL, 0)
 	if err := h.enteredStall(); err != nil {
 		t.Errorf("the timeout scenario did not happen: %v:\n%s", err, h.out)
 	}
@@ -606,7 +633,7 @@ func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
 // that never answers. A Postgres that refuses at once (catalog-rpc exits by itself, nothing is
 // left to leak) must not pass for that scenario: the check must reject it.
 func TestTaskEntry_ParentTimeoutScenarioRejectsAnEarlyEnd(t *testing.T) {
-	h := runHeldDB(t, func(string) string { return deadPG })
+	h := runHeldDB(t, func(string) string { return deadPG }, 0)
 	err := h.enteredStall()
 	if err == nil {
 		t.Fatalf("a Postgres that refuses at once passed as the stall scenario:\n%s", h.out)
