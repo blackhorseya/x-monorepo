@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -22,6 +21,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/domain/reservation"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
 )
 
 // Topics published by inventory: the proto full names.
@@ -54,7 +54,11 @@ func (h *Publisher) Publish(c context.Context, events ...reservation.Event) erro
 			return fmt.Errorf("encode %s: %w", topic, err)
 		}
 
-		msg := message.NewMessageWithContext(c, watermill.NewUUID(), payload)
+		id, err := idgen.New()
+		if err != nil {
+			return fmt.Errorf("message id for %s: %w", topic, err)
+		}
+		msg := message.NewMessageWithContext(c, id, payload)
 		msg.Metadata.Set(eventbus.MetaKey, e.AggregateID())
 		msg.Metadata.Set(eventbus.MetaOccurredAt, e.OccurredAt().UTC().Format("2006-01-02T15:04:05.999999999Z07:00"))
 		if err := h.pub.Publish(topic, msg); err != nil {

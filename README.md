@@ -162,7 +162,7 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 
 | header | 內容 |
 |---|---|
-| `X-Request-Id` | client 有帶就原樣回（≤128 字），沒帶就 server 產 UUID；`server.RequestID(c)` 拿得到，request log 也有 `request_id` |
+| `X-Request-Id` | client 有帶就原樣回（≤128 字），沒帶就 server 產 UUID v7；`server.RequestID(c)` 拿得到，request log 也有 `request_id` |
 | `X-Trace-Id` | OTel trace id（有 span 才有；`otel.endpoint` 空時沒有），直接貼到 Tempo / Loki `| trace_id="…"` |
 | `traceparent` | W3C trace context。**rpc 不延續請求帶進來的 `traceparent`**（開 SDK：新 root trace，呼叫端的 span 只留成 link，查 trace 用上一列的 `X-Trace-Id`；`otel.endpoint` 空：不讀也不寫 trace header，回應沒有 `X-Trace-Id`），catalog-rpc 才延續 rpc 的（`docs/observability.md`）。回應這一份：`otelconnect.WithPropagateResponseHeader()` 回給瀏覽器端 tracing（otelconnect 只在成功回應設；錯誤看 `X-Trace-Id`） |
 
@@ -191,7 +191,7 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 
 | 層 | 負責 | 位置 |
 |---|---|---|
-| domain | 排序鍵固定 `(created_at desc, id desc)`（UUID 不可排序，`id` 只當 tie-breaker）；`order.Cursor` 是型別，`ListParams` 帶 `Limit` / `After` | `domain/order/cursor.go`、`repository.go` |
+| domain | 排序鍵固定 `(created_at desc, id desc)`（`id` 只當 tie-breaker；新 ID 是 UUID v7，舊資料仍是 v4，兩者並存且都當不透明字串，不得只靠 `id` 排序、也不保證 ID 單調遞增——跨 pod 的 v7 只有毫秒級順序。ID 不是憑證：v7 前 48 bit 是建立時間，API key secret 由 `SecretGenerator` 另產 256 bit 全隨機值）；`order.Cursor` 是型別，`ListParams` 帶 `Limit` / `After` | `domain/order/cursor.go`、`repository.go` |
 | platform | `pagination.Clamp`（0 → 預設 20、上限 100、負數 → `InvalidArgument`）與 `EncodeToken` / `DecodeToken`（base64url(JSON)，不透明但不是秘密） | `platform/pagination` |
 | usecase | token 在這裡鑄造與驗證（所有 adapter 共用同一契約）；payload **包含當時的 filter**，換了 filter 還帶舊 token → `pagination.invalid_token` | `usecase/list_orders.go` |
 | infra | SQL `WHERE (created_at, id) < (?, ?) ORDER BY created_at DESC, id DESC LIMIT n+1`：多抓一筆判斷有沒有下一頁，不 COUNT；memory 版做一樣的比較 | `infra/postgres/order_repository.go`、migration `0002` 的兩個 composite index |
