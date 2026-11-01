@@ -26,19 +26,23 @@ func TestOrderRepository_List_MixedV4V7_Postgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer telCleanup()
+	t.Cleanup(telCleanup)
 	db, cleanup, err := platformpg.NewDB(cfg, tel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
+	t.Cleanup(cleanup) // registered first, so it runs last: after the TRUNCATE below
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.WithContext(c).Exec(`TRUNCATE ordering.orders CASCADE`).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.WithContext(context.Background()).Exec(`TRUNCATE ordering.orders CASCADE`).Error })
+	t.Cleanup(func() {
+		if err := db.WithContext(context.Background()).Exec(`TRUNCATE ordering.orders CASCADE`).Error; err != nil {
+			t.Errorf("cleanup: truncate ordering.orders: %v", err)
+		}
+	})
 
 	repo := postgres.NewOrderRepository(db)
 	base := time.Now().UTC().Truncate(time.Microsecond)

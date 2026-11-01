@@ -20,12 +20,12 @@ func TestInbox_MixedV4V7(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer telCleanup()
+	t.Cleanup(telCleanup)
 	db, cleanup, err := postgres.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
+	t.Cleanup(cleanup) // registered first, so it runs last: after the DROP below
 	for _, q := range []string{
 		"DROP SCHEMA IF EXISTS inboxmixed CASCADE", "CREATE SCHEMA inboxmixed",
 		"CREATE TABLE inboxmixed.inbox (message_id VARCHAR(36) PRIMARY KEY, consumed_at TIMESTAMPTZ NOT NULL DEFAULT now())",

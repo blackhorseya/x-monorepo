@@ -42,8 +42,8 @@ func NewMetaInterceptor() connect.UnaryInterceptorFunc {
 			if rid == "" || len(rid) > maxRequestIDLen {
 				var err error
 				if rid, err = idgen.New(); err != nil {
-					// The system's randomness source failed: nothing else on this
-					// request can be trusted to work either. Fail it as internal.
+					// The system's randomness source failed. There is no v4 fallback:
+					// every new id is v7, so fail the request as internal.
 					return nil, connect.NewError(connect.CodeInternal, errors.New("internal error"))
 				}
 			}
