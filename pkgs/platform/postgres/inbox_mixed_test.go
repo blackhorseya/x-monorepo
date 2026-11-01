@@ -4,12 +4,42 @@ import (
 	"context"
 	"testing"
 
+	"gorm.io/gorm"
+
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
+
+// dropInboxMixed is the fixture's purge. It returns the error so the caller
+// can fail the test: a purge that cannot run must not look like a clean one.
+func dropInboxMixed(db *gorm.DB) error {
+	return db.WithContext(context.Background()).Exec("DROP SCHEMA IF EXISTS inboxmixed CASCADE").Error
+}
+
+// Fault injection: with the pool already closed (the order the earlier
+// defer-based cleanup ran in) the purge must report an error, not succeed
+// silently and leave the schema behind.
+func TestInboxMixedPurge_ReportsAClosedPool(t *testing.T) {
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(telCleanup)
+	db, cleanup, err := postgres.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dropInboxMixed(db); err != nil { // positive control: an open pool purges fine
+		t.Fatalf("purge on an open pool: %v", err)
+	}
+	cleanup()
+	if err := dropInboxMixed(db); err == nil {
+		t.Fatal("purge on a closed pool returned nil: a failed cleanup would pass silently")
+	}
+}
 
 // Message ids are opaque strings: a v4 id from before the v7 switch and a v7
 // id from after it dedupe the same way, and neither collides with the other.
@@ -35,7 +65,9 @@ func TestInbox_MixedV4V7(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() {
-		_ = db.WithContext(context.Background()).Exec("DROP SCHEMA IF EXISTS inboxmixed CASCADE").Error
+		if err := dropInboxMixed(db); err != nil {
+			t.Errorf("cleanup: drop schema inboxmixed: %v", err)
+		}
 	})
 	inbox := postgres.NewInbox(db, "inboxmixed")
 
