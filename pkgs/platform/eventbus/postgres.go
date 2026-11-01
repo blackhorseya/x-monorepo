@@ -119,6 +119,16 @@ type SubscriberOption func(*subscriberOptions)
 
 type subscriberOptions struct {
 	pollInterval time.Duration
+	batchSize    int
+}
+
+// WithSubscribeBatchSize is how many outbox rows one poll claims at most
+// (watermill-sql SubscribeBatchSize). The rows of a poll are handled one after
+// the other inside the poll's transaction, which also holds the consumer
+// group's offsets row `FOR UPDATE`, and the cursor moves once at the end. 0
+// keeps the library's 100.
+func WithSubscribeBatchSize(n int) SubscriberOption {
+	return func(o *subscriberOptions) { o.batchSize = n }
 }
 
 // WithPollInterval is how long the subscriber waits before it asks the outbox
@@ -146,9 +156,12 @@ func subscriberConfig(consumerGroup string, offsetsAdapter wsql.OffsetsAdapter, 
 		opt(&o)
 	}
 
+	sa := schema()
+	sa.SubscribeBatchSize = o.batchSize
+
 	return wsql.SubscriberConfig{
 		ConsumerGroup:    consumerGroup,
-		SchemaAdapter:    schema(),
+		SchemaAdapter:    sa,
 		OffsetsAdapter:   offsetsAdapter,
 		PollInterval:     o.pollInterval,
 		InitializeSchema: false, // DDL ships in the BC's migrations
