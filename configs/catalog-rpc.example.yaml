@@ -1,0 +1,12 @@
+# Template for configs/catalog-rpc.yaml (gitignored). `task catalog-rpc` copies it there on first
+# use and loads it via APP_CONFIG (override: task catalog-rpc CATALOG_CONFIG=<file>).
+
+http:
+  addr: ":8081"
+
+postgres:
+  url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+
+log:
+  level: debug
+  format: text
