@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -404,9 +405,8 @@ func TestTaskEntry_ConfigPath(t *testing.T) {
 	})
 }
 
-// TestTaskEntry_HeldDB is the inner half of TestTaskEntry_ParentTimeoutLeavesNoChildren: a task run
-// whose Postgres never answers, so the catalog-rpc it started never gets ready. It only runs when
-// that test drives it.
+// TestTaskEntry_HeldDB is the inner half of the timeout tests below: a task run against the
+// Postgres in TASK_ENTRY_HELD_DB. It only runs when those tests drive it.
 func TestTaskEntry_HeldDB(t *testing.T) {
 	url := os.Getenv("TASK_ENTRY_HELD_DB")
 	if url == "" {
@@ -439,13 +439,27 @@ func psRows(t *testing.T) map[int][2]string {
 	return rows
 }
 
-// The harness starts task, its shell and catalog-rpc in a process group of their own. When the
-// test binary is killed by `go test -timeout` (a panic: no t.Cleanup runs) they must not outlive
-// it: the children's budget is shorter than the parent's remaining deadline, and at the deadline
-// the whole group is killed and waited for. The inner test (TestTaskEntry_HeldDB) is run as its own
-// process with a short -timeout against a Postgres that accepts connections and never answers, so
-// catalog-rpc is stuck; what is left of that process tree afterwards is what the harness leaked.
-func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
+// heldRun is what one run of TestTaskEntry_HeldDB as a process of its own (with a short
+// -test.timeout, so the go test alarm is what ends it) left behind.
+type heldRun struct {
+	seen  map[int]string // every descendant seen while it ran: pid -> command
+	alive []string       // those still alive 4s after it ended
+	out   string         // its output
+}
+
+// enteredStall says whether the run really went through the scenario it claims to test.
+func (h heldRun) enteredStall() error {
+	if len(h.seen) == 0 {
+		return errors.New("no child was ever seen: the inner test did not start task")
+	}
+
+	return nil
+}
+
+// runHeldDB runs TestTaskEntry_HeldDB as a process of its own, against the Postgres URL dbURL
+// builds from the address of a listener that accepts connections and never answers.
+func runHeldDB(t *testing.T, dbURL func(heldAddr string) string) heldRun {
+	t.Helper()
 	bin := t.TempDir()
 	prebuild(t, bin)
 	hold, err := net.Listen("tcp", "127.0.0.1:0")
@@ -482,7 +496,7 @@ func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
 	}
 	cmd := exec.Command(exe, "-test.run=^TestTaskEntry_HeldDB$", "-test.timeout=10s", "-test.v")
 	cmd.Env = append(taskEnv(nil),
-		"TASK_ENTRY_HELD_DB=postgres://app:app@"+hold.Addr().String()+"/app?sslmode=disable",
+		"TASK_ENTRY_HELD_DB="+dbURL(hold.Addr().String()),
 		"TASK_ENTRY_BIN="+bin, "TEST_DATABASE_URL="+pgtest.URL(t))
 	var out syncBuf
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -494,9 +508,9 @@ func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
 
 	// Whatever descends from the inner test while it runs; remembered with its command, so a
 	// recycled pid is not mistaken for a survivor.
-	seen := map[int]string{}
+	h := heldRun{seen: map[int]string{}}
 	t.Cleanup(func() { // the leak must not outlive this test either
-		for pid := range seen {
+		for pid := range h.seen {
 			_ = syscall.Kill(-pid, syscall.SIGKILL)
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
@@ -508,7 +522,7 @@ func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
 			changed = false
 			for pid, row := range rows {
 				if ppid, _ := strconv.Atoi(row[0]); family[ppid] && !family[pid] {
-					family[pid], seen[pid], changed = true, row[1], true
+					family[pid], h.seen[pid], changed = true, row[1], true
 				}
 			}
 		}
@@ -525,24 +539,46 @@ func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
 			track()
 		}
 	}
-	if len(seen) == 0 {
-		t.Fatalf("no child was ever seen: the inner test did not start task:\n%s", &out)
-	}
+	h.out = out.String()
 
-	var alive []string
 	for deadline := time.Now().Add(4 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		alive = alive[:0]
+		h.alive = h.alive[:0]
 		rows := psRows(t)
-		for pid, cmdline := range seen {
+		for pid, cmdline := range h.seen {
 			if row, ok := rows[pid]; ok && row[1] == cmdline {
-				alive = append(alive, strconv.Itoa(pid)+" "+cmdline)
+				h.alive = append(h.alive, strconv.Itoa(pid)+" "+cmdline)
 			}
 		}
-		if len(alive) == 0 || time.Now().After(deadline) {
+		if len(h.alive) == 0 || time.Now().After(deadline) {
 			break
 		}
 	}
-	if len(alive) > 0 {
-		t.Errorf("children outlived the parent test's timeout:\n  %s\ninner output:\n%s", strings.Join(alive, "\n  "), &out)
+
+	return h
+}
+
+// The harness starts task, its shell and catalog-rpc in a process group of their own. When the
+// test binary is killed by `go test -timeout` (a panic: no t.Cleanup runs) they must not outlive
+// it: the children's budget is shorter than the parent's remaining deadline, and at the deadline
+// the whole group is killed and waited for. The inner test runs against a Postgres that accepts
+// connections and never answers, so catalog-rpc is stuck; what is left of that process tree
+// afterwards is what the harness leaked.
+func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
+	h := runHeldDB(t, func(addr string) string { return "postgres://app:app@" + addr + "/app?sslmode=disable" })
+	if err := h.enteredStall(); err != nil {
+		t.Fatalf("%v:\n%s", err, h.out)
+	}
+	if len(h.alive) > 0 {
+		t.Errorf("children outlived the parent test's timeout:\n  %s\ninner output:\n%s", strings.Join(h.alive, "\n  "), h.out)
+	}
+}
+
+// The cleanup assertion above only means something if the run really was stuck on the Postgres
+// that never answers. A Postgres that refuses at once (catalog-rpc exits by itself, nothing is
+// left to leak) must not pass for that scenario: the check must reject it.
+func TestTaskEntry_ParentTimeoutScenarioRejectsAnEarlyEnd(t *testing.T) {
+	h := runHeldDB(t, func(string) string { return deadPG })
+	if err := h.enteredStall(); err == nil {
+		t.Fatalf("a Postgres that refuses at once passed as the stall scenario:\n%s", h.out)
 	}
 }
