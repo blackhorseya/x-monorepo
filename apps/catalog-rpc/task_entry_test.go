@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
 // These tests drive `task catalog-rpc` itself, the real entry point (#358/#361): the Taskfile
@@ -280,7 +283,7 @@ func TestTaskEntry_ConfigPath(t *testing.T) {
 	}
 	root, _ := filepath.Abs("../..")
 
-	for _, form := range []string{"absolute", "relative", "with space"} {
+	for _, form := range []string{"absolute", "relative", "with space", `double quote`} {
 		dir := t.TempDir()
 		if form == "with space" {
 			dir = filepath.Join(dir, "a dir", "with space")
@@ -289,6 +292,9 @@ func TestTaskEntry_ConfigPath(t *testing.T) {
 			}
 		}
 		path := func(name string) string {
+			if form == "double quote" { // a legal file name: every place that uses the path must keep it one word
+				name = strings.Replace(name, ".yaml", `"q.yaml`, 1)
+			}
 			p := filepath.Join(dir, name)
 			if form == "relative" {
 				rel, err := filepath.Rel(root, p)
@@ -363,4 +369,147 @@ func TestTaskEntry_ConfigPath(t *testing.T) {
 			t.Error("the file exists")
 		}
 	})
+}
+
+// TestTaskEntry_HeldDB is the inner half of TestTaskEntry_ParentTimeoutLeavesNoChildren: a task run
+// whose Postgres never answers, so the catalog-rpc it started never gets ready. It only runs when
+// that test drives it.
+func TestTaskEntry_HeldDB(t *testing.T) {
+	url := os.Getenv("TASK_ENTRY_HELD_DB")
+	if url == "" {
+		t.Skip("driven by TestTaskEntry_ParentTimeoutLeavesNoChildren")
+	}
+	r := startTask(t, os.Getenv("TASK_ENTRY_BIN"), dedicatedFile(t, t.TempDir(), "catalog-rpc.yaml", url), nil)
+	r.settle(t)
+}
+
+// psRows is pid -> (ppid, command) of every process.
+func psRows(t *testing.T) map[int][2]string {
+	t.Helper()
+	out, err := exec.Command("ps", "-Ao", "pid=,ppid=,command=").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[int][2]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		if err1 != nil {
+			continue
+		}
+		rows[pid] = [2]string{f[1], strings.Join(f[2:], " ")}
+	}
+
+	return rows
+}
+
+// The harness starts task, its shell and catalog-rpc in a process group of their own. When the
+// test binary is killed by `go test -timeout` (a panic: no t.Cleanup runs) they must not outlive
+// it: the children's budget is shorter than the parent's remaining deadline, and at the deadline
+// the whole group is killed and waited for. The inner test (TestTaskEntry_HeldDB) is run as its own
+// process with a short -timeout against a Postgres that accepts connections and never answers, so
+// catalog-rpc is stuck; what is left of that process tree afterwards is what the harness leaked.
+func TestTaskEntry_ParentTimeoutLeavesNoChildren(t *testing.T) {
+	bin := t.TempDir()
+	prebuild(t, bin)
+	hold, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hold.Close() })
+	var (
+		heldMu sync.Mutex
+		held   []net.Conn
+	)
+	t.Cleanup(func() {
+		heldMu.Lock()
+		defer heldMu.Unlock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+	})
+	go func() { // fire-and-forget: ends when the listener closes at cleanup
+		for {
+			c, err := hold.Accept()
+			if err != nil {
+				return
+			}
+			heldMu.Lock()
+			held = append(held, c) // accepted and never answered
+			heldMu.Unlock()
+		}
+	}()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestTaskEntry_HeldDB$", "-test.timeout=10s", "-test.v")
+	cmd.Env = append(taskEnv(nil),
+		"TASK_ENTRY_HELD_DB=postgres://app:app@"+hold.Addr().String()+"/app?sslmode=disable",
+		"TASK_ENTRY_BIN="+bin, "TEST_DATABASE_URL="+pgtest.URL(t))
+	var out syncBuf
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }() // fire-and-forget: reports into the buffered channel read below
+
+	// Whatever descends from the inner test while it runs; remembered with its command, so a
+	// recycled pid is not mistaken for a survivor.
+	seen := map[int]string{}
+	t.Cleanup(func() { // the leak must not outlive this test either
+		for pid := range seen {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	track := func() {
+		rows := psRows(t)
+		family := map[int]bool{cmd.Process.Pid: true}
+		for changed := true; changed; {
+			changed = false
+			for pid, row := range rows {
+				if ppid, _ := strconv.Atoi(row[0]); family[ppid] && !family[pid] {
+					family[pid], seen[pid], changed = true, row[1], true
+				}
+			}
+		}
+	}
+	giveUp := time.After(60 * time.Second)
+	for exited := false; !exited; {
+		select {
+		case <-done:
+			exited = true
+		case <-giveUp:
+			_ = cmd.Process.Kill()
+			t.Fatalf("the inner test did not end in 60s:\n%s", &out)
+		case <-time.After(100 * time.Millisecond):
+			track()
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatalf("no child was ever seen: the inner test did not start task:\n%s", &out)
+	}
+
+	var alive []string
+	for deadline := time.Now().Add(4 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		alive = alive[:0]
+		rows := psRows(t)
+		for pid, cmdline := range seen {
+			if row, ok := rows[pid]; ok && row[1] == cmdline {
+				alive = append(alive, strconv.Itoa(pid)+" "+cmdline)
+			}
+		}
+		if len(alive) == 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	if len(alive) > 0 {
+		t.Errorf("children outlived the parent test's timeout:\n  %s\ninner output:\n%s", strings.Join(alive, "\n  "), &out)
+	}
 }
