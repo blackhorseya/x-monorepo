@@ -33,6 +33,7 @@ task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.
 task lint test      # depguard 強制分層與 BC 邊界
 task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）；第一次會把 config.example.yaml 複製成 configs/local.yaml（gitignored）
+task catalog-rpc    # 另一個終端、在 task run 之前：:8081 的 catalog 服務，讀自己的 configs/catalog-rpc.yaml（gitignored，從 catalog-rpc.example.yaml 複製；不讀 local.yaml），telemetry 送 otel-lgtm
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
 

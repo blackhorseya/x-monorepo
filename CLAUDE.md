@@ -88,7 +88,7 @@ pkgs/<bc>        一個 bounded context = 完整六角形（示範 BC：ordering
   infra/           driven：memory / postgres（gorm row model + embed migrations）/ system（clock、id）
   adapters/        driving：rpc（Connect handler，pb ↔ dto）、consumer（broker handler）
 apps/rpc         composition root：main + wire.go，無業務、無 mapping；不載入 catalog（問 catalog-rpc，見下）；`rpc --wait-catalog[=60s]` 是 Helm initContainer 用的盡力等待（等不到只 WARN、exit 0，不是硬依賴）
-apps/catalog-rpc  composition root：只掛 catalog 的 rpc（同 apps/rpc 裁成一個 BC）；沒有 identity，不接 CredentialResolver，認證只認 `auth.api_keys`（`auth.jwt` / `auth.oidc.enabled` 拒啟動）；`--require-durable`（Helm 以 container arg 傳）在 `postgres.url` 空、`auth.mode` 不是 required、或 `auth.api_keys` 不是恰好一個名為 `rpc` 的 key 時拒啟動；schema 歸 apps/migrate
+apps/catalog-rpc  composition root：只掛 catalog 的 rpc（同 apps/rpc 裁成一個 BC）；沒有 identity，不接 CredentialResolver，認證只認 `auth.api_keys`（`auth.jwt` / `auth.oidc.enabled` 拒啟動）；本機 `task catalog-rpc` 讀自己的 `configs/catalog-rpc.yaml`（gitignored，從 `catalog-rpc.example.yaml` 複製；不讀 `local.yaml`）；`--require-durable`（Helm 以 container arg 傳）在 `postgres.url` 空、`auth.mode` 不是 required、或 `auth.api_keys` 不是恰好一個名為 `rpc` 的 key 時拒啟動；schema 歸 apps/migrate
 apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Watermill router，各 BC 自己的 consumer group / poison；
                  worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）；
                  `worker poison list|show|requeue|drop` 操作各 BC 的 poison 表（requeue = 重新 insert 回原 topic 的 outbox 表）；
@@ -158,7 +158,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 ## Config
 
 `platform/config.Load()`：defaults → YAML（`$APP_CONFIG`，否則 `./configs/config.yaml`）→ `APP_*` env，由低到高。
-`configs/local.yaml` gitignored，`task run` / `task migrate` 第一次會從 `config.example.yaml` 複製。
+`configs/local.yaml` gitignored，`task run` / `task migrate` 第一次會從 `config.example.yaml` 複製。`task catalog-rpc` 另有 `configs/catalog-rpc.yaml`（從 `catalog-rpc.example.yaml` 複製，`CATALOG_CONFIG=<file>` 換檔）。
 注意：viper 忽略空 env，`APP_POSTGRES_URL=` 清不掉 key，要「不接 DB」請改 local.yaml。完整 key 表見 `docs/config.md`。
 `auth.*`（mode / api_keys / jwt / public）見 `docs/config.md`。
 

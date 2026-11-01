@@ -77,4 +77,4 @@
   只有這兩個 attribute 會變成 series label，少了 instance.id 多 replica 會寫同一條 series、counter 亂跳
 
 本機：`task compose-up` 連 `grafana/otel-lgtm` 一起起（Grafana `http://localhost:3000`，匿名 admin；OTLP gRPC :4317），
-`configs/local.yaml` 的 `otel.endpoint` 已指向它。
+`configs/local.yaml`（rpc）和 `configs/catalog-rpc.yaml`（`task catalog-rpc`）的 `otel.endpoint` 已指向它。
