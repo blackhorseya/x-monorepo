@@ -64,14 +64,44 @@ func TestExampleConfig_IsWhatCatalogRPCRunsOn(t *testing.T) {
 	}
 }
 
-// A file that turns auth.oidc on is refused, and the message names the setting.
+// A file that turns auth.oidc on is refused, and the message names the setting: with no issuer
+// (config.Load's own validation) and with one (NewAuth: catalog-rpc takes api_keys only).
 func TestExampleConfig_OIDCInTheFileIsRefused(t *testing.T) {
 	raw, err := os.ReadFile(exampleConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
+	for name, extra := range map[string]string{
+		"enabled, no issuer": "\nauth:\n  oidc:\n    enabled: true\n",
+		"enabled, one issuer": "\nauth:\n  oidc:\n    enabled: true\n    issuers:\n" +
+			"      - issuer: https://issuer.example\n        audience: console\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "catalog-rpc.yaml")
+			if err := os.WriteFile(path, append(append([]byte{}, raw...), extra...), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := loadFile(t, path)
+			if err == nil {
+				_, err = NewAuth(cfg)
+			}
+			if err == nil || !strings.Contains(err.Error(), "auth.oidc") {
+				t.Fatalf("err = %v, want a refusal naming auth.oidc", err)
+			}
+		})
+	}
+}
+
+// ...and so is auth.jwt in the file.
+func TestExampleConfig_JWTInTheFileIsRefused(t *testing.T) {
+	raw, err := os.ReadFile(exampleConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "catalog-rpc.yaml")
-	if err := os.WriteFile(path, append(raw, []byte("\nauth:\n  oidc:\n    enabled: true\n")...), 0o600); err != nil {
+	extra := "\nauth:\n  jwt:\n    issuer: https://issuer.example\n    hs256_secret: 0123456789abcdef0123456789abcdef\n"
+	if err := os.WriteFile(path, append(append([]byte{}, raw...), extra...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,7 +109,7 @@ func TestExampleConfig_OIDCInTheFileIsRefused(t *testing.T) {
 	if err == nil {
 		_, err = NewAuth(cfg)
 	}
-	if err == nil || !strings.Contains(err.Error(), "auth.oidc") {
-		t.Fatalf("err = %v, want a refusal naming auth.oidc", err)
+	if err == nil || !strings.Contains(err.Error(), "auth.jwt") {
+		t.Fatalf("err = %v, want a refusal naming auth.jwt", err)
 	}
 }
