@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
@@ -41,11 +40,11 @@ func NewMetaInterceptor() connect.UnaryInterceptorFunc {
 		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			rid := req.Header().Get(RequestIDHeader)
 			if rid == "" || len(rid) > maxRequestIDLen {
-				// v7 is only for index locality; a request id is a log key.
-				// Randomness failing must not fail the request, so fall back.
 				var err error
 				if rid, err = idgen.New(); err != nil {
-					rid = uuid.NewString()
+					// The system's randomness source failed: nothing else on this
+					// request can be trusted to work either. Fail it as internal.
+					return nil, connect.NewError(connect.CodeInternal, errors.New("internal error"))
 				}
 			}
 			var tid string
