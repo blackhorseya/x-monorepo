@@ -34,7 +34,9 @@ func TestInbox_MixedV4V7(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() { _ = db.WithContext(context.Background()).Exec("DROP SCHEMA IF EXISTS inboxmixed CASCADE").Error })
+	t.Cleanup(func() {
+		_ = db.WithContext(context.Background()).Exec("DROP SCHEMA IF EXISTS inboxmixed CASCADE").Error
+	})
 	inbox := postgres.NewInbox(db, "inboxmixed")
 
 	v7, err := idgen.New()
