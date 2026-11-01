@@ -22,19 +22,24 @@ func TestStockRepository_FindBySKUs_Postgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer telCleanup()
+	t.Cleanup(telCleanup)
 	db, cleanup, err := platformpg.NewDB(cfg, tel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
+	t.Cleanup(cleanup) // registered before purge below: Cleanup is LIFO, so the purge runs while the pool is open
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.WithContext(c).Exec("DELETE FROM inventory.stocks WHERE sku LIKE 'BATCH-%'").Error; err != nil {
-		t.Fatal(err)
+	// Own fixture: purge before (a repeated run starts clean) and after (nothing is
+	// left for other tests), with the error checked.
+	purge := func() {
+		if err := db.WithContext(c).Exec("DELETE FROM inventory.stocks WHERE sku LIKE 'BATCH-%'").Error; err != nil {
+			t.Errorf("purge BATCH stocks: %v", err)
+		}
 	}
-	t.Cleanup(func() { db.WithContext(c).Exec("DELETE FROM inventory.stocks WHERE sku LIKE 'BATCH-%'") })
+	purge()
+	t.Cleanup(purge)
 
 	stocks := postgres.NewStockRepository(db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
