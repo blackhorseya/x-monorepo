@@ -89,7 +89,7 @@ func New(cfg config.OTel, logCfg config.Log) (*Providers, func(), error) {
 	// so an external traceparent would travel through this process to whatever it calls (and into outbox
 	// metadata). The empty propagator reads nothing and writes nothing: no trace headers in, none out. This is
 	// not configurable; it follows from having no tracer.
-	var propagator propagation.TextMapPropagator = propagation.NewCompositeTextMapPropagator()
+	propagator := propagation.NewCompositeTextMapPropagator()
 	var lp *sdklog.LoggerProvider
 	shutdowns := []func(context.Context) error{}
 
