@@ -140,7 +140,14 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 - **補查窗口之後才收款、而且 webhook 缺席**：付款單停在 `EXPIRED`／`CANCELLED`，錢在 provider，系統不會發現。webhook 若送到仍走 T8（與窗口無關）。這種情況到 provider 後台對帳處理。窗口預設 24 小時，大於 provider checkout 有效期，所以這只會在 provider 端 session 失效後才收款（理論上不該發生）或 provider 回報延遲超過窗口時出現。
 - `payment-rpc` 的補查依賴 provider 的查詢 API 可用；查詢持續失敗時只有告警，沒有自動出口。
 
-錯誤碼（`payment.expired`、`payment.not_pending`、`payment.disabled`、`payment.provider_unavailable`）進 `docs/error-codes.md`，碼名在切片 2 定案時以實際為準；`FAILED_PRECONDITION` 為預期的 Connect code。
+錯誤碼（`payment.expired`、`payment.not_pending`、`payment.disabled`、`payment.provider_unavailable`）進 `docs/error-codes.md`，碼名在切片 2 定案時以實際為準。逐碼對應的 Connect code（語意先定，碼名可變）：
+
+| code | Connect code | 語意 |
+|---|---|---|
+| `payment.disabled` | `FAILED_PRECONDITION`（Sean 已定） | 開關關閉或訂單快照 `payment_required = false` |
+| `payment.expired` | `FAILED_PRECONDITION` | `PENDING` 已過 `expires_at`、`expire` 尚未處理 |
+| `payment.not_pending` | `FAILED_PRECONDITION` | 付款單已不是 `PENDING` |
+| `payment.provider_unavailable` | `UNAVAILABLE` | provider 暫時故障（可重試的服務失敗，不是業務前提錯誤）；固定訊息，provider 原始錯誤不外洩 |
 
 ## 4. 事件清單
 
@@ -248,7 +255,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | 目前開關 | 快照 | 新進 `CONFIRMED` 的訂單快照 | 既有 `CONFIRMED` 單的 `CompleteOrder`／`CancelOrder`／付款事件 | `StartPayment` | 預定測試 |
 |---|---|---|---|---|---|
 | `false`（**預設**） | `false` | `false` | 上表 `false` 列 | `payment.disabled` | S1：**不設定任何開關**（吃預設值）建單 → 快照為 `false` → `CompleteOrder` 成功；既有 usecase 測試在預設設定下全綠不改 |
-| `false` | `true`（開關**從開切回關**） | `false` | 上表 `true` 列：仍等付款、`Complete` 仍被擋；已發出的 checkout 仍可收款→`PAID`→`COMPLETED`；`Cancel` 仍可 | `payment.disabled`——顧客無法再發起付款，30 分鐘後 `PaymentExpired` → ordering（快照 `true`）取消訂單，庫存歸還。這是「切回關閉」的已知後果，不是缺陷 | S6：kind 先開再關，驗上述三條 |
+| `false` | `true`（開關**從開切回關**） | `false` | 上表 `true` 列：仍等付款、`Complete` 仍被擋；已發出的 checkout 仍可收款→`PAID`→`COMPLETED`；`Cancel` 仍可 | `payment.disabled`——顧客無法再發起付款。**provider 查詢成功時**，30 分鐘後 `expire` 確認未收款 → `PaymentExpired` → ordering（快照 `true`）取消訂單、歸還庫存。**provider 查詢持續失敗時不保證 30 分鐘**：`PENDING` 不轉移（§3 失敗來源表），訂單仍 `CONFIRMED`、預留仍被持有，直到 24 小時預留 TTL 的 sweep（Helm 預設每 15 分鐘）釋放預留並發 `OrderCancellationRequested` → ordering 取消 → `OrderCancelled` → Payment T7 進 `CANCELLED`；`terminal_at` 從這時起算，補查窗口也從這時起算。這是「切回關閉」的已知後果，不是缺陷 | S6：kind 先開再關，驗上述三條 |
 | `true` | `false`（舊單，或開關打開前建立的單） | `true` | 上表 `false` 列：照舊可完成，付款事件忽略 | `payment.disabled`（§6，快照 `false`） | S6：切換前建的 `CONFIRMED` 單，開關打開後仍可 `CompleteOrder`，且 `StartPayment` 回 `payment.disabled` |
 | `true` | `true` | `true` | 上表 `true` 列 | 可用 | S3、S6 |
 
@@ -285,9 +292,10 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | webhook 簽章錯 → 4xx、不落地；對簽章用原始 body | S3 | HTTP 測試：改一個 byte、重排 JSON key 各一例 |
 | webhook 重送不重複處理 | S3 | `(provider, provider_event_id)` 唯一 + 重送測試（Postgres） |
 | 金額／幣別不符 → `NEEDS_REVIEW`、告警、不發 `PaymentCaptured`；`expire` 不動 `NEEDS_REVIEW` | S3 | consumer 測試（金額、幣別各一例）；`expire` 測試（對 `NEEDS_REVIEW` 單跑一輪，狀態不變） |
+| 查詢持續失敗跨過 30 分鐘與 24 小時 TTL：訂單不被 `PaymentExpired` 取消，改由預留 TTL sweep 釋放，之後 T7 → `CANCELLED`，補查窗口從此起算；恢復後相符退款、不符 `NEEDS_REVIEW`；超窗未恢復只告警 | S3、S6 | 完整事件序列測試（fake clock + mock provider 查詢一律失敗）：30 分鐘 `PENDING` 不變 → sweep 發 `OrderCancellationRequested` → 訂單 `CANCELLED` → Payment `CANCELLED`（`terminal_at` 為此刻）→ provider 恢復並已收款 → `expire` → 退款；S6 kind 以 `expire` CronJob 實跑 |
 | `expire` 查 provider 失敗：`PENDING` 不轉 `EXPIRED`、下個 tick 重試、連續失敗告警；`EXPIRED`／`CANCELLED` 窗口內重試、窗口結束仍失敗告警 | S3 | `expire` 測試：mock provider `GetPayment` 一律失敗，斷言狀態不變、重試次數與告警；恢復後收斂（positive control） |
 | `expire` 先查 provider：已收款且相符 → `CAPTURED`（T6）；已收款但不符 → `NEEDS_REVIEW` + 告警（T6'）；未收款 → `EXPIRED`（T5） | S3 | `expire` 測試（mock provider 三種回應，webhook 缺席） |
-| `EXPIRED`／`CANCELLED` 後 webhook 缺席的晚收款由 `expire` 補查收斂：相符 → `CAPTURED` → 退款（T8→T10）；不符 → `NEEDS_REVIEW` + 告警（T9）；訂單不復活 | S3、S6 | consumer＋`expire` 測試兩條：「取消 → T7 的 `CancelCheckout` fault injection 失敗 → provider 收款 → 無 webhook → `expire`」與「逾時 `EXPIRED` → provider 收款 → 無 webhook → `expire`」，各測相符與不符；補查窗口（`payment.reconcile_window`，預設 24 小時）結束後不再查（窗口內查到、窗口外查不到各一例，時間用 fake clock）；啟動檢查 `reconcile_window` 必須大於 mock provider 的 checkout 有效期，否則拒啟動；positive control：mock provider 確實被查到（呼叫計數 > 0）；S6 kind 跑同一情境 |
+| `EXPIRED`／`CANCELLED` 後 webhook 缺席的晚收款由 `expire` 補查收斂：相符 → T8 `CAPTURED`，**之後是否退款取決於 ordering 先處理哪個事件**——(a) 取消先贏（`order_outcome ≠ NONE`）→ T10 退款、訂單不復活；(b) `PaymentCaptured` 先贏（`EXPIRED` 時 `PaymentExpired` 尚未被 ordering 處理）→ 訂單 `PAID`→`COMPLETED`，`order_outcome` 仍 `NONE`，隨後的 `OrderCompleted` 忽略，**不退款**；不符 → `NEEDS_REVIEW` + 告警（T9） | S3、S6 | consumer＋`expire` 測試：「取消 → T7 的 `CancelCheckout` fault injection 失敗 → provider 收款 → 無 webhook → `expire`」（(a)）與「逾時 `EXPIRED` → provider 收款 → 無 webhook → `expire` → ordering 先處理 `PaymentCaptured`」（(b)）與「同前但 ordering 先處理 `PaymentExpired`」（(a)），各斷言訂單最終狀態與是否出現 `PaymentRefundRequested`；不符另測；補查窗口（`payment.reconcile_window`，預設 24 小時）結束後不再查（窗口內查到、窗口外查不到各一例，時間用 fake clock）；啟動檢查 `reconcile_window` 必須大於 mock provider 的 checkout 有效期，否則拒啟動；positive control：mock provider 確實被查到（呼叫計數 > 0）；S6 kind 跑同一情境 |
 | provider 原始錯誤與 payload、webhook 簽章與 body、provider 密鑰不外洩（#347） | S2/S3 | 真入口測試：以合成敏感標記放進 provider 錯誤、webhook body 與簽章，實際觸發失敗；斷言 caller 收到的錯誤、捕捉到的 log、metrics label、span 都不含標記；並斷言目標請求／錯誤確實發生（positive control：標記有進到 provider fake／請求） |
 | admin 可讀（`GetPayment`）不可代付（`StartPayment`）；非本人非 admin 兩者皆 `NOT_FOUND` | S2/S4 | 權限正負例：admin `GetPayment` 成功、admin `StartPayment` 拒絕；本人兩者成功；他人兩者 `NOT_FOUND`；rpc 層與 usecase 層各一 |
 | `PaymentCaptured` 與 `OrderCancelled`／`OrderCompleted` 任何順序都收斂（T10、T14、T15） | S3 | 兩個順序 + 墓碑（`OrderCancelled`／`OrderCompleted` 先於 `OrderConfirmed`）+ 「逾時→取消→晚收款」完整順序的 consumer 測試，Postgres |
