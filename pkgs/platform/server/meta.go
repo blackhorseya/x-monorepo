@@ -31,8 +31,9 @@ func RequestID(c context.Context) string {
 }
 
 // NewMetaInterceptor assigns a request id (client-provided or fresh UUID), keeps
-// it in the context for logging, and sets X-Request-Id / X-Trace-Id on every
-// response — success or error. Place it after otelconnect so the span exists.
+// it in the context for logging, and sets X-Request-Id on every response and
+// X-Trace-Id on every response that has a trace (none when otel.endpoint is
+// empty) — success or error. Place it after otelconnect so the span exists.
 func NewMetaInterceptor() connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {

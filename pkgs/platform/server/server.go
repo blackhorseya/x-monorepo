@@ -83,8 +83,8 @@ type Server struct {
 // readiness over checks, see health.go), /api/metrics (Prometheus exposition
 // of the OTel MeterProvider) and, when cfg.Docs is set, /api/docs. Every RPC gets an
 // OpenTelemetry span (otelconnect, outermost) and a request logger carrying
-// its trace_id and request_id, and every response carries X-Request-Id /
-// X-Trace-Id (see meta.go); the rate limit (limits.go, when cfg.RateLimit.RPS
+// its trace_id and request_id, and every response carries X-Request-Id, and
+// X-Trace-Id when there is a trace (not when otel.endpoint is empty; see meta.go); the rate limit (limits.go, when cfg.RateLimit.RPS
 // is set) drops a flood; auth (auth.go, when auth.Mode is not off) resolves
 // the caller to a contextx.Principal; the timeout (limits.go, cfg.Timeout)
 // bounds the rest; opts (TrustRemoteTrace / DistrustRemoteTrace) decide whether

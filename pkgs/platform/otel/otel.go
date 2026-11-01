@@ -85,6 +85,11 @@ func New(cfg config.OTel, logCfg config.Log) (*Providers, func(), error) {
 	metricOpts := []sdkmetric.Option{sdkmetric.WithResource(res), sdkmetric.WithReader(promReader)}
 
 	var tracer trace.TracerProvider = tracenoop.NewTracerProvider()
+	// Without an endpoint the tracer is a no-op, and a no-op tracer hands a parent's span context on unchanged,
+	// so an external traceparent would travel through this process to whatever it calls (and into outbox
+	// metadata). The empty propagator reads nothing and writes nothing: no trace headers in, none out. This is
+	// not configurable; it follows from having no tracer.
+	var propagator propagation.TextMapPropagator = propagation.NewCompositeTextMapPropagator()
 	var lp *sdklog.LoggerProvider
 	shutdowns := []func(context.Context) error{}
 
@@ -97,6 +102,7 @@ func New(cfg config.OTel, logCfg config.Log) (*Providers, func(), error) {
 		}
 		tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithBatcher(exp.trace))
 		tracer = tp
+		propagator = propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{})
 		lp = sdklog.NewLoggerProvider(sdklog.WithResource(res), sdklog.WithProcessor(sdklog.NewBatchProcessor(exp.log)))
 		shutdowns = append(shutdowns, tp.Shutdown, lp.Shutdown)
 		metricOpts = append(metricOpts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp.metric)))
@@ -132,7 +138,7 @@ func New(cfg config.OTel, logCfg config.Log) (*Providers, func(), error) {
 		ServiceName:    serviceName(cfg),
 		Tracer:         tracer,
 		Meter:          mp,
-		Propagator:     propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}),
+		Propagator:     propagator,
 		Logger:         logger,
 		MetricsHandler: promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
 	}, cleanup, nil
