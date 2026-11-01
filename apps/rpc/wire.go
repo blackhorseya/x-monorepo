@@ -33,6 +33,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewDocs,
 		NewReadiness,
 		NewOIDCAuth,
+		TraceOptions,
 		ordering.ProviderSet,
 		inventory.ProviderSet,
 		identity.ProviderSet,
