@@ -101,6 +101,7 @@ type taskRun struct {
 	exited bool
 	err    error
 	cancel context.CancelFunc // the same cancellation the deadline uses: kills the whole group
+	pgid   int                // task's process group: task, its shell and catalog-rpc
 }
 
 // taskEnv: the child's parent environment, without anything of the developer's own
@@ -144,6 +145,7 @@ func startTask(t *testing.T, binDir, config string, env map[string]string) *task
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	r.pgid = cmd.Process.Pid
 	go func() { r.done <- cmd.Wait() }()
 	t.Cleanup(func() {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
@@ -444,6 +446,13 @@ func TestTaskEntry_HeldDB(t *testing.T) {
 	var ee *exec.ExitError
 	if !errors.As(r.err, &ee) || !ee.Sys().(syscall.WaitStatus).Signaled() || ee.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
 		t.Fatalf("the run did not end by the group kill (%v):\n%s", r.err, r.out)
+	}
+	// Before this test's own t.Cleanup (which kills the group too) gets to hide it: the cancel alone
+	// must have taken the whole group, not just task.
+	for deadline := time.Now().Add(3 * time.Second); syscall.Kill(-r.pgid, 0) == nil; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the cancel left the process group %d alive (only task was killed?)", r.pgid)
+		}
 	}
 }
 
