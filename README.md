@@ -123,6 +123,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
 | [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、ordering 怎麼用它定價（rpc 經 Connect 問獨立的 catalog-rpc）、舊 client 還送 `unit_price` 會怎樣、Console 的 Products 頁 |
+| [`docs/payment.md`](docs/payment.md) | payment BC **設計稿（#367，尚未實作）**：付款單狀態機與狀態 × 事件全表、事件、訂單 `payment_required` 快照 × 目前開關矩陣、webhook 與 `payment-rpc` 認證入口、切片與保證對照 |
 | [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
