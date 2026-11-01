@@ -4,7 +4,7 @@
 
 > **狀態：設計稿（#367 切片 0）。以下全部尚未實作**——`pkgs/payment`、`apps/payment-rpc`、`PAID`、`OrderConfirmed.total`、`ordering.require_payment` 目前在 repo 裡都不存在。
 > 「保證」欄只列已指定到切片測試的條目；測試名稱是預定名稱，實作時以實際為準，寫不出測試的就不在這裡當保證。
-> 七個設計決定由 Sean 逐題確認（#367），改動任何一項都要回 Sean。標 **〔補充〕** 的是 issue 沒展開、由本文補上的細節，**審閱時請一併確認**；「未決事項」一節列出本文無法自行決定的地方。
+> 七個設計決定由 Sean 逐題確認（#367），改動任何一項都要回 Sean。標 **〔補充〕** 的是 issue 沒展開、由本文補上的細節，**審閱時請一併確認**；它們是**提案**，不是 Sean 已定的規則。「未決事項」一節列出本文無法自行決定的地方。
 
 `pkgs/payment` 是第五個 bounded context：補上訂單從 `CONFIRMED` 到完成之間的**收款**。
 流程是 建單 → 預留 → `CONFIRMED` → 付款 → `PAID` → `COMPLETED`；`CONFIRMED` 的語意（庫存已保留）不變。
@@ -73,7 +73,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 
 **為何補 `CANCELLED`**：「取消路徑」需要一個 Payment 自己的結果；若重用 `EXPIRED`，「訂單先取消」與「逾時」的告警、指標與退款判斷會混在一起。
 **為何補 `NEEDS_REVIEW`**：issue §5.4 要求不符時「不進 `CAPTURED`、標記人工處理並告警」，需要一個可查詢、可被 metrics 數到的落點；留在 `PENDING` 會被 `expire` 當成沒付款而過期，錢已經在 provider 那邊。
-**沒有 `FAILED`**：hosted checkout 讓顧客在窗口內自行重試，provider 的單次失敗事件不改付款單狀態，窗口到期才 `EXPIRED`。（此為第一版取捨，要加 `FAILED` 需回 Sean。）
+**沒有 `FAILED`**〔補充，提案〕：issue 沒討論 provider 失敗事件。本文提議 hosted checkout 讓顧客在窗口內自行重試，單次失敗不改付款單狀態，窗口到期才 `EXPIRED`；這不是 Sean 已定的取捨，待確認（U5）。
 
 ### 轉移與觸發來源
 
@@ -82,17 +82,19 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 | T1 | ∅ → `PENDING` | `consume`：`OrderConfirmed` | 驗 `total` 存在；`unique(order_id)` 重送忽略；不打 provider | — |
 | T2 | `PENDING` →（不變，補 `provider_ref`、`checkout_url`）| `serve`：`StartPayment` | 顧客本人；未過期；向 provider 開 hosted checkout。**重複呼叫回傳尚未過期的同一個 URL**；`checkout_expires_at` 已過則重開 | — |
 | T3 | `PENDING` → `CAPTURED` | `consume`：webhook 事件（`payment.captured`） | 金額、幣別與付款單相符 | `PaymentCaptured` |
-| T4 | `PENDING` → `NEEDS_REVIEW` | 同 T3 | 金額或幣別不符 | — （告警） |
+| T4 | `PENDING` → `NEEDS_REVIEW` | 同 T3，或 `expire` 查 provider 時（webhook 缺席） | 已收款但金額或幣別不符 | — （告警） |
 | T5 | `PENDING` → `EXPIRED` | `expire`（CronJob） | `now ≥ expires_at`，且**先向 provider 查一次狀態**確認沒收款 | `PaymentExpired` |
 | T6 | `PENDING` → `CAPTURED` | `expire` | 同 T5 但 provider 查到已收款（webhook 沒送到），金額相符 | `PaymentCaptured` |
+| T6' | `PENDING` → `NEEDS_REVIEW` | `expire` | provider 查到已收款但金額／幣別不符（即 T4 的 expire 版，不落到 T5 也不落到 T6） | — （告警） |
 | T7 | `PENDING` → `CANCELLED` | `consume`：`OrderCancelled` | 取消 provider 端 checkout（best-effort，失敗不阻擋）；設 `order_cancelled` | — |
 | T8 | `EXPIRED` / `CANCELLED` → `CAPTURED` | webhook（逾時或取消後 provider 才通知成功） | 錢已動：必須記錄；金額相符才進 | `PaymentCaptured` |
 | T9 | `EXPIRED` / `CANCELLED` → `NEEDS_REVIEW` | webhook | 同 T8 但金額／幣別不符 | — （告警） |
-| T10 | `CAPTURED` → `REFUNDING` | `consume`：`OrderCancelled`，或 T3/T6/T8 進入 `CAPTURED` 時 `order_cancelled` 已為真 | 兩個順序（先收款後取消／先取消後收款）收斂到同一個條件：`CAPTURED ∧ order_cancelled`。`PAID` 的訂單不會發 `OrderCancelled`，所以不會誤退 | `PaymentRefundRequested`（內部） |
+| T12 | 任何狀態（`PENDING` 以外）→ 狀態不變 | `consume`：`OrderCancelled` | 只設 `order_cancelled = true`（`PENDING` 走 T7、`CAPTURED` 走 T10）。涵蓋 `EXPIRED`（ordering 因 `PaymentExpired` 取消訂單後，Payment 收到的 `OrderCancelled`）、`CANCELLED`、`REFUNDING`、`REFUNDED`、`NEEDS_REVIEW` | — |
+| T10 | `CAPTURED` → `REFUNDING` | `consume`：`OrderCancelled`，或 T3/T6/T8 進入 `CAPTURED` 時 `order_cancelled` 已為真（旗標由 T7／T12 先寫入） | 兩個順序（先收款後取消／先取消後收款）收斂到同一個條件：`CAPTURED ∧ order_cancelled`。`PAID` 的訂單不會發 `OrderCancelled`，所以不會誤退 | `PaymentRefundRequested`（內部） |
 | T11 | `REFUNDING` → `REFUNDED` | `consume`：處理 `PaymentRefundRequested` | 呼叫 provider 退款（冪等 key = 付款單 `id`）成功。失敗有界重試，超過次數進 poison 並告警，狀態維持 `REFUNDING` | `PaymentRefunded`（目前沒有 consumer） |
 | — | 其餘組合 | — | 晚到的舊事件忽略（「只往前走」）；不在上表的轉移一律拒絕 | — |
 
-`order_cancelled` 在 T7、T8、T9、T10 的觸發事件處理時一併寫入；`OrderCancelled` 比 `OrderConfirmed` 先到（不同 topic 無順序保證）時的處理見 §4「亂序」。
+`order_cancelled` 只在收到 `OrderCancelled` 時寫入（T7、T10、T12），**不**在 T8／T9 寫入——收款先贏（ordering 尚未處理 `PaymentExpired`）時訂單會是 `PAID`，不能一律當已取消。T8 進 `CAPTURED` 時只讀此旗標：已為真則接 T10。`OrderCancelled` 比 `OrderConfirmed` 先到（不同 topic 無順序保證）時的處理見 §4「亂序」。
 
 ## 4. 事件清單
 
@@ -129,6 +131,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 |---|---|---|
 | `PaymentCaptured` 先到，訂單 `CONFIRMED` | 訂單 `PAID`→`COMPLETED`，之後的逾時與取消被拒絕 | S3 ordering consumer；S6 kind |
 | 訂單已 `CANCELLED`，`PaymentCaptured` 才到 | 拒絕 `PAID`；Payment 自動全額退款（T10） | S3；S6 kind |
+| 逾時（`EXPIRED`）→ ordering 取消訂單 → Payment 收 `OrderCancelled`（T12）→ 晚收款 webhook（T8）→ 因旗標已真接 T10 退款 | 錢不會停在 `CAPTURED` | S3 consumer 測試（完整順序）；S6 kind |
 | 顧客在付款途中取消訂單 | Payment 收到 `OrderCancelled`：取消 provider 端付款（T7）；已收款就退款（T10） | S3；S6 kind |
 | 逾時後 provider 才通知成功 | 訂單已取消就退款，**不復活訂單**；訂單尚未處理 `PaymentExpired` 時 `PaymentCaptured` 先贏則訂單 `PAID` | S3；S6 kind |
 
@@ -183,7 +186,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | `true` | 無（含切換當下的舊訂單） | **照舊可完成**（依「有沒有付款單」判斷，不看建單時間） | 可取消 | S6：kind 切換前建的 `CONFIRMED` 單，開關打開後仍可 `CompleteOrder` |
 | `true` | 有 | **拒絕**（`CONFIRMED` 只能經付款前進；錯誤碼待切片 1 定，進 `error-codes.md`）；`PAID` 後由 ordering 自動完成 | 可取消（`CONFIRMED`）；`PAID`/`COMPLETED` 拒絕 | S3、S6 |
 
-> 「有付款單」要 ordering 知道。〔補充〕做法：`require_payment=true` 時 `CompleteOrder` 向 payment 查（經 payment 的 contract client，同 PriceQuoter 形狀）還是 ordering 自己記「已收到 `PaymentCaptured`／已發起」？兩者對 `payment-rpc` 掛掉的行為不同——**這是 U4，需要 Sean 決定**；在決定前，本表「有」那兩格的 `CompleteOrder` 行為以「拒絕」為準，但 `payment-rpc` 掛掉時的結果未定。
+> `true` 的格子要 ordering 知道「有付款單」。〔補充〕做法：`require_payment=true` 時 `CompleteOrder` 向 payment 查（經 payment 的 contract client，同 PriceQuoter 形狀）還是 ordering 自己記「已收到 `PaymentCaptured`／已發起」？兩者對 `payment-rpc` 掛掉的行為不同——**這是 U4，需要 Sean 決定**；在決定前，`require_payment=false` 的格子不受 U4 影響（#367 §7：維持現狀，`CompleteOrder` 可直接完成）；U4 只決定 `true` + 有付款單那一格在 `payment-rpc` 掛掉時的結果，該格的「拒絕」是未付款時的既定行為。
 
 ## 9. 切片與保證對照
 
@@ -213,7 +216,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | webhook 簽章錯 → 4xx、不落地；對簽章用原始 body | S3 | HTTP 測試：改一個 byte、重排 JSON key 各一例 |
 | webhook 重送不重複處理 | S3 | `(provider, provider_event_id)` 唯一 + 重送測試（Postgres） |
 | 金額／幣別不符 → `NEEDS_REVIEW`、告警、不發 `PaymentCaptured` | S3 | consumer 測試（金額、幣別各一例）|
-| `expire` 先查 provider：provider 已收款 → `CAPTURED`（T6），否則 `EXPIRED` | S3 | `expire` 測試（mock provider 兩種回應） |
+| `expire` 先查 provider：已收款且相符 → `CAPTURED`（T6）；已收款但金額／幣別不符 → `NEEDS_REVIEW` + 告警（T6'）；未收款 → `EXPIRED`（T5） | S3 | `expire` 測試（mock provider 三種回應，webhook 缺席） |
 | `PaymentCaptured` 與 `OrderCancelled` 任何順序都收斂到退款（T10） | S3 | 兩個順序 + 墓碑（`OrderCancelled` 先於 `OrderConfirmed`）的 consumer 測試，Postgres |
 | 退款冪等：同一付款單重送退款 provider 只收到一次實質退款 | S3 | mock provider 以冪等 key 去重；測試重送 `PaymentRefundRequested` |
 | 退款失敗有界重試，超過次數進 poison + 告警 | S3 | fault injection：provider `Refund` 一律失敗，斷言 retry 次數上限與 poison 列；positive control：恢復後成功 |
@@ -244,3 +247,15 @@ admin 退款、部分退款、`COMPLETED` 之後的退款（先到 provider 後�
 | U4 | **ordering 怎麼知道「有付款單」**（§8 注） | 影響 `payment-rpc` 掛掉時 `CompleteOrder` 的行為 | 傾向 ordering 自己記（收到 `PaymentCaptured`／`OrderConfirmed` 已發出且開關為真即視為有），不在 `CompleteOrder` 路徑上同步問 payment，避免 payment 掛掉拖垮 ordering；代價是 ordering 要多存一個旗標 |
 | U5 | `FAILED` 狀態、`NEEDS_REVIEW` 的人工出口（誰、怎麼把它推到 `CAPTURED`／退款）| issue 沒有 admin 操作 | 第一版只告警，不提供 RPC；手動處理走 provider 後台與 SQL，記入 runbook（切片 5） |
 | U6 | 開關 `false` 時 `StartPayment` 入口（切片 4 的 rpc 轉發與 Console 付款頁）該不該可用 | `false` 時 ordering 忽略 `PaymentCaptured`，顧客若付了款，訂單不會 `PAID` | 建議 `false` 時 rpc 的 `StartPayment` 回 `FAILED_PRECONDITION`、Console 不顯示付款頁；需 Sean 確認，因為這是切片 4 的行為而非 issue 寫明的 |
+
+## 13. 來源決定 → 權威章節
+
+| #367 決定 | 本文章節 | 其中屬 Sean 已定 | 其中屬〔補充〕提案 |
+|---|---|---|---|
+| 1 先預留再付款 | §2 | 順序、`CONFIRMED` 語意不變 | — |
+| 2 `PAID` 狀態 | §2 | `CONFIRMED→PAID→COMPLETED`、自動完成、`PAID` 不可取消、訂單無 `payment_status` | 同 transaction 發 `OrderPaid` 與 `OrderCompleted` |
+| 3 付款窗口與競態 | §3、§4、§5 | 30 分鐘、`PaymentExpired`、判定權在 ordering、四種競態結果、已知限制 | `CANCELLED`／`NEEDS_REVIEW` 狀態、`order_cancelled` 旗標、墓碑、T12 |
+| 4 發起方式 | §3 T1–T2、§6 | `PENDING` 先建、`StartPayment` 才打 provider、重複回同 URL、不在 tx、`OrderConfirmed.total` | `customer_id` 以 request 欄位傳 |
+| 5 Provider／webhook／部署／認證 | §1、§7 | mock、webhook 六點、三個子命令、認證比照 catalog-rpc | gin route option、入口表的 probe／metrics／docs 列 |
+| 6 退款範圍 | §3 T10–T11、§11 | 全額自動、`CAPTURED→REFUNDING→REFUNDED`、冪等 key、poison、`PaymentRefunded` | 內部事件 `PaymentRefundRequested` |
+| 7 切片與上線 | §8、§9 | 七片、開關語意與預設值、舊訂單依付款單判斷、切片 5 順序 | `false` 時 ordering 忽略 payment 事件 |
