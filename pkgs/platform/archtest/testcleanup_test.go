@@ -88,6 +88,12 @@ func TestX(t *testing.T) {
 		{
 			name: "other pool and connection openers",
 			src: `package x_test
+import (
+	"database/sql"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
+)
 func TestX(t *testing.T) {
 	a, _ := sql.Open("pgx", dsn)
 	b := sql.OpenDB(connector)
@@ -98,8 +104,8 @@ func TestX(t *testing.T) {
 	g, _ := gorm.Open(dialector, gc)
 }`,
 			want: []string{
-				"test-direct-pool@003", "test-direct-pool@004", "test-direct-pool@005", "test-direct-pool@006",
-				"test-direct-pool@007", "test-direct-pool@008", "test-direct-pool@009",
+				"test-direct-pool@009", "test-direct-pool@010", "test-direct-pool@011", "test-direct-pool@012",
+				"test-direct-pool@013", "test-direct-pool@014", "test-direct-pool@015",
 			},
 		},
 		{
@@ -140,6 +146,18 @@ func TestX(t *testing.T) {
 	_, _ = New(ctx, dsn)
 }`,
 			want: []string{"test-direct-pool@003", "test-direct-pool@004"},
+		},
+		{
+			// No import of that name in this file: a local value, not a package. Imports are
+			// file-scoped, so a name the file does not import is never guessed to be one.
+			name: "local values that happen to be called sql and pgxpool",
+			src: `package x_test
+func TestX(t *testing.T) {
+	sql := fileSystem{}
+	_ = sql.Open()
+	pgxpool := struct{ Count int }{Count: 7}
+	_ = pgxpool.Count
+}`,
 		},
 		{
 			name: "a package that is not an opener, whatever it is called",
@@ -465,10 +483,10 @@ var shapeCells = []struct{ name, src string }{
 	{"closer_registered_with_cleanup", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tt.Cleanup(closeDB)\n}\n"},
 	{"method_value_opener", "package probe_test\nfunc TestProbe(t *testing.T) {\n\topen := postgres.NewDB\n\tdb, closeDB, _ := open(cfg, tel)\n\tt.Cleanup(closeDB)\n}\n"},
 	{"import_alias", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := pg.NewDB(cfg, tel)\n\tt.Cleanup(closeDB)\n}\n"},
-	{"sql_open", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, _ := sql.Open(\"pgx\", dsn)\n\tt.Cleanup(func() { _ = db.Close() })\n}\n"},
-	{"pgxpool_new", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tp, _ := pgxpool.New(ctx, dsn)\n\tt.Cleanup(p.Close)\n}\n"},
-	{"pgx_connect", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tc, _ := pgx.Connect(ctx, dsn)\n\tt.Cleanup(func() { _ = c.Close(ctx) })\n}\n"},
-	{"gorm_open", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, _ := gorm.Open(dialector, gc)\n\t_ = db\n}\n"},
+	{"sql_open", "package probe_test\nimport \"database/sql\"\nfunc TestProbe(t *testing.T) {\n\tdb, _ := sql.Open(\"pgx\", dsn)\n\tt.Cleanup(func() { _ = db.Close() })\n}\n"},
+	{"pgxpool_new", "package probe_test\nimport \"github.com/jackc/pgx/v5/pgxpool\"\nfunc TestProbe(t *testing.T) {\n\tp, _ := pgxpool.New(ctx, dsn)\n\tt.Cleanup(p.Close)\n}\n"},
+	{"pgx_connect", "package probe_test\nimport \"github.com/jackc/pgx/v5\"\nfunc TestProbe(t *testing.T) {\n\tc, _ := pgx.Connect(ctx, dsn)\n\tt.Cleanup(func() { _ = c.Close(ctx) })\n}\n"},
+	{"gorm_open", "package probe_test\nimport \"gorm.io/gorm\"\nfunc TestProbe(t *testing.T) {\n\tdb, _ := gorm.Open(dialector, gc)\n\t_ = db\n}\n"},
 }
 
 // Controls that must NOT hit, and the one that must (same content, allowlisted and not).
@@ -507,6 +525,7 @@ func TestTestCleanup_ShapeMatrix(t *testing.T) {
 	// allowlist; a directory that merely has the same name is not it.
 	write("pkgs/platform/postgres/pgtest/own_test.go", opensAPool)
 	write("nested/pgtest/imposter_test.go", opensAPool)
+	write("pkgs/platform/postgres/pgtest/other/child_test.go", opensAPool) // another package under the helper's directory
 	write("other/pkgs/platform/postgres/pgtest/imposter_test.go", opensAPool)
 
 	allow := []archtest.Allow{{Path: "allowed/", Reason: "fixture: stands in for a test of NewDB itself"}}
@@ -514,7 +533,7 @@ func TestTestCleanup_ShapeMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := len(shapeCells) + len(shapeControlsClean) + 7; st.Files != want {
+	if want := len(shapeCells) + len(shapeControlsClean) + 8; st.Files != want {
 		t.Fatalf("scanned %d files, want %d: the matrix was not looked at", st.Files, want)
 	}
 	count := map[string]int{}
@@ -546,7 +565,7 @@ func TestTestCleanup_ShapeMatrix(t *testing.T) {
 	if n := count["pkgs/platform/postgres/pgtest/own_test.go"]; n != 0 {
 		t.Errorf("pgtest's own package reported %d hit(s), want none", n)
 	}
-	for _, imposter := range []string{"nested/pgtest/imposter_test.go", "other/pkgs/platform/postgres/pgtest/imposter_test.go"} {
+	for _, imposter := range []string{"pkgs/platform/postgres/pgtest/other/child_test.go", "nested/pgtest/imposter_test.go", "other/pkgs/platform/postgres/pgtest/imposter_test.go"} {
 		if count[imposter] == 0 {
 			t.Errorf("%s: a directory named pgtest elsewhere got pgtest's exemption", imposter)
 		}
