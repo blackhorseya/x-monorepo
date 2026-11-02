@@ -59,7 +59,9 @@ async function open(page: Page, state: State) {
   const id = await realOrder(page);
   const calls = await script(page, state);
   await page.goto(`/orders/${id}`);
-  await expect(page.getByTestId("order-status")).toHaveText(state.status);
+  // The first answer comes from the real server through a route handler: a long budget for a loaded machine
+  // (a full suite once took over 5s here); the assertions after it keep the default.
+  await expect(page.getByTestId("order-status")).toHaveText(state.status, { timeout: 20_000 });
   expect(calls.order).toBeGreaterThanOrEqual(1); // positive control: the page asked
   return { id, calls };
 }
