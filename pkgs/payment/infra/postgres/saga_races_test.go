@@ -685,3 +685,107 @@ func TestRace_TheSweepExpiresAPaymentWhileItsNotificationIsProcessed(t *testing.
 		})
 	}
 }
+
+// The expire sweep (T5: PENDING -> EXPIRED) against the end of the order (T7/T7': PENDING -> CANCELLED) landing while
+// the sweep decides. The held side loses on the version and is redone: if the order's end came first the payment is
+// CANCELLED and the sweep counts a conflict (no PaymentExpired); if the sweep came first the payment is EXPIRED and the
+// end only records its outcome (T12).
+func TestRace_TheSweepExpiresAPaymentWhileItsOrderEnds(t *testing.T) {
+	for _, end := range endings {
+		for _, sweepHeld := range []bool{true, false} {
+			name := end.name + "/the end wins"
+			if !sweepHeld {
+				name = end.name + "/the sweep wins"
+			}
+			t.Run(name, func(t *testing.T) {
+				e := newSagaEnv(t)
+				c := t.Context()
+				clock := &sweepClock{now: t0.Add(time.Minute)}
+				prov := mock.New(mock.Options{Now: clock.Now})
+				const expiredTable = "payment.events_v1_paymentexpired"
+				if err := e.db.Exec("TRUNCATE " + expiredTable).Error; err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = e.db.Exec("TRUNCATE " + expiredTable).Error })
+
+				p := newPayment(t, "race-sweep-end-pay", "race-sweep-end-order")
+				if err := e.repo.Save(c, p); err != nil {
+					t.Fatal(err)
+				}
+				start := paymentbc.ProvideStartPayment(e.repo, prov, e.tx, clock, e.rec)
+				if _, err := start.Execute(c, dto.StartPaymentInput{OrderID: p.OrderID(), CustomerID: "cust"}); err != nil {
+					t.Fatal(err)
+				}
+				clock.now = t0.Add(31 * time.Minute) // past the window: due
+
+				gate := &gatedRepo{Repository: e.repo, reached: make(chan struct{}), resume: make(chan struct{})}
+				sweepRepo, endRepo := payment.Repository(e.repo), payment.Repository(e.repo)
+				if sweepHeld {
+					sweepRepo = gate
+				} else {
+					endRepo = gate
+				}
+				sweep := usecase.NewExpireSweep(sweepRepo, e.hooks, prov, e.ev, e.al, e.tx, clock,
+					dto.SweepConfig{Batch: 10, ReconcileWindow: 24 * time.Hour, Interval: 15 * time.Minute})
+				ended := end.handle(e, endRepo, e.outs, clock)
+				runSweep := func() (*dto.ExpireOutput, error) { return sweep.Execute(c, dto.Ack{}) }
+				runEnded := func() error {
+					err := ended(c, p.OrderID())
+					for range 5 {
+						if !errors.Is(err, payment.ErrStale) {
+							break
+						}
+						err = ended(c, p.OrderID())
+					}
+					return err
+				}
+
+				release := sync.OnceFunc(func() { close(gate.resume) })
+				t.Cleanup(release)
+				var out *dto.ExpireOutput
+				heldDone := make(chan error, 1)
+				if sweepHeld {
+					go func() { var err error; out, err = runSweep(); heldDone <- err }()
+				} else {
+					go func() { heldDone <- runEnded() }()
+				}
+				select {
+				case <-gate.reached:
+				case <-time.After(10 * time.Second):
+					t.Fatal("fixture: the held side never reached its save")
+				}
+				var err error
+				if sweepHeld {
+					err = runEnded()
+				} else {
+					out, err = runSweep()
+				}
+				if err != nil {
+					t.Fatalf("the free side: %v", err)
+				}
+				release()
+				if err = <-heldDone; err != nil {
+					t.Fatalf("the held side: %v", err)
+				}
+
+				got, err := e.repo.FindByOrderID(c, p.OrderID())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var expired int
+				if err = e.db.Raw("SELECT count(*) FROM " + expiredTable).Scan(&expired).Error; err != nil {
+					t.Fatal(err)
+				}
+				if sweepHeld { // the end came first: cancelled, and the sweep only counted a conflict
+					if got.Status() != payment.StatusCancelled || got.Outcome() != end.outcome || out.Conflicts != 1 || expired != 0 {
+						t.Fatalf("end first: payment=%s/%s conflicts=%d PaymentExpired=%d, want CANCELLED/%s 1 0", got.Status(), got.Outcome(), out.Conflicts, expired, end.outcome)
+					}
+				} else { // the sweep came first: expired, then the end recorded its outcome on the expired payment
+					if got.Status() != payment.StatusExpired || got.Outcome() != end.outcome || out.Expired != 1 || expired != 1 {
+						t.Fatalf("sweep first: payment=%s/%s expired=%d PaymentExpired=%d, want EXPIRED/%s 1 1", got.Status(), got.Outcome(), out.Expired, expired, end.outcome)
+					}
+				}
+			})
+		}
+	}
+}
