@@ -31,8 +31,8 @@ import (
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
 var groupSeq atomic.Int64
@@ -62,16 +62,7 @@ func newConsumeEnv(t *testing.T) *consumeEnv {
 	if err := postgres.Up(context.Background(), pg, orderingpg.Migration()); err != nil {
 		t.Fatalf("migrate ordering: %v", err)
 	}
-	tel, closeTel, err := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(closeTel)
-	db, closeDB, err := postgres.NewDB(pg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(closeDB)
+	db := pgtest.DB(t, pg, pgtest.Telemetry(t))
 
 	topics := []string{topicConfirmed, topicCancelled, topicCompleted, "payment.v1.PaymentCaptured", "payment.v1.PaymentExpired",
 		"payment.v1.PaymentRefunded", "payment.v1.PaymentRefundRequested", "payment.v1.WebhookReceived", "payment.poison"}
