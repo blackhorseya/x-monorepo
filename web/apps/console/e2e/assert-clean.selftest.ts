@@ -1,11 +1,12 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { randomInt } from "node:crypto";
 import { createServer, type Server } from "node:net";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { EventEmitter } from "node:events";
-import { type Connect, classifyConnectError, probe } from "./clean.ts";
+import { type Connect, classifyConnectError, hasIPv6Loopback, probe } from "./clean.ts";
 import { derivePorts } from "./ports.ts";
 
 // The cleanup check (e2e/assert-clean.ts) must fail while ANYTHING still listens on a port the e2e stack
@@ -15,7 +16,33 @@ import { derivePorts } from "./ports.ts";
 // port, expects exit 1, closes it, and expects exit 0 again; the real `vite preview` is one of the cases.
 //
 //   node --test --experimental-strip-types e2e/assert-clean.selftest.ts      (task web-e2e-ports runs it first)
-const env = { ...process.env, E2E_RPC_PORT: "19711", E2E_WEB_PORT: "4711" };
+// This test is internal to the task: it does not read the caller's E2E pair (that belongs to the smoke
+// run, and to whatever else the caller runs beside it) and writes no port of its own. It picks a pair at
+// random from the OS's dynamic range and keeps it only if EVERY port derived from it (e2e/ports.ts, 14 of
+// them across two blocks) can be bound right now on every loopback, so any number of runs — under any
+// callers' pairs — can go side by side (#386). The OS cannot hand out the pair itself: it hands out one port at a
+// time, usually the next free one, and the derived ports must be spread over two separate blocks.
+const bindable = (host: string, port: number) =>
+  new Promise<boolean>((resolve) => {
+    const s = createServer();
+    s.once("error", () => resolve(false));
+    s.listen({ port, host, ipv6Only: host === "::1" }, () => s.close(() => resolve(true)));
+  });
+async function privatePair(): Promise<{ rpc: number; web: number }> {
+  const hosts = (await hasIPv6Loopback()).available ? ["127.0.0.1", "::1"] : ["127.0.0.1"];
+  for (let attempt = 0; attempt < 100; attempt++) {
+    // Dynamic range, with room for the largest offset (+60) below 65535; the two blocks are far apart.
+    const rpc = randomInt(20_000, 30_000);
+    const web = randomInt(40_000, 65_000);
+    const all = derivePorts({ E2E_RPC_PORT: String(rpc), E2E_WEB_PORT: String(web) }).all;
+    if (Math.max(...all) > 65535 || new Set(all).size !== all.length) continue;
+    const free = await Promise.all(all.flatMap((port) => hosts.map((host) => bindable(host, port))));
+    if (free.every(Boolean)) return { rpc, web };
+  }
+  throw new Error("no private E2E port pair with every derived port free after 100 tries");
+}
+const pair = await privatePair();
+const env = { ...process.env, E2E_RPC_PORT: String(pair.rpc), E2E_WEB_PORT: String(pair.web) };
 const p = derivePorts(env);
 const consoleDir = fileURLToPath(new URL("..", import.meta.url));
 const run = promisify(execFile);
@@ -33,7 +60,7 @@ async function checker(): Promise<{ code: number; out: string }> {
 function listen(host: string, port: number): Promise<Server> {
   return new Promise((resolve, reject) => {
     const s = createServer();
-    s.once("error", reject);
+    s.once("error", (err: NodeJS.ErrnoException) => reject(new Error(`${host}:${port} of the private pair was taken after it was chosen (${err.code}); rerun`, { cause: err })));
     s.listen({ port, host, ipv6Only: host === "::1" || host === "::" }, () => resolve(s));
   });
 }
