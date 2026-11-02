@@ -145,8 +145,12 @@ CREATE TABLE payment.order_outcomes (
 
 -- The expire sweep: PENDING payments whose window closed, and EXPIRED / CANCELLED ones still inside
 -- the reconcile window that have a provider reference.
-CREATE INDEX payments_pending_due_idx ON payment.payments (expires_at) WHERE status = 'PENDING';
-CREATE INDEX payments_reconcile_idx ON payment.payments (terminal_at)
+-- swept_at is the sweep's cursor: when it last looked at the payment (asked the provider, whatever the
+-- answer). Both lists serve the least recently looked-at first, NULL (never) before all, so a payment that
+-- stays in a list does not keep the front of it. It is not part of the aggregate: Save never writes it.
+ALTER TABLE payment.payments ADD COLUMN swept_at timestamptz;
+CREATE INDEX payments_pending_due_idx ON payment.payments (swept_at NULLS FIRST, expires_at) WHERE status = 'PENDING';
+CREATE INDEX payments_reconcile_idx ON payment.payments (swept_at NULLS FIRST, terminal_at)
     WHERE status IN ('EXPIRED', 'CANCELLED') AND provider_ref <> '';
 -- webhook processing finds the payment by the provider's reference
 CREATE INDEX payments_provider_ref_idx ON payment.payments (provider, provider_ref) WHERE provider_ref <> '';

@@ -29,6 +29,7 @@ func (x *Expire) Run(c context.Context) error {
 		x.logger.InfoContext(c, "payment-rpc expire finished",
 			"expired", out.Expired, "captured", out.Captured, "needs_review", out.NeedsReview,
 			"query_failures", out.QueryFailures, "conflicts", out.Conflicts, "failures", out.Failures,
+			"reconcile_eligible", out.ReconcileEligible, "oldest_unchecked", out.OldestUnchecked.String(),
 			"retention_deleted", out.RetentionDeleted, "retention_failed", out.RetentionFailed)
 	}
 

@@ -59,6 +59,7 @@ func (uc *ExpireSweep) Execute(c context.Context, _ dto.Ack) (*dto.ExpireOutput,
 	if err := uc.reconcile(ctx, out, asked); err != nil {
 		return out, err
 	}
+	uc.measure(ctx, out)
 	uc.retention(ctx, out)
 	if out.Failures > 0 {
 		return out, fmt.Errorf("expire sweep: %d payments could not be saved", out.Failures)
@@ -73,6 +74,7 @@ func (uc *ExpireSweep) expireDue(ctx contextx.Contextx, out *dto.ExpireOutput, a
 	if err != nil {
 		return fmt.Errorf("list due payments: %w", err)
 	}
+	defer uc.markSwept(ctx, out, due)
 	for _, p := range due {
 		paid := false
 		if p.ProviderRef() != "" {
@@ -107,10 +109,13 @@ func (uc *ExpireSweep) reconcile(ctx contextx.Contextx, out *dto.ExpireOutput, a
 	if err != nil {
 		return fmt.Errorf("list reconcilable payments: %w", err)
 	}
+	var queried []*payment.Payment
+	defer func() { uc.markSwept(ctx, out, queried) }()
 	for _, p := range open {
 		if asked[p.OrderID()] || !p.Reconcilable(now, uc.cfg.ReconcileWindow) {
 			continue // asked a moment ago, in the first pass of this very run; or out of its window
 		}
+		queried = append(queried, p)
 		got, err := uc.provider.GetPayment(ctx, p.ProviderRef())
 		if err != nil {
 			out.QueryFailures++
@@ -129,6 +134,45 @@ func (uc *ExpireSweep) reconcile(ctx contextx.Contextx, out *dto.ExpireOutput, a
 	}
 
 	return nil
+}
+
+// markSwept moves the cursor past the payments this pass looked at, whatever the provider said (or
+// failed to say): without it a payment that stays in its list — unpaid, or its query failing — keeps the
+// front of a bounded list for ever and the ones behind it are never asked. A cursor that cannot be written
+// is a failed run (it would repeat the same front).
+func (uc *ExpireSweep) markSwept(ctx contextx.Contextx, out *dto.ExpireOutput, looked []*payment.Payment) {
+	if len(looked) == 0 {
+		return
+	}
+	ids := make([]payment.ID, len(looked))
+	for n, p := range looked {
+		ids[n] = p.ID()
+	}
+	if err := uc.payments.MarkSwept(ctx, ids, uc.clock.Now()); err != nil {
+		out.Failures++
+	}
+}
+
+// measure reports how far behind the reconcile is (docs/payment.md §3 補查): how many payments are owed
+// a query and how long the least recently looked-at has waited. More than half the window is an alert:
+// from there the runs left cannot be counted on to reach every payment, and the batch or the interval
+// needs an operator.
+func (uc *ExpireSweep) measure(ctx contextx.Contextx, out *dto.ExpireOutput) {
+	now := uc.clock.Now()
+	b, err := uc.payments.ReconcileBacklog(ctx, now.Add(-uc.cfg.ReconcileWindow))
+	if err != nil {
+		out.Failures++
+
+		return
+	}
+	out.ReconcileEligible = b.Eligible
+	if !b.OldestUnchecked.IsZero() {
+		out.OldestUnchecked = now.Sub(b.OldestUnchecked)
+	}
+	uc.alerts.Backlog(ctx, out.ReconcileEligible, out.OldestUnchecked)
+	if out.OldestUnchecked > uc.cfg.ReconcileWindow/2 {
+		uc.alerts.Raise(ctx, payment.AlertReconcileBacklog, "")
+	}
 }
 
 // apply runs transition on p, then saves it and queues its events in one transaction. A lost optimistic

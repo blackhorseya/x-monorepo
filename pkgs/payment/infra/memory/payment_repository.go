@@ -18,10 +18,13 @@ type PaymentRepository struct {
 	mu   sync.RWMutex
 	data map[string]payment.ReconstituteParams // by order id
 	ids  map[payment.ID]string                 // payment id → order id
+	// swept is the sweep's cursor (MarkSwept): when a payment was last looked at. Not part of the stored
+	// record, so Save never touches it and a payment never loses a race to it.
+	swept map[payment.ID]time.Time
 }
 
 func NewPaymentRepository() *PaymentRepository {
-	return &PaymentRepository{data: map[string]payment.ReconstituteParams{}, ids: map[payment.ID]string{}}
+	return &PaymentRepository{data: map[string]payment.ReconstituteParams{}, ids: map[payment.ID]string{}, swept: map[payment.ID]time.Time{}}
 }
 
 func (i *PaymentRepository) FindByOrderID(c context.Context, orderID string) (*payment.Payment, error) {
@@ -86,8 +89,12 @@ func (i *PaymentRepository) ListPendingDue(c context.Context, now time.Time, lim
 
 func (i *PaymentRepository) ListReconcilable(c context.Context, notBefore time.Time, limit int) ([]*payment.Payment, error) {
 	return i.list(c, limit, func(r payment.ReconstituteParams) bool {
-		return (r.Status == payment.StatusExpired || r.Status == payment.StatusCancelled) && r.ProviderRef != "" && !r.TerminalAt.Before(notBefore)
+		return reconcilable(r, notBefore)
 	}, func(a, b payment.ReconstituteParams) bool { return a.TerminalAt.Before(b.TerminalAt) })
+}
+
+func reconcilable(r payment.ReconstituteParams, notBefore time.Time) bool {
+	return (r.Status == payment.StatusExpired || r.Status == payment.StatusCancelled) && r.ProviderRef != "" && !r.TerminalAt.Before(notBefore)
 }
 
 func (i *PaymentRepository) list(c context.Context, limit int, keep func(payment.ReconstituteParams) bool, less func(a, b payment.ReconstituteParams) bool) ([]*payment.Payment, error) {
@@ -103,7 +110,19 @@ func (i *PaymentRepository) list(c context.Context, limit int, keep func(payment
 			recs = append(recs, r)
 		}
 	}
-	sort.Slice(recs, func(a, b int) bool { return less(recs[a], recs[b]) })
+	// least recently looked-at first, the never looked-at before all; then the list's own order
+	sort.Slice(recs, func(a, b int) bool {
+		sa, oka := i.swept[recs[a].ID]
+		sb, okb := i.swept[recs[b].ID]
+		switch {
+		case oka != okb:
+			return !oka
+		case oka && !sa.Equal(sb):
+			return sa.Before(sb)
+		}
+
+		return less(recs[a], recs[b])
+	})
 	if limit > 0 && len(recs) > limit {
 		recs = recs[:limit]
 	}
@@ -122,10 +141,45 @@ func (i *PaymentRepository) list(c context.Context, limit int, keep func(payment
 // Save inserts a never-saved payment (Version 0) with version 1, or replaces a loaded one when the
 // stored version is still the loaded one. A second payment for an order, or a reused payment id, is
 // ErrDuplicateForOrder; a version that moved on is ErrStale.
-func (i *PaymentRepository) MarkSwept(context.Context, []payment.ID, time.Time) error { return nil }
+func (i *PaymentRepository) MarkSwept(c context.Context, ids []payment.ID, at time.Time) error {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return err
+	}
 
-func (i *PaymentRepository) ReconcileBacklog(context.Context, time.Time) (payment.Backlog, error) {
-	return payment.Backlog{}, nil
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for _, id := range ids {
+		if _, ok := i.ids[id]; ok {
+			i.swept[id] = at
+		}
+	}
+
+	return nil
+}
+
+func (i *PaymentRepository) ReconcileBacklog(c context.Context, notBefore time.Time) (payment.Backlog, error) {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return payment.Backlog{}, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	var b payment.Backlog
+	for _, r := range i.data {
+		if !reconcilable(r, notBefore) {
+			continue
+		}
+		b.Eligible++
+		seen, ok := i.swept[r.ID]
+		if !ok {
+			seen = r.TerminalAt
+		}
+		if b.OldestUnchecked.IsZero() || seen.Before(b.OldestUnchecked) {
+			b.OldestUnchecked = seen
+		}
+	}
+
+	return b, nil
 }
 
 func (i *PaymentRepository) Save(c context.Context, p *payment.Payment) error {

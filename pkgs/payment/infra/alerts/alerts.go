@@ -21,6 +21,10 @@ var _ port.Alerts = (*Alerts)(nil)
 type Alerts struct {
 	log     *slog.Logger
 	counter metric.Int64Counter
+	// the reconcile backlog (docs/payment.md §3 補查): payments owed a query, and the longest wait since
+	// one was last looked at
+	eligible metric.Int64Gauge
+	oldest   metric.Float64Gauge
 }
 
 func New(l *slog.Logger, meter metric.MeterProvider) (*Alerts, error) {
@@ -30,10 +34,26 @@ func New(l *slog.Logger, meter metric.MeterProvider) (*Alerts, error) {
 		return nil, err
 	}
 
-	return &Alerts{log: l, counter: c}, nil
+	eligible, err := meter.Meter("payment").Int64Gauge("payment_reconcile_eligible",
+		metric.WithDescription("Payments inside their reconcile window that are owed a provider query, after the last sweep."))
+	if err != nil {
+		return nil, err
+	}
+	oldest, err := meter.Meter("payment").Float64Gauge("payment_reconcile_oldest_unchecked_seconds",
+		metric.WithDescription("How long the least recently looked-at reconcilable payment has waited, after the last sweep."),
+		metric.WithUnit("s"))
+	if err != nil {
+		return nil, err
+	}
+
+	return &Alerts{log: l, counter: c, eligible: eligible, oldest: oldest}, nil
 }
 
-func (x *Alerts) Backlog(context.Context, int, time.Duration) {}
+// Backlog records the reconcile backlog as two gauges, set once per sweep.
+func (x *Alerts) Backlog(c context.Context, eligible int, oldest time.Duration) {
+	x.eligible.Record(c, int64(eligible))
+	x.oldest.Record(c, oldest.Seconds())
+}
 
 func (x *Alerts) Raise(c context.Context, a payment.Alert, orderID string) {
 	x.log.ErrorContext(c, "payment alert", "alert", string(a), "order_id", orderID)

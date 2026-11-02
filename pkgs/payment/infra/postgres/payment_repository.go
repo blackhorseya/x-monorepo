@@ -124,12 +124,16 @@ func (i *PaymentRepository) findOne(c context.Context, where string, arg any, wh
 	return row.toAggregate()
 }
 
+// reconcilableWhere is the reconcile list: EXPIRED / CANCELLED payments that opened a checkout and ended
+// inside the window (? = the window's start).
+const reconcilableWhere = "status IN ('EXPIRED', 'CANCELLED') AND provider_ref <> '' AND terminal_at >= ?"
+
 func (i *PaymentRepository) ListPendingDue(c context.Context, now time.Time, limit int) ([]*payment.Payment, error) {
 	return i.list(c, limit, "status = 'PENDING' AND expires_at <= ?", now, "expires_at ASC")
 }
 
 func (i *PaymentRepository) ListReconcilable(c context.Context, notBefore time.Time, limit int) ([]*payment.Payment, error) {
-	return i.list(c, limit, "status IN ('EXPIRED', 'CANCELLED') AND provider_ref <> '' AND terminal_at >= ?", notBefore, "terminal_at ASC")
+	return i.list(c, limit, reconcilableWhere, notBefore, "terminal_at ASC")
 }
 
 func (i *PaymentRepository) list(c context.Context, limit int, where string, arg any, order string) ([]*payment.Payment, error) {
@@ -138,7 +142,8 @@ func (i *PaymentRepository) list(c context.Context, limit int, where string, arg
 		return nil, err
 	}
 	var rows []paymentRow
-	q := platformpg.TxOrDB(ctx, i.db).Where(where, arg).Order(order + ", id ASC")
+	// least recently looked-at first, the never looked-at before all (the sweep's cursor)
+	q := platformpg.TxOrDB(ctx, i.db).Where(where, arg).Order("swept_at ASC NULLS FIRST, " + order + ", id ASC")
 	if limit > 0 {
 		q = q.Limit(limit)
 	}
@@ -157,10 +162,44 @@ func (i *PaymentRepository) list(c context.Context, limit int, where string, arg
 	return out, nil
 }
 
-func (i *PaymentRepository) MarkSwept(context.Context, []payment.ID, time.Time) error { return nil }
+// MarkSwept stamps swept_at without touching version: the cursor is not part of the aggregate, so a
+// stamp can neither fail a writer's compare-and-set nor be failed by one.
+func (i *PaymentRepository) MarkSwept(c context.Context, ids []payment.ID, at time.Time) error {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	raw := make([]string, len(ids))
+	for n, id := range ids {
+		raw[n] = id.String()
+	}
+	if err := platformpg.TxOrDB(ctx, i.db).Exec(`UPDATE `+Schema+`.payments SET swept_at = ? WHERE id IN ?`, at, raw).Error; err != nil {
+		return fmt.Errorf("mark payments swept: %w", err)
+	}
 
-func (i *PaymentRepository) ReconcileBacklog(context.Context, time.Time) (payment.Backlog, error) {
-	return payment.Backlog{}, nil
+	return nil
+}
+
+func (i *PaymentRepository) ReconcileBacklog(c context.Context, notBefore time.Time) (payment.Backlog, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return payment.Backlog{}, err
+	}
+	var row struct {
+		Eligible int
+		Oldest   *time.Time
+	}
+	err := platformpg.TxOrDB(ctx, i.db).Raw(
+		`SELECT count(*) AS eligible, min(COALESCE(swept_at, terminal_at)) AS oldest FROM `+Schema+`.payments
+		 WHERE `+reconcilableWhere, notBefore).Scan(&row).Error
+	if err != nil {
+		return payment.Backlog{}, fmt.Errorf("measure the reconcile backlog: %w", err)
+	}
+
+	return payment.Backlog{Eligible: row.Eligible, OldestUnchecked: utc(row.Oldest)}, nil
 }
 
 // Save inserts a never-saved payment (Version 0) with version 1, or updates a loaded one

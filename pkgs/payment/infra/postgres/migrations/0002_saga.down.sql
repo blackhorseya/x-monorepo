@@ -1,6 +1,7 @@
 DROP INDEX IF EXISTS payment.payments_provider_ref_idx;
 DROP INDEX IF EXISTS payment.payments_reconcile_idx;
 DROP INDEX IF EXISTS payment.payments_pending_due_idx;
+ALTER TABLE payment.payments DROP COLUMN IF EXISTS swept_at;
 DROP TABLE IF EXISTS payment.order_outcomes;
 DROP TABLE IF EXISTS payment.webhook_events;
 DROP TABLE IF EXISTS payment.inbox;
