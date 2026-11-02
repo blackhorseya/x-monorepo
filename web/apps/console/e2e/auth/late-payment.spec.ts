@@ -214,3 +214,146 @@ test("a refreshed access token of the same session does not reset the card", asy
   await expect(page.getByText("someone-else")).toBeVisible({ timeout: 10_000 }); // positive control: the page rendered again after the refresh
   await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT); // and the card is as it was
 });
+
+// What the card reads from the query cache belongs to the credential too (#391, the fourth cell: a result
+// already cached, then the credential changes). The server answers per credential here: ops and the JWT see
+// the order and, for ops, a payment with a checkout link; nobody (anonymous) is refused with 401. Anchors
+// first: the new credential is in force and its refused or empty requests have really been answered, so an
+// absent link is not just a request that has not come back yet.
+
+type Who = "ops" | "jwt" | "admin" | "none";
+const whoIs = (headers: Record<string, string>): Who => {
+  if (headers["x-api-key"] === OPS_KEY) return "ops";
+  if (headers["x-api-key"] === ADMIN_KEY) return "admin";
+  if (headers["authorization"]?.startsWith("Bearer ")) return "jwt";
+  return "none";
+};
+const refused = { status: 401, headers: { "x-error-code": "auth.unauthenticated" }, json: { code: "unauthenticated", message: "no credential" } };
+
+async function perCredential(page: import("@playwright/test").Page, id: string, linkFor: Who[]) {
+  const answered = { none: 0, getPaymentFor: [] as Who[] };
+  await page.route(GET_ORDER, (route) => {
+    const who = whoIs(route.request().headers());
+    if (who === "none") {
+      answered.none++;
+      return route.fulfill(refused);
+    }
+    return route.fulfill({
+      json: { order: { id, customerId: "someone", status: "ORDER_STATUS_CONFIRMED", paymentRequired: true, items: [], total: { amountMinor: "100", currency: "USD" } } },
+    });
+  });
+  await page.route("**/inventory.v1.InventoryService/GetReservation", (route) =>
+    route.fulfill({ status: 404, json: { code: "not_found", message: "none" } }),
+  );
+  await page.route(GET_PAYMENT, (route) => {
+    const who = whoIs(route.request().headers());
+    answered.getPaymentFor.push(who);
+    if (who === "none") {
+      answered.none++;
+      return route.fulfill(refused);
+    }
+    if (!linkFor.includes(who)) return route.fulfill(notFound);
+    return route.fulfill({ json: { payment: { id: "p", orderId: id, status: "PAYMENT_STATUS_PENDING", checkoutUrl: CHECKOUT } } });
+  });
+  return answered;
+}
+
+test("a payment result cached for a credential that signed out is not shown", async ({ page }) => {
+  const id = `e2e-pay-cache-out-${uid()}`;
+  const answered = await perCredential(page, id, ["ops"]);
+  await page.goto(`/orders/${id}`);
+  await useKey(page, OPS_KEY);
+  await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT); // positive control: the result was cached and shown
+
+  await page.locator("header").getByRole("button", { name: "Clear" }).click();
+  await expect(subject(page)).toHaveText("anonymous"); // the credential is gone
+  await expect.poll(() => answered.none, { timeout: 10_000 }).toBeGreaterThanOrEqual(2); // and the refusals (order and payment) have been answered
+  await settle(page);
+  await page.waitForTimeout(300);
+  expect(await page.getByTestId("payment-link").count()).toBe(0);
+  expect(await page.getByTestId("payment-card").count()).toBe(0); // the card is not kept up by the order data of the credential that left
+});
+
+test("a payment result cached for one credential is not shown to another; going back finds it again", async ({ page }) => {
+  const id = `e2e-pay-cache-switch-${uid()}`;
+  const answered = await perCredential(page, id, ["ops"]); // the JWT has an order but no payment
+  await page.goto(`/orders/${id}`);
+  await useKey(page, OPS_KEY);
+  await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT); // positive control
+
+  await useJWT(page, mintJWT(`e2e-b-${uid()}`));
+  await expect(subject(page)).toHaveText(/^jwt/);
+  await expect.poll(() => answered.getPaymentFor.includes("jwt"), { timeout: 10_000 }).toBe(true); // the JWT's own GetPayment has been answered (404)
+  await expect(page.getByTestId("payment-card")).toBeVisible();
+  await settle(page);
+  expect(await page.getByTestId("payment-link").count()).toBe(0);
+
+  // The normal path still works: the first credential again asks again and gets its result.
+  await useKey(page, OPS_KEY);
+  await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT);
+});
+
+test("a GetPayment answer that arrives late for the previous credential is not shown to the new one", async ({ page }) => {
+  const id = `e2e-pay-cache-late-${uid()}`;
+  const answered = await perCredential(page, id, []); // nobody has a link by default
+  // ops' payment answer is held back; it carries a link
+  let received!: () => void;
+  const hasReceived = new Promise<void>((r) => (received = r));
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  let delivered!: () => void;
+  const wasDelivered = new Promise<void>((r) => (delivered = r));
+  let held = false;
+  await page.route(GET_PAYMENT, async (route) => {
+    if (whoIs(route.request().headers()) !== "ops" || held) return route.fallback();
+    held = true;
+    received();
+    await released;
+    await route.fulfill({ json: { payment: { id: "p", orderId: id, status: "PAYMENT_STATUS_PENDING", checkoutUrl: CHECKOUT } } });
+    delivered();
+  });
+  await page.goto(`/orders/${id}`);
+  await useKey(page, OPS_KEY);
+  await hasReceived; // positive control: ops' payment request is on its way
+  await expect(page.getByTestId("payment-card")).toBeVisible();
+
+  await useJWT(page, mintJWT(`e2e-b-${uid()}`));
+  await expect(subject(page)).toHaveText(/^jwt/); // the new credential is in force
+  await expect(page.getByTestId("payment-card")).toBeVisible();
+  release();
+  await wasDelivered; // the old answer has been handed to the page
+  await settle(page);
+  await page.waitForTimeout(500);
+  expect(await page.getByTestId("payment-link").count()).toBe(0);
+  // After the assertion that matters (a request the old query joined would never show up here): the new
+  // credential did ask for its own payment, and was answered.
+  expect(answered.getPaymentFor).toContain("jwt");
+});
+
+// Same session, refreshed token: the payment result in the cache is the same person's and stays.
+test("a payment result from the query is kept through a token refresh of the same session", async ({ page }) => {
+  const id = `e2e-pay-cache-rotate-${uid()}`;
+  await stubConfig(page);
+  const idp = await mockIdp(page, { expiresIn: 12 });
+  let customer = "someone";
+  const order = () => ({ id, customerId: customer, status: "ORDER_STATUS_CONFIRMED", paymentRequired: true, items: [], total: { amountMinor: "100", currency: "USD" } });
+  await page.route(GET_ORDER, (route) => route.fulfill({ json: { order: order() } }));
+  await page.route("**/inventory.v1.InventoryService/GetReservation", (route) =>
+    route.fulfill({ status: 404, json: { code: "not_found", message: "none" } }),
+  );
+  await page.route(GET_PAYMENT, (route) =>
+    route.fulfill({ json: { payment: { id: "p", orderId: id, status: "PAYMENT_STATUS_PENDING", checkoutUrl: CHECKOUT } } }),
+  );
+  await page.route("**/ordering.v1.OrderService/ListOrders", (route) => route.fulfill({ json: { orders: [order()] } }));
+  await page.route("**/inventory.v1.InventoryService/BatchGetReservations", (route) => route.fulfill({ json: {} }));
+  await page.goto("/login");
+  await signIn(page);
+  await page.getByRole("link", { name: id.slice(-8) }).click();
+  await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT); // from GetPayment: Pay was never pressed
+
+  const issued = idp.accessTokens.length;
+  await expect.poll(() => idp.accessTokens.length, { timeout: 25_000 }).toBeGreaterThan(issued); // a new access token was issued
+  customer = "someone-else"; // the next poll of the order changes what the page renders
+  await expect(page.getByText("someone-else")).toBeVisible({ timeout: 10_000 }); // positive control: rendered again after the refresh
+  await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT);
+});
