@@ -98,7 +98,7 @@ apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Wate
                  `worker prune --older-than <d>` 是 outbox / inbox 的 retention（poison 表不清）；`worker expire --older-than <d>` 是 inventory 的 reservation TTL（adapters/cli，第二個 wire injector）；`worker bootstrap` 是 identity 的第一個 account + key（adapters/cli，第三個 injector；identity 沒 event 所以不在 router 裡）；
                  有 DB 時 `eventbus.Lag` 另報每張 outbox 表 / inbox 的大小與最老一列年齡（`eventbus_outbox_*` / `eventbus_inbox_*`），alert 用它抓 prune 沒跑與 stale group；各 BC 的 `adapters/metrics` 另報 `ordering_orders{status}` / `inventory_reservations{status}` 與各 status 最老一筆的年齡（saga 漏斗，PENDING 太老有 alert）
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
-deployments/helm Helm chart：rpc / worker Deployment、選配 payment-rpc（`paymentRpc.enabled` 預設 off：serve／consume Deployment ＋ expire CronJob，自己的 ConfigMap／Secret，只對外開 webhook 的 ingress ＋ ingress-nginx 限流）、migrate pre-install/pre-upgrade hook Job、prune CronJob、console（nginx，/api proxy 到 rpc Service，`console.enabled` 預設 off）、
+deployments/helm Helm chart：rpc / worker Deployment、選配 payment-rpc（`paymentRpc.enabled` 與 `config.ordering.require_payment` 從 chart 0.3.53 起**預設 on**，全新安裝沒給 auth 與 payment secrets 會被拒絕並指名兩條出路，要關得兩個值都設 false：serve／consume Deployment ＋ expire CronJob，自己的 ConfigMap／Secret，只對外開 webhook 的 ingress ＋ ingress-nginx 限流）、migrate pre-install/pre-upgrade hook Job、prune CronJob、console（nginx，/api proxy 到 rpc Service，`console.enabled` 預設 off）、
                  選配 rpc ServiceMonitor 與 ingress-only NetworkPolicy（rpc 永遠放行 console；`ingressFrom` 空 = 任何來源）；terminationGracePeriodSeconds
                  從 rpc.shutdown / worker 的 drain 算出來（改 shutdown 行為要一起改 values 註解與 check.py）；CI 的 helm-kind job 在 kind 真裝 + smoke
 ```

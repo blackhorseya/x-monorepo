@@ -378,6 +378,35 @@ COMMIT;
 
 ## Deploy（Helm）
 
+### Upgrade notes — chart 0.3.53：payment 預設開（#367 切片 6）
+
+**先讀這一條：有一種升級會「無預警」把開關打開。** chart 0.3.50–0.3.52 的 release，如果已開 auth（`config.auth.mode` 是 `optional`／`required`）、已顯式 `paymentRpc.enabled=true` 且 `secrets.paymentRpc.*` 齊，但**從沒寫過** `config.ordering.require_payment`（舊預設 `false`），那麼用**同一份 values** `helm upgrade` 到 0.3.53，render 會過、升級會成功，`config.ordering.require_payment` 同時變成 `true`——chart 分不出「沒寫」和「預設值」，沒有任何錯誤擋它。**實測**（kind，helm 4.3.0）：0.3.51 的 release（auth required、payment-rpc 開、沒寫開關）用同一份 values 升級 → `STATUS: deployed`、ConfigMap 出現 `ordering.require_payment: true`、worker 多了 `APP_PAYMENT_UPSTREAM`；升級**之後**建的單 `payment_required=true`，`CompleteOrder` 回 `failed_precondition`（`order requires payment before it can be completed`，要走付款）；升級**之前**已 `CONFIRMED` 的單快照維持 `false`，仍可手動完成。`--reuse-values` 與 `--reset-then-reuse-values` 這兩種升級同樣都成功（沒有任何錯誤），`--reset-then-reuse-values` 之後的 ConfigMap 實測是 `require_payment: true`。**升級前請在你的 values 顯式寫 `config.ordering.require_payment: true` 或 `false`**（寫 `false` 之前也要確認 `paymentRpc.enabled` 你要不要）。
+
+**這個版本的預設改了什麼**：chart 預設 `paymentRpc.enabled: true` 與 `config.ordering.require_payment: true`。**binary 預設不變**（`ordering.require_payment` 預設 `false`，`task run`、compose、沒設 payment 的環境都不受影響）。`config.auth.mode` 預設仍是 `off`，而 auth 關著沒有人付得了款，所以：
+
+- **全新安裝**只給一個資料庫與 catalog-rpc 的 key（舊 chart 需要的一切）→ **render 失敗**（`ci-negative/first-install-defaults.yaml`），訊息指名兩條出路：①讓 payment 活著：`config.auth.mode` 設 `optional`／`required`（加 key），並給 `secrets.paymentRpc.apiKey` 與 `secrets.paymentRpc.mockWebhookSecret`（或 `secrets.paymentRpc.existingSecret`）；②**明確關掉**：**兩個**值都要設——`config.ordering.require_payment=false` 與 `paymentRpc.enabled=false`（只關其中一個仍會 render 失敗）。
+- **provider 目前只有 mock，沒有人付得了款**（`https://mock-pay.invalid/checkout/…` 是不存在的主機）。所以預設開著、也能 render 的部署，每張需要付款的訂單會在 `paymentRpc.config.window`（預設 30 分鐘）後被取消，除非有人用 `payment-rpc mock pay` 付款——那個入口（`paymentRpc.config.mock_control`）預設關，只給 kind 與測試。接真流量的部署在有真 provider 之前**不要開**：關掉的方法就是上面的兩個值。`helm install`／`upgrade` 結束時 NOTES.txt 第一段就是這段警告。
+- 已經 `CONFIRMED` 的訂單不受影響：快照在確認的那一刻存下，之後怎麼改開關都不動它（`docs/payment.md` §8）。
+
+**實測過的升級格子**（kind，真的 `helm upgrade`；沒列的格子沒有測，不要當成保證）：
+
+| 起點（release） | 指令 | 結果 |
+|---|---|---|
+| 0.3.49，auth off，沒有 payment | `-f` 自己的 values | **render 失敗**（auth 關著＋開關預設開），訊息列兩條出路；release 維持 rev 1，pod 一個都沒動 |
+| 同上 | `--reuse-values`（不帶 `-f`） | **失敗，但是 template 的 nil pointer**（`.Values.paymentRpc.enabled`）：helm 不會把新頂層 key 的預設補進 `--reuse-values`，helm 不會把新頂層 key 的預設補進 `--reuse-values` 的結果（`.Values.paymentRpc` 是 nil）；這不是這次改預設造成的（`paymentRpc` 這個頂層 key 從 0.3.50 就有了，沒有在 0.3.50 的 chart 上單獨量測）；release 不動 |
+| 同上 | `--reset-then-reuse-values` | 同第一列：明確失敗、不動 |
+| 同上 | `-f` 自己的 values `--set config.ordering.require_payment=false --set paymentRpc.enabled=false` | 升級成功（rev 2），沒有任何 payment 物件 |
+| 0.3.51，auth required，payment-rpc 開且 secrets 齊，**沒寫**開關 | `-f` 同一份 values | **升級成功且開關變 `true`**（上面第一條；無預警的那格） |
+| 同上 | `--reuse-values`、`--reset-then-reuse-values` | 兩個都升級成功（沒有錯誤）；`--reset-then-reuse-values` 之後 ConfigMap 實測 `require_payment: true`，`--reuse-values` 之後的值沒有單獨量測 |
+| 全新安裝，只給資料庫與 catalog-rpc key | `helm install` | render 失敗，訊息列兩條出路 |
+| 全新安裝，auth＋payment secrets 齊 | `helm install` | 成功；開關 `true`；`task helm-kind` 的 `payment-flow.sh` 走完整流程 |
+
+**用 `--reuse-values` 升級的人**：從 0.3.49 之前沒有 `paymentRpc` 的 release 用 `--reuse-values` 會得到上面的 nil pointer（不是設定錯誤）。改用 `-f <你的 values>`，或 `--reset-then-reuse-values`（helm 3.14+），並照上面顯式寫開關。
+
+**怎麼關（回到沒有 payment 的行為）**：`--set config.ordering.require_payment=false --set paymentRpc.enabled=false`（values 檔寫同樣兩個鍵）。已經在跑的 payment-rpc 在 `paymentRpc.enabled=false` 後被移除；`payment` schema 的資料與 migration 不動。
+
+**GitOps（ArgoCD、Flux）**：它們用 `helm template` 渲染，上面「升級成功／失敗」的實測是 `helm upgrade` 對活的 release；`helm template` 不看活的 release，所以**沒有任何東西擋住**上面那個無預警的格子。用這類工具的人更需要在 values 裡顯式寫開關。
+
 `deployments/helm/x-monorepo/` 是這些 image 的 chart，沒有 dependency、不假設 ingress controller 或 secret 工具。它做的事是把
 README 的 server / Events 節講的「部署要配合的行為」寫成算式，而不是讓人手抄：
 

@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-> **狀態：設計稿，切片 1、2、3、4、5 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`。切片 3A（payment 側的 saga）：`payment-rpc consume`（T1／T7／T7'／T10／T12–T15、退款 T11）、webhook route 與其套用（T3／T4／T8／T9）、`payment-rpc expire`（T5／T6／T6'、補查）、webhook 通知的 retention。切片 3B（ordering 側的 saga）：ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（`apps/worker`，依訂單快照，§8 ordering 表每一格）、`worker poison`／`worker prune`／admin RPC 納入 payment、worker 的 retention／poison gauge 涵蓋 payment 的表、payment 的表不存在時 worker 拒絕啟動。切片 4（`apps/rpc` 轉發與 Console 付款頁）已由 #390 合併。切片 5（部署）：5a image（#394）、5b mock 狀態跨 process 共用（#399）、5c chart（`paymentRpc`，預設 off：`serve`／`consume`／`expire` 三個 workload、只開 webhook 的 ingress 與限流、Grafana 面板與 alert）。**尚未實作**：切片 6（切換）；預設設定（`ordering.require_payment: false`）下所有訂單的快照都是 `false`，ordering 忽略付款事件，所以預設部署沒有任何路徑會讓訂單走到 `PAID`；打開開關才會（切片 6）。
+> **狀態：設計稿，切片 1、2、3、4、5、6 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`。切片 3A（payment 側的 saga）：`payment-rpc consume`（T1／T7／T7'／T10／T12–T15、退款 T11）、webhook route 與其套用（T3／T4／T8／T9）、`payment-rpc expire`（T5／T6／T6'、補查）、webhook 通知的 retention。切片 3B（ordering 側的 saga）：ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（`apps/worker`，依訂單快照，§8 ordering 表每一格）、`worker poison`／`worker prune`／admin RPC 納入 payment、worker 的 retention／poison gauge 涵蓋 payment 的表、payment 的表不存在時 worker 拒絕啟動。切片 4（`apps/rpc` 轉發與 Console 付款頁）已由 #390 合併。切片 5（部署）：5a image（#394）、5b mock 狀態跨 process 共用（#399）、5c chart（`paymentRpc`，預設 off：`serve`／`consume`／`expire` 三個 workload、只開 webhook 的 ingress 與限流、Grafana 面板與 alert）。**尚未實作**：切片 6（切換）；預設設定（`ordering.require_payment: false`）下所有訂單的快照都是 `false`，ordering 忽略付款事件，所以預設部署沒有任何路徑會讓訂單走到 `PAID`；打開開關才會（切片 6）。
 > 決策來源：#367 七個決定，加上 Sean 對 PR #369 暴露的未決項的後續裁示（[#367 comment](https://github.com/blackhorseya/x-monorepo/issues/367#issuecomment-6565500716)，decision `d-20261101232833097592-18`）。兩者有衝突時以後者為準；§13 列出哪一條取代了哪一條。
 > 「保證」只列已指定到切片測試的條目；測試名稱是預定名稱，實作時以實際為準。寫不出測試的就不寫成保證。
 > 改動任何已定決定都要回 Sean。標 **〔實作細節〕** 的是本文為了讓已定規則成立而補上的內部做法，實作時可調整，但不得改變它所服務的規則。
@@ -280,7 +280,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 
 規則（§2）：ordering 只看訂單的 `payment_required` 快照。**目前的 `ordering.require_payment` 只決定兩件事**：(1) 之後進 `CONFIRMED` 的新訂單，快照存成什麼；(2) `StartPayment` 能不能用（§6）。它**不**影響任何已 `CONFIRMED` 訂單的 `CompleteOrder`、`CancelOrder` 與付款事件處理。
 
-開關預設 `false`（切片 6 之前）；切片 6 之後**新部署**預設 `true`，範例設定與 chart 同步更新（已存在部署的 values 不自動改）。
+**binary 與範例設定的預設是 `false`；Helm chart 的預設是 `true`**（切片 6，Sean 裁示、代價已告知：`paymentRpc.enabled` 與 `config.ordering.require_payment` 一起預設開）。`config.auth.mode` 預設仍是 `off`，而 auth 關著沒有人付得了款，所以預設的 `helm install` 會 render 失敗並指名兩條出路（`docs/operations.md`「Upgrade notes」）；provider 目前只有 mock，預設開著而能 render 的部署，每張需要付款的訂單在 `payment.window` 後被取消，除非用 mock 控制入口付款。已存在 release 的升級行為只寫實測過的格子，其中有一格（auth 已開、payment-rpc 已開、從沒寫過開關）會**無預警**把開關打開，升級前要顯式寫。
 
 ### ordering 端：快照 × 訂單狀態 × 動作
 
@@ -315,8 +315,8 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 2 | Payment 核心 | `pkgs/payment`、schema、mock provider、`payment-rpc serve`（RPC；`StartPayment` 的 `payment.disabled` 在 rpc 側，切片 4） | 否（沒部署） |
 | 3 | Saga（3A、3B **已實作**） | `consume`（訂閱 `OrderConfirmed`／`OrderCancelled`／`OrderCompleted`）、webhook 落地（含 platform 的 gin route option）、`expire`、自動退款（T10–T11）、ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（依快照）、**`poison`／`prune` 的 `payment` 納入**（見下） | 否（預設快照 `false` 時 ordering 忽略付款事件） |
 | 4 | 入口（**已實作**） | `payment.v1.PublicPaymentService`（rpc 轉發 `StartPayment`／`GetPayment`，含 `payment.disabled`、`payment.unavailable`）、`payment.*` 設定、Console Pay 卡片 | 否（預設設定下快照全為 `false`、payment 設定選填，頁面與現在一樣） |
-| 5 | 部署 | **5a** goreleaser 第六個 image（#394）；**5b** mock 狀態跨 process 共用（`payment.mock_*`，migration `0003`）；**5c** chart（`paymentRpc`，預設 off）、ingress 只開 webhook 並限流、`task helm-check` 負例、kind 實測（`payment.sh`）、Grafana 面板與 alert；bot chart bump 常設授權的書面由 lead 另改 | 否 |
-| 6 | 切換 | 開啟開關（新部署預設 `true`），kind 跑完整流程與第 5 節全部競態 | **是** |
+| 5 | 部署 | **5a** goreleaser 第六個 image（#394）；**5b** mock 狀態跨 process 共用（`payment.mock_*`，migration `0003`）；**5c** chart（`paymentRpc`，5c 時預設 off；切片 6 起預設 on）、ingress 只開 webhook 並限流、`task helm-check` 負例、kind 實測（`payment.sh`）、Grafana 面板與 alert；bot chart bump 常設授權的書面由 lead 另改 | 否 |
+| 6 | 切換（**已實作**） | chart 預設開（`paymentRpc.enabled`、`config.ordering.require_payment` 預設 `true`，binary 預設不變；`auth.mode` 預設仍 `off`，預設安裝 fail closed 並指名兩條出路；所有 `ci/` profile 與 kind base 顯式選邊）、mock 控制入口 `payment-rpc mock pay\|notify\|fail`（`payment.mock_control`，migration `0004`）、worker 在開關開著而沒有 `payment.upstream` 時拒絕啟動、kind 全流程（`payment-flow.sh`）與 Console 真流程（`task web-e2e-payment`），§5 全部競態與 TTL 序列在真環境成立 | **是**（chart 預設） |
 
 每片一個 PR，切片 6 之前都不改變現有下單行為。**例外：切片 3 分兩支（3A、3B）**——3A 是 payment 側（migration、`consume`、webhook、`expire`），3B 是 ordering 訂閱 `PaymentCaptured`／`PaymentExpired` 與 `poison`／`prune` 納入 payment。3B 讀 3A migration 建的 `payment.events_*` 表，所以 3A 合併後才從新 main 開 3B，不做 stacked PR。3A 單獨合併時不改變任何下單行為：沒有人訂閱 payment 的事件，`consume` 也還沒部署（收到 `OrderConfirmed` 建付款單會寫資料，部署 `consume` 是切片 5 的事）。
 
