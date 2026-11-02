@@ -17,6 +17,8 @@ const (
 	durableKey    = "payment-rpc-key-0123456789ab"
 	durablePGPass = "s3cretpgpass"
 	otherKey      = "console-user-key-0123456789"
+	// the mock provider's webhook secret every durable deployment shares (serve verifies with it, the others sign with it)
+	durableMockSecret = "mock-webhook-secret-0123456789"
 )
 
 // outcome of one run(args) under a given environment.
@@ -127,6 +129,8 @@ func durableEnv(t *testing.T, override map[string]*string) map[string]*string {
 		"APP_POSTGRES_URL":  s(pg),
 		"APP_AUTH_MODE":     s("required"),
 		"APP_AUTH_API_KEYS": s("rpc=" + durableKey + ":admin"),
+		// not part of the contract of the old cases: a valid shared secret, so each case still varies one thing
+		"APP_PAYMENT_MOCK_WEBHOOK_SECRET": s(durableMockSecret),
 	}
 	for k, v := range override {
 		env[k] = v
@@ -206,4 +210,44 @@ func TestRun_RequireDurable(t *testing.T) {
 			t.Fatalf("run = %+v, want a refusal for an unknown argument", out)
 		}
 	})
+}
+
+// An external Secret holds the mock provider's webhook secret, and `optional: false` only catches a MISSING key: the
+// key can be there with an empty or blank value. Without a shared secret every process signs with its own random one
+// and serve cannot verify what another process signed. --require-durable judges the FINAL value, in every workload
+// (serve, consume, expire), whatever put it there; a good Secret still starts (positive control per workload).
+func TestRun_RequireDurable_MockWebhookSecret(t *testing.T) {
+	bad := map[string]*string{
+		"missing (unset)": nil,
+		"empty":           s(""),
+		"blank":           s("   "),
+		"tab and newline": s("\t\n"),
+	}
+	for _, cmd := range []string{"serve", "consume", "expire"} {
+		for name, v := range bad {
+			t.Run("refuses "+cmd+" with the mock webhook secret "+name, func(t *testing.T) {
+				env := durableEnv(t, map[string]*string{"APP_PAYMENT_MOCK_WEBHOOK_SECRET": v})
+				out := start(t, []string{cmd, "--require-durable"}, env)
+				if out.served || out.timedOut {
+					t.Fatalf("payment-rpc %s --require-durable ran with no usable mock webhook secret: %+v", cmd, out)
+				}
+				if out.err == nil || !strings.Contains(out.err.Error(), "require-durable") || !strings.Contains(out.err.Error(), "mock_webhook_secret") {
+					t.Fatalf("run = %v, want a refusal naming --require-durable and payment.mock_webhook_secret", out.err)
+				}
+				for _, secret := range []string{durableKey, otherKey, durablePGPass, durableMockSecret} {
+					if strings.Contains(out.err.Error(), secret) {
+						t.Fatalf("the refusal prints a secret: %v", out.err)
+					}
+				}
+			})
+		}
+		t.Run("accepts "+cmd+" with a shared secret (positive control)", func(t *testing.T) {
+			out := start(t, []string{cmd, "--require-durable"}, durableEnv(t, nil))
+			// consume gets past the gate and then fails for want of ordering's event tables in this bare database
+			// (its router needs them): what must not happen is the gate refusing a good Secret.
+			if out.err != nil && (cmd != "consume" || strings.Contains(out.err.Error(), "require-durable")) {
+				t.Fatalf("payment-rpc %s --require-durable refused a good configuration: %v", cmd, out.err)
+			}
+		})
+	}
 }

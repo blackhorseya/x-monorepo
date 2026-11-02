@@ -189,6 +189,11 @@ def main(profile: str) -> None:
     # payment-rpc (#367 slice 5c): off by default, and then the release is what it was before it existed.
     check_payment_rpc(docs, values, rpc, c, worker)
 
+    # The release-wide ConfigMap (the worker, rpc and the CronJobs mount it) never carries a payment credential,
+    # whatever the values say: the provider's credential belongs to payment-rpc's own Secret alone.
+    for k in ("mock_webhook_secret", "api_key"):
+        check(k not in (cfg.get("payment") or {}), f"the release-wide ConfigMap carries payment.{k}")
+
     # Every app pod reads the same config file and, when there is one, the same Secret.
     for d in (rpc, worker):
         cc = d["spec"]["template"]["spec"]["containers"][0]
