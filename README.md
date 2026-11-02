@@ -34,6 +34,7 @@ task lint test      # depguard 強制分層與 BC 邊界
 task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）；第一次會把 config.example.yaml 複製成 configs/local.yaml（gitignored）
 task catalog-rpc    # 另一個終端、在 task run 之前：:8081 的 catalog 服務，讀自己的 configs/catalog-rpc.yaml（gitignored，從 catalog-rpc.example.yaml 複製；不讀 local.yaml），telemetry 送 otel-lgtm
+task payment-rpc    # 另一個終端（選用，目前沒有人呼叫它）：:8082 的 payment 服務，讀自己的 configs/payment-rpc.yaml（gitignored，從 payment-rpc.example.yaml 複製），provider 是 mock
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
 
@@ -93,6 +94,9 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │   └── catalog/                   # ── 第四個 BC：商品價格的 server 端來源，沒有 event（docs/catalog.md）──
 │       ├── domain/product/        # Product aggregate（sku、name、price（每個 product 各自的幣別）、active、optimistic version）
 │       └── application/usecase/   # Upsert / Get / List / Deactivate + QuotePrices（批次報價，分得出不存在與已下架；ordering 的 `adapters/pricing` 經 contract 呼叫它）
+│   └── payment/                   # ── 第五個 BC：訂單的單一付款單，經 provider 的 hosted checkout 收款（docs/payment.md；切片 2 沒有 event）──
+│       ├── domain/payment/        # Payment aggregate + 狀態 × 事件全表（每格一個 domain 方法）
+│       └── infra/provider/mock/   # PaymentProvider 的 mock：hosted checkout、簽章 webhook、延遲與故障注入
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / catalog-rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
@@ -100,6 +104,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── catalog-rpc/               # catalog 的獨立服務（#320）：只掛 catalog 的 rpc；rpc 以 Connect 問它查價與檢查 SKU（`catalog.upstream`）
+│   ├── payment-rpc/               # payment 的獨立服務（#367 切片 2）：只掛 payment 的 rpc（`StartPayment`／`GetPayment`），認證只認 service key `rpc`；saga 是切片 3
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）
@@ -123,7 +128,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
 | [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、ordering 怎麼用它定價（rpc 經 Connect 問獨立的 catalog-rpc）、舊 client 還送 `unit_price` 會怎樣、Console 的 Products 頁 |
-| [`docs/payment.md`](docs/payment.md) | payment BC **設計稿（#367；切片 1 的 ordering 契約已實作，`pkgs/payment` 尚未）**：付款單狀態機與狀態 × 事件全表、事件、訂單 `payment_required` 快照 × 目前開關矩陣、webhook 與 `payment-rpc` 認證入口、切片與保證對照 |
+| [`docs/payment.md`](docs/payment.md) | payment BC **設計稿（#367，切片 1（ordering 契約）、切片 2 已實作：付款單 aggregate、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`；saga 與其餘尚未）**：付款單狀態機與狀態 × 事件全表、事件、訂單 `payment_required` 快照 × 目前開關矩陣、webhook 與 `payment-rpc` 認證入口、切片與保證對照 |
 | [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
@@ -386,11 +391,11 @@ task web-e2e-image  # 同一套 chromium spec 改打真的 console image（e2e/i
 | 呼叫後端 | `@connectrpc/connect-web` + `@repo/proto` 的 service descriptor；vite dev server 把 `/ordering.v1.*`、`/inventory.v1.*` proxy 到 Go server，瀏覽器維持 same-origin，所以 server **不需要 CORS** |
 | 錯誤 | `describe()` 讀 `x-error-code` header，並解析 protovalidate 的 `Violations` detail 成 `items[0].sku: …`；`UNAUTHENTICATED` 另外提示去設 credential |
 | 認證 | header 右側的 **Credential**：API key（`X-API-Key`）或 JWT（`Authorization: Bearer`），存 localStorage（`console.credential`），transport 的 interceptor 每次呼叫時讀，改了下一個 RPC 就生效；`VITE_CONSOLE_API_KEY` / `VITE_CONSOLE_TOKEN` 可在 build 時 seed。server `auth.mode: off` 時什麼都不用設 |
-| 資料 | TanStack Query：server 只有 unary RPC，所以 orders 與 reservation 用 `refetchInterval` polling；reservation 到 REJECTED / RELEASED（終態）就停。domain error 不 retry |
+| 資料 | TanStack Query：server 只有 unary RPC，所以輪詢：訂單詳情頁的 order 與 reservation 用 `refetchInterval`（order：PENDING 2s；CONFIRMED 15s，因為 inventory 可能自己讓預留過期而取消訂單，不靠 reservation 變動去 invalidate order：saga 還沒走完時會讀到舊的 CONFIRMED；COMPLETED / CANCELLED、查無此單（`null`）就停。reservation：RESERVED 15s、其他狀態停；還沒有 reservation 時繼續 2s 查，但 order 已 COMPLETED / CANCELLED 就停）；三張列表（Orders、Stock、Reservations）只每 2s 重抓第一頁（`refreshFirstPage`），不用 `refetchInterval`（N 個已載入的頁 = 每輪 N 個請求）。domain error 不 retry |
 | 路由 | TanStack Router（code-based，`/orders`、`/orders/$id`、`/reservations`、`/stock`、`/poison`、`/prune`），不需要額外的 codegen plugin；`/orders` 的 `status` / `customer` 與 `/reservations` 的 `status` / `order` 走 search params（`validateSearch`），連結可分享；`/orders/$id` 是單筆訂單（每條 line、total、Cancel、inventory 的 reservation），list 的 id 欄與 Reservations 頁的 order 欄都連過去，`/orders` 另有 Order id 輸入框貼完整 id 直接開（log / ticket 抄來的 id 不用在 list 裡翻頁找），不存在的 id 顯示 not found 而不是錯誤 |
-| Orders 頁 | 建單表單的 Customer 選填：admin（`ListAccounts` 探測）或 anonymous（`WhoAmI.anonymous`）才可填，其他 credential 欄位鎖住、由 server 用 principal 的 subject；`ordering.v1.OrderService/ListOrders`（keyset，`created_at desc, id desc`，customer / status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s 只重抓第一頁（`refreshFirstPage`）；mutation 以 `["orders"]` 前綴 invalidate 所有 filter 的頁。Reservation 欄不逐列 `GetReservation`：還在等的列（PENDING，或 COMPLETED／CANCELLED 但仍 RESERVED／尚無）每 2s 共用一次 `inventory.v1.InventoryService/BatchGetReservations`（一次最多 100 個 order id，超過就分批；沒有要等的列就不打、分頁隱藏不打），訂單狀態變動時立刻補查一次，回到分頁（`visibilitychange`）時對所有已載入的列再查一次（含等待窗口已過期的缺失列）。非第一頁的列不隨第一頁刷新，訂單狀態維持載入時的值（PENDING 的列會持續被查），重載或 Load more 後更新；訂單詳情頁仍用 `GetReservation` 自己 poll |
-| Reservations 頁 | `inventory.v1.InventoryService/ListReservations`（keyset，`created_at desc, order_id desc`，status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s poll；Orders 頁的 reservation badge 連到 `/reservations?order=<id>`，該筆釘在最上面 |
-| Stock 頁 | `inventory.v1.InventoryService/ListStocks`（keyset，SKU 升冪，opaque page token；`sku_prefix` / `only_reserved` 篩選，token 帶著篩選條件，換條件續頁是 INVALID_ARGUMENT）的表格，`useInfiniteQuery` + Load more，每 2s poll 已載入的頁；篩選走 `/stock?prefix=&reserved=` search params；上方 Set stock 建立 / 覆寫 on hand，列上 Edit 把該 SKU 帶進表單 |
+| Orders 頁 | 建單表單送 `idempotency_key`（UUID v7，npm `uuid`）：key 代表「一次下單意圖」，同一份內容（customer、lines，以及 customer 留空時的 credential）重送沿用同一把，所以回應遺失後再按一次不會多一筆訂單；內容或 customer 改變、或建單成功就換新 key（server 對同 key 不同內容回 `order.idempotency_key_reused`）；成功後導向 `/orders/$id`；送出後才換 credential 的晚到成功回覆（訂單屬於舊 credential）不導向、也不清掉新 credential 當下的 key。Customer 選填：admin（`ListAccounts` 探測）或 anonymous（`WhoAmI.anonymous`）才可填，其他 credential 欄位鎖住、由 server 用 principal 的 subject；`ordering.v1.OrderService/ListOrders`（keyset，`created_at desc, id desc`，customer / status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s 只重抓第一頁（`refreshFirstPage`，Stock、Reservations 共用同一份，含「輪詢回應晚於 refetch 就丟棄」）；mutation 以 `["orders"]` 前綴 invalidate 所有 filter 的頁。Reservation 欄不逐列 `GetReservation`：還在等的列（PENDING，或 COMPLETED／CANCELLED 但仍 RESERVED／尚無）每 2s 共用一次 `inventory.v1.InventoryService/BatchGetReservations`（一次最多 100 個 order id，超過就分批；沒有要等的列就不打、分頁隱藏不打），訂單狀態變動時立刻補查一次，回到分頁（`visibilitychange`）時對所有已載入的列再查一次（含等待窗口已過期的缺失列）。非第一頁的列不隨第一頁刷新，訂單狀態維持載入時的值（PENDING 的列會持續被查），重載或 Load more 後更新；訂單詳情頁仍用 `GetReservation` 自己 poll |
+| Reservations 頁 | `inventory.v1.InventoryService/ListReservations`（keyset，`created_at desc, order_id desc`，status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s 只重抓第一頁（`refreshFirstPage`，older pages 在 remount / 回到分頁時更新）；Orders 頁的 reservation badge 連到 `/reservations?order=<id>`，該筆釘在最上面 |
+| Stock 頁 | `inventory.v1.InventoryService/ListStocks`（keyset，SKU 升冪，opaque page token；`sku_prefix` / `only_reserved` 篩選，token 帶著篩選條件，換條件續頁是 INVALID_ARGUMENT）的表格，`useInfiniteQuery` + Load more，每 2s 只重抓第一頁（`refreshFirstPage`；older pages 在 remount、Set stock 或回到分頁時更新）；篩選走 `/stock?prefix=&reserved=` search params；上方 Set stock 建立 / 覆寫 on hand，列上 Edit 把該 SKU 帶進表單 |
 | Products 頁 | admin 頁（`AdminGate` 之後）：`catalog.v1.CatalogService`——儲存商品（`UpsertProduct`：SKU / Name / Price（minor units）/ Currency，沒有就建、有就改價，下架的會重新上架）、`ListProducts` 表格（SKU 升冪、`useInfiniteQuery` + Load more，不 poll；`/products?prefix=` 篩選，含下架的）、Edit（帶回表單）、Deactivate |
 | Poison 頁 | `admin.v1.AdminService`：各 BC 的 poison 表，Show（metadata + payload base64）/ Requeue / Drop，每個 BC 有 Requeue all / Drop all；server auth 開著時 credential 要帶 `admin` role |
 | UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |

@@ -25,3 +25,13 @@ export async function cellUnder(page: Page, row: Locator, header: string): Promi
 export async function expectOrderStatus(page: Page, row: Locator, status: string, options?: { timeout?: number }) {
   await expect(await cellUnder(page, row, "Order")).toHaveText(status, options);
 }
+
+// Press Create order on /orders: a success opens the new order's page (/orders/$id), so wait for
+// that, and return to the list the specs filter. Returns the new order's id.
+export async function createOrder(page: Page): Promise<string> {
+  await page.getByRole("button", { name: "Create order" }).click();
+  await expect(page).toHaveURL(/\/orders\/[^/?]+$/);
+  const id = new URL(page.url()).pathname.split("/").pop()!;
+  await page.goto("/orders");
+  return id;
+}

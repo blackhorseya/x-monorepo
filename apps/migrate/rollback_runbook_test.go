@@ -113,7 +113,7 @@ func (e *rollbackEnv) snapshot(t *testing.T, schemas []string) map[string]string
 }
 
 // bcSchemas are the schemas whose tables the snapshots cover.
-var bcSchemas = []string{"catalog", "identity", "inventory", "ordering"}
+var bcSchemas = []string{"catalog", "identity", "inventory", "ordering", "payment"}
 
 // dataTables lists every base table of the BC schemas except the version tables and the
 // catalog.currencies list migration 0001 seeds.
@@ -161,6 +161,8 @@ func (e *rollbackEnv) seedEveryTable(t *testing.T) {
 	e.exec(t, `INSERT INTO ordering.orders (id, customer_id, status, created_at, updated_at) VALUES ('rollback-order', 'rollback-customer', 'PENDING', now(), now())`)
 	e.exec(t, `INSERT INTO ordering.order_items (order_id, position, sku, quantity, unit_price_minor, currency) VALUES ('rollback-order', 0, 'ROLLBACK-STOCK', 1, 100, 'USD')`)
 	e.exec(t, `INSERT INTO ordering.inbox (message_id) VALUES ('sentinel')`)
+
+	e.exec(t, `INSERT INTO payment.payments (id, order_id, customer_id, amount, currency, status, order_outcome, expires_at, version, updated_at) VALUES ('payment-sentinel', 'rollback-order', 'rollback-customer', 100, 'USD', 'PENDING', 'NONE', now() + interval '1 hour', 1, now())`)
 
 	for _, table := range tables {
 		switch {

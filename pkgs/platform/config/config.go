@@ -33,6 +33,7 @@ type AppConfig struct {
 	Worker   Worker   `mapstructure:"worker"`
 	Catalog  Catalog  `mapstructure:"catalog"`
 	Ordering Ordering `mapstructure:"ordering"`
+	Payment  Payment  `mapstructure:"payment"`
 }
 
 // Ordering configures the ordering BC. Only apps/worker reads it for now: an order becomes
@@ -42,6 +43,18 @@ type Ordering struct {
 	// its payment_required snapshot (docs/payment.md §2); a CONFIRMED order is then completed only
 	// through payment. Changing it never touches orders that are already CONFIRMED. Default false.
 	RequirePayment bool `mapstructure:"require_payment"`
+}
+
+// Payment configures apps/payment-rpc (docs/payment.md). Only that binary reads it.
+type Payment struct {
+	// Provider names the payment provider. The first version has "mock" only; anything else refuses to start.
+	Provider string `mapstructure:"provider"`
+	// ReconcileWindow is how long after a payment became EXPIRED or CANCELLED the expire sweep keeps
+	// asking the provider whether money arrived anyway (docs/payment.md §3「補查有界」). It must be longer
+	// than the provider's checkout validity, checked at start-up. Default 24h.
+	ReconcileWindow time.Duration `mapstructure:"reconcile_window"`
+	// MockCheckoutTTL is how long a checkout page of the mock provider stays valid. Default 15m.
+	MockCheckoutTTL time.Duration `mapstructure:"mock_checkout_ttl"`
 }
 
 // Catalog is how apps/rpc reaches the catalog service (apps/catalog-rpc): the base URL, the one
@@ -427,6 +440,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.oidc.issuers", []OIDCIssuer{})
 	v.SetDefault("auth.resolver_timeout", 2*time.Second)
 	v.SetDefault("auth.last_used_interval", time.Minute)
+	v.SetDefault("payment.provider", "mock")
+	v.SetDefault("payment.reconcile_window", 24*time.Hour)
+	v.SetDefault("payment.mock_checkout_ttl", 15*time.Minute)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")

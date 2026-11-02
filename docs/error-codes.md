@@ -50,6 +50,15 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `product.unsupported_currency` | `INVALID_ARGUMENT` | catalog domain | 幣別格式對但不是已指派的 ISO 4217 代碼（`AAA`、`ZZZ`…）；白名單是 SIX List One（`domain/product/currency_codes.go`，與 `catalog.currencies` 同一份）。protovalidate 只擋格式，所以這個一定走到 domain |
 | `money.invalid_amount` / `money.invalid_currency` | `INVALID_ARGUMENT` | kernel `Money` | 金額為負、幣別不是 3 個大寫英文字母（ISO 4217 形狀）；`UpsertProduct` 的價格（rpc 先被 protovalidate 擋） |
 | `product.not_found` | `NOT_FOUND` | catalog domain | `GetProduct` / `DeactivateProduct` 的 SKU 沒有 product（`UpsertProduct` 會建立它，不會回這個） |
+| `payment.invalid_id` / `payment.invalid_order_id` / `payment.empty_customer` / `payment.invalid_amount` / `payment.invalid_expiry` / `payment.invalid_status` / `payment.invalid_outcome` / `payment.invalid_checkout` | `INVALID_ARGUMENT` | payment domain | aggregate 不變量（建立與從 DB 載入時都檢查，載入到不可能的狀態組合是錯誤，不是一張付款單）。`payment.empty_customer` 也是 `GetPayment`／`StartPayment` 的 `customer_id` 空白：**不會**被當成「任何人」（proto 層先以 `request.validation_failed` 擋下，domain 再擋一次） |
+| `payment.missing_total` | `INVALID_ARGUMENT` | payment domain | `OrderConfirmed` 沒帶 `total`：**不能當成 0 元收款**。切片 3 的 consumer 以 domain error drop 並告警；切片 2 只有 domain 方法（`payment.New`、`DuplicateConfirmed`） |
+| `payment.not_found` | `NOT_FOUND` | payment application（`ownership`）／domain | 這張訂單沒有付款單，**或**呼叫者不是付款單的 customer 又不是 admin（`GetPayment`、`StartPayment`）：兩種情況同一個答案，不洩漏別人的付款單存不存在 |
+| `payment.permission_denied` | `PERMISSION_DENIED` | payment application（`ownership`） | **admin 不可代付**：`StartPayment` 的 `admin=true` 且 `customer_id` 不是付款單的 customer。第一版不開這扇門；admin 付自己的單、`GetPayment` 讀任何單都不是這個 |
+| `payment.not_pending` | `FAILED_PRECONDITION` | payment domain | `StartPayment` 時付款單已不是 `PENDING`（已收款、過期、取消、退款中…）。provider 沒有被呼叫 |
+| `payment.expired` | `FAILED_PRECONDITION` | payment domain | `StartPayment` 時 `PENDING` 已過 `expires_at`、`expire` 尚未處理。provider 沒有被呼叫 |
+| `payment.not_refunding` | `FAILED_PRECONDITION` | payment domain | 退款成功的通知（`RefundSucceeded`）對一張不在 `REFUNDING`／`REFUNDED` 的付款單；狀態不動。沒有 RPC 會回它，切片 3 的退款 consumer 才會碰到 |
+| `payment.already_exists` | `ALREADY_EXISTS` | payment domain（repository） | 同一張訂單（或同一個付款單 id）第二次 `Save`：`unique(order_id)`。consumer 的重送靠它被忽略（切片 3） |
+| `payment.provider_unavailable` | `UNAVAILABLE` | payment rpc adapter（`StartPayment`） | provider 沒有給出可用的答覆（連不上、逾時、拒絕、任何失敗）：**付款單沒變**，同一個請求可重送。不是 domain error（請求本身沒錯），所以沒有 `kernel.Kind`；訊息固定，provider 的原始錯誤**不進** caller、log、metrics、span（#347，`TestPayment_ProviderErrorTextNeverLeaves`）。`GetPayment` 不呼叫 provider，不會回它 |
 | `reservation.invalid_order_id` / `reservation.no_lines` / `reservation.invalid_sku` / `reservation.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | aggregate 不變量 |
 | `reservation.invalid_status_filter` / `reservation.invalid_cursor` | `INVALID_ARGUMENT` | inventory domain | ListReservations 的 filter / cursor |
 | `reservation.too_many_order_ids` | `INVALID_ARGUMENT` | inventory domain | `BatchGetReservations` 一次超過 100 個 order id（rpc 先被 protovalidate 擋，這是直呼 use case 的那條）；空清單與空字串 id 走 `reservation.invalid_order_id` |

@@ -59,7 +59,7 @@ export function OrderPage() {
           {data && <OrderDetail order={data} />}
         </CardContent>
       </Card>
-      {data && <ReservationCard orderId={id} />}
+      {data && <ReservationCard orderId={id} order={data.status} />}
     </div>
   );
 }
@@ -176,8 +176,8 @@ function OrderDetail({ order }: { order: Order }) {
 
 // What inventory decided: the same query the list's Reservation column polls,
 // here with the lines and the shortfall spelled out.
-function ReservationCard({ orderId }: { orderId: string }) {
-  const { data, isError, error } = useQuery(reservationQuery(orderId));
+function ReservationCard({ orderId, order }: { orderId: string; order: OrderStatus }) {
+  const { data, isError, error } = useQuery(reservationQuery(orderId, order));
   return (
     <Card>
       <CardHeader>

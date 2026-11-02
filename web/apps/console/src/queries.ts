@@ -1,8 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
-import { CancelledError, infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
-import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
-import type { ListOrdersResponse } from "@repo/proto/ordering/v1/service_pb";
+import { CancelledError, infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient, type QueryKey } from "@tanstack/react-query";
+import { ReservationStatus, type Reservation } from "@repo/proto/inventory/v1/entity_pb";
+import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
 import { getCredentialGeneration } from "./auth";
 import { admin, catalog, identity, inventory, isNotFound, orders } from "./client";
 
@@ -13,6 +12,9 @@ export type ServerVersion = { version: string; commit: string; date: string; go:
 // written by apps/worker after it consumes OrderCreated, and orders can be
 // cancelled by inventory (shortfall), so both change without a user action.
 export const POLL_MS = 2000;
+// The slow poll, for what can still change but only on its own schedule (a CONFIRMED order whose
+// reservation may expire, a reservation that stays RESERVED until the customer acts).
+export const SLOW_POLL_MS = 15_000;
 // A list query is fresh for a second: remounting a list (or two components asking for the
 // same page) within a tick reuses the data instead of going back to the server.
 const LIST_STALE_MS = 1000;
@@ -57,8 +59,8 @@ export const versionQuery = queryOptions({
 // Orders newest first, 20 per page, by customer (empty = any) and status
 // (UNSPECIFIED = any). Inventory cancels orders on its own, so the list refreshes, but not
 // by refetchInterval: that would refetch every loaded page each tick (N pages = N requests).
-// refreshFirstPage polls the newest page instead. The key starts with keys.orders so a
-// mutation invalidates every filter.
+// refreshFirstPage (refreshOrders) polls the newest page instead. The key starts with keys.orders
+// so a mutation invalidates every filter.
 export const ordersQuery = (customerId: string, status: OrderStatus) =>
   infiniteQueryOptions({
     queryKey: keys.ordersPage(customerId, status),
@@ -68,30 +70,80 @@ export const ordersQuery = (customerId: string, status: OrderStatus) =>
     staleTime: LIST_STALE_MS,
   });
 
-// One poll tick of the orders list: fetch only the first page. Same orders in the same order
-// = nothing moved, so just swap in the fresh rows (status changes) and keep the other pages.
-// Anything else (a new order, one that left the filter) shifts the page boundaries, so
-// refetch every loaded page. Older pages catch up on a remount, a mutation or window focus.
-export async function refreshFirstPage(qc: QueryClient, customerId: string, status: OrderStatus) {
-  const key = keys.ordersPage(customerId, status);
-  const cur = qc.getQueryData<InfiniteData<ListOrdersResponse, string>>(key);
+// One poll tick of a paged list: fetch only the first page. Same rows in the same order = nothing
+// moved, so just swap in the fresh rows (a status or a count changed) and keep the other pages.
+// Anything else (a new row, one that left the filter) shifts the page boundaries, so refetch every
+// loaded page. Older pages catch up on a remount, a mutation or window focus. Shared by the lists
+// that would otherwise poll with refetchInterval (N loaded pages = N requests per tick): `fetchFirst`
+// asks for page one, `ids` names the rows of a page.
+export async function refreshFirstPage<R extends { nextPageToken: string }>(
+  qc: QueryClient,
+  key: QueryKey,
+  fetchFirst: () => Promise<R>,
+  ids: (page: R) => readonly string[],
+) {
+  const cur = qc.getQueryData<InfiniteData<R, string>>(key);
   if (cur === undefined || qc.isFetching({ queryKey: key }) > 0) return;
   const stamp = qc.getQueryState(key)?.dataUpdatedAt;
-  const fresh = await orders.listOrders({ customerId, status, pageSize: 20, pageToken: "" });
+  const fresh = await fetchFirst();
   // This request lives outside the query, so a mutation's refetch cannot cancel it. If the
   // cache moved on while it was in flight (a refetch running, or one that already landed),
   // the response is older than what is shown: drop it, the next tick tries again.
   if (qc.isFetching({ queryKey: key }) > 0 || qc.getQueryState(key)?.dataUpdatedAt !== stamp) return;
-  const old = cur.pages[0]?.orders ?? [];
-  const same = fresh.orders.length === old.length && fresh.orders.every((o, i) => o.id === old[i]?.id);
+  const old = cur.pages[0] === undefined ? [] : ids(cur.pages[0]);
+  const now = ids(fresh);
+  const same = now.length === old.length && now.every((id, i) => id === old[i]);
   if (!same) return qc.invalidateQueries({ queryKey: key });
-  qc.setQueryData<InfiniteData<ListOrdersResponse, string>>(key, (d) =>
+  qc.setQueryData<InfiniteData<R, string>>(key, (d) =>
     d === undefined ? d : { ...d, pages: [fresh, ...d.pages.slice(1)] },
   );
 }
 
-// One order for /orders/$id; null = no such id. PENDING keeps polling because
-// inventory cancels orders on its own; CANCELLED is terminal.
+export const refreshOrders = (qc: QueryClient, customerId: string, status: OrderStatus) =>
+  refreshFirstPage(
+    qc,
+    keys.ordersPage(customerId, status),
+    () => orders.listOrders({ customerId, status, pageSize: 20, pageToken: "" }),
+    (p) => p.orders.map((o) => o.id),
+  );
+
+export const refreshStocks = (qc: QueryClient, skuPrefix: string, onlyReserved: boolean) =>
+  refreshFirstPage(
+    qc,
+    keys.stocksPage(skuPrefix, onlyReserved),
+    () => inventory.listStocks({ skuPrefix, onlyReserved, pageSize: 20, pageToken: "" }),
+    (p) => p.stocks.map((s) => s.sku),
+  );
+
+export const refreshReservations = (qc: QueryClient, status: ReservationStatus) =>
+  refreshFirstPage(
+    qc,
+    keys.reservations(status),
+    () => inventory.listReservations({ status, pageSize: 20, pageToken: "" }),
+    (p) => p.reservations.map((r) => r.orderId),
+  );
+
+// One order for /orders/$id; null = no such id. Three different "nothing to show" answers:
+// undefined = not loaded yet (keep asking), null = there is no such order (stop: asking again
+// finds nothing new), an order = it depends on the status. PENDING polls fast, the worker is about
+// to answer. CONFIRMED can still turn CANCELLED without anyone acting: inventory expires the
+// reservation. That is a slow poll, not "invalidate the order when the reservation changes": the
+// reservation can say EXPIRED before the saga has cancelled the order, and the refetch would read
+// the stale CONFIRMED and stop looking. COMPLETED and CANCELLED are final.
+export function orderInterval(order: Order | null | undefined): number | false {
+  if (order === undefined) return POLL_MS;
+  if (order === null) return false;
+  switch (order.status) {
+    case OrderStatus.CONFIRMED:
+      return SLOW_POLL_MS;
+    case OrderStatus.COMPLETED:
+    case OrderStatus.CANCELLED:
+      return false;
+    default:
+      return POLL_MS; // PENDING (and a status this build does not know yet)
+  }
+}
+
 export const orderQuery = (id: string) =>
   queryOptions({
     queryKey: keys.order(id),
@@ -103,16 +155,31 @@ export const orderQuery = (id: string) =>
         throw err;
       }
     },
-    refetchInterval: (q) => {
-      const s = q.state.data?.status;
-      return s === undefined || s === OrderStatus.PENDING ? POLL_MS : false;
-    },
+    refetchInterval: (q) => orderInterval(q.state.data),
   });
+
+// How often one order's page asks for its reservation, given the reservation (undefined = not
+// loaded yet, null = none yet) and the order's status (undefined = not loaded). RESERVED can still
+// be released, committed or expired: slow poll. Any other status is final. No reservation yet
+// is waited for at the fast pace while the order can still get one, including CONFIRMED (the saga
+// confirms right after the reservation exists, so the page may be a beat ahead of it), and not at
+// all once the order is final: a reservation that appears after COMPLETED / CANCELLED is a
+// tombstone this page has no use for.
+export function reservationInterval(
+  reservation: Reservation | null | undefined,
+  order: OrderStatus | undefined,
+): number | false {
+  if (reservation === undefined) return POLL_MS;
+  if (reservation !== null) return reservation.status === ReservationStatus.RESERVED ? SLOW_POLL_MS : false;
+  return order === OrderStatus.COMPLETED || order === OrderStatus.CANCELLED ? false : POLL_MS;
+}
 
 // null = the worker has not reserved anything for this order (yet). One order's page polls it
 // on its own state alone; the orders list does not use this at all: its rows share one
-// BatchGetReservations per tick (orderReservations.ts).
-export const reservationQuery = (orderId: string) =>
+// BatchGetReservations per tick (orderReservations.ts). `order` is the status of the order the
+// page shows, when the page knows it (/orders/$id); without it (the pinned card on /reservations)
+// a missing reservation is waited for.
+export const reservationQuery = (orderId: string, order?: OrderStatus) =>
   queryOptions({
     queryKey: keys.reservation(orderId),
     queryFn: async () => {
@@ -123,12 +190,7 @@ export const reservationQuery = (orderId: string) =>
         throw err;
       }
     },
-    // Everything but RESERVED is terminal; RESERVED can still be released and
-    // a missing reservation can still appear.
-    refetchInterval: (q) => {
-      const s = q.state.data?.status;
-      return s === undefined || s === ReservationStatus.RESERVED ? POLL_MS : false;
-    },
+    refetchInterval: (q) => reservationInterval(q.state.data, order),
   });
 
 // Is there a change to wait for on an orders-list row, given the order's status, the reservation's (undefined =
@@ -156,15 +218,15 @@ export function reservationPending(
 
 // SKUs ascending, 20 per page, by prefix (empty = every SKU) and optionally
 // only the ones with something reserved; the worker moves reserved / available
-// as orders come and go, so the loaded pages are polled. The key starts with
-// keys.stocks so Set stock invalidates every filter.
+// as orders come and go, so the first page is polled (refreshStocks; not refetchInterval, which
+// would refetch every loaded page each tick). Older pages catch up on a remount, a mutation or window
+// focus. The key starts with keys.stocks so Set stock invalidates every filter.
 export const stocksQuery = (skuPrefix: string, onlyReserved: boolean) =>
   infiniteQueryOptions({
     queryKey: keys.stocksPage(skuPrefix, onlyReserved),
     queryFn: async ({ pageParam }) => inventory.listStocks({ skuPrefix, onlyReserved, pageSize: 20, pageToken: pageParam }),
     initialPageParam: "",
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
-    refetchInterval: POLL_MS,
     staleTime: LIST_STALE_MS,
   });
 
@@ -196,7 +258,7 @@ export const productsQuery = (skuPrefix: string) =>
 // open to every caller) and not by scanning ListProducts, so a SKU's answer never depends on
 // which page of products it falls on. A SKU in neither list is an active product. The key starts
 // with keys.products, so saving or deactivating a product refreshes it; it also polls, since the
-// catalog changes behind the stock list's back.
+// catalog changes behind the stock list's back, but rarely: once a minute is enough.
 export const PRODUCT_STATUS_MAX = 100;
 export const productStatusQuery = (skus: string[]) =>
   queryOptions({
@@ -206,20 +268,21 @@ export const productStatusQuery = (skus: string[]) =>
       return { missing: new Set(res.missing), inactive: new Set(res.inactive) };
     },
     enabled: skus.length > 0,
-    refetchInterval: 5000,
+    refetchInterval: 60_000,
     staleTime: LIST_STALE_MS,
     retry: false,
   });
 
 // Reservations newest first, 20 per page, optionally one status (UNSPECIFIED =
-// any); RESERVED rows can still be released by the worker, so loaded pages poll.
+// any); RESERVED rows can still be released by the worker, so the first page is polled
+// (refreshReservations), like the stock list: the older pages are refetched on a remount, a mutation
+// or window focus, not every tick.
 export const reservationsQuery = (status: ReservationStatus) =>
   infiniteQueryOptions({
     queryKey: keys.reservations(status),
     queryFn: async ({ pageParam }) => inventory.listReservations({ status, pageSize: 20, pageToken: pageParam }),
     initialPageParam: "",
     getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
-    refetchInterval: POLL_MS,
     staleTime: LIST_STALE_MS,
   });
 

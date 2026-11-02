@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { cellUnder, confirm, createCard, filterCard, expectOrderStatus } from "./orders-ui";
+import { cellUnder, confirm, createCard, filterCard, expectOrderStatus, createOrder } from "./orders-ui";
 import { setStock } from "./stock-ui";
 import { expectReservationStatus } from "./reservation-ui";
 
@@ -30,7 +30,7 @@ test("an order is reserved by the worker and confirmed, cancelling releases it",
   await createCard(page).getByLabel("Customer").fill(customer);
   await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByLabel("Qty").fill("2");
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
   await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
 
@@ -75,7 +75,7 @@ test("completing a confirmed order commits the reservation: the stock is sold", 
   await createCard(page).getByLabel("Customer").fill(customer);
   await createCard(page).getByLabel("SKU").fill(sku);
   await page.getByLabel("Qty").fill("2");
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
   await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
 

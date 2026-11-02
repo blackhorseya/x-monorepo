@@ -329,7 +329,7 @@ WHERE octet_length(sku) NOT BETWEEN 1 AND 64;
 2. 刪除或改名那些列（`DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`，刪之前把查詢結果存起來）。
 3. 重設版本再重跑：`UPDATE inventory.schema_migrations SET version = 8, dirty = false;`，然後 `task migrate -- up`。這個 reset 只適用於上面這種「`0009` 失敗後 dirty」的狀態，不是任意 dirty 版本的通用解（只是不想升級而要退掉時，直接用下面的 Rollback，同一段 SQL 在這個狀態也成立）。
 
-**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：catalog、identity、inventory、ordering），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行。兩種狀態用同一段 SQL：9 clean（CHECK 存在）會移除 CHECK 並退回 8；9 dirty（`0009` 失敗，沒有 CHECK）`IF EXISTS` 讓 DROP 略過，只把版本設回 8 clean（超長的列仍在，要再 migrate 先照上面第 1–2 步處理）：
+**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的 `0001` 會 `DROP TABLE payment.payments`），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行。兩種狀態用同一段 SQL：9 clean（CHECK 存在）會移除 CHECK 並退回 8；9 dirty（`0009` 失敗，沒有 CHECK）`IF EXISTS` 讓 DROP 略過，只把版本設回 8 clean（超長的列仍在，要再 migrate 先照上面第 1–2 步處理）：
 
 ```sql
 BEGIN;
@@ -372,7 +372,7 @@ COMMIT;
 
 丟失的範圍：`ordering.orders` 每一列的 `payment_required`（快照隨之消失：退版前以 `ordering.require_payment: true` 進 `CONFIRMED` 的訂單，退版後又可以直接 `CompleteOrder`，所以只在 Payment 還沒上線、沒有任何訂單真的欠款時退），加上 `OrderPaid` 的事件表（切片 1 沒有發布者，表是空的）；訂單與明細本身都留著。`ALTER TABLE` 取 ACCESS EXCLUSIVE，持有到 `COMMIT`。兩種狀態用同一段 SQL（`IF EXISTS`）：9 clean（`0009` 已套用）退回 8；9 dirty（`0009` 失敗，例如 `ALTER TABLE` 在 `lock_timeout` 內拿不到鎖；整個檔案在一個交易裡，所以欄位與事件表都不在）只把版本設回 8 clean，之後排除原因再 `task migrate -- up`。這個 dirty 分支只驗證過「失敗後欄位與事件表都不在」的狀態。這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，兩種狀態都驗證其他 BC 的版本、表、欄位與資料不動。要繼續退 `0008`，在 ordering 回到 `8` 之後用下一段。
 
-**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9` 先照上一段退 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：catalog、identity、inventory、ordering），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
+**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9` 先照上一段退 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的 `0001` 會 `DROP TABLE payment.payments`），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
 
 ```sql
 BEGIN;

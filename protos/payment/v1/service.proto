@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package payment.v1;
+
+import "buf/validate/validate.proto";
+import "payment/v1/entity.proto";
+
+// PaymentService is the RPC contract of the payment bounded context. Its only caller is apps/rpc,
+// which authenticates the end user and presents the one service key `rpc` (auth.api_keys).
+//
+// customer_id and admin are the CALLER'S claims about the end user, supplied by apps/rpc after it
+// verified them, and payment-rpc trusts them on one condition: the request got past the auth
+// interceptor, so it carries that service key. They are request fields, never a user credential.
+// A request without a valid service key never reaches this code, and an empty customer_id is
+// INVALID_ARGUMENT, not a wildcard.
+service PaymentService {
+  // StartPayment opens (or reuses) the provider's hosted checkout for the order's payment and
+  // returns the payment with its checkout_url. Calling it again while the checkout page is still
+  // valid returns the same URL; once it expired a new page is opened. Only the order's own customer
+  // may pay: another customer's order is NOT_FOUND (x-error-code: payment.not_found), and an admin
+  // paying for somebody else's order is PERMISSION_DENIED (payment.permission_denied). Only a
+  // PENDING payment can be started: payment.not_pending, or payment.expired once its window ran
+  // out. A provider that cannot be reached is UNAVAILABLE (payment.provider_unavailable) and
+  // changes nothing.
+  rpc StartPayment(StartPaymentRequest) returns (StartPaymentResponse);
+  // GetPayment reads the payment of an order. The order's own customer and an admin may read it;
+  // anyone else gets NOT_FOUND, the same answer as for an order without a payment.
+  rpc GetPayment(GetPaymentRequest) returns (GetPaymentResponse);
+}
+
+message StartPaymentRequest {
+  string order_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  // The authenticated customer paying; must be the payment's customer.
+  string customer_id = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+  // The caller holds the admin role. An admin may read any payment but may not pay for another
+  // customer's order.
+  bool admin = 3;
+}
+
+message StartPaymentResponse {
+  Payment payment = 1;
+}
+
+message GetPaymentRequest {
+  string order_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  string customer_id = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 128
+  }];
+  // The caller holds the admin role: any payment may be read.
+  bool admin = 3;
+}
+
+message GetPaymentResponse {
+  Payment payment = 1;
+}

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { createOrder } from "../orders-ui";
 import { useJWT } from "./helpers";
 import { mintJWT } from "./jwt";
 import { ADMIN_KEY } from "../../playwright.config";
@@ -25,7 +26,7 @@ test("a non-admin sees only their own orders; an admin orders on behalf of a cus
   await useJWT(page, mintJWT(alice));
   await expect(page.getByLabel("Customer").first()).toBeDisabled();
   await page.getByLabel("SKU").fill(sku);
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
   await expect(createdFor(alice)).toHaveCount(1);
   await expect(page.getByRole("alert")).toHaveCount(0);
 
@@ -45,7 +46,7 @@ test("a non-admin sees only their own orders; an admin orders on behalf of a cus
   await expect(page.getByLabel("Customer").first()).toBeEnabled();
   await page.getByLabel("Customer").first().fill(walkIn);
   await page.getByLabel("SKU").fill(sku);
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
   await page.getByLabel("Customer").nth(1).fill(walkIn);
   await page.getByRole("button", { name: "Filter" }).click();
   await expect(createdFor(walkIn)).toHaveCount(1);

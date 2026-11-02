@@ -15,6 +15,8 @@
 | `local.yaml` | gitignored。`task run` / `task migrate` 第一次會從 example 複製過來（`task config`），之後透過 `APP_CONFIG` 載入；隨意改 |
 | `catalog-rpc.example.yaml` | `apps/catalog-rpc` 專屬的範本：`http`（`:8081`）、`auth`（`mode: required` 與唯一一把開發用 key `rpc=…:admin`）、`postgres`、`log`、`otel`（`127.0.0.1:4317`、`insecure: true`）。**沒有** `auth.jwt`、`auth.oidc`（catalog-rpc 遇到就拒啟動），也不放使用者的 key。key 與埠對應 Taskfile 的 `CATALOG_DEV_KEY`／`CATALOG_PORT`（`task run` 用），由 `apps/catalog-rpc/config_example_test.go` 釘住 |
 | `catalog-rpc.yaml` | gitignored。`task catalog-rpc` 第一次從上面那份複製（`task catalog-config`），之後透過 `APP_CONFIG` 載入，和 `task run` 載入 `local.yaml` 同形狀；`CATALOG_CONFIG=<file>` 換檔。`task catalog-rpc` 不讀 `local.yaml`。環境變數照一般規則 env > 檔案，沒有額外保證 |
+| `payment-rpc.example.yaml` | `apps/payment-rpc` 專屬的範本：`http`（`:8082`）、`auth`（`mode: required` 與唯一一把開發用 key `rpc=…:admin`）、`postgres`、`payment`（`provider: mock`、`mock_checkout_ttl`、`reconcile_window`）、`log`、`otel`。**沒有** `auth.jwt`、`auth.oidc`（payment-rpc 遇到就拒啟動），也不放使用者的 key：payment-rpc 相信請求裡的 `customer_id`／`admin`，唯一的前提是呼叫者持有這把 service key。由 `apps/payment-rpc/config_example_test.go` 釘住；同一個測試也確認 `configs/` 下**每一份**範例在加了 `payment` 區段之後仍能載入 |
+| `payment-rpc.yaml` | gitignored。`task payment-rpc` 第一次從上面那份複製（`task payment-config`），之後透過 `APP_CONFIG` 載入，形狀同 `catalog-rpc.yaml`；`PAYMENT_CONFIG=<file>` 換檔。`task payment-rpc` 不讀 `local.yaml`。環境變數照一般規則 env > 檔案，沒有額外保證 |
 | 其他 | `configs/*` 全部 gitignored；`task run CONFIG=<file>` 可指定別的檔 |
 
 > 注意：env 不能把 key 清成空字串（viper 忽略空 env），所以要「不接 DB」請改 local.yaml 的 `postgres.url`，不要 `APP_POSTGRES_URL=`。
@@ -51,6 +53,9 @@
 | `catalog.api_key` | `APP_CATALOG_API_KEY` | 空 | **只有 `apps/rpc` 讀**。rpc 對 catalog-rpc 出示的 service credential（catalog-rpc 的 `auth.api_keys` 裡名為 `rpc` 的那把）；**機密**：只走 env，不寫進檔案或 log。rpc 永遠只送這把，不轉傳使用者的 credential。空 → rpc 拒絕啟動，訊息不含 key |
 | `catalog.timeout` | `APP_CATALOG_TIMEOUT` | `3s` | 對 catalog 的單次呼叫預算，必須 > 0；逾時 → `UNAVAILABLE`（`catalog.unavailable`），CreateOrder／SetStock 不寫入 |
 | `ordering.require_payment` | `APP_ORDERING_REQUIRE_PAYMENT` | `false` | **只有 `apps/worker` 讀**（訂單在它的 `StockReserved` consumer 進 CONFIRMED）。進 CONFIRMED 的當下，這個值被存成該訂單的 `payment_required` 快照，之後不再改；`CompleteOrder` 只看快照，`true` 的 CONFIRMED 訂單回 `order.payment_required`。改這個值只影響**之後**才 CONFIRMED 的訂單，已經 CONFIRMED 的不動，切回 `false` 也擋不放行已經是 `true` 的單（[payment.md](payment.md) §8）。切片 1 沒有任何路徑會付款，所以打開它只會讓新訂單停在 CONFIRMED，直到 Payment 切片上線；Helm 的 `config` 原樣進 ConfigMap（`templates/configmap.yaml`），以 `config.ordering.require_payment` 設定 |
+| `payment.provider` | `APP_PAYMENT_PROVIDER` | `mock` | **只有 `apps/payment-rpc` 讀**。付款 provider 的名字；第一版只有 `mock`（一個沒有人付得了款的假 gateway，測試與本機走完整流程用），其他值**拒絕啟動**，不會退回 mock |
+| `payment.mock_checkout_ttl` | `APP_PAYMENT_MOCK_CHECKOUT_TTL` | `15m` | **只有 `apps/payment-rpc` 讀**。mock provider 開的 hosted checkout 頁多久後失效（`StartPayment` 回的 `checkout_expires_at`） |
+| `payment.reconcile_window` | `APP_PAYMENT_RECONCILE_WINDOW` | `24h` | **只有 `apps/payment-rpc` 讀**。付款單進入 `EXPIRED`／`CANCELLED` 之後，`expire` 補查 provider 有沒有款的窗口（`docs/payment.md` §3「補查有界」，補查本身是切片 3）。**必須大於** provider 的 checkout 有效期（mock 是 `payment.mock_checkout_ttl`），否則**拒絕啟動**（有或沒有 `--require-durable` 都檢查，看最終生效的值）：顧客在頁面最後一刻付款，補查窗口已經關了，錢就沒人看 |
 | `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 前綴，實際 group 是 `<值>.<bc>`（每個 BC 各自讀完整個 topic）；同名 replica 分工，新名字從哪開始看 `worker.start_from` |
 | `worker.start_from` | `APP_WORKER_START_FROM` | `beginning` | **還沒有 cursor** 的 group 從哪開始：`beginning` 重播所有留存的訊息，`latest` 只收建立之後的。已有 cursor 的 group 不會被移動；redis 模式也套用到 forwarder 的 SQL group 與 stream group |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |
