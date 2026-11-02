@@ -99,7 +99,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │       └── infra/provider/mock/   # PaymentProvider 的 mock：hosted checkout、簽章 webhook、延遲與故障注入
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / catalog-rpc / worker Deployment、選配的 payment-rpc（serve／consume／expire）、migrate hook Job、prune CronJob（task helm-check）
-├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh、payment.sh）
+├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh、payment.sh、payment-flow.sh）
 ├── tests/k6/                      # k6：orders（load + thresholds）、ratelimit、timeout、reservation（worker 鏈延遲）；task k6 -- <script>、task k6-smoke、task k6-auth-matrix（各 auth 組合）
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
