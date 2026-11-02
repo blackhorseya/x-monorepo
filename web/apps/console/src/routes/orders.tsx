@@ -14,7 +14,7 @@ import { ConfirmButton } from "../components/confirm";
 import { useCanChooseCustomer } from "../components/customer";
 import { ErrorAlert } from "../components/error-alert";
 import { Field } from "../components/field";
-import { formatMoney, statusVariant } from "../components/order-status";
+import { formatMoney, paymentRequiredLabel, statusVariant } from "../components/order-status";
 import { describe, orders } from "../client";
 import { useOrderReservations, type RowReservation } from "../orderReservations";
 import { keys, ordersQuery, quoteQuery, refreshFirstPage } from "../queries";
@@ -67,7 +67,7 @@ function totalLabel(lines: Line[], quoted: Quoted[]): string {
 }
 
 // Search params of /orders: a status filter and a customer id filter.
-export type OrdersSearch = { status?: "PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED"; customer?: string };
+export type OrdersSearch = { status?: "PENDING" | "CONFIRMED" | "PAID" | "COMPLETED" | "CANCELLED"; customer?: string };
 
 export function OrdersPage() {
   return (
@@ -209,7 +209,7 @@ function OrdersCard() {
       <CardContent className="grid gap-4">
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex gap-2">
-            {(["ANY", "PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"] as const).map((s) => {
+            {(["ANY", "PENDING", "CONFIRMED", "PAID", "COMPLETED", "CANCELLED"] as const).map((s) => {
               const active = s === "ANY" ? !search.status : search.status === s;
               return (
                 <Button key={s} size="sm" variant={active ? "default" : "outline"} onClick={() => setSearch({ status: s === "ANY" ? undefined : s })}>
@@ -271,6 +271,7 @@ function OrdersCard() {
               <TableHead>Customer</TableHead>
               <TableHead className="text-right">Total</TableHead>
               <TableHead>Order</TableHead>
+              <TableHead>Payment</TableHead>
               <TableHead>Reservation</TableHead>
               <TableHead />
             </TableRow>
@@ -281,7 +282,7 @@ function OrdersCard() {
             ))}
             {list.isSuccess && rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground">
+                <TableCell colSpan={7} className="text-center text-muted-foreground">
                   No orders{search.status ? ` with status ${search.status}` : ""}{customer ? ` for ${customer}` : ""} yet.
                 </TableCell>
               </TableRow>
@@ -335,6 +336,7 @@ function OrderRow({ order, reservation, reservationError }: { order: Order; rese
       <TableCell>
         <Badge variant={statusVariant(order.status)}>{OrderStatus[order.status]}</Badge>
       </TableCell>
+      <TableCell data-testid="payment-required">{paymentRequiredLabel(order.paymentRequired)}</TableCell>
       <TableCell>
         <ReservationCell orderId={order.id} state={reservation} error={reservationError} />
       </TableCell>

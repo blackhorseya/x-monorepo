@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/entity.proto.
  */
 export const file_ordering_v1_entity: GenFile = /*@__PURE__*/
-  fileDesc("ChhvcmRlcmluZy92MS9lbnRpdHkucHJvdG8SC29yZGVyaW5nLnYxIlUKCExpbmVJdGVtEg0KA3NrdRgBIAEoCUIAEhIKCHF1YW50aXR5GAIgASgFQgASJgoKdW5pdF9wcmljZRgDIAEoCzIQLmNvbW1vbi52MS5Nb25leUIAIvsBCgVPcmRlchIKCgJpZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIkCgVpdGVtcxgDIAMoCzIVLm9yZGVyaW5nLnYxLkxpbmVJdGVtEh8KBXRvdGFsGAQgASgLMhAuY29tbW9uLnYxLk1vbmV5EigKBnN0YXR1cxgFIAEoDjIYLm9yZGVyaW5nLnYxLk9yZGVyU3RhdHVzEi8KC2NyZWF0ZV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAqmQEKC09yZGVyU3RhdHVzEhwKGE9SREVSX1NUQVRVU19VTlNQRUNJRklFRBAAEhgKFE9SREVSX1NUQVRVU19QRU5ESU5HEAESGgoWT1JERVJfU1RBVFVTX0NBTkNFTExFRBACEhoKFk9SREVSX1NUQVRVU19DT05GSVJNRUQQAxIaChZPUkRFUl9TVEFUVVNfQ09NUExFVEVEEARiBnByb3RvMw", [file_common_v1_money, file_google_protobuf_timestamp]);
+  fileDesc("ChhvcmRlcmluZy92MS9lbnRpdHkucHJvdG8SC29yZGVyaW5nLnYxIlUKCExpbmVJdGVtEg0KA3NrdRgBIAEoCUIAEhIKCHF1YW50aXR5GAIgASgFQgASJgoKdW5pdF9wcmljZRgDIAEoCzIQLmNvbW1vbi52MS5Nb25leUIAIpUCCgVPcmRlchIKCgJpZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIkCgVpdGVtcxgDIAMoCzIVLm9yZGVyaW5nLnYxLkxpbmVJdGVtEh8KBXRvdGFsGAQgASgLMhAuY29tbW9uLnYxLk1vbmV5EigKBnN0YXR1cxgFIAEoDjIYLm9yZGVyaW5nLnYxLk9yZGVyU3RhdHVzEi8KC2NyZWF0ZV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASGAoQcGF5bWVudF9yZXF1aXJlZBgIIAEoCCqwAQoLT3JkZXJTdGF0dXMSHAoYT1JERVJfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGAoUT1JERVJfU1RBVFVTX1BFTkRJTkcQARIaChZPUkRFUl9TVEFUVVNfQ0FOQ0VMTEVEEAISGgoWT1JERVJfU1RBVFVTX0NPTkZJUk1FRBADEhoKFk9SREVSX1NUQVRVU19DT01QTEVURUQQBBIVChFPUkRFUl9TVEFUVVNfUEFJRBAFYgZwcm90bzM", [file_common_v1_money, file_google_protobuf_timestamp]);
 
 /**
  * LineItem is one line of an Order. unit_price is the snapshot of the catalog
@@ -84,6 +84,15 @@ export type Order = Message<"ordering.v1.Order"> & {
    * @generated from field: google.protobuf.Timestamp update_time = 7;
    */
   updateTime?: Timestamp;
+
+  /**
+   * Snapshot of ordering.require_payment taken when the order became CONFIRMED, never changed
+   * afterwards; false for every order that was CONFIRMED before the setting existed. Ordering decides
+   * CompleteOrder and the payment events from this value only (docs/payment.md §2, §8).
+   *
+   * @generated from field: bool payment_required = 8;
+   */
+  paymentRequired: boolean;
 };
 
 /**
@@ -126,6 +135,14 @@ export enum OrderStatus {
    * @generated from enum value: ORDER_STATUS_COMPLETED = 4;
    */
   COMPLETED = 4,
+
+  /**
+   * Payment received (docs/payment.md §2): CONFIRMED → PAID → COMPLETED. A PAID order cannot be
+   * cancelled. Slice 1 defines the state and the transitions only; nothing reaches it yet.
+   *
+   * @generated from enum value: ORDER_STATUS_PAID = 5;
+   */
+  PAID = 5,
 }
 
 /**

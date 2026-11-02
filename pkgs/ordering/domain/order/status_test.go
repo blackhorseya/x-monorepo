@@ -9,7 +9,7 @@ import (
 )
 
 func TestStatuses_AndStatusCount(t *testing.T) {
-	if got := order.Statuses(); len(got) != 4 || got[0] != order.StatusPending || got[2] != order.StatusCompleted || got[3] != order.StatusCancelled {
+	if got := order.Statuses(); len(got) != 5 || got[0] != order.StatusPending || got[1] != order.StatusConfirmed || got[2] != order.StatusPaid || got[3] != order.StatusCompleted || got[4] != order.StatusCancelled {
 		t.Fatalf("Statuses() = %v", got)
 	}
 	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)

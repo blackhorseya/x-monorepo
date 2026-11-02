@@ -23,7 +23,7 @@ import { ConfirmButton } from "../components/confirm";
 import { describe, orders } from "../client";
 import { keys, orderQuery, reservationQuery } from "../queries";
 import { ErrorAlert } from "../components/error-alert";
-import { formatMoney, statusVariant } from "../components/order-status";
+import { formatMoney, paymentRequiredLabel, statusVariant } from "../components/order-status";
 import { reservationBadge } from "./reservations";
 
 // /orders/$id: one order in full — every line, the total, and what inventory
@@ -97,6 +97,12 @@ function OrderDetail({ order }: { order: Order }) {
         >
           {OrderStatus[order.status]}
         </Badge>
+        <span className="text-xs text-muted-foreground">
+          Payment{" "}
+          <span data-testid="order-payment-required">
+            {paymentRequiredLabel(order.paymentRequired)}
+          </span>
+        </span>
         {confirmed && (
           <ConfirmButton
             label="Complete"

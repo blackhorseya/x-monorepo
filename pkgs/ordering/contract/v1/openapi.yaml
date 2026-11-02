@@ -325,6 +325,13 @@ components:
           allOf:
             - $ref: '#/components/schemas/google.protobuf.Timestamp'
           title: update_time
+        paymentRequired:
+          type: boolean
+          title: payment_required
+          description: |-
+            Snapshot of ordering.require_payment taken when the order became CONFIRMED, never changed
+             afterwards; false for every order that was CONFIRMED before the setting existed. Ordering decides
+             CompleteOrder and the payment events from this value only (docs/payment.md §2, §8).
       title: Order
       additionalProperties: false
     ordering.v1.OrderCancellationRequested:
@@ -394,6 +401,13 @@ components:
           allOf:
             - $ref: '#/components/schemas/google.protobuf.Timestamp'
           title: confirmed_at
+        total:
+          allOf:
+            - $ref: '#/components/schemas/common.v1.Money'
+          title: total
+          description: |-
+            The order's actual total. Payment bills from it; an event without it (published before this
+             field existed) must be rejected, never read as a 0 charge (docs/payment.md §2).
       title: OrderConfirmed
       additionalProperties: false
       description: |-
@@ -438,6 +452,24 @@ components:
           format: int32
       title: OrderCreatedItem
       additionalProperties: false
+    ordering.v1.OrderPaid:
+      type: object
+      properties:
+        orderId:
+          type: string
+          title: order_id
+        customerId:
+          type: string
+          title: customer_id
+        paidAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: paid_at
+      title: OrderPaid
+      additionalProperties: false
+      description: |-
+        OrderPaid is raised when an order moves CONFIRMED → PAID. Reserved for Fulfillment; nothing
+         publishes it until Payment lands (docs/payment.md §4).
     ordering.v1.OrderStatus:
       type: string
       title: OrderStatus
@@ -447,6 +479,7 @@ components:
         - ORDER_STATUS_CANCELLED
         - ORDER_STATUS_CONFIRMED
         - ORDER_STATUS_COMPLETED
+        - ORDER_STATUS_PAID
 security:
   - apiKey: []
   - bearer: []

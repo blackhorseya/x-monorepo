@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/event.proto.
  */
 export const file_ordering_v1_event: GenFile = /*@__PURE__*/
-  fileDesc("ChdvcmRlcmluZy92MS9ldmVudC5wcm90bxILb3JkZXJpbmcudjEitAEKDE9yZGVyQ3JlYXRlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIsCgVpdGVtcxgDIAMoCzIdLm9yZGVyaW5nLnYxLk9yZGVyQ3JlYXRlZEl0ZW0SHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMQoQT3JkZXJDcmVhdGVkSXRlbRILCgNza3UYASABKAkSEAoIcXVhbnRpdHkYAiABKAUiaQoOT3JkZXJDb25maXJtZWQSEAoIb3JkZXJfaWQYASABKAkSEwoLY3VzdG9tZXJfaWQYAiABKAkSMAoMY29uZmlybWVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJpCg5PcmRlckNvbXBsZXRlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIwCgxjb21wbGV0ZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wImkKDk9yZGVyQ2FuY2VsbGVkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEjAKDGNhbmNlbGxlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAicAoaT3JkZXJDYW5jZWxsYXRpb25SZXF1ZXN0ZWQSEAoIb3JkZXJfaWQYASABKAkSDgoGcmVhc29uGAIgASgJEjAKDHJlcXVlc3RlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBiBnByb3RvMw", [file_common_v1_money, file_google_protobuf_timestamp]);
+  fileDesc("ChdvcmRlcmluZy92MS9ldmVudC5wcm90bxILb3JkZXJpbmcudjEitAEKDE9yZGVyQ3JlYXRlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIsCgVpdGVtcxgDIAMoCzIdLm9yZGVyaW5nLnYxLk9yZGVyQ3JlYXRlZEl0ZW0SHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMQoQT3JkZXJDcmVhdGVkSXRlbRILCgNza3UYASABKAkSEAoIcXVhbnRpdHkYAiABKAUiigEKDk9yZGVyQ29uZmlybWVkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEjAKDGNvbmZpcm1lZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkiXwoJT3JkZXJQYWlkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEisKB3BhaWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wImkKDk9yZGVyQ29tcGxldGVkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEjAKDGNvbXBsZXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiaQoOT3JkZXJDYW5jZWxsZWQSEAoIb3JkZXJfaWQYASABKAkSEwoLY3VzdG9tZXJfaWQYAiABKAkSMAoMY2FuY2VsbGVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJwChpPcmRlckNhbmNlbGxhdGlvblJlcXVlc3RlZBIQCghvcmRlcl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkSMAoMcmVxdWVzdGVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcGIGcHJvdG8z", [file_common_v1_money, file_google_protobuf_timestamp]);
 
 /**
  * OrderCreated is raised once per New order, in the same transaction that
@@ -99,6 +99,14 @@ export type OrderConfirmed = Message<"ordering.v1.OrderConfirmed"> & {
    * @generated from field: google.protobuf.Timestamp confirmed_at = 3;
    */
   confirmedAt?: Timestamp;
+
+  /**
+   * The order's actual total. Payment bills from it; an event without it (published before this
+   * field existed) must be rejected, never read as a 0 charge (docs/payment.md §2).
+   *
+   * @generated from field: common.v1.Money total = 4;
+   */
+  total?: Money;
 };
 
 /**
@@ -107,6 +115,36 @@ export type OrderConfirmed = Message<"ordering.v1.OrderConfirmed"> & {
  */
 export const OrderConfirmedSchema: GenMessage<OrderConfirmed> = /*@__PURE__*/
   messageDesc(file_ordering_v1_event, 2);
+
+/**
+ * OrderPaid is raised when an order moves CONFIRMED → PAID. Reserved for Fulfillment; nothing
+ * publishes it until Payment lands (docs/payment.md §4).
+ *
+ * @generated from message ordering.v1.OrderPaid
+ */
+export type OrderPaid = Message<"ordering.v1.OrderPaid"> & {
+  /**
+   * @generated from field: string order_id = 1;
+   */
+  orderId: string;
+
+  /**
+   * @generated from field: string customer_id = 2;
+   */
+  customerId: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp paid_at = 3;
+   */
+  paidAt?: Timestamp;
+};
+
+/**
+ * Describes the message ordering.v1.OrderPaid.
+ * Use `create(OrderPaidSchema)` to create a new message.
+ */
+export const OrderPaidSchema: GenMessage<OrderPaid> = /*@__PURE__*/
+  messageDesc(file_ordering_v1_event, 3);
 
 /**
  * OrderCompleted is raised when an order moves to COMPLETED (CompleteOrder on a
@@ -136,7 +174,7 @@ export type OrderCompleted = Message<"ordering.v1.OrderCompleted"> & {
  * Use `create(OrderCompletedSchema)` to create a new message.
  */
 export const OrderCompletedSchema: GenMessage<OrderCompleted> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_event, 3);
+  messageDesc(file_ordering_v1_event, 4);
 
 /**
  * OrderCancelled is raised when an order moves to CANCELLED, whatever asked
@@ -166,7 +204,7 @@ export type OrderCancelled = Message<"ordering.v1.OrderCancelled"> & {
  * Use `create(OrderCancelledSchema)` to create a new message.
  */
 export const OrderCancelledSchema: GenMessage<OrderCancelled> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_event, 4);
+  messageDesc(file_ordering_v1_event, 5);
 
 /**
  * OrderCancellationRequested is published by another BC (e.g. payment timeout)
@@ -196,5 +234,5 @@ export type OrderCancellationRequested = Message<"ordering.v1.OrderCancellationR
  * Use `create(OrderCancellationRequestedSchema)` to create a new message.
  */
 export const OrderCancellationRequestedSchema: GenMessage<OrderCancellationRequested> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_event, 5);
+  messageDesc(file_ordering_v1_event, 6);
 

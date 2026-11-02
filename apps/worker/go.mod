@@ -6,6 +6,7 @@ require (
 	github.com/ThreeDotsLabs/watermill v1.5.3
 	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
+	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/google/wire v0.7.0
@@ -36,7 +37,6 @@ require (
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blackhorseya/x-monorepo/pkgs/catalog v0.0.0 // indirect
-	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.4 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect

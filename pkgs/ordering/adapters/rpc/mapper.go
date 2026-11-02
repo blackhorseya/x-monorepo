@@ -37,6 +37,8 @@ func toProtoOrder(o *dto.OrderOutput) *orderingv1.Order {
 		Status:     toProtoStatus(o.Status),
 		CreateTime: timestamppb.New(o.CreatedAt),
 		UpdateTime: timestamppb.New(o.UpdatedAt),
+
+		PaymentRequired: o.PaymentRequired,
 	}
 }
 
@@ -54,6 +56,8 @@ func toProtoStatus(s string) orderingv1.OrderStatus {
 		return orderingv1.OrderStatus_ORDER_STATUS_CONFIRMED
 	case "COMPLETED":
 		return orderingv1.OrderStatus_ORDER_STATUS_COMPLETED
+	case "PAID":
+		return orderingv1.OrderStatus_ORDER_STATUS_PAID
 	default:
 		return orderingv1.OrderStatus_ORDER_STATUS_UNSPECIFIED
 	}
@@ -74,6 +78,8 @@ func toDTOStatus(s orderingv1.OrderStatus) string {
 		return "CONFIRMED"
 	case orderingv1.OrderStatus_ORDER_STATUS_COMPLETED:
 		return "COMPLETED"
+	case orderingv1.OrderStatus_ORDER_STATUS_PAID:
+		return "PAID"
 	default:
 		return s.String()
 	}

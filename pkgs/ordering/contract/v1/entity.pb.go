@@ -35,6 +35,9 @@ const (
 	// Fulfilled (CompleteOrder): inventory commits the reservation — the stock is sold, not held.
 	// Terminal: a completed order cannot be cancelled.
 	OrderStatus_ORDER_STATUS_COMPLETED OrderStatus = 4
+	// Payment received (docs/payment.md §2): CONFIRMED → PAID → COMPLETED. A PAID order cannot be
+	// cancelled. Slice 1 defines the state and the transitions only; nothing reaches it yet.
+	OrderStatus_ORDER_STATUS_PAID OrderStatus = 5
 )
 
 // Enum value maps for OrderStatus.
@@ -45,6 +48,7 @@ var (
 		2: "ORDER_STATUS_CANCELLED",
 		3: "ORDER_STATUS_CONFIRMED",
 		4: "ORDER_STATUS_COMPLETED",
+		5: "ORDER_STATUS_PAID",
 	}
 	OrderStatus_value = map[string]int32{
 		"ORDER_STATUS_UNSPECIFIED": 0,
@@ -52,6 +56,7 @@ var (
 		"ORDER_STATUS_CANCELLED":   2,
 		"ORDER_STATUS_CONFIRMED":   3,
 		"ORDER_STATUS_COMPLETED":   4,
+		"ORDER_STATUS_PAID":        5,
 	}
 )
 
@@ -145,16 +150,20 @@ func (x *LineItem) GetUnitPrice() *v1.Money {
 }
 
 type Order struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	CustomerId    string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
-	Items         []*LineItem            `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"`
-	Total         *v1.Money              `protobuf:"bytes,4,opt,name=total,proto3" json:"total,omitempty"`
-	Status        OrderStatus            `protobuf:"varint,5,opt,name=status,proto3,enum=ordering.v1.OrderStatus" json:"status,omitempty"`
-	CreateTime    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
-	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	CustomerId string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	Items      []*LineItem            `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"`
+	Total      *v1.Money              `protobuf:"bytes,4,opt,name=total,proto3" json:"total,omitempty"`
+	Status     OrderStatus            `protobuf:"varint,5,opt,name=status,proto3,enum=ordering.v1.OrderStatus" json:"status,omitempty"`
+	CreateTime *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
+	UpdateTime *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
+	// Snapshot of ordering.require_payment taken when the order became CONFIRMED, never changed
+	// afterwards; false for every order that was CONFIRMED before the setting existed. Ordering decides
+	// CompleteOrder and the payment events from this value only (docs/payment.md §2, §8).
+	PaymentRequired bool `protobuf:"varint,8,opt,name=payment_required,json=paymentRequired,proto3" json:"payment_required,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Order) Reset() {
@@ -236,6 +245,13 @@ func (x *Order) GetUpdateTime() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Order) GetPaymentRequired() bool {
+	if x != nil {
+		return x.PaymentRequired
+	}
+	return false
+}
+
 var File_ordering_v1_entity_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_entity_proto_rawDesc = "" +
@@ -245,7 +261,7 @@ const file_ordering_v1_entity_proto_rawDesc = "" +
 	"\x03sku\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x03sku\x12#\n" +
 	"\bquantity\x18\x02 \x01(\x05B\a\xbaH\x04\x1a\x02 \x00R\bquantity\x127\n" +
 	"\n" +
-	"unit_price\x18\x03 \x01(\v2\x10.common.v1.MoneyB\x06\xbaH\x03\xc8\x01\x01R\tunitPrice\"\xb9\x02\n" +
+	"unit_price\x18\x03 \x01(\v2\x10.common.v1.MoneyB\x06\xbaH\x03\xc8\x01\x01R\tunitPrice\"\xe4\x02\n" +
 	"\x05Order\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
@@ -256,13 +272,15 @@ const file_ordering_v1_entity_proto_rawDesc = "" +
 	"\vcreate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime*\x99\x01\n" +
+	"updateTime\x12)\n" +
+	"\x10payment_required\x18\b \x01(\bR\x0fpaymentRequired*\xb0\x01\n" +
 	"\vOrderStatus\x12\x1c\n" +
 	"\x18ORDER_STATUS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14ORDER_STATUS_PENDING\x10\x01\x12\x1a\n" +
 	"\x16ORDER_STATUS_CANCELLED\x10\x02\x12\x1a\n" +
 	"\x16ORDER_STATUS_CONFIRMED\x10\x03\x12\x1a\n" +
-	"\x16ORDER_STATUS_COMPLETED\x10\x04B\xb4\x01\n" +
+	"\x16ORDER_STATUS_COMPLETED\x10\x04\x12\x15\n" +
+	"\x11ORDER_STATUS_PAID\x10\x05B\xb4\x01\n" +
 	"\x0fcom.ordering.v1B\vEntityProtoP\x01ZGgithub.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1\xa2\x02\x03OXX\xaa\x02\vOrdering.V1\xca\x02\vOrdering\\V1\xe2\x02\x17Ordering\\V1\\GPBMetadata\xea\x02\fOrdering::V1b\x06proto3"
 
 var (

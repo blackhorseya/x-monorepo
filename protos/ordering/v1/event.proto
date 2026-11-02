@@ -34,6 +34,17 @@ message OrderConfirmed {
   string order_id = 1;
   string customer_id = 2;
   google.protobuf.Timestamp confirmed_at = 3;
+  // The order's actual total. Payment bills from it; an event without it (published before this
+  // field existed) must be rejected, never read as a 0 charge (docs/payment.md §2).
+  common.v1.Money total = 4;
+}
+
+// OrderPaid is raised when an order moves CONFIRMED → PAID. Reserved for Fulfillment; nothing
+// publishes it until Payment lands (docs/payment.md §4).
+message OrderPaid {
+  string order_id = 1;
+  string customer_id = 2;
+  google.protobuf.Timestamp paid_at = 3;
 }
 
 // OrderCompleted is raised when an order moves to COMPLETED (CompleteOrder on a

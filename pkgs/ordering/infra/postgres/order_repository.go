@@ -36,6 +36,8 @@ type orderRow struct {
 	CreatedAt  time.Time `gorm:"not null;autoCreateTime:false"`
 	UpdatedAt  time.Time `gorm:"not null;autoUpdateTime:false"`
 	Version    int64     `gorm:"not null"`
+	// Snapshot of ordering.require_payment at CONFIRMED (migration 0009; false for older orders).
+	PaymentRequired bool `gorm:"not null"`
 	// NULL (not "") for an order created without a key: the unique index is partial on NOT NULL.
 	IdempotencyKey *string
 	RequestHash    *string
@@ -156,10 +158,11 @@ func (i *OrderRepository) Save(c context.Context, o *order.Order) error {
 			res := tx.Model(&orderRow{}).
 				Where("id = ? AND version = ?", row.ID, o.Version()).
 				Updates(map[string]any{
-					"customer_id": row.CustomerID,
-					"status":      row.Status,
-					"updated_at":  row.UpdatedAt,
-					"version":     gorm.Expr("version + 1"),
+					"customer_id":      row.CustomerID,
+					"status":           row.Status,
+					"payment_required": row.PaymentRequired,
+					"updated_at":       row.UpdatedAt,
+					"version":          gorm.Expr("version + 1"),
 				})
 			if res.Error != nil {
 				return fmt.Errorf("update order %s: %w", o.ID(), res.Error)
@@ -246,7 +249,9 @@ func toRow(o *order.Order) orderRow {
 		CreatedAt:  o.CreatedAt(),
 		UpdatedAt:  o.UpdatedAt(),
 		Version:    o.Version(),
-		Items:      make([]orderItemRow, 0, len(items)),
+
+		PaymentRequired: o.PaymentRequired(),
+		Items:           make([]orderItemRow, 0, len(items)),
 	}
 	if o.IdempotencyKey() != "" {
 		key, hash := o.IdempotencyKey(), o.RequestHash()
@@ -298,9 +303,11 @@ func toDomain(row orderRow) (*order.Order, error) {
 		CustomerID: row.CustomerID,
 		Items:      items,
 		Status:     status,
-		CreatedAt:  row.CreatedAt.UTC(),
-		UpdatedAt:  row.UpdatedAt.UTC(),
-		Version:    row.Version,
+
+		PaymentRequired: row.PaymentRequired,
+		CreatedAt:       row.CreatedAt.UTC(),
+		UpdatedAt:       row.UpdatedAt.UTC(),
+		Version:         row.Version,
 
 		IdempotencyKey: key,
 		RequestHash:    hash,

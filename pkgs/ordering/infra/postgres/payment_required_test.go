@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
@@ -148,4 +151,108 @@ func filesUpTo(t *testing.T, all fs.FS, max int) fs.FS {
 	}
 
 	return out
+}
+
+// The snapshot Confirm takes is what the table holds: Save's UPDATE writes payment_required
+// (it names its columns), and a later status change keeps it. Orders are born false (nothing is
+// CONFIRMED yet), a Confirm under the setting stores it, PAID survives a reload.
+func TestOrderRepository_PaymentRequiredSnapshot(t *testing.T) {
+	url := pgtest.URL(t)
+
+	c := context.Background()
+	cfg := config.Postgres{URL: url}
+	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(telCleanup)
+	db, cleanup, err := platformpg.NewDB(cfg, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup) // registered before the purge below: LIFO, so the purge runs while the pool is open
+	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
+		t.Fatal(err)
+	}
+	purge := func() {
+		if err := db.WithContext(c).Exec(`DELETE FROM ordering.orders WHERE id LIKE 'pay-snap-%'`).Error; err != nil {
+			t.Errorf("purge pay-snap orders: %v", err)
+		}
+	}
+	purge()
+	t.Cleanup(purge)
+
+	repo := postgres.NewOrderRepository(db)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	usd, _ := kernel.NewMoney(250, "USD")
+	li, err := order.NewLineItem("SKU-1", 2, usd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	place := func(id string) *order.Order {
+		o, err := order.New(order.Params{ID: order.ID(id), CustomerID: "c-snap", Items: []order.LineItem{li}, Now: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Save(c, o); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repo.FindByID(c, order.ID(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return got
+	}
+	reload := func(id string) *order.Order {
+		o, err := repo.FindByID(c, order.ID(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return o
+	}
+
+	for _, on := range []bool{true, false} {
+		id := "pay-snap-" + map[bool]string{true: "on", false: "off"}[on]
+		o := place(id)
+		if o.PaymentRequired() {
+			t.Fatalf("%s: a PENDING order is stored with payment_required = true", id)
+		}
+		if err := o.Confirm(now.Add(time.Second), on); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Save(c, o); err != nil {
+			t.Fatal(err)
+		}
+		if got := reload(id); got.PaymentRequired() != on || got.Status() != order.StatusConfirmed {
+			t.Fatalf("%s after Confirm(%v): PaymentRequired = %v, status = %s", id, on, got.PaymentRequired(), got.Status())
+		}
+	}
+
+	// PAID is a stored status, and the snapshot rides along unchanged.
+	paid := reload("pay-snap-on")
+	if err := paid.MarkPaid(now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(c, paid); err != nil {
+		t.Fatal(err)
+	}
+	if got := reload("pay-snap-on"); got.Status() != order.StatusPaid || !got.PaymentRequired() {
+		t.Fatalf("after MarkPaid: status = %s, PaymentRequired = %v; want PAID, true", got.Status(), got.PaymentRequired())
+	}
+	// Completing a CONFIRMED order that owes payment is refused, from the stored snapshot alone.
+	if err := reload("pay-snap-off").Complete(now.Add(time.Minute)); err != nil {
+		t.Fatalf("Complete of the payment_required=false order: %v", err)
+	}
+	other := place("pay-snap-held")
+	if err := other.Confirm(now, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(c, other); err != nil {
+		t.Fatal(err)
+	}
+	if err := reload("pay-snap-held").Complete(now); !errors.Is(err, order.ErrPaymentRequired) {
+		t.Fatalf("Complete of a stored payment_required=true order err = %v, want ErrPaymentRequired", err)
+	}
 }

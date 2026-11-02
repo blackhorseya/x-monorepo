@@ -22,7 +22,7 @@ func TestPublisher_MessageIDIsV7(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := o.Confirm(now.Add(time.Second)); err != nil {
+	if err := o.Confirm(now.Add(time.Second), false); err != nil {
 		t.Fatal(err)
 	}
 

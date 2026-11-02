@@ -38,7 +38,7 @@ func TestPublisher_MapsDomainEventsToWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := o.Confirm(now.Add(30 * time.Second)); err != nil {
+	if err := o.Confirm(now.Add(30*time.Second), false); err != nil {
 		t.Fatal(err)
 	}
 	if err := o.Cancel(now.Add(time.Minute)); err != nil {

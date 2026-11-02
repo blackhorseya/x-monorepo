@@ -34,7 +34,7 @@ func TestPublisher_OrderConfirmedCarriesOrderTotal(t *testing.T) {
 	if o.Total().Amount() != 620 {
 		t.Fatalf("fixture total = %d, want 620", o.Total().Amount())
 	}
-	if err := o.Confirm(now.Add(time.Second)); err != nil {
+	if err := o.Confirm(now.Add(time.Second), false); err != nil {
 		t.Fatal(err)
 	}
 

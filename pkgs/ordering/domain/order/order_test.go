@@ -156,13 +156,13 @@ func TestOrder_Confirm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := o.Confirm(later); err != nil {
+	if err := o.Confirm(later, false); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	if o.Status() != order.StatusConfirmed || !o.UpdatedAt().Equal(later) {
 		t.Fatalf("status = %v, updatedAt = %v", o.Status(), o.UpdatedAt())
 	}
-	if err := o.Confirm(later); !errors.Is(err, order.ErrCannotConfirm) {
+	if err := o.Confirm(later, false); !errors.Is(err, order.ErrCannotConfirm) {
 		t.Fatalf("second confirm err = %v, want ErrCannotConfirm", err)
 	}
 	// A confirmed order is still the customer's to cancel; inventory releases on OrderCancelled.
@@ -170,7 +170,7 @@ func TestOrder_Confirm(t *testing.T) {
 		t.Fatalf("cancel after confirm: %v", err)
 	}
 	// A late StockReserved for a cancelled order is refused, not applied.
-	if err := o.Confirm(later); !errors.Is(err, order.ErrCannotConfirm) {
+	if err := o.Confirm(later, false); !errors.Is(err, order.ErrCannotConfirm) {
 		t.Fatalf("confirm after cancel err = %v, want ErrCannotConfirm", err)
 	}
 }
@@ -187,7 +187,7 @@ func TestOrder_Complete(t *testing.T) {
 	if err := o.Complete(later); !errors.Is(err, order.ErrCannotComplete) {
 		t.Fatalf("complete while pending err = %v, want ErrCannotComplete", err)
 	}
-	if err := o.Confirm(later); err != nil {
+	if err := o.Confirm(later, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := o.Complete(later.Add(time.Minute)); err != nil {
@@ -203,7 +203,7 @@ func TestOrder_Complete(t *testing.T) {
 	if err := o.Cancel(later); !errors.Is(err, order.ErrCannotCancel) {
 		t.Fatalf("cancel after complete err = %v, want ErrCannotCancel", err)
 	}
-	if err := o.Confirm(later); !errors.Is(err, order.ErrCannotConfirm) {
+	if err := o.Confirm(later, false); !errors.Is(err, order.ErrCannotConfirm) {
 		t.Fatalf("confirm after complete err = %v, want ErrCannotConfirm", err)
 	}
 }

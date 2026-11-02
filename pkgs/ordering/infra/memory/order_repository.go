@@ -142,8 +142,9 @@ func cloneAt(o *order.Order, version int64) (*order.Order, error) {
 		UpdatedAt:  o.UpdatedAt(),
 		Version:    version,
 
-		IdempotencyKey: o.IdempotencyKey(),
-		RequestHash:    o.RequestHash(),
+		PaymentRequired: o.PaymentRequired(),
+		IdempotencyKey:  o.IdempotencyKey(),
+		RequestHash:     o.RequestHash(),
 	})
 }
 
