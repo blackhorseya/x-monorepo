@@ -274,8 +274,9 @@ func scanScope(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]b
 	// this function's own body (a literal's defer runs when the literal returns).
 	// A Cleanup counts when it is registered on this function's t: a closure that
 	// captures t (open := func() { t.Cleanup(...) }) registers on the same t, so
-	// it runs after this function's defers; a closure with its own t parameter
-	// (t.Run("x", func(t *testing.T) {...})) is a subtest, which finishes first.
+	// it runs after this function's defers; the literal given to t.Run is a subtest
+	// with a t of its own, which finishes first. A closure that merely takes a t
+	// parameter is not one: func(t *testing.T) {...}(t) is the parent's t.
 	type reg struct {
 		pos     token.Pos
 		closes  string // closer name when this registration is the closer itself
@@ -321,24 +322,43 @@ func scanScope(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]b
 				}
 				registrs = append(registrs, r)
 			case calleeName(s) != "" && registrars[calleeName(s)]:
-				// A same-package helper that registers its own cleanup.
+				// A same-package helper that registers its own cleanup, on the t it is
+				// given: a subtest's t finishes before this function's defers run.
+				for _, a := range s.Args {
+					if id, ok := a.(*ast.Ident); ok && shadow[id.Name] {
+						return
+					}
+				}
 				registrs = append(registrs, reg{pos: s.Pos(), uses: touches(s, dbs)})
 			}
 		}
 	}
+	subtests := map[*ast.FuncLit]bool{} // the literals handed to X.Run(name, func(t *testing.T) {...})
 	walk = func(root ast.Node, own bool, shadow map[string]bool) {
 		ast.Inspect(root, func(n ast.Node) bool {
 			if n == nil || n == root {
 				return n == root
+			}
+			if c, ok := n.(*ast.CallExpr); ok && calleeName(c) == "Run" {
+				for _, a := range c.Args {
+					if lit, ok := a.(*ast.FuncLit); ok {
+						subtests[lit] = true
+					}
+				}
 			}
 			if lit, ok := n.(*ast.FuncLit); ok {
 				inner := map[string]bool{}
 				for k := range shadow {
 					inner[k] = true
 				}
-				for _, f := range lit.Type.Params.List {
-					for _, nm := range f.Names {
-						inner[nm.Name] = true
+				// Only a subtest gets a t of its own. Any other literal that takes a *testing.T
+				// (called at once with the parent's t, passed on, run in a goroutine) is handed
+				// the same t, so its Cleanup still runs after this function's defers.
+				if subtests[lit] {
+					for _, f := range lit.Type.Params.List {
+						for _, nm := range f.Names {
+							inner[nm.Name] = true
+						}
 					}
 				}
 				walk(lit.Body, false, inner)
