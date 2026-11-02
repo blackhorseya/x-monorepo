@@ -34,11 +34,7 @@ func TestBootstrapCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer telCleanup()
-	db, dbCleanup, err := postgres.NewDB(cfg.Postgres, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dbCleanup()
+	db := pgtest.DB(t, cfg.Postgres, tel)
 	if err := postgres.Up(c, cfg.Postgres, identitypg.Migration()); err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +147,7 @@ func TestBootstrapCommand_AdminEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer telCleanup()
-	db, dbCleanup, err := postgres.NewDB(cfg.Postgres, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dbCleanup()
+	db := pgtest.DB(t, cfg.Postgres, tel)
 	if err := postgres.Up(c, cfg.Postgres, identitypg.Migration()); err != nil {
 		t.Fatal(err)
 	}

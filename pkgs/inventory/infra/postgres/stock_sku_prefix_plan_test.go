@@ -8,7 +8,6 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -36,16 +35,7 @@ func TestStockRepository_SKUPrefixUsesIndex(t *testing.T) {
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	db := pgtest.DB(t, cfg, pgtest.Telemetry(t))
 
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
@@ -53,7 +43,11 @@ func TestStockRepository_SKUPrefixUsesIndex(t *testing.T) {
 	if err := db.WithContext(c).Exec("TRUNCATE inventory.stocks CASCADE").Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Exec("TRUNCATE inventory.stocks CASCADE") })
+	t.Cleanup(func() {
+		if err := db.Exec("TRUNCATE inventory.stocks CASCADE").Error; err != nil {
+			t.Errorf("purge inventory.stocks: %v", err)
+		}
+	})
 
 	// 20k rows so the planner sees a selective prefix; ANALYZE makes the stats current.
 	if err := db.WithContext(c).Exec(`
@@ -67,7 +61,7 @@ func TestStockRepository_SKUPrefixUsesIndex(t *testing.T) {
 
 	// Same shape as StockRepository.List: LIKE ... ESCAPE, keyset bound, ORDER BY sku, LIMIT page+1.
 	var raw string
-	err = db.WithContext(c).Raw(
+	err := db.WithContext(c).Raw(
 		`EXPLAIN (FORMAT JSON) SELECT * FROM inventory.stocks
 		 WHERE sku LIKE ? ESCAPE '\' ORDER BY sku ASC LIMIT 51`, "SKU-0123%").Scan(&raw).Error
 	if err != nil {

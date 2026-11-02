@@ -19,7 +19,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -34,16 +33,8 @@ func freshDB(t *testing.T) config.Postgres {
 	if err := postgres.Up(c, cfg, catalogpg.Migration()); err != nil {
 		t.Fatalf("migrate catalog: %v", err)
 	}
-	tel, closeTel, err := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeTel()
-	db, closeDB, err := postgres.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeDB()
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel)
 	if err := db.WithContext(c).Exec("TRUNCATE catalog.products").Error; err != nil {
 		t.Fatal(err)
 	}

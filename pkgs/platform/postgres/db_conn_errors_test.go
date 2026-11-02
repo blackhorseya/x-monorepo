@@ -13,8 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
@@ -33,20 +31,15 @@ func assertNoURLText(t *testing.T, err error, frags ...string) {
 // nothing parsed from the URL: not the user, database or password, and not the
 // text pgx or the server add around them.
 func TestNewDB_ConnectionRefusedCarriesNoURLText(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	for _, expectTarget := range []string{"", "127.0.0.1:1"} {
 		t.Run("expect_target="+expectTarget, func(t *testing.T) {
-			_, cleanup, err := postgres.NewDB(config.Postgres{
+			_, err := pgtest.TryDB(t, config.Postgres{
 				URL:          "postgres://leakyuser:" + secretMarker + "@127.0.0.1:1/leakydb?sslmode=disable",
 				ExpectTarget: expectTarget,
 			}, tel)
 			if err == nil {
-				cleanup()
 				t.Fatal("NewDB = nil, want an error (nothing listens on port 1)")
 			}
 			assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb")
@@ -66,24 +59,20 @@ func TestNewDB_ConnectionRefusedCarriesNoURLText(t *testing.T) {
 // not the server's message, which names the role; and a password that contains
 // "TimeZone=<x>" is a password, not a session timezone.
 func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	base := pgtest.URL(t)
-	admin, adminCleanup, err := postgres.NewDB(config.Postgres{URL: base}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer adminCleanup()
+	admin := pgtest.DB(t, config.Postgres{URL: base}, tel)
 	const role = "leaky_role_conn_errors"
 	password := "pTimeZone=" + secretMarker
 	if err := admin.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", role, password)).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { admin.Exec("DROP ROLE IF EXISTS " + role) })
+	t.Cleanup(func() {
+		if err := admin.Exec("DROP ROLE IF EXISTS " + role).Error; err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatal(err)
@@ -100,14 +89,17 @@ func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
 			if err := admin.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", name, pw)).Error; err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { admin.Exec("DROP ROLE IF EXISTS " + name) })
+			t.Cleanup(func() {
+				if err := admin.Exec("DROP ROLE IF EXISTS " + name).Error; err != nil {
+					t.Errorf("cleanup: %v", err)
+				}
+			})
 			d := fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=disable",
 				u.Hostname(), u.Port(), strings.TrimPrefix(u.Path, "/"), name, pw)
-			db, cleanup, err := postgres.NewDB(config.Postgres{URL: d}, tel)
+			db, err := pgtest.TryDB(t, config.Postgres{URL: d}, tel)
 			if err != nil {
 				t.Fatalf("NewDB: %v (the password fragment was sent as the session timezone)", err)
 			}
-			defer cleanup()
 			var tz string
 			if err := db.Raw("SHOW timezone").Scan(&tz).Error; err != nil {
 				t.Fatal(err)
@@ -121,9 +113,8 @@ func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
 	hostPort := net.JoinHostPort(u.Hostname(), u.Port())
 	for _, expectTarget := range []string{"", hostPort} {
 		t.Run("wrong password/expect_target="+expectTarget, func(t *testing.T) {
-			_, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn("wrong"), ExpectTarget: expectTarget}, tel)
+			_, err := pgtest.TryDB(t, config.Postgres{URL: dsn("wrong"), ExpectTarget: expectTarget}, tel)
 			if err == nil {
-				cleanup()
 				t.Fatal("NewDB = nil, want a rejected login")
 			}
 			assertNoURLText(t, err, role, "wrong")
@@ -146,20 +137,15 @@ func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
 // be a piece of a password (u:prefix@... is the shape of a mistyped one), and
 // nothing parsed from the URL can tell the two apart.
 func TestNewDB_UnpinnedHostIsNeverPrinted(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	for _, dsn := range []string{
 		"postgres://u:prefix@SYNTHETICSECRET.invalid:1/app?sslmode=disable",
 		"postgres://u:@SYNTHETICSECRET@127.0.0.1:1/app?sslmode=disable",
 		"postgres://leakyuser:pw@127.0.0.1:1,SYNTHETICSECRET.invalid:2/leakydb?sslmode=disable",
 	} {
-		_, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn}, tel)
+		_, err := pgtest.TryDB(t, config.Postgres{URL: dsn}, tel)
 		if err == nil {
-			cleanup()
 			t.Fatalf("NewDB(%q) = nil, want an error", dsn)
 		}
 		assertNoURLText(t, err, "SYNTHETICSECRET", ".invalid", "127.0.0.1", "leakyuser", "leakydb")
@@ -169,19 +155,14 @@ func TestNewDB_UnpinnedHostIsNeverPrinted(t *testing.T) {
 // A URL that does not parse says so in fixed words: pgx's parse error quotes
 // the string, user and database included.
 func TestNewDB_UnparsableURLIsNotQuoted(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	for _, expectTarget := range []string{"", "127.0.0.1:1"} {
-		_, cleanup, err := postgres.NewDB(config.Postgres{
+		_, err := pgtest.TryDB(t, config.Postgres{
 			URL:          "postgres://leakyuser:" + secretMarker + "@h:notaport/leakydb",
 			ExpectTarget: expectTarget,
 		}, tel)
 		if err == nil {
-			cleanup()
 			t.Fatal("NewDB = nil, want an error")
 		}
 		assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb", "notaport")

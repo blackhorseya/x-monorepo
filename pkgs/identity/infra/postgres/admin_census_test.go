@@ -18,7 +18,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -31,16 +30,8 @@ func censusDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	c := context.Background()
 	cfg := config.Postgres{URL: pgtest.URL(t)}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel)
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +226,11 @@ func TestLastAdminGuard_ConcurrentPostgres(t *testing.T) {
 	t.Run("two admins disable each other", func(t *testing.T) {
 		a, _ := f.account("mutual-a", []string{censusRole}, time.Time{})
 		b, _ := f.account("mutual-b", []string{censusRole}, time.Time{})
-		t.Cleanup(func() { db.Exec("TRUNCATE identity.accounts CASCADE") })
+		t.Cleanup(func() {
+			if err := db.Exec("TRUNCATE identity.accounts CASCADE").Error; err != nil {
+				t.Errorf("purge identity.accounts: %v", err)
+			}
+		})
 		disable := usecasex.Chain[dto.DisableAccountInput, *dto.AccountOutput](
 			usecase.NewDisableAccount(f.accounts, newCensus(), censusRole, clock),
 			usecasex.Transactional[dto.DisableAccountInput, *dto.AccountOutput](tx),
@@ -252,7 +247,11 @@ func TestLastAdminGuard_ConcurrentPostgres(t *testing.T) {
 
 	t.Run("two keys of the only admin revoked at once", func(t *testing.T) {
 		_, kids := f.account("keys", []string{censusRole}, time.Time{}, time.Time{})
-		t.Cleanup(func() { db.Exec("TRUNCATE identity.accounts CASCADE") })
+		t.Cleanup(func() {
+			if err := db.Exec("TRUNCATE identity.accounts CASCADE").Error; err != nil {
+				t.Errorf("purge identity.accounts: %v", err)
+			}
+		})
 		revoke := usecasex.Chain[dto.RevokeAPIKeyInput, *dto.APIKeyOutput](
 			usecase.NewRevokeAPIKey(f.keys, newCensus(), censusRole, clock),
 			usecasex.Transactional[dto.RevokeAPIKeyInput, *dto.APIKeyOutput](tx),
@@ -270,7 +269,11 @@ func TestLastAdminGuard_ConcurrentPostgres(t *testing.T) {
 	t.Run("one admin loses its role while the other is disabled", func(t *testing.T) {
 		a, _ := f.account("mix-a", []string{censusRole}, time.Time{})
 		b, _ := f.account("mix-b", []string{censusRole}, time.Time{})
-		t.Cleanup(func() { db.Exec("TRUNCATE identity.accounts CASCADE") })
+		t.Cleanup(func() {
+			if err := db.Exec("TRUNCATE identity.accounts CASCADE").Error; err != nil {
+				t.Errorf("purge identity.accounts: %v", err)
+			}
+		})
 		census := newCensus()
 		disable := usecasex.Chain[dto.DisableAccountInput, *dto.AccountOutput](
 			usecase.NewDisableAccount(f.accounts, census, censusRole, clock),

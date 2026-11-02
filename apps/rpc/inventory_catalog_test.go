@@ -21,7 +21,6 @@ import (
 	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -51,16 +50,8 @@ func newCatalogStockServer(t *testing.T) catalogStockServer {
 	pgCfg := config.Postgres{URL: pgtest.URL(t)}
 	c := context.Background()
 
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, dbCleanup, err := postgres.NewDB(pgCfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(dbCleanup)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, pgCfg, tel)
 	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration(), catalogpg.Migration()} {
 		if err := postgres.Up(c, pgCfg, m); err != nil {
 			t.Fatal(err)

@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
@@ -24,11 +22,7 @@ func TestNewDB_PoolLimits(t *testing.T) {
 	)
 	c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	url := pgtest.URL(t)
 	// application_name tells this pool's server-side connections apart from the
@@ -37,7 +31,7 @@ func TestNewDB_PoolLimits(t *testing.T) {
 	if strings.Contains(url, "?") {
 		sep = "&"
 	}
-	db, cleanup, err := postgres.NewDB(config.Postgres{
+	db, err := pgtest.TryDB(t, config.Postgres{
 		URL:             url + sep + "application_name=pooltest",
 		MaxOpenConns:    maxOpen,
 		MaxIdleConns:    2,
@@ -47,7 +41,6 @@ func TestNewDB_PoolLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 	sqlDB, err := db.DB()
 	if err != nil {
 		t.Fatal(err)
@@ -56,11 +49,7 @@ func TestNewDB_PoolLimits(t *testing.T) {
 		t.Fatalf("MaxOpenConnections = %d, want %d", got, maxOpen)
 	}
 
-	monitor, monitorCleanup, err := postgres.NewDB(config.Postgres{URL: url + sep + "application_name=poolmonitor", MaxOpenConns: 1, MaxIdleConns: 1}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer monitorCleanup()
+	monitor := pgtest.DB(t, config.Postgres{URL: url + sep + "application_name=poolmonitor", MaxOpenConns: 1, MaxIdleConns: 1}, tel)
 	var peak atomic.Int64
 	stop := make(chan struct{})
 	var monitorDone sync.WaitGroup
@@ -112,11 +101,7 @@ func TestNewDB_PoolLimits(t *testing.T) {
 // as before. The URLs point at a closed port, so "refused by the guard" and
 // "tried to connect" are told apart by the error alone.
 func TestNewDB_ExpectTarget(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	const pw = "s3cretPW"
 	cases := []struct {
@@ -134,9 +119,8 @@ func TestNewDB_ExpectTarget(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			db, cleanup, err := postgres.NewDB(config.Postgres{URL: tc.url, ExpectTarget: tc.target}, tel)
+			db, err := pgtest.TryDB(t, config.Postgres{URL: tc.url, ExpectTarget: tc.target}, tel)
 			if err == nil {
-				cleanup()
 				t.Fatalf("NewDB = %v, nil; want an error (nothing listens on port 1)", db)
 			}
 			if strings.Contains(err.Error(), pw) || strings.Contains(err.Error(), "postgres://") {

@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -54,22 +53,18 @@ func TestMigrate_ConnectionErrorsCarryNoURLText(t *testing.T) {
 // server's text, which names the role; once connected, a migration's own SQL
 // error is left whole, because that is what the operator has to fix.
 func TestMigrate_ServerErrors(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 	base := pgtest.URL(t)
-	admin, adminCleanup, err := postgres.NewDB(config.Postgres{URL: base}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer adminCleanup()
+	admin := pgtest.DB(t, config.Postgres{URL: base}, tel)
 	const role = "leaky_role_migrate_errors"
 	if err := admin.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'right'", role)).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { admin.Exec("DROP ROLE IF EXISTS " + role) })
+	t.Cleanup(func() {
+		if err := admin.Exec("DROP ROLE IF EXISTS " + role).Error; err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +93,11 @@ func TestMigrate_ServerErrors(t *testing.T) {
 				Files:  fstest.MapFS{"0001_bad.up.sql": {Data: []byte("SELECT * FROM table_that_does_not_exist_xyz;")}},
 			}
 			err = postgres.Up(context.Background(), config.Postgres{URL: base, ExpectTarget: expectTarget}, bad)
-			t.Cleanup(func() { admin.Exec("DROP SCHEMA IF EXISTS conn_errors_bad CASCADE") })
+			t.Cleanup(func() {
+				if err := admin.Exec("DROP SCHEMA IF EXISTS conn_errors_bad CASCADE").Error; err != nil {
+					t.Errorf("cleanup: %v", err)
+				}
+			})
 			if err == nil || !strings.Contains(err.Error(), "table_that_does_not_exist_xyz") {
 				t.Fatalf("a migration's own SQL error = %v, want its text kept", err)
 			}

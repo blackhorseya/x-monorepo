@@ -20,7 +20,6 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -93,16 +92,8 @@ func randomName(t *testing.T) string {
 
 func openDB(t *testing.T, rawURL string) *gorm.DB {
 	t.Helper()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, closeDB, err := platformpg.NewDB(config.Postgres{URL: rawURL}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(closeDB)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: rawURL}, tel)
 
 	return db
 }
@@ -362,7 +353,11 @@ func TestStocksSKUCheck_IsolatedFromSharedDatabase(t *testing.T) {
 			if err := db.Exec(`INSERT INTO inventory.stocks (sku, on_hand, reserved, version, updated_at) VALUES ('sku-check-sentinel', 1, 0, 1, now())`).Error; err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { db.Exec(`DELETE FROM inventory.stocks WHERE sku = 'sku-check-sentinel'`) })
+			t.Cleanup(func() {
+				if err := db.Exec(`DELETE FROM inventory.stocks WHERE sku = 'sku-check-sentinel'`).Error; err != nil {
+					t.Errorf("purge sentinel stock: %v", err)
+				}
+			})
 			before := takeSnapshot(t, cfg, db)
 			if before.Version != 9 || before.Dirty || before.Checks == 0 || before.Rows == 0 {
 				t.Fatalf("the shared database is not a non-empty latest fixture to compare against: %+v", before)

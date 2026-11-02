@@ -12,7 +12,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -25,16 +24,8 @@ func TestRepositories_Postgres(t *testing.T) {
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel)
 
 	m := postgres.Migration()
 	// Down → Up exercises the .down.sql files too; start from whatever state the DB is in.

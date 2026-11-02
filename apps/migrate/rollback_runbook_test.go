@@ -224,24 +224,20 @@ func runRollbackCase(t *testing.T, tc rollbackCase) {
 			t.Fatal(err)
 		}
 	}
-	conn, err := pgx.Connect(e.c, url)
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := pgtest.Conn(t, url)
 	e.conn = conn
 	t.Cleanup(func() { // leave every BC applied and clean for the next test, whatever the runbook SQL left behind
 		ctx := context.Background()
-		_ = conn.Close(ctx) // first: a runbook that failed halfway leaves its transaction (and locks) open on it
-		fresh, err := pgx.Connect(ctx, url)
-		if err != nil {
-			t.Errorf("restore: %v", err)
-
-			return
+		// First: a runbook that failed halfway leaves its transaction (and locks) open on it
+		_ = conn.Close(ctx)
+		fresh := pgtest.Conn(t, url)                                                                                            // closed when this cleanup returns, after the restore below
+		if _, err := fresh.Exec(ctx, `DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`); err != nil { // the dirty case's over-long row would fail 0009 again
+			t.Errorf("restore: delete over-long skus: %v", err)
 		}
-		defer func() { _ = fresh.Close(ctx) }()
-		_, _ = fresh.Exec(ctx, `DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`) // the dirty case's over-long row would fail 0009 again
 		for _, m := range migrations {
-			_, _ = fresh.Exec(ctx, fmt.Sprintf(`UPDATE %s.schema_migrations SET version = version - 1, dirty = false WHERE dirty`, pgx.Identifier{m.Schema}.Sanitize()))
+			if _, err := fresh.Exec(ctx, fmt.Sprintf(`UPDATE %s.schema_migrations SET version = version - 1, dirty = false WHERE dirty`, pgx.Identifier{m.Schema}.Sanitize())); err != nil {
+				t.Errorf("restore %s: clear dirty flag: %v", m.Schema, err)
+			}
 			if err := postgres.Up(ctx, e.cfg, m); err != nil {
 				t.Errorf("restore %s: %v", m.Schema, err)
 			}
@@ -428,11 +424,7 @@ var ordering0008Dirty = rollbackCase{
 				t.Fatal(err)
 			}
 		}
-		holder, err := pgx.Connect(e.c, e.url)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = holder.Close(e.c) }()
+		holder := pgtest.Conn(t, e.url) // closed by its t.Cleanup, which runs before the restore above
 		tx, err := holder.Begin(e.c)
 		if err != nil {
 			t.Fatal(err)
@@ -523,11 +515,7 @@ var ordering0009Dirty = rollbackCase{
 		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
 			t.Fatal(err)
 		}
-		holder, err := pgx.Connect(e.c, e.url)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = holder.Close(e.c) }()
+		holder := pgtest.Conn(t, e.url) // closed by its t.Cleanup, which runs before the restore above
 		tx, err := holder.Begin(e.c)
 		if err != nil {
 			t.Fatal(err)

@@ -7,8 +7,7 @@ import (
 	"testing"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
 // Spellings of TimeZone that name different zones have no right answer: pgx
@@ -17,11 +16,7 @@ import (
 // columns decode in just one. NewDB refuses such a URL before it connects, in
 // words that carry neither the URL nor the zones.
 func TestNewDB_ConflictingTimeZoneKeysAreRefused(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	for _, query := range []string{
 		"TimeZone=UTC&timezone=Asia/Taipei",
@@ -35,9 +30,8 @@ func TestNewDB_ConflictingTimeZoneKeysAreRefused(t *testing.T) {
 				if pinned {
 					cfg.ExpectTarget = addr
 				}
-				_, cleanup, err := postgres.NewDB(cfg, tel)
+				_, err := pgtest.TryDB(t, cfg, tel)
 				if err == nil {
-					cleanup()
 					t.Fatal("NewDB = nil, want a refusal")
 				}
 				if !strings.Contains(err.Error(), "postgres.url has conflicting timezone parameters") {

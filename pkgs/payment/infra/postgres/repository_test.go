@@ -13,7 +13,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -38,16 +37,8 @@ func twd(t *testing.T, n int64) kernel.Money {
 func testDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	cfg := config.Postgres{URL: pgtest.URL(t)}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, closeDB, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(closeDB)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel)
 	if err := platformpg.Up(context.Background(), cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}

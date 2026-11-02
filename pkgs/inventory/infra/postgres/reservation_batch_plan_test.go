@@ -9,7 +9,6 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -23,16 +22,7 @@ func TestReservationRepository_FindByOrderIDsUsesIndex(t *testing.T) {
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	db := pgtest.DB(t, cfg, pgtest.Telemetry(t))
 
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
@@ -40,7 +30,11 @@ func TestReservationRepository_FindByOrderIDsUsesIndex(t *testing.T) {
 	if err := db.WithContext(c).Exec("TRUNCATE inventory.reservations CASCADE").Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Exec("TRUNCATE inventory.reservations CASCADE") })
+	t.Cleanup(func() {
+		if err := db.Exec("TRUNCATE inventory.reservations CASCADE").Error; err != nil {
+			t.Errorf("purge inventory.reservations: %v", err)
+		}
+	})
 
 	// 20k reservations with 2 lines each, so the planner sees a selective batch; ANALYZE makes the stats current.
 	if err := db.WithContext(c).Exec(`

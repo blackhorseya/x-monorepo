@@ -16,7 +16,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -98,16 +97,8 @@ func newSetStockFixture(t *testing.T, products *memory.ProductCatalog) setStockF
 	t.Helper()
 	c := context.Background()
 	cfg := config.Postgres{URL: pgtest.URL(t)}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel)
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}

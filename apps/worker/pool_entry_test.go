@@ -21,7 +21,6 @@ import (
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	platformredis "github.com/blackhorseya/x-monorepo/pkgs/platform/redis"
@@ -78,16 +77,8 @@ func newWorkerWithPool(t *testing.T, broker string, rdb goredis.UniversalClient,
 	c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pgCfg := config.Postgres{URL: pgtest.URL(t), MaxOpenConns: maxOpen}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, dbCleanup, err := postgres.NewDB(pgCfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(dbCleanup)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, pgCfg, tel)
 	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
 		if err := postgres.Up(c, pgCfg, m); err != nil {
 			t.Fatal(err)

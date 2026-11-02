@@ -31,8 +31,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"gorm.io/gorm"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
+	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
 // EnvURL is the opt-in: point it at an existing database to bypass the container.
@@ -69,6 +75,89 @@ func URL(t testing.TB) string {
 		t.Fatal(startErr)
 	}
 	return url
+}
+
+// Telemetry returns quiet providers for a test's pool and shuts them down with
+// t.Cleanup. Call it before DB: cleanups run last-in first-out, so the providers
+// outlive the pool they instrument.
+func Telemetry(t testing.TB) *otel.Providers {
+	t.Helper()
+	tel, shutdown, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatalf("pgtest: telemetry: %v", err)
+	}
+	t.Cleanup(shutdown)
+	return tel
+}
+
+// DB opens a pool with cfg and closes it with t.Cleanup. The caller gets no
+// closer, so there is nothing to defer: a defer would close the pool when the
+// test function returns, before any t.Cleanup the test registered, and a purge
+// registered with t.Cleanup would then run on a closed pool (#371).
+//
+// Because the close is registered here, before the caller's own t.Cleanup calls,
+// last-in first-out runs the caller's cleanups first, with the pool still open:
+//
+//	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, pgtest.Telemetry(t))
+//	t.Cleanup(func() {
+//		if err := db.Exec("DELETE FROM t WHERE ...").Error; err != nil {
+//			t.Errorf("purge: %v", err)
+//		}
+//	})
+//
+// A test does not open a pool itself: archtest.RunTestCleanup (every module's
+// pgtest_cleanup_test.go) fails on any mention of NewDB, sql.Open, pgxpool.* or
+// pgx.Connect* in a *_test.go file, and on Close of the sql.DB behind this pool.
+// This package is where they are allowed.
+func DB(t testing.TB, cfg config.Postgres, tel *otel.Providers) *gorm.DB {
+	t.Helper()
+	db, err := TryDB(t, cfg, tel)
+	if err != nil {
+		t.Fatalf("pgtest: open pool: %v", err)
+	}
+	return db
+}
+
+// TryDB is DB for a test that expects the open to be able to fail (a rejected
+// login, a bad host, an expect_target mismatch) or that wants to word the failure
+// itself. On success the pool is closed with t.Cleanup; on error nothing was opened
+// and there is nothing to close. The error is the one NewDB returned, untouched.
+func TryDB(t testing.TB, cfg config.Postgres, tel *otel.Providers) (*gorm.DB, error) {
+	t.Helper()
+	db, closePool, err := platformpg.NewDB(cfg, tel)
+	if err != nil {
+		return nil, err // NewDB returns a nil closer on error: register nothing
+	}
+	t.Cleanup(closePool)
+	return db, nil
+}
+
+// ClosePool closes db now, for a test that needs the "pool already closed" state
+// (a purge or a probe run against a dead pool, to see how it fails). The close
+// registered by DB then finds it closed, which is a no-op.
+func ClosePool(t testing.TB, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("pgtest: pool handle: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("pgtest: close pool: %v", err)
+	}
+}
+
+// Conn opens one pgx connection to url and closes it with t.Cleanup. A test that
+// closes it earlier on purpose (to end a transaction it holds) may: pgx.Conn.Close
+// is idempotent.
+func Conn(t testing.TB, url string) *pgx.Conn {
+	t.Helper()
+	c := context.Background()
+	conn, err := pgx.Connect(c, url)
+	if err != nil {
+		t.Fatalf("pgtest: connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(c) })
+	return conn
 }
 
 // Main wraps m.Run so the container started by URL is terminated after the
