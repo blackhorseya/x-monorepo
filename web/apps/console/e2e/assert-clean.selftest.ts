@@ -4,6 +4,8 @@ import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { EventEmitter } from "node:events";
+import { type Connect, classifyConnectError, probe } from "./clean.ts";
 import { derivePorts } from "./ports.ts";
 
 // The cleanup check (e2e/assert-clean.ts) must fail while ANYTHING still listens on a port the e2e stack
@@ -54,7 +56,15 @@ async function failsWhileHeld(name: string, hold: () => Promise<() => Promise<vo
 }
 
 const viteChildren: ChildProcess[] = [];
-after(() => viteChildren.forEach((c) => c.kill("SIGKILL")));
+// `pnpm exec` starts vite as ITS child: signal the group, or vite outlives the test and holds the port.
+const killGroup = (c: ChildProcess, signal: NodeJS.Signals) => {
+  try {
+    if (c.pid) process.kill(-c.pid, signal);
+  } catch {
+    // already gone
+  }
+};
+after(() => viteChildren.forEach((c) => killGroup(c, "SIGKILL")));
 
 describe("assert-clean sees live listeners", () => {
   it("passes when nothing listens (positive control)", async () => {
@@ -85,7 +95,7 @@ describe("assert-clean sees live listeners", () => {
 
   it("the real `vite preview` on localhost", async () => {
     await failsWhileHeld("vite preview", async () => {
-      const vite = spawn("pnpm", ["exec", "vite", "preview", "--port", String(p.webPort), "--strictPort"], { cwd: consoleDir, stdio: "ignore" });
+      const vite = spawn("pnpm", ["exec", "vite", "preview", "--port", String(p.webPort), "--strictPort"], { cwd: consoleDir, stdio: "ignore", detached: true });
       viteChildren.push(vite);
       const exited = new Promise<void>((r) => vite.once("exit", () => r()));
       for (let i = 0; ; i++) {
@@ -95,11 +105,39 @@ describe("assert-clean sees live listeners", () => {
         await new Promise((r) => setTimeout(r, 100));
       }
       return async () => {
-        vite.kill("SIGTERM");
+        killGroup(vite, "SIGTERM");
         await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
-        if (vite.exitCode === null) vite.kill("SIGKILL");
+        if (vite.exitCode === null) killGroup(vite, "SIGKILL");
         await exited;
+        // The group is signalled, but the port is only free once vite really let go of it.
+        for (let i = 0; i < 50 && (await fetch(`http://localhost:${p.webPort}/`).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 100));
       };
     });
+  });
+});
+
+// Only a refused connection says "nobody here". A timeout or any other error is not an answer, so the
+// check must fail on it rather than call the port closed.
+describe("what counts as closed", () => {
+  it("classifyConnectError: only ECONNREFUSED", () => {
+    assert.equal(classifyConnectError("ECONNREFUSED"), "closed");
+    for (const code of ["ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EADDRNOTAVAIL", "EACCES", "ECONNRESET", undefined]) assert.equal(classifyConnectError(code), "unknown", String(code));
+  });
+
+  const fake = (script: (s: EventEmitter) => void): Connect => () => {
+    const s = Object.assign(new EventEmitter(), { destroy: () => s }) as unknown as ReturnType<Connect> & EventEmitter;
+    queueMicrotask(() => script(s));
+    return s;
+  };
+  it("probe: connect → listening, refused → closed, other errors and silence → unknown", async () => {
+    assert.deepEqual(await probe("::1", 1, 50, fake((s) => s.emit("connect"))), { state: "listening" });
+    assert.deepEqual(await probe("::1", 1, 50, fake((s) => s.emit("error", Object.assign(new Error("x"), { code: "ECONNREFUSED" })))), { state: "closed" });
+    for (const code of ["ETIMEDOUT", "EHOSTUNREACH"]) {
+      const r = await probe("::1", 1, 50, fake((s) => s.emit("error", Object.assign(new Error("x"), { code }))));
+      assert.equal(r.state, "unknown", code);
+    }
+    const silent = await probe("127.0.0.1", 1, 50, fake(() => {}));
+    assert.equal(silent.state, "unknown");
+    assert.match(silent.state === "unknown" ? silent.detail : "", /timed out/);
   });
 });
