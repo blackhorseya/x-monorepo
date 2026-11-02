@@ -23,6 +23,7 @@ import { ConfirmButton } from "../components/confirm";
 import { describe, orders } from "../client";
 import { keys, orderQuery, reservationQuery } from "../queries";
 import { ErrorAlert } from "../components/error-alert";
+import { PaymentCard } from "../components/payment-card";
 import { formatMoney, paymentRequiredLabel, statusVariant } from "../components/order-status";
 import { reservationBadge } from "./reservations";
 
@@ -59,6 +60,7 @@ export function OrderPage() {
           {data && <OrderDetail order={data} />}
         </CardContent>
       </Card>
+      {data && data.status === OrderStatus.CONFIRMED && data.paymentRequired && <PaymentCard orderId={id} />}
       {data && <ReservationCard orderId={id} order={data.status} />}
     </div>
   );

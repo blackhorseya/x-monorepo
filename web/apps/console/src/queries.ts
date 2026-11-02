@@ -3,7 +3,7 @@ import { CancelledError, infiniteQueryOptions, queryOptions, type InfiniteData, 
 import { ReservationStatus, type Reservation } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
 import { getCredentialGeneration } from "./auth";
-import { admin, catalog, identity, inventory, isNotFound, orders } from "./client";
+import { admin, catalog, identity, inventory, isNotFound, orders, payments } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
 export type ServerVersion = { version: string; commit: string; date: string; go: string };
@@ -24,6 +24,7 @@ export const keys = {
   ordersPage: (customerId: string, status: OrderStatus) => ["orders", customerId, status] as const,
   order: (id: string) => ["order", id] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
+  payment: (orderId: string) => ["payment", orderId] as const,
   quote: (skus: string[]) => ["quote", ...skus] as const,
   products: ["products"] as const,
   productsPage: (skuPrefix: string) => ["products", skuPrefix] as const,
@@ -135,7 +136,10 @@ export function orderInterval(order: Order | null | undefined): number | false {
   if (order === null) return false;
   switch (order.status) {
     case OrderStatus.CONFIRMED:
-      return SLOW_POLL_MS;
+      // An order waiting for its payment is watched at the fast pace: the customer is on a checkout page
+      // in another tab and comes back to a result. The Pay card is shown for exactly this condition (the
+      // page, routes/order.tsx), so the two end together when the order moves on.
+      return order.paymentRequired ? POLL_MS : SLOW_POLL_MS;
     case OrderStatus.COMPLETED:
     case OrderStatus.CANCELLED:
       return false;
@@ -191,6 +195,23 @@ export const reservationQuery = (orderId: string, order?: OrderStatus) =>
       }
     },
     refetchInterval: (q) => reservationInterval(q.state.data, order),
+  });
+
+// The payment of one order for the Pay card, null = none yet (NOT_FOUND). Polled while the card is
+// mounted, which is exactly while the order waits for its payment.
+export const paymentQuery = (orderId: string) =>
+  queryOptions({
+    queryKey: keys.payment(orderId),
+    queryFn: async () => {
+      try {
+        return (await payments.getPayment({ orderId })).payment ?? null;
+      } catch (err) {
+        if (isNotFound(err)) return null;
+        throw err;
+      }
+    },
+    refetchInterval: POLL_MS,
+    retry: false,
   });
 
 // Is there a change to wait for on an orders-list row, given the order's status, the reservation's (undefined =

@@ -45,8 +45,19 @@ type Ordering struct {
 	RequirePayment bool `mapstructure:"require_payment"`
 }
 
-// Payment configures apps/payment-rpc (docs/payment.md). Only that binary reads it.
+// Payment configures payment (docs/payment.md). Provider, ReconcileWindow and MockCheckoutTTL are read
+// by apps/payment-rpc only; Upstream, APIKey and Timeout by apps/rpc only (how it reaches payment-rpc).
 type Payment struct {
+	// Upstream is the base URL of payment-rpc, e.g. http://x-monorepo-payment-rpc:80. Read by apps/rpc.
+	// Payment is optional for rpc: unset together with APIKey, the payment API answers
+	// payment.unavailable. Set one without the other, or one that is not an http(s) URL, and rpc
+	// refuses to start; so does ordering.require_payment with neither set.
+	Upstream string `mapstructure:"upstream"`
+	// APIKey is the service credential rpc presents to payment-rpc (the key named rpc in payment-rpc's
+	// auth.api_keys; never a user's). Secret: APP_PAYMENT_API_KEY, never in the file or a log.
+	APIKey string `mapstructure:"api_key"`
+	// Timeout bounds one call to payment-rpc (default 3s); a slower payment-rpc is UNAVAILABLE.
+	Timeout time.Duration `mapstructure:"timeout"`
 	// Provider names the payment provider. The first version has "mock" only; anything else refuses to start.
 	Provider string `mapstructure:"provider"`
 	// ReconcileWindow is how long after a payment became EXPIRED or CANCELLED the expire sweep keeps
@@ -440,6 +451,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.oidc.issuers", []OIDCIssuer{})
 	v.SetDefault("auth.resolver_timeout", 2*time.Second)
 	v.SetDefault("auth.last_used_interval", time.Minute)
+	v.SetDefault("payment.upstream", "")
+	v.SetDefault("payment.api_key", "")
+	v.SetDefault("payment.timeout", 3*time.Second)
 	v.SetDefault("payment.provider", "mock")
 	v.SetDefault("payment.reconcile_window", 24*time.Hour)
 	v.SetDefault("payment.mock_checkout_ttl", 15*time.Minute)
@@ -505,6 +519,9 @@ func (x *AppConfig) validate() error {
 	}
 	if by := x.HTTP.RateLimit.By; by != RateLimitGlobal && by != RateLimitPeer {
 		return fmt.Errorf("invalid http.rate_limit.by %q (want global|peer)", by)
+	}
+	if x.Payment.Timeout <= 0 {
+		return fmt.Errorf("invalid payment.timeout %s (want > 0: payment-rpc is on the request path of StartPayment)", x.Payment.Timeout)
 	}
 	if x.Catalog.Timeout <= 0 {
 		return fmt.Errorf("invalid catalog.timeout %s (want > 0: the catalog is on the request path)", x.Catalog.Timeout)

@@ -26,6 +26,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	orderingrpc "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
+	paymentclient "github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/client"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
@@ -34,8 +35,8 @@ import (
 )
 
 // NewRoutes lists every mounted service: the BCs' and the platform's admin surface.
-func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, identity *identityrpc.IdentityService, catalog *catalogrpc.Forwarder, poison *admin.PoisonService) []server.Route {
-	return []server.Route{ordering, inventory, identity, catalog, poison}
+func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, identity *identityrpc.IdentityService, catalog *catalogrpc.Forwarder, payment *paymentclient.PublicService, poison *admin.PoisonService) []server.Route {
+	return []server.Route{ordering, inventory, identity, catalog, payment, poison}
 }
 
 // NewPoisonService serves admin.v1.AdminService over every BC's poison

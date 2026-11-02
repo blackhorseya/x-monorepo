@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
@@ -22,6 +24,8 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
+	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1/paymentv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
@@ -42,8 +46,8 @@ const (
 	publicSvc     = "/payment.v1.PublicPaymentService/"
 )
 
-// fakePayment is payment-rpc as rpc sees it: the internal payment.v1.PaymentService over Connect JSON,
-// behind the one service key. It records every call that got in.
+// fakePayment is payment-rpc as rpc sees it: the internal payment.v1.PaymentService over Connect (the
+// protocol rpc's client speaks), behind the one service key. It records every call that got in.
 type fakePayment struct {
 	ts    *httptest.Server
 	mu    sync.Mutex
@@ -60,7 +64,19 @@ type payCall struct {
 func newFakePayment(t *testing.T, mode string) *fakePayment {
 	t.Helper()
 	f := &fakePayment{mode: mode}
-	f.ts = httptest.NewServer(http.HandlerFunc(f.serve))
+	withKey := connect.WithInterceptors(connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			if req.Header().Get("X-API-Key") != payServiceKey {
+				return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("no service key"))
+			}
+
+			return next(c, req)
+		}
+	}))
+	mux := http.NewServeMux()
+	path, h := paymentv1connect.NewPaymentServiceHandler(f, withKey)
+	mux.Handle(path, h)
+	f.ts = httptest.NewServer(mux)
 	t.Cleanup(f.ts.Close)
 
 	return f
@@ -81,54 +97,58 @@ func (f *fakePayment) last(t *testing.T) payCall {
 	return f.calls[len(f.calls)-1]
 }
 
-func (f *fakePayment) serve(w http.ResponseWriter, r *http.Request) {
-	method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
-	if r.Header.Get("X-API-Key") != payServiceKey {
-		writeConnectError(w, http.StatusUnauthorized, "unauthenticated", "", "no service key")
-		return
-	}
-	var body map[string]any
-	raw, _ := io.ReadAll(r.Body)
-	_ = json.Unmarshal(raw, &body)
+func (f *fakePayment) answer(c context.Context, method, key, order, customer string, admin bool) (*paymentv1.Payment, error) {
 	f.mu.Lock()
-	f.calls = append(f.calls, payCall{Method: method, Key: r.Header.Get("X-API-Key"), Body: body})
+	f.calls = append(f.calls, payCall{Method: method, Key: key, Body: map[string]any{"orderId": order, "customerId": customer, "admin": admin}})
 	mode := f.mode
 	f.mu.Unlock()
 
 	switch mode {
 	case "hang":
 		select {
-		case <-r.Context().Done():
+		case <-c.Done():
 		case <-time.After(30 * time.Second):
 		}
+
+		return nil, connect.NewError(connect.CodeCanceled, errors.New("gone"))
 	case "denied":
-		writeConnectError(w, http.StatusForbidden, "permission_denied", "payment.permission_denied", "an admin cannot pay for another customer")
+		ce := connect.NewError(connect.CodePermissionDenied, errors.New("an admin cannot pay for another customer"))
+		ce.Meta().Set("x-error-code", "payment.permission_denied")
+
+		return nil, ce
 	case "leak":
-		// What a misbehaving upstream might send: its text, a header and a body full of something that
-		// must never reach the caller or the log.
-		w.Header().Set("X-Error-Code", leakMarker)
-		w.Header().Set("X-Leak", leakMarker)
-		writeConnectError(w, http.StatusInternalServerError, "internal", leakMarker, leakMarker)
-	default:
-		pay := map[string]any{
-			"id": "pay-1", "orderId": body["orderId"], "customerId": body["customerId"],
-			"status": "PAYMENT_STATUS_PENDING",
-		}
-		if method == "StartPayment" {
-			pay["checkoutUrl"] = "https://pay.example.test/checkout/pay-1"
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"payment": pay})
+		// What a misbehaving upstream might send: its text, a header and an error code of its own, full of
+		// something that must never reach the caller or the log.
+		ce := connect.NewError(connect.CodeInternal, errors.New(leakMarker))
+		ce.Meta().Set("X-Error-Code", leakMarker)
+		ce.Meta().Set("X-Leak", leakMarker)
+
+		return nil, ce
 	}
+	pay := &paymentv1.Payment{Id: "pay-1", OrderId: order, CustomerId: customer, Status: paymentv1.PaymentStatus_PAYMENT_STATUS_PENDING}
+	if method == "StartPayment" {
+		pay.CheckoutUrl = "https://pay.example.test/checkout/pay-1"
+	}
+
+	return pay, nil
 }
 
-func writeConnectError(w http.ResponseWriter, status int, code, xcode, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	if xcode != "" {
-		w.Header().Set("x-error-code", xcode)
+func (f *fakePayment) StartPayment(c context.Context, req *connect.Request[paymentv1.StartPaymentRequest]) (*connect.Response[paymentv1.StartPaymentResponse], error) {
+	p, err := f.answer(c, "StartPayment", req.Header().Get("X-API-Key"), req.Msg.GetOrderId(), req.Msg.GetCustomerId(), req.Msg.GetAdmin())
+	if err != nil {
+		return nil, err
 	}
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": msg})
+
+	return connect.NewResponse(&paymentv1.StartPaymentResponse{Payment: p}), nil
+}
+
+func (f *fakePayment) GetPayment(c context.Context, req *connect.Request[paymentv1.GetPaymentRequest]) (*connect.Response[paymentv1.GetPaymentResponse], error) {
+	p, err := f.answer(c, "GetPayment", req.Header().Get("X-API-Key"), req.Msg.GetOrderId(), req.Msg.GetCustomerId(), req.Msg.GetAdmin())
+	if err != nil {
+		return nil, err
+	}
+
+	return connect.NewResponse(&paymentv1.GetPaymentResponse{Payment: p}), nil
 }
 
 type payOpts struct {
@@ -186,6 +206,9 @@ func newPayHarness(t *testing.T, o payOpts) *payHarness {
 		"APP_AUTH_MODE": "optional", "APP_AUTH_API_KEYS": "alice=" + aliceKey + ",bob=" + bobKey + ",ops=" + opsKey + ":admin",
 		"APP_POSTGRES_URL": pgCfg.URL, "APP_CATALOG_UPSTREAM": cat.URL, "APP_CATALOG_API_KEY": serviceKey,
 	}
+	// Set explicitly, empty when off: a Setenv of an earlier harness in the same test is still there, and
+	// viper reads an empty variable as unset.
+	env["APP_PAYMENT_UPSTREAM"], env["APP_PAYMENT_API_KEY"], env["APP_ORDERING_REQUIRE_PAYMENT"] = "", "", ""
 	if o.upstream {
 		env["APP_PAYMENT_UPSTREAM"] = fake.ts.URL
 		env["APP_PAYMENT_API_KEY"] = payServiceKey
@@ -271,7 +294,7 @@ func (h *payHarness) post(t *testing.T, key, method, body string) payReply {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	raw, _ := io.ReadAll(res.Body)
 	r := payReply{status: res.StatusCode, xcode: res.Header.Get("x-error-code"), raw: string(raw), header: res.Header}
 	_ = json.Unmarshal(raw, &r.body)
@@ -288,7 +311,7 @@ func (h *payHarness) post(t *testing.T, key, method, body string) payReply {
 func wantReply(t *testing.T, r payReply, code, xcode string) {
 	t.Helper()
 	if r.code != code || r.xcode != xcode {
-		t.Fatalf("reply = HTTP %d %s / %q (%s), want %s / %q", r.status, r.code, r.xcode, r.raw, code, xcode)
+		t.Fatalf("reply = HTTP %d %s / %q (%s) headers %v, want %s / %q", r.status, r.code, r.xcode, r.raw, r.header, code, xcode)
 	}
 }
 
@@ -476,7 +499,7 @@ func TestPaymentEntry_SameInterceptorsAsOrderService(t *testing.T) {
 		}
 	})
 	t.Run("rate limit", func(t *testing.T) {
-		h := newPayHarness(t, payOpts{upstream: true, require: true, env: map[string]string{"APP_RATE_LIMIT_RPS": "1", "APP_RATE_LIMIT_BURST": "1"}})
+		h := newPayHarness(t, payOpts{upstream: true, require: true, env: map[string]string{"APP_HTTP_RATE_LIMIT_RPS": "1", "APP_HTTP_RATE_LIMIT_BURST": "1"}})
 		id := h.confirmed(t, "alice", true)
 		limited := false
 		for range 5 {

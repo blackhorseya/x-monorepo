@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-> **狀態：設計稿，切片 1、2 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`（付款單 aggregate 與 §3 全表、`StartPayment`／`GetPayment`、Postgres／memory repository、`payment.payments` 表、`PaymentProvider` port 與 mock provider）、`apps/payment-rpc serve`。**尚未實作**：`consume`、webhook route、`expire`、退款流程（切片 3）、`apps/rpc` 轉發與 Console 付款頁（切片 4）、image／chart（切片 5）、切換（切片 6）；所以目前沒有任何路徑會走到 `PAID`。
+> **狀態：設計稿，切片 1、2、4 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`（付款單 aggregate 與 §3 全表、`StartPayment`／`GetPayment`、Postgres／memory repository、`payment.payments` 表、`PaymentProvider` port 與 mock provider）、`apps/payment-rpc serve`。**尚未實作**：`consume`、webhook route、`expire`、退款流程（切片 3）、image／chart（切片 5）、切換（切片 6）；所以目前沒有任何路徑會走到 `PAID`。
 > 決策來源：#367 七個決定，加上 Sean 對 PR #369 暴露的未決項的後續裁示（[#367 comment](https://github.com/blackhorseya/x-monorepo/issues/367#issuecomment-6565500716)，decision `d-20261101232833097592-18`）。兩者有衝突時以後者為準；§13 列出哪一條取代了哪一條。
 > 「保證」只列已指定到切片測試的條目；測試名稱是預定名稱，實作時以實際為準。寫不出測試的就不寫成保證。
 > 改動任何已定決定都要回 Sean。標 **〔實作細節〕** 的是本文為了讓已定規則成立而補上的內部做法，實作時可調整，但不得改變它所服務的規則。
@@ -207,6 +207,18 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
   - `GetPayment`：`customer_id` 等於付款單的 customer，或 `admin=true`，才讀得到；否則 `NOT_FOUND`（和「這張訂單沒有付款單」同一個答案）。
   - `StartPayment`：`customer_id` 等於付款單的 customer 才可以；不是的話，`admin=true` 回 `payment.permission_denied`（代付，admin 付自己的單不受影響），`admin=false` 回 `NOT_FOUND`。
 
+### 入口（`apps/rpc`，切片 4，Sean／lead 定案）
+
+`apps/rpc` 對外服務 **`payment.v1.PublicPaymentService`**（`StartPayment`、`GetPayment`），**不是**把 `payment-rpc` 的內部 `PaymentService` 原樣轉出：內部服務的 request 有 `customer_id`、`admin`（呼叫者的宣稱），對外服務的 request **只有 `order_id`**，client 沒有地方寫「我是誰」（`pkgs/payment/adapters/client` 的 `TestPublicContract_HasNoIdentityFields` 固定）。`apps/rpc` 以通過驗證的 principal 填 `customer_id`（subject）與 `admin`（是否持有 `auth.admin_role`），再以 service key 呼叫 `payment-rpc`。實作在 `pkgs/payment/adapters/client`（`apps/rpc` 只 import 它與 payment 的 `contract/`，不載入領域程式，`apps/rpc/payment_split_test.go` 固定）。
+
+- **設定**：`payment.upstream`、`payment.api_key`、`payment.timeout`（預設 3s）。**選填**：兩者都沒設是合法狀態（切片 5 之前 payment-rpc 沒部署），此時 `StartPayment`／`GetPayment` 回 `payment.unavailable`；預設設定（什麼都不設）照常啟動。**啟動拒絕**：`ordering.require_payment: true` 但 payment 設定缺（開關開了卻沒有後端）、只設 `upstream` 或只設 `api_key`、`upstream` 不是 http(s) URL、有 userinfo、`timeout` ≤ 0；拒絕訊息不含 key。
+- **`StartPayment` 的檢查順序**：(a) 沒有 credential → `UNAUTHENTICATED`（payment-rpc 會把空的 `customer_id` 當 `INVALID_ARGUMENT`，所以 rpc 不送出去；auth 關閉時沒有人可付款）；(b) 以呼叫者身分讀訂單（同 process 呼叫 ordering 的 `GetOrder`，principal 沿用，ordering 的擁有權生效）：不是本人的單、不存在的單都是 `NOT_FOUND`／`order.not_found`，與開關無關；ordering 的其他失敗原樣回傳，**不當成「沒有訂單」**；(c) 開關關閉**或**這張單的快照 `payment_required = false` → `payment.disabled`；(d) 轉發。admin 讀得到別人的單，所以 admin 對別人的單走到 (d)，由 `payment-rpc` 回 `payment.permission_denied`，rpc 不自己判代付。
+- **`GetPayment` 不受開關影響**：不讀訂單、不看開關，(a) 之後直接轉發；沒有付款單由 `payment-rpc` 回 `payment.not_found`（`ownership`：非本人非 admin 同一個答案）。
+- **錯誤**：`payment-rpc` 的業務答案（`x-error-code` 為 `payment.*`）code、message、`x-error-code` 原樣回；`payment.provider_unavailable` 保留 code、訊息換成固定句。其他一切（連不上、逾時、5xx、service key 被拒、`x-error-code` 不是 `payment.*` 的任何「業務答案」）一律 `UNAVAILABLE`／**`payment.unavailable`**、固定訊息，原因進 log 時只有固定詞與 Connect code，上游寫的文字不進回應、不進 log（#347；`TestPaymentEntry_PaymentRPCTrouble_IsOneFixedUnavailable`）。`payment-rpc` 掛掉只影響這兩個 RPC，下單與預留照常。
+- **interceptor**：新服務與 `OrderService` 走同一條 chain（auth、rate limit、timeout、validation 都是 `server.New` 對所有 route 一次套上，沒有 method 清單可漏；`TestPaymentEntry_SameInterceptorsAsOrderService`）。`auth.public` 預設空；沒有新增 public procedure。
+- **Console**：不知道開關。訂單詳情頁的 **Pay 卡片只依「訂單 `CONFIRMED` 且 `payment_required` 快照為 `true`」顯示**，不探測開關；預設設定下快照全是 `false`，頁面與切片 4 之前一樣。按 Pay 呼叫 `StartPayment`（body 只有 `order_id`），收到 `checkout_url` 後在**新分頁**開啟（`noopener`），原頁繼續輪詢；pop-up 被擋時卡片上有可點的連結。`checkout_url` 是外部資料：只接受 http(s)，其餘（`javascript:`、`data:`、`ftp:`、protocol-relative、空字串）不開也不連，顯示固定訊息。錯誤一律顯示固定句（`payment.disabled`、`payment.unavailable`…），不顯示伺服器的文字。**輪詢**：卡片顯示期間訂單與付款每 2 秒查一次（一般 `CONFIRMED` 訂單仍是 15 秒，`queries.ts` 的 `orderInterval`）；訂單離開 `CONFIRMED`（第一版是 `CONFIRMED → COMPLETED`）卡片消失、輪詢隨之停止；頁面隱藏時比照既有輪詢（react-query 預設不在背景輪詢）。
+- **限制**：切片 3 之前沒有路徑會建立付款單，所以真 stack 的 E2E 只到「預設設定下沒有 Pay 卡片、`StartPayment` 回 `payment.disabled`」與「`payment-rpc` 缺席」；開關開啟後的 Console 完整流程（建單 → 預留 → `CONFIRMED` → Pay → webhook → `COMPLETED`）由切片 6 的 kind 驗證。Console 的 Pay 卡片測試以 `page.route` 腳本化 `StartPayment`／`GetPayment`。
+
 ## 7. Provider、webhook 與認證邊界
 
 ### Provider
@@ -276,7 +288,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 1 | Ordering 契約（**已實作**） | `OrderConfirmed.total`、`PAID`、`OrderPaid`、訂單 `payment_required` 快照（migration：既有訂單為 `false`）、`require_payment` 設定（預設 `false`）、`CompleteOrder` 依快照擋、Console 顯示 | 否（預設 `false`，快照皆為 `false`） |
 | 2 | Payment 核心 | `pkgs/payment`、schema、mock provider、`payment-rpc serve`（RPC；`StartPayment` 的 `payment.disabled` 在 rpc 側，切片 4） | 否（沒部署） |
 | 3 | Saga | `consume`（訂閱 `OrderConfirmed`／`OrderCancelled`／`OrderCompleted`）、webhook 落地（含 platform 的 gin route option）、`expire`、自動退款（T10–T11）、ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（依快照）、**`poison`／`prune` 的 `payment` 納入**（見下） | 否（預設快照 `false` 時 ordering 忽略付款事件） |
-| 4 | 入口 | rpc 轉發 `StartPayment`／`GetPayment`（含 `payment.disabled`）、Console 付款頁 | 否 |
+| 4 | 入口（**已實作**） | `payment.v1.PublicPaymentService`（rpc 轉發 `StartPayment`／`GetPayment`，含 `payment.disabled`、`payment.unavailable`）、`payment.*` 設定、Console Pay 卡片 | 否（預設設定下快照全為 `false`、payment 設定選填，頁面與現在一樣） |
 | 5 | 部署 | goreleaser 第六個 image、chart（ingress 只開 webhook）、Grafana、alert | 否 |
 | 6 | 切換 | 開啟開關（新部署預設 `true`），kind 跑完整流程與第 5 節全部競態 | **是** |
 
@@ -321,6 +333,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | webhook route 不受 API key 影響 | S3 | §7 認證入口表 | `auth.mode: required` 下無 `X-API-Key` 但簽章正確 → 200；簽章錯 → 4xx |
 | ingress 只對外開 webhook | S5 | §1 | `task helm-check` 負例：渲染出的 ingress 規則只含 webhook path |
 | 競態在真環境成立 | S6 | §5 | kind 全流程（mock provider 的延遲／重送／亂序） |
+| Console 真流程 | S6 | §6「入口」 | 開關開啟後的真 stack（非 `page.route` 腳本）：建單 → `CONFIRMED` → Pay 卡片 → `StartPayment` 開新分頁 → 付款成功 → 訂單 `COMPLETED`、卡片消失、輪詢停止；開關切回關閉後新單沒有卡片 |
 
 ## 10. 儲存（`payment` schema）
 

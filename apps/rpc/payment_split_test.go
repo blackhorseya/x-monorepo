@@ -53,10 +53,9 @@ func TestRPC_PaymentLivesBehindTheNetwork(t *testing.T) {
 			t.Errorf("apps/rpc imports %s (%v): it may import only payment's contract and adapters/client", p, files)
 		}
 	}
-	for _, want := range []string{payModule + "/contract/v1", payModule + "/adapters/client"} {
-		if rpc[want] == nil {
-			t.Errorf("apps/rpc does not import %s (positive control)", want)
-		}
+	// The client is what rpc imports (its wire set and the service). The contract comes with it, not from rpc.
+	if rpc[payModule+"/adapters/client"] == nil {
+		t.Errorf("apps/rpc does not import %s (positive control)", payModule+"/adapters/client")
 	}
 
 	dir := filepath.Join("..", "..", "pkgs", "payment", "adapters", "client")

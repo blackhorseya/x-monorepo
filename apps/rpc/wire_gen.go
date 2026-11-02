@@ -24,6 +24,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/pricing"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
+	client2 "github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/client"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
@@ -154,8 +155,18 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	}
 	identityService := rpc3.NewIdentityService(useCases, configAuth)
 	forwarder := rpc4.NewForwarder(clientClient, configAuth)
+	payment := cfg.Payment
+	configOrdering := cfg.Ordering
+	client3, err := client2.New(payment, configOrdering, providers)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	publicService := client2.NewPublicService(client3, orderService, configAuth, configOrdering)
 	poisonService := NewPoisonService(db, configAuth)
-	v27 := NewRoutes(orderService, inventoryService, identityService, forwarder, poisonService)
+	v27 := NewRoutes(orderService, inventoryService, identityService, forwarder, publicService, poisonService)
 	v28 := NewDocs()
 	readiness := NewReadiness(db)
 	v29 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)

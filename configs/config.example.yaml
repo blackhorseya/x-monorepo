@@ -98,8 +98,18 @@ catalog:
   upstream: http://127.0.0.1:8081
   timeout: 3s        # one call to the catalog; a slower one is UNAVAILABLE (catalog.unavailable)
 
+# Payment is optional for rpc until payment-rpc is deployed (docs/payment.md §6): with nothing set,
+# payment.v1.PublicPaymentService answers payment.unavailable and everything else is unchanged. To try it
+# locally (task payment-rpc listens on :8082), uncomment this and set APP_PAYMENT_API_KEY to the key named
+# rpc in payment-rpc's auth.api_keys (a secret: env only, never this file). Half of it, or
+# ordering.require_payment: true without it, makes rpc refuse to start.
+# payment:
+#   upstream: http://127.0.0.1:8082
+#   timeout: 3s      # one call to payment-rpc; a slower one is UNAVAILABLE (payment.unavailable)
+
 ordering:
-  # Read by apps/worker only (an order becomes CONFIRMED in its StockReserved consumer). The value at
+  # Read by apps/worker (an order becomes CONFIRMED in its StockReserved consumer) and by apps/rpc (the
+  # payment API answers payment.disabled while this is off; on, it needs the payment section below). The value at
   # that moment is stored on the order as payment_required and never changes; CompleteOrder reads that
   # snapshot, so a CONFIRMED order with payment_required: true answers order.payment_required.
   # Leave false until Payment ships (docs/payment.md): nothing can pay an order yet.
