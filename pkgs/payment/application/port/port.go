@@ -62,6 +62,10 @@ var ErrProviderUnavailable = errors.New("payment provider unavailable")
 // ErrInvalidSignature is a webhook whose signature does not verify against its raw body.
 var ErrInvalidSignature = errors.New("webhook signature invalid")
 
+// ErrMalformedWebhook is a notification whose signature verified but whose content is not an event a
+// payment can be told about. Like every provider-facing error it carries none of the provider's words.
+var ErrMalformedWebhook = errors.New("webhook malformed")
+
 // PaymentProvider is the payment gateway behind a hosted checkout. The first version has only a mock.
 // Every method returns ErrProviderUnavailable (never the provider's own error text) when the provider
 // cannot give a usable answer.

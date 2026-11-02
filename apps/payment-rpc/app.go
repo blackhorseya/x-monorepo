@@ -61,11 +61,16 @@ func NoCredentialResolver() server.CredentialResolver { return nil }
 // interceptor holds no verifier for them.
 func NoOIDC() server.OIDCAuth { return server.OIDCAuth{} }
 
-// TraceOptions: payment-rpc continues the trace rpc started. Its callers are rpc alone (the Service
-// is ClusterIP, and the interceptor accepts nothing but rpc's service key), so a traceparent is
-// trusted here. A caller who reaches it directly could still choose its own trace_id; that only
-// affects observability data, never authorization.
-func TraceOptions() []server.Option { return []server.Option{server.TrustRemoteTrace()} }
+// ServerOptions are payment-rpc's decisions about the server, made in code. TrustRemoteTrace: payment-rpc
+// continues the trace rpc started. Its RPC callers are rpc alone (the Service is ClusterIP, and the
+// interceptor accepts nothing but rpc's service key), so a traceparent is trusted there; a caller who
+// reaches it directly could still choose its own trace_id, which only affects observability data, never
+// authorization. The webhook route is the other half of the surface: it is open to the provider by
+// signature, not by key (docs/payment.md §7), and a request to it carries no traceparent worth trusting
+// either way, since it has no span parent of ours.
+func ServerOptions(webhook server.Option) []server.Option {
+	return []server.Option{server.TrustRemoteTrace(), webhook}
+}
 
 // NewAuth is the only config.Auth in the graph: apps/payment-rpc accepts static auth.api_keys and
 // nothing else, so it refuses to start on a legacy auth.jwt or auth.oidc.enabled (a valid token

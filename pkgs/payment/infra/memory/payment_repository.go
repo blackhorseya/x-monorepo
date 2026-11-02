@@ -153,3 +153,26 @@ func (i *OutcomeRepository) Record(c context.Context, orderID string, outcome pa
 
 	return nil
 }
+
+var _ payment.WebhookRepository = (*WebhookRepository)(nil)
+
+// WebhookRepository keeps the verified notifications. SPEC STAGE: it keeps nothing.
+type WebhookRepository struct{}
+
+func NewWebhookRepository() *WebhookRepository { return &WebhookRepository{} }
+
+func (i *WebhookRepository) Insert(context.Context, *payment.WebhookEvent) (bool, error) {
+	return true, nil
+}
+
+func (i *WebhookRepository) Find(context.Context, string, string) (*payment.WebhookEvent, error) {
+	return nil, payment.ErrNotFound
+}
+
+func (i *WebhookRepository) MarkProcessed(context.Context, string, string, time.Time) error {
+	return nil
+}
+
+func (i *WebhookRepository) DeleteProcessedBefore(context.Context, time.Time, int) (int, error) {
+	return 0, nil
+}

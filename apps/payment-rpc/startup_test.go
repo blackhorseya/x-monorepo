@@ -5,14 +5,12 @@ import (
 	"testing"
 )
 
-// The command line: serve is the one subcommand (docs/payment.md §1 names consume and expire too, but
-// they are the saga's, slice 3). Anything else is refused before anything is opened, and the refusal
+// The command line: serve and consume are the subcommands so far (docs/payment.md §1 names expire too). Anything else is refused before anything is opened, and the refusal
 // does not echo the argument.
 func TestRun_Subcommand(t *testing.T) {
 	for name, args := range map[string][]string{
 		"none":                        nil,
 		"a flag first":                {"--require-durable"},
-		"consume does not exist yet":  {"consume"},
 		"expire does not exist yet":   {"expire"},
 		"a typo":                      {"sreve"},
 		"serve with an unknown flag":  {"serve", "--verbose"},

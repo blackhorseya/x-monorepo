@@ -143,9 +143,10 @@ type leakyProvider struct {
 	*mock.Provider
 	marker string
 
-	mu    sync.Mutex
-	calls int
-	said  []string
+	mu       sync.Mutex
+	calls    int
+	said     []string
+	verified []string // what VerifyWebhook was given
 }
 
 func (p *leakyProvider) fail(op string) error {
@@ -169,6 +170,17 @@ func (p *leakyProvider) GetPayment(context.Context, string) (dto.ProviderPayment
 func (p *leakyProvider) CancelCheckout(context.Context, string) error {
 	return p.fail("cancel_checkout")
 }
+
+// VerifyWebhook records what the server handed it (the positive control of the webhook scenarios: the
+// marker really arrived in the request) and then judges it like the mock does.
+func (p *leakyProvider) VerifyWebhook(body []byte, signature string) (dto.ProviderWebhookOutput, error) {
+	p.mu.Lock()
+	p.verified = append(p.verified, string(body)+"\n"+signature)
+	p.mu.Unlock()
+
+	return p.Provider.VerifyWebhook(body, signature)
+}
+
 func (p *leakyProvider) Refund(context.Context, dto.ProviderRefundInput) error {
 	return p.fail("refund")
 }
@@ -200,7 +212,7 @@ func TestLeaks_FindsAMarkerInAnyArtifact(t *testing.T) {
 // anchors say, per observed artifact, what THIS call must have left in it. "The marker is absent" means
 // something only for an artifact that is non-empty and shows the call it was watching; an artifact with
 // no anchor at all is not observed either, so adding one to the scenario without an anchor fails.
-var anchors = map[string]string{
+var startAnchors = map[string]string{
 	"response status line": "503",
 	"response headers":     "payment.provider_unavailable",
 	"response body":        "unavailable",
@@ -235,10 +247,38 @@ func TestUnobserved_FlagsEmptyMissingAndUnanchoredArtifacts(t *testing.T) {
 
 const leakMarker = "SYNTH-SECRET-9d41c7e2b0"
 
+// exchange is what the caller of a scenario's request sees.
+type exchange struct{ status, headers, body string }
+
+// driveStart makes StartPayment fail through the real entry: the provider fake fails every call.
+func driveStart(t *testing.T, base string, cfg config.Postgres, _ *leakyProvider) exchange {
+	t.Helper()
+	seed(t, cfg, "pay-1", "ord-1", owner, nil)
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/payment.v1.PaymentService/StartPayment",
+		strings.NewReader(`{"order_id":"ord-1","customer_id":"`+owner+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(server.APIKeyHeader, serviceKey)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	var hdr strings.Builder
+	for k, vs := range res.Header {
+		hdr.WriteString(k + ": " + strings.Join(vs, ",") + "\n")
+	}
+	if res.StatusCode != http.StatusServiceUnavailable || res.Header.Get("X-Error-Code") != "payment.provider_unavailable" {
+		t.Fatalf("response = %d %q / %q; want the provider-unavailable failure", res.StatusCode, body, res.Header.Get("X-Error-Code"))
+	}
+
+	return exchange{status: res.Status, headers: hdr.String(), body: string(body)}
+}
+
 // leakScenario makes StartPayment fail through the REAL entry (the real server, its interceptors,
 // Postgres, an exporting OTel SDK) with leakMarker in every provider error, and returns everything an
 // outsider could see afterwards. dropExports makes the collector discard what the SDK sends it.
-func leakScenario(t *testing.T, dropExports bool) (map[string]string, *leakyProvider) {
+func leakScenario(t *testing.T, dropExports bool, drive func(t *testing.T, base string, cfg config.Postgres, prov *leakyProvider) exchange) (map[string]string, *leakyProvider) {
 	t.Helper()
 	sink := newOTLPSink()
 	sink.drop = dropExports
@@ -268,35 +308,16 @@ func leakScenario(t *testing.T, dropExports bool) (map[string]string, *leakyProv
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(srv.Handler())
-	seed(t, cfg, "pay-1", "ord-1", owner, nil)
-
-	// the raw HTTP exchange: everything the caller can see
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/payment.v1.PaymentService/StartPayment",
-		strings.NewReader(`{"order_id":"ord-1","customer_id":"`+owner+`"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(server.APIKeyHeader, serviceKey)
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(res.Body)
-	_ = res.Body.Close()
-	var hdr strings.Builder
-	for k, vs := range res.Header {
-		hdr.WriteString(k + ": " + strings.Join(vs, ",") + "\n")
-	}
-	if res.StatusCode != http.StatusServiceUnavailable || res.Header.Get("X-Error-Code") != "payment.provider_unavailable" {
-		t.Fatalf("response = %d %q / %q; want the provider-unavailable failure", res.StatusCode, body, res.Header.Get("X-Error-Code"))
-	}
+	ex := drive(t, ts.URL, cfg, prov)
 	_, metricsPage := get(t, ts.URL+server.MetricsPath)
 
 	ts.Close()
 	cleanup() // flushes the exporters
 
 	return map[string]string{
-		"response status line": res.Status,
-		"response headers":     hdr.String(),
-		"response body":        string(body),
+		"response status line": ex.status,
+		"response headers":     ex.headers,
+		"response body":        ex.body,
 		"process log":          stdout.String(),
 		"exported spans":       sink.text("spans"),
 		"exported logs":        sink.text("logs"),
@@ -310,7 +331,7 @@ func leakScenario(t *testing.T, dropExports bool) (map[string]string, *leakyProv
 // the exported spans / logs / metrics, the /api/metrics page. The log carries only fixed categories and
 // codes. Every artifact must also show THIS call (anchors), or "absent" proves nothing.
 func TestPayment_ProviderErrorTextNeverLeaves(t *testing.T) {
-	artifacts, prov := leakScenario(t, false)
+	artifacts, prov := leakScenario(t, false, driveStart)
 
 	// positive control: the marker reached the fake and came back as its error
 	prov.mu.Lock()
@@ -319,7 +340,7 @@ func TestPayment_ProviderErrorTextNeverLeaves(t *testing.T) {
 	if calls == 0 || !strings.Contains(said, leakMarker) {
 		t.Fatalf("the provider fake was called %d times and said %q: the marker never went through it", calls, said)
 	}
-	if got := unobserved(artifacts, anchors); len(got) != 0 {
+	if got := unobserved(artifacts, startAnchors); len(got) != 0 {
 		t.Fatalf("artifacts that do not show the failed call, so cannot show the marker absent: %v", got)
 	}
 
@@ -333,9 +354,9 @@ func TestPayment_ProviderErrorTextNeverLeaves(t *testing.T) {
 // unaffected). Without this, "no marker in the exported telemetry" could pass on telemetry that was
 // never exported.
 func TestPayment_DroppedExportsAreNotMistakenForCleanOnes(t *testing.T) {
-	artifacts, _ := leakScenario(t, true)
+	artifacts, _ := leakScenario(t, true, driveStart)
 
-	got := unobserved(artifacts, anchors)
+	got := unobserved(artifacts, startAnchors)
 	want := []string{"exported logs", "exported metrics", "exported spans"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("unobserved = %v, want exactly %v", got, want)

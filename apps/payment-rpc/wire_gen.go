@@ -11,6 +11,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/rpc"
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/webhook"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -63,14 +64,27 @@ func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.S
 	readiness := NewReadiness(db)
 	credentialResolver := NoCredentialResolver()
 	oidcAuth := NoOIDC()
-	v5 := TraceOptions()
-	serverServer, err := server.New(http, auth, logger, v3, v4, readiness, providers, credentialResolver, oidcAuth, v5...)
+	webhookRepository := payment.ProvideWebhookRepository(db)
+	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
+	eventsPublisher := events.NewPublisher(publisher)
+	v5 := payment.ProvideReceiveWebhook(webhookRepository, provider, eventsPublisher, transactor, clock, recorder)
+	handler := webhook.NewHandler(v5, logger)
+	option := payment.WebhookRoute(handler)
+	v6 := ServerOptions(option)
+	serverServer, err := server.New(http, auth, logger, v3, v4, readiness, providers, credentialResolver, oidcAuth, v6...)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	return serverServer, func() {
+		cleanup3()
 		cleanup2()
 		cleanup()
 	}, nil
@@ -130,7 +144,10 @@ func InitializeConsume(cfg *config.AppConfig, provider port.PaymentProvider) (*C
 	orderCompletedHandler := consumer.NewOrderCompletedHandler(orderCompletedUC)
 	v2 := payment.ProvideProcessRefund(repository, provider, eventsPublisher, transactor, clock, recorder)
 	refundHandler := consumer.NewRefundHandler(v2)
-	subscriptions := payment.ProvideSubscriptions(orderConfirmedHandler, orderCancelledHandler, orderCompletedHandler, refundHandler)
+	webhookRepository := payment.ProvideWebhookRepository(db)
+	v3 := payment.ProvideProcessWebhook(repository, webhookRepository, eventsPublisher, alerts, clock, transactor, inbox, recorder)
+	webhookReceivedHandler := consumer.NewWebhookReceivedHandler(v3)
+	subscriptions := payment.ProvideSubscriptions(orderConfirmedHandler, orderCancelledHandler, orderCompletedHandler, refundHandler, webhookReceivedHandler)
 	mainConsumer, err := NewConsumer(worker, db, logger, providers, publisher, subscriptions)
 	if err != nil {
 		cleanup3()

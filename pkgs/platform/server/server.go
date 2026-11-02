@@ -53,7 +53,28 @@ type Route interface {
 // has no way to change one.
 type Option func(*options)
 
-type options struct{ trustRemoteTrace bool }
+type options struct {
+	trustRemoteTrace bool
+	httpRoutes       []httpRoute
+}
+
+type httpRoute struct {
+	method, path string
+	handler      http.Handler
+}
+
+// WithHTTPRoute mounts a plain HTTP handler (not Connect) at method + path, next to the probes. It is
+// for the few things that are not an RPC of ours, such as a provider's webhook (docs/payment.md §7).
+//
+// Know what it does NOT get: the auth interceptor, the rate limit and the timeout wrap Connect procedures
+// only, so a handler mounted here is open to whoever can reach the port unless it authenticates the request
+// itself (a webhook verifies a signature over the raw body, before it writes anything). The route does get
+// the request span (otelgin) and gin's recovery. Paths under a Connect prefix are not for this.
+func WithHTTPRoute(method, path string, h http.Handler) Option {
+	_, _, _ = method, path, h
+
+	return func(*options) {} // SPEC STAGE: nothing is mounted
+}
 
 // TrustRemoteTrace makes the server continue the trace named by an incoming
 // traceparent: the RPC's server span is a child of the caller's span and shares
@@ -181,6 +202,9 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	engine.GET(ReadyzPath, hp.ready)
 	engine.GET(VersionPath, hp.version)
 	engine.GET(MetricsPath, gin.WrapH(tel.MetricsHandler))
+	for _, r := range o.httpRoutes {
+		engine.Handle(r.method, r.path, gin.WrapH(r.handler))
+	}
 	if cfg.Docs {
 		mountDocs(engine, docs)
 		logger.Info("api docs enabled", "path", DocsPath)

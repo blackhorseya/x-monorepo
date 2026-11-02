@@ -85,6 +85,8 @@ const (
 	AlertAmountMismatch Alert = "amount_mismatch"
 	// AlertMissingTotal: an OrderConfirmed without a total reached an existing payment.
 	AlertMissingTotal Alert = "missing_total"
+	// AlertOrphanWebhook: a verified notification names a checkout no payment has opened.
+	AlertOrphanWebhook Alert = "orphan_webhook"
 	// AlertCaptureAfterReview: money was reported again for a payment already waiting for review.
 	AlertCaptureAfterReview Alert = "capture_after_review"
 )

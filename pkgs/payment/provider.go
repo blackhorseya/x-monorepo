@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/google/wire"
 	"go.opentelemetry.io/otel/metric"
@@ -16,6 +17,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/rpc"
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/webhook"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/usecase"
@@ -29,6 +31,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -46,9 +49,15 @@ var ProviderSet = wire.NewSet(
 	// across BCs: apps provide it.
 	ProvideStartPayment,
 	ProvideGetPayment,
+	ProvideWebhookRepository,
+	events.NewPublisher,
+	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),
+	ProvideReceiveWebhook,
 
 	// adapters
 	rpc.NewPaymentService,
+	webhook.NewHandler,
+	WebhookRoute,
 )
 
 // ProvidePaymentRepository picks the persistence backend from the composition root's database
@@ -132,15 +141,15 @@ var ConsumerProviderSet = wire.NewSet(
 	ProvideInbox,
 	system.NewIDGenerator,
 	wire.Bind(new(port.IDGenerator), new(*system.IDGenerator)),
-	events.NewPublisher,
-	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),
 	ProvideAlerts,
 
 	ProvideRecordOrderConfirmed,
 	ProvideRecordOrderCancelled,
 	ProvideRecordOrderCompleted,
 	ProvideProcessRefund,
+	ProvideProcessWebhook,
 
+	consumer.NewWebhookReceivedHandler,
 	consumer.NewOrderConfirmedHandler,
 	consumer.NewOrderCancelledHandler,
 	consumer.NewOrderCompletedHandler,
@@ -155,13 +164,14 @@ type Subscriptions []eventbus.Subscription
 // ProvideSubscriptions binds each consumed topic to its handler.
 func ProvideSubscriptions(
 	confirmed *consumer.OrderConfirmedHandler, cancelled *consumer.OrderCancelledHandler,
-	completed *consumer.OrderCompletedHandler, refund *consumer.RefundHandler,
+	completed *consumer.OrderCompletedHandler, refund *consumer.RefundHandler, webhook *consumer.WebhookReceivedHandler,
 ) Subscriptions {
 	return Subscriptions{
 		{Topic: consumer.TopicOrderConfirmed, Handler: confirmed},
 		{Topic: consumer.TopicOrderCancelled, Handler: cancelled},
 		{Topic: consumer.TopicOrderCompleted, Handler: completed},
 		{Topic: consumer.TopicPaymentRefundRequested, Handler: refund},
+		{Topic: consumer.TopicWebhookReceived, Handler: webhook},
 	}
 }
 
@@ -250,4 +260,31 @@ func cancelCheckoutAfterCommit(provider port.PaymentProvider, logger *slog.Logge
 // the payment id, and a payment already REFUNDED answers with nothing to do).
 func ProvideProcessRefund(payments payment.Repository, provider port.PaymentProvider, ev port.EventPublisher, tx port.Transactor, clock port.Clock, rec *usecasex.Recorder) consumer.RefundUC {
 	return decorateNoTx("payment.process_refund", rec, usecase.NewProcessRefund(payments, provider, ev, tx, clock))
+}
+
+// ProvideWebhookRepository pairs with ProvidePaymentRepository.
+func ProvideWebhookRepository(db *gorm.DB) payment.WebhookRepository {
+	if db == nil {
+		return memory.NewWebhookRepository()
+	}
+
+	return postgres.NewWebhookRepository(db)
+}
+
+// ProvideReceiveWebhook is the webhook route's use case: it verifies, then writes in a transaction it
+// opens itself, so it is not wrapped in Transactional (decorateNoTx). The provider's verification is
+// local computation, but the shape is the same as the other provider-facing use cases: nothing about
+// the request is held inside a transaction while it is judged.
+func ProvideReceiveWebhook(webhooks payment.WebhookRepository, provider port.PaymentProvider, ev port.EventPublisher, tx port.Transactor, clock port.Clock, rec *usecasex.Recorder) webhook.ReceiveUC {
+	return decorateNoTx("payment.receive_webhook", rec, usecase.NewReceiveWebhook(webhooks, provider, ev, tx, clock))
+}
+
+// WebhookRoute mounts the provider's webhook next to the probes (server.WithHTTPRoute): no API key, the
+// signature is the credential.
+func WebhookRoute(h *webhook.Handler) server.Option {
+	return server.WithHTTPRoute(http.MethodPost, webhook.Path, h)
+}
+
+func ProvideProcessWebhook(payments payment.Repository, webhooks payment.WebhookRepository, ev port.EventPublisher, al port.Alerts, clock port.Clock, tx port.Transactor, inbox port.Inbox, rec *usecasex.Recorder) consumer.WebhookUC {
+	return decorateTx("payment.process_webhook", rec, tx, inbox, usecase.NewProcessWebhook(payments, webhooks, ev, al, clock))
 }

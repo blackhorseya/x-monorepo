@@ -65,3 +65,16 @@ type RefundInput struct {
 
 // Ack is the answer of a use case that has nothing to say but "done".
 type Ack struct{}
+
+// WebhookInput is one POST of the provider's webhook as the route read it: the RAW body (the signature
+// is over these bytes, not over a re-encoding) and the signature header's value.
+type WebhookInput struct {
+	Body      []byte
+	Signature string
+}
+
+// WebhookReceivedInput names a stored notification (payment.v1.WebhookReceived): the storage key only.
+type WebhookReceivedInput struct {
+	Provider string
+	EventID  string
+}

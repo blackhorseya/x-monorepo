@@ -87,6 +87,17 @@ func TestRefundHandler(t *testing.T) {
 	}
 }
 
+func TestWebhookReceivedHandler(t *testing.T) {
+	var got []dto.WebhookReceivedInput
+	h := consumer.NewWebhookReceivedHandler(capture(&got, &dto.Ack{}, nil))
+	if err := h.Handle(context.Background(), marshal(t, &paymentv1.WebhookReceived{Provider: "mock", ProviderEventId: "evt-1"})); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Provider != "mock" || got[0].EventID != "evt-1" {
+		t.Fatalf("input = %+v", got)
+	}
+}
+
 // The error contract: undecodable and domain rejections are final (ErrDrop), everything else is
 // retried (and finally parked): a lost lock, the database, the provider not answering.
 func TestErrorContract(t *testing.T) {
@@ -102,13 +113,16 @@ func TestErrorContract(t *testing.T) {
 		"cancelled": marshal(t, &orderingv1.OrderCancelled{OrderId: "o"}),
 		"completed": marshal(t, &orderingv1.OrderCompleted{OrderId: "o"}),
 		"refund":    marshal(t, &paymentv1.PaymentRefundRequested{PaymentId: "p"}),
+		"webhook":   marshal(t, &paymentv1.WebhookReceived{Provider: "mock", ProviderEventId: "e"}),
 	}
 	build := func(err error) map[string]handler {
 		var a []dto.OrderConfirmedInput
 		var b, d []dto.OrderEndedInput
 		var r []dto.RefundInput
+		var w []dto.WebhookReceivedInput
 
 		return map[string]handler{
+			"webhook":   consumer.NewWebhookReceivedHandler(capture(&w, &dto.Ack{}, err)),
 			"confirmed": consumer.NewOrderConfirmedHandler(capture(&a, &dto.Ack{}, err)),
 			"cancelled": consumer.NewOrderCancelledHandler(capture(&b, &dto.OrderEndedOutput{}, err)),
 			"completed": consumer.NewOrderCompletedHandler(capture(&d, &dto.OrderEndedOutput{}, err)),

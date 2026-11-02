@@ -31,6 +31,7 @@ var (
 	TopicOrderCancelled         = string((&orderingv1.OrderCancelled{}).ProtoReflect().Descriptor().FullName())
 	TopicOrderCompleted         = string((&orderingv1.OrderCompleted{}).ProtoReflect().Descriptor().FullName())
 	TopicPaymentRefundRequested = string((&paymentv1.PaymentRefundRequested{}).ProtoReflect().Descriptor().FullName())
+	TopicWebhookReceived        = string((&paymentv1.WebhookReceived{}).ProtoReflect().Descriptor().FullName())
 )
 
 // ErrDrop tells the router the message is final: acknowledge it, do not retry.
@@ -39,6 +40,7 @@ var ErrDrop = eventbus.ErrDrop
 type (
 	OrderConfirmedUC = usecasex.UseCase[dto.OrderConfirmedInput, *dto.Ack]
 	RefundUC         = usecasex.UseCase[dto.RefundInput, *dto.Ack]
+	WebhookUC        = usecasex.UseCase[dto.WebhookReceivedInput, *dto.Ack]
 )
 
 // OrderCancelledUC and OrderCompletedUC have the same shape and are different use cases: distinct
@@ -150,3 +152,12 @@ func (h *RefundHandler) Handle(c context.Context, payload []byte) error {
 
 	return result(ctx, TopicPaymentRefundRequested, evt.GetPaymentId(), err)
 }
+
+// WebhookReceivedHandler consumes payment.v1.WebhookReceived. SPEC STAGE: it acknowledges and drives nothing.
+type WebhookReceivedHandler struct{ uc WebhookUC }
+
+func NewWebhookReceivedHandler(uc WebhookUC) *WebhookReceivedHandler {
+	return &WebhookReceivedHandler{uc: uc}
+}
+
+func (h *WebhookReceivedHandler) Handle(context.Context, []byte) error { return nil }

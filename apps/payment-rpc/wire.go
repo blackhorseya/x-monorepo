@@ -31,7 +31,8 @@ func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.S
 		NewReadiness,
 		NoCredentialResolver,
 		NoOIDC,
-		TraceOptions,
+		ServerOptions,
+		eventbus.ProvidePublisher,
 		payment.ProviderSet,
 	)
 

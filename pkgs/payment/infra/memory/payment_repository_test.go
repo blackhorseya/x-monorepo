@@ -154,3 +154,96 @@ func TestPaymentRepository_FindersAndOutcomes(t *testing.T) {
 		t.Fatalf("Record cancelled: %v", err)
 	}
 }
+
+func aWebhook(t *testing.T, id, typ string) *payment.WebhookEvent {
+	t.Helper()
+	amount, _ := kernel.NewMoney(1000, "TWD")
+	w, err := payment.NewWebhookEvent("mock", id, typ, "ref-1", amount, []byte(`{"id":"`+id+`"}`), t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return w
+}
+
+// The webhook log: (provider, event id) deduplicates, processing is marked once, and the retention delete
+// takes only PROCESSED rows older than the cutoff, oldest first, up to the limit — the sentinels (an
+// unprocessed old row, a processed recent row) must survive, or "nothing was deleted" proves nothing.
+func TestWebhookRepository(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewWebhookRepository()
+	for _, id := range []string{"old-1", "old-2", "old-3", "recent", "unprocessed"} {
+		if inserted, err := repo.Insert(c, aWebhook(t, id, payment.WebhookCaptured)); err != nil || !inserted {
+			t.Fatalf("insert %s = %v, %v", id, inserted, err)
+		}
+	}
+	if inserted, err := repo.Insert(c, aWebhook(t, "old-1", "something.else")); err != nil || inserted {
+		t.Fatalf("a redelivery inserted again: %v, %v", inserted, err)
+	}
+	got, err := repo.Find(c, "mock", "old-1")
+	if err != nil || got.EventType() != payment.WebhookCaptured || got.Processed() {
+		t.Fatalf("Find = %+v, %v; want the first one stored, unprocessed", got, err)
+	}
+	if _, err = repo.Find(c, "mock", "nope"); !errors.Is(err, payment.ErrNotFound) {
+		t.Fatalf("Find unknown: %v", err)
+	}
+	if _, err = repo.Find(c, "other", "old-1"); !errors.Is(err, payment.ErrNotFound) {
+		t.Fatalf("Find under another provider: %v", err)
+	}
+
+	long := t0.Add(-100 * time.Hour)
+	for _, id := range []string{"old-1", "old-2", "old-3"} {
+		if err = repo.MarkProcessed(c, "mock", id, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = repo.MarkProcessed(c, "mock", "old-1", t0); err != nil { // the first mark stands
+		t.Fatal(err)
+	}
+	if err = repo.MarkProcessed(c, "mock", "recent", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.MarkProcessed(c, "mock", "ghost", t0); err != nil {
+		t.Fatalf("marking an unknown event: %v", err)
+	}
+	if got, _ = repo.Find(c, "mock", "old-1"); !got.ProcessedAt().Equal(long) {
+		t.Fatalf("processed_at = %v, want the first mark %v", got.ProcessedAt(), long)
+	}
+
+	cutoff := t0.Add(-24 * time.Hour)
+	n, err := repo.DeleteProcessedBefore(c, cutoff, 2)
+	if err != nil || n != 2 {
+		t.Fatalf("delete with limit 2 = %d, %v; want 2", n, err)
+	}
+	if _, err = repo.Find(c, "mock", "old-1"); !errors.Is(err, payment.ErrNotFound) {
+		t.Fatalf("the oldest was not the first deleted: %v", err)
+	}
+	if _, err = repo.Find(c, "mock", "old-3"); err != nil {
+		t.Fatalf("a row beyond the limit was deleted: %v", err)
+	}
+	if n, err = repo.DeleteProcessedBefore(c, cutoff, 100); err != nil || n != 1 {
+		t.Fatalf("second delete = %d, %v; want the remaining old one", n, err)
+	}
+	for _, id := range []string{"recent", "unprocessed"} {
+		if _, err = repo.Find(c, "mock", id); err != nil {
+			t.Fatalf("sentinel %s was deleted: %v", id, err)
+		}
+	}
+	// a replay of a deleted event is "new" again: that is what retention costs, and why it must outlast the redelivery window
+	if inserted, _ := repo.Insert(c, aWebhook(t, "old-1", payment.WebhookCaptured)); !inserted {
+		t.Fatal("after retention, a redelivery is treated as new")
+	}
+
+	cc, cancel := context.WithCancel(c)
+	cancel()
+	for name, err := range map[string]error{
+		"insert": func() error { _, err := repo.Insert(cc, aWebhook(t, "x", "t")); return err }(),
+		"find":   func() error { _, err := repo.Find(cc, "mock", "x"); return err }(),
+		"mark":   repo.MarkProcessed(cc, "mock", "x", t0),
+		"delete": func() error { _, err := repo.DeleteProcessedBefore(cc, t0, 1); return err }(),
+	} {
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("%s with a cancelled context: %v", name, err)
+		}
+	}
+}

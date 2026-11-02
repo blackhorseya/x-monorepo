@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -402,4 +404,21 @@ func (e *consumeEnv) poisonOffsets() []int64 {
 	}
 
 	return offsets
+}
+
+func orderCancelled(order string) *orderingv1.OrderCancelled {
+	return &orderingv1.OrderCancelled{OrderId: order, CustomerId: owner}
+}
+
+func dtoCheckout(p *payment.Payment) dto.ProviderCheckoutInput {
+	return dto.ProviderCheckoutInput{PaymentID: p.ID().String(), OrderID: p.OrderID(), Amount: dto.MoneyOutput{Amount: p.Amount().Amount(), Currency: p.Amount().Currency()}}
+}
+
+// newTestServer serves h on a loopback port until the test ends and returns its base URL.
+func newTestServer(t *testing.T, h http.Handler) string {
+	t.Helper()
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+
+	return ts.URL
 }
