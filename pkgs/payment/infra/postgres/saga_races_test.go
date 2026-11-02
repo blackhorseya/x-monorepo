@@ -150,6 +150,80 @@ func TestRace_ConfirmedAndCancelledWithoutAPaymentYet(t *testing.T) {
 	}
 }
 
+// gatedOutcomes stops Record (the cancellation's write when no payment exists) until released: the other
+// order of the same race, the cancellation first and the confirmation arriving while it is half done.
+type gatedOutcomes struct {
+	payment.OutcomeRepository
+	reached chan struct{}
+	resume  chan struct{}
+	once    sync.Once
+}
+
+func (r *gatedOutcomes) Record(c context.Context, orderID string, o payment.Outcome, at time.Time) error {
+	r.once.Do(func() { close(r.reached) })
+	select {
+	case <-r.resume:
+	case <-c.Done():
+		return c.Err()
+	}
+
+	return r.OutcomeRepository.Record(c, orderID, o, at)
+}
+
+func TestRace_CancelledThenConfirmedWithoutAPaymentYet(t *testing.T) {
+	e := newSagaEnv(t)
+	c := t.Context()
+	orderID, err := system.NewIDGenerator().NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := &gatedOutcomes{OutcomeRepository: e.outs, reached: make(chan struct{}), resume: make(chan struct{})}
+	clock := system.NewClock()
+	cancel := paymentbc.ProvideRecordOrderCancelled(e.repo, gate, e.ev, clock, mock.New(mock.Options{}), e.logger, e.tx, nil, e.rec)
+	confirm := paymentbc.ProvideRecordOrderConfirmed(e.repo, e.outs, system.NewIDGenerator(), clock, e.al, config.Payment{Window: 30 * time.Minute}, e.tx, nil, e.rec)
+
+	release := sync.OnceFunc(func() { close(gate.resume) })
+	t.Cleanup(release)
+	cancelled := make(chan error, 1)
+	go func() {
+		_, err := cancel.Execute(c, dto.OrderEndedInput{OrderID: orderID})
+		cancelled <- err
+	}()
+	select {
+	case <-gate.reached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fixture: the cancellation never reached its write")
+	}
+
+	confirmed := make(chan error, 1)
+	go func() {
+		_, err := confirm.Execute(c, dto.OrderConfirmedInput{OrderID: orderID, CustomerID: "cust", Total: &dto.MoneyOutput{Amount: 1000, Currency: "TWD"}})
+		confirmed <- err
+	}()
+	var confirmErr error
+	select {
+	case confirmErr = <-confirmed:
+	case <-time.After(750 * time.Millisecond):
+		release()
+		confirmErr = <-confirmed
+	}
+	release()
+	if confirmErr != nil {
+		t.Fatalf("confirm: %v", confirmErr)
+	}
+	if err = <-cancelled; err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	p, err := e.repo.FindByOrderID(c, orderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Status() != payment.StatusCancelled || p.Outcome() != payment.OutcomeCancelled {
+		t.Fatalf("both handlers acked but the cancellation was lost: payment=%s/%s", p.Status(), p.Outcome())
+	}
+}
+
 type sweepClock struct{ now time.Time }
 
 func (c *sweepClock) Now() time.Time { return c.now }

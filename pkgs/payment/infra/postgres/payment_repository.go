@@ -236,12 +236,14 @@ func (i *OutcomeRepository) Find(c context.Context, orderID string) (payment.Out
 
 // Lock takes a transaction-scoped advisory lock keyed by the order id: it is released at commit or
 // rollback, whichever way the surrounding transaction ends, and nothing outlives a crashed connection.
+// The two-key form (class, object) lives in its own key space, apart from the one-bigint form, and the
+// class is payment's own, so no other lock of this database can be the same lock.
 func (i *OutcomeRepository) Lock(c context.Context, orderID string) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := platformpg.TxOrDB(ctx, i.db).Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`, Schema+".order:"+orderID).Error; err != nil {
+	if err := platformpg.TxOrDB(ctx, i.db).Exec(`SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?))`, Schema+".order", orderID).Error; err != nil {
 		return fmt.Errorf("lock order %s: %w", orderID, err)
 	}
 
