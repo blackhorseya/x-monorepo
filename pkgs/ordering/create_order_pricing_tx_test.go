@@ -3,6 +3,7 @@ package ordering_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -229,5 +230,21 @@ func TestCreateOrder_UnquotableSKUOpensNoTransactionAndKeepsTheKey(t *testing.T)
 	out, err := f.create(c, bad)
 	if err != nil || out.Replayed {
 		t.Fatalf("retry with the same key = %+v, %v; want a new order", out, err)
+	}
+}
+
+// The tests above run against the one database of the test binary, which keeps what they write. `go test
+// -count=2` (or a rerun against the same TEST_DATABASE_URL) runs them again over the first round's orders, so
+// each must make its own customer: a fixed customer and key find the first round's order and answer with a
+// replay. This runs every test of the file twice in this process, which is what -count=2 does, without a
+// subprocess.
+func TestCreateOrder_PricingTxTestsRerunOverTheSameDatabase(t *testing.T) {
+	for round := 1; round <= 2; round++ {
+		t.Run(fmt.Sprintf("round%d", round), func(t *testing.T) {
+			TestCreateOrder_PricesBeforeTheTransactionOpens(t)
+			TestCreateOrder_HoldsNoConnectionWhilePricing(t)
+			TestCreateOrder_ReplayOpensNoTransactionAndAsksNoCatalog(t)
+			TestCreateOrder_UnquotableSKUOpensNoTransactionAndKeepsTheKey(t)
+		})
 	}
 }
