@@ -5,7 +5,7 @@ import { useState } from "react";
 import { PaymentStatus } from "@repo/proto/payment/v1/entity_pb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getCredentialGeneration, useResetOnCredentialChange } from "../auth";
+import { getCredentialGeneration } from "../auth";
 import { payments } from "../client";
 import { paymentQuery } from "../queries";
 
@@ -47,6 +47,13 @@ function messageFor(err: unknown): string {
 // asks rpc to start the payment (StartPayment takes the order id and nothing else: who pays is the
 // credential's business) and opens the provider's checkout page in a new tab, without an opener; the page
 // itself keeps watching the order (queries.ts orderInterval) so the customer comes back to the result.
+//
+// Everything the card remembers (the message, the link, a call in flight) belongs to the credential it was
+// shown for, and the way that is kept is by the page giving the card the credential generation as its key
+// (routes/order.tsx): another credential is another card, so nothing of the old one can be on screen, and a
+// failure that arrives late finds nobody to tell. A call's success has a side effect outside the card
+// (opening a window), so it still checks the generation itself. A refreshed token of the same session keeps
+// the generation (auth.ts rotateSessionToken) and so the card.
 export function PaymentCard({ orderId }: { orderId: string }) {
   const payment = useQuery(paymentQuery(orderId));
   const [message, setMessage] = useState<string | null>(null);
@@ -58,8 +65,8 @@ export function PaymentCard({ orderId }: { orderId: string }) {
       const res = await payments.startPayment({ orderId });
       return { payment: res.payment, generation };
     },
-    // An answer for a credential that was replaced meanwhile belongs to the old one: it opens nothing
-    // here (useResetOnCredentialChange resets the mutation's state, not a call in flight).
+    // An answer for a credential that was replaced meanwhile belongs to the old one: it opens nothing. (The
+    // card itself is gone with its generation; this is the part of a success that is not state.)
     onSuccess: ({ payment: started, generation }) => {
       if (generation !== getCredentialGeneration()) return;
       const url = safeCheckoutUrl(started?.checkoutUrl);
@@ -74,7 +81,6 @@ export function PaymentCard({ orderId }: { orderId: string }) {
     },
     onError: (err) => setMessage(messageFor(err)),
   });
-  useResetOnCredentialChange(start);
 
   const link = startedUrl ?? safeCheckoutUrl(payment.data?.checkoutUrl);
   const status = payment.data ? PaymentStatus[payment.data.status] : null;

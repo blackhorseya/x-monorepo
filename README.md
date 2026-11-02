@@ -367,6 +367,7 @@ proto-first：OpenAPI 是 proto 的產物，不是另一份契約。`task gen` �
 `protos/<bc>/v1/openapi.base.yaml` 提供 title / description 等手寫 metadata。
 BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 BC，`APP_HTTP_DOCS=true`
 時才掛 `/api/docs`（Scalar UI，`/api/docs/<bc>`）與 `/api/openapi/<bc>.yaml`。production 不開。
+**新增 RPC 要兩個檢查，不是一個**：生成檔存在（`task gen` / `check-gen-fresh`）不等於服務文件已發布（要在 `NewDocs` 掛上並由 wired rpc 的 `APP_HTTP_DOCS=true` 入口測到）。同一個 BC 有內部服務與對外服務時（payment：`payment-rpc` 的 `PaymentService` 與 rpc 的 `PublicPaymentService`），要發布**對外的 subset**：對外服務放獨立的 proto 檔（`protos/payment/v1/public.proto`），`task gen` 另生 `public.openapi.yaml`（`base` 是 `public.openapi.base.yaml`），`NewDocs` 掛它；`TestPaymentEntry_PublicOpenAPIIsPublished` 守住「公開 procedures 可見、內部 procedure 與 request 型別不在、docs 關閉時 404」。`check-gen-fresh` 的 pathspec 是 `*/contract/*/*openapi.yaml`，涵蓋這份。
 spec 裡的 `servers` 是相對的 `/api`（任何 host 都對），但 serve 出去的 yaml 會把它改寫成 request 的絕對 origin（`X-Forwarded-Proto` / Host）：
 Scalar 的 Send request 用 `new URL(server + path)`，相對 server 會噴「The URL seems to be invalid」；順便讓檔案直接匯入 Postman / Bruno 就能打。
 四份 `openapi.base.yaml` 都宣告 `securitySchemes`（`apiKey` = `X-API-Key`、`bearer` = JWT），所以 Scalar 右上 **Auth** 可以選一種填進去

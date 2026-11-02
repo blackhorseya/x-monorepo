@@ -27,6 +27,7 @@ import (
 	orderingrpc "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	paymentclient "github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/client"
+	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
@@ -69,6 +70,8 @@ func NewDocs() []server.Doc {
 		{Name: "inventory", Spec: inventoryv1.OpenAPI},
 		{Name: "identity", Spec: identityv1.OpenAPI},
 		{Name: "catalog", Spec: catalogv1.OpenAPI},
+		// The public subset: PaymentService (payment-rpc's internal API, which rpc does not serve) is not in it.
+		{Name: "payment", Spec: paymentv1.PublicOpenAPI},
 		{Name: "admin", Spec: adminv1.OpenAPI},
 	}
 }

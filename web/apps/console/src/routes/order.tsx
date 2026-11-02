@@ -18,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useResetOnCredentialChange } from "../auth";
+import { useCredentialGeneration, useResetOnCredentialChange } from "../auth";
 import { ConfirmButton } from "../components/confirm";
 import { describe, orders } from "../client";
 import { keys, orderQuery, reservationQuery } from "../queries";
@@ -33,6 +33,7 @@ import { reservationBadge } from "./reservations";
 export function OrderPage() {
   const { id } = useParams({ from: "/orders/$id" });
   const { data, isError, error } = useQuery(orderQuery(id));
+  const generation = useCredentialGeneration();
 
   return (
     <div className="grid gap-6">
@@ -60,7 +61,7 @@ export function OrderPage() {
           {data && <OrderDetail order={data} />}
         </CardContent>
       </Card>
-      {data && data.status === OrderStatus.CONFIRMED && data.paymentRequired && <PaymentCard orderId={id} />}
+      {data && data.status === OrderStatus.CONFIRMED && data.paymentRequired && <PaymentCard key={generation} orderId={id} />}
       {data && <ReservationCard orderId={id} order={data.status} />}
     </div>
   );

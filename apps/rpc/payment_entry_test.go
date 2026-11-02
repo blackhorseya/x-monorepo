@@ -604,9 +604,9 @@ func TestPaymentEntry_PublicOpenAPIIsPublished(t *testing.T) {
 				t.Errorf("the payment document does not contain %s", want)
 			}
 		}
-		for _, banned := range []string{"/payment.v1.PaymentService/", "customerId", "admin:"} {
+		for _, banned := range []string{"/payment.v1.PaymentService/", "payment.v1.StartPaymentRequest", "payment.v1.GetPaymentRequest"} {
 			if strings.Contains(body, banned) {
-				t.Errorf("the payment document contains %q: only the public service is published, and it has no identity fields", banned)
+				t.Errorf("the payment document contains %q: only the public service is published, not payment-rpc's internal one", banned)
 			}
 		}
 		if code, index := h.get(t, "/api/docs"); code != http.StatusOK || !strings.Contains(index, "payment") {

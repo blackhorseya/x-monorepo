@@ -182,7 +182,14 @@ test("a refreshed access token of the same session does not reset the card", asy
   const id = `e2e-pay-rotate-${uid()}`;
   await stubConfig(page);
   const idp = await mockIdp(page, { expiresIn: 12 });
-  await waitingOrder(page, id);
+  // The order changes a little when a new token has been issued (its customer line), so that the page
+  // renders again with the new token: a card that is reset by anything but a new credential would show it.
+  let customer = "someone";
+  const order = () => ({ id, customerId: customer, status: "ORDER_STATUS_CONFIRMED", paymentRequired: true, items: [], total: { amountMinor: "100", currency: "USD" } });
+  await page.route(GET_ORDER, (route) => route.fulfill({ json: { order: order() } }));
+  await page.route("**/inventory.v1.InventoryService/GetReservation", (route) =>
+    route.fulfill({ status: 404, json: { code: "not_found", message: "none" } }),
+  );
   await page.route(GET_PAYMENT, (route) => route.fulfill(notFound));
   await page.route(START, (route) =>
     route.fulfill({ json: { payment: { id: "p", orderId: id, status: "PAYMENT_STATUS_PENDING", checkoutUrl: CHECKOUT } } }),
@@ -190,8 +197,7 @@ test("a refreshed access token of the same session does not reset the card", asy
   await page.context().route("https://pay.example.test/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>c</title>" }));
   // The orders list offers the order (scripted), and the page is reached by following its link: within the
   // single-page app, since a reload would restore the session through a refresh of its own.
-  const order = { id, customerId: "someone", status: "ORDER_STATUS_CONFIRMED", paymentRequired: true, items: [], total: { amountMinor: "100", currency: "USD" } };
-  await page.route("**/ordering.v1.OrderService/ListOrders", (route) => route.fulfill({ json: { orders: [order] } }));
+  await page.route("**/ordering.v1.OrderService/ListOrders", (route) => route.fulfill({ json: { orders: [order()] } }));
   await page.route("**/inventory.v1.InventoryService/BatchGetReservations", (route) => route.fulfill({ json: {} }));
   await page.goto("/login");
   await signIn(page);
@@ -204,6 +210,7 @@ test("a refreshed access token of the same session does not reset the card", asy
   const issued = idp.accessTokens.length;
   await expect.poll(() => idp.accessTokens.length, { timeout: 25_000 }).toBeGreaterThan(issued); // a new access token was issued
   expect(grants()).toBeGreaterThanOrEqual(1); // by a refresh
-  await settle(page);
+  customer = "someone-else"; // the next poll of the order changes what the page renders
+  await expect(page.getByText("someone-else")).toBeVisible({ timeout: 10_000 }); // positive control: the page rendered again after the refresh
   await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT); // and the card is as it was
 });
