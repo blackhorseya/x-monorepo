@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
@@ -18,11 +16,7 @@ import (
 // opened from an already parsed config has to keep doing so, or every
 // timestamp the repositories read shifts by the zone's offset.
 func TestNewDB_ExpectTargetKeepsTimestampDecoding(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	base := pgtest.URL(t)
 	sep := "?"
@@ -37,11 +31,10 @@ func TestNewDB_ExpectTargetKeepsTimestampDecoding(t *testing.T) {
 
 	read := func(expectTarget string) time.Time {
 		t.Helper()
-		db, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn, ExpectTarget: expectTarget}, tel)
+		db, err := pgtest.TryDB(t, config.Postgres{URL: dsn, ExpectTarget: expectTarget}, tel)
 		if err != nil {
 			t.Fatalf("NewDB(expect_target=%q): %v", expectTarget, err)
 		}
-		defer cleanup()
 		var got time.Time
 		if err := db.Raw("SELECT TIMESTAMP '2026-10-28 12:00:00'").Scan(&got).Error; err != nil {
 			t.Fatal(err)
@@ -63,11 +56,7 @@ func TestNewDB_ExpectTargetKeepsTimestampDecoding(t *testing.T) {
 // TimeZone can be written, now that NewDB reads it from the parsed config
 // instead of leaving it to the driver's regexp over the raw string.
 func TestNewDB_TimestampZoneMatrix(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 	base := pgtest.URL(t)
 	sep := "?"
 	if strings.Contains(base, "?") {
@@ -103,10 +92,9 @@ func TestNewDB_TimestampZoneMatrix(t *testing.T) {
 			if tc.query != "" {
 				dsn += sep + tc.query
 			}
-			db, cleanup, err := postgres.NewDB(config.Postgres{URL: dsn}, tel)
+			db, err := pgtest.TryDB(t, config.Postgres{URL: dsn}, tel)
 			if tc.reject != "" {
 				if err == nil {
-					cleanup()
 					t.Fatal("NewDB = nil, want a refusal")
 				}
 				if !strings.Contains(err.Error(), tc.reject) {
@@ -118,7 +106,6 @@ func TestNewDB_TimestampZoneMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer cleanup()
 			var got time.Time
 			if err := db.Raw("SELECT TIMESTAMP '2026-10-28 12:00:00'").Scan(&got).Error; err != nil {
 				t.Fatal(err)
@@ -147,11 +134,7 @@ func TestNewDB_TimestampZoneMatrix(t *testing.T) {
 // connection. (Spellings that disagree are refused: see
 // TestNewDB_ConflictingTimeZoneKeysAreRefused.)
 func TestNewDB_SameTimeZoneInSeveralCasesIsMerged(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 	base := pgtest.URL(t)
 	sep := "?"
 	if strings.Contains(base, "?") {
@@ -166,7 +149,7 @@ func TestNewDB_SameTimeZoneInSeveralCasesIsMerged(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.query, func(t *testing.T) {
 			for i := 0; i < 20; i++ {
-				db, cleanup, err := postgres.NewDB(config.Postgres{URL: base + sep + tc.query}, tel)
+				db, err := pgtest.TryDB(t, config.Postgres{URL: base + sep + tc.query}, tel)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -176,7 +159,6 @@ func TestNewDB_SameTimeZoneInSeveralCasesIsMerged(t *testing.T) {
 					Session string
 				}
 				err = db.Raw("SELECT CURRENT_TIMESTAMP AS actual, LOCALTIMESTAMP AS decoded, current_setting('TimeZone') AS session").Scan(&row).Error
-				cleanup()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -198,11 +180,7 @@ func TestNewDB_SameTimeZoneInSeveralCasesIsMerged(t *testing.T) {
 // spelling is about the codec, which is deterministic, and the failure of a
 // merged one is about the session, which is not.
 func TestNewDB_AnyCasingOfTimeZoneDecodesInThatZone(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 	base := pgtest.URL(t)
 	sep := "?"
 	if strings.Contains(base, "?") {
@@ -217,7 +195,7 @@ func TestNewDB_AnyCasingOfTimeZoneDecodesInThatZone(t *testing.T) {
 	} {
 		t.Run(query, func(t *testing.T) {
 			for i := 0; i < 30; i++ {
-				db, cleanup, err := postgres.NewDB(config.Postgres{URL: base + sep + query}, tel)
+				db, err := pgtest.TryDB(t, config.Postgres{URL: base + sep + query}, tel)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -227,7 +205,6 @@ func TestNewDB_AnyCasingOfTimeZoneDecodesInThatZone(t *testing.T) {
 					Session string
 				}
 				err = db.Raw("SELECT CURRENT_TIMESTAMP AS actual, LOCALTIMESTAMP AS decoded, current_setting('TimeZone') AS session").Scan(&row).Error
-				cleanup()
 				if err != nil {
 					t.Fatal(err)
 				}

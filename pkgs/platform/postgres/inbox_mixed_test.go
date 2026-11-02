@@ -8,7 +8,6 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -23,19 +22,12 @@ func dropInboxMixed(db *gorm.DB) error {
 // defer-based cleanup ran in) the purge must report an error, not succeed
 // silently and leave the schema behind.
 func TestInboxMixedPurge_ReportsAClosedPool(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := postgres.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel)
 	if err := dropInboxMixed(db); err != nil { // positive control: an open pool purges fine
 		t.Fatalf("purge on an open pool: %v", err)
 	}
-	cleanup()
+	pgtest.ClosePool(t, db)
 	if err := dropInboxMixed(db); err == nil {
 		t.Fatal("purge on a closed pool returned nil: a failed cleanup would pass silently")
 	}
@@ -46,16 +38,8 @@ func TestInboxMixedPurge_ReportsAClosedPool(t *testing.T) {
 // A redelivery (same id) is a duplicate whichever generation minted it.
 func TestInbox_MixedV4V7(t *testing.T) {
 	c := context.Background()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := postgres.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup) // registered first, so it runs last: after the DROP below
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel) // closed by a t.Cleanup registered here, before any purge below: LIFO runs the purge while the pool is open
 	for _, q := range []string{
 		"DROP SCHEMA IF EXISTS inboxmixed CASCADE", "CREATE SCHEMA inboxmixed",
 		"CREATE TABLE inboxmixed.inbox (message_id VARCHAR(36) PRIMARY KEY, consumed_at TIMESTAMPTZ NOT NULL DEFAULT now())",

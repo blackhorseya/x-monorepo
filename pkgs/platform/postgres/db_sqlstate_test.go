@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
 // rejectingServer answers every connection's startup message with an
@@ -64,11 +64,7 @@ func rejectingServer(t *testing.T, severity, code string) (hostPort string) {
 // Postgres's own severities are carried. Anything else is dropped, and then the
 // error is the category alone and errors.As finds no PgError.
 func TestConnectionErrors_ServerFieldsAreValidated(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 	m := postgres.Migration{Schema: "sqlstate", Files: fstest.MapFS{"0001_a.up.sql": {Data: []byte("SELECT 1;")}}}
 
 	cases := []struct {
@@ -89,10 +85,7 @@ func TestConnectionErrors_ServerFieldsAreValidated(t *testing.T) {
 			cfg := config.Postgres{URL: "postgres://synthetic_user:synthetic_password@" + addr + "/synthetic_db?sslmode=disable&connect_timeout=1"}
 			for entry, run := range map[string]func() error{
 				"NewDB": func() error {
-					_, cleanup, err := postgres.NewDB(cfg, tel)
-					if cleanup != nil {
-						cleanup()
-					}
+					_, err := pgtest.TryDB(t, cfg, tel)
 
 					return err
 				},

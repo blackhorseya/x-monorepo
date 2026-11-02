@@ -16,7 +16,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -43,16 +42,8 @@ func repos(t *testing.T, fn func(t *testing.T, repo order.Repository)) {
 	t.Run("postgres", func(t *testing.T) {
 		url := pgtest.URL(t)
 		cfg := config.Postgres{URL: url}
-		tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer telCleanup()
-		db, cleanup, err := platformpg.NewDB(cfg, tel)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cleanup()
+		tel := pgtest.Telemetry(t)
+		db := pgtest.DB(t, cfg, tel)
 		if err := platformpg.Up(context.Background(), cfg, postgres.Migration()); err != nil {
 			t.Fatal(err)
 		}

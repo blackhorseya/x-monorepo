@@ -38,7 +38,6 @@ import (
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	platformredis "github.com/blackhorseya/x-monorepo/pkgs/platform/redis"
@@ -99,16 +98,8 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	c, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	pgCfg := config.Postgres{URL: url}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, dbCleanup, err := postgres.NewDB(pgCfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dbCleanup()
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, pgCfg, tel)
 	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
 		if err := postgres.Up(c, pgCfg, m); err != nil {
 			t.Fatal(err)
@@ -530,16 +521,8 @@ func scrape(t *testing.T, h http.Handler, name string) map[string]string {
 // the forwarder copied into the stream in between.
 func TestNewWorker_RedisGroupsExistBeforeRun(t *testing.T) {
 	c := context.Background()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, dbCleanup, err := postgres.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dbCleanup()
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel)
 	rdb, rdbCleanup, err := platformredis.NewClient(config.Redis{URL: redistest.URL(t)})
 	if err != nil {
 		t.Fatal(err)

@@ -20,7 +20,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -29,16 +28,8 @@ import (
 // openDB opens (and closes at cleanup) a handle on url.
 func openDB(t *testing.T, url string) *gorm.DB {
 	t.Helper()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := platformpg.NewDB(config.Postgres{URL: url}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: url}, tel)
 
 	return db
 }

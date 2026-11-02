@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
@@ -24,11 +22,7 @@ import (
 // Each case checks the session zone and that LOCALTIMESTAMP decodes to the same
 // instant as CURRENT_TIMESTAMP, which is only so when the two agree.
 func TestNewDB_DecodesInTheSessionsOwnTimeZone(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 	base := pgtest.URL(t)
 	u, err := url.Parse(base)
 	if err != nil {
@@ -58,7 +52,7 @@ func TestNewDB_DecodesInTheSessionsOwnTimeZone(t *testing.T) {
 				t.Setenv("PGTZ", tc.pgtz)
 			}
 			for i := 0; i < 10; i++ {
-				db, cleanup, err := postgres.NewDB(config.Postgres{URL: tc.dsn}, tel)
+				db, err := pgtest.TryDB(t, config.Postgres{URL: tc.dsn}, tel)
 				if err != nil {
 					t.Fatalf("NewDB: %v", err)
 				}
@@ -68,7 +62,6 @@ func TestNewDB_DecodesInTheSessionsOwnTimeZone(t *testing.T) {
 					Session string
 				}
 				err = db.Raw("SELECT CURRENT_TIMESTAMP AS actual, LOCALTIMESTAMP AS decoded, current_setting('TimeZone') AS session").Scan(&row).Error
-				cleanup()
 				if err != nil {
 					t.Fatal(err)
 				}

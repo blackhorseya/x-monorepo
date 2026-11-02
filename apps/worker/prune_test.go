@@ -32,11 +32,7 @@ func TestPruneCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer telCleanup()
-	db, dbCleanup, err := postgres.NewDB(cfg.Postgres, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dbCleanup()
+	db := pgtest.DB(t, cfg.Postgres, tel)
 	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
 		if err := postgres.Up(c, cfg.Postgres, m); err != nil {
 			t.Fatal(err)

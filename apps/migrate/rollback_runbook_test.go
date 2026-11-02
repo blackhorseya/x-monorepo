@@ -224,21 +224,13 @@ func runRollbackCase(t *testing.T, tc rollbackCase) {
 			t.Fatal(err)
 		}
 	}
-	conn, err := pgx.Connect(e.c, url)
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := pgtest.Conn(t, url)
 	e.conn = conn
 	t.Cleanup(func() { // leave every BC applied and clean for the next test, whatever the runbook SQL left behind
 		ctx := context.Background()
-		_ = conn.Close(ctx) // first: a runbook that failed halfway leaves its transaction (and locks) open on it
-		fresh, err := pgx.Connect(ctx, url)
-		if err != nil {
-			t.Errorf("restore: %v", err)
-
-			return
-		}
-		defer func() { _ = fresh.Close(ctx) }()
+		// First: a runbook that failed halfway leaves its transaction (and locks) open on it
+		_ = conn.Close(ctx)
+		fresh := pgtest.Conn(t, url)                                                                                            // closed when this cleanup returns, after the restore below
 		if _, err := fresh.Exec(ctx, `DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`); err != nil { // the dirty case's over-long row would fail 0009 again
 			t.Errorf("restore: delete over-long skus: %v", err)
 		}
@@ -432,11 +424,7 @@ var ordering0008Dirty = rollbackCase{
 				t.Fatal(err)
 			}
 		}
-		holder, err := pgx.Connect(e.c, e.url)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = holder.Close(e.c) }()
+		holder := pgtest.Conn(t, e.url) // closed by its t.Cleanup, which runs before the restore above
 		tx, err := holder.Begin(e.c)
 		if err != nil {
 			t.Fatal(err)
@@ -527,11 +515,7 @@ var ordering0009Dirty = rollbackCase{
 		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
 			t.Fatal(err)
 		}
-		holder, err := pgx.Connect(e.c, e.url)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = holder.Close(e.c) }()
+		holder := pgtest.Conn(t, e.url) // closed by its t.Cleanup, which runs before the restore above
 		tx, err := holder.Begin(e.c)
 		if err != nil {
 			t.Fatal(err)
