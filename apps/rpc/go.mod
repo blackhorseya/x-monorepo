@@ -5,6 +5,7 @@ go 1.27
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	connectrpc.com/connect v1.21.1
+	github.com/ThreeDotsLabs/watermill v1.5.3
 	github.com/blackhorseya/x-monorepo/pkgs/catalog v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
@@ -33,7 +34,6 @@ require (
 	github.com/MicahParks/keyfunc/v3 v3.8.2 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/Rican7/retry v0.3.1 // indirect
-	github.com/ThreeDotsLabs/watermill v1.5.3 // indirect
 	github.com/ThreeDotsLabs/watermill-redisstream v1.4.5 // indirect
 	github.com/ThreeDotsLabs/watermill-sql/v4 v4.1.5 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect

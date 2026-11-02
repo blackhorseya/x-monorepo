@@ -5,6 +5,7 @@ go 1.27
 require (
 	connectrpc.com/connect v1.21.1
 	github.com/ThreeDotsLabs/watermill v1.5.3
+	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/payment v0.0.0
@@ -170,3 +171,5 @@ replace (
 )
 
 replace github.com/blackhorseya/x-monorepo/pkgs/payment => ../../pkgs/payment
+
+replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory

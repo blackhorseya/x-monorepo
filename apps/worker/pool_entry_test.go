@@ -17,8 +17,10 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	orderingconsumer "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	orderingevents "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
+	orderingmetrics "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
+	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -50,8 +52,8 @@ func TestNewWorker_RefusesPoolBelowFloor(t *testing.T) {
 				maxOpen int
 				wantErr bool
 			}{
-				{"below the floor", 10, true},
-				{"at the floor", 11, false},
+				{"below the floor", 14, true},
+				{"at the floor", 15, false},
 				{"unlimited", 0, false},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
@@ -59,7 +61,7 @@ func TestNewWorker_RefusesPoolBelowFloor(t *testing.T) {
 					switch {
 					case tc.wantErr && err == nil:
 						t.Fatalf("NewWorker accepted max_open_conns=%d, want a refusal", tc.maxOpen)
-					case tc.wantErr && !strings.Contains(err.Error(), "postgres.max_open_conns 10 is below the 11"):
+					case tc.wantErr && !strings.Contains(err.Error(), "postgres.max_open_conns 14 is below the 15"):
 						t.Fatalf("error does not say why: %v", err)
 					case !tc.wantErr && err != nil:
 						t.Fatalf("NewWorker(max_open_conns=%d): %v", tc.maxOpen, err)
@@ -74,12 +76,19 @@ func TestNewWorker_RefusesPoolBelowFloor(t *testing.T) {
 // real subscriptions, exactly as apps/worker wires them.
 func newWorkerWithPool(t *testing.T, broker string, rdb goredis.UniversalClient, maxOpen int) (*Worker, error) {
 	t.Helper()
+
+	return newWorkerMigrated(t, broker, rdb, maxOpen, orderingpg.Migration(), inventorypg.Migration(), paymentpg.Migration())
+}
+
+// newWorkerMigrated is newWorkerWithPool on a database brought to exactly the given migrations.
+func newWorkerMigrated(t *testing.T, broker string, rdb goredis.UniversalClient, maxOpen int, migrations ...postgres.Migration) (*Worker, error) {
+	t.Helper()
 	c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pgCfg := config.Postgres{URL: pgtest.URL(t), MaxOpenConns: maxOpen}
 	tel := pgtest.Telemetry(t)
 	db := pgtest.DB(t, pgCfg, tel)
-	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
+	for _, m := range migrations {
 		if err := postgres.Up(c, pgCfg, m); err != nil {
 			t.Fatal(err)
 		}
@@ -95,12 +104,18 @@ func newWorkerWithPool(t *testing.T, broker string, rdb goredis.UniversalClient,
 		t.Fatal(err)
 	}
 
+	payResults, err := orderingmetrics.NewPaymentEventResults(tel.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
 	orders := ordering.ProvideOrderRepository(db, logger)
 	otx, oinbox := ordering.ProvideTransactor(db), ordering.ProvideInbox(db)
 	oev, oclock := orderingevents.NewPublisher(publisher), orderingsys.NewClock()
 	orderingSubs := ordering.ProvideSubscriptions(
 		orderingconsumer.NewOrderCancellationHandler(ordering.ProvideCancelOrder(orders, otx, oinbox, oev, oclock, ordering.ProvideOwnership(config.Auth{}), rec)),
-		orderingconsumer.NewStockReservedHandler(ordering.ProvideConfirmOrder(config.Ordering{}, orders, otx, oinbox, oev, oclock, rec)))
+		orderingconsumer.NewStockReservedHandler(ordering.ProvideConfirmOrder(config.Ordering{}, orders, otx, oinbox, oev, oclock, rec)),
+		orderingconsumer.NewPaymentCapturedHandler(ordering.ProvideApplyPaymentCaptured(orders, otx, oinbox, oev, oclock, rec, payResults)),
+		orderingconsumer.NewPaymentExpiredHandler(ordering.ProvideApplyPaymentExpired(orders, otx, oinbox, oev, oclock, rec, payResults)))
 	stocks, reservations := inventory.ProvideStockRepository(db, logger), inventory.ProvideReservationRepository(db)
 	itx, iinbox := inventory.ProvideTransactor(db), inventory.ProvideInbox(db)
 	iev, iclock := inventoryevents.NewPublisher(publisher), inventorysys.NewClock()

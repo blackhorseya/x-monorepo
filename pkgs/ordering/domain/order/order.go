@@ -155,11 +155,16 @@ func (x *Order) Complete(now time.Time) error {
 		return ErrPaymentRequired
 	}
 
+	x.complete(now)
+
+	return nil
+}
+
+// complete is the transition itself, for callers that have already checked it may happen.
+func (x *Order) complete(now time.Time) {
 	x.status = StatusCompleted
 	x.updatedAt = now
 	x.record(NewCompleted(x))
-
-	return nil
 }
 
 // MarkPaid records the payment of a Confirmed order (CONFIRMED → PAID). Nothing calls it in
@@ -170,11 +175,16 @@ func (x *Order) MarkPaid(now time.Time) error {
 		return ErrCannotPay
 	}
 
+	x.markPaid(now)
+
+	return nil
+}
+
+// markPaid is the transition itself, for callers that have already checked it may happen.
+func (x *Order) markPaid(now time.Time) {
 	x.status = StatusPaid
 	x.updatedAt = now
 	x.record(NewPaid(x))
-
-	return nil
 }
 
 // Cancel moves the order to Cancelled if the state machine allows it.
@@ -183,11 +193,16 @@ func (x *Order) Cancel(now time.Time) error {
 		return ErrCannotCancel
 	}
 
+	x.cancel(now)
+
+	return nil
+}
+
+// cancel is the transition itself, for callers that have already checked it may happen.
+func (x *Order) cancel(now time.Time) {
 	x.status = StatusCancelled
 	x.updatedAt = now
 	x.record(NewCancelled(x))
-
-	return nil
 }
 
 func (x *Order) ID() ID               { return x.id }

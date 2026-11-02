@@ -22,6 +22,8 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
+	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
+	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -52,7 +54,7 @@ func TestWorker_RequirePaymentSnapshot_RealEntry(t *testing.T) {
 	pgCfg := config.Postgres{URL: url}
 	tel := pgtest.Telemetry(t)
 	db := pgtest.DB(t, pgCfg, tel)
-	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
+	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration(), paymentpg.Migration()} {
 		if err := postgres.Up(c, pgCfg, m); err != nil {
 			t.Fatal(err)
 		}
@@ -88,8 +90,16 @@ func TestWorker_RequirePaymentSnapshot_RealEntry(t *testing.T) {
 		if err := db.WithContext(bg).Exec(`DELETE FROM inventory.events_v1_stockreserved WHERE metadata->>'key' LIKE ?`, "snap-%-"+runID).Error; err != nil {
 			t.Errorf("cleanup StockReserved rows: %v", err)
 		}
+		for _, tbl := range []string{"payment.events_v1_paymentcaptured", "payment.events_v1_paymentexpired"} {
+			if err := db.WithContext(bg).Exec(`DELETE FROM `+tbl+` WHERE metadata->>'key' LIKE ?`, "snap-%-"+runID).Error; err != nil {
+				t.Errorf("cleanup %s rows: %v", tbl, err)
+			}
+		}
+		if err := db.WithContext(bg).Exec(`DELETE FROM ordering.inbox WHERE message_id LIKE ?`, "snap-evt-"+runID+"-%").Error; err != nil {
+			t.Errorf("cleanup ordering.inbox: %v", err)
+		}
 		var tables []string
-		if err := db.WithContext(bg).Raw(`SELECT table_schema || '.' || table_name FROM information_schema.tables WHERE table_schema IN ('ordering', 'inventory') AND table_name LIKE '%\_offsets'`).Scan(&tables).Error; err != nil {
+		if err := db.WithContext(bg).Raw(`SELECT table_schema || '.' || table_name FROM information_schema.tables WHERE table_schema IN ('ordering', 'inventory', 'payment') AND table_name LIKE '%\_offsets'`).Scan(&tables).Error; err != nil {
 			t.Errorf("cleanup: list offsets tables: %v", err)
 		}
 		for _, tbl := range tables {
@@ -233,5 +243,124 @@ func TestWorker_RequirePaymentSnapshot_RealEntry(t *testing.T) {
 		}
 		// And the held order is still refused after the worker handled a second order.
 		wantPaymentRequired(t, held)
+	})
+	// docs/payment.md §8: what a payment event does to an order is decided by the order's snapshot,
+	// never by the switch the worker runs under. Every order here is confirmed by a worker under the
+	// switch named, the event is consumed by a worker under the OTHER one, and the events come through
+	// payment's real outbox tables (payment.v1.PaymentCaptured / PaymentExpired) and the worker's real
+	// subscriptions. An event is known to be consumed when its message id is in ordering.inbox, which
+	// is also what shows a refused or ignored event was handled and not just left unread.
+	var evN int
+	payEvent := func(t *testing.T, topic, id string) string {
+		t.Helper()
+		evN++
+		msgID := "snap-evt-" + runID + "-" + strconv.Itoa(evN)
+		var payload []byte
+		var err error
+		if topic == orderingconsumer.TopicPaymentCaptured {
+			payload, err = proto.Marshal(&paymentv1.PaymentCaptured{PaymentId: "p-" + id, OrderId: id, CustomerId: "c-snap"})
+		} else {
+			payload, err = proto.Marshal(&paymentv1.PaymentExpired{PaymentId: "p-" + id, OrderId: id, CustomerId: "c-snap"})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg := message.NewMessageWithContext(c, msgID, payload)
+		msg.Metadata.Set(eventbus.MetaKey, id)
+		if err := publisher.Publish(topic, msg); err != nil {
+			t.Fatal(err)
+		}
+
+		return msgID
+	}
+	// waitAcked waits until the worker's ordering group has acknowledged the event: handled, or refused and
+	// dropped (a refusal rolls its transaction back, so it leaves no ordering.inbox row; the cursor is what
+	// shows it was consumed and not just left unread).
+	waitAcked := func(t *testing.T, topic, msgID, setting string) {
+		t.Helper()
+		tbl := eventbus.TableName(topic)
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			var n int64
+			if err := db.WithContext(c).Raw(`SELECT count(*) FROM `+tbl+` m JOIN `+tbl+`_offsets g ON g.consumer_group = ?
+				WHERE m.uuid = ? AND (m.transaction_id < g.last_processed_transaction_id
+				OR (m.transaction_id = g.last_processed_transaction_id AND m."offset" <= g.offset_acked))`,
+				"snap-"+runID+"-"+setting+".ordering", msgID).Scan(&n).Error; err != nil {
+				t.Fatal(err)
+			}
+			if n == 1 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("event %s was not acknowledged by the %s worker's ordering group within 30s", msgID, setting)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	deliver := func(t *testing.T, topic, id, setting string) {
+		t.Helper()
+		waitAcked(t, topic, payEvent(t, topic, id), setting)
+	}
+	statusOf := func(t *testing.T, id string) order.Status {
+		t.Helper()
+		o, err := orders.FindByID(c, order.ID(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return o.Status()
+	}
+	confirmUnder := func(t *testing.T, setting, name string) string {
+		t.Helper()
+		stop := runWorker(t, setting)
+		defer stop()
+		id := seed(t, name)
+		reserve(t, id)
+		waitConfirmed(t, id)
+
+		return id
+	}
+
+	t.Run("payment events: a snapshot-true order follows them under the default switch", func(t *testing.T) {
+		paid, lapsed := confirmUnder(t, "true", "pay-paid"), confirmUnder(t, "true", "pay-lapsed")
+		stop := runWorker(t, "default")
+		defer stop()
+		deliver(t, orderingconsumer.TopicPaymentCaptured, paid, "default")
+		deliver(t, orderingconsumer.TopicPaymentExpired, lapsed, "default")
+		if got := statusOf(t, paid); got != order.StatusCompleted {
+			t.Errorf("PaymentCaptured under the default switch: order is %s, want COMPLETED", got)
+		}
+		if got := statusOf(t, lapsed); got != order.StatusCancelled {
+			t.Errorf("PaymentExpired under the default switch: order is %s, want CANCELLED", got)
+		}
+	})
+
+	t.Run("payment events: a snapshot-false order ignores them under the switch on", func(t *testing.T) {
+		plain := confirmUnder(t, "default", "pay-plain")
+		stop := runWorker(t, "true")
+		defer stop()
+		deliver(t, orderingconsumer.TopicPaymentCaptured, plain, "true")
+		deliver(t, orderingconsumer.TopicPaymentExpired, plain, "true")
+		if got := statusOf(t, plain); got != order.StatusConfirmed {
+			t.Errorf("payment events for an order that never owed payment moved it to %s, want CONFIRMED", got)
+		}
+		// and it still completes the way it always did
+		if done, err := completeOrder.Execute(c, orderingdto.CompleteOrderInput{OrderID: plain}); err != nil || done.Status != "COMPLETED" {
+			t.Errorf("CompleteOrder(%s) = %+v, %v; want COMPLETED", plain, done, err)
+		}
+	})
+
+	t.Run("payment events: a cancelled order is never revived by a late PaymentCaptured", func(t *testing.T) {
+		id := confirmUnder(t, "true", "pay-late")
+		stop := runWorker(t, "true")
+		defer stop()
+		deliver(t, orderingconsumer.TopicPaymentExpired, id, "true")
+		if got := statusOf(t, id); got != order.StatusCancelled {
+			t.Fatalf("after PaymentExpired the order is %s", got)
+		}
+		deliver(t, orderingconsumer.TopicPaymentCaptured, id, "true")
+		if got := statusOf(t, id); got != order.StatusCancelled {
+			t.Errorf("a late PaymentCaptured left the order %s, want CANCELLED", got)
+		}
 	})
 }
