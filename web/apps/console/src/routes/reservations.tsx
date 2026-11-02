@@ -1,11 +1,12 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ReservationStatus, type Reservation } from "@repo/proto/inventory/v1/entity_pb";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { reservationQuery, reservationsQuery } from "../queries";
+import { refreshReservations, reservationQuery, reservationsQuery } from "../queries";
+import { useFirstPagePoll } from "../useFirstPagePoll";
 import { ErrorAlert } from "../components/error-alert";
 
 // Search params of /reservations: a status filter and, from the Orders page,
@@ -30,6 +31,9 @@ export function ReservationsPage() {
   const navigate = useNavigate({ from: "/reservations" });
   const status = search.status ? ReservationStatus[search.status] : ReservationStatus.UNSPECIFIED;
   const list = useInfiniteQuery(reservationsQuery(status));
+  const qc = useQueryClient();
+  // Only the first page polls (see refreshFirstPage); a hidden tab does not.
+  useFirstPagePoll(() => refreshReservations(qc, status), [qc, status]);
   const rows = list.data?.pages.flatMap((p) => p.reservations) ?? [];
 
   return (
@@ -39,7 +43,7 @@ export function ReservationsPage() {
         <CardHeader>
           <CardTitle>Reservations</CardTitle>
           <CardDescription>
-            What inventory decided for each order, newest first, refreshed every 2s. Reservations are made by{" "}
+            What inventory decided for each order, newest first; the first page refreshes every 2s, the pages you loaded after it when you come back to the tab. Reservations are made by{" "}
             <code>apps/worker</code> when it consumes OrderCreated.
           </CardDescription>
         </CardHeader>

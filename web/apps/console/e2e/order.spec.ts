@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { confirm, createCard, filterCard, expectOrderStatus } from "./orders-ui";
+import { confirm, createCard, filterCard, expectOrderStatus, createOrder } from "./orders-ui";
 import { setStock } from "./stock-ui";
 import { expectReservationStatus } from "./reservation-ui";
 
@@ -27,7 +27,7 @@ test("the list links to the order; the page shows lines, cancels, and polls the 
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(customer);
   await createCard(page).getByLabel("SKU").fill(sku);
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
   await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
 
@@ -107,7 +107,7 @@ test("the Order id box on /orders opens the page for a pasted id", async ({
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(customer);
   await createCard(page).getByLabel("SKU").fill(sku);
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
   await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
   const row = page.getByRole("row").filter({ hasText: customer });

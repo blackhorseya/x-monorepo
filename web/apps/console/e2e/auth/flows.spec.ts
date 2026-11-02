@@ -4,7 +4,7 @@ import { subject, useJWT, useKey } from "./helpers";
 import { mintJWT } from "./jwt";
 import { seedProduct } from "../catalog";
 import { uid } from "../uid";
-import { confirm, createCard, filterCard, expectOrderStatus } from "../orders-ui";
+import { confirm, createCard, filterCard, expectOrderStatus, createOrder } from "../orders-ui";
 import { pickProduct } from "../stock-ui";
 
 // The parts of the credential story auth.spec.ts leaves out: the JWT kind
@@ -95,7 +95,7 @@ test("mutations carry the credential set after the page loaded", async ({
   await expect(createCard(page).getByLabel("Customer")).toBeEnabled();
   await createCard(page).getByLabel("Customer").fill(id);
   await createCard(page).getByLabel("SKU").fill(sku);
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
   await expect(page.getByRole("alert")).toHaveCount(0);
   await filterCard(page).getByLabel("Customer").fill(id);
   await page.getByRole("button", { name: "Filter" }).click();

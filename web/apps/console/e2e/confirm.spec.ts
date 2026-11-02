@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { cellUnder, createCard, filterCard } from "./orders-ui";
+import { cellUnder, createCard, filterCard, createOrder } from "./orders-ui";
 import { setStock } from "./stock-ui";
 
 // Cancel and Complete on an order ask first: Cancel gives the reservation back, Complete commits
@@ -80,7 +80,7 @@ test("list: Cancel asks first; declining leaves the order PENDING", async ({ pag
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(customer);
   await createCard(page).getByLabel("SKU").fill(sku);
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
   await filterCard(page).getByLabel("Customer").fill(customer);
   await page.getByRole("button", { name: "Filter" }).click();
   const row = page.getByRole("row").filter({ hasText: customer });

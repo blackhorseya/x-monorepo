@@ -11,7 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useIsAdmin } from "../components/admin";
 import { inventory } from "../client";
-import { keys, productsQuery, stocksQuery } from "../queries";
+import { keys, productsQuery, refreshStocks, stocksQuery } from "../queries";
+import { useFirstPagePoll } from "../useFirstPagePoll";
 import { ErrorAlert } from "../components/error-alert";
 import { Field } from "../components/field";
 
@@ -35,6 +36,8 @@ export function StockPage() {
   const [findInput, setFindInput] = useState("");
   const [findPrefix, setFindPrefix] = useState("");
   const list = useInfiniteQuery(stocksQuery(prefix, onlyReserved));
+  // Only the first page polls (see refreshFirstPage); a hidden tab does not.
+  useFirstPagePoll(() => refreshStocks(qc, prefix, onlyReserved), [qc, prefix, onlyReserved]);
   const stocks = list.data?.pages.flatMap((p) => p.stocks) ?? [];
   // The picker's pages of products (admin's form only), narrowed by the Find prefix.
   const products = useInfiniteQuery({ ...productsQuery(findPrefix), enabled: isAdmin });
@@ -123,7 +126,7 @@ export function StockPage() {
         <CardHeader>
           <CardTitle>Stock</CardTitle>
           <CardDescription>
-            SKUs ascending, refreshed every 2s; narrow by prefix or to what pending orders hold. A SKU the catalog has no
+            SKUs ascending; the first page refreshes every 2s, the pages you loaded after it when you come back to the tab or change stock; narrow by prefix or to what pending orders hold. A SKU the catalog has no
             product for, or whose product was deactivated, is flagged.
           </CardDescription>
         </CardHeader>
