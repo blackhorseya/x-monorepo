@@ -5,6 +5,7 @@ go 1.27
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	connectrpc.com/connect v1.21.1
+	connectrpc.com/otelconnect v0.12.0
 	github.com/ThreeDotsLabs/watermill v1.5.3
 	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
@@ -22,7 +23,6 @@ require (
 	cel.dev/cel-go v0.32.0 // indirect
 	cel.dev/expr v0.25.3 // indirect
 	connectrpc.com/connect/v2 v2.0.0 // indirect
-	connectrpc.com/otelconnect v0.12.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/MicahParks/jwkset v0.11.3 // indirect

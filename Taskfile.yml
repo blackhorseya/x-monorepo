@@ -144,9 +144,9 @@ tasks:
       - task: gen
       - task: wire
       - |
-        git diff --quiet -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml' || {
+        git diff --quiet -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/*openapi.yaml' || {
           echo "generated code is stale — commit the result of: task gen wire"
-          git --no-pager diff --stat -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/openapi.yaml'
+          git --no-pager diff --stat -- '*.pb.go' '*.connect.go' '*wire_gen.go' '*/contract/*/*openapi.yaml'
           exit 1
         }
 
@@ -213,6 +213,11 @@ tasks:
         cmd: >-
           {{.BUF}} generate --path protos/{{.ITEM}} --template
           '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/{{.ITEM}}/contract/v1","opt":["path=openapi.yaml","base=protos/{{.ITEM}}/v1/openapi.base.yaml"]}]}'
+      # payment has an internal service (payment-rpc) and a public one (apps/rpc) in one package: apps/rpc
+      # publishes the public subset only, generated from its own proto file.
+      - >-
+        {{.BUF}} generate --path protos/payment/v1/public.proto --template
+        '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/payment/contract/v1","opt":["path=public.openapi.yaml","base=protos/payment/v1/public.openapi.base.yaml"]}]}'
 
   gen-ts:
     desc: protos → web/packages/proto (remote plugin, needs network)

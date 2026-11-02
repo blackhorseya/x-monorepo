@@ -59,6 +59,8 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `payment.expired` | `FAILED_PRECONDITION` | payment domain | `StartPayment` 時 `PENDING` 已過 `expires_at`、`expire` 尚未處理。provider 沒有被呼叫 |
 | `payment.not_refunding` | `FAILED_PRECONDITION` | payment domain | 退款成功的通知（`RefundSucceeded`）對一張不在 `REFUNDING`／`REFUNDED` 的付款單；狀態不動。沒有 RPC 會回它，切片 3 的退款 consumer 才會碰到 |
 | `payment.already_exists` | `ALREADY_EXISTS` | payment domain（repository） | 同一張訂單（或同一個付款單 id）第二次 `Save`：`unique(order_id)`。consumer 的重送靠它被忽略（切片 3） |
+| `payment.disabled` | `FAILED_PRECONDITION` | `apps/rpc` 的 `PublicPaymentService.StartPayment`（`pkgs/payment/adapters/client`） | 開關 `ordering.require_payment` 關閉，**或**這張單的 `payment_required` 快照是 `false`（含預設設定下的每張單）；在轉發給 payment-rpc 之前回，payment-rpc 沒有被呼叫。訊息固定 |
+| `payment.unavailable` | `UNAVAILABLE` | `apps/rpc` 的 payment client | payment-rpc 沒有給出它自己的答覆（沒設定、連不上、逾時、5xx、service key 被拒、`x-error-code` 不是 `payment.*`）：固定訊息，上游寫的文字**不進** caller、log（#347）。不是 `payment.provider_unavailable`（那是 payment-rpc 還活著、provider 故障）。下單與預留不受影響 |
 | `payment.provider_unavailable` | `UNAVAILABLE` | payment rpc adapter（`StartPayment`） | provider 沒有給出可用的答覆（連不上、逾時、拒絕、任何失敗）：**付款單沒變**，同一個請求可重送。不是 domain error（請求本身沒錯），所以沒有 `kernel.Kind`；訊息固定，provider 的原始錯誤**不進** caller、log、metrics、span（#347，`TestPayment_ProviderErrorTextNeverLeaves`）。`GetPayment` 不呼叫 provider，不會回它 |
 | `reservation.invalid_order_id` / `reservation.no_lines` / `reservation.invalid_sku` / `reservation.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | aggregate 不變量 |
 | `reservation.invalid_status_filter` / `reservation.invalid_cursor` | `INVALID_ARGUMENT` | inventory domain | ListReservations 的 filter / cursor |

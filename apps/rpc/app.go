@@ -26,6 +26,8 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	orderingrpc "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
+	paymentclient "github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/client"
+	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
@@ -34,8 +36,8 @@ import (
 )
 
 // NewRoutes lists every mounted service: the BCs' and the platform's admin surface.
-func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, identity *identityrpc.IdentityService, catalog *catalogrpc.Forwarder, poison *admin.PoisonService) []server.Route {
-	return []server.Route{ordering, inventory, identity, catalog, poison}
+func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, identity *identityrpc.IdentityService, catalog *catalogrpc.Forwarder, payment *paymentclient.PublicService, poison *admin.PoisonService) []server.Route {
+	return []server.Route{ordering, inventory, identity, catalog, payment, poison}
 }
 
 // NewPoisonService serves admin.v1.AdminService over every BC's poison
@@ -68,6 +70,8 @@ func NewDocs() []server.Doc {
 		{Name: "inventory", Spec: inventoryv1.OpenAPI},
 		{Name: "identity", Spec: identityv1.OpenAPI},
 		{Name: "catalog", Spec: catalogv1.OpenAPI},
+		// The public subset: PaymentService (payment-rpc's internal API, which rpc does not serve) is not in it.
+		{Name: "payment", Spec: paymentv1.PublicOpenAPI},
 		{Name: "admin", Spec: adminv1.OpenAPI},
 	}
 }
