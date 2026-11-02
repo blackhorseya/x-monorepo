@@ -344,7 +344,7 @@ tasks:
 
   helm-kind:
     deps: [helm-kind-up]
-    desc: 'install the chart for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api); then payment.sh (the three payment-rpc workloads, the webhook-only Ingress and its rate limit, orders unaffected with payment-rpc stopped). helm-kind-down deletes the cluster'
+    desc: 'install the chart for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api); then payment.sh (the three payment-rpc workloads, the webhook-only Ingress and its rate limit, orders unaffected with payment-rpc stopped); then payment-flow.sh (the whole payment flow with ordering.require_payment on: every race of docs/payment.md §5, the TTL sequence, the switch both ways, payment-rpc stopped). helm-kind-down deletes the cluster'
     vars:
       NS: x-monorepo
       CHART: deployments/helm/x-monorepo
@@ -357,6 +357,8 @@ tasks:
       - '{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
       # payment-rpc: serve / consume / an expire run, the webhook-only Ingress (ingress-nginx is installed there) with its rate limit, and orders reaching CONFIRMED with payment-rpc stopped. Restores the release.
       - '{{.KIND_DIR}}/payment.sh {{.NS}} x-monorepo'
+      # the whole payment flow with ordering.require_payment ON (kind/payment-flow-values.yaml: auth required, two static keys, payment-rpc's mock control): create -> reserved -> CONFIRMED -> StartPayment -> paid -> webhook -> COMPLETED, delayed / repeated / foreign notifications, the customer cancelling and the window running out with the money arriving late (refunded), the reservation-TTL sequence with the provider down, the switch on -> off -> on, payment-rpc stopped. Restores the release.
+      - '{{.KIND_DIR}}/payment-flow.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
       # catalog-rpc on a Secret that cannot make it durable: no start (missing key) / exit (empty URL). Restores the release.
       - '{{.KIND_DIR}}/negative.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
       # rpc without its catalog: the wait is best effort, CreateOrder / SetStock answer UNAVAILABLE and write nothing, recovery needs no restart.
@@ -573,6 +575,31 @@ tasks:
     deps: [build, web-build]
     dir: web/apps/console
     cmds: ['pnpm exec playwright test {{.CLI_ARGS}}']
+
+  web-e2e-payment:
+    desc: 'the "payment" Playwright project (playwright.payment.config.ts): the console against the REAL payment stack, nothing scripted with page.route. e2e/payment/stack-server.ts makes a database of its own on the server E2E_DATABASE_URL names (needs psql), migrates it and runs catalog-rpc, payment-rpc serve + consume, rpc and worker (ordering.require_payment on, switched back off by the spec); the spec orders in the console, presses Pay (a new tab on the mock checkout address), pays through `payment-rpc mock pay`, and expects COMPLETED, the card gone and the polling stopped. What CI''s console-e2e job runs after the default-port run'
+    deps: [build, web-build]
+    dir: web/apps/console
+    preconditions:
+      - sh: test -n "$E2E_DATABASE_URL"
+        msg: 'E2E_DATABASE_URL is required: a Postgres server the stack may create a database on, e.g. postgres://app:app@127.0.0.1:5432/app?sslmode=disable'
+      - sh: command -v psql >/dev/null
+        msg: needs psql (the stack creates and drops its own database with it)
+    cmds:
+      # Set in the shell, not in `env:`: an inherited E2E_*_PORT / CI cannot change what is tested. CI=1 so no webServer
+      # reuses one somebody else started. The cleanup check runs whether the tests passed or not.
+      - |
+        export CI=1
+        unset E2E_DEX E2E_CONSOLE_URL
+        # The default config (task web-e2e, web-e2e-image) must not pick these specs up: without their stack they cannot pass
+        # (CI found exactly that on the first push). Listing is enough to know (paths are relative to testDir); it starts no server.
+        if pnpm exec playwright test --list 2>/dev/null | grep -qE '› payment/'; then
+          echo "playwright.config.ts would run e2e/payment/ without its stack: add payment to its testIgnore"; exit 1
+        fi
+        rc=0
+        pnpm exec playwright test -c playwright.payment.config.ts {{.CLI_ARGS}} || rc=$?
+        node --experimental-strip-types e2e/assert-clean.ts || rc=1
+        exit $rc
 
   web-e2e-image:
     desc: 'the chromium e2e project against the real console image: build web/apps/console/Dockerfile (docker or podman), run it with RPC_UPSTREAM back to the host, Playwright starts bin/rpc as usual; also runs e2e/image.spec.ts (nginx: SPA fallback, cache headers, /api proxy, /healthz). What CI''s console-image job runs'

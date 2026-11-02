@@ -4,6 +4,7 @@ secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
   catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
 config:
+  ordering: { require_payment: false }
   otel: { endpoint: otel-collector:4317 }
 rpc:
   serviceMonitor:
@@ -21,3 +22,4 @@ networkPolicy:
   console:
     ingressFrom:
       - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+paymentRpc: { enabled: false }

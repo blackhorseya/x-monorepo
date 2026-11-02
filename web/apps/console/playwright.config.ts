@@ -102,7 +102,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: /\/(auth(-role)?|oidc-backend|oidc-dex)\//,
+      testIgnore: /\/(auth(-role)?|oidc-backend|oidc-dex|payment)\//, // payment/ is its own config (playwright.payment.config.ts): it needs a stack this one does not start
       use: {
         ...devices["Desktop Chrome"],
         baseURL: consoleURL ?? `http://localhost:${webPort}`,

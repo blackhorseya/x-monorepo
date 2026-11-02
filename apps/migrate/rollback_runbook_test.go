@@ -168,6 +168,7 @@ func (e *rollbackEnv) seedEveryTable(t *testing.T) {
 	e.exec(t, `INSERT INTO payment.webhook_events (provider, provider_event_id, event_type, provider_ref, body, received_at) VALUES ('mock', 'sentinel', 'payment.captured', 'ref-sentinel', '\x7b7d', now())`)
 	e.exec(t, `INSERT INTO payment.mock_checkouts (ref, payment_id, amount, currency, url, expires_at, paid, paid_amount, paid_currency) VALUES ('mock-ref-sentinel', 'payment-sentinel', 100, 'USD', 'https://mock-pay.invalid/checkout/sentinel', now() + interval '1 hour', true, 100, 'USD')`)
 	e.exec(t, `INSERT INTO payment.mock_refunds (ref, idempotency_key) VALUES ('mock-ref-sentinel', 'sentinel')`)
+	e.exec(t, `INSERT INTO payment.mock_faults (op) VALUES ('get_payment')`)
 
 	for _, table := range tables {
 		switch {
@@ -302,6 +303,7 @@ const (
 	orderingMarker  = "**Rollback（只退 ordering `0008`）**"
 	ordering9Marker = "**Rollback（只退 ordering `0009`）**"
 	payment3Marker  = "**Rollback（只退 payment `0003`）**"
+	payment4Marker  = "**Rollback（只退 payment `0004`）**"
 )
 
 const (
@@ -576,6 +578,10 @@ var payment0003Clean = rollbackCase{
 	bc:      4,
 	latest:  3,
 	prepare: func(t *testing.T, e *rollbackEnv) {
+		// payment is at 4 (mock_faults) when every BC is at its latest; this runbook is for 3.
+		if err := postgres.Down(e.c, e.cfg, migrations[4]); err != nil {
+			t.Fatal(err)
+		}
 		if e.count(t, payment0003Tables) != 2 || e.count(t, `SELECT count(*) FROM payment.mock_refunds`) != 1 {
 			t.Fatal("0003 did not add the mock tables, or the sentinel is missing")
 		}
@@ -592,7 +598,7 @@ var payment0003Clean = rollbackCase{
 		if err := postgres.Up(e.c, e.cfg, migrations[4]); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.version(t, 4); got != "3 dirty=false" || e.count(t, payment0003Tables) != 2 {
+		if got := e.version(t, 4); got != "4 dirty=false" || e.count(t, payment0003Tables) != 2 {
 			t.Errorf("after up: %s, mock tables=%d", got, e.count(t, payment0003Tables))
 		}
 	},
@@ -605,8 +611,10 @@ var payment0003Clean = rollbackCase{
 // squatter remains, and the runbook's DROP ... IF EXISTS takes it away.
 func failPayment0003(t *testing.T, e *rollbackEnv, standInTheWay string) {
 	t.Helper()
-	if err := postgres.Down(e.c, e.cfg, migrations[4]); err != nil {
-		t.Fatal(err)
+	for range 2 { // 0004 (mock_faults), then 0003 itself: the Up below must be the one that runs 0003
+		if err := postgres.Down(e.c, e.cfg, migrations[4]); err != nil {
+			t.Fatal(err)
+		}
 	}
 	e.exec(t, standInTheWay)
 	if err := postgres.Up(e.c, e.cfg, migrations[4]); err == nil {
@@ -643,7 +651,7 @@ var payment0003DirtyNoTables = rollbackCase{
 		if err := postgres.Up(e.c, e.cfg, migrations[4]); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.version(t, 4); got != "3 dirty=false" || e.count(t, payment0003Tables) != 2 {
+		if got := e.version(t, 4); got != "4 dirty=false" || e.count(t, payment0003Tables) != 2 {
 			t.Errorf("after up: %s, mock tables=%d", got, e.count(t, payment0003Tables))
 		}
 	},
@@ -673,14 +681,50 @@ var payment0003DirtyTableInTheWay = rollbackCase{
 		if err := postgres.Up(e.c, e.cfg, migrations[4]); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.version(t, 4); got != "3 dirty=false" || e.count(t, payment0003Tables) != 2 {
+		if got := e.version(t, 4); got != "4 dirty=false" || e.count(t, payment0003Tables) != 2 {
 			t.Errorf("after up: %s, mock tables=%d", got, e.count(t, payment0003Tables))
 		}
 	},
 }
 
+const payment0004Table = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'payment' AND table_name = 'mock_faults'`
+
+// payment 0004 only adds the mock provider's fault table, so its rollback drops it and nothing else: the mock's
+// checkouts and refunds (0003) and every other payment table keep their rows.
+var payment0004Clean = rollbackCase{
+	name:    "payment 0004 from 4 clean",
+	runbook: "../../docs/operations.md",
+	marker:  payment4Marker,
+	bc:      4,
+	latest:  4,
+	prepare: func(t *testing.T, e *rollbackEnv) {
+		if e.count(t, payment0004Table) != 1 || e.count(t, `SELECT count(*) FROM payment.mock_faults`) != 1 {
+			t.Fatal("0004 did not add the fault table, or the sentinel is missing")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		if n := e.count(t, payment0004Table); n != 0 {
+			t.Errorf("mock_faults left after the rollback: %d", n)
+		}
+		if n := e.count(t, payment0003Tables); n != 2 {
+			t.Errorf("mock tables = %d after the 0004 rollback, want 0003 untouched (2)", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM payment.mock_refunds`) + e.count(t, `SELECT count(*) FROM payment.payments WHERE id = 'payment-sentinel'`); n != 2 {
+			t.Errorf("mock_refunds / payments sentinel rows = %d, want both kept", n)
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Up(e.c, e.cfg, migrations[4]); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 4); got != "4 dirty=false" || e.count(t, payment0004Table) != 1 {
+			t.Errorf("after up: %s, mock_faults=%d", got, e.count(t, payment0004Table))
+		}
+	},
+}
+
 func TestRollbackRunbooks(t *testing.T) {
-	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0003Clean, payment0003DirtyNoTables, payment0003DirtyTableInTheWay} {
+	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0004Clean, payment0003Clean, payment0003DirtyNoTables, payment0003DirtyTableInTheWay} {
 		t.Run(tc.name, func(t *testing.T) { runRollbackCase(t, tc) })
 	}
 }

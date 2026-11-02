@@ -119,13 +119,20 @@ func TestReceiveWebhook_Refusals(t *testing.T) {
 	w.seedPaid(t, orderID, true)
 	good := w.paid(t, orderID, twd(t, 1000))
 
+	// The body carries a fresh random ref each run (a UUID v7), so its signature does too: "00" + the rest is the
+	// right signature one run in 256 (when it already starts with 00), and would then verify. Differ in the first
+	// byte for certain.
+	wrong := "00"
+	if strings.HasPrefix(good.Signature, "00") {
+		wrong = "ff"
+	}
 	flipped := []byte(strings.Replace(string(good.Body), "1000", "1001", 1))
 	reordered := []byte(`{"type":"payment.captured","id":"evt-x","ref":"r","amount":1000,"currency":"TWD"}`)
 	for name, in := range map[string]dto.WebhookInput{
 		"one byte changed":  {Body: flipped, Signature: good.Signature},
 		"keys reordered":    {Body: reordered, Signature: good.Signature},
 		"no signature":      {Body: good.Body},
-		"a wrong signature": {Body: good.Body, Signature: "00" + good.Signature[2:]},
+		"a wrong signature": {Body: good.Body, Signature: wrong + good.Signature[2:]},
 		"empty body":        {Signature: good.Signature},
 	} {
 		t.Run(name, func(t *testing.T) {

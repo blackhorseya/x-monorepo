@@ -1,4 +1,7 @@
 # expect: config.auth.mode
+# expect: secrets.paymentRpc.apiKey
+# expect: config.ordering.require_payment=false
+# expect: paymentRpc.enabled=false
 # With auth off nobody can pay (docs/payment.md §6 (a)): every order would stay CONFIRMED.
 config:
   ordering: { require_payment: true }

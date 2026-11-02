@@ -198,6 +198,39 @@ func TestMigrationLock_0003OnlyCreatesNewTables(t *testing.T) {
 	}
 }
 
+// 0004 (the mock's fault table) is held to the same shape as 0003: one new table of its own, no ALTER or
+// index on an existing table, no reference to payment.payments.
+func TestMigrationLock_0004OnlyCreatesANewTable(t *testing.T) {
+	b, err := fs.ReadFile(postgres.Migration().Files, "0004_mock_faults.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sql strings.Builder
+	for _, line := range strings.Split(string(b), "\n") {
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		sql.WriteString(line + "\n")
+	}
+	stmts := 0
+	for _, stmt := range strings.Split(sql.String(), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		stmts++
+		if !regexp.MustCompile(`(?is)^CREATE TABLE payment\.mock_faults \(`).MatchString(stmt) {
+			t.Fatalf("0004 may only create payment.mock_faults (anything else can lock a table the running service uses): %.80s", stmt)
+		}
+	}
+	if stmts != 1 {
+		t.Fatalf("0004 has %d statements, want the one CREATE TABLE", stmts)
+	}
+	if strings.Contains(sql.String(), "payment.payments") {
+		t.Fatal("0004 must not reference payment.payments")
+	}
+}
+
 func TestMigrationLock_NewTablesDoNotBlockPayments(t *testing.T) {
 	db := testDB(t)
 	if err := db.Exec(insertSQL, "lk-3", "ord-lk-3", "cust", 10, "TWD", "PENDING", "NONE").Error; err != nil {

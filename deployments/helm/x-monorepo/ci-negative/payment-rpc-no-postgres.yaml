@@ -4,3 +4,5 @@ paymentRpc: { enabled: true }
 secrets:
   catalogRpc: { existingSecret: "my-catalog-rpc-secret" }
   paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }
+config:
+  ordering: { require_payment: false }

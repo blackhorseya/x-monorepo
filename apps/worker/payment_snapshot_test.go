@@ -188,6 +188,8 @@ func TestWorker_RequirePaymentSnapshot_RealEntry(t *testing.T) {
 			}
 		} else {
 			t.Setenv(requirePaymentEnv, setting)
+			// the worker refuses the switch on without a payment-rpc to point orders at (no key: it is rpc's)
+			t.Setenv("APP_PAYMENT_UPSTREAM", "http://payment-rpc.invalid:80")
 		}
 		cmd := newRootCmd(config.Load)
 		cmd.SetArgs(nil)

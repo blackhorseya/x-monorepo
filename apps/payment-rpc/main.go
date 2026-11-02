@@ -38,6 +38,8 @@ const (
 	serveCommand   = "serve"
 	consumeCommand = "consume"
 	expireCommand  = "expire"
+	// mockCommand is the mock provider's control entry (docs/payment.md §9 S6): `mock pay|notify|fail`.
+	mockCommand = "mock"
 )
 
 // run is the process after flag handling: args are the command line without the program name.
@@ -45,6 +47,9 @@ const (
 // refused (a typo must not start the service without the guarantee the operator asked for). The
 // messages name the position, never the value.
 func run(args []string) error {
+	if len(args) > 0 && args[0] == mockCommand {
+		return runMock(args[1:], os.Stdout)
+	}
 	if len(args) == 0 || (args[0] != serveCommand && args[0] != consumeCommand && args[0] != expireCommand) {
 		return fmt.Errorf("payment-rpc: a subcommand is required: %s, %s or %s", serveCommand, consumeCommand, expireCommand)
 	}

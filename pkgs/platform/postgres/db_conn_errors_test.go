@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
@@ -35,21 +37,28 @@ func TestNewDB_ConnectionRefusedCarriesNoURLText(t *testing.T) {
 
 	for _, expectTarget := range []string{"", "127.0.0.1:1"} {
 		t.Run("expect_target="+expectTarget, func(t *testing.T) {
-			_, err := pgtest.TryDB(t, config.Postgres{
+			cfg := config.Postgres{
 				URL:          "postgres://leakyuser:" + secretMarker + "@127.0.0.1:1/leakydb?sslmode=disable",
 				ExpectTarget: expectTarget,
-			}, tel)
-			if err == nil {
-				t.Fatal("NewDB = nil, want an error (nothing listens on port 1)")
 			}
-			assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb")
-			// A host parsed from the URL is not printed unless the operator pinned
-			// it: with a malformed password it can be a piece of the password.
-			if got := strings.Contains(err.Error(), "127.0.0.1:1"); got != (expectTarget != "") {
-				t.Fatalf("host:port present = %v with expect_target=%q: %q", got, expectTarget, err)
-			}
-			if !errors.Is(err, syscall.ECONNREFUSED) {
-				t.Fatalf("errors.Is(err, ECONNREFUSED) = false for %q: the category must stay checkable", err)
+			// NewDB and the deadline-bound NewDBContext share this contract
+			for entry, open := range map[string]func() (*gorm.DB, error){
+				"NewDB":        func() (*gorm.DB, error) { return pgtest.TryDB(t, cfg, tel) },
+				"NewDBContext": func() (*gorm.DB, error) { return pgtest.TryDBContext(t, context.Background(), cfg, tel) },
+			} {
+				_, err := open()
+				if err == nil {
+					t.Fatalf("%s = nil, want an error (nothing listens on port 1)", entry)
+				}
+				assertNoURLText(t, err, "leakyuser", secretMarker, "leakydb")
+				// A host parsed from the URL is not printed unless the operator pinned
+				// it: with a malformed password it can be a piece of the password.
+				if got := strings.Contains(err.Error(), "127.0.0.1:1"); got != (expectTarget != "") {
+					t.Fatalf("%s: host:port present = %v with expect_target=%q: %q", entry, got, expectTarget, err)
+				}
+				if !errors.Is(err, syscall.ECONNREFUSED) {
+					t.Fatalf("%s: errors.Is(err, ECONNREFUSED) = false for %q: the category must stay checkable", entry, err)
+				}
 			}
 		})
 	}

@@ -1,0 +1,11 @@
+# expect: config.auth.mode
+# expect: secrets.paymentRpc.apiKey
+# expect: config.ordering.require_payment=false
+# expect: paymentRpc.enabled=false
+# What a first install looks like when it gives only what the chart needed before payment existed (a database and
+# catalog-rpc's key): the defaults are payment on (paymentRpc.enabled and config.ordering.require_payment true) and
+# auth off, which cannot work (with auth off nobody can pay), so the chart refuses — and the message names both ways
+# out: turn auth and payment-rpc's secrets on, or turn payment off ON PURPOSE with the two values.
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }

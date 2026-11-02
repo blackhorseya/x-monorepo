@@ -44,6 +44,16 @@ containerSecurityContext:
 # the chart sets them from rpc.shutdown so terminationGracePeriodSeconds cannot drift from them.
 # Secrets (postgres.url, redis.url, auth.api_keys, auth.jwt.hs256_secret) go in `secrets`.
 config:
+  # ordering.require_payment (docs/payment.md §8): an order that becomes CONFIRMED while this is true takes
+  # payment_required = true (a snapshot, never changed) and is completed only through payment. ON by default since
+  # chart 0.3.53 (#367 slice 6), together with paymentRpc.enabled below. It needs payment-rpc (paymentRpc.enabled) and
+  # auth (config.auth.mode optional or required: with auth off nobody can pay), and the only provider is the mock,
+  # which nobody can really pay: orders that need payment are cancelled after paymentRpc.config.window unless
+  # someone pays them through the mock control (paymentRpc.config.mock_control, kind and tests only).
+  # TO TURN PAYMENT OFF ON PURPOSE set BOTH: config.ordering.require_payment=false and paymentRpc.enabled=false.
+  # Upgrading a release that never wrote this key: WRITE IT (true or false) before you upgrade — the chart cannot tell
+  # an unset value from the default, so an upgrade that renders turns the switch on (docs/operations.md, "Upgrade notes").
+  ordering: { require_payment: true }
   http:
     addr: ":8080"       # the Service / probes below assume this port
     docs: false
@@ -289,14 +299,16 @@ catalogRpc:
 
 # payment-rpc (apps/payment-rpc, docs/payment.md): one image, three workloads — `serve` (the internal Connect
 # PaymentService for rpc + the provider's webhook route), `consume` (the event handlers) and `expire` (the
-# sweep, a CronJob). OFF by default: until it is on the release renders exactly what it did before, rpc is
-# told nothing about payment, and ordering.require_payment (config.ordering, default false) cannot be on.
+# sweep, a CronJob). ON by default since chart 0.3.53 (#367 slice 6), with config.ordering.require_payment: a first
+# install must give auth and the two payment secrets, or turn payment off ON PURPOSE with both values (the chart
+# refuses otherwise and says so). Off, the release renders without a single payment object, rpc is told nothing about
+# payment and ordering.require_payment cannot be on.
 # It runs on its own ConfigMap and Secret (see secrets.paymentRpc): auth.mode required with ONE static key,
 # no auth.jwt / auth.oidc, the Postgres broker (consume reads the outbox tables; a Redis broker is refused).
 # Every workload runs `--require-durable` as a container arg: no in-memory payments, and for serve no auth
 # but required with exactly the key rpc. Schema: `migrate up` (the hook above), never these pods.
 paymentRpc:
-  enabled: false
+  enabled: true
   # payment.* of payment-rpc's own ConfigMap (docs/config.md). They must agree the way the binary checks at
   # start: window <= mock_checkout_ttl < reconcile_window, webhook_retention 0 or > mock_redelivery_window;
   # the chart refuses a combination the binary would refuse. The provider is "mock" (the first version's
@@ -308,6 +320,10 @@ paymentRpc:
     expire_batch: 100
     mock_checkout_ttl: 30m
     mock_redelivery_window: 72h
+    # true = payment-rpc has the mock control entry (`/app mock pay|notify|fail`, docs/operations.md) and its mock reads the
+    # faults that entry sets. For kind and tests ONLY (kind/payment-flow-values.yaml): whoever can exec into a payment-rpc
+    # pod can then mark an order's checkout paid. Off everywhere else; there is no HTTP route either way.
+    mock_control: false
   serve:
     replicaCount: 2
     shutdown:        # same contract as rpc / catalog-rpc

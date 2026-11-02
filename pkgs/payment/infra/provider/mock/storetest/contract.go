@@ -235,3 +235,62 @@ func RunFaults(t *testing.T, newStore New) {
 		})
 	}
 }
+
+// RunStoredFaults is the contract of the faults a store keeps for `payment-rpc mock fail`: set per operation,
+// seen by every provider over the store that asks for them, and ignored by one that does not. The in-memory
+// store and the Postgres store (whose table accepts exactly mock.AllOps) both run it.
+func RunStoredFaults(t *testing.T, newStore New) {
+	t.Helper()
+	c := context.Background()
+
+	t.Run("a fault is per operation and stays until cleared", func(t *testing.T) {
+		s := newStore(t)
+		for _, op := range mock.AllOps {
+			if on, err := s.Faulted(c, op); err != nil || on {
+				t.Fatalf("%s faulted=%v err=%v on a fresh store", op, on, err)
+			}
+		}
+		for _, op := range mock.AllOps { // every operation the mock names can be set: the Postgres table must accept them all
+			if err := s.SetFault(c, op, true); err != nil {
+				t.Fatalf("set %s: %v", op, err)
+			}
+			if err := s.SetFault(c, op, true); err != nil {
+				t.Fatalf("setting %s again must succeed: %v", op, err)
+			}
+		}
+		if err := s.SetFault(c, mock.OpRefund, false); err != nil {
+			t.Fatal(err)
+		}
+		for _, op := range mock.AllOps {
+			on, err := s.Faulted(c, op)
+			if err != nil || on != (op != mock.OpRefund) {
+				t.Fatalf("%s faulted=%v err=%v, want %v", op, on, err, op != mock.OpRefund)
+			}
+		}
+		if err := s.SetFault(c, mock.OpRefund, false); err != nil {
+			t.Fatalf("clearing what is not set must succeed: %v", err)
+		}
+	})
+
+	t.Run("a provider asks the store only when told to", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.SetFault(c, mock.OpCreateCheckout, true); err != nil {
+			t.Fatal(err)
+		}
+		in := dto.ProviderCheckoutInput{PaymentID: "pay-1", OrderID: "ord-1", Amount: twd(1000)}
+
+		if _, err := mock.New(mock.Options{Store: s}).CreateCheckout(c, in); err != nil {
+			t.Fatalf("a provider that does not read faults failed on one: %v", err)
+		}
+		_, err := mock.New(mock.Options{Store: s, FaultsFromStore: true}).CreateCheckout(c, in)
+		if !errors.Is(err, port.ErrProviderUnavailable) || err.Error() != port.ErrProviderUnavailable.Error() {
+			t.Fatalf("a provider that reads faults answered a faulted operation with %v", err)
+		}
+		if err = s.SetFault(c, mock.OpCreateCheckout, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = mock.New(mock.Options{Store: s, FaultsFromStore: true}).CreateCheckout(c, in); err != nil {
+			t.Fatalf("still failing after the fault was cleared: %v", err)
+		}
+	})
+}

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
@@ -50,6 +52,35 @@ import (
 // Query variables are left out of spans: they are customer data, and the SQL
 // shape is what you need to read a trace.
 func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
+	return open(context.Background(), cfg, tel, false)
+}
+
+// cancelDeadlineDelay is how long a connection waits for the server to answer a cancel request before it is
+// closed anyway (pgconn.CancelRequestContextWatcherHandler.DeadlineDelay).
+const cancelDeadlineDelay = 2 * time.Second
+
+// NewDBContext is NewDB for a command that has ONE deadline, c's, and must not outlive it on the server. It differs
+// from NewDB in exactly two ways, and in nothing else (pool limits, expect_target, time zone, tracing, error
+// redaction are shared):
+//
+//   - connecting and the first ping run under c (NewDB's connect is gorm's own Ping, which has no context, and its
+//     ping is capped at 5s whatever the caller's deadline is), so a peer that takes the StartupMessage and never
+//     answers ends with c;
+//   - when c ends while a statement runs, the connection sends the server a cancel request at once (and closes the
+//     socket after cancelDeadlineDelay if the server does not answer), so the statement is over on the SERVER and
+//     the call returns SQLSTATE 57014. NewDB's pool, like pgx's default, only sets a deadline on the socket: a
+//     backend waiting on a lock does not notice and makes its write when the lock is let go.
+//
+// While a connection is still being made there is no backend key to cancel with: c ending then closes the socket,
+// and that is all that can be done (so nothing can be claimed about a server that had already begun the session).
+// The handler is installed on this pool only, after c is the caller's: it is for short-lived commands, not the
+// serving processes, whose behaviour NewDB keeps.
+func NewDBContext(c context.Context, cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
+	return open(c, cfg, tel, true)
+}
+
+// open is NewDB (serverCancel false: c is only the base of the 5s ping) or NewDBContext (serverCancel true).
+func open(c context.Context, cfg config.Postgres, tel *otel.Providers, serverCancel bool) (*gorm.DB, func(), error) {
 	if cfg.URL == "" {
 		return nil, func() {}, nil
 	}
@@ -67,11 +98,18 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	if err := mergeTimeZoneKeys(cc); err != nil {
 		return nil, nil, err
 	}
+	if serverCancel {
+		cc.BuildContextWatcherHandler = func(pc *pgconn.PgConn) ctxwatch.Handler {
+			return &pgconn.CancelRequestContextWatcherHandler{Conn: pc, DeadlineDelay: cancelDeadlineDelay}
+		}
+	}
 	pool := openPool(cc)
 
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: pool}), &gorm.Config{
 		TranslateError: true,
 		Logger:         gormlogger.Default.LogMode(gormlogger.Silent),
+		// gorm's own ping is context.Background(): with a caller's context the one ping below is the connect
+		DisableAutomaticPing: serverCancel,
 	})
 	if err != nil {
 		_ = pool.Close()
@@ -94,9 +132,13 @@ func NewDB(cfg config.Postgres, tel *otel.Providers) (*gorm.DB, func(), error) {
 	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 
-	c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := sqlDB.PingContext(c); err != nil {
+	pingCtx := c
+	if !serverCancel {
+		var cancel context.CancelFunc
+		pingCtx, cancel = context.WithTimeout(c, 5*time.Second)
+		defer cancel()
+	}
+	if err := sqlDB.PingContext(pingCtx); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("ping postgres: %w", redactConnErr(err, cfg.ExpectTarget))
 	}

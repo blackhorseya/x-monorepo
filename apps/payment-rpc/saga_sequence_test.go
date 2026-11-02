@@ -72,7 +72,8 @@ func buildWorker(t *testing.T) string {
 func (e *consumeEnv) workerEnv(group string) []string {
 	return append(os.Environ(),
 		"APP_POSTGRES_URL="+e.pg.URL, "APP_LOG_LEVEL=error", "APP_OTEL_ENDPOINT=",
-		"APP_ORDERING_REQUIRE_PAYMENT=true", "APP_WORKER_CONSUMER_GROUP="+group, "APP_WORKER_POLL_INTERVAL=20ms",
+		"APP_ORDERING_REQUIRE_PAYMENT=true", "APP_PAYMENT_UPSTREAM=http://payment-rpc.invalid:80", // the worker refuses the switch without it, and needs no key
+		"APP_WORKER_CONSUMER_GROUP="+group, "APP_WORKER_POLL_INTERVAL=20ms",
 	)
 }
 

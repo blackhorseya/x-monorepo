@@ -538,7 +538,16 @@ func scrape(t *testing.T, h http.Handler, name string) map[string]string {
 func TestNewWorker_RedisGroupsExistBeforeRun(t *testing.T) {
 	c := context.Background()
 	tel := pgtest.Telemetry(t)
-	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel)
+	pgCfg := config.Postgres{URL: pgtest.URL(t)}
+	// NewWorker refuses a subscribed topic whose tables are missing, and this test used to find them only because an
+	// earlier test of the package had migrated the shared database: alone, or first under -shuffle, it failed. It brings
+	// the tables itself.
+	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration(), paymentpg.Migration()} {
+		if err := postgres.Up(c, pgCfg, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db := pgtest.DB(t, pgCfg, tel)
 	rdb, rdbCleanup, err := platformredis.NewClient(config.Redis{URL: redistest.URL(t)})
 	if err != nil {
 		t.Fatal(err)

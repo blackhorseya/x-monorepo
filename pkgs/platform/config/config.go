@@ -45,6 +45,20 @@ type Ordering struct {
 	RequirePayment bool `mapstructure:"require_payment"`
 }
 
+// CheckRequirePayment is the one rule for "ordering.require_payment is on": there must be a payment-rpc to
+// pay at, i.e. payment.upstream is set. Both apps that act on the switch apply it before they connect to
+// anything: rpc (which also needs payment.api_key to call it) and the worker (which takes the payment_required
+// snapshot and must NOT hold the key: it is rpc's service credential). Without it every new order would
+// stay CONFIRMED, waiting for a payment nobody can start, until the reservation TTL cancels it.
+func CheckRequirePayment(o Ordering, p Payment) error {
+	if o.RequirePayment && strings.TrimSpace(p.Upstream) == "" {
+		return errors.New("ordering.require_payment is on but payment.upstream (APP_PAYMENT_UPSTREAM) is not set: " +
+			"orders would wait for a payment nobody can start; set payment.upstream to payment-rpc, or turn the switch off")
+	}
+
+	return nil
+}
+
 // Payment configures payment (docs/payment.md). Provider, ReconcileWindow and MockCheckoutTTL are read
 // by apps/payment-rpc only; Upstream, APIKey and Timeout by apps/rpc only (how it reaches payment-rpc).
 type Payment struct {
@@ -73,6 +87,10 @@ type Payment struct {
 	// never in a file or a log). Empty = a random one per process, which only a test in the same process
 	// can sign with.
 	MockWebhookSecret string `mapstructure:"mock_webhook_secret"`
+	// MockControl switches on the mock provider's control entry (`payment-rpc mock pay|notify|fail`) and makes
+	// every process of the mock honour the faults it sets. Off by default and only meaningful for provider
+	// "mock": it is for kind and tests, where nobody can really pay (docs/payment.md §9 S6).
+	MockControl bool `mapstructure:"mock_control"`
 	// Window is how long a new payment stays payable (expires_at = creation + Window). Default 30m.
 	Window time.Duration `mapstructure:"window"`
 	// WebhookRetention is how long a PROCESSED payment.webhook_events row is kept; `expire` deletes the
@@ -477,6 +495,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("payment.mock_checkout_ttl", 30*time.Minute)
 	v.SetDefault("payment.mock_redelivery_window", 72*time.Hour)
 	v.SetDefault("payment.mock_webhook_secret", "")
+	v.SetDefault("payment.mock_control", false)
 	v.SetDefault("payment.window", 30*time.Minute)
 	v.SetDefault("payment.webhook_retention", 720*time.Hour)
 	v.SetDefault("payment.expire_interval", 15*time.Minute)

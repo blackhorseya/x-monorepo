@@ -122,3 +122,26 @@ func (s *MockStore) Refs(c context.Context) ([]string, error) {
 
 	return refs, nil
 }
+
+func (s *MockStore) SetFault(c context.Context, op string, on bool) error {
+	var err error
+	if on {
+		err = s.db.WithContext(c).Exec(`INSERT INTO `+Schema+`.mock_faults (op) VALUES (?) ON CONFLICT (op) DO NOTHING`, op).Error
+	} else {
+		err = s.db.WithContext(c).Exec(`DELETE FROM `+Schema+`.mock_faults WHERE op = ?`, op).Error
+	}
+	if err != nil {
+		return fmt.Errorf("set mock fault %q: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *MockStore) Faulted(c context.Context, op string) (bool, error) {
+	var n int64
+	if err := s.db.WithContext(c).Raw(`SELECT count(*) FROM `+Schema+`.mock_faults WHERE op = ?`, op).Scan(&n).Error; err != nil {
+		return false, fmt.Errorf("read mock fault %q: %w", op, err)
+	}
+
+	return n > 0, nil
+}

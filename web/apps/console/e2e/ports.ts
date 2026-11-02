@@ -5,6 +5,25 @@
 /** Prefix of the temp dir that holds the oidc-backend rpc's generated config (one per IdP port). */
 export const oidcTmpPrefix = (idpPort: number) => `x-monorepo-e2e-oidc-${idpPort}-`;
 
+/**
+ * The "payment" project's own stack (e2e/payment/stack-server.ts, playwright.payment.config.ts): the rpc it talks
+ * to, its catalog-rpc, payment-rpc serve, the wrapper's control port and the console's preview. The offsets
+ * (80, 120, 90, 91; web +30) collide with none of the others: rpc +0 +1 +10 +20, their catalog-rpc +40 +41 +50 +60,
+ * the IdP +30 +31, web +0 +1 +10 +20 (a collision makes e2e/assert-clean.selftest.ts find no free pair).
+ */
+export function paymentPorts(env: Record<string, string | undefined> = process.env) {
+  const rpcPort = Number(env.E2E_RPC_PORT ?? 18091);
+  const webPort = Number(env.E2E_WEB_PORT ?? 4173);
+  const rpc = rpcPort + 80;
+  return {
+    rpc,
+    catalog: rpc + 40, // the catalog-rpc of that rpc, like catalogPort() below
+    serve: rpcPort + 90,
+    control: rpcPort + 91,
+    web: webPort + 30,
+  };
+}
+
 export function derivePorts(env: Record<string, string | undefined> = process.env) {
   const rpcPort = Number(env.E2E_RPC_PORT ?? 18091);
   const webPort = Number(env.E2E_WEB_PORT ?? 4173);
@@ -21,6 +40,7 @@ export function derivePorts(env: Record<string, string | undefined> = process.en
   const catalogPort = (rpcServerPort: number) => rpcServerPort + 40; // 18131, 18132, 18141, 18151, …
   const rpcPorts = [rpcPort, authRpcPort, roleRpcPort, backendRpcPort];
   const webPorts = [webPort, authWebPort, roleWebPort, backendWebPort];
+  const pay = paymentPorts(env);
   return {
     rpcPort,
     webPort,
@@ -35,6 +55,6 @@ export function derivePorts(env: Record<string, string | undefined> = process.en
     /** The port the "other IdP" of the issuer-mismatch negative uses (e2e/oidc-backend/backend.spec.ts). */
     foreignIdpPort: backendIdpPort + 1,
     /** Everything the stack (and the tests that start their own listener) can hold, for the cleanup check. */
-    all: [...rpcPorts, ...rpcPorts.map(catalogPort), backendIdpPort, backendIdpPort + 1, ...webPorts],
+    all: [...rpcPorts, ...rpcPorts.map(catalogPort), backendIdpPort, backendIdpPort + 1, ...webPorts, pay.rpc, pay.catalog, pay.serve, pay.control, pay.web],
   };
 }

@@ -14,6 +14,10 @@ secrets:
   # payment-rpc's own service key (rpc=<this>:admin) and the mock provider's webhook secret: throwaway values.
   paymentRpc: { apiKey: kind-payment-rpc-key-0123456789, mockWebhookSecret: kind-mock-webhook-secret-0123456789 }
 config:
+  # The smoke / outage / negative scripts place orders without a credential and complete them by hand: the payment
+  # switch is OFF here, explicitly (the chart default is ON). payment-flow.sh turns it on (payment-flow-values.yaml)
+  # for the whole payment flow and restores this file on the way out. payment-rpc itself is on (paymentRpc below).
+  ordering: { require_payment: false }
   http: { docs: true }
   # Dex from dex.yaml, reached through the CoreDNS rewrite (coredns-dex.sh). Plain http on a
   # non-loopback host, hence allow_insecure_issuer — dev only. The verifier is not on the request

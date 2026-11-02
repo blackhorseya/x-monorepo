@@ -26,7 +26,7 @@ def main(profile: str) -> None:
     cfg = yaml.safe_load(one(docs, "ConfigMap", "")["data"]["config.yaml"])
     check(cfg["auth"]["mode"] in ("off", "optional", "required"), f'auth.mode rendered as {cfg["auth"]["mode"]!r}')
     for path, v in walk(cfg):
-        check(not isinstance(v, bool) or path[-1] in ("docs", "insecure", "enabled"), f"{'.'.join(path)} rendered as boolean {v!r}")
+        check(not isinstance(v, bool) or path[-1] in ("docs", "insecure", "enabled", "require_payment"), f"{'.'.join(path)} rendered as boolean {v!r}")
 
     # auth.oidc: the list reaches the app as written (a mangled issuer or an off-by-default
     # `enabled` would turn the verifier on or off silently); lists are not walked above.
@@ -358,6 +358,17 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     on = bool(pv["enabled"])
     renv = {e["name"]: e for e in rc["env"]}
 
+    # The worker takes the payment_required snapshot, so with ordering.require_payment on it is told where payment-rpc is
+    # (payment.upstream, the address only: the service key is rpc's credential and a worker holding it could call
+    # payment-rpc as rpc), and it refuses to start without it. With the switch off it is told nothing about payment.
+    wenv = {e["name"]: e for e in worker["spec"]["template"]["spec"]["containers"][0]["env"]}
+    pay_env = sorted(n for n in wenv if n.startswith("APP_PAYMENT_"))
+    if (values["config"].get("ordering") or {}).get("require_payment"):
+        expect(pay_env, ["APP_PAYMENT_UPSTREAM"], "with ordering.require_payment on, the worker is told the payment address and nothing else of payment")
+        expect(wenv["APP_PAYMENT_UPSTREAM"].get("value"), renv["APP_PAYMENT_UPSTREAM"].get("value"), "the worker's payment.upstream is the one rpc has")
+    else:
+        expect(pay_env, [], "with ordering.require_payment off, the worker is told nothing about payment")
+
     # Off (the default): not one object, and not one setting in the other workloads. "Before it is on, the
     # release behaves as it did" is exactly this.
     objs = [("Deployment", "-payment-serve"), ("Deployment", "-payment-consume"), ("CronJob", "-payment-expire"),
@@ -566,9 +577,11 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
         if kind not in ("Deployment", "CronJob", "Job") or "-payment-" in name or d_ is rpc:
             continue
         podspec = d_["spec"]["template"]["spec"] if kind != "CronJob" else d_["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+        # the worker may be told the ADDRESS (ordering.require_payment on: it refuses to start without it); never the key
+        allowed = {"APP_PAYMENT_UPSTREAM"} if kind == "Deployment" and name.endswith("-worker") else set()
         for c_ in podspec["containers"] + podspec.get("initContainers", []):
             for e in c_.get("env", []):
-                check(not e["name"].startswith("APP_PAYMENT_"), f"{name}: {e['name']} (only rpc is told about payment, and only the key and the address)")
+                check(not e["name"].startswith("APP_PAYMENT_") or e["name"] in allowed, f"{name}: {e['name']} (only rpc is told about payment, and only the key and the address; the worker only the address)")
                 ref_ = e.get("valueFrom", {}).get("secretKeyRef", {})
                 check(ref_.get("name") != own_secret, f"{name} reads payment-rpc's Secret")
             for e in c_.get("envFrom", []):

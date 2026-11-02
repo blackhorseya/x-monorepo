@@ -291,17 +291,17 @@ true
 {{- fail (printf "secrets.catalogRpc.existingSecret %q is the name of the Secret the chart renders for payment-rpc (<fullname>-payment-rpc-env): catalog-rpc would read payment-rpc's provider credential; rename secrets.catalogRpc.existingSecret" $final) -}}
 {{- end -}}
 {{- if not .Values.secrets.postgresUrl -}}
-{{- fail "paymentRpc.enabled needs secrets.postgresUrl (or secrets.paymentRpc.existingSecret holding APP_POSTGRES_URL): without a Postgres URL payment-rpc would serve from memory and lose its payments on restart. secrets.existingSecret is the release-wide Secret and does not count: it may carry rpc's JWT secret, which payment-rpc refuses to start with" -}}
+{{- fail (printf "paymentRpc.enabled needs secrets.postgresUrl (or secrets.paymentRpc.existingSecret holding APP_POSTGRES_URL): without a Postgres URL payment-rpc would serve from memory and lose its payments on restart. secrets.existingSecret is the release-wide Secret and does not count: it may carry rpc's JWT secret, which payment-rpc refuses to start with. %s" (include "x-monorepo.payment.waysOut" .)) -}}
 {{- end -}}
 {{- $key := $s.apiKey -}}
 {{- if not $key -}}
-{{- fail "paymentRpc.enabled needs secrets.paymentRpc.apiKey (or secrets.paymentRpc.existingSecret holding APP_AUTH_API_KEYS and APP_PAYMENT_API_KEY): payment-rpc runs with auth.mode required and accepts only the key rpc presents" -}}
+{{- fail (printf "paymentRpc.enabled needs secrets.paymentRpc.apiKey (or secrets.paymentRpc.existingSecret holding APP_AUTH_API_KEYS and APP_PAYMENT_API_KEY): payment-rpc runs with auth.mode required and accepts only the key rpc presents. %s" (include "x-monorepo.payment.waysOut" .)) -}}
 {{- end -}}
 {{- if regexMatch "[,:=\\s]" $key -}}
 {{- fail "secrets.paymentRpc.apiKey must not contain ',', ':', '=' or whitespace: it is embedded in APP_AUTH_API_KEYS (name=key:role,...)" -}}
 {{- end -}}
 {{- if not $s.mockWebhookSecret -}}
-{{- fail "paymentRpc.enabled needs secrets.paymentRpc.mockWebhookSecret (or secrets.paymentRpc.existingSecret holding APP_PAYMENT_MOCK_WEBHOOK_SECRET): empty gives every process its own random secret, and serve could not verify what another process signed" -}}
+{{- fail (printf "paymentRpc.enabled needs secrets.paymentRpc.mockWebhookSecret (or secrets.paymentRpc.existingSecret holding APP_PAYMENT_MOCK_WEBHOOK_SECRET): empty gives every process its own random secret, and serve could not verify what another process signed. %s" (include "x-monorepo.payment.waysOut" .)) -}}
 {{- end -}}
 {{- if regexMatch "\\s" $s.mockWebhookSecret -}}
 {{- fail "secrets.paymentRpc.mockWebhookSecret must not contain whitespace" -}}
@@ -353,6 +353,10 @@ true
 {{- end -}}
 {{- if lt (int $c.expire_batch) 1 -}}
 {{- fail "paymentRpc.config.expire_batch must be positive" -}}
+{{- end -}}
+{{- /* mock_control is written into payment-rpc's config.yaml as it is: a string "true" would not be the boolean the binary reads. */ -}}
+{{- if not (kindIs "bool" (default false $c.mock_control)) -}}
+{{- fail (printf "paymentRpc.config.mock_control must be true or false, not %v: it switches on the mock provider's control entry (payment-rpc mock pay|notify|fail), for kind and tests only" $c.mock_control) -}}
 {{- end -}}
 {{- /* the ingress: the webhook, rate limited, and nothing else */ -}}
 {{- $i := $p.ingress -}}
@@ -438,6 +442,11 @@ checksum/secrets: {{ include "x-monorepo.paymentRpc.secretData" . | sha256sum }}
 {{- printf "http://%s-payment-serve:%d" (include "x-monorepo.fullname" .) (int .Values.paymentRpc.serve.service.port) -}}
 {{- end -}}
 
+{{/* The two ways out every refusal about payment being on ends with (payment is ON by default: paymentRpc.enabled and config.ordering.require_payment). */}}
+{{- define "x-monorepo.payment.waysOut" -}}
+Payment is on by default (paymentRpc.enabled and config.ordering.require_payment are true) and the only provider is the mock, which nobody can really pay. Two ways out: keep it on by giving auth and payment-rpc what it needs (config.auth.mode optional or required with a key, secrets.paymentRpc.apiKey and secrets.paymentRpc.mockWebhookSecret, or secrets.paymentRpc.existingSecret), or turn payment off ON PURPOSE with both config.ordering.require_payment=false and paymentRpc.enabled=false (docs/operations.md, "Upgrade notes")
+{{- end -}}
+
 {{/*
 What the other workloads must not be told about payment. rpc is told where payment-rpc is and with which key
 (APP_PAYMENT_UPSTREAM, APP_PAYMENT_API_KEY) by the chart — whether or not payment-rpc is on, so an extraEnv
@@ -467,10 +476,10 @@ would stay CONFIRMED.
 {{- $o := default dict .Values.config.ordering -}}
 {{- if $o.require_payment -}}
 {{- if not .Values.paymentRpc.enabled -}}
-{{- fail "config.ordering.require_payment is true but paymentRpc.enabled is false: orders would wait for a payment nobody can start (rpc itself refuses to start without payment configured)" -}}
+{{- fail "config.ordering.require_payment is true but paymentRpc.enabled is false: orders would wait for a payment nobody can start (rpc itself refuses to start without payment configured). Turn payment-rpc on (paymentRpc.enabled=true with secrets.paymentRpc.apiKey and secrets.paymentRpc.mockWebhookSecret), or turn the switch off on purpose (config.ordering.require_payment=false)" -}}
 {{- end -}}
 {{- if eq (toString .Values.config.auth.mode) "off" -}}
-{{- fail "config.ordering.require_payment is true with config.auth.mode off: with auth off nobody can pay (no credential, no customer), so every order would stay CONFIRMED; set config.auth.mode to optional or required" -}}
+{{- fail (printf "config.ordering.require_payment is true with config.auth.mode off: with auth off nobody can pay (no credential, no customer), so every order would stay CONFIRMED. %s" (include "x-monorepo.payment.waysOut" .)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
