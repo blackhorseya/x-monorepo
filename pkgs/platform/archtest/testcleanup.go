@@ -16,26 +16,30 @@ import (
 // RunRules deliberately skips, for the three ways a Postgres test leaves rows
 // behind while still reporting PASS:
 //
-//   - pool-defer: a function binds the closer returned by platformpg.NewDB and
-//     defers it, and the same function also registers t.Cleanup. A deferred
-//     call runs when the function returns, t.Cleanup runs after that, so the
-//     cleanup talks to a closed pool and (when it discards the error) nothing
-//     says so.
+//   - pool-defer: a test function binds the closer returned by platformpg.NewDB
+//     and defers it, and registers t.Cleanup anywhere in the same function. A
+//     deferred call runs when the function returns, t.Cleanup after that, so a
+//     cleanup that touches the pool runs on a closed pool and, when it discards
+//     the error, nothing says so. THIS IS A SHAPE BAN, NOT A LIFECYCLE PROOF: it
+//     does not ask which t the Cleanup is on, whether a closure got the parent's
+//     t, or whether the Cleanup would in fact run before the close (a t.Run child's
+//     does). Syntax cannot answer that for all shapes (two review rounds each
+//     found another), and the fix is the same for every shape, so the gate bans
+//     the pairing and the fix is always pgtest.DB.
 //   - pool-order: the closer is registered with t.Cleanup AFTER another
-//     t.Cleanup. Cleanups run last-in first-out, so the closer runs first and
-//     the earlier registration sees a closed pool all the same.
+//     t.Cleanup that reaches the pool. Cleanups run last-in first-out, so the
+//     closer runs first and the earlier registration sees a closed pool.
 //   - cleanup-swallow: a t.Cleanup body discards the error of a database write
 //     (`_ = db.Exec(...).Error`, or a bare `db.Exec(...)` statement). A purge
 //     that fails then leaves its fixture for the next run, which hides it by
 //     wiping the table first.
 //
-// The fix for all three is the same: pgtest.DB registers the close itself and
-// hands the caller no closer, so there is nothing to defer or to order.
+// pgtest.DB registers the close itself and hands the caller no closer, so there is
+// nothing to defer or to order.
 //
 // The scan is AST-only, like the rest of the package. "The closer" is found by
 // binding, not by name: the second result of a NewDB call, whatever it is
-// called (cleanup, dbCleanup, closeDB, ...). That is a different set from a
-// grep for `defer cleanup()`.
+// called (cleanup, dbCleanup, closeDB, ...).
 
 // Finding is one violation, positioned at the statement to fix.
 type Finding struct {
@@ -136,7 +140,9 @@ func ScanTestCleanupDir(root string) ([]Finding, ScanStats, error) {
 	return all, stats, nil
 }
 
-// ScanTestCleanupFiles applies the rules to the files of one package.
+// ScanTestCleanupFiles applies the rules to the files of one package. The unit is
+// a top-level function: its closures and t.Run bodies are part of it, not scopes
+// of their own.
 func ScanTestCleanupFiles(fset *token.FileSet, files []*ast.File) ([]Finding, ScanStats) {
 	registrars := cleanupRegistrars(files)
 	var (
@@ -145,24 +151,17 @@ func ScanTestCleanupFiles(fset *token.FileSet, files []*ast.File) ([]Finding, Sc
 	)
 	stats.Files = len(files)
 	for _, f := range files {
-		ast.Inspect(f, func(n ast.Node) bool {
-			var body *ast.BlockStmt
-			switch fn := n.(type) {
-			case *ast.FuncDecl:
-				body = fn.Body
-			case *ast.FuncLit:
-				body = fn.Body
-			}
-			if body == nil {
-				return true
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
 			}
 			stats.Funcs++
-			found, st := scanScope(fset, body, registrars)
+			found, st := scanFunc(fset, fn.Body, registrars)
 			out = append(out, found...)
 			stats.Closers += st.Closers
 			stats.Defers += st.Defers
-			return true
-		})
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].Pos, out[j].Pos
@@ -174,26 +173,33 @@ func ScanTestCleanupFiles(fset *token.FileSet, files []*ast.File) ([]Finding, Sc
 	return out, stats
 }
 
-// cleanupRegistrars names the package's functions that call .Cleanup on
-// something themselves (seedFixtures(t, db) registering a purge): calling one
-// counts as a t.Cleanup registration in the caller's scope.
+// cleanupRegistrars names the package's functions that register a cleanup, directly
+// (.Cleanup anywhere in the body) or by calling another such function
+// (seedFixtures(t, db) registering a purge, a subtest body that calls it). Calling
+// one, or handing one to something (t.Run("x", child)), counts as a t.Cleanup
+// registration. By name only: which parameter it registers on is exactly the
+// question the gate does not ask.
 func cleanupRegistrars(files []*ast.File) map[string]bool {
 	m := map[string]bool{}
-	for _, f := range files {
-		for _, d := range f.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			found := false
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				if c, ok := n.(*ast.CallExpr); ok && isCleanupCall(c) {
-					found = true
+	for changed := true; changed; {
+		changed = false
+		for _, f := range files {
+			for _, d := range f.Decls {
+				fn, ok := d.(*ast.FuncDecl)
+				if !ok || fn.Body == nil || m[fn.Name.Name] {
+					continue
 				}
-				return !found
-			})
-			if found {
-				m[fn.Name.Name] = true
+				found := false
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					if c, ok := n.(*ast.CallExpr); ok && (isCleanupCall(c) || m[calleeName(c)]) {
+						found = true
+					}
+					return !found
+				})
+				if found {
+					m[fn.Name.Name] = true
+					changed = true
+				}
 			}
 		}
 	}
@@ -205,28 +211,21 @@ func isCleanupCall(c *ast.CallExpr) bool {
 	return ok && s.Sel.Name == "Cleanup" && len(c.Args) == 1
 }
 
-// ownStmts walks body without descending into nested function literals: each
-// literal is its own scope (a subtest's t.Cleanup runs when the subtest ends,
-// before the parent's defers).
-func ownStmts(body *ast.BlockStmt, visit func(ast.Node)) {
-	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		if n != nil {
-			visit(n)
-		}
-		return true
-	})
-}
-
 type closer struct {
 	name string
 	kind string // "NewDB" | "pool"
 	db   string // the handle the pool serves: `db` in `db, cleanup, err := NewDB(...)`, the receiver of db.DB()
 }
 
-func scanScope(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]bool) ([]Finding, ScanStats) {
+type reg struct {
+	pos     token.Pos
+	closes  string // closer name when this registration is the closer itself
+	literal ast.Node
+	uses    bool // reaches a pool handle: a literal naming it, or a registering helper given it; t.Cleanup(telCleanup) does not
+}
+
+// scanFunc applies the rules to one top-level function, closures included.
+func scanFunc(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]bool) ([]Finding, ScanStats) {
 	var (
 		out     []Finding
 		stats   ScanStats
@@ -237,8 +236,8 @@ func scanScope(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]b
 		out = append(out, Finding{Pos: fset.Position(pos), Rule: rule, Msg: msg})
 	}
 
-	// Pass 1: bindings.
-	ownStmts(body, func(n ast.Node) {
+	// Pass 1: bindings, anywhere in the function.
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch s := n.(type) {
 		case *ast.AssignStmt:
 			if len(s.Rhs) == 1 {
@@ -261,6 +260,7 @@ func scanScope(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]b
 				}
 			}
 		}
+		return true
 	})
 	stats.Closers = len(closers)
 	dbs := map[string]bool{}
@@ -270,36 +270,20 @@ func scanScope(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]b
 		}
 	}
 
-	// Pass 2: defers, Cleanup registrations, in source order. A defer counts only in
-	// this function's own body (a literal's defer runs when the literal returns).
-	// A Cleanup counts when it is registered on this function's t: a closure that
-	// captures t (open := func() { t.Cleanup(...) }) registers on the same t, so
-	// it runs after this function's defers; the literal given to t.Run is a subtest
-	// with a t of its own, which finishes first. A closure that merely takes a t
-	// parameter is not one: func(t *testing.T) {...}(t) is the parent's t.
-	type reg struct {
-		pos     token.Pos
-		closes  string // closer name when this registration is the closer itself
-		literal ast.Node
-		uses    bool // reaches a pool handle: a literal naming it, or a registering helper given it; t.Cleanup(telCleanup) does not
-	}
+	// Pass 2: defers and Cleanup registrations, in source order, wherever they are.
 	var (
 		defers   []token.Pos
 		registrs []reg
 	)
-	var walk func(n ast.Node, own bool, shadow map[string]bool)
-	visit := func(n ast.Node, own bool, shadow map[string]bool) {
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch s := n.(type) {
 		case *ast.DeferStmt:
-			if own && closesPool(s.Call, closers) != "" {
+			if closesPool(s.Call, closers) != "" {
 				defers = append(defers, s.Pos())
 			}
 		case *ast.CallExpr:
 			switch {
 			case isCleanupCall(s):
-				if id, ok := s.Fun.(*ast.SelectorExpr).X.(*ast.Ident); ok && shadow[id.Name] {
-					return // a subtest's (or another closure's) own t
-				}
 				r := reg{pos: s.Pos()}
 				switch a := s.Args[0].(type) {
 				case *ast.Ident:
@@ -322,62 +306,27 @@ func scanScope(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]b
 				}
 				registrs = append(registrs, r)
 			case calleeName(s) != "" && registrars[calleeName(s)]:
-				// A same-package helper that registers its own cleanup, on the t it is
-				// given: a subtest's t finishes before this function's defers run.
+				registrs = append(registrs, reg{pos: s.Pos(), uses: touches(s, dbs)})
+			default:
+				// A registering function handed over rather than called: t.Run("x", child).
 				for _, a := range s.Args {
-					if id, ok := a.(*ast.Ident); ok && shadow[id.Name] {
-						return
+					if id, ok := a.(*ast.Ident); ok && registrars[id.Name] {
+						registrs = append(registrs, reg{pos: a.Pos(), uses: true})
 					}
 				}
-				registrs = append(registrs, reg{pos: s.Pos(), uses: touches(s, dbs)})
 			}
 		}
-	}
-	subtests := map[*ast.FuncLit]bool{} // the literals handed to X.Run(name, func(t *testing.T) {...})
-	walk = func(root ast.Node, own bool, shadow map[string]bool) {
-		ast.Inspect(root, func(n ast.Node) bool {
-			if n == nil || n == root {
-				return n == root
-			}
-			if c, ok := n.(*ast.CallExpr); ok && calleeName(c) == "Run" {
-				for _, a := range c.Args {
-					if lit, ok := a.(*ast.FuncLit); ok {
-						subtests[lit] = true
-					}
-				}
-			}
-			if lit, ok := n.(*ast.FuncLit); ok {
-				inner := map[string]bool{}
-				for k := range shadow {
-					inner[k] = true
-				}
-				// Only a subtest gets a t of its own. Any other literal that takes a *testing.T
-				// (called at once with the parent's t, passed on, run in a goroutine) is handed
-				// the same t, so its Cleanup still runs after this function's defers.
-				if subtests[lit] {
-					for _, f := range lit.Type.Params.List {
-						for _, nm := range f.Names {
-							inner[nm.Name] = true
-						}
-					}
-				}
-				walk(lit.Body, false, inner)
-				return false
-			}
-			visit(n, own, shadow)
-			return true
-		})
-	}
-	walk(body, true, map[string]bool{})
+		return true
+	})
 	stats.Defers = len(defers)
 
 	line := func(p token.Pos) int { return fset.Position(p).Line }
 
-	// pool-defer: any other t.Cleanup counts, a literal or a bare function alike
+	// pool-defer: a shape ban. Not "this Cleanup runs after the close", just "both".
 	if len(registrs) > 0 {
 		for _, d := range defers {
-			add(d, RulePoolDefer, "the pool is closed by a defer, but this function also registers t.Cleanup (line "+
-				strconv.Itoa(line(registrs[0].pos))+"), which runs after the defer on a closed pool; use pgtest.DB (it registers the close with t.Cleanup, so a later t.Cleanup runs first)")
+			add(d, RulePoolDefer, "the pool is closed by a defer and this function also registers t.Cleanup (line "+
+				strconv.Itoa(line(registrs[0].pos))+"); the pairing is banned, whether or not that Cleanup would run before the close: use pgtest.DB, which registers the close with t.Cleanup so the order is always right")
 		}
 	}
 	// pool-order
@@ -395,9 +344,6 @@ func scanScope(fset *token.FileSet, body *ast.BlockStmt, registrars map[string]b
 	}
 	// cleanup-swallow
 	for _, r := range registrs {
-		if r.literal == nil {
-			continue
-		}
 		lit, ok := r.literal.(*ast.FuncLit)
 		if !ok {
 			continue

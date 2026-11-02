@@ -22,7 +22,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -39,16 +38,7 @@ func catalogOnPostgres(t *testing.T) *catalogProc {
 	if err := postgres.Up(c, cfg, catalogpg.Migration()); err != nil {
 		t.Fatal(err)
 	}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, closeDB, err := postgres.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeDB()
+	db := pgtest.DB(t, cfg, pgtest.Telemetry(t))
 	if err := db.WithContext(c).Exec("TRUNCATE catalog.products").Error; err != nil {
 		t.Fatal(err)
 	}
