@@ -22,6 +22,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
+	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -52,7 +53,7 @@ func TestWorker_RequirePaymentSnapshot_RealEntry(t *testing.T) {
 	pgCfg := config.Postgres{URL: url}
 	tel := pgtest.Telemetry(t)
 	db := pgtest.DB(t, pgCfg, tel)
-	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
+	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration(), paymentpg.Migration()} {
 		if err := postgres.Up(c, pgCfg, m); err != nil {
 			t.Fatal(err)
 		}

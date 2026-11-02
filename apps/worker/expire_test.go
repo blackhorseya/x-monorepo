@@ -10,6 +10,7 @@ import (
 
 	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
+	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -29,7 +30,7 @@ func TestExpireCommand(t *testing.T) {
 	}
 	defer telCleanup()
 	db := pgtest.DB(t, cfg.Postgres, tel)
-	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
+	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration(), paymentpg.Migration()} {
 		if err := postgres.Up(c, cfg.Postgres, m); err != nil {
 			t.Fatal(err)
 		}

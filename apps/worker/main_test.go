@@ -36,6 +36,7 @@ import (
 	orderingmemory "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/memory"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	orderingsys "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
+	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -100,7 +101,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	pgCfg := config.Postgres{URL: url}
 	tel := pgtest.Telemetry(t)
 	db := pgtest.DB(t, pgCfg, tel)
-	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
+	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration(), paymentpg.Migration()} {
 		if err := postgres.Up(c, pgCfg, m); err != nil {
 			t.Fatal(err)
 		}
@@ -149,12 +150,18 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	payResults, err := orderingmetrics.NewPaymentEventResults(tel.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
 	createOrder := ordering.ProvideCreateOrder(orders, otx, oinbox, oev, orderingsys.NewUUIDGenerator(), oclock, own, orderingmemory.NewFlatPriceList(100, "USD"), rec, createResults)
 	getOrder := ordering.ProvideGetOrder(orders, own, rec)
 	completeOrder := ordering.ProvideCompleteOrder(orders, otx, oinbox, oev, oclock, ordering.ProvideOwnership(config.Auth{}), rec)
 	orderingSubs := ordering.ProvideSubscriptions(
 		orderingconsumer.NewOrderCancellationHandler(ordering.ProvideCancelOrder(orders, otx, oinbox, oev, oclock, ordering.ProvideOwnership(config.Auth{}), rec)),
-		orderingconsumer.NewStockReservedHandler(ordering.ProvideConfirmOrder(config.Ordering{}, orders, otx, oinbox, oev, oclock, rec)))
+		orderingconsumer.NewStockReservedHandler(ordering.ProvideConfirmOrder(config.Ordering{}, orders, otx, oinbox, oev, oclock, rec)),
+		orderingconsumer.NewPaymentCapturedHandler(ordering.ProvideApplyPaymentCaptured(orders, otx, oinbox, oev, oclock, rec, payResults)),
+		orderingconsumer.NewPaymentExpiredHandler(ordering.ProvideApplyPaymentExpired(orders, otx, oinbox, oev, oclock, rec, payResults)))
 
 	stocks := inventory.ProvideStockRepository(db, logger)
 	reservations := inventory.ProvideReservationRepository(db)
@@ -423,9 +430,9 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	// Lag gauges, as Prometheus would scrape them: every cursor the worker
 	// reads is caught up, nothing is parked, and the handlers left samples.
 	// The forwarder's cursor and the stream groups show up only in redis mode.
-	wantCursors := 5 // ordering: 2 topics; inventory: 3 topics
+	wantCursors := 7 // ordering: 4 topics (2 of them payment's); inventory: 3 topics
 	if rdb != nil {
-		wantCursors = 10 // + the forwarder on each distinct topic
+		wantCursors = 14 // + the forwarder on each distinct topic
 	}
 	waitFor("every consumer lag gauge at 0", func() (bool, error) {
 		lag := scrape(t, tel.MetricsHandler, "eventbus_consumer_lag")
@@ -458,18 +465,20 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 			t.Fatalf("%s = %s, want 0", series, v)
 		}
 	}
-	if n := len(scrape(t, tel.MetricsHandler, "eventbus_poison_messages")); n != 2 {
-		t.Fatalf("%d poison series, want 2", n)
+	if n := len(scrape(t, tel.MetricsHandler, "eventbus_poison_messages")); n != 3 {
+		t.Fatalf("%d poison series, want 3 (ordering, inventory, payment)", n)
 	}
 	if n := len(scrape(t, tel.MetricsHandler, "eventbus_consumer_duration_seconds_count")); n == 0 {
 		t.Fatal("no eventbus_consumer_duration_seconds_count samples")
 	}
-	// Retention gauges: every outbox table of both BCs — the 5 consumed
-	// topics and the 4 published-only ones (OrderConfirmed, OrderPaid, StockReleased,
-	// StockCommitted), found in the catalogue — and both inboxes; with every
-	// group caught up no outbox row is held back from prune.
-	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 9 {
-		t.Fatalf("%d outbox row series, want 9: %v", len(rows), rows)
+	// Retention gauges: every outbox table of the three BCs — ordering's and inventory's 9
+	// (the 5 topics they consume and the 4 published-only ones: OrderConfirmed, OrderPaid,
+	// StockReleased, StockCommitted) plus payment's 5 (PaymentCaptured / PaymentExpired, which
+	// ordering consumes, and PaymentRefunded, PaymentRefundRequested, WebhookReceived), found in
+	// the catalogue — and the three inboxes; with every group caught up no outbox row is held
+	// back from prune.
+	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 14 {
+		t.Fatalf("%d outbox row series, want 14: %v", len(rows), rows)
 	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_outbox_held") {
 		if v != "0" {
@@ -477,12 +486,19 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		}
 	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_inbox_rows") {
+		if strings.Contains(series, `"payment"`) {
+			// payment's own consumer (payment-rpc consume) writes payment.inbox; this process only reads it
+			if v != "0" {
+				t.Fatalf("%s = %s: nothing in this worker consumes into payment.inbox", series, v)
+			}
+			continue
+		}
 		if v == "0" {
 			t.Fatalf("%s = 0, want the consumed message ids", series)
 		}
 	}
-	if n := len(scrape(t, tel.MetricsHandler, "eventbus_inbox_rows")); n != 2 {
-		t.Fatalf("%d inbox series, want 2", n)
+	if n := len(scrape(t, tel.MetricsHandler, "eventbus_inbox_rows")); n != 3 {
+		t.Fatalf("%d inbox series, want 3 (ordering, inventory, payment)", n)
 	}
 
 	stop()
