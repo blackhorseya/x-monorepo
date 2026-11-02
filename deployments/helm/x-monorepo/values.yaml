@@ -308,6 +308,10 @@ paymentRpc:
     expire_batch: 100
     mock_checkout_ttl: 30m
     mock_redelivery_window: 72h
+    # true = payment-rpc has the mock control entry (`/app mock pay|notify|fail`, docs/operations.md) and its mock reads the
+    # faults that entry sets. For kind and tests ONLY (kind/payment-flow-values.yaml): whoever can exec into a payment-rpc
+    # pod can then mark an order's checkout paid. Off everywhere else; there is no HTTP route either way.
+    mock_control: false
   serve:
     replicaCount: 2
     shutdown:        # same contract as rpc / catalog-rpc

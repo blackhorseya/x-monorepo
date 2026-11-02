@@ -41,7 +41,12 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-          {{- include "x-monorepo.commonEnv" (dict "root" . "extra" $w.extraEnv) | nindent 10 }}
+          {{- /* The worker takes the payment_required snapshot, so with ordering.require_payment on it must know there is a payment-rpc to pay at: it refuses to start without payment.upstream (the same rule rpc has). Just the address, never the key: that is rpc's service credential. The chart sets it (worker.extraEnv cannot: APP_PAYMENT_* is refused there), and only with the switch on. */}}
+          {{- $env := list }}
+          {{- if (default dict .Values.config.ordering).require_payment }}
+          {{- $env = append $env (dict "name" "APP_PAYMENT_UPSTREAM" "value" (include "x-monorepo.paymentRpc.upstream" .)) }}
+          {{- end }}
+          {{- include "x-monorepo.commonEnv" (dict "root" . "extra" (concat $env $w.extraEnv)) | nindent 10 }}
           resources:
             {{- toYaml $w.resources | nindent 12 }}
           {{- include "x-monorepo.configMount" . | nindent 10 }}

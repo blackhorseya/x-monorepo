@@ -354,6 +354,10 @@ true
 {{- if lt (int $c.expire_batch) 1 -}}
 {{- fail "paymentRpc.config.expire_batch must be positive" -}}
 {{- end -}}
+{{- /* mock_control is written into payment-rpc's config.yaml as it is: a string "true" would not be the boolean the binary reads. */ -}}
+{{- if not (kindIs "bool" (default false $c.mock_control)) -}}
+{{- fail (printf "paymentRpc.config.mock_control must be true or false, not %v: it switches on the mock provider's control entry (payment-rpc mock pay|notify|fail), for kind and tests only" $c.mock_control) -}}
+{{- end -}}
 {{- /* the ingress: the webhook, rate limited, and nothing else */ -}}
 {{- $i := $p.ingress -}}
 {{- if $i.enabled -}}
