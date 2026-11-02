@@ -37,7 +37,7 @@ Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/ale
 
 | rule | 條件 | 意思 / 怎麼處理 |
 |---|---|---|
-| Eventbus consumer lag | `eventbus_consumer_lag` > 100 持續 5m | handler 追不上或沒人在消費；看 oldest age 分辨，再加 worker replica |
+| Eventbus consumer lag | `eventbus_consumer_lag` > 100 持續 5m | handler 追不上或沒人在消費；看 oldest age 分辨，處置見「Worker 輪詢間隔」的「要不要調」（加 replica 是否有效取決於 broker，那裡有量測） |
 | Eventbus consumer stalled | `eventbus_consumer_oldest_age_seconds` > 600 持續 5m | 該 group 完全沒前進（通常是 subscriber 連不到 DB / Redis，不是 handler 失敗——失敗的會進 poison） |
 | Eventbus poison messages | `eventbus_poison_messages` > 0 持續 1m | 有訊息停在 poison 表，`task poison -- list` 看、`requeue` / `drop` 解，alert 隨 gauge 歸零 |
 | Eventbus retention overdue | `eventbus_outbox_oldest_age_seconds` / `eventbus_inbox_oldest_age_seconds` > 45d 持續 1h | prune 沒在跑，或跑了刪不動；`task prune -- --older-than 720h --dry-run` 或 console Prune 頁的 dry run 會說是誰擋的。閾值設成 prune retention 的 1.5× |
@@ -225,11 +225,61 @@ worker 有跑時每張訂單都會讓 inventory 去 reserve，`orders.js` 不等
 
 **要不要調**：看 `eventbus_consumer_lag` 與 `eventbus_consumer_oldest_age_seconds`。
 - 平常 lag 為 0、`oldest_age` 幾乎都在一個間隔之內：剩下的主要延遲就是輪詢等待（最多約一個間隔），要更低才縮間隔（如 100ms）。
-- lag 持續 > 0 且 `oldest_age` 遠大於間隔：瓶頸是 handler 吞吐，不是輪詢；縮間隔沒用，該加 replica（Helm `worker.autoscaling`）或看 handler。
+- lag 持續 > 0 且 `oldest_age` 遠大於間隔：瓶頸是 handler 吞吐，不是輪詢；縮間隔沒用，先看 handler。`postgres` broker 下加 replica **沒有量到**變快（同一個 consumer group 的 2 個 replica 清 2000 筆積壓，中位數 6.00s，1 個是 5.72s，見下節「Subscriber 批次大小」）；要靠加 replica 擴充，改用 `worker.broker: redis`（本文沒有量 redis 模式的吞吐）。
 - Postgres 的 `pg_stat_database.xact_commit` 在閒置時就很高、或連線數吃緊：放大間隔（如 500ms–1s），延遲換 DB 負載。
 重送（nack）與查詢失敗後的等待仍是 library 的 1s：handler 失敗由 `Register` 的 Retry 在行程內重試，不靠 nack；DB 出錯時也不該更頻繁地打它。
 
 設定：`worker.poll_interval` / `APP_WORKER_POLL_INTERVAL`（Helm `config.worker.poll_interval`），必須 > 0。
+
+### Subscriber 批次大小（`SubscribeBatchSize`，量測結果：不調整，沒有設定）
+
+watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預設），這些訊息在同一個 transaction 裡一筆接一筆處理，cursor 最後才前進。#363 問：把它調小（10、1）能不能縮短 `reservation_latency`。**判定規則在量之前就固定**（#363），結果是**不達標，所以不加 `worker.subscribe_batch_size`、預設維持 100**。
+
+**方法**（同一台機器、同一個 commit、`worker.broker: postgres`、`worker.poll_interval` 預設 200ms；只有批次大小不同）：
+- 候選 100、10、1，照固定順序 `100→10→1→1→10→100→100→10→1` 跑三輪（每輪 3 個候選），每次執行都是新建的 database：`migrate up`、catalog-rpc、rpc、worker 起停，跑完 DROP。
+- 指標 A：`k6 run tests/k6/reservation.js -e VUS=50 -e DURATION=60s` 的 `reservation_latency` p95。
+- 指標 B：worker 停著，先建 2000 筆訂單（全部 PENDING），再啟動 worker；計時從啟動 worker 到「沒有 PENDING、全部 CONFIRMED、RESERVED 的 reservation 數等於訂單數」（`tests/k6/bench_drain.sh`，輪詢間隔 0.2s）。
+- **採用條件**：候選的 A 在三輪都比同一輪的 100 改善至少 20%，且 B 變慢不超過 25%。
+
+**批次確實有累積，而且 knob 確實生效**：另外各跑一次插了計數的 worker（VUS=50；batch 100 跑 60s，batch 10 與 1 跑 20s；都不在下面 9 輪裡）。計數掛在 `OffsetsAdapter.AckMessageQuery`，記每次領到訊息的輪詢的 `len(p.Rows)`：
+
+| batch | 領到訊息的輪詢次數 | 每次平均筆數 | 最多 | 領到 2 筆以上的比例 |
+|---|---|---|---|---|
+| 100 | 290 | 34.14 | 50（= VUS） | 97% |
+| 10 | 504 | 8.86 | 10 | 97% |
+| 1 | 4944 | 1.00 | 1 | 0% |
+
+所以這個負載下 batch 100 與 10 確實會累積；batch 1 的上限就是 1，沒有累積。
+
+**環境**：Apple M1 Max（10 核、32 GB）、macOS 26.6.2（Darwin 25.6.0）、Postgres 17.11（podman 上的 compose Postgres，與 rpc / worker / k6 同一台機器）、Go 1.27.1、k6 v2.2.0。**量測時這台機器不安靜**：1 分鐘 load average 在 13 到 35 之間（10 核），超過 `bench.sh` 的 1.0/核門檻；這是共用的開發機，沒有等到安靜。每次執行前後的 load 在下表。
+
+**怎麼重做**（量測用的暫時程式與 harness 沒有留在 repo，因為 `main` 沒有這個設定，留著跑不起來）：
+1. 暫時讓 `eventbus.NewPostgresSubscriber` 把批次大小傳給 watermill-sql 的 `DefaultPostgreSQLSchema.SubscribeBatchSize`（`SubscriberConfig.SchemaAdapter`），由環境變數 `APP_WORKER_SUBSCRIBE_BATCH_SIZE` 帶進 worker（worker 的 handler subscriber 與 redis 模式的 forwarder 都經過 `NewPostgresSubscriber`）。要驗它生效，在 `OffsetsAdapter.AckMessageQuery` 記 `len(p.Rows)`，結果要像下面的計數表（batch 1 最多 1、batch 10 最多 10）。
+2. 每次執行：在 compose Postgres 上新建 database → `migrate up` → 起 catalog-rpc（`tests/k6/catalog.sh`）→ 起 rpc → 起 worker（只改批次大小，其他設定全是預設）→ 量 → DROP database。`worker.poll_interval` 維持預設 200ms，auth 關閉。
+3. 指標 A：`k6 run tests/k6/reservation.js -e VUS=50 -e DURATION=60s`（加 `-e RESERVE_P95=3600000` 讓延遲門檻不擋，其他 correctness 門檻不變），取 `--summary-export` 的 `reservation_latency` p95。
+4. 指標 B：不啟動 worker，先用 k6 `shared-iterations` 對 CreateOrder 建恰好 2000 筆訂單（20 VU，每筆一行、數量 1、20 個 SKU，庫存 1,000,000），確認 2000 筆都是 PENDING；啟動 worker 後立刻呼叫 `tests/k6/bench_drain.sh <database url> <out> 600`，取輸出的 `seconds`。
+5. 順序固定為 `100,10,1,1,10,100,100,10,1`（A 全部跑完再跑 B）；replica 對照是 batch 100，replica 數 `1,2,2,1,1,2`，同一個 consumer group。
+6. 判定規則同上，不因結果調整。要在安靜的機器上重量，執行前先確認 `uptime` 的 load average 低於核數。
+
+**指標 A：`reservation_latency` p95（ms）**，括號是相對同一輪的 100：
+
+| 輪 | 100 | 10 | 1 | load（各次執行前→後） |
+|---|---|---|---|---|
+| 1 | 431.05 | 412.00（-4%） | 731.10（+70%） | 13.39→14.47、14.67→15.85、15.38→23.36 |
+| 2 | 843.85 | 847.00（+0%） | 633.40（-25%） | 23.36→22.78（1）、22.78→27.59（10）、27.59→21.62（100） |
+| 3 | 9063.60 | 440.80（-95%） | 523.85（-94%） | 21.62→35.35（100）、32.92→22.67（10）、21.17→21.26（1） |
+
+**指標 B：2000 筆積壓清空秒數**，括號是相對同一輪的 100：
+
+| 輪 | 100 | 10 | 1 |
+|---|---|---|---|
+| 1 | 6.62 | 6.62（+0%） | 8.90（+34%） |
+| 2 | 6.66 | 6.66（+0%） | 10.77（+62%） |
+| 3 | 6.31 | 7.42（+18%） | 11.05（+75%） |
+
+**判定**：候選 10 在第 1 輪只改善 4%（< 20%）；候選 1 在第 1 輪反而慢 70%。兩者都沒有三輪都改善至少 20%，所以不採用，B 不必再判。候選 1 的 B 也三輪都慢了 34% 以上（超過 25%）。規則沒有允許剔除離群值，所以 100 在第 3 輪的 9063.60ms（load 35）照算；它讓 10 和 1 在第 3 輪看起來進步 94% 以上，**這一輪不能當進步的證據**，只說明在這個環境下 p95 的雜訊遠大於 20%。要再驗，得在安靜的機器上用同一組規則重跑。
+
+**順帶量：同一個 consumer group 開 2 個 replica 跑指標 B**（batch 100，順序 1、2、2、1、1、2 個 replica，秒）：1 個 replica 為 7.05、5.72、5.69（中位數 5.72）；2 個 replica 為 6.00、5.70、6.63（中位數 6.00）。**沒有量到 2 個 replica 比較快**。每個 replica 的 cursor 列是 `FOR UPDATE`（同一個 topic 的輪詢要輪流領），這是對機制的推演，沒有另外驗證；清完 2000 筆只要 6 秒左右、機器又不安靜，這組樣本也看不出小於一兩秒的差異。所以上面「要不要調」的 replica 建議改成指向 `worker.broker: redis`。
 
 ## Deploy（Helm）
 
@@ -252,7 +302,7 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 | console Deployment（`console.enabled`，預設 off） | `web/apps/console` 的 nginx image：chart 算出來的 env 只有 `RPC_UPSTREAM=http://<release>-rpc:<rpc.service.port>`，**沒有** `APP_CONFIG`、沒有 Secret——nginx 看不到 Postgres URL 和 API key；auth 開著且沒有 OIDC 時使用者在 console 的 Credential 對話框貼自己的 key / JWT。OIDC 登入的設定（#273）走 `console.extraEnv`：`CONSOLE_OIDC_ISSUER`、`CONSOLE_OIDC_CLIENT_ID`、`CONSOLE_API_KEY_LOGIN`（`false` 關掉 API key 入口）——entrypoint 渲染成 `/config.json`（只有這三個公開值），並把 issuer 的精確 origin 加進 CSP `connect-src`；沒設或格式不合就是 OIDC 關閉。IdP 的 client 要登記 redirect URI `https://<console host>/auth/callback`，並允許 console origin 的 CORS（見 [identity-login.md](identity-login.md) §8）；probe 打 nginx 自己的 `/healthz`（rpc 的健康是 rpc probe 的事）；同一組 `podSecurityContext`（uid 65532、read-only rootfs）+ `/tmp` emptyDir 就夠。自己的 Service / Ingress（`console.ingress`，純 HTTP/1.1） |
 | ServiceMonitor（`rpc.serviceMonitor.enabled`，預設 off） | Prometheus Operator 抓 rpc Service 的 `http` port、path `/api/metrics`（gin route，auth 開著也不擋）；operator 靠 label 選 ServiceMonitor，`serviceMonitor.labels` 放它要的（kube-prometheus-stack 是 `release: <name>`）。只管 rpc——worker 沒 HTTP server，它的 metrics 只能走 `config.otel.endpoint` |
 | NetworkPolicy（`networkPolicy.enabled`，預設 off） | 每個 Deployment 一張（catalog-rpc 開著才有它的）、只管 ingress（egress 不碰：DB / Redis / collector 在哪是 cluster 的事）。rpc 永遠放行同 release 的 console pod，加上 `networkPolicy.rpc.ingressFrom`（NetworkPolicyPeer list；**空 = 該 port 對任何來源開**，要收緊就列 ingress controller 與 Prometheus 的 namespace）；worker 不收任何 ingress；catalog-rpc 只收同 release 的 **rpc pod**（不收 console、ingress controller；清單永遠不空，所以不會變成「任何來源」），要讓 Prometheus 抓 ServiceMonitor 就把它的 namespace 列在 `networkPolicy.catalogRpc.ingressFrom`；console 同一套 `console.ingressFrom`。要 CNI 真的實作 NetworkPolicy 才有效，kind 預設的 kindnet 不會，所以 helm-kind 驗不了，check.py 驗形狀 |
-| worker autoscaling | replica 共用 `consumer_group` 就是分工，但 handler 是 DB-bound，CPU 低時 lag 照樣長，所以 `worker.autoscaling.metric` 預設 `lag`：KEDA `ScaledObject` 用 Prometheus trigger 查 `max(eventbus_consumer_lag{consumer_group=~"<group>\\..*"})`（gauge 是 per replica，取 max 不 sum；要 `config.otel.endpoint`，否則拒絕 render）；沒 KEDA 的 cluster 用 `metric: cpu` 出普通 HPA。實測踩到的三件事都做成 render 時就擋：`lag.prometheusAddress` 要 `http://<svc>.<ns>.svc:<port>`（KEDA operator 從**它自己的** namespace 解析，裸 Service 名不通）；`minReplicas` 必須 ≥ 1（lag gauge 是 worker 自己報的，0 個 replica 就沒人報）；`pollingInterval` / `cooldownPeriod` 只對 scale-to-zero 有效，縮回去的節奏是 HPA 的 `behavior.scaleDown`（預設 stabilization 300s，`worker.autoscaling.behavior` 透傳） |
+| worker autoscaling | replica 共用 `consumer_group` 就是分工（加 replica 是否有效取決於 broker，量測見「Worker 輪詢間隔」的「要不要調」），但 handler 是 DB-bound，CPU 低時 lag 照樣長，所以 `worker.autoscaling.metric` 預設 `lag`：KEDA `ScaledObject` 用 Prometheus trigger 查 `max(eventbus_consumer_lag{consumer_group=~"<group>\\..*"})`（gauge 是 per replica，取 max 不 sum；要 `config.otel.endpoint`，否則拒絕 render）；沒 KEDA 的 cluster 用 `metric: cpu` 出普通 HPA。實測踩到的三件事都做成 render 時就擋：`lag.prometheusAddress` 要 `http://<svc>.<ns>.svc:<port>`（KEDA operator 從**它自己的** namespace 解析，裸 Service 名不通）；`minReplicas` 必須 ≥ 1（lag gauge 是 worker 自己報的，0 個 replica 就沒人報）；`pollingInterval` / `cooldownPeriod` 只對 scale-to-zero 有效，縮回去的節奏是 HPA 的 `behavior.scaleDown`（預設 stabilization 300s，`worker.autoscaling.behavior` 透傳） |
 
 **升級到「rpc 經 catalog-rpc 查 catalog」這一版（#320 第 4 片，破壞性）**：rpc 不再 in-process 載入 catalog，chart 依此做了幾個你要照做的變動，否則 `helm upgrade` 在 render 階段就失敗（不會帶著半套設定上線）：
 
