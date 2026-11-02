@@ -573,3 +573,115 @@ func TestRace_AnExistingPaymentIsCapturedAndItsOrderEndsAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// The expire sweep (T5: PENDING -> EXPIRED, decided because the provider says nothing was paid) against the
+// notification of a payment (T3) that lands while the sweep is deciding. Both write the row by version:
+//   - the sweep held before its save: the capture runs to the end, the sweep then loses on the version, counts a
+//     conflict and writes nothing — the payment is CAPTURED and PaymentExpired is never published (an expiry that
+//     overwrote a capture would cancel an order whose money arrived);
+//   - the capture held: the sweep expires first, the capture then reads EXPIRED and takes it to CAPTURED (T8).
+func TestRace_TheSweepExpiresAPaymentWhileItsNotificationIsProcessed(t *testing.T) {
+	for _, sweepHeld := range []bool{true, false} {
+		name := "the capture wins"
+		if !sweepHeld {
+			name = "the sweep wins"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newSagaEnv(t)
+			c := t.Context()
+			clock := &sweepClock{now: t0.Add(time.Minute)}
+			prov := mock.New(mock.Options{Now: clock.Now})
+			const expiredTable = "payment.events_v1_paymentexpired"
+			if err := e.db.Exec("TRUNCATE " + expiredTable).Error; err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = e.db.Exec("TRUNCATE " + expiredTable).Error })
+
+			p := newPayment(t, "race-sweep-pay", "race-sweep-order")
+			if err := e.repo.Save(c, p); err != nil {
+				t.Fatal(err)
+			}
+			start := paymentbc.ProvideStartPayment(e.repo, prov, e.tx, clock, e.rec)
+			if _, err := start.Execute(c, dto.StartPaymentInput{OrderID: p.OrderID(), CustomerID: "cust"}); err != nil {
+				t.Fatal(err)
+			}
+			p, err := e.repo.FindByOrderID(c, p.OrderID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			// the provider has NOT been paid when the sweep asks (it will say "nothing"), yet a signed capture is on its way
+			d := prov.Notify("evt-race-sweep", mock.WebhookCaptured, p.ProviderRef(), p.Amount())
+			recv := paymentbc.ProvideReceiveWebhook(e.hooks, prov, e.ev, e.tx, clock, e.rec)
+			if _, err = recv.Execute(c, dto.WebhookInput{Body: d.Body, Signature: d.Signature}); err != nil {
+				t.Fatal(err)
+			}
+			clock.now = t0.Add(31 * time.Minute) // past the window: due
+
+			gate := &gatedRepo{Repository: e.repo, reached: make(chan struct{}), resume: make(chan struct{})}
+			sweepRepo, capRepo := payment.Repository(e.repo), payment.Repository(e.repo)
+			if sweepHeld {
+				sweepRepo = gate
+			} else {
+				capRepo = gate
+			}
+			sweep := usecase.NewExpireSweep(sweepRepo, e.hooks, prov, e.ev, e.al, e.tx, clock,
+				dto.SweepConfig{Batch: 10, ReconcileWindow: 24 * time.Hour, Interval: 15 * time.Minute})
+			capture := paymentbc.ProvideProcessWebhook(capRepo, e.hooks, e.ev, e.al, clock, e.tx, nil, e.rec)
+			runSweep := func() (*dto.ExpireOutput, error) { return sweep.Execute(c, dto.Ack{}) }
+			runCapture := func() error {
+				_, err := capture.Execute(c, dto.WebhookReceivedInput{Provider: mock.Name, EventID: d.EventID})
+				for range 5 {
+					if !errors.Is(err, payment.ErrStale) {
+						break
+					}
+					_, err = capture.Execute(c, dto.WebhookReceivedInput{Provider: mock.Name, EventID: d.EventID})
+				}
+				return err
+			}
+
+			release := sync.OnceFunc(func() { close(gate.resume) })
+			t.Cleanup(release)
+			var out *dto.ExpireOutput
+			heldDone := make(chan error, 1)
+			if sweepHeld {
+				go func() { var err error; out, err = runSweep(); heldDone <- err }()
+			} else {
+				go func() { heldDone <- runCapture() }()
+			}
+			select {
+			case <-gate.reached:
+			case <-time.After(10 * time.Second):
+				t.Fatal("fixture: the held side never reached its save")
+			}
+			if sweepHeld {
+				if err = runCapture(); err != nil {
+					t.Fatalf("capture: %v", err)
+				}
+			} else if out, err = runSweep(); err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			release()
+			if err = <-heldDone; err != nil {
+				t.Fatalf("the held side: %v", err)
+			}
+
+			got, err := e.repo.FindByOrderID(c, p.OrderID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var expired int
+			if err = e.db.Raw("SELECT count(*) FROM " + expiredTable).Scan(&expired).Error; err != nil {
+				t.Fatal(err)
+			}
+			if got.Status() != payment.StatusCaptured {
+				t.Fatalf("payment=%s, want CAPTURED: the money arrived and no expiry may overwrite it", got.Status())
+			}
+			if sweepHeld && (out.Conflicts != 1 || out.Expired != 0 || expired != 0) {
+				t.Fatalf("the sweep that lost on the version: conflicts=%d expired=%d PaymentExpired events=%d, want 1/0/0", out.Conflicts, out.Expired, expired)
+			}
+			if !sweepHeld && (out.Expired != 1 || expired != 1) {
+				t.Fatalf("the sweep that won: expired=%d PaymentExpired events=%d, want 1/1 (then T8 captured it)", out.Expired, expired)
+			}
+		})
+	}
+}
