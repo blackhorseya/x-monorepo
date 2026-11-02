@@ -327,11 +327,16 @@ func TestStartPayment_LostRaceReturnsTheWinnersCheckout(t *testing.T) {
 	if e.prov.Opened() != 2 {
 		t.Fatalf("opened %d checkouts, want 2 (one each)", e.prov.Opened())
 	}
-	// the loser opened its page first (mock_co_1), then the winner ran inside that call and opened mock_co_2
-	if !e.prov.Cancelled("mock_co_1") || e.prov.Cancelled("mock_co_2") {
-		t.Fatalf("the loser's page (mock_co_1) must be cancelled and the winner's (mock_co_2) kept: cancelled 1=%v 2=%v", e.prov.Cancelled("mock_co_1"), e.prov.Cancelled("mock_co_2"))
+	// the loser opened its page first, then the winner ran inside that call and opened the second
+	refs := e.prov.Refs()
+	if len(refs) != 2 {
+		t.Fatalf("refs = %v, want two", refs)
 	}
-	if loser.CheckoutURL != "https://mock-pay.invalid/checkout/mock_co_2" {
+	first, second := refs[0], refs[1]
+	if !e.prov.Cancelled(first) || e.prov.Cancelled(second) {
+		t.Fatalf("the loser's page (%s) must be cancelled and the winner's (%s) kept: cancelled first=%v second=%v", first, second, e.prov.Cancelled(first), e.prov.Cancelled(second))
+	}
+	if loser.CheckoutURL != "https://mock-pay.invalid/checkout/"+second {
 		t.Fatalf("loser's URL %q is not the winner's page", loser.CheckoutURL)
 	}
 }
@@ -359,8 +364,8 @@ func TestStartPayment_PaymentEndedDuringTheProviderCall(t *testing.T) {
 	if _, err := start.Execute(c, startIn(owner, false)); !errors.Is(err, payment.ErrNotPending) {
 		t.Fatalf("err = %v, want payment.not_pending", err)
 	}
-	if !e.prov.Cancelled("mock_co_1") {
-		t.Fatal("the page opened for a payment that ended meanwhile was not cancelled")
+	if refs := e.prov.Refs(); len(refs) != 1 || !e.prov.Cancelled(refs[0]) {
+		t.Fatalf("the page opened for a payment that ended meanwhile was not cancelled (refs %v)", e.prov.Refs())
 	}
 }
 
@@ -379,8 +384,8 @@ func TestStartPayment_GivesUpAfterBoundedAttempts(t *testing.T) {
 	if !errors.Is(err, payment.ErrStale) {
 		t.Fatalf("err = %v, want ErrStale", err)
 	}
-	if !e.prov.Cancelled("mock_co_1") {
-		t.Fatal("the page of a start that never saved was not cancelled")
+	if refs := e.prov.Refs(); len(refs) != 1 || !e.prov.Cancelled(refs[0]) {
+		t.Fatalf("the page of a start that never saved was not cancelled (refs %v)", e.prov.Refs())
 	}
 }
 
@@ -399,7 +404,7 @@ func TestStartPayment_InfrastructureFailureIsReportedAndDropsThePage(t *testing.
 	if _, err := start.Execute(context.Background(), startIn(owner, false)); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the store's error", err)
 	}
-	if !e.prov.Cancelled("mock_co_1") {
-		t.Fatal("the page of a start that failed to save was not cancelled")
+	if refs := e.prov.Refs(); len(refs) != 1 || !e.prov.Cancelled(refs[0]) {
+		t.Fatalf("the page of a start that failed to save was not cancelled (refs %v)", e.prov.Refs())
 	}
 }

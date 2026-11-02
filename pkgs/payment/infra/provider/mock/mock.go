@@ -21,6 +21,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
 )
 
 // Name is what the mock stores on a payment as its provider.
@@ -63,7 +64,7 @@ type Provider struct {
 	opts Options
 
 	mu        sync.Mutex
-	seq       int
+	refs      []string // checkout refs in the order they were opened (for assertions)
 	checkouts map[string]*checkout
 }
 
@@ -134,15 +135,22 @@ func (x *Provider) CreateCheckout(c context.Context, req dto.ProviderCheckoutInp
 		ends = req.ExpiresAt
 	}
 
+	// The ref is the key the payment table and the webhook log keep across every instance and restart
+	// that shares the secret, so it comes from the system's id generator (UUID v7), never from a
+	// counter that starts again in each process.
+	ref, err := idgen.New()
+	if err != nil {
+		return dto.ProviderCheckoutOutput{}, fmt.Errorf("mock: mint a checkout ref: %w", port.ErrProviderUnavailable)
+	}
+
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.seq++
-	ref := fmt.Sprintf("mock_co_%d", x.seq)
 	co := &checkout{
 		paymentID: req.PaymentID, amount: req.Amount, url: "https://mock-pay.invalid/checkout/" + ref,
 		expiresAt: ends, refunded: map[string]struct{}{},
 	}
 	x.checkouts[ref] = co
+	x.refs = append(x.refs, ref)
 
 	return dto.ProviderCheckoutOutput{Ref: ref, URL: co.url, ExpiresAt: co.expiresAt}, nil
 }
@@ -286,6 +294,14 @@ func (x *Provider) Refunds(ref string) int {
 	}
 
 	return len(co.refunded)
+}
+
+// Refs lists the refs of the checkouts ever created, oldest first (for assertions).
+func (x *Provider) Refs() []string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+
+	return append([]string(nil), x.refs...)
 }
 
 // Opened counts the checkouts ever created (for assertions).

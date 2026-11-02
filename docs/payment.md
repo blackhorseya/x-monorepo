@@ -151,7 +151,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 - **補查窗口之後才收款、而且 webhook 缺席**：付款單停在 `EXPIRED`／`CANCELLED`，錢在 provider，系統不會發現。webhook 若送到仍走 T8（與窗口無關）。這種情況到 provider 後台對帳處理。窗口長度與下限見上方「補查有界」。
 - `payment-rpc` 的補查依賴 provider 的查詢 API 可用；查詢持續失敗時只有告警，沒有自動出口。
 - **一張付款單一個 checkout**（T2）要求 provider 能把 checkout 的有效期開到「付款窗口結束」：`payment.window` 必須 ≤ provider 的 checkout 有效期，否則拒絕啟動。**若真實 provider 做不到（頁面有效期比窗口短、而且不能延長），要先改設計（例如縮短窗口或重新設計重開）才能接，不能直接放寬這個檢查**——放寬等於回到「重開會換掉 `provider_ref`」的錯誤。
-- **mock provider 的 checkout／退款狀態只存在各自的 process 記憶體**（`pkgs/payment/infra/provider/mock`）。`serve`、`consume`、`expire` 是三個獨立 process，各自建一個互不相通的 mock：`serve` 開的 checkout，`consume`／`expire` 的 mock 不認得（查詢與退款回「不可用」，**fail safe**：不會因此誤轉 `EXPIRED`／`CAPTURED`／`REFUNDED`；共用的 `payment.mock_webhook_secret` 只解決驗簽）。所以 **mock 只能在單一 process 內演練完整流程**（測試與 `task run`），不能拿三個 workload 的部署演練補查與退款。**切片 5 部署前的前置條件**：mock 的 checkout／退款狀態改成跨 process 共用（例如放進 Postgres 或換成真實 provider 的 sandbox），或部署只驗證 fail-safe 行為；沒做到之前不得宣稱 kind 驗收（S6）涵蓋補查與退款。
+- **mock provider 的 checkout／退款狀態只存在各自的 process 記憶體**（`pkgs/payment/infra/provider/mock`）。`serve`、`consume`、`expire` 是三個獨立 process，各自建一個互不相通的 mock：`serve` 開的 checkout，`consume`／`expire` 的 mock 不認得（查詢與退款回「不可用」，**fail safe**：不會因此誤轉 `EXPIRED`／`CAPTURED`／`REFUNDED`；共用的 `payment.mock_webhook_secret` 只解決驗簽）。所以 **mock 只能在單一 process 內演練完整流程**（測試與 `task run`），不能拿三個 workload 的部署演練補查與退款。**切片 5 部署前的前置條件**：mock 的 checkout／退款狀態改成跨 process 共用（例如放進 Postgres 或換成真實 provider 的 sandbox），或部署只驗證 fail-safe 行為；沒做到之前不得宣稱 kind 驗收（S6）涵蓋補查與退款。狀態各自獨立，**識別碼不會撞**：checkout ref 由 `idgen`（UUID v7）產生、通知 id 由 ref 推出，所以共用 secret 的多個 instance（或重啟）不會存出同一個 `(provider, provider_ref)`，也不會被 webhook 去重鍵當成同一則通知（`TestMockInstances_SharingASecretDoNotCollide`）。
 
 ### 錯誤碼（Connect code 的唯一權威表）
 

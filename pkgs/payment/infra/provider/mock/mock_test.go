@@ -212,3 +212,26 @@ func TestFaultAndLatency(t *testing.T) {
 		t.Fatalf("a little latency must still succeed: %v", err)
 	}
 }
+
+// The ref is a key the payment table and the webhook log keep across instances and restarts that
+// share a secret: independent instances never mint the same one, and it is a UUID v7.
+func TestCheckoutRefs_AreUUIDv7AndNeverRepeatAcrossInstances(t *testing.T) {
+	c := context.Background()
+	seen := map[string]bool{}
+	for range 3 { // three "restarts" of the same provider
+		p := mock.New(mock.Options{Secret: []byte("shared-secret-0123456789abcdef!!")})
+		for range 3 {
+			co, err := p.CreateCheckout(c, dto.ProviderCheckoutInput{PaymentID: "pay", Amount: money(t, 5)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(co.Ref) != 36 || co.Ref[14] != '7' {
+				t.Fatalf("ref %q is not a UUID v7", co.Ref)
+			}
+			if seen[co.Ref] {
+				t.Fatalf("ref %q minted twice", co.Ref)
+			}
+			seen[co.Ref] = true
+		}
+	}
+}
