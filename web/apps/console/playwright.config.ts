@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { derivePorts } from "./e2e/ports";
 
 // Console smoke against the real server: a ./bin/rpc and the production build
 // served by vite preview, which proxies /api to it like the dev server does.
@@ -14,23 +15,24 @@ import { defineConfig, devices } from "@playwright/test";
 // what the console does when the server wants a credential, for both kinds. Its
 // own preview port = its own origin, so the credential it stores in localStorage
 // never leaks into the other project.
+// Ports: everything below derives from E2E_RPC_PORT / E2E_WEB_PORT (e2e/ports.ts), and the fixtures follow
+// them (the oidc-backend rpc's issuer is generated, the specs read baseURL). Run with CI=1 when you change
+// them, or reuseExistingServer attaches to whatever already answers on a derived port. `task web-e2e-ports`.
 // E2E_CONSOLE_URL: run the "chromium" project against a console served from somewhere else —
 // e2e/image.sh builds web/apps/console/Dockerfile and points this at the container, so the
 // nginx config (SPA fallback, /api proxy, cache headers) is what gets tested, not vite preview.
 // The rpc is still started here; the container reaches it through the host. (image.sh runs
 // --project chromium only; the auth pair still starts but is unused in that mode.)
 const consoleURL = process.env.E2E_CONSOLE_URL;
-const rpcPort = Number(process.env.E2E_RPC_PORT ?? 18091);
-const webPort = Number(process.env.E2E_WEB_PORT ?? 4173);
-const authRpcPort = rpcPort + 1;
-const authWebPort = webPort + 1;
-// +10, not +2: e2e/image.sh publishes the console container on 18093 (= rpcPort + 2).
-const roleRpcPort = rpcPort + 10;
-const roleWebPort = webPort + 10;
+// Every port derives from E2E_RPC_PORT / E2E_WEB_PORT in one place (e2e/ports.ts), which the cleanup check
+// (e2e/assert-clean.ts) reads too.
+const P = derivePorts();
+const { rpcPort, webPort, authRpcPort, authWebPort, roleRpcPort, roleWebPort, catalogPort, backendWebPort } = P;
 // The "oidc-backend" pair: a real rpc with auth.oidc on, its own loopback IdP (e2e/oidc-backend/idp.ts).
-export const BACKEND_RPC_PORT = rpcPort + 20;
-export const BACKEND_IDP_PORT = rpcPort + 30; // keep in sync with e2e/oidc-backend/rpc.yaml
-const backendWebPort = webPort + 20;
+// The rpc's issuer is generated from BACKEND_IDP_PORT (e2e/oidc-backend/rpc-server.ts), so the two cannot disagree.
+export const BACKEND_RPC_PORT = P.backendRpcPort;
+export const BACKEND_IDP_PORT = P.backendIdpPort;
+export const FOREIGN_IDP_PORT = P.foreignIdpPort;
 // The "oidc-dex" project (E2E_DEX=1): the dev Dex as the IdP (e2e/oidc-dex/). The console's origin must
 // be a redirect URI registered in deployments/docker/dex/config.yaml, so its port is fixed, not derived
 // (and not one of the three already registered for `task web-dev`, vite preview and the console image,
@@ -52,7 +54,6 @@ const baseEnv = {
 // rpc has no catalog of its own: every rpc below talks to a catalog-rpc of its own (so projects do not
 // share products), over the service key rpc=CATALOG_KEY:admin. Made up for this test; not a credential.
 export const CATALOG_KEY = "e2e-catalog-service-key-0123456789ab";
-const catalogPort = (rpcServerPort: number) => rpcServerPort + 40; // 18131, 18132, 18141, 18151, …
 const catalogEnv = (rpcServerPort: number) => ({
   APP_CATALOG_UPSTREAM: `http://127.0.0.1:${catalogPort(rpcServerPort)}`,
   APP_CATALOG_API_KEY: CATALOG_KEY,
@@ -231,10 +232,13 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
     },
     {
-      // auth required + auth.oidc on (config file: list settings cannot come from env), IdP in the test process.
-      command: `${bin}/rpc`,
+      // auth required + auth.oidc on, the loopback IdP above as its only issuer. The config file (a list setting
+      // cannot come from env) is generated from BACKEND_IDP_PORT by the wrapper, which removes it again on SIGTERM
+      // (hence gracefulShutdown: the default is SIGKILL, which would leave the file behind).
+      command: "node --experimental-strip-types e2e/oidc-backend/rpc-server.ts",
       url: `http://127.0.0.1:${BACKEND_RPC_PORT}/api/readyz`,
-      env: { ...baseEnv, ...catalogEnv(BACKEND_RPC_PORT), APP_CONFIG: "./e2e/oidc-backend/rpc.yaml", APP_HTTP_ADDR: `:${BACKEND_RPC_PORT}` },
+      env: { ...baseEnv, ...catalogEnv(BACKEND_RPC_PORT), APP_HTTP_ADDR: `:${BACKEND_RPC_PORT}`, IDP_PORT: String(BACKEND_IDP_PORT), RPC_BIN: `${bin}/rpc` },
+      gracefulShutdown: { signal: "SIGTERM" as const, timeout: 5_000 },
       reuseExistingServer: !process.env.CI,
       stdout: "ignore",
       stderr: "pipe",

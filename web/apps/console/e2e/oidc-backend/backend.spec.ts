@@ -1,10 +1,11 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { BACKEND_IDP_PORT, BACKEND_RPC_PORT } from "../../playwright.config";
+import { BACKEND_IDP_PORT, BACKEND_RPC_PORT, FOREIGN_IDP_PORT } from "../../playwright.config";
 import { stubConfig } from "../auth/oidc";
 import { subject, useKey } from "../auth/helpers";
 import { uid } from "../uid";
+import { TestIdp } from "./idp";
 
-// The console against the REAL rpc with auth.oidc on (e2e/oidc-backend/rpc.yaml) and a loopback IdP
+// The console against the REAL rpc with auth.oidc on (config generated from e2e/oidc-backend/rpc.yaml by rpc-server.ts) and a loopback IdP
 // whose ES256 tokens the rpc verifies through its real JWKS fetch. Covers what the stubbed `auth`
 // project cannot: the server accepts the token, an unbound identity really gets
 // auth.unbound_identity, ClaimInvite really binds, and RevokeSessions really refuses old tokens.
@@ -49,7 +50,7 @@ async function invitedUser(request: APIRequestContext) {
   return { accountId: account.id as string, email };
 }
 
-test("an OIDC token the server verified, for an identity with no account, gets the claim flow; claiming binds it and opens the console", async ({ page, request }) => {
+test("an OIDC token the server verified, for an identity with no account, gets the claim flow; claiming binds it and opens the console @ports", async ({ page, request }) => {
   await invitedUser(request);
   const authorized: string[] = [];
   page.on("request", (r) => r.url().includes("/api/") && r.headers()["authorization"] && authorized.push(r.headers()["authorization"]));
@@ -67,6 +68,43 @@ test("an OIDC token the server verified, for an identity with no account, gets t
   await expect(page.getByText("Not authenticated")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
+
+// The rpc trusts exactly one issuer, the one generated from the same port as the IdP (rpc-server.ts). A token
+// from another IdP, even one that signs correctly for the same client id, must not get through: the
+// console shows no claim flow for it. The sign-in through the configured IdP right after is the control
+// that this test can pass only when the rpc is really talking to its own IdP.
+test("a token from an IdP the rpc is not configured for is refused; the configured IdP still gets the claim flow @ports", async ({ page, request }) => {
+  await invitedUser(request);
+  const other = new TestIdp(FOREIGN_IDP_PORT, CLIENT_ID);
+  await other.start();
+  try {
+    other.user = { ...idp.user };
+    expect(other.issuer).not.toBe(idp.issuer);
+
+    await stubConfig(page, { issuer: other.issuer, clientId: CLIENT_ID, apiKeyLogin: false });
+    await page.goto("/login");
+    // The refusal is the rpc's own answer, awaited, not inferred from something being absent: a token
+    // whose iss is no configured issuer is auth.invalid_credential (there is no auth.jwt to fall back on).
+    const refused = page.waitForResponse((r) => r.url().includes("/api/identity.v1.IdentityService/") && r.headers()["x-error-code"] === "auth.invalid_credential");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    expect((await refused).status()).toBe(401);
+    await expect(page.getByRole("heading", { name: "Link your account" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Claim invite" })).toHaveCount(0);
+  } finally {
+    await other.stop();
+  }
+
+  // Control: the configured IdP, same invite, a fresh browser context (nothing of the refused session left).
+  const fresh = await page.context().browser()!.newContext({ baseURL: test.info().project.use.baseURL });
+  try {
+    const page2 = await fresh.newPage();
+    await signIn(page2);
+    await expect(page2.getByRole("heading", { name: "Link your account" })).toBeVisible();
+  } finally {
+    await fresh.close();
+  }
+});
+
 
 test("a token with an unverified email cannot claim: refused with invite.email_unverified, still unbound", async ({ page, request }) => {
   await invitedUser(request);
