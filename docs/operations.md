@@ -251,7 +251,15 @@ watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預
 
 所以這個負載下 batch 100 與 10 確實會累積；batch 1 的上限就是 1，沒有累積。
 
-**環境**：Apple M1 Max（10 核、32 GB）、macOS 26.6.2（Darwin 25.6.0）、Postgres 17.11（podman 上的 compose Postgres，與 rpc / worker / k6 同一台機器）、Go 1.27.1、k6 v2.2.0。量測 binary 建自 commit `cf828fcd94c714d63ff1e7cb70ccba8cb9384f62`（加上 `worker.subscribe_batch_size` 的暫時 knob，這個 PR 的最終內容**不含**；harness 在 `c3c7e4a0c56e7a830cbeade3ceee284ce5a940cf` 的 `tests/k6/subscribe_batch.sh`、`backlog.js`，兩者都在這個 PR 的 commit 歷史裡，隨後 revert；squash merge 後這兩個 commit 不再可達，重現請照上述方法：knob 是 `eventbus.WithSubscribeBatchSize` → `SchemaAdapter.SubscribeBatchSize` → `worker.subscribe_batch_size`）。**量測時這台機器不安靜**：1 分鐘 load average 在 13 到 35 之間（10 核），超過 `bench.sh` 的 1.0/核門檻；這是共用的開發機，沒有等到安靜。每次執行前後的 load 在下表。
+**環境**：Apple M1 Max（10 核、32 GB）、macOS 26.6.2（Darwin 25.6.0）、Postgres 17.11（podman 上的 compose Postgres，與 rpc / worker / k6 同一台機器）、Go 1.27.1、k6 v2.2.0。**量測時這台機器不安靜**：1 分鐘 load average 在 13 到 35 之間（10 核），超過 `bench.sh` 的 1.0/核門檻；這是共用的開發機，沒有等到安靜。每次執行前後的 load 在下表。
+
+**怎麼重做**（量測用的暫時程式與 harness 沒有留在 repo，因為 `main` 沒有這個設定，留著跑不起來）：
+1. 暫時讓 `eventbus.NewPostgresSubscriber` 把批次大小傳給 watermill-sql 的 `DefaultPostgreSQLSchema.SubscribeBatchSize`（`SubscriberConfig.SchemaAdapter`），由環境變數 `APP_WORKER_SUBSCRIBE_BATCH_SIZE` 帶進 worker（worker 的 handler subscriber 與 redis 模式的 forwarder 都經過 `NewPostgresSubscriber`）。要驗它生效，在 `OffsetsAdapter.AckMessageQuery` 記 `len(p.Rows)`，結果要像下面的計數表（batch 1 最多 1、batch 10 最多 10）。
+2. 每次執行：在 compose Postgres 上新建 database → `migrate up` → 起 catalog-rpc（`tests/k6/catalog.sh`）→ 起 rpc → 起 worker（只改批次大小，其他設定全是預設）→ 量 → DROP database。`worker.poll_interval` 維持預設 200ms，auth 關閉。
+3. 指標 A：`k6 run tests/k6/reservation.js -e VUS=50 -e DURATION=60s`（加 `-e RESERVE_P95=3600000` 讓延遲門檻不擋，其他 correctness 門檻不變），取 `--summary-export` 的 `reservation_latency` p95。
+4. 指標 B：不啟動 worker，先用 k6 `shared-iterations` 對 CreateOrder 建恰好 2000 筆訂單（20 VU，每筆一行、數量 1、20 個 SKU，庫存 1,000,000），確認 2000 筆都是 PENDING；啟動 worker 後立刻呼叫 `tests/k6/bench_drain.sh <database url> <out> 600`，取輸出的 `seconds`。
+5. 順序固定為 `100,10,1,1,10,100,100,10,1`（A 全部跑完再跑 B）；replica 對照是 batch 100，replica 數 `1,2,2,1,1,2`，同一個 consumer group。
+6. 判定規則同上，不因結果調整。要在安靜的機器上重量，執行前先確認 `uptime` 的 load average 低於核數。
 
 **指標 A：`reservation_latency` p95（ms）**，括號是相對同一輪的 100：
 
