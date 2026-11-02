@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	paymentbc "github.com/blackhorseya/x-monorepo/pkgs/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
@@ -641,6 +643,11 @@ func TestMockControl_DeadlineIsOneForTheWholeCommand_SlowLookupThenWrite(t *test
 		}
 		if r.took > mockTimeout+time.Second {
 			t.Fatalf("returned after %s, deadline %s", r.took, mockTimeout)
+		}
+		// the server's own cancellation is what ended the write: SQLSTATE 57014 (query_canceled), not a client that walked away
+		var pgErr *pgconn.PgError
+		if !errors.As(r.err, &pgErr) || pgErr.Code != "57014" {
+			t.Fatalf("the write was not ended by the server's cancellation (want SQLSTATE 57014 in the error): %v", r.err)
 		}
 		// the statement is over on the SERVER when the command reports, not only abandoned by the client
 		if n := e.waitingOn("mock_checkouts"); n != 0 {

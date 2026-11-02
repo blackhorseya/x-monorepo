@@ -89,6 +89,11 @@ func TestConnectionErrors_ServerFieldsAreValidated(t *testing.T) {
 
 					return err
 				},
+				"NewDBContext": func() error {
+					_, err := pgtest.TryDBContext(t, context.Background(), cfg, tel)
+
+					return err
+				},
 				"migrate Up": func() error { return postgres.Up(context.Background(), cfg, m) },
 			} {
 				err := run()

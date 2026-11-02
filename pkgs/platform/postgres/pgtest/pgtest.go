@@ -132,6 +132,18 @@ func TryDB(t testing.TB, cfg config.Postgres, tel *otel.Providers) (*gorm.DB, er
 	return db, nil
 }
 
+// TryDBContext is TryDB for the deadline-bound entry (postgres.NewDBContext): connecting and the first ping
+// run under c, and a statement running when c ends is cancelled on the server. Same close and error contract as TryDB.
+func TryDBContext(t testing.TB, c context.Context, cfg config.Postgres, tel *otel.Providers) (*gorm.DB, error) {
+	t.Helper()
+	db, closePool, err := platformpg.NewDBContext(c, cfg, tel)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(closePool)
+	return db, nil
+}
+
 // ClosePool closes db now, for a test that needs the "pool already closed" state
 // (a purge or a probe run against a dead pool, to see how it fails). The close
 // registered by DB then finds it closed, which is a no-op.

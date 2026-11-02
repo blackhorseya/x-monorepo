@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -28,8 +27,9 @@ const (
 	mockFail   = "fail"
 )
 
-// mockTimeout bounds the whole command, including a delivery to the webhook route. A variable only so the
-// regression test can make the wait short; nothing else sets it.
+// mockTimeout is the ONE deadline of the whole command: opening the database, every statement and a delivery to the
+// webhook route all run under the context it makes (runMock), not one budget per step. A variable only so the
+// regression tests can make the wait short; nothing else sets it.
 var mockTimeout = 30 * time.Second
 
 // printedDelivery is what `mock pay` and `mock notify` print: one JSON object with the signed webhook to
@@ -114,25 +114,19 @@ func runMock(args []string, out io.Writer) error {
 		return errors.New("payment-rpc mock pay: --order is required: the order whose checkout is paid")
 	}
 
-	// The whole command is bounded by mockTimeout (#406): the database is opened, read and written under this context,
-	// and if something no context reaches (opening the pool) holds past it, the deadline still ends the command. The
-	// body is left to finish in the background; every write it can still make is under c, which is cancelled by then.
+	// ONE deadline for the whole command (#406): the database is opened, read and written under c, on this goroutine,
+	// and the pool is the one that turns c ending into a cancel request to the server (postgres.NewDBContext). Nothing
+	// is left running behind the return, and a statement that is waiting on a lock when c ends is over on the server
+	// when the command reports.
 	c, cancel := context.WithTimeout(context.Background(), mockTimeout)
 	defer cancel()
-	done := make(chan error, 1)
-	// fire-and-forget: the command ends at the deadline below; the goroutine's only effects are under c, which is cancelled then
-	go func() { done <- runMockBody(c, sub, f, on, amount, out) }()
-	select {
-	case err := <-done:
-		// the server's own timeout (below) can end the statement a hair before the context does
-		if err != nil && strings.Contains(err.Error(), "statement timeout") {
-			return fmt.Errorf("payment-rpc mock %s: deadline exceeded: %w", sub, err)
-		}
-
-		return err
-	case <-c.Done():
-		return fmt.Errorf("payment-rpc mock %s: %w", sub, c.Err())
+	err := runMockBody(c, sub, f, on, amount, out)
+	if err != nil && c.Err() != nil && !errors.Is(err, c.Err()) {
+		// the server's cancellation comes back as SQLSTATE 57014, the dial's as a closed socket: both are the deadline
+		return fmt.Errorf("payment-rpc mock %s: %w: %w", sub, c.Err(), err)
 	}
+
+	return err
 }
 
 // runMockBody is the command after its arguments are sound, under c.
@@ -140,16 +134,6 @@ func runMockBody(c context.Context, sub string, f mockFlags, on bool, amount *ke
 	cfg, err := config.Load()
 	if err != nil {
 		return err
-	}
-	if strings.TrimSpace(cfg.Postgres.URL) != "" {
-		// Cancelling the context abandons the connection, and a backend that is waiting on a lock does not notice: it
-		// would make the write when the lock is let go, after the command had already failed. The server enforces the
-		// deadline itself, lock waits included, and it does so BEFORE the context's deadline (three quarters of what is
-		// left): the statement is over on the server when the command reports. (A statement that only starts in the last
-		// quarter of the budget is not covered; opening the pool and the lookups come first and are fast.)
-		if dl, ok := c.Deadline(); ok {
-			cfg.Postgres.URL = withStatementTimeout(cfg.Postgres.URL, time.Until(dl)*3/4)
-		}
 	}
 	if strings.TrimSpace(cfg.Postgres.URL) == "" {
 		return errors.New("payment-rpc mock: postgres.url is required: the control works on the mock tables the payment-rpc processes share")
@@ -159,7 +143,7 @@ func runMockBody(c context.Context, sub string, f mockFlags, on bool, amount *ke
 		return err
 	}
 	defer telCleanup()
-	db, cleanup, err := postgres.NewDB(cfg.Postgres, tel)
+	db, cleanup, err := postgres.NewDBContext(c, cfg.Postgres, tel)
 	if err != nil {
 		return err
 	}
@@ -216,19 +200,4 @@ func emit(c context.Context, out io.Writer, d printedDelivery, url string) error
 	}
 
 	return json.NewEncoder(out).Encode(d)
-}
-
-// withStatementTimeout adds statement_timeout=d (milliseconds, at least 1) to a Postgres URL or key/value DSN, so
-// the server aborts any statement of this connection that runs longer, lock waits included.
-func withStatementTimeout(raw string, d time.Duration) string {
-	ms := max(d.Milliseconds(), 1)
-	if u, err := url.Parse(raw); err == nil && (u.Scheme == "postgres" || u.Scheme == "postgresql") {
-		q := u.Query()
-		q.Set("statement_timeout", fmt.Sprint(ms))
-		u.RawQuery = q.Encode()
-
-		return u.String()
-	}
-
-	return fmt.Sprintf("%s statement_timeout=%d", raw, ms)
 }
