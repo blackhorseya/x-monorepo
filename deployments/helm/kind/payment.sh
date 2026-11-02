@@ -29,23 +29,26 @@ for what in deploy/$release-payment-serve deploy/$release-payment-consume cronjo
   case $img in */payment-rpc:*) ;; *) fail "$what runs '$img', not the payment-rpc image" ;; esac
 done
 cfg=$(kubectl -n "$ns" get configmap "$release-payment-rpc" -o jsonpath='{.data.config\.yaml}')
-echo "$cfg" | grep -q 'oidc\|jwt' && fail "payment-rpc's ConfigMap carries auth.jwt / auth.oidc (this release's rpc has OIDC on: it must not inherit it)"
-echo "$cfg" | grep -q 'mode: required' || fail "payment-rpc's ConfigMap is not auth.mode required"
-echo "$cfg" | grep -q 'broker: postgres' || fail "payment-rpc's ConfigMap is not the Postgres broker (this release's worker uses Redis; consume reads the outbox tables)"
+# grep -q under pipefail: a pipeline whose reader exits at the first match can fail with SIGPIPE on the writer (CI did,
+# at the rpc env check below), so every check reads a variable (here-string), never a pipe.
+grep -q 'oidc\|jwt' <<<"$cfg" && fail "payment-rpc's ConfigMap carries auth.jwt / auth.oidc (this release's rpc has OIDC on: it must not inherit it)"
+grep -q 'mode: required' <<<"$cfg" || fail "payment-rpc's ConfigMap is not auth.mode required"
+grep -q 'broker: postgres' <<<"$cfg" || fail "payment-rpc's ConfigMap is not the Postgres broker (this release's worker uses Redis; consume reads the outbox tables)"
 key=$(kubectl -n "$ns" get secret "$release-payment-rpc-env" -o jsonpath='{.data.APP_PAYMENT_API_KEY}' | base64 -d)
 auth=$(kubectl -n "$ns" get secret "$release-payment-rpc-env" -o jsonpath='{.data.APP_AUTH_API_KEYS}' | base64 -d)
 [ "$auth" = "rpc=$key:admin" ] || fail "payment-rpc's service key is not exactly rpc=<the key rpc presents>:admin"
 # who is told what: rpc has the address and the key, nobody has the provider credential but the three payment workloads
-kubectl -n "$ns" get deploy "$release-rpc" -o jsonpath='{.spec.template.spec.containers[0].env[*].name}' | tr ' ' '\n' | grep -qx APP_PAYMENT_UPSTREAM \
-  || fail "rpc was not told where payment-rpc is"
+rpcenv=$(kubectl -n "$ns" get deploy "$release-rpc" -o jsonpath='{.spec.template.spec.containers[0].env[*].name}')
+case " $rpcenv " in *" APP_PAYMENT_UPSTREAM "*) ;; *) fail "rpc was not told where payment-rpc is" ;; esac
 for w in rpc worker catalog-rpc; do
   names=$(kubectl -n "$ns" get deploy "$release-$w" -o jsonpath='{.spec.template.spec.containers[*].env[*].name}')
   case " $names " in *" APP_PAYMENT_MOCK_WEBHOOK_SECRET "*) fail "$w holds the provider credential" ;; esac
 done
 for _ in $(seq 1 30); do
-  kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null | grep -q 'payment-rpc consume started' && break; sleep 1
+  clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)
+  grep -q 'payment-rpc consume started' <<<"$clog" && break; sleep 1
 done
-kubectl -n "$ns" logs "deploy/$release-payment-consume" | grep -q 'payment-rpc consume started' || fail "consume never logged that it started"
+grep -q 'payment-rpc consume started' <<<"$clog" || fail "consume never logged that it started"
 
 forward "svc/$release-payment-serve" "$sport" 80 -n "$ns"
 direct="http://127.0.0.1:$sport"
@@ -116,7 +119,7 @@ echo "payment: the ingress routes the webhook path and nothing else (RPC, metric
 # first requests answered by payment-rpc (400); a moment later it recovers.
 sleep 3
 res=$(seq 1 40 | xargs -P 20 -I{} curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H "Host: $host" -d '{}' "$ing/api/payment/webhook")
-n400=$(echo "$res" | grep -c '^400$' || true) n503=$(echo "$res" | grep -c '^503$' || true)
+n400=$(grep -c '^400$' <<<"$res" || true) n503=$(grep -c '^503$' <<<"$res" || true)
 [ "$n400" -ge 1 ] || fail "burst: no request reached payment-rpc ($n400 x 400, $n503 x 503)"
 [ "$n503" -ge 1 ] || fail "burst: 40 requests in a burst were never limited ($n400 x 400, $n503 x 503): the rate limit is not in force"
 sleep 5
