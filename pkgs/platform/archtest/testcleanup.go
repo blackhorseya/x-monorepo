@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -194,14 +196,15 @@ func repoRoot(dir string) string {
 	}
 }
 
-// exemptFromDirectPool: the pgtest package opens the pools, so it is exempt by
-// construction (any directory named pgtest); everything else needs an allowlist
-// line.
+// pgtestDir is the one package that may open pools: the helper everything else
+// goes through. Exempt by construction, not by the allowlist; a directory that
+// merely shares the name is not it.
+const pgtestDir = "pkgs/platform/postgres/pgtest/"
+
+// exemptFromDirectPool: only the canonical pgtest package, then the allowlist.
 func exemptFromDirectPool(rel string, allow []Allow) bool {
-	for _, seg := range strings.Split(rel, "/") {
-		if seg == "pgtest" {
-			return true
-		}
+	if strings.HasPrefix(rel, pgtestDir) {
+		return true
 	}
 	for _, a := range allow {
 		if strings.HasPrefix(rel, a.Path) {
@@ -211,16 +214,65 @@ func exemptFromDirectPool(rel string, allow []Allow) bool {
 	return false
 }
 
-// openerSelectors are the package.Name pairs that open a pool or a connection;
-// "*" is every name of that package. NewDB is matched on its name alone, under any
-// import name (or none).
-var openerSelectors = map[string]map[string]bool{
-	"sql":     {"Open": true, "OpenDB": true},
-	"pgxpool": {"*": true},
-	"pgx":     {"Connect": true, "ConnectConfig": true},
-	"gorm":    {"Open": true},
-	"stdlib":  {"OpenDB": true, "OpenDBFromPool": true},
-	"pgconn":  {"Connect": true, "ConnectConfig": true},
+// openerPackages are the import paths (major-version segments dropped) whose
+// functions open a pool or a connection, and which of their names do; "*" is every
+// name. The match is on the import PATH, so a renamed import is still caught.
+// NewDB is matched on its name alone (it is this repo's own opener, under any
+// package name).
+var openerPackages = map[string]map[string]bool{
+	"database/sql":                 {"Open": true, "OpenDB": true},
+	"github.com/jackc/pgx/pgxpool": {"*": true},
+	"github.com/jackc/pgx":         {"Connect": true, "ConnectConfig": true},
+	"github.com/jackc/pgx/stdlib":  {"OpenDB": true, "OpenDBFromPool": true},
+	"github.com/jackc/pgx/pgconn":  {"Connect": true, "ConnectConfig": true},
+	"gorm.io/gorm":                 {"Open": true},
+}
+
+var majorSegment = regexp.MustCompile(`/v[0-9]+(/|$)`)
+
+// normPath drops module major-version segments: .../pgx/v5/pgxpool -> .../pgx/pgxpool.
+func normPath(p string) string {
+	for majorSegment.MatchString(p) {
+		p = majorSegment.ReplaceAllString(p, "$1")
+	}
+	return strings.TrimSuffix(p, "/")
+}
+
+// defaultName is the package name an import gets when it is not renamed.
+func defaultName(path string) string {
+	parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if !regexp.MustCompile(`^v[0-9]+$`).MatchString(parts[i]) {
+			return parts[i]
+		}
+	}
+	return path
+}
+
+// fileImports maps the local name of each import in f to its normalised path, and
+// lists the dot imports of opener packages (reported as findings: a bare Open( or
+// New( cannot be told from a local function).
+func fileImports(f *ast.File) (names map[string]string, dots []*ast.ImportSpec) {
+	names = map[string]string{}
+	for _, imp := range f.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		np := normPath(path)
+		switch {
+		case imp.Name != nil && imp.Name.Name == ".":
+			if _, ok := openerPackages[np]; ok {
+				dots = append(dots, imp)
+			}
+		case imp.Name != nil && imp.Name.Name == "_":
+		case imp.Name != nil:
+			names[imp.Name.Name] = np
+		default:
+			names[defaultName(path)] = np
+		}
+	}
+	return names, dots
 }
 
 const (
@@ -228,7 +280,7 @@ const (
 	directPoolMsg = "a test opens a pool itself (%s); use pgtest.DB (pool closed by t.Cleanup), pgtest.TryDB (when the open is expected to fail) or pgtest.Conn (one connection). The shape is banned whatever is done with the closer afterwards: it is not a claim that this test is broken"
 )
 
-func isOpenerSelector(s *ast.SelectorExpr) bool {
+func isOpenerSelector(s *ast.SelectorExpr, imports map[string]string) bool {
 	if s.Sel.Name == newDB {
 		return true
 	}
@@ -236,7 +288,18 @@ func isOpenerSelector(s *ast.SelectorExpr) bool {
 	if !ok {
 		return false
 	}
-	names := openerSelectors[x.Name]
+	path, imported := imports[x.Name]
+	if !imported {
+		// Not an import of this file (a fixture without imports, or a local value): fall back
+		// to the usual package names so that the check errs on reporting.
+		for p, names := range openerPackages {
+			if defaultName(p) == x.Name && (names["*"] || names[s.Sel.Name]) {
+				return true
+			}
+		}
+		return false
+	}
+	names := openerPackages[path]
 
 	return names != nil && (names["*"] || names[s.Sel.Name])
 }
@@ -258,6 +321,10 @@ func scanFile(fset *token.FileSet, f *ast.File, exempt bool) ([]Finding, ScanSta
 	// direct-pool: identifiers and selectors, nothing else. A selector's Sel and a
 	// declaration's name are not separate mentions.
 	if !exempt {
+		imports, dots := fileImports(f)
+		for _, imp := range dots {
+			out = append(out, Finding{Pos: fset.Position(imp.Pos()), Rule: RuleDirectPool, Msg: "dot import of a package that opens pools or connections (" + imp.Path.Value + "): a bare call cannot be told from a local function, so the import is the finding; " + strings.TrimPrefix(directPoolMsg, "a test opens a pool itself (%s); ")})
+		}
 		skip := map[*ast.Ident]bool{}
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch x := n.(type) {
@@ -265,7 +332,7 @@ func scanFile(fset *token.FileSet, f *ast.File, exempt bool) ([]Finding, ScanSta
 				skip[x.Name] = true
 			case *ast.SelectorExpr:
 				skip[x.Sel] = true
-				if isOpenerSelector(x) {
+				if isOpenerSelector(x, imports) {
 					out = append(out, Finding{Pos: fset.Position(x.Pos()), Rule: RuleDirectPool, Msg: strings.Replace(directPoolMsg, "%s", selName(x), 1)})
 				}
 			case *ast.Ident:

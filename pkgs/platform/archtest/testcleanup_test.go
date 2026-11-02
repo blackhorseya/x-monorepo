@@ -122,8 +122,8 @@ func TestX(t *testing.T) {
 	_, _ = pgc.Connect(ctx, dsn)
 }`,
 			want: []string{
-				"test-direct-pool@012", "test-direct-pool@013", "test-direct-pool@014",
-				"test-direct-pool@015", "test-direct-pool@016", "test-direct-pool@017",
+				"test-direct-pool@011", "test-direct-pool@012", "test-direct-pool@013",
+				"test-direct-pool@014", "test-direct-pool@015", "test-direct-pool@016",
 			},
 		},
 		{
