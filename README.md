@@ -104,7 +104,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── catalog-rpc/               # catalog 的獨立服務（#320）：只掛 catalog 的 rpc；rpc 以 Connect 問它查價與檢查 SKU（`catalog.upstream`）
-│   ├── payment-rpc/               # payment 的獨立服務（#367 切片 2）：只掛 payment 的 rpc（`StartPayment`／`GetPayment`），認證只認 service key `rpc`；saga 是切片 3
+│   ├── payment-rpc/               # payment 的獨立服務（#367）：`serve`（`StartPayment`／`GetPayment` 認 service key `rpc`，加 webhook route 認簽章）、`consume`（訂閱訂單事件、退款、套用 webhook）、`expire`（逾時與補查的 CronJob）
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）

@@ -281,6 +281,35 @@ watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預
 
 **順帶量：同一個 consumer group 開 2 個 replica 跑指標 B**（batch 100，順序 1、2、2、1、1、2 個 replica，秒）：1 個 replica 為 7.05、5.72、5.69（中位數 5.72）；2 個 replica 為 6.00、5.70、6.63（中位數 6.00）。**沒有量到 2 個 replica 比較快**。每個 replica 的 cursor 列是 `FOR UPDATE`（同一個 topic 的輪詢要輪流領），這是對機制的推演，沒有另外驗證；清完 2000 筆只要 6 秒左右、機器又不安靜，這組樣本也看不出小於一兩秒的差異。所以上面「要不要調」的 replica 建議改成指向 `worker.broker: redis`。
 
+## Payment（`payment-rpc`，#367）
+
+`apps/payment-rpc` 一個 binary、三個子命令，部署時各是一個 workload（chart 與 image 是切片 5；現在只能手動跑 `./bin/payment-rpc <cmd>`）：
+
+| 子命令 | 形狀 | 做什麼 | 沒跑會怎樣 |
+|---|---|---|---|
+| `serve` | 常駐 | Connect `PaymentService`（`StartPayment`／`GetPayment`，只認 service key `rpc`）＋ webhook route `POST /api/payment/webhook`（簽章，不認 API key） | 顧客付不了款；provider 的通知會被 provider 重送到它放棄 |
+| `consume` | 常駐，不聽埠 | 訂閱 `OrderConfirmed`／`OrderCancelled`／`OrderCompleted`（建付款單、終結付款單、必要時要求退款）、`PaymentRefundRequested`（呼叫 provider 退款）、`WebhookReceived`（套用已落地的通知） | 付款單不會建、通知不會套用、退款不會做；事件在 outbox 裡等，不會遺失 |
+| `expire` | 跑一次就結束（CronJob，週期 = `payment.expire_interval`） | 逾時的 `PENDING` 先問 provider 再決定 `EXPIRED`／`CAPTURED`／`NEEDS_REVIEW`；`EXPIRED`／`CANCELLED` 在 `payment.reconcile_window` 內補查；順手刪逾期且已處理的 `webhook_events` | 逾時付款單不會過期、webhook 缺席的款項不會被發現 |
+
+三個都要 `postgres.url`（`--require-durable` 另要求 `serve` 的 `auth.mode: required` 與單一把 `rpc` key）。`consume` 把消費位置放在 **ordering** 的三張事件表上，所以 `task migrate -- up` 必須先把 ordering 與 payment 都跑完，否則 `consume` 啟動時以 `relation … does not exist` 結束（fail closed，不是靜默略過）。
+
+**告警**：`payment_alerts_total{alert}`（process log 同時有一行 ERROR `payment alert`，欄位只有固定類別與 order id）。類別與處理：
+
+| `alert` | 意思 | 怎麼處理 |
+|---|---|---|
+| `amount_mismatch` | provider 說收到的款，金額或幣別與付款單不符；付款單進 `NEEDS_REVIEW` | 到 provider 後台對帳；系統不再動它（第一版沒有系統內出口） |
+| `capture_after_review` | `NEEDS_REVIEW` 的付款單又收到收款通知 | 同上 |
+| `missing_total` | 收到沒有 `total` 的 `OrderConfirmed`（舊事件）；沒有建付款單 | 查發布者；舊事件不能當成 0 元 |
+| `orphan_webhook` | 驗過簽章的收款通知，沒有任何付款單開過那個 checkout | 到 provider 後台查那筆款；通知已標為處理完，不會重試 |
+| `provider_query_stuck` | 逾時的 `PENDING` 連續三輪沒能問到 provider，仍是 `PENDING` | 查 provider 狀態與憑證；恢復後下一輪自動收斂 |
+| `reconcile_incomplete` | 一張 `EXPIRED`／`CANCELLED` 付款單最後一次補查失敗，補查窗口即將關閉 | 到 provider 後台確認有沒有款（已知限制：窗口後才到的款，沒有 webhook 就不會被發現） |
+
+**卡住的退款**：`PaymentRefundRequested` 重試三次（100ms 起、指數退避）後進 `payment.events_poison`，付款單維持 `REFUNDING`。provider 恢復後 `requeue` 那一列（`eventbus.Requeue`；`worker poison` 納入 payment 是切片 3B），退款以付款單 id 為冪等鍵，不會退兩次。
+
+**`webhook_events` 的 retention**：不歸 `worker prune`（它只管事件表與 inbox）。由 `payment-rpc expire` 順手刪「已處理」且早於 `payment.webhook_retention` 的列，每輪最多 `payment.expire_batch` 列；未處理的、`NEEDS_REVIEW` 付款單的通知永遠不刪。這張表是重送通知的去重記憶，所以 `webhook_retention` 必須大於 provider 的重送窗口（mock 是 72h，`payment.mock_redelivery_window`），否則**拒絕啟動**；`0` = 永遠保留。
+
+**Rollback 順序**：全域 `task migrate -- down` 先退 payment（反向註冊順序），它 DROP 的是 payment 自己的事件表與 `webhook_events`；退版前先停 `consume`／`expire`／`serve`，否則通知與事件會寫進一個正在消失的表。
+
 ## Deploy（Helm）
 
 `deployments/helm/x-monorepo/` 是這些 image 的 chart，沒有 dependency、不假設 ingress controller 或 secret 工具。它做的事是把
@@ -329,7 +358,7 @@ WHERE octet_length(sku) NOT BETWEEN 1 AND 64;
 2. 刪除或改名那些列（`DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`，刪之前把查詢結果存起來）。
 3. 重設版本再重跑：`UPDATE inventory.schema_migrations SET version = 8, dirty = false;`，然後 `task migrate -- up`。這個 reset 只適用於上面這種「`0009` 失敗後 dirty」的狀態，不是任意 dirty 版本的通用解（只是不想升級而要退掉時，直接用下面的 Rollback，同一段 SQL 在這個狀態也成立）。
 
-**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的 `0001` 會 `DROP TABLE payment.payments`），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行。兩種狀態用同一段 SQL：9 clean（CHECK 存在）會移除 CHECK 並退回 8；9 dirty（`0009` 失敗，沒有 CHECK）`IF EXISTS` 讓 DROP 略過，只把版本設回 8 clean（超長的列仍在，要再 migrate 先照上面第 1–2 步處理）：
+**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的最新一步 `0002` 會 DROP 掉它的事件表、`payment.inbox`、`payment.webhook_events`、`payment.order_outcomes`（連同資料）），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行。兩種狀態用同一段 SQL：9 clean（CHECK 存在）會移除 CHECK 並退回 8；9 dirty（`0009` 失敗，沒有 CHECK）`IF EXISTS` 讓 DROP 略過，只把版本設回 8 clean（超長的列仍在，要再 migrate 先照上面第 1–2 步處理）：
 
 ```sql
 BEGIN;
@@ -372,7 +401,7 @@ COMMIT;
 
 丟失的範圍：`ordering.orders` 每一列的 `payment_required`（快照隨之消失：退版前以 `ordering.require_payment: true` 進 `CONFIRMED` 的訂單，退版後又可以直接 `CompleteOrder`，所以只在 Payment 還沒上線、沒有任何訂單真的欠款時退），加上 `OrderPaid` 的事件表（切片 1 沒有發布者，表是空的）；訂單與明細本身都留著。`ALTER TABLE` 取 ACCESS EXCLUSIVE，持有到 `COMMIT`。兩種狀態用同一段 SQL（`IF EXISTS`）：9 clean（`0009` 已套用）退回 8；9 dirty（`0009` 失敗，例如 `ALTER TABLE` 在 `lock_timeout` 內拿不到鎖；整個檔案在一個交易裡，所以欄位與事件表都不在）只把版本設回 8 clean，之後排除原因再 `task migrate -- up`。這個 dirty 分支只驗證過「失敗後欄位與事件表都不在」的狀態。這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，兩種狀態都驗證其他 BC 的版本、表、欄位與資料不動。要繼續退 `0008`，在 ordering 回到 `8` 之後用下一段。
 
-**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9` 先照上一段退 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的 `0001` 會 `DROP TABLE payment.payments`），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
+**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9` 先照上一段退 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的最新一步 `0002` 會 DROP 掉它的事件表、`payment.inbox`、`payment.webhook_events`、`payment.order_outcomes`（連同資料）），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
 
 ```sql
 BEGIN;

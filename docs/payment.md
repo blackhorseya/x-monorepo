@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-> **狀態：設計稿，切片 1、2 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`（付款單 aggregate 與 §3 全表、`StartPayment`／`GetPayment`、Postgres／memory repository、`payment.payments` 表、`PaymentProvider` port 與 mock provider）、`apps/payment-rpc serve`。**尚未實作**：`consume`、webhook route、`expire`、退款流程（切片 3）、`apps/rpc` 轉發與 Console 付款頁（切片 4）、image／chart（切片 5）、切換（切片 6）；所以目前沒有任何路徑會走到 `PAID`。
+> **狀態：設計稿，切片 1、2、3A 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`。切片 3A（payment 側的 saga）：`payment-rpc consume`（T1／T7／T7'／T10／T12–T15、退款 T11）、webhook route 與其套用（T3／T4／T8／T9）、`payment-rpc expire`（T5／T6／T6'、補查）、webhook 通知的 retention。**尚未實作**：切片 3B（ordering 訂閱 `PaymentCaptured`／`PaymentExpired`、`poison`／`prune` 納入 payment）、切片 4（`apps/rpc` 轉發與 Console 付款頁）、切片 5（image／chart）、切片 6（切換）；所以目前沒有任何路徑會讓訂單走到 `PAID`。
 > 決策來源：#367 七個決定，加上 Sean 對 PR #369 暴露的未決項的後續裁示（[#367 comment](https://github.com/blackhorseya/x-monorepo/issues/367#issuecomment-6565500716)，decision `d-20261101232833097592-18`）。兩者有衝突時以後者為準；§13 列出哪一條取代了哪一條。
 > 「保證」只列已指定到切片測試的條目；測試名稱是預定名稱，實作時以實際為準。寫不出測試的就不寫成保證。
 > 改動任何已定決定都要回 Sean。標 **〔實作細節〕** 的是本文為了讓已定規則成立而補上的內部做法，實作時可調整，但不得改變它所服務的規則。
@@ -51,6 +51,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 - `OrderConfirmed` 新增 `total`（`common.v1.Money`）。**舊事件沒有 `total` 時視為明確錯誤，不能當成 0 元收款**：payment 的 consumer 回 domain error（drop，不 retry）並告警，不建付款單。
 - **已知限制**：inventory 目前在 `OrderCompleted` 才 commit 預留。第一版 `PAID` 立即走到 `COMPLETED`，沒有問題。之後 Fulfillment 讓 `PAID` 停留時，要改成 `OrderPaid` 時 commit，否則已付款訂單的預留可能過期（24 小時 TTL 的 `expire` 會把它還掉）。
 - Console 顯示 `PAID` 與 `payment_required`（切片 1）。
+- **PAID 的輪詢節奏留給切片 4**：第一版 `PAID` 立刻走到 `COMPLETED`（§2），Console 在付款中輪詢訂單時看到的是 `CONFIRMED` → `COMPLETED`；`PaymentCaptured` 到 `COMPLETED` 之間的延遲是 consume → ordering consumer 兩跳的輪詢間隔，調整輪詢節奏屬於切片 4 的 Console 付款頁。
 
 ## 3. 付款單（`payment.Payment`）
 
@@ -151,6 +152,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 | `payment.not_pending` | `FAILED_PRECONDITION` | 付款單已不是 `PENDING` |
 | `payment.provider_unavailable` | `UNAVAILABLE` | provider 暫時故障（可重試的服務失敗，不是業務前提錯誤）；固定訊息，provider 原始錯誤不外洩 |
 | `payment.permission_denied` | `PERMISSION_DENIED` | admin 不可代付：`StartPayment` 的 `admin=true` 且 `customer_id` 不是付款單的 customer（§6 擁有權）。第一版不開這扇門 |
+| `order.cannot_pay`（ordering） | `FAILED_PRECONDITION`（不到 rpc） | `PaymentCaptured` 到達時訂單不在 `CONFIRMED`（已 `CANCELLED`、`COMPLETED`…），`MarkPaid` 的 domain error，ordering 的 consumer 以 drop 處理（切片 3B）；這張付款單的錢由 Payment 側的 T10（`order_outcome ≠ NONE` → 退款）處理，不靠這個錯誤。權威定義在 `docs/error-codes.md` |
 | `order.payment_required`（ordering） | `FAILED_PRECONDITION` | 快照 `payment_required = true` 的 `CONFIRMED` 訂單被 `CompleteOrder`（§8） |
 
 ## 4. 事件清單
@@ -167,6 +169,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | `payment.v1.PaymentExpired` | payment | ordering | `payment_id`、`order_id`、`customer_id`、`expired_at` | ordering 依快照決定取消訂單或忽略；取消後 inventory 走現有 `OrderCancelled` 還庫存 |
 | `payment.v1.PaymentRefunded` | payment | 無 | `payment_id`、`order_id`、`amount`、`refunded_at` | 保留給之後 |
 | `payment.v1.PaymentRefundRequested`（內部）〔實作細節〕 | payment | payment（`consume`） | `payment_id` | 讓退款呼叫在 DB transaction 之外、走 eventbus 的 retry／poison；不對外承諾 |
+| `payment.v1.WebhookReceived`（內部）〔實作細節〕 | payment（webhook route） | payment（`consume`） | `provider`、`provider_event_id` | webhook route 驗過簽章後，在**同一個 transaction** 寫 `payment.webhook_events` 與這個事件；`consume` 讀儲存的通知套用到付款單（T3／T4／T8／T9）。只帶儲存鍵，不帶通知內容；讓套用走 eventbus 的 retry／poison，commit 後 consumer 掛掉也不會遺失 |
 
 `ordering.v1.OrderCancellationRequested` 的註解寫著「例如 payment timeout」，但本設計**不用它**：逾時一律走 `PaymentExpired`，由 ordering 的狀態機判定（切片 3 順手改註解）。
 
@@ -221,6 +224,9 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 4. 金額和幣別必須和付款單相符；不符時不進 `CAPTURED`，進 `NEEDS_REVIEW` 並告警（T4、T6'、T9）。
 5. `expire` 在標記 `EXPIRED` 前先向 provider 查一次狀態，涵蓋 webhook 沒送到的情況（T5／T6／T6'）。
 6. Log 只寫固定分類與 code，不寫 provider 的原始錯誤或 payload（#347）；簽章、body 與 provider 密鑰不進 log、error、metric label、span。
+7. **回應**：`200` = 已落地（含重送）；`400` = 簽章不符或不是合法通知（provider 不該重試）；`413` = body 超過 1 MiB（讀之前就限）；`500` = 我們自己存不下（provider 該重送）。body 固定文字，不回顯請求或錯誤內容。
+8. **Retention（切片 3A 的決定）**：`payment.webhook_events` 不歸 `worker prune`（它只管事件表與 inbox）。`payment-rpc expire` 每輪順手刪「已處理」且早於 `payment.webhook_retention`（預設 720h，`0` = 不刪）的列，上限 `payment.expire_batch`；未處理的列、`NEEDS_REVIEW` 付款單的列永遠不刪。這張表是重送通知的去重記憶，所以 `webhook_retention` 必須大於 provider 的重送窗口（`PaymentProvider.WebhookRedeliveryWindow`；mock 是 72h），否則拒絕啟動。
+9. **這條 route 不經 Connect 的 interceptor**：沒有 API key、沒有 `http.rate_limit`、沒有 `http.timeout`。簽章在寫入前驗，所以未簽章的洪水只花 CPU 與讀 body 的頻寬（body 上限 1 MiB）而不寫 DB；ingress 層的限流是切片 5 的事。
 
 ### `payment-rpc` 認證入口逐一列出
 
@@ -229,7 +235,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | 入口 | 路徑 | 憑證 | 為什麼 |
 |---|---|---|---|
 | Connect RPC（`PaymentService`） | `/api/<svc>/<Method>` 與原生路徑 | `X-API-Key`，且只有 service key `rpc`；`auth.mode` 必須 `required` | 呼叫者只有 `apps/rpc`；ingress 不對外開（§1） |
-| Webhook | 一條 gin route（路徑待切片 3 定）；ingress 只對外開這條 | **簽章**（provider 簽，用原始 body 驗） | provider 打不出我們的 API key，也不該有；API key 是我們發給自己服務的 credential，給 provider 等於把 service key 交出去。**gin route 不在 Connect chain 內，auth interceptor 不會保護它**，簽章是唯一一道閘 |
+| Webhook | `POST /api/payment/webhook`（gin route，簽章放 header `X-Payment-Signature`）；ingress 只對外開這條 | **簽章**（provider 簽，用原始 body 驗） | provider 打不出我們的 API key，也不該有；API key 是我們發給自己服務的 credential，給 provider 等於把 service key 交出去。**gin route 不在 Connect chain 內，auth interceptor 不會保護它**，簽章是唯一一道閘 |
 | `/api/healthz`、`/api/readyz`、`/api/version` | gin | 無（永遠開著） | probe；`readyz` 只看 payment 自己的 DB，不依賴 provider（同 rpc 的 `readyz` 不依賴 catalog）；provider 全部失敗時 `readyz` 仍 200，由 `TestPayment_Probes` 保證（切片 2） |
 | `/api/metrics` | gin | 無（gin route，不經 auth interceptor，見 `pkgs/platform/server/auth.go` 檔頭註解） | 同其他 app；不經 ingress 對外 |
 | `/api/docs` | gin | 無；預設關 | 同其他 app |
@@ -280,7 +286,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 5 | 部署 | goreleaser 第六個 image、chart（ingress 只開 webhook）、Grafana、alert | 否 |
 | 6 | 切換 | 開啟開關（新部署預設 `true`），kind 跑完整流程與第 5 節全部競態 | **是** |
 
-每片一個 PR，切片 6 之前都不改變現有下單行為。
+每片一個 PR，切片 6 之前都不改變現有下單行為。**例外：切片 3 分兩支（3A、3B）**——3A 是 payment 側（migration、`consume`、webhook、`expire`），3B 是 ordering 訂閱 `PaymentCaptured`／`PaymentExpired` 與 `poison`／`prune` 納入 payment。3B 讀 3A migration 建的 `payment.events_*` 表，所以 3A 合併後才從新 main 開 3B，不做 stacked PR。3A 單獨合併時不改變任何下單行為：沒有人訂閱 payment 的事件，`consume` 也還沒部署（收到 `OrderConfirmed` 建付款單會寫資料，部署 `consume` 是切片 5 的事）。
 
 **切片 3 的 `poison`／`prune`（Sean 後續裁示 #4）**：要改的清單有兩處，都只加表名、不載入領域程式——`apps/worker/poison.go` 的 `schemas`（`worker poison` 與 `worker prune` 共用）與 `apps/rpc/app.go` 的 `NewPoisonService` 清單（admin RPC 的 poison／prune）。`payment` 的表名來源不能是 `pkgs/payment` 套件（會 import 領域程式）；用 platform 的字串常數或 contract 套件。payment 的 outbox／inbox／poison 表形狀與其他 BC 相同，`worker prune` 才能照既有路徑清理。`payment.webhook_events` 的 retention 不在 `PruneSchema` 既有範圍（它只處理 outbox／inbox），切片 3 要決定是否擴充同一入口或另設，並在該切片的 PR 寫明；本文不預設。
 
@@ -324,7 +330,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 
 ## 10. 儲存（`payment` schema）
 
-`payment.payments`、`payment.webhook_events`（`unique(provider, provider_event_id)`、原始 body 與簽章結果、處理狀態）、`payment.order_outcomes`（〔實作細節〕墓碑表，見 T15）、`payment.events`／`payment.inbox`／`payment.poison`（同其他 BC 的 outbox／inbox／poison 形狀）、`payment.schema_migrations`。`apps/migrate` 收集 payment 的 `Migration()`。`postgres.url` 空 → in-memory（`task run`），遵守同一份 `Save` 合約。
+`payment.payments`、`payment.webhook_events`（主鍵 `(provider, provider_event_id)`、原始 body、驗過的事件欄位、`processed_at`；retention 見 §7 Webhook 8）、`payment.order_outcomes`（〔實作細節〕墓碑表，見 T15）、`payment.events`／`payment.inbox`／`payment.poison`（同其他 BC 的 outbox／inbox／poison 形狀）、`payment.schema_migrations`。`apps/migrate` 收集 payment 的 `Migration()`。`postgres.url` 空 → in-memory（`task run`），遵守同一份 `Save` 合約。
 
 ## 11. 不做
 
