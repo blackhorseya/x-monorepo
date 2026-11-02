@@ -459,6 +459,41 @@ groups:
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "45"
 
+      # ordering applied a PaymentCaptured to a CONFIRMED order whose snapshot says no payment: StartPayment refuses such
+      # orders, so this is an upstream defect (the switch flipped between CONFIRMED and payment? consume made a payment
+      # for an order that should not pay?). Zero on a healthy system.
+      - uid: x-monorepo-payment-event-unexpected
+        title: Payment event unexpected
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: sum(increase(ordering_payment_event_total{effect="unexpected"}[1h]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: worker }
+        annotations:
+          summary: "{{ $values.A }} PaymentCaptured event(s) hit an order whose snapshot says no payment in the last hour"
+          description: >-
+            ordering_payment_event_total{effect="unexpected"} should stay 0 (docs/operations.md, "ordering 側"). Look at
+            ordering.require_payment (was it flipped while orders were CONFIRMED?) and at payment-rpc consume (did it open
+            a payment for an order that should not pay?).
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "50"
+
   - orgId: 1
     name: rpc-auth
     folder: x-monorepo

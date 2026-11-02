@@ -9,7 +9,8 @@ provisioned from there, so a typo in a metric name makes a rule that silently ne
 
 Every metric name in a payment panel or rule is looked up in the Go source after the suffixes Prometheus
 adds are taken off: `payment_*` as the quoted instrument name, `eventbus_*` in the Prometheus-names list that
-platform/eventbus/metrics.go documents above its (dotted) instruments.
+platform/eventbus/metrics.go documents above its (dotted) instruments, `ordering_payment_*` as the dotted
+instrument (`ordering.payment_event`, the counter's `_total` added by the exporter).
 """
 
 import json
@@ -25,7 +26,7 @@ DASH = os.path.join(ROOT, "deployments/docker/grafana/dashboards/rpc.json")
 ALERTS = os.path.join(ROOT, "deployments/docker/grafana/provisioning/alerting.yaml")
 DASH_UID = "x-monorepo-rpc"
 
-METRIC = re.compile(r"\b((?:payment|eventbus)_[a-z0-9_]+)")
+METRIC = re.compile(r"\b((?:ordering_payment|payment|eventbus)_[a-z0-9_]+)")
 SUFFIXES = ("_bucket", "_count", "_sum")
 
 
@@ -45,7 +46,7 @@ def main() -> None:
             break
         inside.append(p)
     exprs = " ".join(t["expr"] for p in inside for t in p.get("targets", []))
-    for want in ("payment_reconcile_eligible", "payment_reconcile_oldest_unchecked_seconds", "payment_alerts_total"):
+    for want in ("payment_reconcile_eligible", "payment_reconcile_oldest_unchecked_seconds", "payment_alerts_total", "ordering_payment_event_total"):
         check(want in exprs, f"the Payment row has a panel on {want}")
     check("eventbus_consumer_lag" in exprs and 'consumer_group=~"payment-rpc' in exprs,
           "the Payment row has the consumer lag of payment-rpc's own consumer group")
@@ -56,7 +57,7 @@ def main() -> None:
     check("payment" in groups, "alerting.yaml has a payment group")
     rules = groups["payment"]["rules"]
     uids = {r["uid"] for r in rules}
-    for want in ("x-monorepo-payment-alerts", "x-monorepo-payment-reconcile-stale", "x-monorepo-payment-reconcile-absent"):
+    for want in ("x-monorepo-payment-alerts", "x-monorepo-payment-reconcile-stale", "x-monorepo-payment-reconcile-absent", "x-monorepo-payment-event-unexpected"):
         check(want in uids, f"the payment group has the rule {want}")
     for r in rules:
         check(r["uid"].startswith("x-monorepo-payment-"), f"{r['uid']}: uid prefix")
@@ -86,7 +87,13 @@ _cache: dict = {}
 
 def in_code(name: str) -> bool:
     if name not in _cache:
-        if name.startswith("eventbus_"):
+        if name.startswith("ordering_payment_"):
+            # ordering.payment_event (dotted, unit {event}) is ordering_payment_event_total in Prometheus: the
+            # counter's _total is added by the exporter, the first underscore is the dot of the instrument name
+            inst = name[: -len("_total")] if name.endswith("_total") else name
+            out = subprocess.run(["grep", "-rIl", "--include=*.go", "--exclude=*_test.go", f'"{inst.replace("_", ".", 1)}"', "pkgs", "apps"], cwd=ROOT, capture_output=True, text=True)
+            _cache[name] = bool(out.stdout.strip())
+        elif name.startswith("eventbus_"):
             # the eventbus instruments are dotted (eventbus.consumer.lag) and Prometheus renames them; the
             # package lists the Prometheus names in the comment above its instruments
             _cache[name] = re.search(rf"\b{name}\b", open(os.path.join(ROOT, "pkgs/platform/eventbus/metrics.go")).read()) is not None

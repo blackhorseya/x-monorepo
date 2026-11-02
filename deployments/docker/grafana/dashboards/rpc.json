@@ -1960,6 +1960,48 @@
           "mode": "multi"
         }
       }
+    },
+    {
+      "id": 50,
+      "title": "Payment events applied to orders (increase / 10m by event and effect)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "ordering_payment_event_total{event,effect}: what PaymentCaptured / PaymentExpired did to their order in the worker (applied | ignored | noop | unexpected; refused events are domain errors in usecase_duration_seconds, not here). effect=unexpected must stay 0: a PaymentCaptured for a CONFIRMED order whose snapshot says no payment cannot happen unless something upstream is wrong (docs/payment.md §8); the 'Payment event unexpected' rule watches it. Counter: summed over replicas.",
+      "gridPos": {
+        "x": 0,
+        "y": 121,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (event, effect)(increase(ordering_payment_event_total[10m]))",
+          "legendFormat": "{{event}} / {{effect}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     }
   ]
 }
