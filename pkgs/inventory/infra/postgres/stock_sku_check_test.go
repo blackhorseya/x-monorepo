@@ -362,7 +362,11 @@ func TestStocksSKUCheck_IsolatedFromSharedDatabase(t *testing.T) {
 			if err := db.Exec(`INSERT INTO inventory.stocks (sku, on_hand, reserved, version, updated_at) VALUES ('sku-check-sentinel', 1, 0, 1, now())`).Error; err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { db.Exec(`DELETE FROM inventory.stocks WHERE sku = 'sku-check-sentinel'`) })
+			t.Cleanup(func() {
+				if err := db.Exec(`DELETE FROM inventory.stocks WHERE sku = 'sku-check-sentinel'`).Error; err != nil {
+					t.Errorf("purge sentinel stock: %v", err)
+				}
+			})
 			before := takeSnapshot(t, cfg, db)
 			if before.Version != 9 || before.Dirty || before.Checks == 0 || before.Rows == 0 {
 				t.Fatalf("the shared database is not a non-empty latest fixture to compare against: %+v", before)

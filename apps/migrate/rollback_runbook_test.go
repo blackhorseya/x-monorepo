@@ -237,9 +237,13 @@ func runRollbackCase(t *testing.T, tc rollbackCase) {
 			return
 		}
 		defer func() { _ = fresh.Close(ctx) }()
-		_, _ = fresh.Exec(ctx, `DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`) // the dirty case's over-long row would fail 0009 again
+		if _, err := fresh.Exec(ctx, `DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`); err != nil { // the dirty case's over-long row would fail 0009 again
+			t.Errorf("restore: delete over-long skus: %v", err)
+		}
 		for _, m := range migrations {
-			_, _ = fresh.Exec(ctx, fmt.Sprintf(`UPDATE %s.schema_migrations SET version = version - 1, dirty = false WHERE dirty`, pgx.Identifier{m.Schema}.Sanitize()))
+			if _, err := fresh.Exec(ctx, fmt.Sprintf(`UPDATE %s.schema_migrations SET version = version - 1, dirty = false WHERE dirty`, pgx.Identifier{m.Schema}.Sanitize())); err != nil {
+				t.Errorf("restore %s: clear dirty flag: %v", m.Schema, err)
+			}
 			if err := postgres.Up(ctx, e.cfg, m); err != nil {
 				t.Errorf("restore %s: %v", m.Schema, err)
 			}

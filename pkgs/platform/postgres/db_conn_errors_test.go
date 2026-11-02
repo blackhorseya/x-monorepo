@@ -66,24 +66,20 @@ func TestNewDB_ConnectionRefusedCarriesNoURLText(t *testing.T) {
 // not the server's message, which names the role; and a password that contains
 // "TimeZone=<x>" is a password, not a session timezone.
 func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	base := pgtest.URL(t)
-	admin, adminCleanup, err := postgres.NewDB(config.Postgres{URL: base}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer adminCleanup()
+	admin := pgtest.DB(t, config.Postgres{URL: base}, tel)
 	const role = "leaky_role_conn_errors"
 	password := "pTimeZone=" + secretMarker
 	if err := admin.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", role, password)).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { admin.Exec("DROP ROLE IF EXISTS " + role) })
+	t.Cleanup(func() {
+		if err := admin.Exec("DROP ROLE IF EXISTS " + role).Error; err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatal(err)
@@ -100,14 +96,18 @@ func TestNewDB_PasswordIsNotATimeZoneAndServerTextIsDropped(t *testing.T) {
 			if err := admin.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", name, pw)).Error; err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { admin.Exec("DROP ROLE IF EXISTS " + name) })
+			t.Cleanup(func() {
+				if err := admin.Exec("DROP ROLE IF EXISTS " + name).Error; err != nil {
+					t.Errorf("cleanup: %v", err)
+				}
+			})
 			d := fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=disable",
 				u.Hostname(), u.Port(), strings.TrimPrefix(u.Path, "/"), name, pw)
 			db, cleanup, err := postgres.NewDB(config.Postgres{URL: d}, tel)
 			if err != nil {
 				t.Fatalf("NewDB: %v (the password fragment was sent as the session timezone)", err)
 			}
-			defer cleanup()
+			t.Cleanup(cleanup) // the subtest ends before the parent test, and with it this pool
 			var tz string
 			if err := db.Raw("SHOW timezone").Scan(&tz).Error; err != nil {
 				t.Fatal(err)

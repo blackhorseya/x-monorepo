@@ -33,6 +33,11 @@ import (
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"gorm.io/gorm"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
+	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
 // EnvURL is the opt-in: point it at an existing database to bypass the container.
@@ -69,6 +74,48 @@ func URL(t testing.TB) string {
 		t.Fatal(startErr)
 	}
 	return url
+}
+
+// Telemetry returns quiet providers for a test's pool and shuts them down with
+// t.Cleanup. Call it before DB: cleanups run last-in first-out, so the providers
+// outlive the pool they instrument.
+func Telemetry(t testing.TB) *otel.Providers {
+	t.Helper()
+	tel, shutdown, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
+	if err != nil {
+		t.Fatalf("pgtest: telemetry: %v", err)
+	}
+	t.Cleanup(shutdown)
+	return tel
+}
+
+// DB opens a pool with cfg and closes it with t.Cleanup. The caller gets no
+// closer, so there is nothing to defer: a defer would close the pool when the
+// test function returns, before any t.Cleanup the test registered, and a purge
+// registered with t.Cleanup would then run on a closed pool (#371).
+//
+// Because the close is registered here, before the caller's own t.Cleanup calls,
+// last-in first-out runs the caller's cleanups first, with the pool still open:
+//
+//	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, pgtest.Telemetry(t))
+//	t.Cleanup(func() {
+//		if err := db.Exec("DELETE FROM t WHERE ...").Error; err != nil {
+//			t.Errorf("purge: %v", err)
+//		}
+//	})
+//
+// archtest.RunTestCleanup (every module's pgtest_cleanup_test.go) fails a test
+// that closes a NewDB pool the other way, or whose t.Cleanup discards a write's
+// error. A test that needs the NewDB error itself (it is checking NewDB) still
+// calls platformpg.NewDB, and registers the close with t.Cleanup.
+func DB(t testing.TB, cfg config.Postgres, tel *otel.Providers) *gorm.DB {
+	t.Helper()
+	db, closePool, err := platformpg.NewDB(cfg, tel)
+	if err != nil {
+		t.Fatalf("pgtest: open pool: %v", err) // before Cleanup: NewDB returns a nil closer on error
+	}
+	t.Cleanup(closePool)
+	return db
 }
 
 // Main wraps m.Run so the container started by URL is terminated after the
