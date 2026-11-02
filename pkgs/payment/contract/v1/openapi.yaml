@@ -177,6 +177,84 @@ components:
       title: Payment
       additionalProperties: false
       description: Payment is the single payment of one order.
+    payment.v1.PaymentCaptured:
+      type: object
+      properties:
+        paymentId:
+          type: string
+          title: payment_id
+        orderId:
+          type: string
+          title: order_id
+        customerId:
+          type: string
+          title: customer_id
+        amount:
+          allOf:
+            - $ref: '#/components/schemas/common.v1.Money'
+          title: amount
+        capturedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: captured_at
+      title: PaymentCaptured
+      additionalProperties: false
+      description: |-
+        PaymentCaptured: the provider confirmed the money, amount and currency matching the payment.
+         Ordering decides from its own payment_required snapshot whether this moves the order to PAID
+         (docs/payment.md §8); a payment whose order has already ended is refunded by Payment itself.
+    payment.v1.PaymentExpired:
+      type: object
+      properties:
+        paymentId:
+          type: string
+          title: payment_id
+        orderId:
+          type: string
+          title: order_id
+        customerId:
+          type: string
+          title: customer_id
+        expiredAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: expired_at
+      title: PaymentExpired
+      additionalProperties: false
+      description: |-
+        PaymentExpired: the window ran out and the provider reported no payment. Ordering cancels the
+         order when its snapshot says payment is required.
+    payment.v1.PaymentRefundRequested:
+      type: object
+      properties:
+        paymentId:
+          type: string
+          title: payment_id
+      title: PaymentRefundRequested
+      additionalProperties: false
+      description: |-
+        PaymentRefundRequested is internal to payment: a payment became REFUNDING, and the provider
+         refund call must happen outside any database transaction, with retry and a poison queue.
+    payment.v1.PaymentRefunded:
+      type: object
+      properties:
+        paymentId:
+          type: string
+          title: payment_id
+        orderId:
+          type: string
+          title: order_id
+        amount:
+          allOf:
+            - $ref: '#/components/schemas/common.v1.Money'
+          title: amount
+        refundedAt:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: refunded_at
+      title: PaymentRefunded
+      additionalProperties: false
+      description: 'PaymentRefunded: the full refund went through. Nothing consumes it yet.'
     payment.v1.PaymentStatus:
       type: string
       title: PaymentStatus
@@ -259,6 +337,21 @@ components:
           title: payment
       title: StartPaymentResponse
       additionalProperties: false
+    payment.v1.WebhookReceived:
+      type: object
+      properties:
+        provider:
+          type: string
+          title: provider
+        providerEventId:
+          type: string
+          title: provider_event_id
+      title: WebhookReceived
+      additionalProperties: false
+      description: |-
+        WebhookReceived is internal to payment: the webhook route stored a verified provider
+         notification (payment.webhook_events) and left the processing to `consume`. It carries the
+         storage key, never the notification itself.
 security:
   - apiKey: []
 paths:

@@ -73,7 +73,7 @@ func startEnv(t *testing.T) (*usecase.StartPayment, *txProbe, *postgres.Transact
 	if err = repo.Save(context.Background(), newPayment(t, "pay-1", "ord-1")); err != nil {
 		t.Fatal(err)
 	}
-	probe := &txProbe{Provider: mock.New(mock.Options{CheckoutTTL: 10 * time.Minute, Now: fixedClock{}.Now}), pool: pool}
+	probe := &txProbe{Provider: mock.New(mock.Options{CheckoutTTL: 30 * time.Minute, Now: fixedClock{}.Now}), pool: pool}
 	tx := postgres.NewTransactor(db)
 
 	return usecase.NewStartPayment(repo, probe, tx, fixedClock{}), probe, tx

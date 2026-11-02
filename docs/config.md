@@ -57,8 +57,14 @@
 | `payment.api_key` | `APP_PAYMENT_API_KEY` | 空 | **只有 `apps/rpc` 讀**。rpc 對 payment-rpc 出示的 service credential（payment-rpc 的 `auth.api_keys` 裡名為 `rpc` 的那把）；**機密**：只走 env，不寫進檔案或 log。rpc 永遠只送這把，不轉傳使用者的 credential。拒絕啟動的訊息不含 key |
 | `payment.timeout` | `APP_PAYMENT_TIMEOUT` | `3s` | **只有 `apps/rpc` 讀**。對 payment-rpc 的單次呼叫預算，必須 > 0；逾時 → `UNAVAILABLE`（`payment.unavailable`） |
 | `payment.provider` | `APP_PAYMENT_PROVIDER` | `mock` | **只有 `apps/payment-rpc` 讀**。付款 provider 的名字；第一版只有 `mock`（一個沒有人付得了款的假 gateway，測試與本機走完整流程用），其他值**拒絕啟動**，不會退回 mock |
-| `payment.mock_checkout_ttl` | `APP_PAYMENT_MOCK_CHECKOUT_TTL` | `15m` | **只有 `apps/payment-rpc` 讀**。mock provider 開的 hosted checkout 頁多久後失效（`StartPayment` 回的 `checkout_expires_at`） |
+| `payment.mock_checkout_ttl` | `APP_PAYMENT_MOCK_CHECKOUT_TTL` | `30m` | **只有 `apps/payment-rpc` 讀**。mock provider 能把一個 hosted checkout 維持有效的最長時間（`CheckoutValidity`）。`StartPayment` 要求 checkout 與付款窗口同時到期，所以 **`payment.window` 必須 ≤ 這個值**，否則**拒絕啟動**（有或沒有 `--require-durable` 都檢查）：一張付款單只有一個 checkout，頁面比窗口短，顧客在窗口剩下的時間就付不了款，也沒有第二頁可重開（`docs/payment.md` T2） |
 | `payment.reconcile_window` | `APP_PAYMENT_RECONCILE_WINDOW` | `24h` | **只有 `apps/payment-rpc` 讀**。付款單進入 `EXPIRED`／`CANCELLED` 之後，`expire` 補查 provider 有沒有款的窗口（`docs/payment.md` §3「補查有界」，補查本身是切片 3）。**必須大於** provider 的 checkout 有效期（mock 是 `payment.mock_checkout_ttl`），否則**拒絕啟動**（有或沒有 `--require-durable` 都檢查，看最終生效的值）：顧客在頁面最後一刻付款，補查窗口已經關了，錢就沒人看 |
+| `payment.window` | `APP_PAYMENT_WINDOW` | `30m` | **只有 `apps/payment-rpc consume` 讀**。新付款單多久內可付（`expires_at` = 建立當下 + 這個值）；必須 > 0，且 ≤ provider 的 checkout 有效期（mock 是 `payment.mock_checkout_ttl`），否則拒絕啟動（`serve`／`consume`／`expire` 都檢查；一張付款單只有一個 checkout，與窗口同時到期，見 `docs/payment.md` T2） |
+| `payment.webhook_retention` | `APP_PAYMENT_WEBHOOK_RETENTION` | `720h` | **只有 `apps/payment-rpc expire` 讀**。「已處理」的 webhook 通知保留多久後由 `expire` 刪除；它是重送通知的去重記憶，所以**必須大於** provider 的重送窗口（mock：`payment.mock_redelivery_window`），否則拒絕啟動；`0` = 永遠保留；負數拒絕啟動。未處理的、`NEEDS_REVIEW` 付款單的通知永遠不刪 |
+| `payment.expire_interval` | `APP_PAYMENT_EXPIRE_INTERVAL` | `15m` | **只有 `expire` 讀**。`expire` 多久跑一次（要與 CronJob 週期一致）：判斷「這是補查窗口內最後一次查詢」與「連續三輪沒問到 provider」用的；必須 > 0 |
+| `payment.expire_batch` | `APP_PAYMENT_EXPIRE_BATCH` | `100` | **只有 `expire` 讀**。一輪每份清單最多處理幾張付款單，也是一輪最多刪幾列通知；必須 > 0 |
+| `payment.mock_redelivery_window` | `APP_PAYMENT_MOCK_REDELIVERY_WINDOW` | `72h` | mock provider 聲稱的重送窗口（`webhook_retention` 要大於它） |
+| `payment.mock_webhook_secret` | `APP_PAYMENT_MOCK_WEBHOOK_SECRET` | 空 | mock provider 簽／驗 webhook 的金鑰；**機密**：只走 env，不寫進檔案或 log。空 = 每個 process 一把隨機的（只有同一個 process 內的測試簽得出來；跨 process 的 kind／本機演練要設） |
 | `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 前綴，實際 group 是 `<值>.<bc>`（每個 BC 各自讀完整個 topic）；同名 replica 分工，新名字從哪開始看 `worker.start_from` |
 | `worker.start_from` | `APP_WORKER_START_FROM` | `beginning` | **還沒有 cursor** 的 group 從哪開始：`beginning` 重播所有留存的訊息，`latest` 只收建立之後的。已有 cursor 的 group 不會被移動；redis 模式也套用到 forwarder 的 SQL group 與 stream group |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |

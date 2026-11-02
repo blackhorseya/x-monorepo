@@ -197,22 +197,21 @@ func (x *Payment) CheckStart(now time.Time) error {
 	return nil
 }
 
-// ReusableCheckout returns the checkout URL StartPayment hands out again (T2): the one opened
-// earlier while its page is still valid.
-func (x *Payment) ReusableCheckout(now time.Time) (string, bool) {
-	if x.checkoutURL == "" || !now.Before(x.checkoutExpiresAt) {
-		return "", false
-	}
-
-	return x.checkoutURL, true
+// OpenCheckout returns the checkout URL of this payment, if it opened one. There is one checkout per
+// payment for its whole window (T2): once opened it is handed out again until the window closes, never
+// replaced.
+func (x *Payment) OpenCheckout() (string, bool) {
+	return x.checkoutURL, x.checkoutURL != ""
 }
 
 // AttachCheckout records the hosted checkout the provider opened (T2). The status does not change.
+// The checkout must stay valid until the window ends: there is no second page, so one that ends earlier
+// would strand the buyer for the rest of the window.
 func (x *Payment) AttachCheckout(provider, ref, url string, checkoutExpiresAt, now time.Time) error {
 	if err := x.CheckStart(now); err != nil {
 		return err
 	}
-	if provider == "" || ref == "" || url == "" || !checkoutExpiresAt.After(now) {
+	if provider == "" || ref == "" || url == "" || !checkoutExpiresAt.After(now) || checkoutExpiresAt.Before(x.expiresAt) {
 		return ErrInvalidCheckout
 	}
 	x.provider, x.providerRef, x.checkoutURL, x.checkoutExpiresAt = provider, ref, url, checkoutExpiresAt
@@ -355,6 +354,27 @@ func (x *Payment) RefundSucceeded(now time.Time) (Effect, error) {
 	default:
 		return Effect{}, ErrNotRefunding
 	}
+}
+
+// ReconcileDeadline is when the sweep stops asking the provider whether money arrived on an EXPIRED or
+// CANCELLED payment: terminal_at + window (docs/payment.md §3「補查有界」). The zero Time for a payment
+// that is in neither state.
+func (x *Payment) ReconcileDeadline(window time.Duration) time.Time {
+	if (x.status != StatusExpired && x.status != StatusCancelled) || x.terminalAt.IsZero() {
+		return time.Time{}
+	}
+
+	return x.terminalAt.Add(window)
+}
+
+// Reconcilable says whether the sweep should ask the provider about this payment now: it ended without
+// money (EXPIRED / CANCELLED), a checkout was opened at the provider (a payment that never was cannot have
+// been paid), and the window since it ended has not closed. A payment under review, refunding or refunded
+// is never asked: the system does not move it, or it is already moving.
+func (x *Payment) Reconcilable(now time.Time, window time.Duration) bool {
+	deadline := x.ReconcileDeadline(window)
+
+	return x.providerRef != "" && !deadline.IsZero() && now.Before(deadline)
 }
 
 func (x *Payment) setStatus(s Status, now time.Time) {

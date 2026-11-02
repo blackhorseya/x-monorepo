@@ -454,26 +454,28 @@ func TestReconstitute_Refusals(t *testing.T) {
 	}
 }
 
-func TestStartPaymentCheckout(t *testing.T) {
+// One checkout per payment for its whole window (T2): once opened it is handed out again at any time
+// the payment can still be started, including after the moment a shorter page would have ended.
+func TestOpenCheckout_IsTheOnlyOneForTheWholeWindow(t *testing.T) {
 	x := fixture(t, P, none, false)
-	if url, ok := x.ReusableCheckout(t0); ok || url != "" {
-		t.Fatalf("a payment that never opened a checkout has none to reuse: %q %v", url, ok)
+	if url, ok := x.OpenCheckout(); ok || url != "" {
+		t.Fatalf("a payment that never opened a checkout has none: %q %v", url, ok)
 	}
-
-	checkoutEnds := t0.Add(10 * time.Minute)
-	if err := x.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", checkoutEnds, t0); err != nil {
+	if err := x.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", expires, t0); err != nil {
 		t.Fatal(err)
 	}
-	if x.Provider() != "mock" || x.ProviderRef() != "ref-1" || x.CheckoutURL() != "https://pay.example/c/1" ||
-		!x.CheckoutExpiresAt().Equal(checkoutEnds) || x.Status() != P {
-		t.Fatalf("checkout not recorded: %+v", x)
+	if url, ok := x.OpenCheckout(); !ok || url != "https://pay.example/c/1" {
+		t.Fatalf("OpenCheckout = %q %v, want the URL attached", url, ok)
 	}
-	if url, ok := x.ReusableCheckout(checkoutEnds.Add(-time.Second)); !ok || url != "https://pay.example/c/1" {
-		t.Fatalf("reusable while valid = %q %v", url, ok)
-	}
-	// the page stops working at checkout_expires_at: from then on a new one is needed
-	if url, ok := x.ReusableCheckout(checkoutEnds); ok || url != "" {
-		t.Fatalf("reusable at its expiry = %q %v, want none", url, ok)
+}
+
+// A page that ends before the window strands the buyer for the rest of it (there is no second page); one
+// that outlives it can still take money after the payment expired. The provider is asked for exactly the
+// window, and anything shorter is refused.
+func TestAttachCheckout_RefusesAPageThatEndsBeforeTheWindow(t *testing.T) {
+	x := fixture(t, P, none, false)
+	if err := x.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", expires.Add(-time.Second), t0); !errors.Is(err, payment.ErrInvalidCheckout) {
+		t.Fatalf("AttachCheckout = %v, want %v", err, payment.ErrInvalidCheckout)
 	}
 }
 
@@ -543,5 +545,73 @@ func TestNewEffect(t *testing.T) {
 	}
 	if z := (payment.Effect{}); len(z.Publish()) != 0 || z.Alert() != payment.AlertNone || z.CancelCheckout() {
 		t.Fatal("the zero Effect must be 'nothing'")
+	}
+}
+
+// The reconcile window (docs/payment.md §3「補查有界」): only an EXPIRED / CANCELLED payment that has a checkout
+// at the provider, and only until terminal_at + window.
+func TestReconcilable(t *testing.T) {
+	const window = 24 * time.Hour
+	end := t0.Add(time.Hour) // terminal_at of the fixtures below
+
+	mk := func(st payment.Status, out payment.Outcome, withCheckout bool, terminal time.Time) *payment.Payment {
+		t.Helper()
+		p := payment.ReconstituteParams{
+			ID: "pay-1", OrderID: "ord-1", CustomerID: "cust-1", Amount: money(t, 1000, "TWD"), Status: st, ExpiresAt: expires,
+			Outcome: out, TerminalAt: terminal, UpdatedAt: t0,
+		}
+		if withCheckout {
+			p.Provider, p.ProviderRef, p.CheckoutURL, p.CheckoutExpiresAt = "mock", "ref-1", "https://pay.example/c/1", t0.Add(10*time.Minute)
+		}
+		x, err := payment.Reconstitute(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return x
+	}
+
+	for _, tc := range []struct {
+		name string
+		p    *payment.Payment
+		now  time.Time
+		want bool
+	}{
+		{"expired, inside the window", mk(EXP, none, true, end), end.Add(window - time.Second), true},
+		{"expired, at the deadline", mk(EXP, none, true, end), end.Add(window), false},
+		{"expired, after the deadline", mk(EXP, none, true, end), end.Add(window + time.Hour), false},
+		{"cancelled, inside the window", mk(CAN, cancOu, true, end), end.Add(time.Minute), true},
+		{"never opened a checkout: it cannot have been paid", mk(EXP, none, false, end), end.Add(time.Minute), false},
+		{"expired without an end time", mk(EXP, none, true, time.Time{}), end, false},
+		{"pending", mk(P, none, true, time.Time{}), end, false},
+		{"captured", mk(CAP, none, true, time.Time{}), end, false},
+		{"refunding", mk(REFING, cancOu, true, time.Time{}), end, false},
+		{"refunded", mk(REFED, cancOu, true, time.Time{}), end, false},
+		{"under review: the system does not move it", mk(REV, none, true, time.Time{}), end, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.p.Reconcilable(tc.now, window); got != tc.want {
+				t.Fatalf("Reconcilable = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	if got := mk(EXP, none, true, end).ReconcileDeadline(window); !got.Equal(end.Add(window)) {
+		t.Fatalf("deadline = %v, want %v", got, end.Add(window))
+	}
+	if got := mk(P, none, true, time.Time{}).ReconcileDeadline(window); !got.IsZero() {
+		t.Fatalf("a pending payment has no deadline, got %v", got)
+	}
+}
+
+func TestBacklog(t *testing.T) {
+	waiting := t0.Add(-time.Hour)
+	if b := payment.NewBacklog(3, waiting); b.Eligible() != 3 || !b.OldestUnchecked().Equal(waiting) {
+		t.Fatalf("backlog = %d, %s", b.Eligible(), b.OldestUnchecked())
+	}
+	for _, n := range []int{0, -1} {
+		if b := payment.NewBacklog(n, waiting); b.Eligible() != 0 || !b.OldestUnchecked().IsZero() {
+			t.Fatalf("NewBacklog(%d) = %d, %s; want nothing eligible and no oldest", n, b.Eligible(), b.OldestUnchecked())
+		}
 	}
 }

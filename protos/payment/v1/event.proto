@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package payment.v1;
+
+import "common/v1/money.proto";
+import "google/protobuf/timestamp.proto";
+
+// Integration events of the payment bounded context. The topic of every message is its
+// fully-qualified proto name (e.g. "payment.v1.PaymentCaptured"), and the tables of a topic live in
+// payment's schema (docs/payment.md §4).
+//
+// Published by payment through its transactional outbox, in the same transaction as the payment's
+// state change. PaymentCaptured and PaymentExpired are consumed by ordering; the other three are
+// payment's own (they carry work for payment's `consume` through the same retry / poison path).
+
+// PaymentCaptured: the provider confirmed the money, amount and currency matching the payment.
+// Ordering decides from its own payment_required snapshot whether this moves the order to PAID
+// (docs/payment.md §8); a payment whose order has already ended is refunded by Payment itself.
+message PaymentCaptured {
+  string payment_id = 1;
+  string order_id = 2;
+  string customer_id = 3;
+  common.v1.Money amount = 4;
+  google.protobuf.Timestamp captured_at = 5;
+}
+
+// PaymentExpired: the window ran out and the provider reported no payment. Ordering cancels the
+// order when its snapshot says payment is required.
+message PaymentExpired {
+  string payment_id = 1;
+  string order_id = 2;
+  string customer_id = 3;
+  google.protobuf.Timestamp expired_at = 4;
+}
+
+// PaymentRefunded: the full refund went through. Nothing consumes it yet.
+message PaymentRefunded {
+  string payment_id = 1;
+  string order_id = 2;
+  common.v1.Money amount = 3;
+  google.protobuf.Timestamp refunded_at = 4;
+}
+
+// PaymentRefundRequested is internal to payment: a payment became REFUNDING, and the provider
+// refund call must happen outside any database transaction, with retry and a poison queue.
+message PaymentRefundRequested {
+  string payment_id = 1;
+}
+
+// WebhookReceived is internal to payment: the webhook route stored a verified provider
+// notification (payment.webhook_events) and left the processing to `consume`. It carries the
+// storage key, never the notification itself.
+message WebhookReceived {
+  string provider = 1;
+  string provider_event_id = 2;
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
 )
 
 // Name is what the mock stores on a payment as its provider.
@@ -39,10 +40,13 @@ const (
 
 var _ port.PaymentProvider = (*Provider)(nil)
 
-// Options configure a Provider. The zero value is a working mock with a 15 minute checkout page.
+// Options configure a Provider. The zero value is a working mock whose checkouts may last up to 30 minutes.
 type Options struct {
-	// CheckoutTTL is how long an opened page stays valid; default 15 minutes.
+	// CheckoutTTL is the longest an opened page can stay valid (port.PaymentProvider.CheckoutValidity); a
+	// checkout is opened to end when the caller asks, up to this. Default 30 minutes.
 	CheckoutTTL time.Duration
+	// RedeliveryWindow is how long the mock says it may resend a notification; default 72 hours.
+	RedeliveryWindow time.Duration
 	// Secret signs the webhooks; empty = a random one for this process.
 	Secret []byte
 	// Latency delays every call (it honours the caller's context), to rehearse a slow provider.
@@ -60,7 +64,7 @@ type Provider struct {
 	opts Options
 
 	mu        sync.Mutex
-	seq       int
+	refs      []string // checkout refs in the order they were opened (for assertions)
 	checkouts map[string]*checkout
 }
 
@@ -78,7 +82,10 @@ type checkout struct {
 // New creates a mock provider.
 func New(opts Options) *Provider {
 	if opts.CheckoutTTL <= 0 {
-		opts.CheckoutTTL = 15 * time.Minute
+		opts.CheckoutTTL = 30 * time.Minute
+	}
+	if opts.RedeliveryWindow <= 0 {
+		opts.RedeliveryWindow = 72 * time.Hour
 	}
 	if len(opts.Secret) == 0 {
 		opts.Secret = make([]byte, 32)
@@ -94,6 +101,8 @@ func New(opts Options) *Provider {
 func (x *Provider) Name() string { return Name }
 
 func (x *Provider) CheckoutValidity() time.Duration { return x.opts.CheckoutTTL }
+
+func (x *Provider) WebhookRedeliveryWindow() time.Duration { return x.opts.RedeliveryWindow }
 
 // enter is what every call starts with: the injected latency, then the injected fault.
 func (x *Provider) enter(c context.Context, op string) error {
@@ -116,15 +125,32 @@ func (x *Provider) CreateCheckout(c context.Context, req dto.ProviderCheckoutInp
 		return dto.ProviderCheckoutOutput{}, err
 	}
 
+	// the page ends when the caller says (the payment's window), if the provider can keep one that long
+	now := x.opts.Now()
+	ends := now.Add(x.opts.CheckoutTTL)
+	if !req.ExpiresAt.IsZero() {
+		if req.ExpiresAt.After(ends) {
+			return dto.ProviderCheckoutOutput{}, port.ErrProviderUnavailable
+		}
+		ends = req.ExpiresAt
+	}
+
+	// The ref is the key the payment table and the webhook log keep across every instance and restart
+	// that shares the secret, so it comes from the system's id generator (UUID v7), never from a
+	// counter that starts again in each process.
+	ref, err := idgen.New()
+	if err != nil {
+		return dto.ProviderCheckoutOutput{}, fmt.Errorf("mock: mint a checkout ref: %w", port.ErrProviderUnavailable)
+	}
+
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.seq++
-	ref := fmt.Sprintf("mock_co_%d", x.seq)
 	co := &checkout{
 		paymentID: req.PaymentID, amount: req.Amount, url: "https://mock-pay.invalid/checkout/" + ref,
-		expiresAt: x.opts.Now().Add(x.opts.CheckoutTTL), refunded: map[string]struct{}{},
+		expiresAt: ends, refunded: map[string]struct{}{},
 	}
 	x.checkouts[ref] = co
+	x.refs = append(x.refs, ref)
 
 	return dto.ProviderCheckoutOutput{Ref: ref, URL: co.url, ExpiresAt: co.expiresAt}, nil
 }
@@ -268,6 +294,14 @@ func (x *Provider) Refunds(ref string) int {
 	}
 
 	return len(co.refunded)
+}
+
+// Refs lists the refs of the checkouts ever created, oldest first (for assertions).
+func (x *Provider) Refs() []string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+
+	return append([]string(nil), x.refs...)
 }
 
 // Opened counts the checkouts ever created (for assertions).

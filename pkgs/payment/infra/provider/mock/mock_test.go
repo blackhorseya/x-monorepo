@@ -77,6 +77,29 @@ func TestCheckoutLifecycle(t *testing.T) {
 	}
 }
 
+// The caller names when the checkout ends (the payment's window); the provider honours it up to the longest
+// page it can keep valid, and refuses rather than silently shortening it.
+func TestCheckoutEndsWhenTheCallerSays(t *testing.T) {
+	c := context.Background()
+	now := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	p := mock.New(mock.Options{CheckoutTTL: 5 * time.Minute, Now: func() time.Time { return now }})
+	in := dto.ProviderCheckoutInput{PaymentID: "pay-1", OrderID: "ord-1", Amount: money(t, 1000)}
+
+	in.ExpiresAt = now.Add(3 * time.Minute)
+	co, err := p.CreateCheckout(c, in)
+	if err != nil || !co.ExpiresAt.Equal(now.Add(3*time.Minute)) {
+		t.Fatalf("a window inside the validity: %+v, %v; want it to end at +3m", co, err)
+	}
+	in.ExpiresAt = now.Add(5 * time.Minute)
+	if co, err = p.CreateCheckout(c, in); err != nil || !co.ExpiresAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("a window exactly the validity: %+v, %v; want it to end at +5m", co, err)
+	}
+	in.ExpiresAt = now.Add(5*time.Minute + time.Second)
+	if _, err = p.CreateCheckout(c, in); !errors.Is(err, port.ErrProviderUnavailable) {
+		t.Fatalf("a window longer than the validity: %v, want it refused", err)
+	}
+}
+
 func TestUnknownReferencesAreUnavailable(t *testing.T) {
 	c := context.Background()
 	p := mock.New(mock.Options{})
@@ -187,5 +210,28 @@ func TestFaultAndLatency(t *testing.T) {
 	short := mock.New(mock.Options{Latency: time.Millisecond})
 	if _, err = short.CreateCheckout(c, dto.ProviderCheckoutInput{Amount: money(t, 1)}); err != nil {
 		t.Fatalf("a little latency must still succeed: %v", err)
+	}
+}
+
+// The ref is a key the payment table and the webhook log keep across instances and restarts that
+// share a secret: independent instances never mint the same one, and it is a UUID v7.
+func TestCheckoutRefs_AreUUIDv7AndNeverRepeatAcrossInstances(t *testing.T) {
+	c := context.Background()
+	seen := map[string]bool{}
+	for range 3 { // three "restarts" of the same provider
+		p := mock.New(mock.Options{Secret: []byte("shared-secret-0123456789abcdef!!")})
+		for range 3 {
+			co, err := p.CreateCheckout(c, dto.ProviderCheckoutInput{PaymentID: "pay", Amount: money(t, 5)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(co.Ref) != 36 || co.Ref[14] != '7' {
+				t.Fatalf("ref %q is not a UUID v7", co.Ref)
+			}
+			if seen[co.Ref] {
+				t.Fatalf("ref %q minted twice", co.Ref)
+			}
+			seen[co.Ref] = true
+		}
 	}
 }

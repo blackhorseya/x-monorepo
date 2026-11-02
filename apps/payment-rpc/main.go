@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/payment"
@@ -31,18 +32,23 @@ func main() {
 // change an arg); the default stays off so local development and the tests keep working.
 const requireDurableFlag = "--require-durable"
 
-// serveCommand is the one subcommand of this slice: the RPC server (docs/payment.md §1). consume
-// and expire are the saga's (slice 3); until they exist they are unknown commands, not silent no-ops.
-const serveCommand = "serve"
+// The subcommands (docs/payment.md §1): serve is the RPC server and the webhook route, consume the event
+// handlers, expire one run of the sweep (the CronJob).
+const (
+	serveCommand   = "serve"
+	consumeCommand = "consume"
+	expireCommand  = "expire"
+)
 
 // run is the process after flag handling: args are the command line without the program name.
-// The subcommand is serve, and its only flag is --require-durable; anything else is refused (a typo
-// must not start the service without the guarantee the operator asked for). The messages name the
-// position, never the value.
+// The subcommand is serve or consume, and its only flag is --require-durable; anything else is
+// refused (a typo must not start the service without the guarantee the operator asked for). The
+// messages name the position, never the value.
 func run(args []string) error {
-	if len(args) == 0 || args[0] != serveCommand {
-		return fmt.Errorf("payment-rpc: a subcommand is required, the only one is %s", serveCommand)
+	if len(args) == 0 || (args[0] != serveCommand && args[0] != consumeCommand && args[0] != expireCommand) {
+		return fmt.Errorf("payment-rpc: a subcommand is required: %s, %s or %s", serveCommand, consumeCommand, expireCommand)
 	}
+	cmd := args[0]
 	requireDurable := false
 	for n, a := range args[1:] {
 		if a != requireDurableFlag {
@@ -59,8 +65,15 @@ func run(args []string) error {
 		return err
 	}
 
+	if cmd != serveCommand && strings.TrimSpace(cfg.Postgres.URL) == "" {
+		return fmt.Errorf("payment-rpc: %s needs postgres.url: there is nothing to read or sweep without it", cmd)
+	}
 	if requireDurable {
-		if err := CheckDurable(cfg); err != nil {
+		check := CheckDurable
+		if cmd != serveCommand {
+			check = CheckDurablePostgres
+		}
+		if err := check(cfg); err != nil {
 			return err
 		}
 	}
@@ -68,6 +81,26 @@ func run(args []string) error {
 	provider, err := payment.ProvidePaymentProvider(cfg.Payment)
 	if err != nil {
 		return err
+	}
+
+	if cmd == expireCommand {
+		expire, cleanup, err := InitializeExpire(cfg, provider)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+
+		return expire.Run(c)
+	}
+
+	if cmd == consumeCommand {
+		consumer, cleanup, err := InitializeConsume(cfg, provider)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+
+		return consumer.Run(c)
 	}
 
 	srv, cleanup, err := Initialize(cfg, provider)

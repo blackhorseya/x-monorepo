@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-> **狀態：設計稿，切片 1、2、4 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`（付款單 aggregate 與 §3 全表、`StartPayment`／`GetPayment`、Postgres／memory repository、`payment.payments` 表、`PaymentProvider` port 與 mock provider）、`apps/payment-rpc serve`。**尚未實作**：`consume`、webhook route、`expire`、退款流程（切片 3）、image／chart（切片 5）、切換（切片 6）；所以目前沒有任何路徑會走到 `PAID`。
+> **狀態：設計稿，切片 1、2、3A、4 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`。切片 3A（payment 側的 saga）：`payment-rpc consume`（T1／T7／T7'／T10／T12–T15、退款 T11）、webhook route 與其套用（T3／T4／T8／T9）、`payment-rpc expire`（T5／T6／T6'、補查）、webhook 通知的 retention。切片 4（`apps/rpc` 轉發與 Console 付款頁）已由 #390 合併。**尚未實作**：切片 3B（ordering 訂閱 `PaymentCaptured`／`PaymentExpired`、`poison`／`prune` 納入 payment）、切片 5（image／chart）、切片 6（切換）；所以目前沒有任何路徑會讓訂單走到 `PAID`。
 > 決策來源：#367 七個決定，加上 Sean 對 PR #369 暴露的未決項的後續裁示（[#367 comment](https://github.com/blackhorseya/x-monorepo/issues/367#issuecomment-6565500716)，decision `d-20261101232833097592-18`）。兩者有衝突時以後者為準；§13 列出哪一條取代了哪一條。
 > 「保證」只列已指定到切片測試的條目；測試名稱是預定名稱，實作時以實際為準。寫不出測試的就不寫成保證。
 > 改動任何已定決定都要回 Sean。標 **〔實作細節〕** 的是本文為了讓已定規則成立而補上的內部做法，實作時可調整，但不得改變它所服務的規則。
@@ -51,6 +51,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 - `OrderConfirmed` 新增 `total`（`common.v1.Money`）。**舊事件沒有 `total` 時視為明確錯誤，不能當成 0 元收款**：payment 的 consumer 回 domain error（drop，不 retry）並告警，不建付款單。
 - **已知限制**：inventory 目前在 `OrderCompleted` 才 commit 預留。第一版 `PAID` 立即走到 `COMPLETED`，沒有問題。之後 Fulfillment 讓 `PAID` 停留時，要改成 `OrderPaid` 時 commit，否則已付款訂單的預留可能過期（24 小時 TTL 的 `expire` 會把它還掉）。
 - Console 顯示 `PAID` 與 `payment_required`（切片 1）。
+- **PAID 的輪詢節奏留給切片 4**：第一版 `PAID` 立刻走到 `COMPLETED`（§2），Console 在付款中輪詢訂單時看到的是 `CONFIRMED` → `COMPLETED`；`PaymentCaptured` 到 `COMPLETED` 之間的延遲是 consume → ordering consumer 兩跳的輪詢間隔，調整輪詢節奏屬於切片 4 的 Console 付款頁。
 
 ## 3. 付款單（`payment.Payment`）
 
@@ -86,7 +87,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 | # | 轉移 | 觸發來源 | 條件／動作 | 發布事件 |
 |---|---|---|---|---|
 | T1 | ∅ → `PENDING` | `consume`：`OrderConfirmed` | 驗 `total` 存在；`unique(order_id)` 重送忽略；不打 provider。若 `order_outcomes` 已有該訂單的紀錄（事件亂序），改走 T14 | — |
-| T2 | `PENDING` →（不變，補 `provider_ref`、`checkout_url`）| `serve`：`StartPayment` | 顧客本人；`now < expires_at`；向 provider 開 hosted checkout。**重複呼叫回傳尚未過期的同一個 URL**；`checkout_expires_at` 已過則重開 | — |
+| T2 | `PENDING` →（不變，補 `provider_ref`、`checkout_url`）| `serve`：`StartPayment` | 顧客本人；`now < expires_at`；向 provider 開 hosted checkout。**一張付款單只有一個 checkout**：開的時候要求它與付款窗口同時到期（`checkout_expires_at` = `expires_at`），之後**每次呼叫都回傳同一個 URL**，不重開、不換 `provider_ref`。理由：第二個 checkout 也能被付款，兩筆都收款時沒有定義怎麼退第二筆；`provider_ref` 被換掉，第一個 checkout 的延遲通知就找不到付款單（當孤兒丟掉），取消後不會退款 | — |
 | T3 | `PENDING` → `CAPTURED` | `consume`：webhook `payment.captured` | 金額、幣別與付款單相符 | `PaymentCaptured` |
 | T4 | `PENDING` → `NEEDS_REVIEW` | 同 T3，或 `expire` 查 provider（T6'） | 已收款但金額或幣別不符 | — （告警） |
 | T5 | `PENDING` → `EXPIRED` | `expire` | `now ≥ expires_at`，且**先向 provider 查一次狀態**確認沒收款 | `PaymentExpired` |
@@ -108,6 +109,16 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 每個狀態對每個事件都有結果。「忽略」＝ 記錄後不動付款單、不報錯；「拒絕」＝ 回明確錯誤（`serve`）或 domain error drop（`consume`）；「—」＝ 該狀態不可能收到（但不是靠「其餘拒絕」兜底：實作要有對應測試，見 §9）。
 
 `expire` 對 `EXPIRED`／`CANCELLED` 的補查：這兩個狀態可能已有錢在 provider（T7 取消 checkout 是 best-effort 會失敗；webhook 可能缺席），所以 `expire` 對有 `provider_ref` 的這類付款單也向 provider 查狀態。**補查有界**：只在付款單進入 `EXPIRED`／`CANCELLED` 之後的固定窗口內查（`payment.reconcile_window`，預設 24 小時，必須大於 provider checkout 的有效期，啟動時檢查），窗口後不再查。需要記錄進入終態的時間（`terminal_at`，〔實作細節〕）。沒有 `provider_ref`（從未 `StartPayment`）的付款單不可能收款，不查。窗口後才收款的情況見「已知限制」。
+
+**每輪有界，但不是每筆都保證查到——有條件**：每輪每個清單最多取 `payment.expire_batch` 筆。清單從「最久沒被看過的」開始（`swept_at`，〔實作細節〕：從沒看過的排最前面；看過就推進，**不論 provider 回「未付款」、回錯誤、或查不到**，否則留在清單裡的單會永遠佔住隊頭、後面的單查不到）。條件：**`expire_batch` × 窗口內的輪數 ≥ 窗口內符合條件的筆數**，窗口內每一筆才保證至少被查到一次；條件不成立時不保證，所以量測並告警：`payment_reconcile_eligible`（待查筆數）與 `payment_reconcile_oldest_unchecked_seconds`（最久沒被看過的等了多久）兩個 gauge，後者超過 `reconcile_window` 的一半就發 `reconcile_backlog` 告警（見 `docs/operations.md`）。處理：調大 `expire_batch` 或縮短 `expire_interval`。
+
+**有界掃描盤點**（凡是「LIMIT batch 且處理後不一定離開集合」的掃描都要有進度保證）：
+
+| 掃描 | 處理後會離開集合嗎 | 進度保證 |
+|---|---|---|
+| 到期的 `PENDING`（T5／T6／T6'） | 查到結果會（轉 `EXPIRED`／`CAPTURED`／`NEEDS_REVIEW`）；**查詢失敗不會**（失敗不得轉移） | `swept_at` 游標：失敗也推進，下一輪輪到後面的；仍卡的單由 `provider_query_stuck` 告警 |
+| `EXPIRED`／`CANCELLED` 補查 | **不會**（未付款就留在窗口內） | 同上游標 + 上述條件與 gauge／告警 |
+| `webhook_events` retention | 刪掉就離開；`NEEDS_REVIEW` 付款單的通知不刪，但**排除條件在 `LIMIT` 之前**（子查詢先過濾再取 batch），所以不會佔住隊頭 | 不需要游標；刪除失敗整個重來，沒有單列毒藥 |
 
 事件欄：**A** `OrderConfirmed`（有 `total`）；**A'** `OrderConfirmed`（無 `total`）；**B** `OrderCancelled`；**C** `OrderCompleted`；**D** webhook `payment.captured` 且相符；**D'** 同上但金額／幣別不符；**E** webhook 其他類型或未知類型；**F** `StartPayment`；**G** `expire` 到期（`PENDING`）或補查（`EXPIRED`／`CANCELLED`）且 provider 未收款；**G'** `expire` 查到 provider 已收款相符；**G''** `expire` 查到已收款不符；**H** 退款處理（`PaymentRefundRequested`）。`expire` 未到期一律無動作，不列。
 
@@ -139,6 +150,8 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 
 - **補查窗口之後才收款、而且 webhook 缺席**：付款單停在 `EXPIRED`／`CANCELLED`，錢在 provider，系統不會發現。webhook 若送到仍走 T8（與窗口無關）。這種情況到 provider 後台對帳處理。窗口長度與下限見上方「補查有界」。
 - `payment-rpc` 的補查依賴 provider 的查詢 API 可用；查詢持續失敗時只有告警，沒有自動出口。
+- **一張付款單一個 checkout**（T2）要求 provider 能把 checkout 的有效期開到「付款窗口結束」：`payment.window` 必須 ≤ provider 的 checkout 有效期，否則拒絕啟動。**若真實 provider 做不到（頁面有效期比窗口短、而且不能延長），要先改設計（例如縮短窗口或重新設計重開）才能接，不能直接放寬這個檢查**——放寬等於回到「重開會換掉 `provider_ref`」的錯誤。
+- **mock provider 的 checkout／退款狀態只存在各自的 process 記憶體**（`pkgs/payment/infra/provider/mock`）。`serve`、`consume`、`expire` 是三個獨立 process，各自建一個互不相通的 mock：`serve` 開的 checkout，`consume`／`expire` 的 mock 不認得（查詢與退款回「不可用」，**fail safe**：不會因此誤轉 `EXPIRED`／`CAPTURED`／`REFUNDED`；共用的 `payment.mock_webhook_secret` 只解決驗簽）。所以 **mock 只能在單一 process 內演練完整流程**（測試與 `task run`），不能拿三個 workload 的部署演練補查與退款。**切片 5 部署前的前置條件**：mock 的 checkout／退款狀態改成跨 process 共用（例如放進 Postgres 或換成真實 provider 的 sandbox），或部署只驗證 fail-safe 行為；沒做到之前不得宣稱 kind 驗收（S6）涵蓋補查與退款。狀態各自獨立，**識別碼不會撞**：checkout ref 由 `idgen`（UUID v7）產生、通知 id 由 ref 推出，所以共用 secret 的多個 instance（或重啟）不會存出同一個 `(provider, provider_ref)`，也不會被 webhook 去重鍵當成同一則通知（`TestMockInstances_SharingASecretDoNotCollide`）。
 
 ### 錯誤碼（Connect code 的唯一權威表）
 
@@ -151,6 +164,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 | `payment.not_pending` | `FAILED_PRECONDITION` | 付款單已不是 `PENDING` |
 | `payment.provider_unavailable` | `UNAVAILABLE` | provider 暫時故障（可重試的服務失敗，不是業務前提錯誤）；固定訊息，provider 原始錯誤不外洩 |
 | `payment.permission_denied` | `PERMISSION_DENIED` | admin 不可代付：`StartPayment` 的 `admin=true` 且 `customer_id` 不是付款單的 customer（§6 擁有權）。第一版不開這扇門 |
+| `order.cannot_pay`（ordering） | `FAILED_PRECONDITION`（不到 rpc） | `PaymentCaptured` 到達時訂單不在 `CONFIRMED`（已 `CANCELLED`、`COMPLETED`…），`MarkPaid` 的 domain error，ordering 的 consumer 以 drop 處理（切片 3B）；這張付款單的錢由 Payment 側的 T10（`order_outcome ≠ NONE` → 退款）處理，不靠這個錯誤。權威定義在 `docs/error-codes.md` |
 | `order.payment_required`（ordering） | `FAILED_PRECONDITION` | 快照 `payment_required = true` 的 `CONFIRMED` 訂單被 `CompleteOrder`（§8） |
 
 ## 4. 事件清單
@@ -167,6 +181,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | `payment.v1.PaymentExpired` | payment | ordering | `payment_id`、`order_id`、`customer_id`、`expired_at` | ordering 依快照決定取消訂單或忽略；取消後 inventory 走現有 `OrderCancelled` 還庫存 |
 | `payment.v1.PaymentRefunded` | payment | 無 | `payment_id`、`order_id`、`amount`、`refunded_at` | 保留給之後 |
 | `payment.v1.PaymentRefundRequested`（內部）〔實作細節〕 | payment | payment（`consume`） | `payment_id` | 讓退款呼叫在 DB transaction 之外、走 eventbus 的 retry／poison；不對外承諾 |
+| `payment.v1.WebhookReceived`（內部）〔實作細節〕 | payment（webhook route） | payment（`consume`） | `provider`、`provider_event_id` | webhook route 驗過簽章後，在**同一個 transaction** 寫 `payment.webhook_events` 與這個事件；`consume` 讀儲存的通知套用到付款單（T3／T4／T8／T9）。只帶儲存鍵，不帶通知內容；讓套用走 eventbus 的 retry／poison，commit 後 consumer 掛掉也不會遺失 |
 
 `ordering.v1.OrderCancellationRequested` 的註解寫著「例如 payment timeout」，但本設計**不用它**：逾時一律走 `PaymentExpired`，由 ordering 的狀態機判定（切片 3 順手改註解）。
 
@@ -194,11 +209,16 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | 顧客在付款途中取消訂單 | T7、T10 | S3；S6 kind |
 | 逾時後 provider 才通知成功 | T5、T8；§8（`PaymentCaptured`／`PaymentExpired` 兩列）；T10 條件 | S3；S6 kind |
 | 逾時 → 訂單取消 → 晚收款 | T5 → T12 → T8 → T10 | S3 consumer 測試（完整順序）；S6 kind |
+| **付款單尚不存在**時確認與取消／完成併發 | T1／T14／T15 + 同一訂單的序列化（見下） | S3A Postgres：取消先、確認先兩個交錯順序 |
+| 有效期內已付款，顧客再按一次付款，訂單取消，延遲通知才到 | T2（只有一個 checkout，`provider_ref` 不變）→ T7 → T3／T10 | S3A Postgres |
+| 補查的清單比 batch 長 | §3「每輪有界…有條件」 | S3A memory＋Postgres |
+
+**「付款單尚不存在」這一欄**：付款單 `version` 的 compare-and-set 只能保護已存在的列。`OrderConfirmed`（T1）與 `OrderCancelled`／`OrderCompleted`（T15）在列不存在時各自「先讀、後寫」：讀到「沒有付款單、沒有墓碑」的確認，在取消寫完墓碑之後才建出 `PENDING` 的單，兩個 handler 都 ack，但單是 `PENDING/NONE` 而墓碑是 `CANCELLED`，之後也沒有人補。處理：兩個 use case 在交易裡**先**取同一訂單的 transaction 級 advisory lock（`pg_advisory_xact_lock(hashtext('payment.order'), hashtext(order_id))`，兩個 key 的形式，與其他單 key 的鎖不同命名空間），**鎖之後**才讀付款單與墓碑、才判斷 duplicate；其他路徑（webhook、`expire`、`StartPayment`）只碰已存在的列，靠 `version` CAS，不取這把鎖，所以取鎖順序沒有反向（鎖 → 列；沒有人先持列再要鎖）。consumer 的 inbox 去重那一列在鎖之前寫入，但它只以事件 id 為鍵、不同事件互不相干，不會形成等待環。同型空隙掃過的其他格：兩個 `OrderConfirmed` 併發靠 `unique(order_id)`；兩個墓碑併發靠 `ON CONFLICT DO NOTHING`（先到的為準）；webhook 的 `provider_ref` 只在 `StartPayment` 之後存在，付款單必然已存在，所以「通知先於列」不會發生；`StartPayment` 與取消同時靠 `version` CAS，輸的那個 checkout 會被 `dropUnused` 取消。
 
 ## 6. 發起方式與 RPC
 
 - **建單**：`consume` 收到 `OrderConfirmed` 建 `PENDING` 付款單並開始計時（T1），**此時不打 provider**。這對每張 `CONFIRMED` 訂單都發生，不看快照——ordering 才是看快照的一方（§8）。
-- **`StartPayment(order_id)`**：顧客呼叫才向 provider 開 hosted checkout，回傳導向 URL；重複呼叫回傳尚未過期的同一個 URL（T2）。provider 呼叫不在 DB transaction 內（`decorateNoTx`）。
+- **`StartPayment(order_id)`**：顧客呼叫才向 provider 開 hosted checkout，回傳導向 URL；重複呼叫一律回傳同一個 URL（T2；一張付款單一個 checkout，與付款窗口同時到期）。provider 呼叫不在 DB transaction 內（`decorateNoTx`）。
   - **開關關閉時回 `payment.disabled`**（Sean 後續裁示 #7；Connect code 見 §3 錯誤碼表）。檢查在 `apps/rpc`（它持有 `ordering.require_payment` 設定），在轉發給 `payment-rpc` 之前。
   - 〔實作細節〕同一個 code 也用在「訂單的 `payment_required = false`」：開關後來才打開、但這張單建立時是 `false`，ordering 會忽略它的付款事件，讓顧客付款只會收錢不 `PAID`，所以一樣擋掉。rpc 載入 ordering，可直接讀訂單快照。
 - **`GetPayment`**：client 輪詢進度。
@@ -234,6 +254,9 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 4. 金額和幣別必須和付款單相符；不符時不進 `CAPTURED`，進 `NEEDS_REVIEW` 並告警（T4、T6'、T9）。
 5. `expire` 在標記 `EXPIRED` 前先向 provider 查一次狀態，涵蓋 webhook 沒送到的情況（T5／T6／T6'）。
 6. Log 只寫固定分類與 code，不寫 provider 的原始錯誤或 payload（#347）；簽章、body 與 provider 密鑰不進 log、error、metric label、span。
+7. **回應**：`200` = 已落地（含重送）；`400` = 簽章不符或不是合法通知（provider 不該重試）；`413` = body 超過 1 MiB（讀之前就限）；`500` = 我們自己存不下（provider 該重送）。body 固定文字，不回顯請求或錯誤內容。
+8. **Retention（切片 3A 的決定）**：`payment.webhook_events` 不歸 `worker prune`（它只管事件表與 inbox）。`payment-rpc expire` 每輪順手刪「已處理」且早於 `payment.webhook_retention`（預設 720h，`0` = 不刪）的列，上限 `payment.expire_batch`；未處理的列、`NEEDS_REVIEW` 付款單的列永遠不刪。這張表是重送通知的去重記憶，所以 `webhook_retention` 必須大於 provider 的重送窗口（`PaymentProvider.WebhookRedeliveryWindow`；mock 是 72h），否則拒絕啟動。
+9. **這條 route 不經 Connect 的 interceptor**：沒有 API key、沒有 `http.rate_limit`、沒有 `http.timeout`。簽章在寫入前驗，所以未簽章的洪水只花 CPU 與讀 body 的頻寬（body 上限 1 MiB）而不寫 DB；ingress 層的限流是切片 5 的事。
 
 ### `payment-rpc` 認證入口逐一列出
 
@@ -242,7 +265,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | 入口 | 路徑 | 憑證 | 為什麼 |
 |---|---|---|---|
 | Connect RPC（`PaymentService`） | `/api/<svc>/<Method>` 與原生路徑 | `X-API-Key`，且只有 service key `rpc`；`auth.mode` 必須 `required` | 呼叫者只有 `apps/rpc`；ingress 不對外開（§1） |
-| Webhook | 一條 gin route（路徑待切片 3 定）；ingress 只對外開這條 | **簽章**（provider 簽，用原始 body 驗） | provider 打不出我們的 API key，也不該有；API key 是我們發給自己服務的 credential，給 provider 等於把 service key 交出去。**gin route 不在 Connect chain 內，auth interceptor 不會保護它**，簽章是唯一一道閘 |
+| Webhook | `POST /api/payment/webhook`（gin route，簽章放 header `X-Payment-Signature`）；ingress 只對外開這條 | **簽章**（provider 簽，用原始 body 驗） | provider 打不出我們的 API key，也不該有；API key 是我們發給自己服務的 credential，給 provider 等於把 service key 交出去。**gin route 不在 Connect chain 內，auth interceptor 不會保護它**，簽章是唯一一道閘 |
 | `/api/healthz`、`/api/readyz`、`/api/version` | gin | 無（永遠開著） | probe；`readyz` 只看 payment 自己的 DB，不依賴 provider（同 rpc 的 `readyz` 不依賴 catalog）；provider 全部失敗時 `readyz` 仍 200，由 `TestPayment_Probes` 保證（切片 2） |
 | `/api/metrics` | gin | 無（gin route，不經 auth interceptor，見 `pkgs/platform/server/auth.go` 檔頭註解） | 同其他 app；不經 ingress 對外 |
 | `/api/docs` | gin | 無；預設關 | 同其他 app |
@@ -293,7 +316,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 5 | 部署 | goreleaser 第六個 image、chart（ingress 只開 webhook）、Grafana、alert | 否 |
 | 6 | 切換 | 開啟開關（新部署預設 `true`），kind 跑完整流程與第 5 節全部競態 | **是** |
 
-每片一個 PR，切片 6 之前都不改變現有下單行為。
+每片一個 PR，切片 6 之前都不改變現有下單行為。**例外：切片 3 分兩支（3A、3B）**——3A 是 payment 側（migration、`consume`、webhook、`expire`），3B 是 ordering 訂閱 `PaymentCaptured`／`PaymentExpired` 與 `poison`／`prune` 納入 payment。3B 讀 3A migration 建的 `payment.events_*` 表，所以 3A 合併後才從新 main 開 3B，不做 stacked PR。3A 單獨合併時不改變任何下單行為：沒有人訂閱 payment 的事件，`consume` 也還沒部署（收到 `OrderConfirmed` 建付款單會寫資料，部署 `consume` 是切片 5 的事）。
 
 **切片 3 的 `poison`／`prune`（Sean 後續裁示 #4）**：要改的清單有兩處，都只加表名、不載入領域程式——`apps/worker/poison.go` 的 `schemas`（`worker poison` 與 `worker prune` 共用）與 `apps/rpc/app.go` 的 `NewPoisonService` 清單（admin RPC 的 poison／prune）。`payment` 的表名來源不能是 `pkgs/payment` 套件（會 import 領域程式）；用 platform 的字串常數或 contract 套件。payment 的 outbox／inbox／poison 表形狀與其他 BC 相同，`worker prune` 才能照既有路徑清理。`payment.webhook_events` 的 retention 不在 `PruneSchema` 既有範圍（它只處理 outbox／inbox），切片 3 要決定是否擴充同一入口或另設，並在該切片的 PR 寫明；本文不預設。
 
@@ -308,7 +331,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 舊 `OrderConfirmed`（無 `total`）不當 0 元 | S2/S3 | 全表 A' 欄 | 沒有 `payment.payments` 列；domain error drop |
 | 付款單狀態 × 事件的每一格 | S2/S3 | §3 全表 | domain 表驅動逐格斷言（含「—」格：送進去要有確定結果）；`domain/*` 100% 覆蓋由 CI `cover-gate` 守 |
 | 失敗來源 × 狀態的每一格（不適用格除外） | S3 | §3 失敗來源表、T5、T7、T8、T9、T11 | 對 provider 的查詢、取消 checkout、退款、開 checkout 各做一次「一律失敗」fault injection，斷言狀態、告警／poison／錯誤碼符合該表；positive control：fake 確實被呼叫（計數 > 0），恢復後收斂 |
-| `StartPayment` 重複呼叫 | S2 | T2 | URL 相同／過期後不同；`CreateCheckout` 呼叫次數 |
+| `StartPayment` 重複呼叫 | S2、S3A | T2 | 窗口內任何時間點（含舊版頁面有效期之後）URL 與 `provider_ref` 都相同；`CreateCheckout` 只呼叫一次，且要求的到期 = 付款單 `expires_at`；`payment.window` > provider 有效期 → 拒絕啟動（負例）；「有效期內已付款 → 再呼叫 `StartPayment` → 取消 → 延遲通知」→ `REFUNDING`（Postgres） |
 | `StartPayment` 的 provider 呼叫不在 DB transaction 內 | S2 | §1 例外表 | provider fake 在呼叫當下斷言沒有 open tx（觀察同一個 pool／handle） |
 | 擁有權與 admin 權限 | S2/S4 | §6 擁有權 | 正負例：本人讀／付成功；他人讀／付皆 `NOT_FOUND`；admin 讀成功、代付被拒；rpc 層與 usecase 層各一 |
 | 開關關閉或快照 `false` 時 `StartPayment` | S4 | §6、§3 錯誤碼表 | 預設設定（不設開關）下回 `payment.disabled`；開關打開 + 快照 `false` 也回 |
@@ -317,7 +340,10 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 金額／幣別不符 | S3 | T4、T6'、T9、全表 `NEEDS_REVIEW` 列 | 金額、幣別各一例；`expire` 對 `NEEDS_REVIEW` 單跑一輪狀態不變；不發 `PaymentCaptured` |
 | `expire` 對 `PENDING` 的三種 provider 回應 | S3 | T5、T6、T6' | mock provider 三種回應，webhook 缺席 |
 | `EXPIRED`／`CANCELLED` 的補查 | S3、S6 | T8、T9、T10、§3「補查有界」 | 三個時序：取消先贏、`PaymentCaptured` 先贏、金額不符；各斷言訂單最終狀態與是否出現 `PaymentRefundRequested`；「取消 checkout 失敗」與「逾時」兩種進入方式各一；窗口內外（fake clock）與啟動檢查；positive control：mock provider 被查到；S6 kind 同情境 |
-| 查詢持續失敗的完整序列 | S3、S6 | §3 失敗來源表（`expire` 查 provider 失敗列）、T7 | fake clock + mock provider 查詢一律失敗：`PENDING` 不變 → 預留 TTL sweep → 訂單取消 → T7 → 補查；恢復後依 T8／T9 收斂；S6 以 `expire` CronJob 實跑 |
+| 查詢持續失敗（payment 側） | S3A | §3 失敗來源表（`expire` 查 provider 失敗列）、T7 | fake clock + mock provider 查詢一律失敗：`PENDING` 不變 → **注入** `OrderCancelled`（T7）→ 補查持續失敗不轉移 → 恢復後依 T8／T10 收斂。測試名稱與註解寫明「注入」，不叫完整序列 |
+| 查詢持續失敗的完整序列 | **S3B**、S6 | 同上 | 預留 TTL sweep → ordering 取消訂單 → `OrderCancelled` 到 payment → T7 → 補查；跨過實際 TTL（fake clock）；ordering 訂閱 payment 事件是 3B，所以入口測試在 3B。S6 以 `expire` CronJob 實跑 |
+| 補查每筆都輪得到 | S3A | §3「每輪有界…有條件」 | eligible 筆數 > batch、provider 健康、跑完窗口：每筆都被查到，後方已收款的單進 T8／T10（memory 與 Postgres 各一）；查詢失敗的單不佔住隊頭；backlog gauge／告警（有／無兩例） |
+| 同一訂單的確認與終局併發（付款單尚不存在） | S3A | §5 | per-order 鎖；Postgres 兩個交錯順序（取消先、確認先）都收斂到 `CANCELLED`；把鎖拿掉測試會紅 |
 | 事件亂序與墓碑 | S3 | §4 亂序表、T10、T12、T14、T15 | 各順序的 consumer 測試，Postgres |
 | 正常付款路徑的 `OrderCompleted` | S3 | 全表 `CAPTURED` 列 C 欄、T10 | `order_outcome` 仍為 `NONE`、沒有 `PaymentRefundRequested` |
 | 快照 `false` 的訂單被 `CompleteOrder` | S3 | T7' | consumer 測試 |
@@ -338,7 +364,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 
 ## 10. 儲存（`payment` schema）
 
-`payment.payments`、`payment.webhook_events`（`unique(provider, provider_event_id)`、原始 body 與簽章結果、處理狀態）、`payment.order_outcomes`（〔實作細節〕墓碑表，見 T15）、`payment.events`／`payment.inbox`／`payment.poison`（同其他 BC 的 outbox／inbox／poison 形狀）、`payment.schema_migrations`。`apps/migrate` 收集 payment 的 `Migration()`。`postgres.url` 空 → in-memory（`task run`），遵守同一份 `Save` 合約。
+`payment.payments`、`payment.webhook_events`（主鍵 `(provider, provider_event_id)`、原始 body、驗過的事件欄位、`processed_at`；retention 見 §7 Webhook 8）、`payment.order_outcomes`（〔實作細節〕墓碑表，見 T15）、`payment.events`／`payment.inbox`／`payment.poison`（同其他 BC 的 outbox／inbox／poison 形狀）、`payment.schema_migrations`。`apps/migrate` 收集 payment 的 `Migration()`。`postgres.url` 空 → in-memory（`task run`），遵守同一份 `Save` 合約。
 
 ## 11. 不做
 

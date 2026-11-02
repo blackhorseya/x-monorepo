@@ -8,6 +8,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -30,8 +31,40 @@ func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.S
 		NewReadiness,
 		NoCredentialResolver,
 		NoOIDC,
-		TraceOptions,
+		ServerOptions,
+		eventbus.ProvidePublisher,
 		payment.ProviderSet,
+	)
+
+	return nil, nil, nil
+}
+
+// InitializeConsume builds `payment-rpc consume`: the router and payment's consumer use cases,
+// publishing into the outbox (eventbus.ProvidePublisher) like every other BC. No listener, no auth.
+func InitializeConsume(cfg *config.AppConfig, provider port.PaymentProvider) (*Consumer, func(), error) {
+	wire.Build(
+		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel", "Payment", "Worker"),
+		postgres.NewDB,
+		otel.ProviderSet,
+		usecasex.NewRecorder,
+		eventbus.ProvidePublisher,
+		payment.ConsumerProviderSet,
+		NewConsumer,
+	)
+
+	return nil, nil, nil
+}
+
+// InitializeExpire builds `payment-rpc expire`: the sweep over the database and the provider, publishing
+// into the outbox. No listener, no router.
+func InitializeExpire(cfg *config.AppConfig, provider port.PaymentProvider) (*payment.Expire, func(), error) {
+	wire.Build(
+		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel", "Payment"),
+		postgres.NewDB,
+		otel.ProviderSet,
+		usecasex.NewRecorder,
+		eventbus.ProvidePublisher,
+		payment.ExpireProviderSet,
 	)
 
 	return nil, nil, nil

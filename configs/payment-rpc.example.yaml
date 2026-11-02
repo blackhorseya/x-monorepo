@@ -24,7 +24,17 @@ postgres:
 
 payment:
   provider: mock          # the first version's only provider: a gateway nobody can really pay
-  mock_checkout_ttl: 15m  # how long a checkout page of the mock stays valid
+  mock_checkout_ttl: 30m  # the longest a checkout of the mock can last; payment.window must fit in it
+  mock_redelivery_window: 72h  # how long the mock says it may resend a notification
+  # mock_webhook_secret is a secret: set it with APP_PAYMENT_MOCK_WEBHOOK_SECRET, never here. Empty = a random
+  # one per process (only a test inside the same process can sign with it).
+  window: 30m             # how long a new payment stays payable (`consume`)
+  # `expire` (one run of the sweep) deletes PROCESSED webhook notifications older than this. The log is the dedup
+  # memory of redelivered notifications, so it must be longer than the provider's redelivery window
+  # (mock_redelivery_window here): payment-rpc refuses to start otherwise. 0 keeps everything.
+  webhook_retention: 720h
+  expire_interval: 15m    # how often `expire` runs; keep it equal to the CronJob period
+  expire_batch: 100       # payments looked at per list and notifications deleted per run
   # After a payment is EXPIRED or CANCELLED the expire sweep (a later slice) keeps asking the provider
   # for this long whether money arrived anyway. It must be longer than the provider's checkout
   # validity (mock_checkout_ttl here): payment-rpc refuses to start otherwise.

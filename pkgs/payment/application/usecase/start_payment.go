@@ -23,8 +23,10 @@ const saveAttempts = 3
 // The provider is asked OUTSIDE any database transaction: a checkout is a call to another
 // service, and no connection may be held while waiting for it. So this use case holds the
 // port.Transactor itself and wraps only the write (the CreateOrder shape, §1 例外表), and the
-// provider is never called inside it. A second call while the first checkout page is still valid
-// returns the same URL without asking the provider; once it expired a new page is opened.
+// provider is never called inside it. A payment has ONE checkout, opened to end with its window: every
+// later call returns the same URL without asking the provider. A second checkout could be paid as well,
+// and nothing defines how a second payment is refunded; a notification of the first would also find no
+// payment once its reference was replaced.
 //
 // The provider's own error is never passed on: it is untrusted text that may reflect a credential
 // (#347), so every failure of the provider is the fixed port.ErrProviderUnavailable.
@@ -56,12 +58,13 @@ func (uc *StartPayment) Execute(c context.Context, in dto.StartPaymentInput) (*d
 	if err = uc.check(who, p); err != nil {
 		return nil, err
 	}
-	if _, ok := p.ReusableCheckout(uc.clock.Now()); ok {
+	if _, ok := p.OpenCheckout(); ok {
 		return mapper.ToPaymentOutput(p), nil
 	}
 
 	co, err := uc.provider.CreateCheckout(ctx, dto.ProviderCheckoutInput{
 		PaymentID: p.ID().String(), OrderID: p.OrderID(), Amount: mapper.ToMoneyOutput(p.Amount()),
+		ExpiresAt: p.ExpiresAt(), // one checkout for the whole window: it ends with it
 	})
 	if err != nil {
 		// Whatever it said, the caller and the log get the fixed sentinel only.
@@ -99,7 +102,7 @@ func (uc *StartPayment) Execute(c context.Context, in dto.StartPaymentInput) (*d
 		if err = uc.check(who, p); err != nil {
 			return nil, err
 		}
-		if _, ok := p.ReusableCheckout(uc.clock.Now()); ok {
+		if _, ok := p.OpenCheckout(); ok {
 			return mapper.ToPaymentOutput(p), nil
 		}
 	}

@@ -65,7 +65,7 @@ func newEnv(t *testing.T, fault func(op string) error) *env {
 	t.Helper()
 	e := &env{repo: memory.NewPaymentRepository(), clock: &clock{now: t0}, asked: map[string]int{}}
 	e.prov = mock.New(mock.Options{
-		CheckoutTTL: 10 * time.Minute, Now: e.clock.Now,
+		CheckoutTTL: 30 * time.Minute, Now: e.clock.Now,
 		Fault: func(op string) error {
 			e.mu.Lock()
 			e.asked[op]++
@@ -110,43 +110,42 @@ func startIn(customer string, admin bool) dto.StartPaymentInput {
 	return dto.StartPaymentInput{OrderID: orderID, CustomerID: customer, Admin: admin}
 }
 
-// T2: a second StartPayment while the first page is valid hands out the same URL and asks the provider
-// nothing; once the page expired a new one is opened. The count is CreateCheckout calls, read from the
-// provider itself.
-func TestStartPayment_RepeatCallsReuseTheCheckoutUntilItExpires(t *testing.T) {
+// seenCheckouts records what StartPayment asks of the provider.
+type seenCheckouts struct {
+	port.PaymentProvider
+	asked []dto.ProviderCheckoutInput
+}
+
+func (s *seenCheckouts) CreateCheckout(c context.Context, in dto.ProviderCheckoutInput) (dto.ProviderCheckoutOutput, error) {
+	s.asked = append(s.asked, in)
+
+	return s.PaymentProvider.CreateCheckout(c, in)
+}
+
+// T2: one payment has ONE checkout for its whole window. It is opened to end with the window, and a later
+// StartPayment hands out the same URL at any moment of the window, long after a shorter page would have
+// ended: a second checkout could be paid too, and nothing defines how the second payment would be refunded.
+func TestStartPayment_OneCheckoutForTheWholeWindow(t *testing.T) {
 	e := newEnv(t, nil)
 	e.seed(t)
 	c := context.Background()
+	seen := &seenCheckouts{PaymentProvider: e.prov}
+	start := usecase.NewStartPayment(e.repo, seen, memory.NewTransactor(), e.clock)
 
-	first, err := e.start.Execute(c, startIn(owner, false))
+	first, err := start.Execute(c, startIn(owner, false))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.CheckoutURL == "" || first.Status != "PENDING" || e.calls(mock.OpCreateCheckout) != 1 {
-		t.Fatalf("first = %+v, CreateCheckout calls = %d; want a URL, PENDING, 1 call", first, e.calls(mock.OpCreateCheckout))
+	if len(seen.asked) != 1 || !seen.asked[0].ExpiresAt.Equal(t0.Add(30*time.Minute)) {
+		t.Fatalf("the provider was asked %+v, want one checkout ending with the window (+30m)", seen.asked)
 	}
 
-	e.clock.Advance(9 * time.Minute) // inside the page's 10 minutes
-	again, err := e.start.Execute(c, startIn(owner, false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again.CheckoutURL != first.CheckoutURL || e.calls(mock.OpCreateCheckout) != 1 {
-		t.Fatalf("repeat: url %q (first %q), CreateCheckout calls %d; want the same URL and still 1 call", again.CheckoutURL, first.CheckoutURL, e.calls(mock.OpCreateCheckout))
-	}
-
-	e.clock.Advance(2 * time.Minute) // the page ended at +10m; the payment window (30m) is still open
-	reopened, err := e.start.Execute(c, startIn(owner, false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reopened.CheckoutURL == "" || reopened.CheckoutURL == first.CheckoutURL || e.calls(mock.OpCreateCheckout) != 2 {
-		t.Fatalf("after the page expired: url %q (first %q), calls %d; want a different URL and 2 calls", reopened.CheckoutURL, first.CheckoutURL, e.calls(mock.OpCreateCheckout))
-	}
-	// the new page is what is stored
-	got, err := e.get.Execute(c, dto.GetPaymentInput{OrderID: orderID, CustomerID: owner})
-	if err != nil || got.CheckoutURL != reopened.CheckoutURL {
-		t.Fatalf("stored = %+v, %v; want the reopened URL", got, err)
+	for _, after := range []time.Duration{9 * time.Minute, 11 * time.Minute, 29 * time.Minute} {
+		e.clock.Advance(after - e.clock.Now().Sub(t0))
+		again, err := start.Execute(c, startIn(owner, false))
+		if err != nil || again.CheckoutURL != first.CheckoutURL || len(seen.asked) != 1 {
+			t.Fatalf("at +%s: url %q (first %q), %d checkouts asked, err %v; want the same URL and still 1 checkout", after, again.CheckoutURL, first.CheckoutURL, len(seen.asked), err)
+		}
 	}
 }
 
@@ -328,11 +327,16 @@ func TestStartPayment_LostRaceReturnsTheWinnersCheckout(t *testing.T) {
 	if e.prov.Opened() != 2 {
 		t.Fatalf("opened %d checkouts, want 2 (one each)", e.prov.Opened())
 	}
-	// the loser opened its page first (mock_co_1), then the winner ran inside that call and opened mock_co_2
-	if !e.prov.Cancelled("mock_co_1") || e.prov.Cancelled("mock_co_2") {
-		t.Fatalf("the loser's page (mock_co_1) must be cancelled and the winner's (mock_co_2) kept: cancelled 1=%v 2=%v", e.prov.Cancelled("mock_co_1"), e.prov.Cancelled("mock_co_2"))
+	// the loser opened its page first, then the winner ran inside that call and opened the second
+	refs := e.prov.Refs()
+	if len(refs) != 2 {
+		t.Fatalf("refs = %v, want two", refs)
 	}
-	if loser.CheckoutURL != "https://mock-pay.invalid/checkout/mock_co_2" {
+	first, second := refs[0], refs[1]
+	if !e.prov.Cancelled(first) || e.prov.Cancelled(second) {
+		t.Fatalf("the loser's page (%s) must be cancelled and the winner's (%s) kept: cancelled first=%v second=%v", first, second, e.prov.Cancelled(first), e.prov.Cancelled(second))
+	}
+	if loser.CheckoutURL != "https://mock-pay.invalid/checkout/"+second {
 		t.Fatalf("loser's URL %q is not the winner's page", loser.CheckoutURL)
 	}
 }
@@ -360,8 +364,8 @@ func TestStartPayment_PaymentEndedDuringTheProviderCall(t *testing.T) {
 	if _, err := start.Execute(c, startIn(owner, false)); !errors.Is(err, payment.ErrNotPending) {
 		t.Fatalf("err = %v, want payment.not_pending", err)
 	}
-	if !e.prov.Cancelled("mock_co_1") {
-		t.Fatal("the page opened for a payment that ended meanwhile was not cancelled")
+	if refs := e.prov.Refs(); len(refs) != 1 || !e.prov.Cancelled(refs[0]) {
+		t.Fatalf("the page opened for a payment that ended meanwhile was not cancelled (refs %v)", e.prov.Refs())
 	}
 }
 
@@ -380,8 +384,8 @@ func TestStartPayment_GivesUpAfterBoundedAttempts(t *testing.T) {
 	if !errors.Is(err, payment.ErrStale) {
 		t.Fatalf("err = %v, want ErrStale", err)
 	}
-	if !e.prov.Cancelled("mock_co_1") {
-		t.Fatal("the page of a start that never saved was not cancelled")
+	if refs := e.prov.Refs(); len(refs) != 1 || !e.prov.Cancelled(refs[0]) {
+		t.Fatalf("the page of a start that never saved was not cancelled (refs %v)", e.prov.Refs())
 	}
 }
 
@@ -400,7 +404,7 @@ func TestStartPayment_InfrastructureFailureIsReportedAndDropsThePage(t *testing.
 	if _, err := start.Execute(context.Background(), startIn(owner, false)); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the store's error", err)
 	}
-	if !e.prov.Cancelled("mock_co_1") {
-		t.Fatal("the page of a start that failed to save was not cancelled")
+	if refs := e.prov.Refs(); len(refs) != 1 || !e.prov.Cancelled(refs[0]) {
+		t.Fatalf("the page of a start that failed to save was not cancelled (refs %v)", e.prov.Refs())
 	}
 }

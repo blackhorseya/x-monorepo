@@ -18,6 +18,7 @@ var (
 	ErrInvalidOutcome    = kernel.NewError(kernel.KindInvalidArgument, "payment.invalid_outcome", "the order outcome does not fit the payment status")
 	ErrInvalidCheckout   = kernel.NewError(kernel.KindInvalidArgument, "payment.invalid_checkout", "the checkout needs a provider, a reference, a url and a later expiry")
 	ErrMissingTotal      = kernel.NewError(kernel.KindInvalidArgument, "payment.missing_total", "the order carries no total; a missing total is never collected as zero")
+	ErrInvalidWebhook    = kernel.NewError(kernel.KindInvalidArgument, "payment.invalid_webhook", "the notification is not one a payment can be told about")
 	ErrNotFound          = kernel.NewError(kernel.KindNotFound, "payment.not_found", "payment not found")
 	ErrNotPending        = kernel.NewError(kernel.KindFailedPrecondition, "payment.not_pending", "the payment is no longer pending")
 	ErrExpired           = kernel.NewError(kernel.KindFailedPrecondition, "payment.expired", "the payment window has closed")

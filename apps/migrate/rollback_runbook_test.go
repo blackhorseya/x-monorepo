@@ -163,6 +163,9 @@ func (e *rollbackEnv) seedEveryTable(t *testing.T) {
 	e.exec(t, `INSERT INTO ordering.inbox (message_id) VALUES ('sentinel')`)
 
 	e.exec(t, `INSERT INTO payment.payments (id, order_id, customer_id, amount, currency, status, order_outcome, expires_at, version, updated_at) VALUES ('payment-sentinel', 'rollback-order', 'rollback-customer', 100, 'USD', 'PENDING', 'NONE', now() + interval '1 hour', 1, now())`)
+	e.exec(t, `INSERT INTO payment.inbox (message_id) VALUES ('sentinel')`)
+	e.exec(t, `INSERT INTO payment.order_outcomes (order_id, outcome, recorded_at) VALUES ('rollback-order', 'CANCELLED', now())`)
+	e.exec(t, `INSERT INTO payment.webhook_events (provider, provider_event_id, event_type, provider_ref, body, received_at) VALUES ('mock', 'sentinel', 'payment.captured', 'ref-sentinel', '\x7b7d', now())`)
 
 	for _, table := range tables {
 		switch {
