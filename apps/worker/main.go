@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -60,6 +61,10 @@ func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 			cfg, err := load()
 			if err != nil {
 				return err
+			}
+			// the snapshot of a new order is taken here: refuse before connecting to anything
+			if err = config.CheckRequirePayment(cfg.Ordering, cfg.Payment); err != nil {
+				return fmt.Errorf("worker: %w", err)
 			}
 			if cfg.Postgres.URL == "" {
 				return errors.New("postgres.url is required: the event tables are the outbox the worker reads or forwards")

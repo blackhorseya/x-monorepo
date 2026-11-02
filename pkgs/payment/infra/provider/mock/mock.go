@@ -39,6 +39,9 @@ const (
 	OpRefund         = "refund"
 )
 
+// AllOps lists the operations Options.Fault and `payment-rpc mock fail` can name.
+var AllOps = []string{OpCreateCheckout, OpGetPayment, OpCancelCheckout, OpRefund}
+
 var _ port.PaymentProvider = (*Provider)(nil)
 
 // Options configure a Provider. The zero value is a working mock whose checkouts may last up to 30 minutes.
@@ -56,6 +59,10 @@ type Options struct {
 	// call. The call still ends as port.ErrProviderUnavailable for the caller (the answer is the
 	// "provider's own error text" that must never get out). Tests use it to inject failures.
 	Fault func(op string) error
+	// FaultsFromStore makes every call also ask the Store whether its operation was set to fail
+	// (Store.SetFault, i.e. `payment-rpc mock fail`), so that a fault set in one process is seen by all of
+	// them. Off by default: a deployment that is not rehearsing never reads the table (payment.mock_control).
+	FaultsFromStore bool
 	// Now is the clock; default time.Now().UTC().
 	Now func() time.Time
 	// Store keeps the checkouts, payments and refunds; default NewMemoryStore() (this process only).
@@ -109,6 +116,12 @@ func (x *Provider) enter(c context.Context, op string) error {
 	}
 	if x.opts.Fault != nil && x.opts.Fault(op) != nil {
 		return port.ErrProviderUnavailable
+	}
+	if x.opts.FaultsFromStore {
+		// a store that cannot answer fails the call as well: "no fault" must never be the shape of "unknown"
+		if on, err := x.store.Faulted(c, op); err != nil || on {
+			return port.ErrProviderUnavailable
+		}
 	}
 
 	return nil
@@ -220,6 +233,7 @@ func (x *Provider) VerifyWebhook(body []byte, signature string) (dto.ProviderWeb
 
 // Delivery is one webhook the mock would POST: the raw body and its signature header value.
 type Delivery struct {
+	EventID   string // the provider's id of the event: the key the webhook log de-duplicates on
 	Body      []byte
 	Signature string
 }
@@ -248,7 +262,7 @@ func (x *Provider) Notify(id, typ, ref string, amount kernel.Money) Delivery {
 func (x *Provider) delivery(id, typ, ref string, amount kernel.Money) Delivery {
 	body, _ := json.Marshal(event{ID: id, Type: typ, Ref: ref, Amount: amount.Amount(), Currency: amount.Currency()})
 
-	return Delivery{Body: body, Signature: x.sign(body)}
+	return Delivery{EventID: id, Body: body, Signature: x.sign(body)}
 }
 
 // The helpers below are for assertions. A store that cannot answer panics rather than return a zero

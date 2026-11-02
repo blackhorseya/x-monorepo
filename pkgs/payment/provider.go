@@ -119,7 +119,11 @@ func ProvidePaymentProvider(cfg config.Payment, db *gorm.DB) (port.PaymentProvid
 	var p port.PaymentProvider
 	switch cfg.Provider {
 	case mock.Name:
-		opts := mock.Options{CheckoutTTL: cfg.MockCheckoutTTL, RedeliveryWindow: cfg.MockRedeliveryWindow, Secret: []byte(cfg.MockWebhookSecret)}
+		opts := mock.Options{
+			CheckoutTTL: cfg.MockCheckoutTTL, RedeliveryWindow: cfg.MockRedeliveryWindow, Secret: []byte(cfg.MockWebhookSecret),
+			// faults set by `payment-rpc mock fail` live in the database: only a provider over it can read them
+			FaultsFromStore: cfg.MockControl && db != nil,
+		}
 		if db != nil {
 			opts.Store = postgres.NewMockStore(db)
 		}

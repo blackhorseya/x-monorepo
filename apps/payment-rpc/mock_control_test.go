@@ -35,6 +35,15 @@ func newControlEnv(t *testing.T) *consumeEnv {
 	t.Helper()
 	e := newConsumeEnv(t)
 	e.prov = mock.New(mock.Options{Store: paymentpg.NewMockStore(e.db), Secret: []byte(mockSecret)})
+	// the mock's tables are shared by every test of the package: empty before, and after (a fault left set
+	// would fail the next test's provider)
+	cleanMock := func() {
+		if err := e.db.Exec("TRUNCATE payment.mock_checkouts, payment.mock_faults CASCADE").Error; err != nil {
+			t.Errorf("truncate the mock tables: %v", err)
+		}
+	}
+	cleanMock()
+	t.Cleanup(cleanMock)
 	for _, kv := range os.Environ() {
 		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, config.EnvPrefix+"_") {
 			t.Setenv(k, "")

@@ -66,11 +66,10 @@ type Client struct {
 // round, or one that is not an http(s) URL, or a non-positive payment.timeout, is refused whether or not
 // the switch is on. No error carries the key.
 func New(cfg config.Payment, ordering config.Ordering, tel *otel.Providers) (*Client, error) {
+	if err := config.CheckRequirePayment(ordering, cfg); err != nil {
+		return nil, fmt.Errorf("payment client: %w", err)
+	}
 	if cfg.Upstream == "" && cfg.APIKey == "" {
-		if ordering.RequirePayment {
-			return nil, errors.New("payment client: ordering.require_payment is on but payment.upstream and payment.api_key (APP_PAYMENT_UPSTREAM, APP_PAYMENT_API_KEY) are not set")
-		}
-
 		return &Client{}, nil
 	}
 	u, err := url.Parse(cfg.Upstream)

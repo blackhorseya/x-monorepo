@@ -45,6 +45,20 @@ type Ordering struct {
 	RequirePayment bool `mapstructure:"require_payment"`
 }
 
+// CheckRequirePayment is the one rule for "ordering.require_payment is on": there must be a payment-rpc to
+// pay at, i.e. payment.upstream is set. Both apps that act on the switch apply it before they connect to
+// anything: rpc (which also needs payment.api_key to call it) and the worker (which takes the payment_required
+// snapshot and must NOT hold the key: it is rpc's service credential). Without it every new order would
+// stay CONFIRMED, waiting for a payment nobody can start, until the reservation TTL cancels it.
+func CheckRequirePayment(o Ordering, p Payment) error {
+	if o.RequirePayment && strings.TrimSpace(p.Upstream) == "" {
+		return errors.New("ordering.require_payment is on but payment.upstream (APP_PAYMENT_UPSTREAM) is not set: " +
+			"orders would wait for a payment nobody can start; set payment.upstream to payment-rpc, or turn the switch off")
+	}
+
+	return nil
+}
+
 // Payment configures payment (docs/payment.md). Provider, ReconcileWindow and MockCheckoutTTL are read
 // by apps/payment-rpc only; Upstream, APIKey and Timeout by apps/rpc only (how it reaches payment-rpc).
 type Payment struct {

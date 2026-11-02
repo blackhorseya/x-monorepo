@@ -20,6 +20,10 @@ func TestMemoryStore_Faults(t *testing.T) {
 	storetest.RunFaults(t, func(*testing.T) mock.Store { return mock.NewMemoryStore() })
 }
 
+func TestMemoryStore_StoredFaults(t *testing.T) {
+	storetest.RunStoredFaults(t, func(*testing.T) mock.Store { return mock.NewMemoryStore() })
+}
+
 // brokenStore cannot answer: its error text carries something that must never reach a caller.
 type brokenStore struct{ mock.Store }
 

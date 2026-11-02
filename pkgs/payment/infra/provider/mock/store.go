@@ -40,6 +40,11 @@ type Store interface {
 	Refunds(c context.Context, ref string) (int, error)
 	// Refs lists every checkout's ref, oldest first.
 	Refs(c context.Context) ([]string, error)
+	// SetFault makes the operation (one of AllOps) fail for every provider over this store (on) or stops it
+	// (off); setting what is already set is a success.
+	SetFault(c context.Context, op string, on bool) error
+	// Faulted reports whether the operation is set to fail.
+	Faulted(c context.Context, op string) (bool, error)
 }
 
 // MemoryStore keeps everything in this process: the default, and what `task run` (no database) uses.
@@ -47,6 +52,7 @@ type MemoryStore struct {
 	mu        sync.Mutex
 	refs      []string
 	checkouts map[string]*memCheckout
+	faults    map[string]struct{}
 }
 
 type memCheckout struct {
@@ -57,7 +63,9 @@ type memCheckout struct {
 var _ Store = (*MemoryStore)(nil)
 
 // NewMemoryStore creates an empty in-process store.
-func NewMemoryStore() *MemoryStore { return &MemoryStore{checkouts: map[string]*memCheckout{}} }
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{checkouts: map[string]*memCheckout{}, faults: map[string]struct{}{}}
+}
 
 func (s *MemoryStore) Create(_ context.Context, ref string, co Checkout) error {
 	s.mu.Lock()
@@ -131,4 +139,24 @@ func (s *MemoryStore) Refs(context.Context) ([]string, error) {
 	defer s.mu.Unlock()
 
 	return append([]string(nil), s.refs...), nil
+}
+
+func (s *MemoryStore) SetFault(_ context.Context, op string, on bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if on {
+		s.faults[op] = struct{}{}
+	} else {
+		delete(s.faults, op)
+	}
+
+	return nil
+}
+
+func (s *MemoryStore) Faulted(_ context.Context, op string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.faults[op]
+
+	return ok, nil
 }

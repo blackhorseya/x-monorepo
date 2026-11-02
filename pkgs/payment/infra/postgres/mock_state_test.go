@@ -287,7 +287,7 @@ func mockStoreFor(t *testing.T) mock.Store {
 	t.Helper()
 	db := testDB(t)
 	clean := func() {
-		if err := db.Exec(`TRUNCATE payment.mock_refunds, payment.mock_checkouts`).Error; err != nil {
+		if err := db.Exec(`TRUNCATE payment.mock_refunds, payment.mock_checkouts, payment.mock_faults`).Error; err != nil {
 			t.Errorf("truncate mock tables: %v", err)
 		}
 	}
@@ -304,4 +304,8 @@ func TestMockStore_Contract(t *testing.T) {
 
 func TestMockStore_Faults(t *testing.T) {
 	storetest.RunFaults(t, mockStoreFor)
+}
+
+func TestMockStore_StoredFaults(t *testing.T) {
+	storetest.RunStoredFaults(t, mockStoreFor)
 }
