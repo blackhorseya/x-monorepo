@@ -73,6 +73,10 @@ type Payment struct {
 	// never in a file or a log). Empty = a random one per process, which only a test in the same process
 	// can sign with.
 	MockWebhookSecret string `mapstructure:"mock_webhook_secret"`
+	// MockControl switches on the mock provider's control entry (`payment-rpc mock pay|notify|fail`) and makes
+	// every process of the mock honour the faults it sets. Off by default and only meaningful for provider
+	// "mock": it is for kind and tests, where nobody can really pay (docs/payment.md §9 S6).
+	MockControl bool `mapstructure:"mock_control"`
 	// Window is how long a new payment stays payable (expires_at = creation + Window). Default 30m.
 	Window time.Duration `mapstructure:"window"`
 	// WebhookRetention is how long a PROCESSED payment.webhook_events row is kept; `expire` deletes the
@@ -477,6 +481,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("payment.mock_checkout_ttl", 30*time.Minute)
 	v.SetDefault("payment.mock_redelivery_window", 72*time.Hour)
 	v.SetDefault("payment.mock_webhook_secret", "")
+	v.SetDefault("payment.mock_control", false)
 	v.SetDefault("payment.window", 30*time.Minute)
 	v.SetDefault("payment.webhook_retention", 720*time.Hour)
 	v.SetDefault("payment.expire_interval", 15*time.Minute)
