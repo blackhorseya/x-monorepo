@@ -5,6 +5,7 @@
 package payment
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/google/wire"
@@ -61,10 +62,28 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 	return postgres.NewTransactor(db)
 }
 
-// ProvidePaymentProvider builds the payment provider. SPEC STAGE: whatever payment.provider says, it
-// is the mock, and reconcile_window is not looked at.
+// ProvidePaymentProvider is not in ProviderSet: the composition root builds the provider before it
+// wires anything (so a configuration that cannot work refuses to start before a database is opened)
+// and hands it to the injector, which is also how a test puts its own provider behind the real server.
+//
+// It builds the payment provider payment.provider names and refuses to start
+// on a configuration that would lose money without a sound: reconcile_window must outlast the
+// provider's checkout pages (docs/payment.md §3「補查有界」), or a customer paying at the very end
+// of a page could pay after the sweep stopped looking.
 func ProvidePaymentProvider(cfg config.Payment) (port.PaymentProvider, error) {
-	return mock.New(mock.Options{CheckoutTTL: cfg.MockCheckoutTTL}), nil
+	var p port.PaymentProvider
+	switch cfg.Provider {
+	case mock.Name:
+		p = mock.New(mock.Options{CheckoutTTL: cfg.MockCheckoutTTL})
+	default:
+		return nil, fmt.Errorf("payment: payment.provider %q is not supported (the first version has %q only)", cfg.Provider, mock.Name)
+	}
+
+	if cfg.ReconcileWindow <= p.CheckoutValidity() {
+		return nil, fmt.Errorf("payment: payment.reconcile_window (%s) must be longer than the provider's checkout validity (%s)", cfg.ReconcileWindow, p.CheckoutValidity())
+	}
+
+	return p, nil
 }
 
 // decorate is the one place that decides which cross-cutting decorators every read use case of

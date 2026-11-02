@@ -40,11 +40,15 @@ const serveCommand = "serve"
 // must not start the service without the guarantee the operator asked for). The messages name the
 // position, never the value.
 func run(args []string) error {
+	if len(args) == 0 || args[0] != serveCommand {
+		return fmt.Errorf("payment-rpc: a subcommand is required, the only one is %s", serveCommand)
+	}
 	requireDurable := false
-	for _, a := range args {
-		if a == requireDurableFlag {
-			requireDurable = true
+	for n, a := range args[1:] {
+		if a != requireDurableFlag {
+			return fmt.Errorf("payment-rpc: unknown argument #%d (the only one is %s)", n+2, requireDurableFlag)
 		}
+		requireDurable = true
 	}
 
 	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -7,6 +7,7 @@ require (
 	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
+	github.com/blackhorseya/x-monorepo/pkgs/payment v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/spf13/cobra v1.10.2
@@ -124,5 +125,7 @@ replace (
 replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory
 
 replace github.com/blackhorseya/x-monorepo/pkgs/catalog => ../../pkgs/catalog
+
+replace github.com/blackhorseya/x-monorepo/pkgs/payment => ../../pkgs/payment
 
 replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity
