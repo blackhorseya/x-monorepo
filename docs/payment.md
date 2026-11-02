@@ -271,7 +271,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | `/api/healthz`、`/api/readyz`、`/api/version` | gin | 無（永遠開著） | probe；`readyz` 只看 payment 自己的 DB，不依賴 provider（同 rpc 的 `readyz` 不依賴 catalog）；provider 全部失敗時 `readyz` 仍 200，由 `TestPayment_Probes` 保證（切片 2） |
 | `/api/metrics` | gin | 無（gin route，不經 auth interceptor，見 `pkgs/platform/server/auth.go` 檔頭註解） | 同其他 app；不經 ingress 對外 |
 | `/api/docs` | gin | 無；預設關 | 同其他 app |
-| 啟動拒絕（fail closed） | — | `auth.jwt` 有設、`auth.oidc.enabled`、`auth.mode` 開著但 `auth.api_keys` 空；`--require-durable` 另要求 `auth.mode: required`、`auth.api_keys` 恰好一把且名為 `rpc`、`postgres.url` 不空 | #323：傳 nil 不等於停用 |
+| 啟動拒絕（fail closed） | — | `auth.jwt` 有設、`auth.oidc.enabled`、`auth.mode` 開著但 `auth.api_keys` 空；`--require-durable` 另要求 `auth.mode: required`、`auth.api_keys` 恰好一把且名為 `rpc`、`postgres.url` 不空，以及（mock provider）`payment.mock_webhook_secret` 不是空或全空白——`serve`／`consume`／`expire` 都檢查，external Secret 的 key 在但值是空的 `optional: false` 擋不住；`worker` 與 `rpc` 則在最終設定帶有 provider credential 時拒絕啟動（`docs/operations.md`） | #323：傳 nil 不等於停用 |
 | 沒有的入口 | — | 沒有 streaming RPC（auth 是 unary-only）；沒有 Bearer；沒有 identity key | 加了要另外包 |
 
 `consume`、`expire` 是背景程序，沒有對外 listener；`serve` 與它們共用同一份 provider 密鑰設定，但只有 `serve` 的 webhook route 讀「驗簽金鑰」。

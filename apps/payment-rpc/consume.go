@@ -81,5 +81,5 @@ func CheckDurablePostgres(cfg *config.AppConfig) error {
 		return errors.New("payment-rpc: --require-durable: postgres.url is empty; there is nothing to read or sweep")
 	}
 
-	return nil
+	return checkProviderSecret(cfg)
 }

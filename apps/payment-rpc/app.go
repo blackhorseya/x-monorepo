@@ -18,6 +18,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/payment"
 	paymentrpc "github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/rpc"
 	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -110,6 +111,18 @@ func CheckDurable(cfg *config.AppConfig) error {
 
 	if n, only := apiKeyNames(cfg.Auth.APIKeys); n != 1 || only != serviceKeyName {
 		return fmt.Errorf("payment-rpc: --require-durable: auth.api_keys must hold exactly one key, named %q (found %d)", serviceKeyName, n)
+	}
+
+	return checkProviderSecret(cfg)
+}
+
+// checkProviderSecret is the part of --require-durable every workload shares: with the mock provider, payment.mock_webhook_secret
+// has to be a real value. An external Secret can hold the key with an empty or blank value (optional: false only catches a
+// MISSING key); the mock then signs with a random secret of its own in every process, and serve could not verify what another
+// signed. The refusal names the setting, never a value.
+func checkProviderSecret(cfg *config.AppConfig) error {
+	if cfg.Payment.Provider == payment.MockProvider && strings.TrimSpace(cfg.Payment.MockWebhookSecret) == "" {
+		return errors.New("payment-rpc: --require-durable: payment.mock_webhook_secret is empty or blank; every process would sign with a random secret of its own and serve could not verify what another signed")
 	}
 
 	return nil

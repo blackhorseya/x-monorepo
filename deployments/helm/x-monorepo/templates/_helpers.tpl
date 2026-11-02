@@ -457,6 +457,13 @@ would stay CONFIRMED.
 {{- fail (printf "worker.extraEnv must not set %s: the worker does not load payment and never holds a provider credential" $e.name) -}}
 {{- end -}}
 {{- end -}}
+{{- /* config.* is written verbatim into the release-wide ConfigMap, which rpc, the worker and the CronJobs mount: a payment credential there is readable by all of them. The binaries refuse it too (the worker and rpc at start); this is the render-time wall. */ -}}
+{{- $cp := default dict .Values.config.payment -}}
+{{- range $k := list "mock_webhook_secret" "api_key" -}}
+{{- if index $cp $k -}}
+{{- fail (printf "config.payment.%s must not be set: the release-wide ConfigMap is read by rpc, the worker and the CronJobs, and a payment credential does not belong in it; payment-rpc's own Secret (secrets.paymentRpc.*) carries it, and rpc gets the service key by APP_PAYMENT_API_KEY" $k) -}}
+{{- end -}}
+{{- end -}}
 {{- $o := default dict .Values.config.ordering -}}
 {{- if $o.require_payment -}}
 {{- if not .Values.paymentRpc.enabled -}}
