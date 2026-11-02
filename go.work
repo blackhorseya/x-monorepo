@@ -3,6 +3,7 @@ go 1.27
 use (
 	./apps/catalog-rpc
 	./apps/migrate
+	./apps/payment-rpc
 	./apps/rpc
 	./apps/worker
 	./pkgs/catalog
@@ -10,6 +11,7 @@ use (
 	./pkgs/inventory
 	./pkgs/kernel
 	./pkgs/ordering
+	./pkgs/payment
 	./pkgs/platform
 	./tools/stripvalidate
 )

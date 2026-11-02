@@ -27,18 +27,20 @@ import (
 	identitypg "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
+	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
 // migrations lists every BC, in dependency order: inventory publishes into
-// ordering's event tables, so ordering goes first; identity and catalog stand alone.
+// ordering's event tables, so ordering goes first; identity, catalog and payment stand alone.
 var migrations = []postgres.Migration{
 	orderingpg.Migration(),
 	inventorypg.Migration(),
 	identitypg.Migration(),
 	catalogpg.Migration(),
+	paymentpg.Migration(),
 }
 
 func main() {

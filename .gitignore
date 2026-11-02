@@ -520,5 +520,6 @@ playwright-report/
 # `go build ./...` inside a single-package app module drops the binary in its root; binaries belong in /bin
 /apps/catalog-rpc/catalog-rpc
 /apps/migrate/migrate
+/apps/payment-rpc/payment-rpc
 /apps/rpc/rpc
 /apps/worker/worker

@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-> **狀態：設計稿（#367）。切片 1（Ordering 契約）已實作**：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。**其餘尚未實作**——`pkgs/payment`、`apps/payment-rpc` 在 repo 裡不存在，切片 1 沒有任何路徑會走到 `PAID`。
+> **狀態：設計稿，切片 1、2 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`（付款單 aggregate 與 §3 全表、`StartPayment`／`GetPayment`、Postgres／memory repository、`payment.payments` 表、`PaymentProvider` port 與 mock provider）、`apps/payment-rpc serve`。**尚未實作**：`consume`、webhook route、`expire`、退款流程（切片 3）、`apps/rpc` 轉發與 Console 付款頁（切片 4）、image／chart（切片 5）、切換（切片 6）；所以目前沒有任何路徑會走到 `PAID`。
 > 決策來源：#367 七個決定，加上 Sean 對 PR #369 暴露的未決項的後續裁示（[#367 comment](https://github.com/blackhorseya/x-monorepo/issues/367#issuecomment-6565500716)，decision `d-20261101232833097592-18`）。兩者有衝突時以後者為準；§13 列出哪一條取代了哪一條。
 > 「保證」只列已指定到切片測試的條目；測試名稱是預定名稱，實作時以實際為準。寫不出測試的就不寫成保證。
 > 改動任何已定決定都要回 Sean。標 **〔實作細節〕** 的是本文為了讓已定規則成立而補上的內部做法，實作時可調整，但不得改變它所服務的規則。
@@ -150,6 +150,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 | `payment.expired` | `FAILED_PRECONDITION` | `PENDING` 已過 `expires_at`、`expire` 尚未處理 |
 | `payment.not_pending` | `FAILED_PRECONDITION` | 付款單已不是 `PENDING` |
 | `payment.provider_unavailable` | `UNAVAILABLE` | provider 暫時故障（可重試的服務失敗，不是業務前提錯誤）；固定訊息，provider 原始錯誤不外洩 |
+| `payment.permission_denied` | `PERMISSION_DENIED` | admin 不可代付：`StartPayment` 的 `admin=true` 且 `customer_id` 不是付款單的 customer（§6 擁有權）。第一版不開這扇門 |
 | `order.payment_required`（ordering） | `FAILED_PRECONDITION` | 快照 `payment_required = true` 的 `CONFIRMED` 訂單被 `CompleteOrder`（§8） |
 
 ## 4. 事件清單
@@ -202,6 +203,9 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
   - 〔實作細節〕同一個 code 也用在「訂單的 `payment_required = false`」：開關後來才打開、但這張單建立時是 `false`，ordering 會忽略它的付款事件，讓顧客付款只會收錢不 `PAID`，所以一樣擋掉。rpc 載入 ordering，可直接讀訂單快照。
 - **`GetPayment`**：client 輪詢進度。
 - 擁有權：付款單的 `customer_id` 來自事件；非本人（非 admin）一律 `NOT_FOUND`，同 `GetOrder` 的形狀。admin 可讀，不可 `StartPayment` 代付（第一版不開）。
+  - **「本人」「admin」由誰說了算**（切片 2 定案）：`payment-rpc` 的呼叫者永遠只有持有 service key `rpc` 的 `apps/rpc`，所以 request 帶兩個欄位：`customer_id`（rpc 驗完身分後填的使用者）與 `admin`（該使用者是否持有 admin role）。`payment-rpc` 相信它們，唯一的前提是請求通過了 auth interceptor（沒有有效的 service key 進不來）；這也是 service key 只能有一把的另一個理由（§1）。`customer_id` 空白是 `INVALID_ARGUMENT`，**不是**「任何人」。
+  - `GetPayment`：`customer_id` 等於付款單的 customer，或 `admin=true`，才讀得到；否則 `NOT_FOUND`（和「這張訂單沒有付款單」同一個答案）。
+  - `StartPayment`：`customer_id` 等於付款單的 customer 才可以；不是的話，`admin=true` 回 `payment.permission_denied`（代付，admin 付自己的單不受影響），`admin=false` 回 `NOT_FOUND`。
 
 ## 7. Provider、webhook 與認證邊界
 
@@ -226,7 +230,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 |---|---|---|---|
 | Connect RPC（`PaymentService`） | `/api/<svc>/<Method>` 與原生路徑 | `X-API-Key`，且只有 service key `rpc`；`auth.mode` 必須 `required` | 呼叫者只有 `apps/rpc`；ingress 不對外開（§1） |
 | Webhook | 一條 gin route（路徑待切片 3 定）；ingress 只對外開這條 | **簽章**（provider 簽，用原始 body 驗） | provider 打不出我們的 API key，也不該有；API key 是我們發給自己服務的 credential，給 provider 等於把 service key 交出去。**gin route 不在 Connect chain 內，auth interceptor 不會保護它**，簽章是唯一一道閘 |
-| `/api/healthz`、`/api/readyz`、`/api/version` | gin | 無（永遠開著） | probe；設計上 `readyz` 只看 payment 自己的 DB，不依賴 provider（同 rpc 的 `readyz` 不依賴 catalog），切片 2 補測試才算保證 |
+| `/api/healthz`、`/api/readyz`、`/api/version` | gin | 無（永遠開著） | probe；`readyz` 只看 payment 自己的 DB，不依賴 provider（同 rpc 的 `readyz` 不依賴 catalog）；provider 全部失敗時 `readyz` 仍 200，由 `TestPayment_Probes` 保證（切片 2） |
 | `/api/metrics` | gin | 無（gin route，不經 auth interceptor，見 `pkgs/platform/server/auth.go` 檔頭註解） | 同其他 app；不經 ingress 對外 |
 | `/api/docs` | gin | 無；預設關 | 同其他 app |
 | 啟動拒絕（fail closed） | — | `auth.jwt` 有設、`auth.oidc.enabled`、`auth.mode` 開著但 `auth.api_keys` 空；`--require-durable` 另要求 `auth.mode: required`、`auth.api_keys` 恰好一把且名為 `rpc`、`postgres.url` 不空 | #323：傳 nil 不等於停用 |

@@ -1,0 +1,44 @@
+# Template for configs/payment-rpc.yaml (gitignored): `task payment-rpc` copies it there on first
+# use and loads it via APP_CONFIG, the way `task catalog-rpc` loads configs/catalog-rpc.yaml; another
+# file: task payment-rpc PAYMENT_CONFIG=<file>. Every key can also be set as APP_<SECTION>_<KEY>;
+# env beats file beats the built-in defaults, as for rpc.
+# This is payment-rpc's own file, like its own ConfigMap in the Helm chart: it never reads
+# configs/local.yaml, whose rpc-only settings (OIDC, JWT, user keys) it would refuse or must not see.
+
+http:
+  addr: ":8082"   # rpc is :8080 and catalog-rpc :8081
+
+auth:
+  mode: required
+  # The one service key rpc will present (a later slice wires rpc to it). payment-rpc believes the
+  # customer_id and admin flag a request carries only because its caller holds this key, so it is the
+  # only key that may ever be listed here: never put a user's key in auth.api_keys.
+  # A local dev key, nothing here is a credential.
+  api_keys: "rpc=dev-payment-service-key-0123456789abcdef:admin"
+  # Deliberately absent: auth.jwt and auth.oidc. payment-rpc accepts static auth.api_keys only and
+  # refuses to start on either.
+
+postgres:
+  # the compose Postgres; `task migrate -- up` creates the payment schema in it
+  url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+
+payment:
+  provider: mock          # the first version's only provider: a gateway nobody can really pay
+  mock_checkout_ttl: 15m  # how long a checkout page of the mock stays valid
+  # After a payment is EXPIRED or CANCELLED the expire sweep (a later slice) keeps asking the provider
+  # for this long whether money arrived anyway. It must be longer than the provider's checkout
+  # validity (mock_checkout_ttl here): payment-rpc refuses to start otherwise.
+  reconcile_window: 24h
+
+log:
+  level: debug
+  format: text
+
+otel:
+  # OTLP/gRPC — `task compose-up` runs grafana/otel-lgtm here (Grafana :3000). Empty = telemetry off
+  # (nothing is exported, no "otel exporting" log). A collector that is not up does not stop it
+  # from starting: readyz stays 200.
+  endpoint: 127.0.0.1:4317
+  insecure: true     # otel-lgtm is plaintext gRPC
+  # keep it empty: the service name is then the executable's (payment-rpc), not rpc's
+  service_name: ""

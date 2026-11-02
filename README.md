@@ -34,6 +34,7 @@ task lint test      # depguard 強制分層與 BC 邊界
 task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）；第一次會把 config.example.yaml 複製成 configs/local.yaml（gitignored）
 task catalog-rpc    # 另一個終端、在 task run 之前：:8081 的 catalog 服務，讀自己的 configs/catalog-rpc.yaml（gitignored，從 catalog-rpc.example.yaml 複製；不讀 local.yaml），telemetry 送 otel-lgtm
+task payment-rpc    # 另一個終端（選用，目前沒有人呼叫它）：:8082 的 payment 服務，讀自己的 configs/payment-rpc.yaml（gitignored，從 payment-rpc.example.yaml 複製），provider 是 mock
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
 
@@ -93,6 +94,9 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │   └── catalog/                   # ── 第四個 BC：商品價格的 server 端來源，沒有 event（docs/catalog.md）──
 │       ├── domain/product/        # Product aggregate（sku、name、price（每個 product 各自的幣別）、active、optimistic version）
 │       └── application/usecase/   # Upsert / Get / List / Deactivate + QuotePrices（批次報價，分得出不存在與已下架；ordering 的 `adapters/pricing` 經 contract 呼叫它）
+│   └── payment/                   # ── 第五個 BC：訂單的單一付款單，經 provider 的 hosted checkout 收款（docs/payment.md；切片 2 沒有 event）──
+│       ├── domain/payment/        # Payment aggregate + 狀態 × 事件全表（每格一個 domain 方法）
+│       └── infra/provider/mock/   # PaymentProvider 的 mock：hosted checkout、簽章 webhook、延遲與故障注入
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / catalog-rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
@@ -100,6 +104,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── catalog-rpc/               # catalog 的獨立服務（#320）：只掛 catalog 的 rpc；rpc 以 Connect 問它查價與檢查 SKU（`catalog.upstream`）
+│   ├── payment-rpc/               # payment 的獨立服務（#367 切片 2）：只掛 payment 的 rpc（`StartPayment`／`GetPayment`），認證只認 service key `rpc`；saga 是切片 3
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）
@@ -123,7 +128,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
 | [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、ordering 怎麼用它定價（rpc 經 Connect 問獨立的 catalog-rpc）、舊 client 還送 `unit_price` 會怎樣、Console 的 Products 頁 |
-| [`docs/payment.md`](docs/payment.md) | payment BC **設計稿（#367；切片 1 的 ordering 契約已實作，`pkgs/payment` 尚未）**：付款單狀態機與狀態 × 事件全表、事件、訂單 `payment_required` 快照 × 目前開關矩陣、webhook 與 `payment-rpc` 認證入口、切片與保證對照 |
+| [`docs/payment.md`](docs/payment.md) | payment BC **設計稿（#367，切片 1（ordering 契約）、切片 2 已實作：付款單 aggregate、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`；saga 與其餘尚未）**：付款單狀態機與狀態 × 事件全表、事件、訂單 `payment_required` 快照 × 目前開關矩陣、webhook 與 `payment-rpc` 認證入口、切片與保證對照 |
 | [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
