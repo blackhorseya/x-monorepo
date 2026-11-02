@@ -63,7 +63,7 @@ func newPayment(t *testing.T, id, order string) *payment.Payment {
 	return p
 }
 
-// Down → Up exercises the .down.sql too; the schema is at version 1.
+// Down → Up exercises the .down.sql too; the schema is at version 3.
 func TestMigration_UpDownUp(t *testing.T) {
 	cfg := config.Postgres{URL: pgtest.URL(t)}
 	c := context.Background()
@@ -73,8 +73,8 @@ func TestMigration_UpDownUp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 2 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 2 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 3 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 3 clean", v, dirty, err)
 	}
 }
 

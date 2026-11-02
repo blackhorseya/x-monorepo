@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	paymentbc "github.com/blackhorseya/x-monorepo/pkgs/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/provider/mock"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -303,7 +304,7 @@ func leakScenario(t *testing.T, dropExports bool, drive func(t *testing.T, base 
 		Auth:     requiredAuth,
 		Postgres: cfg,
 		OTel:     config.OTel{Endpoint: ln.Addr().String(), Insecure: true, ServiceName: "payment-rpc"},
-	}, prov)
+	}, paymentbc.Fixed(prov))
 	if err != nil {
 		t.Fatal(err)
 	}

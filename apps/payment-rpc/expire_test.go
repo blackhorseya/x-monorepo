@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+	paymentbc "github.com/blackhorseya/x-monorepo/pkgs/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
@@ -29,7 +30,7 @@ func (e *consumeEnv) sweep(provider port.PaymentProvider) error {
 			Provider: "mock", Window: 30 * time.Minute, ReconcileWindow: 24 * time.Hour, MockCheckoutTTL: 30 * time.Minute,
 			WebhookRetention: 720 * time.Hour, ExpireInterval: 15 * time.Minute, ExpireBatch: 100,
 		},
-	}, provider)
+	}, paymentbc.Fixed(provider))
 	if err != nil {
 		e.t.Fatal(err)
 	}

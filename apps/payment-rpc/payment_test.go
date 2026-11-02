@@ -16,6 +16,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+	paymentbc "github.com/blackhorseya/x-monorepo/pkgs/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1/paymentv1connect"
@@ -101,7 +102,7 @@ func startPayment(t *testing.T, auth config.Auth, provider port.PaymentProvider)
 		Log:      config.Log{Level: "error", Format: "text"},
 		Auth:     auth,
 		Postgres: cfg,
-	}, provider)
+	}, paymentbc.Fixed(provider))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +212,7 @@ func TestPayment_PersistsInPostgres(t *testing.T) {
 		HTTP:     config.HTTP{Addr: ":0"},
 		Log:      config.Log{Level: "error", Format: "text"},
 		Postgres: config.Postgres{URL: pgtest.URL(t)},
-	}, mock.New(mock.Options{}))
+	}, paymentbc.Fixed(mock.New(mock.Options{})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +371,7 @@ func TestPayment_AuthWithoutKeysFailsToStart(t *testing.T) {
 		Log:      config.Log{Level: "error", Format: "text"},
 		Auth:     config.Auth{Mode: config.AuthRequired},
 		Postgres: freshDB(t),
-	}, mock.New(mock.Options{}))
+	}, paymentbc.Fixed(mock.New(mock.Options{})))
 	if err == nil {
 		cleanup()
 		t.Fatal("auth.mode=required without api_keys started")
@@ -416,7 +417,7 @@ func TestPayment_ReadyzFollowsPostgres(t *testing.T) {
 		HTTP:     config.HTTP{Addr: ":0"},
 		Log:      config.Log{Level: "error", Format: "text"},
 		Postgres: cfg,
-	}, mock.New(mock.Options{}))
+	}, paymentbc.Fixed(mock.New(mock.Options{})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +445,7 @@ func TestPayment_LegacyJWTFailsToStart(t *testing.T) {
 				Log:      config.Log{Level: "error", Format: "text"},
 				Auth:     config.Auth{Mode: config.AuthRequired, APIKeys: keys, JWT: jwt},
 				Postgres: freshDB(t),
-			}, mock.New(mock.Options{}))
+			}, paymentbc.Fixed(mock.New(mock.Options{})))
 			if err == nil {
 				cleanup()
 				t.Fatalf("%s with api_keys=%q started", name, keys)
@@ -464,7 +465,7 @@ func TestPayment_LegacyJWTRefusedWithAuthOff(t *testing.T) {
 		Log:      config.Log{Level: "error", Format: "text"},
 		Auth:     config.Auth{Mode: config.AuthOff, JWT: config.JWT{HS256Secret: secret}},
 		Postgres: freshDB(t),
-	}, mock.New(mock.Options{}))
+	}, paymentbc.Fixed(mock.New(mock.Options{})))
 	if err == nil {
 		cleanup()
 		t.Fatal("auth.jwt with auth.mode off started")
@@ -488,7 +489,7 @@ func TestPayment_OIDCFailsToStart(t *testing.T) {
 				Log:      config.Log{Level: "error", Format: "text"},
 				Auth:     auth,
 				Postgres: freshDB(t),
-			}, mock.New(mock.Options{}))
+			}, paymentbc.Fixed(mock.New(mock.Options{})))
 			if err == nil {
 				cleanup()
 				t.Fatal("auth.oidc.enabled started")

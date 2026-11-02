@@ -11,13 +11,16 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/metric/noop"
+	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	paymentbc "github.com/blackhorseya/x-monorepo/pkgs/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/memory"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/provider/mock"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
@@ -181,4 +184,74 @@ func TestEndedChain_ARedeliveryDoesNothing(t *testing.T) {
 	if after.Version() != before.Version() || e.asked(mock.OpCancelCheckout) != 1 {
 		t.Fatalf("redelivery: version %d -> %d, cancel calls %d; want unchanged and 1", before.Version(), after.Version(), e.asked(mock.OpCancelCheckout))
 	}
+}
+
+// BuildProvider refuses a configuration that cannot work before any database exists, and the builder
+// it returns opens nothing by itself: the mock only reaches Postgres when a call is made, and a
+// provider that is not the mock has no state tables to reach.
+func TestBuildProvider(t *testing.T) {
+	cfg := config.Payment{
+		Provider: mock.Name, MockCheckoutTTL: 30 * time.Minute, MockRedeliveryWindow: 72 * time.Hour,
+		ReconcileWindow: 24 * time.Hour, Window: 30 * time.Minute, WebhookRetention: 720 * time.Hour,
+		ExpireInterval: time.Minute, ExpireBatch: 50,
+	}
+
+	t.Run("a provider that is not the mock is refused with no database in sight", func(t *testing.T) {
+		bad := cfg
+		bad.Provider = "stripe"
+		if build, err := paymentbc.BuildProvider(bad); err == nil || build != nil {
+			t.Fatalf("BuildProvider(stripe) = %v, %v; want a refusal", build != nil, err)
+		}
+	})
+
+	t.Run("a window the checkout cannot cover is refused before the database is opened", func(t *testing.T) {
+		bad := cfg
+		bad.Window = time.Hour
+		if _, err := paymentbc.BuildProvider(bad); err == nil {
+			t.Fatal("payment.window longer than the checkout validity must refuse to start")
+		}
+	})
+
+	t.Run("with no database the mock lives in this process, one per builder call", func(t *testing.T) {
+		build, err := paymentbc.BuildProvider(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := build(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := build(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		co, err := a.CreateCheckout(context.Background(), dto.ProviderCheckoutInput{PaymentID: "p", OrderID: "o", Amount: dto.MoneyOutput{Amount: 1, Currency: "TWD"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = b.GetPayment(context.Background(), co.Ref); err == nil {
+			t.Fatal("two providers built with no database must not share checkouts (that is what a database is for)")
+		}
+	})
+
+	t.Run("building over a database touches nothing", func(t *testing.T) {
+		build, err := paymentbc.BuildProvider(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// a *gorm.DB with no connection behind it: any query would panic or fail, so a builder that
+		// opened, pinged or migrated anything cannot return normally
+		p, err := build(new(gorm.DB))
+		if err != nil || p == nil {
+			t.Fatalf("build over a database: %v, %v", p, err)
+		}
+	})
+
+	t.Run("Fixed hands the injector the provider it was given", func(t *testing.T) {
+		want := mock.New(mock.Options{})
+		got, err := paymentbc.Fixed(want)(nil)
+		if err != nil || got != port.PaymentProvider(want) {
+			t.Fatalf("Fixed = %v, %v", got, err)
+		}
+	})
 }

@@ -166,6 +166,8 @@ func (e *rollbackEnv) seedEveryTable(t *testing.T) {
 	e.exec(t, `INSERT INTO payment.inbox (message_id) VALUES ('sentinel')`)
 	e.exec(t, `INSERT INTO payment.order_outcomes (order_id, outcome, recorded_at) VALUES ('rollback-order', 'CANCELLED', now())`)
 	e.exec(t, `INSERT INTO payment.webhook_events (provider, provider_event_id, event_type, provider_ref, body, received_at) VALUES ('mock', 'sentinel', 'payment.captured', 'ref-sentinel', '\x7b7d', now())`)
+	e.exec(t, `INSERT INTO payment.mock_checkouts (ref, payment_id, amount, currency, url, expires_at, paid, paid_amount, paid_currency) VALUES ('mock-ref-sentinel', 'payment-sentinel', 100, 'USD', 'https://mock-pay.invalid/checkout/sentinel', now() + interval '1 hour', true, 100, 'USD')`)
+	e.exec(t, `INSERT INTO payment.mock_refunds (ref, idempotency_key) VALUES ('mock-ref-sentinel', 'sentinel')`)
 
 	for _, table := range tables {
 		switch {
@@ -299,6 +301,7 @@ const (
 	inventoryMarker = "**Rollback（只退 inventory `0009`）**"
 	orderingMarker  = "**Rollback（只退 ordering `0008`）**"
 	ordering9Marker = "**Rollback（只退 ordering `0009`）**"
+	payment3Marker  = "**Rollback（只退 payment `0003`）**"
 )
 
 const (
@@ -562,8 +565,41 @@ var ordering0009Dirty = rollbackCase{
 	},
 }
 
+const payment0003Tables = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'payment' AND table_name IN ('mock_checkouts', 'mock_refunds')`
+
+// payment 0003 only adds the mock provider's two tables, so its rollback drops them and nothing else:
+// payment.payments and the saga tables keep their rows. (A dirty 0003 is the same SQL: DROP ... IF EXISTS.)
+var payment0003Clean = rollbackCase{
+	name:    "payment 0003 from 3 clean",
+	runbook: "../../docs/operations.md",
+	marker:  payment3Marker,
+	bc:      4,
+	latest:  3,
+	prepare: func(t *testing.T, e *rollbackEnv) {
+		if e.count(t, payment0003Tables) != 2 || e.count(t, `SELECT count(*) FROM payment.mock_refunds`) != 1 {
+			t.Fatal("0003 did not add the mock tables, or the sentinel is missing")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		if n := e.count(t, payment0003Tables); n != 0 {
+			t.Errorf("mock tables left after the rollback: %d", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM payment.payments WHERE id = 'payment-sentinel'`) + e.count(t, `SELECT count(*) FROM payment.webhook_events`); n != 2 {
+			t.Errorf("payment.payments / webhook_events sentinel rows = %d, want both kept", n)
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Up(e.c, e.cfg, migrations[4]); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 4); got != "3 dirty=false" || e.count(t, payment0003Tables) != 2 {
+			t.Errorf("after up: %s, mock tables=%d", got, e.count(t, payment0003Tables))
+		}
+	},
+}
+
 func TestRollbackRunbooks(t *testing.T) {
-	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty} {
+	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0003Clean} {
 		t.Run(tc.name, func(t *testing.T) { runRollbackCase(t, tc) })
 	}
 }

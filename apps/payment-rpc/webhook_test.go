@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
+	paymentbc "github.com/blackhorseya/x-monorepo/pkgs/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/webhook"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/provider/mock"
@@ -41,7 +42,7 @@ func (e *consumeEnv) serveWebhook() string {
 	e.t.Helper()
 	srv, cleanup, err := Initialize(&config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"}, Log: config.Log{Level: "error", Format: "text"}, Auth: requiredAuth, Postgres: e.pg,
-	}, e.prov)
+	}, paymentbc.Fixed(e.prov))
 	if err != nil {
 		e.t.Fatal(err)
 	}

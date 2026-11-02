@@ -42,6 +42,7 @@ var ProviderSet = wire.NewSet(
 	// infra → ports / repositories
 	ProvidePaymentRepository,
 	ProvideTransactor,
+	ProvideProvider,
 	system.NewClock,
 	wire.Bind(new(port.Clock), new(*system.Clock)),
 
@@ -80,19 +81,49 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 	return postgres.NewTransactor(db)
 }
 
-// ProvidePaymentProvider is not in ProviderSet: the composition root builds the provider before it
-// wires anything (so a configuration that cannot work refuses to start before a database is opened)
-// and hands it to the injector, which is also how a test puts its own provider behind the real server.
-//
-// It builds the payment provider payment.provider names and refuses to start
+// ProviderBuilder makes the payment provider once the database is open: the mock keeps its state in
+// Postgres when there is one (so `serve`, `consume` and `expire` share it), and the composition root
+// opens the database inside the injector. A test that wants its own provider behind the real server
+// passes Fixed(p).
+type ProviderBuilder func(db *gorm.DB) (port.PaymentProvider, error)
+
+// Fixed is the builder of a provider that already exists.
+func Fixed(p port.PaymentProvider) ProviderBuilder {
+	return func(*gorm.DB) (port.PaymentProvider, error) { return p, nil }
+}
+
+// ProvideProvider is the injector's step from the builder to the provider (ProviderSet).
+func ProvideProvider(build ProviderBuilder, db *gorm.DB) (port.PaymentProvider, error) {
+	return build(db)
+}
+
+// BuildProvider validates payment.* and returns the builder. It runs before anything is opened, so a
+// configuration that cannot work refuses to start before a database is touched; the checks run on a
+// provider built over no database, which has the same validity windows as the one built later.
+func BuildProvider(cfg config.Payment) (ProviderBuilder, error) {
+	if _, err := ProvidePaymentProvider(cfg, nil); err != nil {
+		return nil, err
+	}
+
+	return func(db *gorm.DB) (port.PaymentProvider, error) { return ProvidePaymentProvider(cfg, db) }, nil
+}
+
+// ProvidePaymentProvider builds the payment provider payment.provider names and refuses to start
 // on a configuration that would lose money without a sound: reconcile_window must outlast the
 // provider's checkout pages (docs/payment.md §3「補查有界」), or a customer paying at the very end
 // of a page could pay after the sweep stopped looking.
-func ProvidePaymentProvider(cfg config.Payment) (port.PaymentProvider, error) {
+//
+// The mock keeps its checkouts and refunds in Postgres when db is not nil and in this process when it is
+// (APP_POSTGRES_URL unset: `task run`). A provider that is not the mock never touches those tables.
+func ProvidePaymentProvider(cfg config.Payment, db *gorm.DB) (port.PaymentProvider, error) {
 	var p port.PaymentProvider
 	switch cfg.Provider {
 	case mock.Name:
-		p = mock.New(mock.Options{CheckoutTTL: cfg.MockCheckoutTTL, RedeliveryWindow: cfg.MockRedeliveryWindow, Secret: []byte(cfg.MockWebhookSecret)})
+		opts := mock.Options{CheckoutTTL: cfg.MockCheckoutTTL, RedeliveryWindow: cfg.MockRedeliveryWindow, Secret: []byte(cfg.MockWebhookSecret)}
+		if db != nil {
+			opts.Store = postgres.NewMockStore(db)
+		}
+		p = mock.New(opts)
 	default:
 		return nil, fmt.Errorf("payment: payment.provider %q is not supported (the first version has %q only)", cfg.Provider, mock.Name)
 	}

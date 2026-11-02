@@ -283,7 +283,7 @@ watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預
 
 ## Payment（`payment-rpc`，#367）
 
-`apps/payment-rpc` 一個 binary、三個子命令，部署時各是一個 workload（chart 與 image 是切片 5；現在只能手動跑 `./bin/payment-rpc <cmd>`）：
+`apps/payment-rpc` 一個 binary、三個子命令，部署時各是一個 workload（image 是切片 5a，chart 是 5c；現在只能手動跑 `./bin/payment-rpc <cmd>`）：
 
 | 子命令 | 形狀 | 做什麼 | 沒跑會怎樣 |
 |---|---|---|---|
@@ -307,13 +307,15 @@ watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預
 
 **補查的游標與 gauge**：`payment.payments.swept_at` 是 `expire` 的游標（最久沒被看過的先查，查過就推進，不論 provider 回什麼；不是付款單狀態，改它不動 `version`）。`payment_reconcile_eligible`（窗口內待查筆數）與 `payment_reconcile_oldest_unchecked_seconds`（最久沒被看過的等了多久）每輪 `expire` 結束時各記一次；CronJob 是短命 process，要靠 OTLP flush 在結束時送出，沒收到資料就等於沒有量測，不能當成「沒有落後」。
 
+**migration 的鎖（payment `0003`）**：`0003_mock_provider` 只 `CREATE TABLE` 兩張新表（`payment.mock_checkouts`、`payment.mock_refunds`，後者以外鍵指向前者），不 `ALTER` 任何既有的表、不建索引在既有的表上，也不參照 `payment.payments`，所以**不會讓 `payments` 等待**：跑的時候讀和寫照常（實測：`TestMigrationLock_NewTablesDoNotBlockPayments` 用真正的 migration runner 跑一個同形狀的檔案——兩張新表、一個外鍵、`pg_sleep`、最後失敗——檔案還在 sleep 時對 `payments` 的 `SELECT` 與 `UPDATE` 在 `lock_timeout` 內完成；`TestMigrationLock_0003OnlyCreatesNewTables` 逐句檢查真正的 `0003` 只有這兩個 `CREATE TABLE`）。檔案仍是**一個交易**，失敗整個 rollback、不留表。可以在服務運行中跑；但新版 `serve`／`consume`／`expire` 在 `postgres.url` 設了之後會讀寫這兩張表，所以**先 `migrate up`，再換 payment-rpc**（舊 binary 不碰這兩張表，順序反過來則 mock 的呼叫回「不可用」，fail safe）。這兩張表的資料保留見 `docs/payment.md` §3：只給 demo／kind，不歸任何 prune。
+
 **migration 的鎖（payment `0002`）**：`0002_saga` 在**一個交易**裡跑（golang-migrate 把整個檔案當一次 query 送出；失敗時整個檔案 rollback，不留半套）。第一個動 `payment.payments` 的是 `ALTER TABLE … ADD COLUMN swept_at`：可為 NULL、沒有 DEFAULT，所以不重寫表，但它取 **ACCESS EXCLUSIVE，持有到交易 commit**——不是只有它自己執行的那一瞬間。之後三個一般（非 `CONCURRENTLY`）`CREATE INDEX` 在同一個交易裡建，所以 **`payments` 在整個檔案跑完前，讀和寫都會等**：`SELECT` 也會被擋住（實測：`TestMigrationLock_AddColumnBlocksReadsUntilTheFileEnds` 用真正的 migration runner 跑一個同形狀的檔案，檔案還在 sleep 時 `SELECT` 就等到 `lock_timeout`；檔案失敗後欄位不留）。等待時間 = 取鎖的等待 + 三個索引的建置時間，隨列數成長；這不是零鎖的線上變更。取鎖本身也有代價：`ADD COLUMN` 要等到所有已開著、碰過 `payments` 的交易結束才拿得到鎖，而它排隊期間，後來的讀寫也都排在它後面（實測：`TestMigrationLock_NoRewriteAndTheQueueBehindAddColumn`，同時確認它不重寫表——relfilenode 不變）。`payments` 在切片 2 才出現，列數預期不多，但沒有量測過實際建索引的時間，所以不要拿「列數少」當保證。建議在 `serve`／`consume`／`expire` 停著或流量低時跑，並設 `lock_timeout`，拿不到鎖就失敗（失敗整個檔案 rollback，可以重跑）。
 
 **卡住的退款**：`PaymentRefundRequested` 重試三次（100ms 起、指數退避）後進 `payment.events_poison`，付款單維持 `REFUNDING`。provider 恢復後 `requeue` 那一列（`task poison -- list payment` 看、`task poison -- requeue payment <offset>` 送回；admin RPC 與 console 的 Poison 頁同樣涵蓋 payment），退款以付款單 id 為冪等鍵，不會退兩次。
 
 **`webhook_events` 的 retention**：不歸 `worker prune`（它只管事件表與 inbox）。由 `payment-rpc expire` 順手刪「已處理」且早於 `payment.webhook_retention` 的列，每輪最多 `payment.expire_batch` 列；未處理的、`NEEDS_REVIEW` 付款單的通知永遠不刪。這張表是重送通知的去重記憶，所以 `webhook_retention` 必須大於 provider 的重送窗口（mock 是 72h，`payment.mock_redelivery_window`），否則**拒絕啟動**；`0` = 永遠保留。
 
-**Rollback 順序**：全域 `task migrate -- down` 先退 payment（反向註冊順序），它 DROP 的是 payment 自己的事件表與 `webhook_events`；退版前先停 `consume`／`expire`／`serve`**與 `worker`**（ordering 讀 payment 的事件表，見下），否則通知與事件會寫進一個正在消失的表。
+**Rollback 順序**：全域 `task migrate -- down` 先退 payment（反向註冊順序）的最新一步 `0003`，它只 DROP mock provider 的兩張狀態表；再退一步才是 `0002`（DROP 事件表與 `webhook_events`）。退版前先停 `consume`／`expire`／`serve` **與 `worker`**（ordering 讀 payment 的事件表，見下），否則通知與事件會寫進一個正在消失的表。
 
 **ordering 側（切片 3B，`apps/worker`）**：
 
@@ -322,7 +324,19 @@ watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預
 - **poison／prune／gauge 涵蓋 payment**：`task poison -- list [payment]`、`task prune -- --older-than 720h [--dry-run] payment`、admin RPC 與 console 都認 `payment`（schema 名取自 payment 的 contract 常數，worker 與 rpc 沒有載入 payment 的 domain／provider）；worker 的 `eventbus_outbox_*`、`eventbus_inbox_*`、`eventbus_poison_messages` 多出 payment 的 5 張 outbox 表、`payment.inbox`、`payment.events_poison`，所以既有的 poison 與 retention 告警自動涵蓋 payment。`payment.webhook_events` 仍不歸 prune（上面）。
 - **升級順序**：先 `migrate up`（payment 的 `0002` 是 3A 的），再換 worker。**payment 的表不存在時**（worker 先於 migrate），worker 在消費任何訊息之前以非 0 結束，訊息是 `worker: subscribed topics have no table: payment.events_v1_paymentcaptured, … — their bounded context's migrations were not applied to this database; run the migrate step … before starting this worker`（postgres 與 redis broker 都一樣，因為 redis 的 forwarder 也讀這些表）；補上 migrate 後重啟即可。刻意不做成「略過這兩個訂閱繼續跑」：那會讓付款事件沒人消費卻看不出來。
 - **連線池下限 11 → 15**：多了 2 個 subscriber（`2 × 7 + 1`）。`postgres.max_open_conns` 明確設在 11–14 的部署，升級後 worker 會拒絕啟動並說明（預設 25 與 `0`＝不設上限不受影響）。
-- **Rollback**：(a) 只退 worker image：舊 worker 不訂閱 payment 的事件，`PaymentCaptured`／`PaymentExpired` 留在 payment 的 outbox 表裡，ordering group 的 cursor 列不動；換回 3B 的 worker 後從 cursor 接著消費（訂單狀態決定結果：期間已取消的單收到 `PaymentCaptured` 會被拒，錢由 payment 退）。**舊 worker 在位時不要對 payment 跑 `worker prune --unconsumed`**：沒有 cursor 的表會被當成沒人要而刪掉。付款成功的單在換回之前停在 `CONFIRMED`、不會 `COMPLETED`。(b) 退 payment 的 migration（`down` 會 DROP 事件表）：**先停 worker**。沒停的話 worker 不會結束也不會拖垮別的 BC，但那兩個 subscriber 每秒各記一行 ERROR（`Error querying for message … relation … does not exist`），直到表回來或 worker 重啟；`SIGTERM` 照常乾淨結束（`TestWorker_KeepsRunningWhenPaymentTablesVanish`）。`migrate up` 重建的是空表與新 cursor，退版期間的事件不會回來。
+- **Rollback**：(a) 只退 worker image：舊 worker 不訂閱 payment 的事件，`PaymentCaptured`／`PaymentExpired` 留在 payment 的 outbox 表裡，ordering group 的 cursor 列不動；換回 3B 的 worker 後從 cursor 接著消費（訂單狀態決定結果：期間已取消的單收到 `PaymentCaptured` 會被拒，錢由 payment 退）。**舊 worker 在位時不要對 payment 跑 `worker prune --unconsumed`**：沒有 cursor 的表會被當成沒人要而刪掉。付款成功的單在換回之前停在 `CONFIRMED`、不會 `COMPLETED`。(b) 退 payment 的 migration 退到 `0002` 以下（DROP 事件表；最新一步 `0003` 只丟 mock 的狀態表，見上）：**先停 worker**。沒停的話 worker 不會結束也不會拖垮別的 BC，但那兩個 subscriber 每秒各記一行 ERROR（`Error querying for message … relation … does not exist`），直到表回來或 worker 重啟；`SIGTERM` 照常乾淨結束（`TestWorker_KeepsRunningWhenPaymentTablesVanish`）。`migrate up` 重建的是空表與新 cursor，退版期間的事件不會回來。
+
+**Rollback（只退 payment `0003`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（ordering、inventory、identity、catalog、payment 的最新 migration 都會回滾，catalog 會 `DROP TABLE catalog.products`（連同資料））。只退 payment `0003`，在 payment 的資料庫執行；先停 `serve`／`consume`／`expire`（或確認 `payment.provider` 不是 mock）：
+
+```sql
+BEGIN;
+DROP TABLE IF EXISTS payment.mock_refunds;
+DROP TABLE IF EXISTS payment.mock_checkouts;
+UPDATE payment.schema_migrations SET version = 2, dirty = false;
+COMMIT;
+```
+
+丟失的範圍：mock provider 記住的 checkout、付款與退款（`payment.payments.provider_ref` 指到的 ref 在 mock 眼裡變成不存在：`expire` 查詢與 `consume` 退款都回「不可用」，fail safe，付款單不會因此誤轉狀態）；`payment.payments`、事件表、`webhook_events` 都留著。只有 demo／kind 會有這些資料，真 provider 不用這兩張表。已是 `3 dirty` 也用同一段（`IF EXISTS` 讓不存在的表略過）。這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，驗證其他 BC 的版本、schema 與資料不動。
 
 ## Deploy（Helm）
 
@@ -372,7 +386,7 @@ WHERE octet_length(sku) NOT BETWEEN 1 AND 64;
 2. 刪除或改名那些列（`DELETE FROM inventory.stocks WHERE octet_length(sku) NOT BETWEEN 1 AND 64`，刪之前把查詢結果存起來）。
 3. 重設版本再重跑：`UPDATE inventory.schema_migrations SET version = 8, dirty = false;`，然後 `task migrate -- up`。這個 reset 只適用於上面這種「`0009` 失敗後 dirty」的狀態，不是任意 dirty 版本的通用解（只是不想升級而要退掉時，直接用下面的 Rollback，同一段 SQL 在這個狀態也成立）。
 
-**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的最新一步 `0002` 會 DROP 掉它的事件表、`payment.inbox`、`payment.webhook_events`、`payment.order_outcomes`（連同資料）），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行。兩種狀態用同一段 SQL：9 clean（CHECK 存在）會移除 CHECK 並退回 8；9 dirty（`0009` 失敗，沒有 CHECK）`IF EXISTS` 讓 DROP 略過，只把版本設回 8 clean（超長的列仍在，要再 migrate 先照上面第 1–2 步處理）：
+**Rollback（只退 inventory `0009`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的最新一步 `0003` 會 DROP 掉 mock provider 的狀態表 `payment.mock_checkouts`、`payment.mock_refunds`（連同資料）），會 `DROP TABLE catalog.products`（連同資料）並回滾 identity、ordering 的最新 migration，不是只移除這個 CHECK。只退 inventory `0009`，在 inventory 的資料庫執行。兩種狀態用同一段 SQL：9 clean（CHECK 存在）會移除 CHECK 並退回 8；9 dirty（`0009` 失敗，沒有 CHECK）`IF EXISTS` 讓 DROP 略過，只把版本設回 8 clean（超長的列仍在，要再 migrate 先照上面第 1–2 步處理）：
 
 ```sql
 BEGIN;
@@ -415,7 +429,7 @@ COMMIT;
 
 丟失的範圍：`ordering.orders` 每一列的 `payment_required`（快照隨之消失：退版前以 `ordering.require_payment: true` 進 `CONFIRMED` 的訂單，退版後又可以直接 `CompleteOrder`，所以只在 Payment 還沒上線、沒有任何訂單真的欠款時退），加上 `OrderPaid` 的事件表（切片 1 沒有發布者，表是空的）；訂單與明細本身都留著。`ALTER TABLE` 取 ACCESS EXCLUSIVE，持有到 `COMMIT`。兩種狀態用同一段 SQL（`IF EXISTS`）：9 clean（`0009` 已套用）退回 8；9 dirty（`0009` 失敗，例如 `ALTER TABLE` 在 `lock_timeout` 內拿不到鎖；整個檔案在一個交易裡，所以欄位與事件表都不在）只把版本設回 8 clean，之後排除原因再 `task migrate -- up`。這個 dirty 分支只驗證過「失敗後欄位與事件表都不在」的狀態。這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，兩種狀態都驗證其他 BC 的版本、表、欄位與資料不動。要繼續退 `0008`，在 ordering 回到 `8` 之後用下一段。
 
-**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9` 先照上一段退 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的最新一步 `0002` 會 DROP 掉它的事件表、`payment.inbox`、`payment.webhook_events`、`payment.order_outcomes`（連同資料）），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
+**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9` 先照上一段退 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的最新一步 `0003` 會 DROP 掉 mock provider 的狀態表 `payment.mock_checkouts`、`payment.mock_refunds`（連同資料）），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
 
 ```sql
 BEGIN;

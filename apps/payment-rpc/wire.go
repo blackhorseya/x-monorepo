@@ -6,7 +6,6 @@ import (
 	"github.com/google/wire"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/payment"
-	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
@@ -16,9 +15,10 @@ import (
 )
 
 // Initialize is the injector. wire.go is the ONLY place AppConfig is mapped
-// into component configs (via wire.FieldsOf). The payment provider comes in as an argument: run builds
-// it from payment.provider (payment.ProvidePaymentProvider) before anything else is opened.
-func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.Server, func(), error) {
+// into component configs (via wire.FieldsOf). The payment provider comes in as a builder: run validates
+// payment.provider (payment.BuildProvider) before anything else is opened, and the injector builds the
+// provider once the database is open (the mock keeps its state there).
+func Initialize(cfg *config.AppConfig, provider payment.ProviderBuilder) (*server.Server, func(), error) {
 	wire.Build(
 		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Log", "Postgres", "OTel"),
 		postgres.NewDB,
@@ -41,7 +41,7 @@ func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.S
 
 // InitializeConsume builds `payment-rpc consume`: the router and payment's consumer use cases,
 // publishing into the outbox (eventbus.ProvidePublisher) like every other BC. No listener, no auth.
-func InitializeConsume(cfg *config.AppConfig, provider port.PaymentProvider) (*Consumer, func(), error) {
+func InitializeConsume(cfg *config.AppConfig, provider payment.ProviderBuilder) (*Consumer, func(), error) {
 	wire.Build(
 		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel", "Payment", "Worker"),
 		postgres.NewDB,
@@ -57,7 +57,7 @@ func InitializeConsume(cfg *config.AppConfig, provider port.PaymentProvider) (*C
 
 // InitializeExpire builds `payment-rpc expire`: the sweep over the database and the provider, publishing
 // into the outbox. No listener, no router.
-func InitializeExpire(cfg *config.AppConfig, provider port.PaymentProvider) (*payment.Expire, func(), error) {
+func InitializeExpire(cfg *config.AppConfig, provider payment.ProviderBuilder) (*payment.Expire, func(), error) {
 	wire.Build(
 		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel", "Payment"),
 		postgres.NewDB,
