@@ -4,6 +4,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -77,12 +78,45 @@ func (i *PaymentRepository) FindByProviderRef(c context.Context, provider, ref s
 	return nil, payment.ErrNotFound
 }
 
-func (i *PaymentRepository) ListPendingDue(context.Context, time.Time, int) ([]*payment.Payment, error) {
-	return nil, nil // SPEC STAGE
+func (i *PaymentRepository) ListPendingDue(c context.Context, now time.Time, limit int) ([]*payment.Payment, error) {
+	return i.list(c, limit, func(r payment.ReconstituteParams) bool {
+		return r.Status == payment.StatusPending && !r.ExpiresAt.After(now)
+	}, func(a, b payment.ReconstituteParams) bool { return a.ExpiresAt.Before(b.ExpiresAt) })
 }
 
-func (i *PaymentRepository) ListReconcilable(context.Context, time.Time, int) ([]*payment.Payment, error) {
-	return nil, nil // SPEC STAGE
+func (i *PaymentRepository) ListReconcilable(c context.Context, notBefore time.Time, limit int) ([]*payment.Payment, error) {
+	return i.list(c, limit, func(r payment.ReconstituteParams) bool {
+		return (r.Status == payment.StatusExpired || r.Status == payment.StatusCancelled) && r.ProviderRef != "" && !r.TerminalAt.Before(notBefore)
+	}, func(a, b payment.ReconstituteParams) bool { return a.TerminalAt.Before(b.TerminalAt) })
+}
+
+func (i *PaymentRepository) list(c context.Context, limit int, keep func(payment.ReconstituteParams) bool, less func(a, b payment.ReconstituteParams) bool) ([]*payment.Payment, error) {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	var recs []payment.ReconstituteParams
+	for _, r := range i.data {
+		if keep(r) {
+			recs = append(recs, r)
+		}
+	}
+	sort.Slice(recs, func(a, b int) bool { return less(recs[a], recs[b]) })
+	if limit > 0 && len(recs) > limit {
+		recs = recs[:limit]
+	}
+	out := make([]*payment.Payment, 0, len(recs))
+	for _, r := range recs {
+		p, err := payment.Reconstitute(r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+
+	return out, nil
 }
 
 // Save inserts a never-saved payment (Version 0) with version 1, or replaces a loaded one when the
@@ -242,7 +276,7 @@ func (i *WebhookRepository) DeleteProcessedBefore(c context.Context, cutoff time
 	deleted := 0
 	for _, key := range i.order {
 		rec := i.data[key]
-		if deleted < limit && !rec.ProcessedAt.IsZero() && rec.ProcessedAt.Before(cutoff) {
+		if deleted < limit && !rec.ProcessedAt.IsZero() && rec.ProcessedAt.Before(cutoff) && !(i.underReview != nil && i.underReview(rec.Provider, rec.Ref)) {
 			delete(i.data, key)
 			deleted++
 

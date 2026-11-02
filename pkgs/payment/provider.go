@@ -100,6 +100,15 @@ func ProvidePaymentProvider(cfg config.Payment) (port.PaymentProvider, error) {
 	if cfg.ReconcileWindow <= p.CheckoutValidity() {
 		return nil, fmt.Errorf("payment: payment.reconcile_window (%s) must be longer than the provider's checkout validity (%s)", cfg.ReconcileWindow, p.CheckoutValidity())
 	}
+	// The webhook log is the dedup memory of redelivered notifications: shorter than the provider's
+	// redelivery window and a redelivery would be taken for a new event. 0 keeps everything.
+	if cfg.WebhookRetention < 0 || (cfg.WebhookRetention != 0 && cfg.WebhookRetention <= p.WebhookRedeliveryWindow()) {
+		return nil, fmt.Errorf("payment: payment.webhook_retention (%s) must be 0 (keep for ever) or longer than the provider's redelivery window (%s)", cfg.WebhookRetention, p.WebhookRedeliveryWindow())
+	}
+	if cfg.Window <= 0 || cfg.ExpireInterval <= 0 || cfg.ExpireBatch <= 0 {
+		return nil, fmt.Errorf("payment: payment.window (%s), payment.expire_interval (%s) and payment.expire_batch (%d) must all be positive", cfg.Window, cfg.ExpireInterval, cfg.ExpireBatch)
+	}
+
 	return p, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/payment"
@@ -64,6 +65,9 @@ func run(args []string) error {
 		return err
 	}
 
+	if cmd != serveCommand && strings.TrimSpace(cfg.Postgres.URL) == "" {
+		return fmt.Errorf("payment-rpc: %s needs postgres.url: there is nothing to read or sweep without it", cmd)
+	}
 	if requireDurable {
 		check := CheckDurable
 		if cmd != serveCommand {

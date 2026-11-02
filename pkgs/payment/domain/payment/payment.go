@@ -357,11 +357,26 @@ func (x *Payment) RefundSucceeded(now time.Time) (Effect, error) {
 	}
 }
 
-// ReconcileDeadline is when the sweep stops asking the provider (docs/payment.md §3). SPEC STAGE: never.
-func (x *Payment) ReconcileDeadline(time.Duration) time.Time { return time.Time{} }
+// ReconcileDeadline is when the sweep stops asking the provider whether money arrived on an EXPIRED or
+// CANCELLED payment: terminal_at + window (docs/payment.md §3「補查有界」). The zero Time for a payment
+// that is in neither state.
+func (x *Payment) ReconcileDeadline(window time.Duration) time.Time {
+	if (x.status != StatusExpired && x.status != StatusCancelled) || x.terminalAt.IsZero() {
+		return time.Time{}
+	}
 
-// Reconcilable says whether the sweep should ask the provider about this payment now. SPEC STAGE: never.
-func (x *Payment) Reconcilable(time.Time, time.Duration) bool { return false }
+	return x.terminalAt.Add(window)
+}
+
+// Reconcilable says whether the sweep should ask the provider about this payment now: it ended without
+// money (EXPIRED / CANCELLED), a checkout was opened at the provider (a payment that never was cannot have
+// been paid), and the window since it ended has not closed. A payment under review, refunding or refunded
+// is never asked: the system does not move it, or it is already moving.
+func (x *Payment) Reconcilable(now time.Time, window time.Duration) bool {
+	deadline := x.ReconcileDeadline(window)
+
+	return x.providerRef != "" && !deadline.IsZero() && now.Before(deadline)
+}
 
 func (x *Payment) setStatus(s Status, now time.Time) {
 	x.status = s

@@ -124,12 +124,37 @@ func (i *PaymentRepository) findOne(c context.Context, where string, arg any, wh
 	return row.toAggregate()
 }
 
-func (i *PaymentRepository) ListPendingDue(context.Context, time.Time, int) ([]*payment.Payment, error) {
-	return nil, nil // SPEC STAGE
+func (i *PaymentRepository) ListPendingDue(c context.Context, now time.Time, limit int) ([]*payment.Payment, error) {
+	return i.list(c, limit, "status = 'PENDING' AND expires_at <= ?", now, "expires_at ASC")
 }
 
-func (i *PaymentRepository) ListReconcilable(context.Context, time.Time, int) ([]*payment.Payment, error) {
-	return nil, nil // SPEC STAGE
+func (i *PaymentRepository) ListReconcilable(c context.Context, notBefore time.Time, limit int) ([]*payment.Payment, error) {
+	return i.list(c, limit, "status IN ('EXPIRED', 'CANCELLED') AND provider_ref <> '' AND terminal_at >= ?", notBefore, "terminal_at ASC")
+}
+
+func (i *PaymentRepository) list(c context.Context, limit int, where string, arg any, order string) ([]*payment.Payment, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var rows []paymentRow
+	q := platformpg.TxOrDB(ctx, i.db).Where(where, arg).Order(order + ", id ASC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list payments: %w", err)
+	}
+	out := make([]*payment.Payment, 0, len(rows))
+	for _, r := range rows {
+		p, err := r.toAggregate()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+
+	return out, nil
 }
 
 // Save inserts a never-saved payment (Version 0) with version 1, or updates a loaded one
@@ -317,6 +342,9 @@ func (i *WebhookRepository) DeleteProcessedBefore(c context.Context, cutoff time
 		`DELETE FROM `+Schema+`.webhook_events WHERE (provider, provider_event_id) IN (
 		   SELECT provider, provider_event_id FROM `+Schema+`.webhook_events
 		   WHERE processed_at IS NOT NULL AND processed_at < ?
+		     AND NOT EXISTS (SELECT 1 FROM `+Schema+`.payments p
+		                     WHERE p.provider = webhook_events.provider AND p.provider_ref = webhook_events.provider_ref
+		                       AND p.status = 'NEEDS_REVIEW')
 		   ORDER BY processed_at LIMIT ?)`, cutoff, limit)
 	if res.Error != nil {
 		return 0, fmt.Errorf("delete processed webhook events: %w", res.Error)
