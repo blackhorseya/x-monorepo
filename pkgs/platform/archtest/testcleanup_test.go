@@ -48,128 +48,123 @@ func TestTestCleanup_Fixtures(t *testing.T) {
 		src  string
 		want []string
 	}{
+		// ── direct-pool: a test may not open a pool itself; pgtest.DB does ──────────
 		{
-			// The shape of #366 before its fix (and #342, #318): the pool is closed by a
-			// defer, so the Cleanup registered later runs on a closed pool, and swallows
-			// the error that says so.
-			name: "defer then cleanup (#366 before the fix)",
+			name: "NewDB called",
 			src: `package x_test
 func TestX(t *testing.T) {
 	db, cleanup, err := platformpg.NewDB(cfg, tel)
 	defer cleanup()
-	t.Cleanup(func() { _ = db.Exec("DELETE FROM t").Error })
 }`,
-			want: []string{"test-cleanup-pool-defer@004", "test-cleanup-swallow@005"},
+			want: []string{"test-direct-pool@003"},
 		},
 		{
-			// The closer is found by what NewDB returns, not by the name "cleanup".
-			name: "renamed closers",
+			name: "NewDB under another import name, and a dot import",
 			src: `package x_test
 func TestX(t *testing.T) {
-	a, dbCleanup, _ := postgres.NewDB(cfg, tel)
-	defer dbCleanup()
-	b, closeDB, _ := postgres.NewDB(cfg, tel)
+	a, ca, _ := pg.NewDB(cfg, tel)
+	b, cb, _ := NewDB(cfg, tel)
+}`,
+			want: []string{"test-direct-pool@003", "test-direct-pool@004"},
+		},
+		{
+			name: "NewDB assigned to a variable and called through it",
+			src: `package x_test
+func TestX(t *testing.T) {
+	open := postgres.NewDB
+	db, closeDB, _ := open(cfg, tel)
+}`,
+			want: []string{"test-direct-pool@003"},
+		},
+		{
+			name: "NewDB passed as an argument or kept in a struct field",
+			src: `package x_test
+func TestX(t *testing.T) {
+	run(postgres.NewDB)
+	_ = opener{open: postgres.NewDB}
+}`,
+			want: []string{"test-direct-pool@003", "test-direct-pool@004"},
+		},
+		{
+			name: "other pool and connection openers",
+			src: `package x_test
+func TestX(t *testing.T) {
+	a, _ := sql.Open("pgx", dsn)
+	b := sql.OpenDB(connector)
+	c, _ := pgxpool.New(ctx, dsn)
+	d, _ := pgxpool.NewWithConfig(ctx, pc)
+	e, _ := pgx.Connect(ctx, dsn)
+	f, _ := pgx.ConnectConfig(ctx, cc)
+	g, _ := gorm.Open(dialector, gc)
+}`,
+			want: []string{
+				"test-direct-pool@003", "test-direct-pool@004", "test-direct-pool@005", "test-direct-pool@006",
+				"test-direct-pool@007", "test-direct-pool@008", "test-direct-pool@009",
+			},
+		},
+		{
+			// The 5 indirect shapes review r2 found against the defer+Cleanup pairing. None needs
+			// to be understood: each one mentions NewDB, and that is the finding.
+			name: "indirect close and registration shapes",
+			src: `package x_test
+func TestA(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
 	defer closeDB()
-	t.Cleanup(func() { if err := a.Exec("x").Error; err != nil { t.Error(err) } })
-	_ = b
+	register := t.Cleanup
+	register(func() {})
+}
+func TestB(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	finish := func() { closeDB() }
+	defer finish()
+	t.Cleanup(purge)
+}
+func TestC(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	finish := closeDB
+	defer finish()
+}
+func TestD(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	wrapper(t)
 }`,
-			want: []string{"test-cleanup-pool-defer@004", "test-cleanup-pool-defer@006"},
+			want: []string{"test-direct-pool@003", "test-direct-pool@009", "test-direct-pool@015", "test-direct-pool@020"},
 		},
 		{
-			name: "pool closed through sql.DB",
+			name: "opened inside a closure, a t.Run body and a goroutine",
 			src: `package x_test
 func TestX(t *testing.T) {
+	t.Run("a", func(t *testing.T) { _, c, _ := postgres.NewDB(cfg, tel); c() })
+	go func() { _, c, _ := postgres.NewDB(cfg, tel); c() }()
+}`,
+			want: []string{"test-direct-pool@003", "test-direct-pool@004"},
+		},
+
+		// ── pool-close: the one way pgtest.DB's pool can still be closed by the test ─
+		{
+			name: "Close on the sql.DB behind a pgtest.DB",
+			src: `package x_test
+func TestX(t *testing.T) {
+	db := pgtest.DB(t, cfg, tel)
 	sqlDB, _ := db.DB()
 	defer sqlDB.Close()
-	t.Cleanup(func() { check(db.Exec("x").Error) })
+	_ = sqlDB.Stats()
 }`,
-			want: []string{"test-cleanup-pool-defer@004"},
+			want: []string{"test-pool-close@005"},
 		},
 		{
-			name: "deferred func literal that closes the pool",
+			name: "Close called outside a defer too",
 			src: `package x_test
 func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	defer func() { cleanup() }()
-	t.Cleanup(func() { check(db.Exec("x").Error) })
+	db := pgtest.DB(t, cfg, tel)
+	pool, err := db.DB()
+	if err := pool.Close(); err != nil { t.Fatal(err) }
 }`,
-			want: []string{"test-cleanup-pool-defer@004"},
+			want: []string{"test-pool-close@005"},
 		},
-		{
-			// LIFO: the close registered after the purge runs before it.
-			name: "close registered after the purge",
-			src: `package x_test
-func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	t.Cleanup(func() { check(db.Exec("x").Error) })
-	t.Cleanup(cleanup)
-}`,
-			want: []string{"test-cleanup-pool-order@005"},
-		},
-		{
-			name: "purge kept in a variable, close registered after it",
-			src: `package x_test
-func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	purge := func() { check(db.Exec("x").Error) }
-	t.Cleanup(purge)
-	t.Cleanup(cleanup)
-}`,
-			want: []string{"test-cleanup-pool-order@006"},
-		},
-		{
-			// A same-package helper registers the purge: the caller's defer is still wrong.
-			name: "helper that registers t.Cleanup",
-			src: `package x_test
-func seed(t *testing.T, db *gorm.DB) { t.Cleanup(func() { check(db.Exec("x").Error) }) }
-func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	defer cleanup()
-	seed(t, db)
-}`,
-			want: []string{"test-cleanup-pool-defer@005"},
-		},
-		{
-			// A closure that captures t registers on the same t: its Cleanup runs after
-			// the function's defers (eventbus/start_test.go before #371).
-			name: "Cleanup registered by a closure that captures t",
-			src: `package x_test
-func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	defer cleanup()
-	open := func() {
-		sub := subscribe(db)
-		t.Cleanup(func() { _ = sub.Close() })
-	}
-	open()
-}`,
-			want: []string{"test-cleanup-pool-defer@004"},
-		},
-		{
-			// Named t, same pointer: an immediately called closure is not a subtest.
-			name: "immediately called closure given the parent's t",
-			src: `package x_test
-func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	defer cleanup()
-	func(t *testing.T) {
-		t.Cleanup(func() { check(db.Exec("x").Error) })
-	}(t)
-}`,
-			want: []string{"test-cleanup-pool-defer@004"},
-		},
-		{
-			name: "helper given the parent's t from a plain closure",
-			src: `package x_test
-func registerPurge(t *testing.T, db *gorm.DB) { t.Cleanup(func() { check(db.Exec("x").Error) }) }
-func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	defer cleanup()
-	run := func(t *testing.T) { registerPurge(t, db) }
-	run(t)
-}`,
-			want: []string{"test-cleanup-pool-defer@005"},
-		},
+
+		// ── cleanup-swallow ──────────────────────────────────────────────────────
 		{
 			name: "swallowed write: blank assignment, bare call, bare .Error, discarded pgx result",
 			src: `package x_test
@@ -193,9 +188,9 @@ func TestX(t *testing.T) {
 			want: []string{"test-cleanup-swallow@004"},
 		},
 
-		// ── what must stay green ────────────────────────────────────────────
+		// ── what must stay green ────────────────────────────────────────────────
 		{
-			name: "pgtest.DB: no closer in the caller, checked purge",
+			name: "pgtest.DB with a checked purge",
 			src: `package x_test
 func TestX(t *testing.T) {
 	db := pgtest.DB(t, cfg, tel)
@@ -207,46 +202,22 @@ func TestX(t *testing.T) {
 }`,
 		},
 		{
-			name: "close registered first, purge after (LIFO runs the purge first)",
+			name: "pgtest.TryDB and pgtest.Conn are not openers the gate bans",
 			src: `package x_test
 func TestX(t *testing.T) {
-	_, telCleanup, _ := otel.New(a, b)
-	t.Cleanup(telCleanup)
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	t.Cleanup(cleanup)
-	t.Cleanup(func() { check(db.Exec("x").Error) })
+	db, err := pgtest.TryDB(t, cfg, tel)
+	conn := pgtest.Conn(t, dsn)
+	_, _ = db, conn
 }`,
 		},
 		{
-			name: "defer alone is only style",
+			name: "using the sql.DB without closing it",
 			src: `package x_test
 func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	defer cleanup()
-	if err := db.Exec("x").Error; err != nil { t.Fatal(err) }
-}`,
-		},
-		{
-			// Forbidden shape, not a lifecycle claim: a subtest's Cleanup does run before the
-			// parent's defers, but the gate does not decide which t a Cleanup belongs to.
-			name: "parent defer, Cleanup only inside a subtest",
-			src: `package x_test
-func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	defer cleanup()
-	t.Run("a", func(t *testing.T) {
-		t.Cleanup(func() { check(db.Exec("x").Error) })
-	})
-}`,
-			want: []string{"test-cleanup-pool-defer@004"},
-		},
-		{
-			name: "defer of something that is not a pool closer",
-			src: `package x_test
-func TestX(t *testing.T) {
-	_, telCleanup, _ := otel.New(a, b)
-	defer telCleanup()
-	t.Cleanup(func() { check(db.Exec("x").Error) })
+	db := pgtest.DB(t, cfg, tel)
+	sqlDB, _ := db.DB()
+	_, _ = sqlDB.ExecContext(ctx, "x")
+	_ = sqlDB.Stats()
 }`,
 		},
 		{
@@ -254,6 +225,14 @@ func TestX(t *testing.T) {
 			src: `package x_test
 func TestX(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close(ctx) })
+}`,
+		},
+		{
+			name: "the word NewDB in a comment or a string is not a mention",
+			src: `package x_test
+// NewDB is what pgtest.DB calls.
+func TestX(t *testing.T) {
+	t.Log("NewDB")
 }`,
 		},
 	} {
@@ -353,57 +332,45 @@ func TestTestCleanup_EveryModuleRunsTheGate(t *testing.T) {
 	}
 }
 
-// The gate scans real code, and a scan that matches nothing is green. Take every
-// real file that binds a NewDB closer, break it the way the bug is written (a
-// defer next to a t.Cleanup), and require the scanner to hit each one: the count
-// of broken files must be above zero and every one of them must hit.
+// The gate scans real code, and a scan that matches nothing is green. In every
+// gated module, take a real *_test.go, add a mention of NewDB to its first test
+// function, and require the scanner to hit it: the number of broken files must
+// equal the number of gated modules (non-zero), and each one must hit.
 func TestTestCleanup_RealFilesHitWhenBroken(t *testing.T) {
 	root, mods := goWorkModules(t)
-	closerRE := regexp.MustCompile(`(?m)^\s*\w+,\s*(\w+),\s*(?:err|_)\s*:?=\s*\w*\.?NewDB\(`)
-	var broken int
+	testFunc := regexp.MustCompile(`(?m)^func Test\w+\([a-z]+ \*testing\.T\) \{\n`)
+	var broken, gated int
 	var missed []string
 	for _, m := range mods {
+		if _, skip := ungated[m]; skip {
+			continue
+		}
+		gated++
+		done := false
 		err := filepath.WalkDir(filepath.Join(root, m), func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			if err != nil || done || d.IsDir() || !strings.HasSuffix(path, "_test.go") || filepath.Base(path) == "testcleanup_test.go" {
 				return err
 			}
 			b, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
-			src := string(b)
-			if filepath.Base(path) == "testcleanup_test.go" {
-				return nil // its fixtures are source text, not code
-			}
-			loc := closerRE.FindStringSubmatchIndex(src)
+			loc := testFunc.FindIndex(b)
 			if loc == nil {
 				return nil
 			}
-			name := src[loc[2]:loc[3]]
-			after := loc[1] // the first release after the binding is the one that belongs to it
-			// However the closer is released today, release it with a defer and
-			// register a t.Cleanup next to it.
-			mutated := ""
-			for _, form := range []string{"defer " + name + "()", "t.Cleanup(" + name + ")"} {
-				if i := strings.Index(src[after:], form); i >= 0 {
-					i += after
-					mutated = src[:i] + "defer " + name + "(); t.Cleanup(func() {})" + src[i+len(form):]
-					break
-				}
-			}
-			if mutated == "" {
-				return nil // released some other way; nothing to break here
-			}
+			mutated := string(b[:loc[1]]) + "\t_ = NewDB\n" + string(b[loc[1]:])
 			fset := token.NewFileSet()
 			f, perr := parser.ParseFile(fset, path, mutated, 0)
 			if perr != nil {
 				t.Fatalf("%s: mutated source does not parse: %v", path, perr)
 			}
+			done = true
 			broken++
 			found, _ := archtest.ScanTestCleanupFiles(fset, []*ast.File{f})
 			hit := false
 			for _, x := range found {
-				hit = hit || x.Rule == archtest.RulePoolDefer
+				hit = hit || x.Rule == archtest.RuleDirectPool
 			}
 			if !hit {
 				missed = append(missed, path)
@@ -414,8 +381,8 @@ func TestTestCleanup_RealFilesHitWhenBroken(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if broken == 0 {
-		t.Fatal("no real file binds a NewDB closer that could be broken: the check observed nothing")
+	if broken == 0 || broken != gated {
+		t.Fatalf("broke %d real files in %d gated modules: the check observed nothing, or skipped a module", broken, gated)
 	}
 	if len(missed) > 0 {
 		t.Fatalf("the gate missed a broken real file: %v", missed)
@@ -424,321 +391,126 @@ func TestTestCleanup_RealFilesHitWhenBroken(t *testing.T) {
 
 // ── shape matrix ─────────────────────────────────────────────────────────────
 //
-// The rule is a SHAPE BAN, not a lifecycle proof: a test function (with every
-// closure and t.Run body inside it) that defers the close of a NewDB pool and
-// registers a t.Cleanup anywhere is reported, whichever t the Cleanup is on and
-// whether it would run before or after the close. The gate does not try to decide
-// that from the syntax (which t a closure was handed, an alias, which parameter a
-// helper registers on, a Run method that is not testing's): the shapes are
-// unbounded and two review rounds each found another. The fix is the same for all
-// of them (pgtest.DB), so a child that happens to be safe is reported and migrated
-// too. This deliberately tightens #371, which left safe subtest shapes alone.
+// The rule is "a test does not open a pool itself": any MENTION of an opener
+// (NewDB, sql.Open, pgxpool.New..., pgx.Connect...) is a finding, matched on
+// identifiers and selectors, with no data flow. Calling it, assigning it, passing
+// it, keeping it in a struct, aliasing the import: all the same finding, so there
+// is no closer to defer, alias or wrap, and the earlier rule that paired a deferred
+// close with a t.Cleanup (and needed alias tracking to be sound) is gone. The fix
+// is pgtest.DB / pgtest.TryDB / pgtest.Conn.
 //
-// Every row below must hit. Rows are {mechanism} x {direct t.Cleanup, helper that
-// registers t.Cleanup}; the helper is declared in a second file of the same
-// package (cross-file discovery). The controls after it must not.
+// Every row must hit. The rows are the shapes the earlier pairing rule was bypassed
+// or fooled by. The controls after them must not.
 var shapeCells = []struct{ name, src string }{
-	{"same_level_direct", `package probe_test
-
-func TestProbe_same_level_direct(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
-}
-`},
-	{"same_level_helper", `package probe_test
-
-func TestProbe_same_level_helper(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	registerPurge(t, db)
-}
-`},
-	{"t_run_child_direct", `package probe_test
-
-func TestProbe_t_run_child_direct(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Run("child", func(t *testing.T) { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) })
-}
-`},
-	{"t_run_child_helper", `package probe_test
-
-func TestProbe_t_run_child_helper(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Run("child", func(t *testing.T) { registerPurge(t, db) })
-}
-`},
-	{"immediate_closure_parent_t_direct", `package probe_test
-
-func TestProbe_immediate_closure_parent_t_direct(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	func(t *testing.T) { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) }(t)
-}
-`},
-	{"immediate_closure_parent_t_helper", `package probe_test
-
-func TestProbe_immediate_closure_parent_t_helper(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	func(t *testing.T) { registerPurge(t, db) }(t)
-}
-`},
-	{"immediate_closure_renamed_t_direct", `package probe_test
-
-func TestProbe_immediate_closure_renamed_t_direct(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	func(tt *testing.T) { tt.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { tt.Errorf("purge: %v", err) } }) }(t)
-}
-`},
-	{"immediate_closure_renamed_t_helper", `package probe_test
-
-func TestProbe_immediate_closure_renamed_t_helper(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	func(tt *testing.T) { registerPurge(tt, db) }(t)
-}
-`},
-	{"capturing_closure_direct", `package probe_test
-
-func TestProbe_capturing_closure_direct(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	func() { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) }()
-}
-`},
-	{"capturing_closure_helper", `package probe_test
-
-func TestProbe_capturing_closure_helper(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	func() { registerPurge(t, db) }()
-}
-`},
-	{"forwarded_t_direct", `package probe_test
-
-func TestProbe_forwarded_t_direct(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	u := t
-	func() { u.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { u.Errorf("purge: %v", err) } }) }()
-}
-`},
-	{"forwarded_t_helper", `package probe_test
-
-func TestProbe_forwarded_t_helper(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	u := t
-	registerPurge(u, db)
-}
-`},
-	{"named_subtest_func_direct", `package probe_test
-
-var probeDB_named_subtest_func_direct *gorm.DB
-
-func probe_named_subtest_func_direct_child(t *testing.T) {
-	db := probeDB_named_subtest_func_direct
-	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
+	{"defer_close", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\tt.Cleanup(func() {})\n}\n"},
+	{"method_value_register", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\tregister := t.Cleanup\n\tregister(func() {})\n}\n"},
+	{"registrar_alias", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\tregister := registerPurge\n\tregister(t, db)\n}\n"},
+	{"deferred_closure", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tfinish := func() { closeDB() }\n\tdefer finish()\n\tt.Cleanup(func() {})\n}\n"},
+	{"closer_alias", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tfinish := closeDB\n\tdefer finish()\n\tt.Cleanup(func() {})\n}\n"},
+	{"wrapper_passes_registrar", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\treviewWrapper(t)\n}\n"},
+	{"t_run_child", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\tt.Run(\"child\", func(t *testing.T) { t.Cleanup(func() {}) })\n}\n"},
+	{"named_subtest_func", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\tt.Run(\"child\", probeChild)\n}\nfunc probeChild(t *testing.T) { t.Cleanup(func() {}) }\n"},
+	{"immediate_closure_parent_t", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\tfunc(t *testing.T) { t.Cleanup(func() {}) }(t)\n}\n"},
+	{"runner_run_is_not_a_subtest", "package probe_test\ntype runner struct{ t *testing.T }\nfunc (r runner) Run(name string, fn func(*testing.T)) { fn(r.t) }\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\trunner{t}.Run(\"x\", func(t *testing.T) { t.Cleanup(func() {}) })\n}\n"},
+	{"helper_registers_on_parent_param", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\tt.Run(\"child\", func(ct *testing.T) { registerOwner(t, ct, db) })\n}\n"},
+	{"child_alias", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n\tt.Run(\"child\", func(ct *testing.T) { u := ct; u.Cleanup(func() {}) })\n}\n"},
+	{"no_cleanup_at_all", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tdefer closeDB()\n}\n"},
+	{"closer_registered_with_cleanup", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tt.Cleanup(closeDB)\n}\n"},
+	{"method_value_opener", "package probe_test\nfunc TestProbe(t *testing.T) {\n\topen := postgres.NewDB\n\tdb, closeDB, _ := open(cfg, tel)\n\tt.Cleanup(closeDB)\n}\n"},
+	{"import_alias", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := pg.NewDB(cfg, tel)\n\tt.Cleanup(closeDB)\n}\n"},
+	{"sql_open", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, _ := sql.Open(\"pgx\", dsn)\n\tt.Cleanup(func() { _ = db.Close() })\n}\n"},
+	{"pgxpool_new", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tp, _ := pgxpool.New(ctx, dsn)\n\tt.Cleanup(p.Close)\n}\n"},
+	{"pgx_connect", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tc, _ := pgx.Connect(ctx, dsn)\n\tt.Cleanup(func() { _ = c.Close(ctx) })\n}\n"},
+	{"gorm_open", "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, _ := gorm.Open(dialector, gc)\n\t_ = db\n}\n"},
 }
 
-func TestProbe_named_subtest_func_direct(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	probeDB_named_subtest_func_direct = db
-	t.Run("child", probe_named_subtest_func_direct_child)
-}
-`},
-	{"named_subtest_func_helper", `package probe_test
-
-var probeDB_named_subtest_func_helper *gorm.DB
-
-func probe_named_subtest_func_helper_child(t *testing.T) { registerPurge(t, probeDB_named_subtest_func_helper) }
-
-func TestProbe_named_subtest_func_helper(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	probeDB_named_subtest_func_helper = db
-	t.Run("child", probe_named_subtest_func_helper_child)
-}
-`},
-	{"runner_run_is_not_a_subtest", `package probe_test
-
-type probe_runner_run_is_not_a_subtest_runner struct{ t *testing.T }
-
-// Run runs fn at once with the SAME t: not a subtest.
-func (r probe_runner_run_is_not_a_subtest_runner) Run(name string, fn func(*testing.T)) { fn(r.t) }
-
-func TestProbe_runner_run_is_not_a_subtest(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	r := probe_runner_run_is_not_a_subtest_runner{t}
-	r.Run("x", func(t *testing.T) { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) })
-}
-`},
-	{"helper_registers_on_parent_param", `package probe_test
-
-func TestProbe_helper_registers_on_parent_param(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Run("child", func(ct *testing.T) { registerOwner(t, ct, db) })
-}
-`},
-	{"child_alias_direct", `package probe_test
-
-func TestProbe_child_alias_direct(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Run("child", func(ct *testing.T) {
-		u := ct
-		u.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { u.Errorf("purge: %v", err) } })
-	})
-}
-`},
-	{"child_alias_helper", `package probe_test
-
-func TestProbe_child_alias_helper(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Run("child", func(ct *testing.T) {
-		u := ct
-		registerPurge(u, db)
-	})
-}
-`},
-	{"grandchild", `package probe_test
-
-func TestProbe_grandchild(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Run("a", func(a *testing.T) {
-		a.Run("b", func(b *testing.T) { b.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { b.Errorf("purge: %v", err) } }) })
-	})
-}
-`},
-	{"child_captured_by_closure_in_child", `package probe_test
-
-func TestProbe_child_captured_by_closure_in_child(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Run("c", func(ct *testing.T) {
-		func() { ct.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { ct.Errorf("purge: %v", err) } }) }()
-	})
-}
-`},
-}
-
-const shapeHelper = `package probe_test
-
-func registerPurge(t *testing.T, db *gorm.DB) {
-	t.Helper()
-	t.Cleanup(func() {
-		if err := db.Exec("SELECT 1").Error; err != nil {
-			t.Errorf("purge: %v", err)
-		}
-	})
-}
-
-// registerOwner registers on its FIRST argument; the second is only passed along.
-func registerOwner(owner, other *testing.T, db *gorm.DB) {
-	owner.Helper()
-	other.Helper()
-	owner.Cleanup(func() {
-		if err := db.Exec("SELECT 1").Error; err != nil {
-			owner.Errorf("purge: %v", err)
-		}
-	})
-}
-`
-
-// Controls that must NOT hit: the clean pgtest.DB use, a defer with no Cleanup,
-// a Cleanup with no defer.
+// Controls that must NOT hit, and the one that must (same content, allowlisted and not).
 var shapeControlsClean = map[string]string{
-	"clean_pgtest_db": `package probe_test
-
-func TestProbe_clean(t *testing.T) {
-	db := pgtest.DB(t, cfg, tel)
-	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
-	registerPurge(t, db)
-	t.Run("child", func(t *testing.T) { t.Cleanup(func() {}) })
-}
-`,
-	"defer_only": `package probe_test
-
-func TestProbe_deferOnly(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	if err := db.Exec("SELECT 1").Error; err != nil { t.Fatal(err) }
-}
-`,
-	"cleanup_only": `package probe_test
-
-func TestProbe_cleanupOnly(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	t.Cleanup(closeDB)
-	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
-}
-`,
+	"clean_pgtest_db":     "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb := pgtest.DB(t, cfg, tel)\n\tt.Cleanup(func() { if err := db.Exec(\"SELECT 1\").Error; err != nil { t.Errorf(\"purge: %v\", err) } })\n\tregisterPurge(t, db)\n\tt.Run(\"child\", func(t *testing.T) { t.Cleanup(func() {}) })\n}\n",
+	"pgtest_try_and_conn": "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, err := pgtest.TryDB(t, cfg, tel)\n\tc := pgtest.Conn(t, dsn)\n\t_, _, _ = db, err, c\n}\n",
 }
 
-// shapeControlHit is the plain shape the gate exists for; it must hit in the same run.
-const shapeControlHit = `package probe_test
-
-func TestProbe_control(t *testing.T) {
-	db, closeDB, _ := postgres.NewDB(cfg, tel)
-	defer closeDB()
-	t.Cleanup(func() { _ = db.Exec("SELECT 1").Error })
-}
-`
+const opensAPool = "package probe_test\nfunc TestProbe(t *testing.T) {\n\tdb, closeDB, _ := postgres.NewDB(cfg, tel)\n\tt.Cleanup(closeDB)\n}\n"
 
 // The scanner is entered through its directory walk, as a module's gate is.
 func TestTestCleanup_ShapeMatrix(t *testing.T) {
 	dir := t.TempDir()
-	write := func(name, src string) {
+	write := func(rel, src string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name+"_test.go"), []byte(src), 0o600); err != nil {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("helper", shapeHelper)
-	write("control_hit", shapeControlHit)
+	write("m/helper_test.go", "package probe_test\nfunc registerPurge(t *testing.T, db *gorm.DB) { t.Cleanup(func() {}) }\n")
+	write("m/control_hit_test.go", opensAPool)
 	for _, c := range shapeCells {
-		write(c.name, c.src)
+		write("m/"+c.name+"_test.go", c.src)
 	}
 	for name, src := range shapeControlsClean {
-		write(name, src)
+		write("m/"+name+"_test.go", src)
 	}
+	// Same content, two places: listed in the allowlist, and not.
+	write("allowed/opens_test.go", opensAPool)
+	write("notallowed/opens_test.go", opensAPool)
+	// pgtest's own package is exempt by construction, not by the allowlist.
+	write("pgtest/own_test.go", opensAPool)
 
-	found, st, err := archtest.ScanTestCleanupDir(dir)
+	allow := []archtest.Allow{{Path: "allowed/", Reason: "fixture: stands in for a test of NewDB itself"}}
+	found, st, err := archtest.ScanTestCleanupDirAllow(dir, allow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := len(shapeCells) + len(shapeControlsClean) + 2; st.Files != want {
+	if want := len(shapeCells) + len(shapeControlsClean) + 5; st.Files != want {
 		t.Fatalf("scanned %d files, want %d: the matrix was not looked at", st.Files, want)
 	}
-	hits := map[string]int{}
+	count := map[string]int{}
 	for _, f := range found {
-		if f.Rule == archtest.RulePoolDefer {
-			hits[strings.TrimSuffix(filepath.Base(f.Pos.Filename), "_test.go")]++
+		if f.Rule == archtest.RuleDirectPool {
+			rel, _ := filepath.Rel(dir, f.Pos.Filename)
+			count[filepath.ToSlash(rel)]++
 		}
 	}
-	if hits["control_hit"] == 0 {
-		t.Fatalf("the plain defer+Cleanup control did not hit: %v", found)
+	if count["m/control_hit_test.go"] == 0 {
+		t.Fatalf("the plain NewDB control did not hit: %v", found)
 	}
 	for _, c := range shapeCells {
-		if hits[c.name] == 0 {
+		if count["m/"+c.name+"_test.go"] == 0 {
 			t.Errorf("%s: not reported", c.name)
 		}
 	}
 	for name := range shapeControlsClean {
-		if hits[name] != 0 {
-			t.Errorf("control %s: reported %d pool-defer hit(s), want none", name, hits[name])
+		if n := count["m/"+name+"_test.go"]; n != 0 {
+			t.Errorf("control %s: reported %d direct-pool hit(s), want none", name, n)
 		}
 	}
-	if len(shapeCells) < 14 {
+	if n := count["allowed/opens_test.go"]; n != 0 {
+		t.Errorf("allowlisted path reported %d hit(s), want none", n)
+	}
+	if count["notallowed/opens_test.go"] == 0 {
+		t.Errorf("the same content outside the allowlist did not hit")
+	}
+	if n := count["pgtest/own_test.go"]; n != 0 {
+		t.Errorf("pgtest's own package reported %d hit(s), want none", n)
+	}
+	if len(shapeCells) < 20 {
 		t.Fatalf("only %d matrix rows", len(shapeCells))
+	}
+}
+
+// The allowlist is part of the gate's contract: each line is one path and its
+// reason, never a comment-based skip. This pins its shape so an entry cannot lose
+// its reason.
+func TestTestCleanup_AllowlistEntriesHaveReasons(t *testing.T) {
+	for _, a := range archtest.DirectPoolAllowlist {
+		if a.Path == "" || strings.TrimSpace(a.Reason) == "" {
+			t.Errorf("allowlist entry %+v needs a path and a reason", a)
+		}
+		if strings.HasPrefix(a.Path, "/") || strings.Contains(a.Path, "..") {
+			t.Errorf("allowlist path %q must be repo-relative", a.Path)
+		}
 	}
 }

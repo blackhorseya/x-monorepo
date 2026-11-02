@@ -55,7 +55,21 @@ const (
 	RulePoolDefer      = "test-cleanup-pool-defer"
 	RulePoolOrder      = "test-cleanup-pool-order"
 	RuleCleanupSwallow = "test-cleanup-swallow"
+	RuleDirectPool     = "test-direct-pool"
+	RulePoolClose      = "test-pool-close"
 )
+
+// Allow exempts one repo-relative path prefix from the direct-pool rule, with the reason.
+type Allow struct{ Path, Reason string }
+
+// DirectPoolAllowlist is the whole list of exemptions; each line is one path and why.
+// (Empty until the rule lands.)
+var DirectPoolAllowlist = []Allow{}
+
+// ScanTestCleanupDirAllow is ScanTestCleanupDir with an explicit allowlist (tests).
+func ScanTestCleanupDirAllow(root string, allow []Allow) ([]Finding, ScanStats, error) {
+	return ScanTestCleanupDir(root)
+}
 
 // ScanStats says how much a scan looked at. A gate that scanned nothing is
 // green for the wrong reason, so callers assert on it.
