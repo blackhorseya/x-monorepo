@@ -431,3 +431,227 @@ func TestTestCleanup_RealFilesHitWhenBroken(t *testing.T) {
 		t.Fatalf("the gate missed a broken real file: %v", missed)
 	}
 }
+
+// ── scope matrix ─────────────────────────────────────────────────────────────
+//
+// Which t does a Cleanup register on? The parent function defers closeDB, so a
+// Cleanup on the PARENT's t runs after the pool is closed (unsafe) and a Cleanup
+// on a t.Run child's own t runs before t.Run returns (safe). The scanner decides
+// from the call site: only a literal handed to t.Run gets a t of its own. A
+// closure that merely takes a *testing.T (called at once with the parent's t, or
+// with it renamed, or capturing it, or reached through a forwarded variable) is
+// the same t. Undecidable shapes are reported, not excused: this is a safety
+// gate, and a wrong "unsafe" is one line to restructure while a wrong "safe" is
+// a purge on a closed pool.
+//
+// Every row was also run as a real test against Postgres (the same bodies, the
+// purge being a statement on the pool): the unsafe rows FAIL with "sql: database
+// is closed", the safe rows PASS. Rows are {mechanism} x {direct t.Cleanup,
+// helper that registers t.Cleanup} (the helper is declared in a second file of
+// the same package, so cross-file discovery is exercised too).
+type scopeCell struct {
+	name string
+	safe bool
+	src  string
+}
+
+var scopeCells = []scopeCell{
+	{"same_level_direct", false, `package probe_test
+
+func TestProbe_same_level_direct(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
+}
+`},
+	{"same_level_helper", false, `package probe_test
+
+func TestProbe_same_level_helper(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	registerPurge(t, db)
+}
+`},
+	{"t_run_child_direct", true, `package probe_test
+
+func TestProbe_t_run_child_direct(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Run("child", func(t *testing.T) { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) })
+}
+`},
+	{"t_run_child_helper", true, `package probe_test
+
+func TestProbe_t_run_child_helper(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Run("child", func(t *testing.T) { registerPurge(t, db) })
+}
+`},
+	{"immediate_closure_parent_t_direct", false, `package probe_test
+
+func TestProbe_immediate_closure_parent_t_direct(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	func(t *testing.T) { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) }(t)
+}
+`},
+	{"immediate_closure_parent_t_helper", false, `package probe_test
+
+func TestProbe_immediate_closure_parent_t_helper(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	func(t *testing.T) { registerPurge(t, db) }(t)
+}
+`},
+	{"immediate_closure_renamed_t_direct", false, `package probe_test
+
+func TestProbe_immediate_closure_renamed_t_direct(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	func(tt *testing.T) { tt.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { tt.Errorf("purge: %v", err) } }) }(t)
+}
+`},
+	{"immediate_closure_renamed_t_helper", false, `package probe_test
+
+func TestProbe_immediate_closure_renamed_t_helper(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	func(tt *testing.T) { registerPurge(tt, db) }(t)
+}
+`},
+	{"capturing_closure_direct", false, `package probe_test
+
+func TestProbe_capturing_closure_direct(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	func() { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) }()
+}
+`},
+	{"capturing_closure_helper", false, `package probe_test
+
+func TestProbe_capturing_closure_helper(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	func() { registerPurge(t, db) }()
+}
+`},
+	{"forwarded_t_direct", false, `package probe_test
+
+func TestProbe_forwarded_t_direct(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	u := t
+	func() { u.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { u.Errorf("purge: %v", err) } }) }()
+}
+`},
+	{"forwarded_t_helper", false, `package probe_test
+
+func TestProbe_forwarded_t_helper(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	u := t
+	registerPurge(u, db)
+}
+`},
+	{"named_subtest_func_direct", true, `package probe_test
+
+var probeDB_named_subtest_func_direct *gorm.DB
+
+func probe_named_subtest_func_direct_child(t *testing.T) {
+	db := probeDB_named_subtest_func_direct
+	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
+}
+
+func TestProbe_named_subtest_func_direct(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	probeDB_named_subtest_func_direct = db
+	t.Run("child", probe_named_subtest_func_direct_child)
+}
+`},
+	{"named_subtest_func_helper", true, `package probe_test
+
+var probeDB_named_subtest_func_helper *gorm.DB
+
+func probe_named_subtest_func_helper_child(t *testing.T) { registerPurge(t, probeDB_named_subtest_func_helper) }
+
+func TestProbe_named_subtest_func_helper(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	probeDB_named_subtest_func_helper = db
+	t.Run("child", probe_named_subtest_func_helper_child)
+}
+`},
+}
+
+const scopeHelper = `package probe_test
+
+func registerPurge(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := db.Exec("SELECT 1").Error; err != nil {
+			t.Errorf("purge: %v", err)
+		}
+	})
+}
+`
+
+// scopeControl is the plain shape the gate exists for; it must hit in the same run.
+const scopeControl = `package probe_test
+
+func TestProbe_control(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Cleanup(func() { _ = db.Exec("SELECT 1").Error })
+}
+`
+
+// The scanner is entered through its directory walk, as a module's gate is.
+func TestTestCleanup_ScopeMatrix(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("helper_test.go", scopeHelper)
+	write("control_test.go", scopeControl)
+	for _, c := range scopeCells {
+		write(c.name+"_test.go", c.src)
+	}
+
+	found, st, err := archtest.ScanTestCleanupDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := len(scopeCells) + 2; st.Files != want {
+		t.Fatalf("scanned %d files, want %d: the matrix was not looked at", st.Files, want)
+	}
+	poolDefer := map[string]int{}
+	for _, f := range found {
+		if f.Rule == archtest.RulePoolDefer {
+			poolDefer[filepath.Base(f.Pos.Filename)]++
+		}
+	}
+	if poolDefer["control_test.go"] == 0 {
+		t.Fatalf("the plain defer+Cleanup control did not hit: %v", found)
+	}
+	unsafe := 0
+	for _, c := range scopeCells {
+		got := poolDefer[c.name+"_test.go"]
+		switch {
+		case c.safe && got != 0:
+			t.Errorf("%s: safe (the Cleanup is on a subtest's own t) but reported %d pool-defer hit(s)", c.name, got)
+		case !c.safe && got == 0:
+			t.Errorf("%s: unsafe (the Cleanup is on the parent's t, after the deferred close) but not reported", c.name)
+		}
+		if !c.safe {
+			unsafe++
+		}
+	}
+	if unsafe == 0 {
+		t.Fatal("the matrix has no unsafe row")
+	}
+}
