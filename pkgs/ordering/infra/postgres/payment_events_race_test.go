@@ -166,8 +166,7 @@ func TestPaymentEvents_RacesOnPostgres(t *testing.T) {
 				if got != winner.final {
 					t.Errorf("final status = %s, want %s (the winner's)", got, winner.final)
 				}
-				switch {
-				case winner.final == loser.final:
+				if winner.final == loser.final {
 					// the same end reached by two roads (cancel vs expired): the loser finds it done
 					if loser.name == "cancel" && !errors.Is(err, order.ErrCannotCancel) {
 						t.Errorf("cancel after the order was cancelled: err = %v, want order.cannot_cancel", err)
@@ -175,10 +174,8 @@ func TestPaymentEvents_RacesOnPostgres(t *testing.T) {
 					if loser.name == "expired" && err != nil {
 						t.Errorf("expired after the order was cancelled is a no-op, got %v", err)
 					}
-				default:
-					if !errors.Is(err, loser.refusal) {
-						t.Errorf("loser %s err = %v, want %v", loser.name, err, loser.refusal)
-					}
+				} else if !errors.Is(err, loser.refusal) {
+					t.Errorf("loser %s err = %v, want %v", loser.name, err, loser.refusal)
 				}
 				if ev := loserEvents.names(); len(ev) != 0 {
 					t.Errorf("the loser raised %v: a refused or no-op event must raise nothing", ev)
