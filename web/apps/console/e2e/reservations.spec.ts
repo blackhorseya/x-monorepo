@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { confirm, createCard, filterCard, expectOrderStatus } from "./orders-ui";
+import { confirm, createCard, filterCard, expectOrderStatus, createOrder } from "./orders-ui";
 import { setStock } from "./stock-ui";
 import { expectReservationStatus } from "./reservation-ui";
 
@@ -69,7 +69,7 @@ test.describe("with a worker", () => {
     await createCard(page).getByLabel("Customer").fill(customer);
     await createCard(page).getByLabel("SKU").fill(sku);
     await page.getByLabel("Qty").fill("1");
-    await page.getByRole("button", { name: "Create order" }).click();
+    await createOrder(page);
     await filterCard(page).getByLabel("Customer").fill(customer);
     await page.getByRole("button", { name: "Filter" }).click();
     const orderRow = page.getByRole("row").filter({ hasText: customer });

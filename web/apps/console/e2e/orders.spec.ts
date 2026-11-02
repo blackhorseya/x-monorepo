@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { withDB } from "./mode";
 import { seedProduct } from "./catalog";
 import { uid } from "./uid";
-import { cellUnder, confirm, createCard, filterCard } from "./orders-ui";
+import { cellUnder, confirm, createCard, filterCard, createOrder } from "./orders-ui";
 import { setStock } from "./stock-ui";
 
 // The server keeps orders in memory for the whole run and the tests run in
@@ -29,7 +29,7 @@ test("create, see, cancel an order", async ({ page, request }) => {
   await page.goto("/orders");
   await createCard(page).getByLabel("Customer").fill(id);
   await createCard(page).getByLabel("SKU").fill(sku);
-  await page.getByRole("button", { name: "Create order" }).click();
+  await createOrder(page);
 
   await filterCard(page).getByLabel("Customer").fill(id);
   await page.getByRole("button", { name: "Filter" }).click();
