@@ -407,6 +407,8 @@ jobs:
           docker compose -f deployments/docker/docker-compose.yaml logs dex; exit 1
       - run: task web-e2e
         env: { E2E_DEX: "1" }
+      # The same OIDC specs on a non-default port pair (#383): fixtures must follow E2E_RPC_PORT / E2E_WEB_PORT.
+      - run: task web-e2e-ports
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

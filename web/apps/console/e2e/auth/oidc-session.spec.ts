@@ -143,7 +143,7 @@ test("sign out: local state cleared, no token left anywhere, later calls carry n
   expect(refreshGrants(idp)).toHaveLength(0);
 });
 
-test("sign out goes to the IdP's end_session_endpoint when discovery has one, with no token in the URL", async ({ page }) => {
+test("sign out goes to the IdP's end_session_endpoint when discovery has one, with no token in the URL @ports", async ({ page, baseURL }) => {
   await stubConfig(page);
   const idp = await mockIdp(page, { endSession: true });
   await page.goto("/login");
@@ -154,19 +154,19 @@ test("sign out goes to the IdP's end_session_endpoint when discovery has one, wi
   await page.waitForURL(`${END_SESSION}**`);
   const url = new URL(page.url());
   expect(url.searchParams.get("client_id")).toBe(CLIENT_ID);
-  expect(url.searchParams.get("post_logout_redirect_uri")).toBe(new URL("/login", "http://localhost:4174").toString());
+  expect(url.searchParams.get("post_logout_redirect_uri")).toBe(new URL("/login", baseURL).toString());
   expect(url.searchParams.has("id_token_hint")).toBe(false);
   for (const secret of [...idp.accessTokens, ...idp.idTokens, ...idp.refreshTokens]) expect(page.url()).not.toContain(secret);
 });
 
-test("sign out without an end_session_endpoint (Dex) stays in the console", async ({ page }) => {
+test("sign out without an end_session_endpoint (Dex) stays in the console @ports", async ({ page, baseURL }) => {
   await stubConfig(page);
   await mockIdp(page, { endSession: false });
   await page.goto("/login");
   await signIn(page);
   await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page).toHaveURL(/localhost:4174\/login/);
+  await expect(page).toHaveURL(new URL("/login", baseURL).toString());
 });
 
 test("an API key chosen on top of an OIDC session replaces it: refresh token dropped, the key survives a reload", async ({ page }) => {
