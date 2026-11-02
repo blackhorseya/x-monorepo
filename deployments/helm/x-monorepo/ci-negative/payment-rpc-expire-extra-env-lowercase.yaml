@@ -1,0 +1,11 @@
+# expect: paymentRpc.expire.extraEnv
+# payment-rpc expire: the chart owns auth, the Postgres URL, the config file, the provider and its
+# credentials, the broker; an env var here would turn one off or replace it (app_auth_mode).
+paymentRpc:
+  enabled: true
+  expire:
+    extraEnv: [{"name": "app_auth_mode", "value": "x"}]
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }

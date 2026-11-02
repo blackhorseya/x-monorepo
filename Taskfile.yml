@@ -183,7 +183,7 @@ tasks:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
       - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
       - go install github.com/yannh/kubeconform/cmd/kubeconform@{{.KUBECONFORM_VERSION}}
-      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-negative.sh deployments/helm/kind/*.sh
+      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/check-negative.sh deployments/helm/kind/*.sh
 
   tools:hooks:
     desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
@@ -282,7 +282,7 @@ tasks:
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
 
   helm-check:
-    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers'
+    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers, check-observability.py the payment panels and alert rules'
     vars:
       CHART: deployments/helm/x-monorepo
       KUBECONFORM:
@@ -296,6 +296,8 @@ tasks:
           helm template t {{.CHART}} -f {{.ITEM}} | {{.KUBECONFORM}} -strict -summary -kubernetes-version 1.30.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{"}}.Group{{"}}"}}/{{"{{"}}.ResourceKind{{"}}"}}_{{"{{"}}.ResourceAPIVersion{{"}}"}}.json' >/dev/null
           helm template t {{.CHART}} -f {{.ITEM}} | deployments/helm/check.py {{.ITEM}}
       - deployments/helm/check-negative.sh
+      # the payment panels and alert rules exist and name only metrics the code exports (deployments/docker/grafana)
+      - deployments/helm/check-observability.py
       # negative.sh's reading of the refusal, against fake kubectl/helm (no cluster): retries, never asserts on a tool error
       - deployments/helm/kind/negative-test.sh
     preconditions:

@@ -1,0 +1,13 @@
+# expect: paymentRpc.ingress.hosts
+# An ingress rule with no host would answer for every host the controller serves.
+paymentRpc:
+  enabled: true
+  ingress:
+    enabled: true
+    className: "nginx"
+    hosts: []
+    rateLimit: { rps: 5, burstMultiplier: 3, connections: 10 }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }
