@@ -570,6 +570,14 @@ tasks:
     deps: [build, web-build]
     cmds: ['web/apps/console/e2e/image.sh {{.CLI_ARGS}}']
 
+  web-e2e-ports:
+    desc: 'the Console OIDC e2e fixtures follow E2E_RPC_PORT / E2E_WEB_PORT (#383): the tests tagged @ports (real-backend claim and issuer-mismatch negative, the two logout cases, the own-origin token-endpoint case) on a NON-default port pair, CI=1 so no webServer reuses someone else''s. Not the RevokeSessions cache wait. What CI''s console-e2e job runs after the default-port run'
+    deps: [build, web-build]
+    dir: web/apps/console
+    cmds:
+      # Set in the shell, not in `env:`, so an inherited E2E_*_PORT / CI cannot change what is tested.
+      - export CI=1 E2E_RPC_PORT=19511 E2E_WEB_PORT=4511; unset E2E_DATABASE_URL E2E_DEX E2E_CONSOLE_URL; pnpm exec playwright test --project=auth --project=oidc-backend --grep @ports {{.CLI_ARGS}}
+
   web-e2e-dex:
     desc: 'the oidc-dex Playwright project: the console signs in through the real dev Dex (compose service dex, started here if it is not up) against a real ./bin/rpc whose only OIDC issuer is that Dex; binding goes through CreateInvite + ClaimInvite. Needs dex.localtest.me to resolve (public DNS, or /etc/hosts offline: docs/operations.md "Dex dev IdP"). Other CI runs it with E2E_DEX=1 task web-e2e'
     deps: [build, web-build]

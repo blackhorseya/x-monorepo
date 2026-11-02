@@ -143,7 +143,7 @@ test("sign out: local state cleared, no token left anywhere, later calls carry n
   expect(refreshGrants(idp)).toHaveLength(0);
 });
 
-test("sign out goes to the IdP's end_session_endpoint when discovery has one, with no token in the URL", async ({ page }) => {
+test("sign out goes to the IdP's end_session_endpoint when discovery has one, with no token in the URL @ports", async ({ page }) => {
   await stubConfig(page);
   const idp = await mockIdp(page, { endSession: true });
   await page.goto("/login");
@@ -159,7 +159,7 @@ test("sign out goes to the IdP's end_session_endpoint when discovery has one, wi
   for (const secret of [...idp.accessTokens, ...idp.idTokens, ...idp.refreshTokens]) expect(page.url()).not.toContain(secret);
 });
 
-test("sign out without an end_session_endpoint (Dex) stays in the console", async ({ page }) => {
+test("sign out without an end_session_endpoint (Dex) stays in the console @ports", async ({ page }) => {
   await stubConfig(page);
   await mockIdp(page, { endSession: false });
   await page.goto("/login");
