@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/provider/mock"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
 // docs/payment.md §9 S6: `payment-rpc mock pay|notify|fail` is how a kind cluster (or a test) plays the customer
@@ -398,4 +400,109 @@ func TestMockControl_OpensNoRoute(t *testing.T) {
 			}
 		}
 	}
+}
+
+// holdRowLock holds a row lock on the checkout of ref from a connection of the test's own until released (or the test
+// ends): whatever then writes that row waits. The release is idempotent and registered as a cleanup.
+func holdRowLock(t *testing.T, url, ref string) (release func()) {
+	t.Helper()
+	conn := pgtest.Conn(t, url)
+	ctx := context.Background()
+	if _, err := conn.Exec(ctx, `BEGIN`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT 1 FROM payment.mock_checkouts WHERE ref = $1 FOR UPDATE`, ref); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { _, _ = conn.Exec(ctx, `ROLLBACK`); _ = conn.Close(ctx) }) }
+	t.Cleanup(release)
+
+	return release
+}
+
+// waitingOn reports how many backends wait on a lock while running a statement that mentions what.
+func (e *consumeEnv) waitingOn(what string) int {
+	e.t.Helper()
+
+	return e.count(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%' || ? || '%' AND pid <> pg_backend_pid()`, what)
+}
+
+// The command's own deadline (#406): `mock pay` is declared to end within mockTimeout, whole command. The write that
+// marks the checkout paid waits on a lock another transaction holds; when the deadline passes the command must return
+// the cancellation — and the write it was waiting to make must NOT happen once the lock is let go (a success a script
+// never saw must not appear later). The positive control: with nothing in the way the same command pays well inside the
+// same budget, so a timeout here means the lock, not a budget too short for the work.
+func TestMockControl_PayEndsAtItsDeadlineWhileTheDatabaseWaits(t *testing.T) {
+	old := mockTimeout
+	mockTimeout = 2 * time.Second
+	t.Cleanup(func() { mockTimeout = old })
+
+	t.Run("positive control: nothing in the way", func(t *testing.T) {
+		e := newControlEnv(t)
+		p := e.pendingWithCheckout()
+		start := time.Now()
+		if _, err := mockRun(t, "pay", "--order", "ord-1"); err != nil {
+			t.Fatalf("mock pay with nothing in the way: %v", err)
+		}
+		if took := time.Since(start); took > mockTimeout {
+			t.Fatalf("the unobstructed pay took %s, longer than the %s budget this test shrinks it to", took, mockTimeout)
+		}
+		if !e.paidAtProvider(p.ProviderRef()) {
+			t.Fatal("the unobstructed pay did not pay")
+		}
+	})
+
+	t.Run("the database holds the row", func(t *testing.T) {
+		e := newControlEnv(t)
+		p := e.pendingWithCheckout()
+		release := holdRowLock(t, e.pg.URL, p.ProviderRef())
+
+		type result struct {
+			err  error
+			took time.Duration
+		}
+		done := make(chan result, 1)
+		start := time.Now()
+		go func() {
+			_, err := mockRun(t, "pay", "--order", "ord-1")
+			done <- result{err, time.Since(start)}
+		}()
+		t.Cleanup(func() { release(); <-done }) // the waiter is joined whatever happens below (a second receive is harmless: done is buffered and drained once)
+
+		// anchor: the command IS waiting on the lock in the paid-marking statement, not somewhere else
+		deadline := time.Now().Add(10 * time.Second)
+		for e.waitingOn("mock_checkouts") == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("fixture: the command never waited on the held row")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		var r result
+		select {
+		case r = <-done:
+		case <-time.After(mockTimeout + 3*time.Second):
+			release() // let it finish so the test can report instead of hanging
+			r = <-done
+			t.Errorf("the command was still waiting %s after its %s deadline and then returned %v once the lock was released", time.Since(start), mockTimeout, r.err)
+			done <- r
+		}
+		if t.Failed() {
+			return
+		}
+		if r.err == nil || !(errors.Is(r.err, context.DeadlineExceeded) || strings.Contains(r.err.Error(), "deadline") || strings.Contains(r.err.Error(), "canceled")) {
+			t.Fatalf("at the deadline the command must return the cancellation, got %v", r.err)
+		}
+		if r.took > mockTimeout+3*time.Second {
+			t.Fatalf("returned after %s, deadline %s", r.took, mockTimeout)
+		}
+		done <- r // for the cleanup's join
+
+		release()
+		time.Sleep(500 * time.Millisecond) // a write that was merely abandoned would land now
+		if e.paidAtProvider(p.ProviderRef()) {
+			t.Fatal("the checkout was paid after the command had already failed: the abandoned write went through when the lock was released")
+		}
+	})
 }
