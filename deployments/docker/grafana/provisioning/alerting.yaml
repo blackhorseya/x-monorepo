@@ -346,6 +346,119 @@ groups:
             The lag and poison rules are silent without this series. Either no worker is running, or its OTLP
             export is not reaching the collector (otel.endpoint).
 
+  # payment-rpc (#367 slice 5c): the payment_* instruments of apps/payment-rpc (counters are summed across
+  # replicas; the reconcile gauges are written by the `expire` CronJob each run, so they are read with
+  # last_over_time over a window longer than the CronJob period, never as an instant that goes stale 5 minutes
+  # after the run). The consumer lag of payment's own group (payment-rpc.payment) is covered by the
+  # worker-eventbus rules above, which take max over every group.
+  - orgId: 1
+    name: payment
+    folder: x-monorepo
+    interval: 1m
+    rules:
+      # A payment ended in a state a person has to look at. The `alert` label is the closed set in docs/operations.md.
+      - uid: x-monorepo-payment-alerts
+        title: Payment needs attention
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: sum by (alert) (increase(payment_alerts_total[15m]))
+              legendFormat: "{{alert}}"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: payment-rpc }
+        annotations:
+          summary: "payment alert {{ $labels.alert }}: {{ $values.A }} in the last 15 minutes"
+          description: >-
+            payment_alerts_total{alert} moved. The category says what to do (docs/operations.md, Payment, "告警"):
+            amount_mismatch / capture_after_review / orphan_webhook mean money at the provider the system will not
+            settle by itself; provider_query_stuck / reconcile_backlog / reconcile_incomplete mean the sweep cannot
+            see the provider (check its credentials and the CronJob).
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "47"
+
+      # The sweep is falling behind: the payment it looked at longest ago has waited more than half the reconcile window.
+      - uid: x-monorepo-payment-reconcile-stale
+        title: Payment reconcile falling behind
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max(last_over_time(payment_reconcile_oldest_unchecked_seconds[30m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [43200] }
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: payment-rpc }
+        annotations:
+          summary: "the oldest unchecked payment has waited {{ $values.A }}s for a reconcile query"
+          description: >-
+            43200s is half of the default payment.reconcile_window (24h): move it with paymentRpc.config.reconcile_window.
+            Past it, expire_batch x the runs inside the window no longer covers the payments inside it, and one with money
+            at the provider and no webhook may go unseen. Raise paymentRpc.config.expire_batch or shorten
+            paymentRpc.expire.intervalMinutes; also look at provider_query_stuck.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "46"
+
+      # payment-rpc consume is up (its lag gauge exists) but the expire CronJob has reported nothing for an hour: no
+      # measurement, which is not the same as no backlog.
+      - uid: x-monorepo-payment-reconcile-absent
+        title: Payment reconcile gauges absent
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: absent_over_time(payment_reconcile_eligible[1h]) and on() (count(eventbus_consumer_lag{consumer_group=~"payment-rpc\\..*"}) > 0)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 30m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, service: payment-rpc }
+        annotations:
+          summary: "payment-rpc consume is reporting but the expire CronJob has exported no reconcile gauge for an hour"
+          description: >-
+            The CronJob is not running (suspended, failing: kubectl get cronjob/jobs), or its OTLP export does not reach
+            the collector (config.otel.endpoint). Without it nothing sweeps: PENDING payments do not expire and money
+            the webhook never reported is not found. The window is 1h, enough for a CronJob period up to 30 minutes.
+          __dashboardUid__: x-monorepo-rpc
+          __panelId__: "45"
+
   - orgId: 1
     name: rpc-auth
     folder: x-monorepo

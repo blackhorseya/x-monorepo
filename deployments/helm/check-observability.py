@@ -7,9 +7,9 @@ provisioned from there, so a typo in a metric name makes a rule that silently ne
 
     deployments/helm/check-observability.py
 
-Every metric name in a payment panel or rule is looked up as a quoted string literal in the Go source
-(the instrument's name) — `payment_alerts_total`, `eventbus_consumer_lag`, ... — after the suffixes
-Prometheus adds are taken off.
+Every metric name in a payment panel or rule is looked up in the Go source after the suffixes Prometheus
+adds are taken off: `payment_*` as the quoted instrument name, `eventbus_*` in the Prometheus-names list that
+platform/eventbus/metrics.go documents above its (dotted) instruments.
 """
 
 import json
@@ -47,8 +47,7 @@ def main() -> None:
     exprs = " ".join(t["expr"] for p in inside for t in p.get("targets", []))
     for want in ("payment_reconcile_eligible", "payment_reconcile_oldest_unchecked_seconds", "payment_alerts_total"):
         check(want in exprs, f"the Payment row has a panel on {want}")
-    check(re.search(r'eventbus_consumer_lag\{[^}]*consumer_group=~"payment-rpc\\\\\..\*"', exprs) is not None
-          or "payment-rpc" in exprs and "eventbus_consumer_lag" in exprs,
+    check("eventbus_consumer_lag" in exprs and 'consumer_group=~"payment-rpc' in exprs,
           "the Payment row has the consumer lag of payment-rpc's own consumer group")
     for p in inside:
         check(p["gridPos"]["y"] > row["gridPos"]["y"], f"panel {p['id']} sits below its row")
@@ -87,8 +86,13 @@ _cache: dict = {}
 
 def in_code(name: str) -> bool:
     if name not in _cache:
-        out = subprocess.run(["grep", "-rIl", "--include=*.go", "--exclude=*_test.go", f'"{name}"', "pkgs", "apps"], cwd=ROOT, capture_output=True, text=True)
-        _cache[name] = bool(out.stdout.strip())
+        if name.startswith("eventbus_"):
+            # the eventbus instruments are dotted (eventbus.consumer.lag) and Prometheus renames them; the
+            # package lists the Prometheus names in the comment above its instruments
+            _cache[name] = re.search(rf"\b{name}\b", open(os.path.join(ROOT, "pkgs/platform/eventbus/metrics.go")).read()) is not None
+        else:
+            out = subprocess.run(["grep", "-rIl", "--include=*.go", "--exclude=*_test.go", f'"{name}"', "pkgs", "apps"], cwd=ROOT, capture_output=True, text=True)
+            _cache[name] = bool(out.stdout.strip())
     return _cache[name]
 
 

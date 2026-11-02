@@ -3,7 +3,7 @@
 #     and pointed at with APP_CONFIG (same keys as configs/config.example.yaml);
 #   - APP_* env vars for secrets (postgres / redis URL, API keys, JWT secret) and for the
 #     values this chart derives (http.shutdown_*). env beats file beats built-in defaults.
-# Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,catalog-rpc,worker,migrate}:<tag>.
+# Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,catalog-rpc,payment-rpc,worker,migrate}:<tag>.
 # They are distroless (no shell): no exec probes, no preStop sleep — the apps' own graceful
 # shutdown does that job (see rpc.shutdown / worker.terminationGracePeriodSeconds).
 # The optional console (web/apps/console/Dockerfile, nginx) is .../console:<tag>.
@@ -130,6 +130,24 @@ secrets:
     # ("rpc=<key>:<admin role>"). Mutually exclusive with apiKey, and not the release-wide
     # secrets.existingSecret. Both keys are read by secretKeyRef (optional: false): a Secret that
     # lacks one keeps the pod from starting (CreateContainerConfigError), it does not fall back to memory.
+    existingSecret: ""
+  # payment-rpc (paymentRpc.enabled) reads NONE of the release-wide keys either: it refuses to start with
+  # auth.jwt / auth.oidc and must not see rpc's JWT secret or user api keys. It gets its own Secret
+  # (<release>-payment-rpc-env): APP_POSTGRES_URL from postgresUrl above, APP_AUTH_API_KEYS
+  # "rpc=<apiKey>:<config.auth.admin_role>" (serve only), APP_PAYMENT_MOCK_WEBHOOK_SECRET (serve, consume,
+  # expire: the provider's credential, never the worker's) and APP_PAYMENT_API_KEY (rpc's copy of the SAME
+  # service key, read by rpc alone, by secretKeyRef). secrets.existingSecret is NOT a source for it.
+  paymentRpc:
+    # The one service key rpc presents (payment-rpc --require-durable accepts exactly one key, named rpc).
+    # No ',' ':' '=' or whitespace.
+    apiKey: ""
+    # The mock provider's webhook signing secret. Required: empty would give every process its own random
+    # one, and serve could not verify what another process signed. No whitespace.
+    mockWebhookSecret: ""
+    # Or a Secret you manage, with the keys APP_POSTGRES_URL, APP_AUTH_API_KEYS ("rpc=<key>:<admin role>"),
+    # APP_PAYMENT_API_KEY (the same <key>) and APP_PAYMENT_MOCK_WEBHOOK_SECRET. Mutually exclusive with
+    # apiKey / mockWebhookSecret, and neither the release-wide secrets.existingSecret nor catalog-rpc's.
+    # Every key is read by secretKeyRef (optional: false): a Secret that lacks one keeps the pod from starting.
     existingSecret: ""
 
 rpc:
@@ -269,6 +287,125 @@ catalogRpc:
   affinity: {}
   topologySpreadConstraints: []
 
+# payment-rpc (apps/payment-rpc, docs/payment.md): one image, three workloads — `serve` (the internal Connect
+# PaymentService for rpc + the provider's webhook route), `consume` (the event handlers) and `expire` (the
+# sweep, a CronJob). OFF by default: until it is on the release renders exactly what it did before, rpc is
+# told nothing about payment, and ordering.require_payment (config.ordering, default false) cannot be on.
+# It runs on its own ConfigMap and Secret (see secrets.paymentRpc): auth.mode required with ONE static key,
+# no auth.jwt / auth.oidc, the Postgres broker (consume reads the outbox tables; a Redis broker is refused).
+# Every workload runs `--require-durable` as a container arg: no in-memory payments, and for serve no auth
+# but required with exactly the key rpc. Schema: `migrate up` (the hook above), never these pods.
+paymentRpc:
+  enabled: false
+  # payment.* of payment-rpc's own ConfigMap (docs/config.md). They must agree the way the binary checks at
+  # start: window <= mock_checkout_ttl < reconcile_window, webhook_retention 0 or > mock_redelivery_window;
+  # the chart refuses a combination the binary would refuse. The provider is "mock" (the first version's
+  # only one: a gateway nobody can really pay; its state lives in payment.mock_* and is shared by the three).
+  config:
+    window: 30m
+    reconcile_window: 24h
+    webhook_retention: 720h
+    expire_batch: 100
+    mock_checkout_ttl: 30m
+    mock_redelivery_window: 72h
+  serve:
+    replicaCount: 2
+    shutdown:        # same contract as rpc / catalog-rpc
+      delaySeconds: 5
+      timeoutSeconds: 15
+      graceMarginSeconds: 5
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 3
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+      successThreshold: 1
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+    # ClusterIP only (the chart refuses anything else): this port carries the internal RPC as well as the
+    # webhook, and the RPC is for rpc alone.
+    service:
+      type: ClusterIP
+      port: 80
+      annotations: {}
+    podDisruptionBudget:
+      enabled: true    # rendered only when more than one replica
+      maxUnavailable: 1
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
+      relabelings: []
+      metricRelabelings: []
+    # Refused at render time when it names APP_AUTH_*, APP_PAYMENT_*, APP_WORKER_*, APP_REDIS_*,
+    # APP_POSTGRES_URL or APP_CONFIG (any case): those make payment-rpc safe and are the chart's to set.
+    extraEnv: []
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpreadConstraints: []
+  # `consume` reads the Postgres outbox only. Replicas of one consumer group split the work, but adding
+  # replicas was NOT measured to make a Postgres-broker consumer faster (docs/operations.md, "Worker 輪詢間隔"),
+  # so there is no autoscaling here and the default is one replica: raise replicaCount for availability
+  # (a restart does not wait for a probe), not for throughput. Its consumer group is `payment-rpc` (so
+  # `payment-rpc.payment`), deliberately outside the worker's `worker.*`: worker.autoscaling's lag query
+  # would otherwise scale the WORKER on payment's backlog.
+  consume:
+    replicaCount: 1
+    # 8s handler drain + 10s router close, must stay above 18s
+    terminationGracePeriodSeconds: 30
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+    extraEnv: []
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+  # `expire` is one run of the sweep per CronJob run. The schedule is `*/<intervalMinutes> * * * *` and
+  # payment.expire_interval is `<intervalMinutes>m`, both from this one value, so the cron period and the
+  # number the sweep reasons with ("is this reconcile query the payment's last?") cannot drift apart.
+  # Must divide 60. A CronJob is a short-lived process: its gauges (payment_reconcile_*) reach Prometheus
+  # only if config.otel.endpoint is set (an unset endpoint means no measurement, not "no backlog").
+  expire:
+    intervalMinutes: 15
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 128Mi }
+    extraEnv: []
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+  # The provider's webhook, and only that, to the outside (docs/payment.md §1, §7): ONE Ingress rule per
+  # host with the single path POST /api/payment/webhook (Exact). The Connect RPC, /api/metrics, probes and
+  # docs are not routed. The route has no API key and no http.rate_limit (the signature is its credential),
+  # so the limits are the ingress's: rendered as ingress-nginx annotations (limit-rps, burst multiplier,
+  # limit-connections) plus a 1 MiB body cap. The chart refuses an enabled ingress without a class, a host,
+  # or a positive limit, and refuses `annotations` that touch the limits, the path or add snippets.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []
+    #  - host: pay.example.com
+    tls: []
+    rateLimit:
+      rps: 5               # requests per second per client IP
+      burstMultiplier: 3   # burst = rps x this
+      connections: 10      # concurrent connections per client IP
+
 worker:
   replicaCount: 1
   # No HTTP server → no probes; the process exits non-zero when it cannot start (bad config,
@@ -379,6 +516,11 @@ networkPolicy:
   # catalog-rpc admits the rpc pods of this release (when catalogRpc.enabled); ingressFrom is ON TOP
   # of that, e.g. Prometheus's namespace for the ServiceMonitor. Never empty = any source.
   catalogRpc:
+    ingressFrom: []
+  # payment-rpc serve admits the rpc pods of this release (when paymentRpc.enabled); ingressFrom is ON TOP
+  # of that: list your ingress controller's namespace (the provider's webhook arrives through it) and
+  # Prometheus's. Never empty = any source. consume and expire have no listener: no ingress at all.
+  paymentRpc:
     ingressFrom: []
 
 # `migrate up` as a pre-install / pre-upgrade hook: new code never starts against an old

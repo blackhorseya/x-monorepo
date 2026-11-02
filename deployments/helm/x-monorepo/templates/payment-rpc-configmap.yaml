@@ -1,0 +1,14 @@
+{{- if .Values.paymentRpc.enabled }}
+{{- include "x-monorepo.paymentRpc.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-payment-rpc
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: payment-rpc
+data:
+  # payment-rpc's own: no auth.jwt, no auth.oidc (it refuses to start with either), the Postgres broker. See _helpers.tpl.
+  config.yaml: |
+    {{- include "x-monorepo.paymentRpc.config" . | nindent 4 }}
+{{- end }}

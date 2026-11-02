@@ -235,3 +235,235 @@ checksum/secrets: {{ include "x-monorepo.catalogRpc.secretData" . | sha256sum }}
 {{- define "x-monorepo.catalogRpc.upstream" -}}
 {{- printf "http://%s-catalog-rpc:%d" (include "x-monorepo.fullname" .) (int .Values.catalogRpc.service.port) -}}
 {{- end -}}
+
+{{/*
+payment-rpc (apps/payment-rpc, docs/payment.md). One image, three workloads (serve, consume, expire), its own
+ConfigMap and Secret: like catalog-rpc it refuses to start on auth.jwt / auth.oidc.enabled / auth on without
+api_keys, and the release-wide config and Secret carry exactly those for rpc. Everything that could be
+misconfigured fails here, at template time, before a pod can come up serving payments from memory or without
+the service key; the binary's --require-durable (a container arg) is the second wall, on the final effective settings.
+*/}}
+{{- define "x-monorepo.paymentRpc.secretName" -}}
+{{- default (printf "%s-payment-rpc-env" (include "x-monorepo.fullname" .)) .Values.secrets.paymentRpc.existingSecret -}}
+{{- end -}}
+
+{{/* Names a workload's env must not set (any case): what makes payment-rpc safe, and the provider's credentials. */}}
+{{- define "x-monorepo.paymentRpc.guardedEnv" -}}
+{{- $n := upper (toString .) -}}
+{{- if or (hasPrefix "APP_AUTH_" $n) (hasPrefix "APP_PAYMENT_" $n) (hasPrefix "APP_WORKER_" $n) (hasPrefix "APP_REDIS_" $n) (eq $n "APP_POSTGRES_URL") (eq $n "APP_CONFIG") -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* "30m" / "24h" / "1h30m" as a time after a fixed instant, so two durations compare with .Before. */}}
+{{- define "x-monorepo.paymentRpc.duration" -}}
+{{- $d := toString .d -}}
+{{- if not (regexMatch "^([0-9]+(h|m|s))+$" $d) -}}
+{{- fail (printf "paymentRpc.config.%s %q is not a duration like 30m, 24h or 1h30m" .name $d) -}}
+{{- end -}}
+{{- (toDate "2006-01-02" "2000-01-01" | dateModify $d).Unix -}}
+{{- end -}}
+
+{{- define "x-monorepo.paymentRpc.validate" -}}
+{{- $p := .Values.paymentRpc -}}
+{{- $s := .Values.secrets.paymentRpc -}}
+{{- $own := $s.existingSecret -}}
+{{- $fn := include "x-monorepo.fullname" . -}}
+{{- $final := include "x-monorepo.paymentRpc.secretName" . -}}
+{{- /* The three Secrets never alias each other, by the names they RESOLVE to, in either direction: payment-rpc's own (existingSecret or the generated <fullname>-payment-rpc-env) must be none of the release-wide ones nor catalog-rpc's; and nothing else may name the one the chart renders for payment-rpc. */ -}}
+{{- $catalog := include "x-monorepo.catalogRpc.secretName" . -}}
+{{- $release := list .Values.secrets.existingSecret (include "x-monorepo.secretName" .) (printf "%s-env" $fn) (printf "%s-migrate-env" $fn) $catalog -}}
+{{- if $own -}}
+{{- if has $final $release -}}
+{{- fail (printf "secrets.paymentRpc.existingSecret %q is one of the release's other Secrets (the release-wide ones may carry rpc's JWT secret and user api keys, catalog-rpc's the key rpc presents to the catalog); give payment-rpc its own Secret" $final) -}}
+{{- end -}}
+{{- if $s.apiKey -}}
+{{- fail "secrets.paymentRpc.existingSecret and secrets.paymentRpc.apiKey are both set: pick one source for payment-rpc's APP_AUTH_API_KEYS and APP_PAYMENT_API_KEY" -}}
+{{- end -}}
+{{- if $s.mockWebhookSecret -}}
+{{- fail "secrets.paymentRpc.existingSecret and secrets.paymentRpc.mockWebhookSecret are both set: pick one source for payment-rpc's APP_PAYMENT_MOCK_WEBHOOK_SECRET" -}}
+{{- end -}}
+{{- else -}}
+{{- if eq .Values.secrets.existingSecret $final -}}
+{{- fail (printf "secrets.existingSecret %q is the name of the Secret the chart renders for payment-rpc (<fullname>-payment-rpc-env): rpc, worker and migrate would read payment-rpc's credentials, and the chart would render a Secret over yours; rename secrets.existingSecret" $final) -}}
+{{- end -}}
+{{- if eq .Values.secrets.catalogRpc.existingSecret $final -}}
+{{- fail (printf "secrets.catalogRpc.existingSecret %q is the name of the Secret the chart renders for payment-rpc (<fullname>-payment-rpc-env): catalog-rpc would read payment-rpc's provider credential; rename secrets.catalogRpc.existingSecret" $final) -}}
+{{- end -}}
+{{- if not .Values.secrets.postgresUrl -}}
+{{- fail "paymentRpc.enabled needs secrets.postgresUrl (or secrets.paymentRpc.existingSecret holding APP_POSTGRES_URL): without a Postgres URL payment-rpc would serve from memory and lose its payments on restart. secrets.existingSecret is the release-wide Secret and does not count: it may carry rpc's JWT secret, which payment-rpc refuses to start with" -}}
+{{- end -}}
+{{- $key := $s.apiKey -}}
+{{- if not $key -}}
+{{- fail "paymentRpc.enabled needs secrets.paymentRpc.apiKey (or secrets.paymentRpc.existingSecret holding APP_AUTH_API_KEYS and APP_PAYMENT_API_KEY): payment-rpc runs with auth.mode required and accepts only the key rpc presents" -}}
+{{- end -}}
+{{- if regexMatch "[,:=\\s]" $key -}}
+{{- fail "secrets.paymentRpc.apiKey must not contain ',', ':', '=' or whitespace: it is embedded in APP_AUTH_API_KEYS (name=key:role,...)" -}}
+{{- end -}}
+{{- if not $s.mockWebhookSecret -}}
+{{- fail "paymentRpc.enabled needs secrets.paymentRpc.mockWebhookSecret (or secrets.paymentRpc.existingSecret holding APP_PAYMENT_MOCK_WEBHOOK_SECRET): empty gives every process its own random secret, and serve could not verify what another process signed" -}}
+{{- end -}}
+{{- if regexMatch "\\s" $s.mockWebhookSecret -}}
+{{- fail "secrets.paymentRpc.mockWebhookSecret must not contain whitespace" -}}
+{{- end -}}
+{{- end -}}
+{{- /* extraEnv of the three workloads */ -}}
+{{- range $wl := list "serve" "consume" "expire" -}}
+{{- range $e := (index $p $wl).extraEnv -}}
+{{- if include "x-monorepo.paymentRpc.guardedEnv" $e.name -}}
+{{- fail (printf "paymentRpc.%s.extraEnv must not set %s: auth, payment-rpc's Postgres URL, its config file, the provider and its credentials, and the broker come from the chart (an env var here would turn one off, replace it, or hand a credential to a workload that must not have it)" $wl $e.name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* serve: the Service carries the internal RPC on the webhook's port */ -}}
+{{- if ne (toString $p.serve.service.type) "ClusterIP" -}}
+{{- fail (printf "paymentRpc.serve.service.type must be ClusterIP, not %s: this port carries the internal Connect RPC as well as the webhook, and the RPC is for rpc alone" (toString $p.serve.service.type)) -}}
+{{- end -}}
+{{- $sd := $p.serve.shutdown -}}
+{{- if lt (int $sd.delaySeconds) (int $p.serve.readiness.periodSeconds) -}}
+{{- fail (printf "paymentRpc.serve.shutdown.delaySeconds (%d) must be >= paymentRpc.serve.readiness.periodSeconds (%d): endpoints must see the 503 before the listener closes" (int $sd.delaySeconds) (int $p.serve.readiness.periodSeconds)) -}}
+{{- end -}}
+{{- if lt (int $p.consume.terminationGracePeriodSeconds) 19 -}}
+{{- fail (printf "paymentRpc.consume.terminationGracePeriodSeconds (%d) must be > 18: 8s handler drain + 10s router close" (int $p.consume.terminationGracePeriodSeconds)) -}}
+{{- end -}}
+{{- $iv := int $p.expire.intervalMinutes -}}
+{{- if not (has $iv (list 1 2 3 4 5 6 10 12 15 20 30)) -}}
+{{- fail (printf "paymentRpc.expire.intervalMinutes (%d) must be one of 1 2 3 4 5 6 10 12 15 20 30: the schedule is */N minutes and payment.expire_interval is Nm, both from this one value, so N has to divide the hour" $iv) -}}
+{{- end -}}
+{{- /* the numbers the binary checks at start, checked here too so the refusal is at template time */ -}}
+{{- $c := $p.config -}}
+{{- $win := include "x-monorepo.paymentRpc.duration" (dict "name" "window" "d" $c.window) | int64 -}}
+{{- $rec := include "x-monorepo.paymentRpc.duration" (dict "name" "reconcile_window" "d" $c.reconcile_window) | int64 -}}
+{{- $ttl := include "x-monorepo.paymentRpc.duration" (dict "name" "mock_checkout_ttl" "d" $c.mock_checkout_ttl) | int64 -}}
+{{- $red := include "x-monorepo.paymentRpc.duration" (dict "name" "mock_redelivery_window" "d" $c.mock_redelivery_window) | int64 -}}
+{{- $keepForever := has (toString $c.webhook_retention) (list "0" "0s" "0m" "0h") -}}
+{{- $ret := 0 | int64 -}}
+{{- if not $keepForever -}}
+{{- $ret = include "x-monorepo.paymentRpc.duration" (dict "name" "webhook_retention" "d" $c.webhook_retention) | int64 -}}
+{{- end -}}
+{{- $base := (toDate "2006-01-02" "2000-01-01").Unix | int64 -}}
+{{- if gt (sub $win $base) (sub $ttl $base) -}}
+{{- fail (printf "paymentRpc.config.window (%s) must not be longer than paymentRpc.config.mock_checkout_ttl (%s): a payment has one checkout for its whole window, and payment-rpc refuses to start otherwise" $c.window $c.mock_checkout_ttl) -}}
+{{- end -}}
+{{- if le (sub $rec $base) (sub $ttl $base) -}}
+{{- fail (printf "paymentRpc.config.reconcile_window (%s) must be longer than paymentRpc.config.mock_checkout_ttl (%s): a customer paying at the end of a page must be found by the sweep, and payment-rpc refuses to start otherwise" $c.reconcile_window $c.mock_checkout_ttl) -}}
+{{- end -}}
+{{- if and (not $keepForever) (le (sub $ret $base) (sub $red $base)) -}}
+{{- fail (printf "paymentRpc.config.webhook_retention (%s) must be 0 (keep for ever) or longer than paymentRpc.config.mock_redelivery_window (%s): the webhook log is the dedup memory of redelivered notifications, and payment-rpc refuses to start otherwise" $c.webhook_retention $c.mock_redelivery_window) -}}
+{{- end -}}
+{{- if lt (int $c.expire_batch) 1 -}}
+{{- fail "paymentRpc.config.expire_batch must be positive" -}}
+{{- end -}}
+{{- /* the ingress: the webhook, rate limited, and nothing else */ -}}
+{{- $i := $p.ingress -}}
+{{- if $i.enabled -}}
+{{- if not $i.className -}}
+{{- fail "paymentRpc.ingress.className is required: the rate limit is rendered as ingress-nginx annotations, which no controller reads without a class that names one" -}}
+{{- end -}}
+{{- if not $i.hosts -}}
+{{- fail "paymentRpc.ingress.hosts needs at least one host: a rule without a host would answer for every host the controller serves" -}}
+{{- end -}}
+{{- range $h := $i.hosts -}}
+{{- if not $h.host -}}
+{{- fail "paymentRpc.ingress.hosts[].host must be set" -}}
+{{- end -}}
+{{- end -}}
+{{- if le (int $i.rateLimit.rps) 0 -}}
+{{- fail "paymentRpc.ingress.rateLimit.rps must be positive: the webhook route has no API key and no http.rate_limit (docs/payment.md §7), so the ingress is the only place a flood of unsigned requests can be limited" -}}
+{{- end -}}
+{{- if le (int $i.rateLimit.burstMultiplier) 0 -}}
+{{- fail "paymentRpc.ingress.rateLimit.burstMultiplier must be positive" -}}
+{{- end -}}
+{{- if le (int $i.rateLimit.connections) 0 -}}
+{{- fail "paymentRpc.ingress.rateLimit.connections must be positive: a rate per second does not bound how many slow connections one client holds open" -}}
+{{- end -}}
+{{- range $k, $_ := $i.annotations -}}
+{{- if or (hasPrefix "nginx.ingress.kubernetes.io/limit-" $k) (hasSuffix "-snippet" $k) (has $k (list "nginx.ingress.kubernetes.io/rewrite-target" "nginx.ingress.kubernetes.io/use-regex" "nginx.ingress.kubernetes.io/app-root" "nginx.ingress.kubernetes.io/proxy-body-size")) -}}
+{{- fail (printf "paymentRpc.ingress.annotations must not set %s: the chart sets the limits, the body cap and the single exposed path; an annotation here could lift a limit or route more than the webhook" $k) -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.paymentRpc.ingressFrom) -}}
+{{- fail "networkPolicy.paymentRpc.ingressFrom is empty while paymentRpc.ingress is on: the provider's webhook arrives through the ingress controller, and payment-rpc serve admits only the rpc pods and what is listed there; list the controller's namespace" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* payment-rpc's config.yaml: the release's http / postgres / log / otel, auth required, the Postgres broker, payment.*. No auth.jwt / auth.oidc. otel.service_name is dropped (it would report as rpc; the binary defaults to payment-rpc). */}}
+{{- define "x-monorepo.paymentRpc.config" -}}
+{{- $c := .Values.config -}}
+{{- $w := .Values.config.worker -}}
+{{- toYaml (dict
+      "http" $c.http
+      "postgres" $c.postgres
+      "log" $c.log
+      "otel" (omit $c.otel "service_name")
+      "auth" (dict "mode" "required" "admin_role" $c.auth.admin_role)
+      "worker" (dict "broker" "postgres" "consumer_group" "payment-rpc" "start_from" $w.start_from "handler_timeout" $w.handler_timeout "poll_interval" $w.poll_interval)
+      "payment" (merge (dict "provider" "mock" "expire_interval" (printf "%dm" (int .Values.paymentRpc.expire.intervalMinutes))) (deepCopy .Values.paymentRpc.config))) -}}
+{{- end -}}
+
+{{/* payment-rpc's own Secret. APP_PAYMENT_API_KEY is rpc's copy of the SAME key: one value feeds both sides, so they cannot drift. serve reads APP_POSTGRES_URL, APP_AUTH_API_KEYS and the mock secret; consume and expire only the Postgres URL and the mock secret (no listener, so no service key). */}}
+{{- define "x-monorepo.paymentRpc.secretData" -}}
+APP_POSTGRES_URL: {{ .Values.secrets.postgresUrl | quote }}
+APP_AUTH_API_KEYS: {{ printf "rpc=%s:%s" .Values.secrets.paymentRpc.apiKey .Values.config.auth.admin_role | quote }}
+APP_PAYMENT_API_KEY: {{ .Values.secrets.paymentRpc.apiKey | quote }}
+APP_PAYMENT_MOCK_WEBHOOK_SECRET: {{ .Values.secrets.paymentRpc.mockWebhookSecret | quote }}
+{{- end -}}
+
+{{- define "x-monorepo.paymentRpc.checksums" -}}
+checksum/config: {{ include "x-monorepo.paymentRpc.config" . | sha256sum }}
+checksum/secrets: {{ include "x-monorepo.paymentRpc.secretData" . | sha256sum }}
+{{- end -}}
+
+{{/* The env a payment-rpc container reads from its Secret: `keys` is the list of the keys it needs (secretKeyRef, optional: false; never envFrom). */}}
+{{- define "x-monorepo.paymentRpc.secretEnv" -}}
+{{- $name := include "x-monorepo.paymentRpc.secretName" .root -}}
+{{- range $k := .keys }}
+- name: {{ $k }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $name }}
+      key: {{ $k }}
+      optional: false
+{{- end }}
+{{- end -}}
+
+{{- define "x-monorepo.paymentRpc.serve.terminationGracePeriodSeconds" -}}
+{{- $s := .Values.paymentRpc.serve.shutdown -}}
+{{- add (int $s.delaySeconds) (int $s.timeoutSeconds) (int $s.graceMarginSeconds) -}}
+{{- end -}}
+
+{{/* Where rpc reaches payment-rpc serve: its Service in this release, in-cluster. */}}
+{{- define "x-monorepo.paymentRpc.upstream" -}}
+{{- printf "http://%s-payment-serve:%d" (include "x-monorepo.fullname" .) (int .Values.paymentRpc.serve.service.port) -}}
+{{- end -}}
+
+{{/*
+What the other workloads must not be told about payment. rpc is told where payment-rpc is and with which key
+(APP_PAYMENT_UPSTREAM, APP_PAYMENT_API_KEY) by the chart — whether or not payment-rpc is on, so an extraEnv
+cannot point rpc at something else or smuggle the key in — and the worker, which does not load payment, never
+holds a provider credential. Also the one switch that makes orders wait for payment: on only with a payment-rpc
+to pay at, and with auth on, because with auth off nobody can pay (docs/payment.md §6 (a)) and every order
+would stay CONFIRMED.
+*/}}
+{{- define "x-monorepo.rpc.validatePayment" -}}
+{{- range $e := .Values.rpc.extraEnv -}}
+{{- if hasPrefix "APP_PAYMENT_" (upper (toString $e.name)) -}}
+{{- fail (printf "rpc.extraEnv must not set %s: where rpc finds payment-rpc and the key it presents come from the chart (paymentRpc.*, secrets.paymentRpc.*)" $e.name) -}}
+{{- end -}}
+{{- end -}}
+{{- range $e := .Values.worker.extraEnv -}}
+{{- if hasPrefix "APP_PAYMENT_" (upper (toString $e.name)) -}}
+{{- fail (printf "worker.extraEnv must not set %s: the worker does not load payment and never holds a provider credential" $e.name) -}}
+{{- end -}}
+{{- end -}}
+{{- $o := default dict .Values.config.ordering -}}
+{{- if $o.require_payment -}}
+{{- if not .Values.paymentRpc.enabled -}}
+{{- fail "config.ordering.require_payment is true but paymentRpc.enabled is false: orders would wait for a payment nobody can start (rpc itself refuses to start without payment configured)" -}}
+{{- end -}}
+{{- if eq (toString .Values.config.auth.mode) "off" -}}
+{{- fail "config.ordering.require_payment is true with config.auth.mode off: with auth off nobody can pay (no credential, no customer), so every order would stay CONFIRMED; set config.auth.mode to optional or required" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

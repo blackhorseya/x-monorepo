@@ -1,0 +1,78 @@
+{{- if .Values.paymentRpc.enabled }}
+{{- include "x-monorepo.paymentRpc.validate" . -}}
+{{- $c := .Values.paymentRpc.expire -}}
+{{- $iv := int $c.intervalMinutes -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-payment-expire
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: payment-expire
+spec:
+  # The period and payment.expire_interval (payment-rpc's ConfigMap) come from the same intervalMinutes.
+  schedule: {{ printf "*/%d * * * *" $iv | quote }}
+  concurrencyPolicy: {{ $c.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ $c.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $c.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "x-monorepo.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: payment-expire
+          annotations:
+            {{- include "x-monorepo.paymentRpc.checksums" . | nindent 12 }}
+            {{- with $c.podAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        spec:
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "x-monorepo.serviceAccountName" . }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: payment-rpc
+              image: {{ include "x-monorepo.image" (dict "root" . "app" "payment-rpc") }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              # One run of the sweep. An arg, not env: no in-memory run (there would be nothing to sweep).
+              args: ["expire", "--require-durable"]
+              terminationMessagePolicy: FallbackToLogsOnError
+              env:
+                {{- with $c.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+                - name: APP_CONFIG
+                  value: /etc/x-monorepo/config.yaml
+                {{- include "x-monorepo.paymentRpc.secretEnv" (dict "root" . "keys" (list "APP_POSTGRES_URL" "APP_PAYMENT_MOCK_WEBHOOK_SECRET")) | nindent 16 }}
+              resources:
+                {{- toYaml $c.resources | nindent 16 }}
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/x-monorepo
+                  readOnly: true
+          volumes:
+            - name: config
+              configMap:
+                name: {{ include "x-monorepo.fullname" . }}-payment-rpc
+          {{- with $c.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $c.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $c.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
