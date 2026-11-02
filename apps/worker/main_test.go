@@ -117,7 +117,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	for _, tbl := range []string{
 		"ordering.orders", "ordering.events_v1_ordercreated", "ordering.events_v1_ordercancelled",
 		"ordering.events_v1_ordercancellationrequested", "ordering.events_v1_orderconfirmed",
-		"ordering.events_v1_ordercompleted", "ordering.events_poison",
+		"ordering.events_v1_ordercompleted", "ordering.events_v1_orderpaid", "ordering.events_poison",
 		"inventory.stocks", "inventory.reservations", "inventory.events_v1_stockreserved",
 		"inventory.events_v1_stockreleased", "inventory.events_v1_stockcommitted", "inventory.events_poison",
 		"ordering.inbox", "inventory.inbox",
@@ -452,14 +452,14 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	// database: a and b ended CANCELLED, f COMPLETED, nothing is left PENDING,
 	// and D holds a RESERVED reservation. Every known status has a series, zero or not.
 	orderGauges := scrape(t, tel.MetricsHandler, "ordering_orders")
-	if len(orderGauges) != 4 || atoi(orderGauges[`ordering_orders{status="CANCELLED"}`]) < 2 || atoi(orderGauges[`ordering_orders{status="COMPLETED"}`]) < 1 || orderGauges[`ordering_orders{status="PENDING"}`] != "0" {
+	if len(orderGauges) != 5 || atoi(orderGauges[`ordering_orders{status="CANCELLED"}`]) < 2 || atoi(orderGauges[`ordering_orders{status="COMPLETED"}`]) < 1 || orderGauges[`ordering_orders{status="PENDING"}`] != "0" {
 		t.Fatalf("ordering_orders = %v", orderGauges)
 	}
 	reservationGauges := scrape(t, tel.MetricsHandler, "inventory_reservations")
 	if len(reservationGauges) != 7 || atoi(reservationGauges[`inventory_reservations{status="RESERVED"}`]) < 1 || atoi(reservationGauges[`inventory_reservations{status="COMMITTED"}`]) < 1 {
 		t.Fatalf("inventory_reservations = %v", reservationGauges)
 	}
-	if ages := scrape(t, tel.MetricsHandler, "ordering_orders_oldest_age_seconds"); len(ages) != 4 || ages[`ordering_orders_oldest_age_seconds{status="PENDING"}`] != "0" {
+	if ages := scrape(t, tel.MetricsHandler, "ordering_orders_oldest_age_seconds"); len(ages) != 5 || ages[`ordering_orders_oldest_age_seconds{status="PENDING"}`] != "0" {
 		t.Fatalf("ordering_orders_oldest_age_seconds = %v", ages)
 	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_poison_messages") {
@@ -474,11 +474,11 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 		t.Fatal("no eventbus_consumer_duration_seconds_count samples")
 	}
 	// Retention gauges: every outbox table of both BCs — the 5 consumed
-	// topics and the 3 published-only ones (OrderConfirmed, StockReleased,
+	// topics and the 4 published-only ones (OrderConfirmed, OrderPaid, StockReleased,
 	// StockCommitted), found in the catalogue — and both inboxes; with every
 	// group caught up no outbox row is held back from prune.
-	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 8 {
-		t.Fatalf("%d outbox row series, want 8: %v", len(rows), rows)
+	if rows := scrape(t, tel.MetricsHandler, "eventbus_outbox_rows"); len(rows) != 9 {
+		t.Fatalf("%d outbox row series, want 9: %v", len(rows), rows)
 	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_outbox_held") {
 		if v != "0" {
