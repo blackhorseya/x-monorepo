@@ -234,6 +234,20 @@ func (i *OutcomeRepository) Find(c context.Context, orderID string) (payment.Out
 	return payment.Outcome(outcome), nil
 }
 
+// Lock takes a transaction-scoped advisory lock keyed by the order id: it is released at commit or
+// rollback, whichever way the surrounding transaction ends, and nothing outlives a crashed connection.
+func (i *OutcomeRepository) Lock(c context.Context, orderID string) error {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := platformpg.TxOrDB(ctx, i.db).Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`, Schema+".order:"+orderID).Error; err != nil {
+		return fmt.Errorf("lock order %s: %w", orderID, err)
+	}
+
+	return nil
+}
+
 func (i *OutcomeRepository) Record(c context.Context, orderID string, outcome payment.Outcome, at time.Time) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {

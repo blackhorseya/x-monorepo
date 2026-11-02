@@ -30,6 +30,12 @@ type Repository interface {
 // OrderCancelled / OrderCompleted travel on other topics than OrderConfirmed, so they can arrive
 // first. Without the note a payment created afterwards would sit PENDING, payable, forever.
 type OutcomeRepository interface {
+	// Lock serializes the writers of one order for the rest of the surrounding transaction: the creation
+	// of its payment (OrderConfirmed) and the recording of how it ended (OrderCancelled / OrderCompleted).
+	// Without a payment row there is nothing for a compare-and-set to compare, so each side would decide
+	// on what it read before the other committed, and both would ack. Take it before reading anything
+	// the decision depends on.
+	Lock(c context.Context, orderID string) error
 	// Find returns the recorded outcome of orderID, or OutcomeNone when nothing was recorded.
 	Find(c context.Context, orderID string) (Outcome, error)
 	// Record stores outcome (CANCELLED or COMPLETED_UNPAID) for orderID unless one is already

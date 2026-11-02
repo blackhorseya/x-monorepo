@@ -47,6 +47,9 @@ func (uc *RecordOrderEnded) Execute(c context.Context, in dto.OrderEndedInput) (
 	}
 	now := uc.clock.Now()
 
+	if err := uc.outcomes.Lock(ctx, in.OrderID); err != nil {
+		return nil, fmt.Errorf("lock order %s: %w", in.OrderID, err)
+	}
 	p, err := uc.payments.FindByOrderID(ctx, in.OrderID)
 	if errors.Is(err, payment.ErrNotFound) {
 		if err = uc.outcomes.Record(ctx, in.OrderID, uc.outcome, now); err != nil {

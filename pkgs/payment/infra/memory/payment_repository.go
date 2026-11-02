@@ -182,6 +182,12 @@ func (i *OutcomeRepository) Find(c context.Context, orderID string) (payment.Out
 	return payment.OutcomeNone, nil
 }
 
+// Lock is a no-op: the in-memory repositories serve the one process that has no consumer (consume
+// refuses to start without Postgres), so no two writers of an order exist to be serialized.
+func (i *OutcomeRepository) Lock(c context.Context, _ string) error {
+	return contextx.FromContext(c).Err()
+}
+
 func (i *OutcomeRepository) Record(c context.Context, orderID string, outcome payment.Outcome, _ time.Time) error {
 	if err := contextx.FromContext(c).Err(); err != nil {
 		return err

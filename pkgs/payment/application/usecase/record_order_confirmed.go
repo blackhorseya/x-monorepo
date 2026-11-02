@@ -41,6 +41,9 @@ func (uc *RecordOrderConfirmed) Execute(c context.Context, in dto.OrderConfirmed
 		return nil, payment.ErrInvalidOrderID
 	}
 
+	if err := uc.outcomes.Lock(ctx, in.OrderID); err != nil {
+		return nil, fmt.Errorf("lock order %s: %w", in.OrderID, err)
+	}
 	existing, err := uc.payments.FindByOrderID(ctx, in.OrderID)
 	switch {
 	case err == nil:
