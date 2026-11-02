@@ -638,7 +638,7 @@ func TestMockControl_DeadlineIsOneForTheWholeCommand_SlowLookupThenWrite(t *test
 			got = &r
 			t.Fatalf("the command was still waiting %s after its %s deadline and returned %v once the lock was released", time.Since(start), mockTimeout, r.err)
 		}
-		if r.err == nil || !(errors.Is(r.err, context.DeadlineExceeded) || strings.Contains(r.err.Error(), "deadline")) {
+		if r.err == nil || (!errors.Is(r.err, context.DeadlineExceeded) && !strings.Contains(r.err.Error(), "deadline")) {
 			t.Fatalf("at the deadline the command must return the deadline, got %v", r.err)
 		}
 		if r.took > mockTimeout+time.Second {
@@ -725,7 +725,7 @@ func (p *startupPeer) closedByPeerSide(limit time.Duration) bool {
 			continue
 		}
 		var ne net.Error
-		return !(errors.As(err, &ne) && ne.Timeout())
+		return !errors.As(err, &ne) || !ne.Timeout()
 	}
 }
 
@@ -777,7 +777,7 @@ func TestMockControl_DeadlineClosesAConnectionWhoseHandshakeNeverCompletes(t *te
 	case <-time.After(mockTimeout + 3*time.Second):
 		t.Fatalf("the command was still running %s after its %s deadline", time.Since(start), mockTimeout)
 	}
-	if err == nil || !(errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline")) {
+	if err == nil || (!errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline")) {
 		t.Fatalf("at the deadline the command must return the deadline, got %v", err)
 	}
 	if !peer.closedByPeerSide(500 * time.Millisecond) {
