@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
 )
 
 // Clock abstracts time for deterministic tests.
@@ -20,6 +21,35 @@ type Clock interface {
 // the provider is never called inside fn. The memory implementation just calls fn.
 type Transactor interface {
 	Do(c context.Context, fn func(c context.Context) error) error
+}
+
+// Inbox is the consumer inbox (usecasex.Idempotent): Record reports whether the message id is new.
+// provider.go wraps every use case a consumer drives with it, inside the transaction, so a
+// redelivery is dropped before any aggregate is loaded. nil Inbox (no database) makes it a pass-through.
+type Inbox interface {
+	Record(c context.Context, id string) (first bool, err error)
+}
+
+// IDGenerator creates the ids of new payments (UUID v7, #365).
+type IDGenerator interface {
+	NewID() (string, error)
+}
+
+// EventPublisher hands the events a transition raised to the outbox. Called inside Transactor.Do
+// (or the Transactional decorator), so the rows share the state change's transaction. at is the
+// domain time of the transition (port.Clock), not wall time.
+type EventPublisher interface {
+	// Publish maps each of events, as raised on p, to its payment.v1 message.
+	Publish(c context.Context, p *payment.Payment, events []payment.Event, at time.Time) error
+	// PublishWebhookReceived queues the processing of a stored provider notification.
+	PublishWebhookReceived(c context.Context, provider, providerEventID string, at time.Time) error
+}
+
+// Alerts tells operators that something needs a human (docs/payment.md "告警"): money that does not
+// match a payment, a notification nobody can place, an event that must not be collected. The
+// implementation logs a fixed category and counts it; it never carries provider or customer text.
+type Alerts interface {
+	Raise(c context.Context, a payment.Alert, orderID string)
 }
 
 // ErrProviderUnavailable is a failure to get a usable answer from the payment provider (as opposed

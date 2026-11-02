@@ -5,6 +5,7 @@ package memory
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -37,6 +38,14 @@ func (i *PaymentRepository) FindByOrderID(c context.Context, orderID string) (*p
 	}
 
 	return payment.Reconstitute(rec)
+}
+
+func (i *PaymentRepository) FindByID(context.Context, payment.ID) (*payment.Payment, error) {
+	return nil, payment.ErrNotFound // SPEC STAGE
+}
+
+func (i *PaymentRepository) FindByProviderRef(context.Context, string, string) (*payment.Payment, error) {
+	return nil, payment.ErrNotFound // SPEC STAGE
 }
 
 // Save inserts a never-saved payment (Version 0) with version 1, or replaces a loaded one when the
@@ -74,4 +83,19 @@ func snapshot(p *payment.Payment) payment.ReconstituteParams {
 		CheckoutExpiresAt: p.CheckoutExpiresAt(), Outcome: p.Outcome(), TerminalAt: p.TerminalAt(),
 		Version: p.Version() + 1, UpdatedAt: p.UpdatedAt(),
 	}
+}
+
+var _ payment.OutcomeRepository = (*OutcomeRepository)(nil)
+
+// OutcomeRepository keeps the order outcomes of payment.OutcomeRepository. SPEC STAGE: it remembers nothing.
+type OutcomeRepository struct{}
+
+func NewOutcomeRepository() *OutcomeRepository { return &OutcomeRepository{} }
+
+func (i *OutcomeRepository) Find(context.Context, string) (payment.Outcome, error) {
+	return payment.OutcomeNone, nil
+}
+
+func (i *OutcomeRepository) Record(context.Context, string, payment.Outcome, time.Time) error {
+	return nil
 }

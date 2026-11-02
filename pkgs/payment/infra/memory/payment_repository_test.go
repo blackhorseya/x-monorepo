@@ -95,3 +95,62 @@ func TestTransactor_RunsFn(t *testing.T) {
 		t.Fatalf("ran=%v err=%v", ran, err)
 	}
 }
+
+func TestPaymentRepository_FindersAndOutcomes(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewPaymentRepository()
+	p := newPayment(t, "pay-1", "ord-1")
+	if err := p.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", t0.Add(10*time.Minute), t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(c, p); err != nil {
+		t.Fatal(err)
+	}
+
+	byID, err := repo.FindByID(c, "pay-1")
+	if err != nil || byID.OrderID() != "ord-1" {
+		t.Fatalf("FindByID = %v, %v", byID, err)
+	}
+	byRef, err := repo.FindByProviderRef(c, "mock", "ref-1")
+	if err != nil || byRef.ID() != "pay-1" {
+		t.Fatalf("FindByProviderRef = %v, %v", byRef, err)
+	}
+	for name, call := range map[string]func() error{
+		"unknown id":           func() error { _, err := repo.FindByID(c, "nope"); return err },
+		"unknown ref":          func() error { _, err := repo.FindByProviderRef(c, "mock", "nope"); return err },
+		"same ref, other name": func() error { _, err := repo.FindByProviderRef(c, "other", "ref-1"); return err },
+		"empty ref":            func() error { _, err := repo.FindByProviderRef(c, "mock", ""); return err },
+	} {
+		if err := call(); !errors.Is(err, payment.ErrNotFound) {
+			t.Fatalf("%s: %v, want ErrNotFound", name, err)
+		}
+	}
+	cc, cancel := context.WithCancel(c)
+	cancel()
+	if _, err = repo.FindByID(cc, "pay-1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FindByID cancelled: %v", err)
+	}
+	if _, err = repo.FindByProviderRef(cc, "mock", "ref-1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FindByProviderRef cancelled: %v", err)
+	}
+
+	out := memory.NewOutcomeRepository()
+	if got, err := out.Find(c, "ord-1"); err != nil || got != payment.OutcomeNone {
+		t.Fatalf("nothing recorded: %v %v", got, err)
+	}
+	if err = out.Record(c, "ord-1", payment.OutcomeCancelled, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err = out.Record(c, "ord-1", payment.OutcomeCompletedUnpaid, t0); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := out.Find(c, "ord-1"); got != payment.OutcomeCancelled {
+		t.Fatalf("outcome = %s, want the first (CANCELLED)", got)
+	}
+	if _, err = out.Find(cc, "ord-1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Find cancelled: %v", err)
+	}
+	if err = out.Record(cc, "ord-2", payment.OutcomeCancelled, t0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Record cancelled: %v", err)
+	}
+}

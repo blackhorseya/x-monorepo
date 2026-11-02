@@ -31,18 +31,22 @@ func main() {
 // change an arg); the default stays off so local development and the tests keep working.
 const requireDurableFlag = "--require-durable"
 
-// serveCommand is the one subcommand of this slice: the RPC server (docs/payment.md §1). consume
-// and expire are the saga's (slice 3); until they exist they are unknown commands, not silent no-ops.
-const serveCommand = "serve"
+// The subcommands (docs/payment.md §1): serve is the RPC server, consume the event handlers. expire
+// (the sweep) is the next to arrive; until it does it is an unknown command, not a silent no-op.
+const (
+	serveCommand   = "serve"
+	consumeCommand = "consume"
+)
 
 // run is the process after flag handling: args are the command line without the program name.
-// The subcommand is serve, and its only flag is --require-durable; anything else is refused (a typo
-// must not start the service without the guarantee the operator asked for). The messages name the
-// position, never the value.
+// The subcommand is serve or consume, and its only flag is --require-durable; anything else is
+// refused (a typo must not start the service without the guarantee the operator asked for). The
+// messages name the position, never the value.
 func run(args []string) error {
-	if len(args) == 0 || args[0] != serveCommand {
-		return fmt.Errorf("payment-rpc: a subcommand is required, the only one is %s", serveCommand)
+	if len(args) == 0 || (args[0] != serveCommand && args[0] != consumeCommand) {
+		return fmt.Errorf("payment-rpc: a subcommand is required: %s or %s", serveCommand, consumeCommand)
 	}
+	cmd := args[0]
 	requireDurable := false
 	for n, a := range args[1:] {
 		if a != requireDurableFlag {
@@ -60,7 +64,11 @@ func run(args []string) error {
 	}
 
 	if requireDurable {
-		if err := CheckDurable(cfg); err != nil {
+		check := CheckDurable
+		if cmd == consumeCommand {
+			check = CheckDurableConsume
+		}
+		if err := check(cfg); err != nil {
 			return err
 		}
 	}
@@ -68,6 +76,16 @@ func run(args []string) error {
 	provider, err := payment.ProvidePaymentProvider(cfg.Payment)
 	if err != nil {
 		return err
+	}
+
+	if cmd == consumeCommand {
+		consumer, cleanup, err := InitializeConsume(cfg, provider)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+
+		return consumer.Run(c)
 	}
 
 	srv, cleanup, err := Initialize(cfg, provider)

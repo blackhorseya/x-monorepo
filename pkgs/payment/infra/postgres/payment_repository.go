@@ -90,6 +90,14 @@ func (i *PaymentRepository) FindByOrderID(c context.Context, orderID string) (*p
 	return row.toAggregate()
 }
 
+func (i *PaymentRepository) FindByID(context.Context, payment.ID) (*payment.Payment, error) {
+	return nil, payment.ErrNotFound // SPEC STAGE
+}
+
+func (i *PaymentRepository) FindByProviderRef(context.Context, string, string) (*payment.Payment, error) {
+	return nil, payment.ErrNotFound // SPEC STAGE
+}
+
 // Save inserts a never-saved payment (Version 0) with version 1, or updates a loaded one
 // `WHERE version = <loaded>`, bumping it. A second payment for the same order (or a reused id) hits
 // a unique constraint and is ErrDuplicateForOrder; an update whose version moved on matches zero
@@ -138,5 +146,22 @@ func (i *PaymentRepository) Save(c context.Context, p *payment.Payment) error {
 		return fmt.Errorf("update payment of order %s: %w", p.OrderID(), payment.ErrStale)
 	}
 
+	return nil
+}
+
+var _ payment.OutcomeRepository = (*OutcomeRepository)(nil)
+
+// OutcomeRepository keeps payment.order_outcomes. SPEC STAGE: it remembers nothing.
+type OutcomeRepository struct {
+	db *gorm.DB
+}
+
+func NewOutcomeRepository(db *gorm.DB) *OutcomeRepository { return &OutcomeRepository{db: db} }
+
+func (i *OutcomeRepository) Find(context.Context, string) (payment.Outcome, error) {
+	return payment.OutcomeNone, nil
+}
+
+func (i *OutcomeRepository) Record(context.Context, string, payment.Outcome, time.Time) error {
 	return nil
 }
