@@ -33,3 +33,15 @@ func TestParseStatus_RoundTrip(t *testing.T) {
 		t.Fatalf("empty name: err = %v", err)
 	}
 }
+
+// PAID is a lifecycle state of its own (docs/payment.md §2): it parses, prints and
+// round-trips by name like every other status.
+func TestParseStatus_Paid(t *testing.T) {
+	got, err := order.ParseStatus("PAID")
+	if err != nil {
+		t.Fatalf("ParseStatus(PAID) err = %v, want nil", err)
+	}
+	if got.String() != "PAID" {
+		t.Fatalf("ParseStatus(PAID).String() = %q, want PAID", got.String())
+	}
+}
