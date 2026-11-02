@@ -87,6 +87,12 @@ const (
 	AlertMissingTotal Alert = "missing_total"
 	// AlertOrphanWebhook: a verified notification names a checkout no payment has opened.
 	AlertOrphanWebhook Alert = "orphan_webhook"
+	// AlertReconcileIncomplete: the last reconcile query a payment will ever get failed, so money that
+	// arrived anyway (docs/payment.md「已知限制」) would go unnoticed.
+	AlertReconcileIncomplete Alert = "reconcile_incomplete"
+	// AlertProviderQueryStuck: a due payment could not be settled because the provider kept failing the
+	// query for several sweeps in a row. It stays PENDING (never EXPIRED on a failed query).
+	AlertProviderQueryStuck Alert = "provider_query_stuck"
 	// AlertCaptureAfterReview: money was reported again for a payment already waiting for review.
 	AlertCaptureAfterReview Alert = "capture_after_review"
 )

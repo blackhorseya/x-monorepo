@@ -78,3 +78,37 @@ type WebhookReceivedInput struct {
 	Provider string
 	EventID  string
 }
+
+// ExpireOutput is what one run of the expire sweep did, for the log: counts only.
+type ExpireOutput struct {
+	// Expired: PENDING payments past their window with no money at the provider (T5).
+	Expired int
+	// Captured: payments the sweep found money for that the webhook never reported (T6, T8).
+	Captured int
+	// NeedsReview: payments the sweep found money for that does not match (T6', T9).
+	NeedsReview int
+	// QueryFailures: provider queries that did not answer. The payment did not move.
+	QueryFailures int
+	// Conflicts: payments someone else changed meanwhile; they come round again next run.
+	Conflicts int
+	// Failures: payments whose write failed for another reason. The run still finishes the rest, then fails.
+	Failures int
+	// RetentionDeleted: processed notifications deleted by retention.
+	RetentionDeleted int
+	// RetentionFailed: the retention delete failed; the run's transitions still happened.
+	RetentionFailed bool
+}
+
+// SweepConfig is the expire sweep's settings, mapped from config.Payment by the composition root.
+type SweepConfig struct {
+	// ReconcileWindow: how long after a payment became EXPIRED / CANCELLED the provider is still asked
+	// whether money arrived (docs/payment.md §3「補查有界」).
+	ReconcileWindow time.Duration
+	// Interval is how often the sweep runs; a reconcile query is the payment's last when the next run
+	// would fall after its window closed.
+	Interval time.Duration
+	// Batch bounds the payments looked at per list and the notifications deleted per run.
+	Batch int
+	// WebhookRetention: processed notifications older than this are deleted; 0 keeps them for ever.
+	WebhookRetention time.Duration
+}

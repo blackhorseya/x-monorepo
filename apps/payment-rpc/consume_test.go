@@ -7,7 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/signal"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -421,4 +425,93 @@ func newTestServer(t *testing.T, h http.Handler) string {
 	t.Cleanup(ts.Close)
 
 	return ts.URL
+}
+
+// startAndStop runs a command that has no readyz (consume, expire) under env: if it returns on its own that is
+// the outcome (a refusal, or a one-shot run that finished); if it is still running after a moment it is told to
+// stop like SIGTERM would and its (clean) result is the outcome.
+func startAndStop(t *testing.T, args []string, env map[string]*string) outcome {
+	t.Helper()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	t.Setenv("APP_LOG_LEVEL", "error")
+	for k, v := range env {
+		if v == nil {
+			old, had := os.LookupEnv(k)
+			_ = os.Unsetenv(k)
+			t.Cleanup(func() {
+				if had {
+					_ = os.Setenv(k, old)
+				}
+			})
+
+			continue
+		}
+		t.Setenv(k, *v)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- run(args) }()
+	select {
+	case err := <-done:
+		return outcome{err: err}
+	case <-time.After(3 * time.Second):
+	}
+	for {
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		select {
+		case err := <-done:
+			return outcome{err: err, served: true}
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+}
+
+// consume as a process: it stays up on a database, stops cleanly on SIGTERM, and refuses what it cannot serve
+// instead of ignoring it.
+func TestRun_Consume(t *testing.T) {
+	newConsumeEnv(t) // migrates ordering too: consume puts its cursor on ordering's event tables
+	out := startAndStop(t, []string{"consume"}, durableEnv(t, nil))
+	if out.err != nil || !out.served {
+		t.Fatalf("consume = %+v err=%v, want it running until told to stop, then nil", out, out.err)
+	}
+	out = startAndStop(t, []string{"consume", "--require-durable"}, durableEnv(t, nil))
+	if out.err != nil || !out.served {
+		t.Fatalf("consume --require-durable = %+v", out)
+	}
+
+	for name, tc := range map[string]struct {
+		args []string
+		env  map[string]*string
+		want string
+	}{
+		"no database":          {[]string{"consume"}, map[string]*string{"APP_POSTGRES_URL": s("")}, "postgres.url"},
+		"no database, durable": {[]string{"consume", "--require-durable"}, map[string]*string{"APP_POSTGRES_URL": s("")}, "postgres.url"},
+		"a redis broker":       {[]string{"consume"}, map[string]*string{"APP_WORKER_BROKER": s("redis")}, "worker.broker"},
+		"an unknown flag":      {[]string{"consume", "--nope"}, nil, "unknown argument"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := startAndStop(t, tc.args, durableEnv(t, tc.env))
+			if out.err == nil || out.served || !strings.Contains(out.err.Error(), tc.want) {
+				t.Fatalf("run = %+v, want a refusal naming %q", out, tc.want)
+			}
+		})
+	}
+}
+
+// expire as a process is ONE run: it finishes by itself (a CronJob), without a signal, and refuses to run
+// without a database.
+func TestRun_Expire(t *testing.T) {
+	out := startAndStop(t, []string{"expire"}, durableEnv(t, nil))
+	if out.err != nil || out.served {
+		t.Fatalf("expire = %+v, want a run that finished by itself with nil", out)
+	}
+	if out := startAndStop(t, []string{"expire", "--require-durable"}, durableEnv(t, nil)); out.err != nil || out.served {
+		t.Fatalf("expire --require-durable = %+v", out)
+	}
+	out = startAndStop(t, []string{"expire"}, durableEnv(t, map[string]*string{"APP_POSTGRES_URL": s("")}))
+	if out.err == nil || !strings.Contains(out.err.Error(), "postgres.url") {
+		t.Fatalf("expire without a database = %+v, want a refusal naming postgres.url", out)
+	}
 }

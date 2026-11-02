@@ -74,11 +74,11 @@ func (x *Consumer) Run(c context.Context) error {
 	return x.router.Run(c)
 }
 
-// CheckDurableConsume is --require-durable for consume: a consumer that would run without Postgres
-// has nothing to read. (There is no auth to check: it listens on nothing.)
-func CheckDurableConsume(cfg *config.AppConfig) error {
+// CheckDurablePostgres is --require-durable for consume and expire: a process that would run without
+// Postgres has nothing to read or sweep. (There is no auth to check: they listen on nothing.)
+func CheckDurablePostgres(cfg *config.AppConfig) error {
 	if strings.TrimSpace(cfg.Postgres.URL) == "" {
-		return errors.New("payment-rpc: --require-durable: postgres.url is empty; consume has nothing to read")
+		return errors.New("payment-rpc: --require-durable: postgres.url is empty; there is nothing to read or sweep")
 	}
 
 	return nil

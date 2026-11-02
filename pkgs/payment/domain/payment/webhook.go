@@ -102,6 +102,8 @@ type WebhookRepository interface {
 	// MarkProcessed sets processed_at on a notification that has none; an already processed one is untouched.
 	MarkProcessed(c context.Context, provider, eventID string, at time.Time) error
 	// DeleteProcessedBefore deletes up to limit PROCESSED notifications processed before cutoff, oldest
-	// first, and returns how many. Unprocessed ones are never touched, whatever their age.
+	// first, and returns how many. Unprocessed ones are never touched, whatever their age, and neither is
+	// a notification whose payment (same provider and reference) is NEEDS_REVIEW: an operator may still
+	// need exactly what the provider sent.
 	DeleteProcessedBefore(c context.Context, cutoff time.Time, limit int) (int, error)
 }

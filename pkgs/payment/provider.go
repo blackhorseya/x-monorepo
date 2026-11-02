@@ -100,7 +100,6 @@ func ProvidePaymentProvider(cfg config.Payment) (port.PaymentProvider, error) {
 	if cfg.ReconcileWindow <= p.CheckoutValidity() {
 		return nil, fmt.Errorf("payment: payment.reconcile_window (%s) must be longer than the provider's checkout validity (%s)", cfg.ReconcileWindow, p.CheckoutValidity())
 	}
-
 	return p, nil
 }
 
@@ -263,9 +262,13 @@ func ProvideProcessRefund(payments payment.Repository, provider port.PaymentProv
 }
 
 // ProvideWebhookRepository pairs with ProvidePaymentRepository.
-func ProvideWebhookRepository(db *gorm.DB) payment.WebhookRepository {
+func ProvideWebhookRepository(db *gorm.DB, payments payment.Repository) payment.WebhookRepository {
 	if db == nil {
-		return memory.NewWebhookRepository()
+		return memory.NewWebhookRepository(func(provider, ref string) bool {
+			p, err := payments.FindByProviderRef(context.Background(), provider, ref)
+
+			return err == nil && p.Status() == payment.StatusNeedsReview
+		})
 	}
 
 	return postgres.NewWebhookRepository(db)
@@ -288,3 +291,24 @@ func WebhookRoute(h *webhook.Handler) server.Option {
 func ProvideProcessWebhook(payments payment.Repository, webhooks payment.WebhookRepository, ev port.EventPublisher, al port.Alerts, clock port.Clock, tx port.Transactor, inbox port.Inbox, rec *usecasex.Recorder) consumer.WebhookUC {
 	return decorateTx("payment.process_webhook", rec, tx, inbox, usecase.NewProcessWebhook(payments, webhooks, ev, al, clock))
 }
+
+// ExpireProviderSet is what `payment-rpc expire` adds to ProviderSet: the sweep use case (decorated here)
+// and the outbox it publishes through. It reads no inbox: it is a scheduled run, not a message handler.
+var ExpireProviderSet = wire.NewSet(
+	ProviderSet,
+	ProvideAlerts,
+	ProvideExpireSweep,
+	NewExpire,
+)
+
+// ProvideExpireSweep maps config.Payment onto the sweep and wraps it for metrics and logging only: it opens
+// its own small transactions around each payment's write (provider calls are outside them), so there is no
+// Transactional and no inbox.
+func ProvideExpireSweep(payments payment.Repository, webhooks payment.WebhookRepository, provider port.PaymentProvider, ev port.EventPublisher, al port.Alerts, tx port.Transactor, clock port.Clock, cfg config.Payment, rec *usecasex.Recorder) ExpireUC {
+	return decorateNoTx("payment.expire_sweep", rec, usecase.NewExpireSweep(payments, webhooks, provider, ev, al, tx, clock, dto.SweepConfig{
+		ReconcileWindow: cfg.ReconcileWindow, Interval: cfg.ExpireInterval, Batch: cfg.ExpireBatch, WebhookRetention: cfg.WebhookRetention,
+	}))
+}
+
+// ExpireUC is the sweep as the composition root runs it.
+type ExpireUC = usecasex.UseCase[dto.Ack, *dto.ExpireOutput]

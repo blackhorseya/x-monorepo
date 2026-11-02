@@ -171,7 +171,18 @@ func aWebhook(t *testing.T, id, typ string) *payment.WebhookEvent {
 // unprocessed old row, a processed recent row) must survive, or "nothing was deleted" proves nothing.
 func TestWebhookRepository(t *testing.T) {
 	c := context.Background()
-	repo := memory.NewWebhookRepository()
+	reviewed := map[string]bool{"ref-review": true}
+	repo := memory.NewWebhookRepository(func(provider, ref string) bool { return provider == "mock" && reviewed[ref] })
+	review, err := payment.NewWebhookEvent("mock", "reviewed", payment.WebhookCaptured, "ref-review", aWebhook(t, "x", "t").Amount(), []byte("{}"), t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = repo.Insert(c, review); err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.MarkProcessed(c, "mock", "reviewed", t0.Add(-100*time.Hour)); err != nil { // old and processed, but its payment is under review
+		t.Fatal(err)
+	}
 	for _, id := range []string{"old-1", "old-2", "old-3", "recent", "unprocessed"} {
 		if inserted, err := repo.Insert(c, aWebhook(t, id, payment.WebhookCaptured)); err != nil || !inserted {
 			t.Fatalf("insert %s = %v, %v", id, inserted, err)
@@ -224,7 +235,7 @@ func TestWebhookRepository(t *testing.T) {
 	if n, err = repo.DeleteProcessedBefore(c, cutoff, 100); err != nil || n != 1 {
 		t.Fatalf("second delete = %d, %v; want the remaining old one", n, err)
 	}
-	for _, id := range []string{"recent", "unprocessed"} {
+	for _, id := range []string{"recent", "unprocessed", "reviewed"} {
 		if _, err = repo.Find(c, "mock", id); err != nil {
 			t.Fatalf("sentinel %s was deleted: %v", id, err)
 		}
@@ -246,4 +257,93 @@ func TestWebhookRepository(t *testing.T) {
 			t.Fatalf("%s with a cancelled context: %v", name, err)
 		}
 	}
+}
+
+// ListPendingDue / ListReconcilable: the sweep's two lists, with sentinels on both sides of every boundary.
+func TestPaymentRepository_Lists(t *testing.T) {
+	c := context.Background()
+	repo := memory.NewPaymentRepository()
+	exp := newPayment(t, "probe", "probe").ExpiresAt() // when the fixtures' window closes
+	now := exp.Add(time.Hour)
+	save := func(id, order string, mutate func(*payment.Payment)) {
+		t.Helper()
+		p := newPayment(t, id, order)
+		if mutate != nil {
+			mutate(p)
+		}
+		if err := repo.Save(c, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkout := func(p *payment.Payment) {
+		if err := p.AttachCheckout("mock", "ref-"+p.OrderID(), "https://pay.example/c", t0.Add(10*time.Minute), t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// pending: expires_at = t0+30m for all (newPayment). Make two due at different times and one not due.
+	save("p-late", "ord-late", func(p *payment.Payment) {}) // due since t0+30m
+	save("p-notdue", "ord-notdue", nil)
+	save("p-captured", "ord-captured", func(p *payment.Payment) { p.Capture(payment.SourceWebhook, p.Amount(), t0) })
+
+	due, err := repo.ListPendingDue(c, now, 10)
+	if err != nil || len(due) != 2 {
+		t.Fatalf("due at %v = %d, %v; want the two PENDING ones past their window", now, len(due), err)
+	}
+	if none, _ := repo.ListPendingDue(c, exp.Add(-time.Minute), 10); len(none) != 0 {
+		t.Fatalf("%d payments due before any window closed", len(none))
+	}
+	if exact, _ := repo.ListPendingDue(c, exp, 10); len(exact) != 2 {
+		t.Fatalf("at the exact moment the window closes %d are due, want 2", len(exact))
+	}
+	if limited, _ := repo.ListPendingDue(c, now, 1); len(limited) != 1 {
+		t.Fatalf("limit 1 returned %d", len(limited))
+	}
+
+	// reconcilable: EXPIRED / CANCELLED with a checkout, ended at or after notBefore
+	end := exp.Add(10 * time.Hour)
+	save("e-ref", "ord-e-ref", func(p *payment.Payment) { checkout(p); p.Unpaid(end) })
+	save("e-noref", "ord-e-noref", func(p *payment.Payment) { p.Unpaid(end) })
+	save("c-ref", "ord-c-ref", func(p *payment.Payment) { checkout(p); p.OrderCancelled(end.Add(time.Minute)) })
+	save("e-old", "ord-e-old", func(p *payment.Payment) { checkout(p); p.Unpaid(exp.Add(time.Minute)) })
+	save("review", "ord-review", func(p *payment.Payment) { checkout(p); p.Capture(payment.SourceWebhook, small(t), t0) })
+
+	got, err := repo.ListReconcilable(c, end.Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[payment.ID]bool{}
+	for _, p := range got {
+		ids[p.ID()] = true
+	}
+	if len(got) != 2 || !ids["e-ref"] || !ids["c-ref"] {
+		t.Fatalf("reconcilable = %v, want exactly e-ref and c-ref (not: no checkout, ended before the cutoff, under review, pending)", ids)
+	}
+	if got[0].ID() != "e-ref" {
+		t.Fatalf("first = %s, want the one whose window closes soonest (e-ref)", got[0].ID())
+	}
+	if all, _ := repo.ListReconcilable(c, exp, 10); len(all) != 3 {
+		t.Fatalf("with an earlier cutoff %d are reconcilable, want 3 (e-old joins)", len(all))
+	}
+	if limited, _ := repo.ListReconcilable(c, exp, 2); len(limited) != 2 {
+		t.Fatalf("limit 2 returned %d", len(limited))
+	}
+
+	cc, cancel := context.WithCancel(c)
+	cancel()
+	if _, err = repo.ListPendingDue(cc, now, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListPendingDue cancelled: %v", err)
+	}
+	if _, err = repo.ListReconcilable(cc, now, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListReconcilable cancelled: %v", err)
+	}
+}
+
+func small(t *testing.T) kernel.Money {
+	t.Helper()
+	m, err := kernel.NewMoney(1, "TWD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return m
 }

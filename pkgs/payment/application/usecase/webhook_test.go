@@ -24,7 +24,7 @@ type webhookEnv struct {
 func newWebhookEnv(t *testing.T) *webhookEnv {
 	t.Helper()
 
-	return &webhookEnv{sagaEnv: newSagaEnv(t, nil), webhooks: memory.NewWebhookRepository()}
+	return &webhookEnv{sagaEnv: newSagaEnv(t, nil), webhooks: memory.NewWebhookRepository(nil)}
 }
 
 func (w *webhookEnv) receive() *usecase.ReceiveWebhook {

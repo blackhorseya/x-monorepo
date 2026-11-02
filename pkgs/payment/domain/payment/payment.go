@@ -357,6 +357,12 @@ func (x *Payment) RefundSucceeded(now time.Time) (Effect, error) {
 	}
 }
 
+// ReconcileDeadline is when the sweep stops asking the provider (docs/payment.md §3). SPEC STAGE: never.
+func (x *Payment) ReconcileDeadline(time.Duration) time.Time { return time.Time{} }
+
+// Reconcilable says whether the sweep should ask the provider about this payment now. SPEC STAGE: never.
+func (x *Payment) Reconcilable(time.Time, time.Duration) bool { return false }
+
 func (x *Payment) setStatus(s Status, now time.Time) {
 	x.status = s
 	x.updatedAt = now

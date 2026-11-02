@@ -77,6 +77,14 @@ func (i *PaymentRepository) FindByProviderRef(c context.Context, provider, ref s
 	return nil, payment.ErrNotFound
 }
 
+func (i *PaymentRepository) ListPendingDue(context.Context, time.Time, int) ([]*payment.Payment, error) {
+	return nil, nil // SPEC STAGE
+}
+
+func (i *PaymentRepository) ListReconcilable(context.Context, time.Time, int) ([]*payment.Payment, error) {
+	return nil, nil // SPEC STAGE
+}
+
 // Save inserts a never-saved payment (Version 0) with version 1, or replaces a loaded one when the
 // stored version is still the loaded one. A second payment for an order, or a reused payment id, is
 // ErrDuplicateForOrder; a version that moved on is ErrStale.
@@ -156,15 +164,18 @@ func (i *OutcomeRepository) Record(c context.Context, orderID string, outcome pa
 
 var _ payment.WebhookRepository = (*WebhookRepository)(nil)
 
-// WebhookRepository keeps the verified notifications in memory.
+// WebhookRepository keeps the verified notifications in memory. underReview, when set, says whether the
+// payment a notification belongs to (provider, reference) is NEEDS_REVIEW: those notifications are never
+// deleted by retention.
 type WebhookRepository struct {
-	mu    sync.Mutex
-	order []string
-	data  map[string]payment.ReconstituteWebhookParams
+	mu          sync.Mutex
+	order       []string
+	data        map[string]payment.ReconstituteWebhookParams
+	underReview func(provider, ref string) bool
 }
 
-func NewWebhookRepository() *WebhookRepository {
-	return &WebhookRepository{data: map[string]payment.ReconstituteWebhookParams{}}
+func NewWebhookRepository(underReview func(provider, ref string) bool) *WebhookRepository {
+	return &WebhookRepository{data: map[string]payment.ReconstituteWebhookParams{}, underReview: underReview}
 }
 
 func webhookKey(provider, id string) string { return provider + "\x00" + id }

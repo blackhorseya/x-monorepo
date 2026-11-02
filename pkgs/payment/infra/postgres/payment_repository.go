@@ -124,6 +124,14 @@ func (i *PaymentRepository) findOne(c context.Context, where string, arg any, wh
 	return row.toAggregate()
 }
 
+func (i *PaymentRepository) ListPendingDue(context.Context, time.Time, int) ([]*payment.Payment, error) {
+	return nil, nil // SPEC STAGE
+}
+
+func (i *PaymentRepository) ListReconcilable(context.Context, time.Time, int) ([]*payment.Payment, error) {
+	return nil, nil // SPEC STAGE
+}
+
 // Save inserts a never-saved payment (Version 0) with version 1, or updates a loaded one
 // `WHERE version = <loaded>`, bumping it. A second payment for the same order (or a reused id) hits
 // a unique constraint and is ErrDuplicateForOrder; an update whose version moved on matches zero
@@ -308,7 +316,8 @@ func (i *WebhookRepository) DeleteProcessedBefore(c context.Context, cutoff time
 	res := platformpg.TxOrDB(ctx, i.db).Exec(
 		`DELETE FROM `+Schema+`.webhook_events WHERE (provider, provider_event_id) IN (
 		   SELECT provider, provider_event_id FROM `+Schema+`.webhook_events
-		   WHERE processed_at IS NOT NULL AND processed_at < ? ORDER BY processed_at LIMIT ?)`, cutoff, limit)
+		   WHERE processed_at IS NOT NULL AND processed_at < ?
+		   ORDER BY processed_at LIMIT ?)`, cutoff, limit)
 	if res.Error != nil {
 		return 0, fmt.Errorf("delete processed webhook events: %w", res.Error)
 	}

@@ -54,3 +54,18 @@ func InitializeConsume(cfg *config.AppConfig, provider port.PaymentProvider) (*C
 
 	return nil, nil, nil
 }
+
+// InitializeExpire builds `payment-rpc expire`: the sweep over the database and the provider, publishing
+// into the outbox. No listener, no router.
+func InitializeExpire(cfg *config.AppConfig, provider port.PaymentProvider) (*payment.Expire, func(), error) {
+	wire.Build(
+		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel", "Payment"),
+		postgres.NewDB,
+		otel.ProviderSet,
+		usecasex.NewRecorder,
+		eventbus.ProvidePublisher,
+		payment.ExpireProviderSet,
+	)
+
+	return nil, nil, nil
+}

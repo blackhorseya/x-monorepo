@@ -545,3 +545,59 @@ func TestNewEffect(t *testing.T) {
 		t.Fatal("the zero Effect must be 'nothing'")
 	}
 }
+
+// The reconcile window (docs/payment.md §3「補查有界」): only an EXPIRED / CANCELLED payment that has a checkout
+// at the provider, and only until terminal_at + window.
+func TestReconcilable(t *testing.T) {
+	const window = 24 * time.Hour
+	end := t0.Add(time.Hour) // terminal_at of the fixtures below
+
+	mk := func(st payment.Status, out payment.Outcome, withCheckout bool, terminal time.Time) *payment.Payment {
+		t.Helper()
+		p := payment.ReconstituteParams{
+			ID: "pay-1", OrderID: "ord-1", CustomerID: "cust-1", Amount: money(t, 1000, "TWD"), Status: st, ExpiresAt: expires,
+			Outcome: out, TerminalAt: terminal, UpdatedAt: t0,
+		}
+		if withCheckout {
+			p.Provider, p.ProviderRef, p.CheckoutURL, p.CheckoutExpiresAt = "mock", "ref-1", "https://pay.example/c/1", t0.Add(10*time.Minute)
+		}
+		x, err := payment.Reconstitute(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return x
+	}
+
+	for _, tc := range []struct {
+		name string
+		p    *payment.Payment
+		now  time.Time
+		want bool
+	}{
+		{"expired, inside the window", mk(EXP, none, true, end), end.Add(window - time.Second), true},
+		{"expired, at the deadline", mk(EXP, none, true, end), end.Add(window), false},
+		{"expired, after the deadline", mk(EXP, none, true, end), end.Add(window + time.Hour), false},
+		{"cancelled, inside the window", mk(CAN, cancOu, true, end), end.Add(time.Minute), true},
+		{"never opened a checkout: it cannot have been paid", mk(EXP, none, false, end), end.Add(time.Minute), false},
+		{"expired without an end time", mk(EXP, none, true, time.Time{}), end, false},
+		{"pending", mk(P, none, true, time.Time{}), end, false},
+		{"captured", mk(CAP, none, true, time.Time{}), end, false},
+		{"refunding", mk(REFING, cancOu, true, time.Time{}), end, false},
+		{"refunded", mk(REFED, cancOu, true, time.Time{}), end, false},
+		{"under review: the system does not move it", mk(REV, none, true, time.Time{}), end, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.p.Reconcilable(tc.now, window); got != tc.want {
+				t.Fatalf("Reconcilable = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	if got := mk(EXP, none, true, end).ReconcileDeadline(window); !got.Equal(end.Add(window)) {
+		t.Fatalf("deadline = %v, want %v", got, end.Add(window))
+	}
+	if got := mk(P, none, true, time.Time{}).ReconcileDeadline(window); !got.IsZero() {
+		t.Fatalf("a pending payment has no deadline, got %v", got)
+	}
+}

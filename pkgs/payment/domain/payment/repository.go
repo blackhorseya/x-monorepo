@@ -13,6 +13,12 @@ type Repository interface {
 	FindByID(c context.Context, id ID) (*Payment, error)
 	// FindByProviderRef returns ErrNotFound when no payment was opened at the provider under ref.
 	FindByProviderRef(c context.Context, provider, ref string) (*Payment, error)
+	// ListPendingDue returns up to limit PENDING payments whose window closed at or before now, the longest
+	// overdue first.
+	ListPendingDue(c context.Context, now time.Time, limit int) ([]*Payment, error)
+	// ListReconcilable returns up to limit EXPIRED / CANCELLED payments that have a provider reference and
+	// ended at or after notBefore, the ones whose reconcile window closes soonest first.
+	ListReconcilable(c context.Context, notBefore time.Time, limit int) ([]*Payment, error)
 	// Save inserts a never-saved payment (Version 0) or updates a loaded one, comparing Version.
 	// ErrStale when another writer won; a second payment for the same order is ErrDuplicateForOrder.
 	// The stored version advances on every save, but the in-memory aggregate does not: reload
