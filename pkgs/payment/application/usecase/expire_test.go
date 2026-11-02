@@ -481,3 +481,61 @@ func newPaymentUnderReview(t *testing.T, s *sweepEnv) *payment.Payment {
 
 	return s.payment(t, "ord-review")
 }
+
+// docs/payment.md §9「查詢持續失敗的完整序列」: the provider stays down for the whole life of a payment. The sweep
+// moves nothing while it is down (PENDING stays PENDING); the order's own TTL then cancels the order, which
+// reaches payment as OrderCancelled (T7: CANCELLED, the checkout stays open at the provider); the reconcile
+// keeps failing without moving anything; once the provider answers inside the window it finds the money
+// that was paid meanwhile and sends it back (T8 -> T10). Nothing is lost at any point of the sequence.
+func TestSweep_TheWholeSequenceWhenTheProviderStaysDown(t *testing.T) {
+	c := context.Background()
+	s := newSweepEnv(t)
+	down := true
+	s.failQuery = func() bool { return down }
+	s.seedPaid(t, orderID, true)
+	paidAt := s.paid(t, orderID, twd(t, 1000)) // the customer paid on the hosted page...
+	_ = paidAt                                 // ...and the webhook never came
+
+	// 1. the window closes; the provider is down: nothing moves, however often it is tried
+	s.pastWindow()
+	for range 2 {
+		out := s.run(t)
+		if out.QueryFailures != 1 || s.payment(t, orderID).Status() != payment.StatusPending {
+			t.Fatalf("while down: %+v status %s", out, s.payment(t, orderID).Status())
+		}
+	}
+	if len(s.rec.events()) != 0 {
+		t.Fatalf("events while down: %v", s.rec.events())
+	}
+
+	// 2. the reservation TTL cancels the order; OrderCancelled reaches payment: T7
+	if _, err := s.cancelled().Execute(c, dto.OrderEndedInput{OrderID: orderID}); err != nil {
+		t.Fatal(err)
+	}
+	p := s.payment(t, orderID)
+	if p.Status() != payment.StatusCancelled || p.Outcome() != payment.OutcomeCancelled {
+		t.Fatalf("after OrderCancelled: %s/%s", p.Status(), p.Outcome())
+	}
+
+	// 3. the reconcile query keeps failing: still nothing moves, and it is asked on every run inside the window
+	asked := s.calls(mock.OpGetPayment)
+	s.clock.Advance(time.Hour)
+	if out := s.run(t); out.QueryFailures != 1 || s.payment(t, orderID).Status() != payment.StatusCancelled {
+		t.Fatalf("reconcile while down: %+v", out)
+	}
+	if s.calls(mock.OpGetPayment) != asked+1 {
+		t.Fatalf("positive control: the provider was asked %d times since, want 1", s.calls(mock.OpGetPayment)-asked)
+	}
+
+	// 4. the provider is back inside the window: the money is found, captured and sent back
+	down = false
+	s.clock.Advance(time.Hour)
+	s.run(t)
+	if got := s.payment(t, orderID).Status(); got != payment.StatusRefunding {
+		t.Fatalf("after recovery: %s, want REFUNDING", got)
+	}
+	ev := s.rec.events()
+	if len(ev) != 2 || !strings.HasPrefix(ev[0], "PaymentCaptured:") || !strings.HasPrefix(ev[1], "PaymentRefundRequested:") {
+		t.Fatalf("outbox = %v, want captured then refund requested", ev)
+	}
+}
