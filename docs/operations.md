@@ -302,7 +302,12 @@ watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預
 | `missing_total` | 收到沒有 `total` 的 `OrderConfirmed`（舊事件）；沒有建付款單 | 查發布者；舊事件不能當成 0 元 |
 | `orphan_webhook` | 驗過簽章的收款通知，沒有任何付款單開過那個 checkout | 到 provider 後台查那筆款；通知已標為處理完，不會重試 |
 | `provider_query_stuck` | 逾時的 `PENDING` 連續三輪沒能問到 provider，仍是 `PENDING` | 查 provider 狀態與憑證；恢復後下一輪自動收斂 |
+| `reconcile_backlog` | 補查落後：窗口內有付款單超過 `reconcile_window` 的一半沒被問過 provider（`payment_reconcile_oldest_unchecked_seconds` 超過閾值）。`expire_batch` × 窗口內的輪數已經不夠覆蓋待查的筆數，沒被問到的單有款也看不到 | 看 `payment_reconcile_eligible`（待查筆數）：調大 `payment.expire_batch` 或縮短 CronJob 週期與 `payment.expire_interval`；同時查 `provider_query_stuck`（卡在查詢失敗的單也會佔輪次）。這是補查「有條件」保證的觀測口（`docs/payment.md` §3） |
 | `reconcile_incomplete` | 一張 `EXPIRED`／`CANCELLED` 付款單最後一次補查失敗，補查窗口即將關閉 | 到 provider 後台確認有沒有款（已知限制：窗口後才到的款，沒有 webhook 就不會被發現） |
+
+**補查的游標與 gauge**：`payment.payments.swept_at` 是 `expire` 的游標（最久沒被看過的先查，查過就推進，不論 provider 回什麼；不是付款單狀態，改它不動 `version`）。`payment_reconcile_eligible`（窗口內待查筆數）與 `payment_reconcile_oldest_unchecked_seconds`（最久沒被看過的等了多久）每輪 `expire` 結束時各記一次；CronJob 是短命 process，要靠 OTLP flush 在結束時送出，沒收到資料就等於沒有量測，不能當成「沒有落後」。
+
+**migration 的鎖（payment `0002`）**：`0002_saga` 在**一個交易**裡跑，對 `payment.payments` 先 `ALTER TABLE … ADD COLUMN swept_at`（可為 NULL、沒有 DEFAULT，不重寫表；取 ACCESS EXCLUSIVE，毫秒級），再建三個一般（非 `CONCURRENTLY`）索引：`CREATE INDEX` 取 **SHARE lock，持有到 commit**，所以這段期間 `payments` 的**寫入會等**（讀不受影響）；時間隨列數成長，不是零鎖的線上變更。payments 在切片 2 才出現、目前沒有任何路徑讓訂單走到 `PAID`，列數少；仍建議在 `serve`／`consume`／`expire` 停著或流量低時跑，並設 `lock_timeout`，拿不到鎖就失敗（整個檔案在交易裡，失敗不留半套）。
 
 **卡住的退款**：`PaymentRefundRequested` 重試三次（100ms 起、指數退避）後進 `payment.events_poison`，付款單維持 `REFUNDING`。provider 恢復後 `requeue` 那一列（`eventbus.Requeue`；`worker poison` 納入 payment 是切片 3B），退款以付款單 id 為冪等鍵，不會退兩次。
 

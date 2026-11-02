@@ -482,12 +482,14 @@ func newPaymentUnderReview(t *testing.T, s *sweepEnv) *payment.Payment {
 	return s.payment(t, "ord-review")
 }
 
-// docs/payment.md §9「查詢持續失敗的完整序列」: the provider stays down for the whole life of a payment. The sweep
-// moves nothing while it is down (PENDING stays PENDING); the order's own TTL then cancels the order, which
-// reaches payment as OrderCancelled (T7: CANCELLED, the checkout stays open at the provider); the reconcile
-// keeps failing without moving anything; once the provider answers inside the window it finds the money
-// that was paid meanwhile and sends it back (T8 -> T10). Nothing is lost at any point of the sequence.
-func TestSweep_TheWholeSequenceWhenTheProviderStaysDown(t *testing.T) {
+// docs/payment.md §9「查詢持續失敗」, the part slice 3A owns: the provider is down when the window closes.
+// The sweep moves nothing while it is down (PENDING stays PENDING); then OrderCancelled reaches payment
+// (T7: CANCELLED, the checkout stays open at the provider) — INJECTED here by calling the use case, since
+// what produces it (the reservation TTL sweep and ordering's cancellation) is not in 3A: ordering does not
+// subscribe to payment until 3B. The reconcile keeps failing without moving anything; once the provider
+// answers inside the window it finds the money paid meanwhile and sends it back (T8 -> T10). Not the whole
+// sequence: the TTL sweep -> order cancellation -> payment step is slice 3B's / S6's.
+func TestSweep_AFailingProviderMovesNothingAndTheMoneyIsFoundAfterAnInjectedCancellation(t *testing.T) {
 	c := context.Background()
 	s := newSweepEnv(t)
 	down := true
@@ -508,7 +510,7 @@ func TestSweep_TheWholeSequenceWhenTheProviderStaysDown(t *testing.T) {
 		t.Fatalf("events while down: %v", s.rec.events())
 	}
 
-	// 2. the reservation TTL cancels the order; OrderCancelled reaches payment: T7
+	// 2. OrderCancelled reaches payment: T7 (injected; see the test's comment)
 	if _, err := s.cancelled().Execute(c, dto.OrderEndedInput{OrderID: orderID}); err != nil {
 		t.Fatal(err)
 	}
