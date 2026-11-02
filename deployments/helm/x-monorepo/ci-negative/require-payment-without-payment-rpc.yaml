@@ -1,4 +1,6 @@
 # expect: ordering.require_payment
+# expect: paymentRpc.enabled=true
+# expect: config.ordering.require_payment=false
 # Orders would wait for a payment nobody can start: rpc itself refuses to start without payment
 # configured, and so does the chart.
 config:
