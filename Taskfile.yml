@@ -585,6 +585,11 @@ tasks:
       - |
         export CI=1
         unset E2E_DEX E2E_CONSOLE_URL
+        # The default config (task web-e2e, web-e2e-image) must not pick these specs up: without their stack they cannot pass
+        # (CI found exactly that on the first push). Listing is enough to know (paths are relative to testDir); it starts no server.
+        if pnpm exec playwright test --list 2>/dev/null | grep -qE '› payment/'; then
+          echo "playwright.config.ts would run e2e/payment/ without its stack: add payment to its testIgnore"; exit 1
+        fi
         rc=0
         pnpm exec playwright test -c playwright.payment.config.ts {{.CLI_ARGS}} || rc=$?
         node --experimental-strip-types e2e/assert-clean.ts || rc=1
