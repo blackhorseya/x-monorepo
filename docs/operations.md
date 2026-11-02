@@ -37,7 +37,7 @@ Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/ale
 
 | rule | 條件 | 意思 / 怎麼處理 |
 |---|---|---|
-| Eventbus consumer lag | `eventbus_consumer_lag` > 100 持續 5m | handler 追不上或沒人在消費；看 oldest age 分辨。`postgres` broker 下加 worker replica 沒有量到變快（見「Subscriber 批次大小」），要靠加 replica 擴充改用 `worker.broker: redis` |
+| Eventbus consumer lag | `eventbus_consumer_lag` > 100 持續 5m | handler 追不上或沒人在消費；看 oldest age 分辨，處置見「Worker 輪詢間隔」的「要不要調」（加 replica 是否有效取決於 broker，那裡有量測） |
 | Eventbus consumer stalled | `eventbus_consumer_oldest_age_seconds` > 600 持續 5m | 該 group 完全沒前進（通常是 subscriber 連不到 DB / Redis，不是 handler 失敗——失敗的會進 poison） |
 | Eventbus poison messages | `eventbus_poison_messages` > 0 持續 1m | 有訊息停在 poison 表，`task poison -- list` 看、`requeue` / `drop` 解，alert 隨 gauge 歸零 |
 | Eventbus retention overdue | `eventbus_outbox_oldest_age_seconds` / `eventbus_inbox_oldest_age_seconds` > 45d 持續 1h | prune 沒在跑，或跑了刪不動；`task prune -- --older-than 720h --dry-run` 或 console Prune 頁的 dry run 會說是誰擋的。閾值設成 prune retention 的 1.5× |
