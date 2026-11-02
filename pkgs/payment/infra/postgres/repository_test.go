@@ -114,7 +114,7 @@ func TestPaymentRepository_Postgres(t *testing.T) {
 
 	// update with a checkout (nullable time set)
 	stale, _ := repo.FindByOrderID(c, "ord-1")
-	checkoutEnds := t0.Add(10 * time.Minute)
+	checkoutEnds := t0.Add(30 * time.Minute)
 	if err = got.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", checkoutEnds, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestPaymentRepository_FindersAndOutcomes_Postgres(t *testing.T) {
 	c := context.Background()
 	repo := postgres.NewPaymentRepository(db)
 	p := newPayment(t, "pay-1", "ord-1")
-	if err := p.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", t0.Add(10*time.Minute), t0); err != nil {
+	if err := p.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", t0.Add(30*time.Minute), t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Save(c, p); err != nil {
@@ -316,7 +316,7 @@ func TestWebhookRepository_Postgres(t *testing.T) {
 	}
 	// a payment under review, whose old processed notification must survive retention
 	rev := newPayment(t, "pay-review", "ord-review")
-	if err = rev.AttachCheckout("mock", "ref-review", "https://pay.example/c/r", t0.Add(10*time.Minute), t0); err != nil {
+	if err = rev.AttachCheckout("mock", "ref-review", "https://pay.example/c/r", t0.Add(30*time.Minute), t0); err != nil {
 		t.Fatal(err)
 	}
 	rev.Capture(payment.SourceWebhook, twd(t, 1), t0) // does not match: NEEDS_REVIEW
@@ -439,7 +439,7 @@ func TestPaymentRepository_Lists_Postgres(t *testing.T) {
 		}
 	}
 	checkout := func(p *payment.Payment) {
-		if err := p.AttachCheckout("mock", "ref-"+p.OrderID(), "https://pay.example/c", t0.Add(10*time.Minute), t0); err != nil {
+		if err := p.AttachCheckout("mock", "ref-"+p.OrderID(), "https://pay.example/c", t0.Add(30*time.Minute), t0); err != nil {
 			t.Fatal(err)
 		}
 	}

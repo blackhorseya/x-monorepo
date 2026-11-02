@@ -53,6 +53,7 @@ func TestRun_ReconcileWindowMustOutlastCheckoutPages(t *testing.T) {
 				}
 				if c.ttl != "" {
 					env["APP_PAYMENT_MOCK_CHECKOUT_TTL"] = s(c.ttl)
+					env["APP_PAYMENT_WINDOW"] = s("10m") // inside every page below: only the reconcile window is judged here
 				}
 				out := start(t, flags, env)
 				if c.refused {

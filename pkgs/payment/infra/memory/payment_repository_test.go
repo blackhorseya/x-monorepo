@@ -100,7 +100,7 @@ func TestPaymentRepository_FindersAndOutcomes(t *testing.T) {
 	c := context.Background()
 	repo := memory.NewPaymentRepository()
 	p := newPayment(t, "pay-1", "ord-1")
-	if err := p.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", t0.Add(10*time.Minute), t0); err != nil {
+	if err := p.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", t0.Add(time.Hour), t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Save(c, p); err != nil {
@@ -276,7 +276,7 @@ func TestPaymentRepository_Lists(t *testing.T) {
 		}
 	}
 	checkout := func(p *payment.Payment) {
-		if err := p.AttachCheckout("mock", "ref-"+p.OrderID(), "https://pay.example/c", t0.Add(10*time.Minute), t0); err != nil {
+		if err := p.AttachCheckout("mock", "ref-"+p.OrderID(), "https://pay.example/c", t0.Add(time.Hour), t0); err != nil {
 			t.Fatal(err)
 		}
 	}

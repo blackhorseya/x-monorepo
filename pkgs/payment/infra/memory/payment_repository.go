@@ -164,22 +164,23 @@ func (i *PaymentRepository) ReconcileBacklog(c context.Context, notBefore time.T
 
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	var b payment.Backlog
+	var eligible int
+	var oldest time.Time
 	for _, r := range i.data {
 		if !reconcilable(r, notBefore) {
 			continue
 		}
-		b.Eligible++
+		eligible++
 		seen, ok := i.swept[r.ID]
 		if !ok {
 			seen = r.TerminalAt
 		}
-		if b.OldestUnchecked.IsZero() || seen.Before(b.OldestUnchecked) {
-			b.OldestUnchecked = seen
+		if oldest.IsZero() || seen.Before(oldest) {
+			oldest = seen
 		}
 	}
 
-	return b, nil
+	return payment.NewBacklog(eligible, oldest), nil
 }
 
 func (i *PaymentRepository) Save(c context.Context, p *payment.Payment) error {

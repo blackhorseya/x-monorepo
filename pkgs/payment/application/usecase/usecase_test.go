@@ -65,7 +65,7 @@ func newEnv(t *testing.T, fault func(op string) error) *env {
 	t.Helper()
 	e := &env{repo: memory.NewPaymentRepository(), clock: &clock{now: t0}, asked: map[string]int{}}
 	e.prov = mock.New(mock.Options{
-		CheckoutTTL: 10 * time.Minute, Now: e.clock.Now,
+		CheckoutTTL: 30 * time.Minute, Now: e.clock.Now,
 		Fault: func(op string) error {
 			e.mu.Lock()
 			e.asked[op]++
@@ -108,46 +108,6 @@ func (e *env) seed(t *testing.T) {
 
 func startIn(customer string, admin bool) dto.StartPaymentInput {
 	return dto.StartPaymentInput{OrderID: orderID, CustomerID: customer, Admin: admin}
-}
-
-// T2: a second StartPayment while the first page is valid hands out the same URL and asks the provider
-// nothing; once the page expired a new one is opened. The count is CreateCheckout calls, read from the
-// provider itself.
-func TestStartPayment_RepeatCallsReuseTheCheckoutUntilItExpires(t *testing.T) {
-	e := newEnv(t, nil)
-	e.seed(t)
-	c := context.Background()
-
-	first, err := e.start.Execute(c, startIn(owner, false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.CheckoutURL == "" || first.Status != "PENDING" || e.calls(mock.OpCreateCheckout) != 1 {
-		t.Fatalf("first = %+v, CreateCheckout calls = %d; want a URL, PENDING, 1 call", first, e.calls(mock.OpCreateCheckout))
-	}
-
-	e.clock.Advance(9 * time.Minute) // inside the page's 10 minutes
-	again, err := e.start.Execute(c, startIn(owner, false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again.CheckoutURL != first.CheckoutURL || e.calls(mock.OpCreateCheckout) != 1 {
-		t.Fatalf("repeat: url %q (first %q), CreateCheckout calls %d; want the same URL and still 1 call", again.CheckoutURL, first.CheckoutURL, e.calls(mock.OpCreateCheckout))
-	}
-
-	e.clock.Advance(2 * time.Minute) // the page ended at +10m; the payment window (30m) is still open
-	reopened, err := e.start.Execute(c, startIn(owner, false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reopened.CheckoutURL == "" || reopened.CheckoutURL == first.CheckoutURL || e.calls(mock.OpCreateCheckout) != 2 {
-		t.Fatalf("after the page expired: url %q (first %q), calls %d; want a different URL and 2 calls", reopened.CheckoutURL, first.CheckoutURL, e.calls(mock.OpCreateCheckout))
-	}
-	// the new page is what is stored
-	got, err := e.get.Execute(c, dto.GetPaymentInput{OrderID: orderID, CustomerID: owner})
-	if err != nil || got.CheckoutURL != reopened.CheckoutURL {
-		t.Fatalf("stored = %+v, %v; want the reopened URL", got, err)
-	}
 }
 
 // seenCheckouts records what StartPayment asks of the provider.

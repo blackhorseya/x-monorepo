@@ -53,7 +53,7 @@ type Payment struct {
 	// asking the provider whether money arrived anyway (docs/payment.md §3「補查有界」). It must be longer
 	// than the provider's checkout validity, checked at start-up. Default 24h.
 	ReconcileWindow time.Duration `mapstructure:"reconcile_window"`
-	// MockCheckoutTTL is how long a checkout page of the mock provider stays valid. Default 15m.
+	// MockCheckoutTTL is how long a checkout page of the mock provider stays valid. Default 30m: the longest a checkout can last, which payment.window must fit in.
 	MockCheckoutTTL time.Duration `mapstructure:"mock_checkout_ttl"`
 	// MockRedeliveryWindow is how long after a notification the mock provider may still send it
 	// again; webhook_retention must outlast the provider's. Default 72h.
@@ -460,7 +460,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.last_used_interval", time.Minute)
 	v.SetDefault("payment.provider", "mock")
 	v.SetDefault("payment.reconcile_window", 24*time.Hour)
-	v.SetDefault("payment.mock_checkout_ttl", 15*time.Minute)
+	v.SetDefault("payment.mock_checkout_ttl", 30*time.Minute)
 	v.SetDefault("payment.mock_redelivery_window", 72*time.Hour)
 	v.SetDefault("payment.mock_webhook_secret", "")
 	v.SetDefault("payment.window", 30*time.Minute)

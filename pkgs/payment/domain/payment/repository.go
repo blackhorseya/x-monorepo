@@ -36,12 +36,27 @@ type Repository interface {
 
 // Backlog is how far behind the reconcile pass is, measured on the payments it still owes a query.
 type Backlog struct {
-	// Eligible is how many EXPIRED / CANCELLED payments with a checkout are still inside the window.
-	Eligible int
-	// OldestUnchecked is when the least recently looked-at of them was last looked at (or, never looked
-	// at, when it ended). The zero time when nothing is eligible.
-	OldestUnchecked time.Time
+	eligible        int
+	oldestUnchecked time.Time
 }
+
+// NewBacklog builds the measurement: eligible EXPIRED / CANCELLED payments with a checkout are still
+// inside the window, and the least recently looked-at of them was last looked at at oldestUnchecked (or,
+// never looked at, ended then). A negative count is no count; with nothing eligible there is no oldest.
+func NewBacklog(eligible int, oldestUnchecked time.Time) Backlog {
+	if eligible <= 0 {
+		return Backlog{}
+	}
+
+	return Backlog{eligible: eligible, oldestUnchecked: oldestUnchecked}
+}
+
+// Eligible is how many payments are owed a reconcile query.
+func (b Backlog) Eligible() int { return b.eligible }
+
+// OldestUnchecked is when the least recently looked-at of them was last looked at; the zero time when
+// nothing is eligible.
+func (b Backlog) OldestUnchecked() time.Time { return b.oldestUnchecked }
 
 // OutcomeRepository remembers how an order ended before its payment existed (docs/payment.md T15):
 // OrderCancelled / OrderCompleted travel on other topics than OrderConfirmed, so they can arrive

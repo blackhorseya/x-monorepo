@@ -165,9 +165,9 @@ func (uc *ExpireSweep) measure(ctx contextx.Contextx, out *dto.ExpireOutput) {
 
 		return
 	}
-	out.ReconcileEligible = b.Eligible
-	if !b.OldestUnchecked.IsZero() {
-		out.OldestUnchecked = now.Sub(b.OldestUnchecked)
+	out.ReconcileEligible = b.Eligible()
+	if !b.OldestUnchecked().IsZero() {
+		out.OldestUnchecked = now.Sub(b.OldestUnchecked())
 	}
 	uc.alerts.Backlog(ctx, out.ReconcileEligible, out.OldestUnchecked)
 	if out.OldestUnchecked > uc.cfg.ReconcileWindow/2 {

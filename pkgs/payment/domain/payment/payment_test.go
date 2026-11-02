@@ -454,29 +454,6 @@ func TestReconstitute_Refusals(t *testing.T) {
 	}
 }
 
-func TestStartPaymentCheckout(t *testing.T) {
-	x := fixture(t, P, none, false)
-	if url, ok := x.ReusableCheckout(t0); ok || url != "" {
-		t.Fatalf("a payment that never opened a checkout has none to reuse: %q %v", url, ok)
-	}
-
-	checkoutEnds := t0.Add(10 * time.Minute)
-	if err := x.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", checkoutEnds, t0); err != nil {
-		t.Fatal(err)
-	}
-	if x.Provider() != "mock" || x.ProviderRef() != "ref-1" || x.CheckoutURL() != "https://pay.example/c/1" ||
-		!x.CheckoutExpiresAt().Equal(checkoutEnds) || x.Status() != P {
-		t.Fatalf("checkout not recorded: %+v", x)
-	}
-	if url, ok := x.ReusableCheckout(checkoutEnds.Add(-time.Second)); !ok || url != "https://pay.example/c/1" {
-		t.Fatalf("reusable while valid = %q %v", url, ok)
-	}
-	// the page stops working at checkout_expires_at: from then on a new one is needed
-	if url, ok := x.ReusableCheckout(checkoutEnds); ok || url != "" {
-		t.Fatalf("reusable at its expiry = %q %v, want none", url, ok)
-	}
-}
-
 // One checkout per payment for its whole window (T2): once opened it is handed out again at any time
 // the payment can still be started, including after the moment a shorter page would have ended.
 func TestOpenCheckout_IsTheOnlyOneForTheWholeWindow(t *testing.T) {
@@ -624,5 +601,17 @@ func TestReconcilable(t *testing.T) {
 	}
 	if got := mk(P, none, true, time.Time{}).ReconcileDeadline(window); !got.IsZero() {
 		t.Fatalf("a pending payment has no deadline, got %v", got)
+	}
+}
+
+func TestBacklog(t *testing.T) {
+	waiting := t0.Add(-time.Hour)
+	if b := payment.NewBacklog(3, waiting); b.Eligible() != 3 || !b.OldestUnchecked().Equal(waiting) {
+		t.Fatalf("backlog = %d, %s", b.Eligible(), b.OldestUnchecked())
+	}
+	for _, n := range []int{0, -1} {
+		if b := payment.NewBacklog(n, waiting); b.Eligible() != 0 || !b.OldestUnchecked().IsZero() {
+			t.Fatalf("NewBacklog(%d) = %d, %s; want nothing eligible and no oldest", n, b.Eligible(), b.OldestUnchecked())
+		}
 	}
 }

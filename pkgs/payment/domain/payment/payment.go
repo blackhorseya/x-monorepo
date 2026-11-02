@@ -197,29 +197,21 @@ func (x *Payment) CheckStart(now time.Time) error {
 	return nil
 }
 
-// ReusableCheckout returns the checkout URL StartPayment hands out again (T2): the one opened
-// earlier while its page is still valid.
-func (x *Payment) ReusableCheckout(now time.Time) (string, bool) {
-	if x.checkoutURL == "" || !now.Before(x.checkoutExpiresAt) {
-		return "", false
-	}
-
-	return x.checkoutURL, true
-}
-
 // OpenCheckout returns the checkout URL of this payment, if it opened one. There is one checkout per
 // payment for its whole window (T2): once opened it is handed out again until the window closes, never
 // replaced.
 func (x *Payment) OpenCheckout() (string, bool) {
-	return "", false
+	return x.checkoutURL, x.checkoutURL != ""
 }
 
 // AttachCheckout records the hosted checkout the provider opened (T2). The status does not change.
+// The checkout must stay valid until the window ends: there is no second page, so one that ends earlier
+// would strand the buyer for the rest of the window.
 func (x *Payment) AttachCheckout(provider, ref, url string, checkoutExpiresAt, now time.Time) error {
 	if err := x.CheckStart(now); err != nil {
 		return err
 	}
-	if provider == "" || ref == "" || url == "" || !checkoutExpiresAt.After(now) {
+	if provider == "" || ref == "" || url == "" || !checkoutExpiresAt.After(now) || checkoutExpiresAt.Before(x.expiresAt) {
 		return ErrInvalidCheckout
 	}
 	x.provider, x.providerRef, x.checkoutURL, x.checkoutExpiresAt = provider, ref, url, checkoutExpiresAt

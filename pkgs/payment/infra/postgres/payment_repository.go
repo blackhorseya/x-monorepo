@@ -199,7 +199,7 @@ func (i *PaymentRepository) ReconcileBacklog(c context.Context, notBefore time.T
 		return payment.Backlog{}, fmt.Errorf("measure the reconcile backlog: %w", err)
 	}
 
-	return payment.Backlog{Eligible: row.Eligible, OldestUnchecked: utc(row.Oldest)}, nil
+	return payment.NewBacklog(row.Eligible, utc(row.Oldest)), nil
 }
 
 // Save inserts a never-saved payment (Version 0) with version 1, or updates a loaded one

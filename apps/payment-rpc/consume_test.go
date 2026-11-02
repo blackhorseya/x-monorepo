@@ -101,7 +101,7 @@ func (e *consumeEnv) start(provider port.PaymentProvider) {
 			ConsumerGroup: e.group, Broker: config.BrokerPostgres, StartFrom: config.StartFromBeginning,
 			PollInterval: 20 * time.Millisecond, HandlerTimeout: 5 * time.Second,
 		},
-		Payment: config.Payment{Provider: "mock", Window: 30 * time.Minute, ReconcileWindow: 24 * time.Hour, MockCheckoutTTL: 15 * time.Minute},
+		Payment: config.Payment{Provider: "mock", Window: 30 * time.Minute, ReconcileWindow: 24 * time.Hour, MockCheckoutTTL: 30 * time.Minute},
 	}
 	consumer, cleanup, err := InitializeConsume(cfg, provider)
 	if err != nil {
@@ -294,7 +294,7 @@ func (e *consumeEnv) capturedPayment() *payment.Payment {
 		e.t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	p, err := payment.New(payment.NewParams{ID: payment.ID(mustID(e.t)), OrderID: "ord-1", CustomerID: owner, Total: total, ExpiresAt: now.Add(time.Hour)}, now)
+	p, err := payment.New(payment.NewParams{ID: payment.ID(mustID(e.t)), OrderID: "ord-1", CustomerID: owner, Total: total, ExpiresAt: now.Add(30 * time.Minute)}, now)
 	if err != nil {
 		e.t.Fatal(err)
 	}

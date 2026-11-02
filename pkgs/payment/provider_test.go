@@ -82,7 +82,7 @@ func newChain(t *testing.T, fault func(op string) error) *chainEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := payment.New(payment.NewParams{ID: "pay-1", OrderID: "ord-1", CustomerID: "cust", Total: total, ExpiresAt: t0.Add(time.Hour)}, t0)
+	p, err := payment.New(payment.NewParams{ID: "pay-1", OrderID: "ord-1", CustomerID: "cust", Total: total, ExpiresAt: t0.Add(30 * time.Minute)}, t0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -100,6 +100,11 @@ func ProvidePaymentProvider(cfg config.Payment) (port.PaymentProvider, error) {
 	if cfg.ReconcileWindow <= p.CheckoutValidity() {
 		return nil, fmt.Errorf("payment: payment.reconcile_window (%s) must be longer than the provider's checkout validity (%s)", cfg.ReconcileWindow, p.CheckoutValidity())
 	}
+	// One checkout per payment for its whole window (docs/payment.md T2): the provider must be able to keep
+	// a page valid that long, or the first page would end before the window and nothing could replace it.
+	if cfg.Window > p.CheckoutValidity() {
+		return nil, fmt.Errorf("payment: payment.window (%s) must not be longer than the provider's checkout validity (%s): a payment has one checkout for its whole window", cfg.Window, p.CheckoutValidity())
+	}
 	// The webhook log is the dedup memory of redelivered notifications: shorter than the provider's
 	// redelivery window and a redelivery would be taken for a new event. 0 keeps everything.
 	if cfg.WebhookRetention < 0 || (cfg.WebhookRetention != 0 && cfg.WebhookRetention <= p.WebhookRedeliveryWindow()) {

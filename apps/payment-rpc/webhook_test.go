@@ -60,7 +60,7 @@ func (e *consumeEnv) pendingWithCheckout() *payment.Payment {
 		e.t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	p, err := payment.New(payment.NewParams{ID: payment.ID(mustID(e.t)), OrderID: "ord-1", CustomerID: owner, Total: total, ExpiresAt: now.Add(time.Hour)}, now)
+	p, err := payment.New(payment.NewParams{ID: payment.ID(mustID(e.t)), OrderID: "ord-1", CustomerID: owner, Total: total, ExpiresAt: now.Add(30 * time.Minute)}, now)
 	if err != nil {
 		e.t.Fatal(err)
 	}

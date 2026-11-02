@@ -26,7 +26,7 @@ func (e *consumeEnv) sweep(provider port.PaymentProvider) error {
 		Log:      config.Log{Level: "error", Format: "text"},
 		Postgres: e.pg,
 		Payment: config.Payment{
-			Provider: "mock", Window: 30 * time.Minute, ReconcileWindow: 24 * time.Hour, MockCheckoutTTL: 15 * time.Minute,
+			Provider: "mock", Window: 30 * time.Minute, ReconcileWindow: 24 * time.Hour, MockCheckoutTTL: 30 * time.Minute,
 			WebhookRetention: 720 * time.Hour, ExpireInterval: 15 * time.Minute, ExpireBatch: 100,
 		},
 	}, provider)

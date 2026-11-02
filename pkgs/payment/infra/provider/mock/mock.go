@@ -39,9 +39,10 @@ const (
 
 var _ port.PaymentProvider = (*Provider)(nil)
 
-// Options configure a Provider. The zero value is a working mock with a 15 minute checkout page.
+// Options configure a Provider. The zero value is a working mock whose checkouts may last up to 30 minutes.
 type Options struct {
-	// CheckoutTTL is how long an opened page stays valid; default 15 minutes.
+	// CheckoutTTL is the longest an opened page can stay valid (port.PaymentProvider.CheckoutValidity); a
+	// checkout is opened to end when the caller asks, up to this. Default 30 minutes.
 	CheckoutTTL time.Duration
 	// RedeliveryWindow is how long the mock says it may resend a notification; default 72 hours.
 	RedeliveryWindow time.Duration
@@ -80,7 +81,7 @@ type checkout struct {
 // New creates a mock provider.
 func New(opts Options) *Provider {
 	if opts.CheckoutTTL <= 0 {
-		opts.CheckoutTTL = 15 * time.Minute
+		opts.CheckoutTTL = 30 * time.Minute
 	}
 	if opts.RedeliveryWindow <= 0 {
 		opts.RedeliveryWindow = 72 * time.Hour
@@ -123,13 +124,23 @@ func (x *Provider) CreateCheckout(c context.Context, req dto.ProviderCheckoutInp
 		return dto.ProviderCheckoutOutput{}, err
 	}
 
+	// the page ends when the caller says (the payment's window), if the provider can keep one that long
+	now := x.opts.Now()
+	ends := now.Add(x.opts.CheckoutTTL)
+	if !req.ExpiresAt.IsZero() {
+		if req.ExpiresAt.After(ends) {
+			return dto.ProviderCheckoutOutput{}, port.ErrProviderUnavailable
+		}
+		ends = req.ExpiresAt
+	}
+
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.seq++
 	ref := fmt.Sprintf("mock_co_%d", x.seq)
 	co := &checkout{
 		paymentID: req.PaymentID, amount: req.Amount, url: "https://mock-pay.invalid/checkout/" + ref,
-		expiresAt: x.opts.Now().Add(x.opts.CheckoutTTL), refunded: map[string]struct{}{},
+		expiresAt: ends, refunded: map[string]struct{}{},
 	}
 	x.checkouts[ref] = co
 
