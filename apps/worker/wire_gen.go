@@ -18,6 +18,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
+	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -80,24 +81,36 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	configOrdering := cfg.Ordering
 	v2 := ordering.ProvideConfirmOrder(configOrdering, repository, transactor, inbox, eventsPublisher, clock, recorder)
 	stockReservedHandler := consumer.NewStockReservedHandler(v2)
-	subscriptions := ordering.ProvideSubscriptions(orderCancellationHandler, stockReservedHandler)
+	paymentEventResults, err := metrics.NewPaymentEventResults(meterProvider)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	v3 := ordering.ProvideApplyPaymentCaptured(repository, transactor, inbox, eventsPublisher, clock, recorder, paymentEventResults)
+	paymentCapturedHandler := consumer.NewPaymentCapturedHandler(v3)
+	v4 := ordering.ProvideApplyPaymentExpired(repository, transactor, inbox, eventsPublisher, clock, recorder, paymentEventResults)
+	paymentExpiredHandler := consumer.NewPaymentExpiredHandler(v4)
+	subscriptions := ordering.ProvideSubscriptions(orderCancellationHandler, stockReservedHandler, paymentCapturedHandler, paymentExpiredHandler)
 	reservationRepository := inventory.ProvideReservationRepository(db)
 	stockRepository := inventory.ProvideStockRepository(db, logger)
 	portTransactor := inventory.ProvideTransactor(db)
 	portInbox := inventory.ProvideInbox(db)
 	publisher2 := events2.NewPublisher(publisher)
 	systemClock := system2.NewClock()
-	v3 := inventory.ProvideReserveStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	orderCreatedHandler := consumer2.NewOrderCreatedHandler(v3)
-	v4 := inventory.ProvideReleaseStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	orderCancelledHandler := consumer2.NewOrderCancelledHandler(v4)
-	v5 := inventory.ProvideCommitStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	orderCompletedHandler := consumer2.NewOrderCompletedHandler(v5)
+	v5 := inventory.ProvideReserveStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
+	orderCreatedHandler := consumer2.NewOrderCreatedHandler(v5)
+	v6 := inventory.ProvideReleaseStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
+	orderCancelledHandler := consumer2.NewOrderCancelledHandler(v6)
+	v7 := inventory.ProvideCommitStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
+	orderCompletedHandler := consumer2.NewOrderCompletedHandler(v7)
 	inventorySubscriptions := inventory.ProvideSubscriptions(orderCreatedHandler, orderCancelledHandler, orderCompletedHandler)
-	v6 := ordering.ProvideOrderStats(repository, recorder)
-	gauges := ordering.ProvideGauges(v6)
-	v7 := inventory.ProvideReservationStats(reservationRepository, recorder)
-	inventoryGauges := inventory.ProvideGauges(v7)
+	v8 := ordering.ProvideOrderStats(repository, recorder)
+	gauges := ordering.ProvideGauges(v8)
+	v9 := inventory.ProvideReservationStats(reservationRepository, recorder)
+	inventoryGauges := inventory.ProvideGauges(v9)
 	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher, subscriptions, inventorySubscriptions, gauges, inventoryGauges)
 	if err != nil {
 		cleanup4()

@@ -63,6 +63,11 @@ var ProviderSet = wire.NewSet(
 	rpc.NewOrderService,
 	consumer.NewOrderCancellationHandler,
 	consumer.NewStockReservedHandler,
+	consumer.NewPaymentCapturedHandler,
+	consumer.NewPaymentExpiredHandler,
+	metrics.NewPaymentEventResults, // needs the process's metric.MeterProvider (platform/otel)
+	ProvideApplyPaymentCaptured,
+	ProvideApplyPaymentExpired,
 	ProvideSubscriptions,
 	ProvideGauges,
 )
@@ -120,10 +125,12 @@ type Subscriptions []eventbus.Subscription
 
 // ProvideSubscriptions binds each consumed topic to its handler. The handler
 // name is the topic.
-func ProvideSubscriptions(cancel *consumer.OrderCancellationHandler, reserved *consumer.StockReservedHandler) Subscriptions {
+func ProvideSubscriptions(cancel *consumer.OrderCancellationHandler, reserved *consumer.StockReservedHandler, captured *consumer.PaymentCapturedHandler, expired *consumer.PaymentExpiredHandler) Subscriptions {
 	return Subscriptions{
 		{Topic: consumer.Topic, Handler: cancel},
 		{Topic: consumer.TopicStockReserved, Handler: reserved},
+		{Topic: consumer.TopicPaymentCaptured, Handler: captured},
+		{Topic: consumer.TopicPaymentExpired, Handler: expired},
 	}
 }
 
@@ -202,6 +209,25 @@ func ProvideConfirmOrder(cfg config.Ordering, repo order.Repository, tx port.Tra
 // ProvideCompleteOrder is rpc-driven: inventory reacts to the OrderCompleted it raises.
 func ProvideCompleteOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, own *ownership.Policy, rec *usecasex.Recorder) rpc.CompleteOrderUC {
 	return decorateTx("ordering.complete_order", rec, tx, inbox, usecase.NewCompleteOrder(repo, events, clock, own))
+}
+
+// ProvideApplyPaymentCaptured has no rpc caller: only the consumer (payment.v1.PaymentCaptured)
+// drives it. What a payment event does to an order is decided by the order's payment_required
+// snapshot, so unlike ProvideConfirmOrder it takes no setting. The result counter is outside the
+// transaction: a rolled-back apply is never counted.
+func ProvideApplyPaymentCaptured(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder, results *metrics.PaymentEventResults) consumer.ApplyPaymentCapturedUC {
+	return usecasex.Chain(
+		decorateTx("ordering.apply_payment_captured", rec, tx, inbox, usecase.NewApplyPaymentCaptured(repo, events, clock)),
+		results.Captured(),
+	)
+}
+
+// ProvideApplyPaymentExpired is ProvideApplyPaymentCaptured for payment.v1.PaymentExpired.
+func ProvideApplyPaymentExpired(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder, results *metrics.PaymentEventResults) consumer.ApplyPaymentExpiredUC {
+	return usecasex.Chain(
+		decorateTx("ordering.apply_payment_expired", rec, tx, inbox, usecase.NewApplyPaymentExpired(repo, events, clock)),
+		results.Expired(),
+	)
 }
 
 // ProvideOrderStats feeds the gauges; decorated like every read (its Logging
