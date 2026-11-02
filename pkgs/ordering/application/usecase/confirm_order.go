@@ -16,14 +16,32 @@ import (
 // RPC for it on purpose — confirmation is inventory's answer, not a client call.
 // An order already cancelled refuses (order.ErrCannotConfirm → the consumer drops
 // the late event; inventory releases that reservation on OrderCancelled).
+//
+// The order takes a snapshot of ordering.require_payment at the moment it is confirmed
+// (docs/payment.md §2); the setting is given at construction and defaults to false.
 type ConfirmOrder struct {
-	repo   order.Repository
-	events port.EventPublisher
-	clock  port.Clock
+	repo           order.Repository
+	events         port.EventPublisher
+	clock          port.Clock
+	requirePayment bool
 }
 
-func NewConfirmOrder(repo order.Repository, events port.EventPublisher, clock port.Clock) *ConfirmOrder {
-	return &ConfirmOrder{repo: repo, events: events, clock: clock}
+// ConfirmOption tunes NewConfirmOrder; the zero configuration is the default setting.
+type ConfirmOption func(*ConfirmOrder)
+
+// WithRequirePayment sets ordering.require_payment: orders confirmed by this use case are
+// stored with payment_required = on. Without it the setting is its default, false.
+func WithRequirePayment(on bool) ConfirmOption {
+	return func(uc *ConfirmOrder) { uc.requirePayment = on }
+}
+
+func NewConfirmOrder(repo order.Repository, events port.EventPublisher, clock port.Clock, opts ...ConfirmOption) *ConfirmOrder {
+	uc := &ConfirmOrder{repo: repo, events: events, clock: clock}
+	for _, opt := range opts {
+		opt(uc)
+	}
+
+	return uc
 }
 
 func (uc *ConfirmOrder) Execute(c context.Context, in dto.ConfirmOrderInput) (*dto.OrderOutput, error) {
@@ -39,7 +57,7 @@ func (uc *ConfirmOrder) Execute(c context.Context, in dto.ConfirmOrderInput) (*d
 		if o, err = uc.repo.FindByID(ctx, order.ID(in.OrderID)); err != nil {
 			return err
 		}
-		if err = o.Confirm(uc.clock.Now()); err != nil {
+		if err = o.Confirm(uc.clock.Now(), uc.requirePayment); err != nil {
 			return err
 		}
 		if err = uc.repo.Save(ctx, o); err != nil {

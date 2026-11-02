@@ -109,7 +109,7 @@ func newWorkerWithPool(t *testing.T, broker string, rdb goredis.UniversalClient,
 	oev, oclock := orderingevents.NewPublisher(publisher), orderingsys.NewClock()
 	orderingSubs := ordering.ProvideSubscriptions(
 		orderingconsumer.NewOrderCancellationHandler(ordering.ProvideCancelOrder(orders, otx, oinbox, oev, oclock, ordering.ProvideOwnership(config.Auth{}), rec)),
-		orderingconsumer.NewStockReservedHandler(ordering.ProvideConfirmOrder(orders, otx, oinbox, oev, oclock, rec)))
+		orderingconsumer.NewStockReservedHandler(ordering.ProvideConfirmOrder(config.Ordering{}, orders, otx, oinbox, oev, oclock, rec)))
 	stocks, reservations := inventory.ProvideStockRepository(db, logger), inventory.ProvideReservationRepository(db)
 	itx, iinbox := inventory.ProvideTransactor(db), inventory.ProvideInbox(db)
 	iev, iclock := inventoryevents.NewPublisher(publisher), inventorysys.NewClock()

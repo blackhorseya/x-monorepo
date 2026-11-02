@@ -28,9 +28,11 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `order.permission_denied` | `PERMISSION_DENIED` | ordering application（`ownership.Policy`） | 非 admin 的 principal 替別人下單（`CreateOrder`）或列別人的訂單（`ListOrders`）；admin role = `auth.admin_role`。讀、取消、完成別人的訂單（`GetOrder` / `CancelOrder` / `CompleteOrder`）是 `order.not_found`，不是這個 |
 | `order.invalid_id` / `order.empty_customer` / `order.no_items` / `order.invalid_sku` / `order.invalid_quantity` | `INVALID_ARGUMENT` | ordering domain | aggregate 不變量（consumer path 沒有 protovalidate，所以留著） |
 | `order.invalid_status_filter` / `order.invalid_cursor` | `INVALID_ARGUMENT` | ordering domain | ListOrders 的 filter / cursor 壞掉 |
-| `order.cannot_cancel` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING / CONFIRMED 的 order 被 Cancel（COMPLETED 是終點） |
+| `order.cannot_cancel` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING / CONFIRMED 的 order 被 Cancel（COMPLETED 是終點；PAID 也不能取消，CANCELLED 不復活） |
 | `order.cannot_confirm` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING 的 order 收到 `StockReserved`（consumer path：drop） |
-| `order.cannot_complete` | `FAILED_PRECONDITION` | ordering domain | 不是 CONFIRMED 的 order 被 Complete（PENDING 還沒有庫存可 commit；再按一次也是這個） |
+| `order.cannot_complete` | `FAILED_PRECONDITION` | ordering domain | 不是 CONFIRMED（或 PAID）的 order 被 Complete（PENDING 還沒有庫存可 commit；再按一次也是這個） |
+| `order.payment_required` | `FAILED_PRECONDITION` | ordering domain | `CompleteOrder` 遇到 CONFIRMED 且 `payment_required = true` 的訂單：這張單是在 `ordering.require_payment` 開著時進 CONFIRMED 的，只能經付款前進（docs/payment.md §8）。只看訂單自己的快照，不看現在的開關——開關切回 `false` 後同一張單仍是這個。其他狀態（COMPLETED、CANCELLED）維持 `order.cannot_complete` |
+| `order.cannot_pay` | （不到 rpc） | ordering domain | `MarkPaid` 遇到不是 CONFIRMED 的訂單。切片 1 只定義狀態與轉移，沒有 RPC 或 consumer 呼叫它；Payment 的 consumer 落地時才會碰到 |
 | `order.not_found` | `NOT_FOUND` | ordering domain / application | 沒有這筆；非 admin 的 principal 讀、取消、完成別人的訂單也是它（`GetOrder` / `CancelOrder` / `CompleteOrder`，不洩漏存在與否） |
 | `order.duplicate` | `ALREADY_EXISTS` | ordering domain | 同 id 再 Save（repo 層） |
 | `order.unknown_sku` / `order.inactive_sku` | `INVALID_ARGUMENT` | ordering domain（`CreateOrder`） | catalog 報不出價：SKU 沒有 product（`unknown_sku`，多半打錯）／product 已下架（`inactive_sku`）。**整張單被拒、沒寫入、沒發 event、冪等 key 也沒被花掉**（商品上架後同一個 key 重送就成立）。訊息固定，不回是哪個 SKU（呼叫端知道自己送了什麼） |

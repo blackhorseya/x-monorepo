@@ -193,8 +193,10 @@ func ProvideCancelOrder(repo order.Repository, tx port.Transactor, inbox port.In
 }
 
 // ProvideConfirmOrder has no rpc caller: only the consumer (inventory.v1.StockReserved) drives it.
-func ProvideConfirmOrder(repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ConfirmOrderUC {
-	return decorateTx("ordering.confirm_order", rec, tx, inbox, usecase.NewConfirmOrder(repo, events, clock))
+// ordering.require_payment is applied here, because CONFIRMED happens in this use case: it is
+// stored on the order as its payment_required snapshot.
+func ProvideConfirmOrder(cfg config.Ordering, repo order.Repository, tx port.Transactor, inbox port.Inbox, events port.EventPublisher, clock port.Clock, rec *usecasex.Recorder) consumer.ConfirmOrderUC {
+	return decorateTx("ordering.confirm_order", rec, tx, inbox, usecase.NewConfirmOrder(repo, events, clock, usecase.WithRequirePayment(cfg.RequirePayment)))
 }
 
 // ProvideCompleteOrder is rpc-driven: inventory reacts to the OrderCompleted it raises.

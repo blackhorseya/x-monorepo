@@ -75,7 +75,7 @@ type OrderStatsOutput struct {
 
 type ListOrdersInput struct {
 	CustomerID string // "" = any
-	Status     string // "" = any; PENDING | CONFIRMED | COMPLETED | CANCELLED
+	Status     string // "" = any; PENDING | CONFIRMED | PAID | COMPLETED | CANCELLED
 	PageSize   int32  // 0 = default
 	PageToken  string // "" = first page
 }
@@ -90,9 +90,11 @@ type OrderOutput struct {
 	CustomerID string
 	Items      []LineItem
 	Total      Money
-	Status     string // PENDING | CONFIRMED | COMPLETED | CANCELLED
+	Status     string // PENDING | CONFIRMED | PAID | COMPLETED | CANCELLED
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// PaymentRequired is the snapshot of ordering.require_payment taken at CONFIRMED.
+	PaymentRequired bool
 	// Replayed is true when CreateOrder answered with an order an earlier call
 	// with the same idempotency key had already created (nothing was written).
 	Replayed bool

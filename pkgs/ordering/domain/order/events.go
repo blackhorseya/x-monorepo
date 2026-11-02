@@ -83,11 +83,29 @@ type moneyView struct {
 // Confirmed is raised by Confirm.
 type Confirmed struct {
 	base
+	total moneyView
 }
 
 // NewConfirmed builds the event for o as it stands; the aggregate calls it from Confirm.
+// It carries the order's actual total: Payment bills from it.
 func NewConfirmed(o *Order) Confirmed {
-	return Confirmed{base: newBase(o, o.updatedAt)}
+	return Confirmed{
+		base:  newBase(o, o.updatedAt),
+		total: moneyView{amount: o.total.Amount(), currency: o.total.Currency()},
+	}
+}
+
+func (x Confirmed) TotalAmount() int64    { return x.total.amount }
+func (x Confirmed) TotalCurrency() string { return x.total.currency }
+
+// Paid is raised by MarkPaid.
+type Paid struct {
+	base
+}
+
+// NewPaid builds the event for o as it stands; the aggregate calls it from MarkPaid.
+func NewPaid(o *Order) Paid {
+	return Paid{base: newBase(o, o.updatedAt)}
 }
 
 // Completed is raised by Complete.

@@ -77,7 +77,8 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	}
 	v := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)
 	orderCancellationHandler := consumer.NewOrderCancellationHandler(v)
-	v2 := ordering.ProvideConfirmOrder(repository, transactor, inbox, eventsPublisher, clock, recorder)
+	configOrdering := cfg.Ordering
+	v2 := ordering.ProvideConfirmOrder(configOrdering, repository, transactor, inbox, eventsPublisher, clock, recorder)
 	stockReservedHandler := consumer.NewStockReservedHandler(v2)
 	subscriptions := ordering.ProvideSubscriptions(orderCancellationHandler, stockReservedHandler)
 	reservationRepository := inventory.ProvideReservationRepository(db)

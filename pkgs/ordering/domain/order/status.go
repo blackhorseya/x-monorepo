@@ -16,6 +16,9 @@ const (
 	// StatusCompleted: fulfilled (CompleteOrder); inventory commits the reservation
 	// on the OrderCompleted it receives. Terminal.
 	StatusCompleted
+	// StatusPaid: payment received (docs/payment.md §2). Appended last so stored values
+	// keep their meaning. Cannot be cancelled; the only way on is COMPLETED.
+	StatusPaid
 )
 
 func (x Status) String() string {
@@ -28,6 +31,8 @@ func (x Status) String() string {
 		return "CONFIRMED"
 	case StatusCompleted:
 		return "COMPLETED"
+	case StatusPaid:
+		return "PAID"
 	default:
 		return "UNKNOWN"
 	}
@@ -42,7 +47,11 @@ func (x Status) CanTransitionTo(next Status) bool {
 		// Fulfil it, or the customer may still cancel (inventory releases on
 		// OrderCancelled). Save compares version, so a cancel racing a complete
 		// loses: an order ends in exactly one of the two.
-		return next == StatusCompleted || next == StatusCancelled
+		// Payment received: CONFIRMED → PAID. Only an order that is still CONFIRMED can be paid.
+		return next == StatusCompleted || next == StatusCancelled || next == StatusPaid
+	case StatusPaid:
+		// Paid money is not undone by a cancel (docs/payment.md §2): no PAID → CANCELLED.
+		return next == StatusCompleted
 	default:
 		return false
 	}
@@ -60,6 +69,8 @@ func ParseStatus(s string) (Status, error) {
 		return StatusConfirmed, nil
 	case StatusCompleted.String():
 		return StatusCompleted, nil
+	case StatusPaid.String():
+		return StatusPaid, nil
 	default:
 		return StatusUnknown, ErrInvalidStatus
 	}
@@ -68,7 +79,7 @@ func ParseStatus(s string) (Status, error) {
 // Statuses lists every status this version knows, in lifecycle order. Readers
 // that report per-status figures use it to show a zero instead of nothing.
 func Statuses() []Status {
-	return []Status{StatusPending, StatusConfirmed, StatusCompleted, StatusCancelled}
+	return []Status{StatusPending, StatusConfirmed, StatusPaid, StatusCompleted, StatusCancelled}
 }
 
 // StatusCount is how many orders sit in one status and when the oldest of them

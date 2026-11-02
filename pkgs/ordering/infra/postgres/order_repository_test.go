@@ -49,8 +49,8 @@ func TestOrderRepository_Postgres(t *testing.T) {
 	if err := platformpg.Up(c, cfg, m); err != nil {
 		t.Fatal(err)
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 8 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 8 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 9 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 9 clean", v, dirty, err)
 	}
 
 	// The version table must live inside the BC schema, never in public:

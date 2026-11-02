@@ -14,7 +14,8 @@ import (
 
 // CompleteOrder fulfils a CONFIRMED order (→ COMPLETED) and raises OrderCompleted,
 // on which inventory commits the reservation: the stock is sold, not held.
-// Driven by the rpc adapter only. Any other status refuses with
+// Driven by the rpc adapter only. Whether payment is owed is the order's own payment_required
+// snapshot (order.Complete answers order.ErrPaymentRequired); this use case never reads the setting. Any other status refuses with
 // order.ErrCannotComplete — including CANCELLED, so a complete racing a cancel
 // cannot both win: Save compares the version, the loser reloads (retryOnConflict) and is refused.
 type CompleteOrder struct {

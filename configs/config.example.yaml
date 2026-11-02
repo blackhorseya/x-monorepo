@@ -98,6 +98,13 @@ catalog:
   upstream: http://127.0.0.1:8081
   timeout: 3s        # one call to the catalog; a slower one is UNAVAILABLE (catalog.unavailable)
 
+ordering:
+  # Read by apps/worker only (an order becomes CONFIRMED in its StockReserved consumer). The value at
+  # that moment is stored on the order as payment_required and never changes; CompleteOrder reads that
+  # snapshot, so a CONFIRMED order with payment_required: true answers order.payment_required.
+  # Leave false until Payment ships (docs/payment.md): nothing can pay an order yet.
+  require_payment: false
+
 worker:
   # apps/worker: consumer group of this process (offset cursor per topic).
   consumer_group: worker

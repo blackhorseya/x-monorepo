@@ -5,8 +5,15 @@ export function formatMoney(minor: bigint | undefined, currency: string | undefi
   return `${(Number(minor) / 100).toFixed(2)} ${currency}`;
 }
 
+// What the order's payment_required snapshot says (taken when it became CONFIRMED, never
+// changed): whether it can only move on through payment.
+export function paymentRequiredLabel(required: boolean): string {
+  return required ? "Required" : "Not required";
+}
+
 // PENDING is waiting on inventory (outline), CONFIRMED and COMPLETED are the good states
-// (default), CANCELLED is over (secondary). Shared with the order detail page.
+// (default), PAID (money received, not yet completed) and CANCELLED are secondary. Shared with
+// the order detail page.
 export function statusVariant(status: OrderStatus): "default" | "outline" | "secondary" {
   switch (status) {
     case OrderStatus.CONFIRMED:

@@ -24,6 +24,10 @@ type Order struct {
 	status     Status
 	createdAt  time.Time
 	updatedAt  time.Time
+	// paymentRequired is the snapshot of ordering.require_payment taken when the order became
+	// CONFIRMED and never changed after (docs/payment.md §2). false before CONFIRMED and for every
+	// order that was CONFIRMED before the setting existed.
+	paymentRequired bool
 	// version is the optimistic-concurrency token Repository.Save compares:
 	// 0 for an order never saved, then the number of saves.
 	version int64
@@ -88,6 +92,8 @@ type ReconstituteParams struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	Version    int64
+	// PaymentRequired is the stored snapshot (see Order.paymentRequired).
+	PaymentRequired bool
 	// IdempotencyKey / RequestHash are "" for an order created without a key.
 	IdempotencyKey string
 	RequestHash    string
@@ -110,37 +116,63 @@ func Reconstitute(p ReconstituteParams) (*Order, error) {
 		updatedAt:  p.UpdatedAt,
 		version:    p.Version,
 
-		idempotencyKey: p.IdempotencyKey,
-		requestHash:    p.RequestHash,
+		paymentRequired: p.PaymentRequired,
+		idempotencyKey:  p.IdempotencyKey,
+		requestHash:     p.RequestHash,
 	}, nil
 }
 
 // Confirm moves the order to Confirmed: inventory reserved every line. A late
 // StockReserved for an order already cancelled is refused (ErrCannotConfirm);
 // inventory releases that reservation on the OrderCancelled it also receives.
-func (x *Order) Confirm(now time.Time) error {
+// requirePayment is ordering.require_payment as it is at this moment; it is stored as the
+// order's payment_required snapshot and decides everything later (docs/payment.md §2).
+func (x *Order) Confirm(now time.Time, requirePayment bool) error {
 	if !x.status.CanTransitionTo(StatusConfirmed) {
 		return ErrCannotConfirm
 	}
 
 	x.status = StatusConfirmed
+	x.paymentRequired = requirePayment
 	x.updatedAt = now
 	x.record(NewConfirmed(x))
 
 	return nil
 }
 
-// Complete fulfils a Confirmed order: the stock inventory held for it is sold.
+// Complete fulfils a Confirmed or Paid order: the stock inventory held for it is sold.
 // Driven by the rpc adapter; inventory commits the reservation on the
 // OrderCompleted this raises. A completed order cannot be cancelled afterwards.
+//
+// A CONFIRMED order whose snapshot says payment is required is refused with
+// ErrPaymentRequired: it only moves on through MarkPaid. The status check comes first, so
+// COMPLETED and CANCELLED orders keep answering ErrCannotComplete (docs/payment.md §8).
 func (x *Order) Complete(now time.Time) error {
 	if !x.status.CanTransitionTo(StatusCompleted) {
 		return ErrCannotComplete
+	}
+	if x.status == StatusConfirmed && x.paymentRequired {
+		return ErrPaymentRequired
 	}
 
 	x.status = StatusCompleted
 	x.updatedAt = now
 	x.record(NewCompleted(x))
+
+	return nil
+}
+
+// MarkPaid records the payment of a Confirmed order (CONFIRMED → PAID). Nothing calls it in
+// slice 1: the contract exists so that Payment (slice 3) has a state to move to. A paid order
+// cannot be cancelled.
+func (x *Order) MarkPaid(now time.Time) error {
+	if !x.status.CanTransitionTo(StatusPaid) {
+		return ErrCannotPay
+	}
+
+	x.status = StatusPaid
+	x.updatedAt = now
+	x.record(NewPaid(x))
 
 	return nil
 }
@@ -166,6 +198,9 @@ func (x *Order) Status() Status       { return x.status }
 func (x *Order) CreatedAt() time.Time { return x.createdAt }
 func (x *Order) UpdatedAt() time.Time { return x.updatedAt }
 func (x *Order) Version() int64       { return x.version }
+
+// PaymentRequired is the snapshot taken when the order became CONFIRMED (see the field).
+func (x *Order) PaymentRequired() bool { return x.paymentRequired }
 
 // IdempotencyKey is the retry token the order was created with, "" if none.
 func (x *Order) IdempotencyKey() string { return x.idempotencyKey }

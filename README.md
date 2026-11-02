@@ -123,7 +123,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
 | [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、ordering 怎麼用它定價（rpc 經 Connect 問獨立的 catalog-rpc）、舊 client 還送 `unit_price` 會怎樣、Console 的 Products 頁 |
-| [`docs/payment.md`](docs/payment.md) | payment BC **設計稿（#367，尚未實作）**：付款單狀態機與狀態 × 事件全表、事件、訂單 `payment_required` 快照 × 目前開關矩陣、webhook 與 `payment-rpc` 認證入口、切片與保證對照 |
+| [`docs/payment.md`](docs/payment.md) | payment BC **設計稿（#367；切片 1 的 ordering 契約已實作，`pkgs/payment` 尚未）**：付款單狀態機與狀態 × 事件全表、事件、訂單 `payment_required` 快照 × 目前開關矩陣、webhook 與 `payment-rpc` 認證入口、切片與保證對照 |
 | [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
@@ -280,7 +280,8 @@ CompleteOrder ─► ordering.v1.OrderCompleted ──► inventory CommitStock�
 worker expire ─► inventory ExpireReservations（RESERVED 超過 TTL → EXPIRED：stock 還回去 + inventory.v1.StockReleased，並發 ordering.v1.OrderCancellationRequested ──► ordering CancelOrder（CONFIRMED → CANCELLED）；回來的 OrderCancelled 找到 EXPIRED → drop）
 ```
 
-Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED | CANCELLED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）；COMPLETED 是終點，不能再取消。
+Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED | CANCELLED | PAID，PAID → COMPLETED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）；COMPLETED 是終點，不能再取消；PAID（已收款，[docs/payment.md](docs/payment.md) §2）不能取消，CANCELLED 不復活。**目前沒有任何路徑會走到 PAID**：`MarkPaid` 與 `OrderPaid` 只是契約，等 Payment 切片 3 接上；訂單 API 已回 `payment_required` 與 `PAID` 這個 enum 值。
+**`payment_required` 快照**：訂單進 CONFIRMED 的當下，`apps/worker` 的 `ConfirmOrder` 把 `ordering.require_payment`（預設 `false`）存成訂單上的 `payment_required`（migration `0009`，既有訂單為 `false`），之後不再改。`CompleteOrder` 只看這個快照：`true` 的 CONFIRMED 訂單回 `order.payment_required`（`FAILED_PRECONDITION`），`false` 維持原樣；開關切回 `false` 不影響已經是 `true` 的訂單。`OrderConfirmed` 新增 `total`（`common.v1.Money`，訂單實際總額）；新增 `ordering.v1.OrderPaid`（尚無發布者與訂閱者）。
 `ConfirmOrder` 沒有 RPC：確認是 inventory 的答覆，不是 client 的呼叫；`CompleteOrder` 只有 RPC（只有 CONFIRMED 能完成，`order.cannot_complete`）。
 cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的那邊 reload 後被狀態機拒絕，所以每張 order 只會有 `OrderCancelled` / `OrderCompleted` 其一。
 **CreateOrder 冪等**：`CreateOrderRequest.idempotency_key`（選填、1–64 個可見 ASCII；放在 request 欄位而不是 header，因為它在 proto / openapi 契約裡、所有協定長一樣、可被 protovalidate 驗證，也不必為它多一個把 header 塞進 context 的 interceptor）讓 client 逾時重送不會下出兩張單：

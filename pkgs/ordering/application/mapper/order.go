@@ -18,6 +18,8 @@ func ToOrderOutput(o *order.Order) *dto.OrderOutput {
 		Status:     o.Status().String(),
 		CreatedAt:  o.CreatedAt(),
 		UpdatedAt:  o.UpdatedAt(),
+
+		PaymentRequired: o.PaymentRequired(),
 	}
 	for _, it := range items {
 		out.Items = append(out.Items, dto.LineItem{

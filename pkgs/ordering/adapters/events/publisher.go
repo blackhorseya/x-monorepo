@@ -26,6 +26,7 @@ var (
 	TopicOrderCancelled = string((&orderingv1.OrderCancelled{}).ProtoReflect().Descriptor().FullName())
 	TopicOrderConfirmed = string((&orderingv1.OrderConfirmed{}).ProtoReflect().Descriptor().FullName())
 	TopicOrderCompleted = string((&orderingv1.OrderCompleted{}).ProtoReflect().Descriptor().FullName())
+	TopicOrderPaid      = string((&orderingv1.OrderPaid{}).ProtoReflect().Descriptor().FullName())
 )
 
 var _ port.EventPublisher = (*Publisher)(nil)
@@ -85,6 +86,13 @@ func toProto(e order.Event) (string, proto.Message, error) {
 			OrderId:     ev.OrderID().String(),
 			CustomerId:  ev.CustomerID(),
 			ConfirmedAt: timestamppb.New(ev.OccurredAt()),
+			Total:       &commonv1.Money{AmountMinor: ev.TotalAmount(), Currency: ev.TotalCurrency()},
+		}, nil
+	case order.Paid:
+		return TopicOrderPaid, &orderingv1.OrderPaid{
+			OrderId:    ev.OrderID().String(),
+			CustomerId: ev.CustomerID(),
+			PaidAt:     timestamppb.New(ev.OccurredAt()),
 		}, nil
 	case order.Completed:
 		return TopicOrderCompleted, &orderingv1.OrderCompleted{

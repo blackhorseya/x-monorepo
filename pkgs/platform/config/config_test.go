@@ -331,3 +331,25 @@ func TestLoad_Catalog(t *testing.T) {
 		}
 	}
 }
+
+// ordering.require_payment: default false; APP_ORDERING_REQUIRE_PAYMENT sets it.
+func TestLoad_OrderingRequirePayment(t *testing.T) {
+	chdirTemp(t)
+	t.Setenv("APP_ORDERING_REQUIRE_PAYMENT", "")
+	_ = os.Unsetenv("APP_ORDERING_REQUIRE_PAYMENT")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ordering.RequirePayment {
+		t.Fatal("ordering.require_payment default = true, want false")
+	}
+
+	for env, want := range map[string]bool{"true": true, "false": false} {
+		t.Setenv("APP_ORDERING_REQUIRE_PAYMENT", env)
+		cfg, err := config.Load()
+		if err != nil || cfg.Ordering.RequirePayment != want {
+			t.Fatalf("APP_ORDERING_REQUIRE_PAYMENT=%s: %+v, %v; want %v", env, cfg.Ordering, err, want)
+		}
+	}
+}

@@ -21,7 +21,7 @@ func TestOrderStats_ZeroFills(t *testing.T) {
 	stats := usecase.NewOrderStats(repo)
 
 	out, err := stats.Execute(c, dto.OrderStatsInput{})
-	if err != nil || len(out.Statuses) != 4 {
+	if err != nil || len(out.Statuses) != 5 {
 		t.Fatalf("empty stats = %+v, %v", out, err)
 	}
 	for _, s := range out.Statuses {
@@ -48,6 +48,7 @@ func TestOrderStats_ZeroFills(t *testing.T) {
 	want := map[string]dto.StatusStat{
 		"PENDING":   {Status: "PENDING", Count: 2, OldestUpdatedAt: t0},
 		"CONFIRMED": {Status: "CONFIRMED"},
+		"PAID":      {Status: "PAID"},
 		"COMPLETED": {Status: "COMPLETED"},
 		"CANCELLED": {Status: "CANCELLED", Count: 1, OldestUpdatedAt: t0.Add(time.Hour)},
 	}

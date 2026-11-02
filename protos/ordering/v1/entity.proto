@@ -19,6 +19,9 @@ enum OrderStatus {
   // Fulfilled (CompleteOrder): inventory commits the reservation — the stock is sold, not held.
   // Terminal: a completed order cannot be cancelled.
   ORDER_STATUS_COMPLETED = 4;
+  // Payment received (docs/payment.md §2): CONFIRMED → PAID → COMPLETED. A PAID order cannot be
+  // cancelled. Slice 1 defines the state and the transitions only; nothing reaches it yet.
+  ORDER_STATUS_PAID = 5;
 }
 
 // LineItem is one line of an Order. unit_price is the snapshot of the catalog
@@ -37,4 +40,8 @@ message Order {
   OrderStatus status = 5;
   google.protobuf.Timestamp create_time = 6;
   google.protobuf.Timestamp update_time = 7;
+  // Snapshot of ordering.require_payment taken when the order became CONFIRMED, never changed
+  // afterwards; false for every order that was CONFIRMED before the setting existed. Ordering decides
+  // CompleteOrder and the payment events from this value only (docs/payment.md §2, §8).
+  bool payment_required = 8;
 }

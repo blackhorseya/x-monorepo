@@ -15,6 +15,11 @@ var (
 	ErrCannotCancel    = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_cancel", "order cannot be cancelled in its current status")
 	ErrCannotConfirm   = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_confirm", "order cannot be confirmed in its current status")
 	ErrCannotComplete  = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_complete", "only a confirmed order can be completed")
+	ErrCannotPay       = kernel.NewError(kernel.KindFailedPrecondition, "order.cannot_pay", "only a confirmed order can be paid")
+	// ErrPaymentRequired: the order was CONFIRMED while ordering.require_payment was on, so it only
+	// moves on through payment (docs/payment.md §8). Decided by the order's own snapshot, never by
+	// the setting as it is now.
+	ErrPaymentRequired = kernel.NewError(kernel.KindFailedPrecondition, "order.payment_required", "order requires payment before it can be completed")
 	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "order.not_found", "order not found")
 	// The three ways the catalog's answer refuses an order. The message is fixed: the caller
 	// knows which SKUs it asked for, and nothing about the catalog is echoed back.

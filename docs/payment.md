@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-> **狀態：設計稿（#367 切片 0）。以下全部尚未實作**——`pkgs/payment`、`apps/payment-rpc`、`PAID`、`OrderConfirmed.total`、`payment_required`、`ordering.require_payment` 目前在 repo 裡都不存在。
+> **狀態：設計稿（#367）。切片 1（Ordering 契約）已實作**：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。**其餘尚未實作**——`pkgs/payment`、`apps/payment-rpc` 在 repo 裡不存在，切片 1 沒有任何路徑會走到 `PAID`。
 > 決策來源：#367 七個決定，加上 Sean 對 PR #369 暴露的未決項的後續裁示（[#367 comment](https://github.com/blackhorseya/x-monorepo/issues/367#issuecomment-6565500716)，decision `d-20261101232833097592-18`）。兩者有衝突時以後者為準；§13 列出哪一條取代了哪一條。
 > 「保證」只列已指定到切片測試的條目；測試名稱是預定名稱，實作時以實際為準。寫不出測試的就不寫成保證。
 > 改動任何已定決定都要回 Sean。標 **〔實作細節〕** 的是本文為了讓已定規則成立而補上的內部做法，實作時可調整，但不得改變它所服務的規則。
@@ -269,7 +269,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | # | 切片 | 內容 | 改變現有下單行為？ |
 |---|---|---|---|
 | 0 | 設計文件 | 本文 | 否 |
-| 1 | Ordering 契約 | `OrderConfirmed.total`、`PAID`、`OrderPaid`、訂單 `payment_required` 快照（migration：既有訂單為 `false`）、`require_payment` 設定（預設 `false`）、`CompleteOrder` 依快照擋、Console 顯示 | 否（預設 `false`，快照皆為 `false`） |
+| 1 | Ordering 契約（**已實作**） | `OrderConfirmed.total`、`PAID`、`OrderPaid`、訂單 `payment_required` 快照（migration：既有訂單為 `false`）、`require_payment` 設定（預設 `false`）、`CompleteOrder` 依快照擋、Console 顯示 | 否（預設 `false`，快照皆為 `false`） |
 | 2 | Payment 核心 | `pkgs/payment`、schema、mock provider、`payment-rpc serve`（RPC；`StartPayment` 的 `payment.disabled` 在 rpc 側，切片 4） | 否（沒部署） |
 | 3 | Saga | `consume`（訂閱 `OrderConfirmed`／`OrderCancelled`／`OrderCompleted`）、webhook 落地（含 platform 的 gin route option）、`expire`、自動退款（T10–T11）、ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（依快照）、**`poison`／`prune` 的 `payment` 納入**（見下） | 否（預設快照 `false` 時 ordering 忽略付款事件） |
 | 4 | 入口 | rpc 轉發 `StartPayment`／`GetPayment`（含 `payment.disabled`）、Console 付款頁 | 否 |

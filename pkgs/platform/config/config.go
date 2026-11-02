@@ -32,6 +32,16 @@ type AppConfig struct {
 	OTel     OTel     `mapstructure:"otel"`
 	Worker   Worker   `mapstructure:"worker"`
 	Catalog  Catalog  `mapstructure:"catalog"`
+	Ordering Ordering `mapstructure:"ordering"`
+}
+
+// Ordering configures the ordering BC. Only apps/worker reads it for now: an order becomes
+// CONFIRMED in the worker's StockReserved consumer, which is where the setting is applied.
+type Ordering struct {
+	// RequirePayment is read at the moment an order becomes CONFIRMED and stored on the order as
+	// its payment_required snapshot (docs/payment.md §2); a CONFIRMED order is then completed only
+	// through payment. Changing it never touches orders that are already CONFIRMED. Default false.
+	RequirePayment bool `mapstructure:"require_payment"`
 }
 
 // Catalog is how apps/rpc reaches the catalog service (apps/catalog-rpc): the base URL, the one
@@ -432,6 +442,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("catalog.upstream", "")
 	v.SetDefault("catalog.api_key", "")
 	v.SetDefault("catalog.timeout", 3*time.Second)
+	v.SetDefault("ordering.require_payment", false)
 	v.SetDefault("worker.consumer_group", "worker")
 	v.SetDefault("worker.broker", BrokerPostgres)
 	v.SetDefault("worker.start_from", StartFromBeginning)

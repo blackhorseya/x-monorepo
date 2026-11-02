@@ -23,7 +23,7 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	wire.Build(
 		// Auth is only here for ordering.ProvideOwnership: the consumer path carries no
 		// principal (anonymous), so the policy never confines it.
-		wire.FieldsOf(new(*config.AppConfig), "Auth", "Log", "Postgres", "Redis", "OTel", "Worker"),
+		wire.FieldsOf(new(*config.AppConfig), "Auth", "Log", "Postgres", "Redis", "OTel", "Worker", "Ordering"),
 		postgres.NewDB,
 		ProvideRedis, // redis.NewClient only when worker.broker is redis
 		otel.ProviderSet,

@@ -47,7 +47,7 @@ func TestOrder_Events(t *testing.T) {
 	}
 
 	confirmedAt := now.Add(30 * time.Second)
-	if err := o.Confirm(confirmedAt); err != nil {
+	if err := o.Confirm(confirmedAt, false); err != nil {
 		t.Fatal(err)
 	}
 	evs = o.PullEvents()
