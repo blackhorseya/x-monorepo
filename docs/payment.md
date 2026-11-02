@@ -212,6 +212,8 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | **付款單尚不存在**時確認與取消／完成併發 | T1／T14／T15 + 同一訂單的序列化（見下） | S3A Postgres：取消先、確認先兩個交錯順序 |
 | 有效期內已付款，顧客再按一次付款，訂單取消，延遲通知才到 | T2（只有一個 checkout，`provider_ref` 不變）→ T7 → T3／T10 | S3A Postgres |
 | 補查的清單比 batch 長 | §3「每輪有界…有條件」 | S3A memory＋Postgres |
+| 付款事件（`PaymentCaptured`／`PaymentExpired`）與顧客取消、或與另一個付款事件，在 ordering 同時處理 | §8 ordering 表；`Save` 比對 `version`，輸的一方重讀後由狀態機判定（`CANCELLED` 不復活、`COMPLETED` 不被取消），被拒的不產生事件 | S3B Postgres：`TestPaymentEvents_RacesOnPostgres`（三對 × 兩種完成順序） |
+| `PaymentCaptured`／`PaymentExpired` 比 ordering 自己的 `CONFIRMED` 還早到 | §8 ordering 表（`PENDING` 列） | 不可達：付款單由 `OrderConfirmed` 建，而 `OrderConfirmed` 與 `CONFIRMED` 在同一個 transaction 提交；真的指到 `PENDING` 或不存在的訂單（缺陷、手動注入）時 ordering 拒絕（`order.not_confirmed`／`order.not_found`）、drop，不建立任何狀態。S3B：domain 與 usecase 表驅動、`TestPaymentEvents_UnknownOrderIsRefused` |
 
 **「付款單尚不存在」這一欄**：付款單 `version` 的 compare-and-set 只能保護已存在的列。`OrderConfirmed`（T1）與 `OrderCancelled`／`OrderCompleted`（T15）在列不存在時各自「先讀、後寫」：讀到「沒有付款單、沒有墓碑」的確認，在取消寫完墓碑之後才建出 `PENDING` 的單，兩個 handler 都 ack，但單是 `PENDING/NONE` 而墓碑是 `CANCELLED`，之後也沒有人補。處理：兩個 use case 在交易裡**先**取同一訂單的 transaction 級 advisory lock（`pg_advisory_xact_lock(hashtext('payment.order'), hashtext(order_id))`，兩個 key 的形式，與其他單 key 的鎖不同命名空間），**鎖之後**才讀付款單與墓碑、才判斷 duplicate；其他路徑（webhook、`expire`、`StartPayment`）只碰已存在的列，靠 `version` CAS，不取這把鎖，所以取鎖順序沒有反向（鎖 → 列；沒有人先持列再要鎖）。consumer 的 inbox 去重那一列在鎖之前寫入，但它只以事件 id 為鍵、不同事件互不相干，不會形成等待環。同型空隙掃過的其他格：兩個 `OrderConfirmed` 併發靠 `unique(order_id)`；兩個墓碑併發靠 `ON CONFLICT DO NOTHING`（先到的為準）；webhook 的 `provider_ref` 只在 `StartPayment` 之後存在，付款單必然已存在，所以「通知先於列」不會發生；`StartPayment` 與取消同時靠 `version` CAS，輸的那個 checkout 會被 `dropUnused` 取消。
 
