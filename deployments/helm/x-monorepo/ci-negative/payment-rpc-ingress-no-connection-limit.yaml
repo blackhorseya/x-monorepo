@@ -1,0 +1,13 @@
+# expect: paymentRpc.ingress.rateLimit.connections
+# A rate limit per second does not bound how many slow connections one client holds open.
+paymentRpc:
+  enabled: true
+  ingress:
+    enabled: true
+    className: "nginx"
+    hosts: [{"host": "pay.example.com"}]
+    rateLimit: { rps: 5, burstMultiplier: 3, connections: 0 }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }

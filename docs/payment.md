@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-> **狀態：設計稿，切片 1、2、3、4 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`。切片 3A（payment 側的 saga）：`payment-rpc consume`（T1／T7／T7'／T10／T12–T15、退款 T11）、webhook route 與其套用（T3／T4／T8／T9）、`payment-rpc expire`（T5／T6／T6'、補查）、webhook 通知的 retention。切片 3B（ordering 側的 saga）：ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（`apps/worker`，依訂單快照，§8 ordering 表每一格）、`worker poison`／`worker prune`／admin RPC 納入 payment、worker 的 retention／poison gauge 涵蓋 payment 的表、payment 的表不存在時 worker 拒絕啟動。切片 4（`apps/rpc` 轉發與 Console 付款頁）已由 #390 合併。**尚未實作**：切片 5（image／chart）、切片 6（切換）；預設設定（`ordering.require_payment: false`）下所有訂單的快照都是 `false`，ordering 忽略付款事件，所以預設部署沒有任何路徑會讓訂單走到 `PAID`；打開開關才會（切片 6）。
+> **狀態：設計稿，切片 1、2、3、4、5 已實作（#367）。** 切片 1（Ordering 契約）：`PAID`／`MarkPaid`／`OrderPaid`、`OrderConfirmed.total`、訂單 `payment_required` 快照與 `ordering.require_payment`（預設 `false`）、`CompleteOrder` 依快照擋（`order.payment_required`）、Console 顯示。切片 2（Payment 核心）：`pkgs/payment`、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`。切片 3A（payment 側的 saga）：`payment-rpc consume`（T1／T7／T7'／T10／T12–T15、退款 T11）、webhook route 與其套用（T3／T4／T8／T9）、`payment-rpc expire`（T5／T6／T6'、補查）、webhook 通知的 retention。切片 3B（ordering 側的 saga）：ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（`apps/worker`，依訂單快照，§8 ordering 表每一格）、`worker poison`／`worker prune`／admin RPC 納入 payment、worker 的 retention／poison gauge 涵蓋 payment 的表、payment 的表不存在時 worker 拒絕啟動。切片 4（`apps/rpc` 轉發與 Console 付款頁）已由 #390 合併。切片 5（部署）：5a image（#394）、5b mock 狀態跨 process 共用（#399）、5c chart（`paymentRpc`，預設 off：`serve`／`consume`／`expire` 三個 workload、只開 webhook 的 ingress 與限流、Grafana 面板與 alert）。**尚未實作**：切片 6（切換）；預設設定（`ordering.require_payment: false`）下所有訂單的快照都是 `false`，ordering 忽略付款事件，所以預設部署沒有任何路徑會讓訂單走到 `PAID`；打開開關才會（切片 6）。
 > 決策來源：#367 七個決定，加上 Sean 對 PR #369 暴露的未決項的後續裁示（[#367 comment](https://github.com/blackhorseya/x-monorepo/issues/367#issuecomment-6565500716)，decision `d-20261101232833097592-18`）。兩者有衝突時以後者為準；§13 列出哪一條取代了哪一條。
 > 「保證」只列已指定到切片測試的條目；測試名稱是預定名稱，實作時以實際為準。寫不出測試的就不寫成保證。
 > 改動任何已定決定都要回 Sean。標 **〔實作細節〕** 的是本文為了讓已定規則成立而補上的內部做法，實作時可調整，但不得改變它所服務的規則。
@@ -26,7 +26,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 - `apps/worker` **不載入** Payment。`apps/rpc` 只依賴 payment 的 `contract/` 與 `adapters/client`，不載入領域程式（同 catalog 的 #320 作法；用 archtest 固定）。
 - `payment-rpc` 掛掉時，只有付款操作回 503，下單與預留不受影響。
 - **剩下的耦合**：Postgres broker 下，Payment 要讀 ordering 的 outbox 表（與 ordering 讀 inventory 的 outbox 同一種耦合）。
-- **對外入口**：ingress 只對外開 webhook 路徑；`serve` 的 Connect RPC 只給 `apps/rpc` 內部呼叫（切片 5 的 chart 與 helm-check 負例固定，見 §9）。
+- **對外入口**：ingress 只對外開 webhook 路徑；`serve` 的 Connect RPC 只給 `apps/rpc` 內部呼叫（切片 5c 的 chart 與 `task helm-check` 負例固定，kind 實測見 `docs/operations.md`「chart 怎麼部署 payment-rpc」；見 §9）。
 - `customer_id` 由 `apps/rpc` 驗完身分後以 service key 傳入 `payment-rpc`（request 的明確欄位，不轉傳使用者 credential）。持有該 service key 的人可冒充任何 customer，所以 service key 只能是 rpc 那一把（單一 key，`--require-durable` 檢查），而且 RPC 路徑不對外（上一條）。
 
 ### 與 `CLAUDE.md` 規則的關係
@@ -258,7 +258,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 6. Log 只寫固定分類與 code，不寫 provider 的原始錯誤或 payload（#347）；簽章、body 與 provider 密鑰不進 log、error、metric label、span。
 7. **回應**：`200` = 已落地（含重送）；`400` = 簽章不符或不是合法通知（provider 不該重試）；`413` = body 超過 1 MiB（讀之前就限）；`500` = 我們自己存不下（provider 該重送）。body 固定文字，不回顯請求或錯誤內容。
 8. **Retention（切片 3A 的決定）**：`payment.webhook_events` 不歸 `worker prune`（它只管事件表與 inbox）。`payment-rpc expire` 每輪順手刪「已處理」且早於 `payment.webhook_retention`（預設 720h，`0` = 不刪）的列，上限 `payment.expire_batch`；未處理的列、`NEEDS_REVIEW` 付款單的列永遠不刪。這張表是重送通知的去重記憶，所以 `webhook_retention` 必須大於 provider 的重送窗口（`PaymentProvider.WebhookRedeliveryWindow`；mock 是 72h），否則拒絕啟動。
-9. **這條 route 不經 Connect 的 interceptor**：沒有 API key、沒有 `http.rate_limit`、沒有 `http.timeout`。簽章在寫入前驗，所以未簽章的洪水只花 CPU 與讀 body 的頻寬（body 上限 1 MiB）而不寫 DB；ingress 層的限流是切片 5 的事。
+9. **這條 route 不經 Connect 的 interceptor**：沒有 API key、沒有 `http.rate_limit`、沒有 `http.timeout`。簽章在寫入前驗，所以未簽章的洪水只花 CPU 與讀 body 的頻寬（body 上限 1 MiB）而不寫 DB；ingress 層的限流與 body 上限由 chart 渲染成 ingress-nginx 的 annotation（切片 5c，`paymentRpc.ingress.rateLimit`，`docs/operations.md`）：沒有限流的 ingress 是 render 失敗。
 
 ### `payment-rpc` 認證入口逐一列出
 
@@ -271,7 +271,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | `/api/healthz`、`/api/readyz`、`/api/version` | gin | 無（永遠開著） | probe；`readyz` 只看 payment 自己的 DB，不依賴 provider（同 rpc 的 `readyz` 不依賴 catalog）；provider 全部失敗時 `readyz` 仍 200，由 `TestPayment_Probes` 保證（切片 2） |
 | `/api/metrics` | gin | 無（gin route，不經 auth interceptor，見 `pkgs/platform/server/auth.go` 檔頭註解） | 同其他 app；不經 ingress 對外 |
 | `/api/docs` | gin | 無；預設關 | 同其他 app |
-| 啟動拒絕（fail closed） | — | `auth.jwt` 有設、`auth.oidc.enabled`、`auth.mode` 開著但 `auth.api_keys` 空；`--require-durable` 另要求 `auth.mode: required`、`auth.api_keys` 恰好一把且名為 `rpc`、`postgres.url` 不空 | #323：傳 nil 不等於停用 |
+| 啟動拒絕（fail closed） | — | `auth.jwt` 有設、`auth.oidc.enabled`、`auth.mode` 開著但 `auth.api_keys` 空；`--require-durable` 另要求 `auth.mode: required`、`auth.api_keys` 恰好一把且名為 `rpc`、`postgres.url` 不空，以及（mock provider）`payment.mock_webhook_secret` 不是空或全空白——`serve`／`consume`／`expire` 都檢查，external Secret 的 key 在但值是空的 `optional: false` 擋不住；`worker` 與 `rpc` 則在最終設定帶有 provider credential 時拒絕啟動（`docs/operations.md`） | #323：傳 nil 不等於停用 |
 | 沒有的入口 | — | 沒有 streaming RPC（auth 是 unary-only）；沒有 Bearer；沒有 identity key | 加了要另外包 |
 
 `consume`、`expire` 是背景程序，沒有對外 listener；`serve` 與它們共用同一份 provider 密鑰設定，但只有 `serve` 的 webhook route 讀「驗簽金鑰」。
@@ -315,7 +315,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 2 | Payment 核心 | `pkgs/payment`、schema、mock provider、`payment-rpc serve`（RPC；`StartPayment` 的 `payment.disabled` 在 rpc 側，切片 4） | 否（沒部署） |
 | 3 | Saga（3A、3B **已實作**） | `consume`（訂閱 `OrderConfirmed`／`OrderCancelled`／`OrderCompleted`）、webhook 落地（含 platform 的 gin route option）、`expire`、自動退款（T10–T11）、ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（依快照）、**`poison`／`prune` 的 `payment` 納入**（見下） | 否（預設快照 `false` 時 ordering 忽略付款事件） |
 | 4 | 入口（**已實作**） | `payment.v1.PublicPaymentService`（rpc 轉發 `StartPayment`／`GetPayment`，含 `payment.disabled`、`payment.unavailable`）、`payment.*` 設定、Console Pay 卡片 | 否（預設設定下快照全為 `false`、payment 設定選填，頁面與現在一樣） |
-| 5 | 部署 | **5a** goreleaser 第六個 image（#394）；**5b** mock 狀態跨 process 共用（`payment.mock_*`，migration `0003`）；**5c** chart（ingress 只開 webhook）、helm-check、Grafana、alert、常設授權書面 | 否 |
+| 5 | 部署 | **5a** goreleaser 第六個 image（#394）；**5b** mock 狀態跨 process 共用（`payment.mock_*`，migration `0003`）；**5c** chart（`paymentRpc`，預設 off）、ingress 只開 webhook 並限流、`task helm-check` 負例、kind 實測（`payment.sh`）、Grafana 面板與 alert；bot chart bump 常設授權的書面由 lead 另改 | 否 |
 | 6 | 切換 | 開啟開關（新部署預設 `true`），kind 跑完整流程與第 5 節全部競態 | **是** |
 
 每片一個 PR，切片 6 之前都不改變現有下單行為。**例外：切片 3 分兩支（3A、3B）**——3A 是 payment 側（migration、`consume`、webhook、`expire`），3B 是 ordering 訂閱 `PaymentCaptured`／`PaymentExpired` 與 `poison`／`prune` 納入 payment。3B 讀 3A migration 建的 `payment.events_*` 表，所以 3A 合併後才從新 main 開 3B，不做 stacked PR。3A 單獨合併時不改變任何下單行為：沒有人訂閱 payment 的事件，`consume` 也還沒部署（收到 `OrderConfirmed` 建付款單會寫資料，部署 `consume` 是切片 5 的事）。
@@ -362,7 +362,8 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | `payment-rpc` 掛掉時下單與預留照常 | S4/S6 | §1 | kind 故障演練：停 payment-rpc → `CreateOrder` 成功且到 `CONFIRMED`；付款操作失敗；恢復後同一 pod 繼續 |
 | fail closed | S2/S5 | §7 認證入口表 | 比照 `apps/catalog-rpc/durable_test.go`：「單獨配置」與「與支援來源並存」兩種負例 |
 | webhook route 不受 API key 影響 | S3 | §7 認證入口表 | `auth.mode: required` 下無 `X-API-Key` 但簽章正確 → 200；簽章錯 → 4xx |
-| ingress 只對外開 webhook | S5 | §1 | `task helm-check` 負例：渲染出的 ingress 規則只含 webhook path |
+| ingress 只對外開 webhook | S5 | §1 | `task helm-check` 負例：渲染出的 ingress 規則只含 webhook path（`Exact`，沒有別的 Ingress 指到 serve Service；`check.py`、`ci/payment-rpc-values.yaml`）；kind 實測（`payment.sh`，ingress-nginx）：webhook 打得到，Connect RPC（含 service key）、metrics、probe、docs 與別的 Host 都 404，對照直接打 Service 是 200 |
+| webhook 的 ingress 限流 | S5 | §7 第 9 點 | 沒有限流（rps／connections 不是正數）、沒有 class、沒有 host 都 render 失敗（`ci-negative/payment-rpc-ingress-*`）；annotation 不得碰 `limit-*`、`proxy-body-size`、snippet；kind 實測：40 個併發請求有 400 也有 503，5 秒後放行，2 MiB body 413 |
 | 競態在真環境成立 | S6 | §5 | kind 全流程（mock provider 的延遲／重送／亂序） |
 | Console 真流程 | S6 | §6「入口」 | 開關開啟後的真 stack（非 `page.route` 腳本）：建單 → `CONFIRMED` → Pay 卡片 → `StartPayment` 開新分頁 → 付款成功 → 訂單 `COMPLETED`、卡片消失、輪詢停止；開關切回關閉後新單沒有卡片 。**S6 已有**：`web/apps/console/e2e/payment/checkout.spec.ts`（`task web-e2e-payment`，CI 的 `console-e2e` job；自己的 Playwright config，因為預設專案的 worker 是開關關閉的）。一個 wrapper 行程（`stack-server.ts`）在 `E2E_DATABASE_URL` 那台 Postgres 上建一個專屬資料庫，跑真的 `catalog-rpc`、`payment-rpc serve`／`consume`、`rpc`、`worker`（`ordering.require_payment` 開）；spec 在 Console 建單，等 `CONFIRMED` 與 Pay 卡片（並等卡片顯示付款單狀態 `PENDING`——付款單由 `consume` 在訂單 `CONFIRMED` 後一跳才建，更早按 Pay 會得到「沒有付款單」，顧客再按一次即可），按 Pay → 新分頁開在 `https://mock-pay.invalid/checkout/<ref>`（無 opener），再用 `payment-rpc mock pay --order <id> --deliver …` 付款，斷言付的是 Console 開的那個 ref，訂單 `COMPLETED`、卡片消失、`GetOrder` 輪詢停止；接著把 worker 的開關關掉重啟，新單 `CONFIRMED` 但沒有卡片，已付的單不動。**checkout 頁沒有做**：mock 的 URL 是一個不存在的主機，瀏覽器 context 對它回一個佔位頁，只為了讓分頁有位址可斷言；真 provider 才有那一頁。故障敏感度：把開關請求固定成 `true` → 第二個測試紅在卡片數；把 `--deliver` 指到關閉的 port → 第一個測試紅在 `mock pay` 失敗（唯一能讓訂單完成的路徑就是 webhook）。|
 

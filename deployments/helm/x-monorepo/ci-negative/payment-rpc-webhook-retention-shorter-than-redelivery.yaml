@@ -1,0 +1,10 @@
+# expect: paymentRpc.config.webhook_retention
+# The webhook log is the dedup memory of redelivered notifications: it must outlast the provider's
+# redelivery window (0 keeps everything).
+paymentRpc:
+  enabled: true
+  config: { webhook_retention: "24h", mock_redelivery_window: "72h" }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }

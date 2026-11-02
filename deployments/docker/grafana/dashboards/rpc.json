@@ -1728,6 +1728,280 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "id": 44,
+      "type": "row",
+      "title": "Payment — payment-rpc (the reconcile gauges are written by the expire CronJob each run: last value, max, never sum; lag is per replica)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 104,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 45,
+      "title": "Reconcile eligible (payments inside the reconcile window)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "payment_reconcile_eligible: how many EXPIRED / CANCELLED payments the expire sweep may still ask the provider about, written at the end of each run. No series at all means the CronJob is not reporting (OTLP not configured, or it is not running): that is no measurement, not an empty backlog — the 'Payment reconcile gauges absent' rule watches it. docs/operations.md, Payment.",
+      "gridPos": {
+        "x": 0,
+        "y": 105,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(last_over_time(payment_reconcile_eligible{job=\"payment-rpc\"}[30m]))",
+          "legendFormat": "eligible"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 46,
+      "title": "Oldest unchecked reconcile query (seconds)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "payment_reconcile_oldest_unchecked_seconds: how long the payment the sweep looked at longest ago has waited. Past half of payment.reconcile_window (12h at the default 24h) the batch no longer covers the window and a payment with money at the provider may go unseen: raise payment.expire_batch or shorten the CronJob period (reconcile_backlog).",
+      "gridPos": {
+        "x": 8,
+        "y": 105,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(last_over_time(payment_reconcile_oldest_unchecked_seconds{job=\"payment-rpc\"}[30m]))",
+          "legendFormat": "oldest unchecked"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 47,
+      "title": "Payment alerts by category (increase / 10m)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "payment_alerts_total{alert}: a payment ended in a state a person has to look at (amount_mismatch, capture_after_review, orphan_webhook, provider_query_stuck, reconcile_backlog, reconcile_incomplete, missing_total). A counter: summed over replicas, unlike the gauges. docs/operations.md lists what to do for each.",
+      "gridPos": {
+        "x": 16,
+        "y": 105,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (alert)(increase(payment_alerts_total{job=\"payment-rpc\"}[10m]))",
+          "legendFormat": "{{alert}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 48,
+      "title": "Consumer lag — payment-rpc consume (unacked messages)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "eventbus_consumer_lag of payment's own consumer group (payment-rpc.payment): outside the worker's worker.* groups on purpose, so worker.autoscaling's lag query does not scale the worker on payment's backlog. The 'Eventbus consumer lag' rule covers it (it takes max over every group).",
+      "gridPos": {
+        "x": 0,
+        "y": 113,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (topic, consumer_group)(eventbus_consumer_lag{consumer_group=~\"payment-rpc\\\\..*\"})",
+          "legendFormat": "{{consumer_group}} ← {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 49,
+      "title": "Oldest unacked age and poison backlog — payment-rpc consume",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "eventbus_consumer_oldest_age_seconds of payment's group, and eventbus_poison_messages (a refund that failed every retry parks on payment.events_poison and its payment stays REFUNDING: worker poison lists it).",
+      "gridPos": {
+        "x": 12,
+        "y": 113,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (topic, consumer_group)(eventbus_consumer_oldest_age_seconds{consumer_group=~\"payment-rpc\\\\..*\"})",
+          "legendFormat": "age {{consumer_group}} ← {{topic}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (topic)(eventbus_poison_messages{job=\"payment-rpc\"})",
+          "legendFormat": "poison {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 50,
+      "title": "Payment events applied to orders (increase / 10m by event and effect)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "ordering_payment_event_total{event,effect}: what PaymentCaptured / PaymentExpired did to their order in the worker (applied | ignored | noop | unexpected; refused events are domain errors in usecase_duration_seconds, not here). effect=unexpected must stay 0: a PaymentCaptured for a CONFIRMED order whose snapshot says no payment cannot happen unless something upstream is wrong (docs/payment.md §8); the 'Payment event unexpected' rule watches it. Counter: summed over replicas.",
+      "gridPos": {
+        "x": 0,
+        "y": 121,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (event, effect)(increase(ordering_payment_event_total[10m]))",
+          "legendFormat": "{{event}} / {{effect}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     }
   ]
 }

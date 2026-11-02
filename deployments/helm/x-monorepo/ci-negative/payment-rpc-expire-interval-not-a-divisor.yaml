@@ -1,0 +1,10 @@
+# expect: paymentRpc.expire.intervalMinutes
+# The schedule is */N minutes and payment.expire_interval is N minutes, both from this one value: it
+# has to be a divisor of 60 or the cron period is not N.
+paymentRpc:
+  enabled: true
+  expire: { intervalMinutes: 7 }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }

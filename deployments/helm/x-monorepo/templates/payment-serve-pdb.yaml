@@ -1,0 +1,16 @@
+{{- $c := .Values.paymentRpc.serve -}}
+{{- if and .Values.paymentRpc.enabled $c.podDisruptionBudget.enabled (gt (int $c.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "x-monorepo.fullname" . }}-payment-serve
+  labels:
+    {{- include "x-monorepo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: payment-serve
+spec:
+  maxUnavailable: {{ $c.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: payment-serve
+{{- end }}
