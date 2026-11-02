@@ -364,7 +364,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | webhook route 不受 API key 影響 | S3 | §7 認證入口表 | `auth.mode: required` 下無 `X-API-Key` 但簽章正確 → 200；簽章錯 → 4xx |
 | ingress 只對外開 webhook | S5 | §1 | `task helm-check` 負例：渲染出的 ingress 規則只含 webhook path |
 | 競態在真環境成立 | S6 | §5 | kind 全流程（mock provider 的延遲／重送／亂序） |
-| Console 真流程 | S6 | §6「入口」 | 開關開啟後的真 stack（非 `page.route` 腳本）：建單 → `CONFIRMED` → Pay 卡片 → `StartPayment` 開新分頁 → 付款成功 → 訂單 `COMPLETED`、卡片消失、輪詢停止；開關切回關閉後新單沒有卡片 |
+| Console 真流程 | S6 | §6「入口」 | 開關開啟後的真 stack（非 `page.route` 腳本）：建單 → `CONFIRMED` → Pay 卡片 → `StartPayment` 開新分頁 → 付款成功 → 訂單 `COMPLETED`、卡片消失、輪詢停止；開關切回關閉後新單沒有卡片 。**S6 已有**：`web/apps/console/e2e/payment/checkout.spec.ts`（`task web-e2e-payment`，CI 的 `console-e2e` job；自己的 Playwright config，因為預設專案的 worker 是開關關閉的）。一個 wrapper 行程（`stack-server.ts`）在 `E2E_DATABASE_URL` 那台 Postgres 上建一個專屬資料庫，跑真的 `catalog-rpc`、`payment-rpc serve`／`consume`、`rpc`、`worker`（`ordering.require_payment` 開）；spec 在 Console 建單，等 `CONFIRMED` 與 Pay 卡片（並等卡片顯示付款單狀態 `PENDING`——付款單由 `consume` 在訂單 `CONFIRMED` 後一跳才建，更早按 Pay 會得到「沒有付款單」，顧客再按一次即可），按 Pay → 新分頁開在 `https://mock-pay.invalid/checkout/<ref>`（無 opener），再用 `payment-rpc mock pay --order <id> --deliver …` 付款，斷言付的是 Console 開的那個 ref，訂單 `COMPLETED`、卡片消失、`GetOrder` 輪詢停止；接著把 worker 的開關關掉重啟，新單 `CONFIRMED` 但沒有卡片，已付的單不動。**checkout 頁沒有做**：mock 的 URL 是一個不存在的主機，瀏覽器 context 對它回一個佔位頁，只為了讓分頁有位址可斷言；真 provider 才有那一頁。故障敏感度：把開關請求固定成 `true` → 第二個測試紅在卡片數；把 `--deliver` 指到關閉的 port → 第一個測試紅在 `mock pay` 失敗（唯一能讓訂單完成的路徑就是 webhook）。|
 
 ## 10. 儲存（`payment` schema）
 
