@@ -1,0 +1,8 @@
+# expect: secrets.paymentRpc.apiKey
+# rpc presents one service key to payment-rpc; without it (and without an existingSecret) there is
+# none.
+paymentRpc: { enabled: true }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { mockWebhookSecret: "mock-webhook-secret-0123456789" }

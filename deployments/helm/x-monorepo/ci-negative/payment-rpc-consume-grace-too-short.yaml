@@ -1,0 +1,9 @@
+# expect: paymentRpc.consume.terminationGracePeriodSeconds
+# consume drains handlers for 8s and closes its router within 10s: the grace period must be above 18s.
+paymentRpc:
+  enabled: true
+  consume: { terminationGracePeriodSeconds: 15 }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }

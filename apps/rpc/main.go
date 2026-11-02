@@ -48,6 +48,9 @@ func waitCommand(budget time.Duration) error {
 	if err != nil {
 		return err
 	}
+	if err := cfg.RejectProviderCredentials("rpc"); err != nil {
+		return err
+	}
 
 	return waitForCatalog(c, cfg.Catalog, budget, time.Second, slog.Default())
 }
@@ -58,6 +61,10 @@ func run() error {
 
 	cfg, err := config.Load()
 	if err != nil {
+		return err
+	}
+	// rpc is told where payment-rpc is and the service key to present; the provider's credential is none of its business.
+	if err := cfg.RejectProviderCredentials("rpc"); err != nil {
 		return err
 	}
 

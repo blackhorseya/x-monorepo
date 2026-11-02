@@ -528,6 +528,31 @@ func readFile(v *viper.Viper) error {
 	return nil
 }
 
+// ProviderCredentials names (never the values) the payment-provider credentials this config carries. They belong
+// to apps/payment-rpc alone (docs/payment.md §1): every other process reads a config an operator can also write
+// (the release-wide ConfigMap and Secret), so each of them refuses to start on a non-empty one — whatever the way in
+// (a config file, APP_* env, a Secret). A provider's own credential field is added here when it is added to Payment;
+// the settings rpc legitimately reads (upstream, api_key, timeout) and the non-secret provider tuning are not
+// credentials of a provider and are not listed.
+func (x *AppConfig) ProviderCredentials() []string {
+	var out []string
+	if strings.TrimSpace(x.Payment.MockWebhookSecret) != "" {
+		out = append(out, "payment.mock_webhook_secret")
+	}
+
+	return out
+}
+
+// RejectProviderCredentials is what a process that does not run a payment provider calls after Load: an error
+// naming the settings, never their values. app is the process's name for the message.
+func (x *AppConfig) RejectProviderCredentials(app string) error {
+	if names := x.ProviderCredentials(); len(names) > 0 {
+		return fmt.Errorf("%s: %s is set: a payment provider's credential belongs to payment-rpc alone and this process never needs it; unset it (config file, APP_* env, Secret)", app, strings.Join(names, ", "))
+	}
+
+	return nil
+}
+
 func (x *AppConfig) validate() error {
 	if x.HTTP.ShutdownDelay < 0 {
 		return fmt.Errorf("invalid http.shutdown_delay %s (want >= 0)", x.HTTP.ShutdownDelay)

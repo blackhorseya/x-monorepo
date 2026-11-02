@@ -35,6 +35,9 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
+// MockProvider is payment.provider's value for the mock (apps may not import infra/provider/mock, so they ask here).
+const MockProvider = mock.Name
+
 // Schema is the Postgres schema of this BC (tables, migrations).
 const Schema = postgres.Schema
 

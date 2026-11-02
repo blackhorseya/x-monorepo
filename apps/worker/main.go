@@ -48,6 +48,20 @@ func run(args []string) error {
 // newRootCmd builds the CLI. load is how commands get their config
 // (config.Load in main, a fixed config in tests).
 func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
+	// The worker does not load payment, so it never holds a provider credential: every command (the consumer, prune,
+	// expire, poison, bootstrap) refuses a config that carries one, wherever it came from.
+	raw := load
+	load = func() (*config.AppConfig, error) {
+		cfg, err := raw()
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.RejectProviderCredentials("worker"); err != nil {
+			return nil, err
+		}
+
+		return cfg, nil
+	}
 	root := &cobra.Command{
 		Use:           "worker",
 		Version:       buildinfo.Get().String(),

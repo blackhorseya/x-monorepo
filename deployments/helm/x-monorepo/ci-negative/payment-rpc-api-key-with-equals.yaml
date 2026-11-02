@@ -1,0 +1,7 @@
+# expect: secrets.paymentRpc.apiKey must not contain
+# The key is embedded in APP_AUTH_API_KEYS (name=key:role,...).
+paymentRpc: { enabled: true }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc=key-0123456789", mockWebhookSecret: "mock-webhook-secret-0123456789" }

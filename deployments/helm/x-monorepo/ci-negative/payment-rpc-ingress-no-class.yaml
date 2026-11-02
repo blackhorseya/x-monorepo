@@ -1,0 +1,13 @@
+# expect: paymentRpc.ingress.className
+# Without a class the rate-limit annotations (ingress-nginx's) may be read by no controller at all.
+paymentRpc:
+  enabled: true
+  ingress:
+    enabled: true
+    className: ""
+    hosts: [{"host": "pay.example.com"}]
+    rateLimit: { rps: 5, burstMultiplier: 3, connections: 10 }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }

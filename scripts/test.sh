@@ -63,7 +63,10 @@ jobs_on() {
 # Shorthands for the sets below (#328): the Go checks every Go change runs, and what only product code adds.
 go_checks="gen_freshness lint work_sync coverage"
 go_prod_pre="build console_e2e helm_kind"; go_prod="$go_prod_pre k6_wire"
-expect_eq "docs only runs nothing"            "" "$(jobs_on docs README.md docs/a.md deployments/docker/grafana/x.json)"
+expect_eq "docs only runs nothing"            "" "$(jobs_on docs README.md docs/a.md)"
+# The Grafana dashboard and alert rules are inputs of helm-check's check-observability.py (#367 slice 5c): a metric-name typo in a rule that never fires is caught there, so a change to them runs helm and nothing else.
+expect_eq "grafana provisioning runs helm-check only" "helm" "$(jobs_on grafana deployments/docker/grafana/provisioning/alerting.yaml)"
+expect_eq "a grafana dashboard runs helm-check only"  "helm" "$(jobs_on grafanadash deployments/docker/grafana/dashboards/rpc.json)"
 
 # A change to *_test.go alone runs the Go checks and the test matrix, no integration job (#328).
 expect_eq "a _test.go alone runs only the Go checks" "$go_checks" "$(jobs_on gotest pkgs/ordering/domain/order/order_test.go)"

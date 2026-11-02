@@ -1,0 +1,10 @@
+# expect: paymentRpc.serve.service.type
+# Same reason: NodePort exposes the internal RPC.
+paymentRpc:
+  enabled: true
+  serve:
+    service: { type: "NodePort", port: 80 }
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }
