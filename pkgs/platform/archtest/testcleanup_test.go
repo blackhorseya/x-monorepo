@@ -227,7 +227,8 @@ func TestX(t *testing.T) {
 }`,
 		},
 		{
-			// A subtest's Cleanup runs when the subtest ends, before the parent's defers.
+			// Forbidden shape, not a lifecycle claim: a subtest's Cleanup does run before the
+			// parent's defers, but the gate does not decide which t a Cleanup belongs to.
 			name: "parent defer, Cleanup only inside a subtest",
 			src: `package x_test
 func TestX(t *testing.T) {
@@ -237,18 +238,7 @@ func TestX(t *testing.T) {
 		t.Cleanup(func() { check(db.Exec("x").Error) })
 	})
 }`,
-		},
-		{
-			// A subtest ends before the parent's defers run, whether its Cleanup is direct or
-			// registered by a helper it hands its own t.
-			name: "parent defer, subtest registers its cleanup through a helper",
-			src: `package x_test
-func registerPurge(t *testing.T, db *gorm.DB) { t.Cleanup(func() { check(db.Exec("x").Error) }) }
-func TestX(t *testing.T) {
-	db, cleanup, _ := postgres.NewDB(cfg, tel)
-	defer cleanup()
-	t.Run("child", func(t *testing.T) { registerPurge(t, db) })
-}`,
+			want: []string{"test-cleanup-pool-defer@004"},
 		},
 		{
 			name: "defer of something that is not a pool closer",
@@ -432,31 +422,23 @@ func TestTestCleanup_RealFilesHitWhenBroken(t *testing.T) {
 	}
 }
 
-// ── scope matrix ─────────────────────────────────────────────────────────────
+// ── shape matrix ─────────────────────────────────────────────────────────────
 //
-// Which t does a Cleanup register on? The parent function defers closeDB, so a
-// Cleanup on the PARENT's t runs after the pool is closed (unsafe) and a Cleanup
-// on a t.Run child's own t runs before t.Run returns (safe). The scanner decides
-// from the call site: only a literal handed to t.Run gets a t of its own. A
-// closure that merely takes a *testing.T (called at once with the parent's t, or
-// with it renamed, or capturing it, or reached through a forwarded variable) is
-// the same t. Undecidable shapes are reported, not excused: this is a safety
-// gate, and a wrong "unsafe" is one line to restructure while a wrong "safe" is
-// a purge on a closed pool.
+// The rule is a SHAPE BAN, not a lifecycle proof: a test function (with every
+// closure and t.Run body inside it) that defers the close of a NewDB pool and
+// registers a t.Cleanup anywhere is reported, whichever t the Cleanup is on and
+// whether it would run before or after the close. The gate does not try to decide
+// that from the syntax (which t a closure was handed, an alias, which parameter a
+// helper registers on, a Run method that is not testing's): the shapes are
+// unbounded and two review rounds each found another. The fix is the same for all
+// of them (pgtest.DB), so a child that happens to be safe is reported and migrated
+// too. This deliberately tightens #371, which left safe subtest shapes alone.
 //
-// Every row was also run as a real test against Postgres (the same bodies, the
-// purge being a statement on the pool): the unsafe rows FAIL with "sql: database
-// is closed", the safe rows PASS. Rows are {mechanism} x {direct t.Cleanup,
-// helper that registers t.Cleanup} (the helper is declared in a second file of
-// the same package, so cross-file discovery is exercised too).
-type scopeCell struct {
-	name string
-	safe bool
-	src  string
-}
-
-var scopeCells = []scopeCell{
-	{"same_level_direct", false, `package probe_test
+// Every row below must hit. Rows are {mechanism} x {direct t.Cleanup, helper that
+// registers t.Cleanup}; the helper is declared in a second file of the same
+// package (cross-file discovery). The controls after it must not.
+var shapeCells = []struct{ name, src string }{
+	{"same_level_direct", `package probe_test
 
 func TestProbe_same_level_direct(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -464,7 +446,7 @@ func TestProbe_same_level_direct(t *testing.T) {
 	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
 }
 `},
-	{"same_level_helper", false, `package probe_test
+	{"same_level_helper", `package probe_test
 
 func TestProbe_same_level_helper(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -472,7 +454,7 @@ func TestProbe_same_level_helper(t *testing.T) {
 	registerPurge(t, db)
 }
 `},
-	{"t_run_child_direct", true, `package probe_test
+	{"t_run_child_direct", `package probe_test
 
 func TestProbe_t_run_child_direct(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -480,7 +462,7 @@ func TestProbe_t_run_child_direct(t *testing.T) {
 	t.Run("child", func(t *testing.T) { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) })
 }
 `},
-	{"t_run_child_helper", true, `package probe_test
+	{"t_run_child_helper", `package probe_test
 
 func TestProbe_t_run_child_helper(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -488,7 +470,7 @@ func TestProbe_t_run_child_helper(t *testing.T) {
 	t.Run("child", func(t *testing.T) { registerPurge(t, db) })
 }
 `},
-	{"immediate_closure_parent_t_direct", false, `package probe_test
+	{"immediate_closure_parent_t_direct", `package probe_test
 
 func TestProbe_immediate_closure_parent_t_direct(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -496,7 +478,7 @@ func TestProbe_immediate_closure_parent_t_direct(t *testing.T) {
 	func(t *testing.T) { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) }(t)
 }
 `},
-	{"immediate_closure_parent_t_helper", false, `package probe_test
+	{"immediate_closure_parent_t_helper", `package probe_test
 
 func TestProbe_immediate_closure_parent_t_helper(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -504,7 +486,7 @@ func TestProbe_immediate_closure_parent_t_helper(t *testing.T) {
 	func(t *testing.T) { registerPurge(t, db) }(t)
 }
 `},
-	{"immediate_closure_renamed_t_direct", false, `package probe_test
+	{"immediate_closure_renamed_t_direct", `package probe_test
 
 func TestProbe_immediate_closure_renamed_t_direct(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -512,7 +494,7 @@ func TestProbe_immediate_closure_renamed_t_direct(t *testing.T) {
 	func(tt *testing.T) { tt.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { tt.Errorf("purge: %v", err) } }) }(t)
 }
 `},
-	{"immediate_closure_renamed_t_helper", false, `package probe_test
+	{"immediate_closure_renamed_t_helper", `package probe_test
 
 func TestProbe_immediate_closure_renamed_t_helper(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -520,7 +502,7 @@ func TestProbe_immediate_closure_renamed_t_helper(t *testing.T) {
 	func(tt *testing.T) { registerPurge(tt, db) }(t)
 }
 `},
-	{"capturing_closure_direct", false, `package probe_test
+	{"capturing_closure_direct", `package probe_test
 
 func TestProbe_capturing_closure_direct(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -528,7 +510,7 @@ func TestProbe_capturing_closure_direct(t *testing.T) {
 	func() { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) }()
 }
 `},
-	{"capturing_closure_helper", false, `package probe_test
+	{"capturing_closure_helper", `package probe_test
 
 func TestProbe_capturing_closure_helper(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -536,7 +518,7 @@ func TestProbe_capturing_closure_helper(t *testing.T) {
 	func() { registerPurge(t, db) }()
 }
 `},
-	{"forwarded_t_direct", false, `package probe_test
+	{"forwarded_t_direct", `package probe_test
 
 func TestProbe_forwarded_t_direct(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -545,7 +527,7 @@ func TestProbe_forwarded_t_direct(t *testing.T) {
 	func() { u.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { u.Errorf("purge: %v", err) } }) }()
 }
 `},
-	{"forwarded_t_helper", false, `package probe_test
+	{"forwarded_t_helper", `package probe_test
 
 func TestProbe_forwarded_t_helper(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -554,7 +536,7 @@ func TestProbe_forwarded_t_helper(t *testing.T) {
 	registerPurge(u, db)
 }
 `},
-	{"named_subtest_func_direct", true, `package probe_test
+	{"named_subtest_func_direct", `package probe_test
 
 var probeDB_named_subtest_func_direct *gorm.DB
 
@@ -570,7 +552,7 @@ func TestProbe_named_subtest_func_direct(t *testing.T) {
 	t.Run("child", probe_named_subtest_func_direct_child)
 }
 `},
-	{"named_subtest_func_helper", true, `package probe_test
+	{"named_subtest_func_helper", `package probe_test
 
 var probeDB_named_subtest_func_helper *gorm.DB
 
@@ -583,9 +565,73 @@ func TestProbe_named_subtest_func_helper(t *testing.T) {
 	t.Run("child", probe_named_subtest_func_helper_child)
 }
 `},
+	{"runner_run_is_not_a_subtest", `package probe_test
+
+type probe_runner_run_is_not_a_subtest_runner struct{ t *testing.T }
+
+// Run runs fn at once with the SAME t: not a subtest.
+func (r probe_runner_run_is_not_a_subtest_runner) Run(name string, fn func(*testing.T)) { fn(r.t) }
+
+func TestProbe_runner_run_is_not_a_subtest(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	r := probe_runner_run_is_not_a_subtest_runner{t}
+	r.Run("x", func(t *testing.T) { t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } }) })
+}
+`},
+	{"helper_registers_on_parent_param", `package probe_test
+
+func TestProbe_helper_registers_on_parent_param(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Run("child", func(ct *testing.T) { registerOwner(t, ct, db) })
+}
+`},
+	{"child_alias_direct", `package probe_test
+
+func TestProbe_child_alias_direct(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Run("child", func(ct *testing.T) {
+		u := ct
+		u.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { u.Errorf("purge: %v", err) } })
+	})
+}
+`},
+	{"child_alias_helper", `package probe_test
+
+func TestProbe_child_alias_helper(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Run("child", func(ct *testing.T) {
+		u := ct
+		registerPurge(u, db)
+	})
+}
+`},
+	{"grandchild", `package probe_test
+
+func TestProbe_grandchild(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Run("a", func(a *testing.T) {
+		a.Run("b", func(b *testing.T) { b.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { b.Errorf("purge: %v", err) } }) })
+	})
+}
+`},
+	{"child_captured_by_closure_in_child", `package probe_test
+
+func TestProbe_child_captured_by_closure_in_child(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	t.Run("c", func(ct *testing.T) {
+		func() { ct.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { ct.Errorf("purge: %v", err) } }) }()
+	})
+}
+`},
 }
 
-const scopeHelper = `package probe_test
+const shapeHelper = `package probe_test
 
 func registerPurge(t *testing.T, db *gorm.DB) {
 	t.Helper()
@@ -595,10 +641,51 @@ func registerPurge(t *testing.T, db *gorm.DB) {
 		}
 	})
 }
+
+// registerOwner registers on its FIRST argument; the second is only passed along.
+func registerOwner(owner, other *testing.T, db *gorm.DB) {
+	owner.Helper()
+	other.Helper()
+	owner.Cleanup(func() {
+		if err := db.Exec("SELECT 1").Error; err != nil {
+			owner.Errorf("purge: %v", err)
+		}
+	})
+}
 `
 
-// scopeControl is the plain shape the gate exists for; it must hit in the same run.
-const scopeControl = `package probe_test
+// Controls that must NOT hit: the clean pgtest.DB use, a defer with no Cleanup,
+// a Cleanup with no defer.
+var shapeControlsClean = map[string]string{
+	"clean_pgtest_db": `package probe_test
+
+func TestProbe_clean(t *testing.T) {
+	db := pgtest.DB(t, cfg, tel)
+	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
+	registerPurge(t, db)
+	t.Run("child", func(t *testing.T) { t.Cleanup(func() {}) })
+}
+`,
+	"defer_only": `package probe_test
+
+func TestProbe_deferOnly(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	defer closeDB()
+	if err := db.Exec("SELECT 1").Error; err != nil { t.Fatal(err) }
+}
+`,
+	"cleanup_only": `package probe_test
+
+func TestProbe_cleanupOnly(t *testing.T) {
+	db, closeDB, _ := postgres.NewDB(cfg, tel)
+	t.Cleanup(closeDB)
+	t.Cleanup(func() { if err := db.Exec("SELECT 1").Error; err != nil { t.Errorf("purge: %v", err) } })
+}
+`,
+}
+
+// shapeControlHit is the plain shape the gate exists for; it must hit in the same run.
+const shapeControlHit = `package probe_test
 
 func TestProbe_control(t *testing.T) {
 	db, closeDB, _ := postgres.NewDB(cfg, tel)
@@ -608,50 +695,50 @@ func TestProbe_control(t *testing.T) {
 `
 
 // The scanner is entered through its directory walk, as a module's gate is.
-func TestTestCleanup_ScopeMatrix(t *testing.T) {
+func TestTestCleanup_ShapeMatrix(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, src string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name+"_test.go"), []byte(src), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("helper_test.go", scopeHelper)
-	write("control_test.go", scopeControl)
-	for _, c := range scopeCells {
-		write(c.name+"_test.go", c.src)
+	write("helper", shapeHelper)
+	write("control_hit", shapeControlHit)
+	for _, c := range shapeCells {
+		write(c.name, c.src)
+	}
+	for name, src := range shapeControlsClean {
+		write(name, src)
 	}
 
 	found, st, err := archtest.ScanTestCleanupDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := len(scopeCells) + 2; st.Files != want {
+	if want := len(shapeCells) + len(shapeControlsClean) + 2; st.Files != want {
 		t.Fatalf("scanned %d files, want %d: the matrix was not looked at", st.Files, want)
 	}
-	poolDefer := map[string]int{}
+	hits := map[string]int{}
 	for _, f := range found {
 		if f.Rule == archtest.RulePoolDefer {
-			poolDefer[filepath.Base(f.Pos.Filename)]++
+			hits[strings.TrimSuffix(filepath.Base(f.Pos.Filename), "_test.go")]++
 		}
 	}
-	if poolDefer["control_test.go"] == 0 {
+	if hits["control_hit"] == 0 {
 		t.Fatalf("the plain defer+Cleanup control did not hit: %v", found)
 	}
-	unsafe := 0
-	for _, c := range scopeCells {
-		got := poolDefer[c.name+"_test.go"]
-		switch {
-		case c.safe && got != 0:
-			t.Errorf("%s: safe (the Cleanup is on a subtest's own t) but reported %d pool-defer hit(s)", c.name, got)
-		case !c.safe && got == 0:
-			t.Errorf("%s: unsafe (the Cleanup is on the parent's t, after the deferred close) but not reported", c.name)
-		}
-		if !c.safe {
-			unsafe++
+	for _, c := range shapeCells {
+		if hits[c.name] == 0 {
+			t.Errorf("%s: not reported", c.name)
 		}
 	}
-	if unsafe == 0 {
-		t.Fatal("the matrix has no unsafe row")
+	for name := range shapeControlsClean {
+		if hits[name] != 0 {
+			t.Errorf("control %s: reported %d pool-defer hit(s), want none", name, hits[name])
+		}
+	}
+	if len(shapeCells) < 14 {
+		t.Fatalf("only %d matrix rows", len(shapeCells))
 	}
 }
