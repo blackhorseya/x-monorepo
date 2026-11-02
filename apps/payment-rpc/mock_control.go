@@ -27,8 +27,9 @@ const (
 	mockFail   = "fail"
 )
 
-// mockTimeout bounds the whole command, including a delivery to the webhook route.
-const mockTimeout = 30 * time.Second
+// mockTimeout bounds the whole command, including a delivery to the webhook route. A variable only so the
+// regression test can make the wait short; nothing else sets it.
+var mockTimeout = 30 * time.Second
 
 // printedDelivery is what `mock pay` and `mock notify` print: one JSON object with the signed webhook to
 // deliver (body is the raw JSON text; the signature is over exactly those bytes). Status is set when
