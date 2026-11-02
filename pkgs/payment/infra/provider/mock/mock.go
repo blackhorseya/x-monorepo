@@ -243,7 +243,13 @@ type Delivery struct {
 // same Delivery may be handed over any number of times, in any order, to rehearse redelivery. It
 // makes no call to the payment service: delivering it is the test's job.
 func (x *Provider) Pay(ref string, amount kernel.Money) (Delivery, error) {
-	ok, err := x.store.MarkPaid(context.Background(), ref, dto.MoneyOutput{Amount: amount.Amount(), Currency: amount.Currency()})
+	return x.PayContext(context.Background(), ref, amount)
+}
+
+// PayContext is Pay under the caller's context: the write that marks the checkout paid is cancelled with it, so a caller
+// with a deadline (payment-rpc mock pay) is not left waiting on the database, and a write it gave up on never lands.
+func (x *Provider) PayContext(c context.Context, ref string, amount kernel.Money) (Delivery, error) {
+	ok, err := x.store.MarkPaid(c, ref, dto.MoneyOutput{Amount: amount.Amount(), Currency: amount.Currency()})
 	if err != nil {
 		return Delivery{}, fmt.Errorf("mock: pay checkout %q: %w", ref, err)
 	}

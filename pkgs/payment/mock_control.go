@@ -78,7 +78,7 @@ func (x *MockControl) Pay(c context.Context, order string, amount *kernel.Money)
 	if amount != nil {
 		paid = *amount
 	}
-	d, err := x.provider.Pay(p.ProviderRef(), paid)
+	d, err := x.provider.PayContext(c, p.ProviderRef(), paid)
 	if err != nil {
 		return Payment{}, err
 	}
