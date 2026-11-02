@@ -16,6 +16,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/provider/mock"
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/provider/mock/storetest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
 
@@ -36,7 +37,7 @@ func mockPaymentConfig() config.Payment {
 // newInstance is one process's provider over the shared database.
 func newInstance(t *testing.T, db *gorm.DB) *mock.Provider {
 	t.Helper()
-	p, err := paymentbc.ProvidePaymentProvider(mockPaymentConfig())
+	p, err := paymentbc.ProvidePaymentProvider(mockPaymentConfig(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,8 +236,9 @@ func TestMockState_ConcurrentPayAndRefundOnOneRef(t *testing.T) {
 	})
 
 	t.Run("a refund racing the payment is paid-or-refused, never a refund of nothing", func(t *testing.T) {
-		refundedRuns := 0
-		for range 20 {
+		refundedRuns, refusedRuns := 0, 0
+		for i := range 300 {
+			stagger := time.Duration(i%20) * 150 * time.Microsecond // sweeps the refund across the payment's write
 			co := openCheckout(t, opener, 500)
 			payer, refunder := newInstance(t, db), newInstance(t, db)
 			start := make(chan struct{})
@@ -251,6 +253,7 @@ func TestMockState_ConcurrentPayAndRefundOnOneRef(t *testing.T) {
 			go func() { // fire-and-forget: joined by wg below
 				defer wg.Done()
 				<-start
+				time.Sleep(stagger)
 				refundErr = refunder.Refund(c, dto.ProviderRefundInput{IdempotencyKey: "race", Ref: co.Ref, Amount: dto.MoneyOutput{Amount: 500, Currency: "TWD"}})
 			}()
 			close(start)
@@ -268,10 +271,37 @@ func TestMockState_ConcurrentPayAndRefundOnOneRef(t *testing.T) {
 			}
 			if refundErr == nil {
 				refundedRuns++
+			} else {
+				refusedRuns++
 			}
 		}
-		if refundedRuns == 0 {
-			t.Fatal("no run ever refunded: the race never reached the paid-then-refund order, so the check above proved nothing")
+		// positive control: the race really went both ways, or the checks above saw only one order
+		if refundedRuns == 0 || refusedRuns == 0 {
+			t.Fatalf("the race went one way only (refunded %d, refused %d of 300): the checks above proved nothing", refundedRuns, refusedRuns)
 		}
 	})
+}
+
+// mockStoreFor is a store over the shared database with the mock tables emptied.
+func mockStoreFor(t *testing.T) mock.Store {
+	t.Helper()
+	db := testDB(t)
+	clean := func() {
+		if err := db.Exec(`TRUNCATE payment.mock_refunds, payment.mock_checkouts`).Error; err != nil {
+			t.Errorf("truncate mock tables: %v", err)
+		}
+	}
+	clean()
+	t.Cleanup(clean)
+
+	return postgres.NewMockStore(db)
+}
+
+// The Postgres store keeps the contract the in-memory store keeps.
+func TestMockStore_Contract(t *testing.T) {
+	storetest.Run(t, mockStoreFor)
+}
+
+func TestMockStore_Faults(t *testing.T) {
+	storetest.RunFaults(t, mockStoreFor)
 }

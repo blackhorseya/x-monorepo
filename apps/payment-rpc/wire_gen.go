@@ -12,7 +12,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/events"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/webhook"
-	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -25,9 +24,10 @@ import (
 // Injectors from wire.go:
 
 // Initialize is the injector. wire.go is the ONLY place AppConfig is mapped
-// into component configs (via wire.FieldsOf). The payment provider comes in as an argument: run builds
-// it from payment.provider (payment.ProvidePaymentProvider) before anything else is opened.
-func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.Server, func(), error) {
+// into component configs (via wire.FieldsOf). The payment provider comes in as a builder: run validates
+// payment.provider (payment.BuildProvider) before anything else is opened, and the injector builds the
+// provider once the database is open (the mock keeps its state there).
+func Initialize(cfg *config.AppConfig, provider payment.ProviderBuilder) (*server.Server, func(), error) {
 	http := cfg.HTTP
 	auth, err := NewAuth(cfg)
 	if err != nil {
@@ -47,6 +47,12 @@ func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.S
 		return nil, nil, err
 	}
 	repository := payment.ProvidePaymentRepository(db, logger)
+	paymentProvider, err := payment.ProvideProvider(provider, db)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	transactor := payment.ProvideTransactor(db)
 	clock := system.NewClock()
 	meterProvider := providers.Meter
@@ -56,7 +62,7 @@ func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.S
 		cleanup()
 		return nil, nil, err
 	}
-	v := payment.ProvideStartPayment(repository, provider, transactor, clock, recorder)
+	v := payment.ProvideStartPayment(repository, paymentProvider, transactor, clock, recorder)
 	v2 := payment.ProvideGetPayment(repository, recorder)
 	paymentService := rpc.NewPaymentService(v, v2)
 	v3 := NewRoutes(paymentService)
@@ -72,7 +78,7 @@ func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.S
 		return nil, nil, err
 	}
 	eventsPublisher := events.NewPublisher(publisher)
-	v5 := payment.ProvideReceiveWebhook(webhookRepository, provider, eventsPublisher, transactor, clock, recorder)
+	v5 := payment.ProvideReceiveWebhook(webhookRepository, paymentProvider, eventsPublisher, transactor, clock, recorder)
 	handler := webhook.NewHandler(v5, logger)
 	option := payment.WebhookRoute(handler)
 	v6 := ServerOptions(option)
@@ -92,7 +98,7 @@ func Initialize(cfg *config.AppConfig, provider port.PaymentProvider) (*server.S
 
 // InitializeConsume builds `payment-rpc consume`: the router and payment's consumer use cases,
 // publishing into the outbox (eventbus.ProvidePublisher) like every other BC. No listener, no auth.
-func InitializeConsume(cfg *config.AppConfig, provider port.PaymentProvider) (*Consumer, func(), error) {
+func InitializeConsume(cfg *config.AppConfig, provider payment.ProviderBuilder) (*Consumer, func(), error) {
 	worker := cfg.Worker
 	configPostgres := cfg.Postgres
 	oTel := cfg.OTel
@@ -138,11 +144,18 @@ func InitializeConsume(cfg *config.AppConfig, provider port.PaymentProvider) (*C
 	v := payment.ProvideRecordOrderConfirmed(repository, outcomeRepository, idGenerator, clock, alerts, configPayment, transactor, inbox, recorder)
 	orderConfirmedHandler := consumer.NewOrderConfirmedHandler(v)
 	eventsPublisher := events.NewPublisher(publisher)
-	orderCancelledUC := payment.ProvideRecordOrderCancelled(repository, outcomeRepository, eventsPublisher, clock, provider, logger, transactor, inbox, recorder)
+	paymentProvider, err := payment.ProvideProvider(provider, db)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	orderCancelledUC := payment.ProvideRecordOrderCancelled(repository, outcomeRepository, eventsPublisher, clock, paymentProvider, logger, transactor, inbox, recorder)
 	orderCancelledHandler := consumer.NewOrderCancelledHandler(orderCancelledUC)
-	orderCompletedUC := payment.ProvideRecordOrderCompleted(repository, outcomeRepository, eventsPublisher, clock, provider, logger, transactor, inbox, recorder)
+	orderCompletedUC := payment.ProvideRecordOrderCompleted(repository, outcomeRepository, eventsPublisher, clock, paymentProvider, logger, transactor, inbox, recorder)
 	orderCompletedHandler := consumer.NewOrderCompletedHandler(orderCompletedUC)
-	v2 := payment.ProvideProcessRefund(repository, provider, eventsPublisher, transactor, clock, recorder)
+	v2 := payment.ProvideProcessRefund(repository, paymentProvider, eventsPublisher, transactor, clock, recorder)
 	refundHandler := consumer.NewRefundHandler(v2)
 	webhookRepository := payment.ProvideWebhookRepository(db, repository)
 	v3 := payment.ProvideProcessWebhook(repository, webhookRepository, eventsPublisher, alerts, clock, transactor, inbox, recorder)
@@ -164,7 +177,7 @@ func InitializeConsume(cfg *config.AppConfig, provider port.PaymentProvider) (*C
 
 // InitializeExpire builds `payment-rpc expire`: the sweep over the database and the provider, publishing
 // into the outbox. No listener, no router.
-func InitializeExpire(cfg *config.AppConfig, provider port.PaymentProvider) (*payment.Expire, func(), error) {
+func InitializeExpire(cfg *config.AppConfig, provider payment.ProviderBuilder) (*payment.Expire, func(), error) {
 	configPostgres := cfg.Postgres
 	oTel := cfg.OTel
 	log := cfg.Log
@@ -180,6 +193,12 @@ func InitializeExpire(cfg *config.AppConfig, provider port.PaymentProvider) (*pa
 	logger := providers.Logger
 	repository := payment.ProvidePaymentRepository(db, logger)
 	webhookRepository := payment.ProvideWebhookRepository(db, repository)
+	paymentProvider, err := payment.ProvideProvider(provider, db)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
 	if err != nil {
 		cleanup2()
@@ -205,7 +224,7 @@ func InitializeExpire(cfg *config.AppConfig, provider port.PaymentProvider) (*pa
 		cleanup()
 		return nil, nil, err
 	}
-	v := payment.ProvideExpireSweep(repository, webhookRepository, provider, eventsPublisher, alerts, transactor, clock, configPayment, recorder)
+	v := payment.ProvideExpireSweep(repository, webhookRepository, paymentProvider, eventsPublisher, alerts, transactor, clock, configPayment, recorder)
 	expire := payment.NewExpire(v, logger)
 	return expire, func() {
 		cleanup3()

@@ -22,6 +22,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
+	paymentbc "github.com/blackhorseya/x-monorepo/pkgs/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
@@ -103,7 +104,7 @@ func (e *consumeEnv) start(provider port.PaymentProvider) {
 		},
 		Payment: config.Payment{Provider: "mock", Window: 30 * time.Minute, ReconcileWindow: 24 * time.Hour, MockCheckoutTTL: 30 * time.Minute},
 	}
-	consumer, cleanup, err := InitializeConsume(cfg, provider)
+	consumer, cleanup, err := InitializeConsume(cfg, paymentbc.Fixed(provider))
 	if err != nil {
 		e.t.Fatal(err)
 	}

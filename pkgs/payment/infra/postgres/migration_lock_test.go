@@ -2,10 +2,14 @@ package postgres_test
 
 import (
 	"context"
+	"io/fs"
+	"regexp"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
@@ -154,5 +158,115 @@ func TestMigrationLock_NoRewriteAndTheQueueBehindAddColumn(t *testing.T) {
 	_ = tx.Rollback(c)
 	if before != after {
 		t.Fatalf("ADD COLUMN rewrote payment.payments (relfilenode %s -> %s)", before, after)
+	}
+}
+
+// docs/operations.md says migration 0003 (the mock provider's state tables) does not make payment.payments
+// wait. Two pins: the real file only creates tables of its own (nothing that locks an existing table),
+// and a file of that shape — new tables, a foreign key between them, a pause, a failure — lets reads and
+// writes on payment.payments through while it runs and leaves nothing behind when it fails.
+func TestMigrationLock_0003OnlyCreatesNewTables(t *testing.T) {
+	files := postgres.Migration().Files
+	b, err := fs.ReadFile(files, "0003_mock_provider.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sql strings.Builder
+	for _, line := range strings.Split(string(b), "\n") {
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		sql.WriteString(line + "\n")
+	}
+	stmts := 0
+	for _, stmt := range strings.Split(sql.String(), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		stmts++
+		if !regexp.MustCompile(`(?is)^CREATE TABLE payment\.mock_(checkouts|refunds) \(`).MatchString(stmt) {
+			t.Fatalf("0003 may only create the mock tables (anything else can lock a table the running service uses): %.80s", stmt)
+		}
+	}
+	if stmts != 2 {
+		t.Fatalf("0003 has %d statements, want the two CREATE TABLE", stmts)
+	}
+	// the only references are to its own table, never to payment.payments
+	if strings.Contains(sql.String(), "payment.payments") {
+		t.Fatal("0003 must not reference payment.payments")
+	}
+}
+
+func TestMigrationLock_NewTablesDoNotBlockPayments(t *testing.T) {
+	db := testDB(t)
+	if err := db.Exec(insertSQL, "lk-3", "ord-lk-3", "cust", 10, "TWD", "PENDING", "NONE").Error; err != nil {
+		t.Fatal(err)
+	}
+	dropProbe := func() {
+		if err := db.Exec(`DROP SCHEMA IF EXISTS lockprobe3 CASCADE`).Error; err != nil {
+			t.Errorf("drop schema lockprobe3: %v", err)
+		}
+	}
+	dropProbe()
+	t.Cleanup(dropProbe)
+
+	probe := platformpg.Migration{Schema: "lockprobe3", Files: fstest.MapFS{
+		"0001_probe.up.sql": {Data: []byte(`
+CREATE TABLE lockprobe3.a (ref text PRIMARY KEY, seq bigserial NOT NULL UNIQUE);
+CREATE TABLE lockprobe3.b (ref text NOT NULL REFERENCES lockprobe3.a (ref) ON DELETE CASCADE, k text NOT NULL, PRIMARY KEY (ref, k));
+SELECT pg_sleep(2);
+SELECT 1/0;
+`)},
+		"0001_probe.down.sql": {Data: []byte(`SELECT 1;`)},
+	}}
+
+	c := context.Background()
+	url := pgtest.URL(t)
+	user := pgtest.Conn(t, url)
+	watcher := pgtest.Conn(t, url)
+
+	done := make(chan error, 1)
+	go func() { done <- platformpg.Up(c, config.Postgres{URL: url}, probe) }() // fire-and-forget: joined through done below
+
+	// positive control: the migration is really inside its sleep (its statement is running) while we use the table
+	deadline := time.Now().Add(5 * time.Second)
+	running := false
+	for time.Now().Before(deadline) && !running {
+		var n int
+		if err := watcher.QueryRow(c, `SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE '%lockprobe3.a%' AND pid <> pg_backend_pid()`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		running = n > 0
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !running {
+		t.Fatal("fixture: the probe migration was never seen running")
+	}
+
+	if _, err := user.Exec(c, `SET lock_timeout = '300ms'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := user.Exec(c, `SELECT 1 FROM payment.payments LIMIT 1`); err != nil {
+		t.Fatalf("a SELECT on payment.payments while the migration ran: %v", err)
+	}
+	if _, err := user.Exec(c, `UPDATE payment.payments SET updated_at = now() WHERE id = 'lk-3'`); err != nil {
+		t.Fatalf("an UPDATE on payment.payments while the migration ran: %v", err)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("fixture: the migration ended before the reads finished: %v", err)
+	default:
+	}
+
+	if err := <-done; err == nil {
+		t.Fatal("the probe migration ends in 1/0 and must fail")
+	}
+	var n int
+	if err := db.Raw(`SELECT count(*) FROM information_schema.tables WHERE table_schema = 'lockprobe3' AND table_name IN ('a', 'b')`).Scan(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("the failed file left %d tables behind: it is not one transaction", n)
 	}
 }
