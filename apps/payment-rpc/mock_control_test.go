@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -540,5 +542,238 @@ func TestMockControl_EverySubcommandEndsAtItsDeadlineWhileTheDatabaseWaits(t *te
 				t.Fatal("the write the command gave up on went through when the lock was released")
 			}
 		})
+	}
+}
+
+// waitUntil polls cond every 10ms until it holds; it fails the test with msg when limit passes first. It is how a
+// test anchors on "the database is really waiting right now" before it acts.
+func waitUntil(t *testing.T, limit time.Duration, msg string, cond func() bool) {
+	t.Helper()
+	end := time.Now().Add(limit)
+	for !cond() {
+		if time.Now().After(end) {
+			t.Fatal(msg)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// One deadline for the whole command (#406 r3): the budget is spent across SEVERAL database steps, and the deadline
+// is the command's, not each step's. `mock pay` looks the payment up (payment.payments), then writes the payment to
+// the provider (payment.mock_checkouts). The case waits on the first for about half the budget, lets it go, and
+// waits on the second until the budget is over. At the deadline the command must have returned the cancellation AND
+// the second statement must be over on the SERVER; a relative per-statement timeout started at the beginning would
+// still be running (and would make the write when the lock is let go). The positive control: the same slow lookup
+// with nothing in the way of the write succeeds inside the same budget, so the delay alone is not what fails.
+func TestMockControl_DeadlineIsOneForTheWholeCommand_SlowLookupThenWrite(t *testing.T) {
+	old := mockTimeout
+	mockTimeout = 3 * time.Second
+	t.Cleanup(func() { mockTimeout = old })
+	const lookupDelay = 1600 * time.Millisecond
+
+	t.Run("positive control: a slow lookup alone fits the budget", func(t *testing.T) {
+		e := newControlEnv(t)
+		p := e.pendingWithCheckout()
+		release := holdTableLock(t, e.pg.URL, "payments")
+		errc := make(chan error, 1)
+		go func() {
+			_, err := mockRun(t, "pay", "--order", "ord-1")
+			errc <- err
+		}()
+		waitUntil(t, 4*time.Second, "fixture: the command never waited on payment.payments", func() bool { return e.waitingOn("payments") > 0 })
+		time.Sleep(lookupDelay)
+		release()
+		select {
+		case err := <-errc:
+			if err != nil {
+				t.Fatalf("a lookup that waited %s inside a %s budget must succeed: %v", lookupDelay, mockTimeout, err)
+			}
+		case <-time.After(mockTimeout + 3*time.Second):
+			t.Fatal("the command did not return")
+		}
+		if !e.paidAtProvider(p.ProviderRef()) {
+			t.Fatal("the slow-lookup command did not make its write")
+		}
+	})
+
+	t.Run("the write waits after the lookup did", func(t *testing.T) {
+		e := newControlEnv(t)
+		p := e.pendingWithCheckout()
+		releaseLookup := holdTableLock(t, e.pg.URL, "payments")
+		releaseWrite := holdTableLock(t, e.pg.URL, "mock_checkouts")
+		type result struct {
+			err  error
+			took time.Duration
+		}
+		done := make(chan result, 1)
+		start := time.Now()
+		go func() {
+			_, err := mockRun(t, "pay", "--order", "ord-1")
+			done <- result{err, time.Since(start)}
+		}()
+		var got *result
+		t.Cleanup(func() {
+			releaseLookup()
+			releaseWrite()
+			if got == nil {
+				<-done
+			}
+		}) // the command is joined whatever happens
+
+		// anchor 1: this call's lookup waits on payments; anchor 2: after it is let go, its write waits on mock_checkouts
+		waitUntil(t, 4*time.Second, "fixture: the command never waited on payment.payments", func() bool { return e.waitingOn("payments") > 0 })
+		time.Sleep(lookupDelay)
+		releaseLookup()
+		waitUntil(t, 4*time.Second, "fixture: the command never reached its write on payment.mock_checkouts", func() bool { return e.waitingOn("mock_checkouts") > 0 })
+
+		var r result
+		select {
+		case r = <-done:
+			got = &r
+		case <-time.After(mockTimeout + 3*time.Second):
+			releaseWrite()
+			r = <-done
+			got = &r
+			t.Fatalf("the command was still waiting %s after its %s deadline and returned %v once the lock was released", time.Since(start), mockTimeout, r.err)
+		}
+		if r.err == nil || !(errors.Is(r.err, context.DeadlineExceeded) || strings.Contains(r.err.Error(), "deadline")) {
+			t.Fatalf("at the deadline the command must return the deadline, got %v", r.err)
+		}
+		if r.took > mockTimeout+time.Second {
+			t.Fatalf("returned after %s, deadline %s", r.took, mockTimeout)
+		}
+		// the statement is over on the SERVER when the command reports, not only abandoned by the client
+		if n := e.waitingOn("mock_checkouts"); n != 0 {
+			t.Fatalf("the command reported its deadline while %d backend(s) still wait to make its write (a per-statement timeout started at the beginning outlives the deadline)", n)
+		}
+		releaseWrite()
+		time.Sleep(500 * time.Millisecond) // a write that was merely abandoned would land now
+		if e.paidAtProvider(p.ProviderRef()) {
+			t.Fatal("the write the command gave up on went through when the lock was released")
+		}
+	})
+}
+
+// startupPeer is a Postgres peer that accepts one connection, reads the StartupMessage, and never answers: a
+// connection whose handshake does not complete. The StartupMessage it read (its protocol number is the anchor that
+// the command's own call reached it, not some other process) is reported on started.
+type startupPeer struct {
+	url     string
+	started chan struct{}
+	mu      sync.Mutex
+	conn    net.Conn
+}
+
+func newStartupPeer(t *testing.T) *startupPeer {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &startupPeer{started: make(chan struct{}), url: "postgres://synthetic:synthetic@" + ln.Addr().String() + "/test?sslmode=disable"}
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		p.mu.Lock()
+		p.conn = c
+		p.mu.Unlock()
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		hdr := make([]byte, 8)
+		if _, err := io.ReadFull(c, hdr); err != nil {
+			return
+		}
+		if binary.BigEndian.Uint32(hdr[4:]) != 196608 { // protocol 3.0: a StartupMessage, not an SSLRequest
+			return
+		}
+		close(p.started)
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-acceptDone
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.conn != nil {
+			_ = p.conn.Close()
+		}
+	})
+
+	return p
+}
+
+// closedByPeerSide reports whether the accepted connection is closed from the command's side within limit: a read
+// that ends in EOF or a reset means the command closed it; one that only times out means it is still open.
+func (p *startupPeer) closedByPeerSide(limit time.Duration) bool {
+	p.mu.Lock()
+	c := p.conn
+	p.mu.Unlock()
+	_ = c.SetReadDeadline(time.Now().Add(limit))
+	buf := make([]byte, 4096)
+	for {
+		_, err := c.Read(buf)
+		if err == nil {
+			continue
+		}
+		var ne net.Error
+		return !(errors.As(err, &ne) && ne.Timeout())
+	}
+}
+
+// One deadline reaches the initialization too (#406 r3): a peer that took the StartupMessage and never answers holds
+// the command's connect (and the ping after it). With a 300ms budget the command returns the deadline; the connection
+// it opened must be closed by then, not left open by an abandoned goroutine. The anchor is the StartupMessage read
+// off this call's own connection; the positive control is the unobstructed command in the tests above.
+func TestMockControl_DeadlineClosesAConnectionWhoseHandshakeNeverCompletes(t *testing.T) {
+	old := mockTimeout
+	mockTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { mockTimeout = old })
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, config.EnvPrefix+"_") {
+			t.Setenv(k, "")
+		}
+	}
+	peer := newStartupPeer(t)
+	t.Setenv("APP_POSTGRES_URL", peer.url)
+	t.Setenv("APP_LOG_LEVEL", "error")
+	t.Setenv("APP_PAYMENT_PROVIDER", "mock")
+	t.Setenv("APP_PAYMENT_MOCK_CONTROL", "true")
+	t.Setenv("APP_PAYMENT_MOCK_WEBHOOK_SECRET", mockSecret)
+
+	errc := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := mockRun(t, "fail", "on")
+		errc <- err
+	}()
+	var err error
+	finished := false
+	t.Cleanup(func() {
+		if !finished {
+			select {
+			case <-errc:
+			case <-time.After(3 * time.Second):
+				t.Error("the command did not return after the test finished")
+			}
+		}
+	})
+	select {
+	case <-peer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fixture: the command never sent its StartupMessage to the peer")
+	}
+	select {
+	case err = <-errc:
+		finished = true
+	case <-time.After(mockTimeout + 3*time.Second):
+		t.Fatalf("the command was still running %s after its %s deadline", time.Since(start), mockTimeout)
+	}
+	if err == nil || !(errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline")) {
+		t.Fatalf("at the deadline the command must return the deadline, got %v", err)
+	}
+	if !peer.closedByPeerSide(500 * time.Millisecond) {
+		t.Fatal("the command returned its deadline but the connection it opened is still open")
 	}
 }
