@@ -84,7 +84,7 @@ func TestExampleConfig_IsWhatPaymentRPCRunsOn(t *testing.T) {
 	}
 	// the payment section is what ProvidePaymentProvider accepts, with the reconcile window longer than the
 	// mock's checkout pages (docs/payment.md §3)
-	if _, err := payment.ProvidePaymentProvider(cfg.Payment); err != nil {
+	if _, err := payment.ProvidePaymentProvider(cfg.Payment, nil); err != nil {
 		t.Errorf("payment section: %v", err)
 	}
 	if cfg.Payment.Provider != "mock" {
@@ -143,7 +143,7 @@ func TestEveryExampleConfigStillLoads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			if _, err := payment.ProvidePaymentProvider(cfg.Payment); err != nil {
+			if _, err := payment.ProvidePaymentProvider(cfg.Payment, nil); err != nil {
 				t.Fatalf("payment section %+v: %v", cfg.Payment, err)
 			}
 		})

@@ -78,7 +78,7 @@ func run(args []string) error {
 		}
 	}
 
-	provider, err := payment.ProvidePaymentProvider(cfg.Payment)
+	provider, err := payment.BuildProvider(cfg.Payment)
 	if err != nil {
 		return err
 	}

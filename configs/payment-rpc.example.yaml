@@ -23,7 +23,9 @@ postgres:
   url: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
 
 payment:
-  provider: mock          # the first version's only provider: a gateway nobody can really pay
+  provider: mock          # the first version's only provider: a gateway nobody can really pay.
+                          # With postgres.url set its state lives in payment.mock_* and serve / consume / expire share it;
+                          # without, each process keeps its own in memory (docs/payment.md §3)
   mock_checkout_ttl: 30m  # the longest a checkout of the mock can last; payment.window must fit in it
   mock_redelivery_window: 72h  # how long the mock says it may resend a notification
   # mock_webhook_secret is a secret: set it with APP_PAYMENT_MOCK_WEBHOOK_SECRET, never here. Empty = a random
