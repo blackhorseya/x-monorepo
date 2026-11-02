@@ -103,6 +103,53 @@ func TestX(t *testing.T) {
 			},
 		},
 		{
+			name: "openers under another import name",
+			src: `package x_test
+import (
+	dbsql "database/sql"
+	pool "github.com/jackc/pgx/v5/pgxpool"
+	pg "github.com/jackc/pgx/v5"
+	orm "gorm.io/gorm"
+	std "github.com/jackc/pgx/v5/stdlib"
+	pgc "github.com/jackc/pgx/v5/pgconn"
+)
+func TestX(t *testing.T) {
+	_, _ = dbsql.Open("pgx", dsn)
+	_, _ = pool.New(ctx, dsn)
+	_, _ = pg.Connect(ctx, dsn)
+	_, _ = orm.Open(dialector, gc)
+	_ = std.OpenDB(cc)
+	_, _ = pgc.Connect(ctx, dsn)
+}`,
+			want: []string{
+				"test-direct-pool@012", "test-direct-pool@013", "test-direct-pool@014",
+				"test-direct-pool@015", "test-direct-pool@016", "test-direct-pool@017",
+			},
+		},
+		{
+			// A dot import makes the opener a bare identifier the gate cannot tell from a local
+			// function, so the import itself is the finding.
+			name: "dot imports of opener packages",
+			src: `package x_test
+import (
+	. "database/sql"
+	. "github.com/jackc/pgx/v5/pgxpool"
+)
+func TestX(t *testing.T) {
+	_, _ = Open("pgx", dsn)
+	_, _ = New(ctx, dsn)
+}`,
+			want: []string{"test-direct-pool@003", "test-direct-pool@004"},
+		},
+		{
+			name: "a package that is not an opener, whatever it is called",
+			src: `package x_test
+import sql "example.com/other/sql"
+func TestX(t *testing.T) {
+	_, _ = sql.Open("x")
+}`,
+		},
+		{
 			// The 5 indirect shapes review r2 found against the defer+Cleanup pairing. None needs
 			// to be understood: each one mentions NewDB, and that is the finding.
 			name: "indirect close and registration shapes",
@@ -456,15 +503,18 @@ func TestTestCleanup_ShapeMatrix(t *testing.T) {
 	// Same content, two places: listed in the allowlist, and not.
 	write("allowed/opens_test.go", opensAPool)
 	write("notallowed/opens_test.go", opensAPool)
-	// pgtest's own package is exempt by construction, not by the allowlist.
-	write("pgtest/own_test.go", opensAPool)
+	// pgtest's own package (the canonical path only) is exempt by construction, not by the
+	// allowlist; a directory that merely has the same name is not it.
+	write("pkgs/platform/postgres/pgtest/own_test.go", opensAPool)
+	write("nested/pgtest/imposter_test.go", opensAPool)
+	write("other/pkgs/platform/postgres/pgtest/imposter_test.go", opensAPool)
 
 	allow := []archtest.Allow{{Path: "allowed/", Reason: "fixture: stands in for a test of NewDB itself"}}
 	found, st, err := archtest.ScanTestCleanupDirAllow(dir, allow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := len(shapeCells) + len(shapeControlsClean) + 5; st.Files != want {
+	if want := len(shapeCells) + len(shapeControlsClean) + 7; st.Files != want {
 		t.Fatalf("scanned %d files, want %d: the matrix was not looked at", st.Files, want)
 	}
 	count := map[string]int{}
@@ -493,8 +543,13 @@ func TestTestCleanup_ShapeMatrix(t *testing.T) {
 	if count["notallowed/opens_test.go"] == 0 {
 		t.Errorf("the same content outside the allowlist did not hit")
 	}
-	if n := count["pgtest/own_test.go"]; n != 0 {
+	if n := count["pkgs/platform/postgres/pgtest/own_test.go"]; n != 0 {
 		t.Errorf("pgtest's own package reported %d hit(s), want none", n)
+	}
+	for _, imposter := range []string{"nested/pgtest/imposter_test.go", "other/pkgs/platform/postgres/pgtest/imposter_test.go"} {
+		if count[imposter] == 0 {
+			t.Errorf("%s: a directory named pgtest elsewhere got pgtest's exemption", imposter)
+		}
 	}
 	if len(shapeCells) < 20 {
 		t.Fatalf("only %d matrix rows", len(shapeCells))
