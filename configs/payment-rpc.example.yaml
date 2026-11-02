@@ -28,6 +28,7 @@ payment:
                           # without, each process keeps its own in memory (docs/payment.md §3)
   mock_checkout_ttl: 30m  # the longest a checkout of the mock can last; payment.window must fit in it
   mock_redelivery_window: 72h  # how long the mock says it may resend a notification
+  # mock_control: false  # true = `payment-rpc mock pay|notify|fail` exists and the mock reads the faults it sets (kind / tests only)
   # mock_webhook_secret is a secret: set it with APP_PAYMENT_MOCK_WEBHOOK_SECRET, never here. Empty = a random
   # one per process (only a test inside the same process can sign with it).
   window: 30m             # how long a new payment stays payable (`consume`)
