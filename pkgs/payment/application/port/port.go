@@ -50,6 +50,9 @@ type EventPublisher interface {
 // implementation logs a fixed category and counts it; it never carries provider or customer text.
 type Alerts interface {
 	Raise(c context.Context, a payment.Alert, orderID string)
+	// Backlog reports how far behind the reconcile pass is after a sweep: how many payments are owed a
+	// query and how long the least recently looked-at has waited. Counts and a duration, nothing else.
+	Backlog(c context.Context, eligible int, oldestUnchecked time.Duration)
 }
 
 // ErrProviderUnavailable is a failure to get a usable answer from the payment provider (as opposed

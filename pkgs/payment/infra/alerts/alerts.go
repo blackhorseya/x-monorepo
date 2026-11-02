@@ -4,6 +4,7 @@ package alerts
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -31,6 +32,8 @@ func New(l *slog.Logger, meter metric.MeterProvider) (*Alerts, error) {
 
 	return &Alerts{log: l, counter: c}, nil
 }
+
+func (x *Alerts) Backlog(context.Context, int, time.Duration) {}
 
 func (x *Alerts) Raise(c context.Context, a payment.Alert, orderID string) {
 	x.log.ErrorContext(c, "payment alert", "alert", string(a), "order_id", orderID)

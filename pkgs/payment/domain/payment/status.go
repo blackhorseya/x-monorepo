@@ -93,6 +93,9 @@ const (
 	// AlertProviderQueryStuck: a due payment could not be settled because the provider kept failing the
 	// query for several sweeps in a row. It stays PENDING (never EXPIRED on a failed query).
 	AlertProviderQueryStuck Alert = "provider_query_stuck"
+	// AlertReconcileBacklog: the reconcile pass is so far behind that a payment inside its window has gone
+	// unasked for more than half of that window; batch × runs per window no longer covers the list.
+	AlertReconcileBacklog Alert = "reconcile_backlog"
 	// AlertCaptureAfterReview: money was reported again for a payment already waiting for review.
 	AlertCaptureAfterReview Alert = "capture_after_review"
 )

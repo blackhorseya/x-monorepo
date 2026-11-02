@@ -357,3 +357,63 @@ func TestWebhook_AnOldCheckoutsPaymentStillFindsItsOrderAfterAReopen(t *testing.
 		t.Fatalf("the old checkout's payment was not refunded: payment=%s, notification processed=%v", p.Status(), stored.Processed())
 	}
 }
+
+// failingFor cannot answer about one checkout.
+type failingFor struct {
+	port.PaymentProvider
+	ref string
+}
+
+func (f failingFor) GetPayment(c context.Context, ref string) (dto.ProviderPaymentOutput, error) {
+	if ref == f.ref {
+		return dto.ProviderPaymentOutput{}, port.ErrProviderUnavailable
+	}
+
+	return f.PaymentProvider.GetPayment(c, ref)
+}
+
+// The due PENDING list on Postgres: a payment whose query keeps failing stays PENDING, and must not keep
+// the one behind it from being settled when the batch is one.
+func TestSweep_AFailingQueryDoesNotHoldTheFrontOfTheDueListOnPostgres(t *testing.T) {
+	e := newSagaEnv(t)
+	c := t.Context()
+	clock := &sweepClock{now: t0}
+	prov := mock.New(mock.Options{Now: clock.Now})
+
+	var refs []string
+	for n, ord := range []string{"due-a", "due-b"} {
+		p, err := payment.New(payment.NewParams{ID: payment.ID("pay-" + ord), OrderID: ord, CustomerID: "cust", Total: twd(t, 1000), ExpiresAt: t0.Add(time.Duration(n+1) * time.Minute)}, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		co, err := prov.CreateCheckout(c, dto.ProviderCheckoutInput{PaymentID: p.ID().String(), Amount: dto.MoneyOutput{Amount: 1000, Currency: "TWD"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = p.AttachCheckout("mock", co.Ref, co.URL, co.ExpiresAt, t0); err != nil {
+			t.Fatal(err)
+		}
+		if err = e.repo.Save(c, p); err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, co.Ref)
+	}
+	clock.now = t0.Add(time.Hour)
+
+	sweep := usecase.NewExpireSweep(e.repo, e.hooks, failingFor{PaymentProvider: prov, ref: refs[0]}, e.ev, e.al, e.tx, clock,
+		dto.SweepConfig{Batch: 1, ReconcileWindow: 24 * time.Hour, Interval: 15 * time.Minute})
+	for range 2 {
+		clock.now = clock.now.Add(15 * time.Minute)
+		if _, err := sweep.Execute(c, dto.Ack{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	b, err := e.repo.FindByOrderID(c, "due-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Status() != payment.StatusExpired {
+		t.Fatalf("due-b behind a failing due-a: status = %s, want EXPIRED", b.Status())
+	}
+}

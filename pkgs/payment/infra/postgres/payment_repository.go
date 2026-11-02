@@ -157,6 +157,12 @@ func (i *PaymentRepository) list(c context.Context, limit int, where string, arg
 	return out, nil
 }
 
+func (i *PaymentRepository) MarkSwept(context.Context, []payment.ID, time.Time) error { return nil }
+
+func (i *PaymentRepository) ReconcileBacklog(context.Context, time.Time) (payment.Backlog, error) {
+	return payment.Backlog{}, nil
+}
+
 // Save inserts a never-saved payment (Version 0) with version 1, or updates a loaded one
 // `WHERE version = <loaded>`, bumping it. A second payment for the same order (or a reused id) hits
 // a unique constraint and is ErrDuplicateForOrder; an update whose version moved on matches zero

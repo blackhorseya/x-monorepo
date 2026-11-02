@@ -19,11 +19,28 @@ type Repository interface {
 	// ListReconcilable returns up to limit EXPIRED / CANCELLED payments that have a provider reference and
 	// ended at or after notBefore, the ones whose reconcile window closes soonest first.
 	ListReconcilable(c context.Context, notBefore time.Time, limit int) ([]*Payment, error)
+	// MarkSwept records that the sweep looked at these payments at `at` — asked the provider, whatever the
+	// answer, or failed to. It is the sweep's cursor: both lists put the least recently looked-at first, so
+	// a payment that stays in the list (not paid, query failing) lets the next one through next run. It is
+	// not a state change: no version moves, so it never loses a race against a writer of the payment.
+	MarkSwept(c context.Context, ids []ID, at time.Time) error
+	// ReconcileBacklog measures the reconcile list: how many are eligible and how long the least recently
+	// looked-at has waited.
+	ReconcileBacklog(c context.Context, notBefore time.Time) (Backlog, error)
 	// Save inserts a never-saved payment (Version 0) or updates a loaded one, comparing Version.
 	// ErrStale when another writer won; a second payment for the same order is ErrDuplicateForOrder.
 	// The stored version advances on every save, but the in-memory aggregate does not: reload
 	// before saving it again.
 	Save(c context.Context, p *Payment) error
+}
+
+// Backlog is how far behind the reconcile pass is, measured on the payments it still owes a query.
+type Backlog struct {
+	// Eligible is how many EXPIRED / CANCELLED payments with a checkout are still inside the window.
+	Eligible int
+	// OldestUnchecked is when the least recently looked-at of them was last looked at (or, never looked
+	// at, when it ended). The zero time when nothing is eligible.
+	OldestUnchecked time.Time
 }
 
 // OutcomeRepository remembers how an order ended before its payment existed (docs/payment.md T15):

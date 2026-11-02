@@ -22,7 +22,8 @@ type recorder struct {
 	mu        sync.Mutex
 	published []string // "<event>:<payment id>"
 	webhooks  []string
-	alerts    []string // "<alert>:<order id>"
+	alerts    []string           // "<alert>:<order id>"
+	backlogs  [][2]time.Duration // {eligible, oldest unchecked}, one per sweep
 }
 
 func (r *recorder) Publish(_ context.Context, p *payment.Payment, events []payment.Event, _ time.Time) error {
@@ -47,6 +48,12 @@ func (r *recorder) Raise(_ context.Context, a payment.Alert, orderID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.alerts = append(r.alerts, string(a)+":"+orderID)
+}
+
+func (r *recorder) Backlog(_ context.Context, eligible int, oldest time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.backlogs = append(r.backlogs, [2]time.Duration{time.Duration(eligible), oldest})
 }
 
 func (r *recorder) events() []string {

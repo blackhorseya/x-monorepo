@@ -93,6 +93,10 @@ type ExpireOutput struct {
 	Conflicts int
 	// Failures: payments whose write failed for another reason. The run still finishes the rest, then fails.
 	Failures int
+	// ReconcileEligible: payments inside their reconcile window that are owed a query (after the run).
+	ReconcileEligible int
+	// OldestUnchecked: how long the least recently looked-at of them has waited (after the run).
+	OldestUnchecked time.Duration
 	// RetentionDeleted: processed notifications deleted by retention.
 	RetentionDeleted int
 	// RetentionFailed: the retention delete failed; the run's transitions still happened.

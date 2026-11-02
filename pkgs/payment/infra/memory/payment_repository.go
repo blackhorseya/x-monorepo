@@ -122,6 +122,12 @@ func (i *PaymentRepository) list(c context.Context, limit int, keep func(payment
 // Save inserts a never-saved payment (Version 0) with version 1, or replaces a loaded one when the
 // stored version is still the loaded one. A second payment for an order, or a reused payment id, is
 // ErrDuplicateForOrder; a version that moved on is ErrStale.
+func (i *PaymentRepository) MarkSwept(context.Context, []payment.ID, time.Time) error { return nil }
+
+func (i *PaymentRepository) ReconcileBacklog(context.Context, time.Time) (payment.Backlog, error) {
+	return payment.Backlog{}, nil
+}
+
 func (i *PaymentRepository) Save(c context.Context, p *payment.Payment) error {
 	ctx := contextx.FromContext(c)
 	if err := ctx.Err(); err != nil {
