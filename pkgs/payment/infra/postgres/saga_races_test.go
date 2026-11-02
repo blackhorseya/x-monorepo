@@ -91,10 +91,44 @@ func (r *gatedRepo) Save(c context.Context, p *payment.Payment) error {
 	return r.Repository.Save(c, p)
 }
 
+// endings are the two events that end an order before its payment exists: OrderCancelled (T15 -> T14) and
+// OrderCompleted (T15 -> T14 with COMPLETED_UNPAID, docs/payment.md §3). Each race below runs for both: the payment must end
+// CANCELLED with the outcome the event names, in whichever order the handlers interleave — both ack, so nothing
+// would repair a loss.
+type ending struct {
+	name    string
+	outcome payment.Outcome
+	handle  func(e *sagaEnv, outs payment.OutcomeRepository, clock port.Clock) func(context.Context, string) error
+}
+
+var endings = []ending{
+	{"cancelled", payment.OutcomeCancelled, func(e *sagaEnv, outs payment.OutcomeRepository, clock port.Clock) func(context.Context, string) error {
+		uc := paymentbc.ProvideRecordOrderCancelled(e.repo, outs, e.ev, clock, mock.New(mock.Options{}), e.logger, e.tx, nil, e.rec)
+		return func(c context.Context, id string) error {
+			_, err := uc.Execute(c, dto.OrderEndedInput{OrderID: id})
+			return err
+		}
+	}},
+	{"completed", payment.OutcomeCompletedUnpaid, func(e *sagaEnv, outs payment.OutcomeRepository, clock port.Clock) func(context.Context, string) error {
+		uc := paymentbc.ProvideRecordOrderCompleted(e.repo, outs, e.ev, clock, mock.New(mock.Options{}), e.logger, e.tx, nil, e.rec)
+		return func(c context.Context, id string) error {
+			_, err := uc.Execute(c, dto.OrderEndedInput{OrderID: id})
+			return err
+		}
+	}},
+}
+
 // OrderConfirmed and OrderCancelled for an order with no payment yet, interleaved so that the
 // cancellation runs entirely inside the confirmation's decide-to-insert gap. Whatever the order they
 // finish in, the stored payment must be cancelled: both handlers ack, so nothing would ever repair it.
-func TestRace_ConfirmedAndCancelledWithoutAPaymentYet(t *testing.T) {
+func TestRace_ConfirmedAndEndedWithoutAPaymentYet(t *testing.T) {
+	for _, end := range endings {
+		t.Run(end.name, func(t *testing.T) { raceConfirmedThenEnded(t, end) })
+	}
+}
+
+func raceConfirmedThenEnded(t *testing.T, end ending) {
+	t.Helper()
 	e := newSagaEnv(t)
 	c := t.Context()
 	orderID, err := system.NewIDGenerator().NewID()
@@ -104,7 +138,7 @@ func TestRace_ConfirmedAndCancelledWithoutAPaymentYet(t *testing.T) {
 	gate := &gatedRepo{Repository: e.repo, reached: make(chan struct{}), resume: make(chan struct{})}
 	clock := system.NewClock()
 	confirm := paymentbc.ProvideRecordOrderConfirmed(gate, e.outs, system.NewIDGenerator(), clock, e.al, config.Payment{Window: 30 * time.Minute}, e.tx, nil, e.rec)
-	cancel := paymentbc.ProvideRecordOrderCancelled(e.repo, e.outs, e.ev, clock, mock.New(mock.Options{}), e.logger, e.tx, nil, e.rec)
+	cancel := end.handle(e, e.outs, clock)
 
 	release := sync.OnceFunc(func() { close(gate.resume) })
 	t.Cleanup(release)
@@ -120,10 +154,7 @@ func TestRace_ConfirmedAndCancelledWithoutAPaymentYet(t *testing.T) {
 	}
 
 	cancelled := make(chan error, 1)
-	go func() {
-		_, err := cancel.Execute(c, dto.OrderEndedInput{OrderID: orderID})
-		cancelled <- err
-	}()
+	go func() { cancelled <- cancel(c, orderID) }()
 	// Let the cancellation finish if nothing stops it; if it is held back by the confirmation, let the
 	// confirmation go on after a pause that is long enough for a cancellation to have run.
 	var cancelErr error
@@ -145,8 +176,8 @@ func TestRace_ConfirmedAndCancelledWithoutAPaymentYet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Status() != payment.StatusCancelled || p.Outcome() != payment.OutcomeCancelled {
-		t.Fatalf("both handlers acked but the cancellation was lost: payment=%s/%s", p.Status(), p.Outcome())
+	if p.Status() != payment.StatusCancelled || p.Outcome() != end.outcome {
+		t.Fatalf("both handlers acked but the %s event was lost: payment=%s/%s, want %s/%s", end.name, p.Status(), p.Outcome(), payment.StatusCancelled, end.outcome)
 	}
 }
 
@@ -170,7 +201,14 @@ func (r *gatedOutcomes) Record(c context.Context, orderID string, o payment.Outc
 	return r.OutcomeRepository.Record(c, orderID, o, at)
 }
 
-func TestRace_CancelledThenConfirmedWithoutAPaymentYet(t *testing.T) {
+func TestRace_EndedThenConfirmedWithoutAPaymentYet(t *testing.T) {
+	for _, end := range endings {
+		t.Run(end.name, func(t *testing.T) { raceEndedThenConfirmed(t, end) })
+	}
+}
+
+func raceEndedThenConfirmed(t *testing.T, end ending) {
+	t.Helper()
 	e := newSagaEnv(t)
 	c := t.Context()
 	orderID, err := system.NewIDGenerator().NewID()
@@ -179,16 +217,13 @@ func TestRace_CancelledThenConfirmedWithoutAPaymentYet(t *testing.T) {
 	}
 	gate := &gatedOutcomes{OutcomeRepository: e.outs, reached: make(chan struct{}), resume: make(chan struct{})}
 	clock := system.NewClock()
-	cancel := paymentbc.ProvideRecordOrderCancelled(e.repo, gate, e.ev, clock, mock.New(mock.Options{}), e.logger, e.tx, nil, e.rec)
+	cancel := end.handle(e, gate, clock)
 	confirm := paymentbc.ProvideRecordOrderConfirmed(e.repo, e.outs, system.NewIDGenerator(), clock, e.al, config.Payment{Window: 30 * time.Minute}, e.tx, nil, e.rec)
 
 	release := sync.OnceFunc(func() { close(gate.resume) })
 	t.Cleanup(release)
 	cancelled := make(chan error, 1)
-	go func() {
-		_, err := cancel.Execute(c, dto.OrderEndedInput{OrderID: orderID})
-		cancelled <- err
-	}()
+	go func() { cancelled <- cancel(c, orderID) }()
 	select {
 	case <-gate.reached:
 	case <-time.After(10 * time.Second):
@@ -219,8 +254,8 @@ func TestRace_CancelledThenConfirmedWithoutAPaymentYet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Status() != payment.StatusCancelled || p.Outcome() != payment.OutcomeCancelled {
-		t.Fatalf("both handlers acked but the cancellation was lost: payment=%s/%s", p.Status(), p.Outcome())
+	if p.Status() != payment.StatusCancelled || p.Outcome() != end.outcome {
+		t.Fatalf("both handlers acked but the %s event was lost: payment=%s/%s, want %s/%s", end.name, p.Status(), p.Outcome(), payment.StatusCancelled, end.outcome)
 	}
 }
 
