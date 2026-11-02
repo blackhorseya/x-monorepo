@@ -233,7 +233,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | 晚到的通知 × 顧客再按一次付款 × 取消 | `PENDING`→`CANCELLED` | 同一個 checkout 的重送 | `TestWebhook_ALateNotificationFindsItsPaymentAfterTheBuyerStartsAgain` |
 | 補查的清單比 batch 長、查詢失敗佔隊頭 | `EXPIRED`／`CANCELLED` | 有界掃描 | `TestSweep_ReconcileReachesEveryPaymentWhenEligibleExceedsTheBatch`、`TestSweep_AFailingQueryDoesNotHoldTheFrontOfTheDueListOnPostgres` |
 
-**其餘格子**：沒有「兩個 handler 在同一列上互搶」可言的組合不在上表——ordering 側見 `TestPaymentEvents_RacesOnPostgres`；`OrderConfirmed` 重送由 `unique(order_id)` 擋（`TestRepository_*`）；webhook 重送由 `unique(provider, provider_event_id)` 擋（kind ③ 與 `TestReceiveWebhook_*`）。**款項早於 `OrderCancelled` 到（T3→T10）與其反向**由上面第二列（收款通知 × 取消）涵蓋，不再只是「組件分段證據」。
+**其餘格子**：沒有「兩個 handler 在同一列上互搶」可言的組合不在上表——ordering 側見 `TestPaymentEvents_RacesOnPostgres`；`OrderConfirmed` 重送由 `unique(order_id)` 擋（`TestPaymentRepository_Postgres` 的 `ErrDuplicateForOrder`）；webhook 重送由 `unique(provider, provider_event_id)` 擋（kind ③ 與 `TestWebhook_SignatureIsTheOnlyCredential` 的重送）。**款項早於 `OrderCancelled` 到（T3→T10）與其反向**由上面第二列（收款通知 × 取消）涵蓋，不再只是「組件分段證據」。
 
 
 ## 6. 發起方式與 RPC
