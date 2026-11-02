@@ -280,7 +280,7 @@ test("returning to the tab while another row's request is in flight still looks 
   });
 
   await page.goto(`/orders?customer=${customer}`);
-  const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: expired.slice(0, 8) }) });
+  const row = page.getByRole("row").filter({ has: page.locator(`a[href$="/orders/${expired}"]`) });
   await expect(row.getByText("none yet")).toBeVisible();
 
   await page.clock.fastForward(40_000); // the expired row's wait is over

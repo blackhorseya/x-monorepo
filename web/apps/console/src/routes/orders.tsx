@@ -327,7 +327,7 @@ function OrderRow({ order, reservation, reservationError }: { order: Order; rese
     <TableRow>
       <TableCell className="font-mono text-xs">
         <Link to="/orders/$id" params={{ id: order.id }} title={order.id} className="underline">
-          {order.id.slice(0, 8)}
+          {order.id.slice(-8)}
         </Link>
       </TableCell>
       <TableCell>{order.customerId}</TableCell>
