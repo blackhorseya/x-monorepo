@@ -55,7 +55,7 @@ func TestPoisonAndPrune_ServePaymentTables(t *testing.T) {
 		}
 	}
 	const refunded = "payment.v1.PaymentRefunded" // published-only: no consumer group has a cursor on it
-	for _, tbl := range []string{"payment.events_poison", "payment.inbox", eventbus.TableName(refunded)} {
+	for _, tbl := range []string{"payment.events_poison", "payment.inbox", "payment.webhook_events", eventbus.TableName(refunded)} {
 		if err := db.WithContext(c).Exec("TRUNCATE " + tbl).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -78,6 +78,13 @@ func TestPoisonAndPrune_ServePaymentTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.WithContext(c).Exec("INSERT INTO payment.inbox (message_id, consumed_at) VALUES (?, now() - interval '48 hours')", watermill.NewUUID()).Error; err != nil {
+		t.Fatal(err)
+	}
+	// payment.webhook_events is not prune's table (docs/payment.md §7, Webhook 8: payment-rpc expire owns its
+	// retention, because the table is the memory that makes a redelivered notification a no-op). A processed
+	// notification far older than any cut-off must survive both prune runs below.
+	if err := db.WithContext(c).Exec(`INSERT INTO payment.webhook_events (provider, provider_event_id, event_type, body, received_at, processed_at)
+		VALUES ('mock', 'evt-old', 'payment.captured', '\x7b7d', now() - interval '400 days', now() - interval '400 days')`).Error; err != nil {
 		t.Fatal(err)
 	}
 	run := func(cmdName string, args ...string) (string, error) {
@@ -106,6 +113,10 @@ func TestPoisonAndPrune_ServePaymentTables(t *testing.T) {
 	}
 	if out, err := run("prune", "--older-than", "24h", "--unconsumed", "payment"); err != nil || !strings.Contains(out, "DELETED") {
 		t.Fatalf("prune payment = %q, %v", out, err)
+	}
+	var kept int64
+	if err := db.WithContext(c).Raw("SELECT count(*) FROM payment.webhook_events WHERE provider_event_id = 'evt-old'").Scan(&kept).Error; err != nil || kept != 1 {
+		t.Fatalf("prune touched payment.webhook_events: %d rows of the old notification left, %v", kept, err)
 	}
 	var left int64
 	if err := db.WithContext(c).Raw("SELECT (SELECT count(*) FROM payment.inbox) + (SELECT count(*) FROM " + eventbus.TableName(refunded) + ")").Scan(&left).Error; err != nil || left != 0 {
