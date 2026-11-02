@@ -8,3 +8,5 @@ secrets:
 paymentRpc:
   enabled: true
   config: { mock_control: "true" }
+config:
+  ordering: { require_payment: false }

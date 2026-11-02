@@ -8,3 +8,4 @@ config:
 secrets:
   postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
   catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+paymentRpc: { enabled: false }   # off ON PURPOSE while the switch stays on: the refusal under test

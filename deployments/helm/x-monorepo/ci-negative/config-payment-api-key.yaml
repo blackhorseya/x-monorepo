@@ -3,6 +3,7 @@
 # in the release-wide ConfigMap every pod reads it would be everywhere, and the worker has no use for it.
 paymentRpc: { enabled: true }
 config:
+  ordering: { require_payment: false }
   payment: { api_key: "payment-rpc-key-0123456789ab" }
 secrets:
   postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"

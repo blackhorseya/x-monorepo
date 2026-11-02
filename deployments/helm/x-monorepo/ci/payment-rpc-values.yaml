@@ -12,6 +12,7 @@ secrets:
     apiKey: "payment-rpc-key-0123456789ab"
     mockWebhookSecret: "mock-webhook-secret-0123456789"
 config:
+  ordering: { require_payment: true }   # payment on, explicit: auth is optional below
   otel: { endpoint: otel-collector:4317, service_name: x-monorepo-rpc }
   worker: { broker: redis, consumer_group: worker }
   auth:

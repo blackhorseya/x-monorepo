@@ -4,6 +4,7 @@ secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
   catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
 config:
+  ordering: { require_payment: false }
   auth:
     mode: required
     oidc:
@@ -15,3 +16,4 @@ config:
           audience: x-console
           mapping: bound
           allow_insecure_issuer: true
+paymentRpc: { enabled: false }
