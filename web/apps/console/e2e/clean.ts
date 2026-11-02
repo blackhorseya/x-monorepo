@@ -35,6 +35,8 @@ export function probe(host: string, port: number, timeoutMs = 2_000, connect: Co
 
 /** Bind errors that mean this host has no such loopback address: nothing can be listening on it. */
 const NO_ADDRESS = new Set(["EADDRNOTAVAIL", "EAFNOSUPPORT", "EPROTONOSUPPORT"]);
+/** The one definition of "this host has no such address", for the checker and for the selftest that skips on it. */
+export const isNoAddress = (code: string | undefined): boolean => code !== undefined && NO_ADDRESS.has(code);
 
 /**
  * Whether ::1 exists here. Decided by binding it (the host's own answer), not by reading a connect
@@ -45,7 +47,7 @@ export function hasIPv6Loopback(): Promise<{ available: true } | { available: fa
   return new Promise((resolve, reject) => {
     const s = createServer();
     s.once("error", (err: NodeJS.ErrnoException) => {
-      if (err.code && NO_ADDRESS.has(err.code)) resolve({ available: false, code: err.code });
+      if (err.code && isNoAddress(err.code)) resolve({ available: false, code: err.code });
       else reject(err);
     });
     s.listen({ port: 0, host: "::1", ipv6Only: true }, () => s.close(() => resolve({ available: true })));

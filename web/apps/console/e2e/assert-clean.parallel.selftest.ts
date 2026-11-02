@@ -11,8 +11,12 @@ const children: ChildProcess[] = [];
 const killGroup = (c: ChildProcess) => {
   try {
     if (c.pid) process.kill(-c.pid, "SIGKILL");
-  } catch {
-    // already gone
+  } catch (e) {
+    // ESRCH: the group is gone. macOS answers EPERM for a group whose members have all exited but are not yet
+    // reaped, so EPERM counts as gone only once the child we started has exited; anything else is a real failure.
+    const code = (e as NodeJS.ErrnoException).code;
+    const exited = c.exitCode !== null || c.signalCode !== null;
+    if (code !== "ESRCH" && !(code === "EPERM" && exited)) throw e;
   }
 };
 after(() => children.forEach(killGroup));

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { EventEmitter } from "node:events";
-import { type Connect, classifyConnectError, hasIPv6Loopback, probe } from "./clean.ts";
+import { type Connect, classifyConnectError, hasIPv6Loopback, isNoAddress, probe } from "./clean.ts";
 import { derivePorts } from "./ports.ts";
 
 // The cleanup check (e2e/assert-clean.ts) must fail while ANYTHING still listens on a port the e2e stack
@@ -60,7 +60,8 @@ async function checker(): Promise<{ code: number; out: string }> {
 function listen(host: string, port: number): Promise<Server> {
   return new Promise((resolve, reject) => {
     const s = createServer();
-    s.once("error", (err: NodeJS.ErrnoException) => reject(new Error(`${host}:${port} of the private pair was taken after it was chosen (${err.code}); rerun`, { cause: err })));
+    // The code stays on the error: the caller decides what it means (taken vs. no such address).
+    s.once("error", (err: NodeJS.ErrnoException) => reject(Object.assign(new Error(`${host}:${port} of the private pair could not be bound after it was chosen (${err.code}); rerun`, { cause: err }), { code: err.code })));
     s.listen({ port, host, ipv6Only: host === "::1" || host === "::" }, () => resolve(s));
   });
 }
@@ -87,8 +88,12 @@ const viteChildren: ChildProcess[] = [];
 const killGroup = (c: ChildProcess, signal: NodeJS.Signals) => {
   try {
     if (c.pid) process.kill(-c.pid, signal);
-  } catch {
-    // already gone
+  } catch (e) {
+    // ESRCH: the group is gone. macOS answers EPERM for a group whose members have all exited but are not yet
+    // reaped, so EPERM counts as gone only once the child we started has exited; anything else is a real failure.
+    const code = (e as NodeJS.ErrnoException).code;
+    const exited = c.exitCode !== null || c.signalCode !== null;
+    if (code !== "ESRCH" && !(code === "EPERM" && exited)) throw e;
   }
 };
 after(() => viteChildren.forEach((c) => killGroup(c, "SIGKILL")));
@@ -110,7 +115,11 @@ describe("assert-clean sees live listeners", () => {
     try {
       s = await listen("::1", p.authRpcPort);
     } catch (e) {
-      t.skip(`no IPv6 loopback on this host (${(e as NodeJS.ErrnoException).code}): nothing can listen on ::1`);
+      // Only a host that has no ::1 may skip (the checker's own definition); a port taken after it was
+      // chosen, or any other error, is a failure with its reason.
+      const code = (e as NodeJS.ErrnoException).code;
+      if (!isNoAddress(code)) throw e;
+      t.skip(`no IPv6 loopback on this host (${code}): nothing can listen on ::1`);
       return;
     }
     await close(s);
