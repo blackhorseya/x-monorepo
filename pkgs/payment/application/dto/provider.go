@@ -11,6 +11,11 @@ type ProviderCheckoutInput struct {
 	PaymentID string
 	OrderID   string
 	Amount    MoneyOutput
+	// ExpiresAt is when the checkout must stop being payable: the payment's own window end. One payment has
+	// one checkout for its whole window (docs/payment.md T2), so the page may not end earlier (the buyer
+	// could not pay for the rest of the window and could not reopen) nor outlive it. Zero = the provider's
+	// own validity.
+	ExpiresAt time.Time
 }
 
 // ProviderCheckoutOutput is the hosted page the provider opened. Card data is typed there; it never

@@ -70,6 +70,45 @@ func TestRun_ReconcileWindowMustOutlastCheckoutPages(t *testing.T) {
 	}
 }
 
+// docs/payment.md T2: one payment has one checkout for its whole window, so payment.window must fit in
+// what the provider can keep valid (its checkout validity). Judged on the final effective settings, at
+// start-up, with or without --require-durable.
+func TestRun_PaymentWindowMustFitInOneCheckout(t *testing.T) {
+	for _, flags := range [][]string{{"serve"}, {"serve", "--require-durable"}} {
+		for name, c := range map[string]struct {
+			window, ttl string
+			refused     bool
+		}{
+			"defaults agree":               {"", "", false},
+			"window equal to the pages":    {"30m", "30m", false},
+			"window one second too long":   {"30m1s", "30m", true},
+			"window longer than the pages": {"1h", "15m", true},
+			"short window, long pages":     {"5m", "30m", false},
+		} {
+			t.Run(strings.Join(flags, " ")+": "+name, func(t *testing.T) {
+				env := durableEnv(t, nil)
+				if c.window != "" {
+					env["APP_PAYMENT_WINDOW"] = s(c.window)
+				}
+				if c.ttl != "" {
+					env["APP_PAYMENT_MOCK_CHECKOUT_TTL"] = s(c.ttl)
+				}
+				out := start(t, flags, env)
+				if c.refused {
+					if out.served || out.err == nil || !strings.Contains(out.err.Error(), "payment.window") {
+						t.Fatalf("run = %+v, want a refusal naming payment.window", out)
+					}
+
+					return
+				}
+				if !out.served || out.err != nil {
+					t.Fatalf("run = %+v, want a clean start and stop", out)
+				}
+			})
+		}
+	}
+}
+
 // Only the mock exists; any other provider name fails closed instead of falling back to it.
 func TestRun_UnknownProviderIsRefused(t *testing.T) {
 	out := start(t, []string{"serve"}, durableEnv(t, map[string]*string{"APP_PAYMENT_PROVIDER": s("stripe")}))

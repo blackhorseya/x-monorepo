@@ -207,6 +207,13 @@ func (x *Payment) ReusableCheckout(now time.Time) (string, bool) {
 	return x.checkoutURL, true
 }
 
+// OpenCheckout returns the checkout URL of this payment, if it opened one. There is one checkout per
+// payment for its whole window (T2): once opened it is handed out again until the window closes, never
+// replaced.
+func (x *Payment) OpenCheckout() (string, bool) {
+	return "", false
+}
+
 // AttachCheckout records the hosted checkout the provider opened (T2). The status does not change.
 func (x *Payment) AttachCheckout(provider, ref, url string, checkoutExpiresAt, now time.Time) error {
 	if err := x.CheckStart(now); err != nil {

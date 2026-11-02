@@ -77,6 +77,29 @@ func TestCheckoutLifecycle(t *testing.T) {
 	}
 }
 
+// The caller names when the checkout ends (the payment's window); the provider honours it up to the longest
+// page it can keep valid, and refuses rather than silently shortening it.
+func TestCheckoutEndsWhenTheCallerSays(t *testing.T) {
+	c := context.Background()
+	now := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	p := mock.New(mock.Options{CheckoutTTL: 5 * time.Minute, Now: func() time.Time { return now }})
+	in := dto.ProviderCheckoutInput{PaymentID: "pay-1", OrderID: "ord-1", Amount: money(t, 1000)}
+
+	in.ExpiresAt = now.Add(3 * time.Minute)
+	co, err := p.CreateCheckout(c, in)
+	if err != nil || !co.ExpiresAt.Equal(now.Add(3*time.Minute)) {
+		t.Fatalf("a window inside the validity: %+v, %v; want it to end at +3m", co, err)
+	}
+	in.ExpiresAt = now.Add(5 * time.Minute)
+	if co, err = p.CreateCheckout(c, in); err != nil || !co.ExpiresAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("a window exactly the validity: %+v, %v; want it to end at +5m", co, err)
+	}
+	in.ExpiresAt = now.Add(5*time.Minute + time.Second)
+	if _, err = p.CreateCheckout(c, in); !errors.Is(err, port.ErrProviderUnavailable) {
+		t.Fatalf("a window longer than the validity: %v, want it refused", err)
+	}
+}
+
 func TestUnknownReferencesAreUnavailable(t *testing.T) {
 	c := context.Background()
 	p := mock.New(mock.Options{})

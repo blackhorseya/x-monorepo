@@ -150,6 +150,45 @@ func TestStartPayment_RepeatCallsReuseTheCheckoutUntilItExpires(t *testing.T) {
 	}
 }
 
+// seenCheckouts records what StartPayment asks of the provider.
+type seenCheckouts struct {
+	port.PaymentProvider
+	asked []dto.ProviderCheckoutInput
+}
+
+func (s *seenCheckouts) CreateCheckout(c context.Context, in dto.ProviderCheckoutInput) (dto.ProviderCheckoutOutput, error) {
+	s.asked = append(s.asked, in)
+
+	return s.PaymentProvider.CreateCheckout(c, in)
+}
+
+// T2: one payment has ONE checkout for its whole window. It is opened to end with the window, and a later
+// StartPayment hands out the same URL at any moment of the window, long after a shorter page would have
+// ended: a second checkout could be paid too, and nothing defines how the second payment would be refunded.
+func TestStartPayment_OneCheckoutForTheWholeWindow(t *testing.T) {
+	e := newEnv(t, nil)
+	e.seed(t)
+	c := context.Background()
+	seen := &seenCheckouts{PaymentProvider: e.prov}
+	start := usecase.NewStartPayment(e.repo, seen, memory.NewTransactor(), e.clock)
+
+	first, err := start.Execute(c, startIn(owner, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen.asked) != 1 || !seen.asked[0].ExpiresAt.Equal(t0.Add(30*time.Minute)) {
+		t.Fatalf("the provider was asked %+v, want one checkout ending with the window (+30m)", seen.asked)
+	}
+
+	for _, after := range []time.Duration{9 * time.Minute, 11 * time.Minute, 29 * time.Minute} {
+		e.clock.Advance(after - e.clock.Now().Sub(t0))
+		again, err := start.Execute(c, startIn(owner, false))
+		if err != nil || again.CheckoutURL != first.CheckoutURL || len(seen.asked) != 1 {
+			t.Fatalf("at +%s: url %q (first %q), %d checkouts asked, err %v; want the same URL and still 1 checkout", after, again.CheckoutURL, first.CheckoutURL, len(seen.asked), err)
+		}
+	}
+}
+
 func TestStartPayment_Refusals(t *testing.T) {
 	t.Run("window closed: refused before the provider is asked", func(t *testing.T) {
 		e := newEnv(t, nil)

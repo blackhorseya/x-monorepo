@@ -477,6 +477,31 @@ func TestStartPaymentCheckout(t *testing.T) {
 	}
 }
 
+// One checkout per payment for its whole window (T2): once opened it is handed out again at any time
+// the payment can still be started, including after the moment a shorter page would have ended.
+func TestOpenCheckout_IsTheOnlyOneForTheWholeWindow(t *testing.T) {
+	x := fixture(t, P, none, false)
+	if url, ok := x.OpenCheckout(); ok || url != "" {
+		t.Fatalf("a payment that never opened a checkout has none: %q %v", url, ok)
+	}
+	if err := x.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", expires, t0); err != nil {
+		t.Fatal(err)
+	}
+	if url, ok := x.OpenCheckout(); !ok || url != "https://pay.example/c/1" {
+		t.Fatalf("OpenCheckout = %q %v, want the URL attached", url, ok)
+	}
+}
+
+// A page that ends before the window strands the buyer for the rest of it (there is no second page); one
+// that outlives it can still take money after the payment expired. The provider is asked for exactly the
+// window, and anything shorter is refused.
+func TestAttachCheckout_RefusesAPageThatEndsBeforeTheWindow(t *testing.T) {
+	x := fixture(t, P, none, false)
+	if err := x.AttachCheckout("mock", "ref-1", "https://pay.example/c/1", expires.Add(-time.Second), t0); !errors.Is(err, payment.ErrInvalidCheckout) {
+		t.Fatalf("AttachCheckout = %v, want %v", err, payment.ErrInvalidCheckout)
+	}
+}
+
 func TestAttachCheckout_Refusals(t *testing.T) {
 	ends := t0.Add(10 * time.Minute)
 	cases := map[string]struct {

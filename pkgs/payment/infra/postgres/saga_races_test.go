@@ -294,10 +294,11 @@ func TestSweep_ReconcileReachesEveryPaymentWhenEligibleExceedsTheBatch(t *testin
 	}
 }
 
-// Pay at the first checkout, reopen a second, cancel, then the first checkout's notification arrives:
-// the money is real and the order is cancelled, so the payment must go to REFUNDING, not be dropped as
-// an orphan because its reference is no longer the current one.
-func TestWebhook_AnOldCheckoutsPaymentStillFindsItsOrderAfterAReopen(t *testing.T) {
+// Pay at the checkout, ask to start the payment again once a shorter page would have ended, cancel, then
+// the notification of that payment arrives late: there is ONE checkout for the whole window, so the second
+// call hands out the same reference and the late notification finds its payment. The money is real and the
+// order is cancelled, so it goes to REFUNDING, not dropped as an orphan.
+func TestWebhook_ALateNotificationFindsItsPaymentAfterTheBuyerStartsAgain(t *testing.T) {
 	e := newSagaEnv(t)
 	c := t.Context()
 	clock := &sweepClock{now: t0}
@@ -321,12 +322,12 @@ func TestWebhook_AnOldCheckoutsPaymentStillFindsItsOrderAfterAReopen(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock.now = clock.now.Add(2 * time.Minute) // the first URL has expired; the buyer reopens
+	clock.now = clock.now.Add(2 * time.Minute) // a page of the old 15 minutes would have ended; the buyer asks again
 	if _, err = start.Execute(c, dto.StartPaymentInput{OrderID: p.OrderID(), CustomerID: "cust"}); err != nil {
 		t.Fatal(err)
 	}
-	if p, err = e.repo.FindByOrderID(c, p.OrderID()); err != nil || p.ProviderRef() == old {
-		t.Fatalf("fixture: the reference did not change: %v", err)
+	if p, err = e.repo.FindByOrderID(c, p.OrderID()); err != nil || p.ProviderRef() != old {
+		t.Fatalf("StartPayment opened a second checkout (%q after %q): %v", p.ProviderRef(), old, err)
 	}
 
 	cancel := paymentbc.ProvideRecordOrderCancelled(e.repo, e.outs, e.ev, clock, prov, e.logger, e.tx, nil, e.rec)
