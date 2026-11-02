@@ -276,7 +276,7 @@ func (i *WebhookRepository) DeleteProcessedBefore(c context.Context, cutoff time
 	deleted := 0
 	for _, key := range i.order {
 		rec := i.data[key]
-		if deleted < limit && !rec.ProcessedAt.IsZero() && rec.ProcessedAt.Before(cutoff) && !(i.underReview != nil && i.underReview(rec.Provider, rec.Ref)) {
+		if deleted < limit && !rec.ProcessedAt.IsZero() && rec.ProcessedAt.Before(cutoff) && (i.underReview == nil || !i.underReview(rec.Provider, rec.Ref)) {
 			delete(i.data, key)
 			deleted++
 
