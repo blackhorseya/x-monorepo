@@ -1,0 +1,10 @@
+# expect: paymentRpc.config.mock_control
+# The mock control entry is a boolean switch, written into payment-rpc's config as given: "true" in quotes is a string
+# the binary would not read as the switch.
+secrets:
+  postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc: { apiKey: "payment-rpc-key-0123456789ab", mockWebhookSecret: "mock-webhook-secret-0123456789" }
+paymentRpc:
+  enabled: true
+  config: { mock_control: "true" }

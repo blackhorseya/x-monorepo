@@ -1,0 +1,17 @@
+# Profile 11: ordering.require_payment ON (docs/payment.md §8, §9 S6): orders that become CONFIRMED wait for payment, so
+# payment-rpc is on and auth is on (with auth off nobody can pay: the chart refuses). check.py asserts the worker is told
+# where payment-rpc is (the address only, never the service key) and that the payment-rpc ConfigMap carries
+# mock_control as asked (on here, the kind profile's setting; off in every other profile).
+secrets:
+  postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
+  apiKeys: "console=console-key-0123456789abc:admin"
+  catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
+  paymentRpc:
+    apiKey: "payment-rpc-key-0123456789ab"
+    mockWebhookSecret: "mock-webhook-secret-0123456789"
+config:
+  auth: { mode: required }
+  ordering: { require_payment: true }
+paymentRpc:
+  enabled: true
+  config: { mock_control: true }
