@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -201,9 +202,11 @@ func repoRoot(dir string) string {
 // merely shares the name is not it.
 const pgtestDir = "pkgs/platform/postgres/pgtest/"
 
-// exemptFromDirectPool: only the canonical pgtest package, then the allowlist.
+// exemptFromDirectPool: only files directly in the canonical pgtest package (its
+// parent directory equals pgtestDir exactly: a child package is another package),
+// then the allowlist.
 func exemptFromDirectPool(rel string, allow []Allow) bool {
-	if strings.HasPrefix(rel, pgtestDir) {
+	if path.Dir(rel)+"/" == pgtestDir {
 		return true
 	}
 	for _, a := range allow {
@@ -288,15 +291,10 @@ func isOpenerSelector(s *ast.SelectorExpr, imports map[string]string) bool {
 	if !ok {
 		return false
 	}
+	// Imports are file-scoped: a name this file does not import is a local value or a
+	// field, never a package, so only the file's own imports are believed.
 	path, imported := imports[x.Name]
 	if !imported {
-		// Not an import of this file (a fixture without imports, or a local value): fall back
-		// to the usual package names so that the check errs on reporting.
-		for p, names := range openerPackages {
-			if defaultName(p) == x.Name && (names["*"] || names[s.Sel.Name]) {
-				return true
-			}
-		}
 		return false
 	}
 	names := openerPackages[path]
