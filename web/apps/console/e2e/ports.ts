@@ -7,18 +7,19 @@ export const oidcTmpPrefix = (idpPort: number) => `x-monorepo-e2e-oidc-${idpPort
 
 /**
  * The "payment" project's own stack (e2e/payment/stack-server.ts, playwright.payment.config.ts): the rpc it talks
- * to, its catalog-rpc, payment-rpc serve, the wrapper's control port and the console's preview. Offsets 60, 70
- * and 71 are free of the other projects' (10, 20, 30, 31, and the catalog-rpc of each at +40).
+ * to, its catalog-rpc, payment-rpc serve, the wrapper's control port and the console's preview. The offsets
+ * (80, 120, 90, 91; web +30) collide with none of the others: rpc +0 +1 +10 +20, their catalog-rpc +40 +41 +50 +60,
+ * the IdP +30 +31, web +0 +1 +10 +20 (a collision makes e2e/assert-clean.selftest.ts find no free pair).
  */
 export function paymentPorts(env: Record<string, string | undefined> = process.env) {
   const rpcPort = Number(env.E2E_RPC_PORT ?? 18091);
   const webPort = Number(env.E2E_WEB_PORT ?? 4173);
-  const rpc = rpcPort + 60;
+  const rpc = rpcPort + 80;
   return {
     rpc,
     catalog: rpc + 40, // the catalog-rpc of that rpc, like catalogPort() below
-    serve: rpcPort + 70,
-    control: rpcPort + 71,
+    serve: rpcPort + 90,
+    control: rpcPort + 91,
     web: webPort + 30,
   };
 }
