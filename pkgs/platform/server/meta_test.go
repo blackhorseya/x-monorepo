@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -59,8 +60,12 @@ func TestMeta_GeneratesRequestIDAndSetsItOnErrors(t *testing.T) {
 			if !errors.As(err, &ce) {
 				t.Fatalf("want *connect.Error, got %T", err)
 			}
-			if ce.Meta().Get(RequestIDHeader) == "" {
+			rid := ce.Meta().Get(RequestIDHeader)
+			if rid == "" {
 				t.Fatal("generated request id missing on error")
+			}
+			if u, err := uuid.Parse(rid); err != nil || u.Version() != 7 {
+				t.Fatalf("generated request id %q: version %d, %v; want v7", rid, u.Version(), err)
 			}
 			if got := ce.Meta().Get(TraceIDHeader); got != tid.String() {
 				t.Fatalf("X-Trace-Id = %q, want %s", got, tid)

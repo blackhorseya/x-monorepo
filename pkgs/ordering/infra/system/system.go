@@ -3,12 +3,11 @@ package system
 
 import (
 	"context"
-	"crypto/rand"
-	"fmt"
 	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
 )
 
 var (
@@ -16,7 +15,8 @@ var (
 	_ port.Clock       = (*Clock)(nil)
 )
 
-// UUIDGenerator generates RFC 4122 v4 UUIDs.
+// UUIDGenerator generates UUID v7 ids (see idgen: opaque, never a credential,
+// never an ordering on their own).
 type UUIDGenerator struct{}
 
 func NewUUIDGenerator() *UUIDGenerator { return &UUIDGenerator{} }
@@ -27,14 +27,7 @@ func (i *UUIDGenerator) NewID(c context.Context) (string, error) {
 		return "", err
 	}
 
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+	return idgen.New()
 }
 
 // Clock returns UTC wall-clock time.

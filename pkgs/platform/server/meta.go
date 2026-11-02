@@ -6,8 +6,9 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
 )
 
 // Response metadata lives in headers, not in the proto messages: Connect, gRPC
@@ -30,7 +31,7 @@ func RequestID(c context.Context) string {
 	return id
 }
 
-// NewMetaInterceptor assigns a request id (client-provided or fresh UUID), keeps
+// NewMetaInterceptor assigns a request id (client-provided or a fresh UUID v7), keeps
 // it in the context for logging, and sets X-Request-Id on every response and
 // X-Trace-Id on every response that has a trace (none when otel.endpoint is
 // empty) — success or error. Place it after otelconnect so the span exists.
@@ -39,7 +40,12 @@ func NewMetaInterceptor() connect.UnaryInterceptorFunc {
 		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			rid := req.Header().Get(RequestIDHeader)
 			if rid == "" || len(rid) > maxRequestIDLen {
-				rid = uuid.NewString()
+				var err error
+				if rid, err = idgen.New(); err != nil {
+					// The system's randomness source failed. There is no v4 fallback:
+					// every new id is v7, so fail the request as internal.
+					return nil, connect.NewError(connect.CodeInternal, errors.New("internal error"))
+				}
 			}
 			var tid string
 			if sc := trace.SpanContextFromContext(c); sc.IsValid() {
