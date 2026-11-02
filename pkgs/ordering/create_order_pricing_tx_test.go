@@ -3,9 +3,11 @@ package ordering_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"gorm.io/gorm"
 
@@ -124,6 +126,11 @@ func newPricingTxFixture(t *testing.T, probe func(c context.Context, db *gorm.DB
 	return pricingTxFixture{create: uc.Execute, log: log, prices: prices}
 }
 
+// customerOf makes a customer of this call's own. The database outlives a test (and a round of
+// -count=2), and an order is looked up by (customer, key), so a fixed customer would find the
+// previous round's order.
+func customerOf(prefix string) string { return prefix + "-" + uuid.NewString() }
+
 func createA(customer, key string) dto.CreateOrderInput {
 	return dto.CreateOrderInput{CustomerID: customer, IdempotencyKey: key, Items: []dto.OrderLine{{SKU: "A", Quantity: 1}}}
 }
@@ -137,7 +144,7 @@ func TestCreateOrder_PricesBeforeTheTransactionOpens(t *testing.T) {
 		}
 	})
 
-	if _, err := f.create(context.Background(), createA("c-ptx-order", "")); err != nil {
+	if _, err := f.create(context.Background(), createA(customerOf("c-ptx-order"), "")); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.log.snapshot(); len(got) != 2 || got[0] != "quote" || got[1] != "tx" {
@@ -163,7 +170,7 @@ func TestCreateOrder_HoldsNoConnectionWhilePricing(t *testing.T) {
 		}
 	})
 
-	if _, err := f.create(context.Background(), createA("c-ptx-conn", "")); err != nil {
+	if _, err := f.create(context.Background(), createA(customerOf("c-ptx-conn"), "")); err != nil {
 		t.Fatal(err)
 	}
 	if f.log.count("quote") != 1 {
@@ -183,7 +190,8 @@ func TestCreateOrder_ReplayOpensNoTransactionAndAsksNoCatalog(t *testing.T) {
 	f := newPricingTxFixture(t, nil)
 	c := context.Background()
 
-	first, err := f.create(c, createA("c-ptx-replay", "k-replay"))
+	customer := customerOf("c-ptx-replay")
+	first, err := f.create(c, createA(customer, "k-replay"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +199,7 @@ func TestCreateOrder_ReplayOpensNoTransactionAndAsksNoCatalog(t *testing.T) {
 		t.Fatalf("first create events = %v, want [quote tx]", got)
 	}
 
-	again, err := f.create(c, createA("c-ptx-replay", "k-replay"))
+	again, err := f.create(c, createA(customer, "k-replay"))
 	if err != nil || !again.Replayed || again.ID != first.ID {
 		t.Fatalf("replay = %+v, %v; want the original order, replayed", again, err)
 	}
@@ -200,7 +208,7 @@ func TestCreateOrder_ReplayOpensNoTransactionAndAsksNoCatalog(t *testing.T) {
 	}
 
 	// Reuse with other lines is refused from the same early read.
-	other := createA("c-ptx-replay", "k-replay")
+	other := createA(customer, "k-replay")
 	other.Items[0].Quantity = 2
 	if _, err := f.create(c, other); !errors.Is(err, order.ErrIdempotencyKeyReused) {
 		t.Fatalf("reuse err = %v, want ErrIdempotencyKeyReused", err)
@@ -216,7 +224,7 @@ func TestCreateOrder_UnquotableSKUOpensNoTransactionAndKeepsTheKey(t *testing.T)
 	f := newPricingTxFixture(t, nil)
 	c := context.Background()
 
-	bad := createA("c-ptx-key", "k-key")
+	bad := createA(customerOf("c-ptx-key"), "k-key")
 	bad.Items[0].SKU = "NOPE"
 	if _, err := f.create(c, bad); !errors.Is(err, order.ErrUnknownSKU) {
 		t.Fatalf("err = %v, want ErrUnknownSKU", err)
@@ -229,5 +237,21 @@ func TestCreateOrder_UnquotableSKUOpensNoTransactionAndKeepsTheKey(t *testing.T)
 	out, err := f.create(c, bad)
 	if err != nil || out.Replayed {
 		t.Fatalf("retry with the same key = %+v, %v; want a new order", out, err)
+	}
+}
+
+// The tests above run against the one database of the test binary, which keeps what they write. `go test
+// -count=2` (or a rerun against the same TEST_DATABASE_URL) runs them again over the first round's orders, so
+// each must make its own customer: a fixed customer and key find the first round's order and answer with a
+// replay. This runs every test of the file twice in this process, which is what -count=2 does, without a
+// subprocess.
+func TestCreateOrder_PricingTxTestsRerunOverTheSameDatabase(t *testing.T) {
+	for round := 1; round <= 2; round++ {
+		t.Run(fmt.Sprintf("round%d", round), func(t *testing.T) {
+			TestCreateOrder_PricesBeforeTheTransactionOpens(t)
+			TestCreateOrder_HoldsNoConnectionWhilePricing(t)
+			TestCreateOrder_ReplayOpensNoTransactionAndAsksNoCatalog(t)
+			TestCreateOrder_UnquotableSKUOpensNoTransactionAndKeepsTheKey(t)
+		})
 	}
 }
