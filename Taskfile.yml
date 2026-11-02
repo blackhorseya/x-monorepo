@@ -344,7 +344,7 @@ tasks:
 
   helm-kind:
     deps: [helm-kind-up]
-    desc: 'install the chart for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api); then payment.sh (the three payment-rpc workloads, the webhook-only Ingress and its rate limit, orders unaffected with payment-rpc stopped). helm-kind-down deletes the cluster'
+    desc: 'install the chart for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api); then payment.sh (the three payment-rpc workloads, the webhook-only Ingress and its rate limit, orders unaffected with payment-rpc stopped); then payment-flow.sh (the whole payment flow with ordering.require_payment on: every race of docs/payment.md §5, the TTL sequence, the switch both ways, payment-rpc stopped). helm-kind-down deletes the cluster'
     vars:
       NS: x-monorepo
       CHART: deployments/helm/x-monorepo
@@ -357,6 +357,8 @@ tasks:
       - '{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
       # payment-rpc: serve / consume / an expire run, the webhook-only Ingress (ingress-nginx is installed there) with its rate limit, and orders reaching CONFIRMED with payment-rpc stopped. Restores the release.
       - '{{.KIND_DIR}}/payment.sh {{.NS}} x-monorepo'
+      # the whole payment flow with ordering.require_payment ON (kind/payment-flow-values.yaml: auth required, two static keys, payment-rpc's mock control): create -> reserved -> CONFIRMED -> StartPayment -> paid -> webhook -> COMPLETED, delayed / repeated / foreign notifications, the customer cancelling and the window running out with the money arriving late (refunded), the reservation-TTL sequence with the provider down, the switch on -> off -> on, payment-rpc stopped. Restores the release.
+      - '{{.KIND_DIR}}/payment-flow.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
       # catalog-rpc on a Secret that cannot make it durable: no start (missing key) / exit (empty URL). Restores the release.
       - '{{.KIND_DIR}}/negative.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
       # rpc without its catalog: the wait is best effort, CreateOrder / SetStock answer UNAVAILABLE and write nothing, recovery needs no restart.

@@ -243,7 +243,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_helm_kind == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # p90 289s, max 382s (last 11 days)
+    timeout-minutes: 30 # was 15 (p90 289s, max 382s, last 11 days); payment-flow.sh (#367 slice 6) adds the whole payment flow, minutes of real waiting
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
