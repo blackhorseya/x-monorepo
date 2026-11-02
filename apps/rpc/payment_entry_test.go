@@ -571,3 +571,54 @@ func TestPaymentEntry_StartupMatrix(t *testing.T) {
 		})
 	}
 }
+
+func (h *payHarness) get(t *testing.T, path string) (int, string) {
+	t.Helper()
+	res, err := http.Get(h.url + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	raw, _ := io.ReadAll(res.Body)
+
+	return res.StatusCode, string(raw)
+}
+
+// A generated spec existing and the service's document being published are two checks (docs/payment.md
+// §6, README "OpenAPI"): through a wired rpc with the docs on, the public payment API is documented, the
+// internal service that shares its package is not, and with the docs off (the default) neither is
+// served. Positive controls: ordering's document is served in the same run, and the payment document is
+// not empty, so absence of the internal procedures is not an empty spec.
+func TestPaymentEntry_PublicOpenAPIIsPublished(t *testing.T) {
+	t.Run("docs on", func(t *testing.T) {
+		h := newPayHarness(t, payOpts{upstream: true, env: map[string]string{"APP_HTTP_DOCS": "true"}})
+		if code, body := h.get(t, "/api/openapi/ordering.yaml"); code != http.StatusOK || !strings.Contains(body, "ordering.v1.OrderService") {
+			t.Fatalf("ordering's document = %d (positive control: the docs entry works)", code)
+		}
+		code, body := h.get(t, "/api/openapi/payment.yaml")
+		if code != http.StatusOK {
+			t.Fatalf("GET /api/openapi/payment.yaml = %d, want the public payment document", code)
+		}
+		for _, want := range []string{"/payment.v1.PublicPaymentService/StartPayment", "/payment.v1.PublicPaymentService/GetPayment", "checkoutUrl"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("the payment document does not contain %s", want)
+			}
+		}
+		for _, banned := range []string{"/payment.v1.PaymentService/", "customerId", "admin:"} {
+			if strings.Contains(body, banned) {
+				t.Errorf("the payment document contains %q: only the public service is published, and it has no identity fields", banned)
+			}
+		}
+		if code, index := h.get(t, "/api/docs"); code != http.StatusOK || !strings.Contains(index, "payment") {
+			t.Errorf("GET /api/docs = %d, payment listed: %v", code, strings.Contains(index, "payment"))
+		}
+	})
+	t.Run("docs off", func(t *testing.T) {
+		h := newPayHarness(t, payOpts{upstream: true})
+		for _, name := range []string{"ordering", "payment"} {
+			if code, _ := h.get(t, "/api/openapi/"+name+".yaml"); code != http.StatusNotFound {
+				t.Errorf("GET /api/openapi/%s.yaml with the docs off = %d, want 404", name, code)
+			}
+		}
+	})
+}
