@@ -5,6 +5,24 @@
 /** Prefix of the temp dir that holds the oidc-backend rpc's generated config (one per IdP port). */
 export const oidcTmpPrefix = (idpPort: number) => `x-monorepo-e2e-oidc-${idpPort}-`;
 
+/**
+ * The "payment" project's own stack (e2e/payment/stack-server.ts, playwright.payment.config.ts): the rpc it talks
+ * to, its catalog-rpc, payment-rpc serve, the wrapper's control port and the console's preview. Offsets 60, 70
+ * and 71 are free of the other projects' (10, 20, 30, 31, and the catalog-rpc of each at +40).
+ */
+export function paymentPorts(env: Record<string, string | undefined> = process.env) {
+  const rpcPort = Number(env.E2E_RPC_PORT ?? 18091);
+  const webPort = Number(env.E2E_WEB_PORT ?? 4173);
+  const rpc = rpcPort + 60;
+  return {
+    rpc,
+    catalog: rpc + 40, // the catalog-rpc of that rpc, like catalogPort() below
+    serve: rpcPort + 70,
+    control: rpcPort + 71,
+    web: webPort + 30,
+  };
+}
+
 export function derivePorts(env: Record<string, string | undefined> = process.env) {
   const rpcPort = Number(env.E2E_RPC_PORT ?? 18091);
   const webPort = Number(env.E2E_WEB_PORT ?? 4173);
@@ -21,6 +39,7 @@ export function derivePorts(env: Record<string, string | undefined> = process.en
   const catalogPort = (rpcServerPort: number) => rpcServerPort + 40; // 18131, 18132, 18141, 18151, …
   const rpcPorts = [rpcPort, authRpcPort, roleRpcPort, backendRpcPort];
   const webPorts = [webPort, authWebPort, roleWebPort, backendWebPort];
+  const pay = paymentPorts(env);
   return {
     rpcPort,
     webPort,
@@ -35,6 +54,6 @@ export function derivePorts(env: Record<string, string | undefined> = process.en
     /** The port the "other IdP" of the issuer-mismatch negative uses (e2e/oidc-backend/backend.spec.ts). */
     foreignIdpPort: backendIdpPort + 1,
     /** Everything the stack (and the tests that start their own listener) can hold, for the cleanup check. */
-    all: [...rpcPorts, ...rpcPorts.map(catalogPort), backendIdpPort, backendIdpPort + 1, ...webPorts],
+    all: [...rpcPorts, ...rpcPorts.map(catalogPort), backendIdpPort, backendIdpPort + 1, ...webPorts, pay.rpc, pay.catalog, pay.serve, pay.control, pay.web],
   };
 }
