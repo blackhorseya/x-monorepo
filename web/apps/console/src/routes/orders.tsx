@@ -1,7 +1,8 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { v7 as uuidv7 } from "uuid";
 import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useResetOnCredentialChange } from "../auth";
+import { getCredentialGeneration, useResetOnCredentialChange } from "../auth";
 import { ConfirmButton } from "../components/confirm";
 import { useCanChooseCustomer } from "../components/customer";
 import { ErrorAlert } from "../components/error-alert";
@@ -17,7 +18,8 @@ import { Field } from "../components/field";
 import { formatMoney, paymentRequiredLabel, statusVariant } from "../components/order-status";
 import { describe, orders } from "../client";
 import { useOrderReservations, type RowReservation } from "../orderReservations";
-import { keys, ordersQuery, quoteQuery, refreshFirstPage } from "../queries";
+import { keys, ordersQuery, quoteQuery, refreshOrders } from "../queries";
+import { useFirstPagePoll } from "../useFirstPagePoll";
 import { reservationBadge } from "./reservations";
 
 type Line = { sku: string; quantity: number };
@@ -110,13 +112,38 @@ function CreateOrderCard() {
   });
   const total = totalLabel(lines, quoted);
 
+  // The idempotency key stands for one intent to place an order. The same request sent again (the
+  // answer was lost, the user pressed the button twice) reuses the key and the server hands back the
+  // order it already made. The server answers a reused key with other content ALREADY_EXISTS, so the
+  // key is tied to everything that is sent: the customer, the lines and, when the caller is the
+  // customer, the credential (another credential is another customer). Any of them changing, or a
+  // success, ends the intent.
+  const intent = useRef<{ request: string; key: string }>(undefined);
+  const navigate = useNavigate();
+
   const create = useMutation({
-    mutationFn: () =>
-      orders.createOrder({
+    mutationFn: async () => {
+      const request = {
         customerId: canChoose ? customerId.trim() : "",
         items: lines.map((l) => ({ sku: l.sku, quantity: l.quantity })),
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.orders }),
+      };
+      const generation = getCredentialGeneration();
+      const signature = JSON.stringify([request, generation]);
+      if (intent.current?.request !== signature) intent.current = { request: signature, key: uuidv7() };
+      const res = await orders.createOrder({ ...request, idempotencyKey: intent.current.key });
+      return { res, signature, generation };
+    },
+    // An answer that comes back after the credential changed belongs to the old credential: the order
+    // was placed for its customer, which the new credential may not read, so it neither opens that
+    // order nor ends the intent the new credential has going (useResetOnCredentialChange resets the
+    // mutation's state, not a call already in flight).
+    onSuccess: ({ res, signature, generation }) => {
+      if (intent.current?.request === signature) intent.current = undefined;
+      void qc.invalidateQueries({ queryKey: keys.orders });
+      if (res.order && generation === getCredentialGeneration()) {
+        void navigate({ to: "/orders/$id", params: { id: res.order.id } });
+      }
+    },
   });
   useResetOnCredentialChange(create);
 
@@ -190,12 +217,7 @@ function OrdersCard() {
   const list = useInfiniteQuery(ordersQuery(customer, status));
   const qc = useQueryClient();
   // Only the newest page polls (see refreshFirstPage); a hidden tab does not.
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (document.visibilityState === "visible") void refreshFirstPage(qc, customer, status).catch(() => {});
-    }, 2000);
-    return () => clearInterval(t);
-  }, [qc, customer, status]);
+  useFirstPagePoll(() => refreshOrders(qc, customer, status), [qc, customer, status]);
   const rows = list.data?.pages.flatMap((p) => p.orders) ?? [];
   const reservations = useOrderReservations(rows);
   const setSearch = (patch: Partial<OrdersSearch>) => void navigate({ search: (prev) => ({ ...prev, ...patch }) });
