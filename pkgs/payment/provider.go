@@ -5,6 +5,7 @@
 package payment
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/provider/mock"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -226,9 +228,20 @@ func endedChain(name string, rec *usecasex.Recorder, tx port.Transactor, inbox p
 	)
 }
 
-func cancelCheckoutAfterCommit(port.PaymentProvider, *slog.Logger) usecasex.Decorator[dto.OrderEndedInput, *dto.OrderEndedOutput] {
+func cancelCheckoutAfterCommit(provider port.PaymentProvider, logger *slog.Logger) usecasex.Decorator[dto.OrderEndedInput, *dto.OrderEndedOutput] {
 	return func(next usecasex.UseCase[dto.OrderEndedInput, *dto.OrderEndedOutput]) usecasex.UseCase[dto.OrderEndedInput, *dto.OrderEndedOutput] {
-		return next // SPEC STAGE: no checkout is ever cancelled
+		return usecasex.Func[dto.OrderEndedInput, *dto.OrderEndedOutput](func(c context.Context, in dto.OrderEndedInput) (*dto.OrderEndedOutput, error) {
+			ctx := contextx.FromContext(c)
+			out, err := next.Execute(ctx, in)
+			if err != nil || out == nil || out.CancelCheckoutRef == "" {
+				return out, err
+			}
+			if cerr := provider.CancelCheckout(ctx, out.CancelCheckoutRef); cerr != nil {
+				logger.WarnContext(ctx, "cancel checkout failed", "code", "payment.cancel_checkout_failed", "order_id", in.OrderID)
+			}
+
+			return out, nil
+		})
 	}
 }
 

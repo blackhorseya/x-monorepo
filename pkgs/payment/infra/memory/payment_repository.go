@@ -40,12 +40,41 @@ func (i *PaymentRepository) FindByOrderID(c context.Context, orderID string) (*p
 	return payment.Reconstitute(rec)
 }
 
-func (i *PaymentRepository) FindByID(context.Context, payment.ID) (*payment.Payment, error) {
-	return nil, payment.ErrNotFound // SPEC STAGE
+func (i *PaymentRepository) FindByID(c context.Context, id payment.ID) (*payment.Payment, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	order, ok := i.ids[id]
+	if !ok {
+		return nil, payment.ErrNotFound
+	}
+
+	return payment.Reconstitute(i.data[order])
 }
 
-func (i *PaymentRepository) FindByProviderRef(context.Context, string, string) (*payment.Payment, error) {
-	return nil, payment.ErrNotFound // SPEC STAGE
+func (i *PaymentRepository) FindByProviderRef(c context.Context, provider, ref string) (*payment.Payment, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	if ref != "" {
+		for _, rec := range i.data {
+			if rec.Provider == provider && rec.ProviderRef == ref {
+				return payment.Reconstitute(rec)
+			}
+		}
+	}
+
+	return nil, payment.ErrNotFound
 }
 
 // Save inserts a never-saved payment (Version 0) with version 1, or replaces a loaded one when the
@@ -87,15 +116,40 @@ func snapshot(p *payment.Payment) payment.ReconstituteParams {
 
 var _ payment.OutcomeRepository = (*OutcomeRepository)(nil)
 
-// OutcomeRepository keeps the order outcomes of payment.OutcomeRepository. SPEC STAGE: it remembers nothing.
-type OutcomeRepository struct{}
+// OutcomeRepository keeps the order outcomes of payment.OutcomeRepository in memory.
+type OutcomeRepository struct {
+	mu   sync.Mutex
+	data map[string]payment.Outcome
+}
 
-func NewOutcomeRepository() *OutcomeRepository { return &OutcomeRepository{} }
+func NewOutcomeRepository() *OutcomeRepository {
+	return &OutcomeRepository{data: map[string]payment.Outcome{}}
+}
 
-func (i *OutcomeRepository) Find(context.Context, string) (payment.Outcome, error) {
+func (i *OutcomeRepository) Find(c context.Context, orderID string) (payment.Outcome, error) {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return payment.OutcomeNone, err
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if o, ok := i.data[orderID]; ok {
+		return o, nil
+	}
+
 	return payment.OutcomeNone, nil
 }
 
-func (i *OutcomeRepository) Record(context.Context, string, payment.Outcome, time.Time) error {
+func (i *OutcomeRepository) Record(c context.Context, orderID string, outcome payment.Outcome, _ time.Time) error {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return err
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if _, ok := i.data[orderID]; !ok {
+		i.data[orderID] = outcome
+	}
+
 	return nil
 }

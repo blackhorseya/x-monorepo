@@ -90,12 +90,38 @@ func (i *PaymentRepository) FindByOrderID(c context.Context, orderID string) (*p
 	return row.toAggregate()
 }
 
-func (i *PaymentRepository) FindByID(context.Context, payment.ID) (*payment.Payment, error) {
-	return nil, payment.ErrNotFound // SPEC STAGE
+func (i *PaymentRepository) FindByID(c context.Context, id payment.ID) (*payment.Payment, error) {
+	return i.findOne(c, "id = ?", id.String(), "payment "+id.String())
 }
 
-func (i *PaymentRepository) FindByProviderRef(context.Context, string, string) (*payment.Payment, error) {
-	return nil, payment.ErrNotFound // SPEC STAGE
+func (i *PaymentRepository) FindByProviderRef(c context.Context, provider, ref string) (*payment.Payment, error) {
+	if ref == "" {
+		return nil, payment.ErrNotFound // a payment that never opened a checkout has no reference to match
+	}
+	var row paymentRow
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	err := platformpg.TxOrDB(ctx, i.db).Take(&row, "provider = ? AND provider_ref = ?", provider, ref).Error
+	if err != nil {
+		return nil, translate(fmt.Errorf("find payment by provider reference: %w", err), payment.ErrNotFound, nil)
+	}
+
+	return row.toAggregate()
+}
+
+func (i *PaymentRepository) findOne(c context.Context, where string, arg any, what string) (*payment.Payment, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var row paymentRow
+	if err := platformpg.TxOrDB(ctx, i.db).Take(&row, where, arg).Error; err != nil {
+		return nil, translate(fmt.Errorf("find %s: %w", what, err), payment.ErrNotFound, nil)
+	}
+
+	return row.toAggregate()
 }
 
 // Save inserts a never-saved payment (Version 0) with version 1, or updates a loaded one
@@ -151,17 +177,41 @@ func (i *PaymentRepository) Save(c context.Context, p *payment.Payment) error {
 
 var _ payment.OutcomeRepository = (*OutcomeRepository)(nil)
 
-// OutcomeRepository keeps payment.order_outcomes. SPEC STAGE: it remembers nothing.
+// OutcomeRepository keeps payment.order_outcomes.
 type OutcomeRepository struct {
 	db *gorm.DB
 }
 
 func NewOutcomeRepository(db *gorm.DB) *OutcomeRepository { return &OutcomeRepository{db: db} }
 
-func (i *OutcomeRepository) Find(context.Context, string) (payment.Outcome, error) {
-	return payment.OutcomeNone, nil
+func (i *OutcomeRepository) Find(c context.Context, orderID string) (payment.Outcome, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return payment.OutcomeNone, err
+	}
+	var outcome string
+	res := platformpg.TxOrDB(ctx, i.db).Raw(`SELECT outcome FROM `+Schema+`.order_outcomes WHERE order_id = ?`, orderID).Scan(&outcome)
+	if res.Error != nil {
+		return payment.OutcomeNone, fmt.Errorf("find outcome of order %s: %w", orderID, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return payment.OutcomeNone, nil
+	}
+
+	return payment.Outcome(outcome), nil
 }
 
-func (i *OutcomeRepository) Record(context.Context, string, payment.Outcome, time.Time) error {
+func (i *OutcomeRepository) Record(c context.Context, orderID string, outcome payment.Outcome, at time.Time) error {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := platformpg.TxOrDB(ctx, i.db).Exec(
+		`INSERT INTO `+Schema+`.order_outcomes (order_id, outcome, recorded_at) VALUES (?, ?, ?) ON CONFLICT (order_id) DO NOTHING`,
+		orderID, outcome.String(), at).Error
+	if err != nil {
+		return fmt.Errorf("record outcome of order %s: %w", orderID, err)
+	}
+
 	return nil
 }

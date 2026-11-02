@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
@@ -31,4 +32,7 @@ func New(l *slog.Logger, meter metric.MeterProvider) (*Alerts, error) {
 	return &Alerts{log: l, counter: c}, nil
 }
 
-func (x *Alerts) Raise(context.Context, payment.Alert, string) {} // SPEC STAGE
+func (x *Alerts) Raise(c context.Context, a payment.Alert, orderID string) {
+	x.log.ErrorContext(c, "payment alert", "alert", string(a), "order_id", orderID)
+	x.counter.Add(c, 1, metric.WithAttributes(attribute.String("alert", string(a))))
+}

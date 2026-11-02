@@ -53,8 +53,15 @@ func NewConsumer(cfg config.Worker, db *gorm.DB, logger *slog.Logger, tel *otel.
 	if err != nil {
 		return nil, err
 	}
-	_, _, _ = sub, instruments, publisher // SPEC STAGE: nothing is registered on the router
-	_ = subs
+	err = eventbus.Register(router, sub, eventbus.ConsumerOptions{
+		Poison:         publisher,
+		PoisonTopic:    eventbus.PoisonTopic(paymentv1.Schema),
+		Instruments:    instruments,
+		HandlerTimeout: cfg.HandlerTimeout,
+	}, subs...)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Consumer{router: router, logger: logger}, nil
 }
