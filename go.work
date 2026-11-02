@@ -10,6 +10,7 @@ use (
 	./pkgs/inventory
 	./pkgs/kernel
 	./pkgs/ordering
+	./pkgs/payment
 	./pkgs/platform
 	./tools/stripvalidate
 )
