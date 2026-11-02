@@ -99,19 +99,19 @@ func (r *gatedRepo) Save(c context.Context, p *payment.Payment) error {
 type ending struct {
 	name    string
 	outcome payment.Outcome
-	handle  func(e *sagaEnv, repo payment.Repository, outs payment.OutcomeRepository, clock port.Clock) func(context.Context, string) error
+	handle  func(e *sagaEnv, repo payment.Repository, outs payment.OutcomeRepository, clock port.Clock, prov port.PaymentProvider) func(context.Context, string) error
 }
 
 var endings = []ending{
-	{"cancelled", payment.OutcomeCancelled, func(e *sagaEnv, repo payment.Repository, outs payment.OutcomeRepository, clock port.Clock) func(context.Context, string) error {
-		uc := paymentbc.ProvideRecordOrderCancelled(repo, outs, e.ev, clock, mock.New(mock.Options{}), e.logger, e.tx, nil, e.rec)
+	{"cancelled", payment.OutcomeCancelled, func(e *sagaEnv, repo payment.Repository, outs payment.OutcomeRepository, clock port.Clock, prov port.PaymentProvider) func(context.Context, string) error {
+		uc := paymentbc.ProvideRecordOrderCancelled(repo, outs, e.ev, clock, prov, e.logger, e.tx, nil, e.rec)
 		return func(c context.Context, id string) error {
 			_, err := uc.Execute(c, dto.OrderEndedInput{OrderID: id})
 			return err
 		}
 	}},
-	{"completed", payment.OutcomeCompletedUnpaid, func(e *sagaEnv, repo payment.Repository, outs payment.OutcomeRepository, clock port.Clock) func(context.Context, string) error {
-		uc := paymentbc.ProvideRecordOrderCompleted(repo, outs, e.ev, clock, mock.New(mock.Options{}), e.logger, e.tx, nil, e.rec)
+	{"completed", payment.OutcomeCompletedUnpaid, func(e *sagaEnv, repo payment.Repository, outs payment.OutcomeRepository, clock port.Clock, prov port.PaymentProvider) func(context.Context, string) error {
+		uc := paymentbc.ProvideRecordOrderCompleted(repo, outs, e.ev, clock, prov, e.logger, e.tx, nil, e.rec)
 		return func(c context.Context, id string) error {
 			_, err := uc.Execute(c, dto.OrderEndedInput{OrderID: id})
 			return err
@@ -139,7 +139,7 @@ func raceConfirmedThenEnded(t *testing.T, end ending) {
 	gate := &gatedRepo{Repository: e.repo, reached: make(chan struct{}), resume: make(chan struct{})}
 	clock := system.NewClock()
 	confirm := paymentbc.ProvideRecordOrderConfirmed(gate, e.outs, system.NewIDGenerator(), clock, e.al, config.Payment{Window: 30 * time.Minute}, e.tx, nil, e.rec)
-	cancel := end.handle(e, e.repo, e.outs, clock)
+	cancel := end.handle(e, e.repo, e.outs, clock, mock.New(mock.Options{}))
 
 	release := sync.OnceFunc(func() { close(gate.resume) })
 	t.Cleanup(release)
@@ -218,7 +218,7 @@ func raceEndedThenConfirmed(t *testing.T, end ending) {
 	}
 	gate := &gatedOutcomes{OutcomeRepository: e.outs, reached: make(chan struct{}), resume: make(chan struct{})}
 	clock := system.NewClock()
-	cancel := end.handle(e, e.repo, gate, clock)
+	cancel := end.handle(e, e.repo, gate, clock, mock.New(mock.Options{}))
 	confirm := paymentbc.ProvideRecordOrderConfirmed(e.repo, e.outs, system.NewIDGenerator(), clock, e.al, config.Payment{Window: 30 * time.Minute}, e.tx, nil, e.rec)
 
 	release := sync.OnceFunc(func() { close(gate.resume) })
@@ -514,7 +514,7 @@ func TestRace_AnExistingPaymentIsCapturedAndItsOrderEndsAtOnce(t *testing.T) {
 					endRepo = gate
 				}
 				capture := paymentbc.ProvideProcessWebhook(capRepo, e.hooks, e.ev, e.al, clock, e.tx, nil, e.rec)
-				ended := end.handle(e, endRepo, e.outs, clock)
+				ended := end.handle(e, endRepo, e.outs, clock, prov)
 				runCapture := func() error {
 					_, err := capture.Execute(c, dto.WebhookReceivedInput{Provider: mock.Name, EventID: d.EventID})
 					return err
@@ -727,7 +727,7 @@ func TestRace_TheSweepExpiresAPaymentWhileItsOrderEnds(t *testing.T) {
 				}
 				sweep := usecase.NewExpireSweep(sweepRepo, e.hooks, prov, e.ev, e.al, e.tx, clock,
 					dto.SweepConfig{Batch: 10, ReconcileWindow: 24 * time.Hour, Interval: 15 * time.Minute})
-				ended := end.handle(e, endRepo, e.outs, clock)
+				ended := end.handle(e, endRepo, e.outs, clock, prov)
 				runSweep := func() (*dto.ExpireOutput, error) { return sweep.Execute(c, dto.Ack{}) }
 				runEnded := func() error {
 					err := ended(c, p.OrderID())
@@ -787,5 +787,200 @@ func TestRace_TheSweepExpiresAPaymentWhileItsOrderEnds(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// StartPayment (T2: opens a checkout at the provider, then saves it on the payment by version) against the
+// cancellation of its order (T7) landing between the checkout being opened and saved. Whoever is held loses on the
+// version:
+//   - StartPayment held: the order was cancelled meanwhile, so it must refuse (payment.not_pending) AND take the
+//     checkout it opened back — a page nobody owns that a customer could still pay;
+//   - the cancellation held: StartPayment saved its checkout first, the cancellation then reads it and cancels it.
+//
+// Either way the payment is CANCELLED and no checkout of it stays payable.
+func TestRace_StartPaymentAndTheCancellationOfItsOrder(t *testing.T) {
+	for _, startHeld := range []bool{true, false} {
+		name := "the cancellation wins"
+		if !startHeld {
+			name = "the start wins"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newSagaEnv(t)
+			c := t.Context()
+			clock := &sweepClock{now: t0.Add(time.Minute)}
+			prov := mock.New(mock.Options{Now: clock.Now})
+			p := newPayment(t, "race-start-pay", "race-start-order")
+			if err := e.repo.Save(c, p); err != nil {
+				t.Fatal(err)
+			}
+
+			gate := &gatedRepo{Repository: e.repo, reached: make(chan struct{}), resume: make(chan struct{})}
+			startRepo, endRepo := payment.Repository(e.repo), payment.Repository(e.repo)
+			if startHeld {
+				startRepo = gate
+			} else {
+				endRepo = gate
+			}
+			start := paymentbc.ProvideStartPayment(startRepo, prov, e.tx, clock, e.rec)
+			cancelled := endings[0].handle(e, endRepo, e.outs, clock, prov)
+			runStart := func() error {
+				_, err := start.Execute(c, dto.StartPaymentInput{OrderID: p.OrderID(), CustomerID: "cust"})
+				return err
+			}
+			runCancel := func() error {
+				err := cancelled(c, p.OrderID())
+				for range 5 {
+					if !errors.Is(err, payment.ErrStale) {
+						break
+					}
+					err = cancelled(c, p.OrderID())
+				}
+				return err
+			}
+
+			release := sync.OnceFunc(func() { close(gate.resume) })
+			t.Cleanup(release)
+			heldDone := make(chan error, 1)
+			if startHeld {
+				go func() { heldDone <- runStart() }()
+			} else {
+				go func() { heldDone <- runCancel() }()
+			}
+			select {
+			case <-gate.reached:
+			case <-time.After(10 * time.Second):
+				t.Fatal("fixture: the held side never reached its save")
+			}
+			var freeErr error
+			if startHeld {
+				freeErr = runCancel()
+			} else {
+				freeErr = runStart()
+			}
+			release()
+			heldErr := <-heldDone
+
+			startErr := heldErr
+			if !startHeld {
+				startErr = freeErr
+			}
+			cancelErr := freeErr
+			if !startHeld {
+				cancelErr = heldErr
+			}
+			if cancelErr != nil {
+				t.Fatalf("the cancellation: %v", cancelErr)
+			}
+			if startHeld && !errors.Is(startErr, payment.ErrNotPending) {
+				t.Fatalf("StartPayment that lost to the cancellation: %v, want payment.not_pending", startErr)
+			}
+			if !startHeld && startErr != nil {
+				t.Fatalf("StartPayment that came first: %v", startErr)
+			}
+
+			got, err := e.repo.FindByOrderID(c, p.OrderID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status() != payment.StatusCancelled {
+				t.Fatalf("payment=%s, want CANCELLED", got.Status())
+			}
+			refs := prov.Refs()
+			if len(refs) != 1 {
+				t.Fatalf("fixture: %d checkouts were opened, want 1", len(refs))
+			}
+			if !prov.Cancelled(refs[0]) {
+				t.Fatalf("checkout %s of a cancelled order is still payable at the provider (held=%v)", refs[0], map[bool]string{true: "start", false: "cancellation"}[startHeld])
+			}
+		})
+	}
+}
+
+// Two deliveries of the same PaymentRefundRequested processed at once (a redelivery while the first is still working):
+// the provider refunds ONCE (the idempotency key is the payment's id), both reach the save, the second loses on the
+// version, is redelivered and finds REFUNDED. One PaymentRefunded event, one refund at the provider.
+func TestRace_TheSameRefundTwiceAtOnce(t *testing.T) {
+	e := newSagaEnv(t)
+	c := t.Context()
+	clock := &sweepClock{now: t0.Add(time.Minute)}
+	prov := mock.New(mock.Options{Now: clock.Now, Store: postgres.NewMockStore(e.db)})
+	const refundedTable = "payment.events_v1_paymentrefunded"
+	for _, q := range []string{"TRUNCATE " + refundedTable, "TRUNCATE payment.mock_refunds, payment.mock_checkouts, payment.mock_faults CASCADE"} {
+		if err := e.db.Exec(q).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = e.db.Exec("TRUNCATE " + refundedTable).Error
+		_ = e.db.Exec("TRUNCATE payment.mock_refunds, payment.mock_checkouts, payment.mock_faults CASCADE").Error
+	})
+
+	p := newPayment(t, "race-refund-pay", "race-refund-order")
+	if err := e.repo.Save(c, p); err != nil {
+		t.Fatal(err)
+	}
+	start := paymentbc.ProvideStartPayment(e.repo, prov, e.tx, clock, e.rec)
+	if _, err := start.Execute(c, dto.StartPaymentInput{OrderID: p.OrderID(), CustomerID: "cust"}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.repo.FindByOrderID(c, p.OrderID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := prov.Pay(p.ProviderRef(), p.Amount())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv := paymentbc.ProvideReceiveWebhook(e.hooks, prov, e.ev, e.tx, clock, e.rec)
+	if _, err = recv.Execute(c, dto.WebhookInput{Body: d.Body, Signature: d.Signature}); err != nil {
+		t.Fatal(err)
+	}
+	process := paymentbc.ProvideProcessWebhook(e.repo, e.hooks, e.ev, e.al, clock, e.tx, nil, e.rec)
+	if _, err = process.Execute(c, dto.WebhookReceivedInput{Provider: mock.Name, EventID: d.EventID}); err != nil {
+		t.Fatal(err)
+	}
+	if err = endings[0].handle(e, e.repo, e.outs, clock, prov)(c, p.OrderID()); err != nil { // the order is cancelled: T10, REFUNDING
+		t.Fatal(err)
+	}
+	if got, _ := e.repo.FindByOrderID(c, p.OrderID()); got.Status() != payment.StatusRefunding {
+		t.Fatalf("fixture: payment=%s, want REFUNDING", got.Status())
+	}
+
+	gate := &gatedRepo{Repository: e.repo, reached: make(chan struct{}), resume: make(chan struct{})}
+	first := paymentbc.ProvideProcessRefund(gate, prov, e.ev, e.tx, clock, e.rec)
+	second := paymentbc.ProvideProcessRefund(e.repo, prov, e.ev, e.tx, clock, e.rec)
+	release := sync.OnceFunc(func() { close(gate.resume) })
+	t.Cleanup(release)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := first.Execute(c, dto.RefundInput{PaymentID: p.ID().String()})
+		firstDone <- err
+	}()
+	select {
+	case <-gate.reached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fixture: the first delivery never reached its save")
+	}
+	if _, err = second.Execute(c, dto.RefundInput{PaymentID: p.ID().String()}); err != nil {
+		t.Fatalf("the second delivery: %v", err)
+	}
+	release()
+	if err = <-firstDone; !errors.Is(err, payment.ErrStale) {
+		t.Fatalf("the first delivery lost on the version and must be redelivered, got %v", err)
+	}
+	if _, err = first.Execute(c, dto.RefundInput{PaymentID: p.ID().String()}); err != nil { // the redelivery finds REFUNDED
+		t.Fatalf("the redelivery: %v", err)
+	}
+
+	got, err := e.repo.FindByOrderID(c, p.OrderID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refunded int
+	if err = e.db.Raw("SELECT count(*) FROM " + refundedTable).Scan(&refunded).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Status() != payment.StatusRefunded || refunded != 1 || prov.Refunds(p.ProviderRef()) != 1 {
+		t.Fatalf("payment=%s PaymentRefunded events=%d refunds at the provider=%d, want REFUNDED 1 1", got.Status(), refunded, prov.Refunds(p.ProviderRef()))
 	}
 }

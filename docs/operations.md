@@ -380,7 +380,7 @@ COMMIT;
 
 ### Upgrade notes — chart 0.3.53：payment 預設開（#367 切片 6）
 
-**先讀這一條：有一種升級會「無預警」把開關打開。** chart 0.3.50–0.3.52 的 release，如果已開 auth（`config.auth.mode` 是 `optional`／`required`）、已顯式 `paymentRpc.enabled=true` 且 `secrets.paymentRpc.*` 齊，但**從沒寫過** `config.ordering.require_payment`（舊預設 `false`），那麼用**同一份 values** `helm upgrade` 到 0.3.53，render 會過、升級會成功，`config.ordering.require_payment` 同時變成 `true`——chart 分不出「沒寫」和「預設值」，沒有任何錯誤擋它。**實測**（kind，helm 4.3.0）：0.3.51 的 release（auth required、payment-rpc 開、沒寫開關）用同一份 values 升級 → `STATUS: deployed`、ConfigMap 出現 `ordering.require_payment: true`、worker 多了 `APP_PAYMENT_UPSTREAM`；升級**之後**建的單 `payment_required=true`，`CompleteOrder` 回 `failed_precondition`（`order requires payment before it can be completed`，要走付款）；升級**之前**已 `CONFIRMED` 的單快照維持 `false`，仍可手動完成。`--reuse-values` 與 `--reset-then-reuse-values` 這兩種升級同樣都成功（沒有任何錯誤），`--reset-then-reuse-values` 之後的 ConfigMap 實測是 `require_payment: true`。**升級前請在你的 values 顯式寫 `config.ordering.require_payment: true` 或 `false`**（寫 `false` 之前也要確認 `paymentRpc.enabled` 你要不要）。
+**先讀這一條：有一種升級會「無預警」把開關打開。** chart 0.3.50–0.3.52 的 release，如果已開 auth（`config.auth.mode` 是 `optional`／`required`）、已顯式 `paymentRpc.enabled=true` 且 `secrets.paymentRpc.*` 齊，但**從沒寫過** `config.ordering.require_payment`（舊預設 `false`），那麼用**同一份 values** `helm upgrade` 到 0.3.53，render 會過、升級會成功，`config.ordering.require_payment` 同時變成 `true`——chart 分不出「沒寫」和「預設值」，沒有任何錯誤擋它。**實測**（kind，helm 4.3.0）：0.3.51 的 release（auth required、payment-rpc 開、沒寫開關）用同一份 values 升級 → `STATUS: deployed`、ConfigMap 出現 `ordering.require_payment: true`、worker 多了 `APP_PAYMENT_UPSTREAM`；升級**之後**建的單 `payment_required=true`，`CompleteOrder` 回 `failed_precondition`（`order requires payment before it can be completed`，要走付款）；升級**之前**已 `CONFIRMED` 的單快照維持 `false`，仍可手動完成。`--reset-then-reuse-values` 同樣成功、同樣變 `true`（作者與 reviewer 各量一次）；**`--reuse-values` 不一樣**：reviewer 實測它升級成功但**開關沒有變**（新單 `payment_required=false`、手動完成 200），因為 `--reuse-values` 沿用舊 release 已算出的值。這只是 helm CLI 的這一種模式，不能外推到其他 helm 版本或 GitOps 工具。**升級前請在你的 values 顯式寫 `config.ordering.require_payment: true` 或 `false`**（寫 `false` 之前也要確認 `paymentRpc.enabled` 你要不要）。
 
 **這個版本的預設改了什麼**：chart 預設 `paymentRpc.enabled: true` 與 `config.ordering.require_payment: true`。**binary 預設不變**（`ordering.require_payment` 預設 `false`，`task run`、compose、沒設 payment 的環境都不受影響）。`config.auth.mode` 預設仍是 `off`，而 auth 關著沒有人付得了款，所以：
 
@@ -397,7 +397,8 @@ COMMIT;
 | 同上 | `--reset-then-reuse-values` | 同第一列：明確失敗、不動 |
 | 同上 | `-f` 自己的 values `--set config.ordering.require_payment=false --set paymentRpc.enabled=false` | 升級成功（rev 2），沒有任何 payment 物件 |
 | 0.3.51，auth required，payment-rpc 開且 secrets 齊，**沒寫**開關 | `-f` 同一份 values | **升級成功且開關變 `true`**（上面第一條；無預警的那格） |
-| 同上 | `--reuse-values`、`--reset-then-reuse-values` | 兩個都升級成功（沒有錯誤）；`--reset-then-reuse-values` 之後 ConfigMap 實測 `require_payment: true`，`--reuse-values` 之後的值沒有單獨量測 |
+| 同上 | `--reset-then-reuse-values` | 升級成功，開關變 `true`（同上） |
+| 同上 | `--reuse-values` | 升級成功，**開關沒變**（新單 `payment_required=false`，手動完成 200；reviewer 實測，helm 4.3.0） |
 | 全新安裝，只給資料庫與 catalog-rpc key | `helm install` | render 失敗，訊息列兩條出路 |
 | 全新安裝，auth＋payment secrets 齊 | `helm install` | 成功；開關 `true`；`task helm-kind` 的 `payment-flow.sh` 走完整流程 |
 

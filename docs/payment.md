@@ -217,6 +217,25 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 
 **「付款單尚不存在」這一欄**：付款單 `version` 的 compare-and-set 只能保護已存在的列。`OrderConfirmed`（T1）與 `OrderCancelled`／`OrderCompleted`（T15）在列不存在時各自「先讀、後寫」：讀到「沒有付款單、沒有墓碑」的確認，在取消寫完墓碑之後才建出 `PENDING` 的單，兩個 handler 都 ack，但單是 `PENDING/NONE` 而墓碑是 `CANCELLED`，之後也沒有人補。處理：兩個 use case 在交易裡**先**取同一訂單的 transaction 級 advisory lock（`pg_advisory_xact_lock(hashtext('payment.order'), hashtext(order_id))`，兩個 key 的形式，與其他單 key 的鎖不同命名空間），**鎖之後**才讀付款單與墓碑、才判斷 duplicate；其他路徑（webhook、`expire`、`StartPayment`）只碰已存在的列，靠 `version` CAS，不取這把鎖，所以取鎖順序沒有反向（鎖 → 列；沒有人先持列再要鎖）。consumer 的 inbox 去重那一列在鎖之前寫入，但它只以事件 id 為鍵、不同事件互不相干，不會形成等待環。同型空隙掃過的其他格：兩個 `OrderConfirmed` 併發靠 `unique(order_id)`；兩個墓碑併發靠 `ON CONFLICT DO NOTHING`（先到的為準）；webhook 的 `provider_ref` 只在 `StartPayment` 之後存在，付款單必然已存在，所以「通知先於列」不會發生；`StartPayment` 與取消同時靠 `version` CAS，輸的那個 checkout 會被 `dropUnused` 取消。
 
+### §5 已測交錯（committed test，逐格）
+
+「順序式」不算交錯：下表的「交錯」欄是兩個 handler 在真 Postgres 上互相卡在 read／save 之間（一邊停在 `Save` 前，另一邊跑完，輸的一邊 `ErrStale`、重送後讀新狀態），不是依序送兩個事件。每個測試都做過受控 mutation（拿掉版本比對或該路徑的 advisory lock → 對應格子變紅）；kind 的 `payment-flow.sh` 是組件分段證據（真 CronJob／真 worker／真 provider 表），不宣稱排出下表的交錯。
+
+| 事件 × 事件 | 付款單 | 交錯 | 測試 |
+|---|---|---|---|
+| `OrderConfirmed` × `OrderCancelled`／`OrderCompleted` | 尚不存在 | 兩個方向（確認先停／結束先停）× 兩種結束 | `TestRace_ConfirmedAndEndedWithoutAPaymentYet`、`TestRace_EndedThenConfirmedWithoutAPaymentYet`（`/cancelled`、`/completed`）。拿掉 Completed 路徑的 advisory lock → 只有兩個 `/completed` 紅（`PENDING/NONE`），Cancelled 仍綠 |
+| 收款通知（T3）× `OrderCancelled`／`OrderCompleted`（T7、T7'） | `PENDING` | 通知先停／結束先停 × 兩種結束 | `TestRace_AnExistingPaymentIsCapturedAndItsOrderEndsAtOnce`：取消 → 兩邊都是 `REFUNDING` 一張退款請求；完成 → 通知先到 `CAPTURED` 不退、結束先到 `REFUNDING` 退一次。拿掉版本比對 → 四格都紅（錢掉了） |
+| `expire` 到期（T5）× 收款通知（T3） | `PENDING` 且已到期 | sweep 先停／通知先停 | `TestRace_TheSweepExpiresAPaymentWhileItsNotificationIsProcessed`：sweep 輸 → 計一次 conflict、不發 `PaymentExpired`、付款單 `CAPTURED`；通知輸 → 先 `EXPIRED` 再 T8 `CAPTURED`。拿掉版本比對 → 「通知先到」那格紅（被改成 `EXPIRED`） |
+| `expire` 到期（T5）× `OrderCancelled`／`OrderCompleted` | `PENDING` 且已到期 | sweep 先停／結束先停 × 兩種結束 | `TestRace_TheSweepExpiresAPaymentWhileItsOrderEnds`：結束先到 → `CANCELLED`＋conflict；sweep 先到 → `EXPIRED` 並記下結束的結局（T12）。拿掉版本比對 → 四格都紅 |
+| `StartPayment`（T2）× `OrderCancelled`（T7） | `PENDING`，尚無 checkout | `StartPayment` 先停（已開 provider checkout、未存）／取消先停 | `TestRace_StartPaymentAndTheCancellationOfItsOrder`：兩邊付款單都 `CANCELLED`、**開出來的那一個 checkout 一定被取消**（`StartPayment` 輸 → 回 `payment.not_pending` 並收回；取消輸 → 重送後取消它）。拿掉 `dropUnused` → 「取消先到」那格紅（checkout 仍可付）；拿掉版本比對 → 兩格紅 |
+| 同一個 `PaymentRefundRequested`（T11）送兩次同時處理 | `REFUNDING` | 第一次停在 save 前、第二次跑完 | `TestRace_TheSameRefundTwiceAtOnce`：provider 只退一次（冪等 key）、一個 `PaymentRefunded`、輸的一次 `ErrStale` 後重送找到 `REFUNDED`。拿掉版本比對 → 紅（兩個事件） |
+| `PaymentCaptured`／`PaymentExpired` × 顧客取消／另一個付款事件（ordering 側） | 訂單 `CONFIRMED` | 三對 × 兩種完成順序 | `TestPaymentEvents_RacesOnPostgres`（`pkgs/ordering`） |
+| 晚到的通知 × 顧客再按一次付款 × 取消 | `PENDING`→`CANCELLED` | 同一個 checkout 的重送 | `TestWebhook_ALateNotificationFindsItsPaymentAfterTheBuyerStartsAgain` |
+| 補查的清單比 batch 長、查詢失敗佔隊頭 | `EXPIRED`／`CANCELLED` | 有界掃描 | `TestSweep_ReconcileReachesEveryPaymentWhenEligibleExceedsTheBatch`、`TestSweep_AFailingQueryDoesNotHoldTheFrontOfTheDueListOnPostgres` |
+
+**其餘格子**：沒有「兩個 handler 在同一列上互搶」可言的組合不在上表——ordering 側見 `TestPaymentEvents_RacesOnPostgres`；`OrderConfirmed` 重送由 `unique(order_id)` 擋（`TestRepository_*`）；webhook 重送由 `unique(provider, provider_event_id)` 擋（kind ③ 與 `TestReceiveWebhook_*`）。**款項早於 `OrderCancelled` 到（T3→T10）與其反向**由上面第二列（收款通知 × 取消）涵蓋，不再只是「組件分段證據」。
+
+
 ## 6. 發起方式與 RPC
 
 - **建單**：`consume` 收到 `OrderConfirmed` 建 `PENDING` 付款單並開始計時（T1），**此時不打 provider**。這對每張 `CONFIRMED` 訂單都發生，不看快照——ordering 才是看快照的一方（§8）。
@@ -316,7 +335,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 3 | Saga（3A、3B **已實作**） | `consume`（訂閱 `OrderConfirmed`／`OrderCancelled`／`OrderCompleted`）、webhook 落地（含 platform 的 gin route option）、`expire`、自動退款（T10–T11）、ordering 訂閱 `PaymentCaptured`／`PaymentExpired`（依快照）、**`poison`／`prune` 的 `payment` 納入**（見下） | 否（預設快照 `false` 時 ordering 忽略付款事件） |
 | 4 | 入口（**已實作**） | `payment.v1.PublicPaymentService`（rpc 轉發 `StartPayment`／`GetPayment`，含 `payment.disabled`、`payment.unavailable`）、`payment.*` 設定、Console Pay 卡片 | 否（預設設定下快照全為 `false`、payment 設定選填，頁面與現在一樣） |
 | 5 | 部署 | **5a** goreleaser 第六個 image（#394）；**5b** mock 狀態跨 process 共用（`payment.mock_*`，migration `0003`）；**5c** chart（`paymentRpc`，5c 時預設 off；切片 6 起預設 on）、ingress 只開 webhook 並限流、`task helm-check` 負例、kind 實測（`payment.sh`）、Grafana 面板與 alert；bot chart bump 常設授權的書面由 lead 另改 | 否 |
-| 6 | 切換（**已實作**） | chart 預設開（`paymentRpc.enabled`、`config.ordering.require_payment` 預設 `true`，binary 預設不變；`auth.mode` 預設仍 `off`，預設安裝 fail closed 並指名兩條出路；所有 `ci/` profile 與 kind base 顯式選邊）、mock 控制入口 `payment-rpc mock pay\|notify\|fail`（`payment.mock_control`，migration `0004`）、worker 在開關開著而沒有 `payment.upstream` 時拒絕啟動、kind 全流程（`payment-flow.sh`）與 Console 真流程（`task web-e2e-payment`），§5 全部競態與 TTL 序列在真環境成立 | **是**（chart 預設） |
+| 6 | 切換（**已實作**） | chart 預設開（`paymentRpc.enabled`、`config.ordering.require_payment` 預設 `true`，binary 預設不變；`auth.mode` 預設仍 `off`，預設安裝 fail closed 並指名兩條出路；所有 `ci/` profile 與 kind base 顯式選邊）、mock 控制入口 `payment-rpc mock pay\|notify\|fail`（`payment.mock_control`，migration `0004`）、worker 在開關開著而沒有 `payment.upstream` 時拒絕啟動、kind 全流程（`payment-flow.sh`）與 Console 真流程（`task web-e2e-payment`），§5 的競態與 TTL 序列在真環境成立（kind 為組件分段證據；交錯逐格見 §5「已測交錯」，兩格未做真 Postgres 交錯見其下） | **是**（chart 預設） |
 
 每片一個 PR，切片 6 之前都不改變現有下單行為。**例外：切片 3 分兩支（3A、3B）**——3A 是 payment 側（migration、`consume`、webhook、`expire`），3B 是 ordering 訂閱 `PaymentCaptured`／`PaymentExpired` 與 `poison`／`prune` 納入 payment。3B 讀 3A migration 建的 `payment.events_*` 表，所以 3A 合併後才從新 main 開 3B，不做 stacked PR。3A 單獨合併時不改變任何下單行為：沒有人訂閱 payment 的事件，`consume` 也還沒部署（收到 `OrderConfirmed` 建付款單會寫資料，部署 `consume` 是切片 5 的事）。
 
