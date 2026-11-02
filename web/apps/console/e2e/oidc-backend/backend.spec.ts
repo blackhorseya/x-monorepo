@@ -1,11 +1,11 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { BACKEND_IDP_PORT, BACKEND_RPC_PORT } from "../../playwright.config";
+import { BACKEND_IDP_PORT, BACKEND_RPC_PORT, FOREIGN_IDP_PORT } from "../../playwright.config";
 import { stubConfig } from "../auth/oidc";
 import { subject, useKey } from "../auth/helpers";
 import { uid } from "../uid";
 import { TestIdp } from "./idp";
 
-// The console against the REAL rpc with auth.oidc on (e2e/oidc-backend/rpc.yaml) and a loopback IdP
+// The console against the REAL rpc with auth.oidc on (config generated from e2e/oidc-backend/rpc.yaml by rpc-server.ts) and a loopback IdP
 // whose ES256 tokens the rpc verifies through its real JWKS fetch. Covers what the stubbed `auth`
 // project cannot: the server accepts the token, an unbound identity really gets
 // auth.unbound_identity, ClaimInvite really binds, and RevokeSessions really refuses old tokens.
@@ -69,13 +69,13 @@ test("an OIDC token the server verified, for an identity with no account, gets t
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-// The rpc trusts exactly one issuer, the one derived from the same port as the IdP (rpc.yaml). A token
+// The rpc trusts exactly one issuer, the one generated from the same port as the IdP (rpc-server.ts). A token
 // from another IdP, even one that signs correctly for the same client id, must not get through: the
 // console shows no claim flow for it. The sign-in through the configured IdP right after is the control
 // that this test can pass only when the rpc is really talking to its own IdP.
 test("a token from an IdP the rpc is not configured for is refused; the configured IdP still gets the claim flow @ports", async ({ page, request }) => {
   await invitedUser(request);
-  const other = new TestIdp(BACKEND_IDP_PORT + 1, CLIENT_ID);
+  const other = new TestIdp(FOREIGN_IDP_PORT, CLIENT_ID);
   await other.start();
   try {
     other.user = { ...idp.user };

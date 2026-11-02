@@ -1,12 +1,15 @@
-# The rpc of the "oidc-backend" project: auth required, one static admin key (to set accounts up),
-# and the loopback test IdP of e2e/oidc-backend/idp.ts as the only OIDC issuer. Port 18121 is
-# rpcPort + 30 in playwright.config.ts; the host is a loopback literal, so plain http is allowed.
+# TEMPLATE of the rpc config of the "oidc-backend" project; e2e/oidc-backend/rpc-server.ts fills
+# @IDP_PORT@ (= E2E_RPC_PORT + 30, e2e/ports.ts) and runs the rpc on the result. Not a config you
+# can pass to bin/rpc as it is.
+#
+# auth required, one static admin key (to set accounts up), and the loopback test IdP of
+# e2e/oidc-backend/idp.ts as the only OIDC issuer; the host is a loopback literal, so plain http is allowed.
 auth:
   mode: required
   api_keys: "root=e2e-backend-admin-key-0123456789abcdef:admin"
   oidc:
     enabled: true
     issuers:
-      - issuer: http://127.0.0.1:18121/idp
+      - issuer: http://127.0.0.1:@IDP_PORT@/idp
         audience: x-console-e2e
         mapping: bound
