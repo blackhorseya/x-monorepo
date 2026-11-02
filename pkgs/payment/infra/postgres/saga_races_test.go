@@ -92,6 +92,19 @@ func (r *gatedRepo) Save(c context.Context, p *payment.Payment) error {
 	return r.Repository.Save(c, p)
 }
 
+// truncateAfter empties tables when the test ends and reports a failure of that (a cleanup that swallowed it would leave the
+// next test a dirty table).
+func truncateAfter(t *testing.T, e *sagaEnv, tables ...string) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, table := range tables {
+			if err := e.db.Exec("TRUNCATE " + table).Error; err != nil {
+				t.Errorf("truncate %s: %v", table, err)
+			}
+		}
+	})
+}
+
 // endings are the two events that end an order before its payment exists: OrderCancelled (T15 -> T14) and
 // OrderCompleted (T15 -> T14 with COMPLETED_UNPAID, docs/payment.md §3). Each race below runs for both: the payment must end
 // CANCELLED with the outcome the event names, in whichever order the handlers interleave — both ack, so nothing
@@ -482,7 +495,7 @@ func TestRace_AnExistingPaymentIsCapturedAndItsOrderEndsAtOnce(t *testing.T) {
 				if err := e.db.Exec("TRUNCATE " + refundTable).Error; err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { _ = e.db.Exec("TRUNCATE " + refundTable).Error })
+				truncateAfter(t, e, refundTable)
 
 				p := newPayment(t, "race-existing-pay", "race-existing-order")
 				if err := e.repo.Save(c, p); err != nil {
@@ -595,7 +608,7 @@ func TestRace_TheSweepExpiresAPaymentWhileItsNotificationIsProcessed(t *testing.
 			if err := e.db.Exec("TRUNCATE " + expiredTable).Error; err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = e.db.Exec("TRUNCATE " + expiredTable).Error })
+			truncateAfter(t, e, expiredTable)
 
 			p := newPayment(t, "race-sweep-pay", "race-sweep-order")
 			if err := e.repo.Save(c, p); err != nil {
@@ -706,7 +719,7 @@ func TestRace_TheSweepExpiresAPaymentWhileItsOrderEnds(t *testing.T) {
 				if err := e.db.Exec("TRUNCATE " + expiredTable).Error; err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { _ = e.db.Exec("TRUNCATE " + expiredTable).Error })
+				truncateAfter(t, e, expiredTable)
 
 				p := newPayment(t, "race-sweep-end-pay", "race-sweep-end-order")
 				if err := e.repo.Save(c, p); err != nil {
@@ -911,8 +924,11 @@ func TestRace_TheSameRefundTwiceAtOnce(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() {
-		_ = e.db.Exec("TRUNCATE " + refundedTable).Error
-		_ = e.db.Exec("TRUNCATE payment.mock_refunds, payment.mock_checkouts, payment.mock_faults CASCADE").Error
+		for _, q := range []string{"TRUNCATE " + refundedTable, "TRUNCATE payment.mock_refunds, payment.mock_checkouts, payment.mock_faults CASCADE"} {
+			if err := e.db.Exec(q).Error; err != nil {
+				t.Errorf("%s: %v", q, err)
+			}
+		}
 	})
 
 	p := newPayment(t, "race-refund-pay", "race-refund-order")

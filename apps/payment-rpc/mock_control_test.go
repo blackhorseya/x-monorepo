@@ -416,7 +416,16 @@ func holdTableLock(t *testing.T, url, table string) (release func()) {
 		t.Fatal(err)
 	}
 	var once sync.Once
-	release = func() { once.Do(func() { _, _ = conn.Exec(ctx, `ROLLBACK`); _ = conn.Close(ctx) }) }
+	release = func() {
+		once.Do(func() {
+			if _, err := conn.Exec(ctx, `ROLLBACK`); err != nil {
+				t.Errorf("release the table lock: %v", err)
+			}
+			if err := conn.Close(ctx); err != nil {
+				t.Errorf("close the lock holder's connection: %v", err)
+			}
+		})
+	}
 	t.Cleanup(release)
 
 	return release
@@ -513,7 +522,8 @@ func TestMockControl_EverySubcommandEndsAtItsDeadlineWhileTheDatabaseWaits(t *te
 				got = &r
 				t.Fatalf("the command was still waiting %s after its %s deadline and then returned %v once the lock was released", time.Since(start), mockTimeout, r.err)
 			}
-			if r.err == nil || !(errors.Is(r.err, context.DeadlineExceeded) || strings.Contains(r.err.Error(), "deadline") || strings.Contains(r.err.Error(), "canceled")) {
+			cancelled := r.err != nil && (errors.Is(r.err, context.DeadlineExceeded) || strings.Contains(r.err.Error(), "deadline") || strings.Contains(r.err.Error(), "canceled"))
+			if !cancelled {
 				t.Fatalf("at the deadline the command must return the cancellation, got %v", r.err)
 			}
 			if r.took > mockTimeout+3*time.Second {
