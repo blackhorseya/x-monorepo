@@ -241,9 +241,17 @@ watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預
 - 指標 B：worker 停著，先建 2000 筆訂單（全部 PENDING），再啟動 worker；計時從啟動 worker 到「沒有 PENDING、全部 CONFIRMED、RESERVED 的 reservation 數等於訂單數」（`tests/k6/bench_drain.sh`，輪詢間隔 0.2s）。
 - **採用條件**：候選的 A 在三輪都比同一輪的 100 改善至少 20%，且 B 變慢不超過 25%。
 
-**批次確實有累積**（這個負載下才有意義）：另跑一次插了計數的 worker（batch 100，VUS=50，不在下面 9 輪裡），每次領到訊息的輪詢共 290 次，平均一次領 34.14 筆、97% 的輪詢領到 2 筆以上、最多 50 筆（= VUS）。
+**批次確實有累積，而且 knob 確實生效**：另外各跑一次插了計數的 worker（VUS=50；batch 100 跑 60s，batch 10 與 1 跑 20s；都不在下面 9 輪裡）。計數掛在 `OffsetsAdapter.AckMessageQuery`，記每次領到訊息的輪詢的 `len(p.Rows)`：
 
-**環境**：Apple M1 Max（10 核、32 GB）、macOS 26.6.2（Darwin 25.6.0）、Postgres 17.11（podman 上的 compose Postgres，與 rpc / worker / k6 同一台機器）、Go 1.27.1、k6 v2.2.0。量測 binary 建自 commit `cf828fcd94c714d63ff1e7cb70ccba8cb9384f62`（加上 `worker.subscribe_batch_size` 的暫時 knob，這個 PR 的最終內容**不含**；harness 在 `c3c7e4a0c56e7a830cbeade3ceee284ce5a940cf` 的 `tests/k6/subscribe_batch.sh`、`backlog.js`，兩者都在這個 PR 的 commit 歷史裡，隨後 revert）。**量測時這台機器不安靜**：1 分鐘 load average 在 13 到 35 之間（10 核），超過 `bench.sh` 的 1.0/核門檻；這是共用的開發機，沒有等到安靜。每次執行前後的 load 在下表。
+| batch | 領到訊息的輪詢次數 | 每次平均筆數 | 最多 | 領到 2 筆以上的比例 |
+|---|---|---|---|---|
+| 100 | 290 | 34.14 | 50（= VUS） | 97% |
+| 10 | 504 | 8.86 | 10 | 97% |
+| 1 | 4944 | 1.00 | 1 | 0% |
+
+所以這個負載下 batch 100 與 10 確實會累積；batch 1 的上限就是 1，沒有累積。
+
+**環境**：Apple M1 Max（10 核、32 GB）、macOS 26.6.2（Darwin 25.6.0）、Postgres 17.11（podman 上的 compose Postgres，與 rpc / worker / k6 同一台機器）、Go 1.27.1、k6 v2.2.0。量測 binary 建自 commit `cf828fcd94c714d63ff1e7cb70ccba8cb9384f62`（加上 `worker.subscribe_batch_size` 的暫時 knob，這個 PR 的最終內容**不含**；harness 在 `c3c7e4a0c56e7a830cbeade3ceee284ce5a940cf` 的 `tests/k6/subscribe_batch.sh`、`backlog.js`，兩者都在這個 PR 的 commit 歷史裡，隨後 revert；squash merge 後這兩個 commit 不再可達，重現請照上述方法：knob 是 `eventbus.WithSubscribeBatchSize` → `SchemaAdapter.SubscribeBatchSize` → `worker.subscribe_batch_size`）。**量測時這台機器不安靜**：1 分鐘 load average 在 13 到 35 之間（10 核），超過 `bench.sh` 的 1.0/核門檻；這是共用的開發機，沒有等到安靜。每次執行前後的 load 在下表。
 
 **指標 A：`reservation_latency` p95（ms）**，括號是相對同一輪的 100：
 
