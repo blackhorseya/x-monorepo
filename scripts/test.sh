@@ -189,7 +189,8 @@ expect_eq ".goreleaser.yaml is an image change, and a scripts-test input (cosign
 expect_eq "another workflow is actions-resolve only" "actions_resolve" "$(jobs_on wf .github/workflows/labeler.yml)"
 # release.yml pins cosign-release (#215): a bump there must run release-snapshot's cosign smoke and
 # Rekor canary, which ci-changes.sh used to skip (release.yml only set the actions area).
-expect_eq "release.yml runs release-snapshot too" "release_snapshot actions_resolve" "$(jobs_on relyml .github/workflows/release.yml)"
+expect_eq "release.yml runs release-snapshot too, and scripts-test (its image loop is a list case input)" "release_snapshot actions_resolve scripts_test" "$(jobs_on relyml .github/workflows/release.yml)"
+expect_eq "release-drafter.yml runs actions-resolve and scripts-test (its Images block is a list case input)" "actions_resolve scripts_test" "$(jobs_on drafter .github/release-drafter.yml)"
 expect_eq "ci.yml runs everything"   "$all_jobs" "$(jobs_on ciyml .github/workflows/ci.yml)"
 expect_eq "Taskfile runs everything" "$all_jobs" "$(jobs_on taskfile Taskfile.yml)"
 expect_eq "scripts/ runs everything" "$all_jobs" "$(jobs_on scripts scripts/new.sh)"
@@ -1325,6 +1326,29 @@ done
 if kill -0 "$bystander" 2>/dev/null; then ok; else bad "guard: a process outside the suite's group was killed"; fi
 kill "$bystander" 2>/dev/null || true
 for f in "$tmp"/guard-pid-*; do if [ -s "$f" ]; then kill -9 "$(cat "$f")" 2>/dev/null || true; fi; done
+
+# ── release image lists ────────────────────────────────────────────────────────────────────────
+# The images a release ships are named in five places, and adding an app to one and forgetting another
+# gives a release whose images are not all built, signed, verified or documented (payment-rpc, #367
+# slice 5a): .goreleaser.yaml (dockers_v2: the Go images), release.yml (the summary of what was pushed),
+# scripts/release-verify.sh (the signature check of each), release-drafter.yml (the Images block of the
+# notes) and Taskfile.yml's APPS (every deployable app). The console is the one image with no Go binary:
+# it is in the last three, built by release.yml with buildx. An image added to any list alone is a red
+# scripts-test, not a release found wrong afterwards.
+words() { tr ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ' | sed 's/ $//'; }
+images_in() { grep -o 'ghcr\.io/blackhorseya/x-monorepo/[a-z-]*' "$1" | sed 's#.*/##' | words; }
+go_images=$(images_in "$src/.goreleaser.yaml")
+apps=$(sed -n 's/^  APPS: //p' "$src/Taskfile.yml" | words)
+with_console=$(printf '%s console' "$go_images" | words)
+expect_match "release images: .goreleaser.yaml lists images (positive control)" "rpc" "$go_images"
+expect_eq "release images: every app in Taskfile APPS ships a goreleaser image, and nothing else does" "$apps" "$go_images"
+expect_eq "release images: release-verify.sh checks each image's signature" "$with_console" \
+  "$(sed -n 's/^for app in \(.*\); do$/\1/p' "$src/scripts/release-verify.sh" | words)"
+expect_eq "release images: release.yml's summary names each pushed image" "$with_console" \
+  "$(sed -n 's/^ *for app in \(.*\); do$/\1/p' "$src/.github/workflows/release.yml" | words)"
+expect_eq "release images: the release notes' Images block lists each" "$with_console" \
+  "$(grep -o '^  ghcr\.io/blackhorseya/x-monorepo/[a-z-]*:\$RESOLVED_VERSION' "$src/.github/release-drafter.yml" | sed 's#.*/##; s#:.*##' | words)"
+expect_match "release images: ci.yml's release-snapshot job smokes the payment-rpc image" "scripts/image-smoke.sh payment-rpc" "$(cat "$src/.github/workflows/ci.yml")"
 
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

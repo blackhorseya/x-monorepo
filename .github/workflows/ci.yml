@@ -320,6 +320,10 @@ jobs:
         with:
           cosign-release: v3.1.4
       - run: task release-check release-snapshot
+      # The dry run builds the binary; this proves the image made from it starts `payment-rpc serve`
+      # (non-root, read-only rootfs, auth required) the way a release would ship it (#367 slice 5a).
+      - name: the payment-rpc image starts and serves
+        run: scripts/image-smoke.sh payment-rpc
       - name: .goreleaser.yaml's signs command works with this cosign (throwaway key)
         run: scripts/cosign-smoke.sh
       - name: a Rekor v2 409 is re-signed, a 503 is not (#215, real cosign, loopback v2)
