@@ -71,9 +71,9 @@ type httpRoute struct {
 // itself (a webhook verifies a signature over the raw body, before it writes anything). The route does get
 // the request span (otelgin) and gin's recovery. Paths under a Connect prefix are not for this.
 func WithHTTPRoute(method, path string, h http.Handler) Option {
-	_, _, _ = method, path, h
-
-	return func(*options) {} // SPEC STAGE: nothing is mounted
+	return func(o *options) {
+		o.httpRoutes = append(o.httpRoutes, httpRoute{method: method, path: path, handler: h})
+	}
 }
 
 // TrustRemoteTrace makes the server continue the trace named by an incoming

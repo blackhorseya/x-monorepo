@@ -28,7 +28,22 @@ type WebhookEvent struct {
 
 // NewWebhookEvent validates a verified notification. amount is the zero Money for an event without one.
 func NewWebhookEvent(provider, eventID, eventType, ref string, amount kernel.Money, body []byte, at time.Time) (*WebhookEvent, error) {
-	// SPEC STAGE: nothing is validated
+	switch {
+	case provider == "" || len(provider) > 64:
+		return nil, ErrInvalidWebhook
+	case eventID == "" || len(eventID) > 128:
+		return nil, ErrInvalidWebhook
+	case eventType == "" || len(eventType) > 128 || len(ref) > 128:
+		return nil, ErrInvalidWebhook
+	case len(body) == 0 || len(body) > MaxWebhookBody:
+		return nil, ErrInvalidWebhook
+	}
+	if amount != (kernel.Money{}) {
+		if err := validateAmount(amount); err != nil {
+			return nil, ErrInvalidWebhook
+		}
+	}
+
 	return &WebhookEvent{provider: provider, eventID: eventID, eventType: eventType, ref: ref, amount: amount, body: append([]byte(nil), body...), receivedAt: at}, nil
 }
 
@@ -64,13 +79,18 @@ func (x *WebhookEvent) ReceivedAt() time.Time  { return x.receivedAt }
 func (x *WebhookEvent) ProcessedAt() time.Time { return x.processedAt }
 
 // IsCapture says whether the notification reports money collected.
-func (x *WebhookEvent) IsCapture() bool { return false } // SPEC STAGE
+func (x *WebhookEvent) IsCapture() bool { return x.eventType == WebhookCaptured }
 
 // Processed says whether the notification has been applied (or deliberately ignored).
 func (x *WebhookEvent) Processed() bool { return !x.processedAt.IsZero() }
 
 // MarkProcessed records that the notification has been dealt with, once: a second call keeps the first time.
-func (x *WebhookEvent) MarkProcessed(time.Time) {} // SPEC STAGE
+func (x *WebhookEvent) MarkProcessed(at time.Time) {
+	if x.Processed() {
+		return
+	}
+	x.processedAt = at
+}
 
 // WebhookRepository keeps the verified notifications.
 type WebhookRepository interface {

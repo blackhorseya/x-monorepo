@@ -153,11 +153,23 @@ func (h *RefundHandler) Handle(c context.Context, payload []byte) error {
 	return result(ctx, TopicPaymentRefundRequested, evt.GetPaymentId(), err)
 }
 
-// WebhookReceivedHandler consumes payment.v1.WebhookReceived. SPEC STAGE: it acknowledges and drives nothing.
+// WebhookReceivedHandler consumes payment.v1.WebhookReceived: apply a stored provider notification
+// (T3 / T4 / T8 / T9, the D and E columns).
 type WebhookReceivedHandler struct{ uc WebhookUC }
 
 func NewWebhookReceivedHandler(uc WebhookUC) *WebhookReceivedHandler {
 	return &WebhookReceivedHandler{uc: uc}
 }
 
-func (h *WebhookReceivedHandler) Handle(context.Context, []byte) error { return nil }
+func (h *WebhookReceivedHandler) Handle(c context.Context, payload []byte) error {
+	ctx := contextx.FromContext(c)
+	var evt paymentv1.WebhookReceived
+	if err := decode(ctx, TopicWebhookReceived, payload, &evt); err != nil {
+		return err
+	}
+	_, err := h.uc.Execute(ctx, dto.WebhookReceivedInput{Provider: evt.GetProvider(), EventID: evt.GetProviderEventId()})
+
+	// The key names a stored row (ours); the provider's event id is a hash-like opaque string, but it is
+	// the provider's, so the log line carries the provider name and a fixed code, never the id.
+	return result(ctx, TopicWebhookReceived, evt.GetProvider(), err)
+}

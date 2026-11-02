@@ -156,23 +156,90 @@ func (i *OutcomeRepository) Record(c context.Context, orderID string, outcome pa
 
 var _ payment.WebhookRepository = (*WebhookRepository)(nil)
 
-// WebhookRepository keeps the verified notifications. SPEC STAGE: it keeps nothing.
-type WebhookRepository struct{}
+// WebhookRepository keeps the verified notifications in memory.
+type WebhookRepository struct {
+	mu    sync.Mutex
+	order []string
+	data  map[string]payment.ReconstituteWebhookParams
+}
 
-func NewWebhookRepository() *WebhookRepository { return &WebhookRepository{} }
+func NewWebhookRepository() *WebhookRepository {
+	return &WebhookRepository{data: map[string]payment.ReconstituteWebhookParams{}}
+}
 
-func (i *WebhookRepository) Insert(context.Context, *payment.WebhookEvent) (bool, error) {
+func webhookKey(provider, id string) string { return provider + "\x00" + id }
+
+func (i *WebhookRepository) Insert(c context.Context, w *payment.WebhookEvent) (bool, error) {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return false, err
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	key := webhookKey(w.Provider(), w.EventID())
+	if _, ok := i.data[key]; ok {
+		return false, nil
+	}
+	i.data[key] = payment.ReconstituteWebhookParams{
+		Provider: w.Provider(), EventID: w.EventID(), EventType: w.EventType(), Ref: w.Ref(), Amount: w.Amount(),
+		Body: w.Body(), ReceivedAt: w.ReceivedAt(), ProcessedAt: w.ProcessedAt(),
+	}
+	i.order = append(i.order, key)
+
 	return true, nil
 }
 
-func (i *WebhookRepository) Find(context.Context, string, string) (*payment.WebhookEvent, error) {
-	return nil, payment.ErrNotFound
+func (i *WebhookRepository) Find(c context.Context, provider, eventID string) (*payment.WebhookEvent, error) {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return nil, err
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	rec, ok := i.data[webhookKey(provider, eventID)]
+	if !ok {
+		return nil, payment.ErrNotFound
+	}
+
+	return payment.ReconstituteWebhook(rec)
 }
 
-func (i *WebhookRepository) MarkProcessed(context.Context, string, string, time.Time) error {
+func (i *WebhookRepository) MarkProcessed(c context.Context, provider, eventID string, at time.Time) error {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return err
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	key := webhookKey(provider, eventID)
+	if rec, ok := i.data[key]; ok && rec.ProcessedAt.IsZero() {
+		rec.ProcessedAt = at
+		i.data[key] = rec
+	}
+
 	return nil
 }
 
-func (i *WebhookRepository) DeleteProcessedBefore(context.Context, time.Time, int) (int, error) {
-	return 0, nil
+func (i *WebhookRepository) DeleteProcessedBefore(c context.Context, cutoff time.Time, limit int) (int, error) {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return 0, err
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var kept []string
+	deleted := 0
+	for _, key := range i.order {
+		rec := i.data[key]
+		if deleted < limit && !rec.ProcessedAt.IsZero() && rec.ProcessedAt.Before(cutoff) {
+			delete(i.data, key)
+			deleted++
+
+			continue
+		}
+		kept = append(kept, key)
+	}
+	i.order = kept
+
+	return deleted, nil
 }

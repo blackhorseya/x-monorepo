@@ -218,25 +218,100 @@ func (i *OutcomeRepository) Record(c context.Context, orderID string, outcome pa
 
 var _ payment.WebhookRepository = (*WebhookRepository)(nil)
 
-// WebhookRepository keeps payment.webhook_events. SPEC STAGE: it keeps nothing.
+// WebhookRepository keeps payment.webhook_events.
 type WebhookRepository struct {
 	db *gorm.DB
 }
 
 func NewWebhookRepository(db *gorm.DB) *WebhookRepository { return &WebhookRepository{db: db} }
 
-func (i *WebhookRepository) Insert(context.Context, *payment.WebhookEvent) (bool, error) {
-	return true, nil
+type webhookRow struct {
+	Provider        string `gorm:"primaryKey"`
+	ProviderEventID string `gorm:"primaryKey"`
+	EventType       string
+	ProviderRef     string
+	Amount          *int64
+	Currency        *string
+	Body            []byte
+	ReceivedAt      time.Time
+	ProcessedAt     *time.Time
 }
 
-func (i *WebhookRepository) Find(context.Context, string, string) (*payment.WebhookEvent, error) {
-	return nil, payment.ErrNotFound
+func (webhookRow) TableName() string { return Schema + ".webhook_events" }
+
+func (i *WebhookRepository) Insert(c context.Context, w *payment.WebhookEvent) (bool, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	var amount *int64
+	var currency *string
+	if w.Amount() != (kernel.Money{}) {
+		a, cur := w.Amount().Amount(), w.Amount().Currency()
+		amount, currency = &a, &cur
+	}
+	res := platformpg.TxOrDB(ctx, i.db).Exec(
+		`INSERT INTO `+Schema+`.webhook_events (provider, provider_event_id, event_type, provider_ref, amount, currency, body, received_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (provider, provider_event_id) DO NOTHING`,
+		w.Provider(), w.EventID(), w.EventType(), w.Ref(), amount, currency, w.Body(), w.ReceivedAt())
+	if res.Error != nil {
+		return false, fmt.Errorf("insert webhook event: %w", res.Error)
+	}
+
+	return res.RowsAffected == 1, nil
 }
 
-func (i *WebhookRepository) MarkProcessed(context.Context, string, string, time.Time) error {
+func (i *WebhookRepository) Find(c context.Context, provider, eventID string) (*payment.WebhookEvent, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var row webhookRow
+	if err := platformpg.TxOrDB(ctx, i.db).Take(&row, "provider = ? AND provider_event_id = ?", provider, eventID).Error; err != nil {
+		return nil, translate(fmt.Errorf("find webhook event: %w", err), payment.ErrNotFound, nil)
+	}
+	var amount kernel.Money
+	if row.Amount != nil && row.Currency != nil {
+		m, err := kernel.NewMoney(*row.Amount, *row.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("webhook event: %w", err)
+		}
+		amount = m
+	}
+
+	return payment.ReconstituteWebhook(payment.ReconstituteWebhookParams{
+		Provider: row.Provider, EventID: row.ProviderEventID, EventType: row.EventType, Ref: row.ProviderRef,
+		Amount: amount, Body: row.Body, ReceivedAt: row.ReceivedAt.UTC(), ProcessedAt: utc(row.ProcessedAt),
+	})
+}
+
+func (i *WebhookRepository) MarkProcessed(c context.Context, provider, eventID string, at time.Time) error {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := platformpg.TxOrDB(ctx, i.db).Exec(
+		`UPDATE `+Schema+`.webhook_events SET processed_at = ? WHERE provider = ? AND provider_event_id = ? AND processed_at IS NULL`,
+		at, provider, eventID).Error
+	if err != nil {
+		return fmt.Errorf("mark webhook event processed: %w", err)
+	}
+
 	return nil
 }
 
-func (i *WebhookRepository) DeleteProcessedBefore(context.Context, time.Time, int) (int, error) {
-	return 0, nil
+func (i *WebhookRepository) DeleteProcessedBefore(c context.Context, cutoff time.Time, limit int) (int, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	res := platformpg.TxOrDB(ctx, i.db).Exec(
+		`DELETE FROM `+Schema+`.webhook_events WHERE (provider, provider_event_id) IN (
+		   SELECT provider, provider_event_id FROM `+Schema+`.webhook_events
+		   WHERE processed_at IS NOT NULL AND processed_at < ? ORDER BY processed_at LIMIT ?)`, cutoff, limit)
+	if res.Error != nil {
+		return 0, fmt.Errorf("delete processed webhook events: %w", res.Error)
+	}
+
+	return int(res.RowsAffected), nil
 }
