@@ -1,0 +1,32 @@
+# Merged into the generated public OpenAPI document (protoc-gen-connect-openapi `base=` option).
+# Hand-written metadata only; paths/schemas come from public.proto (and the types it imports).
+openapi: 3.1.0
+info:
+  title: Payment API (public)
+  version: v1
+  description: |
+    The payment API apps/rpc serves to users: `payment.v1.PublicPaymentService` (docs/payment.md §6).
+    Every procedure is `POST /api/payment.v1.PublicPaymentService/<Method>` (the bare `/payment.v1.PublicPaymentService/<Method>` works too, for gRPC) with a JSON body;
+    errors use the Connect error shape `{ "code": "...", "message": "..." }` and carry
+    the stable domain code in the `X-Error-Code` response header.
+    Requests carry the order id only: who is paying comes from the credential. The internal
+    `payment.v1.PaymentService` (payment-rpc, service key only) is not part of this document.
+servers:
+  - url: /api
+
+# Auth (platform/server auth interceptor): a credential is required to use payments.
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Static key from `auth.api_keys` (`name=key[:role|role]`); the principal's subject is the customer.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (or an OIDC login); the subject is the customer.
+security:
+  - apiKey: []
+  - bearer: []

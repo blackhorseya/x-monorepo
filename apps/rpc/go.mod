@@ -10,6 +10,7 @@ require (
 	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
+	github.com/blackhorseya/x-monorepo/pkgs/payment v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -172,6 +173,8 @@ replace (
 )
 
 replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory
+
+replace github.com/blackhorseya/x-monorepo/pkgs/payment => ../../pkgs/payment
 
 replace github.com/blackhorseya/x-monorepo/pkgs/catalog => ../../pkgs/catalog
 
