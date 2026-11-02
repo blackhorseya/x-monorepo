@@ -6,8 +6,9 @@
 #   scripts/ci-changes.sh [base] [head]   # default origin/main...HEAD (the PR's diff)
 #   CI_ALL=1 scripts/ci-changes.sh        # everything true: main (the release gate) and dispatch
 #
-# Areas → jobs. A file that no area claims (README, docs/, Grafana dashboards and alerts, the
-# compose file, .claude, e2e specs of other areas…) runs nothing but what it belongs to. ci.yml,
+# Areas → jobs. A file that no area claims (README, docs/, the compose file, .claude, e2e specs of
+# other areas…) runs nothing but what it belongs to. Grafana dashboards and alerts belong to helm-check
+# (check-observability.py reads the payment panels and rules). ci.yml,
 # .github/actions, Taskfile.yml and scripts/ are inputs to every job, so touching them runs all.
 # Scripts outside scripts/ that scripts/test.sh drives (coredns-dex.sh) also run scripts-test.
 #
@@ -77,6 +78,9 @@ go_prod=false; has_prod '*.go' 'go.work' 'go.work.sum' '*/go.mod' '*/go.sum' '.g
 gomod=false;  has 'go.work' 'go.work.sum' '*/go.mod' '*/go.sum' && gomod=true   # the dependency graph of every binary
 web=false;    has 'web/*' && web=true
 helm=false;   has 'deployments/helm/*' && helm=true
+# The payment panels and alert rules in deployments/docker/grafana are checked by task helm-check (check-observability.py: a metric name typo
+# makes a rule that never fires), so a change to them runs the helm job — and only that: it renders nothing the cluster installs.
+grafana=false; has 'deployments/docker/grafana/*' && grafana=true
 release=false; has '.github/workflows/release.yml' && release=true   # pins cosign-release: the smoke + Rekor canary must run on a bump (#215)
 images=false; has 'deployments/docker/Dockerfile*' 'web/apps/console/Dockerfile' 'web/apps/console/deploy/*' '.goreleaser.yaml' '.dockerignore' && images=true
 # goreleaser builds the Go images from deployments/docker/Dockerfile*; the console image is built by release.yml
@@ -111,7 +115,7 @@ out actions_resolve  "$actions" "$ci"
 out web              "$web" "$proto" "$ci"
 out console_e2e      "$go_prod" "$web" "$dex" "$ci"
 out console_image    "$web" "$proto" "$images" "$ci"
-out helm             "$helm" "$ci"
+out helm             "$helm" "$grafana" "$ci"
 out scripts_test     "$ci" "$scripts_src"
 out helm_kind        "$go_prod" "$web" "$helm" "$images" "$ci"
 out helm_kind_keda   "$helm" "$keda_src" "$images" "$gomod" "$ci"

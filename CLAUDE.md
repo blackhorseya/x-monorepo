@@ -29,11 +29,11 @@ task expire -- --older-than 24h --dry-run   # reservation TTL：RESERVED 超過�
 task prune -- --older-than 720h --dry-run   # 刪每個 group 都 ack 過的 outbox 列 + 消費過的 inbox 列（worker prune；先 dry-run；NOTE 列出每個落後的 group 與最老未讀年齡：held back by = 過了 retention、behind = 還沒，--forget-group 刪掉不會再跑的）
 scripts/dex-token.sh [email] [--id-token]    # 本機 Dex（compose 的 `dex` 服務；kind 的 dex.yaml）：authorization code + PKCE 登入拿一顆真 JWT；issuer / 帳號 / 離線 /etc/hosts 見 docs/operations.md「Dex dev IdP」
 task bootstrap                              # identity 第一個 account + API key（空 store 才建；worker bootstrap；secret 只印一次）
-task helm-check            # deployments/helm/x-monorepo：每個 ci/*.yaml profile 跑 helm lint + kubeconform + check.py（derived 數字：grace period、hook 順序、prune args、console 的 RPC_UPSTREAM、ServiceMonitor / NetworkPolicy 的選擇器）
+task helm-check            # deployments/helm/x-monorepo：每個 ci/*.yaml profile 跑 helm lint + kubeconform + check.py（derived 數字：grace period、hook 順序、prune args、console 的 RPC_UPSTREAM、ServiceMonitor / NetworkPolicy 的選擇器、payment-rpc 的三個 workload 與 ingress 只有 webhook path）、ci-negative/ 全部要 render 失敗、check-observability.py（Payment 面板與 alert 的 metric 名稱是程式碼真的匯出的）
 task k6-wire               # tests/k6/wire.sh：四支腳本打一個回壞掉 HTTP response（status code / version / header 行帶著請求的 X-API-Key、body 被截斷、連線直接關）的假 server；每個 run 必須失敗，且 key 不在 k6 輸出、summary、metrics tag 任何地方（不需要 Postgres；CI 的 k6-wire job）
 task k6-bench              # tests/k6/bench.sh：效能 baseline（CreateOrder 吞吐 / 延遲、下單 → RESERVED，N≥3 次、每次獨立資料庫）；結果與重跑方法見 docs/perf-baseline.md；不進 CI（乾淨 runner 上用 `workflow_dispatch` 的 k6-bench workflow，不寫回 baseline）
 task k6-smoke              # tests/k6：orders（load thresholds）/ ratelimit（429 + Retry-After）/ timeout（1ns → 全部 DEADLINE_EXCEEDED）/ reservation（rpc + worker，下單 → RESERVED 延遲）各自起一個 bin/rpc 打；task k6 -- <script> 打現成 server
-task helm-kind             # 真裝：kind cluster + deployments/helm/kind（拋棄式 Postgres / Redis）+ tree build 的 image（含 console：web-build → web/apps/console/Dockerfile），install → smoke → upgrade → smoke；helm-kind-down 刪 cluster
+task helm-kind             # 真裝：kind cluster + deployments/helm/kind（拋棄式 Postgres / Redis）+ tree build 的 image（含 console：web-build → web/apps/console/Dockerfile），install → smoke → upgrade → smoke → payment.sh（payment-rpc 三個 workload、ingress-nginx 前的 webhook 與限流、payment-rpc 停掉時訂單照常 CONFIRMED）；helm-kind-down 刪 cluster
 task helm-kind-keda        # 接著在同一個 cluster：KEDA + OTLP collector + Prometheus，k6 灌訂單看 worker 真的靠 eventbus_consumer_lag scale out / in
 task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Connect + gRPC + gRPC-Web 同 port；RPC 在 /api/<svc>/<Method> 與原生路徑都通，/api/docs 開）
 task payment-rpc           # build 後以 configs/payment-rpc.yaml（gitignored，從 payment-rpc.example.yaml 複製）跑 ./bin/payment-rpc serve --require-durable，:8082；目前沒有人呼叫它（rpc 轉發是切片 4），要 `task migrate -- up` 先建 payment schema
@@ -98,7 +98,7 @@ apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Wate
                  `worker prune --older-than <d>` 是 outbox / inbox 的 retention（poison 表不清）；`worker expire --older-than <d>` 是 inventory 的 reservation TTL（adapters/cli，第二個 wire injector）；`worker bootstrap` 是 identity 的第一個 account + key（adapters/cli，第三個 injector；identity 沒 event 所以不在 router 裡）；
                  有 DB 時 `eventbus.Lag` 另報每張 outbox 表 / inbox 的大小與最老一列年齡（`eventbus_outbox_*` / `eventbus_inbox_*`），alert 用它抓 prune 沒跑與 stale group；各 BC 的 `adapters/metrics` 另報 `ordering_orders{status}` / `inventory_reservations{status}` 與各 status 最老一筆的年齡（saga 漏斗，PENDING 太老有 alert）
 apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
-deployments/helm Helm chart：rpc / worker Deployment、migrate pre-install/pre-upgrade hook Job、prune CronJob、console（nginx，/api proxy 到 rpc Service，`console.enabled` 預設 off）、
+deployments/helm Helm chart：rpc / worker Deployment、選配 payment-rpc（`paymentRpc.enabled` 預設 off：serve／consume Deployment ＋ expire CronJob，自己的 ConfigMap／Secret，只對外開 webhook 的 ingress ＋ ingress-nginx 限流）、migrate pre-install/pre-upgrade hook Job、prune CronJob、console（nginx，/api proxy 到 rpc Service，`console.enabled` 預設 off）、
                  選配 rpc ServiceMonitor 與 ingress-only NetworkPolicy（rpc 永遠放行 console；`ingressFrom` 空 = 任何來源）；terminationGracePeriodSeconds
                  從 rpc.shutdown / worker 的 drain 算出來（改 shutdown 行為要一起改 values 註解與 check.py）；CI 的 helm-kind job 在 kind 真裝 + smoke
 ```

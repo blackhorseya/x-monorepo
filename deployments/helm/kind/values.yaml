@@ -11,6 +11,8 @@ secrets:
   redisUrl: redis://redis:6379/0
   # catalog-rpc's own service key (rpc=<this>:admin); a throwaway value for the throwaway cluster.
   catalogRpc: { apiKey: kind-catalog-rpc-key-0123456789 }
+  # payment-rpc's own service key (rpc=<this>:admin) and the mock provider's webhook secret: throwaway values.
+  paymentRpc: { apiKey: kind-payment-rpc-key-0123456789, mockWebhookSecret: kind-mock-webhook-secret-0123456789 }
 config:
   http: { docs: true }
   # Dex from dex.yaml, reached through the CoreDNS rewrite (coredns-dex.sh). Plain http on a
@@ -43,3 +45,26 @@ worker:
     requests: { cpu: 10m, memory: 32Mi }
 console:
   enabled: true
+# payment-rpc on (docs/payment.md, slice 5c): serve, consume and the expire CronJob on their own ConfigMap and
+# Secret, the Postgres broker although this release's worker uses Redis, and the webhook-only Ingress that
+# payment.sh drives through an ingress-nginx it installs (the controller is not part of the chart). The rate
+# limit is low on purpose so payment.sh can hit it with a handful of requests. ordering.require_payment stays
+# false (the default): nothing in the order flow waits for payment.
+paymentRpc:
+  enabled: true
+  serve:
+    replicaCount: 1
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+  consume:
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+  expire:
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: pay.localtest.me
+    rateLimit: { rps: 2, burstMultiplier: 2, connections: 5 }
