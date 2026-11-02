@@ -43,9 +43,11 @@ func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.Inven
 // NewPoisonService serves admin.v1.AdminService over every BC's poison
 // table. Adding a BC: add its Schema here (the worker's poison.go lists the
 // same set). identity and catalog are not here: they consume no events, so
-// they have no poison table.
+// they have no poison table. payment is: its consumer parks messages in
+// payment.events_poison. Its name is the contract's constant — naming a schema must not
+// load the BC (docs/payment.md §1).
 func NewPoisonService(db *gorm.DB, auth config.Auth) *admin.PoisonService {
-	return admin.NewPoisonService(db, auth, []string{ordering.Schema, inventory.Schema})
+	return admin.NewPoisonService(db, auth, []string{ordering.Schema, inventory.Schema, paymentv1.Schema})
 }
 
 // NewReadiness lists what /api/readyz checks: the database when one is
