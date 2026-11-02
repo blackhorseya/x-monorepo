@@ -28,7 +28,6 @@ import (
 	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
@@ -241,16 +240,8 @@ func newEnv(t *testing.T, onHand int32) *raceEnv {
 	c, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 	cfg := config.Postgres{URL: withServerTimeouts(url, 30*time.Second, 2*time.Minute)}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel)
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
@@ -1169,23 +1160,9 @@ func TestLockBarrierRequiresTheIntendedIntruder(t *testing.T) {
 // suite's timeout.
 func TestIntruderStartFailureIsReported(t *testing.T) {
 	e := newEnv(t, 2)
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	dead, cleanup, err := platformpg.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup)
-	sqlDB, err := dead.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sqlDB.Close(); err != nil {
-		t.Fatal(err)
-	}
+	tel := pgtest.Telemetry(t)
+	dead := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel)
+	pgtest.ClosePool(t, dead)
 	broken := *e
 	broken.db = dead
 

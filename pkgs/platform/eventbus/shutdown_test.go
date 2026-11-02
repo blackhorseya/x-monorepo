@@ -17,7 +17,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	platformredis "github.com/blackhorseya/x-monorepo/pkgs/platform/redis"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/redis/redistest"
@@ -78,16 +77,8 @@ func TestRouter_DrainsInFlightOnShutdown(t *testing.T) {
 func drainDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	c := context.Background()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := platformpg.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel)
 	sqlDB, _ := db.DB()
 	for _, q := range []string{
 		"DROP TABLE IF EXISTS " + eventbus.TableName(drainTopic),

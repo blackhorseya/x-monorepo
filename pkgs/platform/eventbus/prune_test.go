@@ -11,8 +11,6 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
@@ -21,16 +19,8 @@ import (
 func TestPrune(t *testing.T) {
 	c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, cleanup, err := platformpg.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel)
 	sqlDB, _ := db.DB()
 	for _, q := range []string{
 		"DROP SCHEMA IF EXISTS prunetest CASCADE", "CREATE SCHEMA prunetest",

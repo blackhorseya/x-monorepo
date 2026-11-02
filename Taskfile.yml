@@ -570,6 +570,23 @@ tasks:
     deps: [build, web-build]
     cmds: ['web/apps/console/e2e/image.sh {{.CLI_ARGS}}']
 
+  web-e2e-ports:
+    desc: 'the Console OIDC e2e fixtures follow E2E_RPC_PORT / E2E_WEB_PORT (#383): the tests tagged @ports (real-backend claim and issuer-mismatch negative, the two logout cases, the own-origin token-endpoint case) on a NON-default port pair, CI=1 so no webServer reuses someone else''s, then checks that every derived port is closed on every loopback (127.0.0.1 and ::1) and the generated rpc config is gone (e2e/assert-clean.ts, which e2e/assert-clean.selftest.ts proves against IPv4, IPv6 and a real vite preview first, on ports of its own, two runs side by side in e2e/assert-clean.parallel.selftest.ts, a bind that fails must not pass as a skip in e2e/assert-clean.fault.selftest.ts). Not the RevokeSessions cache wait. What CI''s console-e2e job runs after the default-port run'
+    deps: [build, web-build]
+    dir: web/apps/console
+    cmds:
+      # Set in the shell, not in `env:`, so an inherited E2E_*_PORT / CI cannot change what is tested.
+      # The cleanup check runs whether the tests passed or not: every derived port closed and the generated rpc config gone.
+      - |
+        export CI=1 E2E_RPC_PORT=19511 E2E_WEB_PORT=4511
+        unset E2E_DATABASE_URL E2E_DEX E2E_CONSOLE_URL
+        rc=0
+        # The cleanup check checked first: it must see IPv4, IPv6 and a real vite preview (e2e/assert-clean.selftest.ts).
+        node --test --experimental-strip-types e2e/assert-clean.selftest.ts e2e/assert-clean.parallel.selftest.ts e2e/assert-clean.fault.selftest.ts || exit 1
+        pnpm exec playwright test --project=auth --project=oidc-backend --grep @ports {{.CLI_ARGS}} || rc=$?
+        node --experimental-strip-types e2e/assert-clean.ts || rc=1
+        exit $rc
+
   web-e2e-dex:
     desc: 'the oidc-dex Playwright project: the console signs in through the real dev Dex (compose service dex, started here if it is not up) against a real ./bin/rpc whose only OIDC issuer is that Dex; binding goes through CreateInvite + ClaimInvite. Needs dex.localtest.me to resolve (public DNS, or /etc/hosts offline: docs/operations.md "Dex dev IdP"). Other CI runs it with E2E_DEX=1 task web-e2e'
     deps: [build, web-build]

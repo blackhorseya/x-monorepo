@@ -24,7 +24,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/infra/provider/mock"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -47,16 +46,8 @@ func freshDB(t *testing.T) config.Postgres {
 	if err := postgres.Up(c, cfg, paymentpg.Migration()); err != nil {
 		t.Fatalf("migrate payment: %v", err)
 	}
-	tel, closeTel, err := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(closeTel)
-	db, closeDB, err := postgres.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(closeDB)
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel)
 	truncate := func() {
 		if err := db.WithContext(c).Exec("TRUNCATE payment.payments").Error; err != nil {
 			t.Errorf("truncate payment.payments: %v", err)
@@ -71,16 +62,8 @@ func freshDB(t *testing.T) config.Postgres {
 // seed stores a payment the way slice 3's consumer will (T1): PENDING, window open for 30 minutes.
 func seed(t *testing.T, cfg config.Postgres, id, order, customer string, mutate func(*payment.Payment)) {
 	t.Helper()
-	tel, closeTel, err := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeTel()
-	db, closeDB, err := postgres.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeDB()
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel)
 	total, err := kernel.NewMoney(1000, "TWD")
 	if err != nil {
 		t.Fatal(err)
@@ -333,13 +316,7 @@ func TestPayment_StartRefusals(t *testing.T) {
 	wantConnectCode(t, err, connect.CodeNotFound, "payment.not_found")
 
 	// a window that closed while nobody swept it: payment.expired (the stored PENDING row is past its time)
-	tel, closeTel, _ := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
-	defer closeTel()
-	db, closeDB, err := postgres.NewDB(env.cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeDB()
+	db := pgtest.DB(t, env.cfg, pgtest.Telemetry(t))
 	seed(t, env.cfg, "pay-old", "ord-old", owner, nil)
 	if err = db.Exec(`UPDATE payment.payments SET expires_at = now() - interval '1 minute' WHERE id = 'pay-old'`).Error; err != nil {
 		t.Fatal(err)

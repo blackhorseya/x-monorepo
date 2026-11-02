@@ -14,8 +14,6 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
@@ -26,16 +24,8 @@ const poisonTestTopic = "poisontest.v1.Ping"
 // gone) where the same group consumes it again; Drop deletes it.
 func TestPoison_ListRequeueDrop(t *testing.T) {
 	c := context.Background()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, cleanup, err := platformpg.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel)
 	sqlDB, _ := db.DB()
 	for _, q := range []string{"DROP SCHEMA IF EXISTS poisontest CASCADE", "CREATE SCHEMA poisontest"} {
 		if _, err := sqlDB.ExecContext(c, q); err != nil {

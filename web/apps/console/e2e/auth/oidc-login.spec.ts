@@ -181,16 +181,22 @@ test("without OIDC in the runtime config nothing changes: no login page, the cre
 // The token endpoint receives the authorization code and the PKCE verifier. The CSP allows the
 // console's own origin (the RPCs) and the issuer's, so the check that the endpoint belongs to the
 // issuer has to be the console's own: any other origin is refused before a code is ever requested.
-for (const [label, issuer, tokenEndpoint] of [
+const OWN_ORIGIN = "the console's own origin";
+const OWN_ORIGIN_ENDPOINT = "own-origin"; // resolved against the project's baseURL in the test: the auth console's port is not fixed
+for (const [label, issuer, endpoint] of [
   ["https issuer, token endpoint on another origin", ISSUER, "https://tokens.e2e.example/token"],
   ["https issuer, token endpoint on the same host but another port", ISSUER, "https://idp.e2e.example:8443/token"],
-  ["http issuer, token endpoint on the console's own origin", "http://idp.e2e.example/dex", "http://localhost:4174/review-token"],
+  [`http issuer, token endpoint on ${OWN_ORIGIN}`, "http://idp.e2e.example/dex", OWN_ORIGIN_ENDPOINT],
   ["http issuer, token endpoint on another http origin", "http://idp.e2e.example/dex", "http://tokens.e2e.example/token"],
 ] as const) {
-  test(`discovery with ${label} is refused: nothing is sent to it`, async ({ page }) => {
+  test(`discovery with ${label} is refused: nothing is sent to it${label.includes(OWN_ORIGIN) ? " @ports" : ""}`, async ({ page, baseURL }) => {
+    const tokenEndpoint = endpoint === OWN_ORIGIN_ENDPOINT ? new URL("/review-token", baseURL).toString() : endpoint;
     await stubConfig(page, { issuer });
     const idp = await mockIdp(page, { issuer, tokenEndpoint });
     await page.goto("/login");
+    // The case is only what it says if the endpoint IS the page's origin; on a console served from
+    // another port it would silently be "another http origin" and still pass.
+    if (label.includes(OWN_ORIGIN)) expect(new URL(tokenEndpoint).origin).toBe(new URL(page.url()).origin);
     await signIn(page);
     await expect(page.getByRole("alert")).toContainText(/origin/i);
     await page.waitForTimeout(300);

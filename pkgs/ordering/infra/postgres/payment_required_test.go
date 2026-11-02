@@ -16,7 +16,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -33,16 +32,8 @@ func TestMigration_PaymentRequired_ExistingOrdersAreFalse(t *testing.T) {
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup) // registered first: Cleanup is LIFO, so the restore below runs while the pool is open
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel) // closed by a t.Cleanup registered here, before any purge below: LIFO runs the purge while the pool is open
 
 	full := postgres.Migration()
 	upTo8 := platformpg.Migration{Schema: full.Schema, Files: filesUpTo(t, full.Files, 8)}
@@ -94,7 +85,7 @@ func TestMigration_PaymentRequired_ExistingOrdersAreFalse(t *testing.T) {
 		IsNullable    string
 		ColumnDefault *string
 	}
-	err = db.WithContext(c).Raw(
+	err := db.WithContext(c).Raw(
 		`SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'ordering' AND table_name = 'orders' AND column_name = 'payment_required'`,
 	).Scan(&cols).Error
 	if err != nil {
@@ -161,16 +152,8 @@ func TestOrderRepository_PaymentRequiredSnapshot(t *testing.T) {
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup) // registered before the purge below: LIFO, so the purge runs while the pool is open
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel) // closed by a t.Cleanup registered here, before any purge below: LIFO runs the purge while the pool is open
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}

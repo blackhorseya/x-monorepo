@@ -12,8 +12,7 @@ import (
 	"testing"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
 // dialCounter listens on a loopback port and counts the connections it gets,
@@ -47,11 +46,7 @@ func dialCounter(t *testing.T) (addr string, dials *atomic.Int32) {
 // on any later one; a guard that parses, then lets the driver parse again,
 // approves A and dials B.
 func TestNewDB_ExpectTargetHoldsWhenServiceFileChanges(t *testing.T) {
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
+	tel := pgtest.Telemetry(t)
 
 	addrA, dialsA := dialCounter(t)
 	addrB, dialsB := dialCounter(t)
@@ -96,12 +91,11 @@ func TestNewDB_ExpectTargetHoldsWhenServiceFileChanges(t *testing.T) {
 		writerDone <- err
 	}()
 
-	db, cleanup, err := postgres.NewDB(config.Postgres{
+	db, err := pgtest.TryDB(t, config.Postgres{
 		URL:          "service=probe servicefile=" + path + " connect_timeout=1",
 		ExpectTarget: addrA,
 	}, tel)
 	if err == nil {
-		cleanup()
 		t.Fatalf("NewDB = %v, nil; want an error (the listeners hang up)", db)
 	}
 	if werr := <-writerDone; werr != nil {

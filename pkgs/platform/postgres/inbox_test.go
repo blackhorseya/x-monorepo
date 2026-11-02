@@ -9,7 +9,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -24,16 +23,8 @@ func TestMain(m *testing.M) {
 // rolled-back attempt leaves no row, so the retry is a first delivery again.
 func TestInbox(t *testing.T) {
 	c := context.Background()
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer telCleanup()
-	db, cleanup, err := postgres.NewDB(config.Postgres{URL: pgtest.URL(t)}, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, config.Postgres{URL: pgtest.URL(t)}, tel)
 	for _, q := range []string{
 		"DROP SCHEMA IF EXISTS inboxtest CASCADE", "CREATE SCHEMA inboxtest",
 		"CREATE TABLE inboxtest.inbox (message_id VARCHAR(36) PRIMARY KEY, consumed_at TIMESTAMPTZ NOT NULL DEFAULT now())",
@@ -53,7 +44,7 @@ func TestInbox(t *testing.T) {
 
 	// Recorded inside a transaction that fails: the row goes with it.
 	boom := errors.New("use case failed")
-	err = postgres.Transaction(c, db, func(c context.Context, _ *gorm.DB) error {
+	err := postgres.Transaction(c, db, func(c context.Context, _ *gorm.DB) error {
 		if first, err := inbox.Record(c, "m-2"); err != nil || !first {
 			t.Fatalf("in tx: first=%v err=%v", first, err)
 		}

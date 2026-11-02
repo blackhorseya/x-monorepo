@@ -11,7 +11,6 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/domain/order"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
@@ -46,16 +45,8 @@ func TestOrderRepository_StatusSaveLeavesItemsUntouched(t *testing.T) {
 
 	c := context.Background()
 	cfg := config.Postgres{URL: url}
-	tel, telCleanup, err := otel.New(config.OTel{}, config.Log{Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(telCleanup)
-	db, cleanup, err := platformpg.NewDB(cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup) // registered before purge below: Cleanup is LIFO, so the purge runs while the pool is open
+	tel := pgtest.Telemetry(t)
+	db := pgtest.DB(t, cfg, tel) // closed by a t.Cleanup registered here, before any purge below: LIFO runs the purge while the pool is open
 	if err := platformpg.Up(c, cfg, postgres.Migration()); err != nil {
 		t.Fatal(err)
 	}
