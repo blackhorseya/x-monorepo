@@ -146,6 +146,31 @@ func TestX(t *testing.T) {
 			want: []string{"test-cleanup-pool-defer@004"},
 		},
 		{
+			// Named t, same pointer: an immediately called closure is not a subtest.
+			name: "immediately called closure given the parent's t",
+			src: `package x_test
+func TestX(t *testing.T) {
+	db, cleanup, _ := postgres.NewDB(cfg, tel)
+	defer cleanup()
+	func(t *testing.T) {
+		t.Cleanup(func() { check(db.Exec("x").Error) })
+	}(t)
+}`,
+			want: []string{"test-cleanup-pool-defer@004"},
+		},
+		{
+			name: "helper given the parent's t from a plain closure",
+			src: `package x_test
+func registerPurge(t *testing.T, db *gorm.DB) { t.Cleanup(func() { check(db.Exec("x").Error) }) }
+func TestX(t *testing.T) {
+	db, cleanup, _ := postgres.NewDB(cfg, tel)
+	defer cleanup()
+	run := func(t *testing.T) { registerPurge(t, db) }
+	run(t)
+}`,
+			want: []string{"test-cleanup-pool-defer@005"},
+		},
+		{
 			name: "swallowed write: blank assignment, bare call, bare .Error, discarded pgx result",
 			src: `package x_test
 func TestX(t *testing.T) {
@@ -211,6 +236,18 @@ func TestX(t *testing.T) {
 	t.Run("a", func(t *testing.T) {
 		t.Cleanup(func() { check(db.Exec("x").Error) })
 	})
+}`,
+		},
+		{
+			// A subtest ends before the parent's defers run, whether its Cleanup is direct or
+			// registered by a helper it hands its own t.
+			name: "parent defer, subtest registers its cleanup through a helper",
+			src: `package x_test
+func registerPurge(t *testing.T, db *gorm.DB) { t.Cleanup(func() { check(db.Exec("x").Error) }) }
+func TestX(t *testing.T) {
+	db, cleanup, _ := postgres.NewDB(cfg, tel)
+	defer cleanup()
+	t.Run("child", func(t *testing.T) { registerPurge(t, db) })
 }`,
 		},
 		{
