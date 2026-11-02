@@ -357,7 +357,22 @@ ORDER BY s.sku;
 
 **migration 的鎖（ordering `0008`，`CreateOrder` 冪等）**：`0008_order_idempotency` 對 `ordering.orders` 加兩個 nullable 欄位（不重寫表、不回填），再建 partial unique index（`CREATE UNIQUE INDEX`，不是 `CONCURRENTLY`——migration 在**一個交易**裡跑）。`ALTER TABLE` 取 **ACCESS EXCLUSIVE lock 並持有到整個 migration commit**，建 index 的整表掃描也在這把鎖底下：`ordering.orders` 的**讀與寫**（GetOrder / ListOrders / CreateOrder / Cancel / Complete / Confirm）都會等到整個 migration 結束，不只是寫入；讀流量照進來會逾時。表小（本機、staging）是毫秒級，可忽略；**大表請排維護窗口，且窗口要涵蓋讀流量**（先把 rpc / worker `kubectl scale` 到 0 或擋掉流量，再讓 migrate hook 跑）。順序：先 migrate 再升 rpc（chart 的 `pre-upgrade` hook 已保證）；舊 rpc 不認識新欄位也不寫它們，新 rpc 對 NULL 的列照舊，所以 rolling upgrade 期間兩種版本可並存。回滾見下一段（只退 ordering `0008`）。
 
-**Rollback（只退 ordering `0008`）**：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：catalog、identity、inventory、ordering），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
+**migration 的鎖（ordering `0009`，`payment_required` 快照）**：`0009_payment_required` 對 `ordering.orders` 加一個 `boolean NOT NULL DEFAULT false` 欄位（常數 DEFAULT，PostgreSQL 11 起不重寫表、不掃表），並建立 `ordering.v1.OrderPaid` 的事件表（`events_v1_orderpaid` 與 `_offsets`）。migration 在**一個交易**裡跑，`ALTER TABLE` 取 **ACCESS EXCLUSIVE lock 並持有到 commit**：`ordering.orders` 的讀與寫會等到它結束；因為沒有掃表，持鎖時間是毫秒級，但拿鎖要排在進行中的長交易後面，同樣建議在流量低的時段跑。既有訂單的 `payment_required` 全是 `false`（它們在 Payment 存在之前就已 `CONFIRMED`），所以升級後它們照舊可以直接 `CompleteOrder`。順序：先 migrate 再升 worker／rpc（chart 的 `pre-upgrade` hook 已保證）；舊 worker 不認識新欄位也不寫它，新欄位有 DEFAULT，所以 rolling upgrade 期間兩種版本可並存。`ordering.require_payment` 預設 `false`，升級本身不改變任何下單行為。
+
+**Rollback（只退 ordering `0009`）**：**不要用 `task migrate -- down`**（理由同上一段：它對每個 BC 各退一步）。只退 ordering `0009`，在 ordering 的資料庫執行：
+
+```sql
+BEGIN;
+DROP TABLE IF EXISTS ordering.events_v1_orderpaid_offsets;
+DROP TABLE IF EXISTS ordering.events_v1_orderpaid;
+ALTER TABLE ordering.orders DROP COLUMN IF EXISTS payment_required;
+UPDATE ordering.schema_migrations SET version = 8, dirty = false;
+COMMIT;
+```
+
+丟失的範圍：`ordering.orders` 每一列的 `payment_required`（快照隨之消失：退版前以 `ordering.require_payment: true` 進 `CONFIRMED` 的訂單，退版後又可以直接 `CompleteOrder`，所以只在 Payment 還沒上線、沒有任何訂單真的欠款時退），加上 `OrderPaid` 的事件表（切片 1 沒有發布者，表是空的）；訂單與明細本身都留著。`ALTER TABLE` 取 ACCESS EXCLUSIVE，持有到 `COMMIT`。兩種狀態用同一段 SQL（`IF EXISTS`）：9 clean（`0009` 已套用）退回 8；9 dirty（`0009` 失敗，例如 `ALTER TABLE` 在 `lock_timeout` 內拿不到鎖；整個檔案在一個交易裡，所以欄位與事件表都不在）只把版本設回 8 clean，之後排除原因再 `task migrate -- up`。這個 dirty 分支只驗證過「失敗後欄位與事件表都不在」的狀態。這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，兩種狀態都驗證其他 BC 的版本、表、欄位與資料不動。要繼續退 `0008`，在 ordering 回到 `8` 之後用下一段。
+
+**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9` 先照上一段退 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：catalog、identity、inventory、ordering），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
 
 ```sql
 BEGIN;
