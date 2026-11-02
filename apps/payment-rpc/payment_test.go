@@ -333,13 +333,7 @@ func TestPayment_StartRefusals(t *testing.T) {
 	wantConnectCode(t, err, connect.CodeNotFound, "payment.not_found")
 
 	// a window that closed while nobody swept it: payment.expired (the stored PENDING row is past its time)
-	tel, closeTel, _ := otel.New(config.OTel{}, config.Log{Level: "error", Format: "text"})
-	defer closeTel()
-	db, closeDB, err := postgres.NewDB(env.cfg, tel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeDB()
+	db := pgtest.DB(t, env.cfg, pgtest.Telemetry(t))
 	seed(t, env.cfg, "pay-old", "ord-old", owner, nil)
 	if err = db.Exec(`UPDATE payment.payments SET expires_at = now() - interval '1 minute' WHERE id = 'pay-old'`).Error; err != nil {
 		t.Fatal(err)
