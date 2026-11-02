@@ -74,7 +74,7 @@ func ProvidePaymentProvider(cfg config.Payment) (port.PaymentProvider, error) {
 	var p port.PaymentProvider
 	switch cfg.Provider {
 	case mock.Name:
-		p = mock.New(mock.Options{CheckoutTTL: cfg.MockCheckoutTTL})
+		p = mock.New(mock.Options{CheckoutTTL: cfg.MockCheckoutTTL, RedeliveryWindow: cfg.MockRedeliveryWindow, Secret: []byte(cfg.MockWebhookSecret)})
 	default:
 		return nil, fmt.Errorf("payment: payment.provider %q is not supported (the first version has %q only)", cfg.Provider, mock.Name)
 	}

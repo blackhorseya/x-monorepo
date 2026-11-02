@@ -55,6 +55,24 @@ type Payment struct {
 	ReconcileWindow time.Duration `mapstructure:"reconcile_window"`
 	// MockCheckoutTTL is how long a checkout page of the mock provider stays valid. Default 15m.
 	MockCheckoutTTL time.Duration `mapstructure:"mock_checkout_ttl"`
+	// MockRedeliveryWindow is how long after a notification the mock provider may still send it
+	// again; webhook_retention must outlast the provider's. Default 72h.
+	MockRedeliveryWindow time.Duration `mapstructure:"mock_redelivery_window"`
+	// MockWebhookSecret signs and verifies the mock provider's webhooks (secret: APP_PAYMENT_MOCK_WEBHOOK_SECRET,
+	// never in a file or a log). Empty = a random one per process, which only a test in the same process
+	// can sign with.
+	MockWebhookSecret string `mapstructure:"mock_webhook_secret"`
+	// Window is how long a new payment stays payable (expires_at = creation + Window). Default 30m.
+	Window time.Duration `mapstructure:"window"`
+	// WebhookRetention is how long a PROCESSED payment.webhook_events row is kept; `expire` deletes the
+	// older ones. 0 = keep forever. It is the dedup memory of redelivered notifications, so it must be
+	// longer than the provider's redelivery window or start-up is refused. Default 720h.
+	WebhookRetention time.Duration `mapstructure:"webhook_retention"`
+	// ExpireInterval is how often `expire` runs (the CronJob period); the sweep uses it to know a
+	// reconcile query is the last one a payment will get. Default 15m.
+	ExpireInterval time.Duration `mapstructure:"expire_interval"`
+	// ExpireBatch bounds the payments one `expire` run looks at, and the webhook rows it deletes. Default 100.
+	ExpireBatch int `mapstructure:"expire_batch"`
 }
 
 // Catalog is how apps/rpc reaches the catalog service (apps/catalog-rpc): the base URL, the one
@@ -443,6 +461,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("payment.provider", "mock")
 	v.SetDefault("payment.reconcile_window", 24*time.Hour)
 	v.SetDefault("payment.mock_checkout_ttl", 15*time.Minute)
+	v.SetDefault("payment.mock_redelivery_window", 72*time.Hour)
+	v.SetDefault("payment.mock_webhook_secret", "")
+	v.SetDefault("payment.window", 30*time.Minute)
+	v.SetDefault("payment.webhook_retention", 720*time.Hour)
+	v.SetDefault("payment.expire_interval", 15*time.Minute)
+	v.SetDefault("payment.expire_batch", 100)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")

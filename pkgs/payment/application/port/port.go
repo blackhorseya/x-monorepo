@@ -41,6 +41,10 @@ type PaymentProvider interface {
 	// CheckoutValidity is the longest a checkout page it opens stays valid. docs/payment.md §3: the
 	// reconcile window must exceed it.
 	CheckoutValidity() time.Duration
+	// WebhookRedeliveryWindow is how long after a notification the provider may send it again. The
+	// retention of processed payment.webhook_events rows must outlast it, or a redelivery would be
+	// taken for a new event.
+	WebhookRedeliveryWindow() time.Duration
 	CreateCheckout(c context.Context, in dto.ProviderCheckoutInput) (dto.ProviderCheckoutOutput, error)
 	GetPayment(c context.Context, ref string) (dto.ProviderPaymentOutput, error)
 	CancelCheckout(c context.Context, ref string) error

@@ -43,6 +43,8 @@ var _ port.PaymentProvider = (*Provider)(nil)
 type Options struct {
 	// CheckoutTTL is how long an opened page stays valid; default 15 minutes.
 	CheckoutTTL time.Duration
+	// RedeliveryWindow is how long the mock says it may resend a notification; default 72 hours.
+	RedeliveryWindow time.Duration
 	// Secret signs the webhooks; empty = a random one for this process.
 	Secret []byte
 	// Latency delays every call (it honours the caller's context), to rehearse a slow provider.
@@ -80,6 +82,9 @@ func New(opts Options) *Provider {
 	if opts.CheckoutTTL <= 0 {
 		opts.CheckoutTTL = 15 * time.Minute
 	}
+	if opts.RedeliveryWindow <= 0 {
+		opts.RedeliveryWindow = 72 * time.Hour
+	}
 	if len(opts.Secret) == 0 {
 		opts.Secret = make([]byte, 32)
 		_, _ = rand.Read(opts.Secret) // crypto/rand does not fail on supported platforms
@@ -94,6 +99,8 @@ func New(opts Options) *Provider {
 func (x *Provider) Name() string { return Name }
 
 func (x *Provider) CheckoutValidity() time.Duration { return x.opts.CheckoutTTL }
+
+func (x *Provider) WebhookRedeliveryWindow() time.Duration { return x.opts.RedeliveryWindow }
 
 // enter is what every call starts with: the injected latency, then the injected fault.
 func (x *Provider) enter(c context.Context, op string) error {

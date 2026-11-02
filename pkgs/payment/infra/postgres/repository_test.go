@@ -82,8 +82,8 @@ func TestMigration_UpDownUp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 1 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 1 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 2 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 2 clean", v, dirty, err)
 	}
 }
 
