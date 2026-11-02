@@ -10,7 +10,7 @@ type: application
 # when image.tag is empty — a published release (ghcr.io/blackhorseya/x-monorepo/*); release.yml's
 # chart job opens a PR moving it (and bumping the patch here) after every release.
 version: 0.4.0
-appVersion: "0.59.0"
+appVersion: "0.60.0"
 kubeVersion: ">=1.26.0-0"
 home: https://github.com/blackhorseya/x-monorepo
 sources:
