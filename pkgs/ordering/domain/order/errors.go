@@ -20,7 +20,10 @@ var (
 	// moves on through payment (docs/payment.md §8). Decided by the order's own snapshot, never by
 	// the setting as it is now.
 	ErrPaymentRequired = kernel.NewError(kernel.KindFailedPrecondition, "order.payment_required", "order requires payment before it can be completed")
-	ErrNotFound        = kernel.NewError(kernel.KindNotFound, "order.not_found", "order not found")
+	// ErrNotConfirmed: a payment event names an order that was never CONFIRMED. Payment creates its
+	// payment from OrderConfirmed, so this cannot happen on a healthy system; the event is refused.
+	ErrNotConfirmed = kernel.NewError(kernel.KindFailedPrecondition, "order.not_confirmed", "order was never confirmed, so a payment event does not apply")
+	ErrNotFound     = kernel.NewError(kernel.KindNotFound, "order.not_found", "order not found")
 	// The three ways the catalog's answer refuses an order. The message is fixed: the caller
 	// knows which SKUs it asked for, and nothing about the catalog is echoed back.
 	ErrUnknownSKU    = kernel.NewError(kernel.KindInvalidArgument, "order.unknown_sku", "an item names a sku the catalog does not have")

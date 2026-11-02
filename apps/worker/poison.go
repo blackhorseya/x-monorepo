@@ -16,15 +16,19 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
+	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
-// schemas lists every BC the worker serves; their poison tables are what the
-// poison commands operate on. Adding a BC: add its Schema here too.
-var schemas = []string{ordering.Schema, inventory.Schema}
+// schemas lists every BC whose poison table and outbox tables the operator commands (`worker poison`,
+// `worker prune`) serve. Adding a BC: add its Schema here too. payment is in the list although the worker
+// runs none of its handlers (payment-rpc consume does): its tables are in the same database and need the
+// same prune and poison handling. Its name comes from the contract's constant, so the worker loads no
+// payment code to name it (docs/payment.md §1).
+var schemas = []string{ordering.Schema, inventory.Schema, paymentv1.Schema}
 
 // newPoisonCmd is `worker poison`: list / show / requeue / drop the messages
 // a BC's handlers gave up on after every retry (<bc>.events_poison). Rows are

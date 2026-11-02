@@ -10,6 +10,7 @@ import (
 
 	inventorypg "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/postgres"
 	orderingpg "github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/postgres"
+	paymentpg "github.com/blackhorseya/x-monorepo/pkgs/payment/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
@@ -26,7 +27,7 @@ func TestRun_SIGTERM(t *testing.T) {
 	url := pgtest.URL(t)
 	c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration()} {
+	for _, m := range []postgres.Migration{orderingpg.Migration(), inventorypg.Migration(), paymentpg.Migration()} {
 		if err := postgres.Up(c, config.Postgres{URL: url}, m); err != nil {
 			t.Fatal(err)
 		}

@@ -8,6 +8,7 @@ require (
 	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
+	github.com/blackhorseya/x-monorepo/pkgs/payment v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/google/wire v0.7.0
 	github.com/jackc/pgx/v5 v5.11.0
@@ -180,3 +181,5 @@ replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventor
 replace github.com/blackhorseya/x-monorepo/pkgs/catalog => ../../pkgs/catalog
 
 replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity
+
+replace github.com/blackhorseya/x-monorepo/pkgs/payment => ../../pkgs/payment

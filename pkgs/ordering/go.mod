@@ -35,6 +35,7 @@ require (
 	github.com/ThreeDotsLabs/watermill-sql/v4 v4.1.5 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/blackhorseya/x-monorepo/pkgs/payment v0.0.0
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.4 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
@@ -169,3 +170,5 @@ replace (
 	github.com/blackhorseya/x-monorepo/pkgs/kernel => ../kernel
 	github.com/blackhorseya/x-monorepo/pkgs/platform => ../platform
 )
+
+replace github.com/blackhorseya/x-monorepo/pkgs/payment => ../payment

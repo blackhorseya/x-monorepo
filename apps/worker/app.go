@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill/message"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
 	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
+	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -85,6 +87,9 @@ func NewWorker(
 	if err := checkPool(db, bcs); err != nil {
 		return nil, err
 	}
+	if err := checkTopicTables(db, bcs); err != nil {
+		return nil, err
+	}
 
 	start := eventbus.FromBeginning
 	if cfg.StartFrom == config.StartFromLatest {
@@ -95,8 +100,15 @@ func NewWorker(
 		return nil, err
 	}
 	lag := eventbus.LagOptions{DB: db, Redis: rdb}
+	// The BCs `worker prune` manages: the ones this worker runs handlers for, and payment, whose
+	// consumer is its own process (payment-rpc consume) but whose tables are in this database and
+	// are pruned here. Their poison tables and retention are gauged next to the others.
+	managed := []string{paymentv1.Schema}
 	for _, bc := range bcs {
-		lag.PoisonTopics = append(lag.PoisonTopics, eventbus.PoisonTopic(bc.schema))
+		managed = append(managed, bc.schema)
+	}
+	for _, schema := range managed {
+		lag.PoisonTopics = append(lag.PoisonTopics, eventbus.PoisonTopic(schema))
 	}
 	if db != nil {
 		// Retention gauges for what `worker prune` manages: every outbox table
@@ -104,13 +116,13 @@ func NewWorker(
 		// and each BC's inbox.
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		for _, bc := range bcs {
-			tables, err := eventbus.TopicTables(c, db, bc.schema)
+		for _, schema := range managed {
+			tables, err := eventbus.TopicTables(c, db, schema)
 			if err != nil {
 				return nil, err
 			}
 			lag.OutboxTables = append(lag.OutboxTables, tables...)
-			lag.InboxSchemas = append(lag.InboxSchemas, bc.schema)
+			lag.InboxSchemas = append(lag.InboxSchemas, schema)
 		}
 	}
 
@@ -276,6 +288,49 @@ func checkPool(db *gorm.DB, bcs []struct {
 	if limit > 0 && limit < need {
 		return fmt.Errorf("postgres.max_open_conns %d is below the %d this worker needs (%d subscribers x %d connections each, +1 for the gauges): "+
 			"with every subscriber busy the pool deadlocks and handlers time out; raise it, or set 0 for unlimited", limit, need, subs, minConnsPerSubscriber)
+	}
+
+	return nil
+}
+
+// checkTopicTables refuses to start when a subscribed topic's outbox table, or the table of consumer
+// cursors beside it, does not exist: that BC's migrations were not applied to this database yet (the
+// payment topics are the case that matters — ordering reads payment's tables, and payment's migration
+// is a separate step). Without the check the router starts, the other BCs' handlers run, and the two
+// subscribers fail on every poll (or the process exits at Run with a bare "relation does not exist");
+// with it the worker exits before consuming anything and says which tables and what to run. It reads
+// the catalogue only; the redis broker needs the tables too (the forwarder reads them).
+func checkTopicTables(db *gorm.DB, bcs []struct {
+	schema string
+	subs   []eventbus.Subscription
+}) error {
+	if db == nil {
+		return nil
+	}
+	c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var missing []string
+	seen := map[string]bool{}
+	for _, bc := range bcs {
+		for _, s := range bc.subs {
+			if seen[s.Topic] {
+				continue
+			}
+			seen[s.Topic] = true
+			for _, tbl := range []string{eventbus.TableName(s.Topic), eventbus.OffsetsTableName(s.Topic)} {
+				var found *string
+				if err := db.WithContext(c).Raw(`SELECT to_regclass(?)::text`, tbl).Scan(&found).Error; err != nil {
+					return fmt.Errorf("check table %s: %w", tbl, err)
+				}
+				if found == nil {
+					missing = append(missing, tbl)
+				}
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("worker: subscribed topics have no table: %s — their bounded context's migrations were not applied to this database; "+
+			"run the migrate step (task migrate -- up, or the migrate Job) before starting this worker", strings.Join(missing, ", "))
 	}
 
 	return nil

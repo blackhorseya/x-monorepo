@@ -58,6 +58,22 @@ type CompleteOrderInput struct {
 	OrderID string
 }
 
+// PaymentCapturedInput is driven by the consumer adapter only (payment.v1.PaymentCaptured).
+type PaymentCapturedInput struct {
+	OrderID string
+}
+
+// PaymentExpiredInput is driven by the consumer adapter only (payment.v1.PaymentExpired).
+type PaymentExpiredInput struct {
+	OrderID string
+}
+
+// PaymentEventOutput says what the event did: "applied", "ignored", "noop" or "unexpected"
+// (order.PaymentEffect).
+type PaymentEventOutput struct {
+	Effect string
+}
+
 // OrderStatsInput has no fields: the stats are for the whole BC.
 type OrderStatsInput struct{}
 
