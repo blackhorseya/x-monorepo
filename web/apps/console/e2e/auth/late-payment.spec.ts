@@ -230,7 +230,7 @@ const whoIs = (headers: Record<string, string>): Who => {
 };
 const refused = { status: 401, headers: { "x-error-code": "auth.unauthenticated" }, json: { code: "unauthenticated", message: "no credential" } };
 
-async function perCredential(page: import("@playwright/test").Page, id: string, linkFor: Who[]) {
+async function perCredential(page: import("@playwright/test").Page, id: string, linkFor: Who[], failFor: Who[] = []) {
   const answered = { none: 0, getPaymentFor: [] as Who[] };
   await page.route(GET_ORDER, (route) => {
     const who = whoIs(route.request().headers());
@@ -252,6 +252,7 @@ async function perCredential(page: import("@playwright/test").Page, id: string, 
       answered.none++;
       return route.fulfill(refused);
     }
+    if (failFor.includes(who)) return route.fulfill({ status: 503, headers: { "x-error-code": "payment.unavailable" }, json: { code: "unavailable", message: "down" } });
     if (!linkFor.includes(who)) return route.fulfill(notFound);
     return route.fulfill({ json: { payment: { id: "p", orderId: id, status: "PAYMENT_STATUS_PENDING", checkoutUrl: CHECKOUT } } });
   });
@@ -291,6 +292,24 @@ test("a payment result cached for one credential is not shown to another; going 
   // The normal path still works: the first credential again asks again and gets its result.
   await useKey(page, OPS_KEY);
   await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT);
+});
+
+// A query that fails keeps the data it had (that is how the cache works), so the result of the previous
+// credential would survive the new credential's failing request unless the entry is not shared.
+test("a payment result cached for one credential is not shown while another credential's own request fails", async ({ page }) => {
+  const id = `e2e-pay-cache-err-${uid()}`;
+  const answered = await perCredential(page, id, ["ops"], ["jwt"]);
+  await page.goto(`/orders/${id}`);
+  await useKey(page, OPS_KEY);
+  await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT); // positive control
+
+  await useJWT(page, mintJWT(`e2e-b-${uid()}`));
+  await expect(subject(page)).toHaveText(/^jwt/);
+  await expect.poll(() => answered.getPaymentFor.filter((w) => w === "jwt").length, { timeout: 10_000 }).toBeGreaterThanOrEqual(1); // its request failed
+  await expect(page.getByTestId("payment-card")).toBeVisible();
+  await settle(page);
+  await page.waitForTimeout(300);
+  expect(await page.getByTestId("payment-link").count()).toBe(0);
 });
 
 test("a GetPayment answer that arrives late for the previous credential is not shown to the new one", async ({ page }) => {
@@ -341,9 +360,13 @@ test("a payment result from the query is kept through a token refresh of the sam
   await page.route("**/inventory.v1.InventoryService/GetReservation", (route) =>
     route.fulfill({ status: 404, json: { code: "not_found", message: "none" } }),
   );
-  await page.route(GET_PAYMENT, (route) =>
-    route.fulfill({ json: { payment: { id: "p", orderId: id, status: "PAYMENT_STATUS_PENDING", checkoutUrl: CHECKOUT } } }),
-  );
+  let paymentDown = false;
+  let paymentAsked = 0;
+  await page.route(GET_PAYMENT, (route) => {
+    paymentAsked++;
+    if (paymentDown) return route.fulfill({ status: 503, headers: { "x-error-code": "payment.unavailable" }, json: { code: "unavailable", message: "down" } });
+    return route.fulfill({ json: { payment: { id: "p", orderId: id, status: "PAYMENT_STATUS_PENDING", checkoutUrl: CHECKOUT } } });
+  });
   await page.route("**/ordering.v1.OrderService/ListOrders", (route) => route.fulfill({ json: { orders: [order()] } }));
   await page.route("**/inventory.v1.InventoryService/BatchGetReservations", (route) => route.fulfill({ json: {} }));
   await page.goto("/login");
@@ -353,7 +376,13 @@ test("a payment result from the query is kept through a token refresh of the sam
 
   const issued = idp.accessTokens.length;
   await expect.poll(() => idp.accessTokens.length, { timeout: 25_000 }).toBeGreaterThan(issued); // a new access token was issued
+  // From here payment-rpc is down: a result kept for the same session stays on screen (a failing query keeps
+  // its data), and only an entry that was thrown away for the new token would be empty.
+  paymentDown = true;
+  const askedBefore = paymentAsked;
   customer = "someone-else"; // the next poll of the order changes what the page renders
   await expect(page.getByText("someone-else")).toBeVisible({ timeout: 10_000 }); // positive control: rendered again after the refresh
+  await expect.poll(() => paymentAsked, { timeout: 10_000 }).toBeGreaterThan(askedBefore); // and the card asked again, and was refused
+  await page.waitForTimeout(500);
   await expect(page.getByTestId("payment-link")).toHaveAttribute("href", CHECKOUT);
 });

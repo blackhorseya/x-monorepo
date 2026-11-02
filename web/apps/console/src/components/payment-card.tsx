@@ -5,7 +5,7 @@ import { useState } from "react";
 import { PaymentStatus } from "@repo/proto/payment/v1/entity_pb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getCredentialGeneration } from "../auth";
+import { getCredentialGeneration, useCredentialGeneration } from "../auth";
 import { payments } from "../client";
 import { paymentQuery } from "../queries";
 
@@ -48,14 +48,18 @@ function messageFor(err: unknown): string {
 // credential's business) and opens the provider's checkout page in a new tab, without an opener; the page
 // itself keeps watching the order (queries.ts orderInterval) so the customer comes back to the result.
 //
-// Everything the card remembers (the message, the link, a call in flight) belongs to the credential it was
-// shown for, and the way that is kept is by the page giving the card the credential generation as its key
-// (routes/order.tsx): another credential is another card, so nothing of the old one can be on screen, and a
-// failure that arrives late finds nobody to tell. A call's success has a side effect outside the card
-// (opening a window), so it still checks the generation itself. A refreshed token of the same session keeps
-// the generation (auth.ts rotateSessionToken) and so the card.
+// Everything the card reads belongs to the credential it was shown for, from each of its four sources:
+//   - local state (the message, the link): the page gives the card the credential generation as its key
+//     (routes/order.tsx), so another credential is another card;
+//   - a call in flight: its failure finds the old card gone; its success has a side effect outside the card
+//     (opening a window), so that checks the generation itself;
+//   - the query cache (the payment, and the order that decides whether the card is there at all): both
+//     queries are keyed by the generation (queries.ts), so a result obtained for one credential is not in
+//     the entry the next one reads;
+//   - a reply that arrives late: it is written under the key it was asked for.
+// A refreshed token of the same session keeps the generation (auth.ts rotateSessionToken), so it keeps all four.
 export function PaymentCard({ orderId }: { orderId: string }) {
-  const payment = useQuery(paymentQuery(orderId));
+  const payment = useQuery(paymentQuery(orderId, useCredentialGeneration()));
   const [message, setMessage] = useState<string | null>(null);
   const [startedUrl, setStartedUrl] = useState<string | null>(null);
 

@@ -32,8 +32,8 @@ import { reservationBadge } from "./reservations";
 // this is where the rest lives, and where a shared link lands.
 export function OrderPage() {
   const { id } = useParams({ from: "/orders/$id" });
-  const { data, isError, error } = useQuery(orderQuery(id));
   const generation = useCredentialGeneration();
+  const { data, isError, error } = useQuery(orderQuery(id, generation));
 
   return (
     <div className="grid gap-6">

@@ -22,9 +22,12 @@ const LIST_STALE_MS = 1000;
 export const keys = {
   orders: ["orders"] as const,
   ordersPage: (customerId: string, status: OrderStatus) => ["orders", customerId, status] as const,
+  // order(id) is the prefix every generation of one order's detail query starts with (invalidating it
+  // refreshes them all); orderOf(id, generation) is the key the detail page reads.
   order: (id: string) => ["order", id] as const,
+  orderOf: (id: string, generation: number) => ["order", id, generation] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
-  payment: (orderId: string) => ["payment", orderId] as const,
+  payment: (generation: number, orderId: string) => ["payment", generation, orderId] as const,
   quote: (skus: string[]) => ["quote", ...skus] as const,
   products: ["products"] as const,
   productsPage: (skuPrefix: string) => ["products", skuPrefix] as const,
@@ -148,9 +151,14 @@ export function orderInterval(order: Order | null | undefined): number | false {
   }
 }
 
-export const orderQuery = (id: string) =>
+//
+// Keyed by the credential generation (src/auth.ts) like the admin probe: another credential is another
+// entry, so an order read for the previous credential is never shown to the new one, and a reply that
+// arrives late lands in the entry of the credential it was asked for. The page's Pay card is decided by this
+// data (CONFIRMED and payment_required), so it must be the current credential's.
+export const orderQuery = (id: string, generation: number) =>
   queryOptions({
-    queryKey: keys.order(id),
+    queryKey: keys.orderOf(id, generation),
     queryFn: async () => {
       try {
         return (await orders.getOrder({ id })).order ?? null;
@@ -198,10 +206,13 @@ export const reservationQuery = (orderId: string, order?: OrderStatus) =>
   });
 
 // The payment of one order for the Pay card, null = none yet (NOT_FOUND). Polled while the card is
-// mounted, which is exactly while the order waits for its payment.
-export const paymentQuery = (orderId: string) =>
+// mounted, which is exactly while the order waits for its payment. Keyed by the credential generation
+// (src/auth.ts, like the admin probe): a result obtained for one credential is not in the entry the next
+// credential reads, nothing it asks for lands in the previous one's, and a reply that arrives late is
+// written under the key it was asked for. Resetting the card's own state is not enough, the cache outlives it.
+export const paymentQuery = (orderId: string, generation: number) =>
   queryOptions({
-    queryKey: keys.payment(orderId),
+    queryKey: keys.payment(generation, orderId),
     queryFn: async () => {
       try {
         return (await payments.getPayment({ orderId })).payment ?? null;
