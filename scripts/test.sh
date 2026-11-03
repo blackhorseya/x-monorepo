@@ -1474,6 +1474,32 @@ printf '%s\n' "$gw_two" > "$d/go.work"; printf 'version: "3"\nvars:\n  MODULES: 
 rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
 expect_eq "check-modules: a Taskfile without the modules task fails" "1" "$rc"
 expect_match "check-modules: the missing modules task is named" "modules" "$out"
+# go prints a use path as a JSON string ("./apps/a\u0026b" for apps/a&b): it is decoded, not read as text (#413 r2).
+esc_gw='go 1.27
+
+use "./apps/a&b"'
+modrun esc_same "$esc_gw" "apps/a&b"
+expect_eq "check-modules: a use path with a JSON-escaped character equals the same MODULES entry" "0" "$rc"
+modrun esc_diff "$esc_gw" 'apps/a\u0026b'
+expect_eq "check-modules: the literal text of the JSON escape is not the module" "1" "$rc"
+expect_match "check-modules: the literal-escape entry is named" "in MODULES but not in go.work: apps/a.u0026b" "$out"
+# A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
+tools_without() {
+  local bindir="$tmp/toolbin-$1" t
+  mkdir -p "$bindir"
+  for t in bash dirname sed sort tr grep comm go task jq; do
+    [ "$t" = "$1" ] || { [ -e "$bindir/$t" ] || ln -s "$(command -v "$t")" "$bindir/$t" 2>/dev/null || true; }
+  done
+  echo "$bindir"
+}
+for missing in go task jq; do
+  d="$tmp/modules-no-$missing"; mkdir -p "$d"
+  printf '%s\n' "$gw_two" > "$d/go.work"
+  printf 'version: "3"\nvars:\n  MODULES: apps/rpc pkgs/kernel\n%s' "$modules_task" > "$d/Taskfile.yml"
+  rc=0; out=$(PATH=$(tools_without "$missing") "$(command -v bash)" "$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
+  expect_eq "check-modules: without $missing the gate fails" "1" "$rc"
+  expect_match "check-modules: without $missing the failure names it" "$missing not found" "$out"
+done
 rc=0; out=$("$cm" "$tmp/no-such-go.work" "$tmp/no-such-Taskfile.yml" 2>&1) || rc=$?
 expect_eq "check-modules: unreadable inputs fail" "1" "$rc"
 rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
