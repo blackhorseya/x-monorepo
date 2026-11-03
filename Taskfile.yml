@@ -164,8 +164,9 @@ tasks:
         }
 
   check-work-sync:
-    desc: go.work and every go.mod agree
+    desc: go.work and every go.mod agree, and Taskfile MODULES lists exactly go.work's modules
     cmds:
+      - scripts/check-modules.sh
       - go work sync
       - |
         git diff --quiet -- go.work '*/go.mod' '*/*/go.mod' || { echo "go.mod drift — commit the result of: go work sync"; exit 1; }
