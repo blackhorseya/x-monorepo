@@ -180,7 +180,8 @@ newimg=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.s
 newname=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.spec.template.spec.containers[0].name}')
 case $newimg in */payment-worker:*) ;; *) fail "after the upgrade the consumer runs '$newimg', want the payment-worker image" ;; esac
 [ "$newname" = payment-worker ] || fail "the consumer container is named '$newname', want payment-worker"
-kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null | grep -q 'payment-worker started' || fail "the new consumer never logged that it started"
+clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)  # not piped into grep -q: with pipefail an early grep exit makes kubectl fail
+grep -q 'payment-worker started' <<<"$clog" || fail "the new consumer never logged that it started"
 
 # same groups, no new cursor
 [ "$(groups_of "$before")" = "$(groups_of "$after")" ] || fail "the consumer groups changed across the upgrade. before: $(groups_of "$before" | tr '\n' ';') after: $(groups_of "$after" | tr '\n' ';')"
