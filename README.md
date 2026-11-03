@@ -99,14 +99,14 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │       ├── domain/payment/        # Payment aggregate + 狀態 × 事件全表（每格一個 domain 方法）
 │       └── infra/provider/mock/   # PaymentProvider 的 mock：hosted checkout、簽章 webhook、延遲與故障注入
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
-├── deployments/helm/x-monorepo/   # Helm chart：rpc / catalog-rpc / worker Deployment、選配的 payment-rpc（serve／consume／expire）、migrate hook Job、prune CronJob（task helm-check）
+├── deployments/helm/x-monorepo/   # Helm chart：rpc / catalog-rpc / worker Deployment、選配的 payment-rpc（serve／expire）與 payment-worker（consume）、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh、payment.sh、payment-flow.sh）
 ├── tests/k6/                      # k6：orders（load + thresholds）、ratelimit、timeout、reservation（worker 鏈延遲）；task k6 -- <script>、task k6-smoke、task k6-auth-matrix（各 auth 組合）
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── catalog-rpc/               # catalog 的獨立服務（#320）：只掛 catalog 的 rpc；rpc 以 Connect 問它查價與檢查 SKU（`catalog.upstream`）
-│   ├── payment-rpc/               # payment 的獨立服務（#367）：`serve`（`StartPayment`／`GetPayment` 認 service key `rpc`，加 webhook route 認簽章）、`consume`（訂閱訂單事件、退款、套用 webhook）、`expire`（逾時與補查的 CronJob）
-│   ├── payment-worker/            # payment 的事件 consumer（#410 切片 1）：與 `payment-rpc consume` 共用 `pkgs/payment` 的 Consumer，獨立 binary / image；沒有 listener 與 auth
+│   ├── payment-rpc/               # payment 的獨立服務（#367）：`serve`（`StartPayment`／`GetPayment` 認 service key `rpc`，加 webhook route 認簽章）、`expire`（逾時與補查的 CronJob）；訂閱訂單事件、退款、套用 webhook 的 consumer 是 `payment-worker`（`payment-rpc consume` 自 #410 切片 2 起已移除）
+│   ├── payment-worker/            # payment 的事件 consumer（#410）：`pkgs/payment` 的 Consumer 加 `--require-durable` 檢查，獨立 binary / image（chart 的 `payment-consume` 跑它）；沒有 listener 與 auth
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）

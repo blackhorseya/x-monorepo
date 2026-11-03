@@ -363,6 +363,8 @@ tasks:
       - '{{.KIND_DIR}}/negative.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
       # rpc without its catalog: the wait is best effort, CreateOrder / SetStock answer UNAVAILABLE and write nothing, recovery needs no restart.
       - '{{.KIND_DIR}}/outage.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
+      # the upgrade from the chart that runs `payment-rpc consume` (git tag v0.63.3, its ghcr images) to this one (payment-worker): the consumer group payment-rpc.payment is the same, no cursor moves back, every OrderConfirmed is handled exactly once, whether published before, during or after. Restores the release.
+      - '{{.KIND_DIR}}/payment-upgrade.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
       - helm -n {{.NS}} status x-monorepo | head -5
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
