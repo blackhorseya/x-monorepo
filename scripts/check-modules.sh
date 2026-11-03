@@ -7,10 +7,10 @@
 #   scripts/check-modules.sh [go.work] [Taskfile.yml]     # defaults: the repo root's
 #
 # Neither side is parsed here: go.work is read by `go work edit -json` and decoded by jq, and MODULES by Task
-# itself (the Taskfile's `modules` task prints {{.MODULES}}), so whatever YAML / template / JSON-escape form the
+# itself (the Taskfile's `modules` task prints MODULES' items), so whatever YAML / template / JSON-escape form the
 # tools accept is compared as they resolve it (#413 reviews: a text parser read only the first line of a
-# multi-line MODULES; sed on the JSON left "\u0026" in a path). The only string handling left is splitting
-# Task's printed list on whitespace and dropping a path's "./" prefix. Needs go, task and jq on PATH and fails
+# multi-line MODULES; sed on the JSON left "\u0026" in a path; a split on ASCII blanks missed Task's Unicode
+# whitespace). The only string handling left is dropping a path's "./" prefix. Needs go, task and jq on PATH and fails
 # without them; it never skips. Either side resolving to an empty set is a failure: empty == empty would be
 # green with both readers broken. Plain bash 3.2 (macOS) and 5 (ubuntu).
 set -euo pipefail
@@ -46,10 +46,22 @@ if [ -n "$unrepresentable" ]; then
 fi
 in_work=$(printf '%s\n' "$work_json" | jq -r '(.Use // [])[].DiskPath' | canon) || { echo "check-modules: jq could not read the go.work use list" >&2; exit 1; }
 task_out=$(task --silent --taskfile "$taskfile" --dir "$(cd "$(dirname "$taskfile")" && pwd)" modules 2>&1) || {
-  echo "check-modules: task modules failed on $taskfile (it needs a 'modules' task that prints {{.MODULES}}): $task_out" >&2
+  echo "check-modules: task modules failed on $taskfile (it needs a 'modules' task that prints the items of for: { var: MODULES }, one per line): $task_out" >&2
   exit 1
 }
-in_task=$(printf '%s\n' "$task_out" | tr ' \t' '\n\n' | canon)
+# The Taskfile's `modules` task prints the items `for: { var: MODULES }` iterates, one per line, so Task's own
+# splitting (Unicode whitespace included) decides what the items are and no splitting is done here (#413 r4). An item
+# with a control character is refused like a go.work path is, shown JSON-quoted.
+bad_item=""
+while IFS= read -r item; do
+  case "$item" in *[[:cntrl:]]*) bad_item="$bad_item$(printf '%s' "$item" | jq -Rs '.')"$'\n' ;; esac
+done <<<"$task_out"
+if [ -n "$bad_item" ]; then
+  echo "check-modules: MODULES has an item with control characters:" >&2
+  printf '  %s' "$bad_item" >&2
+  exit 1
+fi
+in_task=$(printf '%s\n' "$task_out" | canon)
 
 # count: number of lines in $1 (0 for the empty string).
 count() { if [ -z "$1" ]; then echo 0; else printf '%s\n' "$1" | wc -l | tr -d ' '; fi; }

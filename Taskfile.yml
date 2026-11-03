@@ -164,10 +164,11 @@ tasks:
         }
 
   modules:
-    desc: print MODULES as Task resolves it (scripts/check-modules.sh compares it with go.work)
+    desc: 'print the items Task iterates for MODULES, one per line (scripts/check-modules.sh compares them with go.work)'
     silent: true
     cmds:
-      - echo "{{.MODULES}}"
+      - for: { var: MODULES }
+        cmd: printf '%s\n' {{shellQuote .ITEM}}
 
   check-work-sync:
     desc: go.work and every go.mod agree, and Taskfile MODULES lists exactly go.work's modules

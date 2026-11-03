@@ -1374,7 +1374,8 @@ modules_task='tasks:
   modules:
     silent: true
     cmds:
-      - echo "{{.MODULES}}"
+      - for: { var: MODULES }
+        cmd: printf '"'"'%s\n'"'"' {{shellQuote .ITEM}}
 '
 # modrun <name> <go.work body> <MODULES words>: runs the gate on throwaway files; sets $rc and $out.
 modrun() {
@@ -1529,6 +1530,10 @@ expect_eq "check-modules: a MODULES separated by an em space equals the same go.
 modrun sep_nbsp_extra "$two_uses" $'apps/a\xc2\xa0b\xc2\xa0c'
 expect_eq "check-modules: an extra module behind a no-break space still fails" "1" "$rc"
 expect_match "check-modules: the module behind the no-break space is named" 'in MODULES but not in go.work: "c"' "$out"
+# The same refusal on the MODULES side, from the items Task iterates (one control character is not whitespace to Task).
+modrun ctl_item "$gw_two" '"apps/rpc pkgs/ker\x01nel"'
+expect_eq "check-modules: a MODULES item with a control character is refused" "1" "$rc"
+expect_match "check-modules: the refused MODULES item is shown JSON-escaped" '^  "pkgs/ker\\u0001nel"$' "$out"
 # A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
 tools_without() {
   local bindir="$tmp/toolbin-$1" t
