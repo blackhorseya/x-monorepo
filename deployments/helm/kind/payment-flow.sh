@@ -18,7 +18,11 @@
 #   9  payment-rpc stopped: ordering and the reservation go on; payment operations answer 503; the same rpc pods work
 #      again when it is back
 # Needs kubectl + helm + curl + jq. Exits non-zero (with the pods' state) when anything is off.
+# On ANY non-zero exit, diag.sh (the whole log of every pod since this run began, Postgres sessions and locks) runs
+# first, before the release is restored: restoring replaces the pods and with them their logs (#416).
 set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+flow_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 ns=$1 release=$2 chart=$3 values=$4 flow=$5
 rport=${FLOW_RPC_PORT:-18094} sport=${FLOW_SERVE_PORT:-18095}
 api="http://127.0.0.1:$rport/api" serve="http://127.0.0.1:$sport"
@@ -31,7 +35,12 @@ restore() {
   kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null 2>&1 || true
   helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true
 }
-trap restore EXIT
+on_exit() { # the exit status of the script is the one it had on the way in: this never calls exit
+  local rc=$?
+  [ "$rc" -eq 0 ] || "$here/diag.sh" "$ns" "$flow_start" >&2 || true
+  restore
+}
+trap on_exit EXIT
 
 up() { # up [extra helm args]: the release with the flow overlay, the switch as asked
   helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" -f "$flow" "$@" --wait --timeout 4m >/dev/null || fail "helm upgrade did not become ready"

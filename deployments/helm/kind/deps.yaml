@@ -26,6 +26,10 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
+          # What a failed run needs to explain a stall (#416, diag.sh reads the sessions; the server log comes with the
+          # pod's log): a wait for a lock past 1 s names the lock and who holds it, any statement over 500 ms is
+          # logged, checkpoints are logged. Parameters are NOT logged (0): a query's values may be a credential.
+          args: [-c, log_lock_waits=on, -c, deadlock_timeout=1s, -c, log_min_duration_statement=500, -c, log_checkpoints=on, -c, log_parameter_max_length=0, -c, log_parameter_max_length_on_error=0]
           env:
             - { name: POSTGRES_USER, value: app }
             - { name: POSTGRES_PASSWORD, value: app }

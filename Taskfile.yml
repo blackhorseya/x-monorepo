@@ -287,7 +287,7 @@ tasks:
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
 
   helm-check:
-    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers, check-observability.py the payment panels and alert rules'
+    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers, check-observability.py the payment panels and alert rules, kind/negative-test.sh and kind/diag-test.sh the kind scripts against fake kubectl/helm'
     vars:
       CHART: deployments/helm/x-monorepo
       KUBECONFORM:
@@ -311,6 +311,8 @@ tasks:
       - deployments/helm/kind/upgrade-failure-test.py
       # the chart's version must rise when its templates or values change: the gate's own cases (CI runs the gate itself on pull requests, #423)
       - deployments/helm/check-chart-bump-test.py
+      # what a failed kind run leaves behind (#416): diag.sh (whole pod logs since the start, Postgres sessions and locks) against fake kubectl/helm/curl, payment-flow.sh running it before it restores the release, the kind Postgres' lock-wait logging
+      - deployments/helm/kind/diag-test.sh
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
