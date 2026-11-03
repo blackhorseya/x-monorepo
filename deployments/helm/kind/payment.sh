@@ -24,9 +24,11 @@ code() { curl -s -o /dev/null -w '%{http_code}' "$@" || echo 000; }
 # ── 1. the workloads ───────────────────────────────────────────────────────────────────────────────
 kubectl -n "$ns" rollout status "deploy/$release-payment-serve" "deploy/$release-payment-consume" --timeout=2m >/dev/null \
   || fail "serve / consume did not roll out"
+# serve and the expire CronJob run the payment-rpc image; the consumer runs payment-worker (#410 slice 2)
 for what in deploy/$release-payment-serve deploy/$release-payment-consume cronjob/$release-payment-expire; do
   img=$(kubectl -n "$ns" get "$what" -o jsonpath='{.spec.template.spec.containers[0].image}{.spec.jobTemplate.spec.template.spec.containers[0].image}')
-  case $img in */payment-rpc:*) ;; *) fail "$what runs '$img', not the payment-rpc image" ;; esac
+  want_app=payment-rpc; [ "$what" = "deploy/$release-payment-consume" ] && want_app=payment-worker
+  case $img in */"$want_app":*) ;; *) fail "$what runs '$img', not the $want_app image" ;; esac
 done
 cfg=$(kubectl -n "$ns" get configmap "$release-payment-rpc" -o jsonpath='{.data.config\.yaml}')
 # grep -q under pipefail: a pipeline whose reader exits at the first match can fail with SIGPIPE on the writer (CI did,
