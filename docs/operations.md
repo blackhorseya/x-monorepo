@@ -294,7 +294,7 @@ watermill-sql 一次輪詢最多領 100 筆（`SubscribeBatchSize`，library 預
 | 子命令 | 形狀 | 做什麼 | 沒跑會怎樣 |
 |---|---|---|---|
 | `serve` | 常駐 | Connect `PaymentService`（`StartPayment`／`GetPayment`，只認 service key `rpc`）＋ webhook route `POST /api/payment/webhook`（簽章，不認 API key） | 顧客付不了款；provider 的通知會被 provider 重送到它放棄 |
-| `consume`（binary 是 `payment-worker`，#410 切片 2 起；`payment-rpc consume` 已移除） | 常駐，不聽埠 | 訂閱 `OrderConfirmed`／`OrderCancelled`／`OrderCompleted`（建付款單、終結付款單、必要時要求退款）、`PaymentRefundRequested`（呼叫 provider 退款）、`WebhookReceived`（套用已落地的通知） | 付款單不會建、通知不會套用、退款不會做；事件在 outbox 裡等，不會遺失 |
+| `consume`（binary 是 `payment-worker`；`payment-rpc consume` 在 #410 切片 2 合併後發布的第一個 image 起不再存在，更早的 `payment-rpc` image 仍有） | 常駐，不聽埠 | 訂閱 `OrderConfirmed`／`OrderCancelled`／`OrderCompleted`（建付款單、終結付款單、必要時要求退款）、`PaymentRefundRequested`（呼叫 provider 退款）、`WebhookReceived`（套用已落地的通知） | 付款單不會建、通知不會套用、退款不會做；事件在 outbox 裡等，不會遺失 |
 | `expire` | 跑一次就結束（CronJob，週期 = `payment.expire_interval`） | 逾時的 `PENDING` 先問 provider 再決定 `EXPIRED`／`CAPTURED`／`NEEDS_REVIEW`；`EXPIRED`／`CANCELLED` 在 `payment.reconcile_window` 內補查；順手刪逾期且已處理的 `webhook_events` | 逾時付款單不會過期、webhook 缺席的款項不會被發現 |
 
 三個都要 `postgres.url`（`--require-durable` 另要求 `serve` 的 `auth.mode: required` 與單一把 `rpc` key）。`consume` 把消費位置放在 **ordering** 的三張事件表上，所以 `task migrate -- up` 必須先把 ordering 與 payment 都跑完，否則 `consume` 啟動時以 `relation … does not exist` 結束（fail closed，不是靜默略過）。
@@ -397,10 +397,10 @@ COMMIT;
 | NetworkPolicy／ServiceMonitor／KEDA／HPA | NetworkPolicy（`networkPolicy.enabled` 時，沒有 ingress 規則）照舊用同一個 component label 選 pod，不變；consume 本來就沒有 ServiceMonitor（沒有 listener），也不被 HPA／KEDA 管（`check.py` 斷言沒有 HPA／ScaledObject），所以沒有要改的入口 |
 
 - **前提**：chart 的 `appVersion`（或 `image.tag`）必須 ≥ 0.63.3（`payment-worker` 第一個發布的版本；`0.63.3` 匿名拉取實測 200），且 `ghcr.io/blackhorseya/x-monorepo/payment-worker` 是 public。`check.py` 檢查 `appVersion`。
-- **手動跑 `payment-rpc consume` 的部署**（沒用這個 chart 的 Deployment、compose、systemd…）要改成 payment-worker：同一份設定檔、同樣的環境變數、同樣的 `--require-durable`，只是 binary／image 換成 `payment-worker`（沒有子命令）。舊入口現在以非零 exit 結束並印 `payment-rpc: consume was removed (#410): run the payment-worker binary or image instead …`，不會靜默退出。不要同時留著舊 consumer 與新 consumer 在不同的 group 名下。
+- **手動跑 `payment-rpc consume` 的部署**（沒用這個 chart 的 Deployment、compose、systemd…）要改成 payment-worker：同一份設定檔、同樣的環境變數、同樣的 `--require-durable`，只是 binary／image 換成 `payment-worker`（沒有子命令）。舊入口（本 PR 合併後發布的第一個 `payment-rpc` image 起）以非零 exit 結束並印 `payment-rpc: consume was removed (#410): run the payment-worker binary or image instead …`，不會靜默退出。不要同時留著舊 consumer 與新 consumer 在不同的 group 名下。
 - **滾動期間**：Deployment 預設 RollingUpdate，新舊 pod 短暫並存，兩邊同一個 group 分工，handler 對同一個 message id 有 inbox 冪等；沒有 consumer 的空窗（例如先 scale 到 0）事件留在 outbox 等著。
-- **版本界線**：以 chart `version` 區分——**≤ 0.3.58 的 chart 的 `payment-consume` 跑 `payment-rpc consume`；≥ 0.3.59 跑 `payment-worker`**。同一個 chart 版本號不會對應兩種內容：`deployments/helm/check-chart-bump.sh`（CI 的 `helm` job，pull request 上）比對 base 與 head 的 `templates/` 與 `values*.yaml`，有變就要求 `Chart.yaml` 的 `version` 嚴格遞增（數字比較，0.3.10 > 0.3.9；ci／ci-negative／README／只動 appVersion 的 release bot PR 不算）。
-- **退版**：退到 ≤ 0.3.58 的 chart 時，用的 image 必須是還有 `payment-rpc consume` 的版本（≤ 0.63.3，之後發布的 `payment-rpc` image 已移除它）；若退回舊 chart 卻留著 ≥ 切片 2 發布版的 image tag，舊 chart 的 `consume` arg 會讓 `payment-rpc` 以 `consume was removed` 結束。
+- **版本界線**：以 chart `version` 區分——**已發布的 chart（≤ 0.3.58）的 `payment-consume` 跑 `payment-rpc consume`；本 PR 把版本訂為 0.3.59，從 0.3.59 起跑 `payment-worker`**（0.3.59 要等本 PR 合併、release 之後才存在）。同一個 chart 版本號不會對應兩種內容：`deployments/helm/check-chart-bump.sh`（CI 的 `helm` job，pull request 上）比對 base 與 head 的 `templates/` 與 `values*.yaml`，有變就要求 `Chart.yaml` 的 `version` 嚴格遞增（數字比較，0.3.10 > 0.3.9；ci／ci-negative／README／只動 appVersion 的 release bot PR 不算）。
+- **退版**：退到 ≤ 0.3.58 的 chart 時，`payment-consume` 又會跑 `payment-rpc consume`，所以 image 必須還含這個入口。**已發布的 `payment-rpc` image 到 0.63.4 為止都含它**（`v0.63.4` 的 `apps/payment-rpc/main.go` 仍接受 `consume`），包括 chart 0.3.58 預設的 `appVersion` 0.63.4：照原樣退回 chart 0.3.58 不必動 image tag。**移除入口的 image 是這個 PR 合併之後發布的第一個版本**（版本號要等它發布才知道）；從那個版本起，退回 ≤ 0.3.58 的 chart 卻留著 `image.tag` 在那個版本之後，舊 chart 的 `consume` arg 會讓 `payment-rpc` 以 `consume was removed` 結束（要連 image tag 一起退，或保留 chart ≥ 0.3.59）。這一段只描述已發布的版本與原始碼；沒有用真叢集演練過退版。
 
 ### Upgrade notes — chart 0.3.53：payment 預設開（#367 切片 6）
 
