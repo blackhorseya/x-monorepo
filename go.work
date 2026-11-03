@@ -4,6 +4,7 @@ use (
 	./apps/catalog-rpc
 	./apps/migrate
 	./apps/payment-rpc
+	./apps/payment-worker
 	./apps/rpc
 	./apps/worker
 	./pkgs/catalog
