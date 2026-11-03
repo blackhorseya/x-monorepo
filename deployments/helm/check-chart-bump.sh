@@ -10,6 +10,9 @@ cd "$(dirname "$0")/../.."
 head=${2:-deployments/helm/x-monorepo}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-git fetch -q --depth=1 origin "$base" || { echo "check-chart-bump: cannot fetch $base: the base chart is unknown, so the gate cannot pass" >&2; exit 2; }
+# --depth only when this clone is already shallow (CI): on a full clone, and above all on a repository shared by
+# worktrees, `--depth` would make the whole repository shallow and break every other worktree's merge-base.
+depth=(); [ "$(git rev-parse --is-shallow-repository)" != true ] || depth=(--depth=1)
+git fetch -q ${depth[@]+"${depth[@]}"} origin "$base" || { echo "check-chart-bump: cannot fetch $base: the base chart is unknown, so the gate cannot pass" >&2; exit 2; }
 git archive FETCH_HEAD deployments/helm/x-monorepo | tar -x -C "$tmp" || { echo "check-chart-bump: cannot read the chart on $base" >&2; exit 2; }
 exec python3 deployments/helm/check-chart-bump.py "$tmp/deployments/helm/x-monorepo" "$head"

@@ -113,7 +113,9 @@ groups_of() { awk '{print $1" "$2}' <<<"$1" | sort -u; }
 inbox_rows() { db "SELECT count(*) FROM payment.inbox"; }
 
 # ── 1 the previous chart, as it was released ───────────────────────────────────────────────────────────────
-git fetch -q --depth=1 origin "refs/tags/$from_tag:refs/tags/$from_tag" 2>/dev/null || true
+# --depth only when this clone is already shallow (CI): on a repository shared by worktrees it would shallow all of them
+depth=(); [ "$(git rev-parse --is-shallow-repository)" != true ] || depth=(--depth=1)
+git fetch -q ${depth[@]+"${depth[@]}"} origin "refs/tags/$from_tag:refs/tags/$from_tag" 2>/dev/null || true
 git rev-parse -q --verify "refs/tags/$from_tag" >/dev/null || fail "the tag $from_tag is not available: the previous chart cannot be installed"
 mkdir -p "$tmp/old"
 git archive "$from_tag" deployments/helm/x-monorepo | tar -x -C "$tmp/old"
