@@ -15,7 +15,7 @@
 #                                     no child of the script left (#420)
 #   D6  bounds                      : many pods x many lines -> the Actions console stays small, the files are complete, and a
 #                                     slow cluster ends at the deadline (#420)
-#   D6L/W/E/S  the console in BYTES  : one 1 MiB line per pod / 5000 pod rows / huge event lines / 100000 Postgres rows: the
+#   D6L/W/E/S/M the console in BYTES  : one 1 MiB line per pod / 5000 pod rows / huge event lines / 100000 Postgres rows: the
 #                                     console stays under its byte budget, says it was cut and where the files are, and the
 #                                     files are complete (a limit in lines is no limit: #417 r2)
 #   D7  SQL text never leaves       : a real Postgres runs SQL with a synthetic credential literal while a lock is held;
@@ -315,6 +315,16 @@ if only D6L; then
   [ "$(ls "$DIAG_DIR"/log-p*.txt | wc -l | tr -d ' ')" = 30 ] || die "D6L: not all 30 pod files were written"
   unset DIAG_DIR
   echo "diag-test ok: D6L 30 pods x one 1 MiB line: $bytes console bytes (budget $budget), 30 complete files"
+fi
+if only D6M; then
+  # every part fits its own cap (80 lines of ~80 bytes per pod, under 8 KiB) and no part is cut on its own: only the SUM is over
+  # the budget. The branch of `emit` that counts what it let through is exercised by nothing else.
+  d6cell D6M "30 pods, each under its own cap, together over the budget" PODCOUNT=30 LOGLINES=80
+  has "is used up" "D6M: the total budget ran out, not a per-part cap"
+  [ "$(ls "$DIAG_DIR"/log-p*.txt | wc -l | tr -d ' ')" = 30 ] || die "D6M: not all 30 pod files were written after the console stopped"
+  for f in "$DIAG_DIR"/log-p*.txt; do [ "$(wc -l < "$f" | tr -d ' ')" = 80 ] || die "D6M: $f does not hold all 80 lines"; done
+  unset DIAG_DIR
+  echo "diag-test ok: D6M 30 pods each under its own cap: $bytes console bytes (budget $budget), the console stopped, 30 complete files"
 fi
 if only D6W; then
   d6cell D6W "pods wide with 5000 rows" WIDELINES=5000

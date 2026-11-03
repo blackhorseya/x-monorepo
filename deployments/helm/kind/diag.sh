@@ -7,8 +7,11 @@
 #   log-<pod>.txt                  the WHOLE log of every pod since <since> (timestamps; at most DIAG_POD_BYTES, default 5 MB,
 #   log-<pod>.previous.txt         per pod), and the previous container's where there is one
 #   postgres.txt                   sessions, locks, connections (below)
-# CONSOLE (the Actions log): where the files are, per pod the last DIAG_CONSOLE_LINES lines (default 100) and how many there
-#   are in all, and postgres.txt. Nothing else: a 5,000-line pod must not bury the failure it belongs to.
+# CONSOLE (the Actions log): where the files are, per pod the last DIAG_CONSOLE_LINES lines (default 100) cut to
+#   DIAG_POD_CONSOLE_BYTES (8 KiB) and how many lines there are in all, pods / events / postgres cut the same way. A limit in
+#   lines is no limit (one 1 MiB line is one line), so EVERYTHING written to the console goes through `emit`, which keeps one
+#   byte budget for the whole run (DIAG_CONSOLE_BYTES, default 256 KiB): when it is used up it says so once and prints nothing
+#   more, while the files are still written in full (#417 r2).
 # POSTGRES reads are structured columns only: pid, application_name, state, wait event, seconds in the transaction / query,
 #   the pids blocking it, and per lock its mode, whether it is granted and the relation's NAME. The text of a query is never
 #   selected: it is SQL as the client sent it, literals included (a credential inserted by hand would be printed).
@@ -22,6 +25,42 @@ dir=${DIAG_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/kind-diag}
 deadline=${DIAG_DEADLINE:-120} tail_n=${DIAG_CONSOLE_LINES:-100} max_bytes=${DIAG_POD_BYTES:-5000000}
 mkdir -p "$dir" 2>/dev/null || { echo "diag: cannot create $dir; nothing collected"; exit 0; }
 
+console_budget=${DIAG_CONSOLE_BYTES:-262144} pod_console=${DIAG_POD_CONSOLE_BYTES:-8192}
+console_left=$console_budget console_cut=""
+# emit [max_bytes [file]]: stdin -> the console, under the run's byte budget and, if given, max_bytes for this call (the notice
+# names the file that has all of it). The ONE way text reaches the console, except the constant ::group:: markers (raw): a
+# cut never leaves a group open. Reads at most cap+1 bytes, so an enormous input costs nothing. It keeps the budget in shell
+# variables, so it must run in THIS shell: feed it with `< file`, never `cmd | emit` (a pipeline runs it in a subshell and
+# the budget would not add up; diag-test D6L is what noticed).
+emit() {
+  local cap=$console_left own=0 where=${2:-$dir}
+  if [ -n "${1:-}" ] && [ "$1" -lt "$cap" ]; then cap=$1 own=1; fi
+  if [ -n "$console_cut" ] || [ "$cap" -le 0 ]; then cat > /dev/null; return 0; fi
+  local buf n; buf=$(mktemp) || return 0
+  head -c $((cap + 1)) > "$buf"
+  n=$(wc -c < "$buf" | tr -d ' ')
+  if [ "$n" -le "$cap" ]; then
+    cat "$buf"; console_left=$((console_left - n))
+  else
+    head -c "$cap" "$buf"; echo
+    console_left=$((console_left - cap))
+    if [ "$own" = 1 ]; then
+      printf '[diag: cut to the console budget of %s bytes for this part; all of it is in %s]\n' "$cap" "$where"
+    else
+      console_cut=1
+      printf '[diag: the console budget of %s bytes is used up; nothing more is printed here, everything is in %s]\n' "$console_budget" "$dir"
+    fi
+  fi
+  rm -f "$buf"
+}
+scratch=$(mktemp) || scratch=/dev/null
+say() { printf '%s\n' "$*" > "$scratch"; emit < "$scratch"; }
+# tail_emit <file> <lines> <bytes>: the last <lines> lines of <file>, cut to <bytes>, through emit. One byte more than the cap is
+# handed over, so emit sees the overflow and says it cut (handing it exactly <bytes> would hide the cut).
+tail_emit() { tail -n "$2" "$1" | tail -c $(($3 + 1)) > "$scratch"; emit "$3" "$1" < "$scratch"; }
+group() { printf '::group::%s\n' "$1"; }
+endgroup() { echo "::endgroup::"; }
+
 left() { echo $((deadline - SECONDS)); }
 # k <kubectl args>: bounded by 30 s and by what is left of the deadline (124 = out of time)
 k() {
@@ -31,41 +70,41 @@ k() {
   kubectl --request-timeout="${r}s" -n "$ns" "$@"
 }
 cut_short=""
-out_of_time() { [ "$(left)" -gt 0 ] && return 1; [ -n "$cut_short" ] || echo "diag: the ${deadline}s deadline was reached; the rest is not collected"; cut_short=1; return 0; }
+out_of_time() { [ "$(left)" -gt 0 ] && return 1; [ -n "$cut_short" ] || say "diag: the ${deadline}s deadline was reached; the rest is not collected"; cut_short=1; return 0; }
 
-echo "diag: files in $dir; the console shows the last $tail_n lines per pod; deadline ${deadline}s"
+say "diag: files in $dir; the console shows the last $tail_n lines (at most $pod_console bytes) per pod, $console_budget bytes in all; deadline ${deadline}s"
 
-echo "::group::diag: pods and events"
+group "diag: pods and events"
 k get pods -o wide > "$dir/pods.txt" 2>&1 || echo "diag: kubectl get pods failed" >> "$dir/pods.txt"
-cat "$dir/pods.txt"
+emit 16384 "$dir/pods.txt" < "$dir/pods.txt"
 k get events --sort-by=.lastTimestamp > "$dir/events.txt" 2>&1 || echo "diag: kubectl get events failed" >> "$dir/events.txt"
-tail -n 30 "$dir/events.txt"
-echo "::endgroup::"
+tail_emit "$dir/events.txt" 30 8192
+endgroup
 
-echo "::group::diag: pod logs since $since"
+group "diag: pod logs since $since"
 pods=$(k get pods -o name 2>/dev/null) || pods=""
-[ -n "$pods" ] || echo "diag: no pod list (kubectl get pods failed or the namespace is empty)"
+[ -n "$pods" ] || say "diag: no pod list (kubectl get pods failed or the namespace is empty)"
 for p in $pods; do
   out_of_time && break
   name=${p#pod/}
   f="$dir/log-$name.txt"
   if k logs "$p" --all-containers --timestamps --since-time="$since" --limit-bytes="$max_bytes" > "$f" 2>/dev/null; then
-    echo "--- $p: $(wc -l < "$f" | tr -d ' ') lines, all of them in $f"
-    tail -n "$tail_n" "$f"
+    say "--- $p: $(wc -l < "$f" | tr -d ' ') lines, $(wc -c < "$f" | tr -d ' ') bytes, all of them in $f"
+    tail_emit "$f" "$tail_n" "$pod_console"
   else
-    echo "--- $p: diag: no log"
+    say "--- $p: diag: no log"
     rm -f "$f"
   fi
   prev="$dir/log-$name.previous.txt"
   if k logs "$p" --all-containers --timestamps --since-time="$since" --limit-bytes="$max_bytes" --previous > "$prev" 2>/dev/null && [ -s "$prev" ]; then
-    echo "--- $p: the previous container's log: $(wc -l < "$prev" | tr -d ' ') lines in $prev"
+    say "--- $p: the previous container's log: $(wc -l < "$prev" | tr -d ' ') lines in $prev"
   else
     rm -f "$prev"
   fi
 done
-echo "::endgroup::"
+endgroup
 
-echo "::group::diag: postgres sessions and locks"
+group "diag: postgres sessions and locks"
 pg="$dir/postgres.txt"; : > "$pg"
 sql() { # <title> <statement>: read-only, bounded to 10 s on the server
   out_of_time && return 0
@@ -76,7 +115,7 @@ sql() { # <title> <statement>: read-only, bounded to 10 s on the server
 sql "sessions (pg_stat_activity, no query text)" "SELECT pid, application_name, state, wait_event_type, wait_event, EXTRACT(EPOCH FROM now() - xact_start)::int AS in_xact_s, EXTRACT(EPOCH FROM now() - query_start)::int AS in_query_s, pg_blocking_pids(pid) AS blocked_by FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() ORDER BY xact_start NULLS LAST, pid"
 sql "locks (pg_locks)" "SELECT l.pid, l.locktype, l.mode, l.granted, c.relname FROM pg_locks l LEFT JOIN pg_class c ON c.oid = l.relation WHERE l.pid <> pg_backend_pid() ORDER BY l.granted, l.pid, c.relname"
 sql "connections against max_connections" "SELECT count(*) AS connections, current_setting('max_connections') AS max_connections FROM pg_stat_activity"
-cat "$pg"
-echo "::endgroup::"
-echo "diag: done in ${SECONDS}s; $(ls "$dir" | wc -l | tr -d ' ') files in $dir"
+emit 32768 "$pg" < "$pg"
+endgroup
+say "diag: done in ${SECONDS}s; $(ls "$dir" | wc -l | tr -d ' ') files in $dir"
 exit 0
