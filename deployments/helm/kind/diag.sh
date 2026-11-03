@@ -7,11 +7,14 @@
 #   log-<pod>.txt                  the WHOLE log of every pod since <since> (timestamps; at most DIAG_POD_BYTES, default 5 MB,
 #   log-<pod>.previous.txt         per pod), and the previous container's where there is one
 #   postgres.txt                   sessions, locks, connections (below)
-# THE BOUND IS AT THE PROCESS BOUNDARY (#417 r3): the first thing this script does is send its own stdout and stderr, and
-#   those of everything it starts, into a writer that stops at DIAG_CONSOLE_BYTES (default 256 KiB), says so ONCE (naming the
-#   directory) and swallows the rest. Whatever any line below prints, the console cannot get more. What follows (emit, the per
-#   pod caps) only decides WHAT is worth the bytes; it is not what keeps the console small. A TERM / INT / HUP ends the script
-#   with 128 + the signal after the writer has flushed what it holds.
+# THE CONSOLE IS NEVER IN THE COLLECTOR'S HANDS (#417 r3, r4): this file is two programs. The WRAPPER runs first, is the only
+#   holder of the real stdout / stderr, and starts the COLLECTOR (this same file, with --diag-child) with its stdout and stderr
+#   already pointed at a capture FILE and its stdin at /dev/null. So nothing the collector or anything it starts can write
+#   reaches the console: there is no descriptor for it to find (no fd 3, no fifo, no resident writer, no pid to wait for). When
+#   the collector is done, or the wrapper gets TERM / INT / HUP, the wrapper prints the first DIAG_CONSOLE_BYTES (default 256
+#   KiB) of the capture, says ONCE if there was more (naming the directory), copies the whole capture to $DIAG_DIR/console.full
+#   and exits with the collector's status (128 + the signal for a signal). Cost: the console is not a live stream; it appears
+#   when the run ends. emit and the per-part caps below only decide WHAT is worth the bytes in the capture.
 # CONSOLE (the Actions log): where the files are, per pod the last DIAG_CONSOLE_LINES lines (default 100) cut to
 #   DIAG_POD_CONSOLE_BYTES (8 KiB) and how many lines there are in all, pods / events / postgres cut the same way. A limit in
 #   lines is no limit (one 1 MiB line is one line), so EVERYTHING written to the console goes through `emit`, which keeps one
@@ -28,56 +31,56 @@ set -uo pipefail
 dir=${DIAG_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/kind-diag}
 console_budget=${DIAG_CONSOLE_BYTES:-262144} pod_console=${DIAG_POD_CONSOLE_BYTES:-8192}
 
-# ── the process boundary ─────────────────────────────────────────────────────
-# The real console is the writer's stdout and NOBODY else's: this script never has a descriptor for it (no `exec 3>&1`), so
-# nothing it runs can reach the console except through the fifo, and the writer is the only holder of the caller's pipe.
-#
-# bounded_writer: stdin = the fifo, stdout = the real console, stderr dropped. It reads one byte more than $console_budget, so it
-# knows whether there was more; it prints at most that many bytes, says so once, and then CLOSES the console: a caller that waits
-# for EOF on a pipe gets it now, not when this process ends, and the caller need not have reaped the script (a writer that
-# waited for its parent's pid to vanish deadlocked a caller that reads to EOF before it waits, #417 r4). It drops a flag file
-# ($fifo_dir/flushed) so the script need not wait for an EOF either, and then only drains the fifo until EOF: a writer must
-# never block a producer. `<&0` is explicit on purpose: bash gives an asynchronous command /dev/null for stdin unless redirected.
-bounded_writer() {
-  exec 2>/dev/null
-  local buf n
-  buf=$(mktemp) || { exec >&-; cat > /dev/null; return 0; }
-  head -c $((console_budget + 1)) > "$buf"
-  n=$(wc -c < "$buf" | tr -d ' ')
-  if [ "$n" -le "$console_budget" ]; then
-    cat "$buf"
-  else
-    head -c "$console_budget" "$buf"
-    printf '\n[diag: the console budget of %s bytes is used up at the process boundary; nothing more is printed here, the files are in %.200s]\n::endgroup::\n' "$console_budget" "$dir"
+# ── the wrapper ──────────────────────────────────────────────────────────────
+if [ "${1:-}" != "--diag-child" ]; then
+  cap_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX") || { echo "diag: cannot create a capture directory; nothing collected"; exit 0; }
+  child="" sig_rc="" kill_pid="" c=""
+  # on a signal: stop everything under the collector, then ask the collector itself to stop (it cleans up); if it is still there after 5 s, kill it
+  stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name)
+    local x
+    for x in $(pgrep -P "$1" 2>/dev/null); do stop_tree "$x"; kill "$x" 2>/dev/null || true; done
+  }
+  on_signal() {
+    sig_rc=$1
+    trap '' TERM INT HUP
+    stop_tree "$child"
+    kill -TERM "$child" 2>/dev/null || true
+    ( sleep 5; kill -KILL "$child" 2>/dev/null ) > /dev/null 2>&1 &
+    kill_pid=$!
+  }
+  trap 'on_signal 143' TERM
+  trap 'on_signal 130' INT
+  trap 'on_signal 129' HUP
+  bash "$0" --diag-child "$@" > "$cap_dir/console" 2>&1 < /dev/null &
+  child=$!
+  rc=0
+  while :; do
+    wait "$child"; rc=$?
+    kill -0 "$child" 2>/dev/null || break   # reaped: it is gone. Still there: wait was interrupted by a trapped signal
+  done
+  if [ -n "$kill_pid" ]; then   # the 5 s fuse: its `sleep` first, then the subshell holding it (explicit pids). KILL, not TERM:
+    # the fuse was started after on_signal ignored TERM, and an ignored signal is inherited (diag-test D6T saw it survive)
+    for c in $(pgrep -P "$kill_pid" 2>/dev/null); do kill -KILL "$c" 2>/dev/null || true; done
+    kill -KILL "$kill_pid" 2>/dev/null || true
   fi
-  exec >&-
-  : > "$fifo_dir/flushed"
-  rm -f "$buf"
-  cat <&0 > /dev/null
-}
-fifo_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX") && mkfifo "$fifo_dir/console" || { echo "diag: cannot create the console pipe; nothing collected"; exit 0; }
-bounded_writer < "$fifo_dir/console" &
-writer=$!
-exec > "$fifo_dir/console" 2>&1
-scratch=$(mktemp) || scratch=/dev/null
-# finish: the script leaves with the status it was leaving with, after the writer has flushed. A trap that fires in the middle of
-# a redirected command (a TERM during `k ... > file`) leaves bash's saved copies of the console fifo open at fd 10, 11, ...: they
-# are closed here, and the wait is for the writer's FLAG, not for an EOF a stray child could hold back. After a short grace the
-# writer's `head` is stopped (explicit pids) so it flushes what it has.
-finish() {
-  local rc=$? i=0 fd c
+  [ -z "$sig_rc" ] || rc=$sig_rc
   trap '' TERM INT HUP
-  exec >&- 2>&-
-  for fd in 10 11 12 13 14 15 16 17 18 19; do eval "exec $fd>&-" 2>/dev/null; done
-  while [ ! -e "$fifo_dir/flushed" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
-  if [ ! -e "$fifo_dir/flushed" ]; then
-    for c in $(pgrep -P "$writer" 2>/dev/null); do kill "$c" 2>/dev/null || true; done
-    i=0; while [ ! -e "$fifo_dir/flushed" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  cap="$cap_dir/console"
+  size=$(wc -c < "$cap" | tr -d ' ')
+  head -c "$console_budget" "$cap"
+  if [ "$size" -gt "$console_budget" ]; then
+    printf '\n[diag: the console budget of %s bytes is used up; nothing more is printed here, the whole output is in %.200s/console.full]\n::endgroup::\n' "$console_budget" "$dir"
   fi
-  case "$fifo_dir" in */diag-console.*) rm -rf -- "$fifo_dir" ;; esac
-  [ "$scratch" = /dev/null ] || rm -f -- "$scratch"
+  [ ! -d "$dir" ] || cp -f -- "$cap" "$dir/console.full" 2>/dev/null || true
+  case "$cap_dir" in */diag-console.*) rm -rf -- "$cap_dir" ;; esac
   exit "$rc"
-}
+fi
+shift   # --diag-child
+
+# ── the collector: its stdout and stderr are the capture file, nothing else ────
+# diag-test D6F injects a write to a console descriptor right below this line: there is none to write to.
+scratch=$(mktemp) || scratch=/dev/null
+finish() { [ "$scratch" = /dev/null ] || rm -f -- "$scratch"; }
 trap finish EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
@@ -87,8 +90,8 @@ ns=${1:?usage: diag.sh <namespace> <since RFC3339>} since=${2:?usage: diag.sh <n
 deadline=${DIAG_DEADLINE:-120} tail_n=${DIAG_CONSOLE_LINES:-100} max_bytes=${DIAG_POD_BYTES:-5000000}
 mkdir -p "$dir" 2>/dev/null || { echo "diag: cannot create $dir; nothing collected"; exit 0; }
 
-# emit's own accounting leaves room under the boundary for the fixed lines (group markers, notices), so on the ordinary path
-# the boundary never has to cut anything
+# emit's own accounting leaves room under the wrapper's cut for the fixed lines (group markers, notices), so on the ordinary
+# path the wrapper never has to cut anything
 reserve=4096; [ "$console_budget" -gt $((reserve * 4)) ] || reserve=$((console_budget / 4))
 console_left=$((console_budget - reserve)) console_cut=""
 # emit [max_bytes [file]]: stdin -> the console, under the run's byte budget and, if given, max_bytes for this call (the notice

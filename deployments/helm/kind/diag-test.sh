@@ -21,12 +21,12 @@
 #   D6X        two inputs that reached the console outside emit (#417 r3): a 100,000-character `since` (it is in a group
 #              title) and a `DIAG_DIR` that cannot be created (its path is in the error)
 #   D6D        (same) the DIAG_DIR variant
-#   D6B        the bound is at the PROCESS boundary: a copy of diag.sh with a direct 100 KB write injected after every
+#   D6B        the bound is not a call-site discipline: a copy of diag.sh with a direct 100 KB write injected after every
 #              group marker still stays under the budget, and says so
-#   D6P        a caller that CAPTURES the output through a pipe (subprocess.run(stdout=PIPE)) gets EOF and the exit status: the
-#              writer must not wait for its caller to reap diag.sh while the caller waits for EOF (#417 r4)
-#   D6F        the real console is held by the writer ONLY: a producer that writes to the descriptor it inherited (>&3) reaches
-#              nothing (#417 r4)
+#   D6P        a caller that CAPTURES the output through a pipe (subprocess.run(stdout=PIPE)) gets EOF and the exit status at once:
+#              nothing of diag.sh outlives its exit holding that pipe (#417 r4)
+#   D6F        the collector has no descriptor for the console (a scan of its descriptors finds none that is the console) and a
+#              write to >&3 reaches nothing (#417 r4)
 #   D6T        TERM while diag.sh collects: exit 143, what was printed before it is flushed, no fifo / writer left
 #   D7  SQL text never leaves       : a real Postgres runs SQL with a synthetic credential literal while a lock is held;
 #                                     nothing diag.sh prints or writes carries it (#420)
@@ -425,21 +425,42 @@ PY
   echo "diag-test ok: D6P a caller capturing through a pipe: $res"
 fi
 if only D6F; then
-  # the console descriptor must not be in the producers' hands: inject a direct write to the descriptor diag.sh used to
-  # inherit for it (>&3) right after the redirect
+  # the collector must have no way to the console. Inject, right below the marker comment that opens the collector, (a) a write
+  # to descriptor 3 (what an earlier version inherited for the real console) and (b) a scan of every descriptor the collector
+  # has for one that is the very file the console is (the test's own capture of diag.sh's stdout). The scan compares
+  # (st_dev, st_ino) from python: `[ /dev/fd/N -ef file ]` finds nothing on macOS (its /dev/fd/N is a new node), so a shell scan
+  # would pass whatever the collector held.
+  cat > "$tmp/fdscan.py" <<'PY'
+import os, sys
+c = os.stat(sys.argv[1])
+for fd in range(0, 256):
+    try:
+        s = os.fstat(fd)
+    except OSError:
+        continue
+    if (s.st_dev, s.st_ino) == (c.st_dev, c.st_ino):
+        print(fd)
+PY
+  # positive control: a process whose stdout IS the console must be seen by the scan, or the scan proves nothing
+  : > "$tmp/ctl-console"
+  python3 "$tmp/fdscan.py" "$tmp/ctl-console" > "$tmp/ctl-console"
+  [ "$(cat "$tmp/ctl-console")" = 1 ] || die "D6F: the descriptor scan did not see its own stdout as the console (got: $(cat "$tmp/ctl-console")); it would pass whatever the collector held"
   mut="$tmp/diag-fd3.sh"
-  awk '{ print } /^exec > "\$fifo_dir\/console" 2>&1/ { print "printf \"%100000s\" X >&3 2>/dev/null; echo hit >> \"$INJECT_HITS\"" }' "$here/diag.sh" > "$mut"
+  awk '{ print } /^# diag-test D6F injects/ { print "printf \"%100000s\" X >&3 2>/dev/null; echo hit >> \"$INJECT_HITS\""; print "echo scanned >> \"$INJECT_SCANNED\"; python3 \"$INJECT_SCAN\" \"$INJECT_CONSOLE\" >> \"$INJECT_FDS\""}' "$here/diag.sh" > "$mut"
   chmod +x "$mut"
-  [ "$(grep -c 'INJECT_HITS' "$mut")" = 1 ] || die "D6F: the mutant was not built (the redirect line was not found)"
-  : > "$tmp/hits-f"; export INJECT_HITS="$tmp/hits-f" DIAG_DIR="$tmp/diag-F" DIAG_CONSOLE_BYTES=$budget
+  [ "$(grep -c 'INJECT_HITS' "$mut")" = 1 ] || die "D6F: the mutant was not built (the marker comment was not found)"
+  : > "$tmp/hits-f"; : > "$tmp/scanned-f"; : > "$tmp/fds-f"
+  export INJECT_HITS="$tmp/hits-f" INJECT_SCANNED="$tmp/scanned-f" INJECT_FDS="$tmp/fds-f" INJECT_SCAN="$tmp/fdscan.py" INJECT_CONSOLE="$tmp/out" DIAG_DIR="$tmp/diag-F" DIAG_CONSOLE_BYTES=$budget
   run_bounded 120 "$mut" ns "$since"
-  unset INJECT_HITS DIAG_DIR DIAG_CONSOLE_BYTES
+  unset INJECT_HITS INJECT_SCANNED INJECT_FDS INJECT_SCAN INJECT_CONSOLE DIAG_DIR DIAG_CONSOLE_BYTES
   [ "$rc" = 0 ] || die "D6F: exit $rc, want 0"
   [ "$(wc -l < "$tmp/hits-f" | tr -d ' ')" = 1 ] || die "D6F: the injected write did not run"
+  [ "$(wc -l < "$tmp/scanned-f" | tr -d ' ')" = 1 ] || die "D6F: the descriptor scan did not run (it proves nothing if it did not)"
+  [ ! -s "$tmp/fds-f" ] || die "D6F: the collector holds a descriptor for the console: fd $(tr '\n' ' ' < "$tmp/fds-f")"
   bytes=$(wc -c < "$tmp/out" | tr -d ' ')
   [ "$bytes" -le $((budget + slack)) ] || die "D6F: a write to the inherited console descriptor put $bytes bytes on the console, want at most $((budget + slack))"
-  has "diag: files in" "D6F: the run itself still printed (through the writer)"
-  echo "diag-test ok: D6F a producer writing to >&3 reaches nothing: $bytes console bytes (limit $((budget + slack)))"
+  has "diag: files in" "D6F: the run itself still printed (the wrapper prints the capture)"
+  echo "diag-test ok: D6F the collector has no console descriptor (scanned by inode, scan proven on a positive control) and a write to >&3 reaches nothing: $bytes console bytes (limit $((budget + slack)))"
 fi
 if only D6T; then
   # TERM while diag.sh is collecting (a slow cluster keeps it busy): 143, what it had printed is on the console, nothing is left
