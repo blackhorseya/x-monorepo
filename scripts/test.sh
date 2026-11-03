@@ -1534,6 +1534,16 @@ expect_match "check-modules: the module behind the no-break space is named" 'in 
 modrun ctl_item "$gw_two" '"apps/rpc pkgs/ker\x01nel"'
 expect_eq "check-modules: a MODULES item with a control character is refused" "1" "$rc"
 expect_match "check-modules: the refused MODULES item is shown JSON-escaped" '^  "pkgs/ker\\u0001nel"$' "$out"
+# A YAML list item can hold a newline ("apps/a\nb" is ONE item to Task), so the records Task hands the gate must not be
+# newline-separated (#413 r5): two go.work uses (apps/a, b) are not equal to the single MODULES item "apps/a\nb".
+modrun_tf list_nl "$two_uses" 'vars:
+  MODULES: ["apps/a\nb"]'
+expect_eq "check-modules: a single MODULES list item holding a newline is not two modules" "1" "$rc"
+expect_match "check-modules: the newline item is refused as a control-character item" 'control characters' "$out"
+expect_match "check-modules: the refused list item is shown JSON-escaped, as one item" '^  "apps/a\\nb"$' "$out"
+modrun_tf list_ok "$two_uses" 'vars:
+  MODULES: ["apps/a", "b"]'
+expect_eq "check-modules: a YAML list MODULES equal to go.work passes" "0" "$rc"
 # A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
 tools_without() {
   local bindir="$tmp/toolbin-$1" t
