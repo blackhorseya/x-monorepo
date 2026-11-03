@@ -230,7 +230,8 @@ fi
 cat > "$tmp/sigrun.py" <<'PY'
 import os, signal, subprocess, sys, time
 sig = getattr(signal, "SIG" + sys.argv[1]); marker = sys.argv[2]; cmd = sys.argv[4:]
-p = subprocess.Popen(cmd, start_new_session=True)
+# a test that was itself started in the background (SIGINT ignored, and inherited) must still deliver a catchable INT
+p = subprocess.Popen(cmd, start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 t0 = time.time()
 while not os.path.exists(marker):
     if p.poll() is not None or time.time() - t0 > 30:
@@ -401,7 +402,7 @@ if only D6T; then
 import os, signal, subprocess, sys, time
 marker, out = sys.argv[1], sys.argv[2]; cmd = sys.argv[3:]
 f = open(out, "w")
-p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 t0 = time.time()
 while not os.path.exists(marker) and time.time() - t0 < 30 and p.poll() is None: time.sleep(0.05)
 os.kill(p.pid, signal.SIGTERM)
@@ -419,7 +420,7 @@ PY
   [[ $res == *"rc=143 "* ]] || die "D6T: $res; want rc=143 (128 + TERM)"
   [[ $res == *"leftover=0"* ]] || die "D6T: something of diag.sh outlived it ($res)"
   has "diag: files in" "D6T: what diag.sh printed before the TERM reached the console"
-  left_fifos=$(ls "${TMPDIR:-/tmp}"/diag-console.* 2>/dev/null | wc -l | tr -d ' ')
+  left_fifos=$({ ls "${TMPDIR:-/tmp}"/diag-console.* 2>/dev/null || true; } | wc -l | tr -d ' ')
   [ "$left_fifos" = 0 ] || die "D6T: $left_fifos console fifos left in ${TMPDIR:-/tmp}"
   echo "diag-test ok: D6T TERM while collecting: $res, the printed part is on the console, no fifo left"
 fi

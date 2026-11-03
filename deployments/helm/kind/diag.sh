@@ -7,6 +7,11 @@
 #   log-<pod>.txt                  the WHOLE log of every pod since <since> (timestamps; at most DIAG_POD_BYTES, default 5 MB,
 #   log-<pod>.previous.txt         per pod), and the previous container's where there is one
 #   postgres.txt                   sessions, locks, connections (below)
+# THE BOUND IS AT THE PROCESS BOUNDARY (#417 r3): the first thing this script does is send its own stdout and stderr, and
+#   those of everything it starts, into a writer that stops at DIAG_CONSOLE_BYTES (default 256 KiB), says so ONCE (naming the
+#   directory) and swallows the rest. Whatever any line below prints, the console cannot get more. What follows (emit, the per
+#   pod caps) only decides WHAT is worth the bytes; it is not what keeps the console small. A TERM / INT / HUP ends the script
+#   with 128 + the signal after the writer has flushed what it holds.
 # CONSOLE (the Actions log): where the files are, per pod the last DIAG_CONSOLE_LINES lines (default 100) cut to
 #   DIAG_POD_CONSOLE_BYTES (8 KiB) and how many lines there are in all, pods / events / postgres cut the same way. A limit in
 #   lines is no limit (one 1 MiB line is one line), so EVERYTHING written to the console goes through `emit`, which keeps one
@@ -20,13 +25,73 @@
 #   and it says so. It is called BEFORE the run restores the release: `helm upgrade` replaces the pods and their logs.
 # Best effort: it never fails, so it cannot hide the failure it reports on. Needs kubectl.
 set -uo pipefail
-ns=${1:?usage: diag.sh <namespace> <since RFC3339>} since=${2:?usage: diag.sh <namespace> <since RFC3339>}
 dir=${DIAG_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/kind-diag}
+console_budget=${DIAG_CONSOLE_BYTES:-262144} pod_console=${DIAG_POD_CONSOLE_BYTES:-8192}
+
+# ── the process boundary ─────────────────────────────────────────────────────
+exec 3>&1   # the real console; only the writer below writes to it
+# bounded_writer: stdin -> fd 3, at most $console_budget bytes. It reads one byte more than that, so it knows whether
+# there was more; then it says so once. When it has flushed it drops a flag file ($fifo_dir/flushed) so the script need not wait
+# for EOF (see finish), and it then only drains what is still written to it, until the script (its parent, $main_pid) is gone: a
+# writer must never block a producer or outlive the run.
+main_pid=$$
+bounded_writer() {
+  local buf n d
+  buf=$(mktemp) || { cat > /dev/null; return 0; }
+  head -c $((console_budget + 1)) > "$buf"
+  n=$(wc -c < "$buf" | tr -d ' ')
+  if [ "$n" -le "$console_budget" ]; then
+    cat "$buf" >&3
+  else
+    head -c "$console_budget" "$buf" >&3
+    printf '\n[diag: the console budget of %s bytes is used up at the process boundary; nothing more is printed here, the files are in %.200s]\n::endgroup::\n' "$console_budget" "$dir" >&3
+  fi
+  : > "$fifo_dir/flushed"
+  # `<&0` is explicit on purpose: bash gives an asynchronous command /dev/null for stdin unless it is redirected, and a drain
+  # that reads /dev/null drains nothing (the script then blocks in write() on a full pipe: found by diag-test D6X)
+  cat <&0 > /dev/null &
+  d=$!
+  while kill -0 "$main_pid" 2>/dev/null; do sleep 0.2; done
+  kill "$d" 2>/dev/null
+  rm -f "$buf"
+}
+fifo_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX") && mkfifo "$fifo_dir/console" || { echo "diag: cannot create the console pipe; nothing collected" >&3; exit 0; }
+bounded_writer < "$fifo_dir/console" &
+writer=$!
+exec > "$fifo_dir/console" 2>&1
+scratch=$(mktemp) || scratch=/dev/null
+# finish: the script leaves with the status it was leaving with, after the writer has flushed. A trap that fires in the middle of
+# a redirected command (a TERM during `k ... > file`) leaves bash's saved copies of the console fifo open at fd 10, 11, ...: they
+# are closed here, and the wait is for the writer's FLAG, not for an EOF a stray child could hold back. After a short grace the
+# writer's `head` is stopped (explicit pids) so it flushes what it has.
+finish() {
+  local rc=$? i=0 fd c
+  trap '' TERM INT HUP
+  exec >&- 2>&-
+  for fd in 10 11 12 13 14 15 16 17 18 19; do eval "exec $fd>&-" 2>/dev/null; done
+  while [ ! -e "$fifo_dir/flushed" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+  if [ ! -e "$fifo_dir/flushed" ]; then
+    for c in $(pgrep -P "$writer" 2>/dev/null); do kill "$c" 2>/dev/null || true; done
+    i=0; while [ ! -e "$fifo_dir/flushed" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  fi
+  exec 3>&-
+  case "$fifo_dir" in */diag-console.*) rm -rf -- "$fifo_dir" ;; esac
+  [ "$scratch" = /dev/null ] || rm -f -- "$scratch"
+  exit "$rc"
+}
+trap finish EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
+ns=${1:?usage: diag.sh <namespace> <since RFC3339>} since=${2:?usage: diag.sh <namespace> <since RFC3339>}
 deadline=${DIAG_DEADLINE:-120} tail_n=${DIAG_CONSOLE_LINES:-100} max_bytes=${DIAG_POD_BYTES:-5000000}
 mkdir -p "$dir" 2>/dev/null || { echo "diag: cannot create $dir; nothing collected"; exit 0; }
 
-console_budget=${DIAG_CONSOLE_BYTES:-262144} pod_console=${DIAG_POD_CONSOLE_BYTES:-8192}
-console_left=$console_budget console_cut=""
+# emit's own accounting leaves room under the boundary for the fixed lines (group markers, notices), so on the ordinary path
+# the boundary never has to cut anything
+reserve=4096; [ "$console_budget" -gt $((reserve * 4)) ] || reserve=$((console_budget / 4))
+console_left=$((console_budget - reserve)) console_cut=""
 # emit [max_bytes [file]]: stdin -> the console, under the run's byte budget and, if given, max_bytes for this call (the notice
 # names the file that has all of it). The ONE way text reaches the console, except the constant ::group:: markers (raw): a
 # cut never leaves a group open. Reads at most cap+1 bytes, so an enormous input costs nothing. It keeps the budget in shell
@@ -45,15 +110,14 @@ emit() {
     head -c "$cap" "$buf"; echo
     console_left=$((console_left - cap))
     if [ "$own" = 1 ]; then
-      printf '[diag: cut to the console budget of %s bytes for this part; all of it is in %s]\n' "$cap" "$where"
+      printf '[diag: cut to the console budget of %s bytes for this part; all of it is in %.200s]\n' "$cap" "$where"
     else
       console_cut=1
-      printf '[diag: the console budget of %s bytes is used up; nothing more is printed here, everything is in %s]\n' "$console_budget" "$dir"
+      printf '[diag: the console budget of %s bytes is used up; nothing more is printed here, everything is in %.200s]\n' "$console_budget" "$dir"
     fi
   fi
   rm -f "$buf"
 }
-scratch=$(mktemp) || scratch=/dev/null
 say() { printf '%s\n' "$*" > "$scratch"; emit < "$scratch"; }
 # tail_emit <file> <lines> <bytes>: the last <lines> lines of <file>, cut to <bytes>, through emit. One byte more than the cap is
 # handed over, so emit sees the overflow and says it cut (handing it exactly <bytes> would hide the cut).
