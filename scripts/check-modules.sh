@@ -27,8 +27,15 @@ in_work=$(awk '
   $1 == "use" && $2 == "(" { inblock = 1; next }
   $1 == "use" { for (i = 2; i <= NF; i++) print $i }
 ' "$gowork" | words)
-# Taskfile.yml: the one `MODULES:` var, # comment dropped.
-in_task=$(sed -n 's/^[[:space:]]*MODULES:[[:space:]]*//p' "$taskfile" | sed 's/[[:space:]]*#.*//' | tr ' ' '\n' | words)
+# Taskfile.yml: the one `MODULES:` var. Task reads a multi-line scalar (plain or folded `>`) as one space-joined
+# value, so the lines indented deeper than the key belong to it (#413 review: reading only the key line let
+# `MODULES: a` + a `b` continuation line pass while Task lints a and b). # comments and the `>` / `|` header dropped.
+in_task=$(awk '
+  function indent(l) { match(l, /^[ \t]*/); return RLENGTH }
+  function emit(t,   i, n, a) { sub(/[ \t]*#.*/, "", t); n = split(t, a, /[ \t]+/); for (i = 1; i <= n; i++) if (a[i] != "" && a[i] !~ /^[>|][-+]?$/) print a[i] }
+  !found && /^[ \t]*MODULES:/ { found = 1; ki = indent($0); t = $0; sub(/^[ \t]*MODULES:/, "", t); emit(t); next }
+  found { if ($0 ~ /^[ \t]*$/) next; if (indent($0) <= ki) exit; if ($0 ~ /^[ \t]*#/) next; emit($0) }
+' "$taskfile" | words)
 
 n_work=$(printf '%s' "$in_work" | grep -c . || true)
 n_task=$(printf '%s' "$in_task" | grep -c . || true)
