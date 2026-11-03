@@ -460,13 +460,14 @@ print("rc=%d leftover=%d" % (rc, left))
 PY
   : > "$tmp/events"; rm -f "$tmp/started"
   # SLOW=1: every kubectl call takes 1 s; the first `logs` call proves diag.sh has printed its first lines
-  res=$(DIAG_DIR="$tmp/diag-T" EVENTS="$tmp/events" NONCE="$nonce" SLOW=1 PODCOUNT=30 PATH="$tmp/bin:$PATH" \
+  mkdir -p "$tmp/tmpT"   # diag.sh's own TMPDIR: only ITS leftovers are counted below, not other runs' in the shared one
+  res=$(TMPDIR="$tmp/tmpT" DIAG_DIR="$tmp/diag-T" EVENTS="$tmp/events" NONCE="$nonce" SLOW=1 PODCOUNT=30 PATH="$tmp/bin:$PATH" \
     python3 "$tmp/termrun.py" "$tmp/diag-T/pods.txt" "$tmp/out" "$here/diag.sh" ns "$since")
   [[ $res == *"rc=143 "* ]] || die "D6T: $res; want rc=143 (128 + TERM)"
   [[ $res == *"leftover=0"* ]] || die "D6T: something of diag.sh outlived it ($res)"
   has "diag: files in" "D6T: what diag.sh printed before the TERM reached the console"
-  left_fifos=$({ ls "${TMPDIR:-/tmp}"/diag-console.* 2>/dev/null || true; } | wc -l | tr -d ' ')
-  [ "$left_fifos" = 0 ] || die "D6T: $left_fifos console fifos left in ${TMPDIR:-/tmp}"
+  left_fifos=$({ ls "$tmp/tmpT"/diag-console.* 2>/dev/null || true; } | wc -l | tr -d ' ')
+  [ "$left_fifos" = 0 ] || die "D6T: $left_fifos console fifo dirs left in $tmp/tmpT"
   echo "diag-test ok: D6T TERM while collecting: $res, the printed part is on the console, no fifo left"
 fi
 

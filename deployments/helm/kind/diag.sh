@@ -29,33 +29,33 @@ dir=${DIAG_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/kind-diag}
 console_budget=${DIAG_CONSOLE_BYTES:-262144} pod_console=${DIAG_POD_CONSOLE_BYTES:-8192}
 
 # ── the process boundary ─────────────────────────────────────────────────────
-exec 3>&1   # the real console; only the writer below writes to it
-# bounded_writer: stdin -> fd 3, at most $console_budget bytes. It reads one byte more than that, so it knows whether
-# there was more; then it says so once. When it has flushed it drops a flag file ($fifo_dir/flushed) so the script need not wait
-# for EOF (see finish), and it then only drains what is still written to it, until the script (its parent, $main_pid) is gone: a
-# writer must never block a producer or outlive the run.
-main_pid=$$
+# The real console is the writer's stdout and NOBODY else's: this script never has a descriptor for it (no `exec 3>&1`), so
+# nothing it runs can reach the console except through the fifo, and the writer is the only holder of the caller's pipe.
+#
+# bounded_writer: stdin = the fifo, stdout = the real console, stderr dropped. It reads one byte more than $console_budget, so it
+# knows whether there was more; it prints at most that many bytes, says so once, and then CLOSES the console: a caller that waits
+# for EOF on a pipe gets it now, not when this process ends, and the caller need not have reaped the script (a writer that
+# waited for its parent's pid to vanish deadlocked a caller that reads to EOF before it waits, #417 r4). It drops a flag file
+# ($fifo_dir/flushed) so the script need not wait for an EOF either, and then only drains the fifo until EOF: a writer must
+# never block a producer. `<&0` is explicit on purpose: bash gives an asynchronous command /dev/null for stdin unless redirected.
 bounded_writer() {
-  local buf n d
-  buf=$(mktemp) || { cat > /dev/null; return 0; }
+  exec 2>/dev/null
+  local buf n
+  buf=$(mktemp) || { exec >&-; cat > /dev/null; return 0; }
   head -c $((console_budget + 1)) > "$buf"
   n=$(wc -c < "$buf" | tr -d ' ')
   if [ "$n" -le "$console_budget" ]; then
-    cat "$buf" >&3
+    cat "$buf"
   else
-    head -c "$console_budget" "$buf" >&3
-    printf '\n[diag: the console budget of %s bytes is used up at the process boundary; nothing more is printed here, the files are in %.200s]\n::endgroup::\n' "$console_budget" "$dir" >&3
+    head -c "$console_budget" "$buf"
+    printf '\n[diag: the console budget of %s bytes is used up at the process boundary; nothing more is printed here, the files are in %.200s]\n::endgroup::\n' "$console_budget" "$dir"
   fi
+  exec >&-
   : > "$fifo_dir/flushed"
-  # `<&0` is explicit on purpose: bash gives an asynchronous command /dev/null for stdin unless it is redirected, and a drain
-  # that reads /dev/null drains nothing (the script then blocks in write() on a full pipe: found by diag-test D6X)
-  cat <&0 > /dev/null &
-  d=$!
-  while kill -0 "$main_pid" 2>/dev/null; do sleep 0.2; done
-  kill "$d" 2>/dev/null
   rm -f "$buf"
+  cat <&0 > /dev/null
 }
-fifo_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX") && mkfifo "$fifo_dir/console" || { echo "diag: cannot create the console pipe; nothing collected" >&3; exit 0; }
+fifo_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX") && mkfifo "$fifo_dir/console" || { echo "diag: cannot create the console pipe; nothing collected"; exit 0; }
 bounded_writer < "$fifo_dir/console" &
 writer=$!
 exec > "$fifo_dir/console" 2>&1
@@ -74,7 +74,6 @@ finish() {
     for c in $(pgrep -P "$writer" 2>/dev/null); do kill "$c" 2>/dev/null || true; done
     i=0; while [ ! -e "$fifo_dir/flushed" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
   fi
-  exec 3>&-
   case "$fifo_dir" in */diag-console.*) rm -rf -- "$fifo_dir" ;; esac
   [ "$scratch" = /dev/null ] || rm -f -- "$scratch"
   exit "$rc"
