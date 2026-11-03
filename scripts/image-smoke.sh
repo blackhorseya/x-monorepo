@@ -4,7 +4,7 @@
 # own deployments/docker/Dockerfile, run the way the chart runs it (non-root, read-only rootfs, every
 # capability dropped), then asked over HTTP. CI's release-snapshot job runs it after the dry run.
 #
-#   task release-snapshot && scripts/image-smoke.sh payment-rpc
+#   task release-snapshot && scripts/image-smoke.sh payment-rpc     # or payment-worker
 #
 # What it proves for payment-rpc, and only that: the image holds a binary the dry run built, runs as a
 # non-root user, `serve` comes up with a read-only rootfs, answers /api/readyz and /api/version (stamped,
@@ -12,12 +12,18 @@
 # (an unknown order is payment.not_found, not a 404 of a server that serves something else), and a run
 # without a subcommand is refused. It says nothing about consume / expire (not shipped yet), Postgres or
 # a provider: the container is in-memory with the mock provider.
+#
+# payment-worker (#410) has no listener, so its smoke is smaller and says less: the image holds a binary the dry run
+# built, runs as a non-root user with a read-only rootfs and no capabilities, prints a stamped --version, refuses an
+# unknown argument, and, started with no postgres.url, exits non-zero naming postgres.url (it got as far as its own
+# start-up checks; it did not crash on the read-only rootfs). It does not prove it consumes: that needs Postgres.
 set -euo pipefail
-app=${1:?usage: scripts/image-smoke.sh <app>   (payment-rpc)}
+app=${1:?usage: scripts/image-smoke.sh <app>   (payment-rpc | payment-worker)}
 cd "$(dirname "$0")/.."
 
 case $app in
   payment-rpc) port=8082 args=(serve) ;;
+  payment-worker) port="" args=() ;;
   *) echo "image-smoke: no smoke for $app" >&2; exit 2 ;;
 esac
 
@@ -50,6 +56,29 @@ case $user in
   ''|0|root|0:*|root:*) echo "image-smoke: FAIL the image runs as '$user', want a non-root user" >&2; exit 1 ;;
 esac
 echo "ok: runs as $user"
+
+if [ "$app" = payment-worker ]; then
+  run=("$engine" run --rm --read-only --cap-drop ALL --security-opt no-new-privileges -e APP_LOG_LEVEL=warn)
+  version=$("${run[@]}" "$image" --version | sed -n 's/^payment-worker version \([^ ]*\) .*/\1/p')
+  case $version in
+    ''|dev) echo "image-smoke: FAIL --version says '$version': the binary is not stamped by the release build" >&2; exit 1 ;;
+  esac
+  echo "ok: stamped version $version"
+  out=$(mktemp)
+  if "${run[@]}" "$image" --nope >"$out" 2>&1; then
+    echo "image-smoke: FAIL the image started with an unknown argument" >&2; exit 1
+  fi
+  grep -q 'unknown argument' "$out" || { cat "$out" >&2; echo "image-smoke: FAIL an unknown argument was not refused by name" >&2; exit 1; }
+  echo "ok: an unknown argument is refused"
+  if "${run[@]}" "$image" >"$out" 2>&1; then
+    echo "image-smoke: FAIL the image started with no postgres.url" >&2; exit 1
+  fi
+  grep -q 'postgres.url' "$out" || { cat "$out" >&2; echo "image-smoke: FAIL no postgres.url was not refused by name" >&2; exit 1; }
+  rm -f "$out"
+  echo "ok: no postgres.url is refused by name (read-only rootfs, no capabilities)"
+  echo "image-smoke: $app OK"
+  exit 0
+fi
 
 # No subcommand: refused, non-zero (a typo must not start the service).
 if "$engine" run --rm --read-only --cap-drop ALL "$image" >/tmp/image-smoke-nosub.$$ 2>&1; then

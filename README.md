@@ -34,6 +34,7 @@ task lint test      # depguard 強制分層與 BC 邊界
 task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）；第一次會把 config.example.yaml 複製成 configs/local.yaml（gitignored）
 task catalog-rpc    # 另一個終端、在 task run 之前：:8081 的 catalog 服務，讀自己的 configs/catalog-rpc.yaml（gitignored，從 catalog-rpc.example.yaml 複製；不讀 local.yaml），telemetry 送 otel-lgtm
+task payment-worker # 另一個終端（`ordering.require_payment: true` 時必開）：payment 的事件 consumer（#410），讀同一份 configs/payment-rpc.yaml，沒有它 OrderConfirmed 不會變成付款單
 task payment-rpc    # 另一個終端（選用，目前沒有人呼叫它）：:8082 的 payment 服務，讀自己的 configs/payment-rpc.yaml（gitignored，從 payment-rpc.example.yaml 複製），provider 是 mock
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
@@ -105,6 +106,7 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
 │   ├── catalog-rpc/               # catalog 的獨立服務（#320）：只掛 catalog 的 rpc；rpc 以 Connect 問它查價與檢查 SKU（`catalog.upstream`）
 │   ├── payment-rpc/               # payment 的獨立服務（#367）：`serve`（`StartPayment`／`GetPayment` 認 service key `rpc`，加 webhook route 認簽章）、`consume`（訂閱訂單事件、退款、套用 webhook）、`expire`（逾時與補查的 CronJob）
+│   ├── payment-worker/            # payment 的事件 consumer（#410 切片 1）：與 `payment-rpc consume` 共用 `pkgs/payment` 的 Consumer，獨立 binary / image；沒有 listener 與 auth
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）
@@ -409,7 +411,7 @@ task web-e2e-image  # 同一套 chromium spec 改打真的 console image（e2e/i
 一個 server：`/` 走 SPA fallback（任何路由都回 `index.html`，`assets/` immutable cache）、`/api/` proxy 到 `RPC_UPSTREAM`（預設 `http://rpc:8080`），
 瀏覽器維持 same-origin，rpc 一樣不需要 CORS；`/healthz` 給 probe。nginx 自己回的東西（index.html、assets）帶 `deploy/security-headers.inc.template` 渲染出的標頭：CSP（script 只准 self、style 允許 inline——Radix 用 style attribute、connect 只准 self——OIDC 開啟時加上 issuer 的精確 origin、`frame-ancestors 'none'`）、nosniff、`X-Frame-Options: DENY`、Referrer-Policy、Permissions-Policy；`/api/` 的 response 是 rpc 的，不加（`/api/docs` 的 Scalar 從 CDN 載）。image 只寫 `/tmp`（entrypoint 用 envsubst 把 template render 到 `/tmp/default.conf`、`/tmp/config.json`（SPA 的 runtime 設定：`CONSOLE_OIDC_ISSUER` / `CONSOLE_OIDC_CLIENT_ID` / `CONSOLE_API_KEY_LOGIN`，白名單 filter，見 [`docs/identity-login.md`](docs/identity-login.md) §8）、`/tmp/security-headers.inc`，
 `conf.d` 只剩一行 include），所以 read-only rootfs + 任意 uid 都能跑——Helm chart 的 `console.enabled` 就是這樣部署它（見 [`docs/operations.md`](docs/operations.md)）。
-release pipeline 把它和五個 Go image 一起推成 `ghcr.io/blackhorseya/x-monorepo/console:X.Y.Z`（見 [`docs/release.md`](docs/release.md)；`task helm-kind` 則從 working tree
+release pipeline 把它和六個 Go image 一起推成 `ghcr.io/blackhorseya/x-monorepo/console:X.Y.Z`（見 [`docs/release.md`](docs/release.md)；`task helm-kind` 則從 working tree
 build 成 `localhost/x-monorepo/console:kind`）。所以 console 的改動**會切版**：只有 `e2e/` 和 `playwright.config.ts` 不算。
 
 ## Conventions

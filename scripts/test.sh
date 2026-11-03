@@ -1353,6 +1353,14 @@ expect_eq "release images: the release notes' Images block lists each" "$with_co
   "$(grep -o '^  ghcr\.io/blackhorseya/x-monorepo/[a-z-]*:\$RESOLVED_VERSION' "$src/.github/release-drafter.yml" | sed 's#.*/##; s#:.*##' | words)"
 expect_match "release images: ci.yml's release-snapshot job smokes the payment-rpc image" "scripts/image-smoke.sh payment-rpc" "$(cat "$src/.github/workflows/ci.yml")"
 
+# payment-worker (#410): the module is in go.work, so a change under it selects its tests, and moving consume.go from
+# payment-rpc to payment-worker (a delete plus an add: --no-renames) still selects payment-rpc's tests as well.
+aff() { (cd "$src" && scripts/affected.sh --files "$@" | tr '\n' ' ' | sed 's/ $//'); }
+expect_eq "affected: apps/payment-worker is a module of go.work" "apps/payment-worker" "$(aff apps/payment-worker/main.go)"
+expect_eq "affected: consume.go moved from payment-rpc to payment-worker selects both" "apps/payment-rpc apps/payment-worker" \
+  "$(aff apps/payment-rpc/consume.go apps/payment-worker/consume.go)"
+expect_match "release images: ci.yml's release-snapshot job smokes the payment-worker image" "scripts/image-smoke.sh payment-worker" "$(cat "$src/.github/workflows/ci.yml")"
+
 # ── check-modules.sh: Taskfile.yml MODULES == go.work use (#413) ────────────────────────────────
 # lint / test / cover / tidy loop over MODULES, and go.work does not add a module to it: a module only in
 # go.work is silently never linted or tested (apps/payment-worker, #412). The gate compares the two sets;

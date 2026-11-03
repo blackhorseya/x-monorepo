@@ -149,6 +149,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
       - run: task build
+      # which config file each `task` entry hands its binary: PAYMENT_CONFIG / CONFIG / CATALOG_CONFIG must beat a parent APP_CONFIG (#414)
+      - run: scripts/task-config-test.sh
 
   # ── helm: the chart renders under every ci/ profile and its derived numbers hold ──
   helm:
@@ -324,6 +326,9 @@ jobs:
       # (non-root, read-only rootfs, auth required) the way a release would ship it (#367 slice 5a).
       - name: the payment-rpc image starts and serves
         run: scripts/image-smoke.sh payment-rpc
+      # payment-worker has no listener: its image runs non-root on a read-only rootfs and refuses a start with no postgres.url (#410).
+      - name: the payment-worker image runs and refuses what it cannot serve
+        run: scripts/image-smoke.sh payment-worker
       - name: .goreleaser.yaml's signs command works with this cosign (throwaway key)
         run: scripts/cosign-smoke.sh
       - name: a Rekor v2 409 is re-signed, a 503 is not (#215, real cosign, loopback v2)
