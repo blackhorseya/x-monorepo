@@ -47,8 +47,10 @@ vars:
 
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
   BCS: ordering inventory identity catalog payment
-  # Every Go module in the workspace (keep in sync with go.work).
-  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity pkgs/catalog pkgs/payment apps/catalog-rpc apps/payment-rpc apps/payment-worker apps/rpc apps/migrate apps/worker tools/stripvalidate
+  # Every Go module in the workspace, one per line: go.work is the only list (#413). Resolved on every task run (like BUF above),
+  # so go and jq must be on PATH; a failing pipeline fails the task rather than yield an empty list. `for` loops split it on "\n".
+  MODULES:
+    sh: set -o pipefail; go work edit -json go.work | jq -r '.Use[].DiskPath | ltrimstr("./")'
   APPS: rpc migrate worker catalog-rpc payment-rpc payment-worker
 
 tasks:
@@ -163,15 +165,8 @@ tasks:
           exit 1
         }
 
-  modules:
-    desc: 'print the items Task iterates for MODULES, NUL-terminated (scripts/check-modules.sh compares them with go.work)'
-    silent: true
-    cmds:
-      - for: { var: MODULES }
-        cmd: printf '%s\0' {{shellQuote .ITEM}}
-
   check-work-sync:
-    desc: go.work and every go.mod agree, and Taskfile MODULES lists exactly go.work's modules
+    desc: go.work and every go.mod agree, and every go.work module path is one a for-loop over MODULES can carry
     cmds:
       - scripts/check-modules.sh
       - go work sync
@@ -250,7 +245,7 @@ tasks:
     desc: proto lint + go vet + golangci-lint (depguard enforces layer / BC boundaries)
     cmds:
       - '{{.BUF}} lint'
-      - for: { var: MODULES }
+      - for: { var: MODULES, split: "\n" }
         cmd: echo ">> {{.ITEM}}" && cd {{.ITEM}} && go vet ./... && {{.GOLANGCI_LINT}} run ./...
 
   breaking:
@@ -260,14 +255,14 @@ tasks:
   test:
     desc: go test -race, every module
     cmds:
-      - for: { var: MODULES }
+      - for: { var: MODULES, split: "\n" }
         cmd: echo ">> {{.ITEM}}" && cd {{.ITEM}} && go test -race ./...
 
   test-bin:
     desc: compile test binaries into ./bin/test/
     cmds:
       - mkdir -p {{.BIN_DIR}}/test
-      - for: { var: MODULES }
+      - for: { var: MODULES, split: "\n" }
         cmd: cd {{.ITEM}} && go test -c -o {{.BIN_DIR}}/test/ ./...
 
   cover:
@@ -275,7 +270,7 @@ tasks:
     silent: true
     cmds:
       - mkdir -p {{.BIN_DIR}}
-      - for: { var: MODULES }
+      - for: { var: MODULES, split: "\n" }
         cmd: |
           prof={{.BIN_DIR}}/coverage-$(echo {{.ITEM}} | tr / _).out
           (cd {{.ITEM}} && go test -coverprofile="$prof" ./... >/dev/null)
@@ -691,7 +686,7 @@ tasks:
   tidy:
     desc: go mod tidy in every module, then go work sync
     cmds:
-      - for: { var: MODULES }
+      - for: { var: MODULES, split: "\n" }
         cmd: cd {{.ITEM}} && go mod tidy
       - go work sync
 

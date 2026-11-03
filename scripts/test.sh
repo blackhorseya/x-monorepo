@@ -1361,29 +1361,22 @@ expect_eq "affected: consume.go moved from payment-rpc to payment-worker selects
   "$(aff apps/payment-rpc/consume.go apps/payment-worker/consume.go)"
 expect_match "release images: ci.yml's release-snapshot job smokes the payment-worker image" "scripts/image-smoke.sh payment-worker" "$(cat "$src/.github/workflows/ci.yml")"
 
-# ── check-modules.sh: Taskfile.yml MODULES == go.work use (#413) ────────────────────────────────
-# lint / test / cover / tidy loop over MODULES, and go.work does not add a module to it: a module only in
-# go.work is silently never linted or tested (apps/payment-worker, #412). The gate compares the two sets;
-# an empty side is a failure, not a pass (empty == empty would be green with both parsers broken).
-# Like the other optional cases, skipped without go / task / jq on PATH — but never in CI ($CI is set on GitHub Actions),
-# where a missing tool must be a red run, not a skipped gate (the scripts-test job runs ./.github/actions/setup for go + task).
+# ── MODULES is derived from go.work; check-modules.sh refuses go.work paths it cannot carry (#413) ──────────────
+# lint / test / cover / tidy loop over Taskfile.yml's MODULES. It used to be a second hand-kept list, and a module only
+# in go.work was silently never linted or tested (apps/payment-worker, #412); five rounds of a gate comparing the two
+# each hit a path the text channel between them could not carry. MODULES is now `go work edit -json | jq` of go.work,
+# so a module added there is iterated by every per-module task, and scripts/check-modules.sh (task check-work-sync,
+# CI work-sync) only refuses the go.work shapes the derivation cannot carry. Skipped without go / jq / task on PATH like
+# the other optional cases — but never in CI ($CI is set on GitHub Actions), where a missing tool must be a red run, not
+# a skipped gate (the scripts-test job runs ./.github/actions/setup for go + task; jq is on the ubuntu runner image).
 if [ -n "${CI:-}" ] || { command -v go >/dev/null 2>&1 && command -v task >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; }; then
 cm="$src/scripts/check-modules.sh"
-# The gate asks Task itself for MODULES (any YAML form Task accepts is then compared as Task resolves it, #413 r1) and go for go.work.
-modules_task='tasks:
-  modules:
-    silent: true
-    cmds:
-      - for: { var: MODULES }
-        cmd: printf '"'"'%s\0'"'"' {{shellQuote .ITEM}}
-'
-# modrun <name> <go.work body> <MODULES words>: runs the gate on throwaway files; sets $rc and $out.
-modrun() {
+# gwrun <name> <go.work body>: runs the check on a throwaway go.work; sets $rc and $out.
+gwrun() {
   local d="$tmp/modules-$1"
   mkdir -p "$d"
   printf '%s\n' "$2" > "$d/go.work"
-  printf 'version: "3"\nvars:\n  BCS: a b\n  # Every Go module in the workspace (keep in sync with go.work).\n  MODULES: %s\n  APPS: rpc\n%s' "$3" "$modules_task" > "$d/Taskfile.yml"
-  rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
+  rc=0; out=$("$cm" "$d/go.work" 2>&1) || rc=$?
 }
 gw_block='go 1.27
 
@@ -1392,161 +1385,60 @@ use (
 	./pkgs/kernel
 	./tools/x
 )'
-modrun same "$gw_block" "pkgs/kernel apps/rpc tools/x"
-expect_eq "check-modules: same sets in a different order pass" "0" "$rc"
-expect_match "check-modules: a pass names how many modules it compared (non-empty positive control)" "3 modules" "$out"
-modrun single "go 1.27
+gwrun ok "$gw_block"
+expect_eq "check-modules: a go.work of ordinary paths passes" "0" "$rc"
+expect_match "check-modules: a pass names how many modules it saw (non-empty positive control)" "3 modules" "$out"
+gwrun single 'go 1.27
 
 use ./apps/rpc
-use ./pkgs/kernel" "apps/rpc pkgs/kernel"
+use ./pkgs/kernel'
 expect_eq "check-modules: single-line use directives are read" "0" "$rc"
 expect_match "check-modules: single-line use directives are counted" "2 modules" "$out"
-modrun gw_only "$gw_block" "pkgs/kernel apps/rpc"
-expect_eq "check-modules: a module only in go.work fails" "1" "$rc"
-expect_match "check-modules: go.work-only module is named under its side" "in go.work but not in MODULES: \"tools/x\"" "$out"
-modrun mod_only "$gw_block" "pkgs/kernel apps/rpc tools/x pkgs/ghost"
-expect_eq "check-modules: a module only in MODULES fails" "1" "$rc"
-expect_match "check-modules: MODULES-only module is named under its side" "in MODULES but not in go.work: \"pkgs/ghost\"" "$out"
-modrun both "$gw_block" "pkgs/kernel apps/rpc pkgs/ghost"
-expect_match "check-modules: both directions are reported in one run (go.work side)" "in go.work but not in MODULES: \"tools/x\"" "$out"
-expect_match "check-modules: both directions are reported in one run (MODULES side)" "in MODULES but not in go.work: \"pkgs/ghost\"" "$out"
-modrun empty_gw "go 1.27" "pkgs/kernel apps/rpc"
-expect_eq "check-modules: an empty go.work side fails" "1" "$rc"
-expect_match "check-modules: empty go.work side says so" "go.work lists no modules" "$out"
-modrun empty_mod "$gw_block" ""
-expect_eq "check-modules: an empty MODULES side fails" "1" "$rc"
-expect_match "check-modules: empty MODULES side says so" "MODULES lists no modules" "$out"
-modrun empty_both "go 1.27" ""
-expect_eq "check-modules: empty == empty fails, it is not green" "1" "$rc"
-# modrun_tf <name> <go.work body> <Taskfile.yml body>: same, with the Taskfile written verbatim (YAML continuation forms).
-modrun_tf() {
-  local d="$tmp/modules-$1"
-  mkdir -p "$d"
-  printf '%s\n' "$2" > "$d/go.work"
-  printf 'version: "3"\n%s\n%s' "$3" "$modules_task" > "$d/Taskfile.yml"
-  rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
-}
-gw_two='go 1.27
-
-use (
-	./apps/rpc
-	./pkgs/kernel
-)'
-# Task reads a plain multi-line scalar as one space-joined value (task show prints MODULES=<apps/rpc pkgs/kernel pkgs/new>):
-# the first line alone is not the list.
-modrun_tf cont_extra "$gw_two" 'vars:
-  MODULES: apps/rpc pkgs/kernel
-    pkgs/new
-  APPS: rpc'
-expect_eq "check-modules: a module on a MODULES continuation line is compared (extra fails)" "1" "$rc"
-expect_match "check-modules: the continuation-line module is named" "in MODULES but not in go.work: \"pkgs/new\"" "$out"
-modrun_tf cont_same "$gw_two" 'vars:
-  MODULES: apps/rpc
-    pkgs/kernel
-  APPS: rpc'
-expect_eq "check-modules: a consistent multi-line MODULES passes" "0" "$rc"
-expect_match "check-modules: a multi-line MODULES counts every line" "2 modules" "$out"
-modrun_tf cont_folded "$gw_two" 'vars:
-  MODULES: >
-    apps/rpc
-    pkgs/kernel
-    pkgs/new
-  APPS: rpc'
-expect_eq "check-modules: a folded (>) MODULES is compared (extra fails)" "1" "$rc"
-expect_match "check-modules: the folded-scalar module is named" "in MODULES but not in go.work: \"pkgs/new\"" "$out"
-modrun_tf cont_comment "$gw_two" 'vars:
-  # Every Go module in the workspace.
-  MODULES: apps/rpc pkgs/kernel
-  # next var is not a continuation
-  APPS: rpc'
-expect_eq "check-modules: a comment and the next key after MODULES are not continuation lines" "0" "$rc"
-# Forms a text parser reads differently from Task (all consistent with go.work except where noted).
-modrun_tf quoted "$gw_two" 'vars:
-  MODULES: "apps/rpc pkgs/kernel"'
-expect_eq "check-modules: a quoted MODULES scalar is compared as Task resolves it" "0" "$rc"
-modrun_tf templated "$gw_two" 'vars:
-  CORE: pkgs/kernel
-  MODULES: apps/rpc {{.CORE}}'
-expect_eq "check-modules: a MODULES built from another var is compared as Task resolves it" "0" "$rc"
-modrun_tf templated_extra "$gw_two" 'vars:
-  CORE: pkgs/kernel pkgs/new
-  MODULES: apps/rpc {{.CORE}}'
-expect_eq "check-modules: an extra module hidden in a var MODULES references fails" "1" "$rc"
-expect_match "check-modules: the module behind the var is named" "in MODULES but not in go.work: \"pkgs/new\"" "$out"
-modrun quoted_path 'go 1.27
-
-use (
-	"./apps/rpc"
-	./pkgs/kernel
-)' "apps/rpc pkgs/kernel"
-expect_eq "check-modules: a quoted use path in go.work is read as go reads it" "0" "$rc"
-# No `modules` task: the gate cannot ask Task, and must fail rather than compare nothing.
-d="$tmp/modules-no-task"; mkdir -p "$d"
-printf '%s\n' "$gw_two" > "$d/go.work"; printf 'version: "3"\nvars:\n  MODULES: apps/rpc pkgs/kernel\n' > "$d/Taskfile.yml"
-rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
-expect_eq "check-modules: a Taskfile without the modules task fails" "1" "$rc"
-expect_match "check-modules: the missing modules task is named" "modules" "$out"
-# go prints a use path as a JSON string ("./apps/a\u0026b" for apps/a&b): it is decoded, not read as text (#413 r2).
-esc_gw='go 1.27
+gwrun amp 'go 1.27
 
 use "./apps/a&b"'
-modrun esc_same "$esc_gw" "apps/a&b"
-expect_eq "check-modules: a use path with a JSON-escaped character equals the same MODULES entry" "0" "$rc"
-modrun esc_diff "$esc_gw" 'apps/a\u0026b'
-expect_eq "check-modules: the literal text of the JSON escape is not the module" "1" "$rc"
-expect_match "check-modules: the literal-escape entry is named" "in MODULES but not in go.work: \"apps/a.u0026b\"" "$out"
-# MODULES is a whitespace-separated list (Task iterates it by splitting on whitespace), so it cannot name a module whose
-# path holds whitespace or a control character; such a go.work path is refused, shown JSON-escaped (#413 r3: a newline in
-# a path was split into two records and "apps/a\nb" agreed with MODULES "apps/a b").
-nl_gw='go 1.27
+expect_eq "check-modules: a JSON-escaped character (&) in a use path is decoded and accepted" "0" "$rc"
+gwrun empty "go 1.27"
+expect_eq "check-modules: an empty go.work fails" "1" "$rc"
+expect_match "check-modules: the empty go.work says so" "go.work lists no modules" "$out"
+# A path a for-loop over MODULES (one path per line) cannot carry is refused, shown JSON-quoted (#413 r3).
+refused() { # <name> <path as written inside go.work's quotes> <JSON form shown>
+  gwrun "$1" "go 1.27
 
-use "./apps/a\nb"'
-modrun ws_newline "$nl_gw" "apps/a b"
-expect_eq "check-modules: a go.work path with a newline is refused, not split into two modules" "1" "$rc"
-expect_match "check-modules: the refusal says MODULES cannot represent the path" 'whitespace or control characters; MODULES is whitespace-separated and cannot represent it' "$out"
-expect_match "check-modules: the refused newline path is shown JSON-escaped" '^  "\./apps/a\\nb"$' "$out"
-modrun ws_space 'go 1.27
+use \"./apps/ok\"
+use \"$2\""
+  expect_eq "check-modules: a go.work path with $1 is refused" "1" "$rc"
+  expect_match "check-modules: the refusal for $1 says what a MODULES loop cannot carry" 'whitespace or control characters; a for-loop over MODULES' "$out"
+  expect_match "check-modules: the refused $1 path is shown JSON-escaped" "^  \"\\./apps/$3\"\$" "$out"
+}
+refused newline './apps/a\nb' 'a\\nb'
+refused space './apps/a b' 'a b'
+refused tab './apps/a\tb' 'a\\tb'
+refused nbsp $'./apps/a\xc2\xa0b' $'a\xc2\xa0b'
+rc=0; out=$("$cm" "$tmp/no-such-go.work" 2>&1) || rc=$?
+expect_eq "check-modules: an unreadable go.work fails" "1" "$rc"
+rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
+expect_eq "check-modules: this repo's go.work passes" "0" "$rc"
+expect_match "check-modules: this repo's check saw a non-empty set" "[1-9][0-9]* modules" "$out"
+# A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
+tools_without() {
+  local bindir="$tmp/toolbin-$1" t
+  mkdir -p "$bindir"
+  for t in bash dirname go jq; do
+    [ "$t" = "$1" ] || { [ -e "$bindir/$t" ] || ln -s "$(command -v "$t")" "$bindir/$t" 2>/dev/null || true; }
+  done
+  echo "$bindir"
+}
+for missing in go jq; do
+  d="$tmp/modules-no-$missing"; mkdir -p "$d"
+  printf '%s\n' "$gw_block" > "$d/go.work"
+  rc=0; out=$(PATH=$(tools_without "$missing") "$(command -v bash)" "$cm" "$d/go.work" 2>&1) || rc=$?
+  expect_eq "check-modules: without $missing the check fails" "1" "$rc"
+  expect_match "check-modules: without $missing the failure names it" "$missing not found" "$out"
+done
 
-use "./apps/a b"' "apps/a b"
-expect_eq "check-modules: a go.work path with a space is refused" "1" "$rc"
-expect_match "check-modules: the refused space path is shown with its boundaries" '^  "\./apps/a b"$' "$out"
-modrun ws_tab 'go 1.27
-
-use "./apps/a\tb"' "apps/a b"
-expect_eq "check-modules: a tab in a go.work path is refused" "1" "$rc"
-expect_match "check-modules: the refused tab path is shown JSON-escaped" '^  "\./apps/a\\tb"$' "$out"
-modrun ws_clean_among "$gw_block" "pkgs/kernel apps/rpc tools/x"
-expect_eq "check-modules: ordinary paths still pass beside the refusal rule" "0" "$rc"
-# Task splits MODULES on Unicode whitespace too (for: { var: MODULES } iterates "apps/a<NBSP>b" as apps/a and b): the same
-# set is green however the list is separated (#413 r4: the gate split on ASCII blanks only and called it a difference).
-two_uses='go 1.27
-
-use ./apps/a
-use ./b'
-modrun sep_nbsp "$two_uses" $'apps/a\xc2\xa0b'
-expect_eq "check-modules: a MODULES separated by a no-break space equals the same go.work set" "0" "$rc"
-modrun sep_emsp "$two_uses" $'apps/a\xe2\x80\x83b'
-expect_eq "check-modules: a MODULES separated by an em space equals the same go.work set" "0" "$rc"
-modrun sep_nbsp_extra "$two_uses" $'apps/a\xc2\xa0b\xc2\xa0c'
-expect_eq "check-modules: an extra module behind a no-break space still fails" "1" "$rc"
-expect_match "check-modules: the module behind the no-break space is named" 'in MODULES but not in go.work: "c"' "$out"
-# The same refusal on the MODULES side, from the items Task iterates (one control character is not whitespace to Task).
-modrun ctl_item "$gw_two" '"apps/rpc pkgs/ker\x01nel"'
-expect_eq "check-modules: a MODULES item with a control character is refused" "1" "$rc"
-expect_match "check-modules: the refused MODULES item is shown JSON-escaped" '^  "pkgs/ker\\u0001nel"$' "$out"
-# A YAML list item can hold a newline ("apps/a\nb" is ONE item to Task), so the records Task hands the gate must not be
-# newline-separated (#413 r5): two go.work uses (apps/a, b) are not equal to the single MODULES item "apps/a\nb".
-modrun_tf list_nl "$two_uses" 'vars:
-  MODULES: ["apps/a\nb"]'
-expect_eq "check-modules: a single MODULES list item holding a newline is not two modules" "1" "$rc"
-expect_match "check-modules: the newline item is refused as a control-character item" 'control characters' "$out"
-expect_match "check-modules: the refused list item is shown JSON-escaped, as one item" '^  "apps/a\\nb"$' "$out"
-modrun_tf list_ok "$two_uses" 'vars:
-  MODULES: ["apps/a", "b"]'
-expect_eq "check-modules: a YAML list MODULES equal to go.work passes" "0" "$rc"
-# MODULES is derived from go.work, not kept beside it (#413 r5: five rounds of a gate between two hand-kept lists, each
-# hitting a path the text channel between them could not carry). A module added to go.work only is iterated by every
-# per-module task: the real Taskfile.yml and a go.work with one more `use`, run through `task --dry` (dry still resolves vars).
+# MODULES is derived from go.work: the real Taskfile.yml and a go.work with one more `use`, run through `task --dry`
+# (dry still resolves vars). A module added to go.work only is iterated by every per-module task.
 d="$tmp/modules-derived"; mkdir -p "$d"
 cp "$src/Taskfile.yml" "$d/Taskfile.yml"
 cp "$src/go.work" "$d/go.work"
@@ -1556,29 +1448,11 @@ for t in lint test tidy; do
   expect_match "derived modules: task $t runs for an existing module (positive control)" 'cd pkgs/kernel' "$out"
   expect_match "derived modules: task $t iterates a module only go.work lists" 'cd apps/brand-new' "$out"
 done
-# A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
-tools_without() {
-  local bindir="$tmp/toolbin-$1" t
-  mkdir -p "$bindir"
-  for t in bash dirname sed sort tr grep comm go task jq; do
-    [ "$t" = "$1" ] || { [ -e "$bindir/$t" ] || ln -s "$(command -v "$t")" "$bindir/$t" 2>/dev/null || true; }
-  done
-  echo "$bindir"
-}
-for missing in go task jq; do
-  d="$tmp/modules-no-$missing"; mkdir -p "$d"
-  printf '%s\n' "$gw_two" > "$d/go.work"
-  printf 'version: "3"\nvars:\n  MODULES: apps/rpc pkgs/kernel\n%s' "$modules_task" > "$d/Taskfile.yml"
-  rc=0; out=$(PATH=$(tools_without "$missing") "$(command -v bash)" "$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
-  expect_eq "check-modules: without $missing the gate fails" "1" "$rc"
-  expect_match "check-modules: without $missing the failure names it" "$missing not found" "$out"
-done
-rc=0; out=$("$cm" "$tmp/no-such-go.work" "$tmp/no-such-Taskfile.yml" 2>&1) || rc=$?
-expect_eq "check-modules: unreadable inputs fail" "1" "$rc"
-rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
-expect_eq "check-modules: this repo's go.work and Taskfile.yml agree" "0" "$rc"
-expect_match "check-modules: this repo's check compared a non-empty set" "[1-9][0-9]* modules" "$out"
-
+# A go that cannot read go.work must fail the task, not leave MODULES empty (every per-module loop would iterate nothing).
+mkdir -p "$tmp/failing-go"; printf '#!/bin/sh\necho "go: stub failure" >&2\nexit 1\n' > "$tmp/failing-go/go"; chmod +x "$tmp/failing-go/go"
+rc=0; out=$(cd "$d" && PATH="$tmp/failing-go:$PATH" task --dry lint 2>&1) || rc=$?
+expect_eq "derived modules: a failing go work edit fails the task instead of an empty MODULES" "1" "$rc"
+expect_match "derived modules: the failing task shows go's error" "go: stub failure" "$out"
 fi
 
 echo "scripts/test.sh: $pass passed, $fail failed"

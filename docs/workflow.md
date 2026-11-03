@@ -13,8 +13,8 @@
 
 ### 新增 Bounded Context（`pkgs/inventory` 是照這個清單加的第二個 BC，可當範本；`pkgs/identity` 與 `pkgs/catalog` 是沒有 event 的版本：沒有 consumer / events adapter / outbox / inbox / poison，`apps/worker` 與 `NewPoisonService` 都不用加）
 1. `protos/<newbc>/v1/{entity,service,event}.proto` + `openapi.base.yaml`；`buf.gen.yaml` 加一行 `go_package` override
-2. `pkgs/<newbc>/go.mod`（module path 對齊目錄，`replace` 指向 kernel / platform / 要讀 contract 的 BC），`go.work` 加 `use`，
-   `Taskfile.yml` 的 `MODULES` 與 `BCS` 加上，`apps/*/go.mod` 加 `require` + `replace` → `task tidy`
+2. `pkgs/<newbc>/go.mod`（module path 對齊目錄，`replace` 指向 kernel / platform / 要讀 contract 的 BC），`go.work` 加 `use`（`Taskfile.yml` 的 `MODULES` 由它導出，不用另外加），
+   `Taskfile.yml` 的 `BCS` 加上，`apps/*/go.mod` 加 `require` + `replace` → `task tidy`
 3. `contract/v1/openapi.go`（embed）→ `task gen`；複製 `pkgs/ordering` 結構，寫 `provider.go`（`Subscriptions` 用自己的 named type）與 `arch_test.go`
 4. `.golangci.yml`：複製 `ordering-*` 四個 layer block、加 `bc-isolation-<newbc>`，並把新 BC 加進**每個**既有 BC 的 isolation / layer deny
    以及 `shared` / `apps` / `apps-migrate`（`pkg` 是 prefix match，不能用 `*`）
