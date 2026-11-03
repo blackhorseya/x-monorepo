@@ -397,15 +397,17 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     cc = cs["containers"][0]
     xs = cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]
     xc = xs["containers"][0]
-    for what, c_ in (("serve", sc), ("consume", cc), ("expire", xc)):
-        check(c_["image"].split("/")[-1].startswith("payment-rpc:"), f"payment-rpc {what} runs the payment-rpc image: {c_['image']}")
+    # #410 slice 2: consume runs the payment-worker image (its own binary); serve and expire stay payment-rpc.
+    for what, c_, app in (("serve", sc, "payment-rpc"), ("consume", cc, "payment-worker"), ("expire", xc, "payment-rpc")):
+        check(c_["image"].split("/")[-1].startswith(app + ":"), f"payment {what} runs the {app} image: {c_['image']}")
+        expect(c_["name"], app, f"payment {what} container name")
         check("command" not in c_, f"payment-rpc {what} keeps the image ENTRYPOINT")
         check("envFrom" not in c_, f"payment-rpc {what} has no envFrom (a missing key would be silently skipped)")
         check(c_["securityContext"].get("readOnlyRootFilesystem") is True, f"payment-rpc {what} rootfs read-only")
     # The binary refuses to start on a configuration that would serve payments from memory or without
     # required auth, judged on the FINAL effective settings; as a container arg no env var or Secret can change it.
     expect(sc.get("args"), ["serve", "--require-durable"], "payment-rpc serve args")
-    expect(cc.get("args"), ["consume", "--require-durable"], "payment-rpc consume args")
+    expect(cc.get("args"), ["--require-durable"], "payment-worker args (the binary has no subcommand; the flag is an arg, no env var can change it)")
     expect(xc.get("args"), ["expire", "--require-durable"], "payment-rpc expire args")
     for what, c_ in (("serve", sc), ("consume", cc), ("expire", xc)):
         expect(c_.get("terminationMessagePolicy"), "FallbackToLogsOnError", f"payment-rpc {what} terminationMessagePolicy (a refusal stays readable in the Pod status)")
@@ -424,6 +426,10 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     wgroup = values["config"]["worker"]["consumer_group"]
     check(group != wgroup and not group.startswith(wgroup + "."), f"payment-rpc consumer_group {group!r} must not fall under the worker's lag query ({wgroup}.*)")
     check("payment-rpc" == group, f"payment-rpc consumer_group is payment-rpc, got {group!r}")
+    # Upgrade invariant (#410 slice 2): the consumer's cursor is its consumer group. The group the previous chart's
+    # `payment-rpc consume` read under is payment-rpc.payment; payment-worker must read the same one, or a rolling
+    # upgrade starts a new cursor (worker.start_from decides what it skips or replays).
+    expect(group + ".payment", "payment-rpc.payment", "the effective consumer group of payment's consumer")
     pay = pcfg["payment"]
     expect(pay["provider"], "mock", "payment.provider (the first version's only provider)")
     check("upstream" not in pay and "api_key" not in pay and "timeout" not in pay, "payment-rpc's payment section carries nothing of rpc's (upstream / api_key / timeout)")

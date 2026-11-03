@@ -507,3 +507,22 @@ func TestRun_Expire(t *testing.T) {
 		t.Fatalf("expire without a database = %+v, want a refusal naming postgres.url", out)
 	}
 }
+
+// #410 slice 2: `payment-rpc consume` is gone, replaced by apps/payment-worker. The old entry must not start a
+// consumer and must not exit quietly: it refuses with a non-nil error that names payment-worker, with or without the
+// flag, even on a configuration the old command would have run on (a real database with every table migrated).
+func TestRun_ConsumeIsRemoved(t *testing.T) {
+	newConsumeEnv(t) // migrates ordering too: before this slice consume would have started on this database
+	for name, args := range map[string][]string{
+		"consume":                      {"consume"},
+		"consume --require-durable":    {"consume", "--require-durable"},
+		"consume with an unknown flag": {"consume", "--nope"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := startAndStop(t, args, durableEnv(t, nil))
+			if out.served || out.err == nil || !strings.Contains(out.err.Error(), "payment-worker") {
+				t.Fatalf("run(%q) = %+v, want a refusal that names payment-worker and no consumer running", args, out)
+			}
+		})
+	}
+}
