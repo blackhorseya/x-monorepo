@@ -34,6 +34,16 @@ canon() {
 }
 
 work_json=$(go work edit -json "$gowork") || { echo "check-modules: go work edit -json failed on $gowork" >&2; exit 1; }
+# MODULES is a whitespace-separated list (Task's `for: { var: MODULES }` splits it on whitespace), so it cannot name a
+# module whose path holds whitespace or a control character: refuse such a go.work path, shown JSON-quoted so its
+# boundaries and escapes are visible. After this no path holds a newline, so the line-per-module sets below are exact
+# (#413 r3: a newline inside a path was read as two modules and "apps/a\nb" agreed with MODULES "apps/a b").
+unrepresentable=$(printf '%s\n' "$work_json" | jq -r '(.Use // [])[].DiskPath | select(test("[\\s[:cntrl:]]")) | @json') || { echo "check-modules: jq could not read the go.work use list" >&2; exit 1; }
+if [ -n "$unrepresentable" ]; then
+  echo "check-modules: go.work uses a path with whitespace or control characters; MODULES is whitespace-separated and cannot represent it:" >&2
+  printf '  %s\n' "$unrepresentable" >&2
+  exit 1
+fi
 in_work=$(printf '%s\n' "$work_json" | jq -r '(.Use // [])[].DiskPath' | canon) || { echo "check-modules: jq could not read the go.work use list" >&2; exit 1; }
 task_out=$(task --silent --taskfile "$taskfile" --dir "$(cd "$(dirname "$taskfile")" && pwd)" modules 2>&1) || {
   echo "check-modules: task modules failed on $taskfile (it needs a 'modules' task that prints {{.MODULES}}): $task_out" >&2
@@ -50,9 +60,10 @@ rc=0
 [ "$n_task" -gt 0 ] || { echo "check-modules: MODULES lists no modules ($taskfile)" >&2; rc=1; }
 [ "$rc" = 0 ] || exit 1
 
-only_work=$(comm -23 <(printf '%s\n' "$in_work") <(printf '%s\n' "$in_task") | tr '\n' ' ')
-only_task=$(comm -13 <(printf '%s\n' "$in_work") <(printf '%s\n' "$in_task") | tr '\n' ' ')
-if [ -n "$only_work" ]; then echo "check-modules: in go.work but not in MODULES: ${only_work% } (never linted or tested; add to Taskfile.yml MODULES)" >&2; rc=1; fi
-if [ -n "$only_task" ]; then echo "check-modules: in MODULES but not in go.work: ${only_task% } (add to go.work or drop from MODULES)" >&2; rc=1; fi
+quote() { local p out=""; while IFS= read -r p; do out="$out\"$p\" "; done; printf '%s' "${out% }"; }
+only_work=$(comm -23 <(printf '%s\n' "$in_work") <(printf '%s\n' "$in_task") | quote)
+only_task=$(comm -13 <(printf '%s\n' "$in_work") <(printf '%s\n' "$in_task") | quote)
+if [ -n "$only_work" ]; then echo "check-modules: in go.work but not in MODULES: $only_work (never linted or tested; add to Taskfile.yml MODULES)" >&2; rc=1; fi
+if [ -n "$only_task" ]; then echo "check-modules: in MODULES but not in go.work: $only_task (add to go.work or drop from MODULES)" >&2; rc=1; fi
 [ "$rc" = 0 ] || exit 1
 echo "check-modules: go.work and MODULES agree ($n_work modules)"

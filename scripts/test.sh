@@ -1394,13 +1394,13 @@ expect_eq "check-modules: single-line use directives are read" "0" "$rc"
 expect_match "check-modules: single-line use directives are counted" "2 modules" "$out"
 modrun gw_only "$gw_block" "pkgs/kernel apps/rpc"
 expect_eq "check-modules: a module only in go.work fails" "1" "$rc"
-expect_match "check-modules: go.work-only module is named under its side" "in go.work but not in MODULES: tools/x" "$out"
+expect_match "check-modules: go.work-only module is named under its side" "in go.work but not in MODULES: \"tools/x\"" "$out"
 modrun mod_only "$gw_block" "pkgs/kernel apps/rpc tools/x pkgs/ghost"
 expect_eq "check-modules: a module only in MODULES fails" "1" "$rc"
-expect_match "check-modules: MODULES-only module is named under its side" "in MODULES but not in go.work: pkgs/ghost" "$out"
+expect_match "check-modules: MODULES-only module is named under its side" "in MODULES but not in go.work: \"pkgs/ghost\"" "$out"
 modrun both "$gw_block" "pkgs/kernel apps/rpc pkgs/ghost"
-expect_match "check-modules: both directions are reported in one run (go.work side)" "in go.work but not in MODULES: tools/x" "$out"
-expect_match "check-modules: both directions are reported in one run (MODULES side)" "in MODULES but not in go.work: pkgs/ghost" "$out"
+expect_match "check-modules: both directions are reported in one run (go.work side)" "in go.work but not in MODULES: \"tools/x\"" "$out"
+expect_match "check-modules: both directions are reported in one run (MODULES side)" "in MODULES but not in go.work: \"pkgs/ghost\"" "$out"
 modrun empty_gw "go 1.27" "pkgs/kernel apps/rpc"
 expect_eq "check-modules: an empty go.work side fails" "1" "$rc"
 expect_match "check-modules: empty go.work side says so" "go.work lists no modules" "$out"
@@ -1430,7 +1430,7 @@ modrun_tf cont_extra "$gw_two" 'vars:
     pkgs/new
   APPS: rpc'
 expect_eq "check-modules: a module on a MODULES continuation line is compared (extra fails)" "1" "$rc"
-expect_match "check-modules: the continuation-line module is named" "in MODULES but not in go.work: pkgs/new" "$out"
+expect_match "check-modules: the continuation-line module is named" "in MODULES but not in go.work: \"pkgs/new\"" "$out"
 modrun_tf cont_same "$gw_two" 'vars:
   MODULES: apps/rpc
     pkgs/kernel
@@ -1444,7 +1444,7 @@ modrun_tf cont_folded "$gw_two" 'vars:
     pkgs/new
   APPS: rpc'
 expect_eq "check-modules: a folded (>) MODULES is compared (extra fails)" "1" "$rc"
-expect_match "check-modules: the folded-scalar module is named" "in MODULES but not in go.work: pkgs/new" "$out"
+expect_match "check-modules: the folded-scalar module is named" "in MODULES but not in go.work: \"pkgs/new\"" "$out"
 modrun_tf cont_comment "$gw_two" 'vars:
   # Every Go module in the workspace.
   MODULES: apps/rpc pkgs/kernel
@@ -1463,7 +1463,7 @@ modrun_tf templated_extra "$gw_two" 'vars:
   CORE: pkgs/kernel pkgs/new
   MODULES: apps/rpc {{.CORE}}'
 expect_eq "check-modules: an extra module hidden in a var MODULES references fails" "1" "$rc"
-expect_match "check-modules: the module behind the var is named" "in MODULES but not in go.work: pkgs/new" "$out"
+expect_match "check-modules: the module behind the var is named" "in MODULES but not in go.work: \"pkgs/new\"" "$out"
 modrun quoted_path 'go 1.27
 
 use (
@@ -1485,7 +1485,7 @@ modrun esc_same "$esc_gw" "apps/a&b"
 expect_eq "check-modules: a use path with a JSON-escaped character equals the same MODULES entry" "0" "$rc"
 modrun esc_diff "$esc_gw" 'apps/a\u0026b'
 expect_eq "check-modules: the literal text of the JSON escape is not the module" "1" "$rc"
-expect_match "check-modules: the literal-escape entry is named" "in MODULES but not in go.work: apps/a.u0026b" "$out"
+expect_match "check-modules: the literal-escape entry is named" "in MODULES but not in go.work: \"apps/a.u0026b\"" "$out"
 # MODULES is a whitespace-separated list (Task iterates it by splitting on whitespace), so it cannot name a module whose
 # path holds whitespace or a control character; such a go.work path is refused, shown JSON-escaped (#413 r3: a newline in
 # a path was split into two records and "apps/a\nb" agreed with MODULES "apps/a b").
@@ -1494,16 +1494,18 @@ nl_gw='go 1.27
 use "./apps/a\nb"'
 modrun ws_newline "$nl_gw" "apps/a b"
 expect_eq "check-modules: a go.work path with a newline is refused, not split into two modules" "1" "$rc"
-expect_match "check-modules: the refused newline path is shown JSON-escaped" 'whitespace or control.*"\./apps/a\\nb"' "$out"
+expect_match "check-modules: the refusal says MODULES cannot represent the path" 'whitespace or control characters; MODULES is whitespace-separated and cannot represent it' "$out"
+expect_match "check-modules: the refused newline path is shown JSON-escaped" '^  "\./apps/a\\nb"$' "$out"
 modrun ws_space 'go 1.27
 
 use "./apps/a b"' "apps/a b"
 expect_eq "check-modules: a go.work path with a space is refused" "1" "$rc"
-expect_match "check-modules: the refused space path is shown with its boundaries" 'whitespace or control.*"\./apps/a b"' "$out"
+expect_match "check-modules: the refused space path is shown with its boundaries" '^  "\./apps/a b"$' "$out"
 modrun ws_tab 'go 1.27
 
 use "./apps/a\tb"' "apps/a b"
-expect_match "check-modules: a tab in a go.work path is refused" 'whitespace or control' "$out"
+expect_eq "check-modules: a tab in a go.work path is refused" "1" "$rc"
+expect_match "check-modules: the refused tab path is shown JSON-escaped" '^  "\./apps/a\\tb"$' "$out"
 modrun ws_clean_among "$gw_block" "pkgs/kernel apps/rpc tools/x"
 expect_eq "check-modules: ordinary paths still pass beside the refusal rule" "0" "$rc"
 # A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
