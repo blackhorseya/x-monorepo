@@ -15,6 +15,9 @@
 #                                     no child of the script left (#420)
 #   D6  bounds                      : many pods x many lines -> the Actions console stays small, the files are complete, and a
 #                                     slow cluster ends at the deadline (#420)
+#   D6L/W/E/S  the console in BYTES  : one 1 MiB line per pod / 5000 pod rows / huge event lines / 100000 Postgres rows: the
+#                                     console stays under its byte budget, says it was cut and where the files are, and the
+#                                     files are complete (a limit in lines is no limit: #417 r2)
 #   D7  SQL text never leaves       : a real Postgres runs SQL with a synthetic credential literal while a lock is held;
 #                                     nothing diag.sh prints or writes carries it (#420)
 #
@@ -48,8 +51,12 @@ case $args in
     if [ -n "${PODCOUNT:-}" ]; then for i in $(seq 1 "$PODCOUNT"); do echo "pod/p$i"; done
     elif [ -n "${PGC:-}" ]; then printf 'pod/a\npod/postgres-0\n'
     else printf 'pod/a\npod/b\n'; fi ;;
-  *"get pods -o wide"*) echo "PODS-$NONCE" ;;
-  *"get events"*) echo "EVENTS-$NONCE" ;;
+  *"get pods -o wide"*)
+    if [ -n "${WIDELINES:-}" ]; then seq 1 "$WIDELINES" | sed "s|^|PODS-$NONCE row |"; else echo "PODS-$NONCE"; fi ;;
+  *"get events"*)
+    if [ -n "${EVENTLINES:-}" ]; then
+      for i in $(seq 1 "$EVENTLINES"); do printf 'EVENTS-%s %s ' "$NONCE" "$i"; head -c "${EVENTWIDTH:-100}" /dev/zero | tr '\0' 'e'; echo; done
+    else echo "EVENTS-$NONCE"; fi ;;
   *"get pods"*) echo "PODS-$NONCE" ;;
   *" logs "*)
     pod=$(sed -n 's/.* logs \([^ ]*\) .*/\1/p' <<<"$args")
@@ -62,7 +69,9 @@ case $args in
       "$RT" logs "$PGC" 2>&1 | sed "s/^/2026-11-03T04:18:02Z /"; exit 0
     fi
     if [ "${MODE:-ok}" = degraded ] && [ "$pod" = pod/a ]; then echo "unable to retrieve container logs" >&2; exit 1; fi
-    if [ -n "${LOGLINES:-}" ]; then
+    if [ -n "${LONGLINE:-}" ]; then
+      printf 'LONG-%s %s ' "$NONCE" "$pod"; head -c "$LONGLINE" /dev/zero | tr '\0' 'x'; echo
+    elif [ -n "${LOGLINES:-}" ]; then
       seq 1 "$LOGLINES" | sed "s|^|2026-11-03T04:18:01Z LOG $pod line |; s|\$| $NONCE|"
     else
       echo "2026-11-03T04:18:01Z LOG $pod since=$st $NONCE"
@@ -73,6 +82,7 @@ case $args in
       exec "$RT" exec -i "$PGC" "${rest[@]}"
     fi
     last=${args##*-c }
+    if [ -n "${SQLLINES:-}" ]; then seq 1 "$SQLLINES" | sed "s|^|SQL-$NONCE row |"; exit 0; fi
     if [ "${MODE:-ok}" = degraded ] && [[ $last == *pg_locks* ]]; then echo "psql: error: connection to server failed" >&2; exit 2; fi
     echo "SQL $NONCE: $last" ;;
   *) ;;
@@ -280,6 +290,49 @@ if only D6; then
   [ "$got" -ge 1 ] && [ "$got" -lt 30 ] || die "D6 deadline: $got of 30 pod logs written; want some, not all (the deadline must cut)"
   unset DIAG_DIR
   echo "diag-test ok: D6 30 pods x 5000 lines: $lines console lines, 30 complete files; 6s deadline over a 1s-per-call cluster: ${took}s, $got pods"
+fi
+
+# ── D6L / D6W / D6E / D6S the console in bytes ───────────────────────────────
+# One surface at a time (one fixture, one variable), each oversized past the budget in a way a line count does not see.
+budget=65536   # DIAG_CONSOLE_BYTES for these cells: small, so the fixtures stay small too
+slack=4096     # the fixed lines around the output (group markers, headers, the truncation notice)
+d6cell() { # <cell> <label> <env assignments...>: run diag.sh with the fixture, check console bytes, truncation notice, files
+  local cell=$1 label=$2; shift 2
+  export DIAG_DIR="$tmp/diag-$cell"; rm -rf "$DIAG_DIR"
+  local a; for a in "$@" DIAG_CONSOLE_BYTES=$budget; do export "$a"; done
+  run_bounded 120 "$here/diag.sh" ns "$since"
+  for a in "$@" DIAG_CONSOLE_BYTES=$budget; do unset "${a%%=*}"; done
+  [ "$rc" = 0 ] || die "$cell: exit $rc, want 0"
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  [ "$bytes" -le $((budget + slack)) ] || die "$cell ($label): the console got $bytes bytes, want at most $((budget + slack)) (budget $budget)"
+  has "console budget" "$cell: the console says it was cut"
+  has "$DIAG_DIR" "$cell: the console says where the files are"
+}
+if only D6L; then
+  # 30 pods, one 1 MiB line each: 76 console LINES, 31 MB
+  d6cell D6L "30 pods x one 1 MiB line" PODCOUNT=30 LONGLINE=1048576
+  for f in "$DIAG_DIR"/log-p*.txt; do [ "$(wc -c < "$f" | tr -d ' ')" -ge 1048576 ] || die "D6L: $f is cut (the file must hold the whole line)"; done
+  [ "$(ls "$DIAG_DIR"/log-p*.txt | wc -l | tr -d ' ')" = 30 ] || die "D6L: not all 30 pod files were written"
+  unset DIAG_DIR
+  echo "diag-test ok: D6L 30 pods x one 1 MiB line: $bytes console bytes (budget $budget), 30 complete files"
+fi
+if only D6W; then
+  d6cell D6W "pods wide with 5000 rows" WIDELINES=5000
+  [ "$(wc -l < "$DIAG_DIR/pods.txt" | tr -d ' ')" = 5000 ] || die "D6W: pods.txt does not hold all 5000 rows"
+  unset DIAG_DIR
+  echo "diag-test ok: D6W pods wide, 5000 rows: $bytes console bytes (budget $budget), pods.txt complete"
+fi
+if only D6E; then
+  d6cell D6E "events: 30 lines of 100 KiB" EVENTLINES=30 EVENTWIDTH=102400
+  [ "$(wc -l < "$DIAG_DIR/events.txt" | tr -d ' ')" = 30 ] || die "D6E: events.txt does not hold all 30 events"
+  unset DIAG_DIR
+  echo "diag-test ok: D6E 30 events of 100 KiB: $bytes console bytes (budget $budget), events.txt complete"
+fi
+if only D6S; then
+  d6cell D6S "Postgres reads with 100000 rows" SQLLINES=100000
+  [ "$(grep -c "SQL-$nonce row" "$DIAG_DIR/postgres.txt")" -ge 100000 ] || die "D6S: postgres.txt does not hold the rows"
+  unset DIAG_DIR
+  echo "diag-test ok: D6S 100000 Postgres rows: $bytes console bytes (budget $budget), postgres.txt complete"
 fi
 
 # ── D7 SQL text never leaves ─────────────────────────────────────────────────
