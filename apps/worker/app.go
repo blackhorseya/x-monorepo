@@ -101,7 +101,7 @@ func NewWorker(
 	}
 	lag := eventbus.LagOptions{DB: db, Redis: rdb}
 	// The BCs `worker prune` manages: the ones this worker runs handlers for, and payment, whose
-	// consumer is its own process (payment-rpc consume) but whose tables are in this database and
+	// consumer is its own process (payment-worker) but whose tables are in this database and
 	// are pruned here. Their poison tables and retention are gauged next to the others.
 	managed := []string{paymentv1.Schema}
 	for _, bc := range bcs {

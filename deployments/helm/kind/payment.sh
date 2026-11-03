@@ -33,7 +33,7 @@ cfg=$(kubectl -n "$ns" get configmap "$release-payment-rpc" -o jsonpath='{.data.
 # at the rpc env check below), so every check reads a variable (here-string), never a pipe.
 grep -q 'oidc\|jwt' <<<"$cfg" && fail "payment-rpc's ConfigMap carries auth.jwt / auth.oidc (this release's rpc has OIDC on: it must not inherit it)"
 grep -q 'mode: required' <<<"$cfg" || fail "payment-rpc's ConfigMap is not auth.mode required"
-grep -q 'broker: postgres' <<<"$cfg" || fail "payment-rpc's ConfigMap is not the Postgres broker (this release's worker uses Redis; consume reads the outbox tables)"
+grep -q 'broker: postgres' <<<"$cfg" || fail "payment-rpc's ConfigMap is not the Postgres broker (this release's worker uses Redis; the consumer reads the outbox tables)"
 key=$(kubectl -n "$ns" get secret "$release-payment-rpc-env" -o jsonpath='{.data.APP_PAYMENT_API_KEY}' | base64 -d)
 auth=$(kubectl -n "$ns" get secret "$release-payment-rpc-env" -o jsonpath='{.data.APP_AUTH_API_KEYS}' | base64 -d)
 [ "$auth" = "rpc=$key:admin" ] || fail "payment-rpc's service key is not exactly rpc=<the key rpc presents>:admin"
@@ -46,9 +46,9 @@ for w in rpc worker catalog-rpc; do
 done
 for _ in $(seq 1 30); do
   clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)
-  grep -q 'payment-rpc consume started' <<<"$clog" && break; sleep 1
+  grep -q 'payment-worker started' <<<"$clog" && break; sleep 1
 done
-grep -q 'payment-rpc consume started' <<<"$clog" || fail "consume never logged that it started"
+grep -q 'payment-worker started' <<<"$clog" || fail "payment-worker never logged that it started"
 
 forward "svc/$release-payment-serve" "$sport" 80 -n "$ns"
 direct="http://127.0.0.1:$sport"

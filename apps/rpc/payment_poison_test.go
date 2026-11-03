@@ -26,7 +26,7 @@ import (
 
 // docs/payment.md §9 (slice 3, poison / prune): the admin RPC serves payment's poison queue next to
 // ordering's and inventory's, naming the schema by the contract's constant. A message parked by
-// `payment-rpc consume` after its retries is listed — by BC and across every BC — and the BC is a
+// `payment-worker` after its retries is listed — by BC and across every BC — and the BC is a
 // known one (not "unknown bounded context").
 func TestAdminPoison_ServesPayment(t *testing.T) {
 	c, cancel := context.WithTimeout(context.Background(), 60*time.Second)

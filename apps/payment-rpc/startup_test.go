@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The command line: serve, consume and expire are the subcommands (docs/payment.md §1). Anything else is refused before anything is opened, and the refusal
+// The command line: serve and expire are the subcommands (docs/payment.md §1). Anything else is refused before anything is opened, and the refusal
 // does not echo the argument.
 func TestRun_Subcommand(t *testing.T) {
 	for name, args := range map[string][]string{
@@ -122,8 +122,8 @@ func TestRun_UnknownProviderIsRefused(t *testing.T) {
 // the webhook log is the dedup memory of redelivered notifications, so it may not be shorter than the
 // provider's redelivery window (the mock says 72h); 0 keeps everything; the rest must be positive.
 func TestRun_SagaSettingsFailClosed(t *testing.T) {
-	newConsumeEnv(t) // migrates ordering: a consume that starts puts its cursor on ordering's event tables
-	for _, cmd := range [][]string{{"serve"}, {"consume"}, {"expire"}} {
+	newConsumeEnv(t) // migrates ordering: the saga harness puts its cursor on ordering's event tables
+	for _, cmd := range [][]string{{"serve"}, {"expire"}} {
 		for name, c := range map[string]struct {
 			env, value string
 			refused    bool

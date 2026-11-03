@@ -420,14 +420,14 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     check("service_name" not in pcfg.get("otel", {}), "payment-rpc does not inherit otel.service_name (it would report as rpc)")
     for k in ("http", "postgres", "log", "otel"):
         expect(pcfg.get(k), {kk: vv for kk, vv in values["config"][k].items() if kk != "service_name"}, f"payment-rpc {k} = the release's")
-    expect(pcfg["worker"].get("broker"), "postgres", "payment-rpc consume reads the Postgres outbox only: worker.broker is postgres whatever the release's is")
+    expect(pcfg["worker"].get("broker"), "postgres", "payment-worker reads the Postgres outbox only: worker.broker is postgres whatever the release's is")
     # the consumer group must not match the worker's lag query (worker\..*), or a payment backlog scales the worker
     group = pcfg["worker"]["consumer_group"]
     wgroup = values["config"]["worker"]["consumer_group"]
-    check(group != wgroup and not group.startswith(wgroup + "."), f"payment-rpc consumer_group {group!r} must not fall under the worker's lag query ({wgroup}.*)")
-    check("payment-rpc" == group, f"payment-rpc consumer_group is payment-rpc, got {group!r}")
+    check(group != wgroup and not group.startswith(wgroup + "."), f"payment-workerr_group {group!r} must not fall under the worker's lag query ({wgroup}.*)")
+    check("payment-rpc" == group, f"payment-workerr_group is payment-rpc, got {group!r}")
     # Upgrade invariant (#410 slice 2): the consumer's cursor is its consumer group. The group the previous chart's
-    # `payment-rpc consume` read under is payment-rpc.payment; payment-worker must read the same one, or a rolling
+    # `payment-worker` read under is payment-rpc.payment; payment-worker must read the same one, or a rolling
     # upgrade starts a new cursor (worker.start_from decides what it skips or replays).
     expect(group + ".payment", "payment-rpc.payment", "the effective consumer group of payment's consumer")
     pay = pcfg["payment"]
@@ -495,11 +495,11 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     expect(senv["APP_HTTP_SHUTDOWN_TIMEOUT"], f'{sd["timeoutSeconds"]}s', "payment-rpc serve APP_HTTP_SHUTDOWN_TIMEOUT")
     expect(svc["spec"].get("type", "ClusterIP"), "ClusterIP", "the serve Service is cluster-internal: it carries the internal RPC on the webhook's port")
     expect(svc["spec"]["selector"]["app.kubernetes.io/component"], "payment-serve", "payment-rpc Service selects the serve pods")
-    check("ports" not in cc and "readinessProbe" not in cc and "livenessProbe" not in cc, "payment-rpc consume has no listener, so no ports and no probes")
+    check("ports" not in cc and "readinessProbe" not in cc and "livenessProbe" not in cc, "payment-worker has no listener, so no ports and no probes")
     check("ports" not in xc, "payment-rpc expire has no listener")
-    check(cs["terminationGracePeriodSeconds"] > 18, "payment-rpc consume grace > 18s (8s handler drain + 10s router close)")
-    expect(consume["spec"]["replicas"], pv["consume"]["replicaCount"], "payment-rpc consume replicas (fixed: no autoscaling, docs/operations.md)")
-    check(find(docs, "HorizontalPodAutoscaler", "-payment-consume") is None and find(docs, "ScaledObject", "-payment-consume") is None, "payment-rpc consume is not autoscaled")
+    check(cs["terminationGracePeriodSeconds"] > 18, "payment-worker grace > 18s (8s handler drain + 10s router close)")
+    expect(consume["spec"]["replicas"], pv["consume"]["replicaCount"], "payment-worker replicas (fixed: no autoscaling, docs/operations.md)")
+    check(find(docs, "HorizontalPodAutoscaler", "-payment-consume") is None and find(docs, "ScaledObject", "-payment-consume") is None, "payment-worker is not autoscaled")
     pdb = find(docs, "PodDisruptionBudget", "-payment-serve")
     check((pdb is not None) == (sv["podDisruptionBudget"]["enabled"] and sv["replicaCount"] > 1), "payment-rpc serve PDB iff enabled and more than one replica")
     sm = find(docs, "ServiceMonitor", "-payment-serve")

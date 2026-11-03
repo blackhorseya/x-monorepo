@@ -3,7 +3,7 @@
 #     and pointed at with APP_CONFIG (same keys as configs/config.example.yaml);
 #   - APP_* env vars for secrets (postgres / redis URL, API keys, JWT secret) and for the
 #     values this chart derives (http.shutdown_*). env beats file beats built-in defaults.
-# Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,catalog-rpc,payment-rpc,worker,migrate}:<tag>.
+# Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,catalog-rpc,payment-rpc,payment-worker,worker,migrate}:<tag>.
 # They are distroless (no shell): no exec probes, no preStop sleep — the apps' own graceful
 # shutdown does that job (see rpc.shutdown / worker.terminationGracePeriodSeconds).
 # The optional console (web/apps/console/Dockerfile, nginx) is .../console:<tag>.
@@ -372,7 +372,8 @@ paymentRpc:
   # replicas was NOT measured to make a Postgres-broker consumer faster (docs/operations.md, "Worker 輪詢間隔"),
   # so there is no autoscaling here and the default is one replica: raise replicaCount for availability
   # (a restart does not wait for a probe), not for throughput. Its consumer group is `payment-rpc` (so
-  # `payment-rpc.payment`), deliberately outside the worker's `worker.*`: worker.autoscaling's lag query
+  # `payment-rpc.payment`, the group `payment-rpc consume` read under before #410 slice 2: the binary is payment-worker now,
+  # the ConfigMap and so the cursor are the same), deliberately outside the worker's `worker.*`: worker.autoscaling's lag query
   # would otherwise scale the WORKER on payment's backlog.
   consume:
     replicaCount: 1

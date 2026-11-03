@@ -418,7 +418,7 @@ jobs:
         env: { E2E_DEX: "1" }
       # The same OIDC specs on a non-default port pair (#383): fixtures must follow E2E_RPC_PORT / E2E_WEB_PORT.
       - run: task web-e2e-ports
-      # The payment flow on the real stack (#367 slice 6): catalog-rpc, payment-rpc serve + consume, rpc and worker on a
+      # The payment flow on the real stack (#367 slice 6): catalog-rpc, payment-rpc serve, payment-worker, rpc and worker on a
       # database of its own made on the postgres service above (psql is on the runner image), no page.route.
       - run: task web-e2e-payment
       - if: failure()

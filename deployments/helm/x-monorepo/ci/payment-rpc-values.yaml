@@ -1,6 +1,6 @@
 # Profile 10: payment-rpc on (serve + consume + the expire CronJob + the webhook-only ingress), with
 # everything it must NOT inherit set for rpc — an OIDC issuer, a legacy JWT, user api keys, a Redis
-# broker (payment-rpc consume reads the Postgres outbox only) — and the hardening knobs. check.py asserts
+# broker (payment-worker reads the Postgres outbox only) — and the hardening knobs. check.py asserts
 # none of it reaches payment-rpc's ConfigMap or Secret, and that only the webhook path is routed.
 secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable

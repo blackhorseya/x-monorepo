@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { paymentPorts } from "./e2e/ports";
 
 // The "payment" project (docs/payment.md §9 S6, 「Console 真流程」): the console against the REAL payment stack —
-// catalog-rpc, payment-rpc serve + consume, rpc and worker, a Postgres database made for the run — with nothing
+// catalog-rpc, payment-rpc serve, payment-worker, rpc and worker, a Postgres database made for the run — with nothing
 // scripted by page.route. `task web-e2e-payment`; needs E2E_DATABASE_URL (a Postgres server it may create a
 // database on; CI's console-e2e job has one) and the built binaries and console (`task build web-build`).
 //

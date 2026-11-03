@@ -1848,7 +1848,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (alert)(increase(payment_alerts_total{job=\"payment-rpc\"}[10m]))",
+          "expr": "sum by (alert)(increase(payment_alerts_total{job=~\"payment-rpc|payment-worker\"}[10m]))",
           "legendFormat": "{{alert}}"
         }
       ],
@@ -1870,7 +1870,7 @@
     },
     {
       "id": 48,
-      "title": "Consumer lag — payment-rpc consume (unacked messages)",
+      "title": "Consumer lag — payment-worker (unacked messages; group payment-rpc.payment)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -1912,7 +1912,7 @@
     },
     {
       "id": 49,
-      "title": "Oldest unacked age and poison backlog — payment-rpc consume",
+      "title": "Oldest unacked age and poison backlog — payment-worker",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -1941,7 +1941,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (topic)(eventbus_poison_messages{job=\"payment-rpc\"})",
+          "expr": "max by (topic)(eventbus_poison_messages{job=~\"payment-rpc|payment-worker\"})",
           "legendFormat": "poison {{topic}}"
         }
       ],

@@ -44,7 +44,7 @@ const (
 	topicCompleted = "ordering.v1.OrderCompleted"
 )
 
-// consumeEnv is `payment-rpc consume` as main builds it (InitializeConsume: the real router, the real
+// consumeEnv is payment's consumer as apps/payment-worker builds it (InitializeConsume, kept here for these saga tests: the real router, the real
 // Postgres subscriber and outbox) on a real Postgres with both schemas migrated: ordering publishes the
 // events payment consumes, so its tables must exist. Every table the consumer reads or writes is emptied
 // before and after the test, and the consumer group is new each time, so no cursor of an earlier test is read.
@@ -457,38 +457,6 @@ func startAndStop(t *testing.T, args []string, env map[string]*string) outcome {
 			return outcome{err: err, served: true}
 		case <-time.After(300 * time.Millisecond):
 		}
-	}
-}
-
-// consume as a process: it stays up on a database, stops cleanly on SIGTERM, and refuses what it cannot serve
-// instead of ignoring it.
-func TestRun_Consume(t *testing.T) {
-	newConsumeEnv(t) // migrates ordering too: consume puts its cursor on ordering's event tables
-	out := startAndStop(t, []string{"consume"}, durableEnv(t, nil))
-	if out.err != nil || !out.served {
-		t.Fatalf("consume = %+v err=%v, want it running until told to stop, then nil", out, out.err)
-	}
-	out = startAndStop(t, []string{"consume", "--require-durable"}, durableEnv(t, nil))
-	if out.err != nil || !out.served {
-		t.Fatalf("consume --require-durable = %+v", out)
-	}
-
-	for name, tc := range map[string]struct {
-		args []string
-		env  map[string]*string
-		want string
-	}{
-		"no database":          {[]string{"consume"}, map[string]*string{"APP_POSTGRES_URL": s("")}, "postgres.url"},
-		"no database, durable": {[]string{"consume", "--require-durable"}, map[string]*string{"APP_POSTGRES_URL": s("")}, "postgres.url"},
-		"a redis broker":       {[]string{"consume"}, map[string]*string{"APP_WORKER_BROKER": s("redis")}, "worker.broker"},
-		"an unknown flag":      {[]string{"consume", "--nope"}, nil, "unknown argument"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			out := startAndStop(t, tc.args, durableEnv(t, tc.env))
-			if out.err == nil || out.served || !strings.Contains(out.err.Error(), tc.want) {
-				t.Fatalf("run = %+v, want a refusal naming %q", out, tc.want)
-			}
-		})
 	}
 }
 

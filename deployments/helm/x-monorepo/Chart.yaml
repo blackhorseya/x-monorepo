@@ -1,7 +1,7 @@
 apiVersion: v2
 name: x-monorepo
 description: >-
-  rpc (Connect API), worker (event consumers), catalog-rpc, payment-rpc (serve, consume, expire; on by default, see values), a migrate hook Job, a prune CronJob and the
+  rpc (Connect API), worker (event consumers), catalog-rpc, payment-rpc (serve, expire) and payment-worker (the consumer), on by default, see values, a migrate hook Job, a prune CronJob and the
   optional web console (nginx, /api proxied to the rpc),
   wired the way the binaries expect: config file + APP_* env, probes on /api/healthz and
   /api/readyz, terminationGracePeriodSeconds derived from the apps' own shutdown settings.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -32,26 +33,32 @@ func main() {
 // change an arg); the default stays off so local development and the tests keep working.
 const requireDurableFlag = "--require-durable"
 
-// The subcommands (docs/payment.md §1): serve is the RPC server and the webhook route, consume the event
-// handlers, expire one run of the sweep (the CronJob).
+// The subcommands (docs/payment.md §1): serve is the RPC server and the webhook route, expire one run of the
+// sweep (the CronJob). The event handlers are apps/payment-worker's (#410): `consume` is no longer a command and
+// is refused by name, not left to look like an unknown typo.
 const (
 	serveCommand   = "serve"
-	consumeCommand = "consume"
+	consumeCommand = "consume" // removed: only recognised to say where it went
 	expireCommand  = "expire"
 	// mockCommand is the mock provider's control entry (docs/payment.md §9 S6): `mock pay|notify|fail`.
 	mockCommand = "mock"
 )
 
 // run is the process after flag handling: args are the command line without the program name.
-// The subcommand is serve or consume, and its only flag is --require-durable; anything else is
+// The subcommand is serve or expire, and its only flag is --require-durable; anything else is
 // refused (a typo must not start the service without the guarantee the operator asked for). The
 // messages name the position, never the value.
 func run(args []string) error {
 	if len(args) > 0 && args[0] == mockCommand {
 		return runMock(args[1:], os.Stdout)
 	}
-	if len(args) == 0 || (args[0] != serveCommand && args[0] != consumeCommand && args[0] != expireCommand) {
-		return fmt.Errorf("payment-rpc: a subcommand is required: %s, %s or %s", serveCommand, consumeCommand, expireCommand)
+	if len(args) > 0 && args[0] == consumeCommand {
+		// Not a quiet exit and not "unknown subcommand": whoever still runs this (a hand-written Deployment, a script)
+		// is told what replaced it. The same image family, the same config file and the same consumer group.
+		return errors.New("payment-rpc: consume was removed (#410): run the payment-worker binary or image instead (payment-worker --require-durable); it reads the same settings and the same consumer group")
+	}
+	if len(args) == 0 || (args[0] != serveCommand && args[0] != expireCommand) {
+		return fmt.Errorf("payment-rpc: a subcommand is required: %s or %s", serveCommand, expireCommand)
 	}
 	cmd := args[0]
 	requireDurable := false
@@ -96,16 +103,6 @@ func run(args []string) error {
 		defer cleanup()
 
 		return expire.Run(c)
-	}
-
-	if cmd == consumeCommand {
-		consumer, cleanup, err := InitializeConsume(cfg, provider)
-		if err != nil {
-			return err
-		}
-		defer cleanup()
-
-		return consumer.Run(c)
 	}
 
 	srv, cleanup, err := Initialize(cfg, provider)

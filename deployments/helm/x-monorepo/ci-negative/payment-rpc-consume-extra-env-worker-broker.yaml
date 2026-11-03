@@ -1,5 +1,5 @@
 # expect: paymentRpc.consume.extraEnv
-# payment-rpc consume: the chart owns auth, the Postgres URL, the config file, the provider and its
+# payment-worker (the payment-consume Deployment): the chart owns auth, the Postgres URL, the config file, the provider and its
 # credentials, the broker; an env var here would turn one off or replace it (APP_WORKER_BROKER).
 paymentRpc:
   enabled: true
