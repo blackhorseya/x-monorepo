@@ -1415,6 +1415,22 @@ refused newline './apps/a\nb' 'a\\nb'
 refused space './apps/a b' 'a b'
 refused tab './apps/a\tb' 'a\\tb'
 refused nbsp $'./apps/a\xc2\xa0b' $'a\xc2\xa0b'
+# Shell and template metacharacters: `cd {{.ITEM}}` in the per-module loops re-expands them, so `apps/a$UNSET` entered
+# apps/a and task test passed while never testing the module (#413 r6). Refused like whitespace is, shown JSON-quoted.
+refused_chars() { # <name> <path as written inside go.work's quotes> <JSON form shown>
+  gwrun "$1" "go 1.27
+
+use \"./apps/ok\"
+use \"$2\""
+  expect_eq "check-modules: a go.work path with $1 is refused" "1" "$rc"
+  expect_match "check-modules: the refused $1 path is shown JSON-quoted" "^  \"\\./apps/$3\"\$" "$out"
+}
+refused_chars dollar './apps/a$UNSET' 'a\$UNSET'
+refused_chars squote "./apps/a'b" "a'b"
+refused_chars backtick './apps/a`b' 'a`b'
+refused_chars semicolon './apps/a;b' 'a;b'
+refused_chars star './apps/a*' 'a\*'
+refused_chars leading-dash './-x' '-x'
 rc=0; out=$("$cm" "$tmp/no-such-go.work" 2>&1) || rc=$?
 expect_eq "check-modules: an unreadable go.work fails" "1" "$rc"
 rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
