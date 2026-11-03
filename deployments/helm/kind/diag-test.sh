@@ -18,6 +18,12 @@
 #   D6L/W/E/S/M the console in BYTES  : one 1 MiB line per pod / 5000 pod rows / huge event lines / 100000 Postgres rows: the
 #                                     console stays under its byte budget, says it was cut and where the files are, and the
 #                                     files are complete (a limit in lines is no limit: #417 r2)
+#   D6X        two inputs that reached the console outside emit (#417 r3): a 100,000-character `since` (it is in a group
+#              title) and a `DIAG_DIR` that cannot be created (its path is in the error)
+#   D6D        (same) the DIAG_DIR variant
+#   D6B        the bound is at the PROCESS boundary: a copy of diag.sh with a direct 100 KB write injected after every
+#              group marker still stays under the budget, and says so
+#   D6T        TERM while diag.sh collects: exit 143, what was printed before it is flushed, no fifo / writer left
 #   D7  SQL text never leaves       : a real Postgres runs SQL with a synthetic credential literal while a lock is held;
 #                                     nothing diag.sh prints or writes carries it (#420)
 #
@@ -343,6 +349,79 @@ if only D6S; then
   [ "$(grep -c "SQL-$nonce row" "$DIAG_DIR/postgres.txt")" -ge 100000 ] || die "D6S: postgres.txt does not hold the rows"
   unset DIAG_DIR
   echo "diag-test ok: D6S 100000 Postgres rows: $bytes console bytes (budget $budget), postgres.txt complete"
+fi
+
+# ── D6X / D6B / D6T the bound at the process boundary (#417 r3) ───────────────
+if only D6X; then
+  # the reviewer's first reproduction: 100,824 console bytes against a limit of 69,632 (the since is in a group title)
+  longs="2026-11-03T00:00:00.$(head -c 100000 /dev/zero | tr '\0' 7)Z"
+  export DIAG_DIR="$tmp/diag-X1" DIAG_CONSOLE_BYTES=$budget
+  run_bounded 120 "$here/diag.sh" ns "$longs"
+  unset DIAG_DIR DIAG_CONSOLE_BYTES
+  [ "$rc" = 0 ] || die "D6X: exit $rc, want 0"
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  [ "$bytes" -le $((budget + slack)) ] || die "D6X: a 100,000-character since put $bytes bytes on the console, want at most $((budget + slack))"
+  [ -s "$tmp/diag-X1/log-a.txt" ] || die "D6X: the collection itself did not run (no pod log in the files)"
+  echo "diag-test ok: D6X a 100,000-character since: $bytes console bytes (limit $((budget + slack))), the files are there"
+fi
+if only D6D; then
+  # the second: a DIAG_DIR that cannot be created has its whole path in the error (100,101 bytes)
+  : > "$tmp/notadir"
+  longd="$tmp/notadir/$(head -c 100000 /dev/zero | tr '\0' d)"
+  export DIAG_DIR="$longd" DIAG_CONSOLE_BYTES=$budget
+  run_bounded 120 "$here/diag.sh" ns "$since"
+  unset DIAG_DIR DIAG_CONSOLE_BYTES
+  [ "$rc" = 0 ] || die "D6D: exit $rc, want 0"
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  [ "$bytes" -le $((budget + slack)) ] || die "D6D: a DIAG_DIR that cannot be created put $bytes bytes on the console, want at most $((budget + slack))"
+  has "diag: cannot create" "D6D: the failure is still said"
+  echo "diag-test ok: D6D a 100,000-character DIAG_DIR that cannot be created: $bytes console bytes (limit $((budget + slack)))"
+fi
+if only D6B; then
+  # "the total budget holds whatever the script prints": inject a direct 100 KB write (not through emit, not through say) after
+  # every group marker of a copy of diag.sh. If the bound were a per-call-site discipline this would blow through it.
+  mut="$tmp/diag-mutant.sh"
+  awk '{ print } /^(group|endgroup)/ { print "head -c 102400 /dev/zero | tr \"\\0\" X; echo hit >> \"$INJECT_HITS\"" }' "$here/diag.sh" > "$mut"
+  chmod +x "$mut"
+  [ "$(grep -c 'INJECT_HITS' "$mut")" -ge 4 ] || die "D6B: the mutant was not built (no injections)"
+  : > "$tmp/hits"; export INJECT_HITS="$tmp/hits" DIAG_DIR="$tmp/diag-B" DIAG_CONSOLE_BYTES=$budget
+  run_bounded 120 "$mut" ns "$since"
+  unset INJECT_HITS DIAG_DIR DIAG_CONSOLE_BYTES
+  [ "$rc" = 0 ] || die "D6B: exit $rc, want 0"
+  hits=$(wc -l < "$tmp/hits" | tr -d ' ')
+  [ "$hits" -ge 4 ] || die "D6B: only $hits injected writes ran (the mutant did not do what the cell assumes)"
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  [ "$bytes" -le $((budget + slack)) ] || die "D6B: $hits direct 100 KB writes put $bytes bytes on the console, want at most $((budget + slack))"
+  has "console budget" "D6B: the console says the budget was used up"
+  echo "diag-test ok: D6B $hits direct 100 KB writes injected into diag.sh: $bytes console bytes (limit $((budget + slack)))"
+fi
+if only D6T; then
+  # TERM while diag.sh is collecting (a slow cluster keeps it busy): 143, what it had printed is on the console, nothing is left
+  cat > "$tmp/termrun.py" <<'PY'
+import os, signal, subprocess, sys, time
+marker, out = sys.argv[1], sys.argv[2]; cmd = sys.argv[3:]
+f = open(out, "w")
+p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+t0 = time.time()
+while not os.path.exists(marker) and time.time() - t0 < 30 and p.poll() is None: time.sleep(0.05)
+os.kill(p.pid, signal.SIGTERM)
+try: rc = p.wait(timeout=20)
+except subprocess.TimeoutExpired: os.killpg(p.pid, signal.SIGKILL); p.wait(); print("rc=timeout leftover=?"); sys.exit(0)
+time.sleep(0.5); left = 0
+try: os.killpg(p.pid, 0); left = 1; os.killpg(p.pid, signal.SIGKILL)
+except ProcessLookupError: pass
+print("rc=%d leftover=%d" % (rc, left))
+PY
+  : > "$tmp/events"; rm -f "$tmp/started"
+  # SLOW=1: every kubectl call takes 1 s; the first `logs` call proves diag.sh has printed its first lines
+  res=$(DIAG_DIR="$tmp/diag-T" EVENTS="$tmp/events" NONCE="$nonce" SLOW=1 PODCOUNT=30 PATH="$tmp/bin:$PATH" \
+    python3 "$tmp/termrun.py" "$tmp/diag-T/pods.txt" "$tmp/out" "$here/diag.sh" ns "$since")
+  [[ $res == *"rc=143 "* ]] || die "D6T: $res; want rc=143 (128 + TERM)"
+  [[ $res == *"leftover=0"* ]] || die "D6T: something of diag.sh outlived it ($res)"
+  has "diag: files in" "D6T: what diag.sh printed before the TERM reached the console"
+  left_fifos=$(ls "${TMPDIR:-/tmp}"/diag-console.* 2>/dev/null | wc -l | tr -d ' ')
+  [ "$left_fifos" = 0 ] || die "D6T: $left_fifos console fifos left in ${TMPDIR:-/tmp}"
+  echo "diag-test ok: D6T TERM while collecting: $res, the printed part is on the console, no fifo left"
 fi
 
 # ── D7 SQL text never leaves ─────────────────────────────────────────────────
