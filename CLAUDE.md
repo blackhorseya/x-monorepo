@@ -71,7 +71,7 @@ shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` im
 - **Stop**：跑 `task gate-local`，失敗就不讓你宣告完成。gen-freshness 是和 HEAD 比 diff，
   改了 proto 或 wire provider 後要 `task gen wire` 並把產物一起 commit。
 
-CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，加依賴後 `task tidy`）、
+CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，加依賴後 `task tidy`；Taskfile 的 `MODULES` 由 go.work 的 `use` 導出，新增 module 只加 `use`；`scripts/modules.jq` 是路徑唯一的規則——只收 `[A-Za-z0-9._/-]`、空的 `use` 清單也不行，每個 task 都會失敗；`scripts/check-modules.sh` 在 CI 跑同一份）、
 `cover-gate`（所有 `*/domain/*` package 必須 100% 覆蓋）、`buf breaking`（只警告）。PR 上每個 job 只在輸入有變時跑（`scripts/ci-changes.sh` 決定；main 一律全跑），所以一支 PR 沒跑 helm-kind / k6 是正常的，不是壞掉；改 `scripts/ci-changes.sh` 的對照表要一起改 `scripts/test.sh`（`task scripts-test`）。
 
 ## 架構：誰依賴誰
@@ -176,7 +176,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 
 **新增 Bounded Context**（照 `pkgs/inventory` 抄）：`protos/<newbc>/v1/{entity,service,event}.proto` + `openapi.base.yaml` 與
 `buf.gen.yaml` 的 `go_package` override → `pkgs/<newbc>/go.mod`（replace 指向 kernel / platform / 要讀 contract 的 BC）+ `go.work`
-加 `use` + `Taskfile.yml` 的 `MODULES` 與 `BCS` + `apps/*/go.mod` 的 require / replace → `task tidy` → `contract/v1/openapi.go` →
+加 `use`（`MODULES` 由它導出，不用另外加）+ `Taskfile.yml` 的 `BCS` + `apps/*/go.mod` 的 require / replace → `task tidy` → `contract/v1/openapi.go` →
 `task gen` → 複製 `pkgs/ordering` 結構寫 `provider.go`（`Subscriptions` 自己的 named type）→ `.golangci.yml` 加該 BC 的 layer block 與
 `bc-isolation-<bc>`，並把它加進其他 BC / shared / apps 的 deny（`pkg` 是 prefix match，不能用 `*`）→ `apps/rpc` 的 `NewRoutes` /
 `NewDocs` / `NewPoisonService` 的 schema 清單加它、`apps/{rpc,worker}/wire.go` 加 `ProviderSet`、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions`、`poison.go` 的 `schemas` 加它（沒有 event 的 BC 如 identity：router / poison 都不加，只有 operator 子命令才進 `apps/worker` 的獨立 injector；payment 是唯一例外，Subscriptions 掛在自己的 composition root `apps/payment-worker`〔與切片 2 前的 `payment-rpc consume`〕，因為 provider 憑證不能進 `apps/worker`）→ `task wire` →

@@ -1361,5 +1361,132 @@ expect_eq "affected: consume.go moved from payment-rpc to payment-worker selects
   "$(aff apps/payment-rpc/consume.go apps/payment-worker/consume.go)"
 expect_match "release images: ci.yml's release-snapshot job smokes the payment-worker image" "scripts/image-smoke.sh payment-worker" "$(cat "$src/.github/workflows/ci.yml")"
 
+# ── MODULES is derived from go.work; check-modules.sh refuses go.work paths it cannot carry (#413) ──────────────
+# lint / test / cover / tidy loop over Taskfile.yml's MODULES. It used to be a second hand-kept list, and a module only
+# in go.work was silently never linted or tested (apps/payment-worker, #412); five rounds of a gate comparing the two
+# each hit a path the text channel between them could not carry. MODULES is now `go work edit -json | jq` of go.work,
+# so a module added there is iterated by every per-module task, and scripts/check-modules.sh (task check-work-sync,
+# CI work-sync) only refuses the go.work shapes the derivation cannot carry. Skipped without go / jq / task on PATH like
+# the other optional cases — but never in CI ($CI is set on GitHub Actions), where a missing tool must be a red run, not
+# a skipped gate (the scripts-test job runs ./.github/actions/setup for go + task; jq is on the ubuntu runner image).
+if [ -n "${CI:-}" ] || { command -v go >/dev/null 2>&1 && command -v task >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; }; then
+cm="$src/scripts/check-modules.sh"
+# gwrun <name> <go.work body>: runs the check on a throwaway go.work; sets $rc and $out.
+gwrun() {
+  local d="$tmp/modules-$1"
+  mkdir -p "$d"
+  printf '%s\n' "$2" > "$d/go.work"
+  rc=0; out=$("$cm" "$d/go.work" 2>&1) || rc=$?
+}
+gw_block='go 1.27
+
+use (
+	./apps/rpc
+	./pkgs/kernel
+	./tools/x
+)'
+gwrun ok "$gw_block"
+expect_eq "check-modules: a go.work of ordinary paths passes" "0" "$rc"
+expect_match "check-modules: a pass names how many modules it saw (non-empty positive control)" "3 modules" "$out"
+gwrun single 'go 1.27
+
+use ./apps/rpc
+use ./pkgs/kernel'
+expect_eq "check-modules: single-line use directives are read" "0" "$rc"
+expect_match "check-modules: single-line use directives are counted" "2 modules" "$out"
+gwrun empty "go 1.27"
+expect_eq "check-modules: an empty go.work fails" "1" "$rc"
+expect_match "check-modules: the empty go.work says so" "go.work lists no modules" "$out"
+# A go.work path outside the allowlist [A-Za-z0-9._/-] (not starting with "-") is refused, shown JSON-quoted: the per-module
+# loops splice it into shell commands (#413 r3 newline / whitespace, r6 `$UNSET`). refused <name> <path as written inside
+# go.work's quotes> <the path's JSON form, as a regex>.
+refused() {
+  gwrun "$1" "go 1.27
+
+use \"./apps/ok\"
+use \"$2\""
+  expect_eq "check-modules: a go.work path with $1 is refused" "1" "$rc"
+  expect_match "check-modules: the refusal for $1 says MODULES cannot carry it" 'has characters outside \[A-Za-z0-9\._/-\].*MODULES cannot carry it' "$out"
+  expect_match "check-modules: the refused $1 path is shown JSON-quoted" "go\\.work module path \"\\./apps/$3\" has" "$out"
+}
+refused newline './apps/a\nb' 'a\\nb'
+refused space './apps/a b' 'a b'
+refused tab './apps/a\tb' 'a\\tb'
+refused nbsp $'./apps/a\xc2\xa0b' $'a\xc2\xa0b'
+refused dollar './apps/a$UNSET' 'a\$UNSET'
+refused squote "./apps/a'b" "a'b"
+refused backtick './apps/a`b' 'a`b'
+refused semicolon './apps/a;b' 'a;b'
+refused ampersand './apps/a&b' 'a&b'
+refused star './apps/a*' 'a\*'
+gwrun leading-dash 'go 1.27
+
+use "./apps/ok"
+use "./-x"'
+expect_eq "check-modules: a go.work path starting with - (an option to cd) is refused" "1" "$rc"
+expect_match "check-modules: the refused leading-dash path is shown JSON-quoted" 'go\.work module path "\./-x" has' "$out"
+gwrun plain 'go 1.27
+
+use (
+	./apps/a.b
+	./pkgs/x_y-z
+	./tools/Z9
+)'
+expect_eq "check-modules: dots, underscores, dashes and digits inside a path are accepted" "0" "$rc"
+rc=0; out=$("$cm" "$tmp/no-such-go.work" 2>&1) || rc=$?
+expect_eq "check-modules: an unreadable go.work fails" "1" "$rc"
+rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
+expect_eq "check-modules: this repo's go.work passes" "0" "$rc"
+expect_match "check-modules: this repo's check saw a non-empty set" "[1-9][0-9]* modules" "$out"
+# A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
+tools_without() {
+  local bindir="$tmp/toolbin-$1" t
+  mkdir -p "$bindir"
+  for t in bash dirname go jq; do
+    [ "$t" = "$1" ] || { [ -e "$bindir/$t" ] || ln -s "$(command -v "$t")" "$bindir/$t" 2>/dev/null || true; }
+  done
+  echo "$bindir"
+}
+for missing in go jq; do
+  d="$tmp/modules-no-$missing"; mkdir -p "$d"
+  printf '%s\n' "$gw_block" > "$d/go.work"
+  rc=0; out=$(PATH=$(tools_without "$missing") "$(command -v bash)" "$cm" "$d/go.work" 2>&1) || rc=$?
+  expect_eq "check-modules: without $missing the check fails" "1" "$rc"
+  expect_match "check-modules: without $missing the failure names it" "$missing not found" "$out"
+done
+
+# MODULES is derived from go.work: the real Taskfile.yml and a go.work with one more `use`, run through `task --dry`
+# (dry still resolves vars). A module added to go.work only is iterated by every per-module task.
+d="$tmp/modules-derived"; mkdir -p "$d"
+cp "$src/Taskfile.yml" "$d/Taskfile.yml"
+cp -R "$src/scripts" "$d/scripts"
+cp "$src/go.work" "$d/go.work"
+printf '\nuse ./apps/brand-new\n' >> "$d/go.work"
+for t in lint test tidy; do
+  rc=0; out=$(cd "$d" && task --dry "$t" 2>&1) || rc=$?
+  expect_match "derived modules: task $t runs for an existing module (positive control)" 'cd pkgs/kernel' "$out"
+  expect_match "derived modules: task $t iterates a module only go.work lists" 'cd apps/brand-new' "$out"
+done
+# The reviewer's r6 case from the real entry: a module directory named `apps/a$UNSET` beside `apps/a`. With the path spliced
+# unquoted into `cd`, the shell expanded $UNSET (empty) and `task test` entered apps/a twice, passed, and never tested the
+# other module. Two real Go modules, one test each; `task test` must fail, not pass having run only the first.
+d="$tmp/modules-dollar"; mkdir -p "$d/apps/a" "$d/apps/a\$UNSET"
+cp "$src/Taskfile.yml" "$d/Taskfile.yml"; cp -R "$src/scripts" "$d/scripts"
+printf 'module example.com/base\n\ngo 1.27\n' > "$d/apps/a/go.mod"
+printf 'package a\n\nimport "testing"\n\nfunc TestBase(t *testing.T) {}\n' > "$d/apps/a/a_test.go"
+printf 'module example.com/target\n\ngo 1.27\n' > "$d/apps/a\$UNSET/go.mod"
+printf 'package a\n\nimport "testing"\n\nfunc TestTarget(t *testing.T) {}\n' > "$d/apps/a\$UNSET/a_test.go"
+printf 'go 1.27\n\nuse (\n\t./apps/a\n\t"./apps/a$UNSET"\n)\n' > "$d/go.work"
+rc=0; out=$(cd "$d" && UNSET= task test 2>&1) || rc=$?
+if [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -q 'example.com/target'; then bad "derived modules: task test passed without testing apps/a\$UNSET (it ran apps/a twice)"; else ok; fi
+expect_eq "derived modules: task test fails on a module path it cannot carry" "1" "$rc"
+expect_match "derived modules: the failure names the path" 'apps/a\$UNSET' "$out"
+# A go that cannot read go.work must fail the task, not leave MODULES empty (every per-module loop would iterate nothing).
+mkdir -p "$tmp/failing-go"; printf '#!/bin/sh\necho "go: stub failure" >&2\nexit 1\n' > "$tmp/failing-go/go"; chmod +x "$tmp/failing-go/go"
+rc=0; out=$(cd "$d" && PATH="$tmp/failing-go:$PATH" task --dry lint 2>&1) || rc=$?
+expect_eq "derived modules: a failing go work edit fails the task instead of an empty MODULES" "1" "$rc"
+expect_match "derived modules: the failing task shows go's error" "go: stub failure" "$out"
+fi
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

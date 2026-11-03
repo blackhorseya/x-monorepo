@@ -360,6 +360,7 @@ jobs:
     timeout-minutes: 5 # p90 7s (last 11 days)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup # go + task: the check-modules / derived-MODULES cases run `go work edit` and `task` (jq is on the runner image)
       - run: scripts/test.sh
 
   # ── breaking: warn only (decision: wire-incompatible changes are allowed, but visible) ──
