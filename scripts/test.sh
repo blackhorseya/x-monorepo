@@ -1353,5 +1353,57 @@ expect_eq "release images: the release notes' Images block lists each" "$with_co
   "$(grep -o '^  ghcr\.io/blackhorseya/x-monorepo/[a-z-]*:\$RESOLVED_VERSION' "$src/.github/release-drafter.yml" | sed 's#.*/##; s#:.*##' | words)"
 expect_match "release images: ci.yml's release-snapshot job smokes the payment-rpc image" "scripts/image-smoke.sh payment-rpc" "$(cat "$src/.github/workflows/ci.yml")"
 
+# ── check-modules.sh: Taskfile.yml MODULES == go.work use (#413) ────────────────────────────────
+# lint / test / cover / tidy loop over MODULES, and go.work does not add a module to it: a module only in
+# go.work is silently never linted or tested (apps/payment-worker, #412). The gate compares the two sets;
+# an empty side is a failure, not a pass (empty == empty would be green with both parsers broken).
+cm="$src/scripts/check-modules.sh"
+# modrun <name> <go.work body> <MODULES words>: runs the gate on throwaway files; sets $rc and $out.
+modrun() {
+  local d="$tmp/modules-$1"
+  mkdir -p "$d"
+  printf '%s\n' "$2" > "$d/go.work"
+  printf 'vars:\n  BCS: a b\n  # Every Go module in the workspace (keep in sync with go.work).\n  MODULES: %s\n  APPS: rpc\n' "$3" > "$d/Taskfile.yml"
+  rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
+}
+gw_block='go 1.27
+
+use (
+	./apps/rpc
+	./pkgs/kernel
+	./tools/x
+)'
+modrun same "$gw_block" "pkgs/kernel apps/rpc tools/x"
+expect_eq "check-modules: same sets in a different order pass" "0" "$rc"
+expect_match "check-modules: a pass names how many modules it compared (non-empty positive control)" "3 modules" "$out"
+modrun single "go 1.27
+
+use ./apps/rpc
+use ./pkgs/kernel" "apps/rpc pkgs/kernel"
+expect_eq "check-modules: single-line use directives are read" "0" "$rc"
+expect_match "check-modules: single-line use directives are counted" "2 modules" "$out"
+modrun gw_only "$gw_block" "pkgs/kernel apps/rpc"
+expect_eq "check-modules: a module only in go.work fails" "1" "$rc"
+expect_match "check-modules: go.work-only module is named under its side" "in go.work but not in MODULES: tools/x" "$out"
+modrun mod_only "$gw_block" "pkgs/kernel apps/rpc tools/x pkgs/ghost"
+expect_eq "check-modules: a module only in MODULES fails" "1" "$rc"
+expect_match "check-modules: MODULES-only module is named under its side" "in MODULES but not in go.work: pkgs/ghost" "$out"
+modrun both "$gw_block" "pkgs/kernel apps/rpc pkgs/ghost"
+expect_match "check-modules: both directions are reported in one run (go.work side)" "in go.work but not in MODULES: tools/x" "$out"
+expect_match "check-modules: both directions are reported in one run (MODULES side)" "in MODULES but not in go.work: pkgs/ghost" "$out"
+modrun empty_gw "go 1.27" "pkgs/kernel apps/rpc"
+expect_eq "check-modules: an empty go.work side fails" "1" "$rc"
+expect_match "check-modules: empty go.work side says so" "go.work lists no modules" "$out"
+modrun empty_mod "$gw_block" ""
+expect_eq "check-modules: an empty MODULES side fails" "1" "$rc"
+expect_match "check-modules: empty MODULES side says so" "MODULES lists no modules" "$out"
+modrun empty_both "go 1.27" ""
+expect_eq "check-modules: empty == empty fails, it is not green" "1" "$rc"
+rc=0; out=$("$cm" "$tmp/no-such-go.work" "$tmp/no-such-Taskfile.yml" 2>&1) || rc=$?
+expect_eq "check-modules: unreadable inputs fail" "1" "$rc"
+rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
+expect_eq "check-modules: this repo's go.work and Taskfile.yml agree" "0" "$rc"
+expect_match "check-modules: this repo's check compared a non-empty set" "[1-9][0-9]* modules" "$out"
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
