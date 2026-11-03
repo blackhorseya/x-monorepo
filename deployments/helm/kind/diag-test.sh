@@ -2,9 +2,9 @@
 # What a failed kind run leaves behind (#416): diag.sh and its place in payment-flow.sh, against fake
 # kubectl / helm / curl (no cluster). Cells, each with its own positive control:
 #
-#   D1  diag.sh, everything answers : the WHOLE log of every pod since the given time (no --tail), the previous
-#                                     container's log, the four Postgres reads (sessions, blocked, locks, connections),
-#                                     each read-only and bounded on the server
+#   D1  diag.sh, everything answers : the WHOLE log of every pod since the given time as files (no --tail), the previous
+#                                     container's log, the three Postgres reads (sessions with blocked_by, locks,
+#                                     connections), each read-only, bounded on the server, with no query text
 #   D2  diag.sh, parts fail         : a pod without a log, a failing Postgres read, no pod list: it still exits 0 and
 #                                     still prints everything else (it must not hide the failure it reports on)
 #   D3  payment-flow.sh, real entry : a step fails -> diag.sh ran ONCE, with the run's start time, BEFORE the release was
@@ -121,46 +121,54 @@ run_bounded() {
 
 # ── D1 diag.sh, everything answers ───────────────────────────────────────────
 if only D1; then
+export DIAG_DIR="$tmp/diag1"
 MODE=ok run_bounded 60 "$here/diag.sh" ns "$since"
 [ "$rc" = 0 ] || die "D1: exit $rc, want 0"
 for pod in pod/a pod/b; do
   has "LOG $pod since=$since $nonce" "D1 the log of $pod since the given time"
 done
-has "previous: 2026-11-03T04:18:00Z earlier-instance $nonce" "D1 the previous container's log"
+has "pod/b: the previous container's log: 1 lines in $DIAG_DIR/log-b.previous.txt" "D1 the previous container's log is announced (its text is in the file)"
 has "PODS-$nonce" "D1 pods"; has "EVENTS-$nonce" "D1 events"
 for want in pg_stat_activity pg_blocking_pids pg_locks max_connections; do
   grep -qF "$want" "$tmp/events" || die "D1: no Postgres read of $want"
   has "SQL $nonce:" "D1 the Postgres reads answered"
 done
-n=$(grep -c 'exec deploy/postgres' "$tmp/events" || true); [ "$n" = 4 ] || die "D1: $n Postgres reads, want 4 (sessions, blocked, locks, connections)"
+n=$(grep -c 'exec deploy/postgres' "$tmp/events" || true); [ "$n" = 3 ] || die "D1: $n Postgres reads, want 3 (sessions with blocked_by, locks, connections)"
+# the whole log is in files, not only on the console
+for pod in a b; do grep -qF "LOG pod/$pod since=$since $nonce" "$DIAG_DIR/log-$pod.txt" || die "D1: $DIAG_DIR/log-$pod.txt lacks the log of pod/$pod"; done
+grep -qF "earlier-instance $nonce" "$DIAG_DIR/log-b.previous.txt" || die "D1: no previous container file for pod/b"
+grep -qF "SQL $nonce:" "$DIAG_DIR/postgres.txt" || die "D1: postgres.txt lacks this call's reads"
 grep -q -- '--tail' "$tmp/events" && die "D1: a log was cut with --tail"
 grep -q "statement_timeout = '10s'" "$tmp/events" || die "D1: the Postgres reads are not bounded on the server"
 grep -q 'default_transaction_read_only = on' "$tmp/events" || die "D1: the Postgres reads are not read-only"
 grep -q -- '--request-timeout=30s' "$tmp/events" || die "D1: kubectl calls are not bounded"
-# the text of a query is cut and carries no parameters; the SQL must not select pg_stat_activity.query whole
-grep -q 'left(regexp_replace(query' "$tmp/events" || die "D1: the query text is not cut"
-echo "diag-test ok: D1 the whole log since the start, the previous container, four bounded read-only Postgres reads"
+# the text of a query is SQL as the client sent it: no read selects it, in any spelling
+grep -Eq '(SELECT|,)[[:space:]]*([a-z]+\.)?query([[:space:]]*,|[[:space:]]+FROM)|regexp_replace\(' "$tmp/events" && die "D1: a Postgres read selects the text of a query"
+unset DIAG_DIR
+echo "diag-test ok: D1 the whole log since the start as files, the previous container, three bounded read-only Postgres reads, no query text"
 fi
 
 # ── D2 diag.sh, parts fail ───────────────────────────────────────────────────
 if only D2; then
+export DIAG_DIR="$tmp/diag2"
 MODE=degraded run_bounded 60 "$here/diag.sh" ns "$since"
 [ "$rc" = 0 ] || die "D2: exit $rc, want 0 (diag must not fail the run it reports on)"
-has "diag: no log for pod/a" "D2 a pod without a log is named"
+has "pod/a: diag: no log" "D2 a pod without a log is named"
 has "LOG pod/b since=$since $nonce" "D2 the other pod's log is still there"
 has "diag: 'locks (pg_locks)' failed" "D2 the failing read is named"
 has "SQL $nonce:" "D2 the other reads still ran"
-n=$(grep -c 'exec deploy/postgres' "$tmp/events" || true); [ "$n" = 4 ] || die "D2: $n Postgres reads, want 4 (a failing one must not stop the rest)"
+n=$(grep -c 'exec deploy/postgres' "$tmp/events" || true); [ "$n" = 3 ] || die "D2: $n Postgres reads, want 3 (a failing one must not stop the rest)"
 MODE=nopods run_bounded 60 "$here/diag.sh" ns "$since"
 [ "$rc" = 0 ] || die "D2: no pod list: exit $rc, want 0"
 has "diag: no pod list" "D2 no pod list is said, not silently empty"
 has "SQL $nonce:" "D2 no pod list: Postgres reads still ran"
+unset DIAG_DIR
 echo "diag-test ok: D2 a missing log, a failing read, no pod list: exit 0, the rest still printed"
 fi
 
 # ── D3 payment-flow.sh through the real entry ────────────────────────────────
 if only D3; then
-MODE=ok run_bounded 120 "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml"
+DIAG_DIR="$tmp/diag3" MODE=ok run_bounded 120 "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml"
 [ "$rc" = 1 ] || die "D3: exit $rc, want 1 (the script's own status, not diag's or restore's)"
 has "payment-flow: UpsertProduct: got '500', want '200'" "D3 the step that failed"
 n=$(grep -c '^::group::diag: pods and events' "$tmp/out" || true); [ "$n" = 1 ] || die "D3: diag ran $n times, want exactly once"
@@ -229,7 +237,7 @@ for sg in TERM INT; do
   if only D5; then
     case $sg in TERM) want_rc=143 ;; INT) want_rc=130 ;; esac
     hb="$tmp/hb-$sg"; mkdir -p "$hb"; : > "$tmp/events"
-    res=$(EVENTS="$tmp/events" NONCE="$nonce" HELM_BLOCK="$hb" PATH="$tmp/bin:$PATH" python3 "$tmp/sigrun.py" $sg "$hb/started" 60 \
+    res=$(DIAG_DIR="$tmp/diag5-$sg" EVENTS="$tmp/events" NONCE="$nonce" HELM_BLOCK="$hb" PATH="$tmp/bin:$PATH" python3 "$tmp/sigrun.py" $sg "$hb/started" 60 \
       "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out" || true)
     echo "$res" > "$tmp/out"
     [[ $res == *"signalled=yes"* ]] || die "D5 $sg: the script never reached the waiting helm upgrade ($res)"
@@ -267,7 +275,7 @@ if only D6; then
   took=$((SECONDS - began))
   [ "$rc" = 0 ] || die "D6 deadline: exit $rc, want 0"
   [ "$took" -le 14 ] || die "D6 deadline: took ${took}s with a 6s deadline"
-  has "deadline" "D6 deadline: the console says the collection stopped"
+  has "diag: the 6s deadline was reached" "D6 deadline: the console says the collection stopped"
   got=$(ls "$DIAG_DIR"/log-p*.txt 2>/dev/null | wc -l | tr -d ' ')
   [ "$got" -ge 1 ] && [ "$got" -lt 30 ] || die "D6 deadline: $got of 30 pod logs written; want some, not all (the deadline must cut)"
   unset DIAG_DIR

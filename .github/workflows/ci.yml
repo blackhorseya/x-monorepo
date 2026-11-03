@@ -272,6 +272,16 @@ jobs:
           kubectl -n x-monorepo get all
           kubectl -n x-monorepo describe pods | tail -120
           kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200 || true
+      # payment-flow.sh's diagnosis (kind/diag.sh, run BEFORE the release was restored): every pod's whole log since the
+      # run began, Postgres sessions and locks, as files. $RUNNER_TEMP/kind-diag is diag.sh's default; the console got
+      # only the tails (#420). Short retention: it holds the pods' logs.
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: kind-diag
+          path: ${{ runner.temp }}/kind-diag
+          retention-days: 3
+          if-no-files-found: ignore
 
   # KEDA + an OTLP collector + Prometheus on a cluster of its own and a k6 burst that must scale the
   # worker out on eventbus_consumer_lag and back (task helm-kind-keda). It shares nothing with helm-kind

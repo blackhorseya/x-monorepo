@@ -287,7 +287,7 @@ tasks:
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
 
   helm-check:
-    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers, check-observability.py the payment panels and alert rules, kind/negative-test.sh and kind/diag-test.sh the kind scripts against fake kubectl/helm'
+    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers, check-observability.py the payment panels and alert rules, kind/negative-test.sh and kind/diag-test.sh the kind scripts against fake kubectl/helm (diag-test D7: a real Postgres in docker/podman)'
     vars:
       CHART: deployments/helm/x-monorepo
       KUBECONFORM:
@@ -316,6 +316,8 @@ tasks:
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
+      - sh: command -v docker >/dev/null || command -v podman >/dev/null
+        msg: needs docker or podman (kind/diag-test.sh D7 runs a real Postgres)
 
   helm-kind-up:
     deps: [web-build]
