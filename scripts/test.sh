@@ -1375,7 +1375,7 @@ modules_task='tasks:
     silent: true
     cmds:
       - for: { var: MODULES }
-        cmd: printf '"'"'%s\n'"'"' {{shellQuote .ITEM}}
+        cmd: printf '"'"'%s\0'"'"' {{shellQuote .ITEM}}
 '
 # modrun <name> <go.work body> <MODULES words>: runs the gate on throwaway files; sets $rc and $out.
 modrun() {

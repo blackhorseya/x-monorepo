@@ -45,23 +45,32 @@ if [ -n "$unrepresentable" ]; then
   exit 1
 fi
 in_work=$(printf '%s\n' "$work_json" | jq -r '(.Use // [])[].DiskPath' | canon) || { echo "check-modules: jq could not read the go.work use list" >&2; exit 1; }
-task_out=$(task --silent --taskfile "$taskfile" --dir "$(cd "$(dirname "$taskfile")" && pwd)" modules 2>&1) || {
-  echo "check-modules: task modules failed on $taskfile (it needs a 'modules' task that prints the items of for: { var: MODULES }, one per line): $task_out" >&2
+# The Taskfile's `modules` task prints the items `for: { var: MODULES }` iterates, each terminated by NUL, so Task's own
+# splitting decides what an item is (Unicode whitespace included; a YAML list item may even hold a newline) and nothing
+# is split here but at the NUL (#413 r4, r5). An item with a control character is refused like a go.work path is, shown
+# JSON-quoted. Read from a file: a shell variable cannot hold NUL.
+items_file=$(mktemp) || { echo "check-modules: mktemp failed" >&2; exit 1; }
+trap 'rm -f "$items_file"' EXIT
+task --silent --taskfile "$taskfile" --dir "$(cd "$(dirname "$taskfile")" && pwd)" modules >"$items_file" 2>"$items_file.err" || {
+  echo "check-modules: task modules failed on $taskfile (it needs a 'modules' task that prints the items of for: { var: MODULES }, each NUL-terminated): $(cat "$items_file.err")" >&2
+  rm -f "$items_file.err"
   exit 1
 }
-# The Taskfile's `modules` task prints the items `for: { var: MODULES }` iterates, one per line, so Task's own
-# splitting (Unicode whitespace included) decides what the items are and no splitting is done here (#413 r4). An item
-# with a control character is refused like a go.work path is, shown JSON-quoted.
+rm -f "$items_file.err"
 bad_item=""
-while IFS= read -r item; do
-  case "$item" in *[[:cntrl:]]*) bad_item="$bad_item$(printf '%s' "$item" | jq -Rs '.')"$'\n' ;; esac
-done <<<"$task_out"
+task_items=""
+while IFS= read -r -d '' item; do
+  case "$item" in
+    *[[:cntrl:]]*) bad_item="$bad_item$(printf '%s' "$item" | jq -Rs '.')"$'\n' ;;
+    *) task_items="$task_items$item"$'\n' ;;
+  esac
+done <"$items_file"
 if [ -n "$bad_item" ]; then
   echo "check-modules: MODULES has an item with control characters:" >&2
   printf '  %s' "$bad_item" >&2
   exit 1
 fi
-in_task=$(printf '%s\n' "$task_out" | canon)
+in_task=$(printf '%s' "$task_items" | canon)
 
 # count: number of lines in $1 (0 for the empty string).
 count() { if [ -z "$1" ]; then echo 0; else printf '%s\n' "$1" | wc -l | tr -d ' '; fi; }
