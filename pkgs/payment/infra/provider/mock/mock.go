@@ -22,6 +22,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/providerfail"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/idgen"
 )
 
@@ -105,22 +106,36 @@ func (x *Provider) CheckoutValidity() time.Duration { return x.opts.CheckoutTTL 
 
 func (x *Provider) WebhookRedeliveryWindow() time.Duration { return x.opts.RedeliveryWindow }
 
+// unavailable is port.ErrProviderUnavailable tagged with why a call failed, read from the context and
+// the error's chain only: the error's text (the store's, the driver's) is never looked at, never kept.
+func unavailable(c context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(c.Err(), context.DeadlineExceeded) {
+		return providerfail.Unavailable(providerfail.Deadline)
+	}
+
+	return providerfail.Unavailable(providerfail.Other)
+}
+
 // enter is what every call starts with: the injected latency, then the injected fault.
 func (x *Provider) enter(c context.Context, op string) error {
 	if x.opts.Latency > 0 {
 		select {
 		case <-time.After(x.opts.Latency):
 		case <-c.Done():
-			return port.ErrProviderUnavailable
+			return unavailable(c, c.Err())
 		}
 	}
 	if x.opts.Fault != nil && x.opts.Fault(op) != nil {
-		return port.ErrProviderUnavailable
+		return providerfail.Unavailable(providerfail.Fault)
 	}
 	if x.opts.FaultsFromStore {
 		// a store that cannot answer fails the call as well: "no fault" must never be the shape of "unknown"
-		if on, err := x.store.Faulted(c, op); err != nil || on {
-			return port.ErrProviderUnavailable
+		on, err := x.store.Faulted(c, op)
+		if err != nil {
+			return unavailable(c, err)
+		}
+		if on {
+			return providerfail.Unavailable(providerfail.Fault)
 		}
 	}
 
@@ -152,7 +167,7 @@ func (x *Provider) CreateCheckout(c context.Context, req dto.ProviderCheckoutInp
 
 	co := Checkout{PaymentID: req.PaymentID, Amount: req.Amount, URL: "https://mock-pay.invalid/checkout/" + ref, ExpiresAt: ends}
 	if err = x.store.Create(c, ref, co); err != nil {
-		return dto.ProviderCheckoutOutput{}, port.ErrProviderUnavailable // the store's own text stays inside
+		return dto.ProviderCheckoutOutput{}, unavailable(c, err) // the store's own text stays inside
 	}
 
 	return dto.ProviderCheckoutOutput{Ref: ref, URL: co.URL, ExpiresAt: co.ExpiresAt}, nil
@@ -164,7 +179,10 @@ func (x *Provider) GetPayment(c context.Context, ref string) (dto.ProviderPaymen
 	}
 
 	co, ok, err := x.store.Get(c, ref)
-	if err != nil || !ok {
+	if err != nil {
+		return dto.ProviderPaymentOutput{}, unavailable(c, err)
+	}
+	if !ok {
 		return dto.ProviderPaymentOutput{}, port.ErrProviderUnavailable
 	}
 	if !co.Paid {
@@ -179,7 +197,11 @@ func (x *Provider) CancelCheckout(c context.Context, ref string) error {
 		return err
 	}
 
-	if ok, err := x.store.MarkCancelled(c, ref); err != nil || !ok {
+	ok, err := x.store.MarkCancelled(c, ref)
+	if err != nil {
+		return unavailable(c, err)
+	}
+	if !ok {
 		return port.ErrProviderUnavailable
 	}
 
@@ -192,7 +214,11 @@ func (x *Provider) Refund(c context.Context, req dto.ProviderRefundInput) error 
 	}
 
 	// asking again with the same key refunds nothing twice; a checkout nobody paid cannot be refunded
-	if ok, err := x.store.Refund(c, req.Ref, req.IdempotencyKey); err != nil || !ok {
+	ok, err := x.store.Refund(c, req.Ref, req.IdempotencyKey)
+	if err != nil {
+		return unavailable(c, err)
+	}
+	if !ok {
 		return port.ErrProviderUnavailable
 	}
 

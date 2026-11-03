@@ -18,12 +18,22 @@
 #   9  payment-rpc stopped: ordering and the reservation go on; payment operations answer 503; the same rpc pods work
 #      again when it is back
 # Needs kubectl + helm + curl + jq. Exits non-zero (with the pods' state) when anything is off.
+# Unless it runs to its end, diag.sh (every pod's log since this run began as files, Postgres sessions and locks) runs
+# first, before the release is restored: restoring replaces the pods and with them their logs (#416). That includes TERM,
+# INT and HUP (a cancelled CI job): the slow children (helm --wait, kubectl wait / rollout status) are started in the
+# background and waited for, because bash runs a trap only after a FOREGROUND child returns; the handler stops the child,
+# the exit status is 128 + the signal, and the exit trap diagnoses, then restores (#420).
 set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+flow_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 ns=$1 release=$2 chart=$3 values=$4 flow=$5
 rport=${FLOW_RPC_PORT:-18094} sport=${FLOW_SERVE_PORT:-18095}
 api="http://127.0.0.1:$rport/api" serve="http://127.0.0.1:$sport"
 pfs=""
 body=""
+cur=""        # pid of the slow child being waited for (helm, kubectl wait / rollout)
+finished=""   # set only when the flow ran to its end: any other way out is diagnosed
+slow() { "$@" & cur=$!; local rc=0; wait "$cur" || rc=$?; cur=""; return "$rc"; }
 
 fail() { echo "payment-flow: $*" >&2; kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true; exit 1; }
 restore() {
@@ -31,10 +41,29 @@ restore() {
   kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null 2>&1 || true
   helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true
 }
-trap restore EXIT
+on_signal() { # <exit status>: stop the waited-for child, then leave through the exit trap (diagnose, restore)
+  trap '' TERM INT HUP   # a second signal must not cut the diagnosis or the restore short
+  # the child and ITS children (a wrapper around helm / kubectl leaves its own child behind otherwise)
+  if [ -n "$cur" ]; then
+    for c in $(pgrep -P "$cur" 2>/dev/null || true); do kill "$c" 2>/dev/null || true; done   # explicit pids, never a pattern
+    kill "$cur" 2>/dev/null || true; wait "$cur" 2>/dev/null || true; cur=""
+  fi
+  exit "$1"
+}
+trap 'on_signal 143' TERM
+trap 'on_signal 130' INT
+trap 'on_signal 129' HUP
+on_exit() { # the script leaves with the status it had on the way in
+  local rc=$?
+  trap '' TERM INT HUP
+  [ -n "$finished" ] || "$here/diag.sh" "$ns" "$flow_start" >&2 || true
+  restore
+  exit "$rc"
+}
+trap on_exit EXIT
 
 up() { # up [extra helm args]: the release with the flow overlay, the switch as asked
-  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" -f "$flow" "$@" --wait --timeout 4m >/dev/null || fail "helm upgrade did not become ready"
+  slow helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" -f "$flow" "$@" --wait --timeout 4m >/dev/null || fail "helm upgrade did not become ready"
   forwards
 }
 forwards() {
@@ -229,7 +258,7 @@ echo "payment-flow 8: switch on->off: the CONFIRMED order with an open checkout 
 
 # 9 ── payment-rpc stopped ───────────────────────────────────────────────────────────────────────────────
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=0 >/dev/null
-kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null 2>&1 || true
+slow kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null 2>&1 || true
 rpc_pods_before=$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}')
 sku="flow-down-$(date +%s)"
 as_admin catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}" >/dev/null
@@ -239,7 +268,7 @@ od=$(jq -r .order.id <<<"$body")
 wait_order "$od" ORDER_STATUS_CONFIRMED
 as_shopper payment.v1.PublicPaymentService/StartPayment "{\"order_id\":\"$od\"}"; want "StartPayment with payment-rpc stopped" "$res" "503 payment.unavailable"
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null
-kubectl -n "$ns" rollout status "deploy/$release-payment-serve" "deploy/$release-payment-consume" --timeout=2m >/dev/null || fail "payment-rpc did not come back"
+slow kubectl -n "$ns" rollout status "deploy/$release-payment-serve" "deploy/$release-payment-consume" --timeout=2m >/dev/null || fail "payment-rpc did not come back"
 forwards
 with_payment "$od"   # consume turns the OrderConfirmed that waited into the payment; the rpc pods were never restarted
 out=$(mock pay --order "$od" --deliver "$hook") || fail "mock pay after recovery"
@@ -247,4 +276,5 @@ wait_order "$od" ORDER_STATUS_COMPLETED
 want "rpc pods across the outage (names and restarts)" "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}')" "$rpc_pods_before"
 echo "payment-flow 9: payment-rpc stopped: the order was reserved and CONFIRMED, StartPayment answered 503 payment.unavailable; back again, the same rpc pods paid it to COMPLETED"
 
+finished=1
 echo "payment-flow ok"
