@@ -1544,6 +1544,18 @@ expect_match "check-modules: the refused list item is shown JSON-escaped, as one
 modrun_tf list_ok "$two_uses" 'vars:
   MODULES: ["apps/a", "b"]'
 expect_eq "check-modules: a YAML list MODULES equal to go.work passes" "0" "$rc"
+# MODULES is derived from go.work, not kept beside it (#413 r5: five rounds of a gate between two hand-kept lists, each
+# hitting a path the text channel between them could not carry). A module added to go.work only is iterated by every
+# per-module task: the real Taskfile.yml and a go.work with one more `use`, run through `task --dry` (dry still resolves vars).
+d="$tmp/modules-derived"; mkdir -p "$d"
+cp "$src/Taskfile.yml" "$d/Taskfile.yml"
+cp "$src/go.work" "$d/go.work"
+printf '\nuse ./apps/brand-new\n' >> "$d/go.work"
+for t in lint test tidy; do
+  rc=0; out=$(cd "$d" && task --dry "$t" 2>&1) || rc=$?
+  expect_match "derived modules: task $t runs for an existing module (positive control)" 'cd pkgs/kernel' "$out"
+  expect_match "derived modules: task $t iterates a module only go.work lists" 'cd apps/brand-new' "$out"
+done
 # A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
 tools_without() {
   local bindir="$tmp/toolbin-$1" t
