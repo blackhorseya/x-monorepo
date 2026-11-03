@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/mapper"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/ownership"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/port"
+	"github.com/blackhorseya/x-monorepo/pkgs/payment/application/providerfail"
 	"github.com/blackhorseya/x-monorepo/pkgs/payment/domain/payment"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
+
+// opCreateCheckout names the provider call in the log; the same word the mock's fault switch uses.
+const opCreateCheckout = "create_checkout"
 
 // saveAttempts bounds the reload-and-retry when another writer changed the payment between the load
 // and the save of one StartPayment.
@@ -62,12 +67,17 @@ func (uc *StartPayment) Execute(c context.Context, in dto.StartPaymentInput) (*d
 		return mapper.ToPaymentOutput(p), nil
 	}
 
+	asked := time.Now()
 	co, err := uc.provider.CreateCheckout(ctx, dto.ProviderCheckoutInput{
 		PaymentID: p.ID().String(), OrderID: p.OrderID(), Amount: mapper.ToMoneyOutput(p.Amount()),
 		ExpiresAt: p.ExpiresAt(), // one checkout for the whole window: it ends with it
 	})
 	if err != nil {
-		// Whatever it said, the caller and the log get the fixed sentinel only.
+		// Whatever it said, the caller and the log get the fixed sentinel only; the log also gets one of
+		// three fixed classes, so a stall (#416) says whether it was the provider's fault or the clock's.
+		ctx.Warn("payment provider failed", "op", opCreateCheckout, "class", string(providerfail.Classify(ctx, err)),
+			"order_id", in.OrderID, "elapsed_ms", time.Since(asked).Milliseconds())
+
 		return nil, port.ErrProviderUnavailable
 	}
 

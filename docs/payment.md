@@ -268,6 +268,8 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 
 第一版只有 mock，走 application 的 `PaymentProvider` port（`CreateCheckout`、`GetPayment`、`CancelCheckout`、`Refund`、`VerifyWebhook`）。mock 要能模擬：hosted checkout、webhook 簽章、延遲、重送與亂序（測試與 kind 用）。
 
+**provider 失敗的 log（#416）**：`StartPayment` 的 provider 呼叫失敗時，caller 與 log 拿到的仍是固定的 `port.ErrProviderUnavailable`（#347，不帶 provider 或 driver 的任何文字），但 log 多一筆 WARN `payment provider failed`，欄位只有 `op`（`create_checkout`）、`class`、`order_id`、`elapsed_ms`。`class` 是封閉的三個字：`deadline`（caller 的期限到了，呼叫還在等 provider 或 mock 背後的 store）、`fault`（被注入的 fault，或 `payment-rpc mock fail` 設的）、`other`。分類只看 context 與 error 鏈，從不讀 error 文字（`application/providerfail`）。**範圍**：只有 `StartPayment` 的 `CreateCheckout` 會寫這筆 log；`GetPayment`、`CancelCheckout`、`Refund` 的失敗在 mock 內也帶 class，但沒有 use case 把它寫進 log。`deadline` 只說「等到期限」，不說卡在哪一條 SQL（那要看 Postgres 的 log 與 `diag.sh`，見 `docs/operations.md` kind 一節）。
+
 ### Webhook
 
 1. 普通 HTTP route，不走 Connect，也不走 API key；憑證是**簽章**，用**原始 body** 驗簽（不先 parse 再重組）。
@@ -377,6 +379,7 @@ Payment 端對 `payment_required = false` 的訂單：付款單照建（§6）�
 | 開關對已 `CONFIRMED` 訂單沒有影響 | S3/S6 | §8 | 同一張快照 `true` 的單，開關 `true`／`false` 下 `CompleteOrder`、`CancelOrder`、兩個付款事件結果相同；S6 kind 先開再關。**3B 已有**（真的 worker 入口，`TestWorker_RequirePaymentSnapshot_RealEntry` 的 `payment events:` 三個 case）：開關 `true` 下確認的單由開關預設的 worker 消費付款事件 → `COMPLETED`／`CANCELLED`；預設下確認的單由開關 `true` 的 worker 消費 → 不動，之後仍可 `CompleteOrder`；已取消的單收到遲到的 `PaymentCaptured` 維持 `CANCELLED`。事件走 payment 真的 outbox 表，拒絕以 consumer cursor 觀察（被拒的 attempt 會 rollback，不留 inbox 列）。**S6 已有**（`payment-flow.sh` ⑧，真的 helm upgrade 開→關→開）：開→關：快照 `true` 的單 `CompleteOrder` 仍回 `order.payment_required`、`StartPayment` 回 `payment.disabled`，已開 checkout 的單付款後 `COMPLETED`，沒開的單逾時被 `expire` 取消（T5）；關時新進 `CONFIRMED` 的單快照 `false`、可手動完成；關→開：開關打開前確認的單仍可手動 `CompleteOrder`，且 `StartPayment` 回 `payment.disabled` |
 | 快照的設定與 migration | S1 | §2 | 新進 `CONFIRMED` 的快照等於當下開關；既有訂單 migration 後為 `false`（Postgres） |
 | `PAID` 後不可取消、`CANCELLED` 不復活 | S1/S3 | §2 | domain 與 usecase 測試 |
+| provider 失敗的 log 只有固定分類（#416） | 診斷 | §7 Provider | `TestStartPayment_ProviderFailureLogsAFixedClass`：五種失敗（注入延遲超過期限、store 忙到期限、注入 fault、store 設的 fault、store 其他錯誤）各只有一筆記錄，`op`／`class`／`order_id` 對，log 全文不含放在 provider／driver 文字裡的標記；變異：把錯誤文字放進 log、分類永遠 `other`，都紅。`TestStartPayment_AStalledStoreIsLoggedAsADeadline`（真 Postgres）：持 `mock_checkouts`／`mock_faults` 的 `ACCESS EXCLUSIVE` 鎖，300ms 期限到 → `deadline`，log 不含 driver 文字；放鎖後同一呼叫成功（正控制） |
 | 敏感資料不外洩（#347） | S2/S3 | §7 Webhook 第 6 點 | 以合成敏感標記放進 provider 錯誤、webhook body 與簽章，真入口觸發失敗；caller 錯誤、log、metrics label、span 都不含標記；positive control：標記有進到 fake／請求 |
 | `apps/rpc` 不載入 payment 領域程式 | S4 | §1 | archtest／depguard 負例（比照 `apps/rpc/catalog_split_test.go`） |
 | `payment-rpc` 掛掉時下單與預留照常 | S4/S6 | §1 | kind 故障演練：停 payment-rpc → `CreateOrder` 成功且到 `CONFIRMED`；付款操作失敗；恢復後同一 pod 繼續。**S6 已有**（`payment-flow.sh` ⑨，`require_payment` 開）：`serve` 與 `consume` 縮到 0 個，`CreateOrder` 成功且到 `CONFIRMED`，`StartPayment` 回 503 `payment.unavailable`；恢復後 `consume` 把等著的 `OrderConfirmed` 建成付款單，**同樣的 rpc pod（名稱與重啟次數不變）**繼續付款到 `COMPLETED` |
