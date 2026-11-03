@@ -300,7 +300,15 @@ if only D7; then
     local label=$1; shift
     pgc="diagpg-$$-$RANDOM"
     "$rt" run -d --name "$pgc" -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=app postgres:16-alpine "$@" >/dev/null
-    for _ in $(seq 1 60); do "$rt" exec "$pgc" pg_isready -U app -d app >/dev/null 2>&1 && break; sleep 1; done
+    # The image starts a throwaway server to run its init, stops it, and starts the real one: pg_isready answers during the
+    # first, and the connection is then cut ("terminating connection due to administrator command", seen on CI #417 r1 where
+    # the image had to be pulled). Ready means the line appears TWICE; a server that never gets there is a setup failure.
+    ready=0
+    for _ in $(seq 1 120); do
+      [ "$("$rt" logs "$pgc" 2>&1 | grep -c 'database system is ready to accept connections')" -ge 2 ] && { ready=1; break; }
+      sleep 1
+    done
+    [ "$ready" = 1 ] || die "D7 $label: the Postgres container never became ready (setup failure, not a result)"
     local psql=("$rt" exec -i "$pgc" psql -U app -d app -X -q)
     "${psql[@]}" -v ON_ERROR_STOP=1 -c "create table t(a text)" -c "create unique index on t(a)" -c "insert into t values ('seed')"
     "${psql[@]}" -c "insert into t values ('$secret-u')" -c "insert into t values ('$secret-u')" >/dev/null 2>&1 || true
