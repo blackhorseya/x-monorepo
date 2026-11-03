@@ -10,8 +10,16 @@
 #   D3  payment-flow.sh, real entry : a step fails -> diag.sh ran ONCE, with the run's start time, BEFORE the release was
 #                                     restored (helm upgrade replaces the pods and their logs), and the exit status is the
 #                                     script's own (1), not diag's or restore's
-#   D4  Postgres of the kind cluster: the server log settings that make a lock wait name its holder, and no parameters
+#   D4  Postgres of the kind cluster: the server log settings that make a lock wait name its holder and keep SQL text out
+#   D5  signals, real entry         : TERM and INT while a helm upgrade waits -> diag ran, BEFORE the restore, exit 128+signal,
+#                                     no child of the script left (#420)
+#   D6  bounds                      : many pods x many lines -> the Actions console stays small, the files are complete, and a
+#                                     slow cluster ends at the deadline (#420)
+#   D7  SQL text never leaves       : a real Postgres runs SQL with a synthetic credential literal while a lock is held;
+#                                     nothing diag.sh prints or writes carries it (#420)
 #
+# ONLY=D5,D6 runs just those cells (a RED run of one cell must not be hidden behind another cell's failure).
+
 # Every "output has X" is checked against text the fakes produce for THIS call (a nonce per run), so an empty or
 # stale output cannot pass.
 set -euo pipefail
@@ -22,18 +30,24 @@ trap 'test -z "$WATCHDOG" || kill $WATCHDOG 2>/dev/null; rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
 nonce="n$$-$RANDOM"
 since="2026-11-03T04:17:46Z"
+printf 'secrets:\n  apiKeys: "shopper=kind-shopper-key-0123456789ab,admin=kind-admin-key-0123456789abc:admin"\n' > "$tmp/flow.yaml"
+: > "$tmp/values.yaml"
+only() { [ -z "${ONLY:-}" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 
 # fake kubectl: MODE=ok answers everything; MODE=degraded fails the log of pod/a, the locks read and nothing else;
 # MODE=nopods fails the pod list. Every call is appended to $EVENTS (shared with the fake helm, so order is visible).
 cat > "$tmp/bin/kubectl" <<'K'
 #!/usr/bin/env bash
 echo "kubectl $*" >> "$EVENTS"
+[ -z "${SLOW:-}" ] || sleep "$SLOW"
 args="$*"
 case $args in
   *port-forward*) exit 0 ;;
   *"get pods -o name"*)
     [ "${MODE:-ok}" = nopods ] && { echo "error: the server is currently unable to handle the request" >&2; exit 1; }
-    printf 'pod/a\npod/b\n' ;;
+    if [ -n "${PODCOUNT:-}" ]; then for i in $(seq 1 "$PODCOUNT"); do echo "pod/p$i"; done
+    elif [ -n "${PGC:-}" ]; then printf 'pod/a\npod/postgres-0\n'
+    else printf 'pod/a\npod/b\n'; fi ;;
   *"get pods -o wide"*) echo "PODS-$NONCE" ;;
   *"get events"*) echo "EVENTS-$NONCE" ;;
   *"get pods"*) echo "PODS-$NONCE" ;;
@@ -44,9 +58,20 @@ case $args in
       [ "$pod" = pod/b ] && echo "2026-11-03T04:18:00Z earlier-instance $NONCE"
       exit 0
     fi
+    if [ -n "${PGC:-}" ] && [ "$pod" = pod/postgres-0 ]; then
+      "$RT" logs "$PGC" 2>&1 | sed "s/^/2026-11-03T04:18:02Z /"; exit 0
+    fi
     if [ "${MODE:-ok}" = degraded ] && [ "$pod" = pod/a ]; then echo "unable to retrieve container logs" >&2; exit 1; fi
-    echo "2026-11-03T04:18:01Z LOG $pod since=$st $NONCE" ;;
+    if [ -n "${LOGLINES:-}" ]; then
+      seq 1 "$LOGLINES" | sed "s|^|2026-11-03T04:18:01Z LOG $pod line |; s|\$| $NONCE|"
+    else
+      echo "2026-11-03T04:18:01Z LOG $pod since=$st $NONCE"
+    fi ;;
   *"exec deploy/postgres"*)
+    if [ -n "${PGC:-}" ]; then
+      rest=("$@"); while [ "${rest[0]}" != -- ]; do rest=("${rest[@]:1}"); done; rest=("${rest[@]:1}")
+      exec "$RT" exec -i "$PGC" "${rest[@]}"
+    fi
     last=${args##*-c }
     if [ "${MODE:-ok}" = degraded ] && [[ $last == *pg_locks* ]]; then echo "psql: error: connection to server failed" >&2; exit 2; fi
     echo "SQL $NONCE: $last" ;;
@@ -56,6 +81,11 @@ K
 cat > "$tmp/bin/helm" <<'H'
 #!/usr/bin/env bash
 echo "helm $*" >> "$EVENTS"
+# HELM_BLOCK=<dir>: the FIRST upgrade waits (a helm --wait that does not return), leaving its pid and a marker
+if [ -n "${HELM_BLOCK:-}" ] && [ ! -e "$HELM_BLOCK/started" ]; then
+  echo $$ > "$HELM_BLOCK/helm.pid"; : > "$HELM_BLOCK/started"
+  sleep 120 & wait $!
+fi
 exit 0
 H
 # fake curl: the readiness probes answer; every API call is a 500 (so the first step of payment-flow.sh fails)
@@ -90,6 +120,7 @@ run_bounded() {
 }
 
 # ── D1 diag.sh, everything answers ───────────────────────────────────────────
+if only D1; then
 MODE=ok run_bounded 60 "$here/diag.sh" ns "$since"
 [ "$rc" = 0 ] || die "D1: exit $rc, want 0"
 for pod in pod/a pod/b; do
@@ -109,8 +140,10 @@ grep -q -- '--request-timeout=30s' "$tmp/events" || die "D1: kubectl calls are n
 # the text of a query is cut and carries no parameters; the SQL must not select pg_stat_activity.query whole
 grep -q 'left(regexp_replace(query' "$tmp/events" || die "D1: the query text is not cut"
 echo "diag-test ok: D1 the whole log since the start, the previous container, four bounded read-only Postgres reads"
+fi
 
 # ── D2 diag.sh, parts fail ───────────────────────────────────────────────────
+if only D2; then
 MODE=degraded run_bounded 60 "$here/diag.sh" ns "$since"
 [ "$rc" = 0 ] || die "D2: exit $rc, want 0 (diag must not fail the run it reports on)"
 has "diag: no log for pod/a" "D2 a pod without a log is named"
@@ -123,10 +156,10 @@ MODE=nopods run_bounded 60 "$here/diag.sh" ns "$since"
 has "diag: no pod list" "D2 no pod list is said, not silently empty"
 has "SQL $nonce:" "D2 no pod list: Postgres reads still ran"
 echo "diag-test ok: D2 a missing log, a failing read, no pod list: exit 0, the rest still printed"
+fi
 
 # ── D3 payment-flow.sh through the real entry ────────────────────────────────
-printf 'secrets:\n  apiKeys: "shopper=kind-shopper-key-0123456789ab,admin=kind-admin-key-0123456789abc:admin"\n' > "$tmp/flow.yaml"
-: > "$tmp/values.yaml"
+if only D3; then
 MODE=ok run_bounded 120 "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml"
 [ "$rc" = 1 ] || die "D3: exit $rc, want 1 (the script's own status, not diag's or restore's)"
 has "payment-flow: UpsertProduct: got '500', want '200'" "D3 the step that failed"
@@ -143,8 +176,10 @@ first_helm=$(grep -n '^helm upgrade' "$tmp/events" | head -1 | cut -d: -f1 || tr
 [ "$first_helm" -lt "$first_logs" ] || die "D3: the flow's own helm upgrade did not come first (the fake run did not get as far as it should)"
 [ "$first_logs" -lt "$last_helm" ] || die "D3: the pods' logs were read AFTER the release was restored (helm upgrade replaced them)"
 echo "diag-test ok: D3 a failing step: diag ran once, since $start, before the release was restored; exit 1"
+fi
 
 # ── D4 the kind Postgres writes the server log a lock wait needs ─────────────
+if only D4; then
 # PyYAML is already what deployments/helm/check.py needs, so this adds no tool
 args=$(python3 - "$here/deps.yaml" <<'PY' || true
 import sys, yaml
@@ -154,8 +189,154 @@ for doc in yaml.safe_load_all(open(sys.argv[1])):
 PY
 )
 [ -n "$args" ] || die "D4: the postgres container of deps.yaml has no args"
-for want in "log_lock_waits=on" "deadlock_timeout=1s" "log_min_duration_statement=500" "log_parameter_max_length=0" "log_parameter_max_length_on_error=0"; do
+for want in "log_lock_waits=on" "deadlock_timeout=1s" "log_checkpoints=on" "log_min_error_statement=panic" "log_min_messages=log"; do
   [[ " $args " == *" $want "* ]] || die "D4: postgres args lack $want (have: $args)"
 done
-echo "diag-test ok: D4 postgres logs lock waits (1s), statements over 500ms, and no parameters"
+# a statement log carries SQL text (literals included): the manifest must not turn one on
+for never in log_min_duration_statement log_statement log_duration; do
+  [[ " $args " != *" $never="* ]] || die "D4: postgres args set $never, which writes SQL text to the server log (have: $args)"
+done
+echo "diag-test ok: D4 postgres logs lock waits (1s) and checkpoints, keeps statements and SQL text out of the server log"
+fi
+
+# ── D5 TERM / INT while a helm upgrade waits ─────────────────────────────────
+# python launches the script in a session of its own (a background job of a non-interactive shell ignores SIGINT, and
+# an ignored signal cannot be trapped), signals ONLY the script's pid once the blocked helm says it started, and then
+# reports the exit status and whether anything of that session is still alive.
+cat > "$tmp/sigrun.py" <<'PY'
+import os, signal, subprocess, sys, time
+sig = getattr(signal, "SIG" + sys.argv[1]); marker = sys.argv[2]; cmd = sys.argv[4:]
+p = subprocess.Popen(cmd, start_new_session=True)
+t0 = time.time()
+while not os.path.exists(marker):
+    if p.poll() is not None or time.time() - t0 > 30:
+        print("rc=%s signalled=no" % p.poll()); sys.exit(0)
+    time.sleep(0.1)
+os.kill(p.pid, sig)
+try:
+    rc = p.wait(timeout=int(sys.argv[3]))
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL); p.wait(); print("rc=timeout signalled=yes leftover=?"); sys.exit(0)
+time.sleep(0.5)
+left = 0
+try:
+    os.killpg(p.pid, 0); left = 1; os.killpg(p.pid, signal.SIGKILL)
+except ProcessLookupError:
+    pass
+print("rc=%d signalled=yes leftover=%d" % (rc, left))
+PY
+for sg in TERM INT; do
+  if only D5; then
+    case $sg in TERM) want_rc=143 ;; INT) want_rc=130 ;; esac
+    hb="$tmp/hb-$sg"; mkdir -p "$hb"; : > "$tmp/events"
+    res=$(EVENTS="$tmp/events" NONCE="$nonce" HELM_BLOCK="$hb" PATH="$tmp/bin:$PATH" python3 "$tmp/sigrun.py" $sg "$hb/started" 60 \
+      "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out" || true)
+    echo "$res" > "$tmp/out"
+    [[ $res == *"signalled=yes"* ]] || die "D5 $sg: the script never reached the waiting helm upgrade ($res)"
+    [[ $res == *"rc=$want_rc "* ]] || die "D5 $sg: $res; want rc=$want_rc (128 + the signal)"
+    [[ $res == *"leftover=0"* ]] || die "D5 $sg: a child of the script outlived it ($res)"
+    hp=$(cat "$hb/helm.pid" 2>/dev/null || true)
+    [ -n "$hp" ] || die "D5 $sg: the fake helm left no pid"
+    ! kill -0 "$hp" 2>/dev/null || { kill "$hp" 2>/dev/null; die "D5 $sg: the waiting helm (pid $hp) was left running"; }
+    n=$(grep -c ' logs ' "$tmp/events" || true); [ "$n" -gt 0 ] || die "D5 $sg: diag.sh did not run (no pod log was read)"
+    first_logs=$(grep -n ' logs ' "$tmp/events" | head -1 | cut -d: -f1)
+    last_helm=$(grep -n '^helm upgrade' "$tmp/events" | tail -1 | cut -d: -f1)
+    [ "$first_logs" -lt "$last_helm" ] || die "D5 $sg: diag.sh ran after the restore"
+    [ "$(grep -c '^helm upgrade' "$tmp/events")" -ge 2 ] || die "D5 $sg: the release was not restored (no second helm upgrade)"
+    echo "diag-test ok: D5 $sg while helm upgrade waits: diag before restore, exit $want_rc, the waiting helm stopped, nothing left"
+  fi
+done
+
+# ── D6 bounds ────────────────────────────────────────────────────────────────
+if only D6; then
+  # many pods x many lines: the console stays small, the files are complete
+  export DIAG_DIR="$tmp/diag6"
+  PODCOUNT=30 LOGLINES=5000 run_bounded 120 "$here/diag.sh" ns "$since"
+  [ "$rc" = 0 ] || die "D6: exit $rc, want 0"
+  lines=$(wc -l < "$tmp/out" | tr -d ' ')
+  [ "$lines" -le 4000 ] || die "D6: the console got $lines lines for 30 pods x 5000 lines (150000 in all), want at most 4000"
+  [ -d "$DIAG_DIR" ] || die "D6: no artifact directory at $DIAG_DIR"
+  full=0; for f in "$DIAG_DIR"/log-p*.txt; do [ -e "$f" ] || continue; [ "$(wc -l < "$f" | tr -d ' ')" = 5000 ] && full=$((full + 1)); done
+  [ "$full" = 30 ] || die "D6: $full of 30 pod log files hold all 5000 lines"
+  has "$DIAG_DIR" "D6 the console says where the files are"
+  has "$nonce" "D6 the console shows pod log lines of this call"
+  # a slow cluster: the collection stops at its deadline, says so, still exits 0
+  rm -rf "$DIAG_DIR"
+  began=$SECONDS
+  SLOW=1 PODCOUNT=30 DIAG_DEADLINE=6 run_bounded 120 "$here/diag.sh" ns "$since"
+  took=$((SECONDS - began))
+  [ "$rc" = 0 ] || die "D6 deadline: exit $rc, want 0"
+  [ "$took" -le 14 ] || die "D6 deadline: took ${took}s with a 6s deadline"
+  has "deadline" "D6 deadline: the console says the collection stopped"
+  got=$(ls "$DIAG_DIR"/log-p*.txt 2>/dev/null | wc -l | tr -d ' ')
+  [ "$got" -ge 1 ] && [ "$got" -lt 30 ] || die "D6 deadline: $got of 30 pod logs written; want some, not all (the deadline must cut)"
+  unset DIAG_DIR
+  echo "diag-test ok: D6 30 pods x 5000 lines: $lines console lines, 30 complete files; 6s deadline over a 1s-per-call cluster: ${took}s, $got pods"
+fi
+
+# ── D7 SQL text never leaves ─────────────────────────────────────────────────
+# Two places carry SQL text: pg_stat_activity.query (diag.sh reads it) and the server log (diag.sh passes the pod's log
+# through UNFILTERED: a filter over a text channel misses the next log format, #415). So the first is kept out by what
+# diag.sh selects, the second by the server's own flags in deps.yaml — and both are checked on a real Postgres running SQL
+# with a synthetic credential as a literal, once with leaky flags as the positive control.
+if only D7; then
+  rt=$(command -v docker || command -v podman || true)
+  [ -n "$rt" ] || die "D7: needs docker or podman (a real Postgres is the point of this cell)"
+  secret="sk_live_SYNTHETIC_$nonce"
+  pgc=""; cleanup_pg() { [ -z "$pgc" ] || "$rt" rm -f "$pgc" >/dev/null 2>&1 || true; pgc=""; }
+  trap 'cleanup_pg; test -z "$WATCHDOG" || kill $WATCHDOG 2>/dev/null; rm -rf "$tmp"' EXIT
+  # d7 <label> <postgres flags...>: session H holds a lock on t and runs SQL with the secret as a literal, session W queues
+  # behind it (its own SQL carries the secret), session U violates a unique index with the secret as the key value (an ERROR
+  # whose DETAIL names the value); then diag.sh runs for real against that server.
+  d7() {
+    local label=$1; shift
+    pgc="diagpg-$$-$RANDOM"
+    "$rt" run -d --name "$pgc" -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=app postgres:16-alpine "$@" >/dev/null
+    for _ in $(seq 1 60); do "$rt" exec "$pgc" pg_isready -U app -d app >/dev/null 2>&1 && break; sleep 1; done
+    local psql=("$rt" exec -i "$pgc" psql -U app -d app -X -q)
+    "${psql[@]}" -v ON_ERROR_STOP=1 -c "create table t(a text)" -c "create unique index on t(a)" -c "insert into t values ('seed')"
+    "${psql[@]}" -c "insert into t values ('$secret-u')" -c "insert into t values ('$secret-u')" >/dev/null 2>&1 || true
+    "${psql[@]}" -c "begin; lock table t in access exclusive mode; select '$secret' as s, pg_sleep(40); commit" >/dev/null 2>&1 &
+    local h=$!
+    sleep 1
+    "${psql[@]}" -c "insert into t values ('$secret-w')" >/dev/null 2>&1 &
+    local w=$!
+    sleep 3   # past the 1s lock-wait log of session W
+    export DIAG_DIR="$tmp/diag7-$label"
+    PGC="$pgc" RT="$rt" run_bounded 120 "$here/diag.sh" ns "$since"
+    [ "$rc" = 0 ] || die "D7 $label: exit $rc, want 0"
+    D7_RAW_QUERY=$("${psql[@]}" -At -c "select string_agg(query, ' | ') from pg_stat_activity where query like '%$secret%' and pid <> pg_backend_pid()")
+    D7_RAW_LOG=$("$rt" logs "$pgc" 2>&1 || true)
+    kill "$h" "$w" 2>/dev/null || true; wait "$h" "$w" 2>/dev/null || true
+    D7_SEEN=$(cat "$tmp/out" "$DIAG_DIR"/* 2>/dev/null || true)
+    unset DIAG_DIR
+  }
+  # control: leaky flags. The secret is really there to be found: in pg_stat_activity, in the statement log, and in the
+  # DETAIL of the unique violation.
+  d7 control -c log_min_duration_statement=0 -c log_min_error_statement=error -c log_lock_waits=on -c deadlock_timeout=1s
+  [[ $D7_RAW_QUERY == *"$secret"* ]] || die "D7 control: the secret is not in pg_stat_activity.query (the cell would prove nothing)"
+  [[ $D7_RAW_LOG == *"$secret-w"* ]] || die "D7 control: the secret of a statement is not in the leaky server's log (the cell would prove nothing)"
+  [[ $D7_RAW_LOG == *"Key (a)=($secret-u)"* ]] || die "D7 control: the unique violation's DETAIL does not carry the secret (the cell would prove nothing)"
+  cleanup_pg
+  # the manifest's own flags
+  real=$(python3 - "$here/deps.yaml" <<'PY'
+import sys, yaml
+for doc in yaml.safe_load_all(open(sys.argv[1])):
+    if doc and doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "postgres":
+        print("\n".join(doc["spec"]["template"]["spec"]["containers"][0].get("args", [])))
+PY
+)
+  [ -n "$real" ] || die "D7: no postgres args in deps.yaml"
+  real_args=(); while IFS= read -r a; do real_args+=("$a"); done <<<"$real"
+  d7 manifest "${real_args[@]}"
+  [[ $D7_RAW_QUERY == *"$secret"* ]] || die "D7 manifest: the secret is not in pg_stat_activity.query (the cell would prove nothing)"
+  [[ $D7_RAW_LOG != *"$secret"* ]] || die "D7 manifest: the server log written under deps.yaml's flags carries the synthetic credential"
+  [[ $D7_RAW_LOG == *"still waiting for"* && $D7_RAW_LOG == *"Process holding the lock"* ]] || die "D7 manifest: the server log does not say who holds the lock (the flags no longer help)"
+  [[ $D7_SEEN != *"$secret"* ]] || die "D7 manifest: diag.sh output or files carry the synthetic credential"
+  [[ $D7_SEEN == *"Process holding the lock"* ]] || die "D7 manifest: the holder line did not reach diag's output (the pod log was not collected)"
+  [[ $D7_SEEN == *blocked_by* ]] || die "D7 manifest: the sessions read has no blocked_by column"
+  cleanup_pg
+  echo "diag-test ok: D7 a synthetic credential in running SQL: raw in pg_stat_activity and in a leaky server's log; absent from everything diag.sh prints or writes, and from the log under deps.yaml's own flags (which still name the lock holder)"
+fi
+
 echo "diag-test ok"
