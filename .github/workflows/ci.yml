@@ -324,6 +324,9 @@ jobs:
       # (non-root, read-only rootfs, auth required) the way a release would ship it (#367 slice 5a).
       - name: the payment-rpc image starts and serves
         run: scripts/image-smoke.sh payment-rpc
+      # payment-worker has no listener: its image runs non-root on a read-only rootfs and refuses a start with no postgres.url (#410).
+      - name: the payment-worker image runs and refuses what it cannot serve
+        run: scripts/image-smoke.sh payment-worker
       - name: .goreleaser.yaml's signs command works with this cosign (throwaway key)
         run: scripts/cosign-smoke.sh
       - name: a Rekor v2 409 is re-signed, a 503 is not (#215, real cosign, loopback v2)

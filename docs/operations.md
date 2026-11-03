@@ -9,6 +9,7 @@ task compose-up      # podman compose（沒有 podman 就 docker compose）起 P
 task migrate -- up   # 自動 seed 的 configs/local.yaml 已把 postgres.url 指向它，不用 export
 task run             # app 在本機跑，不進容器
 task worker          # 事件 consumer process（另開一個 terminal）
+task payment-worker  # payment 的事件 consumer（#410；`ordering.require_payment: true` 時要和 `task payment-rpc` 一起跑，讀 configs/payment-rpc.yaml）
 task compose-down    # 連 volume 一起清
 task grafana-reload  # 改了 deployments/docker/grafana/{dashboards/*.json,provisioning/alerting.yaml} 之後
 ```

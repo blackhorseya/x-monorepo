@@ -48,8 +48,8 @@ vars:
   # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
   BCS: ordering inventory identity catalog payment
   # Every Go module in the workspace (keep in sync with go.work).
-  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity pkgs/catalog pkgs/payment apps/catalog-rpc apps/payment-rpc apps/rpc apps/migrate apps/worker tools/stripvalidate
-  APPS: rpc migrate worker catalog-rpc payment-rpc
+  MODULES: pkgs/kernel pkgs/platform pkgs/ordering pkgs/inventory pkgs/identity pkgs/catalog pkgs/payment apps/catalog-rpc apps/payment-rpc apps/payment-worker apps/rpc apps/migrate apps/worker tools/stripvalidate
+  APPS: rpc migrate worker catalog-rpc payment-rpc payment-worker
 
 tasks:
   default:
@@ -499,6 +499,12 @@ tasks:
     deps: [build, payment-config]
     env: { APP_CONFIG: '{{.PAYMENT_CONFIG}}' }
     cmds: ['{{.BIN_DIR}}/payment-rpc serve --require-durable']
+
+  payment-worker:
+    desc: 'build and run ./bin/payment-worker --require-durable with the same file `task payment-rpc` loads (configs/payment-rpc.yaml, gitignored, seeded from configs/payment-rpc.example.yaml; PAYMENT_CONFIG=<file> to use another): payment''s event consumer (OrderConfirmed / OrderCancelled / OrderCompleted, refunds, webhooks), so with ordering.require_payment on a confirmed order gets its payment. Needs Postgres (`task migrate -- up` first: ordering and payment schemas) and the same mock_webhook_secret as `task payment-rpc`. The config file is chosen in the command (an APP_CONFIG already in your environment does not win); APP_* variables already in your environment still override the file, as for every other task'
+    deps: [build, payment-config]
+    cmds:
+      - 'export APP_CONFIG={{shellQuote .PAYMENT_CONFIG}}; {{shellQuote .BIN_DIR}}/payment-worker --require-durable'
 
   worker:
     desc: 'build and run ./bin/worker (event consumers) with configs/local.yaml; needs postgres.url'

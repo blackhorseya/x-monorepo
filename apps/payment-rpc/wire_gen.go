@@ -98,7 +98,7 @@ func Initialize(cfg *config.AppConfig, provider payment.ProviderBuilder) (*serve
 
 // InitializeConsume builds `payment-rpc consume`: the router and payment's consumer use cases,
 // publishing into the outbox (eventbus.ProvidePublisher) like every other BC. No listener, no auth.
-func InitializeConsume(cfg *config.AppConfig, provider payment.ProviderBuilder) (*Consumer, func(), error) {
+func InitializeConsume(cfg *config.AppConfig, provider payment.ProviderBuilder) (*payment.Consumer, func(), error) {
 	worker := cfg.Worker
 	configPostgres := cfg.Postgres
 	oTel := cfg.OTel
@@ -161,14 +161,14 @@ func InitializeConsume(cfg *config.AppConfig, provider payment.ProviderBuilder) 
 	v3 := payment.ProvideProcessWebhook(repository, webhookRepository, eventsPublisher, alerts, clock, transactor, inbox, recorder)
 	webhookReceivedHandler := consumer.NewWebhookReceivedHandler(v3)
 	subscriptions := payment.ProvideSubscriptions(orderConfirmedHandler, orderCancelledHandler, orderCompletedHandler, refundHandler, webhookReceivedHandler)
-	mainConsumer, err := NewConsumer(worker, db, logger, providers, publisher, subscriptions)
+	paymentConsumer, err := NewConsumer(worker, db, logger, providers, publisher, subscriptions)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	return mainConsumer, func() {
+	return paymentConsumer, func() {
 		cleanup3()
 		cleanup2()
 		cleanup()

@@ -522,5 +522,6 @@ playwright-report-payment/
 /apps/catalog-rpc/catalog-rpc
 /apps/migrate/migrate
 /apps/payment-rpc/payment-rpc
+/apps/payment-worker/payment-worker
 /apps/rpc/rpc
 /apps/worker/worker

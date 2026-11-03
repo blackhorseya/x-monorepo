@@ -41,7 +41,7 @@ func Initialize(cfg *config.AppConfig, provider payment.ProviderBuilder) (*serve
 
 // InitializeConsume builds `payment-rpc consume`: the router and payment's consumer use cases,
 // publishing into the outbox (eventbus.ProvidePublisher) like every other BC. No listener, no auth.
-func InitializeConsume(cfg *config.AppConfig, provider payment.ProviderBuilder) (*Consumer, func(), error) {
+func InitializeConsume(cfg *config.AppConfig, provider payment.ProviderBuilder) (*payment.Consumer, func(), error) {
 	wire.Build(
 		wire.FieldsOf(new(*config.AppConfig), "Log", "Postgres", "OTel", "Payment", "Worker"),
 		postgres.NewDB,
