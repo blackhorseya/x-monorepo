@@ -1358,12 +1358,19 @@ expect_match "release images: ci.yml's release-snapshot job smokes the payment-r
 # go.work is silently never linted or tested (apps/payment-worker, #412). The gate compares the two sets;
 # an empty side is a failure, not a pass (empty == empty would be green with both parsers broken).
 cm="$src/scripts/check-modules.sh"
+# The gate asks Task itself for MODULES (any YAML form Task accepts is then compared as Task resolves it, #413 r1) and go for go.work.
+modules_task='tasks:
+  modules:
+    silent: true
+    cmds:
+      - echo "{{.MODULES}}"
+'
 # modrun <name> <go.work body> <MODULES words>: runs the gate on throwaway files; sets $rc and $out.
 modrun() {
   local d="$tmp/modules-$1"
   mkdir -p "$d"
   printf '%s\n' "$2" > "$d/go.work"
-  printf 'vars:\n  BCS: a b\n  # Every Go module in the workspace (keep in sync with go.work).\n  MODULES: %s\n  APPS: rpc\n' "$3" > "$d/Taskfile.yml"
+  printf 'version: "3"\nvars:\n  BCS: a b\n  # Every Go module in the workspace (keep in sync with go.work).\n  MODULES: %s\n  APPS: rpc\n%s' "$3" "$modules_task" > "$d/Taskfile.yml"
   rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
 }
 gw_block='go 1.27
@@ -1404,7 +1411,7 @@ modrun_tf() {
   local d="$tmp/modules-$1"
   mkdir -p "$d"
   printf '%s\n' "$2" > "$d/go.work"
-  printf '%s\n' "$3" > "$d/Taskfile.yml"
+  printf 'version: "3"\n%s\n%s' "$3" "$modules_task" > "$d/Taskfile.yml"
   rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
 }
 gw_two='go 1.27
@@ -1441,6 +1448,32 @@ modrun_tf cont_comment "$gw_two" 'vars:
   # next var is not a continuation
   APPS: rpc'
 expect_eq "check-modules: a comment and the next key after MODULES are not continuation lines" "0" "$rc"
+# Forms a text parser reads differently from Task (all consistent with go.work except where noted).
+modrun_tf quoted "$gw_two" 'vars:
+  MODULES: "apps/rpc pkgs/kernel"'
+expect_eq "check-modules: a quoted MODULES scalar is compared as Task resolves it" "0" "$rc"
+modrun_tf templated "$gw_two" 'vars:
+  CORE: pkgs/kernel
+  MODULES: apps/rpc {{.CORE}}'
+expect_eq "check-modules: a MODULES built from another var is compared as Task resolves it" "0" "$rc"
+modrun_tf templated_extra "$gw_two" 'vars:
+  CORE: pkgs/kernel pkgs/new
+  MODULES: apps/rpc {{.CORE}}'
+expect_eq "check-modules: an extra module hidden in a var MODULES references fails" "1" "$rc"
+expect_match "check-modules: the module behind the var is named" "in MODULES but not in go.work: pkgs/new" "$out"
+modrun quoted_path 'go 1.27
+
+use (
+	"./apps/rpc"
+	./pkgs/kernel
+)' "apps/rpc pkgs/kernel"
+expect_eq "check-modules: a quoted use path in go.work is read as go reads it" "0" "$rc"
+# No `modules` task: the gate cannot ask Task, and must fail rather than compare nothing.
+d="$tmp/modules-no-task"; mkdir -p "$d"
+printf '%s\n' "$gw_two" > "$d/go.work"; printf 'version: "3"\nvars:\n  MODULES: apps/rpc pkgs/kernel\n' > "$d/Taskfile.yml"
+rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
+expect_eq "check-modules: a Taskfile without the modules task fails" "1" "$rc"
+expect_match "check-modules: the missing modules task is named" "modules" "$out"
 rc=0; out=$("$cm" "$tmp/no-such-go.work" "$tmp/no-such-Taskfile.yml" 2>&1) || rc=$?
 expect_eq "check-modules: unreadable inputs fail" "1" "$rc"
 rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
