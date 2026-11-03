@@ -1516,6 +1516,19 @@ expect_eq "check-modules: a tab in a go.work path is refused" "1" "$rc"
 expect_match "check-modules: the refused tab path is shown JSON-escaped" '^  "\./apps/a\\tb"$' "$out"
 modrun ws_clean_among "$gw_block" "pkgs/kernel apps/rpc tools/x"
 expect_eq "check-modules: ordinary paths still pass beside the refusal rule" "0" "$rc"
+# Task splits MODULES on Unicode whitespace too (for: { var: MODULES } iterates "apps/a<NBSP>b" as apps/a and b): the same
+# set is green however the list is separated (#413 r4: the gate split on ASCII blanks only and called it a difference).
+two_uses='go 1.27
+
+use ./apps/a
+use ./b'
+modrun sep_nbsp "$two_uses" $'apps/a\xc2\xa0b'
+expect_eq "check-modules: a MODULES separated by a no-break space equals the same go.work set" "0" "$rc"
+modrun sep_emsp "$two_uses" $'apps/a\xe2\x80\x83b'
+expect_eq "check-modules: a MODULES separated by an em space equals the same go.work set" "0" "$rc"
+modrun sep_nbsp_extra "$two_uses" $'apps/a\xc2\xa0b\xc2\xa0c'
+expect_eq "check-modules: an extra module behind a no-break space still fails" "1" "$rc"
+expect_match "check-modules: the module behind the no-break space is named" 'in MODULES but not in go.work: "c"' "$out"
 # A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
 tools_without() {
   local bindir="$tmp/toolbin-$1" t
