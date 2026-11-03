@@ -1394,43 +1394,45 @@ use ./apps/rpc
 use ./pkgs/kernel'
 expect_eq "check-modules: single-line use directives are read" "0" "$rc"
 expect_match "check-modules: single-line use directives are counted" "2 modules" "$out"
-gwrun amp 'go 1.27
-
-use "./apps/a&b"'
-expect_eq "check-modules: a JSON-escaped character (&) in a use path is decoded and accepted" "0" "$rc"
 gwrun empty "go 1.27"
 expect_eq "check-modules: an empty go.work fails" "1" "$rc"
 expect_match "check-modules: the empty go.work says so" "go.work lists no modules" "$out"
-# A path a for-loop over MODULES (one path per line) cannot carry is refused, shown JSON-quoted (#413 r3).
-refused() { # <name> <path as written inside go.work's quotes> <JSON form shown>
+# A go.work path outside the allowlist [A-Za-z0-9._/-] (not starting with "-") is refused, shown JSON-quoted: the per-module
+# loops splice it into shell commands (#413 r3 newline / whitespace, r6 `$UNSET`). refused <name> <path as written inside
+# go.work's quotes> <the path's JSON form, as a regex>.
+refused() {
   gwrun "$1" "go 1.27
 
 use \"./apps/ok\"
 use \"$2\""
   expect_eq "check-modules: a go.work path with $1 is refused" "1" "$rc"
-  expect_match "check-modules: the refusal for $1 says what a MODULES loop cannot carry" 'whitespace or control characters; a for-loop over MODULES' "$out"
-  expect_match "check-modules: the refused $1 path is shown JSON-escaped" "^  \"\\./apps/$3\"\$" "$out"
+  expect_match "check-modules: the refusal for $1 says MODULES cannot carry it" 'has characters outside \[A-Za-z0-9\._/-\].*MODULES cannot carry it' "$out"
+  expect_match "check-modules: the refused $1 path is shown JSON-quoted" "go\\.work module path \"\\./apps/$3\" has" "$out"
 }
 refused newline './apps/a\nb' 'a\\nb'
 refused space './apps/a b' 'a b'
 refused tab './apps/a\tb' 'a\\tb'
 refused nbsp $'./apps/a\xc2\xa0b' $'a\xc2\xa0b'
-# Shell and template metacharacters: `cd {{.ITEM}}` in the per-module loops re-expands them, so `apps/a$UNSET` entered
-# apps/a and task test passed while never testing the module (#413 r6). Refused like whitespace is, shown JSON-quoted.
-refused_chars() { # <name> <path as written inside go.work's quotes> <JSON form shown>
-  gwrun "$1" "go 1.27
+refused dollar './apps/a$UNSET' 'a\$UNSET'
+refused squote "./apps/a'b" "a'b"
+refused backtick './apps/a`b' 'a`b'
+refused semicolon './apps/a;b' 'a;b'
+refused ampersand './apps/a&b' 'a&b'
+refused star './apps/a*' 'a\*'
+gwrun leading-dash 'go 1.27
 
-use \"./apps/ok\"
-use \"$2\""
-  expect_eq "check-modules: a go.work path with $1 is refused" "1" "$rc"
-  expect_match "check-modules: the refused $1 path is shown JSON-quoted" "^  \"\\./apps/$3\"\$" "$out"
-}
-refused_chars dollar './apps/a$UNSET' 'a\$UNSET'
-refused_chars squote "./apps/a'b" "a'b"
-refused_chars backtick './apps/a`b' 'a`b'
-refused_chars semicolon './apps/a;b' 'a;b'
-refused_chars star './apps/a*' 'a\*'
-refused_chars leading-dash './-x' '-x'
+use "./apps/ok"
+use "./-x"'
+expect_eq "check-modules: a go.work path starting with - (an option to cd) is refused" "1" "$rc"
+expect_match "check-modules: the refused leading-dash path is shown JSON-quoted" 'go\.work module path "\./-x" has' "$out"
+gwrun plain 'go 1.27
+
+use (
+	./apps/a.b
+	./pkgs/x_y-z
+	./tools/Z9
+)'
+expect_eq "check-modules: dots, underscores, dashes and digits inside a path are accepted" "0" "$rc"
 rc=0; out=$("$cm" "$tmp/no-such-go.work" 2>&1) || rc=$?
 expect_eq "check-modules: an unreadable go.work fails" "1" "$rc"
 rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
