@@ -23,6 +23,10 @@
 #   D6D        (same) the DIAG_DIR variant
 #   D6B        the bound is at the PROCESS boundary: a copy of diag.sh with a direct 100 KB write injected after every
 #              group marker still stays under the budget, and says so
+#   D6P        a caller that CAPTURES the output through a pipe (subprocess.run(stdout=PIPE)) gets EOF and the exit status: the
+#              writer must not wait for its caller to reap diag.sh while the caller waits for EOF (#417 r4)
+#   D6F        the real console is held by the writer ONLY: a producer that writes to the descriptor it inherited (>&3) reaches
+#              nothing (#417 r4)
 #   D6T        TERM while diag.sh collects: exit 143, what was printed before it is flushed, no fifo / writer left
 #   D7  SQL text never leaves       : a real Postgres runs SQL with a synthetic credential literal while a lock is held;
 #                                     nothing diag.sh prints or writes carries it (#420)
@@ -395,6 +399,47 @@ if only D6B; then
   [ "$bytes" -le $((budget + slack)) ] || die "D6B: $hits direct 100 KB writes put $bytes bytes on the console, want at most $((budget + slack))"
   has "console budget" "D6B: the console says the budget was used up"
   echo "diag-test ok: D6B $hits direct 100 KB writes injected into diag.sh: $bytes console bytes (limit $((budget + slack)))"
+fi
+if only D6P; then
+  # the reviewer's reproduction: Popen(stdout=PIPE).communicate() against the unmodified script timed out at 5 s while
+  # poll() already said the script had exited 0. The writer waited for the script's pid to vanish; the caller waited for EOF
+  # before reaping it (a zombie still answers kill -0).
+  cat > "$tmp/pipecap.py" <<'PY'
+import subprocess, sys, time
+t0 = time.time()
+p = subprocess.Popen(sys.argv[1:], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+try:
+    out, _ = p.communicate(timeout=20)
+    print("rc=%d bytes=%d secs=%.1f" % (p.returncode, len(out), time.time() - t0))
+except subprocess.TimeoutExpired:
+    p.kill(); p.communicate()
+    print("rc=%s bytes=? secs=timeout" % p.poll())
+PY
+  res=$(DIAG_DIR="$tmp/diag-P" EVENTS="$tmp/events" NONCE="$nonce" PATH="$tmp/bin:$PATH" DIAG_CONSOLE_BYTES=$budget \
+    python3 "$tmp/pipecap.py" bash "$here/diag.sh" ns "$since")
+  [[ $res == *"secs=timeout"* ]] && die "D6P: a pipe-capturing caller never got EOF ($res): the writer waits for its caller, the caller for the writer"
+  [[ $res == "rc=0 "* ]] || die "D6P: $res; want rc=0"
+  nb=$(sed -n 's/.*bytes=\([0-9]*\).*/\1/p' <<<"$res")
+  [ "${nb:-0}" -gt 0 ] || die "D6P: the caller captured nothing ($res): the output did not reach the pipe"
+  [ "$nb" -le $((budget + slack)) ] || die "D6P: the caller captured $nb bytes, want at most $((budget + slack))"
+  echo "diag-test ok: D6P a caller capturing through a pipe: $res"
+fi
+if only D6F; then
+  # the console descriptor must not be in the producers' hands: inject a direct write to the descriptor diag.sh used to
+  # inherit for it (>&3) right after the redirect
+  mut="$tmp/diag-fd3.sh"
+  awk '{ print } /^exec > "\$fifo_dir\/console" 2>&1/ { print "printf \"%100000s\" X >&3 2>/dev/null; echo hit >> \"$INJECT_HITS\"" }' "$here/diag.sh" > "$mut"
+  chmod +x "$mut"
+  [ "$(grep -c 'INJECT_HITS' "$mut")" = 1 ] || die "D6F: the mutant was not built (the redirect line was not found)"
+  : > "$tmp/hits-f"; export INJECT_HITS="$tmp/hits-f" DIAG_DIR="$tmp/diag-F" DIAG_CONSOLE_BYTES=$budget
+  run_bounded 120 "$mut" ns "$since"
+  unset INJECT_HITS DIAG_DIR DIAG_CONSOLE_BYTES
+  [ "$rc" = 0 ] || die "D6F: exit $rc, want 0"
+  [ "$(wc -l < "$tmp/hits-f" | tr -d ' ')" = 1 ] || die "D6F: the injected write did not run"
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  [ "$bytes" -le $((budget + slack)) ] || die "D6F: a write to the inherited console descriptor put $bytes bytes on the console, want at most $((budget + slack))"
+  has "diag: files in" "D6F: the run itself still printed (through the writer)"
+  echo "diag-test ok: D6F a producer writing to >&3 reaches nothing: $bytes console bytes (limit $((budget + slack)))"
 fi
 if only D6T; then
   # TERM while diag.sh is collecting (a slow cluster keeps it busy): 143, what it had printed is on the console, nothing is left
