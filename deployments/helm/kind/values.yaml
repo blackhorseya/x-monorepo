@@ -49,7 +49,7 @@ worker:
     requests: { cpu: 10m, memory: 32Mi }
 console:
   enabled: true
-# payment-rpc on (docs/payment.md, slice 5c): serve, consume and the expire CronJob on their own ConfigMap and
+# payment-rpc on (docs/payment.md, slice 5c): serve, consume (the payment-worker image) and the expire CronJob on their own ConfigMap and
 # Secret, the Postgres broker although this release's worker uses Redis, and the webhook-only Ingress that
 # payment.sh drives through an ingress-nginx it installs (the controller is not part of the chart). The rate
 # limit is low on purpose so payment.sh can hit it with a handful of requests. ordering.require_payment stays

@@ -188,7 +188,7 @@ tasks:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
       - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
       - go install github.com/yannh/kubeconform/cmd/kubeconform@{{.KUBECONFORM_VERSION}}
-      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/check-negative.sh deployments/helm/kind/*.sh
+      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/check-negative.sh deployments/helm/check-mutants.py deployments/helm/check-chart-bump.py deployments/helm/check-chart-bump.sh deployments/helm/check-chart-bump-test.py deployments/helm/kind/*.sh deployments/helm/kind/*.py
 
   tools:hooks:
     desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
@@ -305,13 +305,19 @@ tasks:
       - deployments/helm/check-observability.py
       # negative.sh's reading of the refusal, against fake kubectl/helm (no cluster): retries, never asserts on a tool error
       - deployments/helm/kind/negative-test.sh
+      # check.py goes red when a payment workload is made unsafe (envFrom, writable rootfs, command, the other app's image), per workload (#422)
+      - deployments/helm/check-mutants.py
+      # payment-upgrade.sh restores the release LAST even when it fails while the background helm still runs (#422)
+      - deployments/helm/kind/upgrade-failure-test.py
+      # the chart's version must rise when its templates or values change: the gate's own cases (CI runs the gate itself on pull requests, #423)
+      - deployments/helm/check-chart-bump-test.py
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
 
   helm-kind-up:
     deps: [web-build]
-    desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster (reused if it exists), images built from the tree (rpc / catalog-rpc / payment-rpc / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) and dex.yaml (Dex dev IdP + CoreDNS rewrite for dex.localtest.me) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
+    desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster (reused if it exists), images built from the tree (rpc / catalog-rpc / payment-rpc / payment-worker / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) and dex.yaml (Dex dev IdP + CoreDNS rewrite for dex.localtest.me) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
     vars:
       CLUSTER: x-monorepo
       NS: x-monorepo
@@ -323,17 +329,17 @@ tasks:
         sh: 'command -v docker >/dev/null && echo docker || echo podman'
     cmds:
       - kind get clusters 2>/dev/null | grep -qx {{.CLUSTER}} || kind create cluster --name {{.CLUSTER}} --wait 2m
-      - for: [rpc, catalog-rpc, payment-rpc, worker, migrate]
+      - for: [rpc, catalog-rpc, payment-rpc, payment-worker, worker, migrate]
         cmd: CGO_ENABLED=0 GOOS=linux GOARCH={{.ARCH}} go build -trimpath -o {{.BIN_DIR}}/kind/linux/{{.ARCH}}/{{.ITEM}} ./apps/{{.ITEM}}
       # Same Dockerfile as the release (context layout <os>/<arch>/<app>); TARGETPLATFORM is set by
       # hand because plain `docker build` / podman do not inject it the way buildx does.
       # `localhost/` prefix: podman qualifies bare names with it anyway, so this is the one
       # spelling docker, podman and the archive loaded into kind all agree on.
-      - for: [rpc, catalog-rpc, payment-rpc, worker, migrate]
+      - for: [rpc, catalog-rpc, payment-rpc, payment-worker, worker, migrate]
         cmd: '{{.DOCKER}} build -q -f deployments/docker/Dockerfile --build-arg APP={{.ITEM}} --build-arg TARGETPLATFORM=linux/{{.ARCH}} -t localhost/x-monorepo/{{.ITEM}}:kind {{.BIN_DIR}}/kind >/dev/null'
       # The console: nginx + web/apps/console/dist (built by the web-build dep), context = that dir.
       - '{{.DOCKER}} build -q -t localhost/x-monorepo/console:kind web/apps/console >/dev/null'
-      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/catalog-rpc:kind localhost/x-monorepo/payment-rpc:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind localhost/x-monorepo/console:kind'
+      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/catalog-rpc:kind localhost/x-monorepo/payment-rpc:kind localhost/x-monorepo/payment-worker:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind localhost/x-monorepo/console:kind'
       - kind load image-archive --name {{.CLUSTER}} {{.BIN_DIR}}/kind/images.tar
       - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f - >/dev/null
       - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null
@@ -360,7 +366,7 @@ tasks:
       # Second pass is an upgrade: pre-upgrade hook re-runs migrate (no-op), pods roll, release stays ready.
       - helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null
       - '{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
-      # payment-rpc: serve / consume / an expire run, the webhook-only Ingress (ingress-nginx is installed there) with its rate limit, and orders reaching CONFIRMED with payment-rpc stopped. Restores the release.
+      # payment-rpc and payment-worker: serve / consume / an expire run, the webhook-only Ingress (ingress-nginx is installed there) with its rate limit, and orders reaching CONFIRMED with payment-rpc stopped. Restores the release.
       - '{{.KIND_DIR}}/payment.sh {{.NS}} x-monorepo'
       # the whole payment flow with ordering.require_payment ON (kind/payment-flow-values.yaml: auth required, two static keys, payment-rpc's mock control): create -> reserved -> CONFIRMED -> StartPayment -> paid -> webhook -> COMPLETED, delayed / repeated / foreign notifications, the customer cancelling and the window running out with the money arriving late (refunded), the reservation-TTL sequence with the provider down, the switch on -> off -> on, payment-rpc stopped. Restores the release.
       - '{{.KIND_DIR}}/payment-flow.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
@@ -368,6 +374,8 @@ tasks:
       - '{{.KIND_DIR}}/negative.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
       # rpc without its catalog: the wait is best effort, CreateOrder / SetStock answer UNAVAILABLE and write nothing, recovery needs no restart.
       - '{{.KIND_DIR}}/outage.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
+      # the upgrade from the chart that runs `payment-rpc consume` (git tag v0.63.3, its ghcr images) to this one (payment-worker): the consumer group payment-rpc.payment is the same, no cursor moves back, every OrderConfirmed is handled exactly once, whether published before, during or after. Restores the release.
+      - '{{.KIND_DIR}}/payment-upgrade.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
       - helm -n {{.NS}} status x-monorepo | head -5
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null

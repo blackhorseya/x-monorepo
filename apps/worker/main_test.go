@@ -487,7 +487,7 @@ func endToEnd(t *testing.T, broker string, rdb goredis.UniversalClient) {
 	}
 	for series, v := range scrape(t, tel.MetricsHandler, "eventbus_inbox_rows") {
 		if strings.Contains(series, `"payment"`) {
-			// payment's own consumer (payment-rpc consume) writes payment.inbox; this process only reads it
+			// payment's own consumer (payment-worker) writes payment.inbox; this process only reads it
 			if v != "0" {
 				t.Fatalf("%s = %s: nothing in this worker consumes into payment.inbox", series, v)
 			}

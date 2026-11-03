@@ -34,17 +34,21 @@ spec:
       serviceAccountName: {{ include "x-monorepo.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      # > 8s handler drain + 10s router close. No probes: consume has no HTTP server (it exits non-zero when
+      # > 8s handler drain + 10s router close. No probes: the consumer has no HTTP server (it exits non-zero when
       # it cannot start and the Deployment restarts it; its health is the eventbus_* gauges over OTLP).
+      # Name, selector labels and ConfigMap are the ones `payment-rpc consume` ran under (#410 slice 2): the
+      # selector of a Deployment cannot change, and the ConfigMap carries worker.consumer_group=payment-rpc, so
+      # the consumer group stays payment-rpc.payment and an upgrade neither replays nor skips events.
       terminationGracePeriodSeconds: {{ int $c.terminationGracePeriodSeconds }}
       containers:
-        - name: payment-rpc
-          image: {{ include "x-monorepo.image" (dict "root" . "app" "payment-rpc") }}
+        - name: payment-worker
+          image: {{ include "x-monorepo.image" (dict "root" . "app" "payment-worker") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-          # An arg, not env: no in-memory consumer (there would be no outbox to read).
-          args: ["consume", "--require-durable"]
+          # An arg, not env: no in-memory consumer (there would be no outbox to read). payment-worker has no
+          # subcommand: --require-durable is its only argument.
+          args: ["--require-durable"]
           terminationMessagePolicy: FallbackToLogsOnError
           # Only the Postgres URL and the provider's credential: no listener, so no service key. Operator extraEnv
           # first (it cannot name APP_AUTH_* / APP_PAYMENT_* / APP_WORKER_* / APP_REDIS_* / APP_POSTGRES_URL /

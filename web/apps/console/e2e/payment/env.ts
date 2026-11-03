@@ -22,6 +22,7 @@ export const BIN = {
   worker: `${bin}/worker`,
   catalog: `${bin}/catalog-rpc`,
   payment: `${bin}/payment-rpc`,
+  paymentWorker: `${bin}/payment-worker`,
 };
 
 /** The database of this stack: a name of its own on the server E2E_DATABASE_URL points at. */

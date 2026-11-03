@@ -96,8 +96,8 @@ func Initialize(cfg *config.AppConfig, provider payment.ProviderBuilder) (*serve
 	}, nil
 }
 
-// InitializeConsume builds `payment-rpc consume`: the router and payment's consumer use cases,
-// publishing into the outbox (eventbus.ProvidePublisher) like every other BC. No listener, no auth.
+// InitializeConsume builds payment's consumer for this module's saga tests. `payment-rpc consume` is gone (#410):
+// the binary that runs it is apps/payment-worker, whose wire.go is the same graph. It is not reachable from main.
 func InitializeConsume(cfg *config.AppConfig, provider payment.ProviderBuilder) (*payment.Consumer, func(), error) {
 	worker := cfg.Worker
 	configPostgres := cfg.Postgres

@@ -425,7 +425,7 @@ groups:
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "46"
 
-      # payment-rpc consume is up (its lag gauge exists) but the expire CronJob has reported nothing for an hour: no
+      # payment-worker is up (its lag gauge exists) but the expire CronJob has reported nothing for an hour: no
       # measurement, which is not the same as no backlog.
       - uid: x-monorepo-payment-reconcile-absent
         title: Payment reconcile gauges absent
@@ -451,7 +451,7 @@ groups:
         execErrState: Error
         labels: { severity: warning, service: payment-rpc }
         annotations:
-          summary: "payment-rpc consume is reporting but the expire CronJob has exported no reconcile gauge for an hour"
+          summary: "payment-worker is reporting but the expire CronJob has exported no reconcile gauge for an hour"
           description: >-
             The CronJob is not running (suspended, failing: kubectl get cronjob/jobs), or its OTLP export does not reach
             the collector (config.otel.endpoint). Without it nothing sweeps: PENDING payments do not expire and money
@@ -489,7 +489,7 @@ groups:
           summary: "{{ $values.A }} PaymentCaptured event(s) hit an order whose snapshot says no payment in the last hour"
           description: >-
             ordering_payment_event_total{effect="unexpected"} should stay 0 (docs/operations.md, "ordering 側"). Look at
-            ordering.require_payment (was it flipped while orders were CONFIRMED?) and at payment-rpc consume (did it open
+            ordering.require_payment (was it flipped while orders were CONFIRMED?) and at payment-worker (did it open
             a payment for an order that should not pay?).
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "50"

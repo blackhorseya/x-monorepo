@@ -11,11 +11,12 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 )
 
-// consumeEntry names this process in the refusals and the log lines of the shared consumer.
-const consumeEntry = "payment-rpc consume"
+// consumeEntry names the consumer the saga tests of this module build (InitializeConsume).
+const consumeEntry = "payment-rpc saga test consumer"
 
-// NewConsumer is `payment-rpc consume`: pkgs/payment's Consumer under this entry's name. The implementation is
-// shared with apps/payment-worker (#410); this command is removed in slice 2.
+// NewConsumer is pkgs/payment's Consumer under the test harness's name. `payment-rpc consume` no longer exists (#410):
+// the process that runs this consumer is apps/payment-worker, which shares the implementation (pkgs/payment/consume.go).
+// This stays only so the saga tests here (serve + expire + the consumer on one database) can build one.
 func NewConsumer(cfg config.Worker, db *gorm.DB, logger *slog.Logger, tel *otel.Providers, publisher message.Publisher, subs payment.Subscriptions) (*payment.Consumer, error) {
 	return payment.NewConsumer(consumeEntry, cfg, db, logger, tel, publisher, subs)
 }

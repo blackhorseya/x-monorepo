@@ -25,7 +25,7 @@ import (
 
 // schemas lists every BC whose poison table and outbox tables the operator commands (`worker poison`,
 // `worker prune`) serve. Adding a BC: add its Schema here too. payment is in the list although the worker
-// runs none of its handlers (payment-rpc consume does): its tables are in the same database and need the
+// runs none of its handlers (payment-worker does): its tables are in the same database and need the
 // same prune and poison handling. Its name comes from the contract's constant, so the worker loads no
 // payment code to name it (docs/payment.md §1).
 var schemas = []string{ordering.Schema, inventory.Schema, paymentv1.Schema}

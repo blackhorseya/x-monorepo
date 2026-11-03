@@ -237,7 +237,7 @@ checksum/secrets: {{ include "x-monorepo.catalogRpc.secretData" . | sha256sum }}
 {{- end -}}
 
 {{/*
-payment-rpc (apps/payment-rpc, docs/payment.md). One image, three workloads (serve, consume, expire), its own
+payment-rpc (apps/payment-rpc, docs/payment.md). Two images, three workloads (serve and expire run payment-rpc, consume runs payment-worker), its own
 ConfigMap and Secret: like catalog-rpc it refuses to start on auth.jwt / auth.oidc.enabled / auth on without
 api_keys, and the release-wide config and Secret carry exactly those for rpc. Everything that could be
 misconfigured fails here, at template time, before a pod can come up serving payments from memory or without

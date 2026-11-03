@@ -183,7 +183,7 @@ func ProvideGetPayment(payments payment.Repository, rec *usecasex.Recorder) rpc.
 	return decorate("payment.get_payment", rec, usecase.NewGetPayment(payments))
 }
 
-// ConsumerProviderSet is what `payment-rpc consume` adds to ProviderSet: the outbox publisher, the
+// ConsumerProviderSet is what `payment-worker` adds to ProviderSet: the outbox publisher, the
 // consumer inbox, the outcome store, the alerts, the consumer use cases (decorated here) and the
 // subscriptions the composition root registers on the router.
 var ConsumerProviderSet = wire.NewSet(
@@ -208,7 +208,7 @@ var ConsumerProviderSet = wire.NewSet(
 	ProvideSubscriptions,
 )
 
-// Subscriptions lists what `payment-rpc consume` handles; the composition root registers them on
+// Subscriptions lists what `payment-worker` handles; the composition root registers them on
 // the router with payment's poison topic. A named type, so wire can tell it from any other BC's.
 type Subscriptions []eventbus.Subscription
 

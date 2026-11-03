@@ -69,7 +69,7 @@ test("a CONFIRMED order that needs payment: Pay opens the checkout, the mock pay
   // the worker reserved the stock and confirmed the order under snapshot true: the Pay card is the proof
   await expect(status(page)).toHaveText("CONFIRMED", { timeout: 45_000 });
   await expect(card(page)).toBeVisible();
-  // The payment is created by payment-rpc consume from the OrderConfirmed event, a hop after the order is
+  // The payment is created by payment-worker from the OrderConfirmed event, a hop after the order is
   // CONFIRMED: a Pay pressed in that gap is answered "no payment for this order" (the customer presses it again).
   // The card shows the payment's status once there is one; wait for it, so the press is the one under test.
   await expect(page.getByTestId("payment-status")).toHaveText("PENDING", { timeout: 30_000 });

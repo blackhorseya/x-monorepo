@@ -45,9 +45,17 @@ def main() -> None:
         if p["type"] == "row":
             break
         inside.append(p)
-    exprs = " ".join(t["expr"] for p in inside for t in p.get("targets", []))
+    exprs_list = [t["expr"] for p in inside for t in p.get("targets", [])]
+    exprs = " ".join(exprs_list)
     for want in ("payment_reconcile_eligible", "payment_reconcile_oldest_unchecked_seconds", "payment_alerts_total", "ordering_payment_event_total"):
         check(want in exprs, f"the Payment row has a panel on {want}")
+    # #410 slice 2: payment's consumer reports as job="payment-worker" (service.name is the executable's), serve and
+    # expire still as "payment-rpc". A panel that selects job="payment-rpc" for a series the consumer writes goes blank
+    # without any error: payment_alerts_total (both) and eventbus_poison_messages (the consumer's) must select both jobs.
+    for e in exprs_list:
+        if ("payment_alerts_total" in e or "eventbus_poison_messages" in e) and "job" in e:
+            check('job=~"payment-rpc|payment-worker"' in e or 'job=~"payment-worker|payment-rpc"' in e,
+                  f"a panel that selects a series payment-worker writes must select its job too: {e}")
     check("eventbus_consumer_lag" in exprs and 'consumer_group=~"payment-rpc' in exprs,
           "the Payment row has the consumer lag of payment-rpc's own consumer group")
     for p in inside:

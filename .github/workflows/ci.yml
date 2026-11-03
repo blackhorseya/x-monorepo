@@ -165,6 +165,11 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with: { version: v4.3.0 }
       - run: task helm-check
+      # The chart's templates / values changed: its version must be higher than the base's (#423). Pull requests only:
+      # on main there is no base. The merge ref is checked out, so this is what the merge would bring.
+      - name: the chart version rises with the chart
+        if: github.event_name == 'pull_request'
+        run: deployments/helm/check-chart-bump.sh "${{ github.base_ref }}"
 
   # The interceptors under traffic: tests/k6/smoke.sh runs the four k6 scripts, each against
   # its own ./bin/rpc on the service Postgres — load thresholds, rate limit at 50 rps (429 +
@@ -419,7 +424,7 @@ jobs:
         env: { E2E_DEX: "1" }
       # The same OIDC specs on a non-default port pair (#383): fixtures must follow E2E_RPC_PORT / E2E_WEB_PORT.
       - run: task web-e2e-ports
-      # The payment flow on the real stack (#367 slice 6): catalog-rpc, payment-rpc serve + consume, rpc and worker on a
+      # The payment flow on the real stack (#367 slice 6): catalog-rpc, payment-rpc serve, payment-worker, rpc and worker on a
       # database of its own made on the postgres service above (psql is on the runner image), no page.route.
       - run: task web-e2e-payment
       - if: failure()

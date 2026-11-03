@@ -9,6 +9,8 @@ The chart derives Kubernetes numbers from the apps' own shutdown behaviour; this
 the only logic in it, so it is the only thing tested here.
 """
 
+import os
+import re
 import sys
 
 import yaml
@@ -397,15 +399,23 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     cc = cs["containers"][0]
     xs = cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]
     xc = xs["containers"][0]
-    for what, c_ in (("serve", sc), ("consume", cc), ("expire", xc)):
-        check(c_["image"].split("/")[-1].startswith("payment-rpc:"), f"payment-rpc {what} runs the payment-rpc image: {c_['image']}")
+    # #410 slice 2: consume runs the payment-worker image (its own binary); serve and expire stay payment-rpc.
+    for what, c_, app in (("serve", sc, "payment-rpc"), ("consume", cc, "payment-worker"), ("expire", xc, "payment-rpc")):
+        check(c_["image"].split("/")[-1].startswith(app + ":"), f"payment {what} runs the {app} image: {c_['image']}")
+        expect(c_["name"], app, f"payment {what} container name")
         check("command" not in c_, f"payment-rpc {what} keeps the image ENTRYPOINT")
         check("envFrom" not in c_, f"payment-rpc {what} has no envFrom (a missing key would be silently skipped)")
         check(c_["securityContext"].get("readOnlyRootFilesystem") is True, f"payment-rpc {what} rootfs read-only")
+    # payment-worker's first published image is 0.63.3 (#410): a chart whose tag (image.tag, else appVersion) is a
+    # lower release points the consumer at an image that does not exist. A non-numeric tag (kind's "kind") is a local build.
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "x-monorepo", "Chart.yaml")) as f_:
+        tag = str(values.get("image", {}).get("tag") or yaml.safe_load(f_)["appVersion"])
+    if re.fullmatch(r"\d+\.\d+\.\d+", tag):
+        check(tuple(int(n_) for n_ in tag.split(".")) >= (0, 63, 3), f"image tag {tag} is older than 0.63.3, the first release with a payment-worker image")
     # The binary refuses to start on a configuration that would serve payments from memory or without
     # required auth, judged on the FINAL effective settings; as a container arg no env var or Secret can change it.
     expect(sc.get("args"), ["serve", "--require-durable"], "payment-rpc serve args")
-    expect(cc.get("args"), ["consume", "--require-durable"], "payment-rpc consume args")
+    expect(cc.get("args"), ["--require-durable"], "payment-worker args (the binary has no subcommand; the flag is an arg, no env var can change it)")
     expect(xc.get("args"), ["expire", "--require-durable"], "payment-rpc expire args")
     for what, c_ in (("serve", sc), ("consume", cc), ("expire", xc)):
         expect(c_.get("terminationMessagePolicy"), "FallbackToLogsOnError", f"payment-rpc {what} terminationMessagePolicy (a refusal stays readable in the Pod status)")
@@ -418,12 +428,16 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     check("service_name" not in pcfg.get("otel", {}), "payment-rpc does not inherit otel.service_name (it would report as rpc)")
     for k in ("http", "postgres", "log", "otel"):
         expect(pcfg.get(k), {kk: vv for kk, vv in values["config"][k].items() if kk != "service_name"}, f"payment-rpc {k} = the release's")
-    expect(pcfg["worker"].get("broker"), "postgres", "payment-rpc consume reads the Postgres outbox only: worker.broker is postgres whatever the release's is")
+    expect(pcfg["worker"].get("broker"), "postgres", "payment-worker reads the Postgres outbox only: worker.broker is postgres whatever the release's is")
     # the consumer group must not match the worker's lag query (worker\..*), or a payment backlog scales the worker
     group = pcfg["worker"]["consumer_group"]
     wgroup = values["config"]["worker"]["consumer_group"]
-    check(group != wgroup and not group.startswith(wgroup + "."), f"payment-rpc consumer_group {group!r} must not fall under the worker's lag query ({wgroup}.*)")
-    check("payment-rpc" == group, f"payment-rpc consumer_group is payment-rpc, got {group!r}")
+    check(group != wgroup and not group.startswith(wgroup + "."), f"payment-workerr_group {group!r} must not fall under the worker's lag query ({wgroup}.*)")
+    check("payment-rpc" == group, f"payment-workerr_group is payment-rpc, got {group!r}")
+    # Upgrade invariant (#410 slice 2): the consumer's cursor is its consumer group. The group the previous chart's
+    # `payment-worker` read under is payment-rpc.payment; payment-worker must read the same one, or a rolling
+    # upgrade starts a new cursor (worker.start_from decides what it skips or replays).
+    expect(group + ".payment", "payment-rpc.payment", "the effective consumer group of payment's consumer")
     pay = pcfg["payment"]
     expect(pay["provider"], "mock", "payment.provider (the first version's only provider)")
     check("upstream" not in pay and "api_key" not in pay and "timeout" not in pay, "payment-rpc's payment section carries nothing of rpc's (upstream / api_key / timeout)")
@@ -489,11 +503,11 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     expect(senv["APP_HTTP_SHUTDOWN_TIMEOUT"], f'{sd["timeoutSeconds"]}s', "payment-rpc serve APP_HTTP_SHUTDOWN_TIMEOUT")
     expect(svc["spec"].get("type", "ClusterIP"), "ClusterIP", "the serve Service is cluster-internal: it carries the internal RPC on the webhook's port")
     expect(svc["spec"]["selector"]["app.kubernetes.io/component"], "payment-serve", "payment-rpc Service selects the serve pods")
-    check("ports" not in cc and "readinessProbe" not in cc and "livenessProbe" not in cc, "payment-rpc consume has no listener, so no ports and no probes")
+    check("ports" not in cc and "readinessProbe" not in cc and "livenessProbe" not in cc, "payment-worker has no listener, so no ports and no probes")
     check("ports" not in xc, "payment-rpc expire has no listener")
-    check(cs["terminationGracePeriodSeconds"] > 18, "payment-rpc consume grace > 18s (8s handler drain + 10s router close)")
-    expect(consume["spec"]["replicas"], pv["consume"]["replicaCount"], "payment-rpc consume replicas (fixed: no autoscaling, docs/operations.md)")
-    check(find(docs, "HorizontalPodAutoscaler", "-payment-consume") is None and find(docs, "ScaledObject", "-payment-consume") is None, "payment-rpc consume is not autoscaled")
+    check(cs["terminationGracePeriodSeconds"] > 18, "payment-worker grace > 18s (8s handler drain + 10s router close)")
+    expect(consume["spec"]["replicas"], pv["consume"]["replicaCount"], "payment-worker replicas (fixed: no autoscaling, docs/operations.md)")
+    check(find(docs, "HorizontalPodAutoscaler", "-payment-consume") is None and find(docs, "ScaledObject", "-payment-consume") is None, "payment-worker is not autoscaled")
     pdb = find(docs, "PodDisruptionBudget", "-payment-serve")
     check((pdb is not None) == (sv["podDisruptionBudget"]["enabled"] and sv["replicaCount"] > 1), "payment-rpc serve PDB iff enabled and more than one replica")
     sm = find(docs, "ServiceMonitor", "-payment-serve")

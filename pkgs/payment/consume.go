@@ -19,7 +19,7 @@ import (
 
 // Consumer is the router that drives payment's handlers (ordering's OrderConfirmed / OrderCancelled /
 // OrderCompleted, payment's own PaymentRefundRequested and WebhookReceived). Two entries run it:
-// apps/payment-worker, and `payment-rpc consume` until it is removed (#410 slice 2). It has no listener
+// apps/payment-worker (`payment-rpc consume` was removed in #410 slice 2; payment-rpc's saga tests build one too). It has no listener
 // and no credentials of its own to check; it needs Postgres (the event tables are the outbox it reads)
 // and, like the other processes, the provider.
 //

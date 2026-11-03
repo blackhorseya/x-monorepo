@@ -5,7 +5,7 @@ import { derivePorts } from "../ports.ts";
 
 // The stack of the "payment" project, as ONE process Playwright starts (webServer, SIGTERM on the way out):
 // it makes a database of its own on the server E2E_DATABASE_URL names, brings migrate up, and runs
-//   catalog-rpc, payment-rpc serve, payment-rpc consume, rpc            (always)
+//   catalog-rpc, payment-rpc serve, payment-worker, rpc                  (always)
 //   worker                                                              (started and switched through the control port)
 // each a real binary of this build. Nothing is scripted: the order is created in the console, reserved by the
 // worker, confirmed under the snapshot the worker's switch says, paid through payment-rpc's own mock control, and
@@ -146,7 +146,7 @@ if (migrate.status !== 0) {
 control.listen(ports.control, "127.0.0.1");
 start("catalog-rpc", BIN.catalog, [], { APP_HTTP_ADDR: `:${ports.catalog}`, APP_AUTH_MODE: "required", APP_AUTH_API_KEYS: `rpc=${CATALOG_KEY}:admin` });
 start("payment-serve", BIN.payment, ["serve"], { ...paymentEnv, APP_HTTP_ADDR: `:${ports.serve}`, APP_AUTH_MODE: "required", APP_AUTH_API_KEYS: `rpc=${PAYMENT_KEY}:admin` });
-start("payment-consume", BIN.payment, ["consume"], { ...paymentEnv, APP_WORKER_CONSUMER_GROUP: "payment-rpc", APP_WORKER_POLL_INTERVAL: "100ms" });
+start("payment-consume", BIN.paymentWorker, [], { ...paymentEnv, APP_WORKER_CONSUMER_GROUP: "payment-rpc", APP_WORKER_POLL_INTERVAL: "100ms" });
 start("rpc", BIN.rpc, [], {
   APP_HTTP_ADDR: `:${ports.rpc}`,
   APP_AUTH_MODE: "required",
