@@ -149,6 +149,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
       - run: task build
+      # which config file each `task` entry hands its binary: PAYMENT_CONFIG / CONFIG / CATALOG_CONFIG must beat a parent APP_CONFIG (#414)
+      - run: scripts/task-config-test.sh
 
   # ── helm: the chart renders under every ci/ profile and its derived numbers hold ──
   helm:

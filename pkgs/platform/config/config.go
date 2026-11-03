@@ -60,7 +60,7 @@ func CheckRequirePayment(o Ordering, p Payment) error {
 }
 
 // Payment configures payment (docs/payment.md). Provider, ReconcileWindow and MockCheckoutTTL are read
-// by apps/payment-rpc only; Upstream, APIKey and Timeout by apps/rpc only (how it reaches payment-rpc).
+// by payment's own processes only (apps/payment-rpc, apps/payment-worker); Upstream, APIKey and Timeout by apps/rpc only (how it reaches payment-rpc).
 type Payment struct {
 	// Upstream is the base URL of payment-rpc, e.g. http://x-monorepo-payment-rpc:80. Read by apps/rpc.
 	// Payment is optional for rpc: unset together with APIKey, the payment API answers
@@ -566,7 +566,7 @@ func (x *AppConfig) ProviderCredentials() []string {
 // naming the settings, never their values. app is the process's name for the message.
 func (x *AppConfig) RejectProviderCredentials(app string) error {
 	if names := x.ProviderCredentials(); len(names) > 0 {
-		return fmt.Errorf("%s: %s is set: a payment provider's credential belongs to payment-rpc alone and this process never needs it; unset it (config file, APP_* env, Secret)", app, strings.Join(names, ", "))
+		return fmt.Errorf("%s: %s is set: a payment provider's credential belongs to payment's own processes (payment-rpc, payment-worker) alone and this process never needs it; unset it (config file, APP_* env, Secret)", app, strings.Join(names, ", "))
 	}
 
 	return nil

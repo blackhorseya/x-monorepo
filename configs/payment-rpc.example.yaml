@@ -2,7 +2,8 @@
 # use and loads it via APP_CONFIG, the way `task catalog-rpc` loads configs/catalog-rpc.yaml; another
 # file: task payment-rpc PAYMENT_CONFIG=<file>. Every key can also be set as APP_<SECTION>_<KEY>;
 # env beats file beats the built-in defaults, as for rpc.
-# This is payment-rpc's own file, like its own ConfigMap in the Helm chart: it never reads
+# This is payment's own file (`task payment-rpc` and `task payment-worker` both load it, so they share one database, one
+# webhook secret and one set of payment.* numbers), like payment-rpc's own ConfigMap in the Helm chart: it never reads
 # configs/local.yaml, whose rpc-only settings (OIDC, JWT, user keys) it would refuse or must not see.
 
 http:
@@ -30,7 +31,7 @@ payment:
   mock_redelivery_window: 72h  # how long the mock says it may resend a notification
   # mock_control: false  # true = `payment-rpc mock pay|notify|fail` exists and the mock reads the faults it sets (kind / tests only)
   # A local dev value, nothing here is a credential (like the dev service key above): --require-durable, which
-  # `task payment-rpc` runs with, refuses an empty or blank secret (every process would sign with a random one of
+  # `task payment-rpc` and `task payment-worker` run with, refuses an empty or blank secret (every process would sign with a random one of
   # its own and serve could not verify what another signed). A deployment sets APP_PAYMENT_MOCK_WEBHOOK_SECRET
   # (the Helm chart does, from payment-rpc's own Secret) and never puts a real one in a file.
   mock_webhook_secret: dev-mock-webhook-secret-0123456789abcdef
@@ -56,5 +57,5 @@ otel:
   # from starting: readyz stays 200.
   endpoint: 127.0.0.1:4317
   insecure: true     # otel-lgtm is plaintext gRPC
-  # keep it empty: the service name is then the executable's (payment-rpc), not rpc's
+  # keep it empty: the service name is then the executable's (payment-rpc, or payment-worker for `task payment-worker`), not rpc's
   service_name: ""

@@ -23,7 +23,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 ```
 
 - **`apps/payment-worker`（#410 切片 1）**：`consume` 的獨立 binary / image，`service.name` 是 `payment-worker`；切片 1 與 `payment-rpc consume` 並存，兩邊共用 `pkgs/payment/consume.go` 的同一份 `Consumer`（不複製），切片 2 才把 chart 的 consume Deployment 切過去並移除 `payment-rpc consume`。**consumer group 不變**：`<worker.consumer_group>.payment`（`payment.ConsumerGroup`，`apps/payment-worker` 的 `TestRun_ConsumerGroupIsPinned` 從 offsets 表量到這個名字）；換名字就是新 group，`worker.start_from: latest` 會跳過切換期間發布的事件。它沒有 listener、auth、identity；拒啟動條件：引數只有 `--require-durable`；`postgres.url` 空白（有無旗標都拒）；`worker.broker` 不是 `postgres`；`payment.*` 不合法（provider、`reconcile_window`、`window`、`webhook_retention`、`expire_*`）；加旗標時 mock provider 的 `payment.mock_webhook_secret` 空白。逐格測試在 `apps/payment-worker/worker_test.go` 的 `TestRun_Refuses`（正向對照 `TestRun_Starts`）。本機 `task payment-worker` 與 `task payment-rpc` 讀同一份 `configs/payment-rpc.yaml`。
-- `apps/payment-rpc` 是新 binary，三個子命令：`serve`（RPC 與 webhook）、`consume`（訂閱 `OrderConfirmed`、`OrderCancelled`、`OrderCompleted`，處理 webhook 事件）、`expire`（CronJob）。自己的 `payment` schema，provider 密鑰只有它持有。
+- `apps/payment-rpc` 是新 binary，三個子命令：`serve`（RPC 與 webhook）、`consume`（訂閱 `OrderConfirmed`、`OrderCancelled`、`OrderCompleted`，處理 webhook 事件）、`expire`（CronJob）。自己的 `payment` schema。provider 密鑰只有 payment 的 process 持有（`payment-rpc`，以及 #410 起的 `payment-worker`），`apps/rpc` 與 `apps/worker` 都不持有。**`payment-worker` 單獨部署（不經 `payment-rpc` 的 Secret／ConfigMap）時要自己配：`postgres.url`、`payment.mock_webhook_secret`（和 `serve` 同一個值；`--require-durable` 下空白就拒啟動）、以及 `payment.*` 的數字（`provider`、`window`、`reconcile_window`、`mock_checkout_ttl`、`mock_redelivery_window`、`webhook_retention`、`expire_*`，啟動時全部驗證）；`worker.*`（`consumer_group`、`broker`、`start_from`…）照常讀；不需要 `auth.*`、`http.*`。**
 - `apps/worker` **不載入** Payment。`apps/rpc` 只依賴 payment 的 `contract/` 與 `adapters/client`，不載入領域程式（同 catalog 的 #320 作法；用 archtest 固定）。
 - `payment-rpc` 掛掉時，只有付款操作回 503，下單與預留不受影響。
 - **剩下的耦合**：Postgres broker 下，Payment 要讀 ordering 的 outbox 表（與 ordering 讀 inventory 的 outbox 同一種耦合）。
@@ -34,7 +34,7 @@ payment-rpc expire（CronJob）──► provider 查狀態 ──► PaymentExp
 
 | 規則（`CLAUDE.md`） | 本設計 | 性質 |
 |---|---|---|
-| 「新增 Bounded Context」清單：`apps/worker` 的 `NewWorker` 收該 BC 的 `Subscriptions` | Payment 的 `Subscriptions` 掛在 `payment-rpc consume`（#410 切片 1 起也有獨立的 `apps/payment-worker`）自己的 router，**不進 `apps/worker`** | **例外**，只限 payment；不改規則。原因：provider 密鑰只有 payment 持有，worker 載入 payment 會讓 worker 也持有 provider 憑證 |
+| 「新增 Bounded Context」清單：`apps/worker` 的 `NewWorker` 收該 BC 的 `Subscriptions` | Payment 的 `Subscriptions` 掛在 `payment-rpc consume`（#410 切片 1 起也有獨立的 `apps/payment-worker`）自己的 router，**不進 `apps/worker`** | **例外**，只限 payment；不改規則。原因：provider 密鑰只有 payment 的 process 持有，worker 載入 payment 會讓 worker 也持有 provider 憑證 |
 | 同清單：`poison.go` 的 `schemas` 加該 BC | **照做**，但只加表名：`apps/worker/poison.go` 的 `schemas`、`apps/rpc/app.go` 的 `NewPoisonService` 清單各加 `payment`。清單目前引用 `ordering.Schema`／`inventory.Schema`（BC 套件的常數）；payment 不能 import `pkgs/payment`（會把領域程式帶進 worker／rpc），所以用不載入領域程式的來源（platform 的字串常數，或 contract 套件） | 規則照走，差別只在表名的來源；見 §9 切片 3 |
 | `apps/rpc` 不載入 catalog（#320） | 同樣不載入 payment，經 `contract/` 的 Connect client 問 `payment-rpc` | 沿用既有規則 |
 | 「decorator 只在 `provider.go` 加」「usecase 不自己開 transaction」 | `StartPayment` 要呼叫 provider，不在 DB transaction 內：走 `decorateNoTx()`，比照 `CreateOrder`（持有 `port.Transactor`，只包住寫入） | **第二個例外**，與 #320 同類（寫入前先打外部服務）。範圍：`StartPayment`、`expire` 的 provider 查詢、退款呼叫 |
@@ -294,7 +294,7 @@ Topic 名稱 = proto 全名（同現有慣例）。下表「欄位」只列要�
 | 啟動拒絕（fail closed） | — | `auth.jwt` 有設、`auth.oidc.enabled`、`auth.mode` 開著但 `auth.api_keys` 空；`--require-durable` 另要求 `auth.mode: required`、`auth.api_keys` 恰好一把且名為 `rpc`、`postgres.url` 不空，以及（mock provider）`payment.mock_webhook_secret` 不是空或全空白——`serve`／`consume`／`expire` 都檢查，external Secret 的 key 在但值是空的 `optional: false` 擋不住；`worker` 與 `rpc` 則在最終設定帶有 provider credential 時拒絕啟動（`docs/operations.md`） | #323：傳 nil 不等於停用 |
 | 沒有的入口 | — | 沒有 streaming RPC（auth 是 unary-only）；沒有 Bearer；沒有 identity key | 加了要另外包 |
 
-`consume`、`expire` 是背景程序，沒有對外 listener；`serve` 與它們共用同一份 provider 密鑰設定，但只有 `serve` 的 webhook route 讀「驗簽金鑰」。
+`consume`（含 `apps/payment-worker`）、`expire` 是背景程序，沒有對外 listener；`serve` 與它們共用同一份 provider 密鑰設定，但只有 `serve` 的 webhook route 讀「驗簽金鑰」。
 
 ## 8. `payment_required` 快照 × 目前開關 × 付款單狀態
 
