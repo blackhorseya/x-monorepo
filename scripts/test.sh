@@ -1457,6 +1457,7 @@ done
 # (dry still resolves vars). A module added to go.work only is iterated by every per-module task.
 d="$tmp/modules-derived"; mkdir -p "$d"
 cp "$src/Taskfile.yml" "$d/Taskfile.yml"
+cp -R "$src/scripts" "$d/scripts"
 cp "$src/go.work" "$d/go.work"
 printf '\nuse ./apps/brand-new\n' >> "$d/go.work"
 for t in lint test tidy; do
@@ -1464,6 +1465,20 @@ for t in lint test tidy; do
   expect_match "derived modules: task $t runs for an existing module (positive control)" 'cd pkgs/kernel' "$out"
   expect_match "derived modules: task $t iterates a module only go.work lists" 'cd apps/brand-new' "$out"
 done
+# The reviewer's r6 case from the real entry: a module directory named `apps/a$UNSET` beside `apps/a`. With the path spliced
+# unquoted into `cd`, the shell expanded $UNSET (empty) and `task test` entered apps/a twice, passed, and never tested the
+# other module. Two real Go modules, one test each; `task test` must fail, not pass having run only the first.
+d="$tmp/modules-dollar"; mkdir -p "$d/apps/a" "$d/apps/a\$UNSET"
+cp "$src/Taskfile.yml" "$d/Taskfile.yml"; cp -R "$src/scripts" "$d/scripts"
+printf 'module example.com/base\n\ngo 1.27\n' > "$d/apps/a/go.mod"
+printf 'package a\n\nimport "testing"\n\nfunc TestBase(t *testing.T) {}\n' > "$d/apps/a/a_test.go"
+printf 'module example.com/target\n\ngo 1.27\n' > "$d/apps/a\$UNSET/go.mod"
+printf 'package a\n\nimport "testing"\n\nfunc TestTarget(t *testing.T) {}\n' > "$d/apps/a\$UNSET/a_test.go"
+printf 'go 1.27\n\nuse (\n\t./apps/a\n\t"./apps/a$UNSET"\n)\n' > "$d/go.work"
+rc=0; out=$(cd "$d" && UNSET= task test 2>&1) || rc=$?
+if [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -q 'example.com/target'; then bad "derived modules: task test passed without testing apps/a\$UNSET (it ran apps/a twice)"; else ok; fi
+expect_eq "derived modules: task test fails on a module path it cannot carry" "1" "$rc"
+expect_match "derived modules: the failure names the path" 'apps/a\$UNSET' "$out"
 # A go that cannot read go.work must fail the task, not leave MODULES empty (every per-module loop would iterate nothing).
 mkdir -p "$tmp/failing-go"; printf '#!/bin/sh\necho "go: stub failure" >&2\nexit 1\n' > "$tmp/failing-go/go"; chmod +x "$tmp/failing-go/go"
 rc=0; out=$(cd "$d" && PATH="$tmp/failing-go:$PATH" task --dry lint 2>&1) || rc=$?
