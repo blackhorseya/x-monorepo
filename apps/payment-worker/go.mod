@@ -170,5 +170,3 @@ replace (
 )
 
 replace github.com/blackhorseya/x-monorepo/pkgs/payment => ../../pkgs/payment
-
-replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory

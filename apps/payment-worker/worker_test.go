@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -200,8 +201,16 @@ func TestRun_Starts(t *testing.T) {
 	pg, _ := workerDB(t)
 	for name, args := range map[string][]string{"without the flag": nil, "with --require-durable": {"--require-durable"}} {
 		t.Run(name, func(t *testing.T) {
+			// No listener: the address http.addr names is held by this test, so a process that tried to serve on it
+			// would fail with "address already in use" instead of running.
+			held, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
 			out := startAndStop(t, args, durableEnv(pg.URL, map[string]*string{
 				"APP_AUTH_MODE": s("off"), "APP_AUTH_API_KEYS": s("console=x:admin,rpc=y:admin"), // serve's auth contract is no business of the consumer
+				"APP_HTTP_ADDR": s(held.Addr().String()),
 			}), 3*time.Second)
 			if out.err != nil || !out.served {
 				t.Fatalf("run(%q) = %+v, want it running until told to stop, then nil", args, out)
