@@ -1399,6 +1399,48 @@ expect_eq "check-modules: an empty MODULES side fails" "1" "$rc"
 expect_match "check-modules: empty MODULES side says so" "MODULES lists no modules" "$out"
 modrun empty_both "go 1.27" ""
 expect_eq "check-modules: empty == empty fails, it is not green" "1" "$rc"
+# modrun_tf <name> <go.work body> <Taskfile.yml body>: same, with the Taskfile written verbatim (YAML continuation forms).
+modrun_tf() {
+  local d="$tmp/modules-$1"
+  mkdir -p "$d"
+  printf '%s\n' "$2" > "$d/go.work"
+  printf '%s\n' "$3" > "$d/Taskfile.yml"
+  rc=0; out=$("$cm" "$d/go.work" "$d/Taskfile.yml" 2>&1) || rc=$?
+}
+gw_two='go 1.27
+
+use (
+	./apps/rpc
+	./pkgs/kernel
+)'
+# Task reads a plain multi-line scalar as one space-joined value (task show prints MODULES=<apps/rpc pkgs/kernel pkgs/new>):
+# the first line alone is not the list.
+modrun_tf cont_extra "$gw_two" 'vars:
+  MODULES: apps/rpc pkgs/kernel
+    pkgs/new
+  APPS: rpc'
+expect_eq "check-modules: a module on a MODULES continuation line is compared (extra fails)" "1" "$rc"
+expect_match "check-modules: the continuation-line module is named" "in MODULES but not in go.work: pkgs/new" "$out"
+modrun_tf cont_same "$gw_two" 'vars:
+  MODULES: apps/rpc
+    pkgs/kernel
+  APPS: rpc'
+expect_eq "check-modules: a consistent multi-line MODULES passes" "0" "$rc"
+expect_match "check-modules: a multi-line MODULES counts every line" "2 modules" "$out"
+modrun_tf cont_folded "$gw_two" 'vars:
+  MODULES: >
+    apps/rpc
+    pkgs/kernel
+    pkgs/new
+  APPS: rpc'
+expect_eq "check-modules: a folded (>) MODULES is compared (extra fails)" "1" "$rc"
+expect_match "check-modules: the folded-scalar module is named" "in MODULES but not in go.work: pkgs/new" "$out"
+modrun_tf cont_comment "$gw_two" 'vars:
+  # Every Go module in the workspace.
+  MODULES: apps/rpc pkgs/kernel
+  # next var is not a continuation
+  APPS: rpc'
+expect_eq "check-modules: a comment and the next key after MODULES are not continuation lines" "0" "$rc"
 rc=0; out=$("$cm" "$tmp/no-such-go.work" "$tmp/no-such-Taskfile.yml" 2>&1) || rc=$?
 expect_eq "check-modules: unreadable inputs fail" "1" "$rc"
 rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
