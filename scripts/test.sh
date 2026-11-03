@@ -1357,6 +1357,9 @@ expect_match "release images: ci.yml's release-snapshot job smokes the payment-r
 # lint / test / cover / tidy loop over MODULES, and go.work does not add a module to it: a module only in
 # go.work is silently never linted or tested (apps/payment-worker, #412). The gate compares the two sets;
 # an empty side is a failure, not a pass (empty == empty would be green with both parsers broken).
+# Like the other optional cases, skipped without go / task / jq on PATH — but never in CI ($CI is set on GitHub Actions),
+# where a missing tool must be a red run, not a skipped gate (the scripts-test job runs ./.github/actions/setup for go + task).
+if [ -n "${CI:-}" ] || { command -v go >/dev/null 2>&1 && command -v task >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; }; then
 cm="$src/scripts/check-modules.sh"
 # The gate asks Task itself for MODULES (any YAML form Task accepts is then compared as Task resolves it, #413 r1) and go for go.work.
 modules_task='tasks:
@@ -1505,6 +1508,8 @@ expect_eq "check-modules: unreadable inputs fail" "1" "$rc"
 rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
 expect_eq "check-modules: this repo's go.work and Taskfile.yml agree" "0" "$rc"
 expect_match "check-modules: this repo's check compared a non-empty set" "[1-9][0-9]* modules" "$out"
+
+fi
 
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
