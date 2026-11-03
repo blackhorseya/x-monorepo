@@ -163,6 +163,12 @@ tasks:
           exit 1
         }
 
+  modules:
+    desc: print MODULES as Task resolves it (scripts/check-modules.sh compares it with go.work)
+    silent: true
+    cmds:
+      - echo "{{.MODULES}}"
+
   check-work-sync:
     desc: go.work and every go.mod agree, and Taskfile MODULES lists exactly go.work's modules
     cmds:

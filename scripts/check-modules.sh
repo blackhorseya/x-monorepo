@@ -6,8 +6,11 @@
 #
 #   scripts/check-modules.sh [go.work] [Taskfile.yml]     # defaults: the repo root's
 #
-# Either side parsing to an empty set is a failure: empty == empty would be green with both parsers broken.
-# Plain bash 3.2 (macOS) and 5 (ubuntu).
+# Neither side is parsed here: go.work is read by `go work edit -json` and MODULES by Task itself (the Taskfile's
+# `modules` task prints {{.MODULES}}), so whatever YAML / template form Task accepts is compared as Task resolves
+# it (#413 review: a text parser read only the first line of a multi-line MODULES). Needs go and task on PATH
+# and fails without them; it never skips. Either side resolving to an empty set is a failure: empty == empty
+# would be green with both readers broken. Plain bash 3.2 (macOS) and 5 (ubuntu).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 gowork=${1:-$root/go.work}
@@ -15,27 +18,19 @@ taskfile=${2:-$root/Taskfile.yml}
 
 [ -r "$gowork" ] || { echo "check-modules: cannot read $gowork" >&2; exit 1; }
 [ -r "$taskfile" ] || { echo "check-modules: cannot read $taskfile" >&2; exit 1; }
+command -v go >/dev/null || { echo "check-modules: go not found on PATH" >&2; exit 1; }
+command -v task >/dev/null || { echo "check-modules: task not found on PATH" >&2; exit 1; }
 
 # words: one module per line, sorted, "./" and trailing "/" dropped.
 words() { sed 's#^\./##; s#/$##' | sed '/^$/d' | sort -u; }
 
-# go.work: `use ./x` and the `use ( ... )` block; // comments dropped.
-in_work=$(awk '
-  { sub(/\/\/.*/, "") }
-  inblock && /^[ \t]*\)/ { inblock = 0; next }
-  inblock { for (i = 1; i <= NF; i++) print $i; next }
-  $1 == "use" && $2 == "(" { inblock = 1; next }
-  $1 == "use" { for (i = 2; i <= NF; i++) print $i }
-' "$gowork" | words)
-# Taskfile.yml: the one `MODULES:` var. Task reads a multi-line scalar (plain or folded `>`) as one space-joined
-# value, so the lines indented deeper than the key belong to it (#413 review: reading only the key line let
-# `MODULES: a` + a `b` continuation line pass while Task lints a and b). # comments and the `>` / `|` header dropped.
-in_task=$(awk '
-  function indent(l) { match(l, /^[ \t]*/); return RLENGTH }
-  function emit(t,   i, n, a) { sub(/[ \t]*#.*/, "", t); n = split(t, a, /[ \t]+/); for (i = 1; i <= n; i++) if (a[i] != "" && a[i] !~ /^[>|][-+]?$/) print a[i] }
-  !found && /^[ \t]*MODULES:/ { found = 1; ki = indent($0); t = $0; sub(/^[ \t]*MODULES:/, "", t); emit(t); next }
-  found { if ($0 ~ /^[ \t]*$/) next; if (indent($0) <= ki) exit; if ($0 ~ /^[ \t]*#/) next; emit($0) }
-' "$taskfile" | words)
+work_json=$(go work edit -json "$gowork") || { echo "check-modules: go work edit -json failed on $gowork" >&2; exit 1; }
+in_work=$(printf '%s\n' "$work_json" | sed -n 's/^[[:space:]]*"DiskPath":[[:space:]]*"\(.*\)",\{0,1\}$/\1/p' | words)
+task_out=$(task --silent --taskfile "$taskfile" --dir "$(cd "$(dirname "$taskfile")" && pwd)" modules 2>&1) || {
+  echo "check-modules: task modules failed on $taskfile (it needs a 'modules' task that prints {{.MODULES}}): $task_out" >&2
+  exit 1
+}
+in_task=$(printf '%s\n' "$task_out" | tr ' \t' '\n\n' | words)
 
 n_work=$(printf '%s' "$in_work" | grep -c . || true)
 n_task=$(printf '%s' "$in_task" | grep -c . || true)
