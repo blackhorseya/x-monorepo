@@ -1486,6 +1486,26 @@ expect_eq "check-modules: a use path with a JSON-escaped character equals the sa
 modrun esc_diff "$esc_gw" 'apps/a\u0026b'
 expect_eq "check-modules: the literal text of the JSON escape is not the module" "1" "$rc"
 expect_match "check-modules: the literal-escape entry is named" "in MODULES but not in go.work: apps/a.u0026b" "$out"
+# MODULES is a whitespace-separated list (Task iterates it by splitting on whitespace), so it cannot name a module whose
+# path holds whitespace or a control character; such a go.work path is refused, shown JSON-escaped (#413 r3: a newline in
+# a path was split into two records and "apps/a\nb" agreed with MODULES "apps/a b").
+nl_gw='go 1.27
+
+use "./apps/a\nb"'
+modrun ws_newline "$nl_gw" "apps/a b"
+expect_eq "check-modules: a go.work path with a newline is refused, not split into two modules" "1" "$rc"
+expect_match "check-modules: the refused newline path is shown JSON-escaped" 'whitespace or control.*"\./apps/a\\nb"' "$out"
+modrun ws_space 'go 1.27
+
+use "./apps/a b"' "apps/a b"
+expect_eq "check-modules: a go.work path with a space is refused" "1" "$rc"
+expect_match "check-modules: the refused space path is shown with its boundaries" 'whitespace or control.*"\./apps/a b"' "$out"
+modrun ws_tab 'go 1.27
+
+use "./apps/a\tb"' "apps/a b"
+expect_match "check-modules: a tab in a go.work path is refused" 'whitespace or control' "$out"
+modrun ws_clean_among "$gw_block" "pkgs/kernel apps/rpc tools/x"
+expect_eq "check-modules: ordinary paths still pass beside the refusal rule" "0" "$rc"
 # A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
 tools_without() {
   local bindir="$tmp/toolbin-$1" t
