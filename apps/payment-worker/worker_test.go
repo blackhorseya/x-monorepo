@@ -207,7 +207,7 @@ func TestRun_Starts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer held.Close()
+			defer func() { _ = held.Close() }()
 			out := startAndStop(t, args, durableEnv(pg.URL, map[string]*string{
 				"APP_AUTH_MODE": s("off"), "APP_AUTH_API_KEYS": s("console=x:admin,rpc=y:admin"), // serve's auth contract is no business of the consumer
 				"APP_HTTP_ADDR": s(held.Addr().String()),
