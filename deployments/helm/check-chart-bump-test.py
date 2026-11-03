@@ -104,7 +104,7 @@ def base_tree(name, **kw):
 def run_wrapper(fake_base, head, fetch_rc="0"):
     env = os.environ.copy()
     env.update(PATH=f"{fake}:{env['PATH']}", FAKE_BASE=str(fake_base) if fake_base else "", FAKE_FETCH_RC=fetch_rc)
-    p = subprocess.run(["bash", str(WRAPPER), "origin/main", str(head)], capture_output=True, text=True, env=env, cwd=HERE.parent.parent)
+    p = subprocess.run(["bash", str(WRAPPER), "main", str(head)], capture_output=True, text=True, env=env, cwd=HERE.parent.parent)
     return p.returncode, (p.stdout + p.stderr).strip()
 
 

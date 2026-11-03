@@ -399,7 +399,8 @@ COMMIT;
 - **前提**：chart 的 `appVersion`（或 `image.tag`）必須 ≥ 0.63.3（`payment-worker` 第一個發布的版本；`0.63.3` 匿名拉取實測 200），且 `ghcr.io/blackhorseya/x-monorepo/payment-worker` 是 public。`check.py` 檢查 `appVersion`。
 - **手動跑 `payment-rpc consume` 的部署**（沒用這個 chart 的 Deployment、compose、systemd…）要改成 payment-worker：同一份設定檔、同樣的環境變數、同樣的 `--require-durable`，只是 binary／image 換成 `payment-worker`（沒有子命令）。舊入口現在以非零 exit 結束並印 `payment-rpc: consume was removed (#410): run the payment-worker binary or image instead …`，不會靜默退出。不要同時留著舊 consumer 與新 consumer 在不同的 group 名下。
 - **滾動期間**：Deployment 預設 RollingUpdate，新舊 pod 短暫並存，兩邊同一個 group 分工，handler 對同一個 message id 有 inbox 冪等；沒有 consumer 的空窗（例如先 scale 到 0）事件留在 outbox 等著。
-- **退版**：退到沒有 payment-worker 的 chart（0.3.57 及更早）時，用的 image 必須是還有 `payment-rpc consume` 的版本（≤ 0.63.3）；若退回舊 chart 卻留著 ≥ 切片 2 發布版的 image tag，舊 chart 的 `consume` arg 會讓 `payment-rpc` 以 `consume was removed` 結束。
+- **版本界線**：以 chart `version` 區分——**≤ 0.3.58 的 chart 的 `payment-consume` 跑 `payment-rpc consume`；≥ 0.3.59 跑 `payment-worker`**。同一個 chart 版本號不會對應兩種內容：`deployments/helm/check-chart-bump.sh`（CI 的 `helm` job，pull request 上）比對 base 與 head 的 `templates/` 與 `values*.yaml`，有變就要求 `Chart.yaml` 的 `version` 嚴格遞增（數字比較，0.3.10 > 0.3.9；ci／ci-negative／README／只動 appVersion 的 release bot PR 不算）。
+- **退版**：退到 ≤ 0.3.58 的 chart 時，用的 image 必須是還有 `payment-rpc consume` 的版本（≤ 0.63.3，之後發布的 `payment-rpc` image 已移除它）；若退回舊 chart 卻留著 ≥ 切片 2 發布版的 image tag，舊 chart 的 `consume` arg 會讓 `payment-rpc` 以 `consume was removed` 結束。
 
 ### Upgrade notes — chart 0.3.53：payment 預設開（#367 切片 6）
 

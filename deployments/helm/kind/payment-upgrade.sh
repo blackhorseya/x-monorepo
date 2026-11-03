@@ -34,9 +34,14 @@ tmp=$(mktemp -d)
 
 fail() { echo "payment-upgrade: $*" >&2; [ -z "${soft:-}" ] || exit 1; kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true; exit 1; }
 restore() {
+  local rc=$?
+  # The background helm of stage 4 may still be running (an order failed to be placed while it ran). Let it
+  # finish FIRST: a restore that ran before it would be overwritten by it, and the release would end upgraded.
+  if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
   helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true
+  return "$rc"
 }
 trap restore EXIT
 

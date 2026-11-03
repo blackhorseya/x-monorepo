@@ -403,15 +403,15 @@ def check_payment_rpc(docs, values, rpc, rc, worker):
     for what, c_, app in (("serve", sc, "payment-rpc"), ("consume", cc, "payment-worker"), ("expire", xc, "payment-rpc")):
         check(c_["image"].split("/")[-1].startswith(app + ":"), f"payment {what} runs the {app} image: {c_['image']}")
         expect(c_["name"], app, f"payment {what} container name")
+        check("command" not in c_, f"payment-rpc {what} keeps the image ENTRYPOINT")
+        check("envFrom" not in c_, f"payment-rpc {what} has no envFrom (a missing key would be silently skipped)")
+        check(c_["securityContext"].get("readOnlyRootFilesystem") is True, f"payment-rpc {what} rootfs read-only")
     # payment-worker's first published image is 0.63.3 (#410): a chart whose tag (image.tag, else appVersion) is a
     # lower release points the consumer at an image that does not exist. A non-numeric tag (kind's "kind") is a local build.
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "x-monorepo", "Chart.yaml")) as f_:
         tag = str(values.get("image", {}).get("tag") or yaml.safe_load(f_)["appVersion"])
     if re.fullmatch(r"\d+\.\d+\.\d+", tag):
         check(tuple(int(n_) for n_ in tag.split(".")) >= (0, 63, 3), f"image tag {tag} is older than 0.63.3, the first release with a payment-worker image")
-        check("command" not in c_, f"payment-rpc {what} keeps the image ENTRYPOINT")
-        check("envFrom" not in c_, f"payment-rpc {what} has no envFrom (a missing key would be silently skipped)")
-        check(c_["securityContext"].get("readOnlyRootFilesystem") is True, f"payment-rpc {what} rootfs read-only")
     # The binary refuses to start on a configuration that would serve payments from memory or without
     # required auth, judged on the FINAL effective settings; as a container arg no env var or Secret can change it.
     expect(sc.get("args"), ["serve", "--require-durable"], "payment-rpc serve args")
