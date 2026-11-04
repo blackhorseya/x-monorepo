@@ -472,6 +472,7 @@ def bad_port_values(target):
         "plus sign": "+18096",
         "empty": "",
         "leading zero": "018096",
+        "leading zero, valid as octal": "01111",
         "hex": "0x4650",
         "fullwidth digits": "\uff11\uff18\uff10\uff19\uff16",
         "scientific": "1e4",
@@ -611,7 +612,7 @@ def main():
             if not want("mutant-ports"):
                 break
             bv = bad_port_values(bad.port)
-            for m, what in ((no_port_check, "userinfo@host:port"), (no_port_check, "empty"), (no_range, "above range"), (zero_ok, "leading zero")):
+            for m, what in ((no_port_check, "userinfo@host:port"), (no_port_check, "empty"), (no_range, "above range"), (zero_ok, "leading zero, valid as octal")):
                 if m is no_port_check and what == "userinfo@host:port" and var == "UPGRADE_RPC_PORT":
                     probs = run_scenario(m, "upgrade", pg, flow=synth_flow, refused=True, recv=[good, bad], env_extra={**other, var: bv[what]})
                     must_catch(f"refused: {var}={what}, {m.stem}", probs, "a request reached a loopback receiver")
@@ -626,8 +627,8 @@ def main():
                                "not refused up front", "must create")
         # a legitimate custom port pair still works, and the key goes to exactly that port
         if want("custom ports"):
-          report("custom ports accepted", run_scenario(script_file, "upgrade", pg, flow=synth_flow, positive=True, recv=[good, bad],
-                                                    env_extra={"UPGRADE_RPC_PORT": str(good.port), "UPGRADE_SERVE_PORT": str(bad.port)}))
+            report("custom ports accepted", run_scenario(script_file, "upgrade", pg, flow=synth_flow, positive=True, recv=[good, bad],
+                                                         env_extra={"UPGRADE_RPC_PORT": str(good.port), "UPGRADE_SERVE_PORT": str(bad.port)}))
         # #433: SIGTERM around the create, from the real entry
         for where in ("before-commit", "after-reply", "after-save"):
             if want(f"SIGTERM {where}"):
@@ -644,7 +645,9 @@ def main():
         sys.exit(1)
     print("upgrade-failure-test: ok (home database unchanged on every path, the drill's namespace created and deleted, "
           f"{len(REFUSALS)} Postgres/Redis-source inputs refused up front, a lost create answer adopts and deletes nothing, an existing namespace (same or other label) left alone, "
-          "background helm joined before the delete, migrate log printed, inherited internal state ignored, a namespace replaced before cleanup survives, 7 mutants caught)")
+          "background helm joined before the delete, migrate log printed, inherited internal state ignored, a namespace replaced before cleanup survives, "
+          f"{2 * len(bad_port_values(0))} port values refused before any request (real curl, synthetic key, loopback receivers), custom ports accepted, "
+          "SIGTERM around the create names the namespace and label and deletes nothing unless the uid was kept, 12 mutants caught)")
 
 
 main()

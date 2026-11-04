@@ -37,17 +37,36 @@ set -euo pipefail
 #   UPGRADE_RUN_ID (digits-digits; names the namespace, proves nothing about ownership), PAYMENT_UPGRADE_FROM_TAG,
 #   PAYMENT_UPGRADE_FROM_IMAGE, UPGRADE_RPC_PORT, UPGRADE_SERVE_PORT,
 # plus what the tools themselves read (PATH, KUBECONFIG, HOME, git / helm / kubectl settings).
-ns_uid="" token="" helm_pid="" soft="" pfs="" body="" res=""
-chart=$3 values=$4 flow=$5 # $1 and $2 (the home namespace and release) are deliberately not used
+ns_uid="" token="" helm_pid="" soft="" pfs="" body="" res="" maybe_ns=""
+# Every input is checked here, before the trap exists and before anything is created, sent or installed. The inputs are,
+# all of them (#432): the five arguments ($1 and $2, the home namespace and release, are deliberately not used; $3-$5 are
+# paths handed to helm and python), and the variables listed above. Each one ends up in a URL (the two ports: curl sends the
+# X-API-Key to it), in a helm argument (--set image.tag=...), in a git ref (the tag), or in a name (the run id); each is
+# matched whole against the one shape it may have, in the C locale, and anything else is refused, not repaired.
+refuse() { echo "payment-upgrade: refused: $*" >&2; exit 1; }
+export LC_ALL=C
+[ "$#" -eq 5 ] || refuse "want 5 arguments (home namespace, home release, chart dir, values file, flow values file), got $#"
+chart=$3 values=$4 flow=$5
+[[ $chart != -* && $values != -* && $flow != -* ]] || refuse "a chart / values path must not start with '-'"
+[ -d "$chart" ] || refuse "the chart directory $chart does not exist"
+[ -f "$values" ] && [ -f "$flow" ] || refuse "the values file $values or the flow values file $flow does not exist"
 kind_dir=$(cd "$(dirname "$0")" && pwd)
-run_id=${UPGRADE_RUN_ID:-$(date +%s)-$RANDOM}
-[[ $run_id =~ ^[0-9]+-[0-9]+$ ]] || { echo "payment-upgrade: refused: UPGRADE_RUN_ID must be <digits>-<digits>" >&2; exit 1; }
+run_id=${UPGRADE_RUN_ID-$(date +%s)-$RANDOM} # set-but-empty is refused below, not replaced by a default
+[[ $run_id =~ ^[0-9]{1,12}-[0-9]{1,6}$ ]] || refuse "UPGRADE_RUN_ID must be <digits>-<digits>"
+from_tag=${PAYMENT_UPGRADE_FROM_TAG-v0.63.3}
+[[ $from_tag =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || refuse "PAYMENT_UPGRADE_FROM_TAG must be a tag name ([A-Za-z0-9._-], not starting with . or -)"
+from_image=${PAYMENT_UPGRADE_FROM_IMAGE-0.63.3}
+[[ $from_image =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || refuse "PAYMENT_UPGRADE_FROM_IMAGE must be an image tag ([A-Za-z0-9_.-], at most 128), it is put in a helm --set"
+# A port is a decimal integer 1-65535 with no sign, no leading zero, nothing else: it is put in http://127.0.0.1:<port>, and
+# a value like 1@host:80 would make that URL name another host, which would then get the X-API-Key.
+port_ok() { [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]; }
+rport=${UPGRADE_RPC_PORT-18096} sport=${UPGRADE_SERVE_PORT-18097}
+port_ok "$rport" || refuse "UPGRADE_RPC_PORT must be a decimal integer 1-65535 (no sign, no leading zero, nothing else)"
+port_ok "$sport" || refuse "UPGRADE_SERVE_PORT must be a decimal integer 1-65535 (no sign, no leading zero, nothing else)"
+[ "$rport" != "$sport" ] || refuse "UPGRADE_RPC_PORT and UPGRADE_SERVE_PORT must differ"
 ns="x-monorepo-upgrade-$run_id"
 release="x-monorepo-upg-${run_id##*-}" # contains the chart name, so the Jobs are <release>-migrate, as in any release named x-monorepo*
 run_label=x-monorepo-upgrade-drill
-from_tag=${PAYMENT_UPGRADE_FROM_TAG:-v0.63.3}
-from_image=${PAYMENT_UPGRADE_FROM_IMAGE:-0.63.3}
-rport=${UPGRADE_RPC_PORT:-18096} sport=${UPGRADE_SERVE_PORT:-18097}
 api="http://127.0.0.1:$rport/api" serve="http://127.0.0.1:$sport"
 tmp=$(mktemp -d)
 url_check=$kind_dir/postgres-url-check.py
@@ -76,6 +95,11 @@ cleanup() {
   # that uid as a precondition, so a namespace that is not the one this run created is refused (409) and nothing is touched.
   # No uid (nothing was created, or the create's answer was lost) means nothing is deleted. There is no `helm uninstall`:
   # the release's storage (helm's Secrets) and everything it installed live in the namespace and go with it.
+  # The create was sent but its uid was never kept (killed between the two, or before the answer came): the namespace may
+  # exist and nothing here may delete it, since only the uid proves it is this run's. Say what to look for (#433).
+  if [ -n "$maybe_ns" ] && [ -z "$ns_uid" ]; then
+    echo "payment-upgrade: interrupted before the uid of namespace $ns was kept: if it exists (label $run_label=$token) it is left in place, delete it by hand" >&2
+  fi
   if [ -n "$ns_uid" ]; then
     printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "$ns_uid" |
       kubectl delete --raw "/api/v1/namespaces/$ns" -f - >/dev/null 2>&1 || echo "payment-upgrade: left the namespace $ns alone: it is gone, or no longer the one this run created" >&2
@@ -198,6 +222,7 @@ assert_connections "$new_render"
 # the uid in the create's own answer. If that answer is lost the namespace is NOT adopted: the run stops and says what to delete.
 if kubectl get namespace "$ns" -o name >/dev/null 2>&1; then fail "refused: the namespace $ns already exists: it is not reused and not touched"; fi
 token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+maybe_ns=1 # from here on the namespace may exist without this run knowing its uid (cleanup reports that, see above)
 if ! created=$(kubectl create -f - -o jsonpath='{.metadata.uid}' 2>"$tmp/create.err" <<NSEOF
 apiVersion: v1
 kind: Namespace
@@ -207,13 +232,15 @@ metadata:
     $run_label: "$token"
 NSEOF
 ); then
-  if grep -q AlreadyExists "$tmp/create.err"; then fail "refused: the namespace $ns already exists: it is not reused and not touched"; fi
+  if grep -q AlreadyExists "$tmp/create.err"; then maybe_ns=""; fail "refused: the namespace $ns already exists: it is not reused and not touched"; fi
   if [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" = "namespace/$ns" ]; then
+    maybe_ns=""
     fail "refused: the create of $ns was applied but its answer was lost, so its uid is unknown and nothing will be deleted: namespace $ns (label $run_label=$token) is left in place, delete it by hand"
   fi
+  maybe_ns=""
   fail "refused: could not create the namespace $ns: $(head -c 300 "$tmp/create.err")"
 fi
-[[ $created =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || fail "refused: the create of $ns did not answer with a namespace uid (got '$created'), so nothing will be deleted: if namespace $ns (label $run_label=$token) exists, delete it by hand"
+[[ $created =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || { maybe_ns=""; fail "refused: the create of $ns did not answer with a namespace uid (got '$created'), so nothing will be deleted: if namespace $ns (label $run_label=$token) exists, delete it by hand"; }
 ns_uid=$created
 kubectl -n "$ns" apply -f "$kind_dir/deps.yaml" >/dev/null
 kubectl -n "$ns" rollout status deploy/postgres deploy/redis --timeout=2m >/dev/null || fail "the drill's Postgres / Redis did not become ready"
