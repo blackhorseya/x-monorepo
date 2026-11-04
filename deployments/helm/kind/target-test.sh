@@ -33,10 +33,10 @@ strip() { sed 's/\x1b\[[0-9;]*m//g'; }
 tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
-# Preconditions only ask `command -v kind kubectl helm jq`. jq stays real (the Taskfile's own vars run it);
-# the three stand-ins are first on PATH and any execution leaves a marker: a --dry that starts a tool is a
-# failure of its own.
-for b in kind kubectl helm; do
+# Preconditions only ask `command -v kind kubectl helm jq k6`. jq stays real (the Taskfile's own vars run it);
+# the stand-ins (kind, kubectl, helm, and k6 for helm-kind-keda's precondition: a CI runner has none of them)
+# are first on PATH and any execution leaves a marker: a --dry that starts a tool is a failure of its own.
+for b in kind kubectl helm k6; do
   printf '#!/bin/sh\necho "$0 $*" >> "%s/ran"\nexit 99\n' "$tmp" > "$tmp/bin/$b"
   chmod +x "$tmp/bin/$b"
 done
