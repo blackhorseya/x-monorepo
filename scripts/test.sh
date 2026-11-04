@@ -971,7 +971,8 @@ chmod +x "$dns_dir/bin/kubectl"
 dns() {
   : > "$dns_dir/klog"
   local rc=0
-  COREFILE="$dns_dir/Corefile" KLOG="$dns_dir/klog" PATH="$dns_dir/bin:$PATH" "$src/deployments/helm/kind/coredns-dex.sh" "$1" >/dev/null 2>&1 || rc=$?
+  mkdir -p "$dns_dir/home"; : > "$dns_dir/home/.kind-runner"  # the script refuses to start outside run.sh's scratch HOME (#444)
+  HOME="$dns_dir/home" KIND_RUNNER_HOME="$dns_dir/home" COREFILE="$dns_dir/Corefile" KLOG="$dns_dir/klog" PATH="$dns_dir/bin:$PATH" "$src/deployments/helm/kind/coredns-dex.sh" "$1" >/dev/null 2>&1 || rc=$?
   echo "$rc $(grep -c '^patch$' "$dns_dir/klog" || true)"
 }
 corefile_with() { # corefile_with <extra lines after ready...>

@@ -66,18 +66,18 @@ values_of() {
       { grep -oE -- '--name [^ ]+' "$2" | sed 's/^--name //'
         grep -oE -- 'grep -qx [^ ]+' "$2" | sed 's/^grep -qx //'; } ;;
     kubeconfig)
-      sed 's/^task: \[[^]]*\] //' "$2" | grep -E '(^|[;| ])kubectl |(^|[;| ])helm .*(upgrade|status) |deployments/helm/kind/[a-z-]+\.sh ' | while IFS= read -r l; do
-        case $l in
-          *deployments/helm/kind/*.sh\ *)  # a script: behind KUBE_ENV, which exports the file and puts the shims on PATH
-            case $l in
-              *'export KUBECONFIG="'*'/deployments/helm/kind/shim:$PATH"'*) printf '%s\n' "$l" | grep -oE -- 'KIND_KUBECONFIG="[^"]*kubeconfig-[a-z0-9.-]+"' | head -1 | sed 's/.*kubeconfig-//; s/"$//' ;;
-              *) echo MISSING ;;
-            esac ;;
-          *'--kubeconfig "'*)  # kubectl / helm: every one of them carries the flag (the count of flags must equal the count of tools)
-            f=$(printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//')
-            t=$(printf '%s\n' "$l" | grep -oE -- '(^|[;| ])(kubectl|helm) ' | wc -l | tr -d ' ')
-            [ "$(printf '%s\n' "$f" | grep -c .)" = "$t" ] && printf '%s\n' "$f" | sort -u | head -1 || echo MISSING ;;
-          *) echo MISSING ;;
+      sed 's/^task: \[[^]]*\] //' "$2" | grep -E '(^|[;|& ])(kubectl|helm|kind) |deployments/helm/kind/[a-z-]+\.sh ' | while IFS= read -r l; do
+        # the cluster of every runner call (`run.sh "<bin>/kind/kubeconfig-<cluster>" <command>`)
+        printf '%s\n' "$l" | grep -oE 'deployments/helm/kind/run\.sh "[^"]*kubeconfig-[a-z0-9.-]+" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) ' \
+          | sed -E 's/.*kubeconfig-([a-z0-9.-]+)" .*/\1/'
+        # a cluster command that is not right behind a runner is MISSING (the runner call and its command are taken out first)
+        rest=$(printf '%s\n' "$l" | sed -E 's#deployments/helm/kind/run\.sh "[^"]*" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) #OK #g')
+        printf '%s\n' "$rest" | grep -oE '(^|[;|&] *)(kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) ' | sed 's/.*/MISSING/'
+        # second layer: each kubectl / helm (but `helm repo`) also names the file by flag, the same cluster
+        case $l in *'helm repo'*) ;; *)
+          t=$(printf '%s\n' "$l" | grep -oE 'run\.sh "[^"]*" (kubectl|helm|kind (create|delete|export)) ' | wc -l | tr -d ' ')
+          f=$(printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//')
+          if [ "$(printf '%s\n' "$f" | grep -c .)" = "$t" ]; then printf '%s\n' "$f" | grep .; else echo MISSING; fi ;;
         esac
       done ;;
     kindkc)
@@ -90,7 +90,7 @@ values_of() {
     kedans) grep -oE -- 'kedacore/keda -n [^ ]+' "$2" | sed 's/^kedacore\/keda -n //' ;;
     ns)
       { grep -v 'kedacore/keda' "$2" | grep -oE -- ' -n [^ ]+' | sed 's/^ -n //'
-        grep -oE -- 'deployments/helm/kind/[a-z-]+\.sh [^ ]+' "$2" | awk '{print $2}'; } ;;
+        sed -E 's#deployments/helm/kind/run\.sh "[^"]*" ##g' "$2" | grep -oE -- 'deployments/helm/kind/[a-z-]+\.sh [^ ]+' | awk '{print $2}'; } ;;
   esac
 }
 

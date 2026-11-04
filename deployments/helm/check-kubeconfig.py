@@ -1,33 +1,31 @@
 #!/usr/bin/env python3
-"""Does every command of Taskfile.yml that can reach a cluster carry the kubeconfig of the task's own cluster? (#437, PR #435)
+"""Does every command of Taskfile.yml that can reach a cluster go through the runner, and name the kubeconfig of the task's own cluster? (#437, #444, PR #435)
 
     deployments/helm/check-kubeconfig.py                       # the real Taskfile.yml and deployments/helm/kind/ (`task helm-check`)
-    deployments/helm/check-kubeconfig.py --taskfile <file>     # the same rules on another Taskfile (the mutants of target-exec-test.sh)
+    deployments/helm/check-kubeconfig.py --taskfile <file>     # the same rules on another Taskfile (mutant 8 of target-isolation-test.sh)
     deployments/helm/check-kubeconfig.py --self-test           # the rules against commands that must be flagged, and ones that must not
 
-On this machine ~/.kube/config can point at a production cluster, and `kind create|delete` write a kubeconfig too, so every
-call that can act on a cluster names the file itself:
+THIS IS DEFENSE IN DEPTH, NOT THE GUARANTEE. On this machine ~/.kube/config can point at a production cluster. What keeps it out of
+reach is deployments/helm/kind/run.sh (env -i, a scratch HOME, KUBECONFIG = the task's file, read-only variables), and that is proven by
+RUNNING the real entry against a decoy caller: deployments/helm/kind/target-isolation-test.sh. A reader of shell text is always one shell
+form short (PR #435 r1-r4), so this file only checks the shapes it can check exactly:
 
-  kubectl …, helm <acting subcommand> …, kind create|delete|export …
-        each SIMPLE command carries `--kubeconfig "{{.KIND_KUBECONFIG}}"` (or `--kubeconfig={{.KIND_KUBECONFIG}}`) on its own:
-        a flag on another command of the same line does not count, a second --kubeconfig with another value is flagged,
-        and so is an empty one. A flag beats KUBECONFIG, so nothing written around the command can undo it.
-        (helm lint / template / repo / version / … never reach a cluster; kind load / get never read a kubeconfig: exempt.)
-  deployments/helm/kind/<x>.sh   (the scripts call kubectl / helm without the flag; their *-test.sh / *-test.py drills run on
-        fakes or on clusters of their own)
-        is exactly `{{.KUBE_ENV}}; <script> …`: two simple commands and nothing else. KUBE_ENV sets KIND_KUBECONFIG and puts
-        deployments/helm/kind/shim first on PATH, whose kubectl / helm add the flag to every call the script makes, at any depth.
+  kubectl …, helm <acting subcommand> …, kind …, deployments/helm/kind/<x>.sh …
+        each SIMPLE command starts with `{{.KIND_RUN}}` (vars.KIND_RUN is exactly `deployments/helm/kind/run.sh "{{.KIND_KUBECONFIG}}"`);
+        kubectl, acting helm and kind create|delete|export also carry `--kubeconfig "{{.KIND_KUBECONFIG}}"` on their own (a flag on
+        another command of the same line does not count, a second one with another value is flagged, an empty one too).
+        helm lint / template / repo / version / … never reach a cluster: they need no runner.
+  deployments/helm/kind/<x>.sh   refuses to run outside run.sh (the `.kind-runner` check, #444); run.sh and lock.sh and the shims exist,
+        lock.sh makes KUBECONFIG KIND_KUBECONFIG PATH HOME read-only.
 
 A command is split into simple commands the way a shell does (quotes respected; ; && || | & and newline separate them). What
 cannot be read that way fails closed: `$(…)`, backticks, parentheses, and a wrapper (env sh bash eval exec xargs time timeout …)
 whose arguments mention kubectl / helm / kind are flagged, whatever else the command says.
 
-The scripts under deployments/helm/kind/ are flagged when a non-comment line changes where they point: KUBECONFIG=, unset
+The scripts under deployments/helm/kind/ are also flagged when a non-comment line changes where they point: KUBECONFIG=, unset
 KUBECONFIG, KIND_KUBECONFIG=, --kubeconfig, --context, --kube-context, `kubectl config use|set|delete-context`, kind
-create|delete|export, env -i, PATH=, and any way to reach a tool without meeting the shim: a path (/opt/homebrew/bin/kubectl),
-`command -p`, `hash -p`, a command word held in a variable. The shims must exist and be executable, and KUBE_ENV must put them first on PATH.
-
-This is the cheap, static half. What the commands really do is judged by running them: deployments/helm/kind/target-exec-test.sh.
+create|delete|export, env -i, PATH=, a tool called by path, `command -p`, `hash -p`, a command word held in a variable. That list
+can never be complete (r4's `read -r KUBECONFIG PATH` was not on it); the runner, not the list, is what holds.
 """
 import os
 import re
@@ -37,7 +35,9 @@ import yaml
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-KUBE_ENV = "{{.KUBE_ENV}}"
+RUN = "{{.KIND_RUN}}"
+RUN_DEF = 'deployments/helm/kind/run.sh "{{.KIND_KUBECONFIG}}"'
+GUARD_MARK = '[ -f "${HOME:-/nonexistent}/.kind-runner" ] || {'  # kind/*.sh refuse to run outside run.sh (#444)
 EXPECT = "{{.KIND_KUBECONFIG}}"
 TOOLS = re.compile(r"(?:^|[^\w.-])(kubectl|helm|kind)(?![\w-])")
 KIND_SCRIPT = re.compile(r"^(?:\./)?(?:deployments/helm/kind|\{\{\.KIND_DIR\}\})/([A-Za-z0-9._-]+\.(?:sh|py))$")
@@ -154,7 +154,7 @@ def named_right(words):
 def judge_command(cmd):
     """The list of reasons this command is flagged (empty = fine)."""
     cmds, opaque = tokenize(cmd)
-    mentions = TOOLS.search(cmd) is not None or any(KIND_SCRIPT.match(w) for c in cmds for w in c)
+    mentions = RUN in cmd or TOOLS.search(cmd) is not None or any(KIND_SCRIPT.match(w) for c in cmds for w in c)
     if not mentions:
         return []
     why = []
@@ -167,6 +167,12 @@ def judge_command(cmd):
         rest = words[k:]
         if not rest:
             continue
+        via_run = rest[0] == RUN  # `{{.KIND_RUN}} <command>`: the runner (env -i, scratch HOME, the task's kubeconfig only) is the door
+        if via_run:
+            rest = rest[1:]
+            if not rest:
+                why.append("%s without a command" % RUN)
+                continue
         head = os.path.basename(rest[0]) if "{{" not in rest[0] else rest[0]
         args = rest[1:]
         if head in WRAPPERS:
@@ -176,21 +182,27 @@ def judge_command(cmd):
                 why.append("%s wraps kubectl / helm / kind or a kind script: not readable, fails closed" % head)
             continue
         if head == "kubectl":
-            if not named_right(rest):
+            if not via_run:
+                why.append("kubectl outside %s (the runner is what keeps the caller's kubeconfig out of reach)" % RUN)
+            elif not named_right(rest):
                 why.append('kubectl without --kubeconfig "%s" of its own' % EXPECT)
         elif head == "helm":
             sub = next((a for j, a in enumerate(args) if not a.startswith("-") and (j == 0 or args[j - 1] != "--kubeconfig")), "")
-            if sub not in HELM_OFFLINE and not named_right(rest):
+            if sub not in HELM_OFFLINE and not via_run:
+                why.append("helm %s outside %s (the runner is what keeps the caller's kubeconfig out of reach)" % (sub, RUN))
+            elif sub not in HELM_OFFLINE and not named_right(rest):
                 why.append('helm %s without --kubeconfig "%s" of its own' % (sub, EXPECT))
         elif head == "kind":
             sub = next((a for a in args if not a.startswith("-")), "")
-            if sub in ("create", "delete", "export") and not named_right(rest):
+            if not via_run:
+                why.append("kind %s outside %s (the runner is what keeps the caller's kubeconfig out of reach)" % (sub, RUN))
+            elif sub in ("create", "delete", "export") and not named_right(rest):
                 why.append('kind %s without --kubeconfig "%s" of its own' % (sub, EXPECT))
         else:
             m = KIND_SCRIPT.match(rest[0])
             if m and not m.group(1).endswith(("-test.sh", "-test.py")):
-                if not (len(cmds) == 2 and cmds[0] == [KUBE_ENV] and cmds[1] is words):
-                    why.append("kind/%s must be exactly `%s; <script> …` and nothing else" % (m.group(1), KUBE_ENV))
+                if not via_run:
+                    why.append("kind/%s must be run as `%s <script> …`" % (m.group(1), RUN))
             elif any((KIND_SCRIPT.match(a) and not KIND_SCRIPT.match(a).group(1).endswith(("-test.sh", "-test.py"))) for a in args):
                 why.append("a kind script is an argument of %s, not the command of its own" % head)
     return why
@@ -252,10 +264,9 @@ def judge_script(text, shell=True):
 
 def check_taskfile(doc):
     problems = []
-    kube_env = (doc.get("vars") or {}).get("KUBE_ENV")
-    if not isinstance(kube_env, str) or "export KUBECONFIG=" not in kube_env or "KIND_KUBECONFIG=" not in kube_env \
-            or "/deployments/helm/kind/shim:$PATH" not in kube_env:
-        problems.append("vars.KUBE_ENV must export KUBECONFIG and KIND_KUBECONFIG and put deployments/helm/kind/shim first on PATH")
+    run_def = (doc.get("vars") or {}).get("KIND_RUN")
+    if run_def != RUN_DEF:
+        problems.append("vars.KIND_RUN must be exactly %s (the runner, given the task's own kubeconfig), not %r" % (RUN_DEF, run_def))
     for name, task in sorted((doc.get("tasks") or {}).items()):
         for cmd in commands(task or {}):
             for w in judge_command(cmd):
@@ -269,8 +280,8 @@ def check_real(taskfile, kind_dir=None):
     kind_dir = kind_dir or os.path.join(ROOT, "deployments", "helm", "kind")
     scanned = 0
     for fn in sorted(os.listdir(kind_dir)):
-        if not fn.endswith((".sh", ".py")) or fn.endswith(("-test.sh", "-test.py")):
-            continue
+        if not fn.endswith((".sh", ".py")) or fn.endswith(("-test.sh", "-test.py")) or fn in ("run.sh", "lock.sh"):
+            continue  # run.sh and lock.sh ARE the isolation: they set KUBECONFIG, PATH and env -i on purpose
         scanned += 1
         with open(os.path.join(kind_dir, fn)) as f:
             for w in judge_script(f.read(), shell=fn.endswith(".sh")):
@@ -279,13 +290,35 @@ def check_real(taskfile, kind_dir=None):
         p = os.path.join(kind_dir, "shim", tool)
         if not os.access(p, os.X_OK):
             problems.append("kind/shim/%s is missing or not executable" % tool)
+    if not os.access(os.path.join(kind_dir, "run.sh"), os.X_OK):
+        problems.append("kind/run.sh is missing or not executable")
+    try:
+        with open(os.path.join(kind_dir, "lock.sh")) as f:
+            if not re.search(r"(?m)^readonly KUBECONFIG KIND_KUBECONFIG PATH HOME\b", f.read()):
+                problems.append("kind/lock.sh must make KUBECONFIG KIND_KUBECONFIG PATH HOME read-only")
+    except OSError:
+        problems.append("kind/lock.sh is missing")
+    # every script that acts on a cluster refuses to run outside run.sh (#444): the marker run.sh leaves in its scratch HOME
+    for fn in sorted(os.listdir(kind_dir)):
+        if fn.endswith(".sh") and not fn.endswith("-test.sh") and fn not in ("run.sh", "lock.sh"):
+            with open(os.path.join(kind_dir, fn)) as f:
+                if GUARD_MARK not in f.read():
+                    problems.append("kind/%s does not refuse to run outside run.sh (the .kind-runner check is missing)" % fn)
     return problems, scanned
 
 
 # cmd -> flagged?
 F = '--kubeconfig "{{.KIND_KUBECONFIG}}"'
-CMD_CASES = [
-    # kubectl / helm / kind carry the flag themselves
+R = RUN
+
+
+def wrap(cmd):
+    """The same command with the runner in front of every kubectl / helm / kind that starts a simple command."""
+    return re.sub(r"(?m)(^|[;&|]\s*)(kubectl|helm|kind)\b", lambda m: m.group(1) + R + " " + m.group(2), cmd)
+
+
+# the flag rules, judged on commands that already go through the runner (the runner is a separate rule, below)
+FLAG_CASES_BASE = [
     ("kubectl -n x get pods", True),
     ("kubectl %s -n x get pods" % F, False),
     ("kubectl --kubeconfig={{.KIND_KUBECONFIG}} get pods", False),
@@ -325,14 +358,48 @@ CMD_CASES = [
     ("kubectl get pods & kubectl %s get ns" % F, True),
     ("kubectl %s get pods || kubectl get ns" % F, True),
     ("kubectl %s get pods | kubectl get ns" % F, True),
-    # prefix, unset, export, order: none of them can matter when the flag is on the command, and the prefix alone is nothing
-    ("{{.KUBE_ENV}}; kubectl -n ns apply -f f", True),
-    ("{{.KUBE_ENV}}; unset KUBECONFIG; kubectl -n ns apply -f f", True),
-    ("{{.KUBE_ENV}}; export KUBECONFIG=/x; kubectl get pods", True),
-    ("kubectl get pods; {{.KUBE_ENV}}", True),
-    ("unset KUBECONFIG; kubectl %s get pods" % F, False),
-    ("export KUBECONFIG=/x; kubectl %s get pods" % F, False),
-    ("KUBECONFIG=/x kubectl %s get pods" % F, False),
+]
+
+
+FLAG_CASES = [
+    # a flag does not stand in for the runner, and the runner does not stand in for the flag
+    ("%s kubectl -n ns apply -f f" % R, True),
+    ("%s kubectl %s -n ns apply -f f" % (R, F), False),
+    ("kubectl %s -n ns apply -f f" % F, True),
+    ("kubectl %s get pods; %s kubectl %s get ns" % (F, R, F), True),
+    ("%s kubectl %s get pods; kubectl %s get ns" % (R, F, F), True),
+    ("%s kubectl %s create namespace a | kubectl %s apply -f -" % (R, F, F), True),
+    ("%s kubectl %s create namespace a | %s kubectl %s apply -f -" % (R, F, R, F), False),
+    ("%s" % R, True),
+    ("echo %s; kubectl %s get pods" % (R, F), True),
+    ("helm %s upgrade --install x chart" % F, True),
+    ("helm lint --strict chart", False),
+    ("helm template t chart | cat", False),
+    ("helm repo add kedacore https://example.test >/dev/null 2>&1 || true", False),
+    ("%s helm repo add kedacore https://example.test >/dev/null 2>&1 || true" % R, False),
+    ("kind get clusters", True),
+    ("kind load image-archive --name a f", True),
+    ("kind get kubeconfig --name a > f", True),
+    ("kind create cluster --name a %s" % F, True),
+    ("kind delete cluster --name a %s" % F, True),
+    ("%s kind get clusters" % R, False),
+    ("%s kind load image-archive --name a f" % R, False),
+    ("%s kind delete cluster --name a" % R, True),
+    ("%s kind delete cluster --name a %s" % (R, F), False),
+    ("%s kind create cluster --name a --kubeconfig /x" % R, True),
+    ("%s kind export kubeconfig --name a" % R, True),
+    # the unset / export / prefix forms of r1-r4 do not matter to this rule any more: the runner makes the variables read-only
+    ("unset KUBECONFIG; %s kubectl %s get pods" % (R, F), False),
+    ("export KUBECONFIG=/x; %s kubectl %s get pods" % (R, F), False),
+    ("KUBECONFIG=/x %s kubectl %s get pods" % (R, F), False),
+    ("read -r KUBECONFIG PATH <<< \"/x /y\"; %s kubectl %s get pods" % (R, F), False),
+    # what is not readable fails closed, runner or not
+    ("%s sh -c 'kubectl %s get pods'" % (R, F), True),
+    ("%s bash -c \"kubectl %s get pods\"" % (R, F), True),
+    ("%s env -u KUBECONFIG kubectl %s get pods" % (R, F), True),
+    ("%s xargs kubectl %s get" % (R, F), True),
+]
+CMD_CASES = [(wrap(c), f) for c, f in FLAG_CASES_BASE] + FLAG_CASES + [
     # what is not readable fails closed
     ("sh -c 'kubectl %s get pods'" % F, True),
     ("bash -c \"kubectl %s get pods\"" % F, True),
@@ -347,17 +414,15 @@ CMD_CASES = [
     ("echo `kubectl %s get pods`" % F, True),
     ("(kubectl %s get pods)" % F, True),
     ("kubectl %s get pods 'unterminated" % F, True),
-    # scripts: exactly the prefix and the script
+    # scripts: through the runner, nothing else
     ("deployments/helm/kind/smoke.sh ns rel", True),
     ("{{.KIND_DIR}}/smoke.sh ns rel", True),
-    ("{{.KUBE_ENV}}; {{.KIND_DIR}}/smoke.sh ns rel", False),
-    ("{{.KUBE_ENV}}; deployments/helm/kind/smoke.sh ns rel", False),
-    ("{{.KUBE_ENV}}; {{.KIND_DIR}}/smoke.sh ns rel | tee log", True),
-    ("{{.KUBE_ENV}}; true; {{.KIND_DIR}}/smoke.sh ns rel", True),
-    ("{{.KUBE_ENV}}; {{.KIND_DIR}}/smoke.sh ns rel; unset KUBECONFIG", True),
-    ("true; {{.KUBE_ENV}}; {{.KIND_DIR}}/smoke.sh ns rel", True),
-    ("{{.KIND_DIR}}/smoke.sh ns rel; {{.KUBE_ENV}}", True),
-    ("{{.KUBE_ENV}}; unset KUBECONFIG {{.KIND_DIR}}/smoke.sh", True),
+    ("%s {{.KIND_DIR}}/smoke.sh ns rel" % R, False),
+    ("%s deployments/helm/kind/smoke.sh ns rel" % R, False),
+    ("%s {{.KIND_DIR}}/smoke.sh ns rel | tee log" % R, False),
+    ("true; {{.KIND_DIR}}/smoke.sh ns rel", True),
+    ("%s true; {{.KIND_DIR}}/smoke.sh ns rel" % R, True),
+    ("echo %s; {{.KIND_DIR}}/smoke.sh ns rel" % R, True),
     ("deployments/helm/kind/negative-test.sh", False),
     ("deployments/helm/kind/upgrade-failure-test.py", False),
     ("command -v kind >/dev/null && command -v kubectl >/dev/null", False),
@@ -419,8 +484,8 @@ SCRIPT_CASES = [
 
 
 def doc_with(cmds, kube_env=None, extra=None):
-    ke = kube_env if kube_env is not None else 'export KUBECONFIG=f KIND_KUBECONFIG=f PATH="{{.ROOT_DIR}}/deployments/helm/kind/shim:$PATH"'
-    d = {"vars": {"KUBE_ENV": ke}, "tasks": {"t": {"cmds": cmds}}}
+    ke = kube_env if kube_env is not None else RUN_DEF
+    d = {"vars": {"KIND_RUN": ke}, "tasks": {"t": {"cmds": cmds}}}
     if extra:
         d["tasks"]["t"].update(extra)
     return d
@@ -442,11 +507,12 @@ def self_test():
         (doc_with(["kubectl get pods"]), True),
         (doc_with([{"cmd": "kubectl get pods"}]), True),
         (doc_with([{"for": ["a"], "cmd": "kubectl get pods"}]), True),
-        (doc_with(["kubectl %s get pods" % F]), False),
-        (doc_with([{"for": ["a"], "cmd": "kubectl %s get pods" % F}]), False),
+        (doc_with(["%s kubectl %s get pods" % (R, F)]), False),
+        (doc_with([{"for": ["a"], "cmd": "%s kubectl %s get pods" % (R, F)}]), False),
+        (doc_with(["kubectl %s get pods" % F]), True),
         (doc_with([{"task": "other"}]), False),
         (doc_with(["true"], kube_env=":"), True),
-        (doc_with(["true"], kube_env='export KUBECONFIG=f KIND_KUBECONFIG=f'), True),  # no shim on PATH
+        (doc_with(["true"], kube_env='deployments/helm/kind/run.sh "other"'), True),  # the runner must be given the task's own kubeconfig
         ({"vars": {}, "tasks": {"t": {"cmds": ["true"]}}}, True),
         (doc_with(["true"], extra={"preconditions": [{"sh": "kubectl get pods"}]}), True),
         (doc_with(["true"], extra={"preconditions": [{"sh": "command -v kubectl"}]}), False),
@@ -480,7 +546,7 @@ def main():
         for p in problems:
             print("  " + p)
         return 1
-    print("check-kubeconfig ok: every kubectl / helm / kind create|delete|export command of %s carries its own --kubeconfig, every kind script runs behind KUBE_ENV; %d kind scripts keep it" % (os.path.basename(taskfile), scanned))
+    print("check-kubeconfig ok: every kubectl / helm / kind create|delete|export command of %s goes through the runner and carries its own --kubeconfig, every cluster command and kind script runs through the runner; %d kind scripts keep their guards" % (os.path.basename(taskfile), scanned))
     return 0
 
 

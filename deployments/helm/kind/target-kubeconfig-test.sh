@@ -16,10 +16,14 @@
 #   P1    target's own kubeconfig (same name, same cluster)   the task goes on: exit 0, the namespace is in target, a second run still passes
 #   P2    an empty kubeconfig file                   same as P1: the caller's kubeconfig is not needed at all (never `unset`:
 #                                              a regression would then fall back to ~/.kube/config, which can be a production cluster)
-#   M1    the alias, on a Taskfile whose namespace command has lost its --kubeconfig flags   the judgement must turn RED: the namespace is in other
+#   X1    a DECOY caller kubeconfig whose only cluster is a local listener (the stand-in for a production cluster in ~/.kube/config)
+#         the task goes on, the namespace is in target, and the listener was never connected to
+#   M1    the alias, on a Taskfile whose namespace command bypasses the runner (a plain kubectl)   the judgement must turn RED: the namespace is in other
 #   D1    `task helm-kind-down CLUSTER=<a name that does not exist>` with KUBECONFIG=<a caller file that holds the context kind-<that name>>
 #         the caller file is byte-for-byte what it was (kind delete only touches the kubeconfig it is given), and no cluster of this run is gone
-#   D2    the same on a Taskfile whose down has no --kubeconfig    the judgement must turn RED: the context is removed from the caller file
+#   D3    the same on a Taskfile whose down goes through the runner but has no --kubeconfig flag   the caller file is STILL intact (the runner's
+#         environment alone keeps kind off it: the second layer is not what holds)
+#   D2    the same on a Taskfile whose down bypasses the runner (a plain kind delete)   the judgement must turn RED: the context is removed from the caller file
 #
 # Also judged on every cell: the alias file and the caller's ~/.kube/config are byte-for-byte what they were (the task
 # never writes the caller's kubeconfig), and the clusters that existed before are all still there.
@@ -43,7 +47,7 @@ for b in kind kubectl task jq; do
 done
 
 # every piece of state the trap reads is set BEFORE the trap exists
-tmp="" created_target=0 created_other=0 mutfile="" target="" other="" ns=""
+tmp="" created_target=0 created_other=0 mutfile="" target="" other="" ns="" listener=""
 tmp=$(mktemp -d) || exit 1
 suffix="$(date +%s)$$"
 target="k437t-$suffix" other="k437o-$suffix" ns="ns437-$suffix"
@@ -51,10 +55,11 @@ mutfile="$root/Taskfile.mut437-$suffix.yml"
 
 cleanup() {
   local rc=$?
+  [ -n "$listener" ] && kill "$listener" 2>/dev/null
   case $target in k437t-*) [ "$created_target" = 1 ] && kind delete cluster --name "$target" --kubeconfig "$tmp/none.yaml" >/dev/null 2>&1 ;; esac
   case $other in k437o-*) [ "$created_other" = 1 ] && kind delete cluster --name "$other" --kubeconfig "$tmp/none.yaml" >/dev/null 2>&1 ;; esac
   case $mutfile in "$root"/Taskfile.mut437-*.yml) rm -f "$mutfile" ;; esac
-  case $target in k437t-*) rm -f "$root/bin/kind/kubeconfig-$target" "$root/bin/kind/kubeconfig-$target.tmp" ;; esac
+  case $target in k437t-*) rm -rf "$root/bin/kind/kubeconfig-$target" "$root/bin/kind/kubeconfig-$target.tmp" "$root/bin/kind/helm-$target" ;; esac
   case $tmp in /*/tmp.*|/tmp/*|/var/folders/*) rm -rf "$tmp" ;; esac
   exit "$rc"
 }
@@ -138,16 +143,48 @@ if run "$TASKFILE" "$tmp/none.yaml"; then rc=0; else rc=$?; fi
 if [ "$rc" = 0 ] && aimed_right; then ok "P2 an empty kubeconfig: the task goes on, the namespace is in target only"
 else bad "P2 rc=$rc"; tail -5 "$tmp/run.log"; fi
 
+# X1: a decoy caller kubeconfig whose server is a local listener that counts connections; the task must not so much as connect
+python3 - "$tmp/listener.port" "$tmp/listener.hits" >"$tmp/listener.log" 2>&1 <<'PY' &
+import socket, sys
+port_file, hits_file = sys.argv[1:3]
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(16)
+open(port_file, "w").write(str(s.getsockname()[1]))
+n = 0
+while True:
+    c, _ = s.accept(); n += 1
+    open(hits_file, "w").write(str(n)); c.close()
+PY
+listener=$!
+for _ in $(seq 1 50); do [ -s "$tmp/listener.port" ] && break; sleep 0.1; done
+port=$(cat "$tmp/listener.port" 2>/dev/null || echo 0)
+cat > "$tmp/decoy.yaml" <<DECOY
+apiVersion: v1
+kind: Config
+clusters: [{name: prod-asia, cluster: {server: "https://127.0.0.1:$port", insecure-skip-tls-verify: true}}]
+users: [{name: u, user: {token: x}}]
+contexts: [{name: prod-asia, context: {cluster: prod-asia, user: u}}]
+current-context: prod-asia
+DECOY
+reset_ns
+if run "$TASKFILE" "$tmp/decoy.yaml"; then rc=0; else rc=$?; fi
+hits=$(cat "$tmp/listener.hits" 2>/dev/null || echo 0)
+if [ "$port" != 0 ] && [ "$rc" = 0 ] && aimed_right && [ "$hits" = 0 ]; then ok "X1 decoy caller kubeconfig (context prod-asia → a listener): the task goes on, the namespace is in target, the listener saw $hits connections"
+else bad "X1 rc=$rc port=$port hits=$hits"; tail -5 "$tmp/run.log"; fi
+# the listener is alive and counts (a dead one would make the zero above meaningless): connect once
+python3 -c "import socket,sys; socket.create_connection(('127.0.0.1', $port), 2).close()" 2>/dev/null; sleep 0.3
+[ "$(cat "$tmp/listener.hits" 2>/dev/null || echo 0)" = 1 ] && ok "X1 control: the listener counts a connection" || bad "X1 control: the listener did not count a test connection"
+kill "$listener" 2>/dev/null; wait "$listener" 2>/dev/null
+
 # M1: the same probe on a Taskfile that does not point KUBECONFIG anywhere must be red. The judgement is
 # aimed_right, the very one A1 passed; the trap has to catch the mutant or the A1 above proves nothing.
-sed '/create namespace/s| --kubeconfig "{{.KIND_KUBECONFIG}}"||g' "$root/Taskfile.yml" > "$mutfile"
+sed '/create namespace/s|{{.KIND_RUN}} kubectl --kubeconfig "{{.KIND_KUBECONFIG}}"|kubectl|g' "$root/Taskfile.yml" > "$mutfile"
 if cmp -s "$root/Taskfile.yml" "$mutfile"; then
   bad "M1 the mutant Taskfile was not made"
 else
   reset_ns
   run "$mutfile" "$tmp/alias.yaml" || true
-  if aimed_right; then bad "M1 the mutant (no --kubeconfig flags) still passes aimed_right: the probe cannot see the alias"
-  elif in_cluster "$tmp/other.yaml"; then ok "M1 mutant without the flags: the namespace lands in other → red as it must"
+  if aimed_right; then bad "M1 the mutant (plain kubectl, no runner) still passes aimed_right: the probe cannot see the alias"
+  elif in_cluster "$tmp/other.yaml"; then ok "M1 mutant without the runner: the namespace lands in other → red as it must"
   else bad "M1 the mutant created the namespace nowhere: $(tail -3 "$tmp/run.log")"; fi
 fi
 reset_ns
@@ -166,12 +203,29 @@ if ! has_ctx; then bad "D0 the caller file has no context kind-$ghost (nothing t
 if down "$TASKFILE"; then rc=0; else rc=$?; fi
 if [ "$rc" = 0 ] && caller_intact && clusters_there; then ok "D1 helm-kind-down: the caller kubeconfig is byte-for-byte unchanged, the context is still there, both clusters of this run are too"
 else bad "D1 rc=$rc intact: $(caller_intact && echo yes || echo no), clusters: $(clusters_there && echo yes || echo no)"; tail -5 "$tmp/down.log"; fi
-sed 's|^\(      - kind delete cluster --name {{.CLUSTER}}\) --kubeconfig .*|\1|' "$root/Taskfile.yml" > "$mutfile"
-if cmp -s "$root/Taskfile.yml" "$mutfile"; then bad "D2 the mutant Taskfile was not made"
+mutate_down() {  # <how>: plain = a bare kind delete; noflag = through the runner, without the flag
+  python3 - "$root/Taskfile.yml" "$mutfile" "$1" <<'PY'
+import sys
+src, dst, how = sys.argv[1:4]
+s = open(src).read()
+old = """'{{.KIND_RUN}} kind delete cluster --name {{.CLUSTER}} --kubeconfig "{{.KIND_KUBECONFIG}}"'"""
+new = {"plain": "kind delete cluster --name {{.CLUSTER}}", "noflag": "'{{.KIND_RUN}} kind delete cluster --name {{.CLUSTER}}'"}[how]
+if old not in s:
+    sys.exit(1)
+open(dst, "w").write(s.replace(old, new, 1))
+PY
+}
+if ! mutate_down noflag; then bad "D3 the mutant Taskfile was not made"
 else
   down "$mutfile" || true
-  if caller_intact; then bad "D2 the mutant (down without --kubeconfig) leaves the caller file alone: the probe cannot see it"
-  else ok "D2 mutant without --kubeconfig: the context is removed from the caller file → red as it must"; fi
+  if caller_intact; then ok "D3 down through the runner without the flag: the caller file is still intact (the runner's environment alone holds)"
+  else bad "D3 the runner alone did not keep kind off the caller file"; fi
+fi
+if ! mutate_down plain; then bad "D2 the mutant Taskfile was not made"
+else
+  down "$mutfile" || true
+  if caller_intact; then bad "D2 the mutant (a plain kind delete) leaves the caller file alone: the probe cannot see it"
+  else ok "D2 mutant that bypasses the runner: the context is removed from the caller file → red as it must"; fi
 fi
 
 # Judged on the whole run

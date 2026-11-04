@@ -7,6 +7,8 @@
 # 3. payment-rpc stopped: an order still reaches CONFIRMED (nothing in the order flow waits for payment).
 # Needs kubectl + helm + curl + jq. Exits non-zero (with the pods' state) when anything is off. Restores the release.
 set -euo pipefail
+# refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
+[ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2
 ingress_chart_version=${INGRESS_NGINX_VERSION:-4.14.3}
 host=pay.localtest.me

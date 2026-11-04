@@ -18,7 +18,7 @@
 #   a mutant   NOT the decoy (a rewrite that does not take effect, or a call that fails, passes; the mutant must really have run)
 #
 # The mutants edit a COPY of the real smoke.sh before its first kubectl, or the real entry:
-#   1 unset KUBECONFIG                          2 read -r KUBECONFIG PATH <<< "<decoy> <second fake bin>:..."   (r4, as the reviewer wrote it)
+#   1 unset KUBECONFIG; kubectl by path         2 read -r KUBECONFIG PATH <<< "<decoy> <second fake bin>:..."   (r4, as the reviewer wrote it)
 #   3 export -n PATH KUBECONFIG; bash -c '<kubectl by path>'           4 kubectl by absolute path
 #   5 export KUBECONFIG="$HOME/.kube/config"    6 env -u KUBECONFIG kubectl             9 HOME=<decoy home>; unset KUBECONFIG; kubectl by path
 #   7 every kind script run directly, outside its task: refused (exit 2), no tool called (#444)
@@ -28,6 +28,7 @@ cd "$(dirname "$0")/../../.."
 root=$PWD
 
 command -v perl >/dev/null || { echo "needs perl (alarm)"; exit 1; }
+python3 -c 'import yaml' 2>/dev/null || { echo "needs python3 with PyYAML (pip install pyyaml): mutant 8 runs check-kubeconfig.py"; exit 1; }
 cluster=probe ns=probe-ns
 fail=0 pass=0
 ok()  { pass=$((pass + 1)); echo "ok   $*"; }
@@ -160,6 +161,10 @@ judge strict >/dev/null 2>&1; j4=$?
 if [ "$j1" = 0 ] && [ "$j2" = 1 ] && [ "$j3" = 1 ] && [ "$j4" = 1 ]; then ok "judge: clean log passes; the decoy file and the decoy HOME turn it red; strict also refuses a third file"
 else bad "judge self-check: clean=$j1 (want 0) decoy-file=$j2 decoy-home=$j3 third-file=$j4 (want 1 each)"; fi
 
+printf 'kubectl\t%s\tflag\tget ns\n' "$dedicated" > "$calls"; saved=$calls; calls=/nonexistent/calls
+judge >/dev/null 2>&1; j5=$?; calls=$saved
+if [ "$j5" = 2 ]; then ok "judge: one that cannot read its log is a crash (exit 2), never a verdict"; else bad "judge crash check: exit $j5, want 2"; fi
+
 # ---- baseline: the real entry, the real scripts, a hostile caller
 fresh_tree
 lines_of Taskfile.yml
@@ -181,7 +186,8 @@ mut_smoke() {  # <name> <payload>: insert payload (with a marker that proves it 
 import re, sys
 path, payload, marker = sys.argv[1:4]
 t = open(path).read()
-new = re.sub(r"(?m)^kubectl ", payload + "; echo ran >> '" + marker + "'\nkubectl ", t, count=1)
+# the marker first: a payload that the shell refuses (readonly variable) may stop the script under set -e, and "reached" is what the cell needs
+new = re.sub(r"(?m)^kubectl ", "echo ran >> '" + marker + "'\n" + payload + "\nkubectl ", t, count=1)
 if new == t:
     sys.exit("smoke.sh has no line starting with kubectl")
 open(path, "w").write(new)
@@ -193,24 +199,46 @@ cell() {  # <name> <what> <payload>
   run_lines 'smoke.sh'
   out=$(judge); rc=$?
   if [ "$rc" = 2 ]; then bad "mutant $name ($what): the judge crashed: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"; return; fi
-  if [ ! -s "$tmp/ran-$name" ]; then bad "mutant $name ($what): the edited line never ran (the cell proves nothing)"; return; fi
-  if [ "$rc" = 0 ]; then ok "mutant $name ($what): the edit ran, the decoy was not used ($(printf '%s' "$out" | head -1))"
+  if [ ! -s "$tmp/ran-$name" ]; then bad "mutant $name ($what): the edited line was never reached (the cell proves nothing)"; return; fi
+  if [ "$rc" = 0 ]; then ok "mutant $name ($what): the edit was reached, the decoy was not used ($(printf '%s' "$out" | head -1))"
   else bad "mutant $name ($what): the decoy WAS used: $(printf '%s' "$out" | sed -n 2p | sed 's/^ *//' | cut -c1-140)"; fi
 }
-cell 1 'unset KUBECONFIG' 'unset KUBECONFIG'
+cell 1 'unset KUBECONFIG; kubectl by path (no shim)' "unset KUBECONFIG; $fakebin2/kubectl -n x get ns"
 cell 2 'read -r KUBECONFIG PATH (r4)' "read -r KUBECONFIG PATH <<< \"$decoy $fakebin2:/usr/bin:/bin\""
 cell 3 'export -n PATH KUBECONFIG; bash -c kubectl by path' "export -n PATH KUBECONFIG; bash -c '$fakebin2/kubectl -n x get ns'"
 cell 4 'kubectl by absolute path' "$fakebin2/kubectl -n x get ns"
-cell 5 'export KUBECONFIG=$HOME/.kube/config' 'export KUBECONFIG="$HOME/.kube/config"'
+cell 5 'export KUBECONFIG=$HOME/.kube/config; kubectl by path' "export KUBECONFIG=\"\$HOME/.kube/config\"; $fakebin2/kubectl -n x get ns"
 cell 6 'env -u KUBECONFIG kubectl' 'env -u KUBECONFIG kubectl -n x get ns'
 cell 9 'HOME=<decoy home>; unset KUBECONFIG; kubectl by path' "HOME=$decoyhome; unset KUBECONFIG; $fakebin2/kubectl -n x get ns"
+
+# ---- controls: the layers are load-bearing. Without the read-only lock, or without the scratch HOME, the same mutants DO reach the decoy
+# (a cell that stays green when the layer is gone proves nothing about the layer)
+ctrl() {  # <name> <what> <payload> <tweak run in the scratch tree>
+  local name=c$1 what=$2 payload=$3 tweak=$4 out rc
+  if ! mut_smoke "$name" "$payload" 2>"$tmp/mut.err"; then bad "control $name was not made: $(cat "$tmp/mut.err")"; return; fi
+  ( cd "$tree/deployments/helm/kind" && eval "$tweak" ) 2>"$tmp/mut.err" || { bad "control $name: the tweak failed: $(cat "$tmp/mut.err")"; return; }
+  run_lines 'smoke.sh'
+  out=$(judge); rc=$?
+  if [ "$rc" = 2 ]; then bad "control $name ($what): the judge crashed"; return; fi
+  if [ ! -s "$tmp/ran-$name" ]; then bad "control $name ($what): the edited line was never reached"; return; fi
+  if [ "$rc" = 1 ]; then ok "control $name ($what): the decoy IS used, so the layer is what keeps it out ($(printf '%s' "$out" | sed -n 2p | sed 's/^ *//' | cut -c1-70))"
+  else bad "control $name ($what): the decoy was not used even without the layer: the cell does not test it"; fi
+}
+tweak_nolock() { : > lock.sh; }
+tweak_nohome() {  # no lock, and HOME is the caller's (the scripts' own #444 guard has to go too, or it refuses to start)
+  : > lock.sh
+  sed -i.bak 's|HOME="$scratch/home"|HOME="$real_home"|' run.sh && grep -q 'HOME="$real_home"' run.sh || return 1
+  sed -i.bak '/KIND_RUNNER_HOME/d' smoke.sh
+}
+ctrl 2 'no lock.sh: read -r KUBECONFIG PATH' "read -r KUBECONFIG PATH <<< \"$decoy $fakebin2:/usr/bin:/bin\"" tweak_nolock
+ctrl 5 'no lock.sh, caller HOME: export KUBECONFIG=$HOME/.kube/config' "export KUBECONFIG=\"\$HOME/.kube/config\"; $fakebin2/kubectl -n x get ns" tweak_nohome
 
 # ---- 7: every kind script run directly, outside its task, by a hostile caller
 fresh_tree
 : > "$calls"
 direct=0 refused=0 notrefused=""
 for f in "$root"/deployments/helm/kind/*.sh; do
-  n=$(basename "$f"); case $n in *-test.sh) continue ;; esac
+  n=$(basename "$f"); case $n in *-test.sh|run.sh|lock.sh) continue ;; esac
   direct=$((direct + 1))
   ( cd "$tree" && env HOME="$decoyhome" PATH="$fakebin:/usr/bin:/bin" KUBECONFIG="$decoy" \
       perl -e 'alarm 25; exec @ARGV' bash "deployments/helm/kind/$n" "$ns" x-monorepo ) >"$tmp/direct.out" 2>&1

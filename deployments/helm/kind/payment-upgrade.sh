@@ -31,6 +31,8 @@
 # before the switch (A, whose checkout was started by the old pods) and one paid after (C) both reach COMPLETED.
 # Needs kubectl, helm, curl, jq, git, tar, python3 with PyYAML.
 set -euo pipefail
+# refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
+[ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 # Internal state is never taken from the environment: cleanup() decides what to delete from ns_uid, so a parent
 # that exported them (or a stale export in a shell) must not be able to make it delete a namespace this run did not create.
 # They start empty here, before the trap exists. The environment variables this script reads are, all of them:
