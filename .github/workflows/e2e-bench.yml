@@ -1,0 +1,55 @@
+name: e2e-bench
+
+# TEMPORARY (#447): measures console-e2e `task web-e2e` under different Playwright workers. Removed before
+# merge. Each matrix cell is its own runner, so cells do not disturb each other.
+on:
+  push:
+    branches: [ci/447-console-e2e-speed]
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        workers: ["default", "3", "4"]
+        rep: [1, 2, 3]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      E2E_DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with: { package_json_file: web/package.json }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: task build web-install
+      - uses: ./.github/actions/playwright
+      - run: |
+          docker compose -f deployments/docker/docker-compose.yaml up -d dex
+          for _ in $(seq 30); do curl -fsS http://dex.localtest.me:5556/dex/.well-known/openid-configuration >/dev/null && exit 0; sleep 1; done
+          docker compose -f deployments/docker/docker-compose.yaml logs dex; exit 1
+      - name: web-e2e
+        env: { E2E_DEX: "1" }
+        run: |
+          echo "nproc=$(nproc)" | tee -a "$GITHUB_STEP_SUMMARY"
+          args=""; [ "${{ matrix.workers }}" != "default" ] && args="-- --workers=${{ matrix.workers }}"
+          start=$(date +%s)
+          set +e
+          task web-e2e $args 2>&1 | tee e2e.log
+          rc=${PIPESTATUS[0]}
+          dur=$(( $(date +%s) - start ))
+          echo "workers=${{ matrix.workers }} rep=${{ matrix.rep }} rc=$rc web-e2e=${dur}s" | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -E '^\s+[0-9]+ (passed|failed|flaky|skipped)' e2e.log | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -E '^Running [0-9]+ tests using [0-9]+ workers' e2e.log | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $rc
