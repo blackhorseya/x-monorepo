@@ -57,6 +57,8 @@ bad() { fail=$((fail + 1)); echo "FAIL $*"; }
 #   cluster  `--name <v>` and `grep -qx <v>`          ns  ` -n <v>` and the first argument of kind/*.sh
 #   kubeconfig  the file every kubectl / helm / kind/*.sh command is pointed at (`export KUBECONFIG=…/kubeconfig-<cluster>`);
 #            a command that aims at nothing is counted as MISSING, so one that lost its prefix turns the cell red
+#   kindkc   every `kind create|delete cluster` names its kubeconfig (`--kubeconfig …/kubeconfig-<cluster>`): without the flag kind
+#            reads $KUBECONFIG, then ~/.kube/config, and `delete` removes the kind-<cluster> context from it (PR #435 r1)
 #   kedans   the namespace KEDA itself is installed in (`helm upgrade --install keda … -n <v>`), not ns
 values_of() {
   case $1 in
@@ -70,6 +72,13 @@ values_of() {
           *) echo MISSING ;;
         esac
       done ;;
+    kindkc)
+      sed 's/^task: \[[^]]*\] //' "$2" | grep -E 'kind (create|delete) cluster' | while IFS= read -r l; do
+        case $l in
+          *'--kubeconfig "'*) printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | head -1 | sed 's/.*kubeconfig-//; s/"$//' ;;
+          *) echo MISSING ;;
+        esac
+      done ;;
     kedans) grep -oE -- 'kedacore/keda -n [^ ]+' "$2" | sed 's/^kedacore\/keda -n //' ;;
     ns)
       { grep -v 'kedacore/keda' "$2" | grep -oE -- ' -n [^ ]+' | sed 's/^ -n //'
@@ -80,7 +89,7 @@ values_of() {
 # run_cell <task> <kind: cluster|ns> <source: S1..S4> -> dry output in $tmp/out
 run_cell() {
   local t=$1 k=$2 s=$3 var def
-  case $k in cluster) var=CLUSTER ;; ns) var=NS ;; kubeconfig) var=CLUSTER ;; kedans) var=KEDA_NS ;; esac
+  case $k in cluster) var=CLUSTER ;; ns) var=NS ;; kubeconfig|kindkc) var=CLUSTER ;; kedans) var=KEDA_NS ;; esac
   case $s in
     S1) env -u CLUSTER -u NS -u KEDA_NS task -t "$TASKFILE" --dry "$t" ;;
     S2) env -u CLUSTER -u NS -u KEDA_NS task -t "$TASKFILE" --dry "$t" "$var=probe" ;;
@@ -90,7 +99,7 @@ run_cell() {
   return "${PIPESTATUS[0]}"
 }
 
-# task, kind (cluster / ns / kubeconfig / kedans), literal minimum number of places in S1 (the anchor)
+# task, kind (cluster / ns / kubeconfig / kindkc / kedans), literal minimum number of places in S1 (the anchor)
 cells=(
   "helm-kind-up cluster 3"
   "helm-kind-up ns 5"
@@ -100,6 +109,8 @@ cells=(
   "helm-kind-keda ns 8"
   "helm-kind-keda kedans 1"
   "helm-kind-down cluster 1"
+  "helm-kind-up kindkc 1"
+  "helm-kind-down kindkc 1"
   "helm-kind-up kubeconfig 6"
   "helm-kind kubeconfig 16"
   "helm-kind-keda kubeconfig 11"

@@ -17,6 +17,9 @@
 #   P2    an empty kubeconfig file                   same as P1: the caller's kubeconfig is not needed at all (never `unset`:
 #                                              a regression would then fall back to ~/.kube/config, which can be a production cluster)
 #   M1    the alias, on a Taskfile with the KUBECONFIG prefix removed (KUBE_ENV: ':')   the judgement must turn RED: the namespace is in other
+#   D1    `task helm-kind-down CLUSTER=<a name that does not exist>` with KUBECONFIG=<a caller file that holds the context kind-<that name>>
+#         the caller file is byte-for-byte what it was (kind delete only touches the kubeconfig it is given), and no cluster of this run is gone
+#   D2    the same on a Taskfile whose down has no --kubeconfig    the judgement must turn RED: the context is removed from the caller file
 #
 # Also judged on every cell: the alias file and the caller's ~/.kube/config are byte-for-byte what they were (the task
 # never writes the caller's kubeconfig), and the clusters that existed before are all still there.
@@ -148,6 +151,28 @@ else
   else bad "M1 the mutant created the namespace nowhere: $(tail -3 "$tmp/run.log")"; fi
 fi
 reset_ns
+
+# D1 / D2: kind delete removes the kind-<cluster> context from the kubeconfig it uses ($KUBECONFIG, else ~/.kube/config), whether or not the
+# cluster exists. The caller file is a fake made here (other's kubeconfig, its context renamed kind-<ghost>); ghost is no cluster.
+ghost="k437x-$suffix"
+cp "$tmp/other.yaml" "$tmp/caller.yaml"
+kubectl --kubeconfig "$tmp/caller.yaml" config rename-context "kind-$other" "kind-$ghost" >/dev/null || { echo "cannot build the caller kubeconfig"; exit 1; }
+caller_before=$(cksum < "$tmp/caller.yaml")
+has_ctx() { kubectl --kubeconfig "$tmp/caller.yaml" config get-contexts -o name 2>/dev/null | grep -qx "kind-$ghost"; }
+down() { KUBECONFIG="$tmp/caller.yaml" task -t "$1" helm-kind-down "CLUSTER=$ghost" >"$tmp/down.log" 2>&1; }
+caller_intact() { has_ctx && [ "$(cksum < "$tmp/caller.yaml")" = "$caller_before" ]; }
+clusters_there() { kind get clusters 2>/dev/null | grep -qx "$target" && kind get clusters 2>/dev/null | grep -qx "$other"; }
+if ! has_ctx; then bad "D0 the caller file has no context kind-$ghost (nothing to protect)"; else ok "D0 the caller file holds the context kind-$ghost (no such cluster)"; fi
+if down "$TASKFILE"; then rc=0; else rc=$?; fi
+if [ "$rc" = 0 ] && caller_intact && clusters_there; then ok "D1 helm-kind-down: the caller kubeconfig is byte-for-byte unchanged, the context is still there, both clusters of this run are too"
+else bad "D1 rc=$rc intact: $(caller_intact && echo yes || echo no), clusters: $(clusters_there && echo yes || echo no)"; tail -5 "$tmp/down.log"; fi
+sed 's|^\(      - kind delete cluster --name {{.CLUSTER}}\) --kubeconfig .*|\1|' "$root/Taskfile.yml" > "$mutfile"
+if cmp -s "$root/Taskfile.yml" "$mutfile"; then bad "D2 the mutant Taskfile was not made"
+else
+  down "$mutfile" || true
+  if caller_intact; then bad "D2 the mutant (down without --kubeconfig) leaves the caller file alone: the probe cannot see it"
+  else ok "D2 mutant without --kubeconfig: the context is removed from the caller file → red as it must"; fi
+fi
 
 # Judged on the whole run
 [ "$(cksum < "$tmp/alias.yaml")" = "$alias_before" ] && ok "the alias kubeconfig is unchanged" || bad "the alias kubeconfig was written"
