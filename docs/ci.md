@@ -34,6 +34,33 @@
 - hook 失敗時 exit 2，stderr 會回到 agent 讓它自己修；`stop_hook_active` 防止無限循環
 - dependabot 只掃單一 module 目錄、不懂 go.work：Go bump 會讓其他 module 漂移，`dependabot-sync.yml` 在它的分支跑 `task tidy` 補 commit 再觸發 CI，否則 `work-sync` 會擋。`.github/dependabot.yml` 三組每週各一支 PR：gomod（所有 module 一組）、github-actions、npm（`web/` pnpm workspace 一組；lockfile 算 releasable，merge 會切 patch 版）
 
+## console-e2e 的平行度與 sharding（#447）
+
+基準：run 41920885162，`console-e2e` 一個 job 369s（setup/build/dex ~75s、`task web-e2e` 254s 用 2 workers、ports 24s、payment 19s）。現在它是 3 個 shard 的 matrix（`console-e2e (1)`…`(3)`）：
+
+- **觸發不變**：仍是 `run_console_e2e` 一個旗標、一個 job（matrix 不是新 job），`scripts/ci-changes.sh` 與 `scripts/test.sh` 的規則不動。沒有 branch protection / ruleset 綁舊的 check 名稱。
+- **workers**：CI 設 `E2E_WORKERS=4`（ubuntu-latest 在 public repo 是 4 vCPU，實測 `nproc=4`）；本機沒設，`task web-e2e` 還是 Playwright 預設，行為不變。
+- **shards**：`task web-e2e -- --shard=i/N`，N 是 matrix 大小（`strategy.job-total`，只有一個來源）。每個 shard 有自己的 runner、postgres service、dex、`bin/worker`，互不共用。
+- **覆蓋**：shard 1 先跑 `task web-e2e-shards-check -- N`：每個 shard 的 `--list` 合起來必須剛好等於未分片的 `--list`（每個 test 一次、不多不少，只列不啟 server）。`web-e2e-ports` 與 `web-e2e-payment` 只在 shard 2 跑（它最輕）。
+- **改 shard 數**：改 matrix 的 `shard: [1, 2, 3]`；ports / payment 掛在 `matrix.shard == 2`，要確認該 shard 不會因此變成 critical path。
+- **沒做慢 spec**（`history.spec.ts`、`oidc-session.spec.ts` 改 clock／短 interval）：分 shard 後單一 shard 只有 50–90s，最長的單一 case 17.9s；兩個 spec 累計 189s 攤在 12 個 worker 上，即使全部歸零，一個 shard 的牆鐘也只少約 16s。其中不少是「over more than two poll periods 沒有再問」的負向等待（`waitForTimeout(4_500)`），縮短等於削弱斷言，不值得。
+
+實測（`task web-e2e` step，nproc=4，274 tests／257 passed，全部 0 flaky、0 retry；每格一台 runner）：
+
+| 方案 | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| 基準 workers=2（預設） | 250s | 273s | 273s |
+| workers=3 | 198s | 207s | 197s |
+| workers=4 | 164s | 174s | 196s |
+| workers=4，shard 1/2 | 97s | 80s | 99s |
+| workers=4，shard 2/2 | 112s | 111s | 115s |
+| workers=4，shard 1/3 | 86s | 79s | 80s |
+| workers=4，shard 2/3 | 65s | 63s | 51s |
+| workers=4，shard 3/3 | 72s | 82s | 89s |
+| ports + payment（獨立） | 50s | 45s | 50s |
+
+選 workers=4 × 3 shards，ports + payment 放 shard 2（~60s + ~48s ≈ 110s，仍低於 setup 之外最慢的 shard 1/3 與 3/3 之上限太多）。
+
 ## 本機 hook 證據：AgEnD hooks ≠ lefthook（#300）
 
 `git commit` / `git push` 成功，不代表 `lefthook.yml` 的 `gate-fast` / `gate-local` 跑過：git 只執行 active `core.hooksPath` 底下**同名**的 hook。AgEnD 管理的 worktree 會把 `core.hooksPath` 指向 `~/.agend/hooks`，那裡只有 `prepare-commit-msg`、`reference-transaction` 等 AgEnD hooks，沒有 `pre-commit` / `pre-push`，也不呼叫 lefthook。`task tools:hooks` 裝的 lefthook 因此不會被觸發。
