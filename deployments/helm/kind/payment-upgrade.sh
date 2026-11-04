@@ -31,13 +31,13 @@
 # before the switch (A, whose checkout was started by the old pods) and one paid after (C) both reach COMPLETED.
 # Needs kubectl, helm, curl, jq, git, tar, python3 with PyYAML.
 set -euo pipefail
-# Internal state is never taken from the environment: cleanup() decides what to delete from ns_created / token, so a parent
+# Internal state is never taken from the environment: cleanup() decides what to delete from ns_uid, so a parent
 # that exported them (or a stale export in a shell) must not be able to make it delete a namespace this run did not create.
 # They start empty here, before the trap exists. The environment variables this script reads are, all of them:
 #   UPGRADE_RUN_ID (digits-digits; names the namespace, proves nothing about ownership), PAYMENT_UPGRADE_FROM_TAG,
 #   PAYMENT_UPGRADE_FROM_IMAGE, UPGRADE_RPC_PORT, UPGRADE_SERVE_PORT,
 # plus what the tools themselves read (PATH, KUBECONFIG, HOME, git / helm / kubectl settings).
-ns_created="" token="" helm_pid="" soft="" pfs="" body="" res=""
+ns_uid="" token="" helm_pid="" soft="" pfs="" body="" res=""
 chart=$3 values=$4 flow=$5 # $1 and $2 (the home namespace and release) are deliberately not used
 kind_dir=$(cd "$(dirname "$0")" && pwd)
 run_id=${UPGRADE_RUN_ID:-$(date +%s)-$RANDOM}
@@ -55,7 +55,7 @@ url_check=$kind_dir/postgres-url-check.py
 fail() {
   echo "payment-upgrade: $*" >&2
   [ -z "${soft:-}" ] || exit 1
-  if [ -n "${ns_created:-}" ]; then
+  if [ -n "$ns_uid" ]; then
     kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true
     # The migrate hook Job is what fails an upgrade onto a schema its image does not know: say why, not just that it did.
     echo "payment-upgrade: logs of the $release-migrate Job (hook pods are kept after a failure):" >&2
@@ -70,18 +70,15 @@ cleanup() {
   if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
-  # Ownership first, then the one destructive step, bound to the identity that was verified. Only the namespace that carries the
-  # token THIS call generated is ours (ns_created and token start empty and are set only after the pre-existence check passed;
-  # a namespace that was already there under this name cannot carry the token). It is found by that token, and what is deleted
-  # is that object, by UID: if someone deleted it and made another namespace of the same name between the lookup and the
-  # delete, the API server refuses (409, uid precondition) and nothing is touched. There is no `helm uninstall`: the release's
-  # storage (helm's Secrets) and everything it installed live in this namespace and go with it.
-  if [ -n "$ns_created" ] && [ -n "$token" ]; then
-    uid=$(kubectl get namespace -l "$run_label=$token" -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.uid}{"\n"}{end}' 2>/dev/null | awk -v n="$ns" '$1 == n {print $2}')
-    if [ -n "$uid" ]; then
-      printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "$uid" |
-        kubectl delete --raw "/api/v1/namespaces/$ns" -f - >/dev/null 2>&1 || echo "payment-upgrade: left the namespace $ns alone: it is gone, or no longer the one this run created" >&2
-    fi
+  # The one destructive step, bound to the identity the API server gave this run's namespace WHEN IT CREATED IT (ns_uid, taken
+  # from the create's own answer and never looked up again: a lookup at cleanup time would find whatever carries the token
+  # then, and a namespace deleted and re-made under the same name and label would have its new uid accepted). The delete has
+  # that uid as a precondition, so a namespace that is not the one this run created is refused (409) and nothing is touched.
+  # No uid (nothing was created, or the create's answer was lost) means nothing is deleted. There is no `helm uninstall`:
+  # the release's storage (helm's Secrets) and everything it installed live in the namespace and go with it.
+  if [ -n "$ns_uid" ]; then
+    printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "$ns_uid" |
+      kubectl delete --raw "/api/v1/namespaces/$ns" -f - >/dev/null 2>&1 || echo "payment-upgrade: left the namespace $ns alone: it is gone, or no longer the one this run created" >&2
   fi
   return "$rc"
 }
@@ -197,13 +194,11 @@ assert_connections() { # <rendered chart>
 assert_connections "$old_render"
 assert_connections "$new_render"
 # Only now is anything created. A namespace that already exists is never ours, whatever it is labelled: run_id can be given by
-# the caller, so a label made of it proves nothing. Ownership is a token generated here, by this call, that nobody else can
-# know; it is what tells a create whose answer was lost (the namespace carries our token) from AlreadyExists (it does not).
-# ns_created is set only once the create may have been sent, and cleanup() deletes only a namespace that carries the token.
+# the caller, so a label made of it proves nothing. The token (random, generated here) is only a marker for a human; ownership is
+# the uid in the create's own answer. If that answer is lost the namespace is NOT adopted: the run stops and says what to delete.
 if kubectl get namespace "$ns" -o name >/dev/null 2>&1; then fail "refused: the namespace $ns already exists: it is not reused and not touched"; fi
 token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
-ns_created=1
-if ! err=$(kubectl create -f - 2>&1 >/dev/null <<NSEOF
+if ! created=$(kubectl create -f - -o jsonpath='{.metadata.uid}' 2>"$tmp/create.err" <<NSEOF
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -212,11 +207,14 @@ metadata:
     $run_label: "$token"
 NSEOF
 ); then
-  if grep -q AlreadyExists <<<"$err" || [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" != "namespace/$ns" ]; then
-    ns_created=""
-    fail "refused: could not create the namespace $ns (it already exists, or the create failed): it is not reused and not touched"
+  if grep -q AlreadyExists "$tmp/create.err"; then fail "refused: the namespace $ns already exists: it is not reused and not touched"; fi
+  if [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" = "namespace/$ns" ]; then
+    fail "refused: the create of $ns was applied but its answer was lost, so its uid is unknown and nothing will be deleted: namespace $ns (label $run_label=$token) is left in place, delete it by hand"
   fi
+  fail "refused: could not create the namespace $ns: $(head -c 300 "$tmp/create.err")"
 fi
+[[ $created =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || fail "refused: the create of $ns did not answer with a namespace uid (got '$created'), so nothing will be deleted: if namespace $ns (label $run_label=$token) exists, delete it by hand"
+ns_uid=$created
 kubectl -n "$ns" apply -f "$kind_dir/deps.yaml" >/dev/null
 kubectl -n "$ns" rollout status deploy/postgres deploy/redis --timeout=2m >/dev/null || fail "the drill's Postgres / Redis did not become ready"
 old_up
