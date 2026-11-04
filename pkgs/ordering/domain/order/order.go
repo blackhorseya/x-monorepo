@@ -191,8 +191,9 @@ func (x *Order) markPaid(now time.Time, cause Cause) {
 }
 
 // Cancel moves the order to Cancelled if the state machine allows it. The caller says why: the
-// aggregate cannot tell a client's request from another BC's (CauseRPCRequest or
-// CauseCancellationRequested); anything else, the zero value included, is ErrInvalidCause and
+// aggregate cannot tell a client's request from another BC's (CauseRPCRequest, or
+// CauseCancellationRequested / CauseStockShortage / CauseReservationExpired for another BC's, the
+// last two when it classified its request); anything else, the zero value included, is ErrInvalidCause and
 // changes nothing. The state machine's refusal comes first.
 func (x *Order) Cancel(now time.Time, cause Cause) error {
 	if !x.status.CanTransitionTo(StatusCancelled) {

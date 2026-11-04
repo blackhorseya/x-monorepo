@@ -25,7 +25,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `admin.no_database` | `FAILED_PRECONDITION` | admin | server 沒接 Postgres（`postgres.url` 空）：poison 表與 outbox / inbox 都在 DB |
 | `admin.unknown_bounded_context` | `INVALID_ARGUMENT` | admin | `bounded_context` 不在 `apps/rpc` 列的 schema 清單 |
 | `admin.poison_not_found` | `NOT_FOUND` | admin | `GetPoison` 的 offset 不存在 |
-| `order.permission_denied` | `PERMISSION_DENIED` | ordering application（`ownership.Policy`） | 非 admin 的 principal 替別人下單（`CreateOrder`）或列別人的訂單（`ListOrders`）；admin role = `auth.admin_role`。讀、取消、完成別人的訂單（`GetOrder` / `CancelOrder` / `CompleteOrder`）是 `order.not_found`，不是這個 |
+| `order.permission_denied` | `PERMISSION_DENIED` | ordering application（`ownership.Policy`） | 非 admin 的 principal 替別人下單（`CreateOrder`）或列別人的訂單（`ListOrders`）；admin role = `auth.admin_role`。讀、取消、完成別人的訂單（`GetOrder` / `GetOrderHistory` / `CancelOrder` / `CompleteOrder`）是 `order.not_found`，不是這個 |
 | `order.invalid_id` / `order.empty_customer` / `order.no_items` / `order.invalid_sku` / `order.invalid_quantity` | `INVALID_ARGUMENT` | ordering domain | aggregate 不變量（consumer path 沒有 protovalidate，所以留著） |
 | `order.invalid_status_filter` / `order.invalid_cursor` | `INVALID_ARGUMENT` | ordering domain | ListOrders 的 filter / cursor 壞掉 |
 | `order.invalid_cause` | `INVALID_ARGUMENT` | ordering domain | `Order.Cancel` 收到固定列舉以外、或取消不可能有的 cause（含零值：adapter 沒說來源）；訊息固定，不回顯上游文字。#427 |
@@ -36,7 +36,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `order.payment_required` | `FAILED_PRECONDITION` | ordering domain | `CompleteOrder` 遇到 CONFIRMED 且 `payment_required = true` 的訂單：這張單是在 `ordering.require_payment` 開著時進 CONFIRMED 的，只能經付款前進（docs/payment.md §8）。只看訂單自己的快照，不看現在的開關——開關切回 `false` 後同一張單仍是這個。其他狀態（COMPLETED、CANCELLED）維持 `order.cannot_complete` |
 | `order.cannot_pay` | （不到 rpc） | ordering domain | `MarkPaid` 遇到不是 CONFIRMED 的訂單；consumer path：`PaymentCaptured` 到達時快照 `true` 的訂單已 `CANCELLED`（不復活）→ 被拒、drop，錢由 Payment 側 T10 退（docs/payment.md §8） |
 | `order.not_confirmed` | `FAILED_PRECONDITION`（不到 rpc） | ordering domain | `PaymentCaptured`／`PaymentExpired` 指到一張還沒 `CONFIRMED` 的訂單（`PENDING`）。付款單在 `OrderConfirmed` 之後才建，健康的系統不會發生；consumer 以 drop 處理 |
-| `order.not_found` | `NOT_FOUND` | ordering domain / application | 沒有這筆；非 admin 的 principal 讀、取消、完成別人的訂單也是它（`GetOrder` / `CancelOrder` / `CompleteOrder`，不洩漏存在與否） |
+| `order.not_found` | `NOT_FOUND` | ordering domain / application | 沒有這筆；非 admin 的 principal 讀、取消、完成別人的訂單也是它（`GetOrder` / `GetOrderHistory` / `CancelOrder` / `CompleteOrder`，不洩漏存在與否） |
 | `order.duplicate` | `ALREADY_EXISTS` | ordering domain | 同 id 再 Save（repo 層） |
 | `order.unknown_sku` / `order.inactive_sku` | `INVALID_ARGUMENT` | ordering domain（`CreateOrder`） | catalog 報不出價：SKU 沒有 product（`unknown_sku`，多半打錯）／product 已下架（`inactive_sku`）。**整張單被拒、沒寫入、沒發 event、冪等 key 也沒被花掉**（商品上架後同一個 key 重送就成立）。訊息固定，不回是哪個 SKU（呼叫端知道自己送了什麼） |
 | `order.mixed_currency` | `INVALID_ARGUMENT` | ordering domain（`CreateOrder`） | 同一張單的行落在兩種幣別（每個 product 各自的幣別，一張單只能一種）；沒寫入 |

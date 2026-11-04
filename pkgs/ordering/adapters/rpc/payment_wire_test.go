@@ -40,7 +40,7 @@ func TestWire_PaidAndPaymentRequired(t *testing.T) {
 	c := context.Background()
 	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
 	for _, required := range []bool{true, false} {
-		svc := rpc.NewOrderService(nil, getOrderReturns{&dto.OrderOutput{ID: "o-1", Status: "PAID", PaymentRequired: required, CreatedAt: at, UpdatedAt: at}}, nil, nil, nil)
+		svc := rpc.NewOrderService(nil, getOrderReturns{&dto.OrderOutput{ID: "o-1", Status: "PAID", PaymentRequired: required, CreatedAt: at, UpdatedAt: at}}, nil, nil, nil, nil)
 		res, err := svc.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: "o-1"}))
 		if err != nil {
 			t.Fatal(err)
@@ -51,7 +51,7 @@ func TestWire_PaidAndPaymentRequired(t *testing.T) {
 	}
 
 	var status string
-	svc := rpc.NewOrderService(nil, nil, nil, nil, listReturns{&status})
+	svc := rpc.NewOrderService(nil, nil, nil, nil, listReturns{&status}, nil)
 	if _, err := svc.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{Status: orderingv1.OrderStatus_ORDER_STATUS_PAID})); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestWire_PaidAndPaymentRequired(t *testing.T) {
 // CompleteOrder on an order that requires payment is FAILED_PRECONDITION with the x-error-code
 // order.payment_required (README error table).
 func TestWire_CompleteOrder_PaymentRequired(t *testing.T) {
-	svc := rpc.NewOrderService(nil, nil, nil, completeOrderFails{err: order.ErrPaymentRequired}, nil)
+	svc := rpc.NewOrderService(nil, nil, nil, completeOrderFails{err: order.ErrPaymentRequired}, nil, nil)
 	_, err := svc.CompleteOrder(context.Background(), connect.NewRequest(&orderingv1.CompleteOrderRequest{Id: "o-1"}))
 	var ce *connect.Error
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeFailedPrecondition || ce.Meta().Get("x-error-code") != "order.payment_required" {

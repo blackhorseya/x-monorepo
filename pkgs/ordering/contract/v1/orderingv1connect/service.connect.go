@@ -46,6 +46,9 @@ const (
 	OrderServiceCompleteOrderProcedure = "/ordering.v1.OrderService/CompleteOrder"
 	// OrderServiceListOrdersProcedure is the fully-qualified name of the OrderService's ListOrders RPC.
 	OrderServiceListOrdersProcedure = "/ordering.v1.OrderService/ListOrders"
+	// OrderServiceGetOrderHistoryProcedure is the fully-qualified name of the OrderService's
+	// GetOrderHistory RPC.
+	OrderServiceGetOrderHistoryProcedure = "/ordering.v1.OrderService/GetOrderHistory"
 )
 
 // OrderServiceClient is a client for the ordering.v1.OrderService service.
@@ -72,6 +75,15 @@ type OrderServiceClient interface {
 	// A non-admin lists only their own orders: customer_id empty means themselves,
 	// another customer is PERMISSION_DENIED. Admin and anonymous callers filter freely.
 	ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error)
+	// GetOrderHistory returns every state transition of one order, oldest first (seq 1..N). It is not
+	// paged: the state machine bounds it at 4 entries (PENDING → CONFIRMED → PAID → COMPLETED; a
+	// cancelled order has fewer), and a test turns red if a longer path ever becomes possible.
+	// Ownership is GetOrder's: a non-admin reading someone else's order gets NOT_FOUND
+	// (x-error-code: order.not_found), decided where the order is selected, and so does an order that
+	// does not exist. An order created before the history existed has none: an empty list, not an error.
+	// actor_subject is returned to an admin only; for every other caller (a customer, or anonymous when
+	// auth.mode is off) it is always empty, whatever the stored row says.
+	GetOrderHistory(context.Context, *connect.Request[v1.GetOrderHistoryRequest]) (*connect.Response[v1.GetOrderHistoryResponse], error)
 }
 
 // NewOrderServiceClient constructs a client for the ordering.v1.OrderService service. By default,
@@ -115,16 +127,23 @@ func NewOrderServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(orderServiceMethods.ByName("ListOrders")),
 			connect.WithClientOptions(opts...),
 		),
+		getOrderHistory: connect.NewClient[v1.GetOrderHistoryRequest, v1.GetOrderHistoryResponse](
+			httpClient,
+			baseURL+OrderServiceGetOrderHistoryProcedure,
+			connect.WithSchema(orderServiceMethods.ByName("GetOrderHistory")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // orderServiceClient implements OrderServiceClient.
 type orderServiceClient struct {
-	createOrder   *connect.Client[v1.CreateOrderRequest, v1.CreateOrderResponse]
-	getOrder      *connect.Client[v1.GetOrderRequest, v1.GetOrderResponse]
-	cancelOrder   *connect.Client[v1.CancelOrderRequest, v1.CancelOrderResponse]
-	completeOrder *connect.Client[v1.CompleteOrderRequest, v1.CompleteOrderResponse]
-	listOrders    *connect.Client[v1.ListOrdersRequest, v1.ListOrdersResponse]
+	createOrder     *connect.Client[v1.CreateOrderRequest, v1.CreateOrderResponse]
+	getOrder        *connect.Client[v1.GetOrderRequest, v1.GetOrderResponse]
+	cancelOrder     *connect.Client[v1.CancelOrderRequest, v1.CancelOrderResponse]
+	completeOrder   *connect.Client[v1.CompleteOrderRequest, v1.CompleteOrderResponse]
+	listOrders      *connect.Client[v1.ListOrdersRequest, v1.ListOrdersResponse]
+	getOrderHistory *connect.Client[v1.GetOrderHistoryRequest, v1.GetOrderHistoryResponse]
 }
 
 // CreateOrder calls ordering.v1.OrderService.CreateOrder.
@@ -152,6 +171,11 @@ func (c *orderServiceClient) ListOrders(ctx context.Context, req *connect.Reques
 	return c.listOrders.CallUnary(ctx, req)
 }
 
+// GetOrderHistory calls ordering.v1.OrderService.GetOrderHistory.
+func (c *orderServiceClient) GetOrderHistory(ctx context.Context, req *connect.Request[v1.GetOrderHistoryRequest]) (*connect.Response[v1.GetOrderHistoryResponse], error) {
+	return c.getOrderHistory.CallUnary(ctx, req)
+}
+
 // OrderServiceHandler is an implementation of the ordering.v1.OrderService service.
 type OrderServiceHandler interface {
 	// CreateOrder places a PENDING order. Whose order it is depends on who calls
@@ -176,6 +200,15 @@ type OrderServiceHandler interface {
 	// A non-admin lists only their own orders: customer_id empty means themselves,
 	// another customer is PERMISSION_DENIED. Admin and anonymous callers filter freely.
 	ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error)
+	// GetOrderHistory returns every state transition of one order, oldest first (seq 1..N). It is not
+	// paged: the state machine bounds it at 4 entries (PENDING → CONFIRMED → PAID → COMPLETED; a
+	// cancelled order has fewer), and a test turns red if a longer path ever becomes possible.
+	// Ownership is GetOrder's: a non-admin reading someone else's order gets NOT_FOUND
+	// (x-error-code: order.not_found), decided where the order is selected, and so does an order that
+	// does not exist. An order created before the history existed has none: an empty list, not an error.
+	// actor_subject is returned to an admin only; for every other caller (a customer, or anonymous when
+	// auth.mode is off) it is always empty, whatever the stored row says.
+	GetOrderHistory(context.Context, *connect.Request[v1.GetOrderHistoryRequest]) (*connect.Response[v1.GetOrderHistoryResponse], error)
 }
 
 // NewOrderServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -215,6 +248,12 @@ func NewOrderServiceHandler(svc OrderServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(orderServiceMethods.ByName("ListOrders")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orderServiceGetOrderHistoryHandler := connect.NewUnaryHandler(
+		OrderServiceGetOrderHistoryProcedure,
+		svc.GetOrderHistory,
+		connect.WithSchema(orderServiceMethods.ByName("GetOrderHistory")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ordering.v1.OrderService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OrderServiceCreateOrderProcedure:
@@ -227,6 +266,8 @@ func NewOrderServiceHandler(svc OrderServiceHandler, opts ...connect.HandlerOpti
 			orderServiceCompleteOrderHandler.ServeHTTP(w, r)
 		case OrderServiceListOrdersProcedure:
 			orderServiceListOrdersHandler.ServeHTTP(w, r)
+		case OrderServiceGetOrderHistoryProcedure:
+			orderServiceGetOrderHistoryHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -254,4 +295,8 @@ func (UnimplementedOrderServiceHandler) CompleteOrder(context.Context, *connect.
 
 func (UnimplementedOrderServiceHandler) ListOrders(context.Context, *connect.Request[v1.ListOrdersRequest]) (*connect.Response[v1.ListOrdersResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ordering.v1.OrderService.ListOrders is not implemented"))
+}
+
+func (UnimplementedOrderServiceHandler) GetOrderHistory(context.Context, *connect.Request[v1.GetOrderHistoryRequest]) (*connect.Response[v1.GetOrderHistoryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ordering.v1.OrderService.GetOrderHistory is not implemented"))
 }

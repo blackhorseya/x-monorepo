@@ -508,9 +508,32 @@ ORDER BY s.sku;
 
 **migration 的鎖（ordering `0008`，`CreateOrder` 冪等）**：`0008_order_idempotency` 對 `ordering.orders` 加兩個 nullable 欄位（不重寫表、不回填），再建 partial unique index（`CREATE UNIQUE INDEX`，不是 `CONCURRENTLY`——migration 在**一個交易**裡跑）。`ALTER TABLE` 取 **ACCESS EXCLUSIVE lock 並持有到整個 migration commit**，建 index 的整表掃描也在這把鎖底下：`ordering.orders` 的**讀與寫**（GetOrder / ListOrders / CreateOrder / Cancel / Complete / Confirm）都會等到整個 migration 結束，不只是寫入；讀流量照進來會逾時。表小（本機、staging）是毫秒級，可忽略；**大表請排維護窗口，且窗口要涵蓋讀流量**（先把 rpc / worker `kubectl scale` 到 0 或擋掉流量，再讓 migrate hook 跑）。順序：先 migrate 再升 rpc（chart 的 `pre-upgrade` hook 已保證）；舊 rpc 不認識新欄位也不寫它們，新 rpc 對 NULL 的列照舊，所以 rolling upgrade 期間兩種版本可並存。回滾見下一段（只退 ordering `0008`）。
 
+**migration 的鎖（ordering `0011`，`order_history` 的 cause，#427 切片 2）**：`0011_order_history_cause` 把 `ordering.order_history` 的 `cause` CHECK 放寬成多收 `STOCK_SHORTAGE`、`RESERVATION_EXPIRED`。migration 在**一個交易**裡跑，`ALTER TABLE` 的 ACCESS EXCLUSIVE lock 持有到 commit。這把鎖雖然落在 `order_history`，**但訂單的寫入路徑都在等它**（實測，見下）：凡是會發 order event 的 use case，都在**同一個交易**裡先 `UPDATE ordering.orders`、再 `INSERT` 一列 `order_history`——`CreateOrder`、`ConfirmOrder`（worker，`StockReserved`）、`CancelOrder`（rpc 與 worker 的 `OrderCancellationRequested`）、`CompleteOrder`、`ApplyPaymentCaptured`、`ApplyPaymentExpired`——它們卡在 INSERT；請求逾時後**整個交易回滾**（訂單、history、outbox 都沒變，重試即可）。`GetOrderHistory` 讀同一張表，也會等。只有不碰 history 的讀（`GetOrder`、`ListOrders`）不受影響。這七個 use case 逐一有測試（`pkgs/ordering` 的 `TestOrderHistory_TableLockBlocksTheWritePath`：一個 session 持有 ACCESS EXCLUSIVE，另一個 session 跑真的 use case 設短期限，斷言會等到逾時、訂單與 outbox 都回滾；鎖釋放後同一個操作成功）。
+
+為了讓這段等待短：(1) 新 CHECK 是舊 CHECK 的超集，既有列必定滿足，所以用 `ADD CONSTRAINT … NOT VALID`，**不掃整張表**——持鎖時間不隨 history 變大（`NOT VALID` 仍對之後每一筆新增或更新的列強制檢查，有測試；沒有另外 `VALIDATE`，真要驗證另開一份 migration）。(2) migration 開頭 `SET LOCAL lock_timeout = '3s'`：拿不到鎖時 `ALTER TABLE` 會排在鎖佇列裡，**之後所有碰這張表的請求都排在它後面**，一個長交易就能讓整條訂單寫入路徑一起卡住；有 timeout 就改成 3 秒後 migration 失敗、放掉佇列。3s 小於 `http.timeout` 預設的 10s。測試：一個長交易持有表的鎖時 `up` 在 timeout 內失敗，拿掉 `lock_timeout` 這個測試就轉紅。我們沒有宣稱持鎖時間是幾毫秒，也沒有宣稱 `order_history` 一定小：它隨訂單量增長，所以靠不掃表與 timeout 這兩件事，不靠表小。
+
+**`lock_timeout` 失敗之後**：golang-migrate 在執行檔案之前就把版本標成 `11 dirty`，所以逾時失敗會留下 `ordering 11 dirty=true`（表沒變，CHECK 還是 `0010` 的；測試驗證）。處理：等持鎖的長交易結束（或避開尖峰），用下面的 rollback 段落那段 SQL 把版本設回 `10` clean（dirty 狀態用同一段 SQL），再 `task migrate -- up`。chart 的 migrate hook 在 dirty 時會一直失敗直到重設，所以升級會被擋在 hook，不會帶著半套 schema 往下走。
+
+**順序（升級）**：先 migrate 再升 worker／rpc／inventory（chart 的 `pre-upgrade` hook 已保證）。**新 worker 不能跑在舊 schema（`10`）上**：inventory 送來帶 `cause` 的 `OrderCancellationRequested` 時，ordering 要記 `STOCK_SHORTAGE`／`RESERVATION_EXPIRED`，而 `10` 的 CHECK 拒絕這兩個值（`apps/migrate` 的 `0011` rollback 測試在退版後直接驗證），所以那筆取消記不下來。所以不要在新 worker 還在跑的時候把 schema 退回 `10`。**舊 image 遇到 `11` 的 schema 也不能升回去**（實測，用 `15f50b5` 建出的 `migrate` 對已經是 `11` 的資料庫跑 `up`）：`migrate ordering: no migration found for version 11: read down for version 11 .: file does not exist`，資料與版本（`11 dirty=false`）都沒動。（重做：`git archive <切片 1 的 commit> go.work apps pkgs tools | tar -x -C <空目錄>`，在該目錄 `go build -o <舊> ./apps/migrate`；用目前的樹 `go build ./apps/migrate` 對一個拋棄式 Postgres 跑 `up` 到 `11`，再用 `<舊> up`。）chart 的 migrate hook 只掛 `pre-install,pre-upgrade`，所以 `helm upgrade` 回舊 chart 會在 hook 失敗，`helm rollback` 則不跑它（只換 workload，不動 schema）。舊 worker（切片 1）跑在 `11` 上沒問題：它只寫舊的六個值，而且**沒有任何 production 路徑讀 history**（`HistoryStore.List` 在切片 1 只有測試呼叫），所以 `11` 的列帶新值不會讓它報錯。`GetOrderHistory` 讀到不認得的 `cause` 時（例如更新的版本寫的值）回 `UNSPECIFIED`，不會讓整個 RPC 失敗。
+
+**Rollback（只退 ordering `0011`）**：**不要用 `task migrate -- down`**（理由同下面各段：它對每個 BC 各退一步）。**順序：先把 worker 縮到 0（它是唯一會寫新值的程序），再執行下面的 SQL，最後才 `helm upgrade` 回切片 1 的 chart／image**（此時舊 migrate 看到的是 `10`，是 no-op；反過來先升回舊 image，hook 會因為看到 `11` 而失敗）。只退 ordering `0011`，在 ordering 的資料庫執行：
+
+```sql
+BEGIN;
+SET LOCAL lock_timeout = '3s';
+UPDATE ordering.order_history SET cause = 'CANCELLATION_REQUESTED' WHERE cause IN ('STOCK_SHORTAGE', 'RESERVATION_EXPIRED');
+ALTER TABLE ordering.order_history DROP CONSTRAINT IF EXISTS order_history_cause_check;
+ALTER TABLE ordering.order_history ADD CONSTRAINT order_history_cause_check
+    CHECK (cause IN ('UNSPECIFIED', 'RPC_REQUEST', 'PAYMENT_CAPTURED', 'PAYMENT_EXPIRED', 'STOCK_RESERVED', 'CANCELLATION_REQUESTED'));
+UPDATE ordering.schema_migrations SET version = 10, dirty = false;
+COMMIT;
+```
+
+丟失的範圍：帶 `STOCK_SHORTAGE`／`RESERVATION_EXPIRED` 的列**改記成** `CANCELLATION_REQUESTED`（切片 1 的 ordering 對同一個事件寫的就是這個值）——列都留著，只是原因的細分資訊永久忘記；訂單、明細與 outbox 都不動。兩種狀態用同一段 SQL：11 clean 退回 10；11 dirty（`0011` 失敗，整個檔案在一個交易裡，所以 CHECK 還是 `0010` 的）只把版本設回 10 clean，之後排除原因再 `task migrate -- up`。這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，驗證其他 BC 的版本、表、欄位與資料不動，並驗證退版後 CHECK 拒絕新值、接受舊值。要繼續退 `0010`，在 ordering 回到 `10` 之後用下一段。
+
 **migration 的鎖（ordering `0010`，`order_history`，#427）**：`0010_order_history` 只有一個 `CREATE TABLE ordering.order_history`（primary key `(order_id, seq)`，CHECK 約束只看自己的列），**不碰 `ordering.orders`，也沒有指向它的 FK**——所以不會在 `orders` 上取鎖，rpc／worker 的讀寫不會等它。migration 仍在一個交易裡跑，但鎖的對象只有新表。既有訂單**不 backfill**：升級前建立的訂單沒有 history，或只有升級之後的轉換（缺前段），讀取時是空清單、不是錯誤。順序：先 migrate 再升 worker／rpc（chart 的 `pre-upgrade` hook 已保證）；舊 worker／rpc 不寫這張表，新舊版本在 rolling upgrade 期間可並存（只是舊版處理的轉換不會有 history）。`worker prune` 不碰這張表，所以它不會自己長大成維運問題之外的東西：每張訂單最多 4 列（PENDING→CONFIRMED→PAID→COMPLETED 的轉換次數上界）。
 
-**Rollback（只退 ordering `0010`）**：**不要用 `task migrate -- down`**（理由同下面各段：它對每個 BC 各退一步）。只退 ordering `0010`，在 ordering 的資料庫執行：
+**Rollback（只退 ordering `0010`）**（ordering 在 `10` 時；已是 `11` 先照上一段退 `0011`）：**不要用 `task migrate -- down`**（理由同下面各段：它對每個 BC 各退一步）。只退 ordering `0010`，在 ordering 的資料庫執行：
 
 ```sql
 BEGIN;
@@ -523,7 +546,7 @@ COMMIT;
 
 **migration 的鎖（ordering `0009`，`payment_required` 快照）**：`0009_payment_required` 對 `ordering.orders` 加一個 `boolean NOT NULL DEFAULT false` 欄位（常數 DEFAULT，PostgreSQL 11 起不重寫表、不掃表），並建立 `ordering.v1.OrderPaid` 的事件表（`events_v1_orderpaid` 與 `_offsets`）。migration 在**一個交易**裡跑，`ALTER TABLE` 取 **ACCESS EXCLUSIVE lock 並持有到 commit**：`ordering.orders` 的讀與寫會等到它結束；因為沒有掃表，持鎖時間是毫秒級，但拿鎖要排在進行中的長交易後面，同樣建議在流量低的時段跑。既有訂單的 `payment_required` 全是 `false`（它們在 Payment 存在之前就已 `CONFIRMED`），所以升級後它們照舊可以直接 `CompleteOrder`。順序：先 migrate 再升 worker／rpc（chart 的 `pre-upgrade` hook 已保證）；舊 worker 不認識新欄位也不寫它，新欄位有 DEFAULT，所以 rolling upgrade 期間兩種版本可並存。`ordering.require_payment` 預設 `false`，升級本身不改變任何下單行為。
 
-**Rollback（只退 ordering `0009`）**（ordering 在 `9` 時；已是 `10` 先照上一段退 `0010`）：**不要用 `task migrate -- down`**（理由同上一段：它對每個 BC 各退一步）。只退 ordering `0009`，在 ordering 的資料庫執行：
+**Rollback（只退 ordering `0009`）**（ordering 在 `9` 時；已是 `10` 或 `11` 先由新到舊退：`0011`、再 `0010`）：**不要用 `task migrate -- down`**（理由同上一段：它對每個 BC 各退一步）。只退 ordering `0009`，在 ordering 的資料庫執行：
 
 ```sql
 BEGIN;
@@ -536,7 +559,7 @@ COMMIT;
 
 丟失的範圍：`ordering.orders` 每一列的 `payment_required`（快照隨之消失：退版前以 `ordering.require_payment: true` 進 `CONFIRMED` 的訂單，退版後又可以直接 `CompleteOrder`，所以只在 Payment 還沒上線、沒有任何訂單真的欠款時退），加上 `OrderPaid` 的事件表（切片 1 沒有發布者，表是空的）；訂單與明細本身都留著。`ALTER TABLE` 取 ACCESS EXCLUSIVE，持有到 `COMMIT`。兩種狀態用同一段 SQL（`IF EXISTS`）：9 clean（`0009` 已套用）退回 8；9 dirty（`0009` 失敗，例如 `ALTER TABLE` 在 `lock_timeout` 內拿不到鎖；整個檔案在一個交易裡，所以欄位與事件表都不在）只把版本設回 8 clean，之後排除原因再 `task migrate -- up`。這個 dirty 分支只驗證過「失敗後欄位與事件表都不在」的狀態。這段 SQL 由 `apps/migrate` 的測試在真實 Postgres 上直接從本文件取出執行，兩種狀態都驗證其他 BC 的版本、表、欄位與資料不動。要繼續退 `0008`，在 ordering 回到 `8` 之後用下一段。
 
-**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9` 或 `10` 先照上面各段由新到舊退：`0010`、再 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的最新一步 `0004` 會 DROP 掉 mock provider 的 fault 表 `payment.mock_faults`（連同資料）），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
+**Rollback（只退 ordering `0008`）**（ordering 在 `8` 時；已是 `9`、`10` 或 `11` 先照上面各段由新到舊退：`0011`、`0010`、再 `0009`）：**不要用 `task migrate -- down`**——它對每個 BC 各退一步（反向註冊順序：payment、catalog、identity、inventory、ordering；payment 的最新一步 `0004` 會 DROP 掉 mock provider 的 fault 表 `payment.mock_faults`（連同資料）），不只退 ordering：catalog 會 `DROP TABLE catalog.products`（連同資料），identity、inventory 的最新 migration 也一併回滾。全域 `down` 的語意不變，只在明確知情要退全部 BC 時使用。只退 ordering `0008`，在 ordering 的資料庫執行：
 
 ```sql
 BEGIN;

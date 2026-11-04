@@ -1,7 +1,7 @@
 # Order history（訂單事件歷程）
 
 每張訂單一份**只追加、不修改**的狀態轉換紀錄：誰、何時、從哪個狀態到哪個狀態、為什麼。表是 `ordering.order_history`
-（migration `0010`）。#427 切片 1 只有寫入路徑；`GetOrderHistory` RPC 與 Console 是切片 2、3。
+（migration `0010`，cause 的 CHECK 由 `0011` 放寬）。寫入路徑是切片 1；讀取的 `ordering.v1.OrderService.GetOrderHistory` 是切片 2（見〈讀取〉）；Console 是切片 3，**目前還沒有**。
 
 ## 為什麼不直接讀 outbox
 
@@ -42,17 +42,38 @@ primary key `(order_id, seq)` 是最後防線：沒先 `Save` 的 writer 撞 key
   `actor_subject` 是 `Principal.Subject`（account id）；沒有 principal（`auth.mode=off`）是 `ANONYMOUS`。
 - 其他 cause（consumer 路徑）：一律 `SYSTEM`，`actor_subject` 空。
 
-`actor_subject` 只能給 admin 看（切片 2 的 RPC 負責遮蔽）。
+`actor_subject` 只給 admin 看：遮蔽在 `GetOrderHistory` 的 use case 做（見〈讀取〉）。
 
 ### cause（固定列舉）
 
-`RPC_REQUEST`、`PAYMENT_CAPTURED`、`PAYMENT_EXPIRED`、`STOCK_RESERVED`、`CANCELLATION_REQUESTED`、`UNSPECIFIED`。
+`RPC_REQUEST`、`PAYMENT_CAPTURED`、`PAYMENT_EXPIRED`、`STOCK_RESERVED`、`CANCELLATION_REQUESTED`、`STOCK_SHORTAGE`、`RESERVATION_EXPIRED`、`UNSPECIFIED`。
 cause 跟著 domain event 走：domain 自己知道的在 domain 決定（Confirm = `STOCK_RESERVED`，`ApplyPayment*` 各自的 cause，
 New／Complete = `RPC_REQUEST`）；Cancel 的來源 domain 不知道，由 adapter 在 `dto.CancelOrderInput.Source` 明說
 （rpc = `RPC_REQUEST`、consumer = `CANCELLATION_REQUESTED`），沒說（零值）就被 `order.ErrInvalidCause` 拒絕，不會悄悄變成別的值。
 
 `OrderCancellationRequested.reason` 是 inventory 自己組的字串（含 SKU 與時長），不可信也不穩定：**不寫進 history，也不寫進 log**。
-切片 2 才會在該 event 加 typed 的 `cause` 欄位。
+
+### OrderCancellationRequested.cause
+
+切片 2 在該 event 加了 typed 的 `cause`（`CancellationCause`，additive，`reason` 保留）。inventory 的 publisher 依來源填：庫存不足 → `STOCK_SHORTAGE`、預約逾時 → `RESERVATION_EXPIRED`。ordering 的 consumer 把它對應成 history 的同名 cause；**沒有 `cause` 的舊事件**（欄位出現前發布、仍在 outbox 或 poison 表裡的）和**不認得的值**（更新的 publisher 送來的）都對應成 `CANCELLATION_REQUESTED`，不報錯、不猜。（兩種都有從 consumer 進去的測試，一個用不含第 4 號欄位的真 bytes。）
+
+升級順序：先 migrate（`0011` 放寬 CHECK）再升 worker；詳見 `docs/operations.md`（`0011` 的鎖、順序與 rollback）。
+
+## 讀取：GetOrderHistory
+
+`ordering.v1.OrderService.GetOrderHistory(id)` 回傳該訂單依 `seq` 排序的全部轉換，**不分頁**。上界是 4 列（PENDING→CONFIRMED→PAID→COMPLETED 的 CREATED 加三次轉換）：`domain/order` 的測試從 `CanTransitionTo` 算出最長路徑，再和 `service.proto` 註解裡寫的數字比對，狀態機若允許更長的路徑，測試就轉紅。
+
+| 情況 | 回應 |
+|---|---|
+| 訂單不存在 | `NOT_FOUND`（`order.not_found`） |
+| 非 admin 的 principal 讀別人的訂單 | `NOT_FOUND`，和不存在同一個答案。擁有者條件在選訂單時就放進查詢（`FindByIDForCustomer`，同 `GetOrder`），history 表根本不會被讀 |
+| 訂單存在但沒有 history（migration 之前建立的） | 空清單，不是錯誤 |
+| `auth.mode=required` 且沒帶 credential | `UNAUTHENTICATED`（`auth.unauthenticated`），在 interceptor 就擋下 |
+| 儲存的 `cause` 這個版本不認得 | 該列的 `cause` 是 `UNSPECIFIED`，其他欄位照常；不會讓整個 RPC 失敗 |
+
+`actor_subject` **只回給 admin**（principal 持有 `auth.admin_role`）。其他人拿到的這一欄一律是空字串，`actor_kind` 照給：擁有者讀自己的單、`auth.mode=optional` 下沒帶 credential 的呼叫、以及 `auth.mode=off`（預設）下的所有呼叫（此時沒有 interceptor，連帶了 admin key 的請求也是 anonymous）。遮蔽在 use case 做，DTO 根本不帶非 admin 看得到的 subject，adapter 不需要知道誰是 admin。
+
+`apps/rpc` 的 `TestOrderHistory_AuthMatrix` 在真 Postgres 上逐格測：`auth.mode`（off＝`config.Load()` 的預設、optional、required）×（admin、擁有者、別的 customer、帶 `admin` role 但不是 `auth.admin_role` 的 caller、anonymous）×（自己的單、別人的單、沒有 history 的單、不存在的單）；資料由真的 `CreateOrder`／`CancelOrder` 以真 key 寫入，所以 table 裡的 `actor_subject` 不是空的（測試先查表確認），每格「看不到」都和 admin 看同一批列的結果對照。
 
 ## 既有訂單不 backfill
 

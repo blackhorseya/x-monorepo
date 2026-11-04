@@ -31,6 +31,15 @@ service OrderService {
   // A non-admin lists only their own orders: customer_id empty means themselves,
   // another customer is PERMISSION_DENIED. Admin and anonymous callers filter freely.
   rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  // GetOrderHistory returns every state transition of one order, oldest first (seq 1..N). It is not
+  // paged: the state machine bounds it at 4 entries (PENDING → CONFIRMED → PAID → COMPLETED; a
+  // cancelled order has fewer), and a test turns red if a longer path ever becomes possible.
+  // Ownership is GetOrder's: a non-admin reading someone else's order gets NOT_FOUND
+  // (x-error-code: order.not_found), decided where the order is selected, and so does an order that
+  // does not exist. An order created before the history existed has none: an empty list, not an error.
+  // actor_subject is returned to an admin only; for every other caller (a customer, or anonymous when
+  // auth.mode is off) it is always empty, whatever the stored row says.
+  rpc GetOrderHistory(GetOrderHistoryRequest) returns (GetOrderHistoryResponse);
 }
 
 message CreateOrderRequest {
@@ -96,6 +105,15 @@ message CompleteOrderRequest {
 
 message CompleteOrderResponse {
   Order order = 1;
+}
+
+message GetOrderHistoryRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetOrderHistoryResponse {
+  // Ordered by seq, at most 4 entries.
+  repeated OrderHistoryEntry entries = 1;
 }
 
 message ListOrdersRequest {

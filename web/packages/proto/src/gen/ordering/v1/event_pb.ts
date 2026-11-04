@@ -2,8 +2,8 @@
 // @generated from file ordering/v1/event.proto (package ordering.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv1";
-import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv1";
+import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv1";
+import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv1";
 import type { Money } from "../../common/v1/money_pb";
 import { file_common_v1_money } from "../../common/v1/money_pb";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/event.proto.
  */
 export const file_ordering_v1_event: GenFile = /*@__PURE__*/
-  fileDesc("ChdvcmRlcmluZy92MS9ldmVudC5wcm90bxILb3JkZXJpbmcudjEitAEKDE9yZGVyQ3JlYXRlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIsCgVpdGVtcxgDIAMoCzIdLm9yZGVyaW5nLnYxLk9yZGVyQ3JlYXRlZEl0ZW0SHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMQoQT3JkZXJDcmVhdGVkSXRlbRILCgNza3UYASABKAkSEAoIcXVhbnRpdHkYAiABKAUiigEKDk9yZGVyQ29uZmlybWVkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEjAKDGNvbmZpcm1lZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkiXwoJT3JkZXJQYWlkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEisKB3BhaWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wImkKDk9yZGVyQ29tcGxldGVkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEjAKDGNvbXBsZXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiaQoOT3JkZXJDYW5jZWxsZWQSEAoIb3JkZXJfaWQYASABKAkSEwoLY3VzdG9tZXJfaWQYAiABKAkSMAoMY2FuY2VsbGVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJwChpPcmRlckNhbmNlbGxhdGlvblJlcXVlc3RlZBIQCghvcmRlcl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkSMAoMcmVxdWVzdGVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcGIGcHJvdG8z", [file_common_v1_money, file_google_protobuf_timestamp]);
+  fileDesc("ChdvcmRlcmluZy92MS9ldmVudC5wcm90bxILb3JkZXJpbmcudjEitAEKDE9yZGVyQ3JlYXRlZBIQCghvcmRlcl9pZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIsCgVpdGVtcxgDIAMoCzIdLm9yZGVyaW5nLnYxLk9yZGVyQ3JlYXRlZEl0ZW0SHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkSLgoKY3JlYXRlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiMQoQT3JkZXJDcmVhdGVkSXRlbRILCgNza3UYASABKAkSEAoIcXVhbnRpdHkYAiABKAUiigEKDk9yZGVyQ29uZmlybWVkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEjAKDGNvbmZpcm1lZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASHwoFdG90YWwYBCABKAsyEC5jb21tb24udjEuTW9uZXkiXwoJT3JkZXJQYWlkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEisKB3BhaWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wImkKDk9yZGVyQ29tcGxldGVkEhAKCG9yZGVyX2lkGAEgASgJEhMKC2N1c3RvbWVyX2lkGAIgASgJEjAKDGNvbXBsZXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiaQoOT3JkZXJDYW5jZWxsZWQSEAoIb3JkZXJfaWQYASABKAkSEwoLY3VzdG9tZXJfaWQYAiABKAkSMAoMY2FuY2VsbGVkX2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKfAQoaT3JkZXJDYW5jZWxsYXRpb25SZXF1ZXN0ZWQSEAoIb3JkZXJfaWQYASABKAkSDgoGcmVhc29uGAIgASgJEjAKDHJlcXVlc3RlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLQoFY2F1c2UYBCABKA4yHi5vcmRlcmluZy52MS5DYW5jZWxsYXRpb25DYXVzZSqKAQoRQ2FuY2VsbGF0aW9uQ2F1c2USIgoeQ0FOQ0VMTEFUSU9OX0NBVVNFX1VOU1BFQ0lGSUVEEAASJQohQ0FOQ0VMTEFUSU9OX0NBVVNFX1NUT0NLX1NIT1JUQUdFEAESKgomQ0FOQ0VMTEFUSU9OX0NBVVNFX1JFU0VSVkFUSU9OX0VYUElSRUQQAmIGcHJvdG8z", [file_common_v1_money, file_google_protobuf_timestamp]);
 
 /**
  * OrderCreated is raised once per New order, in the same transaction that
@@ -219,6 +219,9 @@ export type OrderCancellationRequested = Message<"ordering.v1.OrderCancellationR
   orderId: string;
 
   /**
+   * Free text from the requesting BC: informational only. Ordering neither stores nor logs it
+   * (it is untrusted and unstable); the typed cause below is what it records.
+   *
    * @generated from field: string reason = 2;
    */
   reason: string;
@@ -227,6 +230,16 @@ export type OrderCancellationRequested = Message<"ordering.v1.OrderCancellationR
    * @generated from field: google.protobuf.Timestamp requested_at = 3;
    */
   requestedAt?: Timestamp;
+
+  /**
+   * Why the requester asks, as a fixed enumeration. Additive (#427): an event published before this
+   * field existed carries no cause (CANCELLATION_CAUSE_UNSPECIFIED), and a value this version of
+   * ordering does not know is treated the same way — the order history records both as an
+   * unclassified request (CANCELLATION_REQUESTED).
+   *
+   * @generated from field: ordering.v1.CancellationCause cause = 4;
+   */
+  cause: CancellationCause;
 };
 
 /**
@@ -235,4 +248,36 @@ export type OrderCancellationRequested = Message<"ordering.v1.OrderCancellationR
  */
 export const OrderCancellationRequestedSchema: GenMessage<OrderCancellationRequested> = /*@__PURE__*/
   messageDesc(file_ordering_v1_event, 6);
+
+/**
+ * CancellationCause classifies an OrderCancellationRequested.
+ *
+ * @generated from enum ordering.v1.CancellationCause
+ */
+export enum CancellationCause {
+  /**
+   * @generated from enum value: CANCELLATION_CAUSE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * Inventory could not cover every line of the order.
+   *
+   * @generated from enum value: CANCELLATION_CAUSE_STOCK_SHORTAGE = 1;
+   */
+  STOCK_SHORTAGE = 1,
+
+  /**
+   * Inventory gave the reservation back because it was held past its TTL.
+   *
+   * @generated from enum value: CANCELLATION_CAUSE_RESERVATION_EXPIRED = 2;
+   */
+  RESERVATION_EXPIRED = 2,
+}
+
+/**
+ * Describes the enum ordering.v1.CancellationCause.
+ */
+export const CancellationCauseSchema: GenEnum<CancellationCause> = /*@__PURE__*/
+  enumDesc(file_ordering_v1_event, 0);
 

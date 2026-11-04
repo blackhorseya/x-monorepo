@@ -57,7 +57,7 @@ func (h *OrderCancellationHandler) Handle(c context.Context, payload []byte) err
 	_, err := h.cancelOrder.Execute(ctx, dto.CancelOrderInput{
 		OrderID: evt.GetOrderId(),
 		Reason:  evt.GetReason(),
-		Source:  dto.CancelSourceCancellationRequest,
+		Source:  cancelSource(evt.GetCause()),
 	})
 	if err == nil {
 		return nil
@@ -71,4 +71,20 @@ func (h *OrderCancellationHandler) Handle(c context.Context, payload []byte) err
 	}
 
 	return err // infrastructure error → retry
+}
+
+// cancelSource maps the event's typed cause to the use case's. An event published before the field
+// existed carries none (UNSPECIFIED), and a newer publisher may send a value this version does not
+// know: both are an unclassified request, never an error and never a guess.
+func cancelSource(c orderingv1.CancellationCause) dto.CancelSource {
+	switch c {
+	case orderingv1.CancellationCause_CANCELLATION_CAUSE_STOCK_SHORTAGE:
+		return dto.CancelSourceStockShortage
+	case orderingv1.CancellationCause_CANCELLATION_CAUSE_RESERVATION_EXPIRED:
+		return dto.CancelSourceReservationExpired
+	case orderingv1.CancellationCause_CANCELLATION_CAUSE_UNSPECIFIED:
+		return dto.CancelSourceCancellationRequest
+	default:
+		return dto.CancelSourceCancellationRequest
+	}
 }

@@ -130,6 +130,14 @@ components:
           title: order
       title: CancelOrderResponse
       additionalProperties: false
+    ordering.v1.CancellationCause:
+      type: string
+      title: CancellationCause
+      enum:
+        - CANCELLATION_CAUSE_UNSPECIFIED
+        - CANCELLATION_CAUSE_STOCK_SHORTAGE
+        - CANCELLATION_CAUSE_RESERVATION_EXPIRED
+      description: CancellationCause classifies an OrderCancellationRequested.
     ordering.v1.CompleteOrderRequest:
       type: object
       properties:
@@ -213,6 +221,26 @@ components:
             - $ref: '#/components/schemas/ordering.v1.Order'
           title: order
       title: CreateOrderResponse
+      additionalProperties: false
+    ordering.v1.GetOrderHistoryRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          title: id
+          minLength: 1
+      title: GetOrderHistoryRequest
+      additionalProperties: false
+    ordering.v1.GetOrderHistoryResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/ordering.v1.OrderHistoryEntry'
+          title: entries
+          description: Ordered by seq, at most 4 entries.
+      title: GetOrderHistoryResponse
       additionalProperties: false
     ordering.v1.GetOrderRequest:
       type: object
@@ -343,10 +371,22 @@ components:
         reason:
           type: string
           title: reason
+          description: |-
+            Free text from the requesting BC: informational only. Ordering neither stores nor logs it
+             (it is untrusted and unstable); the typed cause below is what it records.
         requestedAt:
           allOf:
             - $ref: '#/components/schemas/google.protobuf.Timestamp'
           title: requested_at
+        cause:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.CancellationCause'
+          title: cause
+          description: |-
+            Why the requester asks, as a fixed enumeration. Additive (#427): an event published before this
+             field existed carries no cause (CANCELLATION_CAUSE_UNSPECIFIED), and a value this version of
+             ordering does not know is treated the same way — the order history records both as an
+             unclassified request (CANCELLATION_REQUESTED).
       title: OrderCancellationRequested
       additionalProperties: false
       description: |-
@@ -452,6 +492,70 @@ components:
           format: int32
       title: OrderCreatedItem
       additionalProperties: false
+    ordering.v1.OrderHistoryActorKind:
+      type: string
+      title: OrderHistoryActorKind
+      enum:
+        - ORDER_HISTORY_ACTOR_KIND_UNSPECIFIED
+        - ORDER_HISTORY_ACTOR_KIND_CUSTOMER
+        - ORDER_HISTORY_ACTOR_KIND_ADMIN
+        - ORDER_HISTORY_ACTOR_KIND_SYSTEM
+        - ORDER_HISTORY_ACTOR_KIND_ANONYMOUS
+      description: OrderHistoryActorKind is who made an order move (docs/order-history.md).
+    ordering.v1.OrderHistoryCause:
+      type: string
+      title: OrderHistoryCause
+      enum:
+        - ORDER_HISTORY_CAUSE_UNSPECIFIED
+        - ORDER_HISTORY_CAUSE_RPC_REQUEST
+        - ORDER_HISTORY_CAUSE_PAYMENT_CAPTURED
+        - ORDER_HISTORY_CAUSE_PAYMENT_EXPIRED
+        - ORDER_HISTORY_CAUSE_STOCK_RESERVED
+        - ORDER_HISTORY_CAUSE_CANCELLATION_REQUESTED
+        - ORDER_HISTORY_CAUSE_STOCK_SHORTAGE
+        - ORDER_HISTORY_CAUSE_RESERVATION_EXPIRED
+      description: |-
+        OrderHistoryCause is why an order moved, as a fixed enumeration. Another BC's free text is never one.
+         A client must treat a value it does not know as UNSPECIFIED: the set can grow.
+    ordering.v1.OrderHistoryEntry:
+      type: object
+      properties:
+        seq:
+          type: integer
+          title: seq
+          format: int32
+          description: 1..N per order, in the order the transitions happened.
+        fromStatus:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.OrderStatus'
+          title: from_status
+          description: ORDER_STATUS_UNSPECIFIED for the creation (there is no previous state).
+        toStatus:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.OrderStatus'
+          title: to_status
+        occurredTime:
+          allOf:
+            - $ref: '#/components/schemas/google.protobuf.Timestamp'
+          title: occurred_time
+          description: When the domain made the transition (not when the row was written).
+        actorKind:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.OrderHistoryActorKind'
+          title: actor_kind
+        actorSubject:
+          type: string
+          title: actor_subject
+          description: |-
+            The account id of a CUSTOMER or ADMIN actor. Only an admin is shown it; for any other caller
+             it is empty.
+        cause:
+          allOf:
+            - $ref: '#/components/schemas/ordering.v1.OrderHistoryCause'
+          title: cause
+      title: OrderHistoryEntry
+      additionalProperties: false
+      description: OrderHistoryEntry is one transition of an order. Entries are append-only.
     ordering.v1.OrderPaid:
       type: object
       properties:
@@ -651,6 +755,53 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ordering.v1.GetOrderResponse'
+  /ordering.v1.OrderService/GetOrderHistory:
+    post:
+      tags:
+        - ordering.v1.OrderService
+      summary: GetOrderHistory
+      description: |-
+        GetOrderHistory returns every state transition of one order, oldest first (seq 1..N). It is not
+         paged: the state machine bounds it at 4 entries (PENDING → CONFIRMED → PAID → COMPLETED; a
+         cancelled order has fewer), and a test turns red if a longer path ever becomes possible.
+         Ownership is GetOrder's: a non-admin reading someone else's order gets NOT_FOUND
+         (x-error-code: order.not_found), decided where the order is selected, and so does an order that
+         does not exist. An order created before the history existed has none: an empty list, not an error.
+         actor_subject is returned to an admin only; for every other caller (a customer, or anonymous when
+         auth.mode is off) it is always empty, whatever the stored row says.
+      operationId: ordering.v1.OrderService.GetOrderHistory
+      parameters:
+        - name: Connect-Protocol-Version
+          in: header
+          description: Define the version of the Connect protocol
+          schema:
+            $ref: '#/components/schemas/connect-protocol-version'
+          example: 1
+        - name: Connect-Timeout-Ms
+          in: header
+          description: Define the timeout, in ms
+          schema:
+            $ref: '#/components/schemas/connect-timeout-header'
+          example: 1000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ordering.v1.GetOrderHistoryRequest'
+        required: true
+      responses:
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/connect.error'
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ordering.v1.GetOrderHistoryResponse'
   /ordering.v1.OrderService/ListOrders:
     post:
       tags:

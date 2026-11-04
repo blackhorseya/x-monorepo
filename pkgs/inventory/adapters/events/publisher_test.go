@@ -150,3 +150,59 @@ func TestPublisher_UnknownEvent(t *testing.T) {
 		t.Fatal("unmapped event must fail loudly")
 	}
 }
+
+// OrderCancellationRequested carries a typed cause next to the free text (#427 slice 2): a
+// shortage is STOCK_SHORTAGE and an expired hold is RESERVATION_EXPIRED; the reason text stays as
+// it was for operators reading the outbox.
+func TestPublisher_CancellationRequestCarriesATypedCause(t *testing.T) {
+	now := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
+	a, _ := stock.New("A", 5, now)
+	l, err := reservation.NewLine("A", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err := reservation.Reserve(reservation.Params{OrderID: "o-short", Lines: []reservation.Line{l}, Now: now}, map[string]*stock.Stock{"A": a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l1, _ := reservation.NewLine("A", 1)
+	held, err := reservation.Reserve(reservation.Params{OrderID: "o-held", Lines: []reservation.Line{l1}, Now: now}, map[string]*stock.Stock{"A": a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := held.Expire(map[string]*stock.Stock{"A": a}, now.Add(25*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &capture{}
+	pub := events.NewPublisher(sink)
+	for _, r := range []*reservation.Reservation{short, held} {
+		if err := pub.Publish(context.Background(), r.PullEvents()...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := map[string]*orderingv1.OrderCancellationRequested{}
+	for i, topic := range sink.topics {
+		if topic != "ordering.v1.OrderCancellationRequested" {
+			continue
+		}
+		var req orderingv1.OrderCancellationRequested
+		if err := proto.Unmarshal(sink.msgs[i].Payload, &req); err != nil {
+			t.Fatal(err)
+		}
+		got[req.GetOrderId()] = &req
+	}
+	if len(got) != 2 {
+		t.Fatalf("published %d cancellation requests (topics %v), want 2", len(got), sink.topics)
+	}
+	if c := got["o-short"].GetCause(); c != orderingv1.CancellationCause_CANCELLATION_CAUSE_STOCK_SHORTAGE {
+		t.Errorf("shortage cause = %v, want STOCK_SHORTAGE", c)
+	}
+	if c := got["o-held"].GetCause(); c != orderingv1.CancellationCause_CANCELLATION_CAUSE_RESERVATION_EXPIRED {
+		t.Errorf("expiry cause = %v, want RESERVATION_EXPIRED", c)
+	}
+	if got["o-short"].GetReason() == "" || got["o-held"].GetReason() == "" {
+		t.Error("the free-text reason must stay")
+	}
+}

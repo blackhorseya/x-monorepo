@@ -462,6 +462,95 @@ func (x *CompleteOrderResponse) GetOrder() *Order {
 	return nil
 }
 
+type GetOrderHistoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetOrderHistoryRequest) Reset() {
+	*x = GetOrderHistoryRequest{}
+	mi := &file_ordering_v1_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetOrderHistoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetOrderHistoryRequest) ProtoMessage() {}
+
+func (x *GetOrderHistoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetOrderHistoryRequest.ProtoReflect.Descriptor instead.
+func (*GetOrderHistoryRequest) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GetOrderHistoryRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type GetOrderHistoryResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Ordered by seq, at most 4 entries.
+	Entries       []*OrderHistoryEntry `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetOrderHistoryResponse) Reset() {
+	*x = GetOrderHistoryResponse{}
+	mi := &file_ordering_v1_service_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetOrderHistoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetOrderHistoryResponse) ProtoMessage() {}
+
+func (x *GetOrderHistoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_service_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetOrderHistoryResponse.ProtoReflect.Descriptor instead.
+func (*GetOrderHistoryResponse) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_service_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetOrderHistoryResponse) GetEntries() []*OrderHistoryEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
 type ListOrdersRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Empty = any customer for an admin or anonymous caller, the caller's own
@@ -479,7 +568,7 @@ type ListOrdersRequest struct {
 
 func (x *ListOrdersRequest) Reset() {
 	*x = ListOrdersRequest{}
-	mi := &file_ordering_v1_service_proto_msgTypes[9]
+	mi := &file_ordering_v1_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -491,7 +580,7 @@ func (x *ListOrdersRequest) String() string {
 func (*ListOrdersRequest) ProtoMessage() {}
 
 func (x *ListOrdersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ordering_v1_service_proto_msgTypes[9]
+	mi := &file_ordering_v1_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -504,7 +593,7 @@ func (x *ListOrdersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrdersRequest.ProtoReflect.Descriptor instead.
 func (*ListOrdersRequest) Descriptor() ([]byte, []int) {
-	return file_ordering_v1_service_proto_rawDescGZIP(), []int{9}
+	return file_ordering_v1_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListOrdersRequest) GetCustomerId() string {
@@ -546,7 +635,7 @@ type ListOrdersResponse struct {
 
 func (x *ListOrdersResponse) Reset() {
 	*x = ListOrdersResponse{}
-	mi := &file_ordering_v1_service_proto_msgTypes[10]
+	mi := &file_ordering_v1_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -558,7 +647,7 @@ func (x *ListOrdersResponse) String() string {
 func (*ListOrdersResponse) ProtoMessage() {}
 
 func (x *ListOrdersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ordering_v1_service_proto_msgTypes[10]
+	mi := &file_ordering_v1_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -571,7 +660,7 @@ func (x *ListOrdersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrdersResponse.ProtoReflect.Descriptor instead.
 func (*ListOrdersResponse) Descriptor() ([]byte, []int) {
-	return file_ordering_v1_service_proto_rawDescGZIP(), []int{10}
+	return file_ordering_v1_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListOrdersResponse) GetOrders() []*Order {
@@ -615,7 +704,11 @@ const file_ordering_v1_service_proto_rawDesc = "" +
 	"\x14CompleteOrderRequest\x12\x17\n" +
 	"\x02id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x02id\"A\n" +
 	"\x15CompleteOrderResponse\x12(\n" +
-	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"\xab\x01\n" +
+	"\x05order\x18\x01 \x01(\v2\x12.ordering.v1.OrderR\x05order\"1\n" +
+	"\x16GetOrderHistoryRequest\x12\x17\n" +
+	"\x02id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x02id\"S\n" +
+	"\x17GetOrderHistoryResponse\x128\n" +
+	"\aentries\x18\x01 \x03(\v2\x1e.ordering.v1.OrderHistoryEntryR\aentries\"\xab\x01\n" +
 	"\x11ListOrdersRequest\x12\x1f\n" +
 	"\vcustomer_id\x18\x01 \x01(\tR\n" +
 	"customerId\x120\n" +
@@ -625,14 +718,15 @@ const file_ordering_v1_service_proto_rawDesc = "" +
 	"page_token\x18\x04 \x01(\tR\tpageToken\"h\n" +
 	"\x12ListOrdersResponse\x12*\n" +
 	"\x06orders\x18\x01 \x03(\v2\x12.ordering.v1.OrderR\x06orders\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\xa2\x03\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\x80\x04\n" +
 	"\fOrderService\x12P\n" +
 	"\vCreateOrder\x12\x1f.ordering.v1.CreateOrderRequest\x1a .ordering.v1.CreateOrderResponse\x12G\n" +
 	"\bGetOrder\x12\x1c.ordering.v1.GetOrderRequest\x1a\x1d.ordering.v1.GetOrderResponse\x12P\n" +
 	"\vCancelOrder\x12\x1f.ordering.v1.CancelOrderRequest\x1a .ordering.v1.CancelOrderResponse\x12V\n" +
 	"\rCompleteOrder\x12!.ordering.v1.CompleteOrderRequest\x1a\".ordering.v1.CompleteOrderResponse\x12M\n" +
 	"\n" +
-	"ListOrders\x12\x1e.ordering.v1.ListOrdersRequest\x1a\x1f.ordering.v1.ListOrdersResponseB\xb5\x01\n" +
+	"ListOrders\x12\x1e.ordering.v1.ListOrdersRequest\x1a\x1f.ordering.v1.ListOrdersResponse\x12\\\n" +
+	"\x0fGetOrderHistory\x12#.ordering.v1.GetOrderHistoryRequest\x1a$.ordering.v1.GetOrderHistoryResponseB\xb5\x01\n" +
 	"\x0fcom.ordering.v1B\fServiceProtoP\x01ZGgithub.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1\xa2\x02\x03OXX\xaa\x02\vOrdering.V1\xca\x02\vOrdering\\V1\xe2\x02\x17Ordering\\V1\\GPBMetadata\xea\x02\fOrdering::V1b\x06proto3"
 
 var (
@@ -647,45 +741,51 @@ func file_ordering_v1_service_proto_rawDescGZIP() []byte {
 	return file_ordering_v1_service_proto_rawDescData
 }
 
-var file_ordering_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_ordering_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_ordering_v1_service_proto_goTypes = []any{
-	(*CreateOrderRequest)(nil),    // 0: ordering.v1.CreateOrderRequest
-	(*CreateOrderItem)(nil),       // 1: ordering.v1.CreateOrderItem
-	(*CreateOrderResponse)(nil),   // 2: ordering.v1.CreateOrderResponse
-	(*GetOrderRequest)(nil),       // 3: ordering.v1.GetOrderRequest
-	(*GetOrderResponse)(nil),      // 4: ordering.v1.GetOrderResponse
-	(*CancelOrderRequest)(nil),    // 5: ordering.v1.CancelOrderRequest
-	(*CancelOrderResponse)(nil),   // 6: ordering.v1.CancelOrderResponse
-	(*CompleteOrderRequest)(nil),  // 7: ordering.v1.CompleteOrderRequest
-	(*CompleteOrderResponse)(nil), // 8: ordering.v1.CompleteOrderResponse
-	(*ListOrdersRequest)(nil),     // 9: ordering.v1.ListOrdersRequest
-	(*ListOrdersResponse)(nil),    // 10: ordering.v1.ListOrdersResponse
-	(*Order)(nil),                 // 11: ordering.v1.Order
-	(OrderStatus)(0),              // 12: ordering.v1.OrderStatus
+	(*CreateOrderRequest)(nil),      // 0: ordering.v1.CreateOrderRequest
+	(*CreateOrderItem)(nil),         // 1: ordering.v1.CreateOrderItem
+	(*CreateOrderResponse)(nil),     // 2: ordering.v1.CreateOrderResponse
+	(*GetOrderRequest)(nil),         // 3: ordering.v1.GetOrderRequest
+	(*GetOrderResponse)(nil),        // 4: ordering.v1.GetOrderResponse
+	(*CancelOrderRequest)(nil),      // 5: ordering.v1.CancelOrderRequest
+	(*CancelOrderResponse)(nil),     // 6: ordering.v1.CancelOrderResponse
+	(*CompleteOrderRequest)(nil),    // 7: ordering.v1.CompleteOrderRequest
+	(*CompleteOrderResponse)(nil),   // 8: ordering.v1.CompleteOrderResponse
+	(*GetOrderHistoryRequest)(nil),  // 9: ordering.v1.GetOrderHistoryRequest
+	(*GetOrderHistoryResponse)(nil), // 10: ordering.v1.GetOrderHistoryResponse
+	(*ListOrdersRequest)(nil),       // 11: ordering.v1.ListOrdersRequest
+	(*ListOrdersResponse)(nil),      // 12: ordering.v1.ListOrdersResponse
+	(*Order)(nil),                   // 13: ordering.v1.Order
+	(*OrderHistoryEntry)(nil),       // 14: ordering.v1.OrderHistoryEntry
+	(OrderStatus)(0),                // 15: ordering.v1.OrderStatus
 }
 var file_ordering_v1_service_proto_depIdxs = []int32{
 	1,  // 0: ordering.v1.CreateOrderRequest.items:type_name -> ordering.v1.CreateOrderItem
-	11, // 1: ordering.v1.CreateOrderResponse.order:type_name -> ordering.v1.Order
-	11, // 2: ordering.v1.GetOrderResponse.order:type_name -> ordering.v1.Order
-	11, // 3: ordering.v1.CancelOrderResponse.order:type_name -> ordering.v1.Order
-	11, // 4: ordering.v1.CompleteOrderResponse.order:type_name -> ordering.v1.Order
-	12, // 5: ordering.v1.ListOrdersRequest.status:type_name -> ordering.v1.OrderStatus
-	11, // 6: ordering.v1.ListOrdersResponse.orders:type_name -> ordering.v1.Order
-	0,  // 7: ordering.v1.OrderService.CreateOrder:input_type -> ordering.v1.CreateOrderRequest
-	3,  // 8: ordering.v1.OrderService.GetOrder:input_type -> ordering.v1.GetOrderRequest
-	5,  // 9: ordering.v1.OrderService.CancelOrder:input_type -> ordering.v1.CancelOrderRequest
-	7,  // 10: ordering.v1.OrderService.CompleteOrder:input_type -> ordering.v1.CompleteOrderRequest
-	9,  // 11: ordering.v1.OrderService.ListOrders:input_type -> ordering.v1.ListOrdersRequest
-	2,  // 12: ordering.v1.OrderService.CreateOrder:output_type -> ordering.v1.CreateOrderResponse
-	4,  // 13: ordering.v1.OrderService.GetOrder:output_type -> ordering.v1.GetOrderResponse
-	6,  // 14: ordering.v1.OrderService.CancelOrder:output_type -> ordering.v1.CancelOrderResponse
-	8,  // 15: ordering.v1.OrderService.CompleteOrder:output_type -> ordering.v1.CompleteOrderResponse
-	10, // 16: ordering.v1.OrderService.ListOrders:output_type -> ordering.v1.ListOrdersResponse
-	12, // [12:17] is the sub-list for method output_type
-	7,  // [7:12] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	13, // 1: ordering.v1.CreateOrderResponse.order:type_name -> ordering.v1.Order
+	13, // 2: ordering.v1.GetOrderResponse.order:type_name -> ordering.v1.Order
+	13, // 3: ordering.v1.CancelOrderResponse.order:type_name -> ordering.v1.Order
+	13, // 4: ordering.v1.CompleteOrderResponse.order:type_name -> ordering.v1.Order
+	14, // 5: ordering.v1.GetOrderHistoryResponse.entries:type_name -> ordering.v1.OrderHistoryEntry
+	15, // 6: ordering.v1.ListOrdersRequest.status:type_name -> ordering.v1.OrderStatus
+	13, // 7: ordering.v1.ListOrdersResponse.orders:type_name -> ordering.v1.Order
+	0,  // 8: ordering.v1.OrderService.CreateOrder:input_type -> ordering.v1.CreateOrderRequest
+	3,  // 9: ordering.v1.OrderService.GetOrder:input_type -> ordering.v1.GetOrderRequest
+	5,  // 10: ordering.v1.OrderService.CancelOrder:input_type -> ordering.v1.CancelOrderRequest
+	7,  // 11: ordering.v1.OrderService.CompleteOrder:input_type -> ordering.v1.CompleteOrderRequest
+	11, // 12: ordering.v1.OrderService.ListOrders:input_type -> ordering.v1.ListOrdersRequest
+	9,  // 13: ordering.v1.OrderService.GetOrderHistory:input_type -> ordering.v1.GetOrderHistoryRequest
+	2,  // 14: ordering.v1.OrderService.CreateOrder:output_type -> ordering.v1.CreateOrderResponse
+	4,  // 15: ordering.v1.OrderService.GetOrder:output_type -> ordering.v1.GetOrderResponse
+	6,  // 16: ordering.v1.OrderService.CancelOrder:output_type -> ordering.v1.CancelOrderResponse
+	8,  // 17: ordering.v1.OrderService.CompleteOrder:output_type -> ordering.v1.CompleteOrderResponse
+	12, // 18: ordering.v1.OrderService.ListOrders:output_type -> ordering.v1.ListOrdersResponse
+	10, // 19: ordering.v1.OrderService.GetOrderHistory:output_type -> ordering.v1.GetOrderHistoryResponse
+	14, // [14:20] is the sub-list for method output_type
+	8,  // [8:14] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_ordering_v1_service_proto_init() }
@@ -700,7 +800,7 @@ func file_ordering_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ordering_v1_service_proto_rawDesc), len(file_ordering_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

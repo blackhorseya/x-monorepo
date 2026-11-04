@@ -304,6 +304,7 @@ const (
 	orderingMarker   = "**Rollback（只退 ordering `0008`）**"
 	ordering9Marker  = "**Rollback（只退 ordering `0009`）**"
 	ordering10Marker = "**Rollback（只退 ordering `0010`）**"
+	ordering11Marker = "**Rollback（只退 ordering `0011`）**"
 	payment3Marker   = "**Rollback（只退 payment `0003`）**"
 	payment4Marker   = "**Rollback（只退 payment `0004`）**"
 )
@@ -314,6 +315,7 @@ const (
 	ordering0008Index  = `SELECT count(*) FROM pg_indexes WHERE schemaname = 'ordering' AND indexname = 'orders_customer_idempotency_key'`
 	ordering0009Col    = `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'ordering' AND table_name = 'orders' AND column_name = 'payment_required'`
 	ordering0010Table  = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'ordering' AND table_name = 'order_history'`
+	ordering0011Typed  = `SELECT count(*) FROM ordering.order_history WHERE cause IN ('STOCK_SHORTAGE', 'RESERVATION_EXPIRED')`
 	ordering0009Tables = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'ordering' AND table_name IN ('events_v1_orderpaid', 'events_v1_orderpaid_offsets')`
 )
 
@@ -394,8 +396,8 @@ var ordering0008Clean = rollbackCase{
 	bc:         0,
 	latest:     8,
 	prepare: func(t *testing.T, e *rollbackEnv) {
-		// ordering is at 10 (order_history) when every BC is at its latest; this runbook is for 8.
-		for range 2 { // 10 → 9 → 8
+		// ordering is at 11 (order_history cause) when every BC is at its latest; this runbook is for 8.
+		for range 3 { // 11 → 10 → 9 → 8
 			if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
 				t.Fatal(err)
 			}
@@ -416,7 +418,7 @@ var ordering0008Clean = rollbackCase{
 		}
 	},
 	reapply: func(t *testing.T, e *rollbackEnv) {
-		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil { // re-applies 0008, 0009, then 0010
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil { // re-applies 0008, 0009, 0010, then 0011
 			t.Fatal(err)
 		}
 		if e.count(t, ordering0008Cols) != 2 || e.count(t, ordering0008Index) != 1 {
@@ -432,7 +434,7 @@ var ordering0008Dirty = rollbackCase{
 	bc:      0,
 	latest:  8,
 	prepare: func(t *testing.T, e *rollbackEnv) { // a real failed 0008: ALTER TABLE cannot get its lock within lock_timeout
-		for range 3 { // 10 → 9 → 8 → 7: 0008 is the one that fails
+		for range 4 { // 11 → 10 → 9 → 8 → 7: 0008 is the one that fails
 			if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
 				t.Fatal(err)
 			}
@@ -475,7 +477,7 @@ var ordering0008Dirty = rollbackCase{
 		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.version(t, 0); got != "10 dirty=false" || e.count(t, ordering0008Cols) != 2 || e.count(t, ordering0008Index) != 1 {
+		if got := e.version(t, 0); got != "11 dirty=false" || e.count(t, ordering0008Cols) != 2 || e.count(t, ordering0008Index) != 1 {
 			t.Errorf("after up: %s, columns=%d, index=%d", got, e.count(t, ordering0008Cols), e.count(t, ordering0008Index))
 		}
 	},
@@ -488,9 +490,11 @@ var ordering0009Clean = rollbackCase{
 	bc:      0,
 	latest:  9,
 	prepare: func(t *testing.T, e *rollbackEnv) {
-		// ordering is at 10 (order_history) when every BC is at its latest; this runbook is for 9.
-		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
-			t.Fatal(err)
+		// ordering is at 11 (order_history cause) when every BC is at its latest; this runbook is for 9.
+		for range 2 { // 11 → 10 → 9
+			if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if e.count(t, ordering0009Col) != 1 || e.count(t, ordering0009Tables) != 2 {
 			t.Fatal("0009 did not add its column and event tables")
@@ -529,7 +533,7 @@ var ordering0009Dirty = rollbackCase{
 	bc:      0,
 	latest:  9,
 	prepare: func(t *testing.T, e *rollbackEnv) { // a real failed 0009: ALTER TABLE cannot get its lock within lock_timeout
-		for range 2 { // 10 → 9 → 8: 0009 is the one that fails
+		for range 3 { // 11 → 10 → 9 → 8: 0009 is the one that fails
 			if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
 				t.Fatal(err)
 			}
@@ -572,7 +576,7 @@ var ordering0009Dirty = rollbackCase{
 		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.version(t, 0); got != "10 dirty=false" || e.count(t, ordering0009Col) != 1 || e.count(t, ordering0009Tables) != 2 {
+		if got := e.version(t, 0); got != "11 dirty=false" || e.count(t, ordering0009Col) != 1 || e.count(t, ordering0009Tables) != 2 {
 			t.Errorf("after up: %s, column=%d, tables=%d", got, e.count(t, ordering0009Col), e.count(t, ordering0009Tables))
 		}
 	},
@@ -585,6 +589,9 @@ var ordering0010Clean = rollbackCase{
 	bc:      0,
 	latest:  10,
 	prepare: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil { // ordering is at 11 with every BC at its latest; this runbook is for 10
+			t.Fatal(err)
+		}
 		if e.count(t, ordering0010Table) != 1 || e.count(t, `SELECT count(*) FROM ordering.order_history`) != 1 {
 			t.Fatal("0010 did not add order_history, or its sentinel row is missing")
 		}
@@ -619,8 +626,10 @@ var ordering0010Dirty = rollbackCase{
 	bc:      0,
 	latest:  10,
 	prepare: func(t *testing.T, e *rollbackEnv) {
-		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil { // 10 → 9
-			t.Fatal(err)
+		for range 2 { // 11 → 10 → 9
+			if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		// A real failed 0010: CREATE TABLE collides with an object in the way, inside the migration's transaction.
 		e.exec(t, `CREATE VIEW ordering.order_history AS SELECT 1 AS x`)
@@ -647,8 +656,118 @@ var ordering0010Dirty = rollbackCase{
 		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.version(t, 0); got != "10 dirty=false" || e.count(t, ordering0010Table) != 1 {
+		if got := e.version(t, 0); got != "11 dirty=false" || e.count(t, ordering0010Table) != 1 {
 			t.Errorf("after up: %s, table=%d", got, e.count(t, ordering0010Table))
+		}
+	},
+}
+
+// The two causes 0011 admits, planted as the worker would have written them (#427 slice 2). Inserting
+// them is also the proof that 0011 widened the CHECK: before it, the INSERT itself is refused.
+func plantInventoryCauses(t *testing.T, e *rollbackEnv) {
+	t.Helper()
+	for seq, cause := range map[int]string{2: "STOCK_SHORTAGE", 3: "RESERVATION_EXPIRED"} {
+		if _, err := e.conn.Exec(e.c, `INSERT INTO ordering.order_history (order_id, seq, event, from_status, to_status, occurred_at, actor_kind, actor_subject, cause)
+			VALUES ('rollback-order', $1, 'CANCELLED', 'CONFIRMED', 'CANCELLED', now(), 'SYSTEM', '', $2)`, seq, cause); err != nil {
+			t.Fatalf("0011 does not admit cause %s: %v", cause, err)
+		}
+	}
+}
+
+// causeRefused reports whether the CHECK refuses the inventory causes, using a statement that
+// changes nothing when it is refused and is rolled back when it is not.
+func causeRefused(t *testing.T, e *rollbackEnv, cause string) bool {
+	t.Helper()
+	tx, err := e.conn.Begin(e.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(e.c) }()
+	_, err = tx.Exec(e.c, `INSERT INTO ordering.order_history (order_id, seq, event, from_status, to_status, occurred_at, actor_kind, actor_subject, cause)
+		VALUES ('rollback-order', 99, 'CANCELLED', 'CONFIRMED', 'CANCELLED', now(), 'SYSTEM', '', $1)`, cause)
+
+	return err != nil
+}
+
+var ordering0011Clean = rollbackCase{
+	name:    "ordering 0011 from 11 clean",
+	runbook: orderingRunbook,
+	marker:  ordering11Marker,
+	bc:      0,
+	latest:  11,
+	prepare: func(t *testing.T, e *rollbackEnv) {
+		plantInventoryCauses(t, e)
+		if e.count(t, ordering0011Typed) != 2 {
+			t.Fatal("the planted inventory causes are missing")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		// The rows stay (history is a record) but read as the unclassified request the older CHECK knows.
+		if n := e.count(t, ordering0011Typed); n != 0 {
+			t.Errorf("rows with an inventory cause after the rollback: %d", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.order_history WHERE order_id = 'rollback-order' AND cause = 'CANCELLATION_REQUESTED'`); n != 2 {
+			t.Errorf("rows mapped to CANCELLATION_REQUESTED = %d, want the 2 planted ones", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.order_history WHERE order_id = 'rollback-order'`); n != 3 {
+			t.Errorf("history rows = %d, want all 3 kept", n)
+		}
+		// The 0010 CHECK is back: the inventory causes are refused again, the older ones are not.
+		if !causeRefused(t, e, "STOCK_SHORTAGE") || !causeRefused(t, e, "RESERVATION_EXPIRED") {
+			t.Error("the CHECK still admits the inventory causes after the rollback")
+		}
+		if causeRefused(t, e, "CANCELLATION_REQUESTED") {
+			t.Error("the restored CHECK refuses a 0010 cause")
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 0); got != "11 dirty=false" || causeRefused(t, e, "STOCK_SHORTAGE") {
+			t.Errorf("after up: %s, STOCK_SHORTAGE refused=%v", got, causeRefused(t, e, "STOCK_SHORTAGE"))
+		}
+	},
+}
+
+// A dirty 0011: the file is one transaction, so a failure leaves the 0010 CHECK untouched and only the
+// version dirty. The failure is real: the constraint 0011 drops by name has been renamed by hand.
+var ordering0011Dirty = rollbackCase{
+	name:    "ordering 0011 from 11 dirty (CHECK unchanged)",
+	runbook: orderingRunbook,
+	marker:  ordering11Marker,
+	bc:      0,
+	latest:  11,
+	prepare: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil { // 11 → 10
+			t.Fatal(err)
+		}
+		e.exec(t, `ALTER TABLE ordering.order_history RENAME CONSTRAINT order_history_cause_check TO order_history_cause_check_renamed`)
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err == nil {
+			t.Fatal("0011 applied although the constraint it drops by name is missing")
+		}
+		if got := e.version(t, 0); got != "11 dirty=true" {
+			t.Fatalf("ordering = %s, want 11 dirty=true", got)
+		}
+		if !causeRefused(t, e, "STOCK_SHORTAGE") {
+			t.Fatal("the failed 0011 left a widened CHECK behind")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		if !causeRefused(t, e, "STOCK_SHORTAGE") || causeRefused(t, e, "RPC_REQUEST") {
+			t.Error("after the rollback the CHECK must refuse the inventory causes and keep the older ones")
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.order_history WHERE order_id = 'rollback-order'`); n != 1 {
+			t.Errorf("history rows = %d, want the seeded one kept", n)
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) {
+		e.exec(t, `ALTER TABLE ordering.order_history DROP CONSTRAINT IF EXISTS order_history_cause_check_renamed`)
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 0); got != "11 dirty=false" || causeRefused(t, e, "STOCK_SHORTAGE") {
+			t.Errorf("after up: %s, STOCK_SHORTAGE refused=%v", got, causeRefused(t, e, "STOCK_SHORTAGE"))
 		}
 	},
 }
@@ -810,7 +929,7 @@ var payment0004Clean = rollbackCase{
 }
 
 func TestRollbackRunbooks(t *testing.T) {
-	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0010Clean, ordering0010Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0004Clean, payment0003Clean, payment0003DirtyNoTables, payment0003DirtyTableInTheWay} {
+	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0011Clean, ordering0011Dirty, ordering0010Clean, ordering0010Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0004Clean, payment0003Clean, payment0003DirtyNoTables, payment0003DirtyTableInTheWay} {
 		t.Run(tc.name, func(t *testing.T) { runRollbackCase(t, tc) })
 	}
 }

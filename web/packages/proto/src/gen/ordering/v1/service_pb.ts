@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv1";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv1";
-import type { Order, OrderStatus } from "./entity_pb";
+import type { Order, OrderHistoryEntry, OrderStatus } from "./entity_pb";
 import { file_ordering_v1_entity } from "./entity_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/service.proto.
  */
 export const file_ordering_v1_service: GenFile = /*@__PURE__*/
-  fileDesc("ChlvcmRlcmluZy92MS9zZXJ2aWNlLnByb3RvEgtvcmRlcmluZy52MSJzChJDcmVhdGVPcmRlclJlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSLQoFaXRlbXMYAiADKAsyHC5vcmRlcmluZy52MS5DcmVhdGVPcmRlckl0ZW1CABIZCg9pZGVtcG90ZW5jeV9rZXkYAyABKAlCACJGCg9DcmVhdGVPcmRlckl0ZW0SDQoDc2t1GAEgASgJQgASEgoIcXVhbnRpdHkYAiABKAVCAEoECAMQBFIKdW5pdF9wcmljZSI4ChNDcmVhdGVPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiHwoPR2V0T3JkZXJSZXF1ZXN0EgwKAmlkGAEgASgJQgAiNQoQR2V0T3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiIKEkNhbmNlbE9yZGVyUmVxdWVzdBIMCgJpZBgBIAEoCUIAIjgKE0NhbmNlbE9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciIkChRDb21wbGV0ZU9yZGVyUmVxdWVzdBIMCgJpZBgBIAEoCUIAIjoKFUNvbXBsZXRlT3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyInsKEUxpc3RPcmRlcnNSZXF1ZXN0EhMKC2N1c3RvbWVyX2lkGAEgASgJEigKBnN0YXR1cxgCIAEoDjIYLm9yZGVyaW5nLnYxLk9yZGVyU3RhdHVzEhMKCXBhZ2Vfc2l6ZRgDIAEoBUIAEhIKCnBhZ2VfdG9rZW4YBCABKAkiUQoSTGlzdE9yZGVyc1Jlc3BvbnNlEiIKBm9yZGVycxgBIAMoCzISLm9yZGVyaW5nLnYxLk9yZGVyEhcKD25leHRfcGFnZV90b2tlbhgCIAEoCTKiAwoMT3JkZXJTZXJ2aWNlElAKC0NyZWF0ZU9yZGVyEh8ub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXF1ZXN0GiAub3JkZXJpbmcudjEuQ3JlYXRlT3JkZXJSZXNwb25zZRJHCghHZXRPcmRlchIcLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVxdWVzdBodLm9yZGVyaW5nLnYxLkdldE9yZGVyUmVzcG9uc2USUAoLQ2FuY2VsT3JkZXISHy5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlcXVlc3QaIC5vcmRlcmluZy52MS5DYW5jZWxPcmRlclJlc3BvbnNlElYKDUNvbXBsZXRlT3JkZXISIS5vcmRlcmluZy52MS5Db21wbGV0ZU9yZGVyUmVxdWVzdBoiLm9yZGVyaW5nLnYxLkNvbXBsZXRlT3JkZXJSZXNwb25zZRJNCgpMaXN0T3JkZXJzEh4ub3JkZXJpbmcudjEuTGlzdE9yZGVyc1JlcXVlc3QaHy5vcmRlcmluZy52MS5MaXN0T3JkZXJzUmVzcG9uc2ViBnByb3RvMw", [file_ordering_v1_entity]);
+  fileDesc("ChlvcmRlcmluZy92MS9zZXJ2aWNlLnByb3RvEgtvcmRlcmluZy52MSJzChJDcmVhdGVPcmRlclJlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSLQoFaXRlbXMYAiADKAsyHC5vcmRlcmluZy52MS5DcmVhdGVPcmRlckl0ZW1CABIZCg9pZGVtcG90ZW5jeV9rZXkYAyABKAlCACJGCg9DcmVhdGVPcmRlckl0ZW0SDQoDc2t1GAEgASgJQgASEgoIcXVhbnRpdHkYAiABKAVCAEoECAMQBFIKdW5pdF9wcmljZSI4ChNDcmVhdGVPcmRlclJlc3BvbnNlEiEKBW9yZGVyGAEgASgLMhIub3JkZXJpbmcudjEuT3JkZXIiHwoPR2V0T3JkZXJSZXF1ZXN0EgwKAmlkGAEgASgJQgAiNQoQR2V0T3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiIKEkNhbmNlbE9yZGVyUmVxdWVzdBIMCgJpZBgBIAEoCUIAIjgKE0NhbmNlbE9yZGVyUmVzcG9uc2USIQoFb3JkZXIYASABKAsyEi5vcmRlcmluZy52MS5PcmRlciIkChRDb21wbGV0ZU9yZGVyUmVxdWVzdBIMCgJpZBgBIAEoCUIAIjoKFUNvbXBsZXRlT3JkZXJSZXNwb25zZRIhCgVvcmRlchgBIAEoCzISLm9yZGVyaW5nLnYxLk9yZGVyIiYKFkdldE9yZGVySGlzdG9yeVJlcXVlc3QSDAoCaWQYASABKAlCACJKChdHZXRPcmRlckhpc3RvcnlSZXNwb25zZRIvCgdlbnRyaWVzGAEgAygLMh4ub3JkZXJpbmcudjEuT3JkZXJIaXN0b3J5RW50cnkiewoRTGlzdE9yZGVyc1JlcXVlc3QSEwoLY3VzdG9tZXJfaWQYASABKAkSKAoGc3RhdHVzGAIgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSEwoJcGFnZV9zaXplGAMgASgFQgASEgoKcGFnZV90b2tlbhgEIAEoCSJRChJMaXN0T3JkZXJzUmVzcG9uc2USIgoGb3JkZXJzGAEgAygLMhIub3JkZXJpbmcudjEuT3JkZXISFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJMoAECgxPcmRlclNlcnZpY2USUAoLQ3JlYXRlT3JkZXISHy5vcmRlcmluZy52MS5DcmVhdGVPcmRlclJlcXVlc3QaIC5vcmRlcmluZy52MS5DcmVhdGVPcmRlclJlc3BvbnNlEkcKCEdldE9yZGVyEhwub3JkZXJpbmcudjEuR2V0T3JkZXJSZXF1ZXN0Gh0ub3JkZXJpbmcudjEuR2V0T3JkZXJSZXNwb25zZRJQCgtDYW5jZWxPcmRlchIfLm9yZGVyaW5nLnYxLkNhbmNlbE9yZGVyUmVxdWVzdBogLm9yZGVyaW5nLnYxLkNhbmNlbE9yZGVyUmVzcG9uc2USVgoNQ29tcGxldGVPcmRlchIhLm9yZGVyaW5nLnYxLkNvbXBsZXRlT3JkZXJSZXF1ZXN0GiIub3JkZXJpbmcudjEuQ29tcGxldGVPcmRlclJlc3BvbnNlEk0KCkxpc3RPcmRlcnMSHi5vcmRlcmluZy52MS5MaXN0T3JkZXJzUmVxdWVzdBofLm9yZGVyaW5nLnYxLkxpc3RPcmRlcnNSZXNwb25zZRJcCg9HZXRPcmRlckhpc3RvcnkSIy5vcmRlcmluZy52MS5HZXRPcmRlckhpc3RvcnlSZXF1ZXN0GiQub3JkZXJpbmcudjEuR2V0T3JkZXJIaXN0b3J5UmVzcG9uc2ViBnByb3RvMw", [file_ordering_v1_entity]);
 
 /**
  * @generated from message ordering.v1.CreateOrderRequest
@@ -207,6 +207,42 @@ export const CompleteOrderResponseSchema: GenMessage<CompleteOrderResponse> = /*
   messageDesc(file_ordering_v1_service, 8);
 
 /**
+ * @generated from message ordering.v1.GetOrderHistoryRequest
+ */
+export type GetOrderHistoryRequest = Message<"ordering.v1.GetOrderHistoryRequest"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+};
+
+/**
+ * Describes the message ordering.v1.GetOrderHistoryRequest.
+ * Use `create(GetOrderHistoryRequestSchema)` to create a new message.
+ */
+export const GetOrderHistoryRequestSchema: GenMessage<GetOrderHistoryRequest> = /*@__PURE__*/
+  messageDesc(file_ordering_v1_service, 9);
+
+/**
+ * @generated from message ordering.v1.GetOrderHistoryResponse
+ */
+export type GetOrderHistoryResponse = Message<"ordering.v1.GetOrderHistoryResponse"> & {
+  /**
+   * Ordered by seq, at most 4 entries.
+   *
+   * @generated from field: repeated ordering.v1.OrderHistoryEntry entries = 1;
+   */
+  entries: OrderHistoryEntry[];
+};
+
+/**
+ * Describes the message ordering.v1.GetOrderHistoryResponse.
+ * Use `create(GetOrderHistoryResponseSchema)` to create a new message.
+ */
+export const GetOrderHistoryResponseSchema: GenMessage<GetOrderHistoryResponse> = /*@__PURE__*/
+  messageDesc(file_ordering_v1_service, 10);
+
+/**
  * @generated from message ordering.v1.ListOrdersRequest
  */
 export type ListOrdersRequest = Message<"ordering.v1.ListOrdersRequest"> & {
@@ -245,7 +281,7 @@ export type ListOrdersRequest = Message<"ordering.v1.ListOrdersRequest"> & {
  * Use `create(ListOrdersRequestSchema)` to create a new message.
  */
 export const ListOrdersRequestSchema: GenMessage<ListOrdersRequest> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 9);
+  messageDesc(file_ordering_v1_service, 11);
 
 /**
  * @generated from message ordering.v1.ListOrdersResponse
@@ -269,7 +305,7 @@ export type ListOrdersResponse = Message<"ordering.v1.ListOrdersResponse"> & {
  * Use `create(ListOrdersResponseSchema)` to create a new message.
  */
 export const ListOrdersResponseSchema: GenMessage<ListOrdersResponse> = /*@__PURE__*/
-  messageDesc(file_ordering_v1_service, 10);
+  messageDesc(file_ordering_v1_service, 12);
 
 /**
  * OrderService is the public RPC contract of the ordering bounded context.
@@ -339,6 +375,23 @@ export const OrderService: GenService<{
     methodKind: "unary";
     input: typeof ListOrdersRequestSchema;
     output: typeof ListOrdersResponseSchema;
+  },
+  /**
+   * GetOrderHistory returns every state transition of one order, oldest first (seq 1..N). It is not
+   * paged: the state machine bounds it at 4 entries (PENDING → CONFIRMED → PAID → COMPLETED; a
+   * cancelled order has fewer), and a test turns red if a longer path ever becomes possible.
+   * Ownership is GetOrder's: a non-admin reading someone else's order gets NOT_FOUND
+   * (x-error-code: order.not_found), decided where the order is selected, and so does an order that
+   * does not exist. An order created before the history existed has none: an empty list, not an error.
+   * actor_subject is returned to an admin only; for every other caller (a customer, or anonymous when
+   * auth.mode is off) it is always empty, whatever the stored row says.
+   *
+   * @generated from rpc ordering.v1.OrderService.GetOrderHistory
+   */
+  getOrderHistory: {
+    methodKind: "unary";
+    input: typeof GetOrderHistoryRequestSchema;
+    output: typeof GetOrderHistoryResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_ordering_v1_service, 0);

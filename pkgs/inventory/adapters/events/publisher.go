@@ -87,12 +87,14 @@ func toProto(e reservation.Event) (string, proto.Message, error) {
 			OrderId:     ev.OrderID(),
 			Reason:      "inventory: insufficient stock for " + strings.Join(ev.Shortfall(), ", "),
 			RequestedAt: timestamppb.New(ev.OccurredAt()),
+			Cause:       orderingv1.CancellationCause_CANCELLATION_CAUSE_STOCK_SHORTAGE,
 		}, nil
 	case reservation.Expired:
 		return TopicOrderCancellationRequested, &orderingv1.OrderCancellationRequested{
 			OrderId:     ev.OrderID(),
 			Reason:      "inventory: reservation expired after " + ev.HeldFor().Truncate(time.Second).String(),
 			RequestedAt: timestamppb.New(ev.OccurredAt()),
+			Cause:       orderingv1.CancellationCause_CANCELLATION_CAUSE_RESERVATION_EXPIRED,
 		}, nil
 	case reservation.Released:
 		return TopicStockReleased, &inventoryv1.StockReleased{

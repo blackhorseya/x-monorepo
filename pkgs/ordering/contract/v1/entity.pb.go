@@ -87,6 +87,136 @@ func (OrderStatus) EnumDescriptor() ([]byte, []int) {
 	return file_ordering_v1_entity_proto_rawDescGZIP(), []int{0}
 }
 
+// OrderHistoryActorKind is who made an order move (docs/order-history.md).
+type OrderHistoryActorKind int32
+
+const (
+	OrderHistoryActorKind_ORDER_HISTORY_ACTOR_KIND_UNSPECIFIED OrderHistoryActorKind = 0
+	// An authenticated caller without the admin role.
+	OrderHistoryActorKind_ORDER_HISTORY_ACTOR_KIND_CUSTOMER OrderHistoryActorKind = 1
+	// An authenticated caller holding auth.admin_role.
+	OrderHistoryActorKind_ORDER_HISTORY_ACTOR_KIND_ADMIN OrderHistoryActorKind = 2
+	// An event consumer: no person is behind it.
+	OrderHistoryActorKind_ORDER_HISTORY_ACTOR_KIND_SYSTEM OrderHistoryActorKind = 3
+	// An rpc call with no principal (auth.mode off).
+	OrderHistoryActorKind_ORDER_HISTORY_ACTOR_KIND_ANONYMOUS OrderHistoryActorKind = 4
+)
+
+// Enum value maps for OrderHistoryActorKind.
+var (
+	OrderHistoryActorKind_name = map[int32]string{
+		0: "ORDER_HISTORY_ACTOR_KIND_UNSPECIFIED",
+		1: "ORDER_HISTORY_ACTOR_KIND_CUSTOMER",
+		2: "ORDER_HISTORY_ACTOR_KIND_ADMIN",
+		3: "ORDER_HISTORY_ACTOR_KIND_SYSTEM",
+		4: "ORDER_HISTORY_ACTOR_KIND_ANONYMOUS",
+	}
+	OrderHistoryActorKind_value = map[string]int32{
+		"ORDER_HISTORY_ACTOR_KIND_UNSPECIFIED": 0,
+		"ORDER_HISTORY_ACTOR_KIND_CUSTOMER":    1,
+		"ORDER_HISTORY_ACTOR_KIND_ADMIN":       2,
+		"ORDER_HISTORY_ACTOR_KIND_SYSTEM":      3,
+		"ORDER_HISTORY_ACTOR_KIND_ANONYMOUS":   4,
+	}
+)
+
+func (x OrderHistoryActorKind) Enum() *OrderHistoryActorKind {
+	p := new(OrderHistoryActorKind)
+	*p = x
+	return p
+}
+
+func (x OrderHistoryActorKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (OrderHistoryActorKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_ordering_v1_entity_proto_enumTypes[1].Descriptor()
+}
+
+func (OrderHistoryActorKind) Type() protoreflect.EnumType {
+	return &file_ordering_v1_entity_proto_enumTypes[1]
+}
+
+func (x OrderHistoryActorKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use OrderHistoryActorKind.Descriptor instead.
+func (OrderHistoryActorKind) EnumDescriptor() ([]byte, []int) {
+	return file_ordering_v1_entity_proto_rawDescGZIP(), []int{1}
+}
+
+// OrderHistoryCause is why an order moved, as a fixed enumeration. Another BC's free text is never one.
+// A client must treat a value it does not know as UNSPECIFIED: the set can grow.
+type OrderHistoryCause int32
+
+const (
+	OrderHistoryCause_ORDER_HISTORY_CAUSE_UNSPECIFIED OrderHistoryCause = 0
+	// A client asked through the rpc (CreateOrder, CancelOrder, CompleteOrder); who is the actor.
+	OrderHistoryCause_ORDER_HISTORY_CAUSE_RPC_REQUEST      OrderHistoryCause = 1
+	OrderHistoryCause_ORDER_HISTORY_CAUSE_PAYMENT_CAPTURED OrderHistoryCause = 2
+	OrderHistoryCause_ORDER_HISTORY_CAUSE_PAYMENT_EXPIRED  OrderHistoryCause = 3
+	OrderHistoryCause_ORDER_HISTORY_CAUSE_STOCK_RESERVED   OrderHistoryCause = 4
+	// Another BC asked for the cancellation and its reason is not classified.
+	OrderHistoryCause_ORDER_HISTORY_CAUSE_CANCELLATION_REQUESTED OrderHistoryCause = 5
+	// Inventory could not cover every line of the order (OrderCancellationRequested.cause).
+	OrderHistoryCause_ORDER_HISTORY_CAUSE_STOCK_SHORTAGE OrderHistoryCause = 6
+	// Inventory gave the reservation back because it was held past its TTL.
+	OrderHistoryCause_ORDER_HISTORY_CAUSE_RESERVATION_EXPIRED OrderHistoryCause = 7
+)
+
+// Enum value maps for OrderHistoryCause.
+var (
+	OrderHistoryCause_name = map[int32]string{
+		0: "ORDER_HISTORY_CAUSE_UNSPECIFIED",
+		1: "ORDER_HISTORY_CAUSE_RPC_REQUEST",
+		2: "ORDER_HISTORY_CAUSE_PAYMENT_CAPTURED",
+		3: "ORDER_HISTORY_CAUSE_PAYMENT_EXPIRED",
+		4: "ORDER_HISTORY_CAUSE_STOCK_RESERVED",
+		5: "ORDER_HISTORY_CAUSE_CANCELLATION_REQUESTED",
+		6: "ORDER_HISTORY_CAUSE_STOCK_SHORTAGE",
+		7: "ORDER_HISTORY_CAUSE_RESERVATION_EXPIRED",
+	}
+	OrderHistoryCause_value = map[string]int32{
+		"ORDER_HISTORY_CAUSE_UNSPECIFIED":            0,
+		"ORDER_HISTORY_CAUSE_RPC_REQUEST":            1,
+		"ORDER_HISTORY_CAUSE_PAYMENT_CAPTURED":       2,
+		"ORDER_HISTORY_CAUSE_PAYMENT_EXPIRED":        3,
+		"ORDER_HISTORY_CAUSE_STOCK_RESERVED":         4,
+		"ORDER_HISTORY_CAUSE_CANCELLATION_REQUESTED": 5,
+		"ORDER_HISTORY_CAUSE_STOCK_SHORTAGE":         6,
+		"ORDER_HISTORY_CAUSE_RESERVATION_EXPIRED":    7,
+	}
+)
+
+func (x OrderHistoryCause) Enum() *OrderHistoryCause {
+	p := new(OrderHistoryCause)
+	*p = x
+	return p
+}
+
+func (x OrderHistoryCause) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (OrderHistoryCause) Descriptor() protoreflect.EnumDescriptor {
+	return file_ordering_v1_entity_proto_enumTypes[2].Descriptor()
+}
+
+func (OrderHistoryCause) Type() protoreflect.EnumType {
+	return &file_ordering_v1_entity_proto_enumTypes[2]
+}
+
+func (x OrderHistoryCause) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use OrderHistoryCause.Descriptor instead.
+func (OrderHistoryCause) EnumDescriptor() ([]byte, []int) {
+	return file_ordering_v1_entity_proto_rawDescGZIP(), []int{2}
+}
+
 // LineItem is one line of an Order. unit_price is the snapshot of the catalog
 // price at the moment the order was placed: a later reprice does not change it.
 type LineItem struct {
@@ -252,6 +382,104 @@ func (x *Order) GetPaymentRequired() bool {
 	return false
 }
 
+// OrderHistoryEntry is one transition of an order. Entries are append-only.
+type OrderHistoryEntry struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 1..N per order, in the order the transitions happened.
+	Seq int32 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
+	// ORDER_STATUS_UNSPECIFIED for the creation (there is no previous state).
+	FromStatus OrderStatus `protobuf:"varint,2,opt,name=from_status,json=fromStatus,proto3,enum=ordering.v1.OrderStatus" json:"from_status,omitempty"`
+	ToStatus   OrderStatus `protobuf:"varint,3,opt,name=to_status,json=toStatus,proto3,enum=ordering.v1.OrderStatus" json:"to_status,omitempty"`
+	// When the domain made the transition (not when the row was written).
+	OccurredTime *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=occurred_time,json=occurredTime,proto3" json:"occurred_time,omitempty"`
+	ActorKind    OrderHistoryActorKind  `protobuf:"varint,5,opt,name=actor_kind,json=actorKind,proto3,enum=ordering.v1.OrderHistoryActorKind" json:"actor_kind,omitempty"`
+	// The account id of a CUSTOMER or ADMIN actor. Only an admin is shown it; for any other caller
+	// it is empty.
+	ActorSubject  string            `protobuf:"bytes,6,opt,name=actor_subject,json=actorSubject,proto3" json:"actor_subject,omitempty"`
+	Cause         OrderHistoryCause `protobuf:"varint,7,opt,name=cause,proto3,enum=ordering.v1.OrderHistoryCause" json:"cause,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OrderHistoryEntry) Reset() {
+	*x = OrderHistoryEntry{}
+	mi := &file_ordering_v1_entity_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrderHistoryEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrderHistoryEntry) ProtoMessage() {}
+
+func (x *OrderHistoryEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_ordering_v1_entity_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrderHistoryEntry.ProtoReflect.Descriptor instead.
+func (*OrderHistoryEntry) Descriptor() ([]byte, []int) {
+	return file_ordering_v1_entity_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *OrderHistoryEntry) GetSeq() int32 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *OrderHistoryEntry) GetFromStatus() OrderStatus {
+	if x != nil {
+		return x.FromStatus
+	}
+	return OrderStatus_ORDER_STATUS_UNSPECIFIED
+}
+
+func (x *OrderHistoryEntry) GetToStatus() OrderStatus {
+	if x != nil {
+		return x.ToStatus
+	}
+	return OrderStatus_ORDER_STATUS_UNSPECIFIED
+}
+
+func (x *OrderHistoryEntry) GetOccurredTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.OccurredTime
+	}
+	return nil
+}
+
+func (x *OrderHistoryEntry) GetActorKind() OrderHistoryActorKind {
+	if x != nil {
+		return x.ActorKind
+	}
+	return OrderHistoryActorKind_ORDER_HISTORY_ACTOR_KIND_UNSPECIFIED
+}
+
+func (x *OrderHistoryEntry) GetActorSubject() string {
+	if x != nil {
+		return x.ActorSubject
+	}
+	return ""
+}
+
+func (x *OrderHistoryEntry) GetCause() OrderHistoryCause {
+	if x != nil {
+		return x.Cause
+	}
+	return OrderHistoryCause_ORDER_HISTORY_CAUSE_UNSPECIFIED
+}
+
 var File_ordering_v1_entity_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_entity_proto_rawDesc = "" +
@@ -273,14 +501,39 @@ const file_ordering_v1_entity_proto_rawDesc = "" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"updateTime\x12)\n" +
-	"\x10payment_required\x18\b \x01(\bR\x0fpaymentRequired*\xb0\x01\n" +
+	"\x10payment_required\x18\b \x01(\bR\x0fpaymentRequired\"\xf6\x02\n" +
+	"\x11OrderHistoryEntry\x12\x10\n" +
+	"\x03seq\x18\x01 \x01(\x05R\x03seq\x129\n" +
+	"\vfrom_status\x18\x02 \x01(\x0e2\x18.ordering.v1.OrderStatusR\n" +
+	"fromStatus\x125\n" +
+	"\tto_status\x18\x03 \x01(\x0e2\x18.ordering.v1.OrderStatusR\btoStatus\x12?\n" +
+	"\roccurred_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\foccurredTime\x12A\n" +
+	"\n" +
+	"actor_kind\x18\x05 \x01(\x0e2\".ordering.v1.OrderHistoryActorKindR\tactorKind\x12#\n" +
+	"\ractor_subject\x18\x06 \x01(\tR\factorSubject\x124\n" +
+	"\x05cause\x18\a \x01(\x0e2\x1e.ordering.v1.OrderHistoryCauseR\x05cause*\xb0\x01\n" +
 	"\vOrderStatus\x12\x1c\n" +
 	"\x18ORDER_STATUS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14ORDER_STATUS_PENDING\x10\x01\x12\x1a\n" +
 	"\x16ORDER_STATUS_CANCELLED\x10\x02\x12\x1a\n" +
 	"\x16ORDER_STATUS_CONFIRMED\x10\x03\x12\x1a\n" +
 	"\x16ORDER_STATUS_COMPLETED\x10\x04\x12\x15\n" +
-	"\x11ORDER_STATUS_PAID\x10\x05B\xb4\x01\n" +
+	"\x11ORDER_STATUS_PAID\x10\x05*\xd9\x01\n" +
+	"\x15OrderHistoryActorKind\x12(\n" +
+	"$ORDER_HISTORY_ACTOR_KIND_UNSPECIFIED\x10\x00\x12%\n" +
+	"!ORDER_HISTORY_ACTOR_KIND_CUSTOMER\x10\x01\x12\"\n" +
+	"\x1eORDER_HISTORY_ACTOR_KIND_ADMIN\x10\x02\x12#\n" +
+	"\x1fORDER_HISTORY_ACTOR_KIND_SYSTEM\x10\x03\x12&\n" +
+	"\"ORDER_HISTORY_ACTOR_KIND_ANONYMOUS\x10\x04*\xdd\x02\n" +
+	"\x11OrderHistoryCause\x12#\n" +
+	"\x1fORDER_HISTORY_CAUSE_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fORDER_HISTORY_CAUSE_RPC_REQUEST\x10\x01\x12(\n" +
+	"$ORDER_HISTORY_CAUSE_PAYMENT_CAPTURED\x10\x02\x12'\n" +
+	"#ORDER_HISTORY_CAUSE_PAYMENT_EXPIRED\x10\x03\x12&\n" +
+	"\"ORDER_HISTORY_CAUSE_STOCK_RESERVED\x10\x04\x12.\n" +
+	"*ORDER_HISTORY_CAUSE_CANCELLATION_REQUESTED\x10\x05\x12&\n" +
+	"\"ORDER_HISTORY_CAUSE_STOCK_SHORTAGE\x10\x06\x12+\n" +
+	"'ORDER_HISTORY_CAUSE_RESERVATION_EXPIRED\x10\aB\xb4\x01\n" +
 	"\x0fcom.ordering.v1B\vEntityProtoP\x01ZGgithub.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1\xa2\x02\x03OXX\xaa\x02\vOrdering.V1\xca\x02\vOrdering\\V1\xe2\x02\x17Ordering\\V1\\GPBMetadata\xea\x02\fOrdering::V1b\x06proto3"
 
 var (
@@ -295,27 +548,35 @@ func file_ordering_v1_entity_proto_rawDescGZIP() []byte {
 	return file_ordering_v1_entity_proto_rawDescData
 }
 
-var file_ordering_v1_entity_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_ordering_v1_entity_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_ordering_v1_entity_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_ordering_v1_entity_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_ordering_v1_entity_proto_goTypes = []any{
 	(OrderStatus)(0),              // 0: ordering.v1.OrderStatus
-	(*LineItem)(nil),              // 1: ordering.v1.LineItem
-	(*Order)(nil),                 // 2: ordering.v1.Order
-	(*v1.Money)(nil),              // 3: common.v1.Money
-	(*timestamppb.Timestamp)(nil), // 4: google.protobuf.Timestamp
+	(OrderHistoryActorKind)(0),    // 1: ordering.v1.OrderHistoryActorKind
+	(OrderHistoryCause)(0),        // 2: ordering.v1.OrderHistoryCause
+	(*LineItem)(nil),              // 3: ordering.v1.LineItem
+	(*Order)(nil),                 // 4: ordering.v1.Order
+	(*OrderHistoryEntry)(nil),     // 5: ordering.v1.OrderHistoryEntry
+	(*v1.Money)(nil),              // 6: common.v1.Money
+	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
 }
 var file_ordering_v1_entity_proto_depIdxs = []int32{
-	3, // 0: ordering.v1.LineItem.unit_price:type_name -> common.v1.Money
-	1, // 1: ordering.v1.Order.items:type_name -> ordering.v1.LineItem
-	3, // 2: ordering.v1.Order.total:type_name -> common.v1.Money
-	0, // 3: ordering.v1.Order.status:type_name -> ordering.v1.OrderStatus
-	4, // 4: ordering.v1.Order.create_time:type_name -> google.protobuf.Timestamp
-	4, // 5: ordering.v1.Order.update_time:type_name -> google.protobuf.Timestamp
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	6,  // 0: ordering.v1.LineItem.unit_price:type_name -> common.v1.Money
+	3,  // 1: ordering.v1.Order.items:type_name -> ordering.v1.LineItem
+	6,  // 2: ordering.v1.Order.total:type_name -> common.v1.Money
+	0,  // 3: ordering.v1.Order.status:type_name -> ordering.v1.OrderStatus
+	7,  // 4: ordering.v1.Order.create_time:type_name -> google.protobuf.Timestamp
+	7,  // 5: ordering.v1.Order.update_time:type_name -> google.protobuf.Timestamp
+	0,  // 6: ordering.v1.OrderHistoryEntry.from_status:type_name -> ordering.v1.OrderStatus
+	0,  // 7: ordering.v1.OrderHistoryEntry.to_status:type_name -> ordering.v1.OrderStatus
+	7,  // 8: ordering.v1.OrderHistoryEntry.occurred_time:type_name -> google.protobuf.Timestamp
+	1,  // 9: ordering.v1.OrderHistoryEntry.actor_kind:type_name -> ordering.v1.OrderHistoryActorKind
+	2,  // 10: ordering.v1.OrderHistoryEntry.cause:type_name -> ordering.v1.OrderHistoryCause
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_ordering_v1_entity_proto_init() }
@@ -328,8 +589,8 @@ func file_ordering_v1_entity_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ordering_v1_entity_proto_rawDesc), len(file_ordering_v1_entity_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   2,
+			NumEnums:      3,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

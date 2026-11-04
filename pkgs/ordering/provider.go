@@ -58,6 +58,7 @@ var ProviderSet = wire.NewSet(
 	ProvideConfirmOrder,
 	ProvideCompleteOrder,
 	ProvideListOrders,
+	ProvideGetOrderHistory,
 	ProvideOrderStats,
 
 	// adapters
@@ -263,4 +264,9 @@ func ProvideOrderStats(repo order.Repository, rec *usecasex.Recorder) metrics.Or
 
 func ProvideListOrders(repo order.Repository, own *ownership.Policy, rec *usecasex.Recorder) rpc.ListOrdersUC {
 	return decorate("ordering.list_orders", rec, usecase.NewListOrders(repo, own))
+}
+
+// ProvideGetOrderHistory is a read like ProvideGetOrder: decorated, no transaction.
+func ProvideGetOrderHistory(repo order.Repository, history port.HistoryStore, own *ownership.Policy, rec *usecasex.Recorder) rpc.GetOrderHistoryUC {
+	return decorate("ordering.get_order_history", rec, usecase.NewGetOrderHistory(repo, history, own))
 }
