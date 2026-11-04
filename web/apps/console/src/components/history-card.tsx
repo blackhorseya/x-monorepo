@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   OrderHistoryActorKind,
@@ -68,12 +68,18 @@ export function HistoryCard({ orderId, order }: { orderId: string; order: Order 
   // A snapshot taken while the order was in another status can lack the transitions since. Ask again once the
   // request in flight (if any) is done: a refetch cannot replace a first request that has no data yet, it would join
   // it and get the same stale answer. A final order is not polled, so this is the only thing that brings its last
-  // row in when the first answer was slow. After the new answer asOf equals the order's status and it stops; if the
-  // order moved again meanwhile, it asks once more. A failed refetch is shown, not retried in a loop (isError).
+  // row in when the first answer was slow. After the new answer asOf equals the order's status and it stops.
+  //
+  // A failed catch-up is shown and is not retried for the status it failed under (`tried`): that would loop. It does
+  // not block the next status either: the order moving again is a new reason to ask, whatever happened before. So the
+  // guard is "have I already tried for this status", not "is the card in an error state".
   const stale = snapshot !== undefined && snapshot.asOf !== order.status;
+  const tried = useRef<OrderStatus | null>(null);
   useEffect(() => {
-    if (stale && !isFetching && !isError) void refetch();
-  }, [stale, isFetching, isError, refetch]);
+    if (!stale || isFetching || tried.current === order.status) return;
+    tried.current = order.status;
+    void refetch();
+  }, [stale, isFetching, order.status, refetch]);
 
   const notFound = isError && isNotFound(error);
   return (
