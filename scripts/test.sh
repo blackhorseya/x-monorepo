@@ -1489,5 +1489,38 @@ expect_eq "derived modules: a failing go work edit fails the task instead of an 
 expect_match "derived modules: the failing task shows go's error" "go: stub failure" "$out"
 fi
 
+# ── check-script-modes.sh: `task tools` chmods must not change the index (#454) ─────────────────────────────────
+# The repo itself: every file the chmod line names is 100755 in the index. A miss in the tools cache runs that chmod in
+# gen-freshness; a 100644 file then shows up as a mode-only diff and fails the job (lock.sh and runner-home-test.sh did).
+rc=0; out=$(cd "$src" && scripts/check-script-modes.sh 2>&1) || rc=$?
+expect_eq "script modes: this repo's chmod list is all 100755 in the index" "0" "$rc"
+expect_match "script modes: the anchor — it checked the kind scripts" 'files, all 100755' "$out"
+# Fixture: a minimal repo whose Taskfile has the chmod line and 20 scripts. Baseline green; each mutant must go red.
+modes_fixture() {
+  repo="$tmp/modes-$1"; mkdir -p "$repo/scripts" "$repo/k"
+  cp "$src/scripts/check-script-modes.sh" "$repo/scripts/"
+  printf 'tasks:\n  tools:\n    cmds:\n      - chmod +x scripts/*.sh k/*.sh\n' > "$repo/Taskfile.yml"
+  for i in $(seq 1 24); do printf '#!/bin/sh\n' > "$repo/k/s$i.sh"; chmod +x "$repo/k/s$i.sh"; done
+  git -C "$repo" init -q -b main
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m base
+}
+modes_run() { rc=0; out=$(cd "$repo" && scripts/check-script-modes.sh 2>&1) || rc=$?; }
+modes_fixture base; modes_run
+expect_eq "script modes: fixture baseline is green" "0" "$rc"
+# The gate says what `git diff` would after the chmod: apply the chmod and diff, for the baseline and the mutant.
+(cd "$repo" && chmod +x scripts/*.sh k/*.sh); expect_eq "script modes: baseline chmod leaves git diff clean" "" "$(git -C "$repo" diff --stat)"
+modes_fixture mut1; git -C "$repo" update-index --chmod=-x k/s7.sh; git -C "$repo" commit -q -m mutant; modes_run
+expect_eq "script modes: mutant — one script back to 100644 is red" "1" "$rc"
+expect_match "script modes: the mutant is named" 'k/s7\.sh is \[100644\]' "$out"
+(cd "$repo" && chmod +x scripts/*.sh k/*.sh); expect_match "script modes: and the chmod really does dirty git diff" 'k/s7\.sh' "$(git -C "$repo" diff --stat)"
+modes_fixture mut2; git -C "$repo" rm -q --cached k/s3.sh; modes_run
+expect_eq "script modes: mutant — an untracked script is red" "1" "$rc"
+modes_fixture mut3; sed -i.bak 's#k/\*.sh#kk/*.sh#' "$repo/Taskfile.yml"; rm "$repo/Taskfile.yml.bak"; modes_run
+expect_eq "script modes: a glob that matches nothing is not green (exit 2: too few files checked)" "2" "$rc"
+expect_match "script modes: and it says which pattern matched nothing" "kk/\\*\\.sh' \\(from the chmod line\\) matches no file" "$out"
+modes_fixture mut4; sed -i.bak 's#chmod +x#chmod -x#' "$repo/Taskfile.yml"; rm "$repo/Taskfile.yml.bak"; modes_run
+expect_eq "script modes: no chmod line at all is not green (judge cannot pass on empty)" "2" "$rc"
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
