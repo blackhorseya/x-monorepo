@@ -116,9 +116,10 @@ jobs:
       # without one, so create it locally on the commit being released. Never pushed.
       - run: git tag "${{ needs.prepare.outputs.tag }}" "$HEAD_SHA"
       # Share the Go cache with ci.yml's release-snapshot job: same 12 cross-compile targets and
-      # flags (-X only changes the link step), refreshed on every PR. The default scope would be
-      # this job's name, "build", which collides with ci.yml's host-only `build` cache — a
-      # primary-key hit there is never re-saved, so the cross-compiles ran cold every release.
+      # flags (-X only changes the link step), refreshed weekly by the first default-branch run (this
+      # one is such a run: workflow_run on main). The default scope would be this job's name,
+      # "build", which collides with ci.yml's host-only `build` cache — a primary-key hit there is
+      # never re-saved, so the cross-compiles ran cold every release.
       - uses: ./.github/actions/setup
         with:
           cache-scope: release-snapshot

@@ -1,8 +1,8 @@
 name: setup
 description: >-
-  Go (with module/build cache keyed on every go.sum) + Task. With tools=true also
-  restores ./bin (buf, protoc-gen-*, wire, golangci-lint) keyed on the pinned versions, so
-  `task tools` only compiles when a pinned version changes.
+  Go (with a module/build cache that pull requests only read and main refreshes weekly) + Task.
+  With tools=true also restores ./bin (buf, protoc-gen-*, wire, golangci-lint) keyed on the pinned
+  versions, so `task tools` only compiles when a pinned version changes.
 
 inputs:
   tools:
@@ -15,6 +15,12 @@ inputs:
       first to finish — a light job with an empty module cache — wins; the cache is then
       immutable and every later job "hits" ~7 KB and downloads everything anyway.
     default: ${{ github.job }}
+  go-cache:
+    description: >-
+      "false" skips the Go module / build cache entirely (no restore, no save). For a job that
+      needs `go` on PATH only because `task` evaluates a `go work edit` variable on every run, and
+      compiles nothing (web).
+    default: "true"
 
 runs:
   using: composite
@@ -30,17 +36,47 @@ runs:
         echo "modcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
         echo "buildcache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
 
-    # One cache per job/matrix entry; restore-keys fall back to the same job's previous
-    # go.sum, then to any job's, so a dependency bump still starts from a warm cache.
-    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+    # One cache per job / matrix entry, written ONLY by a run on the default branch (push, dispatch,
+    # workflow_run) and read by everyone else. A pull request — fork and dependabot ones included —
+    # never saves: before, a PR whose key missed (any go.sum bump, any evicted entry) saved a full
+    # set of ~25 entries on its own ref, which pushed main's entries out of the 10 GB quota and made
+    # the next PRs miss in turn (#450).
+    #
+    # The key carries the ISO week, so the first default-branch run of a week misses, restores the
+    # previous entry of the SAME scope (restore-keys end in "-gs", which "k6" does not share with
+    # "k6-auth"; there is no fallback to another scope, which is how every entry used to grow into
+    # the union of all of them), and saves a fresh one. Without it the key was go.sum alone: after
+    # the first save the entry was an exact hit forever and GOCACHE froze at that day's sources.
+    - id: go-gen
+      if: inputs.go-cache == 'true'
+      shell: bash
+      run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+    # restore + (post step) save when the exact key missed
+    - id: go-cache-main
+      if: inputs.go-cache == 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: |
           ${{ steps.go-env.outputs.modcache }}
           ${{ steps.go-env.outputs.buildcache }}
-        key: go-${{ runner.os }}-${{ inputs.cache-scope }}-${{ hashFiles('**/go.sum') }}
+        key: go2-${{ runner.os }}-${{ inputs.cache-scope }}-gs${{ hashFiles('**/go.sum') }}-${{ steps.go-gen.outputs.week }}
         restore-keys: |
-          go-${{ runner.os }}-${{ inputs.cache-scope }}-
-          go-${{ runner.os }}-
+          go2-${{ runner.os }}-${{ inputs.cache-scope }}-gs${{ hashFiles('**/go.sum') }}-
+          go2-${{ runner.os }}-${{ inputs.cache-scope }}-gs
+
+    # restore only: no post step, nothing is written. The exact complement of the condition above.
+    - id: go-cache-ro
+      if: inputs.go-cache == 'true' && !(github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          ${{ steps.go-env.outputs.modcache }}
+          ${{ steps.go-env.outputs.buildcache }}
+        key: go2-${{ runner.os }}-${{ inputs.cache-scope }}-gs${{ hashFiles('**/go.sum') }}-${{ steps.go-gen.outputs.week }}
+        restore-keys: |
+          go2-${{ runner.os }}-${{ inputs.cache-scope }}-gs${{ hashFiles('**/go.sum') }}-
+          go2-${{ runner.os }}-${{ inputs.cache-scope }}-gs
 
     - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2
       with:

@@ -223,6 +223,36 @@ expect_eq "k6-auth job no longer runs task k6-wire"     0 "$(ci_job k6-auth | gr
 expect_eq "k6-wire job runs task k6-wire"               1 "$(ci_job k6-wire | grep -c '^      - run: task k6-wire$')"
 expect_eq "k6-wire needs no Postgres (docs/ci.md says so)" 0 "$(ci_job k6-wire | grep -ci 'postgres')"
 
+# ── .github/actions/setup: the Go cache is written by a default-branch run only (#450) ───────────────────────────────
+# A pull request that missed (a go.sum bump, an evicted entry) used to save a full set of ~25 entries on its own ref, which
+# pushed main's entries out of the 10 GB quota and made the next PRs miss in turn. The two steps below are the only
+# readers/writers of the Go cache: the read-write one runs where the condition holds, the restore-only one where it does not.
+act="$src/.github/actions/setup/action.yml"
+# act_step <id>: the lines of the step with that id.
+act_step() { awk -v n="    - id: $1" '$0 == n {f=1; print; next} /^    - / {f=0} f && !/^$/ && !/^    #/' "$act"; }
+act_if() { act_step "$1" | sed -n 's/^      if: //p'; }
+main_cond=$(act_if go-cache-main | sed "s/^inputs.go-cache == 'true' && //")
+ro_cond=$(act_if go-cache-ro | sed "s/^inputs.go-cache == 'true' && !(\(.*\))\$/\1/")
+expect_eq "setup: the read-write Go cache step is actions/cache"       1 "$(act_step go-cache-main | grep -c 'uses: actions/cache@')"
+expect_eq "setup: the other Go cache step only restores (no post save)" 1 "$(act_step go-cache-ro | grep -c 'uses: actions/cache/restore@')"
+expect_eq "setup: the restore-only step cannot save"                    0 "$(act_step go-cache-ro | grep -c 'uses: actions/cache@')"
+expect_eq "setup: only the Go main step and the tools cache use actions/cache (a third would save somewhere unguarded)" 2 "$(grep -c 'uses: actions/cache@' "$act")"
+expect_match "setup: the writing step is skipped on pull_request"       "github.event_name != 'pull_request'" "$main_cond"
+expect_match "setup: the writing step needs the default branch"         "github.ref == format\\('refs/heads/\\{0\\}', github.event.repository.default_branch\\)" "$main_cond"
+expect_eq "setup: the restore-only condition is exactly the complement of the writing one" "$main_cond" "$ro_cond"
+expect_match "setup: the writing condition is not empty"                "default_branch" "$main_cond"
+expect_eq "setup: both Go cache steps use the same key"         "$(act_step go-cache-main | sed -n '/^        key:/p')" "$(act_step go-cache-ro | sed -n '/^        key:/p')"
+expect_eq "setup: both Go cache steps use the same restore-keys" "$(act_step go-cache-main | sed -n '/^        restore-keys:/,$p')" "$(act_step go-cache-ro | sed -n '/^        restore-keys:/,$p')"
+expect_match "setup: the key is per scope and per week"                 "key: go2-.*inputs.cache-scope.*steps.go-gen.outputs.week" "$(act_step go-cache-main)"
+expect_eq "setup: no restore-key ends right after the scope (it would match k6-auth for k6)" 0 "$(act_step go-cache-main | sed -n '/restore-keys:/,$p' | grep -c 'inputs.cache-scope }}-$' || true)"
+expect_eq "setup: restore-keys never leave the scope"                   0 "$(act_step go-cache-main | sed -n '/restore-keys:/,$p' | grep -c 'go2-\${{ runner.os }}-\s*$' || true)"
+expect_eq "setup: go-cache=false skips the week step too"              1 "$(act_step go-gen | grep -c "if: inputs.go-cache == 'true'")"
+# The web job needs go on PATH (task evaluates `go work edit` on every run) but compiles nothing: no cache, but still the setup.
+expect_eq "ci.yml: only the web job opts out of the Go cache"           1 "$(grep -c 'go-cache: "false"' "$src/.github/workflows/ci.yml")"
+expect_eq "ci.yml: the web job opts out of the Go cache"                1 "$(ci_job web | grep -c 'go-cache: "false"')"
+expect_eq "ci.yml: the web job still runs the setup action (task needs go)" 1 "$(ci_job web | grep -c 'uses: ./.github/actions/setup$')"
+expect_match "docs/ci.md describes the Go cache policy"                 "go-cache" "$(cat "$src/docs/ci.md")"
+
 # A branch behind main must see only its own files (three-dot diff), not main's newer ones.
 fixture behind
 git -C "$repo" checkout -q -b change
