@@ -16,6 +16,11 @@ the upgrade), and afterwards the sentinel is there, no per-run database is left,
 one of the two allowed. The same check run against a copy of the script with a "drop every schema" step put back (the
 version that was rejected in review) MUST fail: that is what shows the assertions can go red.
 
+The entry point is payment-upgrade-guard.sh, the wrapper `task helm-kind` runs (CI included): it writes an unrelated
+schema with a row to "app" before the drill and checks, after a success or a failure alike, that the row is there and
+no upgrade_* database is left. On the success path that is the only check there is (the drill's later stages need a
+cluster), which is why the guard exists; here it is exercised on the failure paths and against the mutant.
+
 This drives the REAL payment-upgrade.sh with fake helm / kubectl / curl / sleep (no cluster):
   - fake helm: the 3rd `helm upgrade` is the slow background one (5 seconds, then it sets the release
     state to FLOW); every other `helm upgrade` is a restore/install (sets RESTORED). `helm template` is real.
@@ -43,6 +48,7 @@ REPO = pathlib.Path(__file__).resolve().parents[3]
 values_file = REPO / "deployments/helm/kind/values.yaml"
 flow_file = REPO / "deployments/helm/kind/payment-flow-values.yaml"
 script_file = REPO / "deployments/helm/kind/payment-upgrade.sh"
+guard_file = REPO / "deployments/helm/kind/payment-upgrade-guard.sh"  # what `task helm-kind` runs
 helm_real = shutil.which("helm")
 assert helm_real, "helm is needed (helm template is real)"
 rt = shutil.which("docker") or shutil.which("podman")
@@ -144,7 +150,8 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
     env.update(PATH=f"{bindir}:{env['PATH']}", EVENTS=str(events), UPGRADE_STARTED=str(root / "upgrade_started"),
                ORDERS=str(root / "orders"), RELEASE_STATE=str(root / "release_state"), MODE=mode, PGC=pg,
                APPDB_LOG=str(root / "appdb.log"))
-    cmd = ["bash", str(script), "ns", "rel", "deployments/helm/x-monorepo", str(values_file), str(flow_file)]
+    env["UPGRADE_SCRIPT"] = str(script)  # the guard runs this copy of the drill
+    cmd = ["bash", str(guard_file), "ns", "rel", "deployments/helm/x-monorepo", str(values_file), str(flow_file)]
     out = open(root / "out", "wb")
     p = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     problems = []
@@ -179,7 +186,12 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
             problems.append("the failure did not print the logs of the rel-migrate Job")
 
         # ---- the release's own database is not touched (#427, #429) ----
-        stmts = [x for x in (root / "appdb.log").read_text().splitlines() if x.strip()]
+        # the guard's own statements (its sentinel schema, its leftover-database query) are not the drill's
+        stmts = [x for x in (root / "appdb.log").read_text().splitlines()
+                 if x.strip() and "upgrade_guard_sentinel" not in x and "FROM pg_database" not in x]
+        outtxt = (root / "out").read_text(errors="replace")
+        if "guard: sentinel intact, no per-run database left" not in outtxt:
+            problems.append("the guard (what task helm-kind runs) did not report the sentinel intact and no database left behind")
         create = [x for x in stmts if re.fullmatch(r'CREATE DATABASE "upgrade_[0-9]+_[0-9]+"', x)]
         drop = [x for x in stmts if re.fullmatch(r'DROP DATABASE IF EXISTS "upgrade_[0-9]+_[0-9]+" WITH \(FORCE\)', x)]
         other = [x for x in stmts if x not in create and x not in drop]
@@ -245,7 +257,7 @@ def main():
                     print("  - " + x, file=sys.stderr)
             # fault injection: with the drop-everything step back, the same checks must go red
             caught = run_scenario(mutant, mode, pg)
-            if not any("sentinel" in x or "statements sent to the release's own database" in x for x in caught):
+            if not any("LOST" in x or "sentinel" in x or "statements sent to the release's own database" in x for x in caught):
                 failed = True
                 print(f"upgrade-failure-test: FAIL ({mode}): the drop-every-schema mutant was NOT caught: {caught}", file=sys.stderr)
         shutil.rmtree(mutant_dir, ignore_errors=True)
