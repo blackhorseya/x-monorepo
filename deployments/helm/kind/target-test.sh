@@ -55,25 +55,32 @@ bad() { fail=$((fail + 1)); echo "FAIL $*"; }
 
 # values_of <kind> <dry output file>: every value the expanded commands give the target of that kind.
 #   cluster  `--name <v>` and `grep -qx <v>`          ns  ` -n <v>` and the first argument of kind/*.sh
-#   context  the kubectl context the tasks refuse to run without: `kind-<cluster>` in the guard after kind create
+#   kubeconfig  the file every kubectl / helm / kind/*.sh command is pointed at (`export KUBECONFIG=…/kubeconfig-<cluster>`);
+#            a command that aims at nothing is counted as MISSING, so one that lost its prefix turns the cell red
 #   kedans   the namespace KEDA itself is installed in (`helm upgrade --install keda … -n <v>`), not ns
 values_of() {
   case $1 in
     cluster)
       { grep -oE -- '--name [^ ]+' "$2" | sed 's/^--name //'
         grep -oE -- 'grep -qx [^ ]+' "$2" | sed 's/^grep -qx //'; } ;;
-    context) grep 'current-context' "$2" | sed 's/^task: \[[^]]*\] //' | grep -oE -- 'kind-[a-z0-9.-]+' | sed 's/^kind-//' ;;
+    kubeconfig)
+      sed 's/^task: \[[^]]*\] //' "$2" | grep -E '(^|[;| ])kubectl |helm (upgrade|-n) |deployments/helm/kind/[a-z-]+\.sh ' | while IFS= read -r l; do
+        case $l in
+          *'export KUBECONFIG="'*) printf '%s\n' "$l" | grep -oE -- 'kubeconfig-[a-z0-9.-]+"' | head -1 | sed 's/^kubeconfig-//; s/"$//' ;;
+          *) echo MISSING ;;
+        esac
+      done ;;
     kedans) grep -oE -- 'kedacore/keda -n [^ ]+' "$2" | sed 's/^kedacore\/keda -n //' ;;
     ns)
       { grep -v 'kedacore/keda' "$2" | grep -oE -- ' -n [^ ]+' | sed 's/^ -n //'
-        grep -oE -- '^task: \[[^]]+\] deployments/helm/kind/[a-z-]+\.sh [^ ]+' "$2" | awk '{print $4}'; } ;;
+        grep -oE -- 'deployments/helm/kind/[a-z-]+\.sh [^ ]+' "$2" | awk '{print $2}'; } ;;
   esac
 }
 
 # run_cell <task> <kind: cluster|ns> <source: S1..S4> -> dry output in $tmp/out
 run_cell() {
   local t=$1 k=$2 s=$3 var def
-  case $k in cluster) var=CLUSTER ;; ns|context) var=$([ "$k" = ns ] && echo NS || echo CLUSTER) ;; kedans) var=KEDA_NS ;; esac
+  case $k in cluster) var=CLUSTER ;; ns) var=NS ;; kubeconfig) var=CLUSTER ;; kedans) var=KEDA_NS ;; esac
   case $s in
     S1) env -u CLUSTER -u NS -u KEDA_NS task -t "$TASKFILE" --dry "$t" ;;
     S2) env -u CLUSTER -u NS -u KEDA_NS task -t "$TASKFILE" --dry "$t" "$var=probe" ;;
@@ -83,7 +90,7 @@ run_cell() {
   return "${PIPESTATUS[0]}"
 }
 
-# task, kind (cluster / ns / context / kedans), literal minimum number of places in S1 (the anchor)
+# task, kind (cluster / ns / kubeconfig / kedans), literal minimum number of places in S1 (the anchor)
 cells=(
   "helm-kind-up cluster 3"
   "helm-kind-up ns 5"
@@ -93,9 +100,9 @@ cells=(
   "helm-kind-keda ns 8"
   "helm-kind-keda kedans 1"
   "helm-kind-down cluster 1"
-  "helm-kind-up context 3"
-  "helm-kind context 3"
-  "helm-kind-keda context 3"
+  "helm-kind-up kubeconfig 6"
+  "helm-kind kubeconfig 16"
+  "helm-kind-keda kubeconfig 11"
 )
 for c in "${cells[@]}"; do
   read -r t k min <<<"$c"
