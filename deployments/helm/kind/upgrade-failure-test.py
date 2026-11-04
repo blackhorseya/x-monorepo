@@ -252,6 +252,11 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
                ORDERS=str(root / "orders"), MODE=mode, PGC=pg, NSDIR=str(nsdir), RELDIR=str(reldir), HOME_NS=HOME_NS,
                CREATE_REPLY_FAILS="1" if create_reply_fails else "", SWAPPED="1" if swapped else "",
                SIG=sig or "", KILLSCRIPT=str(bindir / "killscript"))
+    # No cluster is ever reachable from here: kubectl and helm are fakes first in PATH, and whatever default kubeconfig the machine has
+    # (~/.kube/config may point at a real environment) is replaced by a file that does not exist, so a call that slipped past the
+    # fakes would fail instead of reaching a context.
+    env.update(KUBECONFIG=str(root / "no-such-kubeconfig"))
+    env.pop("KUBE_CONTEXT", None)
     env.update(inherited or {})
     env.update(env_extra or {})
     if preexisting_label is not None:
