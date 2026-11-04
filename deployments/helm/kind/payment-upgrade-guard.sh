@@ -1,38 +1,38 @@
 #!/usr/bin/env bash
-# What `task helm-kind` runs instead of payment-upgrade.sh directly (#427, #429): the same arguments, plus the proof
-# that the upgrade drill leaves the release's own database alone. `helm-kind-up` reuses an existing kind cluster and its
-# Postgres keeps its data between runs, so "app" may hold things that are not this test's.
-#   payment-upgrade-guard.sh <namespace> <release> <chart-dir> <values-file> <flow-values-file>
-# Before the drill a schema with one row is written to "app"; after it (success OR failure) the row must still be there
-# and no per-run database (upgrade_*) may be left. The sentinel schema is removed at the end. The exit code is the
-# drill's own, or 1 when the guard itself finds damage.
+# What `task helm-kind` runs instead of payment-upgrade.sh directly (#427, #429): the same arguments, plus a READ-ONLY proof
+# that the upgrade drill left the home release's database alone.
+#   payment-upgrade-guard.sh <home-namespace> <home-release> <chart-dir> <values-file> <flow-values-file>
+# `helm-kind-up` reuses an existing kind cluster and its Postgres keeps its data between runs, so the home database may hold
+# things that are not this test's. The drill itself runs in a namespace of its own and never touches it; this checks that, by
+# taking a snapshot before and one after (every schema, every table with its exact row count) and requiring that it is not
+# empty and did not change. It writes nothing, there or anywhere (every statement runs with default_transaction_read_only on).
+# The exit code is the drill's own, or 1 when the snapshot is empty or differs.
 # UPGRADE_SCRIPT (default: payment-upgrade.sh next to this file) lets the test run a mutated copy of the drill.
 set -uo pipefail
-ns=$1
+home=$1
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 inner=${UPGRADE_SCRIPT:-$here/payment-upgrade.sh}
-schema=upgrade_guard_sentinel
-value="keep-$(date +%s)-$RANDOM"
-adb() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1"; }
+q() { kubectl -n "$home" exec deploy/postgres -- psql -U app -d app -tAq -c "SET default_transaction_read_only = on; $1"; }
 
-adb "SET client_min_messages = warning; DROP SCHEMA IF EXISTS $schema CASCADE; CREATE SCHEMA $schema; CREATE TABLE $schema.keep (v text); INSERT INTO $schema.keep VALUES ('$value')" >/dev/null \
-  || { echo "guard: could not write the sentinel to the release's database" >&2; exit 1; }
+snapshot() {
+  local t
+  q "SELECT 'schema ' || nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' ORDER BY 1" || return 1
+  for t in $(q "SELECT format('%I.%I', table_schema, table_name) FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema !~ '^pg_' AND table_schema <> 'information_schema' ORDER BY 1") ; do
+    echo "table $t $(q "SELECT count(*) FROM $t")"
+  done
+}
+
+before=$(snapshot) || { echo "guard: cannot read the home release's database" >&2; exit 1; }
+[ "$(grep -c '^table ' <<<"$before")" -gt 0 ] || { echo "guard: the snapshot of the home release's database has no table: nothing would be proved" >&2; exit 1; }
 
 bash "$inner" "$@"
 rc=$?
 
-rc_guard=0
-got=$(adb "SELECT v FROM $schema.keep" 2>/dev/null)
-if [ "$got" != "$value" ]; then
-  echo "guard: the sentinel in the release's database is LOST or changed (got '$got'): the upgrade drill modified what is not its own" >&2
-  rc_guard=1
+after=$(snapshot) || { echo "guard: cannot read the home release's database after the drill" >&2; exit 1; }
+if [ "$before" != "$after" ]; then
+  echo "guard: the home release's database CHANGED during the drill:" >&2
+  diff <(echo "$before") <(echo "$after") >&2
+  exit 1
 fi
-left=$(adb "SELECT string_agg(datname, ',') FROM pg_database WHERE datname LIKE 'upgrade\\_%'" 2>/dev/null)
-if [ -n "$left" ]; then
-  echo "guard: per-run database(s) left behind: $left" >&2
-  rc_guard=1
-fi
-[ "$rc_guard" = 0 ] && echo "guard: sentinel intact, no per-run database left"
-adb "SET client_min_messages = warning; DROP SCHEMA IF EXISTS $schema CASCADE" >/dev/null 2>&1 || true
-[ "$rc_guard" = 0 ] || exit 1
+echo "guard: the home release's database is unchanged ($(grep -c '^table ' <<<"$before") tables, every row count the same)"
 exit "$rc"
