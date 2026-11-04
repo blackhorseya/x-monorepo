@@ -148,6 +148,25 @@ CMD_CASES = [
     ("deployments/helm/kind/negative-test.sh", False),
     ("deployments/helm/kind/upgrade-failure-test.py", False),
     ("command -v kind >/dev/null && command -v kubectl >/dev/null", False),
+    # the reviewer's r2 shapes: the prefix is there, but the effective KUBECONFIG is not the file's when kubectl runs
+    ("{{.KUBE_ENV}}; unset KUBECONFIG; kubectl -n ns apply -f f", True),
+    ("{{.KUBE_ENV}}; export KUBECONFIG=/x; kubectl get pods", True),
+    ("{{.KUBE_ENV}}; KUBECONFIG=/x kubectl get pods", True),
+    ("{{.KUBE_ENV}}; env -u KUBECONFIG kubectl get pods", True),
+    ("{{.KUBE_ENV}}; env KUBECONFIG=/x kubectl get pods", True),
+    ("kubectl get pods; {{.KUBE_ENV}}", True),
+    ("kubectl get pods && {{.KUBE_ENV}}; true", True),
+    ("true; {{.KUBE_ENV}}; kubectl get pods", True),
+    ("{{.KUBE_ENV}}; true; kubectl get pods", True),
+    ("{{.KUBE_ENV}}; true && kubectl get pods", True),
+    ("{{.KUBE_ENV}}; kubectl get pods || true", True),
+    ("{{.KUBE_ENV}}; sh -c 'unset KUBECONFIG; kubectl get pods'", True),
+    ("{{.KUBE_ENV}}; (unset KUBECONFIG; kubectl get pods)", True),
+    ("{{.KUBE_ENV}}; kubectl get pods\nunset KUBECONFIG", True),
+    ("{{.KUBE_ENV}}; helm -n ns status x | head -5", False),
+    ("{{.KUBE_ENV}}; kubectl create namespace a --dry-run=client -o yaml | kubectl apply -f - >/dev/null", False),
+    ("kind get clusters 2>/dev/null | grep -qx a || kind create cluster --name a --kubeconfig \"{{.KIND_KUBECONFIG}}\" --wait 2m", False),
+    ("kind create cluster --name a --kubeconfig /x", True),  # the one file kind may write is the task's own
     ("echo run kubectl later", True),  # a word is a word: the rule is on the shape, a false positive costs one --kubeconfig
 ]
 SCRIPT_CASES = [
