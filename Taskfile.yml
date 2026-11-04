@@ -654,24 +654,10 @@ tasks:
     cmds: ['pnpm exec playwright test {{.CLI_ARGS}}']
 
   web-e2e-shards-check:
-    desc: 'CI console-e2e shards (#447): `playwright test --list --shard=i/N` for i in 1..N, together, must be exactly the unsharded --list (same test ids, none twice, none missing). Usage: task web-e2e-shards-check -- 3. Lists only, starts no server. Run with E2E_DEX=1 to include the oidc-dex project, as CI does'
+    desc: 'CI console-e2e shards (#447): `playwright test --list --shard=i/N` for i in 1..N, together, must be exactly the unsharded --list (same test ids, none twice, none missing; a --list that exits non-zero or prints fewer tests than its own Total fails). Usage: task web-e2e-shards-check -- 3. Lists only, starts no server. Run with E2E_DEX=1 to include the oidc-dex project, as CI does. scripts/web-e2e-shards-check.sh, pinned by scripts/test.sh'
     deps: [web-install]
     dir: web/apps/console
-    cmds:
-      - |
-        n="{{.CLI_ARGS}}"; case "$n" in ""|*[!0-9]*|0) echo "usage: task web-e2e-shards-check -- <number of shards>" >&2; exit 2;; esac
-        tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-        list() { pnpm exec playwright test --list "$@" 2>/dev/null | grep '›'; }
-        list | sort > "$tmp/full"
-        total=$(wc -l < "$tmp/full" | tr -d ' ')
-        [ "$total" -gt 0 ] || { echo "the unsharded --list is empty: nothing to compare" >&2; exit 1; }
-        : > "$tmp/union"
-        for i in $(seq "$n"); do
-          list --shard="$i/$n" | tee -a "$tmp/union" | wc -l | xargs echo "shard $i/$n tests:"
-        done
-        sort "$tmp/union" > "$tmp/union.sorted"
-        if ! diff "$tmp/full" "$tmp/union.sorted" >&2; then echo "the $n shards are not the whole suite" >&2; exit 1; fi
-        echo "ok: $n shards = $total tests, each exactly once"
+    cmds: ['../../../scripts/web-e2e-shards-check.sh {{.CLI_ARGS}}']
 
   web-e2e-payment:
     desc: 'the "payment" Playwright project (playwright.payment.config.ts): the console against the REAL payment stack, nothing scripted with page.route. e2e/payment/stack-server.ts makes a database of its own on the server E2E_DATABASE_URL names (needs psql), migrates it and runs catalog-rpc, payment-rpc serve + consume, rpc and worker (ordering.require_payment on, switched back off by the spec); the spec orders in the console, presses Pay (a new tab on the mock checkout address), pays through `payment-rpc mock pay`, and expects COMPLETED, the card gone and the polling stopped. What CI''s console-e2e job runs after the default-port run'

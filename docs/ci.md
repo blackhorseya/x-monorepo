@@ -41,25 +41,17 @@
 - **觸發不變**：仍是 `run_console_e2e` 一個旗標、一個 job（matrix 不是新 job），`scripts/ci-changes.sh` 與 `scripts/test.sh` 的規則不動。沒有 branch protection / ruleset 綁舊的 check 名稱。
 - **workers**：CI 設 `E2E_WORKERS=4`（ubuntu-latest 在 public repo 是 4 vCPU，實測 `nproc=4`）；本機沒設，`task web-e2e` 還是 Playwright 預設，行為不變。
 - **shards**：`task web-e2e -- --shard=i/N`，N 是 matrix 大小（`strategy.job-total`，只有一個來源）。每個 shard 有自己的 runner、postgres service、dex、`bin/worker`，互不共用。
-- **覆蓋**：shard 1 先跑 `task web-e2e-shards-check -- N`：每個 shard 的 `--list` 合起來必須剛好等於未分片的 `--list`（每個 test 一次、不多不少，只列不啟 server）。`web-e2e-ports` 與 `web-e2e-payment` 只在 shard 2 跑（它最輕）。
+- **覆蓋**：shard 1 先跑 `task web-e2e-shards-check -- N`（`scripts/web-e2e-shards-check.sh`）：每個 shard 的 `--list` 合起來必須剛好等於未分片的 `--list`（每個 test 一次、不多不少，只列不啟 server）。每次 `--list` 都要 exit 0，且它自己的 `Total: K tests` 要等於印出的 test 行數（部分清單加非零退出、被截斷的清單都是紅燈，不是較小的套件）。`scripts/test.sh` 用 stub pnpm 對腳本與真的 `task` 入口各做故障注入：死在一半、完整清單但 exit 42、截斷、漏一個、重複一個、空套件。`web-e2e-ports` 與 `web-e2e-payment` 只在 shard 2 跑（它最輕）。
 - **改 shard 數**：改 matrix 的 `shard: [1, 2, 3]`；ports / payment 掛在 `matrix.shard == 2`，要確認該 shard 不會因此變成 critical path。
-- **沒做慢 spec**（`history.spec.ts`、`oidc-session.spec.ts` 改 clock／短 interval）：分 shard 後單一 shard 只有 50–90s，最長的單一 case 17.9s；兩個 spec 累計 189s 攤在 12 個 worker 上，即使全部歸零，一個 shard 的牆鐘也只少約 16s。其中不少是「over more than two poll periods 沒有再問」的負向等待（`waitForTimeout(4_500)`），縮短等於削弱斷言，不值得。
+- **沒做慢 spec**（`history.spec.ts`、`oidc-session.spec.ts` 改 clock／短 interval）：基準 run 41920885162 裡最長的單一 case 是 17.9s，兩個 spec 累計 105s + 84s = 189s；分成 3 shard × 4 workers = 12 個 worker 後，即使這 189s 全部歸零，一個 shard 的牆鐘也只少約 189/12 ≈ 16s（上限估算，不是量測）。其中不少是「over more than two poll periods 沒有再問」的負向等待（`waitForTimeout(4_500)`），縮短等於削弱斷言，不值得。
 
-實測（`task web-e2e` step，nproc=4，274 tests／257 passed，全部 0 flaky、0 retry；每格一台 runner）：
+**量測方法與結論**（數字與 run id 在 PR #453 的描述；這裡只留結論）：
 
-| 方案 | run 1 | run 2 | run 3 |
-|---|---|---|---|
-| 基準 workers=2（預設） | 250s | 273s | 273s |
-| workers=3 | 198s | 207s | 197s |
-| workers=4 | 164s | 174s | 196s |
-| workers=4，shard 1/2 | 97s | 80s | 99s |
-| workers=4，shard 2/2 | 112s | 111s | 115s |
-| workers=4，shard 1/3 | 86s | 79s | 80s |
-| workers=4，shard 2/3 | 65s | 63s | 51s |
-| workers=4，shard 3/3 | 72s | 82s | 89s |
-| ports + payment（獨立） | 50s | 45s | 50s |
+- 探索（單一 workflow run 內的平行 matrix，不是獨立重複，只用來選方案）：workers 2/3/4 是 run 41927472999，shard 2/3 路與 ports + payment 獨立跑是 run 41929103982。結論：4 vCPU 上 workers=4 比預設 2 快約 80–100s 且 0 flaky、0 retry；3 shards 的 `task web-e2e` step 約 50–90s，ports + payment 約 45–50s。
+- 定案後的獨立量測（3 個不同的 workflow run，各自的 run id、各 shard 的 step 秒數、queue 時間、setup 秒數與 cache 命中）在 PR #453 的描述。比較以 `task web-e2e` 的 step 秒數為準，job 總秒數受 Actions cache 與 runner 排隊影響，只作參考。
+- 多佔並行名額：1 個 job 變 3 個（`console-e2e (1..3)`，多 2 個）。名額飽和、排隊時，多拆 job 不一定讓 wall-clock 變短；排隊另外記，不算在 job 秒數裡。
 
-選 workers=4 × 3 shards，ports + payment 放 shard 2（~60s + ~48s ≈ 110s，仍低於 setup 之外最慢的 shard 1/3 與 3/3 之上限太多）。
+選 workers=4 × 3 shards；ports + payment 放 shard 2（探索 run 41929103982 裡它的 `task web-e2e` 最輕；加上 ports + payment 後是否仍不超過其他兩片，看 PR #453 的獨立量測）。
 
 ## 本機 hook 證據：AgEnD hooks ≠ lefthook（#300）
 
