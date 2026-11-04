@@ -25,7 +25,7 @@ func (f createOrderFails) Execute(context.Context, dto.CreateOrderInput) (*dto.O
 // retried. Other failures keep their usual mapping.
 func TestCreateOrder_ACatalogThatDoesNotAnswerIsUnavailable(t *testing.T) {
 	cause := connect.NewError(connect.CodeUnavailable, errors.New("dial tcp 10.0.0.7:80: connection refused"))
-	svc := rpc.NewOrderService(createOrderFails{err: fmt.Errorf("quote prices of 1 skus: %w: %w", port.ErrCatalogUnavailable, cause)}, nil, nil, nil, nil)
+	svc := rpc.NewOrderService(createOrderFails{err: fmt.Errorf("quote prices of 1 skus: %w: %w", port.ErrCatalogUnavailable, cause)}, nil, nil, nil, nil, nil)
 
 	_, err := svc.CreateOrder(context.Background(), connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: "c"}))
 	var ce *connect.Error
@@ -36,7 +36,7 @@ func TestCreateOrder_ACatalogThatDoesNotAnswerIsUnavailable(t *testing.T) {
 		t.Fatalf("message = %q, want the fixed one (no cause)", ce.Message())
 	}
 
-	_, err = rpc.NewOrderService(createOrderFails{err: errors.New("boom")}, nil, nil, nil, nil).
+	_, err = rpc.NewOrderService(createOrderFails{err: errors.New("boom")}, nil, nil, nil, nil, nil).
 		CreateOrder(context.Background(), connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: "c"}))
 	if connect.CodeOf(err) != connect.CodeInternal {
 		t.Fatalf("an unrelated failure is %s, want INTERNAL", connect.CodeOf(err))

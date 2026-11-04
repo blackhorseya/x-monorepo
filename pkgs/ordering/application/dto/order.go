@@ -42,6 +42,26 @@ type GetOrderInput struct {
 	OrderID string
 }
 
+type GetOrderHistoryInput struct {
+	OrderID string
+}
+
+// HistoryEntryOutput is one transition of an order. ActorSubject is already filtered for the caller:
+// the use case leaves it empty unless the caller is an admin, so no adapter can leak it by mapping.
+type HistoryEntryOutput struct {
+	Seq          int32
+	From         string // status name; "" for the creation
+	To           string
+	OccurredAt   time.Time
+	ActorKind    string
+	ActorSubject string
+	Cause        string
+}
+
+type GetOrderHistoryOutput struct {
+	Entries []HistoryEntryOutput
+}
+
 // CancelSource says who is asking for a cancellation. CancelOrder is shared by the rpc adapter and
 // the consumer adapter and cannot tell them apart; each says so here. The zero value is refused
 // (order.ErrInvalidCause), never defaulted.

@@ -18,6 +18,10 @@ const (
 	CauseStockReserved
 	// CauseCancellationRequested: another BC asked for the cancellation and its reason is not classified.
 	CauseCancellationRequested
+	// CauseStockShortage: inventory could not cover every line (OrderCancellationRequested.cause).
+	CauseStockShortage
+	// CauseReservationExpired: inventory's reservation outlived its TTL (OrderCancellationRequested.cause).
+	CauseReservationExpired
 )
 
 func (x Cause) String() string {

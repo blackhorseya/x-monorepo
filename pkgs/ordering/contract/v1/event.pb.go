@@ -23,6 +23,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// CancellationCause classifies an OrderCancellationRequested.
+type CancellationCause int32
+
+const (
+	CancellationCause_CANCELLATION_CAUSE_UNSPECIFIED CancellationCause = 0
+	// Inventory could not cover every line of the order.
+	CancellationCause_CANCELLATION_CAUSE_STOCK_SHORTAGE CancellationCause = 1
+	// Inventory gave the reservation back because it was held past its TTL.
+	CancellationCause_CANCELLATION_CAUSE_RESERVATION_EXPIRED CancellationCause = 2
+)
+
+// Enum value maps for CancellationCause.
+var (
+	CancellationCause_name = map[int32]string{
+		0: "CANCELLATION_CAUSE_UNSPECIFIED",
+		1: "CANCELLATION_CAUSE_STOCK_SHORTAGE",
+		2: "CANCELLATION_CAUSE_RESERVATION_EXPIRED",
+	}
+	CancellationCause_value = map[string]int32{
+		"CANCELLATION_CAUSE_UNSPECIFIED":         0,
+		"CANCELLATION_CAUSE_STOCK_SHORTAGE":      1,
+		"CANCELLATION_CAUSE_RESERVATION_EXPIRED": 2,
+	}
+)
+
+func (x CancellationCause) Enum() *CancellationCause {
+	p := new(CancellationCause)
+	*p = x
+	return p
+}
+
+func (x CancellationCause) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CancellationCause) Descriptor() protoreflect.EnumDescriptor {
+	return file_ordering_v1_event_proto_enumTypes[0].Descriptor()
+}
+
+func (CancellationCause) Type() protoreflect.EnumType {
+	return &file_ordering_v1_event_proto_enumTypes[0]
+}
+
+func (x CancellationCause) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CancellationCause.Descriptor instead.
+func (CancellationCause) EnumDescriptor() ([]byte, []int) {
+	return file_ordering_v1_event_proto_rawDescGZIP(), []int{0}
+}
+
 // OrderCreated is raised once per New order, in the same transaction that
 // persists it.
 type OrderCreated struct {
@@ -414,10 +466,17 @@ func (x *OrderCancelled) GetCancelledAt() *timestamppb.Timestamp {
 // OrderCancellationRequested is published by another BC (e.g. payment timeout)
 // to ask ordering to cancel an order.
 type OrderCancellationRequested struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
-	RequestedAt   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=requested_at,json=requestedAt,proto3" json:"requested_at,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	OrderId string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	// Free text from the requesting BC: informational only. Ordering neither stores nor logs it
+	// (it is untrusted and unstable); the typed cause below is what it records.
+	Reason      string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	RequestedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=requested_at,json=requestedAt,proto3" json:"requested_at,omitempty"`
+	// Why the requester asks, as a fixed enumeration. Additive (#427): an event published before this
+	// field existed carries no cause (CANCELLATION_CAUSE_UNSPECIFIED), and a value this version of
+	// ordering does not know is treated the same way — the order history records both as an
+	// unclassified request (CANCELLATION_REQUESTED).
+	Cause         CancellationCause `protobuf:"varint,4,opt,name=cause,proto3,enum=ordering.v1.CancellationCause" json:"cause,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -473,6 +532,13 @@ func (x *OrderCancellationRequested) GetRequestedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *OrderCancellationRequested) GetCause() CancellationCause {
+	if x != nil {
+		return x.Cause
+	}
+	return CancellationCause_CANCELLATION_CAUSE_UNSPECIFIED
+}
+
 var File_ordering_v1_event_proto protoreflect.FileDescriptor
 
 const file_ordering_v1_event_proto_rawDesc = "" +
@@ -509,11 +575,16 @@ const file_ordering_v1_event_proto_rawDesc = "" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
 	"customerId\x12=\n" +
-	"\fcancelled_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcancelledAt\"\x8e\x01\n" +
+	"\fcancelled_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcancelledAt\"\xc4\x01\n" +
 	"\x1aOrderCancellationRequested\x12\x19\n" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12=\n" +
-	"\frequested_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vrequestedAtB\xb3\x01\n" +
+	"\frequested_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vrequestedAt\x124\n" +
+	"\x05cause\x18\x04 \x01(\x0e2\x1e.ordering.v1.CancellationCauseR\x05cause*\x8a\x01\n" +
+	"\x11CancellationCause\x12\"\n" +
+	"\x1eCANCELLATION_CAUSE_UNSPECIFIED\x10\x00\x12%\n" +
+	"!CANCELLATION_CAUSE_STOCK_SHORTAGE\x10\x01\x12*\n" +
+	"&CANCELLATION_CAUSE_RESERVATION_EXPIRED\x10\x02B\xb3\x01\n" +
 	"\x0fcom.ordering.v1B\n" +
 	"EventProtoP\x01ZGgithub.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1\xa2\x02\x03OXX\xaa\x02\vOrdering.V1\xca\x02\vOrdering\\V1\xe2\x02\x17Ordering\\V1\\GPBMetadata\xea\x02\fOrdering::V1b\x06proto3"
 
@@ -529,33 +600,36 @@ func file_ordering_v1_event_proto_rawDescGZIP() []byte {
 	return file_ordering_v1_event_proto_rawDescData
 }
 
+var file_ordering_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_ordering_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_ordering_v1_event_proto_goTypes = []any{
-	(*OrderCreated)(nil),               // 0: ordering.v1.OrderCreated
-	(*OrderCreatedItem)(nil),           // 1: ordering.v1.OrderCreatedItem
-	(*OrderConfirmed)(nil),             // 2: ordering.v1.OrderConfirmed
-	(*OrderPaid)(nil),                  // 3: ordering.v1.OrderPaid
-	(*OrderCompleted)(nil),             // 4: ordering.v1.OrderCompleted
-	(*OrderCancelled)(nil),             // 5: ordering.v1.OrderCancelled
-	(*OrderCancellationRequested)(nil), // 6: ordering.v1.OrderCancellationRequested
-	(*v1.Money)(nil),                   // 7: common.v1.Money
-	(*timestamppb.Timestamp)(nil),      // 8: google.protobuf.Timestamp
+	(CancellationCause)(0),             // 0: ordering.v1.CancellationCause
+	(*OrderCreated)(nil),               // 1: ordering.v1.OrderCreated
+	(*OrderCreatedItem)(nil),           // 2: ordering.v1.OrderCreatedItem
+	(*OrderConfirmed)(nil),             // 3: ordering.v1.OrderConfirmed
+	(*OrderPaid)(nil),                  // 4: ordering.v1.OrderPaid
+	(*OrderCompleted)(nil),             // 5: ordering.v1.OrderCompleted
+	(*OrderCancelled)(nil),             // 6: ordering.v1.OrderCancelled
+	(*OrderCancellationRequested)(nil), // 7: ordering.v1.OrderCancellationRequested
+	(*v1.Money)(nil),                   // 8: common.v1.Money
+	(*timestamppb.Timestamp)(nil),      // 9: google.protobuf.Timestamp
 }
 var file_ordering_v1_event_proto_depIdxs = []int32{
-	1, // 0: ordering.v1.OrderCreated.items:type_name -> ordering.v1.OrderCreatedItem
-	7, // 1: ordering.v1.OrderCreated.total:type_name -> common.v1.Money
-	8, // 2: ordering.v1.OrderCreated.created_at:type_name -> google.protobuf.Timestamp
-	8, // 3: ordering.v1.OrderConfirmed.confirmed_at:type_name -> google.protobuf.Timestamp
-	7, // 4: ordering.v1.OrderConfirmed.total:type_name -> common.v1.Money
-	8, // 5: ordering.v1.OrderPaid.paid_at:type_name -> google.protobuf.Timestamp
-	8, // 6: ordering.v1.OrderCompleted.completed_at:type_name -> google.protobuf.Timestamp
-	8, // 7: ordering.v1.OrderCancelled.cancelled_at:type_name -> google.protobuf.Timestamp
-	8, // 8: ordering.v1.OrderCancellationRequested.requested_at:type_name -> google.protobuf.Timestamp
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	2,  // 0: ordering.v1.OrderCreated.items:type_name -> ordering.v1.OrderCreatedItem
+	8,  // 1: ordering.v1.OrderCreated.total:type_name -> common.v1.Money
+	9,  // 2: ordering.v1.OrderCreated.created_at:type_name -> google.protobuf.Timestamp
+	9,  // 3: ordering.v1.OrderConfirmed.confirmed_at:type_name -> google.protobuf.Timestamp
+	8,  // 4: ordering.v1.OrderConfirmed.total:type_name -> common.v1.Money
+	9,  // 5: ordering.v1.OrderPaid.paid_at:type_name -> google.protobuf.Timestamp
+	9,  // 6: ordering.v1.OrderCompleted.completed_at:type_name -> google.protobuf.Timestamp
+	9,  // 7: ordering.v1.OrderCancelled.cancelled_at:type_name -> google.protobuf.Timestamp
+	9,  // 8: ordering.v1.OrderCancellationRequested.requested_at:type_name -> google.protobuf.Timestamp
+	0,  // 9: ordering.v1.OrderCancellationRequested.cause:type_name -> ordering.v1.CancellationCause
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_ordering_v1_event_proto_init() }
@@ -568,13 +642,14 @@ func file_ordering_v1_event_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ordering_v1_event_proto_rawDesc), len(file_ordering_v1_event_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_ordering_v1_event_proto_goTypes,
 		DependencyIndexes: file_ordering_v1_event_proto_depIdxs,
+		EnumInfos:         file_ordering_v1_event_proto_enumTypes,
 		MessageInfos:      file_ordering_v1_event_proto_msgTypes,
 	}.Build()
 	File_ordering_v1_event_proto = out.File

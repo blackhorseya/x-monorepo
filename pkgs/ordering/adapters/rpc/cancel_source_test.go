@@ -23,7 +23,7 @@ func TestCancelOrder_AdapterSaysItIsAnRPCRequest(t *testing.T) {
 
 		return &dto.OrderOutput{ID: in.OrderID, Status: "CANCELLED"}, nil
 	})
-	svc := rpc.NewOrderService(nil, nil, cancel, nil, nil)
+	svc := rpc.NewOrderService(nil, nil, cancel, nil, nil, nil)
 
 	if _, err := svc.CancelOrder(context.Background(), connect.NewRequest(&orderingv1.CancelOrderRequest{Id: "o-1"})); err != nil {
 		t.Fatal(err)

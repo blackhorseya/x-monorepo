@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ordering/v1/entity.proto.
  */
 export const file_ordering_v1_entity: GenFile = /*@__PURE__*/
-  fileDesc("ChhvcmRlcmluZy92MS9lbnRpdHkucHJvdG8SC29yZGVyaW5nLnYxIlUKCExpbmVJdGVtEg0KA3NrdRgBIAEoCUIAEhIKCHF1YW50aXR5GAIgASgFQgASJgoKdW5pdF9wcmljZRgDIAEoCzIQLmNvbW1vbi52MS5Nb25leUIAIpUCCgVPcmRlchIKCgJpZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIkCgVpdGVtcxgDIAMoCzIVLm9yZGVyaW5nLnYxLkxpbmVJdGVtEh8KBXRvdGFsGAQgASgLMhAuY29tbW9uLnYxLk1vbmV5EigKBnN0YXR1cxgFIAEoDjIYLm9yZGVyaW5nLnYxLk9yZGVyU3RhdHVzEi8KC2NyZWF0ZV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASGAoQcGF5bWVudF9yZXF1aXJlZBgIIAEoCCqwAQoLT3JkZXJTdGF0dXMSHAoYT1JERVJfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGAoUT1JERVJfU1RBVFVTX1BFTkRJTkcQARIaChZPUkRFUl9TVEFUVVNfQ0FOQ0VMTEVEEAISGgoWT1JERVJfU1RBVFVTX0NPTkZJUk1FRBADEhoKFk9SREVSX1NUQVRVU19DT01QTEVURUQQBBIVChFPUkRFUl9TVEFUVVNfUEFJRBAFYgZwcm90bzM", [file_common_v1_money, file_google_protobuf_timestamp]);
+  fileDesc("ChhvcmRlcmluZy92MS9lbnRpdHkucHJvdG8SC29yZGVyaW5nLnYxIlUKCExpbmVJdGVtEg0KA3NrdRgBIAEoCUIAEhIKCHF1YW50aXR5GAIgASgFQgASJgoKdW5pdF9wcmljZRgDIAEoCzIQLmNvbW1vbi52MS5Nb25leUIAIpUCCgVPcmRlchIKCgJpZBgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRIkCgVpdGVtcxgDIAMoCzIVLm9yZGVyaW5nLnYxLkxpbmVJdGVtEh8KBXRvdGFsGAQgASgLMhAuY29tbW9uLnYxLk1vbmV5EigKBnN0YXR1cxgFIAEoDjIYLm9yZGVyaW5nLnYxLk9yZGVyU3RhdHVzEi8KC2NyZWF0ZV90aW1lGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgt1cGRhdGVfdGltZRgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASGAoQcGF5bWVudF9yZXF1aXJlZBgIIAEoCCKtAgoRT3JkZXJIaXN0b3J5RW50cnkSCwoDc2VxGAEgASgFEi0KC2Zyb21fc3RhdHVzGAIgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSKwoJdG9fc3RhdHVzGAMgASgOMhgub3JkZXJpbmcudjEuT3JkZXJTdGF0dXMSMQoNb2NjdXJyZWRfdGltZRgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASNgoKYWN0b3Jfa2luZBgFIAEoDjIiLm9yZGVyaW5nLnYxLk9yZGVySGlzdG9yeUFjdG9yS2luZBIVCg1hY3Rvcl9zdWJqZWN0GAYgASgJEi0KBWNhdXNlGAcgASgOMh4ub3JkZXJpbmcudjEuT3JkZXJIaXN0b3J5Q2F1c2UqsAEKC09yZGVyU3RhdHVzEhwKGE9SREVSX1NUQVRVU19VTlNQRUNJRklFRBAAEhgKFE9SREVSX1NUQVRVU19QRU5ESU5HEAESGgoWT1JERVJfU1RBVFVTX0NBTkNFTExFRBACEhoKFk9SREVSX1NUQVRVU19DT05GSVJNRUQQAxIaChZPUkRFUl9TVEFUVVNfQ09NUExFVEVEEAQSFQoRT1JERVJfU1RBVFVTX1BBSUQQBSrZAQoVT3JkZXJIaXN0b3J5QWN0b3JLaW5kEigKJE9SREVSX0hJU1RPUllfQUNUT1JfS0lORF9VTlNQRUNJRklFRBAAEiUKIU9SREVSX0hJU1RPUllfQUNUT1JfS0lORF9DVVNUT01FUhABEiIKHk9SREVSX0hJU1RPUllfQUNUT1JfS0lORF9BRE1JThACEiMKH09SREVSX0hJU1RPUllfQUNUT1JfS0lORF9TWVNURU0QAxImCiJPUkRFUl9ISVNUT1JZX0FDVE9SX0tJTkRfQU5PTllNT1VTEAQq3QIKEU9yZGVySGlzdG9yeUNhdXNlEiMKH09SREVSX0hJU1RPUllfQ0FVU0VfVU5TUEVDSUZJRUQQABIjCh9PUkRFUl9ISVNUT1JZX0NBVVNFX1JQQ19SRVFVRVNUEAESKAokT1JERVJfSElTVE9SWV9DQVVTRV9QQVlNRU5UX0NBUFRVUkVEEAISJwojT1JERVJfSElTVE9SWV9DQVVTRV9QQVlNRU5UX0VYUElSRUQQAxImCiJPUkRFUl9ISVNUT1JZX0NBVVNFX1NUT0NLX1JFU0VSVkVEEAQSLgoqT1JERVJfSElTVE9SWV9DQVVTRV9DQU5DRUxMQVRJT05fUkVRVUVTVEVEEAUSJgoiT1JERVJfSElTVE9SWV9DQVVTRV9TVE9DS19TSE9SVEFHRRAGEisKJ09SREVSX0hJU1RPUllfQ0FVU0VfUkVTRVJWQVRJT05fRVhQSVJFRBAHYgZwcm90bzM", [file_common_v1_money, file_google_protobuf_timestamp]);
 
 /**
  * LineItem is one line of an Order. unit_price is the snapshot of the catalog
@@ -103,6 +103,64 @@ export const OrderSchema: GenMessage<Order> = /*@__PURE__*/
   messageDesc(file_ordering_v1_entity, 1);
 
 /**
+ * OrderHistoryEntry is one transition of an order. Entries are append-only.
+ *
+ * @generated from message ordering.v1.OrderHistoryEntry
+ */
+export type OrderHistoryEntry = Message<"ordering.v1.OrderHistoryEntry"> & {
+  /**
+   * 1..N per order, in the order the transitions happened.
+   *
+   * @generated from field: int32 seq = 1;
+   */
+  seq: number;
+
+  /**
+   * ORDER_STATUS_UNSPECIFIED for the creation (there is no previous state).
+   *
+   * @generated from field: ordering.v1.OrderStatus from_status = 2;
+   */
+  fromStatus: OrderStatus;
+
+  /**
+   * @generated from field: ordering.v1.OrderStatus to_status = 3;
+   */
+  toStatus: OrderStatus;
+
+  /**
+   * When the domain made the transition (not when the row was written).
+   *
+   * @generated from field: google.protobuf.Timestamp occurred_time = 4;
+   */
+  occurredTime?: Timestamp;
+
+  /**
+   * @generated from field: ordering.v1.OrderHistoryActorKind actor_kind = 5;
+   */
+  actorKind: OrderHistoryActorKind;
+
+  /**
+   * The account id of a CUSTOMER or ADMIN actor. Only an admin is shown it; for any other caller
+   * it is empty.
+   *
+   * @generated from field: string actor_subject = 6;
+   */
+  actorSubject: string;
+
+  /**
+   * @generated from field: ordering.v1.OrderHistoryCause cause = 7;
+   */
+  cause: OrderHistoryCause;
+};
+
+/**
+ * Describes the message ordering.v1.OrderHistoryEntry.
+ * Use `create(OrderHistoryEntrySchema)` to create a new message.
+ */
+export const OrderHistoryEntrySchema: GenMessage<OrderHistoryEntry> = /*@__PURE__*/
+  messageDesc(file_ordering_v1_entity, 2);
+
+/**
  * @generated from enum ordering.v1.OrderStatus
  */
 export enum OrderStatus {
@@ -150,4 +208,112 @@ export enum OrderStatus {
  */
 export const OrderStatusSchema: GenEnum<OrderStatus> = /*@__PURE__*/
   enumDesc(file_ordering_v1_entity, 0);
+
+/**
+ * OrderHistoryActorKind is who made an order move (docs/order-history.md).
+ *
+ * @generated from enum ordering.v1.OrderHistoryActorKind
+ */
+export enum OrderHistoryActorKind {
+  /**
+   * @generated from enum value: ORDER_HISTORY_ACTOR_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * An authenticated caller without the admin role.
+   *
+   * @generated from enum value: ORDER_HISTORY_ACTOR_KIND_CUSTOMER = 1;
+   */
+  CUSTOMER = 1,
+
+  /**
+   * An authenticated caller holding auth.admin_role.
+   *
+   * @generated from enum value: ORDER_HISTORY_ACTOR_KIND_ADMIN = 2;
+   */
+  ADMIN = 2,
+
+  /**
+   * An event consumer: no person is behind it.
+   *
+   * @generated from enum value: ORDER_HISTORY_ACTOR_KIND_SYSTEM = 3;
+   */
+  SYSTEM = 3,
+
+  /**
+   * An rpc call with no principal (auth.mode off).
+   *
+   * @generated from enum value: ORDER_HISTORY_ACTOR_KIND_ANONYMOUS = 4;
+   */
+  ANONYMOUS = 4,
+}
+
+/**
+ * Describes the enum ordering.v1.OrderHistoryActorKind.
+ */
+export const OrderHistoryActorKindSchema: GenEnum<OrderHistoryActorKind> = /*@__PURE__*/
+  enumDesc(file_ordering_v1_entity, 1);
+
+/**
+ * OrderHistoryCause is why an order moved, as a fixed enumeration. Another BC's free text is never one.
+ * A client must treat a value it does not know as UNSPECIFIED: the set can grow.
+ *
+ * @generated from enum ordering.v1.OrderHistoryCause
+ */
+export enum OrderHistoryCause {
+  /**
+   * @generated from enum value: ORDER_HISTORY_CAUSE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * A client asked through the rpc (CreateOrder, CancelOrder, CompleteOrder); who is the actor.
+   *
+   * @generated from enum value: ORDER_HISTORY_CAUSE_RPC_REQUEST = 1;
+   */
+  RPC_REQUEST = 1,
+
+  /**
+   * @generated from enum value: ORDER_HISTORY_CAUSE_PAYMENT_CAPTURED = 2;
+   */
+  PAYMENT_CAPTURED = 2,
+
+  /**
+   * @generated from enum value: ORDER_HISTORY_CAUSE_PAYMENT_EXPIRED = 3;
+   */
+  PAYMENT_EXPIRED = 3,
+
+  /**
+   * @generated from enum value: ORDER_HISTORY_CAUSE_STOCK_RESERVED = 4;
+   */
+  STOCK_RESERVED = 4,
+
+  /**
+   * Another BC asked for the cancellation and its reason is not classified.
+   *
+   * @generated from enum value: ORDER_HISTORY_CAUSE_CANCELLATION_REQUESTED = 5;
+   */
+  CANCELLATION_REQUESTED = 5,
+
+  /**
+   * Inventory could not cover every line of the order (OrderCancellationRequested.cause).
+   *
+   * @generated from enum value: ORDER_HISTORY_CAUSE_STOCK_SHORTAGE = 6;
+   */
+  STOCK_SHORTAGE = 6,
+
+  /**
+   * Inventory gave the reservation back because it was held past its TTL.
+   *
+   * @generated from enum value: ORDER_HISTORY_CAUSE_RESERVATION_EXPIRED = 7;
+   */
+  RESERVATION_EXPIRED = 7,
+}
+
+/**
+ * Describes the enum ordering.v1.OrderHistoryCause.
+ */
+export const OrderHistoryCauseSchema: GenEnum<OrderHistoryCause> = /*@__PURE__*/
+  enumDesc(file_ordering_v1_entity, 2);
 

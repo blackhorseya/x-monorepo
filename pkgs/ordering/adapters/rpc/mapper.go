@@ -84,3 +84,32 @@ func toDTOStatus(s orderingv1.OrderStatus) string {
 		return s.String()
 	}
 }
+
+func toProtoHistoryEntry(e *dto.HistoryEntryOutput) *orderingv1.OrderHistoryEntry {
+	return &orderingv1.OrderHistoryEntry{
+		Seq:          e.Seq,
+		FromStatus:   toProtoStatus(e.From),
+		ToStatus:     toProtoStatus(e.To),
+		OccurredTime: timestamppb.New(e.OccurredAt),
+		ActorKind:    toProtoActorKind(e.ActorKind),
+		ActorSubject: e.ActorSubject,
+		Cause:        toProtoHistoryCause(e.Cause),
+	}
+}
+
+func toProtoActorKind(s string) orderingv1.OrderHistoryActorKind {
+	if v, ok := orderingv1.OrderHistoryActorKind_value["ORDER_HISTORY_ACTOR_KIND_"+s]; ok {
+		return orderingv1.OrderHistoryActorKind(v)
+	}
+
+	return orderingv1.OrderHistoryActorKind_ORDER_HISTORY_ACTOR_KIND_UNSPECIFIED
+}
+
+// toProtoHistoryCause: a cause name this wire version does not have is UNSPECIFIED, never an error.
+func toProtoHistoryCause(s string) orderingv1.OrderHistoryCause {
+	if v, ok := orderingv1.OrderHistoryCause_value["ORDER_HISTORY_CAUSE_"+s]; ok {
+		return orderingv1.OrderHistoryCause(v)
+	}
+
+	return orderingv1.OrderHistoryCause_ORDER_HISTORY_CAUSE_UNSPECIFIED
+}

@@ -26,6 +26,8 @@ type (
 	CancelOrderUC   = usecasex.UseCase[dto.CancelOrderInput, *dto.OrderOutput]
 	CompleteOrderUC = usecasex.UseCase[dto.CompleteOrderInput, *dto.OrderOutput]
 	ListOrdersUC    = usecasex.UseCase[dto.ListOrdersInput, *dto.ListOrdersOutput]
+
+	GetOrderHistoryUC = usecasex.UseCase[dto.GetOrderHistoryInput, *dto.GetOrderHistoryOutput]
 )
 
 // CatalogUnavailableCode is the x-error-code of CreateOrder failing closed because the catalog did
@@ -48,10 +50,11 @@ type OrderService struct {
 	cancelOrder   CancelOrderUC
 	completeOrder CompleteOrderUC
 	listOrders    ListOrdersUC
+	orderHistory  GetOrderHistoryUC
 }
 
-func NewOrderService(createOrder CreateOrderUC, getOrder GetOrderUC, cancelOrder CancelOrderUC, completeOrder CompleteOrderUC, listOrders ListOrdersUC) *OrderService {
-	return &OrderService{createOrder: createOrder, getOrder: getOrder, cancelOrder: cancelOrder, completeOrder: completeOrder, listOrders: listOrders}
+func NewOrderService(createOrder CreateOrderUC, getOrder GetOrderUC, cancelOrder CancelOrderUC, completeOrder CompleteOrderUC, listOrders ListOrdersUC, orderHistory GetOrderHistoryUC) *OrderService {
+	return &OrderService{createOrder: createOrder, getOrder: getOrder, cancelOrder: cancelOrder, completeOrder: completeOrder, listOrders: listOrders, orderHistory: orderHistory}
 }
 
 // Route returns the mount path and handler (Connect + gRPC + gRPC-Web on one port).
@@ -135,4 +138,21 @@ func (h *OrderService) ListOrders(
 	}
 
 	return connect.NewResponse(&orderingv1.ListOrdersResponse{Orders: orders, NextPageToken: out.NextPageToken}), nil
+}
+
+func (h *OrderService) GetOrderHistory(
+	c context.Context,
+	req *connect.Request[orderingv1.GetOrderHistoryRequest],
+) (*connect.Response[orderingv1.GetOrderHistoryResponse], error) {
+	out, err := h.orderHistory.Execute(c, dto.GetOrderHistoryInput{OrderID: req.Msg.GetId()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	entries := make([]*orderingv1.OrderHistoryEntry, 0, len(out.Entries))
+	for i := range out.Entries {
+		entries = append(entries, toProtoHistoryEntry(&out.Entries[i]))
+	}
+
+	return connect.NewResponse(&orderingv1.GetOrderHistoryResponse{Entries: entries}), nil
 }

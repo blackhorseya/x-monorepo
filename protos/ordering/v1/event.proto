@@ -70,6 +70,22 @@ message OrderCancelled {
 // to ask ordering to cancel an order.
 message OrderCancellationRequested {
   string order_id = 1;
+  // Free text from the requesting BC: informational only. Ordering neither stores nor logs it
+  // (it is untrusted and unstable); the typed cause below is what it records.
   string reason = 2;
   google.protobuf.Timestamp requested_at = 3;
+  // Why the requester asks, as a fixed enumeration. Additive (#427): an event published before this
+  // field existed carries no cause (CANCELLATION_CAUSE_UNSPECIFIED), and a value this version of
+  // ordering does not know is treated the same way — the order history records both as an
+  // unclassified request (CANCELLATION_REQUESTED).
+  CancellationCause cause = 4;
+}
+
+// CancellationCause classifies an OrderCancellationRequested.
+enum CancellationCause {
+  CANCELLATION_CAUSE_UNSPECIFIED = 0;
+  // Inventory could not cover every line of the order.
+  CANCELLATION_CAUSE_STOCK_SHORTAGE = 1;
+  // Inventory gave the reservation back because it was held past its TTL.
+  CANCELLATION_CAUSE_RESERVATION_EXPIRED = 2;
 }
