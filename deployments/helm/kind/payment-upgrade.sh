@@ -127,6 +127,13 @@ new_render=$(helm template t "$chart" -f "$values" -f "$flow")
 grep -q -- '"consume"' <<<"$old_render" || fail "the chart at $from_tag does not run 'payment-rpc consume': nothing to upgrade from"
 if grep -q -- '"consume"' <<<"$new_render"; then fail "this chart still runs a 'consume' argument"; fi
 old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" -f "$flow" "${old_args[@]}" "$@" --wait --timeout 6m >/dev/null || fail "the previous chart did not become ready"; forwards; }
+# The database was migrated by the tree's migrate image, so ordering may be ahead of what the PREVIOUS release's
+# migrate image knows (it fails with "no migration found for version N"). Rolling the release back to it means rolling
+# the schema back first: ordering 0010 (order_history, #427) is undone with the runbook SQL of docs/operations.md
+# ("Rollback（只退 ordering `0010`）"), and re-applied by the migrate hook of the upgrade in stage 4. A no-op when
+# ordering is not at 10. Drop this block once the pinned $from_tag is a release that contains 0010.
+db "BEGIN; DROP TABLE IF EXISTS ordering.order_history; UPDATE ordering.schema_migrations SET version = 9, dirty = false WHERE version = 10; COMMIT;" >/dev/null
+[ "$(db "SELECT version FROM ordering.schema_migrations")" -le 9 ] || fail "ordering is still at 10 after the rollback"
 old_up
 oldimg=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.spec.template.spec.containers[0].image}')
 case $oldimg in */payment-rpc:*) ;; *) fail "before the upgrade the consumer runs '$oldimg', want the payment-rpc image" ;; esac
