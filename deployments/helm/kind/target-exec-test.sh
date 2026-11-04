@@ -12,6 +12,12 @@
 # Judged: every kubectl / helm call, and every `kind create|delete|export`, got exactly one `--kubeconfig` and it is the task's
 # own file (bin/kind/kubeconfig-<cluster>); none got the decoy, none ran with the variable unset and no flag.
 #
+# The REAL kind scripts are run too (smoke.sh payment.sh payment-flow.sh negative.sh outage.sh scale.sh coredns-dex.sh
+# payment-upgrade-guard.sh), behind the same prefix, with fake kubectl / helm / kind / curl / jq / ...: each runs until its first
+# failed step (a few seconds), and every kubectl / helm call it made before that must have arrived with the task's flag. That is
+# the part of each script that runs without a cluster; the rest is the static scan's. Two mutants edit a COPY of a real script
+# (an absolute-path kubectl in smoke.sh, an absolute-path helm in payment-flow.sh): the copy is run, and scanned.
+#
 # Then the same judgement on mutants of the real Taskfile, each made by one edit: the commands are run, and what the fake
 # kubectl receives must be WRONG (the mutant is dangerous), and check-kubeconfig.py --taskfile <mutant> must exit non-zero
 # (the gate sees it). A gate that lets a dangerous mutant through shows up here as a mutant that is "dangerous and not flagged".
@@ -20,6 +26,12 @@
 #   c  kubectl …; KUBE_ENV  (the guard after the operation)    d  the flag on another command of the same line
 #   e  --kubeconfig=""      f  a kind script without KUBE_ENV    g  KUBE_ENV without the shim directory on PATH
 #   h  kind delete without --kubeconfig                          i  --kubeconfig naming the decoy
+#   j  smoke.sh: kubectl by absolute path    k  payment-flow.sh: helm by absolute path      (run AND scanned)
+#   l  scale.sh: command -p kubectl   m  negative.sh: $(command -v kubectl)   n  outage.sh: sources a file   (scanned)
+#
+# The judge asks for the flag on every call, the strictest reading. A call by absolute path in a script that still has
+# KUBECONFIG exported would reach the right file anyway; it is a violation because it is the first half of a bypass (the second
+# half, unset / re-export, is also scanned), and a gate that tolerated it would have to be re-argued at every later edit.
 #
 # TASKFILE=<file in the repo root> runs the baseline against another Taskfile (the mutants are always made from Taskfile.yml).
 set -uo pipefail
@@ -27,6 +39,7 @@ cd "$(dirname "$0")/../../.."
 root=$PWD
 
 TASKFILE=${TASKFILE:-Taskfile.yml}
+python3 -c 'import yaml' 2>/dev/null || { echo "needs python3 with PyYAML (pip install pyyaml): check-kubeconfig.py cannot run without it"; exit 1; }
 cluster=probe ns=probe-ns
 fail=0 pass=0
 ok()  { pass=$((pass + 1)); echo "ok   $*"; }
@@ -131,6 +144,24 @@ PY
 }
 count_of() { judge | sed -n '1s/.*\b'"$2"'=\([0-9]*\).*/\1/p'; }
 
+# fakes for running the REAL scripts: the cluster tools log and succeed; the others fail, so a script stops at its first step that needs
+# the world (curl, jq, psql, git, docker ...) and sleep returns at once
+mkdir -p "$tmp/scriptbin"
+for t in kubectl helm kind k6; do cp "$tmp/fakebin/$t" "$tmp/scriptbin/$t"; done
+for t in curl jq python3 psql git docker podman openssl; do printf '#!/bin/sh\nexit 1\n' > "$tmp/scriptbin/$t"; chmod +x "$tmp/scriptbin/$t"; done
+printf '#!/bin/sh\nexit 0\n' > "$tmp/scriptbin/sleep"; chmod +x "$tmp/scriptbin/sleep"
+
+# run_real <kind dir>: every real script under the environment KUBE_ENV makes (KUBECONFIG, KIND_KUBECONFIG, the shims first on PATH)
+run_real() {
+  : > "$calls"
+  local sc
+  for sc in smoke payment payment-flow negative outage scale coredns-dex payment-upgrade-guard; do
+    ( cd "$root" && env -i HOME="$tmp/home" PATH="$root/deployments/helm/kind/shim:$tmp/scriptbin:/usr/bin:/bin" \
+        KIND_KUBECONFIG="$expected" KUBECONFIG="$expected" \
+        perl -e 'alarm 20; exec @ARGV' bash "$1/$sc.sh" "$ns" x-monorepo deployments/helm/x-monorepo deployments/helm/kind/values.yaml deployments/helm/kind/payment-flow-values.yaml ) >/dev/null 2>&1 || true
+  done
+}
+
 # ---- baseline: the real Taskfile
 lines_of "$TASKFILE"
 n_lines=$(grep -c . "$tmp/lines")
@@ -145,6 +176,16 @@ ki=$(judge | sed -n '1s/.*kind=\([0-9]*\).*/\1/p'); sc=$(judge | sed -n '1s/.*sc
 if [ "${n_lines:-0}" -ge 20 ] && [ "${k:-0}" -ge 30 ] && [ "${h:-0}" -ge 8 ] && [ "${ki:-0}" -ge 2 ] && [ "${sc:-0}" -ge 8 ]; then
   ok "anchors: $n_lines lines run, kubectl=$k helm=$h kind=$ki scripts=$sc (including their hostile unset / subshell / bash -c / xargs calls)"
 else bad "anchors too low: lines=$n_lines kubectl=$k helm=$h kind=$ki scripts=$sc"; fi
+
+# ---- the real scripts, run
+run_real "$root/deployments/helm/kind"
+sumr=$(judge); rcr=$?
+echo "$sumr" | head -1
+kr=$(judge | sed -n '1s/.*kubectl=\([0-9]*\).*/\1/p'); hr=$(judge | sed -n '1s/.*helm=\([0-9]*\).*/\1/p')
+if [ "$rcr" = 0 ]; then ok "real scripts: every kubectl / helm call they made before their first failed step arrived with the task's own --kubeconfig"
+else bad "real scripts: $sumr"; fi
+if [ "${kr:-0}" -ge 12 ] && [ "${hr:-0}" -ge 2 ]; then ok "anchors (real scripts): kubectl=$kr helm=$hr calls came out of the real scripts"
+else bad "anchors (real scripts) too low: kubectl=$kr helm=$hr"; fi
 
 # ---- mutants: made from the real Taskfile.yml by one edit each
 mutate() {  # mutate <name> <python expression on s (the file text) returning the new text>
@@ -191,6 +232,9 @@ PY
 for m in a b c d e f g h i; do
   if ! mutate "$m" 2>"$tmp/mut.err"; then bad "mutant $m was not made: $(cat "$tmp/mut.err")"; continue; fi
   python3 "$root/deployments/helm/check-kubeconfig.py" --taskfile "$mutfile" >"$tmp/gate.out" 2>&1; gate_rc=$?
+  if [ "$gate_rc" != 0 ] && ! grep -q '^check-kubeconfig: [0-9]* problem' "$tmp/gate.out"; then
+    bad "mutant $m: the gate crashed instead of giving a verdict: $(tail -2 "$tmp/gate.out" | tr '\n' ' ')"; continue
+  fi
   lines_of "$mutfile"; run_lines
   judge >"$tmp/judge.out" 2>&1; judge_rc=$?
   case $m in
@@ -206,6 +250,56 @@ for m in a b c d e f g h i; do
   elif [ "$gate_rc" = 0 ] && [ "$judge_rc" != 0 ]; then bad "mutant $m is dangerous when run and the gate lets it through: $(sed -n 2p "$tmp/judge.out")"
   elif [ "$gate_rc" != 0 ] && [ "$judge_rc" = 0 ]; then bad "mutant $m: the gate is red but running it shows nothing wrong (the mutant is not the danger it was made to be)"
   else bad "mutant $m: neither the gate nor the run sees it"; fi
+done
+
+# ---- mutants of the real scripts: a copy of deployments/helm/kind with one edit, scanned and (j k) run
+mk_script_mutant() {  # <name> → $tmp/mutkind
+  rm -rf "$tmp/mutkind"; cp -R "$root/deployments/helm/kind" "$tmp/mutkind"
+  local f
+  case $1 in
+    j) f=smoke.sh ;;
+    k) f=payment-flow.sh ;;
+    l) f=scale.sh ;;
+    m) f=negative.sh ;;
+    n) f=outage.sh ;;
+  esac
+  python3 - "$tmp/mutkind/$f" "$1" "$tmp" <<'PY'
+import re, sys
+path, name, tmp = sys.argv[1:4]
+t = open(path).read()
+before = t
+if name == "j":
+    t = re.sub(r"(?m)^kubectl ", tmp + "/scriptbin/kubectl ", t, count=1)
+elif name == "k":
+    t = re.sub(r"(?m)^(\s*)helm ", r"\1" + tmp + "/scriptbin/helm ", t, count=1)
+elif name == "l":
+    t = re.sub(r"(?m)^kubectl ", "command -p kubectl ", t, count=1)
+elif name == "m":
+    t = re.sub(r"(?m)^kubectl ", 'k=$(command -v kubectl); "$k" ', t, count=1)
+elif name == "n":
+    t = t.replace("set -", "source ./lib.sh\nset -", 1)
+if t == before:
+    sys.exit("mutant %s: nothing to edit in %s" % (name, path))
+open(path, "w").write(t)
+PY
+}
+for m in j k l m n; do
+  if ! mk_script_mutant "$m" 2>"$tmp/mut.err"; then bad "script mutant $m was not made: $(cat "$tmp/mut.err")"; continue; fi
+  python3 "$root/deployments/helm/check-kubeconfig.py" --kind-dir "$tmp/mutkind" >"$tmp/gate.out" 2>&1; gate_rc=$?
+  if [ "$gate_rc" != 0 ] && ! grep -q '^check-kubeconfig: [0-9]* problem' "$tmp/gate.out"; then
+    bad "script mutant $m: the gate crashed instead of giving a verdict: $(tail -2 "$tmp/gate.out" | tr '\n' ' ')"; continue
+  fi
+  verdict=$(sed -n 2p "$tmp/gate.out" | sed 's/^ *//' | cut -c1-110)
+  case $m in
+    j|k)
+      run_real "$tmp/mutkind"; judge >"$tmp/judge.out" 2>&1; judge_rc=$?
+      if [ "$gate_rc" != 0 ] && [ "$judge_rc" != 0 ]; then ok "script mutant $m: run → $(sed -n 2p "$tmp/judge.out" | sed 's/^ *//' | cut -c1-70) | gate → $verdict"
+      elif [ "$gate_rc" = 0 ] && [ "$judge_rc" != 0 ]; then bad "script mutant $m is dangerous when run and the gate lets it through"
+      else bad "script mutant $m: gate rc=$gate_rc, run rc=$judge_rc (the edit did not reach a call, or the gate is blind)"; fi ;;
+    *)
+      if [ "$gate_rc" != 0 ]; then ok "script mutant $m: gate → $verdict"
+      else bad "script mutant $m: the gate lets it through"; fi ;;
+  esac
 done
 
 echo "kind exec: $pass passed, $fail failed"

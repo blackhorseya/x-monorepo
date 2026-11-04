@@ -33,7 +33,7 @@ vars:
   # nothing else. Every kubectl / helm / kind create|delete command of these tasks carries `--kubeconfig "{{.KIND_KUBECONFIG}}"`
   # itself (a flag beats whatever KUBECONFIG is, or becomes). The kind/*.sh scripts call kubectl / helm without it; they run
   # behind KUBE_ENV, which sets KIND_KUBECONFIG and puts deployments/helm/kind/shim first on PATH, whose kubectl / helm add the flag
-  # to every call at any depth. The user's own kubeconfig, its current-context and a context merely NAMED kind-<CLUSTER> (#437)
+  # to every call that finds the tool through PATH, at any depth (check-kubeconfig.py bans every other way to reach one). The user's own kubeconfig, its current-context and a context merely NAMED kind-<CLUSTER> (#437)
   # are never consulted or changed. deployments/helm/check-kubeconfig.py reads each command, target-exec-test.sh runs them.
   KIND_KUBECONFIG: '{{.BIN_DIR}}/kind/kubeconfig-{{.CLUSTER}}'
   KUBE_ENV: 'test -s "{{.KIND_KUBECONFIG}}" || { echo "no kubeconfig for kind cluster {{.CLUSTER}}: run task helm-kind-up CLUSTER={{.CLUSTER}} first" >&2; exit 1; }; export KUBECONFIG="{{.KIND_KUBECONFIG}}" KIND_KUBECONFIG="{{.KIND_KUBECONFIG}}" PATH="{{.ROOT_DIR}}/deployments/helm/kind/shim:$PATH"'

@@ -24,7 +24,8 @@ whose arguments mention kubectl / helm / kind are flagged, whatever else the com
 
 The scripts under deployments/helm/kind/ are flagged when a non-comment line changes where they point: KUBECONFIG=, unset
 KUBECONFIG, KIND_KUBECONFIG=, --kubeconfig, --context, --kube-context, `kubectl config use|set|delete-context`, kind
-create|delete|export, env -i, PATH=. The shims must exist and be executable, and KUBE_ENV must put them first on PATH.
+create|delete|export, env -i, PATH=, and any way to reach a tool without meeting the shim: a path (/opt/homebrew/bin/kubectl),
+`command -p`, `hash -p`, a command word held in a variable. The shims must exist and be executable, and KUBE_ENV must put them first on PATH.
 
 This is the cheap, static half. What the commands really do is judged by running them: deployments/helm/kind/target-exec-test.sh.
 """
@@ -222,15 +223,28 @@ SCRIPT_RULES = [
     (re.compile(r"(?:^|[\s;|&(`])kind\s+(?:create|delete|export)\b"), "kind create|delete|export"),
     (re.compile(r"\benv\s+-i\b"), "env -i drops KIND_KUBECONFIG"),
     (re.compile(r"(?:^|[\s;|&(`])(?:export\s+)?PATH\s*="), "sets PATH (the shims must stay first)"),
+    # the shim is found through PATH: a tool called by path, or looked up without the caller's PATH, never meets it
+    (re.compile(r"(?:^|[\s;|&(`$\"'=])[^\s;|&()`\"']*/(?:kubectl|helm|kind)(?=[\s;|&)`\"']|$)"), "calls kubectl / helm / kind by path (the shim is only found through PATH)"),
+    (re.compile(r"(?:^\s*|[;&|({]\s*|\b(?:then|do|else)\s+)(?:source|\.)\s+[\"$\w./~-]"), "sources another file (not scanned): fails closed"),
+    (re.compile(r"(?:^\s*|[;&|({]\s*|\b(?:then|do|else)\s+)eval\s"), "eval: not readable, fails closed"),
+    (re.compile(r"(?:\$\(|`)\s*(?:command\s+-v|which|type(?:\s+-\w+)?)\s+(?:kubectl|helm|kind)\b"), "resolves a cluster tool to a path (then calls it by path)"),
+    (re.compile(r"\bcommand\s+-[a-zA-Z]*p"), "command -p looks tools up without PATH (bypasses the shims)"),
+    (re.compile(r"\b(?:hash|type)\s+-[a-zA-Z]*[pP]\b|\bhash\s+-p\b"), "hash / type -p pins or resolves a tool outside PATH"),
+    (re.compile(r"(?:^\s*|[;&|({`]\s*|\b(?:then|do|else)\s+)(?:exec\s+)?\"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\"?\s+(?:--?\w+\s+)*(?:get|apply|delete|exec|rollout|create|patch|logs|describe|upgrade|install|status|uninstall|port-forward|wait|cp|run)\b"), "runs a cluster tool through a variable (not readable)"),
 ]
 
 
-def judge_script(text):
+SHELL_ONLY = ("sources another file", "eval:")
+
+
+def judge_script(text, shell=True):
     why = []
     for n, line in enumerate(text.splitlines(), 1):
         if line.lstrip().startswith("#"):
             continue
         for rx, what in SCRIPT_RULES:
+            if not shell and what.startswith(SHELL_ONLY):
+                continue
             if rx.search(line):
                 why.append("line %d: %s" % (n, what))
     return why
@@ -249,17 +263,17 @@ def check_taskfile(doc):
     return problems
 
 
-def check_real(taskfile):
+def check_real(taskfile, kind_dir=None):
     with open(taskfile) as f:
         problems = check_taskfile(yaml.safe_load(f))
-    kind_dir = os.path.join(ROOT, "deployments", "helm", "kind")
+    kind_dir = kind_dir or os.path.join(ROOT, "deployments", "helm", "kind")
     scanned = 0
     for fn in sorted(os.listdir(kind_dir)):
         if not fn.endswith((".sh", ".py")) or fn.endswith(("-test.sh", "-test.py")):
             continue
         scanned += 1
         with open(os.path.join(kind_dir, fn)) as f:
-            for w in judge_script(f.read()):
+            for w in judge_script(f.read(), shell=fn.endswith(".sh")):
                 problems.append("kind/%s: %s" % (fn, w))
     for tool in ("kubectl", "helm"):
         p = os.path.join(kind_dir, "shim", tool)
@@ -457,7 +471,8 @@ def main():
     taskfile = os.path.join(ROOT, "Taskfile.yml")
     if "--taskfile" in argv:
         taskfile = os.path.abspath(argv[argv.index("--taskfile") + 1])
-    problems, scanned = check_real(taskfile)
+    kind_dir = os.path.abspath(argv[argv.index("--kind-dir") + 1]) if "--kind-dir" in argv else None
+    problems, scanned = check_real(taskfile, kind_dir)
     if scanned < 8:  # the anchor: the directory scan saw the scripts it is there for
         problems.append("only %d kind scripts scanned" % scanned)
     if problems:
