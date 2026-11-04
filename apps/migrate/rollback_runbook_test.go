@@ -304,6 +304,7 @@ const (
 	orderingMarker   = "**Rollback（只退 ordering `0008`）**"
 	ordering9Marker  = "**Rollback（只退 ordering `0009`）**"
 	ordering10Marker = "**Rollback（只退 ordering `0010`）**"
+	ordering11Marker = "**Rollback（只退 ordering `0011`）**"
 	payment3Marker   = "**Rollback（只退 payment `0003`）**"
 	payment4Marker   = "**Rollback（只退 payment `0004`）**"
 )
@@ -314,6 +315,7 @@ const (
 	ordering0008Index  = `SELECT count(*) FROM pg_indexes WHERE schemaname = 'ordering' AND indexname = 'orders_customer_idempotency_key'`
 	ordering0009Col    = `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'ordering' AND table_name = 'orders' AND column_name = 'payment_required'`
 	ordering0010Table  = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'ordering' AND table_name = 'order_history'`
+	ordering0011Typed  = `SELECT count(*) FROM ordering.order_history WHERE cause IN ('STOCK_SHORTAGE', 'RESERVATION_EXPIRED')`
 	ordering0009Tables = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'ordering' AND table_name IN ('events_v1_orderpaid', 'events_v1_orderpaid_offsets')`
 )
 
@@ -653,6 +655,116 @@ var ordering0010Dirty = rollbackCase{
 	},
 }
 
+// The two causes 0011 admits, planted as the worker would have written them (#427 slice 2). Inserting
+// them is also the proof that 0011 widened the CHECK: before it, the INSERT itself is refused.
+func plantInventoryCauses(t *testing.T, e *rollbackEnv) {
+	t.Helper()
+	for seq, cause := range map[int]string{2: "STOCK_SHORTAGE", 3: "RESERVATION_EXPIRED"} {
+		if _, err := e.conn.Exec(e.c, `INSERT INTO ordering.order_history (order_id, seq, event, from_status, to_status, occurred_at, actor_kind, actor_subject, cause)
+			VALUES ('rollback-order', $1, 'CANCELLED', 'CONFIRMED', 'CANCELLED', now(), 'SYSTEM', '', $2)`, seq, cause); err != nil {
+			t.Fatalf("0011 does not admit cause %s: %v", cause, err)
+		}
+	}
+}
+
+// causeRefused reports whether the CHECK refuses the inventory causes, using a statement that
+// changes nothing when it is refused and is rolled back when it is not.
+func causeRefused(t *testing.T, e *rollbackEnv, cause string) bool {
+	t.Helper()
+	tx, err := e.conn.Begin(e.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(e.c) }()
+	_, err = tx.Exec(e.c, `INSERT INTO ordering.order_history (order_id, seq, event, from_status, to_status, occurred_at, actor_kind, actor_subject, cause)
+		VALUES ('rollback-order', 99, 'CANCELLED', 'CONFIRMED', 'CANCELLED', now(), 'SYSTEM', '', $1)`, cause)
+
+	return err != nil
+}
+
+var ordering0011Clean = rollbackCase{
+	name:    "ordering 0011 from 11 clean",
+	runbook: orderingRunbook,
+	marker:  ordering11Marker,
+	bc:      0,
+	latest:  11,
+	prepare: func(t *testing.T, e *rollbackEnv) {
+		plantInventoryCauses(t, e)
+		if e.count(t, ordering0011Typed) != 2 {
+			t.Fatal("the planted inventory causes are missing")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		// The rows stay (history is a record) but read as the unclassified request the older CHECK knows.
+		if n := e.count(t, ordering0011Typed); n != 0 {
+			t.Errorf("rows with an inventory cause after the rollback: %d", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.order_history WHERE order_id = 'rollback-order' AND cause = 'CANCELLATION_REQUESTED'`); n != 2 {
+			t.Errorf("rows mapped to CANCELLATION_REQUESTED = %d, want the 2 planted ones", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.order_history WHERE order_id = 'rollback-order'`); n != 3 {
+			t.Errorf("history rows = %d, want all 3 kept", n)
+		}
+		// The 0010 CHECK is back: the inventory causes are refused again, the older ones are not.
+		if !causeRefused(t, e, "STOCK_SHORTAGE") || !causeRefused(t, e, "RESERVATION_EXPIRED") {
+			t.Error("the CHECK still admits the inventory causes after the rollback")
+		}
+		if causeRefused(t, e, "CANCELLATION_REQUESTED") {
+			t.Error("the restored CHECK refuses a 0010 cause")
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 0); got != "11 dirty=false" || causeRefused(t, e, "STOCK_SHORTAGE") {
+			t.Errorf("after up: %s, STOCK_SHORTAGE refused=%v", got, causeRefused(t, e, "STOCK_SHORTAGE"))
+		}
+	},
+}
+
+// A dirty 0011: the file is one transaction, so a failure leaves the 0010 CHECK untouched and only the
+// version dirty. The failure is real: the constraint 0011 drops by name has been renamed by hand.
+var ordering0011Dirty = rollbackCase{
+	name:    "ordering 0011 from 11 dirty (CHECK unchanged)",
+	runbook: orderingRunbook,
+	marker:  ordering11Marker,
+	bc:      0,
+	latest:  11,
+	prepare: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil { // 11 → 10
+			t.Fatal(err)
+		}
+		e.exec(t, `ALTER TABLE ordering.order_history RENAME CONSTRAINT order_history_cause_check TO order_history_cause_check_renamed`)
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err == nil {
+			t.Fatal("0011 applied although the constraint it drops by name is missing")
+		}
+		if got := e.version(t, 0); got != "11 dirty=true" {
+			t.Fatalf("ordering = %s, want 11 dirty=true", got)
+		}
+		if !causeRefused(t, e, "STOCK_SHORTAGE") {
+			t.Fatal("the failed 0011 left a widened CHECK behind")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		if !causeRefused(t, e, "STOCK_SHORTAGE") || causeRefused(t, e, "RPC_REQUEST") {
+			t.Error("after the rollback the CHECK must refuse the inventory causes and keep the older ones")
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.order_history WHERE order_id = 'rollback-order'`); n != 1 {
+			t.Errorf("history rows = %d, want the seeded one kept", n)
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) {
+		e.exec(t, `ALTER TABLE ordering.order_history DROP CONSTRAINT IF EXISTS order_history_cause_check_renamed`)
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 0); got != "11 dirty=false" || causeRefused(t, e, "STOCK_SHORTAGE") {
+			t.Errorf("after up: %s, STOCK_SHORTAGE refused=%v", got, causeRefused(t, e, "STOCK_SHORTAGE"))
+		}
+	},
+}
+
 const payment0003Tables = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'payment' AND table_name IN ('mock_checkouts', 'mock_refunds')`
 
 // payment 0003 only adds the mock provider's two tables, so its rollback drops them and nothing else:
@@ -810,7 +922,7 @@ var payment0004Clean = rollbackCase{
 }
 
 func TestRollbackRunbooks(t *testing.T) {
-	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0010Clean, ordering0010Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0004Clean, payment0003Clean, payment0003DirtyNoTables, payment0003DirtyTableInTheWay} {
+	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0011Clean, ordering0011Dirty, ordering0010Clean, ordering0010Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0004Clean, payment0003Clean, payment0003DirtyNoTables, payment0003DirtyTableInTheWay} {
 		t.Run(tc.name, func(t *testing.T) { runRollbackCase(t, tc) })
 	}
 }

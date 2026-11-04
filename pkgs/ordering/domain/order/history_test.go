@@ -179,7 +179,7 @@ func TestCause_StringAndParse(t *testing.T) {
 		t.Errorf("unknown cause renders as %q", order.Cause(200).String())
 	}
 	// The free text of another BC is never a cause: anything not in the table is refused.
-	for _, bad := range []string{"", "rpc_request", "reservation r-1 expired after 24h", "STOCK_SHORTAGE"} {
+	for _, bad := range []string{"", "rpc_request", "reservation r-1 expired after 24h", "stock_shortage"} {
 		if _, err := order.ParseCause(bad); !errors.Is(err, order.ErrInvalidCause) {
 			t.Errorf("ParseCause(%q) err = %v, want ErrInvalidCause", bad, err)
 		}
