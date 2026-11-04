@@ -56,9 +56,8 @@ func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto
 		return nil, err
 	}
 
-	if in.Reason != "" {
-		ctx.Info("order cancelled", "order_id", in.OrderID, "reason", in.Reason)
-	}
+	// in.Reason is another BC's free text: it is not logged (only fixed classifications are).
+	ctx.Info("order cancelled", "order_id", in.OrderID)
 
 	return mapper.ToOrderOutput(o), nil
 }

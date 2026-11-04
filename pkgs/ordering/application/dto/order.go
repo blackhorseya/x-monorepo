@@ -44,7 +44,7 @@ type GetOrderInput struct {
 
 type CancelOrderInput struct {
 	OrderID string
-	// Reason is informational (logged), not a business rule input.
+	// Reason is upstream free text: informational only, never logged or stored (#427).
 	Reason string
 }
 
