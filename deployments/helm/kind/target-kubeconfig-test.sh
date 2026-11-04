@@ -16,7 +16,7 @@
 #   P1    target's own kubeconfig (same name, same cluster)   the task goes on: exit 0, the namespace is in target, a second run still passes
 #   P2    an empty kubeconfig file                   same as P1: the caller's kubeconfig is not needed at all (never `unset`:
 #                                              a regression would then fall back to ~/.kube/config, which can be a production cluster)
-#   M1    the alias, on a Taskfile with the KUBECONFIG prefix removed (KUBE_ENV: ':')   the judgement must turn RED: the namespace is in other
+#   M1    the alias, on a Taskfile whose namespace command has lost its --kubeconfig flags   the judgement must turn RED: the namespace is in other
 #   D1    `task helm-kind-down CLUSTER=<a name that does not exist>` with KUBECONFIG=<a caller file that holds the context kind-<that name>>
 #         the caller file is byte-for-byte what it was (kind delete only touches the kubeconfig it is given), and no cluster of this run is gone
 #   D2    the same on a Taskfile whose down has no --kubeconfig    the judgement must turn RED: the context is removed from the caller file
@@ -140,14 +140,14 @@ else bad "P2 rc=$rc"; tail -5 "$tmp/run.log"; fi
 
 # M1: the same probe on a Taskfile that does not point KUBECONFIG anywhere must be red. The judgement is
 # aimed_right, the very one A1 passed; the trap has to catch the mutant or the A1 above proves nothing.
-sed "s|^  KUBE_ENV: .*|  KUBE_ENV: ':'|" "$root/Taskfile.yml" > "$mutfile"
-if ! grep -q "^  KUBE_ENV: ':'" "$mutfile"; then
+sed '/create namespace/s| --kubeconfig "{{.KIND_KUBECONFIG}}"||g' "$root/Taskfile.yml" > "$mutfile"
+if cmp -s "$root/Taskfile.yml" "$mutfile"; then
   bad "M1 the mutant Taskfile was not made"
 else
   reset_ns
   run "$mutfile" "$tmp/alias.yaml" || true
-  if aimed_right; then bad "M1 the mutant (no KUBECONFIG prefix) still passes aimed_right: the probe cannot see the alias"
-  elif in_cluster "$tmp/other.yaml"; then ok "M1 mutant without the prefix: the namespace lands in other → red as it must"
+  if aimed_right; then bad "M1 the mutant (no --kubeconfig flags) still passes aimed_right: the probe cannot see the alias"
+  elif in_cluster "$tmp/other.yaml"; then ok "M1 mutant without the flags: the namespace lands in other → red as it must"
   else bad "M1 the mutant created the namespace nowhere: $(tail -3 "$tmp/run.log")"; fi
 fi
 reset_ns

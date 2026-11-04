@@ -30,11 +30,13 @@ vars:
   NS: x-monorepo          # the namespace the chart and its dependencies (Postgres, Redis, Dex) live in
   KEDA_NS: keda           # the namespace helm-kind-keda installs KEDA itself into
   # The kubeconfig the kind tasks use: written from `kind get kubeconfig --name <CLUSTER>`, so it holds that one cluster and
-  # nothing else. Every kubectl / helm / kind/*.sh the kind tasks run starts with KUBE_ENV, which points KUBECONFIG at it
-  # (in the command itself: a Task `env:` entry loses to the OS environment, #358). The user's own kubeconfig, its
-  # current-context and a context that is merely NAMED kind-<CLUSTER> (#437) are never consulted or changed.
+  # nothing else. Every kubectl / helm / kind create|delete command of these tasks carries `--kubeconfig "{{.KIND_KUBECONFIG}}"`
+  # itself (a flag beats whatever KUBECONFIG is, or becomes). The kind/*.sh scripts call kubectl / helm without it; they run
+  # behind KUBE_ENV, which sets KIND_KUBECONFIG and puts deployments/helm/kind/shim first on PATH, whose kubectl / helm add the flag
+  # to every call at any depth. The user's own kubeconfig, its current-context and a context merely NAMED kind-<CLUSTER> (#437)
+  # are never consulted or changed. deployments/helm/check-kubeconfig.py reads each command, target-exec-test.sh runs them.
   KIND_KUBECONFIG: '{{.BIN_DIR}}/kind/kubeconfig-{{.CLUSTER}}'
-  KUBE_ENV: 'test -s "{{.KIND_KUBECONFIG}}" || { echo "no kubeconfig for kind cluster {{.CLUSTER}}: run task helm-kind-up CLUSTER={{.CLUSTER}} first" >&2; exit 1; }; export KUBECONFIG="{{.KIND_KUBECONFIG}}"'
+  KUBE_ENV: 'test -s "{{.KIND_KUBECONFIG}}" || { echo "no kubeconfig for kind cluster {{.CLUSTER}}: run task helm-kind-up CLUSTER={{.CLUSTER}} first" >&2; exit 1; }; export KUBECONFIG="{{.KIND_KUBECONFIG}}" KIND_KUBECONFIG="{{.KIND_KUBECONFIG}}" PATH="{{.ROOT_DIR}}/deployments/helm/kind/shim:$PATH"'
   # Empty unless the value is a plain lowercase DNS-ish name: the tasks interpolate these into shell commands.
   KIND_TARGET_OK: '{{if and (regexMatch "^[a-z0-9][a-z0-9.-]*$" .CLUSTER) (regexMatch "^[a-z0-9][a-z0-9.-]*$" .NS) (regexMatch "^[a-z0-9][a-z0-9.-]*$" .KEDA_NS)}}ok{{end}}'
   # Config file `task run` / `task migrate` load (APP_CONFIG). Gitignored; seeded from
@@ -205,7 +207,7 @@ tasks:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
       - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
       - go install github.com/yannh/kubeconform/cmd/kubeconform@{{.KUBECONFORM_VERSION}}
-      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/check-kubeconfig.py deployments/helm/check-negative.sh deployments/helm/check-mutants.py deployments/helm/check-chart-bump.py deployments/helm/check-chart-bump.sh deployments/helm/check-chart-bump-test.py deployments/helm/kind/*.sh deployments/helm/kind/*.py
+      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/check-kubeconfig.py deployments/helm/kind/shim/kubectl deployments/helm/kind/shim/helm deployments/helm/check-negative.sh deployments/helm/check-mutants.py deployments/helm/check-chart-bump.py deployments/helm/check-chart-bump.sh deployments/helm/check-chart-bump-test.py deployments/helm/kind/*.sh deployments/helm/kind/*.py
 
   tools:hooks:
     desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
@@ -335,6 +337,8 @@ tasks:
       # every kubectl / helm / kind create|delete|export / kind/*.sh command of this file names its kubeconfig, found by parsing the YAML, so a new task cannot forget it (#437); its own cases first
       - deployments/helm/check-kubeconfig.py --self-test
       - deployments/helm/check-kubeconfig.py
+      # the same commands RUN under fake kubectl / helm / kind and hostile fake scripts (unset KUBECONFIG, subshell, xargs, bash -c): every call must arrive with the task's own --kubeconfig; nine mutants must be dangerous when run AND red in the gate (#437, PR #435 r2)
+      - deployments/helm/kind/target-exec-test.sh
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
@@ -347,7 +351,7 @@ tasks:
       - mkdir -p "{{.BIN_DIR}}/kind"
       - kind get clusters 2>/dev/null | grep -qx {{.CLUSTER}} || kind create cluster --name {{.CLUSTER}} --kubeconfig "{{.KIND_KUBECONFIG}}" --wait 2m
       - kind get kubeconfig --name {{.CLUSTER}} > "{{.KIND_KUBECONFIG}}.tmp" && chmod 600 "{{.KIND_KUBECONFIG}}.tmp" && mv "{{.KIND_KUBECONFIG}}.tmp" "{{.KIND_KUBECONFIG}}"
-      - '{{.KUBE_ENV}}; kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f - >/dev/null'
+      - 'kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" create namespace {{.NS}} --dry-run=client -o yaml | kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" apply -f - >/dev/null'
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, jq (brew install kind kubectl jq)
@@ -377,13 +381,13 @@ tasks:
       - '{{.DOCKER}} build -q -t localhost/x-monorepo/console:kind web/apps/console >/dev/null'
       - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/catalog-rpc:kind localhost/x-monorepo/payment-rpc:kind localhost/x-monorepo/payment-worker:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind localhost/x-monorepo/console:kind'
       - kind load image-archive --name {{.CLUSTER}} {{.BIN_DIR}}/kind/images.tar
-      - '{{.KUBE_ENV}}; kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null'
+      - 'kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null'
       # Dex dev IdP: same config file as compose (one source for issuer / client / accounts), and a
       # CoreDNS rewrite so dex.localtest.me resolves to it inside the cluster (docs/operations.md).
-      - '{{.KUBE_ENV}}; kubectl -n {{.NS}} create configmap dex --from-file=config.yaml=deployments/docker/dex/config.yaml --dry-run=client -o yaml | kubectl apply -f - >/dev/null'
-      - '{{.KUBE_ENV}}; kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/dex.yaml >/dev/null'
+      - 'kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} create configmap dex --from-file=config.yaml=deployments/docker/dex/config.yaml --dry-run=client -o yaml | kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" apply -f - >/dev/null'
+      - 'kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} apply -f {{.KIND_DIR}}/dex.yaml >/dev/null'
       - '{{.KUBE_ENV}}; {{.KIND_DIR}}/coredns-dex.sh {{.NS}}'
-      - '{{.KUBE_ENV}}; kubectl -n {{.NS}} rollout status deploy/postgres deploy/redis deploy/dex --timeout=2m'
+      - 'kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} rollout status deploy/postgres deploy/redis deploy/dex --timeout=2m'
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
@@ -397,10 +401,10 @@ tasks:
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
     cmds:
-      - '{{.KUBE_ENV}}; helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null'
+      - 'helm --kubeconfig "{{.KIND_KUBECONFIG}}" upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null'
       - '{{.KUBE_ENV}}; {{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
       # Second pass is an upgrade: pre-upgrade hook re-runs migrate (no-op), pods roll, release stays ready.
-      - '{{.KUBE_ENV}}; helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null'
+      - 'helm --kubeconfig "{{.KIND_KUBECONFIG}}" upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null'
       - '{{.KUBE_ENV}}; {{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
       # payment-rpc and payment-worker: serve / consume / an expire run, the webhook-only Ingress (ingress-nginx is installed there) with its rate limit, and orders reaching CONFIRMED with payment-rpc stopped. Restores the release.
       - '{{.KUBE_ENV}}; {{.KIND_DIR}}/payment.sh {{.NS}} x-monorepo'
@@ -412,7 +416,7 @@ tasks:
       - '{{.KUBE_ENV}}; {{.KIND_DIR}}/outage.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
       # (in a namespace of its own, guarded: the home database must come out unchanged) the upgrade from the chart that runs `payment-rpc consume` (git tag v0.63.3, its ghcr images) to this one (payment-worker): the consumer group payment-rpc.payment is the same, no cursor moves back, every OrderConfirmed is handled exactly once, whether published before, during or after. Restores the release.
       - '{{.KUBE_ENV}}; {{.KIND_DIR}}/payment-upgrade-guard.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
-      - '{{.KUBE_ENV}}; helm -n {{.NS}} status x-monorepo | head -5'
+      - 'helm --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} status x-monorepo | head -5'
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
@@ -428,10 +432,10 @@ tasks:
       KEDA_VERSION: 2.21.0
     cmds:
       - helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1 || true
-      - '{{.KUBE_ENV}}; helm upgrade --install keda kedacore/keda -n {{.KEDA_NS}} --create-namespace --version {{.KEDA_VERSION}} --wait --timeout 3m >/dev/null'
-      - '{{.KUBE_ENV}}; kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/monitoring.yaml >/dev/null'
-      - '{{.KUBE_ENV}}; kubectl -n {{.NS}} rollout status deploy/otel-collector deploy/prometheus --timeout=2m'
-      - '{{.KUBE_ENV}}; helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml -f {{.KIND_DIR}}/keda-values.yaml --wait --timeout 3m >/dev/null'
+      - 'helm --kubeconfig "{{.KIND_KUBECONFIG}}" upgrade --install keda kedacore/keda -n {{.KEDA_NS}} --create-namespace --version {{.KEDA_VERSION}} --wait --timeout 3m >/dev/null'
+      - 'kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} apply -f {{.KIND_DIR}}/monitoring.yaml >/dev/null'
+      - 'kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} rollout status deploy/otel-collector deploy/prometheus --timeout=2m'
+      - 'helm --kubeconfig "{{.KIND_KUBECONFIG}}" upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml -f {{.KIND_DIR}}/keda-values.yaml --wait --timeout 3m >/dev/null'
       - '{{.KUBE_ENV}}; {{.KIND_DIR}}/scale.sh {{.NS}} x-monorepo'
     preconditions:
       - sh: command -v k6 >/dev/null && command -v jq >/dev/null

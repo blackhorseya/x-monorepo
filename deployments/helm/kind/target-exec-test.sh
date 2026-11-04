@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# What kubeconfig does every cluster call of the kind tasks REALLY get, when the commands are run? (#437, PR #435 r2)
+#
+#   deployments/helm/kind/target-exec-test.sh     # needs task, python3 + PyYAML; `task helm-check` runs it. No cluster, no kind.
+#
+# check-kubeconfig.py reads the commands; this runs them. `task --dry` expands each kind task, and every expanded line that
+# names kubectl / helm / kind / a kind script is run with `sh -c`, from a scratch directory, with
+#   - fake kubectl / helm / kind first on PATH that log the KUBECONFIG they run with and their arguments,
+#   - fake deployments/helm/kind/*.sh that do what a hostile script does (`unset KUBECONFIG`, then kubectl from a subshell, from
+#     xargs and from `bash -c`), so what reaches the fake kubectl is what the real shim makes of it,
+#   - KUBECONFIG set to a decoy file the way a caller's would be (and HOME an empty directory, nothing reads ~/.kube/config).
+# Judged: every kubectl / helm call, and every `kind create|delete|export`, got exactly one `--kubeconfig` and it is the task's
+# own file (bin/kind/kubeconfig-<cluster>); none got the decoy, none ran with the variable unset and no flag.
+#
+# Then the same judgement on mutants of the real Taskfile, each made by one edit: the commands are run, and what the fake
+# kubectl receives must be WRONG (the mutant is dangerous), and check-kubeconfig.py --taskfile <mutant> must exit non-zero
+# (the gate sees it). A gate that lets a dangerous mutant through shows up here as a mutant that is "dangerous and not flagged".
+#
+#   a  KUBE_ENV; unset KUBECONFIG; kubectl …      b  KUBE_ENV; export KUBECONFIG=<decoy>; kubectl …
+#   c  kubectl …; KUBE_ENV  (the guard after the operation)    d  the flag on another command of the same line
+#   e  --kubeconfig=""      f  a kind script without KUBE_ENV    g  KUBE_ENV without the shim directory on PATH
+#   h  kind delete without --kubeconfig                          i  --kubeconfig naming the decoy
+#
+# TASKFILE=<file in the repo root> runs the baseline against another Taskfile (the mutants are always made from Taskfile.yml).
+set -uo pipefail
+cd "$(dirname "$0")/../../.."
+root=$PWD
+
+TASKFILE=${TASKFILE:-Taskfile.yml}
+cluster=probe ns=probe-ns
+fail=0 pass=0
+ok()  { pass=$((pass + 1)); echo "ok   $*"; }
+bad() { fail=$((fail + 1)); echo "FAIL $*"; }
+
+tmp="" mutfile=""
+tmp=$(mktemp -d) || exit 1
+mutfile="$root/Taskfile.mut-exec-$$.yml"
+cleanup() { local rc=$?; case $mutfile in "$root"/Taskfile.mut-exec-*.yml) rm -f "$mutfile" ;; esac
+            case $tmp in /*/tmp.*|/tmp/*|/var/folders/*) rm -rf "$tmp" ;; esac; exit "$rc"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
+
+mkdir -p "$tmp/fakebin" "$tmp/work/deployments/helm/kind" "$tmp/bin/kind" "$tmp/home"
+decoy="$tmp/decoy.yaml"; printf 'decoy\n' > "$decoy"
+expected="$tmp/bin/kind/kubeconfig-$cluster"
+calls="$tmp/calls"
+
+# fake tools: log, succeed. `kind get clusters` finds nothing (so kind create runs); `kind get kubeconfig` prints a file.
+for t in kubectl helm kind k6; do
+  cat > "$tmp/fakebin/$t" <<EOF
+#!/bin/sh
+printf '%s\t%s\t%s\n' "$t" "\${KUBECONFIG-UNSET}" "\$*" >> "$calls"
+case "\$1 \$2" in "get kubeconfig") echo "fake kubeconfig" ;; esac
+exit 0
+EOF
+  chmod +x "$tmp/fakebin/$t"
+done
+# fake kind scripts: log, then behave like a script that tries to lose the kubeconfig
+for f in "$root"/deployments/helm/kind/*.sh; do
+  n=$(basename "$f"); case $n in *-test.sh) continue ;; esac
+  cat > "$tmp/work/deployments/helm/kind/$n" <<EOF
+#!/usr/bin/env bash
+printf 'script\t%s\t%s\n' "\${KUBECONFIG-UNSET}" "$n" >> "$calls"
+unset KUBECONFIG
+kubectl get ns script-direct
+( kubectl get ns script-subshell )
+bash -c 'kubectl get ns script-bash-c'
+echo script-xargs | xargs kubectl get ns
+helm -n x status r
+exit 0
+EOF
+  chmod +x "$tmp/work/deployments/helm/kind/$n"
+done
+printf 'fake kubeconfig\n' > "$expected"
+
+strip() { sed 's/\x1b\[[0-9;]*m//g'; }
+
+# lines_of <taskfile> → the expanded cluster-touching lines of the five kind tasks, one per line, in $tmp/lines
+lines_of() {
+  : > "$tmp/lines"
+  local t
+  for t in helm-kind-cluster helm-kind-up helm-kind helm-kind-keda helm-kind-down; do
+    PATH="$tmp/fakebin:$PATH" task -t "$1" --dry "$t" "CLUSTER=$cluster" "NS=$ns" "BIN_DIR=$tmp/bin" 2>&1 | strip \
+      | sed 's/^task: \[[^]]*\] //' \
+      | grep -E '(^|[ ;|&])(kubectl|helm|kind) |deployments/helm/kind/[a-z-]+\.sh' | grep -v -E 'command -v|^kind (get kubeconfig|load)' >> "$tmp/lines" || true
+  done
+  sort -u "$tmp/lines" -o "$tmp/lines"
+}
+
+# run_lines → runs every line in $tmp/lines under the fakes; calls in $tmp/calls
+run_lines() {
+  : > "$calls"
+  local l
+  while IFS= read -r l; do
+    ( cd "$tmp/work" && env -i HOME="$tmp/home" PATH="$tmp/fakebin:/usr/bin:/bin" KUBECONFIG="$decoy" sh -c "$l" ) >/dev/null 2>&1 || true
+  done < "$tmp/lines"
+}
+
+# judge → prints a summary line; exit 0 when every call got exactly the task's own kubeconfig
+judge() {
+  python3 - "$calls" "$expected" "$decoy" <<'PY'
+import sys
+calls, expected, decoy = sys.argv[1:4]
+n = {"kubectl": 0, "helm": 0, "kind": 0, "script": 0}
+wrong = []
+for line in open(calls):
+    parts = line.rstrip("\n").split("\t", 2)
+    if len(parts) < 3:
+        continue
+    tool, env, args = parts
+    a = args.split()
+    if tool == "script":
+        n["script"] += 1
+        continue
+    if tool == "kind" and not (a[:1] and a[0] in ("create", "delete", "export")):
+        continue
+    if tool == "helm":  # the subcommands that never reach a cluster (check-kubeconfig.py's HELM_OFFLINE)
+        sub = next((w for j, w in enumerate(a) if not w.startswith("-") and (j == 0 or a[j - 1] != "--kubeconfig")), "")
+        if sub in ("lint", "template", "repo", "version", "dependency", "dep", "package", "show", "pull", "search", "create", "plugin", "completion", "env", "verify", "push", "registry", "help"):
+            continue
+    n[tool] += 1
+    flags = [a[i + 1] if i + 1 < len(a) else "" for i, w in enumerate(a) if w == "--kubeconfig"] + \
+            [w.split("=", 1)[1] for w in a if w.startswith("--kubeconfig=")]
+    if flags != [expected]:
+        wrong.append("%s env=%s flags=%r :: %s" % (tool, "decoy" if env == decoy else env, flags, args[:90]))
+print("kubectl=%d helm=%d kind=%d scripts=%d wrong=%d" % (n["kubectl"], n["helm"], n["kind"], n["script"], len(wrong)))
+for w in wrong[:4]:
+    print("  " + w)
+sys.exit(1 if wrong else 0)
+PY
+}
+count_of() { judge | sed -n '1s/.*\b'"$2"'=\([0-9]*\).*/\1/p'; }
+
+# ---- baseline: the real Taskfile
+lines_of "$TASKFILE"
+n_lines=$(grep -c . "$tmp/lines")
+run_lines
+sum=$(judge); rc=$?
+echo "$sum" | head -1
+if [ "$rc" = 0 ]; then ok "baseline: every kubectl / helm / kind create|delete call got the task's own kubeconfig, none the decoy"
+else bad "baseline: $sum"; fi
+# anchors: the run saw the calls it is there for (an empty log judges nothing)
+k=$(judge | sed -n '1s/.*kubectl=\([0-9]*\).*/\1/p'); h=$(judge | sed -n '1s/.*helm=\([0-9]*\).*/\1/p')
+ki=$(judge | sed -n '1s/.*kind=\([0-9]*\).*/\1/p'); sc=$(judge | sed -n '1s/.*scripts=\([0-9]*\).*/\1/p')
+if [ "${n_lines:-0}" -ge 20 ] && [ "${k:-0}" -ge 30 ] && [ "${h:-0}" -ge 8 ] && [ "${ki:-0}" -ge 2 ] && [ "${sc:-0}" -ge 8 ]; then
+  ok "anchors: $n_lines lines run, kubectl=$k helm=$h kind=$ki scripts=$sc (including their hostile unset / subshell / bash -c / xargs calls)"
+else bad "anchors too low: lines=$n_lines kubectl=$k helm=$h kind=$ki scripts=$sc"; fi
+
+# ---- mutants: made from the real Taskfile.yml by one edit each
+mutate() {  # mutate <name> <python expression on s (the file text) returning the new text>
+  python3 - "$root/Taskfile.yml" "$mutfile" "$decoy" "$1" <<'PY'
+import sys
+src, dst, decoy, name = sys.argv[1:5]
+s = open(src).read()
+F = '--kubeconfig "{{.KIND_KUBECONFIG}}"'
+DEPS = "kubectl %s -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml" % F
+SMOKE = "'{{.KUBE_ENV}}; {{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'"
+def swap(old, new, count=1):
+    global s
+    if old not in s:
+        sys.exit("mutant %s: the text to edit is gone: %r" % (name, old[:60]))
+    s = s.replace(old, new, count)
+GUARD = 'test -s "{{.KIND_KUBECONFIG}}" || exit 1; export KUBECONFIG="{{.KIND_KUBECONFIG}}"'  # what KUBE_ENV was in r2
+if name == "a":
+    swap(DEPS, GUARD + "; unset KUBECONFIG; kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml")
+elif name == "b":
+    swap(DEPS, GUARD + "; export KUBECONFIG=" + decoy + "; kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml")
+elif name == "c":
+    swap(DEPS, "kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml; " + GUARD)
+elif name == "d":
+    swap(DEPS, "kubectl %s get ns >/dev/null; kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml" % F)
+elif name == "e":
+    swap(DEPS, 'kubectl --kubeconfig="" -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml')
+elif name == "f":
+    swap(SMOKE, "'{{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'")
+elif name == "g":
+    import re
+    s = re.sub(r' PATH="[^"]*/deployments/helm/kind/shim:\$PATH"', "", s, count=1)
+    if "kind/shim" in s.split("KUBE_ENV:")[1].split("\n")[0]:
+        sys.exit("mutant g: the shim is still in KUBE_ENV")
+elif name == "h":
+    swap('kind delete cluster --name {{.CLUSTER}} %s' % F, 'kind delete cluster --name {{.CLUSTER}}')
+elif name == "i":
+    swap(DEPS, "kubectl --kubeconfig " + decoy + " -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml")
+else:
+    sys.exit("no mutant " + name)
+open(dst, "w").write(s)
+PY
+}
+
+for m in a b c d e f g h i; do
+  if ! mutate "$m" 2>"$tmp/mut.err"; then bad "mutant $m was not made: $(cat "$tmp/mut.err")"; continue; fi
+  python3 "$root/deployments/helm/check-kubeconfig.py" --taskfile "$mutfile" >"$tmp/gate.out" 2>&1; gate_rc=$?
+  lines_of "$mutfile"; run_lines
+  judge >"$tmp/judge.out" 2>&1; judge_rc=$?
+  case $m in
+    a|b|c|d|e) want='apply -f deployments/helm/kind/deps.yaml' ;;
+    i) want='decoy.yaml' ;;
+    f|g) want='script-' ;;
+    h) want='delete cluster --name' ;;
+  esac
+  if [ "$judge_rc" != 0 ] && ! sed -n 2p "$tmp/judge.out" | grep -q -F -e "$want"; then
+    bad "mutant $m: the first wrong call is not the edited one (wanted [$want]): $(sed -n 2p "$tmp/judge.out")"
+  elif [ "$gate_rc" != 0 ] && [ "$judge_rc" != 0 ]; then
+    ok "mutant $m: run → $(sed -n 2p "$tmp/judge.out" | sed 's/^ *//' | cut -c1-120) | gate → $(sed -n 2p "$tmp/gate.out" | sed 's/^ *//' | cut -c1-80)"
+  elif [ "$gate_rc" = 0 ] && [ "$judge_rc" != 0 ]; then bad "mutant $m is dangerous when run and the gate lets it through: $(sed -n 2p "$tmp/judge.out")"
+  elif [ "$gate_rc" != 0 ] && [ "$judge_rc" = 0 ]; then bad "mutant $m: the gate is red but running it shows nothing wrong (the mutant is not the danger it was made to be)"
+  else bad "mutant $m: neither the gate nor the run sees it"; fi
+done
+
+echo "kind exec: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

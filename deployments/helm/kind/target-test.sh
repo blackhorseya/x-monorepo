@@ -66,9 +66,17 @@ values_of() {
       { grep -oE -- '--name [^ ]+' "$2" | sed 's/^--name //'
         grep -oE -- 'grep -qx [^ ]+' "$2" | sed 's/^grep -qx //'; } ;;
     kubeconfig)
-      sed 's/^task: \[[^]]*\] //' "$2" | grep -E '(^|[;| ])kubectl |helm (upgrade|-n) |deployments/helm/kind/[a-z-]+\.sh ' | while IFS= read -r l; do
+      sed 's/^task: \[[^]]*\] //' "$2" | grep -E '(^|[;| ])kubectl |(^|[;| ])helm .*(upgrade|status) |deployments/helm/kind/[a-z-]+\.sh ' | while IFS= read -r l; do
         case $l in
-          *'export KUBECONFIG="'*) printf '%s\n' "$l" | grep -oE -- 'kubeconfig-[a-z0-9.-]+"' | head -1 | sed 's/^kubeconfig-//; s/"$//' ;;
+          *deployments/helm/kind/*.sh\ *)  # a script: behind KUBE_ENV, which exports the file and puts the shims on PATH
+            case $l in
+              *'export KUBECONFIG="'*'/deployments/helm/kind/shim:$PATH"'*) printf '%s\n' "$l" | grep -oE -- 'KIND_KUBECONFIG="[^"]*kubeconfig-[a-z0-9.-]+"' | head -1 | sed 's/.*kubeconfig-//; s/"$//' ;;
+              *) echo MISSING ;;
+            esac ;;
+          *'--kubeconfig "'*)  # kubectl / helm: every one of them carries the flag (the count of flags must equal the count of tools)
+            f=$(printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//')
+            t=$(printf '%s\n' "$l" | grep -oE -- '(^|[;| ])(kubectl|helm) ' | wc -l | tr -d ' ')
+            [ "$(printf '%s\n' "$f" | grep -c .)" = "$t" ] && printf '%s\n' "$f" | sort -u | head -1 || echo MISSING ;;
           *) echo MISSING ;;
         esac
       done ;;
