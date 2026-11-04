@@ -71,13 +71,15 @@ def start_postgres():
     raise SystemExit("upgrade-failure-test: the Postgres container never became ready")
 
 
-def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_label=None):
-    """Run `script` (payment-upgrade.sh or a mutant) behind the guard and return the problems found.
+def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_label=None, inherited=None):
+    """Run `script` (payment-upgrade.sh or a mutant, in a directory of its own next to the real guard, checker and deps.yaml) behind
+    the guard and return the problems found. `inherited`: environment variables a parent exported (internal state of the script).
     mode: "install" (the previous chart does not install) or "upgrade" (an order cannot be placed during the upgrade)."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-test-"))
-    bindir, nsdir = root / "bin", root / "namespaces"
+    bindir, nsdir, reldir = root / "bin", root / "namespaces", root / "releases"
     bindir.mkdir()
     nsdir.mkdir()
+    reldir.mkdir()
     events = root / "events"
     # The home database holds something that is not the drill's. Planted fresh for every run.
     for sql in ("DROP SCHEMA IF EXISTS unrelated CASCADE", "DROP TABLE IF EXISTS public.drill_mutant",
@@ -85,10 +87,18 @@ def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=
         assert psql(pg, sql).returncode == 0, sql
     if preexisting_label is not None:  # a namespace that is already there under the very name this run would take
         (nsdir / f"x-monorepo-upgrade-{RUN_ID}").write_text(preexisting_label)
+        (reldir / f"x-monorepo-upgrade-{RUN_ID}").write_text("someone else's release")
 
+    kdir = root / "kind"
+    kdir.mkdir()
+    shutil.copy(guard_file, kdir / "payment-upgrade-guard.sh")
+    shutil.copy(check_file, kdir / "postgres-url-check.py")
+    shutil.copy(guard_file.parent / "deps.yaml", kdir / "deps.yaml")
+    shutil.copy(script, kdir / "payment-upgrade.sh")
     (bindir / "helm").write_text(f'''#!/bin/bash
 if [ "$1" = template ]; then exec {helm_real} "$@"; fi
 printf 'helm %s\\n' "$*" >> "$EVENTS"
+if [ "$1" = uninstall ]; then rm -f "$RELDIR/$(sed -n 's/.* -n \\([^ ]*\\).*/\\1/p' <<<"$*")"; exit 0; fi
 [ "$1" = upgrade ] || exit 0
 n=$(grep -c '^helm upgrade' "$EVENTS")
 if [ "$MODE" = install ] && [ "$n" = 1 ]; then exit 1; fi  # the previous chart does not install
@@ -161,12 +171,12 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
 
     env = os.environ.copy()
     env.update(PATH=f"{bindir}:{env['PATH']}", EVENTS=str(events), UPGRADE_STARTED=str(root / "upgrade_started"),
-               ORDERS=str(root / "orders"), MODE=mode, PGC=pg, NSDIR=str(nsdir), HOME_NS=HOME_NS,
-               POSTGRES_URL_CHECK=str(check_file), UPGRADE_SCRIPT=str(script),
+               ORDERS=str(root / "orders"), MODE=mode, PGC=pg, NSDIR=str(nsdir), RELDIR=str(reldir), HOME_NS=HOME_NS,
                CREATE_REPLY_FAILS="1" if create_reply_fails else "")
+    env.update(inherited or {})
     if preexisting_label is not None:
         env["UPGRADE_RUN_ID"] = RUN_ID  # the caller may name the run, so a label made of the run id proves nothing
-    cmd = ["bash", str(guard_file), HOME_NS, "rel", "deployments/helm/x-monorepo", str(values_file), str(flow or flow_file)]
+    cmd = ["bash", str(kdir / "payment-upgrade-guard.sh"), HOME_NS, "rel", "deployments/helm/x-monorepo", str(values_file), str(flow or flow_file)]
     out = open(root / "out", "wb")
     p = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     problems = []
@@ -211,6 +221,10 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
             if deletes or upgrades or left != [theirs] or (nsdir / theirs).read_text() != preexisting_label:
                 problems.append(f"a namespace that was already there must be left alone and nothing installed: deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
             touched = [x for x in lines if f" -n {theirs} " in x or (x.startswith("helm ") and theirs in x)]
+            if not (reldir / theirs).exists():
+                problems.append("the release in the namespace that was already there was uninstalled")
+            if any(x.startswith("helm uninstall") for x in lines):
+                problems.append("helm uninstall ran although the namespace was not this run's")
             if touched:
                 problems.append(f"something was run against the namespace that was already there: {touched}")
         else:
@@ -318,6 +332,9 @@ def main():
                           'if kubectl get namespace "$ns" -o name >/dev/null 2>&1; then', "if false; then",
                           "token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n')", "token=$run_id",
                           'grep -q AlreadyExists <<<"$err" || ', "")
+    # internal state taken from the environment (the init line removed): what a parent exported steers cleanup()
+    inherits = mutant("inherits-state", 'ns_created="" token="" helm_pid="" soft="" pfs=""',
+                      'ns_created="${ns_created:-}" token="${token:-}" helm_pid="${helm_pid:-}" soft="${soft:-}" pfs=""')
     no_check = mutant("no-check", "assert_connections() {", "assert_connections() { return 0;")
 
     def report(label, problems):
@@ -350,6 +367,14 @@ def main():
             must_catch(f"namespace already exists, {label_name}, run-id-label", run_scenario(run_id_label, "install", pg, preexisting_label=label),
                        "already exists was not refused", "must be left alone", "something was run against") if label_name == "same label" else None
 
+        # r4: a parent that exported the script's internal state (ns_created, token, ns, release...) next to a namespace of the same
+        # name and label, with a release in it, must find both intact and no helm uninstall / kubectl delete at all
+        state = {"ns_created": "1", "token": "inherited-token", "release": "x-monorepo-upg-4242", "ns": f"x-monorepo-upgrade-{RUN_ID}",
+                 "helm_pid": "1", "soft": "1", "run_label": "x-monorepo-upgrade-drill"}
+        report("inherited internal state", run_scenario(script_file, "install", pg, preexisting_label="inherited-token", inherited=state))
+        must_catch("inherited internal state, inherits-state", run_scenario(inherits, "install", pg, preexisting_label="inherited-token", inherited=state),
+                   "left alone", "uninstall", "something was run against", "release in the namespace")
+
         for name, override in REFUSALS.items():
             flow = tmp / ("flow-" + re.sub(r"\W", "_", name) + ".yaml")
             flow.write_text(yaml.safe_dump(merge(yaml.safe_load(flow_file.read_text()), override)))
@@ -364,7 +389,7 @@ def main():
         sys.exit(1)
     print("upgrade-failure-test: ok (home database unchanged on every path, the drill's namespace created and deleted, "
           f"{len(REFUSALS)} Postgres/Redis-source inputs refused up front, lost create reply cleaned up, an existing namespace (same or other label) left alone, "
-          "background helm joined before the delete, migrate log printed, 4 mutants caught)")
+          "background helm joined before the delete, migrate log printed, inherited internal state ignored, 5 mutants caught)")
 
 
 main()

@@ -7,11 +7,13 @@
 # taking a snapshot before and one after (every schema, every table with its exact row count) and requiring that it is not
 # empty and did not change. It writes nothing, there or anywhere (every statement runs with default_transaction_read_only on).
 # The exit code is the drill's own, or 1 when the snapshot is empty or differs.
-# UPGRADE_SCRIPT (default: payment-upgrade.sh next to this file) lets the test run a mutated copy of the drill.
+# It reads no state from the environment (the drill it runs is the payment-upgrade.sh next to this file, nothing else) beyond
+# what the tools read (PATH, KUBECONFIG, ...).
 set -uo pipefail
+before="" after="" rc=0
 home=$1
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-inner=${UPGRADE_SCRIPT:-$here/payment-upgrade.sh}
+inner=$here/payment-upgrade.sh
 q() { kubectl -n "$home" exec deploy/postgres -- psql -U app -d app -tAq -c "SET default_transaction_read_only = on; $1"; }
 
 snapshot() {

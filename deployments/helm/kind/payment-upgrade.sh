@@ -31,9 +31,17 @@
 # before the switch (A, whose checkout was started by the old pods) and one paid after (C) both reach COMPLETED.
 # Needs kubectl, helm, curl, jq, git, tar, python3 with PyYAML.
 set -euo pipefail
+# Internal state is never taken from the environment: cleanup() decides what to delete from ns_created / token, so a parent
+# that exported them (or a stale export in a shell) must not be able to make it delete a namespace this run did not create.
+# They start empty here, before the trap exists. The environment variables this script reads are, all of them:
+#   UPGRADE_RUN_ID (digits-digits; names the namespace, proves nothing about ownership), PAYMENT_UPGRADE_FROM_TAG,
+#   PAYMENT_UPGRADE_FROM_IMAGE, UPGRADE_RPC_PORT, UPGRADE_SERVE_PORT,
+# plus what the tools themselves read (PATH, KUBECONFIG, HOME, git / helm / kubectl settings).
+ns_created="" token="" helm_pid="" soft="" pfs="" body="" res=""
 chart=$3 values=$4 flow=$5 # $1 and $2 (the home namespace and release) are deliberately not used
 kind_dir=$(cd "$(dirname "$0")" && pwd)
 run_id=${UPGRADE_RUN_ID:-$(date +%s)-$RANDOM}
+[[ $run_id =~ ^[0-9]+-[0-9]+$ ]] || { echo "payment-upgrade: refused: UPGRADE_RUN_ID must be <digits>-<digits>" >&2; exit 1; }
 ns="x-monorepo-upgrade-$run_id"
 release="x-monorepo-upg-${run_id##*-}" # contains the chart name, so the Jobs are <release>-migrate, as in any release named x-monorepo*
 run_label=x-monorepo-upgrade-drill
@@ -41,10 +49,8 @@ from_tag=${PAYMENT_UPGRADE_FROM_TAG:-v0.63.3}
 from_image=${PAYMENT_UPGRADE_FROM_IMAGE:-0.63.3}
 rport=${UPGRADE_RPC_PORT:-18096} sport=${UPGRADE_SERVE_PORT:-18097}
 api="http://127.0.0.1:$rport/api" serve="http://127.0.0.1:$sport"
-pfs=""
-body=""
 tmp=$(mktemp -d)
-url_check=${POSTGRES_URL_CHECK:-$kind_dir/postgres-url-check.py} # (the test points this at the real one when it runs a copy of this script)
+url_check=$kind_dir/postgres-url-check.py
 
 fail() {
   echo "payment-upgrade: $*" >&2
@@ -64,14 +70,13 @@ cleanup() {
   if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
-  # The one namespace this run created, and only it: ns_created is set before the create is sent (a create whose answer was
-  # lost still gets cleaned up), and this call's token is checked before the delete (a namespace that was already there under
-  # this name cannot carry it and is left alone).
-  if [ -n "${ns_created:-}" ]; then
+  # Ownership first, then anything destructive: only a namespace that carries the token THIS call generated (ns_created and
+  # token start empty and are set only after the pre-existence check passed) is touched at all; a namespace that was already
+  # there under this name cannot carry it, so neither its release nor the namespace is uninstalled or deleted. A create whose
+  # answer was lost is still ours: it carries the token.
+  if [ -n "$ns_created" ] && [ -n "$token" ] && [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" = "namespace/$ns" ]; then
     helm uninstall "$release" -n "$ns" >/dev/null 2>&1 || true
-    if [ -n "${token:-}" ] && [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" = "namespace/$ns" ]; then
-      kubectl delete namespace "$ns" --timeout=3m >/dev/null 2>&1 || echo "payment-upgrade: could not delete the namespace $ns it created" >&2
-    fi
+    kubectl delete namespace "$ns" --timeout=3m >/dev/null 2>&1 || echo "payment-upgrade: could not delete the namespace $ns it created" >&2
   fi
   return "$rc"
 }
