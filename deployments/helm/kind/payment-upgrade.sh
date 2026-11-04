@@ -31,6 +31,7 @@ api="http://127.0.0.1:$rport/api" serve="http://127.0.0.1:$sport"
 pfs=""
 body=""
 tmp=$(mktemp -d)
+url_check=${POSTGRES_URL_CHECK:-$(cd "$(dirname "$0")" && pwd)/postgres-url-check.py} # (the test points this at the real one when it runs a copy of this script)
 dbname="" # the database this run creates for itself (stage 1); the release's own database is never modified
 # adb talks to the release's own database ("app") and is used for exactly two statements: CREATE DATABASE and
 # DROP DATABASE of $dbname. Everything else goes through db(), on $dbname.
@@ -52,7 +53,8 @@ restore() {
   if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
-  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true
+  # (a run refused before it changed anything has nothing to restore)
+  [ -z "${changed:-}" ] || helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true
   # The release is back on its own database. The one database this script made is the only thing it ever drops;
   # FORCE ends the connections of pods that were still on it. Nothing in `app` (or any other database) is touched.
   if [ -n "${dbname:-}" ] && [ "$dbname" != app ]; then
@@ -139,8 +141,8 @@ git archive "$from_tag" deployments/helm/x-monorepo | tar -x -C "$tmp/old"
 old_chart="$tmp/old/deployments/helm/x-monorepo"
 old_args=(--set "image.registry=ghcr.io/blackhorseya/x-monorepo" --set "image.tag=$from_image" --set "image.pullPolicy=IfNotPresent")
 # the premise: that chart really runs `payment-rpc consume`, and this one does not
-old_render=$(helm template t "$old_chart" -f "$values" -f "$flow" "${old_args[@]}")
-new_render=$(helm template t "$chart" -f "$values" -f "$flow")
+old_render=$(helm template t "$old_chart" -f "$values" -f "$flow" "${old_args[@]}") || fail "refused: the previous chart does not render with these values"
+new_render=$(helm template t "$chart" -f "$values" -f "$flow") || fail "refused: this chart does not render with these values"
 grep -q -- '"consume"' <<<"$old_render" || fail "the chart at $from_tag does not run 'payment-rpc consume': nothing to upgrade from"
 if grep -q -- '"consume"' <<<"$new_render"; then fail "this chart still runs a 'consume' argument"; fi
 old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" -f "$flow" "${old_args[@]}" "$@" --wait --timeout 6m >/dev/null || fail "the previous chart did not become ready"; forwards; }
@@ -154,11 +156,27 @@ old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" 
 # exactly what that release knows; stage 4 upgrades it to this tree, which is the upgrade path this script is about. No
 # migration number appears here. The release's own database is not read or changed, and `kind` clusters are reused
 # between runs, so it may hold things that are not this test's: the only DROP this script runs is of $dbname, in restore().
-grep -qxF '  postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable' "$values" || fail "$values does not give secrets.postgresUrl as postgres://app:app@postgres:5432/app?sslmode=disable: cannot derive the run's database URL from it"
-dbname="upgrade_$(date +%s)_$RANDOM"
-pgurl="postgres://app:app@postgres:5432/$dbname?sslmode=disable"
-adb "CREATE DATABASE \"$dbname\"" >/dev/null || { dbname=""; fail "could not create the database for this run"; }
+dbname_next="upgrade_$(date +%s)_$RANDOM"
+pgurl="postgres://app:app@postgres:5432/$dbname_next?sslmode=disable"
 old_args+=(--set "secrets.postgresUrl=$pgurl")
+# The inputs that decide which database a workload uses are not a list this script can keep up with (secrets.postgresUrl,
+# secrets.existingSecret, secrets.catalogRpc.existingSecret, secrets.paymentRpc.existingSecret, every extraEnv, a
+# postgres.url in config, whatever the next chart version adds), so it checks the RENDERED chart, with exactly the
+# arguments of each install below: every container of every workload and hook must resolve to $pgurl (env, envFrom and
+# secretKeyRef followed through the Secrets of the same render); an existingSecret or any other source it cannot resolve
+# is refused. Fail closed, before anything is created or installed.
+assert_postgres_source() { # <chart> <helm template args...>
+  local c=$1; shift
+  helm template t "$c" "$@" | python3 "$url_check" "$pgurl" >&2 || fail "refused: with these values a workload would not use the run's own database ($pgurl): $c"
+}
+assert_postgres_source "$old_chart" -f "$values" -f "$flow" "${old_args[@]}"
+assert_postgres_source "$chart" -f "$values" -f "$flow" --set "secrets.postgresUrl=$pgurl"
+# Only now is anything created. dbname is set BEFORE the CREATE is sent: if it commits and the answer is lost, restore()
+# still knows the name (DROP ... IF EXISTS is a no-op when it was never created).
+dbname=$dbname_next
+changed=1
+adb "CREATE DATABASE \"$dbname\"" >/dev/null || echo "payment-upgrade: CREATE DATABASE $dbname did not answer cleanly; checking whether it exists" >&2
+[ "$(adb "SELECT count(*) FROM pg_database WHERE datname = '$dbname'")" = 1 ] || fail "the database $dbname for this run does not exist"
 old_up
 oldimg=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.spec.template.spec.containers[0].image}')
 case $oldimg in */payment-rpc:*) ;; *) fail "before the upgrade the consumer runs '$oldimg', want the payment-rpc image" ;; esac

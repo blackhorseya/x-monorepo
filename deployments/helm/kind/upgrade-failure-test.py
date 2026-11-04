@@ -43,11 +43,14 @@ import tempfile
 import time
 import uuid
 
+import yaml
+
 REPO = pathlib.Path(__file__).resolve().parents[3]
 # the values the real helm-kind passes: the chart must render with them (helm template is real)
 values_file = REPO / "deployments/helm/kind/values.yaml"
 flow_file = REPO / "deployments/helm/kind/payment-flow-values.yaml"
 script_file = REPO / "deployments/helm/kind/payment-upgrade.sh"
+check_file = REPO / "deployments/helm/kind/postgres-url-check.py"
 guard_file = REPO / "deployments/helm/kind/payment-upgrade-guard.sh"  # what `task helm-kind` runs
 helm_real = shutil.which("helm")
 assert helm_real, "helm is needed (helm template is real)"
@@ -76,13 +79,16 @@ def start_postgres():
     raise SystemExit("upgrade-failure-test: the Postgres container never became ready")
 
 
-def run_scenario(script, mode, pg):
+def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False):
     """Run `script` (a copy of payment-upgrade.sh or a mutant) in `mode` ("install": the previous chart does not
     install; "upgrade": an order cannot be placed during the upgrade) and return the list of problems found."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-test-"))
     bindir = root / "bin"
     bindir.mkdir()
     events = root / "events"
+    # A mutant that loses the name leaves its database behind: clear it, so one scenario cannot blame the next.
+    for d in psql(pg, "app", "SELECT datname FROM pg_database WHERE datname LIKE 'upgrade\\_%'").stdout.split():
+        psql(pg, "app", f'DROP DATABASE IF EXISTS "{d}" WITH (FORCE)')
     # The release's own database holds something that is not this script's. Planted fresh for every run.
     for sql in ("DROP SCHEMA IF EXISTS unrelated CASCADE", "CREATE SCHEMA unrelated",
                 "CREATE TABLE unrelated.keep (v text)", f"INSERT INTO unrelated.keep VALUES ('{SENTINEL}')"):
@@ -115,6 +121,10 @@ case "$*" in
       # a statement for the release's own database: logged, and run for real
       printf '%s\\n' "$q" >> "$APPDB_LOG"
       {rt} exec "$PGC" psql -U app -d app -tAq -c "$q"
+      rc=$?
+      # the CREATE commits, then the answer is lost
+      case "$q" in "CREATE DATABASE"*) [ -z "$CREATE_REPLY_FAILS" ] || exit 1;; esac
+      exit $rc
     else
       case "$q" in
         *"consumer_group, offset_acked"*)
@@ -149,9 +159,10 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
     env = os.environ.copy()
     env.update(PATH=f"{bindir}:{env['PATH']}", EVENTS=str(events), UPGRADE_STARTED=str(root / "upgrade_started"),
                ORDERS=str(root / "orders"), RELEASE_STATE=str(root / "release_state"), MODE=mode, PGC=pg,
-               APPDB_LOG=str(root / "appdb.log"))
+               APPDB_LOG=str(root / "appdb.log"), POSTGRES_URL_CHECK=str(check_file),
+               CREATE_REPLY_FAILS="1" if create_reply_fails else "")
     env["UPGRADE_SCRIPT"] = str(script)  # the guard runs this copy of the drill
-    cmd = ["bash", str(guard_file), "ns", "rel", "deployments/helm/x-monorepo", str(values_file), str(flow_file)]
+    cmd = ["bash", str(guard_file), "ns", "rel", "deployments/helm/x-monorepo", str(values_file), str(flow or flow_file)]
     out = open(root / "out", "wb")
     p = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     problems = []
@@ -165,46 +176,55 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
         upgrades = [i for i, x in enumerate(lines) if x.startswith("helm upgrade")]
         done = [i for i, x in enumerate(lines) if x == "HELM3_DONE"]
         state = (root / "release_state").read_text().strip() if (root / "release_state").exists() else "none"
-        if rc in (0, None):
-            problems.append(f"exit code {rc}: a failed run must exit non-zero (the exit code is kept through the trap)")
-        if state != "RESTORED":
-            problems.append(f"the release ended in state {state}, want RESTORED (the restore must be the last change)")
-        if mode == "upgrade":
-            if not (root / "upgrade_started").exists():
-                problems.append("the premise failed: the background upgrade never started, so nothing was tested")
-            if len(upgrades) < 4:
-                problems.append(f"{len(upgrades)} helm upgrades ran, want the old chart (x2), the background one and the restore (4)")
-            elif not done:
-                problems.append("the background helm upgrade never finished before the script exited")
-            elif done[0] > upgrades[-1]:
-                problems.append("the restore ran BEFORE the background helm upgrade finished: the upgrade overwrote it afterwards")
-        else:
-            if len(upgrades) != 2:
-                problems.append(f"{len(upgrades)} helm upgrades ran, want the failed previous chart and the restore (2)")
-        # a failure must say why the migrate hook failed: the Job's log, by its job-name label
-        if not any(x.startswith("kubectl") and " logs " in x and "job-name=rel-migrate" in x for x in lines):
-            problems.append("the failure did not print the logs of the rel-migrate Job")
-
-        # ---- the release's own database is not touched (#427, #429) ----
+        outtxt = (root / "out").read_text(errors="replace")
         # the guard's own statements (its sentinel schema, its leftover-database query) are not the drill's
         stmts = [x for x in (root / "appdb.log").read_text().splitlines()
-                 if x.strip() and "upgrade_guard_sentinel" not in x and "FROM pg_database" not in x]
-        outtxt = (root / "out").read_text(errors="replace")
+                 if x.strip() and "upgrade_guard_sentinel" not in x and "FROM pg_database" not in x
+                 and "pg_database WHERE datname" not in x]
         if "guard: sentinel intact, no per-run database left" not in outtxt:
             problems.append("the guard (what task helm-kind runs) did not report the sentinel intact and no database left behind")
+        if rc in (0, None):
+            problems.append(f"exit code {rc}: a failed run must exit non-zero (the exit code is kept through the trap)")
         create = [x for x in stmts if re.fullmatch(r'CREATE DATABASE "upgrade_[0-9]+_[0-9]+"', x)]
         drop = [x for x in stmts if re.fullmatch(r'DROP DATABASE IF EXISTS "upgrade_[0-9]+_[0-9]+" WITH \(FORCE\)', x)]
-        other = [x for x in stmts if x not in create and x not in drop]
+        exists = [x for x in stmts if re.fullmatch(r"SELECT count\(\*\) FROM pg_database WHERE datname = 'upgrade_[0-9]+_[0-9]+'", x)]
+        other = [x for x in stmts if x not in create and x not in drop and x not in exists]
         if other:
             problems.append(f"statements sent to the release's own database besides its CREATE/DROP DATABASE: {other}")
-        if len(create) != 1 or len(drop) != 1:
-            problems.append(f"want exactly one CREATE DATABASE and one DROP DATABASE of the per-run database, got {create} / {drop}")
-        elif re.search(r'"(.*)"', create[0]).group(1) != re.search(r'"(.*)"', drop[0]).group(1):
-            problems.append("the database that was created is not the one that was dropped")
-        first_up = lines.index(next(x for x in lines if x.startswith("helm upgrade"))) if upgrades else None
-        created_at = next((i for i, x in enumerate(lines) if " exec deploy/postgres " in x and "CREATE DATABASE" in x), None)
-        if created_at is None or (first_up is not None and created_at > first_up):
-            problems.append("the per-run database was not created before the previous chart was installed")
+        if refused:
+            # refused up front: nothing created, nothing dropped, nothing installed, nothing restored
+            if create or drop:
+                problems.append(f"a refused run must not CREATE or DROP any database, got {create} / {drop}")
+            if upgrades:
+                problems.append(f"a refused run must not install anything, but helm upgrade ran {len(upgrades)} time(s)")
+            if "payment-upgrade: refused" not in outtxt:
+                problems.append("the run was not refused up front (no 'payment-upgrade: refused' in its output)")
+        else:
+            if state != "RESTORED":
+                problems.append(f"the release ended in state {state}, want RESTORED (the restore must be the last change)")
+            if mode == "upgrade":
+                if not (root / "upgrade_started").exists():
+                    problems.append("the premise failed: the background upgrade never started, so nothing was tested")
+                if len(upgrades) < 4:
+                    problems.append(f"{len(upgrades)} helm upgrades ran, want the old chart (x2), the background one and the restore (4)")
+                elif not done:
+                    problems.append("the background helm upgrade never finished before the script exited")
+                elif done[0] > upgrades[-1]:
+                    problems.append("the restore ran BEFORE the background helm upgrade finished: the upgrade overwrote it afterwards")
+            else:
+                if len(upgrades) != 2:
+                    problems.append(f"{len(upgrades)} helm upgrades ran, want the failed previous chart and the restore (2)")
+            # a failure must say why the migrate hook failed: the Job's log, by its job-name label
+            if not any(x.startswith("kubectl") and " logs " in x and "job-name=rel-migrate" in x for x in lines):
+                problems.append("the failure did not print the logs of the rel-migrate Job")
+            if len(create) != 1 or len(drop) != 1:
+                problems.append(f"want exactly one CREATE DATABASE and one DROP DATABASE of the per-run database, got {create} / {drop}")
+            elif re.search(r'"(.*)"', create[0]).group(1) != re.search(r'"(.*)"', drop[0]).group(1):
+                problems.append("the database that was created is not the one that was dropped")
+            first_up = lines.index(next(x for x in lines if x.startswith("helm upgrade"))) if upgrades else None
+            created_at = next((i for i, x in enumerate(lines) if " exec deploy/postgres " in x and "CREATE DATABASE" in x), None)
+            if created_at is None or (first_up is not None and created_at > first_up):
+                problems.append("the per-run database was not created before the previous chart was installed")
         got = psql(pg, "app", "SELECT v FROM unrelated.keep")
         if got.returncode != 0 or got.stdout.strip() != SENTINEL:
             problems.append(f"the unrelated sentinel in the release's database is gone or changed: rc={got.returncode} {got.stdout.strip()!r} {got.stderr.strip()[:120]}")
@@ -237,36 +257,91 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
 BAD = ('for s in $(adb "SELECT nspname FROM pg_namespace WHERE nspname !~ \'^pg_\' AND nspname NOT IN (\'information_schema\', \'public\')"); '
        'do adb "DROP SCHEMA \\"$s\\" CASCADE" >/dev/null; done\n')
 
+APP = "postgres://app:app@postgres:5432/app?sslmode=disable"  # the release's own database
+ENV_APP = [{"name": "APP_POSTGRES_URL", "value": APP}]
+# Every chart input that can change which Postgres a workload uses (swept from values.yaml and templates/: each
+# existingSecret, each extraEnv, the config file). The drill must REFUSE each, before it creates or installs anything.
+# The five extraEnv of catalog-rpc and payment-rpc are refused by the chart itself at render time; the rest only the
+# rendered-manifest check can see.
+REFUSALS = {
+    "secrets.existingSecret": {"secrets": {"existingSecret": "external-app-env"}},
+    "secrets.catalogRpc.existingSecret": {"secrets": {"catalogRpc": {"existingSecret": "external-catalog-env", "apiKey": ""}}},
+    "secrets.paymentRpc.existingSecret": {"secrets": {"paymentRpc": {"existingSecret": "external-payment-env", "apiKey": "", "mockWebhookSecret": ""}}},
+    "rpc.extraEnv": {"rpc": {"extraEnv": ENV_APP}},
+    "worker.extraEnv": {"worker": {"extraEnv": ENV_APP}},
+    "console.extraEnv": {"console": {"extraEnv": ENV_APP}},
+    "catalogRpc.extraEnv": {"catalogRpc": {"extraEnv": ENV_APP}},
+    "paymentRpc.serve.extraEnv": {"paymentRpc": {"serve": {"extraEnv": ENV_APP}}},
+    "paymentRpc.consume.extraEnv": {"paymentRpc": {"consume": {"extraEnv": ENV_APP}}},
+    "paymentRpc.expire.extraEnv": {"paymentRpc": {"expire": {"extraEnv": ENV_APP}}},
+    "config.postgres.url": {"config": {"postgres": {"url": APP}}},
+}
+
+
+def merge(a, b):
+    out = dict(a)
+    for k, v in b.items():
+        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
 
 def main():
     pg = start_postgres()
     failed = False
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-mutants-"))
+    src = script_file.read_text()
+
+    def mutant(name, old, new):
+        assert old in src, f"the script changed shape: the {name} mutant cannot be built"
+        f = tmp / f"{name}.sh"
+        f.write_text(src.replace(old, new, 1))
+        return f
+
+    drop_all = mutant("drop-all", "old_args+=(", BAD + "old_args+=(")
+    no_check = mutant("no-check", "assert_postgres_source() {", "assert_postgres_source() { return 0;")
+    lose_name = mutant("lose-name", 'did not answer cleanly; checking whether it exists" >&2',
+                       'did not answer cleanly" >&2; dbname=""')
+
+    def report(label, problems):
+        nonlocal failed
+        if problems:
+            failed = True
+            print(f"upgrade-failure-test: FAIL ({label})", file=sys.stderr)
+            for x in problems:
+                print("  - " + x, file=sys.stderr)
+
+    def must_catch(label, problems, *needles):
+        nonlocal failed
+        if not any(n in x for x in problems for n in needles):
+            failed = True
+            print(f"upgrade-failure-test: FAIL ({label}): the mutant was NOT caught: {problems}", file=sys.stderr)
+
     try:
-        mutant_dir = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-mutant-"))
-        mutant = mutant_dir / "payment-upgrade-mutant.sh"
-        src = script_file.read_text()
-        marker = "old_args+=("
-        assert marker in src, "the script changed shape: the mutant cannot be built"
-        mutant.write_text(src.replace(marker, BAD + marker, 1))
         for mode in ("install", "upgrade"):
-            problems = run_scenario(script_file, mode, pg)
-            if problems:
-                failed = True
-                print(f"upgrade-failure-test: FAIL ({mode})", file=sys.stderr)
-                for x in problems:
-                    print("  - " + x, file=sys.stderr)
+            report(mode, run_scenario(script_file, mode, pg))
             # fault injection: with the drop-everything step back, the same checks must go red
-            caught = run_scenario(mutant, mode, pg)
-            if not any("LOST" in x or "sentinel" in x or "statements sent to the release's own database" in x for x in caught):
-                failed = True
-                print(f"upgrade-failure-test: FAIL ({mode}): the drop-every-schema mutant was NOT caught: {caught}", file=sys.stderr)
-        shutil.rmtree(mutant_dir, ignore_errors=True)
+            must_catch(f"{mode}, drop-all", run_scenario(drop_all, mode, pg), "LOST", "sentinel", "statements sent to the release's own database")
+        # CREATE commits and its answer is lost: the name is kept, the database is dropped anyway
+        report("install, CREATE reply lost", run_scenario(script_file, "install", pg, create_reply_fails=True))
+        must_catch("install, CREATE reply lost, lose-name", run_scenario(lose_name, "install", pg, create_reply_fails=True),
+                   "left behind", "exactly one CREATE")
+
+        # every input that can move a workload to another database is refused up front
+        for name, override in REFUSALS.items():
+            flow = tmp / ("flow-" + re.sub(r"\W", "_", name) + ".yaml")
+            flow.write_text(yaml.safe_dump(merge(yaml.safe_load(flow_file.read_text()), override)))
+            report(f"refused: {name}", run_scenario(script_file, "install", pg, flow=flow, refused=True))
+            if name in ("secrets.existingSecret", "rpc.extraEnv", "config.postgres.url", "secrets.catalogRpc.existingSecret"):
+                must_catch(f"refused: {name}, no-check", run_scenario(no_check, "install", pg, flow=flow, refused=True),
+                           "must not CREATE", "must not install", "not refused up front")
     finally:
+        shutil.rmtree(tmp, ignore_errors=True)
         subprocess.run([rt, "rm", "-f", pg], capture_output=True)
     if failed:
         sys.exit(1)
     print("upgrade-failure-test: ok (exit code kept, release RESTORED, background helm joined before the restore, migrate log printed, "
-          "the release's own database untouched, the drop-every-schema mutant caught, no child left)")
+          "the release's own database untouched, "
+          f"{len(REFUSALS)} Postgres-source inputs refused up front, CREATE-reply-lost cleaned up, 3 mutants caught, no child left)")
 
 
 main()
