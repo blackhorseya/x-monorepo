@@ -32,7 +32,15 @@ pfs=""
 body=""
 tmp=$(mktemp -d)
 
-fail() { echo "payment-upgrade: $*" >&2; [ -z "${soft:-}" ] || exit 1; kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true; exit 1; }
+fail() {
+  echo "payment-upgrade: $*" >&2
+  [ -z "${soft:-}" ] || exit 1
+  kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true
+  # The migrate hook Job is what fails an upgrade onto a schema its image does not know: say why, not just that it did.
+  echo "payment-upgrade: logs of the $release-migrate Job (hook pods are kept after a failure):" >&2
+  kubectl -n "$ns" logs -l "job-name=$release-migrate" --tail=50 --prefix --all-containers >&2 2>&1 || true
+  exit 1
+}
 restore() {
   local rc=$?
   # The background helm of stage 4 may still be running (an order failed to be placed while it ran). Let it
@@ -127,13 +135,17 @@ new_render=$(helm template t "$chart" -f "$values" -f "$flow")
 grep -q -- '"consume"' <<<"$old_render" || fail "the chart at $from_tag does not run 'payment-rpc consume': nothing to upgrade from"
 if grep -q -- '"consume"' <<<"$new_render"; then fail "this chart still runs a 'consume' argument"; fi
 old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" -f "$flow" "${old_args[@]}" "$@" --wait --timeout 6m >/dev/null || fail "the previous chart did not become ready"; forwards; }
-# The database was migrated by the tree's migrate image, so ordering may be ahead of what the PREVIOUS release's
-# migrate image knows (it fails with "no migration found for version N"). Rolling the release back to it means rolling
-# the schema back first: ordering 0010 (order_history, #427) is undone with the runbook SQL of docs/operations.md
-# ("Rollback（只退 ordering `0010`）"), and re-applied by the migrate hook of the upgrade in stage 4. A no-op when
-# ordering is not at 10. Drop this block once the pinned $from_tag is a release that contains 0010.
-db "BEGIN; DROP TABLE IF EXISTS ordering.order_history; UPDATE ordering.schema_migrations SET version = 9, dirty = false WHERE version = 10; COMMIT;" >/dev/null
-[ "$(db "SELECT version FROM ordering.schema_migrations")" -le 9 ] || fail "ordering is still at 10 after the rollback"
+# The database holds the schema the TREE's migrate image built (earlier stages of helm-kind installed this tree), so it can
+# be ahead of what the previous release's migrate image knows. Observed (v0.63.3 against ordering at 10, #427):
+#   migrate ordering: no migration found for version 10: read down for version 10 .: file does not exist
+# and the release's pre-upgrade hook Job fails. Stage 1 is the previous release coming up from nothing, so it starts from
+# an empty database: every schema is dropped (whichever BCs and versions the tree has, nothing here names one), and the old
+# release's own migrate hook rebuilds exactly what it knows. The upgrade of stage 4 then applies the tree's migrations on
+# top of that, which is the upgrade path this script is about. Nothing later in helm-kind reads what was dropped.
+user_schemas() { db "SELECT schema_name FROM information_schema.schemata WHERE schema_name <> 'information_schema' AND schema_name !~ '^pg_' AND schema_name <> 'public' ORDER BY 1"; }
+for s in $(user_schemas); do db "SET client_min_messages = warning; DROP SCHEMA \"$s\" CASCADE" >/dev/null; done
+left=$(user_schemas)
+[ -z "$left" ] || fail "schemas still present after the reset: $left"
 old_up
 oldimg=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.spec.template.spec.containers[0].image}')
 case $oldimg in */payment-rpc:*) ;; *) fail "before the upgrade the consumer runs '$oldimg', want the payment-rpc image" ;; esac

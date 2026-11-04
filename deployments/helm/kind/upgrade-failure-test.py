@@ -56,6 +56,8 @@ case "$*" in
   *" exec deploy/postgres "*)
     q=${*: -1}
     case "$q" in
+      *"information_schema.schemata"*) [ -e "$EVENTS.dropped" ] || echo ordering;; # one schema until it is dropped
+      *"DROP SCHEMA"*) : > "$EVENTS.dropped";;
       *"consumer_group, offset_acked"*)
         t=$(sed -n "s/.*SELECT '\\([^']*\\)'.*/\\1/p" <<<"$q")
         echo "$t|payment-rpc.payment|1";;
@@ -111,6 +113,13 @@ try:
         problems.append("the background helm upgrade never finished before the script exited")
     elif done[0] > upgrades[-1]:
         problems.append("the restore ran BEFORE the background helm upgrade finished: the upgrade overwrote it afterwards")
+    # the previous chart must come up on an empty database (the reset ran first, #427)...
+    drops = [i for i, x in enumerate(lines) if "DROP SCHEMA" in x]
+    if not drops or not upgrades or drops[0] > upgrades[0]:
+        problems.append("the schema reset (DROP SCHEMA) did not run before the previous chart was installed")
+    # ...and a failure must say why the migrate hook failed: the Job's log, by its job-name label
+    if not any(x.startswith("kubectl") and " logs " in x and "job-name=rel-migrate" in x for x in lines):
+        problems.append("the failure did not print the logs of the rel-migrate Job")
     if state != "RESTORED":
         problems.append(f"the release ended in state {state}, want RESTORED (the restore must be the last change)")
     # nothing of the script's session may outlive it (a child left behind keeps changing the cluster)
