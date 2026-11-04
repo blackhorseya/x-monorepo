@@ -266,6 +266,9 @@ jobs:
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with: { version: v0.33.0, install_only: true }
       - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
+      # Two throwaway kind clusters, one of them reachable through a context NAMED after the other (#437): `task helm-kind-cluster
+      # CLUSTER=…` must still write only into the cluster it names. Creates and deletes its own clusters (random names), then the real run.
+      - run: deployments/helm/kind/target-kubeconfig-test.sh
       - run: task helm-kind
       - if: failure()
         run: |
