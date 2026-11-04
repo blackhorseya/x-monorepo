@@ -389,7 +389,7 @@ func TestHistory_PaymentRequiredMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	if loaded.Ordering.RequirePayment {
-		t.Skip("the environment turns ordering.require_payment on; the default cell cannot be exercised")
+		t.Fatal("the environment turns ordering.require_payment on (APP_ORDERING_REQUIRE_PAYMENT / APP_CONFIG): the default cell would silently not be tested")
 	}
 
 	cells := []struct {
@@ -779,6 +779,9 @@ func TestHistory_AtomicWithOutbox(t *testing.T) {
 		seedConfirmed(s)
 		tg.fail.Store(true)
 		before := s.snapshot("o-atomic")
+		if before.status != "CONFIRMED" || before.history != 2 {
+			t.Fatalf("setup snapshot = %+v", before)
+		}
 		bare := usecase.NewApplyPaymentCaptured(s.repo, s.pub, s.clock)
 		if _, err := bare.Execute(noPrincipal(), dto.PaymentCapturedInput{OrderID: "o-atomic"}); err == nil {
 			t.Fatal("the bare use case did not fail")

@@ -28,6 +28,8 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `order.permission_denied` | `PERMISSION_DENIED` | ordering application（`ownership.Policy`） | 非 admin 的 principal 替別人下單（`CreateOrder`）或列別人的訂單（`ListOrders`）；admin role = `auth.admin_role`。讀、取消、完成別人的訂單（`GetOrder` / `CancelOrder` / `CompleteOrder`）是 `order.not_found`，不是這個 |
 | `order.invalid_id` / `order.empty_customer` / `order.no_items` / `order.invalid_sku` / `order.invalid_quantity` | `INVALID_ARGUMENT` | ordering domain | aggregate 不變量（consumer path 沒有 protovalidate，所以留著） |
 | `order.invalid_status_filter` / `order.invalid_cursor` | `INVALID_ARGUMENT` | ordering domain | ListOrders 的 filter / cursor 壞掉 |
+| `order.invalid_cause` | `INVALID_ARGUMENT` | ordering domain | `Order.Cancel` 收到固定列舉以外、或取消不可能有的 cause（含零值：adapter 沒說來源）；訊息固定，不回顯上游文字。#427 |
+| `order.invalid_actor` / `order.invalid_history` | `INTERNAL` | ordering domain | 讀出的 `ordering.order_history` 列違反表自己的規則（actor 與 subject 不符、seq < 1…）；不會由請求觸發 |
 | `order.cannot_cancel` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING / CONFIRMED 的 order 被 Cancel（COMPLETED 是終點；PAID 也不能取消，CANCELLED 不復活）；consumer path：`PaymentExpired` 到達時訂單已 `PAID`／`COMPLETED`（付了的款不被逾時撤銷）→ 被拒、drop |
 | `order.cannot_confirm` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING 的 order 收到 `StockReserved`（consumer path：drop） |
 | `order.cannot_complete` | `FAILED_PRECONDITION` | ordering domain | 不是 CONFIRMED（或 PAID）的 order 被 Complete（PENDING 還沒有庫存可 commit；再按一次也是這個） |
