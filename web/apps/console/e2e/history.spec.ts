@@ -193,3 +193,55 @@ test("the timeline follows the order: a new transition appears, and polling stop
   await page.waitForTimeout(4_500);
   expect(historyCalls).toBe(settled);
 });
+
+// The order can reach its final state while the card's first answer is still on the way (a slow network, a busy
+// server): that first answer is a snapshot from before the last transition. The card must not stop there — a final
+// order is not polled, so nothing but a catch-up fetch would ever bring the last row in (#443). Every wait below is
+// a request or a reply the test itself controls or observes; the one timed window (the final order is not asked
+// again) is longer than the order's own 2s poll period.
+for (const final of ["COMPLETED", "CANCELLED"] as const) {
+  test(`a first answer still in flight when the order turns ${final} does not leave the timeline short`, async ({ page }) => {
+    const id = `e2e-hist-slow-${final}-${uid()}`;
+    const finalStatus = `ORDER_STATUS_${final}`;
+    const created = [entry(1, "ORDER_STATUS_UNSPECIFIED", "ORDER_STATUS_PENDING")];
+    const full = [...created, entry(2, "ORDER_STATUS_PENDING", finalStatus, { cause: "ORDER_HISTORY_CAUSE_RPC_REQUEST" })];
+    let status = "ORDER_STATUS_PENDING";
+    let entries = created;
+    await page.route(GET_ORDER, (route) => route.fulfill({ json: { order: order(id, status) } }));
+    await page.route(NO_RESERVATION, (route) => route.fulfill({ status: 404, json: { code: "not_found", message: "none" } }));
+
+    let firstArrived!: () => void;
+    const firstIsHeld = new Promise<void>((r) => (firstArrived = r));
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    const answers: number[] = []; // how many entries each call was answered with, in the order the calls came
+    await page.route(GET_HISTORY, async (route) => {
+      const snapshot = entries; // what the server knew when this call arrived
+      const call = answers.push(snapshot.length);
+      if (call === 1) {
+        firstArrived();
+        await released; // the first answer is held back
+      }
+      await route.fulfill({ json: { entries: snapshot } }).catch(() => undefined); // a superseded request may already be gone
+    });
+
+    await page.goto(`/orders/${id}`);
+    await firstIsHeld; // positive control: the first call is on its way, and it was answered from the CREATED-only state
+    expect(answers).toEqual([1]);
+    status = finalStatus;
+    entries = full;
+    await expect(page.getByTestId("order-status")).toHaveText(final, { timeout: 10_000 }); // the order is final before any history answered
+
+    release(); // the stale first answer now reaches the page
+    await expect(rows(page)).toHaveCount(2, { timeout: 10_000 });
+    expect(await texts(page, "history-event")).toEqual(["CREATED", final]);
+    // Positive control: the second call is what brought the row, and its answer really held it.
+    expect(answers.length).toBeGreaterThanOrEqual(2);
+    expect(answers[1]).toBe(2);
+
+    // A final order is complete now: it is not asked again over more than two of the order's poll periods.
+    const settled = answers.length;
+    await page.waitForTimeout(4_500);
+    expect(answers.length).toBe(settled);
+  });
+}
