@@ -20,6 +20,17 @@ vars:
   # Container runtime for local infra: podman first, docker as fallback.
   COMPOSE:
     sh: 'command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose"'
+  # Where the kind tasks (helm-kind-up / helm-kind / helm-kind-keda / helm-kind-down) aim, #430. These are
+  # file-level literals ON PURPOSE: a task-level `vars:` entry beats the command line in go-task, so the
+  # same literal inside a task made `task helm-kind-up CLUSTER=probe` act on x-monorepo; at file level the
+  # command line wins and the OS environment does not (go-task reads the environment as template
+  # variables, so `{{.CLUSTER | default "x-monorepo"}}` would let a stray CLUSTER=foo in a shell re-aim the
+  # task). Name them on the command line or get the default. deployments/helm/kind/target-test.sh judges it.
+  CLUSTER: x-monorepo     # the kind cluster (kind create / load / delete --name, and kubectl's context kind-<CLUSTER>)
+  NS: x-monorepo          # the namespace the chart and its dependencies (Postgres, Redis, Dex) live in
+  KEDA_NS: keda           # the namespace helm-kind-keda installs KEDA itself into
+  # Empty unless the value is a plain lowercase DNS-ish name: the tasks interpolate these into shell commands.
+  KIND_TARGET_OK: '{{if and (regexMatch "^[a-z0-9][a-z0-9.-]*$" .CLUSTER) (regexMatch "^[a-z0-9][a-z0-9.-]*$" .NS) (regexMatch "^[a-z0-9][a-z0-9.-]*$" .KEDA_NS)}}ok{{end}}'
   # Config file `task run` / `task migrate` load (APP_CONFIG). Gitignored; seeded from
   # configs/config.example.yaml on first use. Override: task run CONFIG=<file>
   CONFIG: '{{.CONFIG | default (printf "%s/configs/local.yaml" .ROOT_DIR)}}'
@@ -325,8 +336,6 @@ tasks:
     deps: [web-build]
     desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster (reused if it exists), images built from the tree (rpc / catalog-rpc / payment-rpc / payment-worker / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) and dex.yaml (Dex dev IdP + CoreDNS rewrite for dex.localtest.me) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
     vars:
-      CLUSTER: x-monorepo
-      NS: x-monorepo
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
       ARCH:
@@ -335,6 +344,9 @@ tasks:
         sh: 'command -v docker >/dev/null && echo docker || echo podman'
     cmds:
       - kind get clusters 2>/dev/null | grep -qx {{.CLUSTER}} || kind create cluster --name {{.CLUSTER}} --wait 2m
+      # Every kubectl / helm below (and in kind/*.sh) acts on the current context. `kind create` switches to the new
+      # cluster, a cluster that already exists is not switched to: refuse rather than apply to whatever the context is.
+      - 'test "$(kubectl config current-context)" = kind-{{.CLUSTER}} || { echo "kubectl current-context is not kind-{{.CLUSTER}}: kubectl config use-context kind-{{.CLUSTER}}" >&2; exit 1; }'
       - for: [rpc, catalog-rpc, payment-rpc, payment-worker, worker, migrate]
         cmd: CGO_ENABLED=0 GOOS=linux GOARCH={{.ARCH}} go build -trimpath -o {{.BIN_DIR}}/kind/linux/{{.ARCH}}/{{.ITEM}} ./apps/{{.ITEM}}
       # Same Dockerfile as the release (context layout <os>/<arch>/<app>); TARGETPLATFORM is set by
@@ -358,12 +370,13 @@ tasks:
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
+      - sh: test -n "{{.KIND_TARGET_OK}}"
+        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind:
     deps: [helm-kind-up]
     desc: 'install the chart for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api); then payment.sh (the three payment-rpc workloads, the webhook-only Ingress and its rate limit, orders unaffected with payment-rpc stopped); then payment-flow.sh (the whole payment flow with ordering.require_payment on: every race of docs/payment.md §5, the TTL sequence, the switch both ways, payment-rpc stopped). helm-kind-down deletes the cluster'
     vars:
-      NS: x-monorepo
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
     cmds:
@@ -386,18 +399,19 @@ tasks:
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
+      - sh: test -n "{{.KIND_TARGET_OK}}"
+        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind-keda:
     deps: [helm-kind-up]
     desc: 'on the helm-kind-up cluster (independent of helm-kind, CI runs both in parallel): KEDA + deployments/helm/kind/monitoring.yaml (OTLP collector → Prometheus), the chart re-installed with kind/keda-values.yaml (worker.autoscaling lag), then kind/scale.sh floods orders with k6 and expects the worker to scale out on eventbus_consumer_lag and back'
     vars:
-      NS: x-monorepo
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
       KEDA_VERSION: 2.21.0
     cmds:
       - helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1 || true
-      - helm upgrade --install keda kedacore/keda -n keda --create-namespace --version {{.KEDA_VERSION}} --wait --timeout 3m >/dev/null
+      - helm upgrade --install keda kedacore/keda -n {{.KEDA_NS}} --create-namespace --version {{.KEDA_VERSION}} --wait --timeout 3m >/dev/null
       - kubectl -n {{.NS}} apply -f {{.KIND_DIR}}/monitoring.yaml >/dev/null
       - kubectl -n {{.NS}} rollout status deploy/otel-collector deploy/prometheus --timeout=2m
       - helm upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml -f {{.KIND_DIR}}/keda-values.yaml --wait --timeout 3m >/dev/null
@@ -405,10 +419,16 @@ tasks:
     preconditions:
       - sh: command -v k6 >/dev/null && command -v jq >/dev/null
         msg: needs k6 and jq
+      - sh: test -n "{{.KIND_TARGET_OK}}"
+        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind-down:
-    desc: delete the kind cluster created by helm-kind
-    cmds: [kind delete cluster --name x-monorepo]
+    desc: delete the kind cluster created by helm-kind (CLUSTER=<name> for another one, default x-monorepo)
+    cmds:
+      - kind delete cluster --name {{.CLUSTER}}
+    preconditions:
+      - sh: test -n "{{.KIND_TARGET_OK}}"
+        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   k6:
     desc: 'one k6 script against a running server (default http://127.0.0.1:8080, i.e. task run): task k6 -- orders|ratelimit|timeout|reservation [k6 args…]; BASE_URL / API_KEY / ADMIN_API_KEY (setup SetStock, admin role when auth is on) / VUS / DURATION / RPS are read from the environment (k6 __ENV), see the headers of tests/k6/*.js'
