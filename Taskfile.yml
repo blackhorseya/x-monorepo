@@ -442,7 +442,9 @@ tasks:
   helm-kind-down:
     desc: delete the kind cluster created by helm-kind (CLUSTER=<name> for another one, default x-monorepo)
     cmds:
-      - kind delete cluster --name {{.CLUSTER}}
+      # --kubeconfig is not optional: without it kind reads $KUBECONFIG, then ~/.kube/config, and removes the kind-<CLUSTER> context from it
+      - kind delete cluster --name {{.CLUSTER}} --kubeconfig "{{.KIND_KUBECONFIG}}"
+      - rm -f "{{.KIND_KUBECONFIG}}"
     preconditions:
       - sh: test -n "{{.KIND_TARGET_OK}}"
         msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
