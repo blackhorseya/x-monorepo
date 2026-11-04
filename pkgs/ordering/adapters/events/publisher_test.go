@@ -41,7 +41,7 @@ func TestPublisher_MapsDomainEventsToWire(t *testing.T) {
 	if err := o.Confirm(now.Add(30*time.Second), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := o.Cancel(now.Add(time.Minute)); err != nil {
+	if err := o.Cancel(now.Add(time.Minute), order.CauseRPCRequest); err != nil {
 		t.Fatal(err)
 	}
 

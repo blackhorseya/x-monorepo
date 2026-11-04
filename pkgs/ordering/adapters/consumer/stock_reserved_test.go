@@ -45,7 +45,7 @@ func TestStockReservedHandler(t *testing.T) {
 	if err := h.Handle(c, payload); !errors.Is(err, consumer.ErrDrop) {
 		t.Fatalf("redelivery err = %v, want ErrDrop", err)
 	}
-	if _, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); err != nil {
+	if _, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC}); err != nil {
 		t.Fatalf("cancel confirmed order: %v", err)
 	}
 	if err := h.Handle(c, payload); !errors.Is(err, consumer.ErrDrop) {

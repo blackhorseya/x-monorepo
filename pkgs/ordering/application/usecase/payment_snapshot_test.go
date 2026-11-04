@@ -79,7 +79,7 @@ func TestPaymentSnapshot_CompleteAndCancel_ByCell(t *testing.T) {
 				}
 				switch tc.reach {
 				case cancelled:
-					if _, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); err != nil {
+					if _, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC}); err != nil {
 						t.Fatal(err)
 					}
 				case completed:
@@ -98,7 +98,7 @@ func TestPaymentSnapshot_CompleteAndCancel_ByCell(t *testing.T) {
 					out, err = complete.Execute(c, dto.CompleteOrderInput{OrderID: "o-1"})
 					wantErr, wantSt = tc.complete, completed
 				} else {
-					out, err = cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
+					out, err = cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC})
 					wantErr, wantSt = tc.cancel, cancelled
 				}
 				if !errors.Is(err, wantErr) {

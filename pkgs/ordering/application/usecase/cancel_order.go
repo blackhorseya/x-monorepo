@@ -32,6 +32,8 @@ func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto
 		return nil, order.ErrInvalidID
 	}
 
+	cause := causeOf(in.Source)
+
 	var o *order.Order
 	err := retryOnConflict(ctx, func() error {
 		var err error
@@ -40,7 +42,7 @@ func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto
 		if o, err = uc.find(ctx, in.OrderID); err != nil {
 			return err
 		}
-		if err = o.Cancel(uc.clock.Now()); err != nil {
+		if err = o.Cancel(uc.clock.Now(), cause); err != nil {
 			return err
 		}
 		if err = uc.repo.Save(ctx, o); err != nil {
@@ -56,8 +58,8 @@ func (uc *CancelOrder) Execute(c context.Context, in dto.CancelOrderInput) (*dto
 		return nil, err
 	}
 
-	// in.Reason is another BC's free text: it is not logged (only fixed classifications are).
-	ctx.Info("order cancelled", "order_id", in.OrderID)
+	// in.Reason is another BC's free text: it is not logged (only the fixed cause is).
+	ctx.Info("order cancelled", "order_id", in.OrderID, "cause", cause.String())
 
 	return mapper.ToOrderOutput(o), nil
 }
@@ -68,4 +70,17 @@ func (uc *CancelOrder) find(ctx contextx.Contextx, id string) (*order.Order, err
 	}
 
 	return uc.repo.FindByID(ctx, order.ID(id))
+}
+
+// causeOf maps the adapter's word for who is asking to the domain's cause. A source nobody said
+// stays unspecified, which Order.Cancel refuses.
+func causeOf(s dto.CancelSource) order.Cause {
+	switch s {
+	case dto.CancelSourceRPC:
+		return order.CauseRPCRequest
+	case dto.CancelSourceCancellationRequest:
+		return order.CauseCancellationRequested
+	default:
+		return order.CauseUnspecified
+	}
 }

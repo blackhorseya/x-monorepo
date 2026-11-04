@@ -95,7 +95,7 @@ func (h *OrderService) CancelOrder(
 	c context.Context,
 	req *connect.Request[orderingv1.CancelOrderRequest],
 ) (*connect.Response[orderingv1.CancelOrderResponse], error) {
-	out, err := h.cancelOrder.Execute(c, dto.CancelOrderInput{OrderID: req.Msg.GetId()})
+	out, err := h.cancelOrder.Execute(c, dto.CancelOrderInput{OrderID: req.Msg.GetId(), Source: dto.CancelSourceRPC})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}

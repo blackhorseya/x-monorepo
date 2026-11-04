@@ -49,6 +49,12 @@ var (
 	// (customer, idempotency key) is already taken. Nothing was written; the
 	// caller reads the winner back with FindByIdempotencyKey.
 	ErrIdempotencyConflict = kernel.NewError(kernel.KindInternal, "order.idempotency_conflict", "idempotency key is taken")
+	// ErrInvalidCause: a cause outside the fixed enumeration, or one a cancellation cannot have. The
+	// message is fixed: an upstream's free text is never echoed.
+	ErrInvalidCause = kernel.NewError(kernel.KindInvalidArgument, "order.invalid_cause", "invalid cause for this transition")
+	// ErrInvalidActor / ErrInvalidHistory: a history row that breaks the table's own rules.
+	ErrInvalidActor   = kernel.NewError(kernel.KindInternal, "order.invalid_actor", "invalid history actor")
+	ErrInvalidHistory = kernel.NewError(kernel.KindInternal, "order.invalid_history", "invalid history entry")
 	// ErrInvalidStatus means persisted state names a status this version does not know.
 	ErrInvalidStatus = kernel.NewError(kernel.KindInternal, "order.invalid_status", "unknown order status")
 )

@@ -62,8 +62,8 @@ func (x *Order) ApplyPaymentCaptured(now time.Time) (PaymentEffect, error) {
 		// One transaction in the caller: the first version never shows an order resting at PAID (§2).
 		// CONFIRMED may move to PAID and PAID to COMPLETED (Status.CanTransitionTo), and the snapshot
 		// only blocks completing straight from CONFIRMED, so both steps are allowed here.
-		x.markPaid(now)
-		x.complete(now)
+		x.markPaid(now, CausePaymentCaptured)
+		x.complete(now, CausePaymentCaptured)
 
 		return PaymentApplied, nil
 	case StatusPaid, StatusCompleted:
@@ -90,7 +90,7 @@ func (x *Order) ApplyPaymentExpired(now time.Time) (PaymentEffect, error) {
 
 	switch x.status {
 	case StatusConfirmed:
-		x.cancel(now) // CONFIRMED → CANCELLED is always allowed (Status.CanTransitionTo)
+		x.cancel(now, CausePaymentExpired) // CONFIRMED → CANCELLED is always allowed (Status.CanTransitionTo)
 
 		return PaymentApplied, nil
 	case StatusCancelled:

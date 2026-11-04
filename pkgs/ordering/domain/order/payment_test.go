@@ -105,7 +105,7 @@ func TestOrder_CompleteAndCancel_BySnapshotAndStatus(t *testing.T) {
 				t.Errorf("a refused Complete moved the order to %s", o.Status())
 			}
 			o = orderIn(t, tc.status, tc.required)
-			if err := o.Cancel(time.Now()); !errors.Is(err, tc.cancel) {
+			if err := o.Cancel(time.Now(), order.CauseRPCRequest); !errors.Is(err, tc.cancel) {
 				t.Errorf("Cancel err = %v, want %v", err, tc.cancel)
 			}
 		})
@@ -133,7 +133,7 @@ func TestMarkPaid(t *testing.T) {
 			t.Fatalf("MarkPaid events = %+v", evs)
 		}
 		// Paid money is not undone: no cancel, and a second MarkPaid is refused.
-		if err := o.Cancel(at); !errors.Is(err, order.ErrCannotCancel) {
+		if err := o.Cancel(at, order.CauseRPCRequest); !errors.Is(err, order.ErrCannotCancel) {
 			t.Errorf("Cancel after MarkPaid err = %v", err)
 		}
 		if err := o.MarkPaid(at); !errors.Is(err, order.ErrCannotPay) {

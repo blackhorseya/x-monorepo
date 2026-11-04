@@ -42,8 +42,23 @@ type GetOrderInput struct {
 	OrderID string
 }
 
+// CancelSource says who is asking for a cancellation. CancelOrder is shared by the rpc adapter and
+// the consumer adapter and cannot tell them apart; each says so here. The zero value is refused
+// (order.ErrInvalidCause), never defaulted.
+type CancelSource uint8
+
+const (
+	CancelSourceUnspecified CancelSource = iota
+	// CancelSourceRPC: a client's CancelOrder request.
+	CancelSourceRPC
+	// CancelSourceCancellationRequest: another BC's OrderCancellationRequested.
+	CancelSourceCancellationRequest
+)
+
 type CancelOrderInput struct {
 	OrderID string
+	// Source is set by the adapter that drives the use case; it becomes the history's cause.
+	Source CancelSource
 	// Reason is upstream free text: informational only, never logged or stored (#427).
 	Reason string
 }

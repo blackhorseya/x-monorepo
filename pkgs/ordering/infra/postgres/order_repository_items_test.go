@@ -77,13 +77,14 @@ func TestOrderRepository_StatusSaveLeavesItemsUntouched(t *testing.T) {
 
 	// Confirm takes the payment setting; the default (false) keeps this table's shape.
 	confirm := func(o *order.Order, now time.Time) error { return o.Confirm(now, false) }
+	cancel := func(o *order.Order, now time.Time) error { return o.Cancel(now, order.CauseRPCRequest) }
 	for _, tc := range []struct {
 		name string
 		path []func(*order.Order, time.Time) error
 	}{
 		{"confirm then complete", []func(*order.Order, time.Time) error{confirm, (*order.Order).Complete}},
-		{"confirm then cancel", []func(*order.Order, time.Time) error{confirm, (*order.Order).Cancel}},
-		{"cancel", []func(*order.Order, time.Time) error{(*order.Order).Cancel}},
+		{"confirm then cancel", []func(*order.Order, time.Time) error{confirm, cancel}},
+		{"cancel", []func(*order.Order, time.Time) error{cancel}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := "items-untouched-" + tc.name

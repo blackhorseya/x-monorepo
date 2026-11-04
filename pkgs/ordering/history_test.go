@@ -123,7 +123,7 @@ func newStack(t *testing.T, db *gorm.DB, o stackOpts) *hstack {
 	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	mp := sdkmetric.NewMeterProvider()
-	rec, err := usecasex.NewRecorder(mp.Meter("history-test"))
+	rec, err := usecasex.NewRecorder(mp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,11 +553,63 @@ func TestHistory_IdempotencyConflictRaceWritesOneRow(t *testing.T) {
 				}
 			}
 		}
-		if len(s.ids.issued) < 2 {
-			t.Fatalf("only %d ids were issued; the race never happened", len(s.ids.issued))
-		}
 		if withRows != 1 {
 			t.Fatalf("%d of %d generated ids have history, want exactly 1 (losers return before Publish)", withRows, len(s.ids.issued))
+		}
+	})
+}
+
+// blindSecondLookup makes the 2nd FindByIdempotencyKey answer "not found" although the key is taken:
+// the window in which two first uses of one key both see nothing. The 2nd request then generates an
+// id, loses at Save (ErrIdempotencyConflict) and reads the winner back.
+type blindSecondLookup struct {
+	order.Repository
+	n       atomic.Int32
+	blinded atomic.Bool
+}
+
+func (r *blindSecondLookup) FindByIdempotencyKey(c context.Context, customer, key string) (*order.Order, error) {
+	if r.n.Add(1) == 2 {
+		r.blinded.Store(true)
+
+		return nil, order.ErrNotFound
+	}
+
+	return r.Repository.FindByIdempotencyKey(c, customer, key)
+}
+
+// The deterministic form of the race above: the loser reaches Save, gets ErrIdempotencyConflict
+// (before Publish) and returns the winner's order. It left no outbox row and no history row.
+func TestHistory_IdempotencyConflictWritesNothing(t *testing.T) {
+	backends(t, func(t *testing.T, mk func(stackOpts) *hstack) {
+		var blind *blindSecondLookup
+		s := mk(stackOpts{repo: func(r order.Repository) order.Repository { blind = &blindSecondLookup{Repository: r}; return blind }})
+		s.clock.set(day(10))
+		ctx := asCustomer("acc-1")
+		in := dto.CreateOrderInput{Items: []dto.OrderLine{{SKU: "SKU-1", Quantity: 1}}, IdempotencyKey: "k-conflict"}
+
+		s.ids.next = "o-winner"
+		if out, err := s.create.Execute(ctx, in); err != nil || out.ID != "o-winner" {
+			t.Fatalf("winner = %+v, %v", out, err)
+		}
+		s.ids.next = "o-loser"
+		out, err := s.create.Execute(ctx, in)
+		if err != nil || out == nil || out.ID != "o-winner" {
+			t.Fatalf("loser = %+v, %v; want the winner's order", out, err)
+		}
+		if !blind.blinded.Load() {
+			t.Fatal("the lookup was never blinded: the conflict path was not exercised")
+		}
+		if len(s.ids.issued) != 2 {
+			t.Fatalf("ids issued = %v, want both requests to have generated one", s.ids.issued)
+		}
+		s.expectRows("o-winner", want(1, "CREATED", "", "PENDING", day(10), "CUSTOMER", "acc-1", "RPC_REQUEST"))
+		s.expectRows("o-loser")
+		if s.db != nil {
+			var n int64
+			if err := s.db.Raw(`SELECT count(*) FROM ordering.events_v1_ordercreated`).Scan(&n).Error; err != nil || n != 1 {
+				t.Fatalf("outbox holds %d OrderCreated, %v; want 1", n, err)
+			}
 		}
 	})
 }

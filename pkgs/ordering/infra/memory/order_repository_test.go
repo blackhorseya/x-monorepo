@@ -39,8 +39,8 @@ func TestOrderRepository_Versioning(t *testing.T) {
 	if a.Version() != 1 {
 		t.Fatalf("loaded version = %d, want 1", a.Version())
 	}
-	_ = a.Cancel(now)
-	_ = b.Cancel(now)
+	_ = a.Cancel(now, order.CauseRPCRequest)
+	_ = b.Cancel(now, order.CauseRPCRequest)
 	if err := repo.Save(c, a); err != nil {
 		t.Fatalf("first writer: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestOrderRepository_CountByStatus(t *testing.T) {
 	for i, id := range []order.ID{"o-1", "o-2", "o-3"} {
 		o, _ := order.New(order.Params{ID: id, CustomerID: "c-1", Items: []order.LineItem{item}, Now: t0.Add(time.Duration(i) * time.Minute)})
 		if id == "o-3" {
-			_ = o.Cancel(t0.Add(time.Hour))
+			_ = o.Cancel(t0.Add(time.Hour), order.CauseRPCRequest)
 		}
 		if err := repo.Save(c, o); err != nil {
 			t.Fatal(err)
@@ -134,7 +134,7 @@ func TestOrderRepository_IdempotencyKey(t *testing.T) {
 
 	// A later update keeps the key.
 	got, _ = repo.FindByID(c, "o-1")
-	_ = got.Cancel(now)
+	_ = got.Cancel(now, order.CauseRPCRequest)
 	if err := repo.Save(c, got); err != nil {
 		t.Fatal(err)
 	}

@@ -40,8 +40,8 @@ func TestOrderRepository_Postgres(t *testing.T) {
 	if err := platformpg.Up(c, cfg, m); err != nil {
 		t.Fatal(err)
 	}
-	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 9 || dirty {
-		t.Fatalf("version = %d dirty=%v err=%v, want 9 clean", v, dirty, err)
+	if v, dirty, err := platformpg.Version(c, cfg, m); err != nil || v != 10 || dirty {
+		t.Fatalf("version = %d dirty=%v err=%v, want 10 clean", v, dirty, err)
 	}
 
 	// The version table must live inside the BC schema, never in public:
@@ -102,7 +102,7 @@ func TestOrderRepository_Postgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, x := range []*order.Order{got, other} {
-		if err := x.Cancel(now.Add(time.Minute)); err != nil {
+		if err := x.Cancel(now.Add(time.Minute), order.CauseRPCRequest); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -308,7 +308,7 @@ func TestOrderRepository_IdempotencyKey_Postgres(t *testing.T) {
 	}
 
 	// An update (cancel) neither drops nor changes the key.
-	_ = got.Cancel(now.Add(time.Minute))
+	_ = got.Cancel(now.Add(time.Minute), order.CauseRPCRequest)
 	if err := repo.Save(c, got); err != nil {
 		t.Fatal(err)
 	}

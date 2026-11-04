@@ -32,7 +32,7 @@ func TestCancelOrder_DoesNotLogUpstreamReason(t *testing.T) {
 	if _, err := create.Execute(c, dto.CreateOrderInput{CustomerID: "c-1", Items: []dto.OrderLine{{SKU: "SKU-1", Quantity: 1}}}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	out, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-log", Reason: secret})
+	out, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-log", Source: dto.CancelSourceRPC, Reason: secret})
 	if err != nil || out == nil || out.Status != "CANCELLED" {
 		t.Fatalf("cancel = %+v, %v", out, err)
 	}

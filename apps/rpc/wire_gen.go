@@ -63,6 +63,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		return nil, nil, err
 	}
 	eventsPublisher := events.NewPublisher(publisher)
+	historyStore := ordering.ProvideHistoryStore(db)
+	eventPublisher := ordering.ProvideEventPublisher(eventsPublisher, historyStore, configAuth)
 	uuidGenerator := system.NewUUIDGenerator()
 	clock := system.NewClock()
 	policy := ordering.ProvideOwnership(configAuth)
@@ -90,10 +92,10 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v := ordering.ProvideCreateOrder(repository, transactor, inbox, eventsPublisher, uuidGenerator, clock, policy, quoter, recorder, createOrderResults)
+	v := ordering.ProvideCreateOrder(repository, transactor, inbox, eventPublisher, uuidGenerator, clock, policy, quoter, recorder, createOrderResults)
 	v2 := ordering.ProvideGetOrder(repository, policy, recorder)
-	v3 := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)
-	v4 := ordering.ProvideCompleteOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)
+	v3 := ordering.ProvideCancelOrder(repository, transactor, inbox, eventPublisher, clock, policy, recorder)
+	v4 := ordering.ProvideCompleteOrder(repository, transactor, inbox, eventPublisher, clock, policy, recorder)
 	v5 := ordering.ProvideListOrders(repository, policy, recorder)
 	orderService := rpc.NewOrderService(v, v2, v3, v4, v5)
 	stockRepository := inventory.ProvideStockRepository(db, logger)

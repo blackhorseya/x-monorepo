@@ -64,8 +64,10 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	transactor := ordering.ProvideTransactor(db)
 	inbox := ordering.ProvideInbox(db)
 	eventsPublisher := events.NewPublisher(publisher)
-	clock := system.NewClock()
+	historyStore := ordering.ProvideHistoryStore(db)
 	auth := cfg.Auth
+	eventPublisher := ordering.ProvideEventPublisher(eventsPublisher, historyStore, auth)
+	clock := system.NewClock()
 	policy := ordering.ProvideOwnership(auth)
 	meterProvider := providers.Meter
 	recorder, err := usecasex.NewRecorder(meterProvider)
@@ -76,10 +78,10 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v := ordering.ProvideCancelOrder(repository, transactor, inbox, eventsPublisher, clock, policy, recorder)
+	v := ordering.ProvideCancelOrder(repository, transactor, inbox, eventPublisher, clock, policy, recorder)
 	orderCancellationHandler := consumer.NewOrderCancellationHandler(v)
 	configOrdering := cfg.Ordering
-	v2 := ordering.ProvideConfirmOrder(configOrdering, repository, transactor, inbox, eventsPublisher, clock, recorder)
+	v2 := ordering.ProvideConfirmOrder(configOrdering, repository, transactor, inbox, eventPublisher, clock, recorder)
 	stockReservedHandler := consumer.NewStockReservedHandler(v2)
 	paymentEventResults, err := metrics.NewPaymentEventResults(meterProvider)
 	if err != nil {
@@ -89,9 +91,9 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v3 := ordering.ProvideApplyPaymentCaptured(repository, transactor, inbox, eventsPublisher, clock, recorder, paymentEventResults)
+	v3 := ordering.ProvideApplyPaymentCaptured(repository, transactor, inbox, eventPublisher, clock, recorder, paymentEventResults)
 	paymentCapturedHandler := consumer.NewPaymentCapturedHandler(v3)
-	v4 := ordering.ProvideApplyPaymentExpired(repository, transactor, inbox, eventsPublisher, clock, recorder, paymentEventResults)
+	v4 := ordering.ProvideApplyPaymentExpired(repository, transactor, inbox, eventPublisher, clock, recorder, paymentEventResults)
 	paymentExpiredHandler := consumer.NewPaymentExpiredHandler(v4)
 	subscriptions := ordering.ProvideSubscriptions(orderCancellationHandler, stockReservedHandler, paymentCapturedHandler, paymentExpiredHandler)
 	reservationRepository := inventory.ProvideReservationRepository(db)
