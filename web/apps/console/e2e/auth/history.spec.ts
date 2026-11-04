@@ -55,9 +55,11 @@ test("another customer is told there is no such order, and sees no history", asy
   await useJWT(page, mintJWT(alice));
   await expect(rows(page)).toHaveCount(2); // control: the owner has rows
   await useJWT(page, mintJWT(`e2e-bob-${uid()}`));
-  await expect(page.getByTestId("history-not-found")).toBeVisible();
+  // The order itself is NOT_FOUND for bob, so the page says so and shows no History card at all.
+  await expect(page.getByText("No such order")).toBeVisible();
+  await expect(page.getByTestId("history-card")).toHaveCount(0);
   await expect(rows(page)).toHaveCount(0);
-  await expect(page.getByTestId("history-card")).not.toContainText(alice);
+  await expect(page.getByText(alice)).toHaveCount(0); // nothing on the page names the actor
 });
 
 test("after the admin switches to a non-admin, the subject is gone", async ({ page, request }) => {
@@ -68,9 +70,11 @@ test("after the admin switches to a non-admin, the subject is gone", async ({ pa
   await expect(page.getByTestId("history-subject")).toHaveCount(2); // control: it was there
 
   await useJWT(page, mintJWT(`e2e-other-${uid()}`)); // a non-admin who is not the owner
+  await expect(page.getByText("No such order")).toBeVisible(); // the new credential's own answer is on screen
   await settle(page);
+  await expect(page.getByTestId("history-card")).toHaveCount(0);
   await expect(page.getByTestId("history-subject")).toHaveCount(0);
-  await expect(page.getByTestId("history-card")).not.toContainText(alice);
+  await expect(page.getByText(alice)).toHaveCount(0); // nothing on the page names the actor
 });
 
 test("after sign-out the history and its subject are gone", async ({ page, request }) => {
@@ -81,10 +85,12 @@ test("after sign-out the history and its subject are gone", async ({ page, reque
   await expect(page.getByTestId("history-subject")).toHaveCount(2); // control
 
   await page.locator("header").getByRole("button", { name: "Clear" }).click();
-  await expect(page.getByTestId("history-error")).toContainText("auth.unauthenticated");
+  // Signed out, the order itself is refused (UNAUTHENTICATED): the page shows that and no History card.
+  await expect(page.getByRole("alert").filter({ hasText: "auth.unauthenticated" })).toBeVisible();
+  await expect(page.getByTestId("history-card")).toHaveCount(0);
   await expect(rows(page)).toHaveCount(0);
   await expect(page.getByTestId("history-subject")).toHaveCount(0);
-  await expect(page.getByTestId("history-card")).not.toContainText(alice);
+  await expect(page.getByText(alice)).toHaveCount(0); // nothing on the page names the actor
 });
 
 test("an admin's slow answer that arrives after the switch is not shown", async ({ page, request }) => {
@@ -131,4 +137,35 @@ test("an admin's slow answer that arrives after the switch is not shown", async 
   await page.waitForTimeout(300);
   await expect(page.getByTestId("history-subject")).toHaveCount(0); // a snapshot: nothing later repairs a subject shown
   await expect(page.getByTestId("history-card")).not.toContainText(alice);
+});
+
+test("while the new credential's answer is pending, the previous credential's rows are not on screen", async ({ page, request }) => {
+  const alice = `e2e-alice-${uid()}`;
+  await aliceOrder(page, request, alice);
+  const adminToken = mintJWT(`e2e-ops-${uid()}`, { roles: ["admin"] });
+  const ownerToken = mintJWT(alice);
+
+  let received!: () => void;
+  const hasReceived = new Promise<void>((r) => (received = r));
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  await page.route(HISTORY, async (route) => {
+    if (route.request().headers()["authorization"] === `Bearer ${ownerToken}`) {
+      received();
+      await released; // the owner's answer is held: for now the page has nothing of its own to show
+    }
+    await route.continue();
+  });
+
+  await useJWT(page, adminToken);
+  await expect(page.getByTestId("history-subject")).toHaveCount(2); // control: the admin's rows, with subjects, are on screen
+  await useJWT(page, ownerToken);
+  await hasReceived; // positive control: the new credential has asked and is waiting
+  await settle(page);
+  await expect(page.getByTestId("history-subject")).toHaveCount(0); // not the admin's cached rows in the meantime
+  await expect(rows(page)).toHaveCount(0);
+
+  release();
+  await expect(rows(page)).toHaveCount(2);
+  await expect(page.getByTestId("history-subject")).toHaveCount(0);
 });

@@ -1,7 +1,7 @@
 # Order history（訂單事件歷程）
 
 每張訂單一份**只追加、不修改**的狀態轉換紀錄：誰、何時、從哪個狀態到哪個狀態、為什麼。表是 `ordering.order_history`
-（migration `0010`，cause 的 CHECK 由 `0011` 放寬）。寫入路徑是切片 1；讀取的 `ordering.v1.OrderService.GetOrderHistory` 是切片 2（見〈讀取〉）；Console 是切片 3，**目前還沒有**。
+（migration `0010`，cause 的 CHECK 由 `0011` 放寬）。寫入路徑是切片 1；讀取的 `ordering.v1.OrderService.GetOrderHistory` 是切片 2（見〈讀取〉）；Console 的 History 卡是切片 3（見〈Console〉）。
 
 ## 為什麼不直接讀 outbox
 
@@ -83,3 +83,14 @@ migration 之前建立的訂單沒有 history，或只有 migration 之後的轉
 
 只有 `CREATE TABLE`，**不加指向 `ordering.orders` 的 FK**：加 FK 要在 `orders` 上拿鎖，而整份 migration 在同一個 transaction 裡，
 鎖會持有到 commit（#318）。要加另開一題，先量測鎖的影響。
+
+## Console：History 卡
+
+`/orders/$id` 在 Reservation 卡下方有一張 History 卡（`web/apps/console/src/components/history-card.tsx`），依 `seq` 列出時間軸：事件（CREATED／CONFIRMED／PAID／COMPLETED／CANCELLED）、`from → to`、時間、誰（actor_kind，有 subject 時一併顯示）、為什麼（cause 的固定標籤）。
+
+- **cause 與 actor 的標籤是固定的句子**，不顯示伺服器給的文字；`UNSPECIFIED` 與這個版本不認得的值（較新的伺服器）都顯示 `Unknown cause`／`Unknown`，不是空白也不是數字。
+- **誰看得到 subject 由伺服器決定**（只回給 admin，見〈讀取〉）；卡片只在回應帶有 subject 時才顯示它。卡片負責的是：答案不能比取得它的 credential 活得久。query 以 credential generation 為 key（`queries.ts` 的 `historyQuery`），頁面再以 generation 當卡片的 key，所以切換 credential 或登出之後，前一個身分的列、錯誤與 subject 不在新身分讀的那一格裡；舊身分的慢回覆寫進它自己的 key。
+- **空清單**（migration 之前建立的訂單）顯示明確的空狀態，不當成錯誤；`NOT_FOUND`（訂單不存在或不是你的）與其他失敗分開顯示。訂單本身讀不到時（`NOT_FOUND`、未登入），頁面只顯示訂單的錯誤，沒有 History 卡。
+- **輪詢跟著訂單**：間隔沿用訂單自己的輪詢（PENDING 與要付款的 CONFIRMED 快、其餘慢），訂單狀態一變就再抓一次（終態訂單的最後一列這樣進來），終態之後不再輪詢；Cancel／Complete 成功後也會讓它失效重抓。沒有另外的輪詢節奏。
+- 測試：`e2e/history.spec.ts`（真實流程、空狀態、錯誤分流、未知 cause、輪詢）與 `e2e/auth/history.spec.ts`（真 server：admin 看得到 subject、擁有者看不到、別人 `NOT_FOUND`、切換與登出後 subject 消失、舊 admin 的慢回覆與「新身分的答案還沒到時」都不會顯示 admin 的列；拿掉 generation 這兩條會轉紅）。
+
