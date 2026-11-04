@@ -70,13 +70,18 @@ cleanup() {
   if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
-  # Ownership first, then anything destructive: only a namespace that carries the token THIS call generated (ns_created and
-  # token start empty and are set only after the pre-existence check passed) is touched at all; a namespace that was already
-  # there under this name cannot carry it, so neither its release nor the namespace is uninstalled or deleted. A create whose
-  # answer was lost is still ours: it carries the token.
-  if [ -n "$ns_created" ] && [ -n "$token" ] && [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" = "namespace/$ns" ]; then
-    helm uninstall "$release" -n "$ns" >/dev/null 2>&1 || true
-    kubectl delete namespace "$ns" --timeout=3m >/dev/null 2>&1 || echo "payment-upgrade: could not delete the namespace $ns it created" >&2
+  # Ownership first, then the one destructive step, bound to the identity that was verified. Only the namespace that carries the
+  # token THIS call generated is ours (ns_created and token start empty and are set only after the pre-existence check passed;
+  # a namespace that was already there under this name cannot carry the token). It is found by that token, and what is deleted
+  # is that object, by UID: if someone deleted it and made another namespace of the same name between the lookup and the
+  # delete, the API server refuses (409, uid precondition) and nothing is touched. There is no `helm uninstall`: the release's
+  # storage (helm's Secrets) and everything it installed live in this namespace and go with it.
+  if [ -n "$ns_created" ] && [ -n "$token" ]; then
+    uid=$(kubectl get namespace -l "$run_label=$token" -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.uid}{"\n"}{end}' 2>/dev/null | awk -v n="$ns" '$1 == n {print $2}')
+    if [ -n "$uid" ]; then
+      printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "$uid" |
+        kubectl delete --raw "/api/v1/namespaces/$ns" -f - >/dev/null 2>&1 || echo "payment-upgrade: left the namespace $ns alone: it is gone, or no longer the one this run created" >&2
+    fi
   fi
   return "$rc"
 }

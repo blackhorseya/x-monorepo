@@ -71,7 +71,7 @@ def start_postgres():
     raise SystemExit("upgrade-failure-test: the Postgres container never became ready")
 
 
-def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_label=None, inherited=None):
+def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_label=None, inherited=None, race=False):
     """Run `script` (payment-upgrade.sh or a mutant, in a directory of its own next to the real guard, checker and deps.yaml) behind
     the guard and return the problems found. `inherited`: environment variables a parent exported (internal state of the script).
     mode: "install" (the previous chart does not install) or "upgrade" (an order cannot be placed during the upgrade)."""
@@ -86,7 +86,7 @@ def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=
                 "CREATE SCHEMA unrelated", "CREATE TABLE unrelated.keep (v text)", f"INSERT INTO unrelated.keep VALUES ('{SENTINEL}')"):
         assert psql(pg, sql).returncode == 0, sql
     if preexisting_label is not None:  # a namespace that is already there under the very name this run would take
-        (nsdir / f"x-monorepo-upgrade-{RUN_ID}").write_text(preexisting_label)
+        (nsdir / f"x-monorepo-upgrade-{RUN_ID}").write_text(preexisting_label + "\nuid-theirs\n")
         (reldir / f"x-monorepo-upgrade-{RUN_ID}").write_text("someone else's release")
 
     kdir = root / "kind"
@@ -116,11 +116,12 @@ case "$*" in
     name=$(sed -n 's/^  name: //p' <<<"$m")
     lab=$(sed -n 's/^    x-monorepo-upgrade-drill: "\\(.*\\)"/\\1/p' <<<"$m")
     if [ -e "$NSDIR/$name" ]; then echo 'Error from server (AlreadyExists)' >&2; exit 1; fi
-    echo "$lab" > "$NSDIR/$name"
+    printf '%s\\nuid-%s\\n' "$lab" "$RANDOM$RANDOM" > "$NSDIR/$name"
     [ -z "$CREATE_REPLY_FAILS" ] || exit 1;;  # the create commits, then the answer is lost
   "get namespace "*)
     want=
-    for a in "$@"; do case "$a" in *=*) want=${{a#*=}};; esac; done
+    prev=
+    for a in "$@"; do [ "$prev" = -l ] && want=${{a#*=}}; prev=$a; done
     case "$3" in
       -*) ;;  # a list: all namespaces (matching the selector, if any)
       *) if [ -n "$want" ]; then echo 'error: name cannot be provided when a selector is specified' >&2; exit 1; fi  # as the real kubectl
@@ -128,8 +129,25 @@ case "$*" in
     esac
     for f in "$NSDIR"/*; do
       [ -e "$f" ] || continue
-      if [ -z "$want" ] || [ "$(cat "$f")" = "$want" ]; then echo "namespace/$(basename "$f")"; fi
+      if [ -z "$want" ] || [ "$(head -1 "$f")" = "$want" ]; then
+        case "$*" in
+          *jsonpath*)
+            echo "$(basename "$f") $(sed -n 2p "$f")"
+            # the interleaving of r5: right after the lookup answered, someone deletes the namespace and makes another of the same name
+            if [ -n "$RACE" ] && [ ! -e "$EVENTS.raced" ]; then
+              : > "$EVENTS.raced"; printf 'replacement\\nuid-replacement\\n' > "$f"; echo "someone else's new release" > "$RELDIR/$(basename "$f")"
+            fi;;
+          *) echo "namespace/$(basename "$f")";;
+        esac
+      fi
     done;;
+  "delete --raw /api/v1/namespaces/"*" -f -")
+    name=${{3##*/}}
+    body=$(cat)
+    uid=$(sed -n 's/.*"uid":"\\([^"]*\\)".*/\\1/p' <<<"$body")
+    [ -e "$NSDIR/$name" ] || {{ echo 'Error from server (NotFound)' >&2; exit 1; }}
+    if [ -n "$uid" ] && [ "$uid" != "$(sed -n 2p "$NSDIR/$name")" ]; then echo 'Error from server (Conflict): Precondition failed: UID in precondition' >&2; exit 1; fi
+    rm -f "$NSDIR/$name";;
   "delete namespace "*) rm -f "$NSDIR/$3";;
   "get deploy"*|*" get deploy"*) echo 'ghcr.io/blackhorseya/x-monorepo/payment-rpc:0.63.3';;
   *" exec deploy/postgres "*)
@@ -172,7 +190,7 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
     env = os.environ.copy()
     env.update(PATH=f"{bindir}:{env['PATH']}", EVENTS=str(events), UPGRADE_STARTED=str(root / "upgrade_started"),
                ORDERS=str(root / "orders"), MODE=mode, PGC=pg, NSDIR=str(nsdir), RELDIR=str(reldir), HOME_NS=HOME_NS,
-               CREATE_REPLY_FAILS="1" if create_reply_fails else "")
+               CREATE_REPLY_FAILS="1" if create_reply_fails else "", RACE="1" if race else "")
     env.update(inherited or {})
     if preexisting_label is not None:
         env["UPGRADE_RUN_ID"] = RUN_ID  # the caller may name the run, so a label made of the run id proves nothing
@@ -190,9 +208,12 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
         outtxt = (root / "out").read_text(errors="replace")
         upgrades = [i for i, x in enumerate(lines) if x.startswith("helm upgrade")]
         creates = [i for i, x in enumerate(lines) if x == "kubectl create -f -"]
-        deletes = [(i, x.split()[3]) for i, x in enumerate(lines) if x.startswith("kubectl delete namespace ")]
+        deletes = [(i, x.split()[3].rsplit("/", 1)[1]) for i, x in enumerate(lines) if x.startswith("kubectl delete --raw /api/v1/namespaces/")]
+        plain_deletes = [x for x in lines if x.startswith("kubectl delete namespace ")]
         done = [i for i, x in enumerate(lines) if x == "HELM3_DONE"]
         left = sorted(f.name for f in nsdir.iterdir())
+        if plain_deletes:
+            problems.append(f"a namespace was deleted by name, not by uid: {plain_deletes}")
 
         if rc in (0, None):
             problems.append(f"exit code {rc}: a failed run must exit non-zero (the exit code is kept through the trap)")
@@ -213,12 +234,23 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
                 problems.append(f"a refused run must create, install and delete nothing, got creates={len(creates)} deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
             if "payment-upgrade: refused" not in outtxt:
                 problems.append("the run was not refused up front (no 'payment-upgrade: refused' in its output)")
+        elif race:
+            # r5: the namespace was deleted and recreated between the ownership lookup and the delete: the replacement (another
+            # label, another uid, its own release) must survive; the delete is bound to the uid that was looked up
+            if len(left) != 1:
+                problems.append(f"want only the replacement namespace left, got {left}")
+            elif (nsdir / left[0]).read_text().splitlines()[0] != "replacement":
+                problems.append("the replacement namespace was deleted or changed after the ownership lookup")
+            elif not (reldir / left[0]).exists():
+                problems.append("the release of the replacement namespace is gone")
+            if "left the namespace" not in outtxt:
+                problems.append("a refused (409) delete was not reported")
         elif preexisting_label is not None:
             # already there, whatever its label: refused, not used, not written to, not deleted
             theirs = f"x-monorepo-upgrade-{RUN_ID}"
             if "already exists" not in outtxt or "payment-upgrade: refused" not in outtxt:
                 problems.append("a namespace that already exists was not refused")
-            if deletes or upgrades or left != [theirs] or (nsdir / theirs).read_text() != preexisting_label:
+            if deletes or upgrades or left != [theirs] or (nsdir / theirs).read_text().splitlines()[0] != preexisting_label:
                 problems.append(f"a namespace that was already there must be left alone and nothing installed: deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
             touched = [x for x in lines if f" -n {theirs} " in x or (x.startswith("helm ") and theirs in x)]
             if not (reldir / theirs).exists():
@@ -326,7 +358,10 @@ def main():
 
     # a drill that writes to the home database / deletes the home namespace / skips the render check
     writes_home = mutant("writes-home", "ns_created=1\n", 'ns_created=1\nkubectl -n "$1" exec deploy/postgres -- psql -U app -d app -tAq -c "CREATE TABLE public.drill_mutant (x int)" >/dev/null\n')
-    deletes_home = mutant("deletes-home", 'kubectl delete namespace "$ns"', 'kubectl delete namespace "$1"')
+    deletes_home = mutant("deletes-home", 'kubectl delete --raw "/api/v1/namespaces/$ns"', 'kubectl delete --raw "/api/v1/namespaces/$1"')
+    # the delete is not bound to the uid that was looked up (r5: a namespace re-created under the same name is deleted)
+    no_uid = mutant("no-uid-precondition", '''printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "$uid" |''',
+                    '''printf '{"kind":"DeleteOptions","apiVersion":"v1"}' |''')
     # the rejected r3 judgement: ownership by a label made of the caller's run id, AlreadyExists taken for a lost reply
     run_id_label = mutant("run-id-label",
                           'if kubectl get namespace "$ns" -o name >/dev/null 2>&1; then', "if false; then",
@@ -367,6 +402,10 @@ def main():
             must_catch(f"namespace already exists, {label_name}, run-id-label", run_scenario(run_id_label, "install", pg, preexisting_label=label),
                        "already exists was not refused", "must be left alone", "something was run against") if label_name == "same label" else None
 
+        # r5: deleted and re-created under the same name right after the ownership lookup: the replacement and its release survive
+        report("namespace replaced after the lookup", run_scenario(script_file, "install", pg, race=True))
+        must_catch("namespace replaced after the lookup, no-uid-precondition", run_scenario(no_uid, "install", pg, race=True),
+                   "replacement namespace", "want only the replacement", "release of the replacement")
         # r4: a parent that exported the script's internal state (ns_created, token, ns, release...) next to a namespace of the same
         # name and label, with a release in it, must find both intact and no helm uninstall / kubectl delete at all
         state = {"ns_created": "1", "token": "inherited-token", "release": "x-monorepo-upg-4242", "ns": f"x-monorepo-upgrade-{RUN_ID}",
@@ -389,7 +428,7 @@ def main():
         sys.exit(1)
     print("upgrade-failure-test: ok (home database unchanged on every path, the drill's namespace created and deleted, "
           f"{len(REFUSALS)} Postgres/Redis-source inputs refused up front, lost create reply cleaned up, an existing namespace (same or other label) left alone, "
-          "background helm joined before the delete, migrate log printed, inherited internal state ignored, 5 mutants caught)")
+          "background helm joined before the delete, migrate log printed, inherited internal state ignored, a namespace replaced after the ownership lookup survives, 6 mutants caught)")
 
 
 main()
