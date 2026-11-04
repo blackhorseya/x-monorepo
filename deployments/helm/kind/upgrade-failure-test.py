@@ -13,6 +13,11 @@ points at the home namespace (checked on the RENDERED chart, postgres-url-check.
 the upgrade is still rolling (the background helm is joined first, #422), after a create whose answer was lost; a namespace
 that was already there under the name is not reused and not touched.
 (4) A failure prints the logs of the migrate hook Job.
+(5) Every input is validated before anything is created or sent (#432): the two ports go into http://127.0.0.1:<port> and curl
+sends the X-API-Key there, so a value like 18096@127.0.0.1:<other port> must be refused. That gate uses the REAL curl, a synthetic
+key and loopback receivers, and asserts that no receiver saw any request (so no key).
+(6) A SIGTERM between the create being sent and its uid being kept leaves the namespace in place, deletes nothing, and says what
+to delete by hand (#433).
 
 This drives the REAL payment-upgrade-guard.sh -> payment-upgrade.sh with fake helm / kubectl / curl / sleep (no cluster):
   - fake helm: the 3rd `helm upgrade` is the slow background one (5 seconds); `helm template` is real. In the "install"
@@ -29,6 +34,8 @@ import pathlib
 import re
 import shutil
 import signal
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import subprocess
 import sys
 import tempfile
@@ -71,10 +78,56 @@ def start_postgres():
     raise SystemExit("upgrade-failure-test: the Postgres container never became ready")
 
 
-def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_label=None, inherited=None, swapped=False):
+class Receiver:
+    """A loopback HTTP server that records every request it gets (path, Host, X-API-Key) and answers 200 {}."""
+
+    def __init__(self):
+        self.hits = []
+        hits = self.hits
+
+        class H(BaseHTTPRequestHandler):
+            def handle_any(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                if n:
+                    self.rfile.read(n)
+                hits.append((self.path, self.headers.get("Host"), self.headers.get("X-API-Key")))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            do_GET = do_POST = handle_any
+
+            def log_message(self, *a):
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), H)
+        self.port = self.server.server_address[1]
+        # fire-and-forget: test fixture, stopped by stop()
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+KILL_SCRIPT = """#!/bin/bash
+# SIGTERM the payment-upgrade.sh that is running this fake: the topmost ancestor whose command line is that script
+p=$PPID
+while q=$(ps -o ppid= -p "$p" | tr -d ' '); ps -o args= -p "$q" 2>/dev/null | grep -q 'kind/payment-upgrade.sh'; do p=$q; done
+kill -TERM "$p"
+"""
+
+
+def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_label=None, inherited=None, swapped=False,
+                 env_extra=None, recv=None, positive=False, sig=None):
     """Run `script` (payment-upgrade.sh or a mutant, in a directory of its own next to the real guard, checker and deps.yaml) behind
     the guard and return the problems found. `inherited`: environment variables a parent exported (internal state of the script).
-    mode: "install" (the previous chart does not install) or "upgrade" (an order cannot be placed during the upgrade)."""
+    mode: "install" (the previous chart does not install) or "upgrade" (an order cannot be placed during the upgrade).
+    `recv`: loopback receivers; given, the REAL curl is used (no fake) and the key in `flow` reaches whoever curl really connects to.
+    `sig`: "before-commit" | "after-reply" | "after-save": SIGTERM the script at that point of the namespace create (#433)."""
+    for r in recv or []:
+        r.hits.clear()
     root = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-test-"))
     bindir, nsdir, reldir = root / "bin", root / "namespaces", root / "releases"
     bindir.mkdir()
@@ -120,10 +173,13 @@ case "$*" in
     name=$(sed -n 's/^  name: //p' <<<"$m")
     lab=$(sed -n 's/^    x-monorepo-upgrade-drill: "\\(.*\\)"/\\1/p' <<<"$m")
     if [ -e "$NSDIR/$name" ]; then echo 'Error from server (AlreadyExists)' >&2; exit 1; fi
+    if [ "$SIG" = before-commit ]; then "$KILLSCRIPT"; exit 1; fi  # killed before the create is applied
     uid=$(printf '%08x-aaaa-4bbb-8ccc-%012x' $((RANDOM*32768+RANDOM)) $((RANDOM*32768+RANDOM)))
     printf '%s\\n%s\\n' "$lab" "$uid" > "$NSDIR/$name"
     [ -z "$CREATE_REPLY_FAILS" ] || exit 1  # the create commits, then the answer is lost
-    printf '%s' "$uid";;
+    printf '%s' "$uid"
+    if [ "$SIG" = after-reply ]; then "$KILLSCRIPT"; fi;;  # the answer is out; the script is killed before it keeps the uid
+  *" apply -f "*) if [ "$SIG" = after-save ]; then "$KILLSCRIPT"; fi;;  # the uid has been kept
   "get namespace "*)
     want=
     prev=
@@ -169,7 +225,9 @@ case "$*" in
     fi;;
 esac
 ''')
-    (bindir / "curl").write_text('''#!/bin/bash
+    (bindir / "killscript").write_text(KILL_SCRIPT)
+    if recv is None:
+        (bindir / "curl").write_text('''#!/bin/bash
 case "$*" in *readyz*) exit 0;; esac
 out=''
 args=("$@")
@@ -192,8 +250,10 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
     env = os.environ.copy()
     env.update(PATH=f"{bindir}:{env['PATH']}", EVENTS=str(events), UPGRADE_STARTED=str(root / "upgrade_started"),
                ORDERS=str(root / "orders"), MODE=mode, PGC=pg, NSDIR=str(nsdir), RELDIR=str(reldir), HOME_NS=HOME_NS,
-               CREATE_REPLY_FAILS="1" if create_reply_fails else "", SWAPPED="1" if swapped else "")
+               CREATE_REPLY_FAILS="1" if create_reply_fails else "", SWAPPED="1" if swapped else "",
+               SIG=sig or "", KILLSCRIPT=str(bindir / "killscript"))
     env.update(inherited or {})
+    env.update(env_extra or {})
     if preexisting_label is not None:
         env["UPGRADE_RUN_ID"] = RUN_ID  # the caller may name the run, so a label made of the run id proves nothing
     cmd = ["bash", str(kdir / "payment-upgrade-guard.sh"), HOME_NS, "rel", "deployments/helm/x-monorepo", str(values_file), str(flow or flow_file)]
@@ -232,7 +292,44 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
             if re.search(rf"(^| )-n {HOME_NS}( |$)", x) and not re.fullmatch(
                     rf"kubectl -n {HOME_NS} exec deploy/postgres -- psql -U app -d app -tAq -c SET default_transaction_read_only = on; .*", x):
                 problems.append(f"a call names the home namespace: {x}")
-        if refused:
+        if recv and not positive:
+            seen = [(i, h) for i, r in enumerate(recv) for h in r.hits]
+            if seen:
+                problems.append(f"a request reached a loopback receiver (the key goes with it): {seen[:3]}")
+        if sig:
+            # #433: killed around the create. The namespace is never deleted unless its uid was kept; when it may exist and its uid
+            # is not known, the output names it and its label so a human can delete it.
+            existing = [f for f in nsdir.iterdir() if f.name != HOME_NS]
+            label = existing[0].read_text().splitlines()[0] if existing else None
+            if sig == "after-save":
+                if left or len(deletes) != 1:
+                    problems.append(f"killed after the uid was kept: the namespace must be deleted by uid, left={left} deletes={deletes}")
+                if "interrupted before the uid" in outtxt:
+                    problems.append("a hint to delete by hand was printed although the uid was kept and the namespace deleted")
+            else:
+                if deletes or upgrades:
+                    problems.append(f"killed before the uid was kept: nothing may be deleted or installed, deletes={deletes} upgrades={len(upgrades)}")
+                if "interrupted before the uid" not in outtxt or f"namespace x-monorepo-upgrade-" not in outtxt or "x-monorepo-upgrade-drill=" not in outtxt:
+                    problems.append("the interrupted run did not say which namespace and label to delete by hand")
+                if sig == "after-reply":
+                    if len(left) != 1:
+                        problems.append(f"the committed namespace must be left in place: {left}")
+                    elif f"x-monorepo-upgrade-drill={label}" not in outtxt or left[0] not in outtxt:
+                        problems.append(f"the hint does not carry the namespace {left} and its label {label}")
+                elif left:
+                    problems.append(f"nothing was created, yet a namespace is there: {left}")
+        elif positive:
+            # a legitimate custom port: accepted, and the key goes to that port on 127.0.0.1 and nowhere else
+            if "payment-upgrade: refused" in outtxt:
+                problems.append("legitimate custom ports were refused")
+            rpc_hits = [h for h in recv[0].hits if h[2]]
+            if not rpc_hits or any(h[1] != f"127.0.0.1:{recv[0].port}" for h in recv[0].hits):
+                problems.append(f"the key did not reach the chosen rpc port on 127.0.0.1: {recv[0].hits[:3]}")
+            if not recv[1].hits:
+                problems.append("the chosen serve port was not used")
+            if left:
+                problems.append(f"namespaces left behind: {left}")
+        elif refused:
             # refused up front: nothing created, nothing installed, nothing deleted
             if creates or deletes or upgrades or left:
                 problems.append(f"a refused run must create, install and delete nothing, got creates={len(creates)} deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
@@ -350,7 +447,50 @@ def merge(a, b):
     return out
 
 
+# Every environment variable the script reads. A new one fails the inventory check below until it is validated in the script
+# (and listed here and in the PR description): that is what keeps the sweep from being a one-time thing (#432).
+ENV_INPUTS = {"UPGRADE_RUN_ID", "PAYMENT_UPGRADE_FROM_TAG", "PAYMENT_UPGRADE_FROM_IMAGE", "UPGRADE_RPC_PORT", "UPGRADE_SERVE_PORT", "RANDOM"}
+
+
+def bad_port_values(target):
+    """Values of a port variable that must be refused; `target` is the loopback port a successful injection would reach."""
+    return {
+        "userinfo@host:port": f"18096@127.0.0.1:{target}",
+        "userinfo@host:port, trailing #": f"1@127.0.0.1:{target}#",
+        "userinfo@host:port, trailing ?": f"1@127.0.0.1:{target}?",
+        "host:port": f"127.0.0.1:{target}",
+        "number:port": f"18096:{target}",
+        "slash": "18096/x",
+        "trailing space": "18096 ",
+        "inner space": "18 096",
+        "trailing newline": "18096\n",
+        "newline then host": f"18096\n@127.0.0.1:{target}",
+        "zero": "0",
+        "above range": "65536",
+        "huge": "99999999999999999999",
+        "negative": "-1",
+        "plus sign": "+18096",
+        "empty": "",
+        "leading zero": "018096",
+        "hex": "0x4650",
+        "fullwidth digits": "\uff11\uff18\uff10\uff19\uff16",
+        "scientific": "1e4",
+    }
+
+
+ONLY = sys.argv[1:]  # label substrings: given, only the #432 / #433 cells whose label contains one of them run
+
+
+def want(label):
+    return not ONLY or any(o in label for o in ONLY)
+
+
 def main():
+    inputs_read = set(re.findall(r"\$\{?([A-Z][A-Z0-9_]+)", "\n".join(l for l in script_file.read_text().splitlines() if not l.lstrip().startswith("#"))))
+    if inputs_read != ENV_INPUTS:
+        print(f"upgrade-failure-test: FAIL: payment-upgrade.sh reads {sorted(inputs_read)}, the inventory is {sorted(ENV_INPUTS)}: "
+              "validate the new input in the script, add a refusal cell here and list it in the PR", file=sys.stderr)
+        sys.exit(1)
     pg = start_postgres()
     failed = False
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-mutants-"))
@@ -359,7 +499,11 @@ def main():
     def mutant(name, old, new, *more):
         text = src
         for o, n in ((old, new),) + tuple(zip(more[::2], more[1::2])):
-            assert o in text, f"the script changed shape: the {name} mutant cannot be built ({o[:40]!r})"
+            if o not in text:  # the script changed shape: say so, and hand back the unchanged script (the mutant will then not be caught)
+                nonlocal failed
+                failed = True
+                print(f"upgrade-failure-test: FAIL: the {name} mutant cannot be built ({o[:40]!r} is not in the script)", file=sys.stderr)
+                continue
             text = text.replace(o, n, 1)
         f = tmp / f"{name}.sh"
         f.write_text(text)
@@ -388,6 +532,12 @@ def main():
     late_lookup = mutant("late-uid-lookup", '  if [ -n "$ns_uid" ]; then\n    printf \'{"kind"',
                          '''  ns_uid=$(kubectl get namespace -l "$run_label=$token" -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.uid}{"\\n"}{end}' | awk -v n="$ns" '$1 == n {print $2}')\n  if [ -n "$ns_uid" ]; then\n    printf '{"kind"''')
     no_check = mutant("no-check", "assert_connections() {", "assert_connections() { return 0;")
+    # the ports go unchecked / the range or the leading-zero rule is dropped / the hint is not printed (#432, #433)
+    no_port_check = mutant("no-port-check", "port_ok() {", "port_ok() { return 0;")
+    no_range = mutant("no-port-range", ' && [ "$1" -le 65535 ]; }', "; }")
+    zero_ok = mutant("leading-zero-ok", "^[1-9][0-9]{0,4}$", "^[0-9]{1,5}$")
+    no_hint = mutant("no-interrupt-hint", 'if [ -n "$maybe_ns" ] && [ -z "$ns_uid" ]; then', "if false; then")
+    no_flag = mutant("no-pending-flag", "maybe_ns=1 # from here", ": # from here")
 
     def report(label, problems):
         nonlocal failed
@@ -403,44 +553,91 @@ def main():
             failed = True
             print(f"upgrade-failure-test: FAIL ({label}): the mutant was NOT caught: {problems}", file=sys.stderr)
 
+    # #432: a synthetic key, never a real credential, in a copy of the flow values; two loopback receivers
+    synth_shopper, synth_admin = "SYNTH-SHOPPER-" + uuid.uuid4().hex, "SYNTH-ADMIN-" + uuid.uuid4().hex
+    synth_flow = tmp / "flow-synthetic-keys.yaml"
+    flow_text = flow_file.read_text()
+    assert "kind-shopper-key-0123456789ab" in flow_text and "kind-admin-key-0123456789abc" in flow_text
+    synth_flow.write_text(flow_text.replace("kind-shopper-key-0123456789ab", synth_shopper).replace("kind-admin-key-0123456789abc", synth_admin))
+    good, bad = Receiver(), Receiver()
+
     try:
-        for mode in ("install", "upgrade"):
-            report(mode, run_scenario(script_file, mode, pg))
-        # fault injection: the same checks must go red
-        must_catch("install, writes-home", run_scenario(writes_home, "install", pg), "CHANGED", "unchanged", "names the home namespace", "sentinel")
-        must_catch("upgrade, writes-home", run_scenario(writes_home, "upgrade", pg), "CHANGED", "unchanged", "names the home namespace", "sentinel")
-        must_catch("install, deletes-home", run_scenario(deletes_home, "install", pg), "home namespace was deleted", "not the home one")
-        # the create is applied and its answer is lost: its uid is unknown, so nothing is adopted or deleted; the run says what to delete
-        report("install, create answer lost", run_scenario(script_file, "install", pg, create_reply_fails=True))
-        # a namespace that was already there is neither reused nor written to nor deleted, whatever its label (r3: the caller can
-        # name the run, so "same name, same label" is a state anyone can construct)
-        for label_name, label in (("same label", RUN_ID), ("other label", "someone-else")):
-            report(f"namespace already exists, {label_name}", run_scenario(script_file, "install", pg, preexisting_label=label))
-            must_catch(f"namespace already exists, {label_name}, adopts-by-label", run_scenario(adopts, "install", pg, preexisting_label=label),
-                       "already exists was not refused", "must be left alone", "something was run against") if label_name == "same label" else None
+        if not ONLY:
+            for mode in ("install", "upgrade"):
+                report(mode, run_scenario(script_file, mode, pg))
+            # fault injection: the same checks must go red
+            must_catch("install, writes-home", run_scenario(writes_home, "install", pg), "CHANGED", "unchanged", "names the home namespace", "sentinel")
+            must_catch("upgrade, writes-home", run_scenario(writes_home, "upgrade", pg), "CHANGED", "unchanged", "names the home namespace", "sentinel")
+            must_catch("install, deletes-home", run_scenario(deletes_home, "install", pg), "home namespace was deleted", "not the home one")
+            # the create is applied and its answer is lost: its uid is unknown, so nothing is adopted or deleted; the run says what to delete
+            report("install, create answer lost", run_scenario(script_file, "install", pg, create_reply_fails=True))
+            # a namespace that was already there is neither reused nor written to nor deleted, whatever its label (r3: the caller can
+            # name the run, so "same name, same label" is a state anyone can construct)
+            for label_name, label in (("same label", RUN_ID), ("other label", "someone-else")):
+                report(f"namespace already exists, {label_name}", run_scenario(script_file, "install", pg, preexisting_label=label))
+                must_catch(f"namespace already exists, {label_name}, adopts-by-label", run_scenario(adopts, "install", pg, preexisting_label=label),
+                           "already exists was not refused", "must be left alone", "something was run against") if label_name == "same label" else None
 
-        # r6: deleted and re-made under the same name AND the same token label before cleanup runs: the uid from the create's answer no
-        # longer matches, so the replacement and its release survive; a uid looked up at cleanup time (or no uid precondition) deletes it
-        report("namespace replaced before cleanup", run_scenario(script_file, "install", pg, swapped=True))
-        for m in (late_lookup, no_uid):
-            must_catch(f"namespace replaced before cleanup, {m.stem}", run_scenario(m, "install", pg, swapped=True),
-                       "replacement namespace was deleted", "release of the replacement")
-        # r4: a parent that exported the script's internal state (ns_uid, token, ns, release...) next to a namespace of the same
-        # name and label, with a release in it, must find both intact and no helm uninstall / kubectl delete at all
-        state = {"ns_uid": "11111111-1111-4111-8111-111111111111", "token": "inherited-token", "release": "x-monorepo-upg-4242", "ns": f"x-monorepo-upgrade-{RUN_ID}",
-                 "helm_pid": "1", "soft": "1", "run_label": "x-monorepo-upgrade-drill"}
-        report("inherited internal state", run_scenario(script_file, "install", pg, preexisting_label="inherited-token", inherited=state))
-        must_catch("inherited internal state, inherits-state", run_scenario(inherits, "install", pg, preexisting_label="inherited-token", inherited=state),
-                   "left alone", "uninstall", "something was run against", "release in the namespace")
+            # r6: deleted and re-made under the same name AND the same token label before cleanup runs: the uid from the create's answer no
+            # longer matches, so the replacement and its release survive; a uid looked up at cleanup time (or no uid precondition) deletes it
+            report("namespace replaced before cleanup", run_scenario(script_file, "install", pg, swapped=True))
+            for m in (late_lookup, no_uid):
+                must_catch(f"namespace replaced before cleanup, {m.stem}", run_scenario(m, "install", pg, swapped=True),
+                           "replacement namespace was deleted", "release of the replacement")
+            # r4: a parent that exported the script's internal state (ns_uid, token, ns, release...) next to a namespace of the same
+            # name and label, with a release in it, must find both intact and no helm uninstall / kubectl delete at all
+            state = {"ns_uid": "11111111-1111-4111-8111-111111111111", "token": "inherited-token", "release": "x-monorepo-upg-4242", "ns": f"x-monorepo-upgrade-{RUN_ID}",
+                     "helm_pid": "1", "soft": "1", "run_label": "x-monorepo-upgrade-drill"}
+            report("inherited internal state", run_scenario(script_file, "install", pg, preexisting_label="inherited-token", inherited=state))
+            must_catch("inherited internal state, inherits-state", run_scenario(inherits, "install", pg, preexisting_label="inherited-token", inherited=state),
+                       "left alone", "uninstall", "something was run against", "release in the namespace")
 
-        for name, override in REFUSALS.items():
-            flow = tmp / ("flow-" + re.sub(r"\W", "_", name) + ".yaml")
-            flow.write_text(yaml.safe_dump(merge(yaml.safe_load(flow_file.read_text()), override)))
-            report(f"refused: {name}", run_scenario(script_file, "install", pg, flow=flow, refused=True))
-            if name.startswith(("secrets.existingSecret", "rpc.extraEnv (FQDN of the home Postgres)", "config.postgres.url", "worker.extraEnv (FQDN of the home Redis)")):
-                must_catch(f"refused: {name}, no-check", run_scenario(no_check, "install", pg, flow=flow, refused=True),
-                           "must create", "not refused up front")
+            for name, override in REFUSALS.items():
+                flow = tmp / ("flow-" + re.sub(r"\W", "_", name) + ".yaml")
+                flow.write_text(yaml.safe_dump(merge(yaml.safe_load(flow_file.read_text()), override)))
+                report(f"refused: {name}", run_scenario(script_file, "install", pg, flow=flow, refused=True))
+                if name.startswith(("secrets.existingSecret", "rpc.extraEnv (FQDN of the home Postgres)", "config.postgres.url", "worker.extraEnv (FQDN of the home Redis)")):
+                    must_catch(f"refused: {name}, no-check", run_scenario(no_check, "install", pg, flow=flow, refused=True),
+                               "must create", "not refused up front")
+
+        # #432: every port value that is not a plain decimal 1-65535 is refused before any request is sent. Real curl, synthetic key,
+        # loopback receivers: neither receiver may see anything. Both variables, every value.
+        for var, other in (("UPGRADE_RPC_PORT", {"UPGRADE_SERVE_PORT": str(good.port)}), ("UPGRADE_SERVE_PORT", {"UPGRADE_RPC_PORT": str(good.port)})):
+            for what, value in bad_port_values(bad.port).items():
+                if want(f"refused: {var}={what}"):
+                    report(f"refused: {var}={what}", run_scenario(script_file, "upgrade", pg, flow=synth_flow, refused=True, recv=[good, bad],
+                                                              env_extra={**other, var: value}))
+        for var, other in (("UPGRADE_RPC_PORT", {"UPGRADE_SERVE_PORT": str(good.port)}), ("UPGRADE_SERVE_PORT", {"UPGRADE_RPC_PORT": str(good.port)})):
+            if not want("mutant-ports"):
+                break
+            bv = bad_port_values(bad.port)
+            for m, what in ((no_port_check, "userinfo@host:port"), (no_port_check, "empty"), (no_range, "above range"), (zero_ok, "leading zero")):
+                if m is no_port_check and what == "userinfo@host:port" and var == "UPGRADE_RPC_PORT":
+                    probs = run_scenario(m, "upgrade", pg, flow=synth_flow, refused=True, recv=[good, bad], env_extra={**other, var: bv[what]})
+                    must_catch(f"refused: {var}={what}, {m.stem}", probs, "a request reached a loopback receiver")
+                    if not any(h[2] and h[2].startswith("SYNTH-") for h in bad.hits):
+                        failed = True
+                        print(f"upgrade-failure-test: FAIL: the unchecked port did not deliver the synthetic key to the receiver: {bad.hits[:3]}", file=sys.stderr)
+                elif m is no_port_check and var == "UPGRADE_SERVE_PORT" and what == "userinfo@host:port":
+                    must_catch(f"refused: {var}={what}, {m.stem}", run_scenario(m, "upgrade", pg, flow=synth_flow, refused=True, recv=[good, bad], env_extra={**other, var: bv[what]}),
+                               "a request reached a loopback receiver")
+                elif var == "UPGRADE_RPC_PORT" and m is not no_port_check:
+                    must_catch(f"refused: {var}={what}, {m.stem}", run_scenario(m, "upgrade", pg, flow=synth_flow, refused=True, recv=[good, bad], env_extra={**other, var: bv[what]}),
+                               "not refused up front", "must create")
+        # a legitimate custom port pair still works, and the key goes to exactly that port
+        if want("custom ports"):
+          report("custom ports accepted", run_scenario(script_file, "upgrade", pg, flow=synth_flow, positive=True, recv=[good, bad],
+                                                    env_extra={"UPGRADE_RPC_PORT": str(good.port), "UPGRADE_SERVE_PORT": str(bad.port)}))
+        # #433: SIGTERM around the create, from the real entry
+        for where in ("before-commit", "after-reply", "after-save"):
+            if want(f"SIGTERM {where}"):
+                report(f"SIGTERM {where}", run_scenario(script_file, "install", pg, sig=where))
+        for m in (no_hint, no_flag) if want("mutant-sigterm") else ():
+            for where in ("before-commit", "after-reply"):
+                must_catch(f"SIGTERM {where}, {m.stem}", run_scenario(m, "install", pg, sig=where), "did not say which namespace", "does not carry")
     finally:
+        good.stop()
+        bad.stop()
         shutil.rmtree(tmp, ignore_errors=True)
         subprocess.run([rt, "rm", "-f", pg], capture_output=True)
     if failed:
