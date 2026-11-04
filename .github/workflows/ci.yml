@@ -205,11 +205,18 @@ jobs:
   # an admin key, auth off with no key / a key sent, × orders / reservation, 2 VU, plus the
   # per-procedure-public and fails-once fixtures (#193). Parallel to `k6`; it runs on the auth
   # paths (pkgs/platform/server + config, pkgs/identity, apps/rpc, configs, tests/k6), not on every Go change.
+  # A static matrix of 3 shards (K6_AUTH_SHARD=i/3: the cells at positions i, i+3, … of
+  # `K6_AUTH_LIST=1 tests/k6/auth-matrix.sh`), each leg on its own runner with its own Postgres service,
+  # so no database, worker consumer group, outbox backlog, port or catalog-rpc is shared between shards (#448).
   k6-auth:
     needs: affected
     if: needs.affected.outputs.run_k6_auth == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
     services:
       postgres:
         image: postgres:16-alpine
@@ -218,6 +225,7 @@ jobs:
         options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
     env:
       DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+      K6_AUTH_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
