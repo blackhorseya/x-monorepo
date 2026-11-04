@@ -71,7 +71,7 @@ def start_postgres():
     raise SystemExit("upgrade-failure-test: the Postgres container never became ready")
 
 
-def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_ns=False):
+def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_label=None):
     """Run `script` (payment-upgrade.sh or a mutant) behind the guard and return the problems found.
     mode: "install" (the previous chart does not install) or "upgrade" (an order cannot be placed during the upgrade)."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-test-"))
@@ -83,8 +83,8 @@ def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=
     for sql in ("DROP SCHEMA IF EXISTS unrelated CASCADE", "DROP TABLE IF EXISTS public.drill_mutant",
                 "CREATE SCHEMA unrelated", "CREATE TABLE unrelated.keep (v text)", f"INSERT INTO unrelated.keep VALUES ('{SENTINEL}')"):
         assert psql(pg, sql).returncode == 0, sql
-    if preexisting_ns:  # someone else's namespace under the very name this run would take
-        (nsdir / f"x-monorepo-upgrade-{RUN_ID}").write_text("someone-else")
+    if preexisting_label is not None:  # a namespace that is already there under the very name this run would take
+        (nsdir / f"x-monorepo-upgrade-{RUN_ID}").write_text(preexisting_label)
 
     (bindir / "helm").write_text(f'''#!/bin/bash
 if [ "$1" = template ]; then exec {helm_real} "$@"; fi
@@ -164,8 +164,8 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
                ORDERS=str(root / "orders"), MODE=mode, PGC=pg, NSDIR=str(nsdir), HOME_NS=HOME_NS,
                POSTGRES_URL_CHECK=str(check_file), UPGRADE_SCRIPT=str(script),
                CREATE_REPLY_FAILS="1" if create_reply_fails else "")
-    if preexisting_ns:
-        env["UPGRADE_RUN_ID"] = RUN_ID
+    if preexisting_label is not None:
+        env["UPGRADE_RUN_ID"] = RUN_ID  # the caller may name the run, so a label made of the run id proves nothing
     cmd = ["bash", str(guard_file), HOME_NS, "rel", "deployments/helm/x-monorepo", str(values_file), str(flow or flow_file)]
     out = open(root / "out", "wb")
     p = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
@@ -203,11 +203,16 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
                 problems.append(f"a refused run must create, install and delete nothing, got creates={len(creates)} deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
             if "payment-upgrade: refused" not in outtxt:
                 problems.append("the run was not refused up front (no 'payment-upgrade: refused' in its output)")
-        elif preexisting_ns:
-            if "refused: could not create the namespace" not in outtxt:
+        elif preexisting_label is not None:
+            # already there, whatever its label: refused, not used, not written to, not deleted
+            theirs = f"x-monorepo-upgrade-{RUN_ID}"
+            if "already exists" not in outtxt or "payment-upgrade: refused" not in outtxt:
                 problems.append("a namespace that already exists was not refused")
-            if deletes or upgrades or left != [f"x-monorepo-upgrade-{RUN_ID}"]:
+            if deletes or upgrades or left != [theirs] or (nsdir / theirs).read_text() != preexisting_label:
                 problems.append(f"a namespace that was already there must be left alone and nothing installed: deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
+            touched = [x for x in lines if f" -n {theirs} " in x or (x.startswith("helm ") and theirs in x)]
+            if touched:
+                problems.append(f"something was run against the namespace that was already there: {touched}")
         else:
             # one namespace created, installed into, and deleted: that one, last
             if len(creates) != 1:
@@ -296,15 +301,23 @@ def main():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-mutants-"))
     src = script_file.read_text()
 
-    def mutant(name, old, new):
-        assert old in src, f"the script changed shape: the {name} mutant cannot be built"
+    def mutant(name, old, new, *more):
+        text = src
+        for o, n in ((old, new),) + tuple(zip(more[::2], more[1::2])):
+            assert o in text, f"the script changed shape: the {name} mutant cannot be built ({o[:40]!r})"
+            text = text.replace(o, n, 1)
         f = tmp / f"{name}.sh"
-        f.write_text(src.replace(old, new, 1))
+        f.write_text(text)
         return f
 
     # a drill that writes to the home database / deletes the home namespace / skips the render check
     writes_home = mutant("writes-home", "ns_created=1\n", 'ns_created=1\nkubectl -n "$1" exec deploy/postgres -- psql -U app -d app -tAq -c "CREATE TABLE public.drill_mutant (x int)" >/dev/null\n')
     deletes_home = mutant("deletes-home", 'kubectl delete namespace "$ns"', 'kubectl delete namespace "$1"')
+    # the rejected r3 judgement: ownership by a label made of the caller's run id, AlreadyExists taken for a lost reply
+    run_id_label = mutant("run-id-label",
+                          'if kubectl get namespace "$ns" -o name >/dev/null 2>&1; then', "if false; then",
+                          "token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n')", "token=$run_id",
+                          'grep -q AlreadyExists <<<"$err" || ', "")
     no_check = mutant("no-check", "assert_connections() {", "assert_connections() { return 0;")
 
     def report(label, problems):
@@ -330,8 +343,12 @@ def main():
         must_catch("install, deletes-home", run_scenario(deletes_home, "install", pg), "not the home one", "namespaces left behind", "names the home namespace")
         # the create commits and its answer is lost: the namespace is still cleaned up
         report("install, create reply lost", run_scenario(script_file, "install", pg, create_reply_fails=True))
-        # a namespace that was already there is neither reused nor deleted
-        report("namespace already exists", run_scenario(script_file, "install", pg, preexisting_ns=True))
+        # a namespace that was already there is neither reused nor written to nor deleted, whatever its label (r3: the caller can
+        # name the run, so "same name, same label" is a state anyone can construct)
+        for label_name, label in (("same label", RUN_ID), ("other label", "someone-else")):
+            report(f"namespace already exists, {label_name}", run_scenario(script_file, "install", pg, preexisting_label=label))
+            must_catch(f"namespace already exists, {label_name}, run-id-label", run_scenario(run_id_label, "install", pg, preexisting_label=label),
+                       "already exists was not refused", "must be left alone", "something was run against") if label_name == "same label" else None
 
         for name, override in REFUSALS.items():
             flow = tmp / ("flow-" + re.sub(r"\W", "_", name) + ".yaml")
@@ -346,8 +363,8 @@ def main():
     if failed:
         sys.exit(1)
     print("upgrade-failure-test: ok (home database unchanged on every path, the drill's namespace created and deleted, "
-          f"{len(REFUSALS)} Postgres/Redis-source inputs refused up front, lost create reply cleaned up, an existing namespace left alone, "
-          "background helm joined before the delete, migrate log printed, 3 mutants caught)")
+          f"{len(REFUSALS)} Postgres/Redis-source inputs refused up front, lost create reply cleaned up, an existing namespace (same or other label) left alone, "
+          "background helm joined before the delete, migrate log printed, 4 mutants caught)")
 
 
 main()

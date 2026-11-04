@@ -65,11 +65,11 @@ cleanup() {
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
   # The one namespace this run created, and only it: ns_created is set before the create is sent (a create whose answer was
-  # lost still gets cleaned up), and the label of THIS run is checked before the delete (a namespace that was already there
-  # under this name carries no such label and is left alone).
+  # lost still gets cleaned up), and this call's token is checked before the delete (a namespace that was already there under
+  # this name cannot carry it and is left alone).
   if [ -n "${ns_created:-}" ]; then
     helm uninstall "$release" -n "$ns" >/dev/null 2>&1 || true
-    if [ "$(kubectl get namespace -l "$run_label=$run_id" -o name 2>/dev/null)" = "namespace/$ns" ]; then
+    if [ -n "${token:-}" ] && [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" = "namespace/$ns" ]; then
       kubectl delete namespace "$ns" --timeout=3m >/dev/null 2>&1 || echo "payment-upgrade: could not delete the namespace $ns it created" >&2
     fi
   fi
@@ -153,14 +153,15 @@ mkdir -p "$tmp/old"
 git archive "$from_tag" deployments/helm/x-monorepo | tar -x -C "$tmp/old"
 old_chart="$tmp/old/deployments/helm/x-monorepo"
 old_args=(--set "image.registry=ghcr.io/blackhorseya/x-monorepo" --set "image.tag=$from_image" --set "image.pullPolicy=IfNotPresent")
-# the premise: that chart really runs `payment-rpc consume`, and this one does not
-old_render=$(helm template t "$old_chart" -f "$values" -f "$flow" "${old_args[@]}") || fail "refused: the previous chart does not render with these values"
-new_render=$(helm template t "$chart" -f "$values" -f "$flow") || fail "refused: this chart does not render with these values"
-grep -q -- '"consume"' <<<"$old_render" || fail "the chart at $from_tag does not run 'payment-rpc consume': nothing to upgrade from"
-if grep -q -- '"consume"' <<<"$new_render"; then fail "this chart still runs a 'consume' argument"; fi
 # The webhook Ingress is switched off for both charts: another release in another namespace already has the same host and
 # path, and the ingress controller refuses duplicates. The drill reaches the pods through port-forwards.
 common_args=(--set paymentRpc.ingress.enabled=false)
+# One render per chart, with exactly the arguments of its installs below: the premise (that chart really runs `payment-rpc
+# consume`, and this one does not) and the connection check both read it.
+old_render=$(helm template t "$old_chart" -f "$values" -f "$flow" "${old_args[@]}" "${common_args[@]}") || fail "refused: the previous chart does not render with these values"
+new_render=$(helm template t "$chart" -f "$values" -f "$flow" "${common_args[@]}") || fail "refused: this chart does not render with these values"
+grep -q -- '"consume"' <<<"$old_render" || fail "the chart at $from_tag does not run 'payment-rpc consume': nothing to upgrade from"
+if grep -q -- '"consume"' <<<"$new_render"; then fail "this chart still runs a 'consume' argument"; fi
 old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" -f "$flow" "${old_args[@]}" "${common_args[@]}" "$@" --wait --timeout 6m >/dev/null || fail "the previous chart did not become ready"; forwards; }
 # Why a namespace of its own: the home database already holds the schema the TREE's migrate image built, so it can be ahead
 # of what the previous release's migrate image knows. Observed (v0.63.3 against ordering at 10, #427):
@@ -180,23 +181,32 @@ old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" 
 # refused. Fail closed, before anything is created or installed.
 read -r pgurl redisurl < <(python3 -c 'import sys,yaml; s=yaml.safe_load(open(sys.argv[1]))["secrets"]; print(s["postgresUrl"], s["redisUrl"])' "$values") || fail "refused: $values gives no secrets.postgresUrl / secrets.redisUrl"
 [[ $pgurl =~ ^postgres://[^@/]*@postgres:[0-9]+/ && $redisurl =~ ^redis://redis:[0-9]+/ ]] || fail "refused: $values must name Postgres and Redis by their short Service names (postgres, redis), which resolve inside the drill's namespace"
-assert_connections() { # <chart> <helm template args...>
-  local c=$1; shift
-  helm template t "$c" "$@" | python3 "$url_check" --expect "APP_POSTGRES_URL=$pgurl" --expect "APP_REDIS_URL=$redisurl" >&2 || fail "refused: with these values a workload would not connect only to the drill's own Postgres and Redis: $c"
+assert_connections() { # <rendered chart>
+  python3 "$url_check" --expect "APP_POSTGRES_URL=$pgurl" --expect "APP_REDIS_URL=$redisurl" <<<"$1" >&2 || fail "refused: with these values a workload would not connect only to the drill's own Postgres and Redis"
 }
-assert_connections "$old_chart" -f "$values" -f "$flow" "${old_args[@]}" "${common_args[@]}"
-assert_connections "$chart" -f "$values" -f "$flow" "${common_args[@]}"
-# Only now is anything created. ns_created is set BEFORE the create is sent; `create` (not apply) fails on a namespace that
-# already exists, which is then not ours and not touched.
+assert_connections "$old_render"
+assert_connections "$new_render"
+# Only now is anything created. A namespace that already exists is never ours, whatever it is labelled: run_id can be given by
+# the caller, so a label made of it proves nothing. Ownership is a token generated here, by this call, that nobody else can
+# know; it is what tells a create whose answer was lost (the namespace carries our token) from AlreadyExists (it does not).
+# ns_created is set only once the create may have been sent, and cleanup() deletes only a namespace that carries the token.
+if kubectl get namespace "$ns" -o name >/dev/null 2>&1; then fail "refused: the namespace $ns already exists: it is not reused and not touched"; fi
+token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 ns_created=1
-kubectl create -f - >/dev/null <<NSEOF || { [ "$(kubectl get namespace -l "$run_label=$run_id" -o name 2>/dev/null)" = "namespace/$ns" ] || { ns_created=""; fail "refused: could not create the namespace $ns (it may already exist: it is not reused)"; }; }
+if ! err=$(kubectl create -f - 2>&1 >/dev/null <<NSEOF
 apiVersion: v1
 kind: Namespace
 metadata:
   name: $ns
   labels:
-    $run_label: "$run_id"
+    $run_label: "$token"
 NSEOF
+); then
+  if grep -q AlreadyExists <<<"$err" || [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" != "namespace/$ns" ]; then
+    ns_created=""
+    fail "refused: could not create the namespace $ns (it already exists, or the create failed): it is not reused and not touched"
+  fi
+fi
 kubectl -n "$ns" apply -f "$kind_dir/deps.yaml" >/dev/null
 kubectl -n "$ns" rollout status deploy/postgres deploy/redis --timeout=2m >/dev/null || fail "the drill's Postgres / Redis did not become ready"
 old_up
