@@ -313,6 +313,8 @@ tasks:
       - deployments/helm/check-chart-bump-test.py
       # what a failed kind run leaves behind (#416): diag.sh (whole pod logs since the start, Postgres sessions and locks) against fake kubectl/helm/curl, payment-flow.sh running it before it restores the release, the kind Postgres' lock-wait logging
       - deployments/helm/kind/diag-test.sh
+      # the cluster / namespace every kind task aims at: nothing, the command line, the OS environment only, both (task --dry, no kind runs; #430)
+      - deployments/helm/kind/target-test.sh
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
