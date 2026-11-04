@@ -3,7 +3,7 @@ import { CancelledError, infiniteQueryOptions, queryOptions, type InfiniteData, 
 import { ReservationStatus, type Reservation } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
 import { getCredentialGeneration } from "./auth";
-import { admin, catalog, identity, inventory, isNotFound, orders, payments } from "./client";
+import { admin, catalog, identity, inventory, isNotFound, isUnauthenticated, orders, payments } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
 export type ServerVersion = { version: string; commit: string; date: string; go: string };
@@ -26,6 +26,10 @@ export const keys = {
   // refreshes them all); orderOf(id, generation) is the key the detail page reads.
   order: (id: string) => ["order", id] as const,
   orderOf: (id: string, generation: number) => ["order", id, generation] as const,
+  // history(id) is the prefix every generation of one order's history starts with (a mutation invalidates it);
+  // historyOf(id, generation) is the key the History card reads, so another credential is another entry.
+  history: (id: string) => ["history", id] as const,
+  historyOf: (id: string, generation: number) => ["history", id, generation] as const,
   reservation: (orderId: string) => ["reservation", orderId] as const,
   payment: (generation: number, orderId: string) => ["payment", generation, orderId] as const,
   quote: (skus: string[]) => ["quote", ...skus] as const,
@@ -168,6 +172,33 @@ export const orderQuery = (id: string, generation: number) =>
       }
     },
     refetchInterval: (q) => orderInterval(q.state.data),
+  });
+
+// How often one order's History card asks for the history: with the order, at the pace the order itself is
+// polled (orderInterval), because a transition is what adds a row. A final order's history does not change
+// any more, so it is not polled; the card fetches once more when the status it follows changes (HistoryCard),
+// which is what brings the last row in. `order` undefined/null: the order is not loaded (or is missing); the
+// card is not asking for anything then.
+export function historyInterval(order: Order | null | undefined): number | false {
+  if (!order) return false;
+  return orderInterval(order);
+}
+
+// The transitions of one order for the History card. Keyed by the credential generation (src/auth.ts) like the
+// payment and the admin probe: the answer carries actor_subject only when the caller is an admin, and it must
+// never outlive the credential it was asked with. Another credential reads another entry, and a reply that
+// arrives late is written under the key it was asked for, not into the new credential's entry.
+// NOT_FOUND is an answer (no such order for this caller) and is told apart from a failure by the card.
+export const historyQuery = (id: string, generation: number, order: Order | null | undefined) =>
+  queryOptions({
+    queryKey: keys.historyOf(id, generation),
+    // asOf: the status of the order when this request was made. The history is read after that, so it holds every
+    // transition up to at least that status; the card compares it with the order's status now to know whether the
+    // snapshot it holds can still be missing a row (HistoryCard). The closure is this render's: a request keeps
+    // the status it started with.
+    queryFn: async () => ({ entries: (await orders.getOrderHistory({ id })).entries, asOf: order?.status }),
+    refetchInterval: historyInterval(order),
+    retry: (count, err) => !isNotFound(err) && !isUnauthenticated(err) && count < 2,
   });
 
 // How often one order's page asks for its reservation, given the reservation (undefined = not

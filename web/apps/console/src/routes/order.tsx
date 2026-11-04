@@ -23,6 +23,7 @@ import { ConfirmButton } from "../components/confirm";
 import { describe, orders } from "../client";
 import { keys, orderQuery, reservationQuery } from "../queries";
 import { ErrorAlert } from "../components/error-alert";
+import { HistoryCard } from "../components/history-card";
 import { PaymentCard } from "../components/payment-card";
 import { formatMoney, paymentRequiredLabel, statusVariant } from "../components/order-status";
 import { reservationBadge } from "./reservations";
@@ -63,6 +64,7 @@ export function OrderPage() {
       </Card>
       {data && data.status === OrderStatus.CONFIRMED && data.paymentRequired && <PaymentCard key={generation} orderId={id} />}
       {data && <ReservationCard orderId={id} order={data.status} />}
+      {data && <HistoryCard key={`history-${generation}`} orderId={id} order={data} />}
     </div>
   );
 }
@@ -75,6 +77,7 @@ function OrderDetail({ order }: { order: Order }) {
       void qc.invalidateQueries({ queryKey: keys.orders });
       void qc.invalidateQueries({ queryKey: keys.order(order.id) });
       void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
+      void qc.invalidateQueries({ queryKey: keys.history(order.id) });
     },
   });
   const complete = useMutation({
@@ -83,6 +86,7 @@ function OrderDetail({ order }: { order: Order }) {
       void qc.invalidateQueries({ queryKey: keys.orders });
       void qc.invalidateQueries({ queryKey: keys.order(order.id) });
       void qc.invalidateQueries({ queryKey: keys.reservation(order.id) });
+      void qc.invalidateQueries({ queryKey: keys.history(order.id) });
     },
   });
   useResetOnCredentialChange(cancel);
