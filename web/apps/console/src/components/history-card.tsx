@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   OrderHistoryActorKind,
@@ -58,18 +58,22 @@ const at = (t?: { seconds: bigint }) => (t ? new Date(Number(t.seconds) * 1000).
 // reply that arrives late is written under its own key.
 //
 // The history grows when the order moves, so the card follows the order's own poll (historyInterval) and asks once
-// more when the order's status changes (the last row of a final order arrives that way); the page's Cancel /
-// Complete invalidate it too. An order from before the history existed has none: an empty state, not an error.
+// more when the snapshot it holds was taken under another status than the order has now (the last row of a final
+// order arrives that way, even when the first answer was slow); the page's Cancel / Complete invalidate it too. An order from before the history existed has none: an empty state, not an error.
 export function HistoryCard({ orderId, order }: { orderId: string; order: Order }) {
   const generation = useCredentialGeneration();
-  const { data, isError, error, refetch, isFetched } = useQuery(historyQuery(orderId, generation, order));
+  const { data: snapshot, isError, error, isFetching, refetch } = useQuery(historyQuery(orderId, generation, order));
+  const data = snapshot?.entries;
 
-  const status = useRef(order.status);
+  // A snapshot taken while the order was in another status can lack the transitions since. Ask again once the
+  // request in flight (if any) is done: a refetch cannot replace a first request that has no data yet, it would join
+  // it and get the same stale answer. A final order is not polled, so this is the only thing that brings its last
+  // row in when the first answer was slow. After the new answer asOf equals the order's status and it stops; if the
+  // order moved again meanwhile, it asks once more. A failed refetch is shown, not retried in a loop (isError).
+  const stale = snapshot !== undefined && snapshot.asOf !== order.status;
   useEffect(() => {
-    if (status.current === order.status) return;
-    status.current = order.status;
-    if (isFetched) void refetch();
-  }, [order.status, isFetched, refetch]);
+    if (stale && !isFetching && !isError) void refetch();
+  }, [stale, isFetching, isError, refetch]);
 
   const notFound = isError && isNotFound(error);
   return (

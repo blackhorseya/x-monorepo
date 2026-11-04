@@ -91,6 +91,6 @@ migration 之前建立的訂單沒有 history，或只有 migration 之後的轉
 - **cause 與 actor 的標籤是固定的句子**，不顯示伺服器給的文字；`UNSPECIFIED` 與這個版本不認得的值（較新的伺服器）都顯示 `Unknown cause`／`Unknown`，不是空白也不是數字。
 - **誰看得到 subject 由伺服器決定**（只回給 admin，見〈讀取〉）；卡片只在回應帶有 subject 時才顯示它。卡片負責的是：答案不能比取得它的 credential 活得久。query 以 credential generation 為 key（`queries.ts` 的 `historyQuery`），頁面再以 generation 當卡片的 key，所以切換 credential 或登出之後，前一個身分的列、錯誤與 subject 不在新身分讀的那一格裡；舊身分的慢回覆寫進它自己的 key。
 - **空清單**（migration 之前建立的訂單）顯示明確的空狀態，不當成錯誤；`NOT_FOUND`（訂單不存在或不是你的）與其他失敗分開顯示。訂單本身讀不到時（`NOT_FOUND`、未登入），頁面只顯示訂單的錯誤，沒有 History 卡。
-- **輪詢跟著訂單**：間隔沿用訂單自己的輪詢（PENDING 與要付款的 CONFIRMED 快、其餘慢），訂單狀態一變就再抓一次（終態訂單的最後一列這樣進來），終態之後不再輪詢；Cancel／Complete 成功後也會讓它失效重抓。沒有另外的輪詢節奏。
-- 測試：`e2e/history.spec.ts`（真實流程、空狀態、錯誤分流、未知 cause、輪詢）與 `e2e/auth/history.spec.ts`（真 server：admin 看得到 subject、擁有者看不到、別人 `NOT_FOUND`、切換與登出後 subject 消失、舊 admin 的慢回覆與「新身分的答案還沒到時」都不會顯示 admin 的列；拿掉 generation 這兩條會轉紅）。
+- **輪詢跟著訂單**：間隔沿用訂單自己的輪詢（PENDING 與要付款的 CONFIRMED 快、其餘慢），終態之後不再輪詢，沒有另外的輪詢節奏。每份快照記著「發出請求時訂單的狀態」（`asOf`）；只要它和訂單現在的狀態不同，就在手上的請求結束後再抓一次（請求還在路上時不能用 refetch 取代它：沒有資料的第一個請求會被併入同一個 promise，拿到同一份舊答案），所以即使第一個回覆很慢、訂單已先到終態，最後一列也一定進來，之後 `asOf` 與狀態相同，不再抓。補抓失敗時顯示錯誤，不無限重試。Cancel／Complete 成功後也會讓它失效重抓。
+- 測試：`e2e/history.spec.ts`（真實流程、空狀態、錯誤分流、未知 cause、輪詢）與 `e2e/auth/history.spec.ts`（真 server：admin 看得到 subject、擁有者看不到、別人 `NOT_FOUND`、切換與登出後 subject 消失、舊 admin 的慢回覆與「新身分的答案還沒到時」都不會顯示 admin 的列；拿掉 generation 這兩條會轉紅；`e2e/history.spec.ts` 另有「第一個回覆還在路上、訂單先到 COMPLETED／CANCELLED」兩格，把補抓條件改回以 `isFetched` 為前提會轉紅）。
 

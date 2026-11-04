@@ -192,7 +192,11 @@ export function historyInterval(order: Order | null | undefined): number | false
 export const historyQuery = (id: string, generation: number, order: Order | null | undefined) =>
   queryOptions({
     queryKey: keys.historyOf(id, generation),
-    queryFn: async () => (await orders.getOrderHistory({ id })).entries,
+    // asOf: the status of the order when this request was made. The history is read after that, so it holds every
+    // transition up to at least that status; the card compares it with the order's status now to know whether the
+    // snapshot it holds can still be missing a row (HistoryCard). The closure is this render's: a request keeps
+    // the status it started with.
+    queryFn: async () => ({ entries: (await orders.getOrderHistory({ id })).entries, asOf: order?.status }),
     refetchInterval: historyInterval(order),
     retry: (count, err) => !isNotFound(err) && !isUnauthenticated(err) && count < 2,
   });
