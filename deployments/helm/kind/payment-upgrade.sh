@@ -31,6 +31,10 @@ api="http://127.0.0.1:$rport/api" serve="http://127.0.0.1:$sport"
 pfs=""
 body=""
 tmp=$(mktemp -d)
+dbname="" # the database this run creates for itself (stage 1); the release's own database is never modified
+# adb talks to the release's own database ("app") and is used for exactly two statements: CREATE DATABASE and
+# DROP DATABASE of $dbname. Everything else goes through db(), on $dbname.
+adb() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1"; }
 
 fail() {
   echo "payment-upgrade: $*" >&2
@@ -49,6 +53,11 @@ restore() {
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
   helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true
+  # The release is back on its own database. The one database this script made is the only thing it ever drops;
+  # FORCE ends the connections of pods that were still on it. Nothing in `app` (or any other database) is touched.
+  if [ -n "${dbname:-}" ] && [ "$dbname" != app ]; then
+    adb "DROP DATABASE IF EXISTS \"$dbname\" WITH (FORCE)" >/dev/null 2>&1 || echo "payment-upgrade: could not drop the database $dbname it created" >&2
+  fi
   return "$rc"
 }
 trap restore EXIT
@@ -84,7 +93,7 @@ call() {
 want() { [ "$2" = "$3" ] || fail "$1: got '$2', want '$3' (body: ${body:-})"; }
 as_shopper() { call "$shopper_key" "$@"; }
 as_admin() { call "$admin_key" "$@"; }
-db() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1"; }
+db() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d "$dbname" -tAq -c "$1"; }
 
 order_status() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.status // "-"' <<<"$body"; }
 wait_order() { # <order> <ORDER_STATUS_X> [seconds]
@@ -135,17 +144,21 @@ new_render=$(helm template t "$chart" -f "$values" -f "$flow")
 grep -q -- '"consume"' <<<"$old_render" || fail "the chart at $from_tag does not run 'payment-rpc consume': nothing to upgrade from"
 if grep -q -- '"consume"' <<<"$new_render"; then fail "this chart still runs a 'consume' argument"; fi
 old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" -f "$flow" "${old_args[@]}" "$@" --wait --timeout 6m >/dev/null || fail "the previous chart did not become ready"; forwards; }
-# The database holds the schema the TREE's migrate image built (earlier stages of helm-kind installed this tree), so it can
-# be ahead of what the previous release's migrate image knows. Observed (v0.63.3 against ordering at 10, #427):
+# The release's own database already holds the schema the TREE's migrate image built (earlier stages of helm-kind installed
+# this tree), so it can be ahead of what the previous release's migrate image knows. Observed (v0.63.3 against ordering
+# at 10, #427):
 #   migrate ordering: no migration found for version 10: read down for version 10 .: file does not exist
-# and the release's pre-upgrade hook Job fails. Stage 1 is the previous release coming up from nothing, so it starts from
-# an empty database: every schema is dropped (whichever BCs and versions the tree has, nothing here names one), and the old
-# release's own migrate hook rebuilds exactly what it knows. The upgrade of stage 4 then applies the tree's migrations on
-# top of that, which is the upgrade path this script is about. Nothing later in helm-kind reads what was dropped.
-user_schemas() { db "SELECT schema_name FROM information_schema.schemata WHERE schema_name <> 'information_schema' AND schema_name !~ '^pg_' AND schema_name <> 'public' ORDER BY 1"; }
-for s in $(user_schemas); do db "SET client_min_messages = warning; DROP SCHEMA \"$s\" CASCADE" >/dev/null; done
-left=$(user_schemas)
-[ -z "$left" ] || fail "schemas still present after the reset: $left"
+# and the release's pre-upgrade hook Job fails. Stage 1 is the previous release coming up from nothing, so it gets a
+# database of its own: created here on the same Postgres, named for this run, and handed to the chart through
+# secrets.postgresUrl (the one input every Secret of the chart is built from). The old release's migrate hook builds in it
+# exactly what that release knows; stage 4 upgrades it to this tree, which is the upgrade path this script is about. No
+# migration number appears here. The release's own database is not read or changed, and `kind` clusters are reused
+# between runs, so it may hold things that are not this test's: the only DROP this script runs is of $dbname, in restore().
+grep -qxF '  postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable' "$values" || fail "$values does not give secrets.postgresUrl as postgres://app:app@postgres:5432/app?sslmode=disable: cannot derive the run's database URL from it"
+dbname="upgrade_$(date +%s)_$RANDOM"
+pgurl="postgres://app:app@postgres:5432/$dbname?sslmode=disable"
+adb "CREATE DATABASE \"$dbname\"" >/dev/null || { dbname=""; fail "could not create the database for this run"; }
+old_args+=(--set "secrets.postgresUrl=$pgurl")
 old_up
 oldimg=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.spec.template.spec.containers[0].image}')
 case $oldimg in */payment-rpc:*) ;; *) fail "before the upgrade the consumer runs '$oldimg', want the payment-rpc image" ;; esac
@@ -175,7 +188,7 @@ echo "payment-upgrade: order $B is CONFIRMED and has no payment while the consum
 # rpc pods roll too, and a forward dies with its pod). A try that fails is repeated; an order that was created but
 # whose answer was lost is still counted, because the checks below count the events on the database, not the orders
 # this script remembers.
-helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" -f "$flow" --wait --timeout 6m >/dev/null &
+helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" -f "$flow" --set "secrets.postgresUrl=$pgurl" --wait --timeout 6m >/dev/null &
 helm_pid=$!
 during=""
 for i in 1 2 3; do
