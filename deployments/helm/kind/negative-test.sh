@@ -13,6 +13,7 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+. "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
 mkdir "$tmp/bin"
 key="kind-neg-key-0123456789abcd"
 # the values file negative.sh reads the Postgres URL from (kind/values.yaml has the same shape)

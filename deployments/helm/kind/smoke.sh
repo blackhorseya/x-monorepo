@@ -4,6 +4,8 @@
 #   smoke.sh <namespace> <release>
 # Needs kubectl + curl + jq. Exits non-zero (with the pods' state) when anything is off.
 set -euo pipefail
+# refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
+[ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2 port=${SMOKE_PORT:-18080} cport=${SMOKE_CONSOLE_PORT:-18081}
 api="http://127.0.0.1:$port/api"
 console="http://127.0.0.1:$cport"

@@ -248,6 +248,13 @@ printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
     (root / "orders").write_text("")
 
     env = os.environ.copy()
+    runner_home = root / "runner-home"  # stands in for run.sh's scratch HOME: the scripts refuse to start without it (#444)
+    runner_home.mkdir()
+    (runner_home / ".kind-runner").write_text("")
+    real_home = env.get("HOME", "")
+    env.setdefault("XDG_CONFIG_HOME", real_home + "/.config")
+    env.setdefault("XDG_DATA_HOME", real_home + "/.local/share")
+    env.update(HOME=str(runner_home), KIND_RUNNER_HOME=str(runner_home))
     env.update(PATH=f"{bindir}:{env['PATH']}", EVENTS=str(events), UPGRADE_STARTED=str(root / "upgrade_started"),
                ORDERS=str(root / "orders"), MODE=mode, PGC=pg, NSDIR=str(nsdir), RELDIR=str(reldir), HOME_NS=HOME_NS,
                CREATE_REPLY_FAILS="1" if create_reply_fails else "", SWAPPED="1" if swapped else "",
@@ -454,6 +461,7 @@ def merge(a, b):
 
 # Every environment variable the script reads. A new one fails the inventory check below until it is validated in the script
 # (and listed here and in the PR description): that is what keeps the sweep from being a one-time thing (#432).
+RUNNER_OWN = {"HOME", "KIND_RUNNER_HOME"}
 ENV_INPUTS = {"UPGRADE_RUN_ID", "PAYMENT_UPGRADE_FROM_TAG", "PAYMENT_UPGRADE_FROM_IMAGE", "UPGRADE_RPC_PORT", "UPGRADE_SERVE_PORT", "RANDOM"}
 
 
@@ -493,6 +501,7 @@ def want(label):
 
 def main():
     inputs_read = set(re.findall(r"\$\{?([A-Z][A-Z0-9_]+)", "\n".join(l for l in script_file.read_text().splitlines() if not l.lstrip().startswith("#"))))
+    inputs_read -= RUNNER_OWN  # the refuse-outside-run.sh guard (#444) reads these two; run.sh sets them, an operator does not
     if inputs_read != ENV_INPUTS:
         print(f"upgrade-failure-test: FAIL: payment-upgrade.sh reads {sorted(inputs_read)}, the inventory is {sorted(ENV_INPUTS)}: "
               "validate the new input in the script, add a refusal cell here and list it in the PR", file=sys.stderr)

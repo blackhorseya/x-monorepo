@@ -10,6 +10,8 @@
 # It reads no state from the environment (the drill it runs is the payment-upgrade.sh next to this file, nothing else) beyond
 # what the tools read (PATH, KUBECONFIG, ...).
 set -uo pipefail
+# refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
+[ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 before="" after="" rc=0
 home=$1
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

@@ -38,6 +38,7 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
+. "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
 WATCHDOG=""
 trap 'test -z "$WATCHDOG" || kill $WATCHDOG 2>/dev/null; rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
@@ -509,7 +510,7 @@ if only D7; then
   d7() {
     local label=$1; shift
     pgc="diagpg-$$-$RANDOM"
-    "$rt" run -d --name "$pgc" -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=app postgres:16-alpine "$@" >/dev/null
+    HOME="$ENGINE_HOME" "$rt" run -d --name "$pgc" -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=app postgres:16-alpine "$@" >/dev/null
     # The image starts a throwaway server to run its init, stops it, and starts the real one: pg_isready answers during the
     # first, and the connection is then cut ("terminating connection due to administrator command", seen on CI #417 r1 where
     # the image had to be pulled). Ready means the line appears TWICE; a server that never gets there is a setup failure.

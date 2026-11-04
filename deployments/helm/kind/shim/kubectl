@@ -1,0 +1,12 @@
+#!/bin/sh
+# kubectl for the scripts the kind tasks run (deployments/helm/kind/*.sh): whatever the script does with KUBECONFIG,
+# every kubectl it starts, from any depth (xargs, bash -c, timeout, a background job), reaches the real kubectl with
+# --kubeconfig $KIND_KUBECONFIG (the file `kind get kubeconfig` wrote for the task's cluster). No KIND_KUBECONFIG: no call.
+# run.sh puts this directory first on PATH (second layer: the real isolation is run.sh's env -i / scratch HOME / read-only variables). See check-kubeconfig.py.
+d=$(cd "$(dirname "$0")" && pwd) || exit 1
+[ -n "${KIND_KUBECONFIG:-}" ] || { echo "kubectl: KIND_KUBECONFIG is not set (run it through a kind task)" >&2; exit 1; }
+p="" ; old_ifs=$IFS ; IFS=:
+for e in $PATH; do [ "$e" = "$d" ] || p="${p:+$p:}$e"; done
+IFS=$old_ifs
+real=$(PATH="$p" command -v kubectl) || { echo "kubectl: not found on PATH" >&2; exit 127; }
+exec "$real" --kubeconfig "$KIND_KUBECONFIG" "$@"
