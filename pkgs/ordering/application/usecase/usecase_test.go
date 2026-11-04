@@ -61,7 +61,7 @@ func TestConfirmThenCancel(t *testing.T) {
 	}
 
 	// Confirmed is still cancellable; a StockReserved arriving after that is refused.
-	cancelled, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
+	cancelled, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC})
 	if err != nil || cancelled.Status != "CANCELLED" {
 		t.Fatalf("cancel = %+v, %v", cancelled, err)
 	}
@@ -116,7 +116,7 @@ func TestCompleteOrder(t *testing.T) {
 	if _, err = complete.Execute(c, dto.CompleteOrderInput{OrderID: "o-1"}); !errors.Is(err, order.ErrCannotComplete) {
 		t.Fatalf("second complete err = %v, want ErrCannotComplete", err)
 	}
-	if _, err = cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); !errors.Is(err, order.ErrCannotCancel) {
+	if _, err = cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC}); !errors.Is(err, order.ErrCannotCancel) {
 		t.Fatalf("cancel after complete err = %v, want ErrCannotCancel", err)
 	}
 
@@ -156,12 +156,12 @@ func TestCreateGetCancel(t *testing.T) {
 		t.Fatalf("get = %+v, %v", got, err)
 	}
 
-	cancelled, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"})
+	cancelled, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC})
 	if err != nil || cancelled.Status != "CANCELLED" {
 		t.Fatalf("cancel = %+v, %v", cancelled, err)
 	}
 
-	if _, err = cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); !errors.Is(err, order.ErrCannotCancel) {
+	if _, err = cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC}); !errors.Is(err, order.ErrCannotCancel) {
 		t.Fatalf("second cancel err = %v, want ErrCannotCancel", err)
 	}
 

@@ -291,8 +291,8 @@ func TestCancelOrder_Ownership(t *testing.T) {
 		// Somebody else's order is refused exactly like a missing one: same
 		// error, same text, order untouched, nothing published.
 		mine := place(t, create, alice, "")
-		_, other := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: mine.ID})
-		_, missing := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: "no-such-order"})
+		_, other := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: mine.ID, Source: dto.CancelSourceRPC})
+		_, missing := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: "no-such-order", Source: dto.CancelSourceRPC})
 		if !errors.Is(other, order.ErrNotFound) || !errors.Is(missing, order.ErrNotFound) {
 			t.Fatalf("other = %v, missing = %v, want both ErrNotFound", other, missing)
 		}
@@ -310,7 +310,7 @@ func TestCancelOrder_Ownership(t *testing.T) {
 		// path) each cancel: admin and anonymous someone else's order.
 		for name, ctx := range map[string]context.Context{"owner": as(alice), "admin": as(ops), "anonymous": context.Background()} {
 			o := place(t, create, alice, "")
-			if out, err := cancel.Execute(ctx, dto.CancelOrderInput{OrderID: o.ID}); err != nil || out.Status != "CANCELLED" {
+			if out, err := cancel.Execute(ctx, dto.CancelOrderInput{OrderID: o.ID, Source: dto.CancelSourceRPC}); err != nil || out.Status != "CANCELLED" {
 				t.Fatalf("%s cancel = %+v, %v", name, out, err)
 			}
 		}
@@ -368,7 +368,7 @@ func TestCancelComplete_ConfinedCallerNeverLoadsAForeignOrder(t *testing.T) {
 		cancel := usecase.NewCancelOrder(spy, &recorder{}, clk, ownership.New(adminRole))
 		complete := usecase.NewCompleteOrder(spy, &recorder{}, clk, ownership.New(adminRole))
 
-		_, cerr := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: mine.ID})
+		_, cerr := cancel.Execute(as(bob), dto.CancelOrderInput{OrderID: mine.ID, Source: dto.CancelSourceRPC})
 		_, derr := complete.Execute(as(bob), dto.CompleteOrderInput{OrderID: mine.ID})
 		if !errors.Is(cerr, order.ErrNotFound) || !errors.Is(derr, order.ErrNotFound) {
 			t.Fatalf("cancel = %v, complete = %v, want both ErrNotFound", cerr, derr)

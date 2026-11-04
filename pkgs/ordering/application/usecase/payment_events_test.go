@@ -60,7 +60,7 @@ func (e *payEnv) reach(t *testing.T, status string, opts ...usecase.ConfirmOptio
 	}
 	switch status {
 	case "CANCELLED":
-		if _, err := e.cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); err != nil {
+		if _, err := e.cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC}); err != nil {
 			t.Fatal(err)
 		}
 	case "COMPLETED":
@@ -227,7 +227,7 @@ func TestPaymentEvents_RedeliveryAndOrder(t *testing.T) {
 	t.Run("a customer cancel, then the captured event: refused, CANCELLED", func(t *testing.T) {
 		e := newPayEnv()
 		e.reach(t, "CONFIRMED", require)
-		if _, err := e.cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1"}); err != nil {
+		if _, err := e.cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-1", Source: dto.CancelSourceRPC}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := e.captured.Execute(c, capIn); !errors.Is(err, order.ErrCannotPay) {

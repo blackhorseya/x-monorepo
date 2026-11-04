@@ -57,6 +57,7 @@ func (h *OrderCancellationHandler) Handle(c context.Context, payload []byte) err
 	_, err := h.cancelOrder.Execute(ctx, dto.CancelOrderInput{
 		OrderID: evt.GetOrderId(),
 		Reason:  evt.GetReason(),
+		Source:  dto.CancelSourceCancellationRequest,
 	})
 	if err == nil {
 		return nil

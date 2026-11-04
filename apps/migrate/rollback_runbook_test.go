@@ -161,6 +161,7 @@ func (e *rollbackEnv) seedEveryTable(t *testing.T) {
 	e.exec(t, `INSERT INTO ordering.orders (id, customer_id, status, created_at, updated_at) VALUES ('rollback-order', 'rollback-customer', 'PENDING', now(), now())`)
 	e.exec(t, `INSERT INTO ordering.order_items (order_id, position, sku, quantity, unit_price_minor, currency) VALUES ('rollback-order', 0, 'ROLLBACK-STOCK', 1, 100, 'USD')`)
 	e.exec(t, `INSERT INTO ordering.inbox (message_id) VALUES ('sentinel')`)
+	e.exec(t, `INSERT INTO ordering.order_history (order_id, seq, event, from_status, to_status, occurred_at, actor_kind, actor_subject, cause) VALUES ('rollback-order', 1, 'CREATED', NULL, 'PENDING', now(), 'SYSTEM', '', 'RPC_REQUEST')`)
 
 	e.exec(t, `INSERT INTO payment.payments (id, order_id, customer_id, amount, currency, status, order_outcome, expires_at, version, updated_at) VALUES ('payment-sentinel', 'rollback-order', 'rollback-customer', 100, 'USD', 'PENDING', 'NONE', now() + interval '1 hour', 1, now())`)
 	e.exec(t, `INSERT INTO payment.inbox (message_id) VALUES ('sentinel')`)
@@ -299,11 +300,12 @@ func runRollbackCase(t *testing.T, tc rollbackCase) {
 }
 
 const (
-	inventoryMarker = "**Rollback（只退 inventory `0009`）**"
-	orderingMarker  = "**Rollback（只退 ordering `0008`）**"
-	ordering9Marker = "**Rollback（只退 ordering `0009`）**"
-	payment3Marker  = "**Rollback（只退 payment `0003`）**"
-	payment4Marker  = "**Rollback（只退 payment `0004`）**"
+	inventoryMarker  = "**Rollback（只退 inventory `0009`）**"
+	orderingMarker   = "**Rollback（只退 ordering `0008`）**"
+	ordering9Marker  = "**Rollback（只退 ordering `0009`）**"
+	ordering10Marker = "**Rollback（只退 ordering `0010`）**"
+	payment3Marker   = "**Rollback（只退 payment `0003`）**"
+	payment4Marker   = "**Rollback（只退 payment `0004`）**"
 )
 
 const (
@@ -311,6 +313,7 @@ const (
 	ordering0008Cols   = `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'ordering' AND table_name = 'orders' AND column_name IN ('idempotency_key', 'request_hash')`
 	ordering0008Index  = `SELECT count(*) FROM pg_indexes WHERE schemaname = 'ordering' AND indexname = 'orders_customer_idempotency_key'`
 	ordering0009Col    = `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'ordering' AND table_name = 'orders' AND column_name = 'payment_required'`
+	ordering0010Table  = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'ordering' AND table_name = 'order_history'`
 	ordering0009Tables = `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'ordering' AND table_name IN ('events_v1_orderpaid', 'events_v1_orderpaid_offsets')`
 )
 
@@ -391,9 +394,11 @@ var ordering0008Clean = rollbackCase{
 	bc:         0,
 	latest:     8,
 	prepare: func(t *testing.T, e *rollbackEnv) {
-		// ordering is at 9 (payment_required) when every BC is at its latest; this runbook is for 8.
-		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
-			t.Fatal(err)
+		// ordering is at 10 (order_history) when every BC is at its latest; this runbook is for 8.
+		for range 2 { // 10 → 9 → 8
+			if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if e.count(t, ordering0008Cols) != 2 || e.count(t, ordering0008Index) != 1 {
 			t.Fatal("0008 did not add its columns and index")
@@ -411,7 +416,7 @@ var ordering0008Clean = rollbackCase{
 		}
 	},
 	reapply: func(t *testing.T, e *rollbackEnv) {
-		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil { // re-applies 0008, then 0009
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil { // re-applies 0008, 0009, then 0010
 			t.Fatal(err)
 		}
 		if e.count(t, ordering0008Cols) != 2 || e.count(t, ordering0008Index) != 1 {
@@ -427,7 +432,7 @@ var ordering0008Dirty = rollbackCase{
 	bc:      0,
 	latest:  8,
 	prepare: func(t *testing.T, e *rollbackEnv) { // a real failed 0008: ALTER TABLE cannot get its lock within lock_timeout
-		for range 2 { // 9 → 8 → 7: 0008 is the one that fails
+		for range 3 { // 10 → 9 → 8 → 7: 0008 is the one that fails
 			if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
 				t.Fatal(err)
 			}
@@ -470,7 +475,7 @@ var ordering0008Dirty = rollbackCase{
 		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.version(t, 0); got != "9 dirty=false" || e.count(t, ordering0008Cols) != 2 || e.count(t, ordering0008Index) != 1 {
+		if got := e.version(t, 0); got != "10 dirty=false" || e.count(t, ordering0008Cols) != 2 || e.count(t, ordering0008Index) != 1 {
 			t.Errorf("after up: %s, columns=%d, index=%d", got, e.count(t, ordering0008Cols), e.count(t, ordering0008Index))
 		}
 	},
@@ -483,6 +488,10 @@ var ordering0009Clean = rollbackCase{
 	bc:      0,
 	latest:  9,
 	prepare: func(t *testing.T, e *rollbackEnv) {
+		// ordering is at 10 (order_history) when every BC is at its latest; this runbook is for 9.
+		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
 		if e.count(t, ordering0009Col) != 1 || e.count(t, ordering0009Tables) != 2 {
 			t.Fatal("0009 did not add its column and event tables")
 		}
@@ -520,8 +529,10 @@ var ordering0009Dirty = rollbackCase{
 	bc:      0,
 	latest:  9,
 	prepare: func(t *testing.T, e *rollbackEnv) { // a real failed 0009: ALTER TABLE cannot get its lock within lock_timeout
-		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
-			t.Fatal(err)
+		for range 2 { // 10 → 9 → 8: 0009 is the one that fails
+			if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		holder := pgtest.Conn(t, e.url) // closed by its t.Cleanup, which runs before the restore above
 		tx, err := holder.Begin(e.c)
@@ -561,8 +572,83 @@ var ordering0009Dirty = rollbackCase{
 		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.version(t, 0); got != "9 dirty=false" || e.count(t, ordering0009Col) != 1 || e.count(t, ordering0009Tables) != 2 {
+		if got := e.version(t, 0); got != "10 dirty=false" || e.count(t, ordering0009Col) != 1 || e.count(t, ordering0009Tables) != 2 {
 			t.Errorf("after up: %s, column=%d, tables=%d", got, e.count(t, ordering0009Col), e.count(t, ordering0009Tables))
+		}
+	},
+}
+
+var ordering0010Clean = rollbackCase{
+	name:    "ordering 0010 from 10 clean",
+	runbook: orderingRunbook,
+	marker:  ordering10Marker,
+	bc:      0,
+	latest:  10,
+	prepare: func(t *testing.T, e *rollbackEnv) {
+		if e.count(t, ordering0010Table) != 1 || e.count(t, `SELECT count(*) FROM ordering.order_history`) != 1 {
+			t.Fatal("0010 did not add order_history, or its sentinel row is missing")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		if n := e.count(t, ordering0010Table); n != 0 {
+			t.Errorf("order_history left after the rollback: %d", n)
+		}
+		// Only the history goes: the order, its items and the outbox stay.
+		if n := e.count(t, `SELECT count(*) FROM ordering.orders WHERE id = 'rollback-order'`); n != 1 {
+			t.Errorf("ordering.orders rows = %d, want the order kept", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.order_items WHERE order_id = 'rollback-order'`); n != 1 {
+			t.Errorf("ordering.order_items rows = %d, want the items kept", n)
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
+		if e.count(t, ordering0010Table) != 1 || e.count(t, `SELECT count(*) FROM ordering.order_history`) != 0 {
+			t.Error("up did not re-create an empty order_history")
+		}
+	},
+}
+
+// A dirty 0010 has no table (the file is one transaction): the same SQL only resets the version.
+var ordering0010Dirty = rollbackCase{
+	name:    "ordering 0010 from 10 dirty (no table)",
+	runbook: orderingRunbook,
+	marker:  ordering10Marker,
+	bc:      0,
+	latest:  10,
+	prepare: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Down(e.c, e.cfg, migrations[0]); err != nil { // 10 → 9
+			t.Fatal(err)
+		}
+		// A real failed 0010: CREATE TABLE collides with an object in the way, inside the migration's transaction.
+		e.exec(t, `CREATE VIEW ordering.order_history AS SELECT 1 AS x`)
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err == nil {
+			t.Fatal("0010 applied over an existing relation of the same name")
+		}
+		e.exec(t, `DROP VIEW ordering.order_history`)
+		if got := e.version(t, 0); got != "10 dirty=true" {
+			t.Fatalf("ordering = %s, want 10 dirty=true", got)
+		}
+		if e.count(t, ordering0010Table) != 0 {
+			t.Fatal("the failed 0010 left the table behind")
+		}
+	},
+	afterRollback: func(t *testing.T, e *rollbackEnv) {
+		if n := e.count(t, ordering0010Table); n != 0 {
+			t.Errorf("order_history after the rollback: %d", n)
+		}
+		if n := e.count(t, `SELECT count(*) FROM ordering.orders WHERE id = 'rollback-order'`); n != 1 {
+			t.Errorf("ordering.orders rows = %d, want the order kept", n)
+		}
+	},
+	reapply: func(t *testing.T, e *rollbackEnv) {
+		if err := postgres.Up(e.c, e.cfg, migrations[0]); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.version(t, 0); got != "10 dirty=false" || e.count(t, ordering0010Table) != 1 {
+			t.Errorf("after up: %s, table=%d", got, e.count(t, ordering0010Table))
 		}
 	},
 }
@@ -724,7 +810,7 @@ var payment0004Clean = rollbackCase{
 }
 
 func TestRollbackRunbooks(t *testing.T) {
-	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0004Clean, payment0003Clean, payment0003DirtyNoTables, payment0003DirtyTableInTheWay} {
+	for _, tc := range []rollbackCase{inventory0009Clean, inventory0009Dirty, ordering0010Clean, ordering0010Dirty, ordering0009Clean, ordering0009Dirty, ordering0008Clean, ordering0008Dirty, payment0004Clean, payment0003Clean, payment0003DirtyNoTables, payment0003DirtyTableInTheWay} {
 		t.Run(tc.name, func(t *testing.T) { runRollbackCase(t, tc) })
 	}
 }

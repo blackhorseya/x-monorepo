@@ -132,10 +132,11 @@ func (x *Order) Confirm(now time.Time, requirePayment bool) error {
 		return ErrCannotConfirm
 	}
 
+	from := x.status
 	x.status = StatusConfirmed
 	x.paymentRequired = requirePayment
 	x.updatedAt = now
-	x.record(NewConfirmed(x))
+	x.record(NewConfirmed(x, from))
 
 	return nil
 }
@@ -155,16 +156,17 @@ func (x *Order) Complete(now time.Time) error {
 		return ErrPaymentRequired
 	}
 
-	x.complete(now)
+	x.complete(now, CauseRPCRequest) // only the rpc completes an order by hand
 
 	return nil
 }
 
 // complete is the transition itself, for callers that have already checked it may happen.
-func (x *Order) complete(now time.Time) {
+func (x *Order) complete(now time.Time, cause Cause) {
+	from := x.status
 	x.status = StatusCompleted
 	x.updatedAt = now
-	x.record(NewCompleted(x))
+	x.record(NewCompleted(x, from, cause))
 }
 
 // MarkPaid records the payment of a Confirmed order (CONFIRMED → PAID). Nothing calls it in
@@ -175,34 +177,42 @@ func (x *Order) MarkPaid(now time.Time) error {
 		return ErrCannotPay
 	}
 
-	x.markPaid(now)
+	x.markPaid(now, CausePaymentCaptured)
 
 	return nil
 }
 
 // markPaid is the transition itself, for callers that have already checked it may happen.
-func (x *Order) markPaid(now time.Time) {
+func (x *Order) markPaid(now time.Time, cause Cause) {
+	from := x.status
 	x.status = StatusPaid
 	x.updatedAt = now
-	x.record(NewPaid(x))
+	x.record(NewPaid(x, from, cause))
 }
 
-// Cancel moves the order to Cancelled if the state machine allows it.
-func (x *Order) Cancel(now time.Time) error {
+// Cancel moves the order to Cancelled if the state machine allows it. The caller says why: the
+// aggregate cannot tell a client's request from another BC's (CauseRPCRequest or
+// CauseCancellationRequested); anything else, the zero value included, is ErrInvalidCause and
+// changes nothing. The state machine's refusal comes first.
+func (x *Order) Cancel(now time.Time, cause Cause) error {
 	if !x.status.CanTransitionTo(StatusCancelled) {
 		return ErrCannotCancel
 	}
+	if !cause.validForCancel() {
+		return ErrInvalidCause
+	}
 
-	x.cancel(now)
+	x.cancel(now, cause)
 
 	return nil
 }
 
 // cancel is the transition itself, for callers that have already checked it may happen.
-func (x *Order) cancel(now time.Time) {
+func (x *Order) cancel(now time.Time, cause Cause) {
+	from := x.status
 	x.status = StatusCancelled
 	x.updatedAt = now
-	x.record(NewCancelled(x))
+	x.record(NewCancelled(x, from, cause))
 }
 
 func (x *Order) ID() ID               { return x.id }

@@ -97,7 +97,7 @@ func TestPaymentEvents_RacesOnPostgres(t *testing.T) {
 		return err
 	}, "CANCELLED", order.ErrCannotCancel}
 	cancel := actor{"cancel", func(r order.Repository, ev *sink) error {
-		_, err := usecase.NewCancelOrder(r, ev, fixedClock{}, own).Execute(c, dto.CancelOrderInput{OrderID: "race-1"})
+		_, err := usecase.NewCancelOrder(r, ev, fixedClock{}, own).Execute(c, dto.CancelOrderInput{OrderID: "race-1", Source: dto.CancelSourceRPC})
 		return err
 	}, "CANCELLED", order.ErrCannotCancel}
 

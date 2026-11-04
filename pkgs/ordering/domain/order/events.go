@@ -15,6 +15,12 @@ type Event interface {
 	kernel.Event
 	OrderID() ID
 	CustomerID() string
+	// From / To are the status the order left and entered (From is StatusUnknown for Created);
+	// Cause says why. They are what the order history records (#427): the recorder reads them off
+	// the event and needs nothing else from the aggregate.
+	From() Status
+	To() Status
+	Cause() Cause
 }
 
 // CreatedItem is the (sku, quantity) pair of a line item as seen by Created:
@@ -37,16 +43,23 @@ type base struct {
 	orderID    ID
 	customerID string
 	occurredAt time.Time
+	from       Status
+	to         Status
+	cause      Cause
 }
 
-func newBase(o *Order, at time.Time) base {
-	return base{orderID: o.id, customerID: o.customerID, occurredAt: at}
+// newBase reads the status the order is in NOW as the status it entered; from is the one it left.
+func newBase(o *Order, at time.Time, from Status, cause Cause) base {
+	return base{orderID: o.id, customerID: o.customerID, occurredAt: at, from: from, to: o.status, cause: cause}
 }
 
 func (x base) AggregateID() string   { return string(x.orderID) }
 func (x base) OrderID() ID           { return x.orderID }
 func (x base) CustomerID() string    { return x.customerID }
 func (x base) OccurredAt() time.Time { return x.occurredAt }
+func (x base) From() Status          { return x.from }
+func (x base) To() Status            { return x.to }
+func (x base) Cause() Cause          { return x.cause }
 
 // Created is raised by New.
 type Created struct {
@@ -63,7 +76,7 @@ func NewCreated(o *Order) Created {
 	}
 
 	return Created{
-		base:  newBase(o, o.createdAt),
+		base:  newBase(o, o.createdAt, StatusUnknown, CauseRPCRequest),
 		items: items,
 		total: moneyView{amount: o.total.Amount(), currency: o.total.Currency()},
 	}
@@ -88,9 +101,9 @@ type Confirmed struct {
 
 // NewConfirmed builds the event for o as it stands; the aggregate calls it from Confirm.
 // It carries the order's actual total: Payment bills from it.
-func NewConfirmed(o *Order) Confirmed {
+func NewConfirmed(o *Order, from Status) Confirmed {
 	return Confirmed{
-		base:  newBase(o, o.updatedAt),
+		base:  newBase(o, o.updatedAt, from, CauseStockReserved),
 		total: moneyView{amount: o.total.Amount(), currency: o.total.Currency()},
 	}
 }
@@ -104,8 +117,8 @@ type Paid struct {
 }
 
 // NewPaid builds the event for o as it stands; the aggregate calls it from MarkPaid.
-func NewPaid(o *Order) Paid {
-	return Paid{base: newBase(o, o.updatedAt)}
+func NewPaid(o *Order, from Status, cause Cause) Paid {
+	return Paid{base: newBase(o, o.updatedAt, from, cause)}
 }
 
 // Completed is raised by Complete.
@@ -114,8 +127,8 @@ type Completed struct {
 }
 
 // NewCompleted builds the event for o as it stands; the aggregate calls it from Complete.
-func NewCompleted(o *Order) Completed {
-	return Completed{base: newBase(o, o.updatedAt)}
+func NewCompleted(o *Order, from Status, cause Cause) Completed {
+	return Completed{base: newBase(o, o.updatedAt, from, cause)}
 }
 
 // Cancelled is raised by Cancel.
@@ -124,8 +137,8 @@ type Cancelled struct {
 }
 
 // NewCancelled builds the event for o as it stands; the aggregate calls it from Cancel.
-func NewCancelled(o *Order) Cancelled {
-	return Cancelled{base: newBase(o, o.updatedAt)}
+func NewCancelled(o *Order, from Status, cause Cause) Cancelled {
+	return Cancelled{base: newBase(o, o.updatedAt, from, cause)}
 }
 
 // PullEvents returns the events recorded since the last call and clears them.

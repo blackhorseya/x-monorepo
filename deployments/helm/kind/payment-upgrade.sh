@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Upgrading from the chart that runs `payment-rpc consume` to the chart that runs payment-worker (#410 slice 2):
-#   payment-upgrade.sh <namespace> <release> <chart-dir> <values-file> <flow-values-file>
+#   payment-upgrade.sh <home-namespace> <home-release> <chart-dir> <values-file> <flow-values-file>
+#
+# The drill runs in a namespace of its own (x-monorepo-upgrade-<run>), with its own throwaway Postgres and Redis (deps.yaml)
+# and its own release (x-monorepo-upg-<rand>): it never reads or writes anything of <home-namespace> / <home-release>, which
+# `task helm-kind` reuses between runs and whose Postgres may hold things that are not this test's (#427, #429). Both
+# arguments are only there for the caller (payment-upgrade-guard.sh checks that the home database is unchanged). The
+# namespace is created with a label of this run and, on the way out (whatever happens), it is the one namespace deleted.
+# This chart renders no cluster-scoped object (the check below refuses a render that would) and the webhook Ingress is
+# switched off, so two releases cannot collide.
 #
 # The consumer's cursor is its consumer group (payment-rpc.payment), so what has to hold across the switch is:
 # the same group (no new cursor: a new one would start from worker.start_from and replay or skip), a cursor that
@@ -21,29 +29,60 @@
 # consumer inbox grew by exactly one row per OrderConfirmed published since step 2 (nothing replayed, nothing
 # skipped). The consumer runs the payment-worker image under the container name payment-worker. An order paid
 # before the switch (A, whose checkout was started by the old pods) and one paid after (C) both reach COMPLETED.
-# The release is restored to <values-file> on the way out, whatever happens. Needs kubectl, helm, curl, jq, git, tar.
+# Needs kubectl, helm, curl, jq, git, tar, python3 with PyYAML.
 set -euo pipefail
-ns=$1 release=$2 chart=$3 values=$4 flow=$5
+# Internal state is never taken from the environment: cleanup() decides what to delete from ns_uid, so a parent
+# that exported them (or a stale export in a shell) must not be able to make it delete a namespace this run did not create.
+# They start empty here, before the trap exists. The environment variables this script reads are, all of them:
+#   UPGRADE_RUN_ID (digits-digits; names the namespace, proves nothing about ownership), PAYMENT_UPGRADE_FROM_TAG,
+#   PAYMENT_UPGRADE_FROM_IMAGE, UPGRADE_RPC_PORT, UPGRADE_SERVE_PORT,
+# plus what the tools themselves read (PATH, KUBECONFIG, HOME, git / helm / kubectl settings).
+ns_uid="" token="" helm_pid="" soft="" pfs="" body="" res=""
+chart=$3 values=$4 flow=$5 # $1 and $2 (the home namespace and release) are deliberately not used
+kind_dir=$(cd "$(dirname "$0")" && pwd)
+run_id=${UPGRADE_RUN_ID:-$(date +%s)-$RANDOM}
+[[ $run_id =~ ^[0-9]+-[0-9]+$ ]] || { echo "payment-upgrade: refused: UPGRADE_RUN_ID must be <digits>-<digits>" >&2; exit 1; }
+ns="x-monorepo-upgrade-$run_id"
+release="x-monorepo-upg-${run_id##*-}" # contains the chart name, so the Jobs are <release>-migrate, as in any release named x-monorepo*
+run_label=x-monorepo-upgrade-drill
 from_tag=${PAYMENT_UPGRADE_FROM_TAG:-v0.63.3}
 from_image=${PAYMENT_UPGRADE_FROM_IMAGE:-0.63.3}
 rport=${UPGRADE_RPC_PORT:-18096} sport=${UPGRADE_SERVE_PORT:-18097}
 api="http://127.0.0.1:$rport/api" serve="http://127.0.0.1:$sport"
-pfs=""
-body=""
 tmp=$(mktemp -d)
+url_check=$kind_dir/postgres-url-check.py
 
-fail() { echo "payment-upgrade: $*" >&2; [ -z "${soft:-}" ] || exit 1; kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true; exit 1; }
-restore() {
+fail() {
+  echo "payment-upgrade: $*" >&2
+  [ -z "${soft:-}" ] || exit 1
+  if [ -n "$ns_uid" ]; then
+    kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true
+    # The migrate hook Job is what fails an upgrade onto a schema its image does not know: say why, not just that it did.
+    echo "payment-upgrade: logs of the $release-migrate Job (hook pods are kept after a failure):" >&2
+    kubectl -n "$ns" logs -l "job-name=$release-migrate" --tail=50 --prefix --all-containers >&2 2>&1 || true
+  fi
+  exit 1
+}
+cleanup() {
   local rc=$?
-  # The background helm of stage 4 may still be running (an order failed to be placed while it ran). Let it
-  # finish FIRST: a restore that ran before it would be overwritten by it, and the release would end upgraded.
+  # The background helm of stage 4 may still be running (an order failed to be placed while it ran). Let it finish
+  # FIRST: deleting the namespace under it would leave it failing against nothing.
   if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
-  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true
+  # The one destructive step, bound to the identity the API server gave this run's namespace WHEN IT CREATED IT (ns_uid, taken
+  # from the create's own answer and never looked up again: a lookup at cleanup time would find whatever carries the token
+  # then, and a namespace deleted and re-made under the same name and label would have its new uid accepted). The delete has
+  # that uid as a precondition, so a namespace that is not the one this run created is refused (409) and nothing is touched.
+  # No uid (nothing was created, or the create's answer was lost) means nothing is deleted. There is no `helm uninstall`:
+  # the release's storage (helm's Secrets) and everything it installed live in the namespace and go with it.
+  if [ -n "$ns_uid" ]; then
+    printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "$ns_uid" |
+      kubectl delete --raw "/api/v1/namespaces/$ns" -f - >/dev/null 2>&1 || echo "payment-upgrade: left the namespace $ns alone: it is gone, or no longer the one this run created" >&2
+  fi
   return "$rc"
 }
-trap restore EXIT
+trap cleanup EXIT
 
 forwards() {
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
@@ -121,12 +160,63 @@ mkdir -p "$tmp/old"
 git archive "$from_tag" deployments/helm/x-monorepo | tar -x -C "$tmp/old"
 old_chart="$tmp/old/deployments/helm/x-monorepo"
 old_args=(--set "image.registry=ghcr.io/blackhorseya/x-monorepo" --set "image.tag=$from_image" --set "image.pullPolicy=IfNotPresent")
-# the premise: that chart really runs `payment-rpc consume`, and this one does not
-old_render=$(helm template t "$old_chart" -f "$values" -f "$flow" "${old_args[@]}")
-new_render=$(helm template t "$chart" -f "$values" -f "$flow")
+# The webhook Ingress is switched off for both charts: another release in another namespace already has the same host and
+# path, and the ingress controller refuses duplicates. The drill reaches the pods through port-forwards.
+common_args=(--set paymentRpc.ingress.enabled=false)
+# One render per chart, with exactly the arguments of its installs below: the premise (that chart really runs `payment-rpc
+# consume`, and this one does not) and the connection check both read it.
+old_render=$(helm template t "$old_chart" -f "$values" -f "$flow" "${old_args[@]}" "${common_args[@]}") || fail "refused: the previous chart does not render with these values"
+new_render=$(helm template t "$chart" -f "$values" -f "$flow" "${common_args[@]}") || fail "refused: this chart does not render with these values"
 grep -q -- '"consume"' <<<"$old_render" || fail "the chart at $from_tag does not run 'payment-rpc consume': nothing to upgrade from"
 if grep -q -- '"consume"' <<<"$new_render"; then fail "this chart still runs a 'consume' argument"; fi
-old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" -f "$flow" "${old_args[@]}" "$@" --wait --timeout 6m >/dev/null || fail "the previous chart did not become ready"; forwards; }
+old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" -f "$flow" "${old_args[@]}" "${common_args[@]}" "$@" --wait --timeout 6m >/dev/null || fail "the previous chart did not become ready"; forwards; }
+# Why a namespace of its own: the home database already holds the schema the TREE's migrate image built, so it can be ahead
+# of what the previous release's migrate image knows. Observed (v0.63.3 against ordering at 10, #427):
+#   migrate ordering: no migration found for version 10: read down for version 10 .: file does not exist
+# and the release's pre-upgrade hook Job fails. Stage 1 is the previous release coming up from nothing, so it gets a Postgres
+# (and Redis) of its own, from deps.yaml, in a namespace of its own. The old release's migrate hook builds in it exactly
+# what that release knows, stage 4 upgrades it to this tree (the path this script is about), and no migration number
+# appears anywhere. The URLs in <values-file> name the Services by their short names (postgres, redis), which resolve to the
+# ones in the drill's namespace.
+#
+# What decides where a workload connects is not a list this script can keep up with (secrets.postgresUrl, every
+# existingSecret, every extraEnv, postgres.url / redis.url in config, whatever the next chart version adds), so the RENDERED
+# charts are checked with exactly the arguments of the installs below: every container of every workload and hook must resolve
+# APP_POSTGRES_URL and APP_REDIS_URL to the values of <values-file> (env, envFrom and secretKeyRef followed through the
+# Secrets of the same render), and the render must hold no Ingress, no cluster-scoped object and no object with a namespace of
+# its own. An existingSecret, a fully qualified name that points at another namespace, or anything else it cannot resolve is
+# refused. Fail closed, before anything is created or installed.
+read -r pgurl redisurl < <(python3 -c 'import sys,yaml; s=yaml.safe_load(open(sys.argv[1]))["secrets"]; print(s["postgresUrl"], s["redisUrl"])' "$values") || fail "refused: $values gives no secrets.postgresUrl / secrets.redisUrl"
+[[ $pgurl =~ ^postgres://[^@/]*@postgres:[0-9]+/ && $redisurl =~ ^redis://redis:[0-9]+/ ]] || fail "refused: $values must name Postgres and Redis by their short Service names (postgres, redis), which resolve inside the drill's namespace"
+assert_connections() { # <rendered chart>
+  python3 "$url_check" --expect "APP_POSTGRES_URL=$pgurl" --expect "APP_REDIS_URL=$redisurl" <<<"$1" >&2 || fail "refused: with these values a workload would not connect only to the drill's own Postgres and Redis"
+}
+assert_connections "$old_render"
+assert_connections "$new_render"
+# Only now is anything created. A namespace that already exists is never ours, whatever it is labelled: run_id can be given by
+# the caller, so a label made of it proves nothing. The token (random, generated here) is only a marker for a human; ownership is
+# the uid in the create's own answer. If that answer is lost the namespace is NOT adopted: the run stops and says what to delete.
+if kubectl get namespace "$ns" -o name >/dev/null 2>&1; then fail "refused: the namespace $ns already exists: it is not reused and not touched"; fi
+token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+if ! created=$(kubectl create -f - -o jsonpath='{.metadata.uid}' 2>"$tmp/create.err" <<NSEOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $ns
+  labels:
+    $run_label: "$token"
+NSEOF
+); then
+  if grep -q AlreadyExists "$tmp/create.err"; then fail "refused: the namespace $ns already exists: it is not reused and not touched"; fi
+  if [ "$(kubectl get namespace -l "$run_label=$token" -o name 2>/dev/null)" = "namespace/$ns" ]; then
+    fail "refused: the create of $ns was applied but its answer was lost, so its uid is unknown and nothing will be deleted: namespace $ns (label $run_label=$token) is left in place, delete it by hand"
+  fi
+  fail "refused: could not create the namespace $ns: $(head -c 300 "$tmp/create.err")"
+fi
+[[ $created =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || fail "refused: the create of $ns did not answer with a namespace uid (got '$created'), so nothing will be deleted: if namespace $ns (label $run_label=$token) exists, delete it by hand"
+ns_uid=$created
+kubectl -n "$ns" apply -f "$kind_dir/deps.yaml" >/dev/null
+kubectl -n "$ns" rollout status deploy/postgres deploy/redis --timeout=2m >/dev/null || fail "the drill's Postgres / Redis did not become ready"
 old_up
 oldimg=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.spec.template.spec.containers[0].image}')
 case $oldimg in */payment-rpc:*) ;; *) fail "before the upgrade the consumer runs '$oldimg', want the payment-rpc image" ;; esac
@@ -156,7 +246,7 @@ echo "payment-upgrade: order $B is CONFIRMED and has no payment while the consum
 # rpc pods roll too, and a forward dies with its pod). A try that fails is repeated; an order that was created but
 # whose answer was lost is still counted, because the checks below count the events on the database, not the orders
 # this script remembers.
-helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" -f "$flow" --wait --timeout 6m >/dev/null &
+helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" -f "$flow" "${common_args[@]}" --wait --timeout 6m >/dev/null &
 helm_pid=$!
 during=""
 for i in 1 2 3; do

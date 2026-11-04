@@ -1,69 +1,175 @@
 #!/usr/bin/env python3
-"""payment-upgrade.sh owes the same thing whatever happens: the release is restored LAST (#422).
+"""payment-upgrade.sh owes the same things whatever happens (#422, #427, #429).
 
-Stage 4 of the script upgrades the release with helm in the background while it places orders. If an
-order cannot be placed the script exits through its EXIT trap, which restores the release. The restore
-must not race the background helm: if the trap restored first and the helm upgrade finished after, the
-release would end in the upgraded-with-overlay state, not the restored one, and the script's exit code
-would not say so.
+(1) It never touches the home release. `task helm-kind` reuses an existing kind cluster, and the Postgres of the home
+namespace keeps its data between runs, so it may hold things that are not this test's. The drill therefore runs in a
+namespace of its own with its own Postgres and Redis and its own release. payment-upgrade-guard.sh (what `task helm-kind`
+runs, CI included) snapshots the home database read-only before and after and requires it unchanged. Here the home
+database is a REAL Postgres (a docker/podman container, psql runs inside it) holding an unrelated schema with a sentinel row.
+(2) It is refused up front, before anything is created, when a chart input would make a workload connect somewhere other
+than the drill's own Postgres / Redis: every existingSecret, every extraEnv, the config file, a fully qualified name that
+points at the home namespace (checked on the RENDERED chart, postgres-url-check.py).
+(3) It deletes the namespace it created, and only that one, whatever happens: after a failed install, after a failure while
+the upgrade is still rolling (the background helm is joined first, #422), after a create whose answer was lost; a namespace
+that was already there under the name is not reused and not touched.
+(4) A failure prints the logs of the migrate hook Job.
 
-This drives the REAL payment-upgrade.sh with fake helm / kubectl / curl / sleep (no cluster):
-  - fake helm: the 3rd `helm upgrade` is the slow background one (5 seconds, then it sets the release
-    state to FLOW); every other `helm upgrade` is a restore/install (sets RESTORED). `helm template` is real.
+This drives the REAL payment-upgrade-guard.sh -> payment-upgrade.sh with fake helm / kubectl / curl / sleep (no cluster):
+  - fake helm: the 3rd `helm upgrade` is the slow background one (5 seconds); `helm template` is real. In the "install"
+    scenario the first `helm upgrade` (the previous chart) fails.
   - fake curl: the first UpsertProduct after the background upgrade started answers 500, so order D1 fails.
-Expected: the script exits non-zero (its exit code is kept), the background helm finished BEFORE the
-restore ran, the release state ends RESTORED, and no process of the script's session is left.
+  - fake kubectl: keeps a set of namespaces; statements for the HOME namespace go to the real Postgres, the drill's are canned.
+The same checks run against copies of the script with a fault put in (writes to the home database; deletes the home
+namespace; no render check) and MUST fail: that is what shows the assertions can go red.
 
-  deployments/helm/kind/upgrade-failure-test.py      # task helm-check runs it; needs helm
+  deployments/helm/kind/upgrade-failure-test.py      # task helm-check runs it; needs helm and docker or podman
 """
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
+
+import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
-root = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-test-"))
-bindir = root / "bin"
-bindir.mkdir()
-events = root / "events"
-# the values the real helm-kind passes: the chart must render with them (helm template is real)
 values_file = REPO / "deployments/helm/kind/values.yaml"
 flow_file = REPO / "deployments/helm/kind/payment-flow-values.yaml"
+script_file = REPO / "deployments/helm/kind/payment-upgrade.sh"
+check_file = REPO / "deployments/helm/kind/postgres-url-check.py"
+guard_file = REPO / "deployments/helm/kind/payment-upgrade-guard.sh"  # what `task helm-kind` runs
 helm_real = shutil.which("helm")
 assert helm_real, "helm is needed (helm template is real)"
+rt = shutil.which("docker") or shutil.which("podman")
+assert rt, "docker or podman is needed (a real Postgres is the home database)"
+HOME_NS = "ns"  # the namespace argument the guard is given
+SENTINEL = "keep-me-" + uuid.uuid4().hex[:8]
+RUN_ID = "1700000000-4242"  # fixed for the "namespace already exists" cell
 
-(bindir / "helm").write_text(f'''#!/bin/bash
+
+def psql(container, sql):
+    return subprocess.run([rt, "exec", container, "psql", "-U", "app", "-d", "app", "-tAq", "-c", sql], capture_output=True, text=True)
+
+
+def start_postgres():
+    name = "upgrade-failure-test-" + uuid.uuid4().hex[:8]
+    subprocess.run([rt, "run", "-d", "--name", name, "-e", "POSTGRES_USER=app", "-e", "POSTGRES_PASSWORD=app",
+                    "-e", "POSTGRES_DB=app", "postgres:16-alpine"], check=True, capture_output=True)
+    ok = 0
+    for _ in range(90):  # the image starts a throwaway server for its init, stops it, then starts the real one
+        r = psql(name, "select 1")
+        ok = ok + 1 if r.returncode == 0 and r.stdout.strip() == "1" else 0
+        if ok >= 3:
+            return name
+        time.sleep(1)
+    subprocess.run([rt, "rm", "-f", name], capture_output=True)
+    raise SystemExit("upgrade-failure-test: the Postgres container never became ready")
+
+
+def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=False, preexisting_label=None, inherited=None, swapped=False):
+    """Run `script` (payment-upgrade.sh or a mutant, in a directory of its own next to the real guard, checker and deps.yaml) behind
+    the guard and return the problems found. `inherited`: environment variables a parent exported (internal state of the script).
+    mode: "install" (the previous chart does not install) or "upgrade" (an order cannot be placed during the upgrade)."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-test-"))
+    bindir, nsdir, reldir = root / "bin", root / "namespaces", root / "releases"
+    bindir.mkdir()
+    nsdir.mkdir()
+    reldir.mkdir()
+    events = root / "events"
+    # The home database holds something that is not the drill's. Planted fresh for every run.
+    for sql in ("DROP SCHEMA IF EXISTS unrelated CASCADE", "DROP TABLE IF EXISTS public.drill_mutant",
+                "CREATE SCHEMA unrelated", "CREATE TABLE unrelated.keep (v text)", f"INSERT INTO unrelated.keep VALUES ('{SENTINEL}')"):
+        assert psql(pg, sql).returncode == 0, sql
+    (nsdir / HOME_NS).write_text("home\nuid-home\n")  # the home release's namespace, in the fake cluster
+    if preexisting_label is not None:  # a namespace that is already there under the very name this run would take
+        (nsdir / f"x-monorepo-upgrade-{RUN_ID}").write_text(preexisting_label + "\n11111111-1111-4111-8111-111111111111\n")
+        (reldir / f"x-monorepo-upgrade-{RUN_ID}").write_text("someone else's release")
+
+    kdir = root / "kind"
+    kdir.mkdir()
+    shutil.copy(guard_file, kdir / "payment-upgrade-guard.sh")
+    shutil.copy(check_file, kdir / "postgres-url-check.py")
+    shutil.copy(guard_file.parent / "deps.yaml", kdir / "deps.yaml")
+    shutil.copy(script, kdir / "payment-upgrade.sh")
+    (bindir / "helm").write_text(f'''#!/bin/bash
 if [ "$1" = template ]; then exec {helm_real} "$@"; fi
-printf 'helm upgrade %s\\n' "$*" >> "$EVENTS"
+printf 'helm %s\\n' "$*" >> "$EVENTS"
+if [ "$1" = uninstall ]; then rm -f "$RELDIR/$(sed -n 's/.* -n \\([^ ]*\\).*/\\1/p' <<<"$*")"; exit 0; fi
+[ "$1" = upgrade ] || exit 0
 n=$(grep -c '^helm upgrade' "$EVENTS")
-if [ "$n" = 3 ]; then
+if [ -n "$SWAPPED" ] && [ "$n" = 1 ]; then  # before cleanup: the namespace is deleted and re-made under the same name AND the same token label
+  for f in "$NSDIR"/x-monorepo-upgrade-*; do printf '%s\\n22222222-2222-4222-8222-222222222222\\n' "$(head -1 "$f")" > "$f"; echo "someone else's new release" > "$RELDIR/$(basename "$f")"; done
+fi
+if [ "$MODE" = install ] && [ "$n" = 1 ]; then exit 1; fi  # the previous chart does not install
+if [ "$MODE" = upgrade ] && [ "$n" = 3 ]; then
   : > "$UPGRADE_STARTED"
   /bin/sleep 5
   echo HELM3_DONE >> "$EVENTS"
-  echo FLOW > "$RELEASE_STATE"
-else
-  echo RESTORED > "$RELEASE_STATE"
 fi
 ''')
-(bindir / "kubectl").write_text('''#!/bin/bash
+    (bindir / "kubectl").write_text(f'''#!/bin/bash
 printf 'kubectl %s\\n' "$*" >> "$EVENTS"
 case "$*" in
-  *"get deploy"*) echo 'ghcr.io/blackhorseya/x-monorepo/payment-rpc:0.63.3';;
+  "create -f - -o jsonpath="*)
+    m=$(cat)
+    name=$(sed -n 's/^  name: //p' <<<"$m")
+    lab=$(sed -n 's/^    x-monorepo-upgrade-drill: "\\(.*\\)"/\\1/p' <<<"$m")
+    if [ -e "$NSDIR/$name" ]; then echo 'Error from server (AlreadyExists)' >&2; exit 1; fi
+    uid=$(printf '%08x-aaaa-4bbb-8ccc-%012x' $((RANDOM*32768+RANDOM)) $((RANDOM*32768+RANDOM)))
+    printf '%s\\n%s\\n' "$lab" "$uid" > "$NSDIR/$name"
+    [ -z "$CREATE_REPLY_FAILS" ] || exit 1  # the create commits, then the answer is lost
+    printf '%s' "$uid";;
+  "get namespace "*)
+    want=
+    prev=
+    for a in "$@"; do [ "$prev" = -l ] && want=${{a#*=}}; prev=$a; done
+    case "$3" in
+      -*) ;;  # a list: all namespaces (matching the selector, if any)
+      *) if [ -n "$want" ]; then echo 'error: name cannot be provided when a selector is specified' >&2; exit 1; fi  # as the real kubectl
+         [ -e "$NSDIR/$3" ] || exit 1; echo "namespace/$3"; exit 0;;
+    esac
+    for f in "$NSDIR"/*; do
+      [ -e "$f" ] || continue
+      if [ -z "$want" ] || [ "$(head -1 "$f")" = "$want" ]; then
+        case "$*" in
+          *jsonpath*)
+            echo "$(basename "$f") $(sed -n 2p "$f")";;
+          *) echo "namespace/$(basename "$f")";;
+        esac
+      fi
+    done;;
+  "delete --raw /api/v1/namespaces/"*" -f -")
+    name=${{3##*/}}
+    body=$(cat)
+    uid=$(sed -n 's/.*"uid":"\\([^"]*\\)".*/\\1/p' <<<"$body")
+    [ -e "$NSDIR/$name" ] || {{ echo 'Error from server (NotFound)' >&2; exit 1; }}
+    if [ -n "$uid" ] && [ "$uid" != "$(sed -n 2p "$NSDIR/$name")" ]; then echo 'Error from server (Conflict): Precondition failed: UID in precondition' >&2; exit 1; fi
+    rm -f "$NSDIR/$name";;
+  "delete namespace "*) rm -f "$NSDIR/$3";;
+  "get deploy"*|*" get deploy"*) echo 'ghcr.io/blackhorseya/x-monorepo/payment-rpc:0.63.3';;
   *" exec deploy/postgres "*)
-    q=${*: -1}
-    case "$q" in
-      *"consumer_group, offset_acked"*)
-        t=$(sed -n "s/.*SELECT '\\([^']*\\)'.*/\\1/p" <<<"$q")
-        echo "$t|payment-rpc.payment|1";;
-      *) echo 1;;
-    esac;;
+    q=${{*: -1}}
+    ns=
+    prev=
+    for a in "$@"; do [ "$prev" = -n ] && [ -z "$ns" ] && ns=$a; prev=$a; done
+    if [ "$ns" = "$HOME_NS" ]; then
+      {rt} exec "$PGC" psql -U app -d app -tAq -c "$q"   # the home database: real, and read by the guard only
+    else
+      case "$q" in
+        *"consumer_group, offset_acked"*)
+          t=$(sed -n "s/.*SELECT '\\\\([^']*\\\\)'.*/\\\\1/p" <<<"$q")
+          echo "$t|payment-rpc.payment|1";;
+        *) echo 1;;
+      esac
+    fi;;
 esac
 ''')
-(bindir / "curl").write_text('''#!/bin/bash
+    (bindir / "curl").write_text('''#!/bin/bash
 case "$*" in *readyz*) exit 0;; esac
 out=''
 args=("$@")
@@ -78,62 +184,270 @@ esac
 [ -z "$out" ] || printf '%s' "$body" > "$out"
 printf 'HTTP/1.1 %s OK\\r\\n\\r\\n' "$code"
 ''')
-(bindir / "sleep").write_text("#!/bin/bash\nexit 0\n")  # the script's own waits are not what is under test
-for f in bindir.iterdir():
-    f.chmod(0o755)
-(root / "orders").write_text("")
+    (bindir / "sleep").write_text("#!/bin/bash\nexit 0\n")  # the script's own waits are not what is under test
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    (root / "orders").write_text("")
 
-env = os.environ.copy()
-env.update(PATH=f"{bindir}:{env['PATH']}", EVENTS=str(events), UPGRADE_STARTED=str(root / "upgrade_started"),
-           ORDERS=str(root / "orders"), RELEASE_STATE=str(root / "release_state"))
-cmd = ["bash", "deployments/helm/kind/payment-upgrade.sh", "ns", "rel", "deployments/helm/x-monorepo",
-       str(values_file), str(flow_file)]
-out = open(root / "out", "wb")
-p = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-problems = []
-try:
+    env = os.environ.copy()
+    env.update(PATH=f"{bindir}:{env['PATH']}", EVENTS=str(events), UPGRADE_STARTED=str(root / "upgrade_started"),
+               ORDERS=str(root / "orders"), MODE=mode, PGC=pg, NSDIR=str(nsdir), RELDIR=str(reldir), HOME_NS=HOME_NS,
+               CREATE_REPLY_FAILS="1" if create_reply_fails else "", SWAPPED="1" if swapped else "")
+    env.update(inherited or {})
+    if preexisting_label is not None:
+        env["UPGRADE_RUN_ID"] = RUN_ID  # the caller may name the run, so a label made of the run id proves nothing
+    cmd = ["bash", str(kdir / "payment-upgrade-guard.sh"), HOME_NS, "rel", "deployments/helm/x-monorepo", str(values_file), str(flow or flow_file)]
+    out = open(root / "out", "wb")
+    p = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    problems = []
     try:
-        rc = p.wait(timeout=60)
-    except subprocess.TimeoutExpired:
-        rc = None
-        problems.append("the script did not exit within 60s")
-    lines = events.read_text().splitlines() if events.exists() else []
-    upgrades = [i for i, x in enumerate(lines) if x.startswith("helm upgrade")]
-    done = [i for i, x in enumerate(lines) if x == "HELM3_DONE"]
-    state = (root / "release_state").read_text().strip() if (root / "release_state").exists() else "none"
-    if not (root / "upgrade_started").exists():
-        problems.append("the premise failed: the background upgrade never started, so nothing was tested")
-    if rc in (0, None):
-        problems.append(f"exit code {rc}: a failed run must exit non-zero (the exit code is kept through the trap)")
-    if len(upgrades) < 4:
-        problems.append(f"{len(upgrades)} helm upgrades ran, want the old chart (x2), the background one and the restore (4)")
-    elif not done:
-        problems.append("the background helm upgrade never finished before the script exited")
-    elif done[0] > upgrades[-1]:
-        problems.append("the restore ran BEFORE the background helm upgrade finished: the upgrade overwrote it afterwards")
-    if state != "RESTORED":
-        problems.append(f"the release ended in state {state}, want RESTORED (the restore must be the last change)")
-    # nothing of the script's session may outlive it (a child left behind keeps changing the cluster)
-    time.sleep(0.2)
-    try:
-        os.killpg(p.pid, 0)
-        problems.append("a process of the script's session is still alive after it exited")
-    except ProcessLookupError:
-        pass
-finally:
-    try:
-        os.killpg(p.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    if p.poll() is None:
-        p.wait()
-    out.close()
+        try:
+            rc = p.wait(timeout=90)
+        except subprocess.TimeoutExpired:
+            rc = None
+            problems.append("the script did not exit within 90s")
+        lines = events.read_text().splitlines() if events.exists() else []
+        outtxt = (root / "out").read_text(errors="replace")
+        upgrades = [i for i, x in enumerate(lines) if x.startswith("helm upgrade")]
+        creates = [i for i, x in enumerate(lines) if x.startswith("kubectl create -f -")]
+        deletes = [(i, x.split()[3].rsplit("/", 1)[1]) for i, x in enumerate(lines) if x.startswith("kubectl delete --raw /api/v1/namespaces/")]
+        plain_deletes = [x for x in lines if x.startswith("kubectl delete namespace ")]
+        done = [i for i, x in enumerate(lines) if x == "HELM3_DONE"]
+        left = sorted(f.name for f in nsdir.iterdir() if f.name != HOME_NS)
+        if not (nsdir / HOME_NS).exists():
+            problems.append("the home namespace was deleted")
+        if plain_deletes:
+            problems.append(f"a namespace was deleted by name, not by uid: {plain_deletes}")
 
-if problems:
-    print("upgrade-failure-test: FAIL", file=sys.stderr)
-    for x in problems:
-        print("  - " + x, file=sys.stderr)
-    print((root / "out").read_text(errors="replace")[-600:], file=sys.stderr)
-    sys.exit(1)
-shutil.rmtree(root, ignore_errors=True)
-print("upgrade-failure-test: ok (exit code kept, background helm joined before the restore, release RESTORED, no child left)")
+        if rc in (0, None):
+            problems.append(f"exit code {rc}: a failed run must exit non-zero (the exit code is kept through the trap)")
+        # ---- the home release is not touched (#427, #429) ----
+        if "guard: the home release's database is unchanged" not in outtxt:
+            problems.append("the guard did not report the home database unchanged")
+        got = psql(pg, "SELECT v FROM unrelated.keep")
+        if got.returncode != 0 or got.stdout.strip() != SENTINEL:
+            problems.append(f"the unrelated sentinel in the home database is gone or changed: {got.stdout.strip()!r} {got.stderr.strip()[:100]}")
+        # nothing but the guard's read-only statements may name the home namespace, in any kubectl or helm call
+        for x in lines:
+            if re.search(rf"(^| )-n {HOME_NS}( |$)", x) and not re.fullmatch(
+                    rf"kubectl -n {HOME_NS} exec deploy/postgres -- psql -U app -d app -tAq -c SET default_transaction_read_only = on; .*", x):
+                problems.append(f"a call names the home namespace: {x}")
+        if refused:
+            # refused up front: nothing created, nothing installed, nothing deleted
+            if creates or deletes or upgrades or left:
+                problems.append(f"a refused run must create, install and delete nothing, got creates={len(creates)} deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
+            if "payment-upgrade: refused" not in outtxt:
+                problems.append("the run was not refused up front (no 'payment-upgrade: refused' in its output)")
+        elif swapped:
+            # the namespace was deleted and re-made under the same name AND the same token label before cleanup looked at it: the
+            # uid taken from the create's own answer no longer matches, so the replacement and its release must survive (409)
+            if len(left) != 1 or (nsdir / left[0]).read_text().splitlines()[1] != "22222222-2222-4222-8222-222222222222":
+                problems.append(f"the replacement namespace was deleted or changed: {left}")
+            elif not (reldir / left[0]).exists():
+                problems.append("the release of the replacement namespace is gone")
+            if "left the namespace" not in outtxt:
+                problems.append("a refused (409) delete was not reported")
+        elif create_reply_fails:
+            # the create was applied but its answer (and so its uid) was lost: nothing is adopted, installed or deleted, and the
+            # output says what to delete by hand
+            if len(creates) != 1 or deletes or upgrades or len(left) != 1:
+                problems.append(f"a lost create answer must leave the namespace in place and install nothing: creates={len(creates)} deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
+            if "left in place, delete it by hand" not in outtxt or "x-monorepo-upgrade-drill=" not in outtxt:
+                problems.append("a lost create answer did not report the namespace and its label for manual cleanup")
+        elif preexisting_label is not None:
+            # already there, whatever its label: refused, not used, not written to, not deleted
+            theirs = f"x-monorepo-upgrade-{RUN_ID}"
+            if "already exists" not in outtxt or "payment-upgrade: refused" not in outtxt:
+                problems.append("a namespace that already exists was not refused")
+            if deletes or upgrades or left != [theirs] or (nsdir / theirs).read_text().splitlines()[0] != preexisting_label:
+                problems.append(f"a namespace that was already there must be left alone and nothing installed: deletes={deletes} upgrades={len(upgrades)} namespaces={left}")
+            touched = [x for x in lines if f" -n {theirs} " in x or (x.startswith("helm ") and theirs in x)]
+            if not (reldir / theirs).exists():
+                problems.append("the release in the namespace that was already there was uninstalled")
+            if any(x.startswith("helm uninstall") for x in lines):
+                problems.append("helm uninstall ran although the namespace was not this run's")
+            if touched:
+                problems.append(f"something was run against the namespace that was already there: {touched}")
+        else:
+            # one namespace created, installed into, and deleted: that one, last
+            if len(creates) != 1:
+                problems.append(f"want exactly one namespace created, got {len(creates)}")
+            if len(deletes) != 1 or (deletes and deletes[0][1] == HOME_NS):
+                problems.append(f"want exactly one namespace deleted and not the home one, got {deletes}")
+            if left:
+                problems.append(f"namespaces left behind: {left}")
+            if not any(x.startswith("kubectl -n x-monorepo-upgrade-") and "apply -f" in x and "deps.yaml" in x for x in lines):
+                problems.append("the drill's own Postgres / Redis (deps.yaml) were not applied in its namespace")
+            ups = [lines[i] for i in upgrades]
+            if not ups or any(" -n x-monorepo-upgrade-" not in x or "paymentRpc.ingress.enabled=false" not in x or "secrets.postgresUrl" in x for x in ups):
+                problems.append(f"every helm upgrade must run in the drill's namespace with the Ingress off: {ups}")
+            if creates and upgrades and creates[0] > upgrades[0]:
+                problems.append("a helm upgrade ran before the namespace was created")
+            want_ups = 3 if mode == "upgrade" else 1
+            if len(upgrades) != want_ups:
+                problems.append(f"{len(upgrades)} helm upgrades ran, want {want_ups}")
+            if mode == "upgrade":
+                if not (root / "upgrade_started").exists():
+                    problems.append("the premise failed: the background upgrade never started, so nothing was tested")
+                elif not done:
+                    problems.append("the background helm upgrade never finished before the script exited")
+                elif deletes and done[0] > deletes[0][0]:
+                    problems.append("the namespace was deleted BEFORE the background helm upgrade finished")
+            # a failure must say why the migrate hook failed: the Job's log, by its job-name label
+            if not any(x.startswith("kubectl -n x-monorepo-upgrade-") and " logs " in x and "job-name=x-monorepo-upg-" in x for x in lines):
+                problems.append("the failure did not print the logs of the migrate Job of the drill's release")
+        # nothing of the script's session may outlive it (a child left behind keeps changing the cluster)
+        time.sleep(0.2)
+        try:
+            os.killpg(p.pid, 0)
+            problems.append("a process of the script's session is still alive after it exited")
+        except ProcessLookupError:
+            pass
+    finally:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if p.poll() is None:
+            p.wait()
+        out.close()
+    if problems:
+        problems.append("script output (tail): " + (root / "out").read_text(errors="replace")[-500:].replace("\n", " | "))
+    else:
+        shutil.rmtree(root, ignore_errors=True)
+    return problems
+
+
+FQDN_PG = f"postgres://app:app@postgres.{HOME_NS}.svc.cluster.local:5432/app?sslmode=disable"  # the home release's Postgres
+FQDN_REDIS = f"redis://redis.{HOME_NS}.svc.cluster.local:6379/0"
+env_pg, env_redis = [{"name": "APP_POSTGRES_URL", "value": FQDN_PG}], [{"name": "APP_REDIS_URL", "value": FQDN_REDIS}]
+# Every chart input that can change which Postgres / Redis a workload uses (swept from values.yaml and templates/: each
+# existingSecret, each extraEnv, the config file). The drill must REFUSE each, before it creates or installs anything. The
+# extraEnv of catalog-rpc and payment-rpc are refused by the chart itself at render time; the rest only the rendered-manifest
+# check can see.
+REFUSALS = {
+    "secrets.existingSecret": {"secrets": {"existingSecret": "external-app-env"}},
+    "secrets.catalogRpc.existingSecret": {"secrets": {"catalogRpc": {"existingSecret": "external-catalog-env", "apiKey": ""}}},
+    "secrets.paymentRpc.existingSecret": {"secrets": {"paymentRpc": {"existingSecret": "external-payment-env", "apiKey": "", "mockWebhookSecret": ""}}},
+    "rpc.extraEnv (FQDN of the home Postgres)": {"rpc": {"extraEnv": env_pg}},
+    "worker.extraEnv (FQDN of the home Postgres)": {"worker": {"extraEnv": env_pg}},
+    "worker.extraEnv (FQDN of the home Redis)": {"worker": {"extraEnv": env_redis}},
+    "rpc.extraEnv (FQDN of the home Redis)": {"rpc": {"extraEnv": env_redis}},
+    "console.extraEnv": {"console": {"extraEnv": env_pg}},
+    "catalogRpc.extraEnv": {"catalogRpc": {"extraEnv": env_pg}},
+    "paymentRpc.serve.extraEnv": {"paymentRpc": {"serve": {"extraEnv": env_pg}}},
+    "paymentRpc.consume.extraEnv": {"paymentRpc": {"consume": {"extraEnv": env_pg}}},
+    "paymentRpc.expire.extraEnv": {"paymentRpc": {"expire": {"extraEnv": env_pg}}},
+    "config.postgres.url": {"config": {"postgres": {"url": FQDN_PG}}},
+    "config.redis.url": {"config": {"redis": {"url": FQDN_REDIS}}},
+}
+
+
+def merge(a, b):
+    out = dict(a)
+    for k, v in b.items():
+        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def main():
+    pg = start_postgres()
+    failed = False
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="upgrade-failure-mutants-"))
+    src = script_file.read_text()
+
+    def mutant(name, old, new, *more):
+        text = src
+        for o, n in ((old, new),) + tuple(zip(more[::2], more[1::2])):
+            assert o in text, f"the script changed shape: the {name} mutant cannot be built ({o[:40]!r})"
+            text = text.replace(o, n, 1)
+        f = tmp / f"{name}.sh"
+        f.write_text(text)
+        return f
+
+    # a drill that writes to the home database / deletes the home namespace / skips the render check
+    writes_home = mutant("writes-home", "ns_uid=$created\n", 'ns_uid=$created\nkubectl -n "$1" exec deploy/postgres -- psql -U app -d app -tAq -c "CREATE TABLE public.drill_mutant (x int)" >/dev/null\n')
+    deletes_home = mutant("deletes-home", 'kubectl delete --raw "/api/v1/namespaces/$ns"', 'kubectl delete --raw "/api/v1/namespaces/ns"',
+                          '''printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "$ns_uid" |''',
+                          '''printf '{"kind":"DeleteOptions","apiVersion":"v1"}' |''')
+    # the delete is not bound to the uid that was looked up (r5: a namespace re-created under the same name is deleted)
+    no_uid = mutant("no-uid-precondition", '''printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' "$ns_uid" |''',
+                    '''printf '{"kind":"DeleteOptions","apiVersion":"v1"}' |''')
+    # ownership by a label made of the caller's run id, AlreadyExists not refused, and a lost create answer adopted by looking the
+    # namespace up by that label (r3 / r6): a namespace that was already there is installed into and deleted
+    adopts = mutant("adopts-by-label",
+                    'if kubectl get namespace "$ns" -o name >/dev/null 2>&1; then', "if false; then",
+                    "token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n')", "token=$run_id",
+                    'if grep -q AlreadyExists "$tmp/create.err"; then', "if false; then",
+                    '    fail "refused: the create of $ns was applied',
+                    '    created=$(kubectl get namespace -l "$run_label=$token" -o jsonpath=\'{.items[0].metadata.uid}\'); true || fail "refused: the create of $ns was applied')
+    # internal state taken from the environment (the init line removed): what a parent exported steers cleanup()
+    inherits = mutant("inherits-state", 'ns_uid="" token="" helm_pid="" soft="" pfs=""',
+                      'ns_uid="${ns_uid:-}" token="${token:-}" helm_pid="${helm_pid:-}" soft="${soft:-}" pfs=""')
+    # the uid is looked up at cleanup time (r6): whatever carries the token THEN is deleted, a re-made namespace included
+    late_lookup = mutant("late-uid-lookup", '  if [ -n "$ns_uid" ]; then\n    printf \'{"kind"',
+                         '''  ns_uid=$(kubectl get namespace -l "$run_label=$token" -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.uid}{"\\n"}{end}' | awk -v n="$ns" '$1 == n {print $2}')\n  if [ -n "$ns_uid" ]; then\n    printf '{"kind"''')
+    no_check = mutant("no-check", "assert_connections() {", "assert_connections() { return 0;")
+
+    def report(label, problems):
+        nonlocal failed
+        if problems:
+            failed = True
+            print(f"upgrade-failure-test: FAIL ({label})", file=sys.stderr)
+            for x in problems:
+                print("  - " + x, file=sys.stderr)
+
+    def must_catch(label, problems, *needles):
+        nonlocal failed
+        if not any(n in x for x in problems for n in needles):
+            failed = True
+            print(f"upgrade-failure-test: FAIL ({label}): the mutant was NOT caught: {problems}", file=sys.stderr)
+
+    try:
+        for mode in ("install", "upgrade"):
+            report(mode, run_scenario(script_file, mode, pg))
+        # fault injection: the same checks must go red
+        must_catch("install, writes-home", run_scenario(writes_home, "install", pg), "CHANGED", "unchanged", "names the home namespace", "sentinel")
+        must_catch("upgrade, writes-home", run_scenario(writes_home, "upgrade", pg), "CHANGED", "unchanged", "names the home namespace", "sentinel")
+        must_catch("install, deletes-home", run_scenario(deletes_home, "install", pg), "home namespace was deleted", "not the home one")
+        # the create is applied and its answer is lost: its uid is unknown, so nothing is adopted or deleted; the run says what to delete
+        report("install, create answer lost", run_scenario(script_file, "install", pg, create_reply_fails=True))
+        # a namespace that was already there is neither reused nor written to nor deleted, whatever its label (r3: the caller can
+        # name the run, so "same name, same label" is a state anyone can construct)
+        for label_name, label in (("same label", RUN_ID), ("other label", "someone-else")):
+            report(f"namespace already exists, {label_name}", run_scenario(script_file, "install", pg, preexisting_label=label))
+            must_catch(f"namespace already exists, {label_name}, adopts-by-label", run_scenario(adopts, "install", pg, preexisting_label=label),
+                       "already exists was not refused", "must be left alone", "something was run against") if label_name == "same label" else None
+
+        # r6: deleted and re-made under the same name AND the same token label before cleanup runs: the uid from the create's answer no
+        # longer matches, so the replacement and its release survive; a uid looked up at cleanup time (or no uid precondition) deletes it
+        report("namespace replaced before cleanup", run_scenario(script_file, "install", pg, swapped=True))
+        for m in (late_lookup, no_uid):
+            must_catch(f"namespace replaced before cleanup, {m.stem}", run_scenario(m, "install", pg, swapped=True),
+                       "replacement namespace was deleted", "release of the replacement")
+        # r4: a parent that exported the script's internal state (ns_uid, token, ns, release...) next to a namespace of the same
+        # name and label, with a release in it, must find both intact and no helm uninstall / kubectl delete at all
+        state = {"ns_uid": "11111111-1111-4111-8111-111111111111", "token": "inherited-token", "release": "x-monorepo-upg-4242", "ns": f"x-monorepo-upgrade-{RUN_ID}",
+                 "helm_pid": "1", "soft": "1", "run_label": "x-monorepo-upgrade-drill"}
+        report("inherited internal state", run_scenario(script_file, "install", pg, preexisting_label="inherited-token", inherited=state))
+        must_catch("inherited internal state, inherits-state", run_scenario(inherits, "install", pg, preexisting_label="inherited-token", inherited=state),
+                   "left alone", "uninstall", "something was run against", "release in the namespace")
+
+        for name, override in REFUSALS.items():
+            flow = tmp / ("flow-" + re.sub(r"\W", "_", name) + ".yaml")
+            flow.write_text(yaml.safe_dump(merge(yaml.safe_load(flow_file.read_text()), override)))
+            report(f"refused: {name}", run_scenario(script_file, "install", pg, flow=flow, refused=True))
+            if name.startswith(("secrets.existingSecret", "rpc.extraEnv (FQDN of the home Postgres)", "config.postgres.url", "worker.extraEnv (FQDN of the home Redis)")):
+                must_catch(f"refused: {name}, no-check", run_scenario(no_check, "install", pg, flow=flow, refused=True),
+                           "must create", "not refused up front")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        subprocess.run([rt, "rm", "-f", pg], capture_output=True)
+    if failed:
+        sys.exit(1)
+    print("upgrade-failure-test: ok (home database unchanged on every path, the drill's namespace created and deleted, "
+          f"{len(REFUSALS)} Postgres/Redis-source inputs refused up front, a lost create answer adopts and deletes nothing, an existing namespace (same or other label) left alone, "
+          "background helm joined before the delete, migrate log printed, inherited internal state ignored, a namespace replaced before cleanup survives, 7 mutants caught)")
+
+
+main()

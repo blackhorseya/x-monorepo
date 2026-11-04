@@ -38,7 +38,7 @@ func seedOrders(t *testing.T, repo order.Repository, n int) {
 			t.Fatal(err)
 		}
 		if i%3 == 2 {
-			if err := o.Cancel(at); err != nil {
+			if err := o.Cancel(at, order.CauseRPCRequest); err != nil {
 				t.Fatal(err)
 			}
 		}

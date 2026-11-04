@@ -36,8 +36,10 @@ var ProviderSet = wire.NewSet(
 	ProvideOrderRepository,
 	ProvideTransactor,
 	ProvideInbox,
+	ProvideHistoryStore,
 	events.NewPublisher,
-	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),
+	// Every use case publishes through the recorder, which also writes the order history (#427).
+	ProvideEventPublisher,
 	system.NewUUIDGenerator,
 	wire.Bind(new(port.IDGenerator), new(*system.UUIDGenerator)),
 	system.NewClock,
@@ -103,6 +105,29 @@ func ProvideTransactor(db *gorm.DB) port.Transactor {
 	}
 
 	return postgres.NewTransactor(db)
+}
+
+// ProvideHistoryStore pairs with ProvideOrderRepository: ordering.order_history on Postgres, a
+// process-local store in memory.
+func ProvideHistoryStore(db *gorm.DB) port.HistoryStore {
+	if db == nil {
+		return memory.NewHistoryStore()
+	}
+
+	return postgres.NewHistoryStore(db)
+}
+
+// ProvideEventPublisher is the one port.EventPublisher of this BC: the outbox publisher wrapped by the
+// history recorder. Wrapping here, and nowhere in a use case, is what makes the history complete —
+// whatever publishes an order event records it, in the caller's transaction. Who counts as an admin
+// actor comes from config.auth.admin_role, like ProvideOwnership.
+func ProvideEventPublisher(pub *events.Publisher, history port.HistoryStore, auth config.Auth) port.EventPublisher {
+	role := auth.AdminRole
+	if role == "" {
+		role = admin.DefaultAdminRole
+	}
+
+	return events.NewRecorder(pub, history, role)
 }
 
 // ProvideInbox is this BC's consumer inbox (usecasex.Idempotent): the

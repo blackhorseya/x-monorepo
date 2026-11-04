@@ -69,7 +69,7 @@ func TestOrder_Events(t *testing.T) {
 	}
 
 	later := now.Add(time.Minute)
-	if err := o.Cancel(later); err != nil {
+	if err := o.Cancel(later, order.CauseRPCRequest); err != nil {
 		t.Fatal(err)
 	}
 	evs = o.PullEvents()
@@ -79,7 +79,7 @@ func TestOrder_Events(t *testing.T) {
 	}
 
 	// A failed transition raises nothing.
-	if err := o.Cancel(later); err == nil {
+	if err := o.Cancel(later, order.CauseRPCRequest); err == nil {
 		t.Fatal("second cancel should fail")
 	}
 	if got := o.PullEvents(); len(got) != 0 {

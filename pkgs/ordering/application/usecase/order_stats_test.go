@@ -37,7 +37,7 @@ func TestOrderStats_ZeroFills(t *testing.T) {
 		}
 	}
 	cancel := usecase.NewCancelOrder(repo, rec, fixedClock{t: t0.Add(time.Hour)}, ownership.New("admin"))
-	if _, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-3"}); err != nil {
+	if _, err := cancel.Execute(c, dto.CancelOrderInput{OrderID: "o-3", Source: dto.CancelSourceRPC}); err != nil {
 		t.Fatal(err)
 	}
 
