@@ -103,9 +103,9 @@ cell() {
 # ── the 8 cells: {auth on, role-less key | auth on, admin key | auth off, no key | auth off, key sent} × script ──
 ON=(APP_AUTH_MODE=required)
 for s in reservation orders; do
-  cell "on-roleless-$s" "$s" 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-  cell "on-admin-$s"    "$s" 0 - "$ADMIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-admin=$ADMIN_KEY:admin"
-  cell "off-nokey-$s"   "$s" 0 - -            APP_AUTH_MODE=off
+  cell "on-roleless-$s" "$s" 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
+  cell "on-admin-$s"    "$s" 99 - "$ADMIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-admin=$ADMIN_KEY:admin"
+  cell "off-nokey-$s"   "$s" 99 - -            APP_AUTH_MODE=off
   cell "off-key-$s"     "$s" 0 - "$PLAIN_KEY" APP_AUTH_MODE=off "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
 done
 
