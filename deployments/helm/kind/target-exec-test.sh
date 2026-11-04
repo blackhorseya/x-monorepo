@@ -111,6 +111,14 @@ run_lines() {
 
 # judge → prints a summary line; exit 0 when every call got exactly the task's own kubeconfig
 judge() {
+  local out rc
+  out=$(judge_py 2>&1); rc=$?
+  if [ "$rc" -gt 1 ] || ! printf '%s\n' "$out" | head -1 | grep -q '^kubectl=[0-9]* helm=[0-9]* kind=[0-9]* scripts=[0-9]* wrong=[0-9]*$'; then
+    echo "JUDGE-CRASH"; printf '%s\n' "$out" | tail -3; return 2
+  fi
+  printf '%s\n' "$out"; return "$rc"
+}
+judge_py() {
   python3 - "$calls" "$expected" "$decoy" <<'PY'
 import sys
 calls, expected, decoy = sys.argv[1:4]
@@ -125,6 +133,8 @@ for line in open(calls):
     if tool == "script":
         n["script"] += 1
         continue
+    if tool not in ("kubectl", "helm", "kind"):
+        continue  # k6 and the like: logged by a fake, not judged
     if tool == "kind" and not (a[:1] and a[0] in ("create", "delete", "export")):
         continue
     if tool == "helm":  # the subcommands that never reach a cluster (check-kubeconfig.py's HELM_OFFLINE)
@@ -161,6 +171,14 @@ run_real() {
         perl -e 'alarm 20; exec @ARGV' bash "$1/$sc.sh" "$ns" x-monorepo deployments/helm/x-monorepo deployments/helm/kind/values.yaml deployments/helm/kind/payment-flow-values.yaml ) >/dev/null 2>&1 || true
   done
 }
+
+# ---- the judge itself, on call logs written by hand (a tool it does not judge must not crash it; a wrong call must turn it red)
+printf 'kubectl\t%s\t--kubeconfig %s get ns\nk6\tUNSET\trun x.js\nscript\tUNSET\tsmoke.sh\n' "$expected" "$expected" > "$calls"
+judge >/dev/null 2>&1; jr=$?
+printf 'kubectl\t%s\t--kubeconfig %s get ns\nk6\tUNSET\trun x.js\nhelm\t%s\t-n x status r\n' "$expected" "$expected" "$decoy" > "$calls"
+judge >/dev/null 2>&1; jw=$?
+if [ "$jr" = 0 ] && [ "$jw" = 1 ]; then ok "judge: a clean log passes (k6 and script lines do not crash it), a call without the flag turns it red"
+else bad "judge self-check: clean log rc=$jr (want 0), wrong log rc=$jw (want 1)"; fi
 
 # ---- baseline: the real Taskfile
 lines_of "$TASKFILE"
@@ -237,6 +255,7 @@ for m in a b c d e f g h i; do
   fi
   lines_of "$mutfile"; run_lines
   judge >"$tmp/judge.out" 2>&1; judge_rc=$?
+  if [ "$judge_rc" = 2 ]; then bad "mutant $m: the judge crashed: $(tr '\n' ' ' < "$tmp/judge.out" | cut -c1-200)"; continue; fi
   case $m in
     a|b|c|d|e) want='apply -f deployments/helm/kind/deps.yaml' ;;
     i) want='decoy.yaml' ;;
@@ -293,6 +312,7 @@ for m in j k l m n; do
   case $m in
     j|k)
       run_real "$tmp/mutkind"; judge >"$tmp/judge.out" 2>&1; judge_rc=$?
+      if [ "$judge_rc" = 2 ]; then bad "script mutant $m: the judge crashed: $(tr '\n' ' ' < "$tmp/judge.out" | cut -c1-200)"; continue; fi
       if [ "$gate_rc" != 0 ] && [ "$judge_rc" != 0 ]; then ok "script mutant $m: run → $(sed -n 2p "$tmp/judge.out" | sed 's/^ *//' | cut -c1-70) | gate → $verdict"
       elif [ "$gate_rc" = 0 ] && [ "$judge_rc" != 0 ]; then bad "script mutant $m is dangerous when run and the gate lets it through"
       else bad "script mutant $m: gate rc=$gate_rc, run rc=$judge_rc (the edit did not reach a call, or the gate is blind)"; fi ;;
