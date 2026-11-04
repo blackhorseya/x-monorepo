@@ -70,6 +70,15 @@ func (x *Policy) ForList(c context.Context, requested string) (string, error) {
 	return p.Subject, nil
 }
 
+// IsAdmin reports whether the caller is an authenticated principal holding the admin role. An
+// anonymous caller (auth off, or no credential on an optional path) is not one: it may be unconfined,
+// but it is not someone who may be shown who acted on an order.
+func (x *Policy) IsAdmin(c context.Context) bool {
+	p := contextx.PrincipalFrom(c)
+
+	return !p.IsAnonymous() && p.HasRole(x.adminRole)
+}
+
 // OwnOnly returns the customer the caller is confined to, and true when they
 // are: a known non-admin principal. Admin and anonymous callers are not
 // confined (false). Reads of a single order use it to put the owner into the

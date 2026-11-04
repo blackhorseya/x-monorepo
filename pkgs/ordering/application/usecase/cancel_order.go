@@ -80,6 +80,10 @@ func causeOf(s dto.CancelSource) order.Cause {
 		return order.CauseRPCRequest
 	case dto.CancelSourceCancellationRequest:
 		return order.CauseCancellationRequested
+	case dto.CancelSourceStockShortage:
+		return order.CauseStockShortage
+	case dto.CancelSourceReservationExpired:
+		return order.CauseReservationExpired
 	default:
 		return order.CauseUnspecified
 	}

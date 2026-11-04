@@ -36,6 +36,10 @@ func (x Cause) String() string {
 		return "STOCK_RESERVED"
 	case CauseCancellationRequested:
 		return "CANCELLATION_REQUESTED"
+	case CauseStockShortage:
+		return "STOCK_SHORTAGE"
+	case CauseReservationExpired:
+		return "RESERVATION_EXPIRED"
 	default:
 		return "UNSPECIFIED"
 	}
@@ -43,7 +47,7 @@ func (x Cause) String() string {
 
 // ParseCause is the inverse of String; anything outside the table is ErrInvalidCause.
 func ParseCause(s string) (Cause, error) {
-	for _, c := range []Cause{CauseUnspecified, CauseRPCRequest, CausePaymentCaptured, CausePaymentExpired, CauseStockReserved, CauseCancellationRequested} {
+	for _, c := range []Cause{CauseUnspecified, CauseRPCRequest, CausePaymentCaptured, CausePaymentExpired, CauseStockReserved, CauseCancellationRequested, CauseStockShortage, CauseReservationExpired} {
 		if c.String() == s {
 			return c, nil
 		}
@@ -52,8 +56,14 @@ func ParseCause(s string) (Cause, error) {
 	return CauseUnspecified, ErrInvalidCause
 }
 
-// validForCancel: the two reasons an order is cancelled by a caller (the other cause of a
-// cancellation, CausePaymentExpired, is decided inside the aggregate).
+// validForCancel: the reasons an order is cancelled by a caller (the other cause of a
+// cancellation, CausePaymentExpired, is decided inside the aggregate): a client's request, or another
+// BC's request, classified (inventory's shortage / expiry) or not.
 func (x Cause) validForCancel() bool {
-	return x == CauseRPCRequest || x == CauseCancellationRequested
+	switch x {
+	case CauseRPCRequest, CauseCancellationRequested, CauseStockShortage, CauseReservationExpired:
+		return true
+	default:
+		return false
+	}
 }

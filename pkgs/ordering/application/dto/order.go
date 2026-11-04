@@ -71,8 +71,13 @@ const (
 	CancelSourceUnspecified CancelSource = iota
 	// CancelSourceRPC: a client's CancelOrder request.
 	CancelSourceRPC
-	// CancelSourceCancellationRequest: another BC's OrderCancellationRequested.
+	// CancelSourceCancellationRequest: another BC's OrderCancellationRequested, unclassified (an event
+	// from before the typed cause existed, or a cause this version does not know).
 	CancelSourceCancellationRequest
+	// CancelSourceStockShortage: OrderCancellationRequested.cause = STOCK_SHORTAGE.
+	CancelSourceStockShortage
+	// CancelSourceReservationExpired: OrderCancellationRequested.cause = RESERVATION_EXPIRED.
+	CancelSourceReservationExpired
 )
 
 type CancelOrderInput struct {

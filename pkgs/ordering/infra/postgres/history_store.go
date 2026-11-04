@@ -105,9 +105,12 @@ func toHistoryEntry(r historyRow) (order.HistoryEntry, error) {
 	if err != nil {
 		return order.HistoryEntry{}, err
 	}
+	// A cause this version does not know (a row written by a newer release) is UNSPECIFIED, not an
+	// error: one unreadable value must not make the whole history unreadable. The other columns stay
+	// strict — an unknown status or actor is corrupt data.
 	cause, err := order.ParseCause(r.Cause)
 	if err != nil {
-		return order.HistoryEntry{}, err
+		cause = order.CauseUnspecified
 	}
 
 	return order.ReconstituteHistoryEntry(order.HistoryParams{
