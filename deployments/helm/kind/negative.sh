@@ -10,7 +10,7 @@
 # The release is restored (helm upgrade --wait) and the Secrets deleted on the way out, whatever happens.
 #   negative.sh <namespace> <release> <chart-dir> <values-file>
 set -euo pipefail
-. "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2 chart=$3 values=$4
