@@ -2789,12 +2789,46 @@ echo "$rows"'
 for f in scripts/test.sh nested/test.sh other.sh scripts/other.sh; do mkdir -p "$rcx/$(dirname "$f")"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_bad" > "$rcx/$f"; done
 mkdir -p "$rcx/ok"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_ok" > "$rcx/ok/test.sh"
 rcx_run() { rc=0; out=$(cd "$rcx" && scripts/check-exit-swallow.sh "$@" 2>&1) || rc=$?; }
+rcx_run ./scripts/test.sh;            expect_eq "exempt: ./scripts/test.sh is the same file → exempt" "0" "$rc"
+rcx_run scripts/../scripts/test.sh;   expect_eq "exempt: scripts/../scripts/test.sh is the same file → exempt" "0" "$rc"
+rcx_run "$rcx/scripts/test.sh";       expect_eq "exempt: the absolute path of scripts/test.sh is the same file → exempt" "0" "$rc"
+rcx_run ./nested/test.sh;             expect_eq "exempt: ./nested/test.sh is still red" "1" "$rc"
+rcx_run "$rcx/nested/test.sh";        expect_eq "exempt: the absolute path of nested/test.sh is still red" "1" "$rc"
+expect_match "exempt: …named by its repo-relative path" '^nested/test\.sh:3: rcbranch:' "$out"
+# a same-named file OUTSIDE the repo is not scripts/test.sh either
+mkdir -p "$tmp/outside/scripts"; cp "$rcx/scripts/test.sh" "$tmp/outside/scripts/test.sh"
+rcx_run "$tmp/outside/scripts/test.sh"; expect_eq "exempt: scripts/test.sh in another repo (outside this one) is scanned → red" "1" "$rc"
 rcx_run scripts/test.sh;       expect_eq "exempt: scripts/test.sh itself is exempt from rcbranch (positive)" "0" "$rc"
 rcx_run nested/test.sh;        expect_eq "exempt: nested/test.sh is NOT exempt → red" "1" "$rc"
 expect_match "exempt: …as rcbranch on nested/test.sh" 'nested/test\.sh:3: rcbranch:' "$out"
 rcx_run other.sh;              expect_eq "exempt: an ordinary .sh at the root is red" "1" "$rc"
 rcx_run scripts/other.sh;      expect_eq "exempt: an ordinary .sh under scripts/ is red" "1" "$rc"
 rcx_run ok/test.sh;            expect_eq "exempt: a healthy test.sh (the refusing branch) is green — positive control" "0" "$rc"
+# the other file-level exemption: the DEFAULT scan skips scripts/hooks/* (the Claude hooks) by the full repo-relative path git ls-files gives. A mini
+# repo (20 clean scripts, 5 workflows, a fake git that lists them): scripts/hooks/check.sh is skipped, other/scripts/hooks/check.sh is not
+hk="$tmp/hk"; mkdir -p "$hk/scripts/hooks" "$hk/other/scripts/hooks" "$hk/bin" "$hk/.github/workflows"
+cp "$src/scripts/check-exit-swallow.sh" "$src/scripts/extract-run-blocks.py" "$hk/scripts/"
+for ((i = 1; i <= 20; i++)); do printf '#!/usr/bin/env bash\nset -euo pipefail\ntrue\n' > "$hk/scripts/clean$i.sh"; done
+for i in 1 2 3 4 5; do printf 'jobs:\n  j:\n    steps:\n      - run: ls\n' > "$hk/.github/workflows/w$i.yml"; done
+cat > "$hk/bin/git" <<'FAKE'
+#!/bin/sh
+[ "$1" = ls-files ] || exit 2
+shift
+case "$*" in
+  *'*.sh'*) cd "$HK_ROOT" && find . -name '*.sh' | sed 's#^\./##' | sort ;;
+  *) cd "$HK_ROOT" && find .github -name '*.yml' | sort ;;
+esac
+FAKE
+chmod +x "$hk/bin/git"
+hk_run() { rc=0; out=$(cd "$hk" && HK_ROOT="$hk" PATH="$hk/bin:$PATH" scripts/check-exit-swallow.sh 2>&1) || rc=$?; }
+printf '#!/usr/bin/env bash\nset -euo pipefail\nls x || true\n' > "$hk/scripts/hooks/check.sh"
+printf '#!/usr/bin/env bash\nset -euo pipefail\ntrue\n' > "$hk/other/scripts/hooks/check.sh"
+hk_run; expect_eq "hooks: scripts/hooks/check.sh with a swallow is skipped by the default scan (the exemption) → green" "0" "$rc"
+printf '#!/usr/bin/env bash\nset -euo pipefail\nls x || true\n' > "$hk/other/scripts/hooks/check.sh"
+hk_run; expect_eq "hooks: the same file under other/scripts/hooks/ is NOT exempt → red" "1" "$rc"
+expect_match "hooks: …and named by its full path" '^other/scripts/hooks/check\.sh:3: swallow:' "$out"
+rcx_run=; rc=0; out=$(cd "$hk" && scripts/check-exit-swallow.sh scripts/hooks/check.sh 2>&1) || rc=$?
+expect_eq "hooks: an explicit argument is scanned as given (no hooks skip in explicit mode, documented) → red" "1" "$rc"
 rcb_ok() { # <name> <lines…>
   local n=$1; shift
   { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; printf '%s\n' "$@"; } > "$sw/rcbok-$n.sh"

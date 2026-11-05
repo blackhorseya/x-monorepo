@@ -3,7 +3,8 @@
 # A gate that swallows a status is green when the command it asked about failed (#453/#455, #457 r0, #453 r1, #458).
 #
 #   scripts/check-exit-swallow.sh              # every tracked *.sh except scripts/hooks/ (task check-exit-swallow)
-#   scripts/check-exit-swallow.sh <file>...    # only these files (scripts/test.sh's fixtures)
+#   scripts/check-exit-swallow.sh <file>...    # only these files (scripts/test.sh's fixtures); no scripts/hooks/ skip here, and a file inside the repo is
+#                                              # named by its repo-relative path however it was spelled (./x, ../x, absolute)
 #
 # It flags, per line (comment lines and heredoc bodies are skipped):
 #   swallow   `cmd || true`, `cmd || :`, `cmd || exit 0`, `cmd || return 0` — also inside $(...), a trap string or sh -c '...'
@@ -38,9 +39,28 @@ cd "$here/.." || die "cannot cd to the repo root from [$here]"
 tmp=$(mktemp -d) || die "mktemp failed"
 trap 'rm -rf "$tmp"' EXIT
 
+# an explicit argument that names a file inside this repo is turned into its repo-relative path (./scripts/test.sh, scripts/../scripts/test.sh and
+# the absolute path all become scripts/test.sh), so the one path-based exemption (rcbranch / scripts/test.sh) does not depend on how it was
+# spelled; a file outside the repo keeps the string it was given. Relative arguments are read from the repo root (the cd above).
+root=$(pwd -P) || die "pwd failed"
+repo_rel() {
+  local d b
+  [ -f "$1" ] || { printf '%s' "$1"; return; }
+  d=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || { printf '%s' "$1"; return; }
+  b=$(basename "$1")
+  case $d in
+    "$root") printf '%s' "$b" ;;
+    "$root"/*) printf '%s' "${d#"$root"/}/$b" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 files=() yml=()
 if [ "$#" -gt 0 ]; then
-  for f in "$@"; do case $f in *.yml | *.yaml) yml+=("$f") ;; *) files+=("$f") ;; esac; done
+  for f in "$@"; do
+    f=$(repo_rel "$f")
+    case $f in *.yml | *.yaml) yml+=("$f") ;; *) files+=("$f") ;; esac
+  done
 else
   rc=0; git ls-files -- '*.sh' > "$tmp/ls" || rc=$?
   [ "$rc" = 0 ] || die "git ls-files failed (exit $rc)"
