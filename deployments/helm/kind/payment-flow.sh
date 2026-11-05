@@ -190,7 +190,7 @@ echo "payment-flow: the release runs with ordering.require_payment on, auth requ
 # 1 ── create → CONFIRMED → StartPayment → pay → webhook → COMPLETED ───────────────────────────────────────
 o=$(new_order); with_payment "$o"
 as_shopper ordering.v1.OrderService/CompleteOrder "{\"id\":\"$o\"}"; want "CompleteOrder of an order that needs payment" "$res" "400 order.payment_required"
-out=$(mock pay --order "$o" --deliver "$hook") || fail "mock pay"
+out=$(mock pay --order "$o" --deliver "$hook") || { fail "mock pay"; exit 1; }
 [ "$(jq -r .delivered_status <<<"$out")" = 200 ] || fail "the webhook was not accepted: $out"
 wait_order "$o" ORDER_STATUS_COMPLETED
 want "payment after the order completed" "$(pay_status "$o")" PAYMENT_STATUS_CAPTURED
@@ -212,7 +212,7 @@ echo "payment-flow 4: an unknown event type and a notification for a checkout no
 
 # 2 ── delayed webhook, and the webhook that never comes ───────────────────────────────────────────────────
 o2=$(new_order); with_payment "$o2"
-d=$(mock pay --order "$o2") || fail "mock pay (no delivery)"
+d=$(mock pay --order "$o2") || { fail "mock pay (no delivery)"; exit 1; }
 want "paid at the provider" "$(db "SELECT paid FROM payment.mock_checkouts WHERE ref = '$(refs "$o2")'")" t
 steady "$o2" ORDER_STATUS_CONFIRMED 8
 want "payment while the webhook is late" "$(pay_status "$o2")" PAYMENT_STATUS_PENDING
@@ -306,7 +306,7 @@ kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-
 slow kubectl -n "$ns" rollout status "deploy/$release-payment-serve" "deploy/$release-payment-consume" --timeout=2m >/dev/null || fail "payment-rpc did not come back"
 forwards
 with_payment "$od"   # consume turns the OrderConfirmed that waited into the payment; the rpc pods were never restarted
-out=$(mock pay --order "$od" --deliver "$hook") || fail "mock pay after recovery"
+out=$(mock pay --order "$od" --deliver "$hook") || { fail "mock pay after recovery"; exit 1; }
 wait_order "$od" ORDER_STATUS_COMPLETED
 want "rpc pods across the outage (names and restarts)" "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}')" "$rpc_pods_before"
 echo "payment-flow 9: payment-rpc stopped: the order was reserved and CONFIRMED, StartPayment answered 503 payment.unavailable; back again, the same rpc pods paid it to COMPLETED"

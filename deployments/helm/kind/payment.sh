@@ -127,7 +127,7 @@ echo "payment: the ingress routes the webhook path and nothing else (RPC, metric
 # first requests answered by payment-rpc (400); a moment later it recovers.
 sleep 3
 res=$(seq 1 40 | xargs -P 20 -I{} curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H "Host: $host" -d '{}' "$ing/api/payment/webhook")
-n400=$(grep -c '^400$' <<<"$res" || [ $? -eq 1 ]) n503=$(grep -c '^503$' <<<"$res" || [ $? -eq 1 ])
+n400=$(value_of -ok 1 grep -c '^400$' <<<"$res") || exit 1; n503=$(value_of -ok 1 grep -c '^503$' <<<"$res") || exit 1
 [ "$n400" -ge 1 ] || fail "burst: no request reached payment-rpc ($n400 x 400, $n503 x 503)"
 [ "$n503" -ge 1 ] || fail "burst: 40 requests in a burst were never limited ($n400 x 400, $n503 x 503): the rate limit is not in force"
 sleep 5

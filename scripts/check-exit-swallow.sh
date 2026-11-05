@@ -16,9 +16,10 @@
 #   pipeline  `a | b` in a file that never says `set -o pipefail` (or set -euo pipefail ...): only b's status counts
 #   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
 #   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
-#             break / fail / die, or a new value for $v; top-level code only: inside a function the fnctx shapes apply). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
-#   default   `$(cmd || echo …)` / `$(cmd || printf …)` and `x=$(cmd) || x=…`: a failed command turned into a default value (#470). Not exemptible. The label idiom
-#             `$([ test ] && echo yes || echo no)` passes only when the left side is a test builtin; a new value for $v is not a refusal anywhere.
+#             break; no function names, and a new value for $v is the failure swallowed; top-level code only: inside a function the fnctx shapes apply). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
+#   default   (#470) a failed command turned into a value, judged against a CLOSED whitelist of handlers (not a list of bad words): after `x=$(…) ||` only
+#             return / exit [arg] or `{ …; return|exit [arg]; }` (or `|| NAME=$?`, which rcbranch then follows); after a `||` INSIDE a $(…) only `exit [non-zero]`
+#             or `{ …; exit; }`; the label idiom `$([ test ] && echo a || echo b)` passes only when the test holds no $( ` <( inside. Not exemptible.
 #   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` must be followed on its own line (or after a heredoc substitution's closing line) by
 #             one of THREE shapes: `|| return [arg]`, `|| exit [arg]`, `|| { …; return|exit [arg]; }` (the group's last top-level statement). Nothing else:
 #             no function names, no new value, no `|| rc=$?`, no `$?` on a later line, no continue / break, no return 0. A shape rule: it does not look at how or from where the function is called (`f || x`,
@@ -38,15 +39,15 @@
 set -euo pipefail
 die() { echo "check-exit-swallow: $*" >&2; exit 2; }
 
-here=$(dirname "$0") || die "dirname failed"
-cd "$here/.." || die "cannot cd to the repo root from [$here]"
-tmp=$(mktemp -d) || die "mktemp failed"
+here=$(dirname "$0") || { echo "check-exit-swallow: dirname failed" >&2; exit 2; }
+cd "$here/.." || { echo "check-exit-swallow: cannot cd to the repo root from [$here]" >&2; exit 2; }
+tmp=$(mktemp -d) || { echo "check-exit-swallow: mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$tmp"' EXIT
 
 # an explicit argument that names a file inside this repo is turned into its repo-relative path (./scripts/test.sh, scripts/../scripts/test.sh and
 # the absolute path all become scripts/test.sh), so the one path-based exemption (rcbranch / scripts/test.sh) does not depend on how it was
 # spelled; a file outside the repo keeps the string it was given. Relative arguments are read from the repo root (the cd above).
-root=$(pwd -P) || die "pwd failed"
+root=$(pwd -P) || { echo "check-exit-swallow: pwd failed" >&2; exit 2; }
 # no dirname / basename / realpath here: a command whose output renames the file to scan and which then dies would be a status swallowed (#466 r3);
 # parameter expansion and the cd / pwd builtins cannot fail silently, and a cd that fails on a file that exists stops the run
 repo_rel() {
@@ -69,16 +70,16 @@ if [ "$#" -gt 0 ]; then
   done
 else
   rc=0; git ls-files -- '*.sh' > "$tmp/ls" || rc=$?
-  [ "$rc" = 0 ] || die "git ls-files failed (exit $rc)"
+  [ "$rc" = 0 ] || { echo "check-exit-swallow: git ls-files failed (exit $rc)" >&2; exit 2; }
   while IFS= read -r f; do
     case $f in scripts/hooks/*) continue ;; esac
     files+=("$f")
   done < "$tmp/ls"
-  [ "${#files[@]}" -ge 20 ] || die "only ${#files[@]} scripts to check — git ls-files '*.sh' no longer returns what it used to"
+  [ "${#files[@]}" -ge 20 ] || { echo "check-exit-swallow: only ${#files[@]} scripts to check — git ls-files '*.sh' no longer returns what it used to" >&2; exit 2; }
   rc=0; git ls-files -- '.github/workflows/*.yml' '.github/actions/*/action.yml' > "$tmp/ls" || rc=$?
-  [ "$rc" = 0 ] || die "git ls-files (workflows) failed (exit $rc)"
+  [ "$rc" = 0 ] || { echo "check-exit-swallow: git ls-files (workflows) failed (exit $rc)" >&2; exit 2; }
   while IFS= read -r f; do yml+=("$f"); done < "$tmp/ls"
-  [ "${#yml[@]}" -ge 5 ] || die "only ${#yml[@]} workflow / action files to check — the .github layout is not what it used to be"
+  [ "${#yml[@]}" -ge 5 ] || { echo "check-exit-swallow: only ${#yml[@]} workflow / action files to check — the .github layout is not what it used to be" >&2; exit 2; }
 fi
 nscripts=${#files[@]} nyml=${#yml[@]}
 
@@ -86,7 +87,7 @@ nscripts=${#files[@]} nyml=${#yml[@]}
 # extracted file back into a line of the YAML (extracted line k is YAML line first+k-2: line 1 is the `set` line the runner implies).
 : > "$tmp/map.tsv"
 if [ "${#yml[@]}" -gt 0 ]; then
-  mkdir "$tmp/runs" || die "mkdir failed"
+  mkdir "$tmp/runs" || { echo "check-exit-swallow: mkdir failed" >&2; exit 2; }
   rc=0; python3 -I "$here/extract-run-blocks.py" "$tmp/runs" "${yml[@]}" > "$tmp/map.tsv" 2> "$tmp/extract.err" || rc=$?
   [ "$rc" = 0 ] || die "extract-run-blocks.py failed (exit $rc): $(head -2 "$tmp/extract.err")"
   while IFS=$'\t' read -r sh _ _; do files+=("$sh"); done < "$tmp/map.tsv"
@@ -95,9 +96,28 @@ fi
 # nothing to scan (a workflow whose only run: steps are not shell, e.g. `shell: python`): clean, and awk / shellcheck must not be started with no file
 if [ "${#files[@]}" -eq 0 ]; then echo "check-exit-swallow: no shell to check in the ${nyml} workflow / action file(s)"; exit 0; fi
 
+cat > "$tmp/common.awk" <<'AWK'
+# The ONE judgment of what may follow `||` after a failing command (#466 fnctx, #470 default). A closed whitelist, shared by both programs:
+#   return [arg]   exit [arg]   { …; return|exit [arg]; }      [arg] = nothing | non-zero literal | $? | $var | ${var} | $1 (quoted or not)
+# hshape(h, exit_only): 1 when the handler text h (what follows `||`, a brace group possibly joined from several lines with " ; ") is one of them.
+# exit_only: inside a $(…) the handler may only `exit` (the status of the substitution reaches the assignment), never `return`.
+function hshape(h, exit_only,   hs, blk, lastst, verb, arg) {
+  arg = "([ \t]+(\\$\\?|\"\\$\\?\"|\\$\\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\\}?|\"\\$\\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\\}?\"|[1-9][0-9]*))?$"
+  verb = exit_only ? "^exit" : "^(return|exit)"
+  sub(/^[ \t]+/, "", h)
+  if (h ~ /^\{/) {
+    if (h !~ /\}[ \t;]*$/) return 0
+    blk = h; sub(/[ \t;]*\}[ \t;]*$/, "", blk); sub(/^\{[ \t]*/, "", blk)
+    lastst = blk; sub(/.*;[ \t]*/, "", lastst); sub(/^[ \t]+/, "", lastst)
+    return (lastst ~ (verb arg))
+  }
+  hs = h; sub(/[ \t]*(;|&&|\|\|).*/, "", hs)                        # a plain shape ends at the first separator
+  return (hs ~ (verb arg))
+}
+AWK
 cat > "$tmp/scan.awk" <<'AWK'
 # Reads the files named on the command line. Prints "file:line: rule: code" per finding; exit 1 if there was one.
-function reset_file() { term = ""; dash = 0; hasflag = 0; sd = 0; dq = 0; sq = 0; pend_var = "" }
+function reset_file() { term = ""; dash = 0; hasflag = 0; sd = 0; dq = 0; sq = 0; aq = 0; ah_open = 0; ah_wait = 0 }
 # split the line into CODE (no trailing comment) and CMT (the comment, if any), tracking quotes
 function split_comment(s,   i, c, q, n) {
   CODE = s; CMT = ""; q = ""; n = length(s)
@@ -159,26 +179,56 @@ function argsub(c,   i, j, d, ch, pre, inner, n) {
   }
   return 0
 }
-# default: a failed command turned into a default value. Walks CODE character by character with a stack of open $(…) / `…` / (…) frames that
-# survives line breaks (a multi-line substitution is one frame) and reports:
-#   - `$(cmd || echo …)` / `$(cmd || printf …)` at the top level of a substitution: the failure of cmd (also after it printed part of its output)
-#     is replaced by a plausible value. EXCEPT the label idiom `$([ test ] && echo yes || echo no)` where the left side is a test builtin
-#     (`[`, `[[`, `test`, `command -v`, `type`): there the status IS the answer and no command output is being hidden.
-#   - `x=$(cmd) || x=…` (same variable on both sides): the failure of cmd is replaced by a new value. Only `|| { …; return|exit …; }` refuses.
-# Not exemptible (no `# exit-ok:`): a default is the thing being forbidden. Limits: a `case` pattern `a)` inside a $( … ) pops a frame early;
-# `||` at the end of a line with the handler on the next one is not followed.
-function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fpor[sd] = 0; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; fdq[sd] = dq; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context; its own quotes do not leak out
-function defscan(c,   i, n, ch, nx, rest, nm, pre, lastclause, cond, rem) {
+# default (#470): a failed command turned into a value. A CLOSED whitelist, not a list of bad words (a keyword list is what #466 r6 and #470 r0 got
+# bypassed through: `{ echo 0; }`, `(echo 0)`, `{ x=0; }`). Walks CODE character by character with a stack of open $(…) / `…` / (…) frames that
+# survives line breaks, and judges every handler after a `||` with hshape() (common.awk, the same judgment fnctx uses):
+#   x=$(…) || H            H = return [arg] | exit [arg] | { …; return|exit [arg]; }   (or `|| NAME=$?`: the status is kept, rcbranch checks the branch)
+#   $(… || H …)            H = exit [non-zero arg] | { …; exit [arg]; }                (the status of the substitution reaches the assignment)
+#   label idiom            $([ test ] && echo a || echo b): the left side is `[` / `[[` / `test` with NO $( ` <( inside it (a command inside the test
+#                          would be a failure turned into a label). A function or external command on the left is not a label: yesno() it.
+# Anything else after a `||` there is a finding. Not exemptible. Limits: a `case` pattern `a)` inside a $( … ) pops a frame early; the handler of an
+# assignment is read for at most 6 lines.
+function reportat(rule, ln, txt) { printf "%s:%d: %s: %s\n", FILENAME, ln, rule, txt; n++ }
+function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; flt[sd] = line; fdq[sd] = dq; fbd[sd] = 0; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context
+function defeval(d,   np, parts, k, h, lc, cond) {
+  np = split(fb[d], parts, "\001")
+  for (k = 2; k <= np; k++) {
+    h = parts[k]; sub(/^[ \t]+/, "", h)
+    if (hshape(h, 1)) continue
+    lc = parts[k - 1]; sub(/.*;/, "", lc); cond = lc; sub(/&&[ \t]*(echo|printf).*$/, "", cond)
+    if (h ~ /^(echo|printf)([ \t;)`"\047]|$)/ && lc ~ /&&[ \t]*(echo|printf)/ && cond ~ /^[ \t]*(\[\[?|test)[ \t]/ && cond !~ /(\$\(|`|<\()/) continue
+    reportat("default", fln[d], flt[d]); return
+  }
+}
+# cut a trailing `# comment` off a short piece of code, honoring quotes (split_comment loses the comment of a line that ends a multi-line string)
+function cutcomment(t,   i, ch, q, out) {
+  q = ""
+  for (i = 1; i <= length(t); i++) {
+    ch = substr(t, i, 1)
+    if (q == "" && ch == "#" && (i == 1 || substr(t, i - 1, 1) ~ /[ \t;]/)) return substr(t, 1, i - 1)
+    if (ch == "\\" && q != "\047") { i++; continue }
+    if (q == "" && (ch == "\"" || ch == "\047")) q = ch; else if (q == ch) q = ""
+  }
+  return t
+}
+function ahjudge(   b) {
+  b = cutcomment(ah_buf); sub(/^[ \t;]+/, "", b); sub(/[ \t]+$/, "", b)
+  if (b == "" || (b ~ /^\{/ && b !~ /\}[ \t;]*$/)) { if (ah_cnt >= 6) { reportat("default", ah_ln, ah_txt); ah_open = 0 }; return }
+  if (!(hshape(b, 0) || b ~ /^[A-Za-z_][A-Za-z_0-9]*=\$\?[ \t]*(;|$)/)) reportat("default", ah_ln, ah_txt)
+  ah_open = 0
+}
+function defscan(c,   i, n, ch, nx, rest, nm, pre, rem, t, d, prevc) {
   n = length(c)
-  if (c ~ /[^ \t]/) {                                       # the first non-blank line after a line that ended in `||`: the handler is on THIS line
-    if (pend_var != "" && c ~ ("^[ \t]*" pend_var "=")) report("default")
-    pend_var = ""
-    if (sd > 0 && fpor[sd] && c ~ /^[ \t]*(echo|printf)([ \t;)`"\047]|$)/ && !fpor_tern[sd]) report("default")
-    if (sd > 0) fpor[sd] = 0
+  if (c ~ /[^ \t]/) {                                       # the first non-blank line after one that ended in `)` or `||`: the handler of an assignment may be here
+    if (ah_wait) { ah_wait = 0; if (c ~ /^[ \t]*\|\|/) { ah_buf = c; sub(/^[ \t]*\|\|[ \t]*/, "", ah_buf); ah_open = 1; ah_cnt = 0; ahjudge() } }
+    else if (ah_open) { t = c; sub(/^[ \t]+/, "", t); ah_buf = ah_buf " ; " t; ah_cnt++; ahjudge() }
   }
   for (i = 1; i <= n; i++) {
     ch = substr(c, i, 1); nx = substr(c, i + 1, 1)
+    if (aq) { if (ch == "\\") { if (sd > 0) fb[sd] = fb[sd] ch nx; i++; continue }; if (ch == "\047") aq = 0; if (sd > 0) fb[sd] = fb[sd] ch; continue }   # $'…': a backslash escapes the next character, even a quote
     if (sq) { if (ch == "\047") sq = 0; if (sd > 0) fb[sd] = fb[sd] ch; continue }
+    if (ch == "#" && !dq && (i == 1 || substr(c, i - 1, 1) ~ /[ \t;]/)) break                      # a comment: backticks and `||` in it are text
+    if (ch == "$" && nx == "\047" && !dq) { aq = 1; if (sd > 0) fb[sd] = fb[sd] ch nx; i++; continue }
     if (ch == "\\") { if (sd > 0) fb[sd] = fb[sd] ch nx; i++; continue }
     if (ch == "\047" && !dq) { sq = 1; if (sd > 0) fb[sd] = fb[sd] ch; continue }
     if (ch == "\"") { dq = !dq; if (sd > 0) fb[sd] = fb[sd] ch; continue }
@@ -189,36 +239,36 @@ function defscan(c,   i, n, ch, nx, rest, nm, pre, lastclause, cond, rem) {
       defpush("s", nm, 1); i++; continue
     }
     if (ch == "`") {
-      if (sd > 0 && ft[sd] == "b") { dq = fdq[sd]; sd-- } else { pre = substr(c, 1, i - 1); nm = ""; if (match(pre, /[A-Za-z_][A-Za-z_0-9]*=("|\047)?$/)) { nm = substr(pre, RSTART, RLENGTH); sub(/=.*/, "", nm) }; defpush("b", nm, 1) }
+      if (sd > 0 && ft[sd] == "b") { defeval(sd); dq = fdq[sd]; sd--; if (sd > 0) fb[sd] = fb[sd] "$(S)" }
+      else { pre = substr(c, 1, i - 1); nm = ""; if (match(pre, /[A-Za-z_][A-Za-z_0-9]*=("|\047)?$/)) { nm = substr(pre, RSTART, RLENGTH); sub(/=.*/, "", nm) }; defpush("b", nm, 1) }
       continue
     }
     if (!dq && ch == "(") { defpush("p", "", 1); continue }
-    if (ch == ")" && (!dq || (sd > 0 && ft[sd] != "p" && fdq[sd] != "" ))) {
+    if (ch == ")" && (!dq || (sd > 0 && ft[sd] != "p"))) {
       if (sd == 0) continue
       fneed[sd]--
       if (fneed[sd] > 0) continue
-      nm = fn[sd]; t = ft[sd]; dq = fdq[sd]; sd--
-      if (t == "s" && nm != "") {                           # x=$(…) closed: is it followed by `|| x=…` on this line?
+      nm = fn[sd]; t = ft[sd]; d = sd
+      if (t == "s" || t == "b") defeval(d)
+      dq = fdq[d]; sd--
+      if (sd > 0) fb[sd] = fb[sd] (t == "p" ? "(P)" : (t == "a" ? "$((A))" : "$(S)"))
+      if (t == "s" && nm != "") {                           # x=$(…) closed: what follows the `)` is the handler
         rem = substr(c, i + 1); sub(/^"/, "", rem)
-        if (rem ~ ("^[ \t]*\\|\\|[ \t]*" nm "=")) report("default")
-        else if (rem ~ /^[ \t]*\|\|[ \t]*$/) pend_var = nm          # `x=$(…) ||` and the new value on the next line
+        if (rem ~ /^[ \t]*\|\|/) { ah_buf = rem; sub(/^[ \t]*\|\|[ \t]*/, "", ah_buf); ah_open = 1; ah_cnt = 0; ah_ln = fln[d]; ah_txt = flt[d]; ahjudge() }
+        else if (rem ~ /^[ \t]*$/) { ah_wait = 1; ah_ln = fln[d]; ah_txt = flt[d] }
       }
       continue
     }
     if (!dq && ch == "|" && nx == "|" && sd > 0 && (ft[sd] == "s" || ft[sd] == "b")) {
-      rest = substr(c, i + 2); sub(/^[ \t]+/, "", rest)
-      if (rest == "") {                                                # `||` at the end of the line: `echo …` on the next one is the default
-        lastclause = fb[sd]; sub(/.*(\|\||;)/, "", lastclause); cond = lastclause; sub(/&&[ \t]*(echo|printf)[^&|]*$/, "", cond)
-        fpor[sd] = 1; fpor_tern[sd] = (lastclause ~ /&&[ \t]*(echo|printf)/ && cond ~ /^[ \t]*(\[\[?|test|command[ \t]+-v|type)([ \t]|$)/)
-      }
-      if (rest ~ /^(echo|printf)([ \t;)`"\047]|$)/) {
-        lastclause = fb[sd]; sub(/.*(\|\||;)/, "", lastclause)       # the clause before this `||`: `[ test ] && echo yes`
-        cond = lastclause; sub(/&&[ \t]*(echo|printf)[^&|]*$/, "", cond)
-        if (!(lastclause ~ /&&[ \t]*(echo|printf)/ && cond ~ /^[ \t]*(\[\[?|test|command[ \t]+-v|type)([ \t]|$)/)) report("default")
-      }
-      fb[sd] = fb[sd] "||"; i++; continue
+      if (fbd[sd] == 0) fb[sd] = fb[sd] "\001"; else fb[sd] = fb[sd] "||"
+      i++; continue
     }
-    if (sd > 0) fb[sd] = fb[sd] ch
+    if (sd > 0) {
+      prevc = substr(fb[sd], length(fb[sd]), 1)
+      if (!dq && ch == "{" && (nx == " " || nx == "" || nx == "\t")) fbd[sd]++
+      else if (!dq && ch == "}" && fbd[sd] > 0 && (prevc == " " || prevc == ";" || prevc == "\t" || prevc == "")) fbd[sd]--
+      fb[sd] = fb[sd] ch
+    }
   }
   if (sd > 0) for (i = 1; i <= sd; i++) fb[i] = fb[i] " "
 }
@@ -326,17 +376,9 @@ END {
         hk = k
         if (hnd ~ /^[ \t]*$/ && k < NR) { hk = k + 1; hnd = L[hk]; sub(/[ \t]#.*/, "", hnd) }   # `|| ` at the end of the line, the handler on the next one
         sub(/^[ \t]+/, "", hnd); sub(/[ \t;]+$/, "", hnd)
-        hs = hnd; sub(/[ \t]*(;|&&|\|\|).*/, "", hs)   # the plain shapes end at the first separator: `|| return; next` is `|| return`
-        if (hnd !~ /^\{/ && hs ~ /^(return|exit)([ \t]+(\$\?|"\$\?"|\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?|"\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?"|[1-9][0-9]*))?$/) ok = 1
-        else if (hnd ~ /^\{/) {
-          blk = hnd; bm = hk
-          while (blk !~ /\}$/ && bm < hk + 5 && bm < to[f]) { bm++; t2 = L[bm]; sub(/[ \t]#.*/, "", t2); sub(/^[ \t]+/, "", t2); sub(/[ \t;]+$/, "", t2); blk = blk " ; " t2 }
-          if (blk ~ /\}$/) {
-            sub(/[ \t;]*\}$/, "", blk); sub(/^\{[ \t]*/, "", blk)
-            lastst = blk; sub(/.*;[ \t]*/, "", lastst)
-            if (lastst ~ /^(return|exit)([ \t]+(\$\?|"\$\?"|\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?|"\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?"|[1-9][0-9]*))?$/ ) ok = 1
-          }
-        }
+        blk = hnd; bm = hk
+        if (hnd ~ /^\{/) while (blk !~ /\}$/ && bm < hk + 5 && bm < to[f]) { bm++; t2 = L[bm]; sub(/[ \t]#.*/, "", t2); sub(/^[ \t]+/, "", t2); sub(/[ \t;]+$/, "", t2); blk = blk " ; " t2 }
+        if (hshape(blk, 0)) ok = 1
       }
       if (ok) continue
       printf "%s:%d: fnctx: %s   [in %s(): a function body must check this substitution's status itself — errexit may be off wherever the function is called]\n", FILENAME, i, code, name[f]
@@ -344,7 +386,7 @@ END {
     }
   }
   # rcbranch: `v=$(cmd) || rc=$?` records the status of a command whose OUTPUT is then used. Something must read $rc, before $v is used, and
-  # the lines that read it must be able to refuse the output (return / exit / continue / break / fail / die, or assign $v again).
+  # the lines that read it must be able to refuse the output (return / exit / continue / break; a new value for $v does not count).
   # Records-and-ignores (jq failed, "nothing to approve" printed, rows used anyway, #466) is red. Heuristic: it does not prove the branch
   # is right, only that one exists; docs/ci.md lists the sites it covers.
   for (i = 1; i <= NR && FILENAME != "scripts/test.sh"; i++) {   # ONLY the repo's scripts/test.sh (as git ls-files names it) is the harness; a test.sh anywhere else is scanned: its $rc is judged by expect_eq, not by a branch
@@ -364,32 +406,32 @@ END {
     if (use && use < rd) { printf "%s:%d: rcbranch: %s   [$%s is used at line %d before $%s is read at line %d]\n", FILENAME, i, code, v, use, c, rd; n++; continue }
     esc = 0
     for (k = rd; k <= rd + 5 && k <= NR; k++) {
-      if (L[k] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|fail|die)([^A-Za-z_0-9]|$)/) { esc = 1; break }   # a new value for $v is NOT a refusal (#470): it is the failure swallowed
+      if (L[k] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break)([^A-Za-z_0-9]|$)/) { esc = 1; break }   # no function names (fail / die: nothing says they stop) and a new value for $v is NOT a refusal (#470): it is the failure swallowed
     }
-    if (!esc) { printf "%s:%d: rcbranch: %s   [the lines that read $%s (from line %d) never refuse $%s: no return / exit / continue / break / fail, no new value]\n", FILENAME, i, code, c, rd, v; n++ }
+    if (!esc) { printf "%s:%d: rcbranch: %s   [the lines that read $%s (from line %d) never refuse $%s: no return / exit / continue / break]\n", FILENAME, i, code, c, rd, v; n++ }
   }
   exit (n > 0)
 }
 AWK
 
-rc=0; awk -f "$tmp/scan.awk" "${files[@]}" > "$tmp/out" || rc=$?
+rc=0; awk -f "$tmp/common.awk" -f "$tmp/scan.awk" "${files[@]}" > "$tmp/out" || rc=$?
 case $rc in 0 | 1) ;; *) die "awk failed (exit $rc)" ;; esac
 for f in "${files[@]}"; do
-  rc=0; awk -f "$tmp/fnctx.awk" "$f" >> "$tmp/out" || rc=$?
+  rc=0; awk -f "$tmp/common.awk" -f "$tmp/fnctx.awk" "$f" >> "$tmp/out" || rc=$?
   case $rc in 0 | 1) ;; *) die "awk (fnctx) failed on $f (exit $rc)" ;; esac
 done
 
 # Second layer, a real shell parser: shellcheck SC2155 ("declare and assign separately to avoid masking return values") sees what a line
 # scanner cannot — continuation lines, `a="x"'y z' b=$(cmd)`, `$'..'` values. A file shellcheck cannot parse would be skipped
 # silently by `-i SC2155`, so every file must also pass `bash -n`. shellcheck missing is an error, never a skipped check.
-command -v shellcheck >/dev/null || die "shellcheck is not installed: the SC2155 (declsub) layer cannot run"
+command -v shellcheck >/dev/null || { echo "check-exit-swallow: shellcheck is not installed: the SC2155 (declsub) layer cannot run" >&2; exit 2; }
 for f in "${files[@]}"; do bash -n "$f" 2> "$tmp/syntax" || die "$f does not parse (bash -n): $(head -1 "$tmp/syntax")"; done
 rc=0; shellcheck -s bash -f gcc -i SC2155 -- "${files[@]}" > "$tmp/sc.out" 2> "$tmp/sc.err" || rc=$?
 case $rc in 0 | 1) ;; *) die "shellcheck failed (exit $rc): $(head -2 "$tmp/sc.err")" ;; esac
 while IFS= read -r row; do
   [ -n "$row" ] || continue
   sf=${row%%:*}; rest=${row#*:}; sl=${rest%%:*}
-  src=$(sed -n "${sl}p" "$sf") || die "cannot read line $sl of $sf"
+  src=$(sed -n "${sl}p" "$sf") || { echo "check-exit-swallow: cannot read line $sl of $sf" >&2; exit 2; }
   if printf '%s\n' "$src" | grep -Eq '#[[:space:]]*exit-ok:[[:space:]]*[^[:space:]].{2,}'; then continue; fi
   printf '%s:%s: declsub: %s   [shellcheck SC2155]\n' "$sf" "$sl" "$(printf '%s' "$src" | sed 's/^[[:space:]]*//')" >> "$tmp/out"
   rc=1
@@ -399,8 +441,8 @@ done < "$tmp/sc.out"
 awk -F'\t' -v map="$tmp/map.tsv" 'FILENAME == map { first[$1] = $3; src[$1] = $2; next }
   { i = index($0, ":"); f = substr($0, 1, i - 1)
     if (f in src) { rest = substr($0, i + 1); j = index(rest, ":"); k = substr(rest, 1, j - 1)
-      print src[f] ":" (first[f] + k - 2) ":" substr(rest, j + 1) } else print }' "$tmp/map.tsv" "$tmp/out" > "$tmp/out.mapped" || die "mapping findings failed"
-mv "$tmp/out.mapped" "$tmp/out" || die "mv failed"
+      print src[f] ":" (first[f] + k - 2) ":" substr(rest, j + 1) } else print }' "$tmp/map.tsv" "$tmp/out" > "$tmp/out.mapped" || { echo "check-exit-swallow: mapping findings failed" >&2; exit 2; }
+mv "$tmp/out.mapped" "$tmp/out" || { echo "check-exit-swallow: mv failed" >&2; exit 2; }
 if [ -s "$tmp/out" ]; then
   cat "$tmp/out" >&2
   echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md). Exception: a fnctx finding has no exit-ok; inside a function the only accepted shapes are \`x=\$(…) || return [arg]\`, \`|| exit [arg]\` and \`|| { …; return|exit [arg]; }\`." >&2

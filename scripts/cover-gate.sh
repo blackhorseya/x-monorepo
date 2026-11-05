@@ -2,6 +2,7 @@
 # Coverage gate: every */domain/* package must be 100% covered.
 # Domain is pure logic with no I/O, so anything below 100% is an untested rule.
 set -euo pipefail
+. "$(dirname "$0")/best-effort.sh"   # value_of (#470)
 cd "$(dirname "$0")/.."
 mkdir -p bin
 
@@ -13,7 +14,7 @@ mods=$(python3 -c 'import json,sys; [print(u["DiskPath"].removeprefix("./")) for
 [[ -n "$mods" ]] || { echo "cover-gate: go.work lists no module — nothing was checked" >&2; exit 1; }
 for m in $mods; do
   list=$(cd "$m" && go list ./...) || { echo "cover-gate: go list failed in $m" >&2; exit 1; }
-  pkgs=$(grep '/domain/' <<<"$list" || [ $? -eq 1 ])
+  pkgs=$(value_of -ok 1 grep '/domain/' <<<"$list") || exit 1
   [[ -z "$pkgs" ]] && continue
   for p in $pkgs; do
     checked=$((checked + 1))

@@ -272,9 +272,9 @@ expect_eq "scripts/ runs everything" "$all_jobs" "$(jobs_on scripts scripts/new.
 fixture ciall
 expect_eq "CI_ALL=1 runs everything" "$all_jobs" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 expect_eq "CI_ALL prints one flag per job" "$(echo "$all_jobs" | wc -w | tr -d ' ')" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | wc -l | tr -d ' ')"
-# assignments, not `"$(… || [ $? -eq 1 ])"` inside an argument: the status of a substitution that is an argument never reaches set -e (#462)
+# assignments, not `"$(value_of -ok 1 …) || exit 1"` inside an argument: the status of a substitution that is an argument never reaches set -e (#462)
 all_out=$(in_repo env CI_ALL=1 scripts/ci-changes.sh)
-n_false=$(grep -c '=false$' <<<"$all_out" || [ $? -eq 1 ])
+n_false=$(value_of -ok 1 grep -c '=false$' <<<"$all_out") || exit 1
 expect_eq "CI_ALL=1 prints no false" "0" "$n_false"
 # Every flag is a job's `if:` in ci.yml, declared once as an output of `affected` (a flag nobody reads skips nothing).
 for j in $all_jobs; do
@@ -1238,7 +1238,7 @@ FAIL')"
 # A long log must not flip a found message to setup: grep -q exiting early SIGPIPEs the filter
 # upstream of it, and pipefail turns that into "not found".
 long_log=$(printf '=== RUN   TestX\n    x_test.go:10: target assertion\n'; for ((_try801 = 1; _try801 <= 20000; _try801++)); do printf '    long diagnostic line %0100d\n' 0; done; printf -- '--- FAIL: TestX (0.00s)\nFAIL\n')
-expect_eq "red: long output still assertion" "assertion 0" "$(out=$(printf '%s\n' "$long_log" | scripts/red-stage.sh -m 'target assertion') && rc=0 || rc=$?; echo "$out $rc")"
+expect_eq "red: long output still assertion" "assertion 0" "$(red 'target assertion' "$long_log")"
 set +e; scripts/red-stage.sh </dev/null >/dev/null 2>&1; rc=$?; set -e
 expect_eq "red: -m is required" 64 "$rc"
 
@@ -1519,7 +1519,7 @@ pb_run
 expect_eq "dex-prebind: rerun succeeds" "0" "$rc"
 expect_eq "dex-prebind: rerun writes nothing (state identical)" "$st_before" "$(pb_state)"
 rerun_log=$(tail -n +$((before + 1)) "$pb_dir/log")
-n_mut=$(grep -cE '^(CreateAccount|CreateInvite|ClaimInvite) ' <<<"$rerun_log" || [ $? -eq 1 ])
+n_mut=$(value_of -ok 1 grep -cE '^(CreateAccount|CreateInvite|ClaimInvite) ' <<<"$rerun_log") || exit 1
 expect_eq "dex-prebind: rerun calls no mutation" "0" "$n_mut"
 expect_eq "dex-prebind: rerun asks Dex for no token" "$tokens_before" "$(wc -l < "$pb_dir/tokens" | tr -d ' ')"
 expect_match "dex-prebind: rerun says already bound" 'already bound' "$out"
@@ -2003,7 +2003,10 @@ sw_red() {
   expect_eq    "swallow: $n is red" "1" "$rc"
   expect_match "swallow: $n names the rule $rule" ": $rule:" "$out"
   sw_file "$n-ok" "$* # exit-ok: the verdict is read from the file this writes, not from this status"; sw_run "$sw/$n-ok.sh"
-  expect_eq    "swallow: $n with an exit-ok comment is green" "0" "$rc"
+  case $n in
+    cmdsub|inpipe|inquote) expect_eq "swallow: $n with an exit-ok comment is STILL red (#470 default: a value made up inside \$(…) cannot be exempted)" "1" "$rc"; expect_match "swallow: $n …by the default rule" ': default:' "$out" ;;
+    *) expect_eq "swallow: $n with an exit-ok comment is green" "0" "$rc" ;;
+  esac
 }
 # the table: name @@ rule @@ the line that must be red
 while IFS= read -r row; do
@@ -2086,14 +2089,14 @@ F
 sw_run "$sw/cleanup.sh"
 expect_eq    "swallow: kill / rm cleanup and [ ] guards are not flagged" "0" "$rc"
 sw_write canonical <<'F'
-n=$(grep -c a f || [ $? -eq 1 ])
+n=$(value_of -ok 1 grep -c a f) || exit 1
 for ((i = 1; i <= 5; i++)); do :; done
 rc=0; out=$(cmd) || rc=$?
 [ "$rc" = 0 ] || exit "$rc"
 for p in $pids; do :; done
 for f in "$d"/log-*.txt; do n=$(wc -l < "$f"); done
 for a in 'NS=a$(id)' 'x'; do :; done
-n=$(grep -c y f || [ $? -eq 1 ])
+n=$(value_of -ok 1 grep -c y f) || exit 1
 n=$(cat f | count_lines y)
 expect_eq x 1 "$n" "$(date)"
 f() { local n; n=$(grep -c y f) || return 1; local m=$((n + 1)); local k=1; echo "$n $m $k"; }
@@ -2961,7 +2964,7 @@ if [[ $1 =~ ^HTTP[^\ ]*\ ([0-9]+) ]]; then st=${BASH_REMATCH[1]}; fi
 F
 df_green label-of-a-test <<'F'
 echo "$([ "$a" != "[]" ] && echo true || echo false)"
-v=$(command -v docker >/dev/null 2>&1 && echo docker || echo podman)
+v=$([ -f f ] && echo yes || echo no)
 F
 df_green label-through-a-function <<'F'
 yesno() { if "$@"; then echo yes; else echo no; fi; }
@@ -2992,6 +2995,85 @@ sw_run "$sw/df-exempt.sh"; expect_eq "default: an exit-ok comment does NOT exemp
 
 # workflow / composite-action run: scripts. wf_check <name> < yaml: writes $sw/<name>.yml and runs the checker on it.
 wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
+# r1 (#470): the handler is judged against a CLOSED whitelist, not a list of bad words. Each fixture's cmd prints `half` and then returns 7; the REAL shell
+# runs it and the failure value is really used (the output proves it), and the checker must be red; the whitelist shapes stop the script instead.
+dr_prelude() { printf '#!/usr/bin/env bash\ncmd() { printf half; return 7; }\nfe() { echo 0; }\n'; }
+dr_red() { # <name> <the value the real shell ends up with> ; the body on stdin; the body ends by setting $v
+  { dr_prelude; cat; printf 'echo "v=[$v]"\n'; } > "$sw/dr-$1.sh"
+  sw_run "$sw/dr-$1.sh"
+  expect_eq    "default (half-print): [$1] is red" "1" "$rc"
+  expect_match "default (half-print): [$1] names the rule" ': default:' "$out"
+  real_rc=0; capture -2 real real_rc bash "$sw/dr-$1.sh" || exit 1
+  expect_match "default (half-print): [$1] — the real shell really uses the failure value" "v=\\[$2\\]" "$real"
+}
+dr_green() { # <name> <the exit status the real shell stops with> ; the body on stdin
+  { dr_prelude; cat; printf 'echo "v=[$v]"\n'; } > "$sw/dg2-$1.sh"
+  sw_run "$sw/dg2-$1.sh"
+  expect_eq "default (half-print): [$1] is green" "0" "$rc"
+  real_rc=0; capture -2 real real_rc bash "$sw/dg2-$1.sh" || exit 1
+  expect_eq "default (half-print): [$1] — the real shell stops with $2 and never uses the value" "$2" "$real_rc"
+  case $real in *'v=['*) bad "default (half-print): [$1] — the value was used [$real]" ;; *) ok ;; esac
+}
+dr_red brace-echo 'half0' <<'F'
+v=$(cmd || { echo 0; })
+F
+dr_red subshell-echo 'half0' <<'F'
+v=$(cmd || (echo 0))
+F
+dr_red assign-brace '0' <<'F'
+x=$(cmd) || { x=0; }
+v=$x
+F
+dr_red subshell-exit 'half' <<'F'
+v=$(cmd || (exit 3))
+F
+dr_red return-zero-brace '0' <<'F'
+f2() { x=$(cmd) || { x=0; return 0; }; }
+f2
+v=$x
+F
+dr_red function-that-echoes 'half0' <<'F'
+v=$(cmd || fe)
+F
+dr_red label-with-a-command-in-the-test 'y' <<'F'
+p=$(mktemp); cmd2() { printf '%s' "$p"; return 7; }
+v=$([ -f "$(cmd2)" ] && echo y || echo n)
+F
+dr_red true-in-a-substitution 'half' <<'F'
+v=$(cmd || true)
+F
+dr_red colon-in-a-substitution 'half' <<'F'
+v=$(cmd || :)
+F
+dr_red continue-in-a-loop '' <<'F'
+v=; for i in 1; do x=$(cmd) || continue; done
+F
+dr_red die-function 'half' <<'F'
+die() { echo 0; }
+v=$(cmd) || die
+F
+dr_green substitution-exit 3 <<'F'
+v=$(cmd || exit 3) || exit $?
+F
+dr_green substitution-brace-exit 3 <<'F'
+v=$(cmd || { echo "cmd failed" >&2; exit 3; }) || exit $?
+F
+dr_green assignment-exit 4 <<'F'
+v=$(cmd) || exit 4
+F
+dr_green assignment-brace-exit 6 <<'F'
+v=$(cmd) || { echo "cmd failed" >&2; exit 6; }
+F
+dr_green function-return 5 <<'F'
+f3() { v=$(cmd) || return 5; }
+f3 || exit $?
+F
+dr_green exit-with-status 7 <<'F'
+v=$(cmd) || exit $?
+F
+# a plain test as a label is still a label
+{ dr_prelude; echo 'v=$([ -f f ] && echo y || echo n)'; echo 'echo "v=[$v]"'; } > "$sw/dr-label-ok.sh"
+sw_run "$sw/dr-label-ok.sh"; expect_eq "default (half-print): a plain [ -f f ] label is green" "0" "$rc"
 # a workflow run: script is scanned too
 wf_check df-wf <<'F'
 name: t

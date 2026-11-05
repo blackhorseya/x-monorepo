@@ -15,7 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f dist/index.html ] || { echo "image.sh: dist/ missing, run task web-build" >&2; exit 1; }
 
-tool=${CONTAINER_TOOL:-$(command -v docker >/dev/null 2>&1 && echo docker || echo podman)}
+if [ -n "${CONTAINER_TOOL:-}" ]; then tool=$CONTAINER_TOOL; elif command -v docker >/dev/null 2>&1; then tool=docker; else tool=podman; fi
 port=${E2E_CONSOLE_PORT:-18093}
 rpc_port=${E2E_RPC_PORT:-18091}
 name=x-monorepo-console-e2e

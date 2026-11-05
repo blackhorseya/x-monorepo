@@ -57,10 +57,10 @@ poll 120 'if any(.items[]; (.status.containerStatuses[0].lastState.terminated.ex
 refusal=""
 for ((_try56 = 1; _try56 <= "${NEGATIVE_TRIES:-60}"; _try56++)); do
   # a failed read (API hiccup, unparsable output) is a retry like any other: set -e must not end the script
-  pods=$(kubectl -n "$ns" get pods -l "$sel" -o json 2>/dev/null) || { sleep "${NEGATIVE_SLEEP:-2}"; continue; }
-  bad=$(jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0] // empty' <<<"$pods" 2>/dev/null) || { sleep "${NEGATIVE_SLEEP:-2}"; continue; }
+  if ! pods=$(kubectl -n "$ns" get pods -l "$sel" -o json 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi
+  if ! bad=$(jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0] // empty' <<<"$pods" 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi
   if [ -n "$bad" ]; then
-    msg=$(jq -r --arg n "$bad" '.items[] | select(.metadata.name == $n) | .status.containerStatuses[0].lastState.terminated.message // empty' <<<"$pods" 2>/dev/null) || { sleep "${NEGATIVE_SLEEP:-2}"; continue; }   # a failed read is a retry, never an empty message
+    if ! msg=$(jq -r --arg n "$bad" '.items[] | select(.metadata.name == $n) | .status.containerStatuses[0].lastState.terminated.message // empty' <<<"$pods" 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi   # a failed read is a retry, never an empty message
     if grep -q 'require-durable' <<<"$msg"; then refusal=$msg; break; fi
     for prev in --previous ""; do
       # shellcheck disable=SC2086
