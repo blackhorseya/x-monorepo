@@ -3142,8 +3142,23 @@ F
 dr_red negated-pipeline 'half' <<'F'
 v=$(! cmd)
 F
-dr_red cd-and-command 'half' <<'F'
-v=$(cd / && cmd)
+dr_red negated-after-and 'half' <<'F'
+v=$(true && ! cmd)
+F
+dr_red negated-before-and 'half' <<'F'
+v=$(! cmd && true)
+F
+dr_red and-chain-then-statement 'half0' <<'F'
+v=$(cd / && cmd; echo 0)
+F
+dr_red and-chain-with-or-default 'halfn' <<'F'
+v=$(cd / && cmd && echo y || echo n)
+F
+dr_green and-chain-then-handler 3 <<'F'
+v=$(cd / && cmd) || exit 3
+F
+dr_green and-chain-inside-handler 3 <<'F'
+v=$(cd / && cmd || exit 3) || exit $?
 F
 dr_red handler-then-another-statement 'half' <<'F'
 v=$(cmd || { exit 3; }; echo 0)
@@ -3198,6 +3213,18 @@ cp "$src/scripts/cover-gate.sh" "$src/scripts/best-effort.sh" "$sl_dir/"; ln -sf
 lrc=0; capture -2 lout lrc bash "$sl_link/cover-gate.sh" || exit 1
 if [ "$lrc" != 0 ]; then ok; else bad "cover-gate through a cross-directory symlink carried on (exit 0) [$lout]"; fi
 expect_match "cover-gate through a cross-directory symlink: the message names best-effort.sh" 'best-effort\.sh' "$lout"
+df_green and-chain-cd-pwd <<'F'
+v=$(cd /tmp && pwd)
+F
+df_green and-chain-cd-pwd-p <<'F'
+v=$(cd /tmp && pwd -P)
+F
+df_green and-chain-git-echo <<'F'
+w=$(git rev-parse HEAD && echo x)
+F
+df_green and-chain-three <<'F'
+v=$(a && b && c)
+F
 # a workflow run: script is scanned too
 wf_check df-wf <<'F'
 name: t

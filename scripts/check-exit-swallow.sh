@@ -19,10 +19,11 @@
 #             break; no function names, and a new value for $v is the failure swallowed; top-level code only: inside a function the fnctx shapes apply). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
 #   default   (#470) a failed command turned into a value. CLOSED whitelists, including the ARGUMENT of exit / return (1..255 literal, nothing, or `$?` straight
 #             after the `||`; never `$var`, never `$?` after another command, never 256). After `x=$(…) ||`: hshape(). The content of a $( … ) may only be ONE
-#             pipeline (no `;`, second line, `&`, `&&`, leading `!`), optionally followed by `|| exit [N]` / `|| { …; exit N; }`, or the label
+#             `&&` chain of pipelines (no `;`, second line, `&`, `!`), optionally followed by `|| exit [N]` / `|| { …; exit N; }`, or the label
 #             `$([ test ] && echo a || echo b)` (no $( ` <( inside the test). Not exemptible.
 #   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` must be followed on its own line (or after a heredoc substitution's closing line) by
-#             one of THREE shapes: `|| return [arg]`, `|| exit [arg]`, `|| { …; return|exit [arg]; }` (the group's last top-level statement). Nothing else:
+#             one of THREE shapes: `|| return` / `|| exit` (bare, or with `$?` straight after the `||`), `|| return N` / `|| exit N` (N a literal 1..255), or
+#             `|| { …; return N; }` / `{ …; exit N; }` (the group's LAST statement, N a literal 1..255; no bare, no `$?`, no `$var`). Nothing else:
 #             no function names, no new value, no `|| rc=$?`, no `$?` on a later line, no continue / break, no return 0. A shape rule: it does not look at how or from where the function is called (`f || x`,
 #             `if f`, `$(f)`, a wrapper, eval, command f, another file, never) - errexit may be off in any of those and the checker is never
 #             one spelling behind that way.
@@ -188,8 +189,9 @@ function argsub(c,   i, j, d, ch, pre, inner, n) {
 # default (#470): a failed command turned into a value. A CLOSED whitelist, not a list of bad words (a keyword list is what #466 r6 and #470 r0 got
 # bypassed through: `{ echo 0; }`, `(echo 0)`, `{ x=0; }`). Walks CODE character by character with a stack of open $(…) / `…` / (…) frames that
 # survives line breaks, and judges every handler after a `||` with hshape() (common.awk, the same judgment fnctx uses):
-#   x=$(…) || H            H = return [arg] | exit [arg] | { …; return|exit [arg]; }   (or `|| NAME=$?`: the status is kept, rcbranch checks the branch)
-#   $(… || H …)            H = exit [non-zero arg] | { …; exit [arg]; }                (the status of the substitution reaches the assignment)
+#   x=$(…) || H            H = hshape(): return|exit (bare or `$?` right after the `||`), return|exit N, { …; return|exit N; }, N = 1..255
+#                          (or `|| NAME=$?`: the status is kept, rcbranch checks the branch)
+#   $(… || H …)            H = the same, exit only, and nothing may follow it
 #   label idiom            $([ test ] && echo a || echo b): the left side is `[` / `[[` / `test` with NO $( ` <( inside it (a command inside the test
 #                          would be a failure turned into a label). A function or external command on the left is not a label: yesno() it.
 # Anything else after a `||` there is a finding. Not exemptible. Limits: a `case` pattern `a)` inside a $( … ) pops a frame early; the handler of an
@@ -197,8 +199,9 @@ function argsub(c,   i, j, d, ch, pre, inner, n) {
 function reportat(rule, ln, txt) { printf "%s:%d: %s: %s\n", FILENAME, ln, rule, txt; n++ }
 function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; flt[sd] = line; fdq[sd] = dq; fbd[sd] = 0; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context
 # What may stand inside $( … ): a CLOSED whitelist, not a list of bad constructs.
-#   1. ONE pipeline: no `;`, no second line, no `&` (background), no `&&`, no leading `!`  (a later statement or a negation hides the failure of the first:
-#      `$(cmd; echo 0)`, `$(cmd⏎echo 0)`, `$(cmd; true)`, `$(cmd & wait)`, `$(! cmd)`, `$(set +e; cmd; echo 0)`)
+#   1. ONE `&&` chain of pipelines: no `;`, no second line, no `&` (background), no `!` on any segment  (a later statement or a negation hides the failure of the first:
+#      `$(cmd; echo 0)`, `$(cmd⏎echo 0)`, `$(cmd; true)`, `$(cmd & wait)`, `$(! cmd)`, `$(a && ! b)`, `$(set +e; cmd; echo 0)`). Pipelines joined by `&&` are fine:
+#      the failure of the first is the status of the chain (`$(cd d && pwd)`)
 #   2. that pipeline followed by `|| H`, H = hshape(exit only)
 #   3. the label `[ test ] && echo a || echo b` (test = `[` / `[[` / `test`, no $( ` <( inside)
 # Everything else is a finding; `if` / `case` / `while` / `for` need `;` or a newline, so they fall outside without being listed.
@@ -212,8 +215,9 @@ function onepipeline(t,   x) {                       # t: one part of a substitu
   gsub(/(\|\||\|)[ \t]*\002[ \t]*/, "| ", x)                                      # a pipeline continued on the next line
   gsub(/[0-9]*[<>]&[0-9-]*/, "", x); gsub(/&>>?/, "", x)                          # 2>&1, >&2, &> are redirections, not `&`
   if (x ~ /[;\002]/) return 0                                                      # a second statement
-  if (x ~ /&/) return 0                                                            # `&` background, `&&` list
-  if (x ~ /^[ \t]*!/) return 0                                                     # a negated pipeline
+  gsub(/&&[ \t]*/, "\003", x)                                                      # `a && b`: the failure of a is the status of the whole chain, no default is made
+  if (x ~ /&/) return 0                                                            # `&` background
+  if (x ~ /(^|\003)[ \t]*!/) return 0                                              # a negated pipeline, anywhere in the chain (`a && ! b`)
   return 1
 }
 function hexact(h,   r) {                          # inside $( … ) the handler is the END of the substitution: nothing may follow it (`|| { exit 3; }; echo 0`)
@@ -395,10 +399,9 @@ END {
         for (k = i + 1; k <= to[f]; k++) if (ENDHD[k]) { hb = k; break }
       }
       # 1. `|| <handler>` after the substitution's `)` (same line, or the next line starts with it). CLOSED whitelist, three shapes only:
-      #      x=$(…) || return [arg]      x=$(…) || exit [arg]      x=$(…) || { …; return|exit [arg]; }
-      #    [arg] is nothing, a non-zero literal, $? or $var. The brace group is parsed: its LAST top-level statement must be that return / exit
-      #    (a return inside if / case / && / || does not count). No function names (die, fail), no new value for the variable, no `|| rc=$?`,
-      #    no `$?` read on a later line, no continue / break: the status has to be refused right where it is captured.
+      #      x=$(…) || return|exit [$?|N]      x=$(…) || { …; return|exit N; }      (N a literal 1..255; hshape() in common.awk is the one judgment)
+      #    The brace group is parsed: its LAST top-level statement must be that return / exit with a literal. No function names (die, fail), no new value
+      #    for the variable, no `|| rc=$?`, no `$?` read on a later line, no continue / break, no $var: the status has to be refused right where it is captured.
       for (k = i; k <= (hb > i ? hb + 2 : i + 3) && k <= to[f] && !ok; k++) {
         hnd = ""
         if (match(L[k], /\)["\047]?[ \t]*\|\|[ \t]*/)) hnd = substr(L[k], RSTART + RLENGTH)
@@ -477,7 +480,7 @@ awk -F'\t' -v map="$tmp/map.tsv" 'FILENAME == map { first[$1] = $3; src[$1] = $2
 mv "$tmp/out.mapped" "$tmp/out" || { echo "check-exit-swallow: mv failed" >&2; exit 2; }
 if [ -s "$tmp/out" ]; then
   cat "$tmp/out" >&2
-  echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md). Exception: a fnctx finding has no exit-ok; inside a function the only accepted shapes are \`x=\$(…) || return [arg]\`, \`|| exit [arg]\` and \`|| { …; return|exit [arg]; }\`." >&2
+  echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line, or for rules that allow it add '# exit-ok: <why the status cannot change the verdict>' (docs/ci.md). default and fnctx findings CANNOT be exempted: after \`x=\$(…) ||\` only \`return\`/\`exit\` (bare or \`\$?\` straight after the \`||\`), \`return N\`/\`exit N\` or \`{ …; return N; }\`/\`{ …; exit N; }\` with N a literal 1..255 (no \$var, no \`\$?\` after another command); inside \$(…) only an \`&&\` chain of pipelines (no ; newline & !), optionally with \`|| exit [N]\`, or the label \`[ test ] && echo a || echo b\`." >&2
   exit 1
 fi
 echo "check-exit-swallow: $nscripts scripts and the run: scripts of $nyml workflow / action files, no swallowed exit status"
