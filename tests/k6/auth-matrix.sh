@@ -5,13 +5,28 @@
 # Why: a green run on the default auth-off server says nothing about a role-less key, an
 # admin key, or a key sent to a server that ignores it; #187 found each by hand (#193).
 #   auth-matrix.sh <bin dir> [cell…]      (default: all; cell names are the first word of each cell() call)
+#   K6_AUTH_LIST=1 auth-matrix.sh [cell…]  print every cell name (or the named ones, failing on an unknown name) and exit; no bin dir, no Postgres
+#   K6_AUTH_SHARD=<i>/<n> auth-matrix.sh <bin dir>   run the cells whose 1-based position p in that list has (p-1) % n == i-1
+#                                          (CI runs n shards, each on a runner with its own Postgres; the union of the n shards
+#                                          is the full list, scripts/test.sh pins it). Not combinable with named cells.
+# A named cell that does not exist is an error (a typo would otherwise run nothing and stay green).
 # Each cell has its own rpc (and worker for reservation), RUN_ID (→ SKUs and customers) and log;
 # the scripts' own thresholds decide pass/fail (rpc_errors, p95s, and now: the operations
 # that must have succeeded are > 0), unchanged and with the same CREATE_P95 / RESERVE_P95 as
 # smoke.sh. The keys below are made up for this test; nothing here is a credential.
 set -euo pipefail
-bin=$1; shift
+list=${K6_AUTH_LIST:-}
+if [ -n "$list" ]; then bin=""; else bin=$1; shift; fi   # list mode: the arguments are cell names to check
 only=("$@")
+shard_i="" shard_n=""
+if [ -n "${K6_AUTH_SHARD:-}" ]; then
+  [ ${#only[@]} -eq 0 ] || { echo "K6_AUTH_SHARD and named cells are exclusive" >&2; exit 2; }
+  case "$K6_AUTH_SHARD" in
+    [1-9]/[1-9]) shard_i=${K6_AUTH_SHARD%/*} shard_n=${K6_AUTH_SHARD#*/} ;;
+    *) echo "K6_AUTH_SHARD must be <i>/<n> (1 <= i <= n <= 9), got '$K6_AUTH_SHARD'" >&2; exit 2 ;;
+  esac
+  [ "$shard_i" -le "$shard_n" ] || { echo "K6_AUTH_SHARD $K6_AUTH_SHARD: i > n" >&2; exit 2; }
+fi
 port=${PORT:-18090}
 export APP_CONFIG=configs/config.example.yaml APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false
 export APP_POSTGRES_URL=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
@@ -32,19 +47,23 @@ stop() {
 }
 trap 'stop; catalog_stop' EXIT
 # one catalog-rpc for every cell (the cells' rpc keys and roles are rpc's business; catalog-rpc only knows rpc's service key)
-catalog_start "$bin" "$((port + 2))" "$bin/k6-auth-catalog.log"
+[ -n "$list" ] || catalog_start "$bin" "$((port + 2))" "$bin/k6-auth-catalog.log"
 
-fails=()
+fails=() seen=() pos=0 ran=0
 # cell <name> <script> <expect: the k6 exit code> <match: text the k6 output must contain, or -> <key|-> <server env…>
 #   env knobs: FAIL_PATH=<procedure> → a fault proxy in front of the rpc answers that procedure's
 #   first call 503 (once), REFLECT=1|header|json|prefixed|redirect|redirect-path → echoing the request's X-API-Key in it; K6_ENV="a=b c=d" → extra
 #   k6 -e; FORBID=<text> → the k6 output, summary export and metrics stream must not contain it (a key must never be printed).
 cell() {
   local name=$1 s=$2 expect=$3 match=$4 key=$5; shift 5
+  pos=$((pos + 1)); seen+=("$name")
   if [ ${#only[@]} -gt 0 ]; then
     local hit=""; for o in "${only[@]}"; do [ "$o" = "$name" ] && hit=1; done
     [ -n "$hit" ] || return 0
   fi
+  if [ -n "$shard_n" ] && [ $(((pos - 1) % shard_n)) -ne $((shard_i - 1)) ]; then return 0; fi
+  if [ -n "$list" ]; then echo "$name"; return 0; fi
+  ran=$((ran + 1))
   local log="$bin/k6-auth-$name" id="auth-$$-$name" target="http://127.0.0.1:$port" t0=$SECONDS
   echo "== $name ($s, expect exit $expect)"
   env "$@" "$bin/rpc" > "$log-rpc.log" 2>&1 & pid=$!
@@ -132,5 +151,12 @@ cell ratelimit-key-is-code ratelimit 0 - request.rate_limited "${RL[@]}"
 cell timeout-key timeout 0 - "$PLAIN_KEY" "${TO[@]}"
 cell timeout-key-is-code timeout 0 - request.timeout "${TO[@]}"
 
+# every named cell must exist, and a shard must run something: neither may pass by running nothing
+for o in ${only[@]+"${only[@]}"}; do
+  hit=""; for n in "${seen[@]}"; do [ "$n" = "$o" ] && hit=1; done
+  [ -n "$hit" ] || { echo "auth matrix FAILED: no such cell '$o' (cells: ${seen[*]})" >&2; exit 1; }
+done
+[ -z "$list" ] || exit 0
+[ -z "$shard_n" ] || [ "$ran" -gt 0 ] || { echo "auth matrix FAILED: shard $K6_AUTH_SHARD ran no cell"; exit 1; }
 if [ ${#fails[@]} -gt 0 ]; then echo "auth matrix FAILED: ${fails[*]}"; exit 1; fi
 echo "auth matrix ok"

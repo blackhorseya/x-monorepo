@@ -142,6 +142,11 @@ expect_eq "moving a product file into pkgs/platform/server counts both ends (k6,
   "$go_checks $go_prod_pre helm_kind_keda k6 k6_auth k6_wire" \
   "$(rename_jobs_on movesrv pkgs/ordering/limits.go pkgs/platform/server/limits.go)"
 
+# #448: the auth matrix script is the k6-auth input; moving it out of tests/k6 (or a file into it) keeps both ends.
+expect_eq "moving the auth matrix out of tests/k6 still runs k6, k6-auth (--no-renames)" \
+  "k6 k6_auth k6_wire" "$(rename_jobs_on movematrix tests/k6/auth-matrix.sh docs/auth-matrix.sh)"
+expect_eq "moving a script into tests/k6 runs k6, k6-auth (--no-renames)" \
+  "k6 k6_auth k6_wire" "$(rename_jobs_on intok6 docs/auth-matrix.sh tests/k6/auth-matrix.sh)"
 expect_eq "moving a file out of apps/worker still runs keda and k6" \
   "$go_checks $go_prod_pre helm_kind_keda k6 k6_wire" \
   "$(rename_jobs_on moveworker apps/worker/main.go pkgs/ordering/main.go)"
@@ -219,6 +224,37 @@ expect_eq "helm-kind has no matrix"      0 "$(ci_job helm-kind | grep -c 'matrix
 expect_eq "helm-kind-keda has no matrix" 0 "$(ci_job helm-kind-keda | grep -c 'matrix')"
 expect_eq "k6-auth job runs task k6-auth-matrix"        1 "$(ci_job k6-auth | grep -c '^      - run: task k6-auth-matrix$')"
 expect_eq "k6-auth job no longer runs task k6-wire"     0 "$(ci_job k6-auth | grep -c 'task k6-wire')"
+# #448: k6-auth is one job with a static matrix of shards, K6_AUTH_SHARD=<i>/<n>. The shards must be exactly
+# 1/n … n/n, and their cells together must be the whole list, each once — a cell in no shard would never run.
+m=$src/tests/k6/auth-matrix.sh
+all_cells=$(K6_AUTH_LIST=1 "$m")
+expect_eq "auth matrix lists 27 cells" 27 "$(printf '%s\n' "$all_cells" | wc -l | tr -d ' ')"
+expect_eq "auth matrix cell names are unique" 0 "$(printf '%s\n' "$all_cells" | sort | uniq -d | wc -l | tr -d ' ')"
+shards=$(ci_job k6-auth | sed -n 's/^        shard: \[\(.*\)\]$/\1/p' | tr -d '" ' | tr ',' ' ')
+expect_match "k6-auth has a static shard matrix" '^1/[1-9]( |$)' "$shards"
+n=${shards##*/}
+want=""; for i in $(seq 1 "$n"); do want="$want $i/$n"; done
+expect_eq "k6-auth shards are 1/n … n/n" "${want# }" "$shards"
+expect_eq "k6-auth leg reads its shard from the matrix" 1 "$(ci_job k6-auth | grep -c '^      K6_AUTH_SHARD: ${{ matrix.shard }}$')"
+expect_eq "k6-auth matrix does not stop the other legs" 1 "$(ci_job k6-auth | grep -c '^      fail-fast: false$')"
+union=""
+for i in $(seq 1 "$n"); do
+  part=$(K6_AUTH_LIST=1 K6_AUTH_SHARD=$i/$n "$m")
+  expect_match "auth matrix shard $i/$n is not empty" '.' "$part"
+  union="$union
+$part"
+done
+expect_eq "the union of the k6-auth shards is the whole cell list, each cell once" \
+  "$(printf '%s\n' "$all_cells" | sort)" "$(printf '%s\n' "$union" | sed '/^$/d' | sort)"
+# A name that is not a cell is an error (it used to run nothing and pass), and so is a shard that is not i/n.
+rc=0; K6_AUTH_LIST=1 "$m" no-such-cell >/dev/null 2>&1 || rc=$?
+expect_eq "an unknown cell name fails" 1 "$rc"
+rc=0; K6_AUTH_LIST=1 "$m" whoami-503 >/dev/null 2>&1 || rc=$?
+expect_eq "a known cell name passes" 0 "$rc"
+rc=0; K6_AUTH_LIST=1 K6_AUTH_SHARD=$((n + 1))/$n "$m" >/dev/null 2>&1 || rc=$?
+expect_eq "a shard beyond n fails" 2 "$rc"
+rc=0; K6_AUTH_LIST=1 K6_AUTH_SHARD=1/$n "$m" whoami-503 >/dev/null 2>&1 || rc=$?
+expect_eq "a shard together with named cells fails" 2 "$rc"
 # #209: the key must stay out of k6's output and tags — k6-wire is the job that proves it, on its own now.
 expect_eq "k6-wire job runs task k6-wire"               1 "$(ci_job k6-wire | grep -c '^      - run: task k6-wire$')"
 expect_eq "k6-wire needs no Postgres (docs/ci.md says so)" 0 "$(ci_job k6-wire | grep -ci 'postgres')"

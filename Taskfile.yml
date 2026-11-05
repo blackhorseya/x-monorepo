@@ -472,7 +472,7 @@ tasks:
         msg: k6 not found (brew install k6)
 
   k6-auth-matrix:
-    desc: 'tests/k6/auth-matrix.sh: orders.js and reservation.js (2 VU, 5s) against a real ./bin/rpc + ./bin/catalog-rpc + ./bin/worker + Postgres (DATABASE_URL) in every auth state — auth on with a role-less key / an admin key, auth off with no key / a key sent — plus the per-procedure-public and fails-once fixtures. Each cell has its own RUN_ID; task k6-auth-matrix -- <cell…> runs some. The `k6-auth` job in CI'
+    desc: 'tests/k6/auth-matrix.sh: orders.js and reservation.js (2 VU, 5s) against a real ./bin/rpc + ./bin/catalog-rpc + ./bin/worker + Postgres (DATABASE_URL) in every auth state — auth on with a role-less key / an admin key, auth off with no key / a key sent — plus the per-procedure-public and fails-once fixtures. Each cell has its own RUN_ID; task k6-auth-matrix -- <cell…> runs some; K6_AUTH_LIST=1 prints the cell names and K6_AUTH_SHARD=<i>/<n> runs one shard (CI: 3 legs, each on its own runner and Postgres). The `k6-auth` job in CI'
     cmds: ['tests/k6/auth-matrix.sh {{.BIN_DIR}} {{.CLI_ARGS}}']
     preconditions:
       - sh: command -v k6 >/dev/null && command -v python3 >/dev/null
