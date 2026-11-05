@@ -3,9 +3,10 @@ description: >-
   Chromium for Playwright, cached under ~/.cache/ms-playwright keyed on the installed
   @playwright/test version (not the lockfile: an unrelated npm bump must not evict it).
   On a hit only the apt dependencies are installed (`install-deps`, not cached — apt is
-  the runner's); on a miss `install --with-deps` downloads the browser too and the cache
-  is saved for the next run. Needs pnpm + `task web-install` done (reads the version
-  from node_modules). Used by ci.yml's console-e2e and console-image jobs.
+  the runner's); on a miss `install --with-deps` downloads the browser too, and a default-branch
+  push / dispatch saves the cache for the next run (a pull request only reads it: it would write
+  into its own ref and push main's entries out of the quota, #450). Needs pnpm + `task web-install`
+  done (reads the version from node_modules). Used by ci.yml's console-e2e and console-image jobs.
 
 runs:
   using: composite
@@ -15,18 +16,35 @@ runs:
       working-directory: web/apps/console
       run: echo "v=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
 
-    - id: cache
+    # same decision as the setup action: its plan.sh is the only definition of "may write"
+    - id: plan
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: ${{ github.action_path }}/../setup/plan.sh
+
+    - id: cache-rw
+      if: steps.plan.outputs.write == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-${{ steps.version.outputs.v }}-chromium
 
-    - if: steps.cache.outputs.cache-hit != 'true'
+    - id: cache-ro
+      if: steps.plan.outputs.write != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.version.outputs.v }}-chromium
+
+    - if: (steps.cache-rw.outputs.cache-hit || steps.cache-ro.outputs.cache-hit) != 'true'
       shell: bash
       working-directory: web/apps/console
       run: pnpm exec playwright install --with-deps chromium
 
-    - if: steps.cache.outputs.cache-hit == 'true'
+    - if: (steps.cache-rw.outputs.cache-hit || steps.cache-ro.outputs.cache-hit) == 'true'
       shell: bash
       working-directory: web/apps/console
       run: pnpm exec playwright install-deps chromium

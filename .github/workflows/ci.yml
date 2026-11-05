@@ -92,7 +92,8 @@ jobs:
       - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
         with: { setup_only: true }
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
-        with: { version: v2.14.0, install-only: true }
+        # install-only still saves ~/.cache/golangci-lint in its post step; a pull request must not write (#450)
+        with: { version: v2.14.0, install-only: true, skip-save-cache: "${{ github.event_name == 'pull_request' }}" }
       - run: task lint
 
   work-sync:

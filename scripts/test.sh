@@ -223,35 +223,272 @@ expect_eq "k6-auth job no longer runs task k6-wire"     0 "$(ci_job k6-auth | gr
 expect_eq "k6-wire job runs task k6-wire"               1 "$(ci_job k6-wire | grep -c '^      - run: task k6-wire$')"
 expect_eq "k6-wire needs no Postgres (docs/ci.md says so)" 0 "$(ci_job k6-wire | grep -ci 'postgres')"
 
-# ── .github/actions/setup: the Go cache is written by a default-branch run only (#450) ───────────────────────────────
-# A pull request that missed (a go.sum bump, an evicted entry) used to save a full set of ~25 entries on its own ref, which
-# pushed main's entries out of the 10 GB quota and made the next PRs miss in turn. The two steps below are the only
-# readers/writers of the Go cache: the read-write one runs where the condition holds, the restore-only one where it does not.
-act="$src/.github/actions/setup/action.yml"
-# act_step <id>: the lines of the step with that id.
-act_step() { awk -v n="    - id: $1" '$0 == n {f=1; print; next} /^    - / {f=0} f && !/^$/ && !/^    #/' "$act"; }
-act_if() { act_step "$1" | sed -n 's/^      if: //p'; }
-main_cond=$(act_if go-cache-main | sed "s/^inputs.go-cache == 'true' && //")
-ro_cond=$(act_if go-cache-ro | sed "s/^inputs.go-cache == 'true' && !(\(.*\))\$/\1/")
-expect_eq "setup: the read-write Go cache step is actions/cache"       1 "$(act_step go-cache-main | grep -c 'uses: actions/cache@')"
-expect_eq "setup: the other Go cache step only restores (no post save)" 1 "$(act_step go-cache-ro | grep -c 'uses: actions/cache/restore@')"
-expect_eq "setup: the restore-only step cannot save"                    0 "$(act_step go-cache-ro | grep -c 'uses: actions/cache@')"
-expect_eq "setup: only the Go main step and the tools cache use actions/cache (a third would save somewhere unguarded)" 2 "$(grep -c 'uses: actions/cache@' "$act")"
-expect_match "setup: the writing step is skipped on pull_request"       "github.event_name != 'pull_request'" "$main_cond"
-expect_match "setup: the writing step needs the default branch"         "github.ref == format\\('refs/heads/\\{0\\}', github.event.repository.default_branch\\)" "$main_cond"
-expect_eq "setup: the restore-only condition is exactly the complement of the writing one" "$main_cond" "$ro_cond"
-expect_match "setup: the writing condition is not empty"                "default_branch" "$main_cond"
-expect_eq "setup: both Go cache steps use the same key"         "$(act_step go-cache-main | sed -n '/^        key:/p')" "$(act_step go-cache-ro | sed -n '/^        key:/p')"
-expect_eq "setup: both Go cache steps use the same restore-keys" "$(act_step go-cache-main | sed -n '/^        restore-keys:/,$p')" "$(act_step go-cache-ro | sed -n '/^        restore-keys:/,$p')"
-expect_match "setup: the key is per scope and per week"                 "key: go2-.*inputs.cache-scope.*steps.go-gen.outputs.week" "$(act_step go-cache-main)"
-expect_eq "setup: no restore-key ends right after the scope (it would match k6-auth for k6)" 0 "$(act_step go-cache-main | sed -n '/restore-keys:/,$p' | grep -c 'inputs.cache-scope }}-$' || true)"
-expect_eq "setup: restore-keys never leave the scope"                   0 "$(act_step go-cache-main | sed -n '/restore-keys:/,$p' | grep -c 'go2-\${{ runner.os }}-\s*$' || true)"
-expect_eq "setup: go-cache=false skips the week step too"              1 "$(act_step go-gen | grep -c "if: inputs.go-cache == 'true'")"
-# The web job needs go on PATH (task evaluates `go work edit` on every run) but compiles nothing: no cache, but still the setup.
-expect_eq "ci.yml: only the web job opts out of the Go cache"           1 "$(grep -c 'go-cache: "false"' "$src/.github/workflows/ci.yml")"
-expect_eq "ci.yml: the web job opts out of the Go cache"                1 "$(ci_job web | grep -c 'go-cache: "false"')"
-expect_eq "ci.yml: the web job still runs the setup action (task needs go)" 1 "$(ci_job web | grep -c 'uses: ./.github/actions/setup$')"
-expect_match "docs/ci.md describes the Go cache policy"                 "go-cache" "$(cat "$src/docs/ci.md")"
+# ── setup / playwright actions: who may write a cache, and what a job reads (#450) ──────────────────────────────────
+# A pull request whose cache key missed used to save a full set of entries on its own ref: two PRs doing that pushed repo
+# cache usage to 14.8 GB (limit 10 GB), main's entries were evicted and every later job compiled cold. plan.sh is the one
+# place that says who may write; each cache step below reads its output, and each read-write step has a restore-only twin.
+plan="$src/.github/actions/setup/plan.sh"
+# count_lines <grep args>: how many lines of stdin match. grep exits 1 for "none" (that is a 0); any other non-zero exit is a failure of
+# the check itself and stops the suite (a `|| true` here would turn a broken grep into a quiet 0).
+count_lines() { local n rc=0; n=$(grep -c "$@") || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; echo "$n"; }
+# plan_out <event> <ref> <default branch> <scope> <output>: one output of plan.sh; PLAN-FAILED / NO-KEY when the script failed or lacks the key,
+# so that an expectation of "" cannot pass on a crashed script.
+plan_out() {
+  local o rc=0
+  o=$(EVENT_NAME=$1 REF=$2 DEFAULT_BRANCH=$3 SCOPE=$4 GITHUB_OUTPUT=/dev/stdout "$plan") || rc=$?
+  if [ "$rc" != 0 ]; then echo PLAN-FAILED; return; fi
+  if [ "$(printf '%s\n' "$o" | count_lines "^$5=")" != 1 ]; then echo NO-KEY; return; fi
+  printf '%s\n' "$o" | sed -n "s/^$5=//p"
+}
+# GitHub (docs "Cache access for low-trust workflow triggers"): only push / workflow_dispatch / repository_dispatch / delete /
+# registry_package / page_build / schedule may create caches in the default branch's scope; workflow_run, pull_request_target,
+# issue_comment ... are read-only there. This repo writes from push and workflow_dispatch only.
+expect_eq "plan: push on main writes"                         true  "$(plan_out push refs/heads/main main lint write)"
+expect_eq "plan: workflow_dispatch on main writes"            true  "$(plan_out workflow_dispatch refs/heads/main main lint write)"
+expect_eq "plan: a pull request never writes"                 false "$(plan_out pull_request refs/pull/7/merge main lint write)"
+expect_eq "plan: pull_request_target on main never writes"    false "$(plan_out pull_request_target refs/heads/main main lint write)"
+expect_eq "plan: workflow_run on main never writes"           false "$(plan_out workflow_run refs/heads/main main lint write)"
+expect_eq "plan: schedule on main does not write"             false "$(plan_out schedule refs/heads/main main lint write)"
+expect_eq "plan: issue_comment on main never writes"          false "$(plan_out issue_comment refs/heads/main main lint write)"
+expect_eq "plan: push on another branch does not write"       false "$(plan_out push refs/heads/feat main lint write)"
+expect_eq "plan: dispatch on another branch does not write"   false "$(plan_out workflow_dispatch refs/heads/feat main lint write)"
+expect_eq "plan: a tag push does not write"                   false "$(plan_out push refs/tags/v1.0.0 main lint write)"
+expect_eq "plan: a branch that only starts with main does not write" false "$(plan_out push refs/heads/mainx main lint write)"
+expect_eq "plan: no default branch known does not write"      false "$(plan_out push refs/heads/main '' lint write)"
+# the build cache is written by the designated saver only, and only when the run may write
+expect_eq "plan: the saver of a group writes its build cache" true  "$(plan_out push refs/heads/main main build save_build)"
+expect_eq "plan: a non-saver of the group does not"           false "$(plan_out push refs/heads/main main k6 save_build)"
+expect_eq "plan: the saver does not write on a pull request"  false "$(plan_out pull_request refs/pull/7/merge main build save_build)"
+expect_eq "plan: an unlisted scope gets no build cache"       ""    "$(plan_out push refs/heads/main main some-new-job group)"
+expect_eq "plan: an unlisted scope never saves a build cache" false "$(plan_out push refs/heads/main main some-new-job save_build)"
+expect_match "plan: the week is an ISO week"                  '^[0-9]{4}-W[0-9]{2}$' "$(plan_out push refs/heads/main main lint week)"
+# Every job of ci.yml that calls the setup action (and keeps the Go cache) maps to a build-cache group, with exactly one saver per
+# group; a new job that is not in plan.sh fails here instead of silently getting no build cache.
+ci_setup_scopes() {
+  local j m
+  for j in $(awk '/^  [a-z0-9-]+:$/ {gsub(/[ :]/, ""); job=$0} /uses: \.\/\.github\/actions\/setup/ {print job}' "$src/.github/workflows/ci.yml" | sort -u); do
+    if [ "$j" = test ]; then
+      for m in $(awk '/^use \(/ {f=1; next} /^\)/ {f=0} f {gsub(/[ \t]|^\.\//, ""); print}' "$src/go.work" | sed 's#^\./##'); do echo "test-$m"; done
+    elif [ "$(ci_job "$j" | count_lines 'go-cache: "false"')" = 0 ]; then
+      echo "$j"
+    fi
+  done
+}
+scopes=$(ci_setup_scopes)
+expect_match "ci.yml scopes: the test matrix is covered" "test-apps/rpc" "$scopes"
+expect_match "ci.yml scopes: release-snapshot is covered" "release-snapshot" "$scopes"
+unmapped="" groups=""
+for sc in $scopes release-snapshot; do
+  g=$(plan_out push refs/heads/main main "$sc" group)
+  [ -n "$g" ] || unmapped="$unmapped $sc"
+  groups="$groups $g"
+done
+expect_eq "plan: every scope of a job that calls the setup action has a build-cache group" "" "$unmapped"
+for g in $(printf '%s\n' $groups | sort -u); do
+  n=0; for sc in $scopes; do
+    [ "$(plan_out push refs/heads/main main "$sc" group)" = "$g" ] && [ "$(plan_out push refs/heads/main main "$sc" save_build)" = true ] && n=$((n + 1))
+  done
+  expect_eq "plan: group $g has exactly one saver among ci.yml's jobs" 1 "$n"
+done
+# Matrix jobs: a leg that is not named by its own cache-scope shares the job's scope with its siblings (#452's k6-auth legs), so a saver
+# among them would race for one key ("Unable to reserve", and the legs that lost kept missing). Every explicit cache-scope in the workflows
+# must be a form this test understands, and no designated saver may be a matrix job unless the scope names the leg (the test matrix:
+# test-<module>, saver test-apps/rpc).
+unknown_forms=""
+for f in "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml"; do
+  [ -f "$f" ] || continue
+  while IFS= read -r line; do
+    v=${line#*cache-scope:}; v=${v//[\" ]/}; v=${v%\}}
+    case $v in
+      test-\$\{\{matrix.module\}\}) ;;                        # the test matrix: one scope per module, mapped above
+      release-snapshot) [ -n "$(plan_out push refs/heads/main main release-snapshot group)" ] || unknown_forms="$unknown_forms $v" ;;
+      *) unknown_forms="$unknown_forms [$v]" ;;
+    esac
+  done <<EOF_SCOPES
+$(awk '/cache-scope:/' "$f")
+EOF_SCOPES
+done
+expect_eq "ci.yml / release.yml: every explicit cache-scope is a form plan.sh knows (a matrix leg needs its own, mapped scope)" "" "$unknown_forms"
+saver_matrix=""
+for sc in $scopes release-snapshot; do
+  if [ "$(plan_out push refs/heads/main main "$sc" save_build)" = true ] && [ "$sc" != test-apps/rpc ]; then
+    [ "$(ci_job "$sc" | count_lines 'matrix:')" = 0 ] || saver_matrix="$saver_matrix $sc"
+  fi
+done
+expect_eq "plan: a group's saver (other than the test matrix's apps/rpc leg) is not a matrix job" "" "$saver_matrix"
+race_savers() {
+  local sc
+  for sc in $scopes; do
+    case $sc in
+      test-*) if [ "$(plan_out push refs/heads/main main "$sc" save_build)" = true ]; then echo "$sc"; fi ;;
+    esac
+  done
+}
+expect_eq "plan: the race saver is exactly the apps/rpc leg of the test matrix" "test-apps/rpc" "$(race_savers)"
+expect_eq "plan: five build-cache groups" 5 "$(printf '%s\n' $groups | sort -u | count_lines .)"
+expect_eq "plan: web (go-cache false) is not given a group in ci.yml" 0 "$(printf '%s\n' $scopes | count_lines -x web)"
+
+# cache_ids <action file>: ids of the steps that use actions/cache (the read-write one or /restore).
+cache_ids() { awk '/^    - / {if (cache && id != "") print id; cache=0; id=""} /^    - id: / {id=$3} /^      id: / {id=$2} /uses: actions\/cache(\/restore)?@/ {cache=1} END {if (cache && id != "") print id}' "$1"; }
+# step_text <file> <id>: the lines of that step.
+step_text() { awk -v n="$2" '/^    - / {f=0} $0 == "    - id: " n {f=1} f' "$1"; }
+step_if()   { step_text "$1" "$2" | sed -n 's/^      if: //p'; }
+# step_body <file> <id>: everything that has to be identical between a read-write step and its restore-only twin.
+step_body() { step_text "$1" "$2" | awk '!/^[ ]*(- id|id|if|uses):/ && !/^[ ]*#/ && !/^[ ]*$/'; }
+for af in setup playwright; do
+  a="$src/.github/actions/$af/action.yml"
+  expect_eq "$af: every actions/cache step has an id" "$(grep -cE 'uses: actions/cache(/restore)?@' "$a")" "$(cache_ids "$a" | count_lines .)"
+  expect_eq "$af: no other way to cache (setup-go / setup-node cache: true)" 0 "$(count_lines -E '^\s+cache: (true|pnpm|npm|yarn)' "$a")"
+  for id in $(cache_ids "$a"); do
+    uses=$(step_text "$a" "$id" | sed -n 's/^      uses: \(actions\/cache[^@]*\)@.*/\1/p')
+    cond=$(step_if "$a" "$id")
+    case $uses in
+      actions/cache)
+        expect_match "$af/$id: a step that can save runs only where plan says write" "steps\.plan\.outputs\.(write|save_build) == 'true'" "$cond"
+        expect_eq "$af/$id: ... and never on a != test" 0 "$(printf '%s' "$cond" | count_lines -E "plan\.outputs\.(write|save_build) !=")"
+        twin="${id%-rw}-ro"; [ "$twin" != "${id}-ro" ] || twin=""
+        expect_match "$af/$id: a read-write step is named <name>-rw" '-rw$' "$id"
+        if [ -n "$twin" ]; then
+          expect_eq "$af/$id: the restore-only twin $twin exists" 1 "$(cache_ids "$a" | count_lines -x "$twin")"
+          want=$(printf '%s' "$cond" | sed -E "s/(steps\.plan\.outputs\.(write|save_build)) == 'true'/\1 != 'true'/")
+          expect_eq "$af/$id: the twin's if: is the exact opposite" "$want" "$(step_if "$a" "$twin")"
+          expect_eq "$af/$id: the twin restores the same path / key / restore-keys" "$(step_body "$a" "$id")" "$(step_body "$a" "$twin")"
+        fi ;;
+      actions/cache/restore)
+        expect_match "$af/$id: a restore-only step runs where plan does not say write" "steps\.plan\.outputs\.(write|save_build) != 'true'" "$cond" ;;
+      *) bad "$af/$id: unexpected cache action [$uses]" ;;
+    esac
+  done
+done
+# The structural checks above read the text of the conditions; this evaluates them. The `if:` of every read-write / restore-only pair is
+# run through a small evaluator (conjunctions of `<name> ==|!= '<literal>'` over plan.sh's outputs and the action's inputs, nothing else)
+# for every event x ref, and for the build cache every scope: the pair must run exactly the step plan.sh says (rw only on a default-branch
+# push / dispatch, and for the build cache only in the designated saver; the other step everywhere else), whatever way an equivalent
+# expression is spelled. A condition outside that grammar is not accepted, it fails here.
+# cond_runs <if: text> <write> <save_build> <group> <go-cache> <tools>: prints 1, 0, or ? when the text is outside the grammar.
+cond_runs() {
+  local cond=$1 write=$2 save=$3 group=$4 gocache=$5 tools=$6 term terms val re res=1
+  [ -n "$cond" ] || { echo '?'; return; }
+  terms=$(printf '%s\n' "$cond" | awk '{n = split($0, a, / && /); for (i = 1; i <= n; i++) print a[i]}') || { echo '?'; return; }
+  re="^([A-Za-z0-9_.-]+) (==|!=) '([^']*)'\$"
+  while IFS= read -r term; do
+    [[ $term =~ $re ]] || { echo '?'; return; }
+    case ${BASH_REMATCH[1]} in
+      steps.plan.outputs.write)      val=$write ;;
+      steps.plan.outputs.save_build) val=$save ;;
+      steps.plan.outputs.group)      val=$group ;;
+      inputs.go-cache)               val=$gocache ;;
+      inputs.tools)                  val=$tools ;;
+      *) echo '?'; return ;;
+    esac
+    if [ "${BASH_REMATCH[2]}" = "==" ]; then [ "$val" = "${BASH_REMATCH[3]}" ] || res=0; else [ "$val" != "${BASH_REMATCH[3]}" ] || res=0; fi
+  done <<EOF_TERMS
+$terms
+EOF_TERMS
+  echo "$res"
+}
+cells=""
+for ev in push workflow_dispatch pull_request pull_request_target workflow_run schedule issue_comment; do
+  for rf in refs/heads/main refs/heads/feat refs/pull/7/merge refs/tags/v1 refs/heads/mainx; do cells="$cells $ev@$rf"; done
+done
+# pair_check <action> <rw id> <ro id> <kind: always|build|tools> <scopes...>: "<cell> <scope> got=<rw ro> want=<rw ro>" for every disagreement
+pair_check() {
+  local a=$1 rw=$2 ro=$3 kind=$4 sc cell ev rf w sv g rwv rov want bad_cells=""
+  shift 4
+  local rwif roif
+  rwif=$(step_if "$a" "$rw"); roif=$(step_if "$a" "$ro")
+  for sc in "$@"; do
+    for cell in $cells; do
+      ev=${cell%%@*}; rf=${cell#*@}
+      w=$(plan_out "$ev" "$rf" main "$sc" write); sv=$(plan_out "$ev" "$rf" main "$sc" save_build); g=$(plan_out "$ev" "$rf" main "$sc" group)
+      rwv=$(cond_runs "$rwif" "$w" "$sv" "$g" true true); rov=$(cond_runs "$roif" "$w" "$sv" "$g" true true)
+      if [ "$kind" = build ]; then
+        if [ -z "$g" ]; then want="0 0"; elif [ "$sv" = true ]; then want="1 0"; else want="0 1"; fi
+      else
+        if [ "$w" = true ]; then want="1 0"; else want="0 1"; fi
+      fi
+      [ "$rwv $rov" = "$want" ] || bad_cells="$bad_cells [$cell $sc got=$rwv,$rov want=${want// /,}]"
+    done
+  done
+  echo "$bad_cells"
+}
+sa="$src/.github/actions/setup/action.yml"; pa="$src/.github/actions/playwright/action.yml"
+all_scopes="lint build k6 helm-kind test-apps/rpc test-pkgs/kernel release-snapshot some-new-job"
+expect_eq "event x ref: the module cache pair runs the writer only for a default-branch push / dispatch" "" "$(pair_check "$sa" gomod-rw gomod-ro always lint build)"
+expect_eq "event x ref: the build cache pair runs the writer only in the group's saver on such a run" "" "$(pair_check "$sa" gobuild-rw gobuild-ro build $all_scopes)"
+expect_eq "event x ref: the tools cache pair" "" "$(pair_check "$sa" tools-rw tools-ro always lint)"
+expect_eq "event x ref: the Playwright cache pair" "" "$(pair_check "$pa" cache-rw cache-ro always console-e2e)"
+# go-cache=false (web) runs neither Go cache step; tools=false runs neither tools step
+none_go=""; none_tools=""
+for st in gomod-rw gomod-ro gobuild-rw gobuild-ro; do
+  [ "$(cond_runs "$(step_if "$sa" $st)" true true race false true)" = 0 ] || none_go="$none_go $st"
+done
+for st in tools-rw tools-ro; do [ "$(cond_runs "$(step_if "$sa" $st)" true true race true false)" = 0 ] || none_tools="$none_tools $st"; done
+expect_eq "go-cache=false runs no Go cache step (web)" "" "$none_go"
+expect_eq "tools=false runs no tools cache step" "" "$none_tools"
+expect_eq "setup: the Go module cache, Go build cache and tools cache are the cache steps" "gobuild-ro gobuild-rw gomod-ro gomod-rw tools-ro tools-rw" "$(cache_ids "$src/.github/actions/setup/action.yml" | sort | tr '\n' ' ' | sed 's/ $//')"
+expect_eq "playwright: cache-rw and cache-ro are the cache steps" "cache-ro cache-rw" "$(cache_ids "$src/.github/actions/playwright/action.yml" | sort | tr '\n' ' ' | sed 's/ $//')"
+# key shape: the module cache is keyed on go.sum only; the build cache on group and week (never on a scope, which is what made 28 copies)
+expect_match "setup: the module cache key is go.sum only"    "key: gomod-\\$\\{\\{ runner.os \\}\\}-\\$\\{\\{ hashFiles\\('\\*\\*/go.sum'\\) \\}\\}\$" "$(step_text "$src/.github/actions/setup/action.yml" gomod-rw)"
+expect_match "setup: the build cache key is group and week"  "key: gobuild-.*steps\.plan\.outputs\.group.*steps\.plan\.outputs\.week" "$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw)"
+expect_eq "setup: no cache key uses cache-scope" 0 "$(awk '/^ +(key|restore-keys):/ || /^ +(gomod|gobuild)-/' "$src/.github/actions/setup/action.yml" | count_lines 'cache-scope')"
+expect_eq "setup: the build cache restore-keys stay inside the group" 0 "$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw | sed -n '/restore-keys:/,$p' | count_lines 'gobuild-\${{ runner.os }}-\s*$')"
+# the web job needs go on PATH (task evaluates `go work edit` on every run) but compiles nothing; lint's own golangci cache must not save on a PR
+expect_eq "ci.yml: only the web job opts out of the Go cache"   1 "$(count_lines 'go-cache: "false"' "$src/.github/workflows/ci.yml")"
+expect_eq "ci.yml: the web job opts out of the Go cache"        1 "$(ci_job web | count_lines 'go-cache: "false"')"
+expect_eq "ci.yml: the web job still runs the setup action (task needs go)" 1 "$(ci_job web | count_lines 'uses: ./.github/actions/setup$')"
+expect_match "ci.yml: lint's golangci-lint cache is not saved on a pull request" "skip-save-cache: \"\\$\\{\\{ github.event_name == 'pull_request' \\}\\}\"" "$(ci_job lint)"
+# the caches this repo still lets a pull request write, and their bound, are written down (the setup-node pnpm cache has no read-only mode)
+expect_match "docs/ci.md names the Go cache policy"             "go-cache" "$(cat "$src/docs/ci.md")"
+expect_match "docs/ci.md names the pnpm cache a PR can still write" "setup-node" "$(cat "$src/docs/ci.md")"
+
+# ── fault injection for the external commands of plan.sh / count_lines: a wrapper that prints something and then fails must make
+# the script fail, never yield a plausible-looking output (#459: gates that swallowed an exit code gave a false green) ──────────
+mkdir -p "$tmp/plan-bin"
+printf '#!/bin/sh\necho 2026-W\nexit 5\n' > "$tmp/plan-bin/date"; chmod +x "$tmp/plan-bin/date"
+rc=0; out=$(PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" 2>&1) || rc=$?
+expect_eq "plan.sh: a date that prints and then fails makes plan.sh fail" "5" "$rc"
+expect_eq "plan.sh: ... and no week= line was written" 0 "$(printf '%s\n' "$out" | count_lines '^week=')"
+printf '#!/bin/sh\necho garbage\nexit 0\n' > "$tmp/plan-bin/date"
+rc=0; out=$(PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" 2>&1) || rc=$?
+expect_eq "plan.sh: a date that prints something that is not an ISO week makes plan.sh fail" "1" "$rc"
+expect_eq "plan: plan_out reports a failing plan.sh instead of an empty value" "PLAN-FAILED" "$(PATH="$tmp/plan-bin:$PATH" plan_out push refs/heads/main main lint write)"
+mkdir -p "$tmp/badgrep-bin"; printf '#!/bin/sh\necho partial\nexit 2\n' > "$tmp/badgrep-bin/grep"; chmod +x "$tmp/badgrep-bin/grep"
+rc=0; (PATH="$tmp/badgrep-bin:$PATH"; echo x | count_lines x) >/dev/null 2>&1 || rc=$?
+expect_eq "count_lines: a grep that fails with exit 2 stops the suite (exit 2), it is not a 0" "2" "$rc"
+rc=0; out=$(echo y | count_lines x) || rc=$?
+expect_eq "count_lines: no match is a 0, exit 0" "0 0" "$out $rc"
+
+# ── go-mod-download.sh: bounded retry of the download, the last exit code passed on, no upstream text in the log (#450) ──
+gmd="$src/.github/actions/setup/go-mod-download.sh"
+mkdir -p "$tmp/gmd-bin"
+cat > "$tmp/gmd-bin/go" <<'GOEOF'
+#!/bin/sh
+# fake go: fails the first $FAILS calls with exit code 7 and a marker on stderr, counts calls in $COUNT_FILE
+n=$(cat "$COUNT_FILE" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$COUNT_FILE"
+if [ "$n" -le "${FAILS:-0}" ]; then echo "UPSTREAM-ERROR-TEXT proxy.golang.org says no" >&2; exit 7; fi
+exit 0
+GOEOF
+chmod +x "$tmp/gmd-bin/go"
+# gmd_run <fails> [attempts]: sets $rc, $out and $calls
+gmd_run() {
+  rm -f "$tmp/gmd-count"
+  rc=0; out=$(PATH="$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=$1 GO_MOD_DOWNLOAD_ATTEMPTS=${2:-3} GO_MOD_DOWNLOAD_SLEEP=0 "$gmd" 2>&1) || rc=$?
+  calls=$(cat "$tmp/gmd-count" 2>/dev/null || echo 0)
+}
+gmd_run 0; expect_eq "go-mod-download: a clean download runs once"            "0 1" "$rc $calls"
+gmd_run 1; expect_eq "go-mod-download: one failure is retried and succeeds"   "0 2" "$rc $calls"
+gmd_run 2; expect_eq "go-mod-download: two failures are retried and succeed"  "0 3" "$rc $calls"
+gmd_run 3; expect_eq "go-mod-download: three failures in a row fail, with go's own exit code" "7 3" "$rc $calls"; out3=$out
+gmd_run 9; expect_eq "go-mod-download: it stops after the last attempt"        "7 3" "$rc $calls"
+gmd_run 1 1; expect_eq "go-mod-download: GO_MOD_DOWNLOAD_ATTEMPTS=1 does not retry" "7 1" "$rc $calls"
+expect_match "go-mod-download: the log names the attempt and the exit code" 'failed with exit code 7 \(attempt 1/3\)' "$out3"
+expect_match "go-mod-download: the final line says it gave up with the last code" 'giving up after 3 attempts, last exit code 7' "$out3"
+expect_eq "go-mod-download: the log never carries go's (proxy) text" 0 "$(printf '%s' "$out3" | count_lines 'UPSTREAM-ERROR-TEXT')"
+mkdir -p "$tmp/sleep-bin"; printf '#!/bin/sh\nexit 9\n' > "$tmp/sleep-bin/sleep"; chmod +x "$tmp/sleep-bin/sleep"
+rm -f "$tmp/gmd-count"; rc=0
+PATH="$tmp/sleep-bin:$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=1 GO_MOD_DOWNLOAD_SLEEP=1 "$gmd" >/dev/null 2>&1 || rc=$?
+expect_eq "go-mod-download: a failing sleep between attempts fails the script (it does not carry on)" "9" "$rc"
 
 # A branch behind main must see only its own files (three-dot diff), not main's newer ones.
 fixture behind
