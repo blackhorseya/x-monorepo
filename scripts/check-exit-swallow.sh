@@ -17,10 +17,10 @@
 #   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
 #   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
 #             break; no function names, and a new value for $v is the failure swallowed; top-level code only: inside a function the fnctx shapes apply). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
-#   default   (#470) a failed command turned into a value, judged against a CLOSED whitelist (not bad words), including the ARGUMENT of exit / return (only a
-#             provably non-zero status: nothing, a non-zero literal, or `$?` straight after the `||`; never `$var` or `$?` after another command). After
-#             `x=$(…) ||`: hshape(); inside a $(…): `exit [N]` / `{ …; exit N; }` only, and no if / case / while / until / for / select there. The label idiom
-#             `$([ test ] && echo a || echo b)` passes when the test holds no $( ` <( . Not exemptible.
+#   default   (#470) a failed command turned into a value. CLOSED whitelists, including the ARGUMENT of exit / return (1..255 literal, nothing, or `$?` straight
+#             after the `||`; never `$var`, never `$?` after another command, never 256). After `x=$(…) ||`: hshape(). The content of a $( … ) may only be ONE
+#             pipeline (no `;`, second line, `&`, `&&`, leading `!`), optionally followed by `|| exit [N]` / `|| { …; exit N; }`, or the label
+#             `$([ test ] && echo a || echo b)` (no $( ` <( inside the test). Not exemptible.
 #   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` must be followed on its own line (or after a heredoc substitution's closing line) by
 #             one of THREE shapes: `|| return [arg]`, `|| exit [arg]`, `|| { …; return|exit [arg]; }` (the group's last top-level statement). Nothing else:
 #             no function names, no new value, no `|| rc=$?`, no `$?` on a later line, no continue / break, no return 0. A shape rule: it does not look at how or from where the function is called (`f || x`,
@@ -51,11 +51,12 @@ trap 'rm -rf "$tmp"' EXIT
 root=$(pwd -P) || { echo "check-exit-swallow: pwd failed" >&2; exit 2; }
 # no dirname / basename / realpath here: a command whose output renames the file to scan and which then dies would be a status swallowed (#466 r3);
 # parameter expansion and the cd / pwd builtins cannot fail silently, and a cd that fails on a file that exists stops the run
+pwd_of() { ( cd "$1" && pwd -P ); }   # the physical path of a directory, without `cd … && pwd` inside $(…)
 repo_rel() {
   local d b
   [ -f "$1" ] || { printf '%s' "$1"; return; }
   case $1 in */*) d=${1%/*} b=${1##*/} ;; *) d=. b=$1 ;; esac
-  d=$(cd "${d:-/}" && pwd -P) || { echo "check-exit-swallow: cannot cd to the directory of [$1]" >&2; exit 2; }
+  d=$(pwd_of "${d:-/}") || { echo "check-exit-swallow: cannot cd to the directory of [$1]" >&2; exit 2; }
   case $d in
     "$root") printf '%s' "$b" ;;
     "$root"/*) printf '%s' "${d#"$root"/}/$b" ;;
@@ -107,7 +108,7 @@ cat > "$tmp/common.awk" <<'AWK'
 # exit_only: inside a $(…) the handler may only `exit` (the status of the substitution reaches the assignment), never `return`.
 function hshape(h, exit_only,   hs, blk, ns, st, i, verb, lit, last) {
   verb = exit_only ? "exit" : "(return|exit)"
-  lit = "\"?[1-9][0-9]*\"?"
+  lit = "\"?([1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\"?"             # 1..255: an exit status is taken modulo 256, so 256 and 512 are 0
   sub(/^[ \t]+/, "", h)
   if (h ~ /^\{/) {
     if (index(h, "}") == 0) return 0
@@ -195,19 +196,40 @@ function argsub(c,   i, j, d, ch, pre, inner, n) {
 # assignment is read for at most 6 lines.
 function reportat(rule, ln, txt) { printf "%s:%d: %s: %s\n", FILENAME, ln, rule, txt; n++ }
 function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; flt[sd] = line; fdq[sd] = dq; fbd[sd] = 0; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context
+# What may stand inside $( … ): a CLOSED whitelist, not a list of bad constructs.
+#   1. ONE pipeline: no `;`, no second line, no `&` (background), no `&&`, no leading `!`  (a later statement or a negation hides the failure of the first:
+#      `$(cmd; echo 0)`, `$(cmd⏎echo 0)`, `$(cmd; true)`, `$(cmd & wait)`, `$(! cmd)`, `$(set +e; cmd; echo 0)`)
+#   2. that pipeline followed by `|| H`, H = hshape(exit only)
+#   3. the label `[ test ] && echo a || echo b` (test = `[` / `[[` / `test`, no $( ` <( inside)
+# Everything else is a finding; `if` / `case` / `while` / `for` need `;` or a newline, so they fall outside without being listed.
 function labelok(prev, h,   lc, cond) {            # `[ test ] && echo a || echo b`: prev = the clause before `||`, h = the handler
   lc = prev; sub(/.*;/, "", lc); cond = lc; sub(/&&[ \t]*(echo|printf).*$/, "", cond)
   return (h ~ /^(echo|printf)([ \t;)`"\047]|$)/ && lc ~ /&&[ \t]*(echo|printf)/ && cond ~ /^[ \t]*(\[\[?|test)[ \t]/ && cond !~ /(\$\(|`|<\()/)
 }
-function defeval(d,   np, parts, k, h, plain) {
-  plain = fb[d]; gsub(/"[^"]*"/, "", plain); gsub(/\047[^\047]*\047/, "", plain)         # control words / && inside a quoted string are text
-  if (plain ~ /(^|[;{(&|\001])[ \t]*(if|case|while|until|for|select)[ \t]/) { reportat("default", fln[d], flt[d]); return }   # a value picked by control flow inside $(…) hides the failure of what it tests
-  np = split(fb[d], parts, "\001")
+function onepipeline(t,   x) {                       # t: one part of a substitution, quotes already removed
+  x = t
+  gsub(/[ \t]*\002[ \t]*$/, "", x); gsub(/^[ \t\002]+/, "", x)                    # blank lines around it are nothing
+  gsub(/(\|\||\|)[ \t]*\002[ \t]*/, "| ", x)                                      # a pipeline continued on the next line
+  gsub(/[0-9]*[<>]&[0-9-]*/, "", x); gsub(/&>>?/, "", x)                          # 2>&1, >&2, &> are redirections, not `&`
+  if (x ~ /[;\002]/) return 0                                                      # a second statement
+  if (x ~ /&/) return 0                                                            # `&` background, `&&` list
+  if (x ~ /^[ \t]*!/) return 0                                                     # a negated pipeline
+  return 1
+}
+function hexact(h,   r) {                          # inside $( … ) the handler is the END of the substitution: nothing may follow it (`|| { exit 3; }; echo 0`)
+  if (h ~ /^\{/) { r = substr(h, index(h, "}") + 1); return (r ~ /^[ \t\002;]*$/) }
+  return (h !~ /(;|&&|\|\|)/ && h !~ /[^ \t\002].*\002[ \t]*[^ \t\002]/)
+}
+function defeval(d,   np, parts, oparts, k, h, plain, p1, op1) {
+  plain = fb[d]; gsub(/"[^"]*"/, "", plain); gsub(/\047[^\047]*\047/, "", plain)         # for the STRUCTURE (; & ! newline): text inside quotes is text
+  np = split(plain, parts, "\001"); split(fb[d], oparts, "\001")                          # the handlers and the label test are judged on the original text: `exit "$zero"`, `[ -f "$(cmd)" ]`
+  p1 = parts[1]; op1 = oparts[1]
+  h = oparts[2]; sub(/^[ \t\002]+/, "", h)
+  if (np == 2 && labelok(op1, h) && p1 !~ /;/) return                                     # the label idiom
+  if (!onepipeline(p1)) { reportat("default", fln[d], flt[d]); return }
   for (k = 2; k <= np; k++) {
-    h = parts[k]; sub(/^[ \t]+/, "", h)
-    if (hshape(h, 1)) continue
-    if (labelok(parts[k - 1], h)) continue
-    reportat("default", fln[d], flt[d]); return
+    h = oparts[k]; gsub(/^[ \t\002]+/, "", h); gsub(/[ \t\002]+$/, "", h)
+    if (!hshape(h, 1) || !hexact(h)) { reportat("default", fln[d], flt[d]); return }
   }
 }
 # cut a trailing `# comment` off a short piece of code, honoring quotes (split_comment loses the comment of a line that ends a multi-line string)
@@ -280,7 +302,7 @@ function defscan(c,   i, n, ch, nx, rest, nm, pre, rem, t, d, prevc) {
       fb[sd] = fb[sd] ch
     }
   }
-  if (sd > 0) for (i = 1; i <= sd; i++) fb[i] = fb[i] " "
+  if (sd > 0 && c !~ /\\[ \t]*$/) for (i = 1; i <= sd; i++) fb[i] = fb[i] "\002"    # a line break inside a substitution separates statements (a trailing backslash does not)
 }
 FNR == 1 { reset_file() }
 {

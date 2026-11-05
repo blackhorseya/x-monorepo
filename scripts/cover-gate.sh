@@ -13,8 +13,9 @@ fail=0 checked=0
 workjson=$(go work edit -json ./go.work)
 mods=$(python3 -c 'import json,sys; [print(u["DiskPath"].removeprefix("./")) for u in json.load(sys.stdin)["Use"]]' <<<"$workjson")
 [[ -n "$mods" ]] || { echo "cover-gate: go.work lists no module — nothing was checked" >&2; exit 1; }
+run_in() { local d=$1; shift; ( cd "$d" && "$@" ); }   # a command in another directory, without `cd … && cmd` inside $(…) (#470)
 for m in $mods; do
-  list=$(cd "$m" && go list ./...) || { echo "cover-gate: go list failed in $m" >&2; exit 1; }
+  list=$(run_in "$m" go list ./...) || { echo "cover-gate: go list failed in $m" >&2; exit 1; }
   pkgs=$(value_of -ok 1 grep '/domain/' <<<"$list") || exit 1
   [[ -z "$pkgs" ]] && continue
   for p in $pkgs; do

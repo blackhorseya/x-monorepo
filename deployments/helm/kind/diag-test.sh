@@ -37,7 +37,8 @@
 # stale output cannot pass.
 set -euo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-here=$(cd "$(dirname "$0")" && pwd)
+abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
+here=$(abs_dir "$(dirname "$0")")
 tmp=$(mktemp -d)
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
 WATCHDOG=""

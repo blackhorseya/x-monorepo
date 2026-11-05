@@ -11,7 +11,8 @@
 #
 # Needs go and jq on PATH and fails without them; it never skips. Plain bash 3.2 (macOS) and 5 (ubuntu).
 set -euo pipefail
-root=$(cd "$(dirname "$0")/.." && pwd)
+abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
+root=$(abs_dir "$(dirname "$0")/..")
 gowork=${1:-$root/go.work}
 
 [ -r "$gowork" ] || { echo "check-modules: cannot read $gowork" >&2; exit 1; }

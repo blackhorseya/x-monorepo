@@ -13,7 +13,8 @@
 set -euo pipefail
 # Run under the outer gate (#307): a process group of its own, checked for leftovers on any exit.
 [ -n "${SUITE_GUARD:-}" ] || exec "$(dirname "$0")/suite-guard.sh" "$0" "$@"
-src=$(cd "$(dirname "$0")/.." && pwd)
+abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
+src=$(abs_dir "$(dirname "$0")/..")
 tmp=$(mktemp -d)
 # The fixtures must not inherit the developer's signing / hook settings.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
@@ -1737,7 +1738,7 @@ guard_run() {
 sleep 300 & bystander=$!
 guard_run clean
 expect_eq "guard: a clean suite passes"                            "0" "$rc"
-expect_eq "guard: a suite's own exit code is kept"                 "3" "$(guard_run exit3; echo $rc)"
+guard_run exit3; expect_eq "guard: a suite's own exit code is kept"                 "3" "$rc"
 guard_run leak
 if [ "$rc" != 0 ]; then ok; else bad "guard: a suite that leaves a process behind must fail"; fi
 expect_match "guard: the leftover is reported"                     'left .* running' "$out"
@@ -1887,7 +1888,7 @@ use (
 expect_eq "check-modules: dots, underscores, dashes and digits inside a path are accepted" "0" "$rc"
 rc=0; out=$("$cm" "$tmp/no-such-go.work" 2>&1) || rc=$?
 expect_eq "check-modules: an unreadable go.work fails" "1" "$rc"
-rc=0; out=$(cd "$src" && "$cm" 2>&1) || rc=$?
+rc=0; capture -2 out rc in_dir "$src" "$cm" || exit 1
 expect_eq "check-modules: this repo's go.work passes" "0" "$rc"
 expect_match "check-modules: this repo's check saw a non-empty set" "[1-9][0-9]* modules" "$out"
 # A missing tool is a failure naming it, never a skip: run with a PATH that has everything but one tool.
@@ -1915,7 +1916,7 @@ cp -R "$src/scripts" "$d/scripts"
 cp "$src/go.work" "$d/go.work"
 printf '\nuse ./apps/brand-new\n' >> "$d/go.work"
 for t in lint test tidy; do
-  rc=0; out=$(cd "$d" && task --dry "$t" 2>&1) || rc=$?
+  rc=0; capture -2 out rc in_dir "$d" task --dry "$t" || exit 1
   expect_match "derived modules: task $t runs for an existing module (positive control)" 'cd pkgs/kernel' "$out"
   expect_match "derived modules: task $t iterates a module only go.work lists" 'cd apps/brand-new' "$out"
 done
@@ -1929,13 +1930,13 @@ printf 'package a\n\nimport "testing"\n\nfunc TestBase(t *testing.T) {}\n' > "$d
 printf 'module example.com/target\n\ngo 1.27\n' > "$d/apps/a\$UNSET/go.mod"
 printf 'package a\n\nimport "testing"\n\nfunc TestTarget(t *testing.T) {}\n' > "$d/apps/a\$UNSET/a_test.go"
 printf 'go 1.27\n\nuse (\n\t./apps/a\n\t"./apps/a$UNSET"\n)\n' > "$d/go.work"
-rc=0; out=$(cd "$d" && UNSET= task test 2>&1) || rc=$?
+rc=0; capture -2 out rc in_dir "$d" UNSET= task test || exit 1
 if [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -q 'example.com/target'; then bad "derived modules: task test passed without testing apps/a\$UNSET (it ran apps/a twice)"; else ok; fi
 expect_eq "derived modules: task test fails on a module path it cannot carry" "1" "$rc"
 expect_match "derived modules: the failure names the path" 'apps/a\$UNSET' "$out"
 # A go that cannot read go.work must fail the task, not leave MODULES empty (every per-module loop would iterate nothing).
 mkdir -p "$tmp/failing-go"; printf '#!/bin/sh\necho "go: stub failure" >&2\nexit 1\n' > "$tmp/failing-go/go"; chmod +x "$tmp/failing-go/go"
-rc=0; out=$(cd "$d" && PATH="$tmp/failing-go:$PATH" task --dry lint 2>&1) || rc=$?
+rc=0; capture -2 out rc in_dir "$d" env PATH="$tmp/failing-go:$PATH" task --dry lint || exit 1
 expect_eq "derived modules: a failing go work edit fails the task instead of an empty MODULES" "1" "$rc"
 expect_match "derived modules: the failing task shows go's error" "go: stub failure" "$out"
 fi
@@ -1943,7 +1944,7 @@ fi
 # ── check-script-modes.sh: `task tools` chmods must not change the index (#454) ─────────────────────────────────
 # The repo itself: every file the chmod line names is 100755 in the index. A miss in the tools cache runs that chmod in
 # gen-freshness; a 100644 file then shows up as a mode-only diff and fails the job (lock.sh and runner-home-test.sh did).
-rc=0; out=$(cd "$src" && scripts/check-script-modes.sh 2>&1) || rc=$?
+rc=0; capture -2 out rc in_dir "$src" scripts/check-script-modes.sh || exit 1
 expect_eq "script modes: this repo's chmod list is all 100755 in the index" "0" "$rc"
 expect_match "script modes: the anchor — it checked the kind scripts" 'files, all 100755' "$out"
 # Fixture: a minimal repo whose Taskfile has the chmod line and 20 scripts. Baseline green; each mutant must go red.
@@ -1976,13 +1977,13 @@ expect_eq "script modes: no chmod line at all is not green (judge cannot pass on
 # and THEN dies. A gate that swallows the status (`x=$(cmd || true)`, a pipe in $(…)) stays green on exactly this; it must go red.
 for t in grep git dirname; do
   modes_fixture "dies-$t"
-  rc=0; out=$(cd "$repo" && PATH="$(inject_fail "$tmp/inj-modes-$t" "$t" 42):$PATH" scripts/check-script-modes.sh 2>&1) || rc=$?
+  rc=0; capture -2 out rc in_dir "$repo" env PATH="$(inject_fail "$tmp/inj-modes-$t" "$t" 42):$PATH" scripts/check-script-modes.sh || exit 1
   if [ "$rc" = 0 ]; then bad "script modes: $t prints its output then exits 42, the gate still exits 0 [$out]"; else ok; fi
 done
 # ... and the same with the output cut short (nothing, or one line): a half-read answer is not an answer either.
 for t in grep git; do for keep in 0 1; do
   modes_fixture "dies-$t-$keep"
-  rc=0; out=$(cd "$repo" && PATH="$(inject_fail "$tmp/inj-modes-$t-$keep" "$t" 42 "$keep"):$PATH" scripts/check-script-modes.sh 2>&1) || rc=$?
+  rc=0; capture -2 out rc in_dir "$repo" env PATH="$(inject_fail "$tmp/inj-modes-$t-$keep" "$t" 42 "$keep"):$PATH" scripts/check-script-modes.sh || exit 1
   if [ "$rc" = 0 ]; then bad "script modes: $t prints $keep line(s) then exits 42, the gate still exits 0 [$out]"; else ok; fi
 done; done
 # The fixture itself is green without the wrapper (so the red above is the wrapper's doing, not the fixture's).
@@ -2255,14 +2256,14 @@ affected_fixture adie
 git -C "$repo" checkout -q -b change; touch_file pkgs/a/x.go; commit "chore: adie"
 for keep in all 0; do
   w=$(PATH="$PATH" inject_fail "$tmp/inj-aff-3dot-$keep" git 42 "$keep" 'diff --no-renames --name-only origin/main...HEAD')
-  rc=0; out=$(cd "$repo" && PATH="$w:$PATH" scripts/affected.sh 2>/dev/null) || rc=$?; out=$(printf '%s\n' "$out" | tr '\n' ' ')
+  rc=0; capture out rc in_dir "$repo" env PATH="$w:$PATH" scripts/affected.sh 2>/dev/null || exit 1; out=$(printf '%s\n' "$out" | tr '\n' ' ')
   expect_eq "affected: git diff base...HEAD dies [$keep] — every module is affected" "pkgs/a pkgs/b " "$out"
 done
 for glob in 'diff --no-renames --name-only HEAD' 'ls-files --others*'; do
-  rc=0; out=$(cd "$repo" && PATH="$(inject_fail "$tmp/inj-aff-$RANDOM" git 42 all "$glob"):$PATH" scripts/affected.sh 2>&1) || rc=$?
+  rc=0; capture -2 out rc in_dir "$repo" env PATH="$(inject_fail "$tmp/inj-aff-$RANDOM" git 42 all "$glob"):$PATH" scripts/affected.sh || exit 1
   if [ "$rc" = 0 ]; then bad "affected: git $glob prints its answer then exits 42, the script still exits 0 [$out]"; else ok; fi
 done
-rc=0; out=$(cd "$repo" && scripts/affected.sh 2>/dev/null) || rc=$?; out=$(printf '%s\n' "$out" | tr '\n' ' ')
+rc=0; capture out rc in_dir "$repo" scripts/affected.sh 2>/dev/null || exit 1; out=$(printf '%s\n' "$out" | tr '\n' ' ')
 expect_eq "affected: fault-injection control — real git, only pkgs/a changed, a and its dependent b" "pkgs/a pkgs/b " "$out"
 
 # cover-gate.sh: needs go + python3 (the scripts-test job has go; jq and python3 are on the runner image).
@@ -3110,6 +3111,50 @@ F
 dr_green plain-exit-literal 3 <<'F'
 v=$(cmd) || exit 3
 F
+dr_red exit-256 'half' <<'F'
+v=$(cmd || exit 256)
+F
+dr_red return-256 'rc0' <<'F'
+f9() { x=$(cmd) || return 256; }
+f9
+v=rc$?
+F
+dr_red brace-exit-512 'rc0' <<'F'
+( x=$(cmd) || { echo e; exit 512; } )
+v=rc$?
+F
+dr_red statement-after-the-command 'half0' <<'F'
+v=$(cmd; echo 0)
+F
+dr_red newline-separated-statements 'half0' <<'F'
+v=$(cmd
+echo 0)
+F
+dr_red errexit-off-then-echo 'half0' <<'F'
+v=$(set +e; cmd; echo 0)
+F
+dr_red true-after-the-command 'half' <<'F'
+v=$(cmd; true)
+F
+dr_red background-and-wait 'half' <<'F'
+v=$(cmd & wait)
+F
+dr_red negated-pipeline 'half' <<'F'
+v=$(! cmd)
+F
+dr_red cd-and-command 'half' <<'F'
+v=$(cd / && cmd)
+F
+dr_red handler-then-another-statement 'half' <<'F'
+v=$(cmd || { exit 3; }; echo 0)
+F
+dr_green exit-255 255 <<'F'
+v=$(cmd) || exit 255
+F
+dr_green pipeline-then-handler 3 <<'F'
+set -o pipefail
+v=$(cmd | cat) || exit 3
+F
 dr_green substitution-exit 3 <<'F'
 v=$(cmd || exit 3) || exit $?
 F
@@ -3412,7 +3457,7 @@ if python3 -c 'import yaml' 2>/dev/null; then
   cs="$tmp/cs-inj"; mkdir -p "$cs/scripts"; cp "$src/scripts/cosign-smoke.sh" "$cs/scripts/"; cp "$src/.goreleaser.yaml" "$cs/"
   for keep in all 1; do
     w=$(inject_fail "$tmp/inj-cs-$keep" python3 42 "$keep")
-    rc=0; out=$(cd "$cs" && PATH="$w:$fakebin:$PATH" FAKE_COUNT="$tmp/count-cs$keep" FAKE_SKIP_SIGN_N=0 scripts/cosign-smoke.sh 2>&1) || rc=$?
+    rc=0; capture -2 out rc in_dir "$cs" env PATH="$w:$fakebin:$PATH" FAKE_COUNT="$tmp/count-cs$keep" FAKE_SKIP_SIGN_N=0 scripts/cosign-smoke.sh || exit 1
     expect_eq    "cosign-smoke: python3 prints [$keep] then exits 42 → the smoke fails" "1" "$rc"
     expect_match "cosign-smoke: …and names the signs entry read" 'reading the signs entry of \.goreleaser\.yaml failed' "$out"
   done
@@ -3480,14 +3525,14 @@ rcx_run() { rc=0; capture -2 out rc in_dir "$rcx" scripts/check-exit-swallow.sh 
 # path normalisation, basename / dirname that rename the file and fail (they are not called any more, so a bad file stays red)
 for t in basename dirname; do
   w=$(inject_fail "$tmp/inj-rel-$t" "$t" 42 all)
-  rc=0; out=$(cd "$rcx" && PATH="$w:$PATH" scripts/check-exit-swallow.sh scripts/other.sh 2>&1) || rc=$?
+  rc=0; capture -2 out rc in_dir "$rcx" env PATH="$w:$PATH" scripts/check-exit-swallow.sh scripts/other.sh || exit 1
   case $t in
     basename) expect_eq "path: a basename that prints and exits 42 does not hide a bad file (scripts/other.sh stays red)" "1" "$rc" ;;
     dirname)  expect_eq "path: a dirname that prints and exits 42 is an error (exit 2), never clean" "2" "$rc" ;;
   esac
 done
 mkdir -p "$tmp/inj-rel-fake"; printf '#!/bin/sh\nif [ "$1" = "${1%%other.sh}" ]; then exec /usr/bin/basename "$@"; fi\necho test.sh\nexit 42\n' > "$tmp/inj-rel-fake/basename"; chmod +x "$tmp/inj-rel-fake/basename"
-rc=0; out=$(cd "$rcx" && PATH="$tmp/inj-rel-fake:$PATH" scripts/check-exit-swallow.sh scripts/other.sh 2>&1) || rc=$?
+rc=0; capture -2 out rc in_dir "$rcx" env PATH="$tmp/inj-rel-fake:$PATH" scripts/check-exit-swallow.sh scripts/other.sh || exit 1
 expect_eq "path: the reviewer's basename (prints test.sh for *other.sh, exits 42) cannot turn scripts/other.sh into the exempt file → still red" "1" "$rc"
 rcx_run ./scripts/test.sh;            expect_eq "exempt: ./scripts/test.sh is the same file → exempt" "0" "$rc"
 rcx_run scripts/../scripts/test.sh;   expect_eq "exempt: scripts/../scripts/test.sh is the same file → exempt" "0" "$rc"
@@ -3527,7 +3572,7 @@ hk_run; expect_eq "hooks: scripts/hooks/check.sh with a swallow is skipped by th
 printf '#!/usr/bin/env bash\nset -euo pipefail\nls x || true\n' > "$hk/other/scripts/hooks/check.sh"
 hk_run; expect_eq "hooks: the same file under other/scripts/hooks/ is NOT exempt → red" "1" "$rc"
 expect_match "hooks: …and named by its full path" '^other/scripts/hooks/check\.sh:3: swallow:' "$out"
-rcx_run=; rc=0; out=$(cd "$hk" && scripts/check-exit-swallow.sh scripts/hooks/check.sh 2>&1) || rc=$?
+rc=0; capture -2 out rc in_dir "$hk" scripts/check-exit-swallow.sh scripts/hooks/check.sh || exit 1
 expect_eq "hooks: an explicit argument is scanned as given (no hooks skip in explicit mode, documented) → red" "1" "$rc"
 rcb_ok() { # <name> <lines…>
   local n=$1; shift
@@ -3564,11 +3609,11 @@ fn_of2 "$src/tests/k6/bench.sh" wait_quiet > "$tmp/wait_quiet.fn"
 expect_eq "bench: wait_quiet was found in the real bench.sh" "1" "$([ -s "$tmp/wait_quiet.fn" ] && echo 1 || echo 0)"
 for keep in all 1; do
   w=$(inject_fail "$tmp/inj-lavg-$keep" python3 42 "$keep" '*loadavg.py*')
-  rc=0; out=$(cd "$src" && PATH="$w:$PATH" bash -c '. "$1"; out=$2; limit=1000; BASELINE_WAIT=1; LOAD_INTERVAL=0; mkdir -p "$out"; if ! wait_quiet 1; then echo "NOT QUIET"; else echo "QUIET"; fi' _ "$tmp/wait_quiet.fn" "$tmp/lavg-out-$keep" 2>&1) || rc=$?
+  rc=0; capture -2 out rc in_dir "$src" env PATH="$w:$PATH" bash -c '. "$1"; out=$2; limit=1000; BASELINE_WAIT=1; LOAD_INTERVAL=0; mkdir -p "$out"; if ! wait_quiet 1; then echo "NOT QUIET"; else echo "QUIET"; fi' _ "$tmp/wait_quiet.fn" "$tmp/lavg-out-$keep" || exit 1
   expect_eq    "bench: loadavg.py prints [$keep] then exits 42 → wait_quiet does not report a quiet machine (exit 1)" "1" "$rc"
   expect_match "bench: …and names the sampler" 'loadavg\.py exited 42' "$out"
 done
-rc=0; out=$(cd "$src" && bash -c '. "$1"; out=$2; limit=1000; BASELINE_WAIT=1; LOAD_INTERVAL=0; mkdir -p "$out"; if ! wait_quiet 1; then echo "NOT QUIET"; else echo "QUIET"; fi' _ "$tmp/wait_quiet.fn" "$tmp/lavg-out-ok" 2>&1) || rc=$?
+rc=0; capture -2 out rc in_dir "$src" bash -c '. "$1"; out=$2; limit=1000; BASELINE_WAIT=1; LOAD_INTERVAL=0; mkdir -p "$out"; if ! wait_quiet 1; then echo "NOT QUIET"; else echo "QUIET"; fi' _ "$tmp/wait_quiet.fn" "$tmp/lavg-out-ok" || exit 1
 expect_eq "bench: a sampler that works → quiet at limit 1000" "0 QUIET" "$rc $out"
 # tests/k6/bench_db_test.sh survives: psql prints 42 and dies
 fn_of2 "$src/tests/k6/bench_db_test.sh" survives > "$tmp/survives.fn"
