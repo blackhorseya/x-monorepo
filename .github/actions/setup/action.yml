@@ -1,8 +1,9 @@
 name: setup
 description: >-
-  Go (with module/build cache keyed on every go.sum) + Task. With tools=true also
-  restores ./bin (buf, protoc-gen-*, wire, golangci-lint) keyed on the pinned versions, so
-  `task tools` only compiles when a pinned version changes.
+  Go + Task, with a module cache shared by the whole repo and a build cache shared by the jobs that
+  compile the same way (both written by main only, read by pull requests), and optionally ./bin
+  (buf, protoc-gen-*, wire, golangci-lint) keyed on the pinned versions, so `task tools` only
+  compiles when a pinned version changes. See docs/ci.md "Go cache" (#450).
 
 inputs:
   tools:
@@ -10,11 +11,17 @@ inputs:
     default: "false"
   cache-scope:
     description: >-
-      Suffix that makes the Go cache key unique per job (and per matrix entry). setup-go's
-      built-in cache keys only on go.sum, so every job in a run races for one key and the
-      first to finish — a light job with an empty module cache — wins; the cache is then
-      immutable and every later job "hits" ~7 KB and downloads everything anyway.
+      Names the job (and the matrix entry) to plan.sh, which maps it to a shared build-cache group
+      and says whether this job is the group's one designated saver. It is no longer part of a cache
+      key: before, every scope kept its own copy of the module and build cache (28 entries, 8.46 GB
+      against a 10 GB quota). A scope plan.sh does not list gets the module cache and no build cache.
     default: ${{ github.job }}
+  go-cache:
+    description: >-
+      "false" skips the Go module / build cache entirely (no restore, no save, no download). For a
+      job that needs `go` on PATH only because `task` evaluates a `go work edit` variable on every
+      run, and compiles nothing (web).
+    default: "true"
 
 runs:
   using: composite
@@ -30,17 +37,66 @@ runs:
         echo "modcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
         echo "buildcache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
 
-    # One cache per job/matrix entry; restore-keys fall back to the same job's previous
-    # go.sum, then to any job's, so a dependency bump still starts from a warm cache.
-    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+    # Who may write a cache, which build-cache group this job reads, whether it is the group's saver.
+    # Decided here and nowhere else: every cache step below only reads these outputs, and each
+    # read-write step has a restore-only twin whose `if:` is the exact opposite of its own.
+    - id: plan
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        SCOPE: ${{ inputs.cache-scope }}
+      run: ${{ github.action_path }}/plan.sh
+
+    # Module cache: ONE entry for the repo, only the downloaded zips (a module is extracted on first
+    # use, ~2 s for apps/rpc against restoring ~400 MB of extracted files). Keyed on go.sum alone: a
+    # module version never changes, so the entry never goes stale, and a go.sum bump restores the
+    # previous one and downloads the difference. A pull request only ever reads it.
+    - id: gomod-rw
+      if: inputs.go-cache == 'true' && steps.plan.outputs.write == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
-        path: |
-          ${{ steps.go-env.outputs.modcache }}
-          ${{ steps.go-env.outputs.buildcache }}
-        key: go-${{ runner.os }}-${{ inputs.cache-scope }}-${{ hashFiles('**/go.sum') }}
+        path: ${{ steps.go-env.outputs.modcache }}/cache/download
+        key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          go-${{ runner.os }}-${{ inputs.cache-scope }}-
-          go-${{ runner.os }}-
+          gomod-${{ runner.os }}-
+
+    - id: gomod-ro
+      if: inputs.go-cache == 'true' && steps.plan.outputs.write != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ${{ steps.go-env.outputs.modcache }}/cache/download
+        key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          gomod-${{ runner.os }}-
+
+    # Anything but an exact hit: fill the whole workspace's modules (retried, see the script). On main
+    # this is what makes the entry complete whichever job saves it; on a pull request it is the delta.
+    - if: inputs.go-cache == 'true' && (steps.gomod-rw.outputs.cache-hit || steps.gomod-ro.outputs.cache-hit) != 'true'
+      shell: bash
+      run: ${{ github.action_path }}/go-mod-download.sh
+
+    # Build cache: GOCACHE only, one per group of jobs that compile the same way (plan.sh), refreshed
+    # weekly. A group's saver is the one job whose compile set contains the others'; the rest read.
+    # restore-keys stay inside the group and fall back to the previous week.
+    - id: gobuild-rw
+      if: inputs.go-cache == 'true' && steps.plan.outputs.group != '' && steps.plan.outputs.save_build == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ${{ steps.go-env.outputs.buildcache }}
+        key: gobuild-${{ runner.os }}-${{ steps.plan.outputs.group }}-${{ steps.plan.outputs.week }}
+        restore-keys: |
+          gobuild-${{ runner.os }}-${{ steps.plan.outputs.group }}-
+
+    - id: gobuild-ro
+      if: inputs.go-cache == 'true' && steps.plan.outputs.group != '' && steps.plan.outputs.save_build != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ${{ steps.go-env.outputs.buildcache }}
+        key: gobuild-${{ runner.os }}-${{ steps.plan.outputs.group }}-${{ steps.plan.outputs.week }}
+        restore-keys: |
+          gobuild-${{ runner.os }}-${{ steps.plan.outputs.group }}-
 
     - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2
       with:
@@ -54,13 +110,20 @@ runs:
       shell: bash
       run: echo "key=${{ runner.os }}-tools-$(grep -E '^\s+[A-Z_]+_VERSION:' Taskfile.yml | sha256sum | cut -c1-16)-$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
 
-    - if: inputs.tools == 'true'
-      id: tools-cache
+    - id: tools-rw
+      if: inputs.tools == 'true' && steps.plan.outputs.write == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: bin
         key: ${{ steps.tools-key.outputs.key }}
 
-    - if: inputs.tools == 'true' && steps.tools-cache.outputs.cache-hit != 'true'
+    - id: tools-ro
+      if: inputs.tools == 'true' && steps.plan.outputs.write != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: bin
+        key: ${{ steps.tools-key.outputs.key }}
+
+    - if: inputs.tools == 'true' && (steps.tools-rw.outputs.cache-hit || steps.tools-ro.outputs.cache-hit) != 'true'
       shell: bash
       run: task tools

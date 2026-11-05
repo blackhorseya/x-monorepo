@@ -1,0 +1,41 @@
+name: pnpm-cache
+description: >-
+  The pnpm store, cached on web/pnpm-lock.yaml. Replaces setup-node's `cache: pnpm`, which saves in
+  its post step on every trigger (a pull request that touched the lockfile wrote ~78 MB into
+  refs/pull/N/merge, #450/#461). Same rule as the other caches: only plan.sh's writer (a default-branch
+  push / dispatch) saves, everyone else restores. Run it after pnpm/action-setup and setup-node
+  (it asks pnpm where the store is).
+
+runs:
+  using: composite
+  steps:
+    - id: plan
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: ${{ github.action_path }}/../setup/plan.sh
+
+    - id: store
+      shell: bash
+      working-directory: web
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - id: cache-rw
+      if: steps.plan.outputs.write == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+        restore-keys: |
+          pnpm-${{ runner.os }}-
+
+    - id: cache-ro
+      if: steps.plan.outputs.write != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+        restore-keys: |
+          pnpm-${{ runner.os }}-

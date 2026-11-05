@@ -115,10 +115,12 @@ jobs:
       # The tag does not exist yet (publish creates it), but goreleaser ≥ v2.18.1 refuses to run
       # without one, so create it locally on the commit being released. Never pushed.
       - run: git tag "${{ needs.prepare.outputs.tag }}" "$HEAD_SHA"
-      # Share the Go cache with ci.yml's release-snapshot job: same 12 cross-compile targets and
-      # flags (-X only changes the link step), refreshed on every PR. The default scope would be
-      # this job's name, "build", which collides with ci.yml's host-only `build` cache — a
-      # primary-key hit there is never re-saved, so the cross-compiles ran cold every release.
+      # Share the Go build cache with ci.yml's release-snapshot job (plan.sh group "cross"): same 12
+      # cross-compile targets and flags (-X only changes the link step). This run is a workflow_run, which
+      # GitHub gives read-only access to the default branch's caches: it restores what ci.yml's
+      # release-snapshot saved on its main push (weekly) and never writes. A missing entry only makes the
+      # cross-compiles cold (slower), it cannot change the result. The default scope would be this job's
+      # name, "build", i.e. the host-only `bin` group.
       - uses: ./.github/actions/setup
         with:
           cache-scope: release-snapshot
@@ -127,8 +129,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: ./.github/actions/pnpm-cache
       # The console's dist/ before goreleaser: a broken web build fails the job before any Go
       # image has been pushed under this version. VITE_CONSOLE_VERSION is what its footer shows.
       - run: VITE_CONSOLE_VERSION="${TAG#v}" task web-build   # same spelling as goreleaser's .Version
