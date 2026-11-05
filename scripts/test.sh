@@ -2388,7 +2388,7 @@ done
 # would catch even if this one were swallowed): it prints all of "1 2 3" or only "1", then exits 42.
 for keep in all 1; do
   w=$(PATH="$sc/bin:$PATH" inject_fail "$tmp/inj-shard-idx-$keep" cat 42 "$keep" '*indexes*')
-  rc=0; out=$( (cd "$tmp" && REAL_PATH="$PATH" PATH="$w:$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT= "$src/scripts/web-e2e-shards-check.sh" 3 2>&1) ) || rc=$?
+  rc=0; capture -2 out rc in_dir "$tmp" env REAL_PATH="$PATH" PATH="$w:$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT= "$src/scripts/web-e2e-shards-check.sh" 3 || exit 1
   if [ "$rc" = 0 ]; then bad "shards-check: cat of the indexes prints [$keep] then exits 42, the check still exits 0 [$out]"; else ok; fi
   case "$out" in *"ok: 3 shards"*) bad "shards-check: cat of the indexes ($keep) then exit 42 still says ok";; *) ok;; esac
   expect_match "shards-check: the index read names its failure ($keep)" 'cat of the shard indexes exited 42' "$out"
@@ -3169,6 +3169,21 @@ F
 dr_green pipeline-then-handler 3 <<'F'
 set -o pipefail
 v=$(cmd | cat) || exit 3
+F
+dr_red subshell-after-and 'half0' <<'F'
+v=$(true && (cmd; echo 0))
+F
+dr_red subshell-with-or-default-after-and 'half0' <<'F'
+v=$(true && (cmd || echo 0))
+F
+dr_red subshell-around-statements 'half0' <<'F'
+v=$( (cmd; echo 0) )
+F
+dr_red subshell-around-the-command 'half' <<'F'
+v=$( (cmd) )
+F
+dr_red group-after-and 'half0' <<'F'
+v=$(true && { cmd; echo 0; })
 F
 dr_green substitution-exit 3 <<'F'
 v=$(cmd || exit 3) || exit $?

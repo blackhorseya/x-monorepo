@@ -199,7 +199,7 @@ function argsub(c,   i, j, d, ch, pre, inner, n) {
 function reportat(rule, ln, txt) { printf "%s:%d: %s: %s\n", FILENAME, ln, rule, txt; n++ }
 function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; flt[sd] = line; fdq[sd] = dq; fbd[sd] = 0; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context
 # What may stand inside $( … ): a CLOSED whitelist, not a list of bad constructs.
-#   1. ONE `&&` chain of pipelines: no `;`, no second line, no `&` (background), no `!` on any segment  (a later statement or a negation hides the failure of the first:
+#   1. ONE `&&` chain of pipelines of simple commands: no `;`, no second line, no `&` (background), no `!` on any segment, no ( … ) subshell, no { … } group  (a later statement or a negation hides the failure of the first:
 #      `$(cmd; echo 0)`, `$(cmd⏎echo 0)`, `$(cmd; true)`, `$(cmd & wait)`, `$(! cmd)`, `$(a && ! b)`, `$(set +e; cmd; echo 0)`). Pipelines joined by `&&` are fine:
 #      the failure of the first is the status of the chain (`$(cd d && pwd)`)
 #   2. that pipeline followed by `|| H`, H = hshape(exit only)
@@ -217,6 +217,8 @@ function onepipeline(t,   x) {                       # t: one part of a substitu
   if (x ~ /[;\002]/) return 0                                                      # a second statement
   gsub(/&&[ \t]*/, "\003", x)                                                      # `a && b`: the failure of a is the status of the whole chain, no default is made
   if (x ~ /&/) return 0                                                            # `&` background
+  if (x ~ /\(P\)/) return 0                                                       # a ( … ) subshell: whatever runs in it can hide a failure (`$(true && (cmd; echo 0))`, `$( (cmd) )`)
+  if (x ~ /(^|[ \t;|\003])\{[ \t]/) return 0                                       # a { … } group, likewise (the handler's `|| { …; exit N; }` is judged by hshape, not here)
   if (x ~ /(^|\003)[ \t]*!/) return 0                                              # a negated pipeline, anywhere in the chain (`a && ! b`)
   return 1
 }
