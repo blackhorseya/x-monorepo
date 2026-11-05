@@ -86,15 +86,31 @@ admin_key=$(sed -n 's/.*admin=\([A-Za-z0-9._-]*\):admin.*/\1/p' "$flow" | head -
 
 # call <key> <path> <json>: sets $res ("<http status> <x-error-code or ->") and $body in THIS shell, so it is called
 # plainly (never inside $(...), whose subshell would keep them).
-err_code_of() { tr -d '\r' <<<"$1" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep .; }   # the X-Error-Code value; exit 1 (grep) = the response has none
+# status_of <response head>: the HTTP status code of the first line; empty when that line is not an HTTP status line. Pure bash: no sed / grep whose
+# exit status could be told apart from "nothing found" only by guessing. A response with no status is not a status the caller can compare.
+status_of() {
+  local first
+  read -r first <<<"$1"
+  if [[ $first =~ ^HTTP[^\ ]*\ ([0-9]+) ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
+  return 0
+}
+# err_code_of <response head>: the value of the FIRST X-Error-Code header (the \r of a CRLF line removed); empty when there is none. Pure bash, same reason.
+err_code_of() {
+  local line
+  while IFS= read -r line; do
+    line=${line%$'\r'}
+    case $line in [Xx]-[Ee]rror-[Cc]ode:\ *) printf '%s' "${line#*: }"; return 0 ;; esac
+  done <<<"$1"
+  return 0
+}
 call() {
   local out rc=0
   capture out rc curl -sS -D - -o /tmp/payflow.$$ -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3" || { echo "payment-flow: cannot run curl for $2" >&2; exit 1; }
   if [ "$rc" != 0 ]; then echo "payment-flow: curl $2 failed (exit $rc): no status is read from it" >&2; out=""; fi   # an empty status never equals the expected one
   body="(no body)"; [ ! -f /tmp/payflow.$$ ] || body=$(cat /tmp/payflow.$$) || { echo "payment-flow: cannot read the response body of $2" >&2; exit 1; }; rm -f /tmp/payflow.$$
   local st xc   # each part on its own: call() runs in `$(…)` and `||` positions, so errexit is off in here
-  st=$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") || { echo "payment-flow: cannot read the status line" >&2; exit 1; }   # an empty status (curl failed above) never equals the expected one
-  xc=$(value_of -ok 1 err_code_of "$out") || { echo "payment-flow: cannot read the error code" >&2; exit 1; }   # 1 = no X-Error-Code header (xc empty); anything else is the parse failing
+  st=$(status_of "$out") || { echo "payment-flow: cannot read the status line" >&2; exit 1; }   # an empty status (curl failed above) never equals the expected one
+  xc=$(err_code_of "$out") || { echo "payment-flow: cannot read the error code" >&2; exit 1; }
   [ -n "$xc" ] || xc=-
   res="$st $xc"
 }

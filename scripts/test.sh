@@ -2668,7 +2668,7 @@ fn_text() { # <file> <name>: the function, from its first line to its closing br
 }
 helper_cell() { # <label> <file> <name> <want rc> <want output> <command…>: define the real function, run the command, judge rc and output
   local label=$1 file=$2 name=$3 wrc=$4 wout=$5; shift 5
-  { echo ". '$src/scripts/best-effort.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" err_code_of; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/helper.sh"
+  { echo ". '$src/scripts/best-effort.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" err_code_of; fn_text "$file" status_of; fn_text "$file" want; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/helper.sh"
   hrc=0; capture -2 hout hrc bash "$tmp/helper.sh" || exit 1
   expect_eq "helper $name ($label): exit" "$wrc" "$hrc"
   expect_eq "helper $name ($label): output" "$wout" "$hout"
@@ -2763,13 +2763,26 @@ helper_cell "outage call(): stderr warning, stdout 'HTTP/1.1 200'" "$src/deploym
 helper_cell "outage call(): curl prints a status then dies (7): no status" "$src/deployments/helm/kind/outage.sh" call 0 " -" 'api=http://x; curl() { printf "HTTP/1.1 200 OK\r\n\r\n"; return 7; }; call p "{}" 2>/dev/null'
 helper_cell "payment-flow call(): stderr 'HTTP/1.1 200' + stdout 'HTTP/1.1 500'" "$src/deployments/helm/kind/payment-flow.sh" call 0 "500 -" 'api=http://x; curl() { echo "HTTP/1.1 200 OK" >&2; printf "HTTP/1.1 500 Error\r\n\r\n"; }; call k p "{}" 2>/dev/null; echo "$res"'
 helper_cell "payment-flow call(): stderr warning + stdout 'HTTP/1.1 200'" "$src/deployments/helm/kind/payment-flow.sh" call 0 "200 -" 'api=http://x; curl() { echo "warning: something" >&2; printf "HTTP/1.1 200 OK\r\n\r\n"; }; call k p "{}" 2>/dev/null; echo "$res"'
-# call() X-Error-Code parsing (outage.sh, payment-flow.sh): no header → "-", a header → its value, and a parse that prints part of an answer and then FAILS → call() fails (never "-")
+# call() (outage.sh, payment-flow.sh): the status and the X-Error-Code are parsed in pure bash (status_of / err_code_of: no sed / grep / tr whose exit status
+# could be mistaken for "nothing found"). Real functions cut out of the files, run against a fake curl.
 for cf in outage payment-flow; do
   if [ "$cf" = outage ]; then run='call p "{}"'; else run='{ call k p "{}"; echo "$res"; }'; fi
-  helper_cell "$cf call(): no X-Error-Code header → -" "$src/deployments/helm/kind/$cf.sh" call 0 "404 -" 'api=http://x; curl() { printf "HTTP/1.1 404 Not Found\r\n\r\n"; }; '"$run"' 2>/dev/null'
-  helper_cell "$cf call(): X-Error-Code: catalog.unavailable → that value" "$src/deployments/helm/kind/$cf.sh" call 0 "409 catalog.unavailable" 'api=http://x; curl() { printf "HTTP/1.1 409 Conflict\r\nX-Error-Code: catalog.unavailable\r\n\r\n"; }; '"$run"' 2>/dev/null'
-  helper_cell "$cf call(): the parse prints 'partial' and then dies (42) → call() FAILS, no status" "$src/deployments/helm/kind/$cf.sh" call 1 "" 'api=http://x; curl() { printf "HTTP/1.1 409 Conflict\r\nX-Error-Code: catalog.unavailable\r\n\r\n"; }; grep() { echo partial; return 42; }; '"$run"' 2>/dev/null'
+  cc() { # <label> <want out> <curl stub body>
+    helper_cell "$cf call(): $1" "$src/deployments/helm/kind/$cf.sh" call 0 "$2" 'api=http://x; fail() { echo "FAIL $*"; exit 1; }; curl() { '"$3"'; }; '"$run"' 2>/dev/null'
+  }
+  cc "no X-Error-Code header → -"                 "404 -"                    'printf "HTTP/1.1 404 Not Found\r\n\r\n"'
+  cc "X-Error-Code: catalog.unavailable → value"  "409 catalog.unavailable"  'printf "HTTP/1.1 409 Conflict\r\nX-Error-Code: catalog.unavailable\r\n\r\n"'
+  cc "the value carries a CR (CRLF line) → trimmed" "409 a.b"                'printf "HTTP/1.1 409 Conflict\r\nx-error-code: a.b\r\n\r\n"'
+  cc "two X-Error-Code headers → the FIRST"       "409 first.one"            'printf "HTTP/1.1 409 Conflict\r\nX-Error-Code: first.one\r\nX-Error-Code: second.two\r\n\r\n"'
+  cc "stderr says 200, stdout says 500 → 500"     "500 -"                    'echo "HTTP/1.1 200 OK" >&2; printf "HTTP/1.1 500 Error\r\n\r\n"'
+  cc "stderr warning, stdout 200 → 200"           "200 -"                    'echo "warning: x" >&2; printf "HTTP/1.1 200 OK\r\n\r\n"'
+  cc "curl prints a status, THEN dies (7) → no status" " -"                  'printf "HTTP/1.1 200 OK\r\n\r\n"; return 7'
+  cc "the status line is not HTTP → empty status (the code is still read)" " x.y" 'printf "garbage\r\nX-Error-Code: x.y\r\n\r\n"'
+  # …and the verdict: a call() whose status is empty can never satisfy the assertion that follows
+  if [ "$cf" = outage ]; then chk='r=$(call p "{}"); want "the call" "$r" "404 -"'; else chk='call k p "{}"; want "the call" "$res" "404 -"'; fi
+  helper_cell "$cf: a non-HTTP status line makes the final want() FAIL" "$src/deployments/helm/kind/$cf.sh" call 1 "" 'api=http://x; fail() { echo "FAIL $*" >&2; exit 1; }; curl() { printf "garbage\r\n\r\n"; }; '"$chk"' >/dev/null 2>&1'
 done
+unset -f cc
 # image.sh expect_refused(): the container's exit code must be KNOWN and non-zero. An unreadable one (inspect dies) is a failure, not a refusal
 img_cell() { # <label> <want rc> <want out regex> <ExitCode inspect behaviour: a command in ctl>
   local label=$1 wrc=$2 wre=$3 ecb=$4
