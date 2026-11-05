@@ -101,7 +101,7 @@ db() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1";
 order_status() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.status // "-"' <<<"$body"; }
 wait_order() { # <order> <ORDER_STATUS_X> [seconds]
   local s=""
-  for ((_try101 = 1; _try101 <= "${3:-60}"; _try101++)); do s=$(order_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
+  for ((_try101 = 1; _try101 <= "${3:-60}"; _try101++)); do s=$(order_status "$1") || s="(status read failed, exit $?)"; [ "$s" = "$2" ] && return 0; sleep 1; done
   fail "order $1 is '$s' after ${3:-60}s, want $2"
 }
 steady() { # <order> <ORDER_STATUS_X> <seconds>: still this status for the whole window (the caller proved it could have moved)

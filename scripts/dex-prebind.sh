@@ -88,9 +88,9 @@ find_account() {
   local token='' id
   while :; do
     admin ListAccounts "$(jq -nc --arg t "$token" '{pageSize: 100, pageToken: $t}')"
-    id=$(jq -r --arg n "$1" '[.accounts[]? | select(.name == $n) | .id][0] // empty' <<<"$resp")
+    id=$(jq -r --arg n "$1" '[.accounts[]? | select(.name == $n) | .id][0] // empty' <<<"$resp") || return 1   # called as $(find_account …): errexit is off in here
     if [ -n "$id" ]; then echo "$id"; return; fi
-    token=$(jq -r '.nextPageToken // empty' <<<"$resp")
+    token=$(jq -r '.nextPageToken // empty' <<<"$resp") || return 1
     [ -n "$token" ] || return 0
   done
 }

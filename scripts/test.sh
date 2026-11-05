@@ -389,7 +389,7 @@ plan_out() {
   local o rc=0
   o=$(EVENT_NAME=$1 REF=$2 DEFAULT_BRANCH=$3 SCOPE=$4 GITHUB_OUTPUT=/dev/stdout "$plan") || rc=$?
   if [ "$rc" != 0 ]; then echo PLAN-FAILED; return; fi
-  n_key=$(printf '%s\n' "$o" | count_lines "^$5=")
+  n_key=$(printf '%s\n' "$o" | count_lines "^$5=") || return 1
   if [ "$n_key" != 1 ]; then echo NO-KEY; return; fi
   printf '%s\n' "$o" | sed -n "s/^$5=//p"
 }
@@ -419,11 +419,11 @@ expect_match "plan: the week is an ISO week"                  '^[0-9]{4}-W[0-9]{
 # group; a new job that is not in plan.sh fails here instead of silently getting no build cache.
 ci_setup_scopes() {
   local j m jobs mods
-  jobs=$(awk '/^  [a-z0-9-]+:$/ {gsub(/[ :]/, ""); job=$0} /uses: \.\/\.github\/actions\/setup/ {print job}' "$src/.github/workflows/ci.yml" | sort -u)   # assigned first: a failing awk is an error, not an empty list (#462)
+  jobs=$(awk '/^  [a-z0-9-]+:$/ {gsub(/[ :]/, ""); job=$0} /uses: \.\/\.github\/actions\/setup/ {print job}' "$src/.github/workflows/ci.yml" | sort -u) || return 1   # assigned first: a failing awk is an error, not an empty list (#462)
   for j in $jobs; do
-    n_nocache=$(ci_job "$j" | count_lines 'go-cache: "false"')
+    n_nocache=$(ci_job "$j" | count_lines 'go-cache: "false"') || return 1
     if [ "$j" = test ]; then
-      mods=$(awk '/^use \(/ {f=1; next} /^\)/ {f=0} f {gsub(/[ \t]|^\.\//, ""); print}' "$src/go.work" | sed 's#^\./##')
+      mods=$(awk '/^use \(/ {f=1; next} /^\)/ {f=0} f {gsub(/[ \t]|^\.\//, ""); print}' "$src/go.work" | sed 's#^\./##') || return 1
       for m in $mods; do echo "test-$m"; done
     elif [ "$n_nocache" = 0 ]; then
       echo "$j"
@@ -557,12 +557,12 @@ pair_check() {
   local a=$1 rw=$2 ro=$3 kind=$4 sc cell ev rf w sv g rwv rov want bad_cells=""
   shift 4
   local rwif roif
-  rwif=$(step_if "$a" "$rw"); roif=$(step_if "$a" "$ro")
+  rwif=$(step_if "$a" "$rw") || return 1; roif=$(step_if "$a" "$ro") || return 1
   for sc in "$@"; do
     for cell in $cells; do
       ev=${cell%%@*}; rf=${cell#*@}
-      w=$(plan_out "$ev" "$rf" main "$sc" write); sv=$(plan_out "$ev" "$rf" main "$sc" save_build); g=$(plan_out "$ev" "$rf" main "$sc" group)
-      rwv=$(cond_runs "$rwif" "$w" "$sv" "$g" true true); rov=$(cond_runs "$roif" "$w" "$sv" "$g" true true)
+      w=$(plan_out "$ev" "$rf" main "$sc" write) || return 1; sv=$(plan_out "$ev" "$rf" main "$sc" save_build) || return 1; g=$(plan_out "$ev" "$rf" main "$sc" group) || return 1
+      rwv=$(cond_runs "$rwif" "$w" "$sv" "$g" true true) || return 1; rov=$(cond_runs "$roif" "$w" "$sv" "$g" true true) || return 1
       if [ "$kind" = build ]; then
         if [ -z "$g" ]; then want="0 0"; elif [ "$sv" = true ]; then want="1 0"; else want="0 1"; fi
       else
@@ -887,7 +887,8 @@ smoke() { # smoke <skip-sign-n> -> prints "<exit> <FAIL line, if any>"
   fixture "smoke$1"; cp "$src/.goreleaser.yaml" "$repo/"
   local out rc=0
   out=$(cd "$repo" && PATH="$fakebin:$PATH" FAKE_COUNT="$tmp/count$1" FAKE_SKIP_SIGN_N=$1 scripts/cosign-smoke.sh 2>&1) || rc=$?
-  first_fail=$(grep -m1 '^FAIL' <<<"$out" || [ $? -eq 1 ])
+  ff_rc=0; first_fail=$(grep -m1 '^FAIL' <<<"$out") || ff_rc=$?   # 1 = no FAIL line; smoke() runs inside $(…), so errexit is off
+  [ "$ff_rc" -le 1 ] || return 1
   echo "$rc $first_fail"
 }
 if python3 -c 'import yaml' 2>/dev/null; then
@@ -1412,7 +1413,8 @@ dns() {
   local rc=0
   mkdir -p "$dns_dir/home"; : > "$dns_dir/home/.kind-runner"  # the script refuses to start outside run.sh's scratch HOME (#444)
   HOME="$dns_dir/home" KIND_RUNNER_HOME="$dns_dir/home" COREFILE="$dns_dir/Corefile" KLOG="$dns_dir/klog" PATH="$dns_dir/bin:$PATH" "$src/deployments/helm/kind/coredns-dex.sh" "$1" >/dev/null 2>&1 || rc=$?
-  n_patch=$(grep -c '^patch$' "$dns_dir/klog" || [ $? -eq 1 ])
+  np_rc=0; n_patch=$(grep -c '^patch$' "$dns_dir/klog") || np_rc=$?   # 1 = none (grep -c prints 0); dns() runs inside $(…), so errexit is off
+  [ "$np_rc" -le 1 ] || return 1
   echo "$rc $n_patch"
 }
 corefile_with() { # corefile_with <extra lines after ready...>
@@ -2561,8 +2563,120 @@ lib_fn || echo failed
 F
 sw_run "$sw/fn-otherfile.sh"; expect_eq "fnctx: the limit — a function defined in another file is not seen (documented)" "0" "$rc"
 
+# fnctx, the $(f) form (#466 r3 brief item 3): a function called INSIDE a command substitution runs in a subshell that does not inherit set -e
+fn_sub_red() { # <name> <call line>
+  sw_write "fns-$1" <<F
+f() {
+  local x
+  x=\$(cmd)
+  echo "\$x"
+}
+$2
+F
+  sw_run "$sw/fns-$1.sh"
+  expect_eq    "fnctx: f called as [$2] is red" "1" "$rc"
+  expect_match "fnctx: [$2] is reported as called inside a substitution" 'fnctx: x=\$\(cmd\) .*f\(\) runs with errexit off: called inside \$\(…\) at line [0-9]+' "$out"
+}
+fn_sub_red plain  'v=$(f)'
+fn_sub_red quoted 'v="$(f)"'
+fn_sub_red arg    'echo "got: $(f)"'
+fn_sub_red args   'v=$(f one two)'
+fn_sub_red tick   'v=`f`'
+sw_write fns-nested <<'F'
+g() {
+  y=$(cmd)
+}
+f() {
+  g
+  echo done
+}
+v=$(f)
+F
+sw_run "$sw/fns-nested.sh"; expect_eq "fnctx: g called by a function that is called inside \$(…) is red too" "1" "$rc"
+sw_write fns-ok <<'F'
+f() {
+  local x
+  x=$(cmd) || return 1
+  echo "$x"
+}
+v=$(f)
+w="$(f)"
+F
+sw_run "$sw/fns-ok.sh"; expect_eq "fnctx: the same with || return 1 is green" "0" "$rc"
+sw_write fns-pure <<'F'
+f() {
+  local x=$1
+  echo "pure $x"
+}
+v=$(f a)
+w="$(f b)"
+F
+sw_run "$sw/fns-pure.sh"; expect_eq "fnctx: a function that only uses builtins is green even when called inside \$(…)" "0" "$rc"
+sw_write fns-comment <<'F'
+f() {
+  x=$(cmd)
+}
+# v=$(f) in a comment is not a call
+f
+F
+sw_run "$sw/fns-comment.sh"; expect_eq "fnctx: a \$(f) in a comment is not a call → green" "0" "$rc"
+sw_write fns-heredoc <<'F'
+f() {
+  out=$(python3 - <<'PY'
+print(1)
+PY
+  ) || return 1
+  echo "$out"
+}
+v=$(f)
+F
+sw_run "$sw/fns-heredoc.sh"; expect_eq "fnctx: a heredoc substitution checked on the closing line is green" "0" "$rc"
 # workflow / composite-action run: scripts. wf_check <name> < yaml: writes $sw/<name>.yml and runs the checker on it.
 wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
+wf_check wf-fnsub <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          f() { x=$(cmd); echo "$x"; }
+          v=$(f)
+Y
+expect_match "workflow: f called as v=\$(f) in a run: is red (fnctx, called inside \$(…), on the YAML line)" 'wf-fnsub\.yml:6: fnctx:.*called inside' "$out"
+wf_check wf-fnsub-quoted <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          f() {
+            x=$(cmd)
+            echo "$x"
+          }
+          v="$(f)"
+Y
+expect_match "workflow: v=\"\$(f)\" in a run: is red (on the assignment line)" 'wf-fnsub-quoted\.yml:7: fnctx:' "$out"
+wf_check wf-fnsub-ok <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          f() { x=$(cmd) || return 1; echo "$x"; }
+          v=$(f)
+Y
+expect_eq "workflow: the checked version is green" "0" "$rc"
+wf_check wf-fnsub-pure <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          f() { echo "pure $1"; }
+          v=$(f a)
+Y
+expect_eq "workflow: a builtin-only function is green" "0" "$rc"
+
 wf_check wf-pipe <<'Y'
 name: t
 on: push

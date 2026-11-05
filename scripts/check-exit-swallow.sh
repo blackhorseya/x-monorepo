@@ -215,13 +215,17 @@ function callpos(t, name,   re, cmd) {   # name sits in command position and an 
   if (t ~ re) return 1
   return 0
 }
+function reason(f) {
+  return (kind[f] == "sub") ? sprintf("called inside $(…) at line %d: a command substitution does not inherit set -e", why[f]) : sprintf("called at line %d in a ||/&&/if/! position", why[f])
+}
 function anycall(t, name,   re) {
   re = "(^|[;&|{(!]|(then|do|else|elif|if|while|until)[ \t])[ \t]*(![ \t]*)?" name "([ \t;)|&]|$)"
   return t ~ re
 }
+BEGIN { BUILTINS = "echo printf read test [ [[ true false : cd pwd export local declare typeset readonly unset set shift return exit break continue eval source . trap wait kill type command let getopts umask alias unalias hash exec sleep if then else elif fi for while until do done case esac in select { } ( ) function" }
 {
   line = $0
-  if (term != "") { t = line; if (dash) sub(/^\t+/, "", t); if (t == term) term = ""; L[NR] = ""; T[NR] = ""; next }   # heredoc bodies are data
+  if (term != "") { t = line; if (dash) sub(/^\t+/, "", t); if (t == term) { term = ""; ENDHD[NR] = 1 }; L[NR] = ""; T[NR] = ""; next }   # heredoc bodies are data (ENDHD: the terminator line)
   L[NR] = line; T[NR] = strip(line)
   tmp = line; gsub(/<<</, "", tmp)
   if (line !~ /^[ \t]*#/ && match(tmp, /<<-?[ \t]*\\?["\047]?[A-Za-z_][A-Za-z_0-9]*/)) {
@@ -235,8 +239,8 @@ END {
       d = T[i]; sub(/^[ \t]*(function[ \t]+)?/, "", d); sub(/[ \t]*(\(\))?[ \t]*\{.*/, "", d)
       ind = L[i]; sub(/[^ \t].*/, "", ind)
       e = i
-      if (T[i] !~ /\}[ \t]*(;|$|[|&])/ || T[i] ~ /\{[ \t]*$/) { for (e = i + 1; e <= NR; e++) if (index(L[e], ind "}") == 1 && L[e] ~ /^[ \t]*\}/) break }
-      nf++; name[nf] = d; from[nf] = i; to[nf] = e; hot[nf] = 0; why[nf] = 0
+      if (T[i] !~ /\}[ \t]*(;|$|[|&])/ || T[i] ~ /\{[ \t]*$/) { for (e = i + 1; e <= NR; e++) if ((index(L[e], ind "}") == 1 && L[e] ~ /^[ \t]*\}/) || (T[i] !~ /\}/ && L[e] ~ /;[ \t]*\}[ \t]*(#.*)?$/)) break }
+      nf++; name[nf] = d; from[nf] = i; to[nf] = e; hot[nf] = 0; why[nf] = 0; kind[nf] = "cond"
     }
   }
   for (f = 1; f <= nf; f++)
@@ -244,13 +248,23 @@ END {
       if (i >= from[f] && i <= to[f]) continue
       if (callpos(T[i], name[f])) { hot[f] = 1; why[f] = i; break }
     }
+  # a function called INSIDE a command substitution ($(f), "$(f)", `f`) runs in a subshell that does not inherit set -e (bash without inherit_errexit)
+  for (f = 1; f <= nf; f++)
+    for (i = 1; i <= NR; i++) {
+      if (i >= from[f] && i <= to[f]) continue
+      r = L[i]; if (r ~ /^[ \t]*#/) continue; sub(/[ \t]#.*/, "", r)
+      if (r ~ ("(\\$\\(|`)[ \t]*(![ \t]*)?" name[f] "([ \t)`;|&\"]|$)")) {
+        hot[f] = 1; if (!why[f]) { why[f] = i; kind[f] = "sub" }
+        break
+      }
+    }
   do {
     ch = 0
     for (f = 1; f <= nf; f++) {
       if (!hot[f]) continue
       for (g = 1; g <= nf; g++) {
         if (hot[g] || g == f) continue
-        for (i = from[f] + 1; i <= to[f]; i++) if (anycall(T[i], name[g])) { hot[g] = 1; why[g] = why[f]; ch = 1; break }
+        for (i = from[f] + 1; i <= to[f]; i++) if (anycall(T[i], name[g])) { hot[g] = 1; why[g] = why[f]; kind[g] = kind[f]; ch = 1; break }
       }
     }
   } while (ch)
@@ -264,13 +278,17 @@ END {
       if (L[i] ~ /#[ \t]*exit-ok:[ \t]*[^ \t].../) continue
       code = L[i]; sub(/^[ \t]+/, "", code)
       ok = 0                                                                 # an explicit status check: `|| …` after the substitution's `)`, or `$?` read next
-      for (k = i; k <= i + 3 && k <= to[f] && !ok; k++) {
+      hb = i                                                                 # a heredoc inside the substitution: the `)` comes after its terminator
+      if (match(L[i], /<<-?[ \t]*\\?["\047]?[A-Za-z_][A-Za-z_0-9]*/)) {
+        for (k = i + 1; k <= to[f]; k++) if (ENDHD[k]) { hb = k; break }
+      }
+      for (k = i; k <= (hb > i ? hb + 2 : i + 3) && k <= to[f] && !ok; k++) {
         if (L[k] ~ /\)["\047]?[ \t]*\|\|/ || (k > i && L[k] ~ /^[ \t]*\|\|/)) ok = 1
         if (k > i && L[k] ~ /\$\?/) ok = 1
         if (k == i && L[k] ~ /\)[ \t]*;[ \t]*[A-Za-z_]*=\$\?/) ok = 1
       }
       if (ok) continue
-      printf "%s:%d: fnctx: %s   [%s() runs with errexit off: called at line %d in a ||/&&/if/! position]\n", FILENAME, i, code, name[f], why[f]
+      printf "%s:%d: fnctx: %s   [%s() runs with errexit off: %s]\n", FILENAME, i, code, name[f], reason(f)
       n++
     }
   }
