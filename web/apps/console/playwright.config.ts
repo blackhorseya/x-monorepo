@@ -1,5 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { derivePorts } from "./e2e/ports";
+import { imageSpecs } from "./e2e/image-specs";
 
 // Console smoke against the real server: a ./bin/rpc and the production build
 // served by vite preview, which proxies /api to it like the dev server does.
@@ -18,11 +19,13 @@ import { derivePorts } from "./e2e/ports";
 // Ports: everything below derives from E2E_RPC_PORT / E2E_WEB_PORT (e2e/ports.ts), and the fixtures follow
 // them (the oidc-backend rpc's issuer is generated, the specs read baseURL). Run with CI=1 when you change
 // them, or reuseExistingServer attaches to whatever already answers on a derived port. `task web-e2e-ports`.
-// E2E_CONSOLE_URL: run the "chromium" project against a console served from somewhere else —
+// E2E_CONSOLE_URL: run the "image" project against a console served from somewhere else —
 // e2e/image.sh builds web/apps/console/Dockerfile and points this at the container, so the
 // nginx config (SPA fallback, /api proxy, cache headers) is what gets tested, not vite preview.
+// "image" is the few specs that need the image (e2e/image-specs.ts: image.spec.ts plus a smoke of each route family);
+// (the project exists only when E2E_CONSOLE_URL is set); the rest stay on "chromium" / vite preview, and e2e/image-specs.check.ts fails on a spec nobody classified (#449).
 // The rpc is still started here; the container reaches it through the host. (image.sh runs
-// --project chromium only; the auth pair still starts but is unused in that mode.)
+// --project image only; the auth pair still starts but is unused in that mode.)
 const consoleURL = process.env.E2E_CONSOLE_URL;
 // Every port derives from E2E_RPC_PORT / E2E_WEB_PORT in one place (e2e/ports.ts), which the cleanup check
 // (e2e/assert-clean.ts) reads too.
@@ -107,9 +110,19 @@ export default defineConfig({
       testIgnore: /\/(auth(-role)?|oidc-backend|oidc-dex|payment)\//, // payment/ is its own config (playwright.payment.config.ts): it needs a stack this one does not start
       use: {
         ...devices["Desktop Chrome"],
-        baseURL: consoleURL ?? `http://localhost:${webPort}`,
+        baseURL: `http://localhost:${webPort}`,
       },
     },
+    // Only with E2E_CONSOLE_URL: a plain `playwright test` (task web-e2e) must not run these specs a second time on vite preview.
+    ...(consoleURL
+      ? [
+          {
+            name: "image",
+            testMatch: imageSpecs.map((f) => `**/e2e/${f}`),
+            use: { ...devices["Desktop Chrome"], baseURL: consoleURL },
+          },
+        ]
+      : []),
     {
       name: "auth",
       testMatch: /\/auth\/.*\.spec\.ts$/, // helpers.ts / jwt.ts beside them are not tests

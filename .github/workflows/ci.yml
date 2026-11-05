@@ -474,7 +474,7 @@ jobs:
             web/apps/console/playwright-report-payment
           retention-days: 7
 
-  # ── console-image: the same specs against the nginx image the release ships (in-memory rpc) ──
+  # ── console-image: the specs that need nginx (e2e/image-specs.ts) against the image the release ships (in-memory rpc) ──
   # vite preview also serves the SPA and proxies /api, but web/apps/console/Dockerfile's nginx
   # config is what runs in the cluster: deep links → index.html, immutable assets, /api proxy.
   console-image:
