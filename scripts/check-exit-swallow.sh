@@ -97,7 +97,7 @@ if [ "${#files[@]}" -eq 0 ]; then echo "check-exit-swallow: no shell to check in
 
 cat > "$tmp/scan.awk" <<'AWK'
 # Reads the files named on the command line. Prints "file:line: rule: code" per finding; exit 1 if there was one.
-function reset_file() { term = ""; dash = 0; hasflag = 0; sd = 0; dq = 0; sq = 0 }
+function reset_file() { term = ""; dash = 0; hasflag = 0; sd = 0; dq = 0; sq = 0; pend_var = "" }
 # split the line into CODE (no trailing comment) and CMT (the comment, if any), tracking quotes
 function split_comment(s,   i, c, q, n) {
   CODE = s; CMT = ""; q = ""; n = length(s)
@@ -167,9 +167,15 @@ function argsub(c,   i, j, d, ch, pre, inner, n) {
 #   - `x=$(cmd) || x=…` (same variable on both sides): the failure of cmd is replaced by a new value. Only `|| { …; return|exit …; }` refuses.
 # Not exemptible (no `# exit-ok:`): a default is the thing being forbidden. Limits: a `case` pattern `a)` inside a $( … ) pops a frame early;
 # `||` at the end of a line with the handler on the next one is not followed.
-function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; fdq[sd] = dq; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context; its own quotes do not leak out
+function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fpor[sd] = 0; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; fdq[sd] = dq; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context; its own quotes do not leak out
 function defscan(c,   i, n, ch, nx, rest, nm, pre, lastclause, cond, rem) {
   n = length(c)
+  if (c ~ /[^ \t]/) {                                       # the first non-blank line after a line that ended in `||`: the handler is on THIS line
+    if (pend_var != "" && c ~ ("^[ \t]*" pend_var "=")) report("default")
+    pend_var = ""
+    if (sd > 0 && fpor[sd] && c ~ /^[ \t]*(echo|printf)([ \t;)`"\047]|$)/ && !fpor_tern[sd]) report("default")
+    if (sd > 0) fpor[sd] = 0
+  }
   for (i = 1; i <= n; i++) {
     ch = substr(c, i, 1); nx = substr(c, i + 1, 1)
     if (sq) { if (ch == "\047") sq = 0; if (sd > 0) fb[sd] = fb[sd] ch; continue }
@@ -195,11 +201,16 @@ function defscan(c,   i, n, ch, nx, rest, nm, pre, lastclause, cond, rem) {
       if (t == "s" && nm != "") {                           # x=$(…) closed: is it followed by `|| x=…` on this line?
         rem = substr(c, i + 1); sub(/^"/, "", rem)
         if (rem ~ ("^[ \t]*\\|\\|[ \t]*" nm "=")) report("default")
+        else if (rem ~ /^[ \t]*\|\|[ \t]*$/) pend_var = nm          # `x=$(…) ||` and the new value on the next line
       }
       continue
     }
     if (!dq && ch == "|" && nx == "|" && sd > 0 && (ft[sd] == "s" || ft[sd] == "b")) {
       rest = substr(c, i + 2); sub(/^[ \t]+/, "", rest)
+      if (rest == "") {                                                # `||` at the end of the line: `echo …` on the next one is the default
+        lastclause = fb[sd]; sub(/.*(\|\||;)/, "", lastclause); cond = lastclause; sub(/&&[ \t]*(echo|printf)[^&|]*$/, "", cond)
+        fpor[sd] = 1; fpor_tern[sd] = (lastclause ~ /&&[ \t]*(echo|printf)/ && cond ~ /^[ \t]*(\[\[?|test|command[ \t]+-v|type)([ \t]|$)/)
+      }
       if (rest ~ /^(echo|printf)([ \t;)`"\047]|$)/) {
         lastclause = fb[sd]; sub(/.*(\|\||;)/, "", lastclause)       # the clause before this `||`: `[ test ] && echo yes`
         cond = lastclause; sub(/&&[ \t]*(echo|printf)[^&|]*$/, "", cond)

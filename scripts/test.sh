@@ -2896,7 +2896,56 @@ F
 df_red in-argument <<'F'
 [ "$(cat f 2>/dev/null || echo 0)" = 1 ] && echo one
 F
+df_red sub-eol-echo <<'F'
+v=$(cmd ||
+  echo 0)
+F
+df_red sub-eol-printf <<'F'
+v=$(cmd ||
+  printf '%s' def)
+F
+df_red var-eol <<'F'
+x=$(cmd) ||
+  x=-
+F
+df_red var-eol-quoted <<'F'
+x="$(cmd)" ||
+  x=""
+F
+df_red backtick <<'F'
+v=`cmd || echo 0`
+F
+df_red backslash-continued <<'F'
+v=$(cmd \
+  || echo 0)
+F
+df_red echo-quoted-zero <<'F'
+v=$(cmd || echo '0')
+F
+df_red refused-outside-but-default-inside <<'F'
+f() { v=$(cmd || echo 0) || return; }
+F
 # the same shapes, refused or read through a status: green
+df_green eol-return <<'F'
+f() {
+  x=$(cmd) ||
+    return 1
+}
+F
+df_green eol-brace-exit <<'F'
+x=$(cmd) ||
+  { echo "cmd failed" >&2; exit 1; }
+F
+df_green eol-other-variable <<'F'
+rc=0
+x=$(cmd) ||
+  rc=$?
+[ "$rc" = 0 ] || exit 1
+F
+df_green eol-label-of-a-test <<'F'
+v=$([ -f f ] && echo yes ||
+  echo no)
+F
 df_green brace-exit <<'F'
 n=$(cat f) || { echo "cannot read f" >&2; exit 1; }
 F
