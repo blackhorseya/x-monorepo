@@ -1912,6 +1912,12 @@ waitalone @@ swallow @@ wait "$p" || true
 argeq @@ argsub @@ expect_eq x 1 "$(cat f | grep -c y)"
 argtest @@ argsub @@ [ "$(grep -c y f)" -ge 2 ] || exit 1
 argcount @@ argsub @@ expect_eq x 1 "$(cat f | count_lines y)"
+localcount @@ declsub @@ f() { local n="$(grep -c y f)"; echo "$n"; }
+localplain @@ declsub @@ local out=$(curl -fsS "$u")
+declarer @@ declsub @@ declare -r n=$(cmd)
+exportsub @@ declsub @@ export X="$(cmd)"
+readonlysub @@ declsub @@ readonly n=$(cmd)
+localmulti @@ declsub @@ local a=1 b="$(cmd)"
 ROWS
 # sw_write <name>: $sw/<name>.sh from stdin, after a header that sets (or not) pipefail
 sw_write() { { printf '#!/usr/bin/env bash\n%s\n' "${2:-set -euo pipefail}"; cat; } > "$sw/$1.sh"; }
@@ -1961,6 +1967,8 @@ for a in 'NS=a$(id)' 'x'; do :; done
 n=$(grep -c y f || [ $? -eq 1 ])
 n=$(cat f | count_lines y)
 expect_eq x 1 "$n" "$(date)"
+f() { local n; n=$(grep -c y f || [ $? -eq 1 ]); local m=$((n + 1)); local k=1; echo "$n $m $k"; }
+n=$(cmd) && echo "$n"
 F
 sw_run "$sw/canonical.sh"
 expect_eq    "swallow: the documented replacements are clean" "0" "$rc"

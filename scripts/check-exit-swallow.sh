@@ -8,6 +8,7 @@
 # It flags, per line (comment lines and heredoc bodies are skipped):
 #   swallow   `cmd || true`, `cmd || :`, `cmd || exit 0`, `cmd || return 0` — also inside $(...), a trap string or sh -c '...'
 #   setargs   `set -- $(cmd)`: same, the status of cmd is dropped
+#   declsub   `local n="$(cmd)"`, `export X=$(cmd)`, `declare`/`readonly`: the declaration's own status hides cmd's; split into `local n; n=$(cmd)`
 #   argsub    `expect_eq x "$(… | grep -c y)"`, `[ "$(grep -c y f)" -ge 2 ]`: a match count inside an argument; assign it first
 #   forlist   `for x in $(cmd)` / `for x in `cmd``: the status of cmd is dropped (a short or failed `seq` is a shorter loop)
 #   pipeline  `a | b` in a file that never says `set -o pipefail` (or set -euo pipefail ...): only b's status counts
@@ -67,6 +68,20 @@ function verb_before(p,   s, w) {
   return w
 }
 function report(rule) { printf "%s:%d: %s: %s\n", FILENAME, FNR, rule, line; n++ }
+# 1 when CODE declares with a substitution: `local n="$(cmd)"`, `declare -r n=$(cmd)`, `export X=$(cmd)`, `readonly n=$(cmd)`. The
+# declaration builtin is the command, and its own success hides the status of cmd (reviewer of #464: grep prints 1, exits 2, the
+# function carries on with n=1). Split it: `local n; n=$(cmd)`.
+function declsub(c,   i, n, pre, p2) {
+  n = length(c)
+  for (i = 1; i < n; i++) {
+    if (substr(c, i, 2) != "$(" || substr(c, i, 3) == "$((") continue
+    pre = substr(c, 1, i - 1)
+    if (pre !~ /=("|\047)?$/) continue
+    p2 = pre; sub(/[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?$/, "", p2)
+    if (p2 ~ /(^|[;&|{(]|[ \t])(local|declare|typeset|export|readonly)([ \t]+-[A-Za-z]+)*[ \t]+([A-Za-z_][A-Za-z_0-9]*=[^ \t]*[ \t]+)*$/) return 1
+  }
+  return 0
+}
 # 1 when CODE has a $(…) that is an ARGUMENT (not the right-hand side of an assignment) and counts matches inside it:
 # `expect_eq x "$(… | grep -c y)"`, `[ "$(grep -c y f)" -ge 2 ]`. The status of a substitution used as an argument never reaches
 # set -e, so a grep that dies is just a number (#456 r0).
@@ -114,6 +129,8 @@ FNR == 1 { reset_file() }
     sub(/;[ \t]*do([ \t]|$).*/, "", fl); gsub(/\047[^\047]*\047/, "", fl)
     if (fl ~ /(\$\(|`)/ && !exempt) report("forlist")
   }
+  # declsub
+  if (declsub(CODE) && !exempt) report("declsub")
   # argsub
   if (argsub(CODE) && !exempt) report("argsub")
   # setargs
