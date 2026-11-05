@@ -5,12 +5,24 @@
 # on the cache: it reads the chmod line out of Taskfile.yml (no second copy of the list to drift), expands its globs the way
 # the shell would, and compares each file's index mode. It never touches the working tree.
 #
-#   scripts/check-script-modes.sh      # task check-script-modes; CI's scripts-test job (scripts/test.sh) and gen-freshness
+# Every external command's exit status is checked on its own: `x=$(cmd || true)` or a pipe inside $(…) would turn a tool that
+# printed something and then died into a green gate. Only grep's exit 1 ("no match") is an answer; anything else aborts with 2
+# (or grep/git's own code is passed on when it is not 0/1).
+#
+#   scripts/check-script-modes.sh      # task check-script-modes; helm-check, and CI's scripts-test job (scripts/test.sh)
 set -euo pipefail
-cd "$(dirname "$0")/.."
+die() { echo "check-script-modes: $*" >&2; exit 2; }
 
-line=$(grep -E '^[[:space:]]+- chmod \+x ' Taskfile.yml || true)
-[ "$(printf '%s\n' "$line" | grep -c .)" = 1 ] || { echo "check-script-modes: want exactly one '- chmod +x' line in Taskfile.yml (task tools), found: [$line]" >&2; exit 2; }
+here=$(dirname "$0") || die "dirname failed"
+cd "$here/.." || die "cannot cd to the repo root from [$here]"
+
+rc=0; line=$(grep -E '^[[:space:]]+- chmod \+x ' Taskfile.yml) || rc=$?
+case $rc in
+  0) ;;
+  1) die "want exactly one '- chmod +x' line in Taskfile.yml (task tools), found none" ;;
+  *) die "grep failed (exit $rc) reading Taskfile.yml" ;;
+esac
+case $line in *$'\n'*) die "want exactly one '- chmod +x' line in Taskfile.yml (task tools), found several: [$line]" ;; esac
 
 # shellcheck disable=SC2086 # word splitting + globbing of the pattern list is the point
 set -- ${line#*chmod +x }
@@ -18,11 +30,13 @@ bad=0 n=0
 for f in "$@"; do
   if [ ! -e "$f" ]; then echo "check-script-modes: '$f' (from the chmod line) matches no file" >&2; bad=1; continue; fi
   n=$((n + 1))
-  mode=$(git ls-files -s -- "$f" | cut -d' ' -f1)
+  rc=0; entry=$(git ls-files -s -- "$f") || rc=$?
+  [ "$rc" = 0 ] || die "git ls-files failed (exit $rc) for '$f'"
+  mode=${entry%% *}
   [ "$mode" = 100755 ] && continue
   echo "check-script-modes: $f is [${mode:-untracked}] in the git index but 'task tools' makes it 755 — run: git update-index --chmod=+x $f" >&2
   bad=1
 done
-[ "$n" -ge 20 ] || { echo "check-script-modes: only $n files checked — the chmod line or its globs no longer match what they used to" >&2; exit 2; }
+[ "$n" -ge 20 ] || die "only $n files checked — the chmod line or its globs no longer match what they used to"
 [ "$bad" = 0 ] || exit 1
 echo "check-script-modes: $n files, all 100755 in the index"
