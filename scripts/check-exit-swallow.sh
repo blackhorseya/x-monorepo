@@ -68,19 +68,21 @@ function verb_before(p,   s, w) {
   return w
 }
 function report(rule) { printf "%s:%d: %s: %s\n", FILENAME, FNR, rule, line; n++ }
-# 1 when CODE declares with a substitution: `local n="$(cmd)"`, `declare -r n=$(cmd)`, `export X=$(cmd)`, `readonly n=$(cmd)`. The
-# declaration builtin is the command, and its own success hides the status of cmd (reviewer of #464: grep prints 1, exits 2, the
-# function carries on with n=1). Split it: `local n; n=$(cmd)`.
-function declsub(c,   i, n, pre, p2) {
-  n = length(c)
-  for (i = 1; i < n; i++) {
-    if (substr(c, i, 2) != "$(" || substr(c, i, 3) == "$((") continue
-    pre = substr(c, 1, i - 1)
-    if (pre !~ /=("|\047)?$/) continue
-    p2 = pre; sub(/[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?$/, "", p2)
-    if (p2 ~ /(^|[;&|{(]|[ \t])(local|declare|typeset|export|readonly)([ \t]+-[A-Za-z]+)*[ \t]+([A-Za-z_][A-Za-z_0-9]*=("[^"]*"|\047[^\047]*\047|[^ \t]*)[ \t]+)*$/) return 1
-  }
-  return 0
+# 1 when a declaration builtin (local / declare / typeset / export / readonly) is followed, before any `;` `&&` `||` on the line, by a
+# command substitution $(…) ($((…)) is arithmetic and does not count): `local n="$(cmd)"`, `declare -r n=$(cmd)`, `export X=$(cmd)`.
+# The declaration is the command, and its own success hides the status of cmd (reviewer of #464: grep prints 1, exits 2, the
+# function carries on with n=1). Deliberately NOT a parser of the assignments before it — regexes over shell quoting were
+# beaten twice — it blocks anything that puts a $( after the builtin; `local n; n=$(cmd)` is fine because the `;` comes first.
+# The cases a line scanner cannot see (a continuation line, a `;` inside a quoted value) are caught by the shellcheck SC2155 pass.
+function declsub(c,   m, rest, p, q, t) {
+  if (!match(c, /(^|[;&|{(]|[ \t])(local|declare|typeset|export|readonly)([ \t]|$)/)) return 0
+  rest = substr(c, RSTART + RLENGTH)
+  t = rest; gsub(/\$\(\(/, "XX", t)
+  p = index(t, "$(")
+  if (p == 0) return 0
+  q = 0
+  if (match(t, /(;|&&|\|\|)/)) q = RSTART
+  return (q == 0 || p < q)
 }
 # 1 when CODE has a $(…) that is an ARGUMENT (not the right-hand side of an assignment) and counts matches inside it:
 # `expect_eq x "$(… | grep -c y)"`, `[ "$(grep -c y f)" -ge 2 ]`. The status of a substitution used as an argument never reaches
@@ -143,10 +145,27 @@ END { exit (n > 0) }
 AWK
 
 rc=0; awk -f "$tmp/scan.awk" "${files[@]}" > "$tmp/out" || rc=$?
-case $rc in
-  0) echo "check-exit-swallow: ${#files[@]} scripts, no swallowed exit status" ;;
-  1) cat "$tmp/out" >&2
-     echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md)." >&2
-     exit 1 ;;
-  *) die "awk failed (exit $rc)" ;;
-esac
+case $rc in 0 | 1) ;; *) die "awk failed (exit $rc)" ;; esac
+
+# Second layer, a real shell parser: shellcheck SC2155 ("declare and assign separately to avoid masking return values") sees what a line
+# scanner cannot — continuation lines, `a="x"'y z' b=$(cmd)`, `$'..'` values. A file shellcheck cannot parse would be skipped
+# silently by `-i SC2155`, so every file must also pass `bash -n`. shellcheck missing is an error, never a skipped check.
+command -v shellcheck >/dev/null || die "shellcheck is not installed: the SC2155 (declsub) layer cannot run"
+for f in "${files[@]}"; do bash -n "$f" 2> "$tmp/syntax" || die "$f does not parse (bash -n): $(head -1 "$tmp/syntax")"; done
+rc=0; shellcheck -s bash -f gcc -i SC2155 -- "${files[@]}" > "$tmp/sc.out" 2> "$tmp/sc.err" || rc=$?
+case $rc in 0 | 1) ;; *) die "shellcheck failed (exit $rc): $(head -2 "$tmp/sc.err")" ;; esac
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  sf=${row%%:*}; rest=${row#*:}; sl=${rest%%:*}
+  src=$(sed -n "${sl}p" "$sf") || die "cannot read line $sl of $sf"
+  if printf '%s\n' "$src" | grep -Eq '#[[:space:]]*exit-ok:[[:space:]]*[^[:space:]].{2,}'; then continue; fi
+  printf '%s:%s: declsub: %s   [shellcheck SC2155]\n' "$sf" "$sl" "$(printf '%s' "$src" | sed 's/^[[:space:]]*//')" >> "$tmp/out"
+  rc=1
+done < "$tmp/sc.out"
+
+if [ -s "$tmp/out" ]; then
+  cat "$tmp/out" >&2
+  echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md)." >&2
+  exit 1
+fi
+echo "check-exit-swallow: ${#files[@]} scripts, no swallowed exit status"

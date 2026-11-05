@@ -115,7 +115,8 @@ hook="http://127.0.0.1:8080/api/payment/webhook" # the webhook route, from insid
 refs() { db "SELECT provider_ref FROM payment.payments WHERE order_id = '$1'"; }
 refunds() { db "SELECT count(*) FROM payment.mock_refunds WHERE ref = '$(refs "$1")'"; }
 job() { # <cronjob> -> one run to completion
-  local j="flow-$1-$(date +%s)-$RANDOM" ok bad
+  local j ok bad
+  j="flow-$1-$(date +%s)-$RANDOM"
   kubectl -n "$ns" create job "$j" --from="cronjob/$release-$1" >/dev/null
   for ((_try120 = 1; _try120 <= 90; _try120++)); do
     ok=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the loop ends in fail() after 90 tries
@@ -129,7 +130,8 @@ job() { # <cronjob> -> one run to completion
 payment_sweep() { job payment-expire; }
 
 place() { # -> the id of an order that is CONFIRMED (stock seeded by the admin, ordered by the shopper)
-  local sku="flow-$(date +%s)-$RANDOM" r
+  local sku r
+  sku="flow-$(date +%s)-$RANDOM"
   as_admin catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}"; want "UpsertProduct" "${res%% *}" 200
   as_admin inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}"; want "SetStock" "${res%% *}" 200
   as_shopper ordering.v1.OrderService/CreateOrder "{\"customer_id\":\"shopper\",\"items\":[{\"sku\":\"$sku\",\"quantity\":1}]}"; want "CreateOrder" "${res%% *}" 200

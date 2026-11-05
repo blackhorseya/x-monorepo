@@ -1921,6 +1921,10 @@ localmulti @@ declsub @@ local a=1 b="$(cmd)"
 localspace @@ declsub @@ local a="hello world" b="$(grep -c y f)"
 localsq @@ declsub @@ local a='hello world' b="$(cmd)"
 exportspace @@ declsub @@ export A="x y" B=$(cmd)
+mixedquote @@ declsub @@ local a="x"'y z' b=$(cmd)
+ansic @@ declsub @@ local a=$'q r' b=$(cmd)
+innersub @@ declsub @@ local a="$(inner)" b=$(cmd)
+typesetsub @@ declsub @@ typeset M=$(cmd)
 ROWS
 # sw_write <name>: $sw/<name>.sh from stdin, after a header that sets (or not) pipefail
 sw_write() { { printf '#!/usr/bin/env bash\n%s\n' "${2:-set -euo pipefail}"; cat; } > "$sw/$1.sh"; }
@@ -1996,6 +2000,38 @@ x=$(grep a f || true)
 F
 sw_run "$sw/after-heredoc.sh"
 expect_eq    "swallow: a line after a heredoc is scanned again" "1" "$rc"
+# declsub, the parts a line scanner cannot see: a continuation line is found by the shellcheck SC2155 layer
+sw_write declcont <<'F'
+f() {
+  local h=1 \
+    i=$(cmd)
+  echo "$h $i"
+}
+F
+sw_run "$sw/declcont.sh"
+expect_eq    "swallow: a declaration split over two lines is red (shellcheck SC2155)" "1" "$rc"
+expect_match "swallow: ... and says declsub" ': declsub:' "$out"
+sw_write declcont-ok <<'F'
+f() {
+  local h=1 \
+    i=$(cmd) # exit-ok: i is only logged below
+  echo "$h $i"
+}
+F
+sw_run "$sw/declcont-ok.sh"
+expect_eq    "swallow: ... and an exit-ok on the line makes it green" "0" "$rc"
+# a file shellcheck/bash cannot parse is an error, never a clean pass (-i SC2155 would hide the parse error)
+sw_write unparsable <<'F'
+if then fi (
+F
+sw_run "$sw/unparsable.sh"
+expect_eq    "swallow: a script that does not parse is exit 2, not clean" "2" "$rc"
+# shellcheck dying (after printing, or not printing) is exit 2 too
+sw_file clean 'echo ok'
+for keep in all 0; do
+  rc=0; out=$(PATH="$(inject_fail "$tmp/inj-sw-sc-$keep" shellcheck 42 "$keep"):$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/clean.sh" 2>&1) || rc=$?
+  expect_eq  "swallow: shellcheck prints [$keep] then exits 42 — exit 2, not clean" "2" "$rc"
+done
 # the checker's own commands dying: red / exit 2, never a clean report
 sw_file clean 'echo ok'
 rc=0; out=$(PATH="$(inject_fail "$tmp/inj-sw-awk" awk 42):$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/clean.sh" 2>&1) || rc=$?

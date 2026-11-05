@@ -43,7 +43,7 @@ gate 若把外部指令的非零退出碼丟掉，指令壞了它也是綠的。
 | 規則 | 寫法 | 為什麼不行 | 改成 |
 |---|---|---|---|
 | `swallow` | `cmd \|\| true`、`\|\| :`、`\|\| exit 0`、`\|\| return 0`，含 `$(… \|\| true)`、trap 字串、`sh -c '…'` | 任何非零碼（壞掉、被注入、找不到）都變成成功；`pipefail` 對 `\|\| true` 沒有作用 | `n=$(grep -c x f \|\| [ $? -eq 1 ])`（grep 只有 1 代表沒有匹配，2 以上照樣讓 `set -e` 中止）；或 `rc=0; cmd \|\| rc=$?` 後用 `case $rc` 逐碼處理 |
-| `declsub` | `local n="$(cmd)"`、`declare -r n=$(cmd)`、`export X=$(cmd)`、`readonly n=$(cmd)`（#464 審查） | 宣告內建才是命令，它自己的成功狀態遮住 cmd 的失敗：`grep -c` 印出 1、退出 2，函式照樣帶著 n=1 往下走 | 拆開：`local n; n=$(cmd)` |
+| `declsub` | `local n="$(cmd)"`、`declare -r n=$(cmd)`、`export X=$(cmd)`、`readonly n=$(cmd)`（#464 審查） | 宣告內建才是命令，它自己的成功狀態遮住 cmd 的失敗：`grep -c` 印出 1、退出 2，函式照樣帶著 n=1 往下走（shellcheck SC2155） | 拆開：`local n; n=$(cmd)`。兩層：行掃描器（宣告內建之後、第一個 `;` `&&` `\|\|` 之前出現 `$(` 就擋，不去解析前面的賦值）＋ `shellcheck -i SC2155`（真的 parser，抓得到續行、`a="x"'y z'`、`$'…'`）；兩者都要裝得起來——shellcheck 缺少或掃不動是 exit 2，不是略過 |
 | `argsub` | `expect_eq x "$(… \| grep -c y)"`、`[ "$(grep -c y f)" -ge 2 ]`（引數位置的比對計數，#456 r0） | 替換放在引數裡，退出碼到不了 `set -e`；grep 先印出數字再死掉，就只是一個數字；函式裡的 `exit`／`set -e` 在 `$(…)` 子 shell 裡也一樣傳不出來 | 先賦值（`n=$(… \| count_lines y)` 或 `n=$(grep -c y f \|\| [ $? -eq 1 ])`），再用 `"$n"` |
 | `forlist` | `for x in $(cmd)`、`` for x in `cmd` `` | 清單是 `$(…)` 時 cmd 的退出碼被丟掉：`seq` 印出 `1` 後壞掉就只是一個更短的迴圈 | `for ((i = 1; i <= N; i++)); do`（不要用 `_` 當計數器：每個指令都會改寫 `$_`）；清單真的要來自指令時，先 `rc=0; list=$(cmd) \|\| rc=$?` 再檢查 |
 | `setargs` | `set -- $(cmd)` | 同上 | `out=$(cmd)`（賦值的退出碼會傳出去）後 `set -- $out` |
