@@ -2307,5 +2307,51 @@ expect_eq "shards-check: no shard count is a usage error" "2" "$rc"
 rc=0; out=$(FAULT= shards_check 0) || rc=$?
 expect_eq "shards-check: zero shards is a usage error" "2" "$rc"
 
+# ── 還原失敗屬於判定失敗 (#462 r2): the EXIT-trap restore of the kind scripts, without a cluster ───────────────────────────
+# restore() / on_exit() are cut out of the REAL scripts (a copy would test itself), kubectl / helm are stubs that exit with
+# $STUB_SCALE / $STUB_HELM / $STUB_DELETE, and the main flow is `exit $MAIN`. Each shape: the main flow ok → a failed restore
+# must make the script non-zero; the main flow already failed → its status is kept; nothing failed → 0.
+fn_of() { awk -v n="$2" '$0 ~ "^"n"\\(\\) *\\{" {p=1} p {print} p && /^\}/ {exit} p && $0 ~ "^"n"\\(\\) *\\{.*\\}( *#.*)?$" {exit}' "$1"; }
+restore_case() { # <script> <MAIN> <SCALE> <HELM> <DELETE> [pf-var]
+  local f="$src/deployments/helm/kind/$1.sh" driver="$tmp/restore-$1.sh"
+  {
+    echo ". '$src/scripts/best-effort.sh'"
+    echo 'kubectl() { case "$*" in *"delete secret"*) return "${STUB_DELETE:-0}";; *) return "${STUB_SCALE:-0}";; esac; }'
+    echo 'helm() { return "${STUB_HELM:-0}"; }; slow() { "$@"; }'
+    echo 'ns=n release=r chart=c values=v cat_dep=d pfs="" pf="" finished=1 flow_start=0 here=/nonexistent cur=""'
+    echo 'pf_stop() { :; }; fail() { echo "fail: $*" >&2; exit 1; }'
+    fn_of "$f" restore; fn_of "$f" on_exit
+    echo 'trap on_exit EXIT'
+    echo 'exit "${MAIN:-0}"'
+  } >"$driver"
+  rc=0; out=$(MAIN=$2 STUB_SCALE=$3 STUB_HELM=$4 STUB_DELETE=$5 bash "$driver" 2>&1) || rc=$?
+}
+for sh_ in payment-flow payment outage negative; do
+  restore_case "$sh_" 0 0 0 0;  expect_eq "$sh_: nothing fails → exit 0" "0" "$rc"
+  case "$sh_" in
+    negative)
+      restore_case "$sh_" 0 0 42 0; expect_eq "$sh_: main ok, the restore helm upgrade exits 42 → exit 42" "42" "$rc"
+      expect_match "$sh_: the failed restore is named" 'restore failed \(exit 42\): helm upgrade' "$out"
+      restore_case "$sh_" 0 0 0 42; expect_eq "$sh_: main ok, deleting the secrets exits 42 → exit 42" "42" "$rc"
+      expect_match "$sh_: the failed secret delete is named" 'restore failed \(exit 42\): kubectl .*delete secret' "$out"
+      ;;
+    payment)
+      restore_case "$sh_" 0 42 0 0; expect_eq "$sh_: main ok, scale back to 1 exits 42 → exit 42" "42" "$rc"
+      expect_match "$sh_: the failed scale is named" 'restore failed \(exit 42\): kubectl .*scale' "$out"
+      ;;
+    *)
+      restore_case "$sh_" 0 42 0 0; expect_eq "$sh_: main ok, scale back to 1 exits 42 → exit 42" "42" "$rc"
+      expect_match "$sh_: the failed scale is named" 'restore failed \(exit 42\): kubectl .*scale' "$out"
+      restore_case "$sh_" 0 0 42 0; expect_eq "$sh_: main ok, the restore helm upgrade exits 42 → exit 42" "42" "$rc"
+      expect_match "$sh_: the failed helm upgrade is named" 'restore failed \(exit 42\): helm upgrade' "$out"
+      ;;
+  esac
+  restore_case "$sh_" 7 42 42 42; expect_eq "$sh_: main already failed (7), the restore fails too → keeps 7" "7" "$rc"
+  expect_match "$sh_: …and says the restore failed too" 'restore also failed \(exit 42\); keeping exit 7' "$out"
+  restore_case "$sh_" 7 0 0 0;   expect_eq "$sh_: main failed (7), restore ok → 7" "7" "$rc"
+done
+rc=0; out=$(grep -c 'restore_step\|restore_exit' "$src"/deployments/helm/kind/{payment-flow,payment,outage,negative}.sh | grep -c ':0$') || rc=$?
+expect_eq "restore_step / restore_exit are used by payment-flow, payment, outage and negative" "0" "$out"
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

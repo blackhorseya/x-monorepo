@@ -24,7 +24,7 @@
 # background and waited for, because bash runs a trap only after a FOREGROUND child returns; the handler stops the child,
 # the exit status is 128 + the signal, and the exit trap diagnoses, then restores (#420).
 set -euo pipefail
-. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
@@ -41,8 +41,8 @@ slow() { "$@" & cur=$!; local rc=0; wait "$cur" || rc=$?; cur=""; return "$rc"; 
 fail() { echo "payment-flow: $*" >&2; best_effort kubectl -n "$ns" get pods,jobs >&2; exit 1; }   # diagnostic: fail() exits 1 whatever kubectl returns
 restore() {
   for p in $pfs; do kill "$p" 2>/dev/null || true; done
-  best_effort kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null   # cleanup after the verdict (on_exit keeps $rc)
-  best_effort helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null   # cleanup after the verdict (on_exit keeps $rc)
+  restore_step kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null   # restore: a failure fails the run (restore_exit), not best effort (#462)
+  restore_step helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
 }
 on_signal() { # <exit status>: stop the waited-for child, then leave through the exit trap (diagnose, restore)
   trap '' TERM INT HUP   # a second signal must not cut the diagnosis or the restore short
@@ -62,7 +62,7 @@ on_exit() { # the script leaves with the status it had on the way in
   trap '' TERM INT HUP
   [ -n "$finished" ] || best_effort "$here/diag.sh" "$ns" "$flow_start" >&2   # diagnostic: on_exit leaves with the status it had
   restore
-  exit "$rc"
+  restore_exit "$rc"   # the status it had on the way in; non-zero when only the restore failed
 }
 trap on_exit EXIT
 

@@ -14,3 +14,28 @@ best_effort() {
   if [ "$rc" != 0 ]; then echo "best-effort command failed (exit $rc): $*" >&2; fi
   return 0
 }
+
+# ── 還原 (restore) is NOT best effort (#462 r2) ───────────────────────────────────────────────────────────────────────
+# A script that promises "the release is back the way it was when I leave" is judged by that promise: a restore that fails
+# fails the gate. Use these two in the EXIT trap instead of best_effort:
+#   restore() { restore_step kubectl scale … ; restore_step helm upgrade … ; }   # every step runs, each failure is printed
+#   on_exit() { local rc=$?; …diagnose…; restore; restore_exit "$rc"; }; trap on_exit EXIT
+# restore_exit leaves with the status the script had on the way in; when that was 0 and a restore failed it leaves with the
+# first restore failure's status; when both failed it keeps the original status and says the restore failed too.
+RESTORE_RC=0
+restore_step() { # <command…>: run one restore command, print its failure, remember the first failing status, carry on
+  local rc=0
+  "$@" || rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "restore failed (exit $rc): $*" >&2
+    if [ "$RESTORE_RC" = 0 ]; then RESTORE_RC=$rc; fi
+  fi
+  return 0
+}
+restore_exit() { # <status on the way in>
+  local rc=$1
+  if [ "$RESTORE_RC" != 0 ]; then
+    if [ "$rc" = 0 ]; then rc=$RESTORE_RC; else echo "restore also failed (exit $RESTORE_RC); keeping exit $rc" >&2; fi
+  fi
+  exit "$rc"
+}

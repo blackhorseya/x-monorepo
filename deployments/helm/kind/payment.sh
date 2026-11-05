@@ -7,7 +7,7 @@
 # 3. payment-rpc stopped: an order still reaches CONFIRMED (nothing in the order flow waits for payment).
 # Needs kubectl + helm + curl + jq. Exits non-zero (with the pods' state) when anything is off. Restores the release.
 set -euo pipefail
-. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2
@@ -140,8 +140,9 @@ rm -f "$big"
 echo "payment: a 2 MiB webhook body is refused at the ingress (413)"
 
 # ── 3. payment-rpc stopped: ordering is unaffected ─────────────────────────────────────────────────
-restore() { best_effort kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null; }   # cleanup after the verdict
-trap 'restore; test -z "$pf" || kill $pf 2>/dev/null || true' EXIT
+restore() { restore_step kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null; }   # restore: a failure fails the run (restore_exit), not best effort (#462)
+on_exit() { local rc=$?; restore; test -z "$pf" || kill $pf 2>/dev/null || true; restore_exit "$rc"; }
+trap on_exit EXIT
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=0 >/dev/null
 best_effort kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null   # wait-gone: "no pods left" is the state wanted; the steps after it assert
 [ "$(hit POST /api/payment/webhook -d '{}')" != 400 ] || fail "control: the webhook still reaches payment-rpc with it stopped"
@@ -164,5 +165,6 @@ done
 echo "payment: with payment-rpc stopped, order $order still reaches CONFIRMED"
 
 restore
+[ "$RESTORE_RC" = 0 ] || fail "the restore (scale back to 1) failed"
 kubectl -n "$ns" rollout status "deploy/$release-payment-serve" "deploy/$release-payment-consume" --timeout=2m >/dev/null || fail "payment-rpc did not come back"
 echo "payment ok"

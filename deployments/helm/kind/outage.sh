@@ -10,7 +10,7 @@
 # The release is restored (helm upgrade --wait) on the way out, whatever happens.
 #   outage.sh <namespace> <release> <chart-dir> <values-file>
 set -euo pipefail
-. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2 chart=$3 values=$4
@@ -30,10 +30,11 @@ pf_start() {
 pf_stop() { [ -n "$pf" ] && kill "$pf" 2>/dev/null && wait "$pf" 2>/dev/null || true; pf=""; }
 restore() {
   pf_stop
-  best_effort kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=1 >/dev/null   # cleanup: the helm upgrade --wait on the next line is what fails the script when the release is not back
-  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
+  restore_step kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=1 >/dev/null   # restore: a failure fails the run (restore_exit), not best effort (#462)
+  restore_step helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
 }
-trap restore EXIT
+on_exit() { local rc=$?; restore; restore_exit "$rc"; }   # leaves with the status it had; a failed restore alone makes it non-zero
+trap on_exit EXIT
 
 # call <path> <json> → "<http status> <x-error-code or ->" and the body in $body
 call() {
