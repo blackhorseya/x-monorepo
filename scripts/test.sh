@@ -2580,6 +2580,62 @@ F
 fn_sub_red plain  'v=$(f)'
 fn_sub_red quoted 'v="$(f)"'
 fn_sub_red arg    'echo "got: $(f)"'
+sw_write fns-multiline <<'F'
+f() {
+  local x
+  x=$(cmd)
+  echo "$x"
+}
+v=$(
+  f
+)
+F
+sw_run "$sw/fns-multiline.sh"
+expect_eq    "fnctx: v=\$( with the call on the next line is red" "1" "$rc"
+expect_match "fnctx: …reported as called inside a substitution" 'fns-multiline\.sh:5: fnctx:.*called inside' "$out"
+sw_write fns-wrapper <<'F'
+f() { local x; x=$(cmd); echo "$x"; }
+g() { f; }
+v=$(g)
+F
+sw_run "$sw/fns-wrapper.sh"
+expect_eq    "fnctx: a ONE-LINE wrapper g() { f; } called inside \$(…) makes f hot → red" "1" "$rc"
+sw_write fns-wrapper-cond <<'F'
+f() { local x; x=$(cmd); echo "$x"; }
+g() { f; }
+if g; then :; fi
+F
+sw_run "$sw/fns-wrapper-cond.sh"; expect_eq "fnctx: a one-line wrapper called in an if is red too" "1" "$rc"
+sw_write fns-wrapper-ml <<'F'
+f() { local x; x=$(cmd); echo "$x"; }
+g() {
+  f
+}
+v=$(g)
+F
+sw_run "$sw/fns-wrapper-ml.sh"; expect_eq "fnctx: the multi-line wrapper is red (control)" "1" "$rc"
+sw_write fns-cd <<'F'
+f() { local x; x=$(cmd); echo "$x"; }
+v=$(cd /tmp && f)
+F
+sw_run "$sw/fns-cd.sh"; expect_eq "fnctx: v=\$(cd d && f) is red" "1" "$rc"
+sw_write fns-wrapper-ok <<'F'
+f() { local x; x=$(cmd) || return 1; echo "$x"; }
+g() { f; }
+v=$(g)
+F
+sw_run "$sw/fns-wrapper-ok.sh"; expect_eq "fnctx: the checked version behind a wrapper is green" "0" "$rc"
+sw_write fns-multiline-ok <<'F'
+f() {
+  local x
+  x=$(cmd) || return 1
+  echo "$x"
+}
+v=$(
+  f
+)
+F
+sw_run "$sw/fns-multiline-ok.sh"; expect_eq "fnctx: the checked version called from a multi-line \$( is green" "0" "$rc"
 fn_sub_red args   'v=$(f one two)'
 fn_sub_red tick   'v=`f`'
 sw_write fns-nested <<'F'

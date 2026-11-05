@@ -18,9 +18,11 @@
 #   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
 #             break / fail / die, or a new value for $v). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
 #   fnctx     a function that is CALLED in a `f || x` / `f && x` / `if f` / `while f` / `! f` position (errexit is off for its whole body)
-#             and assigns a command substitution (`x=$(cmd)`) without a status check on that line. Only call sites in the SAME file
-#             are seen (a function sourced from another file and called conditionally here is not), and calls through variables or
-#             `$(f)` are not either.
+#             and assigns a command substitution (`x=$(cmd)`) without a status check on that line; the same when it is called inside a
+#             command substitution (`v=$(f)`, `"$(f)"`, `` `f` ``, `$(cd d && f)`, `v=$(` with the call on the next line) or by a function that is
+#             (one-line wrappers included). Only call sites in the SAME file are seen (a function sourced from another file and called
+#             conditionally here is not); calls through a variable, eval, `command f`, or a call buried deeper than the first three lines
+#             after a bare `$(` are not either.
 #   Workflow / composite-action files: the `run:` scripts are cut out (scripts/extract-run-blocks.py) and scanned with these same rules;
 #             a step with no `shell:` runs `bash -e {0}` (no pipefail), `shell: bash` runs with pipefail, so the first is held to `pipeline`.
 # Not flagged without a comment: `kill ... || true`, `rm ... || true` and `... kill ... && wait ... || true` (cleanup:
@@ -253,7 +255,16 @@ END {
     for (i = 1; i <= NR; i++) {
       if (i >= from[f] && i <= to[f]) continue
       r = L[i]; if (r ~ /^[ \t]*#/) continue; sub(/[ \t]#.*/, "", r)
-      if (r ~ ("(\\$\\(|`)[ \t]*(![ \t]*)?" name[f] "([ \t)`;|&\"]|$)")) {
+      hit = (r ~ ("(\\$\\(|`)[ \t]*(![ \t]*)?" name[f] "([ \t)`;|&\"]|$)")) || (r ~ ("(\\$\\(|`)[^)`]*[;&|][ \t]*(![ \t]*)?" name[f] "([ \t)`;|&\"]|$)"))
+      if (!hit && r ~ /(\$\(|`)[ \t]*$/) {                                 # `v=$(` and the call on the next line(s)
+        for (k = i + 1; k <= NR && k <= i + 3; k++) {
+          nx = L[k]; sub(/[ \t]#.*/, "", nx)
+          if (nx !~ /[^ \t]/) continue
+          if (nx ~ ("^[ \t]*(![ \t]*)?" name[f] "([ \t)`;|&\"]|$)")) hit = 1
+          break
+        }
+      }
+      if (hit) {
         hot[f] = 1; if (!why[f]) { why[f] = i; kind[f] = "sub" }
         break
       }
@@ -264,7 +275,7 @@ END {
       if (!hot[f]) continue
       for (g = 1; g <= nf; g++) {
         if (hot[g] || g == f) continue
-        for (i = from[f] + 1; i <= to[f]; i++) if (anycall(T[i], name[g])) { hot[g] = 1; why[g] = why[f]; kind[g] = kind[f]; ch = 1; break }
+        for (i = (from[f] == to[f] ? from[f] : from[f] + 1); i <= to[f]; i++) if (anycall(T[i], name[g])) { hot[g] = 1; why[g] = why[f]; kind[g] = kind[f]; ch = 1; break }
       }
     }
   } while (ch)

@@ -91,7 +91,10 @@ call() {
   out=$(curl -sS -D - -o /tmp/payflow.$$ -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3") || rc=$?
   if [ "$rc" != 0 ]; then echo "payment-flow: curl $2 failed (exit $rc): no status is read from it" >&2; out=""; fi   # an empty status never equals the expected one
   body=$(cat /tmp/payflow.$$ 2>/dev/null) || body="(no body)"; rm -f /tmp/payflow.$$
-  res="$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") $(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -)"
+  local st xc   # each part on its own: call() runs in `$(…)` and `||` positions, so errexit is off in here
+  st=$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") || st=""   # an empty status never equals the expected one
+  xc=$(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -) || xc=-
+  res="$st $xc"
 }
 want() { [ "$2" = "$3" ] || fail "$1: got '$2', want '$3' (body: ${body:-})"; }
 as_shopper() { call "$shopper_key" "$@"; }

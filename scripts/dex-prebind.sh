@@ -76,10 +76,10 @@ rpc() {
   if [ "$status" != 200 ]; then
     local code xcode
     code=$(jq -r '.code // empty' "$work/body" 2>/dev/null) || code=""   # only quoted in the die message below; the non-200 status already decided
-    xcode=$(tr -d '\r' < "$work/headers" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p' | head -1)
+    xcode=$(tr -d '\r' < "$work/headers" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p' | head -1) || xcode=""   # only quoted in the die message below; the non-200 status already decided
     die "$method failed: http $(printable status "$status" "$secret"), code $(printable code "${code:-none}" "$secret"), x-error-code $(printable xcode "${xcode:-none.none}" "$secret")"
   fi
-  resp=$(cat "$work/body")
+  resp=$(cat "$work/body") || die "$method: cannot read the response body"
 }
 admin() { rpc "$1" "$2" X-API-Key "$ADMIN_API_KEY"; }
 
