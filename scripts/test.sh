@@ -2680,6 +2680,11 @@ echo "$rows"
 [ "${rc:-0}" = 0 ] || exit 1
 F
 sw_run "$sw/rcb-late.sh"; expect_match "rcbranch: the output is used before the status is read → red" 'rcb-late\.sh:3: rcbranch: .*before' "$out"
+mkdir -p "$sw/nested"
+printf '#!/usr/bin/env bash\nset -euo pipefail\nrows=$(cmd) || rc=$?\n[ "${rc:-0}" = 0 ] || echo warning >&2\necho "$rows"\n' > "$sw/nested/test.sh"
+sw_run "$sw/nested/test.sh"
+expect_eq    "rcbranch: a test.sh in another directory is NOT exempt (only scripts/test.sh is) → red" "1" "$rc"
+expect_match "rcbranch: …as rcbranch" 'nested/test\.sh:3: rcbranch:' "$out"
 rcb_ok() { # <name> <lines…>
   local n=$1; shift
   { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; printf '%s\n' "$@"; } > "$sw/rcbok-$n.sh"

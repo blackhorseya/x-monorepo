@@ -15,7 +15,7 @@
 #   pipeline  `a | b` in a file that never says `set -o pipefail` (or set -euo pipefail ...): only b's status counts
 #   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
 #   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
-#             break / fail / die, or a new value for $v). Heuristic: it checks that a refusing branch EXISTS, not that it is right. scripts/test.sh is exempt.
+#             break / fail / die, or a new value for $v). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
 #   fnctx     a function that is CALLED in a `f || x` / `f && x` / `if f` / `while f` / `! f` position (errexit is off for its whole body)
 #             and assigns a command substitution (`x=$(cmd)`) without a status check on that line. Only call sites in the SAME file
 #             are seen (a function sourced from another file and called conditionally here is not), and calls through variables or
@@ -256,7 +256,7 @@ END {
   # the lines that read it must be able to refuse the output (return / exit / continue / break / fail / die, or assign $v again).
   # Records-and-ignores (jq failed, "nothing to approve" printed, rows used anyway, #466) is red. Heuristic: it does not prove the branch
   # is right, only that one exists; docs/ci.md lists the sites it covers.
-  for (i = 1; i <= NR && FILENAME !~ /(^|\/)test\.sh$/; i++) {   # scripts/test.sh itself is the harness: its $rc is judged by expect_eq, not by a branch
+  for (i = 1; i <= NR && FILENAME != "scripts/test.sh"; i++) {   # ONLY the repo's scripts/test.sh (as git ls-files names it) is the harness; a test.sh anywhere else is scanned: its $rc is judged by expect_eq, not by a branch
     r = L[i]; sub(/[ \t]#.*/, "", r)
     if (!match(r, /(^|[;&|{(]|[ \t])[A-Za-z_][A-Za-z_0-9]*=("|\047)?(\$\(|`)/)) continue
     if (r !~ /\|\|[ \t]*[A-Za-z_][A-Za-z_0-9]*=\$\?/) continue
