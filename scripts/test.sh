@@ -148,9 +148,9 @@ expect_eq "moving a product file into pkgs/platform/server counts both ends (k6,
 
 # #448: the auth matrix script is the k6-auth input; moving it out of tests/k6 (or a file into it) keeps both ends.
 expect_eq "moving the auth matrix out of tests/k6 still runs k6, k6-auth (--no-renames)" \
-  "k6 k6_auth k6_wire" "$(rename_jobs_on movematrix tests/k6/auth-matrix.sh docs/auth-matrix.sh)"
+  "scripts_test k6 k6_auth k6_wire" "$(rename_jobs_on movematrix tests/k6/auth-matrix.sh docs/auth-matrix.sh)"
 expect_eq "moving a script into tests/k6 runs k6, k6-auth (--no-renames)" \
-  "k6 k6_auth k6_wire" "$(rename_jobs_on intok6 docs/auth-matrix.sh tests/k6/auth-matrix.sh)"
+  "scripts_test k6 k6_auth k6_wire" "$(rename_jobs_on intok6 docs/auth-matrix.sh tests/k6/auth-matrix.sh)"
 expect_eq "moving a file out of apps/worker still runs keda and k6" \
   "$go_checks $go_prod_pre helm_kind_keda k6 k6_wire" \
   "$(rename_jobs_on moveworker apps/worker/main.go pkgs/ordering/main.go)"
