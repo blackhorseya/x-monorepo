@@ -64,6 +64,9 @@ if [ "${#yml[@]}" -gt 0 ]; then
   while IFS=$'\t' read -r sh _ _; do files+=("$sh"); done < "$tmp/map.tsv"
 fi
 
+# nothing to scan (a workflow whose only run: steps are not shell, e.g. `shell: python`): clean, and awk / shellcheck must not be started with no file
+if [ "${#files[@]}" -eq 0 ]; then echo "check-exit-swallow: no shell to check in the ${nyml} workflow / action file(s)"; exit 0; fi
+
 cat > "$tmp/scan.awk" <<'AWK'
 # Reads the files named on the command line. Prints "file:line: rule: code" per finding; exit 1 if there was one.
 function reset_file() { term = ""; dash = 0; hasflag = 0 }
