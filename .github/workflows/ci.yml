@@ -240,6 +240,7 @@ jobs:
       - uses: ./.github/actions/setup
       - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
       - run: task k6-wire
+      - run: task k6-parallel-test
       - if: failure()
         run: tail -n 50 bin/k6-wire/*.log
 

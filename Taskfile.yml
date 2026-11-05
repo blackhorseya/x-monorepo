@@ -478,6 +478,13 @@ tasks:
       - sh: command -v k6 >/dev/null && command -v python3 >/dev/null
         msg: needs k6 (brew install k6) and python3
 
+  k6-parallel-test:
+    desc: 'tests/k6/parallel_test.sh: smoke.sh (stub rpc / worker / catalog-rpc, shim k6) and wire.sh must stay red when one parallel member fails — each smoke script failing alone, a k6 that exits 0, a lane that dies without a verdict (#451). Needs k6 and python3; no Postgres. The `k6-wire` job in CI'
+    cmds: ['tests/k6/parallel_test.sh']
+    preconditions:
+      - sh: command -v k6 >/dev/null && command -v python3 >/dev/null
+        msg: needs k6 (brew install k6) and python3
+
   k6-bench:
     desc: 'tests/k6/bench.sh: the performance baseline (#263) — CreateOrder throughput/latency at saturation and order → RESERVED latency through the worker, RUNS (3) times with fixed parameters, each run in its own Postgres database (created on the server of DATABASE_URL, migrated, dropped after). Writes {{.BIN_DIR}}/k6-bench/<stamp>/{result.json,summary.md} (median, min–max, CV; commit, Go/Postgres/k6, CPU, parameters). Needs psql and CREATE DATABASE. Not in CI: docs/perf-baseline.md'
     deps: [build]
