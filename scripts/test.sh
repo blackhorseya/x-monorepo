@@ -1978,6 +1978,7 @@ sw_write canonical <<'F'
 n=$(grep -c a f || [ $? -eq 1 ])
 for ((i = 1; i <= 5; i++)); do :; done
 rc=0; out=$(cmd) || rc=$?
+[ "$rc" = 0 ] || exit "$rc"
 for p in $pids; do :; done
 for f in "$d"/log-*.txt; do n=$(wc -l < "$f"); done
 for a in 'NS=a$(id)' 'x'; do :; done
