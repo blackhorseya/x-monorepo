@@ -2659,6 +2659,47 @@ f() {
 f || st=$?
 F
 sw_run "$sw/fn-quoted-ok.sh"; expect_eq "fnctx: the same with || return 1 is green" "0" "$rc"
+# rcbranch: `v=$(cmd) || rc=$?` records a status; something must read $rc and be able to refuse $v (the #466 jq loop recorded and used it anyway)
+sw_write rcb-ignore <<'F'
+rows=$(jq . f) || rc=$?
+[ "${rc:-0}" = 0 ] || echo "jq failed" >&2
+echo "$rows"
+F
+sw_run "$sw/rcb-ignore.sh"
+expect_eq    "rcbranch: the status is read but nothing refuses the output → red" "1" "$rc"
+expect_match "rcbranch: …as rcbranch" 'rcb-ignore\.sh:3: rcbranch: .*never refuse' "$out"
+sw_write rcb-unread <<'F'
+rows=$(jq . f) || rc=$?
+echo "$rows"
+F
+sw_run "$sw/rcb-unread.sh"; expect_match "rcbranch: the status is never read → red" 'rcb-unread\.sh:3: rcbranch: .*never read' "$out"
+sw_write rcb-late <<'F'
+rows=$(jq . f) || rc=$?
+echo "$rows"
+[ "${rc:-0}" = 0 ] || exit 1
+F
+sw_run "$sw/rcb-late.sh"; expect_match "rcbranch: the output is used before the status is read → red" 'rcb-late\.sh:3: rcbranch: .*before' "$out"
+rcb_ok() { # <name> <lines…>
+  local n=$1; shift
+  { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; printf '%s\n' "$@"; } > "$sw/rcbok-$n.sh"
+  sw_run "$sw/rcbok-$n.sh"; expect_eq "rcbranch: [$n] is green" "0" "$rc"
+}
+rcb_ok clear   'rc=0; rows=$(jq . f) || rc=$?' 'if [ "$rc" != 0 ]; then rows=""; echo "jq failed" >&2; fi' 'echo "$rows"'
+rcb_ok exit    'rc=0; rows=$(jq . f) || rc=$?' '[ "$rc" = 0 ] || { echo "jq failed" >&2; exit 2; }' 'echo "$rows"'
+rcb_ok case    'rc=0; rows=$(jq . f) || rc=$?' 'case $rc in' '  0) ;;' '  *) echo "jq failed" >&2; exit 2 ;;' 'esac' 'echo "$rows"'
+rcb_ok loop    'for f in a b; do' '  rc=0; rows=$(jq . "$f") || rc=$?' '  [ "$rc" = 0 ] || continue' '  echo "$rows"' 'done'
+rcb_ok return  'f() {' '  rc=0; rows=$(jq . f) || rc=$?' '  [ "$rc" = 0 ] || return 1' '  echo "$rows"' '}' 'f'
+wf_check wf-rcbranch <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          rows=$(jq . f) || rc=$?
+          [ "${rc:-0}" = 0 ] || echo "jq failed" >&2
+          echo "$rows"
+Y
+expect_match "workflow: a recorded-and-ignored status in a run: is red (rcbranch, on the YAML line)" 'wf-rcbranch\.yml:6: rcbranch:' "$out"
 # a function pulled out of a real file: fn_of <file> <name> prints it (one line, or up to the closing brace at the same indent)
 fn_of2() { awk -v n="$2" '$0 ~ "^"n"\\(\\) *\\{" {p=1} p {print} p && /^\}/ {exit} p && $0 ~ "^"n"\\(\\) *\\{.*\\}( *#.*)?$" {exit}' "$1"; }
 # tests/k6/bench.sh wait_quiet: the load sampler prints a sample and dies; called as `if ! wait_quiet`
