@@ -40,7 +40,7 @@ if [ "${1:-}" != "--diag-child" ]; then
   # on a signal: stop everything under the collector, then ask the collector itself to stop (it cleans up); if it is still there after 5 s, kill it
   stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name)
     local x
-    for x in $(pgrep -P "$1" 2>/dev/null); do stop_tree "$x"; kill "$x" 2>/dev/null || true; done
+    for x in $(pgrep -P "$1" 2>/dev/null); do stop_tree "$x"; kill "$x" 2>/dev/null || true; done  # exit-ok: pgrep exits 1 when there are no children; this only walks our own process tree to stop it
   }
   on_signal() {
     sig_rc=$1
@@ -62,7 +62,7 @@ if [ "${1:-}" != "--diag-child" ]; then
   done
   if [ -n "$kill_pid" ]; then   # the 5 s fuse: its `sleep` first, then the subshell holding it (explicit pids). KILL, not TERM:
     # the fuse was started after on_signal ignored TERM, and an ignored signal is inherited (diag-test D6T saw it survive)
-    for c in $(pgrep -P "$kill_pid" 2>/dev/null); do kill -KILL "$c" 2>/dev/null || true; done
+    for c in $(pgrep -P "$kill_pid" 2>/dev/null); do kill -KILL "$c" 2>/dev/null || true; done  # exit-ok: pgrep exits 1 when there are no children; this only walks our own process tree to stop it
     kill -KILL "$kill_pid" 2>/dev/null || true
   fi
   [ -z "$sig_rc" ] || rc=$sig_rc
@@ -73,7 +73,7 @@ if [ "${1:-}" != "--diag-child" ]; then
   if [ "$size" -gt "$console_budget" ]; then
     printf '\n[diag: the console budget of %s bytes is used up; nothing more is printed here, the whole output is in %.200s/console.full]\n::endgroup::\n' "$console_budget" "$dir"
   fi
-  [ ! -d "$dir" ] || cp -f -- "$cap" "$dir/console.full" 2>/dev/null || true
+  [ ! -d "$dir" ] || cp -f -- "$cap" "$dir/console.full" 2>/dev/null || true  # exit-ok: diagnostics only: a lost copy of the console capture changes no verdict
   case "$cap_dir" in */diag-console.*) rm -rf -- "$cap_dir" ;; esac
   exit "$rc"
 fi
@@ -105,7 +105,7 @@ emit() {
   local cap=$console_left own=0 where=${2:-$dir}
   if [ -n "${1:-}" ] && [ "$1" -lt "$cap" ]; then cap=$1 own=1; fi
   if [ -n "$console_cut" ] || [ "$cap" -le 0 ]; then cat > /dev/null; return 0; fi
-  local buf n; buf=$(mktemp) || return 0
+  local buf n; buf=$(mktemp) || return 0  # exit-ok: diagnostics only: without a temp file diag.sh prints less, it decides nothing
   head -c $((cap + 1)) > "$buf"
   n=$(wc -c < "$buf" | tr -d ' ')
   if [ "$n" -le "$cap" ]; then

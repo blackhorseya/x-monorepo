@@ -16,7 +16,7 @@
 # Pathspec `*` crosses `/`, so `*.md` is any depth.
 set -euo pipefail
 head=${2:-HEAD}
-base=${1:-$(git describe --tags --abbrev=0 --match 'v*' "$head" 2>/dev/null || true)}
+base=${1:-$(git describe --tags --abbrev=0 --match 'v*' "$head" 2>/dev/null || true)}  # exit-ok: no reachable tag is the normal first-release state; an empty base exits 2 right below
 if [ -z "$base" ]; then
   echo "releasable: no previous v* tag reachable from $head" >&2
   exit 2

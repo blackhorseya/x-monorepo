@@ -28,7 +28,7 @@ elif grep -Eq '^panic: ' <<<"$out"; then class=panic
 elif grep -Eq '^--- FAIL: ' <<<"$out"; then
   # Not `grep -Ev … | grep -Eq`: -q exits at the first match, the upstream grep then dies of SIGPIPE
   # on a long log and pipefail reads that as "message not found".
-  body=$(grep -Ev '^(=== |--- |FAIL|ok )' <<<"$out" || true)
+  body=$(grep -Ev '^(=== |--- |FAIL|ok )' <<<"$out" || [ $? -eq 1 ])
   if grep -E -- "$msg" <<<"$body" >/dev/null; then class=assertion; else class=setup; fi
 fi
 echo "$class"

@@ -155,7 +155,7 @@ while True:
     open(hits_file, "w").write(str(n)); c.close()
 PY
 listener=$!
-for _ in $(seq 1 50); do [ -s "$tmp/listener.port" ] && break; sleep 0.1; done
+for ((_try158 = 1; _try158 <= 50; _try158++)); do [ -s "$tmp/listener.port" ] && break; sleep 0.1; done
 port=$(cat "$tmp/listener.port" 2>/dev/null || echo 0)
 cat > "$tmp/decoy.yaml" <<DECOY
 apiVersion: v1
@@ -182,7 +182,7 @@ if cmp -s "$root/Taskfile.yml" "$mutfile"; then
   bad "M1 the mutant Taskfile was not made"
 else
   reset_ns
-  run "$mutfile" "$tmp/alias.yaml" || true
+  run "$mutfile" "$tmp/alias.yaml" || true  # exit-ok: the mutant may fail either way; the verdict is aimed_right / in_cluster on the next lines
   if aimed_right; then bad "M1 the mutant (plain kubectl, no runner) still passes aimed_right: the probe cannot see the alias"
   elif in_cluster "$tmp/other.yaml"; then ok "M1 mutant without the runner: the namespace lands in other → red as it must"
   else bad "M1 the mutant created the namespace nowhere: $(tail -3 "$tmp/run.log")"; fi
@@ -217,13 +217,13 @@ PY
 }
 if ! mutate_down noflag; then bad "D3 the mutant Taskfile was not made"
 else
-  down "$mutfile" || true
+  down "$mutfile" || true  # exit-ok: the mutant may fail either way; the verdict is caller_intact on the next line
   if caller_intact; then ok "D3 down through the runner without the flag: the caller file is still intact (the runner's environment alone holds)"
   else bad "D3 the runner alone did not keep kind off the caller file"; fi
 fi
 if ! mutate_down plain; then bad "D2 the mutant Taskfile was not made"
 else
-  down "$mutfile" || true
+  down "$mutfile" || true  # exit-ok: the mutant may fail either way; the verdict is caller_intact on the next line
   if caller_intact; then bad "D2 the mutant (a plain kind delete) leaves the caller file alone: the probe cannot see it"
   else ok "D2 mutant that bypasses the runner: the context is removed from the caller file → red as it must"; fi
 fi

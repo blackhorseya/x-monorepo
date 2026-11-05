@@ -9,7 +9,7 @@
 #   wire   k6 exits 0; a lane killed before it wrote a verdict; grep / cat / sleep / rm / mkdir / python3 / env exiting 42 after
 #          partial or full output; verdict lines dropped; a second run whose k6 dies without writing its files while the
 #          first run's files are still in the bin dir (the failure must name the missing files)
-#   smoke  curl / sleep / tee / cat / env / seq exiting 42
+#   smoke  curl / sleep / tee / cat / env exiting 42 (seq is no longer called: catalog.sh counts in the shell, #462)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -128,11 +128,11 @@ async "smoke: tee swallows its input and exits 42" nonzero smoke1 "$(shim tee '/
 async "smoke: tee writes one line and exits 42" nonzero smoke1 "$(shim tee 'head -n 1 | /bin/cat > "$1"; exit 42')" reservation
 async "smoke: cat of a script's output exits 42" nonzero smoke1 "$(shim cat 'case "$*" in *.out*) exit 42;; esac; exec /bin/cat "$@"')" orders
 async "smoke: env (starts the rpc) exits 42" nonzero smoke1 "$(shim env 'exit 42')" orders
-# seq is still called by catalog.sh (sourced; not changed here): its readiness loop ends in a hard readiness check, so a
-# short or failed seq ends red, never green
-async "smoke: seq (catalog.sh) prints 1 and exits 42" nonzero smoke1 "$(shim seq 'echo 1; exit 42')" orders
+# catalog.sh used to count its readiness loop with `for _ in $(seq 1 100)`: the status of seq was dropped, so a seq that printed
+# 1 and died was a one-round wait (#462). It counts in the shell now, and a failing seq changes nothing.
+async "smoke: seq is not used by catalog.sh (exit 42 shim, still green)" zero smoke1 "$(shim seq 'echo 1; exit 42')" orders
 
-wait || true   # every case has its own status file below; a case that left none is a FAIL
+wait || true   # exit-ok: every case has its own status file below; a case that left none is a FAIL
 
 fails=0
 for i in "${!names[@]}"; do

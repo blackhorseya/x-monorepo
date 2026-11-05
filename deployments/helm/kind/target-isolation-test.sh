@@ -84,9 +84,10 @@ lines_of() {
   : > "$tmp/lines"
   local t
   for t in helm-kind-cluster helm-kind-up helm-kind helm-kind-keda helm-kind-down; do
-    PATH="$tmp/fake4:$PATH" task -t "$1" --dry "$t" "CLUSTER=$cluster" "NS=$ns" "BIN_DIR=$tmp/bin" 2>&1 | strip \
-      | sed 's/^task: \[[^]]*\] //' \
-      | grep -E '(^|[ ;|&])(kubectl|helm|kind) |deployments/helm/kind/[a-z-]+\.sh' | grep -v -E 'command -v' >> "$tmp/lines" || true
+    # the dry run first, on its own: piped, a task that fails would leave an empty list and every drill below would run nothing
+    PATH="$tmp/fake4:$PATH" task -t "$1" --dry "$t" "CLUSTER=$cluster" "NS=$ns" "BIN_DIR=$tmp/bin" > "$tmp/dry.out" 2>&1 || { echo "target-isolation-test: task --dry $t failed" >&2; cat "$tmp/dry.out" >&2; return 1; }
+    strip < "$tmp/dry.out" | sed 's/^task: \[[^]]*\] //' \
+      | { grep -E '(^|[ ;|&])(kubectl|helm|kind) |deployments/helm/kind/[a-z-]+\.sh' || [ $? -eq 1 ]; } | { grep -v -E 'command -v' || [ $? -eq 1 ]; } >> "$tmp/lines"
   done
   sort -u "$tmp/lines" -o "$tmp/lines"
 }
@@ -98,7 +99,7 @@ run_lines() {
   while IFS= read -r l; do
     [ -n "${1:-}" ] && ! printf '%s\n' "$l" | grep -q -- "$1" && continue
     ( cd "$tree" && env HOME="$decoyhome" PATH="$fakebin:/usr/bin:/bin" KUBECONFIG="$decoy" \
-        perl -e 'alarm 25; exec @ARGV' sh -c "$l" ) >/dev/null 2>&1 || true
+        perl -e 'alarm 25; exec @ARGV' sh -c "$l" ) >/dev/null 2>&1 || true  # exit-ok: a task line may fail against the fakes; the verdict is the recorded calls ($calls), asserted by the caller
   done < "$tmp/lines"
 }
 

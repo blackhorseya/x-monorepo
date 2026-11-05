@@ -75,7 +75,7 @@ rpc() {
     -H 'Content-Type: application/json' --data-binary "$body" "$base/$svc/$method") || die "$method: cannot reach $base"
   if [ "$status" != 200 ]; then
     local code xcode
-    code=$(jq -r '.code // empty' "$work/body" 2>/dev/null || true)
+    code=$(jq -r '.code // empty' "$work/body" 2>/dev/null || true)  # exit-ok: only quoted in the die message below; the non-200 status already decided
     xcode=$(tr -d '\r' < "$work/headers" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p' | head -1)
     die "$method failed: http $(printable status "$status" "$secret"), code $(printable code "${code:-none}" "$secret"), x-error-code $(printable xcode "${xcode:-none.none}" "$secret")"
   fi

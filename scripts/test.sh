@@ -210,7 +210,7 @@ expect_eq "scripts/ runs everything" "$all_jobs" "$(jobs_on scripts scripts/new.
 fixture ciall
 expect_eq "CI_ALL=1 runs everything" "$all_jobs" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 expect_eq "CI_ALL prints one flag per job" "$(echo "$all_jobs" | wc -w | tr -d ' ')" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | wc -l | tr -d ' ')"
-expect_eq "CI_ALL=1 prints no false" "0" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | grep -c '=false$' || true)"
+expect_eq "CI_ALL=1 prints no false" "0" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | grep -c '=false$' || [ $? -eq 1 ])"
 # Every flag is a job's `if:` in ci.yml, declared once as an output of `affected` (a flag nobody reads skips nothing).
 for j in $all_jobs; do
   expect_eq "ci.yml declares run_$j as an output of affected" 1 "$(grep -c "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml")"
@@ -599,7 +599,7 @@ prepull_pid=""
 prepull_stop() {
   [ -n "$prepull_pid" ] || return 0
   kill -TERM "$prepull_pid" 2>/dev/null || true
-  wait "$prepull_pid" 2>/dev/null || true
+  wait "$prepull_pid" 2>/dev/null || true  # exit-ok: reaping the script we just TERMed; its status is asserted by the cases that care
   prepull_pid=""
 }
 trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
@@ -631,14 +631,14 @@ expect_eq "prepull: gives up after four attempts"    "1 4 4 4" "$(prepull 9)"
 FAKE_HANG=1 FAKE_LOG="$prepull_tmp/log" FAKE_PIDS="$prepull_tmp/pids" DOCKER="$fake_engine" IMAGES="a b c" PULL_RETRY_SLEEP=0 \
   "$src/scripts/ci-prepull-images.sh" >/dev/null 2>&1 &
 prepull_pid=$!
-for _ in $(seq 50); do [ "$(wc -l < "$prepull_tmp/pids" | tr -d ' ')" = 3 ] && break; sleep 0.1; done
+for ((_try328 = 1; _try328 <= 50; _try328++)); do [ "$(wc -l < "$prepull_tmp/pids" | tr -d ' ')" = 3 ] && break; sleep 0.1; done
 expect_eq "prepull: three engines started" "3" "$(wc -l < "$prepull_tmp/pids" | tr -d ' ')"
 prepull_stop
 sleep 0.5
 alive=0
-for p in $(cat "$prepull_tmp/pids"); do
+while IFS= read -r p; do
   if kill -0 "$p" 2>/dev/null; then alive=$((alive + 1)); kill -KILL "$p" 2>/dev/null || true; fi
-done
+done < "$prepull_tmp/pids"
 expect_eq "prepull: SIGTERM leaves no engine running" "0" "$alive"
 rm -rf "$prepull_tmp"
 
@@ -759,7 +759,7 @@ smoke() { # smoke <skip-sign-n> -> prints "<exit> <FAIL line, if any>"
   fixture "smoke$1"; cp "$src/.goreleaser.yaml" "$repo/"
   local out rc=0
   out=$(cd "$repo" && PATH="$fakebin:$PATH" FAKE_COUNT="$tmp/count$1" FAKE_SKIP_SIGN_N=$1 scripts/cosign-smoke.sh 2>&1) || rc=$?
-  echo "$rc $(printf '%s' "$out" | grep -m1 '^FAIL' || true)"
+  echo "$rc $(printf '%s' "$out" | grep -m1 '^FAIL' || [ $? -eq 1 ])"
 }
 if python3 -c 'import yaml' 2>/dev/null; then
   expect_match "smoke: every sign writes a bundle passes"            '^0 $' "$(smoke 0)"
@@ -1104,7 +1104,7 @@ expect_eq "red: message only in the RUN echo is not an assertion" "setup 1" "$(r
 FAIL')"
 # A long log must not flip a found message to setup: grep -q exiting early SIGPIPEs the filter
 # upstream of it, and pipefail turns that into "not found".
-long_log=$(printf '=== RUN   TestX\n    x_test.go:10: target assertion\n'; for _ in $(seq 1 20000); do printf '    long diagnostic line %0100d\n' 0; done; printf -- '--- FAIL: TestX (0.00s)\nFAIL\n')
+long_log=$(printf '=== RUN   TestX\n    x_test.go:10: target assertion\n'; for ((_try801 = 1; _try801 <= 20000; _try801++)); do printf '    long diagnostic line %0100d\n' 0; done; printf -- '--- FAIL: TestX (0.00s)\nFAIL\n')
 expect_eq "red: long output still assertion" "assertion 0" "$(out=$(printf '%s\n' "$long_log" | scripts/red-stage.sh -m 'target assertion') && rc=0 || rc=$?; echo "$out $rc")"
 set +e; scripts/red-stage.sh </dev/null >/dev/null 2>&1; rc=$?; set -e
 expect_eq "red: -m is required" 64 "$rc"
@@ -1283,7 +1283,7 @@ dns() {
   local rc=0
   mkdir -p "$dns_dir/home"; : > "$dns_dir/home/.kind-runner"  # the script refuses to start outside run.sh's scratch HOME (#444)
   HOME="$dns_dir/home" KIND_RUNNER_HOME="$dns_dir/home" COREFILE="$dns_dir/Corefile" KLOG="$dns_dir/klog" PATH="$dns_dir/bin:$PATH" "$src/deployments/helm/kind/coredns-dex.sh" "$1" >/dev/null 2>&1 || rc=$?
-  echo "$rc $(grep -c '^patch$' "$dns_dir/klog" || true)"
+  echo "$rc $(grep -c '^patch$' "$dns_dir/klog" || [ $? -eq 1 ])"
 }
 corefile_with() { # corefile_with <extra lines after ready...>
   { printf '.:53 {\n    errors\n    ready\n'; for l in "$@"; do printf '    %s\n' "$l"; done
@@ -1363,7 +1363,7 @@ pb_run() {
   out=$(env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" 2>&1) || rc=$?
 }
 pb_state() { curl -fsS "$pb_url/_state"; }
-pb_calls() { grep -c "^$1 " "$pb_dir/log" || true; }
+pb_calls() { grep -c "^$1 " "$pb_dir/log" || [ $? -eq 1 ]; }
 
 pb_up first
 pb_run
@@ -1383,7 +1383,7 @@ before=$(wc -l < "$pb_dir/log" | tr -d ' ') ; st_before=$(pb_state); tokens_befo
 pb_run
 expect_eq "dex-prebind: rerun succeeds" "0" "$rc"
 expect_eq "dex-prebind: rerun writes nothing (state identical)" "$st_before" "$(pb_state)"
-expect_eq "dex-prebind: rerun calls no mutation" "0" "$(grep -cE '^(CreateAccount|CreateInvite|ClaimInvite) ' <(tail -n +$((before + 1)) "$pb_dir/log") || true)"
+expect_eq "dex-prebind: rerun calls no mutation" "0" "$(grep -cE '^(CreateAccount|CreateInvite|ClaimInvite) ' <(tail -n +$((before + 1)) "$pb_dir/log") || [ $? -eq 1 ])"
 expect_eq "dex-prebind: rerun asks Dex for no token" "$tokens_before" "$(wc -l < "$pb_dir/tokens" | tr -d ' ')"
 expect_match "dex-prebind: rerun says already bound" 'already bound' "$out"
 rerun_out=$out
@@ -1437,7 +1437,8 @@ expect_eq "dex-prebind: a plain local BASE_URL (trailing slash) still works" "0"
 
 # a server that echoes the key (or a token, or a long text) as its error code must not get it printed
 refl_out=""
-for r in "$pb_key" xk_wrong-key-secret tok-secret-admin@example.com "$(printf 'a%.0s' $(seq 1 80))" 'A_B'; do
+long80=$(printf 'a%.0s' {1..80})
+for r in "$pb_key" xk_wrong-key-secret tok-secret-admin@example.com "$long80" 'A_B'; do
   pb_up refl STUB_REFLECT="$r"
   pb_run
   if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: an error answer must fail the run"; fi
@@ -1754,7 +1755,7 @@ tools_without() {
   local bindir="$tmp/toolbin-$1" t
   mkdir -p "$bindir"
   for t in bash dirname go jq; do
-    [ "$t" = "$1" ] || { [ -e "$bindir/$t" ] || ln -s "$(command -v "$t")" "$bindir/$t" 2>/dev/null || true; }
+    [ "$t" = "$1" ] || { [ -e "$bindir/$t" ] || ln -s "$(command -v "$t")" "$bindir/$t" 2>/dev/null || true; }  # exit-ok: a tool the host lacks is just not linked into the stripped PATH; the case that needs it fails on its own
   done
   echo "$bindir"
 }
@@ -1810,7 +1811,7 @@ modes_fixture() {
   repo="$tmp/modes-$1"; mkdir -p "$repo/scripts" "$repo/k"
   cp "$src/scripts/check-script-modes.sh" "$repo/scripts/"
   printf 'tasks:\n  tools:\n    cmds:\n      - chmod +x scripts/*.sh k/*.sh\n' > "$repo/Taskfile.yml"
-  for i in $(seq 1 24); do printf '#!/bin/sh\n' > "$repo/k/s$i.sh"; chmod +x "$repo/k/s$i.sh"; done
+  for ((i = 1; i <= 24; i++)); do printf '#!/bin/sh\n' > "$repo/k/s$i.sh"; chmod +x "$repo/k/s$i.sh"; done
   git -C "$repo" init -q -b main
   git -C "$repo" add -A
   git -C "$repo" commit -q -m base
@@ -1917,6 +1918,8 @@ rm -f x || true
 [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true
 trap 'test -z "$pf" || kill $pf 2>/dev/null || true' EXIT
 [ -n "$x" ] || return 0
+kill -9 "$(cat "$f")" 2>/dev/null || true
+kill "${PB_PIDS##* }" 2>/dev/null || true
 F
 sw_run "$sw/cleanup.sh"
 expect_eq    "swallow: kill / rm cleanup and [ ] guards are not flagged" "0" "$rc"
@@ -1925,6 +1928,8 @@ n=$(grep -c a f || [ $? -eq 1 ])
 for ((i = 1; i <= 5; i++)); do :; done
 rc=0; out=$(cmd) || rc=$?
 for p in $pids; do :; done
+for f in "$d"/log-*.txt; do n=$(wc -l < "$f"); done
+for a in 'NS=a$(id)' 'x'; do :; done
 F
 sw_run "$sw/canonical.sh"
 expect_eq    "swallow: the documented replacements are clean" "0" "$rc"

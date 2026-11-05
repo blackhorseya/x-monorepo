@@ -77,10 +77,10 @@ fail() {
   echo "payment-upgrade: $*" >&2
   [ -z "${soft:-}" ] || exit 1
   if [ -n "$ns_uid" ]; then
-    kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true
+    kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true  # exit-ok: failure report only; fail() exits 1 below
     # The migrate hook Job is what fails an upgrade onto a schema its image does not know: say why, not just that it did.
     echo "payment-upgrade: logs of the $release-migrate Job (hook pods are kept after a failure):" >&2
-    kubectl -n "$ns" logs -l "job-name=$release-migrate" --tail=50 --prefix --all-containers >&2 2>&1 || true
+    kubectl -n "$ns" logs -l "job-name=$release-migrate" --tail=50 --prefix --all-containers >&2 2>&1 || true  # exit-ok: failure report only; fail() exits 1 below
   fi
   exit 1
 }
@@ -88,7 +88,7 @@ cleanup() {
   local rc=$?
   # The background helm of stage 4 may still be running (an order failed to be placed while it ran). Let it finish
   # FIRST: deleting the namespace under it would leave it failing against nothing.
-  if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi
+  if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi  # exit-ok: cleanup wait; the stage that started helm waits for it itself and fails on its status (wait "$helm_pid" || fail)
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
   # The one destructive step, bound to the identity the API server gave this run's namespace WHEN IT CREATED IT (ns_uid, taken
@@ -115,7 +115,7 @@ forwards() {
   pfs=""
   kubectl -n "$ns" port-forward "svc/$release-rpc" "$rport:80" >/dev/null 2>&1 & pfs="$pfs $!"
   kubectl -n "$ns" port-forward "svc/$release-payment-serve" "$sport:80" >/dev/null 2>&1 & pfs="$pfs $!"
-  for _ in $(seq 1 40); do curl -fsS "$api/readyz" >/dev/null 2>&1 && curl -fsS "$serve/api/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
+  for ((_try118 = 1; _try118 <= 40; _try118++)); do curl -fsS "$api/readyz" >/dev/null 2>&1 && curl -fsS "$serve/api/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
   fail "rpc / payment-rpc serve never answered readyz through the port-forward"
 }
 
@@ -124,7 +124,7 @@ forwards_soft() { # re-point the port-forwards at whatever pods are there now; n
   pfs=""
   kubectl -n "$ns" port-forward "svc/$release-rpc" "$rport:80" >/dev/null 2>&1 & pfs="$pfs $!"
   kubectl -n "$ns" port-forward "svc/$release-payment-serve" "$sport:80" >/dev/null 2>&1 & pfs="$pfs $!"
-  for _ in $(seq 1 15); do curl -fsS "$api/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
+  for ((_try127 = 1; _try127 <= 15; _try127++)); do curl -fsS "$api/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
   return 1
 }
 
@@ -134,8 +134,8 @@ admin_key=$(sed -n 's/.*admin=\([A-Za-z0-9._-]*\):admin.*/\1/p' "$flow" | head -
 
 call() {
   local out
-  out=$(curl -sS -D - -o "$tmp/body" -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3" || true)
-  body=$(cat "$tmp/body" 2>/dev/null || true)
+  out=$(curl -sS -D - -o "$tmp/body" -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3" || true)  # exit-ok: a failed curl leaves out empty, so the status read from it is empty and every caller compares it to an expected code
+  body=$(cat "$tmp/body" 2>/dev/null || true)  # exit-ok: the body is read next to a status that is asserted separately
   res="$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") $(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -)"
 }
 want() { [ "$2" = "$3" ] || fail "$1: got '$2', want '$3' (body: ${body:-})"; }
@@ -146,13 +146,13 @@ db() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1";
 order_status() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.status // "-"' <<<"$body"; }
 wait_order() { # <order> <ORDER_STATUS_X> [seconds]
   local s=""
-  for _ in $(seq 1 "${3:-60}"); do s=$(order_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
+  for ((_try149 = 1; _try149 <= "${3:-60}"; _try149++)); do s=$(order_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
   fail "order $1 is '$s' after ${3:-60}s, want $2"
 }
 pay_status() { as_shopper payment.v1.PublicPaymentService/GetPayment "{\"order_id\":\"$1\"}" >/dev/null; jq -r '.payment.status // "-"' <<<"$body"; }
 wait_payment() { # <order> <PAYMENT_STATUS_X> [seconds]
   local s=""
-  for _ in $(seq 1 "${3:-90}"); do s=$(pay_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
+  for ((_try155 = 1; _try155 <= "${3:-90}"; _try155++)); do s=$(pay_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
   fail "payment of order $1 is '$s' after ${3:-90}s, want $2"
 }
 place() { # -> the id of an order that is CONFIRMED under the switch (stock seeded by the admin, ordered by the shopper)
@@ -180,7 +180,7 @@ inbox_rows() { db "SELECT count(*) FROM payment.inbox"; }
 # ── 1 the previous chart, as it was released ───────────────────────────────────────────────────────────────
 # --depth only when this clone is already shallow (CI): on a repository shared by worktrees it would shallow all of them
 depth=(); [ "$(git rev-parse --is-shallow-repository)" != true ] || depth=(--depth=1)
-git fetch -q ${depth[@]+"${depth[@]}"} origin "refs/tags/$from_tag:refs/tags/$from_tag" 2>/dev/null || true
+git fetch -q ${depth[@]+"${depth[@]}"} origin "refs/tags/$from_tag:refs/tags/$from_tag" 2>/dev/null || true  # exit-ok: the next line fails when the tag is not available
 git rev-parse -q --verify "refs/tags/$from_tag" >/dev/null || fail "the tag $from_tag is not available: the previous chart cannot be installed"
 mkdir -p "$tmp/old"
 git archive "$from_tag" deployments/helm/x-monorepo | tar -x -C "$tmp/old"
@@ -262,9 +262,9 @@ echo "payment-upgrade: order $A has its payment (old consumer); cursors before:"
 
 # ── 3 no consumer: B is confirmed and nothing turns it into a payment ──────────────────────────────────────
 old_up --set paymentRpc.consume.replicaCount=0
-kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component=payment-consume" --timeout=2m >/dev/null 2>&1 || true
+kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component=payment-consume" --timeout=2m >/dev/null 2>&1 || true  # exit-ok: kubectl wait fails when the pods are already gone, which is the state wanted; the steps after it assert
 B=$(place)
-for _ in $(seq 1 6); do
+for ((_try267 = 1; _try267 <= 6; _try267++)); do
   [ "$(pay_status "$B")" = "-" ] || fail "order $B has a payment while no consumer runs: something else consumes OrderConfirmed"
   sleep 1
 done
@@ -280,7 +280,7 @@ helm_pid=$!
 during=""
 for i in 1 2 3; do
   id=""
-  for _ in $(seq 1 8); do
+  for ((_try283 = 1; _try283 <= 8; _try283++)); do
     forwards_soft || { sleep 2; continue; }
     if id=$(soft=1 place 2>/dev/null) && [ -n "$id" ]; then break; fi
     id=""; sleep 2
@@ -306,7 +306,7 @@ newimg=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.s
 newname=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.spec.template.spec.containers[0].name}')
 case $newimg in */payment-worker:*) ;; *) fail "after the upgrade the consumer runs '$newimg', want the payment-worker image" ;; esac
 [ "$newname" = payment-worker ] || fail "the consumer container is named '$newname', want payment-worker"
-clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)  # not piped into grep -q: with pipefail an early grep exit makes kubectl fail
+clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)  # exit-ok: an unreadable log leaves clog empty and the next line fails on it (not piped into grep -q: with pipefail an early grep exit makes kubectl fail)
 grep -q 'payment-worker started' <<<"$clog" || fail "the new consumer never logged that it started"
 
 # same groups, no new cursor

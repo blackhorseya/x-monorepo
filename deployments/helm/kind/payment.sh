@@ -16,7 +16,7 @@ sport=${PAYMENT_SERVE_PORT:-18090} iport=${PAYMENT_INGRESS_PORT:-18091} rport=${
 
 pf=""
 trap 'test -z "$pf" || kill $pf 2>/dev/null || true' EXIT
-fail() { echo "payment: $*"; kubectl -n "$ns" get pods,cronjobs,jobs,ingress 2>/dev/null || true; exit 1; }
+fail() { echo "payment: $*"; kubectl -n "$ns" get pods,cronjobs,jobs,ingress 2>/dev/null || true; exit 1; }  # exit-ok: failure report only; fail() exits 1 whatever kubectl returns
 forward() { # forward <target> <local port> <remote port>
   kubectl "${@:4}" port-forward "$1" "$2:$3" >/dev/null 2>&1 &
   pf="$pf $!"
@@ -48,15 +48,15 @@ for w in rpc worker catalog-rpc; do
   names=$(kubectl -n "$ns" get deploy "$release-$w" -o jsonpath='{.spec.template.spec.containers[*].env[*].name}')
   case " $names " in *" APP_PAYMENT_MOCK_WEBHOOK_SECRET "*) fail "$w holds the provider credential" ;; esac
 done
-for _ in $(seq 1 30); do
-  clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)
+for ((_try51 = 1; _try51 <= 30; _try51++)); do
+  clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the grep after the loop fails when the log never shows the start line
   grep -q 'payment-worker started' <<<"$clog" && break; sleep 1
 done
 grep -q 'payment-worker started' <<<"$clog" || fail "payment-worker never logged that it started"
 
 forward "svc/$release-payment-serve" "$sport" 80 -n "$ns"
 direct="http://127.0.0.1:$sport"
-for _ in $(seq 1 30); do [ "$(code "$direct/api/readyz")" = 200 ] && break; sleep 1; done
+for ((_try59 = 1; _try59 <= 30; _try59++)); do [ "$(code "$direct/api/readyz")" = 200 ] && break; sleep 1; done
 [ "$(code "$direct/api/readyz")" = 200 ] || fail "payment-rpc serve /api/readyz never answered 200"
 body='{"orderId":"kind-payment-order","customerId":"kind-payment-customer"}'
 [ "$(code -X POST -H 'Content-Type: application/json' -d "$body" "$direct/payment.v1.PaymentService/GetPayment")" = 401 ] \
@@ -71,10 +71,10 @@ echo "payment: serve is ready; the RPC wants the service key (401 without, 401 u
 job="payment-expire-kind-$(date +%s)"
 kubectl -n "$ns" create job "$job" --from="cronjob/$release-payment-expire" >/dev/null
 done_=""
-for _ in $(seq 1 90); do
-  ok=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)
-  bad=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.failed}' 2>/dev/null || true)
-  [ "${bad:-0}" != 0 ] && { kubectl -n "$ns" logs "job/$job" --tail=30 || true; fail "the expire run failed"; }
+for ((_try74 = 1; _try74 <= 90; _try74++)); do
+  ok=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the loop ends in fail() when the job never succeeds
+  bad=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.failed}' 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the loop ends in fail() when the job never succeeds
+  [ "${bad:-0}" != 0 ] && { kubectl -n "$ns" logs "job/$job" --tail=30 || true; fail "the expire run failed"; }  # exit-ok: failure report only; fail() exits 1 on the same line
   [ "$ok" = 1 ] && { done_=1; break; }
   sleep 2
 done
@@ -101,7 +101,7 @@ hit() {
   code -X "$m" -H "Host: $host" "$@" "$ing$p"
 }
 # wait for the controller to have the rule: the webhook answers 400 (payment-rpc: not signed), not nginx's 404
-for _ in $(seq 1 60); do [ "$(hit POST /api/payment/webhook -d '{}')" = 400 ] && break; sleep 2; done
+for ((_try104 = 1; _try104 <= 60; _try104++)); do [ "$(hit POST /api/payment/webhook -d '{}')" = 400 ] && break; sleep 2; done
 [ "$(hit POST /api/payment/webhook -d '{}')" = 400 ] || fail "the webhook never reached payment-rpc through the ingress (want 400: unsigned)"
 echo "payment: POST /api/payment/webhook reaches payment-rpc through the ingress (400: not signed)"
 
@@ -123,7 +123,7 @@ echo "payment: the ingress routes the webhook path and nothing else (RPC, metric
 # first requests answered by payment-rpc (400); a moment later it recovers.
 sleep 3
 res=$(seq 1 40 | xargs -P 20 -I{} curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H "Host: $host" -d '{}' "$ing/api/payment/webhook")
-n400=$(grep -c '^400$' <<<"$res" || true) n503=$(grep -c '^503$' <<<"$res" || true)
+n400=$(grep -c '^400$' <<<"$res" || [ $? -eq 1 ]) n503=$(grep -c '^503$' <<<"$res" || [ $? -eq 1 ])
 [ "$n400" -ge 1 ] || fail "burst: no request reached payment-rpc ($n400 x 400, $n503 x 503)"
 [ "$n503" -ge 1 ] || fail "burst: 40 requests in a burst were never limited ($n400 x 400, $n503 x 503): the rate limit is not in force"
 sleep 5
@@ -136,14 +136,14 @@ rm -f "$big"
 echo "payment: a 2 MiB webhook body is refused at the ingress (413)"
 
 # ── 3. payment-rpc stopped: ordering is unaffected ─────────────────────────────────────────────────
-restore() { kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null 2>&1 || true; }
+restore() { kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null 2>&1 || true; }  # exit-ok: EXIT restore after the verdict; the next drill installs with --wait
 trap 'restore; test -z "$pf" || kill $pf 2>/dev/null || true' EXIT
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=0 >/dev/null
-kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null 2>&1 || true
+kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null 2>&1 || true  # exit-ok: kubectl wait fails when the pods are already gone, which is the state wanted; the steps after it assert
 [ "$(hit POST /api/payment/webhook -d '{}')" != 400 ] || fail "control: the webhook still reaches payment-rpc with it stopped"
 forward "svc/$release-rpc" "$rport" 80 -n "$ns"
 api="http://127.0.0.1:$rport/api"
-for _ in $(seq 1 30); do [ "$(code "$api/readyz")" = 200 ] && break; sleep 1; done
+for ((_try146 = 1; _try146 <= 30; _try146++)); do [ "$(code "$api/readyz")" = 200 ] && break; sleep 1; done
 rpc() { curl -fsS -H 'Content-Type: application/json' "$api/$1" -d "$2"; }
 sku="kind-pay-$(date +%s)"
 rpc catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}" >/dev/null
@@ -151,7 +151,7 @@ rpc inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}" >
 order=$(rpc ordering.v1.OrderService/CreateOrder "{\"customer_id\":\"payment-smoke\",\"items\":[{\"sku\":\"$sku\",\"quantity\":1}]}" | jq -r .order.id)
 [ -n "$order" ] && [ "$order" != null ] || fail "CreateOrder returned no id with payment-rpc stopped"
 status=""
-for _ in $(seq 1 60); do
+for ((_try154 = 1; _try154 <= 60; _try154++)); do
   status=$(rpc ordering.v1.OrderService/GetOrder "{\"id\":\"$order\"}" | jq -r .order.status)
   [ "$status" = ORDER_STATUS_CONFIRMED ] && break
   sleep 1

@@ -54,7 +54,7 @@ jq -e -s 'length == 1 and (.[0] | type == "object" and (.rekorTlogUrls | type ==
   || { echo "FAIL: $cfg is not one JSON signing config with a non-empty rekorTlogUrls array of logs that each have a url (empty, blank, truncated or malformed): nothing was verified"; exit 1; }
 logs=$(jq -c '.rekorTlogUrls' "$cfg")
 
-version=$(cosign version 2>/dev/null | sed -n 's/^GitVersion: *//p' || true)
+version=$(cosign version 2>/dev/null | sed -n 's/^GitVersion: *//p' || true)  # exit-ok: only names the cosign version in the report below; the log check does not use it
 bad=$(jq -r '.[] | select(.majorApiVersion != 1) | "  \(.url)  majorApiVersion=\(.majorApiVersion)  validFor=\(.validFor | tojson)  operator=\(.operator)"' <<<"$logs")
 if [ -n "$bad" ]; then
   cat <<MSG

@@ -119,7 +119,7 @@ esac
 C
 chmod +x "$tmp/bin/kubectl" "$tmp/bin/helm" "$tmp/bin/curl"
 
-die() { echo "diag-test: $*" >&2; echo "---- output:" >&2; cat "$tmp/out" >&2 2>/dev/null || true; echo "---- events:" >&2; cat "$tmp/events" >&2 2>/dev/null || true; exit 1; }
+die() { echo "diag-test: $*" >&2; echo "---- output:" >&2; cat "$tmp/out" >&2 2>/dev/null || true; echo "---- events:" >&2; cat "$tmp/events" >&2 2>/dev/null || true; exit 1; }  # exit-ok: failure report only; die() exits 1 whatever these cats return
 has() { grep -qF -- "$1" "$tmp/out" || die "$2: output lacks '$1'"; }
 hasnt() { ! grep -qF -- "$1" "$tmp/out" || die "$2: output has '$1'"; }
 
@@ -154,7 +154,7 @@ for want in pg_stat_activity pg_blocking_pids pg_locks max_connections; do
   grep -qF "$want" "$tmp/events" || die "D1: no Postgres read of $want"
   has "SQL $nonce:" "D1 the Postgres reads answered"
 done
-n=$(grep -c 'exec deploy/postgres' "$tmp/events" || true); [ "$n" = 3 ] || die "D1: $n Postgres reads, want 3 (sessions with blocked_by, locks, connections)"
+n=$(grep -c 'exec deploy/postgres' "$tmp/events" || [ $? -eq 1 ]); [ "$n" = 3 ] || die "D1: $n Postgres reads, want 3 (sessions with blocked_by, locks, connections)"
 # the whole log is in files, not only on the console
 for pod in a b; do grep -qF "LOG pod/$pod since=$since $nonce" "$DIAG_DIR/log-$pod.txt" || die "D1: $DIAG_DIR/log-$pod.txt lacks the log of pod/$pod"; done
 grep -qF "earlier-instance $nonce" "$DIAG_DIR/log-b.previous.txt" || die "D1: no previous container file for pod/b"
@@ -178,7 +178,7 @@ has "pod/a: diag: no log" "D2 a pod without a log is named"
 has "LOG pod/b since=$since $nonce" "D2 the other pod's log is still there"
 has "diag: 'locks (pg_locks)' failed" "D2 the failing read is named"
 has "SQL $nonce:" "D2 the other reads still ran"
-n=$(grep -c 'exec deploy/postgres' "$tmp/events" || true); [ "$n" = 3 ] || die "D2: $n Postgres reads, want 3 (a failing one must not stop the rest)"
+n=$(grep -c 'exec deploy/postgres' "$tmp/events" || [ $? -eq 1 ]); [ "$n" = 3 ] || die "D2: $n Postgres reads, want 3 (a failing one must not stop the rest)"
 MODE=nopods run_bounded 60 "$here/diag.sh" ns "$since"
 [ "$rc" = 0 ] || die "D2: no pod list: exit $rc, want 0"
 has "diag: no pod list" "D2 no pod list is said, not silently empty"
@@ -192,15 +192,15 @@ if only D3; then
 DIAG_DIR="$tmp/diag3" MODE=ok run_bounded 120 "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml"
 [ "$rc" = 1 ] || die "D3: exit $rc, want 1 (the script's own status, not diag's or restore's)"
 has "payment-flow: UpsertProduct: got '500', want '200'" "D3 the step that failed"
-n=$(grep -c '^::group::diag: pods and events' "$tmp/out" || true); [ "$n" = 1 ] || die "D3: diag ran $n times, want exactly once"
-start=$(sed -n 's/.*--since-time=\([^ ]*\).*/\1/p' "$tmp/events" | sort -u || true)
+n=$(grep -c '^::group::diag: pods and events' "$tmp/out" || [ $? -eq 1 ]); [ "$n" = 1 ] || die "D3: diag ran $n times, want exactly once"
+start=$(sed -n 's/.*--since-time=\([^ ]*\).*/\1/p' "$tmp/events" | sort -u)
 [ -n "$start" ] || die "D3: no log was read at all (diag.sh did not run)"
 [ "$(wc -l <<<"$start" | tr -d ' ')" = 1 ] || die "D3: the logs were read since more than one time: $start"
 [[ $start =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || die "D3: since-time '$start' is not RFC 3339 UTC"
 has "LOG pod/a since=$start $nonce" "D3 the pod log reached the output"
-first_logs=$(grep -n ' logs ' "$tmp/events" | head -1 | cut -d: -f1 || true)
-last_helm=$(grep -n '^helm upgrade' "$tmp/events" | tail -1 | cut -d: -f1 || true)
-first_helm=$(grep -n '^helm upgrade' "$tmp/events" | head -1 | cut -d: -f1 || true)
+first_logs=$(awk '/ logs /{print NR; exit}' "$tmp/events")
+last_helm=$(awk '/^helm upgrade/{n=NR} END{if(n) print n}' "$tmp/events")
+first_helm=$(awk '/^helm upgrade/{print NR; exit}' "$tmp/events")
 [ -n "$first_logs" ] && [ -n "$last_helm" ] || die "D3: no log read or no restore in the events"
 [ "$first_helm" -lt "$first_logs" ] || die "D3: the flow's own helm upgrade did not come first (the fake run did not get as far as it should)"
 [ "$first_logs" -lt "$last_helm" ] || die "D3: the pods' logs were read AFTER the release was restored (helm upgrade replaced them)"
@@ -210,7 +210,7 @@ fi
 # ── D4 the kind Postgres writes the server log a lock wait needs ─────────────
 if only D4; then
 # PyYAML is already what deployments/helm/check.py needs, so this adds no tool
-args=$(python3 - "$here/deps.yaml" <<'PY' || true
+args=$(python3 - "$here/deps.yaml" <<'PY'
 import sys, yaml
 for doc in yaml.safe_load_all(open(sys.argv[1])):
     if doc and doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "postgres":
@@ -260,15 +260,15 @@ for sg in TERM INT; do
     case $sg in TERM) want_rc=143 ;; INT) want_rc=130 ;; esac
     hb="$tmp/hb-$sg"; mkdir -p "$hb"; : > "$tmp/events"
     res=$(DIAG_DIR="$tmp/diag5-$sg" EVENTS="$tmp/events" NONCE="$nonce" HELM_BLOCK="$hb" PATH="$tmp/bin:$PATH" python3 "$tmp/sigrun.py" $sg "$hb/started" 60 \
-      "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out" || true)
+      "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out" || true)  # exit-ok: sigrun.py prints the script's rc= and signalled=; the next lines assert on both
     echo "$res" > "$tmp/out"
     [[ $res == *"signalled=yes"* ]] || die "D5 $sg: the script never reached the waiting helm upgrade ($res)"
     [[ $res == *"rc=$want_rc "* ]] || die "D5 $sg: $res; want rc=$want_rc (128 + the signal)"
     [[ $res == *"leftover=0"* ]] || die "D5 $sg: a child of the script outlived it ($res)"
-    hp=$(cat "$hb/helm.pid" 2>/dev/null || true)
+    hp=$(cat "$hb/helm.pid" 2>/dev/null || true)  # exit-ok: an empty pid is the failure, the next line dies on it
     [ -n "$hp" ] || die "D5 $sg: the fake helm left no pid"
     ! kill -0 "$hp" 2>/dev/null || { kill "$hp" 2>/dev/null; die "D5 $sg: the waiting helm (pid $hp) was left running"; }
-    n=$(grep -c ' logs ' "$tmp/events" || true); [ "$n" -gt 0 ] || die "D5 $sg: diag.sh did not run (no pod log was read)"
+    n=$(grep -c ' logs ' "$tmp/events" || [ $? -eq 1 ]); [ "$n" -gt 0 ] || die "D5 $sg: diag.sh did not run (no pod log was read)"
     first_logs=$(grep -n ' logs ' "$tmp/events" | head -1 | cut -d: -f1)
     last_helm=$(grep -n '^helm upgrade' "$tmp/events" | tail -1 | cut -d: -f1)
     [ "$first_logs" -lt "$last_helm" ] || die "D5 $sg: diag.sh ran after the restore"
@@ -488,7 +488,7 @@ PY
   [[ $res == *"rc=143 "* ]] || die "D6T: $res; want rc=143 (128 + TERM)"
   [[ $res == *"leftover=0"* ]] || die "D6T: something of diag.sh outlived it ($res)"
   has "diag: files in" "D6T: what diag.sh printed before the TERM reached the console"
-  left_fifos=$({ ls "$tmp/tmpT"/diag-console.* 2>/dev/null || true; } | wc -l | tr -d ' ')
+  left_fifos=$(find "$tmp/tmpT" -maxdepth 1 -name 'diag-console.*' | wc -l | tr -d ' ')
   [ "$left_fifos" = 0 ] || die "D6T: $left_fifos console fifo dirs left in $tmp/tmpT"
   echo "diag-test ok: D6T TERM while collecting: $res, the printed part is on the console, no fifo left"
 fi
@@ -499,7 +499,7 @@ fi
 # diag.sh selects, the second by the server's own flags in deps.yaml — and both are checked on a real Postgres running SQL
 # with a synthetic credential as a literal, once with leaky flags as the positive control.
 if only D7; then
-  rt=$(command -v docker || command -v podman || true)
+  rt=$(command -v docker || command -v podman || true)  # exit-ok: empty means neither engine is installed, the next line dies on it
   [ -n "$rt" ] || die "D7: needs docker or podman (a real Postgres is the point of this cell)"
   secret="sk_live_SYNTHETIC_$nonce"
   pgc=""; cleanup_pg() { [ -z "$pgc" ] || "$rt" rm -f "$pgc" >/dev/null 2>&1 || true; pgc=""; }
@@ -515,14 +515,14 @@ if only D7; then
     # first, and the connection is then cut ("terminating connection due to administrator command", seen on CI #417 r1 where
     # the image had to be pulled). Ready means the line appears TWICE; a server that never gets there is a setup failure.
     ready=0
-    for _ in $(seq 1 120); do
+    for ((_try518 = 1; _try518 <= 120; _try518++)); do
       [ "$("$rt" logs "$pgc" 2>&1 | grep -c 'database system is ready to accept connections')" -ge 2 ] && { ready=1; break; }
       sleep 1
     done
     [ "$ready" = 1 ] || die "D7 $label: the Postgres container never became ready (setup failure, not a result)"
     local psql=("$rt" exec -i "$pgc" psql -U app -d app -X -q)
     "${psql[@]}" -v ON_ERROR_STOP=1 -c "create table t(a text)" -c "create unique index on t(a)" -c "insert into t values ('seed')"
-    "${psql[@]}" -c "insert into t values ('$secret-u')" -c "insert into t values ('$secret-u')" >/dev/null 2>&1 || true
+    "${psql[@]}" -c "insert into t values ('$secret-u')" -c "insert into t values ('$secret-u')" >/dev/null 2>&1 || true  # exit-ok: the second insert violates the unique index on purpose; the error text is what the drill reads back
     "${psql[@]}" -c "begin; lock table t in access exclusive mode; select '$secret' as s, pg_sleep(40); commit" >/dev/null 2>&1 &
     local h=$!
     sleep 1
@@ -533,9 +533,9 @@ if only D7; then
     PGC="$pgc" RT="$rt" run_bounded 120 "$here/diag.sh" ns "$since"
     [ "$rc" = 0 ] || die "D7 $label: exit $rc, want 0"
     D7_RAW_QUERY=$("${psql[@]}" -At -c "select string_agg(query, ' | ') from pg_stat_activity where query like '%$secret%' and pid <> pg_backend_pid()")
-    D7_RAW_LOG=$("$rt" logs "$pgc" 2>&1 || true)
+    D7_RAW_LOG=$("$rt" logs "$pgc" 2>&1 || true)  # exit-ok: only the leaky-flags control reads it, and the control fails when the secret is not found in it
     kill "$h" "$w" 2>/dev/null || true; wait "$h" "$w" 2>/dev/null || true
-    D7_SEEN=$(cat "$tmp/out" "$DIAG_DIR"/* 2>/dev/null || true)
+    D7_SEEN=$(cat "$tmp/out" "$DIAG_DIR"/* 2>/dev/null) || die "D7: cannot read what diag.sh wrote — a leak check over nothing proves nothing"
     unset DIAG_DIR
   }
   # control: leaky flags. The secret is really there to be found: in pg_stat_activity, in the statement log, and in the

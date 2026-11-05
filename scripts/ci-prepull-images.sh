@@ -60,7 +60,7 @@ cleanup() {
   trap - EXIT
   local p
   for p in $pids; do kill -TERM -- "-$p" 2>/dev/null || true; done
-  for p in $pids; do wait "$p" 2>/dev/null || true; done
+  for p in $pids; do wait "$p" 2>/dev/null || true; done  # exit-ok: reaping the pulls we just killed; their status is not a verdict
 }
 trap cleanup EXIT
 trap 'exit 130' INT

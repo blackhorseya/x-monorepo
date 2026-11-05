@@ -14,7 +14,7 @@ catalog_start() {
   APP_CONFIG=/dev/null APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false APP_LOG_LEVEL="${APP_LOG_LEVEL:-warn}" \
     APP_AUTH_MODE=required APP_AUTH_API_KEYS="rpc=$CATALOG_KEY:admin" \
     "$bin/catalog-rpc" --require-durable > "$log" 2>&1 & catalog_pid=$!
-  for _ in $(seq 1 100); do
+  for ((_try_catalog = 1; _try_catalog <= 100; _try_catalog++)); do
     kill -0 "$catalog_pid" 2>/dev/null || { echo "catalog-rpc exited:"; cat "$log"; exit 1; }
     curl -fsS "http://127.0.0.1:$port/api/readyz" >/dev/null 2>&1 && break
     sleep 0.2

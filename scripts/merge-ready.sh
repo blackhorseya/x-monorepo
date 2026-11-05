@@ -28,9 +28,11 @@ case "${2:-}" in "") ;; --revalidate) revalidate=true ;; *) usage ;; esac
 case $pr in ''|*[!0-9]*) usage ;; esac
 
 repo=${MERGE_READY_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
-# shellcheck disable=SC2046
-set -- $(gh pr view "$pr" --repo "$repo" --json headRefOid,baseRefName -q '.headRefOid + " " + .baseRefName')
-head=$1 base=$2
+# `set -- $(gh …)` would drop gh's exit status (#462): read first, split after
+view=$(gh pr view "$pr" --repo "$repo" --json headRefOid,baseRefName -q '.headRefOid + " " + .baseRefName')
+# shellcheck disable=SC2086
+set -- $view
+head=${1:?gh pr view printed no head} base=${2:?gh pr view printed no base}
 main=$(gh api "repos/$repo/git/ref/heads/$base" -q .object.sha)
 
 echo "PR #$pr → $base"
@@ -38,14 +40,21 @@ echo "  main   $main   (live $base HEAD)"
 echo "  head   $head   (PR head)"
 
 # ── checks: complete, none pending / failing ──
-buckets=$(gh pr checks "$pr" --repo "$repo" --json bucket -q '.[].bucket' 2>/dev/null || true)
-total=$(printf '%s\n' "$buckets" | grep -c . || true)
-bad=$(printf '%s\n' "$buckets" | grep -cE '^(fail|cancel)$' || true)
-pending=$(printf '%s\n' "$buckets" | grep -cE '^pending$' || true)
+# gh pr checks exits 1 when a check failed and 8 when checks are pending, and prints the list either way; any other
+# status is gh itself failing, and an unreadable list is not "no checks" (#462)
+rc=0; buckets=$(gh pr checks "$pr" --repo "$repo" --json bucket -q '.[].bucket' 2>/dev/null) || rc=$?
+case $rc in
+  0|1|8) ;;
+  *) echo "NOT READY: gh pr checks failed (exit $rc) — the checks of PR #$pr could not be read" >&2; exit 1 ;;
+esac
+total=$(printf '%s\n' "$buckets" | grep -c . || [ $? -eq 1 ])
+bad=$(printf '%s\n' "$buckets" | grep -cE '^(fail|cancel)$' || [ $? -eq 1 ])
+pending=$(printf '%s\n' "$buckets" | grep -cE '^pending$' || [ $? -eq 1 ])
 
-# shellcheck disable=SC2046
-set -- $(gh run list --workflow ci.yml --event pull_request --commit "$head" --repo "$repo" --limit 1 \
+runinfo=$(gh run list --workflow ci.yml --event pull_request --commit "$head" --repo "$repo" --limit 1 \
   --json databaseId,status,conclusion -q '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"')
+# shellcheck disable=SC2086
+set -- $runinfo
 run=${1:-} status=${2:-} conclusion=${3:-}
 
 notready=false
@@ -71,8 +80,9 @@ if [ -z "$merge" ]; then
   echo "  STALE: run $run did not check out refs/pull/$pr/merge — nothing proves which main it merged into"
   fresh=false
 else
-  # shellcheck disable=SC2046
-  set -- $(gh api "repos/$repo/commits/$merge" -q '.parents[].sha')
+  parents=$(gh api "repos/$repo/commits/$merge" -q '.parents[].sha')
+  # shellcheck disable=SC2086
+  set -- $parents
   p_base=${1:-} p_head=${2:-}
   echo "  merge  $merge   (ci run $run, refs/pull/$pr/merge)"
   echo "  base   $p_base   (merge parent 1: main when the run started)"
@@ -96,11 +106,14 @@ fi
 # compare it for equality, never as a substring — "...base=<main>-wrong-tree" must not pass.
 want="merge-tree pr=$pr head=$head base=$main"
 tree=""
+# read into a variable first: `done < <(gh … || true)` lost gh's status, and a gh that died after printing the matching run
+# still counted as proof (#462). A gh that fails here means "no proof", i.e. stale — never "ready".
+treeruns=$(gh run list --workflow merge-tree.yml --event workflow_dispatch --repo "$repo" --limit 30 \
+  --json databaseId,status,conclusion,displayTitle \
+  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null) || treeruns=""
 while read -r id st concl title; do
   if [ "$st" = completed ] && [ "$concl" = success ] && [ "$title" = "$want" ]; then tree=$id; break; fi
-done < <(gh run list --workflow merge-tree.yml --event workflow_dispatch --repo "$repo" --limit 30 \
-  --json databaseId,status,conclusion,displayTitle \
-  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null || true)
+done <<<"$treeruns"
 if [ -n "$tree" ]; then
   echo "READY: merge-tree run $tree built main $main + head $head and passed ($total checks green on the PR)"
   exit 0

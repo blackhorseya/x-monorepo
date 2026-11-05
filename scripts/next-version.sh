@@ -16,7 +16,7 @@
 # release happens at all is scripts/releasable.sh's call, not this one's.
 set -euo pipefail
 head=${2:-HEAD}
-base=${1:-$(git describe --tags --abbrev=0 --match 'v*' "$head" 2>/dev/null || true)}
+base=${1:-$(git describe --tags --abbrev=0 --match 'v*' "$head" 2>/dev/null || true)}  # exit-ok: no reachable tag is the normal first-release state; an empty base exits 2 right below, so a failing git is no version either
 if [ -z "$base" ]; then
   echo "next-version: no previous v* tag reachable from $head" >&2
   exit 2
@@ -48,7 +48,7 @@ while IFS= read -r -d '' commit; do
   consider "${commit%%$'\n'*}" "$body" || break
 done < <(git log -z --first-parent --format='%s%n%b' "$base..$head")
 if [ -n "${3:-}" ] && [ "$bump" != major ]; then
-  consider "$3" "" || true
+  consider "$3" "" || true  # exit-ok: consider() is our own function and returns 1 only to say "major reached, stop scanning"
 fi
 
 case "$bump" in

@@ -25,7 +25,16 @@ if [[ "${1:-}" == "--files" ]]; then
 else
   BASE="${BASE_REF:-origin/main}"
   git rev-parse --verify -q "$BASE" >/dev/null || BASE=HEAD
-  FILES=$( (git diff --no-renames --name-only "$BASE"...HEAD 2>/dev/null || true; git diff --no-renames --name-only HEAD; git ls-files --others --exclude-standard) | sort -u)
+  # No merge base (a shallow clone) makes the three-dot diff fail. That used to read as "nothing changed on the branch" (|| true)
+  # and shrink the test matrix; now it means "cannot tell", and every module is affected (#462).
+  if ! committed=$(git diff --no-renames --name-only "$BASE"...HEAD 2>/dev/null); then
+    echo "affected: git diff $BASE...HEAD failed — treating every module as affected" >&2
+    echo "$ALL"; exit 0
+  fi
+  # one assignment each: a failing git stops the script here, it is not a shorter list
+  worktree=$(git diff --no-renames --name-only HEAD)
+  untracked=$(git ls-files --others --exclude-standard)
+  FILES=$(printf '%s\n%s\n%s\n' "$committed" "$worktree" "$untracked" | sort -u)
 fi
 
 [[ -z "$FILES" ]] && exit 0

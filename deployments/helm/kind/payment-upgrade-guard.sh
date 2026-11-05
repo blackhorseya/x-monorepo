@@ -19,10 +19,14 @@ inner=$here/payment-upgrade.sh
 q() { kubectl -n "$home" exec deploy/postgres -- psql -U app -d app -tAq -c "SET default_transaction_read_only = on; $1"; }
 
 snapshot() {
-  local t
+  local t tables n
   q "SELECT 'schema ' || nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' ORDER BY 1" || return 1
-  for t in $(q "SELECT format('%I.%I', table_schema, table_name) FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema !~ '^pg_' AND table_schema <> 'information_schema' ORDER BY 1") ; do
-    echo "table $t $(q "SELECT count(*) FROM $t")"
+  # each read on its own line, not inside `for … in $(q …)` or `echo "$(q …)"`: a q that prints part of its answer and then dies
+  # would be a shorter snapshot (a missing table, a count of nothing) and before == after would still hold (#462)
+  tables=$(q "SELECT format('%I.%I', table_schema, table_name) FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema !~ '^pg_' AND table_schema <> 'information_schema' ORDER BY 1") || return 1
+  for t in $tables; do
+    n=$(q "SELECT count(*) FROM $t") || return 1
+    echo "table $t $n"
   done
 }
 

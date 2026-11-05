@@ -97,8 +97,8 @@ hostport=$("$engine" port "$cid" "$port/tcp" | head -n1 | sed 's/.*://')
 base="http://127.0.0.1:$hostport"
 
 ready=""
-for _ in $(seq 60); do
-  if [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/readyz" || true)" = 200 ]; then ready=1; break; fi
+for ((_try100 = 1; _try100 <= 60; _try100++)); do
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/readyz" || true)" = 200 ]; then ready=1; break; fi  # exit-ok: poll: a failed curl is "not ready yet"; the loop ends in a FAIL line when /api/readyz never answers 200
   [ "$("$engine" inspect --format '{{.State.Running}}' "$cid")" = true ] || { "$engine" logs "$cid" >&2; echo "image-smoke: FAIL the container exited" >&2; exit 1; }
   sleep 0.5
 done

@@ -21,7 +21,7 @@ run() {
   kargs=("$@")
   : > "$work/$name.skus"
   env "${stubenv[@]}" STUB_SKU_LOG="$work/$name.skus" python3 tests/k6/bench_stub.py "$port" & xpid=$!
-  for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
+  for ((_try24 = 1; _try24 <= 50; _try24++)); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
   local rc=0
   k6 run --quiet --summary-export "$work/$name.json" "$js" -e "BASE_URL=http://127.0.0.1:$port" -e RUN_ID=fx \
     -e K6_CUSTOMER_MODE=omit "${kargs[@]}" > "$work/$name.log" 2>&1 || rc=$?

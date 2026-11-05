@@ -16,7 +16,7 @@ set -euo pipefail
 main=$1 head=$2 title=$3
 repo_url=${REPO_URL:-https://github.com/blackhorseya/x-monorepo}
 
-base=$(git describe --tags --abbrev=0 --match 'v*' "$main" 2>/dev/null || true)
+base=$(git describe --tags --abbrev=0 --match 'v*' "$main" 2>/dev/null || true)  # exit-ok: no reachable tag is the first-release state and is announced as such in the comment; the comment is advisory, release.yml decides
 echo '<!-- release-gate -->'
 echo '### Release gate'
 echo

@@ -134,7 +134,7 @@ for c in "${cells[@]}"; do
       continue
     fi
     values_of "$k" "$tmp/out" > "$tmp/vals"
-    n=$(grep -c . "$tmp/vals" || true)
+    n=$(grep -c . "$tmp/vals" || [ $? -eq 1 ])
     got=$(sort -u "$tmp/vals" | tr '\n' ' ')
     [ "$s" = S1 ] && base=$n
     if [ "$got" != "$want " ]; then

@@ -143,7 +143,7 @@ while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
   APP_POSTGRES_URL=$url catalog_start "$bin" "$((port + 2))" "$out/run$n-catalog.log"
   APP_POSTGRES_URL=$url "$bin/rpc" > "$out/run$n-rpc.log" 2>&1 & pid=$!
   APP_POSTGRES_URL=$url "$bin/worker" > "$out/run$n-worker.log" 2>&1 & wpid=$!
-  for _ in $(seq 1 100); do
+  for ((_try146 = 1; _try146 <= 100; _try146++)); do
     kill -0 "$pid" 2>/dev/null || { echo "rpc exited:"; cat "$out/run$n-rpc.log"; exit 1; }
     kill -0 "$wpid" 2>/dev/null || { echo "worker exited:"; cat "$out/run$n-worker.log"; exit 1; }
     curl -fsS "http://127.0.0.1:$port/api/readyz" >/dev/null 2>&1 && break
@@ -157,7 +157,7 @@ while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
     # the create phase leaves a backlog for the worker (CreateOrder outruns reservation): how long it
     # takes to drain, over the orders still PENDING at the start of that window (tests/k6/bench_drain.sh)
     tests/k6/bench_drain.sh "$url" "$out/run$n-drain.json" "$DRAIN_TIMEOUT"
-    k6_phase "$n" reserve -e "RATE=$RESERVE_RATE" -e "DURATION=$RESERVE_DURATION" || true
+    k6_phase "$n" reserve -e "RATE=$RESERVE_RATE" -e "DURATION=$RESERVE_DURATION" || true  # exit-ok: k6_phase returns 1 only for a provable overload (recorded in $overload); every other failure exits inside it
   fi
   stop_load
   python3 -I tests/k6/loadavg.py >> "$out/run$n-load.csv"

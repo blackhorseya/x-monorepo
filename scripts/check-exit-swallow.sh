@@ -58,6 +58,7 @@ function split_comment(s,   i, c, q, n) {
 # the first word of the command that ends right before position p of CODE ("" when there is none)
 function verb_before(p,   s, w) {
   s = substr(CODE, 1, p - 1)
+  while (match(s, /\$\([^()]*\)/) || match(s, /\$\{[^{}]*\}/)) s = substr(s, 1, RSTART - 1) "X" substr(s, RSTART + RLENGTH)   # arguments like "$(cat f)" and "${P##* }"
   while (match(s, /(;|&&|\|\||\$\(|\{|\(|[ \t]do[ \t]|[ \t]then[ \t]|\047)/)) s = substr(s, RSTART + RLENGTH)
   sub(/^[ \t]+/, "", s)
   if (match(s, /^"\$[A-Za-z_{}0-9]+"[ \t]+/)) s = substr(s, RLENGTH + 1)   # "$tool" rm -f ...
@@ -90,8 +91,12 @@ FNR == 1 { reset_file() }
     ok = (v == "kill" || v == "rm" || (v == "wait" && pre ~ /(^|[^A-Za-z_])kill[ \t]/) || (guard && (v == "[" || v == "[[" || v == "test")))
     if (!ok && !exempt) report("swallow")
   }
-  # forlist
-  if (CODE ~ /(^|[;&|{(]|[ \t])for[ \t]+[A-Za-z_][A-Za-z_0-9]*[ \t]+in[ \t].*(\$\(|`)/ && !exempt) report("forlist")
+  # forlist: only the word list between `in` and `; do`, not the loop body
+  if (match(CODE, /(^|[;&|{(]|[ \t])for[ \t]+[A-Za-z_][A-Za-z_0-9]*[ \t]+in[ \t]/)) {
+    fl = substr(CODE, RSTART + RLENGTH)
+    sub(/;[ \t]*do([ \t]|$).*/, "", fl); gsub(/\047[^\047]*\047/, "", fl)
+    if (fl ~ /(\$\(|`)/ && !exempt) report("forlist")
+  }
   # setargs
   if (CODE ~ /(^|[;&|{(]|[ \t])set[ \t]+--[ \t].*(\$\(|`)/ && !exempt) report("setargs")
   # pipeline: pipefail must already be set above this line
