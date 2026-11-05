@@ -1521,6 +1521,20 @@ expect_eq "script modes: a glob that matches nothing is not green (exit 2: too f
 expect_match "script modes: and it says which pattern matched nothing" "kk/\\*\\.sh' \\(from the chmod line\\) matches no file" "$out"
 modes_fixture mut4; sed -i.bak 's#chmod +x#chmod -x#' "$repo/Taskfile.yml"; rm "$repo/Taskfile.yml.bak"; modes_run
 expect_eq "script modes: no chmod line at all is not green (judge cannot pass on empty)" "2" "$rc"
+# Fault injection (#454 r1): each external command the gate calls prints its real output and THEN dies. A gate that swallows
+# the status (`x=$(cmd || true)`, a pipe in $(…)) stays green on exactly this; it must go red.
+modes_dying() {   # modes_dying <tool>: PATH wrapper that runs the real <tool>, then exits 42
+  local real; real=$(command -v "$1")
+  mkdir -p "$tmp/dying-$1"; printf '#!/bin/sh\n%s "$@"\nexit 42\n' "$real" > "$tmp/dying-$1/$1"; chmod +x "$tmp/dying-$1/$1"
+}
+for t in grep git dirname; do
+  modes_dying "$t"; modes_fixture "dies-$t"
+  rc=0; out=$(cd "$repo" && PATH="$tmp/dying-$t:$PATH" scripts/check-script-modes.sh 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then bad "script modes: $t prints its output then exits 42, the gate still exits 0 [$out]"; else ok; fi
+done
+# The fixture itself is green without the wrapper (so the red above is the wrapper's doing, not the fixture's).
+modes_fixture dies-control; modes_run
+expect_eq "script modes: fault-injection control — same fixture, real tools, is green" "0" "$rc"
 
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
