@@ -45,7 +45,18 @@ want() {
 # the outputs in cell order after all lanes are done, so a cell's lines are never interleaved with another's.
 # A cell with no .rc (its lane died) is a FAIL: absence of a verdict is never green.
 xpid=""
+# `|| true`: cleanup only (the server is already gone, or killed here); it decides nothing — every verdict is made from the
+# files the cell wrote and k6's own exit code
 stop() { [ -n "$xpid" ] && kill "$xpid" 2>/dev/null && wait "$xpid" 2>/dev/null || true; xpid=""; }
+
+# found <grep -q args…>: 0 = there, 1 = not there. Any other exit is grep itself failing (it may have printed all, some
+# or none of its output first): that is a FAIL reason of the cell, never "not there" (a leak check must not go green on it).
+found() {
+  local r=0
+  grep -q "$@" 2>/dev/null || r=$?
+  [ "$r" -le 1 ] || why+=("grep failed (exit $r): grep -q $*")
+  [ "$r" = 0 ]
+}
 
 # <script> <mode> <port>
 cell_grid() {
@@ -73,17 +84,20 @@ cell_grid() {
   [ "$rc" != 0 ] || why+=("k6 exited 0: a transport failure must fail the run")
   for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
     for k in "$KEY" "$ADMIN_KEY"; do
-      if grep -q -- "$k" "$f" 2>/dev/null; then
+      if found -- "$k" "$f"; then
         why+=("forbidden text $k found in $(basename "$f") (a credential reflected by the wire parser error)")
       fi
     done
   done
   # nothing free-text in a tag: k6's `error` tag is the parser's own message
-  if grep -q '"error":"' "$log-metrics.json" 2>/dev/null; then
+  if found '"error":"' "$log-metrics.json"; then
     why+=("metrics carry a free-text error tag (the parser message)")
   fi
   # the diagnostic: exactly the class this mode produces, and no other
-  classes=$(grep -o 'transport\.[a-z_]*' "$log.log" | sort -u | tr '\n' ' ' || true)
+  # grep -o exits 1 with no match (classes stays empty → the check below fails); any other exit is a FAIL of its own
+  g=0; found_classes=$(grep -o 'transport\.[a-z_]*' "$log.log") || g=$?
+  [ "$g" -le 1 ] || why+=("grep -o failed (exit $g) while reading the failure classes")
+  classes=$(printf '%s\n' "$found_classes" | sort -u | tr '\n' ' ')
   if [ "$classes" != "transport.$(want "$mode") " ]; then
     why+=("expected the only failure class transport.$(want "$mode"), output has: ${classes:-none}")
   fi
@@ -116,7 +130,7 @@ cell_key() {
   grep -q "^served status$" "$log-server.log" 2>/dev/null || why+=("wire server never served 'status'")
   [ "$rc" != 0 ] || why+=("k6 exited 0: a transport failure must fail the run")
   for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
-    if grep -q -- "$k" "$f" 2>/dev/null; then
+    if found -- "$k" "$f"; then
       why+=("forbidden text $k found in $(basename "$f") (a key equal to a failure class string)")
     fi
   done
@@ -155,7 +169,7 @@ cell_reflect() {
   grep -q "^served $mode$" "$log-server.log" 2>/dev/null || why+=("status server never served the reflected '$mode' answer")
   [ "$rc" != 0 ] || why+=("k6 exited 0: a wrong status must fail $counter")
   for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
-    if grep -q -- "$k" "$f" 2>/dev/null; then
+    if found -- "$k" "$f"; then
       why+=("forbidden text $k found in $(basename "$f") (a credential reflected into a legal JSON status)")
     fi
   done
@@ -234,12 +248,13 @@ lane() { # <lane number>
 }
 lpids=()
 for ((l = 0; l < jobs; l++)); do lane "$l" & lpids+=($!); done
+# `|| true`: a lane's own exit decides nothing — every cell has its own .rc, and a cell without one is a FAIL below
 for p in "${lpids[@]}"; do wait "$p" || true; done
 
 fails=()
 for c in "${cells[@]}"; do
   name=${c%%|*}
-  cat "$dir/$name.out" 2>/dev/null || true
+  cat "$dir/$name.out" 2>/dev/null || true   # printing only: the verdict is the .rc below, a missing/empty .out cannot make a cell pass
   if [ "$(cat "$dir/$name.rc" 2>/dev/null || echo missing)" != 0 ]; then
     fails+=("$name")
     # a cell that printed no verdict at all (its lane died, or it was killed): say so, red-stage-shaped

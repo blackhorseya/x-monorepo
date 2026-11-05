@@ -68,5 +68,29 @@ rc=0; PATH="$work/shim:$PATH" wire WIRE_JOBS=2 || rc=$?;      check "wire: a lan
 grep -q '^--- FAIL: wire-' "$work/wire.out" && echo "ok   wire: the cell is printed as --- FAIL:" \
   || { echo "FAIL wire: no --- FAIL: line for the dead lane"; fails=$((fails + 1)); }
 
+# grep failing AFTER writing output (all of it / part of it) or on the leak check must fail the cell, not read as
+# "no match" / "no leak": the shim runs the real grep and then exits 42 (full), prints its first line only (partial),
+# or exits 42 on the leak check (a pattern with `canary`)
+cat > "$work/shim/grep" <<'SH'
+#!/bin/sh
+real=/usr/bin/grep; [ -x "$real" ] || real=/bin/grep
+case "$*" in
+  *'transport\.'*) case ${GREP_SHIM:-} in
+    full) $real "$@"; $real "$@" >/dev/null; exit 42;;
+    partial) $real "$@" | head -n 1; exit 42;;
+  esac;;
+  *canary*) [ "${GREP_SHIM:-}" = leak ] && exit 42;;
+esac
+exec $real "$@"
+SH
+chmod +x "$work/shim/grep"
+rm -f "$work/shim/k6"   # the real k6 again for the cases below
+rm -f "$work/shim/k6"
+for m in full partial leak; do
+  rc=0; PATH="$work/shim:$PATH" wire GREP_SHIM=$m WIRE_MODES=status || rc=$?
+  check "wire: grep exits 42 ($m) is a FAIL" nonzero "$rc"
+done
+rc=0; PATH="$work/shim:$PATH" wire WIRE_MODES=status || rc=$?; check "wire: the grep shim in pass-through is still green" zero "$rc"
+
 [ "$fails" = 0 ] || { echo "FAIL ($fails)"; exit 1; }
 echo "ok  parallel harnesses"
