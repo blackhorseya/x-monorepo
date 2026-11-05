@@ -237,12 +237,12 @@ expect_eq "auth matrix cell names are unique" 0 "$(printf '%s\n' "$all_cells" | 
 shards=$(ci_job k6-auth | sed -n 's/^        shard: \[\(.*\)\]$/\1/p' | tr -d '" ' | tr ',' ' ')
 expect_match "k6-auth has a static shard matrix" '^1/[1-9]( |$)' "$shards"
 n=${shards##*/}
-want=""; for i in $(seq 1 "$n"); do want="$want $i/$n"; done
+want=""; for ((i = 1; i <= n; i++)); do want="$want $i/$n"; done
 expect_eq "k6-auth shards are 1/n … n/n" "${want# }" "$shards"
 expect_eq "k6-auth leg reads its shard from the matrix" 1 "$(ci_job k6-auth | grep -c '^      K6_AUTH_SHARD: ${{ matrix.shard }}$')"
 expect_eq "k6-auth matrix does not stop the other legs" 1 "$(ci_job k6-auth | grep -c '^      fail-fast: false$')"
 union=""
-for i in $(seq 1 "$n"); do
+for ((i = 1; i <= n; i++)); do
   part=$(K6_AUTH_LIST=1 K6_AUTH_SHARD=$i/$n "$m")
   expect_match "auth matrix shard $i/$n is not empty" '.' "$part"
   union="$union
