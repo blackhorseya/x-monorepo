@@ -13,8 +13,6 @@ cd "$(dirname "$0")/.."
 [ -f dist/index.html ] || { echo "image.sh: dist/ missing, run task web-build" >&2; exit 1; }
 
 tool=${CONTAINER_TOOL:-$(command -v docker >/dev/null 2>&1 && echo docker || echo podman)}
-# FAULT INJECTION (do not merge): the `logs` of the "-refused" container print what they have and then exit 42 — expect_refused must say it cannot read the logs and then fail on their absence
-real_tool=$(command -v "$tool"); tool="$(mktemp -d)/tool-faulty"; printf '#!/bin/sh\ncase "$1 $2" in "logs "*-refused) %s "$@"; exit 42;; esac\nexec %s "$@"\n' "$real_tool" "$real_tool" > "$tool"; chmod +x "$tool"
 port=${E2E_CONSOLE_PORT:-18093}
 rpc_port=${E2E_RPC_PORT:-18091}
 name=x-monorepo-console-e2e
@@ -58,7 +56,7 @@ expect_refused() {
   done
   local code logs
   code=$("$tool" inspect -f '{{.State.ExitCode}}' "$n" 2>/dev/null || echo "?")
-  logs=$("$tool" logs "$n" 2>&1) || { echo "image.sh: cannot read the logs of $n" >&2; logs=""; }   # the refusal text is asserted next; an empty log does not contain it
+  logs=$("$tool" logs "$n" 2>&1; exit 42) || { echo "image.sh: cannot read the logs of $n" >&2; logs=""; }   # FAULT INJECTION (do not merge): the logs are printed, then the read exits 42
   "$tool" rm -f "$n" >/dev/null 2>&1 || true
   if [ "$status" != exited ] || [ "$code" = 0 ] || ! printf '%s' "$logs" | grep -q 'console-env:'; then
     echo "image.sh: expected the container to refuse '$label' (exit non-zero, say why), got status=$status exit=$code"; printf '%s\n' "$logs" | tail -5; exit 1
