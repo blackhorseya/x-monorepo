@@ -2095,7 +2095,7 @@ for a in 'NS=a$(id)' 'x'; do :; done
 n=$(grep -c y f || [ $? -eq 1 ])
 n=$(cat f | count_lines y)
 expect_eq x 1 "$n" "$(date)"
-f() { local n; n=$(grep -c y f || [ $? -eq 1 ]); local m=$((n + 1)); local k=1; echo "$n $m $k"; }
+f() { local n; n=$(grep -c y f) || [ $? -eq 1 ]; local m=$((n + 1)); local k=1; echo "$n $m $k"; }
 best_effort kubectl -n "$ns" get pods,jobs >&2
 [ -n "$x" ] && best_effort kubectl wait --for=delete pod -l a=b
 n=$(cmd) && echo "$n"
