@@ -2585,8 +2585,18 @@ wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
 # the same six call forms inside a workflow run: (the lock holds for the extracted scripts too); the finding is on the YAML line of x=$(cmd) (line 7)
 wf_lock() { # <name> <call line(s)>
   {
-    printf 'jobs:\n  j:\n    steps:\n      - shell: bash\n        run: |\n'
-    printf '          f() {\n            local x\n            x=$(cmd)\n            echo "$x"\n          }\n'
+    cat <<'EOT'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          f() {
+            local x
+            x=$(cmd)
+            echo "$x"
+          }
+EOT
     printf '%s\n' "$2" | sed 's/^/          /'
   } > "$sw/wfl-$1.yml"
   sw_run "$sw/wfl-$1.yml"
