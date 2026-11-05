@@ -211,6 +211,7 @@ fixture ciall
 expect_eq "CI_ALL=1 runs everything" "$all_jobs" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 expect_eq "CI_ALL prints one flag per job" "$(echo "$all_jobs" | wc -w | tr -d ' ')" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | wc -l | tr -d ' ')"
 # assignments, not `"$(… || [ $? -eq 1 ])"` inside an argument: the status of a substitution that is an argument never reaches set -e (#462)
+grep() { if [ "$1" = -c ]; then command grep "$@"; return 2; fi; command grep "$@"; }   # FAULT INJECTION: grep -c exits 2 after printing (do not merge)
 all_out=$(in_repo env CI_ALL=1 scripts/ci-changes.sh)
 n_false=$(grep -c '=false$' <<<"$all_out" || [ $? -eq 1 ])
 expect_eq "CI_ALL=1 prints no false" "0" "$n_false"
