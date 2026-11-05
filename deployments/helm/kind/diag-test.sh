@@ -37,7 +37,6 @@
 # stale output cannot pass.
 set -euo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-. "$(dirname "$0")/../../../scripts/capture.sh"   # value_or_empty: a value that is empty, not half-printed, when its command fails (#466)
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)

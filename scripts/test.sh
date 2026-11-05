@@ -22,7 +22,6 @@ trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; rm -rf "$tmp"' EXIT
 fail=0 pass=0
 # shellcheck source=fault-inject.sh
 . "$src/scripts/best-effort.sh"    # best_effort: cleanup that must not decide a verdict, and says so when it fails (#462)
-. "$src/scripts/capture.sh"        # capture: output + exit status of a command without $(…) around it (#466)
 # le1 <command…>: a filter whose exit 1 means "found nothing" (grep -c / -m1): 0 and 1 are a success, 2+ is the command's own failure and stays one.
 le1() { local rc=0; "$@" || rc=$?; [ "$rc" -le 1 ] || return "$rc"; return 0; }
 # count_file <file>: the number in a counter file; 0 when the fake never created it (no file = never called); a file that cannot be read fails
@@ -2669,7 +2668,7 @@ fn_text() { # <file> <name>: the function, from its first line to its closing br
 }
 helper_cell() { # <label> <file> <name> <want rc> <want output> <command…>: define the real function, run the command, judge rc and output
   local label=$1 file=$2 name=$3 wrc=$4 wout=$5; shift 5
-  { echo ". '$src/scripts/capture.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/helper.sh"
+  { echo ". '$src/scripts/best-effort.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/helper.sh"
   hrc=0; capture hout hrc bash "$tmp/helper.sh" || exit 1
   expect_eq "helper $name ($label): exit" "$wrc" "$hrc"
   expect_eq "helper $name ($label): output" "$wout" "$hout"
@@ -2719,10 +2718,10 @@ helper_cell "read dies (5) after printing" "$src/deployments/helm/kind/payment-f
 # container_field (web/apps/console/e2e/image.sh): the State field; a failed inspect says so, prints nothing, exit 0
 helper_cell "field read" "$src/web/apps/console/e2e/image.sh" container_field 0 exited 'tool=ctl; ctl() { printf exited; }; container_field Status c'
 helper_cell "inspect dies (125)" "$src/web/apps/console/e2e/image.sh" container_field 0 "value_or_empty: command failed (exit 125): ctl inspect -f {{.State.Status}} c" 'tool=ctl; ctl() { return 125; }; container_field Status c 2>&1'
-# value_or_empty (scripts/capture.sh): the value when the command succeeds (or exits <= -ok N), NOTHING of it when it fails after printing a part
+# value_or_empty (scripts/best-effort.sh): the value when the command succeeds (or exits <= -ok N), NOTHING of it when it fails after printing a part
 voe_cell() { # <label> <want rc> <want out (stdout+stderr)> <command…>
   local label=$1 wrc=$2 wout=$3; shift 3
-  { echo ". '$src/scripts/capture.sh'"; echo "voe_ok() { printf 'v1\nv2\n'; }; voe_part() { printf 'half'; return 2; }; voe_one() { printf '0\n'; return 1; }"; printf '%s\n' "$@"; } > "$tmp/voe.sh"
+  { echo ". '$src/scripts/best-effort.sh'"; echo "voe_ok() { printf 'v1\nv2\n'; }; voe_part() { printf 'half'; return 2; }; voe_one() { printf '0\n'; return 1; }"; printf '%s\n' "$@"; } > "$tmp/voe.sh"
   vrc=0; capture vout vrc bash "$tmp/voe.sh" || exit 1
   expect_eq "value_or_empty ($label): exit" "$wrc" "$vrc"
   expect_eq "value_or_empty ($label): output" "$wout" "$vout"
@@ -2743,7 +2742,7 @@ cls_cell() { # <label> <want rc> <want output regex> <stub lines…>: the real c
 cls_cell "failed_specs dies (3) after printing"  2 'parsing the log failed \(status 3\)' 'failed_specs() { echo partial.spec.ts; return 3; }' 'run_summary() { echo "  1 failed"; }'
 cls_cell "run_summary dies (4) after printing"   2 'reading the Playwright summary failed \(status 4\)' 'failed_specs() { echo a.spec.ts; }' 'run_summary() { echo "  1 failed"; return 4; }'
 cls_cell "both fine, a spec failed, exit 1: RED" 0 'exit=1 failed-spec-files=\[a.spec.ts\]' 'failed_specs() { echo a.spec.ts; }' 'run_summary() { echo "  1 failed"; }'
-# scripts/capture.sh: all the output and the real exit status of a command, the command's own failure is never capture's
+# scripts/best-effort.sh: all the output and the real exit status of a command, the command's own failure is never capture's
 cap_run() { # <label> <want rc> <want out> <want capture rc> <command…>
   local label=$1 wrc=$2 wout=$3 wcrc=$4; shift 4
   crc=0; copt=; cap_rc=

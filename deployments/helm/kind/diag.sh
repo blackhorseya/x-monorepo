@@ -29,7 +29,6 @@
 # Best effort: it never fails, so it cannot hide the failure it reports on. Needs kubectl.
 set -uo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-. "$(dirname "$0")/../../../scripts/capture.sh"   # value_or_empty: a value that is empty, not half-printed, when its command fails (#466)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 dir=${DIAG_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/kind-diag}

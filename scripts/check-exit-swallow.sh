@@ -27,8 +27,9 @@
 # Not flagged without a comment: `kill ... || true`, `rm ... || true` and `... kill ... && wait ... || true` (cleanup:
 # an already-gone process or file is not a verdict). Anything else needs either a fix or, on the SAME line, a comment
 #   # exit-ok: <why this command's status cannot change the verdict>
-# The fixes: `n=$(grep -c x f || [ $? -eq 1 ])` (grep: 1 = no match, 2 = error stays fatal), an explicit `rc=0; cmd || rc=$?`
-# followed by a case on $rc, `for ((i = 0; i < N; i++))` instead of $(seq). docs/ci.md has the rules and the reasons.
+# The fixes: at top level `n=$(grep -c x f || [ $? -eq 1 ])` (grep: 1 = no match, 2 = error stays fatal) or an explicit `rc=0; cmd || rc=$?`
+# followed by a case on $rc; inside a function only the three fnctx shapes, with a tolerant exit status in a helper (le1: `n=$(le1 grep -c x f) || return`);
+# `for ((i = 0; i < N; i++))` instead of $(seq). docs/ci.md has the rules and the reasons.
 #
 # This is a line scanner, not a shell parser: `pipeline` only looks at files without pipefail, and a `|` inside a quoted
 # string is ignored. Exit 0 = clean, 1 = findings, 2 = the checker itself failed (never reported as clean).
@@ -336,7 +337,7 @@ awk -F'\t' -v map="$tmp/map.tsv" 'FILENAME == map { first[$1] = $3; src[$1] = $2
 mv "$tmp/out.mapped" "$tmp/out" || die "mv failed"
 if [ -s "$tmp/out" ]; then
   cat "$tmp/out" >&2
-  echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md)." >&2
+  echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md). Exception: a fnctx finding has no exit-ok; inside a function the only accepted shapes are \`x=\$(…) || return [arg]\`, \`|| exit [arg]\` and \`|| { …; return|exit [arg]; }\`." >&2
   exit 1
 fi
 echo "check-exit-swallow: $nscripts scripts and the run: scripts of $nyml workflow / action files, no swallowed exit status"

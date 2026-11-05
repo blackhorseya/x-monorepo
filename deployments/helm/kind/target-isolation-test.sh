@@ -24,9 +24,9 @@
 #   7 every kind script run directly, outside its task: refused (exit 2), no tool called (#444)
 #   8 a Taskfile command that does not go through the runner: check-kubeconfig.py --taskfile must exit non-zero
 set -uo pipefail
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort, capture, value_or_empty (#462, #466)
 cd "$(dirname "$0")/../../.."
 root=$PWD
-. scripts/capture.sh   # capture: output + exit status of a command, without $(…) around it (#466)
 
 command -v perl >/dev/null || { echo "needs perl (alarm)"; exit 1; }
 python3 -c 'import yaml' 2>/dev/null || { echo "needs python3 with PyYAML (pip install pyyaml): mutant 8 runs check-kubeconfig.py"; exit 1; }
@@ -78,7 +78,7 @@ printf '#!/bin/sh\nexit 0\n' > "$fakebin/sleep"; chmod +x "$fakebin/sleep"
 
 fresh_tree() {  # a scratch copy of the kind directory (the mutants edit it, never the repo)
   rm -rf "$tree/deployments/helm/kind"; cp -R "$root/deployments/helm/kind" "$tree/deployments/helm/kind"
-  mkdir -p "$tree/scripts"; cp "$root/scripts/best-effort.sh" "$root/scripts/capture.sh" "$tree/scripts/"   # the kind scripts source ../../../scripts/best-effort.sh and capture.sh
+  mkdir -p "$tree/scripts"; cp "$root/scripts/best-effort.sh" "$tree/scripts/best-effort.sh"   # the kind scripts source ../../../scripts/best-effort.sh
 }
 
 # lines_of <taskfile> → $tmp/lines: the expanded cluster-touching lines of the seven kind tasks

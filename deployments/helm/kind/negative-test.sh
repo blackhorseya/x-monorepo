@@ -14,7 +14,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
-. "$here/../../../scripts/capture.sh"  # capture: output + exit status of a command, without $(…) around it (#466)
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort, capture, value_or_empty (#462, #466)
 mkdir "$tmp/bin"
 key="kind-neg-key-0123456789abcd"
 # the values file negative.sh reads the Postgres URL from (kind/values.yaml has the same shape)

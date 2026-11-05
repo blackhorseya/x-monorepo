@@ -12,7 +12,6 @@
 #   e2e/image.sh --grep orders         # extra args go to playwright test
 set -euo pipefail
 . "$(dirname "$0")/../../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-. "$(dirname "$0")/../../../../scripts/capture.sh"   # value_or_empty: a value that is empty, not half-printed, when its command fails (#466)
 cd "$(dirname "$0")/.."
 [ -f dist/index.html ] || { echo "image.sh: dist/ missing, run task web-build" >&2; exit 1; }
 
