@@ -17,9 +17,10 @@
 #   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
 #   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
 #             break; no function names, and a new value for $v is the failure swallowed; top-level code only: inside a function the fnctx shapes apply). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
-#   default   (#470) a failed command turned into a value, judged against a CLOSED whitelist of handlers (not a list of bad words): after `x=$(…) ||` only
-#             return / exit [arg] or `{ …; return|exit [arg]; }` (or `|| NAME=$?`, which rcbranch then follows); after a `||` INSIDE a $(…) only `exit [non-zero]`
-#             or `{ …; exit; }`; the label idiom `$([ test ] && echo a || echo b)` passes only when the test holds no $( ` <( inside. Not exemptible.
+#   default   (#470) a failed command turned into a value, judged against a CLOSED whitelist (not bad words), including the ARGUMENT of exit / return (only a
+#             provably non-zero status: nothing, a non-zero literal, or `$?` straight after the `||`; never `$var` or `$?` after another command). After
+#             `x=$(…) ||`: hshape(); inside a $(…): `exit [N]` / `{ …; exit N; }` only, and no if / case / while / until / for / select there. The label idiom
+#             `$([ test ] && echo a || echo b)` passes when the test holds no $( ` <( . Not exemptible.
 #   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` must be followed on its own line (or after a heredoc substitution's closing line) by
 #             one of THREE shapes: `|| return [arg]`, `|| exit [arg]`, `|| { …; return|exit [arg]; }` (the group's last top-level statement). Nothing else:
 #             no function names, no new value, no `|| rc=$?`, no `$?` on a later line, no continue / break, no return 0. A shape rule: it does not look at how or from where the function is called (`f || x`,
@@ -97,22 +98,26 @@ fi
 if [ "${#files[@]}" -eq 0 ]; then echo "check-exit-swallow: no shell to check in the ${nyml} workflow / action file(s)"; exit 0; fi
 
 cat > "$tmp/common.awk" <<'AWK'
-# The ONE judgment of what may follow `||` after a failing command (#466 fnctx, #470 default). A closed whitelist, shared by both programs:
-#   return [arg]   exit [arg]   { …; return|exit [arg]; }      [arg] = nothing | non-zero literal | $? | $var | ${var} | $1 (quoted or not)
+# The ONE judgment of what may follow `||` after a failing command (#466 fnctx, #470 default, rcbranch). A closed whitelist INCLUDING the argument: only what is
+# provably a non-zero status. A status taken from a variable can be 0 (`exit "$zero"`), and `$?` after another command is THAT command's status
+# (`{ echo 0; exit $?; }` and a bare `{ echo 0; exit; }` leave with 0).
+#   plain   (directly after `||`)  return | exit | return $? | exit $? | return N | exit N     here `$?` IS the failed command's status; N = non-zero integer literal
+#   brace   { …; return N; }  { …; exit N; }                                                    the LAST statement, N a non-zero integer literal. No bare, no `$?`, no `$var`.
 # hshape(h, exit_only): 1 when the handler text h (what follows `||`, a brace group possibly joined from several lines with " ; ") is one of them.
 # exit_only: inside a $(…) the handler may only `exit` (the status of the substitution reaches the assignment), never `return`.
-function hshape(h, exit_only,   hs, blk, lastst, verb, arg) {
-  arg = "([ \t]+(\\$\\?|\"\\$\\?\"|\\$\\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\\}?|\"\\$\\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\\}?\"|[1-9][0-9]*))?$"
-  verb = exit_only ? "^exit" : "^(return|exit)"
+function hshape(h, exit_only,   hs, blk, ns, st, i, verb, lit, last) {
+  verb = exit_only ? "exit" : "(return|exit)"
+  lit = "\"?[1-9][0-9]*\"?"
   sub(/^[ \t]+/, "", h)
   if (h ~ /^\{/) {
-    if (h !~ /\}[ \t;]*$/) return 0
-    blk = h; sub(/[ \t;]*\}[ \t;]*$/, "", blk); sub(/^\{[ \t]*/, "", blk)
-    lastst = blk; sub(/.*;[ \t]*/, "", lastst); sub(/^[ \t]+/, "", lastst)
-    return (lastst ~ (verb arg))
+    if (index(h, "}") == 0) return 0
+    blk = substr(h, 1, index(h, "}") - 1); sub(/^\{[ \t]*/, "", blk); sub(/[ \t;]+$/, "", blk)
+    if (blk ~ /[{}]/) return 0                                       # nested groups: not judged, so not accepted
+    ns = split(blk, st, ";"); last = st[ns]; sub(/^[ \t]+/, "", last); sub(/[ \t]+$/, "", last)
+    return (last ~ ("^" verb "[ \t]+" lit "$"))
   }
   hs = h; sub(/[ \t]*(;|&&|\|\|).*/, "", hs)                        # a plain shape ends at the first separator
-  return (hs ~ (verb arg))
+  return (hs ~ ("^" verb "([ \t]+(\\$\\?|\"\\$\\?\"|" lit "))?$"))
 }
 AWK
 cat > "$tmp/scan.awk" <<'AWK'
@@ -190,13 +195,18 @@ function argsub(c,   i, j, d, ch, pre, inner, n) {
 # assignment is read for at most 6 lines.
 function reportat(rule, ln, txt) { printf "%s:%d: %s: %s\n", FILENAME, ln, rule, txt; n++ }
 function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; flt[sd] = line; fdq[sd] = dq; fbd[sd] = 0; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context
-function defeval(d,   np, parts, k, h, lc, cond) {
+function labelok(prev, h,   lc, cond) {            # `[ test ] && echo a || echo b`: prev = the clause before `||`, h = the handler
+  lc = prev; sub(/.*;/, "", lc); cond = lc; sub(/&&[ \t]*(echo|printf).*$/, "", cond)
+  return (h ~ /^(echo|printf)([ \t;)`"\047]|$)/ && lc ~ /&&[ \t]*(echo|printf)/ && cond ~ /^[ \t]*(\[\[?|test)[ \t]/ && cond !~ /(\$\(|`|<\()/)
+}
+function defeval(d,   np, parts, k, h, plain) {
+  plain = fb[d]; gsub(/"[^"]*"/, "", plain); gsub(/\047[^\047]*\047/, "", plain)         # control words / && inside a quoted string are text
+  if (plain ~ /(^|[;{(&|\001])[ \t]*(if|case|while|until|for|select)[ \t]/) { reportat("default", fln[d], flt[d]); return }   # a value picked by control flow inside $(…) hides the failure of what it tests
   np = split(fb[d], parts, "\001")
   for (k = 2; k <= np; k++) {
     h = parts[k]; sub(/^[ \t]+/, "", h)
     if (hshape(h, 1)) continue
-    lc = parts[k - 1]; sub(/.*;/, "", lc); cond = lc; sub(/&&[ \t]*(echo|printf).*$/, "", cond)
-    if (h ~ /^(echo|printf)([ \t;)`"\047]|$)/ && lc ~ /&&[ \t]*(echo|printf)/ && cond ~ /^[ \t]*(\[\[?|test)[ \t]/ && cond !~ /(\$\(|`|<\()/) continue
+    if (labelok(parts[k - 1], h)) continue
     reportat("default", fln[d], flt[d]); return
   }
 }
@@ -213,7 +223,7 @@ function cutcomment(t,   i, ch, q, out) {
 }
 function ahjudge(   b) {
   b = cutcomment(ah_buf); sub(/^[ \t;]+/, "", b); sub(/[ \t]+$/, "", b)
-  if (b == "" || (b ~ /^\{/ && b !~ /\}[ \t;]*$/)) { if (ah_cnt >= 6) { reportat("default", ah_ln, ah_txt); ah_open = 0 }; return }
+  if (b == "" || (b ~ /^\{/ && index(b, "}") == 0)) { if (ah_cnt >= 6) { reportat("default", ah_ln, ah_txt); ah_open = 0 }; return }
   if (!(hshape(b, 0) || b ~ /^[A-Za-z_][A-Za-z_0-9]*=\$\?[ \t]*(;|$)/)) reportat("default", ah_ln, ah_txt)
   ah_open = 0
 }
@@ -406,7 +416,7 @@ END {
     if (use && use < rd) { printf "%s:%d: rcbranch: %s   [$%s is used at line %d before $%s is read at line %d]\n", FILENAME, i, code, v, use, c, rd; n++; continue }
     esc = 0
     for (k = rd; k <= rd + 5 && k <= NR; k++) {
-      if (L[k] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break)([^A-Za-z_0-9]|$)/) { esc = 1; break }   # no function names (fail / die: nothing says they stop) and a new value for $v is NOT a refusal (#470): it is the failure swallowed
+      if (L[k] ~ /(^|[^A-Za-z_0-9])(continue|break)([^A-Za-z_0-9]|$)/ || L[k] ~ ("(^|[^A-Za-z_0-9])(return|exit)([ \t]+(\"?[1-9][0-9]*\"?|\"?\\$\\?\"?|\"?\\$\\{?" c "\\}?\"?))?[ \t]*(;|\\}|&|\\||\\)|$)")) { esc = 1; break }   # return / exit count only with a provably non-zero status: nothing, a non-zero literal, $?, or the captured $c (not `exit "$zero"`)
     }
     if (!esc) { printf "%s:%d: rcbranch: %s   [the lines that read $%s (from line %d) never refuse $%s: no return / exit / continue / break]\n", FILENAME, i, code, c, rd, v; n++ }
   }

@@ -77,8 +77,7 @@ jobs:
             echo "manual dispatch: releasing \`$HEAD_SHA\` unconditionally" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          rc=0; base=$(git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null) || rc=$?
-          if [ "$rc" != 0 ]; then base=""; echo "git describe exited $rc: no tag reachable from $HEAD_SHA, releasing" >&2; fi
+          if base=$(git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null); then :; else rc=$?; base=""; echo "git describe exited $rc: no tag reachable from $HEAD_SHA, releasing" >&2; fi
           if [ -z "$base" ]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "no previous tag reachable from \`$HEAD_SHA\`: releasing" >> "$GITHUB_STEP_SUMMARY"

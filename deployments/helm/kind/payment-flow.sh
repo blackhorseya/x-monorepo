@@ -48,7 +48,7 @@ on_signal() { # <exit status>: stop the waited-for child, then leave through the
   trap '' TERM INT HUP   # a second signal must not cut the diagnosis or the restore short
   # the child and ITS children (a wrapper around helm / kubectl leaves its own child behind otherwise)
   if [ -n "$cur" ]; then
-    kids=$(value_of -ok 1 pgrep -P "$cur") || { echo "payment-flow: cannot list the children of $cur" >&2; kill "$cur" 2>/dev/null || true; exit "$1"; }   # explicit pids, never a pattern; 1 = no children, 2+ = pgrep failed: still stop the child and leave
+    if ! kids=$(value_of -ok 1 pgrep -P "$cur"); then kids=""; fi   # explicit pids, never a pattern; 1 = no children, 2+ = pgrep failed (said on stderr by value_of): the child itself is still stopped below and the script still leaves
     for c in $kids; do kill "$c" 2>/dev/null || true; done
     kill "$cur" 2>/dev/null || true; wait "$cur" 2>/dev/null || true; cur=""
   fi

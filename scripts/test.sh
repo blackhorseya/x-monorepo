@@ -65,8 +65,8 @@ all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot 
 # pipeline are each checked: CI-CHANGES-FAILED when ci-changes.sh dies (even after printing a plausible set), FORMAT-FAILED when sed / tr die.
 ci_changes_jobs() {
   local out res
-  out=$(in_repo scripts/ci-changes.sh) || { echo CI-CHANGES-FAILED; return; }
-  res=$(printf '%s\n' "$out" | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//') || { echo FORMAT-FAILED; return; }
+  out=$(in_repo scripts/ci-changes.sh) || { echo CI-CHANGES-FAILED; return 1; }
+  res=$(printf '%s\n' "$out" | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//') || { echo FORMAT-FAILED; return 1; }
   echo "$res"
 }
 # jobs_on <name> <files...>: commits the files on a branch off main and returns the jobs set to true.
@@ -291,9 +291,9 @@ ci_job() { awk -v n="  $1:" '$0 == n {f=1; next} /^  [a-z0-9-]+:/ || /^  #/ {f=0
 ci_count() {
   local j=$1 body n
   shift
-  body=$(ci_job "$j") || { echo CI-JOB-FAILED; return; }
+  body=$(ci_job "$j") || { echo CI-JOB-FAILED; return 1; }
   [ -n "$body" ] || { echo CI-JOB-EMPTY; return; }
-  n=$(printf '%s\n' "$body" | le1 grep -c "$@") || { echo COUNT-FAILED; return; }
+  n=$(printf '%s\n' "$body" | le1 grep -c "$@") || { echo COUNT-FAILED; return 1; }
   echo "$n"
 }
 # helm-kind, helm-kind-keda and k6-auth / k6-wire are jobs of their own, not matrix legs: a skipped one
@@ -318,7 +318,7 @@ done
 # (no sort / wc whose failure would be read off a value); GREP-FAILED when grep finds nothing or dies.
 diag_name_count() {
   local n=0 seen="|" all dn
-  all=$(grep -o 'name: kind-diag-[a-z]*' "$src/.github/workflows/ci.yml") || { echo GREP-FAILED; return; }
+  all=$(grep -o 'name: kind-diag-[a-z]*' "$src/.github/workflows/ci.yml") || { echo GREP-FAILED; return 1; }
   while IFS= read -r dn; do
     case "$seen" in *"|$dn|"*) ;; *) seen="$seen$dn|"; n=$((n + 1)) ;; esac
   done <<EOF_DIAG
@@ -336,7 +336,7 @@ expect_eq "helm-kind-target has no matrix"  0 "$(ci_count helm-kind-target 'matr
 # out_inputs <flag>: the inputs ci-changes.sh lists for `out <flag> …` (FAILED when grep finds nothing or dies)
 out_inputs() {
   local l
-  l=$(grep "^out $1 " "$src/scripts/ci-changes.sh") || { echo FAILED; return; }
+  l=$(grep "^out $1 " "$src/scripts/ci-changes.sh") || { echo FAILED; return 1; }
   l=${l#out $1}
   echo "${l#"${l%%[![:space:]]*}"}"
 }
@@ -533,11 +533,11 @@ done
 # cond_runs <if: text> <write> <save_build> <group> <go-cache> <tools>: prints 1, 0, or ? when the text is outside the grammar.
 cond_runs() {
   local cond=$1 write=$2 save=$3 group=$4 gocache=$5 tools=$6 term terms val re res=1
-  [ -n "$cond" ] || { echo '?'; return; }
-  terms=$(printf '%s\n' "$cond" | awk '{n = split($0, a, / && /); for (i = 1; i <= n; i++) print a[i]}') || { echo '?'; return; }
+  [ -n "$cond" ] || { echo '?'; return 1; }
+  terms=$(printf '%s\n' "$cond" | awk '{n = split($0, a, / && /); for (i = 1; i <= n; i++) print a[i]}') || { echo '?'; return 1; }
   re="^([A-Za-z0-9_.-]+) (==|!=) '([^']*)'\$"
   while IFS= read -r term; do
-    [[ $term =~ $re ]] || { echo '?'; return; }
+    [[ $term =~ $re ]] || { echo '?'; return 1; }
     case ${BASH_REMATCH[1]} in
       steps.plan.outputs.write)      val=$write ;;
       steps.plan.outputs.save_build) val=$save ;;
@@ -1237,7 +1237,8 @@ expect_eq "red: message only in the RUN echo is not an assertion" "setup 1" "$(r
 FAIL')"
 # A long log must not flip a found message to setup: grep -q exiting early SIGPIPEs the filter
 # upstream of it, and pipefail turns that into "not found".
-long_log=$(printf '=== RUN   TestX\n    x_test.go:10: target assertion\n'; for ((_try801 = 1; _try801 <= 20000; _try801++)); do printf '    long diagnostic line %0100d\n' 0; done; printf -- '--- FAIL: TestX (0.00s)\nFAIL\n')
+gen_long_log() { printf '=== RUN   TestX\n    x_test.go:10: target assertion\n'; for ((_try801 = 1; _try801 <= 20000; _try801++)); do printf '    long diagnostic line %0100d\n' 0; done; printf -- '--- FAIL: TestX (0.00s)\nFAIL\n'; }
+long_log=$(gen_long_log) || exit 1
 expect_eq "red: long output still assertion" "assertion 0" "$(red 'target assertion' "$long_log")"
 set +e; scripts/red-stage.sh </dev/null >/dev/null 2>&1; rc=$?; set -e
 expect_eq "red: -m is required" 64 "$rc"
@@ -2631,7 +2632,6 @@ bypass_case or-rc      $'  x=$(cmd) || rc=$?\n  printf \'%s\\n\' "$x"'
 good_case or-exit      $'  x=$(cmd) || exit 1\n  printf \'%s\\n\' "$x"'
 good_case or-return-rc $'  x=$(cmd) || return $?\n  printf \'%s\\n\' "$x"'
 good_case or-brace     $'  x=$(cmd) || { echo "cmd failed" >&2; return 1; }\n  printf \'%s\\n\' "$x"'
-good_case or-brace-rc  $'  x=$(cmd) || { rc=$?; echo "cmd failed ($rc)" >&2; return "$rc"; }\n  printf \'%s\\n\' "$x"'
 good_case or-next-line $'  x=$(cmd) ||\n    return 1\n  printf \'%s\\n\' "$x"'
 # r8 (#466): outside the CLOSED three shapes (`|| return [arg]`, `|| exit [arg]`, `|| { …; return|exit [arg]; }`) is red even when it behaves:
 # no function names, no new value for the variable, no `|| rc=$?`, no `$?` read on a later line, no continue / break, no return 0, no refusal that is
@@ -2649,6 +2649,12 @@ F
   expect_eq "fnctx: [$1] is outside the closed whitelist: red" "1" "$rc"
 }
 sp=' '   # the literal "|| x=" is a #470 finding in THIS file too: the space comes from a variable
+shape_red or-brace-rc     $'  x=$(cmd) || { rc=$?; echo "cmd failed ($rc)" >&2; return "$rc"; }'
+shape_red ret-var         $'  r=3\n  x=$(cmd) || return "$r"'
+shape_red ret-positional  $'  x=$(cmd) || return "$1"'
+shape_red brace-bare-exit $'  x=$(cmd) || { echo m >&2; exit; }'
+shape_red brace-dollar-q  $'  x=$(cmd) || { echo m >&2; exit $?; }'
+shape_red ret-arith       '  x=$(cmd) || return $((0))'
 shape_red rc-next         $'  x=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1\n  printf \'%s\\n\' "$x"'
 shape_red rc-same-line    $'  x=$(cmd); rc=$?\n  [ "$rc" = 0 ] || return 1'
 shape_red or-die          $'  x=$(cmd) || die "cmd failed"'
@@ -2666,7 +2672,6 @@ shape_red brace-case      $'  x=$(cmd) || { case $x in *) return 1 ;; esac; }'
 shape_red return-cmd      $'  x=$(cmd) || return $(warn)'
 # the three shapes, with each kind of [arg], are green
 fn_green ret-arg     '  x=$(cmd) || return 3'
-fn_green ret-var     $'  r=3\n  x=$(cmd) || return "$r"'
 fn_green exit-status '  x=$(cmd) || exit $?'
 fn_green brace-last  '  x=$(cmd) || { echo "cmd failed" >&2; cleanup; return 2; }'
 # the helpers that tolerate one exit status, each against rc=0 / rc=1 / rc>=2 (the real functions, cut out of their files)
@@ -3052,6 +3057,59 @@ dr_red die-function 'half' <<'F'
 die() { echo 0; }
 v=$(cmd) || die
 F
+dr_red zero-variable 'half' <<'F'
+zero=0
+v=$(cmd || exit "$zero")
+F
+dr_red zero-variable-braced 'half' <<'F'
+zero=0
+v=$(cmd || exit "${zero}")
+F
+dr_red sub-brace-exit-after-echo 'half0' <<'F'
+v=$(cmd || { echo 0; exit $?; })
+F
+dr_red sub-brace-bare-exit-after-echo 'half0' <<'F'
+v=$(cmd || { echo 0; exit; })
+F
+dr_red assign-zero-variable 'rc0' <<'F'
+zero=0
+( x=$(cmd) || exit "$zero" )
+v=rc$?
+F
+dr_red assign-brace-exit-after-echo 'rc0' <<'F'
+( x=$(cmd) || { echo 0; exit $?; } )
+v=rc$?
+F
+dr_red assign-colon-return 'rc0' <<'F'
+f4() { x=$(cmd) || { :; return; }; }
+f4
+v=rc$?
+F
+dr_red assign-arith-return 'rc0' <<'F'
+f5() { x=$(cmd) || return $((0)); }
+f5
+v=rc$?
+F
+dr_red if-in-substitution 'half0' <<'F'
+v=$(if cmd; then echo yes; else echo 0; fi)
+F
+dr_red case-in-substitution 'half0' <<'F'
+v=$(case x in (*) cmd || echo 0;; esac)
+F
+dr_red and-or-chain-in-substitution 'halfn' <<'F'
+v=$(cmd && echo y || echo n)
+F
+dr_green plain-bare-return 7 <<'F'
+f6() { v=$(cmd) || return; }
+f6 || exit $?
+F
+dr_green plain-return-status 7 <<'F'
+f7() { v=$(cmd) || return $?; }
+f7 || exit $?
+F
+dr_green plain-exit-literal 3 <<'F'
+v=$(cmd) || exit 3
+F
 dr_green substitution-exit 3 <<'F'
 v=$(cmd || exit 3) || exit $?
 F
@@ -3089,6 +3147,12 @@ for sl in cover-gate merge-ready red-stage rekor-v2-canary; do
   lrc=0; capture -2 lout lrc env -C "$both" bash "./$sl.sh" || exit 1
   case $lout in *"cannot load"*) bad "$sl: started as ./name it could not load its library [$lout]" ;; *) ok ;; esac
 done
+# a script started through a symlink that lives in another directory cannot find its library: that is a documented limit, and it must FAIL (not carry on)
+sl_dir="$tmp/sym-real"; sl_link="$tmp/sym-link"; mkdir -p "$sl_dir" "$sl_link"
+cp "$src/scripts/cover-gate.sh" "$src/scripts/best-effort.sh" "$sl_dir/"; ln -sf "$sl_dir/cover-gate.sh" "$sl_link/cover-gate.sh"
+lrc=0; capture -2 lout lrc bash "$sl_link/cover-gate.sh" || exit 1
+if [ "$lrc" != 0 ]; then ok; else bad "cover-gate through a cross-directory symlink carried on (exit 0) [$lout]"; fi
+expect_match "cover-gate through a cross-directory symlink: the message names best-effort.sh" 'best-effort\.sh' "$lout"
 # a workflow run: script is scanned too
 wf_check df-wf <<'F'
 name: t
@@ -3476,7 +3540,9 @@ rcb_red() { # <name> <lines…>: #470 — giving $v a new value is the failure s
   sw_run "$sw/rcbred-$n.sh"; expect_eq "rcbranch: [$n] is red (a new value is not a refusal)" "1" "$rc"; expect_match "rcbranch: [$n] names the rule" ': rcbranch:' "$out"
 }
 rcb_red clear   'rc=0; rows=$(jq . f) || rc=$?' 'if [ "$rc" != 0 ]; then rows=""; echo "jq failed" >&2; fi' 'echo "$rows"'
+rcb_red zero-status 'zero=0; rc=0; rows=$(jq . f) || rc=$?' '[ "$rc" = 0 ] || exit "$zero"' 'echo "$rows"'
 rcb_red default 'rc=0; rows=$(jq . f) || rc=$?' 'if [ "$rc" != 0 ]; then rows="[]"; fi' 'echo "$rows"'
+rcb_ok captured 'rc=0; rows=$(jq . f) || rc=$?' '[ "$rc" = 0 ] || exit "$rc"' 'echo "$rows"'
 rcb_ok exit    'rc=0; rows=$(jq . f) || rc=$?' '[ "$rc" = 0 ] || { echo "jq failed" >&2; exit 2; }' 'echo "$rows"'
 rcb_ok case    'rc=0; rows=$(jq . f) || rc=$?' 'case $rc in' '  0) ;;' '  *) echo "jq failed" >&2; exit 2 ;;' 'esac' 'echo "$rows"'
 rcb_ok loop    'for f in a b; do' '  rc=0; rows=$(jq . "$f") || rc=$?' '  [ "$rc" = 0 ] || continue' '  echo "$rows"' 'done'

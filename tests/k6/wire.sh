@@ -307,8 +307,8 @@ for p in "${lpids[@]}"; do best_effort wait "$p"; done   # a lane's verdict is t
 fails=() passed=0
 for c in "${cells[@]}"; do
   name=${c%%|*}
-  out="" r=0; out=$(cat "$dir/$name.out" 2>/dev/null) || r=$?
-  rcv="" q=0; rcv=$(cat "$dir/$name.rc" 2>/dev/null) || q=$?
+  out="" r=0; if out=$(cat "$dir/$name.out" 2>/dev/null); then :; else r=$?; fi   # a failed read is a reason below, never an empty output
+  rcv="" q=0; if rcv=$(cat "$dir/$name.rc" 2>/dev/null); then :; else q=$?; fi
   [ "$r" = 0 ] && [ -n "$out" ] && printf '%s\n' "$out"
   reason=""
   if [ "$r" != 0 ]; then reason="could not read its output (exit $r)"
