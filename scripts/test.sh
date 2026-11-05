@@ -55,7 +55,15 @@ expect_match() { if printf '%s' "$3" | grep -Eq -- "$2"; then ok; else bad "$1: 
 count_lines() { local n rc=0; n=$(grep -c "$@") || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; echo "$n"; }
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
-all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind helm_kind_keda k6 k6_auth k6_wire"
+all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind helm_kind_payment helm_kind_keda helm_kind_target k6 k6_auth k6_wire"
+# ci_changes_jobs: runs scripts/ci-changes.sh in $repo and prints the jobs set to true. The script's exit code and the formatting
+# pipeline are each checked: CI-CHANGES-FAILED when ci-changes.sh dies (even after printing a plausible set), FORMAT-FAILED when sed / tr die.
+ci_changes_jobs() {
+  local out res
+  out=$(in_repo scripts/ci-changes.sh) || { echo CI-CHANGES-FAILED; return; }
+  res=$(printf '%s\n' "$out" | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//') || { echo FORMAT-FAILED; return; }
+  echo "$res"
+}
 # jobs_on <name> <files...>: commits the files on a branch off main and returns the jobs set to true.
 jobs_on() {
   local name=$1; shift
@@ -63,11 +71,11 @@ jobs_on() {
   git -C "$repo" checkout -q -b change
   for f in "$@"; do touch_file "$f"; done
   commit "chore: $name"
-  in_repo scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//'
+  ci_changes_jobs
 }
 # Shorthands for the sets below (#328): the Go checks every Go change runs, and what only product code adds.
 go_checks="gen_freshness lint work_sync coverage"
-go_prod_pre="build console_e2e helm_kind"; go_prod="$go_prod_pre k6_wire"
+go_prod_pre="build console_e2e helm_kind helm_kind_payment"; go_prod="$go_prod_pre k6_wire"
 expect_eq "docs only runs nothing"            "" "$(jobs_on docs README.md docs/a.md)"
 # The Grafana dashboard and alert rules are inputs of helm-check's check-observability.py (#367 slice 5c): a metric-name typo in a rule that never fires is caught there, so a change to them runs helm and nothing else.
 expect_eq "grafana provisioning runs helm-check only" "helm" "$(jobs_on grafana deployments/docker/grafana/provisioning/alerting.yaml)"
@@ -81,7 +89,7 @@ expect_eq "an apps/worker _test.go is still test-only"     "$go_checks" "$(jobs_
 expect_eq "an apps/rpc _test.go is still test-only"        "$go_checks" "$(jobs_on rpctest apps/rpc/x_test.go)"
 # A test helper that is not named *_test.go is product code: it can be imported by a binary.
 expect_eq "a non-_test.go test helper is product code" \
-  "$go_checks build console_e2e helm_kind helm_kind_keda k6_wire" \
+  "$go_checks build console_e2e helm_kind helm_kind_payment helm_kind_keda k6_wire" \
   "$(jobs_on pgtest pkgs/platform/postgres/pgtest/pgtest.go)"
 expect_eq "a _test.go next to a product file changes nothing about the product file" \
   "$go_checks $go_prod" \
@@ -92,27 +100,50 @@ expect_eq "go runs the Go checks, kind and k6-wire" \
   "$go_checks $go_prod" \
   "$(jobs_on go pkgs/ordering/domain/order/order.go)"
 # go.mod / go.sum / go.work change the dependency graph of every binary: release-snapshot, keda and k6 run too.
-gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind helm_kind_keda k6 k6_wire"
+gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind helm_kind_payment helm_kind_keda k6 k6_wire"
 expect_eq "go.mod counts as go, and as a release / keda / k6 input" "$gomod_jobs" "$(jobs_on gomod pkgs/ordering/go.mod)"
 expect_eq "go.sum likewise"  "$gomod_jobs" "$(jobs_on gosum pkgs/ordering/go.sum)"
-expect_eq "go.work likewise" "$gomod_jobs" "$(jobs_on gowork go.work)"
+# go.work alone is also an input of helm-kind-target (every task evaluates the Taskfile's MODULES from it), the other three are not.
+gowork_jobs="$go_checks build release_snapshot console_e2e helm_kind helm_kind_payment helm_kind_keda helm_kind_target k6 k6_wire"
+expect_eq "go.work likewise, and a helm-kind-target input" "$gowork_jobs" "$(jobs_on gowork go.work)"
 expect_eq "go.work.sum likewise" "$gomod_jobs" "$(jobs_on goworksum go.work.sum)"
 expect_eq ".golangci.yml is product code (not test-only)" "$go_checks $go_prod" "$(jobs_on golangci .golangci.yml)"
 # proto: generated Go is committed (a Go change) and the TS client is generated from it (a web change),
 # so console-image keeps the trigger; it is not a release-snapshot input.
 expect_eq "proto is go + breaking + web, console-image included" \
-  "$go_checks build breaking web console_e2e console_image helm_kind k6_wire" \
+  "$go_checks build breaking web console_e2e console_image helm_kind helm_kind_payment k6_wire" \
   "$(jobs_on proto protos/ordering/v1/service.proto)"
 expect_eq "web only: no lint, no k6, no keda" \
-  "gen_freshness web console_e2e console_image helm_kind" \
+  "gen_freshness web console_e2e console_image helm_kind helm_kind_payment" \
   "$(jobs_on web web/apps/console/src/routes/orders.tsx)"
-expect_eq "helm only" "helm helm_kind helm_kind_keda" "$(jobs_on helm deployments/helm/x-monorepo/values.yaml)"
+expect_eq "helm only" "helm helm_kind helm_kind_payment helm_kind_keda" "$(jobs_on helm deployments/helm/x-monorepo/values.yaml)"
 # scripts/test.sh drives deployments/helm/kind/coredns-dex.sh itself (#287): a change to only that
 # file must run scripts-test, or its fixtures cannot catch a regression in it at PR time.
-expect_eq "coredns-dex.sh also runs scripts-test" "helm scripts_test helm_kind helm_kind_keda" "$(jobs_on coredns deployments/helm/kind/coredns-dex.sh)"
-expect_eq "any kind script runs scripts-test (check-exit-swallow.sh scans every tracked *.sh, #462)" "helm scripts_test helm_kind helm_kind_keda" "$(jobs_on kindsmoke deployments/helm/kind/smoke.sh)"
+expect_eq "coredns-dex.sh also runs scripts-test" "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" "$(jobs_on coredns deployments/helm/kind/coredns-dex.sh)"
+expect_eq "any kind script runs scripts-test (check-exit-swallow.sh scans every tracked *.sh, #462)" "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" "$(jobs_on kindsmoke deployments/helm/kind/smoke.sh)"
 expect_eq "a k6 shell script runs scripts-test too" "scripts_test k6 k6_auth k6_wire" "$(jobs_on k6sh tests/k6/catalog.sh)"
-expect_eq "a console e2e shell script runs scripts-test too" "gen_freshness web console_e2e console_image scripts_test helm_kind" "$(jobs_on e2esh web/apps/console/e2e/image.sh)"
+expect_eq "a console e2e shell script runs scripts-test too" "gen_freshness web console_e2e console_image scripts_test helm_kind helm_kind_payment" "$(jobs_on e2esh web/apps/console/e2e/image.sh)"
+# helm-kind-target (#446) runs deployments/helm/kind/target-kubeconfig-test.sh, which executes the kind runner and the Taskfile's
+# helm-kind-cluster / helm-kind-down. Its inputs are named in ci-changes.sh (target_src); each one alone must run it, and the helm
+# jobs next to it (everything under deployments/helm/ is a helm input). Anything else must not: it creates two kind clusters.
+kind_target_jobs="helm helm_kind helm_kind_payment helm_kind_keda helm_kind_target"
+kind_target_sh_jobs="helm scripts_test helm_kind helm_kind_payment helm_kind_keda helm_kind_target"   # a *.sh also runs scripts-test (check-exit-swallow.sh, #462)
+expect_eq "kind/run.sh alone runs helm-kind-target"           "$kind_target_sh_jobs" "$(jobs_on tgtrun deployments/helm/kind/run.sh)"
+expect_eq "kind/lock.sh alone runs helm-kind-target"          "$kind_target_sh_jobs" "$(jobs_on tgtlock deployments/helm/kind/lock.sh)"
+expect_eq "kind/shim/kubectl alone runs helm-kind-target"     "$kind_target_jobs" "$(jobs_on tgtshimk deployments/helm/kind/shim/kubectl)"
+expect_eq "kind/shim/helm alone runs helm-kind-target"        "$kind_target_jobs" "$(jobs_on tgtshimh deployments/helm/kind/shim/helm)"
+expect_eq "kind/target-kubeconfig-test.sh alone runs helm-kind-target" "$kind_target_sh_jobs" "$(jobs_on tgtkc deployments/helm/kind/target-kubeconfig-test.sh)"
+expect_eq "kind/target-test.sh alone runs helm-kind-target"   "$kind_target_sh_jobs" "$(jobs_on tgtt deployments/helm/kind/target-test.sh)"
+expect_eq "kind/target-isolation-test.sh alone runs helm-kind-target" "$kind_target_sh_jobs" "$(jobs_on tgtiso deployments/helm/kind/target-isolation-test.sh)"
+# the Taskfile is where helm-kind-cluster / helm-kind-down live: ci (all_jobs, above) already covers it. Not inputs:
+expect_eq "the chart does not run helm-kind-target"           "helm helm_kind helm_kind_payment helm_kind_keda" "$(jobs_on tgtchart deployments/helm/x-monorepo/templates/deployment.yaml)"
+expect_eq "kind/payment-flow.sh does not run helm-kind-target" "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" "$(jobs_on tgtpay deployments/helm/kind/payment-flow.sh)"
+expect_eq "kind/values.yaml does not run helm-kind-target"    "helm helm_kind helm_kind_payment helm_kind_keda" "$(jobs_on tgtvals deployments/helm/kind/values.yaml)"
+expect_eq "kind/diag.sh does not run helm-kind-target"        "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" "$(jobs_on tgtdiag deployments/helm/kind/diag.sh)"
+expect_eq "kind/runner-home-test.sh does not run helm-kind-target (it is the fake-tool drills' helper)" "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" "$(jobs_on tgthome deployments/helm/kind/runner-home-test.sh)"
+expect_eq "plain product Go does not run helm-kind-target"    "$go_checks $go_prod" "$(jobs_on tgtgo pkgs/ordering/domain/order/order.go)"
+expect_eq "web does not run helm-kind-target"                 "gen_freshness web console_e2e console_image helm_kind helm_kind_payment" "$(jobs_on tgtweb web/apps/console/src/routes/orders.tsx)"
+expect_eq "a run.sh look-alike elsewhere does not run helm-kind-target (only scripts-test, for the *.sh)" "scripts_test" "$(jobs_on tgtlook docs/run.sh scripts_old/shim/kubectl)"
 # test.sh also reads .github/workflows/k6-bench.yml (wiring assertions) and copies .goreleaser.yaml
 # into the cosign-smoke fixture (#298): each alone must run scripts-test; no other workflow does.
 expect_eq "k6-bench.yml also runs scripts-test" "actions_resolve scripts_test" "$(jobs_on k6bench .github/workflows/k6-bench.yml)"
@@ -137,7 +168,7 @@ rename_jobs_on() {
   mkdir -p "$repo/$(dirname "$new")"
   git -C "$repo" mv "$old" "$new"
   commit "chore: rename"
-  in_repo scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//'
+  ci_changes_jobs
 }
 expect_eq "renaming a product file to _test.go removed a product input" \
   "$go_checks $go_prod" "$(rename_jobs_on torename pkgs/ordering/helper.go pkgs/ordering/helper_test.go)"
@@ -158,8 +189,29 @@ expect_eq "moving a file out of apps/worker still runs keda and k6" \
   "$go_checks $go_prod_pre helm_kind_keda k6 k6_wire" \
   "$(rename_jobs_on moveworker apps/worker/main.go pkgs/ordering/main.go)"
 expect_eq "moving a file out of the chart still runs helm and the kind jobs" \
-  "helm helm_kind helm_kind_keda" \
+  "helm helm_kind helm_kind_payment helm_kind_keda" \
   "$(rename_jobs_on movehelm deployments/helm/x-monorepo/values.yaml docs/values.yaml)"
+# helm-kind-target: ci-changes.sh diffs with --no-renames, so a runner file renamed OUT of its directory is a deletion of an input and
+# still runs the job (a rename-aware diff prints only the new path, docs/run.sh, which no rule names). The same for every input, and for
+# a rename INTO one.
+expect_eq "moving kind/run.sh out still runs helm-kind-target" \
+  "$kind_target_sh_jobs" "$(rename_jobs_on movekindrun deployments/helm/kind/run.sh docs/run.sh)"
+expect_eq "moving kind/lock.sh out still runs helm-kind-target" \
+  "$kind_target_sh_jobs" "$(rename_jobs_on movekindlock deployments/helm/kind/lock.sh docs/lock.sh)"
+expect_eq "moving kind/shim/kubectl out still runs helm-kind-target" \
+  "$kind_target_jobs" "$(rename_jobs_on movekindshim deployments/helm/kind/shim/kubectl docs/kubectl)"
+expect_eq "moving kind/target-kubeconfig-test.sh out still runs helm-kind-target" \
+  "$kind_target_sh_jobs" "$(rename_jobs_on movekindtgt deployments/helm/kind/target-kubeconfig-test.sh docs/target-kubeconfig-test.sh)"
+expect_eq "moving go.work out still runs helm-kind-target (and the rest of go.work's jobs)" \
+  "$gowork_jobs" "$(rename_jobs_on movegowork go.work docs/go.work)"
+expect_eq "moving a file INTO kind/run.sh's place runs helm-kind-target" \
+  "$kind_target_sh_jobs" "$(rename_jobs_on movekindin docs/run.sh deployments/helm/kind/run.sh)"
+# a rename inside the kind directory between two non-inputs is not an input either way
+expect_eq "renaming kind/smoke.sh to kind/smoke2.sh does not run helm-kind-target" \
+  "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" "$(rename_jobs_on movekindsmoke deployments/helm/kind/smoke.sh deployments/helm/kind/smoke2.sh)"
+# ...but renaming a non-input onto an input name is one
+expect_eq "renaming kind/smoke.sh to kind/target-smoke.sh runs helm-kind-target" \
+  "$kind_target_sh_jobs" "$(rename_jobs_on movekindtosmoke deployments/helm/kind/smoke.sh deployments/helm/kind/target-smoke.sh)"
 
 # k6 (the smoke: rate limit, timeout, load): tests/k6, pkgs/platform/server (interceptors, limits.go),
 # pkgs/platform/config (their env and defaults), apps/rpc, apps/worker, configs, go.mod. A business-flow
@@ -187,19 +239,19 @@ expect_eq "inventory is not a k6 input" "$go_checks $go_prod" "$(jobs_on invento
 # release-snapshot: goreleaser, a Dockerfile, .dockerignore, release.yml, go.mod / go.sum / go.work. Not the console image
 # (.goreleaser.yaml: the console has no Go binary, release.yml pushes it with buildx).
 expect_eq "Dockerfile is an image change" \
-  "release_snapshot console_image helm_kind helm_kind_keda" \
+  "release_snapshot console_image helm_kind helm_kind_payment helm_kind_keda" \
   "$(jobs_on image deployments/docker/Dockerfile.rpc)"
 expect_eq ".dockerignore is an image change" \
-  "release_snapshot console_image helm_kind helm_kind_keda" \
+  "release_snapshot console_image helm_kind helm_kind_payment helm_kind_keda" \
   "$(jobs_on dockerignore .dockerignore)"
 expect_eq "the console Dockerfile is not a release-snapshot input" \
-  "gen_freshness web console_e2e console_image helm_kind helm_kind_keda" \
+  "gen_freshness web console_e2e console_image helm_kind helm_kind_payment helm_kind_keda" \
   "$(jobs_on consoleimg web/apps/console/Dockerfile)"
 expect_eq "the console nginx config is not a release-snapshot input" \
-  "gen_freshness web console_e2e console_image helm_kind helm_kind_keda" \
+  "gen_freshness web console_e2e console_image helm_kind helm_kind_payment helm_kind_keda" \
   "$(jobs_on consolenginx web/apps/console/deploy/nginx.conf)"
 expect_eq ".goreleaser.yaml is an image change, and a scripts-test input (cosign-smoke fixture)" \
-  "release_snapshot console_image scripts_test helm_kind helm_kind_keda" \
+  "release_snapshot console_image scripts_test helm_kind helm_kind_payment helm_kind_keda" \
   "$(jobs_on goreleaser .goreleaser.yaml)"
 expect_eq "another workflow is actions-resolve and scripts-test (check-exit-swallow.sh scans its run: scripts, #465)" "actions_resolve scripts_test" "$(jobs_on wf .github/workflows/labeler.yml)"
 expect_match "a composite action runs scripts-test too (#465)" '(^| )scripts_test( |$)' "$(jobs_on wfact .github/actions/playwright/action.yml)"
@@ -227,15 +279,70 @@ for j in $all_jobs; do
 done
 # ci_job <name>: the lines of that top-level job in ci.yml.
 ci_job() { awk -v n="  $1:" '$0 == n {f=1; next} /^  [a-z0-9-]+:/ || /^  #/ {f=0} f' "$src/.github/workflows/ci.yml"; }
+# ci_count <job> <grep -c args…>: how many lines of that job match. The exit codes are checked on their own, never read off the printed
+# value: CI-JOB-FAILED when awk dies (even after printing), CI-JOB-EMPTY when the job is not there (a "0 matches" would pass on a job that
+# does not exist), COUNT-FAILED when grep fails with anything but "no match" (#446 r0: `$(ci_count x y)` stayed green on a grep that
+# printed 1 and then exited 42).
+ci_count() {
+  local j=$1 body n rc=0
+  shift
+  body=$(ci_job "$j") || { echo CI-JOB-FAILED; return; }
+  [ -n "$body" ] || { echo CI-JOB-EMPTY; return; }
+  n=$(printf '%s\n' "$body" | grep -c "$@") || rc=$?
+  if [ "$rc" -gt 1 ]; then echo COUNT-FAILED; return; fi
+  echo "$n"
+}
 # helm-kind, helm-kind-keda and k6-auth / k6-wire are jobs of their own, not matrix legs: a skipped one
 # leaves a skipped check, a dynamic matrix would leave none (#328).
 _c228a=$(count_lines 'task: \[helm-kind' "$src/.github/workflows/ci.yml"); expect_eq "no matrix over the kind tasks" 0 "$_c228a"
-_c229a=$(ci_job helm-kind | count_lines '^      - run: task helm-kind$'); expect_eq "helm-kind job runs task helm-kind"            1 "$_c229a"
-_c230a=$(ci_job helm-kind-keda | count_lines '^      - run: task helm-kind-keda$'); expect_eq "helm-kind-keda job runs task helm-kind-keda"  1 "$_c230a"
-_c231a=$(ci_job helm-kind | count_lines 'matrix'); expect_eq "helm-kind has no matrix"      0 "$_c231a"
-_c232a=$(ci_job helm-kind-keda | count_lines 'matrix'); expect_eq "helm-kind-keda has no matrix" 0 "$_c232a"
-_c233a=$(ci_job k6-auth | count_lines '^      - run: task k6-auth-matrix$'); expect_eq "k6-auth job runs task k6-auth-matrix"        1 "$_c233a"
-_c234a=$(ci_job k6-auth | count_lines 'task k6-wire'); expect_eq "k6-auth job no longer runs task k6-wire"     0 "$_c234a"
+# helm-kind is the first half of task helm-kind and helm-kind-payment the second, each on its own cluster (#446); task helm-kind itself is the
+# laptop's "everything on one cluster", so no CI job runs it (it would run both halves again).
+expect_eq "helm-kind job runs task helm-kind-core"            1 "$(ci_count helm-kind '^      - run: task helm-kind-core$')"
+expect_eq "helm-kind-payment job runs task helm-kind-payment" 1 "$(ci_count helm-kind-payment '^      - run: task helm-kind-payment$')"
+whole_kind=$(count_lines '^      - run: task helm-kind$' "$src/.github/workflows/ci.yml")   # empty (so the assertion fails) when grep dies: count_lines stops the subshell
+expect_eq "no ci.yml job runs the whole task helm-kind"       0 "$whole_kind"
+expect_eq "helm-kind-target job runs target-kubeconfig-test.sh" 1 "$(ci_count helm-kind-target '^      - run: deployments/helm/kind/target-kubeconfig-test.sh$')"
+expect_eq "helm-kind no longer runs target-kubeconfig-test.sh (its own job)" 0 "$(ci_count helm-kind 'target-kubeconfig-test')"
+expect_eq "helm-kind-payment does not run target-kubeconfig-test.sh"        0 "$(ci_count helm-kind-payment 'target-kubeconfig-test')"
+# both halves keep the failure diagnosis: the kubectl dump and the kind-diag artifact (one name per job: upload-artifact names are unique per run)
+for j in helm-kind helm-kind-payment; do
+  expect_eq "$j dumps the pods on failure"            1 "$(ci_count $j 'kubectl -n x-monorepo describe pods')"
+  expect_eq "$j uploads the kind-diag artifact on failure" 1 "$(ci_count $j 'name: kind-diag-')"
+  expect_eq "$j has a timeout"                        1 "$(ci_count $j '^    timeout-minutes:')"
+done
+# diag_name_count: distinct `name: kind-diag-*` artifact names in ci.yml. grep's exit code is checked, the de-duplication is plain bash
+# (no sort / wc whose failure would be read off a value); GREP-FAILED when grep finds nothing or dies.
+diag_name_count() {
+  local n=0 seen="|" all dn
+  all=$(grep -o 'name: kind-diag-[a-z]*' "$src/.github/workflows/ci.yml") || { echo GREP-FAILED; return; }
+  while IFS= read -r dn; do
+    case "$seen" in *"|$dn|"*) ;; *) seen="$seen$dn|"; n=$((n + 1)) ;; esac
+  done <<EOF_DIAG
+$all
+EOF_DIAG
+  echo "$n"
+}
+expect_eq "the two halves upload under different artifact names" 2 "$(diag_name_count)"
+# helm-kind-target needs neither node, helm nor k6 (docs/ci.md says so)
+expect_eq "helm-kind-target installs no node / helm / k6" 0 "$(ci_count helm-kind-target -E 'setup-node|setup-helm|setup-k6|pnpm')"
+# the halves are each other's equals: the same trigger (ci-changes.sh) and no shared state between them
+expect_eq "helm-kind-payment has no matrix" 0 "$(ci_count helm-kind-payment 'matrix')"
+expect_eq "helm-kind-target has no matrix"  0 "$(ci_count helm-kind-target 'matrix')"
+# helm-kind and helm-kind-payment run on the same inputs: the same flags in ci-changes.sh
+# out_inputs <flag>: the inputs ci-changes.sh lists for `out <flag> …` (FAILED when grep finds nothing or dies)
+out_inputs() {
+  local l
+  l=$(grep "^out $1 " "$src/scripts/ci-changes.sh") || { echo FAILED; return; }
+  l=${l#out $1}
+  echo "${l#"${l%%[![:space:]]*}"}"
+}
+expect_eq "run_helm_kind and run_helm_kind_payment take the same inputs" "$(out_inputs helm_kind)" "$(out_inputs helm_kind_payment)"
+expect_match "run_helm_kind lists its inputs (so the comparison above is not FAILED == FAILED)" '^"[$]' "$(out_inputs helm_kind)"
+expect_eq "helm-kind-keda job runs task helm-kind-keda"  1 "$(ci_count helm-kind-keda '^      - run: task helm-kind-keda$')"
+expect_eq "helm-kind has no matrix"      0 "$(ci_count helm-kind 'matrix')"
+expect_eq "helm-kind-keda has no matrix" 0 "$(ci_count helm-kind-keda 'matrix')"
+expect_eq "k6-auth job runs task k6-auth-matrix"        1 "$(ci_count k6-auth '^      - run: task k6-auth-matrix$')"
+expect_eq "k6-auth job no longer runs task k6-wire"     0 "$(ci_count k6-auth 'task k6-wire')"
 # #448: k6-auth is one job with a static matrix of shards, K6_AUTH_SHARD=<i>/<n>. The shards must be exactly
 # 1/n … n/n, and their cells together must be the whole list, each once — a cell in no shard would never run.
 m=$src/tests/k6/auth-matrix.sh
@@ -247,8 +354,8 @@ expect_match "k6-auth has a static shard matrix" '^1/[1-9]( |$)' "$shards"
 n=${shards##*/}
 want=""; for ((i = 1; i <= n; i++)); do want="$want $i/$n"; done
 expect_eq "k6-auth shards are 1/n … n/n" "${want# }" "$shards"
-_c246a=$(ci_job k6-auth | count_lines '^      K6_AUTH_SHARD: ${{ matrix.shard }}$'); expect_eq "k6-auth leg reads its shard from the matrix" 1 "$_c246a"
-_c247a=$(ci_job k6-auth | count_lines '^      fail-fast: false$'); expect_eq "k6-auth matrix does not stop the other legs" 1 "$_c247a"
+expect_eq "k6-auth leg reads its shard from the matrix" 1 "$(ci_count k6-auth '^      K6_AUTH_SHARD: ${{ matrix.shard }}$')"
+expect_eq "k6-auth matrix does not stop the other legs" 1 "$(ci_count k6-auth '^      fail-fast: false$')"
 union=""
 for ((i = 1; i <= n; i++)); do
   part=$(K6_AUTH_LIST=1 K6_AUTH_SHARD=$i/$n "$m")
@@ -268,7 +375,7 @@ expect_eq "a shard beyond n fails" 2 "$rc"
 rc=0; K6_AUTH_LIST=1 K6_AUTH_SHARD=1/$n "$m" whoami-503 >/dev/null 2>&1 || rc=$?
 expect_eq "a shard together with named cells fails" 2 "$rc"
 # #209: the key must stay out of k6's output and tags — k6-wire is the job that proves it, on its own now.
-_c267a=$(ci_job k6-wire | count_lines '^      - run: task k6-wire$'); expect_eq "k6-wire job runs task k6-wire"               1 "$_c267a"
+expect_eq "k6-wire job runs task k6-wire"               1 "$(ci_count k6-wire '^      - run: task k6-wire$')"
 expect_eq "k6-wire needs no Postgres (docs/ci.md says so)" 0 "$(ci_job k6-wire | grep -ci 'postgres')"
 
 # ── setup / playwright actions: who may write a cache, and what a job reads (#450) ──────────────────────────────────
@@ -276,8 +383,6 @@ expect_eq "k6-wire needs no Postgres (docs/ci.md says so)" 0 "$(ci_job k6-wire |
 # cache usage to 14.8 GB (limit 10 GB), main's entries were evicted and every later job compiled cold. plan.sh is the one
 # place that says who may write; each cache step below reads its output, and each read-write step has a restore-only twin.
 plan="$src/.github/actions/setup/plan.sh"
-# count_lines <grep args>: how many lines of stdin match. grep exits 1 for "none" (that is a 0); any other non-zero exit is a failure of
-# the check itself and stops the suite (a `|| true` here would turn a broken grep into a quiet 0).
 # plan_out <event> <ref> <default branch> <scope> <output>: one output of plan.sh; PLAN-FAILED / NO-KEY when the script failed or lacks the key,
 # so that an expectation of "" cannot pass on a crashed script.
 plan_out() {
@@ -493,9 +598,12 @@ expect_eq "setup: no cache key uses cache-scope" 0 "$n_scope"
 n_loose=$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw | sed -n '/restore-keys:/,$p' | count_lines 'gobuild-\${{ runner.os }}-\s*$')
 expect_eq "setup: the build cache restore-keys stay inside the group" 0 "$n_loose"
 # the web job needs go on PATH (task evaluates `go work edit` on every run) but compiles nothing; lint's own golangci cache must not save on a PR
-_c486a=$(count_lines 'go-cache: "false"' "$src/.github/workflows/ci.yml"); expect_eq "ci.yml: only the web job opts out of the Go cache"   1 "$_c486a"
-_c487a=$(ci_job web | count_lines 'go-cache: "false"'); expect_eq "ci.yml: the web job opts out of the Go cache"        1 "$_c487a"
-_c488a=$(ci_job web | count_lines 'uses: ./.github/actions/setup$'); expect_eq "ci.yml: the web job still runs the setup action (task needs go)" 1 "$_c488a"
+optouts=$(count_lines 'go-cache: "false"' "$src/.github/workflows/ci.yml")
+expect_eq "ci.yml: only the web and helm-kind-target jobs opt out of the Go cache" 2 "$optouts"
+expect_eq "ci.yml: the helm-kind-target job opts out of the Go cache (it compiles nothing, #446)" 1 "$(ci_count helm-kind-target 'go-cache: "false"')"
+expect_eq "ci.yml: the helm-kind-target job still runs the setup action (task needs go)" 1 "$(ci_count helm-kind-target 'uses: ./.github/actions/setup$')"
+expect_eq "ci.yml: the web job opts out of the Go cache"        1 "$(ci_count web 'go-cache: "false"')"
+expect_eq "ci.yml: the web job still runs the setup action (task needs go)" 1 "$(ci_count web 'uses: ./.github/actions/setup$')"
 expect_match "ci.yml: lint's golangci-lint cache is not saved on a pull request" "skip-save-cache: \"\\$\\{\\{ github.event_name == 'pull_request' \\}\\}\"" "$(ci_job lint)"
 # no workflow lets setup-node cache (its post step saves on every trigger); the pnpm store goes through the pnpm-cache action, once per setup-node
 _c491a=$(count_lines -E '^\s+cache: (pnpm|npm|yarn)' "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | awk -F: '{s+=$NF} END {print s+0}'); expect_eq "workflows: no setup-node cache: input"                  0 "$_c491a"
@@ -2172,37 +2280,6 @@ for keep in all 0; do
   done
 done
 
-# payment-upgrade-guard.sh: the home release's database must be the same before and after the drill. kubectl is a fake that
-# answers the psql reads; a read that prints part of its answer and dies must not become a shorter, equal snapshot.
-pg_fixture() {
-  pgd="$tmp/pgguard-$1"; mkdir -p "$pgd/bin"
-  cp "$src/deployments/helm/kind/payment-upgrade-guard.sh" "$pgd/"
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$pgd/payment-upgrade.sh"   # the inner drill: succeeds and touches nothing
-  cat > "$pgd/bin/kubectl" <<'FAKE'
-#!/usr/bin/env bash
-case "$*" in
-  *information_schema.tables*) printf 'public.a\npublic.b\npublic.c\n' ;;
-  *"count(*)"*) echo 3 ;;
-  *pg_namespace*) echo 'schema public' ;;
-  *) echo "fake kubectl: unexpected: $*" >&2; exit 99 ;;
-esac
-FAKE
-  chmod +x "$pgd/bin/kubectl"
-  mkdir -p "$pgd/home"; : > "$pgd/home/.kind-runner"   # the guard refuses to run outside run.sh's scratch HOME (#444)
-}
-pg_run() {   # pg_run [<dir of a wrapper that goes first on the PATH>]
-  rc=0; out=$(HOME="$pgd/home" KIND_RUNNER_HOME="$pgd/home" PATH="${1:+$1:}$pgd/bin:$PATH" bash "$pgd/payment-upgrade-guard.sh" home 2>&1) || rc=$?
-}
-pg_fixture ok; pg_run
-expect_eq "upgrade guard: fault-injection control — an untouched database passes" "0" "$rc"
-for spec in 'all|*information_schema.tables*' '1|*information_schema.tables*' '0|*information_schema.tables*' 'all|*count(*)*' '0|*count(*)*' 'all|*pg_namespace*'; do
-  keep=${spec%%|*} glob=${spec#*|}
-  pg_fixture "dies-$RANDOM"
-  w=$(PATH="$pgd/bin:$PATH" inject_fail "$tmp/inj-pg-$RANDOM" kubectl 42 "$keep" "$glob")
-  pg_run "$w"
-  if [ "$rc" = 0 ]; then bad "upgrade guard: kubectl $glob prints [$keep] then exits 42, the guard still passes [$out]"; else ok; fi
-done
-
 # ── scripts/web-e2e-shards-check.sh: the console-e2e shards are the whole suite (#447) ──────────────────────────────
 # A stub pnpm answers `exec playwright test --list [--shard=i/n]` from a 10-test list (shard i = every n-th test), with a fault
 # chosen by FAULT. The check must be red for a list that dies half way, a truncated list that exits 0, a shard that drops a
@@ -2359,6 +2436,37 @@ for sh_ in payment-flow payment outage negative; do
 done
 rc=0; out=$(grep -c 'restore_step\|restore_exit' "$src"/deployments/helm/kind/{payment-flow,payment,outage,negative}.sh | grep -c ':0$') || rc=$?
 expect_eq "restore_step / restore_exit are used by payment-flow, payment, outage and negative" "0" "$out"
+# ── fault injection for the helm-kind wiring gates (#446 r0): every external command behind ci_count / diag_name_count / out_inputs /
+# ci_changes_jobs prints its real output and THEN dies (exit 42). A gate that read the verdict off the printed value stayed green on
+# exactly this (`$(ci_job x | grep -c y)` printed 1 and the assertion passed); each must now produce a failure token, never the plausible value.
+# The control for every cell is the real assertion above (same input, real tools, the expected value).
+kd_dying() {   # kd_dying <tool>: PATH wrapper dir that runs the real <tool>, then exits 42 (git: only `diff`, so the fixture still builds)
+  local real; real=$(command -v "$1")
+  mkdir -p "$tmp/kd-dying-$1"
+  if [ "$1" = git ]; then
+    printf '#!/bin/sh\nif [ "$1" = diff ]; then %s "$@"; exit 42; fi\nexec %s "$@"\n' "$real" "$real" > "$tmp/kd-dying-$1/$1"
+  else
+    printf '#!/bin/sh\n%s "$@"\nexit 42\n' "$real" > "$tmp/kd-dying-$1/$1"
+  fi
+  chmod +x "$tmp/kd-dying-$1/$1"
+}
+for t in awk grep sed tr git; do kd_dying "$t"; done
+expect_eq "ci_count: control — the real tools count the helm-kind-core step" 1 "$(ci_count helm-kind '^      - run: task helm-kind-core$')"
+expect_eq "ci_count: awk prints the job and then dies, no count is trusted"  CI-JOB-FAILED "$(PATH="$tmp/kd-dying-awk:$PATH" ci_count helm-kind '^      - run: task helm-kind-core$')"
+expect_eq "ci_count: grep prints 1 and then dies, no count is trusted"       COUNT-FAILED  "$(PATH="$tmp/kd-dying-grep:$PATH" ci_count helm-kind '^      - run: task helm-kind-core$')"
+expect_eq "ci_count: a job that is not in ci.yml is not a count of 0"        CI-JOB-EMPTY  "$(ci_count helm-kind-nosuchjob 'matrix')"
+expect_eq "diag_name_count: control — two artifact names" 2 "$(diag_name_count)"
+expect_eq "diag_name_count: grep prints the names and then dies" GREP-FAILED "$(PATH="$tmp/kd-dying-grep:$PATH" diag_name_count)"
+expect_match "out_inputs: control — helm_kind lists its inputs" '^"[$]' "$(out_inputs helm_kind)"
+expect_eq "out_inputs: grep prints the line and then dies" FAILED "$(PATH="$tmp/kd-dying-grep:$PATH" out_inputs helm_kind)"
+fixture kddies
+git -C "$repo" checkout -q -b change
+touch_file deployments/helm/kind/run.sh
+commit "chore: kddies"
+expect_match "ci_changes_jobs: control — run.sh alone sets helm_kind_target" '(^| )helm_kind_target( |$)' "$(ci_changes_jobs)"
+expect_eq "ci_changes_jobs: git diff prints the files and then dies"  CI-CHANGES-FAILED "$(PATH="$tmp/kd-dying-git:$PATH" ci_changes_jobs)"
+expect_eq "ci_changes_jobs: sed prints the jobs and then dies"        FORMAT-FAILED     "$(PATH="$tmp/kd-dying-sed:$PATH" ci_changes_jobs)"
+expect_eq "ci_changes_jobs: tr prints the jobs and then dies"         FORMAT-FAILED     "$(PATH="$tmp/kd-dying-tr:$PATH" ci_changes_jobs)"
 
 
 # ── #465: process substitution, errexit-off functions, workflow run: scripts ───────────────────────────────────────────────
@@ -2622,23 +2730,6 @@ if python3 -c 'import yaml' 2>/dev/null; then
     expect_match "cosign-smoke: …and names the signs entry read" 'reading the signs entry of \.goreleaser\.yaml exited 42' "$out"
   done
 fi
-# payment-upgrade.sh: the two lines that read secrets.postgresUrl / redisUrl out of the values file, cut out of the REAL script
-# (the rest needs a cluster); python3 prints [all / the first line] and exits 42, `fail` is a stub that says so and exits 1
-if python3 -c 'import yaml' 2>/dev/null; then
-  printf 'secrets:\n  postgresUrl: postgres://u@postgres:5432/db\n  redisUrl: redis://redis:6379/0\n' > "$tmp/urls-values.yaml"
-  grep -E '^(urls=|read -r pgurl redisurl)' "$src/deployments/helm/kind/payment-upgrade.sh" > "$tmp/urls-lines.sh"
-  expect_eq "payment-upgrade: both lines were found in the real script" "2" "$(wc -l < "$tmp/urls-lines.sh" | tr -d ' ')"
-  urls_run() { # <PATH prefix or empty>
-    rc=0; out=$(PATH="${1:+$1:}$PATH" bash -c 'fail() { echo "refused: $*"; exit 1; }; values=$1; . "$2"; echo "pg=$pgurl redis=$redisurl"' _ "$tmp/urls-values.yaml" "$tmp/urls-lines.sh" 2>&1) || rc=$?
-  }
-  urls_run ""
-  expect_eq "payment-upgrade: the URLs are read from the values file" "0 pg=postgres://u@postgres:5432/db redis=redis://redis:6379/0" "$rc $out"
-  for keep in all 1; do
-    urls_run "$(inject_fail "$tmp/inj-urls-$keep" python3 42 "$keep")"
-    expect_eq    "payment-upgrade: python3 prints [$keep] then exits 42 → refused, not a half-read URL pair" "1" "$rc"
-    expect_match "payment-upgrade: …and it says refused" '^refused: ' "$out"
-  done
-fi
 # fnctx, the reviewer's r1 findings (#466): a QUOTED substitution in an errexit-off function, and the three real sites
 sw_write fn-quoted <<'F'
 f() {
@@ -2748,12 +2839,6 @@ for keep in all 1; do
   w=$(PATH="$tmp/fakepsql:$PATH" inject_fail "$tmp/inj-psql-$keep" psql 42 "$keep")
   expect_eq "bench_db_test: psql prints [$keep] (42) then exits 42 → NOT survives" "GONE" "$(PATH="$w:$tmp/fakepsql:$PATH" surv)"
 done
-# payment-upgrade.sh wait_order: the status read prints the wanted status and then dies → must not count as reached
-fn_of2 "$src/deployments/helm/kind/payment-upgrade.sh" wait_order > "$tmp/wait_order.fn"
-expect_eq "payment-upgrade: wait_order was found in the real script" "1" "$([ -s "$tmp/wait_order.fn" ] && echo 1 || echo 0)"
-wo() { STATUS_RC=$1 bash -c 'sleep() { :; }; fail() { echo "FAILED: $*"; exit 1; }; order_status() { echo ORDER_STATUS_PAID; return "$STATUS_RC"; }; . "$1"; if wait_order o ORDER_STATUS_PAID 2; then echo REACHED; fi' _ "$tmp/wait_order.fn" 2>&1; }
-expect_eq    "payment-upgrade: a working status read reaches the status" "REACHED" "$(wo 0)"
-expect_match "payment-upgrade: the status read prints the wanted status then exits 42 → wait_order fails, not reached" '^FAILED: ' "$(wo 42)"
 # release.yml: jq over the runs prints a row and dies → nothing may be approved (the real loop, cut out of the YAML)
 awk '/^ *awaiting=/{p=1} p{print} p&&/^          done$/{exit}' "$src/.github/workflows/release.yml" > "$tmp/approve-loop.sh"
 expect_match "release.yml: the approve loop was found" 'gh api -X POST' "$(cat "$tmp/approve-loop.sh")"
