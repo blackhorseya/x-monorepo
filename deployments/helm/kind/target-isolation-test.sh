@@ -77,6 +77,7 @@ printf '#!/bin/sh\nexit 0\n' > "$fakebin/sleep"; chmod +x "$fakebin/sleep"
 
 fresh_tree() {  # a scratch copy of the kind directory (the mutants edit it, never the repo)
   rm -rf "$tree/deployments/helm/kind"; cp -R "$root/deployments/helm/kind" "$tree/deployments/helm/kind"
+  mkdir -p "$tree/scripts"; cp "$root/scripts/best-effort.sh" "$tree/scripts/best-effort.sh"   # the kind scripts source ../../../scripts/best-effort.sh
 }
 
 # lines_of <taskfile> → $tmp/lines: the expanded cluster-touching lines of the five kind tasks
@@ -98,8 +99,11 @@ run_lines() {
   local l
   while IFS= read -r l; do
     [ -n "${1:-}" ] && ! printf '%s\n' "$l" | grep -q -- "$1" && continue
+    line_rc=0
     ( cd "$tree" && env HOME="$decoyhome" PATH="$fakebin:/usr/bin:/bin" KUBECONFIG="$decoy" \
-        perl -e 'alarm 25; exec @ARGV' sh -c "$l" ) >/dev/null 2>&1 || true  # exit-ok: a task line may fail against the fakes; the verdict is the recorded calls ($calls), asserted by the caller
+        perl -e 'alarm 25; exec @ARGV' sh -c "$l" ) >/dev/null 2>&1 || line_rc=$?
+    # a task line may fail against the fakes (the verdict is the recorded calls, $calls); the alarm is not that — it means the line never ran to its end
+    [ "$line_rc" != 142 ] || echo "target-isolation-test: a task line hit the 25 s alarm: $l" >&2
   done < "$tmp/lines"
 }
 

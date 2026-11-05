@@ -21,6 +21,7 @@
 # Failures are printed as `--- FAIL: <cell>` + indented reasons, the shape scripts/red-stage.sh reads.
 # The key is made up for this test; nothing here is a credential.
 set -euo pipefail
+. "$(dirname "$0")/../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 bin=$1; shift
 scripts=("$@"); [ ${#scripts[@]} -gt 0 ] || scripts=(orders ratelimit timeout reservation)
 port=${PORT:-18190}
@@ -296,7 +297,7 @@ lane() { # <lane number>
 lpids=()
 for ((l = 0; l < jobs; l++)); do lane "$l" & lpids+=($!); done
 # `|| true`: a lane's own exit decides nothing — every cell has its own .rc, and a cell without one is a FAIL below
-for p in "${lpids[@]}"; do wait "$p" || true; done  # exit-ok: a lane's verdict is the files it wrote, read below; a lane that died leaves none and is a FAIL
+for p in "${lpids[@]}"; do best_effort wait "$p"; done   # a lane's verdict is the files it wrote, read below; a lane that died leaves none and is a FAIL
 
 # A cell passes only if ALL hold: its .rc is readable and 0, its .out was read in full (cat exit 0), and that output has the
 # cell's own `--- PASS: <cell> (` line and no `--- FAIL: <cell>` line. The match is plain bash on the text, no external

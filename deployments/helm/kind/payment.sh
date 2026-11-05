@@ -7,6 +7,7 @@
 # 3. payment-rpc stopped: an order still reaches CONFIRMED (nothing in the order flow waits for payment).
 # Needs kubectl + helm + curl + jq. Exits non-zero (with the pods' state) when anything is off. Restores the release.
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2
@@ -16,7 +17,7 @@ sport=${PAYMENT_SERVE_PORT:-18090} iport=${PAYMENT_INGRESS_PORT:-18091} rport=${
 
 pf=""
 trap 'test -z "$pf" || kill $pf 2>/dev/null || true' EXIT
-fail() { echo "payment: $*"; kubectl -n "$ns" get pods,cronjobs,jobs,ingress 2>/dev/null || true; exit 1; }  # exit-ok: failure report only; fail() exits 1 whatever kubectl returns
+fail() { echo "payment: $*"; best_effort kubectl -n "$ns" get pods,cronjobs,jobs,ingress; exit 1; }   # diagnostic: fail() exits 1 whatever kubectl returns
 forward() { # forward <target> <local port> <remote port>
   kubectl "${@:4}" port-forward "$1" "$2:$3" >/dev/null 2>&1 &
   pf="$pf $!"
@@ -49,7 +50,8 @@ for w in rpc worker catalog-rpc; do
   case " $names " in *" APP_PAYMENT_MOCK_WEBHOOK_SECRET "*) fail "$w holds the provider credential" ;; esac
 done
 for ((_try51 = 1; _try51 <= 30; _try51++)); do
-  clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the grep after the loop fails when the log never shows the start line
+  log_rc=0; clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null) || log_rc=$?
+  if [ "$log_rc" != 0 ]; then echo "payment: reading the consumer's log failed (exit $log_rc), retrying" >&2; clog=""; fi
   grep -q 'payment-worker started' <<<"$clog" && break; sleep 1
 done
 grep -q 'payment-worker started' <<<"$clog" || fail "payment-worker never logged that it started"
@@ -72,9 +74,11 @@ job="payment-expire-kind-$(date +%s)"
 kubectl -n "$ns" create job "$job" --from="cronjob/$release-payment-expire" >/dev/null
 done_=""
 for ((_try74 = 1; _try74 <= 90; _try74++)); do
-  ok=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the loop ends in fail() when the job never succeeds
-  bad=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.failed}' 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the loop ends in fail() when the job never succeeds
-  [ "${bad:-0}" != 0 ] && { kubectl -n "$ns" logs "job/$job" --tail=30 || true; fail "the expire run failed"; }  # exit-ok: failure report only; fail() exits 1 on the same line
+  job_rc=0; ok=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}' 2>/dev/null) || job_rc=$?
+  if [ "$job_rc" != 0 ]; then echo "payment: reading job $job (succeeded) failed (exit $job_rc), retrying" >&2; ok=""; fi
+  job_rc=0; bad=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.failed}' 2>/dev/null) || job_rc=$?
+  if [ "$job_rc" != 0 ]; then echo "payment: reading job $job (failed) failed (exit $job_rc), retrying" >&2; bad=""; fi
+  [ "${bad:-0}" != 0 ] && { best_effort kubectl -n "$ns" logs "job/$job" --tail=30; fail "the expire run failed"; }
   [ "$ok" = 1 ] && { done_=1; break; }
   sleep 2
 done
@@ -136,10 +140,10 @@ rm -f "$big"
 echo "payment: a 2 MiB webhook body is refused at the ingress (413)"
 
 # ── 3. payment-rpc stopped: ordering is unaffected ─────────────────────────────────────────────────
-restore() { kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null 2>&1 || true; }  # exit-ok: EXIT restore after the verdict; the next drill installs with --wait
+restore() { best_effort kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null; }   # cleanup after the verdict
 trap 'restore; test -z "$pf" || kill $pf 2>/dev/null || true' EXIT
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=0 >/dev/null
-kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null 2>&1 || true  # exit-ok: kubectl wait fails when the pods are already gone, which is the state wanted; the steps after it assert
+best_effort kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null   # wait-gone: "no pods left" is the state wanted; the steps after it assert
 [ "$(hit POST /api/payment/webhook -d '{}')" != 400 ] || fail "control: the webhook still reaches payment-rpc with it stopped"
 forward "svc/$release-rpc" "$rport" 80 -n "$ns"
 api="http://127.0.0.1:$rport/api"

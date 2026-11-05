@@ -24,6 +24,7 @@
 # background and waited for, because bash runs a trap only after a FOREGROUND child returns; the handler stops the child,
 # the exit status is 128 + the signal, and the exit trap diagnoses, then restores (#420).
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,17 +38,18 @@ cur=""        # pid of the slow child being waited for (helm, kubectl wait / rol
 finished=""   # set only when the flow ran to its end: any other way out is diagnosed
 slow() { "$@" & cur=$!; local rc=0; wait "$cur" || rc=$?; cur=""; return "$rc"; }
 
-fail() { echo "payment-flow: $*" >&2; kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true; exit 1; }  # exit-ok: failure report only; fail() exits 1 whatever kubectl returns
+fail() { echo "payment-flow: $*" >&2; best_effort kubectl -n "$ns" get pods,jobs >&2; exit 1; }   # diagnostic: fail() exits 1 whatever kubectl returns
 restore() {
   for p in $pfs; do kill "$p" 2>/dev/null || true; done
-  kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null 2>&1 || true  # exit-ok: EXIT restore after the verdict (on_exit keeps $rc); the next drill installs with --wait
-  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true  # exit-ok: EXIT restore after the verdict (on_exit keeps $rc); the next drill installs with --wait
+  best_effort kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null   # cleanup after the verdict (on_exit keeps $rc)
+  best_effort helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null   # cleanup after the verdict (on_exit keeps $rc)
 }
 on_signal() { # <exit status>: stop the waited-for child, then leave through the exit trap (diagnose, restore)
   trap '' TERM INT HUP   # a second signal must not cut the diagnosis or the restore short
   # the child and ITS children (a wrapper around helm / kubectl leaves its own child behind otherwise)
   if [ -n "$cur" ]; then
-    for c in $(pgrep -P "$cur" 2>/dev/null || true); do kill "$c" 2>/dev/null || true; done   # exit-ok: pgrep exits 1 when there are no children; stops our own process tree (explicit pids, never a pattern)
+    kids=$(pgrep -P "$cur" 2>/dev/null) || { [ $? -eq 1 ] || echo "payment-flow: pgrep -P $cur failed" >&2; }   # 1 = no children; explicit pids, never a pattern
+    for c in $kids; do kill "$c" 2>/dev/null || true; done
     kill "$cur" 2>/dev/null || true; wait "$cur" 2>/dev/null || true; cur=""
   fi
   exit "$1"
@@ -58,7 +60,7 @@ trap 'on_signal 129' HUP
 on_exit() { # the script leaves with the status it had on the way in
   local rc=$?
   trap '' TERM INT HUP
-  [ -n "$finished" ] || "$here/diag.sh" "$ns" "$flow_start" >&2 || true  # exit-ok: diagnostics only; on_exit leaves with the status it had
+  [ -n "$finished" ] || best_effort "$here/diag.sh" "$ns" "$flow_start" >&2   # diagnostic: on_exit leaves with the status it had
   restore
   exit "$rc"
 }
@@ -85,9 +87,10 @@ admin_key=$(sed -n 's/.*admin=\([A-Za-z0-9._-]*\):admin.*/\1/p' "$flow" | head -
 # call <key> <path> <json>: sets $res ("<http status> <x-error-code or ->") and $body in THIS shell, so it is called
 # plainly (never inside $(...), whose subshell would keep them).
 call() {
-  local out
-  out=$(curl -sS -D - -o /tmp/payflow.$$ -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3" || true)  # exit-ok: a failed curl leaves out empty, so the status read from it is empty and every caller compares it to an expected code
-  body=$(cat /tmp/payflow.$$ 2>/dev/null || true); rm -f /tmp/payflow.$$  # exit-ok: the body is read next to a status that is asserted separately
+  local out rc=0
+  out=$(curl -sS -D - -o /tmp/payflow.$$ -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3") || rc=$?
+  if [ "$rc" != 0 ]; then echo "payment-flow: curl $2 failed (exit $rc): no status is read from it" >&2; out=""; fi   # an empty status never equals the expected one
+  body=$(cat /tmp/payflow.$$ 2>/dev/null) || body="(no body)"; rm -f /tmp/payflow.$$
   res="$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") $(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -)"
 }
 want() { [ "$2" = "$3" ] || fail "$1: got '$2', want '$3' (body: ${body:-})"; }
@@ -115,13 +118,15 @@ hook="http://127.0.0.1:8080/api/payment/webhook" # the webhook route, from insid
 refs() { db "SELECT provider_ref FROM payment.payments WHERE order_id = '$1'"; }
 refunds() { db "SELECT count(*) FROM payment.mock_refunds WHERE ref = '$(refs "$1")'"; }
 job() { # <cronjob> -> one run to completion
-  local j ok bad
+  local j ok bad rc
   j="flow-$1-$(date +%s)-$RANDOM"
   kubectl -n "$ns" create job "$j" --from="cronjob/$release-$1" >/dev/null
   for ((_try120 = 1; _try120 <= 90; _try120++)); do
-    ok=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the loop ends in fail() after 90 tries
-    bad=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.failed}' 2>/dev/null || true)  # exit-ok: poll: a failed read is retried; the loop ends in fail() after 90 tries
-    [ "${bad:-0}" != 0 ] && { kubectl -n "$ns" logs "job/$j" --tail=30 || true; fail "$1 run failed"; }  # exit-ok: failure report only; fail() exits 1 on the same line
+    rc=0; ok=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.succeeded}' 2>/dev/null) || rc=$?
+    if [ "$rc" != 0 ]; then echo "payment-flow: reading job $j (succeeded) failed (exit $rc), retrying" >&2; ok=""; fi
+    rc=0; bad=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.failed}' 2>/dev/null) || rc=$?
+    if [ "$rc" != 0 ]; then echo "payment-flow: reading job $j (failed) failed (exit $rc), retrying" >&2; bad=""; fi
+    [ "${bad:-0}" != 0 ] && { best_effort kubectl -n "$ns" logs "job/$j" --tail=30; fail "$1 run failed"; }
     [ "$ok" = 1 ] && { kubectl -n "$ns" delete job "$j" >/dev/null; return 0; }
     sleep 2
   done
@@ -262,7 +267,7 @@ echo "payment-flow 8: switch on->off: the CONFIRMED order with an open checkout 
 
 # 9 ── payment-rpc stopped ───────────────────────────────────────────────────────────────────────────────
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=0 >/dev/null
-slow kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null 2>&1 || true  # exit-ok: kubectl wait fails when the pods are already gone, which is the state wanted; the steps after it assert
+best_effort slow kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null   # wait-gone: "no pods left" is the state wanted; the steps after it assert
 rpc_pods_before=$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}')
 sku="flow-down-$(date +%s)"
 as_admin catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}" >/dev/null

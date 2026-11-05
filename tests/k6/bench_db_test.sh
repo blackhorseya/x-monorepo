@@ -9,7 +9,7 @@ bin=$1
 base=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
 work=$(mktemp -d)
 sentinels=()
-trap 'for d in ${sentinels[@]+"${sentinels[@]}"}; do psql "$base" -qAt -c "drop database if exists $d with (force)" >/dev/null 2>&1 || true; done; rm -rf "$work"' EXIT  # exit-ok: EXIT cleanup of the sentinel databases; the cases that created them asserted already
+trap 'for d in ${sentinels[@]+"${sentinels[@]}"}; do psql "$base" -qAt -c "drop database if exists $d with (force)" >/dev/null 2>&1 || echo "bench_db_test: could not drop $d" >&2; done; rm -rf "$work"' EXIT   # cleanup of the sentinel databases; the cases that created them asserted already
 
 # a fixed clock, so the stamp bench.sh puts in the database name is known to the test
 mkdir "$work/fakebin"

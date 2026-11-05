@@ -31,6 +31,7 @@
 # before the switch (A, whose checkout was started by the old pods) and one paid after (C) both reach COMPLETED.
 # Needs kubectl, helm, curl, jq, git, tar, python3 with PyYAML.
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 # Internal state is never taken from the environment: cleanup() decides what to delete from ns_uid, so a parent
@@ -77,10 +78,10 @@ fail() {
   echo "payment-upgrade: $*" >&2
   [ -z "${soft:-}" ] || exit 1
   if [ -n "$ns_uid" ]; then
-    kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true  # exit-ok: failure report only; fail() exits 1 below
+    best_effort kubectl -n "$ns" get pods,jobs >&2   # diagnostic: fail() exits 1 below
     # The migrate hook Job is what fails an upgrade onto a schema its image does not know: say why, not just that it did.
     echo "payment-upgrade: logs of the $release-migrate Job (hook pods are kept after a failure):" >&2
-    kubectl -n "$ns" logs -l "job-name=$release-migrate" --tail=50 --prefix --all-containers >&2 2>&1 || true  # exit-ok: failure report only; fail() exits 1 below
+    best_effort kubectl -n "$ns" logs -l "job-name=$release-migrate" --tail=50 --prefix --all-containers >&2
   fi
   exit 1
 }
@@ -88,7 +89,7 @@ cleanup() {
   local rc=$?
   # The background helm of stage 4 may still be running (an order failed to be placed while it ran). Let it finish
   # FIRST: deleting the namespace under it would leave it failing against nothing.
-  if [ -n "${helm_pid:-}" ]; then wait "$helm_pid" 2>/dev/null || true; fi  # exit-ok: cleanup wait; the stage that started helm waits for it itself and fails on its status (wait "$helm_pid" || fail)
+  if [ -n "${helm_pid:-}" ]; then best_effort wait "$helm_pid"; fi   # cleanup wait; the stage that started helm waits for it itself and fails on its status (wait "$helm_pid" || fail)
   for p in $pfs; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
   rm -rf "$tmp"
   # The one destructive step, bound to the identity the API server gave this run's namespace WHEN IT CREATED IT (ns_uid, taken
@@ -133,9 +134,10 @@ admin_key=$(sed -n 's/.*admin=\([A-Za-z0-9._-]*\):admin.*/\1/p' "$flow" | head -
 [ -n "$shopper_key" ] && [ -n "$admin_key" ] || fail "no shopper / admin key in $flow"
 
 call() {
-  local out
-  out=$(curl -sS -D - -o "$tmp/body" -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3" || true)  # exit-ok: a failed curl leaves out empty, so the status read from it is empty and every caller compares it to an expected code
-  body=$(cat "$tmp/body" 2>/dev/null || true)  # exit-ok: the body is read next to a status that is asserted separately
+  local out rc=0
+  out=$(curl -sS -D - -o "$tmp/body" -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3") || rc=$?
+  if [ "$rc" != 0 ]; then echo "payment-upgrade: curl $2 failed (exit $rc): no status is read from it" >&2; out=""; fi   # an empty status never equals the expected one
+  body=$(cat "$tmp/body" 2>/dev/null) || body="(no body)"
   res="$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") $(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -)"
 }
 want() { [ "$2" = "$3" ] || fail "$1: got '$2', want '$3' (body: ${body:-})"; }
@@ -180,7 +182,7 @@ inbox_rows() { db "SELECT count(*) FROM payment.inbox"; }
 # ── 1 the previous chart, as it was released ───────────────────────────────────────────────────────────────
 # --depth only when this clone is already shallow (CI): on a repository shared by worktrees it would shallow all of them
 depth=(); [ "$(git rev-parse --is-shallow-repository)" != true ] || depth=(--depth=1)
-git fetch -q ${depth[@]+"${depth[@]}"} origin "refs/tags/$from_tag:refs/tags/$from_tag" 2>/dev/null || true  # exit-ok: the next line fails when the tag is not available
+git fetch -q ${depth[@]+"${depth[@]}"} origin "refs/tags/$from_tag:refs/tags/$from_tag" 2>/dev/null || echo "payment-upgrade: git fetch of tag $from_tag failed (exit $?); the next line checks for a local copy" >&2
 git rev-parse -q --verify "refs/tags/$from_tag" >/dev/null || fail "the tag $from_tag is not available: the previous chart cannot be installed"
 mkdir -p "$tmp/old"
 git archive "$from_tag" deployments/helm/x-monorepo | tar -x -C "$tmp/old"
@@ -262,7 +264,7 @@ echo "payment-upgrade: order $A has its payment (old consumer); cursors before:"
 
 # ── 3 no consumer: B is confirmed and nothing turns it into a payment ──────────────────────────────────────
 old_up --set paymentRpc.consume.replicaCount=0
-kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component=payment-consume" --timeout=2m >/dev/null 2>&1 || true  # exit-ok: kubectl wait fails when the pods are already gone, which is the state wanted; the steps after it assert
+best_effort kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component=payment-consume" --timeout=2m >/dev/null   # wait-gone: "no pods left" is the state wanted; the steps after it assert
 B=$(place)
 for ((_try267 = 1; _try267 <= 6; _try267++)); do
   [ "$(pay_status "$B")" = "-" ] || fail "order $B has a payment while no consumer runs: something else consumes OrderConfirmed"
@@ -306,7 +308,7 @@ newimg=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.s
 newname=$(kubectl -n "$ns" get deploy "$release-payment-consume" -o jsonpath='{.spec.template.spec.containers[0].name}')
 case $newimg in */payment-worker:*) ;; *) fail "after the upgrade the consumer runs '$newimg', want the payment-worker image" ;; esac
 [ "$newname" = payment-worker ] || fail "the consumer container is named '$newname', want payment-worker"
-clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || true)  # exit-ok: an unreadable log leaves clog empty and the next line fails on it (not piped into grep -q: with pipefail an early grep exit makes kubectl fail)
+clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null) || { echo "payment-upgrade: cannot read the consumer's log (exit $?)" >&2; clog=""; }   # not piped into grep -q: with pipefail an early grep exit makes kubectl fail; an empty log fails the next line
 grep -q 'payment-worker started' <<<"$clog" || fail "the new consumer never logged that it started"
 
 # same groups, no new cursor

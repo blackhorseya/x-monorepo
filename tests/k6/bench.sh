@@ -157,7 +157,9 @@ while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
     # the create phase leaves a backlog for the worker (CreateOrder outruns reservation): how long it
     # takes to drain, over the orders still PENDING at the start of that window (tests/k6/bench_drain.sh)
     tests/k6/bench_drain.sh "$url" "$out/run$n-drain.json" "$DRAIN_TIMEOUT"
-    k6_phase "$n" reserve -e "RATE=$RESERVE_RATE" -e "DURATION=$RESERVE_DURATION" || true  # exit-ok: k6_phase returns 1 only for a provable overload (recorded in $overload); every other failure exits inside it
+    if ! k6_phase "$n" reserve -e "RATE=$RESERVE_RATE" -e "DURATION=$RESERVE_DURATION"; then
+      echo "bench: the reserve phase of run $n hit the overload line (recorded in \$overload); every other failure exits inside k6_phase" >&2
+    fi
   fi
   stop_load
   python3 -I tests/k6/loadavg.py >> "$out/run$n-load.csv"

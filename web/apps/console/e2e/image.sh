@@ -8,6 +8,7 @@
 #   task web-e2e-image                 # what CI's console-image job runs
 #   e2e/image.sh --grep orders         # extra args go to playwright test
 set -euo pipefail
+. "$(dirname "$0")/../../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 cd "$(dirname "$0")/.."
 [ -f dist/index.html ] || { echo "image.sh: dist/ missing, run task web-build" >&2; exit 1; }
 
@@ -48,13 +49,14 @@ expect_refused() {
   "$tool" run -d --name "$n" ${host_opts[@]+"${host_opts[@]}"} -e "RPC_UPSTREAM=$upstream" "$@" "$img" >/dev/null
   local status=""
   for ((_try50 = 1; _try50 <= 40; _try50++)); do
-    status=$("$tool" inspect -f '{{.State.Status}}' "$n" 2>/dev/null || true)  # exit-ok: poll: a failed inspect is "not exited yet"; the checks after the loop fail on a status that is not exited
+    st_rc=0; status=$("$tool" inspect -f '{{.State.Status}}' "$n" 2>/dev/null) || st_rc=$?
+    if [ "$st_rc" != 0 ]; then echo "image.sh: inspect $n failed (exit $st_rc), retrying" >&2; status=""; fi
     [ "$status" = exited ] && break
     sleep 0.5
   done
   local code logs
   code=$("$tool" inspect -f '{{.State.ExitCode}}' "$n" 2>/dev/null || echo "?")
-  logs=$("$tool" logs "$n" 2>&1 || true)  # exit-ok: the refusal text is asserted next; an unreadable log does not contain it and fails that check
+  logs=$("$tool" logs "$n" 2>&1) || { echo "image.sh: cannot read the logs of $n" >&2; logs=""; }   # the refusal text is asserted next; an empty log does not contain it
   "$tool" rm -f "$n" >/dev/null 2>&1 || true
   if [ "$status" != exited ] || [ "$code" = 0 ] || ! printf '%s' "$logs" | grep -q 'console-env:'; then
     echo "image.sh: expected the container to refuse '$label' (exit non-zero, say why), got status=$status exit=$code"; printf '%s\n' "$logs" | tail -5; exit 1

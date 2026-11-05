@@ -77,7 +77,8 @@ values_of() {
         case $l in *'helm repo'*) ;; *)
           t=$(printf '%s\n' "$l" | grep -oE 'run\.sh "[^"]*" (kubectl|helm|kind (create|delete|export)) ' | wc -l | tr -d ' ')
           f=$(printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//')
-          if [ "$(printf '%s\n' "$f" | grep -c .)" = "$t" ]; then printf '%s\n' "$f" | grep .; else echo MISSING; fi ;;   # exit-ok: a count that failed is not "$t", so the branch prints MISSING, which the cell compares against the expected values
+          nf=$(printf '%s\n' "$f" | grep -c .) || { [ $? -eq 1 ] || nf=-1; }   # 1 = no line (nf=0), 2 = grep failed (nf=-1, never equal to $t)
+          if [ "$nf" = "$t" ]; then printf '%s\n' "$f" | grep .; else echo MISSING; fi ;;
         esac
       done ;;
     kindkc)

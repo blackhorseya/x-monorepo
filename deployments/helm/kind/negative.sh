@@ -10,6 +10,7 @@
 # The release is restored (helm upgrade --wait) and the Secrets deleted on the way out, whatever happens.
 #   negative.sh <namespace> <release> <chart-dir> <values-file>
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2 chart=$3 values=$4
@@ -17,7 +18,7 @@ sel="app.kubernetes.io/component=catalog-rpc"
 key="kind-neg-key-0123456789abcd"
 
 restore() {
-  kubectl -n "$ns" delete secret catalog-rpc-no-url catalog-rpc-empty-url catalog-rpc-no-rpc-key --ignore-not-found >/dev/null 2>&1 || true  # exit-ok: cleanup of the drill secrets; the drill verdict is already decided
+  best_effort kubectl -n "$ns" delete secret catalog-rpc-no-url catalog-rpc-empty-url catalog-rpc-no-rpc-key --ignore-not-found >/dev/null
   helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
 }
 trap restore EXIT

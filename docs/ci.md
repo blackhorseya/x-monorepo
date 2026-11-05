@@ -43,6 +43,7 @@ gate 若把外部指令的非零退出碼丟掉，指令壞了它也是綠的。
 | 規則 | 寫法 | 為什麼不行 | 改成 |
 |---|---|---|---|
 | `swallow` | `cmd \|\| true`、`\|\| :`、`\|\| exit 0`、`\|\| return 0`，含 `$(… \|\| true)`、trap 字串、`sh -c '…'` | 任何非零碼（壞掉、被注入、找不到）都變成成功；`pipefail` 對 `\|\| true` 沒有作用 | `n=$(grep -c x f \|\| [ $? -eq 1 ])`（grep 只有 1 代表沒有匹配，2 以上照樣讓 `set -e` 中止）；或 `rc=0; cmd \|\| rc=$?` 後用 `case $rc` 逐碼處理 |
+| `besteffort` | `x=$(best_effort cmd)`、`n="$(best_effort grep -c y f)"`、`x=best_effort …`（#464 lead 的條件） | `best_effort` 只給「失敗不改變判定」的指令；放在 `$(…)` 或賦值右邊代表它的輸出／狀態被拿去用了 | 要用到輸出或狀態的指令用 `rc=0; cmd \|\| rc=$?` 加明確分支 |
 | `declsub` | `local n="$(cmd)"`、`declare -r n=$(cmd)`、`export X=$(cmd)`、`readonly n=$(cmd)`（#464 審查） | 宣告內建才是命令，它自己的成功狀態遮住 cmd 的失敗：`grep -c` 印出 1、退出 2，函式照樣帶著 n=1 往下走（shellcheck SC2155） | 拆開：`local n; n=$(cmd)`。兩層：行掃描器（宣告內建之後、第一個 `;` `&&` `\|\|` 之前出現 `$(` 就擋，不去解析前面的賦值）＋ `shellcheck -i SC2155`（真的 parser，抓得到續行、`a="x"'y z'`、`$'…'`）；兩者都要裝得起來——shellcheck 缺少或掃不動是 exit 2，不是略過 |
 | `argsub` | `expect_eq x "$(… \| grep -c y)"`、`[ "$(grep -c y f)" -ge 2 ]`（引數位置的比對計數，#456 r0） | 替換放在引數裡，退出碼到不了 `set -e`；grep 先印出數字再死掉，就只是一個數字；函式裡的 `exit`／`set -e` 在 `$(…)` 子 shell 裡也一樣傳不出來 | 先賦值（`n=$(… \| count_lines y)` 或 `n=$(grep -c y f \|\| [ $? -eq 1 ])`），再用 `"$n"` |
 | `forlist` | `for x in $(cmd)`、`` for x in `cmd` `` | 清單是 `$(…)` 時 cmd 的退出碼被丟掉：`seq` 印出 `1` 後壞掉就只是一個更短的迴圈 | `for ((i = 1; i <= N; i++)); do`（不要用 `_` 當計數器：每個指令都會改寫 `$_`）；清單真的要來自指令時，先 `rc=0; list=$(cmd) \|\| rc=$?` 再檢查 |
@@ -56,6 +57,8 @@ out=$(curl -sS "$url" || true)   # exit-ok: empty output is the "not ready" answ
 ```
 
 `|| [ $? -eq 1 ]` 只在**賦值**（`n=$(grep -c … || [ $? -eq 1 ])`）有用：`echo "$(… || [ $? -eq 1 ])"`、`expect_eq … "$(…)"` 這種放在引數裡的替換，退出碼到不了 `set -e`，要先賦值再用；沒有 `set -e` 的檔案（`target-test.sh` 等）要自己讀 `$?`。這兩點是 #462 的 fault injection 在 CI 上抓出來的。
+
+**`best_effort`**（`scripts/best-effort.sh`，`. scripts/best-effort.sh` 後使用；kind 腳本是 `. "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/best-effort.sh"`）：`best_effort <指令…>` 跑指令，失敗時往 stderr 印 `best-effort command failed (exit N): <指令>` 並回 0——失敗從靜默變成可見。**只給三類**：診斷（失敗報告時多印的 `kubectl get pods`、`diag.sh`）、清理（判定已定之後的 restore／delete／`wait` 回收）、wait-gone（`kubectl wait --for=delete`：對象已不在就是想要的狀態）。有 mutant（輸出全部／部分／不輸出後 exit 42，成功、失敗各一格）；checker 的 `besteffort` 規則擋它出現在 `$(…)` 或賦值右邊。要讀輸出或看狀態的呼叫（poll、查找、取值）一律 `rc=0; cmd || rc=$?` 加明確分支（印出哪個呼叫失敗、怎麼處理），不准用 `best_effort`。`# exit-ok:` 只留給行掃描器誤判且有 mutant 證明的情形，目前 repo 內一處也沒有。
 
 格式是 `# exit-ok: <理由>`，理由至少要有幾個字；空的不算。它是逐行掃描，不是 shell parser：註解行與 heredoc 本文不掃，`pipeline` 只看沒有 pipefail 的檔案，引號裡的 `|` 不算。`.yml` 內嵌的 shell（Taskfile、workflows）與 `done < <(cmd)`（process substitution，一樣不回報 cmd 的退出碼）不在掃描範圍，PR #464 的盤點表有逐行列出；新寫的 gate 請自己避開（先把輸出放進變數或暫存檔，檢查退出碼，再迴圈）。
 

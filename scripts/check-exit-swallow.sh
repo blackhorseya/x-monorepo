@@ -8,6 +8,7 @@
 # It flags, per line (comment lines and heredoc bodies are skipped):
 #   swallow   `cmd || true`, `cmd || :`, `cmd || exit 0`, `cmd || return 0` — also inside $(...), a trap string or sh -c '...'
 #   setargs   `set -- $(cmd)`: same, the status of cmd is dropped
+#   besteffort best_effort inside $(…) or on the right of an assignment: it hides the status of a command whose output is used
 #   declsub   `local n="$(cmd)"`, `export X=$(cmd)`, `declare`/`readonly`: the declaration's own status hides cmd's; split into `local n; n=$(cmd)`
 #   argsub    `expect_eq x "$(… | grep -c y)"`, `[ "$(grep -c y f)" -ge 2 ]`: a match count inside an argument; assign it first
 #   forlist   `for x in $(cmd)` / `for x in `cmd``: the status of cmd is dropped (a short or failed `seq` is a shorter loop)
@@ -68,6 +69,11 @@ function verb_before(p,   s, w) {
   return w
 }
 function report(rule) { printf "%s:%d: %s: %s\n", FILENAME, FNR, rule, line; n++ }
+# 1 when best_effort sits where its output would be USED: inside a $(…) / backticks, or on the right of an assignment. It is for
+# diagnostics, cleanup and "already gone" waits only (scripts/best-effort.sh); a value or a status that matters takes an explicit branch.
+function besteffort_misuse(c) {
+  return (c ~ /(\$\(|`)[^)`]*best_effort/ || c ~ /[A-Za-z_][A-Za-z_0-9]*=("|\047)?best_effort/)
+}
 # 1 when a declaration builtin (local / declare / typeset / export / readonly) is followed, before any `;` `&&` `||` on the line, by a
 # command substitution $(…) ($((…)) is arithmetic and does not count): `local n="$(cmd)"`, `declare -r n=$(cmd)`, `export X=$(cmd)`.
 # The declaration is the command, and its own success hides the status of cmd (reviewer of #464: grep prints 1, exits 2, the
@@ -131,6 +137,8 @@ FNR == 1 { reset_file() }
     sub(/;[ \t]*do([ \t]|$).*/, "", fl); gsub(/\047[^\047]*\047/, "", fl)
     if (fl ~ /(\$\(|`)/ && !exempt) report("forlist")
   }
+  # besteffort
+  if (besteffort_misuse(CODE) && !exempt) report("besteffort")
   # declsub
   if (declsub(CODE) && !exempt) report("declsub")
   # argsub

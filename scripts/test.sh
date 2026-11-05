@@ -21,6 +21,7 @@ PB_PIDS=""   # dex-prebind stubs; killed by the one EXIT trap set below the prep
 trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; rm -rf "$tmp"' EXIT
 fail=0 pass=0
 # shellcheck source=fault-inject.sh
+. "$src/scripts/best-effort.sh"    # best_effort: cleanup that must not decide a verdict, and says so when it fails (#462)
 . "$src/scripts/fault-inject.sh"   # inject_fail: a PATH wrapper that runs the real tool, then dies (#462)
 
 # fixture <name>: a fresh repo at $repo with scripts/ committed on main and tag v0.1.0.
@@ -616,7 +617,7 @@ prepull_pid=""
 prepull_stop() {
   [ -n "$prepull_pid" ] || return 0
   kill -TERM "$prepull_pid" 2>/dev/null || true
-  wait "$prepull_pid" 2>/dev/null || true  # exit-ok: reaping the script we just TERMed; its status is asserted by the cases that care
+  best_effort wait "$prepull_pid"   # cleanup: reaping the script we just TERMed; its status is asserted by the cases that care
   prepull_pid=""
 }
 trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
@@ -1780,7 +1781,7 @@ tools_without() {
   local bindir="$tmp/toolbin-$1" t
   mkdir -p "$bindir"
   for t in bash dirname go jq; do
-    [ "$t" = "$1" ] || { [ -e "$bindir/$t" ] || ln -s "$(command -v "$t")" "$bindir/$t" 2>/dev/null || true; }  # exit-ok: a tool the host lacks is just not linked into the stripped PATH; the case that needs it fails on its own
+    if [ "$t" != "$1" ] && [ ! -e "$bindir/$t" ] && tp=$(command -v "$t"); then ln -s "$tp" "$bindir/$t"; fi   # a tool the host lacks is just not linked into the stripped PATH; the case that needs it fails on its own
   done
   echo "$bindir"
 }
@@ -1925,6 +1926,9 @@ mixedquote @@ declsub @@ local a="x"'y z' b=$(cmd)
 ansic @@ declsub @@ local a=$'q r' b=$(cmd)
 innersub @@ declsub @@ local a="$(inner)" b=$(cmd)
 typesetsub @@ declsub @@ typeset M=$(cmd)
+besub @@ besteffort @@ out=$(best_effort cat f)
+bequoted @@ besteffort @@ n="$(best_effort grep -c y f)"
+beassign @@ besteffort @@ x=best_effort
 ROWS
 # sw_write <name>: $sw/<name>.sh from stdin, after a header that sets (or not) pipefail
 sw_write() { { printf '#!/usr/bin/env bash\n%s\n' "${2:-set -euo pipefail}"; cat; } > "$sw/$1.sh"; }
@@ -1975,6 +1979,8 @@ n=$(grep -c y f || [ $? -eq 1 ])
 n=$(cat f | count_lines y)
 expect_eq x 1 "$n" "$(date)"
 f() { local n; n=$(grep -c y f || [ $? -eq 1 ]); local m=$((n + 1)); local k=1; echo "$n $m $k"; }
+best_effort kubectl -n "$ns" get pods,jobs >&2
+[ -n "$x" ] && best_effort kubectl wait --for=delete pod -l a=b
 n=$(cmd) && echo "$n"
 F
 sw_run "$sw/canonical.sh"
@@ -2032,6 +2038,31 @@ for keep in all 0; do
   rc=0; out=$(PATH="$(inject_fail "$tmp/inj-sw-sc-$keep" shellcheck 42 "$keep"):$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/clean.sh" 2>&1) || rc=$?
   expect_eq  "swallow: shellcheck prints [$keep] then exits 42 — exit 2, not clean" "2" "$rc"
 done
+# scripts/best-effort.sh: a failing command is REPORTED (stderr) and the shell carries on with status 0; a succeeding one is silent.
+# Whatever the command printed (all of it, part of it, nothing) before dying with 42 still reaches stdout. (seq: an external tool,
+# so the PATH wrapper is what runs; a builtin like printf would not be wrapped.)
+. "$src/scripts/best-effort.sh"
+be_run() {   # be_run <keep> <command…>: runs best_effort on <command…> whose tool dies with 42 after <keep> lines; stdout+rc → $tmp/be.out, stderr → $tmp/be.err
+  local keep=$1 w; shift
+  w=$(inject_fail "$tmp/inj-be-$RANDOM" "$1" 42 "$keep" '*')
+  ( PATH="$w:$PATH"; best_effort "$@"; echo "rc=$?" ) > "$tmp/be.out" 2> "$tmp/be.err"
+}
+for keep in all 1 0; do
+  be_run "$keep" seq 1 2
+  expect_match "best_effort: seq prints [$keep] then dies — it reports the exit code" 'best-effort command failed \(exit 42\): seq 1 2' "$(cat "$tmp/be.err")"
+  expect_match "best_effort: ... and still returns 0" 'rc=0$' "$(cat "$tmp/be.out")"
+  case $keep in
+    all) expect_eq "best_effort: ... the whole output got through" "1 2 rc=0" "$(tr '\n' ' ' < "$tmp/be.out" | sed 's/ $//')" ;;
+    1)   expect_eq "best_effort: ... only the first line got through" "1 rc=0" "$(tr '\n' ' ' < "$tmp/be.out" | sed 's/ $//')" ;;
+    0)   expect_eq "best_effort: ... nothing got through" "rc=0" "$(cat "$tmp/be.out")" ;;
+  esac
+done
+( best_effort seq 1 2; echo "rc=$?" ) > "$tmp/be.out" 2> "$tmp/be.err"
+expect_eq    "best_effort: a succeeding command is silent on stderr" "" "$(cat "$tmp/be.err")"
+expect_eq    "best_effort: ... passes its output and returns 0" "1 2 rc=0" "$(tr '\n' ' ' < "$tmp/be.out" | sed 's/ $//')"
+( best_effort false; echo "rc=$?" ) > "$tmp/be.out" 2> "$tmp/be.err"
+expect_match "best_effort: a plain failure is reported" 'failed \(exit 1\): false' "$(cat "$tmp/be.err")"
+expect_match "best_effort: ... and returns 0" 'rc=0$' "$(cat "$tmp/be.out")"
 # the checker's own commands dying: red / exit 2, never a clean report
 sw_file clean 'echo ok'
 rc=0; out=$(PATH="$(inject_fail "$tmp/inj-sw-awk" awk 42):$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/clean.sh" 2>&1) || rc=$?

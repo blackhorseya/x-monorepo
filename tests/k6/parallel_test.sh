@@ -11,6 +11,7 @@
 #          first run's files are still in the bin dir (the failure must name the missing files)
 #   smoke  curl / sleep / tee / cat / env exiting 42 (seq is no longer called: catalog.sh counts in the shell, #462)
 set -euo pipefail
+. "$(dirname "$0")/../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 cd "$(dirname "$0")/../.."
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 jobs_max=${PARALLEL_TEST_JOBS:-8}
@@ -132,7 +133,7 @@ async "smoke: env (starts the rpc) exits 42" nonzero smoke1 "$(shim env 'exit 42
 # 1 and died was a one-round wait (#462). It counts in the shell now, and a failing seq changes nothing.
 async "smoke: seq is not used by catalog.sh (exit 42 shim, still green)" zero smoke1 "$(shim seq 'echo 1; exit 42')" orders
 
-wait || true   # exit-ok: every case has its own status file below; a case that left none is a FAIL
+best_effort wait   # every case has its own status file below; a case that left none is a FAIL
 
 fails=0
 for i in "${!names[@]}"; do

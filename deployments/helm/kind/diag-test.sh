@@ -36,6 +36,7 @@
 # Every "output has X" is checked against text the fakes produce for THIS call (a nonce per run), so an empty or
 # stale output cannot pass.
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
@@ -119,7 +120,7 @@ esac
 C
 chmod +x "$tmp/bin/kubectl" "$tmp/bin/helm" "$tmp/bin/curl"
 
-die() { echo "diag-test: $*" >&2; echo "---- output:" >&2; cat "$tmp/out" >&2 2>/dev/null || true; echo "---- events:" >&2; cat "$tmp/events" >&2 2>/dev/null || true; exit 1; }  # exit-ok: failure report only; die() exits 1 whatever these cats return
+die() { echo "diag-test: $*" >&2; echo "---- output:" >&2; best_effort cat "$tmp/out" >&2; echo "---- events:" >&2; best_effort cat "$tmp/events" >&2; exit 1; }
 has() { grep -qF -- "$1" "$tmp/out" || die "$2: output lacks '$1'"; }
 hasnt() { ! grep -qF -- "$1" "$tmp/out" || die "$2: output has '$1'"; }
 
@@ -259,13 +260,15 @@ for sg in TERM INT; do
   if only D5; then
     case $sg in TERM) want_rc=143 ;; INT) want_rc=130 ;; esac
     hb="$tmp/hb-$sg"; mkdir -p "$hb"; : > "$tmp/events"
+    sig_rc=0
     res=$(DIAG_DIR="$tmp/diag5-$sg" EVENTS="$tmp/events" NONCE="$nonce" HELM_BLOCK="$hb" PATH="$tmp/bin:$PATH" python3 "$tmp/sigrun.py" $sg "$hb/started" 60 \
-      "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out" || true)  # exit-ok: sigrun.py prints the script's rc= and signalled=; the next lines assert on both
+      "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out") || sig_rc=$?
+    [ "$sig_rc" = 0 ] || echo "diag-test: D5 $sg: sigrun.py exited $sig_rc (it reports the script's rc= and signalled= in its output, asserted next)" >&2
     echo "$res" > "$tmp/out"
     [[ $res == *"signalled=yes"* ]] || die "D5 $sg: the script never reached the waiting helm upgrade ($res)"
     [[ $res == *"rc=$want_rc "* ]] || die "D5 $sg: $res; want rc=$want_rc (128 + the signal)"
     [[ $res == *"leftover=0"* ]] || die "D5 $sg: a child of the script outlived it ($res)"
-    hp=$(cat "$hb/helm.pid" 2>/dev/null || true)  # exit-ok: an empty pid is the failure, the next line dies on it
+    hp=$(cat "$hb/helm.pid" 2>/dev/null) || { echo "diag-test: D5 $sg: cannot read the fake helm's pid file" >&2; hp=""; }
     [ -n "$hp" ] || die "D5 $sg: the fake helm left no pid"
     ! kill -0 "$hp" 2>/dev/null || { kill "$hp" 2>/dev/null; die "D5 $sg: the waiting helm (pid $hp) was left running"; }
     n=$(grep -c ' logs ' "$tmp/events" || [ $? -eq 1 ]); [ "$n" -gt 0 ] || die "D5 $sg: diag.sh did not run (no pod log was read)"
@@ -499,7 +502,7 @@ fi
 # diag.sh selects, the second by the server's own flags in deps.yaml — and both are checked on a real Postgres running SQL
 # with a synthetic credential as a literal, once with leaky flags as the positive control.
 if only D7; then
-  rt=$(command -v docker || command -v podman || true)  # exit-ok: empty means neither engine is installed, the next line dies on it
+  rt=$(command -v docker || command -v podman) || { echo "diag-test: D7: neither docker nor podman is installed" >&2; rt=""; }
   [ -n "$rt" ] || die "D7: needs docker or podman (a real Postgres is the point of this cell)"
   secret="sk_live_SYNTHETIC_$nonce"
   pgc=""; cleanup_pg() { [ -z "$pgc" ] || "$rt" rm -f "$pgc" >/dev/null 2>&1 || true; pgc=""; }
@@ -516,13 +519,16 @@ if only D7; then
     # the image had to be pulled). Ready means the line appears TWICE; a server that never gets there is a setup failure.
     ready=0
     for ((_try518 = 1; _try518 <= 120; _try518++)); do
-      [ "$("$rt" logs "$pgc" 2>&1 | grep -c 'database system is ready to accept connections')" -ge 2 ] && { ready=1; break; }   # exit-ok: poll — a failed logs read or count is "not ready yet", and the loop ends in a die when it never is
+      ready_rc=0; ready_n=$("$rt" logs "$pgc" 2>&1 | grep -c 'database system is ready to accept connections') || ready_rc=$?
+      if [ "$ready_rc" -gt 1 ]; then echo "diag-test: D7 $label: reading the container log failed (exit $ready_rc), retrying" >&2; ready_n=0; fi
+      [ "$ready_n" -ge 2 ] && { ready=1; break; }
       sleep 1
     done
     [ "$ready" = 1 ] || die "D7 $label: the Postgres container never became ready (setup failure, not a result)"
     local psql=("$rt" exec -i "$pgc" psql -U app -d app -X -q)
     "${psql[@]}" -v ON_ERROR_STOP=1 -c "create table t(a text)" -c "create unique index on t(a)" -c "insert into t values ('seed')"
-    "${psql[@]}" -c "insert into t values ('$secret-u')" -c "insert into t values ('$secret-u')" >/dev/null 2>&1 || true  # exit-ok: the second insert violates the unique index on purpose; the error text is what the drill reads back
+    dup_rc=0; "${psql[@]}" -c "insert into t values ('$secret-u')" -c "insert into t values ('$secret-u')" >/dev/null 2>&1 || dup_rc=$?
+    [ "$dup_rc" != 0 ] || die "D7 $label: the duplicate insert was meant to violate the unique index and did not"
     "${psql[@]}" -c "begin; lock table t in access exclusive mode; select '$secret' as s, pg_sleep(40); commit" >/dev/null 2>&1 &
     local h=$!
     sleep 1
@@ -533,7 +539,7 @@ if only D7; then
     PGC="$pgc" RT="$rt" run_bounded 120 "$here/diag.sh" ns "$since"
     [ "$rc" = 0 ] || die "D7 $label: exit $rc, want 0"
     D7_RAW_QUERY=$("${psql[@]}" -At -c "select string_agg(query, ' | ') from pg_stat_activity where query like '%$secret%' and pid <> pg_backend_pid()")
-    D7_RAW_LOG=$("$rt" logs "$pgc" 2>&1 || true)  # exit-ok: only the leaky-flags control reads it, and the control fails when the secret is not found in it
+    D7_RAW_LOG=$("$rt" logs "$pgc" 2>&1) || { echo "diag-test: D7 $label: could not read the container log" >&2; D7_RAW_LOG=""; }
     kill "$h" "$w" 2>/dev/null || true; wait "$h" "$w" 2>/dev/null || true
     D7_SEEN=$(cat "$tmp/out" "$DIAG_DIR"/* 2>/dev/null) || die "D7: cannot read what diag.sh wrote — a leak check over nothing proves nothing"
     unset DIAG_DIR

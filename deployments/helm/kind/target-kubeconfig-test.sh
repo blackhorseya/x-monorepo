@@ -182,7 +182,8 @@ if cmp -s "$root/Taskfile.yml" "$mutfile"; then
   bad "M1 the mutant Taskfile was not made"
 else
   reset_ns
-  run "$mutfile" "$tmp/alias.yaml" || true  # exit-ok: the mutant may fail either way; the verdict is aimed_right / in_cluster on the next lines
+  mut_rc=0; run "$mutfile" "$tmp/alias.yaml" || mut_rc=$?
+  echo "M1 mutant run exited $mut_rc (either way is fine: the verdict is aimed_right / in_cluster below)" >&2
   if aimed_right; then bad "M1 the mutant (plain kubectl, no runner) still passes aimed_right: the probe cannot see the alias"
   elif in_cluster "$tmp/other.yaml"; then ok "M1 mutant without the runner: the namespace lands in other → red as it must"
   else bad "M1 the mutant created the namespace nowhere: $(tail -3 "$tmp/run.log")"; fi
@@ -217,13 +218,15 @@ PY
 }
 if ! mutate_down noflag; then bad "D3 the mutant Taskfile was not made"
 else
-  down "$mutfile" || true  # exit-ok: the mutant may fail either way; the verdict is caller_intact on the next line
+  mut_rc=0; down "$mutfile" || mut_rc=$?
+  echo "mutant down exited $mut_rc (either way is fine: the verdict is caller_intact below)" >&2
   if caller_intact; then ok "D3 down through the runner without the flag: the caller file is still intact (the runner's environment alone holds)"
   else bad "D3 the runner alone did not keep kind off the caller file"; fi
 fi
 if ! mutate_down plain; then bad "D2 the mutant Taskfile was not made"
 else
-  down "$mutfile" || true  # exit-ok: the mutant may fail either way; the verdict is caller_intact on the next line
+  mut_rc=0; down "$mutfile" || mut_rc=$?
+  echo "mutant down exited $mut_rc (either way is fine: the verdict is caller_intact below)" >&2
   if caller_intact; then bad "D2 the mutant (a plain kind delete) leaves the caller file alone: the probe cannot see it"
   else ok "D2 mutant that bypasses the runner: the context is removed from the caller file → red as it must"; fi
 fi
