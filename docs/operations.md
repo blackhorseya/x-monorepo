@@ -384,7 +384,9 @@ COMMIT;
 
 ### Upgrade notes — #410 切片 2：`payment-consume` 改跑 payment-worker
 
-這一版 `<release>-payment-consume` Deployment 的 image 從 `…/payment-rpc:<tag>` 換成 `…/payment-worker:<tag>`（container 名 `payment-worker`，args 只剩 `--require-durable`）。**沒變的**：Deployment 名稱與 selector labels、`<release>-payment-rpc` ConfigMap 與 `<release>-payment-rpc-env` Secret、extraEnv 的限制、resources、`terminationGracePeriodSeconds`、沒有 autoscaling 與 probe。因為 ConfigMap 沒變，`worker.consumer_group` 仍是 `payment-rpc`，consumer group 仍是 **`payment-rpc.payment`**：升級不開新 cursor，所以不依 `worker.start_from` 重放、也不跳過滾動期間發布的事件（`deployments/helm/kind/payment-upgrade.sh`，`task helm-kind` 的一步：從 git tag `v0.63.3` 的 chart 與它發布的 ghcr image 裝起，下單 A；把舊 consumer 縮到 0、下單 B；升級到這一版的同時連下三張單；升級後下單 C。結果：group 集合不變、cursor 不回頭且追到 topic 尾端、每張單恰好一張付款單、consumer inbox 與付款單數各增加「這段期間發布的 OrderConfirmed 數」）。
+這一版 `<release>-payment-consume` Deployment 的 image 從 `…/payment-rpc:<tag>` 換成 `…/payment-worker:<tag>`（container 名 `payment-worker`，args 只剩 `--require-durable`）。**沒變的**：Deployment 名稱與 selector labels、`<release>-payment-rpc` ConfigMap 與 `<release>-payment-rpc-env` Secret、extraEnv 的限制、resources、`terminationGracePeriodSeconds`、沒有 autoscaling 與 probe。因為 ConfigMap 沒變，`worker.consumer_group` 仍是 `payment-rpc`，consumer group 仍是 **`payment-rpc.payment`**：所以這個**名字**不變；`apps/payment-worker` 的 `TestRun_ConsumerGroupIsPinned` 從 offsets 表量到它，`deployments/helm/check.py` 檢查 chart 渲染出的這個 Deployment（image 是 payment-worker、workload 的安全形狀）。
+
+**不再支援、不再測試：從 ≤ v0.63.3（`payment-rpc consume`）直接升到這一版。**（#446）原本 `task helm-kind` 有一步（`payment-upgrade.sh`）從 git tag `v0.63.3` 的 chart 與它發布的 ghcr image 裝起，演練「cursor 不倒退、不重放、不跳過滾動期間發布的事件、每張單恰好一張付款單」；它佔 CI 約 84 秒，已退役。現在沒有任何測試證明這條直升路徑保有那些性質，所以本文件**不**承諾：升級時的 consumer group 不新開 cursor、不依 `worker.start_from` 重放或跳過、每張 `OrderConfirmed` 恰好處理一次。**≤ v0.63.3 的部署請先升到 v0.66.0（chart 0.3.64，最後一個 CI 仍跑這個演練的版本）、確認 `payment-consume` 正常消費，再升到之後的版本。**
 
 | 項目 | 舊 → 新 |
 |---|---|

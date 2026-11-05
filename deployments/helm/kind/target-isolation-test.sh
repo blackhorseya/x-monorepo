@@ -6,7 +6,7 @@
 # r1-r4 each found a shell form the previous gate did not read (unset, read -r, export -n, an absolute path ...). A gate that reads the
 # text of a shell script can always be one form short, so this one RUNS the real entry and judges what the tools received:
 #
-#   - `task --dry` expands the five kind tasks; every expanded line that names kubectl / helm / kind / a kind script is run with
+#   - `task --dry` expands the seven kind tasks; every expanded line that names kubectl / helm / kind / a kind script is run with
 #     `sh -c` from a scratch copy of deployments/helm/kind, the way the task would run it,
 #   - the CALLER is hostile: KUBECONFIG names a decoy file, HOME is a decoy directory with a .kube/config, both chmod 000 (a stand-in
 #     for ~/.kube/config pointing at production),
@@ -80,11 +80,11 @@ fresh_tree() {  # a scratch copy of the kind directory (the mutants edit it, nev
   mkdir -p "$tree/scripts"; cp "$root/scripts/best-effort.sh" "$tree/scripts/best-effort.sh"   # the kind scripts source ../../../scripts/best-effort.sh
 }
 
-# lines_of <taskfile> → $tmp/lines: the expanded cluster-touching lines of the five kind tasks
+# lines_of <taskfile> → $tmp/lines: the expanded cluster-touching lines of the seven kind tasks
 lines_of() {
   : > "$tmp/lines"
   local t
-  for t in helm-kind-cluster helm-kind-up helm-kind helm-kind-keda helm-kind-down; do
+  for t in helm-kind-cluster helm-kind-up helm-kind helm-kind-core helm-kind-payment helm-kind-keda helm-kind-down; do
     # the dry run first, on its own: piped, a task that fails would leave an empty list and every drill below would run nothing
     PATH="$tmp/fake4:$PATH" task -t "$1" --dry "$t" "CLUSTER=$cluster" "NS=$ns" "BIN_DIR=$tmp/bin" > "$tmp/dry.out" 2>&1 || { echo "target-isolation-test: task --dry $t failed" >&2; cat "$tmp/dry.out" >&2; return 1; }
     strip < "$tmp/dry.out" | sed 's/^task: \[[^]]*\] //' \
@@ -177,7 +177,7 @@ n_lines=$(grep -c . "$tmp/lines")
 run_lines
 sum=$(judge strict); rc=$?
 echo "$sum" | head -1
-if [ "$rc" = 0 ]; then ok "baseline: every cluster call of the five kind tasks and the real scripts used the task's own kubeconfig, none the decoy"
+if [ "$rc" = 0 ]; then ok "baseline: every cluster call of the seven kind tasks and the real scripts used the task's own kubeconfig, none the decoy"
 else bad "baseline: $(printf '%s' "$sum" | head -3 | tr '\n' '|')"; fi
 judged=$(printf '%s\n' "$sum" | field judged)
 if [ "${n_lines:-0}" -ge 20 ] && [ "${judged:-0}" -ge 60 ]; then ok "anchors: $n_lines lines run, $judged cluster calls judged"
@@ -252,7 +252,7 @@ for f in "$root"/deployments/helm/kind/*.sh; do
 done
 sum=$(judge); rc=$?
 if [ "$rc" = 2 ]; then bad "mutant 7: the judge crashed"
-elif [ "$direct" -ge 10 ] && [ "$refused" = "$direct" ] && [ "$(printf '%s\n' "$sum" | field judged)" = 0 ]; then
+elif [ "$direct" -ge 8 ] && [ "$refused" = "$direct" ] && [ "$(printf '%s\n' "$sum" | field judged)" = 0 ]; then
   ok "mutant 7: all $direct kind scripts run directly were refused (exit 2, pointing at the task) and called no cluster tool"
 else bad "mutant 7: $refused of $direct scripts refused; not refused:${notrefused:- none}; $(printf '%s' "$sum" | head -2 | tr '\n' '|')"; fi
 
