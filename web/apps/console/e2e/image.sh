@@ -13,8 +13,8 @@ cd "$(dirname "$0")/.."
 [ -f dist/index.html ] || { echo "image.sh: dist/ missing, run task web-build" >&2; exit 1; }
 
 tool=${CONTAINER_TOOL:-$(command -v docker >/dev/null 2>&1 && echo docker || echo podman)}
-# FAULT INJECTION (do not merge): `logs` prints what it has and then exits 42 — expect_refused must say it cannot read the logs and then fail on their absence
-real_tool=$(command -v "$tool"); tool="$(mktemp -d)/tool-faulty"; printf '#!/bin/sh\ncase "$1" in logs) %s "$@"; exit 42;; esac\nexec %s "$@"\n' "$real_tool" "$real_tool" > "$tool"; chmod +x "$tool"
+# FAULT INJECTION (do not merge): the `logs` of the "-refused" container print what they have and then exit 42 — expect_refused must say it cannot read the logs and then fail on their absence
+real_tool=$(command -v "$tool"); tool="$(mktemp -d)/tool-faulty"; printf '#!/bin/sh\ncase "$1 $2" in "logs "*-refused) %s "$@"; exit 42;; esac\nexec %s "$@"\n' "$real_tool" "$real_tool" > "$tool"; chmod +x "$tool"
 port=${E2E_CONSOLE_PORT:-18093}
 rpc_port=${E2E_RPC_PORT:-18091}
 name=x-monorepo-console-e2e

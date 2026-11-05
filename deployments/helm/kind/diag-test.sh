@@ -504,8 +504,6 @@ fi
 if only D7; then
   rt=$(command -v docker || command -v podman) || { echo "diag-test: D7: neither docker nor podman is installed" >&2; rt=""; }
   [ -n "$rt" ] || die "D7: needs docker or podman (a real Postgres is the point of this cell)"
-  # FAULT INJECTION (do not merge): `logs` prints what it has and then exits 42 — the poll below must say so and end in its own die
-  real_rt=$rt; rt="$tmp/rt-faulty"; printf '#!/bin/sh\ncase "$1" in logs) %s "$@"; exit 42;; esac\nexec %s "$@"\n' "$real_rt" "$real_rt" > "$rt"; chmod +x "$rt"
   secret="sk_live_SYNTHETIC_$nonce"
   pgc=""; cleanup_pg() { [ -z "$pgc" ] || "$rt" rm -f "$pgc" >/dev/null 2>&1 || true; pgc=""; }
   trap 'cleanup_pg; test -z "$WATCHDOG" || kill $WATCHDOG 2>/dev/null; rm -rf "$tmp"' EXIT
