@@ -2668,7 +2668,7 @@ fn_text() { # <file> <name>: the function, from its first line to its closing br
 }
 helper_cell() { # <label> <file> <name> <want rc> <want output> <command…>: define the real function, run the command, judge rc and output
   local label=$1 file=$2 name=$3 wrc=$4 wout=$5; shift 5
-  { echo ". '$src/scripts/best-effort.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/helper.sh"
+  { echo ". '$src/scripts/best-effort.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" err_code_of; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/helper.sh"
   hrc=0; capture -2 hout hrc bash "$tmp/helper.sh" || exit 1
   expect_eq "helper $name ($label): exit" "$wrc" "$hrc"
   expect_eq "helper $name ($label): output" "$wout" "$hout"
@@ -2763,6 +2763,13 @@ helper_cell "outage call(): stderr warning, stdout 'HTTP/1.1 200'" "$src/deploym
 helper_cell "outage call(): curl prints a status then dies (7): no status" "$src/deployments/helm/kind/outage.sh" call 0 " -" 'api=http://x; curl() { printf "HTTP/1.1 200 OK\r\n\r\n"; return 7; }; call p "{}" 2>/dev/null'
 helper_cell "payment-flow call(): stderr 'HTTP/1.1 200' + stdout 'HTTP/1.1 500'" "$src/deployments/helm/kind/payment-flow.sh" call 0 "500 -" 'api=http://x; curl() { echo "HTTP/1.1 200 OK" >&2; printf "HTTP/1.1 500 Error\r\n\r\n"; }; call k p "{}" 2>/dev/null; echo "$res"'
 helper_cell "payment-flow call(): stderr warning + stdout 'HTTP/1.1 200'" "$src/deployments/helm/kind/payment-flow.sh" call 0 "200 -" 'api=http://x; curl() { echo "warning: something" >&2; printf "HTTP/1.1 200 OK\r\n\r\n"; }; call k p "{}" 2>/dev/null; echo "$res"'
+# call() X-Error-Code parsing (outage.sh, payment-flow.sh): no header → "-", a header → its value, and a parse that prints part of an answer and then FAILS → call() fails (never "-")
+for cf in outage payment-flow; do
+  if [ "$cf" = outage ]; then run='call p "{}"'; else run='{ call k p "{}"; echo "$res"; }'; fi
+  helper_cell "$cf call(): no X-Error-Code header → -" "$src/deployments/helm/kind/$cf.sh" call 0 "404 -" 'api=http://x; curl() { printf "HTTP/1.1 404 Not Found\r\n\r\n"; }; '"$run"' 2>/dev/null'
+  helper_cell "$cf call(): X-Error-Code: catalog.unavailable → that value" "$src/deployments/helm/kind/$cf.sh" call 0 "409 catalog.unavailable" 'api=http://x; curl() { printf "HTTP/1.1 409 Conflict\r\nX-Error-Code: catalog.unavailable\r\n\r\n"; }; '"$run"' 2>/dev/null'
+  helper_cell "$cf call(): the parse prints 'partial' and then dies (42) → call() FAILS, no status" "$src/deployments/helm/kind/$cf.sh" call 1 "" 'api=http://x; curl() { printf "HTTP/1.1 409 Conflict\r\nX-Error-Code: catalog.unavailable\r\n\r\n"; }; grep() { echo partial; return 42; }; '"$run"' 2>/dev/null'
+done
 # image.sh expect_refused(): the container's exit code must be KNOWN and non-zero. An unreadable one (inspect dies) is a failure, not a refusal
 img_cell() { # <label> <want rc> <want out regex> <ExitCode inspect behaviour: a command in ctl>
   local label=$1 wrc=$2 wre=$3 ecb=$4
@@ -2777,6 +2784,8 @@ img_cell() { # <label> <want rc> <want out regex> <ExitCode inspect behaviour: a
 }
 img_cell "exit code 1: refused"                  0 'refused as expected: fake' 'printf 1'
 img_cell "exit code 0: not a refusal"            1 'expected the container to refuse' 'printf 0'
+img_cell "ExitCode inspect succeeds but prints nothing: unknown" 1 'cannot read the exit code|not a number' ':'
+img_cell "ExitCode inspect prints a non-number"  1 'not a number' 'printf abc'
 img_cell "ExitCode inspect dies (125): unknown"  1 'cannot read the exit code' 'return 125'
 img_cell "ExitCode inspect prints 1 then dies"   1 'cannot read the exit code' 'printf 1; return 125'
 # capture (scripts/best-effort.sh): stdout + the real exit status of a command; stderr only with -2; the command's own failure is never capture's

@@ -86,6 +86,7 @@ admin_key=$(sed -n 's/.*admin=\([A-Za-z0-9._-]*\):admin.*/\1/p' "$flow" | head -
 
 # call <key> <path> <json>: sets $res ("<http status> <x-error-code or ->") and $body in THIS shell, so it is called
 # plainly (never inside $(...), whose subshell would keep them).
+err_code_of() { tr -d '\r' <<<"$1" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep .; }   # the X-Error-Code value; exit 1 (grep) = the response has none
 call() {
   local out rc=0
   capture out rc curl -sS -D - -o /tmp/payflow.$$ -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3" || { echo "payment-flow: cannot run curl for $2" >&2; exit 1; }
@@ -93,7 +94,8 @@ call() {
   body="(no body)"; [ ! -f /tmp/payflow.$$ ] || body=$(cat /tmp/payflow.$$) || { echo "payment-flow: cannot read the response body of $2" >&2; exit 1; }; rm -f /tmp/payflow.$$
   local st xc   # each part on its own: call() runs in `$(…)` and `||` positions, so errexit is off in here
   st=$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") || { echo "payment-flow: cannot read the status line" >&2; exit 1; }   # an empty status (curl failed above) never equals the expected one
-  xc=$(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -) || { echo "payment-flow: cannot read the error code" >&2; exit 1; }
+  xc=$(value_of -ok 1 err_code_of "$out") || { echo "payment-flow: cannot read the error code" >&2; exit 1; }   # 1 = no X-Error-Code header (xc empty); anything else is the parse failing
+  [ -n "$xc" ] || xc=-
   res="$st $xc"
 }
 want() { [ "$2" = "$3" ] || fail "$1: got '$2', want '$3' (body: ${body:-})"; }

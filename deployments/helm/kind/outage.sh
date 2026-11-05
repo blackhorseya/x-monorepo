@@ -37,12 +37,17 @@ on_exit() { local rc=$?; restore; restore_exit "$rc"; }   # leaves with the stat
 trap on_exit EXIT
 
 # call <path> <json> → "<http status> <x-error-code or ->" and the body in $body
+err_code_of() { tr -d '\r' <<<"$1" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep .; }   # the X-Error-Code value; exit 1 (grep) = the response has none
 call() {
   local out rc=0
   capture out rc curl -sS -D - -o /tmp/outage.$$ -H 'Content-Type: application/json' "$api/$1" -d "$2" || { echo "outage: cannot run curl for $1" >&2; exit 1; }
   if [ "$rc" != 0 ]; then echo "outage: curl $1 failed (exit $rc): no status is read from it" >&2; out=""; fi   # an empty status never equals the expected one: want() fails
   body="(no body)"; [ ! -f /tmp/outage.$$ ] || body=$(cat /tmp/outage.$$) || { echo "outage: cannot read the response body of $1" >&2; exit 1; }; rm -f /tmp/outage.$$
-  printf '%s %s' "$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out")" "$(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -)"
+  local st xc
+  st=$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") || { echo "outage: cannot read the status line" >&2; exit 1; }   # an empty status (curl failed above) never equals the expected one
+  xc=$(value_of -ok 1 err_code_of "$out") || { echo "outage: cannot read the error code" >&2; exit 1; }   # 1 = no X-Error-Code header (xc empty); anything else is the parse failing
+  [ -n "$xc" ] || xc=-
+  printf '%s %s' "$st" "$xc"
 }
 want() { # <what> <got> <want>
   [ "$2" = "$3" ] || { echo "outage: $1: got '$2', want '$3' (body: ${body:-})"; exit 1; }
