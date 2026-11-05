@@ -1060,10 +1060,9 @@ if [ -e "$tmp/sb-dashdash-decoy/decoy" ]; then ok; else bad "sign: the file name
 sign_argv_refused() { # sign_argv_refused <name> <args...>: runs the wrapper in a tempdir holding the sentinel `decoy`
   local n=$1 d="$tmp/sb-$1"; shift; mkdir -p "$d"; echo artifact > "$d/artifact"; echo keep > "$d/decoy"
   : > "$d/args"; rm -f "$d/count"
-  set +e
+  set +e; sb_rc=0
   sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="err" \
-    COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" "$@" 2>&1)
-  sb_rc=$?
+    COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" "$@" 2>&1) || sb_rc=$?
   set -e
   sb_tries=$(cat "$d/count" 2>/dev/null) || sb_tries=0   # no counter file = the fake was never called
   expect_eq    "sign: $n exits 2"                 2 "$sb_rc"
@@ -1276,9 +1275,8 @@ STUB
 # ready <name> [args...]: runs merge-ready.sh 7 against stub <name>; sets out and rc.
 ready() {
   local name=$1; shift
-  set +e
-  out=$(GH_STUB_DIR="$tmp/stub-$name" PATH="$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 "$@" 2>&1)
-  rc=$?
+  set +e; rc=0
+  out=$(GH_STUB_DIR="$tmp/stub-$name" PATH="$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 "$@" 2>&1) || rc=$?
   set -e
 }
 stub_gh fresh;  ready fresh
@@ -2161,7 +2159,7 @@ done
 . "$src/scripts/best-effort.sh"
 be_run() {   # be_run <keep> <command…>: runs best_effort on <command…> whose tool dies with 42 after <keep> lines; stdout+rc → $tmp/be.out, stderr → $tmp/be.err
   local keep=$1 w; shift
-  w=$(inject_fail "$tmp/inj-be-$RANDOM" "$1" 42 "$keep" '*')
+  w=$(inject_fail "$tmp/inj-be-$RANDOM" "$1" 42 "$keep" '*') || return 1
   ( PATH="$w:$PATH"; best_effort "$@"; echo "rc=$?" ) > "$tmp/be.out" 2> "$tmp/be.err"
 }
 for keep in all 1 0; do
@@ -2201,10 +2199,9 @@ expect_eq    "swallow: every tracked script is clean" "0" "$rc"
 # merge-ready.sh: gh is a stub; the wrapper goes around the stub.
 ready_dying() {   # ready_dying <stub> <keep> <glob>: gh answers per the stub, but the calls matching <glob> die with exit 42
   local name=$1 keep=$2 glob=$3 w
-  w=$(PATH="$tmp/stub-$name/bin:$PATH" inject_fail "$tmp/inj-ready-$name-$RANDOM" gh 42 "$keep" "$glob")
-  set +e
-  out=$(GH_STUB_DIR="$tmp/stub-$name" PATH="$w:$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 2>&1)
-  rc=$?
+  w=$(PATH="$tmp/stub-$name/bin:$PATH" inject_fail "$tmp/inj-ready-$name-$RANDOM" gh 42 "$keep" "$glob") || return 1
+  set +e; rc=0
+  out=$(GH_STUB_DIR="$tmp/stub-$name" PATH="$w:$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 2>&1) || rc=$?
   set -e
 }
 stub_gh dying
@@ -2553,7 +2550,41 @@ f() {
 }
 f
 F
-sw_run "$sw/fg-exempt.sh"; expect_eq "fnctx: an exit-ok comment on the assignment line makes it green" "0" "$rc"
+sw_run "$sw/fg-exempt.sh"; expect_eq "fnctx: an exit-ok comment does NOT exempt a function body (no legitimate exemption, zero in the repo) → red" "1" "$rc"
+# r5 (#466): checks that do not refuse the failing output. Each is a function whose cmd prints `bad` and exits 42; the REAL shell (errexit
+# off: f is called as f || echo failed) swallows the 42 and uses `bad`; the checker must be red on the file.
+bypass_case() { # <name> <function body line(s)>
+  sw_write "bp-$1" <<F
+cmd() { printf 'bad\n'; return 42; }
+f() {
+$2
+}
+f || echo failed
+F
+  sw_run "$sw/bp-$1.sh"
+  expect_eq "fnctx: [$1] is red" "1" "$rc"
+  real_rc=0; real=$(bash "$sw/bp-$1.sh" 2>&1) || real_rc=$?   # exit 0: f swallowed cmd's 42 and the script went on
+  expect_match "fnctx: [$1] — the real shell really does use the failing output" 'bad' "$real"
+}
+bypass_case and-echo   $'  x=$(cmd) && echo success\n  printf \'%s\\n\' "$x"'
+bypass_case delayed-rc $'  x=$(cmd)\n  echo diagnostic >/dev/null\n  rc=$?\n  [ "$rc" -eq 0 ] || return 1\n  printf \'%s\\n\' "$x"'
+bypass_case rc-no-refusal $'  x=$(cmd)\n  rc=$?\n  echo "status $rc" >&2\n  printf \'%s\\n\' "$x"'
+good_case() { # <name> <function body line(s)>: the same shape, but the failing output is refused
+  sw_write "gd-$1" <<F
+cmd() { printf 'bad\n'; return 42; }
+f() {
+$2
+}
+f || echo failed
+F
+  sw_run "$sw/gd-$1.sh"
+  expect_eq "fnctx: [$1] is green" "0" "$rc"
+  real_rc=0; real=$(bash "$sw/gd-$1.sh" 2>&1) || real_rc=$?
+  case "$real" in *bad*) bad "fnctx: [$1] — the real shell used the failing output [$real]" ;; *) ok ;; esac
+}
+good_case or-return    $'  x=$(cmd) || return 1\n  printf \'%s\\n\' "$x"'
+good_case rc-refused   $'  x=$(cmd)\n  rc=$?\n  [ "$rc" -eq 0 ] || return 1\n  printf \'%s\\n\' "$x"'
+good_case and-or       $'  [ -n "$1$$" ] && x=$(cmd) || return 1\n  printf \'%s\\n\' "$x"'
 sw_write fg-heredoc-body <<'F'
 cat <<'EOT'
 f() {

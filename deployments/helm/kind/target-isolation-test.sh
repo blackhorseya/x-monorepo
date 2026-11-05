@@ -109,7 +109,7 @@ run_lines() {
 
 # judge → "judged=N dedicated=A decoy=D other=O"; exit 0 when nothing used the decoy and nothing but the dedicated file ... (see -s)
 judge() {  # judge [strict]: strict = every judged call used the dedicated file
-  local out rc
+  local out rc=0
   out=$(python3 - "$calls" "$dedicated" "$decoy" "$decoyhome" "${1:-}" <<'PY' 2>&1
 import sys
 calls, dedicated, decoy, decoyhome, strict = sys.argv[1:6]
@@ -145,7 +145,7 @@ for b in bad[:4]:
     print("  " + b)
 sys.exit(1 if bad else 0)
 PY
-  ); rc=$?
+  ) || rc=$?
   # a judge that broke is not a red verdict: it must print its summary line, and exit 0 or 1
   if [ "$rc" -gt 1 ] || ! printf '%s\n' "$out" | head -1 | grep -q '^judged=[0-9]* dedicated=[0-9]* decoy=[0-9]* other=[0-9]*$'; then
     echo "JUDGE-CRASH"; printf '%s\n' "$out" | tail -3; return 2

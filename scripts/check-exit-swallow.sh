@@ -235,17 +235,26 @@ END {
       if (t !~ /(^|[;&|{(]|[ \t])[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?(\$\(|`)/) continue
       if (t ~ /(&&|\|\||(^|[;{(]|[ \t])(if|elif|while|until|!))[ \t]*[^;]*[A-Za-z_][A-Za-z_0-9]*\+?=("|\047)?(\$\(|`)/) continue   # the assignment IS the condition: its status is read
       if (t ~ /^[ \t]*(local|declare|typeset|export|readonly)[ \t]/) continue    # declsub's job
-      if (L[i] ~ /#[ \t]*exit-ok:[ \t]*[^ \t].../) continue
-      code = L[i]; sub(/^[ \t]+/, "", code)
-      ok = 0                                                                 # an explicit status check: `|| …` after the substitution's `)`, or `$?` read next
+      code = L[i]; sub(/^[ \t]+/, "", code)                                   # no exit-ok here: a function body has no legitimate exemption
+      vn = ""; if (match(t, /[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?(\$\(|`)/)) { vn = substr(t, RSTART, RLENGTH); sub(/[^A-Za-z_0-9].*/, "", vn) }
+      ok = 0
       hb = i                                                                 # a heredoc inside the substitution: the `)` comes after its terminator
       if (match(L[i], /<<-?[ \t]*\\?["\047]?[A-Za-z_][A-Za-z_0-9]*/)) {
         for (k = i + 1; k <= to[f]; k++) if (ENDHD[k]) { hb = k; break }
       }
+      # 1. `|| …` after the substitution's `)` (same line, or the next line starts with it): the failure path runs a statement. `&&` is NOT a check
       for (k = i; k <= (hb > i ? hb + 2 : i + 3) && k <= to[f] && !ok; k++) {
-        if (L[k] ~ /\)["\047]?[ \t]*(\|\||&&)/ || (k > i && L[k] ~ /^[ \t]*(\|\||&&)/)) ok = 1
-        if (k > i && L[k] ~ /\$\?/) ok = 1
-        if (k == i && L[k] ~ /\)[ \t]*;[ \t]*[A-Za-z_]*=\$\?/) ok = 1
+        if (L[k] ~ /\)["\047]?[ \t]*\|\|/ || (k > i && L[k] ~ /^[ \t]*\|\|/)) ok = 1
+      }
+      # 2. the status read at once: `); rc=$?` on the closing line, or the very next statement is `rc=$?` / `[ $? … ]` / `case $?` (nothing runs in
+      #    between, or $? is another command's), and a refusal (return / exit / continue / break / fail / die, or a new value for the variable) follows
+      if (!ok) {
+        nl = (hb > i ? hb + 1 : i + 1); same = (L[hb] ~ /\)["\047]?[ \t]*;[ \t]*[A-Za-z_][A-Za-z_0-9]*=\$\?/)
+        nx = L[nl]; sub(/[ \t]#.*/, "", nx)
+        if (same || nx ~ /^[ \t]*([A-Za-z_][A-Za-z_0-9]*=\$\?|\[\[?[ \t]+"?\$\{?[A-Za-z_]*\}?"?|if[ \t]+\[\[?[ \t]+"?\$\?|case[ \t]+"?\$\?)/ && nx ~ /\$\?/) {
+          for (k = (same ? hb : nl); k <= (same ? hb : nl) + 4 && k <= to[f]; k++)
+            if (L[k] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|fail|die)([^A-Za-z_0-9]|$)/ || (vn != "" && L[k] ~ ("(^|[^A-Za-z_0-9])" vn "="))) { ok = 1; break }
+        }
       }
       if (ok) continue
       printf "%s:%d: fnctx: %s   [in %s(): a function body must check this substitution's status itself — errexit may be off wherever the function is called]\n", FILENAME, i, code, name[f]
