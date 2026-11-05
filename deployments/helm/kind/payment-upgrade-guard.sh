@@ -19,15 +19,21 @@ inner=$here/payment-upgrade.sh
 q() { kubectl -n "$home" exec deploy/postgres -- psql -U app -d app -tAq -c "SET default_transaction_read_only = on; $1"; }
 
 snapshot() {
-  local t
+  local t tables n
   q "SELECT 'schema ' || nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' ORDER BY 1" || return 1
-  for t in $(q "SELECT format('%I.%I', table_schema, table_name) FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema !~ '^pg_' AND table_schema <> 'information_schema' ORDER BY 1") ; do
-    echo "table $t $(q "SELECT count(*) FROM $t")"
+  # each read on its own line, not inside `for … in $(q …)` or `echo "$(q …)"`: a q that prints part of its answer and then dies
+  # would be a shorter snapshot (a missing table, a count of nothing) and before == after would still hold (#462)
+  tables=$(q "SELECT format('%I.%I', table_schema, table_name) FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema !~ '^pg_' AND table_schema <> 'information_schema' ORDER BY 1") || return 1
+  for t in $tables; do
+    n=$(q "SELECT count(*) FROM $t") || return 1
+    echo "table $t $n"
   done
 }
 
 before=$(snapshot) || { echo "guard: cannot read the home release's database" >&2; exit 1; }
-[ "$(grep -c '^table ' <<<"$before")" -gt 0 ] || { echo "guard: the snapshot of the home release's database has no table: nothing would be proved" >&2; exit 1; }
+# this file has no `set -e`: read grep's status by hand (1 = no table line, 2 = error)
+ntables=$(grep -c '^table ' <<<"$before") || { [ $? -eq 1 ] || { echo "guard: grep failed counting the snapshot's tables" >&2; exit 1; }; }
+[ "$ntables" -gt 0 ] || { echo "guard: the snapshot of the home release's database has no table: nothing would be proved" >&2; exit 1; }
 
 bash "$inner" "$@"
 rc=$?
@@ -38,5 +44,5 @@ if [ "$before" != "$after" ]; then
   diff <(echo "$before") <(echo "$after") >&2
   exit 1
 fi
-echo "guard: the home release's database is unchanged ($(grep -c '^table ' <<<"$before") tables, every row count the same)"
+echo "guard: the home release's database is unchanged ($ntables tables, every row count the same)"
 exit "$rc"

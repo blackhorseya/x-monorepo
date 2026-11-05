@@ -38,7 +38,8 @@ sort "$tmp/full" >"$tmp/full.sorted"
 : >"$tmp/union"
 sum=0
 seq "$n" >"$tmp/indexes" || { echo "seq $n exited $?" >&2; exit 1; }
-for i in $(cat "$tmp/indexes"); do
+indexes=$(cat "$tmp/indexes") || { echo "cat of the shard indexes exited $?" >&2; exit 1; }   # an assignment: a cat that prints 1 2 and then dies is a failure, not a loop over 1 2
+for i in $indexes; do
   list "shard$i" --shard="$i/$n"
   c=$(wc -l <"$tmp/shard$i" | tr -d ' ')
   echo "shard $i/$n tests: $c"

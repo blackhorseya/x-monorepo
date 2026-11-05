@@ -34,7 +34,7 @@ mkdir -p "$helm_home/config" "$helm_home/cache" "$helm_home/data"
 # PATH: the shims, then the directory of each tool the scripts use as the CALLER's PATH finds it, then the system directories
 path=$shim
 for t in kubectl helm kind docker podman k6 jq psql python3 curl git go perl base64 xargs; do
-  p=$(command -v "$t" 2>/dev/null || true)
+  if p=$(command -v "$t" 2>/dev/null); then :; else p=""; fi   # a tool the caller does not have is simply not added to the PATH; the script that needs it fails on its own
   case $p in /*) d=$(dirname "$p"); case ":$path:" in *":$d:"*) ;; *) path=$path:$d ;; esac ;; esac
 done
 path=$path:/usr/bin:/bin:/usr/sbin:/sbin

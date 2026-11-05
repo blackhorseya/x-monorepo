@@ -188,6 +188,11 @@ tasks:
           exit 1
         }
 
+  check-exit-swallow:
+    desc: 'no shell script drops an external command exit status without an exit-ok comment on the line (|| true, for x in $(cmd), set -- $(cmd), a pipeline without pipefail; #462); scripts/check-exit-swallow.sh, also run by scripts/test.sh in CI scripts-test'
+    cmds:
+      - scripts/check-exit-swallow.sh
+
   check-script-modes:
     desc: every file `task tools` chmods +x is already 100755 in the git index (so a tools-cache miss cannot turn gen-freshness red on a mode-only diff, #454); scripts/check-script-modes.sh
     cmds:

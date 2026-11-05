@@ -28,6 +28,7 @@
 #   and it says so. It is called BEFORE the run restores the release: `helm upgrade` replaces the pods and their logs.
 # Best effort: it never fails, so it cannot hide the failure it reports on. Needs kubectl.
 set -uo pipefail
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 dir=${DIAG_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/kind-diag}
@@ -40,7 +41,8 @@ if [ "${1:-}" != "--diag-child" ]; then
   # on a signal: stop everything under the collector, then ask the collector itself to stop (it cleans up); if it is still there after 5 s, kill it
   stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name)
     local x
-    for x in $(pgrep -P "$1" 2>/dev/null); do stop_tree "$x"; kill "$x" 2>/dev/null || true; done
+    kids=$(pgrep -P "$1" 2>/dev/null) || { [ $? -eq 1 ] || echo "diag: pgrep -P $1 failed" >&2; }   # 1 = no children
+    for x in $kids; do stop_tree "$x"; kill "$x" 2>/dev/null || true; done
   }
   on_signal() {
     sig_rc=$1
@@ -62,7 +64,8 @@ if [ "${1:-}" != "--diag-child" ]; then
   done
   if [ -n "$kill_pid" ]; then   # the 5 s fuse: its `sleep` first, then the subshell holding it (explicit pids). KILL, not TERM:
     # the fuse was started after on_signal ignored TERM, and an ignored signal is inherited (diag-test D6T saw it survive)
-    for c in $(pgrep -P "$kill_pid" 2>/dev/null); do kill -KILL "$c" 2>/dev/null || true; done
+    kids=$(pgrep -P "$kill_pid" 2>/dev/null) || { [ $? -eq 1 ] || echo "diag: pgrep -P $kill_pid failed" >&2; }   # 1 = no children
+    for c in $kids; do kill -KILL "$c" 2>/dev/null || true; done
     kill -KILL "$kill_pid" 2>/dev/null || true
   fi
   [ -z "$sig_rc" ] || rc=$sig_rc
@@ -73,7 +76,7 @@ if [ "${1:-}" != "--diag-child" ]; then
   if [ "$size" -gt "$console_budget" ]; then
     printf '\n[diag: the console budget of %s bytes is used up; nothing more is printed here, the whole output is in %.200s/console.full]\n::endgroup::\n' "$console_budget" "$dir"
   fi
-  [ ! -d "$dir" ] || cp -f -- "$cap" "$dir/console.full" 2>/dev/null || true
+  [ ! -d "$dir" ] || best_effort cp -f -- "$cap" "$dir/console.full"
   case "$cap_dir" in */diag-console.*) rm -rf -- "$cap_dir" ;; esac
   exit "$rc"
 fi
@@ -105,7 +108,7 @@ emit() {
   local cap=$console_left own=0 where=${2:-$dir}
   if [ -n "${1:-}" ] && [ "$1" -lt "$cap" ]; then cap=$1 own=1; fi
   if [ -n "$console_cut" ] || [ "$cap" -le 0 ]; then cat > /dev/null; return 0; fi
-  local buf n; buf=$(mktemp) || return 0
+  local buf n; buf=$(mktemp) || { echo "diag: no temp file for this read, skipping it" >&2; return 0; }
   head -c $((cap + 1)) > "$buf"
   n=$(wc -c < "$buf" | tr -d ' ')
   if [ "$n" -le "$cap" ]; then

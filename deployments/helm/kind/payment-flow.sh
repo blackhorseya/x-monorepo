@@ -24,6 +24,7 @@
 # background and waited for, because bash runs a trap only after a FOREGROUND child returns; the handler stops the child,
 # the exit status is 128 + the signal, and the exit trap diagnoses, then restores (#420).
 set -euo pipefail
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,17 +38,18 @@ cur=""        # pid of the slow child being waited for (helm, kubectl wait / rol
 finished=""   # set only when the flow ran to its end: any other way out is diagnosed
 slow() { "$@" & cur=$!; local rc=0; wait "$cur" || rc=$?; cur=""; return "$rc"; }
 
-fail() { echo "payment-flow: $*" >&2; kubectl -n "$ns" get pods,jobs >&2 2>/dev/null || true; exit 1; }
+fail() { echo "payment-flow: $*" >&2; best_effort kubectl -n "$ns" get pods,jobs >&2; exit 1; }   # diagnostic: fail() exits 1 whatever kubectl returns
 restore() {
   for p in $pfs; do kill "$p" 2>/dev/null || true; done
-  kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null 2>&1 || true
-  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null 2>&1 || true
+  restore_step kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null   # restore: a failure fails the run (restore_exit), not best effort (#462)
+  restore_step helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
 }
 on_signal() { # <exit status>: stop the waited-for child, then leave through the exit trap (diagnose, restore)
   trap '' TERM INT HUP   # a second signal must not cut the diagnosis or the restore short
   # the child and ITS children (a wrapper around helm / kubectl leaves its own child behind otherwise)
   if [ -n "$cur" ]; then
-    for c in $(pgrep -P "$cur" 2>/dev/null || true); do kill "$c" 2>/dev/null || true; done   # explicit pids, never a pattern
+    kids=$(pgrep -P "$cur" 2>/dev/null) || { [ $? -eq 1 ] || echo "payment-flow: pgrep -P $cur failed" >&2; }   # 1 = no children; explicit pids, never a pattern
+    for c in $kids; do kill "$c" 2>/dev/null || true; done
     kill "$cur" 2>/dev/null || true; wait "$cur" 2>/dev/null || true; cur=""
   fi
   exit "$1"
@@ -58,9 +60,9 @@ trap 'on_signal 129' HUP
 on_exit() { # the script leaves with the status it had on the way in
   local rc=$?
   trap '' TERM INT HUP
-  [ -n "$finished" ] || "$here/diag.sh" "$ns" "$flow_start" >&2 || true
+  [ -n "$finished" ] || best_effort "$here/diag.sh" "$ns" "$flow_start" >&2   # diagnostic: on_exit leaves with the status it had
   restore
-  exit "$rc"
+  restore_exit "$rc"   # the status it had on the way in; non-zero when only the restore failed
 }
 trap on_exit EXIT
 
@@ -73,7 +75,7 @@ forwards() {
   pfs=""
   kubectl -n "$ns" port-forward "svc/$release-rpc" "$rport:80" >/dev/null 2>&1 & pfs="$pfs $!"
   kubectl -n "$ns" port-forward "svc/$release-payment-serve" "$sport:80" >/dev/null 2>&1 & pfs="$pfs $!"
-  for _ in $(seq 1 40); do curl -fsS "$api/readyz" >/dev/null 2>&1 && curl -fsS "$serve/api/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
+  for ((_try76 = 1; _try76 <= 40; _try76++)); do curl -fsS "$api/readyz" >/dev/null 2>&1 && curl -fsS "$serve/api/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
   fail "rpc / payment-rpc serve never answered readyz through the port-forward"
 }
 
@@ -85,9 +87,10 @@ admin_key=$(sed -n 's/.*admin=\([A-Za-z0-9._-]*\):admin.*/\1/p' "$flow" | head -
 # call <key> <path> <json>: sets $res ("<http status> <x-error-code or ->") and $body in THIS shell, so it is called
 # plainly (never inside $(...), whose subshell would keep them).
 call() {
-  local out
-  out=$(curl -sS -D - -o /tmp/payflow.$$ -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3" || true)
-  body=$(cat /tmp/payflow.$$ 2>/dev/null || true); rm -f /tmp/payflow.$$
+  local out rc=0
+  out=$(curl -sS -D - -o /tmp/payflow.$$ -H 'Content-Type: application/json' -H "X-API-Key: $1" "$api/$2" -d "$3") || rc=$?
+  if [ "$rc" != 0 ]; then echo "payment-flow: curl $2 failed (exit $rc): no status is read from it" >&2; out=""; fi   # an empty status never equals the expected one
+  body=$(cat /tmp/payflow.$$ 2>/dev/null) || body="(no body)"; rm -f /tmp/payflow.$$
   res="$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out") $(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -)"
 }
 want() { [ "$2" = "$3" ] || fail "$1: got '$2', want '$3' (body: ${body:-})"; }
@@ -98,16 +101,16 @@ db() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1";
 order_status() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.status // "-"' <<<"$body"; }
 wait_order() { # <order> <ORDER_STATUS_X> [seconds]
   local s=""
-  for _ in $(seq 1 "${3:-60}"); do s=$(order_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
+  for ((_try101 = 1; _try101 <= "${3:-60}"; _try101++)); do s=$(order_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
   fail "order $1 is '$s' after ${3:-60}s, want $2"
 }
 steady() { # <order> <ORDER_STATUS_X> <seconds>: still this status for the whole window (the caller proved it could have moved)
-  for _ in $(seq 1 "$3"); do [ "$(order_status "$1")" = "$2" ] || fail "order $1 left $2 within $3s"; sleep 1; done
+  for ((_try105 = 1; _try105 <= "$3"; _try105++)); do [ "$(order_status "$1")" = "$2" ] || fail "order $1 left $2 within $3s"; sleep 1; done
 }
 pay_status() { as_shopper payment.v1.PublicPaymentService/GetPayment "{\"order_id\":\"$1\"}" >/dev/null; jq -r '.payment.status // "-"' <<<"$body"; }
 wait_payment() { # <order> <PAYMENT_STATUS_X> [seconds]
   local s=""
-  for _ in $(seq 1 "${3:-60}"); do s=$(pay_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
+  for ((_try110 = 1; _try110 <= "${3:-60}"; _try110++)); do s=$(pay_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
   fail "payment of order $1 is '$s' after ${3:-60}s, want $2"
 }
 mock() { kubectl -n "$ns" exec "deploy/$release-payment-serve" -- /app mock "$@"; }
@@ -115,12 +118,15 @@ hook="http://127.0.0.1:8080/api/payment/webhook" # the webhook route, from insid
 refs() { db "SELECT provider_ref FROM payment.payments WHERE order_id = '$1'"; }
 refunds() { db "SELECT count(*) FROM payment.mock_refunds WHERE ref = '$(refs "$1")'"; }
 job() { # <cronjob> -> one run to completion
-  local j="flow-$1-$(date +%s)-$RANDOM" ok bad
+  local j ok bad rc
+  j="flow-$1-$(date +%s)-$RANDOM"
   kubectl -n "$ns" create job "$j" --from="cronjob/$release-$1" >/dev/null
-  for _ in $(seq 1 90); do
-    ok=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)
-    bad=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.failed}' 2>/dev/null || true)
-    [ "${bad:-0}" != 0 ] && { kubectl -n "$ns" logs "job/$j" --tail=30 || true; fail "$1 run failed"; }
+  for ((_try120 = 1; _try120 <= 90; _try120++)); do
+    rc=0; ok=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.succeeded}' 2>/dev/null) || rc=$?
+    if [ "$rc" != 0 ]; then echo "payment-flow: reading job $j (succeeded) failed (exit $rc), retrying" >&2; ok=""; fi
+    rc=0; bad=$(kubectl -n "$ns" get job "$j" -o jsonpath='{.status.failed}' 2>/dev/null) || rc=$?
+    if [ "$rc" != 0 ]; then echo "payment-flow: reading job $j (failed) failed (exit $rc), retrying" >&2; bad=""; fi
+    [ "${bad:-0}" != 0 ] && { best_effort kubectl -n "$ns" logs "job/$j" --tail=30; fail "$1 run failed"; }
     [ "$ok" = 1 ] && { kubectl -n "$ns" delete job "$j" >/dev/null; return 0; }
     sleep 2
   done
@@ -129,7 +135,8 @@ job() { # <cronjob> -> one run to completion
 payment_sweep() { job payment-expire; }
 
 place() { # -> the id of an order that is CONFIRMED (stock seeded by the admin, ordered by the shopper)
-  local sku="flow-$(date +%s)-$RANDOM" r
+  local sku r
+  sku="flow-$(date +%s)-$RANDOM"
   as_admin catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}"; want "UpsertProduct" "${res%% *}" 200
   as_admin inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}"; want "SetStock" "${res%% *}" 200
   as_shopper ordering.v1.OrderService/CreateOrder "{\"customer_id\":\"shopper\",\"items\":[{\"sku\":\"$sku\",\"quantity\":1}]}"; want "CreateOrder" "${res%% *}" 200
@@ -260,7 +267,7 @@ echo "payment-flow 8: switch on->off: the CONFIRMED order with an open checkout 
 
 # 9 ── payment-rpc stopped ───────────────────────────────────────────────────────────────────────────────
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=0 >/dev/null
-slow kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null 2>&1 || true
+best_effort slow kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null   # wait-gone: "no pods left" is the state wanted; the steps after it assert
 rpc_pods_before=$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}')
 sku="flow-down-$(date +%s)"
 as_admin catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}" >/dev/null

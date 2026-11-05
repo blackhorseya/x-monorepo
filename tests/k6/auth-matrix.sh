@@ -70,7 +70,7 @@ cell() {
   # a worker in every cell: orders cells leave their outbox for it too, so the next cell's worker
   # does not start on a backlog (that is what stretches reservation_latency on a reused database)
   APP_CONFIG=/dev/null "$bin/worker" > "$log-worker.log" 2>&1 & wpid=$!
-  for _ in $(seq 1 50); do
+  for ((_try54 = 1; _try54 <= 50; _try54++)); do
     kill -0 "$pid" 2>/dev/null || { echo "rpc exited:"; cat "$log-rpc.log"; exit 1; }
     curl -fsS "http://127.0.0.1:$port/api/readyz" >/dev/null 2>&1 && break
     sleep 0.2

@@ -249,10 +249,17 @@ SCRIPT_RULES = [
 SHELL_ONLY = ("sources another file", "eval:")
 
 
+# The one file a kind script may source (#462): scripts/best-effort.sh, which defines best_effort and nothing else. It is scanned with
+# the same rules below (check_real), so it cannot start setting KUBECONFIG or PATH; the line must be exactly this, no other path.
+ALLOWED_SOURCE = '. "$(dirname "$0")/../../../scripts/best-effort.sh"'
+
+
 def judge_script(text, shell=True):
     why = []
     for n, line in enumerate(text.splitlines(), 1):
         if line.lstrip().startswith("#"):
+            continue
+        if shell and line.split("   #", 1)[0].strip() == ALLOWED_SOURCE:
             continue
         for rx, what in SCRIPT_RULES:
             if not shell and what.startswith(SHELL_ONLY):
@@ -286,6 +293,13 @@ def check_real(taskfile, kind_dir=None):
         with open(os.path.join(kind_dir, fn)) as f:
             for w in judge_script(f.read(), shell=fn.endswith(".sh")):
                 problems.append("kind/%s: %s" % (fn, w))
+    best = os.path.join(ROOT, "scripts", "best-effort.sh")
+    try:
+        with open(best) as f:
+            for w in judge_script(f.read(), shell=True):
+                problems.append("scripts/best-effort.sh (sourced by the kind scripts): %s" % w)
+    except OSError:
+        problems.append("scripts/best-effort.sh is missing (the kind scripts source it)")
     for tool in ("kubectl", "helm"):
         p = os.path.join(kind_dir, "shim", tool)
         if not os.access(p, os.X_OK):
@@ -467,6 +481,12 @@ SCRIPT_CASES = [
     ("kubectl=$(command -v kubectl)\n", True),
     ("k=$(which helm)\n", True),
     ("source ./lib.sh\n", True),
+    (ALLOWED_SOURCE + "   # best_effort (#462)\n", False),
+    (ALLOWED_SOURCE + "\n", False),
+    (". \"$(dirname \"$0\")/../../../scripts/other.sh\"\n", True),
+    (". \"$(dirname \"$0\")/../../scripts/best-effort.sh\"\n", True),
+    (ALLOWED_SOURCE + "; . ./evil.sh\n", True),
+    ("true && " + ALLOWED_SOURCE + "\n", True),
     (". \"$here/lib.sh\"\n", True),
     ("eval \"$cmd\"\n", True),
     ("  printf '%s' \"$(sed -n '1s/^HTTP[^ ]* \\([0-9]*\\).*/\\1/p' <<<\"$out\")\"\n", False),

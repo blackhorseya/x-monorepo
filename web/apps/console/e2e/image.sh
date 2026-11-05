@@ -8,6 +8,7 @@
 #   task web-e2e-image                 # what CI's console-image job runs
 #   e2e/image.sh --grep orders         # extra args go to playwright test
 set -euo pipefail
+. "$(dirname "$0")/../../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 cd "$(dirname "$0")/.."
 [ -f dist/index.html ] || { echo "image.sh: dist/ missing, run task web-build" >&2; exit 1; }
 
@@ -32,7 +33,7 @@ img=localhost/x-monorepo/console:e2e
 run_console() {
   local n=$1 p=$2; shift 2
   "$tool" run -d --name "$n" -p "127.0.0.1:$p:8080" ${host_opts[@]+"${host_opts[@]}"} -e "RPC_UPSTREAM=$upstream" "$@" "$img" >/dev/null
-  for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:$p/healthz" >/dev/null 2>&1 && return 0; sleep 0.5; done
+  for ((_try35 = 1; _try35 <= 30; _try35++)); do curl -fsS "http://127.0.0.1:$p/healthz" >/dev/null 2>&1 && return 0; sleep 0.5; done
   echo "image.sh: console container $n not healthy"; "$tool" logs "$n"; exit 1
 }
 run_console "$name" "$port"
@@ -47,14 +48,15 @@ expect_refused() {
   "$tool" rm -f "$n" >/dev/null 2>&1 || true
   "$tool" run -d --name "$n" ${host_opts[@]+"${host_opts[@]}"} -e "RPC_UPSTREAM=$upstream" "$@" "$img" >/dev/null
   local status=""
-  for _ in $(seq 1 40); do
-    status=$("$tool" inspect -f '{{.State.Status}}' "$n" 2>/dev/null || true)
+  for ((_try50 = 1; _try50 <= 40; _try50++)); do
+    st_rc=0; status=$("$tool" inspect -f '{{.State.Status}}' "$n" 2>/dev/null) || st_rc=$?
+    if [ "$st_rc" != 0 ]; then echo "image.sh: inspect $n failed (exit $st_rc), retrying" >&2; status=""; fi
     [ "$status" = exited ] && break
     sleep 0.5
   done
   local code logs
   code=$("$tool" inspect -f '{{.State.ExitCode}}' "$n" 2>/dev/null || echo "?")
-  logs=$("$tool" logs "$n" 2>&1 || true)
+  logs=$("$tool" logs "$n" 2>&1) || { echo "image.sh: cannot read the logs of $n" >&2; logs=""; }   # the refusal text is asserted next; an empty log does not contain it
   "$tool" rm -f "$n" >/dev/null 2>&1 || true
   if [ "$status" != exited ] || [ "$code" = 0 ] || ! printf '%s' "$logs" | grep -q 'console-env:'; then
     echo "image.sh: expected the container to refuse '$label' (exit non-zero, say why), got status=$status exit=$code"; printf '%s\n' "$logs" | tail -5; exit 1

@@ -34,6 +34,36 @@
 - hook 失敗時 exit 2，stderr 會回到 agent 讓它自己修；`stop_hook_active` 防止無限循環
 - dependabot 只掃單一 module 目錄、不懂 go.work：Go bump 會讓其他 module 漂移，`dependabot-sync.yml` 在它的分支跑 `task tidy` 補 commit 再觸發 CI，否則 `work-sync` 會擋。`.github/dependabot.yml` 三組每週各一支 PR：gomod（所有 module 一組）、github-actions、npm（`web/` pnpm workspace 一組；lockfile 算 releasable，merge 會切 patch 版）
 
+## gate 腳本不吞外部指令的退出碼（#462）
+
+gate 若把外部指令的非零退出碼丟掉，指令壞了它也是綠的。同一類錯誤在 #453／#455（`a | b`）、#457（`x=$(grep … || true)`）、#453 r1（`grep … || true`）、#458（`cat … || true`、`for _ in $(seq …)`）各出現過一次，所以改成 repo 層級的檢查，不再靠審查一支一支抓。
+
+`scripts/check-exit-swallow.sh`（`task check-exit-swallow`；CI 由 `scripts/test.sh` 的 `swallow:` 案例在 scripts-test job 跑，任何 `*.sh` 有變動都會觸發該 job）掃每個 tracked `*.sh`（`scripts/hooks/` 除外，那是 Claude hooks，不是 gate），逐行擋下：
+
+| 規則 | 寫法 | 為什麼不行 | 改成 |
+|---|---|---|---|
+| `swallow` | `cmd \|\| true`、`\|\| :`、`\|\| exit 0`、`\|\| return 0`，含 `$(… \|\| true)`、trap 字串、`sh -c '…'` | 任何非零碼（壞掉、被注入、找不到）都變成成功；`pipefail` 對 `\|\| true` 沒有作用 | `n=$(grep -c x f \|\| [ $? -eq 1 ])`（grep 只有 1 代表沒有匹配，2 以上照樣讓 `set -e` 中止）；或 `rc=0; cmd \|\| rc=$?` 後用 `case $rc` 逐碼處理 |
+| `besteffort` | `x=$(best_effort cmd)`、`n="$(best_effort grep -c y f)"`、`x=best_effort …`（#464 lead 的條件） | `best_effort` 只給「失敗不改變判定」的指令；放在 `$(…)` 或賦值右邊代表它的輸出／狀態被拿去用了 | 要用到輸出或狀態的指令用 `rc=0; cmd \|\| rc=$?` 加明確分支 |
+| `declsub` | `local n="$(cmd)"`、`declare -r n=$(cmd)`、`export X=$(cmd)`、`readonly n=$(cmd)`（#464 審查） | 宣告內建才是命令，它自己的成功狀態遮住 cmd 的失敗：`grep -c` 印出 1、退出 2，函式照樣帶著 n=1 往下走（shellcheck SC2155） | 拆開：`local n; n=$(cmd)`。兩層：行掃描器（宣告內建之後、第一個 `;` `&&` `\|\|` 之前出現 `$(` 就擋，不去解析前面的賦值）＋ `shellcheck -i SC2155`（真的 parser，抓得到續行、`a="x"'y z'`、`$'…'`）；兩者都要裝得起來——shellcheck 缺少或掃不動是 exit 2，不是略過 |
+| `argsub` | `expect_eq x "$(… \| grep -c y)"`、`[ "$(grep -c y f)" -ge 2 ]`（引數位置的比對計數，#456 r0） | 替換放在引數裡，退出碼到不了 `set -e`；grep 先印出數字再死掉，就只是一個數字；函式裡的 `exit`／`set -e` 在 `$(…)` 子 shell 裡也一樣傳不出來 | 先賦值（`n=$(… \| count_lines y)` 或 `n=$(grep -c y f \|\| [ $? -eq 1 ])`），再用 `"$n"` |
+| `forlist` | `for x in $(cmd)`、`` for x in `cmd` `` | 清單是 `$(…)` 時 cmd 的退出碼被丟掉：`seq` 印出 `1` 後壞掉就只是一個更短的迴圈 | `for ((i = 1; i <= N; i++)); do`（不要用 `_` 當計數器：每個指令都會改寫 `$_`）；清單真的要來自指令時，先 `rc=0; list=$(cmd) \|\| rc=$?` 再檢查 |
+| `setargs` | `set -- $(cmd)` | 同上 | `out=$(cmd)`（賦值的退出碼會傳出去）後 `set -- $out` |
+| `pipeline` | 檔案裡沒有 `set -o pipefail`（或 `set -euo pipefail` 等）卻有 `a \| b` | 管線的退出碼只算最後一段 | 檔頭加 `set -euo pipefail`；被 source 的檔案由呼叫端負責，要在該行寫 exemption |
+
+不必註解的例外只有清理：`kill … \|\| true`、`rm … \|\| true`、`kill … && wait … \|\| true`（行程或檔案已經不在，不是判定），以及 `[ … ] \|\| return 0` 這類條件式守衛。其餘一律要嘛修，要嘛**在同一行**寫豁免註解，並說明為什麼這個指令的狀態不會改變判定：
+
+```bash
+out=$(curl -sS "$url" || true)   # exit-ok: empty output is the "not ready" answer; the loop ends in an explicit timeout failure
+```
+
+`|| [ $? -eq 1 ]` 只在**賦值**（`n=$(grep -c … || [ $? -eq 1 ])`）有用：`echo "$(… || [ $? -eq 1 ])"`、`expect_eq … "$(…)"` 這種放在引數裡的替換，退出碼到不了 `set -e`，要先賦值再用；沒有 `set -e` 的檔案（`target-test.sh` 等）要自己讀 `$?`。這兩點是 #462 的 fault injection 在 CI 上抓出來的。
+
+**`best_effort`**（`scripts/best-effort.sh`，`. scripts/best-effort.sh` 後使用；kind 腳本是 `. "$(dirname "$0")/../../../scripts/best-effort.sh"`）：`best_effort <指令…>` 跑指令，失敗時往 stderr 印 `best-effort command failed (exit N): <指令>` 並回 0——失敗從靜默變成可見。**只給三類**：診斷（失敗報告時多印的 `kubectl get pods`、`diag.sh`）、清理（只限**回收**：wait 已被 kill 的 pid、刪 tmp 檔；後面另有地方判定結果）、wait-gone（`kubectl wait --for=delete`：對象已不在就是想要的狀態）。有 mutant（輸出全部／部分／不輸出後 exit 42，成功、失敗各一格）；checker 的 `besteffort` 規則擋它出現在 `$(…)` 或賦值右邊。要讀輸出或看狀態的呼叫（poll、查找、取值）一律 `rc=0; cmd || rc=$?` 加明確分支（印出哪個呼叫失敗、怎麼處理），不准用 `best_effort`。**還原不是 best effort**：腳本承諾離開時恢復的狀態（helm values、replicas、secret、scale）一律用 `restore_step <指令…>`（失敗印 `restore failed (exit N): …`、記下第一個失敗碼、繼續跑後面的還原）加 EXIT trap 裡的 `restore_exit "$rc"`：進來時 rc 為 0 而還原失敗就以還原的失敗碼離開；進來時 rc 已非零就保留原 rc 並印 `restore also failed`。使用者：`payment-flow.sh`、`payment.sh`、`outage.sh`、`negative.sh`；`scripts/test.sh` 的 restore 區段把各腳本真正的 `restore`／`on_exit` 抽出來，用 stub 讓還原回 42（主流程成功→非零、主流程已失敗→保留原 rc）。`# exit-ok:` 只留給行掃描器誤判且有 mutant 證明的情形，目前 repo 內一處也沒有。
+
+格式是 `# exit-ok: <理由>`，理由至少要有幾個字；空的不算。它是逐行掃描，不是 shell parser：註解行與 heredoc 本文不掃，`pipeline` 只看沒有 pipefail 的檔案，引號裡的 `|` 不算。`.yml` 內嵌的 shell（Taskfile、workflows）與 `done < <(cmd)`（process substitution，一樣不回報 cmd 的退出碼）不在掃描範圍，PR #464 的盤點表有逐行列出；新寫的 gate 請自己避開（先把輸出放進變數或暫存檔，檢查退出碼，再迴圈）。
+
+**共用 fault-injection helper**：`scripts/fault-inject.sh`，`. scripts/fault-inject.sh` 後用 `inject_fail <dir> <tool> <exit> [<keep>] [<arg-glob>]` 產生 PATH wrapper：先跑真的 `<tool>`，輸出全部（`keep` 省略）、前 `keep` 行或完全不輸出（`0`）之後以 `<exit>` 結束，可用 `arg-glob` 只讓某個子指令（`gh pr checks*`、`go list *`）失敗。gate 的測試對它用到的每個外部指令至少跑「輸出後失敗」與「完全不輸出就失敗」兩格，斷言 gate 非 0，另跑同一個 fixture 的對照組確認是綠的，才知道紅是 wrapper 造成的。`scripts/test.sh` 的 `check-script-modes`、`merge-ready`、`red-stage`、`affected`、`cover-gate` 案例是範例。
+
 ## console-e2e 的平行度與 sharding（#447）
 
 基準：run 41920885162，`console-e2e` 一個 job 369s（setup/build/dex ~75s、`task web-e2e` 254s 用 2 workers、ports 24s、payment 19s）。現在它是 3 個 shard 的 matrix（`console-e2e (1)`…`(3)`）：

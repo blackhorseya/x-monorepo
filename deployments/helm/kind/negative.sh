@@ -10,6 +10,7 @@
 # The release is restored (helm upgrade --wait) and the Secrets deleted on the way out, whatever happens.
 #   negative.sh <namespace> <release> <chart-dir> <values-file>
 set -euo pipefail
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2 chart=$3 values=$4
@@ -17,10 +18,11 @@ sel="app.kubernetes.io/component=catalog-rpc"
 key="kind-neg-key-0123456789abcd"
 
 restore() {
-  kubectl -n "$ns" delete secret catalog-rpc-no-url catalog-rpc-empty-url catalog-rpc-no-rpc-key --ignore-not-found >/dev/null 2>&1 || true
-  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
+  restore_step kubectl -n "$ns" delete secret catalog-rpc-no-url catalog-rpc-empty-url catalog-rpc-no-rpc-key --ignore-not-found >/dev/null   # restore: a failure fails the run (restore_exit), not best effort (#462)
+  restore_step helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
 }
-trap restore EXIT
+on_exit() { local rc=$?; restore; restore_exit "$rc"; }
+trap on_exit EXIT
 
 upgrade_with() { # <secret name>
   helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" \
@@ -29,7 +31,7 @@ upgrade_with() { # <secret name>
 
 # poll <seconds> <jq filter over the catalog-rpc pods list that must print "yes">
 poll() {
-  for _ in $(seq 1 "$1"); do
+  for ((_try32 = 1; _try32 <= "$1"; _try32++)); do
     [ "$(kubectl -n "$ns" get pods -l "$sel" -o json | jq -r "$2")" = yes ] && return 0
     sleep 1
   done
@@ -53,7 +55,7 @@ poll 120 'if any(.items[]; (.status.containerStatuses[0].lastState.terminated.ex
 # current). Bounded: NEGATIVE_TRIES (default 60) tries, NEGATIVE_SLEEP (default 2) seconds apart. A failed read is a retry, never "the log": only text
 # that a successful read returned is asserted on.
 refusal=""
-for _ in $(seq 1 "${NEGATIVE_TRIES:-60}"); do
+for ((_try56 = 1; _try56 <= "${NEGATIVE_TRIES:-60}"; _try56++)); do
   # a failed read (API hiccup, unparsable output) is a retry like any other: set -e must not end the script
   pods=$(kubectl -n "$ns" get pods -l "$sel" -o json 2>/dev/null) || { sleep "${NEGATIVE_SLEEP:-2}"; continue; }
   bad=$(jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0] // empty' <<<"$pods" 2>/dev/null) || { sleep "${NEGATIVE_SLEEP:-2}"; continue; }
@@ -79,7 +81,7 @@ kubectl -n "$ns" create secret generic catalog-rpc-no-rpc-key \
 upgrade_with catalog-rpc-no-rpc-key
 # bounded like every read here (NEGATIVE_TRIES x NEGATIVE_SLEEP, default 90 x 1s); a failed read is a retry
 found=""
-for _ in $(seq 1 "${NEGATIVE_RPC_TRIES:-90}"); do
+for ((_try82 = 1; _try82 <= "${NEGATIVE_RPC_TRIES:-90}"; _try82++)); do
   if [ "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o json 2>/dev/null | jq -r 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end' 2>/dev/null || echo no)" = yes ]; then found=yes; break; fi
   sleep "${NEGATIVE_RPC_SLEEP:-1}"
 done

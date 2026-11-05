@@ -143,8 +143,10 @@ def run_scenario(script, mode, pg, flow=None, create_reply_fails=False, refused=
         (nsdir / f"x-monorepo-upgrade-{RUN_ID}").write_text(preexisting_label + "\n11111111-1111-4111-8111-111111111111\n")
         (reldir / f"x-monorepo-upgrade-{RUN_ID}").write_text("someone else's release")
 
-    kdir = root / "kind"
-    kdir.mkdir()
+    kdir = root / "deployments" / "helm" / "kind"   # the scripts source ../../../scripts/best-effort.sh, so keep the repository's depth (#462)
+    kdir.mkdir(parents=True)
+    (root / "scripts").mkdir()
+    shutil.copy(REPO / "scripts" / "best-effort.sh", root / "scripts" / "best-effort.sh")
     shutil.copy(guard_file, kdir / "payment-upgrade-guard.sh")
     shutil.copy(check_file, kdir / "postgres-url-check.py")
     shutil.copy(guard_file.parent / "deps.yaml", kdir / "deps.yaml")

@@ -16,7 +16,11 @@
 # Pathspec `*` crosses `/`, so `*.md` is any depth.
 set -euo pipefail
 head=${2:-HEAD}
-base=${1:-$(git describe --tags --abbrev=0 --match 'v*' "$head" 2>/dev/null || true)}
+base=${1:-}
+if [ -z "$base" ]; then
+  describe_rc=0; base=$(git describe --tags --abbrev=0 --match 'v*' "$head" 2>/dev/null) || describe_rc=$?
+  [ "$describe_rc" = 0 ] || { base=""; echo "releasable: git describe exited $describe_rc (no v* tag reachable from $head?)" >&2; }
+fi
 if [ -z "$base" ]; then
   echo "releasable: no previous v* tag reachable from $head" >&2
   exit 2

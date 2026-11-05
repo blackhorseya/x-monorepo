@@ -5,11 +5,18 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p bin
 
-fail=0
-for m in $(go work edit -json ./go.work | python3 -c 'import json,sys; [print(u["DiskPath"].removeprefix("./")) for u in json.load(sys.stdin)["Use"]]'); do
-  pkgs=$(cd "$m" && go list ./... 2>/dev/null | grep '/domain/' || true)
+fail=0 checked=0
+# each step on its own line: `for m in $(go … | python3 …)` and `go list … || true` turned a go that failed into an empty
+# module list or a module without domain packages — and a gate that checked nothing exited 0 (#462)
+workjson=$(go work edit -json ./go.work)
+mods=$(python3 -c 'import json,sys; [print(u["DiskPath"].removeprefix("./")) for u in json.load(sys.stdin)["Use"]]' <<<"$workjson")
+[[ -n "$mods" ]] || { echo "cover-gate: go.work lists no module — nothing was checked" >&2; exit 1; }
+for m in $mods; do
+  list=$(cd "$m" && go list ./...) || { echo "cover-gate: go list failed in $m" >&2; exit 1; }
+  pkgs=$(grep '/domain/' <<<"$list" || [ $? -eq 1 ])
   [[ -z "$pkgs" ]] && continue
   for p in $pkgs; do
+    checked=$((checked + 1))
     prof="bin/cover-$(echo "$p" | tr '/' '_').out"
     go test -coverprofile="$prof" "$p" >/dev/null
     pct=$(go tool cover -func="$prof" | tail -1 | awk '{print $3}' | tr -d '%')
@@ -21,4 +28,5 @@ for m in $(go work edit -json ./go.work | python3 -c 'import json,sys; [print(u[
     fi
   done
 done
+[[ "$checked" -gt 0 ]] || { echo "cover-gate: no */domain/* package in any module — nothing was checked" >&2; exit 1; }
 exit $fail

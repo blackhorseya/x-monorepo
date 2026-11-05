@@ -15,7 +15,7 @@ pf=$!
 kubectl -n "$ns" port-forward "svc/$release-console" "$cport:80" >/dev/null 2>&1 &
 pfc=$!
 trap 'kill $pf $pfc 2>/dev/null || true' EXIT
-for _ in $(seq 1 30); do curl -fsS "$api/readyz" >/dev/null 2>&1 && break; sleep 1; done
+for ((_try18 = 1; _try18 <= 30; _try18++)); do curl -fsS "$api/readyz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "$api/readyz" >/dev/null || { echo "smoke: /api/readyz never answered 200"; exit 1; }
 echo "smoke: running $(curl -fsS "$api/version")"
 
@@ -27,7 +27,7 @@ kubectl -n "$ns" port-forward "svc/$release-catalog-rpc" "$cport_cat:80" >/dev/n
 pfk=$!
 trap 'kill $pf $pfc $pfk 2>/dev/null || true' EXIT
 cat="http://127.0.0.1:$cport_cat/api"
-for _ in $(seq 1 30); do curl -fsS "$cat/readyz" >/dev/null 2>&1 && break; sleep 1; done
+for ((_try30 = 1; _try30 <= 30; _try30++)); do curl -fsS "$cat/readyz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "$cat/readyz" >/dev/null || { echo "smoke: catalog-rpc /api/readyz never answered 200"; exit 1; }
 curl -fsS "$cat/version" >/dev/null || { echo "smoke: catalog-rpc /api/version failed"; exit 1; }
 catimg=$(kubectl -n "$ns" get deploy -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].spec.template.spec.containers[0].image}')
@@ -54,7 +54,7 @@ echo "smoke: catalog-rpc requires its service key (401 without, 401 unknown, 200
 
 # Console: the SPA for any route (TanStack Router handles /reservations client-side), the rpc
 # through nginx's /api proxy — what the browser does.
-for _ in $(seq 1 30); do curl -fsS "$console/healthz" >/dev/null 2>&1 && break; sleep 1; done
+for ((_try57 = 1; _try57 <= 30; _try57++)); do curl -fsS "$console/healthz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "$console/reservations" | grep -q "<title>x-monorepo console</title>" \
   || { echo "smoke: console did not serve index.html for /reservations"; exit 1; }
 curl -fsSI "$console/reservations" | grep -qi '^content-security-policy: .*frame-ancestors' \
@@ -84,7 +84,7 @@ order=$(rpc ordering.v1.OrderService/CreateOrder \
 [ -n "$order" ] && [ "$order" != null ] || { echo "smoke: CreateOrder returned no id"; exit 1; }
 
 # OrderCreated → outbox → forwarder → Redis Streams → inventory consumer → stock.reserved.
-for _ in $(seq 1 30); do
+for ((_try87 = 1; _try87 <= 30; _try87++)); do
   reserved=$(rpc inventory.v1.InventoryService/GetStock "{\"sku\":\"$sku\"}" | jq -r '.stock.reserved // 0')
   [ "$reserved" = 3 ] && { echo "smoke ok: order $order reserved 3 of $sku through the worker"; exit 0; }
   sleep 1

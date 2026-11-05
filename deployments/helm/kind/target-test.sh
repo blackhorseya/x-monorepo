@@ -77,7 +77,8 @@ values_of() {
         case $l in *'helm repo'*) ;; *)
           t=$(printf '%s\n' "$l" | grep -oE 'run\.sh "[^"]*" (kubectl|helm|kind (create|delete|export)) ' | wc -l | tr -d ' ')
           f=$(printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//')
-          if [ "$(printf '%s\n' "$f" | grep -c .)" = "$t" ]; then printf '%s\n' "$f" | grep .; else echo MISSING; fi ;;
+          nf=$(printf '%s\n' "$f" | grep -c .) || { [ $? -eq 1 ] || nf=-1; }   # 1 = no line (nf=0), 2 = grep failed (nf=-1, never equal to $t)
+          if [ "$nf" = "$t" ]; then printf '%s\n' "$f" | grep .; else echo MISSING; fi ;;
         esac
       done ;;
     kindkc)
@@ -134,7 +135,9 @@ for c in "${cells[@]}"; do
       continue
     fi
     values_of "$k" "$tmp/out" > "$tmp/vals"
-    n=$(grep -c . "$tmp/vals" || true)
+    # this file has no `set -e`: read the status by hand (grep -c: 1 = no line, 2 = error) — `|| [ $? -eq 1 ]` alone would change nothing here
+    grc=0; n=$(grep -c . "$tmp/vals") || grc=$?
+    if [ "$grc" -gt 1 ]; then bad "$id: grep -c on the expanded values exited $grc"; continue; fi
     got=$(sort -u "$tmp/vals" | tr '\n' ' ')
     [ "$s" = S1 ] && base=$n
     if [ "$got" != "$want " ]; then

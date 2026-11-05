@@ -38,7 +38,7 @@ if [ -z "$cfg" ]; then
   done
   [ -n "$ok" ] || { echo "FAIL: cannot resolve the default signing config: cosign initialize (TUF) failed 3 times, nothing was checked. A network or sigstore outage, not a Rekor v2 finding; re-run."; exit 1; }
   found=$(find "$tuf" -path '*/targets/signing_config*.json' -type f)
-  [ "$(printf '%s\n' "$found" | grep -c .)" = 1 ] || {
+  _c41a=$(printf '%s\n' "$found" | grep -c . || [ $? -eq 1 ]); [ "$_c41a" = 1 ] || {
     echo "FAIL: expected one signing_config*.json among cosign's TUF targets, found:"; echo "${found:-  (none)}"
     echo "cosign's TUF layout or the signing config's file name changed; fix this script before trusting it ($issue)."; exit 1
   }
@@ -54,7 +54,7 @@ jq -e -s 'length == 1 and (.[0] | type == "object" and (.rekorTlogUrls | type ==
   || { echo "FAIL: $cfg is not one JSON signing config with a non-empty rekorTlogUrls array of logs that each have a url (empty, blank, truncated or malformed): nothing was verified"; exit 1; }
 logs=$(jq -c '.rekorTlogUrls' "$cfg")
 
-version=$(cosign version 2>/dev/null | sed -n 's/^GitVersion: *//p' || true)
+version=$(cosign version 2>/dev/null | sed -n 's/^GitVersion: *//p') || { echo "rekor-v2-canary: cosign version failed (exit $?)" >&2; version=""; }   # only names the cosign version in the report below; the log check does not use it
 bad=$(jq -r '.[] | select(.majorApiVersion != 1) | "  \(.url)  majorApiVersion=\(.majorApiVersion)  validFor=\(.validFor | tojson)  operator=\(.operator)"' <<<"$logs")
 if [ -n "$bad" ]; then
   cat <<MSG

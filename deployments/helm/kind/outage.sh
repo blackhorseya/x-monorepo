@@ -10,6 +10,7 @@
 # The release is restored (helm upgrade --wait) on the way out, whatever happens.
 #   outage.sh <namespace> <release> <chart-dir> <values-file>
 set -euo pipefail
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2 chart=$3 values=$4
@@ -23,22 +24,24 @@ pf=""
 pf_start() {
   pf_stop
   kubectl -n "$ns" port-forward "svc/$rpc_dep" "$port:80" >/dev/null 2>&1 & pf=$!
-  for _ in $(seq 1 30); do curl -fsS "$api/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
+  for ((_try26 = 1; _try26 <= 30; _try26++)); do curl -fsS "$api/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
   echo "outage: rpc never answered readyz through the port-forward"; return 1
 }
 pf_stop() { [ -n "$pf" ] && kill "$pf" 2>/dev/null && wait "$pf" 2>/dev/null || true; pf=""; }
 restore() {
   pf_stop
-  kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=1 >/dev/null 2>&1 || true
-  helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
+  restore_step kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=1 >/dev/null   # restore: a failure fails the run (restore_exit), not best effort (#462)
+  restore_step helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
 }
-trap restore EXIT
+on_exit() { local rc=$?; restore; restore_exit "$rc"; }   # leaves with the status it had; a failed restore alone makes it non-zero
+trap on_exit EXIT
 
 # call <path> <json> → "<http status> <x-error-code or ->" and the body in $body
 call() {
-  local out
-  out=$(curl -sS -D - -o /tmp/outage.$$ -H 'Content-Type: application/json' "$api/$1" -d "$2" || true)
-  body=$(cat /tmp/outage.$$ 2>/dev/null || true); rm -f /tmp/outage.$$
+  local out rc=0
+  out=$(curl -sS -D - -o /tmp/outage.$$ -H 'Content-Type: application/json' "$api/$1" -d "$2") || rc=$?
+  if [ "$rc" != 0 ]; then echo "outage: curl $1 failed (exit $rc): no status is read from it" >&2; out=""; fi   # an empty status never equals the expected one: want() fails
+  body=$(cat /tmp/outage.$$ 2>/dev/null) || body="(no body)"; rm -f /tmp/outage.$$
   printf '%s %s' "$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out")" "$(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -)"
 }
 want() { # <what> <got> <want>
@@ -51,7 +54,7 @@ rpc_pod() { kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc --field
 # terminated with exit 0, not the text being non-empty.
 init_log() {
   local pod=$1 out code
-  for _ in $(seq 1 30); do
+  for ((_try54 = 1; _try54 <= 30; _try54++)); do
     code=$(kubectl -n "$ns" get pod "$pod" -o json 2>/dev/null | jq -r '.status.initContainerStatuses[0].state.terminated.exitCode // "none"') || code=none
     if [ "$code" = 0 ] && out=$(kubectl -n "$ns" logs "$pod" -c wait-for-catalog 2>/dev/null); then printf '%s' "$out"; return 0; fi
     sleep 2
@@ -72,11 +75,11 @@ pf_stop
 
 # ── A. the catalog is down while rpc rolls out ──────────────────────────────────────────────────────────
 kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=0 >/dev/null
-kubectl -n "$ns" wait --for=delete pod -l app.kubernetes.io/component=catalog-rpc --timeout=90s >/dev/null 2>&1 || true
+best_effort kubectl -n "$ns" wait --for=delete pod -l app.kubernetes.io/component=catalog-rpc --timeout=90s >/dev/null   # wait-gone: "no pods left" is the state wanted; the drill below asserts the outage itself
 start=$SECONDS
 kubectl -n "$ns" rollout restart "deploy/$rpc_dep" >/dev/null
 waiting=""
-for _ in $(seq 1 $((budget + 10))); do
+for ((_try79 = 1; _try79 <= $((budget + 10)); _try79++)); do
   if [ "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o json | jq -r 'if any(.items[]; .status.initContainerStatuses[0].state.running != null) then "yes" else "no" end')" = yes ]; then waiting=yes; break; fi
   sleep 1
 done
@@ -106,7 +109,7 @@ restarts=$(kubectl -n "$ns" get pod "$pod" -o json | jq '[.status.containerStatu
 kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=1 >/dev/null
 kubectl -n "$ns" rollout status "deploy/$cat_dep" --timeout=180s >/dev/null
 ok=""
-for _ in $(seq 1 60); do r=$(order); [ "${r%% *}" = 200 ] && { ok=yes; break; }; sleep 1; done
+for ((_try109 = 1; _try109 <= 60; _try109++)); do r=$(order); [ "${r%% *}" = 200 ] && { ok=yes; break; }; sleep 1; done
 [ "$ok" = yes ] || { echo "outage: CreateOrder did not recover after the catalog came back (last: $r)"; exit 1; }
 want "the rpc pod after the recovery" "$(rpc_pod)" "$pod"
 want "rpc restarts across the outage" "$(kubectl -n "$ns" get pod "$pod" -o json | jq '[.status.containerStatuses[].restartCount] | add')" "$restarts"
@@ -115,7 +118,7 @@ pf_stop
 
 # ── B. the catalog comes up DURING the wait ────────────────────────────────────────────────────────────
 kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=0 >/dev/null
-kubectl -n "$ns" wait --for=delete pod -l app.kubernetes.io/component=catalog-rpc --timeout=90s >/dev/null 2>&1 || true
+best_effort kubectl -n "$ns" wait --for=delete pod -l app.kubernetes.io/component=catalog-rpc --timeout=90s >/dev/null   # wait-gone: "no pods left" is the state wanted; the drill below asserts the outage itself
 kubectl -n "$ns" rollout restart "deploy/$rpc_dep" >/dev/null
 sleep 2
 kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=1 >/dev/null
