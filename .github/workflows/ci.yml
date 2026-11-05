@@ -412,11 +412,20 @@ jobs:
 
   # ── console-e2e: the built console driven by Playwright against a real bin/rpc on Postgres ──
   # (E2E_DATABASE_URL: the webServer runs bin/migrate up first; poison / prune then run for real)
+  # Sharded (#447): `playwright test --shard=i/N`, N = the matrix size (strategy.job-total), each shard its own runner,
+  # postgres and dex. The default run was 369s (2 workers, one runner); 4 workers x 3 shards is the measured choice, see
+  # docs/ci.md. `task web-e2e-shards-check` (shard 1) proves the shards together are the whole `--list`; ports and payment
+  # run on shard 2, the lightest, so they are run exactly once.
   console-e2e:
     needs: affected
     if: needs.affected.outputs.run_console_e2e == 'true'
+    name: console-e2e (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 15 # p90 142s, max 656s (last 11 days)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     services:
       postgres:
         image: postgres:16-alpine
@@ -425,6 +434,7 @@ jobs:
         options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
     env:
       E2E_DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
+      E2E_WORKERS: "4" # ubuntu-latest on a public repo has 4 vCPU (nproc=4 measured); unset locally = Playwright's default
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
@@ -442,17 +452,23 @@ jobs:
           docker compose -f deployments/docker/docker-compose.yaml up -d dex
           for _ in $(seq 30); do curl -fsS http://dex.localtest.me:5556/dex/.well-known/openid-configuration >/dev/null && exit 0; sleep 1; done
           docker compose -f deployments/docker/docker-compose.yaml logs dex; exit 1
-      - run: task web-e2e
+      # The shards are the whole suite: --list of every shard, together, equals the unsharded --list (lists only, no server).
+      - if: matrix.shard == 1
+        run: task web-e2e-shards-check -- ${{ strategy.job-total }}
+        env: { E2E_DEX: "1" }
+      - run: task web-e2e -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         env: { E2E_DEX: "1" }
       # The same OIDC specs on a non-default port pair (#383): fixtures must follow E2E_RPC_PORT / E2E_WEB_PORT.
-      - run: task web-e2e-ports
+      - if: matrix.shard == 2
+        run: task web-e2e-ports
       # The payment flow on the real stack (#367 slice 6): catalog-rpc, payment-rpc serve, payment-worker, rpc and worker on a
       # database of its own made on the postgres service above (psql is on the runner image), no page.route.
-      - run: task web-e2e-payment
+      - if: matrix.shard == 2
+        run: task web-e2e-payment
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: |
             web/apps/console/playwright-report
             web/apps/console/playwright-report-payment

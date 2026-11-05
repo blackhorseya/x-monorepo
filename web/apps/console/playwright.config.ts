@@ -93,6 +93,8 @@ export default defineConfig({
   // DB mode also runs one bin/worker (e2e/worker.setup.ts) so reservations happen.
   globalSetup: "./e2e/worker.setup.ts",
   fullyParallel: true,
+  // CI sets E2E_WORKERS (the runner's vCPU, #447); unset = Playwright's default (half the cores), so `task web-e2e` is unchanged.
+  workers: process.env.E2E_WORKERS ? Number(process.env.E2E_WORKERS) : undefined,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
