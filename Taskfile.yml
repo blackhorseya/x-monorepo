@@ -188,6 +188,11 @@ tasks:
           exit 1
         }
 
+  check-script-modes:
+    desc: every file `task tools` chmods +x is already 100755 in the git index (so a tools-cache miss cannot turn gen-freshness red on a mode-only diff, #454); scripts/check-script-modes.sh
+    cmds:
+      - scripts/check-script-modes.sh
+
   check-work-sync:
     desc: go.work and every go.mod agree, and every go.work module path is one a for-loop over MODULES can carry
     cmds:
@@ -322,6 +327,8 @@ tasks:
           helm template t {{.CHART}} -f {{.ITEM}} | {{.KUBECONFORM}} -strict -summary -kubernetes-version 1.30.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{"}}.Group{{"}}"}}/{{"{{"}}.ResourceKind{{"}}"}}_{{"{{"}}.ResourceAPIVersion{{"}}"}}.json' >/dev/null
           helm template t {{.CHART}} -f {{.ITEM}} | deployments/helm/check.py {{.ITEM}}
       - deployments/helm/check-negative.sh
+      # every file `task tools` chmods +x is already 100755 in the index: a tools-cache miss must not turn gen-freshness red on a mode-only diff (#454). Kind scripts live here, so the helm job is the one a new 100644 script reaches
+      - scripts/check-script-modes.sh
       # the payment panels and alert rules exist and name only metrics the code exports (deployments/docker/grafana)
       - deployments/helm/check-observability.py
       # negative.sh's reading of the refusal, against fake kubectl/helm (no cluster): retries, never asserts on a tool error
