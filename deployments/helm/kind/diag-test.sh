@@ -272,7 +272,7 @@ for sg in TERM INT; do
     first_logs=$(grep -n ' logs ' "$tmp/events" | head -1 | cut -d: -f1)
     last_helm=$(grep -n '^helm upgrade' "$tmp/events" | tail -1 | cut -d: -f1)
     [ "$first_logs" -lt "$last_helm" ] || die "D5 $sg: diag.sh ran after the restore"
-    [ "$(grep -c '^helm upgrade' "$tmp/events")" -ge 2 ] || die "D5 $sg: the release was not restored (no second helm upgrade)"
+    _c275a=$(grep -c '^helm upgrade' "$tmp/events" || [ $? -eq 1 ]); [ "$_c275a" -ge 2 ] || die "D5 $sg: the release was not restored (no second helm upgrade)"
     echo "diag-test ok: D5 $sg while helm upgrade waits: diag before restore, exit $want_rc, the waiting helm stopped, nothing left"
   fi
 done
@@ -352,7 +352,7 @@ if only D6E; then
 fi
 if only D6S; then
   d6cell D6S "Postgres reads with 100000 rows" SQLLINES=100000
-  [ "$(grep -c "SQL-$nonce row" "$DIAG_DIR/postgres.txt")" -ge 100000 ] || die "D6S: postgres.txt does not hold the rows"
+  _c355a=$(grep -c "SQL-$nonce row" "$DIAG_DIR/postgres.txt" || [ $? -eq 1 ]); [ "$_c355a" -ge 100000 ] || die "D6S: postgres.txt does not hold the rows"
   unset DIAG_DIR
   echo "diag-test ok: D6S 100000 Postgres rows: $bytes console bytes (budget $budget), postgres.txt complete"
 fi
@@ -389,7 +389,7 @@ if only D6B; then
   mut="$tmp/diag-mutant.sh"
   awk '{ print } /^(group|endgroup)/ { print "head -c 102400 /dev/zero | tr \"\\0\" X; echo hit >> \"$INJECT_HITS\"" }' "$here/diag.sh" > "$mut"
   chmod +x "$mut"
-  [ "$(grep -c 'INJECT_HITS' "$mut")" -ge 4 ] || die "D6B: the mutant was not built (no injections)"
+  _c392a=$(grep -c 'INJECT_HITS' "$mut" || [ $? -eq 1 ]); [ "$_c392a" -ge 4 ] || die "D6B: the mutant was not built (no injections)"
   : > "$tmp/hits"; export INJECT_HITS="$tmp/hits" DIAG_DIR="$tmp/diag-B" DIAG_CONSOLE_BYTES=$budget
   run_bounded 120 "$mut" ns "$since"
   unset INJECT_HITS DIAG_DIR DIAG_CONSOLE_BYTES
@@ -449,7 +449,7 @@ PY
   mut="$tmp/diag-fd3.sh"
   awk '{ print } /^# diag-test D6F injects/ { print "printf \"%100000s\" X >&3 2>/dev/null; echo hit >> \"$INJECT_HITS\""; print "echo scanned >> \"$INJECT_SCANNED\"; python3 \"$INJECT_SCAN\" \"$INJECT_CONSOLE\" >> \"$INJECT_FDS\""}' "$here/diag.sh" > "$mut"
   chmod +x "$mut"
-  [ "$(grep -c 'INJECT_HITS' "$mut")" = 1 ] || die "D6F: the mutant was not built (the marker comment was not found)"
+  _c452a=$(grep -c 'INJECT_HITS' "$mut" || [ $? -eq 1 ]); [ "$_c452a" = 1 ] || die "D6F: the mutant was not built (the marker comment was not found)"
   : > "$tmp/hits-f"; : > "$tmp/scanned-f"; : > "$tmp/fds-f"
   export INJECT_HITS="$tmp/hits-f" INJECT_SCANNED="$tmp/scanned-f" INJECT_FDS="$tmp/fds-f" INJECT_SCAN="$tmp/fdscan.py" INJECT_CONSOLE="$tmp/out" DIAG_DIR="$tmp/diag-F" DIAG_CONSOLE_BYTES=$budget
   run_bounded 120 "$mut" ns "$since"
@@ -516,7 +516,7 @@ if only D7; then
     # the image had to be pulled). Ready means the line appears TWICE; a server that never gets there is a setup failure.
     ready=0
     for ((_try518 = 1; _try518 <= 120; _try518++)); do
-      [ "$("$rt" logs "$pgc" 2>&1 | grep -c 'database system is ready to accept connections')" -ge 2 ] && { ready=1; break; }
+      [ "$("$rt" logs "$pgc" 2>&1 | grep -c 'database system is ready to accept connections')" -ge 2 ] && { ready=1; break; }   # exit-ok: poll — a failed logs read or count is "not ready yet", and the loop ends in a die when it never is
       sleep 1
     done
     [ "$ready" = 1 ] || die "D7 $label: the Postgres container never became ready (setup failure, not a result)"

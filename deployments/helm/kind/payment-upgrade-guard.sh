@@ -31,7 +31,9 @@ snapshot() {
 }
 
 before=$(snapshot) || { echo "guard: cannot read the home release's database" >&2; exit 1; }
-[ "$(grep -c '^table ' <<<"$before")" -gt 0 ] || { echo "guard: the snapshot of the home release's database has no table: nothing would be proved" >&2; exit 1; }
+# this file has no `set -e`: read grep's status by hand (1 = no table line, 2 = error)
+ntables=$(grep -c '^table ' <<<"$before") || { [ $? -eq 1 ] || { echo "guard: grep failed counting the snapshot's tables" >&2; exit 1; }; }
+[ "$ntables" -gt 0 ] || { echo "guard: the snapshot of the home release's database has no table: nothing would be proved" >&2; exit 1; }
 
 bash "$inner" "$@"
 rc=$?
@@ -42,5 +44,5 @@ if [ "$before" != "$after" ]; then
   diff <(echo "$before") <(echo "$after") >&2
   exit 1
 fi
-echo "guard: the home release's database is unchanged ($(grep -c '^table ' <<<"$before") tables, every row count the same)"
+echo "guard: the home release's database is unchanged ($ntables tables, every row count the same)"
 exit "$rc"

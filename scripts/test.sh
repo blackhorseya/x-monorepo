@@ -50,6 +50,8 @@ bad()  { fail=$((fail + 1)); echo "FAIL: $*" >&2; }
 expect_eq() { if [ "$2" = "$3" ]; then ok; else bad "$1: want [$2] got [$3]"; fi; }
 # expect_match <name> <regex> <text>
 expect_match() { if printf '%s' "$3" | grep -Eq -- "$2"; then ok; else bad "$1: [$3] !~ /$2/"; fi; }
+# count_lines <grep -c args>: the number of matching lines; 1 (no match) is 0, anything above is a failure (exit 2). Meant for an ASSIGNMENT (n=$(… | count_lines x)): inside an argument the exit never reaches set -e (#462)
+count_lines() { local n rc=0; n=$(grep -c "$@") || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; echo "$n"; }
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
 all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind helm_kind_keda k6 k6_auth k6_wire"
@@ -211,27 +213,26 @@ fixture ciall
 expect_eq "CI_ALL=1 runs everything" "$all_jobs" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 expect_eq "CI_ALL prints one flag per job" "$(echo "$all_jobs" | wc -w | tr -d ' ')" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | wc -l | tr -d ' ')"
 # assignments, not `"$(… || [ $? -eq 1 ])"` inside an argument: the status of a substitution that is an argument never reaches set -e (#462)
-grep() { if [ "$1" = -c ]; then command grep "$@"; return 2; fi; command grep "$@"; }   # FAULT INJECTION: grep -c exits 2 after printing (do not merge)
 all_out=$(in_repo env CI_ALL=1 scripts/ci-changes.sh)
 n_false=$(grep -c '=false$' <<<"$all_out" || [ $? -eq 1 ])
 expect_eq "CI_ALL=1 prints no false" "0" "$n_false"
 # Every flag is a job's `if:` in ci.yml, declared once as an output of `affected` (a flag nobody reads skips nothing).
 for j in $all_jobs; do
-  expect_eq "ci.yml declares run_$j as an output of affected" 1 "$(grep -c "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml")"
-  expect_eq "ci.yml has exactly one job gated on run_$j"       1 "$(grep -c "^    if: needs.affected.outputs.run_$j == 'true'\$" "$src/.github/workflows/ci.yml")"
+  _c220a=$(count_lines "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml"); expect_eq "ci.yml declares run_$j as an output of affected" 1 "$_c220a"
+  _c221a=$(count_lines "^    if: needs.affected.outputs.run_$j == 'true'\$" "$src/.github/workflows/ci.yml"); expect_eq "ci.yml has exactly one job gated on run_$j"       1 "$_c221a"
   expect_match "docs/ci.md names the $j job" "(^|[^a-z0-9-])$(echo "$j" | tr _ -)([^a-z0-9-]|\$)" "$(cat "$src/docs/ci.md")"
 done
 # ci_job <name>: the lines of that top-level job in ci.yml.
 ci_job() { awk -v n="  $1:" '$0 == n {f=1; next} /^  [a-z0-9-]+:/ || /^  #/ {f=0} f' "$src/.github/workflows/ci.yml"; }
 # helm-kind, helm-kind-keda and k6-auth / k6-wire are jobs of their own, not matrix legs: a skipped one
 # leaves a skipped check, a dynamic matrix would leave none (#328).
-expect_eq "no matrix over the kind tasks" 0 "$(grep -c 'task: \[helm-kind' "$src/.github/workflows/ci.yml")"
-expect_eq "helm-kind job runs task helm-kind"            1 "$(ci_job helm-kind | grep -c '^      - run: task helm-kind$')"
-expect_eq "helm-kind-keda job runs task helm-kind-keda"  1 "$(ci_job helm-kind-keda | grep -c '^      - run: task helm-kind-keda$')"
-expect_eq "helm-kind has no matrix"      0 "$(ci_job helm-kind | grep -c 'matrix')"
-expect_eq "helm-kind-keda has no matrix" 0 "$(ci_job helm-kind-keda | grep -c 'matrix')"
-expect_eq "k6-auth job runs task k6-auth-matrix"        1 "$(ci_job k6-auth | grep -c '^      - run: task k6-auth-matrix$')"
-expect_eq "k6-auth job no longer runs task k6-wire"     0 "$(ci_job k6-auth | grep -c 'task k6-wire')"
+_c228a=$(count_lines 'task: \[helm-kind' "$src/.github/workflows/ci.yml"); expect_eq "no matrix over the kind tasks" 0 "$_c228a"
+_c229a=$(ci_job helm-kind | count_lines '^      - run: task helm-kind$'); expect_eq "helm-kind job runs task helm-kind"            1 "$_c229a"
+_c230a=$(ci_job helm-kind-keda | count_lines '^      - run: task helm-kind-keda$'); expect_eq "helm-kind-keda job runs task helm-kind-keda"  1 "$_c230a"
+_c231a=$(ci_job helm-kind | count_lines 'matrix'); expect_eq "helm-kind has no matrix"      0 "$_c231a"
+_c232a=$(ci_job helm-kind-keda | count_lines 'matrix'); expect_eq "helm-kind-keda has no matrix" 0 "$_c232a"
+_c233a=$(ci_job k6-auth | count_lines '^      - run: task k6-auth-matrix$'); expect_eq "k6-auth job runs task k6-auth-matrix"        1 "$_c233a"
+_c234a=$(ci_job k6-auth | count_lines 'task k6-wire'); expect_eq "k6-auth job no longer runs task k6-wire"     0 "$_c234a"
 # #448: k6-auth is one job with a static matrix of shards, K6_AUTH_SHARD=<i>/<n>. The shards must be exactly
 # 1/n … n/n, and their cells together must be the whole list, each once — a cell in no shard would never run.
 m=$src/tests/k6/auth-matrix.sh
@@ -243,8 +244,8 @@ expect_match "k6-auth has a static shard matrix" '^1/[1-9]( |$)' "$shards"
 n=${shards##*/}
 want=""; for ((i = 1; i <= n; i++)); do want="$want $i/$n"; done
 expect_eq "k6-auth shards are 1/n … n/n" "${want# }" "$shards"
-expect_eq "k6-auth leg reads its shard from the matrix" 1 "$(ci_job k6-auth | grep -c '^      K6_AUTH_SHARD: ${{ matrix.shard }}$')"
-expect_eq "k6-auth matrix does not stop the other legs" 1 "$(ci_job k6-auth | grep -c '^      fail-fast: false$')"
+_c246a=$(ci_job k6-auth | count_lines '^      K6_AUTH_SHARD: ${{ matrix.shard }}$'); expect_eq "k6-auth leg reads its shard from the matrix" 1 "$_c246a"
+_c247a=$(ci_job k6-auth | count_lines '^      fail-fast: false$'); expect_eq "k6-auth matrix does not stop the other legs" 1 "$_c247a"
 union=""
 for ((i = 1; i <= n; i++)); do
   part=$(K6_AUTH_LIST=1 K6_AUTH_SHARD=$i/$n "$m")
@@ -264,7 +265,7 @@ expect_eq "a shard beyond n fails" 2 "$rc"
 rc=0; K6_AUTH_LIST=1 K6_AUTH_SHARD=1/$n "$m" whoami-503 >/dev/null 2>&1 || rc=$?
 expect_eq "a shard together with named cells fails" 2 "$rc"
 # #209: the key must stay out of k6's output and tags — k6-wire is the job that proves it, on its own now.
-expect_eq "k6-wire job runs task k6-wire"               1 "$(ci_job k6-wire | grep -c '^      - run: task k6-wire$')"
+_c267a=$(ci_job k6-wire | count_lines '^      - run: task k6-wire$'); expect_eq "k6-wire job runs task k6-wire"               1 "$_c267a"
 expect_eq "k6-wire needs no Postgres (docs/ci.md says so)" 0 "$(ci_job k6-wire | grep -ci 'postgres')"
 
 # ── setup / playwright actions: who may write a cache, and what a job reads (#450) ──────────────────────────────────
@@ -274,14 +275,14 @@ expect_eq "k6-wire needs no Postgres (docs/ci.md says so)" 0 "$(ci_job k6-wire |
 plan="$src/.github/actions/setup/plan.sh"
 # count_lines <grep args>: how many lines of stdin match. grep exits 1 for "none" (that is a 0); any other non-zero exit is a failure of
 # the check itself and stops the suite (a `|| true` here would turn a broken grep into a quiet 0).
-count_lines() { local n rc=0; n=$(grep -c "$@") || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; echo "$n"; }
 # plan_out <event> <ref> <default branch> <scope> <output>: one output of plan.sh; PLAN-FAILED / NO-KEY when the script failed or lacks the key,
 # so that an expectation of "" cannot pass on a crashed script.
 plan_out() {
   local o rc=0
   o=$(EVENT_NAME=$1 REF=$2 DEFAULT_BRANCH=$3 SCOPE=$4 GITHUB_OUTPUT=/dev/stdout "$plan") || rc=$?
   if [ "$rc" != 0 ]; then echo PLAN-FAILED; return; fi
-  if [ "$(printf '%s\n' "$o" | count_lines "^$5=")" != 1 ]; then echo NO-KEY; return; fi
+  n_key=$(printf '%s\n' "$o" | count_lines "^$5=")
+  if [ "$n_key" != 1 ]; then echo NO-KEY; return; fi
   printf '%s\n' "$o" | sed -n "s/^$5=//p"
 }
 # GitHub (docs "Cache access for low-trust workflow triggers"): only push / workflow_dispatch / repository_dispatch / delete /
@@ -312,10 +313,11 @@ ci_setup_scopes() {
   local j m jobs mods
   jobs=$(awk '/^  [a-z0-9-]+:$/ {gsub(/[ :]/, ""); job=$0} /uses: \.\/\.github\/actions\/setup/ {print job}' "$src/.github/workflows/ci.yml" | sort -u)   # assigned first: a failing awk is an error, not an empty list (#462)
   for j in $jobs; do
+    n_nocache=$(ci_job "$j" | count_lines 'go-cache: "false"')
     if [ "$j" = test ]; then
       mods=$(awk '/^use \(/ {f=1; next} /^\)/ {f=0} f {gsub(/[ \t]|^\.\//, ""); print}' "$src/go.work" | sed 's#^\./##')
       for m in $mods; do echo "test-$m"; done
-    elif [ "$(ci_job "$j" | count_lines 'go-cache: "false"')" = 0 ]; then
+    elif [ "$n_nocache" = 0 ]; then
       echo "$j"
     fi
   done
@@ -359,7 +361,8 @@ expect_eq "ci.yml / release.yml: every explicit cache-scope is a form plan.sh kn
 saver_matrix=""
 for sc in $scopes release-snapshot; do
   if [ "$(plan_out push refs/heads/main main "$sc" save_build)" = true ] && [ "$sc" != test-apps/rpc ]; then
-    [ "$(ci_job "$sc" | count_lines 'matrix:')" = 0 ] || saver_matrix="$saver_matrix $sc"
+    n_matrix=$(ci_job "$sc" | count_lines 'matrix:')
+    [ "$n_matrix" = 0 ] || saver_matrix="$saver_matrix $sc"
   fi
 done
 expect_eq "plan: a group's saver (other than the test matrix's apps/rpc leg) is not a matrix job" "" "$saver_matrix"
@@ -372,8 +375,8 @@ race_savers() {
   done
 }
 expect_eq "plan: the race saver is exactly the apps/rpc leg of the test matrix" "test-apps/rpc" "$(race_savers)"
-expect_eq "plan: five build-cache groups" 5 "$(printf '%s\n' $groups | sort -u | count_lines .)"
-expect_eq "plan: web (go-cache false) is not given a group in ci.yml" 0 "$(printf '%s\n' $scopes | count_lines -x web)"
+_c375a=$(printf '%s\n' $groups | sort -u | count_lines .); expect_eq "plan: five build-cache groups" 5 "$_c375a"
+_c376a=$(printf '%s\n' $scopes | count_lines -x web); expect_eq "plan: web (go-cache false) is not given a group in ci.yml" 0 "$_c376a"
 
 # cache_ids <action file>: ids of the steps that use actions/cache (the read-write one or /restore).
 cache_ids() { awk '/^    - / {if (cache && id != "") print id; cache=0; id=""} /^    - id: / {id=$3} /^      id: / {id=$2} /uses: actions\/cache(\/restore)?@/ {cache=1} END {if (cache && id != "") print id}' "$1"; }
@@ -384,8 +387,10 @@ step_if()   { step_text "$1" "$2" | sed -n 's/^      if: //p'; }
 step_body() { step_text "$1" "$2" | awk '!/^[ ]*(- id|id|if|uses):/ && !/^[ ]*#/ && !/^[ ]*$/'; }
 for af in setup playwright pnpm-cache; do
   a="$src/.github/actions/$af/action.yml"
-  expect_eq "$af: every actions/cache step has an id" "$(grep -cE 'uses: actions/cache(/restore)?@' "$a")" "$(cache_ids "$a" | count_lines .)"
-  expect_eq "$af: no other way to cache (setup-go / setup-node cache: true)" 0 "$(count_lines -E '^\s+cache: (true|pnpm|npm|yarn)' "$a")"
+  n_cache=$(count_lines -E 'uses: actions/cache(/restore)?@' "$a")
+  n_ids=$(cache_ids "$a" | count_lines .)
+  expect_eq "$af: every actions/cache step has an id" "$n_cache" "$n_ids"
+  _c388a=$(count_lines -E '^\s+cache: (true|pnpm|npm|yarn)' "$a"); expect_eq "$af: no other way to cache (setup-go / setup-node cache: true)" 0 "$_c388a"
   ids=$(cache_ids "$a")
   for id in $ids; do
     uses=$(step_text "$a" "$id" | sed -n 's/^      uses: \(actions\/cache[^@]*\)@.*/\1/p')
@@ -393,11 +398,11 @@ for af in setup playwright pnpm-cache; do
     case $uses in
       actions/cache)
         expect_match "$af/$id: a step that can save runs only where plan says write" "steps\.plan\.outputs\.(write|save_build) == 'true'" "$cond"
-        expect_eq "$af/$id: ... and never on a != test" 0 "$(printf '%s' "$cond" | count_lines -E "plan\.outputs\.(write|save_build) !=")"
+        _c396a=$(printf '%s' "$cond" | count_lines -E "plan\.outputs\.(write|save_build) !="); expect_eq "$af/$id: ... and never on a != test" 0 "$_c396a"
         twin="${id%-rw}-ro"; [ "$twin" != "${id}-ro" ] || twin=""
         expect_match "$af/$id: a read-write step is named <name>-rw" '-rw$' "$id"
         if [ -n "$twin" ]; then
-          expect_eq "$af/$id: the restore-only twin $twin exists" 1 "$(cache_ids "$a" | count_lines -x "$twin")"
+          _c400a=$(cache_ids "$a" | count_lines -x "$twin"); expect_eq "$af/$id: the restore-only twin $twin exists" 1 "$_c400a"
           want=$(printf '%s' "$cond" | sed -E "s/(steps\.plan\.outputs\.(write|save_build)) == 'true'/\1 != 'true'/")
           expect_eq "$af/$id: the twin's if: is the exact opposite" "$want" "$(step_if "$a" "$twin")"
           expect_eq "$af/$id: the twin restores the same path / key / restore-keys" "$(step_body "$a" "$id")" "$(step_body "$a" "$twin")"
@@ -480,16 +485,20 @@ expect_eq "playwright: cache-rw and cache-ro are the cache steps" "cache-ro cach
 # key shape: the module cache is keyed on go.sum only; the build cache on group and week (never on a scope, which is what made 28 copies)
 expect_match "setup: the module cache key is go.sum only"    "key: gomod-\\$\\{\\{ runner.os \\}\\}-\\$\\{\\{ hashFiles\\('\\*\\*/go.sum'\\) \\}\\}\$" "$(step_text "$src/.github/actions/setup/action.yml" gomod-rw)"
 expect_match "setup: the build cache key is group and week"  "key: gobuild-.*steps\.plan\.outputs\.group.*steps\.plan\.outputs\.week" "$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw)"
-expect_eq "setup: no cache key uses cache-scope" 0 "$(awk '/^ +(key|restore-keys):/ || /^ +(gomod|gobuild)-/' "$src/.github/actions/setup/action.yml" | count_lines 'cache-scope')"
-expect_eq "setup: the build cache restore-keys stay inside the group" 0 "$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw | sed -n '/restore-keys:/,$p' | count_lines 'gobuild-\${{ runner.os }}-\s*$')"
+n_scope=$(awk '/^ +(key|restore-keys):/ || /^ +(gomod|gobuild)-/' "$src/.github/actions/setup/action.yml" | count_lines 'cache-scope')
+expect_eq "setup: no cache key uses cache-scope" 0 "$n_scope"
+n_loose=$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw | sed -n '/restore-keys:/,$p' | count_lines 'gobuild-\${{ runner.os }}-\s*$')
+expect_eq "setup: the build cache restore-keys stay inside the group" 0 "$n_loose"
 # the web job needs go on PATH (task evaluates `go work edit` on every run) but compiles nothing; lint's own golangci cache must not save on a PR
-expect_eq "ci.yml: only the web job opts out of the Go cache"   1 "$(count_lines 'go-cache: "false"' "$src/.github/workflows/ci.yml")"
-expect_eq "ci.yml: the web job opts out of the Go cache"        1 "$(ci_job web | count_lines 'go-cache: "false"')"
-expect_eq "ci.yml: the web job still runs the setup action (task needs go)" 1 "$(ci_job web | count_lines 'uses: ./.github/actions/setup$')"
+_c486a=$(count_lines 'go-cache: "false"' "$src/.github/workflows/ci.yml"); expect_eq "ci.yml: only the web job opts out of the Go cache"   1 "$_c486a"
+_c487a=$(ci_job web | count_lines 'go-cache: "false"'); expect_eq "ci.yml: the web job opts out of the Go cache"        1 "$_c487a"
+_c488a=$(ci_job web | count_lines 'uses: ./.github/actions/setup$'); expect_eq "ci.yml: the web job still runs the setup action (task needs go)" 1 "$_c488a"
 expect_match "ci.yml: lint's golangci-lint cache is not saved on a pull request" "skip-save-cache: \"\\$\\{\\{ github.event_name == 'pull_request' \\}\\}\"" "$(ci_job lint)"
 # no workflow lets setup-node cache (its post step saves on every trigger); the pnpm store goes through the pnpm-cache action, once per setup-node
-expect_eq "workflows: no setup-node cache: input"                  0 "$(count_lines -E '^\s+cache: (pnpm|npm|yarn)' "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | awk -F: '{s+=$NF} END {print s+0}')"
-expect_eq "workflows: every setup-node is followed by the pnpm-cache action" "$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: actions/setup-node@')" "$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: ./.github/actions/pnpm-cache$')"
+_c491a=$(count_lines -E '^\s+cache: (pnpm|npm|yarn)' "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | awk -F: '{s+=$NF} END {print s+0}'); expect_eq "workflows: no setup-node cache: input"                  0 "$_c491a"
+n_node=$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: actions/setup-node@')
+n_pnpm=$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: ./.github/actions/pnpm-cache$')
+expect_eq "workflows: every setup-node is followed by the pnpm-cache action" "$n_node" "$n_pnpm"
 expect_match "docs/ci.md names the Go cache policy"             "go-cache" "$(cat "$src/docs/ci.md")"
 expect_match "docs/ci.md names the pnpm-cache action"          "pnpm-cache" "$(cat "$src/docs/ci.md")"
 
@@ -499,7 +508,7 @@ mkdir -p "$tmp/plan-bin"
 printf '#!/bin/sh\necho 2026-W\nexit 5\n' > "$tmp/plan-bin/date"; chmod +x "$tmp/plan-bin/date"
 rc=0; out=$(PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" 2>&1) || rc=$?
 expect_eq "plan.sh: a date that prints and then fails makes plan.sh fail" "5" "$rc"
-expect_eq "plan.sh: ... and no week= line was written" 0 "$(printf '%s\n' "$out" | count_lines '^week=')"
+_c502a=$(printf '%s\n' "$out" | count_lines '^week='); expect_eq "plan.sh: ... and no week= line was written" 0 "$_c502a"
 printf '#!/bin/sh\necho garbage\nexit 0\n' > "$tmp/plan-bin/date"
 rc=0; out=$(PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" 2>&1) || rc=$?
 expect_eq "plan.sh: a date that prints something that is not an ISO week makes plan.sh fail" "1" "$rc"
@@ -535,7 +544,7 @@ gmd_run 9; expect_eq "go-mod-download: it stops after the last attempt"        "
 gmd_run 1 1; expect_eq "go-mod-download: GO_MOD_DOWNLOAD_ATTEMPTS=1 does not retry" "7 1" "$rc $calls"
 expect_match "go-mod-download: the log names the attempt and the exit code" 'failed with exit code 7 \(attempt 1/3\)' "$out3"
 expect_match "go-mod-download: the final line says it gave up with the last code" 'giving up after 3 attempts, last exit code 7' "$out3"
-expect_eq "go-mod-download: the log never carries go's (proxy) text" 0 "$(printf '%s' "$out3" | count_lines 'UPSTREAM-ERROR-TEXT')"
+_c538a=$(printf '%s' "$out3" | count_lines 'UPSTREAM-ERROR-TEXT'); expect_eq "go-mod-download: the log never carries go's (proxy) text" 0 "$_c538a"
 mkdir -p "$tmp/sleep-bin"; printf '#!/bin/sh\nexit 9\n' > "$tmp/sleep-bin/sleep"; chmod +x "$tmp/sleep-bin/sleep"
 rm -f "$tmp/gmd-count"; rc=0
 PATH="$tmp/sleep-bin:$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=1 GO_MOD_DOWNLOAD_SLEEP=1 "$gmd" >/dev/null 2>&1 || rc=$?
@@ -1305,17 +1314,17 @@ expect_eq "coredns: first run patches once"        "0 1" "$(dns shop)"
 expect_eq "coredns: rule lands after ready"        "ready $rule_shop" "$(grep -A1 '^ *ready$' "$dns_dir/Corefile" | tr -s ' \n' ' ' | sed 's/^ *//;s/ *$//;s/^ready  */ready /')"
 expect_eq "coredns: second run is a no-op"         "0 0" "$(dns shop)"
 expect_eq "coredns: namespace change replaces"     "0 1" "$(dns other)"
-expect_eq "coredns: exactly one dex rule remains"  "1" "$(grep -c 'exact dex.localtest.me ' "$dns_dir/Corefile")"
-expect_eq "coredns: new target is in place"        "1" "$(grep -c 'dex.other.svc.cluster.local' "$dns_dir/Corefile")"
+_c1308a=$(count_lines 'exact dex.localtest.me ' "$dns_dir/Corefile"); expect_eq "coredns: exactly one dex rule remains"  "1" "$_c1308a"
+_c1309a=$(count_lines 'dex.other.svc.cluster.local' "$dns_dir/Corefile"); expect_eq "coredns: new target is in place"        "1" "$_c1309a"
 corefile_with "rewrite name exact dex.localtest.me.backup backup.shop.svc.cluster.local" "rewrite name exact other.localtest.me o.shop.svc.cluster.local"
 expect_eq "coredns: similar names get their own rule" "0 1" "$(dns shop)"
-expect_eq "coredns: similar-name rewrite survives"  "1" "$(grep -c 'dex.localtest.me.backup backup.shop' "$dns_dir/Corefile")"
-expect_eq "coredns: unrelated rewrite survives"     "1" "$(grep -c 'other.localtest.me o.shop' "$dns_dir/Corefile")"
-expect_eq "coredns: our rule added beside them"     "1" "$(grep -c "^    $rule_shop\$" "$dns_dir/Corefile")"
+_c1312a=$(count_lines 'dex.localtest.me.backup backup.shop' "$dns_dir/Corefile"); expect_eq "coredns: similar-name rewrite survives"  "1" "$_c1312a"
+_c1313a=$(count_lines 'other.localtest.me o.shop' "$dns_dir/Corefile"); expect_eq "coredns: unrelated rewrite survives"     "1" "$_c1313a"
+_c1314a=$(count_lines "^    $rule_shop\$" "$dns_dir/Corefile"); expect_eq "coredns: our rule added beside them"     "1" "$_c1314a"
 corefile_with "# $rule_shop"
 expect_eq "coredns: a commented rule is not the rule" "0 1" "$(dns shop)"
-expect_eq "coredns: the comment is kept"            "1" "$(grep -c "^    # $rule_shop\$" "$dns_dir/Corefile")"
-expect_eq "coredns: and a live rule was added"      "1" "$(grep -c "^    $rule_shop\$" "$dns_dir/Corefile")"
+_c1317a=$(count_lines "^    # $rule_shop\$" "$dns_dir/Corefile"); expect_eq "coredns: the comment is kept"            "1" "$_c1317a"
+_c1318a=$(count_lines "^    $rule_shop\$" "$dns_dir/Corefile"); expect_eq "coredns: and a live rule was added"      "1" "$_c1318a"
 printf '.:53 {\n    errors\n}\n' > "$dns_dir/Corefile"
 expect_eq "coredns: no ready line refuses, no patch" "1 0" "$(dns shop)"
 
@@ -1900,6 +1909,9 @@ forseq @@ forlist @@ for _ in $(seq 1 5); do :; done
 forpgrep @@ forlist @@ for p in $(pgrep -P 1); do :; done
 setargs @@ setargs @@ set -- $(gh pr view)
 waitalone @@ swallow @@ wait "$p" || true
+argeq @@ argsub @@ expect_eq x 1 "$(cat f | grep -c y)"
+argtest @@ argsub @@ [ "$(grep -c y f)" -ge 2 ] || exit 1
+argcount @@ argsub @@ expect_eq x 1 "$(cat f | count_lines y)"
 ROWS
 # sw_write <name>: $sw/<name>.sh from stdin, after a header that sets (or not) pipefail
 sw_write() { { printf '#!/usr/bin/env bash\n%s\n' "${2:-set -euo pipefail}"; cat; } > "$sw/$1.sh"; }
@@ -1946,6 +1958,9 @@ rc=0; out=$(cmd) || rc=$?
 for p in $pids; do :; done
 for f in "$d"/log-*.txt; do n=$(wc -l < "$f"); done
 for a in 'NS=a$(id)' 'x'; do :; done
+n=$(grep -c y f || [ $? -eq 1 ])
+n=$(cat f | count_lines y)
+expect_eq x 1 "$n" "$(date)"
 F
 sw_run "$sw/canonical.sh"
 expect_eq    "swallow: the documented replacements are clean" "0" "$rc"

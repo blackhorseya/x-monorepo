@@ -8,6 +8,7 @@
 # It flags, per line (comment lines and heredoc bodies are skipped):
 #   swallow   `cmd || true`, `cmd || :`, `cmd || exit 0`, `cmd || return 0` — also inside $(...), a trap string or sh -c '...'
 #   setargs   `set -- $(cmd)`: same, the status of cmd is dropped
+#   argsub    `expect_eq x "$(… | grep -c y)"`, `[ "$(grep -c y f)" -ge 2 ]`: a match count inside an argument; assign it first
 #   forlist   `for x in $(cmd)` / `for x in `cmd``: the status of cmd is dropped (a short or failed `seq` is a shorter loop)
 #   pipeline  `a | b` in a file that never says `set -o pipefail` (or set -euo pipefail ...): only b's status counts
 # Not flagged without a comment: `kill ... || true`, `rm ... || true` and `... kill ... && wait ... || true` (cleanup:
@@ -66,6 +67,22 @@ function verb_before(p,   s, w) {
   return w
 }
 function report(rule) { printf "%s:%d: %s: %s\n", FILENAME, FNR, rule, line; n++ }
+# 1 when CODE has a $(…) that is an ARGUMENT (not the right-hand side of an assignment) and counts matches inside it:
+# `expect_eq x "$(… | grep -c y)"`, `[ "$(grep -c y f)" -ge 2 ]`. The status of a substitution used as an argument never reaches
+# set -e, so a grep that dies is just a number (#456 r0).
+function argsub(c,   i, j, d, ch, pre, inner, n) {
+  n = length(c)
+  for (i = 1; i < n; i++) {
+    if (substr(c, i, 2) != "$(" || substr(c, i, 3) == "$((") continue
+    pre = substr(c, 1, i - 1)
+    if (pre ~ /=("|\047)?$/) continue                      # name=$(…) / name="$(…)": an assignment, set -e sees it
+    d = 1
+    for (j = i + 2; j <= n; j++) { ch = substr(c, j, 1); if (ch == "(") d++; else if (ch == ")") { d--; if (d == 0) break } }
+    inner = substr(c, i + 2, j - i - 2)
+    if (inner ~ /(grep[ \t]+-[A-Za-z]*c|count_lines)[ \t]/) return 1
+  }
+  return 0
+}
 FNR == 1 { reset_file() }
 {
   line = $0
@@ -97,6 +114,8 @@ FNR == 1 { reset_file() }
     sub(/;[ \t]*do([ \t]|$).*/, "", fl); gsub(/\047[^\047]*\047/, "", fl)
     if (fl ~ /(\$\(|`)/ && !exempt) report("forlist")
   }
+  # argsub
+  if (argsub(CODE) && !exempt) report("argsub")
   # setargs
   if (CODE ~ /(^|[;&|{(]|[ \t])set[ \t]+--[ \t].*(\$\(|`)/ && !exempt) report("setargs")
   # pipeline: pipefail must already be set above this line
