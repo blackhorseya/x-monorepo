@@ -201,7 +201,9 @@ expect_eq "the console nginx config is not a release-snapshot input" \
 expect_eq ".goreleaser.yaml is an image change, and a scripts-test input (cosign-smoke fixture)" \
   "release_snapshot console_image scripts_test helm_kind helm_kind_keda" \
   "$(jobs_on goreleaser .goreleaser.yaml)"
-expect_eq "another workflow is actions-resolve only" "actions_resolve" "$(jobs_on wf .github/workflows/labeler.yml)"
+expect_eq "another workflow is actions-resolve and scripts-test (check-exit-swallow.sh scans its run: scripts, #465)" "actions_resolve scripts_test" "$(jobs_on wf .github/workflows/labeler.yml)"
+expect_match "a composite action runs scripts-test too (#465)" '(^| )scripts_test( |$)' "$(jobs_on wfact .github/actions/playwright/action.yml)"
+expect_match "extract-run-blocks.py runs scripts-test (#465)" '(^| )scripts_test( |$)' "$(jobs_on extractpy scripts/extract-run-blocks.py)"
 # release.yml pins cosign-release (#215): a bump there must run release-snapshot's cosign smoke and
 # Rekor canary, which ci-changes.sh used to skip (release.yml only set the actions area).
 expect_eq "release.yml runs release-snapshot too, and scripts-test (its image loop is a list case input)" "release_snapshot actions_resolve scripts_test" "$(jobs_on relyml .github/workflows/release.yml)"
@@ -1900,6 +1902,10 @@ while IFS= read -r row; do
 done <<'ROWS'
 cmdsub @@ swallow @@ x=$(grep a f || true)
 direct @@ swallow @@ grep a f > o || true
+procsub-done @@ procsub @@ while read -r l; do :; done < <(grep a f)
+procsub-read @@ procsub @@ read -r a b < <(python3 -c 'print(1, 2)')
+procsub-diff @@ procsub @@ diff <(sort a) <(sort b)
+procsub-out @@ procsub @@ tee >(gzip > o.gz) < f
 catfile @@ swallow @@ cat x || true
 colon @@ swallow @@ grep a f || :
 inpipe @@ swallow @@ n=$(grep a f | wc -l || true)
@@ -2352,6 +2358,309 @@ for sh_ in payment-flow payment outage negative; do
 done
 rc=0; out=$(grep -c 'restore_step\|restore_exit' "$src"/deployments/helm/kind/{payment-flow,payment,outage,negative}.sh | grep -c ':0$') || rc=$?
 expect_eq "restore_step / restore_exit are used by payment-flow, payment, outage and negative" "0" "$out"
+
+
+# ── #465: process substitution, errexit-off functions, workflow run: scripts ───────────────────────────────────────────────
+# procsub: `done < <(cmd)` never sees cmd's status. The fixed form is a variable first, the loop over a here-string.
+sw_write procsub-ok <<'F'
+out=$(grep a f)
+while read -r l; do :; done <<<"$out"
+read -r a b <<<"$(python3 -c 'print(1, 2)')"
+cat <<'EOT'
+while read -r l; do :; done < <(not code, a heredoc body)
+EOT
+F
+sw_run "$sw/procsub-ok.sh"; expect_eq "procsub: a here-string over a variable, and a heredoc body are not flagged" "0" "$rc"
+# fnctx: a function called as `f || x`, `f && x`, `if f`, `while f`, `until f`, `! f` runs with errexit off for its whole body, so an
+# unchecked `x=$(cmd)` in it keeps going. Same-file call sites only; a function that calls another such function counts too.
+fn_red() { # <name> <call line(s)>: f assigns a substitution unchecked and is called the given way
+  sw_write "fn-$1" <<F
+f() {
+  local out
+  out=\$(cmd)
+  echo "\$out"
+}
+$2
+F
+  sw_run "$sw/fn-$1.sh"
+  expect_eq "fnctx: f called as [$2] is red" "1" "$rc"
+  expect_match "fnctx: [$2] names the rule and the call line" ': fnctx: out=\$\(cmd\) .*f\(\) runs with errexit off: called at line [0-9]+' "$out"
+}
+fn_red or      'f || echo failed'
+fn_red and     'f && echo ok'
+fn_red if      'if f; then echo ok; fi'
+fn_red ifnot   'if ! f; then echo no; fi'
+fn_red bang    '! f'
+fn_red while   'while f; do break; done'
+fn_red until   'until f; do break; done'
+fn_red args    'f "a b" 1 || c=$?'
+sw_write fn-nested <<'F'
+g() {
+  v=$(cmd)
+}
+f() {
+  g
+  echo done
+}
+if f; then :; fi
+F
+sw_run "$sw/fn-nested.sh"
+expect_eq "fnctx: g called by an errexit-off f is red too" "1" "$rc"
+expect_match "fnctx: …and the finding is on g's line" 'fn-nested\.sh:4: fnctx: v=\$\(cmd\)' "$out"
+fn_green() { # <name> <function body line(s)> <call line>
+  sw_write "fng-$1" <<F
+f() {
+$2
+}
+$3
+F
+  sw_run "$sw/fng-$1.sh"
+  expect_eq "fnctx: [$1] is green" "0" "$rc"
+}
+fn_green checked      '  out=$(cmd) || return 1' 'f || echo failed'
+fn_green checked-exit '  out=$(cmd) || { echo "cmd failed" >&2; exit 2; }' 'if f; then :; fi'
+fn_green rc-next      $'  out=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1' 'f || echo failed'
+fn_green rc-same      '  out=$(cmd); rc=$?' 'f || echo failed'
+fn_green cond-assign  '  if out=$(cmd); then echo "$out"; fi' 'f || echo failed'
+fn_green and-assign   '  [ -n "$1" ] && out=$(cmd) || return 1' 'f || echo failed'
+fn_green arith        '  n=$((n + 1))' 'f || echo failed'
+fn_green plain-call   '  out=$(cmd)' 'f'
+fn_green last-in-list '  out=$(cmd)' 'true || f'
+fn_green wrapped-cmd  '  out=$(cmd) ||
+    return 1' 'f || echo failed'
+fn_green declared-elsewhere '  local out
+  out=$(cmd) || return 1' 'if f; then :; fi'
+sw_write fn-exempt <<'F'
+f() {
+  out=$(cmd)   # exit-ok: the file cmd writes is read below; this status cannot change the verdict
+}
+f || echo failed
+F
+sw_run "$sw/fn-exempt.sh"; expect_eq "fnctx: an exit-ok comment on the assignment line makes it green" "0" "$rc"
+sw_write fn-heredoc <<'F'
+cat <<'EOT'
+f() {
+  out=$(cmd)
+}
+EOT
+f || echo failed
+F
+sw_run "$sw/fn-heredoc.sh"; expect_eq "fnctx: a function that only exists in a heredoc is not a function" "0" "$rc"
+sw_write fn-otherfile <<'F'
+. ./lib.sh
+lib_fn || echo failed
+F
+sw_run "$sw/fn-otherfile.sh"; expect_eq "fnctx: the limit — a function defined in another file is not seen (documented)" "0" "$rc"
+
+# workflow / composite-action run: scripts. wf_check <name> < yaml: writes $sw/<name>.yml and runs the checker on it.
+wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
+wf_check wf-pipe <<'Y'
+name: t
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo start
+          ./gate.sh | tee out.txt
+Y
+expect_eq    "workflow: a pipe in a run: with no shell: is red (bash -e {0} has no pipefail)" "1" "$rc"
+expect_match "workflow: …reported against the YAML line" 'wf-pipe\.yml:9: pipeline: ./gate\.sh \| tee out\.txt' "$out"
+wf_check wf-pipe-bash <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: ./gate.sh | tee out.txt
+Y
+expect_eq    "workflow: shell: bash (= -eo pipefail) makes the same pipe green" "0" "$rc"
+wf_check wf-pipe-wfdefault <<'Y'
+defaults:
+  run:
+    shell: bash
+jobs:
+  j:
+    steps:
+      - run: ./gate.sh | tee out.txt
+Y
+expect_eq    "workflow: defaults.run.shell: bash at the workflow level is green" "0" "$rc"
+wf_check wf-pipe-jobdefault <<'Y'
+jobs:
+  j:
+    defaults: { run: { shell: bash } }
+    steps:
+      - run: ./gate.sh | tee out.txt
+Y
+expect_eq    "workflow: defaults.run.shell: bash at the job level is green" "0" "$rc"
+wf_check wf-pipe-override <<'Y'
+defaults:
+  run:
+    shell: bash
+jobs:
+  j:
+    steps:
+      - shell: sh -e {0}
+        run: ./gate.sh | tee out.txt
+Y
+expect_eq    "workflow: a step shell: that drops pipefail beats the default → red" "1" "$rc"
+wf_check wf-pipe-spelled <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash -eo pipefail {0}
+        run: ./gate.sh | tee out.txt
+Y
+expect_eq    "workflow: a shell: that spells pipefail out is green" "0" "$rc"
+wf_check wf-python <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: python
+        run: |
+          a | b or True
+Y
+expect_eq    "workflow: a shell: python step is not shell code → skipped" "0" "$rc"
+wf_check wf-swallow <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: kubectl get pods || true
+Y
+expect_eq    "workflow: a swallowed status in a run: is red" "1" "$rc"
+expect_match "workflow: …as swallow, on the YAML line" 'wf-swallow\.yml:5: swallow:' "$out"
+wf_check wf-exitok <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          kubectl get pods || true   # exit-ok: a diagnostic printed after the verdict
+Y
+expect_eq    "workflow: an exit-ok comment inside the run: block makes it green" "0" "$rc"
+wf_check wf-procsub <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          while read -r l; do echo "$l"; done < <(gh api x)
+Y
+expect_match "workflow: done < <(cmd) in a run: is red (procsub)" 'wf-procsub\.yml:6: procsub:' "$out"
+wf_check wf-expr <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          echo "${{ github.sha }}" "${{ matrix.a
+            }}" | cat
+          kubectl get x || true
+Y
+expect_match "workflow: a multi-line \${{ }} keeps the line count: the finding is on its own line" 'wf-expr\.yml:8: swallow:' "$out"
+wf_check wf-fnctx <<'Y'
+jobs:
+  j:
+    steps:
+      - shell: bash
+        run: |
+          f() { x=$(cmd); echo "$x"; }
+          f || echo failed
+Y
+expect_match "workflow: fnctx applies inside a run: too" 'wf-fnctx\.yml:6: fnctx:' "$out"
+mkdir -p "$sw/act"
+cat > "$sw/act/action.yml" <<'Y'
+name: a
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        grep a f | cut -d, -f1 || true
+Y
+sw_run "$sw/act/action.yml"
+expect_match "composite action: runs.steps[*].run is scanned (swallow, on the YAML line)" 'action\.yml:7: swallow:' "$out"
+cat > "$sw/wf-bad.yml" <<'Y'
+jobs:
+  j:
+    steps:
+      - run: [unterminated
+Y
+sw_run "$sw/wf-bad.yml"
+expect_eq    "workflow: a YAML that does not parse is exit 2, never clean" "2" "$rc"
+cat > "$sw/wf-clean.yml" <<'Y'
+jobs:
+  j:
+    steps:
+      - run: ls
+Y
+mkdir -p "$tmp/nopython"; printf '#!/bin/sh\nexit 42\n' > "$tmp/nopython/python3"; chmod +x "$tmp/nopython/python3"
+rc=0; out=$(PATH="$tmp/nopython:$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/wf-clean.yml" 2>&1) || rc=$?
+expect_eq    "workflow: the extractor dying (python3 exit 42) is exit 2, never clean" "2" "$rc"
+expect_match "workflow: …and it says which command" 'extract-run-blocks\.py failed \(exit 42\)' "$out"
+
+# the known procsub sites, each with the external command printing (all of its output, or only the first line) and then exiting 42
+for keep in all 1; do
+  w=$(inject_fail "$tmp/inj-neg-$keep" sed 42 "$keep")
+  rc=0; out=$(PATH="$w:$PATH" "$src/deployments/helm/check-negative.sh" x-monorepo 2>&1) || rc=$?
+  expect_eq    "check-negative: sed prints [$keep] then exits 42 → the check fails" "1" "$rc"
+  expect_match "check-negative: …and names the read" "reading the '# expect:' lines exited 42" "$out"
+  w=$(inject_fail "$tmp/inj-res-$keep" grep 42 "$keep")
+  rc=0; out=$(PATH="$w:$PATH" "$src/scripts/actions-resolve.sh" 2>&1) || rc=$?
+  expect_eq    "actions-resolve: grep prints [$keep] then exits 42 → exit 2" "2" "$rc"
+  expect_match "actions-resolve: …and names the listing" 'listing the uses: lines exited 42' "$out"
+done
+# cosign-smoke.sh: python3 reading .goreleaser.yaml prints [all / the first line] and exits 42 (no git needed: the script only needs its own root)
+if python3 -c 'import yaml' 2>/dev/null; then
+  cs="$tmp/cs-inj"; mkdir -p "$cs/scripts"; cp "$src/scripts/cosign-smoke.sh" "$cs/scripts/"; cp "$src/.goreleaser.yaml" "$cs/"
+  for keep in all 1; do
+    w=$(inject_fail "$tmp/inj-cs-$keep" python3 42 "$keep")
+    rc=0; out=$(cd "$cs" && PATH="$w:$fakebin:$PATH" FAKE_COUNT="$tmp/count-cs$keep" FAKE_SKIP_SIGN_N=0 scripts/cosign-smoke.sh 2>&1) || rc=$?
+    expect_eq    "cosign-smoke: python3 prints [$keep] then exits 42 → the smoke fails" "1" "$rc"
+    expect_match "cosign-smoke: …and names the signs entry read" 'reading the signs entry of \.goreleaser\.yaml exited 42' "$out"
+  done
+fi
+# payment-upgrade.sh: the two lines that read secrets.postgresUrl / redisUrl out of the values file, cut out of the REAL script
+# (the rest needs a cluster); python3 prints [all / the first line] and exits 42, `fail` is a stub that says so and exits 1
+if python3 -c 'import yaml' 2>/dev/null; then
+  printf 'secrets:\n  postgresUrl: postgres://u@postgres:5432/db\n  redisUrl: redis://redis:6379/0\n' > "$tmp/urls-values.yaml"
+  grep -E '^(urls=|read -r pgurl redisurl)' "$src/deployments/helm/kind/payment-upgrade.sh" > "$tmp/urls-lines.sh"
+  expect_eq "payment-upgrade: both lines were found in the real script" "2" "$(wc -l < "$tmp/urls-lines.sh" | tr -d ' ')"
+  urls_run() { # <PATH prefix or empty>
+    rc=0; out=$(PATH="${1:+$1:}$PATH" bash -c 'fail() { echo "refused: $*"; exit 1; }; values=$1; . "$2"; echo "pg=$pgurl redis=$redisurl"' _ "$tmp/urls-values.yaml" "$tmp/urls-lines.sh" 2>&1) || rc=$?
+  }
+  urls_run ""
+  expect_eq "payment-upgrade: the URLs are read from the values file" "0 pg=postgres://u@postgres:5432/db redis=redis://redis:6379/0" "$rc $out"
+  for keep in all 1; do
+    urls_run "$(inject_fail "$tmp/inj-urls-$keep" python3 42 "$keep")"
+    expect_eq    "payment-upgrade: python3 prints [$keep] then exits 42 → refused, not a half-read URL pair" "1" "$rc"
+    expect_match "payment-upgrade: …and it says refused" '^refused: ' "$out"
+  done
+fi
+# next-version.sh: a fake git (describe → v0.1.0, log → two commits, NUL separated); `log` is the one that dies
+fakegit="$tmp/nv-git"; mkdir -p "$fakegit"
+cat > "$fakegit/git" <<'FAKE'
+#!/bin/sh
+case $1 in
+  describe) echo v0.1.0 ;;
+  log) printf 'fix: a\n\0feat: b\n\0' ;;
+  *) exit 2 ;;
+esac
+FAKE
+chmod +x "$fakegit/git"
+rc=0; out=$(PATH="$fakegit:$PATH" "$src/scripts/next-version.sh" 2>&1) || rc=$?
+expect_match "next-version: the fake git, nothing failing, gives a version" '^v0\.2\.0' "$out"
+for keep in all 1; do
+  w=$(PATH="$fakegit:$PATH" inject_fail "$tmp/inj-nv-$keep" git 42 "$keep" 'log*')
+  rc=0; out=$(PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" 2>&1) || rc=$?
+  expect_eq    "next-version: git log prints [$keep] then exits 42 → exit 2 (not a version from half the log)" "2" "$rc"
+  expect_match "next-version: …and names git log" 'git log v0\.1\.0\.\.HEAD exited 42' "$out"
+  w=$(inject_fail "$tmp/inj-nvsed-$keep" sed 42 "$keep")
+  rc=0; out=$(PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" 2>&1) || rc=$?
+  expect_eq    "next-version: consider()'s sed prints [$keep] then exits 42 → exit 2" "2" "$rc"
+  expect_match "next-version: …and names the sed" 'sed over a commit subject failed \(exit 42\)' "$out"
+done
 
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -180,15 +180,16 @@ cat > "$tmp/fnctx.awk" <<'AWK'
 # One file at a time. Finds functions defined in the file that run with errexit off (called as `f || x`, `f && x`, `if f`, `while f`,
 # `until f`, `! f`, directly or from such a function) and prints a finding for every `x=$(cmd)` in them that has no `||` on the line.
 function strip(s,   t) { t = s; gsub(/\047[^\047]*\047/, "", t); gsub(/"[^"]*"/, "", t); sub(/[ \t]#.*/, "", t); return t }
-function callpos(t, name,   re) {   # name sits in command position and an && / || follows it, or a condition keyword precedes it
+function callpos(t, name,   re, cmd) {   # name sits in command position and an && / || follows it, or a condition keyword precedes it
+  cmd = "(^|[;&|{(!]|(then|do|else|elif|if|while|until)[ \t])[ \t]*(![ \t]*)?"
   re = "(^|[;&|{(!]|[ \t])(if|elif|while|until|!)[ \t]+(![ \t]*)?" name "([ \t;)]|$)"
   if (t ~ re) return 1
-  re = "(^|[;&|{(]|[ \t])(then|do|else)?[ \t]*(![ \t]*)?" name "([ \t][^;]*)?[ \t]*(\\|\\||&&)"
+  re = cmd name "([ \t][^;]*)?[ \t]*(\\|\\||&&)"
   if (t ~ re) return 1
   return 0
 }
 function anycall(t, name,   re) {
-  re = "(^|[;&|{(!]|[ \t])(then|do|else)?[ \t]*" name "([ \t;)|&]|$)"
+  re = "(^|[;&|{(!]|(then|do|else|elif|if|while|until)[ \t])[ \t]*(![ \t]*)?" name "([ \t;)|&]|$)"
   return t ~ re
 }
 {
@@ -236,7 +237,7 @@ END {
       if (L[i] ~ /#[ \t]*exit-ok:[ \t]*[^ \t].../) continue
       code = L[i]; sub(/^[ \t]+/, "", code)
       ok = 0                                                                 # an explicit status check: `|| …` after the substitution's `)`, or `$?` read next
-      for (k = i; k <= i + 3 && k <= NR && !ok; k++) {
+      for (k = i; k <= i + 3 && k <= to[f] && !ok; k++) {
         if (L[k] ~ /\)[ \t]*\|\|/ || (k > i && L[k] ~ /^[ \t]*\|\|/)) ok = 1
         if (k > i && L[k] ~ /\$\?/) ok = 1
         if (k == i && L[k] ~ /\)[ \t]*;[ \t]*[A-Za-z_]*=\$\?/) ok = 1
@@ -274,7 +275,7 @@ while IFS= read -r row; do
 done < "$tmp/sc.out"
 
 # findings in an extracted script are reported against the YAML file and line
-awk -F'\t' 'NR == FNR { first[$1] = $3; src[$1] = $2; next }
+awk -F'\t' -v map="$tmp/map.tsv" 'FILENAME == map { first[$1] = $3; src[$1] = $2; next }
   { i = index($0, ":"); f = substr($0, 1, i - 1)
     if (f in src) { rest = substr($0, i + 1); j = index(rest, ":"); k = substr(rest, 1, j - 1)
       print src[f] ":" (first[f] + k - 2) ":" substr(rest, j + 1) } else print }' "$tmp/map.tsv" "$tmp/out" > "$tmp/out.mapped" || die "mapping findings failed"

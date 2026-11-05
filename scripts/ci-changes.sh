@@ -96,10 +96,10 @@ auth_src=false; { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'pk
 keda_src=false; has_prod 'apps/worker/*' 'pkgs/platform/*' && keda_src=true
 # The oidc-dex Playwright project signs in through the compose Dex (#274): its config or the service is a console-e2e input.
 dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.yaml' && dex=true
-# Inputs of scripts/test.sh outside scripts/ (#287, #298, #462): every *.sh is read by check-exit-swallow.sh, coredns-dex.sh is run by its coredns: cases,
+# Inputs of scripts/test.sh outside scripts/ (#287, #298, #462, #465): every *.sh and every workflow / composite action file (its run: scripts) is read by check-exit-swallow.sh, coredns-dex.sh is run by its coredns: cases,
 # k6-bench.yml is grepped by its wiring assertions, .goreleaser.yaml is copied into the cosign-smoke
 # fixture, tests/dex-prebind/ is the rpc stub of the dex-prebind: cases, docs/ci.md is checked for every job name (#328), release.yml and release-drafter.yml are read by the release image list cases (#367). Add a path here (and a sole-path case in test.sh) whenever test.sh starts reading a new one.
-scripts_src=false; has '*.sh' '.github/workflows/k6-bench.yml' '.goreleaser.yaml' 'tests/dex-prebind/*' 'docs/ci.md' '.github/workflows/release.yml' '.github/release-drafter.yml' && scripts_src=true
+scripts_src=false; has '*.sh' 'scripts/extract-run-blocks.py' '.github/workflows/*' '.github/actions/*/action.yml' '.github/workflows/k6-bench.yml' '.goreleaser.yaml' 'tests/dex-prebind/*' 'docs/ci.md' '.github/workflows/release.yml' '.github/release-drafter.yml' && scripts_src=true
 
 any() { for v in "$@"; do [ "$v" = true ] && return 0; done; return 1; }
 out() { if any "${@:2}"; then echo "run_$1=true"; else echo "run_$1=false"; fi; }
