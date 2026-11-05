@@ -26,7 +26,7 @@ fail=0 pass=0
 le1() { local rc=0; "$@" || rc=$?; [ "$rc" -le 1 ] || return "$rc"; return 0; }
 # count_file <file>: the number in a counter file; 0 when the fake never created it (no file = never called); a file that cannot be read fails
 count_file() { [ -f "$1" ] || { echo 0; return 0; }; cat "$1"; }
-in_dir() { local d=$1; shift; ( cd "$d" && "$@" ); }   # run a command in another directory without moving this shell (capture runs its command in this shell)
+in_dir() { local d=$1; shift; ( cd "$d" && "$@" ); }   # run a command in another directory without moving this shell (capture -2 runs its command in this shell)
 . "$src/scripts/fault-inject.sh"   # inject_fail: a PATH wrapper that runs the real tool, then dies (#462)
 
 # fixture <name>: a fresh repo at $repo with scripts/ committed on main and tag v0.1.0.
@@ -648,7 +648,7 @@ chmod +x "$tmp/gmd-bin/go"
 # gmd_run <fails> [attempts]: sets $rc, $out and $calls
 gmd_run() {
   rm -f "$tmp/gmd-count"
-  rc=0; capture out rc env PATH="$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=$1 GO_MOD_DOWNLOAD_ATTEMPTS=${2:-3} GO_MOD_DOWNLOAD_SLEEP=0 "$gmd" || exit 1
+  rc=0; capture -2 out rc env PATH="$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=$1 GO_MOD_DOWNLOAD_ATTEMPTS=${2:-3} GO_MOD_DOWNLOAD_SLEEP=0 "$gmd" || exit 1
   calls=$(count_file "$tmp/gmd-count") || exit 1   # no counter file yet = no calls
 }
 gmd_run 0; expect_eq "go-mod-download: a clean download runs once"            "0 1" "$rc $calls"
@@ -890,7 +890,7 @@ chmod +x "$fakebin/cosign"
 smoke() { # smoke <skip-sign-n> -> prints "<exit> <FAIL line, if any>"
   fixture "smoke$1"; cp "$src/.goreleaser.yaml" "$repo/"
   local out rc=0
-  capture out rc in_dir "$repo" env PATH="$fakebin:$PATH" FAKE_COUNT="$tmp/count$1" FAKE_SKIP_SIGN_N=$1 scripts/cosign-smoke.sh || exit 1
+  capture -2 out rc in_dir "$repo" env PATH="$fakebin:$PATH" FAKE_COUNT="$tmp/count$1" FAKE_SKIP_SIGN_N=$1 scripts/cosign-smoke.sh || exit 1
   first_fail=$(le1 grep -m1 '^FAIL' <<<"$out") || return 1   # 1 = no FAIL line (empty), 2+ = grep broke
   echo "$rc $first_fail"
 }
@@ -951,10 +951,10 @@ sign_blob() { # SB_ART=<file name> overrides the artifact name; SB_BUNDLE_ARGS (
   set +e
   sb_rc=0
   if [ -n "${SB_REL:-}" ]; then # a bare relative artifact name, as cosign prints it
-    capture sb_out sb_rc in_dir "$d" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token FAKE_ART="$art" \
+    capture -2 sb_out sb_rc in_dir "$d" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token FAKE_ART="$art" \
       COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "${bundle_args[@]}" ${SB_PRE:-} "$art" --yes || exit 1
   else
-    capture sb_out sb_rc in_dir "$src" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
+    capture -2 sb_out sb_rc in_dir "$src" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
       COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "${bundle_args[@]}" "$d/$art" --yes || exit 1
   fi
   set -e
@@ -1064,7 +1064,7 @@ sign_argv_refused() { # sign_argv_refused <name> <args...>: runs the wrapper in 
   local n=$1 d="$tmp/sb-$1"; shift; mkdir -p "$d"; echo artifact > "$d/artifact"; echo keep > "$d/decoy"
   : > "$d/args"; rm -f "$d/count"
   set +e; sb_rc=0
-  capture sb_out sb_rc in_dir "$d" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="err" \
+  capture -2 sb_out sb_rc in_dir "$d" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="err" \
     COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" "$@" || exit 1
   set -e
   sb_tries=$(count_file "$d/count") || exit 1   # no counter file = the fake was never called
@@ -1136,7 +1136,7 @@ canary_cfg() { # canary_cfg <name> <rekorTlogUrls json> -> path of a signing con
 }
 canary() { # canary <config path> -> "<exit> <output>"
   local out rc=0
-  capture out rc env REKOR_CANARY_SIGNING_CONFIG=$1 "$src/scripts/rekor-v2-canary.sh" || exit 1
+  capture -2 out rc env REKOR_CANARY_SIGNING_CONFIG=$1 "$src/scripts/rekor-v2-canary.sh" || exit 1
   echo "$rc $out"
 }
 v1='{"url":"https://rekor.sigstore.dev","majorApiVersion":1,"validFor":{"start":"2021-01-12T11:53:27.000Z"},"operator":"sigstore.dev"}'
@@ -1189,7 +1189,7 @@ FAKE
   chmod +x "$canary_fake/cosign"
   canary_via() { # canary_via <env assignment> -> "<exit> <output>"
     local out rc=0
-    capture out rc env -u REKOR_CANARY_SIGNING_CONFIG PATH="$canary_fake:$PATH" REKOR_CANARY_RETRY_DELAY=0 "$@" "$src/scripts/rekor-v2-canary.sh" || exit 1
+    capture -2 out rc env -u REKOR_CANARY_SIGNING_CONFIG PATH="$canary_fake:$PATH" REKOR_CANARY_RETRY_DELAY=0 "$@" "$src/scripts/rekor-v2-canary.sh" || exit 1
     echo "$rc $out"
   }
   expect_match "canary via cosign: v1 default passes"   '^0 '        "$(canary_via FAKE_CONFIG="$(canary_cfg viav1 "[$v1]")")"
@@ -1280,7 +1280,7 @@ STUB
 ready() {
   local name=$1; shift
   set +e; rc=0
-  capture out rc env GH_STUB_DIR="$tmp/stub-$name" PATH="$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 "$@" || exit 1
+  capture -2 out rc env GH_STUB_DIR="$tmp/stub-$name" PATH="$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 "$@" || exit 1
   set -e
 }
 stub_gh fresh;  ready fresh
@@ -1375,7 +1375,7 @@ if command -v go >/dev/null 2>&1; then
   printf 'package fx\n\nimport "testing"\n\nfunc TestRetry(t *testing.T) { _ = NewCreateOrder(3, 4) }\n' > "$repo/retry_test.go"
   commit "test: retry"
   git -C "$repo" checkout -q main
-  tree_check() { capture tc_out tc_rc in_repo scripts/merge-tree-check.sh "$@" || exit 1; }
+  tree_check() { capture -2 tc_out tc_rc in_repo scripts/merge-tree-check.sh "$@" || exit 1; }
   tree_check main ownership; expect_eq "ownership alone builds"   0 "$tc_rc"
   tree_check main retry;     expect_eq "retry alone builds"       0 "$tc_rc"
   if git -C "$repo" merge-tree --write-tree ownership retry >/dev/null 2>&1; then ok; else bad "fixture: ownership + retry must merge without a text conflict"; fi
@@ -1493,7 +1493,7 @@ pb_up() {
 # pb_run [VAR=value...]: runs the script against the current stub; sets out (stdout+stderr) and rc.
 pb_run() {
   rc=0
-  capture out rc env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" || exit 1
+  capture -2 out rc env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" || exit 1
 }
 pb_state() { curl -fsS "$pb_url/_state"; }
 pb_calls() { local c=0; grep -c "^$1 " "$pb_dir/log" > "$pb_dir/n" || c=$?; [ "$c" -le 1 ] || return 1; read -r pb_n < "$pb_dir/n"; }   # sets $pb_n: an assignment aborts on a grep error, "$(pb_calls …)" in an argument would not
@@ -1730,7 +1730,7 @@ gone() { ! kill -0 "$(cat "$1")" 2>/dev/null; }
 # guard_run <mode>: runs the guard over the fake; sets out, rc and gpid (file) for the leftover.
 guard_run() {
   gpid="$tmp/guard-pid-$1"; rm -f "$gpid"; rc=0
-  capture out rc env PIDF="$gpid" "$guard" "$gfake" "$1" || exit 1
+  capture -2 out rc env PIDF="$gpid" "$guard" "$gfake" "$1" || exit 1
 }
 # a bystander outside the suite's group must survive every case below
 sleep 300 & bystander=$!
@@ -1827,7 +1827,7 @@ gwrun() {
   local d="$tmp/modules-$1"
   mkdir -p "$d"
   printf '%s\n' "$2" > "$d/go.work"
-  rc=0; capture out rc "$cm" "$d/go.work" || exit 1
+  rc=0; capture -2 out rc "$cm" "$d/go.work" || exit 1
 }
 gw_block='go 1.27
 
@@ -1955,7 +1955,7 @@ modes_fixture() {
   git -C "$repo" add -A
   git -C "$repo" commit -q -m base
 }
-modes_run() { rc=0; capture out rc in_dir "$repo" scripts/check-script-modes.sh || exit 1; }
+modes_run() { rc=0; capture -2 out rc in_dir "$repo" scripts/check-script-modes.sh || exit 1; }
 modes_fixture base; modes_run
 expect_eq "script modes: fixture baseline is green" "0" "$rc"
 # The gate says what `git diff` would after the chmod: apply the chmod and diff, for the baseline and the mutant.
@@ -1995,7 +1995,7 @@ expect_eq "script modes: fault-injection control — same fixture, real tools, i
 sw="$tmp/swallow"; mkdir -p "$sw"
 # sw_file <name> <body…>: $sw/<name>.sh with pipefail set (so only the shape under test can be flagged)
 sw_file() { local n=$1; shift; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$*" > "$sw/$n.sh"; }
-sw_run() { rc=0; capture out rc "$src/scripts/check-exit-swallow.sh" "$@" || exit 1; }
+sw_run() { rc=0; capture -2 out rc "$src/scripts/check-exit-swallow.sh" "$@" || exit 1; }
 # sw_red <name> <rule> <body…>: the body is red, the output names the rule, and an exit-ok comment makes it green
 sw_red() {
   local n=$1 rule=$2; shift 2
@@ -2204,7 +2204,7 @@ ready_dying() {   # ready_dying <stub> <keep> <glob>: gh answers per the stub, b
   local name=$1 keep=$2 glob=$3 w
   w=$(PATH="$tmp/stub-$name/bin:$PATH" inject_fail "$tmp/inj-ready-$name-$RANDOM" gh 42 "$keep" "$glob") || return 1
   set +e; rc=0
-  capture out rc env GH_STUB_DIR="$tmp/stub-$name" PATH="$w:$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 || exit 1
+  capture -2 out rc env GH_STUB_DIR="$tmp/stub-$name" PATH="$w:$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 || exit 1
   set -e
 }
 stub_gh dying
@@ -2268,7 +2268,7 @@ cg_fixture() {
   printf 'package order\n\nfunc Add(a, b int) int { return a + b }\n' > "$repo/pkgs/dom/domain/order/o.go"
   printf 'package order\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal("add")\n\t}\n}\n' > "$repo/pkgs/dom/domain/order/o_test.go"
 }
-cg_run() { rc=0; capture out rc in_dir "$repo" env GOTOOLCHAIN=local "$@" scripts/cover-gate.sh || exit 1; }
+cg_run() { rc=0; capture -2 out rc in_dir "$repo" env GOTOOLCHAIN=local "$@" scripts/cover-gate.sh || exit 1; }
 cg_fixture ok; cg_run env
 expect_eq    "cover-gate: fixture, a fully covered domain package, is green" "0" "$rc"
 expect_match "cover-gate: and it checked the package" 'ok +example.com/dom/domain/order 100%' "$out"
@@ -2410,7 +2410,7 @@ restore_case() { # <script> <MAIN> <SCALE> <HELM> <DELETE> [pf-var]
     echo 'trap on_exit EXIT'
     echo 'exit "${MAIN:-0}"'
   } >"$driver"
-  rc=0; capture out rc env MAIN=$2 STUB_SCALE=$3 STUB_HELM=$4 STUB_DELETE=$5 bash "$driver" || exit 1
+  rc=0; capture -2 out rc env MAIN=$2 STUB_SCALE=$3 STUB_HELM=$4 STUB_DELETE=$5 bash "$driver" || exit 1
 }
 for sh_ in payment-flow payment outage negative; do
   restore_case "$sh_" 0 0 0 0;  expect_eq "$sh_: nothing fails → exit 0" "0" "$rc"
@@ -2566,7 +2566,7 @@ f || echo failed
 F
   sw_run "$sw/bp-$1.sh"
   expect_eq "fnctx: [$1] is red" "1" "$rc"
-  real_rc=0; capture real real_rc bash "$sw/bp-$1.sh" || exit 1   # exit 0: f swallowed cmd's 42 and the script went on
+  real_rc=0; capture -2 real real_rc bash "$sw/bp-$1.sh" || exit 1   # exit 0: f swallowed cmd's 42 and the script went on
   expect_match "fnctx: [$1] — the real shell really does use the failing output" 'bad' "$real"
 }
 bypass_case and-echo   $'  x=$(cmd) && echo success\n  printf \'%s\\n\' "$x"'
@@ -2588,7 +2588,7 @@ f || echo failed
 F
   sw_run "$sw/gd-$1.sh"
   expect_eq "fnctx: [$1] is green" "0" "$rc"
-  real_rc=0; capture real real_rc bash "$sw/gd-$1.sh" || exit 1
+  real_rc=0; capture -2 real real_rc bash "$sw/gd-$1.sh" || exit 1
   case "$real" in *bad*) bad "fnctx: [$1] — the real shell used the failing output [$real]" ;; *) ok ;; esac
 }
 good_case or-return    $'  x=$(cmd) || return 1\n  printf \'%s\\n\' "$x"'
@@ -2669,7 +2669,7 @@ fn_text() { # <file> <name>: the function, from its first line to its closing br
 helper_cell() { # <label> <file> <name> <want rc> <want output> <command…>: define the real function, run the command, judge rc and output
   local label=$1 file=$2 name=$3 wrc=$4 wout=$5; shift 5
   { echo ". '$src/scripts/best-effort.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/helper.sh"
-  hrc=0; capture hout hrc bash "$tmp/helper.sh" || exit 1
+  hrc=0; capture -2 hout hrc bash "$tmp/helper.sh" || exit 1
   expect_eq "helper $name ($label): exit" "$wrc" "$hrc"
   expect_eq "helper $name ($label): output" "$wout" "$hout"
 }
@@ -2687,81 +2687,123 @@ helper_cell "missing" "$src/scripts/test.sh" count_file 0 0 'count_file '"$tmp"'
 helper_cell "present" "$src/scripts/test.sh" count_file 0 3 'count_file '"$tmp"'/cf.three'
 if [ "$(id -u)" != 0 ]; then helper_cell "unreadable" "$src/scripts/test.sh" count_file 1 "" 'count_file '"$tmp"'/cf.noread 2>/dev/null'; fi
 chmod 600 "$tmp/cf.noread"
-# children_of (deployments/helm/kind/diag.sh and payment-flow.sh): pgrep 0 = children printed, 1 = none (silent), 2+ = said so, none, carries on (exit 0)
-mkdir -p "$tmp/pg"
-for rcw in 0 1 2; do
-  printf '#!/usr/bin/env bash\nif [ "$1" = -P ]; then [ %s = 0 ] && printf "11\\n12\\n"; exit %s; fi\n' "$rcw" "$rcw" > "$tmp/pg/pgrep$rcw"; chmod +x "$tmp/pg/pgrep$rcw"
-done
-for cf in deployments/helm/kind/diag.sh deployments/helm/kind/payment-flow.sh; do
-  helper_cell "pgrep 0 ($cf)" "$src/$cf" children_of 0 $'11\n12' 'pgrep() { '"$tmp"'/pg/pgrep0 "$@"; }; children_of 5'
-  helper_cell "pgrep 1 ($cf)" "$src/$cf" children_of 0 "" 'pgrep() { '"$tmp"'/pg/pgrep1 "$@"; }; children_of 5 2>&1'
-  helper_cell "pgrep 2 ($cf)" "$src/$cf" children_of 0 "value_or_empty: command failed (exit 2): pgrep -P 5" 'pgrep() { '"$tmp"'/pg/pgrep2 "$@"; }; children_of 5 2>&1'
-done
-
-# ready_count (deployments/helm/kind/diag-test.sh): grep -c over the container log. 2 lines = 2; none = 0 (grep's 1); a log read that dies = said so, 0, exit 0
+# value_of (scripts/best-effort.sh): stdout + 0 when the command succeeded (or exited <= -ok N); when it failed: NOTHING on stdout (not the half it wrote), the
+# reason on stderr, and the command's OWN exit status. Never "fails to 0 with an empty value".
+vo_cell() { # <label> <want rc> <want stdout> <want stderr regex> <command…>
+  local label=$1 wrc=$2 wout=$3 wre=$4; shift 4
+  { echo ". '$src/scripts/best-effort.sh'"; echo "vo_ok() { printf 'v1\nv2\n'; }; vo_part() { printf 'half'; return 2; }; vo_one() { printf '0\n'; return 1; }; vo_seven() { return 7; }"; printf '%s\n' "$@"; } > "$tmp/vo.sh"
+  vrc=0; vout=; verr=
+  bash "$tmp/vo.sh" > "$tmp/vo.out" 2> "$tmp/vo.err" || vrc=$?
+  vout=$(cat "$tmp/vo.out") || exit 1; verr=$(cat "$tmp/vo.err") || exit 1
+  expect_eq    "value_of ($label): exit" "$wrc" "$vrc"
+  expect_eq    "value_of ($label): stdout" "$wout" "$vout"
+  if [ "$wre" = EMPTY ]; then expect_eq "value_of ($label): stderr" "" "$verr"; else expect_match "value_of ($label): stderr" "$wre" "$verr"; fi
+}
+vo_cell "rc=0 keeps the output"                  0 $'v1\nv2' EMPTY                                             'value_of vo_ok'
+vo_cell "rc=1 without -ok is a failure: no stdout" 1 ""      'value_of: command failed \(exit 1\): vo_one'      'value_of vo_one'
+vo_cell "rc=1 with -ok 1 keeps the output"       0 0         EMPTY                                             'value_of -ok 1 vo_one'
+vo_cell "output, THEN exit 2 (-ok 1): nothing, rc 2" 2 ""    'value_of: command failed \(exit 2\): vo_part'    'value_of -ok 1 vo_part'
+vo_cell "exit 7 keeps its own status"            7 ""        'exit 7'                                          'value_of vo_seven'
+vo_cell "no command"                             1 ""        EMPTY                                             'value_of'
+# the callers: the READ is one function that fails when the read fails; the loop retries, running out of tries fails the wait. cell <label> <file> <function> <want rc> <want stdout> <command>
+call_cell() { # <label> <file> <function> <want rc> <want out (stdout+stderr)> <command…>
+  local label=$1 file=$2 name=$3 wrc=$4 wout=$5; shift 5
+  { echo ". '$src/scripts/best-effort.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" init_done; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/callc.sh"
+  crc=0; capture -2 cout crc bash "$tmp/callc.sh" || exit 1
+  expect_eq "$name ($label): exit" "$wrc" "$crc"
+  expect_eq "$name ($label): output" "$wout" "$cout"
+}
 printf '#!/usr/bin/env bash\nprintf "database system is ready to accept connections\\ndatabase system is ready to accept connections\\n"\n' > "$tmp/rt-two"
 printf '#!/usr/bin/env bash\nprintf "starting\\n"\n' > "$tmp/rt-none"
-printf '#!/usr/bin/env bash\nprintf "database system is ready to accept connections\\n"; exit 7\n' > "$tmp/rt-dies"
+printf '#!/usr/bin/env bash\nprintf "database system is ready to accept connections\\ndatabase system is ready to accept connections\\n"; exit 7\n' > "$tmp/rt-dies"
 chmod +x "$tmp/rt-two" "$tmp/rt-none" "$tmp/rt-dies"
-helper_cell "two lines"  "$src/deployments/helm/kind/diag-test.sh" ready_count 0 2 'set -o pipefail; ready_count '"$tmp"'/rt-two pg'
-helper_cell "no line (grep 1)" "$src/deployments/helm/kind/diag-test.sh" ready_count 0 0 'set -o pipefail; ready_count '"$tmp"'/rt-none pg'
-helper_cell "the read dies after one line (7)" "$src/deployments/helm/kind/diag-test.sh" ready_count 0 $'value_or_empty: command failed (exit 7): ready_lines '"$tmp"$'/rt-dies pg\n0' 'set -o pipefail; ready_count '"$tmp"'/rt-dies pg 2>&1'
-# init_exit_code (deployments/helm/kind/outage.sh): the init container's exit code; "none" when it has not terminated or kubectl broke
+call_cell "two ready lines"                    "$src/deployments/helm/kind/diag-test.sh" ready_twice 0 "" 'set -o pipefail; ready_twice '"$tmp"'/rt-two pg'
+call_cell "no ready line (grep 1): not yet"    "$src/deployments/helm/kind/diag-test.sh" ready_twice 1 "" 'set -o pipefail; ready_twice '"$tmp"'/rt-none pg'
+call_cell "two lines, THEN the read dies (7): a failure, not a pass" "$src/deployments/helm/kind/diag-test.sh" ready_twice 7 "value_of: command failed (exit 7): ready_lines $tmp/rt-dies pg" 'set -o pipefail; ready_twice '"$tmp"'/rt-dies pg'
 printf '{"status":{"initContainerStatuses":[{"state":{"terminated":{"exitCode":0}}}]}}\n' > "$tmp/pod-done.json"
+printf '{"status":{"initContainerStatuses":[{"state":{"terminated":{"exitCode":3}}}]}}\n' > "$tmp/pod-bad.json"
 printf '{"status":{"initContainerStatuses":[{"state":{"running":{}}}]}}\n' > "$tmp/pod-run.json"
-helper_cell "terminated 0" "$src/deployments/helm/kind/outage.sh" init_exit_code 0 0 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-done.json; }; init_exit_code p'
-helper_cell "still running" "$src/deployments/helm/kind/outage.sh" init_exit_code 0 none 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-run.json; }; init_exit_code p'
-helper_cell "kubectl prints JSON then dies (9)" "$src/deployments/helm/kind/outage.sh" init_exit_code 0 $'value_or_empty: command failed (exit 9): pod_init_exit p\nnone' 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-done.json; return 9; }; init_exit_code p 2>&1'
-# job_field (deployments/helm/kind/payment-flow.sh): the field; a failed read says so, prints nothing, exit 0 (the poll tries again)
-helper_cell "field read" "$src/deployments/helm/kind/payment-flow.sh" job_field 0 1 'ns=n; kubectl() { printf 1; }; job_field j x succeeded'
-helper_cell "read dies (5) after printing" "$src/deployments/helm/kind/payment-flow.sh" job_field 0 "value_or_empty: command failed (exit 5): kubectl -n n get job j -o jsonpath=x" 'ns=n; kubectl() { printf 1; return 5; }; job_field j x succeeded 2>&1'
-# container_field (web/apps/console/e2e/image.sh): the State field; a failed inspect says so, prints nothing, exit 0
-helper_cell "field read" "$src/web/apps/console/e2e/image.sh" container_field 0 exited 'tool=ctl; ctl() { printf exited; }; container_field Status c'
-helper_cell "inspect dies (125)" "$src/web/apps/console/e2e/image.sh" container_field 0 "value_or_empty: command failed (exit 125): ctl inspect -f {{.State.Status}} c" 'tool=ctl; ctl() { return 125; }; container_field Status c 2>&1'
-# value_or_empty (scripts/best-effort.sh): the value when the command succeeds (or exits <= -ok N), NOTHING of it when it fails after printing a part
-voe_cell() { # <label> <want rc> <want out (stdout+stderr)> <command…>
-  local label=$1 wrc=$2 wout=$3; shift 3
-  { echo ". '$src/scripts/best-effort.sh'"; echo "voe_ok() { printf 'v1\nv2\n'; }; voe_part() { printf 'half'; return 2; }; voe_one() { printf '0\n'; return 1; }"; printf '%s\n' "$@"; } > "$tmp/voe.sh"
-  vrc=0; capture vout vrc bash "$tmp/voe.sh" || exit 1
-  expect_eq "value_or_empty ($label): exit" "$wrc" "$vrc"
-  expect_eq "value_or_empty ($label): output" "$wout" "$vout"
+call_cell "terminated 0"                       "$src/deployments/helm/kind/outage.sh" init_done 0 "" 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-done.json; }; init_done p'
+call_cell "terminated 3: not done"             "$src/deployments/helm/kind/outage.sh" init_done 1 "" 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-bad.json; }; init_done p'
+call_cell "still running: not done"            "$src/deployments/helm/kind/outage.sh" init_done 1 "" 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-run.json; }; init_done p'
+call_cell "kubectl prints the done JSON, THEN dies (9): a failure, not done" "$src/deployments/helm/kind/outage.sh" init_done 9 "value_of: command failed (exit 9): pod_init_exit p" 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-done.json; return 9; }; init_done p'
+# init_log() — the verdict-level caller: it must return non-zero (and print nothing) when kubectl keeps failing, and the log when the init container finished
+call_cell "init_log: the init container finished, the log is read" "$src/deployments/helm/kind/outage.sh" init_log 0 "waited" 'set -o pipefail; ns=n; sleep() { :; }; kubectl() { case $* in *logs*) printf waited;; *) cat '"$tmp"'/pod-done.json;; esac; }; init_log p'
+call_cell "init_log: kubectl dies on every read: the wait fails" "$src/deployments/helm/kind/outage.sh" init_log 1 "" 'set -o pipefail; ns=n; sleep() { :; }; kubectl() { cat '"$tmp"'/pod-done.json; return 9; }; init_log p 2>/dev/null'
+# payment-flow.sh job_state() and job(): a failed read is never "0 0"
+call_cell "job_state: read"                    "$src/deployments/helm/kind/payment-flow.sh" job_state 0 "0 1" 'ns=n; kubectl() { case $* in *failed*) ;; *) printf 1;; esac; }; job_state j'
+call_cell "job_state: the second read dies (5)" "$src/deployments/helm/kind/payment-flow.sh" job_state 5 "value_of: command failed (exit 5): kubectl -n n get job j -o jsonpath={.status.failed}" 'ns=n; kubectl() { case $* in *failed*) printf 0; return 5;; *) printf 1;; esac; }; job_state j'
+job_text() { fn_text "$src/deployments/helm/kind/payment-flow.sh" job_state; fn_text "$src/deployments/helm/kind/payment-flow.sh" job; }
+job_cell() { # <label> <want rc> <want out regex> <kubectl stub body>
+  local label=$1
+  { echo ". '$src/scripts/best-effort.sh'"; job_text; echo 'ns=n; release=r; sleep() { :; }; fail() { echo "FAIL $*"; exit 1; }'; echo "kubectl() { $4; }"; echo 'job nightly; echo "returned $?"'; } > "$tmp/jobc.sh"
+  jrc=0; capture -2 jout jrc bash "$tmp/jobc.sh" || exit 1
+  expect_eq    "job() ($label): exit" "$2" "$jrc"
+  expect_match "job() ($label): output" "$3" "$jout"
 }
-voe_cell "rc=0 keeps the output"                 0 $'v1\nv2'  'value_or_empty voe_ok'
-voe_cell "rc=1 without -ok: failed, nothing"     0 "value_or_empty: command failed (exit 1): voe_one" 'value_or_empty voe_one 2>&1'
-voe_cell "rc=1 with -ok 1 keeps the output"      0 0 'value_or_empty -ok 1 voe_one'
-voe_cell "partial output then exit 2: nothing"   0 "value_or_empty: command failed (exit 2): voe_part" 'value_or_empty -ok 1 voe_part 2>&1'
-voe_cell "no command"                            1 "" 'value_or_empty'
+job_cell "succeeded=1: returns"                0 'returned 0' 'case $* in *create*) ;; *failed*) ;; *succeeded*) printf 1;; esac'
+job_cell "failed=1: the run fails"             1 'FAIL nightly run failed' 'case $* in *create*) ;; *failed*) printf 1;; *succeeded*) ;; esac'
+job_cell "every read dies: the wait times out and FAILS (not a pass)" 1 'FAIL|returned [1-9]' 'case $* in *create*) ;; *) return 9;; esac'
+job_cell "succeeded=1 printed, THEN the read dies: not a pass"      1 'FAIL|returned [1-9]' 'case $* in *create*) ;; *) printf 1; return 9;; esac'
+# container_field + expect_refused (web/apps/console/e2e/image.sh) are covered at the verdict level below (img_cell)
 # classify() (web/apps/console/e2e/image-mutants.lib.sh): a failing stage is a harness error (return 2) WITH its status, never a half-parsed RED
 cls_cell() { # <label> <want rc> <want output regex> <stub lines…>: the real classify, with failed_specs / run_summary replaced by the stubs
   local label=$1 wrc=$2 wre=$3; shift 3
   { echo ". '$src/web/apps/console/e2e/image-mutants.lib.sh'"; printf '%s\n' "$@"; echo 'classify m log 1'; } > "$tmp/cls.sh"
-  crc2=0; capture cout crc2 bash "$tmp/cls.sh" || exit 1
+  crc2=0; capture -2 cout crc2 bash "$tmp/cls.sh" || exit 1
   expect_eq    "classify ($label): exit" "$wrc" "$crc2"
   expect_match "classify ($label): output" "$wre" "$cout"
 }
 cls_cell "failed_specs dies (3) after printing"  2 'parsing the log failed \(status 3\)' 'failed_specs() { echo partial.spec.ts; return 3; }' 'run_summary() { echo "  1 failed"; }'
 cls_cell "run_summary dies (4) after printing"   2 'reading the Playwright summary failed \(status 4\)' 'failed_specs() { echo a.spec.ts; }' 'run_summary() { echo "  1 failed"; return 4; }'
 cls_cell "both fine, a spec failed, exit 1: RED" 0 'exit=1 failed-spec-files=\[a.spec.ts\]' 'failed_specs() { echo a.spec.ts; }' 'run_summary() { echo "  1 failed"; }'
-# scripts/best-effort.sh: all the output and the real exit status of a command, the command's own failure is never capture's
-cap_run() { # <label> <want rc> <want out> <want capture rc> <command…>
-  local label=$1 wrc=$2 wout=$3 wcrc=$4; shift 4
+# outage.sh / payment-flow.sh call(): the HTTP status is read from curl's STDOUT; a line on stderr that looks like a status line must not win
+helper_cell "outage call(): stderr 'HTTP/1.1 200' + stdout 'HTTP/1.1 500'" "$src/deployments/helm/kind/outage.sh" call 0 "500 -" 'api=http://x; curl() { echo "HTTP/1.1 200 OK" >&2; printf "HTTP/1.1 500 Error\r\n\r\n"; }; call p "{}" 2>/dev/null'
+helper_cell "outage call(): stderr warning, stdout 'HTTP/1.1 200'" "$src/deployments/helm/kind/outage.sh" call 0 "200 -" 'api=http://x; curl() { echo "warning: something" >&2; printf "HTTP/1.1 200 OK\r\n\r\n"; }; call p "{}" 2>/dev/null'
+helper_cell "outage call(): curl prints a status then dies (7): no status" "$src/deployments/helm/kind/outage.sh" call 0 " -" 'api=http://x; curl() { printf "HTTP/1.1 200 OK\r\n\r\n"; return 7; }; call p "{}" 2>/dev/null'
+helper_cell "payment-flow call(): stderr 'HTTP/1.1 200' + stdout 'HTTP/1.1 500'" "$src/deployments/helm/kind/payment-flow.sh" call 0 "500 -" 'api=http://x; curl() { echo "HTTP/1.1 200 OK" >&2; printf "HTTP/1.1 500 Error\r\n\r\n"; }; call k p "{}" 2>/dev/null; echo "$res"'
+helper_cell "payment-flow call(): stderr warning + stdout 'HTTP/1.1 200'" "$src/deployments/helm/kind/payment-flow.sh" call 0 "200 -" 'api=http://x; curl() { echo "warning: something" >&2; printf "HTTP/1.1 200 OK\r\n\r\n"; }; call k p "{}" 2>/dev/null; echo "$res"'
+# image.sh expect_refused(): the container's exit code must be KNOWN and non-zero. An unreadable one (inspect dies) is a failure, not a refusal
+img_cell() { # <label> <want rc> <want out regex> <ExitCode inspect behaviour: a command in ctl>
+  local label=$1 wrc=$2 wre=$3 ecb=$4
+  { echo ". '$src/scripts/best-effort.sh'"; fn_text "$src/web/apps/console/e2e/image.sh" container_field; fn_text "$src/web/apps/console/e2e/image.sh" expect_refused
+    printf '%s\n' 'name=n; img=i; upstream=u; host_opts=(); tool=ctl'
+    printf '%s\n' 'ctl() { case $1 in inspect) case $3 in *Status*) printf exited;; *ExitCode*) echo asked >> "'"$tmp"'/img.asked"; '"$ecb"';; esac;; logs) echo "console-env: synthetic refusal text";; esac; }'
+    echo 'expect_refused fake -e X=1'; } > "$tmp/img.sh"
+  : > "$tmp/img.asked"; irc=0; capture -2 iout irc bash "$tmp/img.sh" || exit 1
+  expect_eq    "image expect_refused ($label): the ExitCode query was really run" "asked" "$(cat "$tmp/img.asked")"
+  expect_eq    "image expect_refused ($label): exit" "$wrc" "$irc"
+  expect_match "image expect_refused ($label): output" "$wre" "$iout"
+}
+img_cell "exit code 1: refused"                  0 'refused as expected: fake' 'printf 1'
+img_cell "exit code 0: not a refusal"            1 'expected the container to refuse' 'printf 0'
+img_cell "ExitCode inspect dies (125): unknown"  1 'cannot read the exit code' 'return 125'
+img_cell "ExitCode inspect prints 1 then dies"   1 'cannot read the exit code' 'printf 1; return 125'
+# capture (scripts/best-effort.sh): stdout + the real exit status of a command; stderr only with -2; the command's own failure is never capture's
+cap_run() { # <label> <flag: -2 or -> <want rc> <want out> <want stderr> <want capture rc> <command…>
+  local label=$1 flag=$2 wrc=$3 wout=$4 werr=$5 wcrc=$6; shift 6
   crc=0; copt=; cap_rc=
-  { capture copt cap_rc "$@"; } || crc=$?
+  if [ "$flag" = -2 ]; then { capture -2 copt cap_rc "$@"; } 2> "$tmp/cap.err" || crc=$?; else { capture copt cap_rc "$@"; } 2> "$tmp/cap.err" || crc=$?; fi
+  cerr=$(cat "$tmp/cap.err") || exit 1
   expect_eq "capture ($label): capture's own status" "$wcrc" "$crc"
   if [ "$wcrc" = 0 ]; then
     expect_eq "capture ($label): the command's status is kept" "$wrc" "$cap_rc"
-    if [ "$wout" != SKIP ]; then expect_eq "capture ($label): the whole output is kept" "$wout" "$copt"; fi
+    if [ "$wout" != SKIP ]; then expect_eq "capture ($label): out" "$wout" "$copt"; fi
+    if [ "$werr" != SKIP ]; then expect_eq "capture ($label): what reached stderr" "$werr" "$cerr"; fi
   fi
 }
 cap_ok()   { printf 'all\nof it\n\n'; }
 cap_part() { printf 'partial'; echo "and stderr" >&2; return 42; }
 cap_big()  { local i; for ((i = 1; i <= 5000; i++)); do echo "line $i"; done; return 3; }
 cap_big_want=; for ((cap_i = 1; cap_i <= 5000; cap_i++)); do cap_big_want+="line $cap_i"$'\n'; done; cap_big_want=${cap_big_want%$'\n'}
-cap_run "rc=0"                    0  $'all\nof it'            0 cap_ok
-cap_run "output, THEN exit 42"    42 $'partialand stderr'     0 cap_part
-cap_run "rc=3 after a long output" 3 "$cap_big_want" 0 cap_big
-cap_run "command not found"       127 SKIP 0 env -u BASH_ENV "$tmp/no-such-command-for-capture"
-cap_run "no command at all"       "" "" 1
+cap_run "rc=0"                          -  0  $'all\nof it'  ""            0 cap_ok
+cap_run "output, THEN exit 42: stdout only, stderr NOT in out" - 42 partial "and stderr" 0 cap_part
+cap_run "-2: stderr IS in out"          -2 42 $'partialand stderr' ""      0 cap_part
+cap_run "-2: rc=0"                      -2 0  $'all\nof it'  ""            0 cap_ok
+cap_run "rc=3 after a long output"      -  3  "$cap_big_want" ""           0 cap_big
+cap_run "command not found"             -2 127 SKIP SKIP                   0 env -u BASH_ENV "$tmp/no-such-command-for-capture"
+cap_run "no command at all"             -  "" "" ""                        1
+cap_run "-2 and no command"             -2 "" "" ""                        1
 
 # workflow / composite-action run: scripts. wf_check <name> < yaml: writes $sw/<name>.yml and runs the checker on it.
 wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
@@ -3061,7 +3103,7 @@ rcx_body_ok='rows=$(cmd) || rc=$?
 echo "$rows"'
 for f in scripts/test.sh nested/test.sh other.sh scripts/other.sh; do mkdir -p "$rcx/$(dirname "$f")"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_bad" > "$rcx/$f"; done
 mkdir -p "$rcx/ok"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_ok" > "$rcx/ok/test.sh"
-rcx_run() { rc=0; capture out rc in_dir "$rcx" scripts/check-exit-swallow.sh "$@" || exit 1; }
+rcx_run() { rc=0; capture -2 out rc in_dir "$rcx" scripts/check-exit-swallow.sh "$@" || exit 1; }
 # the helper commands the checker still runs must not be trusted when they print something and then die: dirname (checked → exit 2) and, for the
 # path normalisation, basename / dirname that rename the file and fail (they are not called any more, so a bad file stays red)
 for t in basename dirname; do
@@ -3106,7 +3148,7 @@ case "$*" in
 esac
 FAKE
 chmod +x "$hk/bin/git"
-hk_run() { rc=0; capture out rc in_dir "$hk" env HK_ROOT="$hk" PATH="$hk/bin:$PATH" scripts/check-exit-swallow.sh || exit 1; }
+hk_run() { rc=0; capture -2 out rc in_dir "$hk" env HK_ROOT="$hk" PATH="$hk/bin:$PATH" scripts/check-exit-swallow.sh || exit 1; }
 printf '#!/usr/bin/env bash\nset -euo pipefail\nls x || true\n' > "$hk/scripts/hooks/check.sh"
 printf '#!/usr/bin/env bash\nset -euo pipefail\ntrue\n' > "$hk/other/scripts/hooks/check.sh"
 hk_run; expect_eq "hooks: scripts/hooks/check.sh with a swallow is skipped by the default scan (the exemption) → green" "0" "$rc"
@@ -3168,7 +3210,7 @@ FAKE
 mkdir -p "$tmp/approve-bin"; cp "$tmp/approve-gh" "$tmp/approve-bin/gh"; chmod +x "$tmp/approve-bin/gh"
 approve_run() { # <PATH prefix or empty> → $out: what gh was asked to do
   : > "$tmp/approve.log"
-  capture out approve_st env PATH="${1:+$1:}$tmp/approve-bin:$PATH" APPROVE_LOG="$tmp/approve.log" REPO=o/r RUNNER_TEMP="$tmp" bash -c '
+  capture -2 out approve_st env PATH="${1:+$1:}$tmp/approve-bin:$PATH" APPROVE_LOG="$tmp/approve.log" REPO=o/r RUNNER_TEMP="$tmp" bash -c '
     sleep() { :; }
     my_runs() { echo "[{\"id\":99,\"path\":\".github/workflows/ci.yml\",\"status\":\"completed\",\"conclusion\":\"action_required\"}]"; }
     . "$1"; echo "past_gate=[$past_gate]"' _ "$tmp/approve-loop.sh" || exit 1

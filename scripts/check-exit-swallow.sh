@@ -261,14 +261,14 @@ END {
         if (hnd ~ /^[ \t]*$/ && k < NR) { hk = k + 1; hnd = L[hk]; sub(/[ \t]#.*/, "", hnd) }   # `|| ` at the end of the line, the handler on the next one
         sub(/^[ \t]+/, "", hnd); sub(/[ \t;]+$/, "", hnd)
         hs = hnd; sub(/[ \t]*(;|&&|\|\|).*/, "", hs)   # the plain shapes end at the first separator: `|| return; next` is `|| return`
-        if (hnd !~ /^\{/ && hs ~ /^(return|exit)([ \t]+(\$\?|"\$\?"|\$\{?[A-Za-z_][A-Za-z_0-9]*\}?|"\$\{?[A-Za-z_][A-Za-z_0-9]*\}?"|[1-9][0-9]*))?$/) ok = 1
+        if (hnd !~ /^\{/ && hs ~ /^(return|exit)([ \t]+(\$\?|"\$\?"|\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?|"\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?"|[1-9][0-9]*))?$/) ok = 1
         else if (hnd ~ /^\{/) {
           blk = hnd; bm = hk
           while (blk !~ /\}$/ && bm < hk + 5 && bm < to[f]) { bm++; t2 = L[bm]; sub(/[ \t]#.*/, "", t2); sub(/^[ \t]+/, "", t2); sub(/[ \t;]+$/, "", t2); blk = blk " ; " t2 }
           if (blk ~ /\}$/) {
             sub(/[ \t;]*\}$/, "", blk); sub(/^\{[ \t]*/, "", blk)
             lastst = blk; sub(/.*;[ \t]*/, "", lastst)
-            if (lastst ~ /^(return|exit)([ \t]+(\$\?|"\$\?"|\$\{?[A-Za-z_][A-Za-z_0-9]*\}?|"\$\{?[A-Za-z_][A-Za-z_0-9]*\}?"|[1-9][0-9]*))?$/ ) ok = 1
+            if (lastst ~ /^(return|exit)([ \t]+(\$\?|"\$\?"|\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?|"\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?"|[1-9][0-9]*))?$/ ) ok = 1
           }
         }
       }

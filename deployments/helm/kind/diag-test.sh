@@ -122,13 +122,14 @@ chmod +x "$tmp/bin/kubectl" "$tmp/bin/helm" "$tmp/bin/curl"
 
 die() { echo "diag-test: $*" >&2; echo "---- output:" >&2; best_effort cat "$tmp/out" >&2; echo "---- events:" >&2; best_effort cat "$tmp/events" >&2; exit 1; }
 has() { grep -qF -- "$1" "$tmp/out" || die "$2: output lacks '$1'"; }
-# ready_count <runtime> <container>: how many times the Postgres log says it is ready. grep -c: 1 = none (the count is 0, fine); 2+ = the read failed:
-# say so and count 0 so the caller retries. Never fails (the caller's `$(…) || exit 1` is for a broken shell, not for this).
+# ready_lines <runtime> <container>: ONE read of the Postgres log, the number of "ready" lines (grep -c: 1 = none, the count is 0).
+# ready_twice: that count is at least 2. A failed read is a failure (nonzero, said on stderr), never a count of 0: the caller's loop retries, and a
+# server that never gets there is a failure of the wait (the timeout), not a pass.
 ready_lines() { "$1" logs "$2" 2>&1 | grep -c 'database system is ready to accept connections'; }
-ready_count() {
+ready_twice() {
   local n
-  n=$(value_or_empty -ok 1 ready_lines "$1" "$2") || return
-  echo "${n:-0}"
+  n=$(value_of -ok 1 ready_lines "$1" "$2") || return
+  [ "$n" -ge 2 ]
 }
 hasnt() { ! grep -qF -- "$1" "$tmp/out" || die "$2: output has '$1'"; }
 
@@ -528,8 +529,7 @@ if only D7; then
     # the image had to be pulled). Ready means the line appears TWICE; a server that never gets there is a setup failure.
     ready=0
     for ((_try518 = 1; _try518 <= 120; _try518++)); do
-      ready_n=$(ready_count "$rt" "$pgc") || exit 1
-      [ "$ready_n" -ge 2 ] && { ready=1; break; }
+      if ready_twice "$rt" "$pgc"; then ready=1; break; fi
       sleep 1
     done
     [ "$ready" = 1 ] || die "D7 $label: the Postgres container never became ready (setup failure, not a result)"

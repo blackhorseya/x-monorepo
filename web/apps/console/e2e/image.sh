@@ -46,8 +46,8 @@ run_console "$oidc_name" "$oidc_port" -e CONSOLE_OIDC_ISSUER=https://idp.e2e.exa
 # Misconfigured OIDC env must stop the container, not switch OIDC off quietly and not reach /config.json
 # or the CSP: the quote-and-brace would break the JSON, a newline would pass a line-oriented grep and
 # cut the CSP header short, an issuer without a client id (or the reverse) is half a login.
-container_field() {   # <State field> <container>: that field of the container; a failed inspect says so and prints nothing (the caller polls or compares)
-  value_or_empty "$tool" inspect -f "{{.State.$1}}" "$2"
+container_field() {   # <State field> <container>: ONE read of that field. A failed inspect is a failure (nonzero, said on stderr), never an empty value
+  value_of "$tool" inspect -f "{{.State.$1}}" "$2"
 }
 expect_refused() {
   local label=$1 n=$name-refused; shift
@@ -55,13 +55,11 @@ expect_refused() {
   "$tool" run -d --name "$n" ${host_opts[@]+"${host_opts[@]}"} -e "RPC_UPSTREAM=$upstream" "$@" "$img" >/dev/null
   local status=""
   for ((_try50 = 1; _try50 <= 40; _try50++)); do
-    status=$(container_field Status "$n") || return   # a failed inspect says so and leaves status empty: the loop tries again
-    [ "$status" = exited ] && break
+    if status=$(container_field Status "$n"); then [ "$status" = exited ] && break; else status=""; fi   # a failed inspect is a retry; running out of tries leaves status != exited, which fails below
     sleep 0.5
   done
   local code logs
-  code=$(container_field ExitCode "$n") || return
-  code=${code:-?}
+  code=$(container_field ExitCode "$n") || { echo "image.sh: cannot read the exit code of $n: a container whose exit code is unknown is not proven to have refused" >&2; "$tool" rm -f "$n" >/dev/null 2>&1 || true; exit 1; }
   local lf lrc=0
   lf=$(mktemp "${TMPDIR:-/tmp}/image-logs.XXXXXX") || { echo "image.sh: cannot create a temp file for the logs of $n" >&2; exit 1; }
   "$tool" logs "$n" > "$lf" 2>&1 || lrc=$?

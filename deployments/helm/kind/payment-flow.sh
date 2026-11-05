@@ -44,14 +44,11 @@ restore() {
   restore_step kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null   # restore: a failure fails the run (restore_exit), not best effort (#462)
   restore_step helm upgrade --install "$release" "$chart" -n "$ns" -f "$values" --wait --timeout 3m >/dev/null
 }
-children_of() {   # the direct children of pid $1, one per line. pgrep: 1 = no children (fine); 2+ = it failed: say so, carry on with none (a diagnostic stop must not stop on this)
-  value_or_empty -ok 1 pgrep -P "$1"
-}
 on_signal() { # <exit status>: stop the waited-for child, then leave through the exit trap (diagnose, restore)
   trap '' TERM INT HUP   # a second signal must not cut the diagnosis or the restore short
   # the child and ITS children (a wrapper around helm / kubectl leaves its own child behind otherwise)
   if [ -n "$cur" ]; then
-    kids=$(children_of "$cur") || return   # explicit pids, never a pattern
+    kids=$(value_of -ok 1 pgrep -P "$cur") || { echo "payment-flow: cannot list the children of $cur" >&2; kill "$cur" 2>/dev/null || true; exit "$1"; }   # explicit pids, never a pattern; 1 = no children, 2+ = pgrep failed: still stop the child and leave
     for c in $kids; do kill "$c" 2>/dev/null || true; done
     kill "$cur" 2>/dev/null || true; wait "$cur" 2>/dev/null || true; cur=""
   fi
@@ -104,37 +101,41 @@ as_shopper() { call "$shopper_key" "$@"; }
 as_admin() { call "$admin_key" "$@"; }
 db() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1"; }
 
-order_status() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.status // "-"' <<<"$body" || echo "(status read failed)"; }
+order_status() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.status // "-"' <<<"$body"; }   # a failed read is a failure, never a status
 wait_order() { # <order> <ORDER_STATUS_X> [seconds]
   local s=""
-  for ((_try101 = 1; _try101 <= "${3:-60}"; _try101++)); do s=$(order_status "$1") || return; [ "$s" = "$2" ] && return 0; sleep 1; done
+  for ((_try101 = 1; _try101 <= "${3:-60}"; _try101++)); do if s=$(order_status "$1"); then [ "$s" = "$2" ] && return 0; else s="(status read failed)"; fi; sleep 1; done
   fail "order $1 is '$s' after ${3:-60}s, want $2"
 }
 steady() { # <order> <ORDER_STATUS_X> <seconds>: still this status for the whole window (the caller proved it could have moved)
   for ((_try105 = 1; _try105 <= "$3"; _try105++)); do [ "$(order_status "$1")" = "$2" ] || fail "order $1 left $2 within $3s"; sleep 1; done
 }
-pay_status() { as_shopper payment.v1.PublicPaymentService/GetPayment "{\"order_id\":\"$1\"}" >/dev/null; jq -r '.payment.status // "-"' <<<"$body" || echo "(status read failed)"; }
+pay_status() { as_shopper payment.v1.PublicPaymentService/GetPayment "{\"order_id\":\"$1\"}" >/dev/null; jq -r '.payment.status // "-"' <<<"$body"; }
 wait_payment() { # <order> <PAYMENT_STATUS_X> [seconds]
   local s=""
-  for ((_try110 = 1; _try110 <= "${3:-60}"; _try110++)); do s=$(pay_status "$1") || return; [ "$s" = "$2" ] && return 0; sleep 1; done
+  for ((_try110 = 1; _try110 <= "${3:-60}"; _try110++)); do if s=$(pay_status "$1"); then [ "$s" = "$2" ] && return 0; else s="(status read failed)"; fi; sleep 1; done
   fail "payment of order $1 is '$s' after ${3:-60}s, want $2"
 }
 mock() { kubectl -n "$ns" exec "deploy/$release-payment-serve" -- /app mock "$@"; }
 hook="http://127.0.0.1:8080/api/payment/webhook" # the webhook route, from inside the serve pod
 refs() { db "SELECT provider_ref FROM payment.payments WHERE order_id = '$1'"; }
 refunds() { db "SELECT count(*) FROM payment.mock_refunds WHERE ref = '$(refs "$1")'"; }
-job_field() { # <job> <jsonpath> <name>: one field of the job. A failed read says so and prints nothing: the poll in job() tries again, and a run that never completes still fails there
-  value_or_empty kubectl -n "$ns" get job "$1" -o jsonpath="$2"   # $3 names the field (documentation only: value_or_empty's log line carries the whole command)
+job_state() { # <job>: "<failed> <succeeded>" from ONE pair of reads. A failed read is a failure (nonzero): job()'s loop tries again, and a run that never completes fails there
+  local ok bad
+  ok=$(value_of kubectl -n "$ns" get job "$1" -o jsonpath='{.status.succeeded}') || return
+  bad=$(value_of kubectl -n "$ns" get job "$1" -o jsonpath='{.status.failed}') || return
+  echo "${bad:-0} ${ok:-0}"
 }
 job() { # <cronjob> -> one run to completion
-  local j ok bad
+  local j ok bad st
   j="flow-$1-$(date +%s)-$RANDOM"
   kubectl -n "$ns" create job "$j" --from="cronjob/$release-$1" >/dev/null
   for ((_try120 = 1; _try120 <= 90; _try120++)); do
-    ok=$(job_field "$j" '{.status.succeeded}' succeeded) || return
-    bad=$(job_field "$j" '{.status.failed}' failed) || return
-    [ "${bad:-0}" != 0 ] && { best_effort kubectl -n "$ns" logs "job/$j" --tail=30; fail "$1 run failed"; }
-    [ "$ok" = 1 ] && { kubectl -n "$ns" delete job "$j" >/dev/null; return 0; }
+    if st=$(job_state "$j"); then
+      bad=${st% *} ok=${st#* }
+      [ "$bad" != 0 ] && { best_effort kubectl -n "$ns" logs "job/$j" --tail=30; fail "$1 run failed"; }
+      [ "$ok" = 1 ] && { kubectl -n "$ns" delete job "$j" >/dev/null; return 0; }
+    fi
     sleep 2
   done
   fail "$1 run did not finish in 3 minutes"

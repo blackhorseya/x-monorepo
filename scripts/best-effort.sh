@@ -40,21 +40,23 @@ restore_exit() { # <status on the way in>
   exit "$rc"
 }
 
-# ── capture / value_or_empty (#466): fnctx's closed whitelist leaves no room for `out=$(cmd) || rc=$?` in a function body; these two are what tests and polls use instead ──
-# capture <outvar> <rcvar> <command…> — run a command, keep ALL of its output (stdout and stderr, trailing newlines trimmed like $(…)) in
-# $outvar and its exit status in $rcvar. For a test that judges BOTH (#466): `out=$(cmd) || rc=$?` hides the status behind an assignment
-# the checker cannot tell from a swallowed one, and `fnctx` allows only `|| return` / `|| exit` / `|| { …; return|exit; }` after a $(…) in
-# a function body. capture has no $(cmd) around the command: the command's own status goes into $rcvar, and capture fails (returns 1) only
-# when it cannot do its own job (no temp file, cannot read it back, bad variable name), never because the command did.
-#   . scripts/best-effort.sh
-#   capture out rc ./script.sh arg          # out = what it printed (also after printing and THEN exiting non-zero), rc = its exit status
+# ── capture / value_of (#466): fnctx's closed whitelist leaves no room for `out=$(cmd) || rc=$?` in a function body; these two are what tests and polls use instead ──
+# capture [-2] <outvar> <rcvar> <command…> — run a command; its STDOUT (trailing newlines trimmed, as $(…) does) goes to $outvar and its exit status
+# to $rcvar. The command's stderr is NOT captured: it goes to the caller's stderr, exactly as in `out=$(cmd)`. `-2` merges stderr into the
+# output, exactly as in `out=$(cmd 2>&1)`: use it where the old code said 2>&1, and nowhere else (a warning on stderr must not become a
+# parsed HTTP header). There is no $(cmd) around the command, so its status is in $rcvar whatever it printed first. capture fails (returns 1)
+# only when it cannot do its own job (no temp file, cannot read it back, bad variable name), never because the command did.
+#   capture out rc ./script.sh arg          # out = stdout (also after printing and THEN exiting non-zero), rc = its exit status
+#   capture -2 out rc ./script.sh           # out = stdout + stderr interleaved
 #   A=1 capture out rc ./script.sh          # a prefix assignment reaches the command; a `cd` needs a function with ( cd dir && cmd )
 capture() {
-  local _cap_o=$1 _cap_r=$2 _cap_f _cap_rc=0 _cap_txt
+  local _cap_merge=0 _cap_o _cap_r _cap_f _cap_rc=0 _cap_txt
+  if [ "${1:-}" = -2 ]; then _cap_merge=1; shift; fi
+  _cap_o=${1:-} _cap_r=${2:-}
+  [ "$#" -ge 3 ] || return 1
   shift 2
-  [ "$#" -gt 0 ] || return 1
   _cap_f=$(mktemp "${TMPDIR:-/tmp}/capture.XXXXXX") || return 1
-  "$@" > "$_cap_f" 2>&1 || _cap_rc=$?
+  if [ "$_cap_merge" = 1 ]; then "$@" > "$_cap_f" 2>&1 || _cap_rc=$?; else "$@" > "$_cap_f" || _cap_rc=$?; fi
   _cap_txt=$(cat "$_cap_f") || { rm -f "$_cap_f"; return 1; }
   rm -f "$_cap_f" || return 1
   printf -v "$_cap_o" '%s' "$_cap_txt" || return 1
@@ -62,21 +64,23 @@ capture() {
   return 0
 }
 
-# value_or_empty [-ok N] <command…> — print the command's stdout when it succeeds (exit 0, or <= N with -ok N: grep's 1 = nothing found);
-# when it fails, say so on stderr and print NOTHING — not the half of the output it produced before it died. Always returns 0 on a
-# failed command (the caller polls, or treats an empty value as "not there"); returns 1 only when it cannot do its own job.
-#   n=$(value_or_empty -ok 1 grep -c ready "$log") || return      # "" when grep broke, the count (0 too) otherwise
-value_or_empty() {
-  local ok=0 _voe_f _voe_rc=0
+# value_of [-ok N] <command…> — the command's stdout, when it succeeded: exit 0, or <= N with -ok N (grep -c / pgrep: 1 = nothing found).
+# When it FAILED it prints the reason on stderr, prints NOTHING on stdout (not the half it wrote before it died) and returns the command's own
+# exit status. A failed read is a failure of the caller, never an empty value:
+#   n=$(value_of -ok 1 grep -c ready "$log") || return
+# It returns 1 when it cannot do its own job (no command, no temp file).
+value_of() {
+  local ok=0 _vo_f _vo_rc=0
   if [ "${1:-}" = -ok ]; then ok=$2; shift 2; fi
   [ "$#" -gt 0 ] || return 1
-  _voe_f=$(mktemp "${TMPDIR:-/tmp}/voe.XXXXXX") || return 1
-  "$@" > "$_voe_f" 2>/dev/null || _voe_rc=$?
-  if [ "$_voe_rc" -le "$ok" ]; then
-    cat "$_voe_f" || { rm -f "$_voe_f"; return 1; }
-  else
-    echo "value_or_empty: command failed (exit $_voe_rc): $*" >&2
+  _vo_f=$(mktemp "${TMPDIR:-/tmp}/value_of.XXXXXX") || return 1
+  "$@" > "$_vo_f" 2>/dev/null || _vo_rc=$?
+  if [ "$_vo_rc" -le "$ok" ]; then
+    cat "$_vo_f" || { rm -f "$_vo_f"; return 1; }
+    rm -f "$_vo_f" || return 1
+    return 0
   fi
-  rm -f "$_voe_f" || return 1
-  return 0
+  echo "value_of: command failed (exit $_vo_rc): $*" >&2
+  rm -f "$_vo_f" || return 1
+  return "$_vo_rc"
 }

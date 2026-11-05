@@ -24,7 +24,7 @@
 #   7 every kind script run directly, outside its task: refused (exit 2), no tool called (#444)
 #   8 a Taskfile command that does not go through the runner: check-kubeconfig.py --taskfile must exit non-zero
 set -uo pipefail
-. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort, capture, value_or_empty (#462, #466)
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort, capture, value_of (#462, #466)
 cd "$(dirname "$0")/../../.."
 root=$PWD
 
@@ -111,7 +111,7 @@ run_lines() {
 # judge → "judged=N dedicated=A decoy=D other=O"; exit 0 when nothing used the decoy and nothing but the dedicated file ... (see -s)
 judge() {  # judge [strict]: strict = every judged call used the dedicated file
   local out rc=0
-  capture out rc python3 - "$calls" "$dedicated" "$decoy" "$decoyhome" "${1:-}" <<'PY' || { echo "JUDGE-CRASH (capture failed)"; return 2; }
+  capture -2 out rc python3 - "$calls" "$dedicated" "$decoy" "$decoyhome" "${1:-}" <<'PY' || { echo "JUDGE-CRASH (capture failed)"; return 2; }
 import sys
 calls, dedicated, decoy, decoyhome, strict = sys.argv[1:6]
 OFFLINE = {"lint", "template", "repo", "version", "dependency", "dep", "package", "show", "pull", "search", "create", "plugin",

@@ -39,18 +39,15 @@ if [ "${1:-}" != "--diag-child" ]; then
   cap_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX") || { echo "diag: cannot create a capture directory; nothing collected"; exit 0; }
   child="" sig_rc="" kill_pid="" c=""
   # on a signal: stop everything under the collector, then ask the collector itself to stop (it cleans up); if it is still there after 5 s, kill it
-  children_of() {   # the direct children of pid $1, one per line. pgrep: 1 = no children (fine); 2+ = it failed: say so, carry on with none (a diagnostic stop must not stop on this)
-    value_or_empty -ok 1 pgrep -P "$1"
-  }
-  stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name)
+  stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name). pgrep: 1 = no children; 2+ = it failed: the pid is still stopped, and the failure is the caller's to see (best_effort prints it)
     local x kids
-    kids=$(children_of "$1") || return
-    for x in $kids; do stop_tree "$x"; kill "$x" 2>/dev/null || true; done
+    kids=$(value_of -ok 1 pgrep -P "$1") || { kill "$1" 2>/dev/null || true; return 1; }
+    for x in $kids; do best_effort stop_tree "$x"; kill "$x" 2>/dev/null || true; done
   }
   on_signal() {
     sig_rc=$1
     trap '' TERM INT HUP
-    stop_tree "$child"
+    best_effort stop_tree "$child"
     kill -TERM "$child" 2>/dev/null || true
     ( sleep 5; kill -KILL "$child" 2>/dev/null ) > /dev/null 2>&1 &
     kill_pid=$!

@@ -52,18 +52,18 @@ rpc_pod() { kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc --field
 # the wait's own log: bounded retries, a failed read is a retry, never the log. An EMPTY log is a valid answer
 # (a wait that found the catalog ready logs nothing), so success is the read succeeding AND the init container having
 # terminated with exit 0, not the text being non-empty.
-# init_exit_code <pod>: the exit code of the init container, or "none" when it has not terminated or kubectl / jq failed (the caller polls; "none" is not 0)
+# pod_init_exit <pod>: ONE read of the init container's exit code ("none" while it has not terminated). init_done: it terminated with exit 0. A failed read
+# is a failure (nonzero), never "not 0 yet" and never a value: init_log's loop retries, and running out of tries fails the wait.
 pod_init_exit() { kubectl -n "$ns" get pod "$1" -o json 2>/dev/null | jq -r '.status.initContainerStatuses[0].state.terminated.exitCode // "none"'; }
-init_exit_code() {
+init_done() {
   local c
-  c=$(value_or_empty pod_init_exit "$1") || return
-  echo "${c:-none}"
+  c=$(value_of pod_init_exit "$1") || return
+  [ "$c" = 0 ]
 }
 init_log() {
-  local pod=$1 out code
+  local pod=$1 out
   for ((_try54 = 1; _try54 <= 30; _try54++)); do
-    code=$(init_exit_code "$pod") || return
-    if [ "$code" = 0 ] && out=$(kubectl -n "$ns" logs "$pod" -c wait-for-catalog 2>/dev/null); then printf '%s' "$out"; return 0; fi
+    if init_done "$pod" && out=$(kubectl -n "$ns" logs "$pod" -c wait-for-catalog 2>/dev/null); then printf '%s' "$out"; return 0; fi
     sleep 2
   done
   return 1
