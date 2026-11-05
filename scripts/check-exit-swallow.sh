@@ -231,7 +231,9 @@ END {
   }
   for (f = 1; f <= nf; f++) {
     for (i = from[f]; i <= to[f]; i++) {
-      t = L[i]; sub(/[ \t]#.*/, "", t); gsub(/\$\(\(/, "", t)             # the RAW line (a quoted `n="$(cmd)"` counts); $(( … )) is arithmetic
+      t = L[i]; sub(/[ \t]#.*/, "", t); gsub(/\$\(\(/, "", t)
+      gsub(/(local|declare|typeset|export|readonly)[ \t]+(-[A-Za-z]+[ \t]+)*[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?=("|\047)?(\$\(|`)/, "", t)   # declaration forms are declsub's rule (and SC2155's)             # the RAW line (a quoted `n="$(cmd)"` counts); $(( … )) is arithmetic
+      if (i > from[f] && L[i-1] ~ /\\[ \t]*$/ && L[i-1] ~ /(^|[ \t;{])(local|declare|typeset|export|readonly)[ \t]/) continue   # continuation of a declaration: SC2155's
       if (t !~ /(^|[;&|{(]|[ \t])[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?(\$\(|`)/) continue
       if (t ~ /(&&|\|\||(^|[;{(]|[ \t])(if|elif|while|until|!))[ \t]*[^;]*[A-Za-z_][A-Za-z_0-9]*\+?=("|\047)?(\$\(|`)/) continue   # the assignment IS the condition: its status is read
       if (t ~ /^[ \t]*(local|declare|typeset|export|readonly)[ \t]/) continue    # declsub's job
