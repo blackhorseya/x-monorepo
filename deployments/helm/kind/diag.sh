@@ -41,7 +41,7 @@ if [ "${1:-}" != "--diag-child" ]; then
   # on a signal: stop everything under the collector, then ask the collector itself to stop (it cleans up); if it is still there after 5 s, kill it
   stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name)
     local x
-    kids=$(pgrep -P "$1" 2>/dev/null) || { [ $? -eq 1 ] || echo "diag: pgrep -P $1 failed" >&2; }   # 1 = no children
+    kids=$(pgrep -P "$1" 2>/dev/null) || { pg_rc=$?; kids=""; [ "$pg_rc" -eq 1 ] || echo "diag: pgrep -P $1 failed" >&2; }   # 1 = no children
     for x in $kids; do stop_tree "$x"; kill "$x" 2>/dev/null || true; done
   }
   on_signal() {

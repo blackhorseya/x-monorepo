@@ -75,8 +75,11 @@ values_of() {
         printf '%s\n' "$rest" | grep -oE '(^|[;|&] *)(kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) ' | sed 's/.*/MISSING/'
         # second layer: each kubectl / helm (but `helm repo`) also names the file by flag, the same cluster
         case $l in *'helm repo'*) ;; *)
-          t=$(printf '%s\n' "$l" | grep -oE 'run\.sh "[^"]*" (kubectl|helm|kind (create|delete|export)) ' | wc -l | tr -d ' ')
-          f=$(printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//')
+          t_rc=0 f_rc=0
+          t=$(printf '%s\n' "$l" | grep -oE 'run\.sh "[^"]*" (kubectl|helm|kind (create|delete|export)) ' | wc -l | tr -d ' ') || t_rc=$?   # pipefail: grep -o finding nothing is 1 (t=0)
+          [ "${t_rc:-0}" -le 1 ] || return 1
+          f=$(printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//') || f_rc=$?   # grep -o finding nothing is 1 (f empty)
+          [ "${f_rc:-0}" -le 1 ] || return 1
           nf=$(printf '%s\n' "$f" | grep -c .) || { [ $? -eq 1 ] || nf=-1; }   # 1 = no line (nf=0), 2 = grep failed (nf=-1, never equal to $t)
           if [ "$nf" = "$t" ]; then printf '%s\n' "$f" | grep .; else echo MISSING; fi ;;
         esac

@@ -1371,7 +1371,7 @@ if command -v go >/dev/null 2>&1; then
   printf 'package fx\n\nimport "testing"\n\nfunc TestRetry(t *testing.T) { _ = NewCreateOrder(3, 4) }\n' > "$repo/retry_test.go"
   commit "test: retry"
   git -C "$repo" checkout -q main
-  tree_check() { set +e; tc_out=$(in_repo scripts/merge-tree-check.sh "$@" 2>&1); tc_rc=$?; set -e; }
+  tree_check() { set +e; tc_rc=0; tc_out=$(in_repo scripts/merge-tree-check.sh "$@" 2>&1) || tc_rc=$?; set -e; }
   tree_check main ownership; expect_eq "ownership alone builds"   0 "$tc_rc"
   tree_check main retry;     expect_eq "retry alone builds"       0 "$tc_rc"
   if git -C "$repo" merge-tree --write-tree ownership retry >/dev/null 2>&1; then ok; else bad "fixture: ownership + retry must merge without a text conflict"; fi
@@ -1493,7 +1493,7 @@ pb_run() {
   out=$(env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" 2>&1) || rc=$?
 }
 pb_state() { curl -fsS "$pb_url/_state"; }
-pb_calls() { pb_n=$(grep -c "^$1 " "$pb_dir/log") || [ $? -eq 1 ]; }   # sets $pb_n: an assignment aborts on a grep error, "$(pb_calls …)" in an argument would not
+pb_calls() { local c=0; pb_n=$(grep -c "^$1 " "$pb_dir/log") || c=$?; [ "$c" -le 1 ] || return 1; }   # sets $pb_n: an assignment aborts on a grep error, "$(pb_calls …)" in an argument would not
 
 pb_up first
 pb_run
@@ -2526,7 +2526,6 @@ F
 fn_green checked      '  out=$(cmd) || return 1'
 fn_green checked-exit '  out=$(cmd) || { echo "cmd failed" >&2; exit 2; }'
 fn_green rc-next      $'  out=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1'
-fn_green rc-same      '  out=$(cmd); rc=$?'
 fn_green cond-assign  '  if out=$(cmd); then echo "$out"; fi'
 fn_green and-assign   '  [ -n "$1" ] && out=$(cmd) || return 1'
 fn_green arith        '  n=$((n + 1))'
@@ -2556,6 +2555,7 @@ sw_run "$sw/fg-exempt.sh"; expect_eq "fnctx: an exit-ok comment does NOT exempt 
 bypass_case() { # <name> <function body line(s)>
   sw_write "bp-$1" <<F
 cmd() { printf 'bad\n'; return 42; }
+warn() { echo "warning: cmd failed" >&2; }
 f() {
 $2
 }
@@ -2569,6 +2569,12 @@ F
 bypass_case and-echo   $'  x=$(cmd) && echo success\n  printf \'%s\\n\' "$x"'
 bypass_case delayed-rc $'  x=$(cmd)\n  echo diagnostic >/dev/null\n  rc=$?\n  [ "$rc" -eq 0 ] || return 1\n  printf \'%s\\n\' "$x"'
 bypass_case rc-no-refusal $'  x=$(cmd)\n  rc=$?\n  echo "status $rc" >&2\n  printf \'%s\\n\' "$x"'
+bypass_case rc-same-unused $'  x=$(cmd); rc=$?\n  printf \'%s\\n\' "$x"'
+bypass_case or-warn    $'  x=$(cmd) || warn\n  printf \'%s\\n\' "$x"'
+bypass_case or-echo    $'  x=$(cmd) || echo "cmd failed" >&2\n  printf \'%s\\n\' "$x"'
+bypass_case and-or-flag $'  x=$(cmd) && ok=1 || ok=0\n  printf \'%s\\n\' "$x"'
+bypass_case false-refusal $'  x=$(cmd)\n  rc=$?\n  if false; then return 1; fi\n  printf \'%s\\n\' "$x"'
+bypass_case far-refusal $'  x=$(cmd)\n  rc=$?\n  echo "rc=$rc" >&2\n  [ -z "$$" ] && return 1\n  printf \'%s\\n\' "$x"'
 good_case() { # <name> <function body line(s)>: the same shape, but the failing output is refused
   sw_write "gd-$1" <<F
 cmd() { printf 'bad\n'; return 42; }
@@ -2584,7 +2590,7 @@ F
 }
 good_case or-return    $'  x=$(cmd) || return 1\n  printf \'%s\\n\' "$x"'
 good_case rc-refused   $'  x=$(cmd)\n  rc=$?\n  [ "$rc" -eq 0 ] || return 1\n  printf \'%s\\n\' "$x"'
-good_case and-or       $'  [ -n "$1$$" ] && x=$(cmd) || return 1\n  printf \'%s\\n\' "$x"'
+good_case and-or       $'  [ -n "$$" ] && x=$(cmd) || return 1\n  printf \'%s\\n\' "$x"'
 sw_write fg-heredoc-body <<'F'
 cat <<'EOT'
 f() {

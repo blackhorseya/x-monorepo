@@ -244,18 +244,40 @@ END {
       if (match(L[i], /<<-?[ \t]*\\?["\047]?[A-Za-z_][A-Za-z_0-9]*/)) {
         for (k = i + 1; k <= to[f]; k++) if (ENDHD[k]) { hb = k; break }
       }
-      # 1. `|| …` after the substitution's `)` (same line, or the next line starts with it): the failure path runs a statement. `&&` is NOT a check
+      # 1. `|| <handler>` after the substitution's `)` (same line, or the next line starts with it). SYNTACTIC: the handler must start with
+      #    return / exit / continue / break / die / fail, or be a `{ … }` block that holds one of them, or give the SAME variable a new value, or
+      #    capture the status (`|| rc=$?`, whose use the rcbranch rule checks). `|| warn`, `|| echo …`, `&& ok=1 || ok=0` do not refuse anything.
       for (k = i; k <= (hb > i ? hb + 2 : i + 3) && k <= to[f] && !ok; k++) {
-        if (L[k] ~ /\)["\047]?[ \t]*\|\|/ || (k > i && L[k] ~ /^[ \t]*\|\|/)) ok = 1
+        hnd = ""
+        if (match(L[k], /\)["\047]?[ \t]*\|\|[ \t]*/)) hnd = substr(L[k], RSTART + RLENGTH)
+        else if (k > i && match(L[k], /^[ \t]*\|\|[ \t]*/)) hnd = substr(L[k], RSTART + RLENGTH)
+        else continue
+        sub(/[ \t]#.*/, "", hnd)
+        if (hnd ~ /^[ \t]*$/ && k < NR) { hnd = L[k + 1]; sub(/^[ \t]+/, "", hnd); sub(/[ \t]#.*/, "", hnd) }   # `|| ` at the end of the line, the handler on the next one
+        if (hnd ~ /^(return|exit|continue|break|die|fail)([^A-Za-z_0-9]|$)/) ok = 1
+        else if (hnd ~ /^\{/) { blk = hnd; for (m = k + 1; m <= k + 3 && m <= to[f]; m++) blk = blk " " L[m]; if (blk ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|die|fail)([^A-Za-z_0-9]|$)/ || (vn != "" && blk ~ ("(^|[^A-Za-z_0-9])" vn "="))) ok = 1 }
+        else if (vn != "" && hnd ~ ("^" vn "=")) ok = 1
+        else if (hnd ~ /^[A-Za-z_][A-Za-z_0-9]*=\$\?/) ok = 1
       }
-      # 2. the status read at once: `); rc=$?` on the closing line, or the very next statement is `rc=$?` / `[ $? … ]` / `case $?` (nothing runs in
-      #    between, or $? is another command's), and a refusal (return / exit / continue / break / fail / die, or a new value for the variable) follows
+      # 2. the status read at once: `); rc=$?` on the closing line, or the very next statement is `rc=$?` / `[ $? … ]` / `case $?`, and the
+      #    statement that TESTS it (`[ "$rc" … ] || return`, `if [ "$rc" … ]; then return`, `case $rc in … return`) is the next one, with the refusal word
+      #    on that same statement. A `return` somewhere else in the next few lines proves nothing and does not count.
       if (!ok) {
         nl = (hb > i ? hb + 1 : i + 1); same = (L[hb] ~ /\)["\047]?[ \t]*;[ \t]*[A-Za-z_][A-Za-z_0-9]*=\$\?/)
         nx = L[nl]; sub(/[ \t]#.*/, "", nx)
-        if (same || nx ~ /^[ \t]*([A-Za-z_][A-Za-z_0-9]*=\$\?|\[\[?[ \t]+"?\$\{?[A-Za-z_]*\}?"?|if[ \t]+\[\[?[ \t]+"?\$\?|case[ \t]+"?\$\?)/ && nx ~ /\$\?/) {
-          for (k = (same ? hb : nl); k <= (same ? hb : nl) + 4 && k <= to[f]; k++)
-            if (L[k] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|fail|die)([^A-Za-z_0-9]|$)/ || (vn != "" && L[k] ~ ("(^|[^A-Za-z_0-9])" vn "="))) { ok = 1; break }
+        rv = ""
+        if (same) { rv = L[hb]; sub(/.*;[ \t]*/, "", rv); sub(/=.*/, "", rv); tl = hb + 1 }
+        else if (nx ~ /^[ \t]*[A-Za-z_][A-Za-z_0-9]*=\$\?[ \t]*(;|$)/) { rv = nx; sub(/^[ \t]*/, "", rv); sub(/=.*/, "", rv); tl = nl + 1 }
+        else if (nx ~ /\$\?/) { rv = "?"; tl = nl }
+        if (rv != "") {
+          ts = L[tl]; sub(/[ \t]#.*/, "", ts)
+          refer = (rv == "?") ? (ts ~ /\$\?/) : (ts ~ ("\\$\\{?" rv "([^A-Za-z_0-9]|$)"))
+          if (rv == "?" && tl == nl) refer = 1
+          refuse = (ts ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|die|fail)([^A-Za-z_0-9]|$)/)
+          if (refer && refuse && ts !~ /(^|[ \t;])if[ \t]+(false|true|:)/ && ts !~ /^[ \t]*(false|:)[ \t]/) ok = 1
+          # `if [ "$rc" != 0 ]; then` + the refusal on one of the next two lines
+          if (!ok && refer && ts ~ /(^|[ \t;])if[ \t]/ && ts ~ /then[ \t]*$/) for (m = tl + 1; m <= tl + 2 && m <= to[f]; m++) if (L[m] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|die|fail)([^A-Za-z_0-9]|$)/) ok = 1
+          if (!ok && refer && ts ~ /^[ \t]*case[ \t]/) for (m = tl + 1; m <= tl + 4 && m <= to[f]; m++) if (L[m] ~ /(^|[^A-Za-z_0-9])(return|exit)([^A-Za-z_0-9]|$)/) ok = 1
         }
       }
       if (ok) continue
