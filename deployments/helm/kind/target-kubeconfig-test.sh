@@ -35,6 +35,7 @@
 # TASKFILE=<file in the repo root> runs the probe cells against another Taskfile (the control and M1 stay as they are).
 set -uo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # value_of (#462, #466, #470)
+type value_of >/dev/null 2>&1 || { echo "target-kubeconfig-test: scripts/best-effort.sh did not load (value_of is missing)" >&2; exit 2; }   # the allowed source line cannot carry `|| exit`, so the load is checked here
 # No "$(cmd || echo default)" here: a failed read must not turn into a plausible value (#470).
 yesno() { if "$@"; then echo yes; else echo no; fi; }                      # a label for a message: the status IS the answer
 fingerprint() { if [ -f "$1" ]; then cksum < "$1"; else echo absent; fi; }    # a file that is not there is "absent"; one that is there and cannot be read fails

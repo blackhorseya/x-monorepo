@@ -21,7 +21,8 @@
 #
 # Exit: 0 ready · 1 checks missing, pending or failing · 2 stale / unproven · 3 usage.
 set -euo pipefail
-. "$(dirname "$0")/best-effort.sh"   # value_of (#470)
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "merge-ready: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 usage() { echo "usage: $0 <pr> [--revalidate]" >&2; exit 3; }
 [ $# -ge 1 ] && [ $# -le 2 ] || usage
 pr=$1 revalidate=false

@@ -2,7 +2,8 @@
 # Coverage gate: every */domain/* package must be 100% covered.
 # Domain is pure logic with no I/O, so anything below 100% is an untested rule.
 set -euo pipefail
-. "$(dirname "$0")/best-effort.sh"   # value_of (#470)
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "cover-gate: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 cd "$(dirname "$0")/.."
 mkdir -p bin
 

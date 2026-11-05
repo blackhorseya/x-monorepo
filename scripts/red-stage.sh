@@ -15,7 +15,8 @@
 # Go prints test logs indented and `=== RUN` / `--- FAIL` unindented, so those lines are not
 # searched for the message; -m is an ERE.
 set -euo pipefail
-. "$(dirname "$0")/best-effort.sh"   # value_of (#470)
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "red-stage: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 msg=
 while getopts m: o; do
   case $o in m) msg=$OPTARG ;; *) exit 64 ;; esac

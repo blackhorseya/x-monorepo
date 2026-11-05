@@ -2267,7 +2267,7 @@ expect_eq "affected: fault-injection control — real git, only pkgs/a changed, 
 # cover-gate.sh: needs go + python3 (the scripts-test job has go; jq and python3 are on the runner image).
 cg_fixture() {
   repo="$tmp/cg-$1"; mkdir -p "$repo/scripts" "$repo/pkgs/dom/domain/order"
-  cp "$src/scripts/cover-gate.sh" "$repo/scripts/"
+  cp "$src/scripts/cover-gate.sh" "$src/scripts/best-effort.sh" "$repo/scripts/"   # cover-gate.sh sources best-effort.sh (value_of, #470)
   printf 'go 1.21\n\nuse ./pkgs/dom\n' > "$repo/go.work"
   printf 'module example.com/dom\n\ngo 1.21\n' > "$repo/pkgs/dom/go.mod"
   printf 'package order\n\nfunc Add(a, b int) int { return a + b }\n' > "$repo/pkgs/dom/domain/order/o.go"
@@ -3074,6 +3074,21 @@ F
 # a plain test as a label is still a label
 { dr_prelude; echo 'v=$([ -f f ] && echo y || echo n)'; echo 'echo "v=[$v]"'; } > "$sw/dr-label-ok.sh"
 sw_run "$sw/dr-label-ok.sh"; expect_eq "default (half-print): a plain [ -f f ] label is green" "0" "$rc"
+# scripts that source scripts/best-effort.sh by their own location (#470 r1b): a missing library stops them with a message (exit 2), and it does not
+# matter from which directory — or under which spelling of its own path — they are started
+for sl in cover-gate merge-ready red-stage rekor-v2-canary; do
+  alone="$tmp/lib-alone-$sl"; both="$tmp/lib-both-$sl"; mkdir -p "$alone" "$both" "$tmp/lib-elsewhere"
+  cp "$src/scripts/$sl.sh" "$alone/"; cp "$src/scripts/$sl.sh" "$src/scripts/best-effort.sh" "$both/"
+  lrc=0; capture -2 lout lrc bash "$alone/$sl.sh" || exit 1
+  if [ "$lrc" != 0 ]; then ok; else bad "$sl: best-effort.sh missing and the script carried on (exit 0) [$lout]"; fi   # bash itself stops a set -e script at a failing `.` (exit 1); the explicit handler (exit 2) covers the rest
+  expect_match "$sl: …and it names the library that could not be loaded" 'best-effort\.sh' "$lout"
+  lrc=0; capture -2 lout lrc env -C "$tmp/lib-elsewhere" bash "$both/$sl.sh" || exit 1
+  case $lout in *"cannot load"*) bad "$sl: started from another directory it could not load its library [$lout]" ;; *) ok ;; esac
+  lrc=0; capture -2 lout lrc env -C "$both" bash "$sl.sh" || exit 1
+  case $lout in *"cannot load"*) bad "$sl: started as a bare file name it could not load its library [$lout]" ;; *) ok ;; esac
+  lrc=0; capture -2 lout lrc env -C "$both" bash "./$sl.sh" || exit 1
+  case $lout in *"cannot load"*) bad "$sl: started as ./name it could not load its library [$lout]" ;; *) ok ;; esac
+done
 # a workflow run: script is scanned too
 wf_check df-wf <<'F'
 name: t

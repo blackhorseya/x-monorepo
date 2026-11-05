@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - id: pin
         run: |
-          . scripts/best-effort.sh   # value_of (#470)
+          . scripts/best-effort.sh || exit 2   # value_of (#470); a missing library stops the step
           # every `cosign-release:` in release.yml must agree, or there is no "the release's cosign"
           v=$(sed -n 's/^ *cosign-release: *//p' .github/workflows/release.yml | sort -u)
           n=$(value_of -ok 1 grep -c . <<<"$v") || exit 1   # 1 = no line (grep -c prints 0), 2 = grep failing stays fatal

@@ -23,7 +23,8 @@
 # exactly when this cannot see, and cosign-smoke.sh next to it fails the same way when Rekor is
 # unreachable; the TUF failure carries its own message so a flake reads differently from a v2.
 set -euo pipefail
-. "$(dirname "$0")/best-effort.sh"   # value_of (#470)
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "rekor-v2-canary: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 
 issue='#215, https://github.com/blackhorseya/x-monorepo/issues/215'
 cfg=${REKOR_CANARY_SIGNING_CONFIG:-}
