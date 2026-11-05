@@ -34,6 +34,29 @@
 - hook 失敗時 exit 2，stderr 會回到 agent 讓它自己修；`stop_hook_active` 防止無限循環
 - dependabot 只掃單一 module 目錄、不懂 go.work：Go bump 會讓其他 module 漂移，`dependabot-sync.yml` 在它的分支跑 `task tidy` 補 commit 再觸發 CI，否則 `work-sync` 會擋。`.github/dependabot.yml` 三組每週各一支 PR：gomod（所有 module 一組）、github-actions、npm（`web/` pnpm workspace 一組；lockfile 算 releasable，merge 會切 patch 版）
 
+## gate 腳本不吞外部指令的退出碼（#462）
+
+gate 若把外部指令的非零退出碼丟掉，指令壞了它也是綠的。同一類錯誤在 #453／#455（`a | b`）、#457（`x=$(grep … || true)`）、#453 r1（`grep … || true`）、#458（`cat … || true`、`for _ in $(seq …)`）各出現過一次，所以改成 repo 層級的檢查，不再靠審查一支一支抓。
+
+`scripts/check-exit-swallow.sh`（`task check-exit-swallow`；CI 由 `scripts/test.sh` 的 `swallow:` 案例在 scripts-test job 跑，任何 `*.sh` 有變動都會觸發該 job）掃每個 tracked `*.sh`（`scripts/hooks/` 除外，那是 Claude hooks，不是 gate），逐行擋下：
+
+| 規則 | 寫法 | 為什麼不行 | 改成 |
+|---|---|---|---|
+| `swallow` | `cmd \|\| true`、`\|\| :`、`\|\| exit 0`、`\|\| return 0`，含 `$(… \|\| true)`、trap 字串、`sh -c '…'` | 任何非零碼（壞掉、被注入、找不到）都變成成功；`pipefail` 對 `\|\| true` 沒有作用 | `n=$(grep -c x f \|\| [ $? -eq 1 ])`（grep 只有 1 代表沒有匹配，2 以上照樣讓 `set -e` 中止）；或 `rc=0; cmd \|\| rc=$?` 後用 `case $rc` 逐碼處理 |
+| `forlist` | `for x in $(cmd)`、`` for x in `cmd` `` | 清單是 `$(…)` 時 cmd 的退出碼被丟掉：`seq` 印出 `1` 後壞掉就只是一個更短的迴圈 | `for ((i = 1; i <= N; i++)); do`（不要用 `_` 當計數器：每個指令都會改寫 `$_`）；清單真的要來自指令時，先 `rc=0; list=$(cmd) \|\| rc=$?` 再檢查 |
+| `setargs` | `set -- $(cmd)` | 同上 | `out=$(cmd)`（賦值的退出碼會傳出去）後 `set -- $out` |
+| `pipeline` | 檔案裡沒有 `set -o pipefail`（或 `set -euo pipefail` 等）卻有 `a \| b` | 管線的退出碼只算最後一段 | 檔頭加 `set -euo pipefail`；被 source 的檔案由呼叫端負責，要在該行寫 exemption |
+
+不必註解的例外只有清理：`kill … \|\| true`、`rm … \|\| true`、`kill … && wait … \|\| true`（行程或檔案已經不在，不是判定），以及 `[ … ] \|\| return 0` 這類條件式守衛。其餘一律要嘛修，要嘛**在同一行**寫豁免註解，並說明為什麼這個指令的狀態不會改變判定：
+
+```bash
+out=$(curl -sS "$url" || true)   # exit-ok: empty output is the "not ready" answer; the loop ends in an explicit timeout failure
+```
+
+格式是 `# exit-ok: <理由>`，理由至少要有幾個字；空的不算。它是逐行掃描，不是 shell parser：註解行與 heredoc 本文不掃，`pipeline` 只看沒有 pipefail 的檔案，引號裡的 `|` 不算。`.yml` 內嵌的 shell（Taskfile、workflows）不在掃描範圍，PR #462 的盤點表有逐行列出。
+
+**共用 fault-injection helper**：`scripts/fault-inject.sh`，`. scripts/fault-inject.sh` 後用 `inject_fail <dir> <tool> <exit> [<keep>] [<arg-glob>]` 產生 PATH wrapper：先跑真的 `<tool>`，輸出全部（`keep` 省略）、前 `keep` 行或完全不輸出（`0`）之後以 `<exit>` 結束，可用 `arg-glob` 只讓某個子指令（`gh pr checks*`、`go list *`）失敗。gate 的測試對它用到的每個外部指令至少跑「輸出後失敗」與「完全不輸出就失敗」兩格，斷言 gate 非 0，另跑同一個 fixture 的對照組確認是綠的，才知道紅是 wrapper 造成的。`scripts/test.sh` 的 `check-script-modes`、`merge-ready`、`red-stage`、`affected`、`cover-gate` 案例是範例。
+
 ## 本機 hook 證據：AgEnD hooks ≠ lefthook（#300）
 
 `git commit` / `git push` 成功，不代表 `lefthook.yml` 的 `gate-fast` / `gate-local` 跑過：git 只執行 active `core.hooksPath` 底下**同名**的 hook。AgEnD 管理的 worktree 會把 `core.hooksPath` 指向 `~/.agend/hooks`，那裡只有 `prepare-commit-msg`、`reference-transaction` 等 AgEnD hooks，沒有 `pre-commit` / `pre-push`，也不呼叫 lefthook。`task tools:hooks` 裝的 lefthook 因此不會被觸發。

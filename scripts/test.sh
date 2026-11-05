@@ -20,6 +20,8 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t
 PB_PIDS=""   # dex-prebind stubs; killed by the one EXIT trap set below the prepull helpers
 trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; rm -rf "$tmp"' EXIT
 fail=0 pass=0
+# shellcheck source=fault-inject.sh
+. "$src/scripts/fault-inject.sh"   # inject_fail: a PATH wrapper that runs the real tool, then dies (#462)
 
 # fixture <name>: a fresh repo at $repo with scripts/ committed on main and tag v0.1.0.
 fixture() {
@@ -105,7 +107,9 @@ expect_eq "helm only" "helm helm_kind helm_kind_keda" "$(jobs_on helm deployment
 # scripts/test.sh drives deployments/helm/kind/coredns-dex.sh itself (#287): a change to only that
 # file must run scripts-test, or its fixtures cannot catch a regression in it at PR time.
 expect_eq "coredns-dex.sh also runs scripts-test" "helm scripts_test helm_kind helm_kind_keda" "$(jobs_on coredns deployments/helm/kind/coredns-dex.sh)"
-expect_eq "other kind scripts do not run scripts-test" "helm helm_kind helm_kind_keda" "$(jobs_on kindsmoke deployments/helm/kind/smoke.sh)"
+expect_eq "any kind script runs scripts-test (check-exit-swallow.sh scans every tracked *.sh, #462)" "helm scripts_test helm_kind helm_kind_keda" "$(jobs_on kindsmoke deployments/helm/kind/smoke.sh)"
+expect_eq "a k6 shell script runs scripts-test too" "scripts_test k6 k6_auth k6_wire" "$(jobs_on k6sh tests/k6/catalog.sh)"
+expect_eq "a console e2e shell script runs scripts-test too" "gen_freshness web console_e2e console_image scripts_test helm_kind" "$(jobs_on e2esh web/apps/console/e2e/image.sh)"
 # test.sh also reads .github/workflows/k6-bench.yml (wiring assertions) and copies .goreleaser.yaml
 # into the cosign-smoke fixture (#298): each alone must run scripts-test; no other workflow does.
 expect_eq "k6-bench.yml also runs scripts-test" "actions_resolve scripts_test" "$(jobs_on k6bench .github/workflows/k6-bench.yml)"
@@ -1827,20 +1831,215 @@ expect_eq "script modes: a glob that matches nothing is not green (exit 2: too f
 expect_match "script modes: and it says which pattern matched nothing" "kk/\\*\\.sh' \\(from the chmod line\\) matches no file" "$out"
 modes_fixture mut4; sed -i.bak 's#chmod +x#chmod -x#' "$repo/Taskfile.yml"; rm "$repo/Taskfile.yml.bak"; modes_run
 expect_eq "script modes: no chmod line at all is not green (judge cannot pass on empty)" "2" "$rc"
-# Fault injection (#454 r1): each external command the gate calls prints its real output and THEN dies. A gate that swallows
-# the status (`x=$(cmd || true)`, a pipe in $(…)) stays green on exactly this; it must go red.
-modes_dying() {   # modes_dying <tool>: PATH wrapper that runs the real <tool>, then exits 42
-  local real; real=$(command -v "$1")
-  mkdir -p "$tmp/dying-$1"; printf '#!/bin/sh\n%s "$@"\nexit 42\n' "$real" > "$tmp/dying-$1/$1"; chmod +x "$tmp/dying-$1/$1"
-}
+# Fault injection (#454 r1, helper: scripts/fault-inject.sh, #462): each external command the gate calls prints its real output
+# and THEN dies. A gate that swallows the status (`x=$(cmd || true)`, a pipe in $(…)) stays green on exactly this; it must go red.
 for t in grep git dirname; do
-  modes_dying "$t"; modes_fixture "dies-$t"
-  rc=0; out=$(cd "$repo" && PATH="$tmp/dying-$t:$PATH" scripts/check-script-modes.sh 2>&1) || rc=$?
+  modes_fixture "dies-$t"
+  rc=0; out=$(cd "$repo" && PATH="$(inject_fail "$tmp/inj-modes-$t" "$t" 42):$PATH" scripts/check-script-modes.sh 2>&1) || rc=$?
   if [ "$rc" = 0 ]; then bad "script modes: $t prints its output then exits 42, the gate still exits 0 [$out]"; else ok; fi
 done
+# ... and the same with the output cut short (nothing, or one line): a half-read answer is not an answer either.
+for t in grep git; do for keep in 0 1; do
+  modes_fixture "dies-$t-$keep"
+  rc=0; out=$(cd "$repo" && PATH="$(inject_fail "$tmp/inj-modes-$t-$keep" "$t" 42 "$keep"):$PATH" scripts/check-script-modes.sh 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then bad "script modes: $t prints $keep line(s) then exits 42, the gate still exits 0 [$out]"; else ok; fi
+done; done
 # The fixture itself is green without the wrapper (so the red above is the wrapper's doing, not the fixture's).
 modes_fixture dies-control; modes_run
 expect_eq "script modes: fault-injection control — same fixture, real tools, is green" "0" "$rc"
+
+# ── check-exit-swallow.sh (#462) ────────────────────────────────────────────────────────────────
+# The static gate: a script may not drop an external command's exit status without saying why. One mutant per shape it
+# must catch (each a file of its own, red and naming its rule), the exemption flipping each to green, the lines it must
+# NOT flag, and the checker's own external commands dying (exit 2, never "clean").
+sw="$tmp/swallow"; mkdir -p "$sw"
+# sw_file <name> <body…>: $sw/<name>.sh with pipefail set (so only the shape under test can be flagged)
+sw_file() { local n=$1; shift; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$*" > "$sw/$n.sh"; }
+sw_run() { rc=0; out=$("$src/scripts/check-exit-swallow.sh" "$@" 2>&1) || rc=$?; }
+# sw_red <name> <rule> <body…>: the body is red, the output names the rule, and an exit-ok comment makes it green
+sw_red() {
+  local n=$1 rule=$2; shift 2
+  sw_file "$n" "$*"; sw_run "$sw/$n.sh"
+  expect_eq    "swallow: $n is red" "1" "$rc"
+  expect_match "swallow: $n names the rule $rule" ": $rule:" "$out"
+  sw_file "$n-ok" "$* # exit-ok: the verdict is read from the file this writes, not from this status"; sw_run "$sw/$n-ok.sh"
+  expect_eq    "swallow: $n with an exit-ok comment is green" "0" "$rc"
+}
+# the table: name @@ rule @@ the line that must be red
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  n=${row%% @@ *}; rest=${row#* @@ }; rule=${rest%% @@ *}; body=${rest#* @@ }
+  sw_red "$n" "$rule" "$body"
+done <<'ROWS'
+cmdsub @@ swallow @@ x=$(grep a f || true)
+direct @@ swallow @@ grep a f > o || true
+catfile @@ swallow @@ cat x || true
+colon @@ swallow @@ grep a f || :
+inpipe @@ swallow @@ n=$(grep a f | wc -l || true)
+inquote @@ swallow @@ x="$(grep a f || true)"
+intrap @@ swallow @@ trap 'cleanup || true' EXIT
+retzero @@ swallow @@ mktemp -d || return 0
+forseq @@ forlist @@ for _ in $(seq 1 5); do :; done
+forpgrep @@ forlist @@ for p in $(pgrep -P 1); do :; done
+setargs @@ setargs @@ set -- $(gh pr view)
+waitalone @@ swallow @@ wait "$p" || true
+ROWS
+# sw_write <name>: $sw/<name>.sh from stdin, after a header that sets (or not) pipefail
+sw_write() { { printf '#!/usr/bin/env bash\n%s\n' "${2:-set -euo pipefail}"; cat; } > "$sw/$1.sh"; }
+# no pipefail: a pipeline's status is its last command's
+sw_write nopipefail 'set -eu' <<'F'
+x=$(a | b)
+F
+sw_run "$sw/nopipefail.sh"
+expect_eq    "swallow: a pipeline in a file without pipefail is red" "1" "$rc"
+expect_match "swallow: and it says pipeline" ': pipeline:' "$out"
+sw_write nopipefail-ok 'set -eu' <<'F'
+x=$(a | b) # exit-ok: only b matters, a is a plain echo
+F
+sw_run "$sw/nopipefail-ok.sh"
+expect_eq    "swallow: the same with an exit-ok comment is green" "0" "$rc"
+sw_write pipefail <<'F'
+x=$(a | b)
+F
+sw_run "$sw/pipefail.sh"
+expect_eq    "swallow: the same pipeline with pipefail is green" "0" "$rc"
+# an exemption has to carry its reason
+sw_write noreason <<'F'
+x=$(grep a f || true) # exit-ok:
+F
+sw_run "$sw/noreason.sh"
+expect_eq    "swallow: an exit-ok comment without a reason does not count" "1" "$rc"
+# what is not flagged
+sw_write cleanup <<'F'
+kill "$p" 2>/dev/null || true
+rm -f x || true
+"$tool" rm -f "$n" >/dev/null 2>&1 || true
+[ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true
+trap 'test -z "$pf" || kill $pf 2>/dev/null || true' EXIT
+[ -n "$x" ] || return 0
+F
+sw_run "$sw/cleanup.sh"
+expect_eq    "swallow: kill / rm cleanup and [ ] guards are not flagged" "0" "$rc"
+sw_write canonical <<'F'
+n=$(grep -c a f || [ $? -eq 1 ])
+for ((i = 1; i <= 5; i++)); do :; done
+rc=0; out=$(cmd) || rc=$?
+for p in $pids; do :; done
+F
+sw_run "$sw/canonical.sh"
+expect_eq    "swallow: the documented replacements are clean" "0" "$rc"
+sw_write doc <<'F'
+# x=$(a || true) is only a comment
+cat <<'EOF'
+x=$(a || true)
+for _ in $(seq 1 3); do :; done
+EOF
+cat <<-X
+	x=$(a || true)
+	X
+echo done
+F
+sw_run "$sw/doc.sh"
+expect_eq    "swallow: comments and heredoc bodies are not scanned" "0" "$rc"
+sw_write after-heredoc <<'F'
+cat <<EOF
+x
+EOF
+x=$(grep a f || true)
+F
+sw_run "$sw/after-heredoc.sh"
+expect_eq    "swallow: a line after a heredoc is scanned again" "1" "$rc"
+# the checker's own commands dying: red / exit 2, never a clean report
+sw_file clean 'echo ok'
+rc=0; out=$(PATH="$(inject_fail "$tmp/inj-sw-awk" awk 42):$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/clean.sh" 2>&1) || rc=$?
+expect_eq    "swallow: awk dies after its report — not clean (exit 2)" "2" "$rc"
+rc=0; out=$(PATH="$(inject_fail "$tmp/inj-sw-awk0" awk 42 0):$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/clean.sh" 2>&1) || rc=$?
+expect_eq    "swallow: awk dies before printing — not clean (exit 2)" "2" "$rc"
+rc=0; out=$(PATH="$(inject_fail "$tmp/inj-sw-git" git 42 all 'ls-files*'):$PATH" "$src/scripts/check-exit-swallow.sh" 2>&1) || rc=$?
+expect_eq    "swallow: git ls-files dies after its list — not clean (exit 2)" "2" "$rc"
+rc=0; out=$(PATH="$(inject_fail "$tmp/inj-sw-git0" git 42 0 'ls-files*'):$PATH" "$src/scripts/check-exit-swallow.sh" 2>&1) || rc=$?
+expect_eq    "swallow: git ls-files dies before listing — not clean (exit 2)" "2" "$rc"
+# the repository itself
+sw_run
+expect_eq    "swallow: every tracked script is clean" "0" "$rc"
+[ "$rc" = 0 ] || echo "$out" | head -20 >&2
+
+# ── gates under fault injection (#462) ────────────────────────────────────────────────────────────
+# Each external command a gate calls prints (all, none or part of) its real answer and then exits 42. The gate has to end
+# non-zero, and its control run — the same fixture, real tools — has to stay green.
+# merge-ready.sh: gh is a stub; the wrapper goes around the stub.
+ready_dying() {   # ready_dying <stub> <keep> <glob>: gh answers per the stub, but the calls matching <glob> die with exit 42
+  local name=$1 keep=$2 glob=$3 w
+  w=$(PATH="$tmp/stub-$name/bin:$PATH" inject_fail "$tmp/inj-ready-$name-$RANDOM" gh 42 "$keep" "$glob")
+  set +e
+  out=$(GH_STUB_DIR="$tmp/stub-$name" PATH="$w:$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 2>&1)
+  rc=$?
+  set -e
+}
+stub_gh dying
+for call in 'pr view*' 'api repos/o/r/git/ref/heads/*' 'pr checks*' 'run list --workflow ci.yml*' 'run view *' 'api repos/o/r/commits/*'; do
+  for keep in all 0; do
+    ready_dying dying "$keep" "$call"
+    if [ "$rc" = 0 ]; then bad "merge-ready: gh $call prints [$keep] then exits 42, the gate still exits 0 [$out]"; else ok; fi
+    if printf '%s' "$out" | grep -q '^READY'; then bad "merge-ready: gh $call dies and the gate still says READY"; else ok; fi
+  done
+done
+stub_gh dyingtree; printf '%s\n%s\n' "$old_main" "$head_sha" > "$tmp/stub-dyingtree/parents"
+printf '77 completed success merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-dyingtree/tree_runs"
+ready_dying dyingtree all 'run list --workflow merge-tree.yml*'
+if [ "$rc" = 0 ]; then bad "merge-ready: gh run list (merge-tree) prints the matching run then exits 42, the gate still exits 0 [$out]"; else ok; fi
+ready dyingtree
+expect_eq "merge-ready: fault-injection control — the same stale + merge-tree fixture, a healthy gh, is ready" "0" "$rc"
+ready dying
+expect_eq "merge-ready: fault-injection control — the fresh fixture, a healthy gh, is ready" "0" "$rc"
+
+# red-stage.sh: grep dies
+for keep in all 0 1; do
+  rc=0; out=$(printf '%s\n' '=== RUN   TestCreate
+    order_test.go:42: find calls: want 1 call, got 0
+--- FAIL: TestCreate (0.00s)
+FAIL' | PATH="$(inject_fail "$tmp/inj-red-$keep" grep 42 "$keep"):$PATH" "$src/scripts/red-stage.sh" -m 'want 1 call.* got 0' 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then bad "red-stage: grep prints [$keep] then exits 42, the gate still calls it an assertion [$out]"; else ok; fi
+done
+
+# affected.sh: git dies in each of its three calls. The three-dot diff failing (no merge base in a shallow clone) must
+# not shrink the test matrix: every module runs.
+affected_fixture adie
+git -C "$repo" checkout -q -b change; touch_file pkgs/a/x.go; commit "chore: adie"
+for keep in all 0; do
+  w=$(PATH="$PATH" inject_fail "$tmp/inj-aff-3dot-$keep" git 42 "$keep" 'diff --no-renames --name-only origin/main...HEAD')
+  rc=0; out=$(cd "$repo" && PATH="$w:$PATH" scripts/affected.sh 2>/dev/null) || rc=$?; out=$(printf '%s\n' "$out" | tr '\n' ' ')
+  expect_eq "affected: git diff base...HEAD dies [$keep] — every module is affected" "pkgs/a pkgs/b " "$out"
+done
+for glob in 'diff --no-renames --name-only HEAD' 'ls-files --others*'; do
+  rc=0; out=$(cd "$repo" && PATH="$(inject_fail "$tmp/inj-aff-$RANDOM" git 42 all "$glob"):$PATH" scripts/affected.sh 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then bad "affected: git $glob prints its answer then exits 42, the script still exits 0 [$out]"; else ok; fi
+done
+rc=0; out=$(cd "$repo" && scripts/affected.sh 2>/dev/null) || rc=$?; out=$(printf '%s\n' "$out" | tr '\n' ' ')
+expect_eq "affected: fault-injection control — real git, only pkgs/a changed, a and its dependent b" "pkgs/a pkgs/b " "$out"
+
+# cover-gate.sh: needs go + python3 (the scripts-test job has go; jq and python3 are on the runner image).
+cg_fixture() {
+  repo="$tmp/cg-$1"; mkdir -p "$repo/scripts" "$repo/pkgs/dom/domain/order"
+  cp "$src/scripts/cover-gate.sh" "$repo/scripts/"
+  printf 'go 1.21\n\nuse ./pkgs/dom\n' > "$repo/go.work"
+  printf 'module example.com/dom\n\ngo 1.21\n' > "$repo/pkgs/dom/go.mod"
+  printf 'package order\n\nfunc Add(a, b int) int { return a + b }\n' > "$repo/pkgs/dom/domain/order/o.go"
+  printf 'package order\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal("add")\n\t}\n}\n' > "$repo/pkgs/dom/domain/order/o_test.go"
+}
+cg_run() { rc=0; out=$(cd "$repo" && GOTOOLCHAIN=local "$@" scripts/cover-gate.sh 2>&1) || rc=$?; }
+cg_fixture ok; cg_run env
+expect_eq    "cover-gate: fixture, a fully covered domain package, is green" "0" "$rc"
+expect_match "cover-gate: and it checked the package" 'ok +example.com/dom/domain/order 100%' "$out"
+cg_fixture low; printf 'package order\n\nfunc Sub(a, b int) int { return a - b }\n' >> "$repo/pkgs/dom/domain/order/o.go"; cg_run env
+expect_eq    "cover-gate: mutant — an uncovered function is red" "1" "$rc"
+for keep in all 0; do
+  for glob in 'work edit*' 'list *'; do
+    cg_fixture "dies-$RANDOM"
+    cg_run env "PATH=$(inject_fail "$tmp/inj-cg-$RANDOM" go 42 "$keep" "$glob"):$PATH"
+    if [ "$rc" = 0 ]; then bad "cover-gate: go $glob prints [$keep] then exits 42, the gate still exits 0 [$out]"; else ok; fi
+  done
+done
 
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
