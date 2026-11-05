@@ -658,6 +658,12 @@ tasks:
     dir: web/apps/console
     cmds: ['pnpm exec playwright test {{.CLI_ARGS}}']
 
+  web-e2e-shards-check:
+    desc: 'CI console-e2e shards (#447): `playwright test --list --shard=i/N` for i in 1..N, together, must be exactly the unsharded --list (same test ids, none twice, none missing; a --list that exits non-zero or prints fewer tests than its own Total fails). Usage: task web-e2e-shards-check -- 3. Lists only, starts no server. Run with E2E_DEX=1 to include the oidc-dex project, as CI does. scripts/web-e2e-shards-check.sh, pinned by scripts/test.sh'
+    deps: [web-install]
+    dir: web/apps/console
+    cmds: ['../../../scripts/web-e2e-shards-check.sh {{.CLI_ARGS}}']
+
   web-e2e-payment:
     desc: 'the "payment" Playwright project (playwright.payment.config.ts): the console against the REAL payment stack, nothing scripted with page.route. e2e/payment/stack-server.ts makes a database of its own on the server E2E_DATABASE_URL names (needs psql), migrates it and runs catalog-rpc, payment-rpc serve + consume, rpc and worker (ordering.require_payment on, switched back off by the spec); the spec orders in the console, presses Pay (a new tab on the mock checkout address), pays through `payment-rpc mock pay`, and expects COMPLETED, the card gone and the polling stopped. What CI''s console-e2e job runs after the default-port run'
     deps: [build, web-build]

@@ -2118,5 +2118,107 @@ for spec in 'all|*information_schema.tables*' '1|*information_schema.tables*' '0
   if [ "$rc" = 0 ]; then bad "upgrade guard: kubectl $glob prints [$keep] then exits 42, the guard still passes [$out]"; else ok; fi
 done
 
+# ── scripts/web-e2e-shards-check.sh: the console-e2e shards are the whole suite (#447) ──────────────────────────────
+# A stub pnpm answers `exec playwright test --list [--shard=i/n]` from a 10-test list (shard i = every n-th test), with a fault
+# chosen by FAULT. The check must be red for a list that dies half way, a truncated list that exits 0, a shard that drops a
+# test, a test listed in two shards, an empty suite; green only when the shards are exactly the suite.
+sc="$tmp/shards-check"; mkdir -p "$sc/bin"
+for k in 1 2 3 4 5 6 7 8 9 10; do echo "  [chromium] › a$((k % 3)).spec.ts:$k:1 › case $k"; done > "$sc/tests.txt"
+cat > "$sc/bin/pnpm" <<'STUB'
+#!/usr/bin/env bash
+# pnpm exec playwright test --list [--shard=i/n]; FAKE_FAULT picks the fault. Anything else (task's web-install: pnpm install) is a no-op.
+[ "${1:-}" = exec ] && [ "${2:-}" = playwright ] || exit 0
+PATH="$REAL_PATH"   # the stub itself must not run through the failing wrappers of a case
+shard=""; for a in "$@"; do case "$a" in --shard=*) shard=${a#--shard=};; esac; done
+if [ -n "$shard" ]; then
+  sel=$(awk -v i="${shard%/*}" -v n="${shard#*/}" '(NR - 1) % n == i - 1' "$FAKE_TESTS")
+else
+  sel=$(cat "$FAKE_TESTS")
+fi
+total_says=""; code=0
+case "${FAKE_FAULT:-}:${shard:-full}" in
+  dies-partial:full) echo "Listing tests:"; printf '%s\n' "$sel" | head -3; echo "boom" >&2; exit 42 ;;  # part of the list, then dies
+  dies:full)       code=42; echo "boom" >&2 ;;     # a complete, consistent list, but the exit code says it failed
+  dies-shard:2/3)  code=42 ;;
+  truncated:full)  total_says=$(printf '%s\n' "$sel" | wc -l | tr -d ' '); sel=$(printf '%s\n' "$sel" | head -4) ;;
+  drop:2/3)        sel=$(printf '%s\n' "$sel" | tail -n +2) ;;
+  dup:1/3)         sel=$(printf '%s\n%s\n' "$sel" "$(printf '%s\n' "$sel" | head -1)") ;;
+  empty:full)      sel="" ;;
+esac
+echo "Listing tests:"
+[ -z "$sel" ] || printf '%s\n' "$sel"
+echo
+echo "Total: ${total_says:-$(printf '%s' "$sel" | grep -c '')} tests in 3 files"
+exit "$code"
+STUB
+chmod +x "$sc/bin/pnpm"
+shards_check() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT="${FAULT:-}" "$src/scripts/web-e2e-shards-check.sh" "$@" 2>&1); }
+rc=0; out=$(FAULT= shards_check 3) || rc=$?
+expect_eq "shards-check: the shards together are the suite → exit 0" "0" "$rc"
+expect_match "shards-check: it says each test once" 'ok: 3 shards = 10 tests, each exactly once' "$out"
+rc=0; out=$(FAULT=dies shards_check 3) || rc=$?
+expect_eq "shards-check: a --list that prints the whole list but exits 42 is red" "1" "$rc"
+expect_match "shards-check: it names the exit code" 'exited 42' "$out"
+rc=0; out=$(FAULT=dies-partial shards_check 3) || rc=$?
+expect_eq "shards-check: a --list that prints part of the list and exits 42 is red" "1" "$rc"
+expect_match "shards-check: the partial list names the exit code too" 'exited 42' "$out"
+rc=0; out=$(FAULT=dies-shard shards_check 3) || rc=$?
+expect_eq "shards-check: one shard's --list dying half way is red" "1" "$rc"
+rc=0; out=$(FAULT=truncated shards_check 3) || rc=$?
+expect_eq "shards-check: a truncated list that exits 0 is red" "1" "$rc"
+expect_match "shards-check: it says the Total and the lines differ" "Total says '10' but it printed 4" "$out"
+rc=0; out=$(FAULT=drop shards_check 3) || rc=$?
+expect_eq "shards-check: a shard that drops a test is red" "1" "$rc"
+expect_match "shards-check: it says the shards are not the suite" 'are not the whole suite' "$out"
+rc=0; out=$(FAULT=dup shards_check 3) || rc=$?
+expect_eq "shards-check: a test in two shards is red" "1" "$rc"
+expect_match "shards-check: the duplicate is a difference, not a match" 'are not the whole suite' "$out"
+rc=0; out=$(FAULT=empty shards_check 3) || rc=$?
+expect_eq "shards-check: an empty suite is red, not a match of nothing" "1" "$rc"
+# The same faults through the real entry point, `task web-e2e-shards-check -- N` (the Taskfile in this checkout, the stub pnpm first on PATH).
+shards_task() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT="${FAULT:-}" task -t "$src/Taskfile.yml" web-e2e-shards-check -- "$@" 2>&1); }
+rc=0; out=$(FAULT= shards_task 3) || rc=$?
+expect_eq "shards-check via task: the shards are the suite → exit 0" "0" "$rc"
+expect_match "shards-check via task: it says each test once" 'ok: 3 shards = 10 tests, each exactly once' "$out"
+rc=0; out=$(FAULT=dies-partial shards_task 3) || rc=$?
+expect_eq "shards-check via task: part of the list, then exit 42 → the task exits non-zero" "201" "$rc"
+expect_match "shards-check via task: the controlled error names the exit code" 'exited 42' "$out"
+rc=0; out=$(FAULT=dies shards_task 3) || rc=$?
+expect_eq "shards-check via task: a whole list but exit 42 → the task exits non-zero" "201" "$rc"
+rc=0; out=$(FAULT=truncated shards_task 3) || rc=$?
+expect_eq "shards-check via task: a truncated list, exit 0 → the task exits non-zero" "201" "$rc"
+rc=0; out=$(FAULT=drop shards_task 3) || rc=$?
+expect_eq "shards-check via task: a missing test → the task exits non-zero" "201" "$rc"
+rc=0; out=$(FAULT=dup shards_task 3) || rc=$?
+expect_eq "shards-check via task: a duplicate → the task exits non-zero" "201" "$rc"
+# Every external command of the script is checked: a wrapper (first on PATH) runs the real command, then either prints all
+# of its output and exits 42 (WRAP_MODE=full) or prints only its first line and exits 42 (WRAP_MODE=partial). The script
+# must exit non-zero and never say ok. (grep's exit 1 = no match is the one non-zero it may accept.)
+mkdir -p "$sc/wrap"
+cat > "$sc/wrap/wrapper" <<'WRAPPER'
+#!/usr/bin/env bash
+name=$(basename "$0"); real=$(PATH="$REAL_PATH" command -v "$name")
+if [ "${WRAP_CMD:-}" != "$name" ]; then exec "$real" "$@"; fi
+out=$("$real" "$@"; echo "rc=$?"); out=${out%rc=*}
+if [ "${WRAP_MODE:-full}" = partial ]; then printf '%s\n' "$out" | head -1; else printf '%s' "$out"; fi
+exit 42
+WRAPPER
+chmod +x "$sc/wrap/wrapper"
+for c in grep sed wc tr cat sort diff seq mktemp; do ln -sf wrapper "$sc/wrap/$c"; done
+wrapped_check() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/wrap:$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT= WRAP_CMD="$1" WRAP_MODE="$2" "$src/scripts/web-e2e-shards-check.sh" 3 2>&1); }
+for c in grep sed wc tr cat sort diff seq mktemp; do
+  for m in full partial; do
+    rc=0; out=$(wrapped_check "$c" "$m") || rc=$?
+    if [ "$rc" = 0 ]; then bad "shards-check: $c printing ($m) then exiting 42 still exits 0"; else ok; fi
+    case "$out" in *"ok: 3 shards"*) bad "shards-check: $c ($m) then exit 42 still says ok";; *) ok;; esac
+  done
+done
+rc=0; out=$(WRAP_CMD=none wrapped_check none full) || rc=$?
+expect_eq "shards-check: the wrappers that do not fail change nothing → exit 0" "0" "$rc"
+rc=0; out=$(FAULT= shards_check) || rc=$?
+expect_eq "shards-check: no shard count is a usage error" "2" "$rc"
+rc=0; out=$(FAULT= shards_check 0) || rc=$?
+expect_eq "shards-check: zero shards is a usage error" "2" "$rc"
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
