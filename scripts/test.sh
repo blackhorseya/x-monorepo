@@ -2011,6 +2011,16 @@ FAIL' | PATH="$(inject_fail "$tmp/inj-red-$keep" grep 42 "$keep"):$PATH" "$src/s
   if [ "$rc" = 0 ]; then bad "red-stage: grep prints [$keep] then exits 42, the gate still calls it an assertion [$out]"; else ok; fi
 done
 
+# red-stage.sh, the part that tightened (#462): the body filter used to end in `|| true`, so a grep that died with 2 (not 1 = "no
+# line left") after printing its answer still classified the run; now it is a hard failure and nothing is printed. The old class word
+# on stdout is the observable that tells the two writings apart.
+rc=0; out=$(printf '%s\n' '=== RUN   TestCreate
+    order_test.go:42: find calls: want 1 call, got 0
+--- FAIL: TestCreate (0.00s)
+FAIL' | PATH="$(inject_fail "$tmp/inj-red-ev" grep 2 all '-Ev*'):$PATH" "$src/scripts/red-stage.sh" -m 'want 1 call.* got 0' 2>/dev/null) || rc=$?
+expect_eq "red-stage: grep -Ev exits 2 after printing — no class is printed" "" "$out"
+if [ "$rc" = 0 ]; then bad "red-stage: grep -Ev exits 2 after printing, the gate still exits 0"; else ok; fi
+
 # affected.sh: git dies in each of its three calls. The three-dot diff failing (no merge base in a shallow clone) must
 # not shrink the test matrix: every module runs.
 affected_fixture adie
