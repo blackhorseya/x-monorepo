@@ -17,12 +17,10 @@
 #   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
 #   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
 #             break / fail / die, or a new value for $v). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
-#   fnctx     a function that is CALLED in a `f || x` / `f && x` / `if f` / `while f` / `! f` position (errexit is off for its whole body)
-#             and assigns a command substitution (`x=$(cmd)`) without a status check on that line; the same when it is called inside a
-#             command substitution (`v=$(f)`, `"$(f)"`, `` `f` ``, `$(cd d && f)`, `v=$(` with the call on the next line) or by a function that is
-#             (one-line wrappers included). Only call sites in the SAME file are seen (a function sourced from another file and called
-#             conditionally here is not); calls through a variable, eval, `command f`, or a call buried deeper than the first three lines
-#             after a bare `$(` are not either.
+#   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` with no status check (`|| …` on the line, `$?` read next, or `) || …` after a
+#             heredoc substitution's closing line). A shape rule: it does not look at how or from where the function is called (`f || x`,
+#             `if f`, `$(f)`, a wrapper, eval, command f, another file, never) - errexit may be off in any of those and the checker is never
+#             one spelling behind that way.
 #   Workflow / composite-action files: the `run:` scripts are cut out (scripts/extract-run-blocks.py) and scanned with these same rules;
 #             a step with no `shell:` runs `bash -e {0}` (no pipefail), `shell: bash` runs with pipefail, so the first is held to `pipeline`.
 # Not flagged without a comment: `kill ... || true`, `rm ... || true` and `... kill ... && wait ... || true` (cleanup:
@@ -206,25 +204,11 @@ END { exit (n > 0) }
 AWK
 
 cat > "$tmp/fnctx.awk" <<'AWK'
-# One file at a time. Finds functions defined in the file that run with errexit off (called as `f || x`, `f && x`, `if f`, `while f`,
-# `until f`, `! f`, directly or from such a function) and prints a finding for every `x=$(cmd)` in them that has no `||` on the line.
+# One file at a time. A SHAPE rule, not a call-graph one: inside ANY function body, every `x=$(cmd)` / `x="$(cmd)"` must say what happens when
+# cmd fails (`|| …` on the line, `$?` read right after, or the `|| …` after a heredoc substitution's closing line). Where the function is
+# called from (`f || x`, `if f`, `$(f)`, a wrapper, eval, command f, another file) decides whether errexit protects it, and a checker that
+# reads call sites is always one spelling behind; the body is the only place that is the same everywhere.
 function strip(s,   t) { t = s; gsub(/\047[^\047]*\047/, "", t); gsub(/"[^"]*"/, "", t); sub(/[ \t]#.*/, "", t); return t }
-function callpos(t, name,   re, cmd) {   # name sits in command position and an && / || follows it, or a condition keyword precedes it
-  cmd = "(^|[;&|{(!]|(then|do|else|elif|if|while|until)[ \t])[ \t]*(![ \t]*)?"
-  re = "(^|[;&|{(!]|[ \t])(if|elif|while|until|!)[ \t]+(![ \t]*)?" name "([ \t;)]|$)"
-  if (t ~ re) return 1
-  re = cmd name "([ \t][^;]*)?[ \t]*(\\|\\||&&)"
-  if (t ~ re) return 1
-  return 0
-}
-function reason(f) {
-  return (kind[f] == "sub") ? sprintf("called inside $(…) at line %d: a command substitution does not inherit set -e", why[f]) : sprintf("called at line %d in a ||/&&/if/! position", why[f])
-}
-function anycall(t, name,   re) {
-  re = "(^|[;&|{(!]|(then|do|else|elif|if|while|until)[ \t])[ \t]*(![ \t]*)?" name "([ \t;)|&]|$)"
-  return t ~ re
-}
-BEGIN { BUILTINS = "echo printf read test [ [[ true false : cd pwd export local declare typeset readonly unset set shift return exit break continue eval source . trap wait kill type command let getopts umask alias unalias hash exec sleep if then else elif fi for while until do done case esac in select { } ( ) function" }
 {
   line = $0
   if (term != "") { t = line; if (dash) sub(/^\t+/, "", t); if (t == term) { term = ""; ENDHD[NR] = 1 }; L[NR] = ""; T[NR] = ""; next }   # heredoc bodies are data (ENDHD: the terminator line)
@@ -240,47 +224,12 @@ END {
     if (match(T[i], /^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z_0-9]*[ \t]*(\(\))?[ \t]*\{/) && (T[i] ~ /\(\)/ || T[i] ~ /^[ \t]*function[ \t]/)) {
       d = T[i]; sub(/^[ \t]*(function[ \t]+)?/, "", d); sub(/[ \t]*(\(\))?[ \t]*\{.*/, "", d)
       ind = L[i]; sub(/[^ \t].*/, "", ind)
-      e = i
-      if (T[i] !~ /\}[ \t]*(;|$|[|&])/ || T[i] ~ /\{[ \t]*$/) { for (e = i + 1; e <= NR; e++) if ((index(L[e], ind "}") == 1 && L[e] ~ /^[ \t]*\}/) || (T[i] !~ /\}/ && L[e] ~ /;[ \t]*\}[ \t]*(#.*)?$/)) break }
-      nf++; name[nf] = d; from[nf] = i; to[nf] = e; hot[nf] = 0; why[nf] = 0; kind[nf] = "cond"
+      e = i; tq = L[i]; openq = (gsub(/\047/, "", tq) % 2 == 1)   # the definition line leaves a single quote open: the body's `; }` is on a later line
+      if (T[i] !~ /\}[ \t]*(;|$|[|&])/ || T[i] ~ /\{[ \t]*$/) { for (e = i + 1; e <= NR; e++) if ((index(L[e], ind "}") == 1 && L[e] ~ /^[ \t]*\}/) || (openq && L[e] ~ /;[ \t]*\}[ \t]*(#.*)?$/)) break }
+      nf++; name[nf] = d; from[nf] = i; to[nf] = e
     }
   }
-  for (f = 1; f <= nf; f++)
-    for (i = 1; i <= NR; i++) {
-      if (i >= from[f] && i <= to[f]) continue
-      if (callpos(T[i], name[f])) { hot[f] = 1; why[f] = i; break }
-    }
-  # a function called INSIDE a command substitution ($(f), "$(f)", `f`) runs in a subshell that does not inherit set -e (bash without inherit_errexit)
-  for (f = 1; f <= nf; f++)
-    for (i = 1; i <= NR; i++) {
-      if (i >= from[f] && i <= to[f]) continue
-      r = L[i]; if (r ~ /^[ \t]*#/) continue; sub(/[ \t]#.*/, "", r)
-      hit = (r ~ ("(\\$\\(|`)[ \t]*(![ \t]*)?" name[f] "([ \t)`;|&\"]|$)")) || (r ~ ("(\\$\\(|`)[^)`]*[;&|][ \t]*(![ \t]*)?" name[f] "([ \t)`;|&\"]|$)"))
-      if (!hit && r ~ /(\$\(|`)[ \t]*$/) {                                 # `v=$(` and the call on the next line(s)
-        for (k = i + 1; k <= NR && k <= i + 3; k++) {
-          nx = L[k]; sub(/[ \t]#.*/, "", nx)
-          if (nx !~ /[^ \t]/) continue
-          if (nx ~ ("^[ \t]*(![ \t]*)?" name[f] "([ \t)`;|&\"]|$)")) hit = 1
-          break
-        }
-      }
-      if (hit) {
-        hot[f] = 1; if (!why[f]) { why[f] = i; kind[f] = "sub" }
-        break
-      }
-    }
-  do {
-    ch = 0
-    for (f = 1; f <= nf; f++) {
-      if (!hot[f]) continue
-      for (g = 1; g <= nf; g++) {
-        if (hot[g] || g == f) continue
-        for (i = (from[f] == to[f] ? from[f] : from[f] + 1); i <= to[f]; i++) if (anycall(T[i], name[g])) { hot[g] = 1; why[g] = why[f]; kind[g] = kind[f]; ch = 1; break }
-      }
-    }
-  } while (ch)
   for (f = 1; f <= nf; f++) {
-    if (!hot[f]) continue
     for (i = from[f]; i <= to[f]; i++) {
       t = L[i]; sub(/[ \t]#.*/, "", t); gsub(/\$\(\(/, "", t)             # the RAW line (a quoted `n="$(cmd)"` counts); $(( … )) is arithmetic
       if (t !~ /(^|[;&|{(]|[ \t])[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?(\$\(|`)/) continue
@@ -294,12 +243,12 @@ END {
         for (k = i + 1; k <= to[f]; k++) if (ENDHD[k]) { hb = k; break }
       }
       for (k = i; k <= (hb > i ? hb + 2 : i + 3) && k <= to[f] && !ok; k++) {
-        if (L[k] ~ /\)["\047]?[ \t]*\|\|/ || (k > i && L[k] ~ /^[ \t]*\|\|/)) ok = 1
+        if (L[k] ~ /\)["\047]?[ \t]*(\|\||&&)/ || (k > i && L[k] ~ /^[ \t]*(\|\||&&)/)) ok = 1
         if (k > i && L[k] ~ /\$\?/) ok = 1
         if (k == i && L[k] ~ /\)[ \t]*;[ \t]*[A-Za-z_]*=\$\?/) ok = 1
       }
       if (ok) continue
-      printf "%s:%d: fnctx: %s   [%s() runs with errexit off: %s]\n", FILENAME, i, code, name[f], reason(f)
+      printf "%s:%d: fnctx: %s   [in %s(): a function body must check this substitution's status itself — errexit may be off wherever the function is called]\n", FILENAME, i, code, name[f]
       n++
     }
   }

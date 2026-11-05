@@ -70,7 +70,7 @@ run() { # <name> <want exit: 0|1> <want text in output> ; env set by caller
   : > "$tmp/helm.log"; : > "$tmp/kubectl.log"
   out=$(PATH="$tmp/bin:$PATH" PHASE_FILE="$tmp/phase" tmp_count="$tmp/count" tmp_pods="$tmp/pods.count" HLOG="$tmp/helm.log" KLOG="$tmp/kubectl.log" \
     POD_JSON="$tmp/pods.json" NEGATIVE_TRIES=4 NEGATIVE_SLEEP=0 NEGATIVE_RPC_TRIES=3 NEGATIVE_RPC_SLEEP=0 "$here/negative.sh" ns rel chart "${VALUES_FILE:-$tmp/values.yaml}" 2>&1) && got=0 || got=1
-  pods_calls=$(cat "$tmp/pods.count" 2>/dev/null || echo 0)
+  pods_calls=$(cat "$tmp/pods.count" 2>/dev/null) || pods_calls=0   # no counter file = no pod reads
   rm -f "$tmp/phase" "$tmp/count" "$tmp/pods.count"
   [ "$got" = "$2" ] || { echo "negative-test: $1: exit $got, want $2"; echo "$out"; exit 1; }
   case $out in *"$3"*) ;; *) echo "negative-test: $1: output lacks '$3'"; echo "$out"; exit 1 ;; esac

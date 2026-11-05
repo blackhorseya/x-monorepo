@@ -25,8 +25,8 @@ list() {
   fi
   rc=0; grep '›' "$tmp/$name.raw" >"$tmp/$name" || rc=$?
   if [ "$rc" -gt 1 ]; then echo "grep over the playwright --list output exited $rc" >&2; exit 1; fi   # 1 = no test line: the Total check below says so
-  want=$(sed -n 's/^Total: \([0-9][0-9]*\) tests\{0,1\} .*/\1/p' "$tmp/$name.raw")
-  have=$(wc -l <"$tmp/$name" | tr -d ' ')
+  want=$(sed -n 's/^Total: \([0-9][0-9]*\) tests\{0,1\} .*/\1/p' "$tmp/$name.raw") || { echo "sed over the playwright --list output failed" >&2; exit 1; }
+  have=$(wc -l <"$tmp/$name" | tr -d ' ') || { echo "wc over the test lines failed" >&2; exit 1; }
   if [ -z "$want" ] || [ "$want" != "$have" ]; then
     echo "playwright test --list $*: its Total says '${want:-none}' but it printed $have tests (truncated output?)" >&2; exit 1
   fi

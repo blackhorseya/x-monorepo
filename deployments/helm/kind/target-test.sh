@@ -71,7 +71,7 @@ values_of() {
         printf '%s\n' "$l" | grep -oE 'deployments/helm/kind/run\.sh "[^"]*kubeconfig-[a-z0-9.-]+" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) ' \
           | sed -E 's/.*kubeconfig-([a-z0-9.-]+)" .*/\1/'
         # a cluster command that is not right behind a runner is MISSING (the runner call and its command are taken out first)
-        rest=$(printf '%s\n' "$l" | sed -E 's#deployments/helm/kind/run\.sh "[^"]*" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) #OK #g')
+        rest=$(printf '%s\n' "$l" | sed -E 's#deployments/helm/kind/run\.sh "[^"]*" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) #OK #g') || return 1
         printf '%s\n' "$rest" | grep -oE '(^|[;|&] *)(kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) ' | sed 's/.*/MISSING/'
         # second layer: each kubectl / helm (but `helm repo`) also names the file by flag, the same cluster
         case $l in *'helm repo'*) ;; *)

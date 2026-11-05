@@ -645,7 +645,7 @@ chmod +x "$tmp/gmd-bin/go"
 gmd_run() {
   rm -f "$tmp/gmd-count"
   rc=0; out=$(PATH="$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=$1 GO_MOD_DOWNLOAD_ATTEMPTS=${2:-3} GO_MOD_DOWNLOAD_SLEEP=0 "$gmd" 2>&1) || rc=$?
-  calls=$(cat "$tmp/gmd-count" 2>/dev/null || echo 0)
+  calls=$(cat "$tmp/gmd-count" 2>/dev/null) || calls=0   # no counter file yet = no calls
 }
 gmd_run 0; expect_eq "go-mod-download: a clean download runs once"            "0 1" "$rc $calls"
 gmd_run 1; expect_eq "go-mod-download: one failure is retried and succeeds"   "0 2" "$rc $calls"
@@ -946,16 +946,16 @@ sign_blob() { # SB_ART=<file name> overrides the artifact name; SB_BUNDLE_ARGS (
   local bargs="${SB_BUNDLE_ARGS:---bundle=@B@}" bundle_args
   bargs=${bargs//@B@/$sb_bundle}; read -r -a bundle_args <<<"$bargs"
   set +e
+  sb_rc=0
   if [ -n "${SB_REL:-}" ]; then # a bare relative artifact name, as cosign prints it
     sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token FAKE_ART="$art" \
-      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "${bundle_args[@]}" ${SB_PRE:-} "$art" --yes 2>&1)
+      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "${bundle_args[@]}" ${SB_PRE:-} "$art" --yes 2>&1) || sb_rc=$?
   else
     sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-      COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "${bundle_args[@]}" "$d/$art" --yes 2>&1)
+      COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "${bundle_args[@]}" "$d/$art" --yes 2>&1) || sb_rc=$?
   fi
-  sb_rc=$?
   set -e
-  sb_tries=$(cat "$d/count" 2>/dev/null || echo 0); sb_args=$d/args
+  sb_tries=$(cat "$d/count" 2>/dev/null) || sb_tries=0; sb_args=$d/args   # no counter file = the fake was never called
 }
 sign_blob first "ok"
 expect_eq    "sign: first attempt succeeds"                0 "$sb_rc"
@@ -1065,7 +1065,7 @@ sign_argv_refused() { # sign_argv_refused <name> <args...>: runs the wrapper in 
     COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" "$@" 2>&1)
   sb_rc=$?
   set -e
-  sb_tries=$(cat "$d/count" 2>/dev/null || echo 0)
+  sb_tries=$(cat "$d/count" 2>/dev/null) || sb_tries=0   # no counter file = the fake was never called
   expect_eq    "sign: $n exits 2"                 2 "$sb_rc"
   expect_eq    "sign: $n never calls cosign"      0 "$sb_tries"
   if [ "$(cat "$d/decoy" 2>/dev/null)" = keep ]; then ok; else bad "sign: $n removed or changed the sentinel file"; fi
@@ -1495,7 +1495,7 @@ pb_run() {
   out=$(env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" 2>&1) || rc=$?
 }
 pb_state() { curl -fsS "$pb_url/_state"; }
-pb_calls() { pb_n=$(grep -c "^$1 " "$pb_dir/log" || [ $? -eq 1 ]); }   # sets $pb_n: an assignment aborts on a grep error, "$(pb_calls …)" in an argument would not
+pb_calls() { pb_n=$(grep -c "^$1 " "$pb_dir/log") || [ $? -eq 1 ]; }   # sets $pb_n: an assignment aborts on a grep error, "$(pb_calls …)" in an argument would not
 
 pb_up first
 pb_run
@@ -2482,90 +2482,11 @@ while read -r l; do :; done < <(not code, a heredoc body)
 EOT
 F
 sw_run "$sw/procsub-ok.sh"; expect_eq "procsub: a here-string over a variable, and a heredoc body are not flagged" "0" "$rc"
-# fnctx: a function called as `f || x`, `f && x`, `if f`, `while f`, `until f`, `! f` runs with errexit off for its whole body, so an
-# unchecked `x=$(cmd)` in it keeps going. Same-file call sites only; a function that calls another such function counts too.
-fn_red() { # <name> <call line(s)>: f assigns a substitution unchecked and is called the given way
-  sw_write "fn-$1" <<F
-f() {
-  local out
-  out=\$(cmd)
-  echo "\$out"
-}
-$2
-F
-  sw_run "$sw/fn-$1.sh"
-  expect_eq "fnctx: f called as [$2] is red" "1" "$rc"
-  expect_match "fnctx: [$2] names the rule and the call line" ': fnctx: out=\$\(cmd\) .*f\(\) runs with errexit off: called at line [0-9]+' "$out"
-}
-fn_red or      'f || echo failed'
-fn_red and     'f && echo ok'
-fn_red if      'if f; then echo ok; fi'
-fn_red ifnot   'if ! f; then echo no; fi'
-fn_red bang    '! f'
-fn_red while   'while f; do break; done'
-fn_red until   'until f; do break; done'
-fn_red args    'f "a b" 1 || c=$?'
-sw_write fn-nested <<'F'
-g() {
-  v=$(cmd)
-}
-f() {
-  g
-  echo done
-}
-if f; then :; fi
-F
-sw_run "$sw/fn-nested.sh"
-expect_eq "fnctx: g called by an errexit-off f is red too" "1" "$rc"
-expect_match "fnctx: …and the finding is on g's line" 'fn-nested\.sh:4: fnctx: v=\$\(cmd\)' "$out"
-fn_green() { # <name> <function body line(s)> <call line>
-  sw_write "fng-$1" <<F
-f() {
-$2
-}
-$3
-F
-  sw_run "$sw/fng-$1.sh"
-  expect_eq "fnctx: [$1] is green" "0" "$rc"
-}
-fn_green checked      '  out=$(cmd) || return 1' 'f || echo failed'
-fn_green checked-exit '  out=$(cmd) || { echo "cmd failed" >&2; exit 2; }' 'if f; then :; fi'
-fn_green rc-next      $'  out=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1' 'f || echo failed'
-fn_green rc-same      '  out=$(cmd); rc=$?' 'f || echo failed'
-fn_green cond-assign  '  if out=$(cmd); then echo "$out"; fi' 'f || echo failed'
-fn_green and-assign   '  [ -n "$1" ] && out=$(cmd) || return 1' 'f || echo failed'
-fn_green arith        '  n=$((n + 1))' 'f || echo failed'
-fn_green plain-call   '  out=$(cmd)' 'f'
-fn_green last-in-list '  out=$(cmd)' 'true || f'
-fn_green wrapped-cmd  '  out=$(cmd) ||
-    return 1' 'f || echo failed'
-fn_green declared-elsewhere '  local out
-  out=$(cmd) || return 1' 'if f; then :; fi'
-sw_write fn-exempt <<'F'
-f() {
-  out=$(cmd)   # exit-ok: the file cmd writes is read below; this status cannot change the verdict
-}
-f || echo failed
-F
-sw_run "$sw/fn-exempt.sh"; expect_eq "fnctx: an exit-ok comment on the assignment line makes it green" "0" "$rc"
-sw_write fn-heredoc <<'F'
-cat <<'EOT'
-f() {
-  out=$(cmd)
-}
-EOT
-f || echo failed
-F
-sw_run "$sw/fn-heredoc.sh"; expect_eq "fnctx: a function that only exists in a heredoc is not a function" "0" "$rc"
-sw_write fn-otherfile <<'F'
-. ./lib.sh
-lib_fn || echo failed
-F
-sw_run "$sw/fn-otherfile.sh"; expect_eq "fnctx: the limit — a function defined in another file is not seen (documented)" "0" "$rc"
-
-# fnctx, the $(f) form (#466 r3 brief item 3): a function called INSIDE a command substitution runs in a subshell that does not inherit set -e
-fn_sub_red() { # <name> <call line>
-  sw_write "fns-$1" <<F
+# fnctx is a SHAPE rule (#466 r5): inside ANY function body, `x=$(cmd)` must say what happens when cmd fails. How the function is CALLED
+# (plainly, `f || x`, `if f`, `$(f)`, behind a wrapper, `eval f`, `command f`, from another file, never) decides whether errexit protects
+# it, and a checker that reads call sites is always one spelling behind - so it does not: the same f() is red whatever the call line is.
+fn_lock() { # <name> <call line(s)>
+  sw_write "fl-$1" <<F
 f() {
   local x
   x=\$(cmd)
@@ -2573,110 +2494,76 @@ f() {
 }
 $2
 F
-  sw_run "$sw/fns-$1.sh"
-  expect_eq    "fnctx: f called as [$2] is red" "1" "$rc"
-  expect_match "fnctx: [$2] is reported as called inside a substitution" 'fnctx: x=\$\(cmd\) .*f\(\) runs with errexit off: called inside \$\(…\) at line [0-9]+' "$out"
+  sw_run "$sw/fl-$1.sh"
+  expect_eq    "fnctx: the same f() called as [$1] is red" "1" "$rc"
+  expect_match "fnctx: [$1] names the rule, the line and the function" 'fl-[a-z]+\.sh:5: fnctx: x=\$\(cmd\) .*in f\(\)' "$out"
 }
-fn_sub_red plain  'v=$(f)'
-fn_sub_red quoted 'v="$(f)"'
-fn_sub_red arg    'echo "got: $(f)"'
-sw_write fns-multiline <<'F'
+fn_lock plain     'f'
+fn_lock never     ':'
+fn_lock or        'f || echo failed'
+fn_lock if        'if f; then echo ok; fi'
+fn_lock sub       'v=$(f)'
+fn_lock quoted    'v="$(f)"'
+fn_lock tick      'v=`f`'
+fn_lock wrapper   $'g() { f; }\nv=$(g)'
+fn_lock multiline $'v=$(\n  f\n)'
+fn_lock eval      'eval f'
+fn_lock command   'command f'
+fn_lock backgroundjob 'f &'
+sw_write fl-lib <<'F'
+. ./lib.sh
+lib_fn || echo failed
+F
+sw_run "$sw/fl-lib.sh"; expect_eq "fnctx: a call to a function defined in another file is not this file's business (the other file is scanned itself)" "0" "$rc"
+fn_green() { # <name> <function body line(s)>: any call line, here the plain one and the substitution one
+  sw_write "fg-$1" <<F
 f() {
-  local x
-  x=$(cmd)
-  echo "$x"
+$2
 }
-v=$(
-  f
-)
+f
+v=\$(f)
 F
-sw_run "$sw/fns-multiline.sh"
-expect_eq    "fnctx: v=\$( with the call on the next line is red" "1" "$rc"
-expect_match "fnctx: …reported as called inside a substitution" 'fns-multiline\.sh:5: fnctx:.*called inside' "$out"
-sw_write fns-wrapper <<'F'
-f() { local x; x=$(cmd); echo "$x"; }
-g() { f; }
-v=$(g)
-F
-sw_run "$sw/fns-wrapper.sh"
-expect_eq    "fnctx: a ONE-LINE wrapper g() { f; } called inside \$(…) makes f hot → red" "1" "$rc"
-sw_write fns-wrapper-cond <<'F'
-f() { local x; x=$(cmd); echo "$x"; }
-g() { f; }
-if g; then :; fi
-F
-sw_run "$sw/fns-wrapper-cond.sh"; expect_eq "fnctx: a one-line wrapper called in an if is red too" "1" "$rc"
-sw_write fns-wrapper-ml <<'F'
-f() { local x; x=$(cmd); echo "$x"; }
-g() {
-  f
+  sw_run "$sw/fg-$1.sh"
+  expect_eq "fnctx: [$1] is green" "0" "$rc"
 }
-v=$(g)
-F
-sw_run "$sw/fns-wrapper-ml.sh"; expect_eq "fnctx: the multi-line wrapper is red (control)" "1" "$rc"
-sw_write fns-cd <<'F'
-f() { local x; x=$(cmd); echo "$x"; }
-v=$(cd /tmp && f)
-F
-sw_run "$sw/fns-cd.sh"; expect_eq "fnctx: v=\$(cd d && f) is red" "1" "$rc"
-sw_write fns-wrapper-ok <<'F'
-f() { local x; x=$(cmd) || return 1; echo "$x"; }
-g() { f; }
-v=$(g)
-F
-sw_run "$sw/fns-wrapper-ok.sh"; expect_eq "fnctx: the checked version behind a wrapper is green" "0" "$rc"
-sw_write fns-multiline-ok <<'F'
-f() {
-  local x
-  x=$(cmd) || return 1
-  echo "$x"
-}
-v=$(
-  f
-)
-F
-sw_run "$sw/fns-multiline-ok.sh"; expect_eq "fnctx: the checked version called from a multi-line \$( is green" "0" "$rc"
-fn_sub_red args   'v=$(f one two)'
-fn_sub_red tick   'v=`f`'
-sw_write fns-nested <<'F'
-g() {
-  y=$(cmd)
-}
-f() {
-  g
-  echo done
-}
+fn_green checked      '  out=$(cmd) || return 1'
+fn_green checked-exit '  out=$(cmd) || { echo "cmd failed" >&2; exit 2; }'
+fn_green rc-next      $'  out=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1'
+fn_green rc-same      '  out=$(cmd); rc=$?'
+fn_green cond-assign  '  if out=$(cmd); then echo "$out"; fi'
+fn_green and-assign   '  [ -n "$1" ] && out=$(cmd) || return 1'
+fn_green arith        '  n=$((n + 1))'
+fn_green builtins     '  local x=$1; echo "pure $x"; return 0'
+fn_green wrapped-cmd  $'  out=$(cmd) ||\n    return 1'
+fn_green one-line     '  :'
+sw_write fg-oneline <<'F'
+f() { x=$(cmd) || return 1; echo "$x"; }
+g() { local x; x=$(cmd) || return 1; echo "$x"; }
 v=$(f)
 F
-sw_run "$sw/fns-nested.sh"; expect_eq "fnctx: g called by a function that is called inside \$(…) is red too" "1" "$rc"
-sw_write fns-ok <<'F'
-f() {
-  local x
-  x=$(cmd) || return 1
-  echo "$x"
-}
+sw_run "$sw/fg-oneline.sh"; expect_eq "fnctx: one-line functions with the check on the line are green" "0" "$rc"
+sw_write fl-oneline <<'F'
+f() { x=$(cmd); echo "$x"; }
 v=$(f)
-w="$(f)"
 F
-sw_run "$sw/fns-ok.sh"; expect_eq "fnctx: the same with || return 1 is green" "0" "$rc"
-sw_write fns-pure <<'F'
+sw_run "$sw/fl-oneline.sh"; expect_eq "fnctx: a one-line function without the check is red" "1" "$rc"
+sw_write fg-exempt <<'F'
 f() {
-  local x=$1
-  echo "pure $x"
+  out=$(cmd)   # exit-ok: the file cmd writes is read below; this status cannot change the verdict
 }
-v=$(f a)
-w="$(f b)"
-F
-sw_run "$sw/fns-pure.sh"; expect_eq "fnctx: a function that only uses builtins is green even when called inside \$(…)" "0" "$rc"
-sw_write fns-comment <<'F'
-f() {
-  x=$(cmd)
-}
-# v=$(f) in a comment is not a call
 f
 F
-sw_run "$sw/fns-comment.sh"; expect_eq "fnctx: a \$(f) in a comment is not a call → green" "0" "$rc"
-sw_write fns-heredoc <<'F'
+sw_run "$sw/fg-exempt.sh"; expect_eq "fnctx: an exit-ok comment on the assignment line makes it green" "0" "$rc"
+sw_write fg-heredoc-body <<'F'
+cat <<'EOT'
+f() {
+  out=$(cmd)
+}
+EOT
+f
+F
+sw_run "$sw/fg-heredoc-body.sh"; expect_eq "fnctx: a function that only exists in a heredoc body is not a function" "0" "$rc"
+sw_write fg-heredoc-sub <<'F'
 f() {
   out=$(python3 - <<'PY'
 print(1)
@@ -2686,9 +2573,32 @@ PY
 }
 v=$(f)
 F
-sw_run "$sw/fns-heredoc.sh"; expect_eq "fnctx: a heredoc substitution checked on the closing line is green" "0" "$rc"
+sw_run "$sw/fg-heredoc-sub.sh"; expect_eq "fnctx: a heredoc substitution checked on the closing line is green" "0" "$rc"
+sw_write fg-toplevel <<'F'
+x=$(cmd)
+echo "$x"
+F
+sw_run "$sw/fg-toplevel.sh"; expect_eq "fnctx: x=\$(cmd) at the top level of a set -e script is not this rule's business (errexit protects it)" "0" "$rc"
+
 # workflow / composite-action run: scripts. wf_check <name> < yaml: writes $sw/<name>.yml and runs the checker on it.
 wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
+# the same six call forms inside a workflow run: (the lock holds for the extracted scripts too); the finding is on the YAML line of x=$(cmd) (line 7)
+wf_lock() { # <name> <call line(s)>
+  {
+    printf 'jobs:\n  j:\n    steps:\n      - shell: bash\n        run: |\n'
+    printf '          f() {\n            local x\n            x=$(cmd)\n            echo "$x"\n          }\n'
+    printf '%s\n' "$2" | sed 's/^/          /'
+  } > "$sw/wfl-$1.yml"
+  sw_run "$sw/wfl-$1.yml"
+  expect_eq    "workflow: the same f() called as [$1] in a run: is red" "1" "$rc"
+  expect_match "workflow: [$1] is reported on the YAML line of the assignment" "wfl-$1\\.yml:8: fnctx:" "$out"
+}
+wf_lock plain     'f'
+wf_lock sub       'v=$(f)'
+wf_lock wrapper   $'g() { f; }\nv=$(g)'
+wf_lock multiline $'v=$(\n  f\n)'
+wf_lock eval      'eval f'
+wf_lock command   'command f'
 wf_check wf-fnsub <<'Y'
 jobs:
   j:
@@ -2698,7 +2608,7 @@ jobs:
           f() { x=$(cmd); echo "$x"; }
           v=$(f)
 Y
-expect_match "workflow: f called as v=\$(f) in a run: is red (fnctx, called inside \$(…), on the YAML line)" 'wf-fnsub\.yml:6: fnctx:.*called inside' "$out"
+expect_match "workflow: f called as v=\$(f) in a run: is red (fnctx, on the YAML line)" 'wf-fnsub\.yml:6: fnctx:.*in f\(\)' "$out"
 wf_check wf-fnsub-quoted <<'Y'
 jobs:
   j:

@@ -73,8 +73,8 @@ c_stale() { # real run, then a k6 that dies without writing its files, same bin 
   PATH="$DEADK6:$PATH" wire1 && return 1
   grep -q "k6 did not write it in this call" "$D/wire.out"   # red for the target reason
 }
-c_negenv() { PATH="$(shim env 'exit 42'):$PATH" env WIRE_NO_NEGATIVES= WIRE_MODES=status PORT="$P" tests/k6/wire.sh "$D/wbin" orders > "$D/wire.out" 2>&1; }
-c_seqwire() { PATH="$(shim "$1" 'echo 1; exit 42'):$PATH" wire1; }
+c_negenv() { local sd; sd=$(shim env 'exit 42') || return 1; PATH="$sd:$PATH" env WIRE_NO_NEGATIVES= WIRE_MODES=status PORT="$P" tests/k6/wire.sh "$D/wbin" orders > "$D/wire.out" 2>&1; }
+c_seqwire() { local sd; sd=$(shim "$1" 'echo 1; exit 42') || return 1; PATH="$sd:$PATH" wire1; }
 
 # --- scheduling ---
 names=() wants=() n=0

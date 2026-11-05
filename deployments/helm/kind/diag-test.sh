@@ -318,7 +318,7 @@ d6cell() { # <cell> <label> <env assignments...>: run diag.sh with the fixture, 
   run_bounded 120 "$here/diag.sh" ns "$since"
   for a in "$@" DIAG_CONSOLE_BYTES=$budget; do unset "${a%%=*}"; done
   [ "$rc" = 0 ] || die "$cell: exit $rc, want 0"
-  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ') || die "$cell: cannot count the console bytes"
   [ "$bytes" -le $((budget + slack)) ] || die "$cell ($label): the console got $bytes bytes, want at most $((budget + slack)) (budget $budget)"
   has "console budget" "$cell: the console says it was cut"
   has "$DIAG_DIR" "$cell: the console says where the files are"

@@ -94,7 +94,7 @@ cell_grid() {
   echo "=== RUN   $cell"
   why=()
   clear_artifacts "$log.log" "$log-server.log" "$log-summary.json" "$log-metrics.json"
-  nc=$(nonce "$s-$mode")
+  nc=$(nonce "$s-$mode") || return 1
   $server_cmd "$port" "${WIRE_SERVE_AS:-$mode}" > "$log-server.log" 2>&1 & xpid=$!
   listening "$port" || why+=("wire server did not listen on :$port within 5s")
   rc=0
@@ -151,7 +151,7 @@ cell_key() {
   echo "=== RUN   $cell"
   why=()
   clear_artifacts "$log.log" "$log-server.log" "$log-summary.json" "$log-metrics.json"
-  nc=$(nonce "$s-key-$c")
+  nc=$(nonce "$s-key-$c") || return 1
   python3 tests/k6/wire_server.py "$port" status > "$log-server.log" 2>&1 & xpid=$!
   listening "$port" || why+=("wire server did not listen on :$port within 5s")
   rc=0
@@ -194,7 +194,7 @@ cell_reflect() {
   echo "=== RUN   $cell"
   why=()
   clear_artifacts "$log.log" "$log-server.log" "$log-summary.json" "$log-metrics.json"
-  nc=$(nonce "reflect-$mode-$want_tag")
+  nc=$(nonce "reflect-$mode-$want_tag") || return 1
   python3 tests/k6/status_server.py "$port" "$mode" > "$log-server.log" 2>&1 & xpid=$!
   listening "$port" || why+=("status server did not listen on :$port within 5s")
   rc=0

@@ -110,7 +110,7 @@ emit() {
   if [ -n "$console_cut" ] || [ "$cap" -le 0 ]; then cat > /dev/null; return 0; fi
   local buf n; buf=$(mktemp) || { echo "diag: no temp file for this read, skipping it" >&2; return 0; }
   head -c $((cap + 1)) > "$buf"
-  n=$(wc -c < "$buf" | tr -d ' ')
+  n=$(wc -c < "$buf" | tr -d ' ') || { echo "diag: cannot count this read, skipping it" >&2; rm -f "$buf"; return 0; }
   if [ "$n" -le "$cap" ]; then
     cat "$buf"; console_left=$((console_left - n))
   else

@@ -108,7 +108,7 @@ expect_account() {
 prebind() {
   local email=$1; shift
   local roles id
-  roles=$(jq -nc '$ARGS.positional' --args "$@")
+  roles=$(jq -nc '$ARGS.positional' --args "$@") || die "cannot build the roles list"
   id=$(find_account "$email")
   if [ -z "$id" ]; then
     admin CreateAccount "$(jq -nc --arg n "$email" --argjson r "$roles" '{name: $n, roles: $r}')"
@@ -138,7 +138,7 @@ prebind() {
 # Check every existing account before changing anything, so a bad one stops the run with nothing bound.
 preflight() {
   local id
-  id=$(find_account "$1")
+  id=$(find_account "$1") || die "listing accounts failed"
   [ -z "$id" ] || expect_account "$id" "$1" "$(jq -nc '$ARGS.positional' --args "${@:2}")"
 }
 preflight admin@example.com "$role"
