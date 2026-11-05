@@ -37,20 +37,19 @@ mutate asset-path default.conf.template 's|location /assets/ \{|location /assetz
 
 want=("$@")
 rc=0
-# run <name> <context>: 0 = the image project went red on a SPEC (at least one failed test), 1 = green, 2 = it did not
-# run at all (build, container or Playwright startup failed): that is a broken harness, never a mutant that "went red".
+# run <name> <context>: 0 = the image project went red on a SPEC, 1 = green, 2 = the harness broke (e2e/image-mutants.lib.sh:
+# no Playwright summary, a parsing stage failed, the evidence copy failed). Never "red" because something else went wrong.
+# shellcheck source=image-mutants.lib.sh
+. ./e2e/image-mutants.lib.sh
+image_sh=${E2E_IMAGE_SH:-./e2e/image.sh}
 run() {
-  local name=$1 ctx=$2 log=$work/$1.log code=0
+  local name=$1 ctx=$2 log=$work/$1.log code=0 st=0 keep=${E2E_MUTANT_LOGS:-$work}
   # --retries=0: a mutant has to be red on the first attempt, and a failing test is not run twice (30s timeouts add up)
-  E2E_IMAGE_CONTEXT=$ctx CI=1 ./e2e/image.sh --retries=0 >"$log" 2>&1 || code=$?
-  local failed
-  # grep exits 1 for "no match", which is a result here; any other non-zero is an error and stops the script
-  failed=$(sed -E 's/\x1b\[[0-9;]*m//g' "$log" | { grep -E '^\s+✘\s+[0-9]+ \[image\]' || [ $? -eq 1 ]; } | sed -E 's/^.*\[image\] › e2e\/([^:]+):.*/\1/' | sort | uniq -c | awk '{printf "%s%s×%s", s, $2, $1; s=", "}')
-  echo "mutant $name: exit=$code failed-spec-files=[${failed}]"
-  cp "$log" "${E2E_MUTANT_LOGS:-$work}/$name.log" 2>/dev/null || true
-  if [ "$code" -eq 0 ]; then return 1; fi
-  if [ -z "$failed" ]; then echo "mutant $name: exit=$code but no spec failed, the harness broke (log: ${E2E_MUTANT_LOGS:-$work}/$name.log)"; tail -5 "$log"; return 2; fi
-  return 0
+  E2E_IMAGE_CONTEXT=$ctx CI=1 "$image_sh" --retries=0 >"$log" 2>&1 || code=$?
+  keep_log "$log" "$keep" "$name" || { echo "mutant $name: ERROR, cannot keep the log in $keep"; return 2; }
+  classify "$name" "$log" "$code" || st=$?
+  if [ "$st" -eq 2 ]; then tail -5 "$log"; fi
+  return "$st"
 }
 selected() { [ ${#want[@]} -eq 0 ] && return 0; local w; for w in "${want[@]}"; do [ "$w" = "$1" ] && return 0; done; return 1; }
 
