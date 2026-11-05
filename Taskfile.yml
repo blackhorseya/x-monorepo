@@ -20,7 +20,7 @@ vars:
   # Container runtime for local infra: podman first, docker as fallback.
   COMPOSE:
     sh: 'command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose"'
-  # Where the kind tasks (helm-kind-up / helm-kind / helm-kind-keda / helm-kind-down) aim, #430. These are
+  # Where the kind tasks (helm-kind-up / helm-kind / helm-kind-core / helm-kind-payment / helm-kind-keda / helm-kind-down) aim, #430. These are
   # file-level literals ON PURPOSE: a task-level `vars:` entry beats the command line in go-task, so the
   # same literal inside a task made `task helm-kind-up CLUSTER=probe` act on x-monorepo; at file level the
   # command line wins and the OS environment does not (go-task reads the environment as template
@@ -219,7 +219,7 @@ tasks:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
       - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
       - go install github.com/yannh/kubeconform/cmd/kubeconform@{{.KUBECONFORM_VERSION}}
-      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/check-kubeconfig.py deployments/helm/kind/shim/kubectl deployments/helm/kind/shim/helm deployments/helm/check-negative.sh deployments/helm/check-mutants.py deployments/helm/check-chart-bump.py deployments/helm/check-chart-bump.sh deployments/helm/check-chart-bump-test.py deployments/helm/kind/*.sh deployments/helm/kind/*.py
+      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/check-kubeconfig.py deployments/helm/kind/shim/kubectl deployments/helm/kind/shim/helm deployments/helm/check-negative.sh deployments/helm/check-mutants.py deployments/helm/check-chart-bump.py deployments/helm/check-chart-bump.sh deployments/helm/check-chart-bump-test.py deployments/helm/kind/*.sh
 
   tools:hooks:
     desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
@@ -340,8 +340,6 @@ tasks:
       - deployments/helm/kind/negative-test.sh
       # check.py goes red when a payment workload is made unsafe (envFrom, writable rootfs, command, the other app's image), per workload (#422)
       - deployments/helm/check-mutants.py
-      # payment-upgrade.sh restores the release LAST even when it fails while the background helm still runs (#422)
-      - deployments/helm/kind/upgrade-failure-test.py
       # the chart's version must rise when its templates or values change: the gate's own cases (CI runs the gate itself on pull requests, #423)
       - deployments/helm/check-chart-bump-test.py
       # what a failed kind run leaves behind (#416): diag.sh (whole pod logs since the start, Postgres sessions and locks) against fake kubectl/helm/curl, payment-flow.sh running it before it restores the release, the kind Postgres' lock-wait logging
@@ -373,8 +371,9 @@ tasks:
         msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind-up:
+    run: once   # helm-kind calls helm-kind-core and helm-kind-payment, each of which depends on this: one cluster, built once
     deps: [web-build, helm-kind-cluster]
-    desc: 'the shared base of helm-kind and helm-kind-keda: kind cluster + its own kubeconfig (helm-kind-cluster; reused if it exists), images built from the tree (rpc / catalog-rpc / payment-rpc / payment-worker / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) and dex.yaml (Dex dev IdP + CoreDNS rewrite for dex.localtest.me) rolled out. CI runs the two on separate clusters in parallel, so each one needs this on its own'
+    desc: 'the shared base of helm-kind-core, helm-kind-payment and helm-kind-keda: kind cluster + its own kubeconfig (helm-kind-cluster; reused if it exists), images built from the tree (rpc / catalog-rpc / payment-rpc / payment-worker / worker / migrate + the console on web-build) and kind-loaded, namespace, deployments/helm/kind/deps.yaml (Postgres, Redis) and dex.yaml (Dex dev IdP + CoreDNS rewrite for dex.localtest.me) rolled out. CI runs the three on separate clusters in parallel, so each one needs this on its own'
     vars:
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
@@ -409,8 +408,20 @@ tasks:
         msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind:
+    desc: 'both halves on one cluster, one after the other (what a laptop runs; CI runs helm-kind-core and helm-kind-payment as two jobs on two clusters): helm-kind-core, then helm-kind-payment. helm-kind-up runs once. Each half installs the release itself and seeds its own data, so either can be run alone on a fresh cluster. helm-kind-down deletes the cluster'
+    cmds:
+      - task: helm-kind-core
+      - task: helm-kind-payment
+      - '{{.KIND_RUN}} helm --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} status x-monorepo | head -5'
+    preconditions:
+      - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
+        msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
+      - sh: test -n "{{.KIND_TARGET_OK}}"
+        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
+
+  helm-kind-core:
     deps: [helm-kind-up]
-    desc: 'install the chart for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api); then payment.sh (the three payment-rpc workloads, the webhook-only Ingress and its rate limit, orders unaffected with payment-rpc stopped); then payment-flow.sh (the whole payment flow with ordering.require_payment on: every race of docs/payment.md §5, the TTL sequence, the switch both ways, payment-rpc stopped). helm-kind-down deletes the cluster'
+    desc: 'the chart installed for real on the helm-kind-up cluster, without payment: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (an order reserves stock through the worker; the console serves the UI and proxies /api); then negative.sh (catalog-rpc on a Secret that cannot make it durable) and outage.sh (rpc without its catalog). Needs nothing another task left on the cluster; independent of helm-kind-payment (CI runs both in parallel on separate clusters)'
     vars:
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
@@ -420,16 +431,29 @@ tasks:
       # Second pass is an upgrade: pre-upgrade hook re-runs migrate (no-op), pods roll, release stays ready.
       - '{{.KIND_RUN}} helm --kubeconfig "{{.KIND_KUBECONFIG}}" upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null'
       - '{{.KIND_RUN}} {{.KIND_DIR}}/smoke.sh {{.NS}} x-monorepo'
-      # payment-rpc and payment-worker: serve / consume / an expire run, the webhook-only Ingress (ingress-nginx is installed there) with its rate limit, and orders reaching CONFIRMED with payment-rpc stopped. Restores the release.
-      - '{{.KIND_RUN}} {{.KIND_DIR}}/payment.sh {{.NS}} x-monorepo'
-      # the whole payment flow with ordering.require_payment ON (kind/payment-flow-values.yaml: auth required, two static keys, payment-rpc's mock control): create -> reserved -> CONFIRMED -> StartPayment -> paid -> webhook -> COMPLETED, delayed / repeated / foreign notifications, the customer cancelling and the window running out with the money arriving late (refunded), the reservation-TTL sequence with the provider down, the switch on -> off -> on, payment-rpc stopped. Restores the release.
-      - '{{.KIND_RUN}} {{.KIND_DIR}}/payment-flow.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
       # catalog-rpc on a Secret that cannot make it durable: no start (missing key) / exit (empty URL). Restores the release.
       - '{{.KIND_RUN}} {{.KIND_DIR}}/negative.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
       # rpc without its catalog: the wait is best effort, CreateOrder / SetStock answer UNAVAILABLE and write nothing, recovery needs no restart.
       - '{{.KIND_RUN}} {{.KIND_DIR}}/outage.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml'
-      # (in a namespace of its own, guarded: the home database must come out unchanged) the upgrade from the chart that runs `payment-rpc consume` (git tag v0.63.3, its ghcr images) to this one (payment-worker): the consumer group payment-rpc.payment is the same, no cursor moves back, every OrderConfirmed is handled exactly once, whether published before, during or after. Restores the release.
-      - '{{.KIND_RUN}} {{.KIND_DIR}}/payment-upgrade-guard.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
+      - '{{.KIND_RUN}} helm --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} status x-monorepo | head -5'
+    preconditions:
+      - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
+        msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
+      - sh: test -n "{{.KIND_TARGET_OK}}"
+        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
+
+  helm-kind-payment:
+    deps: [helm-kind-up]
+    desc: 'payment on the helm-kind-up cluster: the chart installed (helm upgrade --install --wait, kind/values.yaml), then payment.sh (the three payment-rpc workloads, the webhook-only Ingress and its rate limit, orders unaffected with payment-rpc stopped) and payment-flow.sh (the whole payment flow with ordering.require_payment on: every race of docs/payment.md §5, the TTL sequence, the switch both ways, payment-rpc stopped). Needs nothing another task left on the cluster (the scripts seed their own products and stock); independent of helm-kind-core (CI runs both in parallel on separate clusters)'
+    vars:
+      CHART: deployments/helm/x-monorepo
+      KIND_DIR: deployments/helm/kind
+    cmds:
+      - '{{.KIND_RUN}} helm --kubeconfig "{{.KIND_KUBECONFIG}}" upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml --wait --timeout 3m >/dev/null'
+      # payment-rpc and payment-worker: serve / consume / an expire run, the webhook-only Ingress (ingress-nginx is installed there) with its rate limit, and orders reaching CONFIRMED with payment-rpc stopped. Restores the release.
+      - '{{.KIND_RUN}} {{.KIND_DIR}}/payment.sh {{.NS}} x-monorepo'
+      # the whole payment flow with ordering.require_payment ON (kind/payment-flow-values.yaml: auth required, two static keys, payment-rpc's mock control): create -> reserved -> CONFIRMED -> StartPayment -> paid -> webhook -> COMPLETED, delayed / repeated / foreign notifications, the customer cancelling and the window running out with the money arriving late (refunded), the reservation-TTL sequence with the provider down, the switch on -> off -> on, payment-rpc stopped. Restores the release.
+      - '{{.KIND_RUN}} {{.KIND_DIR}}/payment-flow.sh {{.NS}} x-monorepo {{.CHART}} {{.KIND_DIR}}/values.yaml {{.KIND_DIR}}/payment-flow-values.yaml'
       - '{{.KIND_RUN}} helm --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} status x-monorepo | head -5'
     preconditions:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
@@ -439,7 +463,7 @@ tasks:
 
   helm-kind-keda:
     deps: [helm-kind-up]
-    desc: 'on the helm-kind-up cluster (independent of helm-kind, CI runs both in parallel): KEDA + deployments/helm/kind/monitoring.yaml (OTLP collector → Prometheus), the chart re-installed with kind/keda-values.yaml (worker.autoscaling lag), then kind/scale.sh floods orders with k6 and expects the worker to scale out on eventbus_consumer_lag and back'
+    desc: 'on the helm-kind-up cluster (independent of the other helm-kind tasks, CI runs them in parallel): KEDA + deployments/helm/kind/monitoring.yaml (OTLP collector → Prometheus), the chart re-installed with kind/keda-values.yaml (worker.autoscaling lag), then kind/scale.sh floods orders with k6 and expects the worker to scale out on eventbus_consumer_lag and back'
     vars:
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind

@@ -438,7 +438,7 @@ CMD_CASES = [(wrap(c), f) for c, f in FLAG_CASES_BASE] + FLAG_CASES + [
     ("%s true; {{.KIND_DIR}}/smoke.sh ns rel" % R, True),
     ("echo %s; {{.KIND_DIR}}/smoke.sh ns rel" % R, True),
     ("deployments/helm/kind/negative-test.sh", False),
-    ("deployments/helm/kind/upgrade-failure-test.py", False),
+    ("deployments/helm/kind/example-test.py", False),
     ("command -v kind >/dev/null && command -v kubectl >/dev/null", False),
     ("echo run kubectl later", False),
     ("mkdir -p \"{{.BIN_DIR}}/kind\"", False),

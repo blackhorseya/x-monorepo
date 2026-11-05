@@ -113,7 +113,11 @@ cells=(
   "helm-kind-up cluster 3"
   "helm-kind-up ns 5"
   "helm-kind cluster 3"
-  "helm-kind ns 15"
+  "helm-kind ns 17"
+  "helm-kind-core cluster 4"
+  "helm-kind-core ns 12"
+  "helm-kind-payment cluster 4"
+  "helm-kind-payment ns 9"
   "helm-kind-keda cluster 3"
   "helm-kind-keda ns 8"
   "helm-kind-keda kedans 1"
@@ -121,7 +125,9 @@ cells=(
   "helm-kind-up kindkc 1"
   "helm-kind-down kindkc 1"
   "helm-kind-up kubeconfig 6"
-  "helm-kind kubeconfig 16"
+  "helm-kind kubeconfig 38"
+  "helm-kind-core kubeconfig 30"
+  "helm-kind-payment kubeconfig 26"
   "helm-kind-keda kubeconfig 11"
 )
 for c in "${cells[@]}"; do
@@ -154,7 +160,7 @@ done
 
 # A name that is not a plain lowercase DNS-ish name is refused before any command is expanded (the values are
 # interpolated into shell commands): non-zero exit, the reason on stderr, no `--name` / `-n` / kind/*.sh line.
-for t in helm-kind-up helm-kind helm-kind-keda helm-kind-down; do
+for t in helm-kind-up helm-kind helm-kind-core helm-kind-payment helm-kind-keda helm-kind-down; do
   for arg in 'CLUSTER=a b' 'CLUSTER=x;touch pwned' 'CLUSTER=UPPER' 'CLUSTER=' 'NS=-x' 'NS=a$(id)' 'KEDA_NS=k_s'; do
     id="$t refuses $arg"
     if env -u CLUSTER -u NS -u KEDA_NS task -t "$TASKFILE" --dry "$t" "$arg" 2>&1 | strip > "$tmp/out"; [ "${PIPESTATUS[0]}" -eq 0 ]; then
