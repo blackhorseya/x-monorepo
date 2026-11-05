@@ -1930,7 +1930,7 @@ printf 'package a\n\nimport "testing"\n\nfunc TestBase(t *testing.T) {}\n' > "$d
 printf 'module example.com/target\n\ngo 1.27\n' > "$d/apps/a\$UNSET/go.mod"
 printf 'package a\n\nimport "testing"\n\nfunc TestTarget(t *testing.T) {}\n' > "$d/apps/a\$UNSET/a_test.go"
 printf 'go 1.27\n\nuse (\n\t./apps/a\n\t"./apps/a$UNSET"\n)\n' > "$d/go.work"
-rc=0; capture -2 out rc in_dir "$d" UNSET= task test || exit 1
+rc=0; capture -2 out rc in_dir "$d" env UNSET= task test || exit 1
 if [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -q 'example.com/target'; then bad "derived modules: task test passed without testing apps/a\$UNSET (it ran apps/a twice)"; else ok; fi
 expect_eq "derived modules: task test fails on a module path it cannot carry" "1" "$rc"
 expect_match "derived modules: the failure names the path" 'apps/a\$UNSET' "$out"
