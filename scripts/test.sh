@@ -1852,6 +1852,7 @@ cat > "$sc/bin/pnpm" <<'STUB'
 #!/usr/bin/env bash
 # pnpm exec playwright test --list [--shard=i/n]; FAKE_FAULT picks the fault. Anything else (task's web-install: pnpm install) is a no-op.
 [ "${1:-}" = exec ] && [ "${2:-}" = playwright ] || exit 0
+PATH="$REAL_PATH"   # the stub itself must not run through the failing wrappers of a case
 shard=""; for a in "$@"; do case "$a" in --shard=*) shard=${a#--shard=};; esac; done
 if [ -n "$shard" ]; then
   sel=$(awk -v i="${shard%/*}" -v n="${shard#*/}" '(NR - 1) % n == i - 1' "$FAKE_TESTS")
@@ -1875,7 +1876,7 @@ echo "Total: ${total_says:-$(printf '%s' "$sel" | grep -c '')} tests in 3 files"
 exit "$code"
 STUB
 chmod +x "$sc/bin/pnpm"
-shards_check() { (cd "$tmp" && PATH="$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT="${FAULT:-}" "$src/scripts/web-e2e-shards-check.sh" "$@" 2>&1); }
+shards_check() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT="${FAULT:-}" "$src/scripts/web-e2e-shards-check.sh" "$@" 2>&1); }
 rc=0; out=$(FAULT= shards_check 3) || rc=$?
 expect_eq "shards-check: the shards together are the suite → exit 0" "0" "$rc"
 expect_match "shards-check: it says each test once" 'ok: 3 shards = 10 tests, each exactly once' "$out"
@@ -1899,7 +1900,7 @@ expect_match "shards-check: the duplicate is a difference, not a match" 'are not
 rc=0; out=$(FAULT=empty shards_check 3) || rc=$?
 expect_eq "shards-check: an empty suite is red, not a match of nothing" "1" "$rc"
 # The same faults through the real entry point, `task web-e2e-shards-check -- N` (the Taskfile in this checkout, the stub pnpm first on PATH).
-shards_task() { (cd "$tmp" && PATH="$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT="${FAULT:-}" task -t "$src/Taskfile.yml" web-e2e-shards-check -- "$@" 2>&1); }
+shards_task() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT="${FAULT:-}" task -t "$src/Taskfile.yml" web-e2e-shards-check -- "$@" 2>&1); }
 rc=0; out=$(FAULT= shards_task 3) || rc=$?
 expect_eq "shards-check via task: the shards are the suite → exit 0" "0" "$rc"
 expect_match "shards-check via task: it says each test once" 'ok: 3 shards = 10 tests, each exactly once' "$out"
@@ -1914,6 +1915,30 @@ rc=0; out=$(FAULT=drop shards_task 3) || rc=$?
 expect_eq "shards-check via task: a missing test → the task exits non-zero" "201" "$rc"
 rc=0; out=$(FAULT=dup shards_task 3) || rc=$?
 expect_eq "shards-check via task: a duplicate → the task exits non-zero" "201" "$rc"
+# Every external command of the script is checked: a wrapper (first on PATH) runs the real command, then either prints all
+# of its output and exits 42 (WRAP_MODE=full) or prints only its first line and exits 42 (WRAP_MODE=partial). The script
+# must exit non-zero and never say ok. (grep's exit 1 = no match is the one non-zero it may accept.)
+mkdir -p "$sc/wrap"
+cat > "$sc/wrap/wrapper" <<'WRAPPER'
+#!/usr/bin/env bash
+name=$(basename "$0"); real=$(PATH="$REAL_PATH" command -v "$name")
+if [ "${WRAP_CMD:-}" != "$name" ]; then exec "$real" "$@"; fi
+out=$("$real" "$@"; echo "rc=$?"); out=${out%rc=*}
+if [ "${WRAP_MODE:-full}" = partial ]; then printf '%s\n' "$out" | head -1; else printf '%s' "$out"; fi
+exit 42
+WRAPPER
+chmod +x "$sc/wrap/wrapper"
+for c in grep sed wc tr cat sort diff seq mktemp; do ln -sf wrapper "$sc/wrap/$c"; done
+wrapped_check() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/wrap:$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT= WRAP_CMD="$1" WRAP_MODE="$2" "$src/scripts/web-e2e-shards-check.sh" 3 2>&1); }
+for c in grep sed wc tr cat sort diff seq mktemp; do
+  for m in full partial; do
+    rc=0; out=$(wrapped_check "$c" "$m") || rc=$?
+    if [ "$rc" = 0 ]; then bad "shards-check: $c printing ($m) then exiting 42 still exits 0"; else ok; fi
+    case "$out" in *"ok: 3 shards"*) bad "shards-check: $c ($m) then exit 42 still says ok";; *) ok;; esac
+  done
+done
+rc=0; out=$(WRAP_CMD=none wrapped_check none full) || rc=$?
+expect_eq "shards-check: the wrappers that do not fail change nothing → exit 0" "0" "$rc"
 rc=0; out=$(FAULT= shards_check) || rc=$?
 expect_eq "shards-check: no shard count is a usage error" "2" "$rc"
 rc=0; out=$(FAULT= shards_check 0) || rc=$?
