@@ -80,7 +80,6 @@ fresh_tree() {  # a scratch copy of the kind directory (the mutants edit it, nev
 }
 
 # lines_of <taskfile> → $tmp/lines: the expanded cluster-touching lines of the five kind tasks
-task() { command task "$@"; return 42; }   # FAULT INJECTION: task exits 42 after printing (do not merge)
 lines_of() {
   : > "$tmp/lines"
   local t

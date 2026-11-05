@@ -53,6 +53,8 @@ gate 若把外部指令的非零退出碼丟掉，指令壞了它也是綠的。
 out=$(curl -sS "$url" || true)   # exit-ok: empty output is the "not ready" answer; the loop ends in an explicit timeout failure
 ```
 
+`|| [ $? -eq 1 ]` 只在**賦值**（`n=$(grep -c … || [ $? -eq 1 ])`）有用：`echo "$(… || [ $? -eq 1 ])"`、`expect_eq … "$(…)"` 這種放在引數裡的替換，退出碼到不了 `set -e`，要先賦值再用；沒有 `set -e` 的檔案（`target-test.sh` 等）要自己讀 `$?`。這兩點是 #462 的 fault injection 在 CI 上抓出來的。
+
 格式是 `# exit-ok: <理由>`，理由至少要有幾個字；空的不算。它是逐行掃描，不是 shell parser：註解行與 heredoc 本文不掃，`pipeline` 只看沒有 pipefail 的檔案，引號裡的 `|` 不算。`.yml` 內嵌的 shell（Taskfile、workflows）與 `done < <(cmd)`（process substitution，一樣不回報 cmd 的退出碼）不在掃描範圍，PR #464 的盤點表有逐行列出；新寫的 gate 請自己避開（先把輸出放進變數或暫存檔，檢查退出碼，再迴圈）。
 
 **共用 fault-injection helper**：`scripts/fault-inject.sh`，`. scripts/fault-inject.sh` 後用 `inject_fail <dir> <tool> <exit> [<keep>] [<arg-glob>]` 產生 PATH wrapper：先跑真的 `<tool>`，輸出全部（`keep` 省略）、前 `keep` 行或完全不輸出（`0`）之後以 `<exit>` 結束，可用 `arg-glob` 只讓某個子指令（`gh pr checks*`、`go list *`）失敗。gate 的測試對它用到的每個外部指令至少跑「輸出後失敗」與「完全不輸出就失敗」兩格，斷言 gate 非 0，另跑同一個 fixture 的對照組確認是綠的，才知道紅是 wrapper 造成的。`scripts/test.sh` 的 `check-script-modes`、`merge-ready`、`red-stage`、`affected`、`cover-gate` 案例是範例。

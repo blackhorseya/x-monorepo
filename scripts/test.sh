@@ -210,9 +210,10 @@ expect_eq "scripts/ runs everything" "$all_jobs" "$(jobs_on scripts scripts/new.
 fixture ciall
 expect_eq "CI_ALL=1 runs everything" "$all_jobs" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 expect_eq "CI_ALL prints one flag per job" "$(echo "$all_jobs" | wc -w | tr -d ' ')" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | wc -l | tr -d ' ')"
-grep() { if [ "$1" = -c ]; then command grep "$@"; return 2; fi; command grep "$@"; }   # FAULT INJECTION: grep -c exits 2 after printing (do not merge)
-expect_eq "CI_ALL=1 prints no false" "0" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | grep -c '=false$' || [ $? -eq 1 ])"
-unset -f grep
+# assignments, not `"$(… || [ $? -eq 1 ])"` inside an argument: the status of a substitution that is an argument never reaches set -e (#462)
+all_out=$(in_repo env CI_ALL=1 scripts/ci-changes.sh)
+n_false=$(grep -c '=false$' <<<"$all_out" || [ $? -eq 1 ])
+expect_eq "CI_ALL=1 prints no false" "0" "$n_false"
 # Every flag is a job's `if:` in ci.yml, declared once as an output of `affected` (a flag nobody reads skips nothing).
 for j in $all_jobs; do
   expect_eq "ci.yml declares run_$j as an output of affected" 1 "$(grep -c "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml")"
@@ -765,7 +766,8 @@ smoke() { # smoke <skip-sign-n> -> prints "<exit> <FAIL line, if any>"
   fixture "smoke$1"; cp "$src/.goreleaser.yaml" "$repo/"
   local out rc=0
   out=$(cd "$repo" && PATH="$fakebin:$PATH" FAKE_COUNT="$tmp/count$1" FAKE_SKIP_SIGN_N=$1 scripts/cosign-smoke.sh 2>&1) || rc=$?
-  echo "$rc $(printf '%s' "$out" | grep -m1 '^FAIL' || [ $? -eq 1 ])"
+  first_fail=$(grep -m1 '^FAIL' <<<"$out" || [ $? -eq 1 ])
+  echo "$rc $first_fail"
 }
 if python3 -c 'import yaml' 2>/dev/null; then
   expect_match "smoke: every sign writes a bundle passes"            '^0 $' "$(smoke 0)"
@@ -1289,7 +1291,8 @@ dns() {
   local rc=0
   mkdir -p "$dns_dir/home"; : > "$dns_dir/home/.kind-runner"  # the script refuses to start outside run.sh's scratch HOME (#444)
   HOME="$dns_dir/home" KIND_RUNNER_HOME="$dns_dir/home" COREFILE="$dns_dir/Corefile" KLOG="$dns_dir/klog" PATH="$dns_dir/bin:$PATH" "$src/deployments/helm/kind/coredns-dex.sh" "$1" >/dev/null 2>&1 || rc=$?
-  echo "$rc $(grep -c '^patch$' "$dns_dir/klog" || [ $? -eq 1 ])"
+  n_patch=$(grep -c '^patch$' "$dns_dir/klog" || [ $? -eq 1 ])
+  echo "$rc $n_patch"
 }
 corefile_with() { # corefile_with <extra lines after ready...>
   { printf '.:53 {\n    errors\n    ready\n'; for l in "$@"; do printf '    %s\n' "$l"; done
@@ -1369,7 +1372,7 @@ pb_run() {
   out=$(env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" 2>&1) || rc=$?
 }
 pb_state() { curl -fsS "$pb_url/_state"; }
-pb_calls() { grep -c "^$1 " "$pb_dir/log" || [ $? -eq 1 ]; }
+pb_calls() { pb_n=$(grep -c "^$1 " "$pb_dir/log" || [ $? -eq 1 ]); }   # sets $pb_n: an assignment aborts on a grep error, "$(pb_calls …)" in an argument would not
 
 pb_up first
 pb_run
@@ -1380,8 +1383,10 @@ expect_eq "dex-prebind: user account has no role"         '[]'        "$(echo "$
 expect_eq "dex-prebind: two accounts, two claimed invites, two bindings" "2 2 2" \
   "$(echo "$st" | jq -r '[(.accounts|length), ([.invites[]|select(.status=="INVITE_STATUS_CLAIMED")]|length), (.identities|length)] | join(" ")')"
 expect_eq "dex-prebind: bindings are for the dev issuer" "[\"$pb_dev\"]" "$(echo "$st" | jq -c '[.identities[].issuer] | unique')"
-expect_eq "dex-prebind: CreateInvite uses the admin key"  "2 admin" "$(pb_calls CreateInvite) $(grep '^CreateInvite ' "$pb_dir/log" | sort -u | cut -d' ' -f2)"
-expect_eq "dex-prebind: ClaimInvite uses the bearer token" "2 bearer" "$(pb_calls ClaimInvite) $(grep '^ClaimInvite ' "$pb_dir/log" | sort -u | cut -d' ' -f2)"
+pb_calls CreateInvite
+expect_eq "dex-prebind: CreateInvite uses the admin key"  "2 admin" "$pb_n $(grep '^CreateInvite ' "$pb_dir/log" | sort -u | cut -d' ' -f2)"
+pb_calls ClaimInvite
+expect_eq "dex-prebind: ClaimInvite uses the bearer token" "2 bearer" "$pb_n $(grep '^ClaimInvite ' "$pb_dir/log" | sort -u | cut -d' ' -f2)"
 expect_eq "dex-prebind: one token per account" "admin@example.com user@example.com" "$(sort "$pb_dir/tokens" | tr '\n' ' ' | sed 's/ $//')"
 first_out=$out
 
@@ -1389,7 +1394,9 @@ before=$(wc -l < "$pb_dir/log" | tr -d ' ') ; st_before=$(pb_state); tokens_befo
 pb_run
 expect_eq "dex-prebind: rerun succeeds" "0" "$rc"
 expect_eq "dex-prebind: rerun writes nothing (state identical)" "$st_before" "$(pb_state)"
-expect_eq "dex-prebind: rerun calls no mutation" "0" "$(grep -cE '^(CreateAccount|CreateInvite|ClaimInvite) ' <(tail -n +$((before + 1)) "$pb_dir/log") || [ $? -eq 1 ])"
+rerun_log=$(tail -n +$((before + 1)) "$pb_dir/log")
+n_mut=$(grep -cE '^(CreateAccount|CreateInvite|ClaimInvite) ' <<<"$rerun_log" || [ $? -eq 1 ])
+expect_eq "dex-prebind: rerun calls no mutation" "0" "$n_mut"
 expect_eq "dex-prebind: rerun asks Dex for no token" "$tokens_before" "$(wc -l < "$pb_dir/tokens" | tr -d ' ')"
 expect_match "dex-prebind: rerun says already bound" 'already bound' "$out"
 rerun_out=$out
@@ -1496,7 +1503,9 @@ done
 : > "$pb_dir/log"
 pb_run
 expect_eq "dex-prebind: resume after a failed claim succeeds" "0" "$rc"
-expect_eq "dex-prebind: resume creates no second account or invite" "0 0" "$(pb_calls CreateAccount) $(pb_calls CreateInvite)"
+pb_calls CreateAccount; n_acc=$pb_n
+pb_calls CreateInvite
+expect_eq "dex-prebind: resume creates no second account or invite" "0 0" "$n_acc $pb_n"
 expect_eq "dex-prebind: resume binds both" "2" "$(pb_state | jq '.identities | length')"
 
 # an existing account is reused only if it is what the Dex account should be: a wrong role set or a
