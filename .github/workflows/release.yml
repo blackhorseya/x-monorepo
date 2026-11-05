@@ -129,8 +129,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: ./.github/actions/pnpm-cache
       # The console's dist/ before goreleaser: a broken web build fails the job before any Go
       # image has been pushed under this version. VITE_CONSOLE_VERSION is what its footer shows.
       - run: VITE_CONSOLE_VERSION="${TAG#v}" task web-build   # same spelling as goreleaser's .Version

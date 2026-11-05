@@ -335,7 +335,7 @@ step_text() { awk -v n="$2" '/^    - / {f=0} $0 == "    - id: " n {f=1} f' "$1";
 step_if()   { step_text "$1" "$2" | sed -n 's/^      if: //p'; }
 # step_body <file> <id>: everything that has to be identical between a read-write step and its restore-only twin.
 step_body() { step_text "$1" "$2" | awk '!/^[ ]*(- id|id|if|uses):/ && !/^[ ]*#/ && !/^[ ]*$/'; }
-for af in setup playwright; do
+for af in setup playwright pnpm-cache; do
   a="$src/.github/actions/$af/action.yml"
   expect_eq "$af: every actions/cache step has an id" "$(grep -cE 'uses: actions/cache(/restore)?@' "$a")" "$(cache_ids "$a" | count_lines .)"
   expect_eq "$af: no other way to cache (setup-go / setup-node cache: true)" 0 "$(count_lines -E '^\s+cache: (true|pnpm|npm|yarn)' "$a")"
@@ -418,6 +418,7 @@ expect_eq "event x ref: the module cache pair runs the writer only for a default
 expect_eq "event x ref: the build cache pair runs the writer only in the group's saver on such a run" "" "$(pair_check "$sa" gobuild-rw gobuild-ro build $all_scopes)"
 expect_eq "event x ref: the tools cache pair" "" "$(pair_check "$sa" tools-rw tools-ro always lint)"
 expect_eq "event x ref: the Playwright cache pair" "" "$(pair_check "$pa" cache-rw cache-ro always console-e2e)"
+expect_eq "event x ref: the pnpm store cache pair" "" "$(pair_check "$src/.github/actions/pnpm-cache/action.yml" cache-rw cache-ro always web)"
 # go-cache=false (web) runs neither Go cache step; tools=false runs neither tools step
 none_go=""; none_tools=""
 for st in gomod-rw gomod-ro gobuild-rw gobuild-ro; do
@@ -438,9 +439,11 @@ expect_eq "ci.yml: only the web job opts out of the Go cache"   1 "$(count_lines
 expect_eq "ci.yml: the web job opts out of the Go cache"        1 "$(ci_job web | count_lines 'go-cache: "false"')"
 expect_eq "ci.yml: the web job still runs the setup action (task needs go)" 1 "$(ci_job web | count_lines 'uses: ./.github/actions/setup$')"
 expect_match "ci.yml: lint's golangci-lint cache is not saved on a pull request" "skip-save-cache: \"\\$\\{\\{ github.event_name == 'pull_request' \\}\\}\"" "$(ci_job lint)"
-# the caches this repo still lets a pull request write, and their bound, are written down (the setup-node pnpm cache has no read-only mode)
+# no workflow lets setup-node cache (its post step saves on every trigger); the pnpm store goes through the pnpm-cache action, once per setup-node
+expect_eq "workflows: no setup-node cache: input"                  0 "$(count_lines -E '^\s+cache: (pnpm|npm|yarn)' "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | awk -F: '{s+=$NF} END {print s+0}')"
+expect_eq "workflows: every setup-node is followed by the pnpm-cache action" "$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: actions/setup-node@')" "$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: ./.github/actions/pnpm-cache$')"
 expect_match "docs/ci.md names the Go cache policy"             "go-cache" "$(cat "$src/docs/ci.md")"
-expect_match "docs/ci.md names the pnpm cache a PR can still write" "setup-node" "$(cat "$src/docs/ci.md")"
+expect_match "docs/ci.md names the pnpm-cache action"          "pnpm-cache" "$(cat "$src/docs/ci.md")"
 
 # ── fault injection for the external commands of plan.sh / count_lines: a wrapper that prints something and then fails must make
 # the script fail, never yield a plausible-looking output (#459: gates that swallowed an exit code gave a false green) ──────────
