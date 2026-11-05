@@ -189,7 +189,7 @@ tasks:
         }
 
   check-exit-swallow:
-    desc: no shell script drops an external command's exit status without an `# exit-ok: <reason>` on the line (`|| true`, `for x in $(cmd)`, `set -- $(cmd)`, a pipeline without pipefail, #462); scripts/check-exit-swallow.sh, also run by scripts/test.sh in CI's scripts-test
+    desc: 'no shell script drops an external command exit status without an exit-ok comment on the line (|| true, for x in $(cmd), set -- $(cmd), a pipeline without pipefail; #462); scripts/check-exit-swallow.sh, also run by scripts/test.sh in CI scripts-test'
     cmds:
       - scripts/check-exit-swallow.sh
 

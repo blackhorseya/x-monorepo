@@ -2041,5 +2041,36 @@ for keep in all 0; do
   done
 done
 
+# payment-upgrade-guard.sh: the home release's database must be the same before and after the drill. kubectl is a fake that
+# answers the psql reads; a read that prints part of its answer and dies must not become a shorter, equal snapshot.
+pg_fixture() {
+  pgd="$tmp/pgguard-$1"; mkdir -p "$pgd/bin"
+  cp "$src/deployments/helm/kind/payment-upgrade-guard.sh" "$pgd/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$pgd/payment-upgrade.sh"   # the inner drill: succeeds and touches nothing
+  cat > "$pgd/bin/kubectl" <<'FAKE'
+#!/usr/bin/env bash
+case "$*" in
+  *information_schema.tables*) printf 'public.a\npublic.b\npublic.c\n' ;;
+  *"count(*)"*) echo 3 ;;
+  *pg_namespace*) echo 'schema public' ;;
+  *) echo "fake kubectl: unexpected: $*" >&2; exit 99 ;;
+esac
+FAKE
+  chmod +x "$pgd/bin/kubectl"
+  mkdir -p "$pgd/home"; : > "$pgd/home/.kind-runner"   # the guard refuses to run outside run.sh's scratch HOME (#444)
+}
+pg_run() {   # pg_run [<dir of a wrapper that goes first on the PATH>]
+  rc=0; out=$(HOME="$pgd/home" KIND_RUNNER_HOME="$pgd/home" PATH="${1:+$1:}$pgd/bin:$PATH" bash "$pgd/payment-upgrade-guard.sh" home 2>&1) || rc=$?
+}
+pg_fixture ok; pg_run
+expect_eq "upgrade guard: fault-injection control — an untouched database passes" "0" "$rc"
+for spec in 'all|*information_schema.tables*' '1|*information_schema.tables*' '0|*information_schema.tables*' 'all|*count(*)*' '0|*count(*)*' 'all|*pg_namespace*'; do
+  keep=${spec%%|*} glob=${spec#*|}
+  pg_fixture "dies-$RANDOM"
+  w=$(PATH="$pgd/bin:$PATH" inject_fail "$tmp/inj-pg-$RANDOM" kubectl 42 "$keep" "$glob")
+  pg_run "$w"
+  if [ "$rc" = 0 ]; then bad "upgrade guard: kubectl $glob prints [$keep] then exits 42, the guard still passes [$out]"; else ok; fi
+done
+
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
