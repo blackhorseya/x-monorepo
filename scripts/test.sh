@@ -2685,6 +2685,25 @@ printf '#!/usr/bin/env bash\nset -euo pipefail\nrows=$(cmd) || rc=$?\n[ "${rc:-0
 sw_run "$sw/nested/test.sh"
 expect_eq    "rcbranch: a test.sh in another directory is NOT exempt (only scripts/test.sh is) → red" "1" "$rc"
 expect_match "rcbranch: …as rcbranch" 'nested/test\.sh:3: rcbranch:' "$out"
+# the file-level exemption (#467): ONLY the repo-relative path scripts/test.sh. A mini repo with the real checker, run from its own root with
+# repo-relative arguments (the way `git ls-files` names files), one file per cell
+rcx="$tmp/rcx"; mkdir -p "$rcx/scripts" "$rcx/nested"
+cp "$src/scripts/check-exit-swallow.sh" "$src/scripts/extract-run-blocks.py" "$rcx/scripts/"
+rcx_body_bad='rows=$(cmd) || rc=$?
+[ "${rc:-0}" = 0 ] || echo warning >&2
+echo "$rows"'
+rcx_body_ok='rows=$(cmd) || rc=$?
+[ "${rc:-0}" = 0 ] || { echo warning >&2; exit 2; }
+echo "$rows"'
+for f in scripts/test.sh nested/test.sh other.sh scripts/other.sh; do mkdir -p "$rcx/$(dirname "$f")"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_bad" > "$rcx/$f"; done
+mkdir -p "$rcx/ok"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_ok" > "$rcx/ok/test.sh"
+rcx_run() { rc=0; out=$(cd "$rcx" && scripts/check-exit-swallow.sh "$@" 2>&1) || rc=$?; }
+rcx_run scripts/test.sh;       expect_eq "exempt: scripts/test.sh itself is exempt from rcbranch (positive)" "0" "$rc"
+rcx_run nested/test.sh;        expect_eq "exempt: nested/test.sh is NOT exempt → red" "1" "$rc"
+expect_match "exempt: …as rcbranch on nested/test.sh" 'nested/test\.sh:3: rcbranch:' "$out"
+rcx_run other.sh;              expect_eq "exempt: an ordinary .sh at the root is red" "1" "$rc"
+rcx_run scripts/other.sh;      expect_eq "exempt: an ordinary .sh under scripts/ is red" "1" "$rc"
+rcx_run ok/test.sh;            expect_eq "exempt: a healthy test.sh (the refusing branch) is green — positive control" "0" "$rc"
 rcb_ok() { # <name> <lines…>
   local n=$1; shift
   { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; printf '%s\n' "$@"; } > "$sw/rcbok-$n.sh"
