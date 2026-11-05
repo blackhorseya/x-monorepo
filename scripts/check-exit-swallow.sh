@@ -78,7 +78,7 @@ function declsub(c,   i, n, pre, p2) {
     pre = substr(c, 1, i - 1)
     if (pre !~ /=("|\047)?$/) continue
     p2 = pre; sub(/[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?$/, "", p2)
-    if (p2 ~ /(^|[;&|{(]|[ \t])(local|declare|typeset|export|readonly)([ \t]+-[A-Za-z]+)*[ \t]+([A-Za-z_][A-Za-z_0-9]*=[^ \t]*[ \t]+)*$/) return 1
+    if (p2 ~ /(^|[;&|{(]|[ \t])(local|declare|typeset|export|readonly)([ \t]+-[A-Za-z]+)*[ \t]+([A-Za-z_][A-Za-z_0-9]*=("[^"]*"|\047[^\047]*\047|[^ \t]*)[ \t]+)*$/) return 1
   }
   return 0
 }

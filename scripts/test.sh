@@ -1918,6 +1918,9 @@ declarer @@ declsub @@ declare -r n=$(cmd)
 exportsub @@ declsub @@ export X="$(cmd)"
 readonlysub @@ declsub @@ readonly n=$(cmd)
 localmulti @@ declsub @@ local a=1 b="$(cmd)"
+localspace @@ declsub @@ local a="hello world" b="$(grep -c y f)"
+localsq @@ declsub @@ local a='hello world' b="$(cmd)"
+exportspace @@ declsub @@ export A="x y" B=$(cmd)
 ROWS
 # sw_write <name>: $sw/<name>.sh from stdin, after a header that sets (or not) pipefail
 sw_write() { { printf '#!/usr/bin/env bash\n%s\n' "${2:-set -euo pipefail}"; cat; } > "$sw/$1.sh"; }
@@ -2220,6 +2223,15 @@ for c in grep sed wc tr cat sort diff seq mktemp; do
     if [ "$rc" = 0 ]; then bad "shards-check: $c printing ($m) then exiting 42 still exits 0"; else ok; fi
     case "$out" in *"ok: 3 shards"*) bad "shards-check: $c ($m) then exit 42 still says ok";; *) ok;; esac
   done
+done
+# Only the read of the shard indexes fails (the wrappers above fail EVERY call of a tool, which the later cats of the shard lists
+# would catch even if this one were swallowed): it prints all of "1 2 3" or only "1", then exits 42.
+for keep in all 1; do
+  w=$(PATH="$sc/bin:$PATH" inject_fail "$tmp/inj-shard-idx-$keep" cat 42 "$keep" '*indexes*')
+  rc=0; out=$( (cd "$tmp" && REAL_PATH="$PATH" PATH="$w:$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT= "$src/scripts/web-e2e-shards-check.sh" 3 2>&1) ) || rc=$?
+  if [ "$rc" = 0 ]; then bad "shards-check: cat of the indexes prints [$keep] then exits 42, the check still exits 0 [$out]"; else ok; fi
+  case "$out" in *"ok: 3 shards"*) bad "shards-check: cat of the indexes ($keep) then exit 42 still says ok";; *) ok;; esac
+  expect_match "shards-check: the index read names its failure ($keep)" 'cat of the shard indexes exited 42' "$out"
 done
 rc=0; out=$(WRAP_CMD=none wrapped_check none full) || rc=$?
 expect_eq "shards-check: the wrappers that do not fail change nothing → exit 0" "0" "$rc"
