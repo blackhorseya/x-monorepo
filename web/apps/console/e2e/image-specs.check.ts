@@ -13,13 +13,19 @@ import { checkSpecClasses, imageSpecs, previewOnlySpecs, type Listed } from "./i
 // expectation with it and nothing would notice.
 const PINNED = ["image.spec.ts", "version.spec.ts", "orders.spec.ts", "order.spec.ts", "products.spec.ts", "reservations.spec.ts"];
 
+interface JSONReport extends JSONSuite {
+  errors?: unknown[];
+}
+
 interface JSONSuite {
   specs?: { file: string; tests: { projectName: string }[] }[];
   suites?: JSONSuite[];
 }
 
 export function parseListing(json: string): Listed {
-  const root = JSON.parse(json) as JSONSuite;
+  const root = JSON.parse(json) as JSONReport;
+  // a spec that does not load is reported here and may not change the exit code: a listing with errors is not a listing
+  if ((root.errors ?? []).length > 0) throw new Error(`playwright --list reported ${root.errors!.length} error(s): ${JSON.stringify(root.errors).slice(0, 400)}`);
   const files: Record<string, Set<string>> = { chromium: new Set(), image: new Set() };
   const walk = (s: JSONSuite) => {
     for (const sp of s.specs ?? []) {

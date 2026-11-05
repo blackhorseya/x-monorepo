@@ -37,23 +37,35 @@ mutate asset-path default.conf.template 's|location /assets/ \{|location /assetz
 
 want=("$@")
 rc=0
-run() { # run <name> <context>
+# run <name> <context>: 0 = the image project went red on a SPEC (at least one failed test), 1 = green, 2 = it did not
+# run at all (build, container or Playwright startup failed): that is a broken harness, never a mutant that "went red".
+run() {
   local name=$1 ctx=$2 log=$work/$1.log code=0
   # --retries=0: a mutant has to be red on the first attempt, and a failing test is not run twice (30s timeouts add up)
   E2E_IMAGE_CONTEXT=$ctx CI=1 ./e2e/image.sh --retries=0 >"$log" 2>&1 || code=$?
   local failed
-  failed=$(sed -E 's/\x1b\[[0-9;]*m//g' "$log" | grep -E '^\s+✘\s+[0-9]+ \[image\]' | sed -E 's/^.*\[image\] › e2e\/([^:]+):.*/\1/' | sort | uniq -c | awk '{printf "%s%s×%s", s, $2, $1; s=", "}')
+  # grep exits 1 for "no match", which is a result here; any other non-zero is an error and stops the script
+  failed=$(sed -E 's/\x1b\[[0-9;]*m//g' "$log" | { grep -E '^\s+✘\s+[0-9]+ \[image\]' || [ $? -eq 1 ]; } | sed -E 's/^.*\[image\] › e2e\/([^:]+):.*/\1/' | sort | uniq -c | awk '{printf "%s%s×%s", s, $2, $1; s=", "}')
   echo "mutant $name: exit=$code failed-spec-files=[${failed}]"
   cp "$log" "${E2E_MUTANT_LOGS:-$work}/$name.log" 2>/dev/null || true
-  return $code
+  if [ "$code" -eq 0 ]; then return 1; fi
+  if [ -z "$failed" ]; then echo "mutant $name: exit=$code but no spec failed, the harness broke (log: ${E2E_MUTANT_LOGS:-$work}/$name.log)"; tail -5 "$log"; return 2; fi
+  return 0
 }
 selected() { [ ${#want[@]} -eq 0 ] && return 0; local w; for w in "${want[@]}"; do [ "$w" = "$1" ] && return 0; done; return 1; }
 
 if selected control; then
-  run control . && echo "control: GREEN (as required)" || { echo "control: RED, the harness cannot prove anything"; exit 1; }
+  c=0; run control . || c=$?
+  # the control has to be green: 1 from run. 0 (red) or 2 (broken) means the harness proves nothing.
+  if [ "$c" -eq 1 ]; then echo "control: GREEN (as required)"; else echo "control: not green (run=$c), the harness cannot prove anything"; exit 1; fi
 fi
 for name in fallback api-proxy csp-script-none csp-sandbox config-json asset-mime asset-path; do
   selected "$name" || continue
-  if run "$name" "$work/$name"; then echo "mutant $name: GREEN  <-- the image specs did not notice"; rc=1; else echo "mutant $name: RED (as required)"; fi
+  c=0; run "$name" "$work/$name" || c=$?
+  case $c in
+    0) echo "mutant $name: RED (as required)" ;;
+    1) echo "mutant $name: GREEN  <-- the image specs did not notice"; rc=1 ;;
+    *) echo "mutant $name: ERROR (harness)"; rc=1 ;;
+  esac
 done
 exit $rc
