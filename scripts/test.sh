@@ -305,10 +305,12 @@ expect_match "plan: the week is an ISO week"                  '^[0-9]{4}-W[0-9]{
 # Every job of ci.yml that calls the setup action (and keeps the Go cache) maps to a build-cache group, with exactly one saver per
 # group; a new job that is not in plan.sh fails here instead of silently getting no build cache.
 ci_setup_scopes() {
-  local j m
-  for j in $(awk '/^  [a-z0-9-]+:$/ {gsub(/[ :]/, ""); job=$0} /uses: \.\/\.github\/actions\/setup/ {print job}' "$src/.github/workflows/ci.yml" | sort -u); do
+  local j m jobs mods
+  jobs=$(awk '/^  [a-z0-9-]+:$/ {gsub(/[ :]/, ""); job=$0} /uses: \.\/\.github\/actions\/setup/ {print job}' "$src/.github/workflows/ci.yml" | sort -u)   # assigned first: a failing awk is an error, not an empty list (#462)
+  for j in $jobs; do
     if [ "$j" = test ]; then
-      for m in $(awk '/^use \(/ {f=1; next} /^\)/ {f=0} f {gsub(/[ \t]|^\.\//, ""); print}' "$src/go.work" | sed 's#^\./##'); do echo "test-$m"; done
+      mods=$(awk '/^use \(/ {f=1; next} /^\)/ {f=0} f {gsub(/[ \t]|^\.\//, ""); print}' "$src/go.work" | sed 's#^\./##')
+      for m in $mods; do echo "test-$m"; done
     elif [ "$(ci_job "$j" | count_lines 'go-cache: "false"')" = 0 ]; then
       echo "$j"
     fi
@@ -324,7 +326,8 @@ for sc in $scopes release-snapshot; do
   groups="$groups $g"
 done
 expect_eq "plan: every scope of a job that calls the setup action has a build-cache group" "" "$unmapped"
-for g in $(printf '%s\n' $groups | sort -u); do
+ugroups=$(printf '%s\n' $groups | sort -u)
+for g in $ugroups; do
   n=0; for sc in $scopes; do
     [ "$(plan_out push refs/heads/main main "$sc" group)" = "$g" ] && [ "$(plan_out push refs/heads/main main "$sc" save_build)" = true ] && n=$((n + 1))
   done
@@ -379,7 +382,8 @@ for af in setup playwright pnpm-cache; do
   a="$src/.github/actions/$af/action.yml"
   expect_eq "$af: every actions/cache step has an id" "$(grep -cE 'uses: actions/cache(/restore)?@' "$a")" "$(cache_ids "$a" | count_lines .)"
   expect_eq "$af: no other way to cache (setup-go / setup-node cache: true)" 0 "$(count_lines -E '^\s+cache: (true|pnpm|npm|yarn)' "$a")"
-  for id in $(cache_ids "$a"); do
+  ids=$(cache_ids "$a")
+  for id in $ids; do
     uses=$(step_text "$a" "$id" | sed -n 's/^      uses: \(actions\/cache[^@]*\)@.*/\1/p')
     cond=$(step_if "$a" "$id")
     case $uses in
