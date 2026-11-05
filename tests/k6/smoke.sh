@@ -35,7 +35,8 @@ run_one() {
   pid="" wpid=""   # not local: the EXIT trap runs after this function has returned (and this is a subshell)
   export APP_HTTP_ADDR=":$p"
   stop() {
-    # worker first: SIGTERM drains in-flight handlers (≤ 8s) and exits 0.
+    # worker first: SIGTERM drains in-flight handlers (≤ 8s) and exits 0. `|| true`: cleanup only; the verdict of a script is
+    # k6's own exit status (the last command of run_one), never this.
     [ -n "$wpid" ] && kill "$wpid" 2>/dev/null && wait "$wpid" 2>/dev/null || true; wpid=""
     [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true; pid=""
   }
@@ -52,11 +53,15 @@ run_one() {
     # and the compose-up addresses it does not need). Same as the console e2e's worker.setup.ts.
     APP_CONFIG=/dev/null "$bin/worker" > "$bin/k6-$s-worker.log" 2>&1 & wpid=$!
   fi
-  for _ in $(seq 1 50); do
+  # up to 10s; bash arithmetic loop (no `seq`), a failing `sleep` is a failure of this script, and the end of the loop
+  # is checked: ready, or this script fails (no external command's exit is ever read as "ready")
+  local n ready=""
+  for ((n = 0; n < 50; n++)); do
     kill -0 "$pid" 2>/dev/null || { echo "rpc exited:"; cat "$bin/k6-$s.log"; exit 1; }
-    curl -fsS "http://127.0.0.1:$p/api/readyz" >/dev/null 2>&1 && break
-    sleep 0.2
+    if curl -fsS "http://127.0.0.1:$p/api/readyz" >/dev/null 2>&1; then ready=1; break; fi
+    sleep 0.2 || { echo "sleep failed while waiting for the rpc of $s"; exit 1; }
   done
+  [ -n "$ready" ] || { echo "rpc of $s never became ready on :$p:"; cat "$bin/k6-$s.log"; exit 1; }
   # CREATE_P95: the smoke runs on a shared CI runner against a Postgres container, where
   # CreateOrder's p95 lands anywhere between 150 and 400ms at the same p50 as a laptop.
   # RESERVE_P95: same story for the worker chain (outbox poll + handler + the Postgres service).
@@ -75,7 +80,12 @@ done
 
 for i in ${first[@]+"${!first[@]}"}; do
   s=${first[$i]}
-  ( run_one "$s" "${firstp[$i]}" ) 2>&1 | tee "$bin/k6-$s.out"; [ "${PIPESTATUS[0]}" = 0 ] || exit 1
+  # every stage of the pipeline counts: the script's own status, and tee (a lost log is a failure too)
+  # (both arms read PIPESTATUS before anything else runs; a bare `|| true` would overwrite it)
+  # shellcheck disable=SC2015
+  ( run_one "$s" "${firstp[$i]}" ) 2>&1 | tee "$bin/k6-$s.out" && st=("${PIPESTATUS[@]}") || st=("${PIPESTATUS[@]}")
+  [ "${st[0]}" = 0 ] || exit 1
+  [ "${st[1]}" = 0 ] || { echo "tee failed (exit ${st[1]}) while logging $s"; exit 1; }
 done
 
 if [ ${#rest[@]} -gt 0 ]; then
@@ -86,7 +96,7 @@ if [ ${#rest[@]} -gt 0 ]; then
   fail=0
   for i in "${!rest[@]}"; do
     rc=0; wait "${pids[$i]}" || rc=$?
-    cat "$bin/k6-${rest[$i]}.out"
+    cat "$bin/k6-${rest[$i]}.out" || { echo "--- FAIL: ${rest[$i]} (its output could not be read)"; fail=1; }
     [ "$rc" = 0 ] || { echo "--- FAIL: ${rest[$i]} (exit $rc)"; fail=1; }
   done
   [ "$fail" = 0 ] || exit 1

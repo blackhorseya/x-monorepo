@@ -22,6 +22,8 @@ bin=$work/bin; mkdir -p "$bin" "$work/shim"
 cat > "$work/stub.py" <<'PY'
 import sys, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
+time.sleep(0.4)   # the first readiness poll must miss: a failing sleep/curl in the wait loop has to be able to matter
 port = int(os.environ["APP_HTTP_ADDR"].lstrip(":"))
 class H(BaseHTTPRequestHandler):
     def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
@@ -91,6 +93,75 @@ for m in full partial leak; do
   check "wire: grep exits 42 ($m) is a FAIL" nonzero "$rc"
 done
 rc=0; PATH="$work/shim:$PATH" wire WIRE_MODES=status || rc=$?; check "wire: the grep shim in pass-through is still green" zero "$rc"
+
+# the cell outputs wire.sh prints: unreadable (cat exits 42 for every .out), or readable but without any verdict line
+# (cat drops the `--- PASS` lines, exit 0). Either way wire.sh must go red instead of printing nothing and `ok  wire gate`.
+rm -f "$work/shim/grep"
+cat > "$work/shim/cat" <<'SH'
+#!/bin/sh
+case "$*" in
+  *.out*) case ${CAT_SHIM:-} in
+    unreadable) exit 42;;
+    noverdict) /bin/cat "$@" | /usr/bin/grep -v -- '--- PASS'; exit 0;;
+  esac;;
+esac
+exec /bin/cat "$@"
+SH
+chmod +x "$work/shim/cat"
+for m in unreadable noverdict; do
+  rc=0; PATH="$work/shim:$PATH" wire CAT_SHIM=$m WIRE_MODES=status || rc=$?
+  check "wire: cat shim ($m) is a FAIL" nonzero "$rc"
+done
+rc=0; PATH="$work/shim:$PATH" wire WIRE_MODES=status || rc=$?; check "wire: the cat shim in pass-through is still green" zero "$rc"
+
+# --- every external command the two harnesses call: it fails (exit 42) after partial or full output → the run is red ---
+# one shim per command, in a directory of its own (so the others stay real); `real` finds the genuine binary.
+shim() { # <command> <body…> → prints the shim dir
+  local d="$work/shim-$1"; mkdir -p "$d"; shift
+  printf '#!/bin/sh\n%s\n' "$*" > "$d/$CMD"; chmod +x "$d/$CMD"; echo "$d"
+}
+withshim() { # <command> <body> <runner…>: runner with the shim first in PATH
+  local c=$1 b=$2; shift 2; local d; CMD=$c d=$(shim "$c" "$b"); PATH="$d:$PATH" "$@"
+}
+REAL_SLEEP=$(command -v sleep)
+rc=0; withshim sleep 'exit 42' wire WIRE_MODES=status || rc=$?;                   check "wire: sleep exits 42" nonzero "$rc"
+rc=0; withshim sleep "$REAL_SLEEP 0.05; exit 42" wire WIRE_MODES=status || rc=$?; check "wire: sleep exits 42 after waiting" nonzero "$rc"
+rc=0; withshim rm 'exit 42' wire WIRE_MODES=status || rc=$?;                      check "wire: rm exits 42" nonzero "$rc"
+rc=0; withshim rm '/bin/rm "$@"; exit 42' wire WIRE_MODES=status || rc=$?;       check "wire: rm exits 42 after removing" nonzero "$rc"
+rc=0; withshim mkdir '/bin/mkdir "$@"; exit 42' wire WIRE_MODES=status || rc=$?;  check "wire: mkdir exits 42 after creating" nonzero "$rc"
+rc=0; withshim python3 'echo "served status" >&2; exit 42' wire WIRE_MODES=status || rc=$?; check "wire: python3 (the server) prints its marker then exits 42" nonzero "$rc"
+rc=0; withshim cat 'case "$*" in *.out*) /bin/cat "$@" | head -n 1; exit 42;; esac; exec /bin/cat "$@"' wire WIRE_MODES=status || rc=$?; check "wire: cat prints one line of a .out then exits 42" nonzero "$rc"
+rc=0; withshim cat 'case "$*" in *.rc*) /bin/cat "$@"; exit 42;; esac; exec /bin/cat "$@"' wire WIRE_MODES=status || rc=$?; check "wire: cat prints a .rc then exits 42" nonzero "$rc"
+# seq, sort, tr, basename: no longer called; a failing one changes nothing (and wire still passes)
+for c in seq sort tr basename; do
+  rc=0; withshim "$c" 'echo 1; exit 42' wire WIRE_MODES=status || rc=$?;           check "wire: $c is not used (exit 42 shim, still green)" zero "$rc"
+done
+# env: the nested negative runs go through it; a failing env must not read as "red as it must"
+rc=0; withshim env 'exit 42' env WIRE_NO_NEGATIVES= WIRE_MODES=status PORT=18500 tests/k6/wire.sh "$work/wbin2" orders > "$work/wire.out" 2>&1 || rc=$?
+check "wire: env exits 42 (negative cells must not pass as 'red')" nonzero "$rc"
+
+# a k6 that reaches the server, prints a line and dies without writing summary / metrics, in a bin that already holds a
+# real run's files: judged by what the OLD call left, it would pass
+mkdir -p "$work/wbin3"
+rc=0; WIRE_NO_NEGATIVES=1 WIRE_MODES=status PORT=18600 tests/k6/wire.sh "$work/wbin3" orders > "$work/wire.out" 2>&1 || rc=$?; check "wire: first run (real k6) is green" zero "$rc"
+rc=0; withshim k6 'for a in "$@"; do case $a in BASE_URL=*) u=${a#BASE_URL=};; esac; done; curl -s "$u/x" >/dev/null; echo "transport.malformed_response"; exit 42' \
+  env WIRE_NO_NEGATIVES=1 WIRE_MODES=status PORT=18600 tests/k6/wire.sh "$work/wbin3" orders > "$work/wire.out" 2>&1 || rc=$?
+check "wire: second run, k6 dies without writing its files (stale files from the first)" nonzero "$rc"
+# red for the target reason: the cell says the files were not written by this call (not some other failure)
+if grep -q "k6 did not write it in this call" "$work/wire.out"; then echo "ok   wire: the stale-file run fails on 'k6 did not write it in this call'"
+else echo "FAIL wire: the stale-file run did not fail on the missing-artifact assertion"; fails=$((fails + 1)); fi
+
+# smoke.sh: the same, per command
+one() { SHIM_FAIL="" PORT=18700 DATABASE_URL=x tests/k6/smoke.sh "$bin" "$@" > "$work/smoke.out" 2>&1 && return 0 || return $?; }
+rc=0; withshim curl 'echo partial; exit 42' one orders || rc=$?;                   check "smoke: curl exits 42 (never ready)" nonzero "$rc"
+rc=0; withshim sleep 'exit 42' one orders || rc=$?;                                check "smoke: sleep exits 42" nonzero "$rc"
+rc=0; withshim tee '/bin/cat > /dev/null; exit 42' one reservation || rc=$?;       check "smoke: tee swallows its input and exits 42" nonzero "$rc"
+rc=0; withshim tee 'head -n 1 | /bin/cat > "$1"; exit 42' one reservation || rc=$?; check "smoke: tee writes one line and exits 42" nonzero "$rc"
+rc=0; withshim cat 'case "$*" in *.out*) exit 42;; esac; exec /bin/cat "$@"' one orders || rc=$?; check "smoke: cat of a script's output exits 42" nonzero "$rc"
+rc=0; withshim env 'exit 42' one orders || rc=$?;                                  check "smoke: env (starts the rpc) exits 42" nonzero "$rc"
+# seq is still called by catalog.sh (sourced; not changed here): its readiness loop ends in a hard readiness check, so a short
+# or failed seq ends red, never green
+rc=0; withshim seq 'echo 1; exit 42' one orders || rc=$?;                          check "smoke: seq (catalog.sh) prints 1 and exits 42" nonzero "$rc"
 
 [ "$fails" = 0 ] || { echo "FAIL ($fails)"; exit 1; }
 echo "ok  parallel harnesses"

@@ -479,7 +479,7 @@ tasks:
         msg: needs k6 (brew install k6) and python3
 
   k6-parallel-test:
-    desc: 'tests/k6/parallel_test.sh: smoke.sh (stub rpc / worker / catalog-rpc, shim k6) and wire.sh must stay red when one parallel member fails — each smoke script failing alone, a k6 that exits 0, a lane that dies without a verdict (#451). Needs k6 and python3; no Postgres. The `k6-wire` job in CI'
+    desc: 'tests/k6/parallel_test.sh: smoke.sh (stub rpc / worker / catalog-rpc, shim k6) and wire.sh must stay red when one parallel member fails — each smoke script failing alone, a k6 that exits 0 or dies without writing its files, a lane that dies without a verdict, and every external command (grep, cat, sleep, rm, mkdir, env, curl, tee, python3…) exiting 42 after partial or full output (#451, #463). Needs k6 and python3; no Postgres. The `k6-wire` job in CI'
     cmds: ['tests/k6/parallel_test.sh']
     preconditions:
       - sh: command -v k6 >/dev/null && command -v python3 >/dev/null

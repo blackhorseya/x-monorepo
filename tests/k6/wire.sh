@@ -58,6 +58,33 @@ found() {
   [ "$r" = 0 ]
 }
 
+# nap <seconds>: sleep, and a sleep that fails is a FAIL reason of the cell (it would turn a poll loop into a spin)
+nap() { sleep "$1" || why+=("sleep $1 failed"); }
+# listening <port>: 0 as soon as something accepts connections on it, 1 after 5s. Bash arithmetic loop, no `seq`.
+listening() {
+  local n
+  for ((n = 0; n < 50; n++)); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && return 0
+    nap 0.1
+  done
+  return 1
+}
+# clear_artifacts <file…> / need_artifacts <file…>: the files one k6 call must write are removed before it, and must
+# exist and be non-empty after it, so a k6 that dies before writing them can never be judged by what an earlier call left.
+clear_artifacts() {
+  local f
+  for f in "$@"; do
+    rm -f -- "$f" || why+=("rm ${f##*/} failed")
+    [ ! -e "$f" ] || why+=("${f##*/} survived rm")
+  done
+}
+need_artifacts() {
+  local f
+  for f in "$@"; do [ -s "$f" ] || why+=("${f##*/} missing or empty: k6 did not write it in this call"); done
+}
+# nonce <label>: unique per call; k6 stamps it on every sample (--tag), the judge looks for it in the metrics file
+nonce() { echo "$$-$1-$RANDOM$RANDOM"; }
+
 # <script> <mode> <port>
 cell_grid() {
   local s=$1 mode=$2 port=$3
@@ -65,27 +92,26 @@ cell_grid() {
   trap stop EXIT
   echo "=== RUN   $cell"
   why=()
+  clear_artifacts "$log.log" "$log-server.log" "$log-summary.json" "$log-metrics.json"
+  nc=$(nonce "$s-$mode")
   $server_cmd "$port" "${WIRE_SERVE_AS:-$mode}" > "$log-server.log" 2>&1 & xpid=$!
-  up=""
-  for _ in $(seq 1 50); do
-    (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && { up=1; break; }
-    sleep 0.1
-  done
-  [ -n "$up" ] || why+=("wire server did not listen on :$port within 5s")
+  listening "$port" || why+=("wire server did not listen on :$port within 5s")
   rc=0
-  k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
+  k6 run --quiet --tag "wirenonce=$nc" --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
     "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$KEY" -e "ADMIN_API_KEY=$ADMIN_KEY" -e VUS=1 -e DURATION=2s \
     -e RPS=5 -e "RUN_ID=wire-$$-$s-$mode" > "$log.log" 2>&1 || rc=$?
   # alive at the end: a server that died mid-run answered nothing after that
   kill -0 "$xpid" 2>/dev/null || why+=("wire server exited during the run")
   stop
+  need_artifacts "$log.log" "$log-summary.json" "$log-metrics.json"
+  found -F -- "\"wirenonce\":\"$nc\"" "$log-metrics.json" || why+=("metrics file carries no sample of this call (nonce $nc)")
   grep -q "^served ${mode}$" "$log-server.log" 2>/dev/null \
     || why+=("wire server never served '$mode' (its log has no 'served $mode' line)")
   [ "$rc" != 0 ] || why+=("k6 exited 0: a transport failure must fail the run")
   for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
     for k in "$KEY" "$ADMIN_KEY"; do
       if found -- "$k" "$f"; then
-        why+=("forbidden text $k found in $(basename "$f") (a credential reflected by the wire parser error)")
+        why+=("forbidden text $k found in ${f##*/} (a credential reflected by the wire parser error)")
       fi
     done
   done
@@ -97,7 +123,10 @@ cell_grid() {
   # grep -o exits 1 with no match (classes stays empty → the check below fails); any other exit is a FAIL of its own
   g=0; found_classes=$(grep -o 'transport\.[a-z_]*' "$log.log") || g=$?
   [ "$g" -le 1 ] || why+=("grep -o failed (exit $g) while reading the failure classes")
-  classes=$(printf '%s\n' "$found_classes" | sort -u | tr '\n' ' ')
+  classes="" cl=""
+  while IFS= read -r cl; do
+    case " $classes" in *" $cl "*) ;; *) [ -z "$cl" ] || classes+="$cl " ;; esac
+  done <<<"$found_classes"
   if [ "$classes" != "transport.$(want "$mode") " ]; then
     why+=("expected the only failure class transport.$(want "$mode"), output has: ${classes:-none}")
   fi
@@ -120,18 +149,22 @@ cell_key() {
   trap stop EXIT
   echo "=== RUN   $cell"
   why=()
+  clear_artifacts "$log.log" "$log-server.log" "$log-summary.json" "$log-metrics.json"
+  nc=$(nonce "$s-key-$c")
   python3 tests/k6/wire_server.py "$port" status > "$log-server.log" 2>&1 & xpid=$!
-  for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
+  listening "$port" || why+=("wire server did not listen on :$port within 5s")
   rc=0
-  k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
+  k6 run --quiet --tag "wirenonce=$nc" --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
     "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$k" -e "ADMIN_API_KEY=$k" -e VUS=1 \
     -e DURATION=2s -e RPS=5 -e "RUN_ID=wire-$$-$s-key-$c" > "$log.log" 2>&1 || rc=$?
   stop
+  need_artifacts "$log.log" "$log-summary.json" "$log-metrics.json"
+  found -F -- "\"wirenonce\":\"$nc\"" "$log-metrics.json" || why+=("metrics file carries no sample of this call (nonce $nc)")
   grep -q "^served status$" "$log-server.log" 2>/dev/null || why+=("wire server never served 'status'")
   [ "$rc" != 0 ] || why+=("k6 exited 0: a transport failure must fail the run")
   for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
     if found -- "$k" "$f"; then
-      why+=("forbidden text $k found in $(basename "$f") (a key equal to a failure class string)")
+      why+=("forbidden text $k found in ${f##*/} (a key equal to a failure class string)")
     fi
   done
   # the status wire answer is a malformed_response: shown as is, or redacted when the key is that very string
@@ -159,18 +192,22 @@ cell_reflect() {
   trap stop EXIT
   echo "=== RUN   $cell"
   why=()
+  clear_artifacts "$log.log" "$log-server.log" "$log-summary.json" "$log-metrics.json"
+  nc=$(nonce "reflect-$mode-$want_tag")
   python3 tests/k6/status_server.py "$port" "$mode" > "$log-server.log" 2>&1 & xpid=$!
-  for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
+  listening "$port" || why+=("status server did not listen on :$port within 5s")
   rc=0
-  k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
+  k6 run --quiet --tag "wirenonce=$nc" --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
     tests/k6/reservation.js -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$k" -e "ADMIN_API_KEY=$k" -e VUS=1 \
     -e DURATION=2s -e SKUS=1 -e "RUN_ID=wire-$$-reflect-$mode" > "$log.log" 2>&1 || rc=$?
   stop
+  need_artifacts "$log.log" "$log-summary.json" "$log-metrics.json"
+  found -F -- "\"wirenonce\":\"$nc\"" "$log-metrics.json" || why+=("metrics file carries no sample of this call (nonce $nc)")
   grep -q "^served $mode$" "$log-server.log" 2>/dev/null || why+=("status server never served the reflected '$mode' answer")
   [ "$rc" != 0 ] || why+=("k6 exited 0: a wrong status must fail $counter")
   for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
     if found -- "$k" "$f"; then
-      why+=("forbidden text $k found in $(basename "$f") (a credential reflected into a legal JSON status)")
+      why+=("forbidden text $k found in ${f##*/} (a credential reflected into a legal JSON status)")
     fi
   done
   # the counter was really hit, with the fixed bucket as its tag
@@ -192,10 +229,20 @@ cell_reflect() {
 # <"name:ENV=value"> <port>
 cell_neg() {
   local neg=$1 port=$2
+  why=()   # found() adds its reasons here
   echo "=== RUN   wire-negative-${neg%%:*}"
-  if env WIRE_NO_NEGATIVES=1 WIRE_JOBS=1 WIRE_MODES=status PORT=$((port + 1)) "${neg#*:}" "$0" "$dir/negative-${neg%%:*}" orders > "$dir/negative-${neg%%:*}.log" 2>&1; then
+  local nlog="$dir/negative-${neg%%:*}.log" nrc=0
+  rm -f -- "$nlog" || { echo "--- FAIL: wire-negative-${neg%%:*}"; echo "    rm of the previous log failed"; return 1; }
+  env WIRE_NO_NEGATIVES=1 WIRE_JOBS=1 WIRE_MODES=status PORT=$((port + 1)) "${neg#*:}" "$0" "$dir/negative-${neg%%:*}" orders > "$nlog" 2>&1 || nrc=$?
+  if [ "$nrc" = 0 ]; then
     echo "--- FAIL: wire-negative-${neg%%:*}"
     echo "    wire.sh stayed green with the fixture ${neg%%:*}: the gate proves nothing"
+    return 1
+  fi
+  # red for the right reason only: the nested wire.sh's own verdict (exit 1) naming its one cell, not env failing or a crash
+  if [ "$nrc" != 1 ] || ! found -F -- "wire gate FAILED: wire-orders-status" "$nlog"; then
+    echo "--- FAIL: wire-negative-${neg%%:*}"
+    echo "    the nested wire.sh went red (exit $nrc) but not with its own 'wire gate FAILED: wire-orders-status' verdict"
     return 1
   fi
   echo "--- PASS: wire-negative-${neg%%:*} (red as it must)"
@@ -251,16 +298,33 @@ for ((l = 0; l < jobs; l++)); do lane "$l" & lpids+=($!); done
 # `|| true`: a lane's own exit decides nothing — every cell has its own .rc, and a cell without one is a FAIL below
 for p in "${lpids[@]}"; do wait "$p" || true; done
 
-fails=()
+# A cell passes only if ALL hold: its .rc is readable and 0, its .out was read in full (cat exit 0), and that output has the
+# cell's own `--- PASS: <cell> (` line and no `--- FAIL: <cell>` line. The match is plain bash on the text, no external
+# command. Anything else is a FAIL with its reason printed, and the number of cells that passed must equal the number of
+# cells listed.
+fails=() passed=0
 for c in "${cells[@]}"; do
   name=${c%%|*}
-  cat "$dir/$name.out" 2>/dev/null || true   # printing only: the verdict is the .rc below, a missing/empty .out cannot make a cell pass
-  if [ "$(cat "$dir/$name.rc" 2>/dev/null || echo missing)" != 0 ]; then
+  out="" r=0; out=$(cat "$dir/$name.out" 2>/dev/null) || r=$?
+  rcv="" q=0; rcv=$(cat "$dir/$name.rc" 2>/dev/null) || q=$?
+  [ "$r" = 0 ] && [ -n "$out" ] && printf '%s\n' "$out"
+  reason=""
+  if [ "$r" != 0 ]; then reason="could not read its output (exit $r)"
+  elif [ "$q" != 0 ]; then reason="no exit status (its lane died or the cell was killed)"
+  elif [ "$rcv" != 0 ]; then reason="cell exit $rcv"
+  else
+    case "$out" in *"--- FAIL: $name"*) reason="its output carries a FAIL line" ;; esac
+    case "$out" in *"--- PASS: $name ("*) ;; *) reason=${reason:-"its output has no '--- PASS: $name' line"} ;; esac
+  fi
+  if [ -n "$reason" ]; then
     fails+=("$name")
-    # a cell that printed no verdict at all (its lane died, or it was killed): say so, red-stage-shaped
-    grep -q "^--- FAIL: $name" "$dir/$name.out" 2>/dev/null || { echo "--- FAIL: $name"; echo "    cell ended without a PASS verdict (exit $(cat "$dir/$name.rc" 2>/dev/null || echo missing))"; }
+    # the cell's own FAIL line is already printed above; for the other reasons say it here, red-stage-shaped
+    case "$out" in *"--- FAIL: $name"*) ;; *) echo "--- FAIL: $name"; echo "    $reason" ;; esac
+  else
+    passed=$((passed + 1))
   fi
 done
+[ "$passed" = "${#cells[@]}" ] || [ ${#fails[@]} -gt 0 ] || fails+=("pass-count: $passed of ${#cells[@]} cells")
 
 if [ ${#fails[@]} -gt 0 ]; then echo "FAIL"; echo "wire gate FAILED: ${fails[*]}"; exit 1; fi
 echo "ok  wire gate"
