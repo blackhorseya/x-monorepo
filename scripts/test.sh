@@ -2789,6 +2789,19 @@ echo "$rows"'
 for f in scripts/test.sh nested/test.sh other.sh scripts/other.sh; do mkdir -p "$rcx/$(dirname "$f")"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_bad" > "$rcx/$f"; done
 mkdir -p "$rcx/ok"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_ok" > "$rcx/ok/test.sh"
 rcx_run() { rc=0; out=$(cd "$rcx" && scripts/check-exit-swallow.sh "$@" 2>&1) || rc=$?; }
+# the helper commands the checker still runs must not be trusted when they print something and then die: dirname (checked → exit 2) and, for the
+# path normalisation, basename / dirname that rename the file and fail (they are not called any more, so a bad file stays red)
+for t in basename dirname; do
+  w=$(inject_fail "$tmp/inj-rel-$t" "$t" 42 all)
+  rc=0; out=$(cd "$rcx" && PATH="$w:$PATH" scripts/check-exit-swallow.sh scripts/other.sh 2>&1) || rc=$?
+  case $t in
+    basename) expect_eq "path: a basename that prints and exits 42 does not hide a bad file (scripts/other.sh stays red)" "1" "$rc" ;;
+    dirname)  expect_eq "path: a dirname that prints and exits 42 is an error (exit 2), never clean" "2" "$rc" ;;
+  esac
+done
+mkdir -p "$tmp/inj-rel-fake"; printf '#!/bin/sh\nif [ "$1" = "${1%%other.sh}" ]; then exec /usr/bin/basename "$@"; fi\necho test.sh\nexit 42\n' > "$tmp/inj-rel-fake/basename"; chmod +x "$tmp/inj-rel-fake/basename"
+rc=0; out=$(cd "$rcx" && PATH="$tmp/inj-rel-fake:$PATH" scripts/check-exit-swallow.sh scripts/other.sh 2>&1) || rc=$?
+expect_eq "path: the reviewer's basename (prints test.sh for *other.sh, exits 42) cannot turn scripts/other.sh into the exempt file → still red" "1" "$rc"
 rcx_run ./scripts/test.sh;            expect_eq "exempt: ./scripts/test.sh is the same file → exempt" "0" "$rc"
 rcx_run scripts/../scripts/test.sh;   expect_eq "exempt: scripts/../scripts/test.sh is the same file → exempt" "0" "$rc"
 rcx_run "$rcx/scripts/test.sh";       expect_eq "exempt: the absolute path of scripts/test.sh is the same file → exempt" "0" "$rc"

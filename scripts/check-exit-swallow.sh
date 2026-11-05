@@ -43,11 +43,13 @@ trap 'rm -rf "$tmp"' EXIT
 # the absolute path all become scripts/test.sh), so the one path-based exemption (rcbranch / scripts/test.sh) does not depend on how it was
 # spelled; a file outside the repo keeps the string it was given. Relative arguments are read from the repo root (the cd above).
 root=$(pwd -P) || die "pwd failed"
+# no dirname / basename / realpath here: a command whose output renames the file to scan and which then dies would be a status swallowed (#466 r3);
+# parameter expansion and the cd / pwd builtins cannot fail silently, and a cd that fails on a file that exists stops the run
 repo_rel() {
   local d b
   [ -f "$1" ] || { printf '%s' "$1"; return; }
-  d=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || { printf '%s' "$1"; return; }
-  b=$(basename "$1")
+  case $1 in */*) d=${1%/*} b=${1##*/} ;; *) d=. b=$1 ;; esac
+  d=$(cd "${d:-/}" && pwd -P) || die "cannot cd to the directory of [$1]"
   case $d in
     "$root") printf '%s' "$b" ;;
     "$root"/*) printf '%s' "${d#"$root"/}/$b" ;;
