@@ -41,7 +41,12 @@ rc=$?
 after=$(snapshot) || { echo "guard: cannot read the home release's database after the drill" >&2; exit 1; }
 if [ "$before" != "$after" ]; then
   echo "guard: the home release's database CHANGED during the drill:" >&2
-  diff <(echo "$before") <(echo "$after") >&2
+  # the two snapshots as files: diff <(…) <(…) would not see a snapshot command dying (#465)
+  diffdir=$(mktemp -d) || { echo "guard: mktemp failed" >&2; exit 1; }
+  printf '%s\n' "$before" > "$diffdir/before"; printf '%s\n' "$after" > "$diffdir/after"
+  rc_diff=0; diff "$diffdir/before" "$diffdir/after" >&2 || rc_diff=$?
+  [ "$rc_diff" = 1 ] || echo "guard: diff exited $rc_diff (1 = they differ)" >&2
+  rm -rf "$diffdir"
   exit 1
 fi
 echo "guard: the home release's database is unchanged ($ntables tables, every row count the same)"

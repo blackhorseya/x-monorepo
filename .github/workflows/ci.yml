@@ -13,6 +13,12 @@ concurrency:
 env:
   GOTOOLCHAIN: local
 
+# `shell: bash` is what turns on pipefail: the runner's default (`bash -e {0}`) lets `a | b` pass when a failed (#465).
+# scripts/check-exit-swallow.sh reads this and the step-level `shell:` when it scans the run: scripts.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # ── affected: which modules and which jobs does this change need? ─────────────
   # scripts/affected.sh → the go.work modules for the test matrix; scripts/ci-changes.sh → one
@@ -55,7 +61,7 @@ jobs:
         env:
           CI_ALL: ${{ github.event_name != 'pull_request' && '1' || '' }}
         run: |
-          git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
+          git fetch origin main:refs/remotes/origin/main 2>/dev/null || echo "git fetch origin main failed (exit $?): using the origin/main the checkout has" >&2
           # main and dispatch: every module (the diff against main is empty there, which would
           # skip the whole test matrix); a PR: the modules its diff reaches.
           mods=$(BASE_REF=origin/main scripts/affected.sh ${CI_ALL:+--all} | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
@@ -281,9 +287,10 @@ jobs:
       - run: task helm-kind
       - if: failure()
         run: |
-          kubectl -n x-monorepo get all
-          kubectl -n x-monorepo describe pods | tail -120
-          kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200 || true
+          . scripts/best-effort.sh   # diagnostics after the failure: they print what they can and say when they cannot
+          best_effort kubectl -n x-monorepo get all
+          best_effort kubectl -n x-monorepo describe pods | tail -120
+          best_effort kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200
       # payment-flow.sh's diagnosis (kind/diag.sh, run BEFORE the release was restored): every pod's whole log since the
       # run began, Postgres sessions and locks, as files. $RUNNER_TEMP/kind-diag is diag.sh's default; the console got
       # only the tails (#420). Short retention: it holds the pods' logs.
@@ -322,11 +329,12 @@ jobs:
       - run: task helm-kind-keda
       - if: failure()
         run: |
-          kubectl -n x-monorepo get all
-          kubectl -n x-monorepo describe pods | tail -120
-          kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200 || true
-          kubectl -n x-monorepo get scaledobject,hpa 2>/dev/null || true
-          kubectl -n keda logs deploy/keda-operator --tail=50 2>/dev/null || true
+          . scripts/best-effort.sh   # diagnostics after the failure: they print what they can and say when they cannot
+          best_effort kubectl -n x-monorepo get all
+          best_effort kubectl -n x-monorepo describe pods | tail -120
+          best_effort kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200
+          best_effort kubectl -n x-monorepo get scaledobject,hpa
+          best_effort kubectl -n keda logs deploy/keda-operator --tail=50
 
   # ── release config: the snapshot must build before anyone tags ─────────────
   # release.yml itself only ever runs on main (workflow_run), so this job also exercises the two
@@ -450,7 +458,7 @@ jobs:
       # image and deployments/docker/dex/config.yaml as a developer. *.localtest.me is public DNS → 127.0.0.1.
       - run: |
           docker compose -f deployments/docker/docker-compose.yaml up -d dex
-          for _ in $(seq 30); do curl -fsS http://dex.localtest.me:5556/dex/.well-known/openid-configuration >/dev/null && exit 0; sleep 1; done
+          for ((_poll = 1; _poll <= 30; _poll++)); do curl -fsS http://dex.localtest.me:5556/dex/.well-known/openid-configuration >/dev/null && exit 0; sleep 1; done
           docker compose -f deployments/docker/docker-compose.yaml logs dex; exit 1
       # The shards are the whole suite: --list of every shard, together, equals the unsharded --list (lists only, no server).
       - if: matrix.shard == 1
@@ -514,5 +522,11 @@ jobs:
         with: { setup_only: true }
       - name: buf breaking (skipped while main has no protos)
         run: |
-          git ls-tree -r --name-only origin/main -- protos | grep -q '\.proto$' || { echo "main has no protos yet — nothing to compare"; exit 0; }
+          protos=$(git ls-tree -r --name-only origin/main -- protos)
+          rc=0; grep -q '\.proto$' <<<"$protos" || rc=$?   # 0 = some, 1 = none; anything else is grep failing, which must not read as "none"
+          case $rc in
+            0) ;;
+            1) echo "main has no protos yet — nothing to compare"; exit 0 ;;
+            *) echo "grep over the proto list exited $rc"; exit 1 ;;
+          esac
           buf breaking --against '.git#ref=refs/remotes/origin/main' --error-format=github-actions

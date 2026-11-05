@@ -24,6 +24,12 @@ concurrency:
   group: k6-bench   # two benches on one runner pool are not a clean environment for each other
   cancel-in-progress: false
 
+# `shell: bash` is what turns on pipefail: the runner's default (`bash -e {0}`) lets `a | b` pass when a failed (#465).
+# scripts/check-exit-swallow.sh reads this and the step-level `shell:` when it scans the run: scripts.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   bench:
     runs-on: ubuntu-latest

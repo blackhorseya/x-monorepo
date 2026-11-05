@@ -36,6 +36,12 @@ concurrency:
 env:
   GOTOOLCHAIN: local
 
+# `shell: bash` is what turns on pipefail: the runner's default (`bash -e {0}`) lets `a | b` pass when a failed (#465).
+# scripts/check-exit-swallow.sh reads this and the step-level `shell:` when it scans the run: scripts.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   sign:
     # a PR from a fork or from Dependabot has no OIDC token to give
@@ -55,7 +61,8 @@ jobs:
       - id: pin
         run: |
           v=$(sed -n 's/^ *cosign-release: *//p' .github/workflows/release.yml | sort -u)
-          [ "$(printf '%s\n' "$v" | grep -c .)" = 1 ] || { echo "release.yml pins cosign-release to: [$v]"; exit 1; }
+          n=$(printf '%s\n' "$v" | grep -c . || [ $? -eq 1 ])   # 1 = no line (grep -c prints 0), 2 = grep failing stays fatal
+          [ "$n" = 1 ] || { echo "release.yml pins cosign-release to: [$v]"; exit 1; }
           echo "cosign=$v" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7

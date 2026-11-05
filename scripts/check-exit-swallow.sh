@@ -13,6 +13,13 @@
 #   argsub    `expect_eq x "$(… | grep -c y)"`, `[ "$(grep -c y f)" -ge 2 ]`: a match count inside an argument; assign it first
 #   forlist   `for x in $(cmd)` / `for x in `cmd``: the status of cmd is dropped (a short or failed `seq` is a shorter loop)
 #   pipeline  `a | b` in a file that never says `set -o pipefail` (or set -euo pipefail ...): only b's status counts
+#   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
+#   fnctx     a function that is CALLED in a `f || x` / `f && x` / `if f` / `while f` / `! f` position (errexit is off for its whole body)
+#             and assigns a command substitution (`x=$(cmd)`) without a status check on that line. Only call sites in the SAME file
+#             are seen (a function sourced from another file and called conditionally here is not), and calls through variables or
+#             `$(f)` are not either.
+#   Workflow / composite-action files: the `run:` scripts are cut out (scripts/extract-run-blocks.py) and scanned with these same rules;
+#             a step with no `shell:` runs `bash -e {0}` (no pipefail), `shell: bash` runs with pipefail, so the first is held to `pipeline`.
 # Not flagged without a comment: `kill ... || true`, `rm ... || true` and `... kill ... && wait ... || true` (cleanup:
 # an already-gone process or file is not a verdict). Anything else needs either a fix or, on the SAME line, a comment
 #   # exit-ok: <why this command's status cannot change the verdict>
@@ -29,9 +36,9 @@ cd "$here/.." || die "cannot cd to the repo root from [$here]"
 tmp=$(mktemp -d) || die "mktemp failed"
 trap 'rm -rf "$tmp"' EXIT
 
-files=()
+files=() yml=()
 if [ "$#" -gt 0 ]; then
-  files=("$@")
+  for f in "$@"; do case $f in *.yml | *.yaml) yml+=("$f") ;; *) files+=("$f") ;; esac; done
 else
   rc=0; git ls-files -- '*.sh' > "$tmp/ls" || rc=$?
   [ "$rc" = 0 ] || die "git ls-files failed (exit $rc)"
@@ -40,6 +47,21 @@ else
     files+=("$f")
   done < "$tmp/ls"
   [ "${#files[@]}" -ge 20 ] || die "only ${#files[@]} scripts to check — git ls-files '*.sh' no longer returns what it used to"
+  rc=0; git ls-files -- '.github/workflows/*.yml' '.github/actions/*/action.yml' > "$tmp/ls" || rc=$?
+  [ "$rc" = 0 ] || die "git ls-files (workflows) failed (exit $rc)"
+  while IFS= read -r f; do yml+=("$f"); done < "$tmp/ls"
+  [ "${#yml[@]}" -ge 5 ] || die "only ${#yml[@]} workflow / action files to check — the .github layout is not what it used to be"
+fi
+nscripts=${#files[@]} nyml=${#yml[@]}
+
+# `run:` scripts of workflows and composite actions are cut out and scanned like any other script; map.tsv turns a finding in the
+# extracted file back into a line of the YAML (extracted line k is YAML line first+k-2: line 1 is the `set` line the runner implies).
+: > "$tmp/map.tsv"
+if [ "${#yml[@]}" -gt 0 ]; then
+  mkdir "$tmp/runs" || die "mkdir failed"
+  rc=0; python3 -I "$here/extract-run-blocks.py" "$tmp/runs" "${yml[@]}" > "$tmp/map.tsv" 2> "$tmp/extract.err" || rc=$?
+  [ "$rc" = 0 ] || die "extract-run-blocks.py failed (exit $rc): $(head -2 "$tmp/extract.err")"
+  while IFS=$'\t' read -r sh _ _; do files+=("$sh"); done < "$tmp/map.tsv"
 fi
 
 cat > "$tmp/scan.awk" <<'AWK'
@@ -147,13 +169,93 @@ FNR == 1 { reset_file() }
   if (CODE ~ /(^|[;&|{(]|[ \t])set[ \t]+--[ \t].*(\$\(|`)/ && !exempt) report("setargs")
   # pipeline: pipefail must already be set above this line
   p = CODE; gsub(/\047[^\047]*\047/, "", p); gsub(/"[^"]*"/, "", p)
+  # procsub: `done < <(cmd)`, `diff <(a) <(b)`: the status of cmd never reaches the shell (not even with set -e or pipefail)
+  if (!exempt && p ~ /(^|[^$])[<>]\(/) report("procsub")
   if (!hasflag && !exempt && p ~ /[^|]\|[^|&]/ && p !~ /^[ \t]*[^ \t]*\|[^ \t]*\)/) report("pipeline")
 }
 END { exit (n > 0) }
 AWK
 
+cat > "$tmp/fnctx.awk" <<'AWK'
+# One file at a time. Finds functions defined in the file that run with errexit off (called as `f || x`, `f && x`, `if f`, `while f`,
+# `until f`, `! f`, directly or from such a function) and prints a finding for every `x=$(cmd)` in them that has no `||` on the line.
+function strip(s,   t) { t = s; gsub(/\047[^\047]*\047/, "", t); gsub(/"[^"]*"/, "", t); sub(/[ \t]#.*/, "", t); return t }
+function callpos(t, name,   re) {   # name sits in command position and an && / || follows it, or a condition keyword precedes it
+  re = "(^|[;&|{(!]|[ \t])(if|elif|while|until|!)[ \t]+(![ \t]*)?" name "([ \t;)]|$)"
+  if (t ~ re) return 1
+  re = "(^|[;&|{(]|[ \t])(then|do|else)?[ \t]*(![ \t]*)?" name "([ \t][^;]*)?[ \t]*(\\|\\||&&)"
+  if (t ~ re) return 1
+  return 0
+}
+function anycall(t, name,   re) {
+  re = "(^|[;&|{(!]|[ \t])(then|do|else)?[ \t]*" name "([ \t;)|&]|$)"
+  return t ~ re
+}
+{
+  line = $0
+  if (term != "") { t = line; if (dash) sub(/^\t+/, "", t); if (t == term) term = ""; L[NR] = ""; T[NR] = ""; next }   # heredoc bodies are data
+  L[NR] = line; T[NR] = strip(line)
+  tmp = line; gsub(/<<</, "", tmp)
+  if (line !~ /^[ \t]*#/ && match(tmp, /<<-?[ \t]*\\?["\047]?[A-Za-z_][A-Za-z_0-9]*/)) {
+    h = substr(tmp, RSTART, RLENGTH); dash = (h ~ /^<<-/); sub(/^<<-?[ \t]*\\?["\047]?/, "", h); term = h
+  }
+}
+END {
+  nf = 0
+  for (i = 1; i <= NR; i++) {
+    if (match(T[i], /^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z_0-9]*[ \t]*(\(\))?[ \t]*\{/) && (T[i] ~ /\(\)/ || T[i] ~ /^[ \t]*function[ \t]/)) {
+      d = T[i]; sub(/^[ \t]*(function[ \t]+)?/, "", d); sub(/[ \t]*(\(\))?[ \t]*\{.*/, "", d)
+      ind = L[i]; sub(/[^ \t].*/, "", ind)
+      e = i
+      if (T[i] !~ /\}[ \t]*(;|$|[|&])/ || T[i] ~ /\{[ \t]*$/) { for (e = i + 1; e <= NR; e++) if (index(L[e], ind "}") == 1 && L[e] ~ /^[ \t]*\}/) break }
+      nf++; name[nf] = d; from[nf] = i; to[nf] = e; hot[nf] = 0; why[nf] = 0
+    }
+  }
+  for (f = 1; f <= nf; f++)
+    for (i = 1; i <= NR; i++) {
+      if (i >= from[f] && i <= to[f]) continue
+      if (callpos(T[i], name[f])) { hot[f] = 1; why[f] = i; break }
+    }
+  do {
+    ch = 0
+    for (f = 1; f <= nf; f++) {
+      if (!hot[f]) continue
+      for (g = 1; g <= nf; g++) {
+        if (hot[g] || g == f) continue
+        for (i = from[f] + 1; i <= to[f]; i++) if (anycall(T[i], name[g])) { hot[g] = 1; why[g] = why[f]; ch = 1; break }
+      }
+    }
+  } while (ch)
+  for (f = 1; f <= nf; f++) {
+    if (!hot[f]) continue
+    for (i = from[f]; i <= to[f]; i++) {
+      t = T[i]; gsub(/\$\(\(/, "", t)                                      # $(( … )) is arithmetic
+      if (t !~ /(^|[;&|{(]|[ \t])[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?(\$\(|`)/) continue
+      if (t ~ /(&&|\|\||(^|[;{(]|[ \t])(if|elif|while|until|!))[ \t]*[^;]*[A-Za-z_][A-Za-z_0-9]*\+?=("|\047)?(\$\(|`)/) continue   # the assignment IS the condition: its status is read
+      if (t ~ /^[ \t]*(local|declare|typeset|export|readonly)[ \t]/) continue    # declsub's job
+      if (L[i] ~ /#[ \t]*exit-ok:[ \t]*[^ \t].../) continue
+      code = L[i]; sub(/^[ \t]+/, "", code)
+      ok = 0                                                                 # an explicit status check: `|| …` after the substitution's `)`, or `$?` read next
+      for (k = i; k <= i + 3 && k <= NR && !ok; k++) {
+        if (L[k] ~ /\)[ \t]*\|\|/ || (k > i && L[k] ~ /^[ \t]*\|\|/)) ok = 1
+        if (k > i && L[k] ~ /\$\?/) ok = 1
+        if (k == i && L[k] ~ /\)[ \t]*;[ \t]*[A-Za-z_]*=\$\?/) ok = 1
+      }
+      if (ok) continue
+      printf "%s:%d: fnctx: %s   [%s() runs with errexit off: called at line %d in a ||/&&/if/! position]\n", FILENAME, i, code, name[f], why[f]
+      n++
+    }
+  }
+  exit (n > 0)
+}
+AWK
+
 rc=0; awk -f "$tmp/scan.awk" "${files[@]}" > "$tmp/out" || rc=$?
 case $rc in 0 | 1) ;; *) die "awk failed (exit $rc)" ;; esac
+for f in "${files[@]}"; do
+  rc=0; awk -f "$tmp/fnctx.awk" "$f" >> "$tmp/out" || rc=$?
+  case $rc in 0 | 1) ;; *) die "awk (fnctx) failed on $f (exit $rc)" ;; esac
+done
 
 # Second layer, a real shell parser: shellcheck SC2155 ("declare and assign separately to avoid masking return values") sees what a line
 # scanner cannot — continuation lines, `a="x"'y z' b=$(cmd)`, `$'..'` values. A file shellcheck cannot parse would be skipped
@@ -171,9 +273,15 @@ while IFS= read -r row; do
   rc=1
 done < "$tmp/sc.out"
 
+# findings in an extracted script are reported against the YAML file and line
+awk -F'\t' 'NR == FNR { first[$1] = $3; src[$1] = $2; next }
+  { i = index($0, ":"); f = substr($0, 1, i - 1)
+    if (f in src) { rest = substr($0, i + 1); j = index(rest, ":"); k = substr(rest, 1, j - 1)
+      print src[f] ":" (first[f] + k - 2) ":" substr(rest, j + 1) } else print }' "$tmp/map.tsv" "$tmp/out" > "$tmp/out.mapped" || die "mapping findings failed"
+mv "$tmp/out.mapped" "$tmp/out" || die "mv failed"
 if [ -s "$tmp/out" ]; then
   cat "$tmp/out" >&2
   echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md)." >&2
   exit 1
 fi
-echo "check-exit-swallow: ${#files[@]} scripts, no swallowed exit status"
+echo "check-exit-swallow: $nscripts scripts and the run: scripts of $nyml workflow / action files, no swallowed exit status"

@@ -29,7 +29,7 @@ p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2
 survives() { # <name>: still there, with its row
   local url
   url=$(python3 -I -c 'import sys, urllib.parse as u
-p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base" "$1")
+p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base" "$1") || return 1   # survives is called in `&& … ||`: errexit is off here
   [ "$(psql "$url" -qAt -c 'select v from keep' 2>/dev/null)" = 42 ]
 }
 

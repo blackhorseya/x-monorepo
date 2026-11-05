@@ -10,7 +10,9 @@ chart=${1:-x-monorepo}
 rc=0
 for f in "$chart"/ci-negative/*.yaml; do
   wants=()
-  while IFS= read -r line; do wants+=("${line#\# expect: }"); done < <(sed -n '/^# expect: /!q;p' "$f")
+  expects_rc=0; expects=$(sed -n '/^# expect: /!q;p' "$f") || expects_rc=$?
+  [ "$expects_rc" = 0 ] || { echo "helm check-negative: $f: reading the '# expect:' lines exited $expects_rc"; rc=1; continue; }
+  while IFS= read -r line; do [ -z "$line" ] || wants+=("${line#\# expect: }"); done <<<"$expects"
   [ "${#wants[@]}" -gt 0 ] || { echo "helm check-negative: $f: first line must be '# expect: <text>'"; rc=1; continue; }
   if out=$(helm template t "$chart" -f "$f" 2>&1); then
     echo "helm check-negative: $f rendered, want a failure naming '${wants[*]}'"; rc=1; continue

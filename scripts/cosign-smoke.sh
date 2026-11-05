@@ -24,7 +24,8 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 # `--yes` is kept; the caller appends `--key`, which turns the keyless flow into a local one.
 signs_cmd() {
   cmd=()
-  while IFS= read -r line; do cmd+=("$line"); done < <(python3 - "$1" <<'PY'
+  local out rc=0
+  out=$(python3 - "$1" <<'PY'
 import sys, yaml
 art = sys.argv[1]
 s = yaml.safe_load(open(".goreleaser.yaml"))["signs"][0]
@@ -32,7 +33,9 @@ sig = s.get("signature", "${artifact}.sig").replace("${artifact}", art)
 sub = lambda a: a.replace("${artifact}", art).replace("${signature}", sig)
 print(s.get("cmd", "cosign")); print(*map(sub, s["args"]), sep="\n"); print(sig)
 PY
-)
+  ) || rc=$?
+  [ "$rc" = 0 ] || { echo "cosign-smoke: reading the signs entry of .goreleaser.yaml exited $rc" >&2; exit 1; }
+  while IFS= read -r line; do cmd+=("$line"); done <<<"$out"
   sig=${cmd[${#cmd[@]}-1]}; unset "cmd[${#cmd[@]}-1]"
 }
 

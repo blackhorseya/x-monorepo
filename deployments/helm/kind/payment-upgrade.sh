@@ -148,7 +148,7 @@ db() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1";
 order_status() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.status // "-"' <<<"$body"; }
 wait_order() { # <order> <ORDER_STATUS_X> [seconds]
   local s=""
-  for ((_try149 = 1; _try149 <= "${3:-60}"; _try149++)); do s=$(order_status "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
+  for ((_try149 = 1; _try149 <= "${3:-60}"; _try149++)); do s=$(order_status "$1") || s="(status read failed, exit $?)"; [ "$s" = "$2" ] && return 0; sleep 1; done
   fail "order $1 is '$s' after ${3:-60}s, want $2"
 }
 pay_status() { as_shopper payment.v1.PublicPaymentService/GetPayment "{\"order_id\":\"$1\"}" >/dev/null; jq -r '.payment.status // "-"' <<<"$body"; }
@@ -214,7 +214,8 @@ old_up() { helm upgrade --install "$release" "$old_chart" -n "$ns" -f "$values" 
 # Secrets of the same render), and the render must hold no Ingress, no cluster-scoped object and no object with a namespace of
 # its own. An existingSecret, a fully qualified name that points at another namespace, or anything else it cannot resolve is
 # refused. Fail closed, before anything is created or installed.
-read -r pgurl redisurl < <(python3 -c 'import sys,yaml; s=yaml.safe_load(open(sys.argv[1]))["secrets"]; print(s["postgresUrl"], s["redisUrl"])' "$values") || fail "refused: $values gives no secrets.postgresUrl / secrets.redisUrl"
+urls=$(python3 -c 'import sys,yaml; s=yaml.safe_load(open(sys.argv[1]))["secrets"]; print(s["postgresUrl"], s["redisUrl"])' "$values") || fail "refused: $values gives no secrets.postgresUrl / secrets.redisUrl"
+read -r pgurl redisurl <<<"$urls" || fail "refused: $values gives no secrets.postgresUrl / secrets.redisUrl"
 [[ $pgurl =~ ^postgres://[^@/]*@postgres:[0-9]+/ && $redisurl =~ ^redis://redis:[0-9]+/ ]] || fail "refused: $values must name Postgres and Redis by their short Service names (postgres, redis), which resolve inside the drill's namespace"
 assert_connections() { # <rendered chart>
   python3 "$url_check" --expect "APP_POSTGRES_URL=$pgurl" --expect "APP_REDIS_URL=$redisurl" <<<"$1" >&2 || fail "refused: with these values a workload would not connect only to the drill's own Postgres and Redis"

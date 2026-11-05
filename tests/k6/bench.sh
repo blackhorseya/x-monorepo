@@ -79,7 +79,7 @@ wait_quiet() {
   local f="$out/run$1-baseline.csv" t0=$SECONDS last
   while :; do
     python3 -I tests/k6/loadavg.py >> "$f"
-    last=$(tail -n 1 "$f" | cut -d, -f2)
+    last=$(tail -n 1 "$f" | cut -d, -f2) || { echo "bench failed: cannot read the load sample in $f (exit $?)" >&2; exit 1; }   # wait_quiet runs inside `if ! wait_quiet`: errexit is off here
     python3 -I -c "import sys; sys.exit(0 if $last <= $limit else 1)" && return 0
     [ $((SECONDS - t0)) -lt "$BASELINE_WAIT" ] || return 1
     sleep "$LOAD_INTERVAL"
