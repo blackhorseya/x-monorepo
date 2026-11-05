@@ -134,6 +134,7 @@ for c in "${cells[@]}"; do
       continue
     fi
     values_of "$k" "$tmp/out" > "$tmp/vals"
+    grep() { if [ "$1" = -c ]; then command grep "$@"; return 2; fi; command grep "$@"; }   # FAULT INJECTION: grep -c exits 2 after printing (do not merge)
     n=$(grep -c . "$tmp/vals" || [ $? -eq 1 ])
     got=$(sort -u "$tmp/vals" | tr '\n' ' ')
     [ "$s" = S1 ] && base=$n

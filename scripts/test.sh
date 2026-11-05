@@ -210,7 +210,9 @@ expect_eq "scripts/ runs everything" "$all_jobs" "$(jobs_on scripts scripts/new.
 fixture ciall
 expect_eq "CI_ALL=1 runs everything" "$all_jobs" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 expect_eq "CI_ALL prints one flag per job" "$(echo "$all_jobs" | wc -w | tr -d ' ')" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | wc -l | tr -d ' ')"
+grep() { if [ "$1" = -c ]; then command grep "$@"; return 2; fi; command grep "$@"; }   # FAULT INJECTION: grep -c exits 2 after printing (do not merge)
 expect_eq "CI_ALL=1 prints no false" "0" "$(in_repo env CI_ALL=1 scripts/ci-changes.sh | grep -c '=false$' || [ $? -eq 1 ])"
+unset -f grep
 # Every flag is a job's `if:` in ci.yml, declared once as an output of `affected` (a flag nobody reads skips nothing).
 for j in $all_jobs; do
   expect_eq "ci.yml declares run_$j as an output of affected" 1 "$(grep -c "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml")"

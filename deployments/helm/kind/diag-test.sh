@@ -154,6 +154,7 @@ for want in pg_stat_activity pg_blocking_pids pg_locks max_connections; do
   grep -qF "$want" "$tmp/events" || die "D1: no Postgres read of $want"
   has "SQL $nonce:" "D1 the Postgres reads answered"
 done
+grep() { if [ "$1" = -c ]; then command grep "$@"; return 2; fi; command grep "$@"; }   # FAULT INJECTION: grep -c exits 2 after printing (do not merge)
 n=$(grep -c 'exec deploy/postgres' "$tmp/events" || [ $? -eq 1 ]); [ "$n" = 3 ] || die "D1: $n Postgres reads, want 3 (sessions with blocked_by, locks, connections)"
 # the whole log is in files, not only on the console
 for pod in a b; do grep -qF "LOG pod/$pod since=$since $nonce" "$DIAG_DIR/log-$pod.txt" || die "D1: $DIAG_DIR/log-$pod.txt lacks the log of pod/$pod"; done
@@ -488,6 +489,7 @@ PY
   [[ $res == *"rc=143 "* ]] || die "D6T: $res; want rc=143 (128 + TERM)"
   [[ $res == *"leftover=0"* ]] || die "D6T: something of diag.sh outlived it ($res)"
   has "diag: files in" "D6T: what diag.sh printed before the TERM reached the console"
+  find() { command find "$@"; return 42; }   # FAULT INJECTION: find exits 42 after printing (do not merge)
   left_fifos=$(find "$tmp/tmpT" -maxdepth 1 -name 'diag-console.*' | wc -l | tr -d ' ')
   [ "$left_fifos" = 0 ] || die "D6T: $left_fifos console fifo dirs left in $tmp/tmpT"
   echo "diag-test ok: D6T TERM while collecting: $res, the printed part is on the console, no fifo left"
@@ -535,6 +537,7 @@ if only D7; then
     D7_RAW_QUERY=$("${psql[@]}" -At -c "select string_agg(query, ' | ') from pg_stat_activity where query like '%$secret%' and pid <> pg_backend_pid()")
     D7_RAW_LOG=$("$rt" logs "$pgc" 2>&1 || true)  # exit-ok: only the leaky-flags control reads it, and the control fails when the secret is not found in it
     kill "$h" "$w" 2>/dev/null || true; wait "$h" "$w" 2>/dev/null || true
+    cat() { command cat "$@"; return 42; }   # FAULT INJECTION: cat exits 42 after printing (do not merge)
     D7_SEEN=$(cat "$tmp/out" "$DIAG_DIR"/* 2>/dev/null) || die "D7: cannot read what diag.sh wrote — a leak check over nothing proves nothing"
     unset DIAG_DIR
   }
