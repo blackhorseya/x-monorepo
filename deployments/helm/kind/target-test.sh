@@ -60,6 +60,14 @@ bad() { fail=$((fail + 1)); echo "FAIL $*"; }
 #   kindkc   every `kind create|delete cluster` names its kubeconfig (`--kubeconfig …/kubeconfig-<cluster>`): without the flag kind
 #            reads $KUBECONFIG, then ~/.kube/config, and `delete` removes the kind-<cluster> context from it (PR #435 r1)
 #   kedans   the namespace KEDA itself is installed in (`helm upgrade --install keda … -n <v>`), not ns
+# le1 <command…>: run a filter whose exit 1 means "found nothing" (grep -o / -c): 0 and 1 are a success, 2+ is the command's own failure and stays one.
+# Used inside a pipeline, so the substitution around the pipeline sees 0 for "nothing" and a failure for a broken grep.
+le1() {
+  local rc=0
+  "$@" || rc=$?
+  [ "$rc" -le 1 ] || return "$rc"
+  return 0
+}
 values_of() {
   case $1 in
     cluster)
@@ -71,13 +79,13 @@ values_of() {
         printf '%s\n' "$l" | grep -oE 'deployments/helm/kind/run\.sh "[^"]*kubeconfig-[a-z0-9.-]+" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) ' \
           | sed -E 's/.*kubeconfig-([a-z0-9.-]+)" .*/\1/'
         # a cluster command that is not right behind a runner is MISSING (the runner call and its command are taken out first)
-        rest=$(printf '%s\n' "$l" | sed -E 's#deployments/helm/kind/run\.sh "[^"]*" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) #OK #g')
+        rest=$(printf '%s\n' "$l" | sed -E 's#deployments/helm/kind/run\.sh "[^"]*" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) #OK #g') || return 1
         printf '%s\n' "$rest" | grep -oE '(^|[;|&] *)(kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) ' | sed 's/.*/MISSING/'
         # second layer: each kubectl / helm (but `helm repo`) also names the file by flag, the same cluster
         case $l in *'helm repo'*) ;; *)
-          t=$(printf '%s\n' "$l" | grep -oE 'run\.sh "[^"]*" (kubectl|helm|kind (create|delete|export)) ' | wc -l | tr -d ' ')
-          f=$(printf '%s\n' "$l" | grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//')
-          nf=$(printf '%s\n' "$f" | grep -c .) || { [ $? -eq 1 ] || nf=-1; }   # 1 = no line (nf=0), 2 = grep failed (nf=-1, never equal to $t)
+          t=$(printf '%s\n' "$l" | le1 grep -oE 'run\.sh "[^"]*" (kubectl|helm|kind (create|delete|export)) ' | wc -l | tr -d ' ') || return 1   # grep -o finding nothing is 1 (t=0), a broken grep stays a failure
+          f=$(printf '%s\n' "$l" | le1 grep -oE -- '--kubeconfig "[^"]*kubeconfig-[a-z0-9.-]+"' | sed 's/.*kubeconfig-//; s/"$//') || return 1   # nothing is 1 (f empty)
+          nf=$(printf '%s\n' "$f" | le1 grep -c .) || return 1   # no line is 1 (nf=0); a broken grep fails the cell instead of counting
           if [ "$nf" = "$t" ]; then printf '%s\n' "$f" | grep .; else echo MISSING; fi ;;
         esac
       done ;;

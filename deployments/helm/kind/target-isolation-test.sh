@@ -24,6 +24,7 @@
 #   7 every kind script run directly, outside its task: refused (exit 2), no tool called (#444)
 #   8 a Taskfile command that does not go through the runner: check-kubeconfig.py --taskfile must exit non-zero
 set -uo pipefail
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort, capture, value_of (#462, #466)
 cd "$(dirname "$0")/../../.."
 root=$PWD
 
@@ -109,8 +110,8 @@ run_lines() {
 
 # judge → "judged=N dedicated=A decoy=D other=O"; exit 0 when nothing used the decoy and nothing but the dedicated file ... (see -s)
 judge() {  # judge [strict]: strict = every judged call used the dedicated file
-  local out rc
-  out=$(python3 - "$calls" "$dedicated" "$decoy" "$decoyhome" "${1:-}" <<'PY' 2>&1
+  local out rc=0
+  capture -2 out rc python3 - "$calls" "$dedicated" "$decoy" "$decoyhome" "${1:-}" <<'PY' || { echo "JUDGE-CRASH (capture failed)"; return 2; }
 import sys
 calls, dedicated, decoy, decoyhome, strict = sys.argv[1:6]
 OFFLINE = {"lint", "template", "repo", "version", "dependency", "dep", "package", "show", "pull", "search", "create", "plugin",
@@ -145,7 +146,6 @@ for b in bad[:4]:
     print("  " + b)
 sys.exit(1 if bad else 0)
 PY
-  ); rc=$?
   # a judge that broke is not a red verdict: it must print its summary line, and exit 0 or 1
   if [ "$rc" -gt 1 ] || ! printf '%s\n' "$out" | head -1 | grep -q '^judged=[0-9]* dedicated=[0-9]* decoy=[0-9]* other=[0-9]*$'; then
     echo "JUDGE-CRASH"; printf '%s\n' "$out" | tail -3; return 2
@@ -202,7 +202,7 @@ cell() {  # <name> <what> <payload>
   local name=$1 what=$2 payload=$3 out rc
   if ! mut_smoke "$name" "$payload" 2>"$tmp/mut.err"; then bad "mutant $name was not made: $(cat "$tmp/mut.err")"; return; fi
   run_lines 'smoke.sh'
-  out=$(judge); rc=$?
+  capture out rc judge || { bad "mutant $name: capture failed"; return; }
   if [ "$rc" = 2 ]; then bad "mutant $name ($what): the judge crashed: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"; return; fi
   if [ ! -s "$tmp/ran-$name" ]; then bad "mutant $name ($what): the edited line was never reached (the cell proves nothing)"; return; fi
   if [ "$rc" = 0 ]; then ok "mutant $name ($what): the edit was reached, the decoy was not used ($(printf '%s' "$out" | head -1))"
@@ -223,7 +223,7 @@ ctrl() {  # <name> <what> <payload> <tweak run in the scratch tree>
   if ! mut_smoke "$name" "$payload" 2>"$tmp/mut.err"; then bad "control $name was not made: $(cat "$tmp/mut.err")"; return; fi
   ( cd "$tree/deployments/helm/kind" && eval "$tweak" ) 2>"$tmp/mut.err" || { bad "control $name: the tweak failed: $(cat "$tmp/mut.err")"; return; }
   run_lines 'smoke.sh'
-  out=$(judge); rc=$?
+  capture out rc judge || { bad "control $name: capture failed"; return; }
   if [ "$rc" = 2 ]; then bad "control $name ($what): the judge crashed"; return; fi
   if [ ! -s "$tmp/ran-$name" ]; then bad "control $name ($what): the edited line was never reached"; return; fi
   if [ "$rc" = 1 ]; then ok "control $name ($what): the decoy IS used, so the layer is what keeps it out ($(printf '%s' "$out" | sed -n 2p | sed 's/^ *//' | cut -c1-70))"

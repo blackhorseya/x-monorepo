@@ -37,12 +37,33 @@ on_exit() { local rc=$?; restore; restore_exit "$rc"; }   # leaves with the stat
 trap on_exit EXIT
 
 # call <path> <json> → "<http status> <x-error-code or ->" and the body in $body
+# status_of <response head>: the HTTP status code of the first line; empty when that line is not an HTTP status line. Pure bash: no sed / grep whose
+# exit status could be told apart from "nothing found" only by guessing. A response with no status is not a status the caller can compare.
+status_of() {
+  local first
+  read -r first <<<"$1"
+  if [[ $first =~ ^HTTP[^\ ]*\ ([0-9]+) ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
+  return 0
+}
+# err_code_of <response head>: the value of the FIRST X-Error-Code header (the \r of a CRLF line removed); empty when there is none. Pure bash, same reason.
+err_code_of() {
+  local line
+  while IFS= read -r line; do
+    line=${line%$'\r'}
+    case $line in [Xx]-[Ee]rror-[Cc]ode:\ *) printf '%s' "${line#*: }"; return 0 ;; esac
+  done <<<"$1"
+  return 0
+}
 call() {
   local out rc=0
-  out=$(curl -sS -D - -o /tmp/outage.$$ -H 'Content-Type: application/json' "$api/$1" -d "$2") || rc=$?
+  capture out rc curl -sS -D - -o /tmp/outage.$$ -H 'Content-Type: application/json' "$api/$1" -d "$2" || { echo "outage: cannot run curl for $1" >&2; exit 1; }
   if [ "$rc" != 0 ]; then echo "outage: curl $1 failed (exit $rc): no status is read from it" >&2; out=""; fi   # an empty status never equals the expected one: want() fails
-  body=$(cat /tmp/outage.$$ 2>/dev/null) || body="(no body)"; rm -f /tmp/outage.$$
-  printf '%s %s' "$(sed -n '1s/^HTTP[^ ]* \([0-9]*\).*/\1/p' <<<"$out")" "$(tr -d '\r' <<<"$out" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: //p' | head -n 1 | grep . || echo -)"
+  body="(no body)"; [ ! -f /tmp/outage.$$ ] || body=$(cat /tmp/outage.$$) || { echo "outage: cannot read the response body of $1" >&2; exit 1; }; rm -f /tmp/outage.$$
+  local st xc
+  st=$(status_of "$out") || { echo "outage: cannot read the status line" >&2; exit 1; }   # an empty status (curl failed above) never equals the expected one
+  xc=$(err_code_of "$out") || { echo "outage: cannot read the error code" >&2; exit 1; }
+  [ -n "$xc" ] || xc=-
+  printf '%s %s' "$st" "$xc"
 }
 want() { # <what> <got> <want>
   [ "$2" = "$3" ] || { echo "outage: $1: got '$2', want '$3' (body: ${body:-})"; exit 1; }
@@ -52,11 +73,18 @@ rpc_pod() { kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc --field
 # the wait's own log: bounded retries, a failed read is a retry, never the log. An EMPTY log is a valid answer
 # (a wait that found the catalog ready logs nothing), so success is the read succeeding AND the init container having
 # terminated with exit 0, not the text being non-empty.
+# pod_init_exit <pod>: ONE read of the init container's exit code ("none" while it has not terminated). init_done: it terminated with exit 0. A failed read
+# is a failure (nonzero), never "not 0 yet" and never a value: init_log's loop retries, and running out of tries fails the wait.
+pod_init_exit() { kubectl -n "$ns" get pod "$1" -o json 2>/dev/null | jq -r '.status.initContainerStatuses[0].state.terminated.exitCode // "none"'; }
+init_done() {
+  local c
+  c=$(value_of pod_init_exit "$1") || return
+  [ "$c" = 0 ]
+}
 init_log() {
-  local pod=$1 out code
+  local pod=$1 out
   for ((_try54 = 1; _try54 <= 30; _try54++)); do
-    code=$(kubectl -n "$ns" get pod "$pod" -o json 2>/dev/null | jq -r '.status.initContainerStatuses[0].state.terminated.exitCode // "none"') || code=none
-    if [ "$code" = 0 ] && out=$(kubectl -n "$ns" logs "$pod" -c wait-for-catalog 2>/dev/null); then printf '%s' "$out"; return 0; fi
+    if init_done "$pod" && out=$(kubectl -n "$ns" logs "$pod" -c wait-for-catalog 2>/dev/null); then printf '%s' "$out"; return 0; fi
     sleep 2
   done
   return 1

@@ -47,6 +47,12 @@ env:
   GOTOOLCHAIN: local
   HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+# `shell: bash` is what turns on pipefail: the runner's default (`bash -e {0}`) lets `a | b` pass when a failed (#465).
+# scripts/check-exit-swallow.sh reads this and the step-level `shell:` when it scans the run: scripts.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   prepare:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
@@ -71,7 +77,8 @@ jobs:
             echo "manual dispatch: releasing \`$HEAD_SHA\` unconditionally" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          base=$(git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null || true)
+          rc=0; base=$(git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null) || rc=$?
+          if [ "$rc" != 0 ]; then base=""; echo "git describe exited $rc: no tag reachable from $HEAD_SHA, releasing" >&2; fi
           if [ -z "$base" ]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "no previous tag reachable from \`$HEAD_SHA\`: releasing" >> "$GITHUB_STEP_SUMMARY"
@@ -319,9 +326,11 @@ jobs:
           ci_past_gate() { jq -e ".[] | select(.path == \".github/workflows/ci.yml\" and ($awaiting | not))" <<<"$1" >/dev/null 2>&1; }
           runs='[]'
           past_gate=""
-          for _ in $(seq 1 12); do
+          for ((_poll = 1; _poll <= 12; _poll++)); do
             if now=$(my_runs); then runs=$now; fi
             if ci_past_gate "$runs"; then past_gate=1; fi
+            rows=""; rc=0; rows=$(jq -r ".[] | select($awaiting) | \"\\(.id) \\(.path)\"" <<<"$runs" 2>/dev/null) || rc=$?
+            if [ "$rc" != 0 ]; then rows=""; echo "jq over the runs exited $rc: nothing to approve this round" >&2; fi   # whatever it printed before dying is not a list to act on
             while read -r id path; do
               [ -n "$id" ] || continue
               if gh api -X POST "repos/$REPO/actions/runs/$id/approve" >/dev/null 2>&1; then
@@ -329,7 +338,7 @@ jobs:
               else
                 echo "approve of run $id failed" >> "$RUNNER_TEMP/approve-errors.txt"
               fi
-            done < <(jq -r ".[] | select($awaiting) | \"\\(.id) \\(.path)\"" <<<"$runs" 2>/dev/null || true)
+            done <<<"$rows"
             [ -z "$past_gate" ] || break
             sleep 5
           done

@@ -19,6 +19,7 @@
 # ADMIN_API_KEY (required), BASE_URL (default http://127.0.0.1:8080), ISSUER, DEX_TOKEN_CMD (default
 # dex-token.sh next to this script), PREBIND_ADMIN_ROLE. Needs curl and jq.
 set -euo pipefail
+. "$(dirname "$0")/best-effort.sh" || exit 1
 dev_issuer=http://dex.localtest.me:5556/dex
 issuer=${ISSUER:-$dev_issuer}
 base=${BASE_URL:-http://127.0.0.1:8080}
@@ -72,14 +73,18 @@ rpc() {
   local method=$1 body=$2 name=$3 secret=$4 value status
   value=${secret//\\/\\\\}; value=${value//\"/\\\"}
   status=$(printf 'header = "%s: %s"\n' "$name" "$value" | curl -sS -K - -o "$work/body" -D "$work/headers" -w '%{http_code}' \
-    -H 'Content-Type: application/json' --data-binary "$body" "$base/$svc/$method") || die "$method: cannot reach $base"
+    -H 'Content-Type: application/json' --data-binary "$body" "$base/$svc/$method") || { echo "dex-prebind: $method: cannot reach $base" >&2; exit 1; }
   if [ "$status" != 200 ]; then
     local code xcode
-    code=$(jq -r '.code // empty' "$work/body" 2>/dev/null) || code=""   # only quoted in the die message below; the non-200 status already decided
-    xcode=$(tr -d '\r' < "$work/headers" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p' | head -1)
+    # the two values are only quoted in the die message below (the non-200 status already decided): read them through files, not $(…)
+    best_effort jq -r '.code // empty' "$work/body" > "$work/code" 2>/dev/null
+    read -r code < "$work/code" || code=""
+    best_effort sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p' "$work/headers" > "$work/xcode"
+    read -r xcode < "$work/xcode" || xcode=""
+    xcode=${xcode%$'\r'}
     die "$method failed: http $(printable status "$status" "$secret"), code $(printable code "${code:-none}" "$secret"), x-error-code $(printable xcode "${xcode:-none.none}" "$secret")"
   fi
-  resp=$(cat "$work/body")
+  resp=$(cat "$work/body") || { echo "dex-prebind: $method: cannot read the response body" >&2; exit 1; }
 }
 admin() { rpc "$1" "$2" X-API-Key "$ADMIN_API_KEY"; }
 
@@ -88,9 +93,9 @@ find_account() {
   local token='' id
   while :; do
     admin ListAccounts "$(jq -nc --arg t "$token" '{pageSize: 100, pageToken: $t}')"
-    id=$(jq -r --arg n "$1" '[.accounts[]? | select(.name == $n) | .id][0] // empty' <<<"$resp")
+    id=$(jq -r --arg n "$1" '[.accounts[]? | select(.name == $n) | .id][0] // empty' <<<"$resp") || return 1   # called as $(find_account …): errexit is off in here
     if [ -n "$id" ]; then echo "$id"; return; fi
-    token=$(jq -r '.nextPageToken // empty' <<<"$resp")
+    token=$(jq -r '.nextPageToken // empty' <<<"$resp") || return 1
     [ -n "$token" ] || return 0
   done
 }
@@ -108,11 +113,11 @@ expect_account() {
 prebind() {
   local email=$1; shift
   local roles id
-  roles=$(jq -nc '$ARGS.positional' --args "$@")
-  id=$(find_account "$email")
+  roles=$(jq -nc '$ARGS.positional' --args "$@") || { echo "dex-prebind: cannot build the roles list" >&2; exit 1; }
+  id=$(find_account "$email") || { echo "dex-prebind: listing accounts failed" >&2; exit 1; }
   if [ -z "$id" ]; then
     admin CreateAccount "$(jq -nc --arg n "$email" --argjson r "$roles" '{name: $n, roles: $r}')"
-    id=$(jq -er '.account.id' <<<"$resp") || die "CreateAccount: no account id in the response"
+    id=$(jq -er '.account.id' <<<"$resp") || { echo "dex-prebind: CreateAccount: no account id in the response" >&2; exit 1; }
     echo "created account for $email"
   else
     expect_account "$id" "$email" "$roles"
@@ -129,7 +134,7 @@ prebind() {
     echo "invited $email"
   fi
   local token
-  token=$(ISSUER=$issuer "$token_cmd" "$email") || die "could not get a Dex token for $email (is Dex up and dex.localtest.me resolvable? docs/operations.md)"
+  token=$(ISSUER=$issuer "$token_cmd" "$email") || { echo "dex-prebind: could not get a Dex token for $email (is Dex up and dex.localtest.me resolvable? docs/operations.md)" >&2; exit 1; }
   [ -n "$token" ] || die "empty Dex token for $email"
   rpc ClaimInvite '{}' Authorization "Bearer $token"
   echo "bound $email"
@@ -138,7 +143,7 @@ prebind() {
 # Check every existing account before changing anything, so a bad one stops the run with nothing bound.
 preflight() {
   local id
-  id=$(find_account "$1")
+  id=$(find_account "$1") || { echo "dex-prebind: listing accounts failed" >&2; exit 1; }
   [ -z "$id" ] || expect_account "$id" "$1" "$(jq -nc '$ARGS.positional' --args "${@:2}")"
 }
 preflight admin@example.com "$role"

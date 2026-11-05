@@ -33,12 +33,18 @@ bump=patch reason="default"
 # consider folds one commit (subject + body) into bump / reason; returns 1 once major is settled.
 consider() {
   local subject=$1 body=$2 type
-  type=$(printf '%s' "$subject" | sed -nE 's/^([a-z]+)(\([^)]*\))?(!)?:.*/\1\3/p')
+  # consider() is called as `consider … || break` / `if consider`: errexit is off in here, so every status is read by hand
+  type=$(printf '%s' "$subject" | sed -nE 's/^([a-z]+)(\([^)]*\))?(!)?:.*/\1\3/p') || { echo "next-version: sed over a commit subject failed (exit $?)" >&2; exit 2; }
   case "$type" in
     *!) bump=major reason="breaking: $subject"; return 1 ;;
   esac
-  if [ -n "$body" ] && printf '%s' "$body" | grep -q '^BREAKING[ -]CHANGE:'; then
-    bump=major reason="breaking: $subject"; return 1
+  if [ -n "$body" ]; then
+    grep_rc=0; grep -q '^BREAKING[ -]CHANGE:' <<<"$body" || grep_rc=$?   # 0 = a footer, 1 = none; 2+ is grep failing, which must not read as "none"
+    case $grep_rc in
+      0) bump=major reason="breaking: $subject"; return 1 ;;
+      1) ;;
+      *) echo "next-version: grep over a commit body failed (exit $grep_rc)" >&2; exit 2 ;;
+    esac
   fi
   if [ "$type" = feat ] && [ "$bump" = patch ]; then
     bump=minor reason="feat: $subject"
@@ -46,11 +52,17 @@ consider() {
     reason="$type: $subject"
   fi
 }
+# the log first, as a file (it is NUL-separated, which a shell variable cannot hold), then the loop: `done < <(git log …)` would not
+# see git dying (#465)
+commits=$(mktemp) || { echo "next-version: mktemp failed" >&2; exit 2; }
+trap 'rm -f "$commits"' EXIT
+log_rc=0; git log -z --first-parent --format='%s%n%b' "$base..$head" > "$commits" || log_rc=$?
+[ "$log_rc" = 0 ] || { echo "next-version: git log $base..$head exited $log_rc" >&2; exit 2; }
 while IFS= read -r -d '' commit; do
   body=${commit#*$'\n'}
   [ "$body" = "$commit" ] && body=
   consider "${commit%%$'\n'*}" "$body" || break
-done < <(git log -z --first-parent --format='%s%n%b' "$base..$head")
+done < "$commits"
 if [ -n "${3:-}" ] && [ "$bump" != major ]; then
   if consider "$3" ""; then :; fi   # consider() returns 1 only to say "major reached, stop scanning"
 fi

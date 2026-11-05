@@ -39,15 +39,15 @@ if [ "${1:-}" != "--diag-child" ]; then
   cap_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX") || { echo "diag: cannot create a capture directory; nothing collected"; exit 0; }
   child="" sig_rc="" kill_pid="" c=""
   # on a signal: stop everything under the collector, then ask the collector itself to stop (it cleans up); if it is still there after 5 s, kill it
-  stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name)
-    local x
-    kids=$(pgrep -P "$1" 2>/dev/null) || { [ $? -eq 1 ] || echo "diag: pgrep -P $1 failed" >&2; }   # 1 = no children
-    for x in $kids; do stop_tree "$x"; kill "$x" 2>/dev/null || true; done
+  stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name). pgrep: 1 = no children; 2+ = it failed: the pid is still stopped, and the failure is the caller's to see (best_effort prints it)
+    local x kids
+    kids=$(value_of -ok 1 pgrep -P "$1") || { kill "$1" 2>/dev/null || true; return 1; }
+    for x in $kids; do best_effort stop_tree "$x"; kill "$x" 2>/dev/null || true; done
   }
   on_signal() {
     sig_rc=$1
     trap '' TERM INT HUP
-    stop_tree "$child"
+    best_effort stop_tree "$child"
     kill -TERM "$child" 2>/dev/null || true
     ( sleep 5; kill -KILL "$child" 2>/dev/null ) > /dev/null 2>&1 &
     kill_pid=$!
@@ -110,7 +110,8 @@ emit() {
   if [ -n "$console_cut" ] || [ "$cap" -le 0 ]; then cat > /dev/null; return 0; fi
   local buf n; buf=$(mktemp) || { echo "diag: no temp file for this read, skipping it" >&2; return 0; }
   head -c $((cap + 1)) > "$buf"
-  n=$(wc -c < "$buf" | tr -d ' ')
+  if ! wc -c < "$buf" > "$buf.n"; then echo "diag: cannot count this read, skipping it" >&2; rm -f "$buf" "$buf.n"; return 0; fi
+  read -r n < "$buf.n" || n=0; rm -f "$buf.n"
   if [ "$n" -le "$cap" ]; then
     cat "$buf"; console_left=$((console_left - n))
   else

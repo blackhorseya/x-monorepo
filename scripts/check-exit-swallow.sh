@@ -3,7 +3,8 @@
 # A gate that swallows a status is green when the command it asked about failed (#453/#455, #457 r0, #453 r1, #458).
 #
 #   scripts/check-exit-swallow.sh              # every tracked *.sh except scripts/hooks/ (task check-exit-swallow)
-#   scripts/check-exit-swallow.sh <file>...    # only these files (scripts/test.sh's fixtures)
+#   scripts/check-exit-swallow.sh <file>...    # only these files (scripts/test.sh's fixtures); no scripts/hooks/ skip here, and a file inside the repo is
+#                                              # named by its repo-relative path however it was spelled (./x, ../x, absolute)
 #
 # It flags, per line (comment lines and heredoc bodies are skipped):
 #   swallow   `cmd || true`, `cmd || :`, `cmd || exit 0`, `cmd || return 0` — also inside $(...), a trap string or sh -c '...'
@@ -13,11 +14,22 @@
 #   argsub    `expect_eq x "$(… | grep -c y)"`, `[ "$(grep -c y f)" -ge 2 ]`: a match count inside an argument; assign it first
 #   forlist   `for x in $(cmd)` / `for x in `cmd``: the status of cmd is dropped (a short or failed `seq` is a shorter loop)
 #   pipeline  `a | b` in a file that never says `set -o pipefail` (or set -euo pipefail ...): only b's status counts
+#   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
+#   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
+#             break / fail / die, or a new value for $v; top-level code only: inside a function the fnctx shapes apply). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
+#   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` must be followed on its own line (or after a heredoc substitution's closing line) by
+#             one of THREE shapes: `|| return [arg]`, `|| exit [arg]`, `|| { …; return|exit [arg]; }` (the group's last top-level statement). Nothing else:
+#             no function names, no new value, no `|| rc=$?`, no `$?` on a later line, no continue / break, no return 0. A shape rule: it does not look at how or from where the function is called (`f || x`,
+#             `if f`, `$(f)`, a wrapper, eval, command f, another file, never) - errexit may be off in any of those and the checker is never
+#             one spelling behind that way.
+#   Workflow / composite-action files: the `run:` scripts are cut out (scripts/extract-run-blocks.py) and scanned with these same rules;
+#             a step with no `shell:` runs `bash -e {0}` (no pipefail), `shell: bash` runs with pipefail, so the first is held to `pipeline`.
 # Not flagged without a comment: `kill ... || true`, `rm ... || true` and `... kill ... && wait ... || true` (cleanup:
 # an already-gone process or file is not a verdict). Anything else needs either a fix or, on the SAME line, a comment
 #   # exit-ok: <why this command's status cannot change the verdict>
-# The fixes: `n=$(grep -c x f || [ $? -eq 1 ])` (grep: 1 = no match, 2 = error stays fatal), an explicit `rc=0; cmd || rc=$?`
-# followed by a case on $rc, `for ((i = 0; i < N; i++))` instead of $(seq). docs/ci.md has the rules and the reasons.
+# The fixes: at top level `n=$(grep -c x f || [ $? -eq 1 ])` (grep: 1 = no match, 2 = error stays fatal) or an explicit `rc=0; cmd || rc=$?`
+# followed by a case on $rc; inside a function only the three fnctx shapes, with a tolerant exit status in a helper (le1: `n=$(le1 grep -c x f) || return`);
+# `for ((i = 0; i < N; i++))` instead of $(seq). docs/ci.md has the rules and the reasons.
 #
 # This is a line scanner, not a shell parser: `pipeline` only looks at files without pipefail, and a `|` inside a quoted
 # string is ignored. Exit 0 = clean, 1 = findings, 2 = the checker itself failed (never reported as clean).
@@ -29,9 +41,30 @@ cd "$here/.." || die "cannot cd to the repo root from [$here]"
 tmp=$(mktemp -d) || die "mktemp failed"
 trap 'rm -rf "$tmp"' EXIT
 
-files=()
+# an explicit argument that names a file inside this repo is turned into its repo-relative path (./scripts/test.sh, scripts/../scripts/test.sh and
+# the absolute path all become scripts/test.sh), so the one path-based exemption (rcbranch / scripts/test.sh) does not depend on how it was
+# spelled; a file outside the repo keeps the string it was given. Relative arguments are read from the repo root (the cd above).
+root=$(pwd -P) || die "pwd failed"
+# no dirname / basename / realpath here: a command whose output renames the file to scan and which then dies would be a status swallowed (#466 r3);
+# parameter expansion and the cd / pwd builtins cannot fail silently, and a cd that fails on a file that exists stops the run
+repo_rel() {
+  local d b
+  [ -f "$1" ] || { printf '%s' "$1"; return; }
+  case $1 in */*) d=${1%/*} b=${1##*/} ;; *) d=. b=$1 ;; esac
+  d=$(cd "${d:-/}" && pwd -P) || { echo "check-exit-swallow: cannot cd to the directory of [$1]" >&2; exit 2; }
+  case $d in
+    "$root") printf '%s' "$b" ;;
+    "$root"/*) printf '%s' "${d#"$root"/}/$b" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+files=() yml=()
 if [ "$#" -gt 0 ]; then
-  files=("$@")
+  for f in "$@"; do
+    f=$(repo_rel "$f")
+    case $f in *.yml | *.yaml) yml+=("$f") ;; *) files+=("$f") ;; esac
+  done
 else
   rc=0; git ls-files -- '*.sh' > "$tmp/ls" || rc=$?
   [ "$rc" = 0 ] || die "git ls-files failed (exit $rc)"
@@ -40,7 +73,25 @@ else
     files+=("$f")
   done < "$tmp/ls"
   [ "${#files[@]}" -ge 20 ] || die "only ${#files[@]} scripts to check — git ls-files '*.sh' no longer returns what it used to"
+  rc=0; git ls-files -- '.github/workflows/*.yml' '.github/actions/*/action.yml' > "$tmp/ls" || rc=$?
+  [ "$rc" = 0 ] || die "git ls-files (workflows) failed (exit $rc)"
+  while IFS= read -r f; do yml+=("$f"); done < "$tmp/ls"
+  [ "${#yml[@]}" -ge 5 ] || die "only ${#yml[@]} workflow / action files to check — the .github layout is not what it used to be"
 fi
+nscripts=${#files[@]} nyml=${#yml[@]}
+
+# `run:` scripts of workflows and composite actions are cut out and scanned like any other script; map.tsv turns a finding in the
+# extracted file back into a line of the YAML (extracted line k is YAML line first+k-2: line 1 is the `set` line the runner implies).
+: > "$tmp/map.tsv"
+if [ "${#yml[@]}" -gt 0 ]; then
+  mkdir "$tmp/runs" || die "mkdir failed"
+  rc=0; python3 -I "$here/extract-run-blocks.py" "$tmp/runs" "${yml[@]}" > "$tmp/map.tsv" 2> "$tmp/extract.err" || rc=$?
+  [ "$rc" = 0 ] || die "extract-run-blocks.py failed (exit $rc): $(head -2 "$tmp/extract.err")"
+  while IFS=$'\t' read -r sh _ _; do files+=("$sh"); done < "$tmp/map.tsv"
+fi
+
+# nothing to scan (a workflow whose only run: steps are not shell, e.g. `shell: python`): clean, and awk / shellcheck must not be started with no file
+if [ "${#files[@]}" -eq 0 ]; then echo "check-exit-swallow: no shell to check in the ${nyml} workflow / action file(s)"; exit 0; fi
 
 cat > "$tmp/scan.awk" <<'AWK'
 # Reads the files named on the command line. Prints "file:line: rule: code" per finding; exit 1 if there was one.
@@ -147,13 +198,120 @@ FNR == 1 { reset_file() }
   if (CODE ~ /(^|[;&|{(]|[ \t])set[ \t]+--[ \t].*(\$\(|`)/ && !exempt) report("setargs")
   # pipeline: pipefail must already be set above this line
   p = CODE; gsub(/\047[^\047]*\047/, "", p); gsub(/"[^"]*"/, "", p)
+  # procsub: `done < <(cmd)`, `diff <(a) <(b)`: the status of cmd never reaches the shell (not even with set -e or pipefail)
+  if (!exempt && p ~ /(^|[^$])[<>]\(/) report("procsub")
   if (!hasflag && !exempt && p ~ /[^|]\|[^|&]/ && p !~ /^[ \t]*[^ \t]*\|[^ \t]*\)/) report("pipeline")
 }
 END { exit (n > 0) }
 AWK
 
+cat > "$tmp/fnctx.awk" <<'AWK'
+# One file at a time. A SHAPE rule, not a call-graph one: inside ANY function body, every `x=$(cmd)` / `x="$(cmd)"` must say what happens when
+# cmd fails (`|| …` on the line, `$?` read right after, or the `|| …` after a heredoc substitution's closing line). Where the function is
+# called from (`f || x`, `if f`, `$(f)`, a wrapper, eval, command f, another file) decides whether errexit protects it, and a checker that
+# reads call sites is always one spelling behind; the body is the only place that is the same everywhere.
+function strip(s,   t) { t = s; gsub(/\047[^\047]*\047/, "", t); gsub(/"[^"]*"/, "", t); sub(/[ \t]#.*/, "", t); return t }
+{
+  line = $0
+  if (term != "") { t = line; if (dash) sub(/^\t+/, "", t); if (t == term) { term = ""; ENDHD[NR] = 1 }; L[NR] = ""; T[NR] = ""; next }   # heredoc bodies are data (ENDHD: the terminator line)
+  L[NR] = line; T[NR] = strip(line)
+  tmp = line; gsub(/<<</, "", tmp)
+  if (line !~ /^[ \t]*#/ && match(tmp, /<<-?[ \t]*\\?["\047]?[A-Za-z_][A-Za-z_0-9]*/)) {
+    h = substr(tmp, RSTART, RLENGTH); dash = (h ~ /^<<-/); sub(/^<<-?[ \t]*\\?["\047]?/, "", h); term = h
+  }
+}
+END {
+  nf = 0
+  for (i = 1; i <= NR; i++) {
+    if (match(T[i], /^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z_0-9]*[ \t]*(\(\))?[ \t]*\{/) && (T[i] ~ /\(\)/ || T[i] ~ /^[ \t]*function[ \t]/)) {
+      d = T[i]; sub(/^[ \t]*(function[ \t]+)?/, "", d); sub(/[ \t]*(\(\))?[ \t]*\{.*/, "", d)
+      ind = L[i]; sub(/[^ \t].*/, "", ind)
+      e = i; tq = L[i]; openq = (gsub(/\047/, "", tq) % 2 == 1)   # the definition line leaves a single quote open: the body's `; }` is on a later line
+      if (T[i] !~ /\}[ \t]*(;|$|[|&])/ || T[i] ~ /\{[ \t]*$/) { for (e = i + 1; e <= NR; e++) if ((index(L[e], ind "}") == 1 && L[e] ~ /^[ \t]*\}/) || (openq && L[e] ~ /;[ \t]*\}[ \t]*(#.*)?$/)) break }
+      nf++; name[nf] = d; from[nf] = i; to[nf] = e
+    }
+  }
+  for (f = 1; f <= nf; f++) {
+    for (i = from[f]; i <= to[f]; i++) {
+      t = L[i]; sub(/[ \t]#.*/, "", t); gsub(/\$\(\(/, "", t)
+      gsub(/(local|declare|typeset|export|readonly)[ \t]+(-[A-Za-z]+[ \t]+)*[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?=("|\047)?(\$\(|`)/, "", t)   # declaration forms are declsub's rule (and SC2155's)             # the RAW line (a quoted `n="$(cmd)"` counts); $(( … )) is arithmetic
+      if (i > from[f] && L[i-1] ~ /\\[ \t]*$/ && L[i-1] ~ /(^|[ \t;{])(local|declare|typeset|export|readonly)[ \t]/) continue   # continuation of a declaration: SC2155's
+      if (t !~ /(^|[;&|{(]|[ \t])[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?(\$\(|`)/) continue
+      if (t ~ /(&&|\|\||(^|[;{(]|[ \t])(if|elif|while|until|!))[ \t]*[^;]*[A-Za-z_][A-Za-z_0-9]*\+?=("|\047)?(\$\(|`)/) continue   # the assignment IS the condition: its status is read
+      if (t ~ /^[ \t]*(local|declare|typeset|export|readonly)[ \t]/) continue    # declsub's job
+      code = L[i]; sub(/^[ \t]+/, "", code)                                   # no exit-ok here: a function body has no legitimate exemption
+      vn = ""; if (match(t, /[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?(\$\(|`)/)) { vn = substr(t, RSTART, RLENGTH); sub(/[^A-Za-z_0-9].*/, "", vn) }
+      ok = 0
+      hb = i                                                                 # a heredoc inside the substitution: the `)` comes after its terminator
+      if (match(L[i], /<<-?[ \t]*\\?["\047]?[A-Za-z_][A-Za-z_0-9]*/)) {
+        for (k = i + 1; k <= to[f]; k++) if (ENDHD[k]) { hb = k; break }
+      }
+      # 1. `|| <handler>` after the substitution's `)` (same line, or the next line starts with it). CLOSED whitelist, three shapes only:
+      #      x=$(…) || return [arg]      x=$(…) || exit [arg]      x=$(…) || { …; return|exit [arg]; }
+      #    [arg] is nothing, a non-zero literal, $? or $var. The brace group is parsed: its LAST top-level statement must be that return / exit
+      #    (a return inside if / case / && / || does not count). No function names (die, fail), no new value for the variable, no `|| rc=$?`,
+      #    no `$?` read on a later line, no continue / break: the status has to be refused right where it is captured.
+      for (k = i; k <= (hb > i ? hb + 2 : i + 3) && k <= to[f] && !ok; k++) {
+        hnd = ""
+        if (match(L[k], /\)["\047]?[ \t]*\|\|[ \t]*/)) hnd = substr(L[k], RSTART + RLENGTH)
+        else if (k > i && match(L[k], /^[ \t]*\|\|[ \t]*/)) hnd = substr(L[k], RSTART + RLENGTH)
+        else continue
+        sub(/[ \t]#.*/, "", hnd)
+        hk = k
+        if (hnd ~ /^[ \t]*$/ && k < NR) { hk = k + 1; hnd = L[hk]; sub(/[ \t]#.*/, "", hnd) }   # `|| ` at the end of the line, the handler on the next one
+        sub(/^[ \t]+/, "", hnd); sub(/[ \t;]+$/, "", hnd)
+        hs = hnd; sub(/[ \t]*(;|&&|\|\|).*/, "", hs)   # the plain shapes end at the first separator: `|| return; next` is `|| return`
+        if (hnd !~ /^\{/ && hs ~ /^(return|exit)([ \t]+(\$\?|"\$\?"|\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?|"\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?"|[1-9][0-9]*))?$/) ok = 1
+        else if (hnd ~ /^\{/) {
+          blk = hnd; bm = hk
+          while (blk !~ /\}$/ && bm < hk + 5 && bm < to[f]) { bm++; t2 = L[bm]; sub(/[ \t]#.*/, "", t2); sub(/^[ \t]+/, "", t2); sub(/[ \t;]+$/, "", t2); blk = blk " ; " t2 }
+          if (blk ~ /\}$/) {
+            sub(/[ \t;]*\}$/, "", blk); sub(/^\{[ \t]*/, "", blk)
+            lastst = blk; sub(/.*;[ \t]*/, "", lastst)
+            if (lastst ~ /^(return|exit)([ \t]+(\$\?|"\$\?"|\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?|"\$\{?([A-Za-z_][A-Za-z_0-9]*|[0-9])\}?"|[1-9][0-9]*))?$/ ) ok = 1
+          }
+        }
+      }
+      if (ok) continue
+      printf "%s:%d: fnctx: %s   [in %s(): a function body must check this substitution's status itself — errexit may be off wherever the function is called]\n", FILENAME, i, code, name[f]
+      n++
+    }
+  }
+  # rcbranch: `v=$(cmd) || rc=$?` records the status of a command whose OUTPUT is then used. Something must read $rc, before $v is used, and
+  # the lines that read it must be able to refuse the output (return / exit / continue / break / fail / die, or assign $v again).
+  # Records-and-ignores (jq failed, "nothing to approve" printed, rows used anyway, #466) is red. Heuristic: it does not prove the branch
+  # is right, only that one exists; docs/ci.md lists the sites it covers.
+  for (i = 1; i <= NR && FILENAME != "scripts/test.sh"; i++) {   # ONLY the repo's scripts/test.sh (as git ls-files names it) is the harness; a test.sh anywhere else is scanned: its $rc is judged by expect_eq, not by a branch
+    r = L[i]; sub(/[ \t]#.*/, "", r)
+    if (!match(r, /(^|[;&|{(]|[ \t])[A-Za-z_][A-Za-z_0-9]*=("|\047)?(\$\(|`)/)) continue
+    if (r !~ /\|\|[ \t]*[A-Za-z_][A-Za-z_0-9]*=\$\?/) continue
+    v = substr(r, RSTART, RLENGTH); sub(/^[;&|{( \t]+/, "", v); sub(/=.*/, "", v)
+    c = r; sub(/.*\|\|[ \t]*/, "", c); sub(/=.*/, "", c)
+    if (L[i] ~ /#[ \t]*exit-ok:[ \t]*[^ \t].../) continue
+    rd = 0; use = 0
+    for (k = i + 1; k <= i + 8 && k <= NR; k++) {
+      if (!rd && L[k] ~ ("\\$\\{?" c "([^A-Za-z_0-9]|$)")) rd = k
+      if (!use && L[k] ~ ("\\$\\{?" v "([^A-Za-z_0-9]|$)")) use = k
+    }
+    code = L[i]; sub(/^[ \t]+/, "", code)
+    if (!rd) { printf "%s:%d: rcbranch: %s   [$%s is never read within 8 lines]\n", FILENAME, i, code, c; n++; continue }
+    if (use && use < rd) { printf "%s:%d: rcbranch: %s   [$%s is used at line %d before $%s is read at line %d]\n", FILENAME, i, code, v, use, c, rd; n++; continue }
+    esc = 0
+    for (k = rd; k <= rd + 5 && k <= NR; k++) {
+      if (L[k] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|fail|die)([^A-Za-z_0-9]|$)/ || L[k] ~ ("(^|[^A-Za-z_0-9])" v "=")) { esc = 1; break }
+    }
+    if (!esc) { printf "%s:%d: rcbranch: %s   [the lines that read $%s (from line %d) never refuse $%s: no return / exit / continue / break / fail, no new value]\n", FILENAME, i, code, c, rd, v; n++ }
+  }
+  exit (n > 0)
+}
+AWK
+
 rc=0; awk -f "$tmp/scan.awk" "${files[@]}" > "$tmp/out" || rc=$?
 case $rc in 0 | 1) ;; *) die "awk failed (exit $rc)" ;; esac
+for f in "${files[@]}"; do
+  rc=0; awk -f "$tmp/fnctx.awk" "$f" >> "$tmp/out" || rc=$?
+  case $rc in 0 | 1) ;; *) die "awk (fnctx) failed on $f (exit $rc)" ;; esac
+done
 
 # Second layer, a real shell parser: shellcheck SC2155 ("declare and assign separately to avoid masking return values") sees what a line
 # scanner cannot — continuation lines, `a="x"'y z' b=$(cmd)`, `$'..'` values. A file shellcheck cannot parse would be skipped
@@ -171,9 +329,15 @@ while IFS= read -r row; do
   rc=1
 done < "$tmp/sc.out"
 
+# findings in an extracted script are reported against the YAML file and line
+awk -F'\t' -v map="$tmp/map.tsv" 'FILENAME == map { first[$1] = $3; src[$1] = $2; next }
+  { i = index($0, ":"); f = substr($0, 1, i - 1)
+    if (f in src) { rest = substr($0, i + 1); j = index(rest, ":"); k = substr(rest, 1, j - 1)
+      print src[f] ":" (first[f] + k - 2) ":" substr(rest, j + 1) } else print }' "$tmp/map.tsv" "$tmp/out" > "$tmp/out.mapped" || die "mapping findings failed"
+mv "$tmp/out.mapped" "$tmp/out" || die "mv failed"
 if [ -s "$tmp/out" ]; then
   cat "$tmp/out" >&2
-  echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md)." >&2
+  echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line or add '# exit-ok: <why the status cannot change the verdict>' on it (docs/ci.md). Exception: a fnctx finding has no exit-ok; inside a function the only accepted shapes are \`x=\$(…) || return [arg]\`, \`|| exit [arg]\` and \`|| { …; return|exit [arg]; }\`." >&2
   exit 1
 fi
-echo "check-exit-swallow: ${#files[@]} scripts, no swallowed exit status"
+echo "check-exit-swallow: $nscripts scripts and the run: scripts of $nyml workflow / action files, no swallowed exit status"

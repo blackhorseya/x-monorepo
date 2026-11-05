@@ -78,8 +78,8 @@ sys.exit(0 if r.attempt_status(sys.argv[1], sys.argv[2], float(sys.argv[3]))["va
 wait_quiet() {
   local f="$out/run$1-baseline.csv" t0=$SECONDS last
   while :; do
-    python3 -I tests/k6/loadavg.py >> "$f"
-    last=$(tail -n 1 "$f" | cut -d, -f2)
+    python3 -I tests/k6/loadavg.py >> "$f" || { echo "bench failed: loadavg.py exited $? (sampling the load)" >&2; exit 1; }   # inside `if ! wait_quiet`: errexit is off, a dead sampler must not read as a quiet machine
+    last=$(tail -n 1 "$f" | cut -d, -f2) || { echo "bench failed: cannot read the load sample in $f (exit $?)" >&2; exit 1; }   # wait_quiet runs inside `if ! wait_quiet`: errexit is off here
     python3 -I -c "import sys; sys.exit(0 if $last <= $limit else 1)" && return 0
     [ $((SECONDS - t0)) -lt "$BASELINE_WAIT" ] || return 1
     sleep "$LOAD_INTERVAL"
@@ -98,9 +98,11 @@ k6_phase() {
     return 0
   fi
   if [ "$rc" != 99 ]; then echo "k6 $phase failed (exit $rc):" >&2; tail -n 5 "$out/run$n-$phase.log" >&2; exit "$rc"; fi
-  verdict=$(python3 -I -c 'import sys; sys.path.insert(0, "tests/k6"); import bench_report as r
-kind, why = r.classify_threshold_failure(sys.argv[1], sys.argv[2]); print(kind, why)' "$out/run$n-$phase.json" "$phase" 2>&1) \
-    || verdict="failure k6 $phase exited 99 and the classifier failed: $verdict"
+  vrc=0
+  python3 -I -c 'import sys; sys.path.insert(0, "tests/k6"); import bench_report as r
+kind, why = r.classify_threshold_failure(sys.argv[1], sys.argv[2]); print(kind, why)' "$out/run$n-$phase.json" "$phase" > "$out/run$n-$phase.verdict" 2>&1 || vrc=$?
+  verdict=$(cat "$out/run$n-$phase.verdict") || { echo "bench: cannot read the classifier output" >&2; exit 1; }
+  if [ "$vrc" != 0 ]; then verdict="failure k6 $phase exited 99 and the classifier failed: $verdict"; fi
   case "$verdict" in
     "overload "*) overload=${verdict#overload }; return 1 ;;
     *) echo "bench failed: ${verdict#failure }" >&2; exit 99 ;;

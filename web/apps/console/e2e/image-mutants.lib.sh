@@ -20,10 +20,8 @@ run_summary() {
 # whole function, so a failing stage would otherwise be shrugged off and a half-parsed log reported as RED (#460 r1).
 classify() {
   local name=$1 log=$2 code=$3 failed summary st=0
-  failed=$(failed_specs "$log") || st=$?
-  if [ "$st" -ne 0 ]; then echo "mutant $name: ERROR, parsing the log failed (status $st)"; return 2; fi
-  summary=$(run_summary "$log") || st=$?
-  if [ "$st" -ne 0 ]; then echo "mutant $name: ERROR, reading the Playwright summary failed (status $st)"; return 2; fi
+  failed=$(failed_specs "$log") || { st=$?; echo "mutant $name: ERROR, parsing the log failed (status $st)"; return 2; }
+  summary=$(run_summary "$log") || { st=$?; echo "mutant $name: ERROR, reading the Playwright summary failed (status $st)"; return 2; }
   echo "mutant $name: exit=$code failed-spec-files=[${failed}]"
   if [ -z "$summary" ]; then echo "mutant $name: ERROR, no Playwright summary in the log: the run was cut off or never started (image.sh exit $code)"; return 2; fi
   if [ "$code" -eq 0 ]; then return 1; fi
