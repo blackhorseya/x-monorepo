@@ -63,8 +63,8 @@ settle() { local i=0; while group_alive && [ $i -lt 20 ]; do sleep 0.1; i=$((i +
 
 settle   # a member that is already exiting is not a leftover
 if group_alive; then
-  ps_out=$(ps -ax -o pgid= 2>/dev/null) || ps_out=""   # a count for the message only; group_alive above decided there are leftovers
-  n=$(awk -v g="$pgid" '$1 == g {c++} END {print c + 0}' <<<"$ps_out") || n="?"
+  n="?"   # a count for the message only; group_alive above decided there are leftovers. "?" (not a made-up 0) when it cannot be read
+  if ps_out=$(ps -ax -o pgid= 2>/dev/null) && count=$(awk -v g="$pgid" '$1 == g {c++} END {print c + 0}' <<<"$ps_out"); then n=$count; fi
   echo "suite-guard: the suite left $n process(es) running in its process group ($(ps -ax -o pid=,pgid=,command= | awk -v g="$pgid" '$2 == g { print $1 ": " $3 " " $4 }' | tr '\n' ';')); killing them" >&2
   kill -TERM -- "-$pgid" 2>/dev/null
   settle

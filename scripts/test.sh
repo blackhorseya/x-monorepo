@@ -2219,6 +2219,8 @@ stub_gh dyingtree; printf '%s\n%s\n' "$old_main" "$head_sha" > "$tmp/stub-dyingt
 printf '77 completed success merge-tree pr=7 head=%s base=%s\n' "$head_sha" "$main_sha" > "$tmp/stub-dyingtree/tree_runs"
 ready_dying dyingtree all 'run list --workflow merge-tree.yml*'
 if [ "$rc" = 0 ]; then bad "merge-ready: gh run list (merge-tree) prints the matching run then exits 42, the gate still exits 0 [$out]"; else ok; fi
+expect_eq    "merge-ready (#470): gh run list prints the matching run, THEN dies → exit 1 (an error, not the made-up empty list = stale)" "1" "$rc"
+expect_match "merge-ready (#470): …and says the run could not be proven" 'NOT READY: gh run list \(merge-tree.yml\) failed' "$out"
 ready dyingtree
 expect_eq "merge-ready: fault-injection control — the same stale + merge-tree fixture, a healthy gh, is ready" "0" "$rc"
 ready dying
@@ -2643,10 +2645,12 @@ F
   sw_run "$sw/sr-$1.sh"
   expect_eq "fnctx: [$1] is outside the closed whitelist: red" "1" "$rc"
 }
+sp=' '   # the literal "|| x=" is a #470 finding in THIS file too: the space comes from a variable
 shape_red rc-next         $'  x=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1\n  printf \'%s\\n\' "$x"'
 shape_red rc-same-line    $'  x=$(cmd); rc=$?\n  [ "$rc" = 0 ] || return 1'
 shape_red or-die          $'  x=$(cmd) || die "cmd failed"'
-shape_red or-reset        $'  x=$(cmd) || x=\n  printf \'%s\\n\' "$x"'
+shape_red or-reset        "  x=\$(cmd) ||${sp}x=
+  printf '%s\\n' \"\$x\""
 shape_red or-continue     $'  for i in 1; do x=$(cmd) || continue; done'
 zero=0   # the literal "|| return 0" / "|| exit 0" would be a finding in THIS file: the zero comes from a variable
 shape_red or-return-zero  "  x=\$(cmd) || return $zero"
@@ -2827,8 +2831,144 @@ cap_run "command not found"             -2 127 SKIP SKIP                   0 env
 cap_run "no command at all"             -  "" "" ""                        1
 cap_run "-2 and no command"             -2 "" "" ""                        1
 
+# ── #470: a failed command turned into a default value (`default`) ───────────────────────────────────────────────────────────────────────
+# Each fixture is a file written by heredoc (so THIS file does not contain the forbidden text), run through the real checker entry. The negatives
+# are the shapes that hide a failure (also after the command printed part of its output); every one has a same-shape positive that REFUSES or
+# reads a status; the look-alikes below are the ones a careless rule would let through (or flag by mistake).
+df_red() { # <name> ; the script body comes on stdin
+  { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; cat; } > "$sw/df-$1.sh"
+  sw_run "$sw/df-$1.sh"
+  expect_eq    "default: [$1] is red" "1" "$rc"
+  expect_match "default: [$1] names the rule" ': default:' "$out"
+}
+df_green() { # <name>
+  { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; cat; } > "$sw/dg-$1.sh"
+  sw_run "$sw/dg-$1.sh"
+  expect_eq "default: [$1] is green" "0" "$rc"
+}
+df_red cat-echo <<'F'
+n=$(cat f 2>/dev/null || echo 0)
+F
+df_red grep-c <<'F'
+n=$(grep -c x f || echo 0)
+F
+df_red pipe-dash <<'F'
+x=$(tr a b <f | sed 's/a/b/' | head -n 1 | grep . || echo -)
+F
+df_red printf-def <<'F'
+v=$(cmd || printf '%s' def)
+F
+df_red spaced <<'F'
+v=$(   cmd    ||    echo    0   )
+F
+df_red quoted <<'F'
+echo "n=$(cmd || echo 0) done"
+F
+df_red multiline <<'F'
+v=$(
+  cmd \
+    || echo 0
+)
+F
+df_red nested <<'F'
+v=$(echo "$(cmd || echo 0)")
+F
+df_red in-function <<'F'
+f() { local n; n=$(cat f || echo 0); echo "$n"; }
+F
+df_red label-of-a-function <<'F'
+echo "$(in_cluster f && echo yes || echo no)"
+F
+df_red var-dash <<'F'
+x=$(cmd) || x=-
+F
+df_red var-empty <<'F'
+x=$(cmd) || x=""
+F
+df_red var-quoted-subst <<'F'
+x="$(cmd)" || x=default
+F
+df_red var-after-multiline <<'F'
+x=$(
+  cmd
+) || x=0
+F
+df_red in-argument <<'F'
+[ "$(cat f 2>/dev/null || echo 0)" = 1 ] && echo one
+F
+# the same shapes, refused or read through a status: green
+df_green brace-exit <<'F'
+n=$(cat f) || { echo "cannot read f" >&2; exit 1; }
+F
+df_green value-of <<'F'
+. scripts/best-effort.sh
+n=$(value_of -ok 1 grep -c x f) || exit 1
+F
+df_green file-guard <<'F'
+if [ -f f ]; then n=$(cat f) || exit 1; else n=0; fi
+F
+df_green bash-parse <<'F'
+if [[ $1 =~ ^HTTP[^\ ]*\ ([0-9]+) ]]; then st=${BASH_REMATCH[1]}; fi
+F
+df_green label-of-a-test <<'F'
+echo "$([ "$a" != "[]" ] && echo true || echo false)"
+v=$(command -v docker >/dev/null 2>&1 && echo docker || echo podman)
+F
+df_green label-through-a-function <<'F'
+yesno() { if "$@"; then echo yes; else echo no; fi; }
+echo "$(yesno in_cluster f)"
+F
+df_green if-condition <<'F'
+if x=$(cmd); then echo "$x"; else echo "cmd failed" >&2; exit 1; fi
+F
+df_green plain-echo-after-or <<'F'
+cmd || echo "cmd failed" >&2
+F
+df_green echo-in-a-string <<'F'
+echo "use \$(cmd || echo 0) never"
+F
+df_green other-variable <<'F'
+rc=0; x=$(cmd) || rc=$?
+[ "$rc" = 0 ] || exit 1
+F
+df_green inner-pipeline-no-default <<'F'
+x=$(tr a b <f | head -n 1)
+F
+# the rule is not exemptible
+df_exempt() { { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; cat; } > "$sw/df-exempt.sh"; }
+df_exempt <<'F'
+n=$(cat f || echo 0)   # exit-ok: the file may not be there
+F
+sw_run "$sw/df-exempt.sh"; expect_eq "default: an exit-ok comment does NOT exempt it (a default is what is forbidden)" "1" "$rc"
+
 # workflow / composite-action run: scripts. wf_check <name> < yaml: writes $sw/<name>.yml and runs the checker on it.
 wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
+# a workflow run: script is scanned too
+wf_check df-wf <<'F'
+name: t
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          n=$(cat f 2>/dev/null || echo 0)
+          echo "$n"
+F
+expect_eq "default: a run: script with \$(… || echo 0) is red" "1" "$rc"
+wf_check df-wf-ok <<'F'
+name: t
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ -f f ]; then n=$(cat f) || exit 1; else n=0; fi
+          echo "$n"
+F
+expect_eq "default: the same run: script with a file guard is green" "0" "$rc"
+
 # the same six call forms inside a workflow run: (the lock holds for the extracted scripts too); the finding is on the YAML line of x=$(cmd) (line 7)
 wf_lock() { # <name> <call line(s)>
   {
@@ -3184,7 +3324,13 @@ rcb_ok() { # <name> <lines…>
   { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; printf '%s\n' "$@"; } > "$sw/rcbok-$n.sh"
   sw_run "$sw/rcbok-$n.sh"; expect_eq "rcbranch: [$n] is green" "0" "$rc"
 }
-rcb_ok clear   'rc=0; rows=$(jq . f) || rc=$?' 'if [ "$rc" != 0 ]; then rows=""; echo "jq failed" >&2; fi' 'echo "$rows"'
+rcb_red() { # <name> <lines…>: #470 — giving $v a new value is the failure swallowed, not a refusal
+  local n=$1; shift
+  { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; printf '%s\n' "$@"; } > "$sw/rcbred-$n.sh"
+  sw_run "$sw/rcbred-$n.sh"; expect_eq "rcbranch: [$n] is red (a new value is not a refusal)" "1" "$rc"; expect_match "rcbranch: [$n] names the rule" ': rcbranch:' "$out"
+}
+rcb_red clear   'rc=0; rows=$(jq . f) || rc=$?' 'if [ "$rc" != 0 ]; then rows=""; echo "jq failed" >&2; fi' 'echo "$rows"'
+rcb_red default 'rc=0; rows=$(jq . f) || rc=$?' 'if [ "$rc" != 0 ]; then rows="[]"; fi' 'echo "$rows"'
 rcb_ok exit    'rc=0; rows=$(jq . f) || rc=$?' '[ "$rc" = 0 ] || { echo "jq failed" >&2; exit 2; }' 'echo "$rows"'
 rcb_ok case    'rc=0; rows=$(jq . f) || rc=$?' 'case $rc in' '  0) ;;' '  *) echo "jq failed" >&2; exit 2 ;;' 'esac' 'echo "$rows"'
 rcb_ok loop    'for f in a b; do' '  rc=0; rows=$(jq . "$f") || rc=$?' '  [ "$rc" = 0 ] || continue' '  echo "$rows"' 'done'
@@ -3268,6 +3414,53 @@ for keep in all 1; do
   expect_eq    "next-version: consider()'s sed prints [$keep] then exits 42 → exit 2" "2" "$rc"
   expect_match "next-version: …and names the sed" 'sed over a commit subject failed \(exit 42\)' "$out"
 done
+
+for keep in all 1; do
+  w=$(PATH="$fakegit:$PATH" inject_fail "$tmp/inj-nvdesc-$keep" git 42 "$keep" 'describe*v0.1.0')
+  rc=0; out=$(PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" 2>&1) || rc=$?
+  expect_eq    "next-version (#470): git describe of the base prints [$keep] then exits 42 → exit 2 (no made-up tag)" "2" "$rc"
+  expect_match "next-version (#470): …and names git describe" 'git describe failed for v0\.1\.0' "$out"
+done
+# deployments/helm/kind/target-kubeconfig-test.sh helpers (the real functions): a file that is not there has a value, one that cannot be read does not
+printf 'a\nb\nc\n' > "$tmp/tk.three"; : > "$tmp/tk.empty"; : > "$tmp/tk.noread"; chmod 000 "$tmp/tk.noread"
+tk_cell() { # <label> <want rc> <want out> <command…>
+  local label=$1 wrc=$2 wout=$3; shift 3
+  { echo ". '$src/scripts/best-effort.sh'"; for fn in yesno fingerprint num_in lines_in; do fn_text "$src/deployments/helm/kind/target-kubeconfig-test.sh" $fn; done; printf '%s\n' "$@"; } > "$tmp/tk.sh"
+  trc=0; capture -2 tout trc bash "$tmp/tk.sh" || exit 1
+  expect_eq "target-kubeconfig-test ($label): exit" "$wrc" "$trc"
+  expect_eq "target-kubeconfig-test ($label): output" "$wout" "$tout"
+}
+tk_cell "fingerprint: absent file"       0 absent 'fingerprint '"$tmp"'/tk.nothere'
+tk_cell "fingerprint: present file"      0 "$(cksum < "$tmp/tk.three")" 'fingerprint '"$tmp"'/tk.three'
+[ "$(id -u)" = 0 ] || tk_cell "fingerprint: unreadable file fails (not 'absent')" 1 "" 'fingerprint '"$tmp"'/tk.noread 2>/dev/null'
+tk_cell "num_in: absent counter = 0"     0 0 'num_in '"$tmp"'/tk.nothere'
+tk_cell "num_in: present counter"        0 $'a\nb\nc' 'num_in '"$tmp"'/tk.three'
+[ "$(id -u)" = 0 ] || tk_cell "num_in: unreadable counter fails (not 0)" 1 "" 'num_in '"$tmp"'/tk.noread 2>/dev/null'
+tk_cell "lines_in: absent file = 0"      0 0 'lines_in '"$tmp"'/tk.nothere'
+tk_cell "lines_in: three lines"          0 3 'lines_in '"$tmp"'/tk.three'
+tk_cell "lines_in: empty file = 0 (grep 1)" 0 0 'lines_in '"$tmp"'/tk.empty'
+tk_cell "lines_in: grep prints 5 then dies (2): a failure, no count" 2 "value_of: command failed (exit 2): grep -c . $tmp/tk.three" 'grep() { echo 5; return 2; }; lines_in '"$tmp"'/tk.three'
+tk_cell "yesno: true"                    0 yes 'yesno true'
+tk_cell "yesno: false"                   0 no  'yesno false'
+tk_cell "yesno: prints then fails → no"  0 $'out\nno' 'f() { echo out; return 3; }; yesno f'
+chmod 600 "$tmp/tk.noread"
+
+# deployments/helm/kind/negative.sh rpc_config_error() and the line that uses it: a failed read is "not yet", never a pass and never a made-up "no"
+printf '{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"CreateContainerConfigError"}}}]}}]}\n' > "$tmp/neg.cfgerr.json"
+printf '{"items":[{"status":{"containerStatuses":[{"state":{"running":{}}}]}}]}\n' > "$tmp/neg.ok.json"
+neg_cell() { # <label> <want out> <kubectl stub body>
+  { echo 'set -o pipefail; ns=n'; fn_text "$src/deployments/helm/kind/negative.sh" rpc_config_error; echo "kubectl() { $3; }"
+    cat <<'CALLER'
+if cfg=$(rpc_config_error) && [ "$cfg" = yes ]; then echo found; else echo "not found (rc=$?)"; fi
+CALLER
+  } > "$tmp/neg.sh"
+  nrc=0; capture -2 nout nrc bash "$tmp/neg.sh" || exit 1
+  expect_eq "negative.sh rpc_config_error ($1): output" "$2" "$nout"
+}
+neg_cell "pod waits on CreateContainerConfigError"        found                     'cat '"$tmp"'/neg.cfgerr.json'
+neg_cell "pods are running: no"                           "not found (rc=1)"        'cat '"$tmp"'/neg.ok.json'
+neg_cell "kubectl prints the error JSON, THEN dies (9): not found, not a pass" "not found (rc=9)" 'cat '"$tmp"'/neg.cfgerr.json; return 9'
+neg_cell "kubectl prints nothing and dies (9)"            "not found (rc=9)"        'return 9'
 
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

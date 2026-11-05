@@ -84,8 +84,8 @@ shift   # --diag-child
 
 # ── the collector: its stdout and stderr are the capture file, nothing else ────
 # diag-test D6F injects a write to a console descriptor right below this line: there is none to write to.
-scratch=$(mktemp) || scratch=/dev/null
-finish() { [ "$scratch" = /dev/null ] || rm -f -- "$scratch"; }
+scratch=$(mktemp) || { echo "diag: cannot create a scratch file; nothing collected" >&2; exit 0; }   # a diagnostic never fails the run (same as the capture directory above); it does not carry on with a made-up file either
+finish() { rm -f -- "$scratch"; }
 trap finish EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
@@ -154,8 +154,12 @@ tail_emit "$dir/events.txt" 30 8192
 endgroup
 
 group "diag: pod logs since $since"
-pods=$(k get pods -o name 2>/dev/null) || pods=""
-[ -n "$pods" ] || say "diag: no pod list (kubectl get pods failed or the namespace is empty)"
+if pods=$(k get pods -o name 2>/dev/null); then
+  [ -n "$pods" ] || say "diag: no pods in the namespace"
+else
+  pods=""   # half a list is not a list: nothing is read from a failed `get pods`
+  say "diag: no pod list (kubectl get pods failed)"
+fi
 for p in $pods; do
   out_of_time && break
   name=${p#pod/}

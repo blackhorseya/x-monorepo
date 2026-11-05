@@ -17,6 +17,8 @@
 #   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
 #   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
 #             break / fail / die, or a new value for $v; top-level code only: inside a function the fnctx shapes apply). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
+#   default   `$(cmd || echo …)` / `$(cmd || printf …)` and `x=$(cmd) || x=…`: a failed command turned into a default value (#470). Not exemptible. The label idiom
+#             `$([ test ] && echo yes || echo no)` passes only when the left side is a test builtin; a new value for $v is not a refusal anywhere.
 #   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` must be followed on its own line (or after a heredoc substitution's closing line) by
 #             one of THREE shapes: `|| return [arg]`, `|| exit [arg]`, `|| { …; return|exit [arg]; }` (the group's last top-level statement). Nothing else:
 #             no function names, no new value, no `|| rc=$?`, no `$?` on a later line, no continue / break, no return 0. A shape rule: it does not look at how or from where the function is called (`f || x`,
@@ -95,7 +97,7 @@ if [ "${#files[@]}" -eq 0 ]; then echo "check-exit-swallow: no shell to check in
 
 cat > "$tmp/scan.awk" <<'AWK'
 # Reads the files named on the command line. Prints "file:line: rule: code" per finding; exit 1 if there was one.
-function reset_file() { term = ""; dash = 0; hasflag = 0 }
+function reset_file() { term = ""; dash = 0; hasflag = 0; sd = 0; dq = 0; sq = 0 }
 # split the line into CODE (no trailing comment) and CMT (the comment, if any), tracking quotes
 function split_comment(s,   i, c, q, n) {
   CODE = s; CMT = ""; q = ""; n = length(s)
@@ -157,6 +159,58 @@ function argsub(c,   i, j, d, ch, pre, inner, n) {
   }
   return 0
 }
+# default: a failed command turned into a default value. Walks CODE character by character with a stack of open $(…) / `…` / (…) frames that
+# survives line breaks (a multi-line substitution is one frame) and reports:
+#   - `$(cmd || echo …)` / `$(cmd || printf …)` at the top level of a substitution: the failure of cmd (also after it printed part of its output)
+#     is replaced by a plausible value. EXCEPT the label idiom `$([ test ] && echo yes || echo no)` where the left side is a test builtin
+#     (`[`, `[[`, `test`, `command -v`, `type`): there the status IS the answer and no command output is being hidden.
+#   - `x=$(cmd) || x=…` (same variable on both sides): the failure of cmd is replaced by a new value. Only `|| { …; return|exit …; }` refuses.
+# Not exemptible (no `# exit-ok:`): a default is the thing being forbidden. Limits: a `case` pattern `a)` inside a $( … ) pops a frame early;
+# `||` at the end of a line with the handler on the next one is not followed.
+function defpush(t, nm, need) { sd++; ft[sd] = t; fb[sd] = ""; fn[sd] = nm; fneed[sd] = need; fln[sd] = FNR; fdq[sd] = dq; if (t != "p") dq = 0 }   # a substitution is a fresh quoting context; its own quotes do not leak out
+function defscan(c,   i, n, ch, nx, rest, nm, pre, lastclause, cond, rem) {
+  n = length(c)
+  for (i = 1; i <= n; i++) {
+    ch = substr(c, i, 1); nx = substr(c, i + 1, 1)
+    if (sq) { if (ch == "\047") sq = 0; if (sd > 0) fb[sd] = fb[sd] ch; continue }
+    if (ch == "\\") { if (sd > 0) fb[sd] = fb[sd] ch nx; i++; continue }
+    if (ch == "\047" && !dq) { sq = 1; if (sd > 0) fb[sd] = fb[sd] ch; continue }
+    if (ch == "\"") { dq = !dq; if (sd > 0) fb[sd] = fb[sd] ch; continue }
+    if (ch == "$" && nx == "(") {
+      if (substr(c, i + 2, 1) == "(") { defpush("a", "", 2); i += 2; continue }
+      pre = substr(c, 1, i - 1); nm = ""
+      if (match(pre, /[A-Za-z_][A-Za-z_0-9]*=("|\047)?$/)) { nm = substr(pre, RSTART, RLENGTH); sub(/=.*/, "", nm) }
+      defpush("s", nm, 1); i++; continue
+    }
+    if (ch == "`") {
+      if (sd > 0 && ft[sd] == "b") { dq = fdq[sd]; sd-- } else { pre = substr(c, 1, i - 1); nm = ""; if (match(pre, /[A-Za-z_][A-Za-z_0-9]*=("|\047)?$/)) { nm = substr(pre, RSTART, RLENGTH); sub(/=.*/, "", nm) }; defpush("b", nm, 1) }
+      continue
+    }
+    if (!dq && ch == "(") { defpush("p", "", 1); continue }
+    if (ch == ")" && (!dq || (sd > 0 && ft[sd] != "p" && fdq[sd] != "" ))) {
+      if (sd == 0) continue
+      fneed[sd]--
+      if (fneed[sd] > 0) continue
+      nm = fn[sd]; t = ft[sd]; dq = fdq[sd]; sd--
+      if (t == "s" && nm != "") {                           # x=$(…) closed: is it followed by `|| x=…` on this line?
+        rem = substr(c, i + 1); sub(/^"/, "", rem)
+        if (rem ~ ("^[ \t]*\\|\\|[ \t]*" nm "=")) report("default")
+      }
+      continue
+    }
+    if (!dq && ch == "|" && nx == "|" && sd > 0 && (ft[sd] == "s" || ft[sd] == "b")) {
+      rest = substr(c, i + 2); sub(/^[ \t]+/, "", rest)
+      if (rest ~ /^(echo|printf)([ \t;)`"\047]|$)/) {
+        lastclause = fb[sd]; sub(/.*(\|\||;)/, "", lastclause)       # the clause before this `||`: `[ test ] && echo yes`
+        cond = lastclause; sub(/&&[ \t]*(echo|printf)[^&|]*$/, "", cond)
+        if (!(lastclause ~ /&&[ \t]*(echo|printf)/ && cond ~ /^[ \t]*(\[\[?|test|command[ \t]+-v|type)([ \t]|$)/)) report("default")
+      }
+      fb[sd] = fb[sd] "||"; i++; continue
+    }
+    if (sd > 0) fb[sd] = fb[sd] ch
+  }
+  if (sd > 0) for (i = 1; i <= sd; i++) fb[i] = fb[i] " "
+}
 FNR == 1 { reset_file() }
 {
   line = $0
@@ -174,6 +228,7 @@ FNR == 1 { reset_file() }
   split_comment(line)
   exempt = (CMT ~ /#[ \t]*exit-ok:[ \t]*[^ \t].../)
   if (CODE ~ /^[ \t]*set[ \t].*pipefail/) { hasflag = 1 }
+  defscan(CODE)
   # swallow
   if (match(CODE, /\|\|[ \t]*(true|:|exit 0|return 0)([ \t;)}&|`"\047]|$)/)) {
     pos = RSTART; guard = (substr(CODE, pos, 12) ~ /\|\|[ \t]*(exit|return)/)
@@ -298,7 +353,7 @@ END {
     if (use && use < rd) { printf "%s:%d: rcbranch: %s   [$%s is used at line %d before $%s is read at line %d]\n", FILENAME, i, code, v, use, c, rd; n++; continue }
     esc = 0
     for (k = rd; k <= rd + 5 && k <= NR; k++) {
-      if (L[k] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|fail|die)([^A-Za-z_0-9]|$)/ || L[k] ~ ("(^|[^A-Za-z_0-9])" v "=")) { esc = 1; break }
+      if (L[k] ~ /(^|[^A-Za-z_0-9])(return|exit|continue|break|fail|die)([^A-Za-z_0-9]|$)/) { esc = 1; break }   # a new value for $v is NOT a refusal (#470): it is the failure swallowed
     }
     if (!esc) { printf "%s:%d: rcbranch: %s   [the lines that read $%s (from line %d) never refuse $%s: no return / exit / continue / break / fail, no new value]\n", FILENAME, i, code, c, rd, v; n++ }
   }

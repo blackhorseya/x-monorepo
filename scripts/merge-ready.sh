@@ -110,7 +110,7 @@ tree=""
 # still counted as proof (#462). A gh that fails here means "no proof", i.e. stale — never "ready".
 treeruns=$(gh run list --workflow merge-tree.yml --event workflow_dispatch --repo "$repo" --limit 30 \
   --json databaseId,status,conclusion,displayTitle \
-  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null) || treeruns=""
+  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null) || { echo "NOT READY: gh run list (merge-tree.yml) failed — no merge-tree run can be proven for PR #$pr" >&2; exit 1; }
 while read -r id st concl title; do
   if [ "$st" = completed ] && [ "$concl" = success ] && [ "$title" = "$want" ]; then tree=$id; break; fi
 done <<<"$treeruns"
