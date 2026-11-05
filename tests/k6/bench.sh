@@ -78,7 +78,7 @@ sys.exit(0 if r.attempt_status(sys.argv[1], sys.argv[2], float(sys.argv[3]))["va
 wait_quiet() {
   local f="$out/run$1-baseline.csv" t0=$SECONDS last
   while :; do
-    python3 -I tests/k6/loadavg.py >> "$f"
+    python3 -I tests/k6/loadavg.py >> "$f" || { echo "bench failed: loadavg.py exited $? (sampling the load)" >&2; exit 1; }   # inside `if ! wait_quiet`: errexit is off, a dead sampler must not read as a quiet machine
     last=$(tail -n 1 "$f" | cut -d, -f2) || { echo "bench failed: cannot read the load sample in $f (exit $?)" >&2; exit 1; }   # wait_quiet runs inside `if ! wait_quiet`: errexit is off here
     python3 -I -c "import sys; sys.exit(0 if $last <= $limit else 1)" && return 0
     [ $((SECONDS - t0)) -lt "$BASELINE_WAIT" ] || return 1

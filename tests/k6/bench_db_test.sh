@@ -30,7 +30,8 @@ survives() { # <name>: still there, with its row
   local url
   url=$(python3 -I -c 'import sys, urllib.parse as u
 p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base" "$1") || return 1   # survives is called in `&& … ||`: errexit is off here
-  [ "$(psql "$url" -qAt -c 'select v from keep' 2>/dev/null)" = 42 ]
+  got=$(psql "$url" -qAt -c 'select v from keep' 2>/dev/null) || return 1   # a psql that printed 42 and then died did not prove the row survived
+  [ "$got" = 42 ]
 }
 
 fails=0

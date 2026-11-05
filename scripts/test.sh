@@ -2638,6 +2638,79 @@ if python3 -c 'import yaml' 2>/dev/null; then
     expect_match "payment-upgrade: …and it says refused" '^refused: ' "$out"
   done
 fi
+# fnctx, the reviewer's r1 findings (#466): a QUOTED substitution in an errexit-off function, and the three real sites
+sw_write fn-quoted <<'F'
+f() {
+  local n
+  n="$(cmd)"
+  echo "n=$n"
+}
+f || st=$?
+F
+sw_run "$sw/fn-quoted.sh"
+expect_eq    "fnctx: n=\"\$(cmd)\" (quoted) in a function called as f || x is red" "1" "$rc"
+expect_match "fnctx: …as fnctx, on the assignment line" 'fn-quoted\.sh:5: fnctx:' "$out"
+sw_write fn-quoted-ok <<'F'
+f() {
+  local n
+  n="$(cmd)" || return 1
+  echo "n=$n"
+}
+f || st=$?
+F
+sw_run "$sw/fn-quoted-ok.sh"; expect_eq "fnctx: the same with || return 1 is green" "0" "$rc"
+# a function pulled out of a real file: fn_of <file> <name> prints it (one line, or up to the closing brace at the same indent)
+fn_of2() { awk -v n="$2" '$0 ~ "^"n"\\(\\) *\\{" {p=1} p {print} p && /^\}/ {exit} p && $0 ~ "^"n"\\(\\) *\\{.*\\}( *#.*)?$" {exit}' "$1"; }
+# tests/k6/bench.sh wait_quiet: the load sampler prints a sample and dies; called as `if ! wait_quiet`
+fn_of2 "$src/tests/k6/bench.sh" wait_quiet > "$tmp/wait_quiet.fn"
+expect_eq "bench: wait_quiet was found in the real bench.sh" "1" "$([ -s "$tmp/wait_quiet.fn" ] && echo 1 || echo 0)"
+for keep in all 1; do
+  w=$(inject_fail "$tmp/inj-lavg-$keep" python3 42 "$keep" '*loadavg.py*')
+  rc=0; out=$(cd "$src" && PATH="$w:$PATH" bash -c '. "$1"; out=$2; limit=1000; BASELINE_WAIT=1; LOAD_INTERVAL=0; mkdir -p "$out"; if ! wait_quiet 1; then echo "NOT QUIET"; else echo "QUIET"; fi' _ "$tmp/wait_quiet.fn" "$tmp/lavg-out-$keep" 2>&1) || rc=$?
+  expect_eq    "bench: loadavg.py prints [$keep] then exits 42 → wait_quiet does not report a quiet machine (exit 1)" "1" "$rc"
+  expect_match "bench: …and names the sampler" 'loadavg\.py exited 42' "$out"
+done
+rc=0; out=$(cd "$src" && bash -c '. "$1"; out=$2; limit=1000; BASELINE_WAIT=1; LOAD_INTERVAL=0; mkdir -p "$out"; if ! wait_quiet 1; then echo "NOT QUIET"; else echo "QUIET"; fi' _ "$tmp/wait_quiet.fn" "$tmp/lavg-out-ok" 2>&1) || rc=$?
+expect_eq "bench: a sampler that works → quiet at limit 1000" "0 QUIET" "$rc $out"
+# tests/k6/bench_db_test.sh survives: psql prints 42 and dies
+fn_of2 "$src/tests/k6/bench_db_test.sh" survives > "$tmp/survives.fn"
+expect_eq "bench_db_test: survives was found in the real file" "1" "$([ -s "$tmp/survives.fn" ] && echo 1 || echo 0)"
+mkdir -p "$tmp/fakepsql"; printf '#!/bin/sh\necho 42\n' > "$tmp/fakepsql/psql"; chmod +x "$tmp/fakepsql/psql"
+surv() { bash -c '. "$1"; base=postgres://u@h:1/d; if survives some_db; then echo SURVIVES; else echo GONE; fi' _ "$tmp/survives.fn" 2>&1; }
+expect_eq "bench_db_test: a healthy psql printing 42 → survives" "SURVIVES" "$(PATH="$tmp/fakepsql:$PATH" surv)"
+for keep in all 1; do
+  w=$(PATH="$tmp/fakepsql:$PATH" inject_fail "$tmp/inj-psql-$keep" psql 42 "$keep")
+  expect_eq "bench_db_test: psql prints [$keep] (42) then exits 42 → NOT survives" "GONE" "$(PATH="$w:$tmp/fakepsql:$PATH" surv)"
+done
+# payment-upgrade.sh wait_order: the status read prints the wanted status and then dies → must not count as reached
+fn_of2 "$src/deployments/helm/kind/payment-upgrade.sh" wait_order > "$tmp/wait_order.fn"
+expect_eq "payment-upgrade: wait_order was found in the real script" "1" "$([ -s "$tmp/wait_order.fn" ] && echo 1 || echo 0)"
+wo() { STATUS_RC=$1 bash -c 'sleep() { :; }; fail() { echo "FAILED: $*"; exit 1; }; order_status() { echo ORDER_STATUS_PAID; return "$STATUS_RC"; }; . "$1"; if wait_order o ORDER_STATUS_PAID 2; then echo REACHED; fi' _ "$tmp/wait_order.fn" 2>&1; }
+expect_eq    "payment-upgrade: a working status read reaches the status" "REACHED" "$(wo 0)"
+expect_match "payment-upgrade: the status read prints the wanted status then exits 42 → wait_order fails, not reached" '^FAILED: ' "$(wo 42)"
+# release.yml: jq over the runs prints a row and dies → nothing may be approved (the real loop, cut out of the YAML)
+awk '/^ *awaiting=/{p=1} p{print} p&&/^          done$/{exit}' "$src/.github/workflows/release.yml" > "$tmp/approve-loop.sh"
+expect_match "release.yml: the approve loop was found" 'gh api -X POST' "$(cat "$tmp/approve-loop.sh")"
+cat > "$tmp/approve-gh" <<'FAKE'
+#!/bin/sh
+echo "gh $*" >> "$APPROVE_LOG"
+FAKE
+mkdir -p "$tmp/approve-bin"; cp "$tmp/approve-gh" "$tmp/approve-bin/gh"; chmod +x "$tmp/approve-bin/gh"
+approve_run() { # <PATH prefix or empty> → $out: what gh was asked to do
+  : > "$tmp/approve.log"
+  out=$(PATH="${1:+$1:}$tmp/approve-bin:$PATH" APPROVE_LOG="$tmp/approve.log" REPO=o/r RUNNER_TEMP="$tmp" bash -c '
+    sleep() { :; }
+    my_runs() { echo "[{\"id\":99,\"path\":\".github/workflows/ci.yml\",\"status\":\"completed\",\"conclusion\":\"action_required\"}]"; }
+    . "$1"; echo "past_gate=[$past_gate]"' _ "$tmp/approve-loop.sh" 2>&1) || approve_st=$?
+  out="$out $(cat "$tmp/approve.log")"
+}
+approve_run ""
+expect_match "release.yml: a working jq approves the parked run" 'api -X POST repos/o/r/actions/runs/99/approve' "$out"
+for keep in all 1; do
+  approve_run "$(PATH="$tmp/approve-bin:$PATH" inject_fail "$tmp/inj-jq-$keep" jq 42 "$keep" '-r*')"
+  case "$out" in *"approve"*"POST"*|*"-X POST"*) bad "release.yml: jq prints [$keep] then exits 42, the loop still approved a run [$out]" ;; *) ok ;; esac
+  expect_match "release.yml: …and says jq failed" 'jq over the runs exited 42' "$out"
+done
 # next-version.sh: a fake git (describe → v0.1.0, log → two commits, NUL separated); `log` is the one that dies
 fakegit="$tmp/nv-git"; mkdir -p "$fakegit"
 cat > "$fakegit/git" <<'FAKE'

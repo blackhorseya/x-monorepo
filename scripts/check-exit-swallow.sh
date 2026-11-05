@@ -233,7 +233,7 @@ END {
   for (f = 1; f <= nf; f++) {
     if (!hot[f]) continue
     for (i = from[f]; i <= to[f]; i++) {
-      t = T[i]; gsub(/\$\(\(/, "", t)                                      # $(( … )) is arithmetic
+      t = L[i]; sub(/[ \t]#.*/, "", t); gsub(/\$\(\(/, "", t)             # the RAW line (a quoted `n="$(cmd)"` counts); $(( … )) is arithmetic
       if (t !~ /(^|[;&|{(]|[ \t])[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?\+?=("|\047)?(\$\(|`)/) continue
       if (t ~ /(&&|\|\||(^|[;{(]|[ \t])(if|elif|while|until|!))[ \t]*[^;]*[A-Za-z_][A-Za-z_0-9]*\+?=("|\047)?(\$\(|`)/) continue   # the assignment IS the condition: its status is read
       if (t ~ /^[ \t]*(local|declare|typeset|export|readonly)[ \t]/) continue    # declsub's job
@@ -241,7 +241,7 @@ END {
       code = L[i]; sub(/^[ \t]+/, "", code)
       ok = 0                                                                 # an explicit status check: `|| …` after the substitution's `)`, or `$?` read next
       for (k = i; k <= i + 3 && k <= to[f] && !ok; k++) {
-        if (L[k] ~ /\)[ \t]*\|\|/ || (k > i && L[k] ~ /^[ \t]*\|\|/)) ok = 1
+        if (L[k] ~ /\)["\047]?[ \t]*\|\|/ || (k > i && L[k] ~ /^[ \t]*\|\|/)) ok = 1
         if (k > i && L[k] ~ /\$\?/) ok = 1
         if (k == i && L[k] ~ /\)[ \t]*;[ \t]*[A-Za-z_]*=\$\?/) ok = 1
       }

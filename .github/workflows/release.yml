@@ -330,7 +330,7 @@ jobs:
             if now=$(my_runs); then runs=$now; fi
             if ci_past_gate "$runs"; then past_gate=1; fi
             rows=""; rc=0; rows=$(jq -r ".[] | select($awaiting) | \"\\(.id) \\(.path)\"" <<<"$runs" 2>/dev/null) || rc=$?
-            [ "$rc" = 0 ] || echo "jq over the runs exited $rc: nothing to approve this round" >&2
+            if [ "$rc" != 0 ]; then rows=""; echo "jq over the runs exited $rc: nothing to approve this round" >&2; fi   # whatever it printed before dying is not a list to act on
             while read -r id path; do
               [ -n "$id" ] || continue
               if gh api -X POST "repos/$REPO/actions/runs/$id/approve" >/dev/null 2>&1; then
