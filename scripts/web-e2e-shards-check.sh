@@ -8,6 +8,8 @@
 # half way (non-zero exit, or a truncated output) is a failure, never a smaller suite that still "matches".
 # Exit: 0 shards = suite, 1 they differ or a list failed, 2 usage. Test: scripts/test.sh (a stub pnpm with faults).
 set -euo pipefail
+# Every external command is checked. `set -e` does not see a failure inside `$(...)` of a `for` word list, nor one
+# swallowed by `|| true`; grep's exit 1 (no match) is the only non-zero this script accepts, and then only where said.
 n="${1:-}"
 case "$n" in "" | *[!0-9]* | 0) echo "usage: web-e2e-shards-check.sh <number of shards>" >&2; exit 2 ;; esac
 tmp=$(mktemp -d)
@@ -21,7 +23,8 @@ list() {
   if [ "$rc" != 0 ]; then
     echo "playwright test --list $* exited $rc" >&2; cat "$tmp/$name.err" >&2; exit 1
   fi
-  grep '›' "$tmp/$name.raw" >"$tmp/$name" || true
+  rc=0; grep '›' "$tmp/$name.raw" >"$tmp/$name" || rc=$?
+  if [ "$rc" -gt 1 ]; then echo "grep over the playwright --list output exited $rc" >&2; exit 1; fi   # 1 = no test line: the Total check below says so
   want=$(sed -n 's/^Total: \([0-9][0-9]*\) tests\{0,1\} .*/\1/p' "$tmp/$name.raw")
   have=$(wc -l <"$tmp/$name" | tr -d ' ')
   if [ -z "$want" ] || [ "$want" != "$have" ]; then
@@ -34,7 +37,8 @@ list full
 sort "$tmp/full" >"$tmp/full.sorted"
 : >"$tmp/union"
 sum=0
-for i in $(seq "$n"); do
+seq "$n" >"$tmp/indexes" || { echo "seq $n exited $?" >&2; exit 1; }
+for i in $(cat "$tmp/indexes"); do
   list "shard$i" --shard="$i/$n"
   c=$(wc -l <"$tmp/shard$i" | tr -d ' ')
   echo "shard $i/$n tests: $c"
