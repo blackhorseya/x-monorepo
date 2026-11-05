@@ -98,9 +98,11 @@ k6_phase() {
     return 0
   fi
   if [ "$rc" != 99 ]; then echo "k6 $phase failed (exit $rc):" >&2; tail -n 5 "$out/run$n-$phase.log" >&2; exit "$rc"; fi
-  verdict=$(python3 -I -c 'import sys; sys.path.insert(0, "tests/k6"); import bench_report as r
-kind, why = r.classify_threshold_failure(sys.argv[1], sys.argv[2]); print(kind, why)' "$out/run$n-$phase.json" "$phase" 2>&1) \
-    || verdict="failure k6 $phase exited 99 and the classifier failed: $verdict"
+  vrc=0
+  python3 -I -c 'import sys; sys.path.insert(0, "tests/k6"); import bench_report as r
+kind, why = r.classify_threshold_failure(sys.argv[1], sys.argv[2]); print(kind, why)' "$out/run$n-$phase.json" "$phase" > "$out/run$n-$phase.verdict" 2>&1 || vrc=$?
+  verdict=$(cat "$out/run$n-$phase.verdict") || { echo "bench: cannot read the classifier output" >&2; exit 1; }
+  if [ "$vrc" != 0 ]; then verdict="failure k6 $phase exited 99 and the classifier failed: $verdict"; fi
   case "$verdict" in
     "overload "*) overload=${verdict#overload }; return 1 ;;
     *) echo "bench failed: ${verdict#failure }" >&2; exit 99 ;;

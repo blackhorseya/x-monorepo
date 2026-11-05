@@ -22,6 +22,12 @@ trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; rm -rf "$tmp"' EXIT
 fail=0 pass=0
 # shellcheck source=fault-inject.sh
 . "$src/scripts/best-effort.sh"    # best_effort: cleanup that must not decide a verdict, and says so when it fails (#462)
+. "$src/scripts/capture.sh"        # capture: output + exit status of a command without $(…) around it (#466)
+# le1 <command…>: a filter whose exit 1 means "found nothing" (grep -c / -m1): 0 and 1 are a success, 2+ is the command's own failure and stays one.
+le1() { local rc=0; "$@" || rc=$?; [ "$rc" -le 1 ] || return "$rc"; return 0; }
+# count_file <file>: the number in a counter file; 0 when the fake never created it (no file = never called); a file that cannot be read fails
+count_file() { [ -f "$1" ] || { echo 0; return 0; }; cat "$1"; }
+in_dir() { local d=$1; shift; ( cd "$d" && "$@" ); }   # run a command in another directory without moving this shell (capture runs its command in this shell)
 . "$src/scripts/fault-inject.sh"   # inject_fail: a PATH wrapper that runs the real tool, then dies (#462)
 
 # fixture <name>: a fresh repo at $repo with scripts/ committed on main and tag v0.1.0.
@@ -52,7 +58,7 @@ expect_eq() { if [ "$2" = "$3" ]; then ok; else bad "$1: want [$2] got [$3]"; fi
 # expect_match <name> <regex> <text>
 expect_match() { if printf '%s' "$3" | grep -Eq -- "$2"; then ok; else bad "$1: [$3] !~ /$2/"; fi; }
 # count_lines <grep -c args>: the number of matching lines; 1 (no match) is 0, anything above is a failure (exit 2). Meant for an ASSIGNMENT (n=$(… | count_lines x)): inside an argument the exit never reaches set -e (#462)
-count_lines() { local n rc=0; n=$(grep -c "$@") || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; echo "$n"; }
+count_lines() { local rc=0; grep -c "$@" || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; }   # grep -c prints the count (0 too) and exits 1 on "none": that is a count, not a failure
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
 all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind helm_kind_payment helm_kind_keda helm_kind_target k6 k6_auth k6_wire"
@@ -284,12 +290,11 @@ ci_job() { awk -v n="  $1:" '$0 == n {f=1; next} /^  [a-z0-9-]+:/ || /^  #/ {f=0
 # does not exist), COUNT-FAILED when grep fails with anything but "no match" (#446 r0: `$(ci_count x y)` stayed green on a grep that
 # printed 1 and then exited 42).
 ci_count() {
-  local j=$1 body n rc=0
+  local j=$1 body n
   shift
   body=$(ci_job "$j") || { echo CI-JOB-FAILED; return; }
   [ -n "$body" ] || { echo CI-JOB-EMPTY; return; }
-  n=$(printf '%s\n' "$body" | grep -c "$@") || rc=$?
-  if [ "$rc" -gt 1 ]; then echo COUNT-FAILED; return; fi
+  n=$(printf '%s\n' "$body" | le1 grep -c "$@") || { echo COUNT-FAILED; return; }
   echo "$n"
 }
 # helm-kind, helm-kind-keda and k6-auth / k6-wire are jobs of their own, not matrix legs: a skipped one
@@ -644,8 +649,8 @@ chmod +x "$tmp/gmd-bin/go"
 # gmd_run <fails> [attempts]: sets $rc, $out and $calls
 gmd_run() {
   rm -f "$tmp/gmd-count"
-  rc=0; out=$(PATH="$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=$1 GO_MOD_DOWNLOAD_ATTEMPTS=${2:-3} GO_MOD_DOWNLOAD_SLEEP=0 "$gmd" 2>&1) || rc=$?
-  calls=$(cat "$tmp/gmd-count" 2>/dev/null) || calls=0   # no counter file yet = no calls
+  rc=0; capture out rc env PATH="$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=$1 GO_MOD_DOWNLOAD_ATTEMPTS=${2:-3} GO_MOD_DOWNLOAD_SLEEP=0 "$gmd" || exit 1
+  calls=$(count_file "$tmp/gmd-count") || exit 1   # no counter file yet = no calls
 }
 gmd_run 0; expect_eq "go-mod-download: a clean download runs once"            "0 1" "$rc $calls"
 gmd_run 1; expect_eq "go-mod-download: one failure is retried and succeeds"   "0 2" "$rc $calls"
@@ -886,9 +891,8 @@ chmod +x "$fakebin/cosign"
 smoke() { # smoke <skip-sign-n> -> prints "<exit> <FAIL line, if any>"
   fixture "smoke$1"; cp "$src/.goreleaser.yaml" "$repo/"
   local out rc=0
-  out=$(cd "$repo" && PATH="$fakebin:$PATH" FAKE_COUNT="$tmp/count$1" FAKE_SKIP_SIGN_N=$1 scripts/cosign-smoke.sh 2>&1) || rc=$?
-  ff_rc=0; first_fail=$(grep -m1 '^FAIL' <<<"$out") || ff_rc=$?   # 1 = no FAIL line; smoke() runs inside $(…), so errexit is off
-  [ "$ff_rc" -le 1 ] || return 1
+  capture out rc in_dir "$repo" env PATH="$fakebin:$PATH" FAKE_COUNT="$tmp/count$1" FAKE_SKIP_SIGN_N=$1 scripts/cosign-smoke.sh || exit 1
+  first_fail=$(le1 grep -m1 '^FAIL' <<<"$out") || return 1   # 1 = no FAIL line (empty), 2+ = grep broke
   echo "$rc $first_fail"
 }
 if python3 -c 'import yaml' 2>/dev/null; then
@@ -948,14 +952,14 @@ sign_blob() { # SB_ART=<file name> overrides the artifact name; SB_BUNDLE_ARGS (
   set +e
   sb_rc=0
   if [ -n "${SB_REL:-}" ]; then # a bare relative artifact name, as cosign prints it
-    sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token FAKE_ART="$art" \
-      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "${bundle_args[@]}" ${SB_PRE:-} "$art" --yes 2>&1) || sb_rc=$?
+    capture sb_out sb_rc in_dir "$d" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token FAKE_ART="$art" \
+      COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" sign-blob "${bundle_args[@]}" ${SB_PRE:-} "$art" --yes || exit 1
   else
-    sb_out=$(cd "$src" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-      COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "${bundle_args[@]}" "$d/$art" --yes 2>&1) || sb_rc=$?
+    capture sb_out sb_rc in_dir "$src" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
+      COSIGN_SIGN_RETRY_DELAY=0 env ${SB_EXTRA:-} scripts/cosign-sign-blob.sh sign-blob "${bundle_args[@]}" "$d/$art" --yes || exit 1
   fi
   set -e
-  sb_tries=$(cat "$d/count" 2>/dev/null) || sb_tries=0; sb_args=$d/args   # no counter file = the fake was never called
+  sb_tries=$(count_file "$d/count") || exit 1; sb_args=$d/args   # no counter file = the fake was never called
 }
 sign_blob first "ok"
 expect_eq    "sign: first attempt succeeds"                0 "$sb_rc"
@@ -1061,10 +1065,10 @@ sign_argv_refused() { # sign_argv_refused <name> <args...>: runs the wrapper in 
   local n=$1 d="$tmp/sb-$1"; shift; mkdir -p "$d"; echo artifact > "$d/artifact"; echo keep > "$d/decoy"
   : > "$d/args"; rm -f "$d/count"
   set +e; sb_rc=0
-  sb_out=$(cd "$d" && PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="err" \
-    COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" "$@" 2>&1) || sb_rc=$?
+  capture sb_out sb_rc in_dir "$d" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="err" \
+    COSIGN_SIGN_RETRY_DELAY=0 "$src/scripts/cosign-sign-blob.sh" "$@" || exit 1
   set -e
-  sb_tries=$(cat "$d/count" 2>/dev/null) || sb_tries=0   # no counter file = the fake was never called
+  sb_tries=$(count_file "$d/count") || exit 1   # no counter file = the fake was never called
   expect_eq    "sign: $n exits 2"                 2 "$sb_rc"
   expect_eq    "sign: $n never calls cosign"      0 "$sb_tries"
   if [ "$(cat "$d/decoy" 2>/dev/null)" = keep ]; then ok; else bad "sign: $n removed or changed the sentinel file"; fi
@@ -1133,7 +1137,7 @@ canary_cfg() { # canary_cfg <name> <rekorTlogUrls json> -> path of a signing con
 }
 canary() { # canary <config path> -> "<exit> <output>"
   local out rc=0
-  out=$(REKOR_CANARY_SIGNING_CONFIG=$1 "$src/scripts/rekor-v2-canary.sh" 2>&1) || rc=$?
+  capture out rc env REKOR_CANARY_SIGNING_CONFIG=$1 "$src/scripts/rekor-v2-canary.sh" || exit 1
   echo "$rc $out"
 }
 v1='{"url":"https://rekor.sigstore.dev","majorApiVersion":1,"validFor":{"start":"2021-01-12T11:53:27.000Z"},"operator":"sigstore.dev"}'
@@ -1186,7 +1190,7 @@ FAKE
   chmod +x "$canary_fake/cosign"
   canary_via() { # canary_via <env assignment> -> "<exit> <output>"
     local out rc=0
-    out=$(env -u REKOR_CANARY_SIGNING_CONFIG PATH="$canary_fake:$PATH" REKOR_CANARY_RETRY_DELAY=0 "$@" "$src/scripts/rekor-v2-canary.sh" 2>&1) || rc=$?
+    capture out rc env -u REKOR_CANARY_SIGNING_CONFIG PATH="$canary_fake:$PATH" REKOR_CANARY_RETRY_DELAY=0 "$@" "$src/scripts/rekor-v2-canary.sh" || exit 1
     echo "$rc $out"
   }
   expect_match "canary via cosign: v1 default passes"   '^0 '        "$(canary_via FAKE_CONFIG="$(canary_cfg viav1 "[$v1]")")"
@@ -1205,7 +1209,8 @@ fi
 # ── red-stage.sh ────────────────────────────────────────────────────────────────
 # Classifies `go test` output of a RED run: compile / panic / assertion / setup / pass. Exit 0 only
 # for `assertion` (the expected message was printed under a --- FAIL).
-red() { local rc=0 out; out=$(printf '%s\n' "$2" | scripts/red-stage.sh -m "$1") || rc=$?; echo "$out $rc"; }
+red_stage_in() { printf '%s\n' "$2" | scripts/red-stage.sh -m "$1"; }
+red() { local rc out; capture out rc red_stage_in "$1" "$2" || exit 1; echo "$out $rc"; }
 want_msg='want 1 call.* got 0'
 expect_eq "red: target assertion"  "assertion 0" "$(red "$want_msg" '=== RUN   TestCreate
     order_test.go:42: find calls: want 1 call, got 0
@@ -1276,7 +1281,7 @@ STUB
 ready() {
   local name=$1; shift
   set +e; rc=0
-  out=$(GH_STUB_DIR="$tmp/stub-$name" PATH="$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 "$@" 2>&1) || rc=$?
+  capture out rc env GH_STUB_DIR="$tmp/stub-$name" PATH="$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 "$@" || exit 1
   set -e
 }
 stub_gh fresh;  ready fresh
@@ -1371,7 +1376,7 @@ if command -v go >/dev/null 2>&1; then
   printf 'package fx\n\nimport "testing"\n\nfunc TestRetry(t *testing.T) { _ = NewCreateOrder(3, 4) }\n' > "$repo/retry_test.go"
   commit "test: retry"
   git -C "$repo" checkout -q main
-  tree_check() { set +e; tc_rc=0; tc_out=$(in_repo scripts/merge-tree-check.sh "$@" 2>&1) || tc_rc=$?; set -e; }
+  tree_check() { capture tc_out tc_rc in_repo scripts/merge-tree-check.sh "$@" || exit 1; }
   tree_check main ownership; expect_eq "ownership alone builds"   0 "$tc_rc"
   tree_check main retry;     expect_eq "retry alone builds"       0 "$tc_rc"
   if git -C "$repo" merge-tree --write-tree ownership retry >/dev/null 2>&1; then ok; else bad "fixture: ownership + retry must merge without a text conflict"; fi
@@ -1411,8 +1416,7 @@ dns() {
   local rc=0
   mkdir -p "$dns_dir/home"; : > "$dns_dir/home/.kind-runner"  # the script refuses to start outside run.sh's scratch HOME (#444)
   HOME="$dns_dir/home" KIND_RUNNER_HOME="$dns_dir/home" COREFILE="$dns_dir/Corefile" KLOG="$dns_dir/klog" PATH="$dns_dir/bin:$PATH" "$src/deployments/helm/kind/coredns-dex.sh" "$1" >/dev/null 2>&1 || rc=$?
-  np_rc=0; n_patch=$(grep -c '^patch$' "$dns_dir/klog") || np_rc=$?   # 1 = none (grep -c prints 0); dns() runs inside $(…), so errexit is off
-  [ "$np_rc" -le 1 ] || return 1
+  n_patch=$(le1 grep -c '^patch$' "$dns_dir/klog") || return 1   # 1 = none (grep -c prints 0), 2+ = grep broke
   echo "$rc $n_patch"
 }
 corefile_with() { # corefile_with <extra lines after ready...>
@@ -1490,10 +1494,10 @@ pb_up() {
 # pb_run [VAR=value...]: runs the script against the current stub; sets out (stdout+stderr) and rc.
 pb_run() {
   rc=0
-  out=$(env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" 2>&1) || rc=$?
+  capture out rc env ADMIN_API_KEY="$pb_key" BASE_URL="$pb_url" DEX_TOKEN_CMD="$pb_fake" PB_TOKEN_CALLS="$pb_dir/tokens" "$@" "$src/scripts/dex-prebind.sh" || exit 1
 }
 pb_state() { curl -fsS "$pb_url/_state"; }
-pb_calls() { local c=0; pb_n=$(grep -c "^$1 " "$pb_dir/log") || c=$?; [ "$c" -le 1 ] || return 1; }   # sets $pb_n: an assignment aborts on a grep error, "$(pb_calls …)" in an argument would not
+pb_calls() { local c=0; grep -c "^$1 " "$pb_dir/log" > "$pb_dir/n" || c=$?; [ "$c" -le 1 ] || return 1; read -r pb_n < "$pb_dir/n"; }   # sets $pb_n: an assignment aborts on a grep error, "$(pb_calls …)" in an argument would not
 
 pb_up first
 pb_run
@@ -1727,7 +1731,7 @@ gone() { ! kill -0 "$(cat "$1")" 2>/dev/null; }
 # guard_run <mode>: runs the guard over the fake; sets out, rc and gpid (file) for the leftover.
 guard_run() {
   gpid="$tmp/guard-pid-$1"; rm -f "$gpid"; rc=0
-  out=$(PIDF="$gpid" "$guard" "$gfake" "$1" 2>&1) || rc=$?
+  capture out rc env PIDF="$gpid" "$guard" "$gfake" "$1" || exit 1
 }
 # a bystander outside the suite's group must survive every case below
 sleep 300 & bystander=$!
@@ -1824,7 +1828,7 @@ gwrun() {
   local d="$tmp/modules-$1"
   mkdir -p "$d"
   printf '%s\n' "$2" > "$d/go.work"
-  rc=0; out=$("$cm" "$d/go.work" 2>&1) || rc=$?
+  rc=0; capture out rc "$cm" "$d/go.work" || exit 1
 }
 gw_block='go 1.27
 
@@ -1952,7 +1956,7 @@ modes_fixture() {
   git -C "$repo" add -A
   git -C "$repo" commit -q -m base
 }
-modes_run() { rc=0; out=$(cd "$repo" && scripts/check-script-modes.sh 2>&1) || rc=$?; }
+modes_run() { rc=0; capture out rc in_dir "$repo" scripts/check-script-modes.sh || exit 1; }
 modes_fixture base; modes_run
 expect_eq "script modes: fixture baseline is green" "0" "$rc"
 # The gate says what `git diff` would after the chmod: apply the chmod and diff, for the baseline and the mutant.
@@ -1992,7 +1996,7 @@ expect_eq "script modes: fault-injection control — same fixture, real tools, i
 sw="$tmp/swallow"; mkdir -p "$sw"
 # sw_file <name> <body…>: $sw/<name>.sh with pipefail set (so only the shape under test can be flagged)
 sw_file() { local n=$1; shift; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$*" > "$sw/$n.sh"; }
-sw_run() { rc=0; out=$("$src/scripts/check-exit-swallow.sh" "$@" 2>&1) || rc=$?; }
+sw_run() { rc=0; capture out rc "$src/scripts/check-exit-swallow.sh" "$@" || exit 1; }
 # sw_red <name> <rule> <body…>: the body is red, the output names the rule, and an exit-ok comment makes it green
 sw_red() {
   local n=$1 rule=$2; shift 2
@@ -2201,7 +2205,7 @@ ready_dying() {   # ready_dying <stub> <keep> <glob>: gh answers per the stub, b
   local name=$1 keep=$2 glob=$3 w
   w=$(PATH="$tmp/stub-$name/bin:$PATH" inject_fail "$tmp/inj-ready-$name-$RANDOM" gh 42 "$keep" "$glob") || return 1
   set +e; rc=0
-  out=$(GH_STUB_DIR="$tmp/stub-$name" PATH="$w:$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 2>&1) || rc=$?
+  capture out rc env GH_STUB_DIR="$tmp/stub-$name" PATH="$w:$tmp/stub-$name/bin:$PATH" MERGE_READY_REPO=o/r "$src/scripts/merge-ready.sh" 7 || exit 1
   set -e
 }
 stub_gh dying
@@ -2265,7 +2269,7 @@ cg_fixture() {
   printf 'package order\n\nfunc Add(a, b int) int { return a + b }\n' > "$repo/pkgs/dom/domain/order/o.go"
   printf 'package order\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal("add")\n\t}\n}\n' > "$repo/pkgs/dom/domain/order/o_test.go"
 }
-cg_run() { rc=0; out=$(cd "$repo" && GOTOOLCHAIN=local "$@" scripts/cover-gate.sh 2>&1) || rc=$?; }
+cg_run() { rc=0; capture out rc in_dir "$repo" env GOTOOLCHAIN=local "$@" scripts/cover-gate.sh || exit 1; }
 cg_fixture ok; cg_run env
 expect_eq    "cover-gate: fixture, a fully covered domain package, is green" "0" "$rc"
 expect_match "cover-gate: and it checked the package" 'ok +example.com/dom/domain/order 100%' "$out"
@@ -2407,7 +2411,7 @@ restore_case() { # <script> <MAIN> <SCALE> <HELM> <DELETE> [pf-var]
     echo 'trap on_exit EXIT'
     echo 'exit "${MAIN:-0}"'
   } >"$driver"
-  rc=0; out=$(MAIN=$2 STUB_SCALE=$3 STUB_HELM=$4 STUB_DELETE=$5 bash "$driver" 2>&1) || rc=$?
+  rc=0; capture out rc env MAIN=$2 STUB_SCALE=$3 STUB_HELM=$4 STUB_DELETE=$5 bash "$driver" || exit 1
 }
 for sh_ in payment-flow payment outage negative; do
   restore_case "$sh_" 0 0 0 0;  expect_eq "$sh_: nothing fails → exit 0" "0" "$rc"
@@ -2525,7 +2529,6 @@ F
 }
 fn_green checked      '  out=$(cmd) || return 1'
 fn_green checked-exit '  out=$(cmd) || { echo "cmd failed" >&2; exit 2; }'
-fn_green rc-next      $'  out=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1'
 fn_green cond-assign  '  if out=$(cmd); then echo "$out"; fi'
 fn_green and-assign   '  [ -n "$1" ] && out=$(cmd) || return 1'
 fn_green arith        '  n=$((n + 1))'
@@ -2556,6 +2559,7 @@ bypass_case() { # <name> <function body line(s)>
   sw_write "bp-$1" <<F
 cmd() { printf 'bad\n'; return 42; }
 warn() { echo "warning: cmd failed" >&2; }
+fail() { echo "failure" >&2; }
 f() {
 $2
 }
@@ -2563,7 +2567,7 @@ f || echo failed
 F
   sw_run "$sw/bp-$1.sh"
   expect_eq "fnctx: [$1] is red" "1" "$rc"
-  real_rc=0; real=$(bash "$sw/bp-$1.sh" 2>&1) || real_rc=$?   # exit 0: f swallowed cmd's 42 and the script went on
+  real_rc=0; capture real real_rc bash "$sw/bp-$1.sh" || exit 1   # exit 0: f swallowed cmd's 42 and the script went on
   expect_match "fnctx: [$1] — the real shell really does use the failing output" 'bad' "$real"
 }
 bypass_case and-echo   $'  x=$(cmd) && echo success\n  printf \'%s\\n\' "$x"'
@@ -2585,11 +2589,10 @@ f || echo failed
 F
   sw_run "$sw/gd-$1.sh"
   expect_eq "fnctx: [$1] is green" "0" "$rc"
-  real_rc=0; real=$(bash "$sw/gd-$1.sh" 2>&1) || real_rc=$?
+  real_rc=0; capture real real_rc bash "$sw/gd-$1.sh" || exit 1
   case "$real" in *bad*) bad "fnctx: [$1] — the real shell used the failing output [$real]" ;; *) ok ;; esac
 }
 good_case or-return    $'  x=$(cmd) || return 1\n  printf \'%s\\n\' "$x"'
-good_case rc-refused   $'  x=$(cmd)\n  rc=$?\n  [ "$rc" -eq 0 ] || return 1\n  printf \'%s\\n\' "$x"'
 good_case and-or       $'  [ -n "$$" ] && x=$(cmd) || return 1\n  printf \'%s\\n\' "$x"'
 sw_write fg-heredoc-body <<'F'
 cat <<'EOT'
@@ -2616,6 +2619,150 @@ x=$(cmd)
 echo "$x"
 F
 sw_run "$sw/fg-toplevel.sh"; expect_eq "fnctx: x=\$(cmd) at the top level of a set -e script is not this rule's business (errexit protects it)" "0" "$rc"
+
+bypass_case or-fail    $'  x=$(cmd) || fail\n  printf \'%s\\n\' "$x"'
+bypass_case or-brace-unreachable $'  x=$(cmd) || { if false; then return 1; fi; }\n  printf \'%s\\n\' "$x"'
+bypass_case or-brace-warn $'  x=$(cmd) || { warn; }\n  printf \'%s\\n\' "$x"'
+bypass_case or-rc      $'  x=$(cmd) || rc=$?\n  printf \'%s\\n\' "$x"'
+good_case or-exit      $'  x=$(cmd) || exit 1\n  printf \'%s\\n\' "$x"'
+good_case or-return-rc $'  x=$(cmd) || return $?\n  printf \'%s\\n\' "$x"'
+good_case or-brace     $'  x=$(cmd) || { echo "cmd failed" >&2; return 1; }\n  printf \'%s\\n\' "$x"'
+good_case or-brace-rc  $'  x=$(cmd) || { rc=$?; echo "cmd failed ($rc)" >&2; return "$rc"; }\n  printf \'%s\\n\' "$x"'
+good_case or-next-line $'  x=$(cmd) ||\n    return 1\n  printf \'%s\\n\' "$x"'
+# r8 (#466): outside the CLOSED three shapes (`|| return [arg]`, `|| exit [arg]`, `|| { …; return|exit [arg]; }`) is red even when it behaves:
+# no function names, no new value for the variable, no `|| rc=$?`, no `$?` read on a later line, no continue / break, no return 0, no refusal that is
+# not the brace group's last top-level statement. (They are not all bypasses: the point is that the checker accepts three shapes and nothing else.)
+shape_red() { # <name> <function body line(s)>
+  sw_write "sr-$1" <<F
+cmd() { printf 'bad\n'; return 42; }
+warn() { echo "warning: cmd failed" >&2; }
+f() {
+$2
+}
+f || echo failed
+F
+  sw_run "$sw/sr-$1.sh"
+  expect_eq "fnctx: [$1] is outside the closed whitelist: red" "1" "$rc"
+}
+shape_red rc-next         $'  x=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1\n  printf \'%s\\n\' "$x"'
+shape_red rc-same-line    $'  x=$(cmd); rc=$?\n  [ "$rc" = 0 ] || return 1'
+shape_red or-die          $'  x=$(cmd) || die "cmd failed"'
+shape_red or-reset        $'  x=$(cmd) || x=\n  printf \'%s\\n\' "$x"'
+shape_red or-continue     $'  for i in 1; do x=$(cmd) || continue; done'
+zero=0   # the literal "|| return 0" / "|| exit 0" would be a finding in THIS file: the zero comes from a variable
+shape_red or-return-zero  "  x=\$(cmd) || return $zero"
+shape_red or-exit-zero    "  x=\$(cmd) || exit $zero"
+shape_red brace-ret-echo  $'  x=$(cmd) || { return 1; echo; }'
+shape_red brace-if        $'  x=$(cmd) || { if [ -n "$$" ]; then return 1; fi; }'
+shape_red brace-and       $'  x=$(cmd) || { [ -n "$$" ] && return 1; }'
+shape_red brace-warn-only $'  x=$(cmd) || { warn; }'
+shape_red brace-case      $'  x=$(cmd) || { case $x in *) return 1 ;; esac; }'
+shape_red return-cmd      $'  x=$(cmd) || return $(warn)'
+# the three shapes, with each kind of [arg], are green
+fn_green ret-arg     '  x=$(cmd) || return 3'
+fn_green ret-var     $'  r=3\n  x=$(cmd) || return "$r"'
+fn_green exit-status '  x=$(cmd) || exit $?'
+fn_green brace-last  '  x=$(cmd) || { echo "cmd failed" >&2; cleanup; return 2; }'
+# the helpers that tolerate one exit status, each against rc=0 / rc=1 / rc>=2 (the real functions, cut out of their files)
+fn_text() { # <file> <name>: the function, from its first line to its closing brace (indented or not)
+  awk -v n="$2" '$0 ~ "^[ \t]*" n "\\(\\) \\{" { on = 1 } on { print } on && $0 ~ /^[ \t]*\}[ \t]*$/ { exit } on && $1 == n "()" && $0 ~ /\}[ \t]*$/ { exit }' "$1"
+}
+helper_cell() { # <label> <file> <name> <want rc> <want output> <command…>: define the real function, run the command, judge rc and output
+  local label=$1 file=$2 name=$3 wrc=$4 wout=$5; shift 5
+  { echo ". '$src/scripts/capture.sh'"; fn_text "$file" ready_lines; fn_text "$file" pod_init_exit; fn_text "$file" "$name"; printf '%s\n' "$@"; } > "$tmp/helper.sh"
+  hrc=0; capture hout hrc bash "$tmp/helper.sh" || exit 1
+  expect_eq "helper $name ($label): exit" "$wrc" "$hrc"
+  expect_eq "helper $name ($label): output" "$wout" "$hout"
+}
+# le1 (scripts/test.sh and deployments/helm/kind/target-test.sh): 0 = found, 1 = nothing (a count of 0 is a success), 2+ = grep broke (a failure)
+printf 'y\ny\n' > "$tmp/le1.yes"; printf 'n\n' > "$tmp/le1.no"
+for lf in scripts/test.sh deployments/helm/kind/target-test.sh; do
+  helper_cell "rc=0 ($lf)" "$src/$lf" le1 0 2 'le1 grep -c y '"$tmp"'/le1.yes'
+  helper_cell "rc=1 ($lf)" "$src/$lf" le1 0 0 'le1 grep -c y '"$tmp"'/le1.no'
+  helper_cell "rc>=2 ($lf)" "$src/$lf" le1 2 "" 'le1 grep -c y '"$tmp"'/le1.missing 2>/dev/null'
+done
+helper_cell "partial output then 7" "$src/scripts/test.sh" le1 7 "x" 'f() { printf x; return 7; }; le1 f'
+# count_file: a missing counter is 0 (never called), a present one is read as it is, an unreadable one fails
+printf '3\n' > "$tmp/cf.three"; : > "$tmp/cf.noread"; chmod 000 "$tmp/cf.noread"
+helper_cell "missing" "$src/scripts/test.sh" count_file 0 0 'count_file '"$tmp"'/cf.none'
+helper_cell "present" "$src/scripts/test.sh" count_file 0 3 'count_file '"$tmp"'/cf.three'
+if [ "$(id -u)" != 0 ]; then helper_cell "unreadable" "$src/scripts/test.sh" count_file 1 "" 'count_file '"$tmp"'/cf.noread 2>/dev/null'; fi
+chmod 600 "$tmp/cf.noread"
+# children_of (deployments/helm/kind/diag.sh and payment-flow.sh): pgrep 0 = children printed, 1 = none (silent), 2+ = said so, none, carries on (exit 0)
+mkdir -p "$tmp/pg"
+for rcw in 0 1 2; do
+  printf '#!/usr/bin/env bash\nif [ "$1" = -P ]; then [ %s = 0 ] && printf "11\\n12\\n"; exit %s; fi\n' "$rcw" "$rcw" > "$tmp/pg/pgrep$rcw"; chmod +x "$tmp/pg/pgrep$rcw"
+done
+for cf in deployments/helm/kind/diag.sh deployments/helm/kind/payment-flow.sh; do
+  helper_cell "pgrep 0 ($cf)" "$src/$cf" children_of 0 $'11\n12' 'pgrep() { '"$tmp"'/pg/pgrep0 "$@"; }; children_of 5'
+  helper_cell "pgrep 1 ($cf)" "$src/$cf" children_of 0 "" 'pgrep() { '"$tmp"'/pg/pgrep1 "$@"; }; children_of 5 2>&1'
+  helper_cell "pgrep 2 ($cf)" "$src/$cf" children_of 0 "value_or_empty: command failed (exit 2): pgrep -P 5" 'pgrep() { '"$tmp"'/pg/pgrep2 "$@"; }; children_of 5 2>&1'
+done
+
+# ready_count (deployments/helm/kind/diag-test.sh): grep -c over the container log. 2 lines = 2; none = 0 (grep's 1); a log read that dies = said so, 0, exit 0
+printf '#!/usr/bin/env bash\nprintf "database system is ready to accept connections\\ndatabase system is ready to accept connections\\n"\n' > "$tmp/rt-two"
+printf '#!/usr/bin/env bash\nprintf "starting\\n"\n' > "$tmp/rt-none"
+printf '#!/usr/bin/env bash\nprintf "database system is ready to accept connections\\n"; exit 7\n' > "$tmp/rt-dies"
+chmod +x "$tmp/rt-two" "$tmp/rt-none" "$tmp/rt-dies"
+helper_cell "two lines"  "$src/deployments/helm/kind/diag-test.sh" ready_count 0 2 'set -o pipefail; ready_count '"$tmp"'/rt-two pg'
+helper_cell "no line (grep 1)" "$src/deployments/helm/kind/diag-test.sh" ready_count 0 0 'set -o pipefail; ready_count '"$tmp"'/rt-none pg'
+helper_cell "the read dies after one line (7)" "$src/deployments/helm/kind/diag-test.sh" ready_count 0 $'value_or_empty: command failed (exit 7): ready_lines '"$tmp"$'/rt-dies pg\n0' 'set -o pipefail; ready_count '"$tmp"'/rt-dies pg 2>&1'
+# init_exit_code (deployments/helm/kind/outage.sh): the init container's exit code; "none" when it has not terminated or kubectl broke
+printf '{"status":{"initContainerStatuses":[{"state":{"terminated":{"exitCode":0}}}]}}\n' > "$tmp/pod-done.json"
+printf '{"status":{"initContainerStatuses":[{"state":{"running":{}}}]}}\n' > "$tmp/pod-run.json"
+helper_cell "terminated 0" "$src/deployments/helm/kind/outage.sh" init_exit_code 0 0 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-done.json; }; init_exit_code p'
+helper_cell "still running" "$src/deployments/helm/kind/outage.sh" init_exit_code 0 none 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-run.json; }; init_exit_code p'
+helper_cell "kubectl prints JSON then dies (9)" "$src/deployments/helm/kind/outage.sh" init_exit_code 0 $'value_or_empty: command failed (exit 9): pod_init_exit p\nnone' 'set -o pipefail; ns=n; kubectl() { cat '"$tmp"'/pod-done.json; return 9; }; init_exit_code p 2>&1'
+# job_field (deployments/helm/kind/payment-flow.sh): the field; a failed read says so, prints nothing, exit 0 (the poll tries again)
+helper_cell "field read" "$src/deployments/helm/kind/payment-flow.sh" job_field 0 1 'ns=n; kubectl() { printf 1; }; job_field j x succeeded'
+helper_cell "read dies (5) after printing" "$src/deployments/helm/kind/payment-flow.sh" job_field 0 "value_or_empty: command failed (exit 5): kubectl -n n get job j -o jsonpath=x" 'ns=n; kubectl() { printf 1; return 5; }; job_field j x succeeded 2>&1'
+# container_field (web/apps/console/e2e/image.sh): the State field; a failed inspect says so, prints nothing, exit 0
+helper_cell "field read" "$src/web/apps/console/e2e/image.sh" container_field 0 exited 'tool=ctl; ctl() { printf exited; }; container_field Status c'
+helper_cell "inspect dies (125)" "$src/web/apps/console/e2e/image.sh" container_field 0 "value_or_empty: command failed (exit 125): ctl inspect -f {{.State.Status}} c" 'tool=ctl; ctl() { return 125; }; container_field Status c 2>&1'
+# value_or_empty (scripts/capture.sh): the value when the command succeeds (or exits <= -ok N), NOTHING of it when it fails after printing a part
+voe_cell() { # <label> <want rc> <want out (stdout+stderr)> <command…>
+  local label=$1 wrc=$2 wout=$3; shift 3
+  { echo ". '$src/scripts/capture.sh'"; echo "voe_ok() { printf 'v1\nv2\n'; }; voe_part() { printf 'half'; return 2; }; voe_one() { printf '0\n'; return 1; }"; printf '%s\n' "$@"; } > "$tmp/voe.sh"
+  vrc=0; capture vout vrc bash "$tmp/voe.sh" || exit 1
+  expect_eq "value_or_empty ($label): exit" "$wrc" "$vrc"
+  expect_eq "value_or_empty ($label): output" "$wout" "$vout"
+}
+voe_cell "rc=0 keeps the output"                 0 $'v1\nv2'  'value_or_empty voe_ok'
+voe_cell "rc=1 without -ok: failed, nothing"     0 "value_or_empty: command failed (exit 1): voe_one" 'value_or_empty voe_one 2>&1'
+voe_cell "rc=1 with -ok 1 keeps the output"      0 0 'value_or_empty -ok 1 voe_one'
+voe_cell "partial output then exit 2: nothing"   0 "value_or_empty: command failed (exit 2): voe_part" 'value_or_empty -ok 1 voe_part 2>&1'
+voe_cell "no command"                            1 "" 'value_or_empty'
+# classify() (web/apps/console/e2e/image-mutants.lib.sh): a failing stage is a harness error (return 2) WITH its status, never a half-parsed RED
+cls_cell() { # <label> <want rc> <want output regex> <stub lines…>: the real classify, with failed_specs / run_summary replaced by the stubs
+  local label=$1 wrc=$2 wre=$3; shift 3
+  { echo ". '$src/web/apps/console/e2e/image-mutants.lib.sh'"; printf '%s\n' "$@"; echo 'classify m log 1'; } > "$tmp/cls.sh"
+  crc2=0; capture cout crc2 bash "$tmp/cls.sh" || exit 1
+  expect_eq    "classify ($label): exit" "$wrc" "$crc2"
+  expect_match "classify ($label): output" "$wre" "$cout"
+}
+cls_cell "failed_specs dies (3) after printing"  2 'parsing the log failed \(status 3\)' 'failed_specs() { echo partial.spec.ts; return 3; }' 'run_summary() { echo "  1 failed"; }'
+cls_cell "run_summary dies (4) after printing"   2 'reading the Playwright summary failed \(status 4\)' 'failed_specs() { echo a.spec.ts; }' 'run_summary() { echo "  1 failed"; return 4; }'
+cls_cell "both fine, a spec failed, exit 1: RED" 0 'exit=1 failed-spec-files=\[a.spec.ts\]' 'failed_specs() { echo a.spec.ts; }' 'run_summary() { echo "  1 failed"; }'
+# scripts/capture.sh: all the output and the real exit status of a command, the command's own failure is never capture's
+cap_run() { # <label> <want rc> <want out> <want capture rc> <command…>
+  local label=$1 wrc=$2 wout=$3 wcrc=$4; shift 4
+  crc=0; copt=; cap_rc=
+  { capture copt cap_rc "$@"; } || crc=$?
+  expect_eq "capture ($label): capture's own status" "$wcrc" "$crc"
+  if [ "$wcrc" = 0 ]; then
+    expect_eq "capture ($label): the command's status is kept" "$wrc" "$cap_rc"
+    if [ "$wout" != SKIP ]; then expect_eq "capture ($label): the whole output is kept" "$wout" "$copt"; fi
+  fi
+}
+cap_ok()   { printf 'all\nof it\n\n'; }
+cap_part() { printf 'partial'; echo "and stderr" >&2; return 42; }
+cap_big()  { local i; for ((i = 1; i <= 5000; i++)); do echo "line $i"; done; return 3; }
+cap_big_want=; for ((cap_i = 1; cap_i <= 5000; cap_i++)); do cap_big_want+="line $cap_i"$'\n'; done; cap_big_want=${cap_big_want%$'\n'}
+cap_run "rc=0"                    0  $'all\nof it'            0 cap_ok
+cap_run "output, THEN exit 42"    42 $'partialand stderr'     0 cap_part
+cap_run "rc=3 after a long output" 3 "$cap_big_want" 0 cap_big
+cap_run "command not found"       127 SKIP 0 env -u BASH_ENV "$tmp/no-such-command-for-capture"
+cap_run "no command at all"       "" "" 1
 
 # workflow / composite-action run: scripts. wf_check <name> < yaml: writes $sw/<name>.yml and runs the checker on it.
 wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
@@ -2854,7 +3001,7 @@ if python3 -c 'import yaml' 2>/dev/null; then
     w=$(inject_fail "$tmp/inj-cs-$keep" python3 42 "$keep")
     rc=0; out=$(cd "$cs" && PATH="$w:$fakebin:$PATH" FAKE_COUNT="$tmp/count-cs$keep" FAKE_SKIP_SIGN_N=0 scripts/cosign-smoke.sh 2>&1) || rc=$?
     expect_eq    "cosign-smoke: python3 prints [$keep] then exits 42 → the smoke fails" "1" "$rc"
-    expect_match "cosign-smoke: …and names the signs entry read" 'reading the signs entry of \.goreleaser\.yaml exited 42' "$out"
+    expect_match "cosign-smoke: …and names the signs entry read" 'reading the signs entry of \.goreleaser\.yaml failed' "$out"
   done
 fi
 # fnctx, the reviewer's r1 findings (#466): a QUOTED substitution in an errexit-off function, and the three real sites
@@ -2915,7 +3062,7 @@ rcx_body_ok='rows=$(cmd) || rc=$?
 echo "$rows"'
 for f in scripts/test.sh nested/test.sh other.sh scripts/other.sh; do mkdir -p "$rcx/$(dirname "$f")"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_bad" > "$rcx/$f"; done
 mkdir -p "$rcx/ok"; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$rcx_body_ok" > "$rcx/ok/test.sh"
-rcx_run() { rc=0; out=$(cd "$rcx" && scripts/check-exit-swallow.sh "$@" 2>&1) || rc=$?; }
+rcx_run() { rc=0; capture out rc in_dir "$rcx" scripts/check-exit-swallow.sh "$@" || exit 1; }
 # the helper commands the checker still runs must not be trusted when they print something and then die: dirname (checked → exit 2) and, for the
 # path normalisation, basename / dirname that rename the file and fail (they are not called any more, so a bad file stays red)
 for t in basename dirname; do
@@ -2960,7 +3107,7 @@ case "$*" in
 esac
 FAKE
 chmod +x "$hk/bin/git"
-hk_run() { rc=0; out=$(cd "$hk" && HK_ROOT="$hk" PATH="$hk/bin:$PATH" scripts/check-exit-swallow.sh 2>&1) || rc=$?; }
+hk_run() { rc=0; capture out rc in_dir "$hk" env HK_ROOT="$hk" PATH="$hk/bin:$PATH" scripts/check-exit-swallow.sh || exit 1; }
 printf '#!/usr/bin/env bash\nset -euo pipefail\nls x || true\n' > "$hk/scripts/hooks/check.sh"
 printf '#!/usr/bin/env bash\nset -euo pipefail\ntrue\n' > "$hk/other/scripts/hooks/check.sh"
 hk_run; expect_eq "hooks: scripts/hooks/check.sh with a swallow is skipped by the default scan (the exemption) → green" "0" "$rc"
@@ -2978,7 +3125,6 @@ rcb_ok clear   'rc=0; rows=$(jq . f) || rc=$?' 'if [ "$rc" != 0 ]; then rows="";
 rcb_ok exit    'rc=0; rows=$(jq . f) || rc=$?' '[ "$rc" = 0 ] || { echo "jq failed" >&2; exit 2; }' 'echo "$rows"'
 rcb_ok case    'rc=0; rows=$(jq . f) || rc=$?' 'case $rc in' '  0) ;;' '  *) echo "jq failed" >&2; exit 2 ;;' 'esac' 'echo "$rows"'
 rcb_ok loop    'for f in a b; do' '  rc=0; rows=$(jq . "$f") || rc=$?' '  [ "$rc" = 0 ] || continue' '  echo "$rows"' 'done'
-rcb_ok return  'f() {' '  rc=0; rows=$(jq . f) || rc=$?' '  [ "$rc" = 0 ] || return 1' '  echo "$rows"' '}' 'f'
 wf_check wf-rcbranch <<'Y'
 jobs:
   j:
@@ -3023,10 +3169,10 @@ FAKE
 mkdir -p "$tmp/approve-bin"; cp "$tmp/approve-gh" "$tmp/approve-bin/gh"; chmod +x "$tmp/approve-bin/gh"
 approve_run() { # <PATH prefix or empty> → $out: what gh was asked to do
   : > "$tmp/approve.log"
-  out=$(PATH="${1:+$1:}$tmp/approve-bin:$PATH" APPROVE_LOG="$tmp/approve.log" REPO=o/r RUNNER_TEMP="$tmp" bash -c '
+  capture out approve_st env PATH="${1:+$1:}$tmp/approve-bin:$PATH" APPROVE_LOG="$tmp/approve.log" REPO=o/r RUNNER_TEMP="$tmp" bash -c '
     sleep() { :; }
     my_runs() { echo "[{\"id\":99,\"path\":\".github/workflows/ci.yml\",\"status\":\"completed\",\"conclusion\":\"action_required\"}]"; }
-    . "$1"; echo "past_gate=[$past_gate]"' _ "$tmp/approve-loop.sh" 2>&1) || approve_st=$?
+    . "$1"; echo "past_gate=[$past_gate]"' _ "$tmp/approve-loop.sh" || exit 1
   out="$out $(cat "$tmp/approve.log")"
 }
 approve_run ""

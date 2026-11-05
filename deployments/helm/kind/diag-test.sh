@@ -37,6 +37,7 @@
 # stale output cannot pass.
 set -euo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+. "$(dirname "$0")/../../../scripts/capture.sh"   # value_or_empty: a value that is empty, not half-printed, when its command fails (#466)
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
@@ -122,6 +123,14 @@ chmod +x "$tmp/bin/kubectl" "$tmp/bin/helm" "$tmp/bin/curl"
 
 die() { echo "diag-test: $*" >&2; echo "---- output:" >&2; best_effort cat "$tmp/out" >&2; echo "---- events:" >&2; best_effort cat "$tmp/events" >&2; exit 1; }
 has() { grep -qF -- "$1" "$tmp/out" || die "$2: output lacks '$1'"; }
+# ready_count <runtime> <container>: how many times the Postgres log says it is ready. grep -c: 1 = none (the count is 0, fine); 2+ = the read failed:
+# say so and count 0 so the caller retries. Never fails (the caller's `$(…) || exit 1` is for a broken shell, not for this).
+ready_lines() { "$1" logs "$2" 2>&1 | grep -c 'database system is ready to accept connections'; }
+ready_count() {
+  local n
+  n=$(value_or_empty -ok 1 ready_lines "$1" "$2") || return
+  echo "${n:-0}"
+}
 hasnt() { ! grep -qF -- "$1" "$tmp/out" || die "$2: output has '$1'"; }
 
 # run_bounded <seconds> <cmd...>: output in $tmp/out, exit status in $rc. A run that does not end in time is a failure.
@@ -318,7 +327,8 @@ d6cell() { # <cell> <label> <env assignments...>: run diag.sh with the fixture, 
   run_bounded 120 "$here/diag.sh" ns "$since"
   for a in "$@" DIAG_CONSOLE_BYTES=$budget; do unset "${a%%=*}"; done
   [ "$rc" = 0 ] || die "$cell: exit $rc, want 0"
-  bytes=$(wc -c < "$tmp/out" | tr -d ' ') || die "$cell: cannot count the console bytes"
+  wc -c < "$tmp/out" > "$tmp/out.n" || die "$cell: cannot count the console bytes"
+  read -r bytes < "$tmp/out.n" || die "$cell: cannot read the console byte count"
   [ "$bytes" -le $((budget + slack)) ] || die "$cell ($label): the console got $bytes bytes, want at most $((budget + slack)) (budget $budget)"
   has "console budget" "$cell: the console says it was cut"
   has "$DIAG_DIR" "$cell: the console says where the files are"
@@ -519,8 +529,7 @@ if only D7; then
     # the image had to be pulled). Ready means the line appears TWICE; a server that never gets there is a setup failure.
     ready=0
     for ((_try518 = 1; _try518 <= 120; _try518++)); do
-      ready_rc=0; ready_n=$("$rt" logs "$pgc" 2>&1 | grep -c 'database system is ready to accept connections') || ready_rc=$?
-      if [ "$ready_rc" -gt 1 ]; then echo "diag-test: D7 $label: reading the container log failed (exit $ready_rc), retrying" >&2; ready_n=0; fi
+      ready_n=$(ready_count "$rt" "$pgc") || exit 1
       [ "$ready_n" -ge 2 ] && { ready=1; break; }
       sleep 1
     done
@@ -538,10 +547,11 @@ if only D7; then
     export DIAG_DIR="$tmp/diag7-$label"
     PGC="$pgc" RT="$rt" run_bounded 120 "$here/diag.sh" ns "$since"
     [ "$rc" = 0 ] || die "D7 $label: exit $rc, want 0"
-    D7_RAW_QUERY=$("${psql[@]}" -At -c "select string_agg(query, ' | ') from pg_stat_activity where query like '%$secret%' and pid <> pg_backend_pid()")
-    D7_RAW_LOG=$("$rt" logs "$pgc" 2>&1) || { echo "diag-test: D7 $label: could not read the container log" >&2; D7_RAW_LOG=""; }
+    D7_RAW_QUERY=$("${psql[@]}" -At -c "select string_agg(query, ' | ') from pg_stat_activity where query like '%$secret%' and pid <> pg_backend_pid()") || { echo "diag-test: D7 $label: cannot read pg_stat_activity" >&2; exit 1; }
+    best_effort "$rt" logs "$pgc" > "$tmp/d7-raw.log" 2>&1   # an unreadable container log is an empty one (and said so); the leak check below still reads diag.sh's own output
+    D7_RAW_LOG=$(cat "$tmp/d7-raw.log") || { echo "diag-test: D7 $label: cannot read the saved container log" >&2; exit 1; }
     kill "$h" "$w" 2>/dev/null || true; wait "$h" "$w" 2>/dev/null || true
-    D7_SEEN=$(cat "$tmp/out" "$DIAG_DIR"/* 2>/dev/null) || die "D7: cannot read what diag.sh wrote — a leak check over nothing proves nothing"
+    D7_SEEN=$(cat "$tmp/out" "$DIAG_DIR"/* 2>/dev/null) || { echo "diag-test: D7: cannot read what diag.sh wrote — a leak check over nothing proves nothing" >&2; exit 1; }
     unset DIAG_DIR
   }
   # control: leaky flags. The secret is really there to be found: in pg_stat_activity, in the statement log, and in the

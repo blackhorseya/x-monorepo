@@ -12,6 +12,7 @@
 #   e2e/image.sh --grep orders         # extra args go to playwright test
 set -euo pipefail
 . "$(dirname "$0")/../../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+. "$(dirname "$0")/../../../../scripts/capture.sh"   # value_or_empty: a value that is empty, not half-printed, when its command fails (#466)
 cd "$(dirname "$0")/.."
 [ -f dist/index.html ] || { echo "image.sh: dist/ missing, run task web-build" >&2; exit 1; }
 
@@ -46,20 +47,28 @@ run_console "$oidc_name" "$oidc_port" -e CONSOLE_OIDC_ISSUER=https://idp.e2e.exa
 # Misconfigured OIDC env must stop the container, not switch OIDC off quietly and not reach /config.json
 # or the CSP: the quote-and-brace would break the JSON, a newline would pass a line-oriented grep and
 # cut the CSP header short, an issuer without a client id (or the reverse) is half a login.
+container_field() {   # <State field> <container>: that field of the container; a failed inspect says so and prints nothing (the caller polls or compares)
+  value_or_empty "$tool" inspect -f "{{.State.$1}}" "$2"
+}
 expect_refused() {
   local label=$1 n=$name-refused; shift
   "$tool" rm -f "$n" >/dev/null 2>&1 || true
   "$tool" run -d --name "$n" ${host_opts[@]+"${host_opts[@]}"} -e "RPC_UPSTREAM=$upstream" "$@" "$img" >/dev/null
   local status=""
   for ((_try50 = 1; _try50 <= 40; _try50++)); do
-    st_rc=0; status=$("$tool" inspect -f '{{.State.Status}}' "$n" 2>/dev/null) || st_rc=$?
-    if [ "$st_rc" != 0 ]; then echo "image.sh: inspect $n failed (exit $st_rc), retrying" >&2; status=""; fi
+    status=$(container_field Status "$n") || return   # a failed inspect says so and leaves status empty: the loop tries again
     [ "$status" = exited ] && break
     sleep 0.5
   done
   local code logs
-  code=$("$tool" inspect -f '{{.State.ExitCode}}' "$n" 2>/dev/null || echo "?")
-  logs=$("$tool" logs "$n" 2>&1) || { echo "image.sh: cannot read the logs of $n" >&2; logs=""; }   # the refusal text is asserted next; an empty log does not contain it
+  code=$(container_field ExitCode "$n") || return
+  code=${code:-?}
+  local lf lrc=0
+  lf=$(mktemp "${TMPDIR:-/tmp}/image-logs.XXXXXX") || { echo "image.sh: cannot create a temp file for the logs of $n" >&2; exit 1; }
+  "$tool" logs "$n" > "$lf" 2>&1 || lrc=$?
+  if [ "$lrc" != 0 ]; then echo "image.sh: cannot read the logs of $n (exit $lrc)" >&2; fi   # the refusal text is asserted next; an empty log does not contain it
+  logs=$(cat "$lf") || { echo "image.sh: cannot read the saved logs of $n" >&2; exit 1; }
+  rm -f "$lf"
   "$tool" rm -f "$n" >/dev/null 2>&1 || true
   if [ "$status" != exited ] || [ "$code" = 0 ] || ! printf '%s' "$logs" | grep -q 'console-env:'; then
     echo "image.sh: expected the container to refuse '$label' (exit non-zero, say why), got status=$status exit=$code"; printf '%s\n' "$logs" | tail -5; exit 1

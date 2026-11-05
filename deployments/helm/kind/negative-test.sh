@@ -14,6 +14,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
+. "$here/../../../scripts/capture.sh"  # capture: output + exit status of a command, without $(…) around it (#466)
 mkdir "$tmp/bin"
 key="kind-neg-key-0123456789abcd"
 # the values file negative.sh reads the Postgres URL from (kind/values.yaml has the same shape)
@@ -68,11 +69,11 @@ pod() { # <terminated.message>
 
 run() { # <name> <want exit: 0|1> <want text in output> ; env set by caller
   : > "$tmp/helm.log"; : > "$tmp/kubectl.log"
-  got=0
-  out=$(PATH="$tmp/bin:$PATH" PHASE_FILE="$tmp/phase" tmp_count="$tmp/count" tmp_pods="$tmp/pods.count" HLOG="$tmp/helm.log" KLOG="$tmp/kubectl.log" \
-    POD_JSON="$tmp/pods.json" NEGATIVE_TRIES=4 NEGATIVE_SLEEP=0 NEGATIVE_RPC_TRIES=3 NEGATIVE_RPC_SLEEP=0 "$here/negative.sh" ns rel chart "${VALUES_FILE:-$tmp/values.yaml}" 2>&1) || got=$?
+  PATH="$tmp/bin:$PATH" PHASE_FILE="$tmp/phase" tmp_count="$tmp/count" tmp_pods="$tmp/pods.count" HLOG="$tmp/helm.log" KLOG="$tmp/kubectl.log" \
+    POD_JSON="$tmp/pods.json" NEGATIVE_TRIES=4 NEGATIVE_SLEEP=0 NEGATIVE_RPC_TRIES=3 NEGATIVE_RPC_SLEEP=0 \
+    capture out got "$here/negative.sh" ns rel chart "${VALUES_FILE:-$tmp/values.yaml}" || { echo "negative-test: $1: capture failed" >&2; exit 1; }
   [ "$got" -le 1 ] || got=1   # the run is judged by its exit being 0 or 1; anything else is a 1
-  pods_calls=$(cat "$tmp/pods.count" 2>/dev/null) || pods_calls=0   # no counter file = no pod reads
+  pods_calls=0; [ ! -f "$tmp/pods.count" ] || pods_calls=$(cat "$tmp/pods.count") || { echo "negative-test: $1: cannot read the pod counter" >&2; exit 1; }   # no counter file = no pod reads
   rm -f "$tmp/phase" "$tmp/count" "$tmp/pods.count"
   [ "$got" = "$2" ] || { echo "negative-test: $1: exit $got, want $2"; echo "$out"; exit 1; }
   case $out in *"$3"*) ;; *) echo "negative-test: $1: output lacks '$3'"; echo "$out"; exit 1 ;; esac
