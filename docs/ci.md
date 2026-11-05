@@ -48,7 +48,7 @@
 **量測方法與結論**（數字與 run id 在 PR #453 的描述；這裡只留結論）：
 
 - 探索（單一 workflow run 內的平行 matrix，不是獨立重複，只用來選方案）：workers 2/3/4 是 run 41927472999，shard 2/3 路與 ports + payment 獨立跑是 run 41929103982。結論：4 vCPU 上 workers=4 比預設 2 快約 80–100s 且 0 flaky、0 retry；3 shards 的 `task web-e2e` step 約 50–90s，ports + payment 約 45–50s。
-- 定案後的獨立量測是 3 個不同的 workflow run：41934848918（pull_request）、41937591178（workflow_dispatch）、41939558460（workflow_dispatch），同一個 head 9776da2c。三次都是 3 shard 全綠、274 tests（102+86+86）加 ports 5、payment 2，0 flaky、0 retry；`task web-e2e` step 最長的 shard 是 87s／86s／80s（基準 254s）。各 shard 的 step 秒數、queue、setup、cache 命中在 PR #453 的描述。比較以 step 秒數為準，job 總秒數受 Actions cache 與 runner 排隊影響，只作參考。
+- 定案後的獨立量測是 3 個不同的 workflow run：41934848918（pull_request）、41937591178（workflow_dispatch）、41939558460（workflow_dispatch），同一個 head 9776da2c。三次的 9 個 shard job 全部成功（274 tests = 102+86+86，加 ports 5、payment 2，0 flaky、0 retry）；整個 workflow 的最終狀態不是三次全綠：41934848918 與 41937591178 因 `gen-freshness`（base 問題，#454）失敗，41937591178 另被後續 dispatch 的 concurrency 取消；`task web-e2e` step 最長的 shard 是 87s／86s／80s（基準 254s）。各 shard 的 step 秒數、queue、setup、cache 命中在 PR #453 的描述。比較以 step 秒數為準，job 總秒數受 Actions cache 與 runner 排隊影響，只作參考。
 - 多佔並行名額：1 個 job 變 3 個（`console-e2e (1..3)`，多 2 個）。名額飽和、排隊時，多拆 job 不一定讓 wall-clock 變短；排隊另外記，不算在 job 秒數裡。
 
 選 workers=4 × 3 shards；ports + payment 放 shard 2（探索 run 41929103982 裡它的 `task web-e2e` 最輕；加上 ports + payment 後是否仍不超過其他兩片，看 PR #453 的獨立量測）。
