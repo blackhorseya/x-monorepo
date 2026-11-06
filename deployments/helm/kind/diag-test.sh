@@ -562,7 +562,8 @@ if only D7; then
     export DIAG_DIR="$tmp/diag7-$label"
     PGC="$pgc" RT="$rt" run_bounded 120 "$here/diag.sh" ns "$since"
     [ "$rc" = 0 ] || die "D7 $label: exit $rc, want 0"
-    D7_RAW_QUERY=$("${psql[@]}" -At -c "select string_agg(query, ' | ') from pg_stat_activity where query like '%$secret%' and pid <> pg_backend_pid()") || { echo "diag-test: D7 $label: cannot read pg_stat_activity" >&2; exit 1; }
+    capture D7_RAW_QUERY d7_query_rc "${psql[@]}" -At -c "select string_agg(query, ' | ') from pg_stat_activity where query like '%$secret%' and pid <> pg_backend_pid()" || exit 1
+    [ "$d7_query_rc" = 0 ] || { echo "diag-test: D7 $label: cannot read pg_stat_activity" >&2; exit 1; }
     best_effort "$rt" logs "$pgc" > "$tmp/d7-raw.log" 2>&1   # an unreadable container log is an empty one (and said so); the leak check below still reads diag.sh's own output
     D7_RAW_LOG=$(cat "$tmp/d7-raw.log") || { echo "diag-test: D7 $label: cannot read the saved container log" >&2; exit 1; }
     kill "$h" "$w" 2>/dev/null || true; wait "$h" "$w" 2>/dev/null || true

@@ -21,13 +21,15 @@
 #             or `x="$(…)"`, or (2) the label idiom `$([ test ] && echo a || echo b)` (no substitution inside the test; anywhere). Every other position is red: an
 #             argument, command name, redirection target, heredoc / here-string, for list, case word / pattern, [[ ]] / [ ] operand, ${x:-$(…)}, array element,
 #             declaration, arithmetic, let, prefix assignment, process substitution, and a substitution inside a substitution. What stands inside one is a closed
-#             whitelist too: ONE `&&` / `|` chain of simple commands, optionally ending in `|| exit [N]` (no `;`, second statement, `!`, `&`, subshell, group, if / case /
-#             loop / function / [[ ]] / time / coproc, no eval / . / source). The handler after an assignment, `x=$(…) || H`: H is `exit` / `return` (bare, or `$?` straight
-#             after the `||`), `exit N` / `return N`, or `{ …; exit N; }` / `{ …; return N; }` (N a literal 1..255; the group's last statement, earlier ones simple and not
-#             exit / return / break / continue), or at top level `NAME=$?` (rcbranch judges it); `return` never inside a substitution. The handler must END its AND-OR
+#             whitelist too: ONE `&&` / `|` chain of simple commands whose first word is a LITERAL and not command / builtin / exec / eval / . / source (their options are not
+#             parsed), optionally ending in `|| exit [N]` (no `;`, second statement, `!`, `&`, subshell, group, if / case / loop / function / [[ ]] / time / coproc). The
+#             handler after an assignment, `x=$(…) || H`: H is `exit` / `return` (bare, or `$?` straight after the `||`), `exit N` / `return N`, or `{ …; exit N; }` /
+#             `{ …; return N; }` (N a literal 1..255; the group's last statement; every earlier one is a literal echo / printf with no prefix assignment and no substitution in
+#             an argument or redirection: a function call is not), or at top level `NAME=$?` (rcbranch judges it); `return` never inside a substitution. The handler must END its AND-OR
 #             list (only `;` or a comment may follow; `&`, `|`, `&&`, `||` after it are red) and the list must not run in the background, as a pipeline operand or in a
-#             coprocess. An assignment that is the condition of `if` / `elif` is accepted when the WHOLE chain has an `else` whose last statement is `exit N` / `return N`
-#             (bare / `$?` only when it is the else block's only statement); of `until`, always; of `while`, and `! x=$(…)`, never. The one exempt node is the kind scripts'
+#             coprocess. An assignment that is the condition of `if` / `elif` is accepted when what runs after it FAILED is the final `else` ending in `exit N` / `return N`
+#             (bare / `$?` only when it is the else block's only statement), or an `elif` whose whole condition is an assignment `name=$(…)` to the same variable;
+#             any other `elif` is red; `until`, always; `while`, and `! x=$(…)`, never. The one exempt node is the kind scripts'
 #             `. "$(dirname "$0")/../../../scripts/best-effort.sh"`, matched field by field. Not exemptible.
 #   fnctx     inside ANY function body, `x=$(…)` must carry that handler (`|| return` / `|| exit` with `$?` or a literal, or `|| { …; return N; }`; no `|| NAME=$?`),
 #             or be the condition form above; `x=$(cmd) && use` is red there (at top level it is the documented way to use a value only when it succeeded).
@@ -315,4 +317,4 @@ if [ -s "$tmp/out" ]; then
   echo "check-exit-swallow: $n_findings finding(s). Fix the line, or for rules that allow it add '# exit-ok: <why the status cannot change the verdict>' (docs/ci.md). default and fnctx findings CANNOT be exempted: after \`x=\$(…) ||\` only \`return\`/\`exit\` (bare or \`\$?\` straight after the \`||\`), \`return N\`/\`exit N\` or \`{ …; return N; }\`/\`{ …; exit N; }\` with N a literal 1..255 (no \$var, no \`\$?\` after another command); inside \$(…) only an \`&&\` chain of pipelines (no ; newline & !), optionally with \`|| exit [N]\`, or the label \`[ test ] && echo a || echo b\`." >&2
   exit 1
 fi
-echo "check-exit-swallow: $nscripts scripts and the run: scripts of $nyml workflow / action files, no finding for the covered shapes (heuristic; see docs/ci.md, #472)"
+echo "check-exit-swallow: $nscripts scripts and the run: scripts of $nyml workflow / action files, no finding for the covered shapes (heuristic; what it does not follow: docs/ci.md 〈不透明範圍〉, #472)"

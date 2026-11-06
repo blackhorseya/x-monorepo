@@ -55,7 +55,7 @@ exec /bin/cat "$@"')
 KILLLANE=$(shim k6 'kill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"')
 EXIT0K6=$(shim k6 'exit 0')
 DEADK6=$(shim k6 'for a in "$@"; do case $a in BASE_URL=*) u=${a#BASE_URL=};; esac; done; curl -s "$u/x" >/dev/null; echo "transport.malformed_response"; exit 42')
-REAL_SLEEP=$(command -v sleep)
+REAL_SLEEP=$(type -P sleep)
 
 # --- case runners (run in a subshell of their own; $P, $D set by async) ---
 wire() { # <env…>: wire.sh on orders (and ratelimit), 2 modes, no negatives, in $D/wbin

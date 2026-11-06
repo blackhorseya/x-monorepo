@@ -60,14 +60,18 @@ grep -q 'payment-worker started' <<<"$clog" || fail "payment-worker never logged
 forward "svc/$release-payment-serve" "$sport" 80 -n "$ns"
 direct="http://127.0.0.1:$sport"
 for ((_try59 = 1; _try59 <= 30; _try59++)); do capture st st_rc code "$direct/api/readyz"; [ "$st_rc" = 0 ] && [ "$st" = 200 ] && break; sleep 1; done   # a failed read is "not ready yet": the loop retries
-st=$(code "$direct/api/readyz") || { fail "payment-rpc serve /api/readyz could not be read"; exit 1; }
+capture st st_rc code "$direct/api/readyz" || exit 1
+[ "$st_rc" = 0 ] || fail "payment-rpc serve /api/readyz could not be read"
 [ "$st" = 200 ] || fail "payment-rpc serve /api/readyz never answered 200"
 body='{"orderId":"kind-payment-order","customerId":"kind-payment-customer"}'
-st=$(code -X POST -H 'Content-Type: application/json' -d "$body" "$direct/payment.v1.PaymentService/GetPayment") || { fail "no status for a call with no service key"; exit 1; }
+capture st st_rc code -X POST -H 'Content-Type: application/json' -d "$body" "$direct/payment.v1.PaymentService/GetPayment" || exit 1
+[ "$st_rc" = 0 ] || fail "no status for a call with no service key"
 [ "$st" = 401 ] || fail "payment-rpc answered a call with no service key"
-st=$(code -X POST -H 'Content-Type: application/json' -H 'X-API-Key: not-the-service-key-0123456789' -d "$body" "$direct/payment.v1.PaymentService/GetPayment") || { fail "no status for a call with an unknown key"; exit 1; }
+capture st st_rc code -X POST -H 'Content-Type: application/json' -H 'X-API-Key: not-the-service-key-0123456789' -d "$body" "$direct/payment.v1.PaymentService/GetPayment" || exit 1
+[ "$st_rc" = 0 ] || fail "no status for a call with an unknown key"
 [ "$st" = 401 ] || fail "payment-rpc accepted an unknown key"
-st=$(code -X POST -H 'Content-Type: application/json' -H "X-API-Key: $key" -d "$body" "$direct/payment.v1.PaymentService/GetPayment") || { fail "no status for a call with the service key"; exit 1; }
+capture st st_rc code -X POST -H 'Content-Type: application/json' -H "X-API-Key: $key" -d "$body" "$direct/payment.v1.PaymentService/GetPayment" || exit 1
+[ "$st_rc" = 0 ] || fail "no status for a call with the service key"
 [ "$st" = 404 ] || fail "payment-rpc refused its own service key (want 404 payment.not_found for an unknown order)"
 echo "payment: serve is ready; the RPC wants the service key (401 without, 401 unknown, 404 not_found with)"
 
@@ -109,25 +113,31 @@ hit() {
 }
 # wait for the controller to have the rule: the webhook answers 400 (payment-rpc: not signed), not nginx's 404
 for ((_try104 = 1; _try104 <= 60; _try104++)); do capture st st_rc hit POST /api/payment/webhook -d '{}'; [ "$st_rc" = 0 ] && [ "$st" = 400 ] && break; sleep 2; done   # a failed read is "not yet"
-st=$(hit POST /api/payment/webhook -d '{}') || { fail "no status from the ingress for the webhook"; exit 1; }
+capture st st_rc hit POST /api/payment/webhook -d '{}' || exit 1
+[ "$st_rc" = 0 ] || fail "no status from the ingress for the webhook"
 [ "$st" = 400 ] || fail "the webhook never reached payment-rpc through the ingress (want 400: unsigned)"
 echo "payment: POST /api/payment/webhook reaches payment-rpc through the ingress (400: not signed)"
 
 # What must NOT be reachable from outside. Each of these answers 200/401 on the Service itself (direct, port-forward),
 # so a 404 at the ingress is the ingress not routing it, not the backend not having it.
-st_metrics=$(code "$direct/api/metrics") || { fail "no status for metrics on the Service itself"; exit 1; }
-st_healthz=$(code "$direct/api/healthz") || { fail "no status for healthz on the Service itself"; exit 1; }
+capture st_metrics st_metrics_rc code "$direct/api/metrics" || exit 1
+[ "$st_metrics_rc" = 0 ] || fail "no status for metrics on the Service itself"
+capture st_healthz st_healthz_rc code "$direct/api/healthz" || exit 1
+[ "$st_healthz_rc" = 0 ] || fail "no status for healthz on the Service itself"
 [ "$st_metrics" = 200 ] && [ "$st_healthz" = 200 ] || fail "control: metrics / healthz are not on the Service itself"
 for pth in /api/metrics /api/readyz /api/healthz /api/version /api/docs /api/payment/webhook/ /api/payment/webhookx /api/payment/; do
-  st=$(hit GET "$pth") || { fail "no status for GET $pth"; exit 1; }
+  capture st st_rc hit GET "$pth" || exit 1
+  [ "$st_rc" = 0 ] || fail "no status for GET $pth"
   [ "$st" = 404 ] || fail "GET $pth is routed by the ingress (want 404)"
 done
 for pth in /payment.v1.PaymentService/GetPayment /api/payment.v1.PaymentService/GetPayment /payment.v1.PaymentService/StartPayment /api/payment.v1.PaymentService/StartPayment; do
-  c=$(hit POST "$pth" -H 'Content-Type: application/json' -H "X-API-Key: $key" -d "$body") || { fail "no status for POST $pth"; exit 1; }
+  capture c c_rc hit POST "$pth" -H 'Content-Type: application/json' -H "X-API-Key: $key" -d "$body" || exit 1
+  [ "$c_rc" = 0 ] || fail "no status for POST $pth"
   [ "$c" = 404 ] || fail "POST $pth (even with the service key) is routed by the ingress: $c, want 404"
 done
 sleep 0.6
-st=$(code -H "Host: other.localtest.me" -X POST -d '{}' "$ing/api/payment/webhook") || { fail "no status for the webhook on another host"; exit 1; }
+capture st st_rc code -H "Host: other.localtest.me" -X POST -d '{}' "$ing/api/payment/webhook" || exit 1
+[ "$st_rc" = 0 ] || fail "no status for the webhook on another host"
 [ "$st" = 404 ] || fail "the webhook answers for a host that is not paymentRpc.ingress.hosts"
 echo "payment: the ingress routes the webhook path and nothing else (RPC, metrics, probes, docs, other hosts: 404)"
 
@@ -139,12 +149,14 @@ n400=$(value_of -ok 1 grep -c '^400$' <<<"$res") || exit 1; n503=$(value_of -ok 
 [ "$n400" -ge 1 ] || fail "burst: no request reached payment-rpc ($n400 x 400, $n503 x 503)"
 [ "$n503" -ge 1 ] || fail "burst: 40 requests in a burst were never limited ($n400 x 400, $n503 x 503): the rate limit is not in force"
 sleep 5
-st=$(hit POST /api/payment/webhook -d '{}') || { fail "no status after the burst"; exit 1; }
+capture st st_rc hit POST /api/payment/webhook -d '{}' || exit 1
+[ "$st_rc" = 0 ] || fail "no status after the burst"
 [ "$st" = 400 ] || fail "the limit did not release after the burst"
 echo "payment: the rate limit is in force ($n400 x 400, $n503 x 503 in a burst of 40) and releases"
 big=$(mktemp)
 head -c 2097152 /dev/zero | tr '\0' 'a' >"$big"
-st=$(hit POST /api/payment/webhook --data-binary "@$big") || { fail "no status for the 2 MiB body"; exit 1; }
+capture st st_rc hit POST /api/payment/webhook --data-binary "@$big" || exit 1
+[ "$st_rc" = 0 ] || fail "no status for the 2 MiB body"
 [ "$st" = 413 ] || fail "a 2 MiB body was not refused with 413"
 rm -f "$big"
 echo "payment: a 2 MiB webhook body is refused at the ingress (413)"
@@ -155,7 +167,8 @@ on_exit() { local rc=$?; restore; test -z "$pf" || kill $pf 2>/dev/null || true;
 trap on_exit EXIT
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=0 >/dev/null
 best_effort kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null   # wait-gone: "no pods left" is the state wanted; the steps after it assert
-st=$(hit POST /api/payment/webhook -d '{}') || { fail "no status with payment-rpc stopped"; exit 1; }
+capture st st_rc hit POST /api/payment/webhook -d '{}' || exit 1
+[ "$st_rc" = 0 ] || fail "no status with payment-rpc stopped"
 [ "$st" != 400 ] || fail "control: the webhook still reaches payment-rpc with it stopped"
 forward "svc/$release-rpc" "$rport" 80 -n "$ns"
 api="http://127.0.0.1:$rport/api"

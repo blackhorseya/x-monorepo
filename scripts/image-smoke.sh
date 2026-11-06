@@ -21,6 +21,7 @@ set -euo pipefail
 app=${1:?usage: scripts/image-smoke.sh <app>   (payment-rpc | payment-worker)}
 self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
 cd "$self_dir/.." || exit 1
+. "$self_dir/best-effort.sh" || exit 1   # capture: the status of a container-engine call next to what it printed
 
 case $app in
   payment-rpc) port=8082 args=(serve) ;;
@@ -52,7 +53,8 @@ cp "$bin" "$ctx/linux/$arch/$app"
 image="localhost/x-monorepo/$app:smoke"
 "$engine" build -q -f deployments/docker/Dockerfile --build-arg "APP=$app" --build-arg "TARGETPLATFORM=linux/$arch" -t "$image" "$ctx" >/dev/null
 
-user=$("$engine" image inspect --format '{{.Config.User}}' "$image")
+capture user user_rc "$engine" image inspect --format '{{.Config.User}}' "$image" || exit 1
+[ "$user_rc" = 0 ] || { echo "image-smoke: FAIL cannot inspect the image" >&2; exit 1; }
 case $user in
   ''|0|root|0:*|root:*) echo "image-smoke: FAIL the image runs as '$user', want a non-root user" >&2; exit 1 ;;
 esac
@@ -60,7 +62,9 @@ echo "ok: runs as $user"
 
 if [ "$app" = payment-worker ]; then
   run=("$engine" run --rm --read-only --cap-drop ALL --security-opt no-new-privileges -e APP_LOG_LEVEL=warn)
-  version=$("${run[@]}" "$image" --version | sed -n 's/^payment-worker version \([^ ]*\) .*/\1/p')
+  capture version_raw version_rc "${run[@]}" "$image" --version || exit 1
+  [ "$version_rc" = 0 ] || { echo "image-smoke: FAIL --version exited $version_rc" >&2; exit 1; }
+  version=$(printf '%s\n' "$version_raw" | sed -n 's/^payment-worker version \([^ ]*\) .*/\1/p') || exit 1
   case $version in
     ''|dev) echo "image-smoke: FAIL --version says '$version': the binary is not stamped by the release build" >&2; exit 1 ;;
   esac
@@ -89,12 +93,15 @@ rm -f /tmp/image-smoke-nosub.$$
 echo "ok: no subcommand is refused"
 
 key=image-smoke-service-key-0123456789
-cid=$("$engine" run -d --read-only --cap-drop ALL --security-opt no-new-privileges \
+capture cid cid_rc "$engine" run -d --read-only --cap-drop ALL --security-opt no-new-privileges \
   -p "127.0.0.1::$port" \
   -e "APP_HTTP_ADDR=:$port" -e APP_LOG_LEVEL=warn \
   -e APP_AUTH_MODE=required -e "APP_AUTH_API_KEYS=rpc=$key:admin" \
-  "$image" "${args[@]}")
-hostport=$("$engine" port "$cid" "$port/tcp" | head -n1 | sed 's/.*://')
+  "$image" "${args[@]}" || exit 1
+[ "$cid_rc" = 0 ] || { echo "image-smoke: FAIL cannot start the container" >&2; exit 1; }
+capture port_out port_rc "$engine" port "$cid" "$port/tcp" || exit 1
+[ "$port_rc" = 0 ] || { echo "image-smoke: FAIL no published port" >&2; exit 1; }
+hostport=$(printf '%s\n' "$port_out" | head -n1 | sed 's/.*://') || exit 1
 base="http://127.0.0.1:$hostport"
 
 ready=""
@@ -102,7 +109,8 @@ for ((_try100 = 1; _try100 <= 60; _try100++)); do
   poll_rc=0; code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/readyz") || poll_rc=$?
   [ "$poll_rc" = 0 ] || echo "image-smoke: readyz poll $_try100: curl exited $poll_rc, retrying" >&2
   if [ "$code" = 200 ]; then ready=1; break; fi
-  running=$("$engine" inspect --format '{{.State.Running}}' "$cid") || { echo "image-smoke: FAIL cannot inspect the container" >&2; exit 1; }
+  capture running running_rc "$engine" inspect --format '{{.State.Running}}' "$cid" || exit 1
+  [ "$running_rc" = 0 ] || { echo "image-smoke: FAIL cannot inspect the container" >&2; exit 1; }
   [ "$running" = true ] || { "$engine" logs "$cid" >&2; echo "image-smoke: FAIL the container exited" >&2; exit 1; }
   sleep 0.5
 done

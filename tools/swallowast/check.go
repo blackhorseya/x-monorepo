@@ -183,7 +183,7 @@ func (c *checker) listContext(si int) (rule, why string) {
 		cur -= 2
 	}
 	if handler == nil && !negated {
-		if ok, why := c.conditionReason(cur); ok {
+		if ok, why := c.conditionReason(cur, assignName(c.at(si).(*syntax.Stmt))); ok {
 			return "", ""
 		} else if why != "" {
 			return rule, why
@@ -219,14 +219,14 @@ func (c *checker) listContext(si int) (rule, why string) {
 //	while       never: the loop is left by the failure, and the value after it is the failed run's.
 //
 // When the node is not a condition at all, ok is false and why is empty.
-func (c *checker) conditionReason(cur int) (ok bool, why string) {
+func (c *checker) conditionReason(cur int, name string) (ok bool, why string) {
 	st := c.at(cur).(*syntax.Stmt)
 	switch p := c.at(cur - 1).(type) {
 	case *syntax.IfClause:
 		if !containsStmt(p.Cond, st) {
 			return false, ""
 		}
-		if why := elseStops(p); why != "" {
+		if why := elseStops(p, name); why != "" {
 			return false, why
 		}
 		return true, ""
@@ -242,26 +242,52 @@ func (c *checker) conditionReason(cur int) (ok bool, why string) {
 	return false, ""
 }
 
-// elseStops: the if / elif chain that starts at ic ends in an `else` whose last statement is `exit N` / `return N`.
-func elseStops(ic *syntax.IfClause) string {
-	last := ic
-	for last.Else != nil {
-		last = last.Else
+// assignName: the variable a plain assignment statement sets ("" when it is not one).
+func assignName(s *syntax.Stmt) string {
+	if ce, ok := s.Cmd.(*syntax.CallExpr); ok && len(ce.Assigns) == 1 && ce.Assigns[0].Name != nil {
+		return ce.Assigns[0].Name.Value
 	}
-	if last == ic || len(last.Cond) != 0 {
+	return ""
+}
+
+// elseStops: what runs after the assignment's own clause FAILED. Exactly one of
+//
+//	(a) the final `else`, ending in `exit N` / `return N` (a single statement may be bare or `$?`; with more, every earlier one is an echo / printf);
+//	(b) an `elif` whose condition is ONE plain assignment `name=$(…)` to the SAME variable (try A, else B), and the same rule again for that clause.
+//
+// Everything else is red: any other `elif` runs ITS then-branch with the half-printed value of the failed run (`elif true`, `elif [ -n "$v" ]`, `elif w=$(…)`).
+func elseStops(ic *syntax.IfClause, name string) string {
+	next := ic.Else
+	if next == nil {
 		return "the if / elif chain has no `else`: after the `fi` the value of a failed assignment is used"
 	}
-	exitOnly := false
-	if len(last.Then) == 1 {
-		if why := stopStmt(last.Then[0], exitOnly, true); why != "" {
-			return why
+	if len(next.Cond) != 0 { // an elif
+		if !isRetryCondition(next.Cond, name) {
+			return "the clause that runs after the failed assignment must be the final `else` or an `elif` whose whole condition is an assignment to the same variable: any other `elif` runs its then-branch with the failed run's value"
 		}
-		return ""
+		return "" // that elif holds its own assignment, which is judged on its own (same rule for what runs after IT failed)
 	}
-	if why := braceReason(&syntax.Block{Stmts: last.Then}, exitOnly); why != "" {
+	if len(next.Then) == 1 {
+		return stopStmt(next.Then[0], false, true)
+	}
+	if why := braceReason(&syntax.Block{Stmts: next.Then}, false); why != "" {
 		return "the else block of the if / elif chain must end in `exit N` / `return N` (literal 1..255): " + why
 	}
 	return ""
+}
+
+// isRetryCondition: the condition is exactly one plain assignment `name=$(…)` to the variable the first clause set.
+func isRetryCondition(list []*syntax.Stmt, name string) bool {
+	if len(list) != 1 || name == "" {
+		return false
+	}
+	s := list[0]
+	ce, ok := s.Cmd.(*syntax.CallExpr)
+	if !ok || s.Negated || s.Background || s.Coprocess || len(s.Redirs) > 0 || len(ce.Args) != 0 || len(ce.Assigns) != 1 {
+		return false
+	}
+	a := ce.Assigns[0]
+	return a.Name != nil && a.Name.Value == name && !a.Append && a.Index == nil && a.Array == nil && a.Value != nil && hasSubst(a.Value)
 }
 
 // stopStmt: one statement that is `exit` / `return`, with nothing, `$?` (allowed when bare is true) or a literal 1..255.
@@ -363,12 +389,8 @@ func braceReason(b *syntax.Block, exitOnly bool) string {
 		return "an empty handler group"
 	}
 	for _, s := range b.Stmts[:len(b.Stmts)-1] {
-		ce, ok := s.Cmd.(*syntax.CallExpr)
-		if !ok || s.Negated || s.Coprocess {
-			return "inside the handler group only simple commands may come before the last statement"
-		}
-		if name := firstLit(ce); name == "exit" || name == "return" || name == "break" || name == "continue" {
-			return "a statement before the last one leaves the handler group early"
+		if why := messageReason(s); why != "" {
+			return why
 		}
 	}
 	last := b.Stmts[len(b.Stmts)-1]
@@ -378,6 +400,31 @@ func braceReason(b *syntax.Block, exitOnly bool) string {
 	}
 	if _, ok := exitVerb(ce, exitOnly); !ok || len(ce.Args) != 2 || !exitLiteral(ce.Args[1]) {
 		return "the last statement of the handler group must be `exit N` / `return N` with a literal N of 1..255"
+	}
+	return ""
+}
+
+// messageReason: a statement in front of the closing exit is a message and nothing else: a simple command whose name is the literal `echo` or `printf`,
+// no prefix assignment, no wrapper, and no command / process substitution in an argument or in a redirection. A function call (fail, warn, log…) is
+// not that: what it does cannot be read here. This is a whitelist; nothing about `exit`, `return`, `eval`, `command` or their options is parsed.
+func messageReason(s *syntax.Stmt) string {
+	const why = "inside a handler group, every statement before the closing exit must be an echo or printf (literal name, no substitution in arguments or redirections)"
+	ce, ok := s.Cmd.(*syntax.CallExpr)
+	if !ok || s.Negated || s.Background || s.Coprocess || len(ce.Assigns) != 0 || len(ce.Args) == 0 {
+		return why
+	}
+	if name := litOf(ce.Args[0]); name != "echo" && name != "printf" {
+		return why
+	}
+	for _, a := range ce.Args {
+		if hasSubst(a) {
+			return why
+		}
+	}
+	for _, r := range s.Redirs {
+		if hasSubst(r) {
+			return why
+		}
 	}
 	return ""
 }
@@ -558,16 +605,16 @@ func chainReason(s *syntax.Stmt) string {
 }
 
 func simpleReason(ce *syntax.CallExpr) string {
-	args := ce.Args
-	for len(args) > 0 {
-		switch litOf(args[0]) {
-		case "eval", ".", "source":
-			return "eval, `.` and source run text that this check cannot see"
-		case "command", "builtin":
-			args = args[1:]
-			continue
-		}
-		break
+	if len(ce.Args) == 0 {
+		return "" // only assignments
+	}
+	name := litOf(ce.Args[0])
+	if name == "" {
+		return "the command word is computed ($x, ${x}, \"$x\", a word with a substitution): what runs cannot be read"
+	}
+	switch name {
+	case "command", "builtin", "exec", "eval", ".", "source":
+		return "command, builtin, exec, eval, `.` and source run what follows them; this check does not read their options or their text"
 	}
 	return ""
 }

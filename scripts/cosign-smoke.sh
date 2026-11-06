@@ -18,6 +18,7 @@
 set -euo pipefail
 self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
 cd "$self_dir/.." || exit 1
+. "$self_dir/best-effort.sh" || exit 1   # capture: the status of the second sign next to what cosign printed
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 # signs_cmd <artifact>: the signs entry — cmd, args and the signature template, with goreleaser's
@@ -66,7 +67,7 @@ COSIGN_PASSWORD= "${cmd[@]}" --key "$work/import-cosign.key" >/dev/null \
   || { echo "FAIL: first signature of the artifact failed (Rekor unreachable, not the 409 case)"; exit 1; }
 # Both signs write the same $sig: drop the first bundle so the checks below see the second one only.
 rm -f "$sig"
-out_rc=0; out=$(COSIGN_PASSWORD= "${cmd[@]}" --key "$work/import-cosign.key" 2>&1) || out_rc=$?
+capture -2 out out_rc env COSIGN_PASSWORD= "${cmd[@]}" --key "$work/import-cosign.key" || exit 1
 if [ "$out_rc" != 0 ]; then
   echo "FAIL: signing the same artifact again met an equivalent Rekor entry and cosign gave up (#195):"
   printf '%s\n' "$out" | sed -E 's/[0-9a-f]{40,}/<id>/g' | tail -n 2

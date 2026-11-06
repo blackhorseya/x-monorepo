@@ -144,7 +144,8 @@ prebind() {
     echo "invited $email"
   fi
   local token
-  token=$(ISSUER=$issuer "$token_cmd" "$email") || { echo "dex-prebind: could not get a Dex token for $email (is Dex up and dex.localtest.me resolvable? docs/operations.md)" >&2; exit 1; }
+  capture token token_rc env ISSUER="$issuer" "$token_cmd" "$email" || exit 1
+  [ "$token_rc" = 0 ] || { echo "dex-prebind: could not get a Dex token for $email (is Dex up and dex.localtest.me resolvable? docs/operations.md)" >&2; exit 1; }
   [ -n "$token" ] || die "empty Dex token for $email"
   rpc ClaimInvite '{}' Authorization "Bearer $token"
   echo "bound $email"

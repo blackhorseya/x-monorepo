@@ -63,7 +63,8 @@ expect_refused() {
     sleep 0.5
   done
   local code logs
-  code=$(container_field ExitCode "$n") || { echo "image.sh: cannot read the exit code of $n: a container whose exit code is unknown is not proven to have refused" >&2; best_effort "$tool" rm -f "$n" >/dev/null 2>&1; exit 1; }
+  capture code code_rc container_field ExitCode "$n" || exit 1
+  if [ "$code_rc" != 0 ]; then echo "image.sh: cannot read the exit code of $n: a container whose exit code is unknown is not proven to have refused" >&2; best_effort "$tool" rm -f "$n" >/dev/null 2>&1; exit 1; fi
   case $code in ''|*[!0-9]*) echo "image.sh: the exit code of $n is not a number ([$code]): a container whose exit code is unknown is not proven to have refused" >&2; "$tool" rm -f "$n" >/dev/null 2>&1 || true; exit 1 ;; esac
   local lf lrc=0
   lf=$(mktemp "${TMPDIR:-/tmp}/image-logs.XXXXXX") || { echo "image.sh: cannot create a temp file for the logs of $n" >&2; exit 1; }

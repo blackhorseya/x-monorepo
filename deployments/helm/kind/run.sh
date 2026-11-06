@@ -39,7 +39,7 @@ path=$shim
 for t in kubectl helm kind docker podman k6 jq psql python3 curl git go perl base64 xargs; do
   p=""
   # a tool the caller does not have is simply not added to the PATH; the script that needs it fails on its own
-  if command -v "$t" >/dev/null 2>&1; then p=$(command -v "$t") || exit 1; fi
+  if type -P "$t" >/dev/null 2>&1; then p=$(type -P "$t") || exit 1; fi
   case $p in /*) d=${p%/*}; case ":$path:" in *":$d:"*) ;; *) path=$path:$d ;; esac ;; esac
 done
 path=$path:/usr/bin:/bin:/usr/sbin:/sbin

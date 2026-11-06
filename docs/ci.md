@@ -57,13 +57,15 @@ gate 若把外部指令的非零退出碼丟掉，指令壞了它也是綠的。
 **`default`／`fnctx` 的白名單（#472）**——只列放行的位置與內容，其餘都紅：
 
 - **位置**（命令替換只准出現在這兩處）：(1) 賦值的**完整**右手邊：`x=$(…)`、`x="$(…)"`，Word 裡只有這一個 part，且不是 `+=`、陣列、宣告內建、命令的前置賦值；(2) 標籤寫法 `$([ test ] && echo a || echo b)`，test 是 `[`／`[[`／`test` 且裡面沒有任何替換，a、b 是 `echo`／`printf`（這一種在任何位置都放行）。
-- **內容**（每個非標籤的替換）：恰好一條由 `&&` 或 `|` 串起的**簡單命令**，最後可接一個 `|| exit [N]`。不准有 `;`／第二個敘述、`!`、`&`、subshell、group、`if`／`case`／迴圈／函式／`[[ ]]`／`(( ))`／`time`／`coproc`，不准 `eval`、`.`、`source`（含 `command`／`builtin` 前綴）。
-- **賦值後面的 handler**：`x=$(…) || H`，H 只能是 `exit`／`return`（無參數，或 `$?` 緊接在 `||` 之後）、`exit N`／`return N`（N 是 **1–255 的字面值**，256 的倍數是 0）、`{ …; exit N; }`／`{ …; return N; }`（最後一句是 1–255 的字面值，前面只准簡單命令且不准 `exit`／`return`／`break`／`continue`；區塊裡不准無參數、不准 `$?`、不准 `$var`），頂層另可 `|| NAME=$?`（交給 `rcbranch`）。替換裡只准 `exit`。handler 必須**結束整條 AND-OR list**：後面只准 `;` 或註解，不准接 `&`／`|`／`&&`／`||`，list 也不能在背景、pipeline 運算元或 coprocess 裡（`exit` 只會離開那個 subshell）。不接受函式名稱（`die`、`fail`）、重設變數、`|| true`。
-- **賦值本身是條件**：`if`／`elif` 的條件放行，但**整條鏈要有 `else`，else 的最後一句是 `exit N`／`return N`**（N 為 1–255；只有 else 僅此一句時可寫無參數或 `$?`）；`until` 放行（迴圈只在成功時離開）；`while` 的條件與 `! x=$(…)` 紅（離開迴圈／進 then 的是失敗那次，後面用到的是它的半截輸出）。
+- **內容**（每個非標籤的替換）：恰好一條由 `&&` 或 `|` 串起的**簡單命令**，最後可接一個 `|| exit [N]`。不准有 `;`／第二個敘述、`!`、`&`、subshell、group、`if`／`case`／迴圈／函式／`[[ ]]`／`(( ))`／`time`／`coproc`。**每條簡單命令的第一個字必須是字面值**（不是 `$x`、`${x}`、`"$x"`、`"$src/…"`、帶替換或串接的字；要跑變數裡的命令用 `capture out rc env … "$cmd" …`，命令寫在引數位置），而且**第一個字不能是 `command`、`builtin`、`exec`、`eval`、`.`、`source`**，不論後面接什麼：不解析 `-p`、`--`、`-v` 或任何 option（`$(command -v x)` 改 `$(type -P x)`）。
+- **賦值後面的 handler**：`x=$(…) || H`，H 只能是 `exit`／`return`（無參數，或 `$?` 緊接在 `||` 之後）、`exit N`／`return N`（N 是 **1–255 的字面值**，256 的倍數是 0）、`{ …; exit N; }`／`{ …; return N; }`（最後一句是 1–255 的字面值；區塊裡不准無參數、不准 `$?`、不准 `$var`；**最後一句之前的每一句都只能是指令名為字面 `echo` 或 `printf` 的簡單命令**：沒有前綴賦值、沒有 wrapper，引數與重導向裡沒有任何替換；函式呼叫（`fail`、`warn`、`log`…）一律不行，要在 handler 外先輸出，或把值先讀進變數再 `[ "$rc" = 0 ] || fail …`），頂層另可 `|| NAME=$?`（交給 `rcbranch`）。替換裡只准 `exit`。handler 必須**結束整條 AND-OR list**：後面只准 `;` 或註解，不准接 `&`／`|`／`&&`／`||`，list 也不能在背景、pipeline 運算元或 coprocess 裡（`exit` 只會離開那個 subshell）。不接受函式名稱、重設變數、`|| true`。
+- **賦值本身是條件**：`if`／`elif` 的條件放行，但賦值失敗後**下一個執行的子句**必須是下列其一：(a) 最後的 `else`，且 else 的最後一句是 `exit N`／`return N`（N 為 1–255；只有 else 僅此一句時可寫無參數或 `$?`；有多句時前面的每一句都是 echo／printf，規則同 handler）；(b) 一個 `elif`，它的條件**只有**一個對**同一個變數名**的純賦值 `v=$(…)`（try A else B），然後對這個 elif 遞迴套用同一條規則。其他 `elif`（`elif true`、`elif [ -n "$v" ]`、`elif w=$(…)`、變數名不同、條件不只是賦值）紅，因為它的 then 會拿失敗那次的半截輸出去跑；沒有 else 也紅。`until` 放行（迴圈只在成功時離開）；`while` 的條件與 `! x=$(…)` 紅（離開迴圈／進 then 的是失敗那次，後面用到的是它的半截輸出）。
 - **函式本體**：本體裡的 `x=$(…)` 必須帶上面的 handler，或是上面的條件形式；賦值在 `&&` 左邊（`x=$(cmd) && use`）在函式裡紅（頂層放行：值只在成功時才用，#466 r5）。
 - **唯一的整節點例外**：kind 腳本的 `. "$(dirname "$0")/../../../scripts/best-effort.sh"`（check-kubeconfig 只接受逐字這一行）。逐欄位比對：命令是 `.`、一個引數、引數恰好是 `dirname "$0"` 的替換接上那段字面路徑；路徑、命令（`source`、`basename`）、引數個數、反引號任一不同都紅。
 
-**限制（誠實版）**：判斷的是位置與形狀，不證明分支會被走到，零 finding 不等於行為正確，審查仍要看分支；`eval "$x"`、`sh -c "$x"`、`xargs sh -c` 這類在別處組出來的動態內容不在判斷範圍；bash 的 `-n` 讀得過、但 parser 讀不懂的檔案是 exit 2（fail closed，不是乾淨）；`tools/swallowast` 的輸出寫不出去（管線關閉、磁碟滿）也是 exit 2。
+**不透明範圍（checker 不追進去，不是保證）**：`sh -c`／`bash -c` 的字串、函式本體在 `$(f)` 被呼叫時的內容（函式本體裡自己的賦值另由 fnctx 管）、外部直譯器（`python -c`、`perl -e`、`awk` 的程式…）、`xargs`／`env`／`nohup` 之類帶著命令的前綴，以及其他任何間接執行字串的方式。這些都在範圍外；checker 的輸出只宣稱「covered shapes」，指到這一段。
+
+**限制（誠實版）**：判斷的是位置與形狀，不證明分支會被走到，零 finding 不等於行為正確，審查仍要看分支；bash 的 `-n` 讀得過、但 parser 讀不懂的檔案是 exit 2（fail closed，不是乾淨）；`tools/swallowast` 的輸出寫不出去（管線關閉、磁碟滿）也是 exit 2。
 
 **改成什麼**：值先算、再用（`n=$(wc -l < f | tr -d ' ') || exit 1` 之後 `[ "$n" = 5 ]`）；測試的 `expect_eq name want "$(cmd)"` 改 `eq_of name want cmd …`、`match_of`（命令寫成字，在 subshell 跑，非零碼是失敗的案例而不是被比較的值；失敗標記的案例用 `eq_rc name want 退出碼 cmd …`）；`cd "$(dirname "$0")/.."` 改 `abs_dir_of "$0" ..`（`( cd "${1%/*}…" && pwd )` 寫在函式本體裡）；heredoc 要原文就引用結束字 `<<'EOF'`，要展開就先把值算進變數；訊息裡的替換先算成變數。
 

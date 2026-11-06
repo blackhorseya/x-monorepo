@@ -375,7 +375,8 @@ eq_of "k6-auth job no longer runs task k6-wire"     0 ci_count k6-auth 'task k6-
 # #448: k6-auth is one job with a static matrix of shards, K6_AUTH_SHARD=<i>/<n>. The shards must be exactly
 # 1/n … n/n, and their cells together must be the whole list, each once — a cell in no shard would never run.
 m=$src/tests/k6/auth-matrix.sh
-all_cells=$(K6_AUTH_LIST=1 "$m")
+capture all_cells all_cells_rc env K6_AUTH_LIST=1 "$m" || exit 1
+[ "$all_cells_rc" = 0 ] || { echo "scripts/test.sh: $m K6_AUTH_LIST=1 failed" >&2; exit 1; }
 got=$(printf '%s\n' "$all_cells" | wc -l | tr -d ' ') || exit 1
 expect_eq "auth matrix lists 27 cells" 27 "$got"
 got=$(printf '%s\n' "$all_cells" | sort | uniq -d | wc -l | tr -d ' ') || exit 1
@@ -389,7 +390,8 @@ eq_of "k6-auth leg reads its shard from the matrix" 1 ci_count k6-auth '^      K
 eq_of "k6-auth matrix does not stop the other legs" 1 ci_count k6-auth '^      fail-fast: false$'
 union=""
 for ((i = 1; i <= n; i++)); do
-  part=$(K6_AUTH_LIST=1 K6_AUTH_SHARD=$i/$n "$m")
+  capture part part_rc env K6_AUTH_LIST=1 K6_AUTH_SHARD=$i/$n "$m" || exit 1
+  [ "$part_rc" = 0 ] || { echo "scripts/test.sh: $m shard $i/$n failed" >&2; exit 1; }
   expect_match "auth matrix shard $i/$n is not empty" '.' "$part"
   union="$union
 $part"
@@ -665,11 +667,11 @@ match_of "docs/ci.md names the pnpm-cache action"          "pnpm-cache" cat "$sr
 # the script fail, never yield a plausible-looking output (#459: gates that swallowed an exit code gave a false green) ──────────
 mkdir -p "$tmp/plan-bin"
 printf '#!/bin/sh\necho 2026-W\nexit 5\n' > "$tmp/plan-bin/date"; chmod +x "$tmp/plan-bin/date"
-rc=0; out=$(PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" 2>&1) || rc=$?
+capture -2 out rc env PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" || exit 1
 expect_eq "plan.sh: a date that prints and then fails makes plan.sh fail" "5" "$rc"
 _c502a=$(printf '%s\n' "$out" | count_lines '^week='); expect_eq "plan.sh: ... and no week= line was written" 0 "$_c502a"
 printf '#!/bin/sh\necho garbage\nexit 0\n' > "$tmp/plan-bin/date"
-rc=0; out=$(PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" 2>&1) || rc=$?
+capture -2 out rc env PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" || exit 1
 expect_eq "plan.sh: a date that prints something that is not an ISO week makes plan.sh fail" "1" "$rc"
 PATH="$tmp/plan-bin:$PATH" eq_rc "plan: plan_out reports a failing plan.sh instead of an empty value" "PLAN-FAILED" 0 plan_out push refs/heads/main main lint write
 mkdir -p "$tmp/badgrep-bin"; printf '#!/bin/sh\necho partial\nexit 2\n' > "$tmp/badgrep-bin/grep"; chmod +x "$tmp/badgrep-bin/grep"
@@ -1637,7 +1639,7 @@ done
 # the same attack through a real name: a curl wrapper maps remote.invalid to the stub (curl's own --resolve),
 # so a guard that let the userinfo URL through would really connect to the "remote" host and send the key
 pb_curlbin="$tmp/pb-curlbin"; mkdir -p "$pb_curlbin"
-curl_bin=$(command -v curl) || exit 1
+curl_bin=$(type -P curl) || exit 1
 printf '#!/usr/bin/env bash\nexec "%s" --resolve "remote.invalid:%s:127.0.0.1" "$@"\n' "$curl_bin" "$pb_port" > "$pb_curlbin/curl"
 chmod +x "$pb_curlbin/curl"
 for u in "http://localhost:unused@remote.invalid:$pb_port" "http://remote.invalid:$pb_port" "http://localhost:unused@remote.invalid:$pb_port/"; do
@@ -1968,7 +1970,7 @@ use (
 	./tools/Z9
 )'
 expect_eq "check-modules: dots, underscores, dashes and digits inside a path are accepted" "0" "$rc"
-rc=0; out=$("$cm" "$tmp/no-such-go.work" 2>&1) || rc=$?
+capture -2 out rc "$cm" "$tmp/no-such-go.work" || exit 1
 expect_eq "check-modules: an unreadable go.work fails" "1" "$rc"
 rc=0; capture -2 out rc in_dir "$src" "$cm" || exit 1
 expect_eq "check-modules: this repo's go.work passes" "0" "$rc"
@@ -1989,7 +1991,7 @@ for missing in go jq; do
   d="$tmp/modules-no-$missing"; mkdir -p "$d"
   printf '%s\n' "$gw_block" > "$d/go.work"
   tw=$(tools_without "$missing") || exit 1
-  bash_bin=$(command -v bash) || exit 1
+  bash_bin=$(type -P bash) || exit 1
   capture -2 out rc env PATH="$tw" "$bash_bin" "$cm" "$d/go.work" || exit 1
   expect_eq "check-modules: without $missing the check fails" "1" "$rc"
   expect_match "check-modules: without $missing the failure names it" "$missing not found" "$out"
@@ -2559,7 +2561,7 @@ expect_eq "restore_step / restore_exit are used by payment-flow, payment, outage
 # exactly this (`$(ci_job x | grep -c y)` printed 1 and the assertion passed); each must now produce a failure token, never the plausible value.
 # The control for every cell is the real assertion above (same input, real tools, the expected value).
 kd_dying() {   # kd_dying <tool>: PATH wrapper dir that runs the real <tool>, then exits 42 (git: only `diff`, so the fixture still builds)
-  local real; real=$(command -v "$1") || return 1
+  local real; real=$(type -P "$1") || return 1
   mkdir -p "$tmp/kd-dying-$1"
   if [ "$1" = git ]; then
     printf '#!/bin/sh\nif [ "$1" = diff ]; then %s "$@"; exit 42; fi\nexec %s "$@"\n' "$real" "$real" > "$tmp/kd-dying-$1/$1"
@@ -2764,6 +2766,7 @@ shape_red or-brace-rc     $'  x=$(cmd) || { rc=$?; echo "cmd failed ($rc)" >&2; 
 shape_red ret-var         $'  r=3\n  x=$(cmd) || return "$r"'
 shape_red ret-positional  $'  x=$(cmd) || return "$1"'
 shape_red brace-bare-exit $'  x=$(cmd) || { echo m >&2; exit; }'
+shape_red brace-function-call $'  x=$(cmd) || { echo m >&2; cleanup; return 2; }'
 shape_red brace-dollar-q  $'  x=$(cmd) || { echo m >&2; exit $?; }'
 shape_red ret-arith       '  x=$(cmd) || return $((0))'
 shape_red rc-next         $'  x=$(cmd)\n  rc=$?\n  [ "$rc" = 0 ] || return 1\n  printf \'%s\\n\' "$x"'
@@ -2784,7 +2787,7 @@ shape_red return-cmd      $'  x=$(cmd) || return $(warn)'
 # the three shapes, with each kind of [arg], are green
 fn_green ret-arg     '  x=$(cmd) || return 3'
 fn_green exit-status '  x=$(cmd) || exit $?'
-fn_green brace-last  '  x=$(cmd) || { echo "cmd failed" >&2; cleanup; return 2; }'
+fn_green brace-last  '  x=$(cmd) || { echo "cmd failed" >&2; return 2; }'
 # the helpers that tolerate one exit status, each against rc=0 / rc=1 / rc>=2 (the real functions, cut out of their files)
 fn_text() { # <file> <name>: the function, from its first line to its closing brace (indented or not)
   awk -v n="$2" '$0 ~ "^[ \t]*" n "\\(\\) \\{" { on = 1 } on { print } on && $0 ~ /^[ \t]*\}[ \t]*$/ { exit } on && $1 == n "()" && $0 ~ /\}[ \t]*$/ { exit }' "$1"
@@ -3601,6 +3604,13 @@ dr_red ast-list-while-condition 'half' <<'F'
 while x=$(cmd); do :; done
 v=$x
 F
+# an `elif` after the assignment's clause runs its OWN then-branch with the half-printed value; the closing `else exit` is never reached (#473 review)
+dr_red ast-list-elif-runs-its-then 'half' <<'F'
+if v=$(cmd); then :; elif true; then :; else exit 1; fi
+F
+dr_red ast-list-elif-reads-the-value 'half' <<'F'
+if v=$(cmd); then :; elif [ -n "$v" ]; then :; else exit 1; fi
+F
 # an else block that leaves early (return 0) before its closing exit: the failure is swallowed, in a function the real shell returns 0 and the half is used
 sw_write ast-else-returns-first <<'F'
 cmd() { printf half; return 7; }
@@ -3660,6 +3670,118 @@ drf_red and-use $'  x=$(cmd) && v=$x'
 drf_red rc-handler $'  rc=0\n  x=$(cmd) || rc=$?\n  [ "$rc" = 0 ] || return "$rc"\n  v=$x'
 { dr_prelude; printf 'f() {\n  if x=$(cmd); then v=$x; else return 5; fi\n}\nf || exit $?\n'; } > "$sw/drf-ok.sh"
 sw_run "$sw/drf-ok.sh"; expect_eq "ast (function): an if / else-return condition assignment is green" "0" "$rc"
+dr_red ast-list-elif-other-variable 'half' <<'F'
+if v=$(cmd); then :; elif w=$(true); then printf -v v '%s' "$v"; else exit 1; fi
+F
+dr_red ast-list-elif-middle-not-an-assignment 'half' <<'F'
+if v=$(cmd); then :; elif true; then :; elif v=$(true); then :; else exit 1; fi
+F
+df_red ast-list-elif-assignment-without-substitution <<'F'
+if v=$(cmd); then :; elif v=literal; then echo "$v"; else exit 1; fi
+F
+df_red ast-list-elif-condition-is-a-list <<'F'
+if v=$(cmd); then :; elif v=$(true); true; then echo "$v"; else exit 1; fi
+F
+dr_red ast-list-elif-chain-then-plain-elif 'half' <<'F'
+if v=$(false); then :; elif v=$(cmd); then :; elif true; then :; else exit 1; fi
+F
+# handler groups: a statement BEFORE the closing exit that leaves early, also behind `command` / `builtin` (and their options) or through eval (#473 review)
+ast_early_red() { # <name> <the early statement>: in a function the real shell returns 0 with the half-printed value in use
+  { dr_prelude; printf 'f() {\n  v=$(cmd) || { %s; exit 1; }\n}\nf\necho "v=[$v] rc=$?"\n' "$2"; } > "$sw/early-$1.sh"
+  sw_run "$sw/early-$1.sh"
+  expect_eq    "ast (early leave): [$1] is red" "1" "$rc"
+  expect_match "ast (early leave): [$1] names the default rule" ': default:' "$out"
+  real_rc=0; capture -2 real real_rc bash "$sw/early-$1.sh" || exit 1
+  expect_match "ast (early leave): [$1] — the real shell goes on with the half and status 0" 'v=\[half\] rc=0' "$real"
+}
+ast_early_red command-return 'command return 0'
+ast_early_red command-p-return 'command -p return 0'
+ast_early_red builtin-return 'builtin return 0'
+ast_early_red builtin-dd-return 'builtin -- return 0'
+ast_early_red eval-return 'eval "return 0"'
+ast_early_red dot-return 'source /dev/null; return 0'
+dr_red ast-early-top-level-command-exit 'half' <<'F'
+v=$(cmd) || { echo "v=[$v]"; command exit 0; exit 1; }
+F
+# a function call in front of the closing exit (`fail`, `warn`, `log` all look the same): here it is a function that leaves with status 0
+sw_write ast-early-function-call <<'F'
+cmd() { printf half; return 7; }
+v=sentinel
+f() { echo "v=[$v]"; exit 0; }
+v=$(cmd) || { f; exit 1; }
+echo "not reached"
+F
+sw_run "$sw/ast-early-function-call.sh"
+expect_eq    "ast (early leave): a function call before the closing exit is red" "1" "$rc"
+expect_match "ast (early leave): ...as default" ': default:' "$out"
+real_rc=0; capture -2 real real_rc bash "$sw/ast-early-function-call.sh" || exit 1
+expect_eq    "ast (early leave): ...and the real shell leaves with status 0, the failure swallowed" "0 v=[half]" "$real_rc $real"
+df_red ast-early-prefix-assignment <<'F'
+v=$(cmd) || { FOO=1 echo m; exit 1; }
+F
+df_red ast-early-process-substitution-argument <<'F'
+v=$(cmd) || { echo <(true); exit 1; }
+F
+df_red ast-early-process-substitution-redirect <<'F'
+v=$(cmd) || { echo m > >(cat); exit 1; }
+F
+sw_write ast-handler-return-zero <<'F'
+cmd() { printf half; return 7; }
+f() { v=$(cmd) || return 0; echo "reached: v=[$v]"; }
+f
+echo "rc=$?"
+F
+sw_run "$sw/ast-handler-return-zero.sh"
+expect_eq    "ast: a handler with return 0 is red" "1" "$rc"
+real_rc=0; capture -2 real real_rc bash "$sw/ast-handler-return-zero.sh" || exit 1
+expect_eq    "ast: ...and the real shell returns 0: the failure of cmd is gone" "rc=0" "$real"
+dr_red ast-handler-brace-exit-zero 'half' <<'F'
+v=$(cmd) || { echo "v=[$v]"; exit 0; }
+F
+dr_green ast-early-positive-message-then-exit 3 <<'F'
+f() { v=$(cmd) || { echo "cmd failed" >&2; printf '%s\n' "$LINENO" >&2; exit 3; }; }
+f
+F
+# `command` / `builtin` with options in front of eval, inside a substitution
+dr_red ast-content-command-p-eval 'half0' <<'F'
+v=$(command -p eval 'cmd; echo 0')
+F
+dr_red ast-content-command-dd-eval 'half0' <<'F'
+v=$(command -- eval 'cmd; echo 0')
+F
+dr_red ast-content-builtin-dd-eval 'half0' <<'F'
+v=$(builtin -- eval 'cmd; echo 0')
+F
+# the command word is a literal, and not command / builtin / exec / eval / . / source (no option is parsed: `command -v x` is red too)
+dr_red ast-content-command-v 'half' <<'F'
+half() { printf half; return 7; }
+v=$(command -v half)
+F
+dr_red ast-content-exec 'half' <<'F'
+v=$(exec printf half)
+F
+dr_red ast-content-computed-name 'half' <<'F'
+c=cmd
+v=$($c)
+F
+dr_red ast-content-computed-name-braced 'half' <<'F'
+c=cmd
+v=$(${c} arg)
+F
+dr_red ast-content-computed-name-quoted 'half' <<'F'
+c=cmd
+v=$("${c}" arg)
+F
+dr_red ast-content-computed-name-quoted-var 'half' <<'F'
+CMD=cmd
+v=$("$CMD" arg)
+F
+dr_red ast-content-computed-name-with-substitution 'half' <<'F'
+v=$(c$(printf md) arg)
+F
+dr_red ast-content-computed-name-concat 'half' <<'F'
+v=$("c"m"d")
+F
 # (d) the one node that is exempt: the kind scripts' `. "$(dirname "$0")/../../../scripts/best-effort.sh"`. Matched field by field.
 sw_write ast-kind-exact <<'F'
 . "$(dirname "$0")/../../../scripts/best-effort.sh"
@@ -4043,24 +4165,24 @@ jobs:
       - run: ls
 Y
 mkdir -p "$tmp/nopython"; printf '#!/bin/sh\nexit 42\n' > "$tmp/nopython/python3"; chmod +x "$tmp/nopython/python3"
-rc=0; out=$(PATH="$tmp/nopython:$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/wf-clean.yml" 2>&1) || rc=$?
+capture -2 out rc env PATH="$tmp/nopython:$PATH" "$src/scripts/check-exit-swallow.sh" "$sw/wf-clean.yml" || exit 1
 expect_eq    "workflow: the extractor dying (python3 exit 42) is exit 2, never clean" "2" "$rc"
 expect_match "workflow: …and it says which command" 'extract-run-blocks\.py failed \(exit 42\)' "$out"
 
 # the known procsub sites, each with the external command printing (all of its output, or only the first line) and then exiting 42
 for keep in all 1; do
   w=$(inject_fail "$tmp/inj-neg-$keep" sed 42 "$keep")
-  rc=0; out=$(PATH="$w:$PATH" "$src/deployments/helm/check-negative.sh" x-monorepo 2>&1) || rc=$?
+  capture -2 out rc env PATH="$w:$PATH" "$src/deployments/helm/check-negative.sh" x-monorepo || exit 1
   expect_eq    "check-negative: sed prints [$keep] then exits 42 → the check fails" "1" "$rc"
   expect_match "check-negative: …and names the read" "reading the '# expect:' lines exited 42" "$out"
   w=$(inject_fail "$tmp/inj-res-$keep" grep 42 "$keep")
-  rc=0; out=$(PATH="$w:$PATH" "$src/scripts/actions-resolve.sh" 2>&1) || rc=$?
+  capture -2 out rc env PATH="$w:$PATH" "$src/scripts/actions-resolve.sh" || exit 1
   expect_eq    "actions-resolve: grep prints [$keep] then exits 42 → exit 2" "2" "$rc"
   expect_match "actions-resolve: …and names the listing" 'listing the uses: lines exited 42' "$out"
 done
 # cosign-smoke.sh: python3 reading .goreleaser.yaml prints [all / the first line] and exits 42 (no git needed: the script only needs its own root)
 if python3 -c 'import yaml' 2>/dev/null; then
-  cs="$tmp/cs-inj"; mkdir -p "$cs/scripts"; cp "$src/scripts/cosign-smoke.sh" "$cs/scripts/"; cp "$src/.goreleaser.yaml" "$cs/"
+  cs="$tmp/cs-inj"; mkdir -p "$cs/scripts"; cp "$src/scripts/cosign-smoke.sh" "$src/scripts/best-effort.sh" "$cs/scripts/"; cp "$src/.goreleaser.yaml" "$cs/"
   for keep in all 1; do
     w=$(inject_fail "$tmp/inj-cs-$keep" python3 42 "$keep")
     rc=0; capture -2 out rc in_dir "$cs" env PATH="$w:$fakebin:$PATH" FAKE_COUNT="$tmp/count-cs$keep" FAKE_SKIP_SIGN_N=0 scripts/cosign-smoke.sh || exit 1
@@ -4272,22 +4394,22 @@ case $1 in
 esac
 FAKE
 chmod +x "$fakegit/git"
-rc=0; out=$(PATH="$fakegit:$PATH" "$src/scripts/next-version.sh" 2>&1) || rc=$?
+capture -2 out rc env PATH="$fakegit:$PATH" "$src/scripts/next-version.sh" || exit 1
 expect_match "next-version: the fake git, nothing failing, gives a version" '^v0\.2\.0' "$out"
 for keep in all 1; do
   w=$(PATH="$fakegit:$PATH" inject_fail "$tmp/inj-nv-$keep" git 42 "$keep" 'log*')
-  rc=0; out=$(PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" 2>&1) || rc=$?
+  capture -2 out rc env PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" || exit 1
   expect_eq    "next-version: git log prints [$keep] then exits 42 → exit 2 (not a version from half the log)" "2" "$rc"
   expect_match "next-version: …and names git log" 'git log v0\.1\.0\.\.HEAD exited 42' "$out"
   w=$(inject_fail "$tmp/inj-nvsed-$keep" sed 42 "$keep")
-  rc=0; out=$(PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" 2>&1) || rc=$?
+  capture -2 out rc env PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" || exit 1
   expect_eq    "next-version: consider()'s sed prints [$keep] then exits 42 → exit 2" "2" "$rc"
   expect_match "next-version: …and names the sed" 'sed over a commit subject failed \(exit 42\)' "$out"
 done
 
 for keep in all 1; do
   w=$(PATH="$fakegit:$PATH" inject_fail "$tmp/inj-nvdesc-$keep" git 42 "$keep" 'describe*v0.1.0')
-  rc=0; out=$(PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" 2>&1) || rc=$?
+  capture -2 out rc env PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" || exit 1
   expect_eq    "next-version (#470): git describe of the base prints [$keep] then exits 42 → exit 2 (no made-up tag)" "2" "$rc"
   expect_match "next-version (#470): …and names git describe" 'git describe failed for v0\.1\.0' "$out"
 done

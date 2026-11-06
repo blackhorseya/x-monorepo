@@ -81,7 +81,7 @@ export KUBECONFIG="$tmp/none.yaml"
 
 # Every kubectl in this run goes through a shim that records the kubeconfig it was given (the KUBECONFIG it runs with, or its
 # --kubeconfig). Judged at the end: no call ran on the caller's default (~/.kube/config), whose current-context may be production.
-real_kubectl=$(command -v kubectl)
+real_kubectl=$(type -P kubectl)
 mkdir "$tmp/shim"
 cat > "$tmp/shim/kubectl" <<SHIM
 #!/bin/sh
