@@ -4,7 +4,8 @@
 # PR check and broke the first release on main (#115), because release.yml only ever runs there.
 # ci.yml's actions-resolve job runs this on every PR; locally: scripts/actions-resolve.sh (needs gh).
 set -euo pipefail
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 fail=0
 # the list first, then the loop: `done < <(…)` would not see grep / sed / sort dying (#465); no `uses:` at all is not a pass
 rc=0; uses=$(grep -rhE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@' .github \

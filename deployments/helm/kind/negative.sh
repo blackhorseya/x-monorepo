@@ -9,6 +9,7 @@
 #      presents that key to catalog-rpc and reads it by secretKeyRef optional: false
 # The release is restored (helm upgrade --wait) and the Secrets deleted on the way out, whatever happens.
 #   negative.sh <namespace> <release> <chart-dir> <values-file>
+# shellcheck disable=SC2154   # `capture` (scripts/best-effort.sh) assigns the variables it is given, which shellcheck cannot see
 set -euo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
@@ -30,9 +31,12 @@ upgrade_with() { # <secret name>
 }
 
 # poll <seconds> <jq filter over the catalog-rpc pods list that must print "yes">
+poll_read() { kubectl -n "$ns" get pods -l "$sel" -o json | jq -r "$1"; }
 poll() {
+  local ans rc
   for ((_try32 = 1; _try32 <= "$1"; _try32++)); do
-    [ "$(kubectl -n "$ns" get pods -l "$sel" -o json | jq -r "$2")" = yes ] && return 0
+    capture ans rc poll_read "$2" || return 1
+    [ "$rc" = 0 ] && [ "$ans" = yes ] && return 0   # a failed read is "not yet": the loop retries, running out of tries is the failure
     sleep 1
   done
   return 1
@@ -57,14 +61,18 @@ poll 120 'if any(.items[]; (.status.containerStatuses[0].lastState.terminated.ex
 refusal=""
 for ((_try56 = 1; _try56 <= "${NEGATIVE_TRIES:-60}"; _try56++)); do
   # a failed read (API hiccup, unparsable output) is a retry like any other: set -e must not end the script
-  if ! pods=$(kubectl -n "$ns" get pods -l "$sel" -o json 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi
-  if ! bad=$(jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0] // empty' <<<"$pods" 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi
+  capture pods pods_rc kubectl -n "$ns" get pods -l "$sel" -o json 2>/dev/null || exit 1
+  if [ "$pods_rc" != 0 ]; then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi
+  capture bad bad_rc jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0] // empty' <<<"$pods" 2>/dev/null || exit 1
+  if [ "$bad_rc" != 0 ]; then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi
   if [ -n "$bad" ]; then
-    if ! msg=$(jq -r --arg n "$bad" '.items[] | select(.metadata.name == $n) | .status.containerStatuses[0].lastState.terminated.message // empty' <<<"$pods" 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi   # a failed read is a retry, never an empty message
+    capture msg msg_rc jq -r --arg n "$bad" '.items[] | select(.metadata.name == $n) | .status.containerStatuses[0].lastState.terminated.message // empty' <<<"$pods" 2>/dev/null || exit 1
+    if [ "$msg_rc" != 0 ]; then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi   # a failed read is a retry, never an empty message
     if grep -q 'require-durable' <<<"$msg"; then refusal=$msg; break; fi
     for prev in --previous ""; do
       # shellcheck disable=SC2086
-      if out=$(kubectl -n "$ns" logs "$bad" $prev 2>/dev/null) && grep -q 'require-durable' <<<"$out"; then refusal=$out; break 2; fi
+      capture out out_rc kubectl -n "$ns" logs "$bad" $prev 2>/dev/null || exit 1
+      if [ "$out_rc" = 0 ] && grep -q 'require-durable' <<<"$out"; then refusal=$out; break 2; fi
     done
   fi
   sleep "${NEGATIVE_SLEEP:-2}"
@@ -84,7 +92,8 @@ upgrade_with catalog-rpc-no-rpc-key
 rpc_config_error() { kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o json 2>/dev/null | jq -r 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end' 2>/dev/null; }
 found=""
 for ((_try82 = 1; _try82 <= "${NEGATIVE_RPC_TRIES:-90}"; _try82++)); do
-  if cfg=$(rpc_config_error) && [ "$cfg" = yes ]; then found=yes; break; fi   # a failed read is "not yet": the loop retries, running out of tries fails below
+  capture cfg cfg_rc rpc_config_error || exit 1
+  if [ "$cfg_rc" = 0 ] && [ "$cfg" = yes ]; then found=yes; break; fi   # a failed read is "not yet": the loop retries, running out of tries fails below
   sleep "${NEGATIVE_RPC_SLEEP:-1}"
 done
 [ "$found" = yes ] || { echo "negative: a Secret without APP_CATALOG_API_KEY did not stop the rpc pod (CreateContainerConfigError)"; kubectl -n "$ns" get pods; exit 1; }

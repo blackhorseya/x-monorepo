@@ -53,21 +53,29 @@ jobs:
       - name: runner spec
         run: |
           mkdir -p "$OUT"
+          cores=$(nproc)
+          cpu=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
+          memory=$(free -m | awk '/^Mem:/{print $2" MiB"}')
+          kernel=$(uname -srm)
+          go_version=$(go version)
+          k6_version=$(k6 version | sed -n 1p)
+          psql_version=$(psql --version)
+          load=$(cut -d' ' -f1-3 /proc/loadavg)
           {
             echo "run:        $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
             echo "commit:     $GITHUB_SHA"
             echo "ref:        $GITHUB_REF"
             echo "runner:     $RUNNER_NAME ($RUNNER_ENVIRONMENT, $RUNNER_OS $RUNNER_ARCH)"
             echo "image:      ${ImageOS:-?} ${ImageVersion:-?}"
-            echo "cores:      $(nproc)"
-            echo "cpu:        $(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)"
-            echo "memory:     $(free -m | awk '/^Mem:/{print $2" MiB"}')"
-            echo "kernel:     $(uname -srm)"
-            echo "go:         $(go version)"
-            echo "k6:         $(k6 version | head -n1)"
-            echo "psql:       $(psql --version)"
+            echo "cores:      $cores"
+            echo "cpu:        $cpu"
+            echo "memory:     $memory"
+            echo "kernel:     $kernel"
+            echo "go:         $go_version"
+            echo "k6:         $k6_version"
+            echo "psql:       $psql_version"
             echo "postgres:   postgres:16-alpine service container on the same runner"
-            echo "load at start (1m/5m/15m): $(cut -d' ' -f1-3 /proc/loadavg)"
+            echo "load at start (1m/5m/15m): $load"
           } | tee "$OUT/runner.txt"
           { echo '### runner'; echo '```'; cat "$OUT/runner.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 

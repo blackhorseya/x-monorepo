@@ -32,8 +32,8 @@ if [ "$new" = "$corefile" ]; then
   exit 0
 fi
 
-kubectl -n kube-system patch configmap coredns --type merge \
-  -p "$(jq -n --arg c "$new" '{data: {Corefile: $c}}')" >/dev/null
+patch=$(jq -n --arg c "$new" '{data: {Corefile: $c}}') || exit 1
+kubectl -n kube-system patch configmap coredns --type merge -p "$patch" >/dev/null
 kubectl -n kube-system rollout restart deployment/coredns >/dev/null
 kubectl -n kube-system rollout status deployment/coredns --timeout=2m
 echo "coredns: dex.localtest.me → $target"

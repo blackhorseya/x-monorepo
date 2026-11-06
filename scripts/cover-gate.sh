@@ -4,7 +4,8 @@
 set -euo pipefail
 _lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
 . "$_lib/best-effort.sh" || { echo "cover-gate: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 mkdir -p bin
 
 fail=0 checked=0
@@ -20,7 +21,7 @@ for m in $mods; do
   [[ -z "$pkgs" ]] && continue
   for p in $pkgs; do
     checked=$((checked + 1))
-    prof="bin/cover-$(echo "$p" | tr '/' '_').out"
+    prof="bin/cover-${p//\//_}.out"
     go test -coverprofile="$prof" "$p" >/dev/null
     pct=$(go tool cover -func="$prof" | tail -1 | awk '{print $3}' | tr -d '%')
     if [[ "$pct" != "100.0" ]]; then

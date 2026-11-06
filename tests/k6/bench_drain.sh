@@ -17,12 +17,15 @@ q() { psql "$url" -qAt -F'|' -c "$1"; }
 t0=$(now)
 snap=$(q "select count(*) filter (where status = 'PENDING'), count(*) from ordering.orders")
 pending=${snap%%|*} total=${snap##*|}
-until [ "$(q "select count(*) from ordering.orders where status = 'PENDING'")" = 0 ]; do
-  python3 -I -c "import sys; sys.exit(0 if $(now) - $t0 < $timeout else 1)" \
+# a read that fails is "not drained yet" (the loop retries, and running out of time fails below); the value tested is always the one a successful read returned
+until left=$(q "select count(*) from ordering.orders where status = 'PENDING'") && [ "$left" = 0 ]; do
+  tnow=$(now) || exit 1
+  python3 -I -c "import sys; sys.exit(0 if $tnow - $t0 < $timeout else 1)" \
     || { echo "backlog not drained within ${timeout}s" >&2; exit 1; }
   sleep 0.2
 done
-secs=$(python3 -I -c "print(round($(now) - $t0, 2))")
+t1=$(now) || exit 1
+secs=$(python3 -I -c "print(round($t1 - $t0, 2))")
 notok=$(q "select count(*) from ordering.orders where status <> 'CONFIRMED'")
 reserved=$(q "select count(*) from inventory.reservations where status = 'RESERVED'")
 if [ "$notok" != 0 ] || [ "$reserved" != "$total" ]; then

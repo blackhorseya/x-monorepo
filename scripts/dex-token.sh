@@ -34,7 +34,9 @@ trap 'rm -f "$jar"' EXIT
 urlenc() { jq -rn --arg v "$1" '$v|@uri'; }
 
 # 1. /auth → (with one connector Dex redirects straight to its login form); -L ends on the form.
-auth="$issuer/auth?client_id=$client&redirect_uri=$(urlenc "$redirect")&response_type=code&scope=$(urlenc 'openid email profile')&state=$state&code_challenge=$challenge&code_challenge_method=S256"
+enc_redirect=$(urlenc "$redirect") || exit 1
+enc_scope=$(urlenc 'openid email profile') || exit 1
+auth="$issuer/auth?client_id=$client&redirect_uri=$enc_redirect&response_type=code&scope=$enc_scope&state=$state&code_challenge=$challenge&code_challenge_method=S256"
 form=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$auth")
 
 # 2. POST the credentials; skipApprovalScreen makes the 303 land on redirect_uri?code=…
@@ -42,7 +44,7 @@ location=$(curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' \
   --data-urlencode "login=$email" --data-urlencode "password=$password" "$form")
 case $location in
   "$redirect"*) ;;
-  *"/approval"*) if location=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$location"); then :; else echo "dex-token: following the approval redirect failed (exit $?)" >&2; location=""; fi ;;   # an empty location fails the case below
+  *"/approval"*) location=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$location") || { echo "dex-token: following the approval redirect failed" >&2; exit 1; } ;;
 esac
 case $location in
   "$redirect"*) ;;

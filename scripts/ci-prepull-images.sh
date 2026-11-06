@@ -20,8 +20,9 @@
 #   postgres, redis  the Image constants of pgtest / redistest
 #   ryuk             ReaperDefaultImage of the testcontainers-go version go.work resolves
 set -euo pipefail
-. "$(dirname "$0")/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+. "$self_dir/best-effort.sh" || exit 1   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+cd "$self_dir/.." || exit 1
 run_in() { local d=$1; shift; ( cd "$d" && "$@" ); }   # a command in another directory, without `cd … && cmd` inside $(…) (#470)
 docker=${DOCKER:-docker}
 

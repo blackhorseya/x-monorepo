@@ -21,7 +21,8 @@
 # TASKFILE=<file in the repo root> runs the same cells against another Taskfile (default Taskfile.yml), to
 # show them red on an older one: git show <old sha>:Taskfile.yml > Taskfile.old.yml (delete it afterwards).
 set -uo pipefail
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 
 TASKFILE=${TASKFILE:-Taskfile.yml}
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }
@@ -73,8 +74,9 @@ done
 spaced="$tmp/dir with space/local.yaml"
 printf 'existing: content\n' >"$spaced"
 out=$(task -t "$TASKFILE" config CONFIG="$spaced" 2>&1); rc=$?
-if [ "$rc" = 0 ] && [ "$(cat "$spaced")" = 'existing: content' ]; then pass=$((pass + 1)); else
-  fail=$((fail + 1)); echo "FAIL: quoting: task config on an existing file with a space: exit $rc, content [$(cat "$spaced" 2>&1)]" >&2; printf '%s\n' "$out" | strip | tail -3 >&2
+spaced_content=$(cat "$spaced" 2>&1) || { echo "FAIL: quoting: cannot read $spaced after task config: $spaced_content" >&2; exit 1; }
+if [ "$rc" = 0 ] && [ "$spaced_content" = 'existing: content' ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: quoting: task config on an existing file with a space: exit $rc, content [$spaced_content]" >&2; printf '%s\n' "$out" | strip | tail -3 >&2
 fi
 rm -f "$spaced"
 out=$(task -t "$TASKFILE" config CONFIG="$spaced" 2>&1); rc=$?

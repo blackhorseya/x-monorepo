@@ -110,10 +110,12 @@ rc_of() { cat "$work/$1.rc"; }
 # 1. k6 crosses an overload threshold (rpc_errors, every error a timeout: the 10s CreateOrder timeouts of an
 # overloaded machine): the attempt is an invalid attempt, the bench ends "NOT A VALID BASELINE" with exit 3
 bench thr 0.5 timeouts
-[ "$(rc_of thr)" = 3 ] && r=ok || r=bad; check $r "overload threshold: exit 3 (NOT A VALID BASELINE), got $(rc_of thr)"
+got_rc=$(rc_of thr) || exit 1
+[ "$got_rc" = 3 ] && r=ok || r=bad; check $r "overload threshold: exit 3 (NOT A VALID BASELINE), got $got_rc"
 grep -q "NOT A VALID BASELINE" "$work/thr.out/summary.md" 2>/dev/null && r=ok || r=bad; check $r "overload threshold: summary.md says NOT A VALID BASELINE"
 grep -q "rpc_errors" "$work/thr.out/run1-invalid.txt" 2>/dev/null && r=ok || r=bad; check $r "overload threshold: run1-invalid.txt names the crossed threshold"
-[ "$(wc -l < "$work/thr.k6" | tr -d ' ')" = 3 ] && r=ok || r=bad; check $r "overload threshold: all 3 attempts were made (each one a create phase)"
+k6_attempts=$(wc -l < "$work/thr.k6" | tr -d ' ') || exit 1
+[ "$k6_attempts" = 3 ] && r=ok || r=bad; check $r "overload threshold: all 3 attempts were made (each one a create phase)"
 
 # 1b. anything that is not provably overload is a failure, never exit 3 and never "try again": a correctness
 # threshold, a correctness threshold together with an overload one (correctness wins), rpc_errors that are not
@@ -122,12 +124,14 @@ for mode in wrong both other nosummary onlyreq emptycount negative rpcnocount ok
   bench "f-$mode" 0.5 "$mode"
   rc=$(rc_of "f-$mode"); { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad
   check $r "$mode: a failure (not exit 0, not exit 3), got exit $rc"
-  [ "$(wc -l < "$work/f-$mode.k6" | tr -d ' ')" = 1 ] && r=ok || r=bad; check $r "$mode: the bench stopped at the first attempt, no retry"
+  k6_attempts=$(wc -l < "$work/f-$mode.k6" | tr -d ' ') || exit 1
+  [ "$k6_attempts" = 1 ] && r=ok || r=bad; check $r "$mode: the bench stopped at the first attempt, no retry"
   [ ! -e "$work/f-$mode.out/run1-invalid.txt" ] && r=ok || r=bad; check $r "$mode: the attempt was not written off as invalid"
 done
 
 # 1b2. the unknown-split case the reviewer reproduced ends in exactly exit 99
-[ "$(rc_of f-emptycount)" = 99 ] && r=ok || r=bad; check $r "emptycount: exit 99 exactly, got $(rc_of f-emptycount)"
+got_rc=$(rc_of f-emptycount) || exit 1
+[ "$got_rc" = 99 ] && r=ok || r=bad; check $r "emptycount: exit 99 exactly, got $got_rc"
 
 # 1c. a summary left in a reused out dir by an earlier bench (a clean timeouts-only one) must not be taken for
 # this run's: k6 exits 99 without writing a summary, so there is none, and that is a failure
@@ -145,7 +149,8 @@ env PATH="$work/fakebin:$PATH" BENCH_LOADAVG_FILE="$work/load" LOAD_INTERVAL=1 R
   FAKE_K6=nosummary FAKE_K6_LOG="$work/stale.k6" FAKE_K6_BUSY=1000 FAKE_K6_QUIET=0.5 \
   tests/k6/bench.sh "$work/bin" "$work/stale.out" > "$work/stale.log" 2>&1 || rc=$?
 { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad; check $r "stale summary: a failure (not exit 0, not exit 3), got exit $rc"
-[ "$(wc -l < "$work/stale.k6" | tr -d ' ')" = 1 ] && r=ok || r=bad; check $r "stale summary: the bench stopped at the first attempt, no retry"
+k6_attempts=$(wc -l < "$work/stale.k6" | tr -d ' ') || exit 1
+[ "$k6_attempts" = 1 ] && r=ok || r=bad; check $r "stale summary: the bench stopped at the first attempt, no retry"
 
 # 1c2. nor may an earlier bench's complete, VALID-looking output stand in for a k6 that exited 0 and wrote nothing
 mkdir "$work/stale0.out"
@@ -166,7 +171,8 @@ env PATH="$work/fakebin:$PATH" BENCH_LOADAVG_FILE="$work/load" LOAD_INTERVAL=1 R
   FAKE_K6=okless FAKE_K6_LOG="$work/stale0.k6" FAKE_K6_BUSY=1000 FAKE_K6_QUIET=0.5 \
   tests/k6/bench.sh "$work/bin" "$work/stale0.out" > "$work/stale0.log" 2>&1 || rc=$?
 { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad; check $r "stale valid summaries: k6 exit 0 without a summary is a failure, got exit $rc"
-[ "$(wc -l < "$work/stale0.k6" | tr -d ' ')" = 1 ] && r=ok || r=bad; check $r "stale valid summaries: the bench stopped at the first attempt"
+k6_attempts=$(wc -l < "$work/stale0.k6" | tr -d ' ') || exit 1
+[ "$k6_attempts" = 1 ] && r=ok || r=bad; check $r "stale valid summaries: the bench stopped at the first attempt"
 
 # 1d. nor may an earlier bench's other leftovers speak for this run: a stale run1-invalid.txt and a stale
 # baseline sample must not make a clean attempt 1 invalid
@@ -184,7 +190,8 @@ rc=$(rc_of scr); { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad; check $
 # 3. the load the bench itself makes (1000 during the create phase, far over the limit) does not invalidate
 # attempts that started on a quiet machine; it is recorded
 bench own 0.5 ok
-[ "$(rc_of own)" = 0 ] && r=ok || r=bad; check $r "own load: 3 valid attempts, exit 0, got $(rc_of own)"
+got_rc=$(rc_of own) || exit 1
+[ "$got_rc" = 0 ] && r=ok || r=bad; check $r "own load: 3 valid attempts, exit 0, got $got_rc"
 python3 -I - "$work/own.out/result.json" <<'PY' && r=ok || r=bad
 import json, sys
 doc = json.load(open(sys.argv[1]))
@@ -209,7 +216,8 @@ check $r "wait: attempt 1 sampled the busy machine until it was quiet (run1-base
 # 5. the machine never gets quiet: BASELINE_WAIT is up, k6 never ran, every attempt is invalid, exit 3
 bench busy 1000 ok BASELINE_WAIT=2
 [ ! -s "$work/busy.k6" ] && r=ok || r=bad; check $r "busy: k6 never ran on a machine that was not quiet"
-[ "$(rc_of busy)" = 3 ] && r=ok || r=bad; check $r "busy: exit 3, got $(rc_of busy)"
+got_rc=$(rc_of busy) || exit 1
+[ "$got_rc" = 3 ] && r=ok || r=bad; check $r "busy: exit 3, got $got_rc"
 grep -q "not quiet" "$work/busy.out/run1-invalid.txt" 2>/dev/null && r=ok || r=bad; check $r "busy: run1-invalid.txt says the environment was not quiet"
 
 [ "$fails" = 0 ] || { echo "FAIL: $fails check(s)"; exit 1; }

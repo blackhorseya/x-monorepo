@@ -12,7 +12,9 @@
 #   - so does a change to what the test job itself runs on: .github/workflows/ci.yml,
 #     .github/actions/* and scripts/* (the same inputs scripts/ci-changes.sh runs every job for)
 set -euo pipefail
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
+. "$self_dir/best-effort.sh" || exit 1   # capture: the status of git diff next to what it printed
 
 modules() { go work edit -json ./go.work | python3 -c 'import json,sys; [print(u["DiskPath"].removeprefix("./")) for u in json.load(sys.stdin)["Use"]]'; }
 
@@ -27,7 +29,8 @@ else
   git rev-parse --verify -q "$BASE" >/dev/null || BASE=HEAD
   # No merge base (a shallow clone) makes the three-dot diff fail. That used to read as "nothing changed on the branch" (|| true)
   # and shrink the test matrix; now it means "cannot tell", and every module is affected (#462).
-  if ! committed=$(git diff --no-renames --name-only "$BASE"...HEAD 2>/dev/null); then
+  capture committed committed_rc git diff --no-renames --name-only "$BASE"...HEAD 2>/dev/null || exit 1
+  if [ "$committed_rc" != 0 ]; then
     echo "affected: git diff $BASE...HEAD failed — treating every module as affected" >&2
     echo "$ALL"; exit 0
   fi

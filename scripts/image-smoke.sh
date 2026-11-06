@@ -19,7 +19,8 @@
 # start-up checks; it did not crash on the read-only rootfs). It does not prove it consumes: that needs Postgres.
 set -euo pipefail
 app=${1:?usage: scripts/image-smoke.sh <app>   (payment-rpc | payment-worker)}
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 
 case $app in
   payment-rpc) port=8082 args=(serve) ;;
@@ -101,7 +102,8 @@ for ((_try100 = 1; _try100 <= 60; _try100++)); do
   poll_rc=0; code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/readyz") || poll_rc=$?
   [ "$poll_rc" = 0 ] || echo "image-smoke: readyz poll $_try100: curl exited $poll_rc, retrying" >&2
   if [ "$code" = 200 ]; then ready=1; break; fi
-  [ "$("$engine" inspect --format '{{.State.Running}}' "$cid")" = true ] || { "$engine" logs "$cid" >&2; echo "image-smoke: FAIL the container exited" >&2; exit 1; }
+  running=$("$engine" inspect --format '{{.State.Running}}' "$cid") || { echo "image-smoke: FAIL cannot inspect the container" >&2; exit 1; }
+  [ "$running" = true ] || { "$engine" logs "$cid" >&2; echo "image-smoke: FAIL the container exited" >&2; exit 1; }
   sleep 0.5
 done
 [ -n "$ready" ] || { "$engine" logs "$cid" >&2; echo "image-smoke: FAIL /api/readyz never answered 200" >&2; exit 1; }

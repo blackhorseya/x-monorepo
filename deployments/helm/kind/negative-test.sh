@@ -11,8 +11,8 @@
 # script owes whatever happens: the release is restored last (`helm upgrade --wait`), both test Secrets are
 # deleted, and the reads are bounded (NEGATIVE_TRIES), so a permanent failure exits instead of hanging.
 set -euo pipefail
-abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
-here=$(abs_dir "$(dirname "$0")")
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a script path, no dirname inside a substitution (#472)
+here=$(abs_dir_of "$0") || exit 1
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort, capture, value_of (#462, #466)

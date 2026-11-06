@@ -34,8 +34,10 @@ runs:
     - id: go-env
       shell: bash
       run: |
-        echo "modcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-        echo "buildcache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+        modcache=$(go env GOMODCACHE)
+        buildcache=$(go env GOCACHE)
+        echo "modcache=$modcache" >> "$GITHUB_OUTPUT"
+        echo "buildcache=$buildcache" >> "$GITHUB_OUTPUT"
 
     # Who may write a cache, which build-cache group this job reads, whether it is the group's saver.
     # Decided here and nowhere else: every cache step below only reads these outputs, and each
@@ -108,7 +110,10 @@ runs:
     - if: inputs.tools == 'true'
       id: tools-key
       shell: bash
-      run: echo "key=${{ runner.os }}-tools-$(grep -E '^\s+[A-Z_]+_VERSION:' Taskfile.yml | sha256sum | cut -c1-16)-$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      run: |
+        versions_hash=$(grep -E '^\s+[A-Z_]+_VERSION:' Taskfile.yml | sha256sum | cut -c1-16)
+        go_version=$(go env GOVERSION)
+        echo "key=${{ runner.os }}-tools-$versions_hash-$go_version" >> "$GITHUB_OUTPUT"
 
     - id: tools-rw
       if: inputs.tools == 'true' && steps.plan.outputs.write == 'true'

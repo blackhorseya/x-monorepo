@@ -85,9 +85,10 @@ jobs:
             --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --bundle "$bundle" bin/dist/checksums.txt
+          checksums_sha=$(sha256sum bin/dist/checksums.txt | cut -d' ' -f1)
           {
             echo "## sign-dry-run: signed through scripts/cosign-sign-blob.sh and verified"
             echo "- identity: \`https://github.com/$GITHUB_WORKFLOW_REF\`"
             echo "- cosign: \`${{ steps.pin.outputs.cosign }}\`"
-            echo "- \`$(sha256sum bin/dist/checksums.txt | cut -d' ' -f1)\`  checksums.txt"
+            echo "- \`$checksums_sha\`  checksums.txt"
           } >> "$GITHUB_STEP_SUMMARY"

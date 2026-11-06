@@ -20,11 +20,12 @@ EOF
 chmod +x "$work/fakebin/date"
 
 sentinel() { # <name>: a database with one row in it
+  local url
   sentinels+=("$1")
   psql "$base" -qAt -c "drop database if exists $1 with (force)" -c "create database $1" >/dev/null
-  psql "$(python3 -I -c 'import sys, urllib.parse as u
-p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base" "$1")" \
-    -qAt -c "create table keep(v int); insert into keep values (42)" >/dev/null
+  url=$(python3 -I -c 'import sys, urllib.parse as u
+p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base" "$1") || return 1
+  psql "$url" -qAt -c "create table keep(v int); insert into keep values (42)" >/dev/null
 }
 survives() { # <name>: still there, with its row
   local url

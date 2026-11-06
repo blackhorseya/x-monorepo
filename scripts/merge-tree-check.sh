@@ -17,11 +17,11 @@ base=$1 head=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-if ! merged=$(git merge-tree --write-tree "$base" "$head" 2>&1); then
+merged=$(git merge-tree --write-tree "$base" "$head" 2>&1) || {
   echo "merge-tree-check: $base + $head conflict in git itself (not a compile question):" >&2
   printf '%s\n' "$merged" >&2
   exit 2
-fi
+}
 tree=${merged%%$'\n'*}
 git archive "$tree" | tar -x -C "$tmp"
 echo "merge-tree-check: $base + $head → tree $tree"

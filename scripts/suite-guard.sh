@@ -10,6 +10,8 @@
 # never a scan of the user's processes. The command sees SUITE_GUARD=1 so it does not nest.
 # Exit status: the command's, or 1 if it passed but left processes behind, or 130 / 143 on INT / TERM.
 set -u
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "suite-guard: cannot load $_lib/best-effort.sh (capture)" >&2; exit 2; }
 [ $# -gt 0 ] || { echo "usage: $0 <command> [args...]" >&2; exit 2; }
 
 pgid=
@@ -51,8 +53,8 @@ while :; do
 done
 
 if [ -n "$escalator" ]; then   # the suite ended by itself in time: drop the pending KILL and its sleep
-  # shellcheck disable=SC2046
-  kill $(pgrep -P "$escalator") "$escalator" 2>/dev/null
+  pkill -P "$escalator" 2>/dev/null   # its sleep (no children is exit 1, and not a verdict here: the point is that none is left)
+  kill "$escalator" 2>/dev/null
   wait "$escalator" 2>/dev/null
 fi
 
@@ -64,8 +66,15 @@ settle() { local i=0; while group_alive && [ $i -lt 20 ]; do sleep 0.1; i=$((i +
 settle   # a member that is already exiting is not a leftover
 if group_alive; then
   n="?"   # a count for the message only; group_alive above decided there are leftovers. "?" (not a made-up 0) when it cannot be read
-  if ps_out=$(ps -ax -o pgid= 2>/dev/null) && count=$(awk -v g="$pgid" '$1 == g {c++} END {print c + 0}' <<<"$ps_out"); then n=$count; fi
-  echo "suite-guard: the suite left $n process(es) running in its process group ($(ps -ax -o pid=,pgid=,command= | awk -v g="$pgid" '$2 == g { print $1 ": " $3 " " $4 }' | tr '\n' ';')); killing them" >&2
+  capture ps_out ps_rc ps -ax -o pgid= 2>/dev/null || exit 2
+  if [ "$ps_rc" = 0 ]; then
+    capture count count_rc awk -v g="$pgid" '$1 == g {c++} END {print c + 0}' <<<"$ps_out" || exit 2
+    if [ "$count_rc" = 0 ]; then n=$count; fi
+  fi
+  # the members for the message: this is the failure path, a ps / awk that cannot say leaves the list empty and the leftovers are killed all the same
+  capture ps_all ps_all_rc ps -ax -o pid=,pgid=,command= || exit 2
+  capture members members_rc awk -v g="$pgid" '$2 == g { printf "%s: %s %s;", $1, $3, $4 }' <<<"$ps_all" || exit 2
+  echo "suite-guard: the suite left $n process(es) running in its process group ($members); killing them" >&2
   kill -TERM -- "-$pgid" 2>/dev/null
   settle
   if group_alive; then kill -KILL -- "-$pgid" 2>/dev/null; settle; fi

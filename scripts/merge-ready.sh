@@ -29,7 +29,8 @@ pr=$1 revalidate=false
 case "${2:-}" in "") ;; --revalidate) revalidate=true ;; *) usage ;; esac
 case $pr in ''|*[!0-9]*) usage ;; esac
 
-repo=${MERGE_READY_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
+repo=${MERGE_READY_REPO:-}
+if [ -z "$repo" ]; then repo=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1; fi
 # `set -- $(gh …)` would drop gh's exit status (#462): read first, split after
 view=$(gh pr view "$pr" --repo "$repo" --json headRefOid,baseRefName -q '.headRefOid + " " + .baseRefName')
 # shellcheck disable=SC2086

@@ -21,7 +21,9 @@
 # Failures are printed as `--- FAIL: <cell>` + indented reasons, the shape scripts/red-stage.sh reads.
 # The key is made up for this test; nothing here is a credential.
 set -euo pipefail
-. "$(dirname "$0")/../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a path, without dirname inside $(…)
+root=$(abs_dir_of "$0" ../..) || exit 1
+. "$root/scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 bin=$1; shift
 scripts=("$@"); [ ${#scripts[@]} -gt 0 ] || scripts=(orders ratelimit timeout reservation)
 port=${PORT:-18190}
@@ -129,8 +131,9 @@ cell_grid() {
   while IFS= read -r cl; do
     case " $classes" in *" $cl "*) ;; *) [ -z "$cl" ] || classes+="$cl " ;; esac
   done <<<"$found_classes"
-  if [ "$classes" != "transport.$(want "$mode") " ]; then
-    why+=("expected the only failure class transport.$(want "$mode"), output has: ${classes:-none}")
+  want_class=$(want "$mode") || return 1
+  if [ "$classes" != "transport.$want_class " ]; then
+    why+=("expected the only failure class transport.$want_class, output has: ${classes:-none}")
   fi
   if [ ${#why[@]} -gt 0 ]; then
     echo "--- FAIL: $cell (k6 exit $rc)"
@@ -307,8 +310,9 @@ for p in "${lpids[@]}"; do best_effort wait "$p"; done   # a lane's verdict is t
 fails=() passed=0
 for c in "${cells[@]}"; do
   name=${c%%|*}
-  out="" r=0; if out=$(cat "$dir/$name.out" 2>/dev/null); then :; else r=$?; fi   # a failed read is a reason below, never an empty output
-  rcv="" q=0; if rcv=$(cat "$dir/$name.rc" 2>/dev/null); then :; else q=$?; fi
+  out="" r=0 rcv="" q=0
+  capture out r cat "$dir/$name.out" 2>/dev/null   # a failed read is a reason below ($r), never an empty output
+  capture rcv q cat "$dir/$name.rc" 2>/dev/null
   [ "$r" = 0 ] && [ -n "$out" ] && printf '%s\n' "$out"
   reason=""
   if [ "$r" != 0 ]; then reason="could not read its output (exit $r)"

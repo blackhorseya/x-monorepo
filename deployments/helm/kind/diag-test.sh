@@ -36,9 +36,9 @@
 # Every "output has X" is checked against text the fakes produce for THIS call (a nonce per run), so an empty or
 # stale output cannot pass.
 set -euo pipefail
-. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
-here=$(abs_dir "$(dirname "$0")")
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462); capture, value_of
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the directory of $0 (plus a subdirectory), absolute: no `cd … && pwd` and no dirname inside $(…) (#470, #472)
+here=$(abs_dir_of "$0") || exit 1
 tmp=$(mktemp -d)
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
 WATCHDOG=""
@@ -206,7 +206,8 @@ has "payment-flow: UpsertProduct: got '500', want '200'" "D3 the step that faile
 n=$(value_of -ok 1 grep -c '^::group::diag: pods and events' "$tmp/out") || exit 1; [ "$n" = 1 ] || die "D3: diag ran $n times, want exactly once"
 start=$(sed -n 's/.*--since-time=\([^ ]*\).*/\1/p' "$tmp/events" | sort -u)
 [ -n "$start" ] || die "D3: no log was read at all (diag.sh did not run)"
-[ "$(wc -l <<<"$start" | tr -d ' ')" = 1 ] || die "D3: the logs were read since more than one time: $start"
+start_lines=$(wc -l <<<"$start" | tr -d ' ') || exit 1
+[ "$start_lines" = 1 ] || die "D3: the logs were read since more than one time: $start"
 [[ $start =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || die "D3: since-time '$start' is not RFC 3339 UTC"
 has "LOG pod/a since=$start $nonce" "D3 the pod log reached the output"
 first_logs=$(awk '/ logs /{print NR; exit}' "$tmp/events")
@@ -299,7 +300,7 @@ if only D6; then
   lines=$(wc -l < "$tmp/out" | tr -d ' ')
   [ "$lines" -le 4000 ] || die "D6: the console got $lines lines for 30 pods x 5000 lines (150000 in all), want at most 4000"
   [ -d "$DIAG_DIR" ] || die "D6: no artifact directory at $DIAG_DIR"
-  full=0; for f in "$DIAG_DIR"/log-p*.txt; do [ -e "$f" ] || continue; [ "$(wc -l < "$f" | tr -d ' ')" = 5000 ] && full=$((full + 1)); done
+  full=0; for f in "$DIAG_DIR"/log-p*.txt; do [ -e "$f" ] || continue; f_lines=$(wc -l < "$f" | tr -d ' ') || exit 1; [ "$f_lines" = 5000 ] && full=$((full + 1)); done
   [ "$full" = 30 ] || die "D6: $full of 30 pod log files hold all 5000 lines"
   has "$DIAG_DIR" "D6 the console says where the files are"
   has "$nonce" "D6 the console shows pod log lines of this call"
@@ -337,8 +338,9 @@ d6cell() { # <cell> <label> <env assignments...>: run diag.sh with the fixture, 
 if only D6L; then
   # 30 pods, one 1 MiB line each: 76 console LINES, 31 MB
   d6cell D6L "30 pods x one 1 MiB line" PODCOUNT=30 LONGLINE=1048576
-  for f in "$DIAG_DIR"/log-p*.txt; do [ "$(wc -c < "$f" | tr -d ' ')" -ge 1048576 ] || die "D6L: $f is cut (the file must hold the whole line)"; done
-  [ "$(ls "$DIAG_DIR"/log-p*.txt | wc -l | tr -d ' ')" = 30 ] || die "D6L: not all 30 pod files were written"
+  for f in "$DIAG_DIR"/log-p*.txt; do f_bytes=$(wc -c < "$f" | tr -d ' ') || exit 1; [ "$f_bytes" -ge 1048576 ] || die "D6L: $f is cut (the file must hold the whole line)"; done
+  n_files=$(ls "$DIAG_DIR"/log-p*.txt | wc -l | tr -d ' ') || exit 1
+  [ "$n_files" = 30 ] || die "D6L: not all 30 pod files were written"
   unset DIAG_DIR
   echo "diag-test ok: D6L 30 pods x one 1 MiB line: $bytes console bytes (budget $budget), 30 complete files"
 fi
@@ -347,20 +349,23 @@ if only D6M; then
   # the budget. The branch of `emit` that counts what it let through is exercised by nothing else.
   d6cell D6M "30 pods, each under its own cap, together over the budget" PODCOUNT=30 LOGLINES=80
   has "is used up" "D6M: the total budget ran out, not a per-part cap"
-  [ "$(ls "$DIAG_DIR"/log-p*.txt | wc -l | tr -d ' ')" = 30 ] || die "D6M: not all 30 pod files were written after the console stopped"
-  for f in "$DIAG_DIR"/log-p*.txt; do [ "$(wc -l < "$f" | tr -d ' ')" = 80 ] || die "D6M: $f does not hold all 80 lines"; done
+  n_files=$(ls "$DIAG_DIR"/log-p*.txt | wc -l | tr -d ' ') || exit 1
+  [ "$n_files" = 30 ] || die "D6M: not all 30 pod files were written after the console stopped"
+  for f in "$DIAG_DIR"/log-p*.txt; do f_lines=$(wc -l < "$f" | tr -d ' ') || exit 1; [ "$f_lines" = 80 ] || die "D6M: $f does not hold all 80 lines"; done
   unset DIAG_DIR
   echo "diag-test ok: D6M 30 pods each under its own cap: $bytes console bytes (budget $budget), the console stopped, 30 complete files"
 fi
 if only D6W; then
   d6cell D6W "pods wide with 5000 rows" WIDELINES=5000
-  [ "$(wc -l < "$DIAG_DIR/pods.txt" | tr -d ' ')" = 5000 ] || die "D6W: pods.txt does not hold all 5000 rows"
+  pod_rows=$(wc -l < "$DIAG_DIR/pods.txt" | tr -d ' ') || exit 1
+  [ "$pod_rows" = 5000 ] || die "D6W: pods.txt does not hold all 5000 rows"
   unset DIAG_DIR
   echo "diag-test ok: D6W pods wide, 5000 rows: $bytes console bytes (budget $budget), pods.txt complete"
 fi
 if only D6E; then
   d6cell D6E "events: 30 lines of 100 KiB" EVENTLINES=30 EVENTWIDTH=102400
-  [ "$(wc -l < "$DIAG_DIR/events.txt" | tr -d ' ')" = 30 ] || die "D6E: events.txt does not hold all 30 events"
+  event_rows=$(wc -l < "$DIAG_DIR/events.txt" | tr -d ' ') || exit 1
+  [ "$event_rows" = 30 ] || die "D6E: events.txt does not hold all 30 events"
   unset DIAG_DIR
   echo "diag-test ok: D6E 30 events of 100 KiB: $bytes console bytes (budget $budget), events.txt complete"
 fi
@@ -374,7 +379,8 @@ fi
 # ── D6X / D6B / D6T the bound at the process boundary (#417 r3) ───────────────
 if only D6X; then
   # the reviewer's first reproduction: 100,824 console bytes against a limit of 69,632 (the since is in a group title)
-  longs="2026-11-03T00:00:00.$(head -c 100000 /dev/zero | tr '\0' 7)Z"
+  sevens=$(head -c 100000 /dev/zero | tr '\0' 7) || exit 1
+  longs="2026-11-03T00:00:00.${sevens}Z"
   export DIAG_DIR="$tmp/diag-X1" DIAG_CONSOLE_BYTES=$budget
   run_bounded 120 "$here/diag.sh" ns "$longs"
   unset DIAG_DIR DIAG_CONSOLE_BYTES
@@ -387,7 +393,8 @@ fi
 if only D6D; then
   # the second: a DIAG_DIR that cannot be created has its whole path in the error (100,101 bytes)
   : > "$tmp/notadir"
-  longd="$tmp/notadir/$(head -c 100000 /dev/zero | tr '\0' d)"
+  dees=$(head -c 100000 /dev/zero | tr '\0' d) || exit 1
+  longd="$tmp/notadir/$dees"
   export DIAG_DIR="$longd" DIAG_CONSOLE_BYTES=$budget
   run_bounded 120 "$here/diag.sh" ns "$since"
   unset DIAG_DIR DIAG_CONSOLE_BYTES
@@ -459,7 +466,8 @@ PY
   # positive control: a process whose stdout IS the console must be seen by the scan, or the scan proves nothing
   : > "$tmp/ctl-console"
   python3 "$tmp/fdscan.py" "$tmp/ctl-console" > "$tmp/ctl-console"
-  [ "$(cat "$tmp/ctl-console")" = 1 ] || die "D6F: the descriptor scan did not see its own stdout as the console (got: $(cat "$tmp/ctl-console")); it would pass whatever the collector held"
+  ctl_seen=$(cat "$tmp/ctl-console") || exit 1
+  [ "$ctl_seen" = 1 ] || die "D6F: the descriptor scan did not see its own stdout as the console (got: $ctl_seen); it would pass whatever the collector held"
   mut="$tmp/diag-fd3.sh"
   awk '{ print } /^# diag-test D6F injects/ { print "printf \"%100000s\" X >&3 2>/dev/null; echo hit >> \"$INJECT_HITS\""; print "echo scanned >> \"$INJECT_SCANNED\"; python3 \"$INJECT_SCAN\" \"$INJECT_CONSOLE\" >> \"$INJECT_FDS\""}' "$here/diag.sh" > "$mut"
   chmod +x "$mut"
@@ -469,9 +477,14 @@ PY
   run_bounded 120 "$mut" ns "$since"
   unset INJECT_HITS INJECT_SCANNED INJECT_FDS INJECT_SCAN INJECT_CONSOLE DIAG_DIR DIAG_CONSOLE_BYTES
   [ "$rc" = 0 ] || die "D6F: exit $rc, want 0"
-  [ "$(wc -l < "$tmp/hits-f" | tr -d ' ')" = 1 ] || die "D6F: the injected write did not run"
-  [ "$(wc -l < "$tmp/scanned-f" | tr -d ' ')" = 1 ] || die "D6F: the descriptor scan did not run (it proves nothing if it did not)"
-  [ ! -s "$tmp/fds-f" ] || die "D6F: the collector holds a descriptor for the console: fd $(tr '\n' ' ' < "$tmp/fds-f")"
+  hits=$(wc -l < "$tmp/hits-f" | tr -d ' ') || exit 1
+  [ "$hits" = 1 ] || die "D6F: the injected write did not run"
+  scans=$(wc -l < "$tmp/scanned-f" | tr -d ' ') || exit 1
+  [ "$scans" = 1 ] || die "D6F: the descriptor scan did not run (it proves nothing if it did not)"
+  if [ -s "$tmp/fds-f" ]; then
+    capture fds_txt fds_rc tr '\n' ' ' < "$tmp/fds-f"   # the text of a failure message; the verdict (die) does not depend on it
+    die "D6F: the collector holds a descriptor for the console: fd $fds_txt"
+  fi
   bytes=$(wc -c < "$tmp/out" | tr -d ' ')
   [ "$bytes" -le $((budget + slack)) ] || die "D6F: a write to the inherited console descriptor put $bytes bytes on the console, want at most $((budget + slack))"
   has "diag: files in" "D6F: the run itself still printed (the wrapper prints the capture)"
@@ -513,7 +526,9 @@ fi
 # diag.sh selects, the second by the server's own flags in deps.yaml — and both are checked on a real Postgres running SQL
 # with a synthetic credential as a literal, once with leaky flags as the positive control.
 if only D7; then
-  if rt=$(command -v docker); then :; elif rt=$(command -v podman); then :; else echo "diag-test: D7: neither docker nor podman is installed" >&2; rt=""; fi
+  rt=$(value_of -ok 1 command -v docker) || exit 1   # command -v: 1 = not found (empty), anything else is a failure
+  if [ -z "$rt" ]; then rt=$(value_of -ok 1 command -v podman) || exit 1; fi
+  [ -n "$rt" ] || echo "diag-test: D7: neither docker nor podman is installed" >&2
   [ -n "$rt" ] || die "D7: needs docker or podman (a real Postgres is the point of this cell)"
   secret="sk_live_SYNTHETIC_$nonce"
   pgc=""; cleanup_pg() { [ -z "$pgc" ] || "$rt" rm -f "$pgc" >/dev/null 2>&1 || true; pgc=""; }

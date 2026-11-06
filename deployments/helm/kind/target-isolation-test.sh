@@ -25,8 +25,9 @@
 #   8 a Taskfile command that does not go through the runner: check-kubeconfig.py --taskfile must exit non-zero
 set -uo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort, capture, value_of (#462, #466)
-cd "$(dirname "$0")/../../.."
-root=$PWD
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the directory of $0 (plus a subdirectory), absolute: no dirname inside $(…) around a cd
+root=$(abs_dir_of "$0" ../../..) || exit 1
+cd "$root" || exit 1
 
 command -v perl >/dev/null || { echo "needs perl (alarm)"; exit 1; }
 python3 -c 'import yaml' 2>/dev/null || { echo "needs python3 with PyYAML (pip install pyyaml): mutant 8 runs check-kubeconfig.py"; exit 1; }
@@ -152,6 +153,13 @@ PY
   fi
   printf '%s\n' "$out"; return "$rc"
 }
+# text helpers for the failure / ok MESSAGES below, read through capture (a failed read leaves the text empty: the verdict is already decided by the cell, a message is not one)
+flat() { printf '%s' "$2" | head -"$1" | tr '\n' '|'; }                                # flat <n> <text>: the first n lines on one line
+squash() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-"$2"; }                            # squash <text> <cols>
+excerpt() { printf '%s' "$1" | sed -n "$2p" | sed 's/^ *//' | cut -c1-"$3"; }            # excerpt <text> <line> <cols>
+file_excerpt() { sed -n "$2p" "$1" | sed 's/^ *//' | cut -c1-"$3"; }                    # file_excerpt <file> <line> <cols>
+tail_flat() { tail -"$1" "$2" | tr '\n' ' '; }                                          # tail_flat <n> <file>
+judged_of() { printf '%s\n' "$1" | field judged; }                                     # judged_of <judge summary>: the judged= count, empty when there is none (never equal to 0)
 field() { head -1 | grep -oE "(^| )$1=[0-9]+" | head -1 | cut -d= -f2; }
 
 # ---- the judge itself (hand-written logs: a decoy use turns it red, a clean log does not, a broken input is a crash, not a verdict)
@@ -178,7 +186,10 @@ run_lines
 sum=$(judge strict); rc=$?
 echo "$sum" | head -1
 if [ "$rc" = 0 ]; then ok "baseline: every cluster call of the seven kind tasks and the real scripts used the task's own kubeconfig, none the decoy"
-else bad "baseline: $(printf '%s' "$sum" | head -3 | tr '\n' '|')"; fi
+else
+  capture msg msg_rc flat 3 "$sum"
+  bad "baseline: $msg"
+fi
 judged=$(printf '%s\n' "$sum" | field judged)
 if [ "${n_lines:-0}" -ge 20 ] && [ "${judged:-0}" -ge 60 ]; then ok "anchors: $n_lines lines run, $judged cluster calls judged"
 else bad "anchors too low: lines=$n_lines judged=${judged:-0} (the run is not seeing the commands it is there for)"; fi
@@ -200,13 +211,24 @@ PY
 }
 cell() {  # <name> <what> <payload>
   local name=$1 what=$2 payload=$3 out rc
-  if ! mut_smoke "$name" "$payload" 2>"$tmp/mut.err"; then bad "mutant $name was not made: $(cat "$tmp/mut.err")"; return; fi
+  if ! mut_smoke "$name" "$payload" 2>"$tmp/mut.err"; then
+    capture msg msg_rc cat "$tmp/mut.err"
+    bad "mutant $name was not made: $msg"; return
+  fi
   run_lines 'smoke.sh'
   capture out rc judge || { bad "mutant $name: capture failed"; return; }
-  if [ "$rc" = 2 ]; then bad "mutant $name ($what): the judge crashed: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"; return; fi
+  if [ "$rc" = 2 ]; then
+    capture msg msg_rc squash "$out" 160
+    bad "mutant $name ($what): the judge crashed: $msg"; return
+  fi
   if [ ! -s "$tmp/ran-$name" ]; then bad "mutant $name ($what): the edited line was never reached (the cell proves nothing)"; return; fi
-  if [ "$rc" = 0 ]; then ok "mutant $name ($what): the edit was reached, the decoy was not used ($(printf '%s' "$out" | head -1))"
-  else bad "mutant $name ($what): the decoy WAS used: $(printf '%s' "$out" | sed -n 2p | sed 's/^ *//' | cut -c1-140)"; fi
+  if [ "$rc" = 0 ]; then
+    capture msg msg_rc excerpt "$out" 1 200
+    ok "mutant $name ($what): the edit was reached, the decoy was not used ($msg)"
+  else
+    capture msg msg_rc excerpt "$out" 2 140
+    bad "mutant $name ($what): the decoy WAS used: $msg"
+  fi
 }
 cell 1 'unset KUBECONFIG; kubectl by path (no shim)' "unset KUBECONFIG; $fakebin2/kubectl -n x get ns"
 cell 2 'read -r KUBECONFIG PATH (r4)' "read -r KUBECONFIG PATH <<< \"$decoy $fakebin2:/usr/bin:/bin\""
@@ -220,13 +242,21 @@ cell 9 'HOME=<decoy home>; unset KUBECONFIG; kubectl by path' "HOME=$decoyhome; 
 # (a cell that stays green when the layer is gone proves nothing about the layer)
 ctrl() {  # <name> <what> <payload> <tweak run in the scratch tree>
   local name=c$1 what=$2 payload=$3 tweak=$4 out rc
-  if ! mut_smoke "$name" "$payload" 2>"$tmp/mut.err"; then bad "control $name was not made: $(cat "$tmp/mut.err")"; return; fi
-  ( cd "$tree/deployments/helm/kind" && eval "$tweak" ) 2>"$tmp/mut.err" || { bad "control $name: the tweak failed: $(cat "$tmp/mut.err")"; return; }
+  if ! mut_smoke "$name" "$payload" 2>"$tmp/mut.err"; then
+    capture msg msg_rc cat "$tmp/mut.err"
+    bad "control $name was not made: $msg"; return
+  fi
+  if ! ( cd "$tree/deployments/helm/kind" && eval "$tweak" ) 2>"$tmp/mut.err"; then
+    capture msg msg_rc cat "$tmp/mut.err"
+    bad "control $name: the tweak failed: $msg"; return
+  fi
   run_lines 'smoke.sh'
   capture out rc judge || { bad "control $name: capture failed"; return; }
   if [ "$rc" = 2 ]; then bad "control $name ($what): the judge crashed"; return; fi
   if [ ! -s "$tmp/ran-$name" ]; then bad "control $name ($what): the edited line was never reached"; return; fi
-  if [ "$rc" = 1 ]; then ok "control $name ($what): the decoy IS used, so the layer is what keeps it out ($(printf '%s' "$out" | sed -n 2p | sed 's/^ *//' | cut -c1-70))"
+  if [ "$rc" = 1 ]; then
+    capture msg msg_rc excerpt "$out" 2 70
+    ok "control $name ($what): the decoy IS used, so the layer is what keeps it out ($msg)"
   else bad "control $name ($what): the decoy was not used even without the layer: the cell does not test it"; fi
 }
 tweak_nolock() { : > lock.sh; }
@@ -251,10 +281,14 @@ for f in "$root"/deployments/helm/kind/*.sh; do
   if [ "$r" = 2 ] && grep -q 'task' "$tmp/direct.out"; then refused=$((refused + 1)); else notrefused="$notrefused $n(rc=$r)"; fi
 done
 sum=$(judge); rc=$?
+capture judged7 judged7_rc judged_of "$sum"
 if [ "$rc" = 2 ]; then bad "mutant 7: the judge crashed"
-elif [ "$direct" -ge 8 ] && [ "$refused" = "$direct" ] && [ "$(printf '%s\n' "$sum" | field judged)" = 0 ]; then
+elif [ "$direct" -ge 8 ] && [ "$refused" = "$direct" ] && [ "$judged7" = 0 ]; then
   ok "mutant 7: all $direct kind scripts run directly were refused (exit 2, pointing at the task) and called no cluster tool"
-else bad "mutant 7: $refused of $direct scripts refused; not refused:${notrefused:- none}; $(printf '%s' "$sum" | head -2 | tr '\n' '|')"; fi
+else
+  capture msg msg_rc flat 2 "$sum"
+  bad "mutant 7: $refused of $direct scripts refused; not refused:${notrefused:- none}; $msg"
+fi
 
 # ---- 8: a Taskfile command that does not go through the runner
 mut_taskfile() {
@@ -268,12 +302,19 @@ s = s[:j] + "      - kubectl --kubeconfig \"{{.KIND_KUBECONFIG}}\" get ns\n" + s
 open(sys.argv[2], "w").write(s)
 PY
 }
-if ! mut_taskfile 2>"$tmp/mut.err"; then bad "mutant 8 was not made: $(cat "$tmp/mut.err")"
+if ! mut_taskfile 2>"$tmp/mut.err"; then
+  capture msg msg_rc cat "$tmp/mut.err"
+  bad "mutant 8 was not made: $msg"
 else
   python3 "$root/deployments/helm/check-kubeconfig.py" --taskfile "$mutfile" >"$tmp/gate.out" 2>&1; g=$?
   if [ "$g" = 0 ]; then bad "mutant 8: check-kubeconfig.py accepts a kubectl command that does not go through the runner"
-  elif ! grep -q '^check-kubeconfig: [0-9]* problem' "$tmp/gate.out"; then bad "mutant 8: the gate crashed instead of giving a verdict: $(tail -2 "$tmp/gate.out" | tr '\n' ' ')"
-  else ok "mutant 8: a Taskfile kubectl outside the runner is flagged ($(sed -n 2p "$tmp/gate.out" | sed 's/^ *//' | cut -c1-90))"; fi
+  elif ! grep -q '^check-kubeconfig: [0-9]* problem' "$tmp/gate.out"; then
+    capture msg msg_rc tail_flat 2 "$tmp/gate.out"
+    bad "mutant 8: the gate crashed instead of giving a verdict: $msg"
+  else
+    capture msg msg_rc file_excerpt "$tmp/gate.out" 2 90
+    ok "mutant 8: a Taskfile kubectl outside the runner is flagged ($msg)"
+  fi
 fi
 
 echo "kind isolation: $pass passed, $fail failed"

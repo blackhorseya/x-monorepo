@@ -16,7 +16,8 @@
 # The signs entry's cmd is scripts/cosign-sign-blob.sh (#215, bounded re-sign on a Rekor 409), so
 # both cases also run through that wrapper; its own retry cases are in scripts/test.sh.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 # signs_cmd <artifact>: the signs entry — cmd, args and the signature template, with goreleaser's
@@ -51,19 +52,22 @@ if [[ $sig == *.sigstore.json ]]; then
 else
   cosign verify-blob --key "$work/cosign.pub" --signature "$sig" "$work/checksums.txt"
 fi
-echo "cosign $(cosign version 2>&1 | sed -n 's/^GitVersion: *//p') signs and verifies with .goreleaser.yaml's flags"
+cosign_version=$(cosign version 2>&1 | sed -n 's/^GitVersion: *//p') || exit 1
+echo "cosign $cosign_version signs and verifies with .goreleaser.yaml's flags"
 
 # Same artifact, same deterministic key, signed twice (#195). The content is unique per run, so
 # the first POST is always a new entry and the second one the equivalent entry.
 openssl genrsa -out "$work/rsa.pem" 2048 2>/dev/null
 ( cd "$work" && COSIGN_PASSWORD= cosign import-key-pair --key rsa.pem >/dev/null 2>&1 )
-echo "equivalent-entry $(openssl rand -hex 16)" > "$work/equiv.txt"
+entry_id=$(openssl rand -hex 16) || exit 1
+echo "equivalent-entry $entry_id" > "$work/equiv.txt"
 signs_cmd "$work/equiv.txt"
 COSIGN_PASSWORD= "${cmd[@]}" --key "$work/import-cosign.key" >/dev/null \
   || { echo "FAIL: first signature of the artifact failed (Rekor unreachable, not the 409 case)"; exit 1; }
 # Both signs write the same $sig: drop the first bundle so the checks below see the second one only.
 rm -f "$sig"
-if ! out=$(COSIGN_PASSWORD= "${cmd[@]}" --key "$work/import-cosign.key" 2>&1); then
+out_rc=0; out=$(COSIGN_PASSWORD= "${cmd[@]}" --key "$work/import-cosign.key" 2>&1) || out_rc=$?
+if [ "$out_rc" != 0 ]; then
   echo "FAIL: signing the same artifact again met an equivalent Rekor entry and cosign gave up (#195):"
   printf '%s\n' "$out" | sed -E 's/[0-9a-f]{40,}/<id>/g' | tail -n 2
   exit 1

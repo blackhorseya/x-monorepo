@@ -17,7 +17,8 @@ pfc=$!
 trap 'kill $pf $pfc 2>/dev/null || true' EXIT
 for ((_try18 = 1; _try18 <= 30; _try18++)); do curl -fsS "$api/readyz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "$api/readyz" >/dev/null || { echo "smoke: /api/readyz never answered 200"; exit 1; }
-echo "smoke: running $(curl -fsS "$api/version")"
+version=$(curl -fsS "$api/version") || exit 1
+echo "smoke: running $version"
 
 # catalog-rpc (catalogRpc.enabled in kind/values.yaml): its own pod, ConfigMap and Secret. It refuses to
 # start on auth.jwt / auth.oidc.enabled, and this release's rpc config has auth.oidc on, so a pod
@@ -32,19 +33,25 @@ curl -fsS "$cat/readyz" >/dev/null || { echo "smoke: catalog-rpc /api/readyz nev
 curl -fsS "$cat/version" >/dev/null || { echo "smoke: catalog-rpc /api/version failed"; exit 1; }
 catimg=$(kubectl -n "$ns" get deploy -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].spec.template.spec.containers[0].image}')
 case $catimg in */catalog-rpc:*) ;; *) echo "smoke: the catalog-rpc Deployment runs '$catimg', not the catalog-rpc image"; exit 1 ;; esac
-echo "smoke: catalog-rpc running $catimg $(curl -fsS "$cat/version")"
+cat_version=$(curl -fsS "$cat/version") || exit 1
+echo "smoke: catalog-rpc running $catimg $cat_version"
 catcfg=$(kubectl -n "$ns" get configmap -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.config\.yaml}')
 echo "$catcfg" | grep -q 'oidc\|jwt' && { echo "smoke: catalog-rpc ConfigMap carries auth.jwt/auth.oidc"; exit 1; }
 echo "$catcfg" | grep -q 'mode: required' || { echo "smoke: catalog-rpc ConfigMap is not auth.mode required"; exit 1; }
 catkey=$(kubectl -n "$ns" get secret -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.APP_AUTH_API_KEYS}' | base64 -d)
 case $catkey in rpc=*:admin) catkey=${catkey#rpc=}; catkey=${catkey%:admin} ;; *) echo "smoke: catalog-rpc service key is not rpc=<key>:admin"; exit 1 ;; esac
 catrpc() { curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' ${3:+-H "X-API-Key: $3"} "$cat/$1" -d "$2"; }
-catsku="kind-cat-$(date +%s)"
+now=$(date +%s) || exit 1
+catsku="kind-cat-$now"
 up="{\"sku\":\"$catsku\",\"name\":\"$catsku\",\"price\":{\"amount_minor\":250,\"currency\":\"USD\"}}"
-[ "$(catrpc catalog.v1.CatalogService/UpsertProduct "$up")" = 401 ] || { echo "smoke: catalog-rpc accepted a write with no credential"; exit 1; }
-[ "$(catrpc catalog.v1.CatalogService/GetProduct "{\"sku\":\"$catsku\"}")" = 401 ] || { echo "smoke: catalog-rpc accepted a read with no credential"; exit 1; }
-[ "$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" not-the-service-key-0123456789)" = 401 ] || { echo "smoke: catalog-rpc accepted an unknown key"; exit 1; }
-[ "$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" "$catkey")" = 200 ] || { echo "smoke: catalog-rpc refused its own service key"; exit 1; }
+code=$(catrpc catalog.v1.CatalogService/UpsertProduct "$up") || { echo "smoke: catalog-rpc did not answer a write with no credential"; exit 1; }
+[ "$code" = 401 ] || { echo "smoke: catalog-rpc accepted a write with no credential"; exit 1; }
+code=$(catrpc catalog.v1.CatalogService/GetProduct "{\"sku\":\"$catsku\"}") || { echo "smoke: catalog-rpc did not answer a read with no credential"; exit 1; }
+[ "$code" = 401 ] || { echo "smoke: catalog-rpc accepted a read with no credential"; exit 1; }
+code=$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" not-the-service-key-0123456789) || { echo "smoke: catalog-rpc did not answer an unknown key"; exit 1; }
+[ "$code" = 401 ] || { echo "smoke: catalog-rpc accepted an unknown key"; exit 1; }
+code=$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" "$catkey") || { echo "smoke: catalog-rpc did not answer its own service key"; exit 1; }
+[ "$code" = 200 ] || { echo "smoke: catalog-rpc refused its own service key"; exit 1; }
 # What catalog-rpc wrote is what the rpc serves: this GetProduct hits the rpc, whose Forwarder passes
 # it to catalog-rpc over Connect. (The rpc has no catalog repository of its own, so a 404 here means
 # the Forwarder or catalog-rpc is broken.)
@@ -62,7 +69,8 @@ curl -fsSI "$console/reservations" | grep -qi '^content-security-policy: .*frame
 curl -fsSI "$console/api/readyz" | grep -qi '^content-security-policy' \
   && { echo "smoke: console applied its CSP to a proxied /api response"; exit 1; }
 curl -fsS "$console/api/readyz" >/dev/null || { echo "smoke: console /api proxy to the rpc failed"; exit 1; }
-echo "smoke: console serves the UI and proxies /api → $(curl -fsS "$console/api/version")"
+console_version=$(curl -fsS "$console/api/version") || exit 1
+echo "smoke: console serves the UI and proxies /api → $console_version"
 
 # Dex (dex.yaml): the issuer URL the rpc's auth.oidc names must resolve inside the cluster (the
 # CoreDNS rewrite) and its discovery document must name exactly that issuer.
@@ -73,7 +81,8 @@ got=$(kubectl -n "$ns" exec deploy/dex -- wget -qO- "$issuer/.well-known/openid-
 echo "smoke: dex discovery resolves in-cluster as $issuer"
 
 rpc() { curl -fsS -H 'Content-Type: application/json' "$api/$1" -d "$2"; }
-sku="kind-$(date +%s)"
+now=$(date +%s) || exit 1
+sku="kind-$now"
 # The SKU has to be a catalog product first: SetStock refuses one the catalog does not have
 # (stock.unknown_sku), and CreateOrder prices its lines from the catalog.
 rpc catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}" >/dev/null

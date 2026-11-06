@@ -34,15 +34,16 @@
 #
 # TASKFILE=<file in the repo root> runs the probe cells against another Taskfile (the control and M1 stay as they are).
 set -uo pipefail
-. "$(dirname "$0")/../../../scripts/best-effort.sh"   # value_of (#462, #466, #470)
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # value_of, capture (#462, #466, #470)
 type value_of >/dev/null 2>&1 || { echo "target-kubeconfig-test: scripts/best-effort.sh did not load (value_of is missing)" >&2; exit 2; }   # the allowed source line cannot carry `|| exit`, so the load is checked here
 # No "$(cmd || echo default)" here: a failed read must not turn into a plausible value (#470).
 yesno() { if "$@"; then echo yes; else echo no; fi; }                      # a label for a message: the status IS the answer
 fingerprint() { if [ -f "$1" ]; then cksum < "$1"; else echo absent; fi; }    # a file that is not there is "absent"; one that is there and cannot be read fails
 num_in() { if [ -f "$1" ]; then cat "$1"; else echo 0; fi; }                  # a counter file the listener has not written yet is 0; an unreadable one fails
 lines_in() { if [ -f "$1" ]; then value_of -ok 1 grep -c . "$1"; else echo 0; fi; }   # grep -c: 1 = no line (prints 0); 2+ = the read failed
-cd "$(dirname "$0")/../../.."
-root=$PWD
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the directory of $0 (plus a subdirectory), absolute: no dirname inside $(…) around a cd
+root=$(abs_dir_of "$0" ../../..) || exit 1
+cd "$root" || exit 1
 
 TASKFILE=${TASKFILE:-Taskfile.yml}
 fail=0 pass=0
@@ -56,7 +57,8 @@ done
 # every piece of state the trap reads is set BEFORE the trap exists
 tmp="" created_target=0 created_other=0 mutfile="" target="" other="" ns="" listener=""
 tmp=$(mktemp -d) || exit 1
-suffix="$(date +%s)$$"
+now=$(date +%s) || exit 1
+suffix="$now$$"
 target="k437t-$suffix" other="k437o-$suffix" ns="ns437-$suffix"
 mutfile="$root/Taskfile.mut437-$suffix.yml"
 
@@ -106,7 +108,9 @@ kubectl --kubeconfig "$tmp/alias.yaml" config rename-context "kind-$other" "kind
 alias_before=$(cksum < "$tmp/alias.yaml")
 
 uid() { kubectl --kubeconfig "$1" get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null; }
-u_target=$(uid "$tmp/target.yaml") u_other=$(uid "$tmp/other.yaml") u_alias=$(uid "$tmp/alias.yaml")
+u_target=$(uid "$tmp/target.yaml") || { echo "cannot read the namespace uid in $target"; exit 1; }
+u_other=$(uid "$tmp/other.yaml") || { echo "cannot read the namespace uid in $other"; exit 1; }
+u_alias=$(uid "$tmp/alias.yaml") || { echo "cannot read the namespace uid through the alias"; exit 1; }
 
 # C0: the control. An alias that does not answer as `other` would make every cell below prove nothing.
 if [ -n "$u_target" ] && [ -n "$u_other" ] && [ "$u_target" != "$u_other" ] && [ "$u_alias" = "$u_other" ]; then
@@ -135,7 +139,11 @@ aimed_right() { in_cluster "$tmp/target.yaml" && ! in_cluster "$tmp/other.yaml";
 reset_ns
 if run "$TASKFILE" "$tmp/alias.yaml"; then rc=0; else rc=$?; fi
 if [ "$rc" = 0 ] && aimed_right; then ok "A1 alias (kind-$target → other): the namespace is in target, not in other"
-else bad "A1 rc=$rc, in target: $(yesno in_cluster "$tmp/target.yaml"), in other: $(yesno in_cluster "$tmp/other.yaml")"; tail -5 "$tmp/run.log"; fi
+else
+  capture a1_t a1_rc yesno in_cluster "$tmp/target.yaml"   # yesno never fails; capture keeps the message free of a $(…) around a command
+  capture a1_o a1_rc yesno in_cluster "$tmp/other.yaml"
+  bad "A1 rc=$rc, in target: $a1_t, in other: $a1_o"; tail -5 "$tmp/run.log"
+fi
 
 # P1: same name, same cluster, twice
 reset_ns
@@ -194,7 +202,10 @@ else
   echo "M1 mutant run exited $mut_rc (either way is fine: the verdict is aimed_right / in_cluster below)" >&2
   if aimed_right; then bad "M1 the mutant (plain kubectl, no runner) still passes aimed_right: the probe cannot see the alias"
   elif in_cluster "$tmp/other.yaml"; then ok "M1 mutant without the runner: the namespace lands in other → red as it must"
-  else bad "M1 the mutant created the namespace nowhere: $(tail -3 "$tmp/run.log")"; fi
+  else
+    capture m1_log m1_rc tail -3 "$tmp/run.log"   # a failure message: a failed read leaves it empty, the failure being reported is already known
+    bad "M1 the mutant created the namespace nowhere: $m1_log"
+  fi
 fi
 reset_ns
 
@@ -206,12 +217,16 @@ kubectl --kubeconfig "$tmp/caller.yaml" config rename-context "kind-$other" "kin
 caller_before=$(cksum < "$tmp/caller.yaml")
 has_ctx() { kubectl --kubeconfig "$tmp/caller.yaml" config get-contexts -o name 2>/dev/null | grep -qx "kind-$ghost"; }
 down() { KUBECONFIG="$tmp/caller.yaml" task -t "$1" helm-kind-down "CLUSTER=$ghost" >"$tmp/down.log" 2>&1; }
-caller_intact() { has_ctx && [ "$(cksum < "$tmp/caller.yaml")" = "$caller_before" ]; }
+caller_intact() { local now_sum; has_ctx || return 1; now_sum=$(cksum < "$tmp/caller.yaml") || return 1; [ "$now_sum" = "$caller_before" ]; }
 clusters_there() { kind get clusters 2>/dev/null | grep -qx "$target" && kind get clusters 2>/dev/null | grep -qx "$other"; }
 if ! has_ctx; then bad "D0 the caller file has no context kind-$ghost (nothing to protect)"; else ok "D0 the caller file holds the context kind-$ghost (no such cluster)"; fi
 if down "$TASKFILE"; then rc=0; else rc=$?; fi
 if [ "$rc" = 0 ] && caller_intact && clusters_there; then ok "D1 helm-kind-down: the caller kubeconfig is byte-for-byte unchanged, the context is still there, both clusters of this run are too"
-else bad "D1 rc=$rc intact: $(yesno caller_intact), clusters: $(yesno clusters_there)"; tail -5 "$tmp/down.log"; fi
+else
+  capture d1_i d1_rc yesno caller_intact
+  capture d1_c d1_rc yesno clusters_there
+  bad "D1 rc=$rc intact: $d1_i, clusters: $d1_c"; tail -5 "$tmp/down.log"
+fi
 mutate_down() {  # <how>: plain = a bare kind delete; noflag = through the runner, without the flag
   python3 - "$root/Taskfile.yml" "$mutfile" "$1" <<'PY'
 import sys
@@ -240,7 +255,8 @@ else
 fi
 
 # Judged on the whole run
-[ "$(cksum < "$tmp/alias.yaml")" = "$alias_before" ] && ok "the alias kubeconfig is unchanged" || bad "the alias kubeconfig was written"
+alias_after=$(cksum < "$tmp/alias.yaml") || exit 1
+[ "$alias_after" = "$alias_before" ] && ok "the alias kubeconfig is unchanged" || bad "the alias kubeconfig was written"
 user_after=$(fingerprint "$user_kc") || exit 1
 [ "$user_after" = "$user_before" ] && ok "the caller's ~/.kube/config is unchanged" || bad "the caller's ~/.kube/config was written"
 # no kubectl call ran on the default kubeconfig: each one had a KUBECONFIG inside this run's directory or the task's own

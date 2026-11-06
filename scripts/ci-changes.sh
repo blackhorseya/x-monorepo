@@ -31,7 +31,8 @@
 #   k6-auth             tests/k6, pkgs/platform/server + config, pkgs/identity, apps/rpc, apps/catalog-rpc + pkgs/catalog, configs.
 #   k6-wire             any product Go, tests/k6: it guards against the API key leaking (#209).
 set -euo pipefail
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 
 if [ -n "${CI_ALL:-}" ]; then
   files=ALL

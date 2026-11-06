@@ -19,8 +19,8 @@ set -euo pipefail
 [ "$#" -ge 2 ] || { echo "usage: run.sh <kubeconfig file> <command> [args...]" >&2; exit 2; }
 kc=$1; shift
 case $kc in /*) ;; *) kc=$PWD/$kc ;; esac
-abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
-here=$(abs_dir "$(dirname "$0")")
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a script path, no dirname inside a substitution (#472)
+here=$(abs_dir_of "$0") || exit 1
 shim=$here/shim lock=$here/lock.sh
 [ -x "$shim/kubectl" ] && [ -f "$lock" ] || { echo "run.sh: $here is missing shim/ or lock.sh" >&2; exit 2; }
 
@@ -29,14 +29,18 @@ trap 'rm -rf "$scratch"' EXIT
 trap 'exit 130' INT TERM HUP
 mkdir -p "$scratch/home" "$scratch/tmp"
 : > "$scratch/home/.kind-runner"          # the marker kind/*.sh look for (#444)
-helm_home=$(dirname "$kc")/helm-$(basename "$kc" | sed 's/^kubeconfig-//')
+kc_dir=${kc%/*} kc_base=${kc##*/}       # kc is absolute (above): the directory and the file name, without dirname / basename in a substitution
+kc_name=${kc_base#kubeconfig-}          # == sed 's/^kubeconfig-//'
+helm_home=$kc_dir/helm-$kc_name
 mkdir -p "$helm_home/config" "$helm_home/cache" "$helm_home/data"
 
 # PATH: the shims, then the directory of each tool the scripts use as the CALLER's PATH finds it, then the system directories
 path=$shim
 for t in kubectl helm kind docker podman k6 jq psql python3 curl git go perl base64 xargs; do
-  if p=$(command -v "$t" 2>/dev/null); then :; else p=""; fi   # a tool the caller does not have is simply not added to the PATH; the script that needs it fails on its own
-  case $p in /*) d=$(dirname "$p"); case ":$path:" in *":$d:"*) ;; *) path=$path:$d ;; esac ;; esac
+  p=""
+  # a tool the caller does not have is simply not added to the PATH; the script that needs it fails on its own
+  if command -v "$t" >/dev/null 2>&1; then p=$(command -v "$t") || exit 1; fi
+  case $p in /*) d=${p%/*}; case ":$path:" in *":$d:"*) ;; *) path=$path:$d ;; esac ;; esac
 done
 path=$path:/usr/bin:/bin:/usr/sbin:/sbin
 
