@@ -39,7 +39,7 @@ set -euo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462); capture, value_of
 abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the directory of $0 (plus a subdirectory), absolute: no `cd … && pwd` and no dirname inside $(…) (#470, #472)
 here=$(abs_dir_of "$0") || exit 1
-tmp=$(mktemp -d)
+tmp=$(mktemp -d) || exit 1
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
 WATCHDOG=""
 trap 'test -z "$WATCHDOG" || kill $WATCHDOG 2>/dev/null; rm -rf "$tmp"' EXIT
@@ -204,15 +204,15 @@ DIAG_DIR="$tmp/diag3" MODE=ok run_bounded 120 "$here/payment-flow.sh" ns rel cha
 [ "$rc" = 1 ] || die "D3: exit $rc, want 1 (the script's own status, not diag's or restore's)"
 has "payment-flow: UpsertProduct: got '500', want '200'" "D3 the step that failed"
 n=$(value_of -ok 1 grep -c '^::group::diag: pods and events' "$tmp/out") || exit 1; [ "$n" = 1 ] || die "D3: diag ran $n times, want exactly once"
-start=$(sed -n 's/.*--since-time=\([^ ]*\).*/\1/p' "$tmp/events" | sort -u)
+start=$(sed -n 's/.*--since-time=\([^ ]*\).*/\1/p' "$tmp/events" | sort -u) || exit 1
 [ -n "$start" ] || die "D3: no log was read at all (diag.sh did not run)"
 start_lines=$(wc -l <<<"$start" | tr -d ' ') || exit 1
 [ "$start_lines" = 1 ] || die "D3: the logs were read since more than one time: $start"
 [[ $start =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || die "D3: since-time '$start' is not RFC 3339 UTC"
 has "LOG pod/a since=$start $nonce" "D3 the pod log reached the output"
-first_logs=$(awk '/ logs /{print NR; exit}' "$tmp/events")
-last_helm=$(awk '/^helm upgrade/{n=NR} END{if(n) print n}' "$tmp/events")
-first_helm=$(awk '/^helm upgrade/{print NR; exit}' "$tmp/events")
+first_logs=$(awk '/ logs /{print NR; exit}' "$tmp/events") || exit 1
+last_helm=$(awk '/^helm upgrade/{n=NR} END{if(n) print n}' "$tmp/events") || exit 1
+first_helm=$(awk '/^helm upgrade/{print NR; exit}' "$tmp/events") || exit 1
 [ -n "$first_logs" ] && [ -n "$last_helm" ] || die "D3: no log read or no restore in the events"
 [ "$first_helm" -lt "$first_logs" ] || die "D3: the flow's own helm upgrade did not come first (the fake run did not get as far as it should)"
 [ "$first_logs" -lt "$last_helm" ] || die "D3: the pods' logs were read AFTER the release was restored (helm upgrade replaced them)"
@@ -228,7 +228,7 @@ for doc in yaml.safe_load_all(open(sys.argv[1])):
     if doc and doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "postgres":
         print(" ".join(doc["spec"]["template"]["spec"]["containers"][0].get("args", [])))
 PY
-)
+) || exit 1
 [ -n "$args" ] || die "D4: the postgres container of deps.yaml has no args"
 for want in "log_lock_waits=on" "deadlock_timeout=1s" "log_checkpoints=on" "log_min_error_statement=panic" "log_min_messages=log"; do
   [[ " $args " == *" $want "* ]] || die "D4: postgres args lack $want (have: $args)"
@@ -283,8 +283,8 @@ for sg in TERM INT; do
     [ -n "$hp" ] || die "D5 $sg: the fake helm left no pid"
     ! kill -0 "$hp" 2>/dev/null || { kill "$hp" 2>/dev/null; die "D5 $sg: the waiting helm (pid $hp) was left running"; }
     n=$(value_of -ok 1 grep -c ' logs ' "$tmp/events") || exit 1; [ "$n" -gt 0 ] || die "D5 $sg: diag.sh did not run (no pod log was read)"
-    first_logs=$(grep -n ' logs ' "$tmp/events" | head -1 | cut -d: -f1)
-    last_helm=$(grep -n '^helm upgrade' "$tmp/events" | tail -1 | cut -d: -f1)
+    first_logs=$(grep -n ' logs ' "$tmp/events" | head -1 | cut -d: -f1) || exit 1
+    last_helm=$(grep -n '^helm upgrade' "$tmp/events" | tail -1 | cut -d: -f1) || exit 1
     [ "$first_logs" -lt "$last_helm" ] || die "D5 $sg: diag.sh ran after the restore"
     _c275a=$(value_of -ok 1 grep -c '^helm upgrade' "$tmp/events") || exit 1; [ "$_c275a" -ge 2 ] || die "D5 $sg: the release was not restored (no second helm upgrade)"
     echo "diag-test ok: D5 $sg while helm upgrade waits: diag before restore, exit $want_rc, the waiting helm stopped, nothing left"
@@ -297,7 +297,7 @@ if only D6; then
   export DIAG_DIR="$tmp/diag6"
   PODCOUNT=30 LOGLINES=5000 run_bounded 120 "$here/diag.sh" ns "$since"
   [ "$rc" = 0 ] || die "D6: exit $rc, want 0"
-  lines=$(wc -l < "$tmp/out" | tr -d ' ')
+  lines=$(wc -l < "$tmp/out" | tr -d ' ') || exit 1
   [ "$lines" -le 4000 ] || die "D6: the console got $lines lines for 30 pods x 5000 lines (150000 in all), want at most 4000"
   [ -d "$DIAG_DIR" ] || die "D6: no artifact directory at $DIAG_DIR"
   full=0; for f in "$DIAG_DIR"/log-p*.txt; do [ -e "$f" ] || continue; f_lines=$(wc -l < "$f" | tr -d ' ') || exit 1; [ "$f_lines" = 5000 ] && full=$((full + 1)); done
@@ -312,7 +312,7 @@ if only D6; then
   [ "$rc" = 0 ] || die "D6 deadline: exit $rc, want 0"
   [ "$took" -le 14 ] || die "D6 deadline: took ${took}s with a 6s deadline"
   has "diag: the 6s deadline was reached" "D6 deadline: the console says the collection stopped"
-  got=$(ls "$DIAG_DIR"/log-p*.txt 2>/dev/null | wc -l | tr -d ' ')
+  got=$(ls "$DIAG_DIR"/log-p*.txt 2>/dev/null | wc -l | tr -d ' ') || exit 1
   [ "$got" -ge 1 ] && [ "$got" -lt 30 ] || die "D6 deadline: $got of 30 pod logs written; want some, not all (the deadline must cut)"
   unset DIAG_DIR
   echo "diag-test ok: D6 30 pods x 5000 lines: $lines console lines, 30 complete files; 6s deadline over a 1s-per-call cluster: ${took}s, $got pods"
@@ -385,7 +385,7 @@ if only D6X; then
   run_bounded 120 "$here/diag.sh" ns "$longs"
   unset DIAG_DIR DIAG_CONSOLE_BYTES
   [ "$rc" = 0 ] || die "D6X: exit $rc, want 0"
-  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ') || exit 1
   [ "$bytes" -le $((budget + slack)) ] || die "D6X: a 100,000-character since put $bytes bytes on the console, want at most $((budget + slack))"
   [ -s "$tmp/diag-X1/log-a.txt" ] || die "D6X: the collection itself did not run (no pod log in the files)"
   echo "diag-test ok: D6X a 100,000-character since: $bytes console bytes (limit $((budget + slack))), the files are there"
@@ -399,7 +399,7 @@ if only D6D; then
   run_bounded 120 "$here/diag.sh" ns "$since"
   unset DIAG_DIR DIAG_CONSOLE_BYTES
   [ "$rc" = 0 ] || die "D6D: exit $rc, want 0"
-  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ') || exit 1
   [ "$bytes" -le $((budget + slack)) ] || die "D6D: a DIAG_DIR that cannot be created put $bytes bytes on the console, want at most $((budget + slack))"
   has "diag: cannot create" "D6D: the failure is still said"
   echo "diag-test ok: D6D a 100,000-character DIAG_DIR that cannot be created: $bytes console bytes (limit $((budget + slack)))"
@@ -415,9 +415,9 @@ if only D6B; then
   run_bounded 120 "$mut" ns "$since"
   unset INJECT_HITS DIAG_DIR DIAG_CONSOLE_BYTES
   [ "$rc" = 0 ] || die "D6B: exit $rc, want 0"
-  hits=$(wc -l < "$tmp/hits" | tr -d ' ')
+  hits=$(wc -l < "$tmp/hits" | tr -d ' ') || exit 1
   [ "$hits" -ge 4 ] || die "D6B: only $hits injected writes ran (the mutant did not do what the cell assumes)"
-  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ') || exit 1
   [ "$bytes" -le $((budget + slack)) ] || die "D6B: $hits direct 100 KB writes put $bytes bytes on the console, want at most $((budget + slack))"
   has "console budget" "D6B: the console says the budget was used up"
   echo "diag-test ok: D6B $hits direct 100 KB writes injected into diag.sh: $bytes console bytes (limit $((budget + slack)))"
@@ -438,10 +438,10 @@ except subprocess.TimeoutExpired:
     print("rc=%s bytes=? secs=timeout" % p.poll())
 PY
   res=$(DIAG_DIR="$tmp/diag-P" EVENTS="$tmp/events" NONCE="$nonce" PATH="$tmp/bin:$PATH" DIAG_CONSOLE_BYTES=$budget \
-    python3 "$tmp/pipecap.py" bash "$here/diag.sh" ns "$since")
+    python3 "$tmp/pipecap.py" bash "$here/diag.sh" ns "$since") || exit 1
   [[ $res == *"secs=timeout"* ]] && die "D6P: a pipe-capturing caller never got EOF ($res): the writer waits for its caller, the caller for the writer"
   [[ $res == "rc=0 "* ]] || die "D6P: $res; want rc=0"
-  nb=$(sed -n 's/.*bytes=\([0-9]*\).*/\1/p' <<<"$res")
+  nb=$(sed -n 's/.*bytes=\([0-9]*\).*/\1/p' <<<"$res") || exit 1
   [ "${nb:-0}" -gt 0 ] || die "D6P: the caller captured nothing ($res): the output did not reach the pipe"
   [ "$nb" -le $((budget + slack)) ] || die "D6P: the caller captured $nb bytes, want at most $((budget + slack))"
   echo "diag-test ok: D6P a caller capturing through a pipe: $res"
@@ -485,7 +485,7 @@ PY
     capture fds_txt fds_rc tr '\n' ' ' < "$tmp/fds-f"   # the text of a failure message; the verdict (die) does not depend on it
     die "D6F: the collector holds a descriptor for the console: fd $fds_txt"
   fi
-  bytes=$(wc -c < "$tmp/out" | tr -d ' ')
+  bytes=$(wc -c < "$tmp/out" | tr -d ' ') || exit 1
   [ "$bytes" -le $((budget + slack)) ] || die "D6F: a write to the inherited console descriptor put $bytes bytes on the console, want at most $((budget + slack))"
   has "diag: files in" "D6F: the run itself still printed (the wrapper prints the capture)"
   echo "diag-test ok: D6F the collector has no console descriptor (scanned by inode, scan proven on a positive control) and a write to >&3 reaches nothing: $bytes console bytes (limit $((budget + slack)))"
@@ -511,11 +511,11 @@ PY
   # SLOW=1: every kubectl call takes 1 s; the first `logs` call proves diag.sh has printed its first lines
   mkdir -p "$tmp/tmpT"   # diag.sh's own TMPDIR: only ITS leftovers are counted below, not other runs' in the shared one
   res=$(TMPDIR="$tmp/tmpT" DIAG_DIR="$tmp/diag-T" EVENTS="$tmp/events" NONCE="$nonce" SLOW=1 PODCOUNT=30 PATH="$tmp/bin:$PATH" \
-    python3 "$tmp/termrun.py" "$tmp/diag-T/pods.txt" "$tmp/out" "$here/diag.sh" ns "$since")
+    python3 "$tmp/termrun.py" "$tmp/diag-T/pods.txt" "$tmp/out" "$here/diag.sh" ns "$since") || exit 1
   [[ $res == *"rc=143 "* ]] || die "D6T: $res; want rc=143 (128 + TERM)"
   [[ $res == *"leftover=0"* ]] || die "D6T: something of diag.sh outlived it ($res)"
   has "diag: files in" "D6T: what diag.sh printed before the TERM reached the console"
-  left_fifos=$(find "$tmp/tmpT" -maxdepth 1 -name 'diag-console.*' | wc -l | tr -d ' ')
+  left_fifos=$(find "$tmp/tmpT" -maxdepth 1 -name 'diag-console.*' | wc -l | tr -d ' ') || exit 1
   [ "$left_fifos" = 0 ] || die "D6T: $left_fifos console fifo dirs left in $tmp/tmpT"
   echo "diag-test ok: D6T TERM while collecting: $res, the printed part is on the console, no fifo left"
 fi
@@ -584,7 +584,7 @@ for doc in yaml.safe_load_all(open(sys.argv[1])):
     if doc and doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "postgres":
         print("\n".join(doc["spec"]["template"]["spec"]["containers"][0].get("args", [])))
 PY
-)
+) || exit 1
   [ -n "$real" ] || die "D7: no postgres args in deps.yaml"
   real_args=(); while IFS= read -r a; do real_args+=("$a"); done <<<"$real"
   d7 manifest "${real_args[@]}"

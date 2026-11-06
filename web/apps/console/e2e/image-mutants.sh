@@ -15,7 +15,7 @@ app_dir=$(abs_dir_of "$0" ..) || exit 1
 cd "$app_dir" || exit 1
 [ -f dist/index.html ] || { echo "image-mutants: dist/ missing, run task web-build" >&2; exit 1; }
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/console-mutants.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/console-mutants.XXXXXX") || exit 1
 trap 'rm -rf "$work"' EXIT
 
 # mutate <name> <file under deploy/> <sed expression>: prepares $work/<name> and fails if the sed changed nothing

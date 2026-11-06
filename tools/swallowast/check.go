@@ -685,40 +685,94 @@ func sourceExceptionShape(dq *syntax.DblQuoted) bool {
 type errexitInfo struct {
 	enabledAt uint // byte offset of the first top-level `set -e` / `set -o errexit` (valid when enabled)
 	enabled   bool
-	disabled  bool // anything anywhere that may turn it off: `set +e`, `set +o errexit`, `shopt -u …`, a `set` with a computed argument
+	disabled  bool // anything that may turn it off: `set +e`, `set +o errexit`, `shopt -u …`, a `set` with a computed argument, or after the `set -e` (or inside any function) a `.` / source / eval / DEBUG-RETURN trap
 }
 
 func scanErrexit(f *syntax.File) errexitInfo {
 	var ei errexitInfo
+	// A top-level `set -e` counts only as a plain statement: not in the background (that runs in a subshell), not negated, no redirection (a failed
+	// redirection means `set` never ran), not a coprocess.
 	top := map[*syntax.CallExpr]bool{}
 	for _, st := range f.Stmts {
-		if ce, ok := st.Cmd.(*syntax.CallExpr); ok {
+		if ce, ok := st.Cmd.(*syntax.CallExpr); ok && !st.Background && !st.Negated && !st.Coprocess && len(st.Redirs) == 0 {
 			top[ce] = true
 		}
 	}
+	// Code that runs inside a function body runs whenever the function is called, possibly after errexit is on, wherever the body stands in the file.
+	var fns [][2]uint
 	syntax.Walk(f, func(n syntax.Node) bool {
+		if fd, ok := n.(*syntax.FuncDecl); ok {
+			fns = append(fns, [2]uint{fd.Pos().Offset(), fd.End().Offset()})
+		}
+		return true
+	})
+	inFn := func(off uint) bool {
+		for _, r := range fns {
+			if off >= r[0] && off < r[1] {
+				return true
+			}
+		}
+		return false
+	}
+	var risky []uint // where something runs that may change shell options from outside this file's text: `.` / source / eval / a DEBUG or RETURN trap
+	var stk []syntax.Node
+	syntax.Walk(f, func(n syntax.Node) bool {
+		if n == nil {
+			stk = stk[:len(stk)-1]
+			return true
+		}
+		stk = append(stk, n)
 		ce, ok := n.(*syntax.CallExpr)
 		if !ok || len(ce.Args) == 0 {
 			return true
 		}
-		switch litOf(ce.Args[0]) {
+		args := ce.Args
+		for len(args) > 1 && (litOf(args[0]) == "command" || litOf(args[0]) == "builtin") { // `command set +e`, `builtin shopt -u …` are the same builtin
+			args = args[1:]
+		}
+		switch litOf(args[0]) {
 		case "shopt":
-			for _, a := range ce.Args[1:] {
+			for _, a := range args[1:] {
 				if l := litOf(a); strings.HasPrefix(l, "-") && strings.Contains(l, "u") {
 					ei.disabled = true
 				}
 			}
 		case "set":
-			on, off := setFlags(ce.Args[1:])
+			on, off := setFlags(args[1:])
 			if off {
 				ei.disabled = true
 			}
-			if on && top[ce] && !ei.enabled {
+			if on && top[ce] && len(args) == len(ce.Args) && !ei.enabled {
 				ei.enabled, ei.enabledAt = true, ce.Pos().Offset()
+			}
+		case ".", "source", "eval":
+			if litOf(args[0]) != "eval" && isErrexitSafeLib(args) {
+				return true
+			}
+			if isolatedFromShell(stk) {
+				return true
+			}
+			risky = append(risky, ce.Pos().Offset())
+			if inFn(ce.Pos().Offset()) {
+				ei.disabled = true
+			}
+		case "trap":
+			for _, a := range args[1:] {
+				if l := litOf(a); (!staticWord(a) || l == "DEBUG" || l == "RETURN") && !isolatedFromShell(stk) {
+					risky = append(risky, ce.Pos().Offset())
+					if inFn(ce.Pos().Offset()) {
+						ei.disabled = true
+					}
+				}
 			}
 		}
 		return true
 	})
+	for _, off := range risky {
+		if ei.enabled && off >= ei.enabledAt {
+			ei.disabled = true // it runs after errexit is on: it may switch it off, and its text is not in this file
+		}
+	}
 	return ei
 }
 
@@ -806,4 +860,80 @@ func (c *checker) errexitReason(si int) string {
 			return lost
 		}
 	}
+}
+
+// isErrexitSafeLib: `. <path>/best-effort.sh` with no further argument. The one library every script here sources is a file of this repo whose text never
+// touches errexit; scripts/test.sh asserts that (a grep over the file for set +e / set +o / shopt -u / eval / trap / source), so naming it is as good as
+// reading it. Any other file that is sourced after `set -e` may switch errexit off and counts as unreadable.
+func isErrexitSafeLib(args []*syntax.Word) bool {
+	if len(args) != 2 {
+		return false
+	}
+	parts := args[1].Parts
+	if len(parts) == 1 {
+		if q, ok := parts[0].(*syntax.DblQuoted); ok && !q.Dollar {
+			parts = q.Parts
+		}
+	}
+	if len(parts) == 0 {
+		return false
+	}
+	var last string
+	switch l := parts[len(parts)-1].(type) {
+	case *syntax.Lit:
+		last = l.Value
+	case *syntax.SglQuoted:
+		if l.Dollar {
+			return false
+		}
+		last = l.Value
+	default:
+		return false
+	}
+	return last == "best-effort.sh" && len(parts) == 1 || strings.HasSuffix(last, "/best-effort.sh")
+}
+
+// isolatedFromShell: the node (the last of the stack) runs in a child process, so an option it changes does not reach the shell that holds the assignment:
+// in a `( … )`, a $(…), a <(…), the background, or the left side of a pipe.
+func isolatedFromShell(stk []syntax.Node) bool {
+	for i := 0; i+1 < len(stk); i++ {
+		switch p := stk[i].(type) {
+		case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
+			return true
+		case *syntax.Stmt:
+			if p.Background {
+				return true
+			}
+		case *syntax.BinaryCmd:
+			if (p.Op == syntax.Pipe || p.Op == syntax.PipeAll) && stk[i+1] == syntax.Node(p.X) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// staticWord: the word is spelled out (literals and quotes with nothing expanded in them); `”` is static, `"$x"` is not.
+func staticWord(w *syntax.Word) bool {
+	for _, p := range w.Parts {
+		switch q := p.(type) {
+		case *syntax.Lit:
+		case *syntax.SglQuoted:
+			if q.Dollar {
+				return false
+			}
+		case *syntax.DblQuoted:
+			if q.Dollar {
+				return false
+			}
+			for _, in := range q.Parts {
+				if _, ok := in.(*syntax.Lit); !ok {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }

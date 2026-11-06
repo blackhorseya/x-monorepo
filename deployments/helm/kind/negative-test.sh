@@ -13,7 +13,7 @@
 set -euo pipefail
 abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a script path, no dirname inside a substitution (#472)
 here=$(abs_dir_of "$0") || exit 1
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+tmp=$(mktemp -d) || exit 1; trap 'rm -rf "$tmp"' EXIT
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort, capture, value_of (#462, #466)
 mkdir "$tmp/bin"

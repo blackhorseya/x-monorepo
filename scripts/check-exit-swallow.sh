@@ -31,7 +31,9 @@
 #             (bare / `$?` only when it is the else block's only statement), or an `elif` whose whole condition is an assignment `name=$(…)` to the same variable;
 #             any other `elif` is red; `until`, always; `while`, and `! x=$(…)`, never.
 #             A plain top-level `x=$(…)` (no handler, not a condition) relies on `set -e`: it is accepted only when the file turns errexit on at top level BEFORE it and
-#             nothing in the file may turn it off (`set +e`, `set +o errexit`, `shopt -u`, a computed `set`), and every ancestor is a place where errexit is in force
+#             nothing in the file may turn it off (`set +e`, `set +o errexit`, `shopt -u`, a computed `set`, also behind `command` / `builtin`; after the `set -e`, or in any
+#             function, a `.` / `source` / `eval` / DEBUG-RETURN trap outside a child process, except `. …/best-effort.sh`), the `set -e` being a plain top-level statement (not
+#             backgrounded, negated or redirected), and every ancestor is a place where errexit is in force
 #             (file / `{ }` / `( )` / then, else, do, case bodies; never a condition, the left of && ||, `!`, `&`, a pipeline operand, `time`, `coproc`, `$( )`). The one exempt node is the kind scripts'
 #             `. "$(dirname "$0")/../../../scripts/best-effort.sh"`, matched field by field. Not exemptible.
 #   fnctx     inside ANY function body, `x=$(…)` must carry that handler (`|| return` / `|| exit` with `$?` or a literal, or `|| { …; return N; }`; no `|| NAME=$?`),

@@ -36,7 +36,7 @@
 # produces is searched for it; one hit fails the whole bench.
 set -euo pipefail
 bin=$1; shift
-stamp=$(date -u +%Y%m%dT%H%M%SZ)
+stamp=$(date -u +%Y%m%dT%H%M%SZ) || exit 1
 # pid + random: two benches started in the same second (same stamp) never share a database name or
 # an output directory. BENCH_DB_SUFFIX pins it (bench_db_test.sh forces a collision with it).
 suffix=${BENCH_DB_SUFFIX:-$$$RANDOM}
@@ -63,7 +63,7 @@ export APP_CONFIG=/dev/null APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false APP_LOG_L
 . tests/k6/catalog.sh   # rpc has no catalog of its own: a catalog-rpc per attempt, on that attempt's database
 
 if ncpu=$(sysctl -n hw.ncpu 2>/dev/null); then :; elif ncpu=$(nproc); then :; else echo "bench: cannot count the cpus" >&2; exit 1; fi
-limit=$(python3 -I -c "print($MAX_LOAD_PER_CORE * $ncpu)")
+limit=$(python3 -I -c "print($MAX_LOAD_PER_CORE * $ncpu)") || exit 1
 
 # 1m load average every LOAD_INTERVAL seconds into $1 (epoch,load) until stopped (tests/k6/loadavg.py)
 pid="" wpid="" db="" lpid=""
@@ -129,7 +129,7 @@ while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
   attempts=$((attempts + 1)); n=$attempts
   name="k6_bench_${stamp_lc}_${suffix}_$n"
   run_id="bench-$stamp-$suffix-$n"
-  url=$(dburl "$name")
+  url=$(dburl "$name") || exit 1
   echo "== attempt $n ($valid/$RUNS valid so far; $run_id, database $name)"
   # whatever an earlier bench left under this attempt's names (a reused out dir) is not this run's evidence
   rm -f "$out"/run"$n"-*
@@ -182,7 +182,7 @@ done
 # where the numbers were taken: enough for someone else to rerun them under the same conditions
 if cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null); then :; elif cpu=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo); then :; else echo "bench: cannot read the cpu model" >&2; exit 1; fi
 rc=0
-pgv=$(psql "$base_url" -qAt -c "show server_version")
+pgv=$(psql "$base_url" -qAt -c "show server_version") || exit 1
 bench_commit=$(git rev-parse HEAD) || exit 1
 bench_dirty=$(git status --porcelain -- . ':!bin') || exit 1   # first character only: no `| head -c1` (a SIGPIPE on a dirty tree would be a failure of the pipeline)
 bench_dirty=${bench_dirty:0:1}

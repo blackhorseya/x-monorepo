@@ -3844,6 +3844,68 @@ ee_red set-e-inside-a-function 'f() { set -e; }
 f
 v=$(cmd)
 echo "v=[$v]"' ':' norealhalf   # a set -e that runs inside a function does take effect; the checker only trusts a TOP-LEVEL set -e
+# (c3) the `set -e` itself has to be a plain top-level statement that RAN, and nothing after it may reach the shell from outside this file's text (#473 r1)
+ee_red set-e-background 'set -e &
+wait
+v=$(cmd)
+echo "v=[$v]"' ':'   # r1 A: the background `set -e` runs in a subshell; the main shell never turns errexit on
+ee_red set-e-failed-redirect 'set -e > /nonexistent-472-dir/file
+v=$(cmd)
+echo "v=[$v]"' ':'   # r1 B: the redirection fails first, `set` never runs
+ee_red set-e-then-source 'printf "set +e\n" > "$0.off"
+set -e
+. "$0.off"
+v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red set-e-then-eval 'set -e
+eval "set +e"
+v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red set-e-then-debug-trap 'set -e
+trap "set +e" DEBUG
+v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red set-e-then-source-in-function 'printf "set +e\n" > "$0.off"
+f() { . "$0.off"; }
+set -e
+f
+v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red set-e-then-trap-computed 'sig=DEBUG
+set -e
+trap "set +e" "$sig"
+v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red set-e-then-eval-named-like-the-library 'set -e
+eval "set +e #/best-effort.sh"
+v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red command-set-plus-e 'set -e
+command set +e
+v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red builtin-set-plus-e 'set -e
+builtin set +e
+v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red command-shopt-unset 'set -e
+command shopt -u extglob
+v=$(cmd)
+echo "v=[$v]"' ':' norealhalf
+ee_green eval-in-subshell '( eval "set +e" )
+v=$(cmd)'
+ee_green eval-left-of-pipe 'eval "set +e" | cat
+v=$(cmd)'
+ee_green eval-in-background 'eval "set +e" &
+wait
+v=$(cmd)'
+ee_green exit-trap 'trap : EXIT
+v=$(cmd)'
+ee_green best-effort-lib ". '$src/scripts/best-effort.sh'
+v=\$(cmd)"
+# the one library that is sourced by name without being read: its own text must not touch errexit
+capture be_hits be_rc grep -nE '^[^#]*([;&|(]|^)[[:space:]]*(set[[:space:]]+[-+][a-zA-Z]*[eo]|shopt[[:space:]]+-[a-z]*u|eval[[:space:]]|\.[[:space:]]+[^ ]|source[[:space:]]|trap[[:space:]].*(DEBUG|RETURN))' "$src/scripts/best-effort.sh" || exit 1
+expect_eq "ast (errexit): scripts/best-effort.sh never changes errexit, evals, sources or traps DEBUG/RETURN (rc 1 = no line matches)" "1 " "$be_rc $be_hits"
 ee_green top-level 'v=$(cmd)'
 ee_green set-eu 'set -eu
 v=$(cmd)'
