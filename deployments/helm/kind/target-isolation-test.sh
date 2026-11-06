@@ -181,16 +181,16 @@ if [ "$j5" = 2 ]; then ok "judge: one that cannot read its log is a crash (exit 
 # ---- baseline: the real entry, the real scripts, a hostile caller
 fresh_tree
 lines_of Taskfile.yml
-n_lines=$(grep -c . "$tmp/lines")
+capture n_lines n_lines_rc grep -c . "$tmp/lines" || exit 1   # 1 = no line (grep -c prints 0); the anchors below judge the count
 run_lines
-sum=$(judge strict); rc=$?
+capture sum rc judge strict || exit 1
 echo "$sum" | head -1
 if [ "$rc" = 0 ]; then ok "baseline: every cluster call of the seven kind tasks and the real scripts used the task's own kubeconfig, none the decoy"
 else
   capture msg msg_rc flat 3 "$sum"
   bad "baseline: $msg"
 fi
-judged=$(printf '%s\n' "$sum" | field judged)
+capture judged judged_rc field judged <<<"$sum" || exit 1
 if [ "${n_lines:-0}" -ge 20 ] && [ "${judged:-0}" -ge 60 ]; then ok "anchors: $n_lines lines run, $judged cluster calls judged"
 else bad "anchors too low: lines=$n_lines judged=${judged:-0} (the run is not seeing the commands it is there for)"; fi
 
@@ -273,14 +273,14 @@ fresh_tree
 : > "$calls"
 direct=0 refused=0 notrefused=""
 for f in "$root"/deployments/helm/kind/*.sh; do
-  n=$(basename "$f"); case $n in *-test.sh|run.sh|lock.sh) continue ;; esac
+  n=${f##*/}; case $n in *-test.sh|run.sh|lock.sh) continue ;; esac
   direct=$((direct + 1))
   ( cd "$tree" && env HOME="$decoyhome" PATH="$fakebin:/usr/bin:/bin" KUBECONFIG="$decoy" \
       perl -e 'alarm 25; exec @ARGV' bash "deployments/helm/kind/$n" "$ns" x-monorepo ) >"$tmp/direct.out" 2>&1
   r=$?
   if [ "$r" = 2 ] && grep -q 'task' "$tmp/direct.out"; then refused=$((refused + 1)); else notrefused="$notrefused $n(rc=$r)"; fi
 done
-sum=$(judge); rc=$?
+capture sum rc judge || exit 1
 capture judged7 judged7_rc judged_of "$sum"
 if [ "$rc" = 2 ]; then bad "mutant 7: the judge crashed"
 elif [ "$direct" -ge 8 ] && [ "$refused" = "$direct" ] && [ "$judged7" = 0 ]; then

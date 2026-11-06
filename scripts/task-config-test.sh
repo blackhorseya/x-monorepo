@@ -23,11 +23,12 @@
 set -uo pipefail
 self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
 cd "$self_dir/.." || exit 1
+. "$self_dir/best-effort.sh" || exit 1   # capture: the output of a task run is judged, its status is read on purpose
 
 TASKFILE=${TASKFILE:-Taskfile.yml}
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }
 
-tmp=$(mktemp -d)
+tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/dir with space"
 chosen="$tmp/chosen.yaml"   # no space: priority cells
@@ -55,11 +56,11 @@ for e in "${entries[@]}"; do
   name=${parts[0]} var=${parts[1]} rest=("${parts[@]:2}")
   for mode in competing alone; do
     if [ "$mode" = competing ]; then
-      out=$(APP_CONFIG="$parent" task -t "$TASKFILE" "$name" "$var=$chosen" ${rest[@]+"${rest[@]}"} 2>&1)
+      capture -2 out task_rc env APP_CONFIG="$parent" task -t "$TASKFILE" "$name" "$var=$chosen" ${rest[@]+"${rest[@]}"} || exit 1   # a task that cannot use the config exits non-zero AFTER saying which file it read: the output is the verdict
     else
-      out=$(env -u APP_CONFIG task -t "$TASKFILE" "$name" "$var=$chosen" ${rest[@]+"${rest[@]}"} 2>&1)
+      capture -2 out task_rc env -u APP_CONFIG task -t "$TASKFILE" "$name" "$var=$chosen" ${rest[@]+"${rest[@]}"} || exit 1
     fi
-    out=$(printf '%s' "$out" | strip)
+    out=$(printf '%s' "$out" | strip) || exit 1
     if ! printf '%s' "$out" | grep -qF "read APP_CONFIG=$chosen"; then
       fail=$((fail + 1)); echo "FAIL: priority: task $name ($mode): did not read $var=$chosen; output:" >&2; printf '%s\n' "$out" | tail -4 >&2
     elif [ "$mode" = competing ] && printf '%s' "$out" | grep -qF "$parent"; then
@@ -73,13 +74,13 @@ done
 # quoting: the real `task config` entry with a path that has a space
 spaced="$tmp/dir with space/local.yaml"
 printf 'existing: content\n' >"$spaced"
-out=$(task -t "$TASKFILE" config CONFIG="$spaced" 2>&1); rc=$?
+capture -2 out rc task -t "$TASKFILE" config CONFIG="$spaced" || exit 1
 spaced_content=$(cat "$spaced" 2>&1) || { echo "FAIL: quoting: cannot read $spaced after task config: $spaced_content" >&2; exit 1; }
 if [ "$rc" = 0 ] && [ "$spaced_content" = 'existing: content' ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: quoting: task config on an existing file with a space: exit $rc, content [$spaced_content]" >&2; printf '%s\n' "$out" | strip | tail -3 >&2
 fi
 rm -f "$spaced"
-out=$(task -t "$TASKFILE" config CONFIG="$spaced" 2>&1); rc=$?
+capture -2 out rc task -t "$TASKFILE" config CONFIG="$spaced" || exit 1
 if [ "$rc" = 0 ] && cmp -s "$spaced" configs/config.example.yaml; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: quoting: task config on a missing file with a space: exit $rc, seeded=$([ -f "$spaced" ] && echo yes || echo no)" >&2; printf '%s\n' "$out" | strip | tail -3 >&2
 fi

@@ -24,7 +24,7 @@ here=$(abs_dir_of "$0") || exit 1
 shim=$here/shim lock=$here/lock.sh
 [ -x "$shim/kubectl" ] && [ -f "$lock" ] || { echo "run.sh: $here is missing shim/ or lock.sh" >&2; exit 2; }
 
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/kind-run.XXXXXX")
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/kind-run.XXXXXX") || exit 1
 trap 'rm -rf "$scratch"' EXIT
 trap 'exit 130' INT TERM HUP
 mkdir -p "$scratch/home" "$scratch/tmp"

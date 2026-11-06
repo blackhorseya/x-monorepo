@@ -74,7 +74,7 @@ if [ "${1:-}" != "--diag-child" ]; then
   [ -z "$sig_rc" ] || rc=$sig_rc
   trap '' TERM INT HUP
   cap="$cap_dir/console"
-  size=$(wc -c < "$cap" | tr -d ' ')
+  count_into size -c "$cap"
   head -c "$console_budget" "$cap"
   if [ "$size" -gt "$console_budget" ]; then
     printf '\n[diag: the console budget of %s bytes is used up; nothing more is printed here, the whole output is in %.200s/console.full]\n::endgroup::\n' "$console_budget" "$dir"

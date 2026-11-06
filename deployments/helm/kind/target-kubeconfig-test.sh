@@ -81,7 +81,7 @@ export KUBECONFIG="$tmp/none.yaml"
 
 # Every kubectl in this run goes through a shim that records the kubeconfig it was given (the KUBECONFIG it runs with, or its
 # --kubeconfig). Judged at the end: no call ran on the caller's default (~/.kube/config), whose current-context may be production.
-real_kubectl=$(type -P kubectl)
+real_kubectl=$(type -P kubectl) || { echo "target-kubeconfig-test: no kubectl on PATH" >&2; exit 1; }
 mkdir "$tmp/shim"
 cat > "$tmp/shim/kubectl" <<SHIM
 #!/bin/sh
@@ -105,7 +105,7 @@ kind create cluster --name "$other" --kubeconfig "$tmp/other.yaml" --wait 2m >"$
 
 cp "$tmp/other.yaml" "$tmp/alias.yaml"
 kubectl --kubeconfig "$tmp/alias.yaml" config rename-context "kind-$other" "kind-$target" >/dev/null || { echo "cannot build the alias kubeconfig"; exit 1; }
-alias_before=$(cksum < "$tmp/alias.yaml")
+alias_before=$(cksum < "$tmp/alias.yaml") || { echo "target-kubeconfig-test: cannot checksum the alias kubeconfig" >&2; exit 1; }
 
 uid() { kubectl --kubeconfig "$1" get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null; }
 u_target=$(uid "$tmp/target.yaml") || { echo "cannot read the namespace uid in $target"; exit 1; }
@@ -119,7 +119,7 @@ else
   bad "C0 the alias is not a trap: target=[$u_target] other=[$u_other] alias=[$u_alias]"
   echo "kind target kubeconfig: $pass passed, $fail failed"; exit 1
 fi
-cur=$(kubectl --kubeconfig "$tmp/alias.yaml" config current-context)
+capture cur cur_rc kubectl --kubeconfig "$tmp/alias.yaml" config current-context || exit 1   # a failed read leaves $cur empty: the C0 line below then fails
 [ "$cur" = "kind-$target" ] && ok "C0 the alias's current-context is named kind-$target" || bad "C0 the alias's current-context is [$cur]"
 
 in_cluster() { kubectl --kubeconfig "$1" get ns "$ns" -o name >/dev/null 2>&1; }
@@ -214,7 +214,7 @@ reset_ns
 ghost="k437x-$suffix"
 cp "$tmp/other.yaml" "$tmp/caller.yaml"
 kubectl --kubeconfig "$tmp/caller.yaml" config rename-context "kind-$other" "kind-$ghost" >/dev/null || { echo "cannot build the caller kubeconfig"; exit 1; }
-caller_before=$(cksum < "$tmp/caller.yaml")
+caller_before=$(cksum < "$tmp/caller.yaml") || { echo "target-kubeconfig-test: cannot checksum the caller kubeconfig" >&2; exit 1; }
 has_ctx() { kubectl --kubeconfig "$tmp/caller.yaml" config get-contexts -o name 2>/dev/null | grep -qx "kind-$ghost"; }
 down() { KUBECONFIG="$tmp/caller.yaml" task -t "$1" helm-kind-down "CLUSTER=$ghost" >"$tmp/down.log" 2>&1; }
 caller_intact() { local now_sum; has_ctx || return 1; now_sum=$(cksum < "$tmp/caller.yaml") || return 1; [ "$now_sum" = "$caller_before" ]; }
@@ -262,11 +262,13 @@ user_after=$(fingerprint "$user_kc") || exit 1
 # no kubectl call ran on the default kubeconfig: each one had a KUBECONFIG inside this run's directory or the task's own
 # bin/kind/kubeconfig-<target>, or named its own --kubeconfig; and there were calls to judge (an empty log proves nothing)
 calls=$(lines_in "$tmp/kubectl.calls") || exit 1
-stray=$(grep -v -E "^($tmp/[^|:]*|$root/bin/kind/kubeconfig-$target)\|" "$tmp/kubectl.calls" | grep -v -E -- '--kubeconfig[ =]' | head -3 | tr '\n' ';')
+stray_calls() { grep -v -E "^($tmp/[^|:]*|$root/bin/kind/kubeconfig-$target)\|" "$tmp/kubectl.calls" | grep -v -E -- '--kubeconfig[ =]' | head -3 | tr '\n' ';'; }
+capture stray stray_rc stray_calls || exit 1   # pipefail: 1 = grep -v found nothing, which is the good answer; 2+ = a tool broke
+[ "$stray_rc" -le 1 ] || { echo "target-kubeconfig-test: reading the kubectl call log failed (exit $stray_rc)" >&2; exit 1; }
 if [ "$calls" -ge 10 ] && [ -z "$stray" ]; then ok "all $calls kubectl calls used a kubeconfig of this run (none on ~/.kube/config)"
 else bad "kubectl calls: $calls, on another kubeconfig: [$stray]"; fi
 kind get clusters 2>/dev/null | sort > "$tmp/clusters.after"
-missing=$(comm -23 "$tmp/clusters.before" "$tmp/clusters.after" | tr '\n' ' ')
+missing=$(comm -23 "$tmp/clusters.before" "$tmp/clusters.after" | tr '\n' ' ') || { echo "target-kubeconfig-test: comparing the cluster lists failed" >&2; exit 1; }
 [ -z "$missing" ] && ok "every cluster that existed before is still there" || bad "clusters gone: $missing"
 
 echo "kind target kubeconfig: $pass passed, $fail failed"

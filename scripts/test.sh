@@ -16,7 +16,7 @@ abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && p
 # Run under the outer gate (#307): a process group of its own, checked for leftovers on any exit.
 if [ -z "${SUITE_GUARD:-}" ]; then guard_dir=$(abs_dir_of "$0") || exit 1; exec "$guard_dir/suite-guard.sh" "$0" "$@"; fi
 src=$(abs_dir_of "$0" ..) || exit 1
-tmp=$(mktemp -d)
+tmp=$(mktemp -d) || exit 1
 # The fixtures must not inherit the developer's signing / hook settings.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 PB_PIDS=""   # dex-prebind stubs; killed by the one EXIT trap set below the prepull helpers
@@ -294,14 +294,14 @@ got=$(echo "$all_jobs" | wc -w | tr -d ' ') || exit 1
 got2=$(in_repo env CI_ALL=1 scripts/ci-changes.sh | wc -l | tr -d ' ') || exit 1
 expect_eq "CI_ALL prints one flag per job" "$got" "$got2"
 # assignments, not `"$(value_of -ok 1 …) || exit 1"` inside an argument: the status of a substitution that is an argument never reaches set -e (#462)
-all_out=$(in_repo env CI_ALL=1 scripts/ci-changes.sh)
+all_out=$(in_repo env CI_ALL=1 scripts/ci-changes.sh) || exit 1
 n_false=$(value_of -ok 1 grep -c '=false$' <<<"$all_out") || exit 1
 expect_eq "CI_ALL=1 prints no false" "0" "$n_false"
 # Every flag is a job's `if:` in ci.yml, declared once as an output of `affected` (a flag nobody reads skips nothing).
 ci_md=$(cat "$src/docs/ci.md") || exit 1
 for j in $all_jobs; do
-  _c220a=$(count_lines "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml"); expect_eq "ci.yml declares run_$j as an output of affected" 1 "$_c220a"
-  _c221a=$(count_lines "^    if: needs.affected.outputs.run_$j == 'true'\$" "$src/.github/workflows/ci.yml"); expect_eq "ci.yml has exactly one job gated on run_$j"       1 "$_c221a"
+  _c220a=$(count_lines "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml") || exit 1; expect_eq "ci.yml declares run_$j as an output of affected" 1 "$_c220a"
+  _c221a=$(count_lines "^    if: needs.affected.outputs.run_$j == 'true'\$" "$src/.github/workflows/ci.yml") || exit 1; expect_eq "ci.yml has exactly one job gated on run_$j"       1 "$_c221a"
   j_dash=$(echo "$j" | tr _ -) || exit 1
   expect_match "docs/ci.md names the $j job" "(^|[^a-z0-9-])${j_dash}([^a-z0-9-]|\$)" "$ci_md"
 done
@@ -321,12 +321,12 @@ ci_count() {
 }
 # helm-kind, helm-kind-keda and k6-auth / k6-wire are jobs of their own, not matrix legs: a skipped one
 # leaves a skipped check, a dynamic matrix would leave none (#328).
-_c228a=$(count_lines 'task: \[helm-kind' "$src/.github/workflows/ci.yml"); expect_eq "no matrix over the kind tasks" 0 "$_c228a"
+_c228a=$(count_lines 'task: \[helm-kind' "$src/.github/workflows/ci.yml") || exit 1; expect_eq "no matrix over the kind tasks" 0 "$_c228a"
 # helm-kind is the first half of task helm-kind and helm-kind-payment the second, each on its own cluster (#446); task helm-kind itself is the
 # laptop's "everything on one cluster", so no CI job runs it (it would run both halves again).
 eq_of "helm-kind job runs task helm-kind-core"            1 ci_count helm-kind '^      - run: task helm-kind-core$'
 eq_of "helm-kind-payment job runs task helm-kind-payment" 1 ci_count helm-kind-payment '^      - run: task helm-kind-payment$'
-whole_kind=$(count_lines '^      - run: task helm-kind$' "$src/.github/workflows/ci.yml")   # empty (so the assertion fails) when grep dies: count_lines stops the subshell
+whole_kind=$(count_lines '^      - run: task helm-kind$' "$src/.github/workflows/ci.yml") || exit 1   # empty (so the assertion fails) when grep dies: count_lines stops the subshell
 expect_eq "no ci.yml job runs the whole task helm-kind"       0 "$whole_kind"
 eq_of "helm-kind-target job runs target-kubeconfig-test.sh" 1 ci_count helm-kind-target '^      - run: deployments/helm/kind/target-kubeconfig-test.sh$'
 eq_of "helm-kind no longer runs target-kubeconfig-test.sh (its own job)" 0 ci_count helm-kind 'target-kubeconfig-test'
@@ -381,7 +381,7 @@ got=$(printf '%s\n' "$all_cells" | wc -l | tr -d ' ') || exit 1
 expect_eq "auth matrix lists 27 cells" 27 "$got"
 got=$(printf '%s\n' "$all_cells" | sort | uniq -d | wc -l | tr -d ' ') || exit 1
 expect_eq "auth matrix cell names are unique" 0 "$got"
-shards=$(ci_job k6-auth | sed -n 's/^        shard: \[\(.*\)\]$/\1/p' | tr -d '" ' | tr ',' ' ')
+shards=$(ci_job k6-auth | sed -n 's/^        shard: \[\(.*\)\]$/\1/p' | tr -d '" ' | tr ',' ' ') || exit 1
 expect_match "k6-auth has a static shard matrix" '^1/[1-9]( |$)' "$shards"
 n=${shards##*/}
 want=""; for ((i = 1; i <= n; i++)); do want="$want $i/$n"; done
@@ -466,17 +466,17 @@ ci_setup_scopes() {
     fi
   done
 }
-scopes=$(ci_setup_scopes)
+scopes=$(ci_setup_scopes) || exit 1
 expect_match "ci.yml scopes: the test matrix is covered" "test-apps/rpc" "$scopes"
 expect_match "ci.yml scopes: release-snapshot is covered" "release-snapshot" "$scopes"
 unmapped="" groups=""
 for sc in $scopes release-snapshot; do
-  g=$(plan_out push refs/heads/main main "$sc" group)
+  g=$(plan_out push refs/heads/main main "$sc" group) || exit 1
   [ -n "$g" ] || unmapped="$unmapped $sc"
   groups="$groups $g"
 done
 expect_eq "plan: every scope of a job that calls the setup action has a build-cache group" "" "$unmapped"
-ugroups=$(printf '%s\n' $groups | sort -u)
+ugroups=$(printf '%s\n' $groups | sort -u) || exit 1
 for g in $ugroups; do
   n=0; for sc in $scopes; do
     sc_group=$(plan_out push refs/heads/main main "$sc" group) || exit 1
@@ -509,7 +509,7 @@ saver_matrix=""
 for sc in $scopes release-snapshot; do
   sc_save=$(plan_out push refs/heads/main main "$sc" save_build) || exit 1
   if [ "$sc_save" = true ] && [ "$sc" != test-apps/rpc ]; then
-    n_matrix=$(ci_job "$sc" | count_lines 'matrix:')
+    n_matrix=$(ci_job "$sc" | count_lines 'matrix:') || exit 1
     [ "$n_matrix" = 0 ] || saver_matrix="$saver_matrix $sc"
   fi
 done
@@ -523,8 +523,8 @@ race_savers() {
   done
 }
 eq_of "plan: the race saver is exactly the apps/rpc leg of the test matrix" "test-apps/rpc" race_savers
-_c375a=$(printf '%s\n' $groups | sort -u | count_lines .); expect_eq "plan: five build-cache groups" 5 "$_c375a"
-_c376a=$(printf '%s\n' $scopes | count_lines -x web); expect_eq "plan: web (go-cache false) is not given a group in ci.yml" 0 "$_c376a"
+_c375a=$(printf '%s\n' $groups | sort -u | count_lines .) || exit 1; expect_eq "plan: five build-cache groups" 5 "$_c375a"
+_c376a=$(printf '%s\n' $scopes | count_lines -x web) || exit 1; expect_eq "plan: web (go-cache false) is not given a group in ci.yml" 0 "$_c376a"
 
 # cache_ids <action file>: ids of the steps that use actions/cache (the read-write one or /restore).
 cache_ids() { awk '/^    - / {if (cache && id != "") print id; cache=0; id=""} /^    - id: / {id=$3} /^      id: / {id=$2} /uses: actions\/cache(\/restore)?@/ {cache=1} END {if (cache && id != "") print id}' "$1"; }
@@ -535,23 +535,23 @@ step_if()   { step_text "$1" "$2" | sed -n 's/^      if: //p'; }
 step_body() { step_text "$1" "$2" | awk '!/^[ ]*(- id|id|if|uses):/ && !/^[ ]*#/ && !/^[ ]*$/'; }
 for af in setup playwright pnpm-cache; do
   a="$src/.github/actions/$af/action.yml"
-  n_cache=$(count_lines -E 'uses: actions/cache(/restore)?@' "$a")
-  n_ids=$(cache_ids "$a" | count_lines .)
+  n_cache=$(count_lines -E 'uses: actions/cache(/restore)?@' "$a") || exit 1
+  n_ids=$(cache_ids "$a" | count_lines .) || exit 1
   expect_eq "$af: every actions/cache step has an id" "$n_cache" "$n_ids"
-  _c388a=$(count_lines -E '^\s+cache: (true|pnpm|npm|yarn)' "$a"); expect_eq "$af: no other way to cache (setup-go / setup-node cache: true)" 0 "$_c388a"
-  ids=$(cache_ids "$a")
+  _c388a=$(count_lines -E '^\s+cache: (true|pnpm|npm|yarn)' "$a") || exit 1; expect_eq "$af: no other way to cache (setup-go / setup-node cache: true)" 0 "$_c388a"
+  ids=$(cache_ids "$a") || exit 1
   for id in $ids; do
-    uses=$(step_text "$a" "$id" | sed -n 's/^      uses: \(actions\/cache[^@]*\)@.*/\1/p')
-    cond=$(step_if "$a" "$id")
+    uses=$(step_text "$a" "$id" | sed -n 's/^      uses: \(actions\/cache[^@]*\)@.*/\1/p') || exit 1
+    cond=$(step_if "$a" "$id") || exit 1
     case $uses in
       actions/cache)
         expect_match "$af/$id: a step that can save runs only where plan says write" "steps\.plan\.outputs\.(write|save_build) == 'true'" "$cond"
-        _c396a=$(printf '%s' "$cond" | count_lines -E "plan\.outputs\.(write|save_build) !="); expect_eq "$af/$id: ... and never on a != test" 0 "$_c396a"
+        _c396a=$(printf '%s' "$cond" | count_lines -E "plan\.outputs\.(write|save_build) !=") || exit 1; expect_eq "$af/$id: ... and never on a != test" 0 "$_c396a"
         twin="${id%-rw}-ro"; [ "$twin" != "${id}-ro" ] || twin=""
         expect_match "$af/$id: a read-write step is named <name>-rw" '-rw$' "$id"
         if [ -n "$twin" ]; then
-          _c400a=$(cache_ids "$a" | count_lines -x "$twin"); expect_eq "$af/$id: the restore-only twin $twin exists" 1 "$_c400a"
-          want=$(printf '%s' "$cond" | sed -E "s/(steps\.plan\.outputs\.(write|save_build)) == 'true'/\1 != 'true'/")
+          _c400a=$(cache_ids "$a" | count_lines -x "$twin") || exit 1; expect_eq "$af/$id: the restore-only twin $twin exists" 1 "$_c400a"
+          want=$(printf '%s' "$cond" | sed -E "s/(steps\.plan\.outputs\.(write|save_build)) == 'true'/\1 != 'true'/") || exit 1
           eq_of "$af/$id: the twin's if: is the exact opposite" "$want" step_if "$a" "$twin"
           got=$(step_body "$a" "$id") || exit 1
           got2=$(step_body "$a" "$twin") || exit 1
@@ -643,12 +643,12 @@ expect_eq "playwright: cache-rw and cache-ro are the cache steps" "cache-ro cach
 # key shape: the module cache is keyed on go.sum only; the build cache on group and week (never on a scope, which is what made 28 copies)
 match_of "setup: the module cache key is go.sum only"    "key: gomod-\\$\\{\\{ runner.os \\}\\}-\\$\\{\\{ hashFiles\\('\\*\\*/go.sum'\\) \\}\\}\$" step_text "$src/.github/actions/setup/action.yml" gomod-rw
 match_of "setup: the build cache key is group and week"  "key: gobuild-.*steps\.plan\.outputs\.group.*steps\.plan\.outputs\.week" step_text "$src/.github/actions/setup/action.yml" gobuild-rw
-n_scope=$(awk '/^ +(key|restore-keys):/ || /^ +(gomod|gobuild)-/' "$src/.github/actions/setup/action.yml" | count_lines 'cache-scope')
+n_scope=$(awk '/^ +(key|restore-keys):/ || /^ +(gomod|gobuild)-/' "$src/.github/actions/setup/action.yml" | count_lines 'cache-scope') || exit 1
 expect_eq "setup: no cache key uses cache-scope" 0 "$n_scope"
-n_loose=$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw | sed -n '/restore-keys:/,$p' | count_lines 'gobuild-\${{ runner.os }}-\s*$')
+n_loose=$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw | sed -n '/restore-keys:/,$p' | count_lines 'gobuild-\${{ runner.os }}-\s*$') || exit 1
 expect_eq "setup: the build cache restore-keys stay inside the group" 0 "$n_loose"
 # the web job needs go on PATH (task evaluates `go work edit` on every run) but compiles nothing; lint's own golangci cache must not save on a PR
-optouts=$(count_lines 'go-cache: "false"' "$src/.github/workflows/ci.yml")
+optouts=$(count_lines 'go-cache: "false"' "$src/.github/workflows/ci.yml") || exit 1
 expect_eq "ci.yml: only the web and helm-kind-target jobs opt out of the Go cache" 2 "$optouts"
 eq_of "ci.yml: the helm-kind-target job opts out of the Go cache (it compiles nothing, #446)" 1 ci_count helm-kind-target 'go-cache: "false"'
 eq_of "ci.yml: the helm-kind-target job still runs the setup action (task needs go)" 1 ci_count helm-kind-target 'uses: ./.github/actions/setup$'
@@ -656,9 +656,9 @@ eq_of "ci.yml: the web job opts out of the Go cache"        1 ci_count web 'go-c
 eq_of "ci.yml: the web job still runs the setup action (task needs go)" 1 ci_count web 'uses: ./.github/actions/setup$'
 match_of "ci.yml: lint's golangci-lint cache is not saved on a pull request" "skip-save-cache: \"\\$\\{\\{ github.event_name == 'pull_request' \\}\\}\"" ci_job lint
 # no workflow lets setup-node cache (its post step saves on every trigger); the pnpm store goes through the pnpm-cache action, once per setup-node
-_c491a=$(count_lines -E '^\s+cache: (pnpm|npm|yarn)' "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | awk -F: '{s+=$NF} END {print s+0}'); expect_eq "workflows: no setup-node cache: input"                  0 "$_c491a"
-n_node=$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: actions/setup-node@')
-n_pnpm=$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: ./.github/actions/pnpm-cache$')
+_c491a=$(count_lines -E '^\s+cache: (pnpm|npm|yarn)' "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | awk -F: '{s+=$NF} END {print s+0}') || exit 1; expect_eq "workflows: no setup-node cache: input"                  0 "$_c491a"
+n_node=$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: actions/setup-node@') || exit 1
+n_pnpm=$(cat "$src/.github/workflows/ci.yml" "$src/.github/workflows/release.yml" | count_lines 'uses: ./.github/actions/pnpm-cache$') || exit 1
 expect_eq "workflows: every setup-node is followed by the pnpm-cache action" "$n_node" "$n_pnpm"
 match_of "docs/ci.md names the Go cache policy"             "go-cache" cat "$src/docs/ci.md"
 match_of "docs/ci.md names the pnpm-cache action"          "pnpm-cache" cat "$src/docs/ci.md"
@@ -669,7 +669,7 @@ mkdir -p "$tmp/plan-bin"
 printf '#!/bin/sh\necho 2026-W\nexit 5\n' > "$tmp/plan-bin/date"; chmod +x "$tmp/plan-bin/date"
 capture -2 out rc env PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" || exit 1
 expect_eq "plan.sh: a date that prints and then fails makes plan.sh fail" "5" "$rc"
-_c502a=$(printf '%s\n' "$out" | count_lines '^week='); expect_eq "plan.sh: ... and no week= line was written" 0 "$_c502a"
+_c502a=$(printf '%s\n' "$out" | count_lines '^week=') || exit 1; expect_eq "plan.sh: ... and no week= line was written" 0 "$_c502a"
 printf '#!/bin/sh\necho garbage\nexit 0\n' > "$tmp/plan-bin/date"
 capture -2 out rc env PATH="$tmp/plan-bin:$PATH" EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint GITHUB_OUTPUT=/dev/stdout "$plan" || exit 1
 expect_eq "plan.sh: a date that prints something that is not an ISO week makes plan.sh fail" "1" "$rc"
@@ -705,7 +705,7 @@ gmd_run 9; expect_eq "go-mod-download: it stops after the last attempt"        "
 gmd_run 1 1; expect_eq "go-mod-download: GO_MOD_DOWNLOAD_ATTEMPTS=1 does not retry" "7 1" "$rc $calls"
 expect_match "go-mod-download: the log names the attempt and the exit code" 'failed with exit code 7 \(attempt 1/3\)' "$out3"
 expect_match "go-mod-download: the final line says it gave up with the last code" 'giving up after 3 attempts, last exit code 7' "$out3"
-_c538a=$(printf '%s' "$out3" | count_lines 'UPSTREAM-ERROR-TEXT'); expect_eq "go-mod-download: the log never carries go's (proxy) text" 0 "$_c538a"
+_c538a=$(printf '%s' "$out3" | count_lines 'UPSTREAM-ERROR-TEXT') || exit 1; expect_eq "go-mod-download: the log never carries go's (proxy) text" 0 "$_c538a"
 mkdir -p "$tmp/sleep-bin"; printf '#!/bin/sh\nexit 9\n' > "$tmp/sleep-bin/sleep"; chmod +x "$tmp/sleep-bin/sleep"
 rm -f "$tmp/gmd-count"; rc=0
 PATH="$tmp/sleep-bin:$tmp/gmd-bin:$PATH" COUNT_FILE="$tmp/gmd-count" FAILS=1 GO_MOD_DOWNLOAD_SLEEP=1 "$gmd" >/dev/null 2>&1 || rc=$?
@@ -771,7 +771,7 @@ expect_eq "affected: --all ignores the diff"         "pkgs/a pkgs/b" "$got"
 # Run against a fake engine (DOCKER=...) with the image list and the backoff overridden. The fake
 # logs each pull to $FAKE_LOG and either succeeds after FAKE_FAIL_FIRST failures per image or, in
 # hang mode, records its pid and blocks like an engine stuck on a registry.
-prepull_tmp=$(mktemp -d)
+prepull_tmp=$(mktemp -d) || exit 1
 fake_engine="$prepull_tmp/engine"
 # The hang case below starts the script in the background. If the suite is cancelled meanwhile,
 # stop that script (its own trap takes the fake engines down) and wait, so nothing outlives us.
@@ -893,13 +893,13 @@ expect_eq "next-version without tag exits 2" 2 "$rc"
 fixture gate
 git -C "$repo" checkout -q -b pr
 touch_file README.md changed; commit "docs: readme"
-out=$(in_repo scripts/release-gate-pr.sh main pr "docs: readme")
+out=$(in_repo scripts/release-gate-pr.sh main pr "docs: readme") || exit 1
 expect_match "docs PR cuts no release"   'Merging \*\*cuts no release\*\*' "$out"
 expect_match "docs PR lists none"        'Releasable files in this PR: none' "$out"
 expect_match "nothing pending"           'waiting on main since `v0.1.0`: nothing' "$out"
 expect_match "comment carries its marker" '^<!-- release-gate -->' "$out"
 touch_file pkgs/x/a.go; commit "feat: a"
-out=$(in_repo scripts/release-gate-pr.sh main pr "feat: a")
+out=$(in_repo scripts/release-gate-pr.sh main pr "feat: a") || exit 1
 expect_match "feat PR releases minor"    'Merging \*\*releases `v0.2.0`\*\* \(minor — feat: feat: a; base v0.1.0\)' "$out"
 expect_match "feat PR lists its file"    'Releasable files in this PR: `pkgs/x/a.go`' "$out"
 # Something releasable already on main: a docs PR still releases, with main's bump.
@@ -907,7 +907,7 @@ git -C "$repo" checkout -q main
 touch_file pkgs/y/b.go; commit "fix: b"
 git -C "$repo" checkout -q -b pr2
 touch_file README.md again; commit "docs: again"
-out=$(in_repo scripts/release-gate-pr.sh main pr2 "docs: again")
+out=$(in_repo scripts/release-gate-pr.sh main pr2 "docs: again") || exit 1
 expect_match "pending on main releases anyway" 'Merging \*\*releases `v0.1.1`\*\* \(patch — fix: fix: b; base v0.1.0\)' "$out"
 expect_match "pending count"                   'waiting on main since `v0.1.0`: 1 releasable file' "$out"
 fixture gatenotag
@@ -1258,7 +1258,7 @@ FAKE
   match_of "canary via cosign: no signing config fails" '^1 '   canary_via FAKE_CONFIG=
   match_of "canary via cosign: empty signing config target fails" '^1 ' canary_via FAKE_CONFIG="$tmp/canary-empty.json"
   match_of "canary via cosign: whitespace target fails"  '^1 ' canary_via FAKE_CONFIG="$tmp/canary-blank.json"
-  tuf_down=$(canary_via FAKE_TUF_DOWN=1)
+  tuf_down=$(canary_via FAKE_TUF_DOWN=1) || exit 1
   expect_match "canary via cosign: TUF unreachable fails closed" '^1 ' "$tuf_down"
   expect_match "canary via cosign: TUF outage is not called v2"  'TUF|initialize' "$tuf_down"
   if printf '%s' "$tuf_down" | grep -q 'majorApiVersion'; then bad "TUF outage reported as a v2 finding: [$tuf_down]"; else ok; fi
@@ -1493,17 +1493,17 @@ got=$(grep -A1 '^ *ready$' "$dns_dir/Corefile" | tr -s ' \n' ' ' | sed 's/^ *//;
 expect_eq "coredns: rule lands after ready"        "ready $rule_shop" "$got"
 eq_of "coredns: second run is a no-op"         "0 0" dns shop
 eq_of "coredns: namespace change replaces"     "0 1" dns other
-_c1308a=$(count_lines 'exact dex.localtest.me ' "$dns_dir/Corefile"); expect_eq "coredns: exactly one dex rule remains"  "1" "$_c1308a"
-_c1309a=$(count_lines 'dex.other.svc.cluster.local' "$dns_dir/Corefile"); expect_eq "coredns: new target is in place"        "1" "$_c1309a"
+_c1308a=$(count_lines 'exact dex.localtest.me ' "$dns_dir/Corefile") || exit 1; expect_eq "coredns: exactly one dex rule remains"  "1" "$_c1308a"
+_c1309a=$(count_lines 'dex.other.svc.cluster.local' "$dns_dir/Corefile") || exit 1; expect_eq "coredns: new target is in place"        "1" "$_c1309a"
 corefile_with "rewrite name exact dex.localtest.me.backup backup.shop.svc.cluster.local" "rewrite name exact other.localtest.me o.shop.svc.cluster.local"
 eq_of "coredns: similar names get their own rule" "0 1" dns shop
-_c1312a=$(count_lines 'dex.localtest.me.backup backup.shop' "$dns_dir/Corefile"); expect_eq "coredns: similar-name rewrite survives"  "1" "$_c1312a"
-_c1313a=$(count_lines 'other.localtest.me o.shop' "$dns_dir/Corefile"); expect_eq "coredns: unrelated rewrite survives"     "1" "$_c1313a"
-_c1314a=$(count_lines "^    $rule_shop\$" "$dns_dir/Corefile"); expect_eq "coredns: our rule added beside them"     "1" "$_c1314a"
+_c1312a=$(count_lines 'dex.localtest.me.backup backup.shop' "$dns_dir/Corefile") || exit 1; expect_eq "coredns: similar-name rewrite survives"  "1" "$_c1312a"
+_c1313a=$(count_lines 'other.localtest.me o.shop' "$dns_dir/Corefile") || exit 1; expect_eq "coredns: unrelated rewrite survives"     "1" "$_c1313a"
+_c1314a=$(count_lines "^    $rule_shop\$" "$dns_dir/Corefile") || exit 1; expect_eq "coredns: our rule added beside them"     "1" "$_c1314a"
 corefile_with "# $rule_shop"
 eq_of "coredns: a commented rule is not the rule" "0 1" dns shop
-_c1317a=$(count_lines "^    # $rule_shop\$" "$dns_dir/Corefile"); expect_eq "coredns: the comment is kept"            "1" "$_c1317a"
-_c1318a=$(count_lines "^    $rule_shop\$" "$dns_dir/Corefile"); expect_eq "coredns: and a live rule was added"      "1" "$_c1318a"
+_c1317a=$(count_lines "^    # $rule_shop\$" "$dns_dir/Corefile") || exit 1; expect_eq "coredns: the comment is kept"            "1" "$_c1317a"
+_c1318a=$(count_lines "^    $rule_shop\$" "$dns_dir/Corefile") || exit 1; expect_eq "coredns: and a live rule was added"      "1" "$_c1318a"
 printf '.:53 {\n    errors\n}\n' > "$dns_dir/Corefile"
 eq_of "coredns: no ready line refuses, no patch" "1 0" dns shop
 
@@ -1523,7 +1523,7 @@ match_of "k6-bench: Task's own 201 is a failed bench"    '^1 INVALID: bench.sh f
 match_of "k6-bench: no exit code = did not finish, red"  '^1 INVALID: the bench step did not finish' kv ''
 # the same thing against the real Task: a failing command is 201 unless --exit-code (skipped without task on PATH)
 if command -v task >/dev/null 2>&1; then
-  tf=$(mktemp -d -p "$tmp"); printf 'version: "3"\ntasks:\n  t:\n    cmds: ["exit 3"]\n' > "$tf/Taskfile.yml"
+  tf=$(mktemp -d -p "$tmp") || exit 1; printf 'version: "3"\ntasks:\n  t:\n    cmds: ["exit 3"]\n' > "$tf/Taskfile.yml"
   plain=0; (cd "$tf" && task t >/dev/null 2>&1) || plain=$?
   kept=0;  (cd "$tf" && task --exit-code t >/dev/null 2>&1) || kept=$?
   expect_eq "task without --exit-code hides bench.sh's 3"  "201" "$plain"
@@ -1568,7 +1568,7 @@ pb_calls() { local c=0; grep -c "^$1 " "$pb_dir/log" > "$pb_dir/n" || c=$?; [ "$
 pb_up first
 pb_run
 expect_eq "dex-prebind: first run succeeds" "0" "$rc"
-st=$(pb_state)
+st=$(pb_state) || exit 1
 got=$(echo "$st" | jq -c '[.accounts[] | select(.name=="admin@example.com") | .roles[]]') || exit 1
 expect_eq "dex-prebind: admin account has the admin role" '["admin"]' "$got"
 got=$(echo "$st" | jq -c '[.accounts[] | select(.name=="user@example.com") | .roles[]]') || exit 1
@@ -1587,11 +1587,11 @@ got=$(sort "$pb_dir/tokens" | tr '\n' ' ' | sed 's/ $//') || exit 1
 expect_eq "dex-prebind: one token per account" "admin@example.com user@example.com" "$got"
 first_out=$out
 
-before=$(wc -l < "$pb_dir/log" | tr -d ' ') ; st_before=$(pb_state); tokens_before=$(wc -l < "$pb_dir/tokens" | tr -d ' ')
+before=$(wc -l < "$pb_dir/log" | tr -d ' ') || exit 1 ; st_before=$(pb_state) || exit 1; tokens_before=$(wc -l < "$pb_dir/tokens" | tr -d ' ') || exit 1
 pb_run
 expect_eq "dex-prebind: rerun succeeds" "0" "$rc"
 eq_of "dex-prebind: rerun writes nothing (state identical)" "$st_before" pb_state
-rerun_log=$(tail -n +$((before + 1)) "$pb_dir/log")
+rerun_log=$(tail -n +$((before + 1)) "$pb_dir/log") || exit 1
 n_mut=$(value_of -ok 1 grep -cE '^(CreateAccount|CreateInvite|ClaimInvite) ' <<<"$rerun_log") || exit 1
 expect_eq "dex-prebind: rerun calls no mutation" "0" "$n_mut"
 got=$(wc -l < "$pb_dir/tokens" | tr -d ' ') || exit 1
@@ -1605,7 +1605,7 @@ bad_key_rc=$rc bad_key_out=$out
 if [ "$bad_key_rc" != 0 ]; then ok; else bad "dex-prebind: a rejected admin key must fail"; fi
 
 # an issuer that is not the dev Dex is refused before anything is sent
-before=$(wc -l < "$pb_dir/log" | tr -d ' ')
+before=$(wc -l < "$pb_dir/log" | tr -d ' ') || exit 1
 pb_run ISSUER=https://accounts.example.com
 if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a non-dev issuer must be refused"; fi
 expect_match "dex-prebind: the refusal names the issuer rule" 'issuer' "$out"
@@ -1627,7 +1627,7 @@ expect_eq "dex-prebind: refusals sent nothing" "$before" "$got"
 
 # BASE_URL is parsed, not prefix-matched: userinfo and look-alike hosts must not carry the key to a
 # server the guard did not name. The stub on 127.0.0.1 stands in for the "remote" one.
-before=$(wc -l < "$pb_dir/log" | tr -d ' ')
+before=$(wc -l < "$pb_dir/log" | tr -d ' ') || exit 1
 pb_port=${pb_url##*:}
 for u in "http://localhost:unused@127.0.0.1:$pb_port" "http://user@127.0.0.1:$pb_port" "http://127.0.0.1@127.0.0.1:$pb_port" \
   "http://127.0.0.1:$pb_port@127.0.0.1:$pb_port" "http://127.0.0.1:$pb_port?@x" "http://127.0.0.1:$pb_port#@x" \
@@ -1653,7 +1653,7 @@ expect_eq "dex-prebind: a plain local BASE_URL (trailing slash) still works" "0"
 
 # a server that echoes the key (or a token, or a long text) as its error code must not get it printed
 refl_out=""
-long80=$(printf 'a%.0s' {1..80})
+long80=$(printf 'a%.0s' {1..80}) || exit 1
 for r in "$pb_key" xk_wrong-key-secret tok-secret-admin@example.com "$long80" 'A_B'; do
   pb_up refl STUB_REFLECT="$r"
   pb_run
@@ -1700,7 +1700,7 @@ pb_up partial2
 # the new stub starts empty: replay the half-done state (accounts + pending invites, no bindings) through the RPC itself
 for e in admin@example.com user@example.com; do
   role='[]'; [ "$e" = admin@example.com ] && role='["admin"]'
-  aid=$(curl -fsS -H "X-API-Key: $pb_key" -H 'Content-Type: application/json' -d "{\"name\":\"$e\",\"roles\":$role}" "$pb_url/identity.v1.IdentityService/CreateAccount" | jq -r .account.id)
+  aid=$(curl -fsS -H "X-API-Key: $pb_key" -H 'Content-Type: application/json' -d "{\"name\":\"$e\",\"roles\":$role}" "$pb_url/identity.v1.IdentityService/CreateAccount" | jq -r .account.id) || exit 1
   curl -fsS -H "X-API-Key: $pb_key" -H 'Content-Type: application/json' -d "{\"accountId\":\"$aid\",\"email\":\"$e\"}" "$pb_url/identity.v1.IdentityService/CreateInvite" >/dev/null
 done
 : > "$pb_dir/log"
@@ -1729,7 +1729,7 @@ for case in "admin@example.com|[]|admin role missing" "user@example.com|[\"admin
 done
 pb_up disabled
 pb_run
-acct=$(pb_state | jq -r '.accounts[] | select(.name=="user@example.com") | .id')
+acct=$(pb_state | jq -r '.accounts[] | select(.name=="user@example.com") | .id') || exit 1
 pb_call DisableAccount "{\"id\":\"$acct\"}" >/dev/null
 pb_run
 if [ "$rc" != 0 ]; then ok; else bad "dex-prebind: a disabled account must fail the run, even when bound"; fi
@@ -1780,8 +1780,8 @@ eq_of "envsh: nothing set is OIDC off, not an error"    0 envsh_rc '' ''
 # Whatever the gate accepts, the browser's URL parser accepts with the same origin (needs node).
 if command -v node >/dev/null 2>&1; then
   for cand in https://idp.example.com.0x1 https://idp.example.com.0XFF/dex https://idp.example.com:65536/dex https://10.0.0.256/dex https://idp.example.com.123/dex https://idp..example.com https://idp.example.com:0/dex https://idp.example.com:65535/dex http://127.0.0.1:18121/idp; do
-    gate=$(envsh_rc "$cand" x-console)
-    url=$(node -e 'try { const u = new URL(process.argv[1]); console.log(u.origin === "null" ? "bad" : "ok") } catch { console.log("bad") }' "$cand")
+    gate=$(envsh_rc "$cand" x-console) || exit 1
+    url=$(node -e 'try { const u = new URL(process.argv[1]); console.log(u.origin === "null" ? "bad" : "ok") } catch { console.log("bad") }' "$cand") || exit 1
     if [ "$gate" = 0 ] && [ "$url" != ok ]; then bad "envsh accepts $cand but the SPA's URL parser rejects it (OIDC would be silently off)"; else ok; fi
   done
 fi
@@ -1877,9 +1877,9 @@ for f in "$tmp"/guard-pid-*; do if [ -s "$f" ]; then pid_f=$(cat "$f") || exit 1
 # scripts-test, not a release found wrong afterwards.
 words() { tr ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ' | sed 's/ $//'; }
 images_in() { grep -o 'ghcr\.io/blackhorseya/x-monorepo/[a-z-]*' "$1" | sed 's#.*/##' | words; }
-go_images=$(images_in "$src/.goreleaser.yaml")
-apps=$(sed -n 's/^  APPS: //p' "$src/Taskfile.yml" | words)
-with_console=$(printf '%s console' "$go_images" | words)
+go_images=$(images_in "$src/.goreleaser.yaml") || exit 1
+apps=$(sed -n 's/^  APPS: //p' "$src/Taskfile.yml" | words) || exit 1
+with_console=$(printf '%s console' "$go_images" | words) || exit 1
 expect_match "release images: .goreleaser.yaml lists images (positive control)" "rpc" "$go_images"
 expect_eq "release images: every app in Taskfile APPS ships a goreleaser image, and nothing else does" "$apps" "$go_images"
 got=$(sed -n 's/^for app in \(.*\); do$/\1/p' "$src/scripts/release-verify.sh" | words) || exit 1
@@ -2204,7 +2204,6 @@ eq_of x 1 date
 f() { local n; n=$(grep -c y f) || return 1; local m=$((n + 1)); local k=1; echo "$n $m $k"; }
 best_effort kubectl -n "$ns" get pods,jobs >&2
 [ -n "$x" ] && best_effort kubectl wait --for=delete pod -l a=b
-n=$(cmd) && echo "$n"
 F
 sw_run "$sw/canonical.sh"
 expect_eq    "swallow: the documented replacements are clean" "0" "$rc"
@@ -2364,8 +2363,8 @@ if [ "$rc" = 0 ]; then bad "red-stage: grep -Ev exits 2 after printing, the gate
 affected_fixture adie
 git -C "$repo" checkout -q -b change; touch_file pkgs/a/x.go; commit "chore: adie"
 for keep in all 0; do
-  w=$(PATH="$PATH" inject_fail "$tmp/inj-aff-3dot-$keep" git 42 "$keep" 'diff --no-renames --name-only origin/main...HEAD')
-  rc=0; capture out rc in_dir "$repo" env PATH="$w:$PATH" scripts/affected.sh 2>/dev/null || exit 1; out=$(printf '%s\n' "$out" | tr '\n' ' ')
+  w=$(PATH="$PATH" inject_fail "$tmp/inj-aff-3dot-$keep" git 42 "$keep" 'diff --no-renames --name-only origin/main...HEAD') || exit 1
+  rc=0; capture out rc in_dir "$repo" env PATH="$w:$PATH" scripts/affected.sh 2>/dev/null || exit 1; out=$(printf '%s\n' "$out" | tr '\n' ' ') || exit 1
   expect_eq "affected: git diff base...HEAD dies [$keep] — every module is affected" "pkgs/a pkgs/b " "$out"
 done
 for glob in 'diff --no-renames --name-only HEAD' 'ls-files --others*'; do
@@ -2373,7 +2372,7 @@ for glob in 'diff --no-renames --name-only HEAD' 'ls-files --others*'; do
   capture -2 out rc in_dir "$repo" env PATH="$inj:$PATH" scripts/affected.sh || exit 1
   if [ "$rc" = 0 ]; then bad "affected: git $glob prints its answer then exits 42, the script still exits 0 [$out]"; else ok; fi
 done
-rc=0; capture out rc in_dir "$repo" scripts/affected.sh 2>/dev/null || exit 1; out=$(printf '%s\n' "$out" | tr '\n' ' ')
+rc=0; capture out rc in_dir "$repo" scripts/affected.sh 2>/dev/null || exit 1; out=$(printf '%s\n' "$out" | tr '\n' ' ') || exit 1
 expect_eq "affected: fault-injection control — real git, only pkgs/a changed, a and its dependent b" "pkgs/a pkgs/b " "$out"
 
 # cover-gate.sh: needs go + python3 (the scripts-test job has go; jq and python3 are on the runner image).
@@ -2498,7 +2497,7 @@ done
 # Only the read of the shard indexes fails (the wrappers above fail EVERY call of a tool, which the later cats of the shard lists
 # would catch even if this one were swallowed): it prints all of "1 2 3" or only "1", then exits 42.
 for keep in all 1; do
-  w=$(PATH="$sc/bin:$PATH" inject_fail "$tmp/inj-shard-idx-$keep" cat 42 "$keep" '*indexes*')
+  w=$(PATH="$sc/bin:$PATH" inject_fail "$tmp/inj-shard-idx-$keep" cat 42 "$keep" '*indexes*') || exit 1
   rc=0; capture -2 out rc in_dir "$tmp" env REAL_PATH="$PATH" PATH="$w:$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT= "$src/scripts/web-e2e-shards-check.sh" 3 || exit 1
   if [ "$rc" = 0 ]; then bad "shards-check: cat of the indexes prints [$keep] then exits 42, the check still exits 0 [$out]"; else ok; fi
   case "$out" in *"ok: 3 shards"*) bad "shards-check: cat of the indexes ($keep) then exit 42 still says ok";; *) ok;; esac
@@ -3654,7 +3653,7 @@ expect_match "ast: ...and the real shell keeps only the value of the run that su
 sw_write ast-and-use <<'F'
 x=$(fe) && echo "$x"
 F
-sw_run "$sw/ast-and-use.sh"; expect_eq "ast: a top-level x=\$(cmd) && use is green (the documented replacement, #466 r5)" "0" "$rc"
+sw_run "$sw/ast-and-use.sh"; expect_eq "ast: a top-level x=\$(cmd) && use is RED too (#473 r3: the left of && is not a place errexit looks at)" "1" "$rc"
 # the same list shapes in a function body (fnctx): a condition assignment must stop in its else too
 drf_red() { # <name> <function body> : the body is a function body, f is called; red and named fnctx
   { dr_prelude; printf 'f() {\n%s\n}\nf\necho "v=[$v]"\n' "$2"; } > "$sw/drf-$1.sh"
@@ -3782,6 +3781,84 @@ F
 dr_red ast-content-computed-name-concat 'half' <<'F'
 v=$("c"m"d")
 F
+# (c2) top level: a plain `x=$(cmd)` is only as safe as errexit is. It is accepted when `set -e` is in force there (#473 r3, decision d-…95 plan A):
+#   the file turns errexit on at top level before it and nothing in the file may turn it off, AND every ancestor is a place where errexit is in force.
+# The node types that can wrap a statement, and the verdict for the statement inside:
+#   File / `{ }` / `( )` / if-elif-else body / loop do-body / case branch  -> in force      Cond of if/elif/while/until, left of && ||, `!`, `&`, pipeline operand,
+#   $( ) , <( ), time, coproc, function (fnctx) -> not trusted
+ee_red() { # <name> <body> [<head>] [norealhalf]: set -euo pipefail (or <head>), then the body; red, and the REAL shell prints the half-printed value (unless the shell really does stop there: then the cell is the whitelist's, not a bypass)
+  sw_write "ee-$1" "${3:-set -euo pipefail}" <<F
+cmd() { printf half; return 7; }
+$2
+F
+  sw_run "$sw/ee-$1.sh"
+  expect_eq    "ast (errexit): [$1] is red" "1" "$rc"
+  expect_match "ast (errexit): [$1] names the default rule" ': default:' "$out"
+  [ "${4:-}" != norealhalf ] || return 0
+  real_rc=0; capture -2 real real_rc bash "$sw/ee-$1.sh" || exit 1
+  expect_match "ast (errexit): [$1] — the real shell goes on and uses the half" 'v=\[half\]' "$real"
+}
+ee_green() { # <name> <body>: green, and the real shell STOPS on the failed cmd (status 7) without using the value
+  sw_write "eg-$1" <<F
+cmd() { printf half; return 7; }
+$2
+echo "v=[\$v]"
+F
+  sw_run "$sw/eg-$1.sh"
+  expect_eq "ast (errexit): [$1] is green" "0" "$rc"
+  real_rc=0; capture -2 real real_rc bash "$sw/eg-$1.sh" || exit 1
+  expect_eq "ast (errexit): [$1] — the real shell stops with status 7 and never uses the value" "7 " "$real_rc $real"
+}
+ee_red cond-not-last 'if v=$(cmd); true; then echo "v=[$v]"; else exit 1; fi'
+ee_red group-left-of-or '{ v=$(cmd); echo "v=[$v]"; } || exit 1'
+ee_red subshell-left-of-and '( v=$(cmd); echo "v=[$v]" ) && :'
+ee_red for-body-left-of-or 'for i in 1; do v=$(cmd); echo "v=[$v]"; done || exit 1'
+ee_red if-then-left-of-or 'if true; then v=$(cmd); echo "v=[$v]"; fi || exit 1'
+ee_red case-branch-left-of-and 'case x in x) v=$(cmd); echo "v=[$v]";; esac && :'
+ee_red negated-group '! { v=$(cmd); echo "v=[$v]"; }'
+ee_red while-body-in-pipeline 'while true; do v=$(cmd); echo "v=[$v]"; break; done | cat' '' norealhalf   # bash applies errexit inside the pipeline's subshell: no half to show, the whitelist just does not trust it
+ee_red pipeline-last-operand 'true | { v=$(cmd); echo "v=[$v]"; }' '' norealhalf   # the last element of a pipeline runs in a subshell of its own
+ee_red time-clause 'time { v=$(cmd); echo "v=[$v]"; }' '' norealhalf   # a node type the whitelist does not list is not trusted
+ee_red background-group '{ v=$(cmd); echo "v=[$v]"; } & wait' '' norealhalf   # same: the background subshell inherits errexit
+ee_red assignment-left-of-and 'v=$(cmd) && :; echo "v=[$v]"'
+ee_red no-set-e 'v=$(cmd)
+echo "v=[$v]"' ':'
+ee_red set-plus-e 'set +e
+v=$(cmd)
+echo "v=[$v]"'
+ee_red set-plus-o-errexit 'set +o errexit
+v=$(cmd)
+echo "v=[$v]"'
+ee_red set-computed 'flag=+e
+set "$flag"
+v=$(cmd)
+echo "v=[$v]"'
+ee_red shopt-unset 'shopt -u extglob
+v=$(cmd)
+echo "v=[$v]"' '' norealhalf   # any shopt -u is read as "may have turned errexit off" (in fact it did not here: the whitelist is lenient on purpose)
+ee_red while-cond-not-last 'while v=$(cmd); true; do echo "v=[$v]"; break; done'
+ee_red set-e-only-later 'v=$(cmd)
+set -e
+echo "v=[$v]"' ':'
+ee_red set-e-inside-a-function 'f() { set -e; }
+f
+v=$(cmd)
+echo "v=[$v]"' ':' norealhalf   # a set -e that runs inside a function does take effect; the checker only trusts a TOP-LEVEL set -e
+ee_green top-level 'v=$(cmd)'
+ee_green set-eu 'set -eu
+v=$(cmd)'
+ee_green set-o-errexit 'set -o errexit
+v=$(cmd)'
+ee_green if-then 'if true; then v=$(cmd); fi'
+ee_green else-body 'if false; then :; else v=$(cmd); fi'
+ee_green for-do 'for i in 1; do v=$(cmd); done'
+ee_green while-do 'while true; do v=$(cmd); break; done'
+ee_green case-branch 'case x in x) v=$(cmd);; esac'
+ee_green brace-group '{ v=$(cmd); }'
+ee_green subshell '( v=$(cmd) )'
+ee_green last-of-and 'true && v=$(cmd)'
+ee_green last-of-or 'false || v=$(cmd)'
+ee_green nested 'if true; then for i in 1; do { v=$(cmd); }; done; fi'
 # (d) the one node that is exempt: the kind scripts' `. "$(dirname "$0")/../../../scripts/best-effort.sh"`. Matched field by field.
 sw_write ast-kind-exact <<'F'
 . "$(dirname "$0")/../../../scripts/best-effort.sh"
@@ -4171,11 +4248,11 @@ expect_match "workflow: …and it says which command" 'extract-run-blocks\.py fa
 
 # the known procsub sites, each with the external command printing (all of its output, or only the first line) and then exiting 42
 for keep in all 1; do
-  w=$(inject_fail "$tmp/inj-neg-$keep" sed 42 "$keep")
+  w=$(inject_fail "$tmp/inj-neg-$keep" sed 42 "$keep") || exit 1
   capture -2 out rc env PATH="$w:$PATH" "$src/deployments/helm/check-negative.sh" x-monorepo || exit 1
   expect_eq    "check-negative: sed prints [$keep] then exits 42 → the check fails" "1" "$rc"
   expect_match "check-negative: …and names the read" "reading the '# expect:' lines exited 42" "$out"
-  w=$(inject_fail "$tmp/inj-res-$keep" grep 42 "$keep")
+  w=$(inject_fail "$tmp/inj-res-$keep" grep 42 "$keep") || exit 1
   capture -2 out rc env PATH="$w:$PATH" "$src/scripts/actions-resolve.sh" || exit 1
   expect_eq    "actions-resolve: grep prints [$keep] then exits 42 → exit 2" "2" "$rc"
   expect_match "actions-resolve: …and names the listing" 'listing the uses: lines exited 42' "$out"
@@ -4184,7 +4261,7 @@ done
 if python3 -c 'import yaml' 2>/dev/null; then
   cs="$tmp/cs-inj"; mkdir -p "$cs/scripts"; cp "$src/scripts/cosign-smoke.sh" "$src/scripts/best-effort.sh" "$cs/scripts/"; cp "$src/.goreleaser.yaml" "$cs/"
   for keep in all 1; do
-    w=$(inject_fail "$tmp/inj-cs-$keep" python3 42 "$keep")
+    w=$(inject_fail "$tmp/inj-cs-$keep" python3 42 "$keep") || exit 1
     rc=0; capture -2 out rc in_dir "$cs" env PATH="$w:$fakebin:$PATH" FAKE_COUNT="$tmp/count-cs$keep" FAKE_SKIP_SIGN_N=0 scripts/cosign-smoke.sh || exit 1
     expect_eq    "cosign-smoke: python3 prints [$keep] then exits 42 → the smoke fails" "1" "$rc"
     expect_match "cosign-smoke: …and names the signs entry read" 'reading the signs entry of \.goreleaser\.yaml failed' "$out"
@@ -4252,7 +4329,7 @@ rcx_run() { rc=0; capture -2 out rc in_dir "$rcx" scripts/check-exit-swallow.sh 
 # the helper commands the checker still runs must not be trusted when they print something and then die: dirname (checked → exit 2) and, for the
 # path normalisation, basename / dirname that rename the file and fail (they are not called any more, so a bad file stays red)
 for t in basename dirname; do
-  w=$(inject_fail "$tmp/inj-rel-$t" "$t" 42 all)
+  w=$(inject_fail "$tmp/inj-rel-$t" "$t" 42 all) || exit 1
   rc=0; capture -2 out rc in_dir "$rcx" env PATH="$w:$PATH" scripts/check-exit-swallow.sh scripts/other.sh || exit 1
   case $t in
     basename) expect_eq "path: a basename that prints and exits 42 does not hide a bad file (scripts/other.sh stays red)" "1" "$rc" ;;
@@ -4337,7 +4414,7 @@ fn_of2 "$src/tests/k6/bench.sh" wait_quiet > "$tmp/wait_quiet.fn"
 got=$([ -s "$tmp/wait_quiet.fn" ] && echo 1 || echo 0) || exit 1
 expect_eq "bench: wait_quiet was found in the real bench.sh" "1" "$got"
 for keep in all 1; do
-  w=$(inject_fail "$tmp/inj-lavg-$keep" python3 42 "$keep" '*loadavg.py*')
+  w=$(inject_fail "$tmp/inj-lavg-$keep" python3 42 "$keep" '*loadavg.py*') || exit 1
   rc=0; capture -2 out rc in_dir "$src" env PATH="$w:$PATH" bash -c '. "$1"; out=$2; limit=1000; BASELINE_WAIT=1; LOAD_INTERVAL=0; mkdir -p "$out"; if ! wait_quiet 1; then echo "NOT QUIET"; else echo "QUIET"; fi' _ "$tmp/wait_quiet.fn" "$tmp/lavg-out-$keep" || exit 1
   expect_eq    "bench: loadavg.py prints [$keep] then exits 42 → wait_quiet does not report a quiet machine (exit 1)" "1" "$rc"
   expect_match "bench: …and names the sampler" 'loadavg\.py exited 42' "$out"
@@ -4353,7 +4430,7 @@ surv() { bash -c '. "$1"; base=postgres://u@h:1/d; if survives some_db; then ech
 got=$(PATH="$tmp/fakepsql:$PATH" surv) || exit 1
 expect_eq "bench_db_test: a healthy psql printing 42 → survives" "SURVIVES" "$got"
 for keep in all 1; do
-  w=$(PATH="$tmp/fakepsql:$PATH" inject_fail "$tmp/inj-psql-$keep" psql 42 "$keep")
+  w=$(PATH="$tmp/fakepsql:$PATH" inject_fail "$tmp/inj-psql-$keep" psql 42 "$keep") || exit 1
   got=$(PATH="$w:$tmp/fakepsql:$PATH" surv) || exit 1
   expect_eq "bench_db_test: psql prints [$keep] (42) then exits 42 → NOT survives" "GONE" "$got"
 done
@@ -4397,18 +4474,18 @@ chmod +x "$fakegit/git"
 capture -2 out rc env PATH="$fakegit:$PATH" "$src/scripts/next-version.sh" || exit 1
 expect_match "next-version: the fake git, nothing failing, gives a version" '^v0\.2\.0' "$out"
 for keep in all 1; do
-  w=$(PATH="$fakegit:$PATH" inject_fail "$tmp/inj-nv-$keep" git 42 "$keep" 'log*')
+  w=$(PATH="$fakegit:$PATH" inject_fail "$tmp/inj-nv-$keep" git 42 "$keep" 'log*') || exit 1
   capture -2 out rc env PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" || exit 1
   expect_eq    "next-version: git log prints [$keep] then exits 42 → exit 2 (not a version from half the log)" "2" "$rc"
   expect_match "next-version: …and names git log" 'git log v0\.1\.0\.\.HEAD exited 42' "$out"
-  w=$(inject_fail "$tmp/inj-nvsed-$keep" sed 42 "$keep")
+  w=$(inject_fail "$tmp/inj-nvsed-$keep" sed 42 "$keep") || exit 1
   capture -2 out rc env PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" || exit 1
   expect_eq    "next-version: consider()'s sed prints [$keep] then exits 42 → exit 2" "2" "$rc"
   expect_match "next-version: …and names the sed" 'sed over a commit subject failed \(exit 42\)' "$out"
 done
 
 for keep in all 1; do
-  w=$(PATH="$fakegit:$PATH" inject_fail "$tmp/inj-nvdesc-$keep" git 42 "$keep" 'describe*v0.1.0')
+  w=$(PATH="$fakegit:$PATH" inject_fail "$tmp/inj-nvdesc-$keep" git 42 "$keep" 'describe*v0.1.0') || exit 1
   capture -2 out rc env PATH="$w:$fakegit:$PATH" "$src/scripts/next-version.sh" || exit 1
   expect_eq    "next-version (#470): git describe of the base prints [$keep] then exits 42 → exit 2 (no made-up tag)" "2" "$rc"
   expect_match "next-version (#470): …and names git describe" 'git describe failed for v0\.1\.0' "$out"

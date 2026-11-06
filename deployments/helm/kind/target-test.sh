@@ -163,7 +163,7 @@ for c in "${cells[@]}"; do
     # this file has no `set -e`: read the status by hand (grep -c: 1 = no line, 2 = error) — `|| [ $? -eq 1 ]` alone would change nothing here
     grc=0; n=$(grep -c . "$tmp/vals") || grc=$?
     if [ "$grc" -gt 1 ]; then bad "$id: grep -c on the expanded values exited $grc"; continue; fi
-    got=$(sort -u "$tmp/vals" | tr '\n' ' ')
+    got=$(sort -u "$tmp/vals" | tr '\n' ' ') || { echo "target-test: sorting the expanded values of $id failed" >&2; exit 1; }
     [ "$s" = S1 ] && base=$n
     if [ "$got" != "$want " ]; then
       bad "$id: target is [${got% }], want [$want]"
