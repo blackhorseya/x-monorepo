@@ -20,7 +20,13 @@ tmp=$(mktemp -d)
 # The fixtures must not inherit the developer's signing / hook settings.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 PB_PIDS=""   # dex-prebind stubs; killed by the one EXIT trap set below the prepull helpers
-trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; rm -rf "$tmp"' EXIT
+# abort_note <status> <line> <command>: an exit with a non-zero status BEFORE the summary line says where it happened. A bare `|| exit 1` in a helper (the rewrites of #472
+# are full of them) or a set -e abort used to end the suite silently: CI showed no FAIL line and no summary, and nothing to look at. suite_done is set just before the summary.
+suite_done=""
+abort_note() {
+  if [ "$1" != 0 ] && [ -z "$suite_done" ]; then echo "scripts/test.sh: stopped with exit $1 before the summary, at line $2: $3" >&2; fi
+}
+trap 'abort_note "$?" "$LINENO" "$BASH_COMMAND"; test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; rm -rf "$tmp"' EXIT
 fail=0 pass=0
 uid_now=$(id -u) || exit 1   # the cells that need an unreadable file are skipped for root
 # shellcheck source=fault-inject.sh
@@ -774,7 +780,7 @@ prepull_stop() {
   best_effort wait "$prepull_pid"   # cleanup: reaping the script we just TERMed; its status is asserted by the cases that care
   prepull_pid=""
 }
-trap 'test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
+trap 'abort_note "$?" "$LINENO" "$BASH_COMMAND"; test -z "$PB_PIDS" || kill $PB_PIDS 2>/dev/null; prepull_stop; rm -rf "$tmp" "$prepull_tmp"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 cat > "$fake_engine" <<'ENGINE'
@@ -2564,28 +2570,21 @@ kd_dying() {   # kd_dying <tool>: PATH wrapper dir that runs the real <tool>, th
 }
 for t in awk grep sed tr git; do kd_dying "$t"; done
 eq_of "ci_count: control — the real tools count the helm-kind-core step" 1 ci_count helm-kind '^      - run: task helm-kind-core$'
-got=$(PATH="$tmp/kd-dying-awk:$PATH" ci_count helm-kind '^      - run: task helm-kind-core$') || exit 1
-expect_eq "ci_count: awk prints the job and then dies, no count is trusted"  CI-JOB-FAILED "$got"
-got=$(PATH="$tmp/kd-dying-grep:$PATH" ci_count helm-kind '^      - run: task helm-kind-core$') || exit 1
-expect_eq "ci_count: grep prints 1 and then dies, no count is trusted"       COUNT-FAILED  "$got"
+PATH="$tmp/kd-dying-awk:$PATH" eq_rc "ci_count: awk prints the job and then dies, no count is trusted" CI-JOB-FAILED 1 ci_count helm-kind '^      - run: task helm-kind-core$'
+PATH="$tmp/kd-dying-grep:$PATH" eq_rc "ci_count: grep prints 1 and then dies, no count is trusted" COUNT-FAILED 1 ci_count helm-kind '^      - run: task helm-kind-core$'
 eq_of "ci_count: a job that is not in ci.yml is not a count of 0"        CI-JOB-EMPTY  ci_count helm-kind-nosuchjob 'matrix'
 eq_of "diag_name_count: control — two artifact names" 2 diag_name_count
-got=$(PATH="$tmp/kd-dying-grep:$PATH" diag_name_count) || exit 1
-expect_eq "diag_name_count: grep prints the names and then dies" GREP-FAILED "$got"
+PATH="$tmp/kd-dying-grep:$PATH" eq_rc "diag_name_count: grep prints the names and then dies" GREP-FAILED 1 diag_name_count
 match_of "out_inputs: control — helm_kind lists its inputs" '^"[$]' out_inputs helm_kind
-got=$(PATH="$tmp/kd-dying-grep:$PATH" out_inputs helm_kind) || exit 1
-expect_eq "out_inputs: grep prints the line and then dies" FAILED "$got"
+PATH="$tmp/kd-dying-grep:$PATH" eq_rc "out_inputs: grep prints the line and then dies" FAILED 1 out_inputs helm_kind
 fixture kddies
 git -C "$repo" checkout -q -b change
 touch_file deployments/helm/kind/run.sh
 commit "chore: kddies"
 match_of "ci_changes_jobs: control — run.sh alone sets helm_kind_target" '(^| )helm_kind_target( |$)' ci_changes_jobs
-got=$(PATH="$tmp/kd-dying-git:$PATH" ci_changes_jobs) || exit 1
-expect_eq "ci_changes_jobs: git diff prints the files and then dies"  CI-CHANGES-FAILED "$got"
-got=$(PATH="$tmp/kd-dying-sed:$PATH" ci_changes_jobs) || exit 1
-expect_eq "ci_changes_jobs: sed prints the jobs and then dies"        FORMAT-FAILED     "$got"
-got=$(PATH="$tmp/kd-dying-tr:$PATH" ci_changes_jobs) || exit 1
-expect_eq "ci_changes_jobs: tr prints the jobs and then dies"         FORMAT-FAILED     "$got"
+PATH="$tmp/kd-dying-git:$PATH" eq_rc "ci_changes_jobs: git diff prints the files and then dies" CI-CHANGES-FAILED 1 ci_changes_jobs
+PATH="$tmp/kd-dying-sed:$PATH" eq_rc "ci_changes_jobs: sed prints the jobs and then dies" FORMAT-FAILED 1 ci_changes_jobs
+PATH="$tmp/kd-dying-tr:$PATH" eq_rc "ci_changes_jobs: tr prints the jobs and then dies" FORMAT-FAILED 1 ci_changes_jobs
 
 
 # ── #465: process substitution, errexit-off functions, workflow run: scripts ───────────────────────────────────────────────
@@ -3742,6 +3741,35 @@ mkdir -p "$work/real/sub" "$work/bogus"
 { printf '#!/usr/bin/env bash\n'; fn_text "$src/scripts/test.sh" abs_dir_of; printf 'dirname() { printf "%%s" "%s/bogus"; return 7; }\nabs_dir_of "%s/real/x.sh" sub\n' "$work" "$work"; } > "$work/abs.sh"
 real_rc=0; capture -2 real real_rc bash "$work/abs.sh" || exit 1
 expect_eq "ast rewrite: abs_dir_of ignores a dirname that prints a wrong directory and dies" "0 $work/real/sub" "$real_rc $real"
+# (h) the suite itself: an exit before the summary leaves a message with the line and the command (a fault injection on the real abort_note and the real trap shape)
+work=$(mktemp -d) || exit 1
+fn_text "$src/scripts/test.sh" abort_note > "$work/abort_note.sh"
+sw_write ast-abort <<'F'
+. "$ABORT_LIB"
+suite_done=""
+trap 'abort_note "$?" "$LINENO" "$BASH_COMMAND"' EXIT
+x=$(false) || exit 3
+F
+real_rc=0; ABORT_LIB="$work/abort_note.sh" capture -2 real real_rc bash "$sw/ast-abort.sh" || exit 1
+expect_eq    "ast harness: a bare exit before the summary keeps its status" "3" "$real_rc"
+expect_match "ast harness: ...and says the status, the line and the command" 'scripts/test\.sh: stopped with exit 3 before the summary, at line [0-9]+: exit 3' "$real"
+sw_write ast-abort-errexit <<'F'
+. "$ABORT_LIB"
+suite_done=""
+trap 'abort_note "$?" "$LINENO" "$BASH_COMMAND"' EXIT
+false
+F
+real_rc=0; ABORT_LIB="$work/abort_note.sh" capture -2 real real_rc bash "$sw/ast-abort-errexit.sh" || exit 1
+expect_match "ast harness: a set -e abort names the failing command" 'stopped with exit 1 before the summary, at line [0-9]+: false' "$real"
+sw_write ast-abort-done <<'F'
+. "$ABORT_LIB"
+suite_done=""
+trap 'abort_note "$?" "$LINENO" "$BASH_COMMAND"' EXIT
+suite_done=1
+exit 4
+F
+real_rc=0; ABORT_LIB="$work/abort_note.sh" capture -2 real real_rc bash "$sw/ast-abort-done.sh" || exit 1
+expect_eq    "ast harness: after the summary a non-zero exit (failures) adds no abort note" "4 " "$real_rc $real"
 # ── end #472 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 # scripts that source scripts/best-effort.sh by their own location (#470 r1b): a missing library stops them with a message (exit 2), and it does not
 # matter from which directory — or under which spelling of its own path — they are started
@@ -4305,5 +4333,6 @@ neg_cell "pods are running: no"                           "not found (rc=1)"    
 neg_cell "kubectl prints the error JSON, THEN dies (9): not found, not a pass" "not found (rc=9)" 'cat '"$tmp"'/neg.cfgerr.json; return 9'
 neg_cell "kubectl prints nothing and dies (9)"            "not found (rc=9)"        'return 9'
 
+suite_done=1
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
