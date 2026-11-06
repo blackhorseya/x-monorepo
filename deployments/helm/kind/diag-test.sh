@@ -37,7 +37,8 @@
 # stale output cannot pass.
 set -euo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-here=$(cd "$(dirname "$0")" && pwd)
+abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
+here=$(abs_dir "$(dirname "$0")")
 tmp=$(mktemp -d)
 . "$here/runner-home-test.sh" "$tmp/runner-home"  # the scripts refuse to start outside run.sh (#444)
 WATCHDOG=""
@@ -164,7 +165,7 @@ for want in pg_stat_activity pg_blocking_pids pg_locks max_connections; do
   grep -qF "$want" "$tmp/events" || die "D1: no Postgres read of $want"
   has "SQL $nonce:" "D1 the Postgres reads answered"
 done
-n=$(grep -c 'exec deploy/postgres' "$tmp/events" || [ $? -eq 1 ]); [ "$n" = 3 ] || die "D1: $n Postgres reads, want 3 (sessions with blocked_by, locks, connections)"
+n=$(value_of -ok 1 grep -c 'exec deploy/postgres' "$tmp/events") || exit 1; [ "$n" = 3 ] || die "D1: $n Postgres reads, want 3 (sessions with blocked_by, locks, connections)"
 # the whole log is in files, not only on the console
 for pod in a b; do grep -qF "LOG pod/$pod since=$since $nonce" "$DIAG_DIR/log-$pod.txt" || die "D1: $DIAG_DIR/log-$pod.txt lacks the log of pod/$pod"; done
 grep -qF "earlier-instance $nonce" "$DIAG_DIR/log-b.previous.txt" || die "D1: no previous container file for pod/b"
@@ -188,7 +189,7 @@ has "pod/a: diag: no log" "D2 a pod without a log is named"
 has "LOG pod/b since=$since $nonce" "D2 the other pod's log is still there"
 has "diag: 'locks (pg_locks)' failed" "D2 the failing read is named"
 has "SQL $nonce:" "D2 the other reads still ran"
-n=$(grep -c 'exec deploy/postgres' "$tmp/events" || [ $? -eq 1 ]); [ "$n" = 3 ] || die "D2: $n Postgres reads, want 3 (a failing one must not stop the rest)"
+n=$(value_of -ok 1 grep -c 'exec deploy/postgres' "$tmp/events") || exit 1; [ "$n" = 3 ] || die "D2: $n Postgres reads, want 3 (a failing one must not stop the rest)"
 MODE=nopods run_bounded 60 "$here/diag.sh" ns "$since"
 [ "$rc" = 0 ] || die "D2: no pod list: exit $rc, want 0"
 has "diag: no pod list" "D2 no pod list is said, not silently empty"
@@ -202,7 +203,7 @@ if only D3; then
 DIAG_DIR="$tmp/diag3" MODE=ok run_bounded 120 "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml"
 [ "$rc" = 1 ] || die "D3: exit $rc, want 1 (the script's own status, not diag's or restore's)"
 has "payment-flow: UpsertProduct: got '500', want '200'" "D3 the step that failed"
-n=$(grep -c '^::group::diag: pods and events' "$tmp/out" || [ $? -eq 1 ]); [ "$n" = 1 ] || die "D3: diag ran $n times, want exactly once"
+n=$(value_of -ok 1 grep -c '^::group::diag: pods and events' "$tmp/out") || exit 1; [ "$n" = 1 ] || die "D3: diag ran $n times, want exactly once"
 start=$(sed -n 's/.*--since-time=\([^ ]*\).*/\1/p' "$tmp/events" | sort -u)
 [ -n "$start" ] || die "D3: no log was read at all (diag.sh did not run)"
 [ "$(wc -l <<<"$start" | tr -d ' ')" = 1 ] || die "D3: the logs were read since more than one time: $start"
@@ -277,14 +278,14 @@ for sg in TERM INT; do
     [[ $res == *"signalled=yes"* ]] || die "D5 $sg: the script never reached the waiting helm upgrade ($res)"
     [[ $res == *"rc=$want_rc "* ]] || die "D5 $sg: $res; want rc=$want_rc (128 + the signal)"
     [[ $res == *"leftover=0"* ]] || die "D5 $sg: a child of the script outlived it ($res)"
-    hp=$(cat "$hb/helm.pid" 2>/dev/null) || { echo "diag-test: D5 $sg: cannot read the fake helm's pid file" >&2; hp=""; }
+    hp=$(cat "$hb/helm.pid" 2>/dev/null) || { echo "diag-test: D5 $sg: cannot read the fake helm's pid file" >&2; exit 1; }
     [ -n "$hp" ] || die "D5 $sg: the fake helm left no pid"
     ! kill -0 "$hp" 2>/dev/null || { kill "$hp" 2>/dev/null; die "D5 $sg: the waiting helm (pid $hp) was left running"; }
-    n=$(grep -c ' logs ' "$tmp/events" || [ $? -eq 1 ]); [ "$n" -gt 0 ] || die "D5 $sg: diag.sh did not run (no pod log was read)"
+    n=$(value_of -ok 1 grep -c ' logs ' "$tmp/events") || exit 1; [ "$n" -gt 0 ] || die "D5 $sg: diag.sh did not run (no pod log was read)"
     first_logs=$(grep -n ' logs ' "$tmp/events" | head -1 | cut -d: -f1)
     last_helm=$(grep -n '^helm upgrade' "$tmp/events" | tail -1 | cut -d: -f1)
     [ "$first_logs" -lt "$last_helm" ] || die "D5 $sg: diag.sh ran after the restore"
-    _c275a=$(grep -c '^helm upgrade' "$tmp/events" || [ $? -eq 1 ]); [ "$_c275a" -ge 2 ] || die "D5 $sg: the release was not restored (no second helm upgrade)"
+    _c275a=$(value_of -ok 1 grep -c '^helm upgrade' "$tmp/events") || exit 1; [ "$_c275a" -ge 2 ] || die "D5 $sg: the release was not restored (no second helm upgrade)"
     echo "diag-test ok: D5 $sg while helm upgrade waits: diag before restore, exit $want_rc, the waiting helm stopped, nothing left"
   fi
 done
@@ -365,7 +366,7 @@ if only D6E; then
 fi
 if only D6S; then
   d6cell D6S "Postgres reads with 100000 rows" SQLLINES=100000
-  _c355a=$(grep -c "SQL-$nonce row" "$DIAG_DIR/postgres.txt" || [ $? -eq 1 ]); [ "$_c355a" -ge 100000 ] || die "D6S: postgres.txt does not hold the rows"
+  _c355a=$(value_of -ok 1 grep -c "SQL-$nonce row" "$DIAG_DIR/postgres.txt") || exit 1; [ "$_c355a" -ge 100000 ] || die "D6S: postgres.txt does not hold the rows"
   unset DIAG_DIR
   echo "diag-test ok: D6S 100000 Postgres rows: $bytes console bytes (budget $budget), postgres.txt complete"
 fi
@@ -402,7 +403,7 @@ if only D6B; then
   mut="$tmp/diag-mutant.sh"
   awk '{ print } /^(group|endgroup)/ { print "head -c 102400 /dev/zero | tr \"\\0\" X; echo hit >> \"$INJECT_HITS\"" }' "$here/diag.sh" > "$mut"
   chmod +x "$mut"
-  _c392a=$(grep -c 'INJECT_HITS' "$mut" || [ $? -eq 1 ]); [ "$_c392a" -ge 4 ] || die "D6B: the mutant was not built (no injections)"
+  _c392a=$(value_of -ok 1 grep -c 'INJECT_HITS' "$mut") || exit 1; [ "$_c392a" -ge 4 ] || die "D6B: the mutant was not built (no injections)"
   : > "$tmp/hits"; export INJECT_HITS="$tmp/hits" DIAG_DIR="$tmp/diag-B" DIAG_CONSOLE_BYTES=$budget
   run_bounded 120 "$mut" ns "$since"
   unset INJECT_HITS DIAG_DIR DIAG_CONSOLE_BYTES
@@ -462,7 +463,7 @@ PY
   mut="$tmp/diag-fd3.sh"
   awk '{ print } /^# diag-test D6F injects/ { print "printf \"%100000s\" X >&3 2>/dev/null; echo hit >> \"$INJECT_HITS\""; print "echo scanned >> \"$INJECT_SCANNED\"; python3 \"$INJECT_SCAN\" \"$INJECT_CONSOLE\" >> \"$INJECT_FDS\""}' "$here/diag.sh" > "$mut"
   chmod +x "$mut"
-  _c452a=$(grep -c 'INJECT_HITS' "$mut" || [ $? -eq 1 ]); [ "$_c452a" = 1 ] || die "D6F: the mutant was not built (the marker comment was not found)"
+  _c452a=$(value_of -ok 1 grep -c 'INJECT_HITS' "$mut") || exit 1; [ "$_c452a" = 1 ] || die "D6F: the mutant was not built (the marker comment was not found)"
   : > "$tmp/hits-f"; : > "$tmp/scanned-f"; : > "$tmp/fds-f"
   export INJECT_HITS="$tmp/hits-f" INJECT_SCANNED="$tmp/scanned-f" INJECT_FDS="$tmp/fds-f" INJECT_SCAN="$tmp/fdscan.py" INJECT_CONSOLE="$tmp/out" DIAG_DIR="$tmp/diag-F" DIAG_CONSOLE_BYTES=$budget
   run_bounded 120 "$mut" ns "$since"
@@ -512,7 +513,7 @@ fi
 # diag.sh selects, the second by the server's own flags in deps.yaml — and both are checked on a real Postgres running SQL
 # with a synthetic credential as a literal, once with leaky flags as the positive control.
 if only D7; then
-  rt=$(command -v docker || command -v podman) || { echo "diag-test: D7: neither docker nor podman is installed" >&2; rt=""; }
+  if rt=$(command -v docker); then :; elif rt=$(command -v podman); then :; else echo "diag-test: D7: neither docker nor podman is installed" >&2; rt=""; fi
   [ -n "$rt" ] || die "D7: needs docker or podman (a real Postgres is the point of this cell)"
   secret="sk_live_SYNTHETIC_$nonce"
   pgc=""; cleanup_pg() { [ -z "$pgc" ] || "$rt" rm -f "$pgc" >/dev/null 2>&1 || true; pgc=""; }

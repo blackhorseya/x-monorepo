@@ -62,7 +62,7 @@ export APP_CONFIG=/dev/null APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false APP_LOG_L
 # shellcheck source=tests/k6/catalog.sh
 . tests/k6/catalog.sh   # rpc has no catalog of its own: a catalog-rpc per attempt, on that attempt's database
 
-ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+if ncpu=$(sysctl -n hw.ncpu 2>/dev/null); then :; elif ncpu=$(nproc); then :; else echo "bench: cannot count the cpus" >&2; exit 1; fi
 limit=$(python3 -I -c "print($MAX_LOAD_PER_CORE * $ncpu)")
 
 # 1m load average every LOAD_INTERVAL seconds into $1 (epoch,load) until stopped (tests/k6/loadavg.py)
@@ -177,7 +177,7 @@ while [ "$valid" -lt "$RUNS" ] && [ "$attempts" -lt "$MAX_ATTEMPTS" ]; do
 done
 
 # where the numbers were taken: enough for someone else to rerun them under the same conditions
-cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
+if cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null); then :; elif cpu=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo); then :; else cpu=unknown; echo "bench: cannot read the cpu model" >&2; fi
 rc=0
 pgv=$(psql "$base_url" -qAt -c "show server_version")
 BENCH_COMMIT=$(git rev-parse HEAD) BENCH_DIRTY=$(git status --porcelain -- . ':!bin' | head -c1) \

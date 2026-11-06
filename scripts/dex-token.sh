@@ -42,7 +42,7 @@ location=$(curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' \
   --data-urlencode "login=$email" --data-urlencode "password=$password" "$form")
 case $location in
   "$redirect"*) ;;
-  *"/approval"*) location=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$location") || { echo "dex-token: following the approval redirect failed (exit $?)" >&2; location=""; } ;;   # an empty location fails the case below
+  *"/approval"*) if location=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$location"); then :; else echo "dex-token: following the approval redirect failed (exit $?)" >&2; location=""; fi ;;   # an empty location fails the case below
 esac
 case $location in
   "$redirect"*) ;;

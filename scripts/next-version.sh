@@ -25,7 +25,7 @@ if [ -z "$base" ]; then
   echo "next-version: no previous v* tag reachable from $head" >&2
   exit 2
 fi
-tag=$(git describe --tags --abbrev=0 --match 'v*' "$base" 2>/dev/null || echo "$base")
+tag=$(git describe --tags --abbrev=0 --match 'v*' "$base" 2>/dev/null) || { echo "next-version: git describe failed for $base (not a v* tag or a commit after one)" >&2; exit 2; }
 IFS=. read -r major minor patch <<<"${tag#v}"
 major=${major:-0}; minor=${minor:-0}; patch=${patch%%[-+]*}; patch=${patch:-0}
 

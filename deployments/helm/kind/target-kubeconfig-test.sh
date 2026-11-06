@@ -34,6 +34,13 @@
 #
 # TASKFILE=<file in the repo root> runs the probe cells against another Taskfile (the control and M1 stay as they are).
 set -uo pipefail
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # value_of (#462, #466, #470)
+type value_of >/dev/null 2>&1 || { echo "target-kubeconfig-test: scripts/best-effort.sh did not load (value_of is missing)" >&2; exit 2; }   # the allowed source line cannot carry `|| exit`, so the load is checked here
+# No "$(cmd || echo default)" here: a failed read must not turn into a plausible value (#470).
+yesno() { if "$@"; then echo yes; else echo no; fi; }                      # a label for a message: the status IS the answer
+fingerprint() { if [ -f "$1" ]; then cksum < "$1"; else echo absent; fi; }    # a file that is not there is "absent"; one that is there and cannot be read fails
+num_in() { if [ -f "$1" ]; then cat "$1"; else echo 0; fi; }                  # a counter file the listener has not written yet is 0; an unreadable one fails
+lines_in() { if [ -f "$1" ]; then value_of -ok 1 grep -c . "$1"; else echo 0; fi; }   # grep -c: 1 = no line (prints 0); 2+ = the read failed
 cd "$(dirname "$0")/../../.."
 root=$PWD
 
@@ -87,7 +94,7 @@ if grep -qx -e "$target" -e "$other" "$tmp/clusters.before"; then
   echo "a cluster named $target or $other already exists"; exit 1
 fi
 user_kc="$HOME/.kube/config"
-user_before=$(cksum < "$user_kc" 2>/dev/null || echo absent)
+user_before=$(fingerprint "$user_kc") || exit 1
 
 created_target=1
 kind create cluster --name "$target" --kubeconfig "$tmp/target.yaml" --wait 2m >"$tmp/create-target.log" 2>&1 || { cat "$tmp/create-target.log"; echo "cannot create $target"; exit 1; }
@@ -128,7 +135,7 @@ aimed_right() { in_cluster "$tmp/target.yaml" && ! in_cluster "$tmp/other.yaml";
 reset_ns
 if run "$TASKFILE" "$tmp/alias.yaml"; then rc=0; else rc=$?; fi
 if [ "$rc" = 0 ] && aimed_right; then ok "A1 alias (kind-$target → other): the namespace is in target, not in other"
-else bad "A1 rc=$rc, in target: $(in_cluster "$tmp/target.yaml" && echo yes || echo no), in other: $(in_cluster "$tmp/other.yaml" && echo yes || echo no)"; tail -5 "$tmp/run.log"; fi
+else bad "A1 rc=$rc, in target: $(yesno in_cluster "$tmp/target.yaml"), in other: $(yesno in_cluster "$tmp/other.yaml")"; tail -5 "$tmp/run.log"; fi
 
 # P1: same name, same cluster, twice
 reset_ns
@@ -156,7 +163,7 @@ while True:
 PY
 listener=$!
 for ((_try158 = 1; _try158 <= 50; _try158++)); do [ -s "$tmp/listener.port" ] && break; sleep 0.1; done
-port=$(cat "$tmp/listener.port" 2>/dev/null || echo 0)
+port=$(num_in "$tmp/listener.port") || exit 1
 cat > "$tmp/decoy.yaml" <<DECOY
 apiVersion: v1
 kind: Config
@@ -167,12 +174,13 @@ current-context: prod-asia
 DECOY
 reset_ns
 if run "$TASKFILE" "$tmp/decoy.yaml"; then rc=0; else rc=$?; fi
-hits=$(cat "$tmp/listener.hits" 2>/dev/null || echo 0)
+hits=$(num_in "$tmp/listener.hits") || exit 1
 if [ "$port" != 0 ] && [ "$rc" = 0 ] && aimed_right && [ "$hits" = 0 ]; then ok "X1 decoy caller kubeconfig (context prod-asia → a listener): the task goes on, the namespace is in target, the listener saw $hits connections"
 else bad "X1 rc=$rc port=$port hits=$hits"; tail -5 "$tmp/run.log"; fi
 # the listener is alive and counts (a dead one would make the zero above meaningless): connect once
 python3 -c "import socket,sys; socket.create_connection(('127.0.0.1', $port), 2).close()" 2>/dev/null; sleep 0.3
-[ "$(cat "$tmp/listener.hits" 2>/dev/null || echo 0)" = 1 ] && ok "X1 control: the listener counts a connection" || bad "X1 control: the listener did not count a test connection"
+hits_now=$(num_in "$tmp/listener.hits") || exit 1
+[ "$hits_now" = 1 ] && ok "X1 control: the listener counts a connection" || bad "X1 control: the listener did not count a test connection"
 kill "$listener" 2>/dev/null; wait "$listener" 2>/dev/null
 
 # M1: the same probe on a Taskfile that does not point KUBECONFIG anywhere must be red. The judgement is
@@ -203,7 +211,7 @@ clusters_there() { kind get clusters 2>/dev/null | grep -qx "$target" && kind ge
 if ! has_ctx; then bad "D0 the caller file has no context kind-$ghost (nothing to protect)"; else ok "D0 the caller file holds the context kind-$ghost (no such cluster)"; fi
 if down "$TASKFILE"; then rc=0; else rc=$?; fi
 if [ "$rc" = 0 ] && caller_intact && clusters_there; then ok "D1 helm-kind-down: the caller kubeconfig is byte-for-byte unchanged, the context is still there, both clusters of this run are too"
-else bad "D1 rc=$rc intact: $(caller_intact && echo yes || echo no), clusters: $(clusters_there && echo yes || echo no)"; tail -5 "$tmp/down.log"; fi
+else bad "D1 rc=$rc intact: $(yesno caller_intact), clusters: $(yesno clusters_there)"; tail -5 "$tmp/down.log"; fi
 mutate_down() {  # <how>: plain = a bare kind delete; noflag = through the runner, without the flag
   python3 - "$root/Taskfile.yml" "$mutfile" "$1" <<'PY'
 import sys
@@ -233,10 +241,11 @@ fi
 
 # Judged on the whole run
 [ "$(cksum < "$tmp/alias.yaml")" = "$alias_before" ] && ok "the alias kubeconfig is unchanged" || bad "the alias kubeconfig was written"
-[ "$(cksum < "$user_kc" 2>/dev/null || echo absent)" = "$user_before" ] && ok "the caller's ~/.kube/config is unchanged" || bad "the caller's ~/.kube/config was written"
+user_after=$(fingerprint "$user_kc") || exit 1
+[ "$user_after" = "$user_before" ] && ok "the caller's ~/.kube/config is unchanged" || bad "the caller's ~/.kube/config was written"
 # no kubectl call ran on the default kubeconfig: each one had a KUBECONFIG inside this run's directory or the task's own
 # bin/kind/kubeconfig-<target>, or named its own --kubeconfig; and there were calls to judge (an empty log proves nothing)
-calls=$(grep -c . "$tmp/kubectl.calls" 2>/dev/null || echo 0)
+calls=$(lines_in "$tmp/kubectl.calls") || exit 1
 stray=$(grep -v -E "^($tmp/[^|:]*|$root/bin/kind/kubeconfig-$target)\|" "$tmp/kubectl.calls" | grep -v -E -- '--kubeconfig[ =]' | head -3 | tr '\n' ';')
 if [ "$calls" -ge 10 ] && [ -z "$stray" ]; then ok "all $calls kubectl calls used a kubeconfig of this run (none on ~/.kube/config)"
 else bad "kubectl calls: $calls, on another kubeconfig: [$stray]"; fi

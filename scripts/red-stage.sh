@@ -15,6 +15,8 @@
 # Go prints test logs indented and `=== RUN` / `--- FAIL` unindented, so those lines are not
 # searched for the message; -m is an ERE.
 set -euo pipefail
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "red-stage: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 msg=
 while getopts m: o; do
   case $o in m) msg=$OPTARG ;; *) exit 64 ;; esac
@@ -28,7 +30,7 @@ elif grep -Eq '^panic: ' <<<"$out"; then class=panic
 elif grep -Eq '^--- FAIL: ' <<<"$out"; then
   # Not `grep -Ev … | grep -Eq`: -q exits at the first match, the upstream grep then dies of SIGPIPE
   # on a long log and pipefail reads that as "message not found".
-  body=$(grep -Ev '^(=== |--- |FAIL|ok )' <<<"$out" || [ $? -eq 1 ])
+  body=$(value_of -ok 1 grep -Ev '^(=== |--- |FAIL|ok )' <<<"$out") || exit 1
   if grep -E -- "$msg" <<<"$body" >/dev/null; then class=assertion; else class=setup; fi
 fi
 echo "$class"

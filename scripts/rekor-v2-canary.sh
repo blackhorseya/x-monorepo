@@ -23,6 +23,8 @@
 # exactly when this cannot see, and cosign-smoke.sh next to it fails the same way when Rekor is
 # unreachable; the TUF failure carries its own message so a flake reads differently from a v2.
 set -euo pipefail
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "rekor-v2-canary: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 
 issue='#215, https://github.com/blackhorseya/x-monorepo/issues/215'
 cfg=${REKOR_CANARY_SIGNING_CONFIG:-}
@@ -38,7 +40,7 @@ if [ -z "$cfg" ]; then
   done
   [ -n "$ok" ] || { echo "FAIL: cannot resolve the default signing config: cosign initialize (TUF) failed 3 times, nothing was checked. A network or sigstore outage, not a Rekor v2 finding; re-run."; exit 1; }
   found=$(find "$tuf" -path '*/targets/signing_config*.json' -type f)
-  _c41a=$(printf '%s\n' "$found" | grep -c . || [ $? -eq 1 ]); [ "$_c41a" = 1 ] || {
+  _c41a=$(value_of -ok 1 grep -c . <<<"$found") || exit 1; [ "$_c41a" = 1 ] || {
     echo "FAIL: expected one signing_config*.json among cosign's TUF targets, found:"; echo "${found:-  (none)}"
     echo "cosign's TUF layout or the signing config's file name changed; fix this script before trusting it ($issue)."; exit 1
   }
@@ -54,7 +56,7 @@ jq -e -s 'length == 1 and (.[0] | type == "object" and (.rekorTlogUrls | type ==
   || { echo "FAIL: $cfg is not one JSON signing config with a non-empty rekorTlogUrls array of logs that each have a url (empty, blank, truncated or malformed): nothing was verified"; exit 1; }
 logs=$(jq -c '.rekorTlogUrls' "$cfg")
 
-version=$(cosign version 2>/dev/null | sed -n 's/^GitVersion: *//p') || { echo "rekor-v2-canary: cosign version failed (exit $?)" >&2; version=""; }   # only names the cosign version in the report below; the log check does not use it
+if version=$(cosign version 2>/dev/null | sed -n 's/^GitVersion: *//p'); then :; else echo "rekor-v2-canary: cosign version failed (exit $?)" >&2; version=""; fi   # only names the cosign version in the report below; the log check does not use it
 bad=$(jq -r '.[] | select(.majorApiVersion != 1) | "  \(.url)  majorApiVersion=\(.majorApiVersion)  validFor=\(.validFor | tojson)  operator=\(.operator)"' <<<"$logs")
 if [ -n "$bad" ]; then
   cat <<MSG

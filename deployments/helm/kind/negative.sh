@@ -57,10 +57,10 @@ poll 120 'if any(.items[]; (.status.containerStatuses[0].lastState.terminated.ex
 refusal=""
 for ((_try56 = 1; _try56 <= "${NEGATIVE_TRIES:-60}"; _try56++)); do
   # a failed read (API hiccup, unparsable output) is a retry like any other: set -e must not end the script
-  pods=$(kubectl -n "$ns" get pods -l "$sel" -o json 2>/dev/null) || { sleep "${NEGATIVE_SLEEP:-2}"; continue; }
-  bad=$(jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0] // empty' <<<"$pods" 2>/dev/null) || { sleep "${NEGATIVE_SLEEP:-2}"; continue; }
+  if ! pods=$(kubectl -n "$ns" get pods -l "$sel" -o json 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi
+  if ! bad=$(jq -r '[.items[] | select((.status.containerStatuses[0].lastState.terminated.exitCode // 0) != 0) | .metadata.name][0] // empty' <<<"$pods" 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi
   if [ -n "$bad" ]; then
-    msg=$(jq -r --arg n "$bad" '.items[] | select(.metadata.name == $n) | .status.containerStatuses[0].lastState.terminated.message // empty' <<<"$pods" 2>/dev/null) || msg=""
+    if ! msg=$(jq -r --arg n "$bad" '.items[] | select(.metadata.name == $n) | .status.containerStatuses[0].lastState.terminated.message // empty' <<<"$pods" 2>/dev/null); then sleep "${NEGATIVE_SLEEP:-2}"; continue; fi   # a failed read is a retry, never an empty message
     if grep -q 'require-durable' <<<"$msg"; then refusal=$msg; break; fi
     for prev in --previous ""; do
       # shellcheck disable=SC2086
@@ -80,9 +80,11 @@ kubectl -n "$ns" create secret generic catalog-rpc-no-rpc-key \
   --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" --from-literal=APP_POSTGRES_URL="$pgurl" >/dev/null
 upgrade_with catalog-rpc-no-rpc-key
 # bounded like every read here (NEGATIVE_TRIES x NEGATIVE_SLEEP, default 90 x 1s); a failed read is a retry
+# rpc_config_error: ONE read of the rpc pods, "yes" when one waits on CreateContainerConfigError, "no" otherwise; fails when the read fails
+rpc_config_error() { kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o json 2>/dev/null | jq -r 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end' 2>/dev/null; }
 found=""
 for ((_try82 = 1; _try82 <= "${NEGATIVE_RPC_TRIES:-90}"; _try82++)); do
-  if [ "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o json 2>/dev/null | jq -r 'if any(.items[]; .status.containerStatuses[0].state.waiting.reason == "CreateContainerConfigError") then "yes" else "no" end' 2>/dev/null || echo no)" = yes ]; then found=yes; break; fi
+  if cfg=$(rpc_config_error) && [ "$cfg" = yes ]; then found=yes; break; fi   # a failed read is "not yet": the loop retries, running out of tries fails below
   sleep "${NEGATIVE_RPC_SLEEP:-1}"
 done
 [ "$found" = yes ] || { echo "negative: a Secret without APP_CATALOG_API_KEY did not stop the rpc pod (CreateContainerConfigError)"; kubectl -n "$ns" get pods; exit 1; }

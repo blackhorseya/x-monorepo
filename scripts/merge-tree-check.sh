@@ -11,6 +11,7 @@
 # MERGE_TREE_CMD replaces the vet step: it runs in each module dir.
 # Exit: 0 builds · 1 does not build · 2 text conflict · 3 usage.
 set -euo pipefail
+run_in() { local d=$1; shift; ( cd "$d" && "$@" ); }   # a command in another directory, without `cd … && cmd` inside $(…) (#470)
 [ $# -eq 2 ] || { echo "usage: $0 <base> <head>" >&2; exit 3; }
 base=$1 head=$2
 tmp=$(mktemp -d)
@@ -26,7 +27,7 @@ git archive "$tree" | tar -x -C "$tmp"
 echo "merge-tree-check: $base + $head → tree $tree"
 
 if [ -f "$tmp/go.work" ]; then
-  dirs=$(cd "$tmp" && go list -m -f '{{.Dir}}')
+  dirs=$(run_in "$tmp" go list -m -f '{{.Dir}}')
 else
   dirs=$tmp
 fi

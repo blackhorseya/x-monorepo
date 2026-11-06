@@ -16,8 +16,9 @@ set -euo pipefail
 main=$1 head=$2 title=$3
 repo_url=${REPO_URL:-https://github.com/blackhorseya/x-monorepo}
 
-describe_rc=0; base=$(git describe --tags --abbrev=0 --match 'v*' "$main" 2>/dev/null) || describe_rc=$?
-if [ "$describe_rc" != 0 ]; then base=""; echo "release-gate-pr: git describe exited $describe_rc (no v* tag reachable from $main?)" >&2; fi   # announced in the comment below; the comment is advisory, release.yml decides
+if base=$(git describe --tags --abbrev=0 --match 'v*' "$main" 2>/dev/null); then :; else
+  describe_rc=$?; base=""; echo "release-gate-pr: git describe exited $describe_rc (no v* tag reachable from $main?)" >&2   # announced in the comment below; the comment is advisory, release.yml decides
+fi
 echo '<!-- release-gate -->'
 echo '### Release gate'
 echo

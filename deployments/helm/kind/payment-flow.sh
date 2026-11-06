@@ -27,7 +27,8 @@ set -euo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
-here=$(cd "$(dirname "$0")" && pwd)
+abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
+here=$(abs_dir "$(dirname "$0")")
 flow_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 ns=$1 release=$2 chart=$3 values=$4 flow=$5
 rport=${FLOW_RPC_PORT:-18094} sport=${FLOW_SERVE_PORT:-18095}
@@ -48,7 +49,7 @@ on_signal() { # <exit status>: stop the waited-for child, then leave through the
   trap '' TERM INT HUP   # a second signal must not cut the diagnosis or the restore short
   # the child and ITS children (a wrapper around helm / kubectl leaves its own child behind otherwise)
   if [ -n "$cur" ]; then
-    kids=$(value_of -ok 1 pgrep -P "$cur") || { echo "payment-flow: cannot list the children of $cur" >&2; kill "$cur" 2>/dev/null || true; exit "$1"; }   # explicit pids, never a pattern; 1 = no children, 2+ = pgrep failed: still stop the child and leave
+    if ! kids=$(value_of -ok 1 pgrep -P "$cur"); then kids=""; fi   # explicit pids, never a pattern; 1 = no children, 2+ = pgrep failed (said on stderr by value_of): the child itself is still stopped below and the script still leaves
     for c in $kids; do kill "$c" 2>/dev/null || true; done
     kill "$cur" 2>/dev/null || true; wait "$cur" 2>/dev/null || true; cur=""
   fi
@@ -190,7 +191,7 @@ echo "payment-flow: the release runs with ordering.require_payment on, auth requ
 # 1 ── create → CONFIRMED → StartPayment → pay → webhook → COMPLETED ───────────────────────────────────────
 o=$(new_order); with_payment "$o"
 as_shopper ordering.v1.OrderService/CompleteOrder "{\"id\":\"$o\"}"; want "CompleteOrder of an order that needs payment" "$res" "400 order.payment_required"
-out=$(mock pay --order "$o" --deliver "$hook") || fail "mock pay"
+out=$(mock pay --order "$o" --deliver "$hook") || { fail "mock pay"; exit 1; }
 [ "$(jq -r .delivered_status <<<"$out")" = 200 ] || fail "the webhook was not accepted: $out"
 wait_order "$o" ORDER_STATUS_COMPLETED
 want "payment after the order completed" "$(pay_status "$o")" PAYMENT_STATUS_CAPTURED
@@ -212,7 +213,7 @@ echo "payment-flow 4: an unknown event type and a notification for a checkout no
 
 # 2 ── delayed webhook, and the webhook that never comes ───────────────────────────────────────────────────
 o2=$(new_order); with_payment "$o2"
-d=$(mock pay --order "$o2") || fail "mock pay (no delivery)"
+d=$(mock pay --order "$o2") || { fail "mock pay (no delivery)"; exit 1; }
 want "paid at the provider" "$(db "SELECT paid FROM payment.mock_checkouts WHERE ref = '$(refs "$o2")'")" t
 steady "$o2" ORDER_STATUS_CONFIRMED 8
 want "payment while the webhook is late" "$(pay_status "$o2")" PAYMENT_STATUS_PENDING
@@ -306,7 +307,7 @@ kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-
 slow kubectl -n "$ns" rollout status "deploy/$release-payment-serve" "deploy/$release-payment-consume" --timeout=2m >/dev/null || fail "payment-rpc did not come back"
 forwards
 with_payment "$od"   # consume turns the OrderConfirmed that waited into the payment; the rpc pods were never restarted
-out=$(mock pay --order "$od" --deliver "$hook") || fail "mock pay after recovery"
+out=$(mock pay --order "$od" --deliver "$hook") || { fail "mock pay after recovery"; exit 1; }
 wait_order "$od" ORDER_STATUS_COMPLETED
 want "rpc pods across the outage (names and restarts)" "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}')" "$rpc_pods_before"
 echo "payment-flow 9: payment-rpc stopped: the order was reserved and CONFIRMED, StartPayment answered 503 payment.unavailable; back again, the same rpc pods paid it to COMPLETED"

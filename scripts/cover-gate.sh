@@ -2,6 +2,8 @@
 # Coverage gate: every */domain/* package must be 100% covered.
 # Domain is pure logic with no I/O, so anything below 100% is an untested rule.
 set -euo pipefail
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "cover-gate: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 cd "$(dirname "$0")/.."
 mkdir -p bin
 
@@ -11,9 +13,10 @@ fail=0 checked=0
 workjson=$(go work edit -json ./go.work)
 mods=$(python3 -c 'import json,sys; [print(u["DiskPath"].removeprefix("./")) for u in json.load(sys.stdin)["Use"]]' <<<"$workjson")
 [[ -n "$mods" ]] || { echo "cover-gate: go.work lists no module — nothing was checked" >&2; exit 1; }
+run_in() { local d=$1; shift; ( cd "$d" && "$@" ); }   # a command in another directory, without `cd … && cmd` inside $(…) (#470)
 for m in $mods; do
-  list=$(cd "$m" && go list ./...) || { echo "cover-gate: go list failed in $m" >&2; exit 1; }
-  pkgs=$(grep '/domain/' <<<"$list" || [ $? -eq 1 ])
+  list=$(run_in "$m" go list ./...) || { echo "cover-gate: go list failed in $m" >&2; exit 1; }
+  pkgs=$(value_of -ok 1 grep '/domain/' <<<"$list") || exit 1
   [[ -z "$pkgs" ]] && continue
   for p in $pkgs; do
     checked=$((checked + 1))

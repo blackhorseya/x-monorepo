@@ -19,7 +19,8 @@ set -euo pipefail
 [ "$#" -ge 2 ] || { echo "usage: run.sh <kubeconfig file> <command> [args...]" >&2; exit 2; }
 kc=$1; shift
 case $kc in /*) ;; *) kc=$PWD/$kc ;; esac
-here=$(cd "$(dirname "$0")" && pwd)
+abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
+here=$(abs_dir "$(dirname "$0")")
 shim=$here/shim lock=$here/lock.sh
 [ -x "$shim/kubectl" ] && [ -f "$lock" ] || { echo "run.sh: $here is missing shim/ or lock.sh" >&2; exit 2; }
 

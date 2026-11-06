@@ -36,7 +36,7 @@ console_budget=${DIAG_CONSOLE_BYTES:-262144} pod_console=${DIAG_POD_CONSOLE_BYTE
 
 # ── the wrapper ──────────────────────────────────────────────────────────────
 if [ "${1:-}" != "--diag-child" ]; then
-  cap_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX") || { echo "diag: cannot create a capture directory; nothing collected"; exit 0; }
+  if cap_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX"); then :; else echo "diag: cannot create a capture directory; nothing collected"; exit 0; fi   # a diagnostic never fails the run
   child="" sig_rc="" kill_pid="" c=""
   # on a signal: stop everything under the collector, then ask the collector itself to stop (it cleans up); if it is still there after 5 s, kill it
   stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name). pgrep: 1 = no children; 2+ = it failed: the pid is still stopped, and the failure is the caller's to see (best_effort prints it)
@@ -64,7 +64,7 @@ if [ "${1:-}" != "--diag-child" ]; then
   done
   if [ -n "$kill_pid" ]; then   # the 5 s fuse: its `sleep` first, then the subshell holding it (explicit pids). KILL, not TERM:
     # the fuse was started after on_signal ignored TERM, and an ignored signal is inherited (diag-test D6T saw it survive)
-    kids=$(pgrep -P "$kill_pid" 2>/dev/null) || { [ $? -eq 1 ] || echo "diag: pgrep -P $kill_pid failed" >&2; }   # 1 = no children
+    if ! kids=$(value_of -ok 1 pgrep -P "$kill_pid"); then kids=""; fi   # 1 = no children; any other failure is on stderr (value_of), and $kill_pid itself is killed below either way
     for c in $kids; do kill -KILL "$c" 2>/dev/null || true; done
     kill -KILL "$kill_pid" 2>/dev/null || true
   fi
@@ -84,8 +84,8 @@ shift   # --diag-child
 
 # ── the collector: its stdout and stderr are the capture file, nothing else ────
 # diag-test D6F injects a write to a console descriptor right below this line: there is none to write to.
-scratch=$(mktemp) || scratch=/dev/null
-finish() { [ "$scratch" = /dev/null ] || rm -f -- "$scratch"; }
+if scratch=$(mktemp); then :; else echo "diag: cannot create a scratch file; nothing collected" >&2; exit 0; fi   # a diagnostic never fails the run (same as the capture directory above); it does not carry on with a made-up file either
+finish() { rm -f -- "$scratch"; }
 trap finish EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
@@ -108,7 +108,8 @@ emit() {
   local cap=$console_left own=0 where=${2:-$dir}
   if [ -n "${1:-}" ] && [ "$1" -lt "$cap" ]; then cap=$1 own=1; fi
   if [ -n "$console_cut" ] || [ "$cap" -le 0 ]; then cat > /dev/null; return 0; fi
-  local buf n; buf=$(mktemp) || { echo "diag: no temp file for this read, skipping it" >&2; return 0; }
+  local buf n
+  if buf=$(mktemp); then :; else echo "diag: no temp file for this read, skipping it" >&2; return 0; fi
   head -c $((cap + 1)) > "$buf"
   if ! wc -c < "$buf" > "$buf.n"; then echo "diag: cannot count this read, skipping it" >&2; rm -f "$buf" "$buf.n"; return 0; fi
   read -r n < "$buf.n" || n=0; rm -f "$buf.n"
@@ -154,8 +155,12 @@ tail_emit "$dir/events.txt" 30 8192
 endgroup
 
 group "diag: pod logs since $since"
-pods=$(k get pods -o name 2>/dev/null) || pods=""
-[ -n "$pods" ] || say "diag: no pod list (kubectl get pods failed or the namespace is empty)"
+if pods=$(k get pods -o name 2>/dev/null); then
+  [ -n "$pods" ] || say "diag: no pods in the namespace"
+else
+  pods=""   # half a list is not a list: nothing is read from a failed `get pods`
+  say "diag: no pod list (kubectl get pods failed)"
+fi
 for p in $pods; do
   out_of_time && break
   name=${p#pod/}

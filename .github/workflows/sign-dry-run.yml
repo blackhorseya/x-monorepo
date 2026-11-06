@@ -60,8 +60,9 @@ jobs:
       # second pin to keep equal (every `cosign-release:` there must agree)
       - id: pin
         run: |
+          . scripts/best-effort.sh || exit 2   # value_of (#470); a missing library stops the step
           v=$(sed -n 's/^ *cosign-release: *//p' .github/workflows/release.yml | sort -u)
-          n=$(printf '%s\n' "$v" | grep -c . || [ $? -eq 1 ])   # 1 = no line (grep -c prints 0), 2 = grep failing stays fatal
+          n=$(value_of -ok 1 grep -c . <<<"$v") || exit 1   # 1 = no line (grep -c prints 0), 2 = grep failing stays fatal
           [ "$n" = 1 ] || { echo "release.yml pins cosign-release to: [$v]"; exit 1; }
           echo "cosign=$v" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup

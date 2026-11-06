@@ -21,6 +21,8 @@
 #
 # Exit: 0 ready · 1 checks missing, pending or failing · 2 stale / unproven · 3 usage.
 set -euo pipefail
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "merge-ready: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 usage() { echo "usage: $0 <pr> [--revalidate]" >&2; exit 3; }
 [ $# -ge 1 ] && [ $# -le 2 ] || usage
 pr=$1 revalidate=false
@@ -47,9 +49,9 @@ case $rc in
   0|1|8) ;;
   *) echo "NOT READY: gh pr checks failed (exit $rc) — the checks of PR #$pr could not be read" >&2; exit 1 ;;
 esac
-total=$(printf '%s\n' "$buckets" | grep -c . || [ $? -eq 1 ])
-bad=$(printf '%s\n' "$buckets" | grep -cE '^(fail|cancel)$' || [ $? -eq 1 ])
-pending=$(printf '%s\n' "$buckets" | grep -cE '^pending$' || [ $? -eq 1 ])
+total=$(value_of -ok 1 grep -c . <<<"$buckets") || exit 1
+bad=$(value_of -ok 1 grep -cE '^(fail|cancel)$' <<<"$buckets") || exit 1
+pending=$(value_of -ok 1 grep -cE '^pending$' <<<"$buckets") || exit 1
 
 runinfo=$(gh run list --workflow ci.yml --event pull_request --commit "$head" --repo "$repo" --limit 1 \
   --json databaseId,status,conclusion -q '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"')
@@ -110,7 +112,7 @@ tree=""
 # still counted as proof (#462). A gh that fails here means "no proof", i.e. stale — never "ready".
 treeruns=$(gh run list --workflow merge-tree.yml --event workflow_dispatch --repo "$repo" --limit 30 \
   --json databaseId,status,conclusion,displayTitle \
-  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null) || treeruns=""
+  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null) || { echo "NOT READY: gh run list (merge-tree.yml) failed — no merge-tree run can be proven for PR #$pr" >&2; exit 1; }
 while read -r id st concl title; do
   if [ "$st" = completed ] && [ "$concl" = success ] && [ "$title" = "$want" ]; then tree=$id; break; fi
 done <<<"$treeruns"

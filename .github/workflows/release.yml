@@ -77,8 +77,7 @@ jobs:
             echo "manual dispatch: releasing \`$HEAD_SHA\` unconditionally" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          rc=0; base=$(git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null) || rc=$?
-          if [ "$rc" != 0 ]; then base=""; echo "git describe exited $rc: no tag reachable from $HEAD_SHA, releasing" >&2; fi
+          if base=$(git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null); then :; else rc=$?; base=""; echo "git describe exited $rc: no tag reachable from $HEAD_SHA, releasing" >&2; fi
           if [ -z "$base" ]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "no previous tag reachable from \`$HEAD_SHA\`: releasing" >> "$GITHUB_STEP_SUMMARY"
@@ -348,7 +347,11 @@ jobs:
           fi
           if [ -z "$past_gate" ]; then
             echo "::warning::no ci.yml pull_request run of $branch got past approval, dispatching it instead"
-            echo "ci.yml: dispatched, not approved ($({ wc -l < "$RUNNER_TEMP/approve-errors.txt"; } 2>/dev/null || echo 0) approve failure(s), last runs seen: $runs)" >> "$GITHUB_STEP_SUMMARY"
+            approve_failures=0   # the loop above writes one line per failed approve; no file = it never failed. Counted in bash: no wc whose failure could print as 0
+            if [ -f "$RUNNER_TEMP/approve-errors.txt" ]; then
+              while IFS= read -r _; do approve_failures=$((approve_failures + 1)); done < "$RUNNER_TEMP/approve-errors.txt"
+            fi
+            echo "ci.yml: dispatched, not approved ($approve_failures approve failure(s), last runs seen: $runs)" >> "$GITHUB_STEP_SUMMARY"
             gh workflow run ci.yml --repo "$REPO" --ref "$branch"
           fi
           gh workflow run release-gate.yml --repo "$REPO" --ref main -f pr="$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')"
