@@ -20,9 +20,11 @@
 #   default   (#470) a failed command turned into a value. Two kinds are flagged: (a) `x=$(…) || H` where H is outside the hshape() whitelist (nothing or
 #             `$?` straight after the `||`; otherwise a literal 1..255; inside braces only a literal 1..255); (b) a `$( … )` whose content is not ONE `&&` chain
 #             of simple pipelines (no `;`, second line, `&`, `!`, subshell, group), optionally followed by one non-zero `|| exit` handler, or the label
-#             `$([ test ] && echo a || echo b)`. Not exemptible.
+#             `$([ test ] && echo a || echo b)`. Not exemptible. A handler (`exit N`, `{ …; exit N; }`) must END the AND-OR list: only blanks, `;` or ` # comment`
+#             may follow it; `&` (background), `|`, `&&`, `||` after it are red. The guarantee stops at the red/green fixture matrix in scripts/test.sh: a line scanner is a heuristic.
 #             KNOWN GAPS, not detected (tracked in #472, parser rewrite): `$(…)` in an argument (`echo "$(cmd)"`, `f "$(cmd)"`), a nested substitution
-#             (`$(echo "$(cmd)")`), `$(…)` inside a heredoc or here-string, the dynamic content of eval / . / source.
+#             (`$(echo "$(cmd)")`), `$(…)` inside a heredoc or here-string, the dynamic content of eval / . / source, a handler whose AND-OR list is
+#             backgrounded or piped in a shape the scanner does not see (`&` and `|` right after the handler are caught since r2f).
 #   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` must be followed on its own line (or after a heredoc substitution's closing line) by
 #             one of THREE shapes: `|| return` / `|| exit` (bare, or with `$?` straight after the `||`), `|| return N` / `|| exit N` (N a literal 1..255), or
 #             `|| { …; return N; }` / `{ …; exit N; }` (the group's LAST statement, N a literal 1..255; no bare, no `$?`, no `$var`). Nothing else:
@@ -109,7 +111,7 @@ cat > "$tmp/common.awk" <<'AWK'
 #   brace   { …; return N; }  { …; exit N; }                                                    the LAST statement, N a non-zero integer literal. No bare, no `$?`, no `$var`.
 # hshape(h, exit_only): 1 when the handler text h (what follows `||`, a brace group possibly joined from several lines with " ; ") is one of them.
 # exit_only: inside a $(…) the handler may only `exit` (the status of the substitution reaches the assignment), never `return`.
-function hshape(h, exit_only,   hs, blk, ns, st, i, verb, lit, last) {
+function hshape(h, exit_only,   blk, ns, st, i, verb, lit, last) {
   verb = exit_only ? "exit" : "(return|exit)"
   lit = "\"?([1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\"?"             # 1..255: an exit status is taken modulo 256, so 256 and 512 are 0
   sub(/^[ \t]+/, "", h)
@@ -118,11 +120,15 @@ function hshape(h, exit_only,   hs, blk, ns, st, i, verb, lit, last) {
     blk = substr(h, 1, index(h, "}") - 1); sub(/^\{[ \t]*/, "", blk); sub(/[ \t;]+$/, "", blk)
     if (blk ~ /[{}]/) return 0                                       # nested groups: not judged, so not accepted
     ns = split(blk, st, ";"); last = st[ns]; sub(/^[ \t]+/, "", last); sub(/[ \t]+$/, "", last)
-    return (last ~ ("^" verb "[ \t]+" lit "$"))
+    if (last !~ ("^" verb "[ \t]+" lit "$")) return 0
+    return htail(substr(h, index(h, "}") + 1))                      # what follows the `}`: `&`, `|`, `&&` would move the handler out of the foreground
   }
-  hs = h; sub(/[ \t]*(;|&&|\|\|).*/, "", hs)                        # a plain shape ends at the first separator
-  return (hs ~ ("^" verb "([ \t]+(\\$\\?|\"\\$\\?\"|" lit "))?$"))
+  if (!match(h, ("^" verb "([ \t]+(\\$\\?|\"\\$\\?\"|" lit "))?"))) return 0
+  return htail(substr(h, RLENGTH + 1))                              # what follows `exit N`: the same boundary as the brace shape
 }
+# the boundary of a handler: only blanks, a `;` (a new statement starts there) or a ` # comment` may follow it. `&` (the whole AND-OR list runs in the background,
+# `exit` only leaves that subshell), `|` (a pipeline subshell), `&&`, `||` and anything else: not judged, so not accepted.
+function htail(r) { return (r ~ /^[ \t\002]*$/ || r ~ /^[ \t\002]*;/ || r ~ /^[ \t\002]+#/) }
 AWK
 cat > "$tmp/scan.awk" <<'AWK'
 # Reads the files named on the command line. Prints "file:line: rule: code" per finding; exit 1 if there was one.
@@ -487,4 +493,4 @@ if [ -s "$tmp/out" ]; then
   echo "check-exit-swallow: $(wc -l < "$tmp/out" | tr -d ' ') finding(s). Fix the line, or for rules that allow it add '# exit-ok: <why the status cannot change the verdict>' (docs/ci.md). default and fnctx findings CANNOT be exempted: after \`x=\$(…) ||\` only \`return\`/\`exit\` (bare or \`\$?\` straight after the \`||\`), \`return N\`/\`exit N\` or \`{ …; return N; }\`/\`{ …; exit N; }\` with N a literal 1..255 (no \$var, no \`\$?\` after another command); inside \$(…) only an \`&&\` chain of pipelines (no ; newline & !), optionally with \`|| exit [N]\`, or the label \`[ test ] && echo a || echo b\`." >&2
   exit 1
 fi
-echo "check-exit-swallow: $nscripts scripts and the run: scripts of $nyml workflow / action files, no swallowed exit status"
+echo "check-exit-swallow: $nscripts scripts and the run: scripts of $nyml workflow / action files, no finding for the covered shapes (heuristic; see docs/ci.md, #472)"

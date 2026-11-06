@@ -3185,6 +3185,49 @@ F
 dr_red group-after-and 'half0' <<'F'
 v=$(true && { cmd; echo 0; })
 F
+# r2f: what follows the handler. `&` runs the whole AND-OR list in a background subshell and `|` in a pipeline subshell: `exit 1` only leaves THAT subshell, the
+# script goes on with the old (or the half-printed) value (real shell: v=[sentinel] / v=[half]). `&&` after the handler is red too (the checker's boundary; the real shell still
+# exits there, so these two have no real-shell half). Only blanks, `;` and a ` # comment` may follow the handler.
+dr_red handler-background 'sentinel' <<'F'
+v=sentinel
+v=$(cmd) || { exit 1; } &
+wait
+F
+dr_red handler-brace-pipe 'half' <<'F'
+set -o pipefail   # so that the pipeline rule is not what turns it red
+v=sentinel
+v=$(cmd) || { exit 1; } | cat
+F
+dr_red handler-plain-pipe 'half' <<'F'
+set -o pipefail   # so that the pipeline rule is not what turns it red
+v=sentinel
+v=$(cmd) || exit 1 | cat
+F
+dr_red handler-plain-background 'sentinel' <<'F'
+v=sentinel
+v=$(cmd) || exit 1 &
+wait
+F
+df_red handler-plain-and <<'F'
+v=$(cmd) || exit 1 && echo "$v"
+F
+df_red handler-brace-and <<'F'
+v=$(cmd) || { exit 1; } && echo "$v"
+F
+shape_red handler-bg-in-function $'  x=sentinel\n  x=$(cmd) || { return 1; } &\n  wait'
+shape_red handler-pipe-in-function $'  x=sentinel\n  x=$(cmd) || return 1 | cat'
+{ dr_prelude; printf 'f2() {\n  x=sentinel\n  x=$(cmd) || { return 1; } &\n  wait\n  printf "x=[%%s]\\n" "$x"\n}\nf2\n'; } > "$sw/dr-handler-bg-fn.sh"
+real_rc=0; capture -2 real real_rc bash "$sw/dr-handler-bg-fn.sh" || exit 1
+expect_match "default (half-print): [handler-bg-in-function] — the real shell really keeps the old value" 'x=\[sentinel\]' "$real"
+dr_green handler-trailing-comment 1 <<'F'
+v=$(cmd) || { exit 1; }  # c
+F
+dr_green handler-trailing-semicolon 1 <<'F'
+v=$(cmd) || { exit 1; };
+F
+dr_green handler-plain-comment 1 <<'F'
+v=$(cmd) || exit 1  # c
+F
 dr_green substitution-exit 3 <<'F'
 v=$(cmd || exit 3) || exit $?
 F
