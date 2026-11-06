@@ -74,7 +74,9 @@ if [ "${1:-}" != "--diag-child" ]; then
   [ -z "$sig_rc" ] || rc=$sig_rc
   trap '' TERM INT HUP
   cap="$cap_dir/console"
-  count_into size -c "$cap"
+  # the wrapper runs before the collector's helpers exist: wc into a file next to the capture, read it back; a failed wc leaves 0 (the size only decides whether to say "cut")
+  if wc -c < "$cap" > "$cap.n" 2>/dev/null && read -r size < "$cap.n"; then :; else size=0; fi
+  rm -f "$cap.n"
   head -c "$console_budget" "$cap"
   if [ "$size" -gt "$console_budget" ]; then
     printf '\n[diag: the console budget of %s bytes is used up; nothing more is printed here, the whole output is in %.200s/console.full]\n::endgroup::\n' "$console_budget" "$dir"
