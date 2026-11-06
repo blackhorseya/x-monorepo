@@ -17,10 +17,12 @@
 #   procsub   `done < <(cmd)`, `diff <(a) <(b)`: the status of a process substitution is never seen, even under set -e / pipefail
 #   rcbranch  `v=$(cmd) || rc=$?` whose output $v is used: $rc must be read (before $v is) by lines that can refuse it (return / exit / continue /
 #             break; no function names, and a new value for $v is the failure swallowed; top-level code only: inside a function the fnctx shapes apply). Heuristic: it checks that a refusing branch EXISTS, not that it is right. Only scripts/test.sh itself is exempt (a test.sh elsewhere is scanned).
-#   default   (#470) a failed command turned into a value. CLOSED whitelists, including the ARGUMENT of exit / return (1..255 literal, nothing, or `$?` straight
-#             after the `||`; never `$var`, never `$?` after another command, never 256). After `x=$(…) ||`: hshape(). The content of a $( … ) may only be ONE
-#             `&&` chain of pipelines (no `;`, second line, `&`, `!`), optionally followed by `|| exit [N]` / `|| { …; exit N; }`, or the label
-#             `$([ test ] && echo a || echo b)` (no $( ` <( inside the test). Not exemptible.
+#   default   (#470) a failed command turned into a value. Two kinds are flagged: (a) `x=$(…) || H` where H is outside the hshape() whitelist (nothing or
+#             `$?` straight after the `||`; otherwise a literal 1..255; inside braces only a literal 1..255); (b) a `$( … )` whose content is not ONE `&&` chain
+#             of simple pipelines (no `;`, second line, `&`, `!`, subshell, group), optionally followed by one non-zero `|| exit` handler, or the label
+#             `$([ test ] && echo a || echo b)`. Not exemptible.
+#             KNOWN GAPS, not detected (tracked in #472, parser rewrite): `$(…)` in an argument (`echo "$(cmd)"`, `f "$(cmd)"`), a nested substitution
+#             (`$(echo "$(cmd)")`), `$(…)` inside a heredoc or here-string, the dynamic content of eval / . / source.
 #   fnctx     inside ANY function body, `x=$(cmd)` / `x="$(cmd)"` must be followed on its own line (or after a heredoc substitution's closing line) by
 #             one of THREE shapes: `|| return` / `|| exit` (bare, or with `$?` straight after the `||`), `|| return N` / `|| exit N` (N a literal 1..255), or
 #             `|| { …; return N; }` / `{ …; exit N; }` (the group's LAST statement, N a literal 1..255; no bare, no `$?`, no `$var`). Nothing else:
