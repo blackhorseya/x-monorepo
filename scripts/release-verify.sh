@@ -14,7 +14,7 @@ version=${tag#v}
 id="https://github.com/$repo/.github/workflows/release.yml@refs/heads/main"
 iss=https://token.actions.githubusercontent.com
 
-dir=$(mktemp -d)
+dir=$(mktemp -d) || exit $?
 trap 'rm -rf "$dir"' EXIT
 cd "$dir"
 gh release download "$tag" --repo "$repo" -p 'checksums.txt*' -p '*.tar.gz'

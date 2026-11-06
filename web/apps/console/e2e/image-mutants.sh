@@ -10,10 +10,12 @@
 # Output: one line per mutant, `mutant <name>: RED (<failed tests>)` / `GREEN`; exit 1 if the control is red
 # or a mutant is green. Which spec files failed is printed so that "A stays green, B goes red" can be read off.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a path, without dirname inside $(…)
+app_dir=$(abs_dir_of "$0" ..) || exit 1
+cd "$app_dir" || exit 1
 [ -f dist/index.html ] || { echo "image-mutants: dist/ missing, run task web-build" >&2; exit 1; }
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/console-mutants.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/console-mutants.XXXXXX") || exit 1
 trap 'rm -rf "$work"' EXIT
 
 # mutate <name> <file under deploy/> <sed expression>: prepares $work/<name> and fails if the sed changed nothing

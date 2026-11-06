@@ -46,7 +46,7 @@ save_build=false
 if [[ $write == true && $saver == true ]]; then save_build=true; fi
 
 # an assignment, not `echo "week=$(date ...)"`: a failing date must stop the script, not become "week="
-week=$(date -u +%G-W%V)
+week=$(date -u +%G-W%V) || exit $?
 if [[ ! $week =~ ^[0-9]{4}-W[0-9]{2}$ ]]; then
   echo "plan: date did not give an ISO week" >&2
   exit 1

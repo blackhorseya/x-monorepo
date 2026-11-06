@@ -25,10 +25,16 @@
 # TASKFILE=<file in the repo root> runs the same cells against another Taskfile (default Taskfile.yml),
 # to show them red on an older one: git show <old sha>:Taskfile.yml > Taskfile.old.yml (delete it afterwards).
 set -uo pipefail
-cd "$(dirname "$0")/../../.."
+. "$(dirname "$0")/../../../scripts/best-effort.sh"   # capture (#466)
+# the directory of $0 (plus an optional subdirectory) as an absolute path: no dirname inside $(…) around a cd
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }
+root=$(abs_dir_of "$0" ../../..) || exit 1
+cd "$root" || exit 1
 
 TASKFILE=${TASKFILE:-Taskfile.yml}
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }
+# first_lines <n> <file>: the first n lines on one line, for a failure message (read through capture: a failed read leaves the text empty, the failure being reported is already known)
+first_lines() { head -"$1" "$2" | tr '\n' '|'; }
 
 tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
@@ -69,12 +75,15 @@ le1() {
   return 0
 }
 values_of() {
+  local l rest t f nf   # the loop below runs in this shell now (it used to run in a pipe subshell): keep its names away from the caller
   case $1 in
     cluster)
       { grep -oE -- '--name [^ ]+' "$2" | sed 's/^--name //'
         grep -oE -- 'grep -qx [^ ]+' "$2" | sed 's/^grep -qx //'; } ;;
     kubeconfig)
-      sed 's/^task: \[[^]]*\] //' "$2" | grep -E '(^|[;|& ])(kubectl|helm|kind) |deployments/helm/kind/[a-z-]+\.sh ' | while IFS= read -r l; do
+      # the loop reads a file, not a pipe: a `return 1` in its body must leave values_of, not just the pipe's subshell (grep finding no command is 1: an empty loop, caught by the anchor)
+      sed 's/^task: \[[^]]*\] //' "$2" | le1 grep -E '(^|[;|& ])(kubectl|helm|kind) |deployments/helm/kind/[a-z-]+\.sh ' > "$tmp/kc-lines" || return 1
+      while IFS= read -r l; do
         # the cluster of every runner call (`run.sh "<bin>/kind/kubeconfig-<cluster>" <command>`)
         printf '%s\n' "$l" | grep -oE 'deployments/helm/kind/run\.sh "[^"]*kubeconfig-[a-z0-9.-]+" (kubectl|helm|kind|deployments/helm/kind/[a-z0-9-]+\.sh) ' \
           | sed -E 's/.*kubeconfig-([a-z0-9.-]+)" .*/\1/'
@@ -88,7 +97,7 @@ values_of() {
           nf=$(printf '%s\n' "$f" | le1 grep -c .) || return 1   # no line is 1 (nf=0); a broken grep fails the cell instead of counting
           if [ "$nf" = "$t" ]; then printf '%s\n' "$f" | grep .; else echo MISSING; fi ;;
         esac
-      done ;;
+      done < "$tmp/kc-lines" ;;
     kindkc)
       sed 's/^task: \[[^]]*\] //' "$2" | grep -E 'kind (create|delete) cluster' | while IFS= read -r l; do
         case $l in
@@ -101,6 +110,7 @@ values_of() {
       { grep -v 'kedacore/keda' "$2" | grep -oE -- ' -n [^ ]+' | sed 's/^ -n //'
         sed -E 's#deployments/helm/kind/run\.sh "[^"]*" ##g' "$2" | grep -oE -- 'deployments/helm/kind/[a-z-]+\.sh [^ ]+' | awk '{print $2}'; } ;;
   esac
+  return 0   # a filter that found nothing ends a branch with 1: the anchor (a minimum number of places) is what turns an empty result red; only the explicit `return 1` above is a failure
 }
 
 # run_cell <task> <kind: cluster|ns> <source: S1..S4> -> dry output in $tmp/out
@@ -145,14 +155,15 @@ for c in "${cells[@]}"; do
     case $s in S1|S3) want=x-monorepo; [ "$k" = kedans ] && want=keda ;; S2|S4) want=probe ;; esac
     id="$t $k $s"
     if ! run_cell "$t" "$k" "$s"; then
-      bad "$id: task --dry exited non-zero: $(head -3 "$tmp/out" | tr '\n' '|')"
+      capture msg msg_rc first_lines 3 "$tmp/out"
+      bad "$id: task --dry exited non-zero: $msg"
       continue
     fi
-    values_of "$k" "$tmp/out" > "$tmp/vals"
+    if ! values_of "$k" "$tmp/out" > "$tmp/vals"; then bad "$id: reading the expanded values failed"; continue; fi
     # this file has no `set -e`: read the status by hand (grep -c: 1 = no line, 2 = error) — `|| [ $? -eq 1 ]` alone would change nothing here
-    grc=0; n=$(grep -c . "$tmp/vals") || grc=$?
+    capture n grc grep -c . "$tmp/vals" || exit 1
     if [ "$grc" -gt 1 ]; then bad "$id: grep -c on the expanded values exited $grc"; continue; fi
-    got=$(sort -u "$tmp/vals" | tr '\n' ' ')
+    got=$(sort -u "$tmp/vals" | tr '\n' ' ') || { echo "target-test: sorting the expanded values of $id failed" >&2; exit 1; }
     [ "$s" = S1 ] && base=$n
     if [ "$got" != "$want " ]; then
       bad "$id: target is [${got% }], want [$want]"
@@ -174,7 +185,8 @@ for t in helm-kind-up helm-kind helm-kind-core helm-kind-payment helm-kind-keda 
     if env -u CLUSTER -u NS -u KEDA_NS task -t "$TASKFILE" --dry "$t" "$arg" 2>&1 | strip > "$tmp/out"; [ "${PIPESTATUS[0]}" -eq 0 ]; then
       bad "$id: exited 0"
     elif ! grep -q 'must be lowercase letters' "$tmp/out"; then
-      bad "$id: failed for another reason: $(head -2 "$tmp/out" | tr '\n' '|')"
+      capture msg msg_rc first_lines 2 "$tmp/out"
+      bad "$id: failed for another reason: $msg"
     elif grep -qE -- '--name|^task: \[[^]]+\] (kubectl|helm|kind|deployments/helm/kind)' "$tmp/out"; then
       bad "$id: commands were expanded before the refusal"
     else
@@ -185,7 +197,8 @@ done
 [ -e pwned ] && { bad "a refused name still ran a command (./pwned exists)"; rm -f pwned; }
 
 if [ -s "$tmp/ran" ]; then
-  bad "a tool ran under --dry: $(head -3 "$tmp/ran" | tr '\n' '|')"
+  capture msg msg_rc first_lines 3 "$tmp/ran"
+  bad "a tool ran under --dry: $msg"
 else
   ok
 fi

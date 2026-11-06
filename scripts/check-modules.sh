@@ -11,8 +11,8 @@
 #
 # Needs go and jq on PATH and fails without them; it never skips. Plain bash 3.2 (macOS) and 5 (ubuntu).
 set -euo pipefail
-abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
-root=$(abs_dir "$(dirname "$0")/..")
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # absolute dir of a path's dirname (+ subdir), no `cd … && pwd` inside $(…) (#470)
+root=$(abs_dir_of "$0" ..) || exit 1
 gowork=${1:-$root/go.work}
 
 [ -r "$gowork" ] || { echo "check-modules: cannot read $gowork" >&2; exit 1; }
@@ -26,5 +26,5 @@ modules=$(printf '%s\n' "$work_json" | jq -r -f "$root/scripts/modules.jq" 2>&1)
   printf '  %s\n' "$modules" >&2
   exit 1
 }
-n=$(printf '%s\n' "$modules" | wc -l | tr -d ' ')
+n=$(printf '%s\n' "$modules" | wc -l | tr -d ' ') || exit $?
 echo "check-modules: go.work lists $n modules, all representable in MODULES"

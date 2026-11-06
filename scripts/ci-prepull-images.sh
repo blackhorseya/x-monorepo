@@ -20,8 +20,9 @@
 #   postgres, redis  the Image constants of pgtest / redistest
 #   ryuk             ReaperDefaultImage of the testcontainers-go version go.work resolves
 set -euo pipefail
-. "$(dirname "$0")/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+. "$self_dir/best-effort.sh" || exit 1   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+cd "$self_dir/.." || exit 1
 run_in() { local d=$1; shift; ( cd "$d" && "$@" ); }   # a command in another directory, without `cd … && cmd` inside $(…) (#470)
 docker=${DOCKER:-docker}
 
@@ -30,11 +31,11 @@ const() { sed -n "s/^const $2 = \"\(.*\)\"\$/\1/p" "$1" | head -1; }
 if [[ -n "${IMAGES:-}" ]]; then
   images=$IMAGES
 else
-  pg=$(const pkgs/platform/postgres/pgtest/pgtest.go Image)
-  redis=$(const pkgs/platform/redis/redistest/redistest.go Image)
+  pg=$(const pkgs/platform/postgres/pgtest/pgtest.go Image) || exit $?
+  redis=$(const pkgs/platform/redis/redistest/redistest.go Image) || exit $?
   (cd pkgs/platform && go mod download github.com/testcontainers/testcontainers-go)
-  tc=$(run_in pkgs/platform go list -m -f '{{.Dir}}' github.com/testcontainers/testcontainers-go)
-  ryuk=$(const "$tc/internal/config/config.go" ReaperDefaultImage)
+  tc=$(run_in pkgs/platform go list -m -f '{{.Dir}}' github.com/testcontainers/testcontainers-go) || exit $?
+  ryuk=$(const "$tc/internal/config/config.go" ReaperDefaultImage) || exit $?
   for img in "$pg" "$redis" "$ryuk"; do
     [[ -n "$img" ]] || { echo "could not read an image name (pg='$pg' redis='$redis' ryuk='$ryuk')" >&2; exit 1; }
   done

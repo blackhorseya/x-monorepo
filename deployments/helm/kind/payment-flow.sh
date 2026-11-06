@@ -27,9 +27,9 @@ set -euo pipefail
 . "$(dirname "$0")/../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone; restore_step / restore_exit: restores (#462)
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
-abs_dir() { ( cd "$1" && pwd ); }   # an absolute directory without a `cd … && pwd` inside $(…) (#470)
-here=$(abs_dir "$(dirname "$0")")
-flow_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a script path, no dirname inside a substitution (#472)
+here=$(abs_dir_of "$0") || exit 1
+flow_start=$(date -u +%Y-%m-%dT%H:%M:%SZ) || exit $?
 ns=$1 release=$2 chart=$3 values=$4 flow=$5
 rport=${FLOW_RPC_PORT:-18094} sport=${FLOW_SERVE_PORT:-18095}
 api="http://127.0.0.1:$rport/api" serve="http://127.0.0.1:$sport"
@@ -49,7 +49,7 @@ on_signal() { # <exit status>: stop the waited-for child, then leave through the
   trap '' TERM INT HUP   # a second signal must not cut the diagnosis or the restore short
   # the child and ITS children (a wrapper around helm / kubectl leaves its own child behind otherwise)
   if [ -n "$cur" ]; then
-    if ! kids=$(value_of -ok 1 pgrep -P "$cur"); then kids=""; fi   # explicit pids, never a pattern; 1 = no children, 2+ = pgrep failed (said on stderr by value_of): the child itself is still stopped below and the script still leaves
+    capture kids kids_rc value_of -ok 1 pgrep -P "$cur" || { echo "payment-flow: capture failed for pgrep" >&2; kids=""; }   # explicit pids, never a pattern; 1 = no children, 2+ = pgrep failed (said on stderr by value_of, which then prints nothing: $kids is empty): the child itself is still stopped below and the script still leaves
     for c in $kids; do kill "$c" 2>/dev/null || true; done
     kill "$cur" 2>/dev/null || true; wait "$cur" 2>/dev/null || true; cur=""
   fi
@@ -81,8 +81,8 @@ forwards() {
 }
 
 # the two credentials, from the overlay itself
-shopper_key=$(sed -n 's/.*shopper=\([A-Za-z0-9._-]*\).*/\1/p' "$flow" | head -1)
-admin_key=$(sed -n 's/.*admin=\([A-Za-z0-9._-]*\):admin.*/\1/p' "$flow" | head -1)
+shopper_key=$(sed -n 's/.*shopper=\([A-Za-z0-9._-]*\).*/\1/p' "$flow" | head -1) || exit $?
+admin_key=$(sed -n 's/.*admin=\([A-Za-z0-9._-]*\):admin.*/\1/p' "$flow" | head -1) || exit $?
 [ -n "$shopper_key" ] && [ -n "$admin_key" ] || fail "no shopper / admin key in $flow"
 
 # call <key> <path> <json>: sets $res ("<http status> <x-error-code or ->") and $body in THIS shell, so it is called
@@ -115,6 +115,7 @@ call() {
   [ -n "$xc" ] || xc=-
   res="$st $xc"
 }
+isolated() { ( "$@" ); }   # a function run in a subshell: the globals call() sets ($res, $body) keep the value of the last direct call, as they did when these reads were $(…)
 want() { [ "$2" = "$3" ] || fail "$1: got '$2', want '$3' (body: ${body:-})"; }
 as_shopper() { call "$shopper_key" "$@"; }
 as_admin() { call "$admin_key" "$@"; }
@@ -123,22 +124,38 @@ db() { kubectl -n "$ns" exec deploy/postgres -- psql -U app -d app -tAq -c "$1";
 order_status() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.status // "-"' <<<"$body"; }   # a failed read is a failure, never a status
 wait_order() { # <order> <ORDER_STATUS_X> [seconds]
   local s=""
-  for ((_try101 = 1; _try101 <= "${3:-60}"; _try101++)); do if s=$(order_status "$1"); then [ "$s" = "$2" ] && return 0; else s="(status read failed)"; fi; sleep 1; done
+  local s_rc
+  for ((_try101 = 1; _try101 <= "${3:-60}"; _try101++)); do
+    capture s s_rc isolated order_status "$1" || return 1
+    if [ "$s_rc" = 0 ]; then [ "$s" = "$2" ] && return 0; else s="(status read failed)"; fi
+    sleep 1
+  done
   fail "order $1 is '$s' after ${3:-60}s, want $2"
 }
 steady() { # <order> <ORDER_STATUS_X> <seconds>: still this status for the whole window (the caller proved it could have moved)
-  for ((_try105 = 1; _try105 <= "$3"; _try105++)); do [ "$(order_status "$1")" = "$2" ] || fail "order $1 left $2 within $3s"; sleep 1; done
+  local s
+  for ((_try105 = 1; _try105 <= "$3"; _try105++)); do
+    capture s s_rc order_status "$1" || return 1
+    [ "$s_rc" = 0 ] || fail "order $1 could not be read within $3s"
+    [ "$s" = "$2" ] || fail "order $1 left $2 within $3s"
+    sleep 1
+  done
 }
 pay_status() { as_shopper payment.v1.PublicPaymentService/GetPayment "{\"order_id\":\"$1\"}" >/dev/null; jq -r '.payment.status // "-"' <<<"$body"; }
 wait_payment() { # <order> <PAYMENT_STATUS_X> [seconds]
   local s=""
-  for ((_try110 = 1; _try110 <= "${3:-60}"; _try110++)); do if s=$(pay_status "$1"); then [ "$s" = "$2" ] && return 0; else s="(status read failed)"; fi; sleep 1; done
+  local s_rc
+  for ((_try110 = 1; _try110 <= "${3:-60}"; _try110++)); do
+    capture s s_rc isolated pay_status "$1" || return 1
+    if [ "$s_rc" = 0 ]; then [ "$s" = "$2" ] && return 0; else s="(status read failed)"; fi
+    sleep 1
+  done
   fail "payment of order $1 is '$s' after ${3:-60}s, want $2"
 }
 mock() { kubectl -n "$ns" exec "deploy/$release-payment-serve" -- /app mock "$@"; }
 hook="http://127.0.0.1:8080/api/payment/webhook" # the webhook route, from inside the serve pod
 refs() { db "SELECT provider_ref FROM payment.payments WHERE order_id = '$1'"; }
-refunds() { db "SELECT count(*) FROM payment.mock_refunds WHERE ref = '$(refs "$1")'"; }
+refunds() { local ref; ref=$(refs "$1") || return 1; db "SELECT count(*) FROM payment.mock_refunds WHERE ref = '$ref'"; }
 job_state() { # <job>: "<failed> <succeeded>" from ONE pair of reads. A failed read is a failure (nonzero): job()'s loop tries again, and a run that never completes fails there
   local ok bad
   ok=$(value_of kubectl -n "$ns" get job "$1" -o jsonpath='{.status.succeeded}') || return
@@ -146,11 +163,13 @@ job_state() { # <job>: "<failed> <succeeded>" from ONE pair of reads. A failed r
   echo "${bad:-0} ${ok:-0}"
 }
 job() { # <cronjob> -> one run to completion
-  local j ok bad st
-  j="flow-$1-$(date +%s)-$RANDOM"
+  local j ok bad st st_rc now
+  now=$(date +%s) || return 1
+  j="flow-$1-$now-$RANDOM"
   kubectl -n "$ns" create job "$j" --from="cronjob/$release-$1" >/dev/null
   for ((_try120 = 1; _try120 <= 90; _try120++)); do
-    if st=$(job_state "$j"); then
+    capture st st_rc job_state "$j" || return 1
+    if [ "$st_rc" = 0 ]; then   # a failed read is a retry: a run that never completes fails below
       bad=${st% *} ok=${st#* }
       [ "$bad" != 0 ] && { best_effort kubectl -n "$ns" logs "job/$j" --tail=30; fail "$1 run failed"; }
       [ "$ok" = 1 ] && { kubectl -n "$ns" delete job "$j" >/dev/null; return 0; }
@@ -162,19 +181,21 @@ job() { # <cronjob> -> one run to completion
 payment_sweep() { job payment-expire; }
 
 place() { # -> the id of an order that is CONFIRMED (stock seeded by the admin, ordered by the shopper)
-  local sku r
-  sku="flow-$(date +%s)-$RANDOM"
+  local sku r now
+  now=$(date +%s) || return 1
+  sku="flow-$now-$RANDOM"
   as_admin catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}"; want "UpsertProduct" "${res%% *}" 200
   as_admin inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}"; want "SetStock" "${res%% *}" 200
   as_shopper ordering.v1.OrderService/CreateOrder "{\"customer_id\":\"shopper\",\"items\":[{\"sku\":\"$sku\",\"quantity\":1}]}"; want "CreateOrder" "${res%% *}" 200
-  local id; id=$(jq -r .order.id <<<"$body")
+  local id; id=$(jq -r .order.id <<<"$body") || return 1
   wait_order "$id" ORDER_STATUS_CONFIRMED
   printf '%s' "$id"
 }
 snapshot() { as_shopper ordering.v1.OrderService/GetOrder "{\"id\":\"$1\"}" >/dev/null; jq -r '.order.paymentRequired // false' <<<"$body"; }
 new_order() { # -> a CONFIRMED order that needs payment (snapshot true)
-  local id; id=$(place)
-  want "payment_required snapshot of $id (switch on)" "$(snapshot "$id")" true
+  local id snap; id=$(place) || return 1
+  snap=$(snapshot "$id") || return 1
+  want "payment_required snapshot of $id (switch on)" "$snap" true
   printf '%s' "$id"
 }
 with_payment() { # <order>: wait for its payment (created by consume), then start it; echoes nothing
@@ -189,69 +210,91 @@ up
 echo "payment-flow: the release runs with ordering.require_payment on, auth required, the mock control on"
 
 # 1 ── create → CONFIRMED → StartPayment → pay → webhook → COMPLETED ───────────────────────────────────────
-o=$(new_order); with_payment "$o"
+o=$(new_order) || exit $?; with_payment "$o"
 as_shopper ordering.v1.OrderService/CompleteOrder "{\"id\":\"$o\"}"; want "CompleteOrder of an order that needs payment" "$res" "400 order.payment_required"
-out=$(mock pay --order "$o" --deliver "$hook") || { fail "mock pay"; exit 1; }
-[ "$(jq -r .delivered_status <<<"$out")" = 200 ] || fail "the webhook was not accepted: $out"
+capture out out_rc mock pay --order "$o" --deliver "$hook" || exit 1
+[ "$out_rc" = 0 ] || fail "mock pay"
+capture delivered delivered_rc jq -r .delivered_status <<<"$out" || exit 1
+[ "$delivered_rc" = 0 ] || fail "the webhook answer could not be read: $out"
+[ "$delivered" = 200 ] || fail "the webhook was not accepted: $out"
 wait_order "$o" ORDER_STATUS_COMPLETED
-want "payment after the order completed" "$(pay_status "$o")" PAYMENT_STATUS_CAPTURED
+got=$(pay_status "$o") || exit 1
+want "payment after the order completed" "$got" PAYMENT_STATUS_CAPTURED
 echo "payment-flow 1: $o  CONFIRMED -> StartPayment -> paid -> webhook -> COMPLETED (CompleteOrder by hand refused: order.payment_required)"
 
 # 3 ── redelivery: the same notification again and again ──────────────────────────────────────────────────
-ev=$(jq -r .event_id <<<"$out")
-for _ in 1 2 3; do mock notify --ref "$(refs "$o")" --id "$ev" --type payment.captured --deliver "$hook" >/dev/null || fail "redelivery"; done
-want "webhook rows for one event after redelivery" "$(db "SELECT count(*) FROM payment.webhook_events WHERE provider_event_id = '$ev'")" 1
-want "order after redelivery" "$(order_status "$o")" ORDER_STATUS_COMPLETED
-want "payment after redelivery" "$(pay_status "$o")" PAYMENT_STATUS_CAPTURED
+ev=$(jq -r .event_id <<<"$out") || exit $?
+ref=$(refs "$o") || exit 1
+for _ in 1 2 3; do mock notify --ref "$ref" --id "$ev" --type payment.captured --deliver "$hook" >/dev/null || fail "redelivery"; done
+got=$(db "SELECT count(*) FROM payment.webhook_events WHERE provider_event_id = '$ev'") || exit 1
+want "webhook rows for one event after redelivery" "$got" 1
+got=$(order_status "$o") || exit 1
+want "order after redelivery" "$got" ORDER_STATUS_COMPLETED
+got=$(pay_status "$o") || exit 1
+want "payment after redelivery" "$got" PAYMENT_STATUS_CAPTURED
 echo "payment-flow 3: three redeliveries of the same notification: one row, order COMPLETED, payment CAPTURED"
 
 # 4 ── out of order / foreign ──────────────────────────────────────────────────────────────────────────────
-mock notify --ref "$(refs "$o")" --id "evt-unknown-$$" --type payment.some_future_event --amount 100 --currency USD --deliver "$hook" >/dev/null || fail "an unknown event type must be accepted (and ignored)"
+mock notify --ref "$ref" --id "evt-unknown-$$" --type payment.some_future_event --amount 100 --currency USD --deliver "$hook" >/dev/null || fail "an unknown event type must be accepted (and ignored)"
 mock notify --ref "no-such-checkout-$$" --id "evt-orphan-$$" --type payment.captured --amount 100 --currency USD --deliver "$hook" >/dev/null || fail "a notification for a checkout nobody owns must be accepted (and parked)"
-want "order after foreign notifications" "$(order_status "$o")" ORDER_STATUS_COMPLETED
+got=$(order_status "$o") || exit 1
+want "order after foreign notifications" "$got" ORDER_STATUS_COMPLETED
 echo "payment-flow 4: an unknown event type and a notification for a checkout nobody owns change nothing"
 
 # 2 ── delayed webhook, and the webhook that never comes ───────────────────────────────────────────────────
-o2=$(new_order); with_payment "$o2"
-d=$(mock pay --order "$o2") || { fail "mock pay (no delivery)"; exit 1; }
-want "paid at the provider" "$(db "SELECT paid FROM payment.mock_checkouts WHERE ref = '$(refs "$o2")'")" t
+o2=$(new_order) || exit $?; with_payment "$o2"
+capture d d_rc mock pay --order "$o2" || exit 1
+[ "$d_rc" = 0 ] || fail "mock pay (no delivery)"
+ref2=$(refs "$o2") || exit 1
+paid=$(db "SELECT paid FROM payment.mock_checkouts WHERE ref = '$ref2'") || exit 1
+want "paid at the provider" "$paid" t
 steady "$o2" ORDER_STATUS_CONFIRMED 8
-want "payment while the webhook is late" "$(pay_status "$o2")" PAYMENT_STATUS_PENDING
-curl -fsS -X POST -H "X-Payment-Signature: $(jq -r .signature <<<"$d")" --data-binary "$(jq -r .body <<<"$d")" "$serve/api/payment/webhook" >/dev/null || fail "late webhook refused"
+got=$(pay_status "$o2") || exit 1
+want "payment while the webhook is late" "$got" PAYMENT_STATUS_PENDING
+sig=$(jq -r .signature <<<"$d") || exit 1
+late_body=$(jq -r .body <<<"$d") || exit 1
+curl -fsS -X POST -H "X-Payment-Signature: $sig" --data-binary "$late_body" "$serve/api/payment/webhook" >/dev/null || fail "late webhook refused"
 wait_order "$o2" ORDER_STATUS_COMPLETED
-o3=$(new_order); with_payment "$o3"
+o3=$(new_order) || exit $?; with_payment "$o3"
 mock pay --order "$o3" >/dev/null || fail "mock pay (the webhook that never comes)"
 db "UPDATE payment.payments SET expires_at = now() - interval '5 minutes' WHERE order_id = '$o3'" >/dev/null
 payment_sweep
 wait_order "$o3" ORDER_STATUS_COMPLETED
-want "payment found by the sweep" "$(pay_status "$o3")" PAYMENT_STATUS_CAPTURED
+got=$(pay_status "$o3") || exit 1
+want "payment found by the sweep" "$got" PAYMENT_STATUS_CAPTURED
 echo "payment-flow 2: a late webhook completes the order; with no webhook at all the expire sweep finds the money (T6) and completes it"
 
 # 5 ── the customer cancels while paying; the money arrives late ───────────────────────────────────────────
-o=$(new_order); with_payment "$o"
+o=$(new_order) || exit $?; with_payment "$o"
 as_shopper ordering.v1.OrderService/CancelOrder "{\"id\":\"$o\"}"; want "CancelOrder" "${res%% *}" 200
 wait_order "$o" ORDER_STATUS_CANCELLED
 wait_payment "$o" PAYMENT_STATUS_CANCELLED
-want "the checkout was cancelled at the provider (T7)" "$(db "SELECT cancelled FROM payment.mock_checkouts WHERE ref = '$(refs "$o")'")" t
+ref=$(refs "$o") || exit 1
+cancelled=$(db "SELECT cancelled FROM payment.mock_checkouts WHERE ref = '$ref'") || exit 1
+want "the checkout was cancelled at the provider (T7)" "$cancelled" t
 mock pay --order "$o" --deliver "$hook" >/dev/null || fail "late payment"
 wait_payment "$o" PAYMENT_STATUS_REFUNDED
-want "refunds of the late payment" "$(refunds "$o")" 1
-want "order after the late payment" "$(order_status "$o")" ORDER_STATUS_CANCELLED
+got=$(refunds "$o") || exit 1
+want "refunds of the late payment" "$got" 1
+got=$(order_status "$o") || exit 1
+want "order after the late payment" "$got" ORDER_STATUS_CANCELLED
 echo "payment-flow 5: $o cancelled mid-payment, money arrived anyway: payment REFUNDED once, order stays CANCELLED"
 
 # 6 ── the window runs out; the money arrives late ──────────────────────────────────────────────────────────
-o=$(new_order); with_payment "$o"
+o=$(new_order) || exit $?; with_payment "$o"
 db "UPDATE payment.payments SET expires_at = now() - interval '5 minutes' WHERE order_id = '$o'" >/dev/null
 payment_sweep
 wait_order "$o" ORDER_STATUS_CANCELLED
 mock pay --order "$o" --deliver "$hook" >/dev/null || fail "late payment"
 wait_payment "$o" PAYMENT_STATUS_REFUNDED
-want "order after the late payment" "$(order_status "$o")" ORDER_STATUS_CANCELLED
-want "refunds" "$(refunds "$o")" 1
+got=$(order_status "$o") || exit 1
+want "order after the late payment" "$got" ORDER_STATUS_CANCELLED
+got=$(refunds "$o") || exit 1
+want "refunds" "$got" 1
 echo "payment-flow 6: $o expired (PaymentExpired cancelled it), money arrived late: REFUNDED once, order stays CANCELLED"
 
 # 7 ── the TTL sequence with the provider down ──────────────────────────────────────────────────────────────
-o=$(new_order); with_payment "$o"
+o=$(new_order) || exit $?; with_payment "$o"
 mock pay --order "$o" >/dev/null || fail "mock pay (webhook lost)"
 mock fail on >/dev/null || fail "mock fail on"
 db "UPDATE inventory.reservations SET created_at = now() - interval '25 hours', updated_at = now() - interval '25 hours' WHERE order_id = '$o'" >/dev/null
@@ -260,19 +303,23 @@ wait_order "$o" ORDER_STATUS_CANCELLED
 wait_payment "$o" PAYMENT_STATUS_CANCELLED
 payment_sweep
 steady "$o" ORDER_STATUS_CANCELLED 3
-want "payment while the provider is down" "$(pay_status "$o")" PAYMENT_STATUS_CANCELLED
-want "refunds while the provider is down" "$(refunds "$o")" 0
+got=$(pay_status "$o") || exit 1
+want "payment while the provider is down" "$got" PAYMENT_STATUS_CANCELLED
+got=$(refunds "$o") || exit 1
+want "refunds while the provider is down" "$got" 0
 mock fail off >/dev/null || fail "mock fail off"
 payment_sweep
 wait_payment "$o" PAYMENT_STATUS_REFUNDED
-want "refunds after recovery" "$(refunds "$o")" 1
-want "order after recovery" "$(order_status "$o")" ORDER_STATUS_CANCELLED
+got=$(refunds "$o") || exit 1
+want "refunds after recovery" "$got" 1
+got=$(order_status "$o") || exit 1
+want "order after recovery" "$got" ORDER_STATUS_CANCELLED
 echo "payment-flow 7: reservation TTL -> cancelled; provider down: sweeps change nothing; recovered: money found (T8), REFUNDED once, order stays CANCELLED"
 
 # 8 ── the switch (docs/payment.md §8: ordering looks at the order's snapshot, never at the current switch) ────────
 # on -> off: orders that became CONFIRMED under the switch are not touched by turning it off
-on_started=$(new_order); with_payment "$on_started"   # a checkout is open
-on_idle=$(new_order); wait_payment "$on_idle" PAYMENT_STATUS_PENDING   # payment exists, nobody started it
+on_started=$(new_order) || exit $?; with_payment "$on_started"   # a checkout is open
+on_idle=$(new_order) || exit $?; wait_payment "$on_idle" PAYMENT_STATUS_PENDING   # payment exists, nobody started it
 up --set config.ordering.require_payment=false
 as_shopper ordering.v1.OrderService/CompleteOrder "{\"id\":\"$on_started\"}"; want "CompleteOrder of a snapshot-true order, switch off" "$res" "400 order.payment_required"
 as_shopper payment.v1.PublicPaymentService/StartPayment "{\"order_id\":\"$on_idle\"}"; want "StartPayment, switch off" "$res" "400 payment.disabled"
@@ -282,8 +329,11 @@ db "UPDATE payment.payments SET expires_at = now() - interval '5 minutes' WHERE 
 payment_sweep
 wait_order "$on_idle" ORDER_STATUS_CANCELLED
 # orders confirmed with the switch off take snapshot false
-off_a=$(place); off_b=$(place); off_c=$(place)
-for o in "$off_a" "$off_b" "$off_c"; do want "payment_required snapshot of $o (switch off)" "$(snapshot "$o")" false; done
+off_a=$(place) || exit $?; off_b=$(place) || exit $?; off_c=$(place) || exit $?
+for o in "$off_a" "$off_b" "$off_c"; do
+  snap=$(snapshot "$o") || exit 1
+  want "payment_required snapshot of $o (switch off)" "$snap" false
+done
 as_shopper ordering.v1.OrderService/CompleteOrder "{\"id\":\"$off_a\"}"; want "CompleteOrder of a snapshot-false order, switch off" "${res%% *}" 200
 # off -> on: orders from before the switch came on are not touched by turning it on
 up
@@ -295,21 +345,24 @@ echo "payment-flow 8: switch on->off: the CONFIRMED order with an open checkout 
 # 9 ── payment-rpc stopped ───────────────────────────────────────────────────────────────────────────────
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=0 >/dev/null
 best_effort slow kubectl -n "$ns" wait --for=delete pod -l "app.kubernetes.io/component in (payment-serve,payment-consume)" --timeout=2m >/dev/null   # wait-gone: "no pods left" is the state wanted; the steps after it assert
-rpc_pods_before=$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}')
-sku="flow-down-$(date +%s)"
+rpc_pods_before=$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}') || exit $?
+now=$(date +%s) || exit 1
+sku="flow-down-$now"
 as_admin catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}" >/dev/null
 as_admin inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}" >/dev/null
 as_shopper ordering.v1.OrderService/CreateOrder "{\"customer_id\":\"shopper\",\"items\":[{\"sku\":\"$sku\",\"quantity\":1}]}"; want "CreateOrder with payment-rpc stopped" "${res%% *}" 200
-od=$(jq -r .order.id <<<"$body")
+od=$(jq -r .order.id <<<"$body") || exit $?
 wait_order "$od" ORDER_STATUS_CONFIRMED
 as_shopper payment.v1.PublicPaymentService/StartPayment "{\"order_id\":\"$od\"}"; want "StartPayment with payment-rpc stopped" "$res" "503 payment.unavailable"
 kubectl -n "$ns" scale "deploy/$release-payment-serve" "deploy/$release-payment-consume" --replicas=1 >/dev/null
 slow kubectl -n "$ns" rollout status "deploy/$release-payment-serve" "deploy/$release-payment-consume" --timeout=2m >/dev/null || fail "payment-rpc did not come back"
 forwards
 with_payment "$od"   # consume turns the OrderConfirmed that waited into the payment; the rpc pods were never restarted
-out=$(mock pay --order "$od" --deliver "$hook") || { fail "mock pay after recovery"; exit 1; }
+capture out out_rc mock pay --order "$od" --deliver "$hook" || exit 1
+[ "$out_rc" = 0 ] || fail "mock pay after recovery"
 wait_order "$od" ORDER_STATUS_COMPLETED
-want "rpc pods across the outage (names and restarts)" "$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}')" "$rpc_pods_before"
+rpc_pods_after=$(kubectl -n "$ns" get pods -l app.kubernetes.io/component=rpc -o jsonpath='{range .items[*]}{.metadata.name}:{.status.containerStatuses[0].restartCount} {end}') || exit 1
+want "rpc pods across the outage (names and restarts)" "$rpc_pods_after" "$rpc_pods_before"
 echo "payment-flow 9: payment-rpc stopped: the order was reserved and CONFIRMED, StartPayment answered 503 payment.unavailable; back again, the same rpc pods paid it to COMPLETED"
 
 finished=1

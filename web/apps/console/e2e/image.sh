@@ -11,8 +11,11 @@
 #   task web-e2e-image                 # what CI's console-image job runs
 #   e2e/image.sh --grep orders         # extra args go to playwright test
 set -euo pipefail
-. "$(dirname "$0")/../../../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-cd "$(dirname "$0")/.."
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a path, without dirname inside $(…)
+repo_root=$(abs_dir_of "$0" ../../../..) || exit 1
+app_dir=$(abs_dir_of "$0" ..) || exit 1
+. "$repo_root/scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+cd "$app_dir" || exit 1
 [ -f dist/index.html ] || { echo "image.sh: dist/ missing, run task web-build" >&2; exit 1; }
 
 if [ -n "${CONTAINER_TOOL:-}" ]; then tool=$CONTAINER_TOOL; elif command -v docker >/dev/null 2>&1; then tool=docker; else tool=podman; fi
@@ -53,13 +56,15 @@ expect_refused() {
   local label=$1 n=$name-refused; shift
   "$tool" rm -f "$n" >/dev/null 2>&1 || true
   "$tool" run -d --name "$n" ${host_opts[@]+"${host_opts[@]}"} -e "RPC_UPSTREAM=$upstream" "$@" "$img" >/dev/null
-  local status=""
+  local status="" status_rc=0
   for ((_try50 = 1; _try50 <= 40; _try50++)); do
-    if status=$(container_field Status "$n"); then [ "$status" = exited ] && break; else status=""; fi   # a failed inspect is a retry; running out of tries leaves status != exited, which fails below
+    capture status status_rc container_field Status "$n"   # a failed inspect leaves status empty (value_of prints nothing) and is a retry; running out of tries leaves status != exited, which fails below
+    [ "$status_rc" = 0 ] && [ "$status" = exited ] && break
     sleep 0.5
   done
   local code logs
-  code=$(container_field ExitCode "$n") || { echo "image.sh: cannot read the exit code of $n: a container whose exit code is unknown is not proven to have refused" >&2; "$tool" rm -f "$n" >/dev/null 2>&1 || true; exit 1; }
+  capture code code_rc container_field ExitCode "$n" || exit 1
+  if [ "$code_rc" != 0 ]; then echo "image.sh: cannot read the exit code of $n: a container whose exit code is unknown is not proven to have refused" >&2; best_effort "$tool" rm -f "$n" >/dev/null 2>&1; exit 1; fi
   case $code in ''|*[!0-9]*) echo "image.sh: the exit code of $n is not a number ([$code]): a container whose exit code is unknown is not proven to have refused" >&2; "$tool" rm -f "$n" >/dev/null 2>&1 || true; exit 1 ;; esac
   local lf lrc=0
   lf=$(mktemp "${TMPDIR:-/tmp}/image-logs.XXXXXX") || { echo "image.sh: cannot create a temp file for the logs of $n" >&2; exit 1; }
@@ -74,9 +79,9 @@ expect_refused() {
   echo "image.sh: refused as expected: $label"
 }
 expect_refused 'issuer with quote and brace' -e 'CONSOLE_OIDC_ISSUER=https://evil.example/"};x' -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
-expect_refused 'issuer with a newline' -e "CONSOLE_OIDC_ISSUER=$(printf 'https://idp.e2e.example/dex\nconnect-src *')" -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
-expect_refused 'issuer with a trailing newline' -e "CONSOLE_OIDC_ISSUER=$(printf 'https://idp.e2e.example/dex\n.')" -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
-expect_refused 'client id with a newline' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example/dex -e "CONSOLE_OIDC_CLIENT_ID=$(printf 'a\nb')"
+expect_refused 'issuer with a newline' -e $'CONSOLE_OIDC_ISSUER=https://idp.e2e.example/dex\nconnect-src *' -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
+expect_refused 'issuer with a trailing newline' -e $'CONSOLE_OIDC_ISSUER=https://idp.e2e.example/dex\n.' -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
+expect_refused 'client id with a newline' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example/dex -e $'CONSOLE_OIDC_CLIENT_ID=a\nb'
 expect_refused 'issuer with userinfo' -e CONSOLE_OIDC_ISSUER=https://user@idp.e2e.example/dex -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
 expect_refused 'issuer with a query' -e 'CONSOLE_OIDC_ISSUER=https://idp.e2e.example/dex?x=1' -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e
 expect_refused 'port 65536' -e CONSOLE_OIDC_ISSUER=https://idp.e2e.example:65536/dex -e CONSOLE_OIDC_CLIENT_ID=x-console-e2e

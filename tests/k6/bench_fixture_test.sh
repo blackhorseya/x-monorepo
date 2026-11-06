@@ -5,7 +5,7 @@
 set -euo pipefail
 js=${BENCH_JS:-tests/k6/bench.js}
 port=${PORT:-18290}
-work=$(mktemp -d)
+work=$(mktemp -d) || exit $?
 xpid=""
 stop() { [ -n "$xpid" ] && kill "$xpid" 2>/dev/null && wait "$xpid" 2>/dev/null || true; xpid=""; }
 trap 'stop; rm -rf "$work"' EXIT
@@ -33,11 +33,14 @@ run() {
 run a1 SETUP_DELAY_MS=0 -- -e PHASE=create -e VUS=1 -e DURATION=2s -e SEED=7
 run a2 SETUP_DELAY_MS=0 -- -e PHASE=create -e VUS=1 -e DURATION=2s -e SEED=7
 run a3 SETUP_DELAY_MS=0 -- -e PHASE=create -e VUS=1 -e DURATION=2s -e SEED=8
-n=$(wc -l < "$work/a1.skus"); m=$(wc -l < "$work/a2.skus"); k=$((n < m ? n : m))
+n=$(wc -l < "$work/a1.skus") || exit $?; m=$(wc -l < "$work/a2.skus") || exit $?; k=$((n < m ? n : m))
 [ "$k" -ge 20 ] && r=ok || r=bad; check $r "seed: enough SKUs to compare ($k)"
-[ "$(head -n "$k" "$work/a1.skus")" = "$(head -n "$k" "$work/a2.skus")" ] && r=ok || r=bad
+first1=$(head -n "$k" "$work/a1.skus") || exit 1
+first2=$(head -n "$k" "$work/a2.skus") || exit 1
+first3=$(head -n "$k" "$work/a3.skus") || exit 1
+[ "$first1" = "$first2" ] && r=ok || r=bad
 check $r "seed: two runs with SEED=7 ask for the same SKUs in the same order"
-[ "$(head -n "$k" "$work/a1.skus")" != "$(head -n "$k" "$work/a3.skus")" ] && r=ok || r=bad
+[ "$first1" != "$first3" ] && r=ok || r=bad
 check $r "seed: SEED=8 asks for a different sequence"
 
 # 2. CreateOrder takes 500ms: the end-to-end latency includes it, the worker's part does not
@@ -76,7 +79,8 @@ check $r "summary: rpc_errors per timeout code are exported (classify_threshold_
 # lasts 1s): the iteration is not cut off by gracefulStop but runs to its own timeout, and k6 fails the
 # run (reservation_timeouts). With the old gracefulStop it was cut off: k6 exit 0, nothing counted.
 run d1 CREATE_DELAY_MS=6500 NEVER_RESERVE=1 -- -e PHASE=reserve -e RATE=1 -e DURATION=1s -e PRE_VUS=1 -e MAX_VUS=1 -e RESERVE_TIMEOUT=1000
-python3 -I - "$work/d1.json" "$(cat "$work/d1.rc")" <<'PY' && r=ok || r=bad
+d1_rc=$(cat "$work/d1.rc") || exit 1
+python3 -I - "$work/d1.json" "$d1_rc" <<'PY' && r=ok || r=bad
 import json, sys
 rc = int(sys.argv[2])
 m = json.load(open(sys.argv[1]))["metrics"]

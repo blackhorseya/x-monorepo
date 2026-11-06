@@ -7,7 +7,7 @@
 set -euo pipefail
 bin=$1
 base=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
-work=$(mktemp -d)
+work=$(mktemp -d) || exit $?
 sentinels=()
 trap 'for d in ${sentinels[@]+"${sentinels[@]}"}; do psql "$base" -qAt -c "drop database if exists $d with (force)" >/dev/null 2>&1 || echo "bench_db_test: could not drop $d" >&2; done; rm -rf "$work"' EXIT   # cleanup of the sentinel databases; the cases that created them asserted already
 
@@ -20,11 +20,12 @@ EOF
 chmod +x "$work/fakebin/date"
 
 sentinel() { # <name>: a database with one row in it
+  local url
   sentinels+=("$1")
   psql "$base" -qAt -c "drop database if exists $1 with (force)" -c "create database $1" >/dev/null
-  psql "$(python3 -I -c 'import sys, urllib.parse as u
-p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base" "$1")" \
-    -qAt -c "create table keep(v int); insert into keep values (42)" >/dev/null
+  url=$(python3 -I -c 'import sys, urllib.parse as u
+p = u.urlsplit(sys.argv[1]); print(u.urlunsplit(p._replace(path="/" + sys.argv[2])))' "$base" "$1") || return 1
+  psql "$url" -qAt -c "create table keep(v int); insert into keep values (42)" >/dev/null
 }
 survives() { # <name>: still there, with its row
   local url
@@ -53,7 +54,7 @@ PATH="$work/fakebin:$PATH" RUNS=3 MAX_LOAD_PER_CORE=1000 CREATE_VUS=2 CREATE_DUR
   tests/k6/bench.sh "$bin" "$work/out2" > "$work/out2.log" 2>&1 || rc=$?
 [ "$rc" = 0 ] && r=ok || r=bad; check $r "same second: bench.sh completes (exit $rc)"
 survives k6_bench_20000101t000000z_1 && r=ok || r=bad; check $r "same second: the pre-existing old-format database survives"
-left=$(psql "$base" -qAt -c "select count(*) from pg_database where datname like 'k6_bench_20000101t000000z_%' and datname <> 'k6_bench_20000101t000000z_1' and datname <> 'k6_bench_20000101t000000z_fixed_1'")
+left=$(psql "$base" -qAt -c "select count(*) from pg_database where datname like 'k6_bench_20000101t000000z_%' and datname <> 'k6_bench_20000101t000000z_1' and datname <> 'k6_bench_20000101t000000z_fixed_1'") || exit $?
 [ "$left" = 0 ] && r=ok || r=bad; check $r "same second: the run's own databases are dropped ($left left)"
 
 [ "$fails" = 0 ] || { echo "FAIL: $fails check(s)"; tail -n 5 "$work/out1.log" "$work/out2.log"; exit 1; }

@@ -10,13 +10,14 @@
 # textual replace would corrupt them — regenerate with `task gen wire` afterwards
 # (`task rename` does that for you).
 set -euo pipefail
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 
 NEW="${1:-}"
 [[ -n "$NEW" ]] || { echo "usage: $0 <new module prefix, e.g. github.com/you/repo>" >&2; exit 2; }
 [[ "$NEW" =~ ^[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)+$ ]] || { echo "not a module path: $NEW" >&2; exit 2; }
 
-OLD=$(go mod edit -print pkgs/kernel/go.mod | awk '/^module /{print $2}')
+OLD=$(go mod edit -print pkgs/kernel/go.mod | awk '/^module /{print $2}') || exit $?
 OLD=${OLD%/pkgs/kernel}
 [[ "$OLD" != "$NEW" ]] || { echo "module prefix is already $NEW"; exit 0; }
 

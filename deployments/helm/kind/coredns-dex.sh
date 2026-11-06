@@ -15,7 +15,7 @@ set -euo pipefail
 ns=${1:?usage: coredns-dex.sh <namespace>}
 target="dex.$ns.svc.cluster.local"
 
-corefile=$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}')
+corefile=$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}') || exit $?
 # Drop our directive wherever it is (a stale target after a namespace change, or a copy that is
 # not where we want it), then put exactly one after `ready`, before `kubernetes`: the rewrite
 # must run before the zone lookup.
@@ -23,7 +23,7 @@ new=$(awk -v target="$target" '
   $1 == "rewrite" && $2 == "name" && $3 == "exact" && $4 == "dex.localtest.me" && NF == 5 { next }
   { print }
   $1 == "ready" && NF == 1 && !done { print "    rewrite name exact dex.localtest.me " target; done = 1 }
-' <<<"$corefile")
+' <<<"$corefile") || exit $?
 grep -qxF "    rewrite name exact dex.localtest.me $target" <<<"$new" \
   || { echo "coredns: no 'ready' line in the Corefile to anchor the rewrite" >&2; exit 1; }
 
@@ -32,8 +32,8 @@ if [ "$new" = "$corefile" ]; then
   exit 0
 fi
 
-kubectl -n kube-system patch configmap coredns --type merge \
-  -p "$(jq -n --arg c "$new" '{data: {Corefile: $c}}')" >/dev/null
+patch=$(jq -n --arg c "$new" '{data: {Corefile: $c}}') || exit 1
+kubectl -n kube-system patch configmap coredns --type merge -p "$patch" >/dev/null
 kubectl -n kube-system rollout restart deployment/coredns >/dev/null
 kubectl -n kube-system rollout status deployment/coredns --timeout=2m
 echo "coredns: dex.localtest.me → $target"

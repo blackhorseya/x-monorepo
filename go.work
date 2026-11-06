@@ -15,4 +15,5 @@ use (
 	./pkgs/payment
 	./pkgs/platform
 	./tools/stripvalidate
+	./tools/swallowast
 )

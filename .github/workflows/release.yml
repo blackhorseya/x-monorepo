@@ -72,12 +72,14 @@ jobs:
       - id: gate
         name: Anything to release since the last tag?
         run: |
+          . scripts/best-effort.sh   # capture: the status of git describe next to what it printed
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "manual dispatch: releasing \`$HEAD_SHA\` unconditionally" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if base=$(git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null); then :; else rc=$?; base=""; echo "git describe exited $rc: no tag reachable from $HEAD_SHA, releasing" >&2; fi
+          capture base describe_rc git describe --tags --abbrev=0 --match 'v*' "$HEAD_SHA" 2>/dev/null || exit 1
+          if [ "$describe_rc" != 0 ]; then base=""; echo "git describe exited $describe_rc: no tag reachable from $HEAD_SHA, releasing" >&2; fi
           if [ -z "$base" ]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "no previous tag reachable from \`$HEAD_SHA\`: releasing" >> "$GITHUB_STEP_SUMMARY"
@@ -86,7 +88,8 @@ jobs:
           # scripts/releasable.sh owns the list of paths that change no shipped artifact;
           # `task release-gate` runs the same script locally.
           releasable() { scripts/releasable.sh "$base" "$HEAD_SHA"; }
-          if [ -z "$(releasable)" ]; then
+          releasable_files=$(releasable) || exit 1
+          if [ -z "$releasable_files" ]; then
             echo "release=false" >> "$GITHUB_OUTPUT"
             echo "## skipped: nothing releasable since $base" >> "$GITHUB_STEP_SUMMARY"
             git diff --name-only "$base" "$HEAD_SHA" | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
@@ -197,7 +200,7 @@ jobs:
             --label org.opencontainers.image.version="$version" \
             --label org.opencontainers.image.licenses=MIT \
             web/apps/console
-          digest=$(jq -r '."containerimage.digest"' bin/console-metadata.json)
+          digest=$(jq -r '."containerimage.digest"' bin/console-metadata.json) || exit $?
           cosign sign --yes "$IMAGE@$digest"
       - run: |
           {
@@ -269,14 +272,16 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
+          . scripts/best-effort.sh   # capture: a failed read of the PR's runs is said and the previous read is kept
           chart=deployments/helm/x-monorepo/Chart.yaml
           v=${TAG#v}
-          cur=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' "$chart")
+          cur=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' "$chart") || exit $?
           if [ "$cur" = "$v" ]; then
             echo "chart appVersion already $v" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          IFS=. read -r a b c <<<"$(sed -n 's/^version: //p' "$chart")"
+          chart_version=$(sed -n 's/^version: //p' "$chart") || exit $?
+          IFS=. read -r a b c <<<"$chart_version"
           new="$a.$b.$((c + 1))"
           sed -i "s/^version: .*/version: $new/; s/^appVersion: .*/appVersion: \"$v\"/" "$chart"
           branch="chore/chart-appversion-$v"
@@ -286,7 +291,8 @@ jobs:
           git checkout -b "$branch"
           git commit -qam "$title"
           git push -f origin "$branch"
-          if [ "$(gh pr list --repo "$REPO" --head "$branch" --json number --jq 'length')" = 0 ]; then
+          open_prs=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq 'length') || exit $?
+          if [ "$open_prs" = 0 ]; then
             body="Opened by release.yml after publishing $TAG: \`image.tag\` empty now deploys the release that exists. Chart-only, so merging it cuts no version."
             if ! gh pr create --repo "$REPO" --base main --head "$branch" --title "$title" --body "$body"; then
               echo "::warning::could not open the PR (repo setting 'Allow GitHub Actions to create and approve pull requests' is off?)"
@@ -308,8 +314,8 @@ jobs:
           # and once a run has been seen past the gate that is remembered; this PR's other runs
           # awaiting approval (release-gate, ...) are still approved in that round. Polling is 12 rounds of
           # an API read + 5s sleep, i.e. at least 60s, not a hard cap.
-          sha=$(git rev-parse HEAD)
-          pr=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')
+          sha=$(git rev-parse HEAD) || exit $?
+          pr=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number') || exit $?
           # Non-zero when the list or the filter fails, so "no runs yet" ([]) and "could not read" differ.
           my_runs() {
             gh api "repos/$REPO/actions/runs?head_sha=$sha&event=pull_request&per_page=100" 2>/dev/null \
@@ -326,9 +332,10 @@ jobs:
           runs='[]'
           past_gate=""
           for ((_poll = 1; _poll <= 12; _poll++)); do
-            if now=$(my_runs); then runs=$now; fi
+            capture now now_rc my_runs || exit 1
+            if [ "$now_rc" = 0 ]; then runs=$now; fi
             if ci_past_gate "$runs"; then past_gate=1; fi
-            rows=""; rc=0; rows=$(jq -r ".[] | select($awaiting) | \"\\(.id) \\(.path)\"" <<<"$runs" 2>/dev/null) || rc=$?
+            capture rows rc jq -r ".[] | select($awaiting) | \"\\(.id) \\(.path)\"" <<<"$runs" 2>/dev/null || exit 1
             if [ "$rc" != 0 ]; then rows=""; echo "jq over the runs exited $rc: nothing to approve this round" >&2; fi   # whatever it printed before dying is not a list to act on
             while read -r id path; do
               [ -n "$id" ] || continue
@@ -342,7 +349,8 @@ jobs:
             sleep 5
           done
           if [ -z "$past_gate" ]; then
-            if now=$(my_runs); then runs=$now; fi
+            capture now now_rc my_runs || exit 1
+            if [ "$now_rc" = 0 ]; then runs=$now; fi
             ci_past_gate "$runs" && past_gate=1
           fi
           if [ -z "$past_gate" ]; then
@@ -354,5 +362,7 @@ jobs:
             echo "ci.yml: dispatched, not approved ($approve_failures approve failure(s), last runs seen: $runs)" >> "$GITHUB_STEP_SUMMARY"
             gh workflow run ci.yml --repo "$REPO" --ref "$branch"
           fi
-          gh workflow run release-gate.yml --repo "$REPO" --ref main -f pr="$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')"
-          echo "chart appVersion → $v: $(gh pr list --repo "$REPO" --head "$branch" --json url --jq '.[0].url')" >> "$GITHUB_STEP_SUMMARY"
+          pr_now=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number') || exit $?
+          gh workflow run release-gate.yml --repo "$REPO" --ref main -f pr="$pr_now"
+          pr_url=$(gh pr list --repo "$REPO" --head "$branch" --json url --jq '.[0].url') || exit $?
+          echo "chart appVersion → $v: $pr_url" >> "$GITHUB_STEP_SUMMARY"

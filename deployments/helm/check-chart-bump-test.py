@@ -86,6 +86,7 @@ case "$1" in
   archive) [ -n "$FAKE_BASE" ] || exit 1
            tar -c -C "$FAKE_BASE" deployments ;;
   fetch) exit "${FAKE_FETCH_RC:-0}" ;;
+  rev-parse) echo "${FAKE_SHALLOW:-false}"; exit "${FAKE_REVPARSE_RC:-0}" ;;
   *) exit 1 ;;
 esac
 ''')
@@ -101,9 +102,9 @@ def base_tree(name, **kw):
     return root
 
 
-def run_wrapper(fake_base, head, fetch_rc="0"):
+def run_wrapper(fake_base, head, fetch_rc="0", revparse_rc="0"):
     env = os.environ.copy()
-    env.update(PATH=f"{fake}:{env['PATH']}", FAKE_BASE=str(fake_base) if fake_base else "", FAKE_FETCH_RC=fetch_rc)
+    env.update(PATH=f"{fake}:{env['PATH']}", FAKE_BASE=str(fake_base) if fake_base else "", FAKE_FETCH_RC=fetch_rc, FAKE_REVPARSE_RC=revparse_rc)
     p = subprocess.run(["bash", str(WRAPPER), "main", str(head)], capture_output=True, text=True, env=env, cwd=HERE.parent.parent)
     return p.returncode, (p.stdout + p.stderr).strip()
 
@@ -114,6 +115,8 @@ expect("wrapper: base has an older template, lower version", run_wrapper(base_tr
 expect("wrapper: nothing changed", run_wrapper(base_tree("bw3", template="kind: Job\n"), head_same), 0)
 expect("wrapper: git cannot serve the base (fail closed)", run_wrapper(None, head_same), "nonzero")
 expect("wrapper: the fetch of the base fails (fail closed)", run_wrapper(base_tree("bw4", version="0.3.4"), head_same, fetch_rc="1"), "nonzero")
+# `git rev-parse --is-shallow-repository` prints `false` and then fails: the shallow question is unanswered, not "no" (it used to be read as "no")
+expect("wrapper: rev-parse --is-shallow-repository fails after printing (fail closed, exit 2)", run_wrapper(base_tree("bw5", version="0.3.4"), head_same, revparse_rc="1"), 2)
 
 shutil.rmtree(tmp, ignore_errors=True)
 if failures:

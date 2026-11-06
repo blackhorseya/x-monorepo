@@ -7,7 +7,8 @@
 # Offline apart from cosign itself. Needs cosign (the one release.yml pins) and python3. Locally:
 # scripts/cosign-v2-conflict-smoke.sh
 set -euo pipefail
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 exec python3 -I - <<'PY'
 import json, os, subprocess, sys, tempfile, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer

@@ -15,9 +15,13 @@
 set -euo pipefail
 main=$1 head=$2 title=$3
 repo_url=${REPO_URL:-https://github.com/blackhorseya/x-monorepo}
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "release-gate-pr: cannot load $_lib/best-effort.sh (capture)" >&2; exit 2; }
 
-if base=$(git describe --tags --abbrev=0 --match 'v*' "$main" 2>/dev/null); then :; else
-  describe_rc=$?; base=""; echo "release-gate-pr: git describe exited $describe_rc (no v* tag reachable from $main?)" >&2   # announced in the comment below; the comment is advisory, release.yml decides
+# no reachable v* tag is a state this comment announces (git describe exits 128), not a crash: the status is read, said, and the comment is built from it
+capture base describe_rc git describe --tags --abbrev=0 --match 'v*' "$main" 2>/dev/null || exit 1
+if [ "$describe_rc" != 0 ]; then
+  base=""; echo "release-gate-pr: git describe exited $describe_rc (no v* tag reachable from $main?)" >&2   # announced in the comment below; the comment is advisory, release.yml decides
 fi
 echo '<!-- release-gate -->'
 echo '### Release gate'
@@ -26,22 +30,23 @@ if [ -z "$base" ]; then
   echo "No \`v*\` tag is reachable from \`$main\`: the first merge releases unconditionally."
   exit 0
 fi
-own=$(scripts/releasable.sh "$main" "$head")
-pending=$(scripts/releasable.sh "$base" "$main")
+own=$(scripts/releasable.sh "$main" "$head") || exit $?
+pending=$(scripts/releasable.sh "$base" "$main") || exit $?
 if [ -z "$own$pending" ]; then
   echo "Merging **cuts no release**: nothing in this PR or waiting on main since [\`$base\`]($repo_url/releases/tag/$base) reaches an artifact."
 else
-  next=$(scripts/next-version.sh "$base" "$main" "$title")
+  next=$(scripts/next-version.sh "$base" "$main" "$title") || exit $?
   echo "Merging **releases \`${next%% *}\`** ${next#* }."
 fi
 echo
 if [ -n "$own" ]; then
-  echo "- Releasable files in this PR: $(printf '%s\n' "$own" | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g')"
+  own_list=$(printf '%s\n' "$own" | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g') || exit 1
+  echo "- Releasable files in this PR: $own_list"
 else
   echo "- Releasable files in this PR: none (docs / CI / tests / chart only — see \`scripts/releasable.sh\`)"
 fi
 if [ -n "$pending" ]; then
-  n=$(printf '%s\n' "$pending" | wc -l | tr -d ' ')
+  n=$(printf '%s\n' "$pending" | wc -l | tr -d ' ') || exit $?
   echo "- Already waiting on main since \`$base\`: $n releasable file(s), so a release is due at the next merge either way."
 else
   echo "- Already waiting on main since \`$base\`: nothing."

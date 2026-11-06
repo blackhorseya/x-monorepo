@@ -57,7 +57,7 @@ capture() {
   shift 2
   _cap_f=$(mktemp "${TMPDIR:-/tmp}/capture.XXXXXX") || return 1
   if [ "$_cap_merge" = 1 ]; then "$@" > "$_cap_f" 2>&1 || _cap_rc=$?; else "$@" > "$_cap_f" || _cap_rc=$?; fi
-  _cap_txt=$(cat "$_cap_f") || { rm -f "$_cap_f"; return 1; }
+  _cap_txt=$(cat "$_cap_f") || return 1   # (a temp file we just wrote that cannot be read back: it is left for the OS temp cleaner, the caller gets the failure)
   rm -f "$_cap_f" || return 1
   printf -v "$_cap_o" '%s' "$_cap_txt" || return 1
   printf -v "$_cap_r" '%s' "$_cap_rc" || return 1

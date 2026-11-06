@@ -20,7 +20,9 @@ runs:
     - id: store
       shell: bash
       working-directory: web
-      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      run: |
+        store_path=$(pnpm store path --silent) || exit $?
+        echo "path=$store_path" >> "$GITHUB_OUTPUT"
 
     - id: cache-rw
       if: steps.plan.outputs.write == 'true'

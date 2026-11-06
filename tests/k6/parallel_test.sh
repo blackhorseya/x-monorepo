@@ -11,9 +11,11 @@
 #          first run's files are still in the bin dir (the failure must name the missing files)
 #   smoke  curl / sleep / tee / cat / env exiting 42 (seq is no longer called: catalog.sh counts in the shell, #462)
 set -euo pipefail
-. "$(dirname "$0")/../../scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
-cd "$(dirname "$0")/../.."
-work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a path, without dirname inside $(…)
+root=$(abs_dir_of "$0" ../..) || exit 1
+. "$root/scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
+cd "$root" || exit 1
+work=$(mktemp -d) || exit $?; trap 'rm -rf "$work"' EXIT
 jobs_max=${PARALLEL_TEST_JOBS:-8}
 mkdir -p "$work/res"
 
@@ -39,21 +41,21 @@ shim() { # <name> <body…> → the dir of a shim called <name>
 }
 # k6 shim for smoke: `k6 run --quiet tests/k6/<script>.js …` exits 99 when <script> is in $SHIM_FAIL, else 0
 K6SMOKE=$(shim k6 'for a in "$@"; do case $a in tests/k6/*.js) s=${a#tests/k6/}; s=${s%.js};; esac; done
-case " ${SHIM_FAIL:-} " in *" $s "*) echo "shim: $s fails"; exit 99;; esac; echo "shim: $s ok"')
+case " ${SHIM_FAIL:-} " in *" $s "*) echo "shim: $s fails"; exit 99;; esac; echo "shim: $s ok"') || exit $?
 # grep / cat shims for the wire cases (pass through unless GREP_SHIM / CAT_SHIM says otherwise)
 GREPSHIM=$(shim grep 'real=/usr/bin/grep; [ -x "$real" ] || real=/bin/grep
 case "$*" in
   *"transport\."*) case ${GREP_SHIM:-} in full) $real "$@"; exit 42;; partial) $real "$@" | head -n 1; exit 42;; esac;;
   *canary*) [ "${GREP_SHIM:-}" = leak ] && exit 42;;
 esac
-exec $real "$@"')
+exec $real "$@"') || exit $?
 CATSHIM=$(shim cat 'case "$*" in *.out*) case ${CAT_SHIM:-} in unreadable) exit 42;; noverdict) /bin/cat "$@" | /usr/bin/grep -v -- "--- PASS"; exit 0;; partial) /bin/cat "$@" | head -n 1; exit 42;; esac;;
   *.rc*) [ "${CAT_SHIM:-}" = rc ] && { /bin/cat "$@"; exit 42; };; esac
-exec /bin/cat "$@"')
-KILLLANE=$(shim k6 'kill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"')
-EXIT0K6=$(shim k6 'exit 0')
-DEADK6=$(shim k6 'for a in "$@"; do case $a in BASE_URL=*) u=${a#BASE_URL=};; esac; done; curl -s "$u/x" >/dev/null; echo "transport.malformed_response"; exit 42')
-REAL_SLEEP=$(command -v sleep)
+exec /bin/cat "$@"') || exit $?
+KILLLANE=$(shim k6 'kill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"') || exit $?
+EXIT0K6=$(shim k6 'exit 0') || exit $?
+DEADK6=$(shim k6 'for a in "$@"; do case $a in BASE_URL=*) u=${a#BASE_URL=};; esac; done; curl -s "$u/x" >/dev/null; echo "transport.malformed_response"; exit 42') || exit $?
+REAL_SLEEP=$(type -P sleep) || exit $?
 
 # --- case runners (run in a subshell of their own; $P, $D set by async) ---
 wire() { # <env…>: wire.sh on orders (and ratelimit), 2 modes, no negatives, in $D/wbin
@@ -80,7 +82,8 @@ c_seqwire() { local sd; sd=$(shim "$1" 'echo 1; exit 42') || return 1; PATH="$sd
 names=() wants=() n=0
 async() { # <name> <want zero|nonzero> <function> [args…]
   local name=$1 want=$2; shift 2
-  while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$jobs_max" ]; do sleep 0.2; done
+  local running
+  until running=$(jobs -rp | wc -l | tr -d ' ') && [ "$running" -lt "$jobs_max" ]; do sleep 0.2; done
   local i=$n; n=$((n + 1)); names+=("$name"); wants+=("$want")
   (
     export P=$((21000 + 40 * i)) D="$work/c$i"; mkdir -p "$D"
@@ -111,33 +114,48 @@ async "wire: cat drops the verdict lines" nonzero withpath "$CATSHIM" wire1 CAT_
 async "wire: cat prints one line of a .out then exits 42" nonzero withpath "$CATSHIM" wire1 CAT_SHIM=partial
 async "wire: cat prints a .rc then exits 42" nonzero withpath "$CATSHIM" wire1 CAT_SHIM=rc
 async "wire: the cat shim in pass-through is still green" zero withpath "$CATSHIM" wire1
-async "wire: sleep exits 42" nonzero withpath "$(shim sleep 'exit 42')" wire1
-async "wire: sleep exits 42 after waiting" nonzero withpath "$(shim sleep "$REAL_SLEEP 0.05; exit 42")" wire1
-async "wire: rm exits 42" nonzero withpath "$(shim rm 'exit 42')" wire1
-async "wire: rm exits 42 after removing" nonzero withpath "$(shim rm '/bin/rm "$@"; exit 42')" wire1
-async "wire: mkdir exits 42 after creating" nonzero withpath "$(shim mkdir '/bin/mkdir "$@"; exit 42')" wire1
-async "wire: python3 (the server) prints its marker then exits 42" nonzero withpath "$(shim python3 'echo "served status" >&2; exit 42')" wire1
+sd=$(shim sleep 'exit 42') || exit 1
+async "wire: sleep exits 42" nonzero withpath "$sd" wire1
+sd=$(shim sleep "$REAL_SLEEP 0.05; exit 42") || exit 1
+async "wire: sleep exits 42 after waiting" nonzero withpath "$sd" wire1
+sd=$(shim rm 'exit 42') || exit 1
+async "wire: rm exits 42" nonzero withpath "$sd" wire1
+sd=$(shim rm '/bin/rm "$@"; exit 42') || exit 1
+async "wire: rm exits 42 after removing" nonzero withpath "$sd" wire1
+sd=$(shim mkdir '/bin/mkdir "$@"; exit 42') || exit 1
+async "wire: mkdir exits 42 after creating" nonzero withpath "$sd" wire1
+sd=$(shim python3 'echo "served status" >&2; exit 42') || exit 1
+async "wire: python3 (the server) prints its marker then exits 42" nonzero withpath "$sd" wire1
 for c in seq sort tr basename; do   # no longer called by wire.sh: a failing one changes nothing
-  async "wire: $c is not used (exit 42 shim, still green)" zero withpath "$(shim "$c" 'echo 1; exit 42')" wire1
+  sd=$(shim "$c" 'echo 1; exit 42') || exit 1
+  async "wire: $c is not used (exit 42 shim, still green)" zero withpath "$sd" wire1
 done
 async "wire: env exits 42 (negative cells must not pass as 'red')" nonzero c_negenv
 async "wire: second run, k6 dies without writing its files; the failure names the missing files" zero c_stale
 
-async "smoke: curl exits 42 (never ready)" nonzero smoke1 "$(shim curl 'echo partial; exit 42')" orders
-async "smoke: sleep exits 42" nonzero smoke1 "$(shim sleep 'exit 42')" orders
-async "smoke: tee swallows its input and exits 42" nonzero smoke1 "$(shim tee '/bin/cat > /dev/null; exit 42')" reservation
-async "smoke: tee writes one line and exits 42" nonzero smoke1 "$(shim tee 'head -n 1 | /bin/cat > "$1"; exit 42')" reservation
-async "smoke: cat of a script's output exits 42" nonzero smoke1 "$(shim cat 'case "$*" in *.out*) exit 42;; esac; exec /bin/cat "$@"')" orders
-async "smoke: env (starts the rpc) exits 42" nonzero smoke1 "$(shim env 'exit 42')" orders
+sd=$(shim curl 'echo partial; exit 42') || exit 1
+async "smoke: curl exits 42 (never ready)" nonzero smoke1 "$sd" orders
+sd=$(shim sleep 'exit 42') || exit 1
+async "smoke: sleep exits 42" nonzero smoke1 "$sd" orders
+sd=$(shim tee '/bin/cat > /dev/null; exit 42') || exit 1
+async "smoke: tee swallows its input and exits 42" nonzero smoke1 "$sd" reservation
+sd=$(shim tee 'head -n 1 | /bin/cat > "$1"; exit 42') || exit 1
+async "smoke: tee writes one line and exits 42" nonzero smoke1 "$sd" reservation
+sd=$(shim cat 'case "$*" in *.out*) exit 42;; esac; exec /bin/cat "$@"') || exit 1
+async "smoke: cat of a script's output exits 42" nonzero smoke1 "$sd" orders
+sd=$(shim env 'exit 42') || exit 1
+async "smoke: env (starts the rpc) exits 42" nonzero smoke1 "$sd" orders
 # catalog.sh used to count its readiness loop with `for _ in $(seq 1 100)`: the status of seq was dropped, so a seq that printed
 # 1 and died was a one-round wait (#462). It counts in the shell now, and a failing seq changes nothing.
-async "smoke: seq is not used by catalog.sh (exit 42 shim, still green)" zero smoke1 "$(shim seq 'echo 1; exit 42')" orders
+sd=$(shim seq 'echo 1; exit 42') || exit 1
+async "smoke: seq is not used by catalog.sh (exit 42 shim, still green)" zero smoke1 "$sd" orders
 
 best_effort wait   # every case has its own status file below; a case that left none is a FAIL
 
 fails=0
 for i in "${!names[@]}"; do
-  got=missing; [ -f "$work/res/$i" ] && got=$(<"$work/res/$i")
+  got=missing
+  if [ -f "$work/res/$i" ]; then got=$(cat "$work/res/$i") || exit 1; fi
   want=${wants[$i]}
   if { [ "$want" = zero ] && [ "$got" = 0 ]; } || { [ "$want" = nonzero ] && [ "$got" != 0 ] && [ "$got" != missing ]; }; then
     echo "ok   ${names[$i]}"

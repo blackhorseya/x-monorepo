@@ -41,7 +41,7 @@ jobs:
         run: |
           . scripts/best-effort.sh || exit 2   # value_of (#470); a missing library stops the step
           # every `cosign-release:` in release.yml must agree, or there is no "the release's cosign"
-          v=$(sed -n 's/^ *cosign-release: *//p' .github/workflows/release.yml | sort -u)
+          v=$(sed -n 's/^ *cosign-release: *//p' .github/workflows/release.yml | sort -u) || exit $?
           n=$(value_of -ok 1 grep -c . <<<"$v") || exit 1   # 1 = no line (grep -c prints 0), 2 = grep failing stays fatal
           [ "$n" = 1 ] || { echo "release.yml pins cosign-release to: [$v]"; exit 1; }
           echo "cosign=$v" >> "$GITHUB_OUTPUT"
@@ -57,6 +57,6 @@ jobs:
         run: |
           title="rekor-canary: cosign's default signing config changed or could not be read (#215)"
           body="The weekly canary failed: $RUN_URL. The step log says whether sigstore's default signing config now lists a Rekor v2 log (act on #215 before the next release) or whether TUF was unreachable (re-run the workflow)."
-          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty') || exit $?
           if [ -n "$n" ]; then gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "$body"
           else gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"; fi

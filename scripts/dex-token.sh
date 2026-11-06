@@ -25,31 +25,33 @@ redirect=${REDIRECT_URI:-http://localhost:5173/auth/callback}
 password=${DEX_PASSWORD:-password}
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-verifier=$(openssl rand 48 | b64url)
-challenge=$(printf %s "$verifier" | openssl dgst -sha256 -binary | b64url)
-state=$(openssl rand -hex 8)
+verifier=$(openssl rand 48 | b64url) || exit $?
+challenge=$(printf %s "$verifier" | openssl dgst -sha256 -binary | b64url) || exit $?
+state=$(openssl rand -hex 8) || exit $?
 
-jar=$(mktemp)
+jar=$(mktemp) || exit $?
 trap 'rm -f "$jar"' EXIT
 urlenc() { jq -rn --arg v "$1" '$v|@uri'; }
 
 # 1. /auth → (with one connector Dex redirects straight to its login form); -L ends on the form.
-auth="$issuer/auth?client_id=$client&redirect_uri=$(urlenc "$redirect")&response_type=code&scope=$(urlenc 'openid email profile')&state=$state&code_challenge=$challenge&code_challenge_method=S256"
-form=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$auth")
+enc_redirect=$(urlenc "$redirect") || exit 1
+enc_scope=$(urlenc 'openid email profile') || exit 1
+auth="$issuer/auth?client_id=$client&redirect_uri=$enc_redirect&response_type=code&scope=$enc_scope&state=$state&code_challenge=$challenge&code_challenge_method=S256"
+form=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$auth") || exit $?
 
 # 2. POST the credentials; skipApprovalScreen makes the 303 land on redirect_uri?code=…
 location=$(curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' \
-  --data-urlencode "login=$email" --data-urlencode "password=$password" "$form")
+  --data-urlencode "login=$email" --data-urlencode "password=$password" "$form") || exit $?
 case $location in
   "$redirect"*) ;;
-  *"/approval"*) if location=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$location"); then :; else echo "dex-token: following the approval redirect failed (exit $?)" >&2; location=""; fi ;;   # an empty location fails the case below
+  *"/approval"*) location=$(curl -fsS -L -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$location") || { echo "dex-token: following the approval redirect failed" >&2; exit 1; } ;;
 esac
 case $location in
   "$redirect"*) ;;
   *) echo "login did not reach redirect_uri (wrong password? client/redirect not in dex config?)" >&2; exit 1 ;;
 esac
 case $location in *"state=$state"*) ;; *) echo "state mismatch" >&2; exit 1 ;; esac
-code=$(printf %s "$location" | sed -n 's/.*[?&]code=\([^&]*\).*/\1/p')
+code=$(printf %s "$location" | sed -n 's/.*[?&]code=\([^&]*\).*/\1/p') || exit $?
 [ -n "$code" ] || { echo "no code in redirect" >&2; exit 1; }
 
 # 3. Exchange the code with the PKCE verifier.

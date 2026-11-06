@@ -31,14 +31,15 @@
 #   k6-auth             tests/k6, pkgs/platform/server + config, pkgs/identity, apps/rpc, apps/catalog-rpc + pkgs/catalog, configs.
 #   k6-wire             any product Go, tests/k6: it guards against the API key leaking (#209).
 set -euo pipefail
-cd "$(dirname "$0")/.."
+self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
+cd "$self_dir/.." || exit 1
 
 if [ -n "${CI_ALL:-}" ]; then
   files=ALL
 else
   base=${1:-origin/main} head=${2:-HEAD}
   # --no-renames: a rename is a delete plus an add, both paths count (helper.go -> helper_test.go removes a product file).
-  files=$(git diff --no-renames --name-only "$base...$head")
+  files=$(git diff --no-renames --name-only "$base...$head") || exit $?
 fi
 
 # has <glob>...: does any changed file match one of the globs (bash pattern, anchored at the root)?

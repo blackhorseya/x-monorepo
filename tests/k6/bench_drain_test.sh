@@ -6,7 +6,7 @@
 #   BENCH_DRAIN=<script>   test another copy (to see the check go red on the old order)
 set -euo pipefail
 script=${BENCH_DRAIN:-tests/k6/bench_drain.sh}
-work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+work=$(mktemp -d) || exit $?; trap 'rm -rf "$work"' EXIT
 mkdir "$work/bin"
 cat > "$work/bin/psql" <<'EOS'
 #!/usr/bin/env bash

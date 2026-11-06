@@ -36,12 +36,15 @@ console_budget=${DIAG_CONSOLE_BYTES:-262144} pod_console=${DIAG_POD_CONSOLE_BYTE
 
 # ── the wrapper ──────────────────────────────────────────────────────────────
 if [ "${1:-}" != "--diag-child" ]; then
-  if cap_dir=$(mktemp -d "${TMPDIR:-/tmp}/diag-console.XXXXXX"); then :; else echo "diag: cannot create a capture directory; nothing collected"; exit 0; fi   # a diagnostic never fails the run
+  # a fresh private directory named by this pid (mkdir without -p fails when it exists, so nothing else's directory is ever reused); a diagnostic never fails the run
+  cap_dir=${TMPDIR:-/tmp}/diag-console.$$
+  if ! mkdir -m 700 "$cap_dir" 2>/dev/null; then echo "diag: cannot create a capture directory; nothing collected"; exit 0; fi
   child="" sig_rc="" kill_pid="" c=""
   # on a signal: stop everything under the collector, then ask the collector itself to stop (it cleans up); if it is still there after 5 s, kill it
   stop_tree() {   # the whole subtree under $1, innermost first, by explicit pid (never by name). pgrep: 1 = no children; 2+ = it failed: the pid is still stopped, and the failure is the caller's to see (best_effort prints it)
-    local x kids
-    kids=$(value_of -ok 1 pgrep -P "$1") || { kill "$1" 2>/dev/null || true; return 1; }
+    local x kids kids_rc
+    capture kids kids_rc value_of -ok 1 pgrep -P "$1" || return 1
+    if [ "$kids_rc" != 0 ]; then kill "$1" 2>/dev/null || true; return 1; fi
     for x in $kids; do best_effort stop_tree "$x"; kill "$x" 2>/dev/null || true; done
   }
   on_signal() {
@@ -64,14 +67,16 @@ if [ "${1:-}" != "--diag-child" ]; then
   done
   if [ -n "$kill_pid" ]; then   # the 5 s fuse: its `sleep` first, then the subshell holding it (explicit pids). KILL, not TERM:
     # the fuse was started after on_signal ignored TERM, and an ignored signal is inherited (diag-test D6T saw it survive)
-    if ! kids=$(value_of -ok 1 pgrep -P "$kill_pid"); then kids=""; fi   # 1 = no children; any other failure is on stderr (value_of), and $kill_pid itself is killed below either way
+    capture kids kids_rc value_of -ok 1 pgrep -P "$kill_pid" || { echo "diag: capture failed for pgrep" >&2; kids=""; }   # 1 = no children; any other failure is on stderr (value_of) and leaves $kids empty (value_of prints nothing when it failed); $kill_pid itself is killed below either way
     for c in $kids; do kill -KILL "$c" 2>/dev/null || true; done
     kill -KILL "$kill_pid" 2>/dev/null || true
   fi
   [ -z "$sig_rc" ] || rc=$sig_rc
   trap '' TERM INT HUP
   cap="$cap_dir/console"
-  size=$(wc -c < "$cap" | tr -d ' ')
+  # the wrapper runs before the collector's helpers exist: wc into a file next to the capture, read it back; a failed wc leaves 0 (the size only decides whether to say "cut")
+  if wc -c < "$cap" > "$cap.n" 2>/dev/null && read -r size < "$cap.n"; then :; else size=0; fi
+  rm -f "$cap.n"
   head -c "$console_budget" "$cap"
   if [ "$size" -gt "$console_budget" ]; then
     printf '\n[diag: the console budget of %s bytes is used up; nothing more is printed here, the whole output is in %.200s/console.full]\n::endgroup::\n' "$console_budget" "$dir"
@@ -84,8 +89,9 @@ shift   # --diag-child
 
 # ── the collector: its stdout and stderr are the capture file, nothing else ────
 # diag-test D6F injects a write to a console descriptor right below this line: there is none to write to.
-if scratch=$(mktemp); then :; else echo "diag: cannot create a scratch file; nothing collected" >&2; exit 0; fi   # a diagnostic never fails the run (same as the capture directory above); it does not carry on with a made-up file either
-finish() { rm -f -- "$scratch"; }
+scratch=${TMPDIR:-/tmp}/diag-scratch.$$   # named by this pid; noclobber makes the create fail when the name exists, so nothing else's file is ever reused
+if ! ( set -o noclobber; : > "$scratch" ) 2>/dev/null; then echo "diag: cannot create a scratch file; nothing collected" >&2; exit 0; fi   # a diagnostic never fails the run (same as the capture directory above); it does not carry on with a made-up file either
+finish() { rm -f -- "$scratch" "$scratch.emit" "$scratch.emit.n" "$scratch.cnt" "$scratch.pods"; }
 trap finish EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
@@ -108,8 +114,7 @@ emit() {
   local cap=$console_left own=0 where=${2:-$dir}
   if [ -n "${1:-}" ] && [ "$1" -lt "$cap" ]; then cap=$1 own=1; fi
   if [ -n "$console_cut" ] || [ "$cap" -le 0 ]; then cat > /dev/null; return 0; fi
-  local buf n
-  if buf=$(mktemp); then :; else echo "diag: no temp file for this read, skipping it" >&2; return 0; fi
+  local buf=$scratch.emit n   # one buffer per emit, never two at once (emit does not nest); finish removes it too
   head -c $((cap + 1)) > "$buf"
   if ! wc -c < "$buf" > "$buf.n"; then echo "diag: cannot count this read, skipping it" >&2; rm -f "$buf" "$buf.n"; return 0; fi
   read -r n < "$buf.n" || n=0; rm -f "$buf.n"
@@ -127,6 +132,13 @@ emit() {
   fi
   rm -f "$buf"
 }
+# count_into <var> <wc flag> <file>: what `wc <flag> < file` prints, blanks removed, in $var, without a substitution. The count only decorates a line: when wc fails
+# the number is empty (wc's error is on stderr, i.e. in the capture) and the collection goes on.
+count_into() {
+  local cnt=$scratch.cnt
+  if wc "$2" < "$3" > "$cnt" 2>/dev/null && read -r "$1" < "$cnt"; then :; else printf -v "$1" '%s' ''; fi
+  rm -f "$cnt"
+}
 say() { printf '%s\n' "$*" > "$scratch"; emit < "$scratch"; }
 # tail_emit <file> <lines> <bytes>: the last <lines> lines of <file>, cut to <bytes>, through emit. One byte more than the cap is
 # handed over, so emit sees the overflow and says it cut (handing it exactly <bytes> would hide the cut).
@@ -134,16 +146,15 @@ tail_emit() { tail -n "$2" "$1" | tail -c $(($3 + 1)) > "$scratch"; emit "$3" "$
 group() { printf '::group::%s\n' "$1"; }
 endgroup() { echo "::endgroup::"; }
 
-left() { echo $((deadline - SECONDS)); }
 # k <kubectl args>: bounded by 30 s and by what is left of the deadline (124 = out of time)
 k() {
-  local r; r=$(left)
+  local r=$((deadline - SECONDS))
   [ "$r" -gt 0 ] || return 124
   [ "$r" -le 30 ] || r=30
   kubectl --request-timeout="${r}s" -n "$ns" "$@"
 }
 cut_short=""
-out_of_time() { [ "$(left)" -gt 0 ] && return 1; [ -n "$cut_short" ] || say "diag: the ${deadline}s deadline was reached; the rest is not collected"; cut_short=1; return 0; }
+out_of_time() { [ $((deadline - SECONDS)) -gt 0 ] && return 1; [ -n "$cut_short" ] || say "diag: the ${deadline}s deadline was reached; the rest is not collected"; cut_short=1; return 0; }
 
 say "diag: files in $dir; the console shows the last $tail_n lines (at most $pod_console bytes) per pod, $console_budget bytes in all; deadline ${deadline}s"
 
@@ -155,7 +166,10 @@ tail_emit "$dir/events.txt" 30 8192
 endgroup
 
 group "diag: pod logs since $since"
-if pods=$(k get pods -o name 2>/dev/null); then
+pods="" pods_rc=0
+k get pods -o name > "$scratch.pods" 2>/dev/null || pods_rc=$?
+if [ "$pods_rc" = 0 ]; then
+  while IFS= read -r p_ || [ -n "$p_" ]; do pods="$pods$p_"$'\n'; done < "$scratch.pods"
   [ -n "$pods" ] || say "diag: no pods in the namespace"
 else
   pods=""   # half a list is not a list: nothing is read from a failed `get pods`
@@ -166,7 +180,8 @@ for p in $pods; do
   name=${p#pod/}
   f="$dir/log-$name.txt"
   if k logs "$p" --all-containers --timestamps --since-time="$since" --limit-bytes="$max_bytes" > "$f" 2>/dev/null; then
-    say "--- $p: $(wc -l < "$f" | tr -d ' ') lines, $(wc -c < "$f" | tr -d ' ') bytes, all of them in $f"
+    count_into n_lines -l "$f"; count_into n_bytes -c "$f"
+    say "--- $p: $n_lines lines, $n_bytes bytes, all of them in $f"
     tail_emit "$f" "$tail_n" "$pod_console"
   else
     say "--- $p: diag: no log"
@@ -174,7 +189,8 @@ for p in $pods; do
   fi
   prev="$dir/log-$name.previous.txt"
   if k logs "$p" --all-containers --timestamps --since-time="$since" --limit-bytes="$max_bytes" --previous > "$prev" 2>/dev/null && [ -s "$prev" ]; then
-    say "--- $p: the previous container's log: $(wc -l < "$prev" | tr -d ' ') lines in $prev"
+    count_into n_lines -l "$prev"
+    say "--- $p: the previous container's log: $n_lines lines in $prev"
   else
     rm -f "$prev"
   fi
@@ -194,5 +210,7 @@ sql "locks (pg_locks)" "SELECT l.pid, l.locktype, l.mode, l.granted, c.relname F
 sql "connections against max_connections" "SELECT count(*) AS connections, current_setting('max_connections') AS max_connections FROM pg_stat_activity"
 emit 32768 "$pg" < "$pg"
 endgroup
-say "diag: done in ${SECONDS}s; $(ls "$dir" | wc -l | tr -d ' ') files in $dir"
+n_files=0
+for f_ in "$dir"/*; do if [ -e "$f_" ] || [ -L "$f_" ]; then n_files=$((n_files + 1)); fi; done   # == ls "$dir" | wc -l (no dot files)
+say "diag: done in ${SECONDS}s; $n_files files in $dir"
 exit 0

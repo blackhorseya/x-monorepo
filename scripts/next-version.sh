@@ -15,10 +15,12 @@
 # Prints "vX.Y.Z (<bump>: <reason>)" and exits 0, or exits 2 when no tag is reachable. Whether a
 # release happens at all is scripts/releasable.sh's call, not this one's.
 set -euo pipefail
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "next-version: cannot load $_lib/best-effort.sh (capture)" >&2; exit 2; }   # capture: the status of a command next to what it printed
 head=${2:-HEAD}
 base=${1:-}
 if [ -z "$base" ]; then
-  describe_rc=0; base=$(git describe --tags --abbrev=0 --match 'v*' "$head" 2>/dev/null) || describe_rc=$?
+  capture base describe_rc git describe --tags --abbrev=0 --match 'v*' "$head" 2>/dev/null || exit 1
   [ "$describe_rc" = 0 ] || { base=""; echo "next-version: git describe exited $describe_rc (no v* tag reachable from $head?)" >&2; }
 fi
 if [ -z "$base" ]; then

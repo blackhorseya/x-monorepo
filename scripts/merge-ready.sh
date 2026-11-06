@@ -29,13 +29,14 @@ pr=$1 revalidate=false
 case "${2:-}" in "") ;; --revalidate) revalidate=true ;; *) usage ;; esac
 case $pr in ''|*[!0-9]*) usage ;; esac
 
-repo=${MERGE_READY_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
+repo=${MERGE_READY_REPO:-}
+if [ -z "$repo" ]; then repo=$(gh repo view --json nameWithOwner -q .nameWithOwner) || exit 1; fi
 # `set -- $(gh …)` would drop gh's exit status (#462): read first, split after
-view=$(gh pr view "$pr" --repo "$repo" --json headRefOid,baseRefName -q '.headRefOid + " " + .baseRefName')
+view=$(gh pr view "$pr" --repo "$repo" --json headRefOid,baseRefName -q '.headRefOid + " " + .baseRefName') || exit $?
 # shellcheck disable=SC2086
 set -- $view
 head=${1:?gh pr view printed no head} base=${2:?gh pr view printed no base}
-main=$(gh api "repos/$repo/git/ref/heads/$base" -q .object.sha)
+main=$(gh api "repos/$repo/git/ref/heads/$base" -q .object.sha) || exit $?
 
 echo "PR #$pr → $base"
 echo "  main   $main   (live $base HEAD)"
@@ -44,7 +45,7 @@ echo "  head   $head   (PR head)"
 # ── checks: complete, none pending / failing ──
 # gh pr checks exits 1 when a check failed and 8 when checks are pending, and prints the list either way; any other
 # status is gh itself failing, and an unreadable list is not "no checks" (#462)
-rc=0; buckets=$(gh pr checks "$pr" --repo "$repo" --json bucket -q '.[].bucket' 2>/dev/null) || rc=$?
+capture buckets rc gh pr checks "$pr" --repo "$repo" --json bucket -q '.[].bucket' 2>/dev/null || exit 1
 case $rc in
   0|1|8) ;;
   *) echo "NOT READY: gh pr checks failed (exit $rc) — the checks of PR #$pr could not be read" >&2; exit 1 ;;
@@ -54,7 +55,7 @@ bad=$(value_of -ok 1 grep -cE '^(fail|cancel)$' <<<"$buckets") || exit 1
 pending=$(value_of -ok 1 grep -cE '^pending$' <<<"$buckets") || exit 1
 
 runinfo=$(gh run list --workflow ci.yml --event pull_request --commit "$head" --repo "$repo" --limit 1 \
-  --json databaseId,status,conclusion -q '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"')
+  --json databaseId,status,conclusion -q '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"') || exit $?
 # shellcheck disable=SC2086
 set -- $runinfo
 run=${1:-} status=${2:-} conclusion=${3:-}
@@ -76,13 +77,13 @@ fi
 if $notready; then exit 1; fi
 
 # ── composite tree: which main did the run merge into? ──
-log=$(gh run view "$run" --repo "$repo" --log)
-merge=$(printf '%s\n' "$log" | sed -n "s|.*+\([0-9a-f]\{40\}\):refs/remotes/pull/$pr/merge.*|\1|p" | head -1)
+log=$(gh run view "$run" --repo "$repo" --log) || exit $?
+merge=$(printf '%s\n' "$log" | sed -n "s|.*+\([0-9a-f]\{40\}\):refs/remotes/pull/$pr/merge.*|\1|p" | head -1) || exit $?
 if [ -z "$merge" ]; then
   echo "  STALE: run $run did not check out refs/pull/$pr/merge — nothing proves which main it merged into"
   fresh=false
 else
-  parents=$(gh api "repos/$repo/commits/$merge" -q '.parents[].sha')
+  parents=$(gh api "repos/$repo/commits/$merge" -q '.parents[].sha') || exit $?
   # shellcheck disable=SC2086
   set -- $parents
   p_base=${1:-} p_head=${2:-}
