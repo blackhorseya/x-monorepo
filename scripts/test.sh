@@ -3428,6 +3428,35 @@ dr_red ast-pos-let '6' <<'F'
 cmd5() { printf 5; return 7; }
 let "v = $(cmd5) + 1"
 F
+dr_red ast-pos-append 'prehalf' <<'F'
+v=pre
+v+=$(cmd)
+F
+dr_red ast-pos-index 'half' <<'F'
+a[0]=$(cmd)
+v=${a[0]}
+F
+dr_red ast-pos-parameter-replace 'ahalfc' <<'F'
+x=abc
+v=${x/b/$(cmd)}
+F
+dr_red ast-pos-parameter-slice 'f' <<'F'
+cmd5() { printf 5; return 7; }
+x=abcdefgh
+v=${x:$(cmd5):1}
+F
+dr_red ast-pos-arithmetic-command '6' <<'F'
+cmd5() { printf 5; return 7; }
+(( v = $(cmd5) + 1 ))
+F
+dr_red ast-pos-for-arithmetic '5' <<'F'
+cmd5() { printf 5; return 7; }
+for ((i = $(cmd5); i < 6; i++)); do v=$i; done
+F
+dr_red ast-pos-local-declaration 'half' <<'F'
+f() { local x=$(cmd); v=$x; }
+f
+F
 dr_red ast-pos-prefix-assignment 'half' <<'F'
 work=$(mktemp -d) || exit 1
 A=$(cmd) sh -c 'printf %s "$A" > "$1/out"' sh "$work"
