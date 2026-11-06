@@ -18,12 +18,12 @@ cd "$self_dir/.." || exit 1
 
 modules() { go work edit -json ./go.work | python3 -c 'import json,sys; [print(u["DiskPath"].removeprefix("./")) for u in json.load(sys.stdin)["Use"]]'; }
 
-ALL=$(modules)
+ALL=$(modules) || exit $?
 
 if [[ "${1:-}" == "--all" ]]; then echo "$ALL"; exit 0; fi
 
 if [[ "${1:-}" == "--files" ]]; then
-  shift; FILES=$(printf '%s\n' "$@")
+  shift; FILES=$(printf '%s\n' "$@") || exit $?
 else
   BASE="${BASE_REF:-origin/main}"
   git rev-parse --verify -q "$BASE" >/dev/null || BASE=HEAD
@@ -35,9 +35,9 @@ else
     echo "$ALL"; exit 0
   fi
   # one assignment each: a failing git stops the script here, it is not a shorter list
-  worktree=$(git diff --no-renames --name-only HEAD)
-  untracked=$(git ls-files --others --exclude-standard)
-  FILES=$(printf '%s\n%s\n%s\n' "$committed" "$worktree" "$untracked" | sort -u)
+  worktree=$(git diff --no-renames --name-only HEAD) || exit $?
+  untracked=$(git ls-files --others --exclude-standard) || exit $?
+  FILES=$(printf '%s\n%s\n%s\n' "$committed" "$worktree" "$untracked" | sort -u) || exit $?
 fi
 
 [[ -z "$FILES" ]] && exit 0
@@ -65,7 +65,7 @@ while [[ $changed == 1 ]]; do
   for m in $ALL; do
     is_hit "$m" && continue
     for h in $HIT; do
-      hpath=$(go mod edit -json "$h/go.mod" | python3 -c 'import json,sys; print(json.load(sys.stdin)["Module"]["Path"])')
+      hpath=$(go mod edit -json "$h/go.mod" | python3 -c 'import json,sys; print(json.load(sys.stdin)["Module"]["Path"])') || exit $?
       if grep -qF "$hpath " "$m/go.mod"; then mark "$m"; changed=1; break; fi
     done
   done

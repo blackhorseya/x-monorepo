@@ -15,7 +15,7 @@ abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && p
 root=$(abs_dir_of "$0" ../..) || exit 1
 . "$root/scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 cd "$root" || exit 1
-work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+work=$(mktemp -d) || exit $?; trap 'rm -rf "$work"' EXIT
 jobs_max=${PARALLEL_TEST_JOBS:-8}
 mkdir -p "$work/res"
 
@@ -41,21 +41,21 @@ shim() { # <name> <body…> → the dir of a shim called <name>
 }
 # k6 shim for smoke: `k6 run --quiet tests/k6/<script>.js …` exits 99 when <script> is in $SHIM_FAIL, else 0
 K6SMOKE=$(shim k6 'for a in "$@"; do case $a in tests/k6/*.js) s=${a#tests/k6/}; s=${s%.js};; esac; done
-case " ${SHIM_FAIL:-} " in *" $s "*) echo "shim: $s fails"; exit 99;; esac; echo "shim: $s ok"')
+case " ${SHIM_FAIL:-} " in *" $s "*) echo "shim: $s fails"; exit 99;; esac; echo "shim: $s ok"') || exit $?
 # grep / cat shims for the wire cases (pass through unless GREP_SHIM / CAT_SHIM says otherwise)
 GREPSHIM=$(shim grep 'real=/usr/bin/grep; [ -x "$real" ] || real=/bin/grep
 case "$*" in
   *"transport\."*) case ${GREP_SHIM:-} in full) $real "$@"; exit 42;; partial) $real "$@" | head -n 1; exit 42;; esac;;
   *canary*) [ "${GREP_SHIM:-}" = leak ] && exit 42;;
 esac
-exec $real "$@"')
+exec $real "$@"') || exit $?
 CATSHIM=$(shim cat 'case "$*" in *.out*) case ${CAT_SHIM:-} in unreadable) exit 42;; noverdict) /bin/cat "$@" | /usr/bin/grep -v -- "--- PASS"; exit 0;; partial) /bin/cat "$@" | head -n 1; exit 42;; esac;;
   *.rc*) [ "${CAT_SHIM:-}" = rc ] && { /bin/cat "$@"; exit 42; };; esac
-exec /bin/cat "$@"')
-KILLLANE=$(shim k6 'kill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"')
-EXIT0K6=$(shim k6 'exit 0')
-DEADK6=$(shim k6 'for a in "$@"; do case $a in BASE_URL=*) u=${a#BASE_URL=};; esac; done; curl -s "$u/x" >/dev/null; echo "transport.malformed_response"; exit 42')
-REAL_SLEEP=$(type -P sleep)
+exec /bin/cat "$@"') || exit $?
+KILLLANE=$(shim k6 'kill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"') || exit $?
+EXIT0K6=$(shim k6 'exit 0') || exit $?
+DEADK6=$(shim k6 'for a in "$@"; do case $a in BASE_URL=*) u=${a#BASE_URL=};; esac; done; curl -s "$u/x" >/dev/null; echo "transport.malformed_response"; exit 42') || exit $?
+REAL_SLEEP=$(type -P sleep) || exit $?
 
 # --- case runners (run in a subshell of their own; $P, $D set by async) ---
 wire() { # <env…>: wire.sh on orders (and ratelimit), 2 modes, no negatives, in $D/wbin

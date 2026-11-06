@@ -4,7 +4,7 @@
 # not part of CI. The machine's load is the number in $BENCH_LOADAVG_FILE (tests/k6/loadavg.py); the
 # fake k6 raises it while it "runs" and lowers it when it ends, as the real bench does to a real machine.
 set -euo pipefail
-work=$(mktemp -d)
+work=$(mktemp -d) || exit $?
 bg=""
 trap 'for p in $bg; do kill "$p" 2>/dev/null || true; done; rm -rf "$work"' EXIT
 
@@ -122,7 +122,7 @@ k6_attempts=$(wc -l < "$work/thr.k6" | tr -d ' ') || exit 1
 # all timeouts, and a summary that is missing (fail-closed)
 for mode in wrong both other nosummary onlyreq emptycount negative rpcnocount okless; do
   bench "f-$mode" 0.5 "$mode"
-  rc=$(rc_of "f-$mode"); { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad
+  rc=$(rc_of "f-$mode") || exit $?; { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad
   check $r "$mode: a failure (not exit 0, not exit 3), got exit $rc"
   k6_attempts=$(wc -l < "$work/f-$mode.k6" | tr -d ' ') || exit 1
   [ "$k6_attempts" = 1 ] && r=ok || r=bad; check $r "$mode: the bench stopped at the first attempt, no retry"
@@ -185,7 +185,7 @@ env PATH="$work/fakebin:$PATH" BENCH_LOADAVG_FILE="$work/load" LOAD_INTERVAL=1 R
 
 # 2. a real tool failure (k6 script error, exit 107) stays a failure: neither 0 nor 3
 bench scr 0.5 script
-rc=$(rc_of scr); { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad; check $r "tool failure: exit is neither 0 nor 3 (exit $rc)"
+rc=$(rc_of scr) || exit $?; { [ "$rc" != 0 ] && [ "$rc" != 3 ]; } && r=ok || r=bad; check $r "tool failure: exit is neither 0 nor 3 (exit $rc)"
 
 # 3. the load the bench itself makes (1000 during the create phase, far over the limit) does not invalidate
 # attempts that started on a quiet machine; it is recorded

@@ -26,5 +26,5 @@ modules=$(printf '%s\n' "$work_json" | jq -r -f "$root/scripts/modules.jq" 2>&1)
   printf '  %s\n' "$modules" >&2
   exit 1
 }
-n=$(printf '%s\n' "$modules" | wc -l | tr -d ' ')
+n=$(printf '%s\n' "$modules" | wc -l | tr -d ' ') || exit $?
 echo "check-modules: go.work lists $n modules, all representable in MODULES"

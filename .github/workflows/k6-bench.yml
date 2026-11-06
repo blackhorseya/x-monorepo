@@ -53,14 +53,14 @@ jobs:
       - name: runner spec
         run: |
           mkdir -p "$OUT"
-          cores=$(nproc)
-          cpu=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
-          memory=$(free -m | awk '/^Mem:/{print $2" MiB"}')
-          kernel=$(uname -srm)
-          go_version=$(go version)
-          k6_version=$(k6 version | sed -n 1p)
-          psql_version=$(psql --version)
-          load=$(cut -d' ' -f1-3 /proc/loadavg)
+          cores=$(nproc) || exit $?
+          cpu=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo) || exit $?
+          memory=$(free -m | awk '/^Mem:/{print $2" MiB"}') || exit $?
+          kernel=$(uname -srm) || exit $?
+          go_version=$(go version) || exit $?
+          k6_version=$(k6 version | sed -n 1p) || exit $?
+          psql_version=$(psql --version) || exit $?
+          load=$(cut -d' ' -f1-3 /proc/loadavg) || exit $?
           {
             echo "run:        $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
             echo "commit:     $GITHUB_SHA"

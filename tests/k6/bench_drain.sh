@@ -14,8 +14,8 @@ url=$1 out=$2 timeout=${3:-300}
 now() { python3 -I -c 'import time; print(time.time())'; }
 q() { psql "$url" -qAt -F'|' -c "$1"; }
 
-t0=$(now)
-snap=$(q "select count(*) filter (where status = 'PENDING'), count(*) from ordering.orders")
+t0=$(now) || exit $?
+snap=$(q "select count(*) filter (where status = 'PENDING'), count(*) from ordering.orders") || exit $?
 pending=${snap%%|*} total=${snap##*|}
 # a read that fails is "not drained yet" (the loop retries, and running out of time fails below); the value tested is always the one a successful read returned
 until left=$(q "select count(*) from ordering.orders where status = 'PENDING'") && [ "$left" = 0 ]; do
@@ -25,9 +25,9 @@ until left=$(q "select count(*) from ordering.orders where status = 'PENDING'") 
   sleep 0.2
 done
 t1=$(now) || exit 1
-secs=$(python3 -I -c "print(round($t1 - $t0, 2))")
-notok=$(q "select count(*) from ordering.orders where status <> 'CONFIRMED'")
-reserved=$(q "select count(*) from inventory.reservations where status = 'RESERVED'")
+secs=$(python3 -I -c "print(round($t1 - $t0, 2))") || exit $?
+notok=$(q "select count(*) from ordering.orders where status <> 'CONFIRMED'") || exit $?
+reserved=$(q "select count(*) from inventory.reservations where status = 'RESERVED'") || exit $?
 if [ "$notok" != 0 ] || [ "$reserved" != "$total" ]; then
   echo "drain ended with $notok order(s) not CONFIRMED and $reserved RESERVED reservation(s) for $total orders" >&2
   exit 1

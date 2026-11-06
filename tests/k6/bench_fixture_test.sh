@@ -5,7 +5,7 @@
 set -euo pipefail
 js=${BENCH_JS:-tests/k6/bench.js}
 port=${PORT:-18290}
-work=$(mktemp -d)
+work=$(mktemp -d) || exit $?
 xpid=""
 stop() { [ -n "$xpid" ] && kill "$xpid" 2>/dev/null && wait "$xpid" 2>/dev/null || true; xpid=""; }
 trap 'stop; rm -rf "$work"' EXIT
@@ -33,7 +33,7 @@ run() {
 run a1 SETUP_DELAY_MS=0 -- -e PHASE=create -e VUS=1 -e DURATION=2s -e SEED=7
 run a2 SETUP_DELAY_MS=0 -- -e PHASE=create -e VUS=1 -e DURATION=2s -e SEED=7
 run a3 SETUP_DELAY_MS=0 -- -e PHASE=create -e VUS=1 -e DURATION=2s -e SEED=8
-n=$(wc -l < "$work/a1.skus"); m=$(wc -l < "$work/a2.skus"); k=$((n < m ? n : m))
+n=$(wc -l < "$work/a1.skus") || exit $?; m=$(wc -l < "$work/a2.skus") || exit $?; k=$((n < m ? n : m))
 [ "$k" -ge 20 ] && r=ok || r=bad; check $r "seed: enough SKUs to compare ($k)"
 first1=$(head -n "$k" "$work/a1.skus") || exit 1
 first2=$(head -n "$k" "$work/a2.skus") || exit 1

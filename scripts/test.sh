@@ -677,7 +677,8 @@ PATH="$tmp/plan-bin:$PATH" eq_rc "plan: plan_out reports a failing plan.sh inste
 mkdir -p "$tmp/badgrep-bin"; printf '#!/bin/sh\necho partial\nexit 2\n' > "$tmp/badgrep-bin/grep"; chmod +x "$tmp/badgrep-bin/grep"
 rc=0; (PATH="$tmp/badgrep-bin:$PATH"; echo x | count_lines x) >/dev/null 2>&1 || rc=$?
 expect_eq "count_lines: a grep that fails with exit 2 stops the suite (exit 2), it is not a 0" "2" "$rc"
-rc=0; out=$(echo y | count_lines x) || rc=$?
+one_y() { echo y | count_lines x; }
+capture out rc one_y || exit 1
 expect_eq "count_lines: no match is a 0, exit 0" "0 0" "$out $rc"
 
 # ── go-mod-download.sh: bounded retry of the download, the last exit code passed on, no upstream text in the log (#450) ──
@@ -2039,7 +2040,7 @@ expect_match "script modes: the anchor — it checked the kind scripts" 'files, 
 # Fixture: a minimal repo whose Taskfile has the chmod line and 20 scripts. Baseline green; each mutant must go red.
 modes_fixture() {
   repo="$tmp/modes-$1"; mkdir -p "$repo/scripts" "$repo/k"
-  cp "$src/scripts/check-script-modes.sh" "$repo/scripts/"
+  cp "$src/scripts/check-script-modes.sh" "$src/scripts/best-effort.sh" "$repo/scripts/"   # check-script-modes.sh sources best-effort.sh (capture)
   printf 'tasks:\n  tools:\n    cmds:\n      - chmod +x scripts/*.sh k/*.sh\n' > "$repo/Taskfile.yml"
   for ((i = 1; i <= 24; i++)); do printf '#!/bin/sh\n' > "$repo/k/s$i.sh"; chmod +x "$repo/k/s$i.sh"; done
   git -C "$repo" init -q -b main
@@ -2089,6 +2090,11 @@ sw="$tmp/swallow"; mkdir -p "$sw"
 # sw_file <name> <body…>: $sw/<name>.sh with pipefail set (so only the shape under test can be flagged)
 sw_file() { local n=$1; shift; printf '#!/usr/bin/env bash\nset -euo pipefail\n%s\n' "$*" > "$sw/$n.sh"; }
 sw_run() { rc=0; capture -2 out rc "$src/scripts/check-exit-swallow.sh" "$@" || exit 1; }
+# no_rcb <name>: the output has no rcbranch finding. (`|| NAME=$?` is also a `default` finding since #473 r2, so the file is red for that; what these cells keep proving
+# is rcbranch's own judgement and its one path-based exemption.)
+no_rcb() { case "$out" in *": rcbranch:"*) bad "$1 [$out]" ;; *) ok ;; esac; }
+# hand: a fixture line that ends in a bare x=$(…) gets `|| exit 1`, so the ONLY reason a cell can be red is the shape it is about (the missing-handler reason is not what is under test)
+hand() { sed -E 's/^([A-Za-z_][A-Za-z_0-9]*=("?\$\(.*\)"?))$/\1 || exit 1/'; }
 # sw_clone <root>: a throwaway repo root that carries the checker the way the real one does (scripts/, the AST tool's sources, and the binary built from them,
 # copied last so it is not older than its sources). The first sw_run above has built it.
 sw_clone() {
@@ -2148,8 +2154,8 @@ mixedquote @@ declsub @@ local a="x"'y z' b=$(cmd)
 ansic @@ declsub @@ local a=$'q r' b=$(cmd)
 innersub @@ declsub @@ local a="$(inner)" b=$(cmd)
 typesetsub @@ declsub @@ typeset M=$(cmd)
-besub @@ besteffort @@ out=$(best_effort cat f)
-bequoted @@ besteffort @@ n="$(best_effort grep -c y f)"
+besub @@ besteffort @@ out=$(best_effort cat f) || exit $?
+bequoted @@ besteffort @@ n="$(best_effort grep -c y f)" || exit $?
 beassign @@ besteffort @@ x=best_effort
 ROWS
 # sw_write <name>: $sw/<name>.sh from stdin, after a header that sets (or not) pipefail
@@ -2162,12 +2168,12 @@ sw_run "$sw/nopipefail.sh"
 expect_eq    "swallow: a pipeline in a file without pipefail is red" "1" "$rc"
 expect_match "swallow: and it says pipeline" ': pipeline:' "$out"
 sw_write nopipefail-ok 'set -eu' <<'F'
-x=$(a | b) # exit-ok: only b matters, a is a plain echo
+x=$(a | b) || exit $? # exit-ok: only b matters, a is a plain echo
 F
 sw_run "$sw/nopipefail-ok.sh"
 expect_eq    "swallow: the same with an exit-ok comment is green" "0" "$rc"
 sw_write pipefail <<'F'
-x=$(a | b)
+x=$(a | b) || exit $?
 F
 sw_run "$sw/pipefail.sh"
 expect_eq    "swallow: the same pipeline with pipefail is green" "0" "$rc"
@@ -2193,13 +2199,13 @@ expect_eq    "swallow: kill / rm cleanup and [ ] guards are not flagged" "0" "$r
 sw_write canonical <<'F'
 n=$(value_of -ok 1 grep -c a f) || exit 1
 for ((i = 1; i <= 5; i++)); do :; done
-rc=0; out=$(cmd) || rc=$?
+capture out rc cmd || exit 1
 [ "$rc" = 0 ] || exit "$rc"
 for p in $pids; do :; done
-for f in "$d"/log-*.txt; do n=$(wc -l < "$f"); done
+for f in "$d"/log-*.txt; do n=$(wc -l < "$f") || exit $?; done
 for a in 'NS=a$(id)' 'x'; do :; done
 n=$(value_of -ok 1 grep -c y f) || exit 1
-n=$(cat f | count_lines y)
+n=$(cat f | count_lines y) || exit $?
 eq_of x 1 date
 f() { local n; n=$(grep -c y f) || return 1; local m=$((n + 1)); local k=1; echo "$n $m $k"; }
 best_effort kubectl -n "$ns" get pods,jobs >&2
@@ -2434,43 +2440,43 @@ exit "$code"
 STUB
 chmod +x "$sc/bin/pnpm"
 shards_check() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT="${FAULT:-}" "$src/scripts/web-e2e-shards-check.sh" "$@" 2>&1); }
-rc=0; out=$(FAULT= shards_check 3) || rc=$?
+FAULT= capture out rc shards_check 3 || exit 1
 expect_eq "shards-check: the shards together are the suite → exit 0" "0" "$rc"
 expect_match "shards-check: it says each test once" 'ok: 3 shards = 10 tests, each exactly once' "$out"
-rc=0; out=$(FAULT=dies shards_check 3) || rc=$?
+FAULT=dies capture out rc shards_check 3 || exit 1
 expect_eq "shards-check: a --list that prints the whole list but exits 42 is red" "1" "$rc"
 expect_match "shards-check: it names the exit code" 'exited 42' "$out"
-rc=0; out=$(FAULT=dies-partial shards_check 3) || rc=$?
+FAULT=dies-partial capture out rc shards_check 3 || exit 1
 expect_eq "shards-check: a --list that prints part of the list and exits 42 is red" "1" "$rc"
 expect_match "shards-check: the partial list names the exit code too" 'exited 42' "$out"
-rc=0; out=$(FAULT=dies-shard shards_check 3) || rc=$?
+FAULT=dies-shard capture out rc shards_check 3 || exit 1
 expect_eq "shards-check: one shard's --list dying half way is red" "1" "$rc"
-rc=0; out=$(FAULT=truncated shards_check 3) || rc=$?
+FAULT=truncated capture out rc shards_check 3 || exit 1
 expect_eq "shards-check: a truncated list that exits 0 is red" "1" "$rc"
 expect_match "shards-check: it says the Total and the lines differ" "Total says '10' but it printed 4" "$out"
-rc=0; out=$(FAULT=drop shards_check 3) || rc=$?
+FAULT=drop capture out rc shards_check 3 || exit 1
 expect_eq "shards-check: a shard that drops a test is red" "1" "$rc"
 expect_match "shards-check: it says the shards are not the suite" 'are not the whole suite' "$out"
-rc=0; out=$(FAULT=dup shards_check 3) || rc=$?
+FAULT=dup capture out rc shards_check 3 || exit 1
 expect_eq "shards-check: a test in two shards is red" "1" "$rc"
 expect_match "shards-check: the duplicate is a difference, not a match" 'are not the whole suite' "$out"
-rc=0; out=$(FAULT=empty shards_check 3) || rc=$?
+FAULT=empty capture out rc shards_check 3 || exit 1
 expect_eq "shards-check: an empty suite is red, not a match of nothing" "1" "$rc"
 # The same faults through the real entry point, `task web-e2e-shards-check -- N` (the Taskfile in this checkout, the stub pnpm first on PATH).
 shards_task() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT="${FAULT:-}" task -t "$src/Taskfile.yml" web-e2e-shards-check -- "$@" 2>&1); }
-rc=0; out=$(FAULT= shards_task 3) || rc=$?
+FAULT= capture out rc shards_task 3 || exit 1
 expect_eq "shards-check via task: the shards are the suite → exit 0" "0" "$rc"
 expect_match "shards-check via task: it says each test once" 'ok: 3 shards = 10 tests, each exactly once' "$out"
-rc=0; out=$(FAULT=dies-partial shards_task 3) || rc=$?
+FAULT=dies-partial capture out rc shards_task 3 || exit 1
 expect_eq "shards-check via task: part of the list, then exit 42 → the task exits non-zero" "201" "$rc"
 expect_match "shards-check via task: the controlled error names the exit code" 'exited 42' "$out"
-rc=0; out=$(FAULT=dies shards_task 3) || rc=$?
+FAULT=dies capture out rc shards_task 3 || exit 1
 expect_eq "shards-check via task: a whole list but exit 42 → the task exits non-zero" "201" "$rc"
-rc=0; out=$(FAULT=truncated shards_task 3) || rc=$?
+FAULT=truncated capture out rc shards_task 3 || exit 1
 expect_eq "shards-check via task: a truncated list, exit 0 → the task exits non-zero" "201" "$rc"
-rc=0; out=$(FAULT=drop shards_task 3) || rc=$?
+FAULT=drop capture out rc shards_task 3 || exit 1
 expect_eq "shards-check via task: a missing test → the task exits non-zero" "201" "$rc"
-rc=0; out=$(FAULT=dup shards_task 3) || rc=$?
+FAULT=dup capture out rc shards_task 3 || exit 1
 expect_eq "shards-check via task: a duplicate → the task exits non-zero" "201" "$rc"
 # Every external command of the script is checked: a wrapper (first on PATH) runs the real command, then either prints all
 # of its output and exits 42 (WRAP_MODE=full) or prints only its first line and exits 42 (WRAP_MODE=partial). The script
@@ -2489,7 +2495,7 @@ for c in grep sed wc tr cat sort diff seq mktemp; do ln -sf wrapper "$sc/wrap/$c
 wrapped_check() { (cd "$tmp" && REAL_PATH="$PATH" PATH="$sc/wrap:$sc/bin:$PATH" FAKE_TESTS="$sc/tests.txt" FAKE_FAULT= WRAP_CMD="$1" WRAP_MODE="$2" "$src/scripts/web-e2e-shards-check.sh" 3 2>&1); }
 for c in grep sed wc tr cat sort diff seq mktemp; do
   for m in full partial; do
-    rc=0; out=$(wrapped_check "$c" "$m") || rc=$?
+    capture out rc wrapped_check "$c" "$m" || exit 1
     if [ "$rc" = 0 ]; then bad "shards-check: $c printing ($m) then exiting 42 still exits 0"; else ok; fi
     case "$out" in *"ok: 3 shards"*) bad "shards-check: $c ($m) then exit 42 still says ok";; *) ok;; esac
   done
@@ -2503,11 +2509,11 @@ for keep in all 1; do
   case "$out" in *"ok: 3 shards"*) bad "shards-check: cat of the indexes ($keep) then exit 42 still says ok";; *) ok;; esac
   expect_match "shards-check: the index read names its failure ($keep)" 'cat of the shard indexes exited 42' "$out"
 done
-rc=0; out=$(WRAP_CMD=none wrapped_check none full) || rc=$?
+WRAP_CMD=none capture out rc wrapped_check none full || exit 1
 expect_eq "shards-check: the wrappers that do not fail change nothing → exit 0" "0" "$rc"
-rc=0; out=$(FAULT= shards_check) || rc=$?
+FAULT= capture out rc shards_check || exit 1
 expect_eq "shards-check: no shard count is a usage error" "2" "$rc"
-rc=0; out=$(FAULT= shards_check 0) || rc=$?
+FAULT= capture out rc shards_check 0 || exit 1
 expect_eq "shards-check: zero shards is a usage error" "2" "$rc"
 
 # ── 還原失敗屬於判定失敗 (#462 r2): the EXIT-trap restore of the kind scripts, without a cluster ───────────────────────────
@@ -2553,7 +2559,8 @@ for sh_ in payment-flow payment outage negative; do
   expect_match "$sh_: …and says the restore failed too" 'restore also failed \(exit 42\); keeping exit 7' "$out"
   restore_case "$sh_" 7 0 0 0;   expect_eq "$sh_: main failed (7), restore ok → 7" "7" "$rc"
 done
-rc=0; out=$(grep -c 'restore_step\|restore_exit' "$src"/deployments/helm/kind/{payment-flow,payment,outage,negative}.sh | grep -c ':0$') || rc=$?
+restore_users() { grep -c 'restore_step\|restore_exit' "$src"/deployments/helm/kind/{payment-flow,payment,outage,negative}.sh | grep -c ':0$'; }
+capture out rc restore_users || exit 1
 expect_eq "restore_step / restore_exit are used by payment-flow, payment, outage and negative" "0" "$out"
 # ── fault injection for the helm-kind wiring gates (#446 r0): every external command behind ci_count / diag_name_count / out_inputs /
 # ci_changes_jobs prints its real output and THEN dies (exit 42). A gate that read the verdict off the printed value stayed green on
@@ -2591,9 +2598,9 @@ PATH="$tmp/kd-dying-tr:$PATH" eq_rc "ci_changes_jobs: tr prints the jobs and the
 # ── #465: process substitution, errexit-off functions, workflow run: scripts ───────────────────────────────────────────────
 # procsub: `done < <(cmd)` never sees cmd's status. The fixed form is a variable first, the loop over a here-string.
 sw_write procsub-ok <<'F'
-out=$(grep a f)
+out=$(grep a f) || exit $?
 while read -r l; do :; done <<<"$out"
-pair=$(python3 -c 'print(1, 2)')
+pair=$(python3 -c 'print(1, 2)') || exit $?
 read -r a b <<<"$pair"
 cat <<'EOT'
 while read -r l; do :; done < <(not code, a heredoc body)
@@ -2639,7 +2646,7 @@ f() {
 $2
 }
 f
-v=\$(f)
+v=\$(f) || exit \$?
 F
   sw_run "$sw/fg-$1.sh"
   expect_eq "fnctx: [$1] is green" "0" "$rc"
@@ -2655,7 +2662,7 @@ fn_green one-line     '  :'
 sw_write fg-oneline <<'F'
 f() { x=$(cmd) || return 1; echo "$x"; }
 g() { local x; x=$(cmd) || return 1; echo "$x"; }
-v=$(f)
+v=$(f) || exit $?
 F
 sw_run "$sw/fg-oneline.sh"; expect_eq "fnctx: one-line functions with the check on the line are green" "0" "$rc"
 sw_write fl-oneline <<'F'
@@ -2728,14 +2735,14 @@ PY
   ) || return 1
   echo "$out"
 }
-v=$(f)
+v=$(f) || exit $?
 F
 sw_run "$sw/fg-heredoc-sub.sh"; expect_eq "fnctx: a heredoc substitution checked on the closing line is green" "0" "$rc"
 sw_write fg-toplevel <<'F'
 x=$(cmd)
 echo "$x"
 F
-sw_run "$sw/fg-toplevel.sh"; expect_eq "fnctx: x=\$(cmd) at the top level of a set -e script is not this rule's business (errexit protects it)" "0" "$rc"
+sw_run "$sw/fg-toplevel.sh"; expect_eq "default: x=\$(cmd) at the top level of a set -e script is red too: the checker does not assume errexit (#473 r1)" "1" "$rc"
 
 bypass_case or-fail    $'  x=$(cmd) || fail\n  printf \'%s\\n\' "$x"'
 bypass_case or-brace-unreachable $'  x=$(cmd) || { if false; then return 1; fi; }\n  printf \'%s\\n\' "$x"'
@@ -2957,7 +2964,7 @@ cap_run "-2 and no command"             -2 "" "" ""                        1
 # are the shapes that hide a failure (also after the command printed part of its output); every one has a same-shape positive that REFUSES or
 # reads a status; the look-alikes below are the ones a careless rule would let through (or flag by mistake).
 df_red() { # <name> ; the script body comes on stdin
-  { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; cat; } > "$sw/df-$1.sh"
+  { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; hand; } > "$sw/df-$1.sh"
   sw_run "$sw/df-$1.sh"
   expect_eq    "default: [$1] is red" "1" "$rc"
   expect_match "default: [$1] names the rule" ': default:' "$out"
@@ -3053,11 +3060,24 @@ f() {
     return 1
 }
 F
+# the handler is there in each of these: the shape around the assignment is the only reason for red (#473 r2)
+df_red negated-with-handler <<'F'
+! v=$(cmd) || exit 1
+F
+df_red pipeline-operand-with-handler <<'F'
+v=$(cmd) | cat || exit 1
+F
+df_red nested-label-inside-a-substitution <<'F'
+v=$(echo $([ -f f ] && echo a || echo b)) || exit 1
+F
+df_red nested-assignment-with-handler <<'F'
+v=$(w=$(cmd) || exit 1) || exit 1
+F
 df_green eol-brace-exit <<'F'
 x=$(cmd) ||
   { echo "cmd failed" >&2; exit 1; }
 F
-df_green eol-other-variable <<'F'
+df_red eol-other-variable <<'F'
 rc=0
 x=$(cmd) ||
   rc=$?
@@ -3086,7 +3106,7 @@ v=$([ -f f ] && echo yes || echo no)
 F
 df_green label-through-a-function <<'F'
 yesno() { if "$@"; then echo yes; else echo no; fi; }
-answer=$(yesno in_cluster f)
+answer=$(yesno in_cluster f) || exit $?
 echo "$answer"
 F
 df_green if-condition <<'F'
@@ -3098,12 +3118,12 @@ F
 df_green echo-in-a-string <<'F'
 echo "use \$(cmd || echo 0) never"
 F
-df_green other-variable <<'F'
+df_red other-variable <<'F'
 rc=0; x=$(cmd) || rc=$?
 [ "$rc" = 0 ] || exit 1
 F
 df_green inner-pipeline-no-default <<'F'
-x=$(tr a b <f | head -n 1)
+x=$(tr a b <f | head -n 1) || exit $?
 F
 # the rule is not exemptible
 df_exempt() { { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; cat; } > "$sw/df-exempt.sh"; }
@@ -3118,11 +3138,15 @@ wf_check() { cat > "$sw/$1.yml"; sw_run "$sw/$1.yml"; }
 # runs it and the failure value is really used (the output proves it), and the checker must be red; the whitelist shapes stop the script instead.
 dr_prelude() { printf '#!/usr/bin/env bash\ncmd() { printf half; return 7; }\nfe() { echo 0; }\n'; }
 dr_red() { # <name> <the value the real shell ends up with> ; the body on stdin; the body ends by setting $v
-  { dr_prelude; cat; printf 'echo "v=[$v]"\n'; } > "$sw/dr-$1.sh"
+  # the checker judges the body with `|| exit 1` on its bare assignment (hand), so the shape under test is the only possible reason for red; the real shell runs the body as written,
+  # which shows what the value is when nothing refuses it
+  local body; body=$(cat) || exit 1
+  { dr_prelude; hand <<<"$body"; printf 'echo "v=[$v]"\n'; } > "$sw/dr-$1.sh"
+  { dr_prelude; printf '%s\n' "$body"; printf 'echo "v=[$v]"\n'; } > "$sw/dr-$1-bare.sh"
   sw_run "$sw/dr-$1.sh"
   expect_eq    "default (half-print): [$1] is red" "1" "$rc"
   expect_match "default (half-print): [$1] names the rule" ': default:' "$out"
-  real_rc=0; capture -2 real real_rc bash "$sw/dr-$1.sh" || exit 1
+  real_rc=0; capture -2 real real_rc bash "$sw/dr-$1-bare.sh" || exit 1
   expect_match "default (half-print): [$1] — the real shell really uses the failure value" "v=\\[$2\\]" "$real"
 }
 dr_green() { # <name> <the exit status the real shell stops with> ; the body on stdin
@@ -3781,22 +3805,20 @@ F
 dr_red ast-content-computed-name-concat 'half' <<'F'
 v=$("c"m"d")
 F
-# (c2) top level: a plain `x=$(cmd)` is only as safe as errexit is. It is accepted when `set -e` is in force there (#473 r3, decision d-…95 plan A):
-#   the file turns errexit on at top level before it and nothing in the file may turn it off, AND every ancestor is a place where errexit is in force.
-# The node types that can wrap a statement, and the verdict for the statement inside:
-#   File / `{ }` / `( )` / if-elif-else body / loop do-body / case branch  -> in force      Cond of if/elif/while/until, left of && ||, `!`, `&`, pipeline operand,
-#   $( ) , <( ), time, coproc, function (fnctx) -> not trusted
+# (c2) the checker does not reason about errexit (#473 r2, decision d-…96): a bare x=$(cmd) is red at the top level of a `set -e` file, in a group, a loop, a case branch,
+# behind `set -e &`, a failed redirection, `. file`, eval, a DEBUG trap: wherever it stands. The only green forms are a whitelisted handler and the condition form.
+# Each red cell below is a file whose REAL shell goes on and uses the half-printed value; each green cell has the handler and its real shell stops with status 7.
 ee_red() { # <name> <body> [<head>] [norealhalf]: set -euo pipefail (or <head>), then the body; red, and the REAL shell prints the half-printed value (unless the shell really does stop there: then the cell is the whitelist's, not a bypass)
   sw_write "ee-$1" "${3:-set -euo pipefail}" <<F
 cmd() { printf half; return 7; }
 $2
 F
   sw_run "$sw/ee-$1.sh"
-  expect_eq    "ast (errexit): [$1] is red" "1" "$rc"
-  expect_match "ast (errexit): [$1] names the default rule" ': default:' "$out"
+  expect_eq    "ast (bare assignment): [$1] is red" "1" "$rc"
+  expect_match "ast (bare assignment): [$1] names the default rule" ': default:' "$out"
   [ "${4:-}" != norealhalf ] || return 0
   real_rc=0; capture -2 real real_rc bash "$sw/ee-$1.sh" || exit 1
-  expect_match "ast (errexit): [$1] — the real shell goes on and uses the half" 'v=\[half\]' "$real"
+  expect_match "ast (bare assignment): [$1] — the real shell goes on and uses the half" 'v=\[half\]' "$real"
 }
 ee_green() { # <name> <body>: green, and the real shell STOPS on the failed cmd (status 7) without using the value
   sw_write "eg-$1" <<F
@@ -3805,9 +3827,9 @@ $2
 echo "v=[\$v]"
 F
   sw_run "$sw/eg-$1.sh"
-  expect_eq "ast (errexit): [$1] is green" "0" "$rc"
+  expect_eq "ast (bare assignment): [$1] is green" "0" "$rc"
   real_rc=0; capture -2 real real_rc bash "$sw/eg-$1.sh" || exit 1
-  expect_eq "ast (errexit): [$1] — the real shell stops with status 7 and never uses the value" "7 " "$real_rc $real"
+  expect_eq "ast (bare assignment): [$1] — the real shell stops with status 7 and never uses the value" "7 " "$real_rc $real"
 }
 ee_red cond-not-last 'if v=$(cmd); true; then echo "v=[$v]"; else exit 1; fi'
 ee_red group-left-of-or '{ v=$(cmd); echo "v=[$v]"; } || exit 1'
@@ -3844,7 +3866,7 @@ ee_red set-e-inside-a-function 'f() { set -e; }
 f
 v=$(cmd)
 echo "v=[$v]"' ':' norealhalf   # a set -e that runs inside a function does take effect; the checker only trusts a TOP-LEVEL set -e
-# (c3) the `set -e` itself has to be a plain top-level statement that RAN, and nothing after it may reach the shell from outside this file's text (#473 r1)
+# (c3) reviewer r1's probes (5baf344d accepted them): a `set -e` that never took effect, or that something later switched off. They are red now for the plain reason that there is no handler.
 ee_red set-e-background 'set -e &
 wait
 v=$(cmd)
@@ -3892,35 +3914,21 @@ ee_red command-shopt-unset 'set -e
 command shopt -u extglob
 v=$(cmd)
 echo "v=[$v]"' ':' norealhalf
-ee_green eval-in-subshell '( eval "set +e" )
-v=$(cmd)'
-ee_green eval-left-of-pipe 'eval "set +e" | cat
-v=$(cmd)'
-ee_green eval-in-background 'eval "set +e" &
-wait
-v=$(cmd)'
-ee_green exit-trap 'trap : EXIT
-v=$(cmd)'
-ee_green best-effort-lib ". '$src/scripts/best-effort.sh'
-v=\$(cmd)"
-# the one library that is sourced by name without being read: its own text must not touch errexit
-capture be_hits be_rc grep -nE '^[^#]*([;&|(]|^)[[:space:]]*(set[[:space:]]+[-+][a-zA-Z]*[eo]|shopt[[:space:]]+-[a-z]*u|eval[[:space:]]|\.[[:space:]]+[^ ]|source[[:space:]]|trap[[:space:]].*(DEBUG|RETURN))' "$src/scripts/best-effort.sh" || exit 1
-expect_eq "ast (errexit): scripts/best-effort.sh never changes errexit, evals, sources or traps DEBUG/RETURN (rc 1 = no line matches)" "1 " "$be_rc $be_hits"
-ee_green top-level 'v=$(cmd)'
+ee_green top-level 'v=$(cmd) || exit $?'
 ee_green set-eu 'set -eu
-v=$(cmd)'
+v=$(cmd) || exit $?'
 ee_green set-o-errexit 'set -o errexit
-v=$(cmd)'
-ee_green if-then 'if true; then v=$(cmd); fi'
-ee_green else-body 'if false; then :; else v=$(cmd); fi'
-ee_green for-do 'for i in 1; do v=$(cmd); done'
-ee_green while-do 'while true; do v=$(cmd); break; done'
-ee_green case-branch 'case x in x) v=$(cmd);; esac'
-ee_green brace-group '{ v=$(cmd); }'
-ee_green subshell '( v=$(cmd) )'
-ee_green last-of-and 'true && v=$(cmd)'
-ee_green last-of-or 'false || v=$(cmd)'
-ee_green nested 'if true; then for i in 1; do { v=$(cmd); }; done; fi'
+v=$(cmd) || exit $?'
+ee_green if-then 'if true; then v=$(cmd) || exit $?; fi'
+ee_green else-body 'if false; then :; else v=$(cmd) || exit $?; fi'
+ee_green for-do 'for i in 1; do v=$(cmd) || exit $?; done'
+ee_green while-do 'while true; do v=$(cmd) || exit $?; break; done'
+ee_green case-branch 'case x in x) v=$(cmd) || exit $?;; esac'
+ee_green brace-group '{ v=$(cmd) || exit $?; }'
+ee_green subshell '( v=$(cmd) || exit $? )'
+ee_green last-of-and 'true && v=$(cmd) || exit $?'
+ee_green last-of-or 'false || v=$(cmd) || exit $?'
+ee_green nested 'if true; then for i in 1; do { v=$(cmd) || exit $?; }; done; fi'
 # (d) the one node that is exempt: the kind scripts' `. "$(dirname "$0")/../../../scripts/best-effort.sh"`. Matched field by field.
 sw_write ast-kind-exact <<'F'
 . "$(dirname "$0")/../../../scripts/best-effort.sh"
@@ -3928,8 +3936,8 @@ F
 sw_run "$sw/ast-kind-exact.sh"; expect_eq "ast: the kind scripts' exact source line is the one accepted node" "0" "$rc"
 # every variant: dirname is a function that prints a real directory and then FAILS; the sourced file really runs
 ast_kind_red() { # <name> <the source line>
-  work=$(mktemp -d) || exit 1
-  mkdir -p "$work/d1/d2/d3" "$work/scripts" || exit 1
+  work=$(mktemp -d) || exit $?
+  mkdir -p "$work/d1/d2/d3" "$work/scripts" || exit $?
   printf 'sourced=yes\n' > "$work/scripts/best-effort.sh"; printf 'sourced=yes\n' > "$work/x.sh"; printf 'sourced=yes\n' > "$work/scripts/other.sh"
   { printf '#!/usr/bin/env bash\nsourced=no\ndirname() { printf "%%s" "%s/d1/d2/d3"; return 7; }\nbasename() { printf "%%s" "%s/d1/d2/d3"; return 7; }\n%s\necho "sourced=[$sourced]"\n' "$work" "$work" "$2"; } > "$sw/ak-$1.sh"
   sw_run "$sw/ak-$1.sh"
@@ -3965,7 +3973,7 @@ df_green ast-prefix-assignment-without-substitution <<'F'
 A=1 sh -c 'echo "$A"'
 F
 df_green ast-substitution-chain-with-pipe-and-redirect <<'F'
-v=$(printf 'a b' | tr ' ' '-' 2>/dev/null)
+v=$(printf 'a b' | tr ' ' '-' 2>/dev/null) || exit $?
 F
 # (f) the tool itself: a file it cannot parse is exit 2 (never clean), and so is a stdout it cannot write
 printf 'if then fi (\n' > "$sw/ast-unparsable.sh"
@@ -4054,16 +4062,16 @@ lrc=0; capture -2 lout lrc bash "$sl_link/cover-gate.sh" || exit 1
 if [ "$lrc" != 0 ]; then ok; else bad "cover-gate through a cross-directory symlink carried on (exit 0) [$lout]"; fi
 expect_match "cover-gate through a cross-directory symlink: the message names best-effort.sh" 'best-effort\.sh' "$lout"
 df_green and-chain-cd-pwd <<'F'
-v=$(cd /tmp && pwd)
+v=$(cd /tmp && pwd) || exit $?
 F
 df_green and-chain-cd-pwd-p <<'F'
-v=$(cd /tmp && pwd -P)
+v=$(cd /tmp && pwd -P) || exit $?
 F
 df_green and-chain-git-echo <<'F'
-w=$(git rev-parse HEAD && echo x)
+w=$(git rev-parse HEAD && echo x) || exit $?
 F
 df_green and-chain-three <<'F'
-v=$(a && b && c)
+v=$(a && b && c) || exit $?
 F
 # a workflow run: script is scanned too
 wf_check df-wf <<'F'
@@ -4148,7 +4156,7 @@ jobs:
       - shell: bash
         run: |
           f() { x=$(cmd) || return 1; echo "$x"; }
-          v=$(f)
+          v=$(f) || exit $?
 Y
 expect_eq "workflow: the checked version is green" "0" "$rc"
 wf_check wf-fnsub-pure <<'Y'
@@ -4158,7 +4166,7 @@ jobs:
       - shell: bash
         run: |
           f() { echo "pure $1"; }
-          v=$(f a)
+          v=$(f a) || exit $?
 Y
 expect_eq "workflow: a builtin-only function is green" "0" "$rc"
 
@@ -4401,21 +4409,21 @@ done
 mkdir -p "$tmp/inj-rel-fake"; printf '#!/bin/sh\nif [ "$1" = "${1%%other.sh}" ]; then exec /usr/bin/basename "$@"; fi\necho test.sh\nexit 42\n' > "$tmp/inj-rel-fake/basename"; chmod +x "$tmp/inj-rel-fake/basename"
 rc=0; capture -2 out rc in_dir "$rcx" env PATH="$tmp/inj-rel-fake:$PATH" scripts/check-exit-swallow.sh scripts/other.sh || exit 1
 expect_eq "path: the reviewer's basename (prints test.sh for *other.sh, exits 42) cannot turn scripts/other.sh into the exempt file → still red" "1" "$rc"
-rcx_run ./scripts/test.sh;            expect_eq "exempt: ./scripts/test.sh is the same file → exempt" "0" "$rc"
-rcx_run scripts/../scripts/test.sh;   expect_eq "exempt: scripts/../scripts/test.sh is the same file → exempt" "0" "$rc"
-rcx_run "$rcx/scripts/test.sh";       expect_eq "exempt: the absolute path of scripts/test.sh is the same file → exempt" "0" "$rc"
+rcx_run ./scripts/test.sh;            no_rcb "exempt: ./scripts/test.sh is the same file → exempt"
+rcx_run scripts/../scripts/test.sh;   no_rcb "exempt: scripts/../scripts/test.sh is the same file → exempt"
+rcx_run "$rcx/scripts/test.sh";       no_rcb "exempt: the absolute path of scripts/test.sh is the same file → exempt"
 rcx_run ./nested/test.sh;             expect_eq "exempt: ./nested/test.sh is still red" "1" "$rc"
 rcx_run "$rcx/nested/test.sh";        expect_eq "exempt: the absolute path of nested/test.sh is still red" "1" "$rc"
 expect_match "exempt: …named by its repo-relative path" '^nested/test\.sh:3: rcbranch:' "$out"
 # a same-named file OUTSIDE the repo is not scripts/test.sh either
 mkdir -p "$tmp/outside/scripts"; cp "$rcx/scripts/test.sh" "$tmp/outside/scripts/test.sh"
 rcx_run "$tmp/outside/scripts/test.sh"; expect_eq "exempt: scripts/test.sh in another repo (outside this one) is scanned → red" "1" "$rc"
-rcx_run scripts/test.sh;       expect_eq "exempt: scripts/test.sh itself is exempt from rcbranch (positive)" "0" "$rc"
+rcx_run scripts/test.sh;       no_rcb "exempt: scripts/test.sh itself is exempt from rcbranch (positive)"
 rcx_run nested/test.sh;        expect_eq "exempt: nested/test.sh is NOT exempt → red" "1" "$rc"
 expect_match "exempt: …as rcbranch on nested/test.sh" 'nested/test\.sh:3: rcbranch:' "$out"
 rcx_run other.sh;              expect_eq "exempt: an ordinary .sh at the root is red" "1" "$rc"
 rcx_run scripts/other.sh;      expect_eq "exempt: an ordinary .sh under scripts/ is red" "1" "$rc"
-rcx_run ok/test.sh;            expect_eq "exempt: a healthy test.sh (the refusing branch) is green — positive control" "0" "$rc"
+rcx_run ok/test.sh;            no_rcb "exempt: a healthy test.sh (the refusing branch) is green — positive control"
 # the other file-level exemption: the DEFAULT scan skips scripts/hooks/* (the Claude hooks) by the full repo-relative path git ls-files gives. A mini
 # repo (20 clean scripts, 5 workflows, a fake git that lists them): scripts/hooks/check.sh is skipped, other/scripts/hooks/check.sh is not
 hk="$tmp/hk"; mkdir -p "$hk/scripts/hooks" "$hk/other/scripts/hooks" "$hk/bin" "$hk/.github/workflows"
@@ -4444,7 +4452,7 @@ expect_eq "hooks: an explicit argument is scanned as given (no hooks skip in exp
 rcb_ok() { # <name> <lines…>
   local n=$1; shift
   { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; printf '%s\n' "$@"; } > "$sw/rcbok-$n.sh"
-  sw_run "$sw/rcbok-$n.sh"; expect_eq "rcbranch: [$n] is green" "0" "$rc"
+  sw_run "$sw/rcbok-$n.sh"; no_rcb "rcbranch: [$n] raises no rcbranch finding"
 }
 rcb_red() { # <name> <lines…>: #470 — giving $v a new value is the failure swallowed, not a refusal
   local n=$1; shift

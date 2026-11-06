@@ -34,8 +34,8 @@ runs:
     - id: go-env
       shell: bash
       run: |
-        modcache=$(go env GOMODCACHE)
-        buildcache=$(go env GOCACHE)
+        modcache=$(go env GOMODCACHE) || exit $?
+        buildcache=$(go env GOCACHE) || exit $?
         echo "modcache=$modcache" >> "$GITHUB_OUTPUT"
         echo "buildcache=$buildcache" >> "$GITHUB_OUTPUT"
 
@@ -111,8 +111,8 @@ runs:
       id: tools-key
       shell: bash
       run: |
-        versions_hash=$(grep -E '^\s+[A-Z_]+_VERSION:' Taskfile.yml | sha256sum | cut -c1-16)
-        go_version=$(go env GOVERSION)
+        versions_hash=$(grep -E '^\s+[A-Z_]+_VERSION:' Taskfile.yml | sha256sum | cut -c1-16) || exit $?
+        go_version=$(go env GOVERSION) || exit $?
         echo "key=${{ runner.os }}-tools-$versions_hash-$go_version" >> "$GITHUB_OUTPUT"
 
     - id: tools-rw

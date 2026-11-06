@@ -200,7 +200,7 @@ jobs:
             --label org.opencontainers.image.version="$version" \
             --label org.opencontainers.image.licenses=MIT \
             web/apps/console
-          digest=$(jq -r '."containerimage.digest"' bin/console-metadata.json)
+          digest=$(jq -r '."containerimage.digest"' bin/console-metadata.json) || exit $?
           cosign sign --yes "$IMAGE@$digest"
       - run: |
           {
@@ -275,12 +275,12 @@ jobs:
           . scripts/best-effort.sh   # capture: a failed read of the PR's runs is said and the previous read is kept
           chart=deployments/helm/x-monorepo/Chart.yaml
           v=${TAG#v}
-          cur=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' "$chart")
+          cur=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' "$chart") || exit $?
           if [ "$cur" = "$v" ]; then
             echo "chart appVersion already $v" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          chart_version=$(sed -n 's/^version: //p' "$chart")
+          chart_version=$(sed -n 's/^version: //p' "$chart") || exit $?
           IFS=. read -r a b c <<<"$chart_version"
           new="$a.$b.$((c + 1))"
           sed -i "s/^version: .*/version: $new/; s/^appVersion: .*/appVersion: \"$v\"/" "$chart"
@@ -291,7 +291,7 @@ jobs:
           git checkout -b "$branch"
           git commit -qam "$title"
           git push -f origin "$branch"
-          open_prs=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq 'length')
+          open_prs=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq 'length') || exit $?
           if [ "$open_prs" = 0 ]; then
             body="Opened by release.yml after publishing $TAG: \`image.tag\` empty now deploys the release that exists. Chart-only, so merging it cuts no version."
             if ! gh pr create --repo "$REPO" --base main --head "$branch" --title "$title" --body "$body"; then
@@ -314,8 +314,8 @@ jobs:
           # and once a run has been seen past the gate that is remembered; this PR's other runs
           # awaiting approval (release-gate, ...) are still approved in that round. Polling is 12 rounds of
           # an API read + 5s sleep, i.e. at least 60s, not a hard cap.
-          sha=$(git rev-parse HEAD)
-          pr=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')
+          sha=$(git rev-parse HEAD) || exit $?
+          pr=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number') || exit $?
           # Non-zero when the list or the filter fails, so "no runs yet" ([]) and "could not read" differ.
           my_runs() {
             gh api "repos/$REPO/actions/runs?head_sha=$sha&event=pull_request&per_page=100" 2>/dev/null \
@@ -335,7 +335,7 @@ jobs:
             capture now now_rc my_runs || exit 1
             if [ "$now_rc" = 0 ]; then runs=$now; fi
             if ci_past_gate "$runs"; then past_gate=1; fi
-            rows=""; rc=0; rows=$(jq -r ".[] | select($awaiting) | \"\\(.id) \\(.path)\"" <<<"$runs" 2>/dev/null) || rc=$?
+            capture rows rc jq -r ".[] | select($awaiting) | \"\\(.id) \\(.path)\"" <<<"$runs" 2>/dev/null || exit 1
             if [ "$rc" != 0 ]; then rows=""; echo "jq over the runs exited $rc: nothing to approve this round" >&2; fi   # whatever it printed before dying is not a list to act on
             while read -r id path; do
               [ -n "$id" ] || continue
@@ -362,7 +362,7 @@ jobs:
             echo "ci.yml: dispatched, not approved ($approve_failures approve failure(s), last runs seen: $runs)" >> "$GITHUB_STEP_SUMMARY"
             gh workflow run ci.yml --repo "$REPO" --ref "$branch"
           fi
-          pr_now=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number')
+          pr_now=$(gh pr list --repo "$REPO" --head "$branch" --json number --jq '.[0].number') || exit $?
           gh workflow run release-gate.yml --repo "$REPO" --ref main -f pr="$pr_now"
-          pr_url=$(gh pr list --repo "$REPO" --head "$branch" --json url --jq '.[0].url')
+          pr_url=$(gh pr list --repo "$REPO" --head "$branch" --json url --jq '.[0].url') || exit $?
           echo "chart appVersion → $v: $pr_url" >> "$GITHUB_STEP_SUMMARY"

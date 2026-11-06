@@ -19,7 +19,7 @@ set -euo pipefail
 self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
 cd "$self_dir/.." || exit 1
 . "$self_dir/best-effort.sh" || exit 1   # capture: the status of the second sign next to what cosign printed
-work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+work=$(mktemp -d) || exit $?; trap 'rm -rf "$work"' EXIT
 
 # signs_cmd <artifact>: the signs entry — cmd, args and the signature template, with goreleaser's
 # ${artifact} / ${signature} filled in — as $cmd (the command line) and $sig (the bundle it writes).

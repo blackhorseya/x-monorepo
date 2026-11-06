@@ -27,7 +27,7 @@ max=3   # 1 sign + at most 2 re-signs
 delay=${COSIGN_SIGN_RETRY_DELAY:-5}
 case $delay in ''|*[!0-9]*) echo "cosign-sign-blob: COSIGN_SIGN_RETRY_DELAY must be whole seconds" >&2; exit 2 ;; esac
 
-log=$(mktemp); trap 'rm -f "$log"' EXIT
+log=$(mktemp) || exit $?; trap 'rm -f "$log"' EXIT
 # A conflict is the OUTER status of one cosign error line (#256), not any 409 text on a line: a
 # non-conflict (HTTP 503, ...) whose body quotes a 409 is an ordinary failure. The two shapes of the
 # pinned cosign v3.1.4, each `Error: <context>: <status marker><status> <body>`:

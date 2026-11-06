@@ -54,9 +54,9 @@ jobs:
           BASE: ${{ inputs.base }}
         run: |
           git checkout --detach "$BASE"
-          checked_out=$(git rev-parse HEAD)
+          checked_out=$(git rev-parse HEAD) || exit $?
           [ "$checked_out" = "$BASE" ] || { echo "checked out $checked_out, not base $BASE" >&2; exit 1; }
           git fetch origin "refs/pull/$PR/head"
-          fetched=$(git rev-parse FETCH_HEAD)
+          fetched=$(git rev-parse FETCH_HEAD) || exit $?
           [ "$fetched" = "$HEAD" ] || { echo "PR #$PR head moved: now $fetched, asked for $HEAD" >&2; exit 1; }
           scripts/merge-tree-check.sh "$BASE" "$HEAD"

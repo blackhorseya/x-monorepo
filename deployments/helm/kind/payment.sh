@@ -30,28 +30,28 @@ kubectl -n "$ns" rollout status "deploy/$release-payment-serve" "deploy/$release
   || fail "serve / consume did not roll out"
 # serve and the expire CronJob run the payment-rpc image; the consumer runs payment-worker (#410 slice 2)
 for what in deploy/$release-payment-serve deploy/$release-payment-consume cronjob/$release-payment-expire; do
-  img=$(kubectl -n "$ns" get "$what" -o jsonpath='{.spec.template.spec.containers[0].image}{.spec.jobTemplate.spec.template.spec.containers[0].image}')
+  img=$(kubectl -n "$ns" get "$what" -o jsonpath='{.spec.template.spec.containers[0].image}{.spec.jobTemplate.spec.template.spec.containers[0].image}') || exit $?
   want_app=payment-rpc; [ "$what" = "deploy/$release-payment-consume" ] && want_app=payment-worker
   case $img in */"$want_app":*) ;; *) fail "$what runs '$img', not the $want_app image" ;; esac
 done
-cfg=$(kubectl -n "$ns" get configmap "$release-payment-rpc" -o jsonpath='{.data.config\.yaml}')
+cfg=$(kubectl -n "$ns" get configmap "$release-payment-rpc" -o jsonpath='{.data.config\.yaml}') || exit $?
 # grep -q under pipefail: a pipeline whose reader exits at the first match can fail with SIGPIPE on the writer (CI did,
 # at the rpc env check below), so every check reads a variable (here-string), never a pipe.
 grep -q 'oidc\|jwt' <<<"$cfg" && fail "payment-rpc's ConfigMap carries auth.jwt / auth.oidc (this release's rpc has OIDC on: it must not inherit it)"
 grep -q 'mode: required' <<<"$cfg" || fail "payment-rpc's ConfigMap is not auth.mode required"
 grep -q 'broker: postgres' <<<"$cfg" || fail "payment-rpc's ConfigMap is not the Postgres broker (this release's worker uses Redis; the consumer reads the outbox tables)"
-key=$(kubectl -n "$ns" get secret "$release-payment-rpc-env" -o jsonpath='{.data.APP_PAYMENT_API_KEY}' | base64 -d)
-auth=$(kubectl -n "$ns" get secret "$release-payment-rpc-env" -o jsonpath='{.data.APP_AUTH_API_KEYS}' | base64 -d)
+key=$(kubectl -n "$ns" get secret "$release-payment-rpc-env" -o jsonpath='{.data.APP_PAYMENT_API_KEY}' | base64 -d) || exit $?
+auth=$(kubectl -n "$ns" get secret "$release-payment-rpc-env" -o jsonpath='{.data.APP_AUTH_API_KEYS}' | base64 -d) || exit $?
 [ "$auth" = "rpc=$key:admin" ] || fail "payment-rpc's service key is not exactly rpc=<the key rpc presents>:admin"
 # who is told what: rpc has the address and the key, nobody has the provider credential but the three payment workloads
-rpcenv=$(kubectl -n "$ns" get deploy "$release-rpc" -o jsonpath='{.spec.template.spec.containers[0].env[*].name}')
+rpcenv=$(kubectl -n "$ns" get deploy "$release-rpc" -o jsonpath='{.spec.template.spec.containers[0].env[*].name}') || exit $?
 case " $rpcenv " in *" APP_PAYMENT_UPSTREAM "*) ;; *) fail "rpc was not told where payment-rpc is" ;; esac
 for w in rpc worker catalog-rpc; do
-  names=$(kubectl -n "$ns" get deploy "$release-$w" -o jsonpath='{.spec.template.spec.containers[*].env[*].name}')
+  names=$(kubectl -n "$ns" get deploy "$release-$w" -o jsonpath='{.spec.template.spec.containers[*].env[*].name}') || exit $?
   case " $names " in *" APP_PAYMENT_MOCK_WEBHOOK_SECRET "*) fail "$w holds the provider credential" ;; esac
 done
 for ((_try51 = 1; _try51 <= 30; _try51++)); do
-  log_rc=0; clog=$(kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null) || log_rc=$?
+  capture clog log_rc kubectl -n "$ns" logs "deploy/$release-payment-consume" 2>/dev/null || exit 1
   if [ "$log_rc" != 0 ]; then echo "payment: reading the consumer's log failed (exit $log_rc), retrying" >&2; clog=""; fi
   grep -q 'payment-worker started' <<<"$clog" && break; sleep 1
 done
@@ -81,9 +81,9 @@ job="payment-expire-kind-$now"
 kubectl -n "$ns" create job "$job" --from="cronjob/$release-payment-expire" >/dev/null
 done_=""
 for ((_try74 = 1; _try74 <= 90; _try74++)); do
-  job_rc=0; ok=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}' 2>/dev/null) || job_rc=$?
+  capture ok job_rc kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}' 2>/dev/null || exit 1
   if [ "$job_rc" != 0 ]; then echo "payment: reading job $job (succeeded) failed (exit $job_rc), retrying" >&2; ok=""; fi
-  job_rc=0; bad=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.failed}' 2>/dev/null) || job_rc=$?
+  capture bad job_rc kubectl -n "$ns" get job "$job" -o jsonpath='{.status.failed}' 2>/dev/null || exit 1
   if [ "$job_rc" != 0 ]; then echo "payment: reading job $job (failed) failed (exit $job_rc), retrying" >&2; bad=""; fi
   [ "${bad:-0}" != 0 ] && { best_effort kubectl -n "$ns" logs "job/$job" --tail=30; fail "the expire run failed"; }
   [ "$ok" = 1 ] && { done_=1; break; }
@@ -144,7 +144,7 @@ echo "payment: the ingress routes the webhook path and nothing else (RPC, metric
 # The rate limit: rps 2 x burst multiplier 2 per client. A fast burst has to be refused (503) and the
 # first requests answered by payment-rpc (400); a moment later it recovers.
 sleep 3
-res=$(seq 1 40 | xargs -P 20 -I{} curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H "Host: $host" -d '{}' "$ing/api/payment/webhook")
+res=$(seq 1 40 | xargs -P 20 -I{} curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H "Host: $host" -d '{}' "$ing/api/payment/webhook") || exit $?
 n400=$(value_of -ok 1 grep -c '^400$' <<<"$res") || exit 1; n503=$(value_of -ok 1 grep -c '^503$' <<<"$res") || exit 1
 [ "$n400" -ge 1 ] || fail "burst: no request reached payment-rpc ($n400 x 400, $n503 x 503)"
 [ "$n503" -ge 1 ] || fail "burst: 40 requests in a burst were never limited ($n400 x 400, $n503 x 503): the rate limit is not in force"
@@ -153,7 +153,7 @@ capture st st_rc hit POST /api/payment/webhook -d '{}' || exit 1
 [ "$st_rc" = 0 ] || fail "no status after the burst"
 [ "$st" = 400 ] || fail "the limit did not release after the burst"
 echo "payment: the rate limit is in force ($n400 x 400, $n503 x 503 in a burst of 40) and releases"
-big=$(mktemp)
+big=$(mktemp) || exit $?
 head -c 2097152 /dev/zero | tr '\0' 'a' >"$big"
 capture st st_rc hit POST /api/payment/webhook --data-binary "@$big" || exit 1
 [ "$st_rc" = 0 ] || fail "no status for the 2 MiB body"
@@ -178,11 +178,11 @@ now=$(date +%s) || exit 1
 sku="kind-pay-$now"
 rpc catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}" >/dev/null
 rpc inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}" >/dev/null
-order=$(rpc ordering.v1.OrderService/CreateOrder "{\"customer_id\":\"payment-smoke\",\"items\":[{\"sku\":\"$sku\",\"quantity\":1}]}" | jq -r .order.id)
+order=$(rpc ordering.v1.OrderService/CreateOrder "{\"customer_id\":\"payment-smoke\",\"items\":[{\"sku\":\"$sku\",\"quantity\":1}]}" | jq -r .order.id) || exit $?
 [ -n "$order" ] && [ "$order" != null ] || fail "CreateOrder returned no id with payment-rpc stopped"
 status=""
 for ((_try154 = 1; _try154 <= 60; _try154++)); do
-  status=$(rpc ordering.v1.OrderService/GetOrder "{\"id\":\"$order\"}" | jq -r .order.status)
+  status=$(rpc ordering.v1.OrderService/GetOrder "{\"id\":\"$order\"}" | jq -r .order.status) || exit $?
   [ "$status" = ORDER_STATUS_CONFIRMED ] && break
   sleep 1
 done

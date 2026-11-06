@@ -31,14 +31,14 @@ esac
 
 engine=docker
 command -v docker >/dev/null 2>&1 || engine=podman
-arch=$(go env GOARCH)
-bin=$(find bin/dist -type f -path "*/${app}_linux_${arch}*/${app}" 2>/dev/null | head -n1)
+arch=$(go env GOARCH) || exit $?
+bin=$(find bin/dist -type f -path "*/${app}_linux_${arch}*/${app}" 2>/dev/null | head -n1) || exit $?
 if [ -z "$bin" ]; then
   echo "image-smoke: FAIL no linux/$arch $app binary under bin/dist: the release dry run (task release-snapshot) does not build it" >&2
   exit 1
 fi
 
-ctx=$(mktemp -d)
+ctx=$(mktemp -d) || exit $?
 cid=""
 cleanup() {
   [ -z "$cid" ] || "$engine" rm -f "$cid" >/dev/null 2>&1 || true
@@ -69,7 +69,7 @@ if [ "$app" = payment-worker ]; then
     ''|dev) echo "image-smoke: FAIL --version says '$version': the binary is not stamped by the release build" >&2; exit 1 ;;
   esac
   echo "ok: stamped version $version"
-  out=$(mktemp)
+  out=$(mktemp) || exit $?
   if "${run[@]}" "$image" --nope >"$out" 2>&1; then
     echo "image-smoke: FAIL the image started with an unknown argument" >&2; exit 1
   fi
@@ -106,7 +106,7 @@ base="http://127.0.0.1:$hostport"
 
 ready=""
 for ((_try100 = 1; _try100 <= 60; _try100++)); do
-  poll_rc=0; code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/readyz") || poll_rc=$?
+  capture code poll_rc curl -s -o /dev/null -w '%{http_code}' "$base/api/readyz" || exit 1
   [ "$poll_rc" = 0 ] || echo "image-smoke: readyz poll $_try100: curl exited $poll_rc, retrying" >&2
   if [ "$code" = 200 ]; then ready=1; break; fi
   capture running running_rc "$engine" inspect --format '{{.State.Running}}' "$cid" || exit 1
@@ -117,18 +117,18 @@ done
 [ -n "$ready" ] || { "$engine" logs "$cid" >&2; echo "image-smoke: FAIL /api/readyz never answered 200" >&2; exit 1; }
 echo "ok: $app ${args[*]} is ready (read-only rootfs, no capabilities)"
 
-version=$(curl -s "$base/api/version" | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+version=$(curl -s "$base/api/version" | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p') || exit $?
 case $version in
   ''|dev) echo "image-smoke: FAIL /api/version says '$version': the binary is not stamped by the release build" >&2; exit 1 ;;
 esac
 echo "ok: stamped version $version"
 
 body='{"orderId":"image-smoke-order","customerId":"image-smoke-customer"}'
-noauth=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$body" "$base/payment.v1.PaymentService/GetPayment")
+noauth=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$body" "$base/payment.v1.PaymentService/GetPayment") || exit $?
 [ "$noauth" = 401 ] || { echo "image-smoke: FAIL a call without the service key answered $noauth, want 401" >&2; exit 1; }
-hdrs=$(mktemp)
-code=$(curl -s -D "$hdrs" -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "X-API-Key: $key" -d "$body" "$base/payment.v1.PaymentService/GetPayment")
-xcode=$(tr -d '\r' <"$hdrs" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p')
+hdrs=$(mktemp) || exit $?
+code=$(curl -s -D "$hdrs" -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "X-API-Key: $key" -d "$body" "$base/payment.v1.PaymentService/GetPayment") || exit $?
+xcode=$(tr -d '\r' <"$hdrs" | sed -n 's/^[Xx]-[Ee]rror-[Cc]ode: *//p') || exit $?
 rm -f "$hdrs"
 [ "$code" = 404 ] && [ "$xcode" = payment.not_found ] || { echo "image-smoke: FAIL GetPayment with the service key answered $code / '$xcode', want 404 / payment.not_found" >&2; exit 1; }
 echo "ok: PaymentService answers (401 without the service key, payment.not_found for an unknown order with it)"

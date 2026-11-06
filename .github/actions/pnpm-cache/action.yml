@@ -21,7 +21,7 @@ runs:
       shell: bash
       working-directory: web
       run: |
-        store_path=$(pnpm store path --silent)
+        store_path=$(pnpm store path --silent) || exit $?
         echo "path=$store_path" >> "$GITHUB_OUTPUT"
 
     - id: cache-rw

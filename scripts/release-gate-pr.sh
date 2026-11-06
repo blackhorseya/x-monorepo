@@ -30,12 +30,12 @@ if [ -z "$base" ]; then
   echo "No \`v*\` tag is reachable from \`$main\`: the first merge releases unconditionally."
   exit 0
 fi
-own=$(scripts/releasable.sh "$main" "$head")
-pending=$(scripts/releasable.sh "$base" "$main")
+own=$(scripts/releasable.sh "$main" "$head") || exit $?
+pending=$(scripts/releasable.sh "$base" "$main") || exit $?
 if [ -z "$own$pending" ]; then
   echo "Merging **cuts no release**: nothing in this PR or waiting on main since [\`$base\`]($repo_url/releases/tag/$base) reaches an artifact."
 else
-  next=$(scripts/next-version.sh "$base" "$main" "$title")
+  next=$(scripts/next-version.sh "$base" "$main" "$title") || exit $?
   echo "Merging **releases \`${next%% *}\`** ${next#* }."
 fi
 echo
@@ -46,7 +46,7 @@ else
   echo "- Releasable files in this PR: none (docs / CI / tests / chart only — see \`scripts/releasable.sh\`)"
 fi
 if [ -n "$pending" ]; then
-  n=$(printf '%s\n' "$pending" | wc -l | tr -d ' ')
+  n=$(printf '%s\n' "$pending" | wc -l | tr -d ' ') || exit $?
   echo "- Already waiting on main since \`$base\`: $n releasable file(s), so a release is due at the next merge either way."
 else
   echo "- Already waiting on main since \`$base\`: nothing."

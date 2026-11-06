@@ -61,7 +61,7 @@ jobs:
       - id: pin
         run: |
           . scripts/best-effort.sh || exit 2   # value_of (#470); a missing library stops the step
-          v=$(sed -n 's/^ *cosign-release: *//p' .github/workflows/release.yml | sort -u)
+          v=$(sed -n 's/^ *cosign-release: *//p' .github/workflows/release.yml | sort -u) || exit $?
           n=$(value_of -ok 1 grep -c . <<<"$v") || exit 1   # 1 = no line (grep -c prints 0), 2 = grep failing stays fatal
           [ "$n" = 1 ] || { echo "release.yml pins cosign-release to: [$v]"; exit 1; }
           echo "cosign=$v" >> "$GITHUB_OUTPUT"
@@ -85,7 +85,7 @@ jobs:
             --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --bundle "$bundle" bin/dist/checksums.txt
-          checksums_sha=$(sha256sum bin/dist/checksums.txt | cut -d' ' -f1)
+          checksums_sha=$(sha256sum bin/dist/checksums.txt | cut -d' ' -f1) || exit $?
           {
             echo "## sign-dry-run: signed through scripts/cosign-sign-blob.sh and verified"
             echo "- identity: \`https://github.com/$GITHUB_WORKFLOW_REF\`"

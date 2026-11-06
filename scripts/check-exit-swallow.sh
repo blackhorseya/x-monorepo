@@ -25,19 +25,18 @@
 #             parsed), optionally ending in `|| exit [N]` (no `;`, second statement, `!`, `&`, subshell, group, if / case / loop / function / [[ ]] / time / coproc). The
 #             handler after an assignment, `x=$(…) || H`: H is `exit` / `return` (bare, or `$?` straight after the `||`), `exit N` / `return N`, or `{ …; exit N; }` /
 #             `{ …; return N; }` (N a literal 1..255; the group's last statement; every earlier one is a literal echo / printf with no prefix assignment and no substitution in
-#             an argument or redirection: a function call is not), or at top level `NAME=$?` (rcbranch judges it); `return` never inside a substitution. The handler must END its AND-OR
+#             an argument or redirection: a function call is not), (`|| NAME=$?` is red everywhere); `return` never inside a substitution. The handler must END its AND-OR
 #             list (only `;` or a comment may follow; `&`, `|`, `&&`, `||` after it are red) and the list must not run in the background, as a pipeline operand or in a
 #             coprocess. An assignment that is the condition of `if` / `elif` is accepted when what runs after it FAILED is the final `else` ending in `exit N` / `return N`
 #             (bare / `$?` only when it is the else block's only statement), or an `elif` whose whole condition is an assignment `name=$(…)` to the same variable;
 #             any other `elif` is red; `until`, always; `while`, and `! x=$(…)`, never.
-#             A plain top-level `x=$(…)` (no handler, not a condition) relies on `set -e`: it is accepted only when the file turns errexit on at top level BEFORE it and
-#             nothing in the file may turn it off (`set +e`, `set +o errexit`, `shopt -u`, a computed `set`, also behind `command` / `builtin`; after the `set -e`, or in any
-#             function, a `.` / `source` / `eval` / DEBUG-RETURN trap outside a child process, except `. …/best-effort.sh`), the `set -e` being a plain top-level statement (not
-#             backgrounded, negated or redirected), and every ancestor is a place where errexit is in force
-#             (file / `{ }` / `( )` / then, else, do, case bodies; never a condition, the left of && ||, `!`, `&`, a pipeline operand, `time`, `coproc`, `$( )`). The one exempt node is the kind scripts'
+#             EVERY `x=$(…)` is judged the same way, at the top level of a file and in a function body alike, and the checker does not look at errexit or at any shell
+#             option (a function call, `. file`, eval, a DEBUG trap, `set -e &` or a failed redirection can each leave `set -e` off, and nothing static proves otherwise): the
+#             assignment carries a whitelisted handler above, or it is the condition form. A bare assignment, a top-level `x=$(cmd) && use`, `x=$(cmd); rc=$?` and
+#             `x=$(cmd) || rc=$?` are red; use `capture` (scripts/best-effort.sh) to get the output and the status. The one exempt node is the kind scripts'
 #             `. "$(dirname "$0")/../../../scripts/best-effort.sh"`, matched field by field. Not exemptible.
-#   fnctx     inside ANY function body, `x=$(…)` must carry that handler (`|| return` / `|| exit` with `$?` or a literal, or `|| { …; return N; }`; no `|| NAME=$?`),
-#             or be the condition form above; `x=$(cmd) && use` is red there (at top level it is the documented way to use a value only when it succeeded).
+#   fnctx     the same rule, named for a function body: `x=$(…)` must carry that handler (`|| return` / `|| exit` with `$?` or a literal, or `|| { …; return N; }`; no `|| NAME=$?`),
+#             or be the condition form above; `x=$(cmd) && use` is red (here and at the top level).
 #             A shape rule: it does not look at how or from where the function is called (`f || x`, `if f`, `$(f)`, a wrapper, eval, command f, another file, never) -
 #             errexit may be off in any of those and the checker is never one spelling behind that way. Nothing is exemptible.
 #   Workflow / composite-action files: the `run:` scripts are cut out (scripts/extract-run-blocks.py) and scanned with these same rules;
@@ -80,7 +79,7 @@ repo_rel() {
 files=() yml=()
 if [ "$#" -gt 0 ]; then
   for f in "$@"; do
-    f=$(repo_rel "$f")
+    f=$(repo_rel "$f") || exit $?
     case $f in *.yml | *.yaml) yml+=("$f") ;; *) files+=("$f") ;; esac
   done
 else

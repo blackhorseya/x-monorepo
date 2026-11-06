@@ -12,7 +12,7 @@ set -euo pipefail
 # swallowed by `|| true`; grep's exit 1 (no match) is the only non-zero this script accepts, and then only where said.
 n="${1:-}"
 case "$n" in "" | *[!0-9]* | 0) echo "usage: web-e2e-shards-check.sh <number of shards>" >&2; exit 2 ;; esac
-tmp=$(mktemp -d)
+tmp=$(mktemp -d) || exit $?
 trap 'rm -rf "$tmp"' EXIT
 
 # list <name> [playwright args]: tests (the lines with the › separator) of one --list run into $tmp/<name>.
@@ -41,13 +41,13 @@ seq "$n" >"$tmp/indexes" || { echo "seq $n exited $?" >&2; exit 1; }
 indexes=$(cat "$tmp/indexes") || { echo "cat of the shard indexes exited $?" >&2; exit 1; }   # an assignment: a cat that prints 1 2 and then dies is a failure, not a loop over 1 2
 for i in $indexes; do
   list "shard$i" --shard="$i/$n"
-  c=$(wc -l <"$tmp/shard$i" | tr -d ' ')
+  c=$(wc -l <"$tmp/shard$i" | tr -d ' ') || exit $?
   echo "shard $i/$n tests: $c"
   sum=$((sum + c))
   cat "$tmp/shard$i" >>"$tmp/union"
 done
 sort "$tmp/union" >"$tmp/union.sorted"
-total=$(wc -l <"$tmp/full" | tr -d ' ')
+total=$(wc -l <"$tmp/full" | tr -d ' ') || exit $?
 if [ "$sum" != "$total" ] || ! diff "$tmp/full.sorted" "$tmp/union.sorted" >&2; then
   echo "the $n shards ($sum tests) are not the whole suite ($total tests)" >&2; exit 1
 fi

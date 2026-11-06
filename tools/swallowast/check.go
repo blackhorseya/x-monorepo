@@ -2,7 +2,6 @@ package main
 
 import (
 	"strconv"
-	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -18,7 +17,6 @@ type finding struct {
 type checker struct {
 	stack []syntax.Node // the ancestors of the node being visited, outermost first
 	out   []finding
-	eo    errexitInfo
 }
 
 func (c *checker) report(n syntax.Node, rule, why string) {
@@ -39,7 +37,6 @@ func (c *checker) functionName() string {
 }
 
 func (c *checker) walk(f *syntax.File) {
-	c.eo = scanErrexit(f)
 	syntax.Walk(f, func(n syntax.Node) bool {
 		if n == nil {
 			c.stack = c.stack[:len(c.stack)-1]
@@ -196,18 +193,17 @@ func (c *checker) listContext(si int, label bool) (rule, why string) {
 		return rule, "the assignment is negated (`! x=$(cmd)`): the failure branch is the then-branch and is not judged"
 	}
 	if handler == nil {
-		if inFn {
-			return "fnctx", "a function body must check this substitution's status itself — errexit may be off wherever the function is called"
+		if label {
+			return "", "" // the label idiom cannot fail: its value is a or b whatever the test says
 		}
-		if why := c.errexitReason(si); why != "" && !label { // the label idiom cannot fail: its value is a or b whatever the test says
-			return "default", why
-		}
-		return "", ""
+		// No reasoning about errexit anywhere: any function call or option change in this shell may have switched it off, and the checker cannot see that.
+		// So an assignment carries its own check (a whitelisted handler) or stands in the condition form, at the top level of a file and in a function body alike.
+		return rule, "this substitution's status must be checked by the assignment itself (`|| exit` / `|| return` [N], `|| { echo …; exit N; }`, or the if / until condition form): the checker does not assume errexit"
 	}
 	if why := c.detached(cur); why != "" {
 		return "default", why
 	}
-	if why := handlerReason(handler, false, !inFn); why != "" {
+	if why := handlerReason(handler, false); why != "" {
 		if inFn {
 			c.report(c.at(si), "default", why) // the handler whitelist is the same everywhere; in a function the missing / wrong check is a fnctx finding as well
 		}
@@ -314,15 +310,6 @@ func stopStmt(s *syntax.Stmt, exitOnly, bare bool) string {
 	return plainExit(ce, exitOnly)
 }
 
-func containsStmt(list []*syntax.Stmt, st *syntax.Stmt) bool {
-	for _, x := range list {
-		if x == st {
-			return true
-		}
-	}
-	return false
-}
-
 // isLastStmt: st is the last statement of a list (the status of a condition list is the status of its last statement).
 func isLastStmt(list []*syntax.Stmt, st *syntax.Stmt) bool {
 	return len(list) > 0 && list[len(list)-1] == st
@@ -355,19 +342,15 @@ func (c *checker) detached(top int) string {
 //
 //	plain   exit | return | exit $? | return $? | exit N | return N      directly after the `||`, so `$?` is the failed command's status
 //	brace   { …; exit N; }  { …; return N; }                              the LAST statement, N a literal 1..255; no bare, no `$?`, no `$var`
-//	rc      NAME=$?  (top level only: the status is kept, scripts/check-exit-swallow.sh's rcbranch rule judges what is done with it)
 //
 // `return` is not allowed inside a substitution (it would only leave the substitution). The handler is a command by itself: a `&`, a
 // pipe, a `&&` or a redirection on it moves it out of the foreground or can skip it.
-func handlerReason(h *syntax.Stmt, exitOnly, allowRC bool) string {
+func handlerReason(h *syntax.Stmt, exitOnly bool) string {
 	if h.Negated || h.Background || h.Coprocess || len(h.Redirs) > 0 {
 		return "the handler is negated, in the background, a coprocess or has a redirection (a failed redirection skips it)"
 	}
 	switch cmd := h.Cmd.(type) {
 	case *syntax.CallExpr:
-		if allowRC && isRCAssign(cmd) {
-			return ""
-		}
 		if why := plainExit(cmd, exitOnly); why != "" {
 			return why
 		}
@@ -375,13 +358,13 @@ func handlerReason(h *syntax.Stmt, exitOnly, allowRC bool) string {
 	case *syntax.Block:
 		return braceReason(cmd, exitOnly)
 	}
-	return "the handler is not `exit` / `return` [N], `{ …; exit N; }` or NAME=$?"
+	return "the handler is not `exit` / `return` [N] or `{ …; exit N; }`"
 }
 
 func plainExit(ce *syntax.CallExpr, exitOnly bool) string {
 	verb, ok := exitVerb(ce, exitOnly)
 	if !ok {
-		return "the handler is not `exit` / `return` [N], `{ …; exit N; }` or NAME=$?"
+		return "the handler is not `exit` / `return` [N] or `{ …; exit N; }`"
 	}
 	_ = verb
 	switch len(ce.Args) {
@@ -449,19 +432,6 @@ func exitVerb(ce *syntax.CallExpr, exitOnly bool) (string, bool) {
 		return name, true
 	}
 	return "", false
-}
-
-// isRCAssign: `NAME=$?` and nothing else (the status is recorded, rcbranch checks the branch that reads it).
-func isRCAssign(ce *syntax.CallExpr) bool {
-	if len(ce.Args) != 0 || len(ce.Assigns) != 1 {
-		return false
-	}
-	a := ce.Assigns[0]
-	if a.Name == nil || a.Append || a.Naked || a.Index != nil || a.Array != nil || a.Value == nil || len(a.Value.Parts) != 1 {
-		return false
-	}
-	p, ok := a.Value.Parts[0].(*syntax.ParamExp)
-	return ok && isPlainStatus(p)
 }
 
 func isPlainStatus(p *syntax.ParamExp) bool {
@@ -590,7 +560,7 @@ func contentReason(cs *syntax.CmdSubst) string {
 		if why := chainReason(b.X); why != "" {
 			return why
 		}
-		return handlerReason(b.Y, true, false)
+		return handlerReason(b.Y, true)
 	}
 	return chainReason(s)
 }
@@ -679,261 +649,4 @@ func sourceExceptionShape(dq *syntax.DblQuoted) bool {
 	}
 	p, ok := q.Parts[0].(*syntax.ParamExp)
 	return ok && p.Short && p.Param != nil && p.Param.Value == "0" && !p.Excl && !p.Length && !p.Width && p.Exp == nil && p.Slice == nil && p.Repl == nil && p.Index == nil
-}
-
-// errexitInfo is what the whole file says about errexit (set -e).
-type errexitInfo struct {
-	enabledAt uint // byte offset of the first top-level `set -e` / `set -o errexit` (valid when enabled)
-	enabled   bool
-	disabled  bool // anything that may turn it off: `set +e`, `set +o errexit`, `shopt -u …`, a `set` with a computed argument, or after the `set -e` (or inside any function) a `.` / source / eval / DEBUG-RETURN trap
-}
-
-func scanErrexit(f *syntax.File) errexitInfo {
-	var ei errexitInfo
-	// A top-level `set -e` counts only as a plain statement: not in the background (that runs in a subshell), not negated, no redirection (a failed
-	// redirection means `set` never ran), not a coprocess.
-	top := map[*syntax.CallExpr]bool{}
-	for _, st := range f.Stmts {
-		if ce, ok := st.Cmd.(*syntax.CallExpr); ok && !st.Background && !st.Negated && !st.Coprocess && len(st.Redirs) == 0 {
-			top[ce] = true
-		}
-	}
-	// Code that runs inside a function body runs whenever the function is called, possibly after errexit is on, wherever the body stands in the file.
-	var fns [][2]uint
-	syntax.Walk(f, func(n syntax.Node) bool {
-		if fd, ok := n.(*syntax.FuncDecl); ok {
-			fns = append(fns, [2]uint{fd.Pos().Offset(), fd.End().Offset()})
-		}
-		return true
-	})
-	inFn := func(off uint) bool {
-		for _, r := range fns {
-			if off >= r[0] && off < r[1] {
-				return true
-			}
-		}
-		return false
-	}
-	var risky []uint // where something runs that may change shell options from outside this file's text: `.` / source / eval / a DEBUG or RETURN trap
-	var stk []syntax.Node
-	syntax.Walk(f, func(n syntax.Node) bool {
-		if n == nil {
-			stk = stk[:len(stk)-1]
-			return true
-		}
-		stk = append(stk, n)
-		ce, ok := n.(*syntax.CallExpr)
-		if !ok || len(ce.Args) == 0 {
-			return true
-		}
-		args := ce.Args
-		for len(args) > 1 && (litOf(args[0]) == "command" || litOf(args[0]) == "builtin") { // `command set +e`, `builtin shopt -u …` are the same builtin
-			args = args[1:]
-		}
-		switch litOf(args[0]) {
-		case "shopt":
-			for _, a := range args[1:] {
-				if l := litOf(a); strings.HasPrefix(l, "-") && strings.Contains(l, "u") {
-					ei.disabled = true
-				}
-			}
-		case "set":
-			on, off := setFlags(args[1:])
-			if off {
-				ei.disabled = true
-			}
-			if on && top[ce] && len(args) == len(ce.Args) && !ei.enabled {
-				ei.enabled, ei.enabledAt = true, ce.Pos().Offset()
-			}
-		case ".", "source", "eval":
-			if litOf(args[0]) != "eval" && isErrexitSafeLib(args) {
-				return true
-			}
-			if isolatedFromShell(stk) {
-				return true
-			}
-			risky = append(risky, ce.Pos().Offset())
-			if inFn(ce.Pos().Offset()) {
-				ei.disabled = true
-			}
-		case "trap":
-			for _, a := range args[1:] {
-				if l := litOf(a); (!staticWord(a) || l == "DEBUG" || l == "RETURN") && !isolatedFromShell(stk) {
-					risky = append(risky, ce.Pos().Offset())
-					if inFn(ce.Pos().Offset()) {
-						ei.disabled = true
-					}
-				}
-			}
-		}
-		return true
-	})
-	for _, off := range risky {
-		if ei.enabled && off >= ei.enabledAt {
-			ei.disabled = true // it runs after errexit is on: it may switch it off, and its text is not in this file
-		}
-	}
-	return ei
-}
-
-// setFlags reads the arguments of `set`: on = this turns errexit on (-e, -eu, -euo pipefail, -o errexit); off = it may turn it off (+e, +o errexit, a computed argument).
-func setFlags(args []*syntax.Word) (on, off bool) {
-	for i := 0; i < len(args); i++ {
-		l := litOf(args[i])
-		switch {
-		case l == "":
-			return on, true // `set "$x"`: unknowable
-		case l == "--":
-			return on, off
-		case l == "-o" || l == "+o":
-			if i+1 < len(args) {
-				i++
-				if litOf(args[i]) == "errexit" {
-					if l == "-o" {
-						on = true
-					} else {
-						off = true
-					}
-				} else if litOf(args[i]) == "" {
-					off = true
-				}
-			}
-		case strings.HasPrefix(l, "-") && strings.Contains(l, "e") && !strings.HasPrefix(l, "--"):
-			on = true
-		case strings.HasPrefix(l, "+") && strings.Contains(l, "e"):
-			off = true
-		}
-	}
-	return on, off
-}
-
-// errexitReason: a top-level assignment with no handler relies on `set -e` to stop the script when its substitution fails. That holds only when
-//
-//	(1) the file turns errexit on at top level BEFORE this statement and nothing in the file may turn it off, and
-//	(2) every ancestor of the statement is a place where errexit is in force: the file's statement list, the body of an `if` / `elif` / `else`, of a loop
-//	    (`do`), of a `case` branch, of a `{ … }` or `( … )`; and each compound command on the way is a whole statement: not part of a condition, not the
-//	    left of `&&` / `||`, not negated, not in the background, not a pipeline operand, not inside a substitution. Any other ancestor type is not trusted.
-func (c *checker) errexitReason(si int) string {
-	st := c.at(si).(*syntax.Stmt)
-	if !c.eo.enabled || c.eo.disabled || st.Pos().Offset() < c.eo.enabledAt {
-		return "a plain assignment relies on `set -e`, which this file does not provably have in force here (no top-level `set -e` before it, or a `set +e` / `shopt -u` / computed `set` anywhere): add `|| exit N` or use the condition form"
-	}
-	const lost = "errexit does not apply where this assignment stands (a condition, the left of `&&` / `||`, a negation, the background, a pipeline, a substitution…): add `|| exit N` or use the condition form"
-	i := si
-	for {
-		n := c.at(i)
-		if s, ok := n.(*syntax.Stmt); ok && (s.Negated || s.Background || s.Coprocess) {
-			return lost
-		}
-		if i == 0 {
-			return ""
-		}
-		switch p := c.at(i - 1).(type) {
-		case *syntax.File:
-			return ""
-		case *syntax.Stmt: // n is the command of that statement
-			i--
-		case *syntax.BinaryCmd:
-			s, ok := n.(*syntax.Stmt)
-			if !ok || (p.Op != syntax.AndStmt && p.Op != syntax.OrStmt) || p.Y != s {
-				return lost
-			}
-			i--
-		case *syntax.Block, *syntax.Subshell, *syntax.CaseItem, *syntax.CaseClause:
-			i--
-		case *syntax.IfClause:
-			if s, ok := n.(*syntax.Stmt); ok && !containsStmt(p.Then, s) {
-				return lost // a condition
-			}
-			i--
-		case *syntax.WhileClause:
-			if s, ok := n.(*syntax.Stmt); ok && !containsStmt(p.Do, s) {
-				return lost
-			}
-			i--
-		case *syntax.ForClause:
-			if s, ok := n.(*syntax.Stmt); ok && !containsStmt(p.Do, s) {
-				return lost
-			}
-			i--
-		default:
-			return lost
-		}
-	}
-}
-
-// isErrexitSafeLib: `. <path>/best-effort.sh` with no further argument. The one library every script here sources is a file of this repo whose text never
-// touches errexit; scripts/test.sh asserts that (a grep over the file for set +e / set +o / shopt -u / eval / trap / source), so naming it is as good as
-// reading it. Any other file that is sourced after `set -e` may switch errexit off and counts as unreadable.
-func isErrexitSafeLib(args []*syntax.Word) bool {
-	if len(args) != 2 {
-		return false
-	}
-	parts := args[1].Parts
-	if len(parts) == 1 {
-		if q, ok := parts[0].(*syntax.DblQuoted); ok && !q.Dollar {
-			parts = q.Parts
-		}
-	}
-	if len(parts) == 0 {
-		return false
-	}
-	var last string
-	switch l := parts[len(parts)-1].(type) {
-	case *syntax.Lit:
-		last = l.Value
-	case *syntax.SglQuoted:
-		if l.Dollar {
-			return false
-		}
-		last = l.Value
-	default:
-		return false
-	}
-	return last == "best-effort.sh" && len(parts) == 1 || strings.HasSuffix(last, "/best-effort.sh")
-}
-
-// isolatedFromShell: the node (the last of the stack) runs in a child process, so an option it changes does not reach the shell that holds the assignment:
-// in a `( … )`, a $(…), a <(…), the background, or the left side of a pipe.
-func isolatedFromShell(stk []syntax.Node) bool {
-	for i := 0; i+1 < len(stk); i++ {
-		switch p := stk[i].(type) {
-		case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
-			return true
-		case *syntax.Stmt:
-			if p.Background {
-				return true
-			}
-		case *syntax.BinaryCmd:
-			if (p.Op == syntax.Pipe || p.Op == syntax.PipeAll) && stk[i+1] == syntax.Node(p.X) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// staticWord: the word is spelled out (literals and quotes with nothing expanded in them); `”` is static, `"$x"` is not.
-func staticWord(w *syntax.Word) bool {
-	for _, p := range w.Parts {
-		switch q := p.(type) {
-		case *syntax.Lit:
-		case *syntax.SglQuoted:
-			if q.Dollar {
-				return false
-			}
-		case *syntax.DblQuoted:
-			if q.Dollar {
-				return false
-			}
-			for _, in := range q.Parts {
-				if _, ok := in.(*syntax.Lit); !ok {
-					return false
-				}
-			}
-		default:
-			return false
-		}
-	}
-	return true
 }

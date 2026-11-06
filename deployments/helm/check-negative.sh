@@ -14,7 +14,7 @@ chart=${1:-x-monorepo}
 rc=0
 for f in "$chart"/ci-negative/*.yaml; do
   wants=()
-  expects_rc=0; expects=$(sed -n '/^# expect: /!q;p' "$f") || expects_rc=$?
+  capture expects expects_rc sed -n '/^# expect: /!q;p' "$f" || exit 1
   [ "$expects_rc" = 0 ] || { echo "helm check-negative: $f: reading the '# expect:' lines exited $expects_rc"; rc=1; continue; }
   while IFS= read -r line; do [ -z "$line" ] || wants+=("${line#\# expect: }"); done <<<"$expects"
   [ "${#wants[@]}" -gt 0 ] || { echo "helm check-negative: $f: first line must be '# expect: <text>'"; rc=1; continue; }

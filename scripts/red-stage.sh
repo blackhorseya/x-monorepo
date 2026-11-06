@@ -23,7 +23,7 @@ while getopts m: o; do
 done
 [ -n "$msg" ] || { echo "usage: red-stage.sh -m <expected assertion message regex> < go-test-output" >&2; exit 64; }
 
-out=$(cat)
+out=$(cat) || exit $?
 class=pass
 if grep -Eq '\[(build|setup) failed\]' <<<"$out"; then class=compile
 elif grep -Eq '^panic: ' <<<"$out"; then class=panic

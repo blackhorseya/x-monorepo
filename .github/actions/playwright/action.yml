@@ -15,7 +15,7 @@ runs:
       shell: bash
       working-directory: web/apps/console
       run: |
-        v=$(pnpm exec playwright --version | awk '{print $2}')
+        v=$(pnpm exec playwright --version | awk '{print $2}') || exit $?
         echo "v=$v" >> "$GITHUB_OUTPUT"
 
     # same decision as the setup action: its plan.sh is the only definition of "may write"

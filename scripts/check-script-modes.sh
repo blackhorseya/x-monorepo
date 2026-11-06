@@ -12,11 +12,13 @@
 #   scripts/check-script-modes.sh      # task check-script-modes; helm-check, and CI's scripts-test job (scripts/test.sh)
 set -euo pipefail
 die() { echo "check-script-modes: $*" >&2; exit 2; }
+_lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
+. "$_lib/best-effort.sh" || { echo "check-script-modes: cannot load $_lib/best-effort.sh (capture)" >&2; exit 2; }   # capture: the status of a command next to what it printed
 
 here=$(dirname "$0") || { echo "check-script-modes: dirname failed" >&2; exit 2; }
 cd "$here/.." || { echo "check-script-modes: cannot cd to the repo root from [$here]" >&2; exit 2; }
 
-rc=0; line=$(grep -E '^[[:space:]]+- chmod \+x ' Taskfile.yml) || rc=$?
+capture line rc grep -E '^[[:space:]]+- chmod \+x ' Taskfile.yml || exit 2
 case $rc in
   0) ;;
   1) die "want exactly one '- chmod +x' line in Taskfile.yml (task tools), found none" ;;
@@ -30,7 +32,7 @@ bad=0 n=0
 for f in "$@"; do
   if [ ! -e "$f" ]; then echo "check-script-modes: '$f' (from the chmod line) matches no file" >&2; bad=1; continue; fi
   n=$((n + 1))
-  rc=0; entry=$(git ls-files -s -- "$f") || rc=$?
+  capture entry rc git ls-files -s -- "$f" || exit 2
   [ "$rc" = 0 ] || { echo "check-script-modes: git ls-files failed (exit $rc) for '$f'" >&2; exit 2; }
   mode=${entry%% *}
   [ "$mode" = 100755 ] && continue

@@ -10,7 +10,7 @@ abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && p
 root=$(abs_dir_of "$0" ../..) || exit 1
 cd "$root" || exit 1
 head=${2:-deployments/helm/x-monorepo}
-tmp=$(mktemp -d)
+tmp=$(mktemp -d) || exit $?
 trap 'rm -rf "$tmp"' EXIT
 # --depth only when this clone is already shallow (CI): on a full clone, and above all on a repository shared by
 # worktrees, `--depth` would make the whole repository shallow and break every other worktree's merge-base.

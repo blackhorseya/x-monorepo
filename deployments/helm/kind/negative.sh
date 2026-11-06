@@ -82,7 +82,7 @@ grep -q "$key" <<<"$refusal" && { echo "negative: the failing pod's refusal carr
 echo "negative ok: an empty APP_POSTGRES_URL makes catalog-rpc exit non-zero and never Ready (--require-durable)"
 
 # 3. rpc's copy of the key is missing from the Secret catalog-rpc is otherwise happy with
-pgurl=$(sed -n 's/^  postgresUrl: //p' "$values" | head -n 1)
+pgurl=$(sed -n 's/^  postgresUrl: //p' "$values" | head -n 1) || exit $?
 [ -n "$pgurl" ] || { echo "negative: no secrets.postgresUrl in $values"; exit 1; }
 kubectl -n "$ns" create secret generic catalog-rpc-no-rpc-key \
   --from-literal=APP_AUTH_API_KEYS="rpc=$key:admin" --from-literal=APP_POSTGRES_URL="$pgurl" >/dev/null

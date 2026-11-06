@@ -16,7 +16,7 @@ set -euo pipefail
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
 ns=$1 release=$2 chart=$3 values=$4
 rpc_dep="$release-rpc" cat_dep="$release-catalog-rpc"
-budget=$(helm -n "$ns" get values "$release" -a -o json | jq -r '.rpc.waitForCatalog.timeoutSeconds')
+budget=$(helm -n "$ns" get values "$release" -a -o json | jq -r '.rpc.waitForCatalog.timeoutSeconds') || exit $?
 [ "$budget" -gt 0 ] || { echo "outage: rpc.waitForCatalog.timeoutSeconds is not set in the release"; exit 1; }
 port=${SMOKE_OUTAGE_PORT:-18083}
 api="http://127.0.0.1:$port/api"
@@ -102,9 +102,9 @@ onhand() { curl -fsS -H 'Content-Type: application/json' "$api/inventory.v1.Inve
 
 # ── seed, with the catalog up ────────────────────────────────────────────────────────────────────────────
 pf_start
-r=$(call catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}"); want "seed UpsertProduct" "${r%% *}" 200
-r=$(call inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}"); want "seed SetStock" "${r%% *}" 200
-r=$(order); want "CreateOrder with the catalog up" "${r%% *}" 200
+r=$(call catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\",\"price\":{\"amount_minor\":100,\"currency\":\"USD\"}}") || exit $?; want "seed UpsertProduct" "${r%% *}" 200
+r=$(call inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}") || exit $?; want "seed SetStock" "${r%% *}" 200
+r=$(order) || exit $?; want "CreateOrder with the catalog up" "${r%% *}" 200
 pf_stop
 
 # ── A. the catalog is down while rpc rolls out ──────────────────────────────────────────────────────────
@@ -123,30 +123,30 @@ kubectl -n "$ns" rollout status "deploy/$rpc_dep" --timeout="$((budget + 120))s"
   || { echo "outage: the rpc rollout did not complete with the catalog down (a best-effort wait must not hold it)"; kubectl -n "$ns" get pods; exit 1; }
 waited=$((SECONDS - start))
 [ "$waited" -ge $((budget - 2)) ] || { echo "outage: the rpc came up after ${waited}s, before the ${budget}s wait ended (it did not wait for the catalog)"; exit 1; }
-pod=$(rpc_pod)
+pod=$(rpc_pod) || exit $?
 log=$(init_log "$pod") || { echo "outage: the wait of $pod did not terminate with exit 0, or its log could not be read"; exit 1; }
 grep -q 'starting anyway' <<<"$log" || { echo "outage: the wait did not warn that it gave up: $log"; exit 1; }
 grep -qi 'kind-catalog-rpc-key\|api_key' <<<"$log" && { echo "outage: the wait's log mentions the service key"; exit 1; }
 echo "outage ok (A1): with the catalog down the rpc rolled out after waiting ${waited}s of a ${budget}s budget, warned, and is Ready"
 
 pf_start
-before_orders=$(orders); before_stock=$(onhand)
-r=$(order); want "CreateOrder with the catalog down" "$r" "503 catalog.unavailable"
-r=$(call inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":99}"); want "SetStock with the catalog down" "$r" "503 catalog.unavailable"
+before_orders=$(orders) || exit $?; before_stock=$(onhand) || exit $?
+r=$(order) || exit $?; want "CreateOrder with the catalog down" "$r" "503 catalog.unavailable"
+r=$(call inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":99}") || exit $?; want "SetStock with the catalog down" "$r" "503 catalog.unavailable"
 after_orders=$(orders) || exit 1
 want "orders written while the catalog was down" "$after_orders" "$before_orders"
 after_stock=$(onhand) || exit 1
 want "stock written while the catalog was down" "$after_stock" "$before_stock"
-r=$(call catalog.v1.CatalogService/GetProduct "{\"sku\":\"$sku\"}"); want "GetProduct (catalog.v1) with the catalog down" "$r" "503 catalog.unavailable"
+r=$(call catalog.v1.CatalogService/GetProduct "{\"sku\":\"$sku\"}") || exit $?; want "GetProduct (catalog.v1) with the catalog down" "$r" "503 catalog.unavailable"
 curl -fsS "$api/readyz" >/dev/null || { echo "outage: rpc readyz fails with the catalog down: it must not depend on it"; exit 1; }
 echo "outage ok (A2): CreateOrder, SetStock and catalog.v1 answer 503 catalog.unavailable and write nothing; readyz, ListOrders and GetStock are untouched"
 
 # the catalog comes back: the SAME rpc pod works again, never restarted
-restarts=$(kubectl -n "$ns" get pod "$pod" -o json | jq '[.status.containerStatuses[].restartCount] | add')
+restarts=$(kubectl -n "$ns" get pod "$pod" -o json | jq '[.status.containerStatuses[].restartCount] | add') || exit $?
 kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=1 >/dev/null
 kubectl -n "$ns" rollout status "deploy/$cat_dep" --timeout=180s >/dev/null
 ok=""
-for ((_try109 = 1; _try109 <= 60; _try109++)); do r=$(order); [ "${r%% *}" = 200 ] && { ok=yes; break; }; sleep 1; done
+for ((_try109 = 1; _try109 <= 60; _try109++)); do r=$(order) || exit $?; [ "${r%% *}" = 200 ] && { ok=yes; break; }; sleep 1; done
 [ "$ok" = yes ] || { echo "outage: CreateOrder did not recover after the catalog came back (last: $r)"; exit 1; }
 pod_after=$(rpc_pod) || exit 1
 want "the rpc pod after the recovery" "$pod_after" "$pod"
@@ -163,7 +163,7 @@ sleep 2
 kubectl -n "$ns" scale "deploy/$cat_dep" --replicas=1 >/dev/null
 kubectl -n "$ns" rollout status "deploy/$cat_dep" --timeout=180s >/dev/null
 kubectl -n "$ns" rollout status "deploy/$rpc_dep" --timeout="$((budget + 120))s" >/dev/null
-pod=$(rpc_pod)
+pod=$(rpc_pod) || exit $?
 log=$(init_log "$pod") || { echo "outage: the wait of $pod did not terminate with exit 0, or its log could not be read"; exit 1; }
 grep -q 'starting anyway' <<<"$log" && { echo "outage: the wait gave up although the catalog came up during it (budget ${budget}s): $log"; exit 1; }
 echo "outage ok (B): the catalog came up during the wait, the wait ended without a warning and the rpc started behind it"

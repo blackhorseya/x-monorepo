@@ -20,10 +20,10 @@ k6pid=""
 trap 'kill $pf1 $pf2 $k6pid 2>/dev/null || true' EXIT
 for ((_try18 = 1; _try18 <= 30; _try18++)); do curl -fsS "http://127.0.0.1:$rpc_port/api/readyz" >/dev/null 2>&1 && curl -fsS "http://127.0.0.1:$prom_port/-/ready" >/dev/null 2>&1 && break; sleep 1; done
 
-group=$(kubectl -n "$ns" get scaledobject "$release-worker" -o jsonpath='{.spec.triggers[0].metadata.query}')
+group=$(kubectl -n "$ns" get scaledobject "$release-worker" -o jsonpath='{.spec.triggers[0].metadata.query}') || exit $?
 lag() { curl -fsS "http://127.0.0.1:$prom_port/api/v1/query" --data-urlencode "query=$group" | jq -r '.data.result[0].value[1] // "none"'; }
 replicas() { kubectl -n "$ns" get "$deploy" -o jsonpath='{.status.replicas}'; }
-min=$(kubectl -n "$ns" get scaledobject "$release-worker" -o jsonpath='{.spec.minReplicaCount}')
+min=$(kubectl -n "$ns" get scaledobject "$release-worker" -o jsonpath='{.spec.minReplicaCount}') || exit $?
 
 # The ScaledObject must be live before the burst: KEDA created the HPA and can query Prometheus.
 for ((_try26 = 1; _try26 <= 30; _try26++)); do
@@ -49,7 +49,7 @@ k6 run --quiet --no-thresholds "$k6dir/orders.js" -e "BASE_URL=http://127.0.0.1:
 
 up=""
 for ((i = 1; i <= $((burst + 60)); i++)); do
-  r=$(replicas); l=$(lag)
+  r=$(replicas) || exit $?; l=$(lag) || exit $?
   [ $((i % 5)) = 0 ] && echo "scale: t=${i}s lag=$l replicas=$r"
   if [ "$r" -gt "$min" ]; then up=$r; echo "scale: scaled out to $r replicas at t=${i}s (lag $l)"; break; fi
   sleep 1
@@ -60,7 +60,7 @@ k6pid=""
 
 # Backlog drained → HPA brings the worker back down (behavior.scaleDown + cooldown from values).
 for ((i = 1; i <= 240; i++)); do
-  r=$(replicas); l=$(lag)
+  r=$(replicas) || exit $?; l=$(lag) || exit $?
   [ $((i % 10)) = 0 ] && echo "scale: drain t=${i}s lag=$l replicas=$r"
   if [ "$r" = "$min" ] && [ "$l" = 0 ]; then echo "scale ok: peaked at $up replicas, drained, back to $min"; exit 0; fi
   sleep 1

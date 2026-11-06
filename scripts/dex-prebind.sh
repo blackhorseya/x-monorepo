@@ -46,7 +46,7 @@ base=${base%/}
 [ -n "${ADMIN_API_KEY:-}" ] || die "ADMIN_API_KEY is required (an admin API key: task bootstrap's, or a break-glass auth.api_keys entry)"
 command -v jq >/dev/null || die "jq is required"
 
-work=$(mktemp -d)
+work=$(mktemp -d) || exit $?
 trap 'rm -rf "$work"' EXIT
 
 # printable <kind> <text> <secret>: what of the server's answer may be echoed. Only known shapes:

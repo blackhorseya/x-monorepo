@@ -14,7 +14,7 @@ set -euo pipefail
 run_in() { local d=$1; shift; ( cd "$d" && "$@" ); }   # a command in another directory, without `cd … && cmd` inside $(…) (#470)
 [ $# -eq 2 ] || { echo "usage: $0 <base> <head>" >&2; exit 3; }
 base=$1 head=$2
-tmp=$(mktemp -d)
+tmp=$(mktemp -d) || exit $?
 trap 'rm -rf "$tmp"' EXIT
 
 merged=$(git merge-tree --write-tree "$base" "$head" 2>&1) || {
@@ -27,7 +27,7 @@ git archive "$tree" | tar -x -C "$tmp"
 echo "merge-tree-check: $base + $head → tree $tree"
 
 if [ -f "$tmp/go.work" ]; then
-  dirs=$(run_in "$tmp" go list -m -f '{{.Dir}}')
+  dirs=$(run_in "$tmp" go list -m -f '{{.Dir}}') || exit $?
 else
   dirs=$tmp
 fi

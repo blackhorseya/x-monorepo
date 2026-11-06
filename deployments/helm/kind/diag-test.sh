@@ -272,8 +272,8 @@ for sg in TERM INT; do
     case $sg in TERM) want_rc=143 ;; INT) want_rc=130 ;; esac
     hb="$tmp/hb-$sg"; mkdir -p "$hb"; : > "$tmp/events"
     sig_rc=0
-    res=$(DIAG_DIR="$tmp/diag5-$sg" EVENTS="$tmp/events" NONCE="$nonce" HELM_BLOCK="$hb" PATH="$tmp/bin:$PATH" python3 "$tmp/sigrun.py" $sg "$hb/started" 60 \
-      "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out") || sig_rc=$?
+    capture res sig_rc env DIAG_DIR="$tmp/diag5-$sg" EVENTS="$tmp/events" NONCE="$nonce" HELM_BLOCK="$hb" PATH="$tmp/bin:$PATH" python3 "$tmp/sigrun.py" $sg "$hb/started" 60 \
+      "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out" || exit 1
     [ "$sig_rc" = 0 ] || echo "diag-test: D5 $sg: sigrun.py exited $sig_rc (it reports the script's rc= and signalled= in its output, asserted next)" >&2
     echo "$res" > "$tmp/out"
     [[ $res == *"signalled=yes"* ]] || die "D5 $sg: the script never reached the waiting helm upgrade ($res)"

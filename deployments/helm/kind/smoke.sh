@@ -31,14 +31,14 @@ cat="http://127.0.0.1:$cport_cat/api"
 for ((_try30 = 1; _try30 <= 30; _try30++)); do curl -fsS "$cat/readyz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "$cat/readyz" >/dev/null || { echo "smoke: catalog-rpc /api/readyz never answered 200"; exit 1; }
 curl -fsS "$cat/version" >/dev/null || { echo "smoke: catalog-rpc /api/version failed"; exit 1; }
-catimg=$(kubectl -n "$ns" get deploy -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].spec.template.spec.containers[0].image}')
+catimg=$(kubectl -n "$ns" get deploy -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].spec.template.spec.containers[0].image}') || exit $?
 case $catimg in */catalog-rpc:*) ;; *) echo "smoke: the catalog-rpc Deployment runs '$catimg', not the catalog-rpc image"; exit 1 ;; esac
 cat_version=$(curl -fsS "$cat/version") || exit 1
 echo "smoke: catalog-rpc running $catimg $cat_version"
-catcfg=$(kubectl -n "$ns" get configmap -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.config\.yaml}')
+catcfg=$(kubectl -n "$ns" get configmap -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.config\.yaml}') || exit $?
 echo "$catcfg" | grep -q 'oidc\|jwt' && { echo "smoke: catalog-rpc ConfigMap carries auth.jwt/auth.oidc"; exit 1; }
 echo "$catcfg" | grep -q 'mode: required' || { echo "smoke: catalog-rpc ConfigMap is not auth.mode required"; exit 1; }
-catkey=$(kubectl -n "$ns" get secret -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.APP_AUTH_API_KEYS}' | base64 -d)
+catkey=$(kubectl -n "$ns" get secret -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.APP_AUTH_API_KEYS}' | base64 -d) || exit $?
 case $catkey in rpc=*:admin) catkey=${catkey#rpc=}; catkey=${catkey%:admin} ;; *) echo "smoke: catalog-rpc service key is not rpc=<key>:admin"; exit 1 ;; esac
 catrpc() { curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' ${3:+-H "X-API-Key: $3"} "$cat/$1" -d "$2"; }
 now=$(date +%s) || exit 1
@@ -55,7 +55,7 @@ code=$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" "$catkey") || { echo
 # What catalog-rpc wrote is what the rpc serves: this GetProduct hits the rpc, whose Forwarder passes
 # it to catalog-rpc over Connect. (The rpc has no catalog repository of its own, so a 404 here means
 # the Forwarder or catalog-rpc is broken.)
-got=$(curl -fsS -H 'Content-Type: application/json' "$api/catalog.v1.CatalogService/GetProduct" -d "{\"sku\":\"$catsku\"}" | jq -r '.product.price.amountMinor // .product.price.amount_minor')
+got=$(curl -fsS -H 'Content-Type: application/json' "$api/catalog.v1.CatalogService/GetProduct" -d "{\"sku\":\"$catsku\"}" | jq -r '.product.price.amountMinor // .product.price.amount_minor') || exit $?
 [ "$got" = 250 ] || { echo "smoke: rpc did not read catalog-rpc's write back (got '$got')"; exit 1; }
 echo "smoke: catalog-rpc requires its service key (401 without, 401 unknown, 200 with) and the rpc reads back through to catalog-rpc what catalog-rpc wrote"
 
@@ -89,12 +89,12 @@ rpc catalog.v1.CatalogService/UpsertProduct "{\"sku\":\"$sku\",\"name\":\"$sku\"
 rpc inventory.v1.InventoryService/SetStock "{\"sku\":\"$sku\",\"on_hand\":10}" >/dev/null
 order=$(rpc ordering.v1.OrderService/CreateOrder \
   "{\"customer_id\":\"smoke\",\"items\":[{\"sku\":\"$sku\",\"quantity\":3}]}" \
-  | jq -r .order.id)
+  | jq -r .order.id) || exit $?
 [ -n "$order" ] && [ "$order" != null ] || { echo "smoke: CreateOrder returned no id"; exit 1; }
 
 # OrderCreated → outbox → forwarder → Redis Streams → inventory consumer → stock.reserved.
 for ((_try87 = 1; _try87 <= 30; _try87++)); do
-  reserved=$(rpc inventory.v1.InventoryService/GetStock "{\"sku\":\"$sku\"}" | jq -r '.stock.reserved // 0')
+  reserved=$(rpc inventory.v1.InventoryService/GetStock "{\"sku\":\"$sku\"}" | jq -r '.stock.reserved // 0') || exit $?
   [ "$reserved" = 3 ] && { echo "smoke ok: order $order reserved 3 of $sku through the worker"; exit 0; }
   sleep 1
 done
