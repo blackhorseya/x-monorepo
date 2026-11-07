@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import { type Connect, LOOPBACKS, classifyConnectError, hasIPv6Loopback, isNoAddress, probe, waitClosed } from "./clean.ts";
 import { derivePorts } from "./ports.ts";
-import { type ChildLike, type Tracked, groupAlive, lastSpawned, reapAll, runBounded, signalGroup, spawnTracked, track, waitChild } from "./child.ts";
+import * as childModule from "./child.ts";
+import { MAX_WAIT_MS, type Tracked, __testing, groupAlive, lastSpawned, reapAll, runBounded, signalGroup, spawnTracked, waitChild } from "./child.ts";
 
 // The cleanup check (e2e/assert-clean.ts) must fail while ANYTHING still listens on a port the e2e stack
 // derives, on every loopback address a fixture can bind: 127.0.0.1, ::1 (what `localhost` is on a
@@ -332,9 +333,8 @@ describe("starting and stopping vite preview is bounded", () => {
   });
 
   it("stopVite: a child that never reports its end (not even after SIGKILL) does not hang the release", async () => {
-    const real = spawnTracked(idle);
-    // a stand-in for the child's handle that never emits `exit` (a real one always does after SIGKILL), on the real group
-    const silent = track(Object.assign(new EventEmitter(), { pid: real.pid, exitCode: null, signalCode: null }) as ChildLike);
+    // the same group, but its end is never reported (a real child always reports it after SIGKILL)
+    const silent = __testing.neverEnds(spawnTracked(idle));
     const t0 = Date.now();
     await within(3_000, "stopVite", stopVite(silent, p.all[12]!, { graceMs: 200, reapMs: 200, closeMs: 200 }));
     assert.ok(Date.now() - t0 >= 400, "the two waits were skipped, not bounded");
@@ -363,29 +363,42 @@ describe("starting and stopping vite preview is bounded", () => {
 
 // The wait helper itself, on a fake child: every branch, without a process.
 describe("waitChild: exit, error and timeout end a wait", () => {
-  const fake = (): ChildLike => Object.assign(new EventEmitter(), { pid: undefined, exitCode: null, signalCode: null });
+  const fake = () => Object.assign(new EventEmitter(), { pid: undefined, exitCode: null, signalCode: null });
   it("exit → { exit, code, signal }", async () => {
     const c = fake();
-    const t = track(c);
+    const t = __testing.fake(c);
     queueMicrotask(() => c.emit("exit", 3, null));
     assert.deepEqual(await waitChild(t, 1_000), { kind: "exit", code: 3, signal: null });
   });
-  it("error → { error }, and an `error` before anyone waits is not an uncaught exception (the listener is hooked at track())", async () => {
+  it("error → { error }, and an `error` before anyone waits is not an uncaught exception (the listener is hooked at __testing.fake())", async () => {
     const c = fake();
-    const t = track(c);
+    const t = __testing.fake(c);
     const failure = Object.assign(new Error("spawn x ENOENT"), { code: "ENOENT" });
     assert.doesNotThrow(() => c.emit("error", failure));
     assert.deepEqual(await waitChild(t, 1_000), { kind: "error", error: failure });
   });
   it("neither → { timeout } after ms, and not before", async () => {
-    const t = track(fake());
+    const t = __testing.fake(fake());
     const t0 = Date.now();
     assert.deepEqual(await waitChild(t, 150), { kind: "timeout" });
     assert.ok(Date.now() - t0 >= 140);
   });
+  it("signalGroup and groupAlive refuse a Tracked that spawnTracked did not make: no signal to a pid through a fake", () => {
+    const real = spawnTracked([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+    const forged = __testing.fake(Object.assign(new EventEmitter(), { pid: real.pid, exitCode: null, signalCode: null }));
+    assert.throws(() => signalGroup(forged, "SIGKILL"), TypeError);
+    assert.throws(() => groupAlive(forged), TypeError);
+    assert.throws(() => signalGroup({ pid: real.pid, ended: undefined } as unknown as Tracked, "SIGKILL"), TypeError);
+    assert.equal(groupAlive(real), true, "control: the real group was not touched, and the real Tracked still answers");
+  });
+  it("a wait is finite: NaN, negative, Infinity and past MAX_WAIT_MS are refused, not turned into a 1 ms timer or a forever", () => {
+    const t = __testing.fake(fake());
+    for (const ms of [Number.NaN, -1, Number.POSITIVE_INFINITY, MAX_WAIT_MS + 1, 2 ** 31]) assert.throws(() => waitChild(t, ms), RangeError, String(ms));
+    return assert.rejects(runBounded(process.execPath, ["-e", ""], { timeoutMs: Number.POSITIVE_INFINITY }), RangeError);
+  });
   it("the first end wins, and a later wait answers at once with it", async () => {
     const c = fake();
-    const t = track(c);
+    const t = __testing.fake(c);
     c.emit("exit", 0, null);
     c.emit("error", new Error("late"));
     const t0 = Date.now();
@@ -408,3 +421,18 @@ describe("the selftest has no handle on a child process", () => {
     assert.ok(!read("./assert-clean.selftest.ts").includes(MODULE), "this file names the child-process module: wait for a child through child.ts");
   });
 });
+
+// What a caller can reach on a Tracked is checked by the compiler (`task web-typecheck`, CI's web job): nothing to await
+// without a limit, no handle to listen on. If one of these ever becomes reachable, its @ts-expect-error turns into an error.
+export const noUnboundedWaitOnTracked = (t: Tracked) => {
+  // @ts-expect-error the promise is private: the only wait is waitChild(t, ms)
+  void t.whenEnded;
+  // @ts-expect-error no ChildProcess handle either
+  void t.child;
+  // @ts-expect-error nor a way to hook `exit`
+  void t.once;
+  // @ts-expect-error a Tracked cannot be made outside child.ts: track() is not exported ...
+  void childModule.track;
+  // @ts-expect-error ... and no constructor (Tracked is exported as a type only)
+  void new childModule.Tracked();
+};
