@@ -28,6 +28,7 @@ describe("assert-clean selftest does not hide a failed bind", () => {
   it("::1 taken after the ports were chosen: non-zero exit, and the reason is EADDRINUSE", { timeout: TEST_TIMEOUT_MS }, async () => {
     const r = await selftest(["--import", fileURLToPath(new URL("./fault/steal-ipv6.mjs", import.meta.url))]);
     assert.notEqual(r.code, 0, "the selftest passed although ::1 was taken");
-    assert.match(r.out, /EADDRINUSE/, `it failed, but not for the injected reason:\n${reportFailure("fault injection", r)}`);
+    // reportFailure writes the stderr block: only when this really failed (an argument of assert.match would run it every time).
+    if (!/EADDRINUSE/.test(r.out)) assert.fail(`it failed, but not for the injected reason:\n${reportFailure("fault injection", r)}`);
   });
 });

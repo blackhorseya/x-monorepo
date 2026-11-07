@@ -139,8 +139,10 @@ describe("a failed runner names every failing subtest on stderr", () => {
     writeFileSync(file, 'console.error("EARLY-CAUSE: import failed here"); for (let i = 0; i < 600; i++) console.error(`noise line ${i} ${"z".repeat(40)}`); process.exit(1);');
     const r = await runner(pair, file);
     assert.equal(r.code, 1);
-    assert.ok(r.out.length > 25_000, "the fixture must print more than the old 20000-character tail, or this proves nothing");
-    assert.ok(r.out.indexOf("EARLY-CAUSE") < r.out.length - 20_000, "EARLY-CAUSE must lie outside the last 20000 characters");
+    const at = r.out.indexOf("EARLY-CAUSE");
+    const shape = `runner output: ${r.out.length} chars, EARLY-CAUSE at ${at}; head: ${JSON.stringify(r.out.slice(0, 300))}; tail: ${JSON.stringify(r.out.slice(-300))}`;
+    assert.ok(at >= 0, `the runner did not forward the file's output at all, so this proves nothing. ${shape}`);
+    assert.ok(at < r.out.length - 20_000, `EARLY-CAUSE must lie outside the last 20000 characters, or this proves nothing. ${shape}`);
     const d = diagnose(r);
     assert.match(d.stderr, /EARLY-CAUSE: import failed here/, "the early output of a dead file was cut");
   });
