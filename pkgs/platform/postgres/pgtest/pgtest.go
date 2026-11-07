@@ -18,7 +18,7 @@
 // ctrreap.OnSignal, installed by Main, not by URL: a package whose tests send SIGTERM to their own process to exercise a
 // graceful shutdown must not have it, so it calls m.Run and Terminate itself and is covered by the next start only);
 // go test -timeout, a panic or SIGKILL leave it, and the NEXT start of any pgtest or redistest container on the machine
-// removes it (ctrreap.ReapOnce). Only containers labelled by this repo whose test process is gone are removed; one whose
+// removes it (ctrreap.ReapBeforeStart). Only containers labelled by this repo whose test process is gone are removed; one whose
 // process is alive (another agent's tests on the same machine), or that carries no such label, is never touched. See
 // package ctrreap for the table of ways a binary can end and what covers each. Nothing is reaped if no test ever runs
 // again on the machine. Neither ~/.testcontainers.properties nor Ryuk is touched.
@@ -251,7 +251,7 @@ func start() {
 	}
 
 	// containers of test processes that are gone are removed before a new one starts; a failure here is a warning, not an error
-	ctrreap.ReapOnce(c, provider.Client(), os.Stderr)
+	ctrreap.ReapBeforeStart(c, provider.Client(), os.Stderr)
 
 	container, err = postgres.Run(c, Image,
 		postgres.WithDatabase("test"),

@@ -124,7 +124,7 @@ func start() {
 		return
 	}
 
-	ctrreap.ReapOnce(c, provider.Client(), os.Stderr)
+	ctrreap.ReapBeforeStart(c, provider.Client(), os.Stderr)
 
 	container, err = redis.Run(c, Image, testcontainers.WithLabels(ctrreap.Labels()))
 	if err != nil {

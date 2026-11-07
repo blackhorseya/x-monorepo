@@ -161,25 +161,41 @@ func TestReapNotFoundIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestReapRemovalInProgressIsNotAFailure(t *testing.T) {
-	inProgress := fmt.Errorf("removal of container a is already in progress: %w", cerrdefs.ErrConflict)
-	other := fmt.Errorf("cannot remove a running container: %w", cerrdefs.ErrConflict)
-	api := &fakeAPI{
-		all: []container.Summary{
-			{ID: "a", Labels: labels("ns", Owner{"h1", 999, 1})},
-			{ID: "b", Labels: labels("ns", Owner{"h1", 998, 1})},
-		},
-		removeErr: map[string]error{"a": inProgress, "b": other},
-	}
-	rep, err := Reap(context.Background(), api, "ns", self, probe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := rep.Items[0]; got.Outcome != Removed || !strings.Contains(got.Detail, "in progress") {
-		t.Fatalf("a removal another reaper is already doing is not a failure: %+v", got)
-	}
-	if got := rep.Items[1]; got.Outcome != RemoveFailed {
-		t.Fatalf("any other conflict is still a failure: %+v", got)
+func TestReapRemovalInProgress(t *testing.T) {
+	const id = "4feb033ec17387343128349c630c1f4bd08cea1af550e4673faa912ca0e716fe"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want Outcome
+	}{
+		// positives: the Docker message as CI saw it, bare, wrapped, with and without the conflict class
+		{"docker as seen in CI", errors.New("Error response from daemon: removal of container " + id + " is already in progress"), Removed},
+		{"bare", errors.New("removal of container " + id + " is already in progress"), Removed},
+		{"short id", errors.New("removal of container 4feb033ec173 is already in progress"), Removed},
+		{"daemon message followed by a wrapper suffix", fmt.Errorf("removal of container %s is already in progress: %w", id, cerrdefs.ErrConflict), RemoveFailed}, // suffix after the sentence: not the daemon's message
+		{"classed conflict, exact message", fmt.Errorf("Error response from daemon: removal of container %s is already in progress", id), Removed},
+		// negatives: every other conflict is a real failure
+		{"container update", fmt.Errorf("container update is already in progress: %w", cerrdefs.ErrConflict), RemoveFailed},
+		{"update of the same container", errors.New("Error response from daemon: update of container " + id + " is already in progress"), RemoveFailed},
+		{"running container", fmt.Errorf("cannot remove a running container: %w", cerrdefs.ErrConflict), RemoveFailed},
+		{"no id", errors.New("removal of container is already in progress"), RemoveFailed},
+		{"the phrase buried in another error", errors.New("start failed: could not stop; removal of container " + id + " is already in progress, giving up"), RemoveFailed},
+		{"the phrase at the end of another sentence", errors.New("could not stop; removal of container " + id + " is already in progress"), RemoveFailed},
+		{"unrelated", errors.New("permission denied"), RemoveFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeAPI{
+				all:       []container.Summary{{ID: "a", Labels: labels("ns", Owner{"h1", 999, 1})}},
+				removeErr: map[string]error{"a": tc.err},
+			}
+			rep, err := Reap(context.Background(), api, "ns", self, probe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rep.Items[0]; got.Outcome != tc.want {
+				t.Fatalf("%v: outcome %q (%s), want %q", tc.err, got.Outcome, got.Detail, tc.want)
+			}
+		})
 	}
 }
 
@@ -190,21 +206,48 @@ func TestReapListFailure(t *testing.T) {
 	}
 }
 
-// ReapOnce on a failing runtime: a fixed-format warning, no panic, nothing removed. It runs once per process, so this
-// test must be the only one to call it.
-func TestReapOnceWarnsAndDoesNotPanic(t *testing.T) {
-	reapMu.Lock()
-	reapOnce, lastReport, reaped = sync.Once{}, Report{}, false // once per process: give this test (and -count=2) its own
-	reapMu.Unlock()
+// ReapBeforeStart on a failing runtime: a fixed-format warning, no panic, nothing removed, and it is not reported as done.
+func TestReapBeforeStartWarnsAndDoesNotPanic(t *testing.T) {
 	var buf bytes.Buffer
-	ReapOnce(context.Background(), &fakeAPI{listErr: errors.New("daemon down")}, &buf)
-	ReapOnce(context.Background(), &fakeAPI{listErr: errors.New("again")}, &buf) // second call: no effect
+	ReapBeforeStart(context.Background(), &fakeAPI{listErr: errors.New("daemon down")}, &buf)
 	want := "ctrreap: warning: reap skipped: list containers: daemon down\n"
 	if buf.String() != want {
 		t.Fatalf("warning = %q, want %q", buf.String(), want)
 	}
 	if _, ok := LastReport(); ok {
 		t.Fatal("a failed reap must not be reported as done")
+	}
+	buf.Reset()
+	ReapBeforeStart(context.Background(), &fakeAPI{
+		all:       []container.Summary{{ID: "stuckstuckstuck", Labels: labels(Namespace(), Owner{"nowhere-host-x", 1, 1})}},
+		removeErr: map[string]error{},
+	}, &buf)
+	if buf.Len() != 0 {
+		t.Fatalf("a container of another host is kept silently, got %q", buf.String())
+	}
+}
+
+// The second start of a process sees an orphan that appeared after the first scan, and removes it. A reap that ran
+// once per process would leave it (the behaviour #481 and the coverage table rule out).
+func TestReapBeforeStartScansEveryStart(t *testing.T) {
+	self, err := Self()
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAPI{all: []container.Summary{
+		{ID: "alive", Labels: Labels()}, // a live owner: this very process, so the first scan has something to look at and keep
+	}}
+	var buf bytes.Buffer
+	ReapBeforeStart(context.Background(), api, &buf)
+	rep, _ := LastReport()
+	if len(rep.Items) != 1 || rep.Items[0].Outcome != KeptAlive || len(api.removed) != 0 {
+		t.Fatalf("first scan: %+v removed=%v, want one kept-alive and nothing removed", rep.Items, api.removed)
+	}
+	// an owner dies after that scan: its container now exists
+	api.all = append(api.all, container.Summary{ID: "orphan", Labels: labels(Namespace(), Owner{self.Host, 999999, 1})})
+	ReapBeforeStart(context.Background(), api, &buf)
+	if len(api.removed) != 1 || api.removed[0] != "orphan" {
+		t.Fatalf("second scan removed %v, want [orphan]", api.removed)
 	}
 }
 

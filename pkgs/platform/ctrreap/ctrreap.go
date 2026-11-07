@@ -16,7 +16,7 @@
 //	                                                    process (graceful-shutdown tests), which a handler would turn
 //	                                                    into a container kill and exit 143 mid-test. apps/catalog-rpc,
 //	                                                    apps/payment-rpc, apps/payment-worker (pgtest.Terminate by hand)
-//	go test -timeout, a panic, SIGKILL                  layer 2, ReapOnce: the next start in ANY process removes it
+//	go test -timeout, a panic, SIGKILL                  layer 2, ReapBeforeStart: the next start in ANY process removes it
 //	a signal while the container is still starting      layer 2 (layer 1 waits for the start up to its grace, then the
 //	                                                    process leaves; the container the start creates later is an orphan)
 //	no test is ever run on this machine again           nothing: it stays until the next run (a known limit)
@@ -38,8 +38,8 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -210,9 +210,17 @@ func Reap(c context.Context, cli api, namespace string, self Owner, probe Probe)
 }
 
 // removalInProgress is the runtime's answer to a remove of a container somebody else is already removing.
+//
+// Only that one message counts. Docker answers a second remove of a container that is being removed with
+// "removal of container <id> is already in progress" (seen in CI: Error response from daemon: removal of container
+// 4feb033ec173... is already in progress); Podman answers 204 and then "no such container", the NotFound case above.
+// Any other conflict, "container update is already in progress" or "cannot remove a running container" among them,
+// is a real failure. The error class is not relied on: the message is what is specific.
 func removalInProgress(err error) bool {
-	return cerrdefs.IsConflict(err) && strings.Contains(err.Error(), "already in progress")
+	return removalInProgressRE.MatchString(err.Error())
 }
+
+var removalInProgressRE = regexp.MustCompile(`(?:^|: )removal of container [0-9a-f]{12,64} is already in progress$`)
 
 // judge decides from a container's labels whether its owner is gone (Removed means: remove it).
 func judge(labels map[string]string, self Owner, probe Probe) (Outcome, string) {
@@ -239,36 +247,37 @@ func judge(labels map[string]string, self Owner, probe Probe) (Outcome, string) 
 }
 
 var (
-	reapOnce   sync.Once
 	reapMu     sync.Mutex
 	lastReport Report
 	reaped     bool
 )
 
-// ReapOnce reaps the namespace's orphans, once per process however many helpers start a container. A failure is one
-// line on warn in a fixed format and nothing else: it never fails the test, and the caller's own start error is its own.
-func ReapOnce(c context.Context, cli api, warn io.Writer) {
-	reapOnce.Do(func() {
-		self, serr := Self()
-		if serr != nil {
-			self = Owner{} // no host: every owner is "another host", nothing is removed
+// ReapBeforeStart reaps the namespace's orphans. It runs on EVERY container start, not once per process: an orphan that
+// appears while this process is already running (another agent's test binary dies after our first scan) is removed by
+// the next start, which is what "before creating a new container" in #481 means. The price is one container list per
+// start, a few milliseconds against a container start of seconds; two starts at once race harmlessly (a remove that
+// lost the race is not a failure, see Reap). A failure is one line on warn in a fixed format and nothing else: it never
+// fails the test, and the caller's own start error is its own.
+func ReapBeforeStart(c context.Context, cli api, warn io.Writer) {
+	self, serr := Self()
+	if serr != nil {
+		self = Owner{} // no host: every owner is "another host", nothing is removed
+	}
+	rep, err := Reap(c, cli, Namespace(), self, ProcessStart)
+	reapMu.Lock()
+	lastReport, reaped = rep, err == nil
+	reapMu.Unlock()
+	if err != nil {
+		_, _ = fmt.Fprintf(warn, "ctrreap: warning: reap skipped: %v\n", err)
+	}
+	for _, it := range rep.Items {
+		if it.Outcome == RemoveFailed {
+			_, _ = fmt.Fprintf(warn, "ctrreap: warning: could not remove %.12s: %s\n", it.ID, it.Detail)
 		}
-		rep, err := Reap(c, cli, Namespace(), self, ProcessStart)
-		reapMu.Lock()
-		lastReport, reaped = rep, err == nil
-		reapMu.Unlock()
-		if err != nil {
-			_, _ = fmt.Fprintf(warn, "ctrreap: warning: reap skipped: %v\n", err)
-		}
-		for _, it := range rep.Items {
-			if it.Outcome == RemoveFailed {
-				_, _ = fmt.Fprintf(warn, "ctrreap: warning: could not remove %.12s: %s\n", it.ID, it.Detail)
-			}
-		}
-	})
+	}
 }
 
-// LastReport is what the process's ReapOnce did, for a fixture that reports it.
+// LastReport is what the process's latest ReapBeforeStart did, for a fixture that reports it.
 func LastReport() (Report, bool) {
 	reapMu.Lock()
 	defer reapMu.Unlock()
