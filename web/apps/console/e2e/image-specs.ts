@@ -19,6 +19,7 @@ export const previewOnlySpecs = [
   "admin.spec.ts",
   "confirm.spec.ts",
   "create-order-idempotency.spec.ts",
+  "credential-switch.spec.ts",
   "history.spec.ts",
   "list-polling.spec.ts",
   "order-page-polling.spec.ts",
