@@ -68,9 +68,11 @@ export async function failRequests(page: Page, options: FailRequestsOptions): Pr
 //   held.release();                // now the stale answer may land
 //
 // A parked call is not sent to the server until release(); after release() matching calls pass straight
-// through. Several calls can be parked at once.
+// through and are not counted: arrived() and count() only ever speak of calls that really were parked, so
+// they are safe as a positive control ("the hold was hit") even when release() runs in a cleanup path.
+// Several calls can be parked at once.
 export type RequestHold = {
-  /** Resolves once the first matching call is parked. */
+  /** Resolves once the first matching call is parked; never resolves if none was before release(). */
   arrived: () => Promise<void>;
   /** Calls parked so far. */
   count: () => number;
@@ -81,13 +83,18 @@ export type RequestHold = {
 export async function holdRequests(page: Page, target: Target): Promise<RequestHold> {
   const hit = matches(page, target);
   let count = 0;
-  let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
+  let released = false;
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const release = () => {
+    released = true;
+    open();
+  };
   let arrive!: () => void;
   const arrival = new Promise<void>((r) => (arrive = r));
   await page.route("**/api/**", async (route) => {
     const request = route.request();
-    if (!hit(request.url(), request.headers())) return route.fallback();
+    if (!hit(request.url(), request.headers()) || released) return route.fallback();
     count++;
     arrive();
     await gate;
