@@ -8,12 +8,16 @@ import type { Page, Route } from "@playwright/test";
 // method  the RPC's name, the last segment of the URL ("ListOrders", "QuotePrices"); matched exactly.
 // key     which callers: omitted = any; a string = calls sent with that X-API-Key; null = calls sent
 //         with no X-API-Key (the anonymous ones: the console's first requests before a credential is set).
-export type Target = { method: string; key?: string | null };
+// bodyIncludes  omitted = any body; a string = only calls whose request body contains it (substring, case
+//         sensitive). For a page that sends the same RPC about something else first: the order form quotes its
+//         default SKU before the one a test types, and a fault meant for the typed SKU must not be spent on that.
+export type Target = { method: string; key?: string | null; bodyIncludes?: string };
 
-function matches(page: Page, { method, key }: Target) {
-  return (url: string, headers: Record<string, string>) => {
+function matches({ method, key, bodyIncludes }: Target) {
+  return (url: string, headers: Record<string, string>, body: string | null) => {
     const path = new URL(url).pathname;
     if (path.slice(path.lastIndexOf("/") + 1) !== method) return false;
+    if (bodyIncludes !== undefined && !(body ?? "").includes(bodyIncludes)) return false;
     if (key === undefined) return true;
     const sent = headers["x-api-key"];
     return key === null ? sent === undefined : sent === key;
@@ -28,8 +32,11 @@ function matches(page: Page, { method, key }: Target) {
 //
 // times   how many matching calls fail (default 1); the ones after that pass through.
 // mode    "unavailable" (default) answers 503 with a Connect `unavailable` error; "reset" drops the
-//         connection (the browser sees "Failed to fetch").
-export type FailRequestsOptions = Target & { times?: number; mode?: "unavailable" | "reset" };
+//         connection (the browser sees "Failed to fetch"); "permission_denied" answers 403 with a Connect
+//         `permission_denied` error, "invalid_argument" answers 400 with a Connect `invalid_argument` error: answers,
+//         not blips, for specs that must show they are not retried.
+// (times: Infinity = every matching call fails.)
+export type FailRequestsOptions = Target & { times?: number; mode?: "unavailable" | "reset" | "permission_denied" | "invalid_argument" };
 
 export type RequestFault = {
   /** Calls that matched (method and key), failed or not. */
@@ -40,20 +47,20 @@ export type RequestFault = {
 
 export async function failRequests(page: Page, options: FailRequestsOptions): Promise<RequestFault> {
   const { times = 1, mode = "unavailable" } = options;
-  const hit = matches(page, options);
+  const hit = matches(options);
   let matched = 0;
   let failed = 0;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
-    if (!hit(request.url(), request.headers())) return route.fallback();
+    if (!hit(request.url(), request.headers(), request.postData())) return route.fallback();
     matched++;
     if (failed >= times) return route.fallback();
     failed++;
     if (mode === "reset") return route.abort("connectionreset");
     return route.fulfill({
-      status: 503,
+      status: { unavailable: 503, permission_denied: 403, invalid_argument: 400 }[mode],
       contentType: "application/json",
-      body: JSON.stringify({ code: "unavailable", message: "injected by failRequests" }),
+      body: JSON.stringify({ code: mode, message: "injected by failRequests" }),
     });
   });
   return { matched: () => matched, failed: () => failed };
@@ -81,7 +88,7 @@ export type RequestHold = {
 };
 
 export async function holdRequests(page: Page, target: Target): Promise<RequestHold> {
-  const hit = matches(page, target);
+  const hit = matches(target);
   let count = 0;
   let released = false;
   let open!: () => void;
@@ -94,7 +101,7 @@ export async function holdRequests(page: Page, target: Target): Promise<RequestH
   const arrival = new Promise<void>((r) => (arrive = r));
   await page.route("**/api/**", async (route) => {
     const request = route.request();
-    if (!hit(request.url(), request.headers()) || released) return route.fallback();
+    if (!hit(request.url(), request.headers(), request.postData()) || released) return route.fallback();
     count++;
     arrive();
     await gate;

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { settle, useKey } from "./auth/helpers";
-import { holdRequests, scriptByKey, watchRequests, type Reply } from "./fail-requests";
+import { failRequests, holdRequests, scriptByKey, watchRequests, type Reply } from "./fail-requests";
 import { createCard } from "./orders-ui";
 
 // #483. Switching credential must re-ask every query the page is showing, with the NEW credential, and
@@ -150,4 +150,48 @@ test("QuotePrices: A's price arrives late while B's call is still pending; it is
 
   heldB.release();
   await expect(card.getByTestId("line-price").first()).toContainText("12.99 USD");
+});
+
+// ---- retry x credential (#483; needs the bounded retry of src/transient.ts) ---------------------------------------
+//
+// A's first ListOrders is refused (503), so the query is in its backoff and then its retry. The page switches to B
+// while A's retry is on the wire / waiting: the retry belongs to A. Handlers run newest first: the fault takes A's
+// first call, the hold parks the call after it (the retry), the script answers whatever reaches it.
+
+test("a retry in flight for the old credential: B is asked at once, and the retry's late rows are not shown", async ({ page }) => {
+  const list = await scriptByKey(page, LIST, { "": { connect: "unauthenticated" }, A: listOf(ID_A), B: listOf(ID_OPS) });
+  const heldA = await holdRequests(page, { method: METHOD(LIST), key: "A" });
+  const fault = await failRequests(page, { method: METHOD(LIST), key: "A" }); // A's first call: 503
+  await page.goto("/orders?customer=cust-sw");
+  await expect(page.getByRole("alert")).toContainText("Not authenticated");
+  await useKey(page, "A");
+  await heldA.arrived(); // the refused call was retried: the retry is on the wire, unanswered
+  expect([fault.failed(), heldA.count()], "A: one refused call, one parked retry").toEqual([1, 1]);
+
+  await useKey(page, "B");
+  await expect(rowOf(page, ID_OPS), "B's rows while A's retry is still parked").toBeVisible();
+  await deliverLate(page, LIST, "A", () => heldA.release()); // A's retry answers after the switch
+
+  await expect(rowOf(page, ID_A)).toHaveCount(0);
+  await expect(rowOf(page, ID_OPS)).toBeVisible();
+  expect(list.count("B"), "ListOrders sent with B").toBeGreaterThanOrEqual(1);
+});
+
+test("a retry waiting out its backoff for the old credential is not sent after the switch", async ({ page }) => {
+  await scriptByKey(page, LIST, { "": { connect: "unauthenticated" }, A: listOf(ID_A), B: listOf(ID_OPS) });
+  const seen = watchRequests(page, LIST);
+  const fault = await failRequests(page, { method: METHOD(LIST), key: "A", times: Infinity }); // every A call: 503
+  await page.goto("/orders?customer=cust-sw");
+  await expect(page.getByRole("alert")).toContainText("Not authenticated");
+  await useKey(page, "A");
+  await expect.poll(() => fault.failed()).toBe(1); // A's first call was refused; its retry is waiting out the 500ms backoff
+  await useKey(page, "B");
+  const sentA = seen.sent("A"); // taken at the switch: the calls A still had coming are the ones after this
+  await expect(rowOf(page, ID_OPS)).toBeVisible();
+
+  // past the whole retry budget (3.5s): the calls A was still going to make never come, and nothing of A is shown
+  await page.waitForTimeout(4_000);
+  expect([seen.sent("A"), fault.failed()], "A's calls after the switch").toEqual([sentA, sentA]);
+  await expect(rowOf(page, ID_OPS)).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });

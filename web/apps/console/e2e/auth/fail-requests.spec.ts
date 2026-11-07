@@ -282,3 +282,96 @@ test("watchRequests: only the exact rpc; another method, a same-prefix name and 
   await call(page, "Mine");
   expect(seen.sent("")).toBe(1);
 });
+
+// ---- extensions for the transient-recovery spec (#483): bodyIncludes and mode "permission_denied" ----
+const callBody = (page: Page, method: string, body: string, key?: string) =>
+  page.evaluate(
+    ([m, b, k]) =>
+      fetch(`/api/test.v1.TestService/${m}`, { method: "POST", headers: { "Content-Type": "application/json", ...(k ? { "X-API-Key": k } : {}) }, body: b })
+        .then((r) => r.status)
+        .catch(() => "failed"),
+    [method, body, key] as const,
+  );
+
+test("failRequests: bodyIncludes spends the fault only on a call whose body contains the text (case sensitive)", async ({ page }) => {
+  const f = await failRequests(page, { method: "Quote", bodyIncludes: "SKU-9" });
+  expect(await callBody(page, "Quote", '{"skus":["SKU-1"]}')).toBe(200); // the default SKU the form quotes first: not matched, not counted
+  expect(await callBody(page, "Quote", '{"skus":["sku-9"]}')).toBe(200); // case sensitive
+  expect(await callBody(page, "Quote", "{}")).toBe(200); // a body with nothing in it
+  expect(f.matched()).toBe(0);
+  expect(await callBody(page, "Quote", '{"skus":["SKU-9"]}')).toBe(503); // the first match takes the fault ...
+  expect(await callBody(page, "Quote", '{"skus":["SKU-9"]}')).toBe(200); // ... times defaults to 1
+  expect([f.matched(), f.failed()]).toEqual([2, 1]);
+});
+
+test("failRequests: bodyIncludes combines with key and with method (all three must match)", async ({ page }) => {
+  const f = await failRequests(page, { method: "Both", key: OPS_KEY, bodyIncludes: "needle", times: 5 });
+  expect(await callBody(page, "Both", "needle")).toBe(200); // right body, anonymous
+  expect(await callBody(page, "Both", "hay", OPS_KEY)).toBe(200); // right key, wrong body
+  expect(await callBody(page, "Other", "needle", OPS_KEY)).toBe(200); // right key and body, another method
+  expect(f.matched()).toBe(0);
+  expect(await callBody(page, "Both", "a needle in it", OPS_KEY)).toBe(503);
+  expect([f.matched(), f.failed()]).toEqual([1, 1]);
+});
+
+test("failRequests: a call without a body never matches bodyIncludes", async ({ page }) => {
+  const f = await failRequests(page, { method: "NoBody", bodyIncludes: "x" });
+  expect(await page.evaluate(() => fetch("/api/test.v1.TestService/NoBody", { method: "POST" }).then((r) => r.status))).toBe(200);
+  expect(f.matched()).toBe(0);
+});
+
+test("holdRequests: bodyIncludes parks only the matching body", async ({ page }) => {
+  const held = await holdRequests(page, { method: "HeldQuote", bodyIncludes: "SKU-9" });
+  expect(await callBody(page, "HeldQuote", '{"skus":["SKU-1"]}')).toBe(200); // not parked: answered at once
+  await settle(page);
+  expect(held.count()).toBe(0);
+  let status: unknown;
+  const pending = callBody(page, "HeldQuote", '{"skus":["SKU-9"]}').then((s) => (status = s));
+  await held.arrived();
+  expect([held.count(), status]).toEqual([1, undefined]);
+  held.release();
+  await pending;
+  expect(status).toBe(200);
+});
+
+test("failRequests: mode permission_denied answers 403 with a Connect permission_denied error; times Infinity never stops", async ({ page }) => {
+  const f = await failRequests(page, { method: "Denied", mode: "permission_denied", times: Infinity });
+  const answers = await page.evaluate(async () => {
+    const out: unknown[] = [];
+    for (let i = 0; i < 4; i++) {
+      const r = await fetch("/api/test.v1.TestService/Denied", { method: "POST", body: "{}" });
+      out.push([r.status, await r.json()]);
+    }
+    return out;
+  });
+  expect(answers).toEqual(Array(4).fill([403, { code: "permission_denied", message: "injected by failRequests" }]));
+  expect([f.matched(), f.failed()]).toEqual([4, 4]);
+});
+
+test("failRequests: times 4 fails exactly four calls, then passes", async ({ page }) => {
+  const f = await failRequests(page, { method: "Four", times: 4 });
+  const statuses: unknown[] = [];
+  for (let i = 0; i < 6; i++) statuses.push(await call(page, "Four"));
+  expect(statuses).toEqual([503, 503, 503, 503, 200, 200]);
+  expect([f.matched(), f.failed()]).toEqual([6, 4]);
+});
+
+test("failRequests: mode invalid_argument answers 400 with a Connect invalid_argument error, not 403 or 503", async ({ page }) => {
+  const f = await failRequests(page, { method: "Invalid", mode: "invalid_argument", times: 2 });
+  const answers = await page.evaluate(async () => {
+    const out: unknown[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await fetch("/api/test.v1.TestService/Invalid", { method: "POST", body: "{}" });
+      out.push(r.status);
+    }
+    const r = await fetch("/api/test.v1.TestService/Invalid", { method: "POST", body: "{}" });
+    return [out, r.status];
+  });
+  expect(answers).toEqual([[400, 400, 200], 200]);
+  expect([f.matched(), f.failed()]).toEqual([4, 2]);
+});
+
+test("failRequests: mode invalid_argument's body carries the Connect code invalid_argument", async ({ page }) => {
+  await failRequests(page, { method: "InvalidBody", mode: "invalid_argument" });
+  expect(await callFull(page, "InvalidBody")).toEqual([400, JSON.stringify({ code: "invalid_argument", message: "injected by failRequests" })]);
+});
