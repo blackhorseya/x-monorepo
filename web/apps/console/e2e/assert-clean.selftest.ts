@@ -1,4 +1,3 @@
-import { randomInt } from "node:crypto";
 import { createConnection, createServer, type Server } from "node:net";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -9,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import { type Connect, LOOPBACKS, classifyConnectError, hasIPv6Loopback, isNoAddress, probe, waitClosed } from "./clean.ts";
 import { derivePorts } from "./ports.ts";
+import { privatePair } from "./private-pair.ts";
 import * as childModule from "./child.ts";
 import { MAX_WAIT_MS, type Tracked, __testing, groupAlive, lastSpawned, reapAll, runBounded, signalGroup, spawnTracked, waitChild } from "./child.ts";
 
@@ -25,30 +25,6 @@ import { MAX_WAIT_MS, type Tracked, __testing, groupAlive, lastSpawned, reapAll,
 // them across two blocks) can be bound right now on every loopback, so any number of runs — under any
 // callers' pairs — can go side by side (#386). The OS cannot hand out the pair itself: it hands out one port at a
 // time, usually the next free one, and the derived ports must be spread over two separate blocks.
-const bindable = (host: string, port: number) =>
-  new Promise<boolean>((resolve) => {
-    const s = createServer();
-    s.once("error", () => resolve(false));
-    s.listen({ port, host, ipv6Only: host === "::1" }, () => s.close(() => resolve(true)));
-  });
-async function privatePair(): Promise<{ rpc: number; web: number }> {
-  // Two projects deriving the same port is a bug in e2e/ports.ts, not bad luck in the draw below: say so, instead of
-  // letting every draw be skipped and the run end as "no free pair".
-  const sample = derivePorts({ E2E_RPC_PORT: "20000", E2E_WEB_PORT: "40000" }).all;
-  const twice = sample.filter((port, i) => sample.indexOf(port) !== i);
-  if (twice.length) throw new Error(`derivePorts() derives port(s) ${[...new Set(twice)].join(", ")} twice (offsets of two projects collide, e2e/ports.ts)`);
-  const hosts = (await hasIPv6Loopback()).available ? ["127.0.0.1", "::1"] : ["127.0.0.1"];
-  for (let attempt = 0; attempt < 100; attempt++) {
-    // Dynamic range, with room for the largest offset (+120) below 65535; the two blocks are far apart.
-    const rpc = randomInt(20_000, 30_000);
-    const web = randomInt(40_000, 65_000);
-    const all = derivePorts({ E2E_RPC_PORT: String(rpc), E2E_WEB_PORT: String(web) }).all;
-    if (Math.max(...all) > 65535 || new Set(all).size !== all.length) continue;
-    const free = await Promise.all(all.flatMap((port) => hosts.map((host) => bindable(host, port))));
-    if (free.every(Boolean)) return { rpc, web };
-  }
-  throw new Error("no private E2E port pair with every derived port free after 100 tries");
-}
 const ipv6Loopback = await hasIPv6Loopback();
 const pair = await privatePair();
 const env = { ...process.env, E2E_RPC_PORT: String(pair.rpc), E2E_WEB_PORT: String(pair.web) };
