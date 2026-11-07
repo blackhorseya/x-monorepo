@@ -20,6 +20,7 @@ export function reportFailure(label: string, r: NestedResult, sink: (text: strin
   const failed = failedSubtests(r.out);
   sink(blockBegin(failed.length, label));
   if (r.timedOut) sink("the runner did not finish within its deadline and was killed");
+  if (r.closeTimedOut) sink("the runner exited but its output did not close in time (something it started still holds the pipes): what follows may be incomplete");
   for (const f of failed) sink(`not ok - ${f.path.join(" > ")}\n${indent(f.error || "(no error text in the TAP)", "    ")}`);
   // A test FILE that dies (spawn failure, uncaught error before any test) is reported as one `not ok` whose error is just
   // "test failed": what killed it was printed outside the test results. So the raw tail goes into the block in that case too.
@@ -29,7 +30,7 @@ export function reportFailure(label: string, r: NestedResult, sink: (text: strin
   }
   sink(BLOCK_END);
 
-  const how = r.timedOut ? "did not finish within its deadline and was killed" : `failed (exit ${r.code ?? r.signal})`;
+  const how = r.timedOut ? "did not finish within its deadline and was killed" : r.closeTimedOut ? `exited (${r.code ?? r.signal}) but its output did not close in time, so what was read may be incomplete` : `failed (exit ${r.code ?? r.signal})`;
   const lines = [`runner ${label} ${how}: ${failed.length} failed subtest(s); their complete names, suites and errors are in the stderr block "${blockBegin(failed.length, label)}" above.`];
   const names = failed.map((f) => clip(f.path.join(" > "), NAME_IN_MESSAGE));
   if (names.join("").length <= MESSAGE_NAMES_CHARS) lines.push(...names.map((n) => `  not ok - ${n}`));
@@ -43,9 +44,9 @@ export function reportFailure(label: string, r: NestedResult, sink: (text: strin
 /** Passes when the runner exited 0 and ran at least one test; otherwise writes the stderr block and fails with the summary. */
 export function assertRunnerPassed(label: string, r: NestedResult, sink?: (text: string) => void): void {
   const ranTests = /^# pass [1-9]/m.test(r.out);
-  if (!r.timedOut && ranTests && r.code === 0) return;
+  if (!r.timedOut && !r.closeTimedOut && ranTests && r.code === 0) return;
   const summary = reportFailure(label, r, sink);
   // A clean exit that ran nothing is no pass either (a nested `node --test` that quietly did nothing).
-  if (!r.timedOut && r.code === 0 && !ranTests) assert.fail(`runner ${label} ran no tests (an empty run is not a pass); what it printed is in the stderr block above`);
+  if (!r.timedOut && !r.closeTimedOut && r.code === 0 && !ranTests) assert.fail(`runner ${label} ran no tests (an empty run is not a pass); what it printed is in the stderr block above`);
   assert.fail(summary);
 }

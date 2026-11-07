@@ -38,12 +38,15 @@ export function groupAlive(pid: number): boolean {
 }
 
 /**
- * `node args…` in `cwd` with `env`. Resolves when it exits, or `deadlineMs` after the start: then the group is
- * SIGKILLed and waited for (at most `reapMs`) and `timedOut` is true. A spawn that fails rejects (it emits `error`, never `exit`).
+ * `node args…` in `cwd` with `env`. Ends when the child has exited AND its stdout/stderr have closed (`exit` alone can fire while
+ * output is still in the pipes), or `deadlineMs` after the start: then the group is SIGKILLed and waited for (at most `reapMs`) and
+ * `timedOut` is true. If the output has not closed `closeMs` after the exit, something the child started still holds it: the group is
+ * SIGKILLed and `closeTimedOut` is true (`out` may be incomplete). A spawn that fails rejects (it emits `error`, never `exit`).
  */
 export function runNested(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; deadlineMs: number; reapMs?: number; closeMs?: number; onSpawn?: (pid: number) => void }): Promise<NestedResult> {
-  const { deadlineMs, reapMs = 5_000 } = options;
+  const { deadlineMs, reapMs = 5_000, closeMs = 5_000 } = options;
   if (!(deadlineMs > 0 && deadlineMs <= MAX_DEADLINE_MS)) throw new RangeError(`a nested run is 1..${MAX_DEADLINE_MS} ms, got ${deadlineMs}`);
+  if (!(closeMs > 0 && closeMs <= MAX_DEADLINE_MS)) throw new RangeError(`closeMs is 1..${MAX_DEADLINE_MS} ms, got ${closeMs}`);
   return new Promise((resolve, reject) => {
     // Inside `node --test`, NODE_TEST_CONTEXT makes a nested `node --test` run quietly in-process and exit 0 without
     // running anything: a passing control that tested nothing. Strip it; callers check the run really ran tests.
@@ -53,31 +56,40 @@ export function runNested(args: string[], options: { cwd: string; env: NodeJS.Pr
     if (child.pid) options.onSpawn?.(child.pid);
     let out = "";
     let timedOut = false;
+    let closeTimedOut = false;
     let settled = false;
-    const finish = (code: number | null, signal: NodeJS.Signals | null) => {
-      if (settled) return;
+    let exitedWith: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const settle = (): boolean => {
+      if (settled) return false;
       settled = true;
-      clearTimeout(deadline);
-      clearTimeout(giveUp);
+      timers.forEach(clearTimeout);
       live.delete(child);
-      resolve({ code, signal, out, timedOut, closeTimedOut: false });
+      return true;
+    };
+    const finish = () => {
+      if (settle()) resolve({ code: exitedWith?.code ?? child.exitCode, signal: exitedWith?.signal ?? child.signalCode, out, timedOut, closeTimedOut });
     };
     child.stdout!.on("data", (d) => (out += d));
     child.stderr!.on("data", (d) => (out += d));
     child.once("error", (e) => {
-      settled = true;
-      clearTimeout(deadline);
-      clearTimeout(giveUp);
-      live.delete(child);
-      reject(e);
+      if (settle()) reject(e);
     });
-    child.once("exit", (code, signal) => finish(code, signal));
-    let giveUp: ReturnType<typeof setTimeout> | undefined;
-    const deadline = setTimeout(() => {
+    child.once("exit", (code, signal) => {
+      exitedWith = { code, signal };
+      // The output closes when every holder of the pipes is gone; if something the child started still holds them, say so.
+      timers.push(setTimeout(() => {
+        closeTimedOut = true;
+        killGroup(child);
+        finish();
+      }, closeMs));
+    });
+    child.once("close", finish);
+    timers.push(setTimeout(() => {
       timedOut = true;
       killGroup(child);
-      // The exit of a SIGKILLed child is reported at once; if it is not, say so rather than wait for ever.
-      giveUp = setTimeout(() => finish(child.exitCode, child.signalCode), reapMs);
-    }, deadlineMs);
+      // The close of a SIGKILLed child's output comes at once; if it does not, say so rather than wait for ever.
+      timers.push(setTimeout(finish, reapMs));
+    }, deadlineMs));
   });
 }

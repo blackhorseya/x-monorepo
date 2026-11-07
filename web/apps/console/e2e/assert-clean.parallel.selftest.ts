@@ -134,35 +134,19 @@ describe("a failed runner names every failing subtest on stderr", () => {
     assert.match(d.stderr, /no TAP/i);
   });
 
-  // What `node --test` forwards of a file that died is not the same on every node: node 26 (a developer's machine) forwards
-  // all of it, node 22 (CI) stopped at ~12 KB of the 33 KB this fixture printed (CI run 42360256259). So the real runner is
-  // checked for the early cause, and the size claim ("no 20000-character tail") on a copy of that real result padded to
-  // 30000 characters right after the early line — which is where node 26 puts them — so it holds on every node.
-  describe("a file that prints its cause first, then a lot of noise, then dies", () => {
-    const early = async () => {
-      const file = join(dir, "early.selftest.ts");
-      // flushed before exit: a file that exit()s right after a big write loses what is past the pipe buffer by itself
-      writeFileSync(file, 'let all = "EARLY-CAUSE: import failed here\\n"; for (let i = 0; i < 600; i++) all += `noise line ${i} ${"z".repeat(40)}\\n`; process.stderr.write(all, () => process.exit(1));');
-      const r = await runner(pair, file);
-      assert.equal(r.code, 1);
-      assert.ok(r.out.includes("# EARLY-CAUSE: import failed here\n"), `the runner did not forward the dead file's output at all, so this proves nothing. runner output: ${JSON.stringify(r.out.slice(0, 400))}`);
-      return r;
-    };
-
-    it("real runner: the early cause is on stderr", async (t) => {
-      const r = await early();
-      t.diagnostic(`the runner forwarded ${r.out.length} characters of what the file printed (it printed about 33000)`);
-      const d = diagnose(r);
-      assert.match(d.stderr, /EARLY-CAUSE: import failed here/);
-    });
-
-    it("the same result with 30000 characters after the early line: the early cause is still on stderr (no 20000-character tail)", async () => {
-      const r = await early();
-      const noise = Array.from({ length: 600 }, (_, i) => `# padding line ${i} ${"p".repeat(40)}\n`).join("");
-      const padded: NestedResult = { ...r, out: r.out.replace("# EARLY-CAUSE: import failed here\n", `# EARLY-CAUSE: import failed here\n${noise}`) };
-      assert.ok(padded.out.length > 30_000 && padded.out.indexOf("EARLY-CAUSE") < padded.out.length - 20_000, "EARLY-CAUSE must lie outside the last 20000 characters, or this proves nothing");
-      assert.match(diagnose(padded).stderr, /EARLY-CAUSE: import failed here/, "the early output of a dead file was cut");
-    });
+  // A file that prints its cause first, then a lot of noise, then dies. The file flushes before it exits: one that exit()s right
+  // after a big async write loses what is past the pipe buffer by itself (CI run 42360256259 showed 12 KB of ~33 KB for that reason,
+  // not because of node 22's runner or this capture; with the flush the same runner forwards 35197 characters on CI).
+  it("a file that prints its cause first, then 33000 characters of noise, then dies: the early cause is on stderr (no 20000-character tail)", async (t) => {
+    const file = join(dir, "early.selftest.ts");
+    writeFileSync(file, 'let all = "EARLY-CAUSE: import failed here\\n"; for (let i = 0; i < 600; i++) all += `noise line ${i} ${"z".repeat(40)}\\n`; process.stderr.write(all, () => process.exit(1));');
+    const r = await runner(pair, file);
+    assert.equal(r.code, 1);
+    t.diagnostic(`the runner forwarded ${r.out.length} characters of the ~33000 the file printed`);
+    const at = r.out.indexOf("EARLY-CAUSE");
+    assert.ok(at >= 0, `the runner did not forward the dead file's output at all, so this proves nothing. runner output: ${JSON.stringify(r.out.slice(0, 400))}`);
+    assert.ok(at < r.out.length - 20_000, `EARLY-CAUSE must lie outside the last 20000 characters, or this proves nothing (runner output: ${r.out.length} characters)`);
+    assert.match(diagnose(r).stderr, /EARLY-CAUSE: import failed here/, "the early output of a dead file was cut");
   });
 
   it("a runner that never ends is killed at its deadline with its whole group; stderr has what it printed, the message says deadline", async () => {
