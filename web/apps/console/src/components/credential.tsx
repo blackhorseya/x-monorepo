@@ -32,6 +32,8 @@ import { signOut } from "../oidc/session";
 // query with the NEW credential: a role-less key, or no key at all, asking for something only an admin may.
 function changeCredential(qc: QueryClient, change: () => void): void {
   flushSync(change);
+  // TanStack v5's resetQueries already cancels each query it resets (reset -> destroy -> cancel); the explicit
+  // cancel is so this does not depend on that library internal (dropping it keeps every e2e cell green).
   void qc.cancelQueries();
   void qc.resetQueries();
 }
