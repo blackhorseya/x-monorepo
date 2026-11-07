@@ -26,6 +26,8 @@ import { MAX_WAIT_MS, type Tracked, __testing, groupAlive, lastSpawned, reapAll,
 // right now. Any number of runs — under any callers' pairs — can go side by side (#386, #495).
 const ipv6Loopback = await hasIPv6Loopback();
 const pair = await privatePair();
+// Which process held which pair, if a run ever fails on a port again: the pid is in the control message below as well.
+console.log(`assert-clean selftest pid ${process.pid}: private E2E pair rpc=${pair.rpc} web=${pair.web}`);
 const env = { ...process.env, E2E_RPC_PORT: String(pair.rpc), E2E_WEB_PORT: String(pair.web) };
 const p = derivePorts(env);
 const consoleDir = fileURLToPath(new URL("..", import.meta.url));
@@ -45,7 +47,7 @@ const close = (s: Server) => new Promise<void>((r) => s.close(() => r()));
 /** Holds `hold()` open: the checker must say 1 while it is, 0 once `release()` has returned. */
 async function failsWhileHeld(name: string, hold: () => Promise<() => Promise<void>>) {
   const before = await checker();
-  assert.equal(before.code, 0, `${name}: the control must start clean, got ${before.code}: ${before.out}`);
+  assert.equal(before.code, 0, `${name}: the control must start clean, got ${before.code} (selftest pid ${process.pid}, pair rpc=${pair.rpc} web=${pair.web}): ${before.out}`);
   const release = await hold();
   let during: { code: number; out: string };
   try {

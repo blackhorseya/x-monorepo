@@ -16,7 +16,11 @@ import { derivePorts } from "./ports.ts";
 // check on overlapping pairs, and one then found the other's listener on a port it derives. A claim is a directory per port,
 // `<tmpdir>/x-monorepo-e2e-port-<port>`, made with mkdir: atomic, so of two processes claiming the same port exactly one succeeds, and
 // no one has to be listening for it to hold. It is given back by `release()` and, whatever the caller did, when the process exits.
-// A process that is SIGKILLed leaves its claims: those ports are then skipped by later draws, never shared.
+// A process that is SIGKILLed leaves its claims: those ports are then skipped by later draws, never shared. Each leaves 19 of the
+// ~35 000 ports the draw can reach, and a draw that hits one just draws again (up to `attempts` times), so it takes hundreds of killed
+// runs on one machine before a selftest fails for want of a pair; its error then names the directory. Remove them with
+// `rm -rf "${TMPDIR:-/tmp}"/x-monorepo-e2e-port-*` while no selftest is running. A claim is not reclaimed by age or by a dead pid on purpose:
+// two processes that both find a claim stale race to replace it, and the loser would own a port the winner owns too.
 
 export type Pair = { rpc: number; web: number };
 /** A pair, and `release()` for whoever is done with it. */
@@ -76,5 +80,5 @@ export async function privatePair({ draw = randomPair, attempts = 100, claimDir 
     }
     unclaim();
   }
-  throw new Error(`no private E2E port pair with every derived port free after ${attempts} tries`);
+  throw new Error(`no private E2E port pair with every derived port free and unclaimed after ${attempts} tries (claims: ${join(claimDir, "x-monorepo-e2e-port-*")}; those a killed run left behind can be removed while no selftest is running)`);
 }

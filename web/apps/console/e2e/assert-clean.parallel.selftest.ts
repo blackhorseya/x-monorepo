@@ -382,6 +382,12 @@ describe("private pairs of concurrent selftests share no port", () => {
     assert.deepEqual({ rpc: again.rpc, web: again.web }, { rpc: d.rpc, web: d.web }, "the refused draw kept its ports claimed");
   });
 
+  it("when every draw is refused, the error names the claims and how to clear them", async () => {
+    const dir = claimDir();
+    const held = await privatePair({ claimDir: dir, draw: calm });
+    await assert.rejects(privatePair({ claimDir: dir, attempts: 2, draw: () => held }), /unclaimed after 2 tries .*x-monorepo-e2e-port-\*.*killed run/);
+  });
+
   // A tripwire, not a barrier: the selftest takes its pair from e2e/private-pair.ts and draws none of its own.
   it("assert-clean.selftest.ts takes its pair from private-pair.ts, and holds the claim until it ends", () => {
     const source = readFileSync(fileURLToPath(new URL("./assert-clean.selftest.ts", import.meta.url)), "utf8");
