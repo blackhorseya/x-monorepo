@@ -137,7 +137,8 @@ func Parallel(t *testing.T, image string) {
 	if !removedOrphan {
 		t.Errorf("no fixture reported removing the real orphan %.12s: the race was not exercised", orphan)
 	}
-	if cs.Exists(orphan) {
+	// a reaper that lost the race returns while the winner's remove is still running (Docker: "already in progress")
+	if !cs.GoneWithin(orphan, 30*time.Second) {
 		t.Errorf("the orphan %.12s is still there after three reaps", orphan)
 	}
 

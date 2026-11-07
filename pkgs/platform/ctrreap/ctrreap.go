@@ -39,6 +39,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -196,6 +197,9 @@ func Reap(c context.Context, cli api, namespace string, self Owner, probe Probe)
 			case cerrdefs.IsNotFound(err):
 				// another process's reaper (or the owner itself) got there first: gone is gone
 				it.Detail += " (already gone)"
+			case removalInProgress(err):
+				// Docker (not Podman) answers 409 when another reaper's remove of the same container is still running
+				it.Detail += " (removal already in progress elsewhere)"
 			default:
 				it.Outcome, it.Detail = RemoveFailed, err.Error()
 			}
@@ -203,6 +207,11 @@ func Reap(c context.Context, cli api, namespace string, self Owner, probe Probe)
 		rep.Items = append(rep.Items, it)
 	}
 	return rep, nil
+}
+
+// removalInProgress is the runtime's answer to a remove of a container somebody else is already removing.
+func removalInProgress(err error) bool {
+	return cerrdefs.IsConflict(err) && strings.Contains(err.Error(), "already in progress")
 }
 
 // judge decides from a container's labels whether its owner is gone (Removed means: remove it).

@@ -161,6 +161,28 @@ func TestReapNotFoundIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestReapRemovalInProgressIsNotAFailure(t *testing.T) {
+	inProgress := fmt.Errorf("removal of container a is already in progress: %w", cerrdefs.ErrConflict)
+	other := fmt.Errorf("cannot remove a running container: %w", cerrdefs.ErrConflict)
+	api := &fakeAPI{
+		all: []container.Summary{
+			{ID: "a", Labels: labels("ns", Owner{"h1", 999, 1})},
+			{ID: "b", Labels: labels("ns", Owner{"h1", 998, 1})},
+		},
+		removeErr: map[string]error{"a": inProgress, "b": other},
+	}
+	rep, err := Reap(context.Background(), api, "ns", self, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rep.Items[0]; got.Outcome != Removed || !strings.Contains(got.Detail, "in progress") {
+		t.Fatalf("a removal another reaper is already doing is not a failure: %+v", got)
+	}
+	if got := rep.Items[1]; got.Outcome != RemoveFailed {
+		t.Fatalf("any other conflict is still a failure: %+v", got)
+	}
+}
+
 func TestReapListFailure(t *testing.T) {
 	api := &fakeAPI{listErr: errors.New("daemon down")}
 	if _, err := Reap(context.Background(), api, "ns", self, probe); err == nil || !strings.Contains(err.Error(), "daemon down") {
