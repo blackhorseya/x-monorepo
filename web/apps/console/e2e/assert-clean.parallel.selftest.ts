@@ -1,60 +1,44 @@
-import { type ChildProcess, spawn } from "node:child_process";
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type NestedResult, groupAlive, killNested, runNested } from "./nested.ts";
+import { explainFailure, failedSubtests } from "./tap.ts";
 
 // Two selftest runs at the same time, each under its own caller E2E pair (the way reviewers and parallel
 // worktrees run), must both pass: the selftest brings the ports it needs and takes nothing the caller's
 // pair or the other run holds (#386). A selftest with ports of its own written in would collide here.
+// When one fails, the message names the failed subtest and its error (e2e/tap.ts), not the tail of the output (#477).
 const consoleDir = fileURLToPath(new URL("..", import.meta.url));
-const children: ChildProcess[] = [];
-const killGroup = (c: ChildProcess) => {
-  try {
-    if (c.pid) process.kill(-c.pid, "SIGKILL");
-  } catch (e) {
-    // ESRCH: the group is gone. macOS answers EPERM for a group whose members have all exited but are not yet
-    // reaped, so EPERM counts as gone only once the child we started has exited; anything else is a real failure.
-    const code = (e as NodeJS.ErrnoException).code;
-    const exited = c.exitCode !== null || c.signalCode !== null;
-    if (code !== "ESRCH" && !(code === "EPERM" && exited)) throw e;
-  }
-};
-after(() => children.forEach(killGroup));
+// A runner takes ~10 s, up to ~40 s on a loaded machine. Its deadline is shorter than the test's own, so the runner is
+// killed and waited for here, with its message, before the test's timeout could take the parent down around it.
+const RUNNER_DEADLINE_MS = 90_000;
+const TEST_TIMEOUT_MS = 150_000;
+after(killNested);
 
-type RunResult = { code: number | null; out: string };
-function runner(pair: { rpc: number; web: number }, file = "e2e/assert-clean.selftest.ts"): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    // Inside `node --test`, NODE_TEST_CONTEXT makes a nested `node --test` run quietly in-process and exit 0
-    // without running anything: a passing control that tested nothing. Strip it, and check below that the
-    // runner really ran its tests. The reporter is named, not left to the TTY check: spec on a terminal,
-    // TAP in CI (#386 — the first version matched the spec summary and failed on GitHub).
-    const { NODE_TEST_CONTEXT: _context, ...parentEnv } = process.env;
-    const child = spawn("node", ["--test", "--test-reporter=tap", "--experimental-strip-types", file], {
-      cwd: consoleDir,
-      env: { ...parentEnv, E2E_RPC_PORT: String(pair.rpc), E2E_WEB_PORT: String(pair.web) },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    });
-    children.push(child);
-    let out = "";
-    child.stdout!.on("data", (d) => (out += d));
-    child.stderr!.on("data", (d) => (out += d));
-    child.once("error", reject);
-    child.once("exit", (code) => resolve({ code, out }));
+function runner(pair: { rpc: number; web: number }, file = "e2e/assert-clean.selftest.ts", deadlineMs = RUNNER_DEADLINE_MS, onSpawn?: (pid: number) => void): Promise<NestedResult> {
+  // The reporter is named, not left to the TTY check: spec on a terminal, TAP in CI (#386 — the first version matched
+  // the spec summary and failed on GitHub).
+  return runNested(["--test", "--test-reporter=tap", "--experimental-strip-types", file], {
+    cwd: consoleDir,
+    env: { ...process.env, E2E_RPC_PORT: String(pair.rpc), E2E_WEB_PORT: String(pair.web) },
+    deadlineMs,
+    onSpawn,
   });
 }
 
 /** Fails when the runner ran nothing or did not exit 0. The message is what a reader of a red CI job has to go on. */
-function assertRunnerPassed(name: string, pair: { rpc: number; web: number }, r: RunResult): void {
+function assertRunnerPassed(name: string, pair: { rpc: number; web: number }, r: NestedResult): void {
+  // First: a runner killed at its deadline also "ran no tests" or "exited non-zero"; the deadline is the cause, say it.
+  assert.equal(r.timedOut, false, `runner ${name} (${pair.rpc}/${pair.web}) failed: ${explainFailure(r)}`);
   assert.match(r.out, /^# pass [1-9]/m, `runner ${name} ran no tests (an empty run is not a pass):\n${r.out.slice(-800)}`);
-  assert.equal(r.code, 0, `runner ${name} (${pair.rpc}/${pair.web}) failed:\n${r.out.slice(-1500)}`);
+  assert.equal(r.code, 0, `runner ${name} (${pair.rpc}/${pair.web}) failed (exit ${r.code ?? r.signal}):\n${explainFailure(r)}`);
 }
 
 describe("assert-clean selftest, run in parallel", () => {
-  it("two runners with different E2E pairs both exit 0", async () => {
+  it("two runners with different E2E pairs both exit 0", { timeout: TEST_TIMEOUT_MS }, async () => {
     const pairA = { rpc: 33131, web: 44131 };
     const pairB = { rpc: 34131, web: 45131 };
     const [a, b] = await Promise.all([runner(pairA), runner(pairB)]);
@@ -74,7 +58,7 @@ describe("a failed runner names the failing subtest", () => {
     writeFileSync(file, ['import { describe, it } from "node:test";', 'import assert from "node:assert/strict";', body, 'for (let i = 0; i < 40; i++) it(`passing filler subtest number ${i}`, () => {});'].join("\n"));
     return file;
   };
-  const failureOf = (r: RunResult): string => {
+  const failureOf = (r: NestedResult): string => {
     try {
       assertRunnerPassed("M", pair, r);
     } catch (e) {
@@ -118,5 +102,74 @@ describe("a failed runner names the failing subtest", () => {
     const message = failureOf(r);
     assert.notEqual(message, "", "a runner that died without TAP must fail the assertion");
     assert.match(message, /no-tap-marker: died before any test/, "what the child printed is missing from the message");
+  });
+
+  it("mutant: a runner that never ends is killed at its deadline, with its whole group, and the message says so", async () => {
+    const file = join(dir, "hang.selftest.ts");
+    // a grandchild in the runner's group, the way `pnpm exec vite` is: killing only the runner would leave it behind
+    writeFileSync(file, 'import { spawn } from "node:child_process"; spawn("sleep", ["120"], { stdio: "ignore" }); console.log("hang-marker"); setInterval(() => {}, 1000);');
+    let pid = 0;
+    const t0 = Date.now();
+    const r = await runner(pair, file, 1_500, (p) => (pid = p));
+    assert.ok(Date.now() - t0 < 1_500 + 6_000, "the run must end within its deadline plus the reap wait");
+    assert.equal(r.timedOut, true);
+    assert.ok(pid > 0);
+    for (let i = 0; i < 30 && groupAlive(pid); i++) await new Promise((res) => setTimeout(res, 100));
+    assert.equal(groupAlive(pid), false, "the runner's group (its grandchild too) must be gone after the deadline");
+    const message = failureOf(r);
+    assert.match(message, /deadline/, "the message must say the runner was killed at its deadline");
+    assert.match(message, /hang-marker/, "and carry what it had printed");
+  });
+
+  it("control: a runner that ends in time is not marked timed out", async () => {
+    const r = await runner(pair, fixture("green2.selftest.ts", ""), 60_000);
+    assert.equal(r.timedOut, false);
+    assert.equal(r.code, 0, r.out);
+  });
+});
+
+// The reader of the TAP, on text: every shape of a failure the node reporter prints.
+describe("failedSubtests reads node's TAP", () => {
+  const block = (indent: string, lines: string[]) => lines.map((l) => indent + l).join("\n");
+  const tap = [
+    "TAP version 13",
+    "# Subtest: outer suite",
+    "    # Subtest: inner suite",
+    "        # Subtest: leaf with a multi-line error",
+    "        not ok 1 - leaf with a multi-line error",
+    block("          ", ["---", "duration_ms: 1.5", "failureType: 'testCodeFailure'", "error: |-", "  first line", "  second line", "code: 'ERR_ASSERTION'", "..."]),
+    "        # Subtest: leaf with a one-line error",
+    "        not ok 2 - leaf with a one-line error",
+    block("          ", ["---", "failureType: 'testCodeFailure'", "error: 'one line'", "..."]),
+    "        1..2",
+    "    not ok 1 - inner suite",
+    block("      ", ["---", "failureType: 'subtestsFailed'", "error: '2 subtests failed'", "..."]),
+    "not ok 1 - outer suite",
+    block("  ", ["---", "failureType: 'subtestsFailed'", "error: '1 subtest failed'", "..."]),
+    "# tests 2",
+  ].join("\n");
+
+  it("lists the leaves with their suites and errors, not the suites whose only failure is a subtest below", () => {
+    assert.deepEqual(failedSubtests(tap), [
+      { path: ["outer suite", "inner suite", "leaf with a multi-line error"], error: "first line\nsecond line" },
+      { path: ["outer suite", "inner suite", "leaf with a one-line error"], error: "one line" },
+    ]);
+  });
+
+  it("a passing run lists nothing, and a TAP with no `not ok` is explained by its tail", () => {
+    assert.deepEqual(failedSubtests("ok 1 - fine\n# pass 1\n"), []);
+    const m = explainFailure({ code: 1, out: `${"x".repeat(5000)}END-OF-OUTPUT` });
+    assert.match(m, /no `not ok`/);
+    assert.match(m, /END-OF-OUTPUT/);
+    assert.ok(m.length < 2000, "the tail is bounded");
+  });
+
+  it("the message is bounded however many subtests fail or however long an error is", () => {
+    const many = Array.from({ length: 30 }, (_, i) => `not ok ${i} - failing ${i}\n  ---\n  failureType: 'testCodeFailure'\n  error: 'e${i}'\n  ...`).join("\n");
+    const m = explainFailure({ code: 1, out: many });
+    assert.match(m, /30 failed subtest/);
+    assert.match(m, /and 25 more/);
+    const long = `not ok 1 - long\n  ---\n  failureType: 'testCodeFailure'\n  error: '${"y".repeat(5000)}'\n  ...`;
+    assert.ok(explainFailure({ code: 1, out: long }).length < 1200);
   });
 });
