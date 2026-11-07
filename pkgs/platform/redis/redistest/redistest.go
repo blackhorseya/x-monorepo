@@ -4,6 +4,11 @@
 // as-is, unreachable fails; set but empty → fails. Only "no container
 // runtime reachable" skips, and only outside CI.
 //
+// Like pgtest's, the container is cleaned up when the test binary does not end through Main (#481): SIGINT / SIGTERM
+// terminate it at once (exit 128+signal), and go test -timeout, a panic or SIGKILL are cleaned up by the next start of
+// any pgtest or redistest container on the machine, which removes only containers labelled by this repo whose test
+// process is gone. See package ctrreap.
+//
 //	func TestMain(m *testing.M) { os.Exit(redistest.Main(m)) }
 package redistest
 
@@ -18,6 +23,8 @@ import (
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/redis"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/ctrreap"
 )
 
 // EnvURL is the opt-in: point it at an existing Redis to bypass the container.
@@ -27,10 +34,13 @@ const EnvURL = "TEST_REDIS_URL"
 const Image = "redis:7-alpine"
 
 var (
-	once      sync.Once
+	once     sync.Once
+	url      string
+	startErr error
+
+	// mu guards container, as in pgtest.
+	mu        sync.Mutex
 	container *redis.RedisContainer
-	url       string
-	startErr  error
 )
 
 // URL returns a connection URL for a Redis the test may freely flush.
@@ -66,11 +76,18 @@ func Main(m *testing.M) int {
 
 // Terminate stops the container URL started, if any. Idempotent.
 func Terminate() {
+	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	terminate(c)
+}
+
+// terminate is Terminate under a context of the caller's (the signal handler's deadline).
+func terminate(c context.Context) {
+	mu.Lock()
+	defer mu.Unlock()
 	if container == nil {
 		return
 	}
-	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	if err := container.Terminate(c); err != nil {
 		fmt.Fprintf(os.Stderr, "redistest: terminate container: %v\n", err)
 	}
@@ -85,6 +102,10 @@ func (e *runtimeUnreachableError) Error() string {
 func (e *runtimeUnreachableError) Unwrap() error { return e.err }
 
 func start() {
+	ctrreap.OnSignal(terminate)
+	mu.Lock()
+	defer mu.Unlock()
+
 	c, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -102,7 +123,9 @@ func start() {
 		return
 	}
 
-	container, err = redis.Run(c, Image)
+	ctrreap.ReapOnce(c, provider.Client(), os.Stderr)
+
+	container, err = redis.Run(c, Image, testcontainers.WithLabels(ctrreap.Labels()))
 	if err != nil {
 		startErr = fmt.Errorf("start %s: %w", Image, err)
 		return

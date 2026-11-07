@@ -22,6 +22,7 @@ package reaptest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -34,8 +35,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/ctrreap"
 )
 
 // Environment of the fixture. The parent sets it, the fixture (this same test binary) reads it.
@@ -43,6 +47,7 @@ const (
 	envMode      = "CTRREAP_FIXTURE" // "hold": stay up until killed / triggered; "once": start, report, exit
 	envReady     = "CTRREAP_READY"   // file the fixture writes its URL to once its container is up
 	envTrigger   = "CTRREAP_TRIGGER" // the fixture panics when this file exists
+	envReport    = "CTRREAP_REPORT"  // file the fixture writes what its start's reap did to (ctrreap.LastReport), as JSON
 	envNamespace = "X_TESTCTR_NAMESPACE"
 )
 
@@ -58,6 +63,16 @@ func Fixture(t *testing.T, start func(t *testing.T) string) {
 		t.Skip("a fixture of the reap harness; it only runs when the harness starts it")
 	}
 	u := start(t)
+	if path := os.Getenv(envReport); path != "" {
+		rep, _ := ctrreap.LastReport()
+		b, err := json.Marshal(rep)
+		if err != nil {
+			t.Fatalf("reaptest: marshal report: %v", err)
+		}
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatalf("reaptest: write report: %v", err)
+		}
+	}
 	ready := os.Getenv(envReady)
 	if ready == "" {
 		t.Fatalf("reaptest: %s is not set", envReady)
@@ -99,6 +114,7 @@ type Child struct {
 	dir     string
 	Ready   string // path of the ready file
 	Trigger string // path of the trigger file
+	report  string // path of the report file
 }
 
 type syncBuffer struct {
@@ -164,10 +180,10 @@ func Spawn(t *testing.T, o Opts) *Child {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	dir := t.TempDir()
-	ch := &Child{t: t, dir: dir, Ready: filepath.Join(dir, "ready"), Trigger: filepath.Join(dir, "trigger"), out: &syncBuffer{}, done: make(chan struct{})}
+	ch := &Child{t: t, dir: dir, Ready: filepath.Join(dir, "ready"), Trigger: filepath.Join(dir, "trigger"), report: filepath.Join(dir, "report"), out: &syncBuffer{}, done: make(chan struct{})}
 
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+fixtureTest+"$", "-test.timeout="+o.Timeout.String(), "-test.v")
-	cmd.Env = childEnv(map[string]string{envMode: o.Mode, envReady: ch.Ready, envTrigger: ch.Trigger, envNamespace: o.Namespace})
+	cmd.Env = childEnv(map[string]string{envMode: o.Mode, envReady: ch.Ready, envTrigger: ch.Trigger, envReport: ch.report, envNamespace: o.Namespace})
 	cmd.Stdout, cmd.Stderr = ch.out, ch.out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
@@ -195,7 +211,7 @@ func Spawn(t *testing.T, o Opts) *Child {
 // childEnv is this process's environment minus whatever would make the fixture use an existing database or redis
 // instead of starting a container, plus the harness's settings.
 func childEnv(set map[string]string) []string {
-	drop := map[string]bool{"TEST_DATABASE_URL": true, "TEST_REDIS_URL": true, envMode: true, envReady: true, envTrigger: true, envNamespace: true}
+	drop := map[string]bool{"TEST_DATABASE_URL": true, "TEST_REDIS_URL": true, envMode: true, envReady: true, envTrigger: true, envReport: true, envNamespace: true}
 	var env []string
 	for _, kv := range os.Environ() {
 		name := kv
@@ -377,4 +393,95 @@ func (c *Containers) Remove(id string) {
 func Namespace(t *testing.T) string {
 	t.Helper()
 	return fmt.Sprintf("reaptest-%d-%d", os.Getpid(), time.Now().UnixNano())
+}
+
+// Report is what the fixture's start did about orphans (written before it says it is ready). The fixture can only report
+// a reap that ran: a missing or unreadable report is a setup failure.
+func (c *Child) Report() ctrreap.Report {
+	c.t.Helper()
+	b, err := os.ReadFile(c.report)
+	if err != nil {
+		c.t.Fatalf("reaptest: SETUP FAILURE, not a result: no report from the fixture: %v\n%s", err, c.out.String())
+	}
+	var rep ctrreap.Report
+	if err := json.Unmarshal(b, &rep); err != nil {
+		c.t.Fatalf("reaptest: unreadable report %q: %v", b, err)
+	}
+	return rep
+}
+
+// Create starts a container of image that only sleeps, with exactly these labels, and removes it when the test ends.
+// It stands in for a container some test process left (or is using): nothing about it comes from pgtest or redistest.
+func (c *Containers) Create(image string, labels map[string]string) string {
+	c.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	created, err := c.api.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{Image: image, Entrypoint: []string{"sleep"}, Cmd: []string{"600"}, Labels: labels},
+	})
+	if err != nil {
+		c.t.Fatalf("reaptest: SETUP FAILURE, not a result: create a synthetic container of %s: %v", image, err)
+	}
+	id := created.ID
+	c.t.Cleanup(func() {
+		if c.Exists(id) {
+			c.Remove(id)
+		}
+	})
+	if _, err := c.api.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
+		c.t.Fatalf("reaptest: SETUP FAILURE, not a result: start the synthetic container: %v", err)
+	}
+	return id
+}
+
+// Owner describes who a synthetic container claims to belong to.
+type Owner = ctrreap.Owner
+
+// DeadOwner is an owner that really existed on this host and is gone: a child that was started, had its start time
+// read, and was killed and waited for. Its pid does not exist (or, if the system already reused it, has another start
+// time: either way the owner is gone).
+func DeadOwner(t *testing.T) Owner {
+	t.Helper()
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("reaptest: start the owner stand-in: %v", err)
+	}
+	pid := cmd.Process.Pid
+	start, running, err := ctrreap.ProcessStart(pid)
+	if err != nil || !running {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("reaptest: SETUP FAILURE, not a result: cannot read the start time of the stand-in (running=%v err=%v)", running, err)
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	host, _ := os.Hostname()
+	return Owner{Host: host, PID: pid, StartMS: start}
+}
+
+// SelfOwner is this test process: alive, with its real start time.
+func SelfOwner(t *testing.T) Owner {
+	t.Helper()
+	o, err := ctrreap.Self()
+	if err != nil {
+		t.Fatalf("reaptest: SETUP FAILURE, not a result: %v", err)
+	}
+	return o
+}
+
+// MarkerLabels are the labels of a container of the namespace claiming owner o.
+func MarkerLabels(namespace string, o Owner) map[string]string {
+	return map[string]string{
+		ctrreap.LabelNamespace: namespace,
+		ctrreap.LabelHost:      o.Host,
+		ctrreap.LabelPID:       strconv.Itoa(o.PID),
+		ctrreap.LabelStart:     strconv.FormatInt(o.StartMS, 10),
+	}
+}
+
+// OwnerLabels are the owner labels alone, without the marker.
+func OwnerLabels(o Owner) map[string]string {
+	l := MarkerLabels("", o)
+	delete(l, ctrreap.LabelNamespace)
+	return l
 }

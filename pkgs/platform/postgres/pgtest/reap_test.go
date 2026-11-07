@@ -20,3 +20,9 @@ func TestReapFixture(t *testing.T) {
 
 // TestReap: how the container of a test binary ends up when that binary ends in each way a test binary can end (#481).
 func TestReap(t *testing.T) { reaptest.Scenarios(t) }
+
+// TestReapDecisions: what a start may remove and what it must leave (#481).
+func TestReapDecisions(t *testing.T) { reaptest.Decisions(t, pgtest.Image) }
+
+// TestReapParallel: test processes starting at the same moment never remove each other's containers.
+func TestReapParallel(t *testing.T) { reaptest.Parallel(t, pgtest.Image) }
