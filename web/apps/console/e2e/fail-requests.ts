@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 
 // Fault injection for the console's RPCs, aimed at one RPC method (and optionally one caller): for
 // specs that need a server failure or a slow answer at a precise moment. Every other request goes
@@ -101,4 +101,53 @@ export async function holdRequests(page: Page, target: Target): Promise<RequestH
     return route.fallback();
   });
   return { arrived: () => arrival, count: () => count, release };
+}
+
+// ---- scriptByKey: each caller gets its own scripted answer --------------------------------------
+//
+//   const list = await scriptByKey(page, "ordering.v1.OrderService/ListOrders", { "": { connect: "unauthenticated" }, OPS: { ok: {...} } });
+//
+// rpc   service and method as they end the URL ("ordering.v1.OrderService/ListOrders"); matched exactly.
+// plan  the Reply for a call sent with that X-API-Key ("" = no X-API-Key). A key that is not in the plan is
+//       a test bug and is answered HTTP 599 (not passed on) so it cannot go unnoticed.
+// It answers the call itself, so a hold meant to park the call is registered AFTER it (the newest handler
+// runs first): holdRequests parks the call and, on release(), hands it on to this script.
+// count(key) = calls that reached this script, answered or refused with 599: a call a hold has parked has
+// not reached it yet.
+export type Reply = { ok: object } | { connect: "unauthenticated" | "permission_denied" | "unavailable" } | { http: number };
+
+const answer = (r: Reply) => {
+  if ("ok" in r) return { status: 200, contentType: "application/json", body: JSON.stringify(r.ok) };
+  if ("http" in r) return { status: r.http, contentType: "text/plain", body: "injected" };
+  const status = { unauthenticated: 401, permission_denied: 403, unavailable: 503 }[r.connect];
+  return { status, contentType: "application/json", body: JSON.stringify({ code: r.connect, message: `injected: ${r.connect}` }) };
+};
+
+export async function scriptByKey(page: Page, rpc: string, plan: Record<string, Reply>) {
+  const seen: string[] = []; // the key of every call that reached this script, in order
+  await page.route(`**/${rpc}`, async (route: Route) => {
+    const key = route.request().headers()["x-api-key"] ?? "";
+    seen.push(key);
+    const step = plan[key];
+    if (step === undefined) return route.fulfill({ status: 599, body: `scriptByKey: no plan for key "${key}"` });
+    return route.fulfill(answer(step));
+  });
+  return { count: (key: string) => seen.filter((k) => k === key).length };
+}
+
+// ---- watchRequests: what the browser SENT --------------------------------------------------------
+//
+//   const sent = watchRequests(page, "catalog.v1.CatalogService/QuotePrices");   // before page.goto
+//   sent.sent("OPS", "SW-SKU")   // calls sent with X-API-Key OPS whose body contains "SW-SKU"
+//
+// Counts every call the browser sent to `rpc` (exact, as scriptByKey), parked by a hold, failed by
+// failRequests or answered: it is the browser's own "request" event. key "" = no X-API-Key; `text`
+// (case-sensitive) narrows to bodies containing it. Next to a hold it shows that the call a test is about is
+// among the parked ones: sent(key, text) >= 1 and sent(key) === hold.count().
+export function watchRequests(page: Page, rpc: string) {
+  const sent: { key: string; body: string }[] = [];
+  page.on("request", (r) => {
+    if (r.url().endsWith(`/${rpc}`)) sent.push({ key: r.headers()["x-api-key"] ?? "", body: r.postData() ?? "" });
+  });
+  return { sent: (key: string, text = "") => sent.filter((s) => s.key === key && s.body.includes(text)).length };
 }
