@@ -1,12 +1,12 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { randomInt } from "node:crypto";
-import { createServer, type Server } from "node:net";
+import { createConnection, createServer, type Server } from "node:net";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { EventEmitter } from "node:events";
-import { type Connect, classifyConnectError, hasIPv6Loopback, isNoAddress, probe } from "./clean.ts";
+import { type Connect, LOOPBACKS, classifyConnectError, hasIPv6Loopback, isNoAddress, probe, waitClosed } from "./clean.ts";
 import { derivePorts } from "./ports.ts";
 
 // The cleanup check (e2e/assert-clean.ts) must fail while ANYTHING still listens on a port the e2e stack
@@ -180,5 +180,76 @@ describe("what counts as closed", () => {
     const silent = await probe("127.0.0.1", 1, 50, fake(() => {}));
     assert.equal(silent.state, "unknown");
     assert.match(silent.state === "unknown" ? silent.detail : "", /timed out/);
+  });
+});
+
+// Two ways the checker said "listening" on a port nobody holds (the #477 run, console-e2e (2): the real vite preview
+// case failed with `listening [[::1]:48929]` after vite was told to stop). Both are held here with a real socket.
+const holdHost = (await hasIPv6Loopback()).available ? "::1" : "127.0.0.1";
+describe("a port nobody holds is not reported as listening", () => {
+  const host = holdHost;
+
+  /** The kernel can connect a socket to ITSELF when it picks the source port that equals the destination port (TCP simultaneous open); `localPort` forces it. */
+  const selfConnectOnce = (): Connect => {
+    let n = 0;
+    return ({ port, host: h }) => (n++ === 0 ? createConnection({ port, host: h, localPort: port, localAddress: h }) : createConnection({ port, host: h }));
+  };
+  // A destroyed self-connected socket keeps its port in TIME_WAIT, so every real self-connect needs a port of its own.
+  const [controlPort, oncePort] = [p.all[5]!, p.all[6]!];
+  // The kernel's answer, as the probe sees it, when it connects the socket to itself: connect, from the port to the same port.
+  const selfConnectFake: Connect = ({ port, host: h }) => {
+    const s = Object.assign(new EventEmitter(), { destroy: () => s, localPort: port, remotePort: port, localAddress: h, remoteAddress: h });
+    queueMicrotask(() => s.emit("connect"));
+    return s as unknown as ReturnType<Connect>;
+  };
+
+  it("control: the forced self-connect really is a connect from the port to itself", async () => {
+    const s = createConnection({ port: controlPort, host, localPort: controlPort, localAddress: host });
+    const seen = await new Promise<string>((resolve) => {
+      s.once("connect", () => resolve(s.localPort === s.remotePort ? "self-connect" : "connect"));
+      s.once("error", (e: NodeJS.ErrnoException) => resolve(String(e.code)));
+    });
+    s.destroy();
+    assert.equal(seen, "self-connect", "this kernel does not self-connect, so the cases below would test nothing");
+  });
+
+  it("probe: a self-connect is no answer; the next attempt decides (refused → closed)", async () => {
+    assert.deepEqual(await probe(host, oncePort, 2_000, selfConnectOnce()), { state: "closed" });
+  });
+
+  it("probe: only self-connects → unknown (fail closed), never listening", async () => {
+    const r = await probe(host, p.authRpcPort, 2_000, selfConnectFake);
+    assert.equal(r.state, "unknown");
+    assert.match(r.state === "unknown" ? r.detail : "", /self-connect/);
+  });
+
+  // What vite does while it shuts down: the listener is still bound and resets every connection, so fetch fails
+  // (ECONNRESET) although the port is not free yet.
+  const holdResetting = async () => {
+    const s = createServer((c) => c.destroy());
+    await new Promise<void>((resolve) => s.listen({ port: p.authRpcPort, host, ipv6Only: host === "::1" }, resolve));
+    return s;
+  };
+  it("waitClosed: a listener that resets connections is not closed", async () => {
+    const s = await holdResetting();
+    try {
+      const t0 = Date.now();
+      assert.equal(await waitClosed(LOOPBACKS, p.authRpcPort, { deadlineMs: 600, intervalMs: 20 }), false);
+      assert.ok(Date.now() - t0 >= 500, "it gave up before its deadline");
+    } finally {
+      await close(s);
+    }
+  });
+  it("waitClosed: returns true only after the listener is gone (and not before)", async () => {
+    const s = await holdResetting();
+    const t0 = Date.now();
+    setTimeout(() => void close(s), 300);
+    assert.equal(await waitClosed(LOOPBACKS, p.authRpcPort, { deadlineMs: 5_000, intervalMs: 20 }), true);
+    assert.ok(Date.now() - t0 >= 250, `it returned after ${Date.now() - t0}ms, before the listener was closed`);
+  });
+  it("waitClosed: nothing listening → true at once (positive control)", async () => {
+    const t0 = Date.now();
+    assert.equal(await waitClosed(LOOPBACKS, p.authRpcPort, { deadlineMs: 5_000, intervalMs: 20 }), true);
+    assert.ok(Date.now() - t0 < 1_000);
   });
 });

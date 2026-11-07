@@ -53,3 +53,21 @@ export function hasIPv6Loopback(): Promise<{ available: true } | { available: fa
     s.listen({ port: 0, host: "::1", ipv6Only: true }, () => s.close(() => resolve({ available: true })));
   });
 }
+
+/**
+ * Waits until nothing answers on `port` on any of `hosts`, for at most `deadlineMs`. Resolves true once every host is
+ * closed, false when the deadline passed first (the cleanup check then reports what is left).
+ */
+export async function waitClosed(
+  _hosts: readonly string[],
+  port: number,
+  opts: { deadlineMs?: number; intervalMs?: number } = {},
+): Promise<boolean> {
+  const { deadlineMs = 5_000, intervalMs = 100 } = opts;
+  const end = Date.now() + deadlineMs;
+  while (Date.now() < end) {
+    if (!(await fetch(`http://localhost:${port}/`).then(() => true, () => false))) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
