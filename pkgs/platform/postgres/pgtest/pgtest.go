@@ -13,6 +13,16 @@
 //     (ALTER ROLE <role> CREATEDB); without it they fail with SQLSTATE 42501.
 //   - set, empty: fails. An empty opt-in is a typo, not "no opt-in".
 //
+// The container is also cleaned up when the test binary does not end through Main (#481). On Podman Ryuk, testcontainers'
+// own reaper, is off, so nothing else would: with Main, a SIGINT or SIGTERM terminates it at once (exit 128+signal;
+// ctrreap.OnSignal, installed by Main, not by URL: a package whose tests send SIGTERM to their own process to exercise a
+// graceful shutdown must not have it, so it calls m.Run and Terminate itself and is covered by the next start only);
+// go test -timeout, a panic or SIGKILL leave it, and the NEXT start of any pgtest or redistest container on the machine
+// removes it (ctrreap.ReapBeforeStart). Only containers labelled by this repo whose test process is gone are removed; one whose
+// process is alive (another agent's tests on the same machine), or that carries no such label, is never touched. See
+// package ctrreap for the table of ways a binary can end and what covers each. Nothing is reaped if no test ever runs
+// again on the machine. Neither ~/.testcontainers.properties nor Ryuk is touched.
+//
 // Each package that wants a database adds its own TestMain:
 //
 //	func TestMain(m *testing.M) { os.Exit(pgtest.Main(m)) }
@@ -37,6 +47,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/ctrreap"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	platformpg "github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
@@ -49,10 +60,14 @@ const EnvURL = "TEST_DATABASE_URL"
 const Image = "postgres:17-alpine"
 
 var (
-	once      sync.Once
+	once     sync.Once
+	url      string
+	startErr error
+
+	// mu guards container: start runs under it (a signal that arrives while the container is still starting waits for
+	// the start, up to the signal handler's grace) and so does terminate, which the signal handler runs from its own goroutine.
+	mu        sync.Mutex
 	container *postgres.PostgresContainer
-	url       string
-	startErr  error
 )
 
 // URL returns a connection string for a database the test may freely wipe.
@@ -177,6 +192,7 @@ func Conn(t testing.TB, url string) *pgx.Conn {
 // that also needs another helper's container calls m.Run and each helper's
 // Terminate itself.
 func Main(m *testing.M) int {
+	ctrreap.OnSignal(terminate)
 	code := m.Run()
 	Terminate()
 	return code
@@ -184,11 +200,18 @@ func Main(m *testing.M) int {
 
 // Terminate stops the container URL started, if any. Idempotent.
 func Terminate() {
+	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	terminate(c)
+}
+
+// terminate is Terminate under a context of the caller's (the signal handler's deadline).
+func terminate(c context.Context) {
+	mu.Lock()
+	defer mu.Unlock()
 	if container == nil {
 		return
 	}
-	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	if err := container.Terminate(c); err != nil {
 		fmt.Fprintf(os.Stderr, "pgtest: terminate container: %v\n", err)
 	}
@@ -205,6 +228,9 @@ func (e *runtimeUnreachableError) Error() string {
 func (e *runtimeUnreachableError) Unwrap() error { return e.err }
 
 func start() {
+	mu.Lock()
+	defer mu.Unlock()
+
 	c, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -224,11 +250,15 @@ func start() {
 		return
 	}
 
+	// containers of test processes that are gone are removed before a new one starts; a failure here is a warning, not an error
+	ctrreap.ReapBeforeStart(c, provider.Client(), os.Stderr)
+
 	container, err = postgres.Run(c, Image,
 		postgres.WithDatabase("test"),
 		postgres.WithUsername("test"),
 		postgres.WithPassword("test"),
 		postgres.BasicWaitStrategies(),
+		testcontainers.WithLabels(ctrreap.Labels()),
 	)
 	if err != nil {
 		startErr = fmt.Errorf("start %s: %w", Image, err)

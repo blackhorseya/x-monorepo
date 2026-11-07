@@ -75,3 +75,4 @@
 | `worker.poll_interval` | `APP_WORKER_POLL_INTERVAL` | `200ms` | 每個 Postgres subscriber 在查不到訊息後，隔多久再查一次 outbox 表（watermill-sql `PollInterval`）；必須 > 0。空輪詢之後才會等滿一個間隔，所以新事件在等待期間到達的額外延遲是 0 到約一個間隔（忙碌時下一次查詢不等）；它也是 DB 輪詢 QPS 的來源（`輪詢迴圈數 × replica 數 ÷ 間隔`；postgres broker 的迴圈數是 handler subscription 數，redis 模式是 forwarder 的 distinct topic 數，見 [operations.md](operations.md)）。只影響 `postgres` broker 與 redis 模式 forwarder 的 SQL 端；重送等待與查詢失敗的退避仍是 library 的 1s |
 | — | `TEST_DATABASE_URL` | 未設 | 只給 integration test：設了就用該 DB，未設則 testcontainers 自起 |
 | — | `TEST_REDIS_URL` | 未設 | 同上，給 worker E2E 的 redis 模式 |
+| — | `X_TESTCTR_NAMESPACE` | `shared` | 只給 pgtest／redistest：container 的 label namespace，也是「下次啟動時回收孤兒」的範圍（只回收同 namespace、擁有者已不存在的）。預設全 repo 共用；只有測 `ctrreap` 本身的 harness 會設，一般不用碰 |
