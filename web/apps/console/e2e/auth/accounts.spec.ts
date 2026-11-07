@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
-import { useKey } from "./helpers";
+import { settle, useKey } from "./helpers";
+import { failRequests, holdRequests } from "../fail-requests";
 import { uid } from "../uid";
 
 // /accounts: DB-managed accounts and their API keys (identity.v1.IdentityService).
@@ -10,9 +11,12 @@ import { uid } from "../uid";
 
 const nav = (page: Page) => page.locator("header nav").getByRole("link", { name: "Accounts" });
 
-test("no admin role: no nav entry, and the route says so", async ({ page }) => {
+// The role-less key must see no Accounts entry and an "Admin role required" route, whatever else the page is
+// doing: the first requests of the page have no credential, and some of them can still be unanswered, or
+// can fail, when the key is set (#483). `arrange` sets that up, `useKeyAndCheck` is the same for both.
+async function noAdminRole(page: Page, whileKeyIsSet: () => Promise<void>) {
   await page.goto("/orders");
-  await useKey(page, OPS_KEY);
+  await whileKeyIsSet();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.locator("header nav").getByRole("link", { name: "Orders" })).toBeVisible();
   await expect(nav(page)).toHaveCount(0);
@@ -25,6 +29,35 @@ test("no admin role: no nav entry, and the route says so", async ({ page }) => {
   await expect(nav(page)).toBeVisible();
   await expect(page.getByText("Admin role required")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create account" })).toBeVisible();
+}
+
+test("no admin role: no nav entry, and the route says so", async ({ page }) => {
+  await noAdminRole(page, () => useKey(page, OPS_KEY));
+});
+
+// The anonymous ListOrders is still on the wire when the key is set; its 401 lands afterwards.
+test("no admin role: the first, anonymous answers still out when the key is set", async ({ page }) => {
+  const held = await holdRequests(page, { method: "ListOrders", key: null });
+  await noAdminRole(page, async () => {
+    await held.arrived();
+    await useKey(page, OPS_KEY);
+    const stale = page.waitForResponse((r) => r.url().endsWith("/ListOrders") && r.request().headers()["x-api-key"] === undefined);
+    held.release();
+    await stale; // the anonymous 401 is in ...
+    await settle(page); // ... and rendered: what follows is checked against a page that has it
+  });
+});
+
+// The role-less key's first ListOrders fails (503): the Orders card's own error, not the admin entry's.
+test("no admin role: the Orders list failing for the key", async ({ page }) => {
+  const fault = await failRequests(page, { method: "ListOrders", key: OPS_KEY });
+  await noAdminRole(page, async () => {
+    const failed = page.waitForResponse((r) => r.url().endsWith("/ListOrders") && r.status() === 503);
+    await useKey(page, OPS_KEY);
+    await failed; // the 503 is in ...
+    await settle(page); // ... and rendered: what follows is checked against a page that has it
+    expect(fault.failed()).toBe(1);
+  });
 });
 
 test("admin: create account → key (secret shown once) → revoke → disable / enable", async ({ page }) => {
