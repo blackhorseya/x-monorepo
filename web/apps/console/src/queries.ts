@@ -3,7 +3,8 @@ import { CancelledError, infiniteQueryOptions, queryOptions, type InfiniteData, 
 import { ReservationStatus, type Reservation } from "@repo/proto/inventory/v1/entity_pb";
 import { OrderStatus, type Order } from "@repo/proto/ordering/v1/entity_pb";
 import { getCredentialGeneration } from "./auth";
-import { admin, catalog, identity, inventory, isNotFound, isUnauthenticated, orders, payments } from "./client";
+import { isTransient } from "./transient";
+import { admin, catalog, identity, inventory, isNotFound, orders, payments } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
 export type ServerVersion = { version: string; commit: string; date: string; go: string };
@@ -91,7 +92,20 @@ export async function refreshFirstPage<R extends { nextPageToken: string }>(
   ids: (page: R) => readonly string[],
 ) {
   const cur = qc.getQueryData<InfiniteData<R, string>>(key);
-  if (cur === undefined || qc.isFetching({ queryKey: key }) > 0) return;
+  if (cur === undefined) {
+    // Nothing to compare with: the first load has not succeeded. If it ended in a transient error
+    // (react-query's own retries ran out), ask again each tick, the list comes back by itself; an
+    // answer ("no") stays as it is, asked once. Only a list on screen (type "active"): this runs from
+    // the page's own interval, and a query nobody watches (the page left, the credential changed and
+    // the page closed) is not woken up by it. The credential is read when the request is sent, and a
+    // credential change already invalidates every query (components/credential.tsx).
+    const st = qc.getQueryState(key);
+    if (st?.status === "error" && st.fetchStatus === "idle" && isTransient(st.error)) {
+      return qc.refetchQueries({ queryKey: key, exact: true, type: "active" });
+    }
+    return;
+  }
+  if (qc.isFetching({ queryKey: key }) > 0) return;
   const stamp = qc.getQueryState(key)?.dataUpdatedAt;
   const fresh = await fetchFirst();
   // This request lives outside the query, so a mutation's refetch cannot cancel it. If the
@@ -198,7 +212,6 @@ export const historyQuery = (id: string, generation: number, order: Order | null
     // the status it started with.
     queryFn: async () => ({ entries: (await orders.getOrderHistory({ id })).entries, asOf: order?.status }),
     refetchInterval: historyInterval(order),
-    retry: (count, err) => !isNotFound(err) && !isUnauthenticated(err) && count < 2,
   });
 
 // How often one order's page asks for its reservation, given the reservation (undefined = not
@@ -253,7 +266,6 @@ export const paymentQuery = (orderId: string, generation: number) =>
       }
     },
     refetchInterval: POLL_MS,
-    retry: false,
   });
 
 // Is there a change to wait for on an orders-list row, given the order's status, the reservation's (undefined =
@@ -302,7 +314,6 @@ export const quoteQuery = (skus: string[]) =>
     queryFn: () => catalog.quotePrices({ skus }),
     enabled: skus.length > 0,
     staleTime: LIST_STALE_MS,
-    retry: false,
   });
 
 // Products ascending by SKU, 20 per page, by prefix (empty = every SKU), inactive ones included.
@@ -333,7 +344,6 @@ export const productStatusQuery = (skus: string[]) =>
     enabled: skus.length > 0,
     refetchInterval: 60_000,
     staleTime: LIST_STALE_MS,
-    retry: false,
   });
 
 // Reservations newest first, 20 per page, optionally one status (UNSPECIFIED =

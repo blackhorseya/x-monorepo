@@ -31,6 +31,7 @@ export const previewOnlySpecs = [
   "reservation-status.spec.ts",
   "reservation.spec.ts",
   "stock.spec.ts",
+  "transient-recovery.spec.ts",
 ];
 
 export interface Listed {
