@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type NestedResult, groupAlive, killNested, runNested } from "./nested.ts";
-import { explainFailure, failedSubtests } from "./tap.ts";
+import { explainFailure, failedSubtests, middleCut } from "./tap.ts";
 
 // Two selftest runs at the same time, each under its own caller E2E pair (the way reviewers and parallel
 // worktrees run), must both pass: the selftest brings the ports it needs and takes nothing the caller's
@@ -185,12 +185,28 @@ describe("failedSubtests reads node's TAP", () => {
     assert.ok(m.length < 2000, "the tail is bounded");
   });
 
-  it("the message is bounded however many subtests fail or however long an error is", () => {
-    const many = Array.from({ length: 30 }, (_, i) => `not ok ${i} - failing ${i}\n  ---\n  failureType: 'testCodeFailure'\n  error: 'e${i}'\n  ...`).join("\n");
-    const m = explainFailure({ code: 1, out: many });
-    assert.match(m, /30 failed subtest/);
-    assert.match(m, /and 25 more/);
-    const long = `not ok 1 - long\n  ---\n  failureType: 'testCodeFailure'\n  error: '${"y".repeat(5000)}'\n  ...`;
-    assert.ok(explainFailure({ code: 1, out: long }).length < 1200);
+  it("the message is bounded, keeps every name while they fit, and says when it cuts", () => {
+    const failing = (n: number, error: string) => Array.from({ length: n }, (_, i) => `not ok ${i} - failing ${i}\n  ---\n  failureType: 'testCodeFailure'\n  error: '${error}'\n  ...`).join("\n");
+    // 200 failures with short names (4 KB of names): all of them, by name
+    const many = explainFailure({ code: 1, out: failing(200, "e") });
+    assert.match(many, /200 failed subtest/);
+    for (const i of [0, 100, 199]) assert.match(many, new RegExp(`failing ${i}\\n`));
+    // 10 000 failures with 5000-character errors: bounded, and the cut is counted
+    const huge = explainFailure({ code: 1, out: failing(10_000, "y".repeat(5000)) });
+    assert.ok(huge.length < 15_000, `bounded, got ${huge.length}`);
+    assert.match(huge, /more failed subtest\(s\) not listed/);
+    assert.match(huge, /errors of the failures from #\d+ on are not shown/);
+    // one error of 5000 characters: head and tail, with the cut and the original length
+    const one = explainFailure({ code: 1, out: failing(1, `HEAD-${"y".repeat(5000)}-TAIL`) });
+    assert.match(one, /HEAD-/);
+    assert.match(one, /-TAIL/);
+    assert.match(one, /\[cut \d+ of 5\d\d\d characters\]/);
+  });
+
+  it("middleCut keeps both ends and leaves a short text alone", () => {
+    assert.equal(middleCut("short", 10), "short");
+    const m = middleCut(`AAAA${"x".repeat(100)}ZZZZ`, 20);
+    assert.ok(m.startsWith("AAAA") && m.endsWith("ZZZZ"));
+    assert.match(m, /cut 88 of 108 characters/);
   });
 });

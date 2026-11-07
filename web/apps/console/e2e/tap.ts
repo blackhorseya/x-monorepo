@@ -4,8 +4,17 @@
 export type FailedSubtest = { path: string[]; error: string };
 
 const INDENT = 4; // node's TAP reporter indents a nested level by four spaces
-const MAX_ERROR_CHARS = 800;
-const MAX_FAILED_LISTED = 5;
+// The bounds of a message. Names come first and are never dropped for a count: every failed subtest is listed, each name
+// up to NAME_CHARS. Only when the names alone pass NAMES_BUDGET (hundreds of failures) is the rest cut, and the cut is
+// said with its count. The errors share ERRORS_BUDGET: each gets an equal share (at least ERROR_MIN, at most ERROR_MAX),
+// and one longer than its share keeps its head AND its tail — the cause is usually at the end — with the cut marked.
+// Worst case: NAMES_BUDGET + ERRORS_BUDGET + the markers, under 15 KB.
+const NAME_CHARS = 300;
+const NAMES_BUDGET = 6_000;
+const ERRORS_BUDGET = 6_000;
+const LINE_OVERHEAD = 12; // "  not ok - " and the newline, counted so the budget is the real size
+const ERROR_MIN = 160;
+const ERROR_MAX = 1_200;
 const TAIL_CHARS = 1500;
 
 const indentOf = (line: string) => line.length - line.trimStart().length;
@@ -55,18 +64,40 @@ export function failedSubtests(tap: string): FailedSubtest[] {
   return found;
 }
 
-/** What to print under "runner X failed": the failed subtests with their errors, or — when the TAP names none — the tail of what it printed. Bounded. */
+/** `text` cut to `max` characters: its head and its tail, with the cut and the original length said in between. */
+export function middleCut(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = Math.ceil(max / 2);
+  const tail = Math.floor(max / 2);
+  return `${text.slice(0, head)}\n… [cut ${text.length - max} of ${text.length} characters] …\n${text.slice(text.length - tail)}`;
+}
+
+/** What to print under "runner X failed": every failed subtest by name with its error (bounded as above), or — when the TAP names none — the tail of what it printed. */
 export function explainFailure(r: { code: number | null; out: string; timedOut?: boolean }): string {
   const parts: string[] = [];
   if (r.timedOut) parts.push("the runner did not finish within its deadline and was killed");
   const failed = failedSubtests(r.out);
-  if (failed.length > 0) {
-    parts.push(`${failed.length} failed subtest(s):`);
-    for (const f of failed.slice(0, MAX_FAILED_LISTED)) parts.push(`  not ok - ${f.path.join(" > ")}\n${indent(f.error.slice(0, MAX_ERROR_CHARS) || "(no error text in the TAP)", "      ")}`);
-    if (failed.length > MAX_FAILED_LISTED) parts.push(`  … and ${failed.length - MAX_FAILED_LISTED} more`);
-  } else {
+  if (failed.length === 0) {
     parts.push(`no \`not ok\` in its output (it died before reporting, or never printed TAP); the last ${TAIL_CHARS} characters it printed:\n${r.out.slice(-TAIL_CHARS)}`);
+    return parts.join("\n");
   }
+  const listed: FailedSubtest[] = [];
+  let used = 0;
+  for (const f of failed) {
+    used += Math.min(f.path.join(" > ").length, NAME_CHARS) + LINE_OVERHEAD;
+    if (listed.length > 0 && used > NAMES_BUDGET) break;
+    listed.push(f);
+  }
+  // Errors of the first `withError` failures only: ERROR_MIN each is the least that says anything, so more would pass the budget.
+  const withError = Math.min(listed.length, Math.floor(ERRORS_BUDGET / ERROR_MIN));
+  const share = Math.min(ERROR_MAX, Math.floor(ERRORS_BUDGET / withError));
+  parts.push(`${failed.length} failed subtest(s):`);
+  listed.forEach((f, i) => {
+    const name = `  not ok - ${middleCut(f.path.join(" > "), NAME_CHARS)}`;
+    parts.push(i < withError ? `${name}\n${indent(middleCut(f.error || "(no error text in the TAP)", share), "      ")}` : name);
+  });
+  if (withError < listed.length) parts.push(`  (the errors of the failures from #${withError + 1} on are not shown: the errors budget of ${ERRORS_BUDGET} characters is used)`);
+  if (listed.length < failed.length) parts.push(`  … ${failed.length - listed.length} more failed subtest(s) not listed (the names alone passed ${NAMES_BUDGET} characters); the first is "${middleCut(failed[listed.length]!.path.join(" > "), 80)}"`);
   return parts.join("\n");
 }
 
