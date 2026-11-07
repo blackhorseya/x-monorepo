@@ -1,7 +1,9 @@
 # Dependabot bumps one go.mod at a time and does not know go.work: every other
 # module's go.mod then drifts (indirect requirements, go.sum) and the work-sync
-# gate rejects the PR. This workflow runs `task tidy` on Dependabot's branch,
-# commits the result, and re-triggers CI on the new head.
+# gate rejects the PR. This workflow runs `task tidy` on Dependabot's branch until a
+# round changes nothing (scripts/sync-fixpoint.sh, at most 5 rounds: one round is not
+# always a fixed point, #475), commits the result, and re-triggers CI on the new head.
+# If it does not converge the job fails before the commit step.
 #
 # Two GitHub rules shape it:
 #   - Workflows triggered by Dependabot get a read-only GITHUB_TOKEN unless the
@@ -41,14 +43,14 @@ jobs:
   sync:
     if: github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # p90 58s, n=5 (last 11 days)
+    timeout-minutes: 10 # one task tidy round p90 ~58s, n=5 (last 11 days); up to 5 rounds
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
           fetch-depth: 0
       - uses: ./.github/actions/setup
-      - run: task tidy
+      - run: scripts/sync-fixpoint.sh
       - id: diff
         run: |
           if git diff --quiet -- go.work '*/go.mod' '*/*/go.mod' '*/go.sum' '*/*/go.sum'; then

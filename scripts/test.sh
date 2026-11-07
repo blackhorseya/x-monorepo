@@ -4602,6 +4602,137 @@ neg_cell "pods are running: no"                           "not found (rc=1)"    
 neg_cell "kubectl prints the error JSON, THEN dies (9): not found, not a pass" "not found (rc=9)" 'cat '"$tmp"'/neg.cfgerr.json; return 9'
 neg_cell "kubectl prints nothing and dies (9)"            "not found (rc=9)"        'return 9'
 
+# ── #478: dependabot-sync runs the sync to a fixed point; tools/swallowast is a scripts-test input ──────────────────────────────
+# #475 (mvdan.cc/sh 3.13.1 -> 3.14.1): one `task tidy` round added go-internal to 12 go.mod, the second took it from 11 of them; the bot committed round
+# one and check-work-sync was red until a human ran round two. scripts/sync-fixpoint.sh repeats the sync until a round changes nothing, within a bound.
+sfx="$src/scripts/sync-fixpoint.sh"
+# sf_fixture <name>: a directory with the files the snapshot looks at (go.work, */go.mod, */*/go.mod, go.sum) and a counter of sync invocations.
+sf_fixture() {
+  sfd="$tmp/sf-$1"
+  mkdir -p "$sfd/apps/a" "$sfd/pkgs/b"
+  printf 'go 1.27\n\nuse (\n\t./apps/a\n\t./pkgs/b\n)\n' > "$sfd/go.work"
+  printf 'module example.com/a\n\ngo 1.27\n' > "$sfd/apps/a/go.mod"
+  printf 'module example.com/b\n\ngo 1.27\n' > "$sfd/pkgs/b/go.mod"
+  printf 'x\n' > "$sfd/apps/a/go.sum"
+}
+# The injected sync commands (SYNC_FIXPOINT_CMD); each appends to .calls so the number of rounds is observable.
+sfcmds="$tmp/sfcmds"; mkdir -p "$sfcmds"
+printf '#!/bin/sh\necho x >> .calls\n' > "$sfcmds/noop.sh"
+# two.sh: round 1 appends A, round 2 appends B, later rounds change nothing (the shape of #475: two changing rounds, then the fixed point)
+printf '#!/bin/sh\necho x >> .calls\nn=$(wc -l < .calls | tr -d " ")\nif [ "$n" = 1 ]; then echo "// A" >> apps/a/go.mod; fi\nif [ "$n" = 2 ]; then echo "// B" >> apps/a/go.mod; fi\n' > "$sfcmds/two.sh"
+# never.sh: every call changes go.sum; past 20 calls it dies with 99 so a script without a bound ends in a visible way instead of hanging
+printf '#!/bin/sh\necho x >> .calls\nn=$(wc -l < .calls | tr -d " ")\nif [ "$n" -gt 20 ]; then exit 99; fi\necho "line $n" >> apps/a/go.sum\n' > "$sfcmds/never.sh"
+# partial.sh: changes a file and prints, THEN dies with 3 (a status the loop must not swallow)
+printf '#!/bin/sh\necho x >> .calls\necho "// partial" >> apps/a/go.mod\necho "half an answer"\nexit 3\n' > "$sfcmds/partial.sh"
+chmod +x "$sfcmds"/*.sh
+# sf_run <script> <fixture> <sync cmd> [max]: runs <script> in the fixture; sets sf_out (stdout+stderr), sf_rc, sf_calls (sync invocations).
+sf_in() { local d=$1 s=$2 c=$3; shift 3; ( cd "$d" && SYNC_FIXPOINT_CMD="$c" "$s" "$@" ); }
+sf_run() {
+  local s=$1 d=$2 c=$3; shift 3
+  capture -2 sf_out sf_rc sf_in "$d" "$s" "$c" "$@" || exit 1
+  sf_calls=0
+  if [ -f "$d/.calls" ]; then sf_calls=$(wc -l < "$d/.calls" | tr -d ' ') || exit 1; fi
+}
+# sf_count <regex> <text>: how many lines of <text> match (count_lines: 0 for none, a grep failure is fatal). first_line <text> <file>: the number of the first line of <file> holding <text> (empty if none).
+sf_count() { printf '%s\n' "$2" | count_lines -E -- "$1"; }
+first_line() { awk -v p="$1" 'index($0, p) { print NR; exit }' "$2"; }
+is_before() { if [ -n "$1" ] && [ -n "$2" ] && [ "$1" -lt "$2" ]; then echo yes; else echo no; fi; }
+names_both() { if grep -qF -- "$1" "$2" && grep -qF -- "$1" "$3"; then echo yes; else echo no; fi; }
+# sf_verdict <script>: runs every case against <script>; prints "OK <cases>" or "FAIL <cases>: <first failing case>". Used for the real script and for each mutant.
+sf_verdict() {
+  local s=$1 n=0 first="" yes
+  sf_check() { n=$((n + 1)); if [ "$2" != "$3" ] && [ -z "$first" ]; then first="$1: want [$2] got [$3]"; fi; }
+  sf_fixture v-insync;  sf_run "$s" "$sfd" "$sfcmds/noop.sh"
+  sf_check "in sync: exit"        0 "$sf_rc"; sf_check "in sync: one round" 1 "$sf_calls"
+  sf_fixture v-two;     sf_run "$s" "$sfd" "$sfcmds/two.sh"
+  sf_check "two rounds: exit"     0 "$sf_rc"; sf_check "two rounds: rounds run (2 changing + 1 confirming)" 3 "$sf_calls"
+  capture yes _ count_lines -E '^// [AB]$' "$sfd/apps/a/go.mod" || exit 1
+  sf_check "two rounds: both rounds' changes are in the tree" 2 "$yes"
+  sf_fixture v-never;   sf_run "$s" "$sfd" "$sfcmds/never.sh"
+  sf_check "never converges: exit 1" 1 "$sf_rc"; sf_check "never converges: bounded at 5 rounds" 5 "$sf_calls"
+  capture yes _ sf_count 'no fixed point after 5 rounds' "$sf_out" || exit 1
+  sf_check "never converges: says so" 1 "$yes"
+  sf_fixture v-never3;  sf_run "$s" "$sfd" "$sfcmds/never.sh" 3
+  sf_check "never converges, max 3: exit 1" 1 "$sf_rc"; sf_check "never converges, max 3: bounded at 3 rounds" 3 "$sf_calls"
+  sf_fixture v-partial; sf_run "$s" "$sfd" "$sfcmds/partial.sh"
+  sf_check "partial output then exit 3: not swallowed" 1 "$sf_rc"; sf_check "partial output then exit 3: stops at the failing round" 1 "$sf_calls"
+  capture yes _ sf_count 'round 1 failed [(]exit 3[)]' "$sf_out" || exit 1
+  sf_check "partial output then exit 3: names the round and status" 1 "$yes"
+  sf_fixture v-badmax;  sf_run "$s" "$sfd" "$sfcmds/noop.sh" 0
+  sf_check "max 0 is refused" 2 "$sf_rc"; sf_check "max 0: nothing ran" 0 "$sf_calls"
+  sf_fixture v-badmax2; sf_run "$s" "$sfd" "$sfcmds/noop.sh" abc
+  sf_check "a non-numeric max is refused" 2 "$sf_rc"
+  if [ -z "$first" ]; then echo "OK $n"; else echo "FAIL $n: $first"; fi
+}
+eq_of "sync-fixpoint: the real script passes every case (and the case count is the baseline)" "OK 16" sf_verdict "$sfx"
+# One mutant per rule: the loop's bound, its failure branch, the convergence test, and the stop-after-one-round shape. A mutant is killed only by a
+# failing case (FAIL); one that does not parse is NOT-BUILT and is not a kill; one the edit did not change is NOT-APPLIED (the rule's text moved).
+sf_mutate() { python3 - "$@" <<'PY'
+import sys
+src, old, new, dst = sys.argv[1:5]
+t = open(src).read()
+if t.count(old) != 1:
+    print("NOT-APPLIED"); sys.exit(0)
+open(dst, "w").write(t.replace(old, new)); print("APPLIED")
+PY
+}
+sf_mutant() { # <name> <old text> <new text>
+  local name=$1 old=$2 new=$3 m="$tmp/sf-mutant-$1.sh" st v
+  capture st _ sf_mutate "$sfx" "$old" "$new" "$m" || exit 1
+  if [ "$st" != APPLIED ]; then bad "sync-fixpoint mutant $name: $st"; return 0; fi
+  chmod +x "$m"
+  if ! bash -n "$m" 2>/dev/null; then bad "sync-fixpoint mutant $name: NOT-BUILT"; return 0; fi
+  capture v _ sf_verdict "$m" || exit 1
+  case "$v" in FAIL*) ok ;; *) bad "sync-fixpoint mutant $name survived: $v" ;; esac
+}
+sf_mutant no-bound    'if [ "$round" -gt "$max" ]; then' 'if false; then'
+sf_t=t   # the replacement is spelled in two pieces so this file does not carry the pattern the swallow checker looks for
+sf_mutant swallow     '|| { echo "sync-fixpoint: round $round failed (exit $?)" >&2; exit 1; }' "|| ${sf_t}rue"
+sf_mutant never-equal '[ "$after" = "$before" ]' '[ "$after" = "never" ]'
+sf_mutant one-round   'if [ "$after" = "$before" ]; then' 'if true; then'
+# The workflow runs the script and commits only after it succeeded: the sync step is before the diff / commit steps, nothing lets a failed step through,
+# and the places that name the synced files (script snapshot, workflow diff) name the same five.
+wf="$src/.github/workflows/dependabot-sync.yml"
+capture wf_sync_line _ first_line 'scripts/sync-fixpoint.sh' "$wf" || exit 1
+capture wf_diff_line _ first_line 'id: diff' "$wf" || exit 1
+expect_eq "dependabot-sync: the sync step runs scripts/sync-fixpoint.sh (a line was found)" "1" "$([ -n "$wf_sync_line" ] && echo 1 || echo 0)"
+eq_of "dependabot-sync: the sync step is before the diff step" yes is_before "$wf_sync_line" "$wf_diff_line"
+eq_of "dependabot-sync: no bare task tidy step is left" 0 count_lines -E '^ *- run: task tidy' "$wf"
+eq_of "dependabot-sync: the commit step only runs on a diff" 1 count_lines -F "if: steps.diff.outputs.changed == 'true'" "$wf"
+eq_of "dependabot-sync: no step may fail and go on" 0 count_lines 'continue-on-error' "$wf"
+for p in 'go.work' "'*/go.mod'" "'*/*/go.mod'" "'*/go.sum'" "'*/*/go.sum'"; do
+  eq_of "sync-fixpoint: the snapshot names $p like the workflow's diff" yes names_both "$p" "$sfx" "$wf"
+done
+
+# tools/swallowast is built by check-exit-swallow.sh, which scripts/test.sh runs: a change to it (go.mod, go.sum, source, test, a rename out of it) runs scripts-test (#475).
+# The inventory of tools/* that scripts/test.sh depends on is this one; tools/stripvalidate is only run by `task gen` (the TS client) and is not a scripts-test input.
+swallowast_jobs="$go_checks build console_e2e scripts_test helm_kind helm_kind_payment k6_wire"
+swallowast_gomod_jobs="$go_checks build release_snapshot console_e2e scripts_test helm_kind helm_kind_payment helm_kind_keda k6 k6_wire"
+eq_of "tools/swallowast/go.mod runs scripts-test" "$swallowast_gomod_jobs" jobs_on swagomod tools/swallowast/go.mod
+eq_of "tools/swallowast/go.sum runs scripts-test" "$swallowast_gomod_jobs" jobs_on swagosum tools/swallowast/go.sum
+eq_of "a tools/swallowast source file runs scripts-test" "$swallowast_jobs" jobs_on swasrc tools/swallowast/main.go
+eq_of "a tools/swallowast _test.go runs scripts-test (and only the Go checks besides)" "$go_checks scripts_test" jobs_on swatest tools/swallowast/ast_test.go
+eq_of "renaming a file out of tools/swallowast runs scripts-test (--no-renames)" "$swallowast_jobs" rename_jobs_on swaout tools/swallowast/main.go docs/swallowast-main.txt
+eq_of "renaming a file into tools/swallowast runs scripts-test (--no-renames)" "$swallowast_jobs" rename_jobs_on swain docs/swallowast-main.txt tools/swallowast/main.go
+eq_of "tools/stripvalidate is not a scripts-test input (source)" "$go_checks build console_e2e helm_kind helm_kind_payment k6_wire" jobs_on stripsrc tools/stripvalidate/main.go
+eq_of "tools/stripvalidate is not a scripts-test input (go.mod)" "$gomod_jobs" jobs_on stripmod tools/stripvalidate/go.mod
+# The same cases against ci-changes.sh with the rule taken out: every one must come out different (a mutant the cases cannot see is a rule nothing pins).
+cc_msrc="$tmp/cc-mutant"; mkdir -p "$cc_msrc"; cp -R "$src/scripts" "$cc_msrc/scripts"
+capture cc_st _ sf_mutate "$src/scripts/ci-changes.sh" " 'tools/swallowast/*'" "" "$cc_msrc/scripts/ci-changes.sh" || exit 1
+expect_eq "ci-changes mutant (the tools/swallowast rule removed) was applied" "APPLIED" "$cc_st"
+mut_jobs_on() { ( src=$cc_msrc; jobs_on "$@" ); }
+mut_rename_jobs_on() { ( src=$cc_msrc; rename_jobs_on "$@" ); }
+cc_killed=0; cc_cases=0
+cc_kill() { # <name> <expected> <mutant output>
+  cc_cases=$((cc_cases + 1)); if [ "$2" != "$3" ]; then cc_killed=$((cc_killed + 1)); else bad "ci-changes mutant survived: $1 still gives [$3]"; fi
+}
+capture cc_o _ mut_jobs_on mswagomod tools/swallowast/go.mod || exit 1;                                cc_kill "go.mod" "$swallowast_gomod_jobs" "$cc_o"
+capture cc_o _ mut_jobs_on mswasrc tools/swallowast/main.go || exit 1;                                 cc_kill "source" "$swallowast_jobs" "$cc_o"
+capture cc_o _ mut_jobs_on mswatest tools/swallowast/ast_test.go || exit 1;                            cc_kill "_test.go" "$go_checks scripts_test" "$cc_o"
+capture cc_o _ mut_rename_jobs_on mswaout tools/swallowast/main.go docs/swallowast-main.txt || exit 1; cc_kill "rename out" "$swallowast_jobs" "$cc_o"
+capture cc_o _ mut_rename_jobs_on mswain docs/swallowast-main.txt tools/swallowast/main.go || exit 1;  cc_kill "rename in" "$swallowast_jobs" "$cc_o"
+expect_eq "ci-changes mutant: five cases ran, all five killed" "5/5" "$cc_killed/$cc_cases"
+
 suite_done=1
 echo "scripts/test.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]
