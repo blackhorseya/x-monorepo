@@ -1,4 +1,3 @@
-import { randomInt } from "node:crypto";
 import { createConnection, createServer, type Server } from "node:net";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -9,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import { type Connect, LOOPBACKS, classifyConnectError, hasIPv6Loopback, isNoAddress, probe, waitClosed } from "./clean.ts";
 import { derivePorts } from "./ports.ts";
+import { privatePair } from "./private-pair.ts";
 import * as childModule from "./child.ts";
 import { MAX_WAIT_MS, type Tracked, __testing, groupAlive, lastSpawned, reapAll, runBounded, signalGroup, spawnTracked, waitChild } from "./child.ts";
 
@@ -20,37 +20,14 @@ import { MAX_WAIT_MS, type Tracked, __testing, groupAlive, lastSpawned, reapAll,
 //
 //   node --test --experimental-strip-types e2e/assert-clean.selftest.ts      (task web-e2e-ports runs it first)
 // This test is internal to the task: it does not read the caller's E2E pair (that belongs to the smoke
-// run, and to whatever else the caller runs beside it) and writes no port of its own. It picks a pair at
-// random from the OS's dynamic range and keeps it only if EVERY port derived from it (e2e/ports.ts, 19 of
-// them across two blocks) can be bound right now on every loopback, so any number of runs — under any
-// callers' pairs — can go side by side (#386). The OS cannot hand out the pair itself: it hands out one port at a
-// time, usually the next free one, and the derived ports must be spread over two separate blocks.
-const bindable = (host: string, port: number) =>
-  new Promise<boolean>((resolve) => {
-    const s = createServer();
-    s.once("error", () => resolve(false));
-    s.listen({ port, host, ipv6Only: host === "::1" }, () => s.close(() => resolve(true)));
-  });
-async function privatePair(): Promise<{ rpc: number; web: number }> {
-  // Two projects deriving the same port is a bug in e2e/ports.ts, not bad luck in the draw below: say so, instead of
-  // letting every draw be skipped and the run end as "no free pair".
-  const sample = derivePorts({ E2E_RPC_PORT: "20000", E2E_WEB_PORT: "40000" }).all;
-  const twice = sample.filter((port, i) => sample.indexOf(port) !== i);
-  if (twice.length) throw new Error(`derivePorts() derives port(s) ${[...new Set(twice)].join(", ")} twice (offsets of two projects collide, e2e/ports.ts)`);
-  const hosts = (await hasIPv6Loopback()).available ? ["127.0.0.1", "::1"] : ["127.0.0.1"];
-  for (let attempt = 0; attempt < 100; attempt++) {
-    // Dynamic range, with room for the largest offset (+120) below 65535; the two blocks are far apart.
-    const rpc = randomInt(20_000, 30_000);
-    const web = randomInt(40_000, 65_000);
-    const all = derivePorts({ E2E_RPC_PORT: String(rpc), E2E_WEB_PORT: String(web) }).all;
-    if (Math.max(...all) > 65535 || new Set(all).size !== all.length) continue;
-    const free = await Promise.all(all.flatMap((port) => hosts.map((host) => bindable(host, port))));
-    if (free.every(Boolean)) return { rpc, web };
-  }
-  throw new Error("no private E2E port pair with every derived port free after 100 tries");
-}
+// run, and to whatever else the caller runs beside it) and writes no port of its own. It takes a pair of its own from
+// e2e/private-pair.ts: drawn at random, every port derived from it claimed so that no other selftest process (the runners of
+// e2e/assert-clean.parallel.selftest.ts, the fault selftest's nested run) is handed a port of it, and free on every loopback
+// right now. Any number of runs — under any callers' pairs — can go side by side (#386, #495).
 const ipv6Loopback = await hasIPv6Loopback();
 const pair = await privatePair();
+// Which process held which pair, if a run ever fails on a port again: the pid is in the control message below as well.
+console.log(`assert-clean selftest pid ${process.pid}: private E2E pair rpc=${pair.rpc} web=${pair.web}`);
 const env = { ...process.env, E2E_RPC_PORT: String(pair.rpc), E2E_WEB_PORT: String(pair.web) };
 const p = derivePorts(env);
 const consoleDir = fileURLToPath(new URL("..", import.meta.url));
@@ -70,7 +47,7 @@ const close = (s: Server) => new Promise<void>((r) => s.close(() => r()));
 /** Holds `hold()` open: the checker must say 1 while it is, 0 once `release()` has returned. */
 async function failsWhileHeld(name: string, hold: () => Promise<() => Promise<void>>) {
   const before = await checker();
-  assert.equal(before.code, 0, `${name}: the control must start clean, got ${before.code}: ${before.out}`);
+  assert.equal(before.code, 0, `${name}: the control must start clean, got ${before.code} (selftest pid ${process.pid}, pair rpc=${pair.rpc} web=${pair.web}): ${before.out}`);
   const release = await hold();
   let during: { code: number; out: string };
   try {
@@ -85,7 +62,13 @@ async function failsWhileHeld(name: string, hold: () => Promise<() => Promise<vo
 
 const hosts = LOOPBACKS.filter((h) => h !== "::1" || ipv6Loopback.available);
 // Whatever a test left behind: SIGKILL every group, then wait (at most 5 s each) until each child is reaped (e2e/child.ts).
-after(() => reapAll(5_000));
+after(async () => {
+  try {
+    await reapAll(5_000);
+  } finally {
+    await pair.release();
+  }
+});
 
 describe("assert-clean sees live listeners", () => {
   it("passes when nothing listens (positive control)", async () => {

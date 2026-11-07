@@ -1,12 +1,16 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:net";
+import { randomInt } from "node:crypto";
 import { type NestedResult, groupAlive, killNested, runNested } from "./nested.ts";
 import { assertRunnerPassed } from "./report.ts";
 import { failedSubtests } from "./tap.ts";
+import { derivePorts } from "./ports.ts";
+import { LOCKS, type LockWindow, type Pair, privatePair } from "./private-pair.ts";
 
 // Two selftest runs at the same time, each under its own caller E2E pair (the way reviewers and parallel
 // worktrees run), must both pass: the selftest brings the ports it needs and takes nothing the caller's
@@ -277,5 +281,167 @@ describe("failedSubtests reads node's TAP", () => {
     assert.deepEqual(failedSubtests("ok 1 - fine\n# pass 1\n"), []);
     const long = `not ok 1 - long\n  ---\n  failureType: 'testCodeFailure'\n  error: '${"y".repeat(5000)}'\n  ...`;
     assert.equal(failedSubtests(long)[0]!.error.length, 5000);
+  });
+});
+
+// The pairs themselves. Several selftest processes run at once under `node --test` (the selftest, both runners of the test above and
+// the fault selftest's nested run: four in one `task web-e2e-ports`, each listening for ~10 s, and another worktree may run its own
+// beside them), and each one draws its own pair. A pair that was free when it was drawn is not a pair nobody else is about to use: the
+// other process has drawn but not yet bound, so the "free now" check passes for both, and one of them finds the other's listener on a
+// port it derives (CI run 42372437266: `failsWhileHeld`'s control saw `listening [[::1]:24638]` before it had listened on anything,
+// #495). Two draws that share ANY derived port, whether or not they are the same pair, must not both be handed out; and a process that
+// ends, however it ends, must not keep its pair (e2e/private-pair.ts: the lock is a bound socket, which the kernel closes with the process).
+describe("private pairs of concurrent selftests share no port", () => {
+  // These cases lock in a window of their own, so a selftest running beside them (the default window) cannot refuse a draw they force.
+  const TEST_LOCKS: LockWindow = { base: 31_500, size: 1_200 };
+  const portsOf = (p: Pair) => derivePorts({ E2E_RPC_PORT: String(p.rpc), E2E_WEB_PORT: String(p.web) }).all;
+  const shared = (a: Pair, b: Pair) => portsOf(a).filter((port) => portsOf(b).includes(port));
+  const same = (a: Pair, b: Pair) => a.rpc === b.rpc && a.web === b.web;
+  const show = (p: Pair) => JSON.stringify({ rpc: p.rpc, web: p.web });
+  // The pairs these cases force are drawn below the OS's ephemeral range (macOS: 49152 and up): a port in it can be taken by
+  // someone's outgoing connection for a moment, the free-now check then refuses a draw the case needs accepted, and the case
+  // would fail for a reason that is not the lock. (The selftest's own draw is random over the whole range and simply draws again.)
+  const calm = (): Pair => ({ rpc: randomInt(20_000, 30_000), web: randomInt(40_000, 48_500) });
+  const farWeb = (p: Pair) => (p.web >= 44_500 ? p.web - 4_000 : p.web + 4_000);
+  /** A draw that shares ports with `p` without being `p`: its rpc is p's role rpc (+10), its web is far away. */
+  const overlapping = (p: Pair): Pair => ({ rpc: p.rpc + 10, web: farWeb(p) });
+  const take = (draw: () => Pair = calm, attempts?: number) => privatePair({ locks: TEST_LOCKS, draw, attempts });
+  const dirs: string[] = [];
+  after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+  const offering = (first: Pair[]) => {
+    const queue = [...first];
+    let offered = 0;
+    return { draw: () => (offered++, queue.shift() ?? calm()), offered: () => offered };
+  };
+
+  it("in one process: a draw that repeats a pair held by an earlier caller, and one that overlaps it, are both refused", async () => {
+    const held = await take();
+    const forced = offering([held, overlapping(held)]);
+    const second = await take(forced.draw);
+    assert.deepEqual(shared(held, second), [], `the second caller was handed ${show(second)}, which shares ports with ${show(held)}`);
+    assert.ok(forced.offered() >= 3, `control: both forced draws must have been offered and refused, then a free one taken (offered ${forced.offered()})`);
+    await held.release();
+    await second.release();
+  });
+
+  it("release() gives the pair back, and may be called twice", async () => {
+    const held = await take();
+    await held.release();
+    await held.release();
+    const again = await take(offering([held]).draw);
+    assert.ok(same(again, held), "release() did not give the pair back");
+    await again.release();
+  });
+
+  it("a draw refused for sharing a port gives back the locks it had taken before it hit the shared one", async () => {
+    const held = await take();
+    // rpc one below held's: its first slot (rpc - 1) is free and is taken, its second (= held's rpc) is held and refuses it
+    const partial: Pair = { rpc: held.rpc - 1, web: farWeb(held) };
+    const second = await take(offering([partial]).draw);
+    assert.deepEqual(shared(held, second), [], "control: the partial overlap was refused");
+    // `second` goes too: it is a random pair, and one of its slots could refuse `partial` for a reason that is not the rollback
+    await second.release();
+    await held.release();
+    const third = await take(offering([partial]).draw);
+    assert.ok(same(third, partial), `the refused draw kept some of its locks (got ${show(third)})`);
+    await third.release();
+  });
+
+  it("a draw refused because one of its ports is bound gives back every lock it took", async () => {
+    const d = await take();
+    await d.release();
+    const busy = createServer();
+    await new Promise<void>((resolve, reject) => (busy.once("error", reject), busy.listen({ port: portsOf(d)[5]!, host: "127.0.0.1" }, resolve)));
+    try {
+      const forced = offering([d]);
+      const other = await take(forced.draw);
+      assert.deepEqual(shared(d, other), [], "control: a draw with a bound port was handed out");
+      assert.ok(forced.offered() >= 2, "control: the draw with the bound port was offered");
+      await other.release();
+    } finally {
+      await new Promise<void>((resolve) => busy.close(() => resolve()));
+    }
+    const again = await take(offering([d]).draw);
+    assert.ok(same(again, d), `the refused draw kept its locks (got ${show(again)})`);
+    await again.release();
+  });
+
+  it("when every draw is refused, the error names the lock window and the refusal", async () => {
+    const held = await take();
+    await assert.rejects(take(() => held, 2), /unlocked after 2 tries \(locks: 127\.0\.0\.1:31500-32699, last refusal: EADDRINUSE\)/);
+    await held.release();
+  });
+
+  // A real process holds a pair and ends; every way a process ends. While it is alive the parent's draws of its pair are refused (so
+  // the pair is held, and it is the end that frees it); once it has ended the parent can take exactly that pair.
+  describe("a process that ends gives its pair back, whichever way it ends", () => {
+    const start = (mode: "exit" | "throw" | "hold") => {
+      const dir = mkdtempSync(join(tmpdir(), "assert-clean-child-"));
+      dirs.push(dir);
+      const ready = join(dir, "ready");
+      let pid = 0;
+      let finished: NestedResult | undefined;
+      const done = runNested(["--experimental-strip-types", "e2e/fault/pair-child.ts", ready, mode, String(TEST_LOCKS.base), String(TEST_LOCKS.size)], { cwd: consoleDir, env: process.env, deadlineMs: 30_000, onSpawn: (p) => (pid = p) });
+      void done.then((r) => (finished = r));
+      const held = async (): Promise<Pair & { draws: number }> => {
+        for (let i = 0; i < 400; i++) {
+          // the file first: a child that holds a pair and ends at once (`exit`, `throw`) has finished by the time it is looked at
+          if (existsSync(ready)) return JSON.parse(readFileSync(ready, "utf8"));
+          if (finished) assert.fail(`setup failure: the child ended before it held a pair (code ${finished.code}, signal ${finished.signal}): ${finished.out}`);
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return assert.fail("setup failure: the child did not hold a pair within 20 s");
+      };
+      return { done, held, pid: () => pid, ready };
+    };
+    const cells: { name: string; mode: "exit" | "throw" | "hold"; signal?: NodeJS.Signals }[] = [
+      { name: "reaching the end of its script", mode: "exit" },
+      { name: "an uncaught exception", mode: "throw" },
+      { name: "SIGTERM", mode: "hold", signal: "SIGTERM" },
+      { name: "SIGINT", mode: "hold", signal: "SIGINT" },
+      { name: "SIGHUP", mode: "hold", signal: "SIGHUP" },
+      { name: "SIGKILL", mode: "hold", signal: "SIGKILL" },
+    ];
+    for (const { name, mode, signal } of cells) {
+      it(name, { timeout: 90_000 }, async () => {
+        const child = start(mode);
+        const held = await child.held();
+        // Every cell, whatever the ending: the child is alive here and waits for us. Its pair is held, a draw of it (or of one that
+        // overlaps it) is refused. Without this, a child that never kept its pair would pass the cells that end by themselves.
+        const forced = offering([held, overlapping(held)]);
+        const other = await take(forced.draw);
+        assert.deepEqual(shared(held, other), [], `control: a live process's pair was handed out again (${show(other)})`);
+        assert.ok(forced.offered() >= 3, "control: both forced draws must have been offered while the child was alive");
+        await other.release();
+        // now it ends, the way the cell says: we signal it, or tell it to exit / throw
+        if (signal) process.kill(child.pid(), signal);
+        else writeFileSync(`${child.ready}.go`, "");
+        const ended = await child.done;
+        assert.equal(ended.timedOut, false, `the child did not end by itself (${mode}): ${ended.out}`);
+        if (signal) assert.equal(ended.signal, signal, `control: the child must have ended by ${signal} (code ${ended.code})`);
+        else if (mode === "throw") assert.ok(ended.code !== 0 && ended.signal === null && /uncaught on purpose/.test(ended.out), `control: the child must have died of its exception (code ${ended.code}): ${ended.out}`);
+        else assert.ok(ended.code === 0 && ended.signal === null, `control: the child must have ended normally (code ${ended.code}, signal ${ended.signal})`);
+        const again = await take(offering([held]).draw);
+        assert.ok(same(again, held), `the child ended by ${name} and its pair is still locked (got ${show(again)})`);
+        await again.release();
+      });
+    }
+  });
+
+  // A tripwire, not a barrier: the selftest takes its pair from e2e/private-pair.ts and draws none of its own.
+  it("assert-clean.selftest.ts takes its pair from private-pair.ts, and releases it when it ends", () => {
+    const source = readFileSync(fileURLToPath(new URL("./assert-clean.selftest.ts", import.meta.url)), "utf8");
+    assert.match(source, /import \{ privatePair \} from "\.\/private-pair\.ts";/);
+    assert.ok(!source.includes("randomInt"), "the selftest draws a pair of its own again");
+    assert.match(source, /await pair\.release\(\)/, "the selftest never releases its pair");
+  });
+
+  // The default window must stay clear of everything that binds or is probed: the derived ports of any pair the selftest can draw
+  // (rpc block up to 29999 + 120, web block from 40000), the default e2e pairs (18091 / 4173, 19511 / 4511, each + up to 130), and the ephemeral ranges.
+  it("the default lock window is clear of the derived ports, the default pairs and the ephemeral ranges", () => {
+    const last = LOCKS.base + LOCKS.size - 1;
+    assert.ok(LOCKS.base > 29_999 + 120 && last < 32_768, `the window ${LOCKS.base}-${last} must lie above the rpc block and below Linux's ephemeral range`);
+    for (const defaults of [{ E2E_RPC_PORT: "18091", E2E_WEB_PORT: "4173" }, { E2E_RPC_PORT: "19511", E2E_WEB_PORT: "4511" }])
+      for (const port of derivePorts(defaults).all) assert.ok(port < LOCKS.base || port > last, `${port} of the default pair ${JSON.stringify(defaults)} lies in the lock window`);
   });
 });
