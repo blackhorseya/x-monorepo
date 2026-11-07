@@ -134,17 +134,32 @@ describe("a failed runner names every failing subtest on stderr", () => {
     assert.match(d.stderr, /no TAP/i);
   });
 
-  it("a file that prints its cause first, then 30000 characters of noise, then dies: the early cause is on stderr", async () => {
-    const file = join(dir, "early.selftest.ts");
-    writeFileSync(file, 'console.error("EARLY-CAUSE: import failed here"); for (let i = 0; i < 600; i++) console.error(`noise line ${i} ${"z".repeat(40)}`); process.exit(1);');
-    const r = await runner(pair, file);
-    assert.equal(r.code, 1);
-    const at = r.out.indexOf("EARLY-CAUSE");
-    const shape = `runner output: ${r.out.length} chars, EARLY-CAUSE at ${at}; head: ${JSON.stringify(r.out.slice(0, 300))}; tail: ${JSON.stringify(r.out.slice(-300))}`;
-    assert.ok(at >= 0, `the runner did not forward the file's output at all, so this proves nothing. ${shape}`);
-    assert.ok(at < r.out.length - 20_000, `EARLY-CAUSE must lie outside the last 20000 characters, or this proves nothing. ${shape}`);
-    const d = diagnose(r);
-    assert.match(d.stderr, /EARLY-CAUSE: import failed here/, "the early output of a dead file was cut");
+  // What `node --test` forwards of a file that died is not the same on every node: node 26 (a developer's machine) forwards
+  // all of it, node 22 (CI) stopped at ~12 KB of the 33 KB this fixture printed (CI run 42360256259). So the real runner is
+  // checked for the early cause, and the size claim ("no 20000-character tail") on a copy of that real result padded to
+  // 30000 characters right after the early line — which is where node 26 puts them — so it holds on every node.
+  describe("a file that prints its cause first, then a lot of noise, then dies", () => {
+    const early = async () => {
+      const file = join(dir, "early.selftest.ts");
+      writeFileSync(file, 'console.error("EARLY-CAUSE: import failed here"); for (let i = 0; i < 600; i++) console.error(`noise line ${i} ${"z".repeat(40)}`); process.exit(1);');
+      const r = await runner(pair, file);
+      assert.equal(r.code, 1);
+      assert.ok(r.out.includes("# EARLY-CAUSE: import failed here\n"), `the runner did not forward the dead file's output at all, so this proves nothing. runner output: ${JSON.stringify(r.out.slice(0, 400))}`);
+      return r;
+    };
+
+    it("real runner: the early cause is on stderr", async () => {
+      const d = diagnose(await early());
+      assert.match(d.stderr, /EARLY-CAUSE: import failed here/);
+    });
+
+    it("the same result with 30000 characters after the early line: the early cause is still on stderr (no 20000-character tail)", async () => {
+      const r = await early();
+      const noise = Array.from({ length: 600 }, (_, i) => `# padding line ${i} ${"p".repeat(40)}\n`).join("");
+      const padded: NestedResult = { ...r, out: r.out.replace("# EARLY-CAUSE: import failed here\n", `# EARLY-CAUSE: import failed here\n${noise}`) };
+      assert.ok(padded.out.length > 30_000 && padded.out.indexOf("EARLY-CAUSE") < padded.out.length - 20_000, "EARLY-CAUSE must lie outside the last 20000 characters, or this proves nothing");
+      assert.match(diagnose(padded).stderr, /EARLY-CAUSE: import failed here/, "the early output of a dead file was cut");
+    });
   });
 
   it("a runner that never ends is killed at its deadline with its whole group; stderr has what it printed, the message says deadline", async () => {
