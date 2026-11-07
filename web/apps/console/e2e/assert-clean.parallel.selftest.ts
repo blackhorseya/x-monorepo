@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type NestedResult, groupAlive, killNested, runNested } from "./nested.ts";
-import { explainFailure, failedSubtests, middleCut } from "./tap.ts";
+import { assertRunnerPassed } from "./report.ts";
+import { failedSubtests } from "./tap.ts";
 
 // Two selftest runs at the same time, each under its own caller E2E pair (the way reviewers and parallel
 // worktrees run), must both pass: the selftest brings the ports it needs and takes nothing the caller's
@@ -27,13 +28,6 @@ function runner(pair: { rpc: number; web: number }, file = "e2e/assert-clean.sel
     deadlineMs,
     onSpawn,
   });
-}
-
-/** Fails when the runner ran nothing or did not exit 0. `sink` takes the lines meant for stderr (the whole diagnosis); the message is the summary. */
-function assertRunnerPassed(label: string, r: NestedResult, _sink: (line: string) => void = (l) => console.error(l)): void {
-  assert.equal(r.timedOut, false, `runner ${label} failed: ${explainFailure(r)}`);
-  assert.match(r.out, /^# pass [1-9]/m, `runner ${label} ran no tests (an empty run is not a pass):\n${r.out.slice(-800)}`);
-  assert.equal(r.code, 0, `runner ${label} failed (exit ${r.code ?? r.signal}):\n${explainFailure(r)}`);
 }
 
 describe("assert-clean selftest, run in parallel", () => {
@@ -157,6 +151,24 @@ describe("a failed runner names every failing subtest on stderr", () => {
     assert.match(d.stderr, /hang-marker/);
   });
 
+  it("the default sink is stderr: a child that calls assertRunnerPassed prints the block there", async () => {
+    const tapFile = join(dir, "38.tap");
+    writeFileSync(tapFile, (await runner(pair, fixture("many2.selftest.ts", failing(38)))).out);
+    const wrapper = join(dir, "wrap.selftest.ts");
+    const report = new URL("./report.ts", import.meta.url).href;
+    writeFileSync(wrapper, `import { readFileSync } from "node:fs"; import { assertRunnerPassed } from ${JSON.stringify(report)}; assertRunnerPassed("W", { code: 1, signal: null, timedOut: false, out: readFileSync(${JSON.stringify(tapFile)}, "utf8") });`);
+    const w = await runNested(["--experimental-strip-types", wrapper], { cwd: consoleDir, env: process.env, deadlineMs: 60_000 });
+    assert.notEqual(w.code, 0);
+    assert.match(w.out, /^=== nested failures \(38\) runner W ===$/m);
+    assert.match(w.out, /CAUSE-AT-38\b/);
+    assert.match(w.out, /^=== end nested failures ===$/m);
+  });
+
+  it("a clean exit that ran no tests is not a pass", () => {
+    const quiet: NestedResult = { code: 0, signal: null, timedOut: false, out: "TAP version 13\n1..0\n# tests 0\n# pass 0\n# fail 0\n" };
+    assert.throws(() => assertRunnerPassed("Q", quiet, () => {}), /ran no tests/);
+  });
+
   it("control: a runner that ends in time is not marked timed out", async () => {
     const r = await runner(pair, fixture("green2.selftest.ts", ""), 60_000);
     assert.equal(r.timedOut, false);
@@ -192,36 +204,9 @@ describe("failedSubtests reads node's TAP", () => {
     ]);
   });
 
-  it("a passing run lists nothing, and a TAP with no `not ok` is explained by its tail", () => {
+  it("a passing run lists nothing, and an error is returned whole however long", () => {
     assert.deepEqual(failedSubtests("ok 1 - fine\n# pass 1\n"), []);
-    const m = explainFailure({ code: 1, out: `${"x".repeat(5000)}END-OF-OUTPUT` });
-    assert.match(m, /no `not ok`/);
-    assert.match(m, /END-OF-OUTPUT/);
-    assert.ok(m.length < 2000, "the tail is bounded");
-  });
-
-  it("the message is bounded, keeps every name while they fit, and says when it cuts", () => {
-    const failing = (n: number, error: string) => Array.from({ length: n }, (_, i) => `not ok ${i} - failing ${i}\n  ---\n  failureType: 'testCodeFailure'\n  error: '${error}'\n  ...`).join("\n");
-    // 200 failures with short names (4 KB of names): all of them, by name
-    const many = explainFailure({ code: 1, out: failing(200, "e") });
-    assert.match(many, /200 failed subtest/);
-    for (const i of [0, 100, 199]) assert.match(many, new RegExp(`failing ${i}\\n`));
-    // 10 000 failures with 5000-character errors: bounded, and the cut is counted
-    const huge = explainFailure({ code: 1, out: failing(10_000, "y".repeat(5000)) });
-    assert.ok(huge.length < 15_000, `bounded, got ${huge.length}`);
-    assert.match(huge, /more failed subtest\(s\) not listed/);
-    assert.match(huge, /errors of the failures from #\d+ on are not shown/);
-    // one error of 5000 characters: head and tail, with the cut and the original length
-    const one = explainFailure({ code: 1, out: failing(1, `HEAD-${"y".repeat(5000)}-TAIL`) });
-    assert.match(one, /HEAD-/);
-    assert.match(one, /-TAIL/);
-    assert.match(one, /\[cut \d+ of 5\d\d\d characters\]/);
-  });
-
-  it("middleCut keeps both ends and leaves a short text alone", () => {
-    assert.equal(middleCut("short", 10), "short");
-    const m = middleCut(`AAAA${"x".repeat(100)}ZZZZ`, 20);
-    assert.ok(m.startsWith("AAAA") && m.endsWith("ZZZZ"));
-    assert.match(m, /cut 88 of 108 characters/);
+    const long = `not ok 1 - long\n  ---\n  failureType: 'testCodeFailure'\n  error: '${"y".repeat(5000)}'\n  ...`;
+    assert.equal(failedSubtests(long)[0]!.error.length, 5000);
   });
 });
