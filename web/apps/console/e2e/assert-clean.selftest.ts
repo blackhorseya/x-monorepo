@@ -3,6 +3,7 @@ import { randomInt } from "node:crypto";
 import { createConnection, createServer, type Server } from "node:net";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { EventEmitter } from "node:events";
@@ -55,7 +56,7 @@ const run = promisify(execFile);
 
 async function checker(): Promise<{ code: number; out: string }> {
   try {
-    const { stdout, stderr } = await run("node", ["--experimental-strip-types", "e2e/assert-clean.ts"], { cwd: consoleDir, env });
+    const { stdout, stderr } = await run("node", ["--experimental-strip-types", "e2e/assert-clean.ts"], { cwd: consoleDir, env, timeout: 60_000, killSignal: "SIGKILL" });
     return { code: 0, out: stdout + stderr };
   } catch (e) {
     const err = e as { code?: number; stdout?: string; stderr?: string };
@@ -90,23 +91,51 @@ async function failsWhileHeld(name: string, hold: () => Promise<() => Promise<vo
 }
 
 const hosts = LOOPBACKS.filter((h) => h !== "::1" || ipv6Loopback.available);
-const viteChildren: ChildProcess[] = [];
+// ---- child-wait helper: the ONLY place that spawns a child or waits for one to end (scanned by "no code waits for a child ..." at the end of this file) ----
+/** How a child ended, or that it did not within the wait. A spawn error (no such executable) is an end: no `exit` event follows it. */
+type ChildEnd = { kind: "exit"; code: number | null; signal: NodeJS.Signals | null } | { kind: "error"; error: Error } | { kind: "timeout" };
+type Tracked = { child: ChildProcess; ended?: ChildEnd; whenEnded: Promise<ChildEnd> };
+/** Hooks `exit` and `error` NOW (an `error` with no listener is an uncaught exception), so that no wait has to come first. */
+function track(child: ChildProcess): Tracked {
+  const t: Tracked = { child, whenEnded: undefined as unknown as Promise<ChildEnd> };
+  t.whenEnded = new Promise<ChildEnd>((resolve) => {
+    const end = (e: ChildEnd) => resolve((t.ended ??= e));
+    child.once("exit", (code, signal) => end({ kind: "exit", code, signal }));
+    child.once("error", (error) => end({ kind: "error", error }));
+  });
+  return t;
+}
+/** Resolves as soon as the child exits, fails to spawn, or `ms` have passed (`timeout`). Never longer than `ms`. */
+function waitChild(t: Tracked, ms: number): Promise<ChildEnd> {
+  if (t.ended) return Promise.resolve(t.ended);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([t.whenEnded, new Promise<ChildEnd>((r) => (timer = setTimeout(() => r({ kind: "timeout" }), ms)))]).finally(() => clearTimeout(timer));
+}
+const viteChildren: Tracked[] = [];
+/** Every child of this file starts here: tracked from the first tick, and reaped by `after()` whatever the test did. */
+function spawnTracked(command: readonly string[], options: { cwd?: string } = {}): Tracked {
+  const t = track(spawn(command[0]!, command.slice(1), { cwd: options.cwd, stdio: "ignore", detached: true }));
+  viteChildren.push(t);
+  return t;
+}
+// ---- end of the child-wait helper ----
+
 // `pnpm exec` starts vite as ITS child: signal the group, or vite outlives the test and holds the port.
 const killGroup = (c: ChildProcess, signal: NodeJS.Signals) => {
   try {
     if (c.pid) process.kill(-c.pid, signal);
   } catch (e) {
-    // ESRCH: the group is gone. macOS answers EPERM for a group whose members have all exited but are not yet
-    // reaped, so EPERM counts as gone only once the child we started has exited; anything else is a real failure.
+    // ESRCH: the group is gone. macOS answers EPERM for a group whose members have all ended but are not yet
+    // reaped, so EPERM counts as gone only once the child we started has ended; anything else is a real failure.
     const code = (e as NodeJS.ErrnoException).code;
-    const exited = c.exitCode !== null || c.signalCode !== null;
-    if (code !== "ESRCH" && !(code === "EPERM" && exited)) throw e;
+    const gone = c.exitCode !== null || c.signalCode !== null;
+    if (code !== "ESRCH" && !(code === "EPERM" && gone)) throw e;
   }
 };
 // Whatever a test left behind: SIGKILL every group, then wait (at most 5 s each) until each child is reaped.
 after(async () => {
-  viteChildren.forEach((c) => killGroup(c, "SIGKILL"));
-  await Promise.all(viteChildren.map((c) => (c.exitCode !== null || c.signalCode !== null ? undefined : new Promise<void>((r) => (c.once("exit", () => r()), setTimeout(r, 5_000))))));
+  viteChildren.forEach((t) => killGroup(t.child, "SIGKILL"));
+  await Promise.all(viteChildren.map((t) => waitChild(t, 5_000)));
 });
 
 describe("assert-clean sees live listeners", () => {
@@ -148,34 +177,34 @@ describe("assert-clean sees live listeners", () => {
   });
 });
 
-type Vite = { child: ChildProcess; exited: Promise<void> };
-/** Starts `command` (default: the real `vite preview` on `port`) and waits `readyMs` for it to answer HTTP; a child that never gets there is killed and reaped before this throws. */
-async function startVite(port: number, { command = ["pnpm", "exec", "vite", "preview", "--port", String(port), "--strictPort"], readyMs = 10_000 } = {}): Promise<Vite> {
-  const child = spawn(command[0]!, command.slice(1), { cwd: consoleDir, stdio: "ignore", detached: true });
-  viteChildren.push(child);
-  const exited = new Promise<void>((r) => child.once("exit", () => r()));
-  const vite = { child, exited };
+type Vite = Tracked;
+/**
+ * Starts `command` (default: the real `vite preview` on `port`) and waits `readyMs` for it to answer HTTP. A child that
+ * never gets there, or never starts (spawn error), is killed and reaped, for at most `reapMs`, before this throws.
+ */
+async function startVite(port: number, { command = ["pnpm", "exec", "vite", "preview", "--port", String(port), "--strictPort"], readyMs = 10_000, reapMs = 5_000 } = {}): Promise<Vite> {
+  const vite = spawnTracked(command, { cwd: consoleDir });
   try {
     const end = Date.now() + readyMs;
     for (;;) {
-      if (child.exitCode !== null) throw new Error(`vite preview exited ${child.exitCode} (is ${port} taken, is dist built?)`);
+      if (vite.ended?.kind === "error") throw new Error(`spawn failed: ${vite.ended.error.message}`);
+      if (vite.ended?.kind === "exit") throw new Error(`vite preview exited ${vite.ended.code ?? vite.ended.signal} (is ${port} taken, is dist built?)`);
       // A listener that accepts and never answers must not hang the wait: every request is bounded.
       if (await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(1_000) }).then((r) => r.ok, () => false)) return vite;
       if (Date.now() >= end) throw new Error(`vite preview did not come up in ${readyMs}ms`);
       await new Promise((r) => setTimeout(r, 100));
     }
   } catch (e) {
-    killGroup(child, "SIGKILL");
-    await exited;
+    killGroup(vite.child, "SIGKILL");
+    await waitChild(vite, reapMs);
     throw e;
   }
 }
-/** SIGTERM the group, SIGKILL after 5 s, then wait (at most `closeMs`) until every loopback refuses `port`. Never longer than that: what is still bound is for the cleanup check to report. */
-async function stopVite({ child, exited }: Vite, port: number, closeMs = 10_000): Promise<void> {
-  killGroup(child, "SIGTERM");
-  await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
-  if (child.exitCode === null) killGroup(child, "SIGKILL");
-  await exited;
+/** SIGTERM the group, SIGKILL after `graceMs`, reap for at most `reapMs`, then wait (at most `closeMs`) until every loopback refuses `port`. Never longer than their sum: what is still bound is for the cleanup check to report. */
+async function stopVite(vite: Vite, port: number, { closeMs = 10_000, graceMs = 5_000, reapMs = 5_000 } = {}): Promise<void> {
+  killGroup(vite.child, "SIGTERM");
+  if ((await waitChild(vite, graceMs)).kind === "timeout") killGroup(vite.child, "SIGKILL");
+  await waitChild(vite, reapMs);
   // The group is signalled, but the port is only free once vite really let go of it: a vite that is shutting down
   // still holds it and resets connections, so a failed fetch says nothing. Ask every loopback the way the checker does.
   await waitClosed(hosts, port, { deadlineMs: closeMs });
@@ -286,10 +315,12 @@ describe("a port nobody holds is not reported as listening", () => {
   });
 });
 
-// The release path must stay bounded and must leave no child behind, whatever the port does (review of #479: a
-// listener that accepts TCP and never answers HTTP held the old fetch poll, and with it `failsWhileHeld`'s finally, for good).
+// The release path must stay bounded and must leave no child behind, whatever the port or the child does (reviews of
+// #479: a listener that accepts TCP and never answers HTTP held the old fetch poll, and with it `failsWhileHeld`'s
+// finally, for good; a command that does not exist emits `error` and never `exit`).
 describe("starting and stopping vite preview is bounded", () => {
   const idle = [process.execPath, "-e", "setInterval(() => {}, 1000)"];
+  const ignoresSigterm = [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"];
   const groupAlive = (c: ChildProcess) => {
     try {
       process.kill(-c.pid!, 0);
@@ -298,54 +329,76 @@ describe("starting and stopping vite preview is bounded", () => {
       return (e as NodeJS.ErrnoException).code === "EPERM" && c.exitCode === null;
     }
   };
-  const within = <T>(ms: number, what: string, work: Promise<T>) =>
-    Promise.race([work, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} did not finish in ${ms}ms`)), ms))]);
-
-  it("stopVite: a port that accepts TCP and never answers does not hang the release; the checker still sees it", async () => {
-    const port = p.all[7]!;
+  const within = <T>(ms: number, what: string, work: Promise<T>) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([work, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} did not finish in ${ms}ms`)), ms)))]).finally(() => clearTimeout(timer));
+  };
+  const hangingListener = async (port: number) => {
     const held: import("node:net").Socket[] = [];
     const s = createServer((c) => held.push(c)); // accepts, says nothing, keeps the socket
     await new Promise<void>((resolve) => s.listen({ port, host: holdHost, ipv6Only: holdHost === "::1" }, resolve));
+    return async () => (held.forEach((c) => c.destroy()), close(s));
+  };
+
+  it("stopVite: a port that accepts TCP and never answers does not hang the release; the checker still sees it", async () => {
+    const port = p.all[7]!;
+    const stop = await hangingListener(port);
     try {
-      const child = spawn(idle[0]!, idle.slice(1), { stdio: "ignore", detached: true });
-      viteChildren.push(child);
-      const vite = { child, exited: new Promise<void>((r) => child.once("exit", () => r())) };
+      const vite = spawnTracked(idle);
       const t0 = Date.now();
-      await within(6_000, "stopVite", stopVite(vite, port, 500));
+      await within(6_000, "stopVite", stopVite(vite, port, { closeMs: 500 }));
       assert.ok(Date.now() - t0 < 6_000);
-      assert.ok(!groupAlive(child), "the child group is still alive after stopVite");
+      assert.ok(!groupAlive(vite.child), "the child group is still alive after stopVite");
       assert.equal((await probe(holdHost, port)).state, "listening", "control: the listener is still bound, so the release gave up on the deadline, not because the port was free");
     } finally {
-      held.forEach((c) => c.destroy());
-      await close(s);
+      await stop();
     }
   });
 
   it("startVite: a child that never answers is killed and reaped before the error is thrown", async () => {
-    const port = p.all[8]!;
-    const child = new Promise<ChildProcess>((resolve, reject) => {
-      startVite(port, { command: idle, readyMs: 400 }).then(() => reject(new Error("startVite succeeded although nothing answers")), () => resolve(viteChildren[viteChildren.length - 1]!));
-    });
-    const c = await within(6_000, "startVite", child);
-    assert.ok(c.exitCode !== null || c.signalCode !== null, "the child was not reaped");
-    assert.ok(!groupAlive(c), "the child group is still alive");
+    await within(6_000, "startVite", assert.rejects(startVite(p.all[8]!, { command: idle, readyMs: 400 }), /did not come up/));
+    const vite = viteChildren[viteChildren.length - 1]!;
+    assert.equal(vite.ended?.kind, "exit", "the child was not reaped");
+    assert.ok(!groupAlive(vite.child), "the child group is still alive");
   });
 
-  const hangingListener = async (port: number) => {
-    const held: import("node:net").Socket[] = [];
-    const s = createServer((c) => held.push(c));
-    await new Promise<void>((resolve) => s.listen({ port, host: holdHost, ipv6Only: holdHost === "::1" }, resolve));
-    return async () => (held.forEach((c) => c.destroy()), close(s));
-  };
   it("startVite: a port that accepts TCP and never answers HTTP does not hang the start", async () => {
-    const port = p.all[9]!;
-    const stop = await hangingListener(port);
+    const stop = await hangingListener(p.all[9]!);
     try {
-      await within(6_000, "startVite", startVite(port, { command: idle, readyMs: 400 }).then(() => assert.fail("startVite succeeded although nothing answers HTTP"), (e: Error) => assert.match(e.message, /did not come up/)));
-      assert.ok(!groupAlive(viteChildren[viteChildren.length - 1]!), "the child group is still alive");
+      await within(6_000, "startVite", assert.rejects(startVite(p.all[9]!, { command: idle, readyMs: 400 }), /did not come up/));
+      assert.ok(!groupAlive(viteChildren[viteChildren.length - 1]!.child), "the child group is still alive");
     } finally {
       await stop();
     }
+  });
+
+  it("startVite: a command that does not exist rejects with the spawn error inside readyMs, leaving no child and no port", async () => {
+    const port = p.all[10]!;
+    const t0 = Date.now();
+    await within(3_000, "startVite", assert.rejects(startVite(port, { command: ["/nonexistent/x-monorepo-no-such-command"], readyMs: 400, reapMs: 200 }), /spawn failed: .*ENOENT/));
+    assert.ok(Date.now() - t0 < 400 + 1_000, `took ${Date.now() - t0}ms`);
+    const vite = viteChildren[viteChildren.length - 1]!;
+    assert.equal(vite.ended?.kind, "error");
+    assert.equal(vite.child.pid, undefined, "a child exists although nothing was spawned");
+    assert.deepEqual(await probe(holdHost, port), { state: "closed" });
+  });
+
+  it("stopVite: a child that ignores SIGTERM is SIGKILLed after the grace period, reaped, and the release returns in bounds", async () => {
+    const vite = spawnTracked(ignoresSigterm);
+    await new Promise((r) => setTimeout(r, 300)); // the handler must be installed before the signal
+    const t0 = Date.now();
+    await within(4_000, "stopVite", stopVite(vite, p.all[11]!, { graceMs: 400, reapMs: 2_000, closeMs: 200 }));
+    assert.ok(Date.now() - t0 >= 400, "SIGKILL came before the grace period ended: the child was not ignoring SIGTERM");
+    assert.deepEqual(vite.ended, { kind: "exit", code: null, signal: "SIGKILL" });
+    assert.ok(!groupAlive(vite.child));
+  });
+
+  it("stopVite: a child that never reports its end (not even after SIGKILL) does not hang the release", async () => {
+    const real = spawnTracked(idle);
+    const silent: Tracked = { child: real.child, whenEnded: new Promise<ChildEnd>(() => {}) }; // the end that does not come
+    const t0 = Date.now();
+    await within(3_000, "stopVite", stopVite(silent, p.all[12]!, { graceMs: 200, reapMs: 200, closeMs: 200 }));
+    assert.ok(Date.now() - t0 >= 400, "the two waits were skipped, not bounded");
   });
 
   it("failsWhileHeld goes red when the release gives up on a port that still holds a listener", async () => {
@@ -365,6 +418,73 @@ describe("starting and stopping vite preview is bounded", () => {
       );
     } finally {
       await stop?.();
+    }
+  });
+});
+
+// The wait helper itself, on a fake child: every branch, without a process.
+describe("waitChild: exit, error and timeout end a wait", () => {
+  const fake = () => Object.assign(new EventEmitter(), { pid: undefined, exitCode: null, signalCode: null }) as unknown as ChildProcess;
+  it("exit → { exit, code, signal }", async () => {
+    const c = fake();
+    const t = track(c);
+    queueMicrotask(() => c.emit("exit", 3, null));
+    assert.deepEqual(await waitChild(t, 1_000), { kind: "exit", code: 3, signal: null });
+  });
+  it("error → { error }, and an `error` before anyone waits is not an uncaught exception (the listener is hooked at track())", async () => {
+    const c = fake();
+    const t = track(c);
+    const failure = Object.assign(new Error("spawn x ENOENT"), { code: "ENOENT" });
+    assert.doesNotThrow(() => c.emit("error", failure));
+    assert.deepEqual(await waitChild(t, 1_000), { kind: "error", error: failure });
+  });
+  it("neither → { timeout } after ms, and not before", async () => {
+    const t = track(fake());
+    const t0 = Date.now();
+    assert.deepEqual(await waitChild(t, 150), { kind: "timeout" });
+    assert.ok(Date.now() - t0 >= 140);
+  });
+  it("the first end wins, and a later wait answers at once with it", async () => {
+    const c = fake();
+    const t = track(c);
+    c.emit("exit", 0, null);
+    c.emit("error", new Error("late"));
+    const t0 = Date.now();
+    assert.deepEqual(await waitChild(t, 5_000), { kind: "exit", code: 0, signal: null });
+    assert.ok(Date.now() - t0 < 500);
+  });
+});
+
+// ---- guard: excluded from its own scan ----
+// Every wait for a child goes through waitChild(), whose helper block is the only place that listens for a child's
+// end or spawns one. A later `await new Promise((r) => child.once("exit", r))`, an awaited `exited`, or a second
+// spawn() is what made #479 unbounded twice; this fails the file instead of a reviewer having to find it.
+describe("no code waits for a child except through waitChild", () => {
+  const BEGIN = "// ---- child-wait helper";
+  const END = "// ---- end of the child-wait helper ----";
+  const GUARD = "// ---- guard: excluded from its own scan ----";
+  const BYPASS = /\b(?:once|on|addListener|prependListener|off|removeListener)\(\s*["'`](?:exit|close|disconnect)["'`]|\bspawn\(|\bawait\s+\w*\.?exited\b|\bimport\s*\{[^}]*\bonce\b[^}]*\}\s*from\s*["']node:events["']/;
+  const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const begin = source.indexOf("\n" + BEGIN) + 1;
+  const end = source.indexOf("\n" + END) + 1;
+  const guard = source.indexOf("\n" + GUARD) + 1;
+  const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("the markers are there, once each, in order", () => {
+    // as a whole line each: the constants above, which name the markers, are not markers
+    const lines = source.split("\n");
+    const at = (m: string) => lines.flatMap((l, i) => (l.startsWith(m) ? [i] : []));
+    for (const m of [BEGIN, END, GUARD]) assert.equal(at(m).length, 1, `${m} must start exactly one line`);
+    assert.ok(at(BEGIN)[0]! < at(END)[0]! && at(END)[0]! < at(GUARD)[0]!);
+  });
+  it("nothing outside the helper block (and this guard) listens for a child's end or spawns one", () => {
+    const scanned = code(source.slice(0, begin) + source.slice(end, guard));
+    assert.doesNotMatch(scanned, BYPASS);
+  });
+  it("controls: the pattern does see the helper block, and each bypass shape", () => {
+    assert.match(code(source.slice(begin, end)), BYPASS, "the helper block must trip the pattern, or the pattern matches nothing");
+    for (const shape of [`await new Promise<void>((r) => child.once("exit", () => r()));`, `c.on("close", f)`, `const x = spawn("a", []);`, `await exited;`, `await vite.exited`, `import { once } from "node:events";`]) {
+      assert.match(code(shape), BYPASS, shape);
     }
   });
 });
