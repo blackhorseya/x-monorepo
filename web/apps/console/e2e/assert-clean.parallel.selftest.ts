@@ -141,15 +141,18 @@ describe("a failed runner names every failing subtest on stderr", () => {
   describe("a file that prints its cause first, then a lot of noise, then dies", () => {
     const early = async () => {
       const file = join(dir, "early.selftest.ts");
-      writeFileSync(file, 'console.error("EARLY-CAUSE: import failed here"); for (let i = 0; i < 600; i++) console.error(`noise line ${i} ${"z".repeat(40)}`); process.exit(1);');
+      // flushed before exit: a file that exit()s right after a big write loses what is past the pipe buffer by itself
+      writeFileSync(file, 'let all = "EARLY-CAUSE: import failed here\\n"; for (let i = 0; i < 600; i++) all += `noise line ${i} ${"z".repeat(40)}\\n`; process.stderr.write(all, () => process.exit(1));');
       const r = await runner(pair, file);
       assert.equal(r.code, 1);
       assert.ok(r.out.includes("# EARLY-CAUSE: import failed here\n"), `the runner did not forward the dead file's output at all, so this proves nothing. runner output: ${JSON.stringify(r.out.slice(0, 400))}`);
       return r;
     };
 
-    it("real runner: the early cause is on stderr", async () => {
-      const d = diagnose(await early());
+    it("real runner: the early cause is on stderr", async (t) => {
+      const r = await early();
+      t.diagnostic(`the runner forwarded ${r.out.length} characters of what the file printed (it printed about 33000)`);
+      const d = diagnose(r);
       assert.match(d.stderr, /EARLY-CAUSE: import failed here/);
     });
 
@@ -193,8 +196,62 @@ describe("a failed runner names every failing subtest on stderr", () => {
   });
 
   it("a clean exit that ran no tests is not a pass", () => {
-    const quiet: NestedResult = { code: 0, signal: null, timedOut: false, out: "TAP version 13\n1..0\n# tests 0\n# pass 0\n# fail 0\n" };
+    const quiet: NestedResult = { code: 0, signal: null, timedOut: false, closeTimedOut: false, out: "TAP version 13\n1..0\n# tests 0\n# pass 0\n# fail 0\n" };
     assert.throws(() => assertRunnerPassed("Q", quiet, () => {}), /ran no tests/);
+  });
+
+  // nested.ts must not end a run while the child's output is still in the pipes (#477: only 12 KB of a dead file's output reached
+  // the CI log — node 22's runner, or this capture?). These are plain children, no node runner in between.
+  describe("runNested reads everything a child wrote", () => {
+    const ONE_RUN = { cwd: tmpdir(), env: process.env, deadlineMs: 20_000 };
+    // The child exits in the flush callback: everything is in the pipe, but the parent has not necessarily read it all when `exit` fires.
+    // (Not `exit(1)` straight after write(): that child loses what is past the 64 KiB pipe buffer by itself — measured on macOS/node 26,
+    // 65536 of 262144 bytes at `exit` AND at `close` — which says nothing about the capture.)
+    for (const stream of ["stdout", "stderr"] as const) {
+      it(`256 KiB written to ${stream} and flushed, then exit(1): every byte arrives`, async () => {
+        const file = join(dir, `big-${stream}.cjs`);
+        writeFileSync(file, `process.${stream}.write("x".repeat(262144), () => process.exit(1));`);
+        for (let i = 0; i < 5; i++) {
+          const r = await runNested([file], ONE_RUN);
+          assert.equal(r.code, 1);
+          assert.equal(Buffer.byteLength(r.out), 262_144, `round ${i}: received ${Buffer.byteLength(r.out)} of 262144 bytes`);
+        }
+      });
+    }
+
+    it("a child that exits while something it started still holds its pipes: close does not come, the run says so within closeMs, and the group is gone", async () => {
+      const file = join(dir, "holder.cjs");
+      writeFileSync(file, 'require("node:child_process").spawn("sleep", ["60"], { stdio: ["ignore", "inherit", "inherit"] }).unref(); console.log("holder-exiting"); process.exit(0);');
+      let pid = 0;
+      const t0 = Date.now();
+      try {
+        const r = await runNested([file], { ...ONE_RUN, closeMs: 1_000, onSpawn: (p) => (pid = p) });
+        assert.ok(Date.now() - t0 < 1_000 + 6_000, "the run must end within closeMs plus the reap wait");
+        assert.equal(r.closeTimedOut, true, "the output never closed, and the run did not say so");
+        assert.match(r.out, /holder-exiting/);
+        for (let i = 0; i < 30 && groupAlive(pid); i++) await new Promise((res) => setTimeout(res, 100));
+        assert.equal(groupAlive(pid), false, "what the child started must not outlive the run");
+      } finally {
+        try {
+          if (pid) process.kill(-pid, "SIGKILL"); // our own child's group, whatever the assertions above found
+        } catch {
+          // already gone
+        }
+      }
+    });
+
+    it("assertRunnerPassed: a run whose output did not close is no pass, even at exit 0", () => {
+      const r: NestedResult = { code: 0, signal: null, timedOut: false, closeTimedOut: true, out: "TAP version 13\n# pass 5\n# fail 0\n" };
+      assert.throws(() => assertRunnerPassed("C", r, () => {}), /output did not close/);
+    });
+  });
+
+  // A green run writes nothing to stderr. The fault selftest is the one that once did (reportFailure as an argument of assert.match runs every time).
+  it("the fault selftest, all green, writes no nested-failures block", { timeout: TEST_TIMEOUT_MS }, async () => {
+    const r = await runNested(["--test", "--test-reporter=tap", "--experimental-strip-types", "e2e/assert-clean.fault.selftest.ts"], { cwd: consoleDir, env: process.env, deadlineMs: RUNNER_DEADLINE_MS });
+    assert.equal(r.code, 0, r.out.slice(-1500));
+    assert.match(r.out, /^# pass [1-9]/m);
+    assert.doesNotMatch(r.out, /=== nested failures/, "a green run printed a failure block");
   });
 
   it("control: a runner that ends in time is not marked timed out", async () => {

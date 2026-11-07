@@ -5,7 +5,8 @@ import { type ChildProcess, spawn } from "node:child_process";
 // never answers) is killed — the whole group, or its vite outlives it — and waited for, instead of holding the
 // parent until the parent's own timeout takes it down with the child still running (#479).
 
-export type NestedResult = { code: number | null; signal: NodeJS.Signals | null; out: string; timedOut: boolean };
+// `closeTimedOut`: the child exited but its stdout/stderr did not close within `closeMs` (something it started still holds them), so `out` may be incomplete.
+export type NestedResult = { code: number | null; signal: NodeJS.Signals | null; out: string; timedOut: boolean; closeTimedOut: boolean };
 const MAX_DEADLINE_MS = 10 * 60_000;
 const live = new Set<ChildProcess>();
 
@@ -40,7 +41,7 @@ export function groupAlive(pid: number): boolean {
  * `node args…` in `cwd` with `env`. Resolves when it exits, or `deadlineMs` after the start: then the group is
  * SIGKILLed and waited for (at most `reapMs`) and `timedOut` is true. A spawn that fails rejects (it emits `error`, never `exit`).
  */
-export function runNested(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; deadlineMs: number; reapMs?: number; onSpawn?: (pid: number) => void }): Promise<NestedResult> {
+export function runNested(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; deadlineMs: number; reapMs?: number; closeMs?: number; onSpawn?: (pid: number) => void }): Promise<NestedResult> {
   const { deadlineMs, reapMs = 5_000 } = options;
   if (!(deadlineMs > 0 && deadlineMs <= MAX_DEADLINE_MS)) throw new RangeError(`a nested run is 1..${MAX_DEADLINE_MS} ms, got ${deadlineMs}`);
   return new Promise((resolve, reject) => {
@@ -59,7 +60,7 @@ export function runNested(args: string[], options: { cwd: string; env: NodeJS.Pr
       clearTimeout(deadline);
       clearTimeout(giveUp);
       live.delete(child);
-      resolve({ code, signal, out, timedOut });
+      resolve({ code, signal, out, timedOut, closeTimedOut: false });
     };
     child.stdout!.on("data", (d) => (out += d));
     child.stderr!.on("data", (d) => (out += d));
