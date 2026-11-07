@@ -339,10 +339,11 @@ describe("private pairs of concurrent selftests share no port", () => {
     const partial: Pair = { rpc: held.rpc - 1, web: farWeb(held) };
     const second = await take(offering([partial]).draw);
     assert.deepEqual(shared(held, second), [], "control: the partial overlap was refused");
+    // `second` goes too: it is a random pair, and one of its slots could refuse `partial` for a reason that is not the rollback
+    await second.release();
     await held.release();
     const third = await take(offering([partial]).draw);
     assert.ok(same(third, partial), `the refused draw kept some of its locks (got ${show(third)})`);
-    await second.release();
     await third.release();
   });
 
@@ -391,7 +392,7 @@ describe("private pairs of concurrent selftests share no port", () => {
         }
         return assert.fail("setup failure: the child did not hold a pair within 20 s");
       };
-      return { done, held, pid: () => pid };
+      return { done, held, pid: () => pid, ready };
     };
     const cells: { name: string; mode: "exit" | "throw" | "hold"; signal?: NodeJS.Signals }[] = [
       { name: "reaching the end of its script", mode: "exit" },
@@ -405,15 +406,16 @@ describe("private pairs of concurrent selftests share no port", () => {
       it(name, { timeout: 90_000 }, async () => {
         const child = start(mode);
         const held = await child.held();
-        if (mode === "hold") {
-          // the child is alive here: its pair is held, a draw of it (or of one that overlaps it) is refused
-          const forced = offering([held, overlapping(held)]);
-          const other = await take(forced.draw);
-          assert.deepEqual(shared(held, other), [], `control: a live process's pair was handed out again (${show(other)})`);
-          assert.ok(forced.offered() >= 3, "control: both forced draws must have been offered while the child was alive");
-          await other.release();
-          process.kill(child.pid(), signal);
-        }
+        // Every cell, whatever the ending: the child is alive here and waits for us. Its pair is held, a draw of it (or of one that
+        // overlaps it) is refused. Without this, a child that never kept its pair would pass the cells that end by themselves.
+        const forced = offering([held, overlapping(held)]);
+        const other = await take(forced.draw);
+        assert.deepEqual(shared(held, other), [], `control: a live process's pair was handed out again (${show(other)})`);
+        assert.ok(forced.offered() >= 3, "control: both forced draws must have been offered while the child was alive");
+        await other.release();
+        // now it ends, the way the cell says: we signal it, or tell it to exit / throw
+        if (signal) process.kill(child.pid(), signal);
+        else writeFileSync(`${child.ready}.go`, "");
         const ended = await child.done;
         assert.equal(ended.timedOut, false, `the child did not end by itself (${mode}): ${ended.out}`);
         if (signal) assert.equal(ended.signal, signal, `control: the child must have ended by ${signal} (code ${ended.code})`);

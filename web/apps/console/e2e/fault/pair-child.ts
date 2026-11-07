@@ -1,10 +1,11 @@
 // A second process asking for a private pair, for e2e/assert-clean.parallel.selftest.ts:
 //   node --experimental-strip-types e2e/fault/pair-child.ts <readyFile> <exit|throw|hold> <lockBase> <lockSize> [rpc,web …]
 // The listed draws are offered first, in order, then calm random ones. Once it holds a pair it writes one JSON line (the pair, how many
-// draws it took) to <readyFile>, then ends the way the mode says: `exit` reaches the end of the script, `throw` throws, `hold` stays alive
-// until it is signalled. It never releases: how the process ends is what is tested.
+// draws it took) to <readyFile>, then WAITS: every mode stays alive until the parent has looked at it holding the pair. `exit` and `throw`
+// wait for the file <readyFile>.go and then end (reach the end of the script / throw); `hold` waits for a signal from the parent. It never
+// releases: how the process ends is what is tested.
 import { randomInt } from "node:crypto";
-import { renameSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { privatePair, type Pair } from "../private-pair.ts";
 
 const [readyFile, mode, base, size, ...forced] = process.argv.slice(2);
@@ -24,5 +25,11 @@ const pair = await privatePair({
 });
 writeFileSync(`${readyFile}.tmp`, JSON.stringify({ rpc: pair.rpc, web: pair.web, draws }));
 renameSync(`${readyFile}.tmp`, readyFile); // the parent reads it only whole
-if (mode === "throw") throw new Error("uncaught on purpose");
 if (mode === "hold") setInterval(() => {}, 1_000);
+else {
+  const waiting = setInterval(() => {
+    if (!existsSync(`${readyFile}.go`)) return;
+    clearInterval(waiting); // nothing but the (unref'd) locks is left: `exit` ends here
+    if (mode === "throw") throw new Error("uncaught on purpose");
+  }, 25);
+}

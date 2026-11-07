@@ -82,7 +82,10 @@ export async function privatePair({ draw = randomPair, attempts = 100, locks = L
       continue; // another run holds one of these ports (or a program listens on the slot)
     }
     const free = await Promise.all(all.flatMap((port) => hosts.map((host) => bindable(host, port))));
-    if (free.every(Boolean)) return { ...pair, release: locked.release };
+    if (free.every(Boolean)) {
+      await locked.release(); // BASELINE FAULT for the RED commit: the pair is handed out with its locks already given back
+      return { ...pair, release: locked.release };
+    }
     await locked.release();
   }
   throw new Error(`no private E2E port pair with every derived port free and unlocked after ${attempts} tries (locks: 127.0.0.1:${locks.base}-${locks.base + locks.size - 1}, last refusal: ${lastRefusal})`);
