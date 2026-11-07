@@ -44,7 +44,9 @@ test("failRequests: key omitted matches every caller, a string only its key, nul
 test("failRequests: only the exact method, only `times` calls, and a reset is a network failure", async ({ page }) => {
   const f = await failRequests(page, { method: "ListOrders" });
   expect(await call(page, "ListOrdersExtra")).toBe(200); // another method, even with the same prefix
+  expect(await call(page, "XListOrders")).toBe(200); // ... or one that merely contains it
   expect(await call(page, "ListOrder")).toBe(200);
+  expect(await call(page, "ListAccounts")).toBe(200); // another RPC altogether
   expect(f.matched()).toBe(0);
   expect(await call(page, "ListOrders")).toBe(503); // the first
   expect(await call(page, "ListOrders")).toBe(200); // times defaults to 1
@@ -105,6 +107,42 @@ test("holdRequests: parked, then released, then a second call: the second is not
   expect(await call(page, "Again")).toBe(200); // the second one never waits ...
   expect(await call(page, "Again", OPS_KEY)).toBe(200);
   expect(held.count()).toBe(1); // ... and is not counted as parked
+});
+
+// holdRequests' own key semantics and exact method, one row per target: which of an anonymous call, OPS_KEY's
+// and another key's call get parked (and counted), and which go straight through (answered 200, count 0).
+const HOLD_ROWS: { name: string; key: string | null | undefined; parked: [boolean, boolean, boolean] }[] = [
+  { name: "omitted: every caller", key: undefined, parked: [true, true, true] },
+  { name: "string: only that key", key: OPS_KEY, parked: [false, true, false] },
+  { name: "null: only anonymous calls", key: null, parked: [true, false, false] },
+];
+for (const row of HOLD_ROWS) {
+  test(`holdRequests: key ${row.name}`, async ({ page }) => {
+    const held = await holdRequests(page, row.key === undefined ? { method: "Keyed" } : { method: "Keyed", key: row.key });
+    const callers: (string | undefined)[] = [undefined, OPS_KEY, OTHER_KEY]; // anonymous, OPS_KEY, another key
+    const pending = callers.map((k) => {
+      const c = { status: undefined as unknown };
+      void call(page, "Keyed", k).then((st) => (c.status = st));
+      return c;
+    });
+    await expect.poll(() => held.count()).toBe(row.parked.filter(Boolean).length);
+    await settle(page);
+    // the ones that were not matched are answered already, the parked ones are still waiting
+    expect(pending.map((c) => c.status !== undefined)).toEqual(row.parked.map((p) => !p));
+    held.release();
+    await expect.poll(() => pending.map((c) => c.status)).toEqual([200, 200, 200]);
+    expect(held.count()).toBe(row.parked.filter(Boolean).length); // release() did not add to it
+  });
+}
+
+test("holdRequests: only the exact method; other RPCs and same-prefix names are not parked", async ({ page }) => {
+  const held = await holdRequests(page, { method: "Slow" });
+  expect(await call(page, "SlowExtra")).toBe(200);
+  expect(await call(page, "XSlow")).toBe(200);
+  expect(await call(page, "Slo")).toBe(200);
+  expect(await call(page, "ListOrders")).toBe(200);
+  await settle(page);
+  expect(held.count()).toBe(0);
 });
 
 test("holdRequests: several calls are parked together, and the helpers compose", async ({ page }) => {
