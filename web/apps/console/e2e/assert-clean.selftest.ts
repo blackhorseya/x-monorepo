@@ -46,6 +46,7 @@ async function privatePair(): Promise<{ rpc: number; web: number }> {
   }
   throw new Error("no private E2E port pair with every derived port free after 100 tries");
 }
+const ipv6Loopback = await hasIPv6Loopback();
 const pair = await privatePair();
 const env = { ...process.env, E2E_RPC_PORT: String(pair.rpc), E2E_WEB_PORT: String(pair.web) };
 const p = derivePorts(env);
@@ -88,6 +89,7 @@ async function failsWhileHeld(name: string, hold: () => Promise<() => Promise<vo
   assert.equal(after.code, 0, `${name}: closed again, the check must pass, got ${after.code}: ${after.out}`);
 }
 
+const hosts = LOOPBACKS.filter((h) => h !== "::1" || ipv6Loopback.available);
 const viteChildren: ChildProcess[] = [];
 // `pnpm exec` starts vite as ITS child: signal the group, or vite outlives the test and holds the port.
 const killGroup = (c: ChildProcess, signal: NodeJS.Signals) => {
@@ -150,7 +152,9 @@ describe("assert-clean sees live listeners", () => {
         await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
         if (vite.exitCode === null) killGroup(vite, "SIGKILL");
         await exited;
-        // The group is signalled, but the port is only free once vite really let go of it.
+        // The group is signalled, but the port is only free once vite really let go of it: a vite that is shutting down
+        // still holds it and resets connections, so a failed fetch says nothing. Ask every loopback the way the checker does.
+        await waitClosed(hosts, p.webPort);
         for (let i = 0; i < 50 && (await fetch(`http://localhost:${p.webPort}/`).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 100));
       };
     });
@@ -184,7 +188,7 @@ describe("what counts as closed", () => {
 });
 
 // Two ways the checker said "listening" on a port nobody holds (the #477 run, console-e2e (2): the real vite preview
-// case failed with `listening [[::1]:48929]` after vite was told to stop). Both are held here with a real socket.
+// case failed with `listening [[::1]:48929]` after vite was told to stop). Real sockets, except where a case says otherwise.
 const holdHost = (await hasIPv6Loopback()).available ? "::1" : "127.0.0.1";
 describe("a port nobody holds is not reported as listening", () => {
   const host = holdHost;
@@ -246,6 +250,14 @@ describe("a port nobody holds is not reported as listening", () => {
     setTimeout(() => void close(s), 300);
     assert.equal(await waitClosed(LOOPBACKS, p.authRpcPort, { deadlineMs: 5_000, intervalMs: 20 }), true);
     assert.ok(Date.now() - t0 >= 250, `it returned after ${Date.now() - t0}ms, before the listener was closed`);
+  });
+  it("waitClosed: unknown is not closed (a timeout or any error but a refusal keeps it waiting)", async () => {
+    const unknown = async () => ({ state: "unknown", detail: "x" }) as const;
+    assert.equal(await waitClosed(["127.0.0.1"], p.authRpcPort, { deadlineMs: 150, intervalMs: 10, probe: unknown }), false);
+  });
+  it("waitClosed: one host closed does not make the port closed", async () => {
+    const mixed = async (h: string) => (h === "127.0.0.1" ? ({ state: "closed" } as const) : ({ state: "listening" } as const));
+    assert.equal(await waitClosed(["127.0.0.1", "::1"], p.authRpcPort, { deadlineMs: 150, intervalMs: 10, probe: mixed }), false);
   });
   it("waitClosed: nothing listening → true at once (positive control)", async () => {
     const t0 = Date.now();
