@@ -186,10 +186,10 @@ test("a retry waiting out its backoff for the old credential is not sent after t
   await useKey(page, "A");
   await expect.poll(() => fault.failed()).toBe(1); // A's first call was refused; its retry is waiting out the 500ms backoff
   await useKey(page, "B");
+  const sentA = seen.sent("A"); // taken at the switch: the calls A still had coming are the ones after this
   await expect(rowOf(page, ID_OPS)).toBeVisible();
 
   // past the whole retry budget (3.5s): the calls A was still going to make never come, and nothing of A is shown
-  const sentA = seen.sent("A");
   await page.waitForTimeout(4_000);
   expect([seen.sent("A"), fault.failed()], "A's calls after the switch").toEqual([sentA, sentA]);
   await expect(rowOf(page, ID_OPS)).toBeVisible();
