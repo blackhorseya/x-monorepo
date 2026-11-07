@@ -244,6 +244,38 @@ func TestReapBeforeStartWarnsOnAnUnrelatedConflict(t *testing.T) {
 	}
 }
 
+// The reviewer's two counterexamples, end to end through ReapBeforeStart: removing A, the daemon says B is being removed,
+// or says something else about A before the removal sentence. Both are failures AND a warning naming A, never Removed.
+func TestReapBeforeStartWarnsWhenTheInProgressMessageIsNotAboutThisContainer(t *testing.T) {
+	const a = "4feb033ec17387343128349c630c1f4bd08cea1af550e4673faa912ca0e716fe"
+	const b = "9ee7b60e99bfa76c8335fc89f35454fd34b6da549cb031783beff355466f6fc9"
+	self, err := Self()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, msg := range map[string]string{
+		"B is being removed":       "Error response from daemon: removal of container " + b + " is already in progress",
+		"an earlier sentence on A": "container update failed: removal of container " + a + " is already in progress",
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &fakeAPI{
+				all:       []container.Summary{{ID: a, Labels: labels(Namespace(), Owner{self.Host, 999999, 1})}},
+				removeErr: map[string]error{a: errors.New(msg)},
+			}
+			var buf bytes.Buffer
+			ReapBeforeStart(context.Background(), api, &buf)
+			rep, _ := LastReport()
+			if len(rep.Items) != 1 || rep.Items[0].Outcome != RemoveFailed {
+				t.Fatalf("outcome %+v, want one RemoveFailed", rep.Items)
+			}
+			want := "ctrreap: warning: could not remove " + a[:12] + ": " + msg + "\n"
+			if buf.String() != want {
+				t.Fatalf("warning = %q, want %q", buf.String(), want)
+			}
+		})
+	}
+}
+
 func TestReapListFailure(t *testing.T) {
 	api := &fakeAPI{listErr: errors.New("daemon down")}
 	if _, err := Reap(context.Background(), api, "ns", self, probe); err == nil || !strings.Contains(err.Error(), "daemon down") {
