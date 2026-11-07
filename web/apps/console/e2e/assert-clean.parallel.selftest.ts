@@ -1,12 +1,14 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type NestedResult, groupAlive, killNested, runNested } from "./nested.ts";
 import { assertRunnerPassed } from "./report.ts";
 import { failedSubtests } from "./tap.ts";
+import { derivePorts } from "./ports.ts";
+import { type Pair, privatePair, randomPair } from "./private-pair.ts";
 
 // Two selftest runs at the same time, each under its own caller E2E pair (the way reviewers and parallel
 // worktrees run), must both pass: the selftest brings the ports it needs and takes nothing the caller's
@@ -277,5 +279,77 @@ describe("failedSubtests reads node's TAP", () => {
     assert.deepEqual(failedSubtests("ok 1 - fine\n# pass 1\n"), []);
     const long = `not ok 1 - long\n  ---\n  failureType: 'testCodeFailure'\n  error: '${"y".repeat(5000)}'\n  ...`;
     assert.equal(failedSubtests(long)[0]!.error.length, 5000);
+  });
+});
+
+// The pairs themselves. Several selftest processes run at once under `node --test` (the selftest, both runners of the test above and
+// the fault selftest's nested run: four in one `task web-e2e-ports`, each listening for ~10 s), and each one draws its own pair. A pair
+// that was free when it was drawn is not a pair nobody else is about to use: the other process has drawn but not yet bound, so the
+// "free now" check passes for both, and one of them finds the other's listener on a port it derives (CI run 42372437266: `failsWhileHeld`'s
+// control saw `listening [[::1]:24638]` before it had listened on anything, #495). Two draws that share ANY derived port, whether or not
+// they are the same pair, must not both be handed out.
+describe("private pairs of concurrent selftests share no port", () => {
+  const portsOf = (p: Pair) => derivePorts({ E2E_RPC_PORT: String(p.rpc), E2E_WEB_PORT: String(p.web) }).all;
+  const shared = (a: Pair, b: Pair) => portsOf(a).filter((port) => portsOf(b).includes(port));
+  /** A draw that shares ports with `p` without being `p`: its rpc is p's role rpc (+10), its web is far away. */
+  const overlapping = (p: Pair): Pair => ({ rpc: p.rpc + 10, web: p.web < 52_500 ? p.web + 3_000 : p.web - 3_000 });
+  const dirs: string[] = [];
+  const claimDir = () => {
+    const d = mkdtempSync(join(tmpdir(), "assert-clean-claims-"));
+    dirs.push(d);
+    return d;
+  };
+  after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+  const offering = (first: Pair[]) => {
+    const queue = [...first];
+    let offered = 0;
+    return { draw: () => (offered++, queue.shift() ?? randomPair()), offered: () => offered };
+  };
+
+  it("in one process: a draw that repeats a pair held by an earlier caller, and one that overlaps it, are both refused", async () => {
+    const dir = claimDir();
+    const held = await privatePair({ claimDir: dir });
+    const forced = offering([held, overlapping(held)]);
+    const second = await privatePair({ claimDir: dir, draw: forced.draw });
+    assert.deepEqual(shared(held, second), [], `the second caller was handed ${JSON.stringify({ rpc: second.rpc, web: second.web })}, which shares ports with ${JSON.stringify({ rpc: held.rpc, web: held.web })}`);
+    assert.ok(forced.offered() >= 3, `control: both forced draws must have been offered and refused, then a free one taken (offered ${forced.offered()})`);
+  });
+
+  it("in another process: the same two draws are refused while this process holds the pair", async () => {
+    const dir = claimDir();
+    const held = await privatePair({ claimDir: dir });
+    const r = await runNested(["--experimental-strip-types", "e2e/fault/pair-child.ts", dir, `${held.rpc},${held.web}`, `${overlapping(held).rpc},${overlapping(held).web}`], { cwd: consoleDir, env: process.env, deadlineMs: 60_000 });
+    assert.equal(r.code, 0, r.out);
+    const got = JSON.parse(r.out.trim().split("\n").at(-1)!) as Pair & { draws: number };
+    assert.deepEqual(shared(held, got), [], `the other process was handed ${JSON.stringify({ rpc: got.rpc, web: got.web })}, which shares ports with ${JSON.stringify({ rpc: held.rpc, web: held.web })}`);
+    assert.ok(got.draws >= 3, `control: the child must have been offered both forced draws (it drew ${got.draws} times)`);
+  });
+
+  it("a released pair can be drawn again", async () => {
+    const dir = claimDir();
+    const held = await privatePair({ claimDir: dir });
+    held.release();
+    const again = await privatePair({ claimDir: dir, draw: offering([held]).draw });
+    assert.deepEqual({ rpc: again.rpc, web: again.web }, { rpc: held.rpc, web: held.web }, "release() did not give the pair back");
+  });
+
+  it("a process that ends gives its pair back without being asked", async () => {
+    const dir = claimDir();
+    const probe = await privatePair({ claimDir: dir });
+    probe.release();
+    const r = await runNested(["--experimental-strip-types", "e2e/fault/pair-child.ts", dir, `${probe.rpc},${probe.web}`], { cwd: consoleDir, env: process.env, deadlineMs: 60_000 });
+    assert.equal(r.code, 0, r.out);
+    const got = JSON.parse(r.out.trim().split("\n").at(-1)!) as Pair & { draws: number };
+    assert.deepEqual({ rpc: got.rpc, web: got.web }, { rpc: probe.rpc, web: probe.web }, "control: the child must have taken the pair it was offered, or this proves nothing");
+    const again = await privatePair({ claimDir: dir, draw: offering([probe]).draw });
+    assert.deepEqual({ rpc: again.rpc, web: again.web }, { rpc: probe.rpc, web: probe.web }, "the child ended and its pair is still taken");
+  });
+
+  // A tripwire, not a barrier: the selftest takes its pair from e2e/private-pair.ts and draws none of its own.
+  it("assert-clean.selftest.ts takes its pair from private-pair.ts, and holds the claim until it ends", () => {
+    const source = readFileSync(fileURLToPath(new URL("./assert-clean.selftest.ts", import.meta.url)), "utf8");
+    assert.match(source, /import \{ privatePair \} from "\.\/private-pair\.ts";/);
+    assert.ok(!source.includes("randomInt"), "the selftest draws a pair of its own again");
+    assert.match(source, /\.release\(\)/, "the selftest never releases its pair");
   });
 });
