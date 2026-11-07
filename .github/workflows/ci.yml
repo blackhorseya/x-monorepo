@@ -475,7 +475,7 @@ jobs:
         with:
           node-version: 22
       - uses: ./.github/actions/pnpm-cache
-      - run: task web-typecheck web-build
+      - run: task web-typecheck web-test web-build
 
   # ── console-e2e: the built console driven by Playwright against a real bin/rpc on Postgres ──
   # (E2E_DATABASE_URL: the webServer runs bin/migrate up first; poison / prune then run for real)

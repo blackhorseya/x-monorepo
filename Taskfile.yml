@@ -670,6 +670,12 @@ tasks:
     dir: web
     cmds: [pnpm typecheck]
 
+  web-test:
+    desc: 'unit tests of the console (node --test, no browser): src/transient.test.ts, the one classifier that decides which failed reads are retried (a row per Connect code, the network-error shapes, the bounded backoff). What CI''s web job runs with web-typecheck'
+    deps: [web-install]
+    dir: web/apps/console
+    cmds: [node --test --experimental-strip-types src/transient.test.ts]
+
   web-build:
     desc: production build of web/apps/console → web/apps/console/dist
     deps: [web-install]
