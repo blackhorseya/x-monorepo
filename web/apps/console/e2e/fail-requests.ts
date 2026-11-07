@@ -33,9 +33,10 @@ function matches({ method, key, bodyIncludes }: Target) {
 // times   how many matching calls fail (default 1); the ones after that pass through.
 // mode    "unavailable" (default) answers 503 with a Connect `unavailable` error; "reset" drops the
 //         connection (the browser sees "Failed to fetch"); "permission_denied" answers 403 with a Connect
-//         `permission_denied` error: an answer, not a blip, for specs that must show it is not retried.
+//         `permission_denied` error, "invalid_argument" answers 400 with a Connect `invalid_argument` error: answers,
+//         not blips, for specs that must show they are not retried.
 // (times: Infinity = every matching call fails.)
-export type FailRequestsOptions = Target & { times?: number; mode?: "unavailable" | "reset" | "permission_denied" };
+export type FailRequestsOptions = Target & { times?: number; mode?: "unavailable" | "reset" | "permission_denied" | "invalid_argument" };
 
 export type RequestFault = {
   /** Calls that matched (method and key), failed or not. */
@@ -57,7 +58,7 @@ export async function failRequests(page: Page, options: FailRequestsOptions): Pr
     failed++;
     if (mode === "reset") return route.abort("connectionreset");
     return route.fulfill({
-      status: mode === "unavailable" ? 503 : 403,
+      status: { unavailable: 503, permission_denied: 403, invalid_argument: 400 }[mode],
       contentType: "application/json",
       body: JSON.stringify({ code: mode, message: "injected by failRequests" }),
     });

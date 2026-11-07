@@ -355,3 +355,23 @@ test("failRequests: times 4 fails exactly four calls, then passes", async ({ pag
   expect(statuses).toEqual([503, 503, 503, 503, 200, 200]);
   expect([f.matched(), f.failed()]).toEqual([6, 4]);
 });
+
+test("failRequests: mode invalid_argument answers 400 with a Connect invalid_argument error, not 403 or 503", async ({ page }) => {
+  const f = await failRequests(page, { method: "Invalid", mode: "invalid_argument", times: 2 });
+  const answers = await page.evaluate(async () => {
+    const out: unknown[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await fetch("/api/test.v1.TestService/Invalid", { method: "POST", body: "{}" });
+      out.push(r.status);
+    }
+    const r = await fetch("/api/test.v1.TestService/Invalid", { method: "POST", body: "{}" });
+    return [out, r.status];
+  });
+  expect(answers).toEqual([[400, 400, 200], 200]);
+  expect([f.matched(), f.failed()]).toEqual([4, 2]);
+});
+
+test("failRequests: mode invalid_argument's body carries the Connect code invalid_argument", async ({ page }) => {
+  await failRequests(page, { method: "InvalidBody", mode: "invalid_argument" });
+  expect(await callFull(page, "InvalidBody")).toEqual([400, JSON.stringify({ code: "invalid_argument", message: "injected by failRequests" })]);
+});

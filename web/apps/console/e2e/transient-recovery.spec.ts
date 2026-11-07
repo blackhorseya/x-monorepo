@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { seedProduct } from "./catalog";
 import { failRequests } from "./fail-requests";
 import { createCard } from "./orders-ui";
@@ -105,4 +105,35 @@ test("(d) a CreateOrder that fails is not sent again by the console", async ({ p
   await expect(page.getByRole("alert")).toContainText(/unavailable/i, { timeout: RECOVERY_MS });
   await page.waitForTimeout(6_000); // past the retry budget: a retrying mutation would have sent again by now
   expect(create.matched(), "CreateOrder requests").toBe(1);
+});
+
+// ---- the queries that used to set their own retry (#483 review) ----------------------------------------------------
+// adminProbeQuery had `retry: 3` + its own delay (an answer such as InvalidArgument was asked four times) and
+// whoAmIQuery had `retry: false` (a 503 left the order form's Customer field locked for good). Both now follow
+// the one policy in src/transient.ts; each cell has the mutant that puts the old line back.
+const setButton = (page: Page) => page.getByRole("button", { name: "Set", exact: true });
+
+test("(e) the admin probe answered InvalidArgument is an answer: asked once, never retried", async ({ page }) => {
+  const probe = await failRequests(page, { method: "ListAccounts", mode: "invalid_argument", times: Infinity });
+  await page.goto("/stock");
+  await expect.poll(() => probe.matched(), { timeout: RECOVERY_MS }).toBe(1);
+  await page.waitForTimeout(6_000); // past the retry budget (3.5s): a retrying probe would have asked again by now
+  expect(probe.matched(), "ListAccounts requests").toBe(1);
+});
+
+test("(f) the admin probe refused once with 503 is retried: the admin UI appears without a reload", async ({ page }) => {
+  const probe = await failRequests(page, { method: "ListAccounts" }); // the first call: 503
+  await page.goto("/stock");
+  await expect(setButton(page)).toBeVisible({ timeout: RECOVERY_MS });
+  expect([probe.failed(), probe.matched() >= 2], "refused once, then asked again").toEqual([1, true]);
+});
+
+test("(g) WhoAmI refused once with 503 is retried: the order form's Customer field unlocks", async ({ page }) => {
+  // The field is enabled for an admin or an anonymous caller. auth is off here, so the probe would make everyone an admin:
+  // it is answered "not admin" (403), which leaves WhoAmI's `anonymous` as the only thing that can unlock the field.
+  await failRequests(page, { method: "ListAccounts", mode: "permission_denied", times: Infinity });
+  const who = await failRequests(page, { method: "WhoAmI" }); // the first call: 503
+  await page.goto("/orders");
+  await expect(createCard(page).getByLabel("Customer")).toBeEnabled({ timeout: RECOVERY_MS });
+  expect([who.failed(), who.matched() >= 2], "refused once, then asked again").toEqual([1, true]);
 });
