@@ -12,7 +12,6 @@ const blockBegin = (n: number, label: string) => `=== nested failures (${n}) run
 const MESSAGE_NAMES_CHARS = 4_000; // all the names go in the message when together they are at most this long
 const EDGE_NAMES = 3; // otherwise this many from each end
 const NAME_IN_MESSAGE = 300;
-const RAW_TAIL_CHARS = 20_000; // with no TAP to read: the end of what the runner printed
 const indent = (text: string, by: string) => text.split("\n").map((l) => by + l).join("\n");
 const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max)}…`);
 
@@ -26,7 +25,7 @@ export function reportFailure(label: string, r: NestedResult, sink: (text: strin
   // "test failed": what killed it was printed outside the test results. So the raw tail goes into the block in that case too.
   const fileDied = failed.some((f) => f.error === "test failed");
   if (failed.length === 0 || fileDied) {
-    sink(`${failed.length === 0 ? "no failed subtest to list: it printed no TAP, or died before reporting" : "a file died without test results (no TAP from it): the cause is outside the results"}; the last ${RAW_TAIL_CHARS} characters the runner printed:\n${r.out.slice(-RAW_TAIL_CHARS)}`);
+    sink(`${failed.length === 0 ? "no failed subtest to list: it printed no TAP, or died before reporting" : "a file died without test results (no TAP from it): the cause is outside the results"}; everything the runner printed, whole:\n${r.out}`);
   }
   sink(BLOCK_END);
 
