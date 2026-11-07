@@ -199,6 +199,43 @@ func TestReapRemovalInProgress(t *testing.T) {
 	}
 }
 
+// Podman never answers "in progress": concurrent removes of one container all get 204 and later ones the 404 below
+// (probed against the local Podman 5.8.9 API: six parallel DELETEs, then one more). It is the NotFound path, with
+// Podman's own text, and it is not a failure either.
+func TestReapPodmanConcurrentRemoveIsNotAFailure(t *testing.T) {
+	const id = "8155c8d6cab879a3097e6af2ab0980a5497409511fac9e54dcb22280d6a7731a"
+	podman := fmt.Errorf("no container with ID or name %q found: no such container: %w", id, cerrdefs.ErrNotFound)
+	api := &fakeAPI{
+		all:       []container.Summary{{ID: id, Labels: labels("ns", Owner{"h1", 999, 1})}},
+		removeErr: map[string]error{id: podman},
+	}
+	rep, err := Reap(context.Background(), api, "ns", self, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rep.Items[0]; got.Outcome != Removed || !strings.Contains(got.Detail, "already gone") {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// An unrelated conflict is a failure AND a warning on stderr (the reviewer's counterexample, end to end through ReapBeforeStart).
+func TestReapBeforeStartWarnsOnAnUnrelatedConflict(t *testing.T) {
+	self, err := Self()
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAPI{
+		all:       []container.Summary{{ID: "abcdef0123456789", Labels: labels(Namespace(), Owner{self.Host, 999999, 1})}},
+		removeErr: map[string]error{"abcdef0123456789": fmt.Errorf("container update is already in progress: %w", cerrdefs.ErrConflict)},
+	}
+	var buf bytes.Buffer
+	ReapBeforeStart(context.Background(), api, &buf)
+	want := "ctrreap: warning: could not remove abcdef012345: container update is already in progress: conflict\n"
+	if !strings.HasPrefix(buf.String(), "ctrreap: warning: could not remove abcdef012345: container update is already in progress") {
+		t.Fatalf("warning = %q, want it to start like %q", buf.String(), want)
+	}
+}
+
 func TestReapListFailure(t *testing.T) {
 	api := &fakeAPI{listErr: errors.New("daemon down")}
 	if _, err := Reap(context.Background(), api, "ns", self, probe); err == nil || !strings.Contains(err.Error(), "daemon down") {
