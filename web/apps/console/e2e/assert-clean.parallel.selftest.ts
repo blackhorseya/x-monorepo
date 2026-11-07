@@ -134,6 +134,17 @@ describe("a failed runner names every failing subtest on stderr", () => {
     assert.match(d.stderr, /no TAP/i);
   });
 
+  it("a file that prints its cause first, then 30000 characters of noise, then dies: the early cause is on stderr", async () => {
+    const file = join(dir, "early.selftest.ts");
+    writeFileSync(file, 'console.error("EARLY-CAUSE: import failed here"); for (let i = 0; i < 600; i++) console.error(`noise line ${i} ${"z".repeat(40)}`); process.exit(1);');
+    const r = await runner(pair, file);
+    assert.equal(r.code, 1);
+    assert.ok(r.out.length > 25_000, "the fixture must print more than the old 20000-character tail, or this proves nothing");
+    assert.ok(r.out.indexOf("EARLY-CAUSE") < r.out.length - 20_000, "EARLY-CAUSE must lie outside the last 20000 characters");
+    const d = diagnose(r);
+    assert.match(d.stderr, /EARLY-CAUSE: import failed here/, "the early output of a dead file was cut");
+  });
+
   it("a runner that never ends is killed at its deadline with its whole group; stderr has what it printed, the message says deadline", async () => {
     const file = join(dir, "hang.selftest.ts");
     // a grandchild in the runner's group, the way `pnpm exec vite` is: killing only the runner would leave it behind
