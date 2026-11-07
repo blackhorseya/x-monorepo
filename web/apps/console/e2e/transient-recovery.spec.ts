@@ -52,11 +52,22 @@ test("(a3) ListOrders keeps failing past the retry budget: the alert shows, then
   // 4 refusals = the first request and its 3 retries (src/transient.ts): react-query gives up and shows the error.
   // Only the page's own poll can get the rows back after that (refreshFirstPage with nothing cached).
   const fault = await failRequests(page, { method: "ListOrders", times: 4 });
+  // The alert is on screen only from the last refusal to the poll's next refetch (a query with no data goes back to
+  // "pending" when it refetches, which clears the error): at most one 2s tick, shorter than a polling assertion can
+  // be trusted to sample. So the page records every alert text it ever showed, and the test reads that afterwards.
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    (window as unknown as { __alerts: string[] }).__alerts = seen;
+    new MutationObserver(() => {
+      for (const el of document.querySelectorAll('[role="alert"]')) if (el.textContent) seen.push(el.textContent);
+    }).observe(document, { subtree: true, childList: true, characterData: true });
+  });
 
   await page.goto(`/orders?customer=${o.customerId}`);
-  await expect(page.getByRole("alert")).toContainText(/unavailable/i, { timeout: RECOVERY_MS });
   await expect(page.getByRole("row").filter({ hasText: o.short })).toBeVisible({ timeout: RECOVERY_MS });
   await expect(page.getByRole("alert")).toHaveCount(0);
+  const alerts = await page.evaluate(() => (window as unknown as { __alerts: string[] }).__alerts);
+  expect(alerts.join("\n"), "the error was shown before the list came back").toMatch(/unavailable/i);
   expect(fault.failed()).toBe(4);
   expect(fault.matched()).toBeGreaterThanOrEqual(5);
 });
