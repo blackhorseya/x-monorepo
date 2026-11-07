@@ -322,15 +322,19 @@ describe("starting and stopping vite preview is bounded", () => {
     assert.deepEqual(await probe(holdHost, port), { state: "closed" });
   });
 
-  it("stopVite: a child that ignores SIGTERM is SIGKILLed after the grace period, reaped, and the release returns in bounds", async () => {
-    const vite = spawnTracked(ignoresSigterm);
+  // A child that is slow to start (a loaded machine) has not installed its handler yet when the signal arrives.
+  const sigtermCase = async (command: string[]) => {
+    const vite = spawnTracked(command);
     await new Promise((r) => setTimeout(r, 300)); // the handler must be installed before the signal
     const t0 = Date.now();
     await within(4_000, "stopVite", stopVite(vite, p.all[11]!, { graceMs: 400, reapMs: 2_000, closeMs: 200 }));
     assert.ok(Date.now() - t0 >= 400, "SIGKILL came before the grace period ended: the child was not ignoring SIGTERM");
     assert.deepEqual(vite.ended, { kind: "exit", code: null, signal: "SIGKILL" });
     assert.ok(!groupAlive(vite));
-  });
+  };
+  it("stopVite: a child that ignores SIGTERM is SIGKILLed after the grace period, reaped, and the release returns in bounds", () => sigtermCase(ignoresSigterm));
+  it("stopVite: the same child, slow to install its handler (1.5 s), is still SIGKILLed only after the grace period", () =>
+    sigtermCase([process.execPath, "-e", "setTimeout(() => process.on('SIGTERM', () => {}), 1500); setInterval(() => {}, 1000)"]));
 
   it("stopVite: a child that never reports its end (not even after SIGKILL) does not hang the release", async () => {
     // the same group, but its end is never reported (a real child always reports it after SIGKILL)
