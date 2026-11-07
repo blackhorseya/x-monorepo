@@ -13,11 +13,17 @@ const nav = (page: Page) => page.locator("header nav").getByRole("link", { name:
 
 // The role-less key must see no Accounts entry and an "Admin role required" route, whatever else the page is
 // doing: the first requests of the page have no credential, and some of them can still be unanswered, or
-// can fail, when the key is set (#483). `arrange` sets that up, `useKeyAndCheck` is the same for both.
+// can fail, when the key is set (#483). `whileKeyIsSet` sets that up, the checks after it are the same for all three.
 async function noAdminRole(page: Page, whileKeyIsSet: () => Promise<void>) {
   await page.goto("/orders");
+  // The admin probe's answer for the role-less key (403). "No Accounts entry" below only means something once
+  // it is in and rendered; what the Orders card shows meanwhile (an alert of its own) is not this test's subject.
+  const probed = page.waitForResponse(
+    (r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && r.request().headers()["x-api-key"] === OPS_KEY,
+  );
   await whileKeyIsSet();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await probed;
+  await settle(page);
   await expect(page.locator("header nav").getByRole("link", { name: "Orders" })).toBeVisible();
   await expect(nav(page)).toHaveCount(0);
 
