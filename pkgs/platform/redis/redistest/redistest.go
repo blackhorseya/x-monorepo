@@ -4,8 +4,9 @@
 // as-is, unreachable fails; set but empty → fails. Only "no container
 // runtime reachable" skips, and only outside CI.
 //
-// Like pgtest's, the container is cleaned up when the test binary does not end through Main (#481): SIGINT / SIGTERM
-// terminate it at once (exit 128+signal), and go test -timeout, a panic or SIGKILL are cleaned up by the next start of
+// Like pgtest's, the container is cleaned up when the test binary does not end through Main (#481): with Main, SIGINT /
+// SIGTERM terminate it at once (exit 128+signal; a package that signals its own process in its tests calls m.Run and
+// Terminate itself and has no handler), and go test -timeout, a panic or SIGKILL are cleaned up by the next start of
 // any pgtest or redistest container on the machine, which removes only containers labelled by this repo whose test
 // process is gone. See package ctrreap.
 //
@@ -69,6 +70,7 @@ func URL(t testing.TB) string {
 // that also needs another helper's container calls m.Run and each helper's
 // Terminate itself.
 func Main(m *testing.M) int {
+	ctrreap.OnSignal(terminate)
 	code := m.Run()
 	Terminate()
 	return code
@@ -102,7 +104,6 @@ func (e *runtimeUnreachableError) Error() string {
 func (e *runtimeUnreachableError) Unwrap() error { return e.err }
 
 func start() {
-	ctrreap.OnSignal(terminate)
 	mu.Lock()
 	defer mu.Unlock()
 

@@ -11,7 +11,11 @@
 //
 //	how the test binary ended                           what removes the container
 //	normal exit                                         Terminate, as before
-//	SIGINT / SIGTERM                                    layer 1, OnSignal: terminated at once, exit 128+signal
+//	SIGINT / SIGTERM, test binary ending through Main   layer 1, OnSignal: terminated at once, exit 128+signal
+//	SIGINT / SIGTERM, a package with its own TestMain   layer 2 only: such a package's tests send SIGTERM to their own
+//	                                                    process (graceful-shutdown tests), which a handler would turn
+//	                                                    into a container kill and exit 143 mid-test. apps/catalog-rpc,
+//	                                                    apps/payment-rpc, apps/payment-worker (pgtest.Terminate by hand)
 //	go test -timeout, a panic, SIGKILL                  layer 2, ReapOnce: the next start in ANY process removes it
 //	a signal while the container is still starting      layer 2 (layer 1 waits for the start up to its grace, then the
 //	                                                    process leaves; the container the start creates later is an orphan)
@@ -82,8 +86,11 @@ func Self() (Owner, error) {
 		return Owner{}, fmt.Errorf("hostname: %w", err)
 	}
 	start, running, err := ProcessStart(os.Getpid())
-	if err != nil || !running {
-		return Owner{}, fmt.Errorf("start time of pid %d: running=%v err=%v", os.Getpid(), running, err)
+	if err != nil {
+		return Owner{}, fmt.Errorf("start time of pid %d: %w", os.Getpid(), err)
+	}
+	if !running {
+		return Owner{}, fmt.Errorf("start time of pid %d: process not running", os.Getpid())
 	}
 	return Owner{Host: host, PID: os.Getpid(), StartMS: start}, nil
 }
@@ -242,11 +249,11 @@ func ReapOnce(c context.Context, cli api, warn io.Writer) {
 		lastReport, reaped = rep, err == nil
 		reapMu.Unlock()
 		if err != nil {
-			fmt.Fprintf(warn, "ctrreap: warning: reap skipped: %v\n", err)
+			_, _ = fmt.Fprintf(warn, "ctrreap: warning: reap skipped: %v\n", err)
 		}
 		for _, it := range rep.Items {
 			if it.Outcome == RemoveFailed {
-				fmt.Fprintf(warn, "ctrreap: warning: could not remove %.12s: %s\n", it.ID, it.Detail)
+				_, _ = fmt.Fprintf(warn, "ctrreap: warning: could not remove %.12s: %s\n", it.ID, it.Detail)
 			}
 		}
 	})
@@ -271,7 +278,8 @@ var (
 // OnSignal registers terminate to be run when the process gets SIGINT or SIGTERM, and installs the handler the first
 // time it is called. The handler runs every registered terminator, together, under one deadline (signalGrace) that
 // bounds them whatever they do, then exits with 128+signal: never 0, and never the code of anything else. A second
-// signal, while it runs, ends the process the default way (the handler hands the signals back first).
+// signal, while it runs, ends the process at once with the same code. It does NOT signal.Reset: that is process-wide and
+// would unregister the signal.Notify channels the tests under test own.
 func OnSignal(terminate func(context.Context)) {
 	sigMu.Lock()
 	terminators = append(terminators, terminate)
@@ -288,13 +296,16 @@ func OnSignal(terminate func(context.Context)) {
 // drive it without a real signal or a real exit.
 func handleSignal(ch <-chan os.Signal, grace time.Duration, exit func(int)) {
 	sig := <-ch
-	signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 	code := 128 + 15
 	if s, ok := sig.(syscall.Signal); ok {
 		code = 128 + int(s)
 	}
 	c, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
+
+	// a second signal while the terminators run ends the process now
+	// fire-and-forget: ends the process or never fires
+	go func() { <-ch; exit(code) }()
 
 	sigMu.Lock()
 	ts := append([]func(context.Context){}, terminators...)

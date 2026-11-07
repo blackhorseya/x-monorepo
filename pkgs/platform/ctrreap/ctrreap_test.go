@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
@@ -170,6 +171,9 @@ func TestReapListFailure(t *testing.T) {
 // ReapOnce on a failing runtime: a fixed-format warning, no panic, nothing removed. It runs once per process, so this
 // test must be the only one to call it.
 func TestReapOnceWarnsAndDoesNotPanic(t *testing.T) {
+	reapMu.Lock()
+	reapOnce, lastReport, reaped = sync.Once{}, Report{}, false // once per process: give this test (and -count=2) its own
+	reapMu.Unlock()
 	var buf bytes.Buffer
 	ReapOnce(context.Background(), &fakeAPI{listErr: errors.New("daemon down")}, &buf)
 	ReapOnce(context.Background(), &fakeAPI{listErr: errors.New("again")}, &buf) // second call: no effect
@@ -248,6 +252,50 @@ func TestHandleSignalDeadlineBoundsABlockingTerminator(t *testing.T) {
 	}
 	if c := <-exited; c != 143 {
 		t.Fatalf("exit code %d, want 143", c)
+	}
+}
+
+// A second signal while the terminators are still running ends the process at once, and the handler does not
+// signal.Reset: a Notify channel somebody else owns keeps receiving.
+func TestHandleSignalSecondSignalExitsAtOnce(t *testing.T) {
+	resetTerminators(t)
+	block := make(chan struct{})
+	defer close(block)
+	sigMu.Lock()
+	terminators = append(terminators, func(context.Context) { <-block })
+	sigMu.Unlock()
+	other := make(chan os.Signal, 1)
+	signal.Notify(other, syscall.SIGUSR2)
+	defer signal.Stop(other)
+
+	ch := make(chan os.Signal, 2)
+	ch <- syscall.SIGTERM
+	exits := make(chan int, 2)
+	go handleSignal(ch, time.Hour, func(c int) { exits <- c })
+	time.Sleep(100 * time.Millisecond) // the first signal is being handled, its terminator is blocked
+	ch <- syscall.SIGINT
+	select {
+	case c := <-exits:
+		if c != 143 {
+			t.Fatalf("exit code %d, want 143", c)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second signal did not end the process while a terminator was blocked")
+	}
+}
+
+func TestOnSignalDoesNotResetOthersChannels(t *testing.T) {
+	other := make(chan os.Signal, 1)
+	signal.Notify(other, syscall.SIGUSR1)
+	defer signal.Stop(other)
+	OnSignal(func(context.Context) {})
+	if err := syscall.Kill(os.Getpid(), syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-other:
+	case <-time.After(5 * time.Second):
+		t.Fatal("somebody else's Notify channel stopped receiving")
 	}
 }
 
