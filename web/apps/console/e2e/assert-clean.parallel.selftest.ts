@@ -104,6 +104,27 @@ describe("a failed runner names the failing subtest", () => {
     assert.match(message, /no-tap-marker: died before any test/, "what the child printed is missing from the message");
   });
 
+  it("mutant: six failing subtests → every name and every error is in the message (the sixth is the root cause)", async () => {
+    const body = [1, 2, 3, 4, 5, 6].map((i) => `it("failure-${i}", () => assert.fail("ROOT-CAUSE-${i}"));`).join("\n");
+    const r = await runner(pair, fixture("six.selftest.ts", body));
+    assert.notEqual(r.code, 0);
+    const message = failureOf(r);
+    for (let i = 1; i <= 6; i++) {
+      assert.match(message, new RegExp(`failure-${i}\\b`), `the name of failing subtest ${i} is missing from the message`);
+      assert.match(message, new RegExp(`ROOT-CAUSE-${i}\\b`), `the error of failing subtest ${i} is missing from the message`);
+    }
+  });
+
+  it("mutant: an error longer than the cap keeps its cause at the end, and says it was cut", async () => {
+    const body = 'it("long-error", () => { throw new Error(`${"x".repeat(3000)} ROOT-CAUSE-END`); });';
+    const r = await runner(pair, fixture("long.selftest.ts", body));
+    assert.notEqual(r.code, 0);
+    const message = failureOf(r);
+    assert.match(message, /long-error/);
+    assert.match(message, /ROOT-CAUSE-END/, "the end of a long error is where the cause usually is");
+    assert.match(message, /cut/, "a shortened error must say it was shortened");
+  });
+
   it("mutant: a runner that never ends is killed at its deadline, with its whole group, and the message says so", async () => {
     const file = join(dir, "hang.selftest.ts");
     // a grandchild in the runner's group, the way `pnpm exec vite` is: killing only the runner would leave it behind
