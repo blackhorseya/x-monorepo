@@ -66,7 +66,7 @@ after(async () => {
   try {
     await reapAll(5_000);
   } finally {
-    pair.release();
+    await pair.release();
   }
 });
 
