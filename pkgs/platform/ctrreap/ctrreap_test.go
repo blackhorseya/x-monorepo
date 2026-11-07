@@ -163,6 +163,7 @@ func TestReapNotFoundIsIdempotent(t *testing.T) {
 
 func TestReapRemovalInProgress(t *testing.T) {
 	const id = "4feb033ec17387343128349c630c1f4bd08cea1af550e4673faa912ca0e716fe"
+	const other = "9ee7b60e99bfa76c8335fc89f35454fd34b6da549cb031783beff355466f6fc9"
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -182,11 +183,18 @@ func TestReapRemovalInProgress(t *testing.T) {
 		{"the phrase buried in another error", errors.New("start failed: could not stop; removal of container " + id + " is already in progress, giving up"), RemoveFailed},
 		{"the phrase at the end of another sentence", errors.New("could not stop; removal of container " + id + " is already in progress"), RemoveFailed},
 		{"unrelated", errors.New("permission denied"), RemoveFailed},
+		// negatives about WHICH container: the message names another one, or is not the daemon's own sentence
+		{"another container's id", errors.New("Error response from daemon: removal of container " + other + " is already in progress"), RemoveFailed},
+		{"another container's short id", errors.New("removal of container " + other[:12] + " is already in progress"), RemoveFailed},
+		{"id that merely resembles this one", errors.New("removal of container " + id[:11] + "0 is already in progress"), RemoveFailed},
+		{"id too short to identify", errors.New("removal of container " + id[:8] + " is already in progress"), RemoveFailed},
+		{"an earlier error sentence in front", errors.New("container update failed: removal of container " + id + " is already in progress"), RemoveFailed},
+		{"daemon prefix after another prefix", errors.New("start failed: Error response from daemon: removal of container " + id + " is already in progress"), RemoveFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &fakeAPI{
-				all:       []container.Summary{{ID: "a", Labels: labels("ns", Owner{"h1", 999, 1})}},
-				removeErr: map[string]error{"a": tc.err},
+				all:       []container.Summary{{ID: id, Labels: labels("ns", Owner{"h1", 999, 1})}},
+				removeErr: map[string]error{id: tc.err},
 			}
 			rep, err := Reap(context.Background(), api, "ns", self, probe)
 			if err != nil {

@@ -58,7 +58,7 @@ TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
 ```
 
 自起的 container（pgtest／redistest）會被回收，不會留在機器上（#481）：正常結束由 `Terminate`；`SIGINT`／`SIGTERM` 由 `pgtest.Main`／`redistest.Main` 裝的 `ctrreap.OnSignal` 立刻回收並以 128+signal 結束（會對自己送 SIGTERM 測 graceful shutdown 的 package——`apps/catalog-rpc`、`payment-rpc`、`payment-worker`——不能用 `Main`，TestMain 是 `m.Run` + `pgtest.Terminate()`，沒有 layer 1，靠下一次啟動回收；新增這類測試時照辦）；
-`go test -timeout`、panic、`SIGKILL` 留下的，由**下一次**任何用到 pgtest／redistest 的 test 啟動時清掉（`ctrreap.ReapOnce`：只動帶本 repo label、且擁有者 host+pid+啟動時間證明已不存在的 container）。
+`go test -timeout`、panic、`SIGKILL` 留下的，由**下一次**任何用到 pgtest／redistest 的 test 啟動時清掉（`ctrreap.ReapBeforeStart`，每次 start 都掃：只動帶本 repo label、且擁有者 host+pid+啟動時間證明已不存在的 container）。
 Podman 上 Ryuk 仍是停用的（`~/.testcontainers.properties`），這裡不改它；CI（Docker）的 Ryuk 照舊。細節與已知限制見 `pkgs/platform/ctrreap` 的 package doc。
 
 前端：`web/` 是 Turborepo（pnpm）。`packages/proto` 是 connect-es client（`task gen-ts` 需要網路，產出到那裡；先過 `tools/stripvalidate` 拿掉 `buf.validate` options 與 `validate.proto`，只留 `Violations`）；

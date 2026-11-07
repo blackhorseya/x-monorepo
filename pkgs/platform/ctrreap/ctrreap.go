@@ -40,6 +40,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -197,7 +198,7 @@ func Reap(c context.Context, cli api, namespace string, self Owner, probe Probe)
 			case cerrdefs.IsNotFound(err):
 				// another process's reaper (or the owner itself) got there first: gone is gone
 				it.Detail += " (already gone)"
-			case removalInProgress(err):
+			case removalInProgress(err, s.ID):
 				// Docker (not Podman) answers 409 when another reaper's remove of the same container is still running
 				it.Detail += " (removal already in progress elsewhere)"
 			default:
@@ -209,18 +210,22 @@ func Reap(c context.Context, cli api, namespace string, self Owner, probe Probe)
 	return rep, nil
 }
 
-// removalInProgress is the runtime's answer to a remove of a container somebody else is already removing.
+// removalInProgress is the runtime's answer to a remove of THIS container while somebody else is already removing it.
 //
-// Only that one message counts. Docker answers a second remove of a container that is being removed with
-// "removal of container <id> is already in progress" (seen in CI: Error response from daemon: removal of container
-// 4feb033ec173... is already in progress); Podman answers 204 and then "no such container", the NotFound case above.
-// Any other conflict, "container update is already in progress" or "cannot remove a running container" among them,
-// is a real failure. The error class is not relied on: the message is what is specific.
-func removalInProgress(err error) bool {
-	return removalInProgressRE.MatchString(err.Error())
+// Only that one message counts, and only about the container Reap is removing (id): Docker answers a second remove of a
+// container that is being removed with "removal of container <id> is already in progress" (seen in CI: Error response
+// from daemon: removal of container 4feb033ec173... is already in progress); Podman answers 204 and then "no such
+// container", the NotFound case above. The message is accepted bare or with the daemon's own fixed prefix and nothing
+// else in front of it (a longer sentence that merely ends with it, "container update failed: removal of container ...",
+// is a different failure), and the id it names must be this container's id or a prefix of it (12 hex digits or more,
+// the short form): a message about another container says nothing about this one. Any other error, any other conflict
+// among them, is a real failure. The error class is not relied on: the message is what is specific.
+func removalInProgress(err error, id string) bool {
+	m := removalInProgressRE.FindStringSubmatch(err.Error())
+	return m != nil && strings.HasPrefix(id, m[1])
 }
 
-var removalInProgressRE = regexp.MustCompile(`(?:^|: )removal of container [0-9a-f]{12,64} is already in progress$`)
+var removalInProgressRE = regexp.MustCompile(`^(?:Error response from daemon: )?removal of container ([0-9a-f]{12,64}) is already in progress$`)
 
 // judge decides from a container's labels whether its owner is gone (Removed means: remove it).
 func judge(labels map[string]string, self Owner, probe Probe) (Outcome, string) {
