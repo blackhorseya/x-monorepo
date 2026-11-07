@@ -103,7 +103,11 @@ const killGroup = (c: ChildProcess, signal: NodeJS.Signals) => {
     if (code !== "ESRCH" && !(code === "EPERM" && exited)) throw e;
   }
 };
-after(() => viteChildren.forEach((c) => killGroup(c, "SIGKILL")));
+// Whatever a test left behind: SIGKILL every group, then wait (at most 5 s each) until each child is reaped.
+after(async () => {
+  viteChildren.forEach((c) => killGroup(c, "SIGKILL"));
+  await Promise.all(viteChildren.map((c) => (c.exitCode !== null || c.signalCode !== null ? undefined : new Promise<void>((r) => (c.once("exit", () => r()), setTimeout(r, 5_000))))));
+});
 
 describe("assert-clean sees live listeners", () => {
   it("passes when nothing listens (positive control)", async () => {
@@ -138,28 +142,44 @@ describe("assert-clean sees live listeners", () => {
 
   it("the real `vite preview` on localhost", async () => {
     await failsWhileHeld("vite preview", async () => {
-      const vite = spawn("pnpm", ["exec", "vite", "preview", "--port", String(p.webPort), "--strictPort"], { cwd: consoleDir, stdio: "ignore", detached: true });
-      viteChildren.push(vite);
-      const exited = new Promise<void>((r) => vite.once("exit", () => r()));
-      for (let i = 0; ; i++) {
-        if (vite.exitCode !== null) throw new Error(`vite preview exited ${vite.exitCode} (is ${p.webPort} taken, is dist built?)`);
-        if (await fetch(`http://localhost:${p.webPort}/`).then((r) => r.ok, () => false)) break;
-        if (i > 100) throw new Error("vite preview did not come up in 10s");
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      return async () => {
-        killGroup(vite, "SIGTERM");
-        await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
-        if (vite.exitCode === null) killGroup(vite, "SIGKILL");
-        await exited;
-        // The group is signalled, but the port is only free once vite really let go of it: a vite that is shutting down
-        // still holds it and resets connections, so a failed fetch says nothing. Ask every loopback the way the checker does.
-        await waitClosed(hosts, p.webPort);
-        for (let i = 0; i < 50 && (await fetch(`http://localhost:${p.webPort}/`).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 100));
-      };
+      const vite = await startVite(p.webPort);
+      return () => stopVite(vite, p.webPort);
     });
   });
 });
+
+type Vite = { child: ChildProcess; exited: Promise<void> };
+/** Starts `command` (default: the real `vite preview` on `port`) and waits `readyMs` for it to answer HTTP; a child that never gets there is killed and reaped before this throws. */
+async function startVite(port: number, { command = ["pnpm", "exec", "vite", "preview", "--port", String(port), "--strictPort"], readyMs = 10_000 } = {}): Promise<Vite> {
+  const child = spawn(command[0]!, command.slice(1), { cwd: consoleDir, stdio: "ignore", detached: true });
+  viteChildren.push(child);
+  const exited = new Promise<void>((r) => child.once("exit", () => r()));
+  const vite = { child, exited };
+  try {
+    const end = Date.now() + readyMs;
+    for (;;) {
+      if (child.exitCode !== null) throw new Error(`vite preview exited ${child.exitCode} (is ${port} taken, is dist built?)`);
+      // A listener that accepts and never answers must not hang the wait: every request is bounded.
+      if (await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(1_000) }).then((r) => r.ok, () => false)) return vite;
+      if (Date.now() >= end) throw new Error(`vite preview did not come up in ${readyMs}ms`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  } catch (e) {
+    killGroup(child, "SIGKILL");
+    await exited;
+    throw e;
+  }
+}
+/** SIGTERM the group, SIGKILL after 5 s, then wait (at most `closeMs`) until every loopback refuses `port`. Never longer than that: what is still bound is for the cleanup check to report. */
+async function stopVite({ child, exited }: Vite, port: number, closeMs = 10_000): Promise<void> {
+  killGroup(child, "SIGTERM");
+  await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
+  if (child.exitCode === null) killGroup(child, "SIGKILL");
+  await exited;
+  // The group is signalled, but the port is only free once vite really let go of it: a vite that is shutting down
+  // still holds it and resets connections, so a failed fetch says nothing. Ask every loopback the way the checker does.
+  await waitClosed(hosts, port, { deadlineMs: closeMs });
+}
 
 // Only a refused connection says "nobody here". A timeout or any other error is not an answer, so the
 // check must fail on it rather than call the port closed.
@@ -263,5 +283,88 @@ describe("a port nobody holds is not reported as listening", () => {
     const t0 = Date.now();
     assert.equal(await waitClosed(LOOPBACKS, p.authRpcPort, { deadlineMs: 5_000, intervalMs: 20 }), true);
     assert.ok(Date.now() - t0 < 1_000);
+  });
+});
+
+// The release path must stay bounded and must leave no child behind, whatever the port does (review of #479: a
+// listener that accepts TCP and never answers HTTP held the old fetch poll, and with it `failsWhileHeld`'s finally, for good).
+describe("starting and stopping vite preview is bounded", () => {
+  const idle = [process.execPath, "-e", "setInterval(() => {}, 1000)"];
+  const groupAlive = (c: ChildProcess) => {
+    try {
+      process.kill(-c.pid!, 0);
+      return true;
+    } catch (e) {
+      return (e as NodeJS.ErrnoException).code === "EPERM" && c.exitCode === null;
+    }
+  };
+  const within = <T>(ms: number, what: string, work: Promise<T>) =>
+    Promise.race([work, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} did not finish in ${ms}ms`)), ms))]);
+
+  it("stopVite: a port that accepts TCP and never answers does not hang the release; the checker still sees it", async () => {
+    const port = p.all[7]!;
+    const held: import("node:net").Socket[] = [];
+    const s = createServer((c) => held.push(c)); // accepts, says nothing, keeps the socket
+    await new Promise<void>((resolve) => s.listen({ port, host: holdHost, ipv6Only: holdHost === "::1" }, resolve));
+    try {
+      const child = spawn(idle[0]!, idle.slice(1), { stdio: "ignore", detached: true });
+      viteChildren.push(child);
+      const vite = { child, exited: new Promise<void>((r) => child.once("exit", () => r())) };
+      const t0 = Date.now();
+      await within(6_000, "stopVite", stopVite(vite, port, 500));
+      assert.ok(Date.now() - t0 < 6_000);
+      assert.ok(!groupAlive(child), "the child group is still alive after stopVite");
+      assert.equal((await probe(holdHost, port)).state, "listening", "control: the listener is still bound, so the release gave up on the deadline, not because the port was free");
+    } finally {
+      held.forEach((c) => c.destroy());
+      await close(s);
+    }
+  });
+
+  it("startVite: a child that never answers is killed and reaped before the error is thrown", async () => {
+    const port = p.all[8]!;
+    const child = new Promise<ChildProcess>((resolve, reject) => {
+      startVite(port, { command: idle, readyMs: 400 }).then(() => reject(new Error("startVite succeeded although nothing answers")), () => resolve(viteChildren[viteChildren.length - 1]!));
+    });
+    const c = await within(6_000, "startVite", child);
+    assert.ok(c.exitCode !== null || c.signalCode !== null, "the child was not reaped");
+    assert.ok(!groupAlive(c), "the child group is still alive");
+  });
+
+  const hangingListener = async (port: number) => {
+    const held: import("node:net").Socket[] = [];
+    const s = createServer((c) => held.push(c));
+    await new Promise<void>((resolve) => s.listen({ port, host: holdHost, ipv6Only: holdHost === "::1" }, resolve));
+    return async () => (held.forEach((c) => c.destroy()), close(s));
+  };
+  it("startVite: a port that accepts TCP and never answers HTTP does not hang the start", async () => {
+    const port = p.all[9]!;
+    const stop = await hangingListener(port);
+    try {
+      await within(6_000, "startVite", startVite(port, { command: idle, readyMs: 400 }).then(() => assert.fail("startVite succeeded although nothing answers HTTP"), (e: Error) => assert.match(e.message, /did not come up/)));
+      assert.ok(!groupAlive(viteChildren[viteChildren.length - 1]!), "the child group is still alive");
+    } finally {
+      await stop();
+    }
+  });
+
+  it("failsWhileHeld goes red when the release gives up on a port that still holds a listener", async () => {
+    let stop: (() => Promise<void>) | undefined;
+    try {
+      await within(
+        20_000,
+        "failsWhileHeld",
+        assert.rejects(
+          failsWhileHeld("leftover", async () => {
+            stop = await hangingListener(p.authRpcPort);
+            // the bounded release: gives up at its deadline with the listener still bound
+            return () => waitClosed(hosts, p.authRpcPort, { deadlineMs: 500 }).then(() => undefined);
+          }),
+          /closed again, the check must pass, got 1/,
+        ),
+      );
+    } finally {
+      await stop?.();
+    }
   });
 });
