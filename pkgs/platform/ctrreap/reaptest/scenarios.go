@@ -14,9 +14,12 @@ const readyBudget = 90 * time.Second
 
 // shortTimeout is the -test.timeout of the fixture that is meant to hit it. The container must be up well inside it,
 // so the wait for it is shorter still (a fixture that is not ready by then is a setup failure, not a result).
+// Sized for a loaded machine: with two packages running their cells at once under -race (about eight fixtures starting
+// containers together on one Podman VM) a postgres container took over 30s to come up in 3 of 14 stress rounds, which
+// is a "no container within 30s" SETUP FAILURE of the harness, never a mistaken removal.
 const (
-	shortTimeout     = 45 * time.Second
-	shortReadyBudget = 30 * time.Second
+	shortTimeout     = 90 * time.Second
+	shortReadyBudget = 60 * time.Second
 )
 
 // Scenarios runs, against the calling package's own test binary, one cell per way a test binary can end:
