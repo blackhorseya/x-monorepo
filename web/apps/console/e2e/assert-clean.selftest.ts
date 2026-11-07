@@ -20,11 +20,10 @@ import { MAX_WAIT_MS, type Tracked, __testing, groupAlive, lastSpawned, reapAll,
 //
 //   node --test --experimental-strip-types e2e/assert-clean.selftest.ts      (task web-e2e-ports runs it first)
 // This test is internal to the task: it does not read the caller's E2E pair (that belongs to the smoke
-// run, and to whatever else the caller runs beside it) and writes no port of its own. It picks a pair at
-// random from the OS's dynamic range and keeps it only if EVERY port derived from it (e2e/ports.ts, 19 of
-// them across two blocks) can be bound right now on every loopback, so any number of runs — under any
-// callers' pairs — can go side by side (#386). The OS cannot hand out the pair itself: it hands out one port at a
-// time, usually the next free one, and the derived ports must be spread over two separate blocks.
+// run, and to whatever else the caller runs beside it) and writes no port of its own. It takes a pair of its own from
+// e2e/private-pair.ts: drawn at random, every port derived from it claimed so that no other selftest process (the runners of
+// e2e/assert-clean.parallel.selftest.ts, the fault selftest's nested run) is handed a port of it, and free on every loopback
+// right now. Any number of runs — under any callers' pairs — can go side by side (#386, #495).
 const ipv6Loopback = await hasIPv6Loopback();
 const pair = await privatePair();
 const env = { ...process.env, E2E_RPC_PORT: String(pair.rpc), E2E_WEB_PORT: String(pair.web) };
@@ -61,7 +60,13 @@ async function failsWhileHeld(name: string, hold: () => Promise<() => Promise<vo
 
 const hosts = LOOPBACKS.filter((h) => h !== "::1" || ipv6Loopback.available);
 // Whatever a test left behind: SIGKILL every group, then wait (at most 5 s each) until each child is reaped (e2e/child.ts).
-after(() => reapAll(5_000));
+after(async () => {
+  try {
+    await reapAll(5_000);
+  } finally {
+    pair.release();
+  }
+});
 
 describe("assert-clean sees live listeners", () => {
   it("passes when nothing listens (positive control)", async () => {

@@ -4,6 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:net";
+import { randomInt } from "node:crypto";
 import { type NestedResult, groupAlive, killNested, runNested } from "./nested.ts";
 import { assertRunnerPassed } from "./report.ts";
 import { failedSubtests } from "./tap.ts";
@@ -291,8 +293,13 @@ describe("failedSubtests reads node's TAP", () => {
 describe("private pairs of concurrent selftests share no port", () => {
   const portsOf = (p: Pair) => derivePorts({ E2E_RPC_PORT: String(p.rpc), E2E_WEB_PORT: String(p.web) }).all;
   const shared = (a: Pair, b: Pair) => portsOf(a).filter((port) => portsOf(b).includes(port));
+  // The pairs these cases force are drawn below the OS's ephemeral range (macOS: 49152 and up): a port in it can be taken by
+  // someone's outgoing connection for a moment, the free-now check then refuses a draw the case needs accepted, and the case
+  // would fail for a reason that is not the claim. (The selftest's own draw is random over the whole range and simply draws again.)
+  const calm = (): Pair => ({ rpc: randomInt(20_000, 30_000), web: randomInt(40_000, 48_500) });
+  const farWeb = (p: Pair) => (p.web >= 44_500 ? p.web - 4_000 : p.web + 4_000);
   /** A draw that shares ports with `p` without being `p`: its rpc is p's role rpc (+10), its web is far away. */
-  const overlapping = (p: Pair): Pair => ({ rpc: p.rpc + 10, web: p.web < 52_500 ? p.web + 3_000 : p.web - 3_000 });
+  const overlapping = (p: Pair): Pair => ({ rpc: p.rpc + 10, web: farWeb(p) });
   const dirs: string[] = [];
   const claimDir = () => {
     const d = mkdtempSync(join(tmpdir(), "assert-clean-claims-"));
@@ -308,7 +315,7 @@ describe("private pairs of concurrent selftests share no port", () => {
 
   it("in one process: a draw that repeats a pair held by an earlier caller, and one that overlaps it, are both refused", async () => {
     const dir = claimDir();
-    const held = await privatePair({ claimDir: dir });
+    const held = await privatePair({ claimDir: dir, draw: calm });
     const forced = offering([held, overlapping(held)]);
     const second = await privatePair({ claimDir: dir, draw: forced.draw });
     assert.deepEqual(shared(held, second), [], `the second caller was handed ${JSON.stringify({ rpc: second.rpc, web: second.web })}, which shares ports with ${JSON.stringify({ rpc: held.rpc, web: held.web })}`);
@@ -317,7 +324,7 @@ describe("private pairs of concurrent selftests share no port", () => {
 
   it("in another process: the same two draws are refused while this process holds the pair", async () => {
     const dir = claimDir();
-    const held = await privatePair({ claimDir: dir });
+    const held = await privatePair({ claimDir: dir, draw: calm });
     const r = await runNested(["--experimental-strip-types", "e2e/fault/pair-child.ts", dir, `${held.rpc},${held.web}`, `${overlapping(held).rpc},${overlapping(held).web}`], { cwd: consoleDir, env: process.env, deadlineMs: 60_000 });
     assert.equal(r.code, 0, r.out);
     const got = JSON.parse(r.out.trim().split("\n").at(-1)!) as Pair & { draws: number };
@@ -327,7 +334,7 @@ describe("private pairs of concurrent selftests share no port", () => {
 
   it("a released pair can be drawn again", async () => {
     const dir = claimDir();
-    const held = await privatePair({ claimDir: dir });
+    const held = await privatePair({ claimDir: dir, draw: calm });
     held.release();
     const again = await privatePair({ claimDir: dir, draw: offering([held]).draw });
     assert.deepEqual({ rpc: again.rpc, web: again.web }, { rpc: held.rpc, web: held.web }, "release() did not give the pair back");
@@ -335,7 +342,7 @@ describe("private pairs of concurrent selftests share no port", () => {
 
   it("a process that ends gives its pair back without being asked", async () => {
     const dir = claimDir();
-    const probe = await privatePair({ claimDir: dir });
+    const probe = await privatePair({ claimDir: dir, draw: calm });
     probe.release();
     const r = await runNested(["--experimental-strip-types", "e2e/fault/pair-child.ts", dir, `${probe.rpc},${probe.web}`], { cwd: consoleDir, env: process.env, deadlineMs: 60_000 });
     assert.equal(r.code, 0, r.out);
@@ -343,6 +350,36 @@ describe("private pairs of concurrent selftests share no port", () => {
     assert.deepEqual({ rpc: got.rpc, web: got.web }, { rpc: probe.rpc, web: probe.web }, "control: the child must have taken the pair it was offered, or this proves nothing");
     const again = await privatePair({ claimDir: dir, draw: offering([probe]).draw });
     assert.deepEqual({ rpc: again.rpc, web: again.web }, { rpc: probe.rpc, web: probe.web }, "the child ended and its pair is still taken");
+  });
+
+  it("a draw refused for sharing a port gives back the ports it had claimed before it hit the shared one", async () => {
+    const dir = claimDir();
+    const held = await privatePair({ claimDir: dir, draw: calm });
+    // rpc one below held's: its first port (rpc - 1) is free and is claimed, its second (= held's rpc) is held and refuses it
+    const partial: Pair = { rpc: held.rpc - 1, web: farWeb(held) };
+    const second = await privatePair({ claimDir: dir, draw: offering([partial]).draw });
+    assert.deepEqual(shared(held, second), [], "control: the partial overlap was refused");
+    held.release();
+    const third = await privatePair({ claimDir: dir, draw: offering([partial]).draw });
+    assert.deepEqual({ rpc: third.rpc, web: third.web }, { rpc: partial.rpc, web: partial.web }, "the refused draw kept some of its ports claimed");
+  });
+
+  it("a draw refused because one of its ports is bound gives back every claim it made", async () => {
+    const dir = claimDir();
+    const d = await privatePair({ claimDir: dir, draw: calm });
+    d.release();
+    const busy = createServer();
+    await new Promise<void>((resolve, reject) => (busy.once("error", reject), busy.listen({ port: portsOf(d)[5]!, host: "127.0.0.1" }, resolve)));
+    try {
+      const forced = offering([d]);
+      const other = await privatePair({ claimDir: dir, draw: forced.draw });
+      assert.deepEqual(shared(d, other), [], "control: a draw with a bound port was handed out");
+      assert.ok(forced.offered() >= 2, "control: the draw with the bound port was offered");
+    } finally {
+      await new Promise<void>((resolve) => busy.close(() => resolve()));
+    }
+    const again = await privatePair({ claimDir: dir, draw: offering([d]).draw });
+    assert.deepEqual({ rpc: again.rpc, web: again.web }, { rpc: d.rpc, web: d.web }, "the refused draw kept its ports claimed");
   });
 
   // A tripwire, not a barrier: the selftest takes its pair from e2e/private-pair.ts and draws none of its own.
