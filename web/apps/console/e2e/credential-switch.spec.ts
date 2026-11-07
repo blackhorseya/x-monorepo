@@ -1,11 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { settle, useKey } from "./auth/helpers";
-import { holdRequests } from "./fail-requests";
-import { scriptByKey, watchRequests, type Reply } from "./inject";
+import { holdRequests, scriptByKey, watchRequests, type Reply } from "./fail-requests";
 import { createCard } from "./orders-ui";
 
 // #483. Switching credential must re-ask every query the page is showing, with the NEW credential, and
-// must not show what was read for the old one. Each credential gets its own scripted answer (e2e/inject.ts)
+// must not show what was read for the old one. Each credential gets its own scripted answer (e2e/fail-requests.ts)
 // and the answer for the old one is parked by `holdRequests` until the test releases it after the switch,
 // so the interleavings are made by the test and not by timing.
 

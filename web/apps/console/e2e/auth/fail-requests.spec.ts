@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
-import { failRequests, holdRequests } from "../fail-requests";
+import { failRequests, holdRequests, scriptByKey, watchRequests } from "../fail-requests";
 import { settle } from "./helpers";
 
 // holdRequests is a small state machine: armed (nothing parked) -> parked (>= 1 call waiting) -> released.
@@ -13,14 +13,24 @@ import { settle } from "./helpers";
 // positive control ("the fault was hit") is only as good as these.
 
 const OTHER_KEY = "some-other-key";
-const call = (page: Page, method: string, key?: string) =>
+const call = (page: Page, method: string, key?: string, body = "{}") =>
   page.evaluate(
-    ([m, k]) =>
-      fetch(`/api/test.v1.TestService/${m}`, { method: "POST", headers: { "Content-Type": "application/json", ...(k ? { "X-API-Key": k } : {}) }, body: "{}" })
+    ([m, k, b]) =>
+      fetch(`/api/test.v1.TestService/${m}`, { method: "POST", headers: { "Content-Type": "application/json", ...(k ? { "X-API-Key": k } : {}) }, body: b })
         .then((r) => r.status)
         .catch(() => "failed"),
+    [method, key, body] as const,
+  );
+// status and parsed body of one call (a call is answered with JSON by the stub and by every Reply but { http })
+const callFull = (page: Page, method: string, key?: string) =>
+  page.evaluate(
+    ([m, k]) =>
+      fetch(`/api/test.v1.TestService/${m}`, { method: "POST", headers: { "Content-Type": "application/json", ...(k ? { "X-API-Key": k } : {}) }, body: "{}" }).then(
+        async (r) => [r.status, await r.text()] as const,
+      ),
     [method, key] as const,
   );
+const RPC = (m: string) => `test.v1.TestService/${m}`;
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/api/readyz"); // an origin to fetch from, nothing of the console running
@@ -157,4 +167,118 @@ test("holdRequests: several calls are parked together, and the helpers compose",
   held.release();
   expect([await a, await c]).toEqual([200, 200]);
   expect([fault.failed(), held.count()]).toEqual([1, 2]);
+});
+
+// ---- scriptByKey ---------------------------------------------------------------------------------------
+
+test("scriptByKey: each key gets its own reply (ok, Connect error, plain http status)", async ({ page }) => {
+  await scriptByKey(page, RPC("Plan"), { "": { connect: "unauthenticated" }, [OPS_KEY]: { ok: { who: "ops" } }, [ADMIN_KEY]: { http: 418 } });
+  expect(await callFull(page, "Plan")).toEqual([401, JSON.stringify({ code: "unauthenticated", message: "injected: unauthenticated" })]);
+  expect(await callFull(page, "Plan", OPS_KEY)).toEqual([200, JSON.stringify({ who: "ops" })]);
+  expect(await callFull(page, "Plan", ADMIN_KEY)).toEqual([418, "injected"]);
+});
+
+test("scriptByKey: a key with no plan is answered 599, not passed on to the server", async ({ page }) => {
+  await scriptByKey(page, RPC("NoPlan"), { [OPS_KEY]: { ok: {} } });
+  expect(await callFull(page, "NoPlan", OTHER_KEY)).toEqual([599, `scriptByKey: no plan for key "${OTHER_KEY}"`]); // the stub behind it says 200
+});
+
+test("scriptByKey: count(key) is per key", async ({ page }) => {
+  const script = await scriptByKey(page, RPC("Count"), { "": { ok: {} }, [OPS_KEY]: { ok: {} } });
+  await call(page, "Count");
+  await call(page, "Count", OPS_KEY);
+  await call(page, "Count", OPS_KEY);
+  expect([script.count(""), script.count(OPS_KEY), script.count(OTHER_KEY)]).toEqual([1, 2, 0]);
+});
+
+test("scriptByKey: a call refused with 599 has reached the script and counts", async ({ page }) => {
+  const script = await scriptByKey(page, RPC("Refused"), { "": { ok: {} } });
+  await call(page, "Refused", OTHER_KEY);
+  expect([script.count(OTHER_KEY), script.count("")]).toEqual([1, 0]);
+});
+
+test("scriptByKey: only the exact rpc is scripted; another method, a same-prefix name and a same-suffix name pass on", async ({ page }) => {
+  const script = await scriptByKey(page, RPC("Exact"), { "": { connect: "unavailable" } });
+  expect(await call(page, "ExactExtra")).toBe(200);
+  expect(await call(page, "XExact")).toBe(200);
+  expect(await call(page, "ListOrders")).toBe(200);
+  expect(script.count("")).toBe(0);
+  expect(await call(page, "Exact")).toBe(503);
+  expect(script.count("")).toBe(1);
+});
+
+test("scriptByKey + holdRequests: a parked call has not reached the script; after release() the script answers it (hold registered after the script)", async ({ page }) => {
+  const script = await scriptByKey(page, RPC("Held"), { "": { ok: { from: "script" } } });
+  const held = await holdRequests(page, { method: "Held", key: null });
+  let got: unknown;
+  const pending = callFull(page, "Held").then((r) => (got = r));
+  await held.arrived();
+  await settle(page);
+  expect([script.count(""), got]).toEqual([0, undefined]); // parked: the script has not been asked, nothing answered
+  held.release();
+  await pending;
+  expect(got).toEqual([200, JSON.stringify({ from: "script" })]); // released: the script's own reply, not the stub's
+  expect(script.count("")).toBe(1);
+  await call(page, "Held"); // after release: goes straight to the script, the hold counts nothing more
+  expect([script.count(""), held.count()]).toEqual([2, 1]);
+});
+
+test("scriptByKey + holdRequests: registered the other way round the script answers first and the hold parks nothing", async ({ page }) => {
+  const held = await holdRequests(page, { method: "Order" });
+  const script = await scriptByKey(page, RPC("Order"), { "": { ok: { from: "script" } } }); // registered later: sees the call first
+  expect(await callFull(page, "Order")).toEqual([200, JSON.stringify({ from: "script" })]);
+  expect([script.count(""), held.count()]).toEqual([1, 0]);
+});
+
+// ---- watchRequests -------------------------------------------------------------------------------------
+
+test("watchRequests: counts what the browser sent, including a call a hold parks, and a parked call is counted once", async ({ page }) => {
+  const seen = watchRequests(page, RPC("Sent"));
+  const held = await holdRequests(page, { method: "Sent" });
+  const pending = call(page, "Sent", OPS_KEY);
+  await held.arrived();
+  await expect.poll(() => seen.sent(OPS_KEY)).toBe(1); // sent, parked, not answered
+  expect(held.count()).toBe(1);
+  held.release();
+  await pending;
+  expect(seen.sent(OPS_KEY)).toBe(1); // answering it does not add a second one
+  await call(page, "Sent", OPS_KEY);
+  expect(seen.sent(OPS_KEY)).toBe(2); // a later call does, parked or not
+});
+
+test("watchRequests: a call failRequests refuses, or drops, was still sent", async ({ page }) => {
+  const seen = watchRequests(page, RPC("Faulty"));
+  await failRequests(page, { method: "Faulty", times: 2, mode: "unavailable" });
+  expect(await call(page, "Faulty")).toBe(503);
+  await failRequests(page, { method: "Faulty", mode: "reset" });
+  expect(await call(page, "Faulty")).toBe("failed");
+  expect(seen.sent("")).toBe(2);
+});
+
+test("watchRequests: the key separates callers, and \"\" is the call with no X-API-Key", async ({ page }) => {
+  const seen = watchRequests(page, RPC("Who"));
+  await call(page, "Who");
+  await call(page, "Who", OPS_KEY);
+  await call(page, "Who", OPS_KEY);
+  await call(page, "Who", OTHER_KEY);
+  expect([seen.sent(""), seen.sent(OPS_KEY), seen.sent(OTHER_KEY), seen.sent(ADMIN_KEY)]).toEqual([1, 2, 1, 0]);
+});
+
+test("watchRequests: text narrows to bodies containing it, case-sensitively; no text counts every body", async ({ page }) => {
+  const seen = watchRequests(page, RPC("Body"));
+  await call(page, "Body", OPS_KEY, '{"skus":["SW-SKU"]}');
+  await call(page, "Body", OPS_KEY, '{"skus":["sw-sku"]}');
+  await call(page, "Body", OPS_KEY, '{"skus":["OTHER"]}');
+  expect([seen.sent(OPS_KEY, "SW-SKU"), seen.sent(OPS_KEY, "sw-sku"), seen.sent(OPS_KEY, "NOPE"), seen.sent(OPS_KEY)]).toEqual([1, 1, 0, 3]);
+  expect(seen.sent(OTHER_KEY, "SW-SKU")).toBe(0); // the text must be in a call of THAT key
+});
+
+test("watchRequests: only the exact rpc; another method, a same-prefix name and a same-suffix name are not counted", async ({ page }) => {
+  const seen = watchRequests(page, RPC("Mine"));
+  await call(page, "MineExtra");
+  await call(page, "XMine");
+  await call(page, "Other");
+  expect(seen.sent("")).toBe(0);
+  await call(page, "Mine");
+  expect(seen.sent("")).toBe(1);
 });
