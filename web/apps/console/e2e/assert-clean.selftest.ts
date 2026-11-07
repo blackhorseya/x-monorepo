@@ -2,7 +2,9 @@ import { randomInt } from "node:crypto";
 import { createConnection, createServer, type Server } from "node:net";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import { type Connect, LOOPBACKS, classifyConnectError, hasIPv6Loopback, isNoAddress, probe, waitClosed } from "./clean.ts";
@@ -267,7 +269,25 @@ describe("a port nobody holds is not reported as listening", () => {
 // finally, for good; a command that does not exist emits `error` and never `exit`).
 describe("starting and stopping vite preview is bounded", () => {
   const idle = [process.execPath, "-e", "setInterval(() => {}, 1000)"];
-  const ignoresSigterm = [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"];
+  // A child that ignores SIGTERM and says so: the marker file is written AFTER the handler is installed, and the test
+  // sends no signal before it has seen it. A fixed sleep is a guess about how slow node starts (#477: 300 ms was not enough
+  // on a loaded machine, SIGTERM arrived first and killed the child).
+  const markerDir = mkdtempSync(join(tmpdir(), "assert-clean-sigterm-"));
+  after(() => rmSync(markerDir, { recursive: true, force: true }));
+  let markers = 0;
+  const ignoresSigterm = (startDelayMs = 0) => {
+    const marker = join(markerDir, `ready-${markers++}`);
+    const code = `setTimeout(() => { process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(process.argv[1], 'ready'); }, ${startDelayMs}); setInterval(() => {}, 1000)`;
+    return { marker, command: [process.execPath, "-e", code, marker] };
+  };
+  /** Waits (at most `ms`) for the child's marker; a child that never says it is ready is a SETUP failure, named as one. */
+  const untilReady = async (marker: string, ms: number) => {
+    const end = Date.now() + ms;
+    while (!existsSync(marker)) {
+      if (Date.now() >= end) assert.fail(`setup failure: the child did not report its SIGTERM handler within ${ms}ms (this says nothing about stopVite)`);
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  };
   const within = <T>(ms: number, what: string, work: Promise<T>) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     return Promise.race([work, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} did not finish in ${ms}ms`)), ms)))]).finally(() => clearTimeout(timer));
@@ -322,13 +342,26 @@ describe("starting and stopping vite preview is bounded", () => {
     assert.deepEqual(await probe(holdHost, port), { state: "closed" });
   });
 
-  it("stopVite: a child that ignores SIGTERM is SIGKILLed after the grace period, reaped, and the release returns in bounds", async () => {
-    const vite = spawnTracked(ignoresSigterm);
-    await new Promise((r) => setTimeout(r, 300)); // the handler must be installed before the signal
+  // A child that is slow to start (a loaded machine) has not installed its handler when it is spawned: wait for its marker.
+  const sigtermCase = async (child: { marker: string; command: string[] }) => {
+    const vite = spawnTracked(child.command);
+    await untilReady(child.marker, 10_000);
     const t0 = Date.now();
     await within(4_000, "stopVite", stopVite(vite, p.all[11]!, { graceMs: 400, reapMs: 2_000, closeMs: 200 }));
     assert.ok(Date.now() - t0 >= 400, "SIGKILL came before the grace period ended: the child was not ignoring SIGTERM");
     assert.deepEqual(vite.ended, { kind: "exit", code: null, signal: "SIGKILL" });
+    assert.ok(!groupAlive(vite));
+  };
+  it("stopVite: a child that ignores SIGTERM is SIGKILLed after the grace period, reaped, and the release returns in bounds", () => sigtermCase(ignoresSigterm()));
+  it("stopVite: the same child, slow to install its handler (1.5 s), is still SIGKILLed only after the grace period", () => sigtermCase(ignoresSigterm(1_500)));
+  it("setup: a child that never reports its handler fails as a setup failure within the wait, and is reaped", async () => {
+    const vite = spawnTracked(idle); // never writes a marker
+    try {
+      await assert.rejects(untilReady(join(markerDir, "never"), 300), /setup failure: the child did not report its SIGTERM handler within 300ms/);
+    } finally {
+      signalGroup(vite, "SIGKILL");
+      await waitChild(vite, 2_000);
+    }
     assert.ok(!groupAlive(vite));
   });
 
