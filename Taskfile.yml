@@ -349,7 +349,7 @@ tasks:
         cmd: go build -o {{.BIN_DIR}}/{{.ITEM}} ./apps/{{.ITEM}}
 
   helm-check:
-    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers, kind/negative-test.sh and kind/diag-test.sh the kind scripts against fake kubectl/helm (diag-test D7: a real Postgres in docker/podman)'
+    desc: 'lint + render + schema-check deployments/helm/x-monorepo under every ci/ profile, then deployments/helm/check.py asserts the derived shutdown / hook / prune numbers, kind/negative-test.sh the kind scripts against fake kubectl/helm'
     vars:
       CHART: deployments/helm/x-monorepo
       KUBECONFORM:
@@ -367,13 +367,9 @@ tasks:
       - scripts/check-script-modes.sh
       # negative.sh's reading of the refusal, against fake kubectl/helm (no cluster): retries, never asserts on a tool error
       - deployments/helm/kind/negative-test.sh
-      # what a failed kind run leaves behind (#416): diag.sh (whole pod logs since the start, Postgres sessions and locks) against fake kubectl/helm/curl, the kind Postgres' lock-wait logging
-      - deployments/helm/kind/diag-test.sh
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
-      - sh: command -v docker >/dev/null || command -v podman >/dev/null
-        msg: needs docker or podman (kind/diag-test.sh D7 runs a real Postgres)
 
   helm-kind-cluster:
     desc: 'the first step of helm-kind-up, on its own (#437): the kind cluster CLUSTER (created if it does not exist; kind writes the kubeconfig below, never ~/.kube/config), the kubeconfig bin/kind/kubeconfig-<CLUSTER> from `kind get kubeconfig --name`, and the namespace NS created through it. Everything after it uses only that kubeconfig, so nothing the caller has in KUBECONFIG or a context named kind-<CLUSTER> can aim a write at another cluster;'

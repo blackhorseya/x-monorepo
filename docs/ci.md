@@ -31,7 +31,7 @@
 
 ## best-effort.sh（#462）
 
-**`best_effort`**（`scripts/best-effort.sh`，`. scripts/best-effort.sh` 後使用；kind 腳本是 `. "$(dirname "$0")/../../../scripts/best-effort.sh"`）：`best_effort <指令…>` 跑指令，失敗時往 stderr 印 `best-effort command failed (exit N): <指令>` 並回 0——失敗從靜默變成可見。**只給三類**：診斷（失敗報告時多印的 `kubectl get pods`、`diag.sh`）、清理（只限**回收**：wait 已被 kill 的 pid、刪 tmp 檔；後面另有地方判定結果）、wait-gone（`kubectl wait --for=delete`：對象已不在就是想要的狀態）。要讀輸出或看狀態的呼叫（poll、查找、取值）一律 `rc=0; cmd || rc=$?` 加明確分支（印出哪個呼叫失敗、怎麼處理），不准用 `best_effort`。**還原不是 best effort**：腳本承諾離開時恢復的狀態（helm values、replicas、secret、scale）一律用 `restore_step <指令…>`（失敗印 `restore failed (exit N): …`、記下第一個失敗碼、繼續跑後面的還原）加 EXIT trap 裡的 `restore_exit "$rc"`：進來時 rc 為 0 而還原失敗就以還原的失敗碼離開；進來時 rc 已非零就保留原 rc 並印 `restore also failed`。使用者：`outage.sh`、`negative.sh`。
+**`best_effort`**（`scripts/best-effort.sh`，`. scripts/best-effort.sh` 後使用；kind 腳本是 `. "$(dirname "$0")/../../../scripts/best-effort.sh"`）：`best_effort <指令…>` 跑指令，失敗時往 stderr 印 `best-effort command failed (exit N): <指令>` 並回 0——失敗從靜默變成可見。**只給三類**：診斷（失敗報告時多印的 `kubectl get pods`）、清理（只限**回收**：wait 已被 kill 的 pid、刪 tmp 檔；後面另有地方判定結果）、wait-gone（`kubectl wait --for=delete`：對象已不在就是想要的狀態）。要讀輸出或看狀態的呼叫（poll、查找、取值）一律 `rc=0; cmd || rc=$?` 加明確分支（印出哪個呼叫失敗、怎麼處理），不准用 `best_effort`。**還原不是 best effort**：腳本承諾離開時恢復的狀態（helm values、replicas、secret、scale）一律用 `restore_step <指令…>`（失敗印 `restore failed (exit N): …`、記下第一個失敗碼、繼續跑後面的還原）加 EXIT trap 裡的 `restore_exit "$rc"`：進來時 rc 為 0 而還原失敗就以還原的失敗碼離開；進來時 rc 已非零就保留原 rc 並印 `restore also failed`。使用者：`outage.sh`、`negative.sh`。
 
 ## console-e2e 的平行度與 sharding（#447）
 
