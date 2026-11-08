@@ -185,10 +185,11 @@ describe("an answer is asked once", () => {
         await withObserver(name, async ({ result }) => {
           await settle();
           assert.equal(total(), 1, "the first request was sent");
-          assert.notEqual(result().status, "pending", "and it settled (an answer is shown at once)");
           mock.timers.tick(MAX_RETRY_DELAY_MS * 4);
           await settle();
           assert.equal(total(), 1, "no second request after the whole backoff");
+          // Not "error": adminProbeQuery turns PermissionDenied into the answer `false` (success), either way settled.
+          assert.notEqual(result().status, "pending", "and it settled (an answer is shown at once)");
         });
       });
     }

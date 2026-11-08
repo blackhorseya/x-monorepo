@@ -1,9 +1,10 @@
 // Resolve hook for the console's node tests. Three jobs, nothing else:
 //  1. vite-style extensionless relative imports ("./transient", and the generated "@repo/proto" files'
 //     "../../common/v1/money_pb") get the .ts / .tsx they stand for;
-//  2. TypeScript is transformed by vite's own transformWithOxc (the console's build tool, so no new
-//     dependency and the same TS the build sees). Stripping alone is not enough: `enum` is not erasable
-//     and the generated @repo/proto files are full of them; node's transform mode varies by version;
+//  2. the generated @repo/proto files are transformed by vite's own transformWithOxc (the console's build
+//     tool, so no new dependency). Node's strip-only mode cannot load them: `enum` is not erasable and they
+//     are full of them, and node's own transform mode varies by version. Every other .ts is left to node's
+//     native type stripping, which keeps line numbers, so a failing assertion points at the real source line;
 //  3. src/client.ts (createConnectTransport, window.location, the OIDC session) is swapped for
 //     src/testing/client.stub.ts, so the real queryFn of every query runs against a scripted server.
 import { existsSync, readFileSync } from "node:fs";
@@ -26,7 +27,7 @@ export async function resolve(specifier, context, nextResolve) {
 }
 
 export async function load(url, context, nextLoad) {
-  if (!/\.tsx?$/.test(url) || !url.startsWith("file:")) return nextLoad(url, context);
+  if (!url.startsWith("file:") || !url.includes("/packages/proto/src/gen/")) return nextLoad(url, context);
   const { transformWithOxc } = await import("vite");
   const path = fileURLToPath(url);
   const out = await transformWithOxc(readFileSync(path, "utf8"), path, { sourcemap: false });
