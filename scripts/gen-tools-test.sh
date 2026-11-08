@@ -55,9 +55,21 @@ trap 'exit 143' TERM
 for t in $ALL_TOOLS; do
   [ -x "$TOOLS_SRC/$t" ] || { echo "gen-tools-test: $TOOLS_SRC/$t is missing or not executable: run \`task tools\` (or set GEN_TOOLS_BIN)" >&2; exit 1; }
 done
-task_bin=$(command -v task) || { echo "gen-tools-test: task is not on PATH" >&2; exit 1; }
-go_bin=$(command -v go) || { echo "gen-tools-test: go is not on PATH" >&2; exit 1; }
-jq_bin=$(command -v jq) || { echo "gen-tools-test: jq is not on PATH" >&2; exit 1; }
+EXE=
+find_exe() { # <name>: EXE = the first executable file of that name on PATH (parameter expansion and tests only, no $(…))
+  local d IFS=:
+  EXE=
+  for d in $PATH; do
+    if [ -f "$d/$1" ] && [ -x "$d/$1" ]; then EXE=$d/$1; return 0; fi
+  done
+  return 1
+}
+find_exe task || { echo "gen-tools-test: task is not on PATH" >&2; exit 1; }
+task_bin=$EXE
+find_exe go || { echo "gen-tools-test: go is not on PATH" >&2; exit 1; }
+go_bin=$EXE
+find_exe jq || { echo "gen-tools-test: jq is not on PATH" >&2; exit 1; }
+jq_bin=$EXE
 # The PATH of every run: task, go and jq (the Taskfile's MODULES variable needs the last two) and the system directories.
 # Neither buf nor wire may be on it: the Taskfile falls back to a PATH copy of them, and a "missing" tool must really be missing.
 mkdir -p "$tmp/path" || exit 1
