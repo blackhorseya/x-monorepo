@@ -30,10 +30,6 @@ else
   # No merge base (a shallow clone) makes the three-dot diff fail. That used to read as "nothing changed on the branch" (|| true)
   # and shrink the test matrix; now it means "cannot tell", and every module is affected (#462).
   capture committed committed_rc git diff --no-renames --name-only "$BASE"...HEAD 2>/dev/null || exit 1
-  if [ "$committed_rc" != 0 ]; then
-    echo "affected: git diff $BASE...HEAD failed — treating every module as affected" >&2
-    echo "$ALL"; exit 0
-  fi
   # one assignment each: a failing git stops the script here, it is not a shorter list
   worktree=$(git diff --no-renames --name-only HEAD) || exit $?
   untracked=$(git ls-files --others --exclude-standard) || exit $?
