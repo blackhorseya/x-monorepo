@@ -217,7 +217,7 @@ add_cells() { # <entry> <tools…>
   local entry=$1 t red
   shift
   for t in "$@"; do
-    red=hash
+    red="hash"
     case $entry in gen-openapi | wire) red=msg ;; esac
     if [ "$t" = buf ]; then red=msg; fi
     cells+=("$entry $t missing $red")

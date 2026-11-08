@@ -72,8 +72,10 @@ console 每個頁面（`src/routes/*`）是 `router.tsx` 裡 `lazyRouteComponent
 shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` import 要確認是 `@/lib/utils`。
 
 **新 clone / 新 worktree 第一件事**：`task tools`。`./bin` 是 gitignored，而 `task gen`（也被 `gate-local` 間接呼叫）會**先刪掉**
-所有 `*.pb.go` / `*.connect.go` 再呼叫 `bin/protoc-gen-*`；工具不在時會留下一個生成檔全被刪掉的 tree。
-遇到了就 `git checkout -- pkgs` 還原，**不要**用 `git commit -a` 把刪除一起 commit 進去。
+所有 `*.pb.go` / `*.connect.go` 再呼叫 `bin/protoc-gen-*`。所以 `gen`、`gen-openapi`、`wire`、`check-gen-fresh`、`check-gen-fresh-all`
+的第一個動作是 `tools-check`（internal task）：它要用的工具有任何一個不存在或不可執行，就以 exit 1 結束並提示 `task tools`，
+在那之前不刪、不寫任何檔（不會自動安裝：gate 不靠網路）。`scripts/gen-tools-test.sh`（CI gen-freshness job 的一個 step）從真入口驗這件事。
+萬一仍遇到生成檔被刪光的 tree（例如工具跑到一半失敗），就 `git checkout -- pkgs` 還原，**不要**用 `git commit -a` 把刪除一起 commit 進去。
 生成物（pb.go、connect.go、`wire_gen.go`、`contract/v1/openapi.yaml`）全部有 commit，gen-freshness 靠 `git diff` 比對它們。
 
 ## Hook harness（會擋你的東西）
