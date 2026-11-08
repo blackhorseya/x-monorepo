@@ -28,7 +28,7 @@ describe("image-specs gate", () => {
     assert.ok(p.some((x) => x.startsWith("products.spec.ts: in both")), p.join("\n"));
   });
   it("one more spec marked for the image (a preview-only one moved over) is red", () => {
-    const moved = "history.spec.ts";
+    const moved = previewOnlySpecs[0];
     const p = checkSpecClasses(
       { chromium: all, image: [...imageSpecs, moved] },
       { image: [...imageSpecs, moved], previewOnly: previewOnlySpecs.filter((f) => f !== moved) },
