@@ -9,7 +9,7 @@
 # printed something and then died into a green gate. Only grep's exit 1 ("no match") is an answer; anything else aborts with 2
 # (or grep/git's own code is passed on when it is not 0/1).
 #
-#   scripts/check-script-modes.sh      # task check-script-modes; helm-check, and CI's scripts-test job (scripts/test.sh)
+#   scripts/check-script-modes.sh      # task check-script-modes; helm-check
 set -euo pipefail
 die() { echo "check-script-modes: $*" >&2; exit 2; }
 _lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)

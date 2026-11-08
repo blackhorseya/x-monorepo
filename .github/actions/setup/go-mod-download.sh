@@ -5,8 +5,8 @@
 #
 # Only the download is retried, as a whole: a failure of any kind is retried, and after the last
 # attempt the script exits with that attempt's own exit code. The log carries a fixed message and
-# the exit code, never the text go printed (it comes from the module proxy). Overrides, used by
-# scripts/test.sh: GO_MOD_DOWNLOAD_ATTEMPTS (default 3), GO_MOD_DOWNLOAD_SLEEP, the wait unit
+# the exit code, never the text go printed (it comes from the module proxy). Overrides:
+# GO_MOD_DOWNLOAD_ATTEMPTS (default 3), GO_MOD_DOWNLOAD_SLEEP, the wait unit
 # between attempts (1x, 2x, ...; default 2 seconds).
 #
 # Why: a cold module cache made `test (apps/migrate)` fail before any test ran, on an HTTP/2

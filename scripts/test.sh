@@ -460,7 +460,7 @@ fi
 # affected.sh: the three-dot diff failing (no merge base in a shallow clone) must
 # not shrink the test matrix: every module runs.
 affected_fixture adie
-git -C "$repo" checkout -q -b change; touch_file pkgs/a/x.go; commit "chore: adie"
+git -C "$repo" checkout -q -b change; touch_file pkgs/b/x.go; commit "chore: adie"
 # the real git prints the list and THEN dies: that answer is not trusted, every module runs
 w="$tmp/inj-aff-3dot"; mkdir -p "$w"
 real_git=$(type -P git) || exit 1

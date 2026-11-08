@@ -6,7 +6,7 @@
 #
 # Every `--list` must exit 0 and its own "Total: K tests" line must equal the test lines it printed: a list that died
 # half way (non-zero exit, or a truncated output) is a failure, never a smaller suite that still "matches".
-# Exit: 0 shards = suite, 1 they differ or a list failed, 2 usage. Test: scripts/test.sh (a stub pnpm with faults).
+# Exit: 0 shards = suite, 1 they differ or a list failed, 2 usage.
 set -euo pipefail
 # Every external command is checked. `set -e` does not see a failure inside `$(...)` of a `for` word list, nor one
 # swallowed by `|| true`; grep's exit 1 (no match) is the only non-zero this script accepts, and then only where said.

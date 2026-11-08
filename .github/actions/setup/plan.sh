@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The one place that decides who may WRITE a cache and which Go build cache a job uses (#450).
 # Called by .github/actions/setup and .github/actions/playwright; every cache step reads its
-# outputs, none repeats the condition. scripts/test.sh runs it against a table of triggers and
-# of ci.yml's own job names.
+# outputs, none repeats the condition. scripts/test.sh pins that the low-trust triggers
+# (pull_request, pull_request_target, workflow_run, schedule, issue_comment) never write.
 #
 #   EVENT_NAME=push REF=refs/heads/main DEFAULT_BRANCH=main SCOPE=lint .github/actions/setup/plan.sh
 #
@@ -27,8 +27,7 @@ if [[ -n $default && $ref == "refs/heads/$default" && ( $event == push || $event
 fi
 
 # scope -> group, and whether this scope is the group's designated saver. A scope that is not
-# listed gets no build cache at all (it can never grow a new entry by accident); scripts/test.sh
-# fails when a job in ci.yml that calls the setup action is missing here.
+# listed gets no build cache at all (it can never grow a new entry by accident).
 group="" saver=false
 case $scope in
   test-apps/rpc)                                          group=race  saver=true ;;

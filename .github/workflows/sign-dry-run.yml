@@ -15,7 +15,7 @@
 # and next-version.sh is unaffected. The certificate's identity is THIS workflow at the ref that ran
 # it (not release.yml@main, which docs/release.md's Verify block uses for the real release), so
 # the identity below comes from github.workflow_ref. The Rekor 409 path stays covered by the
-# fixtures (scripts/test.sh, cosign-v2-conflict-smoke.sh); no conflict is provoked against the real log.
+# fixtures (cosign-v2-conflict-smoke.sh; scripts/test.sh only keeps the empty and stale bundle cases); no conflict is provoked against the real log.
 name: sign-dry-run
 
 on:

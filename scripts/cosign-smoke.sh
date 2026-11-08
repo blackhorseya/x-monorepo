@@ -14,7 +14,7 @@
 # bundle still verifies. Hits the public Rekor, like the first case.
 #
 # The signs entry's cmd is scripts/cosign-sign-blob.sh (#215, bounded re-sign on a Rekor 409), so
-# both cases also run through that wrapper; its own retry cases are in scripts/test.sh.
+# both cases also run through that wrapper.
 set -euo pipefail
 self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
 cd "$self_dir/.." || exit 1
