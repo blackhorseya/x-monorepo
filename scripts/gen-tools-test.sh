@@ -67,7 +67,7 @@ if [ -n "${GEN_TOOLS_SELFTEST:-}" ]; then
   exit 0
 fi
 
-for t in $ALL_TOOLS; do
+for t in $ALL_TOOLS golangci-lint; do
   [ -x "$TOOLS_SRC/$t" ] || { echo "gen-tools-test: $TOOLS_SRC/$t is missing or not executable: run \`task tools\` (or set GEN_TOOLS_BIN)" >&2; exit 1; }
 done
 EXE=
@@ -222,7 +222,10 @@ positive() { # <entry> <taskfile>: returns 0 when the entry behaved, 1 (POS_WHY 
   local entry=$1 tf=$2 rc
   POS_WHY=
   make_fixture "$tf" none || { POS_WHY="cannot build the fixture"; return 1; }
-  if [ "$entry" = lint ]; then add_mini_module "$FX" || { POS_WHY="cannot add the mini module"; return 1; }; fi
+  if [ "$entry" = lint ]; then
+    add_mini_module "$FX" || { POS_WHY="cannot add the mini module"; return 1; }
+    ln -s "$TOOLS_SRC/golangci-lint" "$FX/bin/golangci-lint" || { POS_WHY="cannot link golangci-lint"; return 1; }
+  fi
   snapshot "$FX" "$tmp/before" || { POS_WHY="cannot hash"; return 1; }
   if [ ! -s "$tmp/before" ]; then POS_WHY="empty before-snapshot"; return 1; fi
   run_bounded 240 "$tmp/out" env PATH="$RUN_PATH" task -d "$FX" "$entry"
@@ -235,8 +238,8 @@ positive() { # <entry> <taskfile>: returns 0 when the entry behaved, 1 (POS_WHY 
     # wire's own error (the fixture has no apps/), not Task's echo of the command line, which names the path whether or not it runs
     if ! grep -q '^wire: ' "$tmp/out"; then POS_WHY="wire itself did not run"; return 1; fi
   elif [ "$entry" = breaking ]; then
-    # buf itself ran and failed on its own (the fixture is no git repository): `Failure: …` is buf's, not Task's
-    if ! grep -q '^Failure: ' "$tmp/out"; then POS_WHY="buf itself did not run"; return 1; fi
+    # buf itself ran and failed on its own (the fixture is no git repository, so its clone of .git fails): that message is buf's, not Task's
+    if ! grep -q 'git repository' "$tmp/out"; then POS_WHY="buf itself did not run"; return 1; fi
   elif [ "$entry" = lint ]; then
     # buf lint, then go vet and golangci-lint on the one module of the mini go.work
     if [ "$rc" != 0 ] || ! grep -q '^0 issues\.' "$tmp/out"; then POS_WHY="lint did not finish with golangci-lint's 0 issues (exit $rc)"; return 1; fi
