@@ -109,7 +109,8 @@ apps/worker      事件 consumer：每個 BC 的 Subscriptions 掛同一個 Wate
                  worker.broker=redis 時自己當 forwarder 把 outbox 表轉進 Redis Streams 再讀（outbox 仍是寫入路徑）；
                  `worker poison list|show|requeue|drop` 操作各 BC 的 poison 表（requeue = 重新 insert 回原 topic 的 outbox 表）；
                  `worker prune --older-than <d>` 是 outbox / inbox 的 retention（poison 表不清）；`worker bootstrap` 是 identity 的第一個 account + key（adapters/cli，獨立的 wire injector；identity 沒 event 所以不在 router 裡）；
-                 有 DB 時 `eventbus.Lag` 另報每張 outbox 表 / inbox 的大小與最老一列年齡（`eventbus_outbox_*` / `eventbus_inbox_*`），alert 用它抓 prune 沒跑與 stale groupapps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
+                 有 DB 時 `eventbus.Lag` 另報每張 outbox 表 / inbox 的大小與最老一列年齡（`eventbus_outbox_*` / `eventbus_inbox_*`），alert 用它抓 prune 沒跑與 stale group
+apps/migrate     收集各 BC 的 Migration()，唯一能 import infra 的 app
 deployments/helm Helm chart：rpc / catalog-rpc / worker Deployment、migrate pre-install/pre-upgrade hook Job、prune CronJob、console（nginx，/api proxy 到 rpc Service，`console.enabled` 預設 off）、
                  選配 rpc ServiceMonitor 與 ingress-only NetworkPolicy（rpc 永遠放行 console；`ingressFrom` 空 = 任何來源）；terminationGracePeriodSeconds
                  從 rpc.shutdown / worker 的 drain 算出來（改 shutdown 行為要一起改 values 註解與 check.py）；CI 的 helm-kind job 在 kind 真裝 + smoke
