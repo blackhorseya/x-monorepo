@@ -148,7 +148,7 @@ tasks:
       - scripts/test.sh
 
   merge-ready:
-    desc: 'before merging: is the PR green on main-as-of-now + its head? (task merge-ready -- 188 [--revalidate]; scripts/merge-ready.sh)'
+    desc: 'before merging: is the PR green on main-as-of-now + its head? (task merge-ready -- 188; scripts/merge-ready.sh)'
     cmds:
       - scripts/merge-ready.sh {{.CLI_ARGS}}
 
