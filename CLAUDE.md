@@ -78,7 +78,7 @@ shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` im
 萬一仍遇到生成檔被刪光的 tree（例如工具跑到一半失敗），就 `git checkout -- pkgs` 還原，**不要**用 `git commit -a` 把刪除一起 commit 進去。
 生成物（pb.go、connect.go、`wire_gen.go`、`contract/v1/openapi.yaml`）全部有 commit，gen-freshness 靠 `git diff` 比對它們。
 **repo／worktree 路徑的限制**：只有 codegen（`gen`、`gen-openapi`、`wire`、`check-gen-fresh(-all)`）、`lint`、`breaking` 這幾個入口經 `scripts/gen-tools-test.sh` 驗證過，路徑含空白或 `"`、`'`、`$`、反引號時仍找得到工具（#505、#508）。
-其他 task（`build`、kind／helm、`run` 類等）在路徑含空白或 shell 特殊字元時都沒有保證，例如含空白或 `"` 時 `task build` 會失敗（#509）。建議把 repo 放在不含空白與特殊字元的路徑下。
+其他 task（`build`、kind／helm、`run` 類等）在路徑含空白或 shell 特殊字元時都沒有保證，例如含空白或 `"` 時 `task build` 會失敗（#509）。建議 repo／worktree 路徑只用 `[A-Za-z0-9._/-]`。
 
 ## Hook harness（會擋你的東西）
 
