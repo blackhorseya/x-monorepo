@@ -175,7 +175,7 @@ CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/plat
 ## Deploy（Helm）
 
 
-### Upgrade notes — chart 0.3.70：移除 ordering、inventory、payment（#518 切片 1）
+### Upgrade notes — chart 0.3.71：移除 ordering、inventory、payment（#518 切片 1）
 
 這一版把 ordering、inventory、payment 三個 bounded context 從 repo 移除（程式、proto、Helm、console、k6、CI 與文件）。**不寫 DROP migration**，所以升級本身不會動到既有資料；要注意的是下面幾件事。
 
