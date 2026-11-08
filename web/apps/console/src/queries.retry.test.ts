@@ -17,7 +17,7 @@ import { OK, server } from "./testing/client.stub.ts";
 //
 // What the retry policy does to each query AFTER react-query merged queryClient.ts's defaults with the
 // query's own options. transient.test.ts proves the classifier; this proves nobody overrode it (#483 review:
-// `retry: false` on whoAmIQuery and `retry: 3` on adminProbeQuery passed every test that looked at the
+// `retry: false` on one query and `retry: 3` on adminProbeQuery passed every test that looked at the
 // classifier alone). The real QueryClient defaults (queryClient.getDefaultOptions(), not a copy), the real
 // options exported by queries.ts and their real queryFn run; only the network (src/testing/client.stub.ts,
 // global fetch for /api/version) is scripted, and the clock is mocked, so the 500 ms backoff costs nothing.

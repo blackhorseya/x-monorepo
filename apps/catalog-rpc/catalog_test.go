@@ -271,14 +271,14 @@ func TestCatalog_Probes(t *testing.T) {
 		t.Fatalf("version = %d %q", code, body)
 	}
 
-	// no other BC is mounted: ordering's procedure path is not served
-	res, err := http.Post(env.url+"/ordering.v1.OrderService/GetOrder", "application/json", strings.NewReader("{}"))
+	// no other BC is mounted: identity's procedure path is not served
+	res, err := http.Post(env.url+"/identity.v1.IdentityService/WhoAmI", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = res.Body.Close()
 	if res.StatusCode != http.StatusNotFound {
-		t.Fatalf("ordering procedure = %d, want 404 (catalog is the only BC here)", res.StatusCode)
+		t.Fatalf("identity procedure = %d, want 404 (catalog is the only BC here)", res.StatusCode)
 	}
 }
 

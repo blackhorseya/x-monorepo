@@ -1,6 +1,6 @@
 // Package client is the catalog service seen from another process: a Connect client that
-// implements catalogv1connect.CatalogServiceHandler, so the BCs that ask the catalog (ordering's
-// pricing, inventory's product check) and apps/rpc's forwarding of catalog.v1 keep one interface
+// implements catalogv1connect.CatalogServiceHandler, so the BCs that ask the catalog
+// and apps/rpc's forwarding of catalog.v1 keep one interface
 // whether the catalog runs in the same process or behind catalog-rpc.
 //
 // Two rules live here and nowhere else:

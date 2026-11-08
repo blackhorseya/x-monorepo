@@ -1,7 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 
 // The one place that decides whether a failed read is worth asking again. Every query uses it
-// (queryClient.ts sets it as the default, refreshFirstPage consults it); no query carries its own `retry`.
+// (queryClient.ts sets it as the default); no query carries its own `retry`.
 //
 // Transient = the request may well succeed unchanged a moment later:
 //   Unavailable        the server (or a proxy in front of it: 502/503/504/429 map here) is not answering

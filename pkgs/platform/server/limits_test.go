@@ -42,7 +42,7 @@ func TestTimeoutInterceptor(t *testing.T) {
 	// through ToConnectError (Internal): the client still learns it was a timeout.
 	slow := in(func(c context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 		<-c.Done()
-		return nil, server.ToConnectError(fmt.Errorf("query orders: %w", c.Err()))
+		return nil, server.ToConnectError(fmt.Errorf("query accounts: %w", c.Err()))
 	})
 	_, err := slow(context.Background(), connect.NewRequest(&struct{}{}))
 	if code, ec, _ := errorCode(err); code != connect.CodeDeadlineExceeded || ec != server.TimeoutCode {

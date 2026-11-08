@@ -56,7 +56,7 @@ func parseArgs(args []string) (cliOptions, error) {
 // waitForCatalog is the best-effort wait of an initContainer: it probes the catalog's /api/readyz (no
 // credential: the probe path is open) every `every` until it answers 200 or `budget` is spent, then
 // returns. A catalog that does not come in time is a WARN, not an error: a new rpc pod must start when
-// the catalog is down (rpc's own readyz does not depend on it; CreateOrder answers UNAVAILABLE until the
+// the catalog is down (rpc's own readyz does not depend on it; catalog.v1 calls answer UNAVAILABLE until the
 // catalog is back), so the wait can order a rollout in the normal case and never block one in the bad
 // case. The log names the upstream URL and never the service key.
 func waitForCatalog(c context.Context, cfg config.Catalog, budget, every time.Duration, logger *slog.Logger) error {
@@ -87,7 +87,7 @@ func waitForCatalog(c context.Context, cfg config.Catalog, budget, every time.Du
 		select {
 		case <-c.Done():
 			if errors.Is(c.Err(), context.DeadlineExceeded) {
-				logger.Warn("catalog is not ready, starting anyway: CreateOrder and SetStock answer UNAVAILABLE until it is",
+				logger.Warn("catalog is not ready, starting anyway: catalog.v1 calls answer UNAVAILABLE until it is",
 					"upstream", cfg.Upstream, "waited", budget.String(), "last", last)
 			}
 

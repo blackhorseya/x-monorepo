@@ -71,8 +71,8 @@ func RunRules(t *testing.T, root string, rules ...Rule) {
 	}
 }
 
-// isParamObject reports whether a domain struct is a constructor input (order.Params,
-// order.ReconstituteParams): plain exported fields consumed once by New/Reconstitute,
+// isParamObject reports whether a domain struct is a constructor input (account.Params,
+// account.ReconstituteParams): plain exported fields consumed once by New/Reconstitute,
 // not aggregate state, so the private-field and constructor rules do not apply.
 func isParamObject(name string) bool { return strings.HasSuffix(name, "Params") }
 
