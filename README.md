@@ -14,7 +14,7 @@ git commit -am "chore: rename module path"  # gen-freshness 是跟 HEAD 比，�
 task gate-ci                                # 跟 CI 一樣的檢查，應該全綠
 ```
 
-`ordering` 是示範用的 BC，熟悉結構後可以照「移除一個 BC」那節拆掉。
+目前保留的 BC 是 `identity` 與 `catalog`，兩者都沒有 event。有 event 的完整版（含 ordering、inventory、payment）保存在 https://github.com/blackhorseya/x-monorepo-reference（tree 與 main `87ebfba1` 相同）；移除的經過見 issue #518。
 
 設計的來源與取捨：
 
@@ -34,18 +34,16 @@ task lint test      # depguard 強制分層與 BC 邊界
 task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）；第一次會把 config.example.yaml 複製成 configs/local.yaml（gitignored）
 task catalog-rpc    # 另一個終端、在 task run 之前：:8081 的 catalog 服務，讀自己的 configs/catalog-rpc.yaml（gitignored，從 catalog-rpc.example.yaml 複製；不讀 local.yaml），telemetry 送 otel-lgtm
-task payment-worker # 另一個終端（`ordering.require_payment: true` 時必開）：payment 的事件 consumer（#410），讀同一份 configs/payment-rpc.yaml，沒有它 OrderConfirmed 不會變成付款單
-task payment-rpc    # 另一個終端（選用，目前沒有人呼叫它）：:8082 的 payment 服務，讀自己的 configs/payment-rpc.yaml（gitignored，從 payment-rpc.example.yaml 複製），provider 是 mock
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
 
-# 下單的價格是 catalog 的：先讓 SKU 成為 product（寫入要 admin role；auth 關著就直接打）
+# catalog 的寫入要 admin role（auth 關著就直接打）
 curl -X POST localhost:8080/api/catalog.v1.CatalogService/UpsertProduct \
   -H 'Content-Type: application/json' \
   -d '{"sku":"SKU-1","name":"Sample","price":{"amountMinor":"9000","currency":"USD"}}'
-curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
+curl -X POST localhost:8080/api/catalog.v1.CatalogService/ListProducts \
   -H 'Content-Type: application/json' \
-  -d '{"customerId":"c-1","items":[{"sku":"SKU-1","quantity":2}]}'
+  -d '{}'
 ```
 
 ## Layout
@@ -57,57 +55,47 @@ curl -X POST localhost:8080/api/ordering.v1.OrderService/CreateOrder \
 ├── buf.gen.ts.yaml                # TS 輸出到 web/packages/proto
 ├── protos/
 │   ├── common/v1/money.proto      # 跨 BC 的 wire 型別
-│   ├── ordering/v1/
+│   ├── admin/v1/                  # platform 的 poison / prune 操作面（不屬於任何 BC）
+│   ├── identity/v1/               # account / API key（entity / service，沒有 event）
 │   │   ├── entity.proto           # aggregate 的 state schema（跨語言契約，不是 Go domain model）
-│   │   ├── service.proto          # RPC
-│   │   └── event.proto            # 進出 broker 的訊息
-│   ├── inventory/v1/              # 第二個 BC 的契約（entity / service / event）
-│   ├── identity/v1/               # 第三個 BC：account / API key（entity / service，沒有 event）
-│   └── catalog/v1/                # 第四個 BC：商品價格（entity / service，沒有 event）
+│   │   └── service.proto          # RPC
+│   └── catalog/v1/                # 商品價格（entity / service，沒有 event）
 ├── pkgs/
 │   ├── kernel/                    # shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 │   ├── platform/                  # 技術共用：contextx、config、server（gin）、usecasex、metrics、postgres（gorm + migrate runner）
-│   └── ordering/                  # ── Bounded Context（完整六角形）──
-│       ├── provider.go            # wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorator 包起來
-│       ├── contract/v1/           # buf 生成：pb + Connect + openapi.yaml（只有 adapters / apps 可 import）
-│       ├── domain/order/          # 手寫 aggregate、VO、Repository interface、domain errors
-│       ├── application/
-│       │   ├── dto/               # application 邊界（go-kit endpoint request/response）
-│       │   ├── usecase/           # orchestration（go-kit service）
-│       │   ├── port/              # 需要外界提供的能力
-│       │   └── mapper/            # domain → dto
-│       ├── infra/                 # driven：repository / port 實作
-│       │   ├── memory/            # in-memory repository（APP_POSTGRES_URL 未設時）
-│       │   ├── postgres/          # gorm row model + SQL + 錯誤轉譯；migrations/*.sql 以 embed 隨 BC 走
-│       │   └── system/            # clock / id
-│       └── adapters/              # driving：transport
-│           ├── rpc/               # Connect handler；pb ↔ dto
-│           ├── consumer/          # event handler；呼叫同一個 CancelOrder usecase
-│           └── events/            # outbound：domain event → proto → Watermill publisher
-│   ├── inventory/                 # ── 第二個 BC：同樣結構 ──
-│       ├── domain/stock/          # Stock aggregate（每 SKU 一筆，optimistic version）
-│       ├── domain/reservation/    # Reservation aggregate（每 order 一筆：RESERVED / REJECTED / RELEASED）
-│       └── adapters/consumer/     # 消費 ordering.v1.OrderCreated / OrderCancelled（只 import ordering 的 contract/）
-│   └── identity/                  # ── 第三個 BC：DB 管理的 account + API key，給 auth interceptor 解 X-API-Key（docs/identity.md）──
-│       ├── domain/account/        # Account aggregate（id = principal subject、roles、ACTIVE / DISABLED）
-│       ├── domain/apikey/         # APIKey aggregate（只存 sha256、prefix；ACTIVE / REVOKED、expires_at）
-│       └── adapters/auth/         # 實作 platform 的 server.CredentialResolver（TTL cache），apps/rpc 以 wire.Bind 接上
-│   └── catalog/                   # ── 第四個 BC：商品價格的 server 端來源，沒有 event（docs/catalog.md）──
+│   ├── identity/                  # ── Bounded Context（完整六角形）：DB 管理的 account + API key，給 auth interceptor 解 X-API-Key（docs/identity.md）──
+│   │   ├── provider.go            # wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorator 包起來
+│   │   ├── contract/v1/           # buf 生成：pb + Connect + openapi.yaml（只有 adapters / apps 可 import）
+│   │   ├── domain/                # 手寫 aggregate、VO、Repository interface、domain errors
+│   │   │   ├── account/           # Account aggregate（id = principal subject、roles、ACTIVE / DISABLED）
+│   │   │   ├── apikey/            # APIKey aggregate（只存 sha256、prefix；ACTIVE / REVOKED、expires_at）
+│   │   │   ├── externalidentity/  # 外部 OIDC 的 (iss, sub) 綁定（docs/identity-login.md）
+│   │   │   └── invite/            # 邀請
+│   │   ├── application/
+│   │   │   ├── dto/               # application 邊界（go-kit endpoint request/response）
+│   │   │   ├── usecase/           # orchestration（go-kit service）
+│   │   │   ├── port/              # 需要外界提供的能力
+│   │   │   └── mapper/            # domain → dto
+│   │   ├── infra/                 # driven：repository / port 實作
+│   │   │   ├── memory/            # in-memory repository（APP_POSTGRES_URL 未設時）
+│   │   │   ├── postgres/          # gorm row model + SQL + 錯誤轉譯；migrations/*.sql 以 embed 隨 BC 走
+│   │   │   └── system/            # clock / id
+│   │   └── adapters/              # driving
+│   │       ├── rpc/               # Connect handler；pb ↔ dto
+│   │       ├── auth/              # 實作 platform 的 server.CredentialResolver（TTL cache），apps/rpc 以 wire.Bind 接上
+│   │       └── cli/               # `worker bootstrap` 用的 injector
+│   └── catalog/                   # ── 第二個 BC：商品價格的 server 端來源，沒有 event（docs/catalog.md）──
 │       ├── domain/product/        # Product aggregate（sku、name、price（每個 product 各自的幣別）、active、optimistic version）
-│       └── application/usecase/   # Upsert / Get / List / Deactivate + QuotePrices（批次報價，分得出不存在與已下架；ordering 的 `adapters/pricing` 經 contract 呼叫它）
-│   └── payment/                   # ── 第五個 BC：訂單的單一付款單，經 provider 的 hosted checkout 收款（docs/payment.md；切片 2 沒有 event）──
-│       ├── domain/payment/        # Payment aggregate + 狀態 × 事件全表（每格一個 domain 方法）
-│       └── infra/provider/mock/   # PaymentProvider 的 mock：hosted checkout、簽章 webhook、延遲與故障注入
+│       ├── application/usecase/   # Upsert / Get / List / Deactivate + QuotePrices（批次報價，分得出不存在與已下架）
+│       └── adapters/              # rpc（Connect handler）、client（rpc 以 Connect 問獨立的 catalog-rpc）
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
-├── deployments/helm/x-monorepo/   # Helm chart：rpc / catalog-rpc / worker Deployment、選配的 payment-rpc（serve／expire）與 payment-worker（consume）、migrate hook Job、prune CronJob（task helm-check）
-├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh、payment.sh、payment-flow.sh）
-├── tests/k6/                      # k6：orders（load + thresholds）、ratelimit、timeout、reservation（worker 鏈延遲）；task k6 -- <script>、task k6-smoke、task k6-auth-matrix（各 auth 組合）
+├── deployments/helm/x-monorepo/   # Helm chart：rpc / catalog-rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
+├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
+├── tests/k6/                      # k6：ratelimit、timeout（打 `identity.v1.IdentityService/ListAccounts`）；task k6 -- <script>、task k6-smoke、task k6-auth-matrix（各 auth 組合）、task k6-wire
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
-│   ├── catalog-rpc/               # catalog 的獨立服務（#320）：只掛 catalog 的 rpc；rpc 以 Connect 問它查價與檢查 SKU（`catalog.upstream`）
-│   ├── payment-rpc/               # payment 的獨立服務（#367）：`serve`（`StartPayment`／`GetPayment` 認 service key `rpc`，加 webhook route 認簽章）、`expire`（逾時與補查的 CronJob）；訂閱訂單事件、退款、套用 webhook 的 consumer 是 `payment-worker`（`payment-rpc consume` 自 #410 切片 2 起已移除）
-│   ├── payment-worker/            # payment 的事件 consumer（#410）：`pkgs/payment` 的 Consumer 加 `--require-durable` 檢查，獨立 binary / image（chart 的 `payment-consume` 跑它）；沒有 listener 與 auth
-│   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router
+│   ├── catalog-rpc/               # catalog 的獨立服務（#320）：只掛 catalog 的 rpc；rpc 以 Connect 問它（`catalog.upstream`）
+│   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router（目前沒有 BC 有 consumer，沒有 handler，啟動後只等 signal；`poison` / `prune` / `bootstrap` 子命令照常）
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）
     ├── packages/proto/            # @repo/proto：buf 生成的 connect-es client（有 commit）
@@ -120,7 +108,6 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 
 | 檔 | 內容 |
 |---|---|
-| [`docs/perf-baseline.md`](docs/perf-baseline.md) | 效能 baseline：`task k6-bench` 的重跑方法與 CreateOrder / reservation 的實測數字（不進 CI；乾淨環境用 `k6-bench` workflow_dispatch 取得） |
 | [`docs/ci.md`](docs/ci.md) | gates：hooks / lefthook / CI 各跑什麼、CI 的 job 與依路徑的 gating、相關 scripts |
 | [`docs/release.md`](docs/release.md) | release-drafter + goreleaser 的 release 鏈、release gate、簽名 / attestation 與驗證 |
 | [`docs/operations.md`](docs/operations.md) | Compose 本機環境（Grafana dashboards / alerts）、k6 load test、Helm 部署與 kind 實測 |
@@ -129,8 +116,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
-| [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、儲存、ordering 怎麼用它定價（rpc 經 Connect 問獨立的 catalog-rpc）、舊 client 還送 `unit_price` 會怎樣、Console 的 Products 頁 |
-| [`docs/payment.md`](docs/payment.md) | payment BC **設計稿（#367，切片 1（ordering 契約）、2（付款單 aggregate、`StartPayment`／`GetPayment`、`apps/payment-rpc serve`）、3（saga：payment 側 `consume`／webhook／`expire`／退款，ordering 側訂閱 `PaymentCaptured`／`PaymentExpired`）、4（rpc 入口與 Console Pay 卡片）已實作；image／chart 與切換尚未）**：付款單狀態機與狀態 × 事件全表、事件、訂單 `payment_required` 快照 × 目前開關矩陣、webhook 與 `payment-rpc` 認證入口、切片與保證對照 |
+| [`docs/catalog.md`](docs/catalog.md) | catalog BC：Product 模型、CatalogService（寫入要 admin）、批次報價 `QuotePrices`、rpc 經 Connect 問獨立的 catalog-rpc、儲存、Console 的 Products 頁 |
 | [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`.golangci.yml` depguard 強制）
@@ -180,12 +166,12 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 
 | 層 | 擋什麼 | 位置 |
 |---|---|---|
-| proto | `buf.validate` rule 直接寫在 request message 上（`min_len`、`gt`、`gte`、`pattern`、`required`、`min_items`） | `protos/<bc>/v1/service.proto`、`common/v1/money.proto`、`ordering/v1/entity.proto` |
-| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 先對 `auth.api_keys`（static，break-glass）再問 `server.CredentialResolver`（`pkgs/identity` 的 DB key，見 `docs/identity.md`；resolver 失敗 = 拒絕，不放行；一次查詢受 `auth.resolver_timeout` 限制），否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method, CredentialID}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事（ordering 的 `CreateOrder` / `ListOrders` / `GetOrder` / `GetOrderHistory` / `CancelOrder` / `CompleteOrder` 用它做 ownership：`customer_id` 由 principal 帶，非 `auth.admin_role` 的 caller 只看得到、只下得了自己的單，見 `docs/identity.md`）。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
+| proto | `buf.validate` rule 直接寫在 request message 上（`min_len`、`gt`、`gte`、`pattern`、`required`、`min_items`） | `protos/<bc>/v1/service.proto`、`common/v1/money.proto` |
+| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 先對 `auth.api_keys`（static，break-glass）再問 `server.CredentialResolver`（`pkgs/identity` 的 DB key，見 `docs/identity.md`；resolver 失敗 = 拒絕，不放行；一次查詢受 `auth.resolver_timeout` 限制），否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method, CredentialID}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事（usecase 用 principal 判斷，例如 `auth.admin_role` 的檢查，見 `docs/identity.md`）。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
 | server | `NewRateLimitInterceptor`（`http.rate_limit.rps` > 0 才掛，在 logging 之內、auth 之外——洪水要在付 JWT 簽章驗證成本之前就擋掉）：token bucket，`by: global` 一桶 / `peer` 每個 client IP 一桶（idle 1 分鐘回收）。沒 token → `RESOURCE_EXHAUSTED`、`x-error-code: request.rate_limited`、`Retry-After: <秒>`，不排隊等 | `pkgs/platform/server/limits.go` |
 | server | `NewTimeoutInterceptor`（`http.timeout` > 0 才掛，在 auth 之內、validate 之外）：usecase 拿到會到期的 context，慢 query 被 cancel 而不是吃掉整個 shutdown drain 窗口。到期後失敗的 RPC 一律回 `DEADLINE_EXCEEDED` + `x-error-code: request.timeout`（不管 driver 的 error 被 `ToConnectError` 映成什麼）；到期後仍成功的照常回 response（工作已 commit）。client 的 deadline 較短時一樣適用 | `pkgs/platform/server/limits.go` |
 | server | `NewValidateInterceptor`（最內層 interceptor）：違反 → `INVALID_ARGUMENT`、header `x-error-code: request.validation_failed`、error detail `buf.validate.Violations`（欄位路徑 + rule id + message）；rule 本身編不過 → `INTERNAL` | `pkgs/platform/server/validate.go` |
-| domain | 業務不變量照舊（`NewMoney`、`NewLineItem`…）：consumer path 沒有 interceptor，domain 是唯一防線 | `pkgs/<bc>/domain` |
+| domain | 業務不變量照舊（`NewMoney`…）：consumer path 沒有 interceptor，domain 是唯一防線 | `pkgs/<bc>/domain` |
 
 - 規則故意和 domain 重複：edge 給 client 好讀的錯（哪個欄位、哪條 rule），domain 給所有入口一致的保證。
 - `buf.yaml` 的 `deps` 帶進 `buf.build/bufbuild/protovalidate`（`buf.lock` 有 commit）；`buf.gen.yaml` 用 `managed.disable` 讓它保留自己的 Go package。
@@ -195,41 +181,42 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 ## Pagination：cursor（keyset）+ opaque page token
 
 列表 RPC 走 [AIP-158](https://google.aip.dev/158) 的欄位名（`page_size` / `page_token` / `next_page_token`），不做 offset：
-`OFFSET n` 深頁是線性掃描，且中途插入或刪除會漏／重複；keyset 每頁都是 index range scan。`ListOrders` 是範例：
+`OFFSET n` 深頁是線性掃描，且中途插入或刪除會漏／重複；keyset 每頁都是 index range scan。`ListProducts` 是範例：
 
 | 層 | 負責 | 位置 |
 |---|---|---|
-| domain | 排序鍵固定 `(created_at desc, id desc)`（`id` 只當 tie-breaker；新 ID 是 UUID v7，舊資料仍是 v4，兩者並存且都當不透明字串，不得只靠 `id` 排序、也不保證 ID 單調遞增——跨 pod 的 v7 只有毫秒級順序。ID 不是憑證：v7 前 48 bit 是建立時間，API key secret 由 `SecretGenerator` 另產 256 bit 全隨機值）；`order.Cursor` 是型別，`ListParams` 帶 `Limit` / `After` | `domain/order/cursor.go`、`repository.go` |
+| domain | 排序鍵固定（`ListProducts` 是 SKU 升冪、`ListAccounts` 是 id 升冪），`ListParams` 帶 `Limit` / `After`。新 ID 是 UUID v7，舊資料仍是 v4，兩者並存且都當不透明字串，不得只靠 `id` 排序、也不保證 ID 單調遞增——跨 pod 的 v7 只有毫秒級順序。ID 不是憑證：v7 前 48 bit 是建立時間，API key secret 由 `SecretGenerator` 另產 256 bit 全隨機值 | `pkgs/catalog/domain/product/repository.go` |
 | platform | `pagination.Clamp`（0 → 預設 20、上限 100、負數 → `InvalidArgument`）與 `EncodeToken` / `DecodeToken`（base64url(JSON)，不透明但不是秘密） | `platform/pagination` |
-| usecase | token 在這裡鑄造與驗證（所有 adapter 共用同一契約）；payload **包含當時的 filter**，換了 filter 還帶舊 token → `pagination.invalid_token` | `usecase/list_orders.go` |
-| infra | SQL `WHERE (created_at, id) < (?, ?) ORDER BY created_at DESC, id DESC LIMIT n+1`：多抓一筆判斷有沒有下一頁，不 COUNT；memory 版做一樣的比較 | `infra/postgres/order_repository.go`、migration `0002` 的兩個 composite index |
+| usecase | token 在這裡鑄造與驗證；payload **包含當時的 filter**（SKU prefix），換了 filter 還帶舊 token → `pagination.invalid_token` | `usecase/list_products.go` |
+| infra | SQL `WHERE sku > ? ORDER BY sku ASC LIMIT n+1`：多抓一筆判斷有沒有下一頁，不 COUNT；memory 版做一樣的比較 | `infra/postgres/product_repository.go` |
 
 - `total_size` 不回：大表 COUNT 是另一筆成本，要時再加 optional 欄位不算 breaking。
-- 篩選的「空值」語意：`customer_id` 空字串、`status = UNSPECIFIED` 代表不篩（auth 開著時，非 admin 的 principal 空字串 = 自己的訂單，指定別人 → `PERMISSION_DENIED`，見 `docs/identity.md` 的 Ordering ownership）；但 server 不認識的 enum 值不會塌成「不篩」，
-  而是 `order.invalid_status_filter`（列表 API 寬鬆化等於擴大資料暴露面）。
+- 篩選的「空值」語意：`sku_prefix` 空字串代表不篩。
 - 不開放 `order_by`：動態排序會讓 cursor 與 index 都要跟著變，有需求再加。
 
 ## Events：domain event → transactional outbox（Watermill）→ worker
+
+**目前狀態**：這套機制（platform 的 outbox / inbox / poison / eventbus、`worker poison|prune|bootstrap`、console 的 Poison / Prune 頁）都還在，但現在沒有任何 BC 發 event 或有 consumer：`worker` 沒有 handler，啟動後只等 signal；poison 服務的 schema 清單是空的。下面以 `<bc>` 表示「有 event 的 BC」；有 event 的完整範例保存在 reference repo（見上方）。
 
 x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-effort publish」掉一次就是永久掉。這裡的做法：
 
 | 層 | 做什麼 | 位置 |
 |---|---|---|
 | kernel | `kernel.Event`（`AggregateID()`、`OccurredAt()`）是所有 BC 事件的 base interface | `pkgs/kernel/event.go` |
-| domain | aggregate 在行為裡 `record()`（`New` → `Created`、`Cancel` → `Cancelled`），`PullEvents()` 取出並清空；`order.Event` embed `kernel.Event`，實作共用 embedded `base` struct | `domain/order/events.go` |
-| application | usecase 只依序呼叫 `repo.Save` 與 `port.EventPublisher.Publish`；`provider.go` 的 `decorateTx()` 用 `usecasex.Transactional` 把整個 usecase 包進 `port.Transactor.Do`，兩者同一個交易（`CreateOrder` 是 #320 的窄例外：先查價，再自己用 `port.Transactor` 只包 `Save` + `Publish`，見 `decorateNoTx()`） | `provider.go`、`usecase/cancel_order.go` |
-| adapters/events | domain event → `ordering.v1.OrderCreated` / `OrderCancelled` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
+| domain | aggregate 在行為裡 `record()`，`PullEvents()` 取出並清空；BC 的 `Event` embed `kernel.Event`，實作共用 embedded `base` struct | `domain/<aggregate>/events.go` |
+| application | usecase 只依序呼叫 `repo.Save` 與 `port.EventPublisher.Publish`；`provider.go` 的 `decorateTx()` 用 `usecasex.Transactional` 把整個 usecase 包進 `port.Transactor.Do`，兩者同一個交易 | `provider.go` |
+| adapters/events | domain event → `<bc>.v1.<Event>` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
 | platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → 把帶 topic / message_id / trace_id 的 logger 放進 context，usecase log 才會進 Loki）+ `Register`（每個 BC：PoisonQueue → Retry → drop → access → timeout：每則訊息一行 Info `message`，對應 rpc 的 `rpc` access log；`worker.handler_timeout` 給每次 attempt 一個 deadline）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
 | infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
 | apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工。`worker poison …`（`task poison -- …`）是 poison 表的操作面、`worker prune`（`task prune -- …`）是 outbox / inbox 的 retention | `apps/worker`；`worker bootstrap`（`task bootstrap`）是 identity 的第一個 account + API key（空 store 才建，secret 印一次；identity 沒 event，只掛這個 injector，不進 router） |
 
-- Topic → table：`ordering.v1.OrderCreated` → `ordering.events_v1_ordercreated`（+ `_offsets`），第一段就是 BC，**DDL 由該 BC 的 migration 出**（`0003_events`），
+- Topic → table：`<bc>.v1.<Event>` → `<bc>.events_v1_<event>`（+ `_offsets`），第一段就是 BC，**DDL 由該 BC 的 migration 出**，
   service 不在啟動時建表；`InitializeSchema` 關閉。新 topic = 新 migration。
-- 語意：at-least-once。handler 回 `eventbus.ErrDrop`（壞 payload、domain 說不行 → 例如重送的取消要求碰到 `ErrCannotCancel`）= ack 不重試也不進 poison；
-  其他 error → Retry（3 次、指數退避）→ `ordering.poison` 表（`events_poison`）。
+- 語意：at-least-once。handler 回 `eventbus.ErrDrop`（壞 payload、domain 說不行）= ack 不重試也不進 poison；
+  其他 error → Retry（3 次、指數退避）→ `<bc>.poison` 表（`events_poison`）。
 - 冪等有兩層：**inbox**（`<bc>.inbox` 表，`usecasex.Idempotent` 在 `decorateTx` 的 transaction 之內把 message id 記進去，重送（broker at-least-once、
   `poison requeue`、ack 遺失）在載入任何 aggregate 之前就以 `message.duplicate` drop；失敗的 attempt 連記錄一起 rollback，retry 會重記）
-  加上 domain 狀態機（同一筆 order 的第二個 `OrderCreated` → `reservation.duplicate`）。
+  加上 domain 狀態機（重送的事件碰到已經轉移過的 aggregate，由 domain 擋下）。
   沒 DB（in-memory）時沒有 inbox：GoChannel 本來就 at most once。
 - **Retention**：outbox 表與 inbox 表都只會長，`task prune -- --older-than 720h [--dry-run] [--unconsumed] [<bc>]`（`worker prune`）刪掉
   (1) 比 `--older-than` 老、且**每個**有 cursor 的 consumer group 都 ack 過的 outbox 列（判斷式就是 lag gauge / subscriber「還沒讀」的反面；
@@ -240,18 +227,11 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   poison 表不在此列（`poison drop` 才是）；redis stream 的修剪是 Redis 端的 XTRIM 政策。先 `--dry-run` 看數字再跑。
   同一件事也有 RPC：`AdminService.Prune`（`older_than` / `dry_run` / `unconsumed` / `forget_groups` / `batch_size`，回每張表的列數、skipped 原因、
   擋住的 group），console 的 **Prune** 頁就是打它——alert 響了之後不用進 pod：dry run 看 NOTE、填 forget、再跑；
-bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`，Poison 頁的 BC badge 與 alert 說明都連過來），dry run 永遠從開著開始。它跑在 `http.timeout` 底下，
+bc / days / forget 在 URL 上（`/prune?bc=<bc>&forget=<group>.<bc>`，Poison 頁的 BC badge 與 alert 說明都連過來），dry run 永遠從開著開始。它跑在 `http.timeout` 底下，
   所以是 dry-run / forget-group / 例行小量的入口；第一次清大 backlog 用 CLI / CronJob（逾時只是回應掉了，已刪的 batch 都已 commit，重跑無害）。
-- **SKU 格式（inventory 與 catalog 同一條規則）**：1–64 **bytes**。`SetStockRequest.sku` 有 `max_len: 64`（字元）、`stock.New` 再擋 bytes（`stock.invalid_sku`）、`inventory.stocks` 有 `CHECK (octet_length(sku) BETWEEN 1 AND 64)`（migration `0009`）。
-  以前 `SetStock` 能寫入 catalog 永遠不收的 SKU，那筆庫存下不了單（`order.unknown_sku`）。`Reconstitute` 與 `reservation.NewLine` 刻意不檢查：舊資料與舊事件仍能讀、能走 stock missing，不會變 poison；舊資料的防線是 migration。部署前的查詢與失敗處理見 `docs/operations.md`「inventory `0009`」。
-- **`SetStock` 跟著 catalog（#326）**：catalog 是 SKU 的唯一來源，`SetStock` 只替 catalog 裡有的商品記庫存（建立庫存的規則：第一次對一個 product 的 SKU 呼叫就建立，沒有 product 的 SKU 不會被建立）。SKU 沒有 product → `INVALID_ARGUMENT` + `stock.unknown_sku`；catalog 沒答覆 → `UNAVAILABLE` + `catalog.unavailable`（fail closed）；已下架的 product 放行。兩種拒絕都不寫入。檢查是 `pkgs/inventory/provider.go` 組在 `Transactional` 外面的 decorator（`adapters/catalog` 經 catalog 的 `contract/` 呼叫 `GetProduct`），所以檢查時不佔 DB 連線，`SetStock` usecase 沒變。`GetStock` / `ListStocks` 與 reserve / release / commit / expire（含 worker 的 consumer）都不問 catalog，`apps/worker` 也不依賴 catalog。**行為變更**：自動化要先 `UpsertProduct` 再 `SetStock`；升級前沒有 product 的庫存（孤兒庫存）還讀得到、能走 reservation，但要先補 product 才能 `SetStock`，部署前的查詢見 `docs/operations.md`「部署前查孤兒庫存」。
-- **Inventory 寫入要 admin**：`inventory.v1.InventoryService` 的 `SetStock`（覆寫 on-hand）與 `ExpireReservations` auth 開著時要 `auth.admin_role`
-  （非 admin → `PERMISSION_DENIED` + `auth.permission_denied`，沒帶 credential → `UNAUTHENTICATED`；`auth.mode: off` 全開）；`GetStock` / `ListStocks` /
-  reservation 的讀取不檢查 role。console 的 Stock 頁 Set 要用 admin key / JWT。
 - **Catalog 寫入要 admin**：`catalog.v1.CatalogService` 的 `UpsertProduct` 與 `DeactivateProduct`（它們決定客人被收多少錢）同一個 gate；`GetProduct` / `ListProducts` 不檢查 role。
-  console 的 Products 頁是 admin 頁。**ordering 用 catalog 的價格**：`CreateOrder` 只收 sku / quantity，價格在建單時查出來、寫成明細快照（見 `docs/catalog.md`）。
-  **catalog 是獨立 process（#320）**：`apps/rpc` 不載入 catalog，經 `catalog.upstream` 以 service key（`APP_CATALOG_API_KEY`）問 `apps/catalog-rpc`；`catalog.v1` 的對外入口仍是 rpc（Console、ingress、URL 不變）。catalog 沒答覆 → `UNAVAILABLE` + `catalog.unavailable`、沒寫入；同 key 重送不問 catalog；rpc 的 `readyz` 不依賴 catalog（見 `docs/catalog.md`、`docs/operations.md`）。
-  **payment 同樣是獨立 process（#367 切片 4）**：`apps/rpc` 只 import payment 的 `contract/` 與 `adapters/client`（`apps/rpc/payment_split_test.go` 固定），對外服務 `payment.v1.PublicPaymentService`（`StartPayment`／`GetPayment`，request 只有 `order_id`，customer 與 admin 取自驗證過的 credential，不取自 body），經 `payment.upstream` 以 service key（`APP_PAYMENT_API_KEY`）問 `apps/payment-rpc`；**選填**：沒設定時兩個 RPC 回 `payment.unavailable`，`ordering.require_payment: true` 卻沒設定則拒絕啟動；`StartPayment` 在開關關閉或訂單快照 `payment_required = false` 時回 `payment.disabled`，不受開關影響的只有 `GetPayment`（`docs/payment.md` §6「入口」）
+  console 的 Products 頁是 admin 頁（見 `docs/catalog.md`）。
+  **catalog 是獨立 process（#320）**：`apps/rpc` 不載入 catalog，經 `catalog.upstream` 以 service key（`APP_CATALOG_API_KEY`）問 `apps/catalog-rpc`；`catalog.v1` 的對外入口仍是 rpc（Console、ingress、URL 不變）。catalog 沒答覆 → `UNAVAILABLE` + `catalog.unavailable`、沒寫入；rpc 的 `readyz` 不依賴 catalog（見 `docs/catalog.md`、`docs/operations.md`）。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `auth.admin_role`
@@ -276,52 +256,9 @@ bc / days / forget 在 URL 上（`/prune?bc=ordering&forget=test-old.ordering`�
   不想要就設 `worker.start_from: latest`（stream group 在 `NewWorker` 裡先建好再啟動 forwarder，所以「latest」是從啟動那一刻算）。
   換 NATS / Kafka 同一個形狀：`eventbus` 多一組 publisher / subscriber，`NewWorker` 的 switch 多一個 case。
 - 代價：watermill-sql 會把 `lib/pq` 一起連進來（只用它的 error type），實際連線仍走 pgx。
-
-### 跨 BC 的示範：ordering ↔ inventory
-
-```
-CreateOrder ──► ordering.v1.OrderCreated ──► inventory ReserveStock（全有或全無）
-                                              ├─ RESERVED → inventory.v1.StockReserved ──► ordering ConfirmOrder（PENDING → CONFIRMED → ordering.v1.OrderConfirmed；已 CANCELLED → domain error → drop）
-                                              └─ REJECTED → ordering.v1.OrderCancellationRequested ──► ordering CancelOrder
-CancelOrder ──► ordering.v1.OrderCancelled ──► inventory ReleaseStock（RESERVED → RELEASED；找不到 → CANCELLED tombstone；否則 domain error → drop）
-CompleteOrder ─► ordering.v1.OrderCompleted ──► inventory CommitStock（RESERVED → COMMITTED：on_hand 與 reserved 同時扣掉——賣掉了；EXPIRED → 從 available 補扣成 COMMITTED，不夠就 COMMIT_SHORT；其餘 domain error → drop）
-worker expire ─► inventory ExpireReservations（RESERVED 超過 TTL → EXPIRED：stock 還回去 + inventory.v1.StockReleased，並發 ordering.v1.OrderCancellationRequested ──► ordering CancelOrder（CONFIRMED → CANCELLED）；回來的 OrderCancelled 找到 EXPIRED → drop）
-```
-
-Order 的狀態機：PENDING → CONFIRMED | CANCELLED，CONFIRMED → COMPLETED | CANCELLED | PAID，PAID → COMPLETED（確認後客戶仍可取消，inventory 收到 `OrderCancelled` 照常 release）；COMPLETED 是終點，不能再取消；PAID（已收款，[docs/payment.md](docs/payment.md) §2）不能取消，CANCELLED 不復活。**目前沒有任何路徑會走到 PAID**：`MarkPaid` 與 `OrderPaid` 只是契約，等 Payment 切片 3 接上；訂單 API 已回 `payment_required` 與 `PAID` 這個 enum 值。
-**`payment_required` 快照**：訂單進 CONFIRMED 的當下，`apps/worker` 的 `ConfirmOrder` 把 `ordering.require_payment`（binary 預設 `false`；**Helm chart 預設 `true`**，見 `docs/operations.md`「Upgrade notes」）存成訂單上的 `payment_required`（migration `0009`，既有訂單為 `false`），之後不再改。`CompleteOrder` 只看這個快照：`true` 的 CONFIRMED 訂單回 `order.payment_required`（`FAILED_PRECONDITION`），`false` 維持原樣；開關切回 `false` 不影響已經是 `true` 的訂單。`OrderConfirmed` 新增 `total`（`common.v1.Money`，訂單實際總額）；新增 `ordering.v1.OrderPaid`（尚無發布者與訂閱者）。
-`ConfirmOrder` 沒有 RPC：確認是 inventory 的答覆，不是 client 的呼叫；`CompleteOrder` 只有 RPC（只有 CONFIRMED 能完成，`order.cannot_complete`）。
-cancel 與 complete 同時到不會兩個都成立：`Save` 比 version，輸的那邊 reload 後被狀態機拒絕，所以每張 order 只會有 `OrderCancelled` / `OrderCompleted` 其一。
-**CreateOrder 冪等**：`CreateOrderRequest.idempotency_key`（選填、1–64 個可見 ASCII；放在 request 欄位而不是 header，因為它在 proto / openapi 契約裡、所有協定長一樣、可被 protovalidate 驗證，也不必為它多一個把 header 塞進 context 的 interceptor）讓 client 逾時重送不會下出兩張單：
-- **範圍**：`(customer_id, key)`，customer 是 `ownership` 解析後的那個——admin 代客下單時就是被代下單的 customer，所以同一個 key 在不同 customer 之間互不相干，也看不到彼此。
-- **同 key 同內容**回原訂單，狀態是**現在**的（可能已經 CONFIRMED，不是建單當下的快照），不寫入、不發 `OrderCreated`、**不問 catalog**（商品之後改價或下架也一樣回原單）。「內容」= items 的 sku / quantity，**依序**（`order.FingerprintV2`，`"v2:"` + sha256，不正規化；價格是 catalog 的，不是請求的一部分，所以不在裡面。v2 之前的訂單存 v1 指紋〔含呼叫端給的單價〕，重送時以該訂單自己的快照價重算 v1 比對，行為不變）：同樣的行換個順序、或把同 SKU 拆成兩行，都算不同內容——順序就是訂單的 position，悄悄回一張跟你這次送的不一樣的單比報錯更糟。
-- **同 key 不同內容**：`ALREADY_EXISTS` + `x-error-code: order.idempotency_key_reused`，沒寫入；訊息固定，不帶訂單 id、items 或 key。換 key 才能下新單。
-- **保存期 = 訂單的壽命**：key 與 `request_hash` 是 `ordering.orders` 的兩個 nullable 欄位（migration `0008`，partial unique index），沒有 TTL 表，key 不會比訂單先過期。空 key = 不保護，行為與以前完全相同（舊 client 不受影響）。
-- **併發**：兩個同 key 請求同時到，靠 `INSERT … ON CONFLICT (customer_id, idempotency_key) DO NOTHING` 決勝負，不靠應用層鎖；輸家（`Save` → `ErrIdempotencyConflict`）在**同一個交易**回讀勝出者再決定回放或 reused（DO NOTHING 不會讓交易 abort）。衝突路徑在 `Publish` 之前返回，outbox 不會多一列。
-- key 值不進 log、error、metric label、span。
-**Reservation TTL**：客戶既不完成也不取消，庫存不能一直被扣著——`worker expire --older-than 24h`（Helm `expire` CronJob 每 15 分鐘；`task expire -- --older-than 24h --dry-run` 先看）掃 RESERVED 超過 TTL 的 reservation，一批一個交易、最老的先。
-Reservation 沒有 version 欄位，同一張 order 的 Commit / Release / Expire 之間有兩道鎖：**stock 列的 version**（同一交易裡一起 Save）擋住同時改庫存；**reservation 的 status compare-and-swap**（`Update` 用 `WHERE status = <讀到的 status>`，轉移都是單向所以不需要 version 欄、沒有 migration）擋住「讀完 reservation 之後它被別的交易改了」——stock version 看不到這個，因為 stock 是在那之後才載入的（例如 Commit 讀到 RESERVED、另一交易 expire 並讓別單 reserve 走庫存）。另外，reservation 在讀取後被改、stock 之後才載入時，aggregate 可能先在 stock 層失敗（例如 `commit_exceeds_reserved`）：use case 在 domain 呼叫失敗時會重讀 reservation，status 已變就改回報 `reservation.ErrStale` 而不是當成終態 domain error。輸的那邊拿 `reservation.ErrStale`（wrap `kernel.ErrConcurrentUpdate`，不是 `kernel.Error`）：consumer 重試、重新讀到最新 status；expire 整批 rollback 重跑。
-與 `CompleteOrder` 的競態：`CompleteOrder` commit 到 inventory 消費 `OrderCompleted` 之間 reservation 仍是 RESERVED，sweep 剛好掃到會把庫存還回去並請求取消，ordering 拒絕（COMPLETED 是終點）。`OrderCompleted` 到了找到 EXPIRED 就補扣：`available` 夠 → 從 on_hand 扣、COMMITTED（照常發 `StockCommitted`）；不夠（庫存這段時間被別張單訂走）→ 全部不動、標 `COMMIT_SHORT`（終態、不發 event、不會變負）——訂單已 COMPLETED 但庫存缺口要營運處理，alert `x-monorepo-commit-short`，步驟見 `docs/operations.md`。重送的 `OrderCompleted` 找到 COMMITTED / COMMIT_SHORT 是 domain error → drop，不會扣第二次。
-
-- ordering 與 inventory 各只 import 對方的 `contract/v1`（inventory：consumer 解 `OrderCreated` / `OrderCancelled` / `OrderCompleted`、events adapter 發 `OrderCancellationRequested`（缺貨與過期都是它）；ordering：consumer 解 `StockReserved`），其他一概不行（depguard `bc-isolation-*`）。
-- **event 的 schema 歸 consumer 所有**：缺貨是 ordering 的 message（`OrderCancellationRequested`），inventory 把它發進 ordering 的 topic / 表（同一個 DB、同一個交易）。
-- **缺貨是狀態不是 error**：`reservation.Reserve` 回 `REJECTED` + `Rejected` event，一樣落地；重送的 `OrderCreated` 找到既有 reservation 就什麼都不做。
-  consumer 把 `kernel.Error` 當 final（drop），所以缺貨若用 error 表達就不會有人發取消。
-- Stock 與 Order 都用 `version` 做 optimistic lock，輸的那邊拿 `stock.ErrStale` / `order.ErrStale`。它們 wrap `kernel.ErrConcurrentUpdate`，
+- **optimistic lock**：aggregate（例如 catalog 的 Product）用 `version` 做樂觀鎖，輸的那邊拿 `ErrStale`。它 wrap `kernel.ErrConcurrentUpdate`，
   **刻意不是** `kernel.Error`：consumer 會 retry 而不是 drop，rpc 由 `server.ToConnectError` 回 `Aborted`（`x-error-code: concurrent_update`），
-  `usecasex` 記成 `kind=aborted`、log 為 Warn。兩者的 `Save` 都拆成 version 0 → `INSERT`（存成 1）與
-  `UPDATE ... WHERE version = <loaded>`（+1），所以 version 是存檔次數，記憶體中的新 aggregate 永遠對不上已存的 row。
-  撞 key 時 Order 回 `order.ErrDuplicate`（id 是 server 產的，撞到就是真的重複），Stock 回 `stock.ErrStale`
-  （兩個 SetStock 同時建立同一個 SKU，輸的那個 reload 後改成 restock）。
-  Order 的 `CancelOrder` / `ConfirmOrder` / `CompleteOrder` 在 use case 內先對 `ErrStale` 做 server 端重試（`usecase.retryOnConflict`：最多 3 次、每次間隔 0–20ms jitter，
-  每次都重新 `FindByID` 再套 domain 行為再 `Save`；只重試 `kernel.ErrConcurrentUpdate`，`ErrDuplicate` 與其他錯誤不重試，context 取消即停）。
-  所以輸的那邊拿到的是「看到贏家結果後的 domain 判決」：兩個同時的 CancelOrder → 後者重試看到 CANCELLED → `ErrCannotCancel`；
-  confirm 輸給 cancel → `ErrCannotConfirm`（consumer drop）；cancel 輸給 confirm → CONFIRMED 仍可取消，重試成功。
-  3 次都撞才把 `ErrStale` 往外丟（rpc `Aborted`、consumer retry 的舊路徑不變）。event 只在 Save 成功後發一次。
-- **topic 之間沒有順序保證，用 tombstone 補**：`OrderCancelled` 若比 `OrderCreated` 先到 inventory，`ReleaseStock` 找不到 reservation 時寫一筆
-  `CANCELLED`（`reservation.Tombstone`，唯一沒有 lines 的 reservation，不發 event）；晚到的 `OrderCreated` 找到它就什麼都不做。
-  兩邊同時 `Add` 撞 primary key 時，輸的那方回 `kernel.ErrConcurrentUpdate`（不是 `kernel.Error`）讓 consumer retry，重試後落在「已存在」分支：
-  release 輸給 reserve → 重試時釋放；reserve 輸給 tombstone → 重試時什麼都不做。RESERVED 以外的狀態都是終態。
+  `usecasex` 記成 `kind=aborted`、log 為 Warn。
 
 ## usecasex：use case 的統一形狀與 decorator
 
@@ -331,7 +268,7 @@ type UseCase[I, O any] interface { Execute(c context.Context, in I) (O, error) }
 
 adapter 只依賴 `UseCase[I, O]`，不依賴具體 struct。`provider.go` 的 `decorate()` 用 `usecasex.Chain` 把
 metrics + logging 包在每個 usecase 外面，rpc 和 consumer 兩邊自動都有。寫入的 usecase 改用 `decorateTx()`，多包一層
-transaction（例外：`CreateOrder` 要先問 catalog，改用 `decorateNoTx()` 並自己開只包寫入的 transaction，#320）。Connect
+transaction。Connect
 interceptor 只管 transport 層的事（procedure、protocol、code）。
 
 - `usecasex.Logging`：一行 log。成功是 `Debug`（rpc 路徑已有 interceptor 的 `rpc` access log，成功次數看 metrics），domain error 是 `Info`（預期結果），
@@ -342,7 +279,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 - `usecasex.Transactional`：把 usecase 整個放進 `Transactor.Do`。usecase 拿到的 `c` 帶著 tx，repository 與 outbox
   publisher 用 `platformpg.TxOrDB` 取用，所以全部寫入一起 commit / rollback。任何 `Do` 的錯誤（含 commit 失敗）都丟掉 output。
   放在最內層，commit 失敗會被 logging / metrics 記成這次 usecase 的失敗。只給寫入用：讀取包 transaction 只會多一次 BEGIN/COMMIT。
-  它保證的是 atomicity，不是 isolation：Postgres 預設 READ COMMITTED，兩個同時的 CancelOrder 都可能讀到 PENDING。
+  它保證的是 atomicity，不是 isolation：Postgres 預設 READ COMMITTED，兩個同時的寫入都可能讀到同一份舊狀態。
   擋住重複寫入的是 aggregate 的 `version`（見上方 optimistic lock），不是 transaction
 
 ## Architecture rules：誰擋什麼
@@ -369,39 +306,33 @@ proto-first：OpenAPI 是 proto 的產物，不是另一份契約。`task gen` �
 `protos/<bc>/v1/openapi.base.yaml` 提供 title / description 等手寫 metadata。
 BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 BC，`APP_HTTP_DOCS=true`
 時才掛 `/api/docs`（Scalar UI，`/api/docs/<bc>`）與 `/api/openapi/<bc>.yaml`。production 不開。
-**新增 RPC 要兩個檢查，不是一個**：生成檔存在（`task gen` / `check-gen-fresh`）不等於服務文件已發布（要在 `NewDocs` 掛上並由 wired rpc 的 `APP_HTTP_DOCS=true` 入口測到）。同一個 BC 有內部服務與對外服務時（payment：`payment-rpc` 的 `PaymentService` 與 rpc 的 `PublicPaymentService`），要發布**對外的 subset**：對外服務放獨立的 proto 檔（`protos/payment/v1/public.proto`），`task gen` 另生 `public.openapi.yaml`（`base` 是 `public.openapi.base.yaml`），`NewDocs` 掛它；`TestPaymentEntry_PublicOpenAPIIsPublished` 守住「公開 procedures 可見、內部 procedure 與 request 型別不在、docs 關閉時 404」。`check-gen-fresh` 的 pathspec 是 `*/contract/*/*openapi.yaml`，涵蓋這份。
+**新增 RPC 要兩個檢查，不是一個**：生成檔存在（`task gen` / `check-gen-fresh`）不等於服務文件已發布（要在 `NewDocs` 掛上並由 wired rpc 的 `APP_HTTP_DOCS=true` 入口測到）。`check-gen-fresh` 的 pathspec 是 `*/contract/*/*openapi.yaml`。
 spec 裡的 `servers` 是相對的 `/api`（任何 host 都對），但 serve 出去的 yaml 會把它改寫成 request 的絕對 origin（`X-Forwarded-Proto` / Host）：
 Scalar 的 Send request 用 `new URL(server + path)`，相對 server 會噴「The URL seems to be invalid」；順便讓檔案直接匯入 Postman / Bruno 就能打。
-四份 `openapi.base.yaml` 都宣告 `securitySchemes`（`apiKey` = `X-API-Key`、`bearer` = JWT），所以 Scalar 右上 **Auth** 可以選一種填進去
+三份 `openapi.base.yaml`（admin、identity、catalog） 都宣告 `securitySchemes`（`apiKey` = `X-API-Key`、`bearer` = JWT），所以 Scalar 右上 **Auth** 可以選一種填進去
 （`auth.mode: required` 時填 `configs/local.yaml` 的 `auth.api_keys` 那把 key）；`auth.mode: off` 時填不填都一樣。前端不需要它 —— `web/packages/proto`
 直接從 proto 生 connect-es client。
 
 ## Web console：`web/apps/console`
 
-一個最小的操作介面，用來證明 `@repo/proto` 真的能被前端用：建單、取消、設庫存 / 看全部 SKU，並看 inventory 非同步寫出的
-reservation 狀態。
+一個最小的操作介面，用來證明 `@repo/proto` 真的能被前端用：帳號管理（Accounts）、商品價格（Products），以及 poison / prune 的操作頁。
 
 ```bash
-task run            # rpc :8080（要看到 reservation 還需要 Postgres + task migrate -- up + task worker）
+task run            # rpc :8080
 task web-dev        # http://localhost:5173；CONSOLE_API=http://host:port 可改 proxy 目標
 task web-typecheck  # @repo/proto + @repo/console 的 tsc --noEmit（CI 的 web job 也跑這個 + web-build）
-task web-e2e        # Playwright smoke：建好的 console（vite preview）打真的 ./bin/rpc；orders / stock / poison / prune 各頁走一遍。E2E_DATABASE_URL=postgres://… 先 migrate up 再接那個 DB，並多起一個 bin/worker（CI 的 console-e2e job 這樣跑：poison / prune 真的執行，建單後 Reservation 欄真的變 RESERVED、Cancel 後 RELEASED），沒設就 in-memory、admin 頁驗 admin.no_database；另一組 project auth 起 auth.mode=required（API key + HS256 JWT）的 rpc 驗 401 / 403 / 設 key 或 JWT 恢復、過期 / 錯 issuer 的 token、roles claim 過 admin gate、寫入也帶 credential。第一次要 cd web/apps/console && pnpm exec playwright install chromium（CI 的兩個 console job 走 .github/actions/playwright：chromium 以 @playwright/test 版本為 key 快取在 ~/.cache/ms-playwright，命中只裝 apt deps）
+task web-e2e        # Playwright smoke：建好的 console（vite preview）打真的 ./bin/rpc；products / poison / prune 各頁走一遍。E2E_DATABASE_URL=postgres://… 先 migrate up 再接那個 DB，並多起一個 bin/worker（CI 的 console-e2e job 這樣跑：poison / prune 真的執行），沒設就 in-memory、admin 頁驗 admin.no_database；另一組 project auth 起 auth.mode=required（API key + HS256 JWT）的 rpc 驗 401 / 403 / 設 key 或 JWT 恢復、過期 / 錯 issuer 的 token、roles claim 過 admin gate、寫入也帶 credential。第一次要 cd web/apps/console && pnpm exec playwright install chromium（CI 的兩個 console job 走 .github/actions/playwright：chromium 以 @playwright/test 版本為 key 快取在 ~/.cache/ms-playwright，命中只裝 apt deps）
 task web-e2e-dex    # oidc-dex project：Console 經真 Dex 登入（compose 的 dex 沒起就先起；需 dex.localtest.me 解析得出來，離線見 docs/operations.md「Dex dev IdP」）→ 未綁定 → CreateInvite + ClaimInvite → 進 Console，打只信任 Dex 的真 bin/rpc；CI 的 console-e2e 以 E2E_DEX=1 task web-e2e 一起跑
-task web-e2e-image  # 只把需要 nginx 的 spec（project image：e2e/image-specs.ts = image.spec.ts + version / orders / order / products / reservations 五支 smoke）改打真的 console image，其餘留在 vite preview（e2e/image.sh：build web/apps/console/Dockerfile、容器的 RPC_UPSTREAM 回指 host 上 Playwright 起的 bin/rpc；docker 或 podman），外加 e2e/image.spec.ts 驗 nginx 本身：deep link 回 index.html + no-cache、assets immutable、不存在的 asset 是 404、/api 經 proxy、/healthz、/config.json、CSP。啟動前 e2e/image-specs.check.ts 擋下沒分類的新 spec；task web-e2e-image-mutants 用壞掉的 nginx 設定證明這些 spec 會紅（不進 CI）。CI 的 console-image job
+task web-e2e-image  # 只把需要 nginx 的 spec（project image：e2e/image-specs.ts = image.spec.ts + version / products 兩支 smoke）改打真的 console image，其餘留在 vite preview（e2e/image.sh：build web/apps/console/Dockerfile、容器的 RPC_UPSTREAM 回指 host 上 Playwright 起的 bin/rpc；docker 或 podman），外加 e2e/image.spec.ts 驗 nginx 本身：deep link 回 index.html + no-cache、assets immutable、不存在的 asset 是 404、/api 經 proxy、/healthz、/config.json、CSP。啟動前 e2e/image-specs.check.ts 擋下沒分類的新 spec；task web-e2e-image-mutants 用壞掉的 nginx 設定證明這些 spec 會紅（不進 CI）。CI 的 console-image job
 ```
 
 | 主題 | 做法 |
 |---|---|
-| 呼叫後端 | `@connectrpc/connect-web` + `@repo/proto` 的 service descriptor；vite dev server 把 `/ordering.v1.*`、`/inventory.v1.*` proxy 到 Go server，瀏覽器維持 same-origin，所以 server **不需要 CORS** |
+| 呼叫後端 | `@connectrpc/connect-web` + `@repo/proto` 的 service descriptor；vite dev server 把 `/api` proxy 到 Go server，瀏覽器維持 same-origin，所以 server **不需要 CORS** |
 | 錯誤 | `describe()` 讀 `x-error-code` header，並解析 protovalidate 的 `Violations` detail 成 `items[0].sku: …`；`UNAUTHENTICATED` 另外提示去設 credential |
 | 認證 | header 右側的 **Credential**：API key（`X-API-Key`）或 JWT（`Authorization: Bearer`），存 localStorage（`console.credential`），transport 的 interceptor 每次呼叫時讀，改了下一個 RPC 就生效；`VITE_CONSOLE_API_KEY` / `VITE_CONSOLE_TOKEN` 可在 build 時 seed。server `auth.mode: off` 時什麼都不用設 |
-| 資料 | TanStack Query：server 只有 unary RPC，所以輪詢：訂單詳情頁的 order 與 reservation 用 `refetchInterval`（order：PENDING 2s；CONFIRMED 15s，因為 inventory 可能自己讓預留過期而取消訂單，不靠 reservation 變動去 invalidate order：saga 還沒走完時會讀到舊的 CONFIRMED；COMPLETED / CANCELLED、查無此單（`null`）就停。reservation：RESERVED 15s、其他狀態停；還沒有 reservation 時繼續 2s 查，但 order 已 COMPLETED / CANCELLED 就停）；三張列表（Orders、Stock、Reservations）只每 2s 重抓第一頁（`refreshFirstPage`），不用 `refetchInterval`（N 個已載入的頁 = 每輪 N 個請求）。domain error 不 retry |
-| 路由 | TanStack Router（code-based，`/orders`、`/orders/$id`、`/reservations`、`/stock`、`/poison`、`/prune`），不需要額外的 codegen plugin；`/orders` 的 `status` / `customer` 與 `/reservations` 的 `status` / `order` 走 search params（`validateSearch`），連結可分享；`/orders/$id` 是單筆訂單（每條 line、total、Cancel、inventory 的 reservation），list 的 id 欄與 Reservations 頁的 order 欄都連過去，`/orders` 另有 Order id 輸入框貼完整 id 直接開（log / ticket 抄來的 id 不用在 list 裡翻頁找），不存在的 id 顯示 not found 而不是錯誤 |
-| Orders 頁 | 建單表單送 `idempotency_key`（UUID v7，npm `uuid`）：key 代表「一次下單意圖」，同一份內容（customer、lines，以及 customer 留空時的 credential）重送沿用同一把，所以回應遺失後再按一次不會多一筆訂單；內容或 customer 改變、或建單成功就換新 key（server 對同 key 不同內容回 `order.idempotency_key_reused`）；成功後導向 `/orders/$id`；送出後才換 credential 的晚到成功回覆（訂單屬於舊 credential）不導向、也不清掉新 credential 當下的 key。Customer 選填：admin（`ListAccounts` 探測）或 anonymous（`WhoAmI.anonymous`）才可填，其他 credential 欄位鎖住、由 server 用 principal 的 subject；`ordering.v1.OrderService/ListOrders`（keyset，`created_at desc, id desc`，customer / status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s 只重抓第一頁（`refreshFirstPage`，Stock、Reservations 共用同一份，含「輪詢回應晚於 refetch 就丟棄」）；mutation 以 `["orders"]` 前綴 invalidate 所有 filter 的頁。Reservation 欄不逐列 `GetReservation`：還在等的列（PENDING，或 COMPLETED／CANCELLED 但仍 RESERVED／尚無）每 2s 共用一次 `inventory.v1.InventoryService/BatchGetReservations`（一次最多 100 個 order id，超過就分批；沒有要等的列就不打、分頁隱藏不打），訂單狀態變動時立刻補查一次，回到分頁（`visibilitychange`）時對所有已載入的列再查一次（含等待窗口已過期的缺失列）。非第一頁的列不隨第一頁刷新，訂單狀態維持載入時的值（PENDING 的列會持續被查），重載或 Load more 後更新；訂單詳情頁仍用 `GetReservation` 自己 poll |
-| 訂單詳情頁 `/orders/$id` 的 Pay 卡片 | 只在「訂單 `CONFIRMED` 且 `payment_required` 快照為 `true`」時顯示（console 不知道 `ordering.require_payment`，也不探測；預設設定下快照全是 `false`，頁面沒有變）。按 Pay 呼叫 `payment.v1.PublicPaymentService/StartPayment`（body 只有 `order_id`），`checkout_url` 在新分頁開（`noopener`，只接受 http(s)，pop-up 被擋時有連結），錯誤顯示固定句不顯示伺服器文字；卡片顯示期間訂單與付款每 2 秒輪詢，訂單離開 `CONFIRMED` 卡片與輪詢一起結束 |
-| 訂單詳情頁 `/orders/$id` 的 History 卡 | `GetOrderHistory` 的時間軸（依 `seq`：事件、`from → to`、時間、actor_kind、cause 的固定標籤）。**誰看得到 `actor_subject` 由伺服器決定**（只回給 admin），卡片只在回應帶有它時顯示；卡片保證的是答案不比取得它的 credential 活得久：query 以 credential generation 為 key、頁面再以它當卡片的 key，切換或登出後前一個身分的列、錯誤、subject 不在新身分讀的那格，舊身分的慢回覆寫進自己的 key。空清單（migration 之前的訂單）是明確的空狀態；`NOT_FOUND` 與其他失敗分開；訂單本身讀不到時不顯示此卡。輪詢沿用訂單自己的節奏，終態後不再輪詢；每份快照記著發出請求時訂單的狀態，和訂單現在的狀態不同就在手上的請求結束後再抓一次（第一個回覆很慢、訂單先到終態時，最後一列也會進來）；補抓失敗會顯示錯誤，對那個狀態不再重試，訂單狀態一變就再試一次。見 `docs/order-history.md` | `web/apps/console/src/components/history-card.tsx`、`web/apps/console/src/queries.ts` |
-| Reservations 頁 | `inventory.v1.InventoryService/ListReservations`（keyset，`created_at desc, order_id desc`，status filter 綁在 page token 裡）的表格，`useInfiniteQuery` + Load more，每 2s 只重抓第一頁（`refreshFirstPage`，older pages 在 remount / 回到分頁時更新）；Orders 頁的 reservation badge 連到 `/reservations?order=<id>`，該筆釘在最上面 |
-| Stock 頁 | `inventory.v1.InventoryService/ListStocks`（keyset，SKU 升冪，opaque page token；`sku_prefix` / `only_reserved` 篩選，token 帶著篩選條件，換條件續頁是 INVALID_ARGUMENT）的表格，`useInfiniteQuery` + Load more，每 2s 只重抓第一頁（`refreshFirstPage`；older pages 在 remount、Set stock 或回到分頁時更新）；篩選走 `/stock?prefix=&reserved=` search params；上方 Set stock 建立 / 覆寫 on hand，列上 Edit 把該 SKU 帶進表單 |
+| 資料 | TanStack Query：server 只有 unary RPC。Products 不 poll（沒有東西會在 console 背後改它們），mutation 以 key 前綴 invalidate 所有 filter 的頁；Poison 每 5s 輪詢；`/api/version` 每 5 分鐘重抓。domain error 不 retry |
+| 路由 | TanStack Router（code-based，`/accounts`、`/accounts/$id`、`/products`、`/poison`、`/prune`，另有 `/login`、`/auth/callback`；首頁導到 `/accounts`），不需要額外的 codegen plugin |
 | Products 頁 | admin 頁（`AdminGate` 之後）：`catalog.v1.CatalogService`——儲存商品（`UpsertProduct`：SKU / Name / Price（minor units）/ Currency，沒有就建、有就改價，下架的會重新上架）、`ListProducts` 表格（SKU 升冪、`useInfiniteQuery` + Load more，不 poll；`/products?prefix=` 篩選，含下架的）、Edit（帶回表單）、Deactivate |
 | Poison 頁 | `admin.v1.AdminService`：各 BC 的 poison 表，Show（metadata + payload base64）/ Requeue / Drop，每個 BC 有 Requeue all / Drop all；server auth 開著時 credential 要帶 `admin` role |
 | UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |
@@ -412,7 +343,7 @@ task web-e2e-image  # 只把需要 nginx 的 spec（project image：e2e/image-sp
 一個 server：`/` 走 SPA fallback（任何路由都回 `index.html`，`assets/` immutable cache）、`/api/` proxy 到 `RPC_UPSTREAM`（預設 `http://rpc:8080`），
 瀏覽器維持 same-origin，rpc 一樣不需要 CORS；`/healthz` 給 probe。nginx 自己回的東西（index.html、assets）帶 `deploy/security-headers.inc.template` 渲染出的標頭：CSP（script 只准 self、style 允許 inline——Radix 用 style attribute、connect 只准 self——OIDC 開啟時加上 issuer 的精確 origin、`frame-ancestors 'none'`）、nosniff、`X-Frame-Options: DENY`、Referrer-Policy、Permissions-Policy；`/api/` 的 response 是 rpc 的，不加（`/api/docs` 的 Scalar 從 CDN 載）。image 只寫 `/tmp`（entrypoint 用 envsubst 把 template render 到 `/tmp/default.conf`、`/tmp/config.json`（SPA 的 runtime 設定：`CONSOLE_OIDC_ISSUER` / `CONSOLE_OIDC_CLIENT_ID` / `CONSOLE_API_KEY_LOGIN`，白名單 filter，見 [`docs/identity-login.md`](docs/identity-login.md) §8）、`/tmp/security-headers.inc`，
 `conf.d` 只剩一行 include），所以 read-only rootfs + 任意 uid 都能跑——Helm chart 的 `console.enabled` 就是這樣部署它（見 [`docs/operations.md`](docs/operations.md)）。
-release pipeline 把它和六個 Go image 一起推成 `ghcr.io/blackhorseya/x-monorepo/console:X.Y.Z`（見 [`docs/release.md`](docs/release.md)；`task helm-kind` 則從 working tree
+release pipeline 把它和四個 Go image 一起推成 `ghcr.io/blackhorseya/x-monorepo/console:X.Y.Z`（見 [`docs/release.md`](docs/release.md)；`task helm-kind` 則從 working tree
 build 成 `localhost/x-monorepo/console:kind`）。所以 console 的改動**會切版**：只有 `e2e/` 和 `playwright.config.ts` 不算。
 
 ## Conventions
@@ -429,16 +360,16 @@ build 成 `localhost/x-monorepo/console:kind`）。所以 console 的改動**會
 
 - `platform/postgres.NewDB` 提供 `*gorm.DB`（driver 底層是 pgx，`TranslateError` 開啟）。`APP_POSTGRES_URL` 空 → 回 nil，
   各 BC 的 `Provide*Repository` 看到 nil 就改用 `infra/memory`，所以 `task run`、E2E test 不需要 DB。
-- **每個 BC 一個 Postgres schema**（`ordering.orders`、`inventory.stocks`），版本表也在該 schema 裡（`ordering.schema_migrations`）。
+- **每個 BC 一個 Postgres schema**（`identity.accounts`、`catalog.products`），版本表也在該 schema 裡（`identity.schema_migrations`）。
   多個 BC 共用一個 database 時，預設的單一 `public.schema_migrations` 會讓兩條 migration 序列互相覆寫版本號且不報錯；
   schema 隔離同時解決表名與版本表的衝突。
 - SQL 放 `pkgs/<bc>/infra/postgres/migrations/NNNN_name.{up,down}.sql`，由 BC `embed`（go.work 下 embed 不能跨
   module）；`apps/migrate` 只收集各 BC 的 `Migration()` 並用 golang-migrate 執行（cobra：`up` / `down` / `version`，`--help` 有說明；跟 rpc / worker 一樣是同一個 image 的不同 binary）。**service 啟動不跑 migration**，
   部署流程是 `migrate up` → rollout。
-- row model（`orderRow`）是持久化模型，不是 aggregate；timestamps 來自 domain 的 `port.Clock`，所以 gorm 的
-  `autoCreateTime/autoUpdateTime` 關閉。`total` 不落地，`Reconstitute` 重算。
-- driver error 在 `infra/postgres.translate` 轉成 domain error：`gorm.ErrRecordNotFound → order.ErrNotFound`、
-  `gorm.ErrDuplicatedKey → order.ErrDuplicate`，其他保持 wrapped 給 log。
+- row model（`productRow`）是持久化模型，不是 aggregate；timestamps 來自 domain 的 `port.Clock`，所以 gorm 的
+  `autoCreateTime/autoUpdateTime` 關閉。
+- driver error 在 `infra/postgres.translate` 轉成 domain error：`gorm.ErrRecordNotFound → product.ErrNotFound`、
+  `gorm.ErrDuplicatedKey` → 各 repository 的 duplicate error，其他保持 wrapped 給 log。
 - integration test（`infra/postgres`、`provider_test.go`、`apps/migrate`、`apps/worker`）用 `pkgs/platform/postgres/pgtest`：
   `TEST_DATABASE_URL` 沒設就以 testcontainers 起一個 `postgres:17-alpine`（每個 test binary 一個，`TestMain` 結束時 terminate），
   設了就直接用那個 DB（連不上是 FAIL，不是 skip）。例外：`pkgs/identity` 的 last-admin 到期矩陣（`admin_lock_expiry_test.go`）會 `CREATE DATABASE` 開一個私有 DB 來隔離 `TRUNCATE` / 鎖定整張 accounts 表，所以提供的 `TEST_DATABASE_URL` 角色需要 `CREATEDB`（testcontainers 預設角色已有；沒有時該測試以 42501 明確 FAIL，不 skip；補權限：`ALTER ROLE <role> CREATEDB;`）。只有「本機沒有 container runtime」會 skip，且 CI 裡一律 FAIL。

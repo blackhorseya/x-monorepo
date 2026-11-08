@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-`pkgs/identity` 是第三個 bounded context：**DB 管理的 account 與 API key**，給 rpc server 的 auth interceptor 解 `X-API-Key`。
+`pkgs/identity` 是一個 bounded context：**DB 管理的 account 與 API key**，給 rpc server 的 auth interceptor 解 `X-API-Key`。
 它只做 verifier——JWT 仍由 `auth.jwt` 指的外部 issuer 發；它不發 event、不消費 event（沒有 outbox / inbox / poison 表）。
 
 ## 形狀
@@ -141,32 +141,6 @@ identity BC 這一半（#271）加上 auth interceptor 的串接（#272）。res
 
 現行規格見 [`docs/identity-login.md`](identity-login.md)：登入走**外部 OIDC**（本機開發用 Dex），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
 自建帳密 issuer 降為可選模組（未排程），設計要點留在該文件的「方案 A」一節。先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
-
-## Inventory 寫入（`inventory.v1.InventoryService`）
-
-`SetStock` 與 `ExpireReservations` 都是 `server.RequireRole(auth.admin_role)`：非 admin 的 principal → `PERMISSION_DENIED`（`auth.permission_denied`），沒有 credential（`optional` 沒帶 / `required` 被攔）→ `UNAUTHENTICATED`，`auth.mode: off` 不檢查。
-`GetStock` / `ListStocks` / reservation 讀取不檢查 role。**行為變更**：以前任何 credential 都能 `SetStock`；整合（k6 setup、腳本）要改用 admin key。
-
-## Ordering ownership（PR 3）
-
-identity 存在的業務理由：訂單屬於 principal。授權判斷在 ordering 的 **application 層**（`application/ownership.Policy`，五個 use case 呼叫它；domain 不碰 principal），
-admin role 名稱是注入的 `auth.admin_role`（`ProvideOwnership`），不是寫死的 `"admin"`。「誰是 customer」= `Principal.Subject`（identity key 是 account id、JWT 是 `sub`、static key 是 name）。
-
-| RPC | 非 admin（有 principal） | admin（`auth.admin_role`） | anonymous（auth off，或 `auth.public` 的 procedure / optional 沒帶 credential） |
-|---|---|---|---|
-| `CreateOrder` | `customer_id` 空 = 自己；帶自己 = 自己；帶別人 → `PERMISSION_DENIED`（`order.permission_denied`），不寫入 | 帶了用帶的（代客下單），沒帶 = 自己 | 現行規則：`customer_id` 必填（`order.empty_customer`） |
-| `ListOrders` | 沒帶 `customer_id` = 自己的；帶別人 → `PERMISSION_DENIED` | 現行：空 = 全部，或指定 customer | 現行 |
-| `GetOrder` | 讀別人的訂單 → `NOT_FOUND`（`order.not_found`，跟不存在的 id 一樣，不洩漏存在與否） | 現行 | 現行 |
-| `CancelOrder` / `CompleteOrder` | 操作別人的訂單 → `NOT_FOUND`（`order.not_found`，同 `GetOrder`；訂單狀態不變、不發 event）；自己的照常。`CompleteOrder` 的語意（任何 caller 都能完成）沒改 | 現行：任何訂單 | 現行（consumer 的 `OrderCancellationRequested` 沒有 principal，所以仍可取消任何訂單） |
-
-- 非 admin 的 `GetOrder` / `GetOrderHistory` / `CancelOrder` / `CompleteOrder` 走 `Repository.FindByIDForCustomer`（postgres：`WHERE id = ? AND customer_id = ?`，不符就在載入 items 之前結束）：「不存在」與「不是你的」走同一條查詢路徑：兩者都在選列時結束，不載入他人的 items，所以回應時間不隨訂單大小而異。這不是密碼學意義的 constant-time 保證。admin / anonymous 照舊 `FindByID`。
-- page token 綁的是**解析後**的 customer，所以非 admin 不帶 filter 翻頁、token 跟自己的 Subject 一致。
-- `auth.mode: off` 時沒有 principal，整張表只剩 anonymous 那欄；consumer path 永遠是 anonymous，不受影響。
-- `auth.public` 列進去的 procedure 不跑 auth，也就是 anonymous：公開的 `GetOrder` 任何人都讀得到任何訂單。ownership 保護的是「帶了 credential 的人」。
-- **冪等（`idempotency_key`）**：`CreateOrder` 的重送保護，範圍是**解析後的 customer**——語意見 README 的「CreateOrder 冪等」。
-- **行為變更**：以前任何 credential 都能替任何 customer 下單。現在 role-less 的 static key / JWT 只能替自己下單，要代客下單的整合（例如後台系統）需要 `auth.admin_role`。
-  proto 的 `CreateOrderRequest.customer_id` 拿掉 `min_len`（沒用 `optional` 關鍵字，Go 型別不變、`buf breaking` 無差異）；空值的語意由 use case 決定。
-- Console 的下單表單：Customer 選填；admin（以 `ListAccounts` 探測，跟 Accounts 導覽同一個判斷）或 anonymous（`WhoAmI.anonymous`）才可填，其他人欄位鎖住、不送 `customer_id`。這只是便利，伺服器才是關卡。
 
 ## 檔案
 

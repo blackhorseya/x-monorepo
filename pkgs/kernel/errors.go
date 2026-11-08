@@ -52,7 +52,7 @@ type Error struct {
 	msg  string
 }
 
-// NewError creates a domain error. code should be stable, e.g. "order.not_found".
+// NewError creates a domain error. code should be stable, e.g. "product.not_found".
 func NewError(kind Kind, code, msg string) *Error {
 	return &Error{kind: kind, code: code, msg: msg}
 }

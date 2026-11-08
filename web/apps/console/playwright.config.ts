@@ -93,7 +93,7 @@ export const JWT_AUDIENCE = "x-monorepo-console-e2e";
 
 export default defineConfig({
   testDir: "e2e",
-  // DB mode also runs one bin/worker (e2e/worker.setup.ts) so reservations happen.
+  // DB mode also runs bin/migrate up once (e2e/worker.setup.ts).
   globalSetup: "./e2e/worker.setup.ts",
   fullyParallel: true,
   // CI sets E2E_WORKERS (the runner's vCPU, #447); unset = Playwright's default (half the cores), so `task web-e2e` is unchanged.
@@ -107,7 +107,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: /\/(auth(-role)?|oidc-backend|oidc-dex|payment)\//, // payment/ is its own config (playwright.payment.config.ts): it needs a stack this one does not start
+      testIgnore: /\/(auth(-role)?|oidc-backend|oidc-dex)\//,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: `http://localhost:${webPort}`,

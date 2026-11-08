@@ -14,10 +14,10 @@ func TestDocs_AbsoluteServers(t *testing.T) {
 	gin.SetMode(gin.ReleaseMode)
 	spec := []byte("openapi: 3.1.0\nservers:\n  - url: /api\npaths: {}\n")
 	engine := gin.New()
-	mountDocs(engine, []Doc{{Name: "ordering", Spec: spec}})
+	mountDocs(engine, []Doc{{Name: "identity", Spec: spec}})
 
 	get := func(host, proto string) string {
-		req := httptest.NewRequest("GET", OpenAPIPath+"/ordering.yaml", nil)
+		req := httptest.NewRequest("GET", OpenAPIPath+"/identity.yaml", nil)
 		req.Host = host
 		if proto != "" {
 			req.Header.Set("X-Forwarded-Proto", proto)

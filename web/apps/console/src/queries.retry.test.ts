@@ -8,8 +8,6 @@ import {
   QueryObserver,
   type QueryObserverOptions,
 } from "@tanstack/react-query";
-import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
-import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import * as queries from "./queries.ts";
 import { queryClient } from "./queryClient.ts";
 import { MAX_RETRY_DELAY_MS, retryDelay, shouldRetry } from "./transient.ts";
@@ -19,7 +17,7 @@ import { OK, server } from "./testing/client.stub.ts";
 //
 // What the retry policy does to each query AFTER react-query merged queryClient.ts's defaults with the
 // query's own options. transient.test.ts proves the classifier; this proves nobody overrode it (#483 review:
-// `retry: false` on whoAmIQuery and `retry: 3` on adminProbeQuery passed every test that looked at the
+// `retry: false` on one query and `retry: 3` on adminProbeQuery passed every test that looked at the
 // classifier alone). The real QueryClient defaults (queryClient.getDefaultOptions(), not a copy), the real
 // options exported by queries.ts and their real queryFn run; only the network (src/testing/client.stub.ts,
 // global fetch for /api/version) is scripted, and the clock is mocked, so the 500 ms backoff costs nothing.
@@ -30,20 +28,10 @@ import { OK, server } from "./testing/client.stub.ts";
 // Arguments for each exported query factory; null = the export is the options object itself.
 const CASES: Record<string, unknown[] | null> = {
   versionQuery: null,
-  ordersQuery: ["customer-1", OrderStatus.PENDING],
-  orderQuery: ["order-1", 0],
-  historyQuery: ["order-1", 0, undefined],
-  reservationQuery: ["order-1"],
-  paymentQuery: ["order-1", 0],
-  stocksQuery: ["SKU-", false],
-  quoteQuery: [["SKU-1"]],
   productsQuery: ["SKU-"],
-  productStatusQuery: [["SKU-1"]],
-  reservationsQuery: [ReservationStatus.UNSPECIFIED],
   poisonQuery: null,
-  poisonDetailQuery: ["orders", 1n],
+  poisonDetailQuery: ["schema", 1n],
   adminProbeQuery: [0],
-  whoAmIQuery: [0],
   accountsQuery: null,
   accountQuery: ["account-1"],
   accountIdentitiesQuery: ["account-1", 0, true],
@@ -53,17 +41,6 @@ const CASES: Record<string, unknown[] | null> = {
 // Every other export of queries.ts: helpers and constants, not queries.
 const NOT_QUERIES = new Set([
   "keys",
-  "POLL_MS",
-  "SLOW_POLL_MS",
-  "PRODUCT_STATUS_MAX",
-  "refreshFirstPage",
-  "refreshOrders",
-  "refreshStocks",
-  "refreshReservations",
-  "orderInterval",
-  "historyInterval",
-  "reservationInterval",
-  "reservationPending",
 ]);
 
 // Queries whose queryFn turns a Connect answer into data: the cell asserts the data too (a regression that rethrows
@@ -88,7 +65,7 @@ describe("every query is in the matrix", () => {
     const stale = Object.keys(CASES).filter((n) => !queryNames.includes(n));
     assert.deepEqual(stale, []);
   });
-  it("the matrix is not empty", () => assert.ok(queryNames.length >= 10, `${queryNames.length} queries`));
+  it("the matrix is not empty", () => assert.ok(queryNames.length >= 5, `${queryNames.length} queries`));
 });
 
 describe("the app's defaults are the shared policy", () => {

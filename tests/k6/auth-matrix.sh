@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# The k6 auth gate: orders.js and reservation.js (small VU, functional) against a real rpc +
-# worker (in every cell) + Postgres, once per auth state — 8 cells — plus the fixtures that pin what the
-# scripts do in the awkward ones (per-procedure public, a procedure that fails once).
-# Why: a green run on the default auth-off server says nothing about a role-less key, an
-# admin key, or a key sent to a server that ignores it; #187 found each by hand (#193).
+# The k6 key gate: ratelimit.js and timeout.js against a real rpc + Postgres, with the API key set to a made-up value
+# that must never reach k6's output, summary or metrics — also when the server answers with a 503 or a 307 that
+# echoes the key (fault_proxy.py), or when the key is itself one of the codes a script decides on (#209, #193).
+# Why: a green run on a plain server says nothing about what k6 prints when the answer is not the one it expects.
 #   auth-matrix.sh <bin dir> [cell…]      (default: all; cell names are the first word of each cell() call)
 #   K6_AUTH_LIST=1 auth-matrix.sh [cell…]  print every cell name (or the named ones, failing on an unknown name) and exit; no bin dir, no Postgres
 #   K6_AUTH_SHARD=<i>/<n> auth-matrix.sh <bin dir>   run the cells whose 1-based position p in that list has (p-1) % n == i-1
 #                                          (CI runs n shards, each on a runner with its own Postgres; the union of the n shards
 #                                          is the full list, scripts/test.sh pins it). Not combinable with named cells.
 # A named cell that does not exist is an error (a typo would otherwise run nothing and stay green).
-# Each cell has its own rpc (and worker for reservation), RUN_ID (→ SKUs and customers) and log;
-# the scripts' own thresholds decide pass/fail (rpc_errors, p95s, and now: the operations
-# that must have succeeded are > 0), unchanged and with the same CREATE_P95 / RESERVE_P95 as
-# smoke.sh. The keys below are made up for this test; nothing here is a credential.
+# Each cell has its own rpc and log; the scripts' own thresholds decide pass/fail, and a cell states the k6
+# exit code it must end with. The key below is made up for this test; nothing here is a credential.
 set -euo pipefail
 list=${K6_AUTH_LIST:-}
 if [ -n "$list" ]; then bin=""; else bin=$1; shift; fi   # list mode: the arguments are cell names to check
@@ -35,18 +32,15 @@ export APP_LOG_LEVEL=${APP_LOG_LEVEL:-warn}
 . tests/k6/catalog.sh
 
 PLAIN_KEY=k6-fake-roleless-key-0001
-ADMIN_KEY=k6-fake-admin-key-000002
-WHOAMI=/identity.v1.IdentityService/WhoAmI
-CREATE=/ordering.v1.OrderService/CreateOrder
+LIST=/identity.v1.IdentityService/ListAccounts
 
-pid="" wpid="" xpid=""
+pid="" xpid=""
 stop() {
   [ -n "$xpid" ] && kill "$xpid" 2>/dev/null && wait "$xpid" 2>/dev/null || true; xpid=""
-  [ -n "$wpid" ] && kill "$wpid" 2>/dev/null && wait "$wpid" 2>/dev/null || true; wpid=""
   [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true; pid=""
 }
 trap 'stop; catalog_stop' EXIT
-# one catalog-rpc for every cell (the cells' rpc keys and roles are rpc's business; catalog-rpc only knows rpc's service key)
+# one catalog-rpc for every cell (rpc has no catalog of its own and refuses to start without one)
 [ -n "$list" ] || catalog_start "$bin" "$((port + 2))" "$bin/k6-auth-catalog.log"
 
 fails=() seen=() pos=0 ran=0
@@ -67,9 +61,6 @@ cell() {
   local log="$bin/k6-auth-$name" id="auth-$$-$name" target="http://127.0.0.1:$port" t0=$SECONDS
   echo "== $name ($s, expect exit $expect)"
   env "$@" "$bin/rpc" > "$log-rpc.log" 2>&1 & pid=$!
-  # a worker in every cell: orders cells leave their outbox for it too, so the next cell's worker
-  # does not start on a backlog (that is what stretches reservation_latency on a reused database)
-  APP_CONFIG=/dev/null "$bin/worker" > "$log-worker.log" 2>&1 & wpid=$!
   for ((_try54 = 1; _try54 <= 50; _try54++)); do
     kill -0 "$pid" 2>/dev/null || { echo "rpc exited:"; cat "$log-rpc.log"; exit 1; }
     curl -fsS "http://127.0.0.1:$port/api/readyz" >/dev/null 2>&1 && break
@@ -79,11 +70,8 @@ cell() {
     python3 tests/k6/fault_proxy.py "$((port + 1))" "$port" "$FAIL_PATH" > "$log-proxy.log" 2>&1 & xpid=$!
     target="http://127.0.0.1:$((port + 1))"; sleep 0.5
   fi
-  local kenv=(-e "BASE_URL=$target" -e VUS=2 -e DURATION=5s -e RPS=50
-    -e "CREATE_P95=${CREATE_P95:-500}" -e "RESERVE_P95=${RESERVE_P95:-5000}" -e "RUN_ID=$id")
+  local kenv=(-e "BASE_URL=$target" -e VUS=2 -e DURATION=5s -e RPS=50 -e "RUN_ID=$id")
   [ "$key" = - ] || kenv+=(-e "API_KEY=$key")
-  # setup()'s SetStock takes the admin role: when the server knows the admin key, the script gets it too
-  case "$*" in *"k6-admin=$ADMIN_KEY"*) kenv+=(-e "ADMIN_API_KEY=$ADMIN_KEY") ;; esac
   for kv in ${K6_ENV:-}; do kenv+=(-e "$kv"); done
   local rc=0
   k6 run --quiet --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
@@ -100,56 +88,26 @@ cell() {
   fi
 }
 
-# ── the 8 cells: {auth on, role-less key | auth on, admin key | auth off, no key | auth off, key sent} × script ──
-ON=(APP_AUTH_MODE=required)
-for s in reservation orders; do
-  cell "on-roleless-$s" "$s" 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-  cell "on-admin-$s"    "$s" 0 - "$ADMIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-admin=$ADMIN_KEY:admin"
-  cell "off-nokey-$s"   "$s" 0 - -            APP_AUTH_MODE=off
-  cell "off-key-$s"     "$s" 0 - "$PLAIN_KEY" APP_AUTH_MODE=off "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY"
-done
-
-# ── fixtures: per-procedure public, and a call that fails once ──
-# Only WhoAmI public: WhoAmI answers anonymous for everyone, but the key still authenticates every
-# other procedure — the script must not read "anonymous" off WhoAmI.
-cell whoami-public orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin" "APP_AUTH_PUBLIC=$WHOAMI"
-# Only CreateOrder public with a role-less key: CreateOrder is anonymous (needs a customer), then
-# the key's GetOrder cannot see that customer's order. Not a supported combination (docs/operations.md):
-# it must fail (99: thresholds crossed), and with the server's real answer in the output.
-cell create-public orders 99 order.not_found "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin" "APP_AUTH_PUBLIC=$CREATE"
-# WhoAmI fails once (503): nothing may be decided from it, so the run is unaffected.
-FAIL_PATH=$WHOAMI cell whoami-503 orders 0 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-# The deciding CreateOrder fails once (503): never cached as an answer, aborts (108) naming the source.
-FAIL_PATH=$CREATE cell create-503 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-
-# The same failure with a body that echoes the key: abort names RPC, status and code, never the body.
-FAIL_PATH=$CREATE REFLECT=1 FORBID=$PLAIN_KEY cell create-503-reflect-1 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-FAIL_PATH=$CREATE REFLECT=header FORBID=$PLAIN_KEY cell create-503-reflect-header orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-FAIL_PATH=$CREATE REFLECT=json FORBID=$PLAIN_KEY cell create-503-reflect-json orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-FAIL_PATH=$CREATE REFLECT=prefixed FORBID=$PLAIN_KEY cell create-503-reflect-prefixed orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-# The ordinary ok() diagnostics (K6_CUSTOMER_MODE=omit: no probe) must not print it either: a code that
-# is the key (header or JSON), the first CreateOrder refused once → thresholds crossed (99).
-for m in header json; do
-  FAIL_PATH=$CREATE REFLECT=$m K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell "create-503-omit-$m" orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-done
-# A 307 whose Location carries the key: not followed, not logged, not tagged (aborts 108; with omit, 99).
-FAIL_PATH=$CREATE REFLECT=redirect FORBID=$PLAIN_KEY cell create-307 orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-FAIL_PATH=$CREATE REFLECT=redirect K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$PLAIN_KEY cell create-307-omit orders 99 - "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-FAIL_PATH=$CREATE REFLECT=redirect-path FORBID=$PLAIN_KEY cell create-307-path orders 108 "customer probe" "$PLAIN_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$PLAIN_KEY,k6-admin=$ADMIN_KEY:admin"
-# A key that is itself a known error code, echoed as the code: redacted in the metric tags too.
-CODE_KEY=order.empty_customer
-FAIL_PATH=$CREATE REFLECT=json K6_ENV=K6_CUSTOMER_MODE=omit FORBID=$CODE_KEY cell create-key-is-code orders 99 - "$CODE_KEY" "${ON[@]}" "APP_AUTH_API_KEYS=k6-plain=$CODE_KEY,k6-admin=$ADMIN_KEY:admin"
-# ...and the auto split must not depend on what is printed: auth off ignores the key, which equals
-# order.empty_customer, and the server's real 400 order.empty_customer still means "name the customer".
-cell off-key-is-code orders 0 - order.empty_customer APP_AUTH_MODE=off
-# ratelimit.js / timeout.js decide on the server's x-error-code too: a key equal to that code (printed
-# redacted) must not change the verdict. (No FORBID: the scripts' own check names spell the code.)
+# ── the cells ──
+# A key that is sent and a rate limit / a deadline that decide: the scripts must pass whatever the key is.
 RL=(APP_AUTH_MODE=off APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50)
 TO=(APP_AUTH_MODE=off APP_HTTP_TIMEOUT=1ns APP_LOG_LEVEL=error)
 cell ratelimit-key ratelimit 0 - "$PLAIN_KEY" "${RL[@]}"
 cell ratelimit-key-is-code ratelimit 0 - request.rate_limited "${RL[@]}"
 cell timeout-key timeout 0 - "$PLAIN_KEY" "${TO[@]}"
 cell timeout-key-is-code timeout 0 - request.timeout "${TO[@]}"
+
+# The first ListAccounts answers 503 (once), as a body or a header that echoes the key (REFLECT): the run fails
+# its thresholds (99) and the key must be in none of k6's output, summary export or metrics stream.
+for m in 1 header json prefixed; do
+  FAIL_PATH=$LIST REFLECT=$m FORBID=$PLAIN_KEY cell "ratelimit-503-reflect-$m" ratelimit 99 - "$PLAIN_KEY" "${RL[@]}"
+done
+# A 307 whose Location carries the key: not followed, not logged, not tagged.
+FAIL_PATH=$LIST REFLECT=redirect FORBID=$PLAIN_KEY cell ratelimit-307 ratelimit 99 - "$PLAIN_KEY" "${RL[@]}"
+FAIL_PATH=$LIST REFLECT=redirect-path FORBID=$PLAIN_KEY cell ratelimit-307-path ratelimit 99 - "$PLAIN_KEY" "${RL[@]}"
+# A key that is itself a known error code, echoed as the code: redacted in the metric tags too.
+CODE_KEY=request.validation_failed
+FAIL_PATH=$LIST REFLECT=json FORBID=$CODE_KEY cell ratelimit-key-is-code-reflected ratelimit 99 - "$CODE_KEY" "${RL[@]}"
 
 # every named cell must exist, and a shard must run something: neither may pass by running nothing
 for o in ${only[@]+"${only[@]}"}; do

@@ -66,53 +66,6 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- end }}
-{{- if .Values.paymentRpc.enabled }}
----
-# payment-rpc serve: the rpc pods of this release (the internal RPC) plus networkPolicy.paymentRpc.ingressFrom
-# (the ingress controller the provider's webhook arrives through, Prometheus). The list is never empty, so it
-# never means "any source". consume and expire have no listener: no ingress at all.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "x-monorepo.fullname" . }}-payment-serve
-  labels:
-    {{- include "x-monorepo.labels" . | nindent 4 }}
-    app.kubernetes.io/component: payment-serve
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "x-monorepo.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: payment-serve
-  policyTypes: [Ingress]
-  ingress:
-    - ports:
-        - { protocol: TCP, port: {{ $httpPort }} }
-      from:
-        - podSelector:
-            matchLabels:
-              {{- include "x-monorepo.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: rpc
-        {{- with $np.paymentRpc.ingressFrom }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-{{- range $wl := list "consume" "expire" }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "x-monorepo.fullname" $ }}-payment-{{ $wl }}
-  labels:
-    {{- include "x-monorepo.labels" $ | nindent 4 }}
-    app.kubernetes.io/component: payment-{{ $wl }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "x-monorepo.selectorLabels" $ | nindent 6 }}
-      app.kubernetes.io/component: payment-{{ $wl }}
-  policyTypes: [Ingress]
-  ingress: []
-{{- end }}
-{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -17,7 +17,7 @@ import (
 // schema is the watermill-sql Postgres schema adapter with this repo's table
 // naming (TableName) and proto bytes as payload. The DDL it would run with
 // InitializeSchema is what each BC's migration contains; see
-// pkgs/ordering/infra/postgres/migrations/0003_events.up.sql.
+// a BC's events migration (infra/postgres/migrations/*_events.up.sql).
 func schema() wsql.DefaultPostgreSQLSchema {
 	return wsql.DefaultPostgreSQLSchema{
 		GenerateMessagesTableName: TableName,

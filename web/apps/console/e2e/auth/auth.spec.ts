@@ -10,25 +10,21 @@ import { subject, useKey } from "./helpers";
 // kind and the write paths are in flows.spec.ts.
 
 test("anonymous → wrong key → right key → reload → clear", async ({ page }) => {
-  await page.goto("/orders");
+  await page.goto("/accounts");
   await expect(subject(page)).toHaveText("anonymous");
-  const alert = page.getByRole("alert").first();
-  await expect(alert).toContainText("Not authenticated");
-  await expect(alert).toContainText("auth.unauthenticated");
-  await expect(alert).toContainText("set an API key or JWT");
+  // ListAccounts doubles as the admin probe: an answer of Unauthenticated is "not an admin", and the page shows the gate.
+  await expect(page.getByText("Admin role required")).toBeVisible();
 
   await useKey(page, "not-a-key-0123456789");
-  await expect(page.getByRole("alert").first()).toContainText(
-    "auth.invalid_credential"
-  );
   await expect(subject(page)).toHaveText("api key"); // the console keeps what you typed; the server decides
+  await expect(page.getByText("Admin role required")).toBeVisible();
 
-  await useKey(page, OPS_KEY);
+  await useKey(page, ADMIN_KEY);
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(
     page
       .getByRole("row")
-      .filter({ hasText: /No orders|PENDING|CANCELLED/ })
+      .filter({ hasText: /No accounts yet|ACTIVE|DISABLED/ })
       .first()
   ).toBeVisible();
 
@@ -38,9 +34,7 @@ test("anonymous → wrong key → right key → reload → clear", async ({ page
 
   await page.getByRole("button", { name: "Clear" }).click();
   await expect(subject(page)).toHaveText("anonymous");
-  await expect(page.getByRole("alert").first()).toContainText(
-    "auth.unauthenticated"
-  );
+  await expect(page.getByText("Admin role required")).toBeVisible();
 });
 
 test("/poison needs the admin role", async ({ page }) => {
@@ -51,21 +45,4 @@ test("/poison needs the admin role", async ({ page }) => {
   await useKey(page, ADMIN_KEY);
   // Past the role gate: this server has no database, so the next error is admin's own.
   await expect(page.getByRole("alert")).toContainText("admin.no_database");
-});
-
-test("/expire needs the admin role", async ({ page }) => {
-  // InventoryService.ExpireReservations is the one inventory procedure behind the gate:
-  // it cancels other people's orders. ops gets the gate, not even the form; admin gets the dry run.
-  await page.goto("/expire");
-  await useKey(page, OPS_KEY);
-  await expect(page.getByText("Admin role required")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Dry run", exact: true })).toHaveCount(0);
-
-  await useKey(page, ADMIN_KEY);
-  await page.getByRole("button", { name: "Dry run", exact: true }).click();
-  await expect(
-    page.locator('[data-slot="card-title"]', {
-      hasText: /^would expire \d+ reservation\(s\)$/,
-    })
-  ).toBeVisible();
 });

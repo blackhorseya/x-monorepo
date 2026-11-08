@@ -5,7 +5,7 @@
 #
 # A pull_request run checks out refs/pull/N/merge: the PR head merged into the base branch *as it
 # was when the run started*. Once main moves (another PR merged), that green says nothing about
-# main + this PR — #187 changed NewCreateOrder's signature while #188's new test still used the
+# main + this PR — #187 changed a constructor's signature while #188's new test still used the
 # old one; both were green, together they do not build. This script reads the latest ci.yml
 # pull_request run for the PR's current head, finds its merge commit, and compares the merge
 # commit's base parent with main *now*:

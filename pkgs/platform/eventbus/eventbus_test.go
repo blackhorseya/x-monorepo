@@ -23,13 +23,13 @@ import (
 )
 
 func TestNaming(t *testing.T) {
-	if got := eventbus.TableName("ordering.v1.OrderCreated"); got != "ordering.events_v1_ordercreated" {
+	if got := eventbus.TableName("example.v1.ThingCreated"); got != "example.events_v1_thingcreated" {
 		t.Fatalf("TableName = %s", got)
 	}
-	if got := eventbus.OffsetsTableName("ordering.v1.OrderCreated"); got != "ordering.events_v1_ordercreated_offsets" {
+	if got := eventbus.OffsetsTableName("example.v1.ThingCreated"); got != "example.events_v1_thingcreated_offsets" {
 		t.Fatalf("OffsetsTableName = %s", got)
 	}
-	if got := eventbus.PoisonTopic("ordering"); got != "ordering.poison" || eventbus.TableName(got) != "ordering.events_poison" {
+	if got := eventbus.PoisonTopic("example"); got != "example.poison" || eventbus.TableName(got) != "example.events_poison" {
 		t.Fatalf("PoisonTopic = %s → %s", got, eventbus.TableName(got))
 	}
 }

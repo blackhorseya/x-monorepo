@@ -37,7 +37,7 @@ func (x SKU) String() string { return string(x) }
 
 // Product is the aggregate root. The price carries its own currency, so two
 // products may be priced in different ones. An inactive product is kept (its
-// SKU may still be on old orders) but is no longer quoted.
+// SKU may still be referenced elsewhere) but is no longer quoted.
 // version is the optimistic-concurrency token repositories compare on Save:
 // 0 for a product never saved, then the number of saves.
 type Product struct {

@@ -4,7 +4,3 @@
 rpc: { replicaCount: 1 }
 worker: { replicaCount: 1 }
 prune: { enabled: false }
-expire: { enabled: false }
-config:
-  ordering: { require_payment: false }
-paymentRpc: { enabled: false }

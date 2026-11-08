@@ -2,17 +2,9 @@
 // thresholds in each script can be per RPC. Environment:
 //   BASE_URL  server root (default http://127.0.0.1:8080); RPCs live under /api
 //   API_KEY   X-API-Key when the server runs with auth on (optional)
-//   ADMIN_API_KEY  X-API-Key for setup()'s SetStock and UpsertProduct only (default API_KEY): both take the
-//             admin role when auth is on (docs/identity.md), CreateOrder etc. do not need it
-//   K6_CUSTOMER_MODE  who names the customer (default auto), see customerId below
-//             Ordering is owned by the caller (docs/identity.md): a server that knows the
-//             caller (a key or JWT) takes the customer from it, one that does not (auth off,
-//             even with a key sent; a public procedure) needs customer_id.
 import http from "k6/http";
-import exec from "k6/execution";
 import { KNOWN_CODES } from "./codes.js";
-import { check } from "k6";
-import { Counter, Trend } from "k6/metrics";
+import { Trend } from "k6/metrics";
 
 export const BASE_URL = __ENV.BASE_URL || "http://127.0.0.1:8080";
 
@@ -37,10 +29,6 @@ export const systemTags = [
 export const throwOnError = true;
 
 export const rpcDuration = new Trend("rpc_duration", true);
-export const rpcErrors = new Counter("rpc_errors");
-// Successful operations per RPC: the scripts threshold on it (count>0) so a run that was
-// refused everywhere cannot pass on "no errors" alone, and cells of the auth gate are comparable.
-export const rpcOk = new Counter("rpc_ok");
 
 let unanswered = 0; // per VU
 export function rpc(method, body, extra = {}) {
@@ -98,75 +86,6 @@ function transportClass(e) {
   return "other";
 }
 
-// Who names the customer is the server's answer to the request itself, not something to infer
-// from the environment (an X-API-Key that is sent but ignored by auth off), nor from another
-// procedure (WhoAmI is public while CreateOrder is not; one call that fails says nothing about
-// the rest). K6_CUSTOMER_MODE:
-//   auto     (default) the first CreateOrder of a VU is sent without customer_id. 200 → the
-//            server knows the caller: name no customer from now on. 400 order.empty_customer →
-//            it does not: send the script's own customer (this call is repeated with it, nothing
-//            was written). Only these two answers are remembered; anything else (503, 401, 403, a
-//            refused credential…) is not cached: the run aborts at once with that answer.
-//   include  always send the script's customer_id (auth off; a key that may place for others)
-//   omit     never send it (the server takes the caller's subject)
-// ListOrders follows what CreateOrder resolved: auth off filters by the script's customer, a
-// principal sees its own (an admin: all). Per VU, as k6 runs each VU in its own runtime.
-const MODE = __ENV.K6_CUSTOMER_MODE || "auto";
-if (!["auto", "include", "omit"].includes(MODE)) {
-  throw new Error(`K6_CUSTOMER_MODE=${MODE}: want auto, include or omit`);
-}
-let resolved = MODE === "auto" ? "" : MODE;
-
-export function customerId(name) {
-  if (!resolved) {
-    exec.test.abort(
-      "customer probe: ListOrders before CreateOrder resolved who names the customer (set K6_CUSTOMER_MODE)"
-    );
-  }
-  return resolved === "include" ? { customer_id: name } : {};
-}
-
-// createOrder is CreateOrder with the customer as K6_CUSTOMER_MODE says; the response is
-// returned as rpc() does, for ok().
-export function createOrder(body, name) {
-  const method = "ordering.v1.OrderService/CreateOrder";
-  if (resolved) return rpc(method, { ...body, ...customerId(name) });
-  const res = rpc(method, body, {
-    probe: true,
-    tags: { probe: "true" },
-    responseCallback: http.expectedStatuses(200, 400),
-  });
-  if (res.status === 200) {
-    resolved = "omit";
-    return res;
-  }
-  if (res.status === 400 && knownCode(res) === "order.empty_customer") {
-    resolved = "include";
-    return rpc(method, { ...body, ...customerId(name) });
-  }
-  exec.test.abort(
-    redact(
-      `customer probe: ${method} answered status ${res.status} code ${errorCode(res)}; ` +
-        "not cached, not a customer answer (K6_CUSTOMER_MODE=include|omit skips the probe)"
-    )
-  );
-}
-
-let shown = 0; // per VU
-export function ok(res, what) {
-  const good = check(res, { [`${what} 200`]: (r) => r.status === 200 });
-  if (!good) {
-    rpcErrors.add(1, { rpc: what, code: errorCode(res) });
-    // the counter tags are not in the summary; say which RPC was refused, and how, a few times
-    if (shown++ < 3) {
-      console.error(redact(`${what}: status ${res.status} code ${errorCode(res)}`));
-    }
-  } else {
-    rpcOk.add(1, { rpc: what });
-  }
-  return good ? res.json() : null;
-}
-
 // What a response says about itself, for logs, messages and tags: the Connect / x-error-code
 // value only, and only if it is a known one (codes.js); else <unrecognized>. A request that got
 // no response at all is transport.<class> (malformed_response, truncated_response, timeout,
@@ -198,63 +117,11 @@ function jsonCode(res) {
   }
 }
 
-// statusTag is a status field of a response body, for tags and messages: a value of `known`
-// (codes.js ORDER_STATUSES / RESERVATION_STATUSES) or <unrecognized> — never the raw field, which
-// a misbehaving upstream or proxy can make the request's X-API-Key (a 200 with legal JSON passes
-// every other check). Output only: decisions compare the raw value, so a wrong status is still
-// wrong. Redacted like errorCode(): a key can equal a legal value.
-export function statusTag(status, known) {
-  return redact(known.has(status) ? status : "<unrecognized>");
-}
-
 // redact is the second layer: no diagnostic leaves with the key this run uses in it.
 export function redact(text) {
   let out = String(text);
-  for (const key of [__ENV.API_KEY, __ENV.ADMIN_API_KEY]) {
+  for (const key of [__ENV.API_KEY]) {
     if (key) out = out.split(key).join("<redacted>");
   }
   return out;
-}
-
-// setStock for setup(): needs the admin role when auth is on (ADMIN_API_KEY, else API_KEY), and the SKU has to
-// be a catalog product already (upsertProduct first; stock.unknown_sku otherwise). SetStock is a read-modify-write under optimistic locking, so a
-// worker touching the same SKU at that moment answers 409 Aborted + concurrent_update —
-// "reload and retry", which for an absolute on_hand means: send it again.
-export function setStock(i, onHand) {
-  let res;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    res = rpc(
-      "inventory.v1.InventoryService/SetStock",
-      { sku: sku(i), on_hand: onHand },
-      { apiKey: __ENV.ADMIN_API_KEY }
-    );
-    if (res.status !== 409) break;
-  }
-  return ok(res, "SetStock");
-}
-
-// upsertProduct for setup(): CreateOrder prices its lines from the catalog, so every SKU a script
-// orders (and every SKU setStock stocks) has to be a product first. Admin role when auth is on, like setStock. UpsertProduct is
-// also a read-modify-write under optimistic locking: 409 Aborted means send it again.
-export function upsertProduct(i, amountMinor) {
-  let res;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    res = rpc(
-      "catalog.v1.CatalogService/UpsertProduct",
-      { sku: sku(i), name: sku(i), price: { amount_minor: amountMinor, currency: "USD" } },
-      { apiKey: __ENV.ADMIN_API_KEY }
-    );
-    if (res.status !== 409) break;
-  }
-  return ok(res, "UpsertProduct");
-}
-
-// customer name for a script's own customers (auth off, or a server that does not know the
-// caller): RUN_ID in it, so runs sharing a database do not share customers.
-export function customer(label) {
-  return `k6-${__ENV.RUN_ID || "run"}-${label}`;
-}
-
-export function sku(i) {
-  return `k6-${__ENV.RUN_ID || "run"}-${i}`;
 }

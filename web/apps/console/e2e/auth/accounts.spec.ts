@@ -15,16 +15,15 @@ const nav = (page: Page) => page.locator("header nav").getByRole("link", { name:
 // doing: the first requests of the page have no credential, and some of them can still be unanswered, or
 // can fail, when the key is set (#483). `whileKeyIsSet` sets that up, the checks after it are the same for all three.
 async function noAdminRole(page: Page, whileKeyIsSet: () => Promise<void>) {
-  await page.goto("/orders");
+  await page.goto("/poison");
   // The admin probe's answer for the role-less key (403). "No Accounts entry" below only means something once
-  // it is in and rendered; what the Orders card shows meanwhile (an alert of its own) is not this test's subject.
+  // it is in and rendered.
   const probed = page.waitForResponse(
     (r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && r.request().headers()["x-api-key"] === OPS_KEY,
   );
   await whileKeyIsSet();
   await probed;
   await settle(page);
-  await expect(page.locator("header nav").getByRole("link", { name: "Orders" })).toBeVisible();
   await expect(nav(page)).toHaveCount(0);
 
   await page.goto("/accounts");
@@ -41,24 +40,24 @@ test("no admin role: no nav entry, and the route says so", async ({ page }) => {
   await noAdminRole(page, () => useKey(page, OPS_KEY));
 });
 
-// The anonymous ListOrders is still on the wire when the key is set; its 401 lands afterwards.
+// The anonymous probe (ListAccounts) is still on the wire when the key is set; its 401 lands afterwards.
 test("no admin role: the first, anonymous answers still out when the key is set", async ({ page }) => {
-  const held = await holdRequests(page, { method: "ListOrders", key: null });
+  const held = await holdRequests(page, { method: "ListAccounts", key: null });
   await noAdminRole(page, async () => {
     await held.arrived();
     await useKey(page, OPS_KEY);
-    const stale = page.waitForResponse((r) => r.url().endsWith("/ListOrders") && r.request().headers()["x-api-key"] === undefined);
+    const stale = page.waitForResponse((r) => r.url().endsWith("/ListAccounts") && r.request().headers()["x-api-key"] === undefined);
     held.release();
     await stale; // the anonymous 401 is in ...
     await settle(page); // ... and rendered: what follows is checked against a page that has it
   });
 });
 
-// The role-less key's first ListOrders fails (503): the Orders card's own error, not the admin entry's.
-test("no admin role: the Orders list failing for the key", async ({ page }) => {
-  const fault = await failRequests(page, { method: "ListOrders", key: OPS_KEY });
+// The role-less key's first probe fails (503): it is retried, and the retry's 403 still says "not admin".
+test("no admin role: the first probe failing for the key", async ({ page }) => {
+  const fault = await failRequests(page, { method: "ListAccounts", key: OPS_KEY });
   await noAdminRole(page, async () => {
-    const failed = page.waitForResponse((r) => r.url().endsWith("/ListOrders") && r.status() === 503);
+    const failed = page.waitForResponse((r) => r.url().endsWith("/ListAccounts") && r.status() === 503);
     await useKey(page, OPS_KEY);
     await failed; // the 503 is in ...
     await settle(page); // ... and rendered: what follows is checked against a page that has it
@@ -183,7 +182,7 @@ async function storageDump(page: Page): Promise<string> {
 // Switching credential while the previous one's admin check is still in flight: the late answer
 // belongs to the old credential and must not open the admin UI for the new one.
 test("a late admin answer does not outlive a switch to a role-less key", async ({ page }) => {
-  await page.goto("/orders");
+  await page.goto("/accounts");
 
   let release!: () => void;
   const released = new Promise<void>((r) => (release = r));

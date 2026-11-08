@@ -8,7 +8,6 @@ secrets:
   catalogRpc:
     apiKey: "catalog-rpc-key-0123456789ab"
 config:
-  ordering: { require_payment: false }
   otel: { endpoint: otel-collector:4317, service_name: x-monorepo-rpc }
   auth:
     mode: optional   # not "required": a catalog-rpc that inherits auth.mode is then visible to check.py
@@ -26,4 +25,3 @@ catalogRpc:
     enabled: true
     labels: { release: monitoring }
 networkPolicy: { enabled: true }
-paymentRpc: { enabled: false }

@@ -7,31 +7,33 @@ import { useKey } from "./helpers";
 // what it does not even ask. Runs in the auth project: auth.mode=required, ADMIN_KEY holds the
 // admin role, OPS_KEY none.
 
-const adminPages = ["Poison", "Prune", "Expire", "Accounts", "Products"] as const;
+const adminPages = ["Poison", "Prune", "Accounts", "Products"] as const;
 const navLink = (page: Page, name: string) => page.locator("header nav").getByRole("link", { name, exact: true });
 
 test("no admin role: the nav leaves out every admin page", async ({ page }) => {
-  await page.goto("/orders");
+  await page.goto("/poison");
+  // "no entry" only means something once the admin probe's answer for the role-less key (403) is in.
+  const probed = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && r.request().headers()["x-api-key"] === OPS_KEY);
   await useKey(page, OPS_KEY);
-  await expect(navLink(page, "Orders")).toBeVisible();
-  await expect(navLink(page, "Stock")).toBeVisible();
+  await probed;
   for (const name of adminPages) await expect(navLink(page, name)).toHaveCount(0);
 
   await useKey(page, ADMIN_KEY);
   for (const name of adminPages) await expect(navLink(page, name)).toBeVisible();
 });
 
-for (const path of ["/poison", "/prune", "/expire", "/products"]) {
+for (const path of ["/poison", "/prune", "/products"]) {
   test(`no admin role: ${path} shows the gate and sends no admin RPC`, async ({ page }) => {
     const adminCalls: string[] = [];
     page.on("request", (req) => {
-      if (req.method() === "POST" && /\/(admin\.v1\.AdminService|catalog\.v1\.CatalogService\/(UpsertProduct|DeactivateProduct|ListProducts)|inventory\.v1\.InventoryService\/ExpireReservations)/.test(req.url())) {
+      if (req.method() === "POST" && /\/(admin\.v1\.AdminService|catalog\.v1\.CatalogService\/(UpsertProduct|DeactivateProduct|ListProducts))/.test(req.url())) {
         adminCalls.push(req.url());
       }
     });
-    await page.goto("/orders");
+    await page.goto("/accounts");
+    const probed = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && r.request().headers()["x-api-key"] === OPS_KEY);
     await useKey(page, OPS_KEY);
-    await expect(navLink(page, "Orders")).toBeVisible();
+    await probed;
 
     await page.goto(path);
     await expect(page.getByText("Admin role required")).toBeVisible();
@@ -43,15 +45,14 @@ for (const path of ["/poison", "/prune", "/expire", "/products"]) {
   });
 }
 
-test("no admin role: Stock has no Set form, an admin does", async ({ page }) => {
-  await page.goto("/stock");
+test("no admin role: Prune has no Dry run, an admin does", async ({ page }) => {
+  await page.goto("/prune");
   await useKey(page, OPS_KEY);
-  await expect(page.locator('[data-slot="card-title"]', { hasText: "Stock" }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Set", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  await expect(page.getByText("Admin role required")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dry run", exact: true })).toHaveCount(0);
 
   await useKey(page, ADMIN_KEY);
-  await expect(page.getByRole("button", { name: "Set", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dry run", exact: true })).toBeVisible();
 });
 
 // "Not an admin" is an answer (PERMISSION_DENIED), not a failure: it is not retried.
@@ -61,9 +62,8 @@ test("no admin role: the probe is not retried", async ({ page }) => {
     if (route.request().headers()["x-api-key"] === OPS_KEY) probes++;
     return route.continue();
   });
-  await page.goto("/orders");
+  await page.goto("/accounts");
   await useKey(page, OPS_KEY);
-  await expect(navLink(page, "Orders")).toBeVisible();
   await expect.poll(() => probes).toBeGreaterThan(0);
   await page.waitForTimeout(500);
   const settled = probes;

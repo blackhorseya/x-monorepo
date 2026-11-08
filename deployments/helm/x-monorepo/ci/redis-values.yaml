@@ -6,7 +6,6 @@ secrets:
   apiKeys: "console=0123456789abcdef0123456789abcdef:admin"
   catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
 config:
-  ordering: { require_payment: false }
   auth: { mode: required }
   otel: { endpoint: otel-collector:4317 }
   worker: { broker: redis, consumer_group: worker, start_from: latest, handler_timeout: 10s }
@@ -31,5 +30,4 @@ worker:
 prune:
   schedule: "0 4 * * 0"
   olderThan: 168h
-  forgetGroups: [old.ordering, old.inventory]
-paymentRpc: { enabled: false }
+  forgetGroups: [old.alpha, old.beta]

@@ -58,7 +58,7 @@ func upsertReq(sku string, amount int64, currency string) *connect.Request[catal
 }
 
 // UpsertProduct and DeactivateProduct change what customers will be charged,
-// so with auth on they take the admin role like SetStock: a role-less
+// so with auth on they take the admin role like other writes: a role-less
 // credential is PERMISSION_DENIED, no credential is UNAUTHENTICATED, the admin
 // role is whatever auth.admin_role says; the reads stay open; auth off is open.
 func TestCatalog_WritesNeedTheAdminRole(t *testing.T) {

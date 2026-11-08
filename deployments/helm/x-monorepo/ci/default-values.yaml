@@ -4,8 +4,6 @@ secrets:
   postgresUrl: postgres://app:app@postgres:5432/app?sslmode=disable
   catalogRpc: { apiKey: "catalog-rpc-key-0123456789ab" }
 config:
-  ordering: { require_payment: false }
   otel: { endpoint: otel-collector:4317 }
 worker:
   autoscaling: { enabled: true, metric: cpu, minReplicas: 1, maxReplicas: 4, behavior: { scaleDown: { stabilizationWindowSeconds: 120 } } }
-paymentRpc: { enabled: false }

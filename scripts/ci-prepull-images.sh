@@ -10,7 +10,7 @@
 #
 # testcontainers-go pulls a missing image while it creates the container. v0.44.0 retries its own
 # ImagePull request (attemptToPullImage, with backoff), yet a Docker Hub 502 still failed a run
-# (39370298272, pkgs/ordering: `reaper: ... failed to resolve reference
+# (39370298272, a pkgs/ module: `reaper: ... failed to resolve reference
 # "docker.io/testcontainers/ryuk:0.14.0": ... 502 Bad Gateway`); which step of the create path
 # that was is not traced. With the images already local that path does not need the registry,
 # and the pull here is retried by the engine CLI. Ryuk stays on: it is what removes the

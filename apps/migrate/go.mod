@@ -5,11 +5,7 @@ go 1.27
 require (
 	github.com/blackhorseya/x-monorepo/pkgs/catalog v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
-	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
-	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
-	github.com/blackhorseya/x-monorepo/pkgs/payment v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
-	github.com/jackc/pgx/v5 v5.12.0
 	github.com/spf13/cobra v1.10.2
 )
 
@@ -45,6 +41,7 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/pgx/v5 v5.12.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
@@ -118,14 +115,9 @@ require (
 
 replace (
 	github.com/blackhorseya/x-monorepo/pkgs/kernel => ../../pkgs/kernel
-	github.com/blackhorseya/x-monorepo/pkgs/ordering => ../../pkgs/ordering
 	github.com/blackhorseya/x-monorepo/pkgs/platform => ../../pkgs/platform
 )
 
-replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory
-
 replace github.com/blackhorseya/x-monorepo/pkgs/catalog => ../../pkgs/catalog
-
-replace github.com/blackhorseya/x-monorepo/pkgs/payment => ../../pkgs/payment
 
 replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity

@@ -3,6 +3,3 @@ catalogRpc: { enabled: true }
 secrets:
   postgresUrl: "postgres://app:app@postgres:5432/app?sslmode=disable"
   catalogRpc: { apiKey: "a=b" }
-config:
-  ordering: { require_payment: false }
-paymentRpc: { enabled: false }

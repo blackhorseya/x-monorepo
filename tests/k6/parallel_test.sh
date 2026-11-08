@@ -9,7 +9,7 @@
 #   wire   k6 exits 0; a lane killed before it wrote a verdict; grep / cat / sleep / rm / mkdir / python3 / env exiting 42 after
 #          partial or full output; verdict lines dropped; a second run whose k6 dies without writing its files while the
 #          first run's files are still in the bin dir (the failure must name the missing files)
-#   smoke  curl / sleep / tee / cat / env exiting 42 (seq is no longer called: catalog.sh counts in the shell, #462)
+#   smoke  curl / sleep / cat / env exiting 42 (seq is no longer called: catalog.sh counts in the shell, #462)
 set -euo pipefail
 abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a path, without dirname inside $(…)
 root=$(abs_dir_of "$0" ../..) || exit 1
@@ -30,10 +30,9 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 PY
-mkbin() { # <dir>: stub rpc / catalog-rpc / worker
+mkbin() { # <dir>: stub rpc / catalog-rpc
   mkdir -p "$1"
   for b in rpc catalog-rpc; do printf '#!/bin/sh\nexec python3 %s/stub.py\n' "$work" > "$1/$b"; chmod +x "$1/$b"; done
-  printf '#!/bin/sh\nsleep 300\n' > "$1/worker"; chmod +x "$1/worker"
 }
 shim() { # <name> <body…> → the dir of a shim called <name>
   local d="$work/shim-$1-$RANDOM"; mkdir -p "$d"; local n=$1; shift
@@ -58,10 +57,10 @@ DEADK6=$(shim k6 'for a in "$@"; do case $a in BASE_URL=*) u=${a#BASE_URL=};; es
 REAL_SLEEP=$(type -P sleep) || exit $?
 
 # --- case runners (run in a subshell of their own; $P, $D set by async) ---
-wire() { # <env…>: wire.sh on orders (and ratelimit), 2 modes, no negatives, in $D/wbin
-  env WIRE_NO_NEGATIVES=1 WIRE_MODES="status closed" PORT="$P" "$@" tests/k6/wire.sh "$D/wbin" orders ratelimit > "$D/wire.out" 2>&1
+wire() { # <env…>: wire.sh on ratelimit (and timeout), 2 modes, no negatives, in $D/wbin
+  env WIRE_NO_NEGATIVES=1 WIRE_MODES="status closed" PORT="$P" "$@" tests/k6/wire.sh "$D/wbin" ratelimit timeout > "$D/wire.out" 2>&1
 }
-wire1() { env WIRE_NO_NEGATIVES=1 WIRE_MODES=status PORT="$P" "$@" tests/k6/wire.sh "$D/wbin" orders > "$D/wire.out" 2>&1; }
+wire1() { env WIRE_NO_NEGATIVES=1 WIRE_MODES=status PORT="$P" "$@" tests/k6/wire.sh "$D/wbin" ratelimit > "$D/wire.out" 2>&1; }
 smoke() { # <SHIM_FAIL> <scripts…>
   local f=$1; shift; mkbin "$D/bin"
   PORT="$P" DATABASE_URL=x SHIM_FAIL=$f PATH="$K6SMOKE:$PATH" tests/k6/smoke.sh "$D/bin" "$@" > "$D/smoke.out" 2>&1
@@ -75,7 +74,7 @@ c_stale() { # real run, then a k6 that dies without writing its files, same bin 
   PATH="$DEADK6:$PATH" wire1 && return 1
   grep -q "k6 did not write it in this call" "$D/wire.out"   # red for the target reason
 }
-c_negenv() { local sd; sd=$(shim env 'exit 42') || return 1; PATH="$sd:$PATH" env WIRE_NO_NEGATIVES= WIRE_MODES=status PORT="$P" tests/k6/wire.sh "$D/wbin" orders > "$D/wire.out" 2>&1; }
+c_negenv() { local sd; sd=$(shim env 'exit 42') || return 1; PATH="$sd:$PATH" env WIRE_NO_NEGATIVES= WIRE_MODES=status PORT="$P" tests/k6/wire.sh "$D/wbin" ratelimit > "$D/wire.out" 2>&1; }
 c_seqwire() { local sd; sd=$(shim "$1" 'echo 1; exit 42') || return 1; PATH="$sd:$PATH" wire1; }
 
 # --- scheduling ---
@@ -92,13 +91,12 @@ async() { # <name> <want zero|nonzero> <function> [args…]
   ) > "$work/res/$i.log" 2>&1 &
 }
 
-for s in "" reservation orders ratelimit timeout; do
+for s in "" ratelimit timeout; do
   if [ -z "$s" ]; then async "smoke: all members pass" zero smoke ""; else async "smoke: $s alone fails" nonzero smoke "$s"; fi
 done
-async "smoke: orders fails, no reservation" nonzero smoke orders orders ratelimit timeout
-async "smoke: ratelimit (middle) fails" nonzero smoke ratelimit orders ratelimit timeout
-async "smoke: reservation only, passes" zero smoke "" reservation
-async "smoke: three together, pass" zero smoke "" orders ratelimit timeout
+async "smoke: ratelimit (first) fails" nonzero smoke ratelimit ratelimit timeout
+async "smoke: timeout (last) fails" nonzero smoke timeout ratelimit timeout
+async "smoke: both together, pass" zero smoke "" ratelimit timeout
 
 withpath() { local d=$1; shift; PATH="$d:$PATH" "$@"; }   # <shim dir> <function…>: the shim first in PATH for that call
 
@@ -134,21 +132,17 @@ async "wire: env exits 42 (negative cells must not pass as 'red')" nonzero c_neg
 async "wire: second run, k6 dies without writing its files; the failure names the missing files" zero c_stale
 
 sd=$(shim curl 'echo partial; exit 42') || exit 1
-async "smoke: curl exits 42 (never ready)" nonzero smoke1 "$sd" orders
+async "smoke: curl exits 42 (never ready)" nonzero smoke1 "$sd" ratelimit
 sd=$(shim sleep 'exit 42') || exit 1
-async "smoke: sleep exits 42" nonzero smoke1 "$sd" orders
-sd=$(shim tee '/bin/cat > /dev/null; exit 42') || exit 1
-async "smoke: tee swallows its input and exits 42" nonzero smoke1 "$sd" reservation
-sd=$(shim tee 'head -n 1 | /bin/cat > "$1"; exit 42') || exit 1
-async "smoke: tee writes one line and exits 42" nonzero smoke1 "$sd" reservation
+async "smoke: sleep exits 42" nonzero smoke1 "$sd" ratelimit
 sd=$(shim cat 'case "$*" in *.out*) exit 42;; esac; exec /bin/cat "$@"') || exit 1
-async "smoke: cat of a script's output exits 42" nonzero smoke1 "$sd" orders
+async "smoke: cat of a script's output exits 42" nonzero smoke1 "$sd" ratelimit
 sd=$(shim env 'exit 42') || exit 1
-async "smoke: env (starts the rpc) exits 42" nonzero smoke1 "$sd" orders
+async "smoke: env (starts the rpc) exits 42" nonzero smoke1 "$sd" ratelimit
 # catalog.sh used to count its readiness loop with `for _ in $(seq 1 100)`: the status of seq was dropped, so a seq that printed
 # 1 and died was a one-round wait (#462). It counts in the shell now, and a failing seq changes nothing.
 sd=$(shim seq 'echo 1; exit 42') || exit 1
-async "smoke: seq is not used by catalog.sh (exit 42 shim, still green)" zero smoke1 "$sd" orders
+async "smoke: seq is not used by catalog.sh (exit 42 shim, still green)" zero smoke1 "$sd" ratelimit
 
 best_effort wait   # every case has its own status file below; a case that left none is a FAIL
 

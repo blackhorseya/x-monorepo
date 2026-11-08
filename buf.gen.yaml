@@ -1,6 +1,6 @@
 # Go codegen. Each proto package lands in its owning Go module's contract/ dir.
 # Output path is derived from go_package (set here, not in the .proto files), so
-# adding a BC means adding two override lines below.
+# adding a BC means adding one override line below.
 version: v2
 managed:
   enabled: true
@@ -18,20 +18,11 @@ managed:
       path: admin/v1
       value: github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1;adminv1
     - file_option: go_package
-      path: ordering/v1
-      value: github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1;orderingv1
-    - file_option: go_package
-      path: inventory/v1
-      value: github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1;inventoryv1
-    - file_option: go_package
       path: identity/v1
       value: github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1;identityv1
     - file_option: go_package
       path: catalog/v1
       value: github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1;catalogv1
-    - file_option: go_package
-      path: payment/v1
-      value: github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1;paymentv1
 plugins:
   - local: bin/protoc-gen-go
     out: .

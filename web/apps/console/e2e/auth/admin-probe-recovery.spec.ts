@@ -18,14 +18,14 @@ const NOTICE = "Could not confirm admin access";
 
 const seed = (page: Page, key: string) =>
   page.addInitScript((k) => localStorage.setItem("console.credential", JSON.stringify({ kind: "api_key", value: k })), key);
-const setButton = (page: Page) => page.getByRole("button", { name: "Set", exact: true });
+const setButton = (page: Page) => page.getByRole("button", { name: "Dry run", exact: true });
 const poisonNav = (page: Page) => page.locator("header nav").getByRole("link", { name: "Poison", exact: true });
 
 test("admin: a probe that fails once with 503 recovers on the same page, same credential, no reload", async ({ page }) => {
   await seed(page, ADMIN_KEY);
   let calls = 0;
   await page.route(PROBE, (route) => (++calls === 1 ? route.fulfill(unavailable) : route.continue()));
-  await page.goto("/stock");
+  await page.goto("/prune");
   await expect(setButton(page)).toBeVisible({ timeout: 15_000 });
   await expect(poisonNav(page)).toBeVisible();
   await expect(page.getByText(NOTICE)).toHaveCount(0);
@@ -36,7 +36,7 @@ test("admin: a probe that cannot reach the server (network failure) recovers the
   await seed(page, ADMIN_KEY);
   let calls = 0;
   await page.route(PROBE, (route) => (++calls === 1 ? route.abort("connectionreset") : route.continue()));
-  await page.goto("/stock");
+  await page.goto("/prune");
   await expect(setButton(page)).toBeVisible({ timeout: 15_000 });
   expect(calls).toBeGreaterThanOrEqual(2);
 });
@@ -50,9 +50,8 @@ test("unauthenticated is an answer, not a failure: no admin UI, no notice, no re
     return route.fulfill(unauthenticated);
   });
   const answered = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts"));
-  await page.goto("/stock");
+  await page.goto("/prune");
   await answered;
-  await expect(page.locator('[data-slot="card-title"]', { hasText: "Stock" }).first()).toBeVisible();
   await page.clock.runFor(30_000); // past every retry delay a failing probe would wait (500ms … 4s, ×3)
   await settle(page);
   await expect(setButton(page)).toHaveCount(0);
@@ -69,7 +68,7 @@ test("a new credential re-probes out of an unanswered probe, without Retry", asy
     keys.push(route.request().headers()["x-api-key"] ?? "");
     return failing ? route.fulfill(unavailable) : route.continue();
   });
-  await page.goto("/stock");
+  await page.goto("/prune");
   await expect(page.getByText(NOTICE)).toBeVisible({ timeout: 30_000 });
   await expect(setButton(page)).toHaveCount(0);
 
@@ -100,11 +99,10 @@ test("a late answer for the previous credential never opens the admin UI of the 
   opsDenied.catch(() => {}); // only awaited on the happy path
   lateAdmin.catch(() => {});
   try {
-    await page.goto("/stock");
+    await page.goto("/prune");
     await adminAnswerInHand;
     await useKey(page, OPS_KEY);
     await opsDenied; // the new credential's answer is in: denied
-    await expect(page.locator('[data-slot="card-title"]', { hasText: "Stock" }).first()).toBeVisible();
     await expect(setButton(page)).toHaveCount(0);
   } finally {
     release();

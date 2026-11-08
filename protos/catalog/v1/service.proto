@@ -7,7 +7,7 @@ import "catalog/v1/entity.proto";
 import "common/v1/money.proto";
 
 // CatalogService is the public RPC contract of the catalog bounded context:
-// the server-side source of product prices. Ordering prices every order with it (QuotePrices).
+// the server-side source of product prices (QuotePrices).
 service CatalogService {
   // UpsertProduct creates a product or replaces the name and price of an
   // existing one; an inactive product is activated again. The price's
@@ -25,8 +25,8 @@ service CatalogService {
   // QuotePrices answers, for up to 100 SKUs in one query, what each sells for
   // now: the price of every active product, and the SKUs that cannot be quoted,
   // split into those with no product and those that were deactivated. Same
-  // access as GetProduct. Ordering calls it (over Connect, from the rpc process to
-  // catalog-rpc) to price an order.
+  // access as GetProduct. A bounded context that needs prices calls it (over Connect, from the
+  // rpc process to catalog-rpc).
   rpc QuotePrices(QuotePricesRequest) returns (QuotePricesResponse);
 }
 

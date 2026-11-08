@@ -21,10 +21,12 @@ test("/poison lists the poison tables (or says there is no database)", async ({ 
 });
 
 test("/prune is prefilled from the URL and a dry run reaches the server", async ({ page }) => {
-  await page.goto("/prune?bc=ordering&days=7&forget=old.ordering");
-  await expect(page.getByLabel("Bounded context (empty = all)")).toHaveValue("ordering");
+  // No bounded context consumes events yet, so no schema is hosted: the dry run covers "all" (an empty
+  // field), which is nothing, and a named one would be admin.unknown_bounded_context.
+  await page.goto("/prune?days=7&forget=old-group");
+  await expect(page.getByLabel("Bounded context (empty = all)")).toHaveValue("");
   await expect(page.getByLabel("Older than (days)")).toHaveValue("7");
-  await expect(page.getByLabel("Forget groups (comma-separated)")).toHaveValue("old.ordering");
+  await expect(page.getByLabel("Forget groups (comma-separated)")).toHaveValue("old-group");
   await page.getByRole("button", { name: "Dry run", exact: true }).click();
   if (!withDB) {
     await expect(page.getByRole("alert")).toContainText("admin.no_database");
@@ -32,32 +34,10 @@ test("/prune is prefilled from the URL and a dry run reaches the server", async 
   }
   // Dry run: the result card says what *would* go, per table, nothing deleted.
   await expect(page.locator('[data-slot="card-title"]', { hasText: /^would delete \d+ row\(s\)$/ })).toBeVisible();
-  await expect(page.getByRole("row").filter({ hasText: "ordering." }).first()).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveCount(0);
-  // A group badge in the note adds that group to forget (URL too), deduplicated. Which groups
-  // are behind depends on what the worker is doing right now, so take whatever is there.
-  const badges = page.getByRole("button", { name: /^forget / });
-  if ((await badges.count()) > 0) {
-    const group = (await badges.first().getAttribute("aria-label"))!.replace(/^forget /, "");
-    await badges.first().click();
-    await expect(page.getByLabel("Forget groups (comma-separated)")).toHaveValue(`old.ordering,${group}`);
-    await expect(page).toHaveURL(new RegExp(`forget=old\\.ordering%2C${group.replace(/\./g, "\\.")}`));
-    await badges.first().click();
-    await expect(page.getByLabel("Forget groups (comma-separated)")).toHaveValue(`old.ordering,${group}`);
-  }
-});
-
-test("/expire is prefilled from the URL and a dry run reaches the server", async ({ page }) => {
-  // Inventory is in-memory without a database, so unlike /prune this works in both modes.
-  await page.goto("/expire?hours=48");
-  await expect(page.getByLabel("Older than (hours)")).toHaveValue("48");
-  await page.getByRole("button", { name: "Dry run", exact: true }).click();
-  await expect(page.locator('[data-slot="card-title"]', { hasText: /^would expire \d+ reservation\(s\)$/ })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("/reservations renders", async ({ page }) => {
-  await page.goto("/reservations");
-  await expect(page.locator('[data-slot="card-title"]', { hasText: "Reservations" })).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+test("/prune takes the bounded context from the URL", async ({ page }) => {
+  await page.goto("/prune?bc=example");
+  await expect(page.getByLabel("Bounded context (empty = all)")).toHaveValue("example");
 });

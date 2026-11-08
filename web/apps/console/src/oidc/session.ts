@@ -53,8 +53,8 @@ const redirectUri = () => new URL(CALLBACK_PATH, window.location.origin).toStrin
 
 // Only a path inside this app is a place to come back to: not another origin, not the login pages.
 export function safeReturnTo(raw: string | null | undefined): string {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return "/orders";
-  if (raw.startsWith("/login") || raw.startsWith(CALLBACK_PATH)) return "/orders";
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return "/";
+  if (raw.startsWith("/login") || raw.startsWith(CALLBACK_PATH)) return "/";
   return raw;
 }
 

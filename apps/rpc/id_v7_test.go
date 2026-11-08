@@ -9,13 +9,13 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 
-	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
+	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
-// New ids are UUID v7, seen from the real entry: the order id CreateOrder
+// New ids are UUID v7, seen from the real entry: the account id CreateAccount
 // returns and the X-Request-Id the server mints. A request id the client
 // brings is echoed untouched, whatever it looks like. Ids stay opaque strings.
 func TestIDs_NewOnesAreV7FromTheRealEntry(t *testing.T) {
@@ -29,16 +29,15 @@ func TestIDs_NewOnesAreV7FromTheRealEntry(t *testing.T) {
 	defer cleanup()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	seedProduct(t, ts.URL, "", "SKU-V7", 100, "USD")
-	client := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
+	client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
 
-	create := func(rid string) *connect.Response[orderingv1.CreateOrderResponse] {
+	create := func(rid string) *connect.Response[identityv1.CreateAccountResponse] {
 		t.Helper()
-		req := connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: "c-v7", Items: []*orderingv1.CreateOrderItem{{Sku: "SKU-V7", Quantity: 1}}})
+		req := connect.NewRequest(&identityv1.CreateAccountRequest{Name: "v7"})
 		if rid != "" {
 			req.Header().Set(server.RequestIDHeader, rid)
 		}
-		res, err := client.CreateOrder(context.Background(), req)
+		res, err := client.CreateAccount(context.Background(), req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -52,8 +51,8 @@ func TestIDs_NewOnesAreV7FromTheRealEntry(t *testing.T) {
 	}
 
 	res := create("")
-	if id := res.Msg.GetOrder().GetId(); !isV7(id) {
-		t.Fatalf("order id %q is not a UUID v7", id)
+	if id := res.Msg.GetAccount().GetId(); !isV7(id) {
+		t.Fatalf("account id %q is not a UUID v7", id)
 	}
 	if rid := res.Header().Get(server.RequestIDHeader); !isV7(rid) {
 		t.Fatalf("minted X-Request-Id %q is not a UUID v7", rid)

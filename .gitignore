@@ -516,12 +516,9 @@ configs/*
 # playwright (web/apps/console e2e)
 test-results/
 playwright-report/
-playwright-report-payment/
 
 # `go build ./...` inside a single-package app module drops the binary in its root; binaries belong in /bin
 /apps/catalog-rpc/catalog-rpc
 /apps/migrate/migrate
-/apps/payment-rpc/payment-rpc
-/apps/payment-worker/payment-worker
 /apps/rpc/rpc
 /apps/worker/worker

@@ -87,7 +87,7 @@ export const PoisonMessageSchema: GenMessage<PoisonMessage> = /*@__PURE__*/
  */
 export type ListPoisonRequest = Message<"admin.v1.ListPoisonRequest"> & {
   /**
-   * Schema name of the BC ("ordering"); empty = every BC the server hosts.
+   * Schema name of the BC ("identity"); empty = every BC the server hosts.
    *
    * @generated from field: string bounded_context = 1;
    */
@@ -262,7 +262,7 @@ export const DropPoisonResponseSchema: GenMessage<DropPoisonResponse> = /*@__PUR
  */
 export type PruneRequest = Message<"admin.v1.PruneRequest"> & {
   /**
-   * Schema name of the BC ("ordering"); empty = every BC the server hosts.
+   * Schema name of the BC ("identity"); empty = every BC the server hosts.
    *
    * @generated from field: string bounded_context = 1;
    */

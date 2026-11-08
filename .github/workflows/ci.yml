@@ -23,7 +23,7 @@ jobs:
   # scripts/affected.sh → the go.work modules for the test matrix; scripts/ci-changes.sh → one
   # run_<job> flag per job below, from the files the PR touches (a docs / Grafana / workflow-only
   # PR runs almost nothing; a *_test.go-only PR runs the Go checks and the test matrix; product Go runs
-  # the Go jobs, helm-kind, helm-kind-payment and k6-wire; the k6 / k6-auth / helm-kind-keda / release-snapshot / console-image
+  # the Go jobs, helm-kind and k6-wire; the k6 / k6-auth / helm-kind-keda / release-snapshot / console-image
   # jobs have narrower triggers, see the table in scripts/ci-changes.sh).
   # Every job is its own job (no dynamic matrix over them) so a skipped one shows up as a skipped check.
   # On main (the release gate) and on dispatch every job runs: a skipped job must never be the
@@ -48,7 +48,6 @@ jobs:
       run_helm: ${{ steps.jobs.outputs.run_helm }}
       run_scripts_test: ${{ steps.jobs.outputs.run_scripts_test }}
       run_helm_kind: ${{ steps.jobs.outputs.run_helm_kind }}
-      run_helm_kind_payment: ${{ steps.jobs.outputs.run_helm_kind_payment }}
       run_helm_kind_keda: ${{ steps.jobs.outputs.run_helm_kind_keda }}
       run_k6: ${{ steps.jobs.outputs.run_k6 }}
       run_k6_auth: ${{ steps.jobs.outputs.run_k6_auth }}
@@ -158,7 +157,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
       - run: task build
-      # which config file each `task` entry hands its binary: PAYMENT_CONFIG / CONFIG / CATALOG_CONFIG must beat a parent APP_CONFIG (#414)
+      # which config file each `task` entry hands its binary: CONFIG / CATALOG_CONFIG must beat a parent APP_CONFIG (#414)
       - run: scripts/task-config-test.sh
 
   # ── helm: the chart renders under every ci/ profile and its derived numbers hold ──
@@ -180,10 +179,9 @@ jobs:
         if: github.event_name == 'pull_request'
         run: deployments/helm/check-chart-bump.sh "${{ github.base_ref }}"
 
-  # The interceptors under traffic: tests/k6/smoke.sh runs the four k6 scripts, each against
-  # its own ./bin/rpc on the service Postgres — load thresholds, rate limit at 50 rps (429 +
-  # Retry-After, accepted ≈ rps), timeout at 1ns (every call DEADLINE_EXCEEDED), reservation
-  # with a ./bin/worker beside the rpc (order → RESERVED latency). ~3 min. Runs on tests/k6,
+  # The interceptors under traffic: tests/k6/smoke.sh runs the two k6 scripts, each against
+  # its own ./bin/rpc on the service Postgres — rate limit at 50 rps (429 + Retry-After,
+  # accepted ≈ rps), timeout at 1ns (every call DEADLINE_EXCEEDED). Runs on tests/k6,
   # pkgs/platform/server + config (the interceptors and their settings), apps/rpc, apps/worker,
   # configs and go.mod / go.sum / go.work; business-flow changes are helm-kind's.
   k6:
@@ -209,9 +207,9 @@ jobs:
       - if: failure()
         run: tail -n 50 bin/k6-*.log
 
-  # The same scripts in every auth state (tests/k6/auth-matrix.sh): auth on with a role-less /
-  # an admin key, auth off with no key / a key sent, × orders / reservation, 2 VU, plus the
-  # per-procedure-public and fails-once fixtures (#193). Parallel to `k6`; it runs on the auth
+  # The key gate (tests/k6/auth-matrix.sh): ratelimit.js and timeout.js with a made-up API key that must
+  # not reach k6's output, also when the answer is a 503 or a 307 echoing it, or the key is a known code (#193).
+  # Parallel to `k6`; it runs on the auth
   # paths (pkgs/platform/server + config, pkgs/identity, apps/rpc, configs, tests/k6), not on every Go change.
   # A static matrix of 3 shards (K6_AUTH_SHARD=i/3: the cells at positions i, i+3, … of
   # `K6_AUTH_LIST=1 tests/k6/auth-matrix.sh`), each leg on its own runner with its own Postgres service,
@@ -263,11 +261,9 @@ jobs:
 
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
   # commit (the console one needs node: pnpm build of web/apps/console). task helm-kind is the whole of it on one
-  # cluster (what a laptop runs); CI runs its two halves as two jobs on two clusters, in parallel (#446):
+  # cluster (what a laptop runs):
   #   helm-kind          install → smoke → upgrade → smoke, negative.sh, outage.sh (task helm-kind-core)
-  #   helm-kind-payment  install, payment.sh, payment-flow.sh (task helm-kind-payment)
-  # Both run on product Go, web, helm and image changes. A task that depends on the other's leftovers would pass on a
-  # laptop and fail here, so each half installs the release itself and seeds its own data.
+  # It runs on product Go, web, helm and image changes.
   helm-kind:
     needs: affected
     if: needs.affected.outputs.run_helm_kind == 'true'
@@ -286,7 +282,6 @@ jobs:
         with: { version: v4.3.0 }
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with: { version: v0.33.0, install_only: true }
-      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
       - run: task helm-kind-core
       - if: failure()
         run: |
@@ -294,56 +289,9 @@ jobs:
           best_effort kubectl -n x-monorepo get all
           best_effort kubectl -n x-monorepo describe pods | tail -120
           best_effort kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200
-      # payment-flow.sh's diagnosis (kind/diag.sh, run BEFORE the release was restored; the other scripts write nothing there, hence
-      # if-no-files-found): every pod's whole log since the run began, Postgres sessions and locks, as files. $RUNNER_TEMP/kind-diag is diag.sh's default; the console got
-      # only the tails (#420). Short retention: it holds the pods' logs. One artifact name per job (upload-artifact names are per run).
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: kind-diag-core
-          path: ${{ runner.temp }}/kind-diag
-          retention-days: 3
-          if-no-files-found: ignore
 
-  helm-kind-payment:
-    needs: affected
-    if: needs.affected.outputs.run_helm_kind_payment == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20 # helm-kind-up ~90 s + payment.sh ~55 s + payment-flow.sh ~125 s (run 41920885162); payment-flow (#367 slice 6) is minutes of real waiting
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/setup
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with: { package_json_file: web/package.json }
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: 22
-      - uses: ./.github/actions/pnpm-cache
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
-        with: { version: v4.3.0 }
-      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
-        with: { version: v0.33.0, install_only: true }
-      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
-      - run: task helm-kind-payment
-      - if: failure()
-        run: |
-          . scripts/best-effort.sh   # diagnostics after the failure: they print what they can and say when they cannot
-          best_effort kubectl -n x-monorepo get all
-          best_effort kubectl -n x-monorepo describe pods | tail -120
-          best_effort kubectl -n x-monorepo logs -l app.kubernetes.io/name=x-monorepo --all-containers --tail=200
-      # payment-flow.sh's diagnosis (kind/diag.sh, run BEFORE the release was restored; the other scripts write nothing there, hence
-      # if-no-files-found): every pod's whole log since the run began, Postgres sessions and locks, as files. $RUNNER_TEMP/kind-diag is diag.sh's default; the console got
-      # only the tails (#420). Short retention: it holds the pods' logs. One artifact name per job (upload-artifact names are per run).
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: kind-diag-payment
-          path: ${{ runner.temp }}/kind-diag
-          retention-days: 3
-          if-no-files-found: ignore
-
-  # KEDA + an OTLP collector + Prometheus on a cluster of its own and a k6 burst that must scale the
-  # worker out on eventbus_consumer_lag and back (task helm-kind-keda). It shares nothing with helm-kind
+  # KEDA + an OTLP collector + Prometheus on a cluster of its own, the chart re-installed with the
+  # worker autoscaling on eventbus_consumer_lag (task helm-kind-keda: the ScaledObject must render and be accepted). It shares nothing with helm-kind
   # beyond the base (helm-kind-up: cluster, images, Postgres / Redis), so it is a parallel job of its
   # own: skipped, it leaves a skipped check. Runs on helm, apps/worker, pkgs/platform, image
   # files and go.mod / go.sum / go.work.
@@ -365,7 +313,6 @@ jobs:
         with: { version: v4.3.0 }
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with: { version: v0.33.0, install_only: true }
-      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
       - run: task helm-kind-keda
       - if: failure()
         run: |
@@ -396,13 +343,6 @@ jobs:
         with:
           cosign-release: v3.1.4
       - run: task release-check release-snapshot
-      # The dry run builds the binary; this proves the image made from it starts `payment-rpc serve`
-      # (non-root, read-only rootfs, auth required) the way a release would ship it (#367 slice 5a).
-      - name: the payment-rpc image starts and serves
-        run: scripts/image-smoke.sh payment-rpc
-      # payment-worker has no listener: its image runs non-root on a read-only rootfs and refuses a start with no postgres.url (#410).
-      - name: the payment-worker image runs and refuses what it cannot serve
-        run: scripts/image-smoke.sh payment-worker
       - name: .goreleaser.yaml's signs command works with this cosign (throwaway key)
         run: scripts/cosign-smoke.sh
       - name: a Rekor v2 409 is re-signed, a 503 is not (#215, real cosign, loopback v2)
@@ -462,7 +402,7 @@ jobs:
   # (E2E_DATABASE_URL: the webServer runs bin/migrate up first; poison / prune then run for real)
   # Sharded (#447): `playwright test --shard=i/N`, N = the matrix size (strategy.job-total), each shard its own runner,
   # postgres and dex. The default run was 369s (2 workers, one runner); 4 workers x 3 shards is the measured choice, see
-  # docs/ci.md. `task web-e2e-shards-check` (shard 1) proves the shards together are the whole `--list`; ports and payment
+  # docs/ci.md. `task web-e2e-shards-check` (shard 1) proves the shards together are the whole `--list`; the ports
   # run on shard 2, the lightest, so they are run exactly once.
   console-e2e:
     needs: affected
@@ -509,17 +449,11 @@ jobs:
       # The same OIDC specs on a non-default port pair (#383): fixtures must follow E2E_RPC_PORT / E2E_WEB_PORT.
       - if: matrix.shard == 2
         run: task web-e2e-ports
-      # The payment flow on the real stack (#367 slice 6): catalog-rpc, payment-rpc serve, payment-worker, rpc and worker on a
-      # database of its own made on the postgres service above (psql is on the runner image), no page.route.
-      - if: matrix.shard == 2
-        run: task web-e2e-payment
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: playwright-report-${{ matrix.shard }}
-          path: |
-            web/apps/console/playwright-report
-            web/apps/console/playwright-report-payment
+          path: web/apps/console/playwright-report
           retention-days: 7
 
   # ── console-image: the specs that need nginx (e2e/image-specs.ts) against the image the release ships (in-memory rpc) ──

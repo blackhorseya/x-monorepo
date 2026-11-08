@@ -16,10 +16,6 @@ import (
 	catalogv1 "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1/catalogv1connect"
 	catalogpg "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra/postgres"
-	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1/inventoryv1connect"
-	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
@@ -116,63 +112,34 @@ func TestRPC_CatalogLivesBehindTheNetwork(t *testing.T) {
 	wantCode(t, err, connect.CodeUnavailable, "catalog.unavailable")
 }
 
-// CreateOrder and SetStock fail closed while the catalog is down, write nothing, leave a replay
-// answerable, leave every other API alone, and recover by themselves when the catalog comes back.
+// A forwarded catalog write fails closed while the catalog is down, writes nothing, leaves every other
+// API alone, and recovers by itself when the catalog comes back.
 func TestCatalogOutage_FailsClosedAndRecovers(t *testing.T) {
 	cat := catalogOnPostgres(t)
 	ts := rpcServer(t, withCatalog(&config.AppConfig{}, cat))
 	c := context.Background()
-	orders := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
-	inv := inventoryv1connect.NewInventoryServiceClient(http.DefaultClient, ts.URL)
-
-	seedProduct(t, ts.URL, "", "OUT-1", 100, "USD")
-	if _, err := inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "OUT-1", OnHand: 10})); err != nil {
-		t.Fatal(err)
-	}
-	create := func(key string) (*connect.Response[orderingv1.CreateOrderResponse], error) {
-		return orders.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
-			CustomerId: "c-out", IdempotencyKey: key, Items: []*orderingv1.CreateOrderItem{{Sku: "OUT-1", Quantity: 1}},
+	cl := catalogv1connect.NewCatalogServiceClient(http.DefaultClient, ts.URL)
+	upsert := func(sku string) error {
+		_, err := cl.UpsertProduct(c, connect.NewRequest(&catalogv1.UpsertProductRequest{
+			Sku: sku, Name: "n", Price: &commonv1.Money{AmountMinor: 100, Currency: "USD"},
 		}))
-	}
-	first, err := create("k-1")
-	if err != nil {
-		t.Fatalf("CreateOrder with the catalog up: %v", err)
-	}
-	orderCount := func() int {
-		res, err := orders.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{CustomerId: "c-out"}))
-		if err != nil {
-			t.Fatalf("ListOrders: %v", err)
-		}
 
-		return len(res.Msg.GetOrders())
+		return err
+	}
+	if err := upsert("OUT-1"); err != nil {
+		t.Fatalf("UpsertProduct with the catalog up: %v", err)
 	}
 
 	for round := 1; round <= 2; round++ { // down, up, down, up: a catalog that flaps recovers each time
 		t.Run(fmt.Sprintf("outage %d", round), func(t *testing.T) {
 			cat.Stop()
 
-			_, err := create(fmt.Sprintf("k-down-%d", round))
+			down := fmt.Sprintf("OUT-DOWN-%d", round)
+			wantCode(t, upsert(down), connect.CodeUnavailable, "catalog.unavailable")
+			_, err := cl.GetProduct(c, connect.NewRequest(&catalogv1.GetProductRequest{Sku: "OUT-1"}))
 			wantCode(t, err, connect.CodeUnavailable, "catalog.unavailable")
-			if n := orderCount(); n != round {
-				t.Fatalf("orders for c-out = %d after a refused CreateOrder, want %d (nothing written)", n, round)
-			}
-			// a replay of an order that exists is answered without asking the catalog
-			again, err := create("k-1")
-			if err != nil || again.Msg.GetOrder().GetId() != first.Msg.GetOrder().GetId() {
-				t.Fatalf("replay with the catalog down = %v, %v; want the original order", again, err)
-			}
-
-			_, err = inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "OUT-1", OnHand: 99}))
-			wantCode(t, err, connect.CodeUnavailable, "catalog.unavailable")
-			got, err := inv.GetStock(c, connect.NewRequest(&inventoryv1.GetStockRequest{Sku: "OUT-1"}))
-			if err != nil || got.Msg.GetStock().GetOnHand() != 10 {
-				t.Fatalf("GetStock after a refused SetStock = %v, %v; want on_hand 10 (nothing written)", got, err)
-			}
 
 			// everything that does not need the catalog is untouched, readyz included
-			if _, err := orders.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: first.Msg.GetOrder().GetId()})); err != nil {
-				t.Fatalf("GetOrder with the catalog down: %v", err)
-			}
 			res, err := http.Get(ts.URL + server.ReadyzPath)
 			if err != nil || res.StatusCode != http.StatusOK {
 				t.Fatalf("readyz with the catalog down = %v, %v; rpc must not depend on it", res, err)
@@ -180,13 +147,12 @@ func TestCatalogOutage_FailsClosedAndRecovers(t *testing.T) {
 			_ = res.Body.Close()
 
 			cat.Restart()
-			// no rpc restart, no waiting: the next call works
-			if _, err := create(fmt.Sprintf("k-up-%d", round)); err != nil {
-				t.Fatalf("CreateOrder after the catalog came back: %v", err)
+			// no rpc restart, no waiting: the next call works, and the refused write left nothing behind
+			if err := upsert(fmt.Sprintf("OUT-UP-%d", round)); err != nil {
+				t.Fatalf("UpsertProduct after the catalog came back: %v", err)
 			}
-			if _, err := inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "OUT-1", OnHand: 10})); err != nil {
-				t.Fatalf("SetStock after the catalog came back: %v", err)
-			}
+			_, err = cl.GetProduct(c, connect.NewRequest(&catalogv1.GetProductRequest{Sku: down}))
+			wantCode(t, err, connect.CodeNotFound, "product.not_found")
 		})
 	}
 }
@@ -209,14 +175,12 @@ func TestCatalogHang_IsUnavailableWithinTheBudget(t *testing.T) {
 	}()
 
 	ts := rpcServer(t, &config.AppConfig{Catalog: config.Catalog{Upstream: "http://" + ln.Addr().String(), APIKey: serviceKey, Timeout: 300 * time.Millisecond}})
-	orders := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
+	cl := catalogv1connect.NewCatalogServiceClient(http.DefaultClient, ts.URL)
 	start := time.Now()
-	_, err = orders.CreateOrder(context.Background(), connect.NewRequest(&orderingv1.CreateOrderRequest{
-		CustomerId: "c", Items: []*orderingv1.CreateOrderItem{{Sku: "ANY", Quantity: 1}},
-	}))
+	_, err = cl.GetProduct(context.Background(), connect.NewRequest(&catalogv1.GetProductRequest{Sku: "ANY"}))
 	wantCode(t, err, connect.CodeUnavailable, "catalog.unavailable")
 	if d := time.Since(start); d > 2*time.Second {
-		t.Fatalf("CreateOrder took %s against a hung catalog, the budget is 300ms", d)
+		t.Fatalf("GetProduct took %s against a hung catalog, the budget is 300ms", d)
 	}
 }
 

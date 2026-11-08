@@ -8,18 +8,8 @@ package main
 
 import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
-	cli2 "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/cli"
-	system3 "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
-	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
-	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/cli"
-	consumer2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/consumer"
-	events2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
-	system2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/consumer"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/cli"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
@@ -60,60 +50,7 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	repository := ordering.ProvideOrderRepository(db, logger)
-	transactor := ordering.ProvideTransactor(db)
-	inbox := ordering.ProvideInbox(db)
-	eventsPublisher := events.NewPublisher(publisher)
-	historyStore := ordering.ProvideHistoryStore(db)
-	auth := cfg.Auth
-	eventPublisher := ordering.ProvideEventPublisher(eventsPublisher, historyStore, auth)
-	clock := system.NewClock()
-	policy := ordering.ProvideOwnership(auth)
-	meterProvider := providers.Meter
-	recorder, err := usecasex.NewRecorder(meterProvider)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	v := ordering.ProvideCancelOrder(repository, transactor, inbox, eventPublisher, clock, policy, recorder)
-	orderCancellationHandler := consumer.NewOrderCancellationHandler(v)
-	configOrdering := cfg.Ordering
-	v2 := ordering.ProvideConfirmOrder(configOrdering, repository, transactor, inbox, eventPublisher, clock, recorder)
-	stockReservedHandler := consumer.NewStockReservedHandler(v2)
-	paymentEventResults, err := metrics.NewPaymentEventResults(meterProvider)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	v3 := ordering.ProvideApplyPaymentCaptured(repository, transactor, inbox, eventPublisher, clock, recorder, paymentEventResults)
-	paymentCapturedHandler := consumer.NewPaymentCapturedHandler(v3)
-	v4 := ordering.ProvideApplyPaymentExpired(repository, transactor, inbox, eventPublisher, clock, recorder, paymentEventResults)
-	paymentExpiredHandler := consumer.NewPaymentExpiredHandler(v4)
-	subscriptions := ordering.ProvideSubscriptions(orderCancellationHandler, stockReservedHandler, paymentCapturedHandler, paymentExpiredHandler)
-	reservationRepository := inventory.ProvideReservationRepository(db)
-	stockRepository := inventory.ProvideStockRepository(db, logger)
-	portTransactor := inventory.ProvideTransactor(db)
-	portInbox := inventory.ProvideInbox(db)
-	publisher2 := events2.NewPublisher(publisher)
-	systemClock := system2.NewClock()
-	v5 := inventory.ProvideReserveStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	orderCreatedHandler := consumer2.NewOrderCreatedHandler(v5)
-	v6 := inventory.ProvideReleaseStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	orderCancelledHandler := consumer2.NewOrderCancelledHandler(v6)
-	v7 := inventory.ProvideCommitStock(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	orderCompletedHandler := consumer2.NewOrderCompletedHandler(v7)
-	inventorySubscriptions := inventory.ProvideSubscriptions(orderCreatedHandler, orderCancelledHandler, orderCompletedHandler)
-	v8 := ordering.ProvideOrderStats(repository, recorder)
-	gauges := ordering.ProvideGauges(v8)
-	v9 := inventory.ProvideReservationStats(reservationRepository, recorder)
-	inventoryGauges := inventory.ProvideGauges(v9)
-	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher, subscriptions, inventorySubscriptions, gauges, inventoryGauges)
+	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -129,57 +66,10 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 	}, nil
 }
 
-// InitializeExpire builds `worker expire`: inventory's reservation TTL sweep
-// on the database, without the router. Same component configs as Initialize
-// minus Redis / Worker (a sweep is one process reading and writing Postgres;
-// its events go through the outbox like everyone else's).
-func InitializeExpire(cfg *config.AppConfig) (*cli.Expire, func(), error) {
-	configPostgres := cfg.Postgres
-	oTel := cfg.OTel
-	log := cfg.Log
-	providers, cleanup, err := otel.New(oTel, log)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, cleanup2, err := postgres.NewDB(configPostgres, providers)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	repository := inventory.ProvideReservationRepository(db)
-	logger := providers.Logger
-	stockRepository := inventory.ProvideStockRepository(db, logger)
-	transactor := inventory.ProvideTransactor(db)
-	inbox := inventory.ProvideInbox(db)
-	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	eventsPublisher := events2.NewPublisher(publisher)
-	clock := system2.NewClock()
-	meterProvider := providers.Meter
-	recorder, err := usecasex.NewRecorder(meterProvider)
-	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	v := inventory.ProvideExpireReservations(repository, stockRepository, transactor, inbox, eventsPublisher, clock, recorder)
-	expire := cli.NewExpire(v)
-	return expire, func() {
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
-}
-
 // InitializeBootstrap builds `worker bootstrap`: identity's first account +
 // first key on an empty store. Identity publishes no events, so it is not in
 // Initialize (the router) — only this operator command needs it.
-func InitializeBootstrap(cfg *config.AppConfig) (*cli2.Bootstrap, func(), error) {
+func InitializeBootstrap(cfg *config.AppConfig) (*cli.Bootstrap, func(), error) {
 	configPostgres := cfg.Postgres
 	oTel := cfg.OTel
 	log := cfg.Log
@@ -196,9 +86,9 @@ func InitializeBootstrap(cfg *config.AppConfig) (*cli2.Bootstrap, func(), error)
 	repository := identity.ProvideAccountRepository(db, logger)
 	apikeyRepository := identity.ProvideAPIKeyRepository(db)
 	inviteRepository := identity.ProvideInviteRepository(db)
-	uuidGenerator := system3.NewUUIDGenerator()
-	secretGenerator := system3.NewSecretGenerator()
-	clock := system3.NewClock()
+	uuidGenerator := system.NewUUIDGenerator()
+	secretGenerator := system.NewSecretGenerator()
+	clock := system.NewClock()
 	transactor := identity.ProvideTransactor(db)
 	meterProvider := providers.Meter
 	recorder, err := usecasex.NewRecorder(meterProvider)
@@ -208,7 +98,7 @@ func InitializeBootstrap(cfg *config.AppConfig) (*cli2.Bootstrap, func(), error)
 		return nil, nil, err
 	}
 	v := identity.ProvideBootstrap(repository, apikeyRepository, inviteRepository, uuidGenerator, secretGenerator, clock, transactor, recorder)
-	bootstrap := cli2.NewBootstrap(v)
+	bootstrap := cli.NewBootstrap(v)
 	return bootstrap, func() {
 		cleanup2()
 		cleanup()

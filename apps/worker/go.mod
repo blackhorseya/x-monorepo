@@ -5,17 +5,12 @@ go 1.27
 require (
 	github.com/ThreeDotsLabs/watermill v1.5.3
 	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
-	github.com/blackhorseya/x-monorepo/pkgs/inventory v0.0.0
-	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0
-	github.com/blackhorseya/x-monorepo/pkgs/ordering v0.0.0
-	github.com/blackhorseya/x-monorepo/pkgs/payment v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/google/wire v0.7.0
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/otel/metric v1.47.0
-	google.golang.org/protobuf v1.36.12
 	gorm.io/gorm v1.31.2
 )
 
@@ -37,7 +32,7 @@ require (
 	github.com/ThreeDotsLabs/watermill-sql/v4 v4.1.5 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/blackhorseya/x-monorepo/pkgs/catalog v0.0.0 // indirect
+	github.com/blackhorseya/x-monorepo/pkgs/kernel v0.0.0 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.4 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
@@ -167,19 +162,15 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/grpc v1.85.0 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	gorm.io/driver/postgres v1.6.3 // indirect
 )
 
 replace (
 	github.com/blackhorseya/x-monorepo/pkgs/kernel => ../../pkgs/kernel
-	github.com/blackhorseya/x-monorepo/pkgs/ordering => ../../pkgs/ordering
 	github.com/blackhorseya/x-monorepo/pkgs/platform => ../../pkgs/platform
 )
-
-replace github.com/blackhorseya/x-monorepo/pkgs/inventory => ../../pkgs/inventory
 
 replace github.com/blackhorseya/x-monorepo/pkgs/catalog => ../../pkgs/catalog
 
 replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity
-
-replace github.com/blackhorseya/x-monorepo/pkgs/payment => ../../pkgs/payment

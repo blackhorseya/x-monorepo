@@ -64,7 +64,7 @@ type httpRoute struct {
 }
 
 // WithHTTPRoute mounts a plain HTTP handler (not Connect) at method + path, next to the probes. It is
-// for the few things that are not an RPC of ours, such as a provider's webhook (docs/payment.md §7).
+// for the few things that are not an RPC of ours, such as an external provider's webhook.
 //
 // Know what it does NOT get: the auth interceptor, the rate limit and the timeout wrap Connect procedures
 // only, so a handler mounted here is open to whoever can reach the port unless it authenticates the request

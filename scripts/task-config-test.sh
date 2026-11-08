@@ -3,8 +3,7 @@
 #
 #   scripts/task-config-test.sh     # needs go + task; CI's build job runs it after `task build`
 #
-# Every task that reads a config file chooses it from its own variable (CONFIG, CATALOG_CONFIG,
-# PAYMENT_CONFIG). A parent APP_CONFIG already in the environment must not win over it: a Task `env:`
+# Every task that reads a config file chooses it from its own variable (CONFIG, CATALOG_CONFIG). A parent APP_CONFIG already in the environment must not win over it: a Task `env:`
 # entry does not beat the OS environment, so the choice has to be made in the command itself. The probe
 # is the real entry: a config file that cannot be parsed, at a path with a space, chosen through the
 # task's variable, while the parent environment names a different unparsable file. config.Load fails
@@ -42,13 +41,10 @@ entries=(
   "run CONFIG"
   "worker CONFIG"
   "poison CONFIG -- list"
-  "expire CONFIG -- --older-than 1h --dry-run"
   "bootstrap CONFIG"
   "prune CONFIG -- --older-than 1h --dry-run"
   "migrate CONFIG -- version"
   "catalog-rpc CATALOG_CONFIG"
-  "payment-rpc PAYMENT_CONFIG"
-  "payment-worker PAYMENT_CONFIG"
 )
 for e in "${entries[@]}"; do
   # shellcheck disable=SC2206

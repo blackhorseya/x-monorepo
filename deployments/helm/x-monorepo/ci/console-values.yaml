@@ -10,6 +10,3 @@ console:
     className: nginx
     hosts: [{ host: console.example.com, paths: [{ path: /, pathType: Prefix }] }]
     tls: [{ secretName: console-tls, hosts: [console.example.com] }]
-config:
-  ordering: { require_payment: false }
-paymentRpc: { enabled: false }

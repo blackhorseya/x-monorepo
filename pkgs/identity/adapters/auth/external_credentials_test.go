@@ -79,7 +79,7 @@ func TestExternalCredentials_AllowsUnboundOnlyClaimInvite(t *testing.T) {
 		identityv1connect.IdentityServiceWhoAmIProcedure,
 		identityv1connect.IdentityServiceCreateAccountProcedure,
 		identityv1connect.IdentityServiceCreateInviteProcedure,
-		"/ordering.v1.OrderService/CreateOrder",
+		"/example.v1.ThingService/CreateThing",
 		"",
 	} {
 		if x.AllowsUnbound(p) {

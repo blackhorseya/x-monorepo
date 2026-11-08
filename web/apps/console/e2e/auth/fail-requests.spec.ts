@@ -52,14 +52,14 @@ test("failRequests: key omitted matches every caller, a string only its key, nul
 });
 
 test("failRequests: only the exact method, only `times` calls, and a reset is a network failure", async ({ page }) => {
-  const f = await failRequests(page, { method: "ListOrders" });
-  expect(await call(page, "ListOrdersExtra")).toBe(200); // another method, even with the same prefix
-  expect(await call(page, "XListOrders")).toBe(200); // ... or one that merely contains it
-  expect(await call(page, "ListOrder")).toBe(200);
-  expect(await call(page, "ListAccounts")).toBe(200); // another RPC altogether
+  const f = await failRequests(page, { method: "ListAccounts" });
+  expect(await call(page, "ListAccountsExtra")).toBe(200); // another method, even with the same prefix
+  expect(await call(page, "XListAccounts")).toBe(200); // ... or one that merely contains it
+  expect(await call(page, "ListAccount")).toBe(200);
+  expect(await call(page, "ListProducts")).toBe(200); // another RPC altogether
   expect(f.matched()).toBe(0);
-  expect(await call(page, "ListOrders")).toBe(503); // the first
-  expect(await call(page, "ListOrders")).toBe(200); // times defaults to 1
+  expect(await call(page, "ListAccounts")).toBe(503); // the first
+  expect(await call(page, "ListAccounts")).toBe(200); // times defaults to 1
   expect([f.matched(), f.failed()]).toEqual([2, 1]);
 
   const r = await failRequests(page, { method: "Reset", mode: "reset" });
@@ -150,7 +150,7 @@ test("holdRequests: only the exact method; other RPCs and same-prefix names are 
   expect(await call(page, "SlowExtra")).toBe(200);
   expect(await call(page, "XSlow")).toBe(200);
   expect(await call(page, "Slo")).toBe(200);
-  expect(await call(page, "ListOrders")).toBe(200);
+  expect(await call(page, "ListAccounts")).toBe(200);
   await settle(page);
   expect(held.count()).toBe(0);
 });
@@ -201,7 +201,7 @@ test("scriptByKey: only the exact rpc is scripted; another method, a same-prefix
   const script = await scriptByKey(page, RPC("Exact"), { "": { connect: "unavailable" } });
   expect(await call(page, "ExactExtra")).toBe(200);
   expect(await call(page, "XExact")).toBe(200);
-  expect(await call(page, "ListOrders")).toBe(200);
+  expect(await call(page, "ListAccounts")).toBe(200);
   expect(script.count("")).toBe(0);
   expect(await call(page, "Exact")).toBe(503);
   expect(script.count("")).toBe(1);
@@ -224,9 +224,9 @@ test("scriptByKey + holdRequests: a parked call has not reached the script; afte
 });
 
 test("scriptByKey + holdRequests: registered the other way round the script answers first and the hold parks nothing", async ({ page }) => {
-  const held = await holdRequests(page, { method: "Order" });
-  const script = await scriptByKey(page, RPC("Order"), { "": { ok: { from: "script" } } }); // registered later: sees the call first
-  expect(await callFull(page, "Order")).toEqual([200, JSON.stringify({ from: "script" })]);
+  const held = await holdRequests(page, { method: "Thing" });
+  const script = await scriptByKey(page, RPC("Thing"), { "": { ok: { from: "script" } } }); // registered later: sees the call first
+  expect(await callFull(page, "Thing")).toEqual([200, JSON.stringify({ from: "script" })]);
   expect([script.count(""), held.count()]).toEqual([1, 0]);
 });
 

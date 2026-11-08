@@ -22,7 +22,7 @@ import (
 
 const (
 	claimInvite = "/identity.v1.IdentityService/ClaimInvite"
-	otherProc   = "/ordering.v1.OrderService/CreateOrder"
+	otherProc   = "/identity.v1.IdentityService/ListAccounts"
 	oidcToken   = "eyJ.oidc-token-body.sig" // what the fake verifier knows
 	apiKeyValue = "ci-key-0123456789abcdef"
 )

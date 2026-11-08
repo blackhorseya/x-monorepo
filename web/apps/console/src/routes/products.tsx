@@ -12,7 +12,7 @@ import { catalog } from "../client";
 import { keys, productsQuery } from "../queries";
 import { ErrorAlert } from "../components/error-alert";
 import { Field } from "../components/field";
-import { formatMoney } from "../components/order-status";
+import { formatMoney } from "../components/money";
 
 // The catalog's side of pricing (CatalogService): what each SKU sells for. Behind AdminGate in
 // the router, because saving and deactivating are the admin's (the server checks the role too).

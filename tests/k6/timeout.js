@@ -33,7 +33,7 @@ export const options = {
 };
 
 export default function () {
-  const res = rpc("ordering.v1.OrderService/ListOrders", { page_size: 1 });
+  const res = rpc("identity.v1.IdentityService/ListAccounts", { page_size: 1 });
   timedOut.add(
     check(res, {
       504: (r) => r.status === 504,

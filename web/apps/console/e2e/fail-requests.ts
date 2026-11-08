@@ -5,11 +5,11 @@ import type { Page, Route } from "@playwright/test";
 // on untouched, and the handlers hand it to the next one (route.fallback), so several of these on
 // one page, and a spec's own page.route, compose. Counters are per call.
 //
-// method  the RPC's name, the last segment of the URL ("ListOrders", "QuotePrices"); matched exactly.
+// method  the RPC's name, the last segment of the URL ("ListAccounts", "QuotePrices"); matched exactly.
 // key     which callers: omitted = any; a string = calls sent with that X-API-Key; null = calls sent
 //         with no X-API-Key (the anonymous ones: the console's first requests before a credential is set).
 // bodyIncludes  omitted = any body; a string = only calls whose request body contains it (substring, case
-//         sensitive). For a page that sends the same RPC about something else first: the order form quotes its
+//         sensitive). For a page that sends the same RPC about something else first: a page may ask its
 //         default SKU before the one a test types, and a fault meant for the typed SKU must not be spent on that.
 export type Target = { method: string; key?: string | null; bodyIncludes?: string };
 
@@ -26,7 +26,7 @@ function matches({ method, key, bodyIncludes }: Target) {
 
 // ---- failRequests: the next `times` matching calls fail -------------------------------------
 //
-//   const fault = await failRequests(page, { method: "ListOrders", key: OPS_KEY });   // before page.goto
+//   const fault = await failRequests(page, { method: "ListAccounts", key: OPS_KEY });   // before page.goto
 //   ...
 //   await expect.poll(() => fault.failed()).toBe(1);   // the fault was really hit: no vacuous run
 //
@@ -68,9 +68,9 @@ export async function failRequests(page: Page, options: FailRequestsOptions): Pr
 
 // ---- holdRequests: matching calls are parked until release() ---------------------------------
 //
-//   const held = await holdRequests(page, { method: "ListOrders", key: null });   // before page.goto
-//   await page.goto("/orders");
-//   await held.arrived();          // the anonymous ListOrders is on the wire, unanswered
+//   const held = await holdRequests(page, { method: "ListAccounts", key: null });   // before page.goto
+//   await page.goto("/accounts");
+//   await held.arrived();          // the anonymous ListAccounts is on the wire, unanswered
 //   await useKey(page, OPS_KEY);   // the credential changes while the first answer is still out
 //   held.release();                // now the stale answer may land
 //
@@ -112,9 +112,9 @@ export async function holdRequests(page: Page, target: Target): Promise<RequestH
 
 // ---- scriptByKey: each caller gets its own scripted answer --------------------------------------
 //
-//   const list = await scriptByKey(page, "ordering.v1.OrderService/ListOrders", { "": { connect: "unauthenticated" }, OPS: { ok: {...} } });
+//   const list = await scriptByKey(page, "identity.v1.IdentityService/ListAccounts", { "": { connect: "unauthenticated" }, OPS: { ok: {...} } });
 //
-// rpc   service and method as they end the URL ("ordering.v1.OrderService/ListOrders"); matched exactly.
+// rpc   service and method as they end the URL ("identity.v1.IdentityService/ListAccounts"); matched exactly.
 // plan  the Reply for a call sent with that X-API-Key ("" = no X-API-Key). A key that is not in the plan is
 //       a test bug and is answered HTTP 599 (not passed on) so it cannot go unnoticed.
 // It answers the call itself, so a hold meant to park the call is registered AFTER it (the newest handler

@@ -1,6 +1,6 @@
 // Package catalog is the catalog bounded context: the server-side source of
 // product prices (SKU, name, price with its own currency, active). It
-// publishes no events and consumes none; ordering prices its orders through its
+// publishes no events and consumes none; other bounded contexts price through its
 // QuotePrices RPC. ProviderSet is its only export to
 // composition roots (apps/*).
 package catalog
@@ -47,8 +47,7 @@ var ProviderSet = wire.NewSet(
 
 // ClientProviderSet is the catalog as another process's service: the composition root that does not
 // own the catalog (apps/rpc) asks catalog-rpc over Connect instead of loading the BC. It provides the
-// catalogv1connect.CatalogServiceHandler the other BCs' adapters ask (ordering's pricing, inventory's
-// product check) and the Forwarder that serves catalog.v1 on the caller's own port. Needs config.Catalog
+// catalogv1connect.CatalogServiceHandler the other BCs' adapters ask and the Forwarder that serves catalog.v1 on the caller's own port. Needs config.Catalog
 // (upstream, service key) and the otel providers; builds nothing of the BC itself, so there is no
 // repository, no database and no catalog schema on that side.
 var ClientProviderSet = wire.NewSet(
@@ -114,7 +113,7 @@ func ProvideDeactivateProduct(products product.Repository, clock port.Clock, tx 
 }
 
 // ProvideQuotePrices is the batch price lookup other bounded contexts ask for through
-// CatalogService.QuotePrices (ordering's adapters/pricing, over Connect from apps/rpc).
+// CatalogService.QuotePrices (from another BC's adapter, over Connect from apps/rpc).
 func ProvideQuotePrices(products product.Repository, rec *usecasex.Recorder) rpc.QuotePricesUC {
 	return decorate("catalog.quote_prices", rec, usecase.NewQuotePrices(products))
 }

@@ -32,76 +32,6 @@ type AppConfig struct {
 	OTel     OTel     `mapstructure:"otel"`
 	Worker   Worker   `mapstructure:"worker"`
 	Catalog  Catalog  `mapstructure:"catalog"`
-	Ordering Ordering `mapstructure:"ordering"`
-	Payment  Payment  `mapstructure:"payment"`
-}
-
-// Ordering configures the ordering BC. Only apps/worker reads it for now: an order becomes
-// CONFIRMED in the worker's StockReserved consumer, which is where the setting is applied.
-type Ordering struct {
-	// RequirePayment is read at the moment an order becomes CONFIRMED and stored on the order as
-	// its payment_required snapshot (docs/payment.md §2); a CONFIRMED order is then completed only
-	// through payment. Changing it never touches orders that are already CONFIRMED. Default false.
-	RequirePayment bool `mapstructure:"require_payment"`
-}
-
-// CheckRequirePayment is the one rule for "ordering.require_payment is on": there must be a payment-rpc to
-// pay at, i.e. payment.upstream is set. Both apps that act on the switch apply it before they connect to
-// anything: rpc (which also needs payment.api_key to call it) and the worker (which takes the payment_required
-// snapshot and must NOT hold the key: it is rpc's service credential). Without it every new order would
-// stay CONFIRMED, waiting for a payment nobody can start, until the reservation TTL cancels it.
-func CheckRequirePayment(o Ordering, p Payment) error {
-	if o.RequirePayment && strings.TrimSpace(p.Upstream) == "" {
-		return errors.New("ordering.require_payment is on but payment.upstream (APP_PAYMENT_UPSTREAM) is not set: " +
-			"orders would wait for a payment nobody can start; set payment.upstream to payment-rpc, or turn the switch off")
-	}
-
-	return nil
-}
-
-// Payment configures payment (docs/payment.md). Provider, ReconcileWindow and MockCheckoutTTL are read
-// by payment's own processes only (apps/payment-rpc, apps/payment-worker); Upstream, APIKey and Timeout by apps/rpc only (how it reaches payment-rpc).
-type Payment struct {
-	// Upstream is the base URL of payment-rpc, e.g. http://x-monorepo-payment-rpc:80. Read by apps/rpc.
-	// Payment is optional for rpc: unset together with APIKey, the payment API answers
-	// payment.unavailable. Set one without the other, or one that is not an http(s) URL, and rpc
-	// refuses to start; so does ordering.require_payment with neither set.
-	Upstream string `mapstructure:"upstream"`
-	// APIKey is the service credential rpc presents to payment-rpc (the key named rpc in payment-rpc's
-	// auth.api_keys; never a user's). Secret: APP_PAYMENT_API_KEY, never in the file or a log.
-	APIKey string `mapstructure:"api_key"`
-	// Timeout bounds one call to payment-rpc (default 3s); a slower payment-rpc is UNAVAILABLE.
-	Timeout time.Duration `mapstructure:"timeout"`
-	// Provider names the payment provider. The first version has "mock" only; anything else refuses to start.
-	Provider string `mapstructure:"provider"`
-	// ReconcileWindow is how long after a payment became EXPIRED or CANCELLED the expire sweep keeps
-	// asking the provider whether money arrived anyway (docs/payment.md §3「補查有界」). It must be longer
-	// than the provider's checkout validity, checked at start-up. Default 24h.
-	ReconcileWindow time.Duration `mapstructure:"reconcile_window"`
-	// MockCheckoutTTL is how long a checkout page of the mock provider stays valid. Default 30m: the longest a checkout can last, which payment.window must fit in.
-	MockCheckoutTTL time.Duration `mapstructure:"mock_checkout_ttl"`
-	// MockRedeliveryWindow is how long after a notification the mock provider may still send it
-	// again; webhook_retention must outlast the provider's. Default 72h.
-	MockRedeliveryWindow time.Duration `mapstructure:"mock_redelivery_window"`
-	// MockWebhookSecret signs and verifies the mock provider's webhooks (secret: APP_PAYMENT_MOCK_WEBHOOK_SECRET,
-	// never in a file or a log). Empty = a random one per process, which only a test in the same process
-	// can sign with.
-	MockWebhookSecret string `mapstructure:"mock_webhook_secret"`
-	// MockControl switches on the mock provider's control entry (`payment-rpc mock pay|notify|fail`) and makes
-	// every process of the mock honour the faults it sets. Off by default and only meaningful for provider
-	// "mock": it is for kind and tests, where nobody can really pay (docs/payment.md §9 S6).
-	MockControl bool `mapstructure:"mock_control"`
-	// Window is how long a new payment stays payable (expires_at = creation + Window). Default 30m.
-	Window time.Duration `mapstructure:"window"`
-	// WebhookRetention is how long a PROCESSED payment.webhook_events row is kept; `expire` deletes the
-	// older ones. 0 = keep forever. It is the dedup memory of redelivered notifications, so it must be
-	// longer than the provider's redelivery window or start-up is refused. Default 720h.
-	WebhookRetention time.Duration `mapstructure:"webhook_retention"`
-	// ExpireInterval is how often `expire` runs (the CronJob period); the sweep uses it to know a
-	// reconcile query is the last one a payment will get. Default 15m.
-	ExpireInterval time.Duration `mapstructure:"expire_interval"`
-	// ExpireBatch bounds the payments one `expire` run looks at, and the webhook rows it deletes. Default 100.
-	ExpireBatch int `mapstructure:"expire_batch"`
 }
 
 // Catalog is how apps/rpc reaches the catalog service (apps/catalog-rpc): the base URL, the one
@@ -487,19 +417,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.oidc.issuers", []OIDCIssuer{})
 	v.SetDefault("auth.resolver_timeout", 2*time.Second)
 	v.SetDefault("auth.last_used_interval", time.Minute)
-	v.SetDefault("payment.upstream", "")
-	v.SetDefault("payment.api_key", "")
-	v.SetDefault("payment.timeout", 3*time.Second)
-	v.SetDefault("payment.provider", "mock")
-	v.SetDefault("payment.reconcile_window", 24*time.Hour)
-	v.SetDefault("payment.mock_checkout_ttl", 30*time.Minute)
-	v.SetDefault("payment.mock_redelivery_window", 72*time.Hour)
-	v.SetDefault("payment.mock_webhook_secret", "")
-	v.SetDefault("payment.mock_control", false)
-	v.SetDefault("payment.window", 30*time.Minute)
-	v.SetDefault("payment.webhook_retention", 720*time.Hour)
-	v.SetDefault("payment.expire_interval", 15*time.Minute)
-	v.SetDefault("payment.expire_batch", 100)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
@@ -515,7 +432,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("catalog.upstream", "")
 	v.SetDefault("catalog.api_key", "")
 	v.SetDefault("catalog.timeout", 3*time.Second)
-	v.SetDefault("ordering.require_payment", false)
 	v.SetDefault("worker.consumer_group", "worker")
 	v.SetDefault("worker.broker", BrokerPostgres)
 	v.SetDefault("worker.start_from", StartFromBeginning)
@@ -547,31 +463,6 @@ func readFile(v *viper.Viper) error {
 	return nil
 }
 
-// ProviderCredentials names (never the values) the payment-provider credentials this config carries. They belong
-// to apps/payment-rpc alone (docs/payment.md §1): every other process reads a config an operator can also write
-// (the release-wide ConfigMap and Secret), so each of them refuses to start on a non-empty one — whatever the way in
-// (a config file, APP_* env, a Secret). A provider's own credential field is added here when it is added to Payment;
-// the settings rpc legitimately reads (upstream, api_key, timeout) and the non-secret provider tuning are not
-// credentials of a provider and are not listed.
-func (x *AppConfig) ProviderCredentials() []string {
-	var out []string
-	if strings.TrimSpace(x.Payment.MockWebhookSecret) != "" {
-		out = append(out, "payment.mock_webhook_secret")
-	}
-
-	return out
-}
-
-// RejectProviderCredentials is what a process that does not run a payment provider calls after Load: an error
-// naming the settings, never their values. app is the process's name for the message.
-func (x *AppConfig) RejectProviderCredentials(app string) error {
-	if names := x.ProviderCredentials(); len(names) > 0 {
-		return fmt.Errorf("%s: %s is set: a payment provider's credential belongs to payment's own processes (payment-rpc, payment-worker) alone and this process never needs it; unset it (config file, APP_* env, Secret)", app, strings.Join(names, ", "))
-	}
-
-	return nil
-}
-
 func (x *AppConfig) validate() error {
 	if x.HTTP.ShutdownDelay < 0 {
 		return fmt.Errorf("invalid http.shutdown_delay %s (want >= 0)", x.HTTP.ShutdownDelay)
@@ -587,9 +478,6 @@ func (x *AppConfig) validate() error {
 	}
 	if by := x.HTTP.RateLimit.By; by != RateLimitGlobal && by != RateLimitPeer {
 		return fmt.Errorf("invalid http.rate_limit.by %q (want global|peer)", by)
-	}
-	if x.Payment.Timeout <= 0 {
-		return fmt.Errorf("invalid payment.timeout %s (want > 0: payment-rpc is on the request path of StartPayment)", x.Payment.Timeout)
 	}
 	if x.Catalog.Timeout <= 0 {
 		return fmt.Errorf("invalid catalog.timeout %s (want > 0: the catalog is on the request path)", x.Catalog.Timeout)

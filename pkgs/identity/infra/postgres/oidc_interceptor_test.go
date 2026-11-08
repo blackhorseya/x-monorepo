@@ -216,7 +216,7 @@ func (w *oidcWorld) wantRejected(t *testing.T, what, procedure, token string, co
 	}
 }
 
-const orderProc = "/ordering.v1.OrderService/CreateOrder"
+const orderProc = "/example.v1.ThingService/CreateThing"
 
 // An unbound identity may claim its invite and nothing else; once claimed, the
 // same token is the account's principal, with the account's roles and not the
