@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Is this PR's green CI about the tree that merging would produce? Run before every merge:
 #
-#   scripts/merge-ready.sh <pr> [--revalidate]      # task merge-ready -- <pr>
+#   scripts/merge-ready.sh <pr>      # task merge-ready -- <pr>
 #
 # A pull_request run checks out refs/pull/N/merge: the PR head merged into the base branch *as it
 # was when the run started*. Once main moves (another PR merged), that green says nothing about
@@ -10,23 +10,16 @@
 # pull_request run for the PR's current head, finds its merge commit, and compares the merge
 # commit's base parent with main *now*:
 #   fresh  base parent == main HEAD and head parent == PR head   → the green is about this merge
-#   STALE  anything else                                         → not proven; revalidate first
+#   STALE  anything else                                         → not proven; rebase / update the branch, rerun CI
 # Also needs the run finished and every check of the PR pass / skipping (no pending, fail, cancel).
-#
-# --revalidate (stale only): dispatch .github/workflows/merge-tree.yml for (pr, head, main), which
-# builds main + head with scripts/merge-tree-check.sh. `gh run rerun` is NOT used: a rerun reuses
-# the original GITHUB_SHA / merge ref, so it would re-run the same stale tree. The PR head never
-# changes (no "update branch"), so a reviewed head stays the reviewed head. A successful
-# merge-tree run for exactly this pr / head / main counts as the composite check on the next call.
 #
 # Exit: 0 ready · 1 checks missing, pending or failing · 2 stale / unproven · 3 usage.
 set -euo pipefail
 _lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this script's own directory, whatever the cwd (parameter expansion only)
 . "$_lib/best-effort.sh" || { echo "merge-ready: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
-usage() { echo "usage: $0 <pr> [--revalidate]" >&2; exit 3; }
-[ $# -ge 1 ] && [ $# -le 2 ] || usage
-pr=$1 revalidate=false
-case "${2:-}" in "") ;; --revalidate) revalidate=true ;; *) usage ;; esac
+usage() { echo "usage: $0 <pr>" >&2; exit 3; }
+[ $# -eq 1 ] || usage
+pr=$1
 case $pr in ''|*[!0-9]*) usage ;; esac
 
 repo=${MERGE_READY_REPO:-}
@@ -104,28 +97,6 @@ if $fresh; then
   exit 0
 fi
 
-# ── stale: a merge-tree run for exactly (pr, head, main) is the other way to be proven ──
-# The run title is the whole claim (merge-tree.yml validates its inputs, so it is exactly what ran):
-# compare it for equality, never as a substring — "...base=<main>-wrong-tree" must not pass.
-want="merge-tree pr=$pr head=$head base=$main"
-tree=""
-# read into a variable first: `done < <(gh … || true)` lost gh's status, and a gh that died after printing the matching run
-# still counted as proof (#462). A gh that fails here means "no proof", i.e. stale — never "ready".
-treeruns=$(gh run list --workflow merge-tree.yml --event workflow_dispatch --repo "$repo" --limit 30 \
-  --json databaseId,status,conclusion,displayTitle \
-  -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.displayTitle)"' 2>/dev/null) || { echo "NOT READY: gh run list (merge-tree.yml) failed — no merge-tree run can be proven for PR #$pr" >&2; exit 1; }
-while read -r id st concl title; do
-  if [ "$st" = completed ] && [ "$concl" = success ] && [ "$title" = "$want" ]; then tree=$id; break; fi
-done <<<"$treeruns"
-if [ -n "$tree" ]; then
-  echo "READY: merge-tree run $tree built main $main + head $head and passed ($total checks green on the PR)"
-  exit 0
-fi
-echo "NOT READY (stale): re-verify main $main + head $head before merging"
-if $revalidate; then
-  gh workflow run merge-tree.yml --repo "$repo" -f "pr=$pr" -f "head=$head" -f "base=$main"
-  echo "  dispatched merge-tree.yml (pr=$pr head=$head base=$main); run this again when it finishes"
-else
-  echo "  scripts/merge-ready.sh $pr --revalidate dispatches the check without touching the PR head"
-fi
+# ── stale: the green is not about main + this head — never ready ──
+echo "NOT READY (stale): rebase or update the branch onto main $main, then rerun CI and run this again"
 exit 2
