@@ -42,7 +42,11 @@ GEN_TOOLS="buf protoc-gen-go protoc-gen-connect-go protoc-gen-connect-openapi"
 PLUGINS="protoc-gen-go protoc-gen-connect-go protoc-gen-connect-openapi"
 
 set -m   # every child is its own process group, so a deadline can kill the whole tree, not only `task`
-tmp=$(mktemp -d) || exit 1
+tmproot=${TMPDIR:-/tmp}; tmproot=${tmproot%/}
+tmpl=tmp.XXXXXX
+# the cleanup self-test below starts this script again with GEN_TOOLS_SELFTEST set; GEN_TOOLS_SELFTEST_TMPL is its mutant (a template the cleanup does not accept)
+if [ -n "${GEN_TOOLS_SELFTEST:-}" ] && [ -n "${GEN_TOOLS_SELFTEST_TMPL:-}" ]; then tmpl=$GEN_TOOLS_SELFTEST_TMPL; fi
+tmp=$(mktemp -d "$tmproot/$tmpl") || exit 1
 CHILD=
 cleanup() {
   if [ -n "$CHILD" ]; then best_effort kill -TERM -- "-$CHILD"; fi
@@ -51,6 +55,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# self-test child: say where the temporary directory is, then end the way the parent asked (exit, or wait to be killed with TERM)
+if [ -n "${GEN_TOOLS_SELFTEST:-}" ]; then
+  printf '%s\n' "$tmp" >"$GEN_TOOLS_SELFTEST_OUT" || exit 1
+  n=0
+  if [ "$GEN_TOOLS_SELFTEST" = hold ]; then while [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done; fi
+  exit 0
+fi
 
 for t in $ALL_TOOLS; do
   [ -x "$TOOLS_SRC/$t" ] || { echo "gen-tools-test: $TOOLS_SRC/$t is missing or not executable: run \`task tools\` (or set GEN_TOOLS_BIN)" >&2; exit 1; }
@@ -130,6 +142,7 @@ run_bounded() { # <seconds> <outfile> <command…>: RUN_RC is the exit status, 1
 
 fx_n=0
 FX=
+FX_NAME="fx dir"   # a space in every fixture path: the Taskfile's BUF / WIRE / BIN_DIR must survive it (#504 r0)
 PRESENT=
 others() { # <tool to leave out>: PRESENT = the other tools of ALL_TOOLS
   local t
@@ -142,7 +155,7 @@ others() { # <tool to leave out>: PRESENT = the other tools of ALL_TOOLS
 make_fixture() {
   local tf=$1 kind=$2 tool=${3:-} t
   fx_n=$((fx_n + 1))
-  FX="$tmp/fx.$fx_n"
+  FX="$tmp/$FX_NAME.$fx_n"
   cp -R "$base" "$FX" || return 1
   cp "$tf" "$FX/Taskfile.yml" || return 1
   mkdir "$FX/bin" || return 1
@@ -200,24 +213,94 @@ bad() { # the tail of the task output that went with the failed cell, colours st
 # ── positive controls: every tool present ───────────────────────────────────────────────────────────────────────────
 # gen / gen-openapi / check-gen-fresh(-all) must WRITE (the hash changes: the sentinels are regenerated, so the harness does see a
 # write) and must not print the tools-check message. wire has nothing to regenerate in the fixture (no apps/): it must get as far
-# as `wire gen`, which fails on its own.
-for entry in gen gen-openapi check-gen-fresh check-gen-fresh-all wire; do
-  label="positive $entry (every tool present)"
-  make_fixture "$taskfile_abs" none || exit 1
-  snapshot "$FX" "$tmp/before" || exit 1
-  if [ ! -s "$tmp/before" ]; then bad "$label: empty before-snapshot"; continue; fi
+# as `wire gen`, which fails on its own. Run in a plain path and in one with a space.
+POS_WHY=
+positive() { # <entry> <taskfile>: returns 0 when the entry behaved, 1 (POS_WHY says why) when not
+  local entry=$1 tf=$2 rc
+  POS_WHY=
+  make_fixture "$tf" none || { POS_WHY="cannot build the fixture"; return 1; }
+  snapshot "$FX" "$tmp/before" || { POS_WHY="cannot hash"; return 1; }
+  if [ ! -s "$tmp/before" ]; then POS_WHY="empty before-snapshot"; return 1; fi
   run_bounded 240 "$tmp/out" env PATH="$RUN_PATH" task -d "$FX" "$entry"
   rc=$RUN_RC
-  snapshot "$FX" "$tmp/after" || exit 1
-  cp "$tmp/out" "$tmp/out.last" || exit 1
-  if [ "$rc" = 124 ]; then bad "$label: deadline"; continue; fi
-  if grep -q 'task tools' "$tmp/out"; then bad "$label: printed the tools-check message with every tool present"; continue; fi
+  snapshot "$FX" "$tmp/after" || { POS_WHY="cannot hash after"; return 1; }
+  cp "$tmp/out" "$tmp/out.last" || return 1
+  if [ "$rc" = 124 ]; then POS_WHY="deadline"; return 1; fi
+  if grep -q 'task tools' "$tmp/out"; then POS_WHY="reported a tool missing although every tool is present"; return 1; fi
   if [ "$entry" = wire ]; then
-    if grep -q 'wire gen' "$tmp/out"; then ok "$label"; else bad "$label: wire gen was not reached"; fi
+    if ! grep -q 'wire gen' "$tmp/out"; then POS_WHY="wire gen was not reached"; return 1; fi
   elif cmp -s "$tmp/before" "$tmp/after"; then
-    bad "$label: the hash did not change although tools ran (the harness would not see a write)"
+    POS_WHY="the hash did not change although tools ran (the harness would not see a write)"; return 1
+  fi
+  return 0
+}
+
+# the Taskfile as it was before the quoting fix, in the two places it matters: how BUF / WIRE are resolved, and how they are used
+make_space_mutant() { # def|use <outfile>
+  if [ "$1" = def ]; then
+    sed -E 's/\[ -x "\{\{\.BIN_DIR\}\}\/(buf|wire)" \]/[ -x {{.BIN_DIR}}\/\1 ]/' "$taskfile_abs" >"$2" || return 1
+  else
+    sed -e 's/{{shellQuote \.BUF}}/{{.BUF}}/g' -e 's/{{shellQuote \.WIRE}}/{{.WIRE}}/g' "$taskfile_abs" >"$2" || return 1
+  fi
+  if cmp -s "$taskfile_abs" "$2"; then echo "gen-tools-test: the space mutant ($1) changed nothing" >&2; return 1; fi
+}
+
+for entry in gen gen-openapi check-gen-fresh check-gen-fresh-all wire; do
+  for FX_NAME in fx "fx dir"; do
+    label="positive $entry (every tool present, path ${FX_NAME/ /<space>})"
+    if positive "$entry" "$taskfile_abs"; then ok "$label"; else bad "$label: $POS_WHY"; fi
+  done
+  FX_NAME="fx dir"
+  if [ "$MUTANTS" != 0 ]; then
+    for m in def use; do
+      make_space_mutant "$m" "$tmp/space-mutant.yml" || exit 1
+      label="positive $entry (path with a space) — mutant: BUF/WIRE $m unquoted"
+      if positive "$entry" "$tmp/space-mutant.yml"; then bad "$label: the mutant still passed"; else ok "$label — red: $POS_WHY"; fi
+    done
+  fi
+done
+FX_NAME="fx dir"
+
+# ── the temporary directory is gone afterwards (#504 r0) ────────────────────────────────────────────────────────────
+# The script starts itself in self-test mode: it creates its temporary directory, says where it is, then exits (exit) or waits
+# to be killed with TERM (hold); the directory must not exist afterwards. The mutant gives the child a template the cleanup does not accept.
+SELF_PATH=
+selftest_cleanup() { # <exit|hold> <template or empty>: SELF_PATH = the child's temporary directory
+  local mode=$1 tmpl_env=$2 out="$tmp/selftest.out" i=0
+  rm -f "$out"
+  SELF_PATH=
+  GEN_TOOLS_SELFTEST=$mode GEN_TOOLS_SELFTEST_OUT=$out GEN_TOOLS_SELFTEST_TMPL=$tmpl_env "$root/scripts/gen-tools-test.sh" >/dev/null 2>&1 </dev/null &
+  CHILD=$!
+  while [ ! -s "$out" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  if [ ! -s "$out" ]; then
+    best_effort kill -KILL -- "-$CHILD"
+    wait "$CHILD" 2>/dev/null
+    CHILD=
+    return 1
+  fi
+  if [ "$mode" = hold ]; then best_effort kill -TERM -- "-$CHILD"; fi
+  wait "$CHILD" 2>/dev/null
+  CHILD=
+  IFS= read -r SELF_PATH <"$out" || return 1
+}
+for mode in exit hold; do
+  label="cleanup: the temporary directory is removed after $mode"
+  if ! selftest_cleanup "$mode" ""; then bad "$label: the self-test child did not start"; continue; fi
+  if [ -e "$SELF_PATH" ]; then
+    bad "$label: $SELF_PATH is still there"
+    case $SELF_PATH in "$tmproot"/tmp.* | "$tmproot"/gen-tools-test.*) rm -rf "$SELF_PATH" ;; esac
   else
     ok "$label"
+  fi
+  if [ "$MUTANTS" != 0 ]; then
+    label="cleanup: the temporary directory is removed after $mode — mutant: a template the cleanup does not accept"
+    if ! selftest_cleanup "$mode" "tmp.XXXXXX"; then bad "$label: the self-test child did not start"; continue; fi
+    if [ -e "$SELF_PATH" ]; then
+      ok "$label — red: $SELF_PATH was left"
+      case $SELF_PATH in "$tmproot"/tmp.*) rm -rf "$SELF_PATH" ;; esac
+    else
+      bad "$label: the mutant left nothing behind, so the assertion cannot see a leak"
+    fi
   fi
 done
 
