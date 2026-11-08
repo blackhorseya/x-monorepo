@@ -91,6 +91,9 @@ test("(b) the first QuotePrices fails once: the Create order line shows its pric
 // (c) and (d) are guards, green before the fix too: the console never retried an answer or a mutation, and the
 // fix must not start to. They are proven by mutants (retry everything / retry mutations), not by a red run.
 test("(c) PermissionDenied is an answer: not retried, the alert stays, ListOrders is asked once", async ({ page, request }) => {
+  // Up to RECOVERY_MS for the alert + the fixed 8 s "no further ask" window + placeOrder is ~23 s: close to
+  // Playwright's 30 s default on a busy machine (#500).
+  test.setTimeout(60_000);
   const o = await placeOrder(request);
   const list = await failRequests(page, { method: "ListOrders", mode: "permission_denied", times: Infinity });
 
