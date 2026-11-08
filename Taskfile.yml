@@ -11,13 +11,14 @@ vars:
   BIN_DIR: '{{.ROOT_DIR}}/bin'
   # Prefer the pinned binaries from `task tools`; fall back to PATH (CI installs buf /
   # golangci-lint via actions). OS env wins over Taskfile env, so PATH cannot be prepended here.
-  # The value is the bare path (or the bare name): it can hold a space, so every use below goes through shellQuote (#504 r0).
+  # The value is the bare path (or the bare name): it can hold a space or a shell metacharacter, so the path is spliced into the sh: command
+  # through shellQuote (a `"`, `$` or backtick in the parent directory broke the double quotes #505 used, #507) and every use below goes through shellQuote too.
   BUF:
-    sh: '[ -x "{{.BIN_DIR}}/buf" ] && echo "{{.BIN_DIR}}/buf" || echo buf'
+    sh: '[ -x {{shellQuote (printf "%s/buf" .BIN_DIR)}} ] && printf "%s\n" {{shellQuote (printf "%s/buf" .BIN_DIR)}} || echo buf'
   WIRE:
-    sh: '[ -x "{{.BIN_DIR}}/wire" ] && echo "{{.BIN_DIR}}/wire" || echo wire'
+    sh: '[ -x {{shellQuote (printf "%s/wire" .BIN_DIR)}} ] && printf "%s\n" {{shellQuote (printf "%s/wire" .BIN_DIR)}} || echo wire'
   GOLANGCI_LINT:
-    sh: '[ -x "{{.BIN_DIR}}/golangci-lint" ] && echo "{{.BIN_DIR}}/golangci-lint" || echo golangci-lint'
+    sh: '[ -x {{shellQuote (printf "%s/golangci-lint" .BIN_DIR)}} ] && printf "%s\n" {{shellQuote (printf "%s/golangci-lint" .BIN_DIR)}} || echo golangci-lint'
   # Container runtime for local infra: podman first, docker as fallback.
   COMPOSE:
     sh: 'command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose"'
