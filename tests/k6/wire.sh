@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The k6 wire gate: the four scripts against a server whose HTTP response is broken (non-HTTP
+# The k6 wire gate: the k6 scripts against a server whose HTTP response is broken (non-HTTP
 # status line, bad version, header without a colon, bad chunk, truncated body, closed
 # connection), the first four quoting the request's X-API-Key back as a misbehaving upstream or
 # proxy would (tests/k6/wire_server.py). Go's HTTP parser puts what it could not parse into its
@@ -8,7 +8,7 @@
 # Each run must fail (a transport failure is a failed request) and the key must be in none of: k6's
 # output, --summary-export, --out json (every metric tag); the connection closed without a byte
 # (no key on the wire) must still leave a diagnostic that names a class of failure.
-#   wire.sh <bin dir> [script…]      (default: orders ratelimit timeout reservation)
+#   wire.sh <bin dir> [script…]      (default: ratelimit timeout)
 # A run only counts if the broken answer was really served (the server's own `served <mode>` line)
 # and k6 reports exactly the failure class that mode must produce — a server that is absent or
 # serves the wrong thing fails the cell (a refused connection also fails k6 and leaks nothing, which
@@ -25,11 +25,9 @@ abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && p
 root=$(abs_dir_of "$0" ../..) || exit 1
 . "$root/scripts/best-effort.sh"   # best_effort: diagnostics / cleanup / wait-gone only (#462)
 bin=$1; shift
-scripts=("$@"); [ ${#scripts[@]} -gt 0 ] || scripts=(orders ratelimit timeout reservation)
+scripts=("$@"); [ ${#scripts[@]} -gt 0 ] || scripts=(ratelimit timeout)
 port=${PORT:-18190}
 KEY=k6-fake-wire-canary-0001
-# setup()'s SetStock sends ADMIN_API_KEY, a second key the server reflects: both must stay out
-ADMIN_KEY=k6-fake-wire-admin-canary-0002
 dir="$bin/k6-wire"; mkdir -p "$dir"
 server_cmd=${WIRE_SERVER_CMD:-python3 tests/k6/wire_server.py}
 # the class k6 must report for each mode (rpc() in lib.js: transport.<class>), and no other
@@ -101,7 +99,7 @@ cell_grid() {
   listening "$port" || why+=("wire server did not listen on :$port within 5s")
   rc=0
   k6 run --quiet --tag "wirenonce=$nc" --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
-    "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$KEY" -e "ADMIN_API_KEY=$ADMIN_KEY" -e VUS=1 -e DURATION=2s \
+    "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$KEY" -e VUS=1 -e DURATION=2s \
     -e RPS=5 -e "RUN_ID=wire-$$-$s-$mode" > "$log.log" 2>&1 || rc=$?
   # alive at the end: a server that died mid-run answered nothing after that
   kill -0 "$xpid" 2>/dev/null || why+=("wire server exited during the run")
@@ -112,7 +110,7 @@ cell_grid() {
     || why+=("wire server never served '$mode' (its log has no 'served $mode' line)")
   [ "$rc" != 0 ] || why+=("k6 exited 0: a transport failure must fail the run")
   for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
-    for k in "$KEY" "$ADMIN_KEY"; do
+    for k in "$KEY"; do
       if found -- "$k" "$f"; then
         why+=("forbidden text $k found in ${f##*/} (a credential reflected by the wire parser error)")
       fi
@@ -145,8 +143,7 @@ cell_grid() {
 
 # a key that IS a failure class string (a well-formed made-up key, `transport.<class>`): rpc() decides
 # on the class but must print it through redact() like any other output, so the key never shows. The
-# status wire answer reflects it as the status code; both keys are set to the same string, so the
-# SetStock of setup() (ADMIN_API_KEY) and every other call (API_KEY) are covered.
+# status wire answer reflects it as the status code.
 # <script> <class> <port>
 cell_key() {
   local s=$1 c=$2 port=$3
@@ -160,7 +157,7 @@ cell_key() {
   listening "$port" || why+=("wire server did not listen on :$port within 5s")
   rc=0
   k6 run --quiet --tag "wirenonce=$nc" --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
-    "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$k" -e "ADMIN_API_KEY=$k" -e VUS=1 \
+    "tests/k6/$s.js" -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$k" -e VUS=1 \
     -e DURATION=2s -e RPS=5 -e "RUN_ID=wire-$$-$s-key-$c" > "$log.log" 2>&1 || rc=$?
   stop
   need_artifacts "$log.log" "$log-summary.json" "$log-metrics.json"
@@ -183,51 +180,6 @@ cell_key() {
   echo "--- PASS: $cell (k6 exit $rc)"
 }
 
-# legal HTTP, legal JSON, but an enum field quotes the key back (tests/k6/status_server.py): the
-# diagnostic tags of reservation.js (reservation_wrong_status / order_not_confirmed /
-# reservation_not_committed) are built from response fields, so the key must not reach them. Each
-# run must still fail its own threshold (a status that is not the expected one is counted as wrong,
-# redacting must not turn it into a pass), and the tag must be the fixed bucket. The last cell sets
-# the key to a legal enum value: the value passes the allowlist, so only redact() keeps it out.
-# <"mode:counter:key:want_tag"> <port>
-cell_reflect() {
-  local mode counter k want_tag port=$2
-  IFS=: read -r mode counter k want_tag <<<"$1"
-  local cell="wire-reservation-reflect-$mode-$want_tag" log="$dir/reservation-reflect-$mode-$want_tag"
-  trap stop EXIT
-  echo "=== RUN   $cell"
-  why=()
-  clear_artifacts "$log.log" "$log-server.log" "$log-summary.json" "$log-metrics.json"
-  nc=$(nonce "reflect-$mode-$want_tag") || return 1
-  python3 tests/k6/status_server.py "$port" "$mode" > "$log-server.log" 2>&1 & xpid=$!
-  listening "$port" || why+=("status server did not listen on :$port within 5s")
-  rc=0
-  k6 run --quiet --tag "wirenonce=$nc" --summary-export "$log-summary.json" --out "json=$log-metrics.json" \
-    tests/k6/reservation.js -e "BASE_URL=http://127.0.0.1:$port" -e "API_KEY=$k" -e "ADMIN_API_KEY=$k" -e VUS=1 \
-    -e DURATION=2s -e SKUS=1 -e "RUN_ID=wire-$$-reflect-$mode" > "$log.log" 2>&1 || rc=$?
-  stop
-  need_artifacts "$log.log" "$log-summary.json" "$log-metrics.json"
-  found -F -- "\"wirenonce\":\"$nc\"" "$log-metrics.json" || why+=("metrics file carries no sample of this call (nonce $nc)")
-  grep -q "^served $mode$" "$log-server.log" 2>/dev/null || why+=("status server never served the reflected '$mode' answer")
-  [ "$rc" != 0 ] || why+=("k6 exited 0: a wrong status must fail $counter")
-  for f in "$log.log" "$log-summary.json" "$log-metrics.json"; do
-    if found -- "$k" "$f"; then
-      why+=("forbidden text $k found in ${f##*/} (a credential reflected into a legal JSON status)")
-    fi
-  done
-  # the counter was really hit, with the fixed bucket as its tag
-  grep -q "\"metric\":\"$counter\"" "$log-metrics.json" 2>/dev/null \
-    || why+=("no $counter sample: the threshold decision changed or the fixture was not reached")
-  grep -q "\"status\":\"[^\"]*$want_tag" "$log-metrics.json" 2>/dev/null \
-    || why+=("$counter carries no status tag with $want_tag")
-  if [ ${#why[@]} -gt 0 ]; then
-    echo "--- FAIL: $cell (k6 exit $rc)"
-    printf '    %s\n' "${why[@]}"
-    return 1
-  fi
-  echo "--- PASS: $cell (k6 exit $rc)"
-}
-
 # negatives: the gate must go red when its fixture is absent or wrong. The nested wire.sh is one cell in one lane
 # on a port of this lane's range ($port + 1) and in a bin dir of its own ($dir/negative-<name>/k6-wire), so it meets
 # neither another lane's server nor the parent's logs and verdict files.
@@ -238,16 +190,16 @@ cell_neg() {
   echo "=== RUN   wire-negative-${neg%%:*}"
   local nlog="$dir/negative-${neg%%:*}.log" nrc=0
   rm -f -- "$nlog" || { echo "--- FAIL: wire-negative-${neg%%:*}"; echo "    rm of the previous log failed"; return 1; }
-  env WIRE_NO_NEGATIVES=1 WIRE_JOBS=1 WIRE_MODES=status PORT=$((port + 1)) "${neg#*:}" "$0" "$dir/negative-${neg%%:*}" orders > "$nlog" 2>&1 || nrc=$?
+  env WIRE_NO_NEGATIVES=1 WIRE_JOBS=1 WIRE_MODES=status PORT=$((port + 1)) "${neg#*:}" "$0" "$dir/negative-${neg%%:*}" ratelimit > "$nlog" 2>&1 || nrc=$?
   if [ "$nrc" = 0 ]; then
     echo "--- FAIL: wire-negative-${neg%%:*}"
     echo "    wire.sh stayed green with the fixture ${neg%%:*}: the gate proves nothing"
     return 1
   fi
   # red for the right reason only: the nested wire.sh's own verdict (exit 1) naming its one cell, not env failing or a crash
-  if [ "$nrc" != 1 ] || ! found -F -- "wire gate FAILED: wire-orders-status" "$nlog"; then
+  if [ "$nrc" != 1 ] || ! found -F -- "wire gate FAILED: wire-ratelimit-status" "$nlog"; then
     echo "--- FAIL: wire-negative-${neg%%:*}"
-    echo "    the nested wire.sh went red (exit $nrc) but not with its own 'wire gate FAILED: wire-orders-status' verdict"
+    echo "    the nested wire.sh went red (exit $nrc) but not with its own 'wire gate FAILED: wire-ratelimit-status' verdict"
     return 1
   fi
   echo "--- PASS: wire-negative-${neg%%:*} (red as it must)"
@@ -261,22 +213,13 @@ for s in "${scripts[@]}"; do
   done
 done
 if [ -z "${WIRE_NO_NEGATIVES:-}" ]; then
-  for s in orders timeout; do
+  for s in ratelimit timeout; do
     for c in malformed_response truncated_response timeout connection_refused dns connection_closed other; do
       case " ${scripts[*]} " in *" $s "*) ;; *) continue ;; esac
       cells+=("wire-$s-key-is-transport.$c|cell_key $s $c")
     done
   done
 fi
-case " ${scripts[*]} " in *" reservation "*)
-  for cell_def in "reservation:reservation_wrong_status:$KEY:unrecognized" \
-                  "order:order_not_confirmed:$KEY:unrecognized" \
-                  "commit:reservation_not_committed:$KEY:unrecognized" \
-                  "reservation:reservation_wrong_status:RESERVATION_STATUS_EXPIRED:redacted"; do
-    IFS=: read -r mode _ _ want_tag <<<"$cell_def"
-    cells+=("wire-reservation-reflect-$mode-$want_tag|cell_reflect $cell_def")
-  done ;;
-esac
 if [ -z "${WIRE_NO_NEGATIVES:-}" ] && [ -z "${WIRE_SERVER_CMD:-}${WIRE_SERVE_AS:-}" ]; then
   for neg in "absent:WIRE_SERVER_CMD=false" "wrong-mode:WIRE_SERVE_AS=closed"; do
     cells+=("wire-negative-${neg%%:*}|cell_neg $neg")

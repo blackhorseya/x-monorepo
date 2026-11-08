@@ -61,8 +61,6 @@ template: |
   ```
   ghcr.io/blackhorseya/x-monorepo/rpc:$RESOLVED_VERSION
   ghcr.io/blackhorseya/x-monorepo/catalog-rpc:$RESOLVED_VERSION
-  ghcr.io/blackhorseya/x-monorepo/payment-rpc:$RESOLVED_VERSION
-  ghcr.io/blackhorseya/x-monorepo/payment-worker:$RESOLVED_VERSION
   ghcr.io/blackhorseya/x-monorepo/worker:$RESOLVED_VERSION
   ghcr.io/blackhorseya/x-monorepo/migrate:$RESOLVED_VERSION
   ghcr.io/blackhorseya/x-monorepo/console:$RESOLVED_VERSION
@@ -107,9 +105,5 @@ autolabeler:
     files: ['web/**']
   - label: helm
     files: ['deployments/**']
-  - label: ordering
-    files: ['pkgs/ordering/**']
-  - label: inventory
-    files: ['pkgs/inventory/**']
   - label: platform
     files: ['pkgs/platform/**', 'pkgs/kernel/**']

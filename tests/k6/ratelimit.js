@@ -50,7 +50,7 @@ export const options = {
 
 export default function () {
   const res = rpc(
-    "ordering.v1.OrderService/ListOrders",
+    "identity.v1.IdentityService/ListAccounts",
     { page_size: 1 },
     { tags: { scenario: "flood" } }
   );

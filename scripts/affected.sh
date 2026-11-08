@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print the go.work modules affected by a change, one per line (e.g. "pkgs/ordering").
+# Print the go.work modules affected by a change, one per line (e.g. "pkgs/identity").
 #
 #   scripts/affected.sh                 # vs BASE_REF (default origin/main, falls back to HEAD)
 #   scripts/affected.sh --files a b c   # from an explicit file list

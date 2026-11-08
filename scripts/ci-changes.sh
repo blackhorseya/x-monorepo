@@ -7,8 +7,7 @@
 #   CI_ALL=1 scripts/ci-changes.sh        # everything true: main (the release gate) and dispatch
 #
 # Areas → jobs. A file that no area claims (README, docs/, the compose file, .claude, e2e specs of
-# other areas…) runs nothing but what it belongs to. Grafana dashboards and alerts belong to helm-check
-# (check-observability.py reads the payment panels and rules). ci.yml,
+# other areas…) runs nothing but what it belongs to. ci.yml,
 # .github/actions, Taskfile.yml and scripts/ are inputs to every job, so touching them runs all.
 # The few files outside those that scripts/test.sh reads also run scripts-test (scripts_src below).
 #
@@ -19,10 +18,9 @@
 #   console-image       web, proto (the TS client is generated from it), image files; not plain Go.
 #   release-snapshot    .goreleaser.yaml, a Dockerfile, .dockerignore, release.yml, go.mod / go.sum / go.work.
 #   helm-kind           product Go, web, helm, image files.
-#   helm-kind-payment   the same inputs as helm-kind: the two jobs are halves of task helm-kind (#446), one cluster each.
 #   helm-kind-keda      helm, apps/worker, pkgs/platform, image files, go.mod / go.sum / go.work.
 #   k6 (the smoke)      tests/k6, pkgs/platform/server + config (rate limit, timeout), apps/rpc, apps/worker,
-#                       apps/catalog-rpc + pkgs/catalog (rpc asks catalog-rpc for every order), configs,
+#                       apps/catalog-rpc + pkgs/catalog (rpc does not start without catalog-rpc), configs,
 #                       go.mod / go.sum / go.work. Business flows are helm-kind's.
 #   k6-auth             tests/k6, pkgs/platform/server + config, pkgs/identity, apps/rpc, apps/catalog-rpc + pkgs/catalog, configs.
 #   k6-wire             any product Go, tests/k6: it guards against the API key leaking (#209).
@@ -80,8 +78,8 @@ go_prod=false; has_prod '*.go' 'go.work' 'go.work.sum' '*/go.mod' '*/go.sum' '.g
 gomod=false;  has 'go.work' 'go.work.sum' '*/go.mod' '*/go.sum' && gomod=true   # the dependency graph of every binary
 web=false;    has 'web/*' && web=true
 helm=false;   has 'deployments/helm/*' && helm=true
-# The payment panels and alert rules in deployments/docker/grafana are checked by task helm-check (check-observability.py: a metric name typo
-# makes a rule that never fires), so a change to them runs the helm job — and only that: it renders nothing the cluster installs.
+# The dashboards and alert rules in deployments/docker/grafana belong to the helm job: a change to them runs that job — and only
+# that: they render nothing the cluster installs.
 grafana=false; has 'deployments/docker/grafana/*' && grafana=true
 release=false; has '.github/workflows/release.yml' && release=true   # pins cosign-release: the smoke + Rekor canary must run on a bump (#215)
 images=false; has 'deployments/docker/Dockerfile*' 'web/apps/console/Dockerfile' 'web/apps/console/deploy/*' '.goreleaser.yaml' '.dockerignore' && images=true
@@ -89,7 +87,7 @@ images=false; has 'deployments/docker/Dockerfile*' 'web/apps/console/Dockerfile'
 # with buildx (.goreleaser.yaml says so), so its Dockerfile and nginx config are not a release-snapshot input.
 snapshot_src=false; has 'deployments/docker/Dockerfile*' '.goreleaser.yaml' '.dockerignore' && snapshot_src=true
 k6=false;     has 'tests/k6/*' && k6=true
-# What the k6 jobs run is a ./bin/rpc (+ ./bin/worker, + the ./bin/catalog-rpc rpc asks for every order, tests/k6/catalog.sh): the limits and timeout interceptors live in pkgs/platform/server
+# What the k6 jobs run is a ./bin/rpc (+ ./bin/worker, + the ./bin/catalog-rpc rpc cannot start without, tests/k6/catalog.sh): the limits and timeout interceptors live in pkgs/platform/server
 # (limits.go, server.go) and are configured from pkgs/platform/config; auth in the same server package, pkgs/identity
 # and apps/rpc. Test files are no input (has_prod).
 k6_src=false;   { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'apps/rpc/*' 'apps/worker/*' 'apps/catalog-rpc/*' 'pkgs/catalog/*' || has 'configs/*'; } && k6_src=true
@@ -121,7 +119,6 @@ out console_image    "$web" "$proto" "$images" "$ci"
 out helm             "$helm" "$grafana" "$ci"
 out scripts_test     "$ci" "$scripts_src"
 out helm_kind        "$go_prod" "$web" "$helm" "$images" "$ci"
-out helm_kind_payment "$go_prod" "$web" "$helm" "$images" "$ci"
 out helm_kind_keda   "$helm" "$keda_src" "$images" "$gomod" "$ci"
 out k6               "$k6" "$k6_src" "$gomod" "$ci"
 out k6_auth          "$k6" "$auth_src" "$ci"

@@ -25,7 +25,7 @@ cosign verify-blob --certificate-identity "$id" --certificate-oidc-issuer "$iss"
   --bundle checksums.txt.sigstore.json checksums.txt
 echo "== archive attestation"
 gh attestation verify "x-monorepo_${version}_linux_amd64.tar.gz" --repo "$repo"
-for app in rpc catalog-rpc payment-rpc payment-worker worker migrate console; do
+for app in rpc catalog-rpc worker migrate console; do
   echo "== image signature: $app:$version"
   cosign verify --certificate-identity "$id" --certificate-oidc-issuer "$iss" \
     "ghcr.io/$repo/$app:$version" --output text >/dev/null

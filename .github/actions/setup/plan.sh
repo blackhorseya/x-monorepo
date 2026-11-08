@@ -37,7 +37,7 @@ case $scope in
   build)                                                  group=bin   saver=true ;;
   k6|k6-auth|k6-wire|console-e2e|console-image|helm)      group=bin ;;
   helm-kind)                                              group=kind  saver=true ;;
-  helm-kind-payment|helm-kind-keda)                       group=kind ;;
+  helm-kind-keda)                       group=kind ;;
   release-snapshot)                                       group=cross saver=true ;;
 esac
 
