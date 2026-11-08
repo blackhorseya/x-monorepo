@@ -99,9 +99,9 @@ keda_src=false; has_prod 'apps/worker/*' 'pkgs/platform/*' && keda_src=true
 # The oidc-dex Playwright project signs in through the compose Dex (#274): its config or the service is a console-e2e input.
 dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.yaml' && dex=true
 # Inputs of scripts/test.sh outside scripts/, ci.yml, Taskfile.yml and .github/actions (those already run everything): .goreleaser.yaml (the
-# release image list cases), tests/k6/auth-matrix.sh (the k6-auth shard cases), the console image's 18-console-env.envsh (its OIDC gate cases). Add a path
-# here (and a sole-path case in test.sh) only when a kept test.sh case starts reading a new one.
-scripts_src=false; has '.goreleaser.yaml' 'tests/k6/auth-matrix.sh' 'web/apps/console/deploy/18-console-env.envsh' && scripts_src=true
+# release image list cases), tests/k6/auth-matrix.sh and tests/k6/catalog.sh, which it sources (the k6-auth shard cases), go.work (the MODULES
+# cases copy it), the console image's 18-console-env.envsh (its OIDC gate cases). Add a path here when a kept test.sh case starts reading a new one.
+scripts_src=false; has '.goreleaser.yaml' 'go.work' 'tests/k6/auth-matrix.sh' 'tests/k6/catalog.sh' 'web/apps/console/deploy/18-console-env.envsh' && scripts_src=true
 
 
 any() { for v in "$@"; do [ "$v" = true ] && return 0; done; return 1; }
