@@ -32,7 +32,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # `shell: bash` is what turns on pipefail: the runner's default (`bash -e {0}`) lets `a | b` pass when a failed (#465).
-# scripts/check-exit-swallow.sh reads this and the step-level `shell:` when it scans the run: scripts.
 defaults:
   run:
     shell: bash

@@ -6,8 +6,7 @@
 #   best_effort kubectl wait --for=delete pod -l app=x      # "already gone" is the state we want
 # On failure it prints `best-effort command failed (exit N): <command>` to stderr and returns 0, so the failure is visible in
 # the log instead of silently `|| true`. Three kinds of use only — diagnostic, cleanup, wait-gone; a command whose output or
-# status is used (a poll, a lookup, a value) takes `rc=0; cmd || rc=$?` and an explicit branch instead. check-exit-swallow.sh
-# refuses best_effort inside $(…) or on the right of an assignment, where its output would be used.
+# status is used (a poll, a lookup, a value) takes `rc=0; cmd || rc=$?` and an explicit branch instead.
 best_effort() {
   local rc=0
   "$@" || rc=$?
@@ -40,7 +39,7 @@ restore_exit() { # <status on the way in>
   exit "$rc"
 }
 
-# ── capture / value_of (#466): fnctx's closed whitelist leaves no room for `out=$(cmd) || rc=$?` in a function body; these two are what tests and polls use instead ──
+# ── capture / value_of (#466): what tests and polls use to read a command's output and its status without `out=$(cmd) || rc=$?` in a function body ──
 # capture [-2] <outvar> <rcvar> <command…> — run a command; its STDOUT (trailing newlines trimmed, as $(…) does) goes to $outvar and its exit status
 # to $rcvar. The command's stderr is NOT captured: it goes to the caller's stderr, exactly as in `out=$(cmd)`. `-2` merges stderr into the
 # output, exactly as in `out=$(cmd 2>&1)`: use it where the old code said 2>&1, and nowhere else (a warning on stderr must not become a
