@@ -11,12 +11,13 @@ vars:
   BIN_DIR: '{{.ROOT_DIR}}/bin'
   # Prefer the pinned binaries from `task tools`; fall back to PATH (CI installs buf /
   # golangci-lint via actions). OS env wins over Taskfile env, so PATH cannot be prepended here.
+  # The value is the bare path (or the bare name): it can hold a space, so every use below goes through shellQuote (#504 r0).
   BUF:
-    sh: '[ -x {{.BIN_DIR}}/buf ] && echo {{.BIN_DIR}}/buf || echo buf'
+    sh: '[ -x "{{.BIN_DIR}}/buf" ] && echo "{{.BIN_DIR}}/buf" || echo buf'
   WIRE:
-    sh: '[ -x {{.BIN_DIR}}/wire ] && echo {{.BIN_DIR}}/wire || echo wire'
+    sh: '[ -x "{{.BIN_DIR}}/wire" ] && echo "{{.BIN_DIR}}/wire" || echo wire'
   GOLANGCI_LINT:
-    sh: '[ -x {{.BIN_DIR}}/golangci-lint ] && echo {{.BIN_DIR}}/golangci-lint || echo golangci-lint'
+    sh: '[ -x "{{.BIN_DIR}}/golangci-lint" ] && echo "{{.BIN_DIR}}/golangci-lint" || echo golangci-lint'
   # Container runtime for local infra: podman first, docker as fallback.
   COMPOSE:
     sh: 'command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose"'
@@ -116,7 +117,7 @@ tasks:
         for m in $(scripts/affected.sh --files {{.FILES}}); do
           echo ">> $m"
           (cd "$m" && go vet ./...) || exit 1
-          if [ -x {{.BIN_DIR}}/golangci-lint ] || command -v golangci-lint >/dev/null; then (cd "$m" && {{.GOLANGCI_LINT}} run --fast-only ./...) || exit 1; fi
+          if [ -x {{shellQuote .BIN_DIR}}/golangci-lint ] || command -v golangci-lint >/dev/null; then (cd "$m" && {{shellQuote .GOLANGCI_LINT}} run --fast-only ./...) || exit 1; fi
           # DDD rules (archtest) are an AST walk, ~1s: cheap enough to report on every edit.
           if [ -f "$m/arch_test.go" ]; then (cd "$m" && go test -count=1 -run '^TestArchitecture$' .) || exit 1; fi
         done
@@ -125,7 +126,7 @@ tasks:
     desc: what the agent / pre-push must pass before claiming "done"
     cmds:
       - task: check-gen-fresh
-      - '{{.BUF}} lint'
+      - '{{shellQuote .BUF}} lint'
       - task: test-affected
 
   gate-ci:
@@ -250,9 +251,9 @@ tasks:
         missing=
         for t in {{.NEED}}; do
           case "$t" in
-            buf) p="{{.BUF}}" ;;
-            wire) p="{{.WIRE}}" ;;
-            *) p="{{.BIN_DIR}}/$t" ;;
+            buf) p={{shellQuote .BUF}} ;;
+            wire) p={{shellQuote .WIRE}} ;;
+            *) p={{shellQuote .BIN_DIR}}"/$t" ;;
           esac
           case "$p" in
             */*) if [ -f "$p" ] && [ -x "$p" ]; then :; else missing="$missing $t"; fi ;;
@@ -271,10 +272,10 @@ tasks:
     cmds:
       - task: tools-check
         vars: { NEED: ' buf protoc-gen-go protoc-gen-connect-go protoc-gen-connect-openapi ' }
-      - '{{.BUF}} format -w'
+      - '{{shellQuote .BUF}} format -w'
       - find pkgs -name '*.pb.go' -delete
       - find pkgs -path '*connect/*.connect.go' -delete
-      - '{{.BUF}} generate'
+      - '{{shellQuote .BUF}} generate'
       - task: gen-openapi
 
   gen-openapi:
@@ -283,16 +284,16 @@ tasks:
       - task: tools-check
         vars: { NEED: ' buf protoc-gen-connect-openapi ' }
       - >-
-        {{.BUF}} generate --path protos/admin --template
+        {{shellQuote .BUF}} generate --path protos/admin --template
         '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/platform/contract/admin/v1","opt":["path=openapi.yaml","base=protos/admin/v1/openapi.base.yaml"]}]}'
       - for: { var: BCS }
         cmd: >-
-          {{.BUF}} generate --path protos/{{.ITEM}} --template
+          {{shellQuote .BUF}} generate --path protos/{{.ITEM}} --template
           '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/{{.ITEM}}/contract/v1","opt":["path=openapi.yaml","base=protos/{{.ITEM}}/v1/openapi.base.yaml"]}]}'
       # payment has an internal service (payment-rpc) and a public one (apps/rpc) in one package: apps/rpc
       # publishes the public subset only, generated from its own proto file.
       - >-
-        {{.BUF}} generate --path protos/payment/v1/public.proto --template
+        {{shellQuote .BUF}} generate --path protos/payment/v1/public.proto --template
         '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/payment/contract/v1","opt":["path=public.openapi.yaml","base=protos/payment/v1/public.openapi.base.yaml"]}]}'
 
   gen-ts:
@@ -303,7 +304,7 @@ tasks:
       # --include-imports emits that kept file (buf/validate/violations.proto); WKT are skipped.
       - |
         set -o pipefail
-        {{.BUF}} build -o - | go run ./tools/stripvalidate | {{.BUF}} generate --template buf.gen.ts.yaml --include-imports -
+        {{shellQuote .BUF}} build -o - | go run ./tools/stripvalidate | {{shellQuote .BUF}} generate --template buf.gen.ts.yaml --include-imports -
 
   wire:
     desc: regenerate DI graph for every app
@@ -311,7 +312,7 @@ tasks:
       - task: tools-check
         vars: { NEED: ' wire ' }
       - for: { var: APPS }
-        cmd: '{{.WIRE}} gen ./apps/{{.ITEM}}'
+        cmd: '{{shellQuote .WIRE}} gen ./apps/{{.ITEM}}'
 
   # ── Quality ─────────────────────────────────────────────────────────────────
   # The go.work root is not a module, so `./...` matches nothing there: loop per module.
@@ -319,13 +320,13 @@ tasks:
   lint:
     desc: proto lint + go vet + golangci-lint (depguard enforces layer / BC boundaries)
     cmds:
-      - '{{.BUF}} lint'
+      - '{{shellQuote .BUF}} lint'
       - for: { var: MODULES, split: "\n" }
-        cmd: printf '>> %s\n' {{shellQuote .ITEM}} && cd {{shellQuote .ITEM}} && go vet ./... && {{.GOLANGCI_LINT}} run ./...
+        cmd: printf '>> %s\n' {{shellQuote .ITEM}} && cd {{shellQuote .ITEM}} && go vet ./... && {{shellQuote .GOLANGCI_LINT}} run ./...
 
   breaking:
     desc: detect wire-incompatible proto changes against main
-    cmds: ["{{.BUF}} breaking --against '.git#branch=main'"]
+    cmds: ["{{shellQuote .BUF}} breaking --against '.git#branch=main'"]
 
   test:
     desc: go test -race, every module

@@ -15,6 +15,9 @@
 # "nothing was written" without it. The fixture carries sentinels: a generated Go file and two OpenAPI documents made
 # stale on purpose, so any step that regenerates them changes the hash. Cells that never reach a write (the first command is
 # the missing tool itself) can only go red on msg; the table below says which.
+# A red on msg only shows that the failure is not diagnosable (no tool name, no `task tools`); it does not show that nothing is
+# written. Only the hash cells (a plugin or wire missing behind gen, check-gen-fresh, check-gen-fresh-all) show that the old
+# order wrote or deleted first.
 #
 # Controls (each one proves a verdict can change):
 #   positive      every tool present: `gen`, `gen-openapi`, `check-gen-fresh`, `check-gen-fresh-all` DO change the hash
@@ -43,14 +46,14 @@ PLUGINS="protoc-gen-go protoc-gen-connect-go protoc-gen-connect-openapi"
 
 set -m   # every child is its own process group, so a deadline can kill the whole tree, not only `task`
 tmproot=${TMPDIR:-/tmp}; tmproot=${tmproot%/}
-tmpl=tmp.XXXXXX
+tmpl=gen-tools-test.XXXXXX
 # the cleanup self-test below starts this script again with GEN_TOOLS_SELFTEST set; GEN_TOOLS_SELFTEST_TMPL is its mutant (a template the cleanup does not accept)
 if [ -n "${GEN_TOOLS_SELFTEST:-}" ] && [ -n "${GEN_TOOLS_SELFTEST_TMPL:-}" ]; then tmpl=$GEN_TOOLS_SELFTEST_TMPL; fi
 tmp=$(mktemp -d "$tmproot/$tmpl") || exit 1
 CHILD=
 cleanup() {
   if [ -n "$CHILD" ]; then best_effort kill -TERM -- "-$CHILD"; fi
-  case $tmp in /*/gen-tools-test.*) rm -rf "$tmp" ;; esac
+  case $tmp in "$tmproot"/gen-tools-test.*) rm -rf "$tmp" ;; esac
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -213,7 +216,7 @@ bad() { # the tail of the task output that went with the failed cell, colours st
 # ── positive controls: every tool present ───────────────────────────────────────────────────────────────────────────
 # gen / gen-openapi / check-gen-fresh(-all) must WRITE (the hash changes: the sentinels are regenerated, so the harness does see a
 # write) and must not print the tools-check message. wire has nothing to regenerate in the fixture (no apps/): it must get as far
-# as `wire gen`, which fails on its own. Run in a plain path and in one with a space.
+# as the wire binary, which fails on its own ("wire: …"). Run in a plain path and in one with a space.
 POS_WHY=
 positive() { # <entry> <taskfile>: returns 0 when the entry behaved, 1 (POS_WHY says why) when not
   local entry=$1 tf=$2 rc
@@ -228,7 +231,8 @@ positive() { # <entry> <taskfile>: returns 0 when the entry behaved, 1 (POS_WHY 
   if [ "$rc" = 124 ]; then POS_WHY="deadline"; return 1; fi
   if grep -q 'task tools' "$tmp/out"; then POS_WHY="reported a tool missing although every tool is present"; return 1; fi
   if [ "$entry" = wire ]; then
-    if ! grep -q 'wire gen' "$tmp/out"; then POS_WHY="wire gen was not reached"; return 1; fi
+    # wire's own error (the fixture has no apps/), not Task's echo of the command line, which names the path whether or not it runs
+    if ! grep -q '^wire: ' "$tmp/out"; then POS_WHY="wire itself did not run"; return 1; fi
   elif cmp -s "$tmp/before" "$tmp/after"; then
     POS_WHY="the hash did not change although tools ran (the harness would not see a write)"; return 1
   fi
