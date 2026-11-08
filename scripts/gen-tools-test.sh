@@ -67,7 +67,7 @@ if [ -n "${GEN_TOOLS_SELFTEST:-}" ]; then
   exit 0
 fi
 
-for t in $ALL_TOOLS; do
+for t in $ALL_TOOLS golangci-lint; do
   [ -x "$TOOLS_SRC/$t" ] || { echo "gen-tools-test: $TOOLS_SRC/$t is missing or not executable: run \`task tools\` (or set GEN_TOOLS_BIN)" >&2; exit 1; }
 done
 EXE=
@@ -222,6 +222,10 @@ positive() { # <entry> <taskfile>: returns 0 when the entry behaved, 1 (POS_WHY 
   local entry=$1 tf=$2 rc
   POS_WHY=
   make_fixture "$tf" none || { POS_WHY="cannot build the fixture"; return 1; }
+  if [ "$entry" = lint ]; then
+    add_mini_module "$FX" || { POS_WHY="cannot add the mini module"; return 1; }
+    ln -s "$TOOLS_SRC/golangci-lint" "$FX/bin/golangci-lint" || { POS_WHY="cannot link golangci-lint"; return 1; }
+  fi
   snapshot "$FX" "$tmp/before" || { POS_WHY="cannot hash"; return 1; }
   if [ ! -s "$tmp/before" ]; then POS_WHY="empty before-snapshot"; return 1; fi
   run_bounded 240 "$tmp/out" env PATH="$RUN_PATH" task -d "$FX" "$entry"
@@ -233,16 +237,31 @@ positive() { # <entry> <taskfile>: returns 0 when the entry behaved, 1 (POS_WHY 
   if [ "$entry" = wire ]; then
     # wire's own error (the fixture has no apps/), not Task's echo of the command line, which names the path whether or not it runs
     if ! grep -q '^wire: ' "$tmp/out"; then POS_WHY="wire itself did not run"; return 1; fi
+  elif [ "$entry" = breaking ]; then
+    # buf itself ran and failed on its own (the fixture is no git repository, so its clone of .git fails): that message is buf's, not Task's
+    if ! grep -q 'git repository' "$tmp/out"; then POS_WHY="buf itself did not run"; return 1; fi
+  elif [ "$entry" = lint ]; then
+    # buf lint, then go vet and golangci-lint on the one module of the mini go.work
+    if [ "$rc" != 0 ] || ! grep -q '^0 issues\.' "$tmp/out"; then POS_WHY="lint did not finish with golangci-lint's 0 issues (exit $rc)"; return 1; fi
   elif cmp -s "$tmp/before" "$tmp/after"; then
     POS_WHY="the hash did not change although tools ran (the harness would not see a write)"; return 1
   fi
   return 0
 }
 
+# a go.work of one tiny module, so that `task lint` (MODULES comes from go.work) has something for go vet and golangci-lint to run on
+add_mini_module() { # <fixture dir>
+  mkdir "$1/m" || return 1
+  printf 'go 1.21\n\nuse ./m\n' >"$1/go.work" || return 1
+  printf 'module example.com/m\n\ngo 1.21\n' >"$1/m/go.mod" || return 1
+  printf 'package main\n\nfunc main() {}\n' >"$1/m/main.go" || return 1
+}
+
 # the Taskfile as it was before the quoting fix, in the two places it matters: how BUF / WIRE are resolved, and how they are used
 make_space_mutant() { # def|use <outfile>
   if [ "$1" = def ]; then
-    sed -E 's/\[ -x "\{\{\.BIN_DIR\}\}\/(buf|wire)" \]/[ -x {{.BIN_DIR}}\/\1 ]/' "$taskfile_abs" >"$2" || return 1
+    # the definitions as they were before #505: the path spliced in bare
+    sed -E 's/\{\{shellQuote \(printf "%s\/(buf|wire|golangci-lint)" \.BIN_DIR\)\}\}/{{.BIN_DIR}}\/\1/g' "$taskfile_abs" >"$2" || return 1
   else
     sed -e 's/{{shellQuote \.BUF}}/{{.BUF}}/g' -e 's/{{shellQuote \.WIRE}}/{{.WIRE}}/g' "$taskfile_abs" >"$2" || return 1
   fi
@@ -262,6 +281,39 @@ for entry in gen gen-openapi check-gen-fresh check-gen-fresh-all wire; do
       if positive "$entry" "$tmp/space-mutant.yml"; then bad "$label: the mutant still passed"; else ok "$label — red: $POS_WHY"; fi
     done
   fi
+done
+FX_NAME="fx dir"
+
+# ── shell metacharacters in the parent path (#507) ──────────────────────────────────────────────────────────────────
+# The tool definitions (BUF / WIRE / GOLANGCI_LINT) put BIN_DIR into an sh: command. #505 wrapped it in double quotes, which a `"` in the
+# path breaks (and `$x`, a backtick would be expanded there). Every cell: every tool present, the fixture under a parent whose name holds
+# the character; the entry must find its tool and run it. The mutant of a cell puts the definitions back the way #505 wrote them
+# ("<path>" in double quotes) or, for the one character double quotes survive, the naive fix ('<path>' in single quotes).
+SPECIAL_NAMES=('d"q' "s'q" 'dol$lar' 'back`tick' "all\"'\$\`")
+special_mutant() { # dq|sq <outfile>: the three definitions with the path in double / single quotes
+  local q=\"
+  if [ "$1" = sq ]; then q="'"; fi
+  sed -E "s/\{\{shellQuote \(printf \"%s\/(buf|wire|golangci-lint)\" \.BIN_DIR\)\}\}/${q}{{.BIN_DIR}}\/\1${q}/g" "$taskfile_abs" >"$2" || return 1
+  if cmp -s "$taskfile_abs" "$2"; then echo "gen-tools-test: the special-character mutant ($1) changed nothing" >&2; return 1; fi
+}
+special_entries() { # <name>: the entries judged under that name (every name: the five; the first and the last also breaking and lint)
+  SPECIAL_E="gen gen-openapi check-gen-fresh check-gen-fresh-all wire"
+  case $1 in 'd"q' | all*) SPECIAL_E="$SPECIAL_E breaking lint" ;; esac
+}
+SPECIAL_E=
+for FX_NAME in "${SPECIAL_NAMES[@]}"; do
+  special_entries "$FX_NAME"
+  shape=dq
+  if [ "$FX_NAME" = "s'q" ]; then shape=sq; fi
+  for entry in $SPECIAL_E; do
+    label="positive $entry (every tool present, path $FX_NAME)"
+    if positive "$entry" "$taskfile_abs"; then ok "$label"; else bad "$label: $POS_WHY"; fi
+    if [ "$MUTANTS" != 0 ]; then
+      special_mutant "$shape" "$tmp/special-mutant.yml" || exit 1
+      label="positive $entry (path $FX_NAME) — mutant: definitions with the path in $shape quotes"
+      if positive "$entry" "$tmp/special-mutant.yml"; then bad "$label: the mutant still passed"; else ok "$label — red: $POS_WHY"; fi
+    fi
+  done
 done
 FX_NAME="fx dir"
 
