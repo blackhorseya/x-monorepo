@@ -77,6 +77,8 @@ shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` im
 在那之前不刪、不寫任何檔（不會自動安裝：gate 不靠網路）。`scripts/gen-tools-test.sh`（CI gen-freshness job 的一個 step）從真入口驗這件事。
 萬一仍遇到生成檔被刪光的 tree（例如工具跑到一半失敗），就 `git checkout -- pkgs` 還原，**不要**用 `git commit -a` 把刪除一起 commit 進去。
 生成物（pb.go、connect.go、`wire_gen.go`、`contract/v1/openapi.yaml`）全部有 commit，gen-freshness 靠 `git diff` 比對它們。
+**repo／worktree 路徑的限制**：路徑可以含空白，不支援 shell 特殊字元（`"`、`'`、`$`、反引號）。codegen（`gen`、`gen-openapi`、`wire`、`check-gen-fresh(-all)`）、`lint`、`breaking`
+入口在這些字元下仍找得到工具（#508，`scripts/gen-tools-test.sh` 驗證）；其他 task（`build`、kind／helm、`run` 類等）沒有保證，例如含 `"` 的路徑下 `task build` 會失敗（#509，依裁示以文件限制取代修正）。
 
 ## Hook harness（會擋你的東西）
 
