@@ -240,7 +240,7 @@ export const QuotePricesResponseSchema: GenMessage<QuotePricesResponse> = /*@__P
 
 /**
  * CatalogService is the public RPC contract of the catalog bounded context:
- * the server-side source of product prices. Ordering prices every order with it (QuotePrices).
+ * the server-side source of product prices (QuotePrices).
  *
  * @generated from service catalog.v1.CatalogService
  */
@@ -293,8 +293,8 @@ export const CatalogService: GenService<{
    * QuotePrices answers, for up to 100 SKUs in one query, what each sells for
    * now: the price of every active product, and the SKUs that cannot be quoted,
    * split into those with no product and those that were deactivated. Same
-   * access as GetProduct. Ordering calls it (over Connect, from the rpc process to
-   * catalog-rpc) to price an order.
+   * access as GetProduct. A bounded context that needs prices calls it (over Connect, from the
+   * rpc process to catalog-rpc).
    *
    * @generated from rpc catalog.v1.CatalogService.QuotePrices
    */

@@ -224,9 +224,9 @@ test("scriptByKey + holdRequests: a parked call has not reached the script; afte
 });
 
 test("scriptByKey + holdRequests: registered the other way round the script answers first and the hold parks nothing", async ({ page }) => {
-  const held = await holdRequests(page, { method: "Order" });
-  const script = await scriptByKey(page, RPC("Order"), { "": { ok: { from: "script" } } }); // registered later: sees the call first
-  expect(await callFull(page, "Order")).toEqual([200, JSON.stringify({ from: "script" })]);
+  const held = await holdRequests(page, { method: "Thing" });
+  const script = await scriptByKey(page, RPC("Thing"), { "": { ok: { from: "script" } } }); // registered later: sees the call first
+  expect(await callFull(page, "Thing")).toEqual([200, JSON.stringify({ from: "script" })]);
   expect([script.count(""), held.count()]).toEqual([1, 0]);
 });
 
