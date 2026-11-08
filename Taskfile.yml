@@ -143,7 +143,7 @@ tasks:
       - task: scripts-test
 
   scripts-test:
-    desc: 'scripts/test.sh: the CI / release decision scripts (ci-changes, releasable, next-version, release-gate-pr, merge-ready with a stubbed gh, merge-tree-check) against throwaway git repos, and red-stage against sample go test output; runs under scripts/suite-guard.sh, which fails on any process the suite leaves behind'
+    desc: 'scripts/test.sh: ci-changes (which jobs a change runs), affected, releasable and cosign-sign-blob against throwaway git repos or a fake cosign, plus the k6-auth shard coverage, the cache-write plan, the release image lists, the MODULES derivation and the console OIDC env gate'
     cmds:
       - scripts/test.sh
 
