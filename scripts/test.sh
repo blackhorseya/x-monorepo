@@ -77,7 +77,7 @@ match_of() { local _n=$1 _w=$2 _o _r; shift 2; capture _o _r subshell "$@" || ex
 count_lines() { local rc=0; grep -c "$@" || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; }   # grep -c prints the count (0 too) and exits 1 on "none": that is a count, not a failure
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
-all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind helm_kind_payment helm_kind_keda helm_kind_target k6 k6_auth k6_wire"
+all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind helm_kind_payment helm_kind_keda k6 k6_auth k6_wire"
 # ci_changes_jobs: runs scripts/ci-changes.sh in $repo and prints the jobs set to true. The script's exit code and the formatting
 # pipeline are each checked: CI-CHANGES-FAILED when ci-changes.sh dies (even after printing a plausible set), FORMAT-FAILED when sed / tr die.
 ci_changes_jobs() {
@@ -125,9 +125,9 @@ eq_of "go runs the Go checks, kind and k6-wire" \
 gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind helm_kind_payment helm_kind_keda k6 k6_wire"
 eq_of "go.mod counts as go, and as a release / keda / k6 input" "$gomod_jobs" jobs_on gomod pkgs/ordering/go.mod
 eq_of "go.sum likewise"  "$gomod_jobs" jobs_on gosum pkgs/ordering/go.sum
-# go.work alone is also an input of helm-kind-target (every task evaluates the Taskfile's MODULES from it), the other three are not.
-gowork_jobs="$go_checks build release_snapshot console_e2e helm_kind helm_kind_payment helm_kind_keda helm_kind_target k6 k6_wire"
-eq_of "go.work likewise, and a helm-kind-target input" "$gowork_jobs" jobs_on gowork go.work
+# go.work is an input of the same jobs as go.mod (gomod_jobs) plus the Go checks
+gowork_jobs="$go_checks build release_snapshot console_e2e helm_kind helm_kind_payment helm_kind_keda k6 k6_wire"
+eq_of "go.work likewise" "$gowork_jobs" jobs_on gowork go.work
 eq_of "go.work.sum likewise" "$gomod_jobs" jobs_on goworksum go.work.sum
 eq_of ".golangci.yml is product code (not test-only)" "$go_checks $go_prod" jobs_on golangci .golangci.yml
 # proto: generated Go is committed (a Go change) and the TS client is generated from it (a web change),
@@ -145,27 +145,6 @@ eq_of "coredns-dex.sh also runs scripts-test" "helm scripts_test helm_kind helm_
 eq_of "any kind script runs scripts-test" "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" jobs_on kindsmoke deployments/helm/kind/smoke.sh
 eq_of "a k6 shell script runs scripts-test too" "scripts_test k6 k6_auth k6_wire" jobs_on k6sh tests/k6/catalog.sh
 eq_of "a console e2e shell script runs scripts-test too" "gen_freshness web console_e2e console_image scripts_test helm_kind helm_kind_payment" jobs_on e2esh web/apps/console/e2e/image.sh
-# helm-kind-target (#446) runs deployments/helm/kind/target-kubeconfig-test.sh, which executes the kind runner and the Taskfile's
-# helm-kind-cluster / helm-kind-down. Its inputs are named in ci-changes.sh (target_src); each one alone must run it, and the helm
-# jobs next to it (everything under deployments/helm/ is a helm input). Anything else must not: it creates two kind clusters.
-kind_target_jobs="helm helm_kind helm_kind_payment helm_kind_keda helm_kind_target"
-kind_target_sh_jobs="helm scripts_test helm_kind helm_kind_payment helm_kind_keda helm_kind_target"   # a *.sh also runs scripts-test
-eq_of "kind/run.sh alone runs helm-kind-target"           "$kind_target_sh_jobs" jobs_on tgtrun deployments/helm/kind/run.sh
-eq_of "kind/lock.sh alone runs helm-kind-target"          "$kind_target_sh_jobs" jobs_on tgtlock deployments/helm/kind/lock.sh
-eq_of "kind/shim/kubectl alone runs helm-kind-target"     "$kind_target_jobs" jobs_on tgtshimk deployments/helm/kind/shim/kubectl
-eq_of "kind/shim/helm alone runs helm-kind-target"        "$kind_target_jobs" jobs_on tgtshimh deployments/helm/kind/shim/helm
-eq_of "kind/target-kubeconfig-test.sh alone runs helm-kind-target" "$kind_target_sh_jobs" jobs_on tgtkc deployments/helm/kind/target-kubeconfig-test.sh
-eq_of "kind/target-test.sh alone runs helm-kind-target"   "$kind_target_sh_jobs" jobs_on tgtt deployments/helm/kind/target-test.sh
-eq_of "kind/target-isolation-test.sh alone runs helm-kind-target" "$kind_target_sh_jobs" jobs_on tgtiso deployments/helm/kind/target-isolation-test.sh
-# the Taskfile is where helm-kind-cluster / helm-kind-down live: ci (all_jobs, above) already covers it. Not inputs:
-eq_of "the chart does not run helm-kind-target"           "helm helm_kind helm_kind_payment helm_kind_keda" jobs_on tgtchart deployments/helm/x-monorepo/templates/deployment.yaml
-eq_of "kind/payment-flow.sh does not run helm-kind-target" "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" jobs_on tgtpay deployments/helm/kind/payment-flow.sh
-eq_of "kind/values.yaml does not run helm-kind-target"    "helm helm_kind helm_kind_payment helm_kind_keda" jobs_on tgtvals deployments/helm/kind/values.yaml
-eq_of "kind/diag.sh does not run helm-kind-target"        "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" jobs_on tgtdiag deployments/helm/kind/diag.sh
-eq_of "kind/runner-home-test.sh does not run helm-kind-target (it is the fake-tool drills' helper)" "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" jobs_on tgthome deployments/helm/kind/runner-home-test.sh
-eq_of "plain product Go does not run helm-kind-target"    "$go_checks $go_prod" jobs_on tgtgo pkgs/ordering/domain/order/order.go
-eq_of "web does not run helm-kind-target"                 "gen_freshness web console_e2e console_image helm_kind helm_kind_payment" jobs_on tgtweb web/apps/console/src/routes/orders.tsx
-eq_of "a run.sh look-alike elsewhere does not run helm-kind-target (only scripts-test, for the *.sh)" "scripts_test" jobs_on tgtlook docs/run.sh scripts_old/shim/kubectl
 # test.sh also reads .github/workflows/k6-bench.yml (wiring assertions) and copies .goreleaser.yaml
 # into the cosign-smoke fixture (#298): each alone must run scripts-test; no other workflow does.
 eq_of "k6-bench.yml also runs scripts-test" "actions_resolve scripts_test" jobs_on k6bench .github/workflows/k6-bench.yml
@@ -214,27 +193,8 @@ eq_of "moving a file out of apps/worker still runs keda and k6" \
 eq_of "moving a file out of the chart still runs helm and the kind jobs" \
   "helm helm_kind helm_kind_payment helm_kind_keda" \
   rename_jobs_on movehelm deployments/helm/x-monorepo/values.yaml docs/values.yaml
-# helm-kind-target: ci-changes.sh diffs with --no-renames, so a runner file renamed OUT of its directory is a deletion of an input and
-# still runs the job (a rename-aware diff prints only the new path, docs/run.sh, which no rule names). The same for every input, and for
-# a rename INTO one.
-eq_of "moving kind/run.sh out still runs helm-kind-target" \
-  "$kind_target_sh_jobs" rename_jobs_on movekindrun deployments/helm/kind/run.sh docs/run.sh
-eq_of "moving kind/lock.sh out still runs helm-kind-target" \
-  "$kind_target_sh_jobs" rename_jobs_on movekindlock deployments/helm/kind/lock.sh docs/lock.sh
-eq_of "moving kind/shim/kubectl out still runs helm-kind-target" \
-  "$kind_target_jobs" rename_jobs_on movekindshim deployments/helm/kind/shim/kubectl docs/kubectl
-eq_of "moving kind/target-kubeconfig-test.sh out still runs helm-kind-target" \
-  "$kind_target_sh_jobs" rename_jobs_on movekindtgt deployments/helm/kind/target-kubeconfig-test.sh docs/target-kubeconfig-test.sh
-eq_of "moving go.work out still runs helm-kind-target (and the rest of go.work's jobs)" \
+eq_of "moving go.work out still runs go.work's jobs" \
   "$gowork_jobs" rename_jobs_on movegowork go.work docs/go.work
-eq_of "moving a file INTO kind/run.sh's place runs helm-kind-target" \
-  "$kind_target_sh_jobs" rename_jobs_on movekindin docs/run.sh deployments/helm/kind/run.sh
-# a rename inside the kind directory between two non-inputs is not an input either way
-eq_of "renaming kind/smoke.sh to kind/smoke2.sh does not run helm-kind-target" \
-  "helm scripts_test helm_kind helm_kind_payment helm_kind_keda" rename_jobs_on movekindsmoke deployments/helm/kind/smoke.sh deployments/helm/kind/smoke2.sh
-# ...but renaming a non-input onto an input name is one
-eq_of "renaming kind/smoke.sh to kind/target-smoke.sh runs helm-kind-target" \
-  "$kind_target_sh_jobs" rename_jobs_on movekindtosmoke deployments/helm/kind/smoke.sh deployments/helm/kind/target-smoke.sh
 
 # k6 (the smoke: rate limit, timeout, load): tests/k6, pkgs/platform/server (interceptors, limits.go),
 # pkgs/platform/config (their env and defaults), apps/rpc, apps/worker, configs, go.mod. A business-flow
@@ -327,9 +287,6 @@ eq_of "helm-kind job runs task helm-kind-core"            1 ci_count helm-kind '
 eq_of "helm-kind-payment job runs task helm-kind-payment" 1 ci_count helm-kind-payment '^      - run: task helm-kind-payment$'
 whole_kind=$(count_lines '^      - run: task helm-kind$' "$src/.github/workflows/ci.yml") || exit 1   # empty (so the assertion fails) when grep dies: count_lines stops the subshell
 expect_eq "no ci.yml job runs the whole task helm-kind"       0 "$whole_kind"
-eq_of "helm-kind-target job runs target-kubeconfig-test.sh" 1 ci_count helm-kind-target '^      - run: deployments/helm/kind/target-kubeconfig-test.sh$'
-eq_of "helm-kind no longer runs target-kubeconfig-test.sh (its own job)" 0 ci_count helm-kind 'target-kubeconfig-test'
-eq_of "helm-kind-payment does not run target-kubeconfig-test.sh"        0 ci_count helm-kind-payment 'target-kubeconfig-test'
 # both halves keep the failure diagnosis: the kubectl dump and the kind-diag artifact (one name per job: upload-artifact names are unique per run)
 for j in helm-kind helm-kind-payment; do
   eq_of "$j dumps the pods on failure"            1 ci_count $j 'kubectl -n x-monorepo describe pods'
@@ -349,11 +306,8 @@ EOF_DIAG
   echo "$n"
 }
 eq_of "the two halves upload under different artifact names" 2 diag_name_count
-# helm-kind-target needs neither node, helm nor k6 (docs/ci.md says so)
-eq_of "helm-kind-target installs no node / helm / k6" 0 ci_count helm-kind-target -E 'setup-node|setup-helm|setup-k6|pnpm'
 # the halves are each other's equals: the same trigger (ci-changes.sh) and no shared state between them
 eq_of "helm-kind-payment has no matrix" 0 ci_count helm-kind-payment 'matrix'
-eq_of "helm-kind-target has no matrix"  0 ci_count helm-kind-target 'matrix'
 # helm-kind and helm-kind-payment run on the same inputs: the same flags in ci-changes.sh
 # out_inputs <flag>: the inputs ci-changes.sh lists for `out <flag> …` (FAILED when grep finds nothing or dies)
 out_inputs() {
@@ -648,9 +602,7 @@ n_loose=$(step_text "$src/.github/actions/setup/action.yml" gobuild-rw | sed -n 
 expect_eq "setup: the build cache restore-keys stay inside the group" 0 "$n_loose"
 # the web job needs go on PATH (task evaluates `go work edit` on every run) but compiles nothing; lint's own golangci cache must not save on a PR
 optouts=$(count_lines 'go-cache: "false"' "$src/.github/workflows/ci.yml") || exit 1
-expect_eq "ci.yml: only the web and helm-kind-target jobs opt out of the Go cache" 2 "$optouts"
-eq_of "ci.yml: the helm-kind-target job opts out of the Go cache (it compiles nothing, #446)" 1 ci_count helm-kind-target 'go-cache: "false"'
-eq_of "ci.yml: the helm-kind-target job still runs the setup action (task needs go)" 1 ci_count helm-kind-target 'uses: ./.github/actions/setup$'
+expect_eq "ci.yml: only the web job opts out of the Go cache" 1 "$optouts"
 eq_of "ci.yml: the web job opts out of the Go cache"        1 ci_count web 'go-cache: "false"'
 eq_of "ci.yml: the web job still runs the setup action (task needs go)" 1 ci_count web 'uses: ./.github/actions/setup$'
 match_of "ci.yml: lint's golangci-lint cache is not saved on a pull request" "skip-save-cache: \"\\$\\{\\{ github.event_name == 'pull_request' \\}\\}\"" ci_job lint
@@ -2383,7 +2335,7 @@ fixture kddies
 git -C "$repo" checkout -q -b change
 touch_file deployments/helm/kind/run.sh
 commit "chore: kddies"
-match_of "ci_changes_jobs: control — run.sh alone sets helm_kind_target" '(^| )helm_kind_target( |$)' ci_changes_jobs
+match_of "ci_changes_jobs: control — run.sh alone sets helm" '(^| )helm( |$)' ci_changes_jobs
 PATH="$tmp/kd-dying-git:$PATH" eq_rc "ci_changes_jobs: git diff prints the files and then dies" CI-CHANGES-FAILED 1 ci_changes_jobs
 PATH="$tmp/kd-dying-sed:$PATH" eq_rc "ci_changes_jobs: sed prints the jobs and then dies" FORMAT-FAILED 1 ci_changes_jobs
 PATH="$tmp/kd-dying-tr:$PATH" eq_rc "ci_changes_jobs: tr prints the jobs and then dies" FORMAT-FAILED 1 ci_changes_jobs
@@ -2517,31 +2469,6 @@ for keep in all 1; do
   expect_eq    "next-version (#470): git describe of the base prints [$keep] then exits 42 → exit 2 (no made-up tag)" "2" "$rc"
   expect_match "next-version (#470): …and names git describe" 'git describe failed for v0\.1\.0' "$out"
 done
-# deployments/helm/kind/target-kubeconfig-test.sh helpers (the real functions): a file that is not there has a value, one that cannot be read does not
-printf 'a\nb\nc\n' > "$tmp/tk.three"; : > "$tmp/tk.empty"; : > "$tmp/tk.noread"; chmod 000 "$tmp/tk.noread"
-tk_cell() { # <label> <want rc> <want out> <command…>
-  local label=$1 wrc=$2 wout=$3; shift 3
-  { echo ". '$src/scripts/best-effort.sh'"; for fn in yesno fingerprint num_in lines_in; do fn_text "$src/deployments/helm/kind/target-kubeconfig-test.sh" $fn; done; printf '%s\n' "$@"; } > "$tmp/tk.sh"
-  trc=0; capture -2 tout trc bash "$tmp/tk.sh" || exit 1
-  expect_eq "target-kubeconfig-test ($label): exit" "$wrc" "$trc"
-  expect_eq "target-kubeconfig-test ($label): output" "$wout" "$tout"
-}
-tk_cell "fingerprint: absent file"       0 absent 'fingerprint '"$tmp"'/tk.nothere'
-ck_three=$(cksum < "$tmp/tk.three") || exit 1
-tk_cell "fingerprint: present file"      0 "$ck_three" 'fingerprint '"$tmp"'/tk.three'
-[ "$uid_now" = 0 ] || tk_cell "fingerprint: unreadable file fails (not 'absent')" 1 "" 'fingerprint '"$tmp"'/tk.noread 2>/dev/null'
-tk_cell "num_in: absent counter = 0"     0 0 'num_in '"$tmp"'/tk.nothere'
-tk_cell "num_in: present counter"        0 $'a\nb\nc' 'num_in '"$tmp"'/tk.three'
-[ "$uid_now" = 0 ] || tk_cell "num_in: unreadable counter fails (not 0)" 1 "" 'num_in '"$tmp"'/tk.noread 2>/dev/null'
-tk_cell "lines_in: absent file = 0"      0 0 'lines_in '"$tmp"'/tk.nothere'
-tk_cell "lines_in: three lines"          0 3 'lines_in '"$tmp"'/tk.three'
-tk_cell "lines_in: empty file = 0 (grep 1)" 0 0 'lines_in '"$tmp"'/tk.empty'
-tk_cell "lines_in: grep prints 5 then dies (2): a failure, no count" 2 "value_of: command failed (exit 2): grep -c . $tmp/tk.three" 'grep() { echo 5; return 2; }; lines_in '"$tmp"'/tk.three'
-tk_cell "yesno: true"                    0 yes 'yesno true'
-tk_cell "yesno: false"                   0 no  'yesno false'
-tk_cell "yesno: prints then fails → no"  0 $'out\nno' 'f() { echo out; return 3; }; yesno f'
-chmod 600 "$tmp/tk.noread"
-
 # deployments/helm/kind/negative.sh rpc_config_error() and the line that uses it: a failed read is "not yet", never a pass and never a made-up "no"
 printf '{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"CreateContainerConfigError"}}}]}}]}\n' > "$tmp/neg.cfgerr.json"
 printf '{"items":[{"status":{"containerStatuses":[{"state":{"running":{}}}]}}]}\n' > "$tmp/neg.ok.json"

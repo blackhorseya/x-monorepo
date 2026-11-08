@@ -21,10 +21,6 @@
 #   helm-kind           product Go, web, helm, image files.
 #   helm-kind-payment   the same inputs as helm-kind: the two jobs are halves of task helm-kind (#446), one cluster each.
 #   helm-kind-keda      helm, apps/worker, pkgs/platform, image files, go.mod / go.sum / go.work.
-#   helm-kind-target    the kind runner and what target-kubeconfig-test.sh reads: deployments/helm/kind/{run.sh, lock.sh, shim/*,
-#                       target-*}, go.work (every task evaluates it), plus $ci (Taskfile.yml, ci.yml, scripts/, .github/actions).
-#                       NOT helm, product Go or the other kind scripts: it creates two kind clusters and judges only where `task
-#                       helm-kind-cluster` / `helm-kind-down` write (#437).
 #   k6 (the smoke)      tests/k6, pkgs/platform/server + config (rate limit, timeout), apps/rpc, apps/worker,
 #                       apps/catalog-rpc + pkgs/catalog (rpc asks catalog-rpc for every order), configs,
 #                       go.mod / go.sum / go.work. Business flows are helm-kind's.
@@ -107,12 +103,6 @@ dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.
 # fixture, tests/dex-prebind/ is the rpc stub of the dex-prebind: cases, docs/ci.md is checked for every job name (#328), release.yml and release-drafter.yml are read by the release image list cases (#367). Add a path here (and a sole-path case in test.sh) whenever test.sh starts reading a new one.
 scripts_src=false; has '*.sh' '.github/workflows/*' '.github/actions/*/action.yml' '.github/workflows/k6-bench.yml' '.goreleaser.yaml' 'tests/dex-prebind/*' 'docs/ci.md' '.github/workflows/release.yml' '.github/release-drafter.yml' && scripts_src=true
 
-# helm-kind-target runs deployments/helm/kind/target-kubeconfig-test.sh (#446). What it reads or executes: the script itself and its
-# siblings target-* (target-test.sh, target-isolation-test.sh judge the same entry), the runner run.sh and what run.sh sources
-# (lock.sh as BASH_ENV, shim/ on PATH), and the Taskfile (inside $ci) whose helm-kind-cluster / helm-kind-down it runs; every task
-# evaluates the Taskfile's MODULES var from go.work. Anything else under deployments/helm/kind/ (smoke.sh, payment*.sh, values) is a
-# helm-kind input, not this job's. Add a path here (and a sole-path case in test.sh) whenever that script starts reading a new one.
-target_src=false; has 'deployments/helm/kind/run.sh' 'deployments/helm/kind/lock.sh' 'deployments/helm/kind/shim/*' 'deployments/helm/kind/target-*' 'go.work' && target_src=true
 
 any() { for v in "$@"; do [ "$v" = true ] && return 0; done; return 1; }
 out() { if any "${@:2}"; then echo "run_$1=true"; else echo "run_$1=false"; fi; }
@@ -133,7 +123,6 @@ out scripts_test     "$ci" "$scripts_src"
 out helm_kind        "$go_prod" "$web" "$helm" "$images" "$ci"
 out helm_kind_payment "$go_prod" "$web" "$helm" "$images" "$ci"
 out helm_kind_keda   "$helm" "$keda_src" "$images" "$gomod" "$ci"
-out helm_kind_target "$target_src" "$ci"
 out k6               "$k6" "$k6_src" "$gomod" "$ci"
 out k6_auth          "$k6" "$auth_src" "$ci"
 out k6_wire          "$go_prod" "$k6" "$ci"

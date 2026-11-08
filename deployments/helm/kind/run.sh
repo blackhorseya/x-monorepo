@@ -31,6 +31,23 @@ mkdir -p "$scratch/home" "$scratch/tmp"
 : > "$scratch/home/.kind-runner"          # the marker kind/*.sh look for (#444)
 kc_dir=${kc%/*} kc_base=${kc##*/}       # kc is absolute (above): the directory and the file name, without dirname / basename in a substitution
 kc_name=${kc_base#kubeconfig-}          # == sed 's/^kubeconfig-//'
+
+# The entry check, the only check of where this lands: before a kubectl / helm / script touches the cluster, the kubeconfig it was given
+# must be the kind cluster it is named after (kubeconfig-<name> -> kind cluster <name>): one cluster, one context, and the API server
+# `kind get kubeconfig --name <name>` reports now. A context NAME proves nothing (an alias can carry any name), the server address does.
+# Anything else, or a cluster kind does not have, stops here (fail closed). A file that does not exist yet passes (kubectl fails on it
+# anyway), and `kind` commands are not checked: they act on the container runtime by name, and kind create / delete only add or remove
+# their own entry in the file they are given.
+if [ "$1" != kind ] && [ -e "$kc" ]; then
+  kind get kubeconfig --name "$kc_name" > "$scratch/want.yaml" 2>/dev/null \
+    || { echo "run.sh: refusing to run: kind has no cluster '$kc_name' (the kubeconfig $kc is named after it)" >&2; exit 1; }
+  have=$(kubectl config view --kubeconfig "$kc" -o 'jsonpath={.clusters[*].cluster.server} {.contexts[*].name}') \
+    || { echo "run.sh: refusing to run: cannot read $kc" >&2; exit 1; }
+  want=$(kubectl config view --kubeconfig "$scratch/want.yaml" -o 'jsonpath={.clusters[*].cluster.server} {.contexts[*].name}') \
+    || { echo "run.sh: refusing to run: cannot read what kind reports for '$kc_name'" >&2; exit 1; }
+  [ -n "$want" ] && [ "$have" = "$want" ] \
+    || { echo "run.sh: refusing to run: $kc is not the kubeconfig of kind cluster '$kc_name' (got '$have', kind says '$want')" >&2; exit 1; }
+fi
 helm_home=$kc_dir/helm-$kc_name
 mkdir -p "$helm_home/config" "$helm_home/cache" "$helm_home/data"
 
