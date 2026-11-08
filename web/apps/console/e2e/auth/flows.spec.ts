@@ -1,32 +1,28 @@
 import { expect, test } from "@playwright/test";
-import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
+import { ADMIN_KEY } from "../../playwright.config";
 import { subject, useJWT, useKey } from "./helpers";
 import { mintJWT } from "./jwt";
-import { seedProduct } from "../catalog";
 import { uid } from "../uid";
-import { confirm, createCard, filterCard, expectOrderStatus, createOrder } from "../orders-ui";
-import { pickProduct } from "../stock-ui";
 
 // The parts of the credential story auth.spec.ts leaves out: the JWT kind
 // (header shows the token's sub; expired / wrong issuer / wrong secret are
 // auth.invalid_credential; the roles claim is what the admin gate reads), and
 // that mutations carry the credential too — the interceptor is read at call
-// time, so a key set after the page loaded must reach the next Create / Set.
-
-const customer = (t: string) => `e2e-auth-${t}-${uid()}`;
+// time, so a key set after the page loaded must reach the next Create.
 
 test("JWT: sub in the header, rejected variants name the reason", async ({
   page,
 }) => {
-  await page.goto("/orders");
+  await page.goto("/accounts");
 
-  await useJWT(page, mintJWT("alice"));
+  // ListAccounts is an admin RPC: the roles claim is what lets alice see the list.
+  await useJWT(page, mintJWT("alice", { roles: ["admin"] }));
   await expect(subject(page)).toHaveText("jwt · alice");
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(
     page
       .getByRole("row")
-      .filter({ hasText: /No orders|PENDING|CANCELLED/ })
+      .filter({ hasText: /No accounts yet|ACTIVE|DISABLED/ })
       .first()
   ).toBeVisible();
 
@@ -36,9 +32,9 @@ test("JWT: sub in the header, rejected variants name the reason", async ({
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   for (const bad of [
-    mintJWT("alice", { exp: Math.floor(Date.now() / 1000) - 60 }), // expired
-    mintJWT("alice", { iss: "https://someone-else.example.com" }), // wrong issuer
-    mintJWT("alice", {}, "another-secret-0123456789abcdef0123456789abcdef"), // wrong key
+    mintJWT("alice", { roles: ["admin"], exp: Math.floor(Date.now() / 1000) - 60 }), // expired
+    mintJWT("alice", { roles: ["admin"], iss: "https://someone-else.example.com" }), // wrong issuer
+    mintJWT("alice", { roles: ["admin"] }, "another-secret-0123456789abcdef0123456789abcdef"), // wrong key
   ]) {
     await useJWT(page, bad);
     const alert = page.getByRole("alert").first();
@@ -61,83 +57,27 @@ test("JWT roles claim drives the admin gate", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText("admin.no_database");
 });
 
-test("mutations carry the credential set after the page loaded", async ({
-  page,
-  request,
-}) => {
-  const id = customer("write");
-  const sku = `E2E-AUTH-W-${uid()}`;
-  await seedProduct(request, sku, { headers: { "X-API-Key": ADMIN_KEY } });
-  await page.goto("/orders");
-  await expect(page.getByRole("alert").first()).toContainText(
-    "auth.unauthenticated"
-  );
+test("mutations carry the credential set after the page loaded", async ({ page }) => {
+  const name = `e2e-auth-write-${uid()}`;
+  await page.goto("/accounts");
+  await expect(page.getByRole("alert").first()).toContainText("auth.unauthenticated");
 
   // Anonymous Create is refused by the server, and says so next to the form.
-  // (Nobody is known to default to, so the field stays locked: the answer is the
-  // server's, not a customer id's.)
-  await expect(createCard(page).getByLabel("Customer")).toBeDisabled();
-  await page.getByRole("button", { name: "Create order" }).click();
-  await expect(
-    page.getByRole("alert").filter({ hasText: "auth.unauthenticated" })
-  ).toHaveCount(2);
+  await page.getByLabel("Name").fill(name);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "auth.unauthenticated" })).toHaveCount(2);
 
-  // A role-less key is enough for OrderService: the list recovers at once and
-  // the form's stale error goes with it (the credential change resets mutations).
-  // Its owner is the customer, so the form does not offer to name one.
-  await useKey(page, OPS_KEY);
-  await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(createCard(page).getByLabel("Customer")).toBeDisabled();
-
-  // Naming a customer is the admin's (ordering on behalf of someone).
+  // An admin key: the list recovers at once and the form's stale error goes with it
+  // (the credential change resets mutations); the same Create now goes through.
   await useKey(page, ADMIN_KEY);
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(createCard(page).getByLabel("Customer")).toBeEnabled();
-  await createCard(page).getByLabel("Customer").fill(id);
-  await createCard(page).getByLabel("SKU").fill(sku);
-  await createOrder(page);
+  await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await filterCard(page).getByLabel("Customer").fill(id);
-  await page.getByRole("button", { name: "Filter" }).click();
-  const row = page.getByRole("row").filter({ hasText: id });
-  await expect(row).toHaveCount(1);
-  await expectOrderStatus(page, row, "PENDING");
+  await expect(page.getByRole("row").filter({ hasText: name })).toHaveCount(1);
 
-  // Cancel too, and with the other kind of credential (an admin one: the list is
-  // filtered by another customer's id, which a role-less caller may not do).
-  await useJWT(page, mintJWT("dave", { roles: ["admin"] }));
-  await row.getByRole("button", { name: "Cancel" }).click();
-  await confirm(page, "Cancel order");
-  await expectOrderStatus(page, row, "CANCELLED");
-
-  // Clear (the header's; the filter form has its own): the next write is anonymous again.
+  // Clear (the header's): the next write is anonymous again.
   await page.locator("header").getByRole("button", { name: "Clear" }).click();
-  await page.getByRole("button", { name: "Create order" }).click();
-  await expect(
-    page.getByRole("alert").filter({ hasText: "auth.unauthenticated" }).first()
-  ).toBeVisible();
-});
-
-test("SetStock under auth: no form anonymous, ok with an admin key", async ({
-  page,
-  request,
-}) => {
-  const sku = `E2E-AUTH-${uid()}`;
-  await seedProduct(request, sku, { headers: { "X-API-Key": ADMIN_KEY } });
-  await page.goto("/stock");
-  // Anonymous is not admin: the list is refused (alert) and there is no Set form to try.
-  await expect(
-    page.getByRole("alert").filter({ hasText: "auth.unauthenticated" }).first()
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Set", exact: true })).toHaveCount(0);
-
-  await useKey(page, ADMIN_KEY);
-  await expect(page.getByRole("alert")).toHaveCount(0);
-  await pickProduct(page, sku);
-  await page.getByLabel("On hand").fill("3");
-  await page.getByRole("button", { name: "Set", exact: true }).click();
-  await expect(page.getByRole("alert")).toHaveCount(0);
-  const row = page.getByRole("row").filter({ hasText: sku });
-  await expect(row).toHaveCount(1);
-  await expect(row).toContainText("3");
+  await page.getByLabel("Name").fill(`${name}-2`);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "auth.unauthenticated" }).first()).toBeVisible();
 });

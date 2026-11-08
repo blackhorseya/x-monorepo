@@ -63,9 +63,8 @@ test("no admin role: a slow admin chunk does not delay the gate", async ({ page 
 test("no admin role, already known: navigating to an admin page fetches no chunk", async ({ page }) => {
   await seed(page, OPS_KEY);
   const probe = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts"));
-  await page.goto("/stock");
+  await page.goto("/accounts");
   expect((await probe).status()).toBe(403);
-  await expect(nav(page, "Stock")).toBeVisible();
 
   const chunks: string[] = [];
   page.on("request", (r) => {
@@ -79,7 +78,7 @@ test("no admin role, already known: navigating to an admin page fetches no chunk
 
 test("admin: link intent still preloads the admin chunk", async ({ page }) => {
   await seed(page, ADMIN_KEY);
-  await page.goto("/stock");
+  await page.goto("/accounts");
   await expect(nav(page, "Poison")).toBeVisible();
   const chunks: string[] = [];
   page.on("request", (r) => {
@@ -137,7 +136,7 @@ test("admin: a chunk that fails to load is a visible error, not a blank page, an
 for (const name of ["poison", "prune", "expire"]) {
   test(`credential change: a cached admin answer cannot preload ${name}, pending or denied`, async ({ page }) => {
     await seed(page, ADMIN_KEY);
-    await page.goto("/stock");
+    await page.goto("/accounts");
     await expect(nav(page, "Poison")).toBeVisible(); // probe true is cached for the admin key
 
     let release!: () => void;

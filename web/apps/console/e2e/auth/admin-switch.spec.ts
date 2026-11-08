@@ -24,9 +24,9 @@ const switches: Switch[] = [
 ];
 
 for (const sw of switches) {
-  for (const path of ["/accounts", "ACCOUNT", "/products", "/poison", "/prune", "/expire"]) {
+  for (const path of ["/accounts", "ACCOUNT", "/products", "/poison", "/prune"]) {
     test(`admin on ${path} switches to ${sw.name}: no admin-only RPC is sent with the new credential`, async ({ page }) => {
-      await page.goto("/orders");
+      await page.goto("/accounts");
       await useKey(page, ADMIN_KEY);
       let target = path;
       if (path === "ACCOUNT") {

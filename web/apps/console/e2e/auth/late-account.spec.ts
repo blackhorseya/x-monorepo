@@ -16,7 +16,7 @@ import { mintJWT } from "./jwt";
 //
 // So these pass on purpose, and they stop passing if AdminGate ever keeps its children mounted while the
 // probe is pending, or if a card is moved out from under it. Then the callbacks need the generation check
-// the order form has (routes/orders.tsx, #370). Fault injection: make AdminGate return `children` while
+// the key dialog has (routes/account.tsx, see late-create.spec.ts, #370). Fault injection: make AdminGate return `children` while
 // `probe.isPending` and the three "previous credential" tests below fail (the form is cleared).
 //
 // The server is real (auth project); only the order of the answer is controlled: the request reaches the

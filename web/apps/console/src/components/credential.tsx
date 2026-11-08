@@ -14,7 +14,7 @@ import { signOut } from "../oidc/session";
 // PERMISSION_DENIED page recovers (or appears) at once instead of on its next
 // poll — the slowest one (poison) is 5s.
 //
-// Cancel + reset, not invalidate (#483). Most query keys (["orders", customer, status], ["quote", ...skus])
+// Cancel + reset, not invalidate (#483). Most query keys (["accounts"], ["products", prefix])
 // do not name the credential, so what is cached under a key was read for whoever was calling when it was
 // asked. invalidateQueries only marks it stale and refetches: a query with no data and a request in flight
 // (the first, anonymous one) is not restarted, the new call is folded into the old one and its answer, a
@@ -24,7 +24,7 @@ import { signOut } from "../oidc/session";
 // backoff never fires) and resetQueries sends every query back to "not loaded", so nothing read for the
 // previous credential is shown or can land in the cache, and the queries on screen ask again at once.
 // One call for every query, instead of adding the credential generation to each key by hand: a new query
-// cannot forget it (the keys that already carry a generation, admin probe / payment / history, are simply
+// cannot forget it (the keys that already carry a generation, admin probe / who-am-i / identities, are simply
 // reset too).
 // The change is flushed to the screen first (flushSync): the admin pages sit behind AdminGate, which closes
 // the moment the credential changes (its probe has no answer for the new one yet) and unmounts their

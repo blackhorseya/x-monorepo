@@ -12,7 +12,7 @@ test.skip(
 test("deep link falls back to index.html, never cached", async ({
   request,
 }) => {
-  const res = await request.get("/stock?prefix=E2E");
+  const res = await request.get("/products?prefix=E2E");
   expect(res.status()).toBe(200);
   expect(res.headers()["content-type"]).toContain("text/html");
   expect(res.headers()["cache-control"]).toBe("no-cache");
@@ -34,7 +34,7 @@ test("hashed assets are immutable, unknown ones are 404 (not index.html)", async
 test("security headers on what nginx serves, not on the proxied /api", async ({
   request,
 }) => {
-  const page = (await request.get("/orders")).headers();
+  const page = (await request.get("/accounts")).headers();
   expect(page["content-security-policy"]).toContain("frame-ancestors 'none'");
   expect(page["content-security-policy"]).toContain("script-src 'self'");
   expect(page["x-content-type-options"]).toBe("nosniff");
@@ -72,7 +72,7 @@ test("no CONSOLE_* env: /config.json has an empty issuer (OIDC off), API key log
   expect(res.headers()["content-type"]).toContain("application/json");
   expect(res.headers()["cache-control"]).toBe("no-store");
   expect(await res.json()).toEqual({ oidcIssuer: "", oidcClientId: "", apiKeyLogin: true });
-  const page = (await request.get("/orders")).headers();
+  const page = (await request.get("/accounts")).headers();
   expect(connectSrc(page["content-security-policy"])).toBe("connect-src 'self'");
 });
 
@@ -91,7 +91,7 @@ test.describe("configured for OIDC", () => {
     });
     const text = await res.text();
     expect(text).not.toContain("s3cr3t-must-not-leak"); // another env var of the container: not on the whitelist
-    const csp = (await request.get(`${base()}/orders`)).headers()["content-security-policy"];
+    const csp = (await request.get(`${base()}/accounts`)).headers()["content-security-policy"];
     expect(connectSrc(csp)).toBe("connect-src 'self' https://idp.e2e.example");
     expect(csp).not.toContain("*");
     expect(csp).not.toContain("s3cr3t-must-not-leak");
@@ -104,7 +104,7 @@ test.describe("configured for OIDC", () => {
     await mockIdp(page);
     const violations: string[] = [];
     page.on("console", (m) => /content security policy/i.test(m.text()) && violations.push(m.text()));
-    await page.goto(`${base()}/orders`);
+    await page.goto(`${base()}/accounts`);
     await expect(page).toHaveURL(/\/login/);
     await expect(page.getByLabel("API key")).toHaveCount(0);
     await page.getByRole("button", { name: "Sign in" }).click();

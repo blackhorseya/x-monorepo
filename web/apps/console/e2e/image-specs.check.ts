@@ -11,7 +11,7 @@ import { checkSpecClasses, imageSpecs, previewOnlySpecs, type Listed } from "./i
 //
 // PINNED is NOT derived from image-specs.ts: if it were, adding a spec to the image list would move the
 // expectation with it and nothing would notice.
-const PINNED = ["image.spec.ts", "version.spec.ts", "orders.spec.ts", "order.spec.ts", "products.spec.ts", "reservations.spec.ts"];
+const PINNED = ["image.spec.ts", "version.spec.ts", "products.spec.ts"];
 
 interface JSONReport extends JSONSuite {
   errors?: unknown[];

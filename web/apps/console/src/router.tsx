@@ -1,7 +1,5 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { ReservationStatus } from "@repo/proto/inventory/v1/entity_pb";
-import { OrderStatus } from "@repo/proto/ordering/v1/entity_pb";
 import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
 import { getCredential, getCredentialGeneration, useCredential } from "./auth";
 import { getConfig } from "./oidc/config";
@@ -12,28 +10,17 @@ import { useUnbound } from "./oidc/unbound";
 import { ServerVersion } from "./components/version";
 import { queryClient } from "./queryClient";
 import { adminProbeQuery } from "./queries";
-import type { ExpireSearch } from "./routes/expire";
 import type { LoginSearch } from "./routes/login";
-import type { OrdersSearch } from "./routes/orders";
 import type { ProductsSearch } from "./routes/products";
 import type { PruneSearch } from "./routes/prune";
-import type { ReservationsSearch } from "./routes/reservations";
-import type { StockSearch } from "./routes/stock";
 
 // Every page is its own chunk (lazyRouteComponent), fetched on first visit or on link intent
 // (defaultPreload). The search types above are type-only imports, so they cost nothing at runtime.
-
-const navLinks = [
-  { to: "/orders", label: "Orders" },
-  { to: "/reservations", label: "Reservations" },
-  { to: "/stock", label: "Stock" },
-] as const;
 
 // The pages whose RPCs the server answers to the admin role only.
 const adminLinks = [
   { to: "/poison", label: "Poison" },
   { to: "/prune", label: "Prune" },
-  { to: "/expire", label: "Expire" },
   { to: "/accounts", label: "Accounts" },
   { to: "/products", label: "Products" },
 ] as const;
@@ -74,7 +61,7 @@ function Root() {
     if (getConfig().oidc && !credential && !publicPaths.includes(path)) void navigate({ to: "/login", replace: true });
   }, [credential, path, navigate]);
   const unbound = useUnbound();
-  const links = unbound ? [] : isAdmin ? [...navLinks, ...adminLinks] : navLinks;
+  const links = unbound || !isAdmin ? [] : adminLinks;
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
       <header className="mb-6 flex flex-wrap items-baseline gap-6">
@@ -123,42 +110,12 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   beforeLoad: () => {
-    throw redirect({ to: "/orders" });
+    throw redirect({ to: "/accounts" });
   },
 });
 
-const ordersRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/orders",
-  component: lazyRouteComponent(() => import("./routes/orders"), "OrdersPage"),
-  validateSearch: (raw: Record<string, unknown>): OrdersSearch => ({
-    status: typeof raw.status === "string" && raw.status in OrderStatus ? (raw.status as OrdersSearch["status"]) : undefined,
-    customer: typeof raw.customer === "string" && raw.customer !== "" ? raw.customer : undefined,
-  }),
-});
-// A sibling of /orders, not a child: OrdersPage renders no Outlet, and the nav's
-// activeProps on /orders still light up here (prefix match).
-const orderRoute = createRoute({ getParentRoute: () => rootRoute, path: "/orders/$id", component: lazyRouteComponent(() => import("./routes/order"), "OrderPage") });
-const reservationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/reservations",
-  component: lazyRouteComponent(() => import("./routes/reservations"), "ReservationsPage"),
-  validateSearch: (raw: Record<string, unknown>): ReservationsSearch => ({
-    status: typeof raw.status === "string" && raw.status in ReservationStatus ? (raw.status as ReservationsSearch["status"]) : undefined,
-    order: typeof raw.order === "string" && raw.order !== "" ? raw.order : undefined,
-  }),
-});
-const stockRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/stock",
-  component: lazyRouteComponent(() => import("./routes/stock"), "StockPage"),
-  validateSearch: (raw: Record<string, unknown>): StockSearch => ({
-    prefix: typeof raw.prefix === "string" && raw.prefix !== "" ? raw.prefix : undefined,
-    reserved: raw.reserved === true ? true : undefined,
-  }),
-});
 const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: lazyRouteComponent(() => import("./routes/accounts"), "AccountsPage") });
-// A sibling of /accounts, like /orders/$id: the nav's prefix match lights Accounts up here too.
+// A sibling of /accounts, not a child: the nav's prefix match lights Accounts up here too.
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: lazyRouteComponent(() => import("./routes/account"), "AccountPage") });
 const productsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -180,17 +137,8 @@ const pruneRoute = createRoute({
   }),
 });
 
-const expireRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/expire",
-  component: gated(lazyRouteComponent(() => import("./routes/expire"), "ExpirePage")),
-  validateSearch: (raw: Record<string, unknown>): ExpireSearch => ({
-    hours: typeof raw.hours === "number" && Number.isFinite(raw.hours) && raw.hours > 0 ? raw.hours : undefined,
-  }),
-});
-
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, loginRoute, authCallbackRoute, ordersRoute, orderRoute, reservationsRoute, stockRoute, accountsRoute, accountRoute, productsRoute, poisonRoute, pruneRoute, expireRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, loginRoute, authCallbackRoute, accountsRoute, accountRoute, productsRoute, poisonRoute, pruneRoute]),
   defaultPreload: "intent",
   defaultPendingComponent: RoutePending,
   defaultErrorComponent: RouteError,

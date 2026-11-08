@@ -20,7 +20,7 @@ test("reload restores the session silently from the refresh token, which rotates
 
   await page.reload();
   await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
-  await expect(page).toHaveURL(/\/orders$/); // never bounced through /login
+  await expect(page).toHaveURL(/\/accounts$/); // never bounced through /login
 
   const grants = refreshGrants(idp);
   expect(grants).toHaveLength(1);
@@ -81,7 +81,7 @@ test("the access token is renewed before it expires, without a page reload", asy
     const a = r.headers()["authorization"];
     if (r.url().includes("/api/") && a) used.push(a);
   });
-  await page.getByRole("link", { name: "Stock" }).click();
+  await page.goto("/accounts");
   await expect.poll(() => used.length).toBeGreaterThan(0);
   expect(used.at(-1)).toBe(`Bearer ${idp.accessTokens.at(-1)}`);
 });
@@ -320,7 +320,7 @@ test("an IdP that never answers a refresh is given up on: the page still comes u
   let release!: () => void;
   idp.gate = new Promise<void>((r) => (release = r)); // restore on reload is asked, never answered
   try {
-    await page.goto("/orders", { waitUntil: "commit" });
+    await page.goto("/accounts", { waitUntil: "commit" });
     await expect(page.getByRole("status").filter({ hasText: /identity provider/i })).toBeVisible({ timeout: 20_000 });
     expect(await page.evaluate(() => JSON.stringify({ ...sessionStorage }))).toContain(idp.refreshTokens[0]); // kept
   } finally {

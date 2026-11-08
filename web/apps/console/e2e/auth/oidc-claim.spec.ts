@@ -42,12 +42,10 @@ test("an unbound identity gets the ClaimInvite flow, and claiming opens the cons
   await signIn(page);
 
   await expect(page.getByRole("heading", { name: "Link your account" })).toBeVisible();
-  await expect(page.locator("header nav").getByRole("link", { name: "Orders" })).toHaveCount(0);
   await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
 
   await page.getByRole("button", { name: "Claim invite" }).click();
   await expect(page.getByRole("heading", { name: "Link your account" })).toHaveCount(0);
-  await expect(page.locator("header nav").getByRole("link", { name: "Orders" })).toBeVisible();
 
   expect(server.claimCalls).toBe(1);
   expect(JSON.parse(server.claimBodies[0] || "{}")).toEqual({}); // issuer / subject / email come from the token, never from us

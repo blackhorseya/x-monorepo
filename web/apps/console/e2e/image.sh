@@ -9,7 +9,7 @@
 # the host through host.docker.internal (host-gateway) / host.containers.internal.
 #
 #   task web-e2e-image                 # what CI's console-image job runs
-#   e2e/image.sh --grep orders         # extra args go to playwright test
+#   e2e/image.sh --grep accounts         # extra args go to playwright test
 set -euo pipefail
 abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a path, without dirname inside $(…)
 repo_root=$(abs_dir_of "$0" ../../../..) || exit 1

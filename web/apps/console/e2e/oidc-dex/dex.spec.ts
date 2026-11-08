@@ -83,7 +83,7 @@ test("admin@example.com signs in at Dex, is unbound until the invite is claimed,
     page.getByRole("heading", { name: "Link your account" })
   ).toHaveCount(0);
   await expect(subject(page)).toHaveText(/^jwt · /);
-  await page.getByRole("link", { name: "Orders" }).click();
+  await page.getByRole("link", { name: "Accounts" }).click();
   await expect(page.getByText("Not authenticated")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
 

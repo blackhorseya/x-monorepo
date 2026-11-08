@@ -64,7 +64,7 @@ test("an OIDC token the server verified, for an identity with no account, gets t
   await expect(page.getByRole("heading", { name: "Link your account" })).toHaveCount(0);
   await expect(subject(page)).toHaveText(/^jwt · /);
   // The console's own calls now succeed as the bound account (the subject is the account id, not the token's sub).
-  await page.getByRole("link", { name: "Orders" }).click();
+  await page.goto("/accounts");
   await expect(page.getByText("Not authenticated")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
@@ -141,7 +141,7 @@ test("RevokeSessions: the server refuses the old access token (within the 30 s r
   await page.waitForTimeout(1100);
   await page.reload();
   await expect(subject(page)).toHaveText(/^jwt · /);
-  await page.getByRole("link", { name: "Stock" }).click();
+  await page.goto("/accounts");
   await expect(page.getByText("Not authenticated")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });

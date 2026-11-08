@@ -8,7 +8,7 @@ import { useKey } from "../auth/helpers";
 const nav = (page: import("@playwright/test").Page) => page.locator("header nav").getByRole("link", { name: "Accounts" });
 
 test("a custom auth.admin_role opens the accounts pages, and 'admin' no longer does", async ({ page }) => {
-  await page.goto("/orders");
+  await page.goto("/accounts");
 
   await useKey(page, OPERATOR_KEY);
   await expect(nav(page)).toBeVisible();

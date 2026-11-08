@@ -10,7 +10,7 @@ import { ADMIN_KEY } from "../../playwright.config";
 test("signed out with OIDC on: every page goes to /login, which offers the IdP", async ({ page }) => {
   await stubConfig(page);
   await mockIdp(page);
-  await page.goto("/orders");
+  await page.goto("/accounts");
   await expect(page).toHaveURL(/\/login(\?|$)/);
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
 });
@@ -18,16 +18,16 @@ test("signed out with OIDC on: every page goes to /login, which offers the IdP",
 test("after signing in you land where you were going; a returnTo to another origin is ignored", async ({ page }) => {
   await stubConfig(page);
   await mockIdp(page);
-  await page.goto("/stock");
+  await page.goto("/products");
   await signIn(page);
-  await expect(page).toHaveURL(/\/stock$/);
+  await expect(page).toHaveURL(/\/products$/);
 
   const other = await page.context().newPage();
   await stubConfig(other);
   await mockIdp(other);
   await other.goto("/login?returnTo=https://evil.example/phish");
   await signIn(other);
-  await expect(other).toHaveURL(/\/orders$/);
+  await expect(other).toHaveURL(/\/accounts$/);
 });
 
 test("sign in: authorization code + PKCE (S256), state and nonce, callback path /auth/callback", async ({ page }) => {
@@ -37,7 +37,7 @@ test("sign in: authorization code + PKCE (S256), state and nonce, callback path 
   await signIn(page);
 
   await expect(subject(page)).toHaveText("jwt · e2e-oidc-user");
-  await expect(page).toHaveURL(/\/orders$/);
+  await expect(page).toHaveURL(/\/accounts$/);
 
   expect(idp.authorizeRequests).toHaveLength(1);
   const q = idp.authorizeRequests[0];
@@ -172,8 +172,8 @@ test("apiKeyLogin=true: an API key is a secondary way in (break-glass), OIDC sta
 
 test("without OIDC in the runtime config nothing changes: no login page, the credential control stays", async ({ page }) => {
   await stubConfig(page, { oidc: false });
-  await page.goto("/orders");
-  await expect(page).toHaveURL(/\/orders$/);
+  await page.goto("/accounts");
+  await expect(page).toHaveURL(/\/accounts$/);
   await expect(page.getByRole("button", { name: "Credential" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign in" })).toHaveCount(0);
 });
