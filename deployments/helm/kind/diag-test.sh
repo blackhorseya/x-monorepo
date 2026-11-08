@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# What a failed kind run leaves behind (#416): diag.sh and its place in payment-flow.sh, against fake
+# What a failed kind run leaves behind (#416): diag.sh, against fake
 # kubectl / helm / curl (no cluster). Cells, each with its own positive control:
 #
 #   D1  diag.sh, everything answers : the WHOLE log of every pod since the given time as files (no --tail), the previous
@@ -7,12 +7,7 @@
 #                                     connections), each read-only, bounded on the server, with no query text
 #   D2  diag.sh, parts fail         : a pod without a log, a failing Postgres read, no pod list: it still exits 0 and
 #                                     still prints everything else (it must not hide the failure it reports on)
-#   D3  payment-flow.sh, real entry : a step fails -> diag.sh ran ONCE, with the run's start time, BEFORE the release was
-#                                     restored (helm upgrade replaces the pods and their logs), and the exit status is the
-#                                     script's own (1), not diag's or restore's
 #   D4  Postgres of the kind cluster: the server log settings that make a lock wait name its holder and keep SQL text out
-#   D5  signals, real entry         : TERM and INT while a helm upgrade waits -> diag ran, BEFORE the restore, exit 128+signal,
-#                                     no child of the script left (#420)
 #   D6  bounds                      : many pods x many lines -> the Actions console stays small, the files are complete, and a
 #                                     slow cluster ends at the deadline (#420)
 #   D6L/W/E/S/M the console in BYTES  : one 1 MiB line per pod / 5000 pod rows / huge event lines / 100000 Postgres rows: the
@@ -31,7 +26,7 @@
 #   D7  SQL text never leaves       : a real Postgres runs SQL with a synthetic credential literal while a lock is held;
 #                                     nothing diag.sh prints or writes carries it (#420)
 #
-# ONLY=D5,D6 runs just those cells (a RED run of one cell must not be hidden behind another cell's failure).
+# ONLY=D4,D6 runs just those cells (a RED run of one cell must not be hidden behind another cell's failure).
 
 # Every "output has X" is checked against text the fakes produce for THIS call (a nonce per run), so an empty or
 # stale output cannot pass.
@@ -46,7 +41,6 @@ trap 'test -z "$WATCHDOG" || kill $WATCHDOG 2>/dev/null; rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
 nonce="n$$-$RANDOM"
 since="2026-11-03T04:17:46Z"
-printf 'secrets:\n  apiKeys: "shopper=kind-shopper-key-0123456789ab,admin=kind-admin-key-0123456789abc:admin"\n' > "$tmp/flow.yaml"
 : > "$tmp/values.yaml"
 only() { [ -z "${ONLY:-}" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 
@@ -111,7 +105,7 @@ if [ -n "${HELM_BLOCK:-}" ] && [ ! -e "$HELM_BLOCK/started" ]; then
 fi
 exit 0
 H
-# fake curl: the readiness probes answer; every API call is a 500 (so the first step of payment-flow.sh fails)
+# fake curl: the readiness probes answer; every API call is a 500
 cat > "$tmp/bin/curl" <<'C'
 #!/usr/bin/env bash
 case "$*" in
@@ -198,27 +192,6 @@ unset DIAG_DIR
 echo "diag-test ok: D2 a missing log, a failing read, no pod list: exit 0, the rest still printed"
 fi
 
-# ── D3 payment-flow.sh through the real entry ────────────────────────────────
-if only D3; then
-DIAG_DIR="$tmp/diag3" MODE=ok run_bounded 120 "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml"
-[ "$rc" = 1 ] || die "D3: exit $rc, want 1 (the script's own status, not diag's or restore's)"
-has "payment-flow: UpsertProduct: got '500', want '200'" "D3 the step that failed"
-n=$(value_of -ok 1 grep -c '^::group::diag: pods and events' "$tmp/out") || exit 1; [ "$n" = 1 ] || die "D3: diag ran $n times, want exactly once"
-start=$(sed -n 's/.*--since-time=\([^ ]*\).*/\1/p' "$tmp/events" | sort -u) || exit 1
-[ -n "$start" ] || die "D3: no log was read at all (diag.sh did not run)"
-start_lines=$(wc -l <<<"$start" | tr -d ' ') || exit 1
-[ "$start_lines" = 1 ] || die "D3: the logs were read since more than one time: $start"
-[[ $start =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || die "D3: since-time '$start' is not RFC 3339 UTC"
-has "LOG pod/a since=$start $nonce" "D3 the pod log reached the output"
-first_logs=$(awk '/ logs /{print NR; exit}' "$tmp/events") || exit 1
-last_helm=$(awk '/^helm upgrade/{n=NR} END{if(n) print n}' "$tmp/events") || exit 1
-first_helm=$(awk '/^helm upgrade/{print NR; exit}' "$tmp/events") || exit 1
-[ -n "$first_logs" ] && [ -n "$last_helm" ] || die "D3: no log read or no restore in the events"
-[ "$first_helm" -lt "$first_logs" ] || die "D3: the flow's own helm upgrade did not come first (the fake run did not get as far as it should)"
-[ "$first_logs" -lt "$last_helm" ] || die "D3: the pods' logs were read AFTER the release was restored (helm upgrade replaced them)"
-echo "diag-test ok: D3 a failing step: diag ran once, since $start, before the release was restored; exit 1"
-fi
-
 # ── D4 the kind Postgres writes the server log a lock wait needs ─────────────
 if only D4; then
 # PyYAML is already what deployments/helm/check.py needs, so this adds no tool
@@ -239,57 +212,6 @@ for never in log_min_duration_statement log_statement log_duration; do
 done
 echo "diag-test ok: D4 postgres logs lock waits (1s) and checkpoints, keeps statements and SQL text out of the server log"
 fi
-
-# ── D5 TERM / INT while a helm upgrade waits ─────────────────────────────────
-# python launches the script in a session of its own (a background job of a non-interactive shell ignores SIGINT, and
-# an ignored signal cannot be trapped), signals ONLY the script's pid once the blocked helm says it started, and then
-# reports the exit status and whether anything of that session is still alive.
-cat > "$tmp/sigrun.py" <<'PY'
-import os, signal, subprocess, sys, time
-sig = getattr(signal, "SIG" + sys.argv[1]); marker = sys.argv[2]; cmd = sys.argv[4:]
-# a test that was itself started in the background (SIGINT ignored, and inherited) must still deliver a catchable INT
-p = subprocess.Popen(cmd, start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
-t0 = time.time()
-while not os.path.exists(marker):
-    if p.poll() is not None or time.time() - t0 > 30:
-        print("rc=%s signalled=no" % p.poll()); sys.exit(0)
-    time.sleep(0.1)
-os.kill(p.pid, sig)
-try:
-    rc = p.wait(timeout=int(sys.argv[3]))
-except subprocess.TimeoutExpired:
-    os.killpg(p.pid, signal.SIGKILL); p.wait(); print("rc=timeout signalled=yes leftover=?"); sys.exit(0)
-time.sleep(0.5)
-left = 0
-try:
-    os.killpg(p.pid, 0); left = 1; os.killpg(p.pid, signal.SIGKILL)
-except ProcessLookupError:
-    pass
-print("rc=%d signalled=yes leftover=%d" % (rc, left))
-PY
-for sg in TERM INT; do
-  if only D5; then
-    case $sg in TERM) want_rc=143 ;; INT) want_rc=130 ;; esac
-    hb="$tmp/hb-$sg"; mkdir -p "$hb"; : > "$tmp/events"
-    sig_rc=0
-    capture res sig_rc env DIAG_DIR="$tmp/diag5-$sg" EVENTS="$tmp/events" NONCE="$nonce" HELM_BLOCK="$hb" PATH="$tmp/bin:$PATH" python3 "$tmp/sigrun.py" $sg "$hb/started" 60 \
-      "$here/payment-flow.sh" ns rel chart "$tmp/values.yaml" "$tmp/flow.yaml" 2>"$tmp/out" || exit 1
-    [ "$sig_rc" = 0 ] || echo "diag-test: D5 $sg: sigrun.py exited $sig_rc (it reports the script's rc= and signalled= in its output, asserted next)" >&2
-    echo "$res" > "$tmp/out"
-    [[ $res == *"signalled=yes"* ]] || die "D5 $sg: the script never reached the waiting helm upgrade ($res)"
-    [[ $res == *"rc=$want_rc "* ]] || die "D5 $sg: $res; want rc=$want_rc (128 + the signal)"
-    [[ $res == *"leftover=0"* ]] || die "D5 $sg: a child of the script outlived it ($res)"
-    hp=$(cat "$hb/helm.pid" 2>/dev/null) || { echo "diag-test: D5 $sg: cannot read the fake helm's pid file" >&2; exit 1; }
-    [ -n "$hp" ] || die "D5 $sg: the fake helm left no pid"
-    ! kill -0 "$hp" 2>/dev/null || { kill "$hp" 2>/dev/null; die "D5 $sg: the waiting helm (pid $hp) was left running"; }
-    n=$(value_of -ok 1 grep -c ' logs ' "$tmp/events") || exit 1; [ "$n" -gt 0 ] || die "D5 $sg: diag.sh did not run (no pod log was read)"
-    first_logs=$(grep -n ' logs ' "$tmp/events" | head -1 | cut -d: -f1) || exit 1
-    last_helm=$(grep -n '^helm upgrade' "$tmp/events" | tail -1 | cut -d: -f1) || exit 1
-    [ "$first_logs" -lt "$last_helm" ] || die "D5 $sg: diag.sh ran after the restore"
-    _c275a=$(value_of -ok 1 grep -c '^helm upgrade' "$tmp/events") || exit 1; [ "$_c275a" -ge 2 ] || die "D5 $sg: the release was not restored (no second helm upgrade)"
-    echo "diag-test ok: D5 $sg while helm upgrade waits: diag before restore, exit $want_rc, the waiting helm stopped, nothing left"
-  fi
-done
 
 # ── D6 bounds ────────────────────────────────────────────────────────────────
 if only D6; then

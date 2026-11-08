@@ -1,32 +1,17 @@
-{{ .Chart.Name }} {{ .Chart.Version }} → images {{ .Values.image.registry }}/{rpc,worker,migrate{{ if .Values.catalogRpc.enabled }},catalog-rpc{{ end }}{{ if .Values.paymentRpc.enabled }},payment-rpc{{ end }}{{ if .Values.console.enabled }},console{{ end }}}:{{ include "x-monorepo.imageTag" . }}
-{{- if (default dict .Values.config.ordering).require_payment }}
-
-!! PAYMENT IS ON (config.ordering.require_payment): every order that becomes CONFIRMED needs a payment to be completed.
-   The only provider is the MOCK, which nobody can really pay: those orders are CANCELLED after
-   {{ .Values.paymentRpc.config.window }} (paymentRpc.config.window) unless someone pays them through the mock control
-   (payment-rpc mock pay, paymentRpc.config.mock_control: kind and tests only, no HTTP route).
-   TO TURN PAYMENT OFF: --set config.ordering.require_payment=false --set paymentRpc.enabled=false (both).
-   Orders already CONFIRMED keep what they were confirmed under; see docs/operations.md, "Upgrade notes".
-{{- end }}
+{{ .Chart.Name }} {{ .Chart.Version }} → images {{ .Values.image.registry }}/{rpc,worker,migrate{{ if .Values.catalogRpc.enabled }},catalog-rpc{{ end }}{{ if .Values.console.enabled }},console{{ end }}}:{{ include "x-monorepo.imageTag" . }}
 
 rpc      {{ include "x-monorepo.fullname" . }}-rpc  (Service port {{ .Values.rpc.service.port }} → /api/<pkg>.<Service>/<Method>, /api/healthz, /api/readyz, /api/metrics)
 worker   {{ include "x-monorepo.fullname" . }}-worker  broker={{ .Values.config.worker.broker }} group={{ .Values.config.worker.consumer_group }}
-{{- if .Values.paymentRpc.enabled }}
-payment  {{ include "x-monorepo.fullname" . }}-payment-serve (serve{{ if .Values.paymentRpc.ingress.enabled }}; webhook POST /api/payment/webhook through the ingress{{ end }}) · -payment-consume · CronJob */{{ .Values.paymentRpc.expire.intervalMinutes }} * * * * (expire)
-{{- end }}
 {{- if .Values.console.enabled }}
 console  {{ include "x-monorepo.fullname" . }}-console  (Service port {{ .Values.console.service.port }} → the UI; /api → {{ include "x-monorepo.console.rpcUpstream" . }})
 {{- end }}
 {{- if .Values.prune.enabled }}
 prune    CronJob {{ .Values.prune.schedule | quote }}  worker prune --older-than={{ .Values.prune.olderThan }}{{ if .Values.prune.dryRun }} --dry-run{{ end }}
 {{- end }}
-{{- if .Values.expire.enabled }}
-expire   CronJob {{ .Values.expire.schedule | quote }}  worker expire --older-than={{ .Values.expire.olderThan }}{{ if .Values.expire.dryRun }} --dry-run{{ end }}
-{{- end }}
 {{- if not (include "x-monorepo.secretName" .) }}
 
 !! No Postgres URL (secrets.postgresUrl / secrets.existingSecret): repositories are in-memory,
-   the migrate hook was skipped and prune / expire have nothing to work on. Fine for a smoke test only.
+   the migrate hook was skipped and prune has nothing to work on. Fine for a smoke test only.
 {{- end }}
 {{- if not .Values.imagePullSecrets }}
 
