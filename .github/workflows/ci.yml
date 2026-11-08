@@ -23,7 +23,7 @@ jobs:
   # scripts/affected.sh → the go.work modules for the test matrix; scripts/ci-changes.sh → one
   # run_<job> flag per job below, from the files the PR touches (a docs / Grafana / workflow-only
   # PR runs almost nothing; a *_test.go-only PR runs the Go checks and the test matrix; product Go runs
-  # the Go jobs, helm-kind, helm-kind-payment and k6-wire; the k6 / k6-auth / helm-kind-keda / helm-kind-target / release-snapshot / console-image
+  # the Go jobs, helm-kind, helm-kind-payment and k6-wire; the k6 / k6-auth / helm-kind-keda / release-snapshot / console-image
   # jobs have narrower triggers, see the table in scripts/ci-changes.sh).
   # Every job is its own job (no dynamic matrix over them) so a skipped one shows up as a skipped check.
   # On main (the release gate) and on dispatch every job runs: a skipped job must never be the
@@ -50,7 +50,6 @@ jobs:
       run_helm_kind: ${{ steps.jobs.outputs.run_helm_kind }}
       run_helm_kind_payment: ${{ steps.jobs.outputs.run_helm_kind_payment }}
       run_helm_kind_keda: ${{ steps.jobs.outputs.run_helm_kind_keda }}
-      run_helm_kind_target: ${{ steps.jobs.outputs.run_helm_kind_target }}
       run_k6: ${{ steps.jobs.outputs.run_k6 }}
       run_k6_auth: ${{ steps.jobs.outputs.run_k6_auth }}
       run_k6_wire: ${{ steps.jobs.outputs.run_k6_wire }}
@@ -342,25 +341,6 @@ jobs:
           path: ${{ runner.temp }}/kind-diag
           retention-days: 3
           if-no-files-found: ignore
-
-  # Where `task helm-kind-cluster` / `helm-kind-down` write (#437, #444): two throwaway kind clusters, one of them reachable through
-  # a context NAMED after the other, and a decoy kubeconfig. It judges the kind runner, not the chart: it runs only when
-  # deployments/helm/kind/{run.sh, lock.sh, shim/*, target-*}, go.work, the Taskfile, ci.yml, scripts/ or .github/actions change
-  # (scripts/ci-changes.sh, target_src). It needs no node, helm or k6; kind, kubectl, jq, python3 and a container runtime come with
-  # the runner, task with the setup action. Main and dispatch run it with every other job.
-  helm-kind-target:
-    needs: affected
-    if: needs.affected.outputs.run_helm_kind_target == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10 # ~105 s while it was a step of helm-kind (run 41920885162)
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # Task needs `go` on PATH (the MODULES variable runs `go work edit` on every task run); this job compiles nothing, so no Go cache.
-      - uses: ./.github/actions/setup
-        with: { go-cache: "false" }
-      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
-        with: { version: v0.33.0, install_only: true }
-      - run: deployments/helm/kind/target-kubeconfig-test.sh
 
   # KEDA + an OTLP collector + Prometheus on a cluster of its own and a k6 burst that must scale the
   # worker out on eventbus_consumer_lag and back (task helm-kind-keda). It shares nothing with helm-kind

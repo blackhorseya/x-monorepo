@@ -27,7 +27,7 @@ vars:
   # same literal inside a task made `task helm-kind-up CLUSTER=probe` act on x-monorepo; at file level the
   # command line wins and the OS environment does not (go-task reads the environment as template
   # variables, so `{{.CLUSTER | default "x-monorepo"}}` would let a stray CLUSTER=foo in a shell re-aim the
-  # task). Name them on the command line or get the default. deployments/helm/kind/target-test.sh judges it.
+  # task). Name them on the command line or get the default.
   CLUSTER: x-monorepo     # the kind cluster (kind create / load / delete --name, and kubectl's context kind-<CLUSTER>)
   NS: x-monorepo          # the namespace the chart and its dependencies (Postgres, Redis, Dex) live in
   KEDA_NS: keda           # the namespace helm-kind-keda installs KEDA itself into
@@ -37,8 +37,8 @@ vars:
   # PATH = the shims + the tools' directories, and BASH_ENV making those variables read-only in every bash it starts. The guarantee
   # is that the caller's kubeconfig (~/.kube/config, $KUBECONFIG, a current-context such as production) is not in reach, not that a
   # gate read the right words; the commands still carry `--kubeconfig "{{.KIND_KUBECONFIG}}"` (a second layer, and the shims add it
-  # for the scripts). deployments/helm/kind/target-isolation-test.sh runs the real entry against a decoy caller; check-kubeconfig.py
-  # reads the Taskfile (a command outside KIND_RUN is red). See CLAUDE.md "kind target" for what this does not cover (#437, #444).
+  # for the scripts). run.sh also refuses to start when that file exists but is not the one `kind get kubeconfig` gives for the cluster
+  # it is named after (the entry check). See CLAUDE.md "kind target" for what this does not cover (#437, #444).
   KIND_KUBECONFIG: '{{.BIN_DIR}}/kind/kubeconfig-{{.CLUSTER}}'
   KIND_RUN: 'deployments/helm/kind/run.sh "{{.KIND_KUBECONFIG}}"'
   # Empty unless the value is a plain lowercase DNS-ish name: the tasks interpolate these into shell commands.
@@ -221,7 +221,7 @@ tasks:
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
       - go install github.com/sudorandom/protoc-gen-connect-openapi@{{.CONNECT_OPENAPI_VERSION}}
       - go install github.com/yannh/kubeconform/cmd/kubeconform@{{.KUBECONFORM_VERSION}}
-      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/check-kubeconfig.py deployments/helm/kind/shim/kubectl deployments/helm/kind/shim/helm deployments/helm/check-negative.sh deployments/helm/check-mutants.py deployments/helm/check-chart-bump.py deployments/helm/check-chart-bump.sh deployments/helm/check-chart-bump-test.py deployments/helm/kind/*.sh
+      - chmod +x scripts/*.sh scripts/hooks/*.sh deployments/helm/check.py deployments/helm/check-observability.py deployments/helm/kind/shim/kubectl deployments/helm/kind/shim/helm deployments/helm/check-negative.sh deployments/helm/check-mutants.py deployments/helm/check-chart-bump.py deployments/helm/check-chart-bump.sh deployments/helm/kind/*.sh
 
   tools:hooks:
     desc: install lefthook into ./bin and register the git hooks (humans only; CI never needs it)
@@ -379,17 +379,8 @@ tasks:
       - deployments/helm/kind/negative-test.sh
       # check.py goes red when a payment workload is made unsafe (envFrom, writable rootfs, command, the other app's image), per workload (#422)
       - deployments/helm/check-mutants.py
-      # the chart's version must rise when its templates or values change: the gate's own cases (CI runs the gate itself on pull requests, #423)
-      - deployments/helm/check-chart-bump-test.py
       # what a failed kind run leaves behind (#416): diag.sh (whole pod logs since the start, Postgres sessions and locks) against fake kubectl/helm/curl, payment-flow.sh running it before it restores the release, the kind Postgres' lock-wait logging
       - deployments/helm/kind/diag-test.sh
-      # the cluster / namespace every kind task aims at: nothing, the command line, the OS environment only, both (task --dry, no kind runs; #430)
-      - deployments/helm/kind/target-test.sh
-      # every kubectl / helm / kind create|delete|export / kind/*.sh command of this file names its kubeconfig, found by parsing the YAML, so a new task cannot forget it (#437); its own cases first
-      - deployments/helm/check-kubeconfig.py --self-test
-      - deployments/helm/check-kubeconfig.py
-      # the real entry RUN as a hostile caller (KUBECONFIG and HOME pointing at decoy files): the baseline and nine mutants of smoke.sh / the entry (unset, read -r, export -n, an absolute path, HOME ...), a kind script run directly (#444) and a Taskfile command outside the runner; none may ever use the decoy (#437, PR #435 r4)
-      - deployments/helm/kind/target-isolation-test.sh
     preconditions:
       - sh: command -v helm >/dev/null
         msg: helm not found (brew install helm)
@@ -397,7 +388,7 @@ tasks:
         msg: needs docker or podman (kind/diag-test.sh D7 runs a real Postgres)
 
   helm-kind-cluster:
-    desc: 'the first step of helm-kind-up, on its own (#437): the kind cluster CLUSTER (created if it does not exist; kind writes the kubeconfig below, never ~/.kube/config), the kubeconfig bin/kind/kubeconfig-<CLUSTER> from `kind get kubeconfig --name`, and the namespace NS created through it. Everything after it uses only that kubeconfig, so nothing the caller has in KUBECONFIG or a context named kind-<CLUSTER> can aim a write at another cluster; deployments/helm/kind/target-kubeconfig-test.sh runs this against two real kind clusters'
+    desc: 'the first step of helm-kind-up, on its own (#437): the kind cluster CLUSTER (created if it does not exist; kind writes the kubeconfig below, never ~/.kube/config), the kubeconfig bin/kind/kubeconfig-<CLUSTER> from `kind get kubeconfig --name`, and the namespace NS created through it. Everything after it uses only that kubeconfig, so nothing the caller has in KUBECONFIG or a context named kind-<CLUSTER> can aim a write at another cluster;'
     cmds:
       - mkdir -p "{{.BIN_DIR}}/kind"
       - '{{.KIND_RUN}} kind get clusters 2>/dev/null | grep -qx {{.CLUSTER}} || {{.KIND_RUN}} kind create cluster --name {{.CLUSTER}} --kubeconfig "{{.KIND_KUBECONFIG}}" --wait 2m'

@@ -25,6 +25,10 @@ on:
       - .github/workflows/sign-dry-run.yml
       - .goreleaser.yaml
       - scripts/cosign-sign-blob.sh
+      # the `pin` step below reads cosign-release: from release.yml and sources best-effort.sh. Not listed on purpose: Dockerfiles (docker is
+      # skipped here) and the Go sources (they change what is built, not how checksums.txt is signed)
+      - .github/workflows/release.yml
+      - scripts/best-effort.sh
 
 permissions:
   contents: read

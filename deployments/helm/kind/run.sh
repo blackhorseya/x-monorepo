@@ -31,18 +31,45 @@ mkdir -p "$scratch/home" "$scratch/tmp"
 : > "$scratch/home/.kind-runner"          # the marker kind/*.sh look for (#444)
 kc_dir=${kc%/*} kc_base=${kc##*/}       # kc is absolute (above): the directory and the file name, without dirname / basename in a substitution
 kc_name=${kc_base#kubeconfig-}          # == sed 's/^kubeconfig-//'
-helm_home=$kc_dir/helm-$kc_name
-mkdir -p "$helm_home/config" "$helm_home/cache" "$helm_home/data"
 
-# PATH: the shims, then the directory of each tool the scripts use as the CALLER's PATH finds it, then the system directories
-path=$shim
-for t in kubectl helm kind docker podman k6 jq psql python3 curl git go perl base64 xargs; do
+# PATH: the shims, then the tools themselves, then the directory of each tool and the system directories. The directories are the ones the
+# CALLER's PATH finds the tools in; the PATH built from them is then searched ONCE for each tool, and that answer is linked into
+# $scratch/bin, ahead of everything else. The link is what the command runs (the shim's real kubectl, a script's `kind`) and what the entry
+# check below runs, so the check and the command use the same binaries by construction, whatever else is on the caller's PATH.
+mkdir -p "$scratch/bin"
+tools="kubectl helm kind docker podman k6 jq psql python3 curl git go perl base64 xargs"
+dirs=""
+for t in $tools; do
   p=""
   # a tool the caller does not have is simply not added to the PATH; the script that needs it fails on its own
   if type -P "$t" >/dev/null 2>&1; then p=$(type -P "$t") || exit 1; fi
-  case $p in /*) d=${p%/*}; case ":$path:" in *":$d:"*) ;; *) path=$path:$d ;; esac ;; esac
+  case $p in /*) d=${p%/*}; case ":$dirs:" in *":$d:"*) ;; *) dirs=$dirs:$d ;; esac ;; esac
 done
-path=$path:/usr/bin:/bin:/usr/sbin:/sbin
+rest=${dirs#:}:/usr/bin:/bin:/usr/sbin:/sbin
+for t in $tools; do
+  p=$(PATH=$rest; type -P "$t") || continue   # not found in any of those directories: no link
+  case $p in /*) ln -s "$p" "$scratch/bin/$t" || exit 1 ;; esac
+done
+path=$shim:$scratch/bin:$rest
+
+# The entry check, the only check of where this lands: before a kubectl / helm / script touches the cluster, the kubeconfig it was given
+# must be the kind cluster it is named after (kubeconfig-<name> -> kind cluster <name>): one cluster, one context, and the API server
+# `kind get kubeconfig --name <name>` reports now. A context NAME proves nothing (an alias can carry any name), the server address does.
+# Anything else, or a cluster kind does not have, stops here (fail closed). A file that does not exist yet passes (kubectl fails on it
+# anyway), and `kind` commands are not checked: they act on the container runtime by name, and kind create / delete only add or remove
+# their own entry in the file they are given. It runs the same kind and kubectl the command will (the links in $scratch/bin, see PATH below).
+if [ "$1" != kind ] && [ -e "$kc" ]; then
+  "$scratch/bin/kind" get kubeconfig --name "$kc_name" > "$scratch/want.yaml" 2>/dev/null \
+    || { echo "run.sh: refusing to run: kind has no cluster '$kc_name' (the kubeconfig $kc is named after it)" >&2; exit 1; }
+  have=$("$scratch/bin/kubectl" config view --kubeconfig "$kc" -o 'jsonpath={.clusters[*].cluster.server} {.contexts[*].name}') \
+    || { echo "run.sh: refusing to run: cannot read $kc" >&2; exit 1; }
+  want=$("$scratch/bin/kubectl" config view --kubeconfig "$scratch/want.yaml" -o 'jsonpath={.clusters[*].cluster.server} {.contexts[*].name}') \
+    || { echo "run.sh: refusing to run: cannot read what kind reports for '$kc_name'" >&2; exit 1; }
+  [ -n "$want" ] && [ "$have" = "$want" ] \
+    || { echo "run.sh: refusing to run: $kc is not the kubeconfig of kind cluster '$kc_name' (got '$have', kind says '$want')" >&2; exit 1; }
+fi
+helm_home=$kc_dir/helm-$kc_name
+mkdir -p "$helm_home/config" "$helm_home/cache" "$helm_home/data"
 
 # the only names that come through from the caller (nothing that names a kubeconfig, a context, a cluster)
 pass=(LANG LC_ALL LC_CTYPE TERM TZ HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy SSL_CERT_FILE

@@ -2,7 +2,7 @@
 # helm for the scripts the kind tasks run (deployments/helm/kind/*.sh): whatever the script does with KUBECONFIG,
 # every helm it starts, from any depth (xargs, bash -c, timeout, a background job), reaches the real helm with
 # --kubeconfig $KIND_KUBECONFIG (the file `kind get kubeconfig` wrote for the task's cluster). No KIND_KUBECONFIG: no call.
-# run.sh puts this directory first on PATH (second layer: the real isolation is run.sh's env -i / scratch HOME / read-only variables). See check-kubeconfig.py.
+# run.sh puts this directory first on PATH (second layer: the real isolation is run.sh's env -i / scratch HOME / read-only variables).
 d=$(cd "$(dirname "$0")" && pwd) || exit 1
 [ -n "${KIND_KUBECONFIG:-}" ] || { echo "helm: KIND_KUBECONFIG is not set (run it through a kind task)" >&2; exit 1; }
 p="" ; old_ifs=$IFS ; IFS=:
