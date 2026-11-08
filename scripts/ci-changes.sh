@@ -10,7 +10,7 @@
 # other areas…) runs nothing but what it belongs to. Grafana dashboards and alerts belong to helm-check
 # (check-observability.py reads the payment panels and rules). ci.yml,
 # .github/actions, Taskfile.yml and scripts/ are inputs to every job, so touching them runs all.
-# Any *.sh (scripts/test.sh runs check-exit-swallow.sh over every tracked one, #462) and the other files scripts/test.sh drives also run scripts-test.
+# Any *.sh and the other files scripts/test.sh drives also run scripts-test.
 #
 # The heavy jobs are narrower than "any Go file changed" (#328); when a path is not named below, the
 # job keeps running (a skipped job is only right when its inputs are known not to have changed):
@@ -102,10 +102,10 @@ auth_src=false; { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'pk
 keda_src=false; has_prod 'apps/worker/*' 'pkgs/platform/*' && keda_src=true
 # The oidc-dex Playwright project signs in through the compose Dex (#274): its config or the service is a console-e2e input.
 dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.yaml' && dex=true
-# Inputs of scripts/test.sh outside scripts/ (#287, #298, #462, #465): every *.sh and every workflow / composite action file (its run: scripts) is read by check-exit-swallow.sh, coredns-dex.sh is run by its coredns: cases,
+# Inputs of scripts/test.sh outside scripts/ (#287, #298): coredns-dex.sh is run by its coredns: cases,
 # k6-bench.yml is grepped by its wiring assertions, .goreleaser.yaml is copied into the cosign-smoke
-# fixture, tests/dex-prebind/ is the rpc stub of the dex-prebind: cases, docs/ci.md is checked for every job name (#328), release.yml and release-drafter.yml are read by the release image list cases (#367), tools/swallowast is built by check-exit-swallow.sh (#478: a bump of its own dependencies must run the checker's fixtures; tools/stripvalidate is only `task gen`'s and is not an input). Add a path here (and a sole-path case in test.sh) whenever test.sh starts reading a new one.
-scripts_src=false; has '*.sh' 'scripts/extract-run-blocks.py' '.github/workflows/*' '.github/actions/*/action.yml' '.github/workflows/k6-bench.yml' '.goreleaser.yaml' 'tests/dex-prebind/*' 'docs/ci.md' '.github/workflows/release.yml' '.github/release-drafter.yml' 'tools/swallowast/*' && scripts_src=true
+# fixture, tests/dex-prebind/ is the rpc stub of the dex-prebind: cases, docs/ci.md is checked for every job name (#328), release.yml and release-drafter.yml are read by the release image list cases (#367). Add a path here (and a sole-path case in test.sh) whenever test.sh starts reading a new one.
+scripts_src=false; has '*.sh' '.github/workflows/*' '.github/actions/*/action.yml' '.github/workflows/k6-bench.yml' '.goreleaser.yaml' 'tests/dex-prebind/*' 'docs/ci.md' '.github/workflows/release.yml' '.github/release-drafter.yml' && scripts_src=true
 
 # helm-kind-target runs deployments/helm/kind/target-kubeconfig-test.sh (#446). What it reads or executes: the script itself and its
 # siblings target-* (target-test.sh, target-isolation-test.sh judge the same entry), the runner run.sh and what run.sh sources
