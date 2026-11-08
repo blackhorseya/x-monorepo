@@ -66,6 +66,12 @@ const NOT_QUERIES = new Set([
   "reservationPending",
 ]);
 
+// Queries whose queryFn turns a Connect answer into data: the cell asserts the data too (a regression that rethrows
+// it would still be "asked once", but the user would see an error instead of "not admin").
+const ANSWERED_AS_DATA: Record<string, Partial<Record<Code, { value: unknown }>>> = {
+  adminProbeQuery: { [Code.PermissionDenied]: { value: false } },
+};
+
 const exported = Object.keys(queries);
 const queryNames = exported.filter((n) => n.endsWith("Query"));
 
@@ -125,7 +131,12 @@ async function withObserver<T>(name: string, body: (o: { result: () => { status:
 
 const fetched: string[] = [];
 const realFetch = globalThis.fetch;
-type Scenario = { kind: "transient" } | { kind: "answer"; code: Code };
+// transient: the first request fails once. For GET /api/version (plain fetch) that is an HTTP status by default
+// (503) or a network error (via: "network"); `http` = a status that is an answer or transient, every request.
+type Scenario =
+  | { kind: "transient"; via?: "network" }
+  | { kind: "answer"; code: Code }
+  | { kind: "http"; status: number };
 
 // The server is scripted per scenario. transient: the first request fails the way a refusing server (503 ->
 // Unavailable) or a reset connection fails, the next ones succeed. answer: every request is a domain answer.
@@ -134,14 +145,19 @@ function script(s: Scenario) {
   fetched.length = 0;
   const total = () => server.calls.length + fetched.length;
   server.answer = () => {
+    if (s.kind === "http") return { ok: OK };
     if (s.kind === "transient") return total() === 1 ? { fail: new ConnectError("scripted outage", Code.Unavailable) } : { ok: OK };
     return { fail: new ConnectError("scripted answer", s.code) };
   };
-  // GET /api/version is plain fetch: its transient failure is the network error the classifier knows; an
-  // answer is any non-2xx (the query throws a plain Error for it).
+  // GET /api/version is plain fetch: the first request of a transient scenario is a 503 (or a network error),
+  // an answer is a 400, `http` answers every request with its status.
   globalThis.fetch = (async () => {
     fetched.push("GET /api/version");
-    if (s.kind === "transient" && total() === 1) throw new TypeError("Failed to fetch");
+    if (s.kind === "http") return new Response("x", { status: s.status });
+    if (s.kind === "transient" && total() === 1) {
+      if (s.via === "network") throw new TypeError("Failed to fetch");
+      return new Response("unavailable", { status: 503 });
+    }
     if (s.kind === "answer") return new Response("no", { status: 400 });
     return Response.json({ version: "v", commit: "c", date: "d", go: "g" });
   }) as typeof fetch;
@@ -188,10 +204,61 @@ describe("an answer is asked once", () => {
           mock.timers.tick(MAX_RETRY_DELAY_MS * 4);
           await settle();
           assert.equal(total(), 1, "no second request after the whole backoff");
-          // Not "error": adminProbeQuery turns PermissionDenied into the answer `false` (success), either way settled.
           assert.notEqual(result().status, "pending", "and it settled (an answer is shown at once)");
+          // Some queries turn an answer into data in their own queryFn (adminProbeQuery: PermissionDenied is the
+          // answer `false`, not an error): that is the contract of the cell, so it is asserted, not just settled.
+          const asData = ANSWERED_AS_DATA[name]?.[code];
+          if (asData !== undefined) {
+            assert.equal(result().status, "success", "the answer is cached as data, not shown as an error");
+            assert.equal(result().data, asData.value, "and it is the query's answer");
+          }
         });
       });
     }
+  }
+});
+
+// GET /api/version is plain fetch, not an RPC: its HTTP status has to reach the shared policy as what it is.
+describe("versionQuery over HTTP", () => {
+  for (const status of [429, 502, 503, 504]) {
+    it(`HTTP ${status} -> transient: asked again after the shared delay, then it succeeds`, async () => {
+      const total = script({ kind: "transient" });
+      globalThis.fetch = (async () => {
+        fetched.push("GET /api/version");
+        return total() === 1 ? new Response("x", { status }) : Response.json({ version: "v", commit: "c", date: "d", go: "g" });
+      }) as typeof fetch;
+      await withObserver("versionQuery", async ({ result }) => {
+        await settle();
+        assert.equal(total(), 1, "the first request was sent");
+        mock.timers.tick(retryDelay(0));
+        await settle();
+        assert.equal(total(), 2, "asked again");
+        assert.equal(result().status, "success");
+      });
+    });
+  }
+  it("a network error is transient too", async () => {
+    const total = script({ kind: "transient", via: "network" });
+    await withObserver("versionQuery", async ({ result }) => {
+      await settle();
+      assert.equal(total(), 1);
+      mock.timers.tick(retryDelay(0));
+      await settle();
+      assert.equal(total(), 2, "asked again");
+      assert.equal(result().status, "success");
+    });
+  });
+  for (const status of [400, 404, 500]) {
+    it(`HTTP ${status} -> an answer: one request, never asked again`, async () => {
+      const total = script({ kind: "http", status });
+      await withObserver("versionQuery", async ({ result }) => {
+        await settle();
+        assert.equal(total(), 1, "the first request was sent");
+        mock.timers.tick(MAX_RETRY_DELAY_MS * 4);
+        await settle();
+        assert.equal(total(), 1, "no second request after the whole backoff");
+        assert.equal(result().status, "error");
+      });
+    });
   }
 });
