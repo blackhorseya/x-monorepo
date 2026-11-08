@@ -2,7 +2,7 @@
 # The real cosign against a loopback Rekor v2 (#215): a 409 from POST /api/v2/log/entries must make
 # scripts/cosign-sign-blob.sh sign again, three attempts in all and then a non-zero exit with no
 # bundle left; a 503 must not be retried (one POST). The fake-cosign cases in scripts/test.sh pin
-# the matcher against strings; this pins the string cosign v3.1.4 (sigstore-go v1.3.0, rekor-tiles
+# only the empty and the stale bundle; this pins the string cosign v3.1.4 (sigstore-go v1.3.0, rekor-tiles
 # v2.3.0 HTTP writer: "adding rekor v2 entry: unexpected response: 409 <body>") really prints.
 # Offline apart from cosign itself. Needs cosign (the one release.yml pins) and python3. Locally:
 # scripts/cosign-v2-conflict-smoke.sh

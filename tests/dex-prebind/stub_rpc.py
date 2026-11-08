@@ -3,8 +3,7 @@
 scripts/dex-prebind.sh: CreateAccount, ListAccounts, ListAccountIdentities, GetAccount, DisableAccount, CreateInvite (admin API
 key) and ClaimInvite (a bearer token). It keeps its state in memory, appends one line per call to
 the log file ("<Method> <admin|bearer|none>", never a credential), and serves GET /_state (the
-whole state as JSON) for the test to assert on. Tokens are "tok-secret-<email>"; scripts/test.sh
-uses a fake dex-token.sh that prints the same.
+whole state as JSON) for the test to assert on. Tokens are "tok-secret-<email>".
 
   stub_rpc.py <port-file> <log-file>      # binds 127.0.0.1:0, writes the port to <port-file>
 

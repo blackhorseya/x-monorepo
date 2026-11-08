@@ -8,7 +8,6 @@
 # Only a complete directive `rewrite name exact dex.localtest.me <target>` is ours: other rewrites
 # (including names that merely start with dex.localtest.me) and comments are left alone, and a
 # commented-out copy of the rule is not "already present".
-# scripts/test.sh drives this file against a stub kubectl.
 set -euo pipefail
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind / helm-kind-keda; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }

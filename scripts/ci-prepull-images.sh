@@ -4,7 +4,7 @@
 #   scripts/ci-prepull-images.sh          # ci.yml's test job, before `go test`
 #   DOCKER=podman scripts/ci-prepull-images.sh
 #
-# Overrides (scripts/test.sh uses them to run this against a fake engine): DOCKER, the engine
+# Overrides: DOCKER, the engine
 # command; IMAGES, a space-separated list that skips reading the names below; PULL_RETRY_SLEEP,
 # the wait unit between attempts (1x, 2x, 3x this; default 5 seconds).
 #

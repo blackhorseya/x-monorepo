@@ -98,7 +98,7 @@ ADMIN_API_KEY=<admin key> task dex-prebind      # rpc 要在跑，auth.oidc 要�
 - **只能用在 dev**：`ISSUER` 不是 `http://dex.localtest.me:5556/dex` 就拒絕；`BASE_URL`（預設 `http://127.0.0.1:8080`）必須是本機（host 精確為 `localhost` / `127.0.0.1` / `[::1]`，可帶 1–65535 的 port，不得有 userinfo、path、query、fragment；整串比對而非前綴），因為 admin key 會送去那裡。要對 kind 跑就 `kubectl port-forward` 後用本機 URL。
 - 不印 API key、token：key 與 token 只走 curl 的 stdin config（不進 argv / `ps`），RPC 失敗只印 HTTP status、Connect code 與 `x-error-code`，不印 response body；這三個值只在屬於已知形狀時才原樣印（status＝三位數字、code＝Connect code 的固定名單、x-error-code＝`a.b` 形的平台碼），而且不含剛送出的 credential 或裸 token，其餘一律印 `<redacted>`（server 把 key 或 token 當錯誤碼反射回來也不外洩）。
 
-測試：`task scripts-test` 的 `dex-prebind:` 案例用 `tests/dex-prebind/stub_rpc.py`（記憶體版 IdentityService）驅動，涵蓋首次綁定、零變更重跑、claim 失敗後接續、錯的 issuer / 非本機 server 被拒、輸出不含 key 與 token。Playwright 走真 Dex 的 OIDC E2E 等 #295。
+測試：`dex-prebind.sh` 是本機開發工具，沒有自動化測試（`tests/dex-prebind/stub_rpc.py` 是它原本測試用的記憶體版 IdentityService）。Playwright 走真 Dex 的 OIDC E2E 等 #295。
 
 **名稱怎麼解析**——三個地方都必須看到同一個 issuer 字串，所以不能改寫成 `localhost` 或 service 名：
 
