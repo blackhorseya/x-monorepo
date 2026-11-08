@@ -52,13 +52,22 @@ export const keys = {
   identitiesOf: (accountId: string) => ["account-identities", accountId] as const,
 };
 
+// Plain fetch, not an RPC, so the HTTP status has to be turned into what the shared retry policy
+// (src/transient.ts) understands: 429/502/503/504 mean the server (or the proxy in front of it) is not
+// answering, the same thing Connect maps to Unavailable for the RPCs, so they throw that code and are retried;
+// any other status is an answer, a plain Error, asked once.
+const TRANSIENT_HTTP = new Set([429, 502, 503, 504]);
+
 // The build never changes while a tab is open; refetch only on a reload or
 // after a long idle so a rolling deploy eventually shows up.
 export const versionQuery = queryOptions({
   queryKey: keys.version,
   queryFn: async (): Promise<ServerVersion> => {
     const res = await fetch("/api/version");
-    if (!res.ok) throw new Error(`GET /api/version: ${res.status}`);
+    if (!res.ok) {
+      const msg = `GET /api/version: ${res.status}`;
+      throw TRANSIENT_HTTP.has(res.status) ? new ConnectError(msg, Code.Unavailable) : new Error(msg);
+    }
     return (await res.json()) as ServerVersion;
   },
   staleTime: 5 * 60_000,
