@@ -13,9 +13,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"gorm.io/gorm"
 
-	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
-	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -27,8 +24,11 @@ import (
 type Worker struct {
 	router *message.Router
 	logger *slog.Logger
+	// idle: no bounded context registered a handler, so the router has nothing to run (a watermill
+	// router without handlers never stops by itself). Run then only waits for its context.
+	idle bool
 	// gauges are the callback registrations observed while Run runs: the
-	// eventbus lag gauges and each BC's funnel gauges (orders / reservations per status).
+	// eventbus lag gauges.
 	gauges []metric.Registration
 }
 
@@ -67,10 +67,6 @@ func NewWorker(
 	logger *slog.Logger,
 	tel *otel.Providers,
 	publisher message.Publisher,
-	orderingSubs ordering.Subscriptions,
-	inventorySubs inventory.Subscriptions,
-	orderingGauges ordering.Gauges,
-	inventoryGauges inventory.Gauges,
 ) (*Worker, error) {
 	router, err := eventbus.NewRouter(logger, tel)
 	if err != nil {
@@ -79,10 +75,7 @@ func NewWorker(
 	bcs := []struct {
 		schema string
 		subs   []eventbus.Subscription
-	}{
-		{ordering.Schema, orderingSubs},
-		{inventory.Schema, inventorySubs},
-	}
+	}{}
 
 	if err := checkPool(db, bcs); err != nil {
 		return nil, err
@@ -100,10 +93,9 @@ func NewWorker(
 		return nil, err
 	}
 	lag := eventbus.LagOptions{DB: db, Redis: rdb}
-	// The BCs `worker prune` manages: the ones this worker runs handlers for, and payment, whose
-	// consumer is its own process (payment-worker) but whose tables are in this database and
-	// are pruned here. Their poison tables and retention are gauged next to the others.
-	managed := []string{paymentv1.Schema}
+	// The BCs `worker prune` manages: the ones this worker runs handlers for. Their poison tables and
+	// retention are gauged next to the others.
+	var managed []string
 	for _, bc := range bcs {
 		managed = append(managed, bc.schema)
 	}
@@ -192,21 +184,7 @@ func NewWorker(
 	if err != nil {
 		return nil, err
 	}
-	w := &Worker{router: router, logger: logger, gauges: []metric.Registration{reg}}
-	// The saga funnel (ordering_orders / inventory_reservations by status): read
-	// from the database on every scrape like the lag gauges, so only with one.
-	if db != nil {
-		for _, g := range []interface {
-			Register(metric.MeterProvider) (metric.Registration, error)
-		}{orderingGauges, inventoryGauges} {
-			r, err := g.Register(tel.Meter)
-			if err != nil {
-				return nil, err
-			}
-			w.gauges = append(w.gauges, r)
-		}
-	}
-
+	w := &Worker{router: router, logger: logger, idle: len(bcs) == 0, gauges: []metric.Registration{reg}}
 	return w, nil
 }
 
@@ -294,9 +272,8 @@ func checkPool(db *gorm.DB, bcs []struct {
 }
 
 // checkTopicTables refuses to start when a subscribed topic's outbox table, or the table of consumer
-// cursors beside it, does not exist: that BC's migrations were not applied to this database yet (the
-// payment topics are the case that matters — ordering reads payment's tables, and payment's migration
-// is a separate step). Without the check the router starts, the other BCs' handlers run, and the two
+// cursors beside it, does not exist: that BC's migrations were not applied to this database yet.
+// Without the check the router starts, the other BCs' handlers run, and the two
 // subscribers fail on every poll (or the process exits at Run with a bare "relation does not exist");
 // with it the worker exits before consuming anything and says which tables and what to run. It reads
 // the catalogue only; the redis broker needs the tables too (the forwarder reads them).
@@ -349,6 +326,12 @@ func (w *Worker) Run(c context.Context) error {
 			_ = g.Unregister()
 		}
 	}()
+
+	if w.idle {
+		<-c.Done()
+
+		return nil
+	}
 
 	return w.router.Run(c)
 }

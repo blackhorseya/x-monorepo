@@ -8,25 +8,12 @@ package main
 
 import (
 	"github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/client"
-	rpc4 "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
+	rpc2 "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
-	rpc3 "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
-	system3 "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
-	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
-	"github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/catalog"
-	events2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/events"
-	rpc2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
-	system2 "github.com/blackhorseya/x-monorepo/pkgs/inventory/infra/system"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/events"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/metrics"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/pricing"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/infra/system"
-	client2 "github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/client"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -53,158 +40,97 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	repository := ordering.ProvideOrderRepository(db, logger)
-	transactor := ordering.ProvideTransactor(db)
-	inbox := ordering.ProvideInbox(db)
-	publisher, cleanup3, err := eventbus.ProvidePublisher(db, logger, providers)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	eventsPublisher := events.NewPublisher(publisher)
-	historyStore := ordering.ProvideHistoryStore(db)
-	eventPublisher := ordering.ProvideEventPublisher(eventsPublisher, historyStore, configAuth)
+	repository := identity.ProvideAccountRepository(db, logger)
 	uuidGenerator := system.NewUUIDGenerator()
 	clock := system.NewClock()
-	policy := ordering.ProvideOwnership(configAuth)
-	configCatalog := cfg.Catalog
-	clientClient, err := client.New(configCatalog, providers)
-	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	quoter := pricing.NewQuoter(clientClient)
+	transactor := identity.ProvideTransactor(db)
 	meterProvider := providers.Meter
 	recorder, err := usecasex.NewRecorder(meterProvider)
 	if err != nil {
-		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	createOrderResults, err := metrics.NewCreateOrderResults(meterProvider)
-	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	v := ordering.ProvideCreateOrder(repository, transactor, inbox, eventPublisher, uuidGenerator, clock, policy, quoter, recorder, createOrderResults)
-	v2 := ordering.ProvideGetOrder(repository, policy, recorder)
-	v3 := ordering.ProvideCancelOrder(repository, transactor, inbox, eventPublisher, clock, policy, recorder)
-	v4 := ordering.ProvideCompleteOrder(repository, transactor, inbox, eventPublisher, clock, policy, recorder)
-	v5 := ordering.ProvideListOrders(repository, policy, recorder)
-	v6 := ordering.ProvideGetOrderHistory(repository, historyStore, policy, recorder)
-	orderService := rpc.NewOrderService(v, v2, v3, v4, v5, v6)
-	stockRepository := inventory.ProvideStockRepository(db, logger)
-	portTransactor := inventory.ProvideTransactor(db)
-	portInbox := inventory.ProvideInbox(db)
-	systemClock := system2.NewClock()
-	catalogCatalog := catalog.NewCatalog(clientClient)
-	v7 := inventory.ProvideSetStock(stockRepository, portTransactor, portInbox, systemClock, catalogCatalog, recorder)
-	v8 := inventory.ProvideGetStock(stockRepository, recorder)
-	v9 := inventory.ProvideListStocks(stockRepository, recorder)
-	reservationRepository := inventory.ProvideReservationRepository(db)
-	v10 := inventory.ProvideGetReservation(reservationRepository, recorder)
-	v11 := inventory.ProvideBatchGetReservations(reservationRepository, recorder)
-	v12 := inventory.ProvideListReservations(reservationRepository, recorder)
-	publisher2 := events2.NewPublisher(publisher)
-	v13 := inventory.ProvideExpireReservations(reservationRepository, stockRepository, portTransactor, portInbox, publisher2, systemClock, recorder)
-	inventoryService := rpc2.NewInventoryService(v7, v8, v9, v10, v11, v12, v13, configAuth)
-	accountRepository := identity.ProvideAccountRepository(db, logger)
-	systemUUIDGenerator := system3.NewUUIDGenerator()
-	clock2 := system3.NewClock()
-	transactor2 := identity.ProvideTransactor(db)
-	v14 := identity.ProvideCreateAccount(accountRepository, systemUUIDGenerator, clock2, transactor2, recorder)
-	v15 := identity.ProvideGetAccount(accountRepository, recorder)
-	v16 := identity.ProvideListAccounts(accountRepository, recorder)
+	v := identity.ProvideCreateAccount(repository, uuidGenerator, clock, transactor, recorder)
+	v2 := identity.ProvideGetAccount(repository, recorder)
+	v3 := identity.ProvideListAccounts(repository, recorder)
 	apikeyRepository := identity.ProvideAPIKeyRepository(db)
-	adminCensus := identity.ProvideAdminCensus(db, accountRepository, apikeyRepository, clock2)
-	v17 := identity.ProvideDisableAccount(accountRepository, adminCensus, configAuth, clock2, transactor2, recorder)
-	v18 := identity.ProvideEnableAccount(accountRepository, clock2, transactor2, recorder)
-	v19 := identity.ProvideAssignRoles(accountRepository, adminCensus, configAuth, clock2, transactor2, recorder)
-	secretGenerator := system3.NewSecretGenerator()
-	v20 := identity.ProvideCreateAPIKey(accountRepository, apikeyRepository, systemUUIDGenerator, secretGenerator, clock2, transactor2, recorder)
-	v21 := identity.ProvideListAPIKeys(accountRepository, apikeyRepository, recorder)
-	v22 := identity.ProvideRevokeAPIKey(apikeyRepository, adminCensus, configAuth, clock2, transactor2, recorder)
-	v23 := identity.ProvideWhoAmI(recorder)
+	adminCensus := identity.ProvideAdminCensus(db, repository, apikeyRepository, clock)
+	v4 := identity.ProvideDisableAccount(repository, adminCensus, configAuth, clock, transactor, recorder)
+	v5 := identity.ProvideEnableAccount(repository, clock, transactor, recorder)
+	v6 := identity.ProvideAssignRoles(repository, adminCensus, configAuth, clock, transactor, recorder)
+	secretGenerator := system.NewSecretGenerator()
+	v7 := identity.ProvideCreateAPIKey(repository, apikeyRepository, uuidGenerator, secretGenerator, clock, transactor, recorder)
+	v8 := identity.ProvideListAPIKeys(repository, apikeyRepository, recorder)
+	v9 := identity.ProvideRevokeAPIKey(apikeyRepository, adminCensus, configAuth, clock, transactor, recorder)
+	v10 := identity.ProvideWhoAmI(recorder)
 	inviteRepository := identity.ProvideInviteRepository(db)
 	auditLog := identity.ProvideAuditLog(db)
-	v24 := identity.ProvideCreateInvite(accountRepository, inviteRepository, systemUUIDGenerator, auditLog, clock2, transactor2, recorder)
-	v25 := identity.ProvideRevokeSessions(accountRepository, auditLog, clock2, transactor2, recorder)
+	v11 := identity.ProvideCreateInvite(repository, inviteRepository, uuidGenerator, auditLog, clock, transactor, recorder)
+	v12 := identity.ProvideRevokeSessions(repository, auditLog, clock, transactor, recorder)
 	externalidentityRepository := identity.ProvideExternalIdentityRepository(db)
-	v26 := identity.ProvideClaimInvite(inviteRepository, externalidentityRepository, accountRepository, clock2, transactor2, recorder)
-	v27 := identity.ProvideListAccountIdentities(accountRepository, externalidentityRepository, inviteRepository, clock2, recorder)
+	v13 := identity.ProvideClaimInvite(inviteRepository, externalidentityRepository, repository, clock, transactor, recorder)
+	v14 := identity.ProvideListAccountIdentities(repository, externalidentityRepository, inviteRepository, clock, recorder)
 	externalIdentitySource := identity.ProvideExternalIdentitySource()
-	useCases := rpc3.UseCases{
-		CreateAccount:         v14,
-		GetAccount:            v15,
-		ListAccounts:          v16,
-		DisableAccount:        v17,
-		EnableAccount:         v18,
-		AssignRoles:           v19,
-		CreateAPIKey:          v20,
-		ListAPIKeys:           v21,
-		RevokeAPIKey:          v22,
-		WhoAmI:                v23,
-		CreateInvite:          v24,
-		RevokeSessions:        v25,
-		ClaimInvite:           v26,
-		ListAccountIdentities: v27,
+	useCases := rpc.UseCases{
+		CreateAccount:         v,
+		GetAccount:            v2,
+		ListAccounts:          v3,
+		DisableAccount:        v4,
+		EnableAccount:         v5,
+		AssignRoles:           v6,
+		CreateAPIKey:          v7,
+		ListAPIKeys:           v8,
+		RevokeAPIKey:          v9,
+		WhoAmI:                v10,
+		CreateInvite:          v11,
+		RevokeSessions:        v12,
+		ClaimInvite:           v13,
+		ListAccountIdentities: v14,
 		ExternalIdentity:      externalIdentitySource,
 	}
-	identityService := rpc3.NewIdentityService(useCases, configAuth)
-	forwarder := rpc4.NewForwarder(clientClient, configAuth)
-	payment := cfg.Payment
-	configOrdering := cfg.Ordering
-	client3, err := client2.New(payment, configOrdering, providers)
+	identityService := rpc.NewIdentityService(useCases, configAuth)
+	catalog := cfg.Catalog
+	clientClient, err := client.New(catalog, providers)
 	if err != nil {
-		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	publicService := client2.NewPublicService(client3, orderService, configAuth, configOrdering)
+	forwarder := rpc2.NewForwarder(clientClient, configAuth)
 	poisonService := NewPoisonService(db, configAuth)
-	v28 := NewRoutes(orderService, inventoryService, identityService, forwarder, publicService, poisonService)
-	v29 := NewDocs()
+	v15 := NewRoutes(identityService, forwarder, poisonService)
+	v16 := NewDocs()
 	readiness := NewReadiness(db)
-	v30 := identity.ProvideResolveAPIKey(accountRepository, apikeyRepository, clock2, recorder)
-	v31 := identity.ProvideTouchAPIKey(apikeyRepository, clock2, configAuth, recorder)
-	resolver, cleanup4, err := identity.ProvideResolver(v30, v31, clock2, configAuth, logger, meterProvider)
+	v17 := identity.ProvideResolveAPIKey(repository, apikeyRepository, clock, recorder)
+	v18 := identity.ProvideTouchAPIKey(apikeyRepository, clock, configAuth, recorder)
+	resolver, cleanup3, err := identity.ProvideResolver(v17, v18, clock, configAuth, logger, meterProvider)
 	if err != nil {
-		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	v32 := identity.ProvideResolveExternalIdentity(externalidentityRepository, accountRepository, recorder)
-	v33 := identity.ProvideProvisionExternalIdentity(accountRepository, externalidentityRepository, systemUUIDGenerator, clock2, transactor2, recorder)
+	v19 := identity.ProvideResolveExternalIdentity(externalidentityRepository, repository, recorder)
+	v20 := identity.ProvideProvisionExternalIdentity(repository, externalidentityRepository, uuidGenerator, clock, transactor, recorder)
 	issuerMapping := identity.ProvideIssuerMapping(configAuth)
-	externalResolver, err := auth.NewExternalResolver(v32, v33, issuerMapping, clock2, meterProvider)
+	externalResolver, err := auth.NewExternalResolver(v19, v20, issuerMapping, clock, meterProvider)
 	if err != nil {
-		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	externalCredentials := auth.NewExternalCredentials(externalResolver)
-	oidcAuth, cleanup5, err := NewOIDCAuth(configAuth, externalCredentials, meterProvider)
+	oidcAuth, cleanup4, err := NewOIDCAuth(configAuth, externalCredentials, meterProvider)
 	if err != nil {
-		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	v34 := TraceOptions()
-	serverServer, err := server.New(http, configAuth, logger, v28, v29, readiness, providers, resolver, oidcAuth, v34...)
+	v21 := TraceOptions()
+	serverServer, err := server.New(http, configAuth, logger, v15, v16, readiness, providers, resolver, oidcAuth, v21...)
 	if err != nil {
-		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -212,7 +138,6 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		return nil, nil, err
 	}
 	return serverServer, func() {
-		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()

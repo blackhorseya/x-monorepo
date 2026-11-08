@@ -10,7 +10,7 @@ import (
 )
 
 // Logging logs one line per execution with duration and the domain error kind.
-// name should be stable, e.g. "ordering.cancel_order".
+// name should be stable, e.g. "identity.get_account".
 //
 // Success is Debug: on the rpc path the Connect interceptor already logs one
 // "rpc" line per request, and usecase.duration{kind="ok"} counts successes on

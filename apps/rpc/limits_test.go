@@ -9,8 +9,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
+	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
@@ -28,15 +28,15 @@ func TestRateLimit_E2E(t *testing.T) {
 	defer cleanup()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	client := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
+	client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
 	c := context.Background()
 
 	// First call uses the only token (NotFound is the use case's answer: it ran).
-	_, err = client.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: "nope"}))
+	_, err = client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: "nope"}))
 	if connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("first call = %v, want NotFound", err)
 	}
-	_, err = client.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: "nope"}))
+	_, err = client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: "nope"}))
 	var ce *connect.Error
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeResourceExhausted {
 		t.Fatalf("second call = %v, want ResourceExhausted", err)

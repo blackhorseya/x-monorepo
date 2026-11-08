@@ -16,7 +16,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -49,25 +48,11 @@ func run(args []string) error {
 // newRootCmd builds the CLI. load is how commands get their config
 // (config.Load in main, a fixed config in tests).
 func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
-	// The worker does not load payment, so it never holds a provider credential: every command (the consumer, prune,
-	// expire, poison, bootstrap) refuses a config that carries one, wherever it came from.
-	raw := load
-	load = func() (*config.AppConfig, error) {
-		cfg, err := raw()
-		if err != nil {
-			return nil, err
-		}
-		if err := cfg.RejectProviderCredentials("worker"); err != nil {
-			return nil, err
-		}
-
-		return cfg, nil
-	}
 	root := &cobra.Command{
 		Use:           "worker",
 		Version:       buildinfo.Get().String(),
-		Short:         "event consumers of every bounded context",
-		Long:          "worker runs each bounded context's event handlers on one router (no subcommand) and operates their poison queues (poison), retention (prune), the reservation TTL (expire) and identity's first account (bootstrap).",
+		Short:         "event consumers of the bounded contexts",
+		Long:          "worker runs each bounded context's event handlers on one router (no subcommand) and operates their poison queues (poison), retention (prune) and identity's first account (bootstrap).",
 		SilenceUsage:  true, // a failing worker is not a usage error
 		SilenceErrors: true, // main logs it
 		Args:          cobra.NoArgs,
@@ -75,10 +60,6 @@ func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 			cfg, err := load()
 			if err != nil {
 				return err
-			}
-			// the snapshot of a new order is taken here: refuse before connecting to anything
-			if err = config.CheckRequirePayment(cfg.Ordering, cfg.Payment); err != nil {
-				return fmt.Errorf("worker: %w", err)
 			}
 			if cfg.Postgres.URL == "" {
 				return errors.New("postgres.url is required: the event tables are the outbox the worker reads or forwards")
@@ -93,7 +74,7 @@ func newRootCmd(load func() (*config.AppConfig, error)) *cobra.Command {
 			return w.Run(cmd.Context())
 		},
 	}
-	root.AddCommand(newPoisonCmd(load), newPruneCmd(load), newExpireCmd(load), newBootstrapCmd(load))
+	root.AddCommand(newPoisonCmd(load), newPruneCmd(load), newBootstrapCmd(load))
 
 	return root
 }

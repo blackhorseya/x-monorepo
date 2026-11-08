@@ -13,7 +13,7 @@ import (
 
 // Doc is one bounded context's OpenAPI document.
 type Doc struct {
-	Name string // e.g. "ordering"
+	Name string // e.g. "identity"
 	Spec []byte // YAML
 }
 

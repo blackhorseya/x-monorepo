@@ -10,7 +10,7 @@
 // the same handlers (Watermill's forwarder component turns the SQL table into
 // a classic outbox in front of a broker).
 //
-// Topics are proto full names ("ordering.v1.OrderCreated"). The first segment
+// Topics are proto full names ("example.v1.ThingCreated"). The first segment
 // names the owning bounded context; its Postgres schema holds the topic's
 // tables (see TableName), and the BC ships their DDL in its migrations —
 // services never create tables at runtime.
@@ -70,7 +70,7 @@ const (
 )
 
 // TableName maps a topic to the Postgres table holding its messages:
-// "ordering.v1.OrderCreated" → "ordering.events_v1_ordercreated". The owning
+// "example.v1.ThingCreated" → "example.events_v1_thingcreated". The owning
 // BC's schema comes first so each BC's migrations own their tables.
 func TableName(topic string) string {
 	schema, rest, _ := strings.Cut(topic, ".")

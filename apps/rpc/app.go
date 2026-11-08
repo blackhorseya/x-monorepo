@@ -20,14 +20,6 @@ import (
 	catalogv1 "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1"
 	identityrpc "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
 	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/inventory"
-	inventoryrpc "github.com/blackhorseya/x-monorepo/pkgs/inventory/adapters/rpc"
-	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering"
-	orderingrpc "github.com/blackhorseya/x-monorepo/pkgs/ordering/adapters/rpc"
-	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
-	paymentclient "github.com/blackhorseya/x-monorepo/pkgs/payment/adapters/client"
-	paymentv1 "github.com/blackhorseya/x-monorepo/pkgs/payment/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
@@ -36,18 +28,16 @@ import (
 )
 
 // NewRoutes lists every mounted service: the BCs' and the platform's admin surface.
-func NewRoutes(ordering *orderingrpc.OrderService, inventory *inventoryrpc.InventoryService, identity *identityrpc.IdentityService, catalog *catalogrpc.Forwarder, payment *paymentclient.PublicService, poison *admin.PoisonService) []server.Route {
-	return []server.Route{ordering, inventory, identity, catalog, payment, poison}
+func NewRoutes(identity *identityrpc.IdentityService, catalog *catalogrpc.Forwarder, poison *admin.PoisonService) []server.Route {
+	return []server.Route{identity, catalog, poison}
 }
 
-// NewPoisonService serves admin.v1.AdminService over every BC's poison
-// table. Adding a BC: add its Schema here (the worker's poison.go lists the
-// same set). identity and catalog are not here: they consume no events, so
-// they have no poison table. payment is: its consumer parks messages in
-// payment.events_poison. Its name is the contract's constant — naming a schema must not
-// load the BC (docs/payment.md §1).
+// NewPoisonService serves admin.v1.AdminService over the poison table of every
+// BC that consumes events. Adding such a BC: add its Schema here (the worker's
+// poison.go lists the same set). identity and catalog consume no events, so
+// they have no poison table and none is listed yet.
 func NewPoisonService(db *gorm.DB, auth config.Auth) *admin.PoisonService {
-	return admin.NewPoisonService(db, auth, []string{ordering.Schema, inventory.Schema, paymentv1.Schema})
+	return admin.NewPoisonService(db, auth, []string{})
 }
 
 // NewReadiness lists what /api/readyz checks: the database when one is
@@ -68,12 +58,8 @@ func NewReadiness(db *gorm.DB) server.Readiness {
 // NewDocs lists every BC's OpenAPI document (served only when APP_HTTP_DOCS=true).
 func NewDocs() []server.Doc {
 	return []server.Doc{
-		{Name: "ordering", Spec: orderingv1.OpenAPI},
-		{Name: "inventory", Spec: inventoryv1.OpenAPI},
 		{Name: "identity", Spec: identityv1.OpenAPI},
 		{Name: "catalog", Spec: catalogv1.OpenAPI},
-		// The public subset: PaymentService (payment-rpc's internal API, which rpc does not serve) is not in it.
-		{Name: "payment", Spec: paymentv1.PublicOpenAPI},
 		{Name: "admin", Spec: adminv1.OpenAPI},
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,10 +14,8 @@ import (
 	"buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	"connectrpc.com/connect"
 
-	inventoryv1 "github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/inventory/contract/v1/inventoryv1connect"
-	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
+	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -26,7 +23,7 @@ import (
 
 // End-to-end through the wired graph: proto client → rpc adapter → decorated
 // usecase → domain → infra.
-func TestOrderService_E2E(t *testing.T) {
+func TestPlatform_E2E(t *testing.T) {
 	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
@@ -58,69 +55,31 @@ func TestOrderService_E2E(t *testing.T) {
 	}
 	_ = vres.Body.Close()
 
-	client := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
+	client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
 	c := context.Background()
-	seedProduct(t, ts.URL, "", "SKU-1", 1299, "USD")
-	seedProduct(t, ts.URL, "", "S", 1, "USD")
-	seedProduct(t, ts.URL, "", "SKU-0", 1, "USD")
 
-	created, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
-		CustomerId: "c-1",
-		Items: []*orderingv1.CreateOrderItem{
-			{Sku: "SKU-1", Quantity: 2},
-		},
-	}))
+	created, err := client.CreateAccount(c, connect.NewRequest(&identityv1.CreateAccountRequest{Name: "alice"}))
 	if err != nil {
-		t.Fatalf("CreateOrder: %v", err)
+		t.Fatalf("CreateAccount: %v", err)
 	}
-	o := created.Msg.GetOrder()
-	if o.GetTotal().GetAmountMinor() != 2598 || o.GetStatus() != orderingv1.OrderStatus_ORDER_STATUS_PENDING {
-		t.Fatalf("unexpected order: %v", o)
-	}
-
-	cancelled, err := client.CancelOrder(c, connect.NewRequest(&orderingv1.CancelOrderRequest{Id: o.GetId()}))
-	if err != nil || cancelled.Msg.GetOrder().GetStatus() != orderingv1.OrderStatus_ORDER_STATUS_CANCELLED {
-		t.Fatalf("CancelOrder: %v, %v", cancelled, err)
+	a := created.Msg.GetAccount()
+	got, err := client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: a.GetId()}))
+	if err != nil || got.Msg.GetAccount().GetName() != "alice" {
+		t.Fatalf("GetAccount: %v, %v", got, err)
 	}
 
-	tests := []struct {
-		name string
-		call func() error
-		want connect.Code
-	}{
-		{"cancel twice", func() error {
-			_, err := client.CancelOrder(c, connect.NewRequest(&orderingv1.CancelOrderRequest{Id: o.GetId()}))
-			return err
-		}, connect.CodeFailedPrecondition},
-		{"not found", func() error {
-			_, err := client.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: "nope"}))
-			return err
-		}, connect.CodeNotFound},
-		// Shape errors are rejected by the protovalidate interceptor, before the
-		// use case: same code, the shared validation x-error-code.
-		{"zero quantity (protovalidate)", func() error {
-			_, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
-				CustomerId: "c-1",
-				Items:      []*orderingv1.CreateOrderItem{{Sku: "S", Quantity: 0}},
-			}))
-			return err
-		}, connect.CodeInvalidArgument},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var ce *connect.Error
-			if err := tt.call(); !errors.As(err, &ce) || ce.Code() != tt.want {
-				t.Fatalf("err = %v, want code %v", err, tt.want)
-			}
-			if ce.Meta().Get("x-error-code") == "" {
-				t.Fatal("missing x-error-code header")
-			}
-		})
-	}
-
-	// A rejected request names the violated fields in a buf.validate.Violations detail.
-	_, err = client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: ""}))
 	var ce *connect.Error
+	if _, err := client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: "nope"})); !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
+		t.Fatalf("not found: err = %v", err)
+	}
+	if ce.Meta().Get("x-error-code") == "" {
+		t.Fatal("missing x-error-code header")
+	}
+
+	// Shape errors are rejected by the protovalidate interceptor, before the
+	// use case: same code, the shared validation x-error-code, and the violated
+	// fields in a buf.validate.Violations detail.
+	_, err = client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{}))
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
 		t.Fatalf("empty request: err = %v", err)
 	}
@@ -132,106 +91,23 @@ func TestOrderService_E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	violations, ok := detail.(*validate.Violations)
-	if !ok || len(violations.GetViolations()) != 1 { // items (customer_id is optional: the use case decides)
+	if !ok || len(violations.GetViolations()) != 1 {
 		t.Fatalf("violations = %v", detail)
 	}
 
-	// ListOrders: cursor pagination end to end (3 orders for c-2, pages of 2).
-	for range 2 {
-		if _, err := client.CreateOrder(c, connect.NewRequest(&orderingv1.CreateOrderRequest{
-			CustomerId: "c-2",
-			Items:      []*orderingv1.CreateOrderItem{{Sku: "S", Quantity: 1}},
-		})); err != nil {
-			t.Fatalf("CreateOrder c-2: %v", err)
+	// ListAccounts: cursor pagination end to end (3 accounts, pages of 2).
+	for _, name := range []string{"bob", "carol"} {
+		if _, err := client.CreateAccount(c, connect.NewRequest(&identityv1.CreateAccountRequest{Name: name})); err != nil {
+			t.Fatalf("CreateAccount %s: %v", name, err)
 		}
 	}
-	page1, err := client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{PageSize: 2}))
-	if err != nil || len(page1.Msg.GetOrders()) != 2 || page1.Msg.GetNextPageToken() == "" {
-		t.Fatalf("ListOrders page 1: %v, %v", page1, err)
+	page1, err := client.ListAccounts(c, connect.NewRequest(&identityv1.ListAccountsRequest{PageSize: 2}))
+	if err != nil || len(page1.Msg.GetAccounts()) != 2 || page1.Msg.GetNextPageToken() == "" {
+		t.Fatalf("ListAccounts page 1: %v, %v", page1, err)
 	}
-	page2, err := client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{PageSize: 2, PageToken: page1.Msg.GetNextPageToken()}))
-	if err != nil || len(page2.Msg.GetOrders()) != 1 || page2.Msg.GetNextPageToken() != "" {
-		t.Fatalf("ListOrders page 2: %v, %v", page2, err)
-	}
-	if page2.Msg.GetOrders()[0].GetId() != o.GetId() {
-		t.Fatalf("oldest order last: got %s want %s", page2.Msg.GetOrders()[0].GetId(), o.GetId())
-	}
-	only, err := client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{CustomerId: "c-1", Status: orderingv1.OrderStatus_ORDER_STATUS_CANCELLED}))
-	if err != nil || len(only.Msg.GetOrders()) != 1 {
-		t.Fatalf("ListOrders filtered: %v, %v", only, err)
-	}
-	_, err = client.ListOrders(c, connect.NewRequest(&orderingv1.ListOrdersRequest{CustomerId: "c-1", PageToken: page1.Msg.GetNextPageToken()}))
-	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != "pagination.invalid_token" {
-		t.Fatalf("token with other filters: err = %v", err)
-	}
-
-	// Second BC on the same server: inventory's RPC surface (reservations are
-	// made by the worker, not here; in-process GoChannel has no subscriber).
-	inv := inventoryv1connect.NewInventoryServiceClient(http.DefaultClient, ts.URL)
-	set, err := inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-1", OnHand: 10}))
-	if err != nil || set.Msg.GetStock().GetAvailable() != 10 {
-		t.Fatalf("SetStock: %v, %v", set, err)
-	}
-	stock, err := inv.GetStock(c, connect.NewRequest(&inventoryv1.GetStockRequest{Sku: "SKU-1"}))
-	if err != nil || stock.Msg.GetStock().GetOnHand() != 10 || stock.Msg.GetStock().GetReserved() != 0 {
-		t.Fatalf("GetStock: %v, %v", stock, err)
-	}
-	if _, err := inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-0", OnHand: 1})); err != nil {
-		t.Fatal(err)
-	}
-	list, err := inv.ListStocks(c, connect.NewRequest(&inventoryv1.ListStocksRequest{PageSize: 1}))
-	if err != nil || len(list.Msg.GetStocks()) != 1 || list.Msg.GetStocks()[0].GetSku() != "SKU-0" || list.Msg.GetNextPageToken() == "" {
-		t.Fatalf("ListStocks page 1: %v, %v", list, err)
-	}
-	list, err = inv.ListStocks(c, connect.NewRequest(&inventoryv1.ListStocksRequest{PageSize: 1, PageToken: list.Msg.GetNextPageToken()}))
-	if err != nil || len(list.Msg.GetStocks()) != 1 || list.Msg.GetStocks()[0].GetSku() != "SKU-1" || list.Msg.GetNextPageToken() != "" {
-		t.Fatalf("ListStocks page 2: %v, %v", list, err)
-	}
-	list, err = inv.ListStocks(c, connect.NewRequest(&inventoryv1.ListStocksRequest{SkuPrefix: "SKU-1"}))
-	if err != nil || len(list.Msg.GetStocks()) != 1 || list.Msg.GetStocks()[0].GetSku() != "SKU-1" {
-		t.Fatalf("ListStocks by prefix: %v, %v", list, err)
-	}
-	list, err = inv.ListStocks(c, connect.NewRequest(&inventoryv1.ListStocksRequest{OnlyReserved: true}))
-	if err != nil || len(list.Msg.GetStocks()) != 0 {
-		t.Fatalf("ListStocks only reserved without a worker: %v, %v", list, err)
-	}
-	_, err = inv.GetReservation(c, connect.NewRequest(&inventoryv1.GetReservationRequest{OrderId: o.GetId()}))
-	if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound || ce.Meta().Get("x-error-code") != "reservation.not_found" {
-		t.Fatalf("GetReservation without a worker: err = %v", err)
-	}
-	batch, err := inv.BatchGetReservations(c, connect.NewRequest(&inventoryv1.BatchGetReservationsRequest{OrderIds: []string{o.GetId(), "o-unknown"}}))
-	if err != nil || len(batch.Msg.GetReservations()) != 0 {
-		t.Fatalf("BatchGetReservations without a worker: %v, %v (unknown orders are left out, not an error)", batch, err)
-	}
-	for name, ids := range map[string][]string{"none": nil, "empty id": {o.GetId(), ""}, "over 100": make([]string, 101)} {
-		if name == "over 100" {
-			for i := range ids {
-				ids[i] = fmt.Sprintf("o-%d", i)
-			}
-		}
-		_, err = inv.BatchGetReservations(c, connect.NewRequest(&inventoryv1.BatchGetReservationsRequest{OrderIds: ids}))
-		if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
-			t.Fatalf("BatchGetReservations %s (protovalidate): err = %v", name, err)
-		}
-	}
-	rs, err := inv.ListReservations(c, connect.NewRequest(&inventoryv1.ListReservationsRequest{Status: inventoryv1.ReservationStatus_RESERVATION_STATUS_RESERVED}))
-	if err != nil || len(rs.Msg.GetReservations()) != 0 || rs.Msg.GetNextPageToken() != "" {
-		t.Fatalf("ListReservations without a worker: %v, %v", rs, err)
-	}
-	_, err = inv.ListReservations(c, connect.NewRequest(&inventoryv1.ListReservationsRequest{PageSize: -1}))
-	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
-		t.Fatalf("ListReservations negative page size (protovalidate): err = %v", err)
-	}
-	_, err = inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-1", OnHand: -1}))
-	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
-		t.Fatalf("SetStock negative (protovalidate): err = %v", err)
-	}
-
-	// A SKU the catalog does not have is refused by the guard in front of SetStock, and the
-	// refusal is counted: Metrics wraps the guard.
-	_, err = inv.SetStock(c, connect.NewRequest(&inventoryv1.SetStockRequest{Sku: "SKU-NOT-IN-CATALOG", OnHand: 1}))
-	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != "stock.unknown_sku" {
-		t.Fatalf("SetStock unknown sku: err = %v", err)
+	page2, err := client.ListAccounts(c, connect.NewRequest(&identityv1.ListAccountsRequest{PageSize: 2, PageToken: page1.Msg.GetNextPageToken()}))
+	if err != nil || len(page2.Msg.GetAccounts()) != 1 || page2.Msg.GetNextPageToken() != "" {
+		t.Fatalf("ListAccounts page 2: %v, %v", page2, err)
 	}
 
 	// Metrics decorator is wired for every use case and exposed on /api/metrics.
@@ -244,30 +120,22 @@ func TestOrderService_E2E(t *testing.T) {
 	if _, err := io.Copy(&sb, res.Body); err != nil {
 		t.Fatal(err)
 	}
-	body := sb.String()
+	text := sb.String()
 	for _, want := range []string{
-		`usecase_duration_seconds_count{kind="ok",usecase="ordering.create_order"} 3`,
-		`usecase_duration_seconds_count{kind="ok",usecase="ordering.cancel_order"} 1`,
-		`usecase_duration_seconds_count{kind="failed_precondition",usecase="ordering.cancel_order"} 1`,
-		`usecase_duration_seconds_count{kind="not_found",usecase="ordering.get_order"} 1`,
-		`usecase_duration_seconds_count{kind="ok",usecase="ordering.list_orders"} 3`,
-		`usecase_duration_seconds_count{kind="invalid_argument",usecase="ordering.list_orders"} 1`,
-		`usecase_duration_seconds_count{kind="ok",usecase="inventory.set_stock"} 2`,
-		`usecase_duration_seconds_count{kind="invalid_argument",usecase="inventory.set_stock"} 1`,
-		`usecase_duration_seconds_count{kind="ok",usecase="inventory.list_stocks"} 4`,
-		`usecase_duration_seconds_count{kind="ok",usecase="inventory.get_stock"} 1`,
-		`usecase_duration_seconds_count{kind="not_found",usecase="inventory.get_reservation"} 1`,
-		`usecase_duration_seconds_count{kind="ok",usecase="inventory.list_reservations"} 1`,
+		`usecase_duration_seconds_count{kind="ok",usecase="identity.create_account"} 3`,
+		`usecase_duration_seconds_count{kind="ok",usecase="identity.get_account"} 1`,
+		`usecase_duration_seconds_count{kind="not_found",usecase="identity.get_account"} 1`,
+		`usecase_duration_seconds_count{kind="ok",usecase="identity.list_accounts"} 2`,
 	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("%s missing %q\n%s", server.MetricsPath, want, body)
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s missing %q\n%s", server.MetricsPath, want, text)
 		}
 	}
 }
 
 // gRPC needs HTTP/2 and gRPC-Web is a distinct wire format; both must survive the
 // router (gin wildcard routes + h2c) exactly like the Connect protocol does.
-func TestOrderService_Protocols(t *testing.T) {
+func TestPlatform_Protocols(t *testing.T) {
 	srv, cleanup, err := initialize(t, &config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
@@ -288,7 +156,6 @@ func TestOrderService_Protocols(t *testing.T) {
 	h2c := new(http.Protocols)
 	h2c.SetUnencryptedHTTP2(true)
 	h2cClient := &http.Client{Transport: &http.Transport{Protocols: h2c}}
-	seedProduct(t, ts.URL, "", "S", 1, "USD")
 
 	// Every protocol works at the bare protocol path and under server.RPCPrefix
 	// (a connect-go client prefixes gRPC too; grpc-go could not, hence both).
@@ -309,11 +176,11 @@ func TestOrderService_Protocols(t *testing.T) {
 			if strings.HasSuffix(tt.name, "/api") {
 				base += server.RPCPrefix
 			}
-			client := orderingv1connect.NewOrderServiceClient(tt.client, base, tt.opts...)
+			client := identityv1connect.NewIdentityServiceClient(tt.client, base, tt.opts...)
 			c := context.Background()
 
 			// Response meta travels as headers on every protocol, on errors too.
-			_, err := client.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: "nope"}))
+			_, err := client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: "nope"}))
 			var ce *connect.Error
 			if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
 				t.Fatalf("err = %v, want NotFound", err)
@@ -322,13 +189,10 @@ func TestOrderService_Protocols(t *testing.T) {
 				t.Fatalf("error without %s: %v", server.RequestIDHeader, ce.Meta())
 			}
 
-			req := connect.NewRequest(&orderingv1.CreateOrderRequest{
-				CustomerId: "c-1",
-				Items:      []*orderingv1.CreateOrderItem{{Sku: "S", Quantity: 1}},
-			})
+			req := connect.NewRequest(&identityv1.WhoAmIRequest{})
 			id := "client-" + strings.ReplaceAll(tt.name, "/", "-")
 			req.Header().Set(server.RequestIDHeader, id)
-			res, err := client.CreateOrder(c, req)
+			res, err := client.WhoAmI(c, req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -370,14 +234,14 @@ func TestDocs(t *testing.T) {
 	on := newServer(t, true)
 	for _, path := range []string{
 		server.DocsPath,
-		server.DocsPath + "/ordering", server.OpenAPIPath + "/ordering.yaml",
-		server.DocsPath + "/inventory", server.OpenAPIPath + "/inventory.yaml",
+		server.DocsPath + "/identity", server.OpenAPIPath + "/identity.yaml",
+		server.DocsPath + "/catalog", server.OpenAPIPath + "/catalog.yaml",
 	} {
 		if code, _ := get(t, on, path); code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, code)
 		}
 	}
-	if code, body := get(t, on, server.OpenAPIPath+"/ordering.yaml"); code != 200 || !strings.Contains(body, "openapi: 3") {
+	if code, body := get(t, on, server.OpenAPIPath+"/identity.yaml"); code != 200 || !strings.Contains(body, "openapi: 3") {
 		t.Fatalf("openapi body: %d %q", code, body[:min(len(body), 40)])
 	}
 	if code, _ := get(t, on, "/docs"); code != http.StatusNotFound {
@@ -388,7 +252,7 @@ func TestDocs(t *testing.T) {
 	if code, body := get(t, off, server.DocsPath); code != http.StatusNotFound || !strings.Contains(body, "APP_HTTP_DOCS=true") {
 		t.Fatalf("disabled docs = %d %q", code, body)
 	}
-	if code, _ := get(t, off, server.OpenAPIPath+"/ordering.yaml"); code != http.StatusNotFound {
+	if code, _ := get(t, off, server.OpenAPIPath+"/identity.yaml"); code != http.StatusNotFound {
 		t.Fatalf("disabled openapi = %d, want 404", code)
 	}
 }

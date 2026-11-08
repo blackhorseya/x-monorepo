@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,9 +13,10 @@ import (
 	"connectrpc.com/connect"
 	"go.opentelemetry.io/otel/trace"
 
-	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
+	catalogv1 "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1/catalogv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
@@ -62,7 +62,11 @@ func startTracedPair(t *testing.T, rpcOn, catOn bool) tracedPair {
 		t.Fatalf("rpc otel.endpoint = %q, want it set = %v", cfg.OTel.Endpoint, rpcOn)
 	}
 	ts := rpcServer(t, cfg)
-	seedProduct(t, ts.URL, "", "TR-1", 100, "USD")
+	if _, err := catalogv1connect.NewCatalogServiceClient(http.DefaultClient, ts.URL).UpsertProduct(context.Background(), connect.NewRequest(&catalogv1.UpsertProductRequest{
+		Sku: "TR-1", Name: "n", Price: &commonv1.Money{AmountMinor: 100, Currency: "USD"},
+	})); err != nil {
+		t.Fatalf("seed product: %v", err)
+	}
 
 	return tracedPair{rpcURL: ts.URL, cat: cat}
 }
@@ -121,28 +125,19 @@ func TestTrace_RPCAndCatalogBySDKState(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pair := startTracedPair(t, tc.rpcOn, tc.catOn)
-			client := orderingv1connect.NewOrderServiceClient(http.DefaultClient, pair.rpcURL)
-			for path, items := range map[string][]*orderingv1.CreateOrderItem{
-				"success":                                {{Sku: "TR-1", Quantity: 1}},
-				"catalog's business error (unknown sku)": {{Sku: "NOPE", Quantity: 1}},
+			client := catalogv1connect.NewCatalogServiceClient(http.DefaultClient, pair.rpcURL)
+			for path, skus := range map[string][]string{
+				"known sku":   {"TR-1"},
+				"unknown sku": {"NOPE"},
 			} {
 				before := len(quotePricesLines(pair.cat))
-				req := connect.NewRequest(&orderingv1.CreateOrderRequest{CustomerId: "c-tr", Items: items})
+				req := connect.NewRequest(&catalogv1.QuotePricesRequest{Skus: skus})
 				req.Header().Set("traceparent", "00-"+externalTrace+"-00f067aa0ba902b7-01")
-				res, err := client.CreateOrder(context.Background(), req)
-				var h http.Header
+				res, err := client.QuotePrices(context.Background(), req)
 				if err != nil {
-					var ce *connect.Error
-					if !errors.As(err, &ce) {
-						t.Fatal(err)
-					}
-					h = ce.Meta()
-				} else {
-					h = res.Header()
+					t.Fatalf("%s: QuotePrices error = %v", path, err)
 				}
-				if (path == "success") != (err == nil) {
-					t.Fatalf("%s: CreateOrder error = %v", path, err)
-				}
+				h := res.Header()
 
 				// rpc's own answer
 				if tc.wantRPCTrace {

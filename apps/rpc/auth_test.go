@@ -11,8 +11,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/golang-jwt/jwt/v5"
 
-	orderingv1 "github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/ordering/contract/v1/orderingv1connect"
+	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1/adminv1connect"
@@ -31,7 +31,7 @@ func TestAuth_Required(t *testing.T) {
 			Mode:    config.AuthRequired,
 			APIKeys: "console=console-key-0123456789,ops=ops-key-0123456789abc:admin",
 			JWT:     config.JWT{HS256Secret: secret, Issuer: "x-monorepo"},
-			Public:  []string{orderingv1connect.OrderServiceGetOrderProcedure},
+			Public:  []string{identityv1connect.IdentityServiceWhoAmIProcedure},
 		},
 	})
 	if err != nil {
@@ -58,10 +58,6 @@ func TestAuth_Required(t *testing.T) {
 			}
 		}))
 	}
-	// No customer_id: a non-admin always orders for themselves (see TestOrdering_Ownership).
-	create := &orderingv1.CreateOrderRequest{Items: []*orderingv1.CreateOrderItem{
-		{Sku: "SKU-1", Quantity: 1},
-	}}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": "u-1", "iss": "x-monorepo", "exp": time.Now().Add(time.Minute).Unix(),
 	}).SignedString([]byte(secret))
@@ -69,35 +65,47 @@ func TestAuth_Required(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seedProduct(t, ts.URL, "ops-key-0123456789abc", "SKU-1", 100, "USD")
-
-	anon := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL)
-	_, err = anon.CreateOrder(c, connect.NewRequest(create))
+	// ListAccounts is behind the admin role and is not public: it is the procedure the credentials are tried on.
+	list := &identityv1.ListAccountsRequest{}
+	anon := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
+	_, err = anon.ListAccounts(c, connect.NewRequest(list))
 	var ce *connect.Error
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeUnauthenticated || ce.Meta().Get("x-error-code") != server.UnauthenticatedCode {
-		t.Fatalf("anonymous CreateOrder = %v, want unauthenticated %s", err, server.UnauthenticatedCode)
+		t.Fatalf("anonymous ListAccounts = %v, want unauthenticated %s", err, server.UnauthenticatedCode)
 	}
 	if ce.Meta().Get(server.RequestIDHeader) == "" {
 		t.Fatal("rejected call must still carry X-Request-Id")
 	}
 
-	for name, client := range map[string]orderingv1connect.OrderServiceClient{
-		"api key": orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL, withHeader(server.APIKeyHeader, "console-key-0123456789")),
-		"jwt":     orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL, withHeader(server.AuthorizationHeader, "Bearer "+token)),
+	// A public procedure needs nothing: WhoAmI answers anonymous instead of refusing.
+	if who, err := anon.WhoAmI(c, connect.NewRequest(&identityv1.WhoAmIRequest{})); err != nil || !who.Msg.GetAnonymous() {
+		t.Fatalf("public WhoAmI = %v, %v, want anonymous", who, err)
+	}
+
+	// An API key and a JWT both get through authentication; the admin one also passes the role check.
+	for name, tt := range map[string]struct {
+		opt  connect.ClientOption
+		code connect.Code
+	}{
+		"api key without role": {withHeader(server.APIKeyHeader, "console-key-0123456789"), connect.CodePermissionDenied},
+		"jwt without role":     {withHeader(server.AuthorizationHeader, "Bearer "+token), connect.CodePermissionDenied},
+		"api key :admin":       {withHeader(server.APIKeyHeader, "ops-key-0123456789abc"), 0},
 	} {
-		created, err := client.CreateOrder(c, connect.NewRequest(create))
-		if err != nil {
-			t.Fatalf("%s CreateOrder: %v", name, err)
+		client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL, tt.opt)
+		_, err := client.ListAccounts(c, connect.NewRequest(list))
+		if tt.code == 0 {
+			if err != nil {
+				t.Fatalf("%s ListAccounts: %v", name, err)
+			}
+			continue
 		}
-		// GetOrder is public: the anonymous client reads what the authenticated one wrote.
-		got, err := anon.GetOrder(c, connect.NewRequest(&orderingv1.GetOrderRequest{Id: created.Msg.GetOrder().GetId()}))
-		if err != nil || got.Msg.GetOrder().GetId() != created.Msg.GetOrder().GetId() {
-			t.Fatalf("%s: public GetOrder = %v, %v", name, got, err)
+		if connect.CodeOf(err) != tt.code {
+			t.Fatalf("%s ListAccounts = %v, want %s", name, err, tt.code)
 		}
 	}
 
-	bad := orderingv1connect.NewOrderServiceClient(http.DefaultClient, ts.URL, withHeader(server.AuthorizationHeader, "Bearer "+token+"x"))
-	if _, err := bad.CreateOrder(c, connect.NewRequest(create)); !errors.As(err, &ce) || ce.Meta().Get("x-error-code") != server.InvalidCredentialCode {
+	bad := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL, withHeader(server.AuthorizationHeader, "Bearer "+token+"x"))
+	if _, err := bad.ListAccounts(c, connect.NewRequest(list)); !errors.As(err, &ce) || ce.Meta().Get("x-error-code") != server.InvalidCredentialCode {
 		t.Fatalf("tampered token = %v", err)
 	}
 
