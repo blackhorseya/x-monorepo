@@ -55,8 +55,8 @@ test("failRequests: only the exact method, only `times` calls, and a reset is a 
   const f = await failRequests(page, { method: "ListAccounts" });
   expect(await call(page, "ListAccountsExtra")).toBe(200); // another method, even with the same prefix
   expect(await call(page, "XListAccounts")).toBe(200); // ... or one that merely contains it
-  expect(await call(page, "ListOrder")).toBe(200);
-  expect(await call(page, "ListAccounts")).toBe(200); // another RPC altogether
+  expect(await call(page, "ListAccount")).toBe(200);
+  expect(await call(page, "ListProducts")).toBe(200); // another RPC altogether
   expect(f.matched()).toBe(0);
   expect(await call(page, "ListAccounts")).toBe(503); // the first
   expect(await call(page, "ListAccounts")).toBe(200); // times defaults to 1

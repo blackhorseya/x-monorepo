@@ -38,7 +38,7 @@ test("a reply for the old credential that arrives after the switch is not shown,
   const list = await scriptByKey(page, LIST, { "": { connect: "unauthenticated" }, A: listOf(ID_A), B: listOf(ID_OPS) });
   const heldA = await holdRequests(page, { method: METHOD(LIST), key: "A" });
   await page.goto("/accounts");
-  await expect(page.getByRole("alert")).toContainText("Not authenticated");
+  await expect(page.getByRole("alert")).toContainText("Admin role required");
   await useKey(page, "A");
   await heldA.arrived(); // A's ListAccounts is in flight
 
@@ -55,7 +55,8 @@ test("rows read for the old credential do not stay on screen while the new crede
   const list = await scriptByKey(page, LIST, { "": listOf(), A: listOf(ID_A), B: listOf(ID_OPS) });
   const heldB = await holdRequests(page, { method: METHOD(LIST), key: "B" });
   await page.goto("/accounts");
-  await expect.poll(() => list.count(""), { message: "the anonymous ListAccounts was answered" }).toBe(1);
+  // two callers ask ListAccounts at once: the admin probe and the page's own list
+  await expect.poll(() => list.count(""), { message: "the anonymous ListAccounts was answered" }).toBe(2);
   await settle(page);
   await useKey(page, "A");
   await expect(rowOf(page, ID_A)).toBeVisible();
@@ -83,7 +84,7 @@ test("ListAccounts: A's rows arrive late while B's call is still pending; they a
   const heldA = await holdRequests(page, { method: METHOD(LIST), key: "A" });
   const heldB = await holdRequests(page, { method: METHOD(LIST), key: "B" });
   await page.goto("/accounts");
-  await expect(page.getByRole("alert")).toContainText("Not authenticated");
+  await expect(page.getByRole("alert")).toContainText("Admin role required");
   await useKey(page, "A");
   await heldA.arrived(); // A's ListAccounts is in flight
   await useKey(page, "B");
@@ -110,7 +111,7 @@ test("a retry in flight for the old credential: B is asked at once, and the retr
   const heldA = await holdRequests(page, { method: METHOD(LIST), key: "A" });
   const fault = await failRequests(page, { method: METHOD(LIST), key: "A" }); // A's first call: 503
   await page.goto("/accounts");
-  await expect(page.getByRole("alert")).toContainText("Not authenticated");
+  await expect(page.getByRole("alert")).toContainText("Admin role required");
   await useKey(page, "A");
   await heldA.arrived(); // the refused call was retried: the retry is on the wire, unanswered
   expect([fault.failed(), heldA.count()], "A: one refused call, one parked retry").toEqual([1, 1]);
@@ -129,9 +130,9 @@ test("a retry waiting out its backoff for the old credential is not sent after t
   const seen = watchRequests(page, LIST);
   const fault = await failRequests(page, { method: METHOD(LIST), key: "A", times: Infinity }); // every A call: 503
   await page.goto("/accounts");
-  await expect(page.getByRole("alert")).toContainText("Not authenticated");
+  await expect(page.getByRole("alert")).toContainText("Admin role required");
   await useKey(page, "A");
-  await expect.poll(() => fault.failed()).toBe(1); // A's first call was refused; its retry is waiting out the 500ms backoff
+  await expect.poll(() => fault.failed()).toBeGreaterThanOrEqual(1); // A's first calls (the admin probe's and the list's) were refused; their retries are waiting out the 500ms backoff
   await useKey(page, "B");
   const sentA = seen.sent("A"); // taken at the switch: the calls A still had coming are the ones after this
   await expect(rowOf(page, ID_OPS)).toBeVisible();

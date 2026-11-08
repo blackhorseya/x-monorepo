@@ -20,11 +20,11 @@ const ISSUER = "http://dex.localtest.me:5556/dex";
 const CLIENT_ID = "x-console";
 const PASSWORD = "password"; // both static accounts
 
-// invite makes an account (no roles) and an invite for email, the way an admin would.
-async function invite(rpc: TestRpc, email: string) {
+// invite makes an account (with the given roles, none by default) and an invite for email, the way an admin would.
+async function invite(rpc: TestRpc, email: string, roles: string[] = []) {
   const { account } = await rpc.call("CreateAccount", {
     name: `e2e-dex-${uid()}`,
-    roles: [],
+    roles,
   });
   await rpc.call("CreateInvite", { accountId: account.id, email });
 }
@@ -64,7 +64,7 @@ test("admin@example.com signs in at Dex, is unbound until the invite is claimed,
   browser,
   baseURL,
 }) => {
-  await invite(rpc, "admin@example.com");
+  await invite(rpc, "admin@example.com", ["admin"]); // the nav shows only admin pages
   const bearers: string[] = [];
   page.on("request", (r) => {
     const a = r.headers()["authorization"];

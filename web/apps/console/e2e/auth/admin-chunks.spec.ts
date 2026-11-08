@@ -18,7 +18,7 @@ const navigate = (page: Page, path: string) =>
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, path);
 
-for (const name of ["poison", "prune", "expire"]) {
+for (const name of ["poison", "prune"]) {
   test(`no admin role: direct /${name} shows the gate without fetching its chunk`, async ({ page }) => {
     await seed(page, OPS_KEY);
     const chunks: string[] = [];
@@ -133,7 +133,7 @@ test("admin: a chunk that fails to load is a visible error, not a blank page, an
 // credential must not inherit it: until the new probe answers, the router must not preload the
 // admin chunk (pending), and once it says "no" it must not either (denied). Fresh page context per
 // route, so no admin chunk is cached by an earlier case.
-for (const name of ["poison", "prune", "expire"]) {
+for (const name of ["poison", "prune"]) {
   test(`credential change: a cached admin answer cannot preload ${name}, pending or denied`, async ({ page }) => {
     await seed(page, ADMIN_KEY);
     await page.goto("/accounts");

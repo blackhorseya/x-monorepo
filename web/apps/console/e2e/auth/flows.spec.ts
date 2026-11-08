@@ -37,9 +37,7 @@ test("JWT: sub in the header, rejected variants name the reason", async ({
     mintJWT("alice", { roles: ["admin"] }, "another-secret-0123456789abcdef0123456789abcdef"), // wrong key
   ]) {
     await useJWT(page, bad);
-    const alert = page.getByRole("alert").first();
-    await expect(alert).toContainText("Not authenticated");
-    await expect(alert).toContainText("auth.invalid_credential");
+    await expect(page.getByText("Admin role required")).toBeVisible(); // refused: not an admin
   }
   // The console still labels it by its payload: the server, not the client, decided.
   await expect(subject(page)).toHaveText("jwt · alice");
@@ -60,24 +58,18 @@ test("JWT roles claim drives the admin gate", async ({ page }) => {
 test("mutations carry the credential set after the page loaded", async ({ page }) => {
   const name = `e2e-auth-write-${uid()}`;
   await page.goto("/accounts");
-  await expect(page.getByRole("alert").first()).toContainText("auth.unauthenticated");
+  await expect(page.getByText("Admin role required")).toBeVisible(); // anonymous: the page, and its form, are not there
+  await expect(page.getByLabel("Name")).toHaveCount(0);
 
-  // Anonymous Create is refused by the server, and says so next to the form.
-  await page.getByLabel("Name").fill(name);
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "auth.unauthenticated" })).toHaveCount(2);
-
-  // An admin key: the list recovers at once and the form's stale error goes with it
-  // (the credential change resets mutations); the same Create now goes through.
+  // An admin key set after the page loaded: the form appears and the Create it sends carries the key.
   await useKey(page, ADMIN_KEY);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByLabel("Name").fill(name);
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.getByRole("row").filter({ hasText: name })).toHaveCount(1);
 
-  // Clear (the header's): the next write is anonymous again.
+  // Clear (the header's): the page is gone again, nothing is sent as the admin.
   await page.locator("header").getByRole("button", { name: "Clear" }).click();
-  await page.getByLabel("Name").fill(`${name}-2`);
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "auth.unauthenticated" }).first()).toBeVisible();
+  await expect(page.getByText("Admin role required")).toBeVisible();
+  await expect(page.getByLabel("Name")).toHaveCount(0);
 });

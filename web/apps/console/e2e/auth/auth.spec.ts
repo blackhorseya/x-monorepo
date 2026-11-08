@@ -12,16 +12,12 @@ import { subject, useKey } from "./helpers";
 test("anonymous → wrong key → right key → reload → clear", async ({ page }) => {
   await page.goto("/accounts");
   await expect(subject(page)).toHaveText("anonymous");
-  const alert = page.getByRole("alert").first();
-  await expect(alert).toContainText("Not authenticated");
-  await expect(alert).toContainText("auth.unauthenticated");
-  await expect(alert).toContainText("set an API key or JWT");
+  // ListAccounts doubles as the admin probe: an answer of Unauthenticated is "not an admin", and the page shows the gate.
+  await expect(page.getByText("Admin role required")).toBeVisible();
 
   await useKey(page, "not-a-key-0123456789");
-  await expect(page.getByRole("alert").first()).toContainText(
-    "auth.invalid_credential"
-  );
   await expect(subject(page)).toHaveText("api key"); // the console keeps what you typed; the server decides
+  await expect(page.getByText("Admin role required")).toBeVisible();
 
   await useKey(page, ADMIN_KEY);
   await expect(page.getByRole("alert")).toHaveCount(0);
@@ -38,9 +34,7 @@ test("anonymous → wrong key → right key → reload → clear", async ({ page
 
   await page.getByRole("button", { name: "Clear" }).click();
   await expect(subject(page)).toHaveText("anonymous");
-  await expect(page.getByRole("alert").first()).toContainText(
-    "auth.unauthenticated"
-  );
+  await expect(page.getByText("Admin role required")).toBeVisible();
 });
 
 test("/poison needs the admin role", async ({ page }) => {
