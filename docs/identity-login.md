@@ -12,7 +12,7 @@
 **目標**
 
 - 人（員工與客戶）從**同一個 IdP 入口**登入 Console，拿到 IdP 簽發的 access token 呼叫 RPC。
-- token 經 auth interceptor 解成同一個 `contextx.Principal`（`Subject` = account id、`Roles` = account roles、`Method` = `jwt`）；ordering ownership 等下游**不用改**。
+- token 經 auth interceptor 解成同一個 `contextx.Principal`（`Subject` = account id、`Roles` = account roles、`Method` = `jwt`）；下游用 principal 的 usecase **不用改**。
 - 密碼、MFA、帳號復原、登入節流全部由 IdP 負責；我們只做 verifier、帳號對應與撤銷。
 - 預設關閉；關閉時錯誤碼、metrics label、Principal 與現在逐字相同。
 
@@ -56,7 +56,6 @@
 ## 4. 身分模型（Q1）
 
 - **單一 IdP**：員工與客戶從同一個入口登入，差別只在 account 的 roles。沒有分開的「員工目錄」與「客戶目錄」。
-- **`customer_id` 就是 account id**：ordering ownership 照舊用 principal 的 `Subject`。
 - **多 issuer**：verifier 接受 issuer 清單，**每個 issuer 各有自己的設定**——`audience`（我們的 client id）、`mapping`（§5）、`allow_insecure_issuer`（§10）。同一個 `sub` 在不同 issuer 是不同身分，所以綁定鍵永遠是 `(iss, sub)`。
 - 設定 key 名稱（`auth.oidc.issuers[]` 等）在 PR 2 隨 `docs/config.md` 定案，這份只固定語意。
 
@@ -124,7 +123,7 @@
 - **SPA 自己跑 Authorization Code + PKCE**：`state`、`nonce`、`code_verifier` 由 SPA 產生與驗證（PKCE 一律 `S256`）；scope 含 `openid profile email offline_access`（Dex 需要 `offline_access` 才發 refresh token）。**redirect URI = `<console origin>/auth/callback`**（IdP 的 client 要登記它；dev 的 Dex 見 `deployments/docker/dex/config.yaml`）。
 - **設定走 runtime，不是 build time**：console image 只 build 一次，issuer 隨部署不同，所以 SPA 啟動時 fetch 同源的 `/config.json`（只放公開值，沒有 secret）：`oidcIssuer`、`oidcClientId`、`apiKeyLogin`。nginx image 的 entrypoint 從環境變數 `CONSOLE_OIDC_ISSUER`、`CONSOLE_OIDC_CLIENT_ID`、`CONSOLE_API_KEY_LOGIN`（對應 `console.apiKeyLogin`；只有字面 `false` 會關掉，其他值＝開）用 envsubst 渲染它（`deploy/config.json.template`）。envsubst 的 filter 是**精確白名單**，容器的其他環境變數不會進任何 template。Helm 先用 `console.extraEnv` 傳這三個。`CONSOLE_OIDC_ISSUER` / `CONSOLE_OIDC_CLIENT_ID` 兩個都沒設＝OIDC 關閉（console 與以前完全相同：沒有登入頁、保留 Credential 對話框）。只設一個、含任何控制字元（CR／LF／tab…，對整個字串檢查，不是逐行）、或格式不合（`deploy/18-console-env.envsh`：issuer 只能是 http(s) origin 加路徑，無 userinfo／query／fragment／引號；host 必須是 DNS label 或標準 IPv4（末段是 `0x…` 十六進位也拒絕）（四段 0–255、不含前導 0——最後一段是數字時瀏覽器的 URL parser 會把它當 IPv4），port 必須是 1–65535，與 SPA 的 `new URL()` 同一套判準，避免容器啟動了、前端卻靜默關掉 OIDC；client id 只能是一般識別字）→ **container 啟動失敗**（exit 1，log 以 `console-env:` 開頭說明原因），不會靜默退回預設、也不會把值帶進 JSON 或 CSP；`image.sh` 對這些負例逐一驗證。
 - **CSP**：nginx 的 `connect-src` 預設 `'self'`；OIDC 開啟時加上 **issuer 的精確 origin**（不用萬用字元），SPA 才能 fetch discovery 與 token endpoint。因此 **token endpoint 必須與 issuer 同 origin**（Dex、Keycloak、Auth0、Entra 皆如此）。這條由 console 的 discovery 自己強制（比對 `URL.origin`），**不能只靠 CSP**：CSP 為了 RPC 必須放行 `'self'`，也就會放行指向 console 自己的 token endpoint。不同 origin 的 discovery 文件（例如 Google 的 `oauth2.googleapis.com`）在送出授權請求之前就被拒絕（顯示 origin 不符），code 與 verifier 不會送給它；要支援這類 IdP 需另訂規則。IdP 本身要允許 console origin 的 CORS（token endpoint 的跨來源 `POST`）。
-- **登入流程**：未登入（沒有 credential）的任何頁面導到 `/login`，並記住要去的路徑（只接受 app 內的路徑，其他一律回 `/orders`）。`/login` 的「Sign in」導去 IdP；`/auth/callback` 驗證 `state`（對不上就拒絕、**不**呼叫 token endpoint）→ 用 `code_verifier` 換 token → 檢查 id token 的 `iss`／`aud`／`nonce`（id token 直接來自 token endpoint 的 TLS，不重驗簽章；access token 由 server 驗）。callback 一進來就把 `code`／`state` 從網址列（與 history）拿掉；PKCE verifier、state、nonce 在 callback 讀取的當下就從 `sessionStorage` 刪除，不論成功或失敗。IdP 回 `error=` 也終止該次嘗試並顯示。
+- **登入流程**：未登入（沒有 credential）的任何頁面導到 `/login`，並記住要去的路徑（只接受 app 內的路徑，其他一律回 `/accounts`）。`/login` 的「Sign in」導去 IdP；`/auth/callback` 驗證 `state`（對不上就拒絕、**不**呼叫 token endpoint）→ 用 `code_verifier` 換 token → 檢查 id token 的 `iss`／`aud`／`nonce`（id token 直接來自 token endpoint 的 TLS，不重驗簽章；access token 由 server 驗）。callback 一進來就把 `code`／`state` 從網址列（與 history）拿掉；PKCE verifier、state、nonce 在 callback 讀取的當下就從 `sessionStorage` 刪除，不論成功或失敗。IdP 回 `error=` 也終止該次嘗試並顯示。
 - **token 存放**：
   - **access token 只放記憶體**（reload 就消失，靠 refresh token 靜默取得）。從不寫入 `localStorage`、log 或 URL；也不留 id token。
   - **refresh token 採 rotation，存 `sessionStorage`**（單一 key；同分頁 reload 可延續，關分頁就消失；每個分頁各自一份）。每次使用都換成 IdP 回的新值。

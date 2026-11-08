@@ -34,25 +34,12 @@
   `eventbus_inbox_oldest_age_seconds{schema}` 是 `<bc>.inbox`。這些是 `count(*)` 全表掃，表很大時把 OTLP 的 collect 間隔拉長。
   每個 replica 都回報同一組數字：**用 `max`，不要 `sum`**。
   worker 沒有 HTTP server，這些只走 OTLP（60s 一次）
-- **saga 的漏斗**（各 BC 的 `adapters/metrics`，`apps/worker` 和 lag gauge 一起註冊，只在有 DB 時）：`ordering_orders{status}` /
-  `inventory_reservations{status}` 是每個 status 的筆數，`ordering_orders_oldest_age_seconds{status}` / `inventory_reservations_oldest_age_seconds{status}`
-  是該 status 最老一筆距上次狀態變更的秒數（每個已知 status 都有 series，空的報 0——alert 要看到 0 不是 no data）。
-  每次 scrape 一句 `GROUP BY status`（`OrderStats` / `ReservationStats` use case → `Repository.CountByStatus`），
-  每個 replica 報一樣的數字，`max` 不 `sum`。PENDING 老 = StockReserved 或缺貨的取消都沒回到 ordering（alert `x-monorepo-saga-pending`）；
-  RESERVED 老 = 庫存被沒走完的訂單扣著，超過 TTL 的 1.5× 就是 `worker expire` 沒跑（alert `x-monorepo-reservation-expiry`）；EXPIRED 在長 = TTL 在殺單，看 TTL 是不是太短；COMMIT_SHORT > 0 = 訂單已 COMPLETED 但庫存補不回來（sweep 與 CompleteOrder 競態後庫存被別單訂走），alert `x-monorepo-commit-short`。
-- **CreateOrder 的結果**（`ordering/adapters/metrics`，**rpc** 註冊，因為 CreateOrder 跑在 rpc）：`ordering_create_order_total{result}` 是 counter（**sum**，不像上面的 gauge 用 max）：
-  `created` = 寫入了新訂單（有沒有帶 `idempotency_key` 都算）、`replayed` = 同 key 同內容，回了原訂單（沒寫入、沒發 `OrderCreated`；併發輸家回讀勝出者也是這個）、
-  `key_reused` = 同 key 不同內容（`order.idempotency_key_reused`）。計數點在最外層 decorator，也就是交易 commit **之後**：commit 失敗或 rollback 的 create 不會被記成 `created`。
-  **label 只有 `result`**，沒有 key、customer、order id（R4 與基數）。其他失敗（驗證、`order.permission_denied`、infra error）**刻意不計**：
-  `usecase_duration_seconds{usecase="ordering.create_order", kind}` 已經依 kernel error kind 拆開，再加一個 `rejected` 只會把不同負責人的原因混在一起。
-  Grafana「Saga」row 的兩個面板看 results/s 與 replayed / key_reused 佔比。沒設 alert：`replayed` 是重試保護正常運作（client 逾時重送），
-  `key_reused` 是單一整合的 bug（同一把 key 送兩個請求），都沒有可靠的服務水準線可設門檻；真的有疑慮時看面板，再用 `x-error-code` 的 access line 找是哪個 client。
-- **catalog 是另一個 process（#320、#355）**：rpc 問 catalog-rpc（`QuotePrices` / `GetProduct`）的 Connect client 掛 `otelconnect`，把 rpc 自己那個 span 的 `traceparent` 帶過去（`pkgs/catalog/adapters/client/client_test.go`）。
+- **catalog 是另一個 process（#320、#355）**：rpc 問 catalog-rpc 的 Connect client 掛 `otelconnect`，把 rpc 自己那個 span 的 `traceparent` 帶過去（`pkgs/catalog/adapters/client/client_test.go`）。
   **只有 catalog-rpc 信任遠端 trace**，所以它的 server span 是 rpc 那個 span 的 child、`trace_id` 相同；rpc 不信任。信不信任由各 composition root 在程式裡宣告（`apps/rpc` 的 `TraceOptions` 是 `server.DistrustRemoteTrace()`，`apps/catalog-rpc` 是 `server.TrustRemoteTrace()`，用 wire 提供），不是 config、env 或 Helm value，operator 沒有入口能在 rpc 上打開；`server.New` 不帶選項時也是不信任（`pkgs/platform/server/trace_test.go`，protocol path 與 `/api` 兩個 mount、成功與業務錯誤都測）。
   - **rpc 入口收到的 `traceparent` 不會被延續，兩種 SDK 狀態都是**。要查這張單的 trace，用回應的 `X-Trace-Id`，**不要**用自己送進來的 trace id。rpc 也不會把呼叫端的 `traceparent` 轉給 catalog-rpc。
     - rpc 開 SDK（`otel.endpoint` 有設）：server span 是新的 root，呼叫端的 span 只留成一個 link，`X-Trace-Id`（成功與錯誤都有）是 rpc 自己的。
     - rpc 關 SDK（`otel.endpoint` 空）：tracer 是 no-op，而 no-op tracer 會原樣傳遞 parent 的 trace id，所以 `otel.New` 在這時給**空的 propagator**，不讀也不寫 trace header（`pkgs/platform/otel/propagation_test.go`；不是設定項，沒有 tracer 就沒有 trace）。rpc 不回 `X-Trace-Id`／`traceparent`，外部 ID 不會出現在回應或 catalog-rpc 的 log。
-  - rpc 與 catalog-rpc 的 SDK 開關四格（`apps/rpc/trace_test.go` 的 `TestTrace_RPCAndCatalogBySDKState`，真的起 rpc 與 catalog-rpc 兩個 process，帶外部 `traceparent` 打 `CreateOrder`，成功與 catalog 回業務錯誤〔SKU 不存在〕都測）：
+  - rpc 與 catalog-rpc 的 SDK 開關四格（`apps/rpc/trace_test.go` 的 `TestTrace_RPCAndCatalogBySDKState`，真的起 rpc 與 catalog-rpc 兩個 process，帶外部 `traceparent` 打 `CatalogService.QuotePrices`，成功與 catalog 回業務錯誤〔SKU 不存在〕都測）：
 
     | rpc | catalog-rpc | 結果 |
     |---|---|---|

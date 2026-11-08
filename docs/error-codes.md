@@ -18,61 +18,18 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `auth.unauthenticated` | `UNAUTHENTICATED` | auth interceptor | `auth.mode=required` 且沒帶 credential |
 | `auth.invalid_credential` | `UNAUTHENTICATED` | auth interceptor | 帶了但對不上（未知 API key、JWT 簽章 / exp / iss / aud 不對）。identity 的 key 被 revoke / 過期 / account disabled、或 resolver 查 DB 失敗，client 看到的也是這個（不洩漏原因；resolver 失敗另有 error log）。OIDC token（`auth.oidc`）同理：簽章 / `iss` / `aud` / `exp` / 缺 `iat` 不對、對應的 account 已停用、`iat` 早於 `sessions_revoked_at`、`(iss, sub)` 查 DB 失敗，一律這個碼加固定訊息（token 本身或帳號被拒：`token could not be verified`；resolver 查不到答案：`credential could not be verified`，原因只進 server log，且 log 不含 token）。逾時（`auth.resolver_timeout`）後才回來的答案一律拒絕，連「未綁定」也不例外，不會放行 `ClaimInvite`。帶了 `X-API-Key` 時不看 Bearer，key 錯就是這個，不會 fallback |
 | `auth.unbound_identity` | `PERMISSION_DENIED` | auth interceptor | OIDC token 驗過了，但 `(iss, sub)` 沒綁定任何 account（`mapping: bound`），而這個 procedure 不是 `IdentityService.ClaimInvite`。未綁定的身分只能呼叫 `ClaimInvite`（`auth.mode=optional` 也一樣，不會變 anonymous）。要先請 admin 發邀請，再用 `ClaimInvite` 綁定 |
-| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`InventoryService.SetStock` 與 `ExpireReservations`、`CatalogService.UpsertProduct` 與 `DeactivateProduct`、`IdentityService` 除 `WhoAmI` 與 `ClaimInvite` 外都要 `auth.admin_role`） |
-| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`order.ErrStale` / `stock.ErrStale` / `product.ErrStale` / `account.ErrStale` / `apikey.ErrStale` / `invite.ErrStale` / `reservation.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；Order 的 cancel / confirm / complete 已先在 use case 內重試 3 次，仍撞才會出現；重送即可，刻意沒有前綴也不是 `kernel.Error` |
+| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`CatalogService.UpsertProduct` 與 `DeactivateProduct`、`IdentityService` 除 `WhoAmI` 與 `ClaimInvite` 外都要 `auth.admin_role`） |
+| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`product.ErrStale` / `account.ErrStale` / `apikey.ErrStale` / `invite.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；重送即可，刻意沒有前綴也不是 `kernel.Error` |
 | `pagination.invalid_page_size` | `INVALID_ARGUMENT` | `platform/pagination` | `page_size` 負數 |
-| `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（ListOrders / ListStocks 把 filter 編進 token） |
+| `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（`ListProducts` 把 filter 編進 token） |
 | `admin.no_database` | `FAILED_PRECONDITION` | admin | server 沒接 Postgres（`postgres.url` 空）：poison 表與 outbox / inbox 都在 DB |
 | `admin.unknown_bounded_context` | `INVALID_ARGUMENT` | admin | `bounded_context` 不在 `apps/rpc` 列的 schema 清單 |
 | `admin.poison_not_found` | `NOT_FOUND` | admin | `GetPoison` 的 offset 不存在 |
-| `order.permission_denied` | `PERMISSION_DENIED` | ordering application（`ownership.Policy`） | 非 admin 的 principal 替別人下單（`CreateOrder`）或列別人的訂單（`ListOrders`）；admin role = `auth.admin_role`。讀、取消、完成別人的訂單（`GetOrder` / `GetOrderHistory` / `CancelOrder` / `CompleteOrder`）是 `order.not_found`，不是這個 |
-| `order.invalid_id` / `order.empty_customer` / `order.no_items` / `order.invalid_sku` / `order.invalid_quantity` | `INVALID_ARGUMENT` | ordering domain | aggregate 不變量（consumer path 沒有 protovalidate，所以留著） |
-| `order.invalid_status_filter` / `order.invalid_cursor` | `INVALID_ARGUMENT` | ordering domain | ListOrders 的 filter / cursor 壞掉 |
-| `order.invalid_cause` | `INVALID_ARGUMENT` | ordering domain | `Order.Cancel` 收到固定列舉以外、或取消不可能有的 cause（含零值：adapter 沒說來源）；訊息固定，不回顯上游文字。#427 |
-| `order.invalid_actor` / `order.invalid_history` | `INTERNAL` | ordering domain | 讀出的 `ordering.order_history` 列違反表自己的規則（actor 與 subject 不符、seq < 1…）；不會由請求觸發 |
-| `order.cannot_cancel` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING / CONFIRMED 的 order 被 Cancel（COMPLETED 是終點；PAID 也不能取消，CANCELLED 不復活）；consumer path：`PaymentExpired` 到達時訂單已 `PAID`／`COMPLETED`（付了的款不被逾時撤銷）→ 被拒、drop |
-| `order.cannot_confirm` | `FAILED_PRECONDITION` | ordering domain | 不是 PENDING 的 order 收到 `StockReserved`（consumer path：drop） |
-| `order.cannot_complete` | `FAILED_PRECONDITION` | ordering domain | 不是 CONFIRMED（或 PAID）的 order 被 Complete（PENDING 還沒有庫存可 commit；再按一次也是這個） |
-| `order.payment_required` | `FAILED_PRECONDITION` | ordering domain | `CompleteOrder` 遇到 CONFIRMED 且 `payment_required = true` 的訂單：這張單是在 `ordering.require_payment` 開著時進 CONFIRMED 的，只能經付款前進（docs/payment.md §8）。只看訂單自己的快照，不看現在的開關——開關切回 `false` 後同一張單仍是這個。其他狀態（COMPLETED、CANCELLED）維持 `order.cannot_complete` |
-| `order.cannot_pay` | （不到 rpc） | ordering domain | `MarkPaid` 遇到不是 CONFIRMED 的訂單；consumer path：`PaymentCaptured` 到達時快照 `true` 的訂單已 `CANCELLED`（不復活）→ 被拒、drop，錢由 Payment 側 T10 退（docs/payment.md §8） |
-| `order.not_confirmed` | `FAILED_PRECONDITION`（不到 rpc） | ordering domain | `PaymentCaptured`／`PaymentExpired` 指到一張還沒 `CONFIRMED` 的訂單（`PENDING`）。付款單在 `OrderConfirmed` 之後才建，健康的系統不會發生；consumer 以 drop 處理 |
-| `order.not_found` | `NOT_FOUND` | ordering domain / application | 沒有這筆；非 admin 的 principal 讀、取消、完成別人的訂單也是它（`GetOrder` / `GetOrderHistory` / `CancelOrder` / `CompleteOrder`，不洩漏存在與否） |
-| `order.duplicate` | `ALREADY_EXISTS` | ordering domain | 同 id 再 Save（repo 層） |
-| `order.unknown_sku` / `order.inactive_sku` | `INVALID_ARGUMENT` | ordering domain（`CreateOrder`） | catalog 報不出價：SKU 沒有 product（`unknown_sku`，多半打錯）／product 已下架（`inactive_sku`）。**整張單被拒、沒寫入、沒發 event、冪等 key 也沒被花掉**（商品上架後同一個 key 重送就成立）。訊息固定，不回是哪個 SKU（呼叫端知道自己送了什麼） |
-| `order.mixed_currency` | `INVALID_ARGUMENT` | ordering domain（`CreateOrder`） | 同一張單的行落在兩種幣別（每個 product 各自的幣別，一張單只能一種）；沒寫入 |
-| `order.idempotency_key_reused` | `ALREADY_EXISTS` | ordering domain（`CreateOrder`） | 同一個 customer 的 `idempotency_key` 已用在**內容不同**的請求上（items 的 sku / quantity / **順序**任一不同；價格不是請求內容，是 catalog 的）；沒寫入、沒發 event。訊息固定，不帶訂單、items、key；要換 key 才能下新單。內容相同的重送不是錯誤，回原訂單 |
-| `order.idempotency_conflict` | （不到 rpc） | ordering repo（`Save`） | 新單的 (customer, key) 被別人先佔了：use case 接住、回讀勝出的那筆再決定回放或 `order.idempotency_key_reused`；`INTERNAL` Kind 只是保險，正常不會到 `ToConnectError` |
-| `stock.invalid_sku` / `stock.negative_quantity` / `stock.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | SetStock / Reserve 的參數；`stock.invalid_sku` = SKU 空或超過 64 **bytes**（與 catalog 同規則；超過 64 字元的請求先被 proto 擋成 `request.validation_failed`，64 字元以內但超過 64 bytes 的多位元組 SKU 才走這個 code） |
-| `stock.unknown_sku` | `INVALID_ARGUMENT` | inventory domain（`SetStock`） | catalog 沒有這個 SKU 的 product：庫存只替 catalog 裡有的商品記，**沒寫入**。已下架的 product 放行（下架後仍要能盤點、出清）。訊息固定，不回 catalog 的任何內容。孤兒庫存（升級前就有、沒有 product 的列）仍讀得到、reserve / release / commit / expire 照舊，只有 `SetStock` 回這個 code，補上 product 後恢復（部署前查詢見 `docs/operations.md`「部署前查孤兒庫存」） |
-| `catalog.unavailable` | `UNAVAILABLE` | inventory rpc adapter（`SetStock`） | catalog 沒有答覆（`GetProduct` 回了 `NOT_FOUND` 以外的失敗）：**fail closed，沒寫入**，同一個請求可以重送。不是 domain error（請求本身沒錯），所以沒有 `kernel.Kind`；訊息固定，catalog 的錯誤只進 log。`GetStock` / `ListStocks` 不問 catalog，不受影響 |
-| `stock.below_reserved` | `FAILED_PRECONDITION` | inventory domain | SetStock 想把 on-hand 壓到低於已 reserved |
-| `stock.release_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Release 超過 reserved |
-| `stock.commit_exceeds_reserved` | `FAILED_PRECONDITION` | inventory domain | Commit 超過 reserved（stock 列與 reservation 不一致：資料壞了） |
-| `stock.not_found` | `NOT_FOUND` | inventory domain | |
+| `catalog.unavailable` | `UNAVAILABLE` | `pkgs/catalog/adapters/client` | catalog 沒有答覆（連不上、逾時、5xx、service key 被拒）：**fail closed，沒寫入**，同一個請求可以重送。不是 domain error（請求本身沒錯），所以沒有 `kernel.Kind`；訊息固定，catalog 的錯誤只進 log |
 | `product.invalid_sku` / `product.invalid_name` / `product.invalid_price` | `INVALID_ARGUMENT` | catalog domain | UpsertProduct / GetProduct / DeactivateProduct / 批次報價的參數：sku 1–64 bytes、name 1–200 字元且不能全是空白（`strings.TrimSpace` 的定義）、price 必須是非負金額加 3 個大寫字母的幣別——domain 對 `Money` 重新檢查（`Multiply(-1)`、`ZeroMoney("usd")` 這類繞過 `NewMoney` 的值也擋）（rpc 先被 protovalidate 擋，這是直呼 use case 的那條） |
 | `product.unsupported_currency` | `INVALID_ARGUMENT` | catalog domain | 幣別格式對但不是已指派的 ISO 4217 代碼（`AAA`、`ZZZ`…）；白名單是 SIX List One（`domain/product/currency_codes.go`，與 `catalog.currencies` 同一份）。protovalidate 只擋格式，所以這個一定走到 domain |
 | `money.invalid_amount` / `money.invalid_currency` | `INVALID_ARGUMENT` | kernel `Money` | 金額為負、幣別不是 3 個大寫英文字母（ISO 4217 形狀）；`UpsertProduct` 的價格（rpc 先被 protovalidate 擋） |
 | `product.not_found` | `NOT_FOUND` | catalog domain | `GetProduct` / `DeactivateProduct` 的 SKU 沒有 product（`UpsertProduct` 會建立它，不會回這個） |
-| `payment.invalid_id` / `payment.invalid_order_id` / `payment.empty_customer` / `payment.invalid_amount` / `payment.invalid_expiry` / `payment.invalid_status` / `payment.invalid_outcome` / `payment.invalid_checkout` | `INVALID_ARGUMENT` | payment domain | aggregate 不變量（建立與從 DB 載入時都檢查，載入到不可能的狀態組合是錯誤，不是一張付款單）。`payment.empty_customer` 也是 `GetPayment`／`StartPayment` 的 `customer_id` 空白：**不會**被當成「任何人」（proto 層先以 `request.validation_failed` 擋下，domain 再擋一次） |
-| `payment.invalid_webhook` | （不到 rpc） | payment domain | 驗過簽章的通知不是付款單能處理的東西（缺 id／type、欄位超長、body 空或超過 1 MiB、金額不合法）。webhook route 回 `400`，provider 不該重送 |
-| `payment.missing_total` | `INVALID_ARGUMENT` | payment domain | `OrderConfirmed` 沒帶 `total`：**不能當成 0 元收款**。切片 3 的 consumer 以 domain error drop 並告警；切片 2 只有 domain 方法（`payment.New`、`DuplicateConfirmed`） |
-| `payment.not_found` | `NOT_FOUND` | payment application（`ownership`）／domain | 這張訂單沒有付款單，**或**呼叫者不是付款單的 customer 又不是 admin（`GetPayment`、`StartPayment`）：兩種情況同一個答案，不洩漏別人的付款單存不存在 |
-| `payment.permission_denied` | `PERMISSION_DENIED` | payment application（`ownership`） | **admin 不可代付**：`StartPayment` 的 `admin=true` 且 `customer_id` 不是付款單的 customer。第一版不開這扇門；admin 付自己的單、`GetPayment` 讀任何單都不是這個 |
-| `payment.not_pending` | `FAILED_PRECONDITION` | payment domain | `StartPayment` 時付款單已不是 `PENDING`（已收款、過期、取消、退款中…）。provider 沒有被呼叫 |
-| `payment.expired` | `FAILED_PRECONDITION` | payment domain | `StartPayment` 時 `PENDING` 已過 `expires_at`、`expire` 尚未處理。provider 沒有被呼叫 |
-| `payment.not_refunding` | `FAILED_PRECONDITION` | payment domain | 退款成功的通知（`RefundSucceeded`）對一張不在 `REFUNDING`／`REFUNDED` 的付款單；狀態不動。沒有 RPC 會回它，切片 3 的退款 consumer 才會碰到 |
-| `payment.already_exists` | `ALREADY_EXISTS` | payment domain（repository） | 同一張訂單（或同一個付款單 id）第二次 `Save`：`unique(order_id)`。consumer 的重送靠它被忽略（切片 3） |
-| `payment.disabled` | `FAILED_PRECONDITION` | `apps/rpc` 的 `PublicPaymentService.StartPayment`（`pkgs/payment/adapters/client`） | 開關 `ordering.require_payment` 關閉，**或**這張單的 `payment_required` 快照是 `false`（含預設設定下的每張單）；在轉發給 payment-rpc 之前回，payment-rpc 沒有被呼叫。訊息固定 |
-| `payment.unavailable` | `UNAVAILABLE` | `apps/rpc` 的 payment client | payment-rpc 沒有給出它自己的答覆（沒設定、連不上、逾時、5xx、service key 被拒、`x-error-code` 不是 `payment.*`）：固定訊息，上游寫的文字**不進** caller、log（#347）。不是 `payment.provider_unavailable`（那是 payment-rpc 還活著、provider 故障）。下單與預留不受影響 |
-| `payment.provider_unavailable` | `UNAVAILABLE` | payment rpc adapter（`StartPayment`） | provider 沒有給出可用的答覆（連不上、逾時、拒絕、任何失敗）：**付款單沒變**，同一個請求可重送。不是 domain error（請求本身沒錯），所以沒有 `kernel.Kind`；訊息固定，provider 的原始錯誤**不進** caller、log、metrics、span（#347，`TestPayment_ProviderErrorTextNeverLeaves`）。`GetPayment` 不呼叫 provider，不會回它 |
-| `reservation.invalid_order_id` / `reservation.no_lines` / `reservation.invalid_sku` / `reservation.invalid_quantity` | `INVALID_ARGUMENT` | inventory domain | aggregate 不變量 |
-| `reservation.invalid_status_filter` / `reservation.invalid_cursor` | `INVALID_ARGUMENT` | inventory domain | ListReservations 的 filter / cursor |
-| `reservation.too_many_order_ids` | `INVALID_ARGUMENT` | inventory domain | `BatchGetReservations` 一次超過 100 個 order id（rpc 先被 protovalidate 擋，這是直呼 use case 的那條）；空清單與空字串 id 走 `reservation.invalid_order_id` |
-| `reservation.invalid_older_than` | `INVALID_ARGUMENT` | inventory domain | ExpireReservations 的 `older_than` 不是正數（rpc 先被 protovalidate 擋，這是 CLI / 直呼 use case 的那條） |
-| `reservation.not_reserved` | `FAILED_PRECONDITION` | inventory domain | 只有 RESERVED 能 Release / Commit / Expire（重送的 `OrderCancelled` / `OrderCompleted`、過期後才到的 `OrderCancelled`：drop） |
-| `reservation.stock_missing` | `FAILED_PRECONDITION` | inventory domain | Release / Commit / Expire 時某 SKU 的 stock 列不在了 |
-| `reservation.not_found` | `NOT_FOUND` | inventory domain | `GetReservation`：worker 還沒處理這張 order（console 顯示 `none yet`） |
-| `reservation.duplicate` | `ALREADY_EXISTS` | inventory domain | 同一 order 第二張 reservation（repo `Add`）；reserve / release usecase 把它當「已處理」吞掉，rpc 實際上看不到 |
 | `account.invalid_id` / `account.invalid_name` / `account.invalid_role` | `INVALID_ARGUMENT` | identity domain | aggregate 不變量（role 不能是空字串；protovalidate 先擋 rpc 那條） |
 | `account.invalid_cursor` | `INVALID_ARGUMENT` | identity domain | ListAccounts 的 page token 解得開但沒有 id |
 | `account.already_disabled` / `account.already_active` | `FAILED_PRECONDITION` | identity domain | Disable 已 DISABLED / Enable 已 ACTIVE 的 account |
@@ -94,6 +51,6 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `invite.expired` / `invite.already_claimed` / `invite.email_unverified` / `invite.email_mismatch` | `FAILED_PRECONDITION` | identity domain（`invite`） | `ClaimInvite` 拒絕：超過 7 天、已被用過（含兩個 sub 搶同一張，輸家拿這個）、token 的 `email_verified` 不是 true、email 與邀請不符。被拒的 claim 不會花掉 invite |
 | `account.session_revoked` / `account.missing_iat` | `PERMISSION_DENIED` | identity domain（`account.CheckSession`，經 external resolver） | token 的 `iat` 早於 `sessions_revoked_at`，或 token 沒有 `iat`（無從比較，一律拒絕） |
 | `message.duplicate` | （不到 rpc） | `usecasex.Idempotent` | consumer inbox 看到重送的 message id：handler 回它、broker ack、不 retry；rpc path 沒 message id 不會發 |
-| `order.invalid_status` / `reservation.invalid_status` / `stock.corrupt_quantities` / `account.invalid_status` / `api_key.invalid_status` | `INTERNAL`（header 不帶 code） | domain | 從 DB 讀回來的狀態 / 數量不合法：資料壞了，不是 client 的錯 |
+| `account.invalid_status` / `api_key.invalid_status` | `INTERNAL`（header 不帶 code） | domain | 從 DB 讀回來的狀態 / 數量不合法：資料壞了，不是 client 的錯 |
 
 Kind → Connect code 只在 `server.ToConnectError` 一處；consumer 不看 code：`kernel.Error` 一律 drop（進 poison），其他 error retry。
