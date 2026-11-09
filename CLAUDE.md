@@ -179,6 +179,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 它產生 `protos/<name>/v1/*`、`pkgs/<name>/**`（一個 aggregate、`provider.go` 匯出 `RPC`、`arch_test.go`、`0001` migration）並在 `go.work`、`buf.gen.yaml`、`apps/{rpc,migrate}/go.mod`、`apps/rpc/{wire.go,app.go}`、`apps/migrate/main.go` 各加一筆（插在 `new-bc:*` 錨點註解上方，不要刪或複製錨點）；
 `--events` 另產生 event、outbox、同 BC 的 consumer、inbox、`0002_events`／`0003_inbox` migration，並加 `apps/worker/{go.mod,wire.go,consumers.go,poison.go}`。名稱過 `scripts/bcs.jq`（`^[a-z][a-z0-9]*$`）、最長 30 字元、不是 Go keyword／`kernel`／`platform`，任何一條不過或 BC 已存在都在寫任何檔之前拒絕。
 接著自動跑 `task gen` → `scripts/sync-fixpoint.sh`（tidy 到沒有 diff）→ `task wire`；之後手動：`task gen-ts`、把樣板改成真正的領域、commit tidy 的結果。`task new-bc-check` 在工作樹複本（`git ls-files -co --exclude-standard`，含未 `git add` 的新檔）產生兩種樣本並 lint／build／test；CI 的 gen-freshness 也跑它，**但沒有 DB，不跑 postgres repository 的測試**。
+`--events` 的 BC 需要 Postgres：`apps/worker` 沒有 `postgres.url` 又有 event BC 時，`NewWorker` 啟動即拒絕（`worker: postgres.url is empty, but a bounded context consumes events: …`）；`apps/rpc` 沒有 DB 仍可啟動，event 退成行程內 GoChannel，不會送到 worker。
 有跨 BC 的 consumer、List、stats projection 等樣板沒有的東西，照 `pkgs/identity` 與 `docs/workflow.md` 加。
 
 ## Conventions（本 repo 特有）
