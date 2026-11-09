@@ -18,7 +18,7 @@
 3. 然後 `task gen` → `scripts/sync-fixpoint.sh`（`go mod tidy` + `go work sync` 到沒有 diff）→ `task wire`
 4. 手動：`task gen-ts`（需要網路）把 TS client 產進 `web/packages/proto/src/gen/<name>/`（CI 的 gen-freshness 也比這個）；把樣板的 aggregate、proto 與 migration 改成真正的領域；commit tidy 的結果
 5. 驗證：`task new-bc-check`（工作樹複本，含未 `git add` 的新檔）；CI 的 gen-freshness 也跑，**沒有 DB，所以不跑 postgres repository 的測試**
-產生物是起點：沒有 List、沒有 stats projection、沒有跨 BC 的 consumer。有 event 的 BC 的 `RPC.PoisonSchema` 要填它的 schema（`NewPoisonService` 由 mounts 取）。
+產生物是起點：沒有 List、沒有 stats projection、沒有跨 BC 的 consumer。有 event 的 BC 產生的 `provider.go` 已把 `RPC.PoisonSchema` 填成它的 schema（`NewPoisonService` 由 mounts 取）。
 
 ### 新增 consumer / 新 event
 `task new-bc -- <name> --events` 產生的 BC 就是範例（`<Name>Created`，由同一個 BC 的 consumer 收）。以下是機制的形狀：
