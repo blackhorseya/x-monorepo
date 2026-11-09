@@ -171,5 +171,4 @@ replace (
 	github.com/blackhorseya/x-monorepo/pkgs/platform => ../../pkgs/platform
 )
 
-
 replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity

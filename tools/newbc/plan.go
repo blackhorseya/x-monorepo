@@ -116,7 +116,7 @@ func repoModule(root string) (string, error) {
 	}
 	f, err := modfile.ParseLax("pkgs/kernel/go.mod", b, nil)
 	if err != nil || f.Module == nil {
-		return "", fmt.Errorf("parse pkgs/kernel/go.mod: %v", err)
+		return "", fmt.Errorf("parse pkgs/kernel/go.mod: %w", err)
 	}
 	mod, ok := strings.CutSuffix(f.Module.Mod.Path, "/pkgs/kernel")
 	if !ok {
@@ -230,7 +230,7 @@ func bcsJQ(root string, work *modfile.WorkFile) ([]string, error) {
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("scripts/bcs.jq refuses the new go.work (the BC name rule): %v: %s", err, strings.TrimSpace(errb.String()))
+		return nil, fmt.Errorf("scripts/bcs.jq refuses the new go.work (the BC name rule): %w: %s", err, strings.TrimSpace(errb.String()))
 	}
 
 	return strings.Fields(out.String()), nil
