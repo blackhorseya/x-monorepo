@@ -159,23 +159,8 @@ def main(profile: str) -> None:
             expect(cp["ports"], [{"protocol": "TCP", "port": 8080}], "console NetworkPolicy port")
             expect(cp.get("from", []), npv["console"]["ingressFrom"], "console NetworkPolicy peers = ingressFrom")
 
-    # catalog-rpc (slice 3 of #320): off by default (no image of that name exists at the chart's
-    # appVersion until a release has built it); when on it runs on its OWN ConfigMap and Secret,
-    # because it refuses to start on auth.jwt / auth.oidc.enabled / auth on without api_keys and
-    # the release-wide config and Secret carry exactly those for rpc.
-    cr = values.get("catalogRpc", {})
-    cdep = find(docs, "Deployment", "-catalog-rpc")
-    check((cdep is not None) == bool(cr.get("enabled")), "catalog-rpc Deployment iff catalogRpc.enabled")
-    for kind in ("Service", "ConfigMap"):
-        check((find(docs, kind, "-catalog-rpc") is not None) == bool(cr.get("enabled")), f"catalog-rpc {kind} iff enabled")
-    if cdep and cr.get("enabled"):
-        check_catalog_rpc(docs, values, cdep, cr)
-
-    # rpc asks catalog-rpc (#320 slice 4): where it is, which key it presents, and a best-effort wait before
-    # it starts. rpc has no in-process catalog any more, so catalog-rpc is on in every profile.
-    cr0 = values.get("catalogRpc", {})
-    check(cr0.get("enabled"), "catalogRpc is on: rpc has no in-process catalog to fall back on")
-    check_rpc_to_catalog(docs, values, rpc, c, spec)
+    names = [e["name"] for e in c["env"]]
+    check(len(names) == len(set(names)), f"rpc env has no duplicate names: {names}")
 
     # Every app pod reads the same config file and, when there is one, the same Secret.
     for d in (rpc, worker):
@@ -184,159 +169,6 @@ def main(profile: str) -> None:
         check(("envFrom" in cc) == has_db or bool(values["secrets"].get("existingSecret")), f'{d["metadata"]["name"]}: envFrom iff secrets')
 
     print(f"helm check {profile}: ok")
-
-
-def check_rpc_to_catalog(docs, values, rpc, c, spec):
-    cr = values["catalogRpc"]
-    renv = {e["name"]: e for e in c["env"]}
-    svc = one(docs, "Service", "-catalog-rpc")
-    check("APP_CATALOG_UPSTREAM" in renv and "APP_CATALOG_API_KEY" in renv, "rpc is told where catalog-rpc is and with which key (APP_CATALOG_UPSTREAM, APP_CATALOG_API_KEY)")
-    expect(renv["APP_CATALOG_UPSTREAM"].get("value"), f'http://{svc["metadata"]["name"]}:{cr["service"]["port"]}', "rpc APP_CATALOG_UPSTREAM = the catalog-rpc Service of this release")
-
-    # the service key: the SAME Secret and key catalog-rpc is configured from, never a copy typed twice
-    own = cr_secret_name(values, docs)
-    ref = renv["APP_CATALOG_API_KEY"]["valueFrom"]["secretKeyRef"]
-    expect(ref.get("name"), own, "rpc APP_CATALOG_API_KEY comes from catalog-rpc's own Secret")
-    expect(ref.get("key"), "APP_CATALOG_API_KEY", "rpc APP_CATALOG_API_KEY secretKeyRef key")
-    expect(ref.get("optional"), False, "rpc APP_CATALOG_API_KEY optional: false (a Secret without it keeps the pod from starting)")
-    if not values["secrets"]["catalogRpc"].get("existingSecret"):
-        data = one(docs, "Secret", "-catalog-rpc-env")["stringData"]
-        k = values["secrets"]["catalogRpc"]["apiKey"]
-        expect(data["APP_CATALOG_API_KEY"], k, "rpc's key is the catalogRpc.apiKey value")
-        expect(data["APP_AUTH_API_KEYS"], f'rpc={k}:{values["config"]["auth"]["admin_role"]}', "...and catalog-rpc accepts exactly that key, named rpc")
-    # nothing else of catalog-rpc's Secret reaches rpc, and the shared Secret is not catalog-rpc's
-    check(not any("secretRef" in e and e["secretRef"].get("name") == own for e in c.get("envFrom", [])), "rpc does not envFrom catalog-rpc's Secret (only the one key by secretKeyRef)")
-    names = [e["name"] for e in c["env"]]
-    check(len(names) == len(set(names)), f"rpc env has no duplicate names: {names}")
-
-    # the best-effort wait: an initContainer on the rpc image that cannot hold a rollout longer than its budget
-    w = values["rpc"].get("waitForCatalog", {})
-    inits = spec.get("initContainers", [])
-    check(bool(inits) == bool(w.get("enabled")), "rpc initContainer iff rpc.waitForCatalog.enabled")
-    if w.get("enabled"):
-        check(len(inits) == 1, "one initContainer")
-        ic = inits[0]
-        expect(ic["name"], "wait-for-catalog", "initContainer name")
-        expect(ic["image"], c["image"], "the wait runs the rpc image (distroless: the binary does the waiting)")
-        expect(ic.get("args"), [f'--wait-catalog={w["timeoutSeconds"]}s'], "initContainer args")
-        ienv = {e["name"]: e.get("value") for e in ic.get("env", [])}
-        expect(ienv.get("APP_CATALOG_UPSTREAM"), renv["APP_CATALOG_UPSTREAM"]["value"], "initContainer waits for the same upstream")
-        check("APP_CATALOG_API_KEY" not in ienv and "envFrom" not in ic, "the wait presents no credential (the probe path is open)")
-        check(ic["securityContext"].get("readOnlyRootFilesystem") is True, "initContainer rootfs read-only")
-        deadline = rpc["spec"].get("progressDeadlineSeconds")
-        check(deadline is not None and w["timeoutSeconds"] < deadline, f'wait {w["timeoutSeconds"]}s < progressDeadlineSeconds {deadline}')
-
-
-def check_catalog_rpc(docs, values, dep, cr):
-    spec = dep["spec"]["template"]["spec"]
-    c = spec["containers"][0]
-    name = dep["metadata"]["name"]
-    check(c["image"].split("/")[-1].startswith("catalog-rpc:"), f"catalog-rpc image is catalog-rpc: {c['image']}")
-    sd = cr["shutdown"]
-    expect(spec["terminationGracePeriodSeconds"], sd["delaySeconds"] + sd["timeoutSeconds"] + sd["graceMarginSeconds"], "catalog-rpc terminationGracePeriodSeconds = delay + timeout + margin")
-    expect(c["readinessProbe"]["httpGet"]["path"], "/api/readyz", "catalog-rpc readiness path")
-    expect(c["livenessProbe"]["httpGet"]["path"], "/api/healthz", "catalog-rpc liveness path")
-    check(c["readinessProbe"]["periodSeconds"] <= sd["delaySeconds"], "catalog-rpc readiness period <= shutdown delay")
-    expect(c["ports"][0]["containerPort"], int(values["config"]["http"]["addr"].rsplit(":", 1)[1]), "catalog-rpc containerPort = http.addr")
-
-    # Its own config: auth required, the admin role, and NOTHING of rpc's credential sources.
-    cm = one(docs, "ConfigMap", "-catalog-rpc")
-    cfg = yaml.safe_load(cm["data"]["config.yaml"])
-    expect(cfg["auth"].get("mode"), "required", "catalog-rpc auth.mode")
-    expect(cfg["auth"].get("admin_role"), values["config"]["auth"]["admin_role"], "catalog-rpc auth.admin_role = the release's")
-    check(set(cfg["auth"]) <= {"mode", "admin_role"}, f"catalog-rpc auth carries only mode and admin_role, got {sorted(cfg['auth'])}")
-    check("jwt" not in cfg["auth"] and "oidc" not in cfg["auth"], "catalog-rpc config has no auth.jwt / auth.oidc")
-    check("service_name" not in cfg.get("otel", {}), "catalog-rpc does not inherit otel.service_name (it would report as rpc)")
-    for k in ("http", "postgres", "log", "otel"):
-        expect(cfg.get(k), {kk: vv for kk, vv in values["config"][k].items() if kk != "service_name"}, f"catalog-rpc {k} = the release's")
-    check("worker" not in cfg, "catalog-rpc config has no worker section")
-
-    # Its own env: the two Secret keys it cannot run without come in by secretKeyRef (optional: false),
-    # never envFrom: an external Secret missing APP_POSTGRES_URL must keep the pod from starting,
-    # not let it serve from memory with readyz 200. The Secret is its own, never the release-wide one
-    # (rpc's JWT secret and user api keys).
-    # The guarantee that cannot be made at template time (an external Secret holding an empty URL, an
-    # env var saying auth off) is made by the binary: --require-durable, as a container ARG, which no
-    # env var or Secret can change. Nothing else is passed.
-    expect(c.get("args"), ["--require-durable"], "catalog-rpc container args = --require-durable (refuses in-memory / non-required auth at start)")
-    check("command" not in c, "catalog-rpc keeps the image ENTRYPOINT (no command override)")
-    # A refusal must be readable after the container is gone: the last log lines are copied into the Pod
-    # status (terminated.message), which does not depend on the node still holding the log file.
-    expect(c.get("terminationMessagePolicy"), "FallbackToLogsOnError", "catalog-rpc terminationMessagePolicy (a refusal stays readable in the Pod status)")
-    check("envFrom" not in c, "catalog-rpc has no envFrom (a missing key would be silently skipped)")
-    own = cr_secret_name(values, docs)
-    check(own is not None, "catalog-rpc has a Secret to read")
-    env_list = c["env"]
-    refs = {e["name"]: e["valueFrom"]["secretKeyRef"] for e in env_list if "valueFrom" in e}
-    expect(sorted(refs), ["APP_AUTH_API_KEYS", "APP_POSTGRES_URL"], "catalog-rpc reads exactly APP_POSTGRES_URL and APP_AUTH_API_KEYS from a Secret")
-    for k, ref in refs.items():
-        expect(ref.get("name"), own, f"catalog-rpc {k} comes from its own Secret")
-        expect(ref.get("key"), k, f"catalog-rpc {k} secretKeyRef key")
-        expect(ref.get("optional"), False, f"catalog-rpc {k} secretKeyRef optional: false (a missing key keeps the pod from starting)")
-    shared = find(docs, "Secret", "-env")
-    check(shared is None or shared["metadata"]["name"] != own, "catalog-rpc never reads the release-wide Secret")
-    if values["secrets"].get("existingSecret"):
-        check(values["secrets"]["existingSecret"] != own, "catalog-rpc never reads secrets.existingSecret")
-    names = [e["name"] for e in env_list]
-    check(len(names) == len(set(names)), f"catalog-rpc env has no duplicate names: {names}")
-    env = {e["name"]: e.get("value") for e in env_list}
-    check(not any(k.startswith("APP_AUTH_") and k != "APP_AUTH_API_KEYS" for k in env), "catalog-rpc has no APP_AUTH_* env but its api key")
-    expect(env["APP_CONFIG"], "/etc/x-monorepo/config.yaml", "catalog-rpc APP_CONFIG")
-    # operator extraEnv comes first; what the chart sets (secret refs, config path, shutdown) comes after it
-    for e in cr.get("extraEnv", []):
-        check(names.index(e["name"]) < names.index("APP_CONFIG") and names.index(e["name"]) < names.index("APP_AUTH_API_KEYS"),
-              f"catalog-rpc extraEnv {e['name']} is listed before the chart's own env")
-    vols = {v["name"]: v for v in spec["volumes"]}
-    expect(vols["config"]["configMap"]["name"], cm["metadata"]["name"], "catalog-rpc mounts its own ConfigMap")
-
-    # Its own Secret (unless the operator supplies one): Postgres URL and the single service key.
-    if not values["secrets"]["catalogRpc"].get("existingSecret"):
-        sec = one(docs, "Secret", "-catalog-rpc-env")
-        data = sec["stringData"]
-        expect(sorted(data), ["APP_AUTH_API_KEYS", "APP_CATALOG_API_KEY", "APP_POSTGRES_URL"], "catalog-rpc Secret keys (catalog-rpc itself reads two; the third is rpc's copy of the same key)")
-        expect(data["APP_AUTH_API_KEYS"], f'rpc={values["secrets"]["catalogRpc"]["apiKey"]}:{values["config"]["auth"]["admin_role"]}', "catalog-rpc service key is rpc=<key>:<admin role>")
-        expect(data["APP_POSTGRES_URL"], values["secrets"]["postgresUrl"], "catalog-rpc Postgres URL")
-    else:
-        check(find(docs, "Secret", "-catalog-rpc-env") is None, "no catalog-rpc Secret rendered when secrets.catalogRpc.existingSecret is set")
-
-    svc = one(docs, "Service", "-catalog-rpc")
-    expect(svc["spec"]["selector"]["app.kubernetes.io/component"], "catalog-rpc", "catalog-rpc Service selects catalog-rpc pods")
-    expect(svc["spec"]["ports"][0]["port"], cr["service"]["port"], "catalog-rpc Service port")
-
-    pdb = find(docs, "PodDisruptionBudget", "-catalog-rpc")
-    check((pdb is not None) == (cr["podDisruptionBudget"]["enabled"] and cr["replicaCount"] > 1), "catalog-rpc PDB iff enabled and more than one replica")
-
-    sm = find(docs, "ServiceMonitor", "-catalog-rpc")
-    check((sm is not None) == cr["serviceMonitor"]["enabled"], "catalog-rpc ServiceMonitor iff enabled")
-    if sm:
-        ep = sm["spec"]["endpoints"][0]
-        expect(ep["path"], "/api/metrics", "catalog-rpc ServiceMonitor path")
-        expect(ep["port"], svc["spec"]["ports"][0]["name"], "catalog-rpc ServiceMonitor port = the Service's port name")
-        check(all(svc["metadata"]["labels"].get(k) == v for k, v in sm["spec"]["selector"]["matchLabels"].items()), "catalog-rpc ServiceMonitor selects the catalog-rpc Service")
-
-    # NetworkPolicy: ingress from the rpc pods of this release on the app port, nobody else.
-    pol = find(docs, "NetworkPolicy", "-catalog-rpc")
-    check((pol is not None) == values["networkPolicy"]["enabled"], "catalog-rpc NetworkPolicy iff networkPolicy.enabled")
-    if pol:
-        expect(pol["spec"]["policyTypes"], ["Ingress"], "catalog-rpc NetworkPolicy is ingress-only")
-        expect(pol["spec"]["podSelector"]["matchLabels"].get("app.kubernetes.io/component"), "catalog-rpc", "catalog-rpc NetworkPolicy selects its pods")
-        rules = pol["spec"]["ingress"]
-        check(len(rules) == 1, "catalog-rpc NetworkPolicy has one ingress rule")
-        expect(rules[0]["ports"], [{"protocol": "TCP", "port": c["ports"][0]["containerPort"]}], "catalog-rpc NetworkPolicy port = http.addr")
-        peers = rules[0].get("from")
-        extra = values["networkPolicy"].get("catalogRpc", {}).get("ingressFrom", [])
-        check(peers is not None and len(peers) == 1 + len(extra), "catalog-rpc NetworkPolicy peers = rpc + networkPolicy.catalogRpc.ingressFrom (never empty: empty would mean any source)")
-        sel = peers[0]["podSelector"]["matchLabels"]
-        expect(sel.get("app.kubernetes.io/component"), "rpc", "catalog-rpc NetworkPolicy admits the rpc pods")
-        expect(sel.get("app.kubernetes.io/instance"), dep["metadata"]["labels"]["app.kubernetes.io/instance"], "...of this release only")
-
-
-def cr_secret_name(values, docs):
-    ex = values["secrets"]["catalogRpc"].get("existingSecret")
-    if ex:
-        return ex
-    sec = find(docs, "Secret", "-catalog-rpc-env")
-    return sec["metadata"]["name"] if sec else None
 
 
 def load_values(profile: str) -> dict:
@@ -377,12 +209,6 @@ def one(docs, kind, suffix):
 def find(docs, kind, suffix):
     for (k, name), d in docs.items():
         if k != kind or not name.endswith(suffix):
-            continue
-        # "-rpc" is the rpc's, not the catalog-rpc's; the shared ConfigMap ("" suffix) and
-        # Secret are the release's, not catalog-rpc's own.
-        if suffix != "-catalog-rpc" and name.endswith("-catalog-rpc"):
-            continue
-        if suffix in ("", "-env") and "-catalog-rpc" in name:
             continue
         return d
     return None

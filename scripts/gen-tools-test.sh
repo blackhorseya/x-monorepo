@@ -105,8 +105,8 @@ for d in pkgs/*/contract; do
   cp -R "$d" "$base/$d" || exit 1
 done
 # sentinels: generated files made stale on purpose
-SENT_GO=pkgs/catalog/contract/v1/service.pb.go
-SENT_OA1=pkgs/catalog/contract/v1/openapi.yaml
+SENT_GO=pkgs/identity/contract/v1/service.pb.go
+SENT_OA1=pkgs/identity/contract/v1/openapi.yaml
 SENT_OA2=pkgs/platform/contract/admin/v1/openapi.yaml
 for s in $SENT_GO $SENT_OA1 $SENT_OA2; do
   [ -f "$base/$s" ] || { echo "gen-tools-test: sentinel $s is not in the repo" >&2; exit 1; }

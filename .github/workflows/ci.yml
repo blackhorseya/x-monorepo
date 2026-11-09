@@ -157,7 +157,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
       - run: task build
-      # which config file each `task` entry hands its binary: CONFIG / CATALOG_CONFIG must beat a parent APP_CONFIG (#414)
+      # which config file each `task` entry hands its binary: CONFIG must beat a parent APP_CONFIG (#414)
       - run: scripts/task-config-test.sh
 
   # ── helm: the chart renders under every ci/ profile and its derived numbers hold ──
@@ -213,7 +213,7 @@ jobs:
   # paths (pkgs/platform/server + config, pkgs/identity, apps/rpc, configs, tests/k6), not on every Go change.
   # A static matrix of 3 shards (K6_AUTH_SHARD=i/3: the cells at positions i, i+3, … of
   # `K6_AUTH_LIST=1 tests/k6/auth-matrix.sh`), each leg on its own runner with its own Postgres service,
-  # so no database, worker consumer group, outbox backlog, port or catalog-rpc is shared between shards (#448).
+  # so no database, worker consumer group, outbox backlog, port is shared between shards (#448).
   k6-auth:
     needs: affected
     if: needs.affected.outputs.run_k6_auth == 'true'
@@ -262,13 +262,13 @@ jobs:
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
   # commit (the console one needs node: pnpm build of web/apps/console). task helm-kind is the whole of it on one
   # cluster (what a laptop runs):
-  #   helm-kind          install → smoke → upgrade → smoke, negative.sh, outage.sh (task helm-kind-core)
+  #   helm-kind          install → smoke → upgrade → smoke (task helm-kind-core)
   # It runs on product Go, web, helm and image changes.
   helm-kind:
     needs: affected
     if: needs.affected.outputs.run_helm_kind == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # helm-kind-up ~90 s + install/smoke/upgrade/smoke ~30 s + negative ~40 s + outage ~65 s (run 41920885162); the single job was 30
+    timeout-minutes: 15 # helm-kind-up ~90 s + install/smoke/upgrade/smoke ~30 s (run 41920885162 also had negative ~40 s + outage ~65 s, removed with catalog-rpc in #518; the limit is left as is); the single job was 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup

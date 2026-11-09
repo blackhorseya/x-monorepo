@@ -30,7 +30,7 @@ const consoleURL = process.env.E2E_CONSOLE_URL;
 // Every port derives from E2E_RPC_PORT / E2E_WEB_PORT in one place (e2e/ports.ts), which the cleanup check
 // (e2e/assert-clean.ts) reads too.
 const P = derivePorts();
-const { rpcPort, webPort, authRpcPort, authWebPort, roleRpcPort, roleWebPort, catalogPort, backendWebPort } = P;
+const { rpcPort, webPort, authRpcPort, authWebPort, roleRpcPort, roleWebPort, backendWebPort } = P;
 // The "oidc-backend" pair: a real rpc with auth.oidc on, its own loopback IdP (e2e/oidc-backend/idp.ts).
 // The rpc's issuer is generated from BACKEND_IDP_PORT (e2e/oidc-backend/rpc-server.ts), so the two cannot disagree.
 export const BACKEND_RPC_PORT = P.backendRpcPort;
@@ -53,29 +53,6 @@ const baseEnv = {
   APP_HTTP_DOCS: "false",
   APP_LOG_LEVEL: "warn",
 };
-
-// rpc has no catalog of its own: every rpc below talks to a catalog-rpc of its own (so projects do not
-// share products), over the service key rpc=CATALOG_KEY:admin. Made up for this test; not a credential.
-export const CATALOG_KEY = "e2e-catalog-service-key-0123456789ab";
-const catalogEnv = (rpcServerPort: number) => ({
-  APP_CATALOG_UPSTREAM: `http://127.0.0.1:${catalogPort(rpcServerPort)}`,
-  APP_CATALOG_API_KEY: CATALOG_KEY,
-});
-// The catalog-rpc webServer of one rpc; Postgres when the rpc has it (E2E_DATABASE_URL), else in memory.
-const catalogServer = (rpcServerPort: number, postgresURL?: string) => ({
-  command: `${bin}/catalog-rpc`,
-  url: `http://127.0.0.1:${catalogPort(rpcServerPort)}/api/readyz`,
-  env: {
-    ...baseEnv,
-    APP_HTTP_ADDR: `:${catalogPort(rpcServerPort)}`,
-    APP_AUTH_MODE: "required",
-    APP_AUTH_API_KEYS: `rpc=${CATALOG_KEY}:admin`,
-    ...(postgresURL ? { APP_POSTGRES_URL: postgresURL } : {}),
-  },
-  reuseExistingServer: !process.env.CI,
-  stdout: "ignore" as const,
-  stderr: "pipe" as const,
-});
 
 // What the auth project's server accepts: two API keys (ops has no role, admin
 // has the admin role) and HS256 tokens signed with JWT_SECRET for JWT_ISSUER /
@@ -161,10 +138,6 @@ export default defineConfig({
       : []),
   ],
   webServer: [
-    catalogServer(rpcPort, db),
-    catalogServer(authRpcPort),
-    catalogServer(roleRpcPort),
-    catalogServer(BACKEND_RPC_PORT),
     {
       // APP_CONFIG=/dev/null: defaults only, so postgres.url is exactly what
       // E2E_DATABASE_URL says (viper ignores empty env, so the example config
@@ -174,7 +147,6 @@ export default defineConfig({
       env: {
         ...baseEnv,
         APP_HTTP_ADDR: `:${rpcPort}`,
-        ...catalogEnv(rpcPort),
         ...(db ? { APP_POSTGRES_URL: db } : {}),
       },
       reuseExistingServer: !process.env.CI,
@@ -200,7 +172,6 @@ export default defineConfig({
       env: {
         ...baseEnv,
         APP_HTTP_ADDR: `:${authRpcPort}`,
-        ...catalogEnv(authRpcPort),
         APP_AUTH_MODE: "required",
         APP_AUTH_API_KEYS: `ops=${OPS_KEY},admin=${ADMIN_KEY}:admin`,
         APP_AUTH_JWT_HS256_SECRET: JWT_SECRET,
@@ -224,7 +195,6 @@ export default defineConfig({
       env: {
         ...baseEnv,
         APP_HTTP_ADDR: `:${roleRpcPort}`,
-        ...catalogEnv(roleRpcPort),
         APP_AUTH_MODE: "required",
         APP_AUTH_ADMIN_ROLE: "operator",
         APP_AUTH_API_KEYS: `boss=${OPERATOR_KEY}:operator,legacy=${NOT_OPERATOR_KEY}:admin`,
@@ -252,7 +222,7 @@ export default defineConfig({
       // (hence gracefulShutdown: the default is SIGKILL, which would leave the file behind).
       command: "node --experimental-strip-types e2e/oidc-backend/rpc-server.ts",
       url: `http://127.0.0.1:${BACKEND_RPC_PORT}/api/readyz`,
-      env: { ...baseEnv, ...catalogEnv(BACKEND_RPC_PORT), APP_HTTP_ADDR: `:${BACKEND_RPC_PORT}`, IDP_PORT: String(BACKEND_IDP_PORT), RPC_BIN: `${bin}/rpc` },
+      env: { ...baseEnv, APP_HTTP_ADDR: `:${BACKEND_RPC_PORT}`, IDP_PORT: String(BACKEND_IDP_PORT), RPC_BIN: `${bin}/rpc` },
       gracefulShutdown: { signal: "SIGTERM" as const, timeout: 5_000 },
       reuseExistingServer: !process.env.CI,
       stdout: "ignore",

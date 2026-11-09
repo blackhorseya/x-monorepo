@@ -35,7 +35,6 @@ function service(name: string) {
 type Rpc = Record<string, (req?: unknown) => Promise<any>>;
 export const admin = service("admin") as Rpc;
 export const identity = service("identity") as Rpc;
-export const catalog = service("catalog") as Rpc;
 
 export const isNotFound = (err: unknown): boolean => ConnectError.from(err).code === Code.NotFound;
 export const isUnauthenticated = (err: unknown): boolean => ConnectError.from(err).code === Code.Unauthenticated;

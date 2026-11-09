@@ -18,9 +18,9 @@ test("signed out with OIDC on: every page goes to /login, which offers the IdP",
 test("after signing in you land where you were going; a returnTo to another origin is ignored", async ({ page }) => {
   await stubConfig(page);
   await mockIdp(page);
-  await page.goto("/products");
+  await page.goto("/poison");
   await signIn(page);
-  await expect(page).toHaveURL(/\/products$/);
+  await expect(page).toHaveURL(/\/poison$/);
 
   const other = await page.context().newPage();
   await stubConfig(other);

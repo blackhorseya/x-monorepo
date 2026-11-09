@@ -180,7 +180,7 @@ describe("a port nobody holds is not reported as listening", () => {
     return ({ port, host: h }) => (n++ === 0 ? createConnection({ port, host: h, localPort: port, localAddress: h }) : createConnection({ port, host: h }));
   };
   // A destroyed self-connected socket keeps its port in TIME_WAIT, so every real self-connect needs a port of its own.
-  const [controlPort, oncePort] = [p.all[5]!, p.all[6]!];
+  const [controlPort, oncePort] = [p.all[0]!, p.all[2]!];
   // The kernel's answer, as the probe sees it, when it connects the socket to itself: connect, from the port to the same port.
   const selfConnectFake: Connect = ({ port, host: h }) => {
     const s = Object.assign(new EventEmitter(), { destroy: () => s, localPort: port, remotePort: port, localAddress: h, remoteAddress: h });
@@ -283,7 +283,7 @@ describe("starting and stopping vite preview is bounded", () => {
   };
 
   it("stopVite: a port that accepts TCP and never answers does not hang the release; the checker still sees it", async () => {
-    const port = p.all[7]!;
+    const port = p.all[3]!;
     const stop = await hangingListener(port);
     try {
       const vite = spawnTracked(idle);
@@ -298,16 +298,16 @@ describe("starting and stopping vite preview is bounded", () => {
   });
 
   it("startVite: a child that never answers is killed and reaped before the error is thrown", async () => {
-    await within(6_000, "startVite", assert.rejects(startVite(p.all[8]!, { command: idle, readyMs: 400 }), /did not come up/));
+    await within(6_000, "startVite", assert.rejects(startVite(p.all[4]!, { command: idle, readyMs: 400 }), /did not come up/));
     const vite = lastSpawned()!;
     assert.equal(vite.ended?.kind, "exit", "the child was not reaped");
     assert.ok(!groupAlive(vite), "the child group is still alive");
   });
 
   it("startVite: a port that accepts TCP and never answers HTTP does not hang the start", async () => {
-    const stop = await hangingListener(p.all[9]!);
+    const stop = await hangingListener(p.all[5]!);
     try {
-      await within(6_000, "startVite", assert.rejects(startVite(p.all[9]!, { command: idle, readyMs: 400 }), /did not come up/));
+      await within(6_000, "startVite", assert.rejects(startVite(p.all[5]!, { command: idle, readyMs: 400 }), /did not come up/));
       assert.ok(!groupAlive(lastSpawned()!), "the child group is still alive");
     } finally {
       await stop();
@@ -315,7 +315,7 @@ describe("starting and stopping vite preview is bounded", () => {
   });
 
   it("startVite: a command that does not exist rejects with the spawn error inside readyMs, leaving no child and no port", async () => {
-    const port = p.all[10]!;
+    const port = p.all[7]!;
     const t0 = Date.now();
     await within(3_000, "startVite", assert.rejects(startVite(port, { command: ["/nonexistent/x-monorepo-no-such-command"], readyMs: 400, reapMs: 200 }), /spawn failed: .*ENOENT/));
     assert.ok(Date.now() - t0 < 400 + 1_000, `took ${Date.now() - t0}ms`);
@@ -330,7 +330,7 @@ describe("starting and stopping vite preview is bounded", () => {
     const vite = spawnTracked(child.command);
     await untilReady(child.marker, 10_000);
     const t0 = Date.now();
-    await within(4_000, "stopVite", stopVite(vite, p.all[11]!, { graceMs: 400, reapMs: 2_000, closeMs: 200 }));
+    await within(4_000, "stopVite", stopVite(vite, p.all[8]!, { graceMs: 400, reapMs: 2_000, closeMs: 200 }));
     assert.ok(Date.now() - t0 >= 400, "SIGKILL came before the grace period ended: the child was not ignoring SIGTERM");
     assert.deepEqual(vite.ended, { kind: "exit", code: null, signal: "SIGKILL" });
     assert.ok(!groupAlive(vite));
@@ -352,7 +352,7 @@ describe("starting and stopping vite preview is bounded", () => {
     // the same group, but its end is never reported (a real child always reports it after SIGKILL)
     const silent = __testing.neverEnds(spawnTracked(idle));
     const t0 = Date.now();
-    await within(3_000, "stopVite", stopVite(silent, p.all[12]!, { graceMs: 200, reapMs: 200, closeMs: 200 }));
+    await within(3_000, "stopVite", stopVite(silent, p.all[9]!, { graceMs: 200, reapMs: 200, closeMs: 200 }));
     assert.ok(Date.now() - t0 >= 400, "the two waits were skipped, not bounded");
   });
 

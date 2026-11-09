@@ -23,17 +23,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	catalogpg "github.com/blackhorseya/x-monorepo/pkgs/catalog/infra/postgres"
 	identitypg "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
-// migrations lists every BC, in dependency order: identity and catalog stand alone.
+// migrations lists every BC, in dependency order: identity stands alone.
 var migrations = []postgres.Migration{
 	identitypg.Migration(),
-	catalogpg.Migration(),
 }
 
 func main() {

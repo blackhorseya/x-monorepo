@@ -5,12 +5,12 @@ import type { Page, Route } from "@playwright/test";
 // on untouched, and the handlers hand it to the next one (route.fallback), so several of these on
 // one page, and a spec's own page.route, compose. Counters are per call.
 //
-// method  the RPC's name, the last segment of the URL ("ListAccounts", "QuotePrices"); matched exactly.
+// method  the RPC's name, the last segment of the URL ("ListAccounts", "CreateAccount"); matched exactly.
 // key     which callers: omitted = any; a string = calls sent with that X-API-Key; null = calls sent
 //         with no X-API-Key (the anonymous ones: the console's first requests before a credential is set).
 // bodyIncludes  omitted = any body; a string = only calls whose request body contains it (substring, case
-//         sensitive). For a page that sends the same RPC about something else first: a page may ask its
-//         default SKU before the one a test types, and a fault meant for the typed SKU must not be spent on that.
+//         sensitive). For a page that sends the same RPC about something else first: the admin probe
+//         asks ListAccounts (pageSize 1) before the list page asks for its 20, and a fault meant for the list must not be spent on that.
 export type Target = { method: string; key?: string | null; bodyIncludes?: string };
 
 function matches({ method, key, bodyIncludes }: Target) {
@@ -144,8 +144,8 @@ export async function scriptByKey(page: Page, rpc: string, plan: Record<string, 
 
 // ---- watchRequests: what the browser SENT --------------------------------------------------------
 //
-//   const sent = watchRequests(page, "catalog.v1.CatalogService/QuotePrices");   // before page.goto
-//   sent.sent("OPS", "SW-SKU")   // calls sent with X-API-Key OPS whose body contains "SW-SKU"
+//   const sent = watchRequests(page, "identity.v1.IdentityService/ListAccounts");   // before page.goto
+//   sent.sent("OPS", "pageSize")   // calls sent with X-API-Key OPS whose body contains "pageSize"
 //
 // Counts every call the browser sent to `rpc` (exact, as scriptByKey), parked by a hold, failed by
 // failRequests or answered: it is the browser's own "request" event. key "" = no X-API-Key; `text`

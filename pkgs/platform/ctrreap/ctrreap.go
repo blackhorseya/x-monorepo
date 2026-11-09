@@ -14,7 +14,7 @@
 //	SIGINT / SIGTERM, test binary ending through Main   layer 1, OnSignal: terminated at once, exit 128+signal
 //	SIGINT / SIGTERM, a package with its own TestMain   layer 2 only: such a package's tests send SIGTERM to their own
 //	                                                    process (graceful-shutdown tests), which a handler would turn
-//	                                                    into a container kill and exit 143 mid-test. apps/catalog-rpc
+//	                                                    into a container kill and exit 143 mid-test. apps/worker
 //	                                                    (pgtest.Terminate by hand)
 //	go test -timeout, a panic, SIGKILL                  layer 2, ReapBeforeStart: the next start in ANY process removes it
 //	a signal while the container is still starting      layer 2 (layer 1 waits for the start up to its grace, then the

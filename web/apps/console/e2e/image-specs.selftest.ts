@@ -10,7 +10,7 @@ import { checkSpecClasses, imageSpecs, previewOnlySpecs } from "./image-specs.ts
 // The gate (e2e/image-specs.check.ts) must go red on each way the split can rot, and stay green on the real one:
 // a gate that cannot fail is worth nothing (and "green because both sides are empty" is how that happens).
 //   node --test --experimental-strip-types e2e/image-specs.selftest.ts      (task web-e2e-image runs it first)
-const PINNED = ["image.spec.ts", "version.spec.ts", "products.spec.ts"];
+const PINNED = ["image.spec.ts", "version.spec.ts", "account-loop.spec.ts"];
 const all = [...imageSpecs, ...previewOnlySpecs].sort();
 const lists = { image: imageSpecs, previewOnly: previewOnlySpecs };
 const listed = { chromium: all, image: [...imageSpecs] };
@@ -24,8 +24,8 @@ describe("image-specs gate", () => {
     assert.deepEqual(p.map((x) => x.split(":")[0]), ["refund.spec.ts"]);
   });
   it("a spec in both lists is red", () => {
-    const p = checkSpecClasses(listed, { image: imageSpecs, previewOnly: [...previewOnlySpecs, "products.spec.ts"] }, PINNED);
-    assert.ok(p.some((x) => x.startsWith("products.spec.ts: in both")), p.join("\n"));
+    const p = checkSpecClasses(listed, { image: imageSpecs, previewOnly: [...previewOnlySpecs, "account-loop.spec.ts"] }, PINNED);
+    assert.ok(p.some((x) => x.startsWith("account-loop.spec.ts: in both")), p.join("\n"));
   });
   it("one more spec marked for the image (a preview-only one moved over) is red", () => {
     const moved = previewOnlySpecs[0];
@@ -38,11 +38,11 @@ describe("image-specs gate", () => {
   });
   it("one image spec left out of the image project is red", () => {
     const p = checkSpecClasses(
-      { chromium: all, image: imageSpecs.filter((f) => f !== "products.spec.ts") },
-      { image: imageSpecs.filter((f) => f !== "products.spec.ts"), previewOnly: previewOnlySpecs },
+      { chromium: all, image: imageSpecs.filter((f) => f !== "account-loop.spec.ts") },
+      { image: imageSpecs.filter((f) => f !== "account-loop.spec.ts"), previewOnly: previewOnlySpecs },
       PINNED
     );
-    assert.ok(p.some((x) => x.startsWith("products.spec.ts")), p.join("\n"));
+    assert.ok(p.some((x) => x.startsWith("account-loop.spec.ts")), p.join("\n"));
   });
   it("a listed file that no longer exists is red", () => {
     const p = checkSpecClasses({ ...listed, chromium: all.filter((f) => f !== "admin.spec.ts") }, lists, PINNED);
@@ -105,6 +105,6 @@ describe("image-specs gate: the external command", () => {
     assert.notEqual(runGate(listing({ chromium: [], image: [] }), 0).status, 0);
   });
   it("a listing that reports errors (a spec that does not load) is red even with exit 0", () => {
-    assert.notEqual(runGate(listing({ errors: [{ message: "SyntaxError in e2e/products.spec.ts" }] }), 0).status, 0);
+    assert.notEqual(runGate(listing({ errors: [{ message: "SyntaxError in e2e/account-loop.spec.ts" }] }), 0).status, 0);
   });
 });

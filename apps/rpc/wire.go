@@ -5,7 +5,6 @@ package main
 import (
 	"github.com/google/wire"
 
-	"github.com/blackhorseya/x-monorepo/pkgs/catalog"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
 	identityauth "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -19,7 +18,7 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	wire.Build(
-		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Auth", "Log", "Postgres", "OTel", "Catalog"),
+		wire.FieldsOf(new(*config.AppConfig), "HTTP", "Auth", "Log", "Postgres", "OTel"),
 		postgres.NewDB,
 		server.New,
 		otel.ProviderSet,
@@ -31,9 +30,6 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewOIDCAuth,
 		TraceOptions,
 		identity.ProviderSet,
-		// The catalog is its own process (apps/catalog-rpc): rpc asks it over Connect with its service key,
-		// and the Forwarder serves catalog.v1 here on top of that client.
-		catalog.ClientProviderSet,
 		// The auth interceptor asks identity for keys the config does not know.
 		wire.Bind(new(server.CredentialResolver), new(*identityauth.Resolver)),
 		// ...and for the people behind an OIDC token (auth.oidc).

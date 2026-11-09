@@ -79,7 +79,7 @@ func WithHTTPRoute(method, path string, h http.Handler) Option {
 // TrustRemoteTrace makes the server continue the trace named by an incoming
 // traceparent: the RPC's server span is a child of the caller's span and shares
 // its trace_id. Only a service whose callers are all trusted may say this
-// (catalog-rpc: reachable from rpc alone, by NetworkPolicy and a service key),
+// (a service reachable from one known caller alone, by NetworkPolicy and a service key),
 // because the caller then picks the trace_id of everything logged and traced
 // under that request. The default, and what a service facing outside callers
 // must keep, is DistrustRemoteTrace.

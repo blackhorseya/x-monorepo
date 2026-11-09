@@ -28,7 +28,6 @@ import { OK, server } from "./testing/client.stub.ts";
 // Arguments for each exported query factory; null = the export is the options object itself.
 const CASES: Record<string, unknown[] | null> = {
   versionQuery: null,
-  productsQuery: ["SKU-"],
   poisonQuery: null,
   poisonDetailQuery: ["schema", 1n],
   adminProbeQuery: [0],

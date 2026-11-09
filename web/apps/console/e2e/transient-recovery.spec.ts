@@ -41,16 +41,17 @@ test("(a2) the first ListAccounts resets the connection: the Accounts list recov
 
 // (c) and (d) are guards, green before the fix too: the console never retried an answer or a mutation, and the
 // fix must not start to.
-test("(c) PermissionDenied is an answer: not retried, the alert stays, ListProducts is asked once", async ({ page }) => {
+test("(c) PermissionDenied is an answer: not retried, the alert stays, the list is asked once", async ({ page }) => {
   test.setTimeout(60_000);
-  const list = await failRequests(page, { method: "ListProducts", mode: "permission_denied", times: Infinity });
+  // the list page asks for 20 rows; the admin probe (pageSize 1) is another call and answers "not admin", which is no alert
+  const list = await failRequests(page, { method: "ListAccounts", bodyIncludes: '"pageSize":20', mode: "permission_denied", times: Infinity });
 
-  await page.goto("/products");
+  await page.goto("/accounts");
   await expect(page.getByRole("alert")).toContainText("PermissionDenied", { timeout: RECOVERY_MS });
   // Past the whole retry budget (3.5s): nothing asks again.
   await page.waitForTimeout(8_000);
   await expect(page.getByRole("alert")).toContainText("PermissionDenied");
-  expect(list.matched(), "ListProducts requests").toBe(1);
+  expect(list.matched(), "ListAccounts (page) requests").toBe(1);
 });
 
 test("(d) a CreateAccount that fails is not sent again by the console", async ({ page }) => {

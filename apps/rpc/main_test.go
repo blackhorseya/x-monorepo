@@ -24,7 +24,7 @@ import (
 // End-to-end through the wired graph: proto client → rpc adapter → decorated
 // usecase → domain → infra.
 func TestPlatform_E2E(t *testing.T) {
-	srv, cleanup, err := initialize(t, &config.AppConfig{
+	srv, cleanup, err := Initialize(&config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 	})
@@ -136,7 +136,7 @@ func TestPlatform_E2E(t *testing.T) {
 // gRPC needs HTTP/2 and gRPC-Web is a distinct wire format; both must survive the
 // router (gin wildcard routes + h2c) exactly like the Connect protocol does.
 func TestPlatform_Protocols(t *testing.T) {
-	srv, cleanup, err := initialize(t, &config.AppConfig{
+	srv, cleanup, err := Initialize(&config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 	})
@@ -220,7 +220,7 @@ func TestDocs(t *testing.T) {
 	}
 	newServer := func(t *testing.T, docs bool) http.Handler {
 		t.Helper()
-		srv, cleanup, err := initialize(t, &config.AppConfig{
+		srv, cleanup, err := Initialize(&config.AppConfig{
 			HTTP: config.HTTP{Addr: ":0", Docs: docs},
 			Log:  config.Log{Level: "error", Format: "text"},
 		})
@@ -235,7 +235,6 @@ func TestDocs(t *testing.T) {
 	for _, path := range []string{
 		server.DocsPath,
 		server.DocsPath + "/identity", server.OpenAPIPath + "/identity.yaml",
-		server.DocsPath + "/catalog", server.OpenAPIPath + "/catalog.yaml",
 	} {
 		if code, _ := get(t, on, path); code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, code)
@@ -254,5 +253,24 @@ func TestDocs(t *testing.T) {
 	}
 	if code, _ := get(t, off, server.OpenAPIPath+"/identity.yaml"); code != http.StatusNotFound {
 		t.Fatalf("disabled openapi = %d, want 404", code)
+	}
+}
+
+func TestParseArgs(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args []string
+		bad  bool
+	}{
+		"no args":         {nil, false},
+		"--version":       {[]string{"--version"}, false},
+		"-v":              {[]string{"-v"}, false},
+		"an unknown flag": {[]string{"--wait-catalog"}, true},
+		"a stray arg":     {[]string{"--version", "extra"}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := parseArgs(tc.args); (err != nil) != tc.bad {
+				t.Fatalf("parseArgs(%v) = %v, want error: %v", tc.args, err, tc.bad)
+			}
+		})
 	}
 }

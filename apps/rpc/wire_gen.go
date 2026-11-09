@@ -7,8 +7,6 @@
 package main
 
 import (
-	"github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/client"
-	rpc2 "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
@@ -90,16 +88,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		ExternalIdentity:      externalIdentitySource,
 	}
 	identityService := rpc.NewIdentityService(useCases, configAuth)
-	catalog := cfg.Catalog
-	clientClient, err := client.New(catalog, providers)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	forwarder := rpc2.NewForwarder(clientClient, configAuth)
 	poisonService := NewPoisonService(db, configAuth)
-	v15 := NewRoutes(identityService, forwarder, poisonService)
+	v15 := NewRoutes(identityService, poisonService)
 	v16 := NewDocs()
 	readiness := NewReadiness(db)
 	v17 := identity.ProvideResolveAPIKey(repository, apikeyRepository, clock, recorder)

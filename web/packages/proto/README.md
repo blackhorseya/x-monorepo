@@ -12,10 +12,10 @@ Usage (see `web/apps/console/src/client.ts` for the real thing):
 ```ts
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { CatalogService } from "@repo/proto/catalog/v1/service_pb";
+import { IdentityService } from "@repo/proto/identity/v1/service_pb";
 
-const client = createClient(CatalogService, createConnectTransport({ baseUrl: window.location.origin }));
-const { products } = await client.listProducts({ pageSize: 20 });
+const client = createClient(IdentityService, createConnectTransport({ baseUrl: window.location.origin }));
+const { accounts } = await client.listAccounts({ pageSize: 20 });
 ```
 
 `src/gen/` is committed so the frontend builds without buf installed. `exports` maps
