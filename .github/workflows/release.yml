@@ -167,9 +167,9 @@ jobs:
           GORELEASER_CURRENT_TAG: ${{ needs.prepare.outputs.tag }}
       # Before anything is attested or published: checksums.txt's bundle exists, is not empty, and
       # verifies. goreleaser v2 only warns when a `signs` output file is missing and never looks at
-      # its size, and `cmd: cosign` exits 0 on a bad run too; this step replaces the empty-bundle
-      # fail-closed check of the removed scripts/cosign-sign-blob.sh (#535) and verifies the
-      # signature as well. A red step here stops `publish` (needs: build). The identity is this
+      # its size, so a cosign that exits 0 without writing a usable bundle would go on to publish; this
+      # step replaces the empty-bundle fail-closed check of the removed re-sign wrapper (#535) and
+      # verifies the signature as well. A red step here stops `publish` (needs: build). The identity is this
       # workflow's own workflow_ref, the same value the certificate was issued for (sign-dry-run.yml
       # verifies the same way).
       - name: checksums.txt's bundle is non-empty and verifies, before publish
