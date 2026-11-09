@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.2.5",
+    "@bufbuild/protobuf": "^2.17.0",
     "@connectrpc/connect": "^2.3.0"
   },
   "devDependencies": {
