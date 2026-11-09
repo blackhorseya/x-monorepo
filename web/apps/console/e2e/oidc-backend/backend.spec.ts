@@ -41,17 +41,30 @@ async function signIn(page: Page) {
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
-async function invitedUser(request: APIRequestContext) {
+// roles: what the bound account may do (the rpc maps a bound identity to its account's roles).
+async function invitedUser(request: APIRequestContext, roles: string[] = []) {
   const id = uid();
   const email = `e2e-${id}@example.com`;
-  const { account } = await admin(request, "CreateAccount", { name: `e2e-oidc-${id}`, roles: [] });
+  const { account } = await admin(request, "CreateAccount", { name: `e2e-oidc-${id}`, roles });
   await admin(request, "CreateInvite", { accountId: account.id, email });
   idp.user = await setUser(request, { sub: `sub-${id}`, email, emailVerified: true });
   return { accountId: account.id as string, email };
 }
 
+// An admin page opened as the bound account. The positive signal comes first: the rpc answered ListAccounts
+// 200, which only an account holding the admin role gets. Only then is "no alert" a statement about the
+// bound identity rather than about a probe that has not come back yet.
+async function openAccountsAsBound(page: Page) {
+  const listed = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts"));
+  await page.goto("/accounts");
+  expect((await listed).status()).toBe(200);
+  await expect(page.getByRole("button", { name: "Create account" })).toBeVisible();
+  await expect(page.getByText("Not authenticated")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+}
+
 test("an OIDC token the server verified, for an identity with no account, gets the claim flow; claiming binds it and opens the console @ports", async ({ page, request }) => {
-  await invitedUser(request);
+  await invitedUser(request, ["admin"]);
   const authorized: string[] = [];
   page.on("request", (r) => r.url().includes("/api/") && r.headers()["authorization"] && authorized.push(r.headers()["authorization"]));
 
@@ -64,9 +77,7 @@ test("an OIDC token the server verified, for an identity with no account, gets t
   await expect(page.getByRole("heading", { name: "Link your account" })).toHaveCount(0);
   await expect(subject(page)).toHaveText(/^jwt · /);
   // The console's own calls now succeed as the bound account (the subject is the account id, not the token's sub).
-  await page.goto("/accounts");
-  await expect(page.getByText("Not authenticated")).toHaveCount(0);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await openAccountsAsBound(page);
 });
 
 // The rpc trusts exactly one issuer, the one generated from the same port as the IdP (rpc-server.ts). A token
@@ -117,7 +128,7 @@ test("a token with an unverified email cannot claim: refused with invite.email_u
 
 test("RevokeSessions: the server refuses the old access token (within the 30 s resolver cache); a fresh sign-in from the IdP still works", async ({ page, request }) => {
   test.setTimeout(120_000); // waits out the resolver's 30 s principal cache
-  const { accountId } = await invitedUser(request);
+  const { accountId } = await invitedUser(request, ["admin"]);
   let bearer = "";
   page.on("request", (r) => {
     const a = r.headers()["authorization"];
@@ -141,9 +152,7 @@ test("RevokeSessions: the server refuses the old access token (within the 30 s r
   await page.waitForTimeout(1100);
   await page.reload();
   await expect(subject(page)).toHaveText(/^jwt · /);
-  await page.goto("/accounts");
-  await expect(page.getByText("Not authenticated")).toHaveCount(0);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await openAccountsAsBound(page);
 });
 
 // Bindings card: after a real claim an admin sees the bound identity and the CLAIMED invite (no stubs on the admin side).
