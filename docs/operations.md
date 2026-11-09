@@ -186,7 +186,7 @@ CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/plat
 DROP SCHEMA catalog CASCADE;
 ```
 
-- **回滾界線**：回滾到 0.3.72 或更早的 chart 需要 catalog-rpc 與 `catalog` schema；若已 `DROP SCHEMA catalog`，舊版 rpc 起不來。所以清除 schema 之前，先確認不需要回滾。
+- **回滾界線**：回滾到 0.3.72 或更早的 chart 需要 catalog-rpc 與 `catalog` schema。若已 `DROP SCHEMA catalog`，舊版 catalog-rpc 與 rpc **仍然起得來、readiness 也會是 200**（啟動與 readiness 只 ping Postgres，不查 `catalog.products`），但第一次讀寫 catalog 才會因缺表失敗，舊 rpc 會回 `catalog.unavailable`。所以健康檢查通過不代表回滾成功；要讓 catalog 請求恢復，必須還原 schema 與資料（從 DROP 前的備份）。清除 schema 之前，先確認不需要回滾。
 - **以 Helm 部署時**：`helm upgrade` 到 0.3.73，chart 之前 render 過的 catalog-rpc 資源（Deployment、Service、ConfigMap、`<release>-catalog-rpc-env` Secret、PDB、ServiceMonitor、NetworkPolicy）因為模板移除，由 Helm 刪除。**不是 Helm 管的東西不會被動**，需要手動清理：
   - 自己管的 Secret（`secrets.catalogRpc.existingSecret` 指的那個）。
   - 沒有走這個 chart 部署的 catalog-rpc Deployment（以及它的 Service 等）。
