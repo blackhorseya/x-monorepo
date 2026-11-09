@@ -88,22 +88,24 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		ExternalIdentity:      externalIdentitySource,
 	}
 	identityService := rpc.NewIdentityService(useCases, configAuth)
-	poisonService := NewPoisonService(db, configAuth)
-	v15 := NewRoutes(identityService, poisonService)
-	v16 := NewDocs()
+	identityRPC := identity.ProvideRPC(identityService)
+	v15 := NewMounts(identityRPC)
+	poisonService := NewPoisonService(db, configAuth, v15)
+	v16 := NewRoutes(v15, poisonService)
+	v17 := NewDocs(v15)
 	readiness := NewReadiness(db)
-	v17 := identity.ProvideResolveAPIKey(repository, apikeyRepository, clock, recorder)
-	v18 := identity.ProvideTouchAPIKey(apikeyRepository, clock, configAuth, recorder)
-	resolver, cleanup3, err := identity.ProvideResolver(v17, v18, clock, configAuth, logger, meterProvider)
+	v18 := identity.ProvideResolveAPIKey(repository, apikeyRepository, clock, recorder)
+	v19 := identity.ProvideTouchAPIKey(apikeyRepository, clock, configAuth, recorder)
+	resolver, cleanup3, err := identity.ProvideResolver(v18, v19, clock, configAuth, logger, meterProvider)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	v19 := identity.ProvideResolveExternalIdentity(externalidentityRepository, repository, recorder)
-	v20 := identity.ProvideProvisionExternalIdentity(repository, externalidentityRepository, uuidGenerator, clock, transactor, recorder)
+	v20 := identity.ProvideResolveExternalIdentity(externalidentityRepository, repository, recorder)
+	v21 := identity.ProvideProvisionExternalIdentity(repository, externalidentityRepository, uuidGenerator, clock, transactor, recorder)
 	issuerMapping := identity.ProvideIssuerMapping(configAuth)
-	externalResolver, err := auth.NewExternalResolver(v19, v20, issuerMapping, clock, meterProvider)
+	externalResolver, err := auth.NewExternalResolver(v20, v21, issuerMapping, clock, meterProvider)
 	if err != nil {
 		cleanup3()
 		cleanup2()
@@ -118,8 +120,8 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v21 := TraceOptions()
-	serverServer, err := server.New(http, configAuth, logger, v15, v16, readiness, providers, resolver, oidcAuth, v21...)
+	v22 := TraceOptions()
+	serverServer, err := server.New(http, configAuth, logger, v16, v17, readiness, providers, resolver, oidcAuth, v22...)
 	if err != nil {
 		cleanup4()
 		cleanup3()

@@ -13,7 +13,7 @@ Connect 對外、Wire 組裝、Turborepo 前端（`web/`）。細節以 `README.
 task tools                 # 固定版本工具鏈（buf / wire / golangci-lint / protoc-gen-*）→ ./bin，第一次必跑
 task tidy                  # 每個 module go mod tidy + go work sync
 task gen wire              # protos → pkgs/<bc>/contract（pb + Connect + openapi.yaml）；DI → apps/*/wire_gen.go
-task lint                  # buf lint + go vet + golangci-lint（depguard 強制分層 / BC 邊界）
+task lint                  # buf lint + go vet + golangci-lint（分層 / BC 邊界是 archtest，跑在 `task test`）
 task test                  # go test -race，每個 module
 task gate-fast FILE=a.go   # gofmt + vet + golangci-lint --fast-only + archtest，只跑該檔所屬 module（秒級）
 task gate-local            # gen freshness + buf lint + affected modules 的 go test -race（~1 min）
@@ -34,7 +34,7 @@ task k6-wire               # tests/k6/wire.sh：k6 腳本打一個回壞掉 HTTP
 task k6-smoke              # tests/k6：ratelimit（429 + Retry-After）/ timeout（1ns → 全部 DEADLINE_EXCEEDED）各自起一個 bin/rpc 打 `identity.v1.IdentityService/ListAccounts`；task k6 -- <script> 打現成 server
 task helm-kind             # 真裝，本機全套：同一個 cluster 上跑 `helm-kind-core`（CI 的 `helm-kind` job 跑的就是它）；helm-kind-up 只跑一次；helm-kind-down 刪 cluster
 task helm-kind-core        # kind cluster + deployments/helm/kind（拋棄式 Postgres / Redis）+ tree build 的 image（含 console：web-build → web/apps/console/Dockerfile），install → smoke → upgrade → smoke；CI 的 `helm-kind` job
-task helm-kind-keda        # 在 helm-kind-up 的 cluster 上（與其他 helm-kind task 互相獨立）：KEDA + OTLP collector + Prometheus，驗 ScaledObject 能 render、被 KEDA 接受且 `--wait` 成功；「依 consumer lag 實際擴縮 worker」暫時沒有載具（沒有 BC 發 event），待切片 3
+task helm-kind-keda        # 在 helm-kind-up 的 cluster 上（與其他 helm-kind task 互相獨立）：KEDA + OTLP collector + Prometheus，驗 ScaledObject 能 render、被 KEDA 接受且 `--wait` 成功；「依 consumer lag 實際擴縮 worker」暫時沒有載具（沒有 BC 發 event；#518「已知缺口」未定案）
 task helm-kind-down        # 刪 cluster。kind task（helm-kind-up／helm-kind／helm-kind-core／helm-kind-keda／helm-kind-down）的目標在命令列指定：`CLUSTER=<名字>`（預設 x-monorepo）、`NS=<namespace>`（預設 x-monorepo）、`KEDA_NS=<namespace>`（預設 keda）；只設在 OS 環境不算（這三個是檔案層級的常數，環境蓋不過它），名字只收小寫字母、數字、`.`、`-`。**kubectl／helm／kind 一律不吃你的 current-context 或 `KUBECONFIG`**（這台機器的 `~/.kube/config` 預設可能指向正式環境）。保證來自隔離的環境，不是來自某個 gate 讀對了字：所有 kubectl／helm／kind 指令與 `kind/*.sh` 都經 `deployments/helm/kind/run.sh "<bin/kind/kubeconfig-CLUSTER>" <指令…>`（Taskfile 的 `{{.KIND_RUN}}`）。runner 做的事：`env -i` 清掉 caller 的環境、只放行具名的 env（沒有任何 KUBECONFIG 等價物；容器引擎的 `DOCKER_*`／`CONTAINER_*`／`XDG_*`、proxy、`KIND_EXPERIMENTAL_*`、幾個腳本旋鈕）；HOME 換成空的臨時目錄（沒有 `~/.kube`，結束就刪）；`KUBECONFIG`／`KIND_KUBECONFIG` 設成該 cluster 專屬的檔（`helm-kind-cluster` 用 `kind get kubeconfig --name <CLUSTER>` 寫出，只含那一個 cluster）；PATH 是 `deployments/helm/kind/shim` 加上各工具所在目錄；helm 的 config／cache／data 放在 `bin/kind/helm-<CLUSTER>/`（`helm repo add` 才跨指令留得住）；`BASH_ENV=lock.sh` 讓 `KUBECONFIG KIND_KUBECONFIG PATH HOME` 在 runner 底下每一層 bash 都是 readonly，腳本寫 `unset KUBECONFIG`、`read -r KUBECONFIG PATH <<<…`、`export HOME=…` 都被 shell 擋下（"readonly variable"），值不變。第二層：Taskfile 的 kubectl／helm／`kind create|delete|export` 仍各自帶 `--kubeconfig "{{.KIND_KUBECONFIG}}"`，shim 對腳本裡走 PATH 的 kubectl／helm 補同一個 flag。**直接手動跑 `kind/*.sh` 會被拒絕**（exit 2，指向 task 入口）：每支腳本開頭檢查 runner 留在臨時 HOME 的 `.kind-runner` 標記，且 `KIND_RUNNER_HOME` 等於 `$HOME`（#444）。要用另一個 cluster：`task helm-kind CLUSTER=probe NS=probe`。
 
 **驗證**：只有 `run.sh` 的入口檢查（#435 之後把三層驗證縮成這一個）。每個經 `{{.KIND_RUN}}` 的 kubectl／helm／`kind/*.sh` 在動手前，若 `bin/kind/kubeconfig-<名字>` 已存在，就要求它與 `kind get kubeconfig --name <名字>` 現在回的內容一致（cluster 的 server 位址與 context 名稱）；不一致、讀不出來、或 kind 沒有那個 cluster，就印出原因並 exit 1（fail closed）。context 名稱可以任意取，所以比的是 server 位址，不是名稱。檔案還不存在時放行（kubectl 自己會失敗）；`kind` 子命令不檢查（它們以名稱對容器引擎動作，create／delete 只增減自己在該檔的條目）。不再有靜態掃描 Taskfile 的 gate、`task --dry` 來源矩陣或兩個真 kind cluster 的 CI job；驗證是一次性的：從 `run.sh` 入口對「server 指向別處的 alias kubeconfig」與「與 kind 回報一致的 kubeconfig」各跑一次（結果貼在引入這個檢查的 PR），日後改 `run.sh` 的人照同樣方式重跑。
@@ -94,7 +94,7 @@ CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，
 pkgs/kernel      shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 pkgs/platform    技術共用：contextx、config、server（gin + Connect）、usecasex、otel、postgres、archtest；
                  admin（admin.v1.AdminService：poison 操作 + Prune RPC，與 worker 的 CLI 同一組 eventbus 函式；contract 在 protos/admin，不屬於任何 BC）
-pkgs/<bc>        一個 bounded context = 完整六角形（目前只有 identity，沒有 event；有 event 的版本〔consumer／events adapter／outbox／inbox／poison〕在目前主線沒有範例，切片 3 的示範 BC 會補，完整版在 https://github.com/blackhorseya/x-monorepo-reference）：
+pkgs/<bc>        一個 bounded context = 完整六角形（目前只有 identity，沒有 event；有 event 的版本〔consumer／events adapter／outbox／inbox／poison〕在目前主線沒有範例，完整版在 https://github.com/blackhorseya/x-monorepo-reference）：
                  identity：DB 管理的 account / API key，沒有 event；`adapters/auth` 實作 platform 的 `server.CredentialResolver`，auth interceptor 對 `X-API-Key` 先查 config `auth.api_keys` 再問它（TTL cache 30s）；`auth.oidc.enabled` 時 `Authorization: Bearer` 先交 `platform/oidc` verifier（`iss` 不認識才走 `auth.jwt`，其他失敗終局），驗過的 `(iss, sub)` 經 `adapters/auth.ExternalCredentials` 解成 account 的 principal（`Subject` = account id、roles 取自 account、不看 token claim；停用 / `iat` < `sessions_revoked_at` / DB 錯誤都拒絕且不 cache），未綁定的身分只能呼叫 `ClaimInvite`（其餘 `PERMISSION_DENIED` `auth.unbound_identity`），有 `X-API-Key` 時不看 Bearer——`docs/identity.md`「外部身分綁定」；key 通過驗證會節流、best-effort 地寫 `last_used_at`（`auth.last_used_interval`，預設 1m，寫入失敗不影響驗證）；`DisableAccount` / `AssignRoles` / `RevokeApiKey` 有 last-admin guard：會讓最後一個有效 admin（ACTIVE、有 `auth.admin_role`、至少一把未撤銷未過期 key）失格就回 `identity.last_admin`（`FAILED_PRECONDITION`），同一 transaction 內先 `port.AdminCensus.LockAdmins`（Postgres `FOR UPDATE` 鎖 admin 列、再另一條 statement 算 key；memory 靠 Transactor 串行）再載入 aggregate，「現在」也在拿到鎖之後才讀（`LockAdmins` 回傳，等鎖期間過期的 key 不算），config 的 static key 不算——`docs/identity.md`）
   provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() / decorateTx() 包起來
   contract/v1/     buf 生成的 wire format（pb + Connect + openapi.yaml），只有 adapters / apps 可 import
@@ -114,7 +114,7 @@ deployments/helm Helm chart：rpc / worker Deployment、migrate pre-install/pre-
                  從 rpc.shutdown / worker 的 drain 算出來（改 shutdown 行為要一起改 values 註解與 check.py）；CI 的 helm-kind job 在 kind 真裝 + smoke
 ```
 
-**depguard（`.golangci.yml`）強制的 import 方向**：
+**archtest（`pkgs/platform/archtest/imports.go`）強制的 import 方向**，每條規則跑在「被判斷的檔案所在的 module」的 `arch_test.go`（BC 的 `archtest.Run`、`pkgs/platform` 的測試［含 `pkgs/kernel`］、每個 app 的 `archtest.RunImports`）。BC 是 `pkgs/*` 去掉 kernel、platform，不用逐 BC 列規則；新增 app 要自己加 `arch_test.go`，否則沒有 import 規則檢查它。「任何 BC 的 domain / application / infra 不 import 其他 BC 的 contract」目前沒有規則（`bc-isolation` 只擋其他 BC 的 domain / application / infra / adapters），靠 review：
 
 | 套件 | 可以 import | 不可以 |
 |---|---|---|
@@ -174,12 +174,11 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 `application/dto` + `usecase` → `provider.go` 加 `ProvideXxx` 並用 `decorate()`（讀）或 `decorateTx()`（寫）包 → `adapters/rpc` 實作
 （`var _ XxxServiceHandler` 會提醒）→ `task wire`。
 
-**新增 Bounded Context**（照 `pkgs/identity` 抄；有 event 的版本〔consumer／events adapter／outbox／inbox／poison〕在目前主線沒有範例，切片 3 的示範 BC 會補）：`protos/<newbc>/v1/{entity,service}.proto`（有 event 才加 `event.proto`）+ `openapi.base.yaml` 與
+**新增 Bounded Context**（照 `pkgs/identity` 抄；有 event 的版本〔consumer／events adapter／outbox／inbox／poison〕在目前主線沒有範例）：`protos/<newbc>/v1/{entity,service}.proto`（有 event 才加 `event.proto`）+ `openapi.base.yaml` 與
 `buf.gen.yaml` 的 `go_package` override → `pkgs/<newbc>/go.mod`（replace 指向 kernel / platform / 要讀 contract 的 BC）+ `go.work`
-加 `use`（`MODULES` 由它導出，不用另外加）+ `Taskfile.yml` 的 `BCS` + `apps/*/go.mod` 的 require / replace → `task tidy` → `contract/v1/openapi.go` →
-`task gen` → 複製 `pkgs/identity` 結構寫 `provider.go`（有 event 的 BC：`Subscriptions` 自己的 named type）→ `.golangci.yml` 複製 `identity-*` 四個 layer block 並加
-`bc-isolation-<bc>`，並把它加進其他 BC / shared / apps 的 deny（`pkg` 是 prefix match，不能用 `*`）→ `apps/rpc` 的 `NewRoutes` /
-`NewDocs` 加它、`apps/{rpc,worker}/wire.go` 加 `ProviderSet`；有 event 的 BC 另外要把它加進 `NewPoisonService` 的 schema 清單（目前是空的）、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions`、`poison.go` 的 `schemas`（沒有 event 的 BC 如 identity：router / poison 都不加，只有 operator 子命令才進 `apps/worker` 的獨立 injector）→ `task wire` →
+加 `use`（`MODULES`、`BCS` 由它導出，不用另外加）+ `apps/*/go.mod` 的 require / replace → `task tidy` → `contract/v1/openapi.go` →
+`task gen` → 複製 `pkgs/identity` 結構寫 `provider.go`（有 event 的 BC：`Subscriptions` 自己的 named type）→ 照 `pkgs/identity/arch_test.go` 寫 `arch_test.go`（import 規則自動套用，不用改任何既有 BC 的設定）→ `provider.go` 匯出自己的 `RPC` 型別（`server.Mount`）→ `apps/rpc` 的 `NewMounts` 加它（一個參數＋一個元素）、
+`apps/{rpc,worker}/wire.go` 加 `ProviderSet`；有 event 的 BC 另外要讓 `RPC.PoisonSchema` 填它的 schema（`NewPoisonService` 由 mounts 取）、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions`、`poison.go` 的 `schemas`（沒有 event 的 BC 如 identity：router / poison 都不加，只有 operator 子命令才進 `apps/worker` 的獨立 injector）→ `task wire` →
 有 DB 則加 migrations（有 event 的 BC 另含自己 topic 與 poison 的 events 表、`<bc>.inbox` 表）與 `apps/migrate/main.go` 的 `migrations`；有 event 的 BC 另在 `application/port` 加自己的 `Inbox` 與 `provider.go` 的 `ProvideInbox`（每個 BC 自己的型別，wire 才分得開）。
 
 ## Conventions（本 repo 特有）

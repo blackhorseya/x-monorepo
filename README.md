@@ -9,7 +9,7 @@ Connect 對外，Wire 組裝，Turborepo 前端。
 
 ```bash
 task tools                                  # 固定版本的工具鏈 → ./bin
-task rename -- github.com/<you>/<repo>      # 改 module path（go.mod / imports / buf.gen.yaml / depguard）並重新 gen
+task rename -- github.com/<you>/<repo>      # 改 module path（go.mod / imports / buf.gen.yaml）並重新 gen
 git commit -am "chore: rename module path"  # gen-freshness 是跟 HEAD 比，先 commit
 task gate-ci                                # 跟 CI 一樣的檢查，應該全綠
 ```
@@ -30,7 +30,7 @@ task gate-ci                                # 跟 CI 一樣的檢查，應該全
 task tools          # buf / protoc-gen-go / protoc-gen-connect-go / wire / golangci-lint → ./bin
 task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum）
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
-task lint test      # depguard 強制分層與 BC 邊界
+task lint test      # 分層與 BC 邊界由 archtest 強制（`go test`）
 task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）；第一次會把 config.example.yaml 複製成 configs/local.yaml（gitignored）
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
@@ -108,7 +108,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
 | [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
 
-## Dependency rules（`.golangci.yml` depguard 強制）
+## Dependency rules（`pkgs/platform/archtest` 強制）
 
 | 套件 | 可以 import | 不可以 import |
 |---|---|---|
@@ -271,8 +271,8 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 
 | 規則 | 類型 | 擋的工具 |
 |---|---|---|
-| domain 只 import kernel；application 不碰 infra / adapters / contract；infra 不碰 adapters；adapters 不碰 infra | Clean Arch 依賴方向 | **depguard**（`.golangci.yml`，per-BC 列出；`pkg` 是 prefix match，不能用 `*`） |
-| BC 只能從 adapters import 其他 BC 的 `contract/`；kernel / platform 不 import BC；apps 只碰 provider.go | 邊界 | **depguard**（`bc-isolation-<bc>` block） |
+| domain 只 import kernel；application 不碰 infra / adapters / contract；infra 不碰 adapters；adapters 不碰 infra | Clean Arch 依賴方向 | **archtest**（`pkgs/platform/archtest/imports.go`，BC 內的 `arch_test.go` 跑，不逐 BC 列規則） |
+| BC 只能從 adapters import 其他 BC 的 `contract/`；kernel / platform 不 import BC；apps 只碰 provider.go | 邊界 | **archtest**（`bc-isolation` 規則擋其他 BC 的 domain / application / infra / adapters；BC 的 domain / application / infra 讀其他 BC 的 `contract/` 目前沒有規則，靠 review；kernel / platform 與 apps 的規則跑在各自 module 的 `arch_test.go`） |
 | domain struct 欄位 private；無 `Set*`；每個 struct 有 constructor（`*Params` 參數物件除外）；不呼叫 `time.Now()`；不 log | DDD aggregate | **archtest**（`pkgs/platform/archtest`，每個 BC 的 `arch_test.go` 跑） |
 | `*Repository` interface 只能在 domain | DDD | archtest |
 | usecase 只有 `Execute(c, in) (out, error)` 一個公開方法 | 單一職責、可被 decorator 包 | archtest |

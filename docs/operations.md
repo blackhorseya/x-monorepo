@@ -222,7 +222,7 @@ DROP SCHEMA payment CASCADE;
 - **Helm values**：`config.ordering`、`secrets.paymentRpc`、`paymentRpc`、`networkPolicy.paymentRpc`、`expire` 已移除；升級時請從自己的 values 拿掉（留著只是無效鍵）。`APP_ORDERING_*`／`APP_PAYMENT_*` 環境變數不再被讀取。`payment-rpc`、`payment-worker` image 不再發佈（既有 tag 不受影響）。`worker expire`、`task expire` 子命令已移除。
 - **migrate**：`apps/migrate` 的 `migrate version`／`down` 輸出不再包含這三個 schema。
 - **Grafana**：Saga／Payment 面板列與 saga-pending、reservation-expiry、commit-short、payment-* alert 已移除；eventbus／auth／identity 的面板與 alert 保留。
-- **依 consumer lag 擴縮 worker**：目前沒有載具（沒有 BC 發 event）；`helm-kind-keda` 只驗 ScaledObject 能 render、被 KEDA 接受且 `--wait` 成功，待切片 3 的示範 BC。
+- **依 consumer lag 擴縮 worker**：目前沒有載具（沒有 BC 發 event）；`helm-kind-keda` 只驗 ScaledObject 能 render、被 KEDA 接受且 `--wait` 成功；#518「已知缺口」未定案。
 
 `deployments/helm/x-monorepo/` 是這些 image 的 chart，沒有 dependency、不假設 ingress controller 或 secret 工具。它做的事是把
 README 的 server / Events 節講的「部署要配合的行為」寫成算式，而不是讓人手抄：
@@ -308,7 +308,7 @@ helm install api deployments/helm/x-monorepo -n app --create-namespace \
 rpc 的 `/api/readyz` 與 `/api/version`；console 回 `index.html`、`/api/readyz` 經 nginx proxy 到 rpc；Dex 的 discovery `issuer` 是約定的那個字串。本機約 1 分鐘（cluster 已存在時），`task helm-kind-down` 刪 cluster。
 另一條 `task helm-kind-keda`（CI 同一個 job 的另一個 matrix leg，和 `helm-kind` 平行、各自一個 cluster；兩者共用的底座是 `task helm-kind-up`：cluster、image、Postgres / Redis）：裝 KEDA、`kind/monitoring.yaml` 放一個 OTLP collector（gRPC :4317 → Prometheus exporter :8889）
 和一個 5s scrape 的 Prometheus，用 `kind/keda-values.yaml` 重裝 chart（`OTEL_METRIC_EXPORT_INTERVAL=5000`、threshold 50、scaleDown stabilization 30s），
-並 `--wait`：驗 ScaledObject 能 render、被 KEDA 接受且 `--wait` 成功。「依 consumer lag 實際擴縮 worker」暫時沒有載具（沒有 BC 發 event，原本的擴縮實測已移除），等切片 3 的示範 BC。
+並 `--wait`：驗 ScaledObject 能 render、被 KEDA 接受且 `--wait` 成功。「依 consumer lag 實際擴縮 worker」暫時沒有載具（沒有 BC 發 event，原本的擴縮實測已移除；#518「已知缺口」未定案）。
 `appVersion`（image.tag 空時用它）由 release.yml 的 `chart` job 在每次發版後開一支 chart-only PR 跟上（bot push 不會觸發 CI，所以它自己 `gh workflow run ci.yml`；要 repo 開「Allow GitHub Actions to create and approve pull requests」，沒開就只推 branch、summary 給 compare 連結）；chart 本身沒有 publish 到 OCI registry。
 
 ## DB 連線池容量（`postgres.max_open_conns`）

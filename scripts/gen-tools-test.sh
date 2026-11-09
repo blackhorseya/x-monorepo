@@ -98,7 +98,7 @@ fi
 # ── the minimal tree `task gen` / `gen-openapi` read ────────────────────────────────────────────────────────────────
 base="$tmp/base"
 mkdir -p "$base/scripts" || exit 1
-for f in go.work buf.yaml buf.gen.yaml buf.lock scripts/modules.jq; do cp "$f" "$base/$f" || exit 1; done
+for f in go.work buf.yaml buf.gen.yaml buf.lock scripts/modules.jq scripts/bcs.jq; do cp "$f" "$base/$f" || exit 1; done
 cp -R protos "$base/protos" || exit 1
 for d in pkgs/*/contract; do
   mkdir -p "$base/${d%/contract}" || exit 1
