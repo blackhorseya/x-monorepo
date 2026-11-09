@@ -688,6 +688,24 @@ tasks:
     cmds:
       - '{{.COMPOSE}} -f deployments/docker/docker-compose.yaml down -v'
 
+  new-bc:
+    desc: 'task new-bc -- <name> [--events] → scaffold a bounded context (pkgs/, protos/, migration, one entry in each shared file), then gen, tidy, wire; a name must match scripts/bcs.jq'
+    preconditions:
+      - sh: test -n "{{.CLI_ARGS}}"
+        msg: 'usage: task new-bc -- <name> [--events]   (name: ^[a-z][a-z0-9]*$, at most 30 characters, not a Go keyword, not kernel or platform)'
+    cmds:
+      # every check runs before the first write; a failure after that leaves the files it names, undo with `git restore .` and `git clean -fd pkgs/<name> protos/<name>`
+      - go run ./tools/newbc --root {{shellQuote .ROOT_DIR}} {{.CLI_ARGS}}
+      # gen → tidy → wire: tidy before gen fails on the connect package that gen has not written yet
+      - task: gen
+      - scripts/sync-fixpoint.sh # `go work sync` can need more than one round (#475)
+      - task: wire
+
+  new-bc-check:
+    desc: generate a sample BC with and without --events in a COPY of the working tree (git ls-files -co --exclude-standard, so untracked files are included), then lint, build and test it; writes nothing here, does not run postgres repository tests
+    cmds:
+      - scripts/new-bc-check.sh
+
   # ── Modules ─────────────────────────────────────────────────────────────────
 
   rename:

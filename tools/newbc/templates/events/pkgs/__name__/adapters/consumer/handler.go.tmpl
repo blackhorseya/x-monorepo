@@ -1,0 +1,73 @@
+// Package consumer adapts this BC's own integration event to a use case: <% .Title %>Created →
+// Record<% .Title %>Created. It decodes the contract and knows nothing about subscription, ack or retry:
+// that is platform/eventbus (Watermill router) and apps/worker. A BC that consumes another BC's event
+// does the same with that BC's contract/ package (the only one it may import).
+package consumer
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"google.golang.org/protobuf/proto"
+
+	"<% .Module %>/pkgs/kernel"
+	"<% .Module %>/pkgs/platform/contextx"
+	"<% .Module %>/pkgs/platform/eventbus"
+	"<% .Module %>/pkgs/platform/usecasex"
+	"<% .Module %>/pkgs/<% .Name %>/application/dto"
+	<% .Name %>v1 "<% .Module %>/pkgs/<% .Name %>/contract/v1"
+)
+
+// Topic<% .Title %>Created is the topic this BC subscribes to: the proto full name.
+var Topic<% .Title %>Created = string((&<% .Name %>v1.<% .Title %>Created{}).ProtoReflect().Descriptor().FullName())
+
+// ErrDrop tells the router the message is poison or no longer applicable and must be acknowledged
+// without retry (eventbus.ErrDrop).
+var ErrDrop = eventbus.ErrDrop
+
+type Record<% .Title %>CreatedUC = usecasex.UseCase[dto.Record<% .Title %>CreatedInput, *dto.Record<% .Title %>CreatedOutput]
+
+// <% .Title %>CreatedHandler runs Record<% .Title %>Created for every <% .Title %>Created message.
+type <% .Title %>CreatedHandler struct {
+	record Record<% .Title %>CreatedUC
+}
+
+func New<% .Title %>CreatedHandler(record Record<% .Title %>CreatedUC) *<% .Title %>CreatedHandler {
+	return &<% .Title %>CreatedHandler{record: record}
+}
+
+// Handle decodes the payload and runs the use case.
+//
+// Error contract (eventbus):
+//   - nil            → ack
+//   - ErrDrop        → ack and drop (undecodable / permanently invalid)
+//   - any other err  → retry, then poison queue
+func (h *<% .Title %>CreatedHandler) Handle(c context.Context, payload []byte) error {
+	ctx := contextx.FromContext(c)
+
+	var evt <% .Name %>v1.<% .Title %>Created
+	if err := proto.Unmarshal(payload, &evt); err != nil {
+		ctx.Warn("undecodable event", "topic", Topic<% .Title %>Created, "error", err)
+		return fmt.Errorf("%w: %w", ErrDrop, err)
+	}
+
+	if _, err := h.record.Execute(ctx, dto.Record<% .Title %>CreatedInput{ID: evt.GetId()}); err != nil {
+		return final(ctx, Topic<% .Title %>Created, evt.GetId(), err)
+	}
+
+	return nil
+}
+
+// final decides between drop and retry. Domain rejections (kernel.Error, which includes the inbox's
+// usecasex.ErrDuplicateMessage) are final: retrying won't change the answer. Everything else is
+// infrastructure and is retried.
+func final(ctx contextx.Contextx, topic, id string, err error) error {
+	var de *kernel.Error
+	if errors.As(err, &de) {
+		ctx.Info("event rejected by domain", "topic", topic, "id", id, "code", de.Code())
+		return fmt.Errorf("%w: %w", ErrDrop, err)
+	}
+
+	return err
+}

@@ -1,0 +1,141 @@
+// Package <% .Name %> is the <% .Name %> bounded context. ProviderSet is its only export to composition roots
+// (apps/*): RPC, which the set provides, is what apps/rpc mounts<% if .Events %>, and Subscriptions is what apps/worker
+// registers<% end %>.
+package <% .Name %>
+
+import (
+	"github.com/google/wire"
+	"gorm.io/gorm"
+
+<% if .Events %>	"<% .Module %>/pkgs/platform/eventbus"
+	platformpg "<% .Module %>/pkgs/platform/postgres"
+<% end %>	"<% .Module %>/pkgs/platform/server"
+	"<% .Module %>/pkgs/platform/usecasex"
+	"<% .Module %>/pkgs/<% .Name %>/adapters/rpc"<% if .Events %>
+	"<% .Module %>/pkgs/<% .Name %>/adapters/consumer"
+	"<% .Module %>/pkgs/<% .Name %>/adapters/events"<% end %>
+	"<% .Module %>/pkgs/<% .Name %>/application/port"
+	"<% .Module %>/pkgs/<% .Name %>/application/usecase"
+	<% .Name %>v1 "<% .Module %>/pkgs/<% .Name %>/contract/v1"
+	"<% .Module %>/pkgs/<% .Name %>/domain/<% .Name %>"
+	"<% .Module %>/pkgs/<% .Name %>/infra/memory"
+	"<% .Module %>/pkgs/<% .Name %>/infra/postgres"
+	"<% .Module %>/pkgs/<% .Name %>/infra/system"
+)
+
+// Schema is the Postgres schema of this BC (tables, migrations<% if .Events %>, event topics<% end %>).
+const Schema = postgres.Schema
+
+var ProviderSet = wire.NewSet(
+	// infra → ports / repositories
+	ProvideRepository,
+	ProvideTransactor,<% if .Events %>
+	ProvideInbox,
+	events.NewPublisher,
+	wire.Bind(new(port.EventPublisher), new(*events.Publisher)),<% end %>
+	system.NewClock,
+	wire.Bind(new(port.Clock), new(*system.Clock)),
+	system.NewUUIDGenerator,
+	wire.Bind(new(port.IDGenerator), new(*system.UUIDGenerator)),
+
+	// application (decorated; see decorate). *usecasex.Recorder<% if .Events %> and the message.Publisher (outbox)<% end %> are shared
+	// across BCs: apps provide <% if .Events %>them<% else %>it<% end %>.
+	ProvideCreate,
+	ProvideGet,<% if .Events %>
+	ProvideRecordCreated,<% end %>
+
+	// adapters
+	rpc.New<% .Title %>Service,
+	ProvideRPC,<% if .Events %>
+	consumer.New<% .Title %>CreatedHandler,
+	ProvideSubscriptions,<% end %>
+)
+
+// RPC is what apps/rpc mounts for this BC: the <% .Name %> service and its OpenAPI document<% if .Events %>, and the
+// schema whose poison table the admin service serves<% end %>.
+type RPC server.Mount
+
+func ProvideRPC(svc *rpc.<% .Title %>Service) RPC {
+	return RPC{
+		Routes: []server.Route{svc},
+		Docs:   []server.Doc{{Name: "<% .Name %>", Spec: <% .Name %>v1.OpenAPI}},<% if .Events %>
+		PoisonSchema: Schema,<% end %>
+	}
+}
+
+// ProvideRepository picks the persistence backend from the composition root's database handle: nil
+// (APP_POSTGRES_URL unset) means in-memory.
+func ProvideRepository(db *gorm.DB) <% .Name %>.Repository {
+	if db == nil {
+		return memory.New<% .Title %>Repository()
+	}
+
+	return postgres.New<% .Title %>Repository(db)
+}
+
+// ProvideTransactor pairs with the repository: a real transaction on Postgres, a pass-through in memory.
+func ProvideTransactor(db *gorm.DB) port.Transactor {
+	if db == nil {
+		return memory.NewTransactor()
+	}
+
+	return postgres.NewTransactor(db)
+}<% if .Events %>
+
+// ProvideInbox is this BC's consumer inbox (usecasex.Idempotent): the `<schema>.inbox` table on
+// Postgres, none in memory: a nil Inbox makes Idempotent a pass-through, which is right because the
+// in-memory transactor could not roll a record back with a failed attempt, and the in-memory bus is
+// at most once anyway.
+func ProvideInbox(db *gorm.DB) port.Inbox {
+	if db == nil {
+		return nil
+	}
+
+	return platformpg.NewInbox(db, Schema)
+}
+
+// Subscriptions lists what this BC consumes; apps/worker registers them on the router with this BC's
+// poison topic. A named type, so wire can tell each BC's subscriptions apart.
+type Subscriptions []eventbus.Subscription
+
+// ProvideSubscriptions binds each consumed topic to its handler. The handler name is the topic.
+func ProvideSubscriptions(created *consumer.<% .Title %>CreatedHandler) Subscriptions {
+	return Subscriptions{
+		{Topic: consumer.Topic<% .Title %>Created, Handler: created},
+	}
+}<% end %>
+
+// decorate is the one place that decides which cross-cutting decorators every use case of this BC
+// gets (outermost first). Add a decorator here, not per use case. Reads use it as is: a transaction
+// would only add a BEGIN/COMMIT round trip.
+func decorate[I, O any](name string, rec *usecasex.Recorder, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc,
+		usecasex.Metrics[I, O](rec, name),
+		usecasex.Logging[I, O](name),
+	)
+}
+
+// decorateTx is decorate for use cases that write: the use case runs inside one transaction<% if .Events %>, so its
+// repository writes and outbox events commit or roll back together. Inside it, Idempotent records the
+// consumed message id in this BC's inbox (same transaction) and drops a redelivery before any state is
+// touched; on the rpc path there is no message id and it is a pass-through<% else %><% end %>.
+func decorateTx[I, O any](name string, rec *usecasex.Recorder, tx port.Transactor<% if .Events %>, inbox port.Inbox<% end %>, uc usecasex.UseCase[I, O]) usecasex.UseCase[I, O] {
+	return usecasex.Chain(uc,
+		usecasex.Metrics[I, O](rec, name),
+		usecasex.Logging[I, O](name),
+		usecasex.Transactional[I, O](tx),<% if .Events %>
+		usecasex.Idempotent[I, O](inbox),<% end %>
+	)
+}
+
+func ProvideCreate(repo <% .Name %>.Repository, ids port.IDGenerator, clock port.Clock, tx port.Transactor, <% if .Events %>events port.EventPublisher, inbox port.Inbox, <% end %>rec *usecasex.Recorder) rpc.Create<% .Title %>UC {
+	return decorateTx("<% .Name %>.create", rec, tx, <% if .Events %>inbox, <% end %>usecase.NewCreate<% .Title %>(repo, ids, clock<% if .Events %>, events<% end %>))
+}
+
+func ProvideGet(repo <% .Name %>.Repository, rec *usecasex.Recorder) rpc.Get<% .Title %>UC {
+	return decorate("<% .Name %>.get", rec, usecase.NewGet<% .Title %>(repo))
+}<% if .Events %>
+
+func ProvideRecordCreated(tx port.Transactor, inbox port.Inbox, rec *usecasex.Recorder) consumer.Record<% .Title %>CreatedUC {
+	return decorateTx("<% .Name %>.record_created", rec, tx, inbox, usecase.NewRecord<% .Title %>Created())
+}<% end %>

@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package <% .Name %>.v1;
+
+import "buf/validate/validate.proto";
+import "<% .Name %>/v1/entity.proto";
+
+// <% .Title %>Service is the <% .Name %> bounded context's API. Create<% .Title %> requires the admin role when auth is on.
+service <% .Title %>Service {
+  rpc Create<% .Title %>(Create<% .Title %>Request) returns (Create<% .Title %>Response);
+  rpc Get<% .Title %>(Get<% .Title %>Request) returns (Get<% .Title %>Response);
+}
+
+message Create<% .Title %>Request {
+  string name = 1 [(buf.validate.field).string = {min_len: 1, max_len: 200}];
+}
+
+message Create<% .Title %>Response {
+  <% .Title %> <% .Name %> = 1;
+}
+
+message Get<% .Title %>Request {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message Get<% .Title %>Response {
+  <% .Title %> <% .Name %> = 1;
+}

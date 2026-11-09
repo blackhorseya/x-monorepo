@@ -76,6 +76,7 @@ go_prod=false; has_prod '*.go' 'go.work' 'go.work.sum' '*/go.mod' '*/go.sum' '.g
 [ $proto = true ] && go_prod=true
 gomod=false;  has 'go.work' 'go.work.sum' '*/go.mod' '*/go.sum' && gomod=true   # the dependency graph of every binary
 web=false;    has 'web/*' && web=true
+newbc=false;  has 'tools/newbc/*' && newbc=true   # the generator and its templates: gen-freshness runs task new-bc-check
 helm=false;   has 'deployments/helm/*' && helm=true
 # The dashboards and alert rules in deployments/docker/grafana belong to the helm job: a change to them runs that job — and only
 # that: they render nothing the cluster installs.
@@ -104,7 +105,7 @@ scripts_src=false; has '.goreleaser.yaml' 'go.work' 'tests/k6/auth-matrix.sh' 'w
 any() { for v in "$@"; do [ "$v" = true ] && return 0; done; return 1; }
 out() { if any "${@:2}"; then echo "run_$1=true"; else echo "run_$1=false"; fi; }
 
-out gen_freshness    "$go" "$web" "$ci"
+out gen_freshness    "$go" "$web" "$ci" "$newbc"
 out lint             "$go" "$ci"
 out work_sync        "$go" "$ci"
 out coverage         "$go" "$ci"

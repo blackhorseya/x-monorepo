@@ -26,8 +26,14 @@ import (
 
 // NewMounts lists every BC: what each one mounts. This is the one place to add
 // a BC besides wire.go; NewRoutes, NewDocs and NewPoisonService read from it.
-func NewMounts(identity identity.RPC) []server.Mount {
-	return []server.Mount{server.Mount(identity)}
+func NewMounts(
+	identity identity.RPC,
+	// new-bc:mount-param
+) []server.Mount {
+	return []server.Mount{
+		server.Mount(identity),
+		// new-bc:mount-elem
+	}
 }
 
 // NewRoutes lists every mounted service: the BCs' and the platform's admin surface.

@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package <% .Name %>.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Integration events of the <% .Name %> bounded context. The topic of every message is its
+// fully-qualified proto name (e.g. "<% .Name %>.v1.<% .Title %>Created").
+
+// <% .Title %>Created is raised when a <% .Title %> is created.
+message <% .Title %>Created {
+  string id = 1;
+  google.protobuf.Timestamp create_time = 2;
+}

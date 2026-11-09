@@ -13,10 +13,7 @@ import (
 // startup. Five subscribers need 5 x 2 + 1 = 11 connections.
 func TestCheckPool(t *testing.T) {
 	tel := pgtest.Telemetry(t)
-	bcs := []struct {
-		schema string
-		subs   []eventbus.Subscription
-	}{
+	bcs := []Consumer{
 		{"a", make([]eventbus.Subscription, 2)},
 		{"b", make([]eventbus.Subscription, 3)},
 	}

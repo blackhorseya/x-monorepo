@@ -1,0 +1,11 @@
+// Package mapper turns domain aggregates into application DTOs.
+package mapper
+
+import (
+	"<% .Module %>/pkgs/<% .Name %>/application/dto"
+	"<% .Module %>/pkgs/<% .Name %>/domain/<% .Name %>"
+)
+
+func To<% .Title %>Output(x *<% .Name %>.<% .Title %>) *dto.<% .Title %>Output {
+	return &dto.<% .Title %>Output{ID: x.ID().String(), Name: x.Name(), CreateTime: x.CreatedAt()}
+}

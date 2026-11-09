@@ -29,6 +29,7 @@ task gate-ci                                # 跟 CI 一樣的檢查，應該全
 ```bash
 task tools          # buf / protoc-gen-go / protoc-gen-connect-go / wire / golangci-lint → ./bin
 task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum）
+task new-bc -- <name> [--events]   # 新增 BC：產生 pkgs/<name>、protos/<name>、migration 並接進共用檔，再 gen / tidy / wire
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # 分層與 BC 邊界由 archtest 強制（`go test`）
 task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）

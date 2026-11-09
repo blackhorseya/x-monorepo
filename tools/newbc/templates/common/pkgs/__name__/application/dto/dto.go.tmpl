@@ -1,0 +1,28 @@
+// Package dto is the hand-written application boundary of the <% .Name %> use cases: only what they
+// need, not a copy of the wire format.
+package dto
+
+import "time"
+
+// <% .Title %>Output is one <% .Name %> as use cases return it.
+type <% .Title %>Output struct {
+	ID         string
+	Name       string
+	CreateTime time.Time
+}
+
+type Create<% .Title %>Input struct {
+	Name string
+}
+
+type Get<% .Title %>Input struct {
+	ID string
+}<% if .Events %>
+
+// Record<% .Title %>CreatedInput is what the consumer of <% .Title %>Created hands the use case.
+type Record<% .Title %>CreatedInput struct {
+	ID string
+}
+
+// Record<% .Title %>CreatedOutput is empty: recording has nothing to hand back.
+type Record<% .Title %>CreatedOutput struct{}<% end %>

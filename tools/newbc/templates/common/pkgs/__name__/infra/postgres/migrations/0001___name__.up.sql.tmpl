@@ -1,0 +1,7 @@
+-- <% .Title %>s: one row per <% .Name %>. The checks keep the domain's invariants true for a row nobody
+-- wrote through the aggregate: whatever the database accepts, Get<% .Title %> can rebuild.
+CREATE TABLE <% .Name %>.<% .Name %>s (
+    id         text        PRIMARY KEY CHECK (octet_length(id) > 0),
+    name       text        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
+    created_at timestamptz NOT NULL
+);

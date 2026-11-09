@@ -1,0 +1,28 @@
+# Merged into the generated OpenAPI document (protoc-gen-connect-openapi `base=` option).
+# Hand-written metadata only; paths/schemas come from the .proto files.
+openapi: 3.1.0
+info:
+  title: <% .Title %> API
+  version: v1
+  description: |
+    Connect RPC contract of the <% .Name %> bounded context.
+    Every procedure is `POST /api/<% .Name %>.v1.<% .Title %>Service/<Method>` with a JSON body; errors use the Connect error
+    shape `{ "code": "...", "message": "..." }` and carry the stable domain code in the `X-Error-Code` response header.
+servers:
+  - url: /api
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: A key minted by identity's `CreateApiKey`, or a static key from `auth.api_keys`.
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT verified against `auth.jwt` (HS256 secret or PEM public key); claims sub / name / roles.
+security:
+  - apiKey: []
+  - bearer: []

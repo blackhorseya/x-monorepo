@@ -23,7 +23,9 @@ import (
 // schemas lists every BC whose poison table and outbox tables the operator commands (`worker poison`,
 // `worker prune`) serve. No bounded context consumes events yet, so it is empty; adding such a BC: add its
 // Schema here too.
-var schemas = []string{}
+var schemas = []string{
+	// new-bc:schemas
+}
 
 // newPoisonCmd is `worker poison`: list / show / requeue / drop the messages
 // a BC's handlers gave up on after every retry (<bc>.events_poison). Rows are

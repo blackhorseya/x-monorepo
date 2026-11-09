@@ -1,0 +1,13 @@
+package <% .Name %>_test
+
+import (
+	"testing"
+
+	"<% .Module %>/pkgs/platform/archtest"
+)
+
+// The BC's architecture rules: the import rules between layers and BCs, and the DDD shape
+// imports cannot express (private domain state, constructors, use case shape, dto and port purity).
+func TestArchitecture(t *testing.T) {
+	archtest.Run(t, ".")
+}

@@ -1,0 +1,60 @@
+package postgres
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"gorm.io/gorm"
+
+	"<% .Module %>/pkgs/platform/contextx"
+	platformpg "<% .Module %>/pkgs/platform/postgres"
+	"<% .Module %>/pkgs/<% .Name %>/domain/<% .Name %>"
+)
+
+var _ <% .Name %>.Repository = (*<% .Title %>Repository)(nil)
+
+// <% .Title %>Repository persists <% .Title %> in <% .Name %>.<% .Name %>s.
+type <% .Title %>Repository struct {
+	db *gorm.DB
+}
+
+func New<% .Title %>Repository(db *gorm.DB) *<% .Title %>Repository { return &<% .Title %>Repository{db: db} }
+
+// row mirrors columns, not the aggregate. Timestamps come from the domain (port.Clock), so gorm's
+// automatic tracking is switched off.
+type row struct {
+	ID        string    `gorm:"primaryKey"`
+	Name      string    `gorm:"not null"`
+	CreatedAt time.Time `gorm:"not null;autoCreateTime:false"`
+}
+
+func (row) TableName() string { return Schema + ".<% .Name %>s" }
+
+func (i *<% .Title %>Repository) FindByID(c context.Context, id <% .Name %>.ID) (*<% .Name %>.<% .Title %>, error) {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var r row
+	if err := platformpg.TxOrDB(ctx, i.db).Take(&r, "id = ?", id.String()).Error; err != nil {
+		return nil, translate(fmt.Errorf("find <% .Name %> %s: %w", id, err), <% .Name %>.ErrNotFound, nil)
+	}
+
+	return <% .Name %>.Reconstitute(<% .Name %>.ReconstituteParams{ID: <% .Name %>.ID(r.ID), Name: r.Name, CreatedAt: r.CreatedAt.UTC()})
+}
+
+func (i *<% .Title %>Repository) Save(c context.Context, x *<% .Name %>.<% .Title %>) error {
+	ctx := contextx.FromContext(c)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	r := row{ID: x.ID().String(), Name: x.Name(), CreatedAt: x.CreatedAt()}
+	if err := platformpg.TxOrDB(ctx, i.db).Create(&r).Error; err != nil {
+		return translate(fmt.Errorf("insert <% .Name %> %s: %w", x.ID(), err), nil, <% .Name %>.ErrAlreadyExists)
+	}
+
+	return nil
+}

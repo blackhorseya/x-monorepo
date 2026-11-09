@@ -1,0 +1,80 @@
+// Package rpc adapts the generated <% .Name %>.v1 contract to use cases.
+package rpc
+
+import (
+	"context"
+	"net/http"
+
+	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"<% .Module %>/pkgs/platform/admin"
+	"<% .Module %>/pkgs/platform/config"
+	"<% .Module %>/pkgs/platform/server"
+	"<% .Module %>/pkgs/platform/usecasex"
+	"<% .Module %>/pkgs/<% .Name %>/application/dto"
+	<% .Name %>v1 "<% .Module %>/pkgs/<% .Name %>/contract/v1"
+	"<% .Module %>/pkgs/<% .Name %>/contract/v1/<% .Name %>v1connect"
+)
+
+var _ <% .Name %>v1connect.<% .Title %>ServiceHandler = (*<% .Title %>Service)(nil)
+
+// Use-case aliases keep handler signatures readable.
+type (
+	Create<% .Title %>UC = usecasex.UseCase[dto.Create<% .Title %>Input, *dto.<% .Title %>Output]
+	Get<% .Title %>UC    = usecasex.UseCase[dto.Get<% .Title %>Input, *dto.<% .Title %>Output]
+)
+
+// <% .Title %>Service implements the generated <% .Title %>ServiceHandler. auth is read by the write,
+// Create<% .Title %> (server.RequireRole, the admin role); the read stays open to any caller the auth
+// interceptor lets in.
+type <% .Title %>Service struct {
+	create Create<% .Title %>UC
+	get    Get<% .Title %>UC
+	auth   config.Auth
+}
+
+func New<% .Title %>Service(create Create<% .Title %>UC, get Get<% .Title %>UC, auth config.Auth) *<% .Title %>Service {
+	if auth.AdminRole == "" {
+		auth.AdminRole = admin.DefaultAdminRole // config.Load sets the same; this is for hand-built configs (tests)
+	}
+
+	return &<% .Title %>Service{create: create, get: get, auth: auth}
+}
+
+// Route returns the mount path and handler (Connect + gRPC + gRPC-Web on one port).
+func (h *<% .Title %>Service) Route(opts ...connect.HandlerOption) (string, http.Handler) {
+	return <% .Name %>v1connect.New<% .Title %>ServiceHandler(h, opts...)
+}
+
+// Create<% .Title %> adds a <% .Title %>. Admin role when auth is on.
+func (h *<% .Title %>Service) Create<% .Title %>(
+	c context.Context,
+	req *connect.Request[<% .Name %>v1.Create<% .Title %>Request],
+) (*connect.Response[<% .Name %>v1.Create<% .Title %>Response], error) {
+	if err := server.RequireRole(c, h.auth, h.auth.AdminRole); err != nil {
+		return nil, err
+	}
+	out, err := h.create.Execute(c, dto.Create<% .Title %>Input{Name: req.Msg.GetName()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&<% .Name %>v1.Create<% .Title %>Response{<% .Title %>: toProto(out)}), nil
+}
+
+func (h *<% .Title %>Service) Get<% .Title %>(
+	c context.Context,
+	req *connect.Request[<% .Name %>v1.Get<% .Title %>Request],
+) (*connect.Response[<% .Name %>v1.Get<% .Title %>Response], error) {
+	out, err := h.get.Execute(c, dto.Get<% .Title %>Input{ID: req.Msg.GetId()})
+	if err != nil {
+		return nil, server.ToConnectError(err)
+	}
+
+	return connect.NewResponse(&<% .Name %>v1.Get<% .Title %>Response{<% .Title %>: toProto(out)}), nil
+}
+
+func toProto(x *dto.<% .Title %>Output) *<% .Name %>v1.<% .Title %> {
+	return &<% .Name %>v1.<% .Title %>{Id: x.ID, Name: x.Name, CreateTime: timestamppb.New(x.CreateTime)}
+}

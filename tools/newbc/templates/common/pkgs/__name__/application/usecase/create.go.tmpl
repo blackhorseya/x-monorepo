@@ -1,0 +1,47 @@
+// Package usecase holds the <% .Name %> use cases: orchestration only, the rules live in domain/<% .Name %>.
+package usecase
+
+import (
+	"context"
+	"fmt"
+
+	"<% .Module %>/pkgs/platform/contextx"
+	"<% .Module %>/pkgs/<% .Name %>/application/dto"
+	"<% .Module %>/pkgs/<% .Name %>/application/mapper"
+	"<% .Module %>/pkgs/<% .Name %>/application/port"
+	"<% .Module %>/pkgs/<% .Name %>/domain/<% .Name %>"
+)
+
+// Create<% .Title %> adds a <% .Title %>.<% if .Events %> The aggregate's Created event is published inside the transaction
+// provider.go wraps around this use case, so the state change and the event commit together or not at all.<% end %>
+type Create<% .Title %> struct {
+	repo  <% .Name %>.Repository
+	ids   port.IDGenerator
+	clock port.Clock<% if .Events %>
+	events port.EventPublisher<% end %>
+}
+
+func NewCreate<% .Title %>(repo <% .Name %>.Repository, ids port.IDGenerator, clock port.Clock<% if .Events %>, events port.EventPublisher<% end %>) *Create<% .Title %> {
+	return &Create<% .Title %>{repo: repo, ids: ids, clock: clock<% if .Events %>, events: events<% end %>}
+}
+
+func (uc *Create<% .Title %>) Execute(c context.Context, in dto.Create<% .Title %>Input) (*dto.<% .Title %>Output, error) {
+	ctx := contextx.FromContext(c)
+
+	id, err := uc.ids.NewID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("new <% .Name %> id: %w", err)
+	}
+	x, err := <% .Name %>.New(<% .Name %>.ID(id), in.Name, uc.clock.Now())
+	if err != nil {
+		return nil, err
+	}
+	if err = uc.repo.Save(ctx, x); err != nil {
+		return nil, fmt.Errorf("save <% .Name %> %s: %w", id, err)
+	}<% if .Events %>
+	if err = uc.events.Publish(ctx, x.PullEvents()...); err != nil {
+		return nil, err
+	}<% end %>
+
+	return mapper.To<% .Title %>Output(x), nil
+}

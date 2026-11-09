@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package <% .Name %>.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// <% .Title %> is the wire form of the <% .Name %> aggregate. It is a contract, NOT the domain model: Go
+// keeps the hand-written aggregate in domain/<% .Name %> and maps at the adapter boundary.
+message <% .Title %> {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Timestamp create_time = 3;
+}

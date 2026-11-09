@@ -7,5 +7,6 @@ use (
 	./pkgs/identity
 	./pkgs/kernel
 	./pkgs/platform
+	./tools/newbc
 	./tools/stripvalidate
 )

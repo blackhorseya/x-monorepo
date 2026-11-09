@@ -1,0 +1,36 @@
+// Package system implements ports backed by the OS (wall clock, id source).
+package system
+
+import (
+	"context"
+	"time"
+
+	"<% .Module %>/pkgs/platform/contextx"
+	"<% .Module %>/pkgs/platform/idgen"
+	"<% .Module %>/pkgs/<% .Name %>/application/port"
+)
+
+var (
+	_ port.Clock       = (*Clock)(nil)
+	_ port.IDGenerator = (*UUIDGenerator)(nil)
+)
+
+// Clock returns UTC wall-clock time.
+type Clock struct{}
+
+func NewClock() *Clock { return &Clock{} }
+
+func (i *Clock) Now() time.Time { return time.Now().UTC() }
+
+// UUIDGenerator generates UUID v7 ids (see idgen: opaque, and time ordered).
+type UUIDGenerator struct{}
+
+func NewUUIDGenerator() *UUIDGenerator { return &UUIDGenerator{} }
+
+func (i *UUIDGenerator) NewID(c context.Context) (string, error) {
+	if err := contextx.FromContext(c).Err(); err != nil {
+		return "", err
+	}
+
+	return idgen.New()
+}

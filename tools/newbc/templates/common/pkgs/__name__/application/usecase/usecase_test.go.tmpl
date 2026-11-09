@@ -1,0 +1,74 @@
+package usecase_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"<% .Module %>/pkgs/<% .Name %>/application/dto"
+	"<% .Module %>/pkgs/<% .Name %>/application/usecase"
+	"<% .Module %>/pkgs/<% .Name %>/domain/<% .Name %>"
+	"<% .Module %>/pkgs/<% .Name %>/infra/memory"
+)
+
+type fixedClock struct{ t time.Time }
+
+func (c fixedClock) Now() time.Time { return c.t }
+
+type seqIDs struct{ n int }
+
+func (g *seqIDs) NewID(context.Context) (string, error) {
+	g.n++
+
+	return "id-" + string(rune('0'+g.n)), nil
+}<% if .Events %>
+
+type recordingPublisher struct{ got []<% .Name %>.Event }
+
+func (p *recordingPublisher) Publish(_ context.Context, events ...<% .Name %>.Event) error {
+	p.got = append(p.got, events...)
+
+	return nil
+}<% end %>
+
+func TestCreateThenGet(t *testing.T) {
+	repo := memory.New<% .Title %>Repository()<% if .Events %>
+	events := &recordingPublisher{}<% end %>
+	now := time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
+	create := usecase.NewCreate<% .Title %>(repo, &seqIDs{}, fixedClock{now}<% if .Events %>, events<% end %>)
+	get := usecase.NewGet<% .Title %>(repo)
+
+	created, err := create.Execute(t.Context(), dto.Create<% .Title %>Input{Name: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := get.Execute(t.Context(), dto.Get<% .Title %>Input{ID: created.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "first" || !got.CreateTime.Equal(now) {
+		t.Fatalf("Get = %+v, want the created one", got)
+	}<% if .Events %>
+	if len(events.got) != 1 || events.got[0].AggregateID() != created.ID {
+		t.Fatalf("published %v, want one Created for %s", events.got, created.ID)
+	}<% end %>
+}
+
+func TestCreateRejectsInvalidName(t *testing.T) {
+	repo := memory.New<% .Title %>Repository()
+	create := usecase.NewCreate<% .Title %>(repo, &seqIDs{}, fixedClock{time.Now()}<% if .Events %>, &recordingPublisher{}<% end %>)
+
+	_, err := create.Execute(t.Context(), dto.Create<% .Title %>Input{Name: ""})
+	if !errors.Is(err, <% .Name %>.ErrInvalidName) {
+		t.Fatalf("Create(empty name) error = %v, want ErrInvalidName", err)
+	}
+}
+
+func TestGetUnknown(t *testing.T) {
+	get := usecase.NewGet<% .Title %>(memory.New<% .Title %>Repository())
+
+	if _, err := get.Execute(t.Context(), dto.Get<% .Title %>Input{ID: "nope"}); !errors.Is(err, <% .Name %>.ErrNotFound) {
+		t.Fatalf("Get(unknown) error = %v, want ErrNotFound", err)
+	}
+}

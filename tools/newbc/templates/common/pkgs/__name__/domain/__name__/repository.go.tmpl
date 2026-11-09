@@ -1,0 +1,11 @@
+package <% .Name %>
+
+import "context"
+
+// Repository persists <% .Title %>, one row per id.
+type Repository interface {
+	// FindByID returns ErrNotFound when the id was never saved.
+	FindByID(c context.Context, id ID) (*<% .Title %>, error)
+	// Save inserts a new <% .Title %>; ErrAlreadyExists when the id is taken.
+	Save(c context.Context, x *<% .Title %>) error
+}

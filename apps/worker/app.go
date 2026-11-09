@@ -19,8 +19,8 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 )
 
-// Worker owns the router. Adding a BC: wire.go gets its ProviderSet, NewWorker
-// a parameter for its Subscriptions and a Register call with its poison topic.
+// Worker owns the router. Adding a BC that consumes events: wire.go gets its ProviderSet,
+// NewConsumers (consumers.go) a parameter for its Subscriptions and an element, and poison.go's schemas its Schema.
 type Worker struct {
 	router *message.Router
 	logger *slog.Logger
@@ -67,15 +67,12 @@ func NewWorker(
 	logger *slog.Logger,
 	tel *otel.Providers,
 	publisher message.Publisher,
+	bcs []Consumer,
 ) (*Worker, error) {
 	router, err := eventbus.NewRouter(logger, tel)
 	if err != nil {
 		return nil, err
 	}
-	bcs := []struct {
-		schema string
-		subs   []eventbus.Subscription
-	}{}
 
 	if err := checkPool(db, bcs); err != nil {
 		return nil, err
@@ -206,10 +203,7 @@ func addForwarders(
 	start eventbus.Start,
 	pollInterval time.Duration,
 	logger *slog.Logger,
-	bcs []struct {
-		schema string
-		subs   []eventbus.Subscription
-	},
+	bcs []Consumer,
 ) ([]string, error) {
 	sub, err := eventbus.NewPostgresSubscriber(db, ForwarderGroup, start, logger, eventbus.WithPollInterval(pollInterval))
 	if err != nil {
@@ -247,10 +241,7 @@ const minConnsPerSubscriber = 2
 // worker.handler_timeout one after the other and every message ends up on the
 // poison topic. The floor is the subscribers' two connections each plus one for
 // the lag gauges. 0 (unlimited) and no database always pass.
-func checkPool(db *gorm.DB, bcs []struct {
-	schema string
-	subs   []eventbus.Subscription
-}) error {
+func checkPool(db *gorm.DB, bcs []Consumer) error {
 	if db == nil {
 		return nil
 	}
@@ -277,10 +268,7 @@ func checkPool(db *gorm.DB, bcs []struct {
 // subscribers fail on every poll (or the process exits at Run with a bare "relation does not exist");
 // with it the worker exits before consuming anything and says which tables and what to run. It reads
 // the catalogue only; the redis broker needs the tables too (the forwarder reads them).
-func checkTopicTables(db *gorm.DB, bcs []struct {
-	schema string
-	subs   []eventbus.Subscription
-}) error {
+func checkTopicTables(db *gorm.DB, bcs []Consumer) error {
 	if db == nil {
 		return nil
 	}
