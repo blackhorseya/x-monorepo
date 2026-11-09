@@ -68,8 +68,8 @@ FAIL: cosign ${version:-?}'s default signing config lists a Rekor log that is no
 $bad
 release.yml's cosign v3.1.4 fetches the entry behind a Rekor 409 (#204) for v1 only; a v2 log fails
 the whole sign on a 409 instead. Do not release on this cosign until one of these is done ($issue):
-  - sign-blob / sign get a bounded re-sign wrapper for the 409 (issue option C), proven by
-    scripts/cosign-smoke.sh against the v2 log; or
+  - a re-sign path for the 409 is added for sign-blob and every `cosign sign` call (docker_signs,
+    release.yml's console image), proven against a v2 log; or
   - cosign-release is pinned to a version whose default signing config is still v1-only (the pins
     in release.yml and ci.yml move together; rekor-canary.yml follows release.yml); or
   - cosign signs with an explicit v1 signing config.
