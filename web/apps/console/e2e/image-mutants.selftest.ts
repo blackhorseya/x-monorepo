@@ -19,7 +19,7 @@ const script = join(here, "image-mutants.sh");
 const consoleDir = join(here, "..");
 
 const FAIL_LINE = "  ✘   1 [image] › e2e/image.spec.ts:12:1 › deep link (34ms)";
-const OK_LINE = "  ✓   2 [image] › e2e/products.spec.ts:12:1 › lands (500ms)";
+const OK_LINE = "  ✓   2 [image] › e2e/account-loop.spec.ts:12:1 › lands (500ms)";
 const SUMMARY_RED = ["  1 failed", "  19 passed (12.5s)"];
 const SUMMARY_GREEN = ["  20 passed (12.5s)"];
 const realOf = (cmd: string) => execFileSync("sh", ["-c", `command -v ${cmd}`], { encoding: "utf8" }).trim();

@@ -13,8 +13,6 @@
 |---|---|
 | `config.example.yaml` | 有 commit 的範本，內容就是本機開發 profile（text log、`/api/docs` 開、`postgres.url` 指向 compose） |
 | `local.yaml` | gitignored。`task run` / `task migrate` 第一次會從 example 複製過來（`task config`），之後透過 `APP_CONFIG` 載入；隨意改 |
-| `catalog-rpc.example.yaml` | `apps/catalog-rpc` 專屬的範本：`http`（`:8081`）、`auth`（`mode: required` 與唯一一把開發用 key `rpc=…:admin`）、`postgres`、`log`、`otel`（`127.0.0.1:4317`、`insecure: true`）。**沒有** `auth.jwt`、`auth.oidc`（catalog-rpc 遇到就拒啟動），也不放使用者的 key。key 與埠對應 Taskfile 的 `CATALOG_DEV_KEY`／`CATALOG_PORT`（`task run` 用），由 `apps/catalog-rpc/config_example_test.go` 釘住 |
-| `catalog-rpc.yaml` | gitignored。`task catalog-rpc` 第一次從上面那份複製（`task catalog-config`），之後透過 `APP_CONFIG` 載入，和 `task run` 載入 `local.yaml` 同形狀；`CATALOG_CONFIG=<file>` 換檔。`task catalog-rpc` 不讀 `local.yaml`。環境變數照一般規則 env > 檔案，沒有額外保證 |
 | 其他 | `configs/*` 全部 gitignored；`task run CONFIG=<file>` 可指定別的檔 |
 
 > 注意：env 不能把 key 清成空字串（viper 忽略空 env），所以要「不接 DB」請改 local.yaml 的 `postgres.url`，不要 `APP_POSTGRES_URL=`。
@@ -30,12 +28,12 @@
 | `log.level` / `log.format` | `APP_LOG_LEVEL` / `APP_LOG_FORMAT` | `info` / `json` | |
 | `auth.mode` | `APP_AUTH_MODE` | `off` | `off` 不掛 auth interceptor；`optional` 有帶 credential 才驗（沒帶 = anonymous，帶了驗不過一樣是錯）；`required` 沒有合法 credential → `UNAUTHENTICATED`。開著但 `api_keys` 與 `jwt` 都空是合法的（只靠 identity 的 DB key，`server.New` 會 Warn）；identity 表空的話就是沒人進得來 |
 | `auth.api_keys` | `APP_AUTH_API_KEYS` | 空 | `name=key[:role\|role],name=key`（key ≥ 16 字元），對 `X-API-Key` header；principal 的 subject = name、roles = 冒號後的清單。一個字串，所以 env 帶得動。這是 static / break-glass 那組：對不上時 interceptor 再問 `pkgs/identity` 的 DB key（`identity.v1.IdentityService`，見 `docs/identity.md`），所以 mode 開著、這裡空著也合法——第一把 admin key 仍建議放這裡 bootstrap |
-| `auth.admin_role` | `APP_AUTH_ADMIN_ROLE` | `admin` | `admin.v1.AdminService`（poison 操作）、`catalog.v1.CatalogService` 的 `UpsertProduct` 與 `DeactivateProduct`、`identity.v1.IdentityService`（除 `WhoAmI` 與 `ClaimInvite`）要求的 role（見 `docs/identity.md`）；`auth.mode: off` 時不檢查 |
+| `auth.admin_role` | `APP_AUTH_ADMIN_ROLE` | `admin` | `admin.v1.AdminService`（poison 操作）、`identity.v1.IdentityService`（除 `WhoAmI` 與 `ClaimInvite`）要求的 role（見 `docs/identity.md`）；`auth.mode: off` 時不檢查 |
 | `auth.jwt.hs256_secret` / `auth.jwt.public_key` | `APP_AUTH_JWT_HS256_SECRET` / `APP_AUTH_JWT_PUBLIC_KEY` | 空 | 二選一：HS256 secret（≥ 32 bytes）或 PEM public key（RSA / EC / Ed25519，演算法家族釘死在 key 型別上）。對 `Authorization: Bearer <jwt>`，`exp` 必填 |
 | `auth.jwt.issuer` / `auth.jwt.audience` | `APP_AUTH_JWT_ISSUER` / `APP_AUTH_JWT_AUDIENCE` | 空 | 設了就檢查 `iss` / `aud` |
 | `auth.oidc.enabled` | `APP_AUTH_OIDC_ENABLED` | `false` | 外部 OIDC token verifier（`pkgs/platform/oidc`，規格 [identity-login.md](identity-login.md)）。關著時整段不讀、不驗，行為與以前完全相同。開著時 `issuers` 至少一筆；`auth.jwt` 也有設（`hs256_secret` / `public_key`）時，`auth.jwt.issuer` 必須非空且不等於任何 OIDC issuer（否則啟動失敗）。開著時 auth interceptor 把 Bearer 交給 verifier、再用 `(iss, sub)` 查 account 組 principal（見 [identity.md](identity.md)「外部身分綁定」）；`iss` 不是任何 OIDC issuer 的 token 才走 `auth.jwt`；有 `X-API-Key` 時只看 API key。`auth.oidc` 單獨開著（沒有 `api_keys` / `auth.jwt`）也是合法的 auth 設定。rpc 啟動時不等 IdP（key 在背景預熱，抓不到不是致命錯誤） |
 | `auth.oidc.issuers[]` | 只能走設定檔（list） | 空 | 每個 issuer 一筆：`issuer`（要和 token 的 `iss` 完全相同，含尾端斜線；discovery 在 `<issuer>/.well-known/openid-configuration`）、`audience`（我們的 client id，token 的 `aud` 必須包含它）、`mapping`（`bound`（預設，fail-closed）\| `auto_provision`，由 identity / interceptor 使用，verifier 只攜帶）、`allow_insecure_issuer`（預設 `false`）。`issuer` 必須是 https；http 只在 host 是 loopback 字面值（`localhost`、`127.0.0.0/8`、`::1`）或該筆 `allow_insecure_issuer: true`（dev compose / kind，如 `http://dex.localtest.me:5556/dex`）時放行，判斷看寫出來的 host，不看解析結果；不得帶 query / fragment；`issuer` 不得重複。discovery 的 `jwks_uri` 套同一條 http/https 規則，沒有 `jwks_url` override。驗簽：只收 RS256 / ES256 / EdDSA 且要與 JWK 型別一致；`exp` / `nbf` 容忍 60 秒；`sub`、`iat` 必填。JWKS 固定每 1 小時刷新（不看 `Cache-Control`；解析與刷新用 `MicahParks/keyfunc`）；未知 `kid` 立即重抓但每個 issuer 每 30 秒最多一次（限速中直接拒絕）；重抓失敗沿用舊 key，從最後一次成功起最多 24 小時；啟動時抓不到不是致命錯誤。metrics：`auth_jwks_fetch_total{issuer,result}`、`auth_jwks_age_seconds{issuer}`，alert `x-monorepo-auth-jwks-stale`（超過 2 小時沒成功）。**開發用 IdP**：Dex（compose / kind），issuer `http://dex.localtest.me:5556/dex`、audience `x-console`、需 `allow_insecure_issuer: true`，帳號與離線做法見 [operations.md](operations.md)「Dex dev IdP」。**Helm**：`config.auth.oidc.{enabled,issuers}` 原樣進 ConfigMap（chart 不含 IdP）；kind 的 `deployments/helm/kind/values.yaml` 是範例 |
-| `auth.public` | `APP_AUTH_PUBLIC` | 空 | 不需 credential 的 procedure 清單（`/catalog.v1.CatalogService/GetProduct`，env 用逗號分隔） |
+| `auth.public` | `APP_AUTH_PUBLIC` | 空 | 不需 credential 的 procedure 清單（形如 `/<package>.<Service>/<Method>`，env 用逗號分隔） |
 | `auth.resolver_timeout` | `APP_AUTH_RESOLVER_TIMEOUT` | `2s` | 一次 `server.CredentialResolver` 查詢（identity BC 的 DB key）的上限。auth 在 `http.timeout` 之外，沒有它 DB 卡住會拖住所有帶 key 的 request 與 shutdown drain；到期 = 拒絕（`auth.invalid_credential`）。`0` = 不限 |
 | `auth.last_used_interval` | `APP_AUTH_LAST_USED_INTERVAL` | `1m` | identity API key 的 `last_used_at` 多久最多寫一次（每把 key；resolver 在記憶體端每個 replica 各擋一次，`UPDATE` 條件式寫入再跨 replica 擋一次）。寫入在 request 路徑之外、best-effort（失敗只記錄錯誤類別，不影響驗證）。它是寫入頻率的上限，**不是**「Last used」落後時間的保證：兩層節流的時間相位會疊加（見 `docs/identity.md`），健康時可落後接近兩個 interval，寫入失敗或 DB 掛掉時更久。`0` = 不記錄 |
 | `postgres.url` | `APP_POSTGRES_URL` | 空 | 空 = in-memory；`apps/migrate` 必填 |
@@ -47,9 +45,6 @@
 | `otel.endpoint` | `APP_OTEL_ENDPOINT` | 空 | OTLP/gRPC `host:port`；空 = telemetry 關 |
 | `otel.insecure` | `APP_OTEL_INSECURE` | `false` | plaintext gRPC（本機 collector） |
 | `otel.service_name` | `APP_OTEL_SERVICE_NAME` | 空 | `service.name`；空 = 執行檔名 |
-| `catalog.upstream` | `APP_CATALOG_UPSTREAM` | 空 | **只有 `apps/rpc` 讀**。catalog-rpc 的 base URL（http／https，例如 `http://x-monorepo-catalog-rpc:80`）。空或格式不對 → rpc **拒絕啟動**，沒有 in-process fallback |
-| `catalog.api_key` | `APP_CATALOG_API_KEY` | 空 | **只有 `apps/rpc` 讀**。rpc 對 catalog-rpc 出示的 service credential（catalog-rpc 的 `auth.api_keys` 裡名為 `rpc` 的那把）；**機密**：只走 env，不寫進檔案或 log。rpc 永遠只送這把，不轉傳使用者的 credential。空 → rpc 拒絕啟動，訊息不含 key |
-| `catalog.timeout` | `APP_CATALOG_TIMEOUT` | `3s` | 對 catalog 的單次呼叫預算，必須 > 0；逾時 → `UNAVAILABLE`（`catalog.unavailable`），不寫入 |
 | `worker.consumer_group` | `APP_WORKER_CONSUMER_GROUP` | `worker` | `apps/worker` 的 offset cursor 前綴，實際 group 是 `<值>.<bc>`（每個 BC 各自讀完整個 topic）；同名 replica 分工，新名字從哪開始看 `worker.start_from` |
 | `worker.start_from` | `APP_WORKER_START_FROM` | `beginning` | **還沒有 cursor** 的 group 從哪開始：`beginning` 重播所有留存的訊息，`latest` 只收建立之後的。已有 cursor 的 group 不會被移動；redis 模式也套用到 forwarder 的 SQL group 與 stream group |
 | — | `APP_CONFIG` | 空 | 指定 config 檔路徑（Taskfile 的 `CONFIG` var 會設它） |

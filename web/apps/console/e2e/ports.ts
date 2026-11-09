@@ -17,8 +17,6 @@ export function derivePorts(env: Record<string, string | undefined> = process.en
   const backendRpcPort = rpcPort + 20;
   const backendIdpPort = rpcPort + 30;
   const backendWebPort = webPort + 20;
-  // The catalog-rpc each rpc talks to (so projects do not share products).
-  const catalogPort = (rpcServerPort: number) => rpcServerPort + 40; // 18131, 18132, 18141, 18151, …
   const rpcPorts = [rpcPort, authRpcPort, roleRpcPort, backendRpcPort];
   const webPorts = [webPort, authWebPort, roleWebPort, backendWebPort];
   return {
@@ -31,10 +29,9 @@ export function derivePorts(env: Record<string, string | undefined> = process.en
     backendRpcPort,
     backendIdpPort,
     backendWebPort,
-    catalogPort,
     /** The port the "other IdP" of the issuer-mismatch negative uses (e2e/oidc-backend/backend.spec.ts). */
     foreignIdpPort: backendIdpPort + 1,
     /** Everything the stack (and the tests that start their own listener) can hold, for the cleanup check. */
-    all: [...rpcPorts, ...rpcPorts.map(catalogPort), backendIdpPort, backendIdpPort + 1, ...webPorts],
+    all: [...rpcPorts, backendIdpPort, backendIdpPort + 1, ...webPorts],
   };
 }

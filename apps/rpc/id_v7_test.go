@@ -19,7 +19,7 @@ import (
 // returns and the X-Request-Id the server mints. A request id the client
 // brings is echoed untouched, whatever it looks like. Ids stay opaque strings.
 func TestIDs_NewOnesAreV7FromTheRealEntry(t *testing.T) {
-	srv, cleanup, err := initialize(t, &config.AppConfig{
+	srv, cleanup, err := Initialize(&config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
 		Log:  config.Log{Level: "error", Format: "text"},
 	})

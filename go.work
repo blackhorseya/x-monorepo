@@ -1,11 +1,9 @@
 go 1.27
 
 use (
-	./apps/catalog-rpc
 	./apps/migrate
 	./apps/rpc
 	./apps/worker
-	./pkgs/catalog
 	./pkgs/identity
 	./pkgs/kernel
 	./pkgs/platform

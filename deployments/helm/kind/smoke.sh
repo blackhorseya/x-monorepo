@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end through the installed release: rpc answers, catalog-rpc is reached through it,
+# End-to-end through the installed release: rpc answers,
 # the console serves the UI and proxies /api to the rpc.
 #   smoke.sh <namespace> <release>
 # Needs kubectl + curl + jq. Exits non-zero (with the pods' state) when anything is off.
@@ -19,45 +19,6 @@ for ((_try18 = 1; _try18 <= 30; _try18++)); do curl -fsS "$api/readyz" >/dev/nul
 curl -fsS "$api/readyz" >/dev/null || { echo "smoke: /api/readyz never answered 200"; exit 1; }
 version=$(curl -fsS "$api/version") || exit 1
 echo "smoke: running $version"
-
-# catalog-rpc (catalogRpc.enabled in kind/values.yaml): its own pod, ConfigMap and Secret. It refuses to
-# start on auth.jwt / auth.oidc.enabled, and this release's rpc config has auth.oidc on, so a pod
-# that is Ready proves it did not inherit that. Auth is required with ONE static key, rpc=<key>:admin.
-cport_cat=${SMOKE_CATALOG_PORT:-18082}
-kubectl -n "$ns" port-forward "svc/$release-catalog-rpc" "$cport_cat:80" >/dev/null 2>&1 &
-pfk=$!
-trap 'kill $pf $pfc $pfk 2>/dev/null || true' EXIT
-cat="http://127.0.0.1:$cport_cat/api"
-for ((_try30 = 1; _try30 <= 30; _try30++)); do curl -fsS "$cat/readyz" >/dev/null 2>&1 && break; sleep 1; done
-curl -fsS "$cat/readyz" >/dev/null || { echo "smoke: catalog-rpc /api/readyz never answered 200"; exit 1; }
-curl -fsS "$cat/version" >/dev/null || { echo "smoke: catalog-rpc /api/version failed"; exit 1; }
-catimg=$(kubectl -n "$ns" get deploy -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].spec.template.spec.containers[0].image}') || exit $?
-case $catimg in */catalog-rpc:*) ;; *) echo "smoke: the catalog-rpc Deployment runs '$catimg', not the catalog-rpc image"; exit 1 ;; esac
-cat_version=$(curl -fsS "$cat/version") || exit 1
-echo "smoke: catalog-rpc running $catimg $cat_version"
-catcfg=$(kubectl -n "$ns" get configmap -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.config\.yaml}') || exit $?
-echo "$catcfg" | grep -q 'oidc\|jwt' && { echo "smoke: catalog-rpc ConfigMap carries auth.jwt/auth.oidc"; exit 1; }
-echo "$catcfg" | grep -q 'mode: required' || { echo "smoke: catalog-rpc ConfigMap is not auth.mode required"; exit 1; }
-catkey=$(kubectl -n "$ns" get secret -l app.kubernetes.io/component=catalog-rpc -o jsonpath='{.items[0].data.APP_AUTH_API_KEYS}' | base64 -d) || exit $?
-case $catkey in rpc=*:admin) catkey=${catkey#rpc=}; catkey=${catkey%:admin} ;; *) echo "smoke: catalog-rpc service key is not rpc=<key>:admin"; exit 1 ;; esac
-catrpc() { curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' ${3:+-H "X-API-Key: $3"} "$cat/$1" -d "$2"; }
-now=$(date +%s) || exit 1
-catsku="kind-cat-$now"
-up="{\"sku\":\"$catsku\",\"name\":\"$catsku\",\"price\":{\"amount_minor\":250,\"currency\":\"USD\"}}"
-code=$(catrpc catalog.v1.CatalogService/UpsertProduct "$up") || { echo "smoke: catalog-rpc did not answer a write with no credential"; exit 1; }
-[ "$code" = 401 ] || { echo "smoke: catalog-rpc accepted a write with no credential"; exit 1; }
-code=$(catrpc catalog.v1.CatalogService/GetProduct "{\"sku\":\"$catsku\"}") || { echo "smoke: catalog-rpc did not answer a read with no credential"; exit 1; }
-[ "$code" = 401 ] || { echo "smoke: catalog-rpc accepted a read with no credential"; exit 1; }
-code=$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" not-the-service-key-0123456789) || { echo "smoke: catalog-rpc did not answer an unknown key"; exit 1; }
-[ "$code" = 401 ] || { echo "smoke: catalog-rpc accepted an unknown key"; exit 1; }
-code=$(catrpc catalog.v1.CatalogService/UpsertProduct "$up" "$catkey") || { echo "smoke: catalog-rpc did not answer its own service key"; exit 1; }
-[ "$code" = 200 ] || { echo "smoke: catalog-rpc refused its own service key"; exit 1; }
-# What catalog-rpc wrote is what the rpc serves: this GetProduct hits the rpc, whose Forwarder passes
-# it to catalog-rpc over Connect. (The rpc has no catalog repository of its own, so a 404 here means
-# the Forwarder or catalog-rpc is broken.)
-got=$(curl -fsS -H 'Content-Type: application/json' "$api/catalog.v1.CatalogService/GetProduct" -d "{\"sku\":\"$catsku\"}" | jq -r '.product.price.amountMinor // .product.price.amount_minor') || exit $?
-[ "$got" = 250 ] || { echo "smoke: rpc did not read catalog-rpc's write back (got '$got')"; exit 1; }
-echo "smoke: catalog-rpc requires its service key (401 without, 401 unknown, 200 with) and the rpc reads back through to catalog-rpc what catalog-rpc wrote"
 
 # Console: the SPA for any route (TanStack Router handles /poison client-side), the rpc
 # through nginx's /api proxy — what the browser does.

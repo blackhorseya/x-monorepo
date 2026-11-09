@@ -14,7 +14,7 @@ import { signOut } from "../oidc/session";
 // PERMISSION_DENIED page recovers (or appears) at once instead of on its next
 // poll — the slowest one (poison) is 5s.
 //
-// Cancel + reset, not invalidate (#483). Most query keys (["accounts"], ["products", prefix])
+// Cancel + reset, not invalidate (#483). Most query keys (["accounts"], ["account", id])
 // do not name the credential, so what is cached under a key was read for whoever was calling when it was
 // asked. invalidateQueries only marks it stale and refetches: a query with no data and a request in flight
 // (the first, anonymous one) is not restarted, the new call is folded into the old one and its answer, a

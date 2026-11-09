@@ -34,23 +34,12 @@
   `eventbus_inbox_oldest_age_seconds{schema}` 是 `<bc>.inbox`。這些是 `count(*)` 全表掃，表很大時把 OTLP 的 collect 間隔拉長。
   每個 replica 都回報同一組數字：**用 `max`，不要 `sum`**。
   worker 沒有 HTTP server，這些只走 OTLP（60s 一次）
-- **catalog 是另一個 process（#320、#355）**：rpc 問 catalog-rpc 的 Connect client 掛 `otelconnect`，把 rpc 自己那個 span 的 `traceparent` 帶過去（`pkgs/catalog/adapters/client/client_test.go`）。
-  **只有 catalog-rpc 信任遠端 trace**，所以它的 server span 是 rpc 那個 span 的 child、`trace_id` 相同；rpc 不信任。信不信任由各 composition root 在程式裡宣告（`apps/rpc` 的 `TraceOptions` 是 `server.DistrustRemoteTrace()`，`apps/catalog-rpc` 是 `server.TrustRemoteTrace()`，用 wire 提供），不是 config、env 或 Helm value，operator 沒有入口能在 rpc 上打開；`server.New` 不帶選項時也是不信任（`pkgs/platform/server/trace_test.go`，protocol path 與 `/api` 兩個 mount、成功與業務錯誤都測）。
-  - **rpc 入口收到的 `traceparent` 不會被延續，兩種 SDK 狀態都是**。要查這張單的 trace，用回應的 `X-Trace-Id`，**不要**用自己送進來的 trace id。rpc 也不會把呼叫端的 `traceparent` 轉給 catalog-rpc。
+- **rpc 不延續外部帶進來的 `traceparent`**。信不信任遠端 trace 由各 composition root 在程式裡宣告（`apps/rpc` 的 `TraceOptions` 是 `server.DistrustRemoteTrace()`，用 wire 提供），不是 config、env 或 Helm value，operator 沒有入口能在 rpc 上打開；`server.New` 不帶選項時也是不信任（`pkgs/platform/server/trace_test.go`，protocol path 與 `/api` 兩個 mount、成功與業務錯誤都測）。`server.TrustRemoteTrace()` 仍在 `pkgs/platform/server`，但目前沒有任何服務使用它。
+  - **兩種 SDK 狀態都不延續**。要查這張單的 trace，用回應的 `X-Trace-Id`，**不要**用自己送進來的 trace id。
     - rpc 開 SDK（`otel.endpoint` 有設）：server span 是新的 root，呼叫端的 span 只留成一個 link，`X-Trace-Id`（成功與錯誤都有）是 rpc 自己的。
-    - rpc 關 SDK（`otel.endpoint` 空）：tracer 是 no-op，而 no-op tracer 會原樣傳遞 parent 的 trace id，所以 `otel.New` 在這時給**空的 propagator**，不讀也不寫 trace header（`pkgs/platform/otel/propagation_test.go`；不是設定項，沒有 tracer 就沒有 trace）。rpc 不回 `X-Trace-Id`／`traceparent`，外部 ID 不會出現在回應或 catalog-rpc 的 log。
-  - rpc 與 catalog-rpc 的 SDK 開關四格（`apps/rpc/trace_test.go` 的 `TestTrace_RPCAndCatalogBySDKState`，真的起 rpc 與 catalog-rpc 兩個 process，帶外部 `traceparent` 打 `CatalogService.QuotePrices`，成功與 catalog 回業務錯誤〔SKU 不存在〕都測）：
-
-    | rpc | catalog-rpc | 結果 |
-    |---|---|---|
-    | 開 | 開 | catalog-rpc 的 access log `trace_id` = rpc 回應的 `X-Trace-Id`，≠ 外部 ID |
-    | 關 | 開 | rpc 無 `X-Trace-Id`、無 `traceparent`；catalog `trace_id` 有效且 ≠ 外部 ID（各自一條 trace，無法互查） |
-    | 開 | 關 | rpc 有 `X-Trace-Id`；catalog access line 無 `trace_id` |
-    | 關 | 關 | 兩邊都沒有 trace ID；外部 ID 不出現在任何回應或 catalog-rpc 的 log |
-  - 取捨：catalog-rpc 的 Service 是 ClusterIP、要 rpc 的 service key，chart 的 `networkPolicy` 開著時入口只放 rpc pod（`templates/networkpolicy.yaml`），沒開就只靠前兩者；能直連它的呼叫方可以自選 `trace_id`，影響的只有觀測資料，不影響授權。
-  所以一張單的 trace 在 Tempo 裡跨兩個服務；`service.name` 沒設時取執行檔名（`pkgs/platform/otel/otel.go` 的 `serviceName`），所以 catalog-rpc 上報為 `catalog-rpc`，查 Loki 時 `{service_name="catalog-rpc"} | trace_id="…"` 與 rpc 的那份用同一個 trace_id。
-  catalog-rpc 是獨立的 metrics／`/api/metrics` 來源（它自己的 `usecase_duration_seconds`、`rpc.server.call.duration`），Helm 的 ConfigMap 不帶 `otel.service_name`，以免用 rpc 的名字上報（`docs/operations.md`）。
-  catalog 不通時 rpc 回使用者 `UNAVAILABLE` + `catalog.unavailable`，log 只寫固定的一行 `catalog call failed`＋`op` 與 Connect `code`（或傳輸層的 `reason`：`timeout` / `unreachable` / `transport`），不含上游回的文字、位址或 key（`pkgs/catalog/adapters/client/client.go` 的 `classify`）；service key 被拒使用者端同樣是 `catalog.unavailable`，要看 rpc log 的 `catalog service credential rejected`（Error）才分得出（`TestCatalogServiceKeyMismatch_LooksLikeAnOutageToUsers`）
+    - rpc 關 SDK（`otel.endpoint` 空）：tracer 是 no-op，而 no-op tracer 會原樣傳遞 parent 的 trace id，所以 `otel.New` 在這時給**空的 propagator**，不讀也不寫 trace header（`pkgs/platform/otel/propagation_test.go`；不是設定項，沒有 tracer 就沒有 trace）。rpc 不回 `X-Trace-Id`／`traceparent`，外部 ID 不會出現在回應。
+  - SDK 開關兩格由 `apps/rpc/trace_test.go` 的 `TestTrace_RPCDistrustsAnExternalTraceparent` 釘住（帶外部 `traceparent` 打 `IdentityService.CreateAccount`）：開 SDK → `X-Trace-Id` 有效且 ≠ 外部 ID；關 SDK → 回應沒有 `X-Trace-Id` 也沒有 `traceparent`。
+  - rpc 沒有下游呼叫，所以沒有「轉送 `traceparent`」的問題；以後新增下游呼叫時，要把「轉送」這一格（與測試）補回來。
 - **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader、logs 走 batch processor；`otelconnect`
   interceptor 掛最外層，每個 RPC 一個 span。endpoint 空 = tracer no-op、logger 只寫 stdout、不 dial
 - **span 的來源**：RPC 由 `otelconnect`；`/api/docs`、`/api/openapi/*` 等普通 route 由 `otelgin`（filter 掉 RPC prefix、
@@ -64,4 +53,4 @@
   只有這兩個 attribute 會變成 series label，少了 instance.id 多 replica 會寫同一條 series、counter 亂跳
 
 本機：`task compose-up` 連 `grafana/otel-lgtm` 一起起（Grafana `http://localhost:3000`，匿名 admin；OTLP gRPC :4317），
-`configs/local.yaml`（rpc）和 `configs/catalog-rpc.yaml`（`task catalog-rpc`）的 `otel.endpoint` 已指向它。
+`configs/local.yaml`（rpc）的 `otel.endpoint` 已指向它。

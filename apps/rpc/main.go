@@ -2,36 +2,25 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 )
 
 func main() {
-	opts, err := parseArgs(os.Args[1:])
-	if err != nil {
+	if err := parseArgs(os.Args[1:]); err != nil {
 		slog.Error("rpc", "error", err)
 		os.Exit(2)
 	}
-	switch {
-	case opts.version:
+	if len(os.Args) > 1 {
 		// `rpc --version` prints the stamped build and exits, like the cobra binaries.
 		fmt.Println("rpc version " + buildinfo.Get().String())
-		return
-	case opts.waitCatalog:
-		// `rpc --wait-catalog[=60s]`: the initContainer of the Helm chart. It reads the same config as the
-		// server (catalog.upstream), waits best-effort for the catalog and exits 0, so the server starts
-		// either way. A config it cannot load is a failure: the server would refuse to start on it too.
-		if err := waitCommand(opts.waitBudget); err != nil {
-			slog.Error("rpc --wait-catalog", "error", err)
-			os.Exit(1)
-		}
 		return
 	}
 	if err := run(); err != nil {
@@ -40,16 +29,15 @@ func main() {
 	}
 }
 
-// waitCommand is `rpc --wait-catalog`: load the config, wait for the catalog (best effort), return.
-func waitCommand(budget time.Duration) error {
-	c, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	cfg, err := config.Load()
-	if err != nil {
-		return err
+// parseArgs reads the command line (without the program name). The only argument is --version / -v; anything
+// else is an error, so a typo does not start the server quietly.
+func parseArgs(args []string) error {
+	switch {
+	case len(args) == 0, len(args) == 1 && (args[0] == "--version" || args[0] == "-v"):
+		return nil
+	default:
+		return errors.New("rpc: unknown argument (the only one is --version)")
 	}
-
-	return waitForCatalog(c, cfg.Catalog, budget, time.Second, slog.Default())
 }
 
 func run() error {

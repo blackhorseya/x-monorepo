@@ -2,27 +2,24 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"connectrpc.com/connect"
 	"go.opentelemetry.io/otel/trace"
 
-	catalogv1 "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1/catalogv1connect"
+	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
-	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
-// deadCollector is an OTLP endpoint nothing listens on: both processes run the real SDK (a no-op tracer hands a
-// parent's trace_id on unchanged, which is how the old version of this test stayed green with the trace broken),
-// and the exporters just fail in the background. Their Shutdown is bounded by the otel package's own 5s.
+// deadCollector is an OTLP endpoint nothing listens on: rpc runs the real SDK (a no-op tracer hands a
+// parent's trace_id on unchanged, which is how an older version of this test stayed green with the trace
+// broken), and the exporter just fails in the background. Its Shutdown is bounded by the otel package's own 5s.
 func deadCollector(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -35,152 +32,68 @@ func deadCollector(t *testing.T) string {
 	return addr
 }
 
-// tracedPair is an rpc and a catalog-rpc, each with the OTel SDK on (otel.endpoint set) or off (empty: no-op
-// tracer). The SDK state is read back from the processes themselves where it can be, so a cell that quietly ran
-// in the other state fails here instead of passing vacuously.
-type tracedPair struct {
-	rpcURL string
-	cat    *catalogProc
-}
-
-func startTracedPair(t *testing.T, rpcOn, catOn bool) tracedPair {
-	t.Helper()
-	endpoint := deadCollector(t)
-	var catEnv []string
-	if catOn {
-		catEnv = []string{"APP_OTEL_ENDPOINT=" + endpoint, "APP_OTEL_INSECURE=true", "APP_OTEL_SERVICE_NAME=catalog-rpc"}
-	}
-	cat := startCatalogProc(t, catEnv...)
-	if got := strings.Contains(cat.logs.String(), `"otel exporting"`); got != catOn {
-		t.Fatalf("catalog-rpc SDK on = %v, want %v:\n%s", got, catOn, cat.logs.String())
-	}
-	cfg := withCatalog(&config.AppConfig{}, cat)
-	if rpcOn {
-		cfg.OTel = config.OTel{Endpoint: endpoint, Insecure: true, ServiceName: "rpc"}
-	}
-	if (cfg.OTel.Endpoint != "") != rpcOn {
-		t.Fatalf("rpc otel.endpoint = %q, want it set = %v", cfg.OTel.Endpoint, rpcOn)
-	}
-	ts := rpcServer(t, cfg)
-	if _, err := catalogv1connect.NewCatalogServiceClient(http.DefaultClient, ts.URL).UpsertProduct(context.Background(), connect.NewRequest(&catalogv1.UpsertProductRequest{
-		Sku: "TR-1", Name: "n", Price: &commonv1.Money{AmountMinor: 100, Currency: "USD"},
-	})); err != nil {
-		t.Fatalf("seed product: %v", err)
-	}
-
-	return tracedPair{rpcURL: ts.URL, cat: cat}
-}
-
-// quotePricesLines are the catalog's access lines for QuotePrices, as of now.
-func quotePricesLines(cat *catalogProc) []map[string]any {
-	var lines []map[string]any
-	for _, l := range strings.Split(cat.logs.String(), "\n") {
-		var m map[string]any
-		if json.Unmarshal([]byte(l), &m) == nil && m["msg"] == "rpc" && strings.HasSuffix(fmt.Sprint(m["procedure"]), "/QuotePrices") {
-			lines = append(lines, m)
-		}
-	}
-
-	return lines
-}
-
-// nextQuotePrices waits (the child's stdout is copied by a goroutine) for the QuotePrices access line the call
-// just made: the one after the first `before`.
-func nextQuotePrices(t *testing.T, cat *catalogProc, before int) map[string]any {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if lines := quotePricesLines(cat); len(lines) > before {
-			return lines[before]
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("catalog-rpc logged no new QuotePrices line:\n%s", cat.logs.String())
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
 const externalTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
 
-// The trace across rpc and catalog-rpc for each state of their SDKs. An external caller's traceparent is never
-// continued at rpc: with the SDK on it becomes a link of a new root, with it off rpc neither reads nor writes
-// trace headers at all. catalog-rpc continues what rpc sends it (when it has an SDK to continue it with).
+// An external caller's traceparent is never continued at rpc: with the SDK on (otel.endpoint set) the server
+// span is a new root and rpc answers with its own X-Trace-Id; with it off (empty: no-op tracer) rpc neither
+// reads nor writes trace headers at all. rpc has no downstream call today, so there is no "forwards the trace"
+// cell; the first downstream call brings that cell back.
 // The comparisons are against values asserted valid (or asserted absent) first, never empty against empty.
-func TestTrace_RPCAndCatalogBySDKState(t *testing.T) {
+func TestTrace_RPCDistrustsAnExternalTraceparent(t *testing.T) {
 	ext, err := trace.TraceIDFromHex(externalTrace)
 	if err != nil || !ext.IsValid() {
 		t.Fatal("the external trace id in the test is not valid")
 	}
-	for _, tc := range []struct {
-		name          string
-		rpcOn, catOn  bool
-		wantRPCTrace  bool // rpc answers with an X-Trace-Id
-		wantCatTrace  bool // the catalog's access line carries a trace_id
-		wantSameTrace bool // ... and it is rpc's
-	}{
-		{"rpc on, catalog on", true, true, true, true, true},
-		{"rpc off, catalog on", false, true, false, true, false},
-		{"rpc on, catalog off", true, false, true, false, false},
-		{"rpc off, catalog off", false, false, false, false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			pair := startTracedPair(t, tc.rpcOn, tc.catOn)
-			client := catalogv1connect.NewCatalogServiceClient(http.DefaultClient, pair.rpcURL)
-			for path, skus := range map[string][]string{
-				"known sku":   {"TR-1"},
-				"unknown sku": {"NOPE"},
-			} {
-				before := len(quotePricesLines(pair.cat))
-				req := connect.NewRequest(&catalogv1.QuotePricesRequest{Skus: skus})
-				req.Header().Set("traceparent", "00-"+externalTrace+"-00f067aa0ba902b7-01")
-				res, err := client.QuotePrices(context.Background(), req)
-				if err != nil {
-					t.Fatalf("%s: QuotePrices error = %v", path, err)
-				}
-				h := res.Header()
-
-				// rpc's own answer
-				if tc.wantRPCTrace {
-					if got := traceOf(t, h); got == ext {
-						t.Fatalf("%s: rpc continued the external caller's trace %s; it must start its own", path, ext)
-					}
-				} else {
-					for k, v := range h {
-						if strings.EqualFold(k, server.TraceIDHeader) || strings.EqualFold(k, "traceparent") {
-							t.Fatalf("%s: rpc (no SDK) answered with %s = %v; it has no trace to name", path, k, v)
-						}
-					}
-				}
-
-				// the catalog's access line for this very call
-				line := nextQuotePrices(t, pair.cat, before)
-				tid, has := line["trace_id"]
-				switch {
-				case !tc.wantCatTrace:
-					if has {
-						t.Fatalf("%s: catalog-rpc (no SDK) logged trace_id %v", path, tid)
-					}
-				default:
-					got, err := trace.TraceIDFromHex(fmt.Sprint(tid))
-					if err != nil || !got.IsValid() {
-						t.Fatalf("%s: catalog trace_id = %v, want a valid trace id (%v)", path, tid, err)
-					}
-					if got == ext {
-						t.Fatalf("%s: the external caller's trace %s reached catalog-rpc through rpc", path, ext)
-					}
-					if tc.wantSameTrace && got != traceOf(t, h) {
-						t.Fatalf("%s: catalog trace_id = %s, want rpc's %s", path, got, traceOf(t, h))
-					}
-				}
+	for _, sdkOn := range []bool{true, false} {
+		name := "sdk off"
+		if sdkOn {
+			name = "sdk on"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.AppConfig{
+				HTTP: config.HTTP{Addr: ":0"},
+				Log:  config.Log{Level: "error", Format: "text"},
 			}
-			if strings.Contains(pair.cat.logs.String(), externalTrace) {
-				t.Fatalf("the external trace id appears in catalog-rpc's log:\n%s", pair.cat.logs.String())
+			if sdkOn {
+				cfg.OTel = config.OTel{Endpoint: deadCollector(t), Insecure: true, ServiceName: "rpc"}
+			}
+			if (cfg.OTel.Endpoint != "") != sdkOn {
+				t.Fatalf("rpc otel.endpoint = %q, want it set = %v", cfg.OTel.Endpoint, sdkOn)
+			}
+			srv, cleanup, err := Initialize(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(cleanup)
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(ts.Close)
+
+			client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
+			req := connect.NewRequest(&identityv1.CreateAccountRequest{Name: "tracer"})
+			req.Header().Set("traceparent", "00-"+externalTrace+"-00f067aa0ba902b7-01")
+			res, err := client.CreateAccount(context.Background(), req)
+			if err != nil {
+				t.Fatalf("CreateAccount error = %v", err)
+			}
+			h := res.Header()
+
+			if sdkOn {
+				if got := traceOf(t, h); got == ext {
+					t.Fatalf("rpc continued the external caller's trace %s; it must start its own", ext)
+				}
+
+				return
+			}
+			for k, v := range h {
+				if strings.EqualFold(k, server.TraceIDHeader) || strings.EqualFold(k, "traceparent") {
+					t.Fatalf("rpc (no SDK) answered with %s = %v; it has no trace to name", k, v)
+				}
 			}
 		})
 	}
 }
 
-// traceOf is the X-Trace-Id of a response or of an error's metadata; it must be a valid, non-zero trace id.
+// traceOf is the X-Trace-Id of a response; it must be a valid, non-zero trace id.
 func traceOf(t *testing.T, h http.Header) trace.TraceID {
 	t.Helper()
 	id, err := trace.TraceIDFromHex(h.Get(server.TraceIDHeader))

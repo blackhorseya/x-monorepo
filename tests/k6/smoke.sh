@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # Runs each k6 script against its own ./bin/rpc (built already) with the Postgres at $DATABASE_URL:
-# ratelimit with the server at 50 rps, timeout with the server at a 1ns deadline. Each script also gets
-# its own ./bin/catalog-rpc (rpc has no catalog of its own and refuses to start without one:
-# tests/k6/catalog.sh). `task k6-smoke` locally, the `k6` job in CI.
+# ratelimit with the server at 50 rps, timeout with the server at a 1ns deadline. `task k6-smoke` locally,
+# the `k6` job in CI.
 #   smoke.sh <bin dir> [script…]        (default: ratelimit timeout)
 #
 # The scripts run at the same time (#451). What each shares with the others, and how it is kept apart:
 #   Postgres   shared (one database). ratelimit reads, timeout gets a 504 before touching rows.
-#   rpc port   $PORT + 10 × (position in the list); the catalog-rpc is that port + 2.
-#   catalog    one catalog-rpc per script (catalog.sh exports APP_CATALOG_* into the shell that calls it,
-#              so each script runs in a subshell of its own).
+#   rpc port   $PORT + 10 × (position in the list).
 #   logs       $bin/k6-<script>*.log; k6 output is buffered per script and printed in list order.
 set -euo pipefail
 bin=$1; shift
@@ -18,11 +15,9 @@ port=${PORT:-18090}
 export APP_CONFIG=configs/config.example.yaml APP_HTTP_ADDR=":$port" APP_HTTP_DOCS=false
 export APP_POSTGRES_URL=${DATABASE_URL:-postgres://app:app@127.0.0.1:5432/app?sslmode=disable}
 export APP_LOG_LEVEL=${APP_LOG_LEVEL:-warn}
-# shellcheck source=tests/k6/catalog.sh
-. tests/k6/catalog.sh
 
-# <script> <rpc port>: one script against its own rpc and catalog-rpc.
-# Runs in a subshell: the pids, the traps and catalog.sh's APP_CATALOG_* exports stay its own.
+# <script> <rpc port>: one script against its own rpc.
+# Runs in a subshell: the pids and the traps stay its own.
 run_one() {
   local s=$1 p=$2 env=()
   pid=""   # not local: the EXIT trap runs after this function has returned (and this is a subshell)
@@ -31,9 +26,8 @@ run_one() {
     # `|| true`: cleanup only; the verdict of a script is k6's own exit status (the last command of run_one), never this.
     [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null || true; pid=""
   }
-  trap 'stop; catalog_stop' EXIT
+  trap stop EXIT
   echo "== $s"
-  catalog_start "$bin" "$((p + 2))" "$bin/k6-$s-catalog.log"
   case $s in
     ratelimit) env=(APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50) ;;
     timeout)   env=(APP_HTTP_TIMEOUT=1ns APP_LOG_LEVEL=error) ;;

@@ -112,7 +112,7 @@ jobs:
     timeout-minutes: 20 # p90 387s, max 394s (last 11 days)
     permissions:
       contents: write   # upload archives to the draft
-      packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,catalog-rpc,worker,migrate,console}
+      packages: write   # ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate,console}
       id-token: write   # cosign keyless + attest-build-provenance: the OIDC token names this workflow
       attestations: write   # store the archives' provenance attestation on the repo
     steps:
@@ -204,7 +204,7 @@ jobs:
       - run: |
           {
             echo "## ${{ needs.prepare.outputs.tag }} built from \`$HEAD_SHA\`"
-            for app in rpc catalog-rpc worker migrate console; do
+            for app in rpc worker migrate console; do
               echo "- \`ghcr.io/blackhorseya/x-monorepo/$app:${TAG#v}\`"
             done
           } >> "$GITHUB_STEP_SUMMARY"

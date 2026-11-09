@@ -9,7 +9,7 @@
 #   wire   k6 exits 0; a lane killed before it wrote a verdict; grep / cat / sleep / rm / mkdir / python3 / env exiting 42 after
 #          partial or full output; verdict lines dropped; a second run whose k6 dies without writing its files while the
 #          first run's files are still in the bin dir (the failure must name the missing files)
-#   smoke  curl / sleep / cat / env exiting 42 (seq is no longer called: catalog.sh counts in the shell, #462)
+#   smoke  curl / sleep / cat / env exiting 42
 set -euo pipefail
 abs_dir_of() { local p=${1%/*}; [ "$p" != "$1" ] || p=.; ( cd "$p${2:+/$2}" && pwd ); }   # the absolute directory of a path, without dirname inside $(…)
 root=$(abs_dir_of "$0" ../..) || exit 1
@@ -30,9 +30,9 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 PY
-mkbin() { # <dir>: stub rpc / catalog-rpc
+mkbin() { # <dir>: stub rpc
   mkdir -p "$1"
-  for b in rpc catalog-rpc; do printf '#!/bin/sh\nexec python3 %s/stub.py\n' "$work" > "$1/$b"; chmod +x "$1/$b"; done
+  for b in rpc; do printf '#!/bin/sh\nexec python3 %s/stub.py\n' "$work" > "$1/$b"; chmod +x "$1/$b"; done
 }
 shim() { # <name> <body…> → the dir of a shim called <name>
   local d="$work/shim-$1-$RANDOM"; mkdir -p "$d"; local n=$1; shift
@@ -139,11 +139,6 @@ sd=$(shim cat 'case "$*" in *.out*) exit 42;; esac; exec /bin/cat "$@"') || exit
 async "smoke: cat of a script's output exits 42" nonzero smoke1 "$sd" ratelimit
 sd=$(shim env 'exit 42') || exit 1
 async "smoke: env (starts the rpc) exits 42" nonzero smoke1 "$sd" ratelimit
-# catalog.sh used to count its readiness loop with `for _ in $(seq 1 100)`: the status of seq was dropped, so a seq that printed
-# 1 and died was a one-round wait (#462). It counts in the shell now, and a failing seq changes nothing.
-sd=$(shim seq 'echo 1; exit 42') || exit 1
-async "smoke: seq is not used by catalog.sh (exit 42 shim, still green)" zero smoke1 "$sd" ratelimit
-
 best_effort wait   # every case has its own status file below; a case that left none is a FAIL
 
 fails=0

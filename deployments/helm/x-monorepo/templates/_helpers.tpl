@@ -24,7 +24,7 @@
 {{- end -}}
 {{- end -}}
 
-{{/* Labels. component: rpc | catalog-rpc | worker | migrate | prune */}}
+{{/* Labels. component: rpc | worker | migrate | prune */}}
 {{- define "x-monorepo.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 app.kubernetes.io/name: {{ include "x-monorepo.name" . }}
@@ -129,109 +129,4 @@ checksum/secrets: {{ include "x-monorepo.secretData" . | sha256sum }}
 {{/* Where the console's nginx sends /api: the rpc Service of this release, in-cluster. */}}
 {{- define "x-monorepo.console.rpcUpstream" -}}
 {{- printf "http://%s-rpc:%d" (include "x-monorepo.fullname" .) (int .Values.rpc.service.port) -}}
-{{- end -}}
-
-{{/*
-catalog-rpc (apps/catalog-rpc) authenticates static auth.api_keys only and refuses to start on
-auth.jwt, auth.oidc.enabled, or auth on without api_keys. So it never reads the release-wide
-ConfigMap and Secret (they carry rpc's JWT secret, OIDC issuers and user api keys): it has its
-own, built here. Rendered only when catalogRpc.enabled; every misconfiguration fails at template
-time, before a pod can come up in the in-memory mode an unset Postgres URL would give it.
-*/}}
-{{- define "x-monorepo.catalogRpc.validate" -}}
-{{- $own := .Values.secrets.catalogRpc.existingSecret -}}
-{{- $key := .Values.secrets.catalogRpc.apiKey -}}
-{{- /* The release's own Secrets, by the names they RESOLVE to (nameOverride / fullnameOverride included), not by the values the operator typed: secrets.existingSecret, <fullname>-env (what x-monorepo.secretName picks when the chart renders it), and the hook-scoped <fullname>-migrate-env. catalog-rpc's FINAL Secret name (its own existingSecret, or the generated <fullname>-catalog-rpc-env) must be none of them, in either direction: a catalog existingSecret that points at a release Secret hands rpc's keys to catalog-rpc; a shared existingSecret that names catalog-rpc's generated Secret hands catalog-rpc's service key to rpc, worker and migrate, and the chart would render a Secret over the operator's. */ -}}
-{{- $fn := include "x-monorepo.fullname" . -}}
-{{- $final := include "x-monorepo.catalogRpc.secretName" . -}}
-{{- $release := list .Values.secrets.existingSecret (include "x-monorepo.secretName" .) (printf "%s-env" $fn) (printf "%s-migrate-env" $fn) -}}
-{{- if has $final $release -}}
-{{- if $own -}}
-{{- fail (printf "secrets.catalogRpc.existingSecret %q is one of the release-wide Secrets (they may carry rpc's JWT secret and user api keys, which catalog-rpc must not read); give catalog-rpc its own Secret" $final) -}}
-{{- else -}}
-{{- fail (printf "secrets.existingSecret %q is the name of the Secret the chart renders for catalog-rpc (<fullname>-catalog-rpc-env): rpc, worker and migrate would read catalog-rpc's service key, and the chart would render a Secret over yours; rename secrets.existingSecret" $final) -}}
-{{- end -}}
-{{- end -}}
-{{- range $e := .Values.catalogRpc.extraEnv -}}
-{{- $n := upper (toString $e.name) -}}
-{{- if or (hasPrefix "APP_AUTH_" $n) (eq $n "APP_POSTGRES_URL") (eq $n "APP_CONFIG") -}}
-{{- fail (printf "catalogRpc.extraEnv must not set %s: auth, catalog-rpc's Postgres URL and its config file come from the chart (an env var here would turn auth off or move the service off Postgres)" $e.name) -}}
-{{- end -}}
-{{- end -}}
-{{- if $own -}}
-{{- if $key -}}
-{{- fail "secrets.catalogRpc.existingSecret and secrets.catalogRpc.apiKey are both set: pick one source for catalog-rpc's APP_AUTH_API_KEYS" -}}
-{{- end -}}
-{{- else -}}
-{{- if not .Values.secrets.postgresUrl -}}
-{{- fail "catalogRpc.enabled needs secrets.postgresUrl (or secrets.catalogRpc.existingSecret holding APP_POSTGRES_URL): without a Postgres URL catalog-rpc would serve from memory and lose its prices on restart. secrets.existingSecret is the release-wide Secret and does not count: it may carry rpc's JWT secret, which catalog-rpc refuses to start with" -}}
-{{- end -}}
-{{- if not $key -}}
-{{- fail "catalogRpc.enabled needs secrets.catalogRpc.apiKey (or secrets.catalogRpc.existingSecret holding APP_AUTH_API_KEYS): catalog-rpc runs with auth.mode required and accepts only this key" -}}
-{{- end -}}
-{{- if regexMatch "[,:=\\s]" $key -}}
-{{- fail "secrets.catalogRpc.apiKey must not contain ',', ':', '=' or whitespace: it is embedded in APP_AUTH_API_KEYS (name=key:role,...)" -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "x-monorepo.catalogRpc.secretName" -}}
-{{- default (printf "%s-catalog-rpc-env" (include "x-monorepo.fullname" .)) .Values.secrets.catalogRpc.existingSecret -}}
-{{- end -}}
-
-{{/* catalog-rpc's config.yaml: the release's http / postgres / log / otel, auth required, and no auth.jwt / auth.oidc. otel.service_name is dropped (it would report as rpc; the binary defaults to catalog-rpc). */}}
-{{- define "x-monorepo.catalogRpc.config" -}}
-{{- $c := .Values.config -}}
-{{- toYaml (dict
-      "http" $c.http
-      "postgres" $c.postgres
-      "log" $c.log
-      "otel" (omit $c.otel "service_name")
-      "auth" (dict "mode" "required" "admin_role" $c.auth.admin_role)) -}}
-{{- end -}}
-
-{{/* catalog-rpc's own Secret. APP_CATALOG_API_KEY is rpc's copy of the SAME key (rpc reads only that one key from here, by secretKeyRef): one value feeds both sides, so they cannot drift. catalog-rpc itself reads APP_POSTGRES_URL and APP_AUTH_API_KEYS. */}}
-{{- define "x-monorepo.catalogRpc.secretData" -}}
-APP_POSTGRES_URL: {{ .Values.secrets.postgresUrl | quote }}
-APP_AUTH_API_KEYS: {{ printf "rpc=%s:%s" .Values.secrets.catalogRpc.apiKey .Values.config.auth.admin_role | quote }}
-APP_CATALOG_API_KEY: {{ .Values.secrets.catalogRpc.apiKey | quote }}
-{{- end -}}
-
-{{/*
-rpc has no in-process catalog any more: it asks catalog-rpc (rpc.go: catalog.upstream + APP_CATALOG_API_KEY) and
-does not start without them. So catalog-rpc is not optional, and what tells rpc where the catalog is and with which
-key is the chart's, not the operator's extraEnv. The wait before rpc starts is best-effort (the binary logs a WARN and
-starts anyway after its budget), but the budget itself must end before the Deployment gives up on the rollout.
-*/}}
-{{- define "x-monorepo.rpc.validateCatalog" -}}
-{{- if not .Values.catalogRpc.enabled -}}
-{{- fail "catalogRpc.enabled must be true: rpc has no in-process catalog to fall back on (it does not start without catalog-rpc)" -}}
-{{- end -}}
-{{- range $e := .Values.rpc.extraEnv -}}
-{{- if hasPrefix "APP_CATALOG_" (upper (toString $e.name)) -}}
-{{- fail (printf "rpc.extraEnv must not set %s: where rpc finds the catalog and the key it presents come from the chart (catalogRpc.*, secrets.catalogRpc.*)" $e.name) -}}
-{{- end -}}
-{{- end -}}
-{{- $w := .Values.rpc.waitForCatalog -}}
-{{- if and $w.enabled (ge (int $w.timeoutSeconds) (int .Values.rpc.progressDeadlineSeconds)) -}}
-{{- fail (printf "rpc.waitForCatalog.timeoutSeconds (%d) must be < rpc.progressDeadlineSeconds (%d): the wait must end before the rollout is declared stuck" (int $w.timeoutSeconds) (int .Values.rpc.progressDeadlineSeconds)) -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "x-monorepo.catalogRpc.checksums" -}}
-checksum/config: {{ include "x-monorepo.catalogRpc.config" . | sha256sum }}
-checksum/secrets: {{ include "x-monorepo.catalogRpc.secretData" . | sha256sum }}
-{{- end -}}
-
-{{- define "x-monorepo.catalogRpc.terminationGracePeriodSeconds" -}}
-{{- $s := .Values.catalogRpc.shutdown -}}
-{{- if lt (int $s.delaySeconds) (int .Values.catalogRpc.readiness.periodSeconds) -}}
-{{- fail (printf "catalogRpc.shutdown.delaySeconds (%d) must be >= catalogRpc.readiness.periodSeconds (%d): endpoints must see the 503 before the listener closes" (int $s.delaySeconds) (int .Values.catalogRpc.readiness.periodSeconds)) -}}
-{{- end -}}
-{{- add (int $s.delaySeconds) (int $s.timeoutSeconds) (int $s.graceMarginSeconds) -}}
-{{- end -}}
-
-{{/* Where rpc reaches catalog-rpc (the forwarding slice): the catalog-rpc Service of this release, in-cluster. */}}
-{{- define "x-monorepo.catalogRpc.upstream" -}}
-{{- printf "http://%s-catalog-rpc:%d" (include "x-monorepo.fullname" .) (int .Values.catalogRpc.service.port) -}}
 {{- end -}}

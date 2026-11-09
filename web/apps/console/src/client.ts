@@ -1,7 +1,6 @@
 import { Code, ConnectError, createClient, type Interceptor } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { AdminService } from "@repo/proto/admin/v1/service_pb";
-import { CatalogService } from "@repo/proto/catalog/v1/service_pb";
 import { IdentityService } from "@repo/proto/identity/v1/service_pb";
 import { ViolationsSchema } from "@repo/proto/buf/validate/violations_pb";
 import { credentialHeaders, getCredential, getCredentialGeneration } from "./auth";
@@ -54,7 +53,6 @@ const transport = createConnectTransport({
 
 export const admin = createClient(AdminService, transport);
 export const identity = createClient(IdentityService, transport);
-export const catalog = createClient(CatalogService, transport);
 
 // describe turns a Connect error into one line: the domain code from the
 // x-error-code header, plus protovalidate field violations when present.

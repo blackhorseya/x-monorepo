@@ -9,7 +9,7 @@ import { uid } from "../uid";
 // anonymously after "Clear".
 
 const adminOnly = (url: string) =>
-  /\/api\/(admin\.v1\.AdminService\/|identity\.v1\.IdentityService\/(?!WhoAmI|ClaimInvite))/.test(url) || url.includes("UpsertProduct") || url.includes("DeactivateProduct");
+  /\/api\/(admin\.v1\.AdminService\/|identity\.v1\.IdentityService\/(?!WhoAmI|ClaimInvite))/.test(url);
 
 type Switch = { name: string; apply: (page: Page) => Promise<void>; sends: (headers: Record<string, string>) => boolean };
 const switches: Switch[] = [
@@ -24,7 +24,7 @@ const switches: Switch[] = [
 ];
 
 for (const sw of switches) {
-  for (const path of ["/accounts", "ACCOUNT", "/products", "/poison", "/prune"]) {
+  for (const path of ["/accounts", "ACCOUNT", "/poison", "/prune"]) {
     test(`admin on ${path} switches to ${sw.name}: no admin-only RPC is sent with the new credential`, async ({ page }) => {
       await page.goto("/accounts");
       await useKey(page, ADMIN_KEY);

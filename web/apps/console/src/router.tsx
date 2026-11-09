@@ -11,7 +11,6 @@ import { ServerVersion } from "./components/version";
 import { queryClient } from "./queryClient";
 import { adminProbeQuery } from "./queries";
 import type { LoginSearch } from "./routes/login";
-import type { ProductsSearch } from "./routes/products";
 import type { PruneSearch } from "./routes/prune";
 
 // Every page is its own chunk (lazyRouteComponent), fetched on first visit or on link intent
@@ -22,7 +21,6 @@ const adminLinks = [
   { to: "/poison", label: "Poison" },
   { to: "/prune", label: "Prune" },
   { to: "/accounts", label: "Accounts" },
-  { to: "/products", label: "Products" },
 ] as const;
 
 // An admin page behind AdminGate: for anyone else the page never mounts, so it asks the server
@@ -117,14 +115,6 @@ const indexRoute = createRoute({
 const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: lazyRouteComponent(() => import("./routes/accounts"), "AccountsPage") });
 // A sibling of /accounts, not a child: the nav's prefix match lights Accounts up here too.
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: lazyRouteComponent(() => import("./routes/account"), "AccountPage") });
-const productsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/products",
-  component: gated(lazyRouteComponent(() => import("./routes/products"), "ProductsPage")),
-  validateSearch: (raw: Record<string, unknown>): ProductsSearch => ({
-    prefix: typeof raw.prefix === "string" && raw.prefix !== "" ? raw.prefix : undefined,
-  }),
-});
 const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: gated(lazyRouteComponent(() => import("./routes/poison"), "PoisonPage")) });
 const pruneRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -138,7 +128,7 @@ const pruneRoute = createRoute({
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, loginRoute, authCallbackRoute, accountsRoute, accountRoute, productsRoute, poisonRoute, pruneRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, loginRoute, authCallbackRoute, accountsRoute, accountRoute, poisonRoute, pruneRoute]),
   defaultPreload: "intent",
   defaultPendingComponent: RoutePending,
   defaultErrorComponent: RouteError,

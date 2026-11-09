@@ -1,7 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 import { CancelledError, infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { getCredentialGeneration } from "./auth";
-import { admin, catalog, identity, isNotFound } from "./client";
+import { admin, identity, isNotFound } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
 export type ServerVersion = { version: string; commit: string; date: string; go: string };
@@ -11,8 +11,6 @@ export type ServerVersion = { version: string; commit: string; date: string; go:
 const LIST_STALE_MS = 1000;
 
 export const keys = {
-  products: ["products"] as const,
-  productsPage: (skuPrefix: string) => ["products", skuPrefix] as const,
   poison: ["poison"] as const,
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
   version: ["version"] as const,
@@ -45,18 +43,6 @@ export const versionQuery = queryOptions({
   staleTime: 5 * 60_000,
   refetchInterval: 5 * 60_000,
 });
-
-// Products ascending by SKU, 20 per page, by prefix (empty = every SKU), inactive ones included.
-// Nothing changes them behind the console's back, so no polling; the key starts with keys.products so
-// saving or deactivating a product refreshes every filter.
-export const productsQuery = (skuPrefix: string) =>
-  infiniteQueryOptions({
-    queryKey: keys.productsPage(skuPrefix),
-    queryFn: async ({ pageParam }) => catalog.listProducts({ skuPrefix, pageSize: 20, pageToken: pageParam }),
-    initialPageParam: "",
-    getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
-    staleTime: LIST_STALE_MS,
-  });
 
 // The poison tables of the bounded contexts that consume events; parking happens after retries, so a slower poll is fine.
 export const poisonQuery = queryOptions({

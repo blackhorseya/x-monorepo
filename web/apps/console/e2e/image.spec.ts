@@ -12,7 +12,7 @@ test.skip(
 test("deep link falls back to index.html, never cached", async ({
   request,
 }) => {
-  const res = await request.get("/products?prefix=E2E");
+  const res = await request.get("/accounts?x=E2E");
   expect(res.status()).toBe(200);
   expect(res.headers()["content-type"]).toContain("text/html");
   expect(res.headers()["cache-control"]).toBe("no-cache");

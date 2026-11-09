@@ -16,8 +16,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"gorm.io/gorm"
 
-	catalogrpc "github.com/blackhorseya/x-monorepo/pkgs/catalog/adapters/rpc"
-	catalogv1 "github.com/blackhorseya/x-monorepo/pkgs/catalog/contract/v1"
 	identityrpc "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
 	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
@@ -28,14 +26,14 @@ import (
 )
 
 // NewRoutes lists every mounted service: the BCs' and the platform's admin surface.
-func NewRoutes(identity *identityrpc.IdentityService, catalog *catalogrpc.Forwarder, poison *admin.PoisonService) []server.Route {
-	return []server.Route{identity, catalog, poison}
+func NewRoutes(identity *identityrpc.IdentityService, poison *admin.PoisonService) []server.Route {
+	return []server.Route{identity, poison}
 }
 
 // NewPoisonService serves admin.v1.AdminService over the poison table of every
 // BC that consumes events. Adding such a BC: add its Schema here (the worker's
-// poison.go lists the same set). identity and catalog consume no events, so
-// they have no poison table and none is listed yet.
+// poison.go lists the same set). identity consumes no events, so
+// it has no poison table and none is listed yet.
 func NewPoisonService(db *gorm.DB, auth config.Auth) *admin.PoisonService {
 	return admin.NewPoisonService(db, auth, []string{})
 }
@@ -59,7 +57,6 @@ func NewReadiness(db *gorm.DB) server.Readiness {
 func NewDocs() []server.Doc {
 	return []server.Doc{
 		{Name: "identity", Spec: identityv1.OpenAPI},
-		{Name: "catalog", Spec: catalogv1.OpenAPI},
 		{Name: "admin", Spec: adminv1.OpenAPI},
 	}
 }
@@ -69,7 +66,7 @@ const warmTimeout = 15 * time.Second
 
 // TraceOptions: rpc faces outside callers, so it does not continue an incoming traceparent (the server span is
 // a new root with the caller's span as a link, and X-Trace-Id is rpc's own). Declared here, in code, and not
-// configurable: no key, env var or Helm value can turn it on. catalog-rpc, whose only caller is rpc, trusts rpc's.
+// configurable: no key, env var or Helm value can turn it on. rpc has no downstream call, so there is nothing to forward a trace to (add that case back with the first one).
 func TraceOptions() []server.Option { return []server.Option{server.DistrustRemoteTrace()} }
 
 // NewOIDCAuth is the external-login half of the auth interceptor: with

@@ -18,18 +18,14 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `auth.unauthenticated` | `UNAUTHENTICATED` | auth interceptor | `auth.mode=required` 且沒帶 credential |
 | `auth.invalid_credential` | `UNAUTHENTICATED` | auth interceptor | 帶了但對不上（未知 API key、JWT 簽章 / exp / iss / aud 不對）。identity 的 key 被 revoke / 過期 / account disabled、或 resolver 查 DB 失敗，client 看到的也是這個（不洩漏原因；resolver 失敗另有 error log）。OIDC token（`auth.oidc`）同理：簽章 / `iss` / `aud` / `exp` / 缺 `iat` 不對、對應的 account 已停用、`iat` 早於 `sessions_revoked_at`、`(iss, sub)` 查 DB 失敗，一律這個碼加固定訊息（token 本身或帳號被拒：`token could not be verified`；resolver 查不到答案：`credential could not be verified`，原因只進 server log，且 log 不含 token）。逾時（`auth.resolver_timeout`）後才回來的答案一律拒絕，連「未綁定」也不例外，不會放行 `ClaimInvite`。帶了 `X-API-Key` 時不看 Bearer，key 錯就是這個，不會 fallback |
 | `auth.unbound_identity` | `PERMISSION_DENIED` | auth interceptor | OIDC token 驗過了，但 `(iss, sub)` 沒綁定任何 account（`mapping: bound`），而這個 procedure 不是 `IdentityService.ClaimInvite`。未綁定的身分只能呼叫 `ClaimInvite`（`auth.mode=optional` 也一樣，不會變 anonymous）。要先請 admin 發邀請，再用 `ClaimInvite` 綁定 |
-| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`CatalogService.UpsertProduct` 與 `DeactivateProduct`、`IdentityService` 除 `WhoAmI` 與 `ClaimInvite` 外都要 `auth.admin_role`） |
-| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`product.ErrStale` / `account.ErrStale` / `apikey.ErrStale` / `invite.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；重送即可，刻意沒有前綴也不是 `kernel.Error` |
+| `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`IdentityService` 除 `WhoAmI` 與 `ClaimInvite` 外都要 `auth.admin_role`） |
+| `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`account.ErrStale` / `apikey.ErrStale` / `invite.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；重送即可，刻意沒有前綴也不是 `kernel.Error` |
 | `pagination.invalid_page_size` | `INVALID_ARGUMENT` | `platform/pagination` | `page_size` 負數 |
-| `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（`ListProducts` 把 filter 編進 token） |
+| `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（filter 一併編進 token 的列表才有這一條；目前沒有 RPC 使用） |
 | `admin.no_database` | `FAILED_PRECONDITION` | admin | server 沒接 Postgres（`postgres.url` 空）：poison 表與 outbox / inbox 都在 DB |
 | `admin.unknown_bounded_context` | `INVALID_ARGUMENT` | admin | `bounded_context` 不在 `apps/rpc` 列的 schema 清單 |
 | `admin.poison_not_found` | `NOT_FOUND` | admin | `GetPoison` 的 offset 不存在 |
-| `catalog.unavailable` | `UNAVAILABLE` | `pkgs/catalog/adapters/client` | catalog 沒有答覆（連不上、逾時、5xx、service key 被拒）：**fail closed，沒寫入**，同一個請求可以重送。不是 domain error（請求本身沒錯），所以沒有 `kernel.Kind`；訊息固定，catalog 的錯誤只進 log |
-| `product.invalid_sku` / `product.invalid_name` / `product.invalid_price` | `INVALID_ARGUMENT` | catalog domain | UpsertProduct / GetProduct / DeactivateProduct / 批次報價的參數：sku 1–64 bytes、name 1–200 字元且不能全是空白（`strings.TrimSpace` 的定義）、price 必須是非負金額加 3 個大寫字母的幣別——domain 對 `Money` 重新檢查（`Multiply(-1)`、`ZeroMoney("usd")` 這類繞過 `NewMoney` 的值也擋）（rpc 先被 protovalidate 擋，這是直呼 use case 的那條） |
-| `product.unsupported_currency` | `INVALID_ARGUMENT` | catalog domain | 幣別格式對但不是已指派的 ISO 4217 代碼（`AAA`、`ZZZ`…）；白名單是 SIX List One（`domain/product/currency_codes.go`，與 `catalog.currencies` 同一份）。protovalidate 只擋格式，所以這個一定走到 domain |
-| `money.invalid_amount` / `money.invalid_currency` | `INVALID_ARGUMENT` | kernel `Money` | 金額為負、幣別不是 3 個大寫英文字母（ISO 4217 形狀）；`UpsertProduct` 的價格（rpc 先被 protovalidate 擋） |
-| `product.not_found` | `NOT_FOUND` | catalog domain | `GetProduct` / `DeactivateProduct` 的 SKU 沒有 product（`UpsertProduct` 會建立它，不會回這個） |
+| `money.invalid_amount` / `money.invalid_currency` | `INVALID_ARGUMENT` | kernel `Money` | 金額為負、幣別不是 3 個大寫英文字母（ISO 4217 形狀） |
 | `account.invalid_id` / `account.invalid_name` / `account.invalid_role` | `INVALID_ARGUMENT` | identity domain | aggregate 不變量（role 不能是空字串；protovalidate 先擋 rpc 那條） |
 | `account.invalid_cursor` | `INVALID_ARGUMENT` | identity domain | ListAccounts 的 page token 解得開但沒有 id |
 | `account.already_disabled` / `account.already_active` | `FAILED_PRECONDITION` | identity domain | Disable 已 DISABLED / Enable 已 ACTIVE 的 account |

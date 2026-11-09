@@ -3,7 +3,7 @@
 //
 // image: what only the nginx image can show.
 //   image.spec.ts   nginx itself: SPA fallback, cache headers, /api proxy, /healthz, /config.json, CSP, the OIDC container.
-//   version.spec.ts, products.spec.ts
+//   version.spec.ts, account-loop.spec.ts
 //                   smoke: a real browser loads each route family through nginx with no page.route in the way, so a CSP or an
 //                   asset path that breaks the app is found here (image.spec.ts only reads headers for the default container).
 // previewOnly: asserts UI / RPC behaviour that vite preview and nginx give identically (none of them reads a header,
@@ -12,7 +12,7 @@
 // Every top-level spec has to be in exactly one list, and the image list has to equal the set pinned in
 // e2e/image-specs.check.ts, which is a copy kept on purpose: adding a spec to the image list is a decision
 // that must be written down twice, in review.
-export const imageSpecs = ["image.spec.ts", "version.spec.ts", "products.spec.ts"];
+export const imageSpecs = ["image.spec.ts", "version.spec.ts", "account-loop.spec.ts"];
 
 export const previewOnlySpecs = ["admin-probe.spec.ts", "admin.spec.ts", "credential-switch.spec.ts", "transient-recovery.spec.ts"];
 
