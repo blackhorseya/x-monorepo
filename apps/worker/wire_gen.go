@@ -50,7 +50,8 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher)
+	v := NewConsumers()
+	mainWorker, err := NewWorker(worker, db, universalClient, logger, providers, publisher, v)
 	if err != nil {
 		cleanup4()
 		cleanup3()

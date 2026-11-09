@@ -32,6 +32,7 @@ import (
 // migrations lists every BC, in dependency order: identity stands alone.
 var migrations = []postgres.Migration{
 	identitypg.Migration(),
+	// new-bc:migration
 }
 
 func main() {

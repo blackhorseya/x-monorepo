@@ -87,6 +87,8 @@ jobs:
       # a codegen task must fail before it deletes or writes anything when a ./bin tool is missing (#504): the real entries in a throwaway fixture, no git, ~20 s
       - run: scripts/gen-tools-test.sh
       - run: task check-gen-fresh-all # one definition shared with local runs: gen wire gen-ts, then git diff
+      # a generated sample BC (plain and --events) in a copy of the tree must lint, build and test (#518); no postgres here, so its repository tests are not run
+      - run: task new-bc-check
 
   lint:
     needs: affected

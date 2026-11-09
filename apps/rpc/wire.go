@@ -31,6 +31,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewOIDCAuth,
 		TraceOptions,
 		identity.ProviderSet,
+		// new-bc:rpc-providers
 		// The auth interceptor asks identity for keys the config does not know.
 		wire.Bind(new(server.CredentialResolver), new(*identityauth.Resolver)),
 		// ...and for the people behind an OIDC token (auth.oidc).

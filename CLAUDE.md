@@ -12,6 +12,7 @@ Connect 對外、Wire 組裝、Turborepo 前端（`web/`）。細節以 `README.
 ```bash
 task tools                 # 固定版本工具鏈（buf / wire / golangci-lint / protoc-gen-*）→ ./bin，第一次必跑
 task tidy                  # 每個 module go mod tidy + go work sync
+task new-bc -- <name> [--events]   # 新增 BC：產生 pkgs/<name>、protos/<name>、migration 並在共用檔各加一筆，再 gen → tidy → wire（見 .claude/skills/new-bc）；task new-bc-check 在工作樹複本驗產生物（CI gen-freshness 也跑）
 task gen wire              # protos → pkgs/<bc>/contract（pb + Connect + openapi.yaml）；DI → apps/*/wire_gen.go
 task lint                  # buf lint + go vet + golangci-lint（分層 / BC 邊界是 archtest，跑在 `task test`）
 task test                  # go test -race，每個 module
@@ -174,12 +175,11 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 `application/dto` + `usecase` → `provider.go` 加 `ProvideXxx` 並用 `decorate()`（讀）或 `decorateTx()`（寫）包 → `adapters/rpc` 實作
 （`var _ XxxServiceHandler` 會提醒）→ `task wire`。
 
-**新增 Bounded Context**（照 `pkgs/identity` 抄；有 event 的版本〔consumer／events adapter／outbox／inbox／poison〕在目前主線沒有範例）：`protos/<newbc>/v1/{entity,service}.proto`（有 event 才加 `event.proto`）+ `openapi.base.yaml` 與
-`buf.gen.yaml` 的 `go_package` override → `pkgs/<newbc>/go.mod`（replace 指向 kernel / platform / 要讀 contract 的 BC）+ `go.work`
-加 `use`（`MODULES`、`BCS` 由它導出，不用另外加）+ `apps/*/go.mod` 的 require / replace → `task tidy` → `contract/v1/openapi.go` →
-`task gen` → 複製 `pkgs/identity` 結構寫 `provider.go`（有 event 的 BC：`Subscriptions` 自己的 named type）→ 照 `pkgs/identity/arch_test.go` 寫 `arch_test.go`（import 規則自動套用，不用改任何既有 BC 的設定）→ `provider.go` 匯出自己的 `RPC` 型別（`server.Mount`）→ `apps/rpc` 的 `NewMounts` 加它（一個參數＋一個元素）、
-`apps/{rpc,worker}/wire.go` 加 `ProviderSet`；有 event 的 BC 另外要讓 `RPC.PoisonSchema` 填它的 schema（`NewPoisonService` 由 mounts 取）、`apps/worker` 的 `NewWorker` 收它的 `Subscriptions`、`poison.go` 的 `schemas`（沒有 event 的 BC 如 identity：router / poison 都不加，只有 operator 子命令才進 `apps/worker` 的獨立 injector）→ `task wire` →
-有 DB 則加 migrations（有 event 的 BC 另含自己 topic 與 poison 的 events 表、`<bc>.inbox` 表）與 `apps/migrate/main.go` 的 `migrations`；有 event 的 BC 另在 `application/port` 加自己的 `Inbox` 與 `provider.go` 的 `ProvideInbox`（每個 BC 自己的型別，wire 才分得開）。
+**新增 Bounded Context**：`task new-bc -- <name> [--events]`（`tools/newbc`，樣板在 `tools/newbc/templates/`，skill 在 `.claude/skills/new-bc/SKILL.md`）。
+它產生 `protos/<name>/v1/*`、`pkgs/<name>/**`（一個 aggregate、`provider.go` 匯出 `RPC`、`arch_test.go`、`0001` migration）並在 `go.work`、`buf.gen.yaml`、`apps/{rpc,migrate}/go.mod`、`apps/rpc/{wire.go,app.go}`、`apps/migrate/main.go` 各加一筆（插在 `new-bc:*` 錨點註解上方，不要刪或複製錨點）；
+`--events` 另產生 event、outbox、同 BC 的 consumer、inbox、`0002_events`／`0003_inbox` migration，並加 `apps/worker/{go.mod,wire.go,consumers.go,poison.go}`。名稱過 `scripts/bcs.jq`（`^[a-z][a-z0-9]*$`）、最長 30 字元、不是 Go keyword／`kernel`／`platform`，任何一條不過或 BC 已存在都在寫任何檔之前拒絕。
+接著自動跑 `task gen` → `scripts/sync-fixpoint.sh`（tidy 到沒有 diff）→ `task wire`；之後手動：`task gen-ts`、把樣板改成真正的領域、commit tidy 的結果。`task new-bc-check` 在工作樹複本（`git ls-files -co --exclude-standard`，含未 `git add` 的新檔）產生兩種樣本並 lint／build／test；CI 的 gen-freshness 也跑它，**但沒有 DB，不跑 postgres repository 的測試**。
+有跨 BC 的 consumer、List、stats projection 等樣板沒有的東西，照 `pkgs/identity` 與 `docs/workflow.md` 加。
 
 ## Conventions（本 repo 特有）
 

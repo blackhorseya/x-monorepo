@@ -1,0 +1,13 @@
+module <% .Module %>/pkgs/<% .Name %>
+
+go <% .GoVersion %>
+
+require (
+	<% .Module %>/pkgs/kernel v0.0.0
+	<% .Module %>/pkgs/platform v0.0.0
+)
+
+replace (
+	<% .Module %>/pkgs/kernel => ../kernel
+	<% .Module %>/pkgs/platform => ../platform
+)

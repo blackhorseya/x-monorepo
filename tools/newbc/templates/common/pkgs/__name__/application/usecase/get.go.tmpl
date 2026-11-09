@@ -1,0 +1,29 @@
+package usecase
+
+import (
+	"context"
+
+	"<% .Module %>/pkgs/platform/contextx"
+	"<% .Module %>/pkgs/<% .Name %>/application/dto"
+	"<% .Module %>/pkgs/<% .Name %>/application/mapper"
+	"<% .Module %>/pkgs/<% .Name %>/domain/<% .Name %>"
+)
+
+// Get<% .Title %> reads one <% .Title %>.
+type Get<% .Title %> struct {
+	repo <% .Name %>.Repository
+}
+
+func NewGet<% .Title %>(repo <% .Name %>.Repository) *Get<% .Title %> { return &Get<% .Title %>{repo: repo} }
+
+func (uc *Get<% .Title %>) Execute(c context.Context, in dto.Get<% .Title %>Input) (*dto.<% .Title %>Output, error) {
+	if in.ID == "" {
+		return nil, <% .Name %>.ErrInvalidID
+	}
+	x, err := uc.repo.FindByID(contextx.FromContext(c), <% .Name %>.ID(in.ID))
+	if err != nil {
+		return nil, err
+	}
+
+	return mapper.To<% .Title %>Output(x), nil
+}

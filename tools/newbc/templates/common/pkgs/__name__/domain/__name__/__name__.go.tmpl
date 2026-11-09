@@ -1,0 +1,58 @@
+// Package <% .Name %> is the <% .Title %> aggregate of the <% .Name %> bounded context. It imports only the shared kernel.
+package <% .Name %>
+
+import (
+	"time"
+	"unicode/utf8"
+)
+
+// maxNameRunes is mirrored by the buf.validate rules of <% .Title %>Service and the column check of the schema.
+const maxNameRunes = 200
+
+// ID identifies a <% .Title %>.
+type ID string
+
+func (x ID) String() string { return string(x) }
+
+// <% .Title %> is the aggregate root.<% if .Events %> events are the domain events raised since the last PullEvents.<% end %>
+type <% .Title %> struct {
+	id        ID
+	name      string
+	createdAt time.Time<% if .Events %>
+	events    []Event<% end %>
+}
+
+// New creates a <% .Title %><% if .Events %> and raises Created<% end %>.
+func New(id ID, name string, now time.Time) (*<% .Title %>, error) {
+	x, err := Reconstitute(ReconstituteParams{ID: id, Name: name, CreatedAt: now})
+	if err != nil {
+		return nil, err
+	}<% if .Events %>
+	x.record(NewCreated(x))<% end %>
+
+	return x, nil
+}
+
+// ReconstituteParams carry persisted state back into the aggregate, as stored.
+type ReconstituteParams struct {
+	ID        ID
+	Name      string
+	CreatedAt time.Time
+}
+
+// Reconstitute rebuilds a <% .Title %> from persistence. Only repositories should call it. It raises
+// no event: the state it restores was reached long ago.
+func Reconstitute(p ReconstituteParams) (*<% .Title %>, error) {
+	if p.ID == "" {
+		return nil, ErrInvalidID
+	}
+	if n := utf8.RuneCountInString(p.Name); n == 0 || n > maxNameRunes {
+		return nil, ErrInvalidName
+	}
+
+	return &<% .Title %>{id: p.ID, name: p.Name, createdAt: p.CreatedAt}, nil
+}
+
+func (x *<% .Title %>) ID() ID               { return x.id }
+func (x *<% .Title %>) Name() string         { return x.name }
+func (x *<% .Title %>) CreatedAt() time.Time { return x.createdAt }

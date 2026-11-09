@@ -1,0 +1,36 @@
+-- Event tables of the <% .Name %> BC: one watermill-sql (v4, Postgres) topic table + consumer offsets table
+-- per topic, named by platform/eventbus.TableName (<bc>.events_<topic>).
+-- Topics: <% .Name %>.v1.<% .Title %>Created (published, and consumed by this BC's own worker handler),
+-- <% .Name %>.poison (messages the router gave up on).
+
+CREATE TABLE <% .Name %>.events_v1_<% .Name %>created (
+    "offset"         BIGSERIAL,
+    "uuid"           VARCHAR(36) NOT NULL,
+    "created_at"     TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "payload"        BYTEA       DEFAULT NULL,
+    "metadata"       JSON        DEFAULT NULL,
+    "transaction_id" xid8        NOT NULL,
+    PRIMARY KEY ("transaction_id", "offset")
+);
+CREATE TABLE <% .Name %>.events_v1_<% .Name %>created_offsets (
+    consumer_group                VARCHAR(255) NOT NULL,
+    offset_acked                  BIGINT,
+    last_processed_transaction_id xid8 NOT NULL,
+    PRIMARY KEY (consumer_group)
+);
+
+CREATE TABLE <% .Name %>.events_poison (
+    "offset"         BIGSERIAL,
+    "uuid"           VARCHAR(36) NOT NULL,
+    "created_at"     TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "payload"        BYTEA       DEFAULT NULL,
+    "metadata"       JSON        DEFAULT NULL,
+    "transaction_id" xid8        NOT NULL,
+    PRIMARY KEY ("transaction_id", "offset")
+);
+CREATE TABLE <% .Name %>.events_poison_offsets (
+    consumer_group                VARCHAR(255) NOT NULL,
+    offset_acked                  BIGINT,
+    last_processed_transaction_id xid8 NOT NULL,
+    PRIMARY KEY (consumer_group)
+);

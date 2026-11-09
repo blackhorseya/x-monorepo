@@ -1,0 +1,44 @@
+package <% .Name %>
+
+import (
+	"time"
+
+	"<% .Module %>/pkgs/kernel"
+)
+
+// Event is a domain event of the <% .Title %> aggregate. The events adapter maps each one to the wire
+// contract (<% .Name %>.v1).
+type Event interface {
+	kernel.Event
+	<% .Title %>ID() ID
+}
+
+// base is what every <% .Name %> event carries; concrete events embed it.
+type base struct {
+	id         ID
+	occurredAt time.Time
+}
+
+func (x base) AggregateID() string   { return x.id.String() }
+func (x base) <% .Title %>ID() ID    { return x.id }
+func (x base) OccurredAt() time.Time { return x.occurredAt }
+
+// Created is raised when a <% .Title %> is created.
+type Created struct {
+	base
+}
+
+func NewCreated(x *<% .Title %>) Created {
+	return Created{base: base{id: x.id, occurredAt: x.createdAt}}
+}
+
+// PullEvents returns the events raised since the last pull and clears them. Use cases call it inside
+// the transaction that saves the aggregate.
+func (x *<% .Title %>) PullEvents() []Event {
+	evs := x.events
+	x.events = nil
+
+	return evs
+}
+
+func (x *<% .Title %>) record(e Event) { x.events = append(x.events, e) }

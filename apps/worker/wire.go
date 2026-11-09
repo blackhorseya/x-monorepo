@@ -23,6 +23,8 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 		ProvideRedis, // redis.NewClient only when worker.broker is redis
 		otel.ProviderSet,
 		eventbus.ProvidePublisher,
+		// new-bc:worker-providers
+		NewConsumers,
 		NewWorker,
 	)
 

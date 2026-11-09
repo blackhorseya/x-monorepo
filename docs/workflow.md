@@ -11,23 +11,21 @@
 3. `provider.go` 加 `ProvideXxx`，讀取用 `decorate(name, rec, uc)`，寫入用 `decorateTx(name, rec, tx, uc)`
 4. `adapters/rpc` 實作新方法（`var _ XxxServiceHandler` 會提醒）→ `task wire`
 
-### 新增 Bounded Context（照 `pkgs/identity` 抄；它是沒有 event 的版本：沒有 consumer / events adapter / outbox / inbox / poison，`apps/worker` 與 `NewPoisonService` 都不用加。有 event 的版本（consumer / events adapter / outbox / inbox / poison）在目前主線沒有範例）
-1. `protos/<newbc>/v1/{entity,service}.proto`（有 event 才加 `event.proto`）+ `openapi.base.yaml`；`buf.gen.yaml` 加一行 `go_package` override
-2. `pkgs/<newbc>/go.mod`（module path 對齊目錄，`replace` 指向 kernel / platform / 要讀 contract 的 BC），`go.work` 加 `use`（`Taskfile.yml` 的 `MODULES` 由它導出，不用另外加），
-   `BCS` 由 `go.work` 導出（`pkgs/*` 去掉 kernel、platform，名稱只收 `^[a-z][a-z0-9]*$`），`apps/*/go.mod` 加 `require` + `replace` → `task tidy`
-3. `contract/v1/openapi.go`（embed）→ `task gen`；複製 `pkgs/identity` 結構，寫 `provider.go`（匯出自己的 `RPC` 型別，即 `server.Mount`）與 `arch_test.go`（照 `pkgs/identity/arch_test.go`；layer 與 BC 隔離的 import 規則由 `archtest.Run` 自動套用，不改任何既有 BC 或 `.golangci.yml`）（有 event 的 BC：`Subscriptions` 用自己的 named type）
-4. `apps/rpc`：`NewMounts` 加它的 `RPC`（一個參數＋一個元素）、`wire.go` 加 `ProviderSet`；有 event 的 BC 的 `RPC.PoisonSchema` 填它的 schema（`NewPoisonService` 由 mounts 取）；有 event 的 BC 另加 `apps/worker`：`wire.go` 加 `ProviderSet`、`NewWorker` 收它的
-   `Subscriptions` 並 `Register`（自己的 poison topic）、`poison.go` 的 `schemas` 加它的 schema → `task wire`
-5. 有 DB 的話：`infra/postgres/migrations/0001_*.sql`（表都放在 `<newbc>.` schema）+ `Migration()`（有 event 的 BC：另加自己發的 topic 與 `<newbc>.poison`、`<newbc>.inbox` 的 events 表），
-   `apps/migrate/main.go` 的 `migrations` 加一筆（依賴順序：發進別人表的排後面）
-6. `task gen-ts`（需要網路）把 TS client 產進 `web/packages/proto/src/gen/<newbc>/`——CI 的 gen-freshness 也比這個
+### 新增 Bounded Context：`task new-bc -- <name> [--events]`
+`tools/newbc` 一次產生並接好（樣板在 `tools/newbc/templates/`，細節與失敗還原見 `.claude/skills/new-bc/SKILL.md`）：
+1. 新檔：`protos/<name>/v1/{entity,service}.proto`＋`openapi.base.yaml`、`pkgs/<name>/**`（`provider.go` 匯出自己的 `RPC`，即 `server.Mount`；`arch_test.go` 讓 layer 與 BC 隔離的 import 規則由 `archtest.Run` 自動套用）、`0001_<name>` migration（表放在 `<name>.` schema）。`--events` 另加 `event.proto`、event、outbox、同 BC 的 consumer（經 inbox）、`0002_events`（自己發的 topic 與 `<name>.events_poison`）、`0003_inbox`
+2. 共用檔各加一筆，插在 `new-bc:*` 錨點註解上方：`go.work` 的 `use`（`MODULES`、`BCS` 由它導出，名稱只收 `^[a-z][a-z0-9]*$`）、`buf.gen.yaml` 的 `go_package` override、`apps/{rpc,migrate}/go.mod` 的 `require` + `replace`、`apps/rpc/wire.go` 的 `ProviderSet`、`NewMounts` 的一個參數與一個元素、`apps/migrate/main.go` 的 `migrations`。`--events` 另加 `apps/worker`：`go.mod`、`wire.go` 的 `ProviderSet`、`NewConsumers` 的一個參數與一個元素（`NewWorker` 收 `[]Consumer`）、`poison.go` 的 `schemas`
+3. 然後 `task gen` → `scripts/sync-fixpoint.sh`（`go mod tidy` + `go work sync` 到沒有 diff）→ `task wire`
+4. 手動：`task gen-ts`（需要網路）把 TS client 產進 `web/packages/proto/src/gen/<name>/`（CI 的 gen-freshness 也比這個）；把樣板的 aggregate、proto 與 migration 改成真正的領域；commit tidy 的結果
+5. 驗證：`task new-bc-check`（工作樹複本，含未 `git add` 的新檔）；CI 的 gen-freshness 也跑，**沒有 DB，所以不跑 postgres repository 的測試**
+產生物是起點：沒有 List、沒有 stats projection、沒有跨 BC 的 consumer。有 event 的 BC 的 `RPC.PoisonSchema` 要填它的 schema（`NewPoisonService` 由 mounts 取）。
 
 ### 新增 consumer / 新 event
-目前主線沒有 BC 有 event，沒有範例。以下是機制的形狀：
+`task new-bc -- <name> --events` 產生的 BC 就是範例（`<Name>Created`，由同一個 BC 的 consumer 收）。以下是機制的形狀：
 - **發**：domain 加 event struct（embed `base`）並在行為裡 `record()`；`protos/<bc>/v1/event.proto` 加 message → `task gen`；
   `adapters/events.toProto` 加 case；migration 加 `events_<topic>` + `_offsets` 兩張表。
 - **收**：`adapters/consumer` 加 handler（error contract 見 `handler.go`）→ `provider.go` 的 `Subscriptions` 加一筆；
-  訂閱別的 BC 的 topic 時，表由發的那個 BC 的 migration 建，consumer 只 import 它的 `contract/`。`apps/worker` 不用改，除非是新 BC（見上）。
+  訂閱別的 BC 的 topic 時，表由發的那個 BC 的 migration 建，consumer 只 import 它的 `contract/`。`apps/worker` 不用改，除非是新 BC（`task new-bc --events` 已加）。
 - 要在同一個 process 跑 rpc + consumer 也可以（go-micro 式），那是 `apps/` 的決定，BC 不在乎。
 
 ### 拆 BC 成獨立服務

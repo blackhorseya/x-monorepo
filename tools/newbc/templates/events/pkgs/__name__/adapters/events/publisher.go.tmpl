@@ -1,0 +1,69 @@
+// Package events is the outbound adapter for domain events: it maps <% .Name %>.Event values to the wire
+// contract (<% .Name %>.v1) and hands them to a Watermill publisher.
+package events
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/ThreeDotsLabs/watermill/message"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"<% .Module %>/pkgs/platform/eventbus"
+	"<% .Module %>/pkgs/platform/idgen"
+	"<% .Module %>/pkgs/<% .Name %>/application/port"
+	<% .Name %>v1 "<% .Module %>/pkgs/<% .Name %>/contract/v1"
+	"<% .Module %>/pkgs/<% .Name %>/domain/<% .Name %>"
+)
+
+// Topic<% .Title %>Created is the topic this BC publishes <% .Title %>Created to: the proto full name.
+var Topic<% .Title %>Created = string((&<% .Name %>v1.<% .Title %>Created{}).ProtoReflect().Descriptor().FullName())
+
+var _ port.EventPublisher = (*Publisher)(nil)
+
+// Publisher implements port.EventPublisher on a message.Publisher. With the Postgres publisher the
+// rows join the caller's transaction (the context must come from Transactor.Do); with GoChannel they
+// are delivered in-process.
+type Publisher struct {
+	pub message.Publisher
+}
+
+func NewPublisher(pub message.Publisher) *Publisher { return &Publisher{pub: pub} }
+
+func (h *Publisher) Publish(c context.Context, evs ...<% .Name %>.Event) error {
+	for _, e := range evs {
+		topic, pb, err := toProto(e)
+		if err != nil {
+			return err
+		}
+		payload, err := proto.Marshal(pb)
+		if err != nil {
+			return fmt.Errorf("encode %s: %w", topic, err)
+		}
+		id, err := idgen.New()
+		if err != nil {
+			return fmt.Errorf("message id for %s: %w", topic, err)
+		}
+		msg := message.NewMessageWithContext(c, id, payload)
+		msg.Metadata.Set(eventbus.MetaKey, e.AggregateID())
+		msg.Metadata.Set(eventbus.MetaOccurredAt, e.OccurredAt().UTC().Format("2006-01-02T15:04:05.999999999Z07:00"))
+		if err := h.pub.Publish(topic, msg); err != nil {
+			return fmt.Errorf("publish %s for <% .Name %> %s: %w", topic, e.<% .Title %>ID(), err)
+		}
+	}
+
+	return nil
+}
+
+func toProto(e <% .Name %>.Event) (string, proto.Message, error) {
+	switch ev := e.(type) {
+	case <% .Name %>.Created:
+		return Topic<% .Title %>Created, &<% .Name %>v1.<% .Title %>Created{
+			Id:         ev.<% .Title %>ID().String(),
+			CreateTime: timestamppb.New(ev.OccurredAt()),
+		}, nil
+	default:
+		return "", nil, fmt.Errorf("no wire mapping for domain event %T", e)
+	}
+}

@@ -1,0 +1,10 @@
+package <% .Name %>
+
+import "<% .Module %>/pkgs/kernel"
+
+var (
+	ErrInvalidID     = kernel.NewError(kernel.KindInvalidArgument, "<% .Name %>.invalid_id", "id must not be empty")
+	ErrInvalidName   = kernel.NewError(kernel.KindInvalidArgument, "<% .Name %>.invalid_name", "name must be 1 to 200 characters")
+	ErrNotFound      = kernel.NewError(kernel.KindNotFound, "<% .Name %>.not_found", "<% .Name %> not found")
+	ErrAlreadyExists = kernel.NewError(kernel.KindConflict, "<% .Name %>.already_exists", "<% .Name %> already exists")
+)

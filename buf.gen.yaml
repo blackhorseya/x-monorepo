@@ -20,6 +20,7 @@ managed:
     - file_option: go_package
       path: identity/v1
       value: github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1;identityv1
+    # new-bc:go-package
 plugins:
   - local: bin/protoc-gen-go
     out: .

@@ -1,0 +1,21 @@
+package usecase
+
+import (
+	"context"
+
+	"<% .Module %>/pkgs/platform/contextx"
+	"<% .Module %>/pkgs/<% .Name %>/application/dto"
+)
+
+// Record<% .Title %>Created is what the consumer of <% .Title %>Created runs. The record that the message was
+// handled is the inbox row the Idempotent decorator inserts in the same transaction; this use case adds
+// a log line. A real BC puts its reaction to the event here.
+type Record<% .Title %>Created struct{}
+
+func NewRecord<% .Title %>Created() *Record<% .Title %>Created { return &Record<% .Title %>Created{} }
+
+func (uc *Record<% .Title %>Created) Execute(c context.Context, in dto.Record<% .Title %>CreatedInput) (*dto.Record<% .Title %>CreatedOutput, error) {
+	contextx.FromContext(c).Info("<% .Name %> created event handled", "id", in.ID)
+
+	return &dto.Record<% .Title %>CreatedOutput{}, nil
+}
