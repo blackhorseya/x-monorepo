@@ -23,7 +23,7 @@ task new-bc -- <name> --events   # 有 event：outbox、同 BC 的 consumer、in
 - `pkgs/<name>` 或 `protos/<name>` 已存在 → 拒絕
 
 ## 產生器做什麼
-- 新檔：`protos/<name>/v1/*`、`pkgs/<name>/**`（一個 aggregate，Create 與 Get；memory 與 postgres repository；`arch_test.go`；use case 與 domain 的測試）、`0001_<name>` migration。
+- 新檔：`protos/<name>/v1/*`、`pkgs/<name>/**`（一個 aggregate，Create 與 Get；memory 與 postgres repository；`arch_test.go`、`pgtest_cleanup_test.go`〔`pkgs/platform/archtest` 要求每個 module 都有〕；use case 與 domain 的測試）、`0001_<name>` migration。
   `--events` 另加 `<Name>Created` event（經 outbox 發）、同 BC 的 consumer（經 inbox，只記「已處理」）、`0002_events`、`0003_inbox`。
 - 共用檔各加一筆：`go.work`、`buf.gen.yaml`、`apps/{rpc,migrate}/go.mod`、`apps/rpc/{wire.go,app.go}`、`apps/migrate/main.go`；`--events` 另加 `apps/worker/{go.mod,wire.go,consumers.go,poison.go}`。
 - 插入點是共用檔裡的 `new-bc:*` 錨點註解（整行比對、必須剛好一個），插入後用 parser 驗過。**不要刪錨點，也不要複製它**；少了或重複，產生器會在寫任何檔之前停下。

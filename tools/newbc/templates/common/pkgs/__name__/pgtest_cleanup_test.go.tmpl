@@ -1,0 +1,14 @@
+package <% .Name %>_test
+
+import (
+	"testing"
+
+	"<% .Module %>/pkgs/platform/archtest"
+)
+
+// A Postgres test must not leave rows behind while reporting PASS (#371). CI runs a module's tests only
+// when the change reaches that module, so every module carries this gate; pkgs/platform's archtest pins
+// that none is missing.
+func TestPostgresTestCleanup(t *testing.T) {
+	archtest.RunTestCleanup(t, ".")
+}

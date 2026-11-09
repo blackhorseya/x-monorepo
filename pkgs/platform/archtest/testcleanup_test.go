@@ -349,11 +349,12 @@ func goWorkModules(t *testing.T) (root string, mods []string) {
 
 // ungated are the modules that do not run the gate, and why. kernel is the
 // zero-dependency core: a test importing platform/archtest would make it require
-// platform, turning the dependency around. tools/stripvalidate is a standalone
-// build tool with no database test.
+// platform, turning the dependency around. tools/stripvalidate and tools/newbc are
+// standalone build tools with no database test.
 var ungated = map[string]string{
 	"pkgs/kernel":         "zero-dependency shared kernel; must not require platform",
 	"tools/stripvalidate": "build tool, no database tests, no platform dependency",
+	"tools/newbc":         "code generator, no database tests, no platform dependency",
 }
 
 const gateFile = "pgtest_cleanup_test.go"
