@@ -18,7 +18,6 @@
 #   console-image       web, proto (the TS client is generated from it), image files; not plain Go.
 #   release-snapshot    .goreleaser.yaml, a Dockerfile, .dockerignore, release.yml, go.mod / go.sum / go.work.
 #   helm-kind           product Go, web, helm, image files.
-#   helm-kind-keda      helm, apps/worker, pkgs/platform, image files, go.mod / go.sum / go.work.
 #   k6 (the smoke)      tests/k6, pkgs/platform/server + config (rate limit, timeout), apps/rpc, apps/worker,
 #                       configs, go.mod / go.sum / go.work. Business flows are helm-kind's.
 #   k6-auth             tests/k6, pkgs/platform/server + config, pkgs/identity, apps/rpc, configs.
@@ -92,14 +91,12 @@ k6=false;     has 'tests/k6/*' && k6=true
 # and apps/rpc. Test files are no input (has_prod).
 k6_src=false;   { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'apps/rpc/*' 'apps/worker/*' || has 'configs/*'; } && k6_src=true
 auth_src=false; { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'pkgs/identity/*' 'apps/rpc/*' || has 'configs/*'; } && auth_src=true
-# helm-kind-keda scales the worker on eventbus_consumer_lag: the worker, the platform (eventbus, otel), the images it runs.
-keda_src=false; has_prod 'apps/worker/*' 'pkgs/platform/*' && keda_src=true
 # The oidc-dex Playwright project signs in through the compose Dex (#274): its config or the service is a console-e2e input.
 dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.yaml' && dex=true
 # Inputs of scripts/test.sh outside scripts/, ci.yml, Taskfile.yml and .github/actions (those already run everything): .goreleaser.yaml (the
-# release image list cases), tests/k6/auth-matrix.sh (the k6-auth shard cases), go.work (the MODULES
+# release image list cases), go.work (the MODULES
 # cases copy it), the console image's 18-console-env.envsh (its OIDC gate cases). Add a path here when a kept test.sh case starts reading a new one.
-scripts_src=false; has '.goreleaser.yaml' 'go.work' 'tests/k6/auth-matrix.sh' 'web/apps/console/deploy/18-console-env.envsh' && scripts_src=true
+scripts_src=false; has '.goreleaser.yaml' 'go.work' 'web/apps/console/deploy/18-console-env.envsh' && scripts_src=true
 
 
 any() { for v in "$@"; do [ "$v" = true ] && return 0; done; return 1; }
@@ -119,7 +116,6 @@ out console_image    "$web" "$proto" "$images" "$ci"
 out helm             "$helm" "$grafana" "$ci"
 out scripts_test     "$ci" "$scripts_src"
 out helm_kind        "$go_prod" "$web" "$helm" "$images" "$ci"
-out helm_kind_keda   "$helm" "$keda_src" "$images" "$gomod" "$ci"
 out k6               "$k6" "$k6_src" "$gomod" "$ci"
 out k6_auth          "$k6" "$auth_src" "$ci"
 out k6_wire          "$go_prod" "$k6" "$ci"

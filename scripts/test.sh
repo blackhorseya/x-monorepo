@@ -2,8 +2,7 @@
 # Tests for the CI / release decision scripts whose wrong answer is silent: scripts/ci-changes.sh (which ci.yml jobs a change
 # runs; a wrong rule skips a job and CI stays green), scripts/affected.sh (which modules the test matrix runs),
 # scripts/releasable.sh (does a change cut a release), scripts/cosign-sign-blob.sh (no empty signature is uploaded), and the
-# wiring nothing else checks: the k6-auth shards cover the whole matrix, only push / workflow_dispatch write a cache, the
-# release image lists agree, MODULES follows go.work, the console OIDC env gate.
+# wiring nothing else checks: only push / workflow_dispatch write a cache, the release image lists agree, MODULES follows go.work, the console OIDC env gate.
 #
 #   scripts/test.sh          # task scripts-test; CI's scripts-test job
 #
@@ -66,7 +65,7 @@ eq_of() { local _n=$1 _w=$2 _o _r; shift 2; capture _o _r subshell "$@" || exit 
 count_lines() { local rc=0; grep -c "$@" || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; }   # grep -c prints the count (0 too) and exits 1 on "none": that is a count, not a failure
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
-all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind helm_kind_keda k6 k6_auth k6_wire"
+all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind k6 k6_auth k6_wire"
 # ci_changes_jobs: runs scripts/ci-changes.sh in $repo and prints the jobs set to true. The script's exit code and the formatting
 # pipeline are each checked: CI-CHANGES-FAILED when ci-changes.sh dies (even after printing a plausible set), FORMAT-FAILED when sed / tr die.
 ci_changes_jobs() {
@@ -92,25 +91,25 @@ eq_of "grafana provisioning runs helm-check only" "helm" jobs_on grafana deploym
 eq_of "a _test.go alone runs only the Go checks" "$go_checks" jobs_on gotest pkgs/example/domain/thing/thing_test.go
 # A test helper that is not named *_test.go is product code: it can be imported by a binary.
 eq_of "a non-_test.go test helper is product code" \
-  "$go_checks build console_e2e helm_kind helm_kind_keda k6_wire" \
+  "$go_checks build console_e2e helm_kind k6_wire" \
   jobs_on pgtest pkgs/platform/postgres/pgtest/pgtest.go
 eq_of "a _test.go next to a product file changes nothing about the product file" \
   "$go_checks $go_prod" \
   jobs_on gomixed pkgs/example/domain/thing/thing.go pkgs/example/domain/thing/thing_test.go
 
-# Product Go outside the auth / k6 / worker paths: no release-snapshot, console-image, keda, k6, k6-auth.
+# Product Go outside the auth / k6 / worker paths: no release-snapshot, console-image, k6, k6-auth.
 eq_of "go runs the Go checks, kind and k6-wire" \
   "$go_checks $go_prod" \
   jobs_on go pkgs/example/domain/thing/thing.go
-gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind helm_kind_keda k6 k6_wire"
-eq_of "go.mod counts as go, and as a release / keda / k6 input" "$gomod_jobs" jobs_on gomod pkgs/example/go.mod
+gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind k6 k6_wire"
+eq_of "go.mod counts as go, and as a release / k6 input" "$gomod_jobs" jobs_on gomod pkgs/example/go.mod
 eq_of "proto is go + breaking + web, console-image included" \
   "$go_checks build breaking web console_e2e console_image helm_kind k6_wire" \
   jobs_on proto protos/example/v1/service.proto
-eq_of "web only: no lint, no k6, no keda" \
+eq_of "web only: no lint, no k6" \
   "gen_freshness web console_e2e console_image helm_kind" \
   jobs_on web web/apps/console/src/routes/example.tsx
-eq_of "helm only" "helm helm_kind helm_kind_keda" jobs_on helm deployments/helm/x-monorepo/values.yaml
+eq_of "helm only" "helm helm_kind" jobs_on helm deployments/helm/x-monorepo/values.yaml
 eq_of "dex config runs console-e2e" "console_e2e" jobs_on dexcfg deployments/docker/dex/config.yaml
 # A rename is a delete plus an add. `git diff --name-only` pairs them and prints only the new path, so
 # helper.go -> helper_test.go would look test-only while it removed a product file: ci-changes.sh
@@ -130,14 +129,14 @@ rename_jobs_on() {
 eq_of "renaming a product file to _test.go removed a product input" \
   "$go_checks $go_prod" rename_jobs_on torename pkgs/example/helper.go pkgs/example/helper_test.go
 eq_of "k6 scripts: all three k6 jobs"  "k6 k6_auth k6_wire" jobs_on k6 tests/k6/ratelimit.js
-eq_of "platform/server: k6, k6-auth, keda, k6-wire" \
-  "$go_checks $go_prod_pre helm_kind_keda k6 k6_auth k6_wire" jobs_on server pkgs/platform/server/limits.go
+eq_of "platform/server: k6, k6-auth, k6-wire" \
+  "$go_checks $go_prod_pre k6 k6_auth k6_wire" jobs_on server pkgs/platform/server/limits.go
 eq_of "identity: k6-auth only"      "$go_checks $go_prod_pre k6_auth k6_wire" jobs_on identity pkgs/identity/provider.go
 eq_of "Dockerfile is an image change" \
-  "release_snapshot console_image helm_kind helm_kind_keda" \
+  "release_snapshot console_image helm_kind" \
   jobs_on image deployments/docker/Dockerfile.rpc
 eq_of ".goreleaser.yaml is an image change, and a scripts-test input (the release image list cases read it)" \
-  "release_snapshot console_image scripts_test helm_kind helm_kind_keda" \
+  "release_snapshot console_image scripts_test helm_kind" \
   jobs_on goreleaser .goreleaser.yaml
 eq_of "release.yml runs release-snapshot too" "release_snapshot actions_resolve" jobs_on relyml .github/workflows/release.yml
 eq_of "ci.yml runs everything"   "$all_jobs" jobs_on ciyml .github/workflows/ci.yml
@@ -147,35 +146,11 @@ eq_of "scripts/ runs everything" "$all_jobs" jobs_on scripts scripts/new.sh
 fixture ciall
 got=$(in_repo env CI_ALL=1 scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//') || exit 1
 expect_eq "CI_ALL=1 runs everything" "$all_jobs" "$got"
-# ci_job <name>: the lines of that top-level job in ci.yml.
-ci_job() { awk -v n="  $1:" '$0 == n {f=1; next} /^  [a-z0-9-]+:/ || /^  #/ {f=0} f' "$src/.github/workflows/ci.yml"; }
 # Every flag is a job's `if:` in ci.yml, declared once as an output of `affected` (a flag nobody reads skips nothing).
 for j in $all_jobs; do
   _c220a=$(count_lines "^      run_$j: \${{ steps.jobs.outputs.run_$j }}\$" "$src/.github/workflows/ci.yml") || exit 1; expect_eq "ci.yml declares run_$j as an output of affected" 1 "$_c220a"
   _c221a=$(count_lines "^    if: needs.affected.outputs.run_$j == 'true'\$" "$src/.github/workflows/ci.yml") || exit 1; expect_eq "ci.yml has exactly one job gated on run_$j"       1 "$_c221a"
 done
-# #448: k6-auth is one job with a static matrix of shards, K6_AUTH_SHARD=<i>/<n>. The shards must be exactly
-# 1/n … n/n, and their cells together must be the whole list, each once — a cell in no shard would never run.
-m=$src/tests/k6/auth-matrix.sh
-capture all_cells all_cells_rc env K6_AUTH_LIST=1 "$m" || exit 1
-[ "$all_cells_rc" = 0 ] || { echo "scripts/test.sh: $m K6_AUTH_LIST=1 failed" >&2; exit 1; }
-got=$(printf '%s\n' "$all_cells" | wc -l | tr -d ' ') || exit 1
-shards=$(ci_job k6-auth | sed -n 's/^        shard: \[\(.*\)\]$/\1/p' | tr -d '" ' | tr ',' ' ') || exit 1
-n=${shards##*/}
-want=""; for ((i = 1; i <= n; i++)); do want="$want $i/$n"; done
-expect_eq "k6-auth shards are 1/n … n/n" "${want# }" "$shards"
-union=""
-for ((i = 1; i <= n; i++)); do
-  capture part part_rc env K6_AUTH_LIST=1 K6_AUTH_SHARD=$i/$n "$m" || exit 1
-  [ "$part_rc" = 0 ] || { echo "scripts/test.sh: $m shard $i/$n failed" >&2; exit 1; }
-  expect_match "auth matrix shard $i/$n is not empty" '.' "$part"
-  union="$union
-$part"
-done
-cells_sorted=$(printf '%s\n' "$all_cells" | sort) || exit 1
-union_sorted=$(printf '%s\n' "$union" | sed '/^$/d' | sort) || exit 1
-expect_eq "the union of the k6-auth shards is the whole cell list, each cell once" \
-  "$cells_sorted" "$union_sorted"
 plan="$src/.github/actions/setup/plan.sh"
 # plan_out <event> <ref> <default branch> <scope> <output>: one output of plan.sh; PLAN-FAILED / NO-KEY when the script failed or lacks the key,
 # so that an expectation of "" cannot pass on a crashed script.
