@@ -175,7 +175,7 @@ CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/plat
 ## Deploy（Helm）
 
 
-### Upgrade notes — chart 0.3.72：移除 catalog 與 catalog-rpc（#518 切片 2）
+### Upgrade notes — chart 0.3.73：移除 catalog 與 catalog-rpc（#518 切片 2）
 
 這一版把 catalog bounded context 與 `apps/catalog-rpc` 從 repo 移除（程式、proto、Helm、console、k6、CI 與文件）。**不寫 DROP migration**，所以升級本身不會動到既有資料；要注意的是下面幾件事。
 
@@ -186,8 +186,8 @@ CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/plat
 DROP SCHEMA catalog CASCADE;
 ```
 
-- **回滾界線**：回滾到 0.3.71 或更早的 chart 需要 catalog-rpc 與 `catalog` schema；若已 `DROP SCHEMA catalog`，舊版 rpc 起不來。所以清除 schema 之前，先確認不需要回滾。
-- **以 Helm 部署時**：`helm upgrade` 到 0.3.72，chart 之前 render 過的 catalog-rpc 資源（Deployment、Service、ConfigMap、`<release>-catalog-rpc-env` Secret、PDB、ServiceMonitor、NetworkPolicy）因為模板移除，由 Helm 刪除。**不是 Helm 管的東西不會被動**，需要手動清理：
+- **回滾界線**：回滾到 0.3.72 或更早的 chart 需要 catalog-rpc 與 `catalog` schema；若已 `DROP SCHEMA catalog`，舊版 rpc 起不來。所以清除 schema 之前，先確認不需要回滾。
+- **以 Helm 部署時**：`helm upgrade` 到 0.3.73，chart 之前 render 過的 catalog-rpc 資源（Deployment、Service、ConfigMap、`<release>-catalog-rpc-env` Secret、PDB、ServiceMonitor、NetworkPolicy）因為模板移除，由 Helm 刪除。**不是 Helm 管的東西不會被動**，需要手動清理：
   - 自己管的 Secret（`secrets.catalogRpc.existingSecret` 指的那個）。
   - 沒有走這個 chart 部署的 catalog-rpc Deployment（以及它的 Service 等）。
   - 舊的 image tag：`ghcr.io/blackhorseya/x-monorepo/catalog-rpc:*` 的既有 tag 不受影響，之後不再發佈。
