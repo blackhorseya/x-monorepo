@@ -1,7 +1,7 @@
 // apps/rpc is a composition root: load config → wire → mount each BC's rpc
 // adapter → run. No business logic, no mapping.
 //
-// Adding a BC: add its *Service to NewRoutes and its ProviderSet to wire.go.
+// Adding a BC: its ProviderSet in wire.go and its RPC (a parameter and an element) in NewMounts.
 //
 // Consumer adapters are NOT mounted here: apps/worker wires the same BC
 // ProviderSets and runs their Subscriptions (scale by queue depth instead of
@@ -16,8 +16,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"gorm.io/gorm"
 
-	identityrpc "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
-	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/identity"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
@@ -25,17 +24,34 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 )
 
+// NewMounts lists every BC: what each one mounts. This is the one place to add
+// a BC besides wire.go; NewRoutes, NewDocs and NewPoisonService read from it.
+func NewMounts(identity identity.RPC) []server.Mount {
+	return []server.Mount{server.Mount(identity)}
+}
+
 // NewRoutes lists every mounted service: the BCs' and the platform's admin surface.
-func NewRoutes(identity *identityrpc.IdentityService, poison *admin.PoisonService) []server.Route {
-	return []server.Route{identity, poison}
+func NewRoutes(mounts []server.Mount, poison *admin.PoisonService) []server.Route {
+	var routes []server.Route
+	for _, m := range mounts {
+		routes = append(routes, m.Routes...)
+	}
+
+	return append(routes, poison)
 }
 
 // NewPoisonService serves admin.v1.AdminService over the poison table of every
-// BC that consumes events. Adding such a BC: add its Schema here (the worker's
-// poison.go lists the same set). identity consumes no events, so
-// it has no poison table and none is listed yet.
-func NewPoisonService(db *gorm.DB, auth config.Auth) *admin.PoisonService {
-	return admin.NewPoisonService(db, auth, []string{})
+// BC that consumes events (its Mount's PoisonSchema; the worker's poison.go
+// lists the same set). identity consumes no events, so none is listed yet.
+func NewPoisonService(db *gorm.DB, auth config.Auth, mounts []server.Mount) *admin.PoisonService {
+	schemas := []string{}
+	for _, m := range mounts {
+		if m.PoisonSchema != "" {
+			schemas = append(schemas, m.PoisonSchema)
+		}
+	}
+
+	return admin.NewPoisonService(db, auth, schemas)
 }
 
 // NewReadiness lists what /api/readyz checks: the database when one is
@@ -53,12 +69,14 @@ func NewReadiness(db *gorm.DB) server.Readiness {
 	}}}
 }
 
-// NewDocs lists every BC's OpenAPI document (served only when APP_HTTP_DOCS=true).
-func NewDocs() []server.Doc {
-	return []server.Doc{
-		{Name: "identity", Spec: identityv1.OpenAPI},
-		{Name: "admin", Spec: adminv1.OpenAPI},
+// NewDocs lists every BC's OpenAPI document and the platform's (served only when APP_HTTP_DOCS=true).
+func NewDocs(mounts []server.Mount) []server.Doc {
+	var docs []server.Doc
+	for _, m := range mounts {
+		docs = append(docs, m.Docs...)
 	}
+
+	return append(docs, server.Doc{Name: "admin", Spec: adminv1.OpenAPI})
 }
 
 // warmTimeout bounds the startup warm-up of the OIDC keys.

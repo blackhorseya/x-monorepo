@@ -14,7 +14,7 @@ X-API-Key ──► platform/server auth interceptor
                                                     └─► ResolveAPIKey use case：sha256(secret) → api_keys.hash → key.Usable(now) → account.IsActive → principal
 ```
 
-- **platform 不 import BC**（depguard `shared`）。platform 開一個 port `server.CredentialResolver`，identity 的 `adapters/auth` 實作它，
+- **platform 不 import BC**（archtest 的 `shared` 規則）。platform 開一個 port `server.CredentialResolver`，identity 的 `adapters/auth` 實作它，
   `apps/rpc/wire.go` 用 `wire.Bind` 接起來。這是唯一一處 platform 反向呼叫 BC 的地方，而且只透過 platform 自己宣告的 interface。
 - **查序**：config key 先、resolver 後。config key 永遠不打 DB，所以 DB 掛了 operator 還進得去；resolver 回 error（DB 掛）時 request 被拒成
   `auth.invalid_credential`，**不會**放行、也不會把 error 內容給 client（access log 有 `auth: credential resolver failed`）。

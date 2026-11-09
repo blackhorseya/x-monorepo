@@ -6,8 +6,9 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/archtest"
 )
 
-// DDD rules depguard cannot express: private domain state, constructors, no
-// setters, no wall clock in domain, use case shape, dto purity, port purity.
+// The BC's architecture rules: the import rules between layers and BCs, and the
+// DDD shape imports cannot express (private domain state, constructors, no
+// setters, no wall clock in domain, use case shape, dto purity, port purity).
 func TestArchitecture(t *testing.T) {
 	archtest.Run(t, ".")
 }

@@ -23,6 +23,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		server.New,
 		otel.ProviderSet,
 		usecasex.NewRecorder,
+		NewMounts,
 		NewRoutes,
 		NewPoisonService,
 		NewDocs,

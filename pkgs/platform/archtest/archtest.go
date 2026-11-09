@@ -1,5 +1,6 @@
-// Package archtest enforces the DDD rules depguard cannot see (depguard only
-// knows imports). Each BC runs it from its own arch_test.go:
+// Package archtest enforces the architecture rules: the DDD rules about a BC's
+// code (RunRules) and the import rules between layers and BCs (RunImports, see
+// imports.go). Each BC runs it from its own arch_test.go:
 //
 //	func TestArchitecture(t *testing.T) { archtest.Run(t, ".") }
 //
@@ -25,10 +26,12 @@ type Rule struct {
 	Check func(fset *token.FileSet, f *ast.File, report func(pos token.Pos, msg string))
 }
 
-// Run applies DefaultRules to every non-test .go file under root.
+// Run is a BC's whole architecture test: the DDD DefaultRules over every non-test .go
+// file under root, then the import rules (RunImports) of the BC that root is.
 func Run(t *testing.T, root string) {
 	t.Helper()
 	RunRules(t, root, DefaultRules()...)
+	RunImports(t, root)
 }
 
 // RunRules applies the given rules.

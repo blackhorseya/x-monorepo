@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 }
 
 // A test-only topic in its own schema: platform must not import a BC's
-// migrations (depguard), so the tables come from the library's own DDL.
+// migrations (archtest), so the tables come from the library's own DDL.
 const startTopic = "eventbustest.v1.Ping"
 
 // receive waits for one message on ch (acking it) or reports none within d.

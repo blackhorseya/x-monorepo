@@ -21,6 +21,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/port"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
+	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/account"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/apikey"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/domain/externalidentity"
@@ -30,6 +31,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
@@ -78,12 +80,24 @@ var ProviderSet = wire.NewSet(
 
 	// adapters
 	rpc.NewIdentityService,
+	ProvideRPC,
 	ProvideResolver,
 	ProvideIssuerMapping,
 	auth.NewExternalResolver,
 	auth.NewExternalCredentials,
 	cli.NewBootstrap,
 )
+
+// RPC is what apps/rpc mounts for this BC: the identity service and its OpenAPI
+// document. It consumes no events, so there is no poison schema.
+type RPC server.Mount
+
+func ProvideRPC(svc *rpc.IdentityService) RPC {
+	return RPC{
+		Routes: []server.Route{svc},
+		Docs:   []server.Doc{{Name: "identity", Spec: identityv1.OpenAPI}},
+	}
+}
 
 // ProvideAccountRepository picks the persistence backend from the composition
 // root's database handle: nil (APP_POSTGRES_URL unset) means in-memory.

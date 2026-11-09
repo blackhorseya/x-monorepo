@@ -2,7 +2,7 @@
 # Claude Code hooks (.claude/settings.json), lefthook and CI only call tasks here;
 # none of them carry logic of their own.
 #
-#   gate-fast   seconds   fmt + vet + depguard on the module(s) owning FILE   (PostToolUse / pre-commit)
+#   gate-fast   seconds   fmt + vet + lint + archtest on the module(s) owning FILE   (PostToolUse / pre-commit)
 #   gate-local  ~1 min    gen freshness + {{.BUF}} lint + affected tests           (Stop hook / pre-push)
 #   gate-ci     full      everything, authoritative                          (GitHub Actions)
 version: '3'
@@ -57,8 +57,10 @@ vars:
   GORELEASER_VERSION: v2.18.2   # .github/workflows/release.yml pins the same minor
   KUBECONFORM_VERSION: v0.7.0   # helm-check; helm itself comes from PATH (brew install helm)
 
-  # Bounded contexts that publish an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
-  BCS: identity
+  # Bounded contexts, one per line, derived from go.work like MODULES: every pkgs/<bc> module except kernel and platform
+  # (scripts/bcs.jq, also the allowlist for a name). Each publishes an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
+  BCS:
+    sh: set -o pipefail; go work edit -json go.work | jq -r -f scripts/bcs.jq
   # Every Go module in the workspace, one per line: go.work is the only list (#413). Resolved on every task run (like BUF above),
   # so go and jq must be on PATH; a failing pipeline fails the task rather than yield an empty list. scripts/modules.jq is the one
   # rule for what a path may be (it is spliced into shell commands below): anything outside [A-Za-z0-9._/-] fails every task.
@@ -271,7 +273,7 @@ tasks:
       - >-
         {{shellQuote .BUF}} generate --path protos/admin --template
         '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/platform/contract/admin/v1","opt":["path=openapi.yaml","base=protos/admin/v1/openapi.base.yaml"]}]}'
-      - for: { var: BCS }
+      - for: { var: BCS, split: "\n" }
         cmd: >-
           {{shellQuote .BUF}} generate --path protos/{{.ITEM}} --template
           '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/{{.ITEM}}/contract/v1","opt":["path=openapi.yaml","base=protos/{{.ITEM}}/v1/openapi.base.yaml"]}]}'
@@ -298,7 +300,7 @@ tasks:
   # The go.work root is not a module, so `./...` matches nothing there: loop per module.
 
   lint:
-    desc: proto lint + go vet + golangci-lint (depguard enforces layer / BC boundaries)
+    desc: proto lint + go vet + golangci-lint (layer / BC boundaries are archtest, run by `task test`)
     cmds:
       - '{{shellQuote .BUF}} lint'
       - for: { var: MODULES, split: "\n" }

@@ -1,7 +1,7 @@
 // Package auth adapts the identity bounded context to the platform's auth
 // interceptor: server.CredentialResolver over the ResolveAPIKey use case.
 // It is the one place a BC is called from the platform, and only through the
-// interface the platform declares (depguard keeps platform from importing us;
+// interface the platform declares (archtest keeps platform from importing us;
 // apps/rpc wires the two together).
 package auth
 

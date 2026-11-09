@@ -1,123 +1,18 @@
 version: "2"
 
-# Architecture rules enforced here (Clean Architecture dependency direction + BC isolation).
-# NOTE: depguard `pkg` entries are PREFIX matches — no wildcards mid-path — so rules are
-# spelled out per bounded context. Adding a BC = copy the `identity-*` blocks, add a
-# `bc-isolation-<bc>` block, and add the BC to every other BC's isolation / layer denies
-# and to the `shared` / `apps` / `apps-migrate` blocks. DDD rules that are not about imports live in archtest
-# (pkgs/platform/archtest) and run as `go test`.
+# Layer and bounded-context import rules (domain → kernel only, no BC reaching into another, apps
+# not reaching into a BC's domain / application / infra, shared packages importing no BC) are NOT here: depguard `pkg`
+# entries are prefix matches without wildcards, so they would be spelled per BC and every new BC would
+# edit every existing one. They are Go tests (pkgs/platform/archtest/imports.go, run as `go test` in the
+# module they judge), next to the DDD rules that are not about imports.
 
 linters:
   default: standard
   enable:
-    - depguard
     - errorlint
     - gocritic
     - revive
   settings:
-    depguard:
-      rules:
-        # ── shared: kernel / platform never depend on a BC ─────────────────
-        shared:
-          files:
-            - "**/pkgs/kernel/**"
-            - "**/pkgs/platform/**"
-          deny:
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity"
-              desc: "shared packages must not depend on a bounded context (identity reaches the platform through server.CredentialResolver, wired in apps)"
-
-        # ── identity: domain → kernel only ─────────────────────────────────
-        identity-domain:
-          files:
-            - "!**/*_test.go"
-            - "**/pkgs/identity/domain/**"
-          deny:
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/application"
-              desc: "domain must not depend on application"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/infra"
-              desc: "domain must not depend on infra"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters"
-              desc: "domain must not depend on adapters"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/contract"
-              desc: "domain must not depend on the proto contract"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform"
-              desc: "domain must not depend on platform"
-            - pkg: "google.golang.org/protobuf"
-              desc: "domain must not depend on protobuf"
-            - pkg: "connectrpc.com"
-              desc: "domain must not depend on transport"
-
-        # ── identity: application → domain + kernel + platform (contextx/usecasex) ─
-        identity-application:
-          files:
-            - "!**/*_test.go"
-            - "**/pkgs/identity/application/**"
-          deny:
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/infra"
-              desc: "application must not depend on infra"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters"
-              desc: "application must not depend on adapters"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/contract"
-              desc: "application must not depend on the proto contract (use dto)"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/platform/server"
-              desc: "application must not depend on transport"
-            - pkg: "google.golang.org/protobuf"
-              desc: "application must not depend on protobuf"
-            - pkg: "connectrpc.com"
-              desc: "application must not depend on transport"
-
-        # ── identity: infra → domain + application/port + platform ─────────
-        identity-infra:
-          files:
-            - "!**/*_test.go"
-            - "**/pkgs/identity/infra/**"
-          deny:
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters"
-              desc: "infra must not depend on adapters"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/contract"
-              desc: "infra must not depend on the proto contract"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
-              desc: "infra implements ports; it must not call use cases"
-
-        # ── identity: adapters depend on application + contract, never on infra ─
-        identity-adapters:
-          files:
-            - "!**/*_test.go"
-            - "**/pkgs/identity/adapters/**"
-          deny:
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/infra"
-              desc: "adapters must not depend on infra (wire them in provider.go)"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/application/usecase"
-              desc: "adapters depend on usecasex.UseCase interfaces, not concrete use cases"
-
-        # ── apps: composition roots only touch provider.go + platform ──────
-        apps:
-          files:
-            - "**/apps/**"
-            - "!**/apps/**/*_test.go"
-            - "!**/apps/migrate/**"   # see apps-migrate
-          deny:
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/domain"
-              desc: "apps must not touch domain"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/application"
-              desc: "apps must not call use cases directly"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/infra"
-              desc: "apps must not touch infra (except apps/migrate, by explicit exception)"
-
-        # ── apps/migrate: the one app allowed into infra — only to collect each BC's
-        #    embedded migrations. Still no domain / application / adapters.
-        apps-migrate:
-          files:
-            - "**/apps/migrate/**"
-            - "!**/apps/migrate/**/*_test.go"
-          deny:
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/domain"
-              desc: "apps/migrate must not touch domain"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/application"
-              desc: "apps/migrate must not call use cases"
-            - pkg: "github.com/blackhorseya/x-monorepo/pkgs/identity/adapters"
-              desc: "apps/migrate must not touch adapters"
-
     revive:
       rules:
         - name: exported
