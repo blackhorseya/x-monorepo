@@ -21,7 +21,7 @@ FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、P
 | `auth.permission_denied` | `PERMISSION_DENIED` | `server.RequireRole` | 有身分但缺角色（AdminService、`IdentityService` 除 `WhoAmI` 與 `ClaimInvite` 外都要 `auth.admin_role`） |
 | `concurrent_update` | `ABORTED` | `server.ToConnectError` | optimistic lock 撞版（`account.ErrStale` / `apikey.ErrStale` / `invite.ErrStale`，wrap `kernel.ErrConcurrentUpdate`）；重送即可，刻意沒有前綴也不是 `kernel.Error` |
 | `pagination.invalid_page_size` | `INVALID_ARGUMENT` | `platform/pagination` | `page_size` 負數 |
-| `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開，或帶的 filter 跟這次 request 不同（filter 一併編進 token 的列表才有這一條；目前沒有 RPC 使用） |
+| `pagination.invalid_token` | `INVALID_ARGUMENT` | `platform/pagination` | `page_token` 解不開（`ListAccounts` 就會回這個），或帶的 filter 跟這次 request 不同（filter 一併編進 token 的列表才有這一條；目前沒有帶 filter 的 RPC） |
 | `admin.no_database` | `FAILED_PRECONDITION` | admin | server 沒接 Postgres（`postgres.url` 空）：poison 表與 outbox / inbox 都在 DB |
 | `admin.unknown_bounded_context` | `INVALID_ARGUMENT` | admin | `bounded_context` 不在 `apps/rpc` 列的 schema 清單 |
 | `admin.poison_not_found` | `NOT_FOUND` | admin | `GetPoison` 的 offset 不存在 |

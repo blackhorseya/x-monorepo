@@ -186,8 +186,8 @@ CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/plat
 DROP SCHEMA catalog CASCADE;
 ```
 
-- **回滾界線**：回滾到 0.3.72 或更早的 chart 需要 catalog-rpc 與 `catalog` schema。若已 `DROP SCHEMA catalog`，舊版 catalog-rpc 與 rpc **仍然起得來、readiness 也會是 200**（啟動與 readiness 只 ping Postgres，不查 `catalog.products`），但第一次讀寫 catalog 才會因缺表失敗，舊 rpc 會回 `catalog.unavailable`。所以健康檢查通過不代表回滾成功；要讓 catalog 請求恢復，必須還原 schema 與資料（從 DROP 前的備份）。清除 schema 之前，先確認不需要回滾。
-- **以 Helm 部署時**：`helm upgrade` 到 0.3.73，chart 之前 render 過的 catalog-rpc 資源（Deployment、Service、ConfigMap、`<release>-catalog-rpc-env` Secret、PDB、ServiceMonitor、NetworkPolicy）因為模板移除，由 Helm 刪除。**不是 Helm 管的東西不會被動**，需要手動清理：
+- **回滾界線**：回滾到 0.3.72 或更早的 chart 需要 catalog-rpc 與 `catalog` schema。若已 `DROP SCHEMA catalog`，舊版 catalog-rpc 與 rpc **仍然起得來、readiness 也會是 200**（啟動與 readiness 只 ping Postgres，不查 `catalog.products`），但第一次讀寫 catalog 才會因缺表失敗，舊 rpc 對 catalog 的呼叫可能回 `catalog.unavailable`（catalog-rpc 5xx 會被映射成這個；實際取決於 catalog-rpc 缺表時怎麼失敗，本次沒有實測）。所以健康檢查通過不代表回滾成功；要讓 catalog 請求恢復，必須還原 schema 與資料（從 DROP 前的備份）。清除 schema 之前，先確認不需要回滾。
+- **以 Helm 部署時**：`helm upgrade` 到 0.3.73，chart 之前 render 過的 catalog-rpc 資源（Deployment、Service、ConfigMap；依當時的 values 還有 `<release>-catalog-rpc-env` Secret〔沒設 `secrets.catalogRpc.existingSecret` 才有〕、PDB〔`replicaCount` > 1 且開啟才有〕、ServiceMonitor、NetworkPolicy〔`networkPolicy.enabled` 才有〕）因為模板移除，由 Helm 刪除。**不是 Helm 管的東西不會被動**，需要手動清理：
   - 自己管的 Secret（`secrets.catalogRpc.existingSecret` 指的那個）。
   - 沒有走這個 chart 部署的 catalog-rpc Deployment（以及它的 Service 等）。
   - 舊的 image tag：`ghcr.io/blackhorseya/x-monorepo/catalog-rpc:*` 的既有 tag 不受影響，之後不再發佈。
@@ -200,7 +200,7 @@ kubectl -n <ns> delete secret <name>
 ```
 
 - **Helm values**：`catalogRpc`、`secrets.catalogRpc`、`rpc.waitForCatalog`、`networkPolicy.catalogRpc`、`config.catalog` 已移除；升級時請從自己的 values 拿掉（留著只是無效鍵）。`APP_CATALOG_*` 環境變數不再被讀取。
-- **行為**：rpc 不再有 `catalog.v1`（`UpsertProduct`／`GetProduct`／`ListProducts`／`DeactivateProduct`／`QuotePrices` 都沒有了，呼叫會得到 404／unimplemented），console 的 Products 頁（`/products`）移除。rpc 不再需要 catalog upstream 即可啟動；`rpc --wait-catalog` 與 initContainer `wait-for-catalog` 移除，rpc 現在只有 `--version`／`-v` 一個參數。
+- **行為**：rpc 不再有 `catalog.v1`（`UpsertProduct`／`GetProduct`／`ListProducts`／`DeactivateProduct`／`QuotePrices` 都沒有了，這些 procedure 的路由已不存在，呼叫不會成功），console 的 Products 頁（`/products`）移除。rpc 不再需要 catalog upstream 即可啟動；`rpc --wait-catalog` 與 initContainer `wait-for-catalog` 移除，rpc 現在只有 `--version`／`-v` 一個參數。
 - **錯誤碼**：`catalog.unavailable` 與 `product.*` 移除（`docs/error-codes.md` 同步）。
 - **trace**：目前沒有任何服務信任遠端 trace（`server.TrustRemoteTrace` 沒有使用者，函式仍在 `pkgs/platform/server`）；rpc 一直不延續外部的 `traceparent`，見 `docs/observability.md`。
 - **kind**：`helm-kind-core` 不再跑 `negative.sh`／`outage.sh`（只有 install → smoke → upgrade → smoke）；`ci-negative/` 目錄清空，`check-negative.sh` 移除，`task helm-check` 不再跑它。
