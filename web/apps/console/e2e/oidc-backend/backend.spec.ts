@@ -51,17 +51,15 @@ async function invitedUser(request: APIRequestContext, roles: string[] = []) {
   return { accountId: account.id as string, email };
 }
 
-// An admin page opened as the bound account. The positive signal comes first: the rpc answered the
-// Accounts list itself (ListAccounts, pageSize 20; AdminGate's probe is pageSize 1 and the "Create account"
-// button renders before the list is asked), which only an account holding the admin role gets. Only then is
-// "no alert" a statement about the bound identity rather than about a call that has not come back yet.
+// An admin page opened as the bound account. The positive signal comes first and is what the page shows,
+// not what the network did: a row in the Accounts table's tbody. A tbody row renders only once the list
+// query (AccountsCard's ListAccounts, pageSize 20; AdminGate's probe is pageSize 1) succeeded: a data row,
+// or "No accounts yet" for an empty list (here always a data row: the invited account exists). The "Create
+// account" button renders before the list is asked, so it proves nothing and is not waited for. Only after
+// that row is "no alert" a statement about the bound identity rather than about a call not yet answered.
 async function openAccountsAsBound(page: Page) {
-  const list = page.waitForResponse(
-    (r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && (r.request().postData() ?? "").includes('"pageSize":20'),
-  );
   await page.goto("/accounts");
-  expect((await list).status()).toBe(200);
-  await expect(page.getByRole("button", { name: "Create account" })).toBeVisible();
+  await expect(page.getByRole("table").locator("tbody tr").first()).toBeVisible();
   await expect(page.getByText("Not authenticated")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
 }
