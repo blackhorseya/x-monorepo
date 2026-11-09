@@ -146,7 +146,7 @@ task k6-smoke                     # tests/k6/smoke.sh：ratelimit、timeout 各�
 
 `tests/k6/wire.sh`（`task k6-wire`，不需要 Postgres 和 rpc，約 1 分鐘）：各腳本 × 六種壞掉的回應（`tests/k6/wire_server.py`：`status` / `version` / `header` / `chunk` 帶著請求的 `X-API-Key`，`truncated` body 不完整，`closed` 連線直接關），每個 run 都要非零退出，`API_KEY`（自造的假 key）不能出現在 k6 輸出、`--summary-export`、`--out json` 的任何一行，metrics 不能有自由文字的 `error` tag，`closed`（key 根本沒上線）要有 `transport.<class>` 的診斷。每個 cell 還要證明 fixture 真的在場：server 要在 5 秒內 listen、跑完仍活著、自己印出 `served <mode>`（壞回應確實送出），而且 k6 回報的失敗分類必須恰好是該 mode 的（`status` / `version` / `header` / `chunk` → `malformed_response`、`truncated` → `truncated_response`、`closed` → `connection_closed`），出現其他分類（例如 server 缺席時的 `connection_refused`）就紅——光看 exit 非零和沒有 key 證明不了什麼。最後兩個負例 cell 讓 `wire.sh` 自己再跑一次：server 不啟動（`WIRE_SERVER_CMD=false`）、server 回錯的 mode（`WIRE_SERVE_AS=closed`），它必須失敗，否則 gate 本身標紅。失敗用 go test 的 `--- FAIL:` 格式印，`scripts/red-stage.sh` 讀得懂。
 
-CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/platform/server`、`pkgs/platform/config`、`pkgs/identity`、`apps/rpc`、`configs`、`tests/k6`）變動時跑；壞掉的 HTTP response 那組由獨立的 `k6-wire` job 跑，跟所有產品 Go 變動；matrix 的 cell 名字可以接在 task 後面只跑幾個（`K6_AUTH_LIST=1 tests/k6/auth-matrix.sh` 列出全部 cell 名）。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
+CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/platform/server`、`pkgs/platform/config`、`pkgs/identity`、`apps/rpc`、`configs`、`tests/k6`）變動時跑；壞掉的 HTTP response 那組由獨立的 `k6-wire` job 跑，跟所有產品 Go 變動；matrix 的 cell 名字可以接在 task 後面只跑幾個（cell 名是 `tests/k6/auth-matrix.sh` 裡每個 `cell` 呼叫的第一個字）。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
 
 ## Worker 輪詢間隔（`worker.poll_interval`）
 
@@ -222,7 +222,7 @@ DROP SCHEMA payment CASCADE;
 - **Helm values**：`config.ordering`、`secrets.paymentRpc`、`paymentRpc`、`networkPolicy.paymentRpc`、`expire` 已移除；升級時請從自己的 values 拿掉（留著只是無效鍵）。`APP_ORDERING_*`／`APP_PAYMENT_*` 環境變數不再被讀取。`payment-rpc`、`payment-worker` image 不再發佈（既有 tag 不受影響）。`worker expire`、`task expire` 子命令已移除。
 - **migrate**：`apps/migrate` 的 `migrate version`／`down` 輸出不再包含這三個 schema。
 - **Grafana**：Saga／Payment 面板列與 saga-pending、reservation-expiry、commit-short、payment-* alert 已移除；eventbus／auth／identity 的面板與 alert 保留。
-- **依 consumer lag 擴縮 worker**：目前沒有載具（沒有 BC 發 event）；`helm-kind-keda` 只驗 ScaledObject 能 render、被 KEDA 接受且 `--wait` 成功；#518「已知缺口」未定案。
+- **依 consumer lag 擴縮 worker**：目前沒有載具（沒有 BC 發 event）；ScaledObject 的 render 與 schema 由 `task helm-check` 的 `ci/redis-values.yaml` 驗（沒有叢集裝 KEDA，不驗 KEDA 是否接受它）；#518「已知缺口」未定案。
 
 `deployments/helm/x-monorepo/` 是這些 image 的 chart，沒有 dependency、不假設 ingress controller 或 secret 工具。它做的事是把
 README 的 server / Events 節講的「部署要配合的行為」寫成算式，而不是讓人手抄：
@@ -301,14 +301,12 @@ helm install api deployments/helm/x-monorepo -n app --create-namespace \
 ```
 
 `check.py` 是 chart 裡唯一有邏輯的地方的測試：rpc 的 grace period 算式與 env、readiness period 的關係、worker 沒 probe、migrate hook
-與它的 Secret 的順序、prune 的 args、console 的 `RPC_UPSTREAM` 指到這個 release 的 rpc Service 且沒有 `APP_*` / Secret。ServiceMonitor 選到 rpc Service 的 port、NetworkPolicy 的 peers（console 一定在、`ingressFrom` 原樣、空就不出 `from`）。`ci/` 六個 profile（預設 + DB；redis broker + HPA + ingress + auth required；existingSecret；console + 自己的 ingress；hardened：NetworkPolicy 列 ingress-nginx / monitoring + ServiceMonitor + console；oidc：auth required + 兩個 issuer，驗 `auth.oidc` 原樣進 ConfigMap、布林沒被 YAML 1.1 吃掉）。
+與它的 Secret 的順序、prune 的 args、console 的 `RPC_UPSTREAM` 指到這個 release 的 rpc Service 且沒有 `APP_*` / Secret。ServiceMonitor 選到 rpc Service 的 port、NetworkPolicy 的 peers（console 一定在、`ingressFrom` 原樣、空就不出 `from`）。`ci/` 六個 profile（預設 + DB；redis broker + HPA + ingress + auth required + worker 以 lag 擴縮（ScaledObject，kubeconform 用 CRDs-catalog 的 `keda.sh` schema 驗）；existingSecret；console + 自己的 ingress；hardened：NetworkPolicy 列 ingress-nginx / monitoring + ServiceMonitor + console；oidc：auth required + 兩個 issuer，驗 `auth.oidc` 原樣進 ConfigMap、布林沒被 YAML 1.1 吃掉）。
 在 CI 的 `helm` job 跑。真的裝一次是 `task helm-kind`（CI 的 `helm-kind` job）：起 kind cluster、`deployments/helm/kind/deps.yaml`
 放一個拋棄式 Postgres + Redis（chart 沒有 subchart dependency，production 接 managed DB，這份只給 smoke 用）、從 working tree build 三個 Go image（rpc / worker / migrate）+ console image（`web-build` → nginx）
 `kind load` 進去、`helm upgrade --install --wait` 兩次（第一次走 pre-install hook、第二次走 pre-upgrade），每次跑 `kind/smoke.sh`：
 rpc 的 `/api/readyz` 與 `/api/version`；console 回 `index.html`、`/api/readyz` 經 nginx proxy 到 rpc；Dex 的 discovery `issuer` 是約定的那個字串。本機約 1 分鐘（cluster 已存在時），`task helm-kind-down` 刪 cluster。
-另一條 `task helm-kind-keda`（CI 同一個 job 的另一個 matrix leg，和 `helm-kind` 平行、各自一個 cluster；兩者共用的底座是 `task helm-kind-up`：cluster、image、Postgres / Redis）：裝 KEDA、`kind/monitoring.yaml` 放一個 OTLP collector（gRPC :4317 → Prometheus exporter :8889）
-和一個 5s scrape 的 Prometheus，用 `kind/keda-values.yaml` 重裝 chart（`OTEL_METRIC_EXPORT_INTERVAL=5000`、threshold 50、scaleDown stabilization 30s），
-並 `--wait`：驗 ScaledObject 能 render、被 KEDA 接受且 `--wait` 成功。「依 consumer lag 實際擴縮 worker」暫時沒有載具（沒有 BC 發 event，原本的擴縮實測已移除；#518「已知缺口」未定案）。
+沒有叢集裝 KEDA：worker 以 lag 擴縮的 ScaledObject 只在 `helm` job 驗 render 與 schema，KEDA operator 是否接受它、`--wait` 是否成功、OTLP collector 到 Prometheus 是否起得來都不驗。「依 consumer lag 實際擴縮 worker」暫時沒有載具（沒有 BC 發 event；#518「已知缺口」未定案）。
 `appVersion`（image.tag 空時用它）由 release.yml 的 `chart` job 在每次發版後開一支 chart-only PR 跟上（bot push 不會觸發 CI，所以它自己 `gh workflow run ci.yml`；要 repo 開「Allow GitHub Actions to create and approve pull requests」，沒開就只推 branch、summary 給 compare 連結）；chart 本身沒有 publish 到 OCI registry。
 
 ## DB 連線池容量（`postgres.max_open_conns`）

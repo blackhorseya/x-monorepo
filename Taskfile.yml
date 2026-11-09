@@ -22,7 +22,7 @@ vars:
   # Container runtime for local infra: podman first, docker as fallback.
   COMPOSE:
     sh: 'command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose"'
-  # Where the kind tasks (helm-kind-up / helm-kind / helm-kind-core / helm-kind-keda / helm-kind-down) aim, #430. These are
+  # Where the kind tasks (helm-kind-up / helm-kind / helm-kind-core / helm-kind-down) aim, #430. These are
   # file-level literals ON PURPOSE: a task-level `vars:` entry beats the command line in go-task, so the
   # same literal inside a task made `task helm-kind-up CLUSTER=probe` act on x-monorepo; at file level the
   # command line wins and the OS environment does not (go-task reads the environment as template
@@ -30,7 +30,6 @@ vars:
   # task). Name them on the command line or get the default.
   CLUSTER: x-monorepo     # the kind cluster (kind create / load / delete --name, and kubectl's context kind-<CLUSTER>)
   NS: x-monorepo          # the namespace the chart and its dependencies (Postgres, Redis, Dex) live in
-  KEDA_NS: keda           # the namespace helm-kind-keda installs KEDA itself into
   # The kubeconfig the kind tasks use: written from `kind get kubeconfig --name <CLUSTER>`, so it holds that one cluster and
   # nothing else. Every kubectl / helm / kind command and every kind/*.sh of these tasks runs through KIND_RUN
   # (deployments/helm/kind/run.sh): `env -i`, an empty scratch HOME (no ~/.kube), KUBECONFIG and KIND_KUBECONFIG = the file below,
@@ -42,7 +41,7 @@ vars:
   KIND_KUBECONFIG: '{{.BIN_DIR}}/kind/kubeconfig-{{.CLUSTER}}'
   KIND_RUN: 'deployments/helm/kind/run.sh "{{.KIND_KUBECONFIG}}"'
   # Empty unless the value is a plain lowercase DNS-ish name: the tasks interpolate these into shell commands.
-  KIND_TARGET_OK: '{{if and (regexMatch "^[a-z0-9][a-z0-9.-]*$" .CLUSTER) (regexMatch "^[a-z0-9][a-z0-9.-]*$" .NS) (regexMatch "^[a-z0-9][a-z0-9.-]*$" .KEDA_NS)}}ok{{end}}'
+  KIND_TARGET_OK: '{{if and (regexMatch "^[a-z0-9][a-z0-9.-]*$" .CLUSTER) (regexMatch "^[a-z0-9][a-z0-9.-]*$" .NS)}}ok{{end}}'
   # Config file `task run` / `task migrate` load (APP_CONFIG). Gitignored; seeded from
   # configs/config.example.yaml on first use. Override: task run CONFIG=<file>
   CONFIG: '{{.CONFIG | default (printf "%s/configs/local.yaml" .ROOT_DIR)}}'
@@ -134,7 +133,7 @@ tasks:
       - task: scripts-test
 
   scripts-test:
-    desc: 'scripts/test.sh: ci-changes (which jobs a change runs), affected, releasable and cosign-sign-blob against throwaway git repos or a fake cosign, plus the k6-auth shard coverage, the cache-write plan, the release image lists, the MODULES derivation and the console OIDC env gate'
+    desc: 'scripts/test.sh: ci-changes (which jobs a change runs), affected, releasable and cosign-sign-blob against throwaway git repos or a fake cosign, plus the cache-write plan, the release image lists, the MODULES derivation and the console OIDC env gate'
     cmds:
       - scripts/test.sh
 
@@ -373,12 +372,12 @@ tasks:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, jq (brew install kind kubectl jq)
       - sh: test -n "{{.KIND_TARGET_OK}}"
-        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
+        msg: CLUSTER and NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind-up:
     run: once   # helm-kind and helm-kind-core depend on this: one cluster, built once
     deps: [web-build, helm-kind-cluster]
-    desc: 'the shared base of helm-kind-core and helm-kind-keda: kind cluster + its own kubeconfig (helm-kind-cluster; reused if it exists), images built from the tree (rpc / worker / migrate + the console), kind load, then deployments/helm/kind/deps.yaml (Postgres, Redis, Dex)'
+    desc: 'the base of helm-kind-core: kind cluster + its own kubeconfig (helm-kind-cluster; reused if it exists), images built from the tree (rpc / worker / migrate + the console), kind load, then deployments/helm/kind/deps.yaml (Postgres, Redis, Dex)'
     vars:
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
@@ -410,7 +409,7 @@ tasks:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
       - sh: test -n "{{.KIND_TARGET_OK}}"
-        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
+        msg: CLUSTER and NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind:
     desc: 'helm-kind-core on one cluster (helm-kind-up runs once); the release is left installed on the cluster'
@@ -421,7 +420,7 @@ tasks:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
       - sh: test -n "{{.KIND_TARGET_OK}}"
-        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
+        msg: CLUSTER and NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind-core:
     deps: [helm-kind-up]
@@ -440,26 +439,7 @@ tasks:
       - sh: command -v kind >/dev/null && command -v kubectl >/dev/null && command -v helm >/dev/null && command -v jq >/dev/null
         msg: needs kind, kubectl, helm, jq (brew install kind kubectl helm jq)
       - sh: test -n "{{.KIND_TARGET_OK}}"
-        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
-
-  helm-kind-keda:
-    deps: [helm-kind-up]
-    desc: 'on the helm-kind-up cluster (independent of the other helm-kind tasks, CI runs them in parallel): KEDA + deployments/helm/kind/monitoring.yaml (OTLP collector → Prometheus), the chart re-installed with kind/keda-values.yaml (worker.autoscaling lag) and --wait: the ScaledObject renders and KEDA accepts it. What KEDA scales on (consumer lag) has no producer until a BC publishes events (#518)'
-    vars:
-      CHART: deployments/helm/x-monorepo
-      KIND_DIR: deployments/helm/kind
-      KEDA_VERSION: 2.21.0
-    cmds:
-      - '{{.KIND_RUN}} helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1 || true'
-      - '{{.KIND_RUN}} helm --kubeconfig "{{.KIND_KUBECONFIG}}" upgrade --install keda kedacore/keda -n {{.KEDA_NS}} --create-namespace --version {{.KEDA_VERSION}} --wait --timeout 3m >/dev/null'
-      - '{{.KIND_RUN}} kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} apply -f {{.KIND_DIR}}/monitoring.yaml >/dev/null'
-      - '{{.KIND_RUN}} kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} rollout status deploy/otel-collector deploy/prometheus --timeout=2m'
-      - '{{.KIND_RUN}} helm --kubeconfig "{{.KIND_KUBECONFIG}}" upgrade --install x-monorepo {{.CHART}} -n {{.NS}} -f {{.KIND_DIR}}/values.yaml -f {{.KIND_DIR}}/keda-values.yaml --wait --timeout 3m >/dev/null'
-    preconditions:
-      - sh: command -v jq >/dev/null
-        msg: needs jq
-      - sh: test -n "{{.KIND_TARGET_OK}}"
-        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
+        msg: CLUSTER and NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   helm-kind-down:
     desc: delete the kind cluster created by helm-kind (CLUSTER=<name> for another one, default x-monorepo)
@@ -470,7 +450,7 @@ tasks:
       - rm -rf "{{.BIN_DIR}}/kind/helm-{{.CLUSTER}}"
     preconditions:
       - sh: test -n "{{.KIND_TARGET_OK}}"
-        msg: CLUSTER, NS and KEDA_NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
+        msg: CLUSTER and NS must be lowercase letters, digits, '.' or '-' and start with a letter or digit
 
   k6:
     desc: 'one k6 script against a running server (default http://127.0.0.1:8080, i.e. task run): task k6 -- ratelimit|timeout [k6 args…]; BASE_URL / API_KEY / VUS / DURATION / RPS are read from the environment'
