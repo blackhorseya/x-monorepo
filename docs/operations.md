@@ -186,7 +186,7 @@ CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/plat
 DROP SCHEMA catalog CASCADE;
 ```
 
-- **回滾界線**：catalog 在 chart 0.3.36（v0.54.0）起才是獨立部署的 catalog-rpc；0.3.35（v0.53.0）及更早，catalog 是 rpc 行程內的 service，chart 沒有 catalog-rpc 資源。不論哪一種，回滾到有 catalog 的版本都需要 `catalog` schema 與資料。若已 `DROP SCHEMA catalog`，**已核對的 v0.67.9（chart 0.3.72）**的 catalog-rpc 與 rpc 仍然起得來、readiness 也會是 200（啟動與 readiness 只 ping Postgres，不查 `catalog.products`），但第一次讀寫 catalog 才會因缺表失敗，rpc 對 catalog 的呼叫可能回 `catalog.unavailable`（catalog-rpc 5xx 會被映射成這個；實際取決於 catalog-rpc 缺表時怎麼失敗，本次沒有實測）。0.3.36 到 0.3.71 之間與 0.3.35 以前的版本沒有逐版核對 readiness 行為，不要假設一樣。所以健康檢查通過不代表回滾成功；要讓 catalog 請求恢復，必須還原 schema 與資料（從 DROP 前的備份）。清除 schema 之前，先確認不需要回滾。
+- **回滾界線**：這份 notes 只涵蓋回滾到上一版 chart 0.3.72（v0.67.9）：它需要 catalog-rpc 與 `catalog` schema。若已 `DROP SCHEMA catalog`，該版的 catalog-rpc 與 rpc 仍然起得來、readiness 也會是 200（啟動與 readiness 只 ping Postgres，不查 `catalog.products`），但第一次讀寫 catalog 才會因缺表失敗，rpc 對 catalog 的呼叫可能回 `catalog.unavailable`（catalog-rpc 5xx 會被映射成這個；實際取決於 catalog-rpc 缺表時怎麼失敗，本次沒有實測）。所以健康檢查通過不代表回滾成功；要讓 catalog 請求恢復，必須先還原 schema 與資料（從 DROP 前的備份）。清除 schema 之前，先確認不需要回滾。回滾到更早的 chart 不在這份 notes 的範圍：拓樸不同（例如 0.3.35 及更早 catalog 在 rpc 行程內、沒有 catalog-rpc），請看該版本自己的文件。
 - **以 Helm 部署時**：`helm upgrade` 到 0.3.73，chart 之前 render 過的 catalog-rpc 資源（Deployment、Service、ConfigMap；依當時的 values 還有 `<release>-catalog-rpc-env` Secret〔沒設 `secrets.catalogRpc.existingSecret` 才有〕、PDB〔`replicaCount` > 1 且開啟才有〕、ServiceMonitor〔`catalogRpc.serviceMonitor.enabled` 才有〕、NetworkPolicy〔`networkPolicy.enabled` 才有〕）因為模板移除，由 Helm 刪除。**不是 Helm 管的東西不會被動**，需要手動清理：
   - 自己管的 Secret（`secrets.catalogRpc.existingSecret` 指的那個）。
   - 沒有走這個 chart 部署的 catalog-rpc Deployment（以及它的 Service 等）。
