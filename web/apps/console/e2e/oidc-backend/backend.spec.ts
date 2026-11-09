@@ -51,13 +51,16 @@ async function invitedUser(request: APIRequestContext, roles: string[] = []) {
   return { accountId: account.id as string, email };
 }
 
-// An admin page opened as the bound account. The positive signal comes first: the rpc answered ListAccounts
-// 200, which only an account holding the admin role gets. Only then is "no alert" a statement about the
-// bound identity rather than about a probe that has not come back yet.
+// An admin page opened as the bound account. The positive signal comes first: the rpc answered the
+// Accounts list itself (ListAccounts, pageSize 20; AdminGate's probe is pageSize 1 and the "Create account"
+// button renders before the list is asked), which only an account holding the admin role gets. Only then is
+// "no alert" a statement about the bound identity rather than about a call that has not come back yet.
 async function openAccountsAsBound(page: Page) {
-  const listed = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts"));
+  const list = page.waitForResponse(
+    (r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && (r.request().postData() ?? "").includes('"pageSize":20'),
+  );
   await page.goto("/accounts");
-  expect((await listed).status()).toBe(200);
+  expect((await list).status()).toBe(200);
   await expect(page.getByRole("button", { name: "Create account" })).toBeVisible();
   await expect(page.getByText("Not authenticated")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
