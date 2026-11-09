@@ -133,7 +133,7 @@ tasks:
       - task: scripts-test
 
   scripts-test:
-    desc: 'scripts/test.sh: ci-changes (which jobs a change runs), affected, releasable and cosign-sign-blob against throwaway git repos or a fake cosign, plus the cache-write plan, the release image lists, the MODULES derivation and the console OIDC env gate'
+    desc: 'scripts/test.sh: ci-changes (which jobs a change runs), affected and releasable against throwaway git repos, plus the cache-write plan, the release image lists, the MODULES derivation and the console OIDC env gate'
     cmds:
       - scripts/test.sh
 

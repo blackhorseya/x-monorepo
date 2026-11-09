@@ -1,8 +1,8 @@
 # Real keyless signing without a release (#262). ci.yml's release-snapshot skips `sign` (no OIDC
 # token on a PR run's snapshot, and a throwaway key proves the flags, not Fulcio / Rekor), so
-# the first real run of .goreleaser.yaml's `signs` → scripts/cosign-sign-blob.sh used to be the next
+# the first real run of .goreleaser.yaml's `signs` used to be the next
 # release. This runs goreleaser as a snapshot (no images, no publish, no tag, no release, no
-# draft) with `sign` NOT skipped: checksums.txt is signed through the wrapper with the ambient OIDC
+# draft) with `sign` NOT skipped: checksums.txt is signed through `signs` with the ambient OIDC
 # token (Fulcio certificate, Rekor entry), then `cosign verify-blob` checks that bundle in the same
 # job. A failed sign or a failed verify fails the job.
 #
@@ -14,8 +14,7 @@
 # under .github/, which scripts/releasable.sh excludes, so adding or changing it cuts no version
 # and next-version.sh is unaffected. The certificate's identity is THIS workflow at the ref that ran
 # it (not release.yml@main, which docs/release.md's Verify block uses for the real release), so
-# the identity below comes from github.workflow_ref. The Rekor 409 path stays covered by the
-# fixtures (cosign-v2-conflict-smoke.sh; scripts/test.sh only keeps the empty and stale bundle cases); no conflict is provoked against the real log.
+# the identity below comes from github.workflow_ref. The Rekor 409 path is not verified here, and no conflict is provoked against the real log.
 name: sign-dry-run
 
 on:
@@ -24,7 +23,6 @@ on:
     paths:
       - .github/workflows/sign-dry-run.yml
       - .goreleaser.yaml
-      - scripts/cosign-sign-blob.sh
       # the `pin` step below reads cosign-release: from release.yml and sources best-effort.sh. Not listed on purpose: Dockerfiles (docker is
       # skipped here) and the Go sources (they change what is built, not how checksums.txt is signed)
       - .github/workflows/release.yml
@@ -78,7 +76,7 @@ jobs:
       # is part of that phase); `sign` is deliberately absent from --skip.
       - name: goreleaser snapshot, signing checksums.txt for real
         run: goreleaser release --snapshot --clean --skip=docker,publish
-      - name: cosign verify-blob the bundle the wrapper produced
+      - name: cosign verify-blob the bundle `signs` produced
         run: |
           set -euo pipefail
           bundle=bin/dist/checksums.txt.sigstore.json
@@ -90,7 +88,7 @@ jobs:
             --bundle "$bundle" bin/dist/checksums.txt
           checksums_sha=$(sha256sum bin/dist/checksums.txt | cut -d' ' -f1) || exit $?
           {
-            echo "## sign-dry-run: signed through scripts/cosign-sign-blob.sh and verified"
+            echo "## sign-dry-run: signed through .goreleaser.yaml's signs and verified"
             echo "- identity: \`https://github.com/$GITHUB_WORKFLOW_REF\`"
             echo "- cosign: \`${{ steps.pin.outputs.cosign }}\`"
             echo "- \`$checksums_sha\`  checksums.txt"
