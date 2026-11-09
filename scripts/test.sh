@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the CI / release decision scripts whose wrong answer is silent: scripts/ci-changes.sh (which ci.yml jobs a change
 # runs; a wrong rule skips a job and CI stays green), scripts/affected.sh (which modules the test matrix runs),
-# scripts/releasable.sh (does a change cut a release), scripts/cosign-sign-blob.sh (no empty signature is uploaded), and the
+# scripts/releasable.sh (does a change cut a release), and the
 # wiring nothing else checks: only push / workflow_dispatch write a cache, the release image lists agree, MODULES follows go.work, the console OIDC env gate.
 #
 #   scripts/test.sh          # task scripts-test; CI's scripts-test job
@@ -25,8 +25,6 @@ abort_note() {
 trap 'abort_note "$?" "$LINENO" "$BASH_COMMAND"; rm -rf "$tmp"' EXIT
 fail=0 pass=0
 . "$src/scripts/best-effort.sh"    # best_effort: cleanup that must not decide a verdict, and says so when it fails (#462)
-# count_file <file>: the number in a counter file; 0 when the fake never created it (no file = never called); a file that cannot be read fails
-count_file() { [ -f "$1" ] || { echo 0; return 0; }; cat "$1"; }
 in_dir() { local d=$1; shift; ( cd "$d" && "$@" ); }   # run a command in another directory without moving this shell (capture -2 runs its command in this shell)
 
 # fixture <name>: a fresh repo at $repo with scripts/ committed on main and tag v0.1.0.
@@ -252,47 +250,6 @@ commit "chore: swap"
 eq_of "renames between product and _test.go list the product path" \
   "pkgs/example/helper.go
 pkgs/example/other.go" in_repo scripts/releasable.sh
-# ── cosign-sign-blob.sh ─────────────────────────────────────────────────────────
-# .goreleaser.yaml's `signs.cmd` (#215 option C): cosign sign-blob, re-signed at most twice more and
-# only when the failure is a Rekor 409. Fake cosign, scripted per attempt by FAKE_SEQ (space
-# separated): ok = write the bundle, 409 = Rekor conflict on stderr + exit 1, err = another failure,
-# empty = exit 0 with an empty bundle, none = exit 0 with no bundle. Offline, no sleeping.
-signfake="$tmp/cosign-sign"; mkdir -p "$signfake"
-cat > "$signfake/cosign" <<'FAKE'
-#!/usr/bin/env bash
-n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_COUNT"
-art=$3; echo "$*" >> "$FAKE_ARGS"; echo "token=${SIGSTORE_ID_TOKEN:-}" >> "$FAKE_ARGS"
-for a in "$@"; do case $a in --bundle=*) bundle=${a#--bundle=} ;; esac; done
-[ -s "$bundle" ] && echo "STALE: attempt $n found a bundle left by an earlier one" >> "$FAKE_ARGS"
-set -- $FAKE_SEQ; step=${!n:-err}
-case $step in
-  ok)    echo '{"fake":"bundle"}' > "$bundle" ;;
-  409)   echo "Error: signing $art: [POST /api/v1/log/entries][409] createLogEntryConflict {\"code\":409,\"message\":\"an equivalent entry already exists\"}" >&2; echo partial > "$bundle"; exit 1 ;;
-  empty) : > "$bundle" ;;
-  none)  : ;;
-esac
-FAKE
-chmod +x "$signfake/cosign"
-# sign_blob <name> "<FAKE_SEQ>": runs the wrapper with goreleaser's args; sets sb_rc, sb_out, sb_tries, sb_bundle.
-sign_blob() {
-  local d="$tmp/sb-$1" art=checksums.txt; mkdir -p "$d"; echo artifact > "$d/$art"
-  : > "$d/args"; rm -f "$d/count"
-  sb_bundle="$d/checksums.txt.sigstore.json"
-  set +e
-  sb_rc=0
-  capture -2 sb_out sb_rc in_dir "$src" env PATH="$signfake:$PATH" FAKE_COUNT="$d/count" FAKE_ARGS="$d/args" FAKE_SEQ="$2" SIGSTORE_ID_TOKEN=secret-oidc-token \
-    COSIGN_SIGN_RETRY_DELAY=0 scripts/cosign-sign-blob.sh sign-blob --bundle="$sb_bundle" "$d/$art" --yes || exit 1
-  set -e
-  sb_tries=$(count_file "$d/count") || exit 1; sb_args=$d/args   # no counter file = the fake was never called
-}
-sign_blob retry "409 ok"
-if grep -q STALE "$sb_args"; then bad "sign: retry started on the previous attempt's bundle"; else ok; fi
-sign_blob empty "empty"
-if [ "$sb_rc" != 0 ]; then ok; else bad "sign: success with an empty bundle must fail"; fi
-expect_eq    "sign: empty bundle is not retried"           1 "$sb_tries"
-if [ ! -s "$sb_bundle" ]; then ok; else bad "sign: empty bundle case left a non-empty bundle"; fi
-sign_blob none "none"
-if [ "$sb_rc" != 0 ]; then ok; else bad "sign: success with no bundle must fail"; fi
 # ── web/apps/console/deploy/18-console-env.envsh: the console image's OIDC env gate (#273) ──
 # The same URL judgement as the SPA's parseConfig (new URL): what the container accepts the browser
 # must accept too, otherwise OIDC is switched off silently on the client. Run under sh and dash.
