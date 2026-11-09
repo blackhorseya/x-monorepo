@@ -165,6 +165,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ needs.prepare.outputs.tag }}
+      # Before anything is attested or published: checksums.txt's bundle exists, is not empty, and
+      # verifies. goreleaser v2 only warns when a `signs` output file is missing and never looks at
+      # its size, and `cmd: cosign` exits 0 on a bad run too; this step replaces the empty-bundle
+      # fail-closed check of the removed scripts/cosign-sign-blob.sh (#535) and verifies the
+      # signature as well. A red step here stops `publish` (needs: build). The identity is this
+      # workflow's own workflow_ref, the same value the certificate was issued for (sign-dry-run.yml
+      # verifies the same way).
+      - name: checksums.txt's bundle is non-empty and verifies, before publish
+        run: |
+          set -euo pipefail
+          bundle=bin/dist/checksums.txt.sigstore.json
+          [ -s bin/dist/checksums.txt ] || { echo "bin/dist/checksums.txt is missing or empty"; exit 1; }
+          [ -s "$bundle" ] || { echo "$bundle is missing or empty: the signs step wrote no bundle"; exit 1; }
+          cosign verify-blob \
+            --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --bundle "$bundle" bin/dist/checksums.txt
       # SLSA provenance for what goreleaser just uploaded — the archives and checksums.txt — stored
       # as GitHub artifact attestations (Settings → Attestations; this repo is public, so anyone can
       # `gh attestation verify <file> --repo blackhorseya/x-monorepo`). cosign already signs

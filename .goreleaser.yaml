@@ -82,7 +82,7 @@ checksum:
 # so verify with --bundle. See README → Release → 驗證. Snapshots skip this (`--skip=sign`).
 # cosign is pinned to >= v3.1.4 (release.yml / ci.yml `cosign-release`): v3.0.6 fails the whole
 # sign when Rekor answers 409 "equivalent entry already exists" (#195), v3.1.4 fetches that entry.
-# A Rekor v2 409 is not handled (sigstore-go v1.3.0 onward, #535); rekor-v2-canary.sh warns before the default turns v2.
+# A Rekor v2 409 is not handled (checked in sigstore-go v1.3.0, v1.4.0 and main 9412225a, #535); rekor-v2-canary.sh warns before the default turns v2.
 signs:
   - cmd: cosign
     artifacts: checksum
