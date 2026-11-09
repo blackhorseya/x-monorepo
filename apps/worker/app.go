@@ -74,9 +74,6 @@ func NewWorker(
 		return nil, err
 	}
 
-	if err := checkDB(db, bcs); err != nil {
-		return nil, err
-	}
 	if err := checkPool(db, bcs); err != nil {
 		return nil, err
 	}
@@ -237,19 +234,6 @@ func addForwarders(
 // transaction watermill-sql keeps open from claiming a message until its ack,
 // and the connection the handler's own use case transaction runs on.
 const minConnsPerSubscriber = 2
-
-// checkDB refuses to start a worker that has handlers but no database: every subscriber (and the redis
-// forwarder) reads an outbox table, and the memory repositories of a BC do not feed one. Without it the
-// router starts and the first Postgres subscriber dereferences a nil *gorm.DB. A worker with no
-// consumer (idle) needs no database.
-func checkDB(db *gorm.DB, bcs []Consumer) error {
-	if db != nil || len(bcs) == 0 {
-		return nil
-	}
-
-	return errors.New("worker: postgres.url is empty, but a bounded context consumes events: the consumers read the outbox tables in Postgres " +
-		"(the in-memory repositories only serve rpc); set postgres.url and run the migrate step")
-}
 
 // checkPool refuses a postgres.max_open_conns the subscribers can starve on.
 // With every subscriber busy at once each holds its claiming transaction and

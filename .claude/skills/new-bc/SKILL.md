@@ -52,5 +52,5 @@ git clean -fd pkgs/<name> protos/<name>    # 新檔
 
 ## 注意
 - `task migrate -- down` 讓**每個** BC 各退一步，資料跟著表丟掉：`--events` 的 BC 最新一版是 `0003_inbox`（丟 inbox 表），再退一步是 `0002_events`（丟 events 與 poison 表，未處理的 event 與 poison 的 message 都沒了）。不要把它當單一 BC 的 rollback。
-- **`--events` 的 BC 需要 Postgres**（outbox、inbox 都在 DB）。`apps/worker` 沒有 `postgres.url` 又有 event BC 時，`NewWorker` 啟動就拒絕，錯誤訊息是 `worker: postgres.url is empty, but a bounded context consumes events: …`（`apps/worker/app.go` 的 `checkDB`）；沒有 consumer 的 worker 不需要 DB。`apps/rpc` 沒有 DB 時照常啟動（`task run` 的 in-memory 模式）：repository 用 memory，publisher 退成行程內的 GoChannel（至多一次、沒有人消費，`pkgs/platform/eventbus/eventbus.go` 的 `ProvidePublisher`），event 不會送到 worker。
+- **`--events` 的 BC 需要 Postgres**（outbox、inbox 都在 DB）。`apps/worker` 在 `postgres.url` 為空時拒絕啟動：`postgres.url is required: the event tables are the outbox the worker reads or forwards`（`apps/worker/main.go:63-65`）。
 - 產生的是起點，不是成品：沒有 List、沒有 stats projection、沒有跨 BC 的 consumer。需要時照 `pkgs/identity` 與 `docs/workflow.md` 加。

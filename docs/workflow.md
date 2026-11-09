@@ -18,7 +18,7 @@
 3. 然後 `task gen` → `scripts/sync-fixpoint.sh`（`go mod tidy` + `go work sync` 到沒有 diff）→ `task wire`
 4. 手動：`task gen-ts`（需要網路）把 TS client 產進 `web/packages/proto/src/gen/<name>/`（CI 的 gen-freshness 也比這個）；把樣板的 aggregate、proto 與 migration 改成真正的領域；commit tidy 的結果
 5. 驗證：`task new-bc-check`（工作樹複本，含未 `git add` 的新檔）；CI 的 gen-freshness 也跑，**沒有 DB，所以不跑 postgres repository 的測試**
-產生物是起點：沒有 List、沒有 stats projection、沒有跨 BC 的 consumer。`--events` 的 BC 需要 Postgres：`apps/worker` 沒有 `postgres.url` 又有 event BC 時啟動就拒絕（`worker: postgres.url is empty, but a bounded context consumes events: …`，`apps/worker/app.go` 的 `checkDB`）；`apps/rpc` 沒有 DB 仍可啟動（memory repository、行程內 GoChannel publisher，event 不會送到 worker）。有 event 的 BC 產生的 `provider.go` 已把 `RPC.PoisonSchema` 填成它的 schema（`NewPoisonService` 由 mounts 取）。
+產生物是起點：沒有 List、沒有 stats projection、沒有跨 BC 的 consumer。`--events` 的 BC 需要 Postgres：`apps/worker` 在 `postgres.url` 為空時拒絕啟動（`postgres.url is required: the event tables are the outbox the worker reads or forwards`，`apps/worker/main.go:63-65`）。有 event 的 BC 產生的 `provider.go` 已把 `RPC.PoisonSchema` 填成它的 schema（`NewPoisonService` 由 mounts 取）。
 
 ### 新增 consumer / 新 event
 `task new-bc -- <name> --events` 產生的 BC 就是範例（`<Name>Created`，由同一個 BC 的 consumer 收）。以下是機制的形狀：
