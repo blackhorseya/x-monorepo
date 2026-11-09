@@ -2,7 +2,7 @@
 # Go bump touches a single go.mod and the other modules drift. dependabot-sync.yml runs
 # `task tidy` on its branch, commits, and re-runs CI, so Go version updates can stay on.
 # Once it has pushed, Dependabot no longer rebases that branch and `@dependabot rebase` is refused:
-# use `@dependabot recreate` to catch up with main (it overwrites all non-Dependabot edits; the sync commit is added again).
+# use `@dependabot recreate` to catch up with main (it overwrites all non-Dependabot edits; sync re-runs and commits only if a diff remains).
 # Go bumps are grouped into one weekly PR across all modules; Actions and npm bumps likewise.
 # npm: the pnpm workspace under web/ (one lockfile). The console is a shipped artifact
 # (ghcr .../console), so a merged npm bump cuts a patch release — hence weekly and grouped.

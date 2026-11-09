@@ -17,8 +17,8 @@
 # than Dependabot. That means Dependabot can't rebase it", seen on #521). To catch the
 # branch up with main, comment `@dependabot recreate`: it rebuilds the branch from main
 # and overwrites EVERY non-Dependabot edit (our sync commit, but also any manual fix), so
-# save other edits first; the resulting `synchronize` makes this workflow add the sync
-# commit again. Docs:
+# save other edits first; the resulting `synchronize` re-runs this workflow, which adds
+# a sync commit only if the tree still differs after the fixpoint. Docs:
 # https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-pull-request-comment-commands
 name: dependabot-sync
 
