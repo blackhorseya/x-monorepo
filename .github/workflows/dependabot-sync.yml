@@ -12,9 +12,9 @@
 #     the push alone would leave the PR head without checks. `workflow_dispatch`
 #     is the documented exception, hence the explicit `gh workflow run` at the end.
 #
-# After we push, Dependabot sees a commit it did not author and stops auto-rebasing the
-# branch; `@dependabot rebase` is refused too ("This PR has been edited by someone other
-# than Dependabot. That means Dependabot can't rebase it", seen on #521). To catch the
+# After we push, the branch holds a commit Dependabot did not author, and `@dependabot
+# rebase` is refused ("This PR has been edited by someone other than Dependabot. That
+# means Dependabot can't rebase it", seen on #521). To catch the
 # branch up with main, comment `@dependabot recreate`: it rebuilds the branch from main
 # and overwrites EVERY non-Dependabot edit (our sync commit, but also any manual fix), so
 # save other edits first; the resulting `synchronize` re-runs this workflow, which adds
