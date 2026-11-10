@@ -16,21 +16,32 @@ self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(
 cd "$self_dir/.." || exit 1
 . "$self_dir/best-effort.sh" || exit 1   # capture: a command's output next to its exit status
 
-capture mods mods_rc jq -r 'if type == "array" and length > 0 and all(.[]; type == "string") then .[] else error("MODULES_JSON must be a non-empty JSON array of strings") end' <<< "${MODULES_JSON:-}" || exit 1
-if [ "$mods_rc" != 0 ]; then echo "test-modules: MODULES_JSON is not a non-empty JSON array of module paths (jq exit $mods_rc)" >&2; exit 1; fi
-
+# go.work's module list first (scripts/modules.jq is the one rule for what a module path may be), as a JSON array for jq.
 capture work work_rc go work edit -json ./go.work || exit 1
 if [ "$work_rc" != 0 ]; then echo "test-modules: go work edit failed (exit $work_rc)" >&2; exit 1; fi
 capture known known_rc jq -r -f scripts/modules.jq <<< "$work" || exit 1
 if [ "$known_rc" != 0 ]; then echo "test-modules: scripts/modules.jq refused go.work (exit $known_rc)" >&2; exit 1; fi
+capture known_json known_json_rc jq -R -s -c 'split("\n") | map(select(length > 0))' <<< "$known" || exit 1
+if [ "$known_json_rc" != 0 ]; then echo "test-modules: could not read the go.work module list (jq exit $known_json_rc)" >&2; exit 1; fi
+
+# ALL the validation is done by jq on the JSON elements, before anything is split into lines: an element holding a newline would otherwise come out of
+# `.[]` as two lines, i.e. two runs of one module. An element passes only when it is a string equal to a go.work module (so it already satisfies
+# modules.jq's allowlist; there is no second copy of that rule here); the list must be non-empty and have no repeated element. Any failure is
+# non-zero with the offending value JSON-quoted, and nothing has run yet. The output is one module per line, and no module contains a newline.
+capture mods mods_rc jq -r --argjson known "$known_json" '
+  if type != "array" or length == 0 then error("MODULES_JSON must be a non-empty JSON array")
+  elif (unique | length) != length then error("MODULES_JSON has a repeated element")
+  else .[] | . as $m
+    | if type == "string" and any($known[]; . == $m) then $m
+      else error("MODULES_JSON element " + ($m | @json) + " is not a go.work module") end
+  end' <<< "${MODULES_JSON:-}" || exit 1
+if [ "$mods_rc" != 0 ]; then echo "test-modules: MODULES_JSON refused (jq exit $mods_rc), no module was run" >&2; exit 1; fi
+# jq prints nothing and exits 0 for empty or whitespace-only input; with no module line the loop below would run once with an empty path
+if [ -z "$mods" ]; then echo "test-modules: MODULES_JSON gave no module, no module was run" >&2; exit 1; fi
 
 red=$'\033[31m' plain=$'\033[0m'
 results="" failed=""
 while IFS= read -r m; do
-  case $'\n'"$known"$'\n' in
-    *$'\n'"$m"$'\n'*) ;;
-    *) echo "test-modules: $m is not a go.work module" >&2; exit 1 ;;
-  esac
   echo "=== go test -race ./... in $m ==="
   rc=0
   ( cd "$m" && go test -race ./... ) || rc=$?
