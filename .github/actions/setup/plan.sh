@@ -30,7 +30,10 @@ fi
 # listed gets no build cache at all (it can never grow a new entry by accident).
 group="" saver=false
 case $scope in
+  # test-<module>: a big module's own job; test-(shared): the one job of every other affected module (#547). scripts/affected.sh
+  # STANDALONE names the big ones and must keep apps/rpc, the saver: without that job nobody saves the race cache.
   test-apps/rpc)                                          group=race  saver=true ;;
+  'test-(shared)')                                        group=race ;;
   test-*)                                                 group=race ;;
   lint)                                                   group=check saver=true ;;
   gen-freshness|work-sync|coverage|scripts-test|affected) group=check ;;

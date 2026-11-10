@@ -222,6 +222,31 @@ eq_of "affected: a file moved out of a module still affects it" "pkgs/a pkgs/b" 
 affected_fixture aall
 got=$(in_repo scripts/affected.sh --all | tr '\n' ' ' | sed 's/ $//') || exit 1
 expect_eq "affected: --all ignores the diff"         "pkgs/a pkgs/b" "$got"
+# --matrix (#547): the test job's groups. apps/rpc is in affected.sh's STANDALONE (its own job); pkgs/a and pkgs/b are not named
+# anywhere, so they stand in for a module a template user adds: they must land in the one shared job.
+matrix_fixture() {
+  affected_fixture "$1"
+  mkdir -p "$repo/apps/rpc"
+  printf 'module example.com/rpc\n\ngo 1.22\n' > "$repo/apps/rpc/go.mod"
+  printf 'go 1.22\n\nuse (\n\t./apps/rpc\n\t./pkgs/a\n\t./pkgs/b\n)\n' > "$repo/go.work"
+  commit "chore: rpc module"
+  git -C "$repo" update-ref refs/remotes/origin/main main
+}
+# One case: the groups hold exactly the modules the flagless output prints, each once (a module in two groups would run twice, one in none never),
+# and the printed split is the expected one: apps/rpc alone, the modules STANDALONE does not name together in the shared job.
+matrix_split() {
+  local m mrc a arc u urc
+  matrix_fixture amatrix
+  capture m mrc in_repo scripts/affected.sh --matrix --all || exit 1
+  capture a arc in_repo scripts/affected.sh --all || exit 1
+  if [ "$mrc" != 0 ] || [ "$arc" != 0 ]; then echo "AFFECTED-FAILED"; return 0; fi
+  capture u urc jq -r '[.[].modules[]] | sort | join(" ")' <<< "$m" || exit 1
+  if [ "$urc" != 0 ]; then echo "JQ-FAILED"; return 0; fi
+  a=$(printf '%s\n' "$a" | sort | tr '\n' ' ') || exit 1
+  if [ "$u " = "$a" ]; then echo "$m"; else echo "groups [$u] != affected [$a]"; fi
+}
+eq_of "affected --matrix: groups = the affected modules once each; a standalone module alone, any other module in the shared job" \
+  '[{"name":"apps/rpc","modules":["apps/rpc"]},{"name":"(shared)","modules":["pkgs/a","pkgs/b"]}]' matrix_split
 # ── releasable.sh ───────────────────────────────────────────────────────────────
 fixture releasable
 touch_file README.md changed; touch_file docs/guide.md; touch_file pkgs/example/README.md

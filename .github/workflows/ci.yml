@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5 # p90 20s, max 116s (last 11 days)
     outputs:
-      modules: ${{ steps.detect.outputs.modules }}
+      groups: ${{ steps.detect.outputs.groups }}
       any: ${{ steps.detect.outputs.any }}
       run_gen_freshness: ${{ steps.jobs.outputs.run_gen_freshness }}
       run_lint: ${{ steps.jobs.outputs.run_lint }}
@@ -60,11 +60,13 @@ jobs:
         run: |
           git fetch origin main:refs/remotes/origin/main 2>/dev/null || echo "git fetch origin main failed (exit $?): using the origin/main the checkout has" >&2
           # main and dispatch: every module (the diff against main is empty there, which would
-          # skip the whole test matrix); a PR: the modules its diff reaches.
-          mods=$(BASE_REF=origin/main scripts/affected.sh ${CI_ALL:+--all} | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))') || exit $?
-          echo "modules=$mods" >> "$GITHUB_OUTPUT"
-          echo "any=$([ "$mods" != "[]" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "affected: $mods"
+          # skip the whole test matrix); a PR: the modules its diff reaches. --matrix: one JSON array of
+          # test jobs, [{"name": …, "modules": […]}]: the big modules one job each, the rest in one shared job (#547).
+          groups=$(BASE_REF=origin/main scripts/affected.sh --matrix ${CI_ALL:+--all}) || exit $?
+          any=$(jq -r 'if length > 0 then "true" else "false" end' <<< "$groups") || exit $?
+          echo "groups=$groups" >> "$GITHUB_OUTPUT"
+          echo "any=$any" >> "$GITHUB_OUTPUT"
+          echo "affected: $groups"
       - id: jobs
         env:
           CI_ALL: ${{ github.event_name != 'pull_request' && '1' || '' }}
@@ -113,16 +115,17 @@ jobs:
       - uses: ./.github/actions/setup
       - run: task check-work-sync
 
-  # ── tests: one job per affected module ─────────────────────────────────────
+  # ── tests: one job per big affected module, one shared job for the small ones (#547) ──
   test:
     needs: affected
     if: needs.affected.outputs.any == 'true'
     runs-on: ubuntu-latest
+    name: test (${{ join(matrix.group.modules, ', ') }})
     timeout-minutes: 15 # p90 192s (apps/worker), max 238s; headroom for image pulls (last 11 days)
     strategy:
       fail-fast: false
       matrix:
-        module: ${{ fromJson(needs.affected.outputs.modules) }}
+        group: ${{ fromJson(needs.affected.outputs.groups) }}
     # Integration tests start their own postgres:17-alpine via testcontainers
     # (pkgs/platform/postgres/pgtest) on the runner's Docker, the same path a
     # laptop takes. No TEST_DATABASE_URL here on purpose: with CI set, pgtest
@@ -131,12 +134,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
-        with: { cache-scope: "test-${{ matrix.module }}" }
+        with: { cache-scope: "test-${{ matrix.group.name }}" }
       # testcontainers lets the daemon pull a missing image with no retry; one Docker Hub 502 on
       # ryuk failed a run (39370298272). Pull postgres, redis and ryuk first, with retries.
       - run: scripts/ci-prepull-images.sh
-      - run: go test -race ./...
-        working-directory: ${{ matrix.module }}
+      # every module of the group, each to the end; the red ones are named and the job fails at the end (scripts/test-modules.sh)
+      - run: scripts/test-modules.sh
+        env:
+          MODULES_JSON: ${{ toJSON(matrix.group.modules) }}
 
   coverage:
     needs: affected
