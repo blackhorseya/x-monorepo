@@ -83,26 +83,31 @@ jobs_on() {
 }
 # Shorthands for the sets below (#328): the Go checks every Go change runs, and what only product code adds.
 go_checks="gen_freshness lint work_sync coverage"
-go_prod_pre="build console_e2e helm_kind"; go_prod="$go_prod_pre k6_wire"
+go_prod="build console_e2e helm_kind"
 # The Grafana dashboard and alert rules are inputs of helm-check's check-observability.py (#367 slice 5c): a metric-name typo in a rule that never fires is caught there, so a change to them runs helm and nothing else.
 eq_of "grafana provisioning runs helm-check only" "helm" jobs_on grafana deployments/docker/grafana/provisioning/alerting.yaml
 eq_of "a _test.go alone runs only the Go checks" "$go_checks" jobs_on gotest pkgs/example/domain/thing/thing_test.go
 # A test helper that is not named *_test.go is product code: it can be imported by a binary.
 eq_of "a non-_test.go test helper is product code" \
-  "$go_checks build console_e2e helm_kind k6_wire" \
+  "$go_checks $go_prod" \
   jobs_on pgtest pkgs/platform/postgres/pgtest/pgtest.go
 eq_of "a _test.go next to a product file changes nothing about the product file" \
   "$go_checks $go_prod" \
   jobs_on gomixed pkgs/example/domain/thing/thing.go pkgs/example/domain/thing/thing_test.go
 
 # Product Go outside the auth / k6 / worker paths: no release-snapshot, console-image, k6, k6-auth.
-eq_of "go runs the Go checks, kind and k6-wire" \
+eq_of "go runs the Go checks and kind, not k6-wire (it builds no Go)" \
   "$go_checks $go_prod" \
   jobs_on go pkgs/example/domain/thing/thing.go
 gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind k6 k6_wire"
-eq_of "go.mod counts as go, and as a release / k6 input" "$gomod_jobs" jobs_on gomod pkgs/example/go.mod
-eq_of "proto is go + web, console-image included" \
-  "$go_checks build web console_e2e console_image helm_kind k6_wire" \
+# k6-wire reads go.work (task evaluates `go work edit`, the setup action's go-version-file) and runs `go mod download`: one file at a time, each from the real entry
+eq_of "go.mod counts as go, and as a release / k6 / k6-wire input" "$gomod_jobs" jobs_on gomod pkgs/example/go.mod
+eq_of "go.work is the same set, plus scripts-test" "$go_checks build release_snapshot console_e2e scripts_test helm_kind k6 k6_wire" jobs_on gowork go.work
+# paths that left k6-wire's inputs (it reads neither the lint config nor configs/: its rpc is a stub)
+eq_of ".golangci.yml is Go config: no k6-wire" "$go_checks $go_prod" jobs_on golangci .golangci.yml
+eq_of "configs/ runs the smoke and the auth matrix, not k6-wire" "$go_checks $go_prod k6 k6_auth" jobs_on configs configs/config.example.yaml
+eq_of "proto is go + web, console-image included; no k6-wire" \
+  "$go_checks build web console_e2e console_image helm_kind" \
   jobs_on proto protos/example/v1/service.proto
 eq_of "web only: no lint, no k6" \
   "gen_freshness web console_e2e console_image helm_kind" \
@@ -127,9 +132,9 @@ rename_jobs_on() {
 eq_of "renaming a product file to _test.go removed a product input" \
   "$go_checks $go_prod" rename_jobs_on torename pkgs/example/helper.go pkgs/example/helper_test.go
 eq_of "k6 scripts: all three k6 jobs"  "k6 k6_auth k6_wire" jobs_on k6 tests/k6/ratelimit.js
-eq_of "platform/server: k6, k6-auth, k6-wire" \
-  "$go_checks $go_prod_pre k6 k6_auth k6_wire" jobs_on server pkgs/platform/server/limits.go
-eq_of "identity: k6-auth only"      "$go_checks $go_prod_pre k6_auth k6_wire" jobs_on identity pkgs/identity/provider.go
+eq_of "platform/server: k6 and k6-auth, not k6-wire" \
+  "$go_checks $go_prod k6 k6_auth" jobs_on server pkgs/platform/server/limits.go
+eq_of "identity: k6-auth only"      "$go_checks $go_prod k6_auth" jobs_on identity pkgs/identity/provider.go
 eq_of "Dockerfile is an image change" \
   "release_snapshot console_image helm_kind" \
   jobs_on image deployments/docker/Dockerfile.rpc

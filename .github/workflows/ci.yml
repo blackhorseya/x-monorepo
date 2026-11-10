@@ -23,7 +23,7 @@ jobs:
   # scripts/affected.sh → the go.work modules for the test matrix; scripts/ci-changes.sh → one
   # run_<job> flag per job below, from the files the PR touches (a docs / Grafana / workflow-only
   # PR runs almost nothing; a *_test.go-only PR runs the Go checks and the test matrix; product Go runs
-  # the Go jobs, helm-kind and k6-wire; the k6 / k6-auth / release-snapshot / console-image
+  # the Go jobs and helm-kind; the k6 / k6-auth / k6-wire / release-snapshot / console-image
   # jobs have narrower triggers, see the table in scripts/ci-changes.sh).
   # Every job is its own job (no dynamic matrix over them) so a skipped one shows up as a skipped check.
   # On main (the release gate) and on dispatch every job runs: a skipped job must never be the
@@ -237,7 +237,7 @@ jobs:
 
   # tests/k6/wire.sh: the k6 scripts against a broken HTTP response that quotes the key — a broken
   # response must not carry the key into k6's output or tags (#209). It needs k6 and python3 only
-  # (no Postgres, no ./bin/rpc), so it is a job of its own and follows every product Go change.
+  # (no Postgres, no ./bin/rpc), so it is a job of its own and does not follow product Go: it runs on tests/k6 and the module graph (see ci-changes.sh).
   k6-wire:
     needs: affected
     if: needs.affected.outputs.run_k6_wire == 'true'
