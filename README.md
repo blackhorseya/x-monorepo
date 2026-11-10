@@ -14,7 +14,7 @@ git commit -am "chore: rename module path"  # gen-freshness 是跟 HEAD 比，�
 task gate-ci                                # 跟 CI 一樣的檢查，應該全綠
 ```
 
-目前只保留 `identity` 一個 BC，沒有 event。有 event 的完整版（含 ordering、inventory、payment）保存在 https://github.com/blackhorseya/x-monorepo-reference（tree 與 main `87ebfba1` 相同）；移除的經過見 issue #518。
+目前只保留 `identity` 一個 BC，沒有 event；新增 BC 用 `task new-bc -- <name> [--events]`（流程見 [`docs/workflow.md`](docs/workflow.md)）。有 event 的完整版（含 ordering、inventory、payment、catalog）保存在 https://github.com/blackhorseya/x-monorepo-reference（tree 與 main `87ebfba1` 相同）；移除的經過見 issue #518。
 
 設計的來源與取捨：
 
@@ -58,7 +58,7 @@ curl -X POST localhost:8080/api/identity.v1.IdentityService/ListAccounts \
 │       └── service.proto          # RPC
 ├── pkgs/
 │   ├── kernel/                    # shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
-│   ├── platform/                  # 技術共用：contextx、config、server（gin）、usecasex、metrics、postgres（gorm + migrate runner）
+│   ├── platform/                  # 技術共用：contextx、config、server（gin）、usecasex、otel（metrics / traces / logs）、eventbus、postgres（gorm + migrate runner）、archtest（import 規則）等
 │   └── identity/                  # ── Bounded Context（完整六角形）：DB 管理的 account + API key，給 auth interceptor 解 X-API-Key（docs/identity.md）──
 │       ├── provider.go            # wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorator 包起來
 │       ├── contract/v1/           # buf 生成：pb + Connect + openapi.yaml（只有 adapters / apps 可 import）
@@ -83,6 +83,13 @@ curl -X POST localhost:8080/api/identity.v1.IdentityService/ListAccounts \
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
+├── configs/config.example.yaml    # `task migrate` 第一次會複製成 configs/local.yaml（gitignored）
+├── scripts/                       # CI、gate、release 用的 shell / jq 腳本（docs/ci.md、docs/release.md）
+├── tools/
+│   ├── newbc/                     # `task new-bc` 的產生器與樣板（docs/workflow.md）
+│   └── stripvalidate/             # `task gen-ts` 的一步：buf image 去掉 validate 規則後再產 TS
+├── .claude/skills/new-bc/         # 新增 BC 的 skill（SKILL.md）
+├── .github/                       # workflows、composite actions、PR template
 ├── tests/k6/                      # k6：ratelimit、timeout（打 `identity.v1.IdentityService/ListAccounts`）；task k6 -- <script>、task k6-smoke、task k6-auth-matrix（各 auth 組合）、task k6-wire
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping

@@ -43,13 +43,47 @@
 - **覆蓋**：shard 1 先跑 `task web-e2e-shards-check -- N`（`scripts/web-e2e-shards-check.sh`）：每個 shard 的 `--list` 合起來必須剛好等於未分片的 `--list`（每個 test 一次、不多不少，只列不啟 server）。每次 `--list` 都要 exit 0，且它自己的 `Total: K tests` 要等於印出的 test 行數（部分清單加非零退出、被截斷的清單都是紅燈，不是較小的套件）。`web-e2e-ports` 只在 shard 2 跑。
 - **改 shard 數**：改 matrix 的 `shard: [1, 2]`；ports 掛在 `matrix.shard == 2`，要確認該 shard 不會因此變成 critical path。
 
-**量測方法與結論**（以下是 3 shard 時期，數字與 run id 在 PR #453 的描述；這裡只留結論。#534 改 2 shard 後的實測在 PR #534 的描述）：
+**量測方法與結論**（以下是 3 shard 時期，數字與 run id 在 PR #453 的描述；這裡只留結論。#534 改 2 shard 後的實測在 PR #536 的描述）：
 
 - 探索（單一 workflow run 內的平行 matrix，不是獨立重複，只用來選方案）：workers 2/3/4 是 run 41927472999，shard 2/3 路與 ports 獨立跑是 run 41929103982。結論：4 vCPU 上 workers=4 比預設 2 快約 80–100s 且 0 flaky、0 retry；3 shards 的 `task web-e2e` step 約 50–90s。
 - 定案後的獨立量測是 3 個不同的 workflow run：41934848918（pull_request）、41937591178（workflow_dispatch）、41939558460（workflow_dispatch），同一個 head 9776da2c。三次的 9 個 shard job 全部成功（274 tests = 102+86+86，加 ports 5，0 flaky、0 retry）；整個 workflow 的最終狀態不是三次全綠：41934848918 與 41937591178 因 `gen-freshness`（base 問題，#454）失敗，41937591178 另被後續 dispatch 的 concurrency 取消；`task web-e2e` step 最長的 shard 是 87s／86s／80s（基準 254s）。各 shard 的 step 秒數、queue、setup、cache 命中在 PR #453 的描述。比較以 step 秒數為準，job 總秒數受 Actions cache 與 runner 排隊影響，只作參考。
 - 多佔並行名額：1 個 job 變 3 個（`console-e2e (1..3)`，多 2 個）。名額飽和、排隊時，多拆 job 不一定讓 wall-clock 變短；排隊另外記，不算在 job 秒數裡。
 
 #447 選 workers=4 × 3 shards；ports 放 shard 2（探索 run 41929103982 裡它的 `task web-e2e` 最輕；加上 ports 後是否仍不超過其他兩片，看 PR #453 的獨立量測）。
+
+## CI 時間：骨架瘦身前後（#518）
+
+量法：只算 `ci.yml` 在 **push to main** 的 run；下表 9 個 run 的 job 都是 success、沒有 skipped，job 集合前後可以直接比。資料來自 `gh api repos/blackhorseya/x-monorepo/actions/runs/<id>/jobs`，wall 是第一個 job 開始到最後一個 job 結束（不含 run 一開始的排隊），compute 是所有 job 執行時間加總；每組三個不同的 run id。
+
+| 組 | run | commit | jobs | wall | compute |
+|---|---|---|---|---|---|
+| A 瘦身前 | 42457236735 | 87ebfba1（#517） | 38 | 381s | 3838s |
+| | 42525701445 | 87c6ed08 | 38 | 760s | 3750s |
+| | 42527485365 | 33acb263（#519） | 38 | 422s | 3799s |
+| B 瘦身中、#536 前 | 42547115102 | 5a0d66b6 | 30 | 267s | 2123s |
+| | 42554562740 | df0fed12 | 30 | 261s | 2100s |
+| | 42555687037 | 2117260b（#531） | 31 | 227s | 2253s |
+| C #536 後（最近 3 次） | 42605034612 | e1d52c09（#537） | 27 | 195s | 1768s |
+| | 42612161238 | b8fb72b7（#540） | 27 | 213s | 1846s |
+| | 42736883635 | 6b152584（#541） | 27 | 224s | 1866s |
+
+| 組 | jobs | wall 中位數 | compute 平均（中位數） |
+|---|---|---|---|
+| A | 38 | 422s | 3796s（3799s） |
+| B | 30–31 | 261s | 2159s（2123s） |
+| C | 27 | 213s | 1827s（1846s） |
+
+歸因分開看：
+- **A → B（切片 1–4，骨架瘦身；B 的三個 run 依序含切片 1–2、1–3、1–4）**：job 38 → 30（切片 4 之後 31，多了 `test (tools/newbc)`）；compute 平均 3796s → 2159s（約 −43%）；wall 中位數 422s → 261s。
+- **B → C（#536 之後的三次 main push，也含 #537、#540、#541 的 commit）**：job 31 → 27。#536 移除 `helm-kind-keda`、`console-e2e (3)`，並把 `k6-auth (1/3)`～`(3/3)` 換成單一 `k6-auth`（2117260b 與 8fa64093 的 job 名單比對）；C 的三個 run job 數相同，都是 27。compute 平均 2159s → 1827s（約 −15%）；wall 中位數 261s → 213s。
+- 全程 compute 平均 3796s → 1827s（約 −52%）。
+
+怎麼讀這些數字：
+- 每組只有 3 個 run，wall 受 runner 排隊影響；A 的 760s 明顯偏高，推測原因未查證，所以 wall 只取中位數。
+- compute 取平均是沿用基準的量法；各組平均與中位數的差距：A 3796／3799、B 2159／2123、C 1827／1846。
+- #536 自己的 main run（42596004529，8fa64093）不在 C：它是 #536 之後的第一次，27 jobs、354s、2170s，`gen-freshness` 324s（C 三次是 110／140／170s），原因未查證；取「最近 3 次」時已被後來的 run 擠出。
+- 這份只比較 job 數與 job 秒數，不證明哪個 job 的變動來自哪一個 commit；C 的三次 run 除 #536 的移除外，還含 #537（移除 cosign 腳本）、#540（e2e spec）、#541（chart bump），沒有逐 job 拆開。
+- 刻意不放進來的 run：c4dd88ad（#529）的 run 42548765356 是 attempt 2（attempt 1 的 `console-e2e (3)` failure，原因未查）；它的 jobs 全標 attempt 2，但最早的 job 開始時間（02:03:12Z）早於 attempt 2 的 `run_started_at`（02:11:36Z），算出的 wall 660s 混了兩次 attempt，所以往前改取 5a0d66b6。
 
 ## 本機 hook 證據：AgEnD hooks ≠ lefthook（#300）
 
