@@ -63,7 +63,7 @@ eq_of() { local _n=$1 _w=$2 _o _r; shift 2; capture _o _r subshell "$@" || exit 
 count_lines() { local rc=0; grep -c "$@" || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; }   # grep -c prints the count (0 too) and exits 1 on "none": that is a count, not a failure
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
-all_jobs="gen_freshness lint work_sync coverage build breaking release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind k6 k6_auth k6_wire"
+all_jobs="gen_freshness lint work_sync coverage build release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind k6 k6_auth k6_wire"
 # ci_changes_jobs: runs scripts/ci-changes.sh in $repo and prints the jobs set to true. The script's exit code and the formatting
 # pipeline are each checked: CI-CHANGES-FAILED when ci-changes.sh dies (even after printing a plausible set), FORMAT-FAILED when sed / tr die.
 ci_changes_jobs() {
@@ -101,8 +101,8 @@ eq_of "go runs the Go checks, kind and k6-wire" \
   jobs_on go pkgs/example/domain/thing/thing.go
 gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind k6 k6_wire"
 eq_of "go.mod counts as go, and as a release / k6 input" "$gomod_jobs" jobs_on gomod pkgs/example/go.mod
-eq_of "proto is go + breaking + web, console-image included" \
-  "$go_checks build breaking web console_e2e console_image helm_kind k6_wire" \
+eq_of "proto is go + web, console-image included" \
+  "$go_checks build web console_e2e console_image helm_kind k6_wire" \
   jobs_on proto protos/example/v1/service.proto
 eq_of "web only: no lint, no k6" \
   "gen_freshness web console_e2e console_image helm_kind" \

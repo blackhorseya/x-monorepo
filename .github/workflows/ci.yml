@@ -39,7 +39,6 @@ jobs:
       run_work_sync: ${{ steps.jobs.outputs.run_work_sync }}
       run_coverage: ${{ steps.jobs.outputs.run_coverage }}
       run_build: ${{ steps.jobs.outputs.run_build }}
-      run_breaking: ${{ steps.jobs.outputs.run_breaking }}
       run_release_snapshot: ${{ steps.jobs.outputs.run_release_snapshot }}
       run_actions_resolve: ${{ steps.jobs.outputs.run_actions_resolve }}
       run_web: ${{ steps.jobs.outputs.run_web }}
@@ -336,7 +335,6 @@ jobs:
       - uses: ./.github/actions/setup # go + task: the check-modules / derived-MODULES cases run `go work edit` and `task` (jq is on the runner image)
       - run: scripts/test.sh
 
-  # ── breaking: warn only (decision: wire-incompatible changes are allowed, but visible) ──
   # ── web: @repo/proto must typecheck against the generated TS, console must build ──
   web:
     needs: affected
@@ -441,25 +439,3 @@ jobs:
           name: playwright-report-image
           path: web/apps/console/playwright-report
           retention-days: 7
-
-  breaking:
-    needs: affected
-    if: needs.affected.outputs.run_breaking == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5 # p90 8s (last 11 days)
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: { fetch-depth: 0 }
-      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
-        with: { setup_only: true }
-      - name: buf breaking (skipped while main has no protos)
-        run: |
-          protos=$(git ls-tree -r --name-only origin/main -- protos) || exit $?
-          rc=0; grep -q '\.proto$' <<<"$protos" || rc=$?   # 0 = some, 1 = none; anything else is grep failing, which must not read as "none"
-          case $rc in
-            0) ;;
-            1) echo "main has no protos yet — nothing to compare"; exit 0 ;;
-            *) echo "grep over the proto list exited $rc"; exit 1 ;;
-          esac
-          buf breaking --against '.git#ref=refs/remotes/origin/main' --error-format=github-actions

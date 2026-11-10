@@ -86,7 +86,7 @@ shadcn component 用 `pnpm dlx shadcn@latest add <name>` 加，產出的 `cn` im
   改了 proto 或 wire provider 後要 `task gen wire` 並把產物一起 commit。
 
 CI（`.github/workflows/ci.yml`）另外有 `work-sync`（go.mod 不得漂移，加依賴後 `task tidy`；Taskfile 的 `MODULES` 由 go.work 的 `use` 導出，新增 module 只加 `use`；`scripts/modules.jq` 是路徑唯一的規則——只收 `[A-Za-z0-9._/-]`、空的 `use` 清單也不行，每個 task 都會失敗；`scripts/check-modules.sh` 在 CI 跑同一份）、
-`cover-gate`（所有 `*/domain/*` package 必須 100% 覆蓋）、`buf breaking`（只警告）。PR 上每個 job 只在輸入有變時跑（`scripts/ci-changes.sh` 決定；main 一律全跑），所以一支 PR 沒跑 helm-kind / k6 是正常的，不是壞掉；改 `scripts/ci-changes.sh` 的對照表要一起改 `scripts/test.sh`（`task scripts-test`）。
+`cover-gate`（所有 `*/domain/*` package 必須 100% 覆蓋）。PR 上每個 job 只在輸入有變時跑（`scripts/ci-changes.sh` 決定；main 一律全跑），所以一支 PR 沒跑 helm-kind / k6 是正常的，不是壞掉；改 `scripts/ci-changes.sh` 的對照表要一起改 `scripts/test.sh`（`task scripts-test`）。
 
 ## 架構：誰依賴誰
 
@@ -170,7 +170,7 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 
 ## 新增東西的步驟
 
-**新增 RPC**：改 `protos/<bc>/v1/service.proto`（request 欄位規則用 `buf.validate` 寫在 proto，interceptor 會擋；domain 仍保留不變量）→ `task gen`（`task breaking` 檢查相容）→ domain 加行為 →
+**新增 RPC**：改 `protos/<bc>/v1/service.proto`（request 欄位規則用 `buf.validate` 寫在 proto，interceptor 會擋；domain 仍保留不變量）→ `task gen`（`task breaking` 檢查相容；允許 wire-incompatible 的變更，CI 沒有 breaking job，`task breaking` 只在本機提示）→ domain 加行為 →
 `application/dto` + `usecase` → `provider.go` 加 `ProvideXxx` 並用 `decorate()`（讀）或 `decorateTx()`（寫）包 → `adapters/rpc` 實作
 （`var _ XxxServiceHandler` 會提醒）→ `task wire`。
 
