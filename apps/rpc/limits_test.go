@@ -10,9 +10,9 @@ import (
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
 
-	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1/adminv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
@@ -30,15 +30,15 @@ func TestRateLimit_E2E(t *testing.T) {
 	defer cleanup()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
+	client := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
 	c := context.Background()
 
-	// First call uses the only token (NotFound is the use case's answer: it ran).
-	_, err = client.GetAccount(c, &identityv1.GetAccountRequest{Id: "nope"})
-	if connect.CodeOf(err) != connect.CodeNotFound {
-		t.Fatalf("first call = %v, want NotFound", err)
+	// First call uses the only token (FailedPrecondition admin.no_database is the service's answer: it ran).
+	_, err = client.ListPoison(c, &adminv1.ListPoisonRequest{})
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("first call = %v, want FailedPrecondition", err)
 	}
-	_, err = client.GetAccount(c, &identityv1.GetAccountRequest{Id: "nope"})
+	_, err = client.ListPoison(c, &adminv1.ListPoisonRequest{})
 	var ce *connect.Error
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeResourceExhausted {
 		t.Fatalf("second call = %v, want ResourceExhausted", err)

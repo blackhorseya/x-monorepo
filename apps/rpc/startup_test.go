@@ -90,3 +90,40 @@ func TestStartup_Refuses(t *testing.T) {
 		})
 	}
 }
+
+// The cells where it starts: no auth, or auth with a credential the config itself holds (a static key or a JWT).
+// The deployment shapes in the repo (configs/config.example.yaml, the chart's values and ci profiles, the Console
+// e2e servers) all land in one of these.
+func TestStartup_Starts(t *testing.T) {
+	for _, c := range []struct {
+		name, mode string
+		cred       string
+	}{
+		{"mode off, no credential", "off", "none"},
+		{"mode off, api_keys", "off", "api_keys"},
+		{"mode off, jwt", "off", "jwt"},
+		{"mode optional, api_keys", "optional", "api_keys"},
+		{"mode optional, jwt", "optional", "jwt"},
+		{"mode required, api_keys", "required", "api_keys"},
+		{"mode required, jwt", "required", "jwt"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if err := boot(t, c.mode, false, c.cred); err != nil {
+				t.Fatalf("mode=%s credential=%s: %v, want it to start", c.mode, c.cred, err)
+			}
+		})
+	}
+}
+
+// auth.oidc.enabled next to a static JWT is refused whatever auth.mode is, but by config.Load's own rule (the
+// legacy jwt must pin its issuer, auth.oidc.issuers[]) which runs before the wiring, so the error does not
+// name the extension point. Only the refusal is pinned here.
+func TestStartup_RefusesOIDCWithJWT(t *testing.T) {
+	for _, mode := range []string{"off", "optional", "required"} {
+		t.Run("mode "+mode, func(t *testing.T) {
+			if err := boot(t, mode, true, "jwt"); err == nil {
+				t.Fatalf("mode=%s oidc on with jwt: started, want a refusal", mode)
+			}
+		})
+	}
+}

@@ -12,10 +12,11 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 	"go.opentelemetry.io/otel/trace"
 
-	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1/adminv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
 // deadCollector is an OTLP endpoint nothing listens on: rpc runs the real SDK (a no-op tracer hands a
@@ -69,16 +70,16 @@ func TestTrace_RPCDistrustsAnExternalTraceparent(t *testing.T) {
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(ts.Close)
 
-			client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL)))
+			// No database is wired, so the call ends in the service's FailedPrecondition: the headers asserted
+			// below are the ones an error response carries (the trace id must survive an error, where it is wanted most).
+			client := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
 			c, info := connect.NewClientContext(context.Background())
 			info.RequestHeader().Set("traceparent", "00-"+externalTrace+"-00f067aa0ba902b7-01")
-			if _, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: "tracer"}); err != nil {
-				t.Fatalf("CreateAccount error = %v", err)
+			_, err = client.ListPoison(c, &adminv1.ListPoisonRequest{})
+			if connect.CodeOf(err) != connect.CodeFailedPrecondition {
+				t.Fatalf("ListPoison error = %v, want FailedPrecondition", err)
 			}
-			h := http.Header{}
-			for k, v := range info.ResponseHeader().All() {
-				h[k] = v
-			}
+			h := servertest.ErrorMeta(err)
 
 			if sdkOn {
 				if got := traceOf(t, h); got == ext {
