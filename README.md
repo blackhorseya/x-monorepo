@@ -310,15 +310,14 @@ Scalar 的 Send request 用 `new URL(server + path)`，相對 server 會噴「Th
 
 ## Web console：`web/apps/console`
 
-一個最小的操作介面，用來證明 `@repo/proto` 真的能被前端用：帳號管理（Accounts），以及 poison / prune 的操作頁。
+一個最小的操作介面，用來證明 `@repo/proto` 真的能被前端用：poison / prune 的操作頁。
 
 ```bash
 task run            # rpc :8080
 task web-dev        # http://localhost:5173；CONSOLE_API=http://host:port 可改 proxy 目標
 task web-typecheck  # @repo/proto + @repo/console 的 tsc --noEmit（CI 的 web job 也跑這個 + web-build）
-task web-e2e        # Playwright smoke：建好的 console（vite preview）打真的 ./bin/rpc；account / poison / prune 各頁走一遍。E2E_DATABASE_URL=postgres://… 先 migrate up 再接那個 DB，並多起一個 bin/worker（CI 的 console-e2e job 這樣跑：poison / prune 真的執行），沒設就 in-memory、admin 頁驗 admin.no_database；另一組 project auth 起 auth.mode=required（API key + HS256 JWT）的 rpc 驗 401 / 403 / 設 key 或 JWT 恢復、過期 / 錯 issuer 的 token、roles claim 過 admin gate、寫入也帶 credential。第一次要 cd web/apps/console && pnpm exec playwright install chromium（CI 的兩個 console job 走 .github/actions/playwright：chromium 以 @playwright/test 版本為 key 快取在 ~/.cache/ms-playwright，命中只裝 apt deps）
-task web-e2e-dex    # oidc-dex project：Console 經真 Dex 登入（compose 的 dex 沒起就先起；需 dex.localtest.me 解析得出來，離線見 docs/operations.md「Dex dev IdP」）→ 未綁定 → CreateInvite + ClaimInvite → 進 Console，打只信任 Dex 的真 bin/rpc；CI 的 console-e2e 以 E2E_DEX=1 task web-e2e 一起跑
-task web-e2e-image  # 只把需要 nginx 的 spec（project image：e2e/image-specs.ts = image.spec.ts + version / account-loop 兩支 smoke）改打真的 console image，其餘留在 vite preview（e2e/image.sh：build web/apps/console/Dockerfile、容器的 RPC_UPSTREAM 回指 host 上 Playwright 起的 bin/rpc；docker 或 podman），外加 e2e/image.spec.ts 驗 nginx 本身：deep link 回 index.html + no-cache、assets immutable、不存在的 asset 是 404、/api 經 proxy、/healthz、/config.json、CSP。啟動前 e2e/image-specs.check.ts 擋下沒分類的新 spec；task web-e2e-image-mutants 用壞掉的 nginx 設定證明這些 spec 會紅（不進 CI）。CI 的 console-image job
+task web-e2e        # Playwright smoke：建好的 console（vite preview）打真的 ./bin/rpc；poison / prune 各頁走一遍。E2E_DATABASE_URL=postgres://… 先 migrate up 再接那個 DB，並多起一個 bin/worker（CI 的 console-e2e job 這樣跑：poison / prune 真的執行），沒設就 in-memory、admin 頁驗 admin.no_database；另一組 project auth 起 auth.mode=required（API key + HS256 JWT）的 rpc 驗 401 / 403 / 設 key 或 JWT 恢復、過期 / 錯 issuer 的 token、roles claim 過 admin gate、寫入也帶 credential。第一次要 cd web/apps/console && pnpm exec playwright install chromium（CI 的兩個 console job 走 .github/actions/playwright：chromium 以 @playwright/test 版本為 key 快取在 ~/.cache/ms-playwright，命中只裝 apt deps）
+task web-e2e-image  # 只把需要 nginx 的 spec（project image：e2e/image-specs.ts = image.spec.ts + version / admin 兩支 smoke）改打真的 console image，其餘留在 vite preview（e2e/image.sh：build web/apps/console/Dockerfile、容器的 RPC_UPSTREAM 回指 host 上 Playwright 起的 bin/rpc；docker 或 podman），外加 e2e/image.spec.ts 驗 nginx 本身：deep link 回 index.html + no-cache、assets immutable、不存在的 asset 是 404、/api 經 proxy、/healthz、CSP（渲染完的 connect-src 是 `'self'`、沒有殘留的 template 變數）。啟動前 e2e/image-specs.check.ts 擋下沒分類的新 spec；task web-e2e-image-mutants 用壞掉的 nginx 設定證明這些 spec 會紅（不進 CI）。CI 的 console-image job
 ```
 
 | 主題 | 做法 |
@@ -327,7 +326,7 @@ task web-e2e-image  # 只把需要 nginx 的 spec（project image：e2e/image-sp
 | 錯誤 | `describe()` 讀 `x-error-code` header，並解析 protovalidate 的 `Violations` detail 成 `items[0].sku: …`；`UNAUTHENTICATED` 另外提示去設 credential |
 | 認證 | header 右側的 **Credential**：API key（`X-API-Key`）或 JWT（`Authorization: Bearer`），存 localStorage（`console.credential`），transport 的 interceptor 每次呼叫時讀，改了下一個 RPC 就生效；`VITE_CONSOLE_API_KEY` / `VITE_CONSOLE_TOKEN` 可在 build 時 seed。server `auth.mode: off` 時什麼都不用設 |
 | 資料 | TanStack Query：server 只有 unary RPC。Poison 每 5s 輪詢；`/api/version` 每 5 分鐘重抓。domain error 不 retry |
-| 路由 | TanStack Router（code-based，`/accounts`、`/accounts/$id`、`/poison`、`/prune`，另有 `/login`、`/auth/callback`；首頁導到 `/accounts`），不需要額外的 codegen plugin |
+| 路由 | TanStack Router（code-based，`/poison`、`/prune`；首頁導到 `/poison`），不需要額外的 codegen plugin |
 | Poison 頁 | `admin.v1.AdminService`：各 BC 的 poison 表，Show（metadata + payload base64）/ Requeue / Drop，每個 BC 有 Requeue all / Drop all；server auth 開著時 credential 要帶 `admin` role |
 | UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |
 
@@ -335,7 +334,7 @@ task web-e2e-image  # 只把需要 nginx 的 spec（project image：e2e/image-sp
 
 部署：`web/apps/console/Dockerfile` 把 `task web-build` 的 `dist/` 放進 `nginxinc/nginx-unprivileged`（:8080），`deploy/default.conf.template`
 一個 server：`/` 走 SPA fallback（任何路由都回 `index.html`，`assets/` immutable cache）、`/api/` proxy 到 `RPC_UPSTREAM`（預設 `http://rpc:8080`），
-瀏覽器維持 same-origin，rpc 一樣不需要 CORS；`/healthz` 給 probe。nginx 自己回的東西（index.html、assets）帶 `deploy/security-headers.inc.template` 渲染出的標頭：CSP（script 只准 self、style 允許 inline——Radix 用 style attribute、connect 只准 self——OIDC 開啟時加上 issuer 的精確 origin、`frame-ancestors 'none'`）、nosniff、`X-Frame-Options: DENY`、Referrer-Policy、Permissions-Policy；`/api/` 的 response 是 rpc 的，不加（`/api/docs` 的 Scalar 從 CDN 載）。image 只寫 `/tmp`（entrypoint 用 envsubst 把 template render 到 `/tmp/default.conf`、`/tmp/config.json`（SPA 的 runtime 設定：`CONSOLE_OIDC_ISSUER` / `CONSOLE_OIDC_CLIENT_ID` / `CONSOLE_API_KEY_LOGIN`，白名單 filter，見 [`docs/identity-login.md`](docs/identity-login.md) §8）、`/tmp/security-headers.inc`，
+瀏覽器維持 same-origin，rpc 一樣不需要 CORS；`/healthz` 給 probe。nginx 自己回的東西（index.html、assets）帶 `deploy/security-headers.inc.template` 渲染出的標頭：CSP（script 只准 self、style 允許 inline——Radix 用 style attribute、connect 只准 self、`frame-ancestors 'none'`）、nosniff、`X-Frame-Options: DENY`、Referrer-Policy、Permissions-Policy；`/api/` 的 response 是 rpc 的，不加（`/api/docs` 的 Scalar 從 CDN 載）。image 只寫 `/tmp`（entrypoint 用 envsubst 把 template render 到 `/tmp/default.conf`、`/tmp/security-headers.inc`，白名單 filter 只放 `RPC_UPSTREAM`；SPA 沒有 runtime 設定檔，也就沒有 `/config.json`，`CONSOLE_OIDC_*` 不再有人讀），
 `conf.d` 只剩一行 include），所以 read-only rootfs + 任意 uid 都能跑——Helm chart 的 `console.enabled` 就是這樣部署它（見 [`docs/operations.md`](docs/operations.md)）。
 release pipeline 把它和四個 Go image 一起推成 `ghcr.io/blackhorseya/x-monorepo/console:X.Y.Z`（見 [`docs/release.md`](docs/release.md)；`task helm-kind` 則從 working tree
 build 成 `localhost/x-monorepo/console:kind`）。所以 console 的改動**會切版**：只有 `e2e/` 和 `playwright.config.ts` 不算。
