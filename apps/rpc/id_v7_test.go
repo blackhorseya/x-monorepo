@@ -30,7 +30,7 @@ func TestIDs_NewOnesAreV7FromTheRealEntry(t *testing.T) {
 	defer cleanup()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0))))
+	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL)))
 
 	create := func(rid string) (*identityv1.CreateAccountResponse, *connect.Header) {
 		t.Helper()

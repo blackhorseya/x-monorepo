@@ -76,7 +76,7 @@ func TestIdentityService_EndToEnd(t *testing.T) {
 	defer ts.Close()
 
 	client := func(key string) identityv1connect.IdentityServiceClient {
-		return identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(&http.Client{Transport: keyTransport{key: key}}, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
+		return identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(&http.Client{Transport: keyTransport{key: key}}, ts.URL), servertest.WithErrorMeta()))
 	}
 	c := context.Background()
 	root, viewer := client("root-key-0123456789abcdef"), client("viewer-key-0123456789abcdef")
@@ -230,7 +230,7 @@ func TestIdentityService_AuthOff(t *testing.T) {
 	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
+	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
 	c := context.Background()
 	me, err := client.WhoAmI(c, &identityv1.WhoAmIRequest{})
 	if err != nil || !me.GetAnonymous() {
@@ -320,7 +320,7 @@ func TestIdentityService_InviteAndRevokeSessions(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	client := func(key string) identityv1connect.IdentityServiceClient {
-		return identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(&http.Client{Transport: keyTransport{key: key}}, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
+		return identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(&http.Client{Transport: keyTransport{key: key}}, ts.URL), servertest.WithErrorMeta()))
 	}
 	c := context.Background()
 	root, viewer := client("root-key-0123456789abcdef"), client("viewer-key-0123456789abcdef")
@@ -467,7 +467,7 @@ func TestIdentityService_ListAccountIdentities(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	client := func(key string) identityv1connect.IdentityServiceClient {
-		return identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(&http.Client{Transport: keyTransport{key: key}}, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
+		return identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(&http.Client{Transport: keyTransport{key: key}}, ts.URL), servertest.WithErrorMeta()))
 	}
 	c := context.Background()
 	root, viewer := client("root-key-0123456789abcdef"), client("viewer-key-0123456789abcdef")
@@ -495,7 +495,7 @@ func TestIdentityService_ListAccountIdentities(t *testing.T) {
 		t.Fatalf("viewer, unknown account = %v", err)
 	}
 	// No credential at all.
-	anon := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
+	anon := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
 	if _, err := anon.ListAccountIdentities(c, &identityv1.ListAccountIdentitiesRequest{AccountId: id}); connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Fatalf("anonymous = %v", err)
 	}

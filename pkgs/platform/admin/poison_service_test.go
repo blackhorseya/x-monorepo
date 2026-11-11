@@ -100,9 +100,9 @@ func TestPoisonService(t *testing.T) {
 		}
 		return servertest.WithHeader(server.APIKeyHeader, key)
 	}
-	anon := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
-	viewer := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withKey("viewer-key-0123456789")))
-	ops := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withKey("ops-key-0123456789abcdef")))
+	anon := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
+	viewer := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta(), withKey("viewer-key-0123456789")))
+	ops := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta(), withKey("ops-key-0123456789abcdef")))
 
 	// Gate: anonymous → unauthenticated, a principal without the role → permission denied.
 	_, err = anon.ListPoison(c, &adminv1.ListPoisonRequest{})

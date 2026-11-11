@@ -62,7 +62,7 @@ func TestAuth_Required(t *testing.T) {
 
 	// ListAccounts is behind the admin role and is not public: it is the procedure the credentials are tried on.
 	list := &identityv1.ListAccountsRequest{}
-	anon := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
+	anon := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
 	_, err = anon.ListAccounts(c, list)
 	var ce *connect.Error
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeUnauthenticated || servertest.ErrorMeta(err).Get("x-error-code") != server.UnauthenticatedCode {
@@ -86,7 +86,7 @@ func TestAuth_Required(t *testing.T) {
 		"jwt without role":     {withHeader(server.AuthorizationHeader, "Bearer "+token), connect.CodePermissionDenied},
 		"api key :admin":       {withHeader(server.APIKeyHeader, "ops-key-0123456789abc"), 0},
 	} {
-		client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), tt.opt))
+		client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta(), tt.opt))
 		_, err := client.ListAccounts(c, list)
 		if tt.code == 0 {
 			if err != nil {
@@ -99,7 +99,7 @@ func TestAuth_Required(t *testing.T) {
 		}
 	}
 
-	bad := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withHeader(server.AuthorizationHeader, "Bearer "+token+"x")))
+	bad := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta(), withHeader(server.AuthorizationHeader, "Bearer "+token+"x")))
 	if _, err := bad.ListAccounts(c, list); !errors.As(err, &ce) || servertest.ErrorMeta(err).Get("x-error-code") != server.InvalidCredentialCode {
 		t.Fatalf("tampered token = %v", err)
 	}
@@ -129,7 +129,7 @@ func TestAuth_Required(t *testing.T) {
 		if tt.header != "" {
 			opts = append(opts, withHeader(tt.header, tt.value))
 		}
-		admin := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), opts...))
+		admin := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), opts...))
 		_, err := admin.ListPoison(c, &adminv1.ListPoisonRequest{})
 		if !errors.As(err, &ce) || ce.Code() != tt.code || servertest.ErrorMeta(err).Get("x-error-code") != tt.errorCode {
 			t.Fatalf("%s: ListPoison = %v, want %s / %s", name, err, tt.code, tt.errorCode)
