@@ -363,9 +363,8 @@ jobs:
   # ── console-e2e: the built console driven by Playwright against a real bin/rpc on Postgres ──
   # (E2E_DATABASE_URL: the webServer runs bin/migrate up first; poison / prune then run for real)
   # Sharded (#447): `playwright test --shard=i/N`, N = the matrix size (strategy.job-total), each shard its own runner,
-  # postgres and dex. The default run was 369s (2 workers, one runner); 4 workers x 2 shards, see docs/ci.md.
-  # `task web-e2e-shards-check` (shard 1) proves the shards together are the whole `--list`; the ports
-  # run on shard 2, so they are run exactly once.
+  # and postgres. The default run was 369s (2 workers, one runner); 4 workers x 2 shards, see docs/ci.md.
+  # `task web-e2e-shards-check` (shard 1) proves the shards together are the whole `--list`.
   console-e2e:
     needs: affected
     if: needs.affected.outputs.run_console_e2e == 'true'
@@ -396,21 +395,10 @@ jobs:
       - uses: ./.github/actions/pnpm-cache
       - run: task build web-install
       - uses: ./.github/actions/playwright
-      # The dev Dex for the oidc-dex project (E2E_DEX=1): the compose service, so CI runs the same
-      # image and deployments/docker/dex/config.yaml as a developer. *.localtest.me is public DNS → 127.0.0.1.
-      - run: |
-          docker compose -f deployments/docker/docker-compose.yaml up -d dex
-          for ((_poll = 1; _poll <= 30; _poll++)); do curl -fsS http://dex.localtest.me:5556/dex/.well-known/openid-configuration >/dev/null && exit 0; sleep 1; done
-          docker compose -f deployments/docker/docker-compose.yaml logs dex; exit 1
       # The shards are the whole suite: --list of every shard, together, equals the unsharded --list (lists only, no server).
       - if: matrix.shard == 1
         run: task web-e2e-shards-check -- ${{ strategy.job-total }}
-        env: { E2E_DEX: "1" }
       - run: task web-e2e -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
-        env: { E2E_DEX: "1" }
-      # The same OIDC specs on a non-default port pair (#383): fixtures must follow E2E_RPC_PORT / E2E_WEB_PORT.
-      - if: matrix.shard == 2
-        run: task web-e2e-ports
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

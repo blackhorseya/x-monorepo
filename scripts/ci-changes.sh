@@ -95,8 +95,6 @@ k6=false;     has 'tests/k6/*' && k6=true
 # and apps/rpc. Test files are no input (has_prod).
 k6_src=false;   { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'apps/rpc/*' 'apps/worker/*' || has 'configs/*'; } && k6_src=true
 auth_src=false; { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'pkgs/identity/*' 'apps/rpc/*' || has 'configs/*'; } && auth_src=true
-# The oidc-dex Playwright project signs in through the compose Dex (#274): its config or the service is a console-e2e input.
-dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.yaml' && dex=true
 # Inputs of scripts/test.sh outside scripts/, ci.yml, Taskfile.yml and .github/actions (those already run everything): .goreleaser.yaml (the
 # release image list cases), go.work (the MODULES
 # cases copy it). Add a path here when a kept test.sh case starts reading a new one.
@@ -114,7 +112,7 @@ out build            "$go_prod" "$ci"
 out release_snapshot "$gomod" "$snapshot_src" "$release" "$ci"
 out actions_resolve  "$actions" "$ci"
 out web              "$web" "$proto" "$ci"
-out console_e2e      "$go_prod" "$web" "$dex" "$ci"
+out console_e2e      "$go_prod" "$web" "$ci"
 out console_image    "$web" "$proto" "$images" "$ci"
 out helm             "$helm" "$grafana" "$ci"
 out scripts_test     "$ci" "$scripts_src"

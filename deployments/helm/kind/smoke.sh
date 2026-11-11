@@ -2,7 +2,7 @@
 # End-to-end through the installed release: rpc answers,
 # the console serves the UI and proxies /api to the rpc.
 #   smoke.sh <namespace> <release>
-# Needs kubectl + curl + jq. Exits non-zero (with the pods' state) when anything is off.
+# Needs kubectl + curl. Exits non-zero (with the pods' state) when anything is off.
 set -euo pipefail
 # refuses to run outside run.sh (#444): HOME is the runner's scratch directory, which holds the marker
 [ "${KIND_RUNNER_HOME:-}" = "${HOME:-}" ] && [ -f "${HOME:-/nonexistent}/.kind-runner" ] || { echo "$0: run it through its task (task helm-kind-up / helm-kind; CLUSTER=<name> picks the cluster): the task isolates it from ~/.kube/config (#444)" >&2; exit 2; }
@@ -32,13 +32,5 @@ curl -fsSI "$console/api/readyz" | grep -qi '^content-security-policy' \
 curl -fsS "$console/api/readyz" >/dev/null || { echo "smoke: console /api proxy to the rpc failed"; exit 1; }
 console_version=$(curl -fsS "$console/api/version") || exit 1
 echo "smoke: console serves the UI and proxies /api → $console_version"
-
-# Dex (dex.yaml): the issuer URL the rpc's auth.oidc names must resolve inside the cluster (the
-# CoreDNS rewrite) and its discovery document must name exactly that issuer.
-issuer=http://dex.localtest.me:5556/dex
-got=$(kubectl -n "$ns" exec deploy/dex -- wget -qO- "$issuer/.well-known/openid-configuration" | jq -r .issuer) \
-  || { echo "smoke: $issuer is not reachable from inside the cluster (CoreDNS rewrite?)"; exit 1; }
-[ "$got" = "$issuer" ] || { echo "smoke: dex discovery issuer is '$got', want '$issuer'"; exit 1; }
-echo "smoke: dex discovery resolves in-cluster as $issuer"
 
 echo "smoke ok"

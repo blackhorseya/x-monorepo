@@ -113,7 +113,6 @@ eq_of "web only: no lint, no k6" \
   "gen_freshness web console_e2e console_image helm_kind" \
   jobs_on web web/apps/console/src/routes/example.tsx
 eq_of "helm only" "helm helm_kind" jobs_on helm deployments/helm/x-monorepo/values.yaml
-eq_of "dex config runs console-e2e" "console_e2e" jobs_on dexcfg deployments/docker/dex/config.yaml
 # A rename is a delete plus an add. `git diff --name-only` pairs them and prints only the new path, so
 # helper.go -> helper_test.go would look test-only while it removed a product file: ci-changes.sh
 # diffs with --no-renames and has_prod sees both paths. rename_jobs_on <name> <old> <new>.
@@ -254,7 +253,6 @@ touch_file deployments/helm/x-monorepo/Chart.yaml; touch_file web/apps/console/e
 touch_file pkgs/example/domain/thing/thing_test.go; touch_file .github/workflows/ci.yml
 touch_file scripts/x.sh; touch_file Taskfile.yml; touch_file tests/k6/a.js
 touch_file deployments/docker/docker-compose.yaml; touch_file deployments/docker/grafana/d.json
-touch_file deployments/docker/dex/config.yaml
 commit "docs: nothing shipped"
 eq_of "docs / chart / tests / CI are not releasable" "" in_repo scripts/releasable.sh
 touch_file pkgs/example/domain/thing/thing.go; touch_file deployments/docker/Dockerfile.rpc
