@@ -11,9 +11,12 @@ export const OK = { apiKeys: [], messages: [] };
 
 export const server = {
   calls: [] as string[],
+  // The request each call carried, in the same order as `calls`: a test asserts WHICH RPC and WITH WHAT.
+  requests: [] as unknown[],
   answer: ((): Answer => ({ ok: OK })) as Handler,
   reset() {
     this.calls = [];
+    this.requests = [];
     this.answer = () => ({ ok: OK });
   },
 };
@@ -22,8 +25,9 @@ function service(name: string) {
   return new Proxy(
     {},
     {
-      get: (_t, method: string) => async () => {
+      get: (_t, method: string) => async (req?: unknown) => {
         server.calls.push(`${name}.${method}`);
+        server.requests.push(req);
         const a = server.answer(name, method);
         if ("fail" in a) throw a.fail;
         return a.ok;
