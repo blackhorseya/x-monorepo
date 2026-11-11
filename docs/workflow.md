@@ -54,8 +54,8 @@ review 反覆抓到、但現有 CI 擋不住的類別。PR template（`.github/p
 
 ### 認證 generation／取消類測試：列出所有副作用界線，cookie 與 server session 都要驗（#225）
 - 設計／review 先列「副作用與取消界線」表：JS state、Web Storage、HttpOnly cookie、server session／rotation 各自的「忽略結果」是否涵蓋瀏覽器已套用的 Set-Cookie 與後端已 commit 的寫入。generation 只是 JS 狀態界線，不會取消 cookie jar 或已提交的後端寫入；派工 brief 也要明示這點，避免把局部防護寫成全局保證。
-- 凡 client 端 generation／attempt 丟棄 response body 的流程（Login、Logout、取消、重試），測試必須驅動**真 Console + 真 Login／Logout／Refresh entry point**（Playwright browser integration，不是 mocked fetch／複製 helper 的 fixture），控制 response 順序：Logout／Clear 後才釋放舊 Login／Refresh，接著 **reload**，同時斷言 cookie 與 server session（Refresh 是否成功、`revoked`）。
-- **正例必保留**：未取消的正常 Login → reload → Refresh 成功。成功取消的控制組（取消後 Refresh 必須失敗）擋不住「把所有 Refresh 都拒絕」，只有正例能保護正常登入持續有效；兩者缺一不可。
+- 凡 client 端 generation／attempt 丟棄 response body 的流程（有 session 的系統是 Login、Logout、Refresh；Console 現在的是切換 credential、取消、重試），測試必須驅動**真 client + 真 entry point**（Console 是真的頁面與 credential 控制項，見 `e2e/credential-switch.spec.ts`；Playwright browser integration，不是 mocked fetch／複製 helper 的 fixture），控制 response 順序：Logout／Clear 後才釋放舊 Login／Refresh，接著 **reload**，同時斷言 cookie 與 server session（Refresh 是否成功、`revoked`）。
+- **正例必保留**（有 Login／Refresh 的系統；Console 的對應是未取消的正常 credential 切換仍然生效）：未取消的正常 Login → reload → Refresh 成功。成功取消的控制組（取消後 Refresh 必須失敗）擋不住「把所有 Refresh 都拒絕」，只有正例能保護正常登入持續有效；兩者缺一不可。
 - 驗收矩陣至少含：取消先到／Login 先 commit 的交錯（barrier 控制，真 handler + 真 repo）、取消後 expiry／prune 再遇原 attempt 延遲 admission、commit 後 prune／KEK 輪替再 Logout、不同 pod keyset、Logout 被 429／5xx／斷線／commit 後丟回應、多頁共享 pendingCancel 的 read／merge／write／ack 原子性。
 - generation-only 單元測試可保留，但不能當完整撤銷／登出保證。fixture 只用自造 key／ticket，不把真憑證放 log／產物。設計階段的 SQL／Chromium 模型只證明設計缺口，不能取代產品 integration test。
 

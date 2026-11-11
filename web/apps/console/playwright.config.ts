@@ -26,8 +26,7 @@ import { imageSpecs } from "./e2e/image-specs";
 // The rpc is still started here; the container reaches it through the host. (image.sh runs
 // --project image only; the auth pair still starts but is unused in that mode.)
 const consoleURL = process.env.E2E_CONSOLE_URL;
-// Every port derives from E2E_RPC_PORT / E2E_WEB_PORT in one place (e2e/ports.ts), which the cleanup check
-// (e2e/assert-clean.ts) reads too.
+// Every port derives from E2E_RPC_PORT / E2E_WEB_PORT in one place (e2e/ports.ts).
 const P = derivePorts();
 const { rpcPort, webPort, authRpcPort, authWebPort } = P;
 const rpc = `http://127.0.0.1:${rpcPort}`;
