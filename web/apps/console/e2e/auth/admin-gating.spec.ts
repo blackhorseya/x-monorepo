@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
+import { isProbe, probeResponse, routeProbe } from "../probe";
 import { useKey } from "./helpers";
 
 // Which parts of the console a caller without the admin role sees. The server stays the gate
@@ -7,13 +8,13 @@ import { useKey } from "./helpers";
 // what it does not even ask. Runs in the auth project: auth.mode=required, ADMIN_KEY holds the
 // admin role, OPS_KEY none.
 
-const adminPages = ["Poison", "Prune", "Accounts"] as const;
+const adminPages = ["Poison", "Prune"] as const;
 const navLink = (page: Page, name: string) => page.locator("header nav").getByRole("link", { name, exact: true });
 
 test("no admin role: the nav leaves out every admin page", async ({ page }) => {
   await page.goto("/poison");
   // "no entry" only means something once the admin probe's answer for the role-less key (403) is in.
-  const probed = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && r.request().headers()["x-api-key"] === OPS_KEY);
+  const probed = probeResponse(page, (r) => r.key === OPS_KEY);
   await useKey(page, OPS_KEY);
   await probed;
   for (const name of adminPages) await expect(navLink(page, name)).toHaveCount(0);
@@ -23,15 +24,16 @@ test("no admin role: the nav leaves out every admin page", async ({ page }) => {
 });
 
 for (const path of ["/poison", "/prune"]) {
-  test(`no admin role: ${path} shows the gate and sends no admin RPC`, async ({ page }) => {
+  test(`no admin role: ${path} shows the gate and sends no admin RPC but the probe`, async ({ page }) => {
     const adminCalls: string[] = [];
     page.on("request", (req) => {
-      if (req.method() === "POST" && /\/admin\.v1\.AdminService/.test(req.url())) {
+      // The probe is the one admin RPC a non-admin page sends: it is how the console finds out the caller is not an admin.
+      if (req.method() === "POST" && /\/admin\.v1\.AdminService/.test(req.url()) && !isProbe(req)) {
         adminCalls.push(req.url());
       }
     });
-    await page.goto("/accounts");
-    const probed = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && r.request().headers()["x-api-key"] === OPS_KEY);
+    await page.goto("/prune");
+    const probed = probeResponse(page, (r) => r.key === OPS_KEY);
     await useKey(page, OPS_KEY);
     await probed;
 
@@ -58,11 +60,11 @@ test("no admin role: Prune has no Dry run, an admin does", async ({ page }) => {
 // "Not an admin" is an answer (PERMISSION_DENIED), not a failure: it is not retried.
 test("no admin role: the probe is not retried", async ({ page }) => {
   let probes = 0;
-  await page.route("**/identity.v1.IdentityService/ListAccounts", (route) => {
+  await routeProbe(page, (route) => {
     if (route.request().headers()["x-api-key"] === OPS_KEY) probes++;
     return route.continue();
   });
-  await page.goto("/accounts");
+  await page.goto("/prune");
   await useKey(page, OPS_KEY);
   await expect.poll(() => probes).toBeGreaterThan(0);
   await page.waitForTimeout(500);

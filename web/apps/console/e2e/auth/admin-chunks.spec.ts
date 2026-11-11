@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
+import { probeResponse, routeProbe } from "../probe";
 import { settle, useKey } from "./helpers";
 
 // The admin pages are their own chunks (lazy routes). A caller who is not an admin never needs
@@ -62,8 +63,8 @@ test("no admin role: a slow admin chunk does not delay the gate", async ({ page 
 
 test("no admin role, already known: navigating to an admin page fetches no chunk", async ({ page }) => {
   await seed(page, OPS_KEY);
-  const probe = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts"));
-  await page.goto("/accounts");
+  const probe = probeResponse(page);
+  await page.goto("/prune"); // not the page whose chunk is checked below
   expect((await probe).status()).toBe(403);
 
   const chunks: string[] = [];
@@ -78,7 +79,7 @@ test("no admin role, already known: navigating to an admin page fetches no chunk
 
 test("admin: link intent still preloads the admin chunk", async ({ page }) => {
   await seed(page, ADMIN_KEY);
-  await page.goto("/accounts");
+  await page.goto("/prune"); // not the page whose chunk is preloaded below
   await expect(nav(page, "Poison")).toBeVisible();
   const chunks: string[] = [];
   page.on("request", (r) => {
@@ -136,14 +137,14 @@ test("admin: a chunk that fails to load is a visible error, not a blank page, an
 for (const name of ["poison", "prune"]) {
   test(`credential change: a cached admin answer cannot preload ${name}, pending or denied`, async ({ page }) => {
     await seed(page, ADMIN_KEY);
-    await page.goto("/accounts");
+    await page.goto(name === "poison" ? "/prune" : "/poison"); // the other admin page: this one's chunk must not be loaded yet
     await expect(nav(page, "Poison")).toBeVisible(); // probe true is cached for the admin key
 
     let release!: () => void;
     const hold = new Promise<void>((r) => (release = r));
     let opsStarted!: () => void;
     const opsProbeInFlight = new Promise<void>((r) => (opsStarted = r));
-    await page.route("**/identity.v1.IdentityService/ListAccounts", async (route) => {
+    await routeProbe(page, async (route) => {
       if (route.request().headers()["x-api-key"] !== OPS_KEY) return route.continue();
       const answer = await route.fetch(); // the real 403 for OPS_KEY, held back
       opsStarted();

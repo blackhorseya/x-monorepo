@@ -44,10 +44,10 @@ auth:
   oidc:
     enabled: false
     issuers: []
-    #  - issuer: http://dex.localtest.me:5556/dex
-    #    audience: x-console
+    #  - issuer: https://idp.example.com
+    #    audience: my-client-id
     #    mapping: bound              # bound (default) | auto_provision
-    #    allow_insecure_issuer: true # dev Dex only
+    #    allow_insecure_issuer: true # only for an http issuer on a non-loopback host; dev only
   # Procedures that never need a credential: ["/identity.v1.IdentityService/WhoAmI"]
   public: []
   # Bound on one identity-BC key lookup (X-API-Key the config does not know; auth runs outside

@@ -16,9 +16,8 @@ import { imageSpecs } from "./e2e/image-specs";
 // what the console does when the server wants a credential, for both kinds. Its
 // own preview port = its own origin, so the credential it stores in localStorage
 // never leaks into the other project.
-// Ports: everything below derives from E2E_RPC_PORT / E2E_WEB_PORT (e2e/ports.ts), and the fixtures follow
-// them (the oidc-backend rpc's issuer is generated, the specs read baseURL). Run with CI=1 when you change
-// them, or reuseExistingServer attaches to whatever already answers on a derived port. `task web-e2e-ports`.
+// Ports: everything below derives from E2E_RPC_PORT / E2E_WEB_PORT (e2e/ports.ts), and the specs read baseURL.
+// Run with CI=1 when you change them, or reuseExistingServer attaches to whatever already answers on a derived port.
 // E2E_CONSOLE_URL: run the "image" project against a console served from somewhere else —
 // e2e/image.sh builds web/apps/console/Dockerfile and points this at the container, so the
 // nginx config (SPA fallback, /api proxy, cache headers) is what gets tested, not vite preview.
@@ -27,25 +26,11 @@ import { imageSpecs } from "./e2e/image-specs";
 // The rpc is still started here; the container reaches it through the host. (image.sh runs
 // --project image only; the auth pair still starts but is unused in that mode.)
 const consoleURL = process.env.E2E_CONSOLE_URL;
-// Every port derives from E2E_RPC_PORT / E2E_WEB_PORT in one place (e2e/ports.ts), which the cleanup check
-// (e2e/assert-clean.ts) reads too.
+// Every port derives from E2E_RPC_PORT / E2E_WEB_PORT in one place (e2e/ports.ts).
 const P = derivePorts();
-const { rpcPort, webPort, authRpcPort, authWebPort, roleRpcPort, roleWebPort, backendWebPort } = P;
-// The "oidc-backend" pair: a real rpc with auth.oidc on, its own loopback IdP (e2e/oidc-backend/idp.ts).
-// The rpc's issuer is generated from BACKEND_IDP_PORT (e2e/oidc-backend/rpc-server.ts), so the two cannot disagree.
-export const BACKEND_RPC_PORT = P.backendRpcPort;
-export const BACKEND_IDP_PORT = P.backendIdpPort;
-export const FOREIGN_IDP_PORT = P.foreignIdpPort;
-// The "oidc-dex" project (E2E_DEX=1): the dev Dex as the IdP (e2e/oidc-dex/). The console's origin must
-// be a redirect URI registered in deployments/docker/dex/config.yaml, so its port is fixed, not derived
-// (and not one of the three already registered for `task web-dev`, vite preview and the console image,
-// which a developer's own stack is likely to hold). Its rpc is not a webServer: Dex's two accounts are
-// fixed, so each test starts its own rpc (e2e/oidc-dex/rpc.ts) and its bindings die with the attempt.
-const DEX_WEB_PORT = 4203;
-const withDex = !!process.env.E2E_DEX;
+const { rpcPort, webPort, authRpcPort, authWebPort } = P;
 const rpc = `http://127.0.0.1:${rpcPort}`;
 const authRpc = `http://127.0.0.1:${authRpcPort}`;
-const roleRpc = `http://127.0.0.1:${roleRpcPort}`;
 const db = process.env.E2E_DATABASE_URL;
 const bin = "../../../bin";
 const baseEnv = {
@@ -60,10 +45,6 @@ const baseEnv = {
 // iss / aud, so a token for another issuer is auth.invalid_credential).
 export const OPS_KEY = "e2e-ops-key-0123456789abcdef";
 export const ADMIN_KEY = "e2e-admin-key-0123456789abcdef";
-// The "auth-role" pair: same shape, but auth.admin_role is "operator" (a supported setting), so
-// the key holding "operator" is the admin and the one holding "admin" is not.
-export const OPERATOR_KEY = "e2e-operator-key-0123456789abcdef";
-export const NOT_OPERATOR_KEY = "e2e-notoperator-key-0123456789abcdef";
 export const JWT_SECRET = "e2e-hs256-secret-0123456789abcdef0123456789abcdef"; // ≥ 32 bytes
 export const JWT_ISSUER = "https://e2e.example.com";
 export const JWT_AUDIENCE = "x-monorepo-console-e2e";
@@ -84,7 +65,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: /\/(auth(-role)?|oidc-backend|oidc-dex)\//,
+      testIgnore: /\/auth\//,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: `http://localhost:${webPort}`,
@@ -108,34 +89,6 @@ export default defineConfig({
         baseURL: `http://localhost:${authWebPort}`,
       },
     },
-    {
-      name: "auth-role",
-      testMatch: /\/auth-role\/.*\.spec\.ts$/,
-      use: {
-        ...devices["Desktop Chrome"],
-        baseURL: `http://localhost:${roleWebPort}`,
-      },
-    },
-    {
-      name: "oidc-backend",
-      testMatch: /\/oidc-backend\/.*\.spec\.ts$/,
-      use: {
-        ...devices["Desktop Chrome"],
-        baseURL: `http://localhost:${backendWebPort}`,
-      },
-    },
-    ...(withDex
-      ? [
-          {
-            name: "oidc-dex",
-            testMatch: /\/oidc-dex\/.*\.spec\.ts$/,
-            use: {
-              ...devices["Desktop Chrome"],
-              baseURL: `http://localhost:${DEX_WEB_PORT}`,
-            },
-          },
-        ]
-      : []),
   ],
   webServer: [
     {
@@ -188,61 +141,5 @@ export default defineConfig({
       env: { CONSOLE_API: authRpc },
       reuseExistingServer: !process.env.CI,
     },
-    {
-      // auth.admin_role=operator: RequireRole wants "operator", not the default "admin".
-      command: `${bin}/rpc`,
-      url: `${roleRpc}/api/readyz`,
-      env: {
-        ...baseEnv,
-        APP_HTTP_ADDR: `:${roleRpcPort}`,
-        APP_AUTH_MODE: "required",
-        APP_AUTH_ADMIN_ROLE: "operator",
-        APP_AUTH_API_KEYS: `boss=${OPERATOR_KEY}:operator,legacy=${NOT_OPERATOR_KEY}:admin`,
-      },
-      reuseExistingServer: !process.env.CI,
-      stdout: "ignore",
-      stderr: "pipe",
-    },
-    {
-      command: `pnpm exec vite preview --port ${roleWebPort} --strictPort`,
-      url: `http://localhost:${roleWebPort}/`,
-      env: { CONSOLE_API: roleRpc },
-      reuseExistingServer: !process.env.CI,
-    },
-    {
-      // The loopback IdP, before the rpc that fetches its discovery / JWKS.
-      command: "node --experimental-strip-types e2e/oidc-backend/idp-server.ts",
-      url: `http://127.0.0.1:${BACKEND_IDP_PORT}/idp/.well-known/openid-configuration`,
-      env: { IDP_PORT: String(BACKEND_IDP_PORT), IDP_CLIENT_ID: "x-console-e2e" },
-      reuseExistingServer: !process.env.CI,
-    },
-    {
-      // auth required + auth.oidc on, the loopback IdP above as its only issuer. The config file (a list setting
-      // cannot come from env) is generated from BACKEND_IDP_PORT by the wrapper, which removes it again on SIGTERM
-      // (hence gracefulShutdown: the default is SIGKILL, which would leave the file behind).
-      command: "node --experimental-strip-types e2e/oidc-backend/rpc-server.ts",
-      url: `http://127.0.0.1:${BACKEND_RPC_PORT}/api/readyz`,
-      env: { ...baseEnv, APP_HTTP_ADDR: `:${BACKEND_RPC_PORT}`, IDP_PORT: String(BACKEND_IDP_PORT), RPC_BIN: `${bin}/rpc` },
-      gracefulShutdown: { signal: "SIGTERM" as const, timeout: 5_000 },
-      reuseExistingServer: !process.env.CI,
-      stdout: "ignore",
-      stderr: "pipe",
-    },
-    {
-      command: `pnpm exec vite preview --port ${backendWebPort} --strictPort`,
-      url: `http://localhost:${backendWebPort}/`,
-      env: { CONSOLE_API: `http://127.0.0.1:${BACKEND_RPC_PORT}` },
-      reuseExistingServer: !process.env.CI,
-    },
-    ...(withDex
-      ? [
-          {
-            command: `pnpm exec vite preview --port ${DEX_WEB_PORT} --strictPort`,
-            url: `http://localhost:${DEX_WEB_PORT}/`,
-            env: { CONSOLE_API: "http://127.0.0.1:1" }, // unused: the tests route /api to their own rpc
-            reuseExistingServer: !process.env.CI,
-          },
-        ]
-      : []),
   ],
 });

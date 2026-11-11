@@ -2,7 +2,7 @@
 # Tests for the CI / release decision scripts whose wrong answer is silent: scripts/ci-changes.sh (which ci.yml jobs a change
 # runs; a wrong rule skips a job and CI stays green), scripts/affected.sh (which modules the test matrix runs),
 # scripts/releasable.sh (does a change cut a release), and the
-# wiring nothing else checks: only push / workflow_dispatch write a cache, the release image lists agree, MODULES follows go.work, the console OIDC env gate.
+# wiring nothing else checks: only push / workflow_dispatch write a cache, the release image lists agree, MODULES follows go.work.
 #
 #   scripts/test.sh          # task scripts-test; CI's scripts-test job
 #
@@ -113,7 +113,6 @@ eq_of "web only: no lint, no k6" \
   "gen_freshness web console_e2e console_image helm_kind" \
   jobs_on web web/apps/console/src/routes/example.tsx
 eq_of "helm only" "helm helm_kind" jobs_on helm deployments/helm/x-monorepo/values.yaml
-eq_of "dex config runs console-e2e" "console_e2e" jobs_on dexcfg deployments/docker/dex/config.yaml
 # A rename is a delete plus an add. `git diff --name-only` pairs them and prints only the new path, so
 # helper.go -> helper_test.go would look test-only while it removed a product file: ci-changes.sh
 # diffs with --no-renames and has_prod sees both paths. rename_jobs_on <name> <old> <new>.
@@ -254,7 +253,6 @@ touch_file deployments/helm/x-monorepo/Chart.yaml; touch_file web/apps/console/e
 touch_file pkgs/example/domain/thing/thing_test.go; touch_file .github/workflows/ci.yml
 touch_file scripts/x.sh; touch_file Taskfile.yml; touch_file tests/k6/a.js
 touch_file deployments/docker/docker-compose.yaml; touch_file deployments/docker/grafana/d.json
-touch_file deployments/docker/dex/config.yaml
 commit "docs: nothing shipped"
 eq_of "docs / chart / tests / CI are not releasable" "" in_repo scripts/releasable.sh
 touch_file pkgs/example/domain/thing/thing.go; touch_file deployments/docker/Dockerfile.rpc
@@ -280,22 +278,6 @@ commit "chore: swap"
 eq_of "renames between product and _test.go list the product path" \
   "pkgs/example/helper.go
 pkgs/example/other.go" in_repo scripts/releasable.sh
-# ── web/apps/console/deploy/18-console-env.envsh: the console image's OIDC env gate (#273) ──
-# The same URL judgement as the SPA's parseConfig (new URL): what the container accepts the browser
-# must accept too, otherwise OIDC is switched off silently on the client. Run under sh and dash.
-envsh="$src/web/apps/console/deploy/18-console-env.envsh"
-envsh_rc() { # <issuer> <client id> → exit code of sourcing the gate
-  local rc=0
-  CONSOLE_OIDC_ISSUER=$1 CONSOLE_OIDC_CLIENT_ID=$2 sh -c ". \"$envsh\"" >/dev/null 2>&1 || rc=$?
-  echo "$rc"
-}
-for good in https://idp.example.com https://idp.example.com/dex http://127.0.0.1:18121/idp http://dex.localtest.me:5556/dex https://idp.example.com:65535/a/b https://10.0.0.255:1/x; do
-  eq_of "envsh accepts $good" 0 envsh_rc "$good" x-console
-done
-for badv in 'https://idp.example.com:65536/dex' 'https://idp.example.com:99999' 'https://idp.example.com:0/dex' 'https://10.0.0.256/dex' 'https://idp.example.com.123/dex' 'https://idp.example.com.0x1' 'https://idp.example.com.0XFF/dex' 'https://0x7f.0x1' 'https://idp.example.com.0x' 'https://idp..example.com' 'https://-idp.example.com' 'https://idp.example.com/dex?x=1' 'https://u@idp.example.com' 'ftp://idp.example.com' 'https://idp.example.com/de x'; do
-  eq_of "envsh refuses $badv" 1 envsh_rc "$badv" x-console
-done
-eq_of "envsh: nothing set is OIDC off, not an error"    0 envsh_rc '' ''
 # ── release image lists ────────────────────────────────────────────────────────────────────────
 # The images a release ships are named in five places, and adding an app to one and forgetting another
 # gives a release whose images are not all built, signed, verified or documented (a new app, #367

@@ -5,12 +5,13 @@ import type { Page, Route } from "@playwright/test";
 // on untouched, and the handlers hand it to the next one (route.fallback), so several of these on
 // one page, and a spec's own page.route, compose. Counters are per call.
 //
-// method  the RPC's name, the last segment of the URL ("ListAccounts", "CreateAccount"); matched exactly.
+// method  the RPC's name, the last segment of the URL ("ListPoison", "Prune"); matched exactly.
 // key     which callers: omitted = any; a string = calls sent with that X-API-Key; null = calls sent
 //         with no X-API-Key (the anonymous ones: the console's first requests before a credential is set).
 // bodyIncludes  omitted = any body; a string = only calls whose request body contains it (substring, case
-//         sensitive). For a page that sends the same RPC about something else first: the admin probe
-//         asks ListAccounts (pageSize 1) before the list page asks for its 20, and a fault meant for the list must not be spent on that.
+//         sensitive). For a page that sends the same RPC about something else: the admin probe asks
+//         ListPoison (limit 1) and the Poison page asks it with an empty request, and a fault meant for one
+//         must not be spent on the other (e2e/probe.ts names the two bodies).
 export type Target = { method: string; key?: string | null; bodyIncludes?: string };
 
 function matches({ method, key, bodyIncludes }: Target) {
@@ -26,7 +27,7 @@ function matches({ method, key, bodyIncludes }: Target) {
 
 // ---- failRequests: the next `times` matching calls fail -------------------------------------
 //
-//   const fault = await failRequests(page, { method: "ListAccounts", key: OPS_KEY });   // before page.goto
+//   const fault = await failRequests(page, { method: "ListPoison", key: OPS_KEY });   // before page.goto
 //   ...
 //   await expect.poll(() => fault.failed()).toBe(1);   // the fault was really hit: no vacuous run
 //
@@ -68,9 +69,9 @@ export async function failRequests(page: Page, options: FailRequestsOptions): Pr
 
 // ---- holdRequests: matching calls are parked until release() ---------------------------------
 //
-//   const held = await holdRequests(page, { method: "ListAccounts", key: null });   // before page.goto
-//   await page.goto("/accounts");
-//   await held.arrived();          // the anonymous ListAccounts is on the wire, unanswered
+//   const held = await holdRequests(page, { method: "ListPoison", key: null });   // before page.goto
+//   await page.goto("/poison");
+//   await held.arrived();          // the anonymous ListPoison is on the wire, unanswered
 //   await useKey(page, OPS_KEY);   // the credential changes while the first answer is still out
 //   held.release();                // now the stale answer may land
 //
@@ -112,9 +113,9 @@ export async function holdRequests(page: Page, target: Target): Promise<RequestH
 
 // ---- scriptByKey: each caller gets its own scripted answer --------------------------------------
 //
-//   const list = await scriptByKey(page, "identity.v1.IdentityService/ListAccounts", { "": { connect: "unauthenticated" }, OPS: { ok: {...} } });
+//   const list = await scriptByKey(page, "admin.v1.AdminService/ListPoison", { "": { connect: "unauthenticated" }, OPS: { ok: {...} } });
 //
-// rpc   service and method as they end the URL ("identity.v1.IdentityService/ListAccounts"); matched exactly.
+// rpc   service and method as they end the URL ("admin.v1.AdminService/ListPoison"); matched exactly.
 // plan  the Reply for a call sent with that X-API-Key ("" = no X-API-Key). A key that is not in the plan is
 //       a test bug and is answered HTTP 599 (not passed on) so it cannot go unnoticed.
 // It answers the call itself, so a hold meant to park the call is registered AFTER it (the newest handler
@@ -144,7 +145,7 @@ export async function scriptByKey(page: Page, rpc: string, plan: Record<string, 
 
 // ---- watchRequests: what the browser SENT --------------------------------------------------------
 //
-//   const sent = watchRequests(page, "identity.v1.IdentityService/ListAccounts");   // before page.goto
+//   const sent = watchRequests(page, "admin.v1.AdminService/ListPoison");   // before page.goto
 //   sent.sent("OPS", "pageSize")   // calls sent with X-API-Key OPS whose body contains "pageSize"
 //
 // Counts every call the browser sent to `rpc` (exact, as scriptByKey), parked by a hold, failed by

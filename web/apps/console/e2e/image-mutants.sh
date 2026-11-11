@@ -33,7 +33,6 @@ mutate fallback default.conf.template 's|try_files \$uri /index.html;|try_files 
 mutate api-proxy default.conf.template 's|proxy_pass \$\{RPC_UPSTREAM\};|return 502;|'
 mutate csp-script-none security-headers.inc.template "s|script-src 'self'|script-src 'none'|"
 mutate csp-sandbox security-headers.inc.template "s|frame-ancestors 'none'\"|frame-ancestors 'none'; sandbox\"|"
-mutate config-json config.json.template 's|"apiKeyLogin":|"apiKeyLoginX":|'
 mutate asset-mime default.conf.template 's|(location /assets/ \{)|\1 default_type text/plain; types { }|'
 mutate asset-path default.conf.template 's|location /assets/ \{|location /assetz/ {|'
 
@@ -60,7 +59,7 @@ if selected control; then
   # the control has to be green: 1 from run. 0 (red) or 2 (broken) means the harness proves nothing.
   if [ "$c" -eq 1 ]; then echo "control: GREEN (as required)"; else echo "control: not green (run=$c), the harness cannot prove anything"; exit 1; fi
 fi
-for name in fallback api-proxy csp-script-none csp-sandbox config-json asset-mime asset-path; do
+for name in fallback api-proxy csp-script-none csp-sandbox asset-mime asset-path; do
   selected "$name" || continue
   c=0; run "$name" "$work/$name" || c=$?
   case $c in

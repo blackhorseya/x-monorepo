@@ -6,15 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { setCredential, subject, useCredential, type Credential } from "../auth";
-import { getConfig } from "../oidc/config";
-import { signOut } from "../oidc/session";
 
 // Header control: who the console calls as. Set an API key or a JWT, or clear
 // it to go anonymous. Every query is reset on the spot so an UNAUTHENTICATED /
 // PERMISSION_DENIED page recovers (or appears) at once instead of on its next
 // poll — the slowest one (poison) is 5s.
 //
-// Cancel + reset, not invalidate (#483). Most query keys (["accounts"], ["account", id])
+// Cancel + reset, not invalidate (#483). Most query keys (["poison"], ["version"])
 // do not name the credential, so what is cached under a key was read for whoever was calling when it was
 // asked. invalidateQueries only marks it stale and refetches: a query with no data and a request in flight
 // (the first, anonymous one) is not restarted, the new call is folded into the old one and its answer, a
@@ -24,7 +22,7 @@ import { signOut } from "../oidc/session";
 // backoff never fires) and resetQueries sends every query back to "not loaded", so nothing read for the
 // previous credential is shown or can land in the cache, and the queries on screen ask again at once.
 // One call for every query, instead of adding the credential generation to each key by hand: a new query
-// cannot forget it (the keys that already carry a generation, admin probe / who-am-i / identities, are simply
+// cannot forget it (the key that already carries a generation, the admin probe, is simply
 // reset too).
 // The change is flushed to the screen first (flushSync): the admin pages sit behind AdminGate, which closes
 // the moment the credential changes (its probe has no answer for the new one yet) and unmounts their
@@ -38,33 +36,8 @@ function changeCredential(qc: QueryClient, change: () => void): void {
   void qc.resetQueries();
 }
 
+// Who the console calls as: an API key (auth.api_keys) or a JWT (auth.jwt) pasted in, or none.
 export function CredentialControl() {
-  // With OIDC on, credentials come from /login and there is nothing to paste here.
-  return getConfig().oidc ? <SessionControl /> : <PasteCredentialControl />;
-}
-
-// Who the console calls as, and the way out. Signing out clears the local session; the way back in
-// is /login (the router sends every page there once there is no credential).
-function SessionControl() {
-  const qc = useQueryClient();
-  const current = useCredential();
-  return (
-    <div className="ml-auto flex flex-wrap items-center gap-2 text-sm">
-      <span className="text-muted-foreground">{subject(current)}</span>
-      {current && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => changeCredential(qc, () => void signOut())}
-        >
-          <LogOut /> Sign out
-        </Button>
-      )}
-    </div>
-  );
-}
-
-function PasteCredentialControl() {
   const qc = useQueryClient();
   const current = useCredential();
   const [open, setOpen] = useState(false);

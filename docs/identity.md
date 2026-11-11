@@ -54,9 +54,9 @@ metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有
 - **account 不存在** → `NOT_FOUND` + `account.not_found`（同 `ListApiKeys` / `CreateInvite`）；`account_id` 為空由 protovalidate 擋（`INVALID_ARGUMENT`）；非 admin → `PERMISSION_DENIED`（先於 account 是否存在，不洩漏有無）。
 - **不分頁**：和 `ListApiKeys` 一樣是「單一 account 底下的子資源清單」，不是 `ListAccounts` 那種整體 collection（opaque page token）；一次回兩個清單也沒有單一 cursor 可用。綁定只在 claim / auto_provision 時新增；invite 則每次 `CreateInvite` 都多一筆，目前沒有上限也沒有清理，量大時要補分頁或清理（後續）。
 - `invites` 沒有 `account_id` 索引（只有 `(email, created_at desc, id desc)`），這支查詢會掃 `identity.invites`；表目前很小，所以不為它加 migration，量大再補 `(account_id, created_at desc, id desc)`。
-- 撤銷單一綁定／邀請**不在這支**（先經 Sean 決定）；Console `/accounts` 等 #273 合併後再接。
+- 撤銷單一綁定／邀請**不在 #297**（先經 Sean 決定）；Console 的 `/accounts` 頁已隨 #561 移除。
 
-**`RevokeSessions` 只是「登出所有裝置」**：它設 `accounts.sessions_revoked_at = now`，`iat` 早於這個時間的 access token 在 resolver cache 過期後（≤ 30 秒）被拒；寫 audit（誰、哪個 account、何時，不記 token）。它**擋不住持有 IdP refresh token 的人**——對方能向 IdP 換到新 `iat` 的 token。**懷疑帳號被盜要用 `DisableAccount`**（對每個 token 都有效，包括 refresh 換出來的），再到 IdP 撤銷 refresh token 或重設憑證。proto 註解與 Console 文案都必須這樣寫（#273）。它不改 status / roles / key，所以沒有 last-admin guard。
+**`RevokeSessions` 只是「登出所有裝置」**：它設 `accounts.sessions_revoked_at = now`，`iat` 早於這個時間的 access token 在 resolver cache 過期後（≤ 30 秒）被拒；寫 audit（誰、哪個 account、何時，不記 token）。它**擋不住持有 IdP refresh token 的人**——對方能向 IdP 換到新 `iat` 的 token。**懷疑帳號被盜要用 `DisableAccount`**（對每個 token 都有效，包括 refresh 換出來的），再到 IdP 撤銷 refresh token 或重設憑證。proto 註解必須這樣寫（#273）。它不改 status / roles / key，所以沒有 last-admin guard。
 
 **Last-admin guard**：管理面不能被自己鎖死。「有效 admin」= `status ACTIVE`、roles 含 `auth.admin_role`、且至少一把 key 現在可用（`REVOKED` 與已過 `expires_at` 的不算）的 account。`DisableAccount`、`AssignRoles`（拿掉 admin role）、`RevokeApiKey`（撤掉該 account 最後一把可用 key）若會讓**最後一個**有效 admin 失去資格，回 `FAILED_PRECONDITION` + `x-error-code: identity.last_admin`（訊息固定，不帶其他 account 的資料）；系統裡本來就沒有有效 admin 時什麼都不擋（沒東西可保護），不是有效 admin 的 account 動什麼都不受影響。
 併發：這三個 use case 在同一個 transaction 內先 `AdminCensus.LockAdmins`（Postgres：`SELECT … FOR UPDATE` 鎖住 ACTIVE 且帶該 role 的 account 列，`ORDER BY id` 讓鎖序一致，再另一條 statement 算可用 key——不能合成一條 join，否則等鎖後 `api_keys` 還是舊 snapshot），**之後**才載入要改的 aggregate。「key 是否過期」用的 now 也是拿到鎖**之後**才讀（`LockAdmins` 回傳判斷當下的時間，use case 沿用它）：在鎖前排隊時過期的備援 key 不算。所以兩個 admin 同時互相停用、同一個 admin 的兩把 key 同時撤銷，只有一個會成功，另一個拿到 `identity.last_admin`。in-memory 的 `Transactor` 讓 writer 一次一個。沒有 migration（`api_keys_account_idx` 已涵蓋 `account_id`）。偏保守的方向：與 `EnableAccount`／新 admin 同時進行時，新加入的 admin 若不在這次鎖到的集合裡，可能多拿一個 `identity.last_admin`，重試即可。`ResolveAPIKey`／`TouchLastUsed` 不鎖。
@@ -106,7 +106,7 @@ Dashboard「x-monorepo / service」的 Identity row 有四張圖（lookups/s by 
 
 ### last_used_at（節流、best-effort）
 
-`api_keys.last_used_at`（nullable `timestamptz`，migration `0002`）記 key 最後一次通過驗證的時間，`ListApiKeys` 的 `last_use_time` 與 Console account 頁的「Last used」（沒用過顯示 `—`）讀它。它是**給人看的粗略指標，不是稽核紀錄**——要查「誰在什麼時候做了什麼」看 access line 的 `sub`（account id）與 `enduser.id`。
+`api_keys.last_used_at`（nullable `timestamptz`，migration `0002`）記 key 最後一次通過驗證的時間，`ListApiKeys` 的 `last_use_time` 讀它（Console 的 account 頁已隨 #561 移除）。它是**給人看的粗略指標，不是稽核紀錄**——要查「誰在什麼時候做了什麼」看 access line 的 `sub`（account id）與 `enduser.id`。
 
 驗證成功要寫 DB，但 hot path 不能每個 request 都寫，所以有兩層節流（`auth.last_used_interval`，預設 `1m`，`0` = 關）：
 
@@ -135,11 +135,11 @@ identity BC 這一半（#271）加上 auth interceptor 的串接（#272）。res
 - **interceptor 串接**（#272，`auth.oidc.enabled`）：`Authorization: Bearer` 沒有 `X-API-Key` 時，先交 `platform/oidc` 的 verifier；它回 `ErrUnknownIssuer`（`iss` 不是任何 OIDC issuer）才交給既有的 `auth.jwt`，其他任何 OIDC 失敗都是終局拒絕，**不會**再試 `auth.jwt`。驗過的身分交 `server.ExternalIdentityResolver`（identity 側是 `adapters/auth.ExternalCredentials`，包 `ExternalResolver`），得到 principal：`Subject` = account id、`Name` 與 `Roles` = account 的、`Method` = `jwt`；token 裡的 `roles` / `name` 一律不看。resolver 的回答分三類：`server.ErrUnboundIdentity`（沒綁定）、`server.ErrCredentialRefused`（停用 / 撤銷 / 缺 `iat`，client 看到 `auth.invalid_credential`）、其餘（DB 錯誤等基礎設施失敗，同樣拒絕、不 cache，原因只進 error log）。這一查受 `auth.resolver_timeout` 約束，逾時後才回來的答案也拒絕。驗過的 OIDC 身分（不論綁定與否）都放進 context（`contextx.ExternalIdentity`）。未綁定身分打 `ClaimInvite` 時沒有 principal（`IsAnonymous`）、其他 procedure 回 `PERMISSION_DENIED` `auth.unbound_identity`。metrics 的 label 集合不變：未綁定放行 `ClaimInvite` 記 `result=ok, method=jwt`，未綁定被擋與其他拒絕記 `result=invalid, method=jwt`。
 - **audit**：`identity.audit_events`（actor、action、target_account_id、occurred_at），與動作同一個 transaction；目前寫 `identity.revoke_sessions` 與 `identity.create_invite`。auth 關閉時 actor 是 `anonymous`。
 
-**`worker bootstrap --admin-email <email>`**：在空 store 建 admin account（`--name`、`--role` 預設 `auth.admin_role`）並發出該 email 的 7 天邀請；**不建 API key，沒有任何 secret 可印**（設計文件 §9 留給這支 PR 定案的點：不產 key）。重跑是 no-op（`already bootstrapped`）。`--key-name` / `--expires-in` 與它互斥。部署者從 IdP 登入後呼叫 `ClaimInvite` 完成綁定；7 天沒人領就用 static admin key 重發。注意：last-admin guard 的「有效 admin」仍要求至少一把可用 API key（見上），所以只靠 OIDC 綁定的 admin 目前不被 guard 視為有效 admin——放寬成「或有綁定」屬後續。
+**`worker bootstrap --admin-email <email>`**：在空 store 建 admin account（`--name`、`--role` 預設 `auth.admin_role`）並發出該 email 的 7 天邀請；**不建 API key，沒有任何 secret 可印**（設計文件 §9 留給 #278 定案的點：不產 key）。重跑是 no-op（`already bootstrapped`）。`--key-name` / `--expires-in` 與它互斥。部署者從 IdP 登入後呼叫 `ClaimInvite` 完成綁定；7 天沒人領就用 static admin key 重發。注意：last-admin guard 的「有效 admin」仍要求至少一把可用 API key（見上），所以只靠 OIDC 綁定的 admin 目前不被 guard 視為有效 admin——放寬成「或有綁定」屬後續。
 
 ## 擴充路徑：外部 OIDC 登入
 
-現行規格見 [`docs/identity-login.md`](identity-login.md)：登入走**外部 OIDC**（本機開發用 Dex），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
+規格見 [`docs/identity-login.md`](identity-login.md)（後端部分現行；Console 登入與 Dex 的章節已不適用，見該文開頭）：登入走**外部 OIDC**（repo 不附開發 IdP，Dex 已移除），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
 自建帳密 issuer 降為可選模組（未排程），設計要點留在該文件的「方案 A」一節。先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
 
 ## 檔案

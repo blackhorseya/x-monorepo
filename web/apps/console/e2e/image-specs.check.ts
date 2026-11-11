@@ -11,7 +11,7 @@ import { checkSpecClasses, imageSpecs, previewOnlySpecs, type Listed } from "./i
 //
 // PINNED is NOT derived from image-specs.ts: if it were, adding a spec to the image list would move the
 // expectation with it and nothing would notice.
-const PINNED = ["image.spec.ts", "version.spec.ts", "account-loop.spec.ts"];
+const PINNED = ["image.spec.ts", "version.spec.ts", "admin.spec.ts"];
 
 interface JSONReport extends JSONSuite {
   errors?: unknown[];
@@ -40,9 +40,8 @@ export function parseListing(json: string): Listed {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  // E2E_CONSOLE_URL set so the listing is what a console-image run lists; E2E_DEX off: the dex project is not under test.
+  // E2E_CONSOLE_URL set so the listing is what a console-image run lists.
   const env: NodeJS.ProcessEnv = { ...process.env, E2E_CONSOLE_URL: "http://127.0.0.1:1" };
-  delete env.E2E_DEX;
   const out = execFileSync("pnpm", ["exec", "playwright", "test", "--list", "--reporter=json"], { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   const listed = parseListing(out);
   if (listed.chromium.length === 0 || listed.image.length === 0) {

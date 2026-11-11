@@ -1,9 +1,10 @@
-# Identity：外部 OIDC 登入（Dex 作為開發 IdP）
+# Identity：外部 OIDC 登入
 
 <sub>← [README](../README.md) · [identity.md](identity.md)</sub>
 
-> **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）。** 這份是現行規格，實作拆成 #270–#274（§12）；PR 3（#271）已實作 identity BC 這一半，細節見 [`identity.md`](identity.md)「外部身分綁定」。
-> x-monorepo 是通用 template：登入走**外部 OIDC（方案 B）**，本機開發與測試用 **Dex**；自建帳密 issuer（方案 A）降為可選模組，未排程（§13）。
+> **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）；其中 Console 與 Dex 的部分已於 #561 移除。** 實作拆成 #270–#274（§12）；identity BC 這一半的細節見 [`identity.md`](identity.md)「外部身分綁定」。
+> **怎麼讀這份文件（#561 之後）**：描述 rpc 的 OIDC 驗證、verifier、identity BC（綁定、邀請、撤銷、bootstrap）、告警與 chart 設定的內容，仍是現行。描述 Console 的 OIDC 登入畫面與流程、Dex 開發 IdP，以及驅動它們的 e2e 與 task 的內容，已隨 #561 移除，只當歷史記錄讀，照著操作不會成功；repo 不附 IdP。整節都屬於後者的章節在標題下另有標記（§8），§10 逐條標記。
+> x-monorepo 是通用 template：外部 OIDC 是驗證端的擴充點（方案 B）；自建帳密 issuer（方案 A）降為可選模組，未排程（§13）。
 > API key 繼續用於機器對機器與 break-glass。**OIDC 預設關閉，關閉時行為與現在完全相同。**
 > 所有範例的 secret 都是佔位符（`<…>`），不是可用的值（紅線 R4）。
 
@@ -118,6 +119,7 @@
 
 ## 8. Console（Q3）
 
+> **已不適用（#561）：本節只當歷史，見文件開頭。**
 > 實作於 #273（`web/apps/console/src/oidc/`、`routes/login.tsx`、`routes/auth-callback.tsx`）。
 
 - **SPA 自己跑 Authorization Code + PKCE**：`state`、`nonce`、`code_verifier` 由 SPA 產生與驗證（PKCE 一律 `S256`）；scope 含 `openid profile email offline_access`（Dex 需要 `offline_access` 才發 refresh token）。**redirect URI = `<console origin>/auth/callback`**（IdP 的 client 要登記它；dev 的 Dex 見 `deployments/docker/dex/config.yaml`）。
@@ -156,9 +158,11 @@
 
 ## 10. 本機 issuer（Q6）
 
+> 前三條（Dex 的統一 issuer、名稱解析、離線 hosts）已不適用（#561），只當歷史；後兩條（非 https issuer 的放行規則、不提供 `jwks_url` override）是 verifier 的規則，仍是現行的。
+
 - 統一 issuer：**`http://dex.localtest.me:5556/dex`**（`localtest.me` 的公開 DNS 解析到 `127.0.0.1`）。
-- 容器內的解析：compose 用 `extra_hosts`、kind 用 CoreDNS rewrite，把 `dex.localtest.me` 指到 Dex 服務，讓瀏覽器（host）與 rpc（容器 / Pod）看到**同一個 issuer 字串**（`iss` 必須完全相符）。實作與做法見 `docs/operations.md`「Dex dev IdP」（#274 part 1）。
-- **離線時** `localtest.me` 解不出來：退回 `/etc/hosts` 加一行 `127.0.0.1 dex.localtest.me`（做法寫在 `docs/operations.md`「Dex dev IdP」）。
+- 容器內的解析：compose 用 `extra_hosts`、kind 用 CoreDNS rewrite，把 `dex.localtest.me` 指到 Dex 服務，讓瀏覽器（host）與 rpc（容器 / Pod）看到**同一個 issuer 字串**（`iss` 必須完全相符）。實作與做法見 docs/operations.md「Dex dev IdP」（#274 part 1）。
+- **離線時** `localtest.me` 解不出來：退回 `/etc/hosts` 加一行 `127.0.0.1 dex.localtest.me`（做法寫在 docs/operations.md「Dex dev IdP」）。
 - **非 https 的 issuer 只在兩種情況放行**：host 是 loopback，或該 issuer 的 dev 設定明確開啟 `allow_insecure_issuer`。所以 compose / kind 的 dev 設定明確開這個旗標（「loopback」是字面 host 還是解析後位址，PR 2 定義）；正式環境永遠不開，非 https 的 issuer 在兩個條件都不成立時拒絕啟動。
 - **不提供 `jwks_url` override**：JWKS 一律從 discovery 取，避免 issuer 與金鑰來源脫鉤。
 

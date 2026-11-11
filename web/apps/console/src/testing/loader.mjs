@@ -5,7 +5,7 @@
 //     tool, so no new dependency). Node's strip-only mode cannot load them: `enum` is not erasable and they
 //     are full of them, and node's own transform mode varies by version. Every other .ts is left to node's
 //     native type stripping, which keeps line numbers, so a failing assertion points at the real source line;
-//  3. src/client.ts (createConnectTransport, window.location, the OIDC session) is swapped for
+//  3. src/client.ts (createConnectTransport, window.location) is swapped for
 //     src/testing/client.stub.ts, so the real queryFn of every query runs against a scripted server.
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

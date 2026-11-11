@@ -31,10 +31,6 @@ const CASES: Record<string, unknown[] | null> = {
   poisonQuery: null,
   poisonDetailQuery: ["schema", 1n],
   adminProbeQuery: [0],
-  accountsQuery: null,
-  accountQuery: ["account-1"],
-  accountIdentitiesQuery: ["account-1", 0, true],
-  apiKeysQuery: ["account-1"],
 };
 
 // Every other export of queries.ts: helpers and constants, not queries.
@@ -64,7 +60,7 @@ describe("every query is in the matrix", () => {
     const stale = Object.keys(CASES).filter((n) => !queryNames.includes(n));
     assert.deepEqual(stale, []);
   });
-  it("the matrix is not empty", () => assert.ok(queryNames.length >= 5, `${queryNames.length} queries`));
+  it("the matrix is not empty", () => assert.ok(queryNames.length >= 4, `${queryNames.length} queries`));
 });
 
 describe("the app's defaults are the shared policy", () => {
