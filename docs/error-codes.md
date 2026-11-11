@@ -4,7 +4,7 @@
 
 ## Error codes：`x-error-code` 總表
 
-每個失敗的 RPC 都帶 Connect code（HTTP status 由它決定）+ header `x-error-code`，client 判斷用後者（`console` 的 `describe()` 就是印它）。
+失敗的 RPC 都帶 Connect code（HTTP status 由它決定）；多數另帶 header `x-error-code`，client 有它就用它判斷（`console` 的 `describe()` 就是印它）。沒有 `x-error-code` 的兩種情況（`INTERNAL`、connect 函式庫自己擋下的請求）見下文。
 來源三種：**platform interceptor**（`request.*` / `auth.*`）、**admin**（`admin.*`，`pkgs/platform/admin` 自己設）、**domain error**
 （`kernel.NewError(kind, code, msg)`，`server.ToConnectError` 依 `Kind` 映射：InvalidArgument → `INVALID_ARGUMENT`、NotFound → `NOT_FOUND`、
 FailedPrecondition → `FAILED_PRECONDITION`、Conflict → `ALREADY_EXISTS`、PermissionDenied → `PERMISSION_DENIED`；其他 → `INTERNAL`，**沒有** `x-error-code`，訊息固定 `internal error`）。
