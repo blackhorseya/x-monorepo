@@ -3,6 +3,7 @@
 <sub>← [README](../README.md) · [identity.md](identity.md)</sub>
 
 > **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）。** 這份是現行規格，實作拆成 #270–#274（§12）；PR 3（#271）已實作 identity BC 這一半，細節見 [`identity.md`](identity.md)「外部身分綁定」。
+> **現況（#561）：** Console 已沒有 OIDC 登入頁，repo 也不再附 Dex 與其 e2e（§8 的 Console 實作、§10 的 Dex 開發 IdP、§12 PR 5 的 `oidc-backend`／`oidc-dex` project 與 `web-e2e-dex`／`web-e2e-ports` 都已移除）；這幾段只當歷史記錄讀。後端（verifier、`(iss, sub)` 綁定）仍在 rpc 裡，這份文件隨後續 PR 處理。
 > x-monorepo 是通用 template：登入走**外部 OIDC（方案 B）**，本機開發與測試用 **Dex**；自建帳密 issuer（方案 A）降為可選模組，未排程（§13）。
 > API key 繼續用於機器對機器與 break-glass。**OIDC 預設關閉，關閉時行為與現在完全相同。**
 > 所有範例的 secret 都是佔位符（`<…>`），不是可用的值（紅線 R4）。
