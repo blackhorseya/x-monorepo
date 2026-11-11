@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/metric/noop"
 
@@ -34,27 +34,12 @@ func call(t *testing.T, cfg config.Auth, procedure string, headers map[string]st
 		t.Fatal("mode on but no interceptor")
 	}
 	var seen contextx.Principal
-	next := in(func(c context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
+	err = invokeOne(context.Background(), in, procedure, headers, handled(func(c context.Context) {
 		seen = contextx.PrincipalFrom(c)
-		return connect.NewResponse(&struct{}{}), nil
-	})
-	req := connect.NewRequest(&struct{}{})
-	for k, v := range headers {
-		req.Header().Set(k, v)
-	}
-	// Spec().Procedure comes from the handler in a real server; a request
-	// built by hand gets it through the interceptor's view of the spec.
-	_, err = next(context.Background(), request{AnyRequest: req, procedure: procedure})
+	}))
 
 	return seen, err
 }
-
-type request struct {
-	connect.AnyRequest
-	procedure string
-}
-
-func (r request) Spec() connect.Spec { return connect.Spec{Procedure: r.procedure} }
 
 func token(t *testing.T, key any, method jwt.SigningMethod, cl jwt.MapClaims) string {
 	t.Helper()
@@ -70,7 +55,7 @@ func errCode(err error) (connect.Code, string) {
 	if !errors.As(err, &ce) {
 		return 0, ""
 	}
-	return ce.Code(), ce.Meta().Get("x-error-code")
+	return ce.Code(), server.ErrorMeta(err).Get("x-error-code")
 }
 
 func TestAuthInterceptor_Off(t *testing.T) {
@@ -244,13 +229,9 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 			t.Fatal(err)
 		}
 		var seen contextx.Principal
-		next := in(func(c context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
+		err = invokeOne(context.Background(), in, "/x.v1.X/Do", map[string]string{server.APIKeyHeader: key}, handled(func(c context.Context) {
 			seen = contextx.PrincipalFrom(c)
-			return connect.NewResponse(&struct{}{}), nil
-		})
-		req := connect.NewRequest(&struct{}{})
-		req.Header().Set(server.APIKeyHeader, key)
-		_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+		}))
 
 		return seen, err
 	}
@@ -302,13 +283,9 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next := in(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
-		return connect.NewResponse(&struct{}{}), nil
-	})
-	req := connect.NewRequest(&struct{}{})
-	req.Header().Set(server.APIKeyHeader, "xk_dbkey-0123456789abcdef0123456789")
+	hangingKey := map[string]string{server.APIKeyHeader: "xk_dbkey-0123456789abcdef0123456789"}
 	start := time.Now()
-	_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+	err = invokeOne(context.Background(), in, "/x.v1.X/Do", hangingKey, handled(nil))
 	if !isInvalidCredential(err) || time.Since(start) > time.Second {
 		t.Fatalf("hanging resolver: err=%v after %v (want invalid credential within the timeout)", err, time.Since(start))
 	}
@@ -324,11 +301,7 @@ func TestAuthInterceptor_Resolver(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	next = in(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
-		called = true
-		return connect.NewResponse(&struct{}{}), nil
-	})
-	_, err = next(context.Background(), request{AnyRequest: req, procedure: "/x.v1.X/Do"})
+	err = invokeOne(context.Background(), in, "/x.v1.X/Do", hangingKey, handled(func(context.Context) { called = true }))
 	if !isInvalidCredential(err) || called {
 		t.Fatalf("late success after the deadline: err=%v next called=%v (want rejected, handler not called)", err, called)
 	}
@@ -360,5 +333,5 @@ func (r *hangingResolver) ResolveAPIKey(c context.Context, _ string) (contextx.P
 
 func isInvalidCredential(err error) bool {
 	var ce *connect.Error
-	return errors.As(err, &ce) && ce.Code() == connect.CodeUnauthenticated && ce.Meta().Get("x-error-code") == server.InvalidCredentialCode
+	return errors.As(err, &ce) && ce.Code() == connect.CodeUnauthenticated && server.ErrorMeta(err).Get("x-error-code") == server.InvalidCredentialCode
 }

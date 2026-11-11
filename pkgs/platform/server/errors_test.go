@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -32,7 +32,7 @@ func TestToConnectError(t *testing.T) {
 			if ce.Code() != tc.wantCode {
 				t.Fatalf("code = %v, want %v", ce.Code(), tc.wantCode)
 			}
-			if got := ce.Meta().Get("x-error-code"); got != tc.wantMeta {
+			if got := server.ErrorMeta(server.ToConnectError(tc.err)).Get("x-error-code"); got != tc.wantMeta {
 				t.Fatalf("x-error-code = %q, want %q", got, tc.wantMeta)
 			}
 			if tc.wantCode == connect.CodeInternal && ce.Message() != "internal error" {

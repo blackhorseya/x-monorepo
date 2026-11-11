@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/ThreeDotsLabs/watermill"
 	wsql "github.com/ThreeDotsLabs/watermill-sql/v4/pkg/sql"
 	"github.com/ThreeDotsLabs/watermill/message"
@@ -21,6 +22,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
 // Integration (pgtest): Prune through a real server with auth required. Two
@@ -102,31 +104,29 @@ func TestPruneRPC(t *testing.T) {
 	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	withKey := func(key string) connect.ClientOption {
-		return connect.WithInterceptors(connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
-			return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-				req.Header().Set(server.APIKeyHeader, key)
-				return next(c, req)
-			}
-		}))
+	withKey := func(key string) connect.ClientInterceptor {
+		if key == "" {
+			return func(next connect.ClientFunc) connect.ClientFunc { return next }
+		}
+		return servertest.WithHeader(server.APIKeyHeader, key)
 	}
-	viewer := adminv1connect.NewAdminServiceClient(http.DefaultClient, ts.URL, withKey("viewer-key-0123456789"))
-	ops := adminv1connect.NewAdminServiceClient(http.DefaultClient, ts.URL, withKey("ops-key-0123456789abcdef"))
+	viewer := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withKey("viewer-key-0123456789")))
+	ops := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withKey("ops-key-0123456789abcdef")))
 	day := durationpb.New(24 * time.Hour)
 
-	_, err = viewer.Prune(c, connect.NewRequest(&adminv1.PruneRequest{OlderThan: day, DryRun: true}))
+	_, err = viewer.Prune(c, &adminv1.PruneRequest{OlderThan: day, DryRun: true})
 	if code, ec := errCode(err); code != connect.CodePermissionDenied || ec != server.PermissionDeniedCode {
 		t.Fatalf("viewer = %v", err)
 	}
-	_, err = ops.Prune(c, connect.NewRequest(&adminv1.PruneRequest{DryRun: true}))
+	_, err = ops.Prune(c, &adminv1.PruneRequest{DryRun: true})
 	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != server.ValidationErrorCode {
 		t.Fatalf("no older_than = %v", err)
 	}
-	_, err = ops.Prune(c, connect.NewRequest(&adminv1.PruneRequest{OlderThan: durationpb.New(-time.Hour), DryRun: true}))
+	_, err = ops.Prune(c, &adminv1.PruneRequest{OlderThan: durationpb.New(-time.Hour), DryRun: true})
 	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != server.ValidationErrorCode {
 		t.Fatalf("negative older_than = %v", err)
 	}
-	_, err = ops.Prune(c, connect.NewRequest(&adminv1.PruneRequest{BoundedContext: "billing", OlderThan: day, DryRun: true}))
+	_, err = ops.Prune(c, &adminv1.PruneRequest{BoundedContext: "billing", OlderThan: day, DryRun: true})
 	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != "admin.unknown_bounded_context" {
 		t.Fatalf("unknown bc = %v", err)
 	}
@@ -134,13 +134,13 @@ func TestPruneRPC(t *testing.T) {
 	// Dry run over both BCs: the stale group holds the topic back, the
 	// published-only table is skipped, the inbox would lose one row (the
 	// parked id is kept); nothing is deleted.
-	dry, err := ops.Prune(c, connect.NewRequest(&adminv1.PruneRequest{OlderThan: day, DryRun: true}))
+	dry, err := ops.Prune(c, &adminv1.PruneRequest{OlderThan: day, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tables := dry.Msg.GetTables()
-	if len(tables) != 4 || dry.Msg.GetTotal() != 1 {
-		t.Fatalf("dry run = %v", dry.Msg)
+	tables := dry.GetTables()
+	if len(tables) != 4 || dry.GetTotal() != 1 {
+		t.Fatalf("dry run = %v", dry)
 	}
 	if tbl := tables[0]; tbl.GetTable() != eventbus.TableName(lonely) || tbl.GetRows() != 0 || tbl.GetSkipped() == "" {
 		t.Fatalf("published-only table = %v", tbl)
@@ -164,11 +164,11 @@ func TestPruneRPC(t *testing.T) {
 	}
 
 	// Forgetting the stale group in a dry run reports it, keeps its cursor.
-	dry, err = ops.Prune(c, connect.NewRequest(&adminv1.PruneRequest{BoundedContext: "prunea", OlderThan: day, DryRun: true, ForgetGroups: []string{"test-old.prunea", "never"}}))
-	if err != nil || len(dry.Msg.GetTables()) != 3 || dry.Msg.GetTotal() != 4 {
-		t.Fatalf("dry forget = %v, %v", dry.Msg, err)
+	dry, err = ops.Prune(c, &adminv1.PruneRequest{BoundedContext: "prunea", OlderThan: day, DryRun: true, ForgetGroups: []string{"test-old.prunea", "never"}})
+	if err != nil || len(dry.GetTables()) != 3 || dry.GetTotal() != 4 {
+		t.Fatalf("dry forget = %v, %v", dry, err)
 	}
-	if tbl := dry.Msg.GetTables()[1]; tbl.GetRows() != 3 || len(tbl.GetBlockers()) != 0 || len(tbl.GetForgotten()) != 1 || tbl.GetForgotten()[0] != "test-old.prunea" {
+	if tbl := dry.GetTables()[1]; tbl.GetRows() != 3 || len(tbl.GetBlockers()) != 0 || len(tbl.GetForgotten()) != 1 || tbl.GetForgotten()[0] != "test-old.prunea" {
 		t.Fatalf("dry forget topic = %v", tbl)
 	}
 	if n := count(eventbus.OffsetsTableName(topic)); n != 2 {
@@ -177,9 +177,9 @@ func TestPruneRPC(t *testing.T) {
 
 	// The real run, one BC: cursor gone, three rows and one inbox row deleted,
 	// the parked id's inbox row and the published-only table untouched.
-	real, err := ops.Prune(c, connect.NewRequest(&adminv1.PruneRequest{BoundedContext: "prunea", OlderThan: day, ForgetGroups: []string{"test-old.prunea"}, BatchSize: 2}))
-	if err != nil || real.Msg.GetTotal() != 4 {
-		t.Fatalf("prune = %v, %v", real.Msg, err)
+	real, err := ops.Prune(c, &adminv1.PruneRequest{BoundedContext: "prunea", OlderThan: day, ForgetGroups: []string{"test-old.prunea"}, BatchSize: 2})
+	if err != nil || real.GetTotal() != 4 {
+		t.Fatalf("prune = %v, %v", real, err)
 	}
 	if n := count(eventbus.OffsetsTableName(topic)); n != 1 {
 		t.Fatalf("cursor not forgotten: %d left", n)
@@ -199,7 +199,7 @@ func TestPruneRPC(t *testing.T) {
 	}
 
 	nodb := admin.NewPoisonService(nil, config.Auth{Mode: config.AuthOff}, []string{"prunea"})
-	_, err = nodb.Prune(c, connect.NewRequest(&adminv1.PruneRequest{OlderThan: day, DryRun: true}))
+	_, err = nodb.Prune(c, &adminv1.PruneRequest{OlderThan: day, DryRun: true})
 	if code, ec := errCode(err); code != connect.CodeFailedPrecondition || ec != "admin.no_database" {
 		t.Fatalf("no db = %v", err)
 	}

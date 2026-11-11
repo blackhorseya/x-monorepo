@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -12,7 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
@@ -25,12 +29,39 @@ type slowRoute struct {
 	release chan struct{} // close to let every blocked request finish
 }
 
-func (r *slowRoute) Route(...connect.HandlerOption) (string, http.Handler) {
-	return "/test.v1.Slow/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+func (r *slowRoute) Register(s *connect.Server) {
+	s.Register(connect.Method{Spec: slowSpec, Handler: func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+		if err := stream.Receive(&emptypb.Empty{}); err != nil {
+			return err
+		}
 		r.started <- struct{}{}
 		<-r.release
-		_, _ = io.WriteString(w, "done")
-	})
+
+		return stream.Send(wrapperspb.String("done"))
+	}})
+}
+
+var slowSpec = connect.Spec{StreamType: connect.StreamTypeUnary, Procedure: "/test.v1.Slow/Call"}
+
+// callSlow makes the slow RPC over client (a Connect unary POST) and returns the body
+// the handler answered with, "done", with the status of the response.
+func callSlow(client *http.Client, base string) (string, error) {
+	req, err := http.NewRequest(http.MethodPost, base+slowSpec.Procedure, strings.NewReader("{}"))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out string
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode status %d body: %w", res.StatusCode, err)
+	}
+
+	return out + "/" + http.StatusText(res.StatusCode), nil
 }
 
 // newTestServer builds a Server on a 127.0.0.1:0 listener and runs Serve on
@@ -99,14 +130,14 @@ func TestServer_Serve_GracefulShutdown(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			code, body, err := get(t, client, base+"/test.v1.Slow/Call")
+			got, err := callSlow(client, base)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
 				results[name] = "error: " + err.Error()
 				return
 			}
-			results[name] = body + "/" + http.StatusText(code)
+			results[name] = got
 		}()
 	}
 	for range clients {
@@ -186,7 +217,7 @@ func TestServer_Serve_ShutdownTimeout(t *testing.T) {
 	defer close(route.release)
 	base, cancel, done := newTestServer(t, config.HTTP{ShutdownTimeout: 200 * time.Millisecond}, route)
 
-	go func() { _, _, _ = get(t, &http.Client{Transport: &http.Transport{}}, base+"/test.v1.Slow/Call") }()
+	go func() { _, _ = callSlow(&http.Client{Transport: &http.Transport{}}, base) }()
 	select {
 	case <-route.started:
 	case <-time.After(5 * time.Second):

@@ -6,7 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/google/uuid"
 
 	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
@@ -29,20 +30,20 @@ func TestIDs_NewOnesAreV7FromTheRealEntry(t *testing.T) {
 	defer cleanup()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
+	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0))))
 
-	create := func(rid string) *connect.Response[identityv1.CreateAccountResponse] {
+	create := func(rid string) (*identityv1.CreateAccountResponse, *connect.Header) {
 		t.Helper()
-		req := connect.NewRequest(&identityv1.CreateAccountRequest{Name: "v7"})
+		c, info := connect.NewClientContext(context.Background())
 		if rid != "" {
-			req.Header().Set(server.RequestIDHeader, rid)
+			info.RequestHeader().Set(server.RequestIDHeader, rid)
 		}
-		res, err := client.CreateAccount(context.Background(), req)
+		res, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: "v7"})
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		return res
+		return res, info.ResponseHeader()
 	}
 	isV7 := func(id string) bool {
 		u, err := uuid.Parse(id)
@@ -50,19 +51,19 @@ func TestIDs_NewOnesAreV7FromTheRealEntry(t *testing.T) {
 		return err == nil && u.Version() == 7
 	}
 
-	res := create("")
-	if id := res.Msg.GetAccount().GetId(); !isV7(id) {
+	res, header := create("")
+	if id := res.GetAccount().GetId(); !isV7(id) {
 		t.Fatalf("account id %q is not a UUID v7", id)
 	}
-	if rid := res.Header().Get(server.RequestIDHeader); !isV7(rid) {
+	if rid := header.Get(server.RequestIDHeader); !isV7(rid) {
 		t.Fatalf("minted X-Request-Id %q is not a UUID v7", rid)
 	}
 
 	// A client's own value, even a v4 one, comes back exactly as sent.
 	const v4 = "6ba7b810-9dad-41d1-80b4-00c04fd430c8"
 	for _, own := range []string{v4, "client-42"} {
-		if got := create(own).Header().Get(server.RequestIDHeader); got != own {
-			t.Fatalf("client X-Request-Id %q came back as %q", own, got)
+		if _, h := create(own); h.Get(server.RequestIDHeader) != own {
+			t.Fatalf("client X-Request-Id %q came back as %q", own, h.Get(server.RequestIDHeader))
 		}
 	}
 }

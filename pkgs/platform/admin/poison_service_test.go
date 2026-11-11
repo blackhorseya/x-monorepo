@@ -8,7 +8,8 @@ import (
 	"os"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/ThreeDotsLabs/watermill"
 	wsql "github.com/ThreeDotsLabs/watermill-sql/v4/pkg/sql"
 	"github.com/ThreeDotsLabs/watermill/message"
@@ -21,6 +22,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
 func TestMain(m *testing.M) {
@@ -36,7 +38,13 @@ func errCode(err error) (connect.Code, string) {
 	if !errors.As(err, &ce) {
 		return 0, ""
 	}
-	return ce.Code(), ce.Meta().Get("x-error-code")
+	// Still on the error when a handler is called directly (server.ErrorMeta), response
+	// metadata when it came through a client (servertest.ErrorMeta).
+	if code := server.ErrorMeta(err).Get("x-error-code"); code != "" {
+		return ce.Code(), code
+	}
+
+	return ce.Code(), servertest.ErrorMeta(err).Get("x-error-code")
 }
 
 // Integration (pgtest): the service through a real server.New with auth
@@ -86,78 +94,74 @@ func TestPoisonService(t *testing.T) {
 	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	withKey := func(key string) connect.ClientOption {
-		return connect.WithInterceptors(connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
-			return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-				if key != "" {
-					req.Header().Set(server.APIKeyHeader, key)
-				}
-				return next(c, req)
-			}
-		}))
+	withKey := func(key string) connect.ClientInterceptor {
+		if key == "" {
+			return func(next connect.ClientFunc) connect.ClientFunc { return next }
+		}
+		return servertest.WithHeader(server.APIKeyHeader, key)
 	}
-	anon := adminv1connect.NewAdminServiceClient(http.DefaultClient, ts.URL)
-	viewer := adminv1connect.NewAdminServiceClient(http.DefaultClient, ts.URL, withKey("viewer-key-0123456789"))
-	ops := adminv1connect.NewAdminServiceClient(http.DefaultClient, ts.URL, withKey("ops-key-0123456789abcdef"))
+	anon := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
+	viewer := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withKey("viewer-key-0123456789")))
+	ops := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withKey("ops-key-0123456789abcdef")))
 
 	// Gate: anonymous → unauthenticated, a principal without the role → permission denied.
-	_, err = anon.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{}))
+	_, err = anon.ListPoison(c, &adminv1.ListPoisonRequest{})
 	if code, ec := errCode(err); code != connect.CodeUnauthenticated || ec != server.UnauthenticatedCode {
 		t.Fatalf("anonymous = %v", err)
 	}
-	_, err = viewer.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{}))
+	_, err = viewer.ListPoison(c, &adminv1.ListPoisonRequest{})
 	if code, ec := errCode(err); code != connect.CodePermissionDenied || ec != server.PermissionDeniedCode {
 		t.Fatalf("viewer = %v", err)
 	}
 
 	// Validation and unknown BC are client errors.
-	_, err = ops.RequeuePoison(c, connect.NewRequest(&adminv1.RequeuePoisonRequest{BoundedContext: "admintest"}))
+	_, err = ops.RequeuePoison(c, &adminv1.RequeuePoisonRequest{BoundedContext: "admintest"})
 	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != server.ValidationErrorCode {
 		t.Fatalf("neither offsets nor all = %v", err)
 	}
-	_, err = ops.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{BoundedContext: "billing"}))
+	_, err = ops.ListPoison(c, &adminv1.ListPoisonRequest{BoundedContext: "billing"})
 	if code, ec := errCode(err); code != connect.CodeInvalidArgument || ec != "admin.unknown_bounded_context" {
 		t.Fatalf("unknown bc = %v", err)
 	}
 
 	one, two := park("one"), park("two")
-	list, err := ops.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{}))
-	if err != nil || len(list.Msg.GetMessages()) != 2 {
+	list, err := ops.ListPoison(c, &adminv1.ListPoisonRequest{})
+	if err != nil || len(list.GetMessages()) != 2 {
 		t.Fatalf("list = %v, %v", list, err)
 	}
-	first := list.Msg.GetMessages()[0]
+	first := list.GetMessages()[0]
 	if first.GetUuid() != one || first.GetBoundedContext() != "admintest" || first.GetTopic() != topic || first.GetReason() != "boom" || len(first.GetPayload()) != 0 {
 		t.Fatalf("first = %v", first)
 	}
-	got, err := ops.GetPoison(c, connect.NewRequest(&adminv1.GetPoisonRequest{BoundedContext: "admintest", Offset: first.GetOffset()}))
-	if err != nil || string(got.Msg.GetMessage().GetPayload()) != "one" || got.Msg.GetMessage().GetMetadata()[middleware.PoisonedTopicKey] != topic {
+	got, err := ops.GetPoison(c, &adminv1.GetPoisonRequest{BoundedContext: "admintest", Offset: first.GetOffset()})
+	if err != nil || string(got.GetMessage().GetPayload()) != "one" || got.GetMessage().GetMetadata()[middleware.PoisonedTopicKey] != topic {
 		t.Fatalf("get = %v, %v", got, err)
 	}
-	_, err = ops.GetPoison(c, connect.NewRequest(&adminv1.GetPoisonRequest{BoundedContext: "admintest", Offset: 999999}))
+	_, err = ops.GetPoison(c, &adminv1.GetPoisonRequest{BoundedContext: "admintest", Offset: 999999})
 	if code, ec := errCode(err); code != connect.CodeNotFound || ec != "admin.poison_not_found" {
 		t.Fatalf("get missing = %v", err)
 	}
 
-	req, err := ops.RequeuePoison(c, connect.NewRequest(&adminv1.RequeuePoisonRequest{BoundedContext: "admintest", Offsets: []int64{first.GetOffset()}}))
-	if err != nil || req.Msg.GetCount() != 1 {
+	req, err := ops.RequeuePoison(c, &adminv1.RequeuePoisonRequest{BoundedContext: "admintest", Offsets: []int64{first.GetOffset()}})
+	if err != nil || req.GetCount() != 1 {
 		t.Fatalf("requeue = %v, %v", req, err)
 	}
 	var n int64
 	if err := db.WithContext(c).Raw("SELECT count(*) FROM "+eventbus.TableName(topic)+" WHERE uuid = ?", one).Scan(&n).Error; err != nil || n != 1 {
 		t.Fatalf("requeued row = %d, %v", n, err)
 	}
-	drop, err := ops.DropPoison(c, connect.NewRequest(&adminv1.DropPoisonRequest{BoundedContext: "admintest", All: true}))
-	if err != nil || drop.Msg.GetCount() != 1 {
+	drop, err := ops.DropPoison(c, &adminv1.DropPoisonRequest{BoundedContext: "admintest", All: true})
+	if err != nil || drop.GetCount() != 1 {
 		t.Fatalf("drop all = %v, %v", drop, err)
 	}
-	list, err = ops.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{BoundedContext: "admintest", Limit: 10}))
-	if err != nil || len(list.Msg.GetMessages()) != 0 {
+	list, err = ops.ListPoison(c, &adminv1.ListPoisonRequest{BoundedContext: "admintest", Limit: 10})
+	if err != nil || len(list.GetMessages()) != 0 {
 		t.Fatalf("list after drop = %v, %v (two=%s)", list, err, two)
 	}
 
 	// No database: a clear precondition error, not a nil-pointer panic.
 	nodb := admin.NewPoisonService(nil, config.Auth{Mode: config.AuthOff}, []string{"admintest"})
-	_, err = nodb.ListPoison(c, connect.NewRequest(&adminv1.ListPoisonRequest{}))
+	_, err = nodb.ListPoison(c, &adminv1.ListPoisonRequest{})
 	if code, ec := errCode(err); code != connect.CodeFailedPrecondition || ec != "admin.no_database" {
 		t.Fatalf("no db = %v", err)
 	}

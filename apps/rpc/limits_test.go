@@ -7,12 +7,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 
 	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
 // Through the wired graph: the rate limit sits in the chain and its
@@ -28,20 +30,20 @@ func TestRateLimit_E2E(t *testing.T) {
 	defer cleanup()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
+	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
 	c := context.Background()
 
 	// First call uses the only token (NotFound is the use case's answer: it ran).
-	_, err = client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: "nope"}))
+	_, err = client.GetAccount(c, &identityv1.GetAccountRequest{Id: "nope"})
 	if connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("first call = %v, want NotFound", err)
 	}
-	_, err = client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: "nope"}))
+	_, err = client.GetAccount(c, &identityv1.GetAccountRequest{Id: "nope"})
 	var ce *connect.Error
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeResourceExhausted {
 		t.Fatalf("second call = %v, want ResourceExhausted", err)
 	}
-	if ce.Meta().Get("x-error-code") != server.RateLimitedCode || ce.Meta().Get(server.RetryAfterHeader) == "" || ce.Meta().Get(server.RequestIDHeader) == "" {
-		t.Fatalf("rejection headers = %v", ce.Meta())
+	if servertest.ErrorMeta(err).Get("x-error-code") != server.RateLimitedCode || servertest.ErrorMeta(err).Get(server.RetryAfterHeader) == "" || servertest.ErrorMeta(err).Get(server.RequestIDHeader) == "" {
+		t.Fatalf("rejection headers = %v", servertest.ErrorMeta(err))
 	}
 }

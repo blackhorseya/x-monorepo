@@ -3,10 +3,8 @@ package rpc
 
 import (
 	"context"
-	"errors"
-	"net/http"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/application/dto"
@@ -101,44 +99,44 @@ func NewIdentityService(uc UseCases, auth config.Auth) *IdentityService {
 	return &IdentityService{uc: uc, auth: auth}
 }
 
-// Route returns the mount path and handler (Connect + gRPC + gRPC-Web on one port).
-func (h *IdentityService) Route(opts ...connect.HandlerOption) (string, http.Handler) {
-	return identityv1connect.NewIdentityServiceHandler(h, opts...)
+// Register serves the service on s (Connect + gRPC + gRPC-Web on one port).
+func (h *IdentityService) Register(s *connect.Server) {
+	identityv1connect.RegisterIdentityServiceHandler(s, h)
 }
 
 func (h *IdentityService) admin(c context.Context) error {
 	return server.RequireRole(c, h.auth, h.auth.AdminRole)
 }
 
-func (h *IdentityService) CreateAccount(c context.Context, req *connect.Request[identityv1.CreateAccountRequest]) (*connect.Response[identityv1.CreateAccountResponse], error) {
+func (h *IdentityService) CreateAccount(c context.Context, req *identityv1.CreateAccountRequest) (*identityv1.CreateAccountResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.CreateAccount.Execute(c, dto.CreateAccountInput{Name: req.Msg.GetName(), Roles: req.Msg.GetRoles()})
+	out, err := h.uc.CreateAccount.Execute(c, dto.CreateAccountInput{Name: req.GetName(), Roles: req.GetRoles()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.CreateAccountResponse{Account: toProtoAccount(out)}), nil
+	return &identityv1.CreateAccountResponse{Account: toProtoAccount(out)}, nil
 }
 
-func (h *IdentityService) GetAccount(c context.Context, req *connect.Request[identityv1.GetAccountRequest]) (*connect.Response[identityv1.GetAccountResponse], error) {
+func (h *IdentityService) GetAccount(c context.Context, req *identityv1.GetAccountRequest) (*identityv1.GetAccountResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.GetAccount.Execute(c, dto.GetAccountInput{ID: req.Msg.GetId()})
+	out, err := h.uc.GetAccount.Execute(c, dto.GetAccountInput{ID: req.GetId()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.GetAccountResponse{Account: toProtoAccount(out)}), nil
+	return &identityv1.GetAccountResponse{Account: toProtoAccount(out)}, nil
 }
 
-func (h *IdentityService) ListAccounts(c context.Context, req *connect.Request[identityv1.ListAccountsRequest]) (*connect.Response[identityv1.ListAccountsResponse], error) {
+func (h *IdentityService) ListAccounts(c context.Context, req *identityv1.ListAccountsRequest) (*identityv1.ListAccountsResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.ListAccounts.Execute(c, dto.ListAccountsInput{PageSize: req.Msg.GetPageSize(), PageToken: req.Msg.GetPageToken()})
+	out, err := h.uc.ListAccounts.Execute(c, dto.ListAccountsInput{PageSize: req.GetPageSize(), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
@@ -147,66 +145,66 @@ func (h *IdentityService) ListAccounts(c context.Context, req *connect.Request[i
 		accounts = append(accounts, toProtoAccount(&out.Accounts[i]))
 	}
 
-	return connect.NewResponse(&identityv1.ListAccountsResponse{Accounts: accounts, NextPageToken: out.NextPageToken}), nil
+	return &identityv1.ListAccountsResponse{Accounts: accounts, NextPageToken: out.NextPageToken}, nil
 }
 
-func (h *IdentityService) DisableAccount(c context.Context, req *connect.Request[identityv1.DisableAccountRequest]) (*connect.Response[identityv1.DisableAccountResponse], error) {
+func (h *IdentityService) DisableAccount(c context.Context, req *identityv1.DisableAccountRequest) (*identityv1.DisableAccountResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.DisableAccount.Execute(c, dto.DisableAccountInput{ID: req.Msg.GetId()})
+	out, err := h.uc.DisableAccount.Execute(c, dto.DisableAccountInput{ID: req.GetId()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.DisableAccountResponse{Account: toProtoAccount(out)}), nil
+	return &identityv1.DisableAccountResponse{Account: toProtoAccount(out)}, nil
 }
 
-func (h *IdentityService) EnableAccount(c context.Context, req *connect.Request[identityv1.EnableAccountRequest]) (*connect.Response[identityv1.EnableAccountResponse], error) {
+func (h *IdentityService) EnableAccount(c context.Context, req *identityv1.EnableAccountRequest) (*identityv1.EnableAccountResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.EnableAccount.Execute(c, dto.EnableAccountInput{ID: req.Msg.GetId()})
+	out, err := h.uc.EnableAccount.Execute(c, dto.EnableAccountInput{ID: req.GetId()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.EnableAccountResponse{Account: toProtoAccount(out)}), nil
+	return &identityv1.EnableAccountResponse{Account: toProtoAccount(out)}, nil
 }
 
-func (h *IdentityService) AssignRoles(c context.Context, req *connect.Request[identityv1.AssignRolesRequest]) (*connect.Response[identityv1.AssignRolesResponse], error) {
+func (h *IdentityService) AssignRoles(c context.Context, req *identityv1.AssignRolesRequest) (*identityv1.AssignRolesResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.AssignRoles.Execute(c, dto.AssignRolesInput{ID: req.Msg.GetId(), Roles: req.Msg.GetRoles()})
+	out, err := h.uc.AssignRoles.Execute(c, dto.AssignRolesInput{ID: req.GetId(), Roles: req.GetRoles()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.AssignRolesResponse{Account: toProtoAccount(out)}), nil
+	return &identityv1.AssignRolesResponse{Account: toProtoAccount(out)}, nil
 }
 
-func (h *IdentityService) CreateApiKey(c context.Context, req *connect.Request[identityv1.CreateApiKeyRequest]) (*connect.Response[identityv1.CreateApiKeyResponse], error) {
+func (h *IdentityService) CreateApiKey(c context.Context, req *identityv1.CreateApiKeyRequest) (*identityv1.CreateApiKeyResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	in := dto.CreateAPIKeyInput{AccountID: req.Msg.GetAccountId(), Name: req.Msg.GetName()}
-	if req.Msg.GetExpireTime() != nil {
-		in.ExpiresAt = req.Msg.GetExpireTime().AsTime()
+	in := dto.CreateAPIKeyInput{AccountID: req.GetAccountId(), Name: req.GetName()}
+	if req.GetExpireTime() != nil {
+		in.ExpiresAt = req.GetExpireTime().AsTime()
 	}
 	out, err := h.uc.CreateAPIKey.Execute(c, in)
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.CreateApiKeyResponse{ApiKey: toProtoAPIKey(&out.Key), Secret: out.Secret}), nil
+	return &identityv1.CreateApiKeyResponse{ApiKey: toProtoAPIKey(&out.Key), Secret: out.Secret}, nil
 }
 
-func (h *IdentityService) ListApiKeys(c context.Context, req *connect.Request[identityv1.ListApiKeysRequest]) (*connect.Response[identityv1.ListApiKeysResponse], error) {
+func (h *IdentityService) ListApiKeys(c context.Context, req *identityv1.ListApiKeysRequest) (*identityv1.ListApiKeysResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.ListAPIKeys.Execute(c, dto.ListAPIKeysInput{AccountID: req.Msg.GetAccountId()})
+	out, err := h.uc.ListAPIKeys.Execute(c, dto.ListAPIKeysInput{AccountID: req.GetAccountId()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
@@ -215,38 +213,38 @@ func (h *IdentityService) ListApiKeys(c context.Context, req *connect.Request[id
 		keys = append(keys, toProtoAPIKey(&out.Keys[i]))
 	}
 
-	return connect.NewResponse(&identityv1.ListApiKeysResponse{ApiKeys: keys}), nil
+	return &identityv1.ListApiKeysResponse{ApiKeys: keys}, nil
 }
 
-func (h *IdentityService) RevokeApiKey(c context.Context, req *connect.Request[identityv1.RevokeApiKeyRequest]) (*connect.Response[identityv1.RevokeApiKeyResponse], error) {
+func (h *IdentityService) RevokeApiKey(c context.Context, req *identityv1.RevokeApiKeyRequest) (*identityv1.RevokeApiKeyResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.RevokeAPIKey.Execute(c, dto.RevokeAPIKeyInput{ID: req.Msg.GetId()})
+	out, err := h.uc.RevokeAPIKey.Execute(c, dto.RevokeAPIKeyInput{ID: req.GetId()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.RevokeApiKeyResponse{ApiKey: toProtoAPIKey(out)}), nil
+	return &identityv1.RevokeApiKeyResponse{ApiKey: toProtoAPIKey(out)}, nil
 }
 
-func (h *IdentityService) CreateInvite(c context.Context, req *connect.Request[identityv1.CreateInviteRequest]) (*connect.Response[identityv1.CreateInviteResponse], error) {
+func (h *IdentityService) CreateInvite(c context.Context, req *identityv1.CreateInviteRequest) (*identityv1.CreateInviteResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.CreateInvite.Execute(c, dto.CreateInviteInput{AccountID: req.Msg.GetAccountId(), Email: req.Msg.GetEmail()})
+	out, err := h.uc.CreateInvite.Execute(c, dto.CreateInviteInput{AccountID: req.GetAccountId(), Email: req.GetEmail()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.CreateInviteResponse{Invite: toProtoInvite(out)}), nil
+	return &identityv1.CreateInviteResponse{Invite: toProtoInvite(out)}, nil
 }
 
-func (h *IdentityService) ListAccountIdentities(c context.Context, req *connect.Request[identityv1.ListAccountIdentitiesRequest]) (*connect.Response[identityv1.ListAccountIdentitiesResponse], error) {
+func (h *IdentityService) ListAccountIdentities(c context.Context, req *identityv1.ListAccountIdentitiesRequest) (*identityv1.ListAccountIdentitiesResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.ListAccountIdentities.Execute(c, dto.ListAccountIdentitiesInput{AccountID: req.Msg.GetAccountId()})
+	out, err := h.uc.ListAccountIdentities.Execute(c, dto.ListAccountIdentitiesInput{AccountID: req.GetAccountId()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
@@ -261,26 +259,26 @@ func (h *IdentityService) ListAccountIdentities(c context.Context, req *connect.
 		invites = append(invites, toProtoInvite(&out.Invites[i]))
 	}
 
-	return connect.NewResponse(&identityv1.ListAccountIdentitiesResponse{Identities: identities, Invites: invites}), nil
+	return &identityv1.ListAccountIdentitiesResponse{Identities: identities, Invites: invites}, nil
 }
 
 // RevokeSessions is "sign out of all devices", not a compromise response; the
 // contract comment on the RPC says so, and so must any UI that offers it.
-func (h *IdentityService) RevokeSessions(c context.Context, req *connect.Request[identityv1.RevokeSessionsRequest]) (*connect.Response[identityv1.RevokeSessionsResponse], error) {
+func (h *IdentityService) RevokeSessions(c context.Context, req *identityv1.RevokeSessionsRequest) (*identityv1.RevokeSessionsResponse, error) {
 	if err := h.admin(c); err != nil {
 		return nil, err
 	}
-	out, err := h.uc.RevokeSessions.Execute(c, dto.RevokeSessionsInput{AccountID: req.Msg.GetAccountId()})
+	out, err := h.uc.RevokeSessions.Execute(c, dto.RevokeSessionsInput{AccountID: req.GetAccountId()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.RevokeSessionsResponse{Account: toProtoAccount(out)}), nil
+	return &identityv1.RevokeSessionsResponse{Account: toProtoAccount(out)}, nil
 }
 
 // ClaimInvite binds the caller's verified external identity through the
 // invite for its email. Not admin-only: it is what an unbound identity calls.
-func (h *IdentityService) ClaimInvite(c context.Context, _ *connect.Request[identityv1.ClaimInviteRequest]) (*connect.Response[identityv1.ClaimInviteResponse], error) {
+func (h *IdentityService) ClaimInvite(c context.Context, _ *identityv1.ClaimInviteRequest) (*identityv1.ClaimInviteResponse, error) {
 	var (
 		id ExternalIdentity
 		ok bool
@@ -289,28 +287,25 @@ func (h *IdentityService) ClaimInvite(c context.Context, _ *connect.Request[iden
 		id, ok = h.uc.ExternalIdentity.ExternalIdentityFrom(c)
 	}
 	if !ok {
-		ce := connect.NewError(connect.CodeUnauthenticated, errors.New("a verified external identity is required"))
-		ce.Meta().Set("x-error-code", server.UnauthenticatedCode)
-
-		return nil, ce
+		return nil, server.WithMeta(connect.NewError(connect.CodeUnauthenticated, "a verified external identity is required"), "x-error-code", server.UnauthenticatedCode)
 	}
 	out, err := h.uc.ClaimInvite.Execute(c, dto.ClaimInviteInput{Issuer: id.Issuer, Subject: id.Subject, Email: id.Email, EmailVerified: id.EmailVerified})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.ClaimInviteResponse{Account: toProtoAccount(out)}), nil
+	return &identityv1.ClaimInviteResponse{Account: toProtoAccount(out)}, nil
 }
 
-func (h *IdentityService) WhoAmI(c context.Context, _ *connect.Request[identityv1.WhoAmIRequest]) (*connect.Response[identityv1.WhoAmIResponse], error) {
+func (h *IdentityService) WhoAmI(c context.Context, _ *identityv1.WhoAmIRequest) (*identityv1.WhoAmIResponse, error) {
 	out, err := h.uc.WhoAmI.Execute(c, dto.WhoAmIInput{})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&identityv1.WhoAmIResponse{
+	return &identityv1.WhoAmIResponse{
 		Anonymous: out.Anonymous, Subject: out.Subject, Name: out.Name, Roles: out.Roles, Method: out.Method, CredentialId: out.CredentialID,
-	}), nil
+	}, nil
 }
 
 func toProtoAccount(a *dto.AccountOutput) *identityv1.Account {

@@ -6,7 +6,8 @@ import (
 	"fmt"
 
 	"buf.build/go/protovalidate"
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectproto"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -21,39 +22,52 @@ const ValidationErrorCode = "request.validation_failed"
 // invariants stay in the domain, which the consumer path (no interceptor)
 // relies on. A rule that fails to compile is a programming error and surfaces
 // as Internal, never as a client error.
-func NewValidateInterceptor() (connect.UnaryInterceptorFunc, error) {
+func NewValidateInterceptor() (connect.ServerInterceptor, error) {
 	v, err := protovalidate.New()
 	if err != nil {
 		return nil, fmt.Errorf("protovalidate: %w", err)
 	}
 
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			msg, ok := req.Any().(proto.Message)
-			if !ok {
-				return next(c, req)
-			}
-			if err := v.Validate(msg); err != nil {
-				return nil, toValidationError(err)
-			}
-
-			return next(c, req)
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(c context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			return next(c, spec, &validatingStream{ServerStream: stream, v: v})
 		}
 	}, nil
+}
+
+// validatingStream checks every message the handler reads. A v2 interceptor sees a
+// stream, not a request, so the check moves from "before the handler" to the
+// handler's Receive: the same point in the call for a unary RPC (the handler reads
+// its one request first), and it also covers each message of a streaming one.
+type validatingStream struct {
+	connect.ServerStream
+	v protovalidate.Validator
+}
+
+func (s *validatingStream) Receive(msg any) error {
+	if err := s.ServerStream.Receive(msg); err != nil {
+		return err
+	}
+	if m, ok := msg.(proto.Message); ok {
+		if err := s.v.Validate(m); err != nil {
+			return toValidationError(err)
+		}
+	}
+
+	return nil
 }
 
 func toValidationError(err error) error {
 	var ve *protovalidate.ValidationError
 	if !errors.As(err, &ve) {
 		// Compilation / runtime failure of a rule: the server is misconfigured.
-		return connect.NewError(connect.CodeInternal, errors.New("request validation unavailable"))
+		return connect.NewError(connect.CodeInternal, "request validation unavailable")
 	}
 
-	ce := connect.NewError(connect.CodeInvalidArgument, errors.New(ve.Error()))
-	ce.Meta().Set("x-error-code", ValidationErrorCode)
-	if detail, derr := connect.NewErrorDetail(ve.ToProto()); derr == nil {
-		ce.AddDetail(detail)
+	ce := connect.NewError(connect.CodeInvalidArgument, ve.Error())
+	if detail, derr := connectproto.NewErrorDetail(ve.ToProto()); derr == nil {
+		ce = ce.WithDetail(detail)
 	}
 
-	return ce
+	return WithMeta(ce, "x-error-code", ValidationErrorCode)
 }

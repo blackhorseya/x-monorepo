@@ -7,7 +7,9 @@ import (
 
 	"buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	"buf.build/go/protovalidate"
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectproto"
+	"google.golang.org/protobuf/proto"
 
 	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 )
@@ -18,30 +20,40 @@ func TestValidateInterceptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := 0
-	next := interceptor(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
-		called++
-		return connect.NewResponse(&commonv1.Money{}), nil
-	})
+	// A unary handler reads its one request first; the interceptor checks it there, so
+	// "reaches the handler" is "Receive succeeds and the handler goes on".
+	next := func(in *commonv1.Money) error {
+		h := interceptor(func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+			var req commonv1.Money
+			if err := stream.Receive(&req); err != nil {
+				return err
+			}
+			called++
+			return nil
+		})
+
+		return h(context.Background(), connect.Spec{Procedure: "/t.v1.T/Do"}, &oneMessage{in: in})
+	}
 
 	// Valid message reaches the handler.
-	if _, err := next(context.Background(), connect.NewRequest(&commonv1.Money{AmountMinor: 1, Currency: "USD"})); err != nil || called != 1 {
+	if err := next(&commonv1.Money{AmountMinor: 1, Currency: "USD"}); err != nil || called != 1 {
 		t.Fatalf("valid: err=%v called=%d", err, called)
 	}
 
 	// Two violations in one message: InvalidArgument, the shared header, and
 	// the violations as an error detail clients can decode.
-	_, err = next(context.Background(), connect.NewRequest(&commonv1.Money{AmountMinor: -1, Currency: "usd"}))
+	err = next(&commonv1.Money{AmountMinor: -1, Currency: "usd"})
 	var ce *connect.Error
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || called != 1 {
 		t.Fatalf("invalid: err=%v called=%d", err, called)
 	}
-	if got := ce.Meta().Get("x-error-code"); got != ValidationErrorCode {
+	if got := ErrorMeta(err).Get("x-error-code"); got != ValidationErrorCode {
 		t.Fatalf("x-error-code = %q", got)
 	}
 	if len(ce.Details()) != 1 {
 		t.Fatalf("details = %d, want 1", len(ce.Details()))
 	}
-	detail, err := ce.Details()[0].Value()
+	detail, err := connectproto.UnmarshalErrorDetail(ce.Details()[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +72,7 @@ func TestValidateInterceptor(t *testing.T) {
 
 func TestToValidationError_NonValidationIsInternal(t *testing.T) {
 	var ce *connect.Error
-	if err := toValidationError(errors.New("cel compile failed")); !errors.As(err, &ce) || ce.Code() != connect.CodeInternal || ce.Meta().Get("x-error-code") != "" {
+	if err := toValidationError(errors.New("cel compile failed")); !errors.As(err, &ce) || ce.Code() != connect.CodeInternal || ErrorMeta(err).Get("x-error-code") != "" {
 		t.Fatalf("err = %v", err)
 	}
 	var ve *protovalidate.ValidationError
@@ -68,3 +80,14 @@ func TestToValidationError_NonValidationIsInternal(t *testing.T) {
 		t.Fatalf("validation error must become InvalidArgument without leaking the type")
 	}
 }
+
+// oneMessage is the stream of a unary RPC: one request to read, a response nobody sends.
+type oneMessage struct{ in proto.Message }
+
+func (s *oneMessage) Receive(msg any) error {
+	proto.Merge(msg.(proto.Message), s.in)
+
+	return nil
+}
+func (*oneMessage) SendHeaders() error { return nil }
+func (*oneMessage) Send(any) error     { return nil }

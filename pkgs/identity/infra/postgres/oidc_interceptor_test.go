@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/metric/noop"
 
@@ -27,6 +27,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/oidc"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
 // The whole path of #272 over a real Postgres, a real OIDC verifier and real
@@ -111,13 +112,6 @@ func (f *flakyResolve) Execute(c context.Context, in dto.ResolveExternalInput) (
 	return out, err
 }
 
-type oidcRequest struct {
-	connect.AnyRequest
-	procedure string
-}
-
-func (r oidcRequest) Spec() connect.Spec { return connect.Spec{Procedure: r.procedure} }
-
 type oidcWorld struct {
 	*extWorld
 	idp   *idp
@@ -157,20 +151,18 @@ func newOIDCWorld(t *testing.T, resolverTimeout time.Duration) *oidcWorld {
 
 	w.call = func(procedure, token string) (contextx.Principal, error) {
 		var got seen
-		next := in(func(c context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
-			got.principal = contextx.PrincipalFrom(c)
-			if procedure == identityv1connect.IdentityServiceClaimInviteProcedure {
-				if _, err := svc.ClaimInvite(c, connect.NewRequest(&identityv1.ClaimInviteRequest{})); err != nil {
-					return nil, err
+		_, err := servertest.Invoke(w.ctx, []connect.ServerInterceptor{in}, procedure, "", map[string]string{server.AuthorizationHeader: "Bearer " + token},
+			func(c context.Context, _ connect.Spec, _ connect.ServerStream) error {
+				got.principal = contextx.PrincipalFrom(c)
+				if procedure == identityv1connect.IdentityServiceClaimInviteProcedure {
+					if _, err := svc.ClaimInvite(c, &identityv1.ClaimInviteRequest{}); err != nil {
+						return err
+					}
+					got.claimed = true
 				}
-				got.claimed = true
-			}
 
-			return connect.NewResponse(&struct{}{}), nil
-		})
-		req := connect.NewRequest(&struct{}{})
-		req.Header().Set(server.AuthorizationHeader, "Bearer "+token)
-		_, err := next(w.ctx, oidcRequest{AnyRequest: req, procedure: procedure})
+				return nil
+			})
 		if err == nil && procedure == identityv1connect.IdentityServiceClaimInviteProcedure && !got.claimed {
 			err = errors.New("ClaimInvite did not run")
 		}
@@ -202,7 +194,7 @@ func codeOf(err error) (connect.Code, string) {
 		return 0, ""
 	}
 
-	return ce.Code(), ce.Meta().Get("x-error-code")
+	return ce.Code(), server.ErrorMeta(err).Get("x-error-code")
 }
 
 func (w *oidcWorld) wantRejected(t *testing.T, what, procedure, token string, code connect.Code, errCode string) {

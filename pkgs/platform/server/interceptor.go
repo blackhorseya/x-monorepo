@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
@@ -45,10 +45,10 @@ func recordAuth(c context.Context, method, sub string) {
 // credential was verified, `sub` — the audit trail of every RPC, including
 // the rejected ones (code unauthenticated, auth anonymous). Use-case-level
 // logging is a usecasex decorator.
-func NewLoggingInterceptor(logger *slog.Logger) connect.UnaryInterceptorFunc {
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			l := logger.With("procedure", req.Spec().Procedure, "protocol", req.Peer().Protocol)
+func NewLoggingInterceptor(logger *slog.Logger) connect.ServerInterceptor {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(c context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			l := logger.With("procedure", spec.Procedure, "protocol", callInfo(c).Protocol)
 			if rid := RequestID(c); rid != "" {
 				l = l.With("request_id", rid)
 			}
@@ -59,7 +59,7 @@ func NewLoggingInterceptor(logger *slog.Logger) connect.UnaryInterceptorFunc {
 			ctx := contextx.FromContext(contextx.WithLogger(context.WithValue(c, accessKey{}, a), l))
 
 			start := time.Now()
-			res, err := next(ctx, req)
+			err := next(ctx, spec, stream)
 
 			code := "ok"
 			if err != nil {
@@ -71,7 +71,18 @@ func NewLoggingInterceptor(logger *slog.Logger) connect.UnaryInterceptorFunc {
 			}
 			ctx.Info("rpc", attrs...)
 
-			return res, err
+			return err
 		}
 	}
+}
+
+// callInfo is the per-call metadata the transport put on c (headers, peer,
+// protocol). A c that did not come through connect.Server.Call (a unit test
+// running one interceptor on its own) gets an empty one, so callers need no nil check.
+func callInfo(c context.Context) *connect.CallInfo {
+	if info, ok := connect.CallInfoForServerContext(c); ok {
+		return info
+	}
+
+	return &connect.CallInfo{}
 }

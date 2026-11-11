@@ -5,102 +5,193 @@
 package identityv1connect
 
 import (
-	connect "connectrpc.com/connect"
+	connect "connectrpc.com/connect/v2"
 	context "context"
-	errors "errors"
 	v1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
-	http "net/http"
-	strings "strings"
+	sync "sync"
 )
-
-// This is a compile-time assertion to ensure that this generated file and the connect package are
-// compatible. If you get a compiler error that this constant is not defined, this code was
-// generated with a version of connect newer than the one compiled into your binary. You can fix the
-// problem by either regenerating this code with an older version of connect or updating the connect
-// version compiled into your binary.
-const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// IdentityServiceName is the fully-qualified name of the IdentityService service.
 	IdentityServiceName = "identity.v1.IdentityService"
 )
 
-// These constants are the fully-qualified names of the RPCs defined in this package. They're
-// exposed at runtime as Spec.Procedure and as the final two segments of the HTTP route.
+// These constants are the procedure names of the RPCs defined in this package. They're exposed at
+// runtime as Spec.Procedure and as the final two segments of the HTTP route.
 //
 // Note that these are different from the fully-qualified method names used by
 // google.golang.org/protobuf/reflect/protoreflect. To convert from these constants to
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// IdentityServiceCreateAccountProcedure is the fully-qualified name of the IdentityService's
+	// IdentityServiceCreateAccountProcedure is the procedure name of the IdentityService's
 	// CreateAccount RPC.
 	IdentityServiceCreateAccountProcedure = "/identity.v1.IdentityService/CreateAccount"
-	// IdentityServiceGetAccountProcedure is the fully-qualified name of the IdentityService's
-	// GetAccount RPC.
+	// IdentityServiceGetAccountProcedure is the procedure name of the IdentityService's GetAccount RPC.
 	IdentityServiceGetAccountProcedure = "/identity.v1.IdentityService/GetAccount"
-	// IdentityServiceListAccountsProcedure is the fully-qualified name of the IdentityService's
-	// ListAccounts RPC.
+	// IdentityServiceListAccountsProcedure is the procedure name of the IdentityService's ListAccounts
+	// RPC.
 	IdentityServiceListAccountsProcedure = "/identity.v1.IdentityService/ListAccounts"
-	// IdentityServiceDisableAccountProcedure is the fully-qualified name of the IdentityService's
+	// IdentityServiceDisableAccountProcedure is the procedure name of the IdentityService's
 	// DisableAccount RPC.
 	IdentityServiceDisableAccountProcedure = "/identity.v1.IdentityService/DisableAccount"
-	// IdentityServiceEnableAccountProcedure is the fully-qualified name of the IdentityService's
+	// IdentityServiceEnableAccountProcedure is the procedure name of the IdentityService's
 	// EnableAccount RPC.
 	IdentityServiceEnableAccountProcedure = "/identity.v1.IdentityService/EnableAccount"
-	// IdentityServiceAssignRolesProcedure is the fully-qualified name of the IdentityService's
-	// AssignRoles RPC.
+	// IdentityServiceAssignRolesProcedure is the procedure name of the IdentityService's AssignRoles
+	// RPC.
 	IdentityServiceAssignRolesProcedure = "/identity.v1.IdentityService/AssignRoles"
-	// IdentityServiceCreateApiKeyProcedure is the fully-qualified name of the IdentityService's
-	// CreateApiKey RPC.
+	// IdentityServiceCreateApiKeyProcedure is the procedure name of the IdentityService's CreateApiKey
+	// RPC.
 	IdentityServiceCreateApiKeyProcedure = "/identity.v1.IdentityService/CreateApiKey"
-	// IdentityServiceListApiKeysProcedure is the fully-qualified name of the IdentityService's
-	// ListApiKeys RPC.
+	// IdentityServiceListApiKeysProcedure is the procedure name of the IdentityService's ListApiKeys
+	// RPC.
 	IdentityServiceListApiKeysProcedure = "/identity.v1.IdentityService/ListApiKeys"
-	// IdentityServiceRevokeApiKeyProcedure is the fully-qualified name of the IdentityService's
-	// RevokeApiKey RPC.
+	// IdentityServiceRevokeApiKeyProcedure is the procedure name of the IdentityService's RevokeApiKey
+	// RPC.
 	IdentityServiceRevokeApiKeyProcedure = "/identity.v1.IdentityService/RevokeApiKey"
-	// IdentityServiceCreateInviteProcedure is the fully-qualified name of the IdentityService's
-	// CreateInvite RPC.
+	// IdentityServiceCreateInviteProcedure is the procedure name of the IdentityService's CreateInvite
+	// RPC.
 	IdentityServiceCreateInviteProcedure = "/identity.v1.IdentityService/CreateInvite"
-	// IdentityServiceClaimInviteProcedure is the fully-qualified name of the IdentityService's
-	// ClaimInvite RPC.
+	// IdentityServiceClaimInviteProcedure is the procedure name of the IdentityService's ClaimInvite
+	// RPC.
 	IdentityServiceClaimInviteProcedure = "/identity.v1.IdentityService/ClaimInvite"
-	// IdentityServiceListAccountIdentitiesProcedure is the fully-qualified name of the
-	// IdentityService's ListAccountIdentities RPC.
+	// IdentityServiceListAccountIdentitiesProcedure is the procedure name of the IdentityService's
+	// ListAccountIdentities RPC.
 	IdentityServiceListAccountIdentitiesProcedure = "/identity.v1.IdentityService/ListAccountIdentities"
-	// IdentityServiceRevokeSessionsProcedure is the fully-qualified name of the IdentityService's
+	// IdentityServiceRevokeSessionsProcedure is the procedure name of the IdentityService's
 	// RevokeSessions RPC.
 	IdentityServiceRevokeSessionsProcedure = "/identity.v1.IdentityService/RevokeSessions"
-	// IdentityServiceWhoAmIProcedure is the fully-qualified name of the IdentityService's WhoAmI RPC.
+	// IdentityServiceWhoAmIProcedure is the procedure name of the IdentityService's WhoAmI RPC.
 	IdentityServiceWhoAmIProcedure = "/identity.v1.IdentityService/WhoAmI"
+)
+
+var (
+	identityServiceCreateAccountSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("CreateAccount"),
+			Procedure:  IdentityServiceCreateAccountProcedure,
+		}
+	})
+	identityServiceGetAccountSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("GetAccount"),
+			Procedure:  IdentityServiceGetAccountProcedure,
+		}
+	})
+	identityServiceListAccountsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("ListAccounts"),
+			Procedure:  IdentityServiceListAccountsProcedure,
+		}
+	})
+	identityServiceDisableAccountSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("DisableAccount"),
+			Procedure:  IdentityServiceDisableAccountProcedure,
+		}
+	})
+	identityServiceEnableAccountSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("EnableAccount"),
+			Procedure:  IdentityServiceEnableAccountProcedure,
+		}
+	})
+	identityServiceAssignRolesSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("AssignRoles"),
+			Procedure:  IdentityServiceAssignRolesProcedure,
+		}
+	})
+	identityServiceCreateApiKeySpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("CreateApiKey"),
+			Procedure:  IdentityServiceCreateApiKeyProcedure,
+		}
+	})
+	identityServiceListApiKeysSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("ListApiKeys"),
+			Procedure:  IdentityServiceListApiKeysProcedure,
+		}
+	})
+	identityServiceRevokeApiKeySpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("RevokeApiKey"),
+			Procedure:  IdentityServiceRevokeApiKeyProcedure,
+		}
+	})
+	identityServiceCreateInviteSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("CreateInvite"),
+			Procedure:  IdentityServiceCreateInviteProcedure,
+		}
+	})
+	identityServiceClaimInviteSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("ClaimInvite"),
+			Procedure:  IdentityServiceClaimInviteProcedure,
+		}
+	})
+	identityServiceListAccountIdentitiesSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("ListAccountIdentities"),
+			Procedure:  IdentityServiceListAccountIdentitiesProcedure,
+		}
+	})
+	identityServiceRevokeSessionsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("RevokeSessions"),
+			Procedure:  IdentityServiceRevokeSessionsProcedure,
+		}
+	})
+	identityServiceWhoAmISpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods().ByName("WhoAmI"),
+			Procedure:  IdentityServiceWhoAmIProcedure,
+		}
+	})
 )
 
 // IdentityServiceClient is a client for the identity.v1.IdentityService service.
 type IdentityServiceClient interface {
 	// CreateAccount registers who a key will speak for; roles are free-form
 	// strings (auth.admin_role is the one the platform reads).
-	CreateAccount(context.Context, *connect.Request[v1.CreateAccountRequest]) (*connect.Response[v1.CreateAccountResponse], error)
-	GetAccount(context.Context, *connect.Request[v1.GetAccountRequest]) (*connect.Response[v1.GetAccountResponse], error)
+	CreateAccount(context.Context, *v1.CreateAccountRequest) (*v1.CreateAccountResponse, error)
+	GetAccount(context.Context, *v1.GetAccountRequest) (*v1.GetAccountResponse, error)
 	// ListAccounts pages through accounts by id ascending.
-	ListAccounts(context.Context, *connect.Request[v1.ListAccountsRequest]) (*connect.Response[v1.ListAccountsResponse], error)
+	ListAccounts(context.Context, *v1.ListAccountsRequest) (*v1.ListAccountsResponse, error)
 	// DisableAccount refuses every key of the account from the next request
 	// (bounded by the resolver cache TTL) without revoking them.
-	DisableAccount(context.Context, *connect.Request[v1.DisableAccountRequest]) (*connect.Response[v1.DisableAccountResponse], error)
-	EnableAccount(context.Context, *connect.Request[v1.EnableAccountRequest]) (*connect.Response[v1.EnableAccountResponse], error)
+	DisableAccount(context.Context, *v1.DisableAccountRequest) (*v1.DisableAccountResponse, error)
+	EnableAccount(context.Context, *v1.EnableAccountRequest) (*v1.EnableAccountResponse, error)
 	// AssignRoles replaces the account's roles (an empty list clears them).
-	AssignRoles(context.Context, *connect.Request[v1.AssignRolesRequest]) (*connect.Response[v1.AssignRolesResponse], error)
+	AssignRoles(context.Context, *v1.AssignRolesRequest) (*v1.AssignRolesResponse, error)
 	// CreateApiKey mints a key for an account and returns the secret ONCE; only
 	// its hash is stored, so a lost secret means a new key.
-	CreateApiKey(context.Context, *connect.Request[v1.CreateApiKeyRequest]) (*connect.Response[v1.CreateApiKeyResponse], error)
+	CreateApiKey(context.Context, *v1.CreateApiKeyRequest) (*v1.CreateApiKeyResponse, error)
 	// ListApiKeys lists every key of an account, revoked ones included, newest first.
-	ListApiKeys(context.Context, *connect.Request[v1.ListApiKeysRequest]) (*connect.Response[v1.ListApiKeysResponse], error)
-	RevokeApiKey(context.Context, *connect.Request[v1.RevokeApiKeyRequest]) (*connect.Response[v1.RevokeApiKeyResponse], error)
+	ListApiKeys(context.Context, *v1.ListApiKeysRequest) (*v1.ListApiKeysResponse, error)
+	RevokeApiKey(context.Context, *v1.RevokeApiKeyRequest) (*v1.RevokeApiKeyResponse, error)
 	// CreateInvite pre-binds an email to an account (valid 7 days, single use,
 	// no secret). The person signs in at the identity provider with that verified
 	// email and claims it; the claim binds their (issuer, subject) to the account,
 	// after which only the subject counts. Audited.
-	CreateInvite(context.Context, *connect.Request[v1.CreateInviteRequest]) (*connect.Response[v1.CreateInviteResponse], error)
+	CreateInvite(context.Context, *v1.CreateInviteRequest) (*v1.CreateInviteResponse, error)
 	// ClaimInvite binds the caller's own verified external identity (issuer,
 	// subject) to the account its email was invited for, and spends the invite.
 	// It is the one procedure a verified-but-unbound identity may call. The
@@ -109,14 +200,14 @@ type IdentityServiceClient interface {
 	// admin-only. Refused (x-error-code): invite.not_found, invite.expired,
 	// invite.already_claimed, invite.email_unverified, invite.email_mismatch,
 	// identity.already_bound.
-	ClaimInvite(context.Context, *connect.Request[v1.ClaimInviteRequest]) (*connect.Response[v1.ClaimInviteResponse], error)
+	ClaimInvite(context.Context, *v1.ClaimInviteRequest) (*v1.ClaimInviteResponse, error)
 	// ListAccountIdentities shows who can sign in as an account: the external
 	// identities (issuer, subject) bound to it and its invites with their status
 	// (pending, claimed, expired), each newest first. Admin only. It never returns
 	// an invite token, a hash or any other secret (an invite has none), and it is
 	// not paged: like ListApiKeys it lists one account's handful, not a collection.
 	// Refused (x-error-code): account.not_found.
-	ListAccountIdentities(context.Context, *connect.Request[v1.ListAccountIdentitiesRequest]) (*connect.Response[v1.ListAccountIdentitiesResponse], error)
+	ListAccountIdentities(context.Context, *v1.ListAccountIdentitiesRequest) (*v1.ListAccountIdentitiesResponse, error)
 	// RevokeSessions refuses every access token of the account issued before now
 	// (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
 	// NOTHING MORE: it does not touch the identity provider's refresh tokens, so
@@ -126,223 +217,43 @@ type IdentityServiceClient interface {
 	// included) and revoke the user's refresh tokens or reset their credentials
 	// at the identity provider. Requires the admin role; audited (who, which
 	// account, when; never a token).
-	RevokeSessions(context.Context, *connect.Request[v1.RevokeSessionsRequest]) (*connect.Response[v1.RevokeSessionsResponse], error)
+	RevokeSessions(context.Context, *v1.RevokeSessionsRequest) (*v1.RevokeSessionsResponse, error)
 	// WhoAmI returns the principal the caller's credential resolved to (no role
 	// needed; anonymous when auth is off or optional and nothing was sent).
-	WhoAmI(context.Context, *connect.Request[v1.WhoAmIRequest]) (*connect.Response[v1.WhoAmIResponse], error)
+	WhoAmI(context.Context, *v1.WhoAmIRequest) (*v1.WhoAmIResponse, error)
 }
 
-// NewIdentityServiceClient constructs a client for the identity.v1.IdentityService service. By
-// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
-// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
-// connect.WithGRPC() or connect.WithGRPCWeb() options.
-//
-// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
-// http://api.acme.com or https://acme.com/grpc).
-func NewIdentityServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) IdentityServiceClient {
-	baseURL = strings.TrimRight(baseURL, "/")
-	identityServiceMethods := v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods()
-	return &identityServiceClient{
-		createAccount: connect.NewClient[v1.CreateAccountRequest, v1.CreateAccountResponse](
-			httpClient,
-			baseURL+IdentityServiceCreateAccountProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("CreateAccount")),
-			connect.WithClientOptions(opts...),
-		),
-		getAccount: connect.NewClient[v1.GetAccountRequest, v1.GetAccountResponse](
-			httpClient,
-			baseURL+IdentityServiceGetAccountProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("GetAccount")),
-			connect.WithClientOptions(opts...),
-		),
-		listAccounts: connect.NewClient[v1.ListAccountsRequest, v1.ListAccountsResponse](
-			httpClient,
-			baseURL+IdentityServiceListAccountsProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("ListAccounts")),
-			connect.WithClientOptions(opts...),
-		),
-		disableAccount: connect.NewClient[v1.DisableAccountRequest, v1.DisableAccountResponse](
-			httpClient,
-			baseURL+IdentityServiceDisableAccountProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("DisableAccount")),
-			connect.WithClientOptions(opts...),
-		),
-		enableAccount: connect.NewClient[v1.EnableAccountRequest, v1.EnableAccountResponse](
-			httpClient,
-			baseURL+IdentityServiceEnableAccountProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("EnableAccount")),
-			connect.WithClientOptions(opts...),
-		),
-		assignRoles: connect.NewClient[v1.AssignRolesRequest, v1.AssignRolesResponse](
-			httpClient,
-			baseURL+IdentityServiceAssignRolesProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("AssignRoles")),
-			connect.WithClientOptions(opts...),
-		),
-		createApiKey: connect.NewClient[v1.CreateApiKeyRequest, v1.CreateApiKeyResponse](
-			httpClient,
-			baseURL+IdentityServiceCreateApiKeyProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("CreateApiKey")),
-			connect.WithClientOptions(opts...),
-		),
-		listApiKeys: connect.NewClient[v1.ListApiKeysRequest, v1.ListApiKeysResponse](
-			httpClient,
-			baseURL+IdentityServiceListApiKeysProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("ListApiKeys")),
-			connect.WithClientOptions(opts...),
-		),
-		revokeApiKey: connect.NewClient[v1.RevokeApiKeyRequest, v1.RevokeApiKeyResponse](
-			httpClient,
-			baseURL+IdentityServiceRevokeApiKeyProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("RevokeApiKey")),
-			connect.WithClientOptions(opts...),
-		),
-		createInvite: connect.NewClient[v1.CreateInviteRequest, v1.CreateInviteResponse](
-			httpClient,
-			baseURL+IdentityServiceCreateInviteProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("CreateInvite")),
-			connect.WithClientOptions(opts...),
-		),
-		claimInvite: connect.NewClient[v1.ClaimInviteRequest, v1.ClaimInviteResponse](
-			httpClient,
-			baseURL+IdentityServiceClaimInviteProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("ClaimInvite")),
-			connect.WithClientOptions(opts...),
-		),
-		listAccountIdentities: connect.NewClient[v1.ListAccountIdentitiesRequest, v1.ListAccountIdentitiesResponse](
-			httpClient,
-			baseURL+IdentityServiceListAccountIdentitiesProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("ListAccountIdentities")),
-			connect.WithClientOptions(opts...),
-		),
-		revokeSessions: connect.NewClient[v1.RevokeSessionsRequest, v1.RevokeSessionsResponse](
-			httpClient,
-			baseURL+IdentityServiceRevokeSessionsProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("RevokeSessions")),
-			connect.WithClientOptions(opts...),
-		),
-		whoAmI: connect.NewClient[v1.WhoAmIRequest, v1.WhoAmIResponse](
-			httpClient,
-			baseURL+IdentityServiceWhoAmIProcedure,
-			connect.WithSchema(identityServiceMethods.ByName("WhoAmI")),
-			connect.WithClientOptions(opts...),
-		),
-	}
-}
-
-// identityServiceClient implements IdentityServiceClient.
-type identityServiceClient struct {
-	createAccount         *connect.Client[v1.CreateAccountRequest, v1.CreateAccountResponse]
-	getAccount            *connect.Client[v1.GetAccountRequest, v1.GetAccountResponse]
-	listAccounts          *connect.Client[v1.ListAccountsRequest, v1.ListAccountsResponse]
-	disableAccount        *connect.Client[v1.DisableAccountRequest, v1.DisableAccountResponse]
-	enableAccount         *connect.Client[v1.EnableAccountRequest, v1.EnableAccountResponse]
-	assignRoles           *connect.Client[v1.AssignRolesRequest, v1.AssignRolesResponse]
-	createApiKey          *connect.Client[v1.CreateApiKeyRequest, v1.CreateApiKeyResponse]
-	listApiKeys           *connect.Client[v1.ListApiKeysRequest, v1.ListApiKeysResponse]
-	revokeApiKey          *connect.Client[v1.RevokeApiKeyRequest, v1.RevokeApiKeyResponse]
-	createInvite          *connect.Client[v1.CreateInviteRequest, v1.CreateInviteResponse]
-	claimInvite           *connect.Client[v1.ClaimInviteRequest, v1.ClaimInviteResponse]
-	listAccountIdentities *connect.Client[v1.ListAccountIdentitiesRequest, v1.ListAccountIdentitiesResponse]
-	revokeSessions        *connect.Client[v1.RevokeSessionsRequest, v1.RevokeSessionsResponse]
-	whoAmI                *connect.Client[v1.WhoAmIRequest, v1.WhoAmIResponse]
-}
-
-// CreateAccount calls identity.v1.IdentityService.CreateAccount.
-func (c *identityServiceClient) CreateAccount(ctx context.Context, req *connect.Request[v1.CreateAccountRequest]) (*connect.Response[v1.CreateAccountResponse], error) {
-	return c.createAccount.CallUnary(ctx, req)
-}
-
-// GetAccount calls identity.v1.IdentityService.GetAccount.
-func (c *identityServiceClient) GetAccount(ctx context.Context, req *connect.Request[v1.GetAccountRequest]) (*connect.Response[v1.GetAccountResponse], error) {
-	return c.getAccount.CallUnary(ctx, req)
-}
-
-// ListAccounts calls identity.v1.IdentityService.ListAccounts.
-func (c *identityServiceClient) ListAccounts(ctx context.Context, req *connect.Request[v1.ListAccountsRequest]) (*connect.Response[v1.ListAccountsResponse], error) {
-	return c.listAccounts.CallUnary(ctx, req)
-}
-
-// DisableAccount calls identity.v1.IdentityService.DisableAccount.
-func (c *identityServiceClient) DisableAccount(ctx context.Context, req *connect.Request[v1.DisableAccountRequest]) (*connect.Response[v1.DisableAccountResponse], error) {
-	return c.disableAccount.CallUnary(ctx, req)
-}
-
-// EnableAccount calls identity.v1.IdentityService.EnableAccount.
-func (c *identityServiceClient) EnableAccount(ctx context.Context, req *connect.Request[v1.EnableAccountRequest]) (*connect.Response[v1.EnableAccountResponse], error) {
-	return c.enableAccount.CallUnary(ctx, req)
-}
-
-// AssignRoles calls identity.v1.IdentityService.AssignRoles.
-func (c *identityServiceClient) AssignRoles(ctx context.Context, req *connect.Request[v1.AssignRolesRequest]) (*connect.Response[v1.AssignRolesResponse], error) {
-	return c.assignRoles.CallUnary(ctx, req)
-}
-
-// CreateApiKey calls identity.v1.IdentityService.CreateApiKey.
-func (c *identityServiceClient) CreateApiKey(ctx context.Context, req *connect.Request[v1.CreateApiKeyRequest]) (*connect.Response[v1.CreateApiKeyResponse], error) {
-	return c.createApiKey.CallUnary(ctx, req)
-}
-
-// ListApiKeys calls identity.v1.IdentityService.ListApiKeys.
-func (c *identityServiceClient) ListApiKeys(ctx context.Context, req *connect.Request[v1.ListApiKeysRequest]) (*connect.Response[v1.ListApiKeysResponse], error) {
-	return c.listApiKeys.CallUnary(ctx, req)
-}
-
-// RevokeApiKey calls identity.v1.IdentityService.RevokeApiKey.
-func (c *identityServiceClient) RevokeApiKey(ctx context.Context, req *connect.Request[v1.RevokeApiKeyRequest]) (*connect.Response[v1.RevokeApiKeyResponse], error) {
-	return c.revokeApiKey.CallUnary(ctx, req)
-}
-
-// CreateInvite calls identity.v1.IdentityService.CreateInvite.
-func (c *identityServiceClient) CreateInvite(ctx context.Context, req *connect.Request[v1.CreateInviteRequest]) (*connect.Response[v1.CreateInviteResponse], error) {
-	return c.createInvite.CallUnary(ctx, req)
-}
-
-// ClaimInvite calls identity.v1.IdentityService.ClaimInvite.
-func (c *identityServiceClient) ClaimInvite(ctx context.Context, req *connect.Request[v1.ClaimInviteRequest]) (*connect.Response[v1.ClaimInviteResponse], error) {
-	return c.claimInvite.CallUnary(ctx, req)
-}
-
-// ListAccountIdentities calls identity.v1.IdentityService.ListAccountIdentities.
-func (c *identityServiceClient) ListAccountIdentities(ctx context.Context, req *connect.Request[v1.ListAccountIdentitiesRequest]) (*connect.Response[v1.ListAccountIdentitiesResponse], error) {
-	return c.listAccountIdentities.CallUnary(ctx, req)
-}
-
-// RevokeSessions calls identity.v1.IdentityService.RevokeSessions.
-func (c *identityServiceClient) RevokeSessions(ctx context.Context, req *connect.Request[v1.RevokeSessionsRequest]) (*connect.Response[v1.RevokeSessionsResponse], error) {
-	return c.revokeSessions.CallUnary(ctx, req)
-}
-
-// WhoAmI calls identity.v1.IdentityService.WhoAmI.
-func (c *identityServiceClient) WhoAmI(ctx context.Context, req *connect.Request[v1.WhoAmIRequest]) (*connect.Response[v1.WhoAmIResponse], error) {
-	return c.whoAmI.CallUnary(ctx, req)
+// NewIdentityServiceClient constructs a client for the identity.v1.IdentityService service.
+// Multiple service clients may share a single connect.Client.
+func NewIdentityServiceClient(client *connect.Client) IdentityServiceClient {
+	return &identityServiceClient{client: client}
 }
 
 // IdentityServiceHandler is an implementation of the identity.v1.IdentityService service.
 type IdentityServiceHandler interface {
 	// CreateAccount registers who a key will speak for; roles are free-form
 	// strings (auth.admin_role is the one the platform reads).
-	CreateAccount(context.Context, *connect.Request[v1.CreateAccountRequest]) (*connect.Response[v1.CreateAccountResponse], error)
-	GetAccount(context.Context, *connect.Request[v1.GetAccountRequest]) (*connect.Response[v1.GetAccountResponse], error)
+	CreateAccount(context.Context, *v1.CreateAccountRequest) (*v1.CreateAccountResponse, error)
+	GetAccount(context.Context, *v1.GetAccountRequest) (*v1.GetAccountResponse, error)
 	// ListAccounts pages through accounts by id ascending.
-	ListAccounts(context.Context, *connect.Request[v1.ListAccountsRequest]) (*connect.Response[v1.ListAccountsResponse], error)
+	ListAccounts(context.Context, *v1.ListAccountsRequest) (*v1.ListAccountsResponse, error)
 	// DisableAccount refuses every key of the account from the next request
 	// (bounded by the resolver cache TTL) without revoking them.
-	DisableAccount(context.Context, *connect.Request[v1.DisableAccountRequest]) (*connect.Response[v1.DisableAccountResponse], error)
-	EnableAccount(context.Context, *connect.Request[v1.EnableAccountRequest]) (*connect.Response[v1.EnableAccountResponse], error)
+	DisableAccount(context.Context, *v1.DisableAccountRequest) (*v1.DisableAccountResponse, error)
+	EnableAccount(context.Context, *v1.EnableAccountRequest) (*v1.EnableAccountResponse, error)
 	// AssignRoles replaces the account's roles (an empty list clears them).
-	AssignRoles(context.Context, *connect.Request[v1.AssignRolesRequest]) (*connect.Response[v1.AssignRolesResponse], error)
+	AssignRoles(context.Context, *v1.AssignRolesRequest) (*v1.AssignRolesResponse, error)
 	// CreateApiKey mints a key for an account and returns the secret ONCE; only
 	// its hash is stored, so a lost secret means a new key.
-	CreateApiKey(context.Context, *connect.Request[v1.CreateApiKeyRequest]) (*connect.Response[v1.CreateApiKeyResponse], error)
+	CreateApiKey(context.Context, *v1.CreateApiKeyRequest) (*v1.CreateApiKeyResponse, error)
 	// ListApiKeys lists every key of an account, revoked ones included, newest first.
-	ListApiKeys(context.Context, *connect.Request[v1.ListApiKeysRequest]) (*connect.Response[v1.ListApiKeysResponse], error)
-	RevokeApiKey(context.Context, *connect.Request[v1.RevokeApiKeyRequest]) (*connect.Response[v1.RevokeApiKeyResponse], error)
+	ListApiKeys(context.Context, *v1.ListApiKeysRequest) (*v1.ListApiKeysResponse, error)
+	RevokeApiKey(context.Context, *v1.RevokeApiKeyRequest) (*v1.RevokeApiKeyResponse, error)
 	// CreateInvite pre-binds an email to an account (valid 7 days, single use,
 	// no secret). The person signs in at the identity provider with that verified
 	// email and claims it; the claim binds their (issuer, subject) to the account,
 	// after which only the subject counts. Audited.
-	CreateInvite(context.Context, *connect.Request[v1.CreateInviteRequest]) (*connect.Response[v1.CreateInviteResponse], error)
+	CreateInvite(context.Context, *v1.CreateInviteRequest) (*v1.CreateInviteResponse, error)
 	// ClaimInvite binds the caller's own verified external identity (issuer,
 	// subject) to the account its email was invited for, and spends the invite.
 	// It is the one procedure a verified-but-unbound identity may call. The
@@ -351,14 +262,14 @@ type IdentityServiceHandler interface {
 	// admin-only. Refused (x-error-code): invite.not_found, invite.expired,
 	// invite.already_claimed, invite.email_unverified, invite.email_mismatch,
 	// identity.already_bound.
-	ClaimInvite(context.Context, *connect.Request[v1.ClaimInviteRequest]) (*connect.Response[v1.ClaimInviteResponse], error)
+	ClaimInvite(context.Context, *v1.ClaimInviteRequest) (*v1.ClaimInviteResponse, error)
 	// ListAccountIdentities shows who can sign in as an account: the external
 	// identities (issuer, subject) bound to it and its invites with their status
 	// (pending, claimed, expired), each newest first. Admin only. It never returns
 	// an invite token, a hash or any other secret (an invite has none), and it is
 	// not paged: like ListApiKeys it lists one account's handful, not a collection.
 	// Refused (x-error-code): account.not_found.
-	ListAccountIdentities(context.Context, *connect.Request[v1.ListAccountIdentitiesRequest]) (*connect.Response[v1.ListAccountIdentitiesResponse], error)
+	ListAccountIdentities(context.Context, *v1.ListAccountIdentitiesRequest) (*v1.ListAccountIdentitiesResponse, error)
 	// RevokeSessions refuses every access token of the account issued before now
 	// (within the resolver cache TTL, 30 s). It is "sign out of all devices" and
 	// NOTHING MORE: it does not touch the identity provider's refresh tokens, so
@@ -368,194 +279,375 @@ type IdentityServiceHandler interface {
 	// included) and revoke the user's refresh tokens or reset their credentials
 	// at the identity provider. Requires the admin role; audited (who, which
 	// account, when; never a token).
-	RevokeSessions(context.Context, *connect.Request[v1.RevokeSessionsRequest]) (*connect.Response[v1.RevokeSessionsResponse], error)
+	RevokeSessions(context.Context, *v1.RevokeSessionsRequest) (*v1.RevokeSessionsResponse, error)
 	// WhoAmI returns the principal the caller's credential resolved to (no role
 	// needed; anonymous when auth is off or optional and nothing was sent).
-	WhoAmI(context.Context, *connect.Request[v1.WhoAmIRequest]) (*connect.Response[v1.WhoAmIResponse], error)
+	WhoAmI(context.Context, *v1.WhoAmIRequest) (*v1.WhoAmIResponse, error)
 }
 
-// NewIdentityServiceHandler builds an HTTP handler from the service implementation. It returns the
-// path on which to mount the handler and the handler itself.
-//
-// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
-// and JSON codecs. They also support gzip compression.
-func NewIdentityServiceHandler(svc IdentityServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
-	identityServiceMethods := v1.File_identity_v1_service_proto.Services().ByName("IdentityService").Methods()
-	identityServiceCreateAccountHandler := connect.NewUnaryHandler(
-		IdentityServiceCreateAccountProcedure,
-		svc.CreateAccount,
-		connect.WithSchema(identityServiceMethods.ByName("CreateAccount")),
-		connect.WithHandlerOptions(opts...),
+// RegisterIdentityServiceHandler registers svc as the identity.v1.IdentityService implementation on
+// server.
+func RegisterIdentityServiceHandler(server *connect.Server, svc IdentityServiceHandler) {
+	adapter := identityServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: identityServiceCreateAccountSpec(), Handler: adapter.createAccount},
+		connect.Method{Spec: identityServiceGetAccountSpec(), Handler: adapter.getAccount},
+		connect.Method{Spec: identityServiceListAccountsSpec(), Handler: adapter.listAccounts},
+		connect.Method{Spec: identityServiceDisableAccountSpec(), Handler: adapter.disableAccount},
+		connect.Method{Spec: identityServiceEnableAccountSpec(), Handler: adapter.enableAccount},
+		connect.Method{Spec: identityServiceAssignRolesSpec(), Handler: adapter.assignRoles},
+		connect.Method{Spec: identityServiceCreateApiKeySpec(), Handler: adapter.createApiKey},
+		connect.Method{Spec: identityServiceListApiKeysSpec(), Handler: adapter.listApiKeys},
+		connect.Method{Spec: identityServiceRevokeApiKeySpec(), Handler: adapter.revokeApiKey},
+		connect.Method{Spec: identityServiceCreateInviteSpec(), Handler: adapter.createInvite},
+		connect.Method{Spec: identityServiceClaimInviteSpec(), Handler: adapter.claimInvite},
+		connect.Method{Spec: identityServiceListAccountIdentitiesSpec(), Handler: adapter.listAccountIdentities},
+		connect.Method{Spec: identityServiceRevokeSessionsSpec(), Handler: adapter.revokeSessions},
+		connect.Method{Spec: identityServiceWhoAmISpec(), Handler: adapter.whoAmI},
 	)
-	identityServiceGetAccountHandler := connect.NewUnaryHandler(
-		IdentityServiceGetAccountProcedure,
-		svc.GetAccount,
-		connect.WithSchema(identityServiceMethods.ByName("GetAccount")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceListAccountsHandler := connect.NewUnaryHandler(
-		IdentityServiceListAccountsProcedure,
-		svc.ListAccounts,
-		connect.WithSchema(identityServiceMethods.ByName("ListAccounts")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceDisableAccountHandler := connect.NewUnaryHandler(
-		IdentityServiceDisableAccountProcedure,
-		svc.DisableAccount,
-		connect.WithSchema(identityServiceMethods.ByName("DisableAccount")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceEnableAccountHandler := connect.NewUnaryHandler(
-		IdentityServiceEnableAccountProcedure,
-		svc.EnableAccount,
-		connect.WithSchema(identityServiceMethods.ByName("EnableAccount")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceAssignRolesHandler := connect.NewUnaryHandler(
-		IdentityServiceAssignRolesProcedure,
-		svc.AssignRoles,
-		connect.WithSchema(identityServiceMethods.ByName("AssignRoles")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceCreateApiKeyHandler := connect.NewUnaryHandler(
-		IdentityServiceCreateApiKeyProcedure,
-		svc.CreateApiKey,
-		connect.WithSchema(identityServiceMethods.ByName("CreateApiKey")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceListApiKeysHandler := connect.NewUnaryHandler(
-		IdentityServiceListApiKeysProcedure,
-		svc.ListApiKeys,
-		connect.WithSchema(identityServiceMethods.ByName("ListApiKeys")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceRevokeApiKeyHandler := connect.NewUnaryHandler(
-		IdentityServiceRevokeApiKeyProcedure,
-		svc.RevokeApiKey,
-		connect.WithSchema(identityServiceMethods.ByName("RevokeApiKey")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceCreateInviteHandler := connect.NewUnaryHandler(
-		IdentityServiceCreateInviteProcedure,
-		svc.CreateInvite,
-		connect.WithSchema(identityServiceMethods.ByName("CreateInvite")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceClaimInviteHandler := connect.NewUnaryHandler(
-		IdentityServiceClaimInviteProcedure,
-		svc.ClaimInvite,
-		connect.WithSchema(identityServiceMethods.ByName("ClaimInvite")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceListAccountIdentitiesHandler := connect.NewUnaryHandler(
-		IdentityServiceListAccountIdentitiesProcedure,
-		svc.ListAccountIdentities,
-		connect.WithSchema(identityServiceMethods.ByName("ListAccountIdentities")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceRevokeSessionsHandler := connect.NewUnaryHandler(
-		IdentityServiceRevokeSessionsProcedure,
-		svc.RevokeSessions,
-		connect.WithSchema(identityServiceMethods.ByName("RevokeSessions")),
-		connect.WithHandlerOptions(opts...),
-	)
-	identityServiceWhoAmIHandler := connect.NewUnaryHandler(
-		IdentityServiceWhoAmIProcedure,
-		svc.WhoAmI,
-		connect.WithSchema(identityServiceMethods.ByName("WhoAmI")),
-		connect.WithHandlerOptions(opts...),
-	)
-	return "/identity.v1.IdentityService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case IdentityServiceCreateAccountProcedure:
-			identityServiceCreateAccountHandler.ServeHTTP(w, r)
-		case IdentityServiceGetAccountProcedure:
-			identityServiceGetAccountHandler.ServeHTTP(w, r)
-		case IdentityServiceListAccountsProcedure:
-			identityServiceListAccountsHandler.ServeHTTP(w, r)
-		case IdentityServiceDisableAccountProcedure:
-			identityServiceDisableAccountHandler.ServeHTTP(w, r)
-		case IdentityServiceEnableAccountProcedure:
-			identityServiceEnableAccountHandler.ServeHTTP(w, r)
-		case IdentityServiceAssignRolesProcedure:
-			identityServiceAssignRolesHandler.ServeHTTP(w, r)
-		case IdentityServiceCreateApiKeyProcedure:
-			identityServiceCreateApiKeyHandler.ServeHTTP(w, r)
-		case IdentityServiceListApiKeysProcedure:
-			identityServiceListApiKeysHandler.ServeHTTP(w, r)
-		case IdentityServiceRevokeApiKeyProcedure:
-			identityServiceRevokeApiKeyHandler.ServeHTTP(w, r)
-		case IdentityServiceCreateInviteProcedure:
-			identityServiceCreateInviteHandler.ServeHTTP(w, r)
-		case IdentityServiceClaimInviteProcedure:
-			identityServiceClaimInviteHandler.ServeHTTP(w, r)
-		case IdentityServiceListAccountIdentitiesProcedure:
-			identityServiceListAccountIdentitiesHandler.ServeHTTP(w, r)
-		case IdentityServiceRevokeSessionsProcedure:
-			identityServiceRevokeSessionsHandler.ServeHTTP(w, r)
-		case IdentityServiceWhoAmIProcedure:
-			identityServiceWhoAmIHandler.ServeHTTP(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
 }
 
 // UnimplementedIdentityServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedIdentityServiceHandler struct{}
 
-func (UnimplementedIdentityServiceHandler) CreateAccount(context.Context, *connect.Request[v1.CreateAccountRequest]) (*connect.Response[v1.CreateAccountResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.CreateAccount is not implemented"))
+func (UnimplementedIdentityServiceHandler) CreateAccount(context.Context, *v1.CreateAccountRequest) (*v1.CreateAccountResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.CreateAccount is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) GetAccount(context.Context, *connect.Request[v1.GetAccountRequest]) (*connect.Response[v1.GetAccountResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.GetAccount is not implemented"))
+func (UnimplementedIdentityServiceHandler) GetAccount(context.Context, *v1.GetAccountRequest) (*v1.GetAccountResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.GetAccount is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) ListAccounts(context.Context, *connect.Request[v1.ListAccountsRequest]) (*connect.Response[v1.ListAccountsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.ListAccounts is not implemented"))
+func (UnimplementedIdentityServiceHandler) ListAccounts(context.Context, *v1.ListAccountsRequest) (*v1.ListAccountsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.ListAccounts is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) DisableAccount(context.Context, *connect.Request[v1.DisableAccountRequest]) (*connect.Response[v1.DisableAccountResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.DisableAccount is not implemented"))
+func (UnimplementedIdentityServiceHandler) DisableAccount(context.Context, *v1.DisableAccountRequest) (*v1.DisableAccountResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.DisableAccount is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) EnableAccount(context.Context, *connect.Request[v1.EnableAccountRequest]) (*connect.Response[v1.EnableAccountResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.EnableAccount is not implemented"))
+func (UnimplementedIdentityServiceHandler) EnableAccount(context.Context, *v1.EnableAccountRequest) (*v1.EnableAccountResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.EnableAccount is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) AssignRoles(context.Context, *connect.Request[v1.AssignRolesRequest]) (*connect.Response[v1.AssignRolesResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.AssignRoles is not implemented"))
+func (UnimplementedIdentityServiceHandler) AssignRoles(context.Context, *v1.AssignRolesRequest) (*v1.AssignRolesResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.AssignRoles is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) CreateApiKey(context.Context, *connect.Request[v1.CreateApiKeyRequest]) (*connect.Response[v1.CreateApiKeyResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.CreateApiKey is not implemented"))
+func (UnimplementedIdentityServiceHandler) CreateApiKey(context.Context, *v1.CreateApiKeyRequest) (*v1.CreateApiKeyResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.CreateApiKey is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) ListApiKeys(context.Context, *connect.Request[v1.ListApiKeysRequest]) (*connect.Response[v1.ListApiKeysResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.ListApiKeys is not implemented"))
+func (UnimplementedIdentityServiceHandler) ListApiKeys(context.Context, *v1.ListApiKeysRequest) (*v1.ListApiKeysResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.ListApiKeys is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) RevokeApiKey(context.Context, *connect.Request[v1.RevokeApiKeyRequest]) (*connect.Response[v1.RevokeApiKeyResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.RevokeApiKey is not implemented"))
+func (UnimplementedIdentityServiceHandler) RevokeApiKey(context.Context, *v1.RevokeApiKeyRequest) (*v1.RevokeApiKeyResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.RevokeApiKey is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) CreateInvite(context.Context, *connect.Request[v1.CreateInviteRequest]) (*connect.Response[v1.CreateInviteResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.CreateInvite is not implemented"))
+func (UnimplementedIdentityServiceHandler) CreateInvite(context.Context, *v1.CreateInviteRequest) (*v1.CreateInviteResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.CreateInvite is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) ClaimInvite(context.Context, *connect.Request[v1.ClaimInviteRequest]) (*connect.Response[v1.ClaimInviteResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.ClaimInvite is not implemented"))
+func (UnimplementedIdentityServiceHandler) ClaimInvite(context.Context, *v1.ClaimInviteRequest) (*v1.ClaimInviteResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.ClaimInvite is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) ListAccountIdentities(context.Context, *connect.Request[v1.ListAccountIdentitiesRequest]) (*connect.Response[v1.ListAccountIdentitiesResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.ListAccountIdentities is not implemented"))
+func (UnimplementedIdentityServiceHandler) ListAccountIdentities(context.Context, *v1.ListAccountIdentitiesRequest) (*v1.ListAccountIdentitiesResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.ListAccountIdentities is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) RevokeSessions(context.Context, *connect.Request[v1.RevokeSessionsRequest]) (*connect.Response[v1.RevokeSessionsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.RevokeSessions is not implemented"))
+func (UnimplementedIdentityServiceHandler) RevokeSessions(context.Context, *v1.RevokeSessionsRequest) (*v1.RevokeSessionsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.RevokeSessions is not implemented")
 }
 
-func (UnimplementedIdentityServiceHandler) WhoAmI(context.Context, *connect.Request[v1.WhoAmIRequest]) (*connect.Response[v1.WhoAmIResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("identity.v1.IdentityService.WhoAmI is not implemented"))
+func (UnimplementedIdentityServiceHandler) WhoAmI(context.Context, *v1.WhoAmIRequest) (*v1.WhoAmIResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "identity.v1.IdentityService.WhoAmI is not implemented")
+}
+
+type identityServiceClient struct {
+	client *connect.Client
+}
+
+func (c *identityServiceClient) CreateAccount(ctx context.Context, req *v1.CreateAccountRequest) (*v1.CreateAccountResponse, error) {
+	var res v1.CreateAccountResponse
+	if err := c.client.CallUnary(ctx, identityServiceCreateAccountSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) GetAccount(ctx context.Context, req *v1.GetAccountRequest) (*v1.GetAccountResponse, error) {
+	var res v1.GetAccountResponse
+	if err := c.client.CallUnary(ctx, identityServiceGetAccountSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) ListAccounts(ctx context.Context, req *v1.ListAccountsRequest) (*v1.ListAccountsResponse, error) {
+	var res v1.ListAccountsResponse
+	if err := c.client.CallUnary(ctx, identityServiceListAccountsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) DisableAccount(ctx context.Context, req *v1.DisableAccountRequest) (*v1.DisableAccountResponse, error) {
+	var res v1.DisableAccountResponse
+	if err := c.client.CallUnary(ctx, identityServiceDisableAccountSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) EnableAccount(ctx context.Context, req *v1.EnableAccountRequest) (*v1.EnableAccountResponse, error) {
+	var res v1.EnableAccountResponse
+	if err := c.client.CallUnary(ctx, identityServiceEnableAccountSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) AssignRoles(ctx context.Context, req *v1.AssignRolesRequest) (*v1.AssignRolesResponse, error) {
+	var res v1.AssignRolesResponse
+	if err := c.client.CallUnary(ctx, identityServiceAssignRolesSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) CreateApiKey(ctx context.Context, req *v1.CreateApiKeyRequest) (*v1.CreateApiKeyResponse, error) {
+	var res v1.CreateApiKeyResponse
+	if err := c.client.CallUnary(ctx, identityServiceCreateApiKeySpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) ListApiKeys(ctx context.Context, req *v1.ListApiKeysRequest) (*v1.ListApiKeysResponse, error) {
+	var res v1.ListApiKeysResponse
+	if err := c.client.CallUnary(ctx, identityServiceListApiKeysSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) RevokeApiKey(ctx context.Context, req *v1.RevokeApiKeyRequest) (*v1.RevokeApiKeyResponse, error) {
+	var res v1.RevokeApiKeyResponse
+	if err := c.client.CallUnary(ctx, identityServiceRevokeApiKeySpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) CreateInvite(ctx context.Context, req *v1.CreateInviteRequest) (*v1.CreateInviteResponse, error) {
+	var res v1.CreateInviteResponse
+	if err := c.client.CallUnary(ctx, identityServiceCreateInviteSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) ClaimInvite(ctx context.Context, req *v1.ClaimInviteRequest) (*v1.ClaimInviteResponse, error) {
+	var res v1.ClaimInviteResponse
+	if err := c.client.CallUnary(ctx, identityServiceClaimInviteSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) ListAccountIdentities(ctx context.Context, req *v1.ListAccountIdentitiesRequest) (*v1.ListAccountIdentitiesResponse, error) {
+	var res v1.ListAccountIdentitiesResponse
+	if err := c.client.CallUnary(ctx, identityServiceListAccountIdentitiesSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) RevokeSessions(ctx context.Context, req *v1.RevokeSessionsRequest) (*v1.RevokeSessionsResponse, error) {
+	var res v1.RevokeSessionsResponse
+	if err := c.client.CallUnary(ctx, identityServiceRevokeSessionsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *identityServiceClient) WhoAmI(ctx context.Context, req *v1.WhoAmIRequest) (*v1.WhoAmIResponse, error) {
+	var res v1.WhoAmIResponse
+	if err := c.client.CallUnary(ctx, identityServiceWhoAmISpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type identityServiceHandler struct{ svc IdentityServiceHandler }
+
+func (h identityServiceHandler) createAccount(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateAccountRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateAccount(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) getAccount(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetAccountRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetAccount(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) listAccounts(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListAccountsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListAccounts(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) disableAccount(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DisableAccountRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DisableAccount(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) enableAccount(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.EnableAccountRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.EnableAccount(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) assignRoles(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.AssignRolesRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.AssignRoles(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) createApiKey(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateApiKeyRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateApiKey(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) listApiKeys(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListApiKeysRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListApiKeys(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) revokeApiKey(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.RevokeApiKeyRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.RevokeApiKey(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) createInvite(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateInviteRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateInvite(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) claimInvite(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ClaimInviteRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ClaimInvite(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) listAccountIdentities(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListAccountIdentitiesRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListAccountIdentities(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) revokeSessions(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.RevokeSessionsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.RevokeSessions(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h identityServiceHandler) whoAmI(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.WhoAmIRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.WhoAmI(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
 }

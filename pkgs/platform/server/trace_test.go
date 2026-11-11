@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -26,14 +28,21 @@ import (
 // pingRoute serves /test.v1.Echo/Ping, failing with a business error when the request asks for it.
 type pingRoute struct{}
 
-func (pingRoute) Route(opts ...connect.HandlerOption) (string, http.Handler) {
-	return "/test.v1.Echo/", connect.NewUnaryHandler("/test.v1.Echo/Ping", func(_ context.Context, req *connect.Request[emptypb.Empty]) (*connect.Response[emptypb.Empty], error) {
-		if req.Header().Get("X-Fail") != "" {
-			return nil, connect.NewError(connect.CodeNotFound, errors.New("no such thing"))
+const pingProcedure = "/test.v1.Echo/Ping"
+
+var pingSpec = connect.Spec{StreamType: connect.StreamTypeUnary, Procedure: pingProcedure}
+
+func (pingRoute) Register(s *connect.Server) {
+	s.Register(connect.Method{Spec: pingSpec, Handler: func(c context.Context, _ connect.Spec, stream connect.ServerStream) error {
+		if err := stream.Receive(&emptypb.Empty{}); err != nil {
+			return err
+		}
+		if info, _ := connect.CallInfoForServerContext(c); info.RequestHeader().Get("X-Fail") != "" {
+			return connect.NewError(connect.CodeNotFound, "no such thing")
 		}
 
-		return connect.NewResponse(&emptypb.Empty{}), nil
-	}, opts...)
+		return stream.Send(&emptypb.Empty{})
+	}})
 }
 
 // A server built with a real SDK tracer and an in-memory exporter: a no-op tracer passes a parent's trace_id
@@ -67,29 +76,29 @@ func ping(t *testing.T, ts *httptest.Server, exp *tracetest.InMemoryExporter, pa
 		t.Fatal("the remote span context in the test is not valid")
 	}
 	exp.Reset()
-	client := connect.NewClient[emptypb.Empty, emptypb.Empty](http.DefaultClient, ts.URL+path)
-	req := connect.NewRequest(&emptypb.Empty{})
-	propagation.TraceContext{}.Inject(trace.ContextWithRemoteSpanContext(context.Background(), remote), propagation.HeaderCarrier(req.Header()))
-	if req.Header().Get("traceparent") == "" {
+	client := connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL+strings.TrimSuffix(path, pingProcedure), connecthttp.WithReadMaxBytes(0)))
+	c, info := connect.NewClientContext(context.Background())
+	sent := http.Header{}
+	propagation.TraceContext{}.Inject(trace.ContextWithRemoteSpanContext(context.Background(), remote), propagation.HeaderCarrier(sent))
+	if sent.Get("traceparent") == "" {
 		t.Fatal("no traceparent was injected")
 	}
-	if fail {
-		req.Header().Set("X-Fail", "1")
+	for k, vs := range sent {
+		info.RequestHeader().SetValues(k, vs)
 	}
-	var header http.Header
-	res, err := client.CallUnary(context.Background(), req)
-	switch {
-	case fail:
+	if fail {
+		info.RequestHeader().Set("X-Fail", "1")
+	}
+	err := client.CallUnary(c, pingSpec, &emptypb.Empty{}, &emptypb.Empty{})
+	if fail {
 		var ce *connect.Error
 		if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
 			t.Fatalf("err = %v, want not_found", err)
 		}
-		header = ce.Meta()
-	case err != nil:
+	} else if err != nil {
 		t.Fatal(err)
-	default:
-		header = res.Header()
 	}
+	header := info.ResponseHeader()
 
 	var servers []sdktrace.ReadOnlySpan
 	for _, s := range exp.GetSpans().Snapshots() {
@@ -124,8 +133,8 @@ func remoteSpan(t *testing.T) trace.SpanContext {
 // Both mounts of an RPC (the protocol path and the RPCPrefix one), success and business error alike, behave
 // the same way for a given option.
 var traceMounts = map[string]string{
-	"protocol path": "/test.v1.Echo/Ping",
-	"RPCPrefix":     server.RPCPrefix + "/test.v1.Echo/Ping",
+	"protocol path": pingProcedure,
+	"RPCPrefix":     server.RPCPrefix + pingProcedure,
 }
 
 func TestTrace_TrustRemoteContinuesTheCallersTrace(t *testing.T) {
@@ -180,6 +189,33 @@ func TestTrace_DistrustStartsANewRootAndLinksTheCaller(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+// otelconnect (v2) writes traceparent on the response before the handler runs, so an error
+// response would carry it too; v1's interceptor wrote it on a successful response only and
+// the README says so (an error's trace is found with X-Trace-Id). server.New drops it again
+// when the call fails.
+func TestTrace_TraceparentOnSuccessOnly(t *testing.T) {
+	ts, exp := tracedServer(t)
+	for mount, path := range traceMounts {
+		for _, fail := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/fail=%v", mount, fail), func(t *testing.T) {
+				exp.Reset()
+				client := connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL+strings.TrimSuffix(path, pingProcedure), connecthttp.WithReadMaxBytes(0)))
+				c, info := connect.NewClientContext(context.Background())
+				if fail {
+					info.RequestHeader().Set("X-Fail", "1")
+				}
+				_ = client.CallUnary(c, pingSpec, &emptypb.Empty{}, &emptypb.Empty{})
+				if got := info.ResponseHeader().Get("traceparent"); (got != "") == fail {
+					t.Fatalf("traceparent = %q with fail=%v: present on success, absent on error", got, fail)
+				}
+				if info.ResponseHeader().Get(server.TraceIDHeader) == "" {
+					t.Fatalf("X-Trace-Id missing (fail=%v): the error's trace is found with it", fail)
+				}
+			})
 		}
 	}
 }
