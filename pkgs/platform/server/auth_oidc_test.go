@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/metric/noop"
 
@@ -104,20 +104,13 @@ func runOIDCCtx(t *testing.T, parent context.Context, cfg config.Auth, v server.
 		t.Fatalf("NewAuthInterceptor: %v", err)
 	}
 	var out oidcRun
-	next := in(func(c context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
+	var logs bytes.Buffer
+	c := contextx.WithLogger(parent, slog.New(slog.NewJSONHandler(&logs, nil)))
+	out.err = invokeOne(c, in, procedure, headers, handled(func(c context.Context) {
 		out.nextCalls++
 		out.principal = contextx.PrincipalFrom(c)
 		out.ext, out.hasExt = contextx.ExternalIdentityFrom(c)
-
-		return connect.NewResponse(&struct{}{}), nil
-	})
-	req := connect.NewRequest(&struct{}{})
-	for k, val := range headers {
-		req.Header().Set(k, val)
-	}
-	var logs bytes.Buffer
-	c := contextx.WithLogger(parent, slog.New(slog.NewJSONHandler(&logs, nil)))
-	_, out.err = next(c, request{AnyRequest: req, procedure: procedure})
+	}))
 	out.logs = logs.String()
 
 	return out

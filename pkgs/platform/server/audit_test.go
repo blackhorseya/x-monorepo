@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -60,24 +60,14 @@ func TestAccessLine_Principal(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(logs, nil))
 		exp := tracetest.NewInMemoryExporter()
 		tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
-		interceptors := []connect.Interceptor{server.NewMetaInterceptor(), server.NewLoggingInterceptor(logger)}
+		interceptors := []connect.ServerInterceptor{server.NewMetaInterceptor(), server.NewLoggingInterceptor(logger)}
 		if withAuth {
 			interceptors = append(interceptors, authn)
 		}
-		var next connect.UnaryFunc = func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
-			return connect.NewResponse(&struct{}{}), nil
-		}
-		for i := len(interceptors) - 1; i >= 0; i-- {
-			next = interceptors[i].WrapUnary(next)
-		}
 		return func(proc string, headers map[string]string) error {
-			req := connect.NewRequest(&struct{}{})
-			for k, v := range headers {
-				req.Header().Set(k, v)
-			}
 			c, span := tp.Tracer("test").Start(context.Background(), proc)
 			defer span.End()
-			_, err := next(c, request{AnyRequest: req, procedure: proc})
+			_, err := invoke(c, interceptors, proc, "", headers, handled(nil))
 			return err
 		}, logs, exp
 	}

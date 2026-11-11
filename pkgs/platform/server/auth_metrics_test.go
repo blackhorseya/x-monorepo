@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -31,15 +30,8 @@ func TestAuthInterceptor_Decisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next := in(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
-		return connect.NewResponse(&struct{}{}), nil
-	})
 	call := func(procedure string, headers map[string]string) {
-		req := connect.NewRequest(&struct{}{})
-		for k, v := range headers {
-			req.Header().Set(k, v)
-		}
-		_, _ = next(context.Background(), request{AnyRequest: req, procedure: procedure})
+		_ = invokeOne(context.Background(), in, procedure, headers, handled(nil))
 	}
 	valid := token(t, []byte(secret), jwt.SigningMethodHS256, jwt.MapClaims{"sub": "u-1", "exp": time.Now().Add(time.Minute).Unix()})
 
@@ -77,9 +69,6 @@ func TestAuthInterceptor_Decisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next = in(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
-		return connect.NewResponse(&struct{}{}), nil
-	})
 	call("/a.v1.S/Get", nil)
 	if got := decisions(t, reader); got[[2]string{server.ResultAnonymous, server.MethodNone}] != 1 || len(got) != 1 {
 		t.Fatalf("optional decisions = %v, want one anonymous/none", got)

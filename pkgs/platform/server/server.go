@@ -15,10 +15,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"connectrpc.com/otelconnect"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
@@ -43,9 +45,11 @@ const (
 // defaultShutdownTimeout is http.shutdown_timeout when unset (config.Load sets the same).
 const defaultShutdownTimeout = 15 * time.Second
 
-// Route is implemented by every BC's rpc adapter.
+// Route is implemented by every BC's rpc adapter: it registers its services on the
+// connect.Server that carries the interceptors below (the generated
+// Register<Service>Handler does the work).
 type Route interface {
-	Route(opts ...connect.HandlerOption) (string, http.Handler)
+	Register(s *connect.Server)
 }
 
 // Option is a composition-root decision about the server, made in code and
@@ -108,7 +112,7 @@ type Server struct {
 // X-Trace-Id when there is a trace (not when otel.endpoint is empty; see meta.go); the rate limit (limits.go, when cfg.RateLimit.RPS
 // is set) drops a flood; auth (auth.go, when auth.Mode is not off) resolves
 // the caller to a contextx.Principal; the timeout (limits.go, cfg.Timeout)
-// bounds the rest; opts (TrustRemoteTrace / DistrustRemoteTrace) decide whether
+// bounds the rest (and a call that outlived it is refused before the handler, refuseExpired); opts (TrustRemoteTrace / DistrustRemoteTrace) decide whether
 // an incoming traceparent is continued, and none means it is not; plain HTTP routes (docs, openapi) get spans from otelgin,
 // which skips RPC prefixes, the probes and /api/metrics so nothing is traced twice.
 func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route, docs []Doc, checks Readiness, tel *otel.Providers, resolver CredentialResolver, oidcAuth OIDCAuth, opts ...Option) (*Server, error) {
@@ -133,7 +137,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 		// otelconnect's default is a new root trace with the caller's span as a link.
 		traceOpts = append(traceOpts, otelconnect.WithTrustRemote())
 	}
-	tracing, err := otelconnect.NewInterceptor(traceOpts...)
+	tracing, err := otelconnect.NewServerInterceptor(traceOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("otelconnect interceptor: %w", err)
 	}
@@ -156,7 +160,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	// deadline covers validation and the use case, not credential parsing;
 	// auth before validation so an anonymous caller learns nothing about
 	// the request rules.
-	interceptors := []connect.Interceptor{tracing, NewMetaInterceptor(), NewLoggingInterceptor(logger)}
+	interceptors := []connect.ServerInterceptor{tracing, dropHeadersOnError(tel.Propagator.Fields()...), NewMetaInterceptor(), NewLoggingInterceptor(logger)}
 	if limiter != nil {
 		interceptors = append(interceptors, limiter)
 		logger.Info("rate limit enabled", "rps", cfg.RateLimit.RPS, "burst", cfg.RateLimit.Burst, "by", cfg.RateLimit.By)
@@ -174,14 +178,33 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if deadline := NewTimeoutInterceptor(cfg.Timeout); deadline != nil {
 		interceptors = append(interceptors, deadline)
 	}
-	handlerOpts := connect.WithInterceptors(append(interceptors, validate)...)
-	prefixes := make([]string, 0, len(routes))
-	handlers := make([]http.Handler, 0, len(routes))
+	rpc := connect.NewServer(append(interceptors, validate, refuseExpired)...)
 	for _, r := range routes {
-		prefix, h := r.Route(handlerOpts)
-		prefixes = append(prefixes, prefix)
-		handlers = append(handlers, h)
+		r.Register(rpc)
 	}
+	// Every RPC is mounted by its exact procedure. A path under a service prefix that is
+	// no procedure of ours answers 404 without running an interceptor (what v1's
+	// generated handler did), not Unimplemented through the chain (what connecthttp.Mount's
+	// per-service catch-all would do).
+	mux := http.NewServeMux()
+	// v1 had no read limit; v2's default is 4 MiB per message. The pin keeps v1's
+	// behavior, so this change moves no limit (a limit is a decision for its own change).
+	connecthttp.Mount(mux, rpc, connecthttp.WithReadMaxBytes(0))
+	procedures := map[string]bool{}
+	var prefixes []string
+	for spec := range rpc.Specs() {
+		procedures[spec.Procedure] = true
+		if i := strings.LastIndexByte(spec.Procedure, '/'); i > 0 && !slices.Contains(prefixes, spec.Procedure[:i+1]) {
+			prefixes = append(prefixes, spec.Procedure[:i+1])
+		}
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !procedures[r.URL.Path] {
+			http.NotFound(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 
 	// Middleware must be registered before the routes it applies to.
 	engine.Use(
@@ -193,9 +216,9 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 		),
 		gin.Recovery(),
 	)
-	for i, prefix := range prefixes {
-		engine.Any(prefix+"*procedure", gin.WrapH(handlers[i]))
-		engine.Any(RPCPrefix+prefix+"*procedure", gin.WrapH(http.StripPrefix(RPCPrefix, handlers[i])))
+	for _, prefix := range prefixes {
+		engine.Any(prefix+"*procedure", gin.WrapH(handler))
+		engine.Any(RPCPrefix+prefix+"*procedure", gin.WrapH(http.StripPrefix(RPCPrefix, handler)))
 	}
 	hp := &health{checks: checks}
 	engine.GET(HealthzPath, hp.live)

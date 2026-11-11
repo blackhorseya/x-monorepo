@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"golang.org/x/time/rate"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
@@ -36,25 +36,40 @@ const (
 // ToConnectError); one that still succeeded keeps its response — the work
 // is committed. The client's own deadline (Connect-Timeout-Ms / grpc-timeout)
 // is already on the context and wins when shorter. timeout ≤ 0 returns nil.
-func NewTimeoutInterceptor(timeout time.Duration) connect.UnaryInterceptorFunc {
+func NewTimeoutInterceptor(timeout time.Duration) connect.ServerInterceptor {
 	if timeout <= 0 {
 		return nil
 	}
 
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(c context.Context, spec connect.Spec, stream connect.ServerStream) error {
 			ctx, cancel := context.WithTimeout(c, timeout)
 			defer cancel()
-			res, err := next(ctx, req)
+			err := next(ctx, spec, stream)
 			if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				ce := connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("request exceeded its deadline (%s)", timeout))
-				ce.Meta().Set("x-error-code", TimeoutCode)
-
-				return nil, ce
+				return WithMeta(connect.Errorf(connect.CodeDeadlineExceeded, "request exceeded its deadline (%s)", timeout), "x-error-code", TimeoutCode)
 			}
 
-			return res, err
+			return err
 		}
+	}
+}
+
+// refuseExpired is the innermost interceptor: a call whose context is already done fails
+// before the handler starts. v1's generated unary wrapper did this inside the interceptor
+// chain (connect.NewUnaryHandler: `if err := ctx.Err(); err != nil { return nil, err }`); a v2
+// generated handler does not, so without it a request that used up its deadline before the
+// handler (the timeout above, a client deadline already past, a client that went away) would
+// still run the use case. The timeout interceptor turns the error into DEADLINE_EXCEEDED +
+// request.timeout; anything else leaves as v1 left it, a plain error the meta interceptor
+// answers as Internal.
+func refuseExpired(next connect.ServerFunc) connect.ServerFunc {
+	return func(c context.Context, spec connect.Spec, stream connect.ServerStream) error {
+		if err := c.Err(); err != nil {
+			return err
+		}
+
+		return next(c, spec, stream)
 	}
 }
 
@@ -62,7 +77,7 @@ func NewTimeoutInterceptor(timeout time.Duration) connect.UnaryInterceptorFunc {
 // RESOURCE_EXHAUSTED + x-error-code request.rate_limited + Retry-After. It
 // sits outside auth on purpose: a flood must be dropped before each request
 // pays for a JWT signature check. cfg.RPS ≤ 0 returns nil (off).
-func NewRateLimitInterceptor(cfg config.RateLimit) (connect.UnaryInterceptorFunc, error) {
+func NewRateLimitInterceptor(cfg config.RateLimit) (connect.ServerInterceptor, error) {
 	if cfg.RPS <= 0 {
 		return nil, nil
 	}
@@ -70,39 +85,37 @@ func NewRateLimitInterceptor(cfg config.RateLimit) (connect.UnaryInterceptorFunc
 	if burst <= 0 {
 		burst = int(math.Ceil(cfg.RPS))
 	}
-	var limiter func(req connect.AnyRequest) *rate.Limiter
+	var limiter func(peerAddr string) *rate.Limiter
 	switch cfg.By {
 	case config.RateLimitGlobal, "":
 		one := rate.NewLimiter(rate.Limit(cfg.RPS), burst)
-		limiter = func(connect.AnyRequest) *rate.Limiter { return one }
+		limiter = func(string) *rate.Limiter { return one }
 	case config.RateLimitPeer:
 		buckets := newBuckets(rate.Limit(cfg.RPS), burst)
-		limiter = func(req connect.AnyRequest) *rate.Limiter { return buckets.get(peerHost(req)) }
+		limiter = func(peerAddr string) *rate.Limiter { return buckets.get(peerHost(peerAddr)) }
 	default:
 		return nil, fmt.Errorf("rate limit: unknown by %q (want global|peer)", cfg.By)
 	}
 
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			r := limiter(req).Reserve()
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(c context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			r := limiter(callInfo(c).PeerAddr).Reserve()
 			if delay := r.Delay(); delay > 0 {
 				r.Cancel() // not waiting: give the token back
-				ce := connect.NewError(connect.CodeResourceExhausted, errors.New("rate limit exceeded"))
-				ce.Meta().Set("x-error-code", RateLimitedCode)
-				ce.Meta().Set(RetryAfterHeader, strconv.Itoa(int(math.Ceil(delay.Seconds()))))
 
-				return nil, ce
+				return WithMeta(connect.NewError(connect.CodeResourceExhausted, "rate limit exceeded"),
+					"x-error-code", RateLimitedCode,
+					RetryAfterHeader, strconv.Itoa(int(math.Ceil(delay.Seconds()))))
 			}
 
-			return next(c, req)
+			return next(c, spec, stream)
 		}
 	}, nil
 }
 
-// peerHost is the client IP of req: Peer().Addr without the port, which
-// changes per connection and would make every HTTP/1.1 connection its own bucket.
-func peerHost(req connect.AnyRequest) string {
-	addr := req.Peer().Addr
+// peerHost is the client IP of addr (the call's peer address) without the port,
+// which changes per connection and would make every HTTP/1.1 connection its own bucket.
+func peerHost(addr string) string {
 	if host, _, err := net.SplitHostPort(addr); err == nil {
 		return host
 	}

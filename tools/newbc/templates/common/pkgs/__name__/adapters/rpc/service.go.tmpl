@@ -3,9 +3,8 @@ package rpc
 
 import (
 	"context"
-	"net/http"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"<% .Module %>/pkgs/platform/admin"
@@ -42,37 +41,37 @@ func New<% .Title %>Service(create Create<% .Title %>UC, get Get<% .Title %>UC, 
 	return &<% .Title %>Service{create: create, get: get, auth: auth}
 }
 
-// Route returns the mount path and handler (Connect + gRPC + gRPC-Web on one port).
-func (h *<% .Title %>Service) Route(opts ...connect.HandlerOption) (string, http.Handler) {
-	return <% .Name %>v1connect.New<% .Title %>ServiceHandler(h, opts...)
+// Register serves the service on s (Connect + gRPC + gRPC-Web on one port).
+func (h *<% .Title %>Service) Register(s *connect.Server) {
+	<% .Name %>v1connect.Register<% .Title %>ServiceHandler(s, h)
 }
 
 // Create<% .Title %> adds a <% .Title %>. Admin role when auth is on.
 func (h *<% .Title %>Service) Create<% .Title %>(
 	c context.Context,
-	req *connect.Request[<% .Name %>v1.Create<% .Title %>Request],
-) (*connect.Response[<% .Name %>v1.Create<% .Title %>Response], error) {
+	req *<% .Name %>v1.Create<% .Title %>Request,
+) (*<% .Name %>v1.Create<% .Title %>Response, error) {
 	if err := server.RequireRole(c, h.auth, h.auth.AdminRole); err != nil {
 		return nil, err
 	}
-	out, err := h.create.Execute(c, dto.Create<% .Title %>Input{Name: req.Msg.GetName()})
+	out, err := h.create.Execute(c, dto.Create<% .Title %>Input{Name: req.GetName()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&<% .Name %>v1.Create<% .Title %>Response{<% .Title %>: toProto(out)}), nil
+	return &<% .Name %>v1.Create<% .Title %>Response{<% .Title %>: toProto(out)}, nil
 }
 
 func (h *<% .Title %>Service) Get<% .Title %>(
 	c context.Context,
-	req *connect.Request[<% .Name %>v1.Get<% .Title %>Request],
-) (*connect.Response[<% .Name %>v1.Get<% .Title %>Response], error) {
-	out, err := h.get.Execute(c, dto.Get<% .Title %>Input{ID: req.Msg.GetId()})
+	req *<% .Name %>v1.Get<% .Title %>Request,
+) (*<% .Name %>v1.Get<% .Title %>Response, error) {
+	out, err := h.get.Execute(c, dto.Get<% .Title %>Input{ID: req.GetId()})
 	if err != nil {
 		return nil, server.ToConnectError(err)
 	}
 
-	return connect.NewResponse(&<% .Name %>v1.Get<% .Title %>Response{<% .Title %>: toProto(out)}), nil
+	return &<% .Name %>v1.Get<% .Title %>Response{<% .Title %>: toProto(out)}, nil
 }
 
 func toProto(x *dto.<% .Title %>Output) *<% .Name %>v1.<% .Title %> {

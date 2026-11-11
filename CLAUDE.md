@@ -149,9 +149,13 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - **Auth 只做 authentication**：`auth.mode` 預設 `off`（`task run`、E2E、console 都沒帶 credential）；開了之後 `server.NewAuthInterceptor`
   把 `X-API-Key`（config `auth.api_keys` 先、再問 `server.CredentialResolver` = identity 的 DB key；resolver 失敗是拒絕不是放行）/ `Authorization: Bearer <jwt>` 解析成 `contextx.Principal` 放進 context（identity key 的 `Subject` 是 account id、`CredentialID` 是 key id），usecase 用 `contextx.PrincipalFrom(c)` 讀，
   consumer path 永遠是 anonymous。`rpc` access line 的 `auth` / `sub` 與 span 的 `enduser.id` 由 auth interceptor 透過 logging interceptor 留在 context 的 slot 回報（`recordAuth`），不要把 principal 塞進 metrics label——它記的 `auth_decisions_total{result, method}` 只有 ok / public / anonymous / missing / invalid × api_key / jwt / none（Grafana 的 Auth row 與 `rpc-auth` alert 讀它；OIDC 的 `method` 仍是 `jwt`，未綁定放行 `ClaimInvite` 記 `ok`，未綁定被擋記 `invalid`，不加新值）。要不要做授權（role 檢查）是讀的人的事，不要在 interceptor 裡加（role 檢查在 usecase 或 `server.RequireRole`，見 `docs/identity.md`）。
-  Interceptor chain 由外而內：`tracing, meta, logging, [rate limit], [auth], [timeout], validate`——rate limit 在 auth 之外（洪水先擋再驗簽章）、
+  Interceptor chain 由外而內：`tracing, meta, logging, [rate limit], [auth], [timeout], validate, refuseExpired`——rate limit 在 auth 之外（洪水先擋再驗簽章）、
   timeout 在 auth 之內（deadline 算 validate + usecase）；`http.timeout` 到期的失敗一律 `DEADLINE_EXCEEDED` + `request.timeout`，超過 `http.rate_limit` 是 `RESOURCE_EXHAUSTED` + `request.rate_limited` + `Retry-After`。
-  所有 interceptor 都是 unary-only：哪天加了 streaming RPC，auth 要另外用 `WrapStreamingHandler` 包，不然 stream 沒有驗。
+  `refuseExpired` 在最內層：context 在進 handler 前已逾時或取消就不執行 use case（v1 的 generated unary wrapper 做這件事，v2 的 generated handler 不做）。
+  interceptor 是 connect-go v2 的 `connect.ServerInterceptor`，套用到每一種 RPC 型別，錯誤的 metadata 用 `server.WithMeta` 掛在 error 上（`pkgs/platform/server/errmeta.go`）。
+  目前 protos 沒有 streaming RPC；哪天加了，tracing / meta / logging 每個呼叫各一次（一個 span、一行 access line），rate limit 每個呼叫扣一個 token，
+  auth 只在呼叫開始時看一次 request header、整條 stream 共用，timeout 的 deadline 蓋住整條 stream（長連線的 stream 會在 `http.timeout` 被切），
+  validate 對 handler 每次 `Receive` 到的訊息各驗一次，`refuseExpired` 只在呼叫開始時查一次。
 - **Graceful shutdown 是有測試保護的行為**：rpc 收到 SIGTERM 先把 `/api/readyz` 翻 503 再服務 `http.shutdown_delay`（預設 0），然後關 listener、
   in-flight request 有 `http.shutdown_timeout`；worker 的 `eventbus.Register` 把 subscriber 包進 `eventbus.Draining`，正在跑的 handler 跑完 + ack 才結束
   （上限 8s）。每次 handler attempt 另有 `worker.handler_timeout`（預設 10s，0 = 不限）：到期的 attempt 照常 retry，用完進 poison。改 `Server.Serve` / `Draining` 請一起跑 `platform/server` 與 `platform/eventbus` 的 shutdown tests。

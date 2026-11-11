@@ -5,61 +5,89 @@
 package adminv1connect
 
 import (
-	connect "connectrpc.com/connect"
+	connect "connectrpc.com/connect/v2"
 	context "context"
-	errors "errors"
 	v1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
-	http "net/http"
-	strings "strings"
+	sync "sync"
 )
-
-// This is a compile-time assertion to ensure that this generated file and the connect package are
-// compatible. If you get a compiler error that this constant is not defined, this code was
-// generated with a version of connect newer than the one compiled into your binary. You can fix the
-// problem by either regenerating this code with an older version of connect or updating the connect
-// version compiled into your binary.
-const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// AdminServiceName is the fully-qualified name of the AdminService service.
 	AdminServiceName = "admin.v1.AdminService"
 )
 
-// These constants are the fully-qualified names of the RPCs defined in this package. They're
-// exposed at runtime as Spec.Procedure and as the final two segments of the HTTP route.
+// These constants are the procedure names of the RPCs defined in this package. They're exposed at
+// runtime as Spec.Procedure and as the final two segments of the HTTP route.
 //
 // Note that these are different from the fully-qualified method names used by
 // google.golang.org/protobuf/reflect/protoreflect. To convert from these constants to
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// AdminServiceListPoisonProcedure is the fully-qualified name of the AdminService's ListPoison RPC.
+	// AdminServiceListPoisonProcedure is the procedure name of the AdminService's ListPoison RPC.
 	AdminServiceListPoisonProcedure = "/admin.v1.AdminService/ListPoison"
-	// AdminServiceGetPoisonProcedure is the fully-qualified name of the AdminService's GetPoison RPC.
+	// AdminServiceGetPoisonProcedure is the procedure name of the AdminService's GetPoison RPC.
 	AdminServiceGetPoisonProcedure = "/admin.v1.AdminService/GetPoison"
-	// AdminServiceRequeuePoisonProcedure is the fully-qualified name of the AdminService's
-	// RequeuePoison RPC.
+	// AdminServiceRequeuePoisonProcedure is the procedure name of the AdminService's RequeuePoison RPC.
 	AdminServiceRequeuePoisonProcedure = "/admin.v1.AdminService/RequeuePoison"
-	// AdminServiceDropPoisonProcedure is the fully-qualified name of the AdminService's DropPoison RPC.
+	// AdminServiceDropPoisonProcedure is the procedure name of the AdminService's DropPoison RPC.
 	AdminServiceDropPoisonProcedure = "/admin.v1.AdminService/DropPoison"
-	// AdminServicePruneProcedure is the fully-qualified name of the AdminService's Prune RPC.
+	// AdminServicePruneProcedure is the procedure name of the AdminService's Prune RPC.
 	AdminServicePruneProcedure = "/admin.v1.AdminService/Prune"
+)
+
+var (
+	adminServiceListPoisonSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_admin_v1_service_proto.Services().ByName("AdminService").Methods().ByName("ListPoison"),
+			Procedure:  AdminServiceListPoisonProcedure,
+		}
+	})
+	adminServiceGetPoisonSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_admin_v1_service_proto.Services().ByName("AdminService").Methods().ByName("GetPoison"),
+			Procedure:  AdminServiceGetPoisonProcedure,
+		}
+	})
+	adminServiceRequeuePoisonSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_admin_v1_service_proto.Services().ByName("AdminService").Methods().ByName("RequeuePoison"),
+			Procedure:  AdminServiceRequeuePoisonProcedure,
+		}
+	})
+	adminServiceDropPoisonSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_admin_v1_service_proto.Services().ByName("AdminService").Methods().ByName("DropPoison"),
+			Procedure:  AdminServiceDropPoisonProcedure,
+		}
+	})
+	adminServicePruneSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_admin_v1_service_proto.Services().ByName("AdminService").Methods().ByName("Prune"),
+			Procedure:  AdminServicePruneProcedure,
+		}
+	})
 )
 
 // AdminServiceClient is a client for the admin.v1.AdminService service.
 type AdminServiceClient interface {
 	// ListPoison returns the messages parked on one BC's poison table, oldest
 	// first (nothing consumes it, so this is the whole backlog).
-	ListPoison(context.Context, *connect.Request[v1.ListPoisonRequest]) (*connect.Response[v1.ListPoisonResponse], error)
+	ListPoison(context.Context, *v1.ListPoisonRequest) (*v1.ListPoisonResponse, error)
 	// GetPoison returns one parked message in full (metadata + payload).
-	GetPoison(context.Context, *connect.Request[v1.GetPoisonRequest]) (*connect.Response[v1.GetPoisonResponse], error)
+	GetPoison(context.Context, *v1.GetPoisonRequest) (*v1.GetPoisonResponse, error)
 	// RequeuePoison publishes parked messages back onto the topic each was
 	// consumed from (same message id, poison metadata removed) and unparks
 	// them in the same transaction. Every consumer group behind the topic
 	// handles them again; a message that fails again is parked again.
-	RequeuePoison(context.Context, *connect.Request[v1.RequeuePoisonRequest]) (*connect.Response[v1.RequeuePoisonResponse], error)
+	RequeuePoison(context.Context, *v1.RequeuePoisonRequest) (*v1.RequeuePoisonResponse, error)
 	// DropPoison deletes parked messages for good.
-	DropPoison(context.Context, *connect.Request[v1.DropPoisonRequest]) (*connect.Response[v1.DropPoisonResponse], error)
+	DropPoison(context.Context, *v1.DropPoisonRequest) (*v1.DropPoisonResponse, error)
 	// Prune is `worker prune` over RPC: per bounded context, delete the outbox
 	// rows older than older_than that every consumer group with a cursor has
 	// acknowledged, and the consumed inbox rows older than that (ids still
@@ -68,101 +96,29 @@ type AdminServiceClient interface {
 	// for a dry run, for forgetting a stale group and for routine runs — a big
 	// first backlog belongs to the CLI / CronJob (deleted batches stay deleted
 	// on DEADLINE_EXCEEDED, only the counts are lost; re-running is safe).
-	Prune(context.Context, *connect.Request[v1.PruneRequest]) (*connect.Response[v1.PruneResponse], error)
+	Prune(context.Context, *v1.PruneRequest) (*v1.PruneResponse, error)
 }
 
-// NewAdminServiceClient constructs a client for the admin.v1.AdminService service. By default, it
-// uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and sends
-// uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC() or
-// connect.WithGRPCWeb() options.
-//
-// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
-// http://api.acme.com or https://acme.com/grpc).
-func NewAdminServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) AdminServiceClient {
-	baseURL = strings.TrimRight(baseURL, "/")
-	adminServiceMethods := v1.File_admin_v1_service_proto.Services().ByName("AdminService").Methods()
-	return &adminServiceClient{
-		listPoison: connect.NewClient[v1.ListPoisonRequest, v1.ListPoisonResponse](
-			httpClient,
-			baseURL+AdminServiceListPoisonProcedure,
-			connect.WithSchema(adminServiceMethods.ByName("ListPoison")),
-			connect.WithClientOptions(opts...),
-		),
-		getPoison: connect.NewClient[v1.GetPoisonRequest, v1.GetPoisonResponse](
-			httpClient,
-			baseURL+AdminServiceGetPoisonProcedure,
-			connect.WithSchema(adminServiceMethods.ByName("GetPoison")),
-			connect.WithClientOptions(opts...),
-		),
-		requeuePoison: connect.NewClient[v1.RequeuePoisonRequest, v1.RequeuePoisonResponse](
-			httpClient,
-			baseURL+AdminServiceRequeuePoisonProcedure,
-			connect.WithSchema(adminServiceMethods.ByName("RequeuePoison")),
-			connect.WithClientOptions(opts...),
-		),
-		dropPoison: connect.NewClient[v1.DropPoisonRequest, v1.DropPoisonResponse](
-			httpClient,
-			baseURL+AdminServiceDropPoisonProcedure,
-			connect.WithSchema(adminServiceMethods.ByName("DropPoison")),
-			connect.WithClientOptions(opts...),
-		),
-		prune: connect.NewClient[v1.PruneRequest, v1.PruneResponse](
-			httpClient,
-			baseURL+AdminServicePruneProcedure,
-			connect.WithSchema(adminServiceMethods.ByName("Prune")),
-			connect.WithClientOptions(opts...),
-		),
-	}
-}
-
-// adminServiceClient implements AdminServiceClient.
-type adminServiceClient struct {
-	listPoison    *connect.Client[v1.ListPoisonRequest, v1.ListPoisonResponse]
-	getPoison     *connect.Client[v1.GetPoisonRequest, v1.GetPoisonResponse]
-	requeuePoison *connect.Client[v1.RequeuePoisonRequest, v1.RequeuePoisonResponse]
-	dropPoison    *connect.Client[v1.DropPoisonRequest, v1.DropPoisonResponse]
-	prune         *connect.Client[v1.PruneRequest, v1.PruneResponse]
-}
-
-// ListPoison calls admin.v1.AdminService.ListPoison.
-func (c *adminServiceClient) ListPoison(ctx context.Context, req *connect.Request[v1.ListPoisonRequest]) (*connect.Response[v1.ListPoisonResponse], error) {
-	return c.listPoison.CallUnary(ctx, req)
-}
-
-// GetPoison calls admin.v1.AdminService.GetPoison.
-func (c *adminServiceClient) GetPoison(ctx context.Context, req *connect.Request[v1.GetPoisonRequest]) (*connect.Response[v1.GetPoisonResponse], error) {
-	return c.getPoison.CallUnary(ctx, req)
-}
-
-// RequeuePoison calls admin.v1.AdminService.RequeuePoison.
-func (c *adminServiceClient) RequeuePoison(ctx context.Context, req *connect.Request[v1.RequeuePoisonRequest]) (*connect.Response[v1.RequeuePoisonResponse], error) {
-	return c.requeuePoison.CallUnary(ctx, req)
-}
-
-// DropPoison calls admin.v1.AdminService.DropPoison.
-func (c *adminServiceClient) DropPoison(ctx context.Context, req *connect.Request[v1.DropPoisonRequest]) (*connect.Response[v1.DropPoisonResponse], error) {
-	return c.dropPoison.CallUnary(ctx, req)
-}
-
-// Prune calls admin.v1.AdminService.Prune.
-func (c *adminServiceClient) Prune(ctx context.Context, req *connect.Request[v1.PruneRequest]) (*connect.Response[v1.PruneResponse], error) {
-	return c.prune.CallUnary(ctx, req)
+// NewAdminServiceClient constructs a client for the admin.v1.AdminService service. Multiple service
+// clients may share a single connect.Client.
+func NewAdminServiceClient(client *connect.Client) AdminServiceClient {
+	return &adminServiceClient{client: client}
 }
 
 // AdminServiceHandler is an implementation of the admin.v1.AdminService service.
 type AdminServiceHandler interface {
 	// ListPoison returns the messages parked on one BC's poison table, oldest
 	// first (nothing consumes it, so this is the whole backlog).
-	ListPoison(context.Context, *connect.Request[v1.ListPoisonRequest]) (*connect.Response[v1.ListPoisonResponse], error)
+	ListPoison(context.Context, *v1.ListPoisonRequest) (*v1.ListPoisonResponse, error)
 	// GetPoison returns one parked message in full (metadata + payload).
-	GetPoison(context.Context, *connect.Request[v1.GetPoisonRequest]) (*connect.Response[v1.GetPoisonResponse], error)
+	GetPoison(context.Context, *v1.GetPoisonRequest) (*v1.GetPoisonResponse, error)
 	// RequeuePoison publishes parked messages back onto the topic each was
 	// consumed from (same message id, poison metadata removed) and unparks
 	// them in the same transaction. Every consumer group behind the topic
 	// handles them again; a message that fails again is parked again.
-	RequeuePoison(context.Context, *connect.Request[v1.RequeuePoisonRequest]) (*connect.Response[v1.RequeuePoisonResponse], error)
+	RequeuePoison(context.Context, *v1.RequeuePoisonRequest) (*v1.RequeuePoisonResponse, error)
 	// DropPoison deletes parked messages for good.
-	DropPoison(context.Context, *connect.Request[v1.DropPoisonRequest]) (*connect.Response[v1.DropPoisonResponse], error)
+	DropPoison(context.Context, *v1.DropPoisonRequest) (*v1.DropPoisonResponse, error)
 	// Prune is `worker prune` over RPC: per bounded context, delete the outbox
 	// rows older than older_than that every consumer group with a cursor has
 	// acknowledged, and the consumed inbox rows older than that (ids still
@@ -171,83 +127,146 @@ type AdminServiceHandler interface {
 	// for a dry run, for forgetting a stale group and for routine runs — a big
 	// first backlog belongs to the CLI / CronJob (deleted batches stay deleted
 	// on DEADLINE_EXCEEDED, only the counts are lost; re-running is safe).
-	Prune(context.Context, *connect.Request[v1.PruneRequest]) (*connect.Response[v1.PruneResponse], error)
+	Prune(context.Context, *v1.PruneRequest) (*v1.PruneResponse, error)
 }
 
-// NewAdminServiceHandler builds an HTTP handler from the service implementation. It returns the
-// path on which to mount the handler and the handler itself.
-//
-// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
-// and JSON codecs. They also support gzip compression.
-func NewAdminServiceHandler(svc AdminServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
-	adminServiceMethods := v1.File_admin_v1_service_proto.Services().ByName("AdminService").Methods()
-	adminServiceListPoisonHandler := connect.NewUnaryHandler(
-		AdminServiceListPoisonProcedure,
-		svc.ListPoison,
-		connect.WithSchema(adminServiceMethods.ByName("ListPoison")),
-		connect.WithHandlerOptions(opts...),
+// RegisterAdminServiceHandler registers svc as the admin.v1.AdminService implementation on server.
+func RegisterAdminServiceHandler(server *connect.Server, svc AdminServiceHandler) {
+	adapter := adminServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: adminServiceListPoisonSpec(), Handler: adapter.listPoison},
+		connect.Method{Spec: adminServiceGetPoisonSpec(), Handler: adapter.getPoison},
+		connect.Method{Spec: adminServiceRequeuePoisonSpec(), Handler: adapter.requeuePoison},
+		connect.Method{Spec: adminServiceDropPoisonSpec(), Handler: adapter.dropPoison},
+		connect.Method{Spec: adminServicePruneSpec(), Handler: adapter.prune},
 	)
-	adminServiceGetPoisonHandler := connect.NewUnaryHandler(
-		AdminServiceGetPoisonProcedure,
-		svc.GetPoison,
-		connect.WithSchema(adminServiceMethods.ByName("GetPoison")),
-		connect.WithHandlerOptions(opts...),
-	)
-	adminServiceRequeuePoisonHandler := connect.NewUnaryHandler(
-		AdminServiceRequeuePoisonProcedure,
-		svc.RequeuePoison,
-		connect.WithSchema(adminServiceMethods.ByName("RequeuePoison")),
-		connect.WithHandlerOptions(opts...),
-	)
-	adminServiceDropPoisonHandler := connect.NewUnaryHandler(
-		AdminServiceDropPoisonProcedure,
-		svc.DropPoison,
-		connect.WithSchema(adminServiceMethods.ByName("DropPoison")),
-		connect.WithHandlerOptions(opts...),
-	)
-	adminServicePruneHandler := connect.NewUnaryHandler(
-		AdminServicePruneProcedure,
-		svc.Prune,
-		connect.WithSchema(adminServiceMethods.ByName("Prune")),
-		connect.WithHandlerOptions(opts...),
-	)
-	return "/admin.v1.AdminService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case AdminServiceListPoisonProcedure:
-			adminServiceListPoisonHandler.ServeHTTP(w, r)
-		case AdminServiceGetPoisonProcedure:
-			adminServiceGetPoisonHandler.ServeHTTP(w, r)
-		case AdminServiceRequeuePoisonProcedure:
-			adminServiceRequeuePoisonHandler.ServeHTTP(w, r)
-		case AdminServiceDropPoisonProcedure:
-			adminServiceDropPoisonHandler.ServeHTTP(w, r)
-		case AdminServicePruneProcedure:
-			adminServicePruneHandler.ServeHTTP(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
 }
 
 // UnimplementedAdminServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedAdminServiceHandler struct{}
 
-func (UnimplementedAdminServiceHandler) ListPoison(context.Context, *connect.Request[v1.ListPoisonRequest]) (*connect.Response[v1.ListPoisonResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("admin.v1.AdminService.ListPoison is not implemented"))
+func (UnimplementedAdminServiceHandler) ListPoison(context.Context, *v1.ListPoisonRequest) (*v1.ListPoisonResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "admin.v1.AdminService.ListPoison is not implemented")
 }
 
-func (UnimplementedAdminServiceHandler) GetPoison(context.Context, *connect.Request[v1.GetPoisonRequest]) (*connect.Response[v1.GetPoisonResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("admin.v1.AdminService.GetPoison is not implemented"))
+func (UnimplementedAdminServiceHandler) GetPoison(context.Context, *v1.GetPoisonRequest) (*v1.GetPoisonResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "admin.v1.AdminService.GetPoison is not implemented")
 }
 
-func (UnimplementedAdminServiceHandler) RequeuePoison(context.Context, *connect.Request[v1.RequeuePoisonRequest]) (*connect.Response[v1.RequeuePoisonResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("admin.v1.AdminService.RequeuePoison is not implemented"))
+func (UnimplementedAdminServiceHandler) RequeuePoison(context.Context, *v1.RequeuePoisonRequest) (*v1.RequeuePoisonResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "admin.v1.AdminService.RequeuePoison is not implemented")
 }
 
-func (UnimplementedAdminServiceHandler) DropPoison(context.Context, *connect.Request[v1.DropPoisonRequest]) (*connect.Response[v1.DropPoisonResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("admin.v1.AdminService.DropPoison is not implemented"))
+func (UnimplementedAdminServiceHandler) DropPoison(context.Context, *v1.DropPoisonRequest) (*v1.DropPoisonResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "admin.v1.AdminService.DropPoison is not implemented")
 }
 
-func (UnimplementedAdminServiceHandler) Prune(context.Context, *connect.Request[v1.PruneRequest]) (*connect.Response[v1.PruneResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("admin.v1.AdminService.Prune is not implemented"))
+func (UnimplementedAdminServiceHandler) Prune(context.Context, *v1.PruneRequest) (*v1.PruneResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "admin.v1.AdminService.Prune is not implemented")
+}
+
+type adminServiceClient struct {
+	client *connect.Client
+}
+
+func (c *adminServiceClient) ListPoison(ctx context.Context, req *v1.ListPoisonRequest) (*v1.ListPoisonResponse, error) {
+	var res v1.ListPoisonResponse
+	if err := c.client.CallUnary(ctx, adminServiceListPoisonSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *adminServiceClient) GetPoison(ctx context.Context, req *v1.GetPoisonRequest) (*v1.GetPoisonResponse, error) {
+	var res v1.GetPoisonResponse
+	if err := c.client.CallUnary(ctx, adminServiceGetPoisonSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *adminServiceClient) RequeuePoison(ctx context.Context, req *v1.RequeuePoisonRequest) (*v1.RequeuePoisonResponse, error) {
+	var res v1.RequeuePoisonResponse
+	if err := c.client.CallUnary(ctx, adminServiceRequeuePoisonSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *adminServiceClient) DropPoison(ctx context.Context, req *v1.DropPoisonRequest) (*v1.DropPoisonResponse, error) {
+	var res v1.DropPoisonResponse
+	if err := c.client.CallUnary(ctx, adminServiceDropPoisonSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *adminServiceClient) Prune(ctx context.Context, req *v1.PruneRequest) (*v1.PruneResponse, error) {
+	var res v1.PruneResponse
+	if err := c.client.CallUnary(ctx, adminServicePruneSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type adminServiceHandler struct{ svc AdminServiceHandler }
+
+func (h adminServiceHandler) listPoison(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListPoisonRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListPoison(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h adminServiceHandler) getPoison(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetPoisonRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetPoison(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h adminServiceHandler) requeuePoison(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.RequeuePoisonRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.RequeuePoison(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h adminServiceHandler) dropPoison(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DropPoisonRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DropPoison(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h adminServiceHandler) prune(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.PruneRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Prune(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
 }

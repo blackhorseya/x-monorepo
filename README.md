@@ -149,13 +149,15 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 
 **Response meta 走 header，不包進 proto message**：transport 層本來就有 status / header / trailer，在 body 包 `{data, meta}`
 等於重做一次、每個 Response 都要重複寫、client 多剝一層；錯誤的 `x-error-code` 也已經是 header。`server.NewMetaInterceptor`
-在成功與錯誤兩條路都設：
+在成功與錯誤兩條路都設。錯誤的 metadata（`x-error-code`、`Retry-After` 與下表的 header）由 `server.WithMeta` 掛在 `*connect.Error` 上，
+離開 server 時 Connect unary 寫進 HTTP response header，gRPC / gRPC-Web / Connect streaming 寫進 trailer（`pkgs/platform/server/meta.go`；
+`TestMeta_ErrorMetadataFollowsTheProtocol`、`apps/rpc/main_test.go` 的三協定表）：
 
 | header | 內容 |
 |---|---|
 | `X-Request-Id` | client 有帶就原樣回（≤128 字），沒帶就 server 產 UUID v7；`server.RequestID(c)` 拿得到，request log 也有 `request_id` |
 | `X-Trace-Id` | OTel trace id（有 span 才有；`otel.endpoint` 空時沒有），直接貼到 Tempo / Loki `| trace_id="…"` |
-| `traceparent` | W3C trace context。**rpc 不延續請求帶進來的 `traceparent`**（開 SDK：新 root trace，呼叫端的 span 只留成 link，查 trace 用上一列的 `X-Trace-Id`；`otel.endpoint` 空：不讀也不寫 trace header，回應沒有 `X-Trace-Id`）。rpc 沒有下游呼叫，所以沒有轉送 `traceparent` 的問題（`docs/observability.md`）。回應這一份：`otelconnect.WithPropagateResponseHeader()` 回給瀏覽器端 tracing（otelconnect 只在成功回應設；錯誤看 `X-Trace-Id`） |
+| `traceparent` | W3C trace context。**rpc 不延續請求帶進來的 `traceparent`**（開 SDK：新 root trace，呼叫端的 span 只留成 link，查 trace 用上一列的 `X-Trace-Id`；`otel.endpoint` 空：不讀也不寫 trace header，回應沒有 `X-Trace-Id`）。rpc 沒有下游呼叫，所以沒有轉送 `traceparent` 的問題（`docs/observability.md`）。回應這一份：`otelconnect.WithPropagateResponseHeader()` 回給瀏覽器端 tracing（只在成功回應帶：otelconnect 在 handler 跑之前就寫，`server.New` 在呼叫失敗時用 `dropHeadersOnError` 拿掉它，見 `TestTrace_TraceparentOnSuccessOnly`；錯誤看 `X-Trace-Id`） |
 
 分頁之類「該 RPC 自己的資料」（`next_page_token`、`total_size`）才放進 message，不做通用 `ResponseMeta` 欄位。
 

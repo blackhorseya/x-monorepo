@@ -8,7 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"go.opentelemetry.io/otel/trace"
 
 	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
@@ -68,14 +69,16 @@ func TestTrace_RPCDistrustsAnExternalTraceparent(t *testing.T) {
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(ts.Close)
 
-			client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
-			req := connect.NewRequest(&identityv1.CreateAccountRequest{Name: "tracer"})
-			req.Header().Set("traceparent", "00-"+externalTrace+"-00f067aa0ba902b7-01")
-			res, err := client.CreateAccount(context.Background(), req)
-			if err != nil {
+			client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0))))
+			c, info := connect.NewClientContext(context.Background())
+			info.RequestHeader().Set("traceparent", "00-"+externalTrace+"-00f067aa0ba902b7-01")
+			if _, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: "tracer"}); err != nil {
 				t.Fatalf("CreateAccount error = %v", err)
 			}
-			h := res.Header()
+			h := http.Header{}
+			for k, v := range info.ResponseHeader().All() {
+				h[k] = v
+			}
 
 			if sdkOn {
 				if got := traceOf(t, h); got == ext {

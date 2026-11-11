@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -107,7 +107,7 @@ const (
 // (enduser.id, enduser.roles, auth.method) — the audit trail across Loki and
 // Tempo. Names and credentials are never recorded. Every decision is counted
 // on mp's auth.decisions{result, method} (see the Result* constants).
-func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver CredentialResolver, oidcAuth OIDCAuth) (connect.UnaryInterceptorFunc, error) {
+func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver CredentialResolver, oidcAuth OIDCAuth) (connect.ServerInterceptor, error) {
 	switch cfg.Mode {
 	case config.AuthOff, "":
 		return nil, nil
@@ -153,17 +153,18 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 		decisions.Add(c, 1, metric.WithAttributes(attribute.String("result", result), attribute.String("method", method)))
 	}
 
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(c context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			if public[req.Spec().Procedure] {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(c context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			if public[spec.Procedure] {
 				count(c, ResultPublic, MethodNone)
 				recordAuth(c, AuthPublic, "")
 				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(AuthPublic))
 
-				return next(c, req)
+				return next(c, spec, stream)
 			}
-			apiKey, authorization := req.Header().Get(APIKeyHeader), req.Header().Get(AuthorizationHeader)
-			res, found, err := a.authenticate(c, req.Spec().Procedure, apiKey, authorization)
+			header := callInfo(c).RequestHeader()
+			apiKey, authorization := header.Get(APIKeyHeader), header.Get(AuthorizationHeader)
+			res, found, err := a.authenticate(c, spec.Procedure, apiKey, authorization)
 			p := res.principal
 			switch {
 			case errors.Is(err, errResolver):
@@ -172,31 +173,31 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 				count(c, ResultInvalid, credentialMethod(apiKey, authorization))
 				contextx.FromContext(c).Error("auth: credential resolver failed", "error", err)
 
-				return nil, authError(connect.CodeUnauthenticated, InvalidCredentialCode, errors.New("credential could not be verified"))
+				return authError(connect.CodeUnauthenticated, InvalidCredentialCode, errors.New("credential could not be verified"))
 			case errors.Is(err, errTokenRejected):
 				// Verified or not, the client learns one thing: it was not accepted.
 				// The reason (expired, bad signature, disabled, revoked...) is for the log.
 				count(c, ResultInvalid, MethodJWT)
 				contextx.FromContext(c).Debug("auth: bearer token rejected", "reason", err)
 
-				return nil, authError(connect.CodeUnauthenticated, InvalidCredentialCode, errors.New("token could not be verified"))
+				return authError(connect.CodeUnauthenticated, InvalidCredentialCode, errors.New("token could not be verified"))
 			case errors.Is(err, errUnboundDenied):
 				count(c, ResultInvalid, MethodJWT)
 
-				return nil, authError(connect.CodePermissionDenied, UnboundIdentityCode, errors.New("identity is not bound to an account"))
+				return authError(connect.CodePermissionDenied, UnboundIdentityCode, errors.New("identity is not bound to an account"))
 			case err != nil:
 				count(c, ResultInvalid, credentialMethod(apiKey, authorization))
 
-				return nil, authError(connect.CodeUnauthenticated, InvalidCredentialCode, err)
+				return authError(connect.CodeUnauthenticated, InvalidCredentialCode, err)
 			case !found && required:
 				count(c, ResultMissing, MethodNone)
 
-				return nil, authError(connect.CodeUnauthenticated, UnauthenticatedCode, errors.New("credentials required"))
+				return authError(connect.CodeUnauthenticated, UnauthenticatedCode, errors.New("credentials required"))
 			case !found:
 				count(c, ResultAnonymous, MethodNone)
 				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(AuthAnonymous))
 
-				return next(c, req)
+				return next(c, spec, stream)
 			}
 			if res.unbound {
 				// A verified token no account is bound to, on a procedure that lets
@@ -205,7 +206,7 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 				recordAuth(c, MethodJWT, "")
 				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(MethodJWT))
 
-				return next(contextx.WithExternalIdentity(c, *res.external), req)
+				return next(contextx.WithExternalIdentity(c, *res.external), spec, stream)
 			}
 			count(c, ResultOK, p.Method)
 			recordAuth(c, p.Method, p.Subject)
@@ -221,7 +222,7 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 				ctx = contextx.FromContext(contextx.WithExternalIdentity(ctx, *res.external))
 			}
 
-			return next(contextx.WithPrincipal(ctx, p), req)
+			return next(contextx.WithPrincipal(ctx, p), spec, stream)
 		}
 	}, nil
 }
@@ -510,8 +511,5 @@ func RequireRole(c context.Context, cfg config.Auth, role string) error {
 }
 
 func authError(code connect.Code, errorCode string, err error) error {
-	ce := connect.NewError(code, err)
-	ce.Meta().Set("x-error-code", errorCode)
-
-	return ce
+	return WithMeta(connect.NewError(code, err.Error()).WithCause(err), "x-error-code", errorCode)
 }

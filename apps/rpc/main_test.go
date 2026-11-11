@@ -12,13 +12,16 @@ import (
 	"testing"
 
 	"buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
+	"connectrpc.com/connect/v2/connectproto"
 
 	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
 // End-to-end through the wired graph: proto client → rpc adapter → decorated
@@ -55,38 +58,39 @@ func TestPlatform_E2E(t *testing.T) {
 	}
 	_ = vres.Body.Close()
 
-	client := identityv1connect.NewIdentityServiceClient(http.DefaultClient, ts.URL)
+	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
 	c := context.Background()
 
-	created, err := client.CreateAccount(c, connect.NewRequest(&identityv1.CreateAccountRequest{Name: "alice"}))
+	created, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: "alice"})
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	a := created.Msg.GetAccount()
-	got, err := client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: a.GetId()}))
-	if err != nil || got.Msg.GetAccount().GetName() != "alice" {
+	a := created.GetAccount()
+	got, err := client.GetAccount(c, &identityv1.GetAccountRequest{Id: a.GetId()})
+	if err != nil || got.GetAccount().GetName() != "alice" {
 		t.Fatalf("GetAccount: %v, %v", got, err)
 	}
 
 	var ce *connect.Error
-	if _, err := client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: "nope"})); !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
+	_, err = client.GetAccount(c, &identityv1.GetAccountRequest{Id: "nope"})
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
 		t.Fatalf("not found: err = %v", err)
 	}
-	if ce.Meta().Get("x-error-code") == "" {
+	if servertest.ErrorMeta(err).Get("x-error-code") == "" {
 		t.Fatal("missing x-error-code header")
 	}
 
 	// Shape errors are rejected by the protovalidate interceptor, before the
 	// use case: same code, the shared validation x-error-code, and the violated
 	// fields in a buf.validate.Violations detail.
-	_, err = client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{}))
-	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || ce.Meta().Get("x-error-code") != server.ValidationErrorCode {
+	_, err = client.GetAccount(c, &identityv1.GetAccountRequest{})
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || servertest.ErrorMeta(err).Get("x-error-code") != server.ValidationErrorCode {
 		t.Fatalf("empty request: err = %v", err)
 	}
 	if len(ce.Details()) != 1 {
 		t.Fatalf("details = %d, want violations", len(ce.Details()))
 	}
-	detail, err := ce.Details()[0].Value()
+	detail, err := connectproto.UnmarshalErrorDetail(ce.Details()[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,16 +101,16 @@ func TestPlatform_E2E(t *testing.T) {
 
 	// ListAccounts: cursor pagination end to end (3 accounts, pages of 2).
 	for _, name := range []string{"bob", "carol"} {
-		if _, err := client.CreateAccount(c, connect.NewRequest(&identityv1.CreateAccountRequest{Name: name})); err != nil {
+		if _, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: name}); err != nil {
 			t.Fatalf("CreateAccount %s: %v", name, err)
 		}
 	}
-	page1, err := client.ListAccounts(c, connect.NewRequest(&identityv1.ListAccountsRequest{PageSize: 2}))
-	if err != nil || len(page1.Msg.GetAccounts()) != 2 || page1.Msg.GetNextPageToken() == "" {
+	page1, err := client.ListAccounts(c, &identityv1.ListAccountsRequest{PageSize: 2})
+	if err != nil || len(page1.GetAccounts()) != 2 || page1.GetNextPageToken() == "" {
 		t.Fatalf("ListAccounts page 1: %v, %v", page1, err)
 	}
-	page2, err := client.ListAccounts(c, connect.NewRequest(&identityv1.ListAccountsRequest{PageSize: 2, PageToken: page1.Msg.GetNextPageToken()}))
-	if err != nil || len(page2.Msg.GetAccounts()) != 1 || page2.Msg.GetNextPageToken() != "" {
+	page2, err := client.ListAccounts(c, &identityv1.ListAccountsRequest{PageSize: 2, PageToken: page1.GetNextPageToken()})
+	if err != nil || len(page2.GetAccounts()) != 1 || page2.GetNextPageToken() != "" {
 		t.Fatalf("ListAccounts page 2: %v, %v", page2, err)
 	}
 
@@ -162,41 +166,41 @@ func TestPlatform_Protocols(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		client *http.Client
-		opts   []connect.ClientOption
+		opts   []connecthttp.Option
 	}{
 		{"connect", http.DefaultClient, nil},
-		{"grpc", h2cClient, []connect.ClientOption{connect.WithGRPC()}},
-		{"grpc-web", http.DefaultClient, []connect.ClientOption{connect.WithGRPCWeb()}},
+		{"grpc", h2cClient, []connecthttp.Option{connecthttp.WithGRPC()}},
+		{"grpc-web", http.DefaultClient, []connecthttp.Option{connecthttp.WithGRPCWeb()}},
 		{"connect/api", http.DefaultClient, nil},
-		{"grpc/api", h2cClient, []connect.ClientOption{connect.WithGRPC()}},
-		{"grpc-web/api", http.DefaultClient, []connect.ClientOption{connect.WithGRPCWeb()}},
+		{"grpc/api", h2cClient, []connecthttp.Option{connecthttp.WithGRPC()}},
+		{"grpc-web/api", http.DefaultClient, []connecthttp.Option{connecthttp.WithGRPCWeb()}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			base := ts.URL
 			if strings.HasSuffix(tt.name, "/api") {
 				base += server.RPCPrefix
 			}
-			client := identityv1connect.NewIdentityServiceClient(tt.client, base, tt.opts...)
+			client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(tt.client, base, append([]connecthttp.Option{connecthttp.WithReadMaxBytes(0)}, tt.opts...)...), servertest.WithErrorMeta()))
 			c := context.Background()
 
 			// Response meta travels as headers on every protocol, on errors too.
-			_, err := client.GetAccount(c, connect.NewRequest(&identityv1.GetAccountRequest{Id: "nope"}))
+			_, err := client.GetAccount(c, &identityv1.GetAccountRequest{Id: "nope"})
 			var ce *connect.Error
 			if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
 				t.Fatalf("err = %v, want NotFound", err)
 			}
-			if ce.Meta().Get(server.RequestIDHeader) == "" {
-				t.Fatalf("error without %s: %v", server.RequestIDHeader, ce.Meta())
+			if servertest.ErrorMeta(err).Get(server.RequestIDHeader) == "" {
+				t.Fatalf("error without %s: %v", server.RequestIDHeader, servertest.ErrorMeta(err))
 			}
 
-			req := connect.NewRequest(&identityv1.WhoAmIRequest{})
+			req := &identityv1.WhoAmIRequest{}
 			id := "client-" + strings.ReplaceAll(tt.name, "/", "-")
-			req.Header().Set(server.RequestIDHeader, id)
-			res, err := client.WhoAmI(c, req)
-			if err != nil {
+			c, info := connect.NewClientContext(c)
+			info.RequestHeader().Set(server.RequestIDHeader, id)
+			if _, err := client.WhoAmI(c, req); err != nil {
 				t.Fatal(err)
 			}
-			if got := res.Header().Get(server.RequestIDHeader); got != id {
+			if got := info.ResponseHeader().Get(server.RequestIDHeader); got != id {
 				t.Fatalf("%s = %q, want echo of the client's id", server.RequestIDHeader, got)
 			}
 		})

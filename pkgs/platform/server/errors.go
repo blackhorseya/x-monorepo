@@ -3,7 +3,7 @@ package server
 import (
 	"errors"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/kernel"
 )
@@ -16,15 +16,12 @@ const ConcurrentUpdateCode = "concurrent_update"
 // Internal and their message is hidden from clients. Shared by every BC's rpc adapter.
 func ToConnectError(err error) error {
 	if errors.Is(err, kernel.ErrConcurrentUpdate) {
-		ce := connect.NewError(connect.CodeAborted, errors.New("concurrent update, retry the request"))
-		ce.Meta().Set("x-error-code", ConcurrentUpdateCode)
-
-		return ce
+		return WithMeta(connect.NewError(connect.CodeAborted, "concurrent update, retry the request"), "x-error-code", ConcurrentUpdateCode)
 	}
 
 	var de *kernel.Error
 	if !errors.As(err, &de) {
-		return connect.NewError(connect.CodeInternal, errors.New("internal error"))
+		return connect.NewError(connect.CodeInternal, "internal error")
 	}
 
 	code := connect.CodeInternal
@@ -41,8 +38,5 @@ func ToConnectError(err error) error {
 		code = connect.CodePermissionDenied
 	}
 
-	ce := connect.NewError(code, errors.New(de.Message()))
-	ce.Meta().Set("x-error-code", de.Code())
-
-	return ce
+	return WithMeta(connect.NewError(code, de.Message()), "x-error-code", de.Code())
 }
