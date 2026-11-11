@@ -114,7 +114,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 | [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
-| [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 登入的現行規格（Dex 作為開發 IdP；多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、Console PKCE、撤銷、拆 PR #270–#274；未實作）；自建帳密 issuer 為可選模組（未排程） |
+| [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 的規格：多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、撤銷、拆 PR #270–#274（後端部分仍是現行）；Console 登入與 Dex 開發 IdP 的章節已不適用，只當歷史；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`pkgs/platform/archtest` 強制）
 

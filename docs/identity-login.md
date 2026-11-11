@@ -1,10 +1,11 @@
-# Identity：外部 OIDC 登入（Dex 作為開發 IdP）
+# Identity：外部 OIDC 登入
 
 <sub>← [README](../README.md) · [identity.md](identity.md)</sub>
 
-> **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）。** 這份是現行規格，實作拆成 #270–#274（§12）；PR 3（#271）已實作 identity BC 這一半，細節見 [`identity.md`](identity.md)「外部身分綁定」。
-> **現況（#561）：** Console 已沒有 OIDC 登入頁，repo 也不再附 Dex 與其 e2e（§8 的 Console 實作、§10 的 Dex 開發 IdP、§12 PR 5 的 `oidc-backend`／`oidc-dex` project 與 `web-e2e-dex`／`web-e2e-ports` 都已移除）；這幾段只當歷史記錄讀。後端（verifier、`(iss, sub)` 綁定）仍在 rpc 裡，這份文件隨後續 PR 處理。
-> x-monorepo 是通用 template：登入走**外部 OIDC（方案 B）**，本機開發與測試用 **Dex**；自建帳密 issuer（方案 A）降為可選模組，未排程（§13）。
+> **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）；其中 Console 與 Dex 的部分已於 #561 移除。** 實作拆成 #270–#274（§12）；identity BC 這一半的細節見 [`identity.md`](identity.md)「外部身分綁定」。
+> **仍是現行的（後端）**：rpc 的 OIDC token 驗證（`auth.oidc`、`pkgs/platform/oidc` 的 verifier）、憑證優先序（§3）、外部身分 `(iss, sub)` 綁定與邀請（`CreateInvite`／`ClaimInvite`）、`RevokeSessions` 與 `sessions_revoked_at`（§11 的後端部分）、`worker bootstrap --admin-email`；§10 的規則「非 https issuer 只在 loopback 或 `allow_insecure_issuer` 放行」是 verifier 的規則，仍成立。本 PR 沒動後端。
+> **已不適用（照章節操作不會成功，只當歷史記錄讀）**：Console 的 OIDC 登入、PKCE、`/login`、accounts 頁（§1 的「登入 Console」目標、§2 的 Q3 列與 Q5 列的 Console 部分、§8 整節、§9 的「Console 以 OIDC 為主」、§11 的「Console 登出」一條、§12 的 PR 5）；Dex 開發 IdP 與 `dex.localtest.me`、compose `extra_hosts`、kind CoreDNS、離線 `/etc/hosts`（§2 的 Q6 列、§10 的 Dex 條目與名稱解析、§12 的 PR 6、§14 第 1 列）；`oidc-backend`／`oidc-dex` e2e、`web-e2e-dex`／`web-e2e-ports`、`dex-prebind`（§12 的 PR 5／PR 6）；§14 第 12 列的 Console refresh 處理。repo 不附 IdP。
+> x-monorepo 是通用 template：外部 OIDC 是驗證端的擴充點（方案 B）；自建帳密 issuer（方案 A）降為可選模組，未排程（§13）。
 > API key 繼續用於機器對機器與 break-glass。**OIDC 預設關閉，關閉時行為與現在完全相同。**
 > 所有範例的 secret 都是佔位符（`<…>`），不是可用的值（紅線 R4）。
 

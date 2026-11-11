@@ -54,7 +54,7 @@ metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有
 - **account 不存在** → `NOT_FOUND` + `account.not_found`（同 `ListApiKeys` / `CreateInvite`）；`account_id` 為空由 protovalidate 擋（`INVALID_ARGUMENT`）；非 admin → `PERMISSION_DENIED`（先於 account 是否存在，不洩漏有無）。
 - **不分頁**：和 `ListApiKeys` 一樣是「單一 account 底下的子資源清單」，不是 `ListAccounts` 那種整體 collection（opaque page token）；一次回兩個清單也沒有單一 cursor 可用。綁定只在 claim / auto_provision 時新增；invite 則每次 `CreateInvite` 都多一筆，目前沒有上限也沒有清理，量大時要補分頁或清理（後續）。
 - `invites` 沒有 `account_id` 索引（只有 `(email, created_at desc, id desc)`），這支查詢會掃 `identity.invites`；表目前很小，所以不為它加 migration，量大再補 `(account_id, created_at desc, id desc)`。
-- 撤銷單一綁定／邀請**不在這支**（先經 Sean 決定）；Console `/accounts` 等 #273 合併後再接。
+- 撤銷單一綁定／邀請**不在這支**（先經 Sean 決定）；Console 的 `/accounts` 頁已隨 #561 移除。
 
 **`RevokeSessions` 只是「登出所有裝置」**：它設 `accounts.sessions_revoked_at = now`，`iat` 早於這個時間的 access token 在 resolver cache 過期後（≤ 30 秒）被拒；寫 audit（誰、哪個 account、何時，不記 token）。它**擋不住持有 IdP refresh token 的人**——對方能向 IdP 換到新 `iat` 的 token。**懷疑帳號被盜要用 `DisableAccount`**（對每個 token 都有效，包括 refresh 換出來的），再到 IdP 撤銷 refresh token 或重設憑證。proto 註解與 Console 文案都必須這樣寫（#273）。它不改 status / roles / key，所以沒有 last-admin guard。
 
@@ -106,7 +106,7 @@ Dashboard「x-monorepo / service」的 Identity row 有四張圖（lookups/s by 
 
 ### last_used_at（節流、best-effort）
 
-`api_keys.last_used_at`（nullable `timestamptz`，migration `0002`）記 key 最後一次通過驗證的時間，`ListApiKeys` 的 `last_use_time` 與 Console account 頁的「Last used」（沒用過顯示 `—`）讀它。它是**給人看的粗略指標，不是稽核紀錄**——要查「誰在什麼時候做了什麼」看 access line 的 `sub`（account id）與 `enduser.id`。
+`api_keys.last_used_at`（nullable `timestamptz`，migration `0002`）記 key 最後一次通過驗證的時間，`ListApiKeys` 的 `last_use_time` 讀它（Console 的 account 頁已隨 #561 移除）。它是**給人看的粗略指標，不是稽核紀錄**——要查「誰在什麼時候做了什麼」看 access line 的 `sub`（account id）與 `enduser.id`。
 
 驗證成功要寫 DB，但 hot path 不能每個 request 都寫，所以有兩層節流（`auth.last_used_interval`，預設 `1m`，`0` = 關）：
 
@@ -139,7 +139,7 @@ identity BC 這一半（#271）加上 auth interceptor 的串接（#272）。res
 
 ## 擴充路徑：外部 OIDC 登入
 
-現行規格見 [`docs/identity-login.md`](identity-login.md)：登入走**外部 OIDC**（本機開發用 Dex），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
+現行規格見 [`docs/identity-login.md`](identity-login.md)：登入走**外部 OIDC**（repo 不附開發 IdP，Dex 已移除），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
 自建帳密 issuer 降為可選模組（未排程），設計要點留在該文件的「方案 A」一節。先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
 
 ## 檔案
