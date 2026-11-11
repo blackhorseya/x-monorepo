@@ -96,6 +96,7 @@ func NewMetaInterceptor() connect.ServerInterceptor {
 // headers: the Connect protocol's unary form, whose error is the HTTP response
 // itself. Every other form (gRPC, gRPC-Web, Connect streaming) ends with trailers.
 func errorMetaInHeaders(info *connect.CallInfo, spec connect.Spec) bool {
+	// connect-go v2 exports no constant for the protocol name; "connect" is the value its CallInfo.Protocol documents.
 	return info.Protocol == "connect" && spec.StreamType == connect.StreamTypeUnary
 }
 

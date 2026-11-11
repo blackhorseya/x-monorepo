@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -13,7 +15,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect/v2"
-	"connectrpc.com/connect/v2/connecthttp"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -45,13 +46,22 @@ var slowSpec = connect.Spec{StreamType: connect.StreamTypeUnary, Procedure: "/te
 // callSlow makes the slow RPC over client (a Connect unary POST) and returns the body
 // the handler answered with, "done", with the status of the response.
 func callSlow(client *http.Client, base string) (string, error) {
-	var res wrapperspb.StringValue
-	rpc := connect.NewClient(connecthttp.NewTransport(client, base, connecthttp.WithReadMaxBytes(0)))
-	if err := rpc.CallUnary(context.Background(), slowSpec, &emptypb.Empty{}, &res); err != nil {
+	req, err := http.NewRequest(http.MethodPost, base+slowSpec.Procedure, strings.NewReader("{}"))
+	if err != nil {
 		return "", err
 	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out string
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode status %d body: %w", res.StatusCode, err)
+	}
 
-	return res.GetValue() + "/" + http.StatusText(http.StatusOK), nil
+	return out + "/" + http.StatusText(res.StatusCode), nil
 }
 
 // newTestServer builds a Server on a 127.0.0.1:0 listener and runs Serve on
