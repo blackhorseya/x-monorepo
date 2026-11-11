@@ -120,6 +120,7 @@
 
 ## 8. Console（Q3）
 
+> **已不適用（#561）：本節只當歷史，見文件開頭。**
 > 實作於 #273（`web/apps/console/src/oidc/`、`routes/login.tsx`、`routes/auth-callback.tsx`）。
 
 - **SPA 自己跑 Authorization Code + PKCE**：`state`、`nonce`、`code_verifier` 由 SPA 產生與驗證（PKCE 一律 `S256`）；scope 含 `openid profile email offline_access`（Dex 需要 `offline_access` 才發 refresh token）。**redirect URI = `<console origin>/auth/callback`**（IdP 的 client 要登記它；dev 的 Dex 見 `deployments/docker/dex/config.yaml`）。
@@ -157,6 +158,8 @@
 - Console 以 OIDC 為主；API key 登入入口見 §8。
 
 ## 10. 本機 issuer（Q6）
+
+> 前三條（Dex 的統一 issuer、名稱解析、離線 hosts）已不適用（#561），只當歷史；後兩條（非 https issuer 的放行規則、不提供 `jwks_url` override）是 verifier 的規則，仍是現行的。
 
 - 統一 issuer：**`http://dex.localtest.me:5556/dex`**（`localtest.me` 的公開 DNS 解析到 `127.0.0.1`）。
 - 容器內的解析：compose 用 `extra_hosts`、kind 用 CoreDNS rewrite，把 `dex.localtest.me` 指到 Dex 服務，讓瀏覽器（host）與 rpc（容器 / Pod）看到**同一個 issuer 字串**（`iss` 必須完全相符）。實作與做法見 docs/operations.md「Dex dev IdP」（#274 part 1）。

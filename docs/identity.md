@@ -139,7 +139,7 @@ identity BC 這一半（#271）加上 auth interceptor 的串接（#272）。res
 
 ## 擴充路徑：外部 OIDC 登入
 
-現行規格見 [`docs/identity-login.md`](identity-login.md)：登入走**外部 OIDC**（repo 不附開發 IdP，Dex 已移除），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
+規格見 [`docs/identity-login.md`](identity-login.md)（後端部分現行；Console 登入與 Dex 的章節已不適用，見該文開頭）：登入走**外部 OIDC**（repo 不附開發 IdP，Dex 已移除），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
 自建帳密 issuer 降為可選模組（未排程），設計要點留在該文件的「方案 A」一節。先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
 
 ## 檔案
