@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
+import { ADMIN_NO_DB_STATUS, probeResponse, routeProbe } from "../probe";
 import { settle, useKey } from "./helpers";
 
-// The admin capability probe (ListAccounts) against a server that really enforces the role.
+// The admin capability probe (ListPoison, limit 1) against a server that really enforces the role. The admin key's answer
+// is FAILED_PRECONDITION admin.no_database (HTTP 400): this server has no database, and the console reads it as "admin".
 // What the console must do with each answer, and with a credential change:
 //   - a probe that could not be answered (5xx, network) says nothing about the role: it is
 //     retried, and the admin UI appears once the server answers, on the same page, no reload;
@@ -11,7 +13,6 @@ import { settle, useKey } from "./helpers";
 //     answer still in flight for the previous credential must never open the admin UI.
 // Runs in the auth project: OPS_KEY has no role, ADMIN_KEY the admin role.
 
-const PROBE = "**/identity.v1.IdentityService/ListAccounts";
 const unavailable = { status: 503, json: { code: "unavailable", message: "e2e: injected" } };
 const unauthenticated = { status: 401, json: { code: "unauthenticated", message: "e2e: injected" } };
 const NOTICE = "Could not confirm admin access";
@@ -24,7 +25,7 @@ const poisonNav = (page: Page) => page.locator("header nav").getByRole("link", {
 test("admin: a probe that fails once with 503 recovers on the same page, same credential, no reload", async ({ page }) => {
   await seed(page, ADMIN_KEY);
   let calls = 0;
-  await page.route(PROBE, (route) => (++calls === 1 ? route.fulfill(unavailable) : route.continue()));
+  await routeProbe(page, (route) => (++calls === 1 ? route.fulfill(unavailable) : route.continue()));
   await page.goto("/prune");
   await expect(setButton(page)).toBeVisible({ timeout: 15_000 });
   await expect(poisonNav(page)).toBeVisible();
@@ -35,7 +36,7 @@ test("admin: a probe that fails once with 503 recovers on the same page, same cr
 test("admin: a probe that cannot reach the server (network failure) recovers the same way", async ({ page }) => {
   await seed(page, ADMIN_KEY);
   let calls = 0;
-  await page.route(PROBE, (route) => (++calls === 1 ? route.abort("connectionreset") : route.continue()));
+  await routeProbe(page, (route) => (++calls === 1 ? route.abort("connectionreset") : route.continue()));
   await page.goto("/prune");
   await expect(setButton(page)).toBeVisible({ timeout: 15_000 });
   expect(calls).toBeGreaterThanOrEqual(2);
@@ -45,11 +46,11 @@ test("unauthenticated is an answer, not a failure: no admin UI, no notice, no re
   await seed(page, OPS_KEY);
   await page.clock.install(); // the retry timers are ours to advance
   let calls = 0;
-  await page.route(PROBE, (route) => {
+  await routeProbe(page, (route) => {
     calls++;
     return route.fulfill(unauthenticated);
   });
-  const answered = page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts"));
+  const answered = probeResponse(page);
   await page.goto("/prune");
   await answered;
   await page.clock.runFor(30_000); // past every retry delay a failing probe would wait (500ms … 4s, ×3)
@@ -64,7 +65,7 @@ test("a new credential re-probes out of an unanswered probe, without Retry", asy
   await seed(page, OPS_KEY);
   let failing = true;
   const keys: string[] = [];
-  await page.route(PROBE, (route) => {
+  await routeProbe(page, (route) => {
     keys.push(route.request().headers()["x-api-key"] ?? "");
     return failing ? route.fulfill(unavailable) : route.continue();
   });
@@ -85,17 +86,15 @@ test("a late answer for the previous credential never opens the admin UI of the 
   const hold = new Promise<void>((r) => (release = r));
   let captured!: () => void;
   const adminAnswerInHand = new Promise<void>((r) => (captured = r));
-  await page.route(PROBE, async (route) => {
+  await routeProbe(page, async (route) => {
     if (route.request().headers()["x-api-key"] !== ADMIN_KEY) return route.continue();
-    const answer = await route.fetch(); // the admin key's real 200, in hand but not yet delivered
+    const answer = await route.fetch(); // the admin key's real answer (no database: HTTP 400), in hand but not yet delivered
     captured();
     await hold;
     await route.fulfill({ response: answer });
   });
-  const probeResponse = (status: number) =>
-    page.waitForResponse((r) => r.url().endsWith("/identity.v1.IdentityService/ListAccounts") && r.status() === status);
-  const opsDenied = probeResponse(403);
-  const lateAdmin = probeResponse(200);
+  const opsDenied = probeResponse(page, (r) => r.status === 403);
+  const lateAdmin = probeResponse(page, (r) => r.status === ADMIN_NO_DB_STATUS);
   opsDenied.catch(() => {}); // only awaited on the happy path
   lateAdmin.catch(() => {});
   try {
@@ -107,7 +106,7 @@ test("a late answer for the previous credential never opens the admin UI of the 
   } finally {
     release();
   }
-  await (await lateAdmin).body(); // the old 200 has reached the page
+  await (await lateAdmin).body(); // the old admin answer has reached the page
   await settle(page);
   await expect(setButton(page)).toHaveCount(0);
   await expect(poisonNav(page)).toHaveCount(0);

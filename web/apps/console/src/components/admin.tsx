@@ -9,7 +9,7 @@ import { ErrorAlert } from "./error-alert";
 // Does the current credential pass the server's admin check? Asked of the server (see
 // adminProbeQuery), so it follows auth.admin_role and auth.mode as configured. false until the
 // answer for this very credential is in, so the nav entry never flashes in and a late answer for
-// the previous credential cannot open it. A courtesy, not the gate: every identity RPC is still
+// the previous credential cannot open it. A courtesy, not the gate: every admin RPC is still
 // checked by the server.
 function useAdminProbe() {
   return useQuery(adminProbeQuery(useCredentialGeneration()));

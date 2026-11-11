@@ -1,26 +1,20 @@
-import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { Link, Outlet, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from "@tanstack/react-router";
 import { AdminGate, AdminProbeNotice, useIsAdmin } from "./components/admin";
-import { getCredential, getCredentialGeneration, useCredential } from "./auth";
-import { getConfig } from "./oidc/config";
+import { getCredentialGeneration } from "./auth";
 import { CredentialControl } from "./components/credential";
-import { ClaimInvite } from "./components/claim-invite";
 import { RouteError, RoutePending } from "./components/route-status";
-import { useUnbound } from "./oidc/unbound";
 import { ServerVersion } from "./components/version";
 import { queryClient } from "./queryClient";
 import { adminProbeQuery } from "./queries";
-import type { LoginSearch } from "./routes/login";
 import type { PruneSearch } from "./routes/prune";
 
 // Every page is its own chunk (lazyRouteComponent), fetched on first visit or on link intent
-// (defaultPreload). The search types above are type-only imports, so they cost nothing at runtime.
+// (defaultPreload). The search type above is a type-only import, so it costs nothing at runtime.
 
 // The pages whose RPCs the server answers to the admin role only.
 const adminLinks = [
   { to: "/poison", label: "Poison" },
   { to: "/prune", label: "Prune" },
-  { to: "/accounts", label: "Accounts" },
 ] as const;
 
 // An admin page behind AdminGate: for anyone else the page never mounts, so it asks the server
@@ -42,24 +36,12 @@ const gated = (Page: LazyPage): LazyPage => {
   return Gated;
 };
 
-// With OIDC on, the console is for signed-in people: anything but the login pages goes to /login
-// (remembering where it was headed). With OIDC off the console is open as before.
-const publicPaths = ["/login", "/auth/callback"];
-
 // Layout: the nav shows the admin pages only to a caller the server's admin check lets through
 // (with auth.mode=off that is everyone, as on the server). That is a courtesy, not a gate: the
 // server checks the role on every admin RPC.
 function Root() {
   const isAdmin = useIsAdmin();
-  // Signing out (or a session that ends) leaves the page that needed the credential.
-  const credential = useCredential();
-  const path = useRouterState({ select: (s) => s.location.pathname });
-  const navigate = useNavigate();
-  useEffect(() => {
-    if (getConfig().oidc && !credential && !publicPaths.includes(path)) void navigate({ to: "/login", replace: true });
-  }, [credential, path, navigate]);
-  const unbound = useUnbound();
-  const links = unbound || !isAdmin ? [] : adminLinks;
+  const links = isAdmin ? adminLinks : [];
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-8">
       <header className="mb-6 flex flex-wrap items-baseline gap-6">
@@ -74,7 +56,7 @@ function Root() {
         <CredentialControl />
       </header>
       <AdminProbeNotice />
-      {unbound && !publicPaths.includes(path) ? <ClaimInvite /> : <Outlet />}
+      <Outlet />
       <footer className="mt-10 flex justify-end text-xs text-muted-foreground">
         <ServerVersion />
       </footer>
@@ -82,39 +64,16 @@ function Root() {
   );
 }
 
-const rootRoute = createRootRoute({
-  component: Root,
-  beforeLoad: ({ location }) => {
-    if (!getConfig().oidc || getCredential() || publicPaths.includes(location.pathname)) return;
-    throw redirect({ to: "/login", search: { returnTo: location.pathname === "/" ? undefined : location.href } });
-  },
-});
-
-const loginRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/login",
-  component: lazyRouteComponent(() => import("./routes/login"), "LoginPage"),
-  validateSearch: (raw: Record<string, unknown>): LoginSearch => ({
-    returnTo: typeof raw.returnTo === "string" && raw.returnTo !== "" ? raw.returnTo : undefined,
-  }),
-});
-const authCallbackRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/auth/callback",
-  component: lazyRouteComponent(() => import("./routes/auth-callback"), "AuthCallbackPage"),
-});
+const rootRoute = createRootRoute({ component: Root });
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   beforeLoad: () => {
-    throw redirect({ to: "/accounts" });
+    throw redirect({ to: "/poison" });
   },
 });
 
-const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts", component: lazyRouteComponent(() => import("./routes/accounts"), "AccountsPage") });
-// A sibling of /accounts, not a child: the nav's prefix match lights Accounts up here too.
-const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/accounts/$id", component: lazyRouteComponent(() => import("./routes/account"), "AccountPage") });
 const poisonRoute = createRoute({ getParentRoute: () => rootRoute, path: "/poison", component: gated(lazyRouteComponent(() => import("./routes/poison"), "PoisonPage")) });
 const pruneRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -128,7 +87,7 @@ const pruneRoute = createRoute({
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, loginRoute, authCallbackRoute, accountsRoute, accountRoute, poisonRoute, pruneRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, poisonRoute, pruneRoute]),
   defaultPreload: "intent",
   defaultPendingComponent: RoutePending,
   defaultErrorComponent: RouteError,

@@ -1,25 +1,15 @@
 import { Code, ConnectError } from "@connectrpc/connect";
-import { CancelledError, infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import { getCredentialGeneration } from "./auth";
-import { admin, identity, isNotFound } from "./client";
+import { queryOptions } from "@tanstack/react-query";
+import { admin } from "./client";
 
 // GET /api/version (platform/buildinfo): plain JSON, not a Connect RPC.
 export type ServerVersion = { version: string; commit: string; date: string; go: string };
-
-// A list query is fresh for a second: remounting a list (or two components asking for the same page)
-// within a tick reuses the data instead of going back to the server.
-const LIST_STALE_MS = 1000;
 
 export const keys = {
   poison: ["poison"] as const,
   poisonDetail: (bc: string, offset: bigint) => ["poison", bc, String(offset)] as const,
   version: ["version"] as const,
   adminProbe: (generation: number) => ["admin-probe", generation] as const,
-  accounts: ["accounts"] as const,
-  account: (id: string) => ["account", id] as const,
-  apiKeys: (accountId: string) => ["api-keys", accountId] as const,
-  identities: (accountId: string, generation: number) => ["account-identities", accountId, generation] as const,
-  identitiesOf: (accountId: string) => ["account-identities", accountId] as const,
 };
 
 // x-error-code of the rpc answering "the role check passed, but there is no database" (pkgs/platform/admin).
@@ -94,59 +84,4 @@ export const adminProbeQuery = (generation: number) =>
     },
     staleTime: 60_000,
     gcTime: 60_000,
-  });
-
-// Accounts by id ascending, 20 per page. Created / disabled / re-roled from this console,
-// so no polling; the key starts with keys.accounts so a mutation invalidates every page.
-export const accountsQuery = infiniteQueryOptions({
-  queryKey: keys.accounts,
-  queryFn: async ({ pageParam }) => identity.listAccounts({ pageSize: 20, pageToken: pageParam }),
-  initialPageParam: "",
-  getNextPageParam: (last) => (last.nextPageToken === "" ? undefined : last.nextPageToken),
-  staleTime: LIST_STALE_MS,
-});
-
-// null = no such account.
-export const accountQuery = (id: string) =>
-  queryOptions({
-    queryKey: keys.account(id),
-    queryFn: async () => {
-      try {
-        return (await identity.getAccount({ id })).account ?? null;
-      } catch (err) {
-        if (isNotFound(err)) return null;
-        throw err;
-      }
-    },
-    staleTime: LIST_STALE_MS,
-  });
-
-// Who can sign in as one account: its bound external identities and its invites (any status), one
-// response, no paging. Admin only on the server; only the admin account pages ask for it. The reply
-// carries no secret (an invite has none), and the page shows only the fields it names.
-//
-// Keyed by the credential generation like the admin probe, and refused to run for any other one:
-// the credential control invalidates every query the moment it changes the credential, before the
-// admin gate has re-asked who the new credential is, so an active admin-only query would refetch
-// with the new (possibly role-less) credential. The guard makes that refetch a silent no-op, and
-// `enabled` (the caller passes the admin probe's answer for this generation) keeps the new key
-// from running until the new credential is known to be admin.
-export const accountIdentitiesQuery = (accountId: string, generation: number, enabled: boolean) =>
-  queryOptions({
-    queryKey: keys.identities(accountId, generation),
-    queryFn: async () => {
-      if (generation !== getCredentialGeneration()) throw new CancelledError({ silent: true });
-      const res = await identity.listAccountIdentities({ accountId });
-      return { identities: res.identities, invites: res.invites };
-    },
-    enabled,
-    staleTime: LIST_STALE_MS,
-  });
-
-// Every key of one account, REVOKED included, newest first (one response, no paging).
-export const apiKeysQuery = (accountId: string) =>
-  queryOptions({
-    queryKey: keys.apiKeys(accountId),
-    queryFn: async () => (await identity.listApiKeys({ accountId })).apiKeys,
-    staleTime: LIST_STALE_MS,
   });

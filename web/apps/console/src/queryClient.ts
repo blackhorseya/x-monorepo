@@ -10,8 +10,8 @@ export const queryClient = new QueryClient({
     // InvalidArgument, ...) is an answer and shows at once. One classifier for every query
     // (src/transient.ts): a query does not set its own `retry`.
     queries: { retry: shouldRetry, retryDelay },
-    // A mutation is never retried by the console: CreateAccount and the others change state, so
-    // re-sending one on a guess can repeat its effect: "one click, one effect".
+    // A mutation is never retried by the console: the admin writes change state, so
+    // re-sending one on a guess can repeat its effect (RequeuePoison, Prune): "one click, one effect".
     mutations: { retry: 0 },
   },
 });

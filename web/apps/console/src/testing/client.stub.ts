@@ -5,9 +5,9 @@ import { Code, ConnectError } from "@connectrpc/connect";
 export type Answer = { ok: unknown } | { fail: ConnectError };
 type Handler = (service: string, method: string) => Answer;
 
-// A success: the fields a queryFn unwraps (`.apiKeys`, `.messages`), empty. A queryFn that returns undefined is a
+// A success: the fields a queryFn unwraps (`.messages`), empty. A queryFn that returns undefined is a
 // react-query error, so an empty `{}` would turn "the retry succeeded" into a failure of its own.
-export const OK = { apiKeys: [], messages: [] };
+export const OK = { messages: [] };
 
 export const server = {
   calls: [] as string[],
@@ -38,7 +38,6 @@ function service(name: string) {
 
 type Rpc = Record<string, (req?: unknown) => Promise<any>>;
 export const admin = service("admin") as Rpc;
-export const identity = service("identity") as Rpc;
 
 export const isNotFound = (err: unknown): boolean => ConnectError.from(err).code === Code.NotFound;
 export const isUnauthenticated = (err: unknown): boolean => ConnectError.from(err).code === Code.Unauthenticated;

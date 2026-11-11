@@ -8,11 +8,14 @@ import { subject, useKey } from "./helpers";
 // control sets one, that it survives a reload (localStorage) and that Clear
 // goes back to anonymous. The admin role gate is covered on /poison. The JWT
 // kind and the write paths are in flows.spec.ts.
+//
+// Past the role gate this server has no database, so what an admin sees on /poison is the server's own
+// answer, admin.no_database: reaching it is what "the credential was accepted" looks like here.
 
 test("anonymous → wrong key → right key → reload → clear", async ({ page }) => {
-  await page.goto("/accounts");
+  await page.goto("/poison");
   await expect(subject(page)).toHaveText("anonymous");
-  // ListAccounts doubles as the admin probe: an answer of Unauthenticated is "not an admin", and the page shows the gate.
+  // ListPoison doubles as the admin probe: an answer of Unauthenticated is "not an admin", and the page shows the gate.
   await expect(page.getByText("Admin role required")).toBeVisible();
 
   await useKey(page, "not-a-key-0123456789");
@@ -20,17 +23,13 @@ test("anonymous → wrong key → right key → reload → clear", async ({ page
   await expect(page.getByText("Admin role required")).toBeVisible();
 
   await useKey(page, ADMIN_KEY);
-  await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(
-    page
-      .getByRole("row")
-      .filter({ hasText: /No accounts yet|ACTIVE|DISABLED/ })
-      .first()
-  ).toBeVisible();
+  await expect(page.getByText("Admin role required")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toContainText("admin.no_database");
 
   await page.reload();
   await expect(subject(page)).toHaveText("api key");
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("Admin role required")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toContainText("admin.no_database");
 
   await page.getByRole("button", { name: "Clear" }).click();
   await expect(subject(page)).toHaveText("anonymous");
