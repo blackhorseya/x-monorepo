@@ -58,7 +58,7 @@ func TestPlatform_E2E(t *testing.T) {
 	}
 	_ = vres.Body.Close()
 
-	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta()))
+	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
 	c := context.Background()
 
 	created, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: "alice"})
@@ -180,7 +180,7 @@ func TestPlatform_Protocols(t *testing.T) {
 			if strings.HasSuffix(tt.name, "/api") {
 				base += server.RPCPrefix
 			}
-			client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(tt.client, base, append([]connecthttp.Option{connecthttp.WithReadMaxBytes(0)}, tt.opts...)...), servertest.WithErrorMeta()))
+			client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(tt.client, base, tt.opts...), servertest.WithErrorMeta()))
 			c := context.Background()
 
 			// Response meta travels as headers on every protocol, on errors too.

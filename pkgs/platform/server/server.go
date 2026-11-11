@@ -187,9 +187,9 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	// generated handler did), not Unimplemented through the chain (what connecthttp.Mount's
 	// per-service catch-all would do).
 	mux := http.NewServeMux()
-	// v1 had no read limit; v2's default is 4 MiB per message. The pin keeps v1's
-	// behavior, so this change moves no limit (a limit is a decision for its own change).
-	connecthttp.Mount(mux, rpc, connecthttp.WithReadMaxBytes(0))
+	// One request message is read up to connect-go v2's default, 4 MiB (not a setting); a larger one
+	// is refused with resource_exhausted (readlimit_test.go).
+	connecthttp.Mount(mux, rpc)
 	procedures := map[string]bool{}
 	var prefixes []string
 	for spec := range rpc.Specs() {

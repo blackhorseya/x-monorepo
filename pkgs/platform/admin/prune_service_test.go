@@ -110,8 +110,8 @@ func TestPruneRPC(t *testing.T) {
 		}
 		return servertest.WithHeader(server.APIKeyHeader, key)
 	}
-	viewer := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withKey("viewer-key-0123456789")))
-	ops := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), withKey("ops-key-0123456789abcdef")))
+	viewer := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta(), withKey("viewer-key-0123456789")))
+	ops := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta(), withKey("ops-key-0123456789abcdef")))
 	day := durationpb.New(24 * time.Hour)
 
 	_, err = viewer.Prune(c, &adminv1.PruneRequest{OlderThan: day, DryRun: true})

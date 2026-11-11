@@ -76,7 +76,7 @@ func ping(t *testing.T, ts *httptest.Server, exp *tracetest.InMemoryExporter, pa
 		t.Fatal("the remote span context in the test is not valid")
 	}
 	exp.Reset()
-	client := connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL+strings.TrimSuffix(path, pingProcedure), connecthttp.WithReadMaxBytes(0)))
+	client := connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL+strings.TrimSuffix(path, pingProcedure)))
 	c, info := connect.NewClientContext(context.Background())
 	sent := http.Header{}
 	propagation.TraceContext{}.Inject(trace.ContextWithRemoteSpanContext(context.Background(), remote), propagation.HeaderCarrier(sent))
@@ -203,7 +203,7 @@ func TestTrace_TraceparentOnSuccessOnly(t *testing.T) {
 		for _, fail := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/fail=%v", mount, fail), func(t *testing.T) {
 				exp.Reset()
-				client := connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL+strings.TrimSuffix(path, pingProcedure), connecthttp.WithReadMaxBytes(0)))
+				client := connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL+strings.TrimSuffix(path, pingProcedure)))
 				c, info := connect.NewClientContext(context.Background())
 				if fail {
 					info.RequestHeader().Set("X-Fail", "1")

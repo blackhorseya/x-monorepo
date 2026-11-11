@@ -69,7 +69,7 @@ func TestTrace_RPCDistrustsAnExternalTraceparent(t *testing.T) {
 			ts := httptest.NewServer(srv.Handler())
 			t.Cleanup(ts.Close)
 
-			client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0))))
+			client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL)))
 			c, info := connect.NewClientContext(context.Background())
 			info.RequestHeader().Set("traceparent", "00-"+externalTrace+"-00f067aa0ba902b7-01")
 			if _, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: "tracer"}); err != nil {

@@ -79,9 +79,9 @@ func TestAuth_OIDCLogin(t *testing.T) {
 	c := context.Background()
 
 	with := servertest.WithHeader
-	admin := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), with(server.APIKeyHeader, opsKey)))
+	admin := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta(), with(server.APIKeyHeader, opsKey)))
 	now := time.Now()
-	alice := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL, connecthttp.WithReadMaxBytes(0)), servertest.WithErrorMeta(), with(server.AuthorizationHeader, "Bearer "+sign(jwt.MapClaims{
+	alice := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta(), with(server.AuthorizationHeader, "Bearer "+sign(jwt.MapClaims{
 		"iss": idp.URL, "sub": "alice-sub", "aud": client, "email": "alice@example.com", "email_verified": true,
 		"roles": []string{"admin"}, // never believed: roles come from the account
 		"iat":   now.Unix(), "exp": now.Add(time.Hour).Unix(),
