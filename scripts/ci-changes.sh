@@ -99,8 +99,8 @@ auth_src=false; { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'pk
 dex=false;    has 'deployments/docker/dex/*' 'deployments/docker/docker-compose.yaml' && dex=true
 # Inputs of scripts/test.sh outside scripts/, ci.yml, Taskfile.yml and .github/actions (those already run everything): .goreleaser.yaml (the
 # release image list cases), go.work (the MODULES
-# cases copy it), the console image's 18-console-env.envsh (its OIDC gate cases). Add a path here when a kept test.sh case starts reading a new one.
-scripts_src=false; has '.goreleaser.yaml' 'go.work' 'web/apps/console/deploy/18-console-env.envsh' && scripts_src=true
+# cases copy it). Add a path here when a kept test.sh case starts reading a new one.
+scripts_src=false; has '.goreleaser.yaml' 'go.work' && scripts_src=true
 
 
 any() { for v in "$@"; do [ "$v" = true ] && return 0; done; return 1; }

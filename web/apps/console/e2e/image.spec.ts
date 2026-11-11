@@ -58,17 +58,15 @@ test("/api is the rpc behind nginx; /healthz is nginx itself", async ({
   expect(await health.text()).toBe("ok\n");
 });
 
-// Runtime configuration: CONSOLE_* env → /config.json for the SPA and the CSP's connect-src.
+// The CSP is rendered from deploy/security-headers.inc.template by the entrypoint's envsubst (RPC_UPSTREAM is its only
+// whitelisted variable): the header has to come out whole. connect-src is exactly 'self' (the app only calls its own
+// origin, /api), and no `${...}` of a template variable may be left in it.
 const connectSrc = (csp: string) => csp.split(";").map((d) => d.trim()).find((d) => d.startsWith("connect-src"));
 
-test("no CONSOLE_* env: /config.json has an empty issuer (OIDC off), API key login on, never cached; connect-src stays 'self'", async ({
-  request,
-}) => {
-  const res = await request.get("/config.json");
-  expect(res.status()).toBe(200);
-  expect(res.headers()["content-type"]).toContain("application/json");
-  expect(res.headers()["cache-control"]).toBe("no-store");
-  expect(await res.json()).toEqual({ oidcIssuer: "", oidcClientId: "", apiKeyLogin: true });
-  const page = (await request.get("/poison")).headers();
-  expect(connectSrc(page["content-security-policy"])).toBe("connect-src 'self'");
+test("the CSP is fully rendered: connect-src is 'self' and no template variable is left in it", async ({ request }) => {
+  const csp = (await request.get("/poison")).headers()["content-security-policy"];
+  expect(csp, "the page has a CSP").toBeTruthy();
+  expect(connectSrc(csp)).toBe("connect-src 'self'");
+  expect(csp).not.toContain("${");
+  expect(csp).not.toContain("*");
 });
