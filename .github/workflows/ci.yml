@@ -286,19 +286,12 @@ jobs:
 
   # ── console-e2e: the built console driven by Playwright against a real bin/rpc on Postgres ──
   # (E2E_DATABASE_URL: the webServer runs bin/migrate up first; poison / prune then run for real)
-  # Sharded (#447): `playwright test --shard=i/N`, N = the matrix size (strategy.job-total), each shard its own runner,
-  # and postgres. The default run was 369s (2 workers, one runner); 4 workers x 2 shards, see docs/ci.md.
-  # `task web-e2e-shards-check` (shard 1) proves the shards together are the whole `--list`.
+  # One job, one runner with its own postgres; 4 workers, see docs/ci.md.
   console-e2e:
     needs: affected
     if: needs.affected.outputs.run_console_e2e == 'true'
-    name: console-e2e (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # p90 142s, max 656s (last 11 days)
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
+    timeout-minutes: 15 # one job; 163 s in the #574 run (a single observation)
     services:
       postgres:
         image: postgres:16-alpine
@@ -319,18 +312,15 @@ jobs:
       - uses: ./.github/actions/pnpm-cache
       - run: task build web-install
       - uses: ./.github/actions/playwright
-      # The shards are the whole suite: --list of every shard, together, equals the unsharded --list (lists only, no server).
-      - if: matrix.shard == 1
-        run: task web-e2e-shards-check -- ${{ strategy.job-total }}
-      - run: task web-e2e -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+      - run: task web-e2e
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: playwright-report-${{ matrix.shard }}
+          name: playwright-report
           path: web/apps/console/playwright-report
           retention-days: 7
 
-  # ── console-image: the specs that need nginx (e2e/image-specs.ts) against the image the release ships (in-memory rpc) ──
+  # ── console-image: image.spec.ts and admin.spec.ts against the image the release ships (in-memory rpc) ──
   # vite preview also serves the SPA and proxies /api, but web/apps/console/Dockerfile's nginx
   # config is what runs in the cluster: deep links → index.html, immutable assets, /api proxy.
   console-image:

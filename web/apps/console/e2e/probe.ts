@@ -18,14 +18,3 @@ export const isProbe = (r: Request) => r.url().endsWith(`/${LIST_POISON}`) && (r
 export function routeProbe(page: Page, handler: (route: Route) => Promise<void> | void) {
   return page.route(`**/${LIST_POISON}`, (route) => (isProbe(route.request()) ? handler(route) : route.fallback()));
 }
-
-/** Resolves with the next probe response that satisfies `want` (default: any). */
-export const probeResponse = (page: Page, want: (r: { status: number; key: string }) => boolean = () => true) =>
-  page.waitForResponse((r) => isProbe(r.request()) && want({ status: r.status(), key: r.request().headers()["x-api-key"] ?? "" }));
-
-/**
- * What an admin key's probe is answered with by the e2e rpc that has no database (the `auth` project's, and `chromium`'s
- * without E2E_DATABASE_URL): the role check passes, then the database check fails: FAILED_PRECONDITION =
- * HTTP 400 (x-error-code admin.no_database). The console reads that as "admin" (src/queries.ts).
- */
-export const ADMIN_NO_DB_STATUS = 400;

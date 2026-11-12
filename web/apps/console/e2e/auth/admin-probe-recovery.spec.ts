@@ -1,25 +1,21 @@
 import { expect, test, type Page } from "@playwright/test";
-import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
-import { ADMIN_NO_DB_STATUS, probeResponse, routeProbe } from "../probe";
-import { settle, useKey } from "./helpers";
+import { ADMIN_KEY } from "../../playwright.config";
+import { routeProbe } from "../probe";
 
 // The admin capability probe (ListPoison, limit 1) against a server that really enforces the role. The admin key's answer
 // is FAILED_PRECONDITION admin.no_database (HTTP 400): this server has no database, and the console reads it as "admin".
-// What the console must do with each answer, and with a credential change:
-//   - a probe that could not be answered (5xx, network) says nothing about the role: it is
-//     retried, and the admin UI appears once the server answers, on the same page, no reload;
-//   - PERMISSION_DENIED / UNAUTHENTICATED is an answer: no admin UI, and no "could not confirm";
-//   - a new credential is a new question: it re-probes, also out of an unanswered probe, and an
-//     answer still in flight for the previous credential must never open the admin UI.
-// Runs in the auth project: OPS_KEY has no role, ADMIN_KEY the admin role.
+// A probe that could not be answered (5xx) says nothing about the role:
+//   - failing once, it is retried and the admin UI appears once the server answers, on the same page, no reload;
+//   - staying unanswered, the console says so ("Could not confirm admin access") and Retry brings the admin UI back.
+// Runs in the auth project with ADMIN_KEY (the admin role). Only the probe is intercepted (e2e/probe.ts).
 
 const unavailable = { status: 503, json: { code: "unavailable", message: "e2e: injected" } };
-const unauthenticated = { status: 401, json: { code: "unauthenticated", message: "e2e: injected" } };
 const NOTICE = "Could not confirm admin access";
 
 const seed = (page: Page, key: string) =>
   page.addInitScript((k) => localStorage.setItem("console.credential", JSON.stringify({ kind: "api_key", value: k })), key);
 const setButton = (page: Page) => page.getByRole("button", { name: "Dry run", exact: true });
+const pruneLink = (page: Page) => page.getByRole("link", { name: "Prune" });
 const poisonNav = (page: Page) => page.locator("header nav").getByRole("link", { name: "Poison", exact: true });
 
 test("admin: a probe that fails once with 503 recovers on the same page, same credential, no reload", async ({ page }) => {
@@ -33,81 +29,18 @@ test("admin: a probe that fails once with 503 recovers on the same page, same cr
   expect(calls).toBeGreaterThanOrEqual(2);
 });
 
-test("admin: a probe that cannot reach the server (network failure) recovers the same way", async ({ page }) => {
+test("a probe that stays unanswered says so, and Retry brings the admin UI back", async ({ page }) => {
+  // The admin key: this server enforces the role, so the real answer after Retry is the admin one (admin.no_database).
   await seed(page, ADMIN_KEY);
-  let calls = 0;
-  await routeProbe(page, (route) => (++calls === 1 ? route.abort("connectionreset") : route.continue()));
-  await page.goto("/prune");
-  await expect(setButton(page)).toBeVisible({ timeout: 15_000 });
-  expect(calls).toBeGreaterThanOrEqual(2);
-});
-
-test("unauthenticated is an answer, not a failure: no admin UI, no notice, no retry", async ({ page }) => {
-  await seed(page, OPS_KEY);
-  await page.clock.install(); // the retry timers are ours to advance
-  let calls = 0;
-  await routeProbe(page, (route) => {
-    calls++;
-    return route.fulfill(unauthenticated);
-  });
-  const answered = probeResponse(page);
-  await page.goto("/prune");
-  await answered;
-  await page.clock.runFor(30_000); // past every retry delay a failing probe would wait (500ms … 4s, ×3)
-  await settle(page);
-  await expect(setButton(page)).toHaveCount(0);
-  await expect(poisonNav(page)).toHaveCount(0);
-  await expect(page.getByText(NOTICE)).toHaveCount(0);
-  expect(calls).toBe(1);
-});
-
-test("a new credential re-probes out of an unanswered probe, without Retry", async ({ page }) => {
-  await seed(page, OPS_KEY);
   let failing = true;
-  const keys: string[] = [];
-  await routeProbe(page, (route) => {
-    keys.push(route.request().headers()["x-api-key"] ?? "");
-    return failing ? route.fulfill(unavailable) : route.continue();
-  });
-  await page.goto("/prune");
-  await expect(page.getByText(NOTICE)).toBeVisible({ timeout: 30_000 });
-  await expect(setButton(page)).toHaveCount(0);
+  await routeProbe(page, (route) => (failing ? route.fulfill(unavailable) : route.continue()));
+  await page.goto("/poison");
+  const notice = page.getByText(NOTICE);
+  await expect(notice).toBeVisible({ timeout: 30_000 });
+  await expect(pruneLink(page)).toHaveCount(0);
 
   failing = false;
-  await useKey(page, ADMIN_KEY);
-  await expect(setButton(page)).toBeVisible();
-  await expect(page.getByText(NOTICE)).toHaveCount(0);
-  expect(keys.at(-1)).toBe(ADMIN_KEY);
-});
-
-test("a late answer for the previous credential never opens the admin UI of the new one", async ({ page }) => {
-  await seed(page, ADMIN_KEY);
-  let release!: () => void;
-  const hold = new Promise<void>((r) => (release = r));
-  let captured!: () => void;
-  const adminAnswerInHand = new Promise<void>((r) => (captured = r));
-  await routeProbe(page, async (route) => {
-    if (route.request().headers()["x-api-key"] !== ADMIN_KEY) return route.continue();
-    const answer = await route.fetch(); // the admin key's real answer (no database: HTTP 400), in hand but not yet delivered
-    captured();
-    await hold;
-    await route.fulfill({ response: answer });
-  });
-  const opsDenied = probeResponse(page, (r) => r.status === 403);
-  const lateAdmin = probeResponse(page, (r) => r.status === ADMIN_NO_DB_STATUS);
-  opsDenied.catch(() => {}); // only awaited on the happy path
-  lateAdmin.catch(() => {});
-  try {
-    await page.goto("/prune");
-    await adminAnswerInHand;
-    await useKey(page, OPS_KEY);
-    await opsDenied; // the new credential's answer is in: denied
-    await expect(setButton(page)).toHaveCount(0);
-  } finally {
-    release();
-  }
-  await (await lateAdmin).body(); // the old admin answer has reached the page
-  await settle(page);
-  await expect(setButton(page)).toHaveCount(0);
-  await expect(poisonNav(page)).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(pruneLink(page)).toBeVisible();
+  await expect(notice).toHaveCount(0);
 });

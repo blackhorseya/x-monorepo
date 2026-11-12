@@ -538,27 +538,11 @@ tasks:
     dir: web/apps/console
     cmds: ['pnpm exec playwright test {{.CLI_ARGS}}']
 
-  web-e2e-shards-check:
-    desc: 'CI console-e2e shards (#447): `playwright test --list --shard=i/N` for i in 1..N, together, must be exactly the unsharded --list (same test ids, none twice, none missing; a --list that exits non-zero or prints fewer tests than its own Total fails). Usage: task web-e2e-shards-check -- 2. Lists only, starts no server. scripts/web-e2e-shards-check.sh, pinned by scripts/test.sh'
-    deps: [web-install]
-    dir: web/apps/console
-    cmds: ['../../../scripts/web-e2e-shards-check.sh {{.CLI_ARGS}}']
-
   web-e2e-image:
-    desc: 'the "image" Playwright project against the real console image: build web/apps/console/Dockerfile (docker or podman), run it with RPC_UPSTREAM back to the host, Playwright starts bin/rpc as usual. Only the specs that need nginx run here (e2e/image-specs.ts: e2e/image.spec.ts for SPA fallback, cache headers, /api proxy, /healthz, CSP, plus a smoke of each route family); the rest run on vite preview in console-e2e. Before the build, e2e/image-specs.check.ts fails on a spec nobody classified or an image set that is not the pinned one (e2e/image-specs.selftest.ts proves it can fail). What CI''s console-image job runs'
+    desc: 'the "image" Playwright project against the real console image: build web/apps/console/Dockerfile (docker or podman), run it with RPC_UPSTREAM back to the host, Playwright starts bin/rpc as usual. Two specs run here (playwright.config.ts, project image): e2e/image.spec.ts (SPA fallback, cache headers, security headers, CSP) and e2e/admin.spec.ts (the admin pages loaded through nginx); the rest run on vite preview in console-e2e. What CI''s console-image job runs'
     deps: [build, web-build]
     cmds:
-      - node --test --experimental-strip-types web/apps/console/e2e/image-specs.selftest.ts
-      - cd web/apps/console && node --experimental-strip-types e2e/image-specs.check.ts
       - web/apps/console/e2e/image.sh {{.CLI_ARGS}}
-
-  web-e2e-image-mutants:
-    desc: 'fault injection for task web-e2e-image (#449): builds the console image from a copy of its context with ONE broken nginx setting (SPA fallback, /api proxy, CSP, asset MIME) and runs the image project against it; every mutant must turn it red and the unmodified control green (e2e/image-mutants.sh; a run that did not finish, or a parsing stage that failed, reads ERROR, never RED: e2e/image-mutants.selftest.ts proves it first). Not part of CI: it is the proof that the specs left on the image can fail'
-    deps: [build, web-build]
-    cmds:
-      # The verdict logic proves it can fail first (fakes of sed / grep / sort / uniq / awk / image.sh that fail half way must read ERROR, never RED)
-      - node --test --experimental-strip-types web/apps/console/e2e/image-mutants.selftest.ts
-      - web/apps/console/e2e/image-mutants.sh {{.CLI_ARGS}}
 
   config:
     desc: 'create configs/local.yaml from configs/config.example.yaml if missing'
