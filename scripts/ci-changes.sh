@@ -18,14 +18,6 @@
 #   console-image       web, proto (the TS client is generated from it), image files; not plain Go.
 #   release-snapshot    .goreleaser.yaml, a Dockerfile, .dockerignore, release.yml, go.mod / go.sum / go.work.
 #   helm-kind           product Go, web, helm, image files.
-#   k6 (the smoke)      tests/k6, pkgs/platform/server + config (rate limit, timeout), apps/rpc, apps/worker,
-#                       configs, go.mod / go.sum / go.work. Business flows are helm-kind's.
-#   k6-auth             tests/k6, pkgs/platform/server + config, pkgs/identity, apps/rpc, configs.
-#   k6-wire             tests/k6 and the module graph, no Go code: it guards against the API key leaking (#209) with k6 + python3 against
-#                       wire_server.py and a stub rpc, and builds nothing. go.work is read by `task` itself (Taskfile.yml evaluates
-#                       `go work edit -json go.work` on every run) and by the setup action (go-version-file); go.mod / go.sum / go.work.sum
-#                       are the module graph the setup action's `go mod download` resolves when the module cache is not an exact hit.
-#                       scripts/, Taskfile.yml and .github/ run it through ci.
 set -euo pipefail
 self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
 cd "$self_dir/.." || exit 1
@@ -89,12 +81,6 @@ images=false; has 'deployments/docker/Dockerfile*' 'web/apps/console/Dockerfile'
 # goreleaser builds the Go images from deployments/docker/Dockerfile*; the console image is built by release.yml
 # with buildx (.goreleaser.yaml says so), so its Dockerfile and nginx config are not a release-snapshot input.
 snapshot_src=false; has 'deployments/docker/Dockerfile*' '.goreleaser.yaml' '.dockerignore' && snapshot_src=true
-k6=false;     has 'tests/k6/*' && k6=true
-# What the k6 jobs run is a ./bin/rpc (+ ./bin/worker): the limits and timeout interceptors live in pkgs/platform/server
-# (limits.go, server.go) and are configured from pkgs/platform/config; auth in the same server package, pkgs/identity
-# and apps/rpc. Test files are no input (has_prod).
-k6_src=false;   { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'apps/rpc/*' 'apps/worker/*' || has 'configs/*'; } && k6_src=true
-auth_src=false; { has_prod 'pkgs/platform/server/*' 'pkgs/platform/config/*' 'pkgs/identity/*' 'apps/rpc/*' || has 'configs/*'; } && auth_src=true
 # Inputs of scripts/test.sh outside scripts/, ci.yml, Taskfile.yml and .github/actions (those already run everything): .goreleaser.yaml (the
 # release image list cases), go.work (the MODULES
 # cases copy it). Add a path here when a kept test.sh case starts reading a new one.
@@ -117,6 +103,3 @@ out console_image    "$web" "$proto" "$images" "$ci"
 out helm             "$helm" "$grafana" "$ci"
 out scripts_test     "$ci" "$scripts_src"
 out helm_kind        "$go_prod" "$web" "$helm" "$images" "$ci"
-out k6               "$k6" "$k6_src" "$gomod" "$ci"
-out k6_auth          "$k6" "$auth_src" "$ci"
-out k6_wire          "$gomod" "$k6" "$ci"

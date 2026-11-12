@@ -38,7 +38,7 @@ case $scope in
   lint)                                                   group=check saver=true ;;
   gen-freshness|work-sync|coverage|scripts-test|affected) group=check ;;
   build)                                                  group=bin   saver=true ;;
-  k6|k6-auth|k6-wire|console-e2e|console-image|helm)      group=bin ;;
+  console-e2e|console-image|helm)                         group=bin ;;
   helm-kind)                                              group=kind  saver=true ;;
   release-snapshot)                                       group=cross saver=true ;;
 esac

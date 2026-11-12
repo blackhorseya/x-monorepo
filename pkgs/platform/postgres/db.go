@@ -40,8 +40,9 @@ import (
 // must go to that host:port, or NewDB returns an error naming the expected
 // target and nothing else from the URL. The URL is parsed once, and that parse
 // opens the pool. Empty = no check. Only the target is
-// enforced here; the TLS requirement is `worker bootstrap`'s alone, because
-// local development and in-cluster services legitimately run without it.
+// enforced here; the TLS requirement (a ConnPolicy without AllowPlaintext) is for
+// a caller that asks for it, because local development and in-cluster services
+// legitimately run without it.
 //
 // TranslateError makes the driver surface gorm.ErrDuplicatedKey /
 // ErrForeignKeyViolated instead of raw pgconn codes, so BC repositories can
