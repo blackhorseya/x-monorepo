@@ -2,7 +2,7 @@
 
 <sub>← [README](../README.md)</sub>
 
-> **狀態：歷史記錄（#561）。** identity bounded context（`pkgs/identity`、`protos/identity`、它的 migration、`worker bootstrap`）已從 template 移除，下文的正文是移除前的設計，**不是現況**，照著操作不會成功。仍然成立的只有 platform 的擴充點（`server.CredentialResolver`、`server.ExternalIdentityResolver`、`server.RequireRole`、`auth.api_keys`）本身，它們的現行行為以程式與 [config.md](config.md) 為準。要自己做一個 identity，這份文件可當設計參考，不是可直接套用的規格。後續（#561 PR③）會把仍成立的規則搬到 `docs/auth.md` 並刪除本文。
+> **狀態：歷史記錄（#561）。** identity bounded context（`pkgs/identity`、`protos/identity`、它的 migration、`worker bootstrap`）已從 template 移除，下文的正文是移除前的設計，**不是現況**。怎麼讀：凡是描述 identity BC（帳號、API key 管理、外部身分綁定、邀請、撤銷、bootstrap、`identity_resolver_*` 指標與告警）、Console 的 OIDC 登入、Dex 的內容，都已隨 #561 移除，只當歷史記錄讀，照著操作不會成功。描述 `pkgs/platform`（auth interceptor、OIDC verifier、JWKS、它們的指標與告警、`auth.*` 設定）行為的內容仍是現行，但以程式與 [config.md](config.md) 為準：本文對 platform 的敘述有幾處與程式不完全一致，會在 #561 PR③ 搬到 `docs/auth.md` 時修正。template 的 rpc 沒有接 `server.ExternalIdentityResolver`，`auth.oidc.enabled: true` 會在啟動時被拒絕；repo 不附 IdP。要自己做一個 identity，這份文件可當設計參考，不是可直接套用的規格。後續（#561 PR③）會把仍成立的規則搬到 `docs/auth.md` 並刪除本文。
 
 `pkgs/identity` 是一個 bounded context：**DB 管理的 account 與 API key**，給 rpc server 的 auth interceptor 解 `X-API-Key`。
 它只做 verifier——JWT 仍由 `auth.jwt` 指的外部 issuer 發；它不發 event、不消費 event（沒有 outbox / inbox / poison 表）。
@@ -141,7 +141,7 @@ identity BC 這一半（#271）加上 auth interceptor 的串接（#272）。res
 
 ## 擴充路徑：外部 OIDC 登入
 
-規格見 [`docs/identity-login.md`](identity-login.md)（後端部分現行；Console 登入與 Dex 的章節已不適用，見該文開頭）：登入走**外部 OIDC**（repo 不附開發 IdP，Dex 已移除），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
+規格見 [`docs/identity-login.md`](identity-login.md)（讀法見該文開頭）：登入走**外部 OIDC**（repo 不附開發 IdP，Dex 已移除），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
 自建帳密 issuer 降為可選模組（未排程），設計要點留在該文件的「方案 A」一節。先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
 
 ## 檔案

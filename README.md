@@ -106,8 +106,8 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/config.md`](docs/config.md) | 所有 config key、預設值、env 覆寫規則、`auth.*` |
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
-| [`docs/identity.md`](docs/identity.md) | 歷史記錄：identity BC（#561 已從 template 移除）的設計與擴充路徑；仍現行與已不適用的內容怎麼分，見該文開頭 |
-| [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 的規格：platform 的 verifier 與 JWKS 規則仍是現行；Console 登入、Dex、identity BC 的綁定／邀請／撤銷已移除，只當歷史；讀法見該文開頭 |
+| [`docs/identity.md`](docs/identity.md) | 歷史記錄：identity BC（#561 已從 template 移除）的設計；讀法見該文開頭 |
+| [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 的規格：identity BC、Console 登入、Dex 的內容已移除，只當歷史；描述 platform 行為的內容仍現行但以程式與 config.md 為準；讀法見該文開頭 |
 
 ## Dependency rules（`pkgs/platform/archtest` 強制）
 

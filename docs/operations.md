@@ -84,10 +84,9 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 
 ### Upgrade notes — chart 0.3.79：移除 identity bounded context（#561）
 
-這一版把 identity bounded context 從 template 移除：`pkgs/identity`、`protos/identity`、它的 migration、`worker bootstrap`（含 `task bootstrap`）、Console 的 identity 頁與 OIDC 登入（#562）、k6 測試與 CI job、Grafana 的 identity 面板列與告警。**不寫 DROP migration**，也不提供原地升級路徑。platform 的擴充點（OIDC verifier、`server.CredentialResolver`、`server.ExternalIdentityResolver`）保留。
+這一版把 identity bounded context 從 template 移除：`pkgs/identity`、`protos/identity`、它的 migration、`worker bootstrap`（含 `task bootstrap`）、Console 的 identity 頁與 OIDC 登入（#562）、k6 測試與 CI job、Grafana 的 identity 面板列與告警。**不寫 DROP migration**（既有資料庫怎麼辦見下）。platform 的擴充點（OIDC verifier、`server.CredentialResolver`、`server.ExternalIdentityResolver`）保留。
 
-- **既有資料庫要重建**（#561 的決定：template 不提供從含 identity 的版本原地升級的路徑）。要沿用既有 DB 就自己備份、手動 `DROP SCHEMA identity CASCADE;`；沒有程式替你做。
-- **identity schema 原樣留下**：新 `migrate` 的清單是空的，`up`／`down`／`version` 對留著 `identity` schema 的資料庫都不輸出、不報錯、不碰它；`identity.schema_migrations` 也不動（`apps/migrate/main_test.go` 的 `TestRun_LeavesAnUnknownSchemaAlone`）。新安裝不會建立它。
+- **既有資料庫**：template 不寫 DROP migration。升級後 `identity` schema 與 `identity.schema_migrations` 原樣留著，沒有任何程式再讀寫它。實測：新 `migrate` 的清單是空的，`up`／`down`／`version` 對留著 `identity` schema 的資料庫都不輸出、不報錯、不碰它（`apps/migrate/main_test.go` 的 `TestRun_LeavesAnUnknownSchemaAlone`）；新 `worker` 對這樣的資料庫正常啟動、收到 SIGTERM 正常結束（發版前在 PR 分支用一次性資料庫手動測，沒有留成自動測試）；新 rpc 對這樣的資料庫**未實測**。不需要這些資料就自己備份後移除（`DROP SCHEMA identity CASCADE;` 是常見寫法，**本 repo 沒有驗過**）；要從乾淨狀態開始就重建資料庫。新安裝不會建立 `identity` schema。
 - **行為**：
   - rpc 不再有 `identity.v1`（帳號、API key 管理、外部身分綁定、邀請、撤銷、`WhoAmI` 都沒有了，路由已不存在，呼叫不會成功）；`worker bootstrap` 與 `task bootstrap` 移除（`worker bootstrap` 現在是 `unknown command`）。靜態 `auth.api_keys` 與 `auth.jwt` 是僅有的兩種內建憑證。
   - **`auth.mode` 是 `optional` 或 `required` 而 `auth.api_keys`、`auth.jwt` 都沒設，rpc 現在拒絕啟動**（以前靠 identity 資料庫裡的 key 就能起來）。
@@ -97,7 +96,7 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 - **監控**：`identity_resolver_*` 指標、告警 group `rpc-identity`（Identity resolver errors）與 Grafana 的「Identity」面板列移除；JWKS stale 告警與「Auth」面板列保留（它們量的是 platform 的 verifier 與 auth interceptor）。
 - **k6**：`tests/k6/`、`task k6*` 與 CI 的 `k6`、`k6-auth`、`k6-wire` job 移除（#561 的決定：template 不附壓測腳本）。
 - **image**：第一個不含 identity 的 image tag 預計是 v0.70.0，**尚未發布**。
-- **回滾界線**：只寫實測到的。新 binary 帶著舊 values 的 `auth.last_used_interval` 照常啟動，所以 chart 0.3.78 的 values 配新 image 在這一項不會被擋；其他組合（舊 chart 的 migrate hook 配新 migrate、舊 ConfigMap 的其他鍵）**未實測**。回退到含 identity 的版本需要 `identity` schema：新 migrate 不會刪它，沒有手動 `DROP` 的話它還在；回退後舊版 rpc／worker 與這個 schema 的互動**未實測**。清除 schema 之前先確認不需要回滾。
+- **回滾界線**：只寫實測到的。實測：新 binary 帶著舊 values 的 `auth.last_used_interval` 照常啟動，所以 chart 0.3.78 的 values 配新 image 在這一項不會被擋；`identity` schema 沒被新 `migrate` 動過（上面的測試），所以回退到含 identity 的版本時它的資料還在。**未實測**：舊 chart 的 migrate hook 配新 migrate、舊 ConfigMap 的其他鍵、舊版 migrate／rpc／worker 接回這個 schema 後能否正常運作。
 
 ### Upgrade notes — chart 0.3.73：移除 catalog 與 catalog-rpc（#518 切片 2）
 
