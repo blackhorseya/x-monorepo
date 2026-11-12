@@ -282,7 +282,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 | dto 無方法、不 import domain / proto；port 只有 interface | 邊界純度 | archtest |
 | adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*usecase.X` | decorator 生效 | archtest |
 | generated code 和 source 一致；go.mod 無漂移 | 一致性 | CI `gen-freshness`、`work-sync` |
-| domain 100% coverage | 測試 | `cover-gate.sh` |
+| domain 100% coverage（`go.work` 沒有 BC 時不檢查） | 測試 | `cover-gate.sh` |
 | request 形狀（必填、範圍、格式）在 proto 宣告、進 use case 前就擋 | 邊界 | **protovalidate**（`platform/server/validate.go`） |
 
 archtest 只看 AST，零依賴，毫秒級；規則表在 `archtest.DefaultRules()`，BC 可用 `RunRules` 自選。

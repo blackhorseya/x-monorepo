@@ -34,7 +34,9 @@ for m in $mods; do
 done
 if [[ "$checked" -eq 0 ]]; then
   # a BC is every pkgs/<name> but kernel and platform: with none there is no domain to cover, and that is the template as it
-  # ships; with a BC but no */domain/* package the glob or the layout is wrong, and a gate that checked nothing must not pass
+  # ships; with a BC but no */domain/* package the glob or the layout is wrong, and a gate that checked nothing must not pass.
+  # The pkgs/ directories are deliberately used instead of scripts/bcs.jq: they are a superset of go.work's BC set, so when the
+  # two disagree the gate can only turn red, never pass.
   bcs=0
   for d in pkgs/*/; do
     d=${d%/}; [[ "${d##*/}" == kernel || "${d##*/}" == platform ]] || bcs=$((bcs + 1))
