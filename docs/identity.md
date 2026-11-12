@@ -64,7 +64,7 @@ metrics label 不變（`auth_decisions_total{result, method}`，method 仍只有
 併發：這三個 use case 在同一個 transaction 內先 `AdminCensus.LockAdmins`（Postgres：`SELECT … FOR UPDATE` 鎖住 ACTIVE 且帶該 role 的 account 列，`ORDER BY id` 讓鎖序一致，再另一條 statement 算可用 key——不能合成一條 join，否則等鎖後 `api_keys` 還是舊 snapshot），**之後**才載入要改的 aggregate。「key 是否過期」用的 now 也是拿到鎖**之後**才讀（`LockAdmins` 回傳判斷當下的時間，use case 沿用它）：在鎖前排隊時過期的備援 key 不算。所以兩個 admin 同時互相停用、同一個 admin 的兩把 key 同時撤銷，只有一個會成功，另一個拿到 `identity.last_admin`。in-memory 的 `Transactor` 讓 writer 一次一個。沒有 migration（`api_keys_account_idx` 已涵蓋 `account_id`）。偏保守的方向：與 `EnableAccount`／新 admin 同時進行時，新加入的 admin 若不在這次鎖到的集合裡，可能多拿一個 `identity.last_admin`，重試即可。`ResolveAPIKey`／`TouchLastUsed` 不鎖。
 **不算在內**：config `auth.api_keys` 的 static key 不是 DB account，guard 看不到它；它是 guard 之外的 break-glass——DB 裡最後一個 admin 被擋下時，static admin key 仍可操作，但 static key 不會讓 guard 放行（DB 的最後一個 admin 一樣不能停用）。要保留 break-glass 就在 config 留一把 `name=<key>:admin`。
 
-**啟動行為的改變**：以前 `auth.mode: required` 但 `api_keys` 與 `jwt` 都空會開不起來；現在合法（resolver 一個人也能答），但 DB 空的話就是「auth 開著、沒有任何 credential 能過」的 fail-closed server——`server.New` 會印一行 Warn。Helm 少掛 secret 不再 CrashLoop，而是鎖在外面，看 log。
+**啟動行為的改變（移除前的歷史敘述，不是現況）**：以前 `auth.mode: required` 但 `api_keys` 與 `jwt` 都空會開不起來；現在合法（resolver 一個人也能答），但 DB 空的話就是「auth 開著、沒有任何 credential 能過」的 fail-closed server——`server.New` 會印一行 Warn。Helm 少掛 secret 不再 CrashLoop，而是鎖在外面，看 log。（移除 identity 後這句不再成立：template 的 rpc 沒有接 resolver，`auth.mode` 開而沒有 `api_keys`／`auth.jwt` 會拒絕啟動，見 `docs/operations.md` 的 chart 0.3.79 upgrade notes。）
 
 **Bootstrap**：`task bootstrap`（= `worker bootstrap`，use case `identity.bootstrap`）在**沒有任何 account** 的 store 上一個 transaction 建第一個 account（`--name root`、`--role` 預設 `auth.admin_role`）和它的第一把 key（`--key-name bootstrap`、`--expires-in 0` = 永不過期），secret 只印到 stdout 一次、不進 log。已有 account 就印 `already bootstrapped` 並 exit 0，但**只在操作者本機跑**（經 `kubectl port-forward` 連 DB，見 `docs/operations.md`；`--expect-target host:port` 必填，連線只准連它），不要放進叢集的 Job——secret 是 stdout，會進 Pod log；guard 是 read 不是 constraint（`accounts.name` 沒有 unique），兩個 run 在空 store 上搶跑會各建一個——從一個地方跑一次。拿印出來的 key 再 `CreateAccount` / `CreateApiKey` 建真正的帳號；config `auth.api_keys`（`root=<key>:admin`）不再是必經路，留著當 break-glass。沒有 seed migration。
 
@@ -141,7 +141,7 @@ identity BC 這一半（#271）加上 auth interceptor 的串接（#272）。res
 
 ## 擴充路徑：外部 OIDC 登入
 
-規格見 [`docs/identity-login.md`](identity-login.md)（讀法見該文開頭）：登入走**外部 OIDC**（repo 不附開發 IdP，Dex 已移除），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉，關閉時本文件描述的行為不變。
+規格見 [`docs/identity-login.md`](identity-login.md)（讀法見該文開頭）：登入走**外部 OIDC**（repo 不附開發 IdP，Dex 已移除），本 BC 負責 `(iss, sub)` 到 account 的綁定、email 邀請、role 管理與 `sessions_revoked_at` 撤銷；多 issuer verifier 與 JWKS 在 platform。OIDC 預設關閉；以下是移除前的設計敘述，「關閉時本文件描述的行為不變」只對移除前的版本成立。（移除 identity 後這句不再成立：template 的 rpc 沒有接 resolver，`auth.mode` 開而沒有 `api_keys`／`auth.jwt` 會拒絕啟動，見 `docs/operations.md` 的 chart 0.3.79 upgrade notes。）
 自建帳密 issuer 降為可選模組（未排程），設計要點留在該文件的「方案 A」一節。先前這裡的草稿（`Login` 用 `auth.jwt.hs256_secret` 簽 HS256）已被取代：共用對稱 secret 讓每個 verifier 都能偽造 token，不重用。
 
 ## 檔案

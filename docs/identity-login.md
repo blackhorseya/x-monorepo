@@ -5,7 +5,7 @@
 > **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）；Console、Dex 與 identity BC 已於 #561 移除。** 實作拆成 #270–#274（§12）。
 > **怎麼讀這份文件（#561 之後）**：凡是描述 identity BC（帳號、API key 管理、外部身分綁定、邀請、撤銷、bootstrap、`identity_resolver_*` 指標與告警）、Console 的 OIDC 登入、Dex 的內容，都已隨 #561 移除，只當歷史記錄讀，照著操作不會成功。描述 `pkgs/platform`（auth interceptor、OIDC verifier、JWKS、它們的指標與告警、`auth.*` 設定）行為的內容仍是現行，但以程式與 [config.md](config.md) 為準：本文對 platform 的敘述有幾處與程式不完全一致，會在 #561 PR③ 搬到 `docs/auth.md` 時修正。template 的 rpc 沒有接 `server.ExternalIdentityResolver`，`auth.oidc.enabled: true` 會在啟動時被拒絕；repo 不附 IdP。後續（#561 PR③）會把仍成立的規則搬到 `docs/auth.md` 並刪除本文。
 > x-monorepo 是通用 template：外部 OIDC 是驗證端的擴充點（方案 B）；自建帳密 issuer（方案 A）降為可選模組，未排程（§13）。
-> API key 繼續用於機器對機器與 break-glass。**OIDC 預設關閉，關閉時行為與現在完全相同。**
+> API key 繼續用於機器對機器與 break-glass。**OIDC 預設關閉，關閉時行為與當時（#269 定案時）完全相同。**（歷史設計目標；現況見文件開頭，`auth.mode` 開而無憑證來源的 rpc 現在拒絕啟動。）
 > 所有範例的 secret 都是佔位符（`<…>`），不是可用的值（紅線 R4）。
 
 ## 1. 目標與非目標
@@ -15,7 +15,7 @@
 - 人（員工與客戶）從**同一個 IdP 入口**登入 Console，拿到 IdP 簽發的 access token 呼叫 RPC。
 - token 經 auth interceptor 解成同一個 `contextx.Principal`（`Subject` = account id、`Roles` = account roles、`Method` = `jwt`）；下游用 principal 的 usecase **不用改**。
 - 密碼、MFA、帳號復原、登入節流全部由 IdP 負責；我們只做 verifier、帳號對應與撤銷。
-- 預設關閉；關閉時錯誤碼、metrics label、Principal 與現在逐字相同。
+- 預設關閉；關閉時錯誤碼、metrics label、Principal 與當時逐字相同（歷史設計目標，不是這個 head 的保證）。
 
 **非目標**
 
@@ -201,7 +201,7 @@
 
 - PR 2：`iss` 不符、`aud` 不含 client id、過期超過 60 秒、`alg=none` / HS256、`alg` 與 JWK 不一致、未知 `kid` 30 秒內重抓不超過一次、重抓失敗沿用舊 key 且滿 24 小時後拒絕、非 https 且非 loopback 且無旗標 → 拒絕啟動。
 - PR 3（真 Postgres）：同一 `(iss, sub)` 並發綁定只有一個成功；邀請過期 / 重用 / `email_verified=false` / email 不符皆拒絕；`auto_provision` 建出的帳號沒有 role；`iat` 早於 `sessions_revoked_at` 拒絕、缺 `iat` 拒絕；撤銷寫入 audit。
-- PR 4：DB 錯誤拒絕且不 cache；停用 account 後 30 秒內拒絕；未綁定身分呼叫非 `ClaimInvite` → `PERMISSION_DENIED`；OIDC 關閉時既有行為逐字不變。
+- PR 4（舊 PR 的驗收，歷史）：DB 錯誤拒絕且不 cache；停用 account 後 30 秒內拒絕；未綁定身分呼叫非 `ClaimInvite` → `PERMISSION_DENIED`；OIDC 關閉時既有行為逐字不變。
 - PR 5：Playwright（真 Chromium + 真 rpc；IdP 以 `page.route()` 模擬（`auth` project），另有 `oidc-backend` project 用 loopback ES256 IdP 對**真 rpc** 驗 token 接受、未綁定 → ClaimInvite、撤銷 session、不是 rpc 設定的 IdP 簽的 token 被拒（`auth.invalid_credential`）；該 rpc 的 issuer 由 IdP 的 port 現場產生（`e2e/oidc-backend/rpc-server.ts`），console 的 origin 取自 project 的 `baseURL`，所以 `E2E_RPC_PORT`／`E2E_WEB_PORT` 換掉也對得上（#383，`task web-e2e-ports`）；真 Dex 由 `oidc-dex` project（`E2E_DEX=1`，`task web-e2e-dex`）：真 Chromium 走 Dex 登入表單 → 未綁定 → `CreateInvite` + `ClaimInvite` 綁定 → 再登入直接進；錯密碼留在 Dex）；登入、reload 靜默 refresh、登出後 access token 不在任何 Web Storage、`console.apiKeyLogin` 關閉時入口消失。
 - PR 6：kind 內 issuer 解析一致；JWKS stale alert 觸發；E2E 走完 bootstrap → 邀請 → 登入。
 
