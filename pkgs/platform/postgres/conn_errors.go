@@ -19,12 +19,12 @@ import (
 // message can name the role or echo a setting value, and either can quote a
 // piece of the connection string; a password with an unencoded @ or one that
 // looks like a setting makes even "which host" a secret. So the message is
-// built here from fixed words, and only the operator's own expect_target (a
-// value they typed, and one the connection was checked against) may appear in
-// it. A host parsed from the URL is never printed: pgx does not validate it, a
-// password with an unencoded @ has part of itself cut out as the host, and a
-// piece of a password can look exactly like a host name, so no check on the
-// parsed value is enough. That is what expect_target is for.
+// built here from fixed words, and only postgres.expect_target (the value the
+// connection was checked against) may appear in it. A host parsed from the URL
+// is never printed: pgx does not validate it, a password with an unencoded @ has
+// part of itself cut out as the host, and a piece of a password can look
+// exactly like a host name, so no check on the parsed value is enough. That is
+// what expect_target is for.
 //
 // The category stays checkable: errors.Is answers for the causes in the original
 // chain (context.DeadlineExceeded, syscall.ECONNREFUSED and the like), and
@@ -59,7 +59,7 @@ func (e *connError) As(target any) bool {
 }
 
 // redactConnErr reduces err, from opening or pinging a connection, to a
-// connError. target is the operator's postgres.expect_target, or "".
+// connError. target is postgres.expect_target, or "".
 func redactConnErr(err error, target string) error {
 	if err == nil {
 		return nil
