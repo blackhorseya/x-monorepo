@@ -31,18 +31,25 @@ func TestNew(t *testing.T) {
 			if err == nil && (x.ID() != tc.id || x.Name() != tc.in || !x.CreatedAt().Equal(now)) {
 				t.Fatalf("New() = %v %q %v, want the inputs back", x.ID(), x.Name(), x.CreatedAt())
 			}
+			if err == nil && x.ID().String() != string(tc.id) {
+				t.Fatalf("ID().String() = %q, want %q", x.ID().String(), tc.id)
+			}
 		})
 	}
 }<% if .Events %>
 
 func TestNewRaisesCreatedOnce(t *testing.T) {
-	x, err := <% .Name %>.New("id-1", "a name", time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC))
+	now := time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
+	x, err := <% .Name %>.New("id-1", "a name", now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	evs := x.PullEvents()
 	if len(evs) != 1 || evs[0].AggregateID() != "id-1" {
 		t.Fatalf("PullEvents() = %v, want one Created for id-1", evs)
+	}
+	if evs[0].<% .Title %>ID() != "id-1" || !evs[0].OccurredAt().Equal(now) {
+		t.Fatalf("event = %v at %v, want id-1 at %v", evs[0].<% .Title %>ID(), evs[0].OccurredAt(), now)
 	}
 	if again := x.PullEvents(); len(again) != 0 {
 		t.Fatalf("PullEvents() again = %v, want none", again)
