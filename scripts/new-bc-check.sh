@@ -41,6 +41,8 @@ for bc in cisample cisampleevents; do
   step "pkgs/$bc: vet, lint, test"
   (cd "pkgs/$bc" && go vet ./... && "$repo/bin/golangci-lint" run ./... && go test -count=1 -shuffle=on ./...)
 done
+step "domain coverage gate: every generated domain package must be at 100% (scripts/cover-gate.sh)"
+scripts/cover-gate.sh
 step "pkgs/platform: the repo-wide module guards see the new BCs (every module carries the pgtest cleanup gate)"
 (cd pkgs/platform && go test -count=1 -run '^TestTestCleanup_' ./archtest/)
 for app in rpc worker migrate; do
