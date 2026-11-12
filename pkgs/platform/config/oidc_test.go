@@ -89,7 +89,7 @@ func TestOIDCConfig_Rejected(t *testing.T) {
 	}
 }
 
-// docs/identity-login.md §3: with OIDC on and the legacy auth.jwt configured,
+// With OIDC on and the legacy auth.jwt configured,
 // auth.jwt.issuer must be set and differ from every OIDC issuer — otherwise a
 // wildcard legacy verifier overlaps the OIDC trust boundary.
 func TestOIDCConfig_LegacyJWTIssuerPin(t *testing.T) {

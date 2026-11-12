@@ -38,9 +38,11 @@ auth:
     audience: ""
     hs256_secret: ""
     public_key: ""
-  # External OIDC token verifier (docs/identity-login.md). Off: nothing below is read. When on, every
-  # issuer needs its audience (our client id); http issuers pass only on a loopback host or with
-  # allow_insecure_issuer (dev only). auth.jwt above, if also set, must pin its own issuer.
+  # External OIDC token verifier (platform/oidc). Off: nothing below is read. When on, every issuer needs
+  # its audience (our client id); http issuers pass only on a loopback host or with allow_insecure_issuer
+  # (dev only). auth.jwt above, if also set, must pin its own issuer. The template's rpc wires no
+  # server.ExternalIdentityResolver, so enabled: true is refused at start until you implement one and
+  # wire it in apps/rpc/wire.go.
   oidc:
     enabled: false
     issuers: []
@@ -48,15 +50,12 @@ auth:
     #    audience: my-client-id
     #    mapping: bound              # bound (default) | auto_provision
     #    allow_insecure_issuer: true # only for an http issuer on a non-loopback host; dev only
-  # Procedures that never need a credential: ["/identity.v1.IdentityService/WhoAmI"]
+  # Procedures that never need a credential, as "/<package>.<Service>/<Method>".
   public: []
-  # Bound on one identity-BC key lookup (X-API-Key the config does not know; auth runs outside
+  # Bound on one server.CredentialResolver lookup (an X-API-Key the config does not know; auth runs outside
   # http.timeout). A stuck database rejects fast instead of holding every request. 0 = unbounded.
+  # The template's rpc wires no resolver, so this only matters once you add one.
   resolver_timeout: 2s
-  # How often an identity API key's last_used_at is written (Console "Last used", ListApiKeys
-  # last_use_time): at most once per key per interval, off the request path, best-effort (a failed
-  # write never fails the request). It caps the write rate, not the staleness: with several replicas the column can trail by nearly two intervals. 0 = never record.
-  last_used_interval: 1m
 
 log:
   level: debug  # debug | info | warn | error

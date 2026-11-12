@@ -272,7 +272,9 @@ tasks:
       - >-
         {{shellQuote .BUF}} generate --path protos/admin --template
         '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/platform/contract/admin/v1","opt":["path=openapi.yaml","base=protos/admin/v1/openapi.base.yaml"]}]}'
+      # no BC at all is a valid skeleton: BCS is then empty, and `for` still runs once with an empty ITEM
       - for: { var: BCS, split: "\n" }
+        if: '{{ne .ITEM ""}}'
         cmd: >-
           {{shellQuote .BUF}} generate --path protos/{{.ITEM}} --template
           '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/{{.ITEM}}/contract/v1","opt":["path=openapi.yaml","base=protos/{{.ITEM}}/v1/openapi.base.yaml"]}]}'

@@ -3,7 +3,6 @@ module github.com/blackhorseya/x-monorepo/apps/migrate
 go 1.27
 
 require (
-	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/spf13/cobra v1.10.2
 )
@@ -117,4 +116,3 @@ replace (
 	github.com/blackhorseya/x-monorepo/pkgs/platform => ../../pkgs/platform
 )
 
-replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity

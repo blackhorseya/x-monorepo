@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	claimInvite = "/identity.v1.IdentityService/ClaimInvite"
-	otherProc   = "/identity.v1.IdentityService/ListAccounts"
+	// unboundOK is the one procedure the fake resolver lets an unbound identity call (AllowsUnbound answers true for it).
+	unboundOK   = "/admin.v1.AdminService/GetPoison"
+	otherProc   = "/admin.v1.AdminService/ListPoison"
 	oidcToken   = "eyJ.oidc-token-body.sig" // what the fake verifier knows
 	apiKeyValue = "ci-key-0123456789abcdef"
 )
@@ -158,21 +159,21 @@ func TestOIDC_AloneIsAValidConfiguration(t *testing.T) {
 	}
 }
 
-// A token that verifies but is bound to no account may call ClaimInvite and
+// A token that verifies but is bound to no account may call UnboundOK and
 // nothing else; the handler gets the verified identity from the context, and
 // there is no principal.
 func TestOIDC_UnboundIdentity(t *testing.T) {
-	r := &fakeExternal{err: server.ErrUnboundIdentity, unbind: map[string]bool{claimInvite: true}}
+	r := &fakeExternal{err: server.ErrUnboundIdentity, unbind: map[string]bool{unboundOK: true}}
 
-	out := runOIDC(t, requiredCfg, &fakeVerifier{}, r, claimInvite, bearer(oidcToken))
+	out := runOIDC(t, requiredCfg, &fakeVerifier{}, r, unboundOK, bearer(oidcToken))
 	if out.err != nil || out.nextCalls != 1 {
-		t.Fatalf("ClaimInvite: err %v, handler ran %d times", out.err, out.nextCalls)
+		t.Fatalf("UnboundOK: err %v, handler ran %d times", out.err, out.nextCalls)
 	}
 	if !out.principal.IsAnonymous() {
 		t.Errorf("an unbound identity has no principal, got %+v", out.principal)
 	}
 	if !out.hasExt || out.ext.Issuer != extID.Issuer || out.ext.Subject != extID.Subject || out.ext.Email != extID.Email || !out.ext.EmailVerified {
-		t.Errorf("ClaimInvite must see the verified identity in the context, got %+v (present %v)", out.ext, out.hasExt)
+		t.Errorf("UnboundOK must see the verified identity in the context, got %+v (present %v)", out.ext, out.hasExt)
 	}
 
 	out = runOIDC(t, requiredCfg, &fakeVerifier{}, r, otherProc, bearer(oidcToken))
@@ -184,13 +185,13 @@ func TestOIDC_UnboundIdentity(t *testing.T) {
 	wantReject(t, out, connect.CodePermissionDenied, server.UnboundIdentityCode)
 }
 
-// A bound identity calling ClaimInvite is an ordinary principal call: the
+// A bound identity calling UnboundOK is an ordinary principal call: the
 // interceptor does not special-case it (the use case refuses a second bind).
-func TestOIDC_BoundIdentityCallsClaimInviteAsPrincipal(t *testing.T) {
-	r := &fakeExternal{p: boundPrincipal, unbind: map[string]bool{claimInvite: true}}
-	out := runOIDC(t, requiredCfg, &fakeVerifier{}, r, claimInvite, bearer(oidcToken))
+func TestOIDC_BoundIdentityCallsUnboundOKAsPrincipal(t *testing.T) {
+	r := &fakeExternal{p: boundPrincipal, unbind: map[string]bool{unboundOK: true}}
+	out := runOIDC(t, requiredCfg, &fakeVerifier{}, r, unboundOK, bearer(oidcToken))
 	if out.err != nil || out.principal.Subject != "acc-1" || !out.hasExt {
-		t.Fatalf("bound ClaimInvite: err %v, principal %+v, identity present %v", out.err, out.principal, out.hasExt)
+		t.Fatalf("bound UnboundOK: err %v, principal %+v, identity present %v", out.err, out.principal, out.hasExt)
 	}
 }
 
@@ -217,9 +218,9 @@ func TestOIDC_ResolverFailureRejects(t *testing.T) {
 	if !strings.Contains(out.logs, "db down") {
 		t.Errorf("resolver failure must be logged, logs: %q", out.logs)
 	}
-	// An unbound identity on ClaimInvite is not a way past a failing lookup.
-	r.unbind = map[string]bool{claimInvite: true}
-	out = runOIDC(t, requiredCfg, &fakeVerifier{}, r, claimInvite, bearer(oidcToken))
+	// An unbound identity on UnboundOK is not a way past a failing lookup.
+	r.unbind = map[string]bool{unboundOK: true}
+	out = runOIDC(t, requiredCfg, &fakeVerifier{}, r, unboundOK, bearer(oidcToken))
 	wantReject(t, out, connect.CodeUnauthenticated, server.InvalidCredentialCode)
 }
 
@@ -227,7 +228,7 @@ func TestOIDC_ResolverFailureRejects(t *testing.T) {
 // over — in time, timed out (the answer arrives after auth.resolver_timeout),
 // cancelled by the caller — against every way the resolver can answer, an
 // expired context is a refusal and the answer is not read: not "success", and
-// not "unbound" either, which would otherwise let a ClaimInvite through
+// not "unbound" either, which would otherwise let a UnboundOK through
 // (reviewer F1 of #290, #294). In time, each answer keeps its own class.
 func TestOIDC_ResolverOutcomeMatrix(t *testing.T) {
 	type verdict struct {
@@ -246,10 +247,10 @@ func TestOIDC_ResolverOutcomeMatrix(t *testing.T) {
 		// inTime is what each procedure gets when the context is alive.
 		inTime map[string]verdict
 	}{
-		{"success", boundPrincipal, nil, map[string]verdict{claimInvite: allow, otherProc: allow}},
-		{"unbound", contextx.Principal{}, server.ErrUnboundIdentity, map[string]verdict{claimInvite: allow, otherProc: denyUnbound}},
-		{"refused", contextx.Principal{}, fmt.Errorf("%w: account is disabled", server.ErrCredentialRefused), map[string]verdict{claimInvite: reject, otherProc: reject}},
-		{"infra error", contextx.Principal{}, errors.New("db down"), map[string]verdict{claimInvite: reject, otherProc: reject}},
+		{"success", boundPrincipal, nil, map[string]verdict{unboundOK: allow, otherProc: allow}},
+		{"unbound", contextx.Principal{}, server.ErrUnboundIdentity, map[string]verdict{unboundOK: allow, otherProc: denyUnbound}},
+		{"refused", contextx.Principal{}, fmt.Errorf("%w: account is disabled", server.ErrCredentialRefused), map[string]verdict{unboundOK: reject, otherProc: reject}},
+		{"infra error", contextx.Principal{}, errors.New("db down"), map[string]verdict{unboundOK: reject, otherProc: reject}},
 	}
 	timings := []struct {
 		name    string
@@ -281,9 +282,9 @@ func TestOIDC_ResolverOutcomeMatrix(t *testing.T) {
 
 	for _, tm := range timings {
 		for _, res := range results {
-			for _, procedure := range []string{claimInvite, otherProc} {
+			for _, procedure := range []string{unboundOK, otherProc} {
 				t.Run(tm.name+"/"+res.name+"/"+procedure, func(t *testing.T) {
-					r := &fakeExternal{p: res.p, err: res.err, unbind: map[string]bool{claimInvite: true}}
+					r := &fakeExternal{p: res.p, err: res.err, unbind: map[string]bool{unboundOK: true}}
 					out := tm.run(t, r, procedure)
 
 					want := res.inTime[procedure]
@@ -298,7 +299,7 @@ func TestOIDC_ResolverOutcomeMatrix(t *testing.T) {
 							t.Errorf("principal = %+v, want the account's", out.principal)
 						}
 						if res.err != nil && (!out.principal.IsAnonymous() || !out.hasExt) {
-							t.Errorf("an unbound ClaimInvite carries the verified identity and no principal, got %+v (identity %v)", out.principal, out.hasExt)
+							t.Errorf("an unbound UnboundOK carries the verified identity and no principal, got %+v (identity %v)", out.principal, out.hasExt)
 						}
 
 						return
@@ -318,8 +319,8 @@ func TestOIDC_ResolverOutcomeMatrix(t *testing.T) {
 func TestOIDC_ResolverHonouringTheDeadlineIsRefused(t *testing.T) {
 	cfg := requiredCfg
 	cfg.ResolverTimeout = 10 * time.Millisecond
-	r := &fakeExternal{lateAnswer: true, honour: true, unbind: map[string]bool{claimInvite: true}}
-	out := runOIDC(t, cfg, &fakeVerifier{}, r, claimInvite, bearer(oidcToken))
+	r := &fakeExternal{lateAnswer: true, honour: true, unbind: map[string]bool{unboundOK: true}}
+	out := runOIDC(t, cfg, &fakeVerifier{}, r, unboundOK, bearer(oidcToken))
 	wantReject(t, out, connect.CodeUnauthenticated, server.InvalidCredentialCode)
 }
 

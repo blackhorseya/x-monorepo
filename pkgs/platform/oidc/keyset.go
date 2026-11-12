@@ -28,7 +28,7 @@ import (
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 )
 
-// JWKS rules (docs/identity-login.md §7). Key parsing, storage, the periodic
+// JWKS rules. Key parsing, storage, the periodic
 // refresh and the unknown-kid refetch are MicahParks/keyfunc and jwkset; this
 // file is the thin adapter around them: discovery, the 24 h stale bound, the
 // key-type check, the unknown-kid gate and the fetch metrics.

@@ -55,7 +55,7 @@ message PoisonMessage {
 }
 
 message ListPoisonRequest {
-  // Schema name of the BC ("identity"); empty = every BC the server hosts.
+  // Schema name of the BC ("orders"); empty = every BC the server hosts.
   string bounded_context = 1;
   // Rows per BC, oldest first; 0 = server default (50), at most 500.
   int32 limit = 2 [(buf.validate.field).int32 = {
@@ -111,7 +111,7 @@ message DropPoisonResponse {
 }
 
 message PruneRequest {
-  // Schema name of the BC ("identity"); empty = every BC the server hosts.
+  // Schema name of the BC ("orders"); empty = every BC the server hosts.
   string bounded_context = 1;
   // Rows younger than this are kept whatever their state. Required, positive.
   google.protobuf.Duration older_than = 2 [

@@ -5,7 +5,6 @@ go 1.27
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	connectrpc.com/connect/v2 v2.0.2
-	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -128,4 +127,3 @@ replace (
 	github.com/blackhorseya/x-monorepo/pkgs/platform => ../../pkgs/platform
 )
 
-replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity

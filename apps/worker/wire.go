@@ -27,4 +27,3 @@ func Initialize(cfg *config.AppConfig) (*Worker, func(), error) {
 
 	return nil, nil, nil
 }
-

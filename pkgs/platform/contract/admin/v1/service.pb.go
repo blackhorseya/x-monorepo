@@ -140,7 +140,7 @@ func (x *PoisonMessage) GetPayload() []byte {
 
 type ListPoisonRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Schema name of the BC ("identity"); empty = every BC the server hosts.
+	// Schema name of the BC ("orders"); empty = every BC the server hosts.
 	BoundedContext string `protobuf:"bytes,1,opt,name=bounded_context,json=boundedContext,proto3" json:"bounded_context,omitempty"`
 	// Rows per BC, oldest first; 0 = server default (50), at most 500.
 	Limit         int32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
@@ -545,7 +545,7 @@ func (x *DropPoisonResponse) GetCount() int32 {
 
 type PruneRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Schema name of the BC ("identity"); empty = every BC the server hosts.
+	// Schema name of the BC ("orders"); empty = every BC the server hosts.
 	BoundedContext string `protobuf:"bytes,1,opt,name=bounded_context,json=boundedContext,proto3" json:"bounded_context,omitempty"`
 	// Rows younger than this are kept whatever their state. Required, positive.
 	OlderThan *durationpb.Duration `protobuf:"bytes,2,opt,name=older_than,json=olderThan,proto3" json:"older_than,omitempty"`

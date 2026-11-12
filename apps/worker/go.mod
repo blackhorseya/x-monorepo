@@ -4,7 +4,6 @@ go 1.27
 
 require (
 	github.com/ThreeDotsLabs/watermill v1.5.3
-	github.com/blackhorseya/x-monorepo/pkgs/identity v0.0.0
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/google/wire v0.7.0
 	github.com/jackc/pgx/v5 v5.12.0
@@ -171,4 +170,3 @@ replace (
 	github.com/blackhorseya/x-monorepo/pkgs/platform => ../../pkgs/platform
 )
 
-replace github.com/blackhorseya/x-monorepo/pkgs/identity => ../../pkgs/identity

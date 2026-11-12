@@ -81,7 +81,7 @@ components:
         boundedContext:
           type: string
           title: bounded_context
-          description: Schema name of the BC ("identity"); empty = every BC the server hosts.
+          description: Schema name of the BC ("orders"); empty = every BC the server hosts.
         limit:
           type: integer
           title: limit
@@ -172,7 +172,7 @@ components:
         boundedContext:
           type: string
           title: bounded_context
-          description: Schema name of the BC ("identity"); empty = every BC the server hosts.
+          description: Schema name of the BC ("orders"); empty = every BC the server hosts.
         olderThan:
           allOf:
             - $ref: '#/components/schemas/google.protobuf.Duration'

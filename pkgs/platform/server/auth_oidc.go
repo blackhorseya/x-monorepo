@@ -10,7 +10,7 @@ import (
 
 // UnboundIdentityCode is the x-error-code (PERMISSION_DENIED) when a token
 // verifies but its (issuer, subject) is bound to no account and the procedure
-// is not one an unbound identity may call (docs/identity-login.md §6).
+// is not one an unbound identity may call (ExternalIdentityResolver.AllowsUnbound).
 const UnboundIdentityCode = "auth.unbound_identity"
 
 // Errors a ExternalIdentityResolver answers with. Anything else it returns is
@@ -33,16 +33,17 @@ type TokenVerifier interface {
 }
 
 // ExternalIdentityResolver maps a verified external identity to the principal
-// of its account. The identity BC implements it (adapters/auth) and the
-// composition root wires it in, like CredentialResolver, so the platform never
-// imports a BC. The principal's Subject is the account id and Roles are the
+// of its account. A bounded context implements it and the composition root
+// wires it in, like CredentialResolver (apps/rpc wires none in the template, and
+// refuses auth.oidc.enabled without one), so the platform never imports a BC. The principal's Subject is the account id and Roles are the
 // account's, never the token's. The resolver owns its cache and must not cache
 // a failure. It answers with ErrUnboundIdentity, ErrCredentialRefused, or any
 // other error for an infrastructure failure.
 type ExternalIdentityResolver interface {
 	ResolveExternal(c context.Context, id contextx.ExternalIdentity) (contextx.Principal, error)
 	// AllowsUnbound reports whether an identity bound to no account may call
-	// procedure (the identity BC answers true for ClaimInvite only).
+	// procedure (an application answers true for the one that lets a person
+	// claim an account, and for no other).
 	AllowsUnbound(procedure string) bool
 }
 
