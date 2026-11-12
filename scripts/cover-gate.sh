@@ -6,7 +6,10 @@ _lib=${BASH_SOURCE[0]%/*}; [ "$_lib" != "${BASH_SOURCE[0]}" ] || _lib=.   # this
 . "$_lib/best-effort.sh" || { echo "cover-gate: cannot load $_lib/best-effort.sh (value_of)" >&2; exit 2; }   # a missing library stops the script (#470)
 self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
 cd "$self_dir/.." || exit 1
-mkdir -p bin
+# where the coverage profiles go: ./bin by default (git-ignored); COVER_PROFILE_DIR overrides it, an absolute path, or one relative to the repo root
+# (new-bc-check points it into its own temp dir so a run never writes into, or shares profiles through, the repo's bin). Empty means unset.
+profile_dir=${COVER_PROFILE_DIR:-bin}
+mkdir -p -- "$profile_dir"
 
 fail=0 checked=0
 # each step on its own line: `for m in $(go … | python3 …)` and `go list … || true` turned a go that failed into an empty
@@ -21,7 +24,7 @@ for m in $mods; do
   [[ -z "$pkgs" ]] && continue
   for p in $pkgs; do
     checked=$((checked + 1))
-    prof="bin/cover-${p//\//_}.out"
+    prof="$profile_dir/cover-${p//\//_}.out"
     go test -coverprofile="$prof" "$p" >/dev/null
     pct=$(go tool cover -func="$prof" | tail -1 | awk '{print $3}' | tr -d '%') || exit $?
     if [[ "$pct" != "100.0" ]]; then

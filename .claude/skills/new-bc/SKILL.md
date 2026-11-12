@@ -39,7 +39,7 @@ task new-bc -- <name> --events   # 有 event：outbox、同 BC 的 consumer、in
 ```bash
 task new-bc-check
 ```
-在工作樹的**複本**（`git ls-files -co --exclude-standard`：含尚未 `git add` 的新檔，不含 ignore 的檔）產生 `cisample` 與 `cisampleevents --events`，跑 gen、tidy、wire、vet、lint、測試、`scripts/cover-gate.sh`（兩個範例的 `domain` package 都必須 100% 覆蓋）與三個 app 的 build、`TestArchitecture`。除了被 ignore 的 `bin/` 下的 coverage profile（`bin/cover-*.out`：複本的 `bin` 是指向你工作樹 `bin` 的 symlink，`scripts/new-bc-check.sh` 的 `ln -s`；`scripts/cover-gate.sh` 先 `cd` 到複本根目錄、`mkdir -p bin`，再用 `go test -coverprofile=bin/cover-….out` 寫入）之外，不寫任何東西到你的工作樹；CI 的 gen-freshness 也跑它。
+在工作樹的**複本**（`git ls-files -co --exclude-standard`：含尚未 `git add` 的新檔，不含 ignore 的檔）產生 `cisample` 與 `cisampleevents --events`，跑 gen、tidy、wire、vet、lint、測試、`scripts/cover-gate.sh`（兩個範例的 `domain` package 都必須 100% 覆蓋）與三個 app 的 build、`TestArchitecture`。不寫任何東西到你的工作樹（cover-gate 的 coverage profile 用 `COVER_PROFILE_DIR` 指到複本的暫存目錄，不是 `bin/`）；CI 的 gen-freshness 也跑它。
 **它不跑 postgres repository 的測試**：gen-freshness 沒有 DB，產生的測試只用 memory 的 infra。postgres 的程式碼要在有 DB 的環境（`task compose-up`、`task migrate -- up`）自己驗。
 
 ## 失敗與還原

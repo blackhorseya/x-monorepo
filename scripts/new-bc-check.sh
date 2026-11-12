@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Generate two sample BCs (one plain, one with --events) in a COPY of the working tree and prove they lint, build and test (#518 slice 4).
-# Nothing in the repository is written except the coverage profiles of scripts/cover-gate.sh: it runs in the copy, whose ./bin is a symlink to the
-# repo's ./bin (git-ignored), so bin/cover-*.out lands there. The copy is `git ls-files -co --exclude-standard`: tracked and untracked-not-ignored files, so local
+# Nothing in the repository is written. The copy is `git ls-files -co --exclude-standard`: tracked and untracked-not-ignored files, so local
 # uncommitted work (and a new file you have not added yet) is included; ignored files (./bin, node_modules, generated web output) are not.
 #
 #   scripts/new-bc-check.sh      # needs the tools of `task tools` in ./bin (buf, protoc-gen-*, wire, golangci-lint), go, jq, git
@@ -43,7 +42,7 @@ for bc in cisample cisampleevents; do
   (cd "pkgs/$bc" && go vet ./... && "$repo/bin/golangci-lint" run ./... && go test -count=1 -shuffle=on ./...)
 done
 step "domain coverage gate: every generated domain package must be at 100% (scripts/cover-gate.sh)"
-scripts/cover-gate.sh
+COVER_PROFILE_DIR="$tmp/cover-profiles" scripts/cover-gate.sh # not ./bin: that is a symlink to the repo's bin, and parallel runs would share the profiles
 step "pkgs/platform: the repo-wide module guards see the new BCs (every module carries the pgtest cleanup gate)"
 (cd pkgs/platform && go test -count=1 -run '^TestTestCleanup_' ./archtest/)
 for app in rpc worker migrate; do
