@@ -104,6 +104,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/operations.md`](docs/operations.md) | Compose 本機環境（Grafana dashboards / alerts）、Helm 部署與 kind 實測 |
 | [`docs/observability.md`](docs/observability.md) | OTel → LGTM：metrics、traces、logs、每個 metric 與 alert 的意義 |
 | [`docs/config.md`](docs/config.md) | 所有 config key、預設值、env 覆寫規則、`auth.*` |
+| [`docs/auth.md`](docs/auth.md) | 認證：憑證與優先序、`server.CredentialResolver`／`server.ExternalIdentityResolver` 擴充點的契約、失敗語意、`auth.*` 的啟動檢查順序 |
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 

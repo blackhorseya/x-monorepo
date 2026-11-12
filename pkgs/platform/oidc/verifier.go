@@ -29,9 +29,10 @@ var (
 )
 
 // Identity is a verified external identity — what the issuer vouches for, and
-// nothing about what we make of it. IssuedAt is the token's iat: the identity
-// BC compares it with an account's sessions_revoked_at, which is why a token
-// without one is rejected.
+// nothing about what we make of it. IssuedAt is the token's iat: Verify
+// requires it (a token without one is rejected), and the server auth
+// interceptor passes it on in contextx.ExternalIdentity.IssuedAt to the
+// server.ExternalIdentityResolver.
 type Identity struct {
 	Issuer        string
 	Subject       string
