@@ -131,9 +131,10 @@ type OIDCIssuer struct {
 	Issuer string `mapstructure:"issuer"`
 	// Audience is our client id at this issuer; a token's aud must contain it.
 	Audience string `mapstructure:"audience"`
-	// Mapping decides what an identity with no account yet may do (bound |
-	// auto_provision, default bound). The verifier only carries it; the
-	// ExternalIdentityResolver and the interceptor use it.
+	// Mapping is what an identity with no account yet may do (bound |
+	// auto_provision, default bound). The platform only checks the value is one
+	// of the two; it is for the ExternalIdentityResolver an application wires to
+	// read, and nothing in the platform acts on it.
 	Mapping string `mapstructure:"mapping"`
 	// AllowInsecureIssuer lets an http:// issuer on a non-loopback host through
 	// (dev compose / kind, where the name resolves inside the cluster). Never
@@ -462,8 +463,9 @@ func (x *AppConfig) validate() error {
 	switch x.Auth.Mode {
 	case AuthOff:
 	case AuthOptional, AuthRequired:
-		// No static key and no jwt is allowed here: an application that wires a
-		// server.CredentialResolver answers for keys the config does not know.
+		// No static key and no jwt is allowed here only when the application
+		// wires a server.CredentialResolver, which then answers for keys the
+		// config does not know (apps/rpc wires none, so there it is refused).
 		// NewAuthInterceptor refuses when it has no credential source at all,
 		// and server.New warns when the resolver is the only one.
 	default:

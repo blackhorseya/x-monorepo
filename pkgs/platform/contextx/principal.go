@@ -21,8 +21,8 @@ type Principal struct {
 	// Method is how the principal was established: "jwt" or "api_key".
 	Method string
 	// CredentialID names the credential itself when it has an identity of its
-	// own (the api key id of a key a server.CredentialResolver answers for); empty for a JWT
-	// or a static key. Revoking that one key is what it is for.
+	// own. A server.CredentialResolver implementation fills it; empty for a JWT
+	// or a static key.
 	CredentialID string
 }
 

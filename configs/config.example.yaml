@@ -48,7 +48,7 @@ auth:
     issuers: []
     #  - issuer: https://idp.example.com
     #    audience: my-client-id
-    #    mapping: bound              # bound (default) | auto_provision
+    #    mapping: bound              # bound (default) | auto_provision; checked for shape only, your resolver reads it
     #    allow_insecure_issuer: true # only for an http issuer on a non-loopback host; dev only
   # Procedures that never need a credential, as "/<package>.<Service>/<Method>".
   public: []
