@@ -59,7 +59,7 @@ config:
     admin_role: admin
     jwt: { issuer: "", audience: "", public_key: "" }
     # External OIDC token verifier (platform/oidc). The chart ships no IdP: point `issuers` at yours
-    # (Keycloak, Auth0, Entra ...). Off = nothing below is read, behaviour unchanged. On =
+    # (Keycloak, Auth0, Entra ...). Off = nothing below is read. On =
     # at least one issuer, each with `issuer` (https, must equal the token's iss exactly) and
     # `audience` (our client id); `mapping` bound (default) | auto_provision (the platform checks the
     # value only; the resolver you wire reads it). An http
