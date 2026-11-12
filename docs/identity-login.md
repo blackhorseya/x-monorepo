@@ -2,8 +2,8 @@
 
 <sub>← [README](../README.md) · [identity.md](identity.md)</sub>
 
-> **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）；其中 Console 與 Dex 的部分已於 #561 移除。** 實作拆成 #270–#274（§12）；identity BC 這一半的細節見 [`identity.md`](identity.md)「外部身分綁定」。
-> **怎麼讀這份文件（#561 之後）**：描述 rpc 的 OIDC 驗證、verifier、identity BC（綁定、邀請、撤銷、bootstrap）、告警與 chart 設定的內容，仍是現行。描述 Console 的 OIDC 登入畫面與流程、Dex 開發 IdP，以及驅動它們的 e2e 與 task 的內容，已隨 #561 移除，只當歷史記錄讀，照著操作不會成功；repo 不附 IdP。整節都屬於後者的章節在標題下另有標記（§8），§10 逐條標記。
+> **狀態：決策已定案（Sean 2026-10-30，#269 的 Q1–Q9）；Console、Dex 與 identity BC 已於 #561 移除。** 實作拆成 #270–#274（§12）。
+> **怎麼讀這份文件（#561 之後）**：只有 platform 的 verifier（`pkgs/platform/oidc`）與 JWKS 的規則，以及 `auth.oidc` 的設定與啟動檢查，仍對得上 repo；凡是提到 identity BC、Console 登入或 Dex 的內容，都已移除，只當歷史記錄讀，照著操作不會成功。template 的 rpc 沒有接 `server.ExternalIdentityResolver`，所以 `auth.oidc.enabled: true` 會在啟動時被拒絕；repo 不附 IdP。後續（#561 PR③）會把仍成立的規則搬到 `docs/auth.md` 並刪除本文。
 > x-monorepo 是通用 template：外部 OIDC 是驗證端的擴充點（方案 B）；自建帳密 issuer（方案 A）降為可選模組，未排程（§13）。
 > API key 繼續用於機器對機器與 break-glass。**OIDC 預設關閉，關閉時行為與現在完全相同。**
 > 所有範例的 secret 都是佔位符（`<…>`），不是可用的值（紅線 R4）。

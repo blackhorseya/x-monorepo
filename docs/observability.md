@@ -11,16 +11,8 @@
   `usecasex.Metrics` 記 `usecase.duration`（exposition：`usecase_duration_seconds{usecase, kind}`），
   `otelconnect` 產 `rpc.server.call.duration`，`contrib/instrumentation/runtime` 產 Go runtime metrics，
   auth interceptor 記 `auth.decisions`（`auth_decisions_total{result, method}`：`ok` / `public` / `anonymous` / `missing` / `invalid` × `api_key` / `jwt` / `none`——
-  RPC status 只會說 `unauthenticated`，分不出「沒帶」和「帶了被拒」；label 只有這兩個有限集合，沒有 subject；OIDC 的 `method` 仍是 `jwt`：未綁定的身分放行 `ClaimInvite` 記 `ok`，被擋或其他拒絕記 `invalid`）；
+  RPC status 只會說 `unauthenticated`，分不出「沒帶」和「帶了被拒」；label 只有這兩個有限集合，沒有 subject；OIDC 的 `method` 仍是 `jwt`：未綁定但 `AllowsUnbound` 放行的 procedure 記 `ok`，被擋或其他拒絕記 `invalid`）；
   `auth.oidc` 開著時另有 `auth_jwks_fetch_total{issuer, result}`（`ok` / `error`）與 `auth_jwks_age_seconds{issuer}`（距上次成功抓 JWKS 的秒數，沒成功過就從啟動算起），alert `x-monorepo-auth-jwks-stale` 在超過 2 小時時觸發；issuer 來自設定，沒有高基數
-- **identity 的 key resolver**（`identity/adapters/auth`，`apps/rpc` 用注入的 MeterProvider 建）：
-  `identity_resolver_lookups_total{result}`，result 只有五個值，一次 lookup 一定落在 `hit` 或 `miss`，`miss` 之後再落在 `db_ok` / `db_miss` / `error` 其中一個：
-  `hit` = cache 命中（cache 住的成功和 cache 住的拒絕都算）、`miss` = cache 沒有（沒進過、過了 TTL、或 TTL=0 關掉 cache）、
-  `db_ok` = use case 認得這把 key、`db_miss` = use case 回 domain error（不存在 / revoked / expired / account disabled / 太短；也會被 cache）、
-  `error` = 基礎設施錯誤（DB 掛、`auth.resolver_timeout`；不 cache）。所以 `hit + miss` = 全部 lookup，`miss = db_ok + db_miss + error`，
-  cache hit ratio = `hit / (hit + miss)`。`identity_resolver_cache_entries` 是該 replica 目前 cache 的 entry 數（上限 10k，滿了整個丟掉；
-  過期的 entry 要等下一次被查到才刪，所以不會自己下降）。counter 跨 replica `sum`，gauge 每個 replica 各一份、看 `instance`，不要 sum。
-  **label 只有 `result`**：不放 key、prefix、hash、account id、key id 或任何每把 key 不同的值，series 數固定 ≤ 5（`resolver_metrics_test.go` 斷言）
 - **worker 的 backlog**（`platform/eventbus`，`apps/worker` 註冊）：`eventbus.consumer.duration{topic, result}` 每次 handler
   attempt 一個 sample（retry 也算，被 park 的訊息就是它最後一次 `failed`）；`eventbus.Lag` 掛 observable gauge，每次 collect
   才去查：`eventbus_consumer_lag{topic, consumer_group, broker}` = 該 group 還沒 ack 的訊息數——Postgres 用和 watermill-sql
@@ -38,7 +30,7 @@
   - **兩種 SDK 狀態都不延續**。要查這張單的 trace，用回應的 `X-Trace-Id`，**不要**用自己送進來的 trace id。
     - rpc 開 SDK（`otel.endpoint` 有設）：server span 是新的 root，呼叫端的 span 只留成一個 link，`X-Trace-Id`（成功與錯誤都有）是 rpc 自己的。
     - rpc 關 SDK（`otel.endpoint` 空）：tracer 是 no-op，而 no-op tracer 會原樣傳遞 parent 的 trace id，所以 `otel.New` 在這時給**空的 propagator**，不讀也不寫 trace header（`pkgs/platform/otel/propagation_test.go`；不是設定項，沒有 tracer 就沒有 trace）。rpc 不回 `X-Trace-Id`／`traceparent`，外部 ID 不會出現在回應。
-  - SDK 開關兩格由 `apps/rpc/trace_test.go` 的 `TestTrace_RPCDistrustsAnExternalTraceparent` 釘住（帶外部 `traceparent` 打 `IdentityService.CreateAccount`）：開 SDK → `X-Trace-Id` 有效且 ≠ 外部 ID；關 SDK → 回應沒有 `X-Trace-Id` 也沒有 `traceparent`。
+  - SDK 開關兩格由 `apps/rpc/trace_test.go` 的 `TestTrace_RPCDistrustsAnExternalTraceparent` 釘住（帶外部 `traceparent` 打 `AdminService.ListPoison`）：開 SDK → `X-Trace-Id` 有效且 ≠ 外部 ID；關 SDK → 回應沒有 `X-Trace-Id` 也沒有 `traceparent`。
   - rpc 沒有下游呼叫，所以沒有「轉送 `traceparent`」的問題；以後新增下游呼叫時，要把「轉送」這一格（與測試）補回來。
 - **有 `otel.endpoint` 才推 OTLP**：traces 走 batcher、metrics 多一個 periodic reader、logs 走 batch processor；`otelconnect`
   interceptor 掛最外層，每個 RPC 一個 span。endpoint 空 = tracer no-op、logger 只寫 stdout、不 dial

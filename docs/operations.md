@@ -1,4 +1,4 @@
-# Operations：Compose、k6、Helm
+# Operations：Compose、Helm
 
 <sub>← [README](../README.md)</sub>
 
@@ -27,12 +27,11 @@ provisioning 目錄，`deployments/docker/grafana/dashboards/*.json` 掛到 `/ot
 | Worker — eventbus（第二排） | `eventbus_outbox_rows`、`eventbus_outbox_held`、`eventbus_inbox_rows`、`eventbus_outbox_oldest_age_seconds`、`eventbus_outbox_oldest_held_age_seconds`、`eventbus_inbox_oldest_age_seconds` | prune 管的表：大小、被 group 扣住的列、最老一列的年齡（超過 retention = prune 沒跑或刪不動；held 的年齡一直長 = stale group） |
 | HTTP routes | `http_server_request_duration_seconds`（otelgin） | `/api/*` 的 route / status、p95 |
 | Auth | `auth_decisions_total{result, method}`、`rpc_server_call_duration_seconds_count{rpc_response_status_code="permission_denied"}` | 每秒多少 ok / public / anonymous / missing / invalid，各用什麼 credential；被拒的三種（沒帶、帶錯、role 不夠）疊在一起看。counter，`sum` |
-| Identity | `identity_resolver_lookups_total{result}`、`identity_resolver_cache_entries` | key resolver 的 lookup 各 result（hit / miss / db_ok / db_miss / error）每秒多少、cache hit ratio、error 率、每個 replica 的 cache 大小。counter `sum`，cache size 是 per replica（`max by (instance)`） |
 | Go runtime | `go_goroutine_count`、`go_memory_used_bytes`… | OTel runtime instrumentation 的名字，OTLP 與 `/api/metrics` 相同。`/api/metrics` 用自建 registry，沒有 client_golang 的 `go_memstats_*`、`process_*` |
 | Logs | Loki `{service_name="$service"} \| severity_text=~"WARN\|ERROR"` | severity 是 structured metadata，要用 `\|` 不是 `\|=` |
 
 Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/alerting.yaml` → folder `x-monorepo`，每分鐘評估；group
-`worker-eventbus` 全部用 `max by`，gauge 是 per replica 不能 sum；group `rpc-auth` 與 `rpc-identity` 讀 counter，跨 replica `sum`）：
+`worker-eventbus` 全部用 `max by`，gauge 是 per replica 不能 sum；group `rpc-auth` 讀 counter，跨 replica `sum`）：
 
 | rule | 條件 | 意思 / 怎麼處理 |
 |---|---|---|
@@ -44,9 +43,8 @@ Alert rules 也從 repo provision（`deployments/docker/grafana/provisioning/ale
 | Eventbus metrics absent | `absent(eventbus_consumer_lag)` 持續 10m | 沒有 worker 在匯出，上面幾條都是瞎的 |
 | Auth credential rejections | `rate(auth_decisions_total{result="invalid"}[5m])` > 1/s 持續 5m（by `method`） | 有人在猜 key / 重放 token，或 key 換了 client 還送舊的；Loki `{service_name="rpc"} \| code="unauthenticated"` 看是哪個 procedure、request id（credential 本身不記）。rate limit 在 auth 外層，洪水先被擋 |
 | Auth permission denied | `rate(rpc_server_call_duration_seconds_count{rpc_response_status_code="permission_denied"}[5m])` > 0.1/s 持續 10m（by `rpc_method`） | 驗過身分但 role 不夠（`auth.permission_denied`）：access line 有 `sub`，是正當 operator 就補 role（`name=key:role` / JWT `roles`），不是就是在摸 admin surface |
-| Identity resolver errors | `sum(rate(identity_resolver_lookups_total{result="error"}[5m])) / sum(rate(identity_resolver_lookups_total{result=~"db_ok\|db_miss\|error"}[5m]))` > 5% 持續 5m（severity critical） | resolver 查不到 DB 或 timeout：30s TTL 內驗過的 key 還能過，其他的被拒成 `auth.invalid_credential`，有 valid key 的 caller 被鎖在外面。健康時是 0，只有基礎設施故障才會有 `error`，所以門檻不用高；分母刻意只算會碰 DB 的 lookup（hit 不算）——outage 時 cache 命中照過，算進去會把比例稀釋到看不見。5m 吸收 DB failover / 連線池重建的短暫抖動。先看 Postgres，再看 Loki `{service_name="rpc"} \|= "credential resolver failed"` |
 
-每條都帶 `__dashboardUid__` / `__panelId__`，所以「Worker — eventbus」、「Auth」與「Identity」的 panel 上會畫 alert 狀態。只有 rule 沒有送達：contact point /
+每條都帶 `__dashboardUid__` / `__panelId__`，所以「Worker — eventbus」與「Auth」的 panel 上會畫 alert 狀態。只有 rule 沒有送達：contact point /
 notification policy 由部署環境依 `severity` label 自己接（Grafana → Alerting → Notification policies）。Alerting provisioning
 只在啟動時讀，改完一樣 `task grafana-reload`。
 
@@ -56,44 +54,6 @@ notification policy 由部署環境依 `severity` label 自己接（Grafana → 
 Retention 預設 72h（compose 的 `LGTM_RETENTION`，透過 image 的 `LOKI/TEMPO/PROMETHEUS_EXTRA_ARGS` 下 flag；Pyroscope v2 storage
 還沒有時間型 retention）。Loki 突然沒 log 但 metrics / traces 正常，先看 `podman machine ssh df -h /`：VM 磁碟快滿時 Loki 的
 WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_disk_full_failures_total`），跟 app 無關，`podman system prune` 就好。
-
-## Load test（k6）
-
-`tests/k6/` 是兩個對著真的 `rpc` 打的 k6 腳本（Connect over JSON，`lib.js` 的 `rpc()` 按 method 打 tag，`API_KEY` 有設就帶 `X-API-Key`；兩支都打 `identity.v1.IdentityService/ListAccounts`）：
-
-| 腳本 | 打什麼 | 驗什麼 |
-|---|---|---|
-| `ratelimit.js` | server 開 `http.rate_limit.rps=RPS`，以 `RPS × FACTOR`（預設 4）的 constant-arrival-rate 打 ListAccounts | 被拒的每一筆都是 429 + `code: resource_exhausted` + `x-error-code: request.rate_limited` + 整數 `Retry-After ≥ 1`；放行數 ≈ `RPS × 秒數`（+ 一個 burst）、其餘全拒——limiter 是拒絕不是排隊 |
-| `timeout.js` | server 開 `http.timeout=1ns`（要有 `postgres.url`：context 過期是在 DB call 才浮上來，in-memory repo 不看它） | 每一筆都是 504 + `code: deadline_exceeded` + `x-error-code: request.timeout`，不是 INTERNAL（pgx 包過的 context error 也要被對應到）；server 沒斷線 |
-
-```bash
-task k6 -- ratelimit -e RPS=50    # 對 http://127.0.0.1:8080（task run）打；BASE_URL / API_KEY / VUS / DURATION / RPS 用 env 蓋；server 要先用 APP_HTTP_RATE_LIMIT_RPS=50 APP_HTTP_RATE_LIMIT_BURST=50 起
-task k6-auth-matrix               # tests/k6/auth-matrix.sh：ratelimit / timeout 在真的 rpc + Postgres 上各種 cell 跑一次，見下方「Auth 組合」；CI 的 k6-auth job 就是它
-task k6-wire                      # tests/k6/wire.sh：k6 腳本打 tests/k6/wire_server.py（回壞掉的 HTTP response），驗 key 不進 k6 的輸出 / summary / metrics tag，見下方「壞掉的 HTTP response」；不需要 Postgres 和 rpc，CI 的 k6-wire job 跑它
-task k6-smoke                     # tests/k6/smoke.sh：ratelimit、timeout 各自起一個 bin/rpc（:18090、:18100，local Postgres、對應的 env），rate limit 50 rps、timeout 1ns；CI 的 k6 job 就是它
-```
-
-### Auth 組合
-
-`task k6-auth-matrix`（`tests/k6/auth-matrix.sh`）目前只剩 ratelimit / timeout 的 key 外洩 cell（11 格），真的 rpc + Postgres：API key 設成自造的假值，腳本原本的 thresholds 不動，另外要求這把 key 不出現在 k6 的輸出、`--summary-export` 與 `--out json`——包括 server 回一次 503 或 307 並把請求的 `X-API-Key` 反射回來（`tests/k6/fault_proxy.py`，test-only，不改產品行為），或 key 剛好等於腳本用來判斷的 code 時。每個 cell 有自己的 rpc 與 log，並寫明 k6 必須以哪個 exit code 結束。
-
-### 壞掉的 HTTP response（`task k6-wire`）
-
-上游或 proxy 回的不是合法 HTTP（status code 是 key、version 是 key、header 行沒有冒號且帶著 key）時，Go 的 parser 把「讀不懂的那段」原樣放進錯誤，而 k6 在 `http.post` 回傳之前就把它印成 `Request Failed` warning，並寫進每一筆樣本的 `error` tag——`lib.js` 的 `redact` 只包得到腳本自己印的診斷，在這之前攔不到。實測（k6 v2.2.0）：只在腳本裡包 try/catch **沒有用**（請求失敗時 `http.post` 不丟例外，warning 已經印了）。做法是三件事一起：
-
-1. `options.throw: true`（`lib.js` 的 `throwOnError`）：請求失敗改成丟例外，k6 不再自己印 warning；
-2. `rpc()` 抓住例外，只用訊息挑一個固定分類，訊息本身不印、不放進回傳：回一個 `status: 0` 的 response，`errorCode()` / `knownCode()` 給 `transport.<class>`——`malformed_response`（status / version / header / chunk 讀不懂）、`truncated_response`（`unexpected EOF`）、`timeout`、`connection_refused`、`dns`、`connection_closed`（對方直接關線）、`other`；`rpc()` 每個 VU 前三次印 `<RPC>: no response, transport.<class>`（整句過 `redact()`：決策用 `knownCode()`，輸出和 `errorCode()` 一樣遮罩，key 剛好等於 `transport.<class>` 也不會出現）。這次不是 `rpc_duration` 的樣本；
-3. `systemTags` 拿掉 `error`（自由文字，就是 parser 的訊息），保留 `error_code`（k6 的固定數字分類，例如 1000 = 一般 transport 錯誤）。
-
-`rpc()` 以外的任何 `http.*` 呼叫都不受保護：沒被抓到的例外 k6 會連訊息一起印。新腳本一律走 `rpc()`，`options` 帶 `throw: throwOnError`。
-
-對監控查詢的影響：repo 裡沒有東西讀 k6 的 `error` tag（k6 沒接 Grafana / Prometheus remote write），所以沒有 dashboard 或 alert 受影響。自己用 `--out` 接 k6 metrics 的人，原本 `error` tag 現在沒有了，改看 `error_code`（或 `status == 0`）；細節看 log 的 `transport.<class>`。
-
-另外 transport 失敗不再被默默放過：k6 對沒有 response 的請求不計 `http_req_failed`，所以 `timeout.js` 打到一個回壞掉 HTTP 的 server 時，原本每筆都在 `check` 丟例外、`timed_out` 沒有樣本 → `rate==1` 空過、exit 0；現在 `check` 看得到 `status 0`，`timed_out` 是 0% → exit 99。
-
-`tests/k6/wire.sh`（`task k6-wire`，不需要 Postgres 和 rpc，約 1 分鐘）：各腳本 × 六種壞掉的回應（`tests/k6/wire_server.py`：`status` / `version` / `header` / `chunk` 帶著請求的 `X-API-Key`，`truncated` body 不完整，`closed` 連線直接關），每個 run 都要非零退出，`API_KEY`（自造的假 key）不能出現在 k6 輸出、`--summary-export`、`--out json` 的任何一行，metrics 不能有自由文字的 `error` tag，`closed`（key 根本沒上線）要有 `transport.<class>` 的診斷。每個 cell 還要證明 fixture 真的在場：server 要在 5 秒內 listen、跑完仍活著、自己印出 `served <mode>`（壞回應確實送出），而且 k6 回報的失敗分類必須恰好是該 mode 的（`status` / `version` / `header` / `chunk` → `malformed_response`、`truncated` → `truncated_response`、`closed` → `connection_closed`），出現其他分類（例如 server 缺席時的 `connection_refused`）就紅——光看 exit 非零和沒有 key 證明不了什麼。最後兩個負例 cell 讓 `wire.sh` 自己再跑一次：server 不啟動（`WIRE_SERVER_CMD=false`）、server 回錯的 mode（`WIRE_SERVE_AS=closed`），它必須失敗，否則 gate 本身標紅。失敗用 go test 的 `--- FAIL:` 格式印，`scripts/red-stage.sh` 讀得懂。
-
-CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/platform/server`、`pkgs/platform/config`、`pkgs/identity`、`apps/rpc`、`configs`、`tests/k6`）變動時跑；壞掉的 HTTP response 那組由獨立的 `k6-wire` job 跑，跟所有產品 Go 變動；matrix 的 cell 名字可以接在 task 後面只跑幾個（cell 名是 `tests/k6/auth-matrix.sh` 裡每個 `cell` 呼叫的第一個字）。其他沒有列的組合（JWT、`optional` 模式、其他 procedure 的 public）沒有驗證，不保證。
 
 ## Worker 輪詢間隔（`worker.poll_interval`）
 
@@ -121,6 +81,23 @@ CI 的 `k6-auth` job 和 `k6` job 平行，只在 auth 相關路徑（`pkgs/plat
 
 ## Deploy（Helm）
 
+
+### Upgrade notes — chart 0.3.79：移除 identity bounded context（#561）
+
+這一版把 identity bounded context 從 template 移除：`pkgs/identity`、`protos/identity`、它的 migration、`worker bootstrap`（含 `task bootstrap`）、Console 的 identity 頁與 OIDC 登入（#562）、k6 測試與 CI job、Grafana 的 identity 面板列與告警。**不寫 DROP migration**，也不提供原地升級路徑。platform 的擴充點（OIDC verifier、`server.CredentialResolver`、`server.ExternalIdentityResolver`）保留。
+
+- **既有資料庫要重建**（#561 的決定：template 不提供從含 identity 的版本原地升級的路徑）。要沿用既有 DB 就自己備份、手動 `DROP SCHEMA identity CASCADE;`；沒有程式替你做。
+- **identity schema 原樣留下**：新 `migrate` 的清單是空的，`up`／`down`／`version` 對留著 `identity` schema 的資料庫都不輸出、不報錯、不碰它；`identity.schema_migrations` 也不動（`apps/migrate/main_test.go` 的 `TestRun_LeavesAnUnknownSchemaAlone`）。新安裝不會建立它。
+- **行為**：
+  - rpc 不再有 `identity.v1`（帳號、API key 管理、外部身分綁定、邀請、撤銷、`WhoAmI` 都沒有了，路由已不存在，呼叫不會成功）；`worker bootstrap` 與 `task bootstrap` 移除（`worker bootstrap` 現在是 `unknown command`）。靜態 `auth.api_keys` 與 `auth.jwt` 是僅有的兩種內建憑證。
+  - **`auth.mode` 是 `optional` 或 `required` 而 `auth.api_keys`、`auth.jwt` 都沒設，rpc 現在拒絕啟動**（以前靠 identity 資料庫裡的 key 就能起來）。
+  - **`auth.oidc.enabled: true` 現在在啟動時被拒絕**（`auth.mode: off` 也一樣）：template 的 rpc 沒有接 `server.ExternalIdentityResolver`，錯誤訊息指向那個 interface 與 `apps/rpc/wire.go`。要用外部 OIDC 登入，自己實作並在 `apps/rpc` 的 wire 接上（`apps/rpc/startup_test.go` 逐格釘住）。
+  - `poison`／`prune` 在沒有事件 BC 時沒有資料可看。
+- **Helm values**：`config.auth.last_used_interval` 已移除；舊 values 帶著它不會報錯（新 binary 對 env `APP_AUTH_LAST_USED_INTERVAL` 與設定檔的 `auth.last_used_interval` 兩種都忽略、照常啟動），可以拿掉。
+- **監控**：`identity_resolver_*` 指標、告警 group `rpc-identity`（Identity resolver errors）與 Grafana 的「Identity」面板列移除；JWKS stale 告警與「Auth」面板列保留（它們量的是 platform 的 verifier 與 auth interceptor）。
+- **k6**：`tests/k6/`、`task k6*` 與 CI 的 `k6`、`k6-auth`、`k6-wire` job 移除（#561 的決定：template 不附壓測腳本）。
+- **image**：第一個不含 identity 的 image tag 預計是 v0.70.0，**尚未發布**。
+- **回滾界線**：只寫實測到的。新 binary 帶著舊 values 的 `auth.last_used_interval` 照常啟動，所以 chart 0.3.78 的 values 配新 image 在這一項不會被擋；其他組合（舊 chart 的 migrate hook 配新 migrate、舊 ConfigMap 的其他鍵）**未實測**。回退到含 identity 的版本需要 `identity` schema：新 migrate 不會刪它，沒有手動 `DROP` 的話它還在；回退後舊版 rpc／worker 與這個 schema 的互動**未實測**。清除 schema 之前先確認不需要回滾。
 
 ### Upgrade notes — chart 0.3.73：移除 catalog 與 catalog-rpc（#518 切片 2）
 
@@ -168,7 +145,7 @@ DROP SCHEMA payment CASCADE;
 - **Redis broker**：若使用 `worker.broker: redis`，名為 `ordering.v1.*`、`inventory.v1.*`、`payment.v1.*` 的 Redis Stream 與 consumer group 也會留下，需手動 `DEL`；先列出（例如 `redis-cli --scan --pattern 'ordering.v1.*'`）確認清單，再刪。
 - **Helm values**：`config.ordering`、`secrets.paymentRpc`、`paymentRpc`、`networkPolicy.paymentRpc`、`expire` 已移除；升級時請從自己的 values 拿掉（留著只是無效鍵）。`APP_ORDERING_*`／`APP_PAYMENT_*` 環境變數不再被讀取。`payment-rpc`、`payment-worker` image 不再發佈（既有 tag 不受影響）。`worker expire`、`task expire` 子命令已移除。
 - **migrate**：`apps/migrate` 的 `migrate version`／`down` 輸出不再包含這三個 schema。
-- **Grafana**：Saga／Payment 面板列與 saga-pending、reservation-expiry、commit-short、payment-* alert 已移除；eventbus／auth／identity 的面板與 alert 保留。
+- **Grafana**：Saga／Payment 面板列與 saga-pending、reservation-expiry、commit-short、payment-* alert 已移除；eventbus／auth／identity 的面板與 alert 保留（identity 的在 chart 0.3.79 移除）。
 - **依 consumer lag 擴縮 worker**：目前沒有載具（沒有 BC 發 event）；ScaledObject 的 render 與 schema 由 `task helm-check` 的 `ci/redis-values.yaml` 驗（沒有叢集裝 KEDA，不驗 KEDA 是否接受它）；#518「已知缺口」未定案。
 
 `deployments/helm/x-monorepo/` 是這些 image 的 chart，沒有 dependency、不假設 ingress controller 或 secret 工具。它做的事是把
@@ -182,8 +159,7 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 | worker Deployment | **沒有 probe**（worker 沒 HTTP server；起不來會 exit 非 0 由 Deployment 重啟，健康看 `eventbus_*` gauge 與 alert）；`terminationGracePeriodSeconds` 預設 30，< 19 render 失敗 |
 | migrate Job | `pre-install,pre-upgrade` hook 跑 `migrate up`：新 code 不會先於新 schema 起來。hook 跑在 release 的 Secret 存在之前，所以 chart 另 render 一個 hook-scoped 的 `<release>-migrate-env`（跑完刪）；`existingSecret` 則直接讀它 |
 | prune CronJob | `worker prune --older-than <prune.olderThan>`（預設 720h、每天一次、`concurrencyPolicy: Forbid`）；`prune.forgetGroups` 對應 `--forget-group`。alert「retention overdue」的 45d 是 720h 的 1.5×，改一個要一起改 |
-| identity bootstrap（不在 chart 裡） | 第一個 account + API key：在**操作者本機**跑一次 `worker bootstrap`，經 `kubectl port-forward` 連 release 的 DB，secret 只印在你自己的 terminal 一次（做法見下面「identity bootstrap」）；**不要在叢集裡跑**——Pod 的 stdout 會進 Pod log、也可能被 log collector 收走。config `auth.api_keys` 留作 break-glass。已有 account 就是 no-op，但不要同時跑兩個 |
-| auth.oidc（`config.auth.oidc`） | 外部 OIDC 登入的 values，原樣進 ConfigMap：`enabled`（預設 `false`，關著時整段不讀）、`issuers[]`（`issuer` https、`audience`＝我們的 client id、`mapping` `bound`\|`auto_provision`、dev 才用的 `allow_insecure_issuer`）。**chart 不含 IdP**——Keycloak / Auth0 / Entra 自備；`auth.jwt` 也有設時，`auth.jwt.issuer` 要釘住且不得等於任一 OIDC issuer，否則 Pod 起不來。list 不能用 env 覆蓋，只能寫在 values。開著時 auth interceptor 用 verifier 驗 Bearer、再以 `(iss, sub)` 對應 account（未綁定只能 `ClaimInvite`，見 `docs/identity.md`「外部身分綁定」） |
+| auth.oidc（`config.auth.oidc`） | 外部 OIDC token verifier 的 values，原樣進 ConfigMap：`enabled`（預設 `false`，關著時整段不讀）、`issuers[]`（`issuer` https、`audience`＝我們的 client id、`mapping` `bound`\|`auto_provision`、dev 才用的 `allow_insecure_issuer`）。**chart 不含 IdP**——Keycloak / Auth0 / Entra 自備；`auth.jwt` 也有設時，`auth.jwt.issuer` 要釘住且不得等於任一 OIDC issuer，否則 Pod 起不來。list 不能用 env 覆蓋，只能寫在 values。**template 的 rpc 沒有接 `server.ExternalIdentityResolver`，`enabled: true` 會在啟動時被拒絕**（見 chart 0.3.79 的 upgrade notes）；要用就自己實作並在 `apps/rpc` 的 wire 接上。verifier 的規則見 `docs/identity-login.md`（讀法見該文開頭） |
 | HPA / PDB / Ingress | rpc：CPU HPA（開了就不 render `replicas`、要有 `resources.requests.cpu`）、PDB 只在可能 >1 replica 時 render、Ingress 走 HTTP/1.1（Connect / gRPC-Web），原生 gRPC 要另外 h2c |
 | console Deployment（`console.enabled`，預設 off） | `web/apps/console` 的 nginx image：chart 算出來的 env 只有 `RPC_UPSTREAM=http://<release>-rpc:<rpc.service.port>`，**沒有** `APP_CONFIG`、沒有 Secret——nginx 看不到 Postgres URL 和 API key；auth 開著時使用者在 console 的 Credential 控制項貼自己的 key / JWT（console 沒有登入頁，也不讀任何執行期設定：沒有 `/config.json`，CSP 的 `connect-src` 固定是 `'self'`）。**升級注意**：以前走 `console.extraEnv` 的 `CONSOLE_OIDC_ISSUER`、`CONSOLE_OIDC_CLIENT_ID`、`CONSOLE_API_KEY_LOGIN` 現在沒人讀，設了也不會報錯，沒有效果，可以從 values 拿掉；probe 打 nginx 自己的 `/healthz`（rpc 的健康是 rpc probe 的事）；同一組 `podSecurityContext`（uid 65532、read-only rootfs）+ `/tmp` emptyDir 就夠。自己的 Service / Ingress（`console.ingress`，純 HTTP/1.1） |
 | ServiceMonitor（`rpc.serviceMonitor.enabled`，預設 off） | Prometheus Operator 抓 rpc Service 的 `http` port、path `/api/metrics`（gin route，auth 開著也不擋）；operator 靠 label 選 ServiceMonitor，`serviceMonitor.labels` 放它要的（kube-prometheus-stack 是 `release: <name>`）。只管 rpc——worker 沒 HTTP server，它的 metrics 只能走 `config.otel.endpoint` |
@@ -192,53 +168,7 @@ README 的 server / Events 節講的「部署要配合的行為」寫成算式�
 
 **Migration 通則**：migration 在**一個交易**裡跑；`ALTER TABLE` 取 ACCESS EXCLUSIVE lock 並持有到整個 migration commit，該表的**讀與寫**都會等到它結束，大表請排維護窗口（窗口要涵蓋讀流量）。順序是先 migrate 再升 rpc／worker（chart 的 `pre-upgrade` hook 已保證）。golang-migrate 在執行檔案之前就把 `<schema>.schema_migrations` 標成 `<N> dirty=true`，所以失敗之後每次 `migrate up` 都拒絕（`Dirty database version N`）：排除原因後把版本設回 `N-1` clean 再重跑。**不要用 `task migrate -- down` 退單一 BC**——它對每個 BC 各退一步（每個 BC 的最新 migration 都會回滾）；只退一個 BC 時，在該 BC 的資料庫以專屬的 rollback runbook 執行（`BEGIN; …; UPDATE <schema>.schema_migrations SET version = <N-1>, dirty = false; COMMIT;`）。目前沒有 BC 有 rollback runbook 案例，新增時的要求見 `docs/workflow.md`「單一 BC 的 rollback runbook」。
 
-**identity bootstrap（在操作者本機跑，不要在叢集裡跑）**：secret 是 `worker bootstrap` 的 stdout，叢集裡任何 Pod（Job、`kubectl run`、`kubectl exec`）的 stdout 都會進 Pod log，也可能被 log collector 收走——所以只在你自己的 terminal 跑，經 port-forward 連 DB。chart 本身沒有 Postgres（`secrets.postgresUrl` 指到哪就是哪；kind 的 `deps.yaml` 才有 Service `postgres`），`<fullname>` 是 chart 的 fullname（release `api` 就是 `api-x-monorepo`），`<release-ns>` 是 release 裝的 namespace（跟 `<db-ns>` 不一定同一個）：
-
-```bash
-# 1. DB 的位置在 release 的 Secret 裡：APP_POSTGRES_URL（用 secrets.existingSecret 的話換成那個名字）。
-#    host 若是 <svc>.<ns>.svc，就把那個 Service port-forward 到本機；managed DB 就走你們原本連它的 proxy / bastion。
-kubectl -n <db-ns> port-forward svc/<db-svc> 15432:5432 &   # 開著，做完 kill 它
-
-# 2. 取 URL、改寫、跑 bootstrap，全部在同一個 fail-fast 子 shell 裡：任何一步失敗就中止、不會跑到 bootstrap。
-#    原始 URL 與改寫後的 URL 只存在這個子 shell 的變數裡（不 export、不 echo、不進 history）；最終的 URL 會以 APP_POSTGRES_URL 傳給 go run 這個子程序。
-#    shell 只做改寫；連線安全由 bootstrap 檢查：--expect-target 必填（沒帶就拒絕）、每個 attempt 只准連它、TLS 要驗證，不通過就在連線前拒絕。
-(
-  set +x                          # 外層若開了 xtrace（set -x / bash -x / zsh -x），先關掉，不然下面每一行連同密碼都會被印出
-  set -euo pipefail
-  port=15432                      # 與上面 port-forward 的本機 port 一致
-  ca=/path/to/db-ca.pem           # DB 的 CA
-  raw=$(kubectl -n <release-ns> get secret <fullname>-env -o jsonpath='{.data.APP_POSTGRES_URL}' | base64 -d)
-  [ -n "$raw" ] || { echo "abort: APP_POSTGRES_URL is empty or missing in the Secret" >&2; exit 1; }
-  # 改寫之前先看原始 URL 的 authority（:// 之後到第一個 / 或 ? 之前）：@ 必須剛好一個。密碼裡的 @ 要編碼成 %40；
-  # 未編碼的 @ 讓下面的 sed 把一段密碼當成 host 截掉、改寫成「合法但密碼不對」的 URL，所以直接中止（不印 URL，也不會呼叫 go）。
-  rest=${raw#*://}; auth=${rest%%[/?]*}; ats=${auth//[^@]/}
-  [ "${#ats}" -eq 1 ] || { echo "abort: the URL's authority must contain exactly one @ (encode an @ in the password as %40)" >&2; exit 1; }
-  # 只做兩件事，而且都不去「讀」URL 的內容：
-  #  (a) host:port 換成轉發的本機 port：只動第一個 @ 到下一個 / ? 或結尾那一段（合法 URL 的 userinfo 裡 @ 一定是 %40，所以這段就是 authority），密碼原樣不動；
-  #  (b) 在尾端附加 sslmode=verify-ca 與 sslrootcert（port-forward 之後 hostname 對不上，所以用 verify-ca 驗憑證鏈）。不搜尋、不取代原本的 sslmode：
-  #      原本若有 sslmode，pgx 對重複的 key 以最後一個為準（pgconn/parse_url.go: settings[key] = value），附加的會贏。
-  url=$(printf '%s' "$raw" | sed -E "s#@[^/?]+([/?]|\$)#@127.0.0.1:${port}\1#")
-  case "$url" in *\?*) url="${url}&sslmode=verify-ca&sslrootcert=${ca}" ;; *) url="${url}?sslmode=verify-ca&sslrootcert=${ca}" ;; esac
-  # 用空的 config 檔跑：不會讀 configs/local.yaml，萬一 env 沒生效也只會報 postgres.url is required，不會連到本機 DB。
-  # 不用 `task bootstrap`：它會把 APP_CONFIG 設成 configs/local.yaml、還帶 --insecure-allow-plaintext（只給本機開發 DB）。release 同版 code 在 repo 根目錄跑，或換成同版 worker binary（./worker bootstrap）。
-  cfg=$(mktemp); trap 'rm -f "$cfg"' EXIT
-  APP_CONFIG="$cfg" APP_POSTGRES_URL="$url" go run ./apps/worker bootstrap --expect-target "127.0.0.1:${port}" --name root --role <release 的 auth.admin_role> --key-name bootstrap
-)
-```
-
-- DB 要開 TLS 才走得通這份 runbook：chart 沒有 Postgres，kind 的 `deps.yaml` 那個也沒開 TLS。自備的 Postgres 開 `ssl=on`（自簽 CA 也行），`ca` 指到簽它的 CA；`verify-ca` 不比對主機名，所以 server 憑證的 SAN 不需要含 `127.0.0.1`。app 自己的 `secrets.postgresUrl` 可以維持 `sslmode=require`（只有 bootstrap 這條路要驗憑證）。
-- 空 config 代表 `--role` 的預設是內建預設值、不是 release 的 `auth.admin_role`；兩者不同時要明寫 `--role`，不然 key 會沒有管理權限。
-- TLS 一律驗憑證。透過 port-forward 連 `127.0.0.1` 時 hostname 對不上，所以用 `verify-ca` + `sslrootcert`（憑證鏈照驗，只是不比對主機名；上面的指令在 URL 尾端附加這兩個）。或者改從能以原主機名連到 DB 的地方（bastion、managed DB 的 proxy）跑，保留 `verify-full`，這時不需要 port-forward 與 `sed`，`--expect-target` 填那個 host:port。
-- 附加（而不是取代）的理由：整串 URL 做取代會改到不該改的字，例如密碼 `pw_sslmode=verify-full` 或 `application_name=sslmode=verify-full`。附加只依賴「重複 key 以最後一個為準」；這個語意就算哪天變了，bootstrap 的檢查是看 pgx 最終解析出的結果，TLS 沒驗證就在連線前拒絕——會安全地失敗，不會悄悄用錯的設定連線。密碼要用 `%40`、`%2F`、`%3F` 編碼 `@`、`/`、`?`；未編碼的 `@` 是 malformed URL：上面的指令在改寫前就會中止（authority 裡 `@` 不是剛好一個），不會呼叫 `go`。
-- `sslmode=require` 配有效的 `sslrootcert`，pgx 視同 `verify-ca`（跟 libpq 一致），檢查會放行；沒有 `sslrootcert` 的 `require`（只加密、不驗證 server）、`disable`、`allow`、`prefer` 一律拒絕。
-- 檢查在 bootstrap 裡做，不在 shell：它用 `pgx.ParseConfig`（gorm 開連線時用的同一個 parser）解析 `postgres.url`，連線前要求主 attempt 與每個 fallback 都驗證 server（`verify-ca` 帶 `sslrootcert`，或 `verify-full`；`disable` / `allow` / `prefer` / 沒有 `sslrootcert` 的 `require` 都拒絕），並要求每個 attempt 的 host:port 都**剛好等於 `--expect-target`**（擋 query 裡的 `host=` 或多個 host）。**`--expect-target` 是必填**，沒帶或帶空值，在讀 config、解析 URL 之前就以「--expect-target is required」拒絕：密碼含未編碼的 `@` 時，pgx 解析出的 host 可能是密碼的一段，而且可能剛好長得像合法的 host 名稱（`postgres://u:pw@SECRETLABEL/app` 的 `SECRETLABEL`），單看 URL 分不出來；resolver 的錯誤（`lookup <那一段>`）會被 main 寫進 log。所以只有操作者自己指定的目標可信，其他一律不信。結構檢查（host 必須是 IP、RFC 1123 DNS 名稱——可以有結尾一個根點，如 `localhost.`——或 unix socket 目錄，否則以「postgres.url has an invalid host」拒絕）只是第二道防線：它擋得住 `SECRET@127.0.0.1` 這種不成形的 host，擋不住像 host 的密碼片段，真正擋住的是 target 釘選。所以 URL 怎麼寫（空白 key、重複 key、`%` 編碼）都以 pgx 實際解析的結果為準。拒絕訊息只有原因（target 不符時加上你自己帶的 `--expect-target` 值），**不含任何從 URL 或 `PG*` env 解析出來的值**（host、port、user、dbname、密碼）：密碼含未編碼的 `@` 時，pgx 會把密碼的一段當成 host，印出來就是把密碼寫進 log。
-- 殘餘風險（TOCTOU）：檢查和實際連線各解析一次 `postgres.url`。前提是操作期間，本機的 CA 檔（`sslrootcert`）、service file、`PG*` env 由你控制且不變；有人能在這兩步之間換掉它們，檢查就保證不了連線。
-- `--insecure-allow-plaintext` 只跳過 TLS 檢查，`--expect-target` 照樣必填、照樣釘選。它只給本機開發用的 DB——`task bootstrap` 帶著它，並把 target 釘在 compose 的 Postgres（`127.0.0.1:${POSTGRES_PORT:-5432}`，預設 `127.0.0.1:5432`；`configs/local.yaml` 的 `postgres.url` 改了 port 就設同一個 `POSTGRES_PORT`）。**不要用它連 release 的 DB。**
-- 第一次跑印出 `X-API-Key: xk_…`（只這一次，庫裡只有 hash），抄到密碼管理器；再跑一次是 `already bootstrapped`、什麼都不寫。做完停掉 port-forward。port-forward 在有些環境（kind + podman 實測）會在 client 連線被重置後自己結束（`lost connection to pod`），重跑時若出現 `connection refused`，重開 port-forward 再跑。
-- 這把 key 要 `config.auth.mode` 是 `optional` 或 `required` 才有作用（chart 預設 `off`，不檢查 credential）。`required` 時不用設 `secrets.apiKeys`：DB 裡的 key 由 resolver 驗（kind 實測：沒帶 key 回 401、帶 bootstrap 出來的 key 呼叫 `IdentityService/WhoAmI` 回 `root` / `admin`）。
-- 已有 account 就是 no-op，但**不要同時跑兩個**：guard 是 read 不是 constraint，兩個 run 在空 store 上搶跑會各建一個。
-
-`worker bootstrap` 因為輸出失敗（terminal 被關、pipe 斷掉）而 exit 非 0，代表 account 與 key **已經建立**、secret **已經遺失**（庫裡只有 hash，重跑是 no-op、不會重印）。補救：用 config `auth.api_keys` 的 break-glass key 登入，再呼叫 `CreateApiKey` 開一把新 key（錯誤訊息裡有沒送達那把的 key ID 與 prefix，要的話 `RevokeApiKey` 它）。
+**Secret 不要印在叢集的 Pod stdout**：叢集裡任何 Pod（Job、`kubectl run`、`kubectl exec`）的 stdout 都會進 Pod log，也可能被 log collector 收走。會輸出 secret 的操作者指令只在自己的 terminal 跑，經 `kubectl port-forward`（或原本連 DB 的 proxy / bastion）連 DB，不要寫成叢集裡的 Job。port-forward 在有些環境（kind + podman 實測）會在 client 連線被重置後自己結束（`lost connection to pod`）；重跑時出現 `connection refused` 就重開 port-forward。
 
 ```bash
 task helm-check    # 每個 ci/*.yaml profile：helm lint --strict → helm template | kubeconform -strict → deployments/helm/check.py

@@ -2,6 +2,8 @@
 
 <sub>← [README](../README.md)</sub>
 
+> **狀態：歷史記錄（#561）。** identity bounded context（`pkgs/identity`、`protos/identity`、它的 migration、`worker bootstrap`）已從 template 移除，下文的正文是移除前的設計，**不是現況**，照著操作不會成功。仍然成立的只有 platform 的擴充點（`server.CredentialResolver`、`server.ExternalIdentityResolver`、`server.RequireRole`、`auth.api_keys`）本身，它們的現行行為以程式與 [config.md](config.md) 為準。要自己做一個 identity，這份文件可當設計參考，不是可直接套用的規格。後續（#561 PR③）會把仍成立的規則搬到 `docs/auth.md` 並刪除本文。
+
 `pkgs/identity` 是一個 bounded context：**DB 管理的 account 與 API key**，給 rpc server 的 auth interceptor 解 `X-API-Key`。
 它只做 verifier——JWT 仍由 `auth.jwt` 指的外部 issuer 發；它不發 event、不消費 event（沒有 outbox / inbox / poison 表）。
 
