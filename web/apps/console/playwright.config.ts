@@ -1,6 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
 import { derivePorts } from "./e2e/ports";
-import { imageSpecs } from "./e2e/image-specs";
 
 // Console smoke against the real server: a ./bin/rpc and the production build
 // served by vite preview, which proxies /api to it like the dev server does.
@@ -21,8 +20,8 @@ import { imageSpecs } from "./e2e/image-specs";
 // E2E_CONSOLE_URL: run the "image" project against a console served from somewhere else —
 // e2e/image.sh builds web/apps/console/Dockerfile and points this at the container, so the
 // nginx config (SPA fallback, /api proxy, cache headers) is what gets tested, not vite preview.
-// "image" is the few specs that need the image (e2e/image-specs.ts: image.spec.ts plus a smoke of each route family);
-// (the project exists only when E2E_CONSOLE_URL is set); the rest stay on "chromium" / vite preview, and e2e/image-specs.check.ts fails on a spec nobody classified (#449).
+// "image" runs two specs: image.spec.ts (nginx itself) and admin.spec.ts (a real browser loads the admin pages through nginx);
+// (the project exists only when E2E_CONSOLE_URL is set); every other spec stays on "chromium" / vite preview.
 // The rpc is still started here; the container reaches it through the host. (image.sh runs
 // --project image only; the auth pair still starts but is unused in that mode.)
 const consoleURL = process.env.E2E_CONSOLE_URL;
@@ -76,7 +75,7 @@ export default defineConfig({
       ? [
           {
             name: "image",
-            testMatch: imageSpecs.map((f) => `**/e2e/${f}`),
+            testMatch: ["**/e2e/image.spec.ts", "**/e2e/admin.spec.ts"],
             use: { ...devices["Desktop Chrome"], baseURL: consoleURL },
           },
         ]

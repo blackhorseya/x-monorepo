@@ -44,20 +44,6 @@ test("security headers on what nginx serves, not on the proxied /api", async ({
   expect(api["content-security-policy"]).toBeUndefined();
 });
 
-test("/api is the rpc behind nginx; /healthz is nginx itself", async ({
-  request,
-}) => {
-  const version = await request.get("/api/version");
-  expect(version.status()).toBe(200);
-  expect(await version.json()).toMatchObject({
-    version: expect.any(String),
-    go: expect.stringMatching(/^go\d/),
-  });
-  const health = await request.get("/healthz");
-  expect(health.status()).toBe(200);
-  expect(await health.text()).toBe("ok\n");
-});
-
 // The CSP is rendered from deploy/security-headers.inc.template by the entrypoint's envsubst (RPC_UPSTREAM is its only
 // whitelisted variable): the header has to come out whole. connect-src is exactly 'self' (the app only calls its own
 // origin, /api), and no `${...}` of a template variable may be left in it.

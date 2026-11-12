@@ -34,10 +34,9 @@ function matches({ method, key, bodyIncludes }: Target) {
 // times   how many matching calls fail (default 1); the ones after that pass through.
 // mode    "unavailable" (default) answers 503 with a Connect `unavailable` error; "reset" drops the
 //         connection (the browser sees "Failed to fetch"); "permission_denied" answers 403 with a Connect
-//         `permission_denied` error, "invalid_argument" answers 400 with a Connect `invalid_argument` error: answers,
-//         not blips, for specs that must show they are not retried.
+//         `permission_denied` error: an answer, not a blip, for specs that must show it is not retried.
 // (times: Infinity = every matching call fails.)
-export type FailRequestsOptions = Target & { times?: number; mode?: "unavailable" | "reset" | "permission_denied" | "invalid_argument" };
+export type FailRequestsOptions = Target & { times?: number; mode?: "unavailable" | "reset" | "permission_denied" };
 
 export type RequestFault = {
   /** Calls that matched (method and key), failed or not. */
@@ -59,7 +58,7 @@ export async function failRequests(page: Page, options: FailRequestsOptions): Pr
     failed++;
     if (mode === "reset") return route.abort("connectionreset");
     return route.fulfill({
-      status: { unavailable: 503, permission_denied: 403, invalid_argument: 400 }[mode],
+      status: { unavailable: 503, permission_denied: 403 }[mode],
       contentType: "application/json",
       body: JSON.stringify({ code: mode, message: "injected by failRequests" }),
     });
@@ -122,12 +121,11 @@ export async function holdRequests(page: Page, target: Target): Promise<RequestH
 // runs first): holdRequests parks the call and, on release(), hands it on to this script.
 // count(key) = calls that reached this script, answered or refused with 599: a call a hold has parked has
 // not reached it yet.
-export type Reply = { ok: object } | { connect: "unauthenticated" | "permission_denied" | "unavailable" } | { http: number };
+export type Reply = { ok: object } | { connect: "unauthenticated" };
 
 const answer = (r: Reply) => {
   if ("ok" in r) return { status: 200, contentType: "application/json", body: JSON.stringify(r.ok) };
-  if ("http" in r) return { status: r.http, contentType: "text/plain", body: "injected" };
-  const status = { unauthenticated: 401, permission_denied: 403, unavailable: 503 }[r.connect];
+  const status = { unauthenticated: 401 }[r.connect];
   return { status, contentType: "application/json", body: JSON.stringify({ code: r.connect, message: `injected: ${r.connect}` }) };
 };
 

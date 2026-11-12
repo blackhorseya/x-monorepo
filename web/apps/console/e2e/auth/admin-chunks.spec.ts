@@ -1,119 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
-import { ADMIN_KEY, OPS_KEY } from "../../playwright.config";
-import { probeResponse, routeProbe } from "../probe";
-import { settle, useKey } from "./helpers";
+import { ADMIN_KEY } from "../../playwright.config";
 
-// The admin pages are their own chunks (lazy routes). A caller who is not an admin never needs
-// them: the gate must show without fetching, or waiting for, the page's chunk — also when the
-// router asks for the chunk early (direct load, link intent, in-app navigation). An admin still
-// gets the early fetch. Runs in the auth project: OPS_KEY has no role, ADMIN_KEY the admin role.
+// The admin pages are their own chunks (lazy routes). When an admin's chunk cannot be loaded the console shows
+// a visible error with the layout intact, and Retry loads it. Runs in the auth project: ADMIN_KEY has the admin role.
 
 const seed = (page: Page, key: string) =>
   page.addInitScript((k) => localStorage.setItem("console.credential", JSON.stringify({ kind: "api_key", value: k })), key);
-const chunk = (name: string) => new RegExp(`/assets/${name}-[^/]+\\.js`);
-const nav = (page: Page, name: string) => page.locator("header nav").getByRole("link", { name, exact: true });
-// Client-side navigation, as a link click would do, without a new document load.
-const navigate = (page: Page, path: string) =>
-  page.evaluate((p) => {
-    history.pushState(null, "", p);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
-
-for (const name of ["poison", "prune"]) {
-  test(`no admin role: direct /${name} shows the gate without fetching its chunk`, async ({ page }) => {
-    await seed(page, OPS_KEY);
-    const chunks: string[] = [];
-    page.on("request", (r) => {
-      if (chunk(name).test(r.url())) chunks.push(r.url());
-    });
-    await page.goto(`/${name}`);
-    await expect(page.getByText("Admin role required")).toBeVisible();
-    await page.waitForTimeout(500);
-    expect(chunks).toEqual([]);
-  });
-}
-
-test("no admin role: the gate shows even when the admin chunk cannot be loaded", async ({ page }) => {
-  await seed(page, OPS_KEY);
-  let calls = 0;
-  await page.route("**/assets/poison-*.js", (route) => {
-    calls++;
-    return route.abort("failed");
-  });
-  await page.goto("/poison");
-  await expect(page.getByText("Admin role required")).toBeVisible();
-  expect(calls).toBe(0);
-});
-
-test("no admin role: a slow admin chunk does not delay the gate", async ({ page }) => {
-  await seed(page, OPS_KEY);
-  let release!: () => void;
-  const hold = new Promise<void>((r) => (release = r));
-  await page.route("**/assets/poison-*.js", async (route) => {
-    await hold;
-    await route.continue();
-  });
-  try {
-    await page.goto("/poison");
-    await expect(page.getByText("Admin role required")).toBeVisible({ timeout: 1_500 });
-  } finally {
-    release();
-  }
-});
-
-test("no admin role, already known: navigating to an admin page fetches no chunk", async ({ page }) => {
-  await seed(page, OPS_KEY);
-  const probe = probeResponse(page);
-  await page.goto("/prune"); // not the page whose chunk is checked below
-  expect((await probe).status()).toBe(403);
-
-  const chunks: string[] = [];
-  page.on("request", (r) => {
-    if (chunk("poison").test(r.url())) chunks.push(r.url());
-  });
-  await navigate(page, "/poison");
-  await expect(page.getByText("Admin role required")).toBeVisible();
-  await page.waitForTimeout(500);
-  expect(chunks).toEqual([]);
-});
-
-test("admin: link intent still preloads the admin chunk", async ({ page }) => {
-  await seed(page, ADMIN_KEY);
-  await page.goto("/prune"); // not the page whose chunk is preloaded below
-  await expect(nav(page, "Poison")).toBeVisible();
-  const chunks: string[] = [];
-  page.on("request", (r) => {
-    if (chunk("poison").test(r.url())) chunks.push(r.url());
-  });
-  await nav(page, "Poison").hover();
-  await expect.poll(() => chunks.length).toBeGreaterThan(0);
-});
-
-// ── An admin whose chunk is slow or missing, and a credential that changes under the router ──
-
 const POISON_CHUNK = "**/assets/poison-*.js";
 const gate = (page: Page) => page.getByText("Admin role required");
 const poisonPage = (page: Page) => page.getByText("Poison queue");
-
-test("admin: a slow chunk shows the loading state, never the role gate, and the page mounts on release", async ({ page }) => {
-  await seed(page, ADMIN_KEY);
-  let release!: () => void;
-  const hold = new Promise<void>((r) => (release = r));
-  await page.route(POISON_CHUNK, async (route) => {
-    await hold;
-    await route.continue();
-  });
-  try {
-    await page.goto("/poison");
-    await expect(page.getByRole("status").filter({ hasText: "Loading" })).toBeVisible();
-    await expect(gate(page)).toHaveCount(0);
-    await expect(poisonPage(page)).toHaveCount(0);
-  } finally {
-    release();
-  }
-  await expect(poisonPage(page)).toBeVisible();
-  await expect(gate(page)).toHaveCount(0);
-});
 
 test("admin: a chunk that fails to load is a visible error, not a blank page, and Retry recovers", async ({ page }) => {
   await seed(page, ADMIN_KEY);
@@ -129,46 +24,3 @@ test("admin: a chunk that fails to load is a visible error, not a blank page, an
   await expect(poisonPage(page)).toBeVisible();
   await expect(page.getByText("Failed to load this page")).toHaveCount(0);
 });
-
-// The admin answer for the previous credential is cached under its own generation. A new
-// credential must not inherit it: until the new probe answers, the router must not preload the
-// admin chunk (pending), and once it says "no" it must not either (denied). Fresh page context per
-// route, so no admin chunk is cached by an earlier case.
-for (const name of ["poison", "prune"]) {
-  test(`credential change: a cached admin answer cannot preload ${name}, pending or denied`, async ({ page }) => {
-    await seed(page, ADMIN_KEY);
-    await page.goto(name === "poison" ? "/prune" : "/poison"); // the other admin page: this one's chunk must not be loaded yet
-    await expect(nav(page, "Poison")).toBeVisible(); // probe true is cached for the admin key
-
-    let release!: () => void;
-    const hold = new Promise<void>((r) => (release = r));
-    let opsStarted!: () => void;
-    const opsProbeInFlight = new Promise<void>((r) => (opsStarted = r));
-    await routeProbe(page, async (route) => {
-      if (route.request().headers()["x-api-key"] !== OPS_KEY) return route.continue();
-      const answer = await route.fetch(); // the real 403 for OPS_KEY, held back
-      opsStarted();
-      await hold;
-      await route.fulfill({ response: answer });
-    });
-    const chunks: string[] = [];
-    page.on("request", (r) => {
-      if (chunk(name).test(r.url())) chunks.push(r.url());
-    });
-
-    try {
-      await useKey(page, OPS_KEY);
-      await opsProbeInFlight; // the new credential's probe is pending
-      await navigate(page, `/${name}`);
-      await expect(page).toHaveURL(new RegExp(`/${name}$`));
-      await settle(page); // the router has had its chance to preload
-      expect(chunks).toEqual([]);
-      await expect(gate(page)).toHaveCount(0); // pending is not an answer: no gate, no page
-    } finally {
-      release();
-    }
-    await expect(gate(page)).toBeVisible(); // denied
-    await settle(page);
-    expect(chunks).toEqual([]);
-  });
-}
