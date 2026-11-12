@@ -4,7 +4,6 @@
 # Playwright starts bin/rpc as usual, and runs the specs with E2E_CONSOLE_URL set (which also
 # turns e2e/image.spec.ts on). Only the "image" project runs here (playwright.config.ts: image.spec.ts and
 # admin.spec.ts); the others run on vite preview in console-e2e (#449).
-# E2E_IMAGE_CONTEXT: build from another context directory.
 # docker or podman, Linux or a podman machine: the container reaches
 # the host through host.docker.internal (host-gateway) / host.containers.internal.
 #
@@ -27,7 +26,7 @@ else
 fi
 
 echo "image.sh: building localhost/x-monorepo/console:e2e with $tool"
-"$tool" build -q -t localhost/x-monorepo/console:e2e "${E2E_IMAGE_CONTEXT:-.}" >/dev/null
+"$tool" build -q -t localhost/x-monorepo/console:e2e . >/dev/null
 "$tool" rm -f "$name" >/dev/null 2>&1 || true
 trap '"$tool" rm -f "$name" >/dev/null 2>&1 || true' EXIT
 img=localhost/x-monorepo/console:e2e

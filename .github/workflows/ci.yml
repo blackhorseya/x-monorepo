@@ -291,7 +291,7 @@ jobs:
     needs: affected
     if: needs.affected.outputs.run_console_e2e == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # p90 142s, max 656s (last 11 days)
+    timeout-minutes: 15 # one job; 163 s in the #574 run (a single observation)
     services:
       postgres:
         image: postgres:16-alpine
