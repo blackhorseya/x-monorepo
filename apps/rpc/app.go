@@ -56,7 +56,7 @@ func NewRoutes(mounts []server.Mount, poison *admin.PoisonService) []server.Rout
 
 // NewPoisonService serves admin.v1.AdminService over the poison table of every
 // BC that consumes events (its Mount's PoisonSchema; the worker's poison.go
-// lists the same set). identity consumes no events, so none is listed yet.
+// lists the same set). The template has no BC, so none is listed yet.
 func NewPoisonService(db *gorm.DB, auth config.Auth, mounts []server.Mount) *admin.PoisonService {
 	schemas := []string{}
 	for _, m := range mounts {
