@@ -13,8 +13,9 @@ import (
 )
 
 // ConnPolicy is what a caller demands of the database connection before it
-// opens one: `worker bootstrap` always, any other app through
-// postgres.expect_target.
+// opens one. NewDB and migrate demand only the target (postgres.expect_target,
+// with AllowPlaintext); a command-line tool that connects through a
+// port-forward can also demand TLS verification, by leaving AllowPlaintext off.
 type ConnPolicy struct {
 	// ExpectTarget, when set, is the host:port every connection attempt must
 	// dial (for example 127.0.0.1:15432 behind a kubectl port-forward). It

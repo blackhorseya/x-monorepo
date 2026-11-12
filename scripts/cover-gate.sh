@@ -32,5 +32,16 @@ for m in $mods; do
     fi
   done
 done
-[[ "$checked" -gt 0 ]] || { echo "cover-gate: no */domain/* package in any module — nothing was checked" >&2; exit 1; }
+if [[ "$checked" -eq 0 ]]; then
+  # a BC is every pkgs/<name> but kernel and platform: with none there is no domain to cover, and that is the template as it
+  # ships; with a BC but no */domain/* package the glob or the layout is wrong, and a gate that checked nothing must not pass.
+  # The pkgs/ directories are deliberately used instead of scripts/bcs.jq: they are a superset of go.work's BC set, so when the
+  # two disagree the gate can only turn red, never pass.
+  bcs=0
+  for d in pkgs/*/; do
+    d=${d%/}; [[ "${d##*/}" == kernel || "${d##*/}" == platform ]] || bcs=$((bcs + 1))
+  done
+  if [[ "$bcs" -eq 0 ]]; then echo "cover-gate: no bounded context under pkgs/, so no */domain/* package to check"; exit 0; fi
+  echo "cover-gate: $bcs bounded context(s) but no */domain/* package in any module — nothing was checked" >&2; exit 1
+fi
 exit $fail

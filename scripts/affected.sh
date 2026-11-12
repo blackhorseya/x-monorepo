@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print the go.work modules affected by a change, one per line (e.g. "pkgs/identity").
+# Print the go.work modules affected by a change, one per line (e.g. "pkgs/platform").
 #
 #   scripts/affected.sh                 # vs BASE_REF (default origin/main, falls back to HEAD)
 #   scripts/affected.sh --files a b c   # from an explicit file list
@@ -25,7 +25,7 @@
 #
 # STANDALONE: keep apps/rpc here. plan.sh designates the scope test-apps/rpc as the one job that saves the shared "race" build
 # cache (the largest compile set); without this entry no job would save it.
-STANDALONE="apps/rpc apps/worker pkgs/platform pkgs/identity"
+STANDALONE="apps/rpc apps/worker pkgs/platform"
 set -euo pipefail
 self_dir=${0%/*}; [ "$self_dir" != "$0" ] || self_dir=.   # dirname without a $(…)
 cd "$self_dir/.." || exit 1

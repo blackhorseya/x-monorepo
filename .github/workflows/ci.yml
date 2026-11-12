@@ -23,7 +23,7 @@ jobs:
   # scripts/affected.sh → the go.work modules for the test matrix; scripts/ci-changes.sh → one
   # run_<job> flag per job below, from the files the PR touches (a docs / Grafana / workflow-only
   # PR runs almost nothing; a *_test.go-only PR runs the Go checks and the test matrix; product Go runs
-  # the Go jobs and helm-kind; the k6 / k6-auth / k6-wire / release-snapshot / console-image
+  # the Go jobs and helm-kind; the release-snapshot / console-image
   # jobs have narrower triggers, see the table in scripts/ci-changes.sh).
   # Every job is its own job (no dynamic matrix over them) so a skipped one shows up as a skipped check.
   # On main (the release gate) and on dispatch every job runs: a skipped job must never be the
@@ -47,9 +47,6 @@ jobs:
       run_helm: ${{ steps.jobs.outputs.run_helm }}
       run_scripts_test: ${{ steps.jobs.outputs.run_scripts_test }}
       run_helm_kind: ${{ steps.jobs.outputs.run_helm_kind }}
-      run_k6: ${{ steps.jobs.outputs.run_k6 }}
-      run_k6_auth: ${{ steps.jobs.outputs.run_k6_auth }}
-      run_k6_wire: ${{ steps.jobs.outputs.run_k6_wire }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
@@ -183,79 +180,6 @@ jobs:
       - name: the chart version rises with the chart
         if: github.event_name == 'pull_request'
         run: deployments/helm/check-chart-bump.sh "${{ github.base_ref }}"
-
-  # The interceptors under traffic: tests/k6/smoke.sh runs the two k6 scripts, each against
-  # its own ./bin/rpc on the service Postgres — rate limit at 50 rps (429 + Retry-After,
-  # accepted ≈ rps), timeout at 1ns (every call DEADLINE_EXCEEDED). Runs on tests/k6,
-  # pkgs/platform/server + config (the interceptors and their settings), apps/rpc, apps/worker,
-  # configs and go.mod / go.sum / go.work; business-flow changes are helm-kind's.
-  k6:
-    needs: affected
-    if: needs.affected.outputs.run_k6 == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10 # p90 109s, max 169s (last 11 days)
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
-    env:
-      DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/setup
-      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
-      - run: task build
-      - run: APP_CONFIG=configs/config.example.yaml APP_POSTGRES_URL=$DATABASE_URL bin/migrate up
-      - run: task k6-smoke
-      - if: failure()
-        run: tail -n 50 bin/k6-*.log
-
-  # The key gate (tests/k6/auth-matrix.sh): ratelimit.js and timeout.js with a made-up API key that must
-  # not reach k6's output, also when the answer is a 503 or a 307 echoing it, or the key is a known code (#193).
-  # Parallel to `k6`; it runs on the auth
-  # paths (pkgs/platform/server + config, pkgs/identity, apps/rpc, configs, tests/k6), not on every Go change.
-  # One runner, one Postgres service, the cells one after another (each with its own rpc and log).
-  k6-auth:
-    needs: affected
-    if: needs.affected.outputs.run_k6_auth == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U app -d app" --health-interval 2s --health-timeout 5s --health-retries 15
-    env:
-      DATABASE_URL: postgres://app:app@127.0.0.1:5432/app?sslmode=disable
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/setup
-      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
-      - run: task build
-      - run: APP_CONFIG=configs/config.example.yaml APP_POSTGRES_URL=$DATABASE_URL bin/migrate up
-      - run: task k6-auth-matrix
-      - if: failure()
-        run: tail -n 50 bin/k6-auth-*.log
-
-  # tests/k6/wire.sh: the k6 scripts against a broken HTTP response that quotes the key — a broken
-  # response must not carry the key into k6's output or tags (#209). It needs k6 and python3 only
-  # (no Postgres, no ./bin/rpc), so it is a job of its own and does not follow product Go: it runs on tests/k6 and the module graph (see ci-changes.sh).
-  k6-wire:
-    needs: affected
-    if: needs.affected.outputs.run_k6_wire == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/setup
-      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
-      - run: task k6-wire
-      - run: task k6-parallel-test
-      - if: failure()
-        run: tail -n 50 bin/k6-wire/*.log
 
   # The chart installed for real: kind + throwaway Postgres / Redis, images built from this
   # commit (the console one needs node: pnpm build of web/apps/console). task helm-kind is the whole of it on one

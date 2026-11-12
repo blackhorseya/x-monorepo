@@ -41,7 +41,6 @@ entries=(
   "run CONFIG"
   "worker CONFIG"
   "poison CONFIG -- list"
-  "bootstrap CONFIG"
   "prune CONFIG -- --older-than 1h --dry-run"
   "migrate CONFIG -- version"
 )

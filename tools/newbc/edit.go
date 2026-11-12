@@ -189,6 +189,14 @@ func (p *Plan) editShared(o Options, d data, work *modfile.WorkFile) error {
 		if err != nil {
 			return nil, err
 		}
+		if !funcContains(out, "Initialize", "usecasex.NewRecorder") {
+			// the use cases' metrics recorder every BC's ProviderSet needs, once for all BCs (the template's
+			// rpc wires no BC, so it carries none until the first one is added)
+			out, err = insertAt("apps/rpc/wire.go", out, "//", "rpc-providers", "usecasex.NewRecorder,")
+			if err != nil {
+				return nil, err
+			}
+		}
 		if o.Events && !funcContains(out, "Initialize", "eventbus.ProvidePublisher") {
 			// the outbox publisher the BC's use cases publish through, once for all event BCs
 			return insertAt("apps/rpc/wire.go", out, "//", "rpc-providers", "eventbus.ProvidePublisher, // outbox of the event BCs")
@@ -196,7 +204,7 @@ func (p *Plan) editShared(o Options, d data, work *modfile.WorkFile) error {
 
 		return out, nil
 	}
-	rpcWireImports := map[string]string{bcPkg: ""}
+	rpcWireImports := map[string]string{bcPkg: "", mod + "/pkgs/platform/usecasex": ""}
 	if o.Events {
 		rpcWireImports[mod+"/pkgs/platform/eventbus"] = ""
 	}
@@ -240,7 +248,7 @@ func (p *Plan) editShared(o Options, d data, work *modfile.WorkFile) error {
 
 		return out, nil
 	}
-	if err := p.editFile(o.Root, "apps/worker/wire.go", goEdit("apps/worker/wire.go", workerWire, map[string]string{bcPkg: ""})); err != nil {
+	if err := p.editFile(o.Root, "apps/worker/wire.go", goEdit("apps/worker/wire.go", workerWire, map[string]string{bcPkg: "", mod + "/pkgs/platform/usecasex": ""})); err != nil {
 		return err
 	}
 	err = p.editFile(o.Root, "apps/worker/consumers.go", goEdit("apps/worker/consumers.go", func(src []byte) ([]byte, error) {

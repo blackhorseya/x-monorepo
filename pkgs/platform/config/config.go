@@ -89,22 +89,18 @@ type Auth struct {
 	// (default "admin"); with auth.mode off it is not checked.
 	AdminRole string `mapstructure:"admin_role"`
 	JWT       JWT    `mapstructure:"jwt"`
-	// OIDC is the external-login verifier (docs/identity-login.md). Off by
-	// default; while off, nothing about it is read or validated.
+	// OIDC is the external-login verifier (platform/oidc). Off by default; while
+	// off, nothing about it is read or validated. On, the rpc also needs a
+	// server.ExternalIdentityResolver wired in apps/rpc, or it refuses to start.
 	OIDC OIDC `mapstructure:"oidc"`
 	// Public lists procedures ("/<pkg>.<Service>/<Method>") that never need a
 	// credential, whatever the mode.
 	Public []string `mapstructure:"public"`
-	// ResolverTimeout bounds one server.CredentialResolver lookup (the
-	// identity BC's database read behind an X-API-Key the config does not
-	// know). Auth runs outside http.timeout, so without this a stuck database
+	// ResolverTimeout bounds one server.CredentialResolver lookup (a
+	// database read behind an X-API-Key the config does not know, when the
+	// application wires a resolver). Auth runs outside http.timeout, so without this a stuck database
 	// would hold every authenticating request. Default 2s; 0 = unbounded.
 	ResolverTimeout time.Duration `mapstructure:"resolver_timeout"`
-	// LastUsedInterval is how often an identity API key's last_used_at is
-	// written: at most once per key per interval (per replica in memory, and by
-	// the UPDATE's own condition across replicas). It is the staleness the
-	// Console shows. Default 1m; 0 = never record.
-	LastUsedInterval time.Duration `mapstructure:"last_used_interval"`
 }
 
 // JWT verifies `Authorization: Bearer <token>`: exactly one of HS256Secret
@@ -135,9 +131,10 @@ type OIDCIssuer struct {
 	Issuer string `mapstructure:"issuer"`
 	// Audience is our client id at this issuer; a token's aud must contain it.
 	Audience string `mapstructure:"audience"`
-	// Mapping decides what an identity with no account yet may do (bound |
-	// auto_provision, default bound). The verifier only carries it; the
-	// identity BC and the interceptor use it.
+	// Mapping is what an identity with no account yet may do (bound |
+	// auto_provision, default bound). The platform only checks the value is one
+	// of the two; it is for the ExternalIdentityResolver an application wires to
+	// read, and nothing in the platform acts on it.
 	Mapping string `mapstructure:"mapping"`
 	// AllowInsecureIssuer lets an http:// issuer on a non-loopback host through
 	// (dev compose / kind, where the name resolves inside the cluster). Never
@@ -160,7 +157,7 @@ func (i OIDCIssuer) EffectiveMapping() string {
 	return i.Mapping
 }
 
-// CheckIssuerURL is the issuer policy of docs/identity-login.md §10: an
+// CheckIssuerURL is the issuer policy: an
 // absolute https URL, or http only when the host is a loopback literal
 // (localhost, 127.0.0.0/8, ::1) or insecure is true; no query or fragment.
 // "Loopback" is judged on the host as written, never on what it resolves to.
@@ -224,8 +221,7 @@ type Postgres struct {
 	// ExpectTarget, when set, is the host:port every connection attempt for URL
 	// must dial; NewDB refuses to connect otherwise. It catches a host= (or a
 	// host list) in the URL sending the pool somewhere other than intended.
-	// Empty = no check. Only the target is checked, not TLS: that rule stays
-	// with `worker bootstrap`.
+	// Empty = no check. Only the target is checked, not TLS.
 	ExpectTarget string `mapstructure:"expect_target"`
 
 	// MaxOpenConns caps the connections this process opens (database/sql
@@ -340,7 +336,7 @@ func Load() (*AppConfig, error) {
 
 // validateOIDC checks auth.oidc only when it is enabled. With a legacy auth.jwt
 // verifier configured, its issuer must be pinned and differ from every OIDC
-// issuer (docs/identity-login.md §3): a wildcard legacy verifier would
+// issuer: a wildcard legacy verifier would
 // otherwise share a trust boundary with the OIDC one.
 func (a Auth) validateOIDC() error {
 	if !a.OIDC.Enabled {
@@ -402,7 +398,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.oidc.enabled", false)
 	v.SetDefault("auth.oidc.issuers", []OIDCIssuer{})
 	v.SetDefault("auth.resolver_timeout", 2*time.Second)
-	v.SetDefault("auth.last_used_interval", time.Minute)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("postgres.url", "")
@@ -468,10 +463,11 @@ func (x *AppConfig) validate() error {
 	switch x.Auth.Mode {
 	case AuthOff:
 	case AuthOptional, AuthRequired:
-		// No static key and no jwt is allowed: the rpc server also resolves
-		// keys through server.CredentialResolver (the identity BC's database).
-		// server.New warns about it, because with an empty identity store
-		// nobody can get in until a key exists (bootstrap: auth.api_keys).
+		// No static key and no jwt is allowed here only when the application
+		// wires a server.CredentialResolver, which then answers for keys the
+		// config does not know (apps/rpc wires none, so there it is refused).
+		// NewAuthInterceptor refuses when it has no credential source at all,
+		// and server.New warns when the resolver is the only one.
 	default:
 		return fmt.Errorf("invalid auth.mode %q (want off|optional|required)", x.Auth.Mode)
 	}
@@ -489,9 +485,6 @@ func (x *AppConfig) validate() error {
 	}
 	if x.Auth.ResolverTimeout < 0 {
 		return errors.New("auth.resolver_timeout must not be negative")
-	}
-	if x.Auth.LastUsedInterval < 0 {
-		return errors.New("auth.last_used_interval must not be negative")
 	}
 	if x.Auth.JWT.HS256Secret != "" && x.Auth.JWT.PublicKey != "" {
 		return errors.New("auth.jwt.hs256_secret and auth.jwt.public_key are exclusive")

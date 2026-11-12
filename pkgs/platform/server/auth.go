@@ -49,9 +49,9 @@ const (
 )
 
 // CredentialResolver is the platform's door to credentials that live
-// somewhere other than the config: the identity bounded context implements it
-// (its adapters/auth) and the composition root wires it in, so the platform
-// never imports a BC. ResolveAPIKey answers for a presented X-API-Key the
+// somewhere other than the config: a bounded context implements it and the
+// composition root wires it in (apps/rpc wires none in the template), so the
+// platform never imports a BC. ResolveAPIKey answers for a presented X-API-Key the
 // static auth.api_keys did not match: found=false means no such key (the
 // request is rejected as invalid), err means the lookup itself failed (the
 // request is rejected too, and the error is logged — a database outage must
@@ -201,7 +201,7 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 			}
 			if res.unbound {
 				// A verified token no account is bound to, on a procedure that lets
-				// it in (ClaimInvite): there is an identity and no principal.
+				// it in (AllowsUnbound): there is an identity and no principal.
 				count(c, ResultOK, MethodJWT)
 				recordAuth(c, MethodJWT, "")
 				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(MethodJWT))
@@ -263,7 +263,7 @@ var (
 type outcome struct {
 	principal contextx.Principal
 	// external is the verified OIDC identity, set whenever the credential was an
-	// OIDC token (bound or not): ClaimInvite reads it from the context.
+	// OIDC token (bound or not): a procedure that needs it reads it from the context.
 	external *contextx.ExternalIdentity
 	// unbound: the token verified but no account is bound to it and the
 	// procedure admits that. principal is then the zero (anonymous) value.
@@ -277,7 +277,7 @@ type outcome struct {
 // bound is only a bound for resolvers that honour their context; a late answer
 // is not a verified credential either way (the resolver may have ignored the
 // context, or won a race with it), so it is an errResolver failure — whatever
-// it said, "unbound" included: a late "not bound" must not let ClaimInvite run.
+// it said, "unbound" included: a late "not bound" must not let an unbound-allowed procedure run.
 func bounded[T any](c context.Context, timeout time.Duration, call func(context.Context) (T, error)) (T, error) {
 	rc, cancel := c, func() {}
 	if timeout > 0 {

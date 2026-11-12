@@ -1,7 +1,7 @@
 // Package oidc verifies bearer tokens from external OpenID Connect issuers
-// (docs/identity-login.md §6, §7, §10). It knows nothing about accounts: the
-// output is the verified external identity (iss, sub, email, email_verified,
-// iat), and mapping it to an account is the identity BC's job.
+// It knows nothing about accounts: the output is the verified external
+// identity (iss, sub, email, email_verified, iat), and mapping it to an account
+// is the job of the server.ExternalIdentityResolver the application wires.
 //
 // Per issuer it fetches the discovery document and the JWKS lazily, caches the
 // keys (lifetime from Cache-Control, clamped), refetches on an unknown kid at

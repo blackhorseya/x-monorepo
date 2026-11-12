@@ -23,15 +23,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	identitypg "github.com/blackhorseya/x-monorepo/pkgs/identity/infra/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 )
 
-// migrations lists every BC, in dependency order: identity stands alone.
+// migrations lists every BC, in dependency order. The template ships none; `task new-bc` inserts at the anchor.
 var migrations = []postgres.Migration{
-	identitypg.Migration(),
 	// new-bc:migration
 }
 

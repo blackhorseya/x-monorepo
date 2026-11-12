@@ -105,10 +105,9 @@ for d in pkgs/*/contract; do
   cp -R "$d" "$base/$d" || exit 1
 done
 # sentinels: generated files made stale on purpose
-SENT_GO=pkgs/identity/contract/v1/service.pb.go
-SENT_OA1=pkgs/identity/contract/v1/openapi.yaml
+SENT_GO=pkgs/platform/contract/admin/v1/service.pb.go
 SENT_OA2=pkgs/platform/contract/admin/v1/openapi.yaml
-for s in $SENT_GO $SENT_OA1 $SENT_OA2; do
+for s in $SENT_GO $SENT_OA2; do
   [ -f "$base/$s" ] || { echo "gen-tools-test: sentinel $s is not in the repo" >&2; exit 1; }
   printf '\n# stale sentinel: only a regeneration removes this line\n' >>"$base/$s" || exit 1
 done
@@ -191,7 +190,7 @@ run_cell() {
   make_fixture "$tf" "$kind" "$tool" || { echo "gen-tools-test: $label: cannot build the fixture" >&2; return 0; }
   snapshot "$FX" "$tmp/before" || { echo "gen-tools-test: $label: cannot hash the fixture" >&2; return 0; }
   # the hash is only evidence when it covers something, sentinels included
-  if [ ! -s "$tmp/before" ] || ! grep -q "$SENT_GO" "$tmp/before" || ! grep -q "$SENT_OA1" "$tmp/before" || ! grep -q "$SENT_OA2" "$tmp/before"; then
+  if [ ! -s "$tmp/before" ] || ! grep -q "$SENT_GO" "$tmp/before" || ! grep -q "$SENT_OA2" "$tmp/before"; then
     echo "gen-tools-test: $label: the before-snapshot is empty or lacks a sentinel" >&2
     return 0
   fi

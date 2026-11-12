@@ -7,15 +7,10 @@
 package main
 
 import (
-	"github.com/blackhorseya/x-monorepo/pkgs/identity"
-	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/auth"
-	"github.com/blackhorseya/x-monorepo/pkgs/identity/adapters/rpc"
-	"github.com/blackhorseya/x-monorepo/pkgs/identity/infra/system"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"
 )
 
 // Injectors from wire.go:
@@ -24,7 +19,7 @@ import (
 // into component configs (via wire.FieldsOf).
 func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 	http := cfg.HTTP
-	configAuth := cfg.Auth
+	auth := cfg.Auth
 	oTel := cfg.OTel
 	log := cfg.Log
 	providers, cleanup, err := otel.New(oTel, log)
@@ -32,105 +27,35 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		return nil, nil, err
 	}
 	logger := providers.Logger
+	v := NewMounts()
 	configPostgres := cfg.Postgres
 	db, cleanup2, err := postgres.NewDB(configPostgres, providers)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	repository := identity.ProvideAccountRepository(db, logger)
-	uuidGenerator := system.NewUUIDGenerator()
-	clock := system.NewClock()
-	transactor := identity.ProvideTransactor(db)
-	meterProvider := providers.Meter
-	recorder, err := usecasex.NewRecorder(meterProvider)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	v := identity.ProvideCreateAccount(repository, uuidGenerator, clock, transactor, recorder)
-	v2 := identity.ProvideGetAccount(repository, recorder)
-	v3 := identity.ProvideListAccounts(repository, recorder)
-	apikeyRepository := identity.ProvideAPIKeyRepository(db)
-	adminCensus := identity.ProvideAdminCensus(db, repository, apikeyRepository, clock)
-	v4 := identity.ProvideDisableAccount(repository, adminCensus, configAuth, clock, transactor, recorder)
-	v5 := identity.ProvideEnableAccount(repository, clock, transactor, recorder)
-	v6 := identity.ProvideAssignRoles(repository, adminCensus, configAuth, clock, transactor, recorder)
-	secretGenerator := system.NewSecretGenerator()
-	v7 := identity.ProvideCreateAPIKey(repository, apikeyRepository, uuidGenerator, secretGenerator, clock, transactor, recorder)
-	v8 := identity.ProvideListAPIKeys(repository, apikeyRepository, recorder)
-	v9 := identity.ProvideRevokeAPIKey(apikeyRepository, adminCensus, configAuth, clock, transactor, recorder)
-	v10 := identity.ProvideWhoAmI(recorder)
-	inviteRepository := identity.ProvideInviteRepository(db)
-	auditLog := identity.ProvideAuditLog(db)
-	v11 := identity.ProvideCreateInvite(repository, inviteRepository, uuidGenerator, auditLog, clock, transactor, recorder)
-	v12 := identity.ProvideRevokeSessions(repository, auditLog, clock, transactor, recorder)
-	externalidentityRepository := identity.ProvideExternalIdentityRepository(db)
-	v13 := identity.ProvideClaimInvite(inviteRepository, externalidentityRepository, repository, clock, transactor, recorder)
-	v14 := identity.ProvideListAccountIdentities(repository, externalidentityRepository, inviteRepository, clock, recorder)
-	externalIdentitySource := identity.ProvideExternalIdentitySource()
-	useCases := rpc.UseCases{
-		CreateAccount:         v,
-		GetAccount:            v2,
-		ListAccounts:          v3,
-		DisableAccount:        v4,
-		EnableAccount:         v5,
-		AssignRoles:           v6,
-		CreateAPIKey:          v7,
-		ListAPIKeys:           v8,
-		RevokeAPIKey:          v9,
-		WhoAmI:                v10,
-		CreateInvite:          v11,
-		RevokeSessions:        v12,
-		ClaimInvite:           v13,
-		ListAccountIdentities: v14,
-		ExternalIdentity:      externalIdentitySource,
-	}
-	identityService := rpc.NewIdentityService(useCases, configAuth)
-	identityRPC := identity.ProvideRPC(identityService)
-	v15 := NewMounts(identityRPC)
-	poisonService := NewPoisonService(db, configAuth, v15)
-	v16 := NewRoutes(v15, poisonService)
-	v17 := NewDocs(v15)
+	poisonService := NewPoisonService(db, auth, v)
+	v2 := NewRoutes(v, poisonService)
+	v3 := NewDocs(v)
 	readiness := NewReadiness(db)
-	v18 := identity.ProvideResolveAPIKey(repository, apikeyRepository, clock, recorder)
-	v19 := identity.ProvideTouchAPIKey(apikeyRepository, clock, configAuth, recorder)
-	resolver, cleanup3, err := identity.ProvideResolver(v18, v19, clock, configAuth, logger, meterProvider)
+	credentialResolver := NoCredentialResolver()
+	externalIdentityResolver := NoExternalIdentityResolver()
+	meterProvider := providers.Meter
+	oidcAuth, cleanup3, err := NewOIDCAuth(auth, externalIdentityResolver, meterProvider)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	v20 := identity.ProvideResolveExternalIdentity(externalidentityRepository, repository, recorder)
-	v21 := identity.ProvideProvisionExternalIdentity(repository, externalidentityRepository, uuidGenerator, clock, transactor, recorder)
-	issuerMapping := identity.ProvideIssuerMapping(configAuth)
-	externalResolver, err := auth.NewExternalResolver(v20, v21, issuerMapping, clock, meterProvider)
+	v4 := TraceOptions()
+	serverServer, err := server.New(http, auth, logger, v2, v3, readiness, providers, credentialResolver, oidcAuth, v4...)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	externalCredentials := auth.NewExternalCredentials(externalResolver)
-	oidcAuth, cleanup4, err := NewOIDCAuth(configAuth, externalCredentials, meterProvider)
-	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	v22 := TraceOptions()
-	serverServer, err := server.New(http, configAuth, logger, v16, v17, readiness, providers, resolver, oidcAuth, v22...)
-	if err != nil {
-		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	return serverServer, func() {
-		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()

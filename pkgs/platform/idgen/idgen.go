@@ -10,8 +10,8 @@
 //     two pods mint v7 ids with only millisecond order between them; listings
 //     keep their (created_at, id) keyset and use the id as a tie-breaker.
 //   - An id is an identifier, never a credential. v7 carries fewer random bits
-//     and reveals when it was created. Secrets (API keys) come from
-//     identity's SecretGenerator, which stays 256 bits of pure randomness.
+//     and reveals when it was created. Secrets (API keys) are 256 bits of
+//     pure randomness from a secret generator, never an id.
 package idgen
 
 import (

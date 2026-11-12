@@ -16,16 +16,20 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 	"connectrpc.com/connect/v2/connectproto"
 
-	identityv1 "github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1"
-	"github.com/blackhorseya/x-monorepo/pkgs/identity/contract/v1/identityv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/buildinfo"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1/adminv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
-// End-to-end through the wired graph: proto client → rpc adapter → decorated
-// usecase → domain → infra.
+// noDatabase is what an authorized admin.v1 call answers when no database is wired (these tests have none): the
+// request got through the whole chain to the handler, which has nothing to read. It is how a test tells a call
+// that ran from one an interceptor refused.
+const noDatabase = "admin.no_database"
+
+// End-to-end through the wired graph: proto client → interceptor chain → admin service.
 func TestPlatform_E2E(t *testing.T) {
 	srv, cleanup, err := Initialize(&config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0"},
@@ -58,34 +62,26 @@ func TestPlatform_E2E(t *testing.T) {
 	}
 	_ = vres.Body.Close()
 
-	client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
+	client := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, ts.URL), servertest.WithErrorMeta()))
 	c := context.Background()
 
-	created, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: "alice"})
-	if err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-	a := created.GetAccount()
-	got, err := client.GetAccount(c, &identityv1.GetAccountRequest{Id: a.GetId()})
-	if err != nil || got.GetAccount().GetName() != "alice" {
-		t.Fatalf("GetAccount: %v, %v", got, err)
-	}
-
+	// The call runs the whole chain (auth is off here) and the handler answers: no database is wired, a
+	// FailedPrecondition with the service's own x-error-code.
 	var ce *connect.Error
-	_, err = client.GetAccount(c, &identityv1.GetAccountRequest{Id: "nope"})
-	if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
-		t.Fatalf("not found: err = %v", err)
+	_, err = client.ListPoison(c, &adminv1.ListPoisonRequest{})
+	if !errors.As(err, &ce) || ce.Code() != connect.CodeFailedPrecondition {
+		t.Fatalf("ListPoison: err = %v, want FailedPrecondition", err)
 	}
-	if servertest.ErrorMeta(err).Get("x-error-code") == "" {
-		t.Fatal("missing x-error-code header")
+	if got := servertest.ErrorMeta(err).Get("x-error-code"); got != noDatabase {
+		t.Fatalf("x-error-code = %q, want %s", got, noDatabase)
 	}
 
 	// Shape errors are rejected by the protovalidate interceptor, before the
-	// use case: same code, the shared validation x-error-code, and the violated
+	// service: same code, the shared validation x-error-code, and the violated
 	// fields in a buf.validate.Violations detail.
-	_, err = client.GetAccount(c, &identityv1.GetAccountRequest{})
+	_, err = client.ListPoison(c, &adminv1.ListPoisonRequest{Limit: 501})
 	if !errors.As(err, &ce) || ce.Code() != connect.CodeInvalidArgument || servertest.ErrorMeta(err).Get("x-error-code") != server.ValidationErrorCode {
-		t.Fatalf("empty request: err = %v", err)
+		t.Fatalf("limit 501: err = %v", err)
 	}
 	if len(ce.Details()) != 1 {
 		t.Fatalf("details = %d, want violations", len(ce.Details()))
@@ -99,22 +95,7 @@ func TestPlatform_E2E(t *testing.T) {
 		t.Fatalf("violations = %v", detail)
 	}
 
-	// ListAccounts: cursor pagination end to end (3 accounts, pages of 2).
-	for _, name := range []string{"bob", "carol"} {
-		if _, err := client.CreateAccount(c, &identityv1.CreateAccountRequest{Name: name}); err != nil {
-			t.Fatalf("CreateAccount %s: %v", name, err)
-		}
-	}
-	page1, err := client.ListAccounts(c, &identityv1.ListAccountsRequest{PageSize: 2})
-	if err != nil || len(page1.GetAccounts()) != 2 || page1.GetNextPageToken() == "" {
-		t.Fatalf("ListAccounts page 1: %v, %v", page1, err)
-	}
-	page2, err := client.ListAccounts(c, &identityv1.ListAccountsRequest{PageSize: 2, PageToken: page1.GetNextPageToken()})
-	if err != nil || len(page2.GetAccounts()) != 1 || page2.GetNextPageToken() != "" {
-		t.Fatalf("ListAccounts page 2: %v, %v", page2, err)
-	}
-
-	// Metrics decorator is wired for every use case and exposed on /api/metrics.
+	// /api/metrics is exposed and carries the server's rpc metrics, per procedure and outcome, for the calls above.
 	res, err := http.Get(ts.URL + server.MetricsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -125,14 +106,15 @@ func TestPlatform_E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := sb.String()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", server.MetricsPath, res.StatusCode)
+	}
 	for _, want := range []string{
-		`usecase_duration_seconds_count{kind="ok",usecase="identity.create_account"} 3`,
-		`usecase_duration_seconds_count{kind="ok",usecase="identity.get_account"} 1`,
-		`usecase_duration_seconds_count{kind="not_found",usecase="identity.get_account"} 1`,
-		`usecase_duration_seconds_count{kind="ok",usecase="identity.list_accounts"} 2`,
+		`rpc_server_call_duration_seconds_count{error_type="FAILED_PRECONDITION",rpc_method="admin.v1.AdminService/ListPoison",rpc_response_status_code="FAILED_PRECONDITION",rpc_system_name="connectrpc"} 1`,
+		`rpc_server_call_duration_seconds_count{error_type="INVALID_ARGUMENT",rpc_method="admin.v1.AdminService/ListPoison",rpc_response_status_code="INVALID_ARGUMENT",rpc_system_name="connectrpc"} 1`,
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("%s missing %q\n%s", server.MetricsPath, want, text)
+			t.Fatalf("%s missing %q", server.MetricsPath, want)
 		}
 	}
 }
@@ -180,28 +162,20 @@ func TestPlatform_Protocols(t *testing.T) {
 			if strings.HasSuffix(tt.name, "/api") {
 				base += server.RPCPrefix
 			}
-			client := identityv1connect.NewIdentityServiceClient(connect.NewClient(connecthttp.NewTransport(tt.client, base, tt.opts...), servertest.WithErrorMeta()))
+			client := adminv1connect.NewAdminServiceClient(connect.NewClient(connecthttp.NewTransport(tt.client, base, tt.opts...), servertest.WithErrorMeta()))
 			c := context.Background()
 
-			// Response meta travels as headers on every protocol, on errors too.
-			_, err := client.GetAccount(c, &identityv1.GetAccountRequest{Id: "nope"})
-			var ce *connect.Error
-			if !errors.As(err, &ce) || ce.Code() != connect.CodeNotFound {
-				t.Fatalf("err = %v, want NotFound", err)
-			}
-			if servertest.ErrorMeta(err).Get(server.RequestIDHeader) == "" {
-				t.Fatalf("error without %s: %v", server.RequestIDHeader, servertest.ErrorMeta(err))
-			}
-
-			req := &identityv1.WhoAmIRequest{}
+			// Response meta travels as headers on every protocol, on errors too: the request's own id is echoed.
 			id := "client-" + strings.ReplaceAll(tt.name, "/", "-")
 			c, info := connect.NewClientContext(c)
 			info.RequestHeader().Set(server.RequestIDHeader, id)
-			if _, err := client.WhoAmI(c, req); err != nil {
-				t.Fatal(err)
+			_, err := client.ListPoison(c, &adminv1.ListPoisonRequest{})
+			var ce *connect.Error
+			if !errors.As(err, &ce) || ce.Code() != connect.CodeFailedPrecondition {
+				t.Fatalf("err = %v, want FailedPrecondition", err)
 			}
-			if got := info.ResponseHeader().Get(server.RequestIDHeader); got != id {
-				t.Fatalf("%s = %q, want echo of the client's id", server.RequestIDHeader, got)
+			if got := servertest.ErrorMeta(err).Get(server.RequestIDHeader); got != id {
+				t.Fatalf("%s = %q, want echo of the client's id (%v)", server.RequestIDHeader, got, servertest.ErrorMeta(err))
 			}
 		})
 	}
@@ -238,13 +212,13 @@ func TestDocs(t *testing.T) {
 	on := newServer(t, true)
 	for _, path := range []string{
 		server.DocsPath,
-		server.DocsPath + "/identity", server.OpenAPIPath + "/identity.yaml",
+		server.DocsPath + "/admin", server.OpenAPIPath + "/admin.yaml",
 	} {
 		if code, _ := get(t, on, path); code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", path, code)
 		}
 	}
-	if code, body := get(t, on, server.OpenAPIPath+"/identity.yaml"); code != 200 || !strings.Contains(body, "openapi: 3") {
+	if code, body := get(t, on, server.OpenAPIPath+"/admin.yaml"); code != 200 || !strings.Contains(body, "openapi: 3") {
 		t.Fatalf("openapi body: %d %q", code, body[:min(len(body), 40)])
 	}
 	if code, _ := get(t, on, "/docs"); code != http.StatusNotFound {
@@ -255,7 +229,7 @@ func TestDocs(t *testing.T) {
 	if code, body := get(t, off, server.DocsPath); code != http.StatusNotFound || !strings.Contains(body, "APP_HTTP_DOCS=true") {
 		t.Fatalf("disabled docs = %d %q", code, body)
 	}
-	if code, _ := get(t, off, server.OpenAPIPath+"/identity.yaml"); code != http.StatusNotFound {
+	if code, _ := get(t, off, server.OpenAPIPath+"/admin.yaml"); code != http.StatusNotFound {
 		t.Fatalf("disabled openapi = %d, want 404", code)
 	}
 }

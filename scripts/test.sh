@@ -63,7 +63,7 @@ eq_of() { local _n=$1 _w=$2 _o _r; shift 2; capture _o _r subshell "$@" || exit 
 count_lines() { local rc=0; grep -c "$@" || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; }   # grep -c prints the count (0 too) and exits 1 on "none": that is a count, not a failure
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
-all_jobs="gen_freshness lint work_sync coverage build release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind k6 k6_auth k6_wire"
+all_jobs="gen_freshness lint work_sync coverage build release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind"
 # ci_changes_jobs: runs scripts/ci-changes.sh in $repo and prints the jobs set to true. The script's exit code and the formatting
 # pipeline are each checked: CI-CHANGES-FAILED when ci-changes.sh dies (even after printing a plausible set), FORMAT-FAILED when sed / tr die.
 ci_changes_jobs() {
@@ -95,21 +95,18 @@ eq_of "a _test.go next to a product file changes nothing about the product file"
   "$go_checks $go_prod" \
   jobs_on gomixed pkgs/example/domain/thing/thing.go pkgs/example/domain/thing/thing_test.go
 
-# Product Go outside the auth / k6 / worker paths: no release-snapshot, console-image, k6, k6-auth.
-eq_of "go runs the Go checks and kind, not k6-wire (it builds no Go)" \
+# Product Go: no release-snapshot, console-image.
+eq_of "go runs the Go checks and kind" \
   "$go_checks $go_prod" \
   jobs_on go pkgs/example/domain/thing/thing.go
-gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind k6 k6_wire"
-# k6-wire reads go.work (task evaluates `go work edit`, the setup action's go-version-file) and runs `go mod download`: one file at a time, each from the real entry
-eq_of "go.mod counts as go, and as a release / k6 / k6-wire input" "$gomod_jobs" jobs_on gomod pkgs/example/go.mod
-eq_of "go.work is the same set, plus scripts-test" "$go_checks build release_snapshot console_e2e scripts_test helm_kind k6 k6_wire" jobs_on gowork go.work
-# paths that left k6-wire's inputs (it reads neither the lint config nor configs/: its rpc is a stub)
-eq_of ".golangci.yml is Go config: no k6-wire" "$go_checks $go_prod" jobs_on golangci .golangci.yml
-eq_of "configs/ runs the smoke and the auth matrix, not k6-wire" "$go_checks $go_prod k6 k6_auth" jobs_on configs configs/config.example.yaml
-eq_of "proto is go + web, console-image included; no k6-wire" \
+gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind"
+eq_of "go.mod counts as go, and as a release input" "$gomod_jobs" jobs_on gomod pkgs/example/go.mod
+eq_of "go.work is the same set, plus scripts-test" "$go_checks build release_snapshot console_e2e scripts_test helm_kind" jobs_on gowork go.work
+eq_of ".golangci.yml is Go config" "$go_checks $go_prod" jobs_on golangci .golangci.yml
+eq_of "proto is go + web, console-image included" \
   "$go_checks build web console_e2e console_image helm_kind" \
   jobs_on proto protos/example/v1/service.proto
-eq_of "web only: no lint, no k6" \
+eq_of "web only: no lint" \
   "gen_freshness web console_e2e console_image helm_kind" \
   jobs_on web web/apps/console/src/routes/example.tsx
 eq_of "helm only" "helm helm_kind" jobs_on helm deployments/helm/x-monorepo/values.yaml
@@ -130,10 +127,6 @@ rename_jobs_on() {
 }
 eq_of "renaming a product file to _test.go removed a product input" \
   "$go_checks $go_prod" rename_jobs_on torename pkgs/example/helper.go pkgs/example/helper_test.go
-eq_of "k6 scripts: all three k6 jobs"  "k6 k6_auth k6_wire" jobs_on k6 tests/k6/ratelimit.js
-eq_of "platform/server: k6 and k6-auth, not k6-wire" \
-  "$go_checks $go_prod k6 k6_auth" jobs_on server pkgs/platform/server/limits.go
-eq_of "identity: k6-auth only"      "$go_checks $go_prod k6_auth" jobs_on identity pkgs/identity/provider.go
 eq_of "Dockerfile is an image change" \
   "release_snapshot console_image helm_kind" \
   jobs_on image deployments/docker/Dockerfile.rpc
@@ -175,13 +168,13 @@ eq_of "plan: issue_comment on main never writes"          false plan_out issue_c
 # A branch behind main must see only its own files (three-dot diff), not main's newer ones.
 fixture behind
 git -C "$repo" checkout -q -b change
-touch_file tests/k6/x.js; commit "test: k6"
+touch_file deployments/helm/x-monorepo/values.yaml; commit "test: helm"
 git -C "$repo" checkout -q main
 touch_file pkgs/x/a.go; commit "feat: go on main"
 git -C "$repo" update-ref refs/remotes/origin/main main
 git -C "$repo" checkout -q change
 got=$(in_repo scripts/ci-changes.sh | sed -n 's/^run_\(.*\)=true$/\1/p' | tr '\n' ' ' | sed 's/ $//') || exit 1
-expect_eq "branch behind main sees only its own files" "k6 k6_auth k6_wire" "$got"
+expect_eq "branch behind main sees only its own files" "helm helm_kind" "$got"
 # ── affected.sh ─────────────────────────────────────────────────────────────────
 # The test matrix runs the modules this prints. A file no module claims must still run all of them
 # when it is something the test job runs on (ci.yml, .github/actions, scripts/), and --all (main,
@@ -251,7 +244,7 @@ fixture releasable
 touch_file README.md changed; touch_file docs/guide.md; touch_file pkgs/example/README.md
 touch_file deployments/helm/x-monorepo/Chart.yaml; touch_file web/apps/console/e2e/a.spec.ts
 touch_file pkgs/example/domain/thing/thing_test.go; touch_file .github/workflows/ci.yml
-touch_file scripts/x.sh; touch_file Taskfile.yml; touch_file tests/k6/a.js
+touch_file scripts/x.sh; touch_file Taskfile.yml
 touch_file deployments/docker/docker-compose.yaml; touch_file deployments/docker/grafana/d.json
 commit "docs: nothing shipped"
 eq_of "docs / chart / tests / CI are not releasable" "" in_repo scripts/releasable.sh

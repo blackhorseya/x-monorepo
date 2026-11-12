@@ -37,7 +37,7 @@ kc_name=${kc_base#kubeconfig-}          # == sed 's/^kubeconfig-//'
 # $scratch/bin, ahead of everything else. The link is what the command runs (the shim's real kubectl, a script's `kind`) and what the entry
 # check below runs, so the check and the command use the same binaries by construction, whatever else is on the caller's PATH.
 mkdir -p "$scratch/bin"
-tools="kubectl helm kind docker podman k6 jq psql python3 curl git go perl base64 xargs"
+tools="kubectl helm kind docker podman jq psql python3 curl git go perl base64 xargs"
 dirs=""
 for t in $tools; do
   p=""

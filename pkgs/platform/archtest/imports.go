@@ -36,7 +36,7 @@ import (
 //
 // An import is denied when it equals a denied path or lies below it
 // (p == d || p starts with d+"/"). depguard compared plain string prefixes, so it
-// also denied a sibling like ".../identityx" for ".../identity"; this does not.
+// also denied a sibling like ".../billingx" for ".../billing"; this does not.
 // Generated files are skipped (as golangci-lint skips them); files behind a build
 // tag, wire.go's wireinject, are scanned.
 

@@ -32,7 +32,7 @@ func repoCopy(t *testing.T) string {
 		}
 		write(t, root, rel, b)
 	}
-	for _, dir := range []string{"pkgs/identity", "protos/identity"} { // an existing BC
+	for _, dir := range []string{"pkgs/legacy", "protos/legacy"} { // an existing BC, made here: the repository ships none
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +111,7 @@ func TestRefusalChangesNothing(t *testing.T) {
 		{"platform", []string{"platform"}, nil, "reserved"},
 		{"main", []string{"main"}, nil, "reserved"},
 		{"too long", []string{longName}, nil, "characters"},
-		{"existing BC", []string{"identity"}, nil, "already exists"},
+		{"existing BC", []string{"legacy"}, nil, "already exists"},
 		{"missing anchor", []string{"alpha"}, func(t *testing.T, root string) {
 			write(t, root, "buf.gen.yaml", []byte(strings.ReplaceAll(read(t, root, "buf.gen.yaml"), "# new-bc:go-package", "# gone")))
 		}, "not found"},
@@ -217,6 +217,14 @@ func TestGenerateTwoBCs(t *testing.T) {
 				t.Errorf("%s lacks %q:\n%s", file, want, got)
 			}
 		}
+	}
+	// The template's rpc wires no metrics recorder; the first BC brings it, and the second does not repeat it.
+	rpcWire := read(t, root, "apps/rpc/wire.go")
+	if n := strings.Count(rpcWire, "usecasex.NewRecorder,"); n != 1 {
+		t.Errorf("apps/rpc/wire.go has usecasex.NewRecorder %d times after two BCs, want once:\n%s", n, rpcWire)
+	}
+	if !strings.Contains(rpcWire, `"github.com/blackhorseya/x-monorepo/pkgs/platform/usecasex"`) {
+		t.Errorf("apps/rpc/wire.go does not import usecasex:\n%s", rpcWire)
 	}
 	if strings.Contains(read(t, root, "apps/worker/poison.go"), "alpha.Schema") {
 		t.Error("worker lists the schema of a BC that consumes no events")

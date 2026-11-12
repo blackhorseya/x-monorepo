@@ -14,7 +14,7 @@ test("/poison lists the poison tables (or says there is no database)", async ({ 
     await expect(alert).toContainText("admin.no_database");
     return;
   }
-  // Rows may exist from other runs against the same database (k6, task run);
+  // Rows may exist from other runs against the same database (task run);
   // what must hold is that the table rendered without an error.
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.getByRole("row").filter({ hasText: /Nothing parked\.|^\d+/ }).first()).toBeVisible();

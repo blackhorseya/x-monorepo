@@ -169,10 +169,11 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 		interceptors = append(interceptors, authn)
 		logger.Info("auth enabled", "mode", auth.Mode, "public", auth.Public)
 		if auth.APIKeys == "" && auth.JWT.HS256Secret == "" && auth.JWT.PublicKey == "" {
-			// Valid (the resolver alone can answer), but with an empty identity
-			// store nobody can ever get in: boot would have failed here before
-			// resolvers existed, so say it loudly instead of locking out silently.
-			logger.Warn("auth relies solely on resolver-managed api keys: no auth.api_keys and no auth.jwt — bootstrap needs a static admin key or an existing identity database")
+			// Valid only when a CredentialResolver is wired (NewAuthInterceptor
+			// refuses otherwise): it can answer alone, but until it holds a
+			// credential nobody can get in. Say it loudly instead of locking
+			// out silently.
+			logger.Warn("auth relies solely on the credential resolver: no auth.api_keys and no auth.jwt — until the resolver holds a credential nobody can get in")
 		}
 	}
 	if deadline := NewTimeoutInterceptor(cfg.Timeout); deadline != nil {

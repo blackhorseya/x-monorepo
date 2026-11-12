@@ -14,7 +14,7 @@ git commit -am "chore: rename module path"  # gen-freshness 是跟 HEAD 比，�
 task gate-ci                                # 跟 CI 一樣的檢查，應該全綠
 ```
 
-目前只保留 `identity` 一個 BC，沒有 event；新增 BC 用 `task new-bc -- <name> [--events]`（流程見 [`docs/workflow.md`](docs/workflow.md)）。有 event 的完整版（含 ordering、inventory、payment、catalog）保存在 https://github.com/blackhorseya/x-monorepo-reference（tree 與 main `87ebfba1` 相同）；移除的經過見 issue #518。
+目前沒有任何 BC（template 只有 platform；identity 在 #561 移除）；新增 BC 用 `task new-bc -- <name> [--events]`（流程見 [`docs/workflow.md`](docs/workflow.md)）。有 event 的完整版（含 identity、ordering、inventory、payment、catalog）保存在 https://github.com/blackhorseya/x-monorepo-reference（tree 與 main `87ebfba1` 相同）；移除的經過見 issue #518。
 
 設計的來源與取捨：
 
@@ -37,8 +37,8 @@ task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自�
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
 
-# identity 的管理 RPC 要 admin role（auth 關著就直接打）
-curl -X POST localhost:8080/api/identity.v1.IdentityService/ListAccounts \
+# admin.v1 的 RPC 要 admin role（auth 關著就直接打）；沒接 DB 會回 `admin.no_database`
+curl -X POST localhost:8080/api/admin.v1.AdminService/ListPoison \
   -H 'Content-Type: application/json' \
   -d '{}'
 ```
@@ -53,20 +53,16 @@ curl -X POST localhost:8080/api/identity.v1.IdentityService/ListAccounts \
 ├── protos/
 │   ├── common/v1/money.proto      # 跨 BC 的 wire 型別
 │   ├── admin/v1/                  # platform 的 poison / prune 操作面（不屬於任何 BC）
-│   └── identity/v1/               # account / API key（entity / service，沒有 event）
+│   └── <bc>/v1/                   # `task new-bc` 產生；目前沒有 BC
 │       ├── entity.proto           # aggregate 的 state schema（跨語言契約，不是 Go domain model）
 │       └── service.proto          # RPC
 ├── pkgs/
 │   ├── kernel/                    # shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 │   ├── platform/                  # 技術共用：contextx、config、server（gin）、usecasex、otel（metrics / traces / logs）、eventbus、postgres（gorm + migrate runner）、archtest（import 規則）等
-│   └── identity/                  # ── Bounded Context（完整六角形）：DB 管理的 account + API key，給 auth interceptor 解 X-API-Key（docs/identity.md）──
+│   └── <bc>/                      # ── Bounded Context（完整六角形；`task new-bc` 產生，目前沒有）──
 │       ├── provider.go            # wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorator 包起來
 │       ├── contract/v1/           # buf 生成：pb + Connect + openapi.yaml（只有 adapters / apps 可 import）
 │       ├── domain/                # 手寫 aggregate、VO、Repository interface、domain errors
-│       │   ├── account/           # Account aggregate（id = principal subject、roles、ACTIVE / DISABLED）
-│       │   ├── apikey/            # APIKey aggregate（只存 sha256、prefix；ACTIVE / REVOKED、expires_at）
-│       │   ├── externalidentity/  # 外部 OIDC 的 (iss, sub) 綁定（docs/identity-login.md）
-│       │   └── invite/            # 邀請
 │       ├── application/
 │       │   ├── dto/               # application 邊界（go-kit endpoint request/response）
 │       │   ├── usecase/           # orchestration（go-kit service）
@@ -74,12 +70,10 @@ curl -X POST localhost:8080/api/identity.v1.IdentityService/ListAccounts \
 │       │   └── mapper/            # domain → dto
 │       ├── infra/                 # driven：repository / port 實作
 │       │   ├── memory/            # in-memory repository（APP_POSTGRES_URL 未設時）
-│       │   ├── postgres/          # gorm row model + SQL + 錯誤轉譯；migrations/*.sql 以 embed 隨 BC 走
+│       │   ├── postgres/          # gorm + SQL + 錯誤轉譯；migrations/*.sql 以 embed 隨 BC 走
 │       │   └── system/            # clock / id
 │       └── adapters/              # driving
-│           ├── rpc/               # Connect handler；pb ↔ dto
-│           ├── auth/              # 實作 platform 的 server.CredentialResolver（TTL cache），apps/rpc 以 wire.Bind 接上
-│           └── cli/               # `worker bootstrap` 用的 injector
+│           └── rpc/               # Connect handler；pb ↔ dto（`--events` 另有 events / consumer）
 ├── deployments/docker/            # docker-compose.yaml：本機 infra（Postgres），app 不進容器；goreleaser 用的 Dockerfile
 ├── deployments/helm/x-monorepo/   # Helm chart：rpc / worker Deployment、migrate hook Job、prune CronJob（task helm-check）
 ├── deployments/helm/kind/         # task helm-kind：kind cluster 真裝 chart（拋棄式 Postgres / Redis + smoke.sh）
@@ -90,10 +84,9 @@ curl -X POST localhost:8080/api/identity.v1.IdentityService/ListAccounts \
 │   └── stripvalidate/             # `task gen-ts` 的一步：buf image 去掉 validate 規則後再產 TS
 ├── .claude/skills/new-bc/         # 新增 BC 的 skill（SKILL.md）
 ├── .github/                       # workflows、composite actions、PR template
-├── tests/k6/                      # k6：ratelimit、timeout（打 `identity.v1.IdentityService/ListAccounts`）；task k6 -- <script>、task k6-smoke、task k6-auth-matrix（各 auth 組合）、task k6-wire
 ├── apps/
 │   ├── rpc/                       # composition root：main + wire，無業務、無 mapping
-│   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router（目前沒有 BC 有 consumer，沒有 handler，啟動後只等 signal；`poison` / `prune` / `bootstrap` 子命令照常）
+│   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router（目前沒有 BC 有 consumer，沒有 handler，啟動後只等 signal；`poison` / `prune` 子命令照常）
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）
     ├── packages/proto/            # @repo/proto：buf 生成的 connect-es client（有 commit）
@@ -108,13 +101,11 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 |---|---|
 | [`docs/ci.md`](docs/ci.md) | gates：hooks / lefthook / CI 各跑什麼、CI 的 job 與依路徑的 gating、相關 scripts |
 | [`docs/release.md`](docs/release.md) | release-drafter + goreleaser 的 release 鏈、release gate、簽名 / attestation 與驗證 |
-| [`docs/operations.md`](docs/operations.md) | Compose 本機環境（Grafana dashboards / alerts）、k6 load test、Helm 部署與 kind 實測 |
+| [`docs/operations.md`](docs/operations.md) | Compose 本機環境（Grafana dashboards / alerts）、Helm 部署與 kind 實測 |
 | [`docs/observability.md`](docs/observability.md) | OTel → LGTM：metrics、traces、logs、每個 metric 與 alert 的意義 |
 | [`docs/config.md`](docs/config.md) | 所有 config key、預設值、env 覆寫規則、`auth.*` |
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
-| [`docs/identity.md`](docs/identity.md) | identity BC：DB 管理的 account / API key、`server.CredentialResolver`、principal 語意、cache TTL、帳密 / issuer 的擴充路徑 |
-| [`docs/identity-login.md`](docs/identity-login.md) | 外部 OIDC 的規格：多 issuer verifier、JWKS、`(iss, sub)` 綁定與邀請、撤銷、拆 PR #270–#274（後端部分仍是現行）；Console 登入與 Dex 開發 IdP 的章節已不適用，只當歷史；自建帳密 issuer 為可選模組（未排程） |
 
 ## Dependency rules（`pkgs/platform/archtest` 強制）
 
@@ -166,7 +157,7 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 | 層 | 擋什麼 | 位置 |
 |---|---|---|
 | proto | `buf.validate` rule 直接寫在 request message 上（`min_len`、`gt`、`gte`、`pattern`、`required`、`min_items`） | `protos/<bc>/v1/service.proto`、`common/v1/money.proto` |
-| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 先對 `auth.api_keys`（static，break-glass）再問 `server.CredentialResolver`（`pkgs/identity` 的 DB key，見 `docs/identity.md`；resolver 失敗 = 拒絕，不放行；一次查詢受 `auth.resolver_timeout` 限制），否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method, CredentialID}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事（usecase 用 principal 判斷，例如 `auth.admin_role` 的檢查，見 `docs/identity.md`）。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。request body 在 interceptor chain 之內才解碼：body 解不開的請求也會先經過已掛上的 interceptor，被其中一個先拒絕就回那個 interceptor 的錯誤（例如 `UNAUTHENTICATED`、`RESOURCE_EXHAUSTED`），都通過才回 `INVALID_ARGUMENT`（`pkgs/platform/server/decode_test.go`）。解析失敗的 `message` 由 connect 函式庫產生，不是穩定契約，不要依賴它的字面。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
+| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 先對 `auth.api_keys`（static，break-glass）再問 `server.CredentialResolver`（template 的 rpc 沒有接，衍生專案接自己的實作；resolver 失敗 = 拒絕，不放行；一次查詢受 `auth.resolver_timeout` 限制），否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method, CredentialID}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事（usecase 用 principal 判斷，例如 `admin.v1` 的 `auth.admin_role` 檢查，見 `pkgs/platform/admin`）。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。request body 在 interceptor chain 之內才解碼：body 解不開的請求也會先經過已掛上的 interceptor，被其中一個先拒絕就回那個 interceptor 的錯誤（例如 `UNAUTHENTICATED`、`RESOURCE_EXHAUSTED`），都通過才回 `INVALID_ARGUMENT`（`pkgs/platform/server/decode_test.go`）。解析失敗的 `message` 由 connect 函式庫產生，不是穩定契約，不要依賴它的字面。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
 | server | `NewRateLimitInterceptor`（`http.rate_limit.rps` > 0 才掛，在 logging 之內、auth 之外——洪水要在付 JWT 簽章驗證成本之前就擋掉）：token bucket，`by: global` 一桶 / `peer` 每個 client IP 一桶（idle 1 分鐘回收）。沒 token → `RESOURCE_EXHAUSTED`、`x-error-code: request.rate_limited`、`Retry-After: <秒>`，不排隊等 | `pkgs/platform/server/limits.go` |
 | server | `NewTimeoutInterceptor`（`http.timeout` > 0 才掛，在 auth 之內、validate 之外）：usecase 拿到會到期的 context，慢 query 被 cancel 而不是吃掉整個 shutdown drain 窗口。到期後失敗的 RPC 一律回 `DEADLINE_EXCEEDED` + `x-error-code: request.timeout`（不管 driver 的 error 被 `ToConnectError` 映成什麼）；到期後仍成功的照常回 response（工作已 commit）。client 的 deadline 較短時一樣適用 | `pkgs/platform/server/limits.go` |
 | server | `NewValidateInterceptor`（最內層 interceptor）：違反 → `INVALID_ARGUMENT`、header `x-error-code: request.validation_failed`、error detail `buf.validate.Violations`（欄位路徑 + rule id + message）；rule 本身編不過 → `INTERNAL` | `pkgs/platform/server/validate.go` |
@@ -180,21 +171,21 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 ## Pagination：cursor（keyset）+ opaque page token
 
 列表 RPC 走 [AIP-158](https://google.aip.dev/158) 的欄位名（`page_size` / `page_token` / `next_page_token`），不做 offset：
-`OFFSET n` 深頁是線性掃描，且中途插入或刪除會漏／重複；keyset 每頁都是 index range scan。`ListAccounts` 是範例：
+`OFFSET n` 深頁是線性掃描，且中途插入或刪除會漏／重複；keyset 每頁都是 index range scan。下表是各層的責任（template 目前沒有列表 RPC，`task new-bc` 的樣板只有 Create 與 Get；部件在 `platform/pagination`）：
 
 | 層 | 負責 | 位置 |
 |---|---|---|
-| domain | 排序鍵固定（`ListAccounts` 是 id 升冪），`ListParams` 帶 `Limit` / `After`。新 ID 是 UUID v7，舊資料仍是 v4，兩者並存且都當不透明字串，不得只靠 `id` 排序、也不保證 ID 單調遞增——跨 pod 的 v7 只有毫秒級順序。ID 不是憑證：v7 前 48 bit 是建立時間，API key secret 由 `SecretGenerator` 另產 256 bit 全隨機值 | `pkgs/identity/domain/account/repository.go` |
+| domain | 排序鍵固定，`ListParams` 帶 `Limit` / `After`。新 ID 是 UUID v7（`platform/idgen`），舊資料可能仍是 v4，兩者並存且都當不透明字串，不得只靠 `id` 排序、也不保證 ID 單調遞增——跨 pod 的 v7 只有毫秒級順序。ID 不是憑證：v7 前 48 bit 是建立時間，secret 要用 256 bit 全隨機值，不能拿 id 充當 | `pkgs/<bc>/domain/<aggregate>/repository.go` |
 | platform | `pagination.Clamp`（0 → 預設 20、上限 100、負數 → `InvalidArgument`）與 `EncodeToken` / `DecodeToken`（base64url(JSON)，不透明但不是秘密） | `platform/pagination` |
-| usecase | token 在這裡鑄造與驗證；`ListAccounts` 的 payload 只有最後一筆的 id（沒有 filter）；有 filter 的列表要把 filter 一併編進 payload，換了 filter 還帶舊 token → `pagination.invalid_token` | `usecase/account.go` |
-| infra | SQL `WHERE id > ? ORDER BY id ASC LIMIT n+1`：多抓一筆判斷有沒有下一頁，不 COUNT；memory 版做一樣的比較 | `infra/postgres/account_repository.go` |
+| usecase | token 在這裡鑄造與驗證；payload 放排序鍵的最後一筆（沒有 filter 時只有 id）；有 filter 的列表要把 filter 一併編進 payload，換了 filter 還帶舊 token → `pagination.invalid_token` | `pkgs/<bc>/application/usecase` |
+| infra | SQL `WHERE id > ? ORDER BY id ASC LIMIT n+1`：多抓一筆判斷有沒有下一頁，不 COUNT；memory 版做一樣的比較 | `pkgs/<bc>/infra/postgres`、`infra/memory` |
 
 - `total_size` 不回：大表 COUNT 是另一筆成本，要時再加 optional 欄位不算 breaking。
 - 不開放 `order_by`：動態排序會讓 cursor 與 index 都要跟著變，有需求再加。
 
 ## Events：domain event → transactional outbox（Watermill）→ worker
 
-**目前狀態**：這套機制（platform 的 outbox / inbox / poison / eventbus、`worker poison|prune|bootstrap`、console 的 Poison / Prune 頁）都還在，但現在沒有任何 BC 發 event 或有 consumer：`worker` 沒有 handler，啟動後只等 signal；poison 服務的 schema 清單是空的。下面以 `<bc>` 表示「有 event 的 BC」；有 event 的完整範例保存在 reference repo（見上方）。
+**目前狀態**：這套機制（platform 的 outbox / inbox / poison / eventbus、`worker poison|prune`、console 的 Poison / Prune 頁）都還在，但現在沒有任何 BC 發 event 或有 consumer：`worker` 沒有 handler，啟動後只等 signal；poison 服務的 schema 清單是空的。下面以 `<bc>` 表示「有 event 的 BC」；有 event 的完整範例保存在 reference repo（見上方）。
 
 x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-effort publish」掉一次就是永久掉。這裡的做法：
 
@@ -206,7 +197,7 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
 | adapters/events | domain event → `<bc>.v1.<Event>` proto bytes → `message.Publisher`；topic = proto full name，metadata 帶 `key`（aggregate id）與 `traceparent` | `adapters/events/publisher.go` |
 | platform/eventbus | Watermill：`PostgresPublisher` 從 message context 取出 use case 的 `*sql.Tx` 寫 `<bc>.events_<topic>`（**outbox 就是 commit 本身**）；`NewPostgresSubscriber` + `NewRouter`（Recoverer → tracing → 把帶 topic / message_id / trace_id 的 logger 放進 context，usecase log 才會進 Loki）+ `Register`（每個 BC：PoisonQueue → Retry → drop → access → timeout：每則訊息一行 Info `message`，對應 rpc 的 `rpc` access log；`worker.handler_timeout` 給每次 attempt 一個 deadline）；`ProvidePublisher` 由 app 提供一次給所有 BC；沒 DB 時用 GoChannel（at most once、同 process） | `pkgs/platform/eventbus` |
 | infra | `postgres.Transactor` 把 gorm tx 放進 context，repository / publisher 用 `platformpg.TxOrDB` 拿；memory 版直接呼叫 fn | `infra/postgres/transactor.go` |
-| apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工。`worker poison …`（`task poison -- …`）是 poison 表的操作面、`worker prune`（`task prune -- …`）是 outbox / inbox 的 retention | `apps/worker`；`worker bootstrap`（`task bootstrap`）是 identity 的第一個 account + API key（空 store 才建，secret 印一次；identity 沒 event，只掛這個 injector，不進 router） |
+| apps/worker | 另一個 process：wire 每個 BC 的 `ProviderSet`，把各 BC 的 `Subscriptions`（`ProvideSubscriptions`，named type 讓 wire 分得開）掛上同一個 router；每個 BC 自己的 subscriber / consumer group（`<worker.consumer_group>.<bc>`）與 poison topic。`task worker`，需要 `postgres.url`；同 `worker.consumer_group` 的 replica 分工。`worker poison …`（`task poison -- …`）是 poison 表的操作面、`worker prune`（`task prune -- …`）是 outbox / inbox 的 retention | `apps/worker` |
 
 - Topic → table：`<bc>.v1.<Event>` → `<bc>.events_v1_<event>`（+ `_offsets`），第一段就是 BC，**DDL 由該 BC 的 migration 出**，
   service 不在啟動時建表；`InitializeSchema` 關閉。新 topic = 新 migration。
@@ -251,7 +242,7 @@ bc / days / forget 在 URL 上（`/prune?bc=<bc>&forget=<group>.<bc>`，Poison �
   不想要就設 `worker.start_from: latest`（stream group 在 `NewWorker` 裡先建好再啟動 forwarder，所以「latest」是從啟動那一刻算）。
   換 NATS / Kafka 同一個形狀：`eventbus` 多一組 publisher / subscriber，`NewWorker` 的 switch 多一個 case。
 - 代價：watermill-sql 會把 `lib/pq` 一起連進來（只用它的 error type），實際連線仍走 pgx。
-- **optimistic lock**：aggregate（例如 identity 的 Account）用 `version` 做樂觀鎖，輸的那邊拿 `ErrStale`。它 wrap `kernel.ErrConcurrentUpdate`，
+- **optimistic lock**：aggregate 需要樂觀鎖時用 `version`，輸的那邊拿 `ErrStale`。它 wrap `kernel.ErrConcurrentUpdate`，
   **刻意不是** `kernel.Error`：consumer 會 retry 而不是 drop，rpc 由 `server.ToConnectError` 回 `Aborted`（`x-error-code: concurrent_update`），
   `usecasex` 記成 `kind=aborted`、log 為 Warn。
 
@@ -289,7 +280,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 | dto 無方法、不 import domain / proto；port 只有 interface | 邊界純度 | archtest |
 | adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*usecase.X` | decorator 生效 | archtest |
 | generated code 和 source 一致；go.mod 無漂移 | 一致性 | CI `gen-freshness`、`work-sync` |
-| domain 100% coverage | 測試 | `cover-gate.sh` |
+| domain 100% coverage（`go.work` 沒有 BC 時不檢查） | 測試 | `cover-gate.sh` |
 | request 形狀（必填、範圍、格式）在 proto 宣告、進 use case 前就擋 | 邊界 | **protovalidate**（`platform/server/validate.go`） |
 
 archtest 只看 AST，零依賴，毫秒級；規則表在 `archtest.DefaultRules()`，BC 可用 `RunRules` 自選。
@@ -304,7 +295,7 @@ BC 用 `contract/v1/openapi.go` embed 它；`apps/rpc` 的 `NewDocs` 收集各 B
 **新增 RPC 要兩個檢查，不是一個**：生成檔存在（`task gen` / `check-gen-fresh`）不等於服務文件已發布（要在 `NewDocs` 掛上並由 wired rpc 的 `APP_HTTP_DOCS=true` 入口測到）。`check-gen-fresh` 的 pathspec 是 `*/contract/*/*openapi.yaml`。
 spec 裡的 `servers` 是相對的 `/api`（任何 host 都對），但 serve 出去的 yaml 會把它改寫成 request 的絕對 origin（`X-Forwarded-Proto` / Host）：
 Scalar 的 Send request 用 `new URL(server + path)`，相對 server 會噴「The URL seems to be invalid」；順便讓檔案直接匯入 Postman / Bruno 就能打。
-兩份 `openapi.base.yaml`（admin、identity）都宣告 `securitySchemes`（`apiKey` = `X-API-Key`、`bearer` = JWT），所以 Scalar 右上 **Auth** 可以選一種填進去
+admin 與每個 BC 的 `openapi.base.yaml` 都宣告 `securitySchemes`（`apiKey` = `X-API-Key`、`bearer` = JWT），所以 Scalar 右上 **Auth** 可以選一種填進去
 （`auth.mode: required` 時填 `configs/local.yaml` 的 `auth.api_keys` 那把 key）；`auth.mode: off` 時填不填都一樣。前端不需要它 —— `web/packages/proto`
 直接從 proto 生 connect-es client。
 
@@ -353,17 +344,17 @@ build 成 `localhost/x-monorepo/console:kind`）。所以 console 的改動**會
 
 - `platform/postgres.NewDB` 提供 `*gorm.DB`（driver 底層是 pgx，`TranslateError` 開啟）。`APP_POSTGRES_URL` 空 → 回 nil，
   各 BC 的 `Provide*Repository` 看到 nil 就改用 `infra/memory`，所以 `task run`、E2E test 不需要 DB。
-- **每個 BC 一個 Postgres schema**（目前只有 `identity.accounts`），版本表也在該 schema 裡（`identity.schema_migrations`）。
+- **每個 BC 一個 Postgres schema**，版本表也在該 schema 裡（`<bc>.schema_migrations`）；目前沒有 BC，`apps/migrate` 的清單是空的。
   多個 BC 共用一個 database 時，預設的單一 `public.schema_migrations` 會讓兩條 migration 序列互相覆寫版本號且不報錯；
   schema 隔離同時解決表名與版本表的衝突。
 - SQL 放 `pkgs/<bc>/infra/postgres/migrations/NNNN_name.{up,down}.sql`，由 BC `embed`（go.work 下 embed 不能跨
   module）；`apps/migrate` 只收集各 BC 的 `Migration()` 並用 golang-migrate 執行（cobra：`up` / `down` / `version`，`--help` 有說明；跟 rpc / worker 一樣是同一個 image 的不同 binary）。**service 啟動不跑 migration**，
   部署流程是 `migrate up` → rollout。
-- row model（`accountRow`）是持久化模型，不是 aggregate；timestamps 來自 domain 的 `port.Clock`，所以 gorm 的
+- row model 是持久化模型，不是 aggregate；timestamps 來自 domain 的 `port.Clock`，所以 gorm 的
   `autoCreateTime/autoUpdateTime` 關閉。
-- driver error 在 `infra/postgres.translate` 轉成 domain error：`gorm.ErrRecordNotFound → account.ErrNotFound`、
+- driver error 在 `infra/postgres.translate` 轉成 domain error：`gorm.ErrRecordNotFound → <aggregate>.ErrNotFound`、
   `gorm.ErrDuplicatedKey` → 各 repository 的 duplicate error，其他保持 wrapped 給 log。
 - integration test（`infra/postgres`、`provider_test.go`、`apps/migrate`、`apps/worker`）用 `pkgs/platform/postgres/pgtest`：
   `TEST_DATABASE_URL` 沒設就以 testcontainers 起一個 `postgres:17-alpine`（每個 test binary 一個，`TestMain` 結束時 terminate），
-  設了就直接用那個 DB（連不上是 FAIL，不是 skip）。例外：`pkgs/identity` 的 last-admin 到期矩陣（`admin_lock_expiry_test.go`）會 `CREATE DATABASE` 開一個私有 DB 來隔離 `TRUNCATE` / 鎖定整張 accounts 表，所以提供的 `TEST_DATABASE_URL` 角色需要 `CREATEDB`（testcontainers 預設角色已有；沒有時該測試以 42501 明確 FAIL，不 skip；補權限：`ALTER ROLE <role> CREATEDB;`）。只有「本機沒有 container runtime」會 skip，且 CI 裡一律 FAIL。
+  設了就直接用那個 DB（連不上是 FAIL，不是 skip）。例外：自己 `CREATE DATABASE` 開私有 DB 來隔離的測試（目前 repo 裡沒有），提供的 `TEST_DATABASE_URL` 角色需要 `CREATEDB`（testcontainers 預設角色已有；沒有時該測試以 42501 明確 FAIL，不 skip；補權限：`ALTER ROLE <role> CREATEDB;`）。只有「本機沒有 container runtime」會 skip，且 CI 裡一律 FAIL。
   Podman 使用者要在 `~/.testcontainers.properties` 放 `ryuk.disabled=true`：Ryuk 寫死用名為 `bridge` 的 network，Podman 沒有。

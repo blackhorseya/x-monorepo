@@ -12,7 +12,7 @@ type principalKey struct{}
 // the zero value and IsAnonymous is true.
 type Principal struct {
 	// Subject is the stable identifier: the JWT `sub`, the account id of a key
-	// the identity BC manages, or the name of a static auth.api_keys entry.
+	// a server.CredentialResolver answers for, or the name of a static auth.api_keys entry.
 	Subject string
 	// Name is a display name (JWT `name`), may be empty.
 	Name string
@@ -21,8 +21,8 @@ type Principal struct {
 	// Method is how the principal was established: "jwt" or "api_key".
 	Method string
 	// CredentialID names the credential itself when it has an identity of its
-	// own (the api key id of a key the identity BC manages); empty for a JWT
-	// or a static key. Revoking that one key is what it is for.
+	// own. A server.CredentialResolver implementation fills it; empty for a JWT
+	// or a static key.
 	CredentialID string
 }
 
