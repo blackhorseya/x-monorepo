@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Generate two sample BCs (one plain, one with --events) in a COPY of the working tree and prove they lint, build and test (#518 slice 4).
-# Nothing in the repository is written. The copy is `git ls-files -co --exclude-standard`: tracked and untracked-not-ignored files, so local
+# Nothing in the repository is written except the coverage profiles of scripts/cover-gate.sh: it runs in the copy, whose ./bin is a symlink to the
+# repo's ./bin (git-ignored), so bin/cover-*.out lands there. The copy is `git ls-files -co --exclude-standard`: tracked and untracked-not-ignored files, so local
 # uncommitted work (and a new file you have not added yet) is included; ignored files (./bin, node_modules, generated web output) are not.
 #
 #   scripts/new-bc-check.sh      # needs the tools of `task tools` in ./bin (buf, protoc-gen-*, wire, golangci-lint), go, jq, git
