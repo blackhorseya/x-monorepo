@@ -50,8 +50,8 @@ export const JWT_AUDIENCE = "x-monorepo-console-e2e";
 
 export default defineConfig({
   testDir: "e2e",
-  // DB mode runs bin/migrate up twice: here (e2e/worker.setup.ts) and in the rpc webServer command below; both are idempotent.
-  globalSetup: "./e2e/worker.setup.ts",
+  // DB mode: globalSetup (e2e/migrate.setup.ts) always runs bin/migrate up; the rpc webServer command below runs it too unless an existing server is reused; both are idempotent.
+  globalSetup: "./e2e/migrate.setup.ts",
   fullyParallel: true,
   // CI sets E2E_WORKERS (the runner's vCPU, #447); unset = Playwright's default (half the cores), so `task web-e2e` is unchanged.
   workers: process.env.E2E_WORKERS ? Number(process.env.E2E_WORKERS) : undefined,
