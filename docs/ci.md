@@ -50,7 +50,7 @@
 
 ## console-e2e 的平行度（#447）
 
-現在的 `console-e2e` 只起 postgres service 與 `bin/rpc`（DB 模式 `bin/migrate up` 跑兩次：`e2e/worker.setup.ts`（globalSetup）與 rpc webServer 的 command），沒有 Dex，也沒有第二組 port 的 `web-e2e-ports` 步驟（#561 移除）；下面的數字與探索紀錄是移除之前量的，保留當時的樣子。
+現在的 `console-e2e` 只起 postgres service 與 `bin/rpc`（DB 模式 `bin/migrate up` 跑兩次：`e2e/migrate.setup.ts`（globalSetup）與 rpc webServer 的 command），沒有 Dex，也沒有第二組 port 的 `web-e2e-ports` 步驟（#561 移除）；下面的數字與探索紀錄是移除之前量的，保留當時的樣子。
 
 基準：run 41920885162，`console-e2e` 一個 job 369s（setup/build/dex ~75s、`task web-e2e` 254s 用 2 workers、ports 24s）。#447 拆成 3 個 shard 的 matrix，#534 改成 2 個（`console-e2e (1)`、`(2)`），#565 取消 shard，回到單一 job：
 
