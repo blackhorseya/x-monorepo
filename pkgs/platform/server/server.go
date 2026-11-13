@@ -145,7 +145,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if err != nil {
 		return nil, err
 	}
-	authn, err := NewAuthInterceptor(auth, tel.Meter, resolver, oidcAuth)
+	authn, authSources, err := newAuthInterceptor(auth, tel.Meter, resolver, oidcAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -168,11 +168,11 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if authn != nil {
 		interceptors = append(interceptors, authn)
 		logger.Info("auth enabled", "mode", auth.Mode, "public", auth.Public)
-		if auth.APIKeys == "" && auth.JWT.HS256Secret == "" && auth.JWT.PublicKey == "" {
-			// Valid only when a CredentialResolver is wired (NewAuthInterceptor
-			// refuses otherwise): it can answer alone, but until it holds a
-			// credential nobody can get in. Say it loudly instead of locking
-			// out silently.
+		if authSources.resolverOnly() {
+			// The credential resolver is the only wired source (NewAuthInterceptor
+			// refuses a mode with none): it can answer alone, but until it holds a
+			// credential nobody can get in. Say it loudly instead of locking out
+			// silently. With api_keys, jwt or OIDC wired somebody can, so no Warn.
 			logger.Warn("auth relies solely on the credential resolver: no auth.api_keys and no auth.jwt — until the resolver holds a credential nobody can get in")
 		}
 	}
