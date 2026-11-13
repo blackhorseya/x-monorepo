@@ -39,10 +39,7 @@ import (
 // before anything dials: every connection attempt, fallback hosts included,
 // must go to that host:port, or NewDB returns an error naming the expected
 // target and nothing else from the URL. The URL is parsed once, and that parse
-// opens the pool. Empty = no check. Only the target is
-// enforced here; the TLS requirement (a ConnPolicy without AllowPlaintext) is for
-// a caller that asks for it, because local development and in-cluster services
-// legitimately run without it.
+// opens the pool. Empty = no check. Only the target is checked, not TLS.
 //
 // TranslateError makes the driver surface gorm.ErrDuplicatedKey /
 // ErrForeignKeyViolated instead of raw pgconn codes, so BC repositories can
@@ -153,7 +150,7 @@ func open(c context.Context, cfg config.Postgres, tel *otel.Providers, serverCan
 // quote the string.
 func parseConn(cfg config.Postgres) (*pgx.ConnConfig, error) {
 	if cfg.ExpectTarget != "" {
-		cc, err := ParseCheckedConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true})
+		cc, err := parseCheckedConn(cfg.URL, cfg.ExpectTarget)
 		if err != nil {
 			return nil, fmt.Errorf("postgres.expect_target: %w", err)
 		}

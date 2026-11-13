@@ -12,84 +12,41 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// ConnPolicy is what a caller demands of the database connection before it
-// opens one. NewDB and migrate demand only the target (postgres.expect_target,
-// with AllowPlaintext); a command-line tool that connects through a
-// port-forward can also demand TLS verification, by leaving AllowPlaintext off.
-type ConnPolicy struct {
-	// ExpectTarget, when set, is the host:port every connection attempt must
-	// dial (for example 127.0.0.1:15432 behind a kubectl port-forward). It
-	// stops a host= (or a host list) in the URL from sending the connection
-	// somewhere other than the forward.
-	ExpectTarget string
-	// AllowPlaintext skips the TLS check, for a local development database.
-	// ExpectTarget still applies.
-	AllowPlaintext bool
-}
-
-// CheckConn parses url the way the connection itself will and
-// validates the result.
+// parseCheckedConn parses url the way the connection itself will and checks
+// the result against target, the host:port of postgres.expect_target. Callers
+// run it only when target is set; an empty target matches no host:port, so it
+// would reject every URL rather than pass one.
 //
 // The parse is pgx.ParseConfig, the one gorm's postgres driver runs on a DSN,
-// so what is approved here is what pgx connects with: key trimming, duplicate keys (the last wins), URL decoding,
-// host= overrides, environment and service-file settings are all already
-// applied. A shell or a regexp reading the URL text cannot promise that.
+// so what is approved here is what pgx connects with: key trimming, duplicate
+// keys (the last wins), URL decoding, host= overrides, environment and
+// service-file settings are all already applied. A shell or a regexp reading
+// the URL text cannot promise that. The caller opens the connection from the
+// returned config, not from url again: the URL can name state outside itself (a
+// service file, the environment) that changes between two parses, so a second
+// parse is not guaranteed to be the one that was checked.
 //
 // Errors say why and nothing parsed from the URL or the environment: not the
 // host, port, user or database, and not pgx's own parse error, which can quote
 // the string. A password with an unencoded @ makes pgx cut part of it out as
 // the host, so even "which host" can be the secret. The only value a message
-// carries is --expect-target, which the operator typed.
-func CheckConn(url string, p ConnPolicy) error {
-	_, err := ParseCheckedConn(url, p)
-
-	return err
-}
-
-// ParseCheckedConn is CheckConn that hands back the config it approved. A
-// caller that opens the connection must open it from this value, not from url
-// again: the URL can name state outside itself (a service file, the
-// environment) that changes between two parses, so a second parse is not
-// guaranteed to be the one that was checked.
-func ParseCheckedConn(url string, p ConnPolicy) (*pgx.ConnConfig, error) {
-	// Before the URL is touched: without a target the operator typed there is
-	// nothing to trust, because whatever pgx parses as the host may be a piece
-	// of a malformed password (u:pw@SECRETLABEL looks like a perfectly good
-	// host name).
-	if p.ExpectTarget == "" {
-		return nil, errors.New("--expect-target is required")
-	}
+// carries is target, which the operator configured.
+func parseCheckedConn(url, target string) (*pgx.ConnConfig, error) {
 	cc, err := pgx.ParseConfig(url)
 	if err != nil {
 		return nil, errors.New("postgres.url is not a valid connection string")
 	}
-	if err := validateConn(&cc.Config, p); err != nil {
+	if err := validateConn(&cc.Config, target); err != nil {
 		return nil, err
 	}
 
 	return cc, nil
 }
 
-// validateConn checks a parsed config: every connection attempt —
-// the main one and each fallback pgx will try next — must have a structurally
-// valid host, dial the target the operator gave with --expect-target, and
-// unless plaintext is allowed must verify the server.
-//
-// What "verifies the server" looks like after pgx's configTLS
-// (pgx v5.11.0, pgconn/config.go):
-//   - sslmode=disable: TLSConfig is nil.
-//   - allow, prefer: InsecureSkipVerify with no VerifyPeerCertificate, and
-//     prefer/allow also leave a nil-TLS (plaintext) fallback attempt.
-//   - require without sslrootcert: InsecureSkipVerify, no VerifyPeerCertificate
-//     (encrypted, not authenticated). With sslrootcert pgx treats require as
-//     verify-ca, as libpq does.
-//   - verify-ca: InsecureSkipVerify (to skip the hostname check) but a
-//     VerifyPeerCertificate that verifies the chain against sslrootcert.
-//   - verify-full: InsecureSkipVerify false, ServerName set.
-//
-// So a TLSConfig is acceptable when it is non-nil and either verifies by
-// itself (InsecureSkipVerify false) or has installed its own chain check.
-func validateConn(cfg *pgconn.Config, p ConnPolicy) error {
+// validateConn checks a parsed config: every connection attempt — the main one
+// and each fallback pgx will try next — must have a structurally valid host and
+// dial target.
+func validateConn(cfg *pgconn.Config, target string) error {
 	attempts := append([]*pgconn.Config{cfg}, fallbackConfigs(cfg)...)
 
 	// Before anything else: a host that is not even shaped like one never
@@ -103,19 +60,8 @@ func validateConn(cfg *pgconn.Config, p ConnPolicy) error {
 	}
 
 	for _, a := range attempts {
-		if net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))) != p.ExpectTarget {
-			return fmt.Errorf("connection target does not match --expect-target %s", p.ExpectTarget)
-		}
-	}
-	if p.AllowPlaintext {
-		return nil
-	}
-	for _, a := range attempts {
-		switch {
-		case a.TLSConfig == nil:
-			return errors.New("TLS is disabled for the connection: use sslmode=verify-ca with sslrootcert, or verify-full")
-		case a.TLSConfig.InsecureSkipVerify && a.TLSConfig.VerifyPeerCertificate == nil:
-			return errors.New("TLS does not verify the server certificate: use sslmode=verify-ca with sslrootcert, or verify-full")
+		if net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))) != target {
+			return fmt.Errorf("connection target does not match %s", target)
 		}
 	}
 
@@ -142,8 +88,8 @@ func fallbackConfigs(cfg *pgconn.Config) []*pgconn.Config {
 // "SECRET@127.0.0.1", which the resolver quotes in its error and main logs;
 // rejecting what cannot be a host name catches that early. It cannot catch a
 // password piece that looks like a host name ("u:pw@SECRETLABEL/app"): no check
-// on the URL alone can tell the two apart. That is what the --expect-target
-// pin is for, and why the flag is required.
+// on the URL alone can tell the two apart. That is what the target pin in
+// validateConn is for.
 //
 // One trailing dot (a fully qualified name, "localhost.") is allowed; an empty
 // label anywhere else is not.

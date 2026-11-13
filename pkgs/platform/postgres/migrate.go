@@ -59,7 +59,7 @@ func Version(c context.Context, cfg config.Postgres, m Migration) (version uint,
 // the "pgx" driver as before.
 func openMigrateDB(cfg config.Postgres) (*sql.DB, error) {
 	if cfg.ExpectTarget != "" {
-		cc, err := ParseCheckedConn(cfg.URL, ConnPolicy{ExpectTarget: cfg.ExpectTarget, AllowPlaintext: true})
+		cc, err := parseCheckedConn(cfg.URL, cfg.ExpectTarget)
 		if err != nil {
 			return nil, fmt.Errorf("postgres.expect_target: %w", err)
 		}
