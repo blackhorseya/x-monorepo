@@ -91,7 +91,7 @@ pkgs/kernel      shared kernel：Money VO、kernel.Error{Kind, Code}。零依賴
 pkgs/platform    技術共用：contextx、config、server（gin + Connect）、usecasex、otel、postgres、archtest；
                  admin（admin.v1.AdminService：poison 操作 + Prune RPC，與 worker 的 CLI 同一組 eventbus 函式；contract 在 protos/admin，不屬於任何 BC）
 pkgs/<bc>        一個 bounded context = 完整六角形（目前沒有 BC；`task new-bc` 產生；有 event 的版本〔consumer／events adapter／outbox／inbox／poison〕用 `--events`，完整範例在 https://github.com/blackhorseya/x-monorepo-reference）：
-                 auth 的擴充點在 platform，不在 BC：`server.CredentialResolver`（auth interceptor 對 `X-API-Key` 先查 config `auth.api_keys` 再問它；template 的 rpc 沒有接）與 `server.ExternalIdentityResolver`（`auth.oidc.enabled` 時，驗過的 `(iss, sub)` 解成 principal；template 的 rpc 沒有接，所以 `auth.oidc.enabled` 會在啟動時被拒絕）。要用就在 `apps/rpc` 的 wire 換掉 `NoCredentialResolver` / `NoExternalIdentityResolver`
+                 auth 的擴充點在 platform，不在 BC：`server.CredentialResolver`（auth interceptor 對 `X-API-Key` 先查 config `auth.api_keys` 再問它；template 的 rpc 沒有接）與 `server.ExternalIdentityResolver`（`auth.oidc.enabled` 時，驗過的 `(iss, sub)` 解成 principal；template 的 rpc 沒有接，所以 `auth.oidc.enabled` 會在啟動時被拒絕）。要用就在 `apps/rpc` 的 wire 換掉 `NoCredentialResolver` / `NoExternalIdentityResolver`（契約見 [`docs/auth.md`](docs/auth.md)）
   provider.go      wire.ProviderSet，對外唯一出口；usecase 在這裡被 decorate() / decorateTx() 包起來
   contract/v1/     buf 生成的 wire format（pb + Connect + openapi.yaml），只有 adapters / apps 可 import
   domain/<agg>/    aggregate、VO、Repository interface、domain errors（手寫，不是 proto）
