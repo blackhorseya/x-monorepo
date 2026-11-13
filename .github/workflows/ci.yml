@@ -204,7 +204,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup
         with: { tools: "true" }   # kubeconform lives in ./bin
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with: { version: v4.3.0 }
       - run: task helm-check
       # The chart's templates / values changed: its version must be higher than the base's (#423). Pull requests only:
@@ -232,7 +232,7 @@ jobs:
         with:
           node-version: 22
       - uses: ./.github/actions/pnpm-cache
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with: { version: v4.3.0 }
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with: { version: v0.33.0, install_only: true }
