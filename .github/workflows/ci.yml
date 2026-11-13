@@ -57,7 +57,8 @@ jobs:
       # release (scripts/releasable.sh prints nothing and exits 0, the same test release.yml's prepare job applies to
       # that same tag). Outputs: all = 0 (use the diff) or 1 (run everything), base = the ref the diff starts at.
       # Everything that goes wrong, or is not a pull request or a push to main, ends as all=1: a consumer reads
-      # a missing `all` as 1, a missing `base` as origin/main.
+      # a missing `all` as 1, a missing `base` as origin/main. The helper is first loaded in a subshell: a load
+      # that exits or errors there only fails that probe, and only a clean probe is followed by loading it here.
       - id: classify
         env:
           EVENT: ${{ github.event_name }}
@@ -67,7 +68,7 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             all=0
           elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then
-            if [ -r scripts/best-effort.sh ] && bash -n scripts/best-effort.sh && . scripts/best-effort.sh \
+            if [ -r scripts/best-effort.sh ] && ( . scripts/best-effort.sh ) && . scripts/best-effort.sh \
               && capture tag tag_rc git describe --tags --abbrev=0 --match 'v*' HEAD \
               && [ "$tag_rc" = 0 ] && [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
               && capture files rel_rc scripts/releasable.sh "$tag" HEAD \
