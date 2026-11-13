@@ -56,9 +56,10 @@ jobs:
       # Which jobs may a push to main skip (#566)? Only those whose changes since the last release tag cannot cut a
       # release (scripts/releasable.sh prints nothing and exits 0, the same test release.yml's prepare job applies to
       # that same tag). Outputs: all = 0 (use the diff) or 1 (run everything), base = the ref the diff starts at.
-      # Everything that goes wrong, or is not a pull request or a push to main, ends as all=1: a consumer reads
-      # a missing `all` as 1, a missing `base` as origin/main. The helper is first loaded in a subshell: a load
-      # that exits or errors there only fails that probe, and only a clean probe is followed by loading it here.
+      # A push to main is judged only by external commands run as child processes (git, scripts/releasable.sh);
+      # this shell itself uses only builtins, [ ] / [[ ]] and variable assignments, and loads no file. If any of
+      # those commands exits non-zero or its output does not match, the result is all=1. A consumer reads a
+      # missing `all` as 1 and a missing `base` as origin/main.
       - id: classify
         env:
           EVENT: ${{ github.event_name }}
@@ -68,11 +69,10 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             all=0
           elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then
-            if [ -r scripts/best-effort.sh ] && ( . scripts/best-effort.sh ) && . scripts/best-effort.sh \
-              && capture tag tag_rc git describe --tags --abbrev=0 --match 'v*' HEAD \
-              && [ "$tag_rc" = 0 ] && [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-              && capture files rel_rc scripts/releasable.sh "$tag" HEAD \
-              && [ "$rel_rc" = 0 ] && [ -z "$files" ]; then
+            if tag=$(git describe --tags --abbrev=0 --match 'v*' HEAD) \
+              && [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              && files=$(scripts/releasable.sh "$tag" HEAD) \
+              && [ -z "$files" ]; then
               all=0 base=$tag
             else
               echo "classify: cannot show that this push cannot cut a release: every job runs" >&2
