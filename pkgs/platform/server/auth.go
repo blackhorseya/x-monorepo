@@ -70,6 +70,12 @@ type authenticator struct {
 	oidc            OIDCAuth // external OIDC tokens; the zero value is off
 }
 
+// resolverOnly reports whether the credential resolver is the one wired
+// credential source: no static keys, no jwt verifier, no OIDC.
+func (a *authenticator) resolverOnly() bool {
+	return a.keys == nil && a.jwt == nil && a.resolver != nil && !a.oidc.enabled()
+}
+
 type apiKey struct {
 	name  string
 	roles []string
@@ -108,40 +114,49 @@ const (
 // Tempo. Names and credentials are never recorded. Every decision is counted
 // on mp's auth.decisions{result, method} (see the Result* constants).
 func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver CredentialResolver, oidcAuth OIDCAuth) (connect.ServerInterceptor, error) {
+	interceptor, _, err := newAuthInterceptor(cfg, mp, resolver, oidcAuth)
+
+	return interceptor, err
+}
+
+// newAuthInterceptor is NewAuthInterceptor plus the authenticator it resolved
+// (nil when auth.mode is off), so a caller can describe the credential sources
+// that were actually wired instead of re-deriving them from cfg.
+func newAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver CredentialResolver, oidcAuth OIDCAuth) (connect.ServerInterceptor, *authenticator, error) {
 	switch cfg.Mode {
 	case config.AuthOff, "":
-		return nil, nil
+		return nil, nil, nil
 	case config.AuthOptional, config.AuthRequired:
 	default:
-		return nil, fmt.Errorf("auth: unknown mode %q", cfg.Mode)
+		return nil, nil, fmt.Errorf("auth: unknown mode %q", cfg.Mode)
 	}
 	decisions, err := mp.Meter("github.com/blackhorseya/x-monorepo/pkgs/platform/server").Int64Counter(
 		"auth.decisions",
 		metric.WithDescription("Auth interceptor outcomes: result ok / public / anonymous / missing / invalid, by credential method api_key / jwt / none."),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("auth: decisions counter: %w", err)
+		return nil, nil, fmt.Errorf("auth: decisions counter: %w", err)
 	}
 	if (oidcAuth.Verifier == nil) != (oidcAuth.Resolver == nil) {
-		return nil, errors.New("auth: the oidc verifier and the external identity resolver are set together or not at all")
+		return nil, nil, errors.New("auth: the oidc verifier and the external identity resolver are set together or not at all")
 	}
 	a := &authenticator{resolver: resolver, resolverTimeout: cfg.ResolverTimeout, oidc: oidcAuth}
 	if cfg.APIKeys != "" {
 		keys, err := parseAPIKeys(cfg.APIKeys)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		a.keys = keys
 	}
 	if cfg.JWT.HS256Secret != "" || cfg.JWT.PublicKey != "" {
 		v, err := newJWTVerifier(cfg.JWT)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		a.jwt = v
 	}
 	if a.keys == nil && a.jwt == nil && a.resolver == nil && !a.oidc.enabled() {
-		return nil, errors.New("auth: mode is on but neither api_keys, jwt nor oidc is configured")
+		return nil, nil, errors.New("auth: mode is on but neither api_keys, jwt nor oidc is configured")
 	}
 	public := make(map[string]bool, len(cfg.Public))
 	for _, p := range cfg.Public {
@@ -224,7 +239,7 @@ func NewAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 
 			return next(contextx.WithPrincipal(ctx, p), spec, stream)
 		}
-	}, nil
+	}, a, nil
 }
 
 // Span attributes set by the auth interceptor. enduser.id is the semantic

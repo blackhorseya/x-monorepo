@@ -115,7 +115,7 @@ JWKS 失敗與 discovery 失敗的 server log 分別是 `oidc: jwks refresh fail
 3. **`server.NewAuthInterceptor`**（`pkgs/platform/server/auth.go`）：
    - `auth.mode` 為 `off` 時直接回 nil、不掛 interceptor，後面的檢查都不做。
    - `optional`／`required` 時：verifier 與 `ExternalIdentityResolver` 要一起設或都不設；`auth.api_keys` 與 `auth.jwt` 的內容要能解析（key 格式與長度、`hs256_secret` 至少 32 bytes、`public_key` 是 PEM 的 RSA／ECDSA／Ed25519 公鑰，由 `parseAPIKeys` 與 `newJWTVerifier` 檢查）；`auth.api_keys`、`auth.jwt`、`CredentialResolver`、OIDC 四種憑證來源至少要有一個。
-   - 通過以上之後，`server.New` 在 `auth.api_keys` 與 `auth.jwt` 都沒設時印一行 Warn（`auth relies solely on the credential resolver …`）。條件只看這兩項，所以接了 resolver、或只開 OIDC 時都會印。
+   - 通過以上之後，只有 credential resolver 是唯一憑證來源時，`server.New` 才印一行 Warn（`auth relies solely on the credential resolver …`）。
 
 從 template 的 `apps/rpc` 實際啟動（`bin/rpc`，環境變數覆蓋設定、`APP_POSTGRES_URL=''`、`APP_HTTP_ADDR=':0'`）跑過的格子如下。每一列是一組具體輸入，沒寫到的 `auth.*` 都是預設值；「通過」只代表這一組輸入起得來，不代表同一類設定都起得來，值的格式由上面第 3 層檢查；其他結果寫「在第幾層被拒」。
 
