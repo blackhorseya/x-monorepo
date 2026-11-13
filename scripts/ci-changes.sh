@@ -3,8 +3,8 @@
 # lines (ci.yml's affected job copies them to GITHUB_OUTPUT; every other job has
 # `if: needs.affected.outputs.run_<job> == 'true'`).
 #
-#   scripts/ci-changes.sh [base] [head]   # default origin/main...HEAD (the PR's diff)
-#   CI_ALL=1 scripts/ci-changes.sh        # everything true: main (the release gate) and dispatch
+#   scripts/ci-changes.sh [base] [head]   # default origin/main...HEAD (the PR's diff); ci.yml passes the last v* tag for a main push it cleared
+#   CI_ALL=1 scripts/ci-changes.sh        # everything true: what ci.yml's classify step asks for on dispatch, and on a push to main it cannot clear
 #
 # Areas → jobs. A file that no area claims (README, docs/, the compose file, .claude, e2e specs of
 # other areas…) runs nothing but what it belongs to. ci.yml,

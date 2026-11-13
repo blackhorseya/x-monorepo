@@ -26,8 +26,10 @@ jobs:
   # the Go jobs and helm-kind; the release-snapshot / console-image
   # jobs have narrower triggers, see the table in scripts/ci-changes.sh).
   # Every job is its own job (no dynamic matrix over them) so a skipped one shows up as a skipped check.
-  # On main (the release gate) and on dispatch every job runs: a skipped job must never be the
-  # reason main is green. Skipped jobs count as success for required checks.
+  # A push to main runs every job unless the `classify` step proves it cannot cut a release (#566): then it runs
+  # the jobs its changes since the last v* tag need, like a pull request. Dispatch and everything `classify` cannot
+  # decide run every job: a skipped job must never be the reason a release is green. Skipped jobs count as success
+  # for required checks.
   affected:
     runs-on: ubuntu-latest
     timeout-minutes: 5 # p90 20s, max 116s (last 11 days)
@@ -51,25 +53,54 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { fetch-depth: 0 }
       - uses: ./.github/actions/setup
+      # Which jobs may a push to main skip (#566)? Only those whose changes since the last release tag cannot cut a
+      # release (scripts/releasable.sh prints nothing and exits 0, the same test release.yml's prepare job applies to
+      # that same tag). Outputs: all = 0 (use the diff) or 1 (run everything), base = the ref the diff starts at.
+      # Everything that goes wrong, or is not a pull request or a push to main, ends as all=1: a consumer reads
+      # a missing `all` as 1, a missing `base` as origin/main.
+      - id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          all=1 base=origin/main
+          if [ "$EVENT" = pull_request ]; then
+            all=0
+          elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then
+            if [ -r scripts/best-effort.sh ] && bash -n scripts/best-effort.sh && . scripts/best-effort.sh \
+              && capture tag tag_rc git describe --tags --abbrev=0 --match 'v*' HEAD \
+              && [ "$tag_rc" = 0 ] && [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              && capture files rel_rc scripts/releasable.sh "$tag" HEAD \
+              && [ "$rel_rc" = 0 ] && [ -z "$files" ]; then
+              all=0 base=$tag
+            else
+              echo "classify: cannot show that this push cannot cut a release: every job runs" >&2
+            fi
+          fi
+          echo "classify: all=$all base=$base"
+          printf 'base=%s\nall=%s\n' "$base" "$all" >> "$GITHUB_OUTPUT" || echo "classify: cannot write the outputs: every job runs" >&2
       - id: detect
         env:
-          CI_ALL: ${{ github.event_name != 'pull_request' && '1' || '' }}
+          CI_ALL: ${{ steps.classify.outputs.all != '0' && '1' || '' }}
+          CI_BASE: ${{ steps.classify.outputs.base || 'origin/main' }}
         run: |
           git fetch origin main:refs/remotes/origin/main 2>/dev/null || echo "git fetch origin main failed (exit $?): using the origin/main the checkout has" >&2
-          # main and dispatch: every module (the diff against main is empty there, which would
-          # skip the whole test matrix); a PR: the modules its diff reaches. --matrix: one JSON array of
+          # CI_ALL (classify said run everything): every module; otherwise the modules the diff from CI_BASE reaches
+          # (a pull request: against origin/main; a main push `classify` cleared: since the last v* tag).
+          # On a main push the diff against origin/main is empty, which would skip the whole test matrix. --matrix: one JSON array of
           # test jobs, [{"name": …, "modules": […]}]: the big modules one job each, the rest in one shared job (#547).
-          groups=$(BASE_REF=origin/main scripts/affected.sh --matrix ${CI_ALL:+--all}) || exit $?
+          groups=$(BASE_REF="$CI_BASE" scripts/affected.sh --matrix ${CI_ALL:+--all}) || exit $?
           any=$(jq -r 'if length > 0 then "true" else "false" end' <<< "$groups") || exit $?
           echo "groups=$groups" >> "$GITHUB_OUTPUT"
           echo "any=$any" >> "$GITHUB_OUTPUT"
           echo "affected: $groups"
       - id: jobs
         env:
-          CI_ALL: ${{ github.event_name != 'pull_request' && '1' || '' }}
+          CI_ALL: ${{ steps.classify.outputs.all != '0' && '1' || '' }}
+          CI_BASE: ${{ steps.classify.outputs.base || 'origin/main' }}
         run: |
-          scripts/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
-          { echo "### jobs for this change"; scripts/ci-changes.sh | sed 's/^run_/- /; s/=true/ ✅/; s/=false/ ⏭ skipped/'; } >> "$GITHUB_STEP_SUMMARY"
+          scripts/ci-changes.sh "$CI_BASE" | tee -a "$GITHUB_OUTPUT"
+          { echo "### jobs for this change"; scripts/ci-changes.sh "$CI_BASE" | sed 's/^run_/- /; s/=true/ ✅/; s/=false/ ⏭ skipped/'; } >> "$GITHUB_STEP_SUMMARY"
 
   # ── gen freshness: generated code must match its sources ───────────────────
   gen-freshness:
