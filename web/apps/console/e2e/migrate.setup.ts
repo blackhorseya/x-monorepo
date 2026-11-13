@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { withDB } from "./mode";
 
-// DB mode only: runs bin/migrate up (idempotent). The rpc webServer command runs it too,
-// so it runs twice on purpose: Playwright's docs do not promise an order between
-// globalSetup and webServer, and with reuseExistingServer (local) an rpc that already
-// answers means the webServer command, migrate included, is skipped.
+// DB mode only: always runs bin/migrate up (idempotent). The rpc webServer command runs it
+// too, except when an existing server is reused (reuseExistingServer, local only: the
+// command, migrate included, is skipped). Kept anyway: Playwright's docs do not promise an
+// order between globalSetup and webServer, and on a reused server this is the only migrate.
 const bin = "../../../bin";
 
 export default async function setup() {
