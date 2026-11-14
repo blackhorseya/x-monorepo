@@ -32,7 +32,7 @@ task tidy           # 每個 module go mod tidy + go work sync（產生 go.sum�
 task new-bc -- <name> [--events]   # 新增 BC：產生 pkgs/<name>、protos/<name>、migration 並接進共用檔，再 gen / tidy / wire
 task gen wire       # protos → pkgs/*/contract、DI graph → apps/*/wire_gen.go
 task lint test      # 分層與 BC 邊界由 archtest 強制（`go test`）
-task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:3000）
+task compose-up     # 本機 Postgres + otel-lgtm（Grafana http://localhost:13000）
 task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自己跑）；第一次會把 config.example.yaml 複製成 configs/local.yaml（gitignored）
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）

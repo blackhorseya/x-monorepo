@@ -5,7 +5,7 @@
 ## Local infra（Compose）
 
 ```bash
-task compose-up      # podman compose（沒有 podman 就 docker compose）起 Postgres（:5432，user/pass/db 都是 app）＋ otel-lgtm（Grafana :3000、OTLP :4317）
+task compose-up      # podman compose（沒有 podman 就 docker compose）起 Postgres（:5432，user/pass/db 都是 app）＋ otel-lgtm（Grafana :13000、OTLP :4317）
 task migrate -- up   # 自動 seed 的 configs/local.yaml 已把 postgres.url 指向它，不用 export
 task run             # app 在本機跑，不進容器
 task worker          # 事件 consumer process（另開一個 terminal）

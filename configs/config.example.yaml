@@ -83,7 +83,7 @@ redis:
   url: redis://127.0.0.1:6379/0
 
 otel:
-  # OTLP/gRPC endpoint — `task compose-up` runs grafana/otel-lgtm here (Grafana :3000).
+  # OTLP/gRPC endpoint — `task compose-up` runs grafana/otel-lgtm here (Grafana :13000).
   # Empty = telemetry off (no-op providers). Prometheus metrics are bridged in, so
   # /api/metrics and Grafana show the same series.
   endpoint: 127.0.0.1:4317
