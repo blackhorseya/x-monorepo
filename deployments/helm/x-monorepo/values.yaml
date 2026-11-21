@@ -6,7 +6,6 @@
 # Images are the goreleaser ones: ghcr.io/blackhorseya/x-monorepo/{rpc,worker,migrate}:<tag>.
 # They are distroless (no shell): no exec probes, no preStop sleep — the apps' own graceful
 # shutdown does that job (see rpc.shutdown / worker.terminationGracePeriodSeconds).
-# The optional console (web/apps/console/Dockerfile, nginx) is .../console:<tag>.
 
 image:
   registry: ghcr.io/blackhorseya/x-monorepo
@@ -235,63 +234,18 @@ worker:
   tolerations: []
   affinity: {}
 
-# The web console (web/apps/console): nginx serving the Vite build, /api proxied to this
-# release's rpc Service in-cluster (RPC_UPSTREAM; the browser stays same-origin, no CORS).
-# Off by default: it is a UI for operators. The image exists from v0.23.0 on (the default
-# appVersion); an older image.tag has no console. It gets no config file and no Secret — with
-# auth.mode on, people paste their own API key / JWT into the console's credential dialog.
-console:
-  enabled: false
-  replicaCount: 1
-  liveness:    # /healthz is nginx itself; the rpc's health is the rpc's probes' business
-    initialDelaySeconds: 2
-    periodSeconds: 10
-    timeoutSeconds: 2
-    failureThreshold: 3
-  readiness:
-    initialDelaySeconds: 1
-    periodSeconds: 5
-    timeoutSeconds: 2
-    failureThreshold: 3
-    successThreshold: 1
-  resources:
-    requests: { cpu: 10m, memory: 16Mi }
-    limits: { memory: 64Mi }
-  service:
-    type: ClusterIP
-    port: 80
-    annotations: {}
-  # Plain HTTP/1.1: the console only ever uses Connect over JSON.
-  ingress:
-    enabled: false
-    className: ""
-    annotations: {}
-    hosts:
-      - host: console.example.com
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
-  extraEnv: []
-  podAnnotations: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-
 # Ingress-only NetworkPolicies, one per Deployment (egress untouched — where Postgres / Redis /
 # the collector live is the cluster's business). Needs a CNI that enforces NetworkPolicy (kind's
-# kindnet does not, so helm-kind cannot prove them). rpc always admits the console's pods;
-# each ingressFrom is a list of NetworkPolicyPeer (podSelector / namespaceSelector / ipBlock),
-# and an EMPTY list means any source on the port — list your ingress controller's namespace
-# and Prometheus to tighten it. worker gets no ingress at all.
+# kindnet does not, so helm-kind cannot prove them). rpc's ingressFrom is a list of NetworkPolicyPeer
+# (podSelector / namespaceSelector / ipBlock), and an EMPTY list means any source on the port — list your ingress controller's namespace
+# and Prometheus to tighten it. worker gets no ingress at all. (Chart 0.3.88 removed console: a values file that still sets
+# console.enabled=true fails to render, so this list is decided before the upgrade, not after it.)
 networkPolicy:
   enabled: false
   rpc:
     ingressFrom: []
     #  - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
     #  - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
-  console:
-    ingressFrom: []
 
 
 # `migrate up` as a pre-install / pre-upgrade hook: new code never starts against an old
@@ -311,7 +265,7 @@ migrate:
 # (deployments/docker/grafana/provisioning/alerting.yaml) fires at 45d = 1.5 × 720h: move both
 # together. Rows a group has not acked are never deleted; the alert "rows held by a stale
 # consumer group" tells you which group, forgetGroups removes its cursor. The same thing
-# ad hoc, without kubectl: AdminService.Prune (console Prune page) — dry run, forget, small runs.
+# ad hoc, without kubectl: AdminService.Prune — dry run, forget, small runs.
 prune:
   enabled: true
   schedule: "17 3 * * *"

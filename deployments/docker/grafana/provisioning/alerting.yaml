@@ -151,7 +151,8 @@ groups:
             The oldest row still in the table is older than 45 days (1.5× the `task prune -- --older-than 720h`
             example — set this to 1.5× whatever your prune job uses). Either prune is not scheduled, or it runs and
             cannot delete: `task prune -- --older-than 720h --dry-run` says which, its NOTE column lists the consumer
-            groups with unread rows ("held back by" = past the retention); so does the console's dry run at `/prune?bc=<schema>` (the part of the table
+            groups with unread rows ("held back by" = past the retention); so does the `blockers` of a dry run of `AdminService.Prune`
+            (`/api/admin.v1.AdminService/Prune` with `dry_run: true` and `bounded_context: <schema>`, the part of the table
             name before the dot). A poison row's inbox id is kept on purpose (it can be requeued any time).
           __dashboardUid__: x-monorepo-rpc
           __panelId__: "29"
@@ -192,7 +193,7 @@ groups:
             lists in NOTE every group with unread rows and the age of its oldest one — the stale group is the one
             days behind, under "held back by" once past the retention, "behind" before that — then
             `--forget-group <name>` deletes its cursor so the rows become prunable
-            (console: `/prune?bc=<schema>&forget=<name>`, dry run first).
+            (or `AdminService.Prune` with `forget_groups: [<name>]`, `dry_run: true` first).
             If it is a live group, fix consumption first — forgetting a live group makes it restart from
             worker.start_from.
           __dashboardUid__: x-monorepo-rpc

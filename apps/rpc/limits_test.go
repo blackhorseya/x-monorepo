@@ -18,7 +18,7 @@ import (
 )
 
 // Through the wired graph: the rate limit sits in the chain and its
-// rejection carries the headers the console / curl see.
+// rejection carries the headers a client sees.
 func TestRateLimit_E2E(t *testing.T) {
 	srv, cleanup, err := Initialize(&config.AppConfig{
 		HTTP: config.HTTP{Addr: ":0", RateLimit: config.RateLimit{RPS: 1, Burst: 1}},

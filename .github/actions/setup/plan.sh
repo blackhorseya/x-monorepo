@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The one place that decides who may WRITE a cache and which Go build cache a job uses (#450).
-# Called by .github/actions/setup and .github/actions/playwright; every cache step reads its
+# Called by .github/actions/setup; every cache step reads its
 # outputs, none repeats the condition. scripts/test.sh pins that the low-trust triggers
 # (pull_request, pull_request_target, workflow_run, schedule, issue_comment) never write.
 #
@@ -38,7 +38,7 @@ case $scope in
   lint)                                                   group=check saver=true ;;
   gen-freshness|work-sync|coverage|scripts-test|affected) group=check ;;
   build)                                                  group=bin   saver=true ;;
-  console-e2e|console-image|helm)                         group=bin ;;
+  helm)                                                   group=bin ;;
   helm-kind)                                              group=kind  saver=true ;;
   release-snapshot)                                       group=cross saver=true ;;
 esac

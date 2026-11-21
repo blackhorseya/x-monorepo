@@ -15,7 +15,6 @@
 # job keeps running (a skipped job is only right when its inputs are known not to have changed):
 #   *_test.go only      the Go checks (gen-freshness, lint, work-sync, coverage) and the test matrix;
 #                       no build, no integration job. A test helper not named *_test.go is product code.
-#   console-image       web, proto (the TS client is generated from it), image files; not plain Go.
 #   release-snapshot    .goreleaser.yaml, a Dockerfile, .dockerignore, release.yml, go.mod / go.sum / go.work.
 #   helm-kind           product Go, web, helm, image files.
 set -euo pipefail
@@ -77,9 +76,7 @@ helm=false;   has 'deployments/helm/*' && helm=true
 # that: they render nothing the cluster installs.
 grafana=false; has 'deployments/docker/grafana/*' && grafana=true
 release=false; has '.github/workflows/release.yml' && release=true   # pins cosign-release: the smoke + Rekor canary must run on a bump (#215)
-images=false; has 'deployments/docker/Dockerfile*' 'web/apps/console/Dockerfile' 'web/apps/console/deploy/*' '.goreleaser.yaml' '.dockerignore' && images=true
-# goreleaser builds the Go images from deployments/docker/Dockerfile*; the console image is built by release.yml
-# with buildx (.goreleaser.yaml says so), so its Dockerfile and nginx config are not a release-snapshot input.
+images=false; has 'deployments/docker/Dockerfile*' '.goreleaser.yaml' '.dockerignore' && images=true
 snapshot_src=false; has 'deployments/docker/Dockerfile*' '.goreleaser.yaml' '.dockerignore' && snapshot_src=true
 # Inputs of scripts/test.sh outside scripts/, ci.yml, Taskfile.yml and .github/actions (those already run everything): .goreleaser.yaml (the
 # release image list cases), go.work (the MODULES
@@ -98,8 +95,6 @@ out build            "$go_prod" "$ci"
 out release_snapshot "$gomod" "$snapshot_src" "$release" "$ci"
 out actions_resolve  "$actions" "$ci"
 out web              "$web" "$proto" "$ci"
-out console_e2e      "$go_prod" "$web" "$ci"
-out console_image    "$web" "$proto" "$images" "$ci"
 out helm             "$helm" "$grafana" "$ci"
 out scripts_test     "$ci" "$scripts_src"
 out helm_kind        "$go_prod" "$web" "$helm" "$images" "$ci"

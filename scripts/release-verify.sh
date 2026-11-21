@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Verifies a published release the way its notes tell a reader to (.github/release-drafter.yml's
 # Verify block): the checksums.txt cosign bundle, the archives against checksums.txt, the
-# linux_amd64 archive's GitHub artifact attestation, and the keyless signature on each of the seven
-# images. release.yml's verify job runs it right after publish — a release whose own instructions
+# linux_amd64 archive's GitHub artifact attestation, and the keyless signature on each
+# image. release.yml's verify job runs it right after publish — a release whose own instructions
 # fail is a red run, not something found by hand a day later.
 #
 #   scripts/release-verify.sh vX.Y.Z    # needs gh (logged in), cosign, sha256sum; the ghcr packages
@@ -25,7 +25,7 @@ cosign verify-blob --certificate-identity "$id" --certificate-oidc-issuer "$iss"
   --bundle checksums.txt.sigstore.json checksums.txt
 echo "== archive attestation"
 gh attestation verify "x-monorepo_${version}_linux_amd64.tar.gz" --repo "$repo"
-for app in rpc worker migrate console; do
+for app in rpc worker migrate; do
   echo "== image signature: $app:$version"
   cosign verify --certificate-identity "$id" --certificate-oidc-issuer "$iss" \
     "ghcr.io/$repo/$app:$version" --output text >/dev/null

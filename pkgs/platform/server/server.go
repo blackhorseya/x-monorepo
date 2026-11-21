@@ -33,8 +33,8 @@ import (
 // Everything lives under /api so one ingress rule covers the whole server.
 //
 // RPCs are served twice: at RPCPrefix + "/<pkg>.<Service>/<Method>", which is
-// what Connect / gRPC-Web clients configured with base URL "…/api" call (the
-// console, curl, Scalar), and at the bare "/<pkg>.<Service>/<Method>", because
+// what Connect / gRPC-Web clients configured with base URL "…/api" call (curl,
+// Scalar), and at the bare "/<pkg>.<Service>/<Method>", because
 // the gRPC protocol fixes that path and a grpc-go / grpcurl client cannot add
 // a prefix. The handler is the same; only the route differs.
 const (
