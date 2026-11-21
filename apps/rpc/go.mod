@@ -14,13 +14,13 @@ require (
 )
 
 require (
-	buf.build/go/protovalidate v1.4.0 // indirect
-	cel.dev/cel-go v0.32.0 // indirect
+	buf.build/go/protovalidate v1.4.1 // indirect
+	cel.dev/cel-go v0.33.2 // indirect
 	cel.dev/expr v0.25.3 // indirect
 	connectrpc.com/connect v1.21.1 // indirect
 	connectrpc.com/otelconnect v0.12.0 // indirect
-	github.com/MicahParks/jwkset v0.11.4 // indirect
-	github.com/MicahParks/keyfunc/v3 v3.9.1 // indirect
+	github.com/MicahParks/jwkset v0.11.5 // indirect
+	github.com/MicahParks/keyfunc/v3 v3.9.2 // indirect
 	github.com/Rican7/retry v0.3.1 // indirect
 	github.com/ThreeDotsLabs/watermill v1.5.3 // indirect
 	github.com/ThreeDotsLabs/watermill-redisstream v1.4.5 // indirect
@@ -53,7 +53,7 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.12.0 // indirect
+	github.com/jackc/pgx/v5 v5.13.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
