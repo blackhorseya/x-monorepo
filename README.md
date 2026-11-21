@@ -273,7 +273,7 @@ interceptor 只管 transport 層的事（procedure、protocol、code）。
 |---|---|---|
 | domain 只 import kernel；application 不碰 infra / adapters / contract；infra 不碰 adapters；adapters 不碰 infra | Clean Arch 依賴方向 | **archtest**（`pkgs/platform/archtest/imports.go`，BC 內的 `arch_test.go` 跑，不逐 BC 列規則） |
 | BC 只能從 adapters import 其他 BC 的 `contract/`；kernel / platform 不 import BC；apps 只碰 provider.go | 邊界 | **archtest**（`bc-isolation` 規則擋其他 BC 的 domain / application / infra / adapters；BC 的 domain / application / infra 讀其他 BC 的 `contract/` 目前沒有規則，靠 review；kernel / platform 與 apps 的規則跑在各自 module 的 `arch_test.go`） |
-| domain struct 欄位 private；無 `Set*`；每個 struct 有 constructor（`*Params` 參數物件除外）；不呼叫 `time.Now()`；不 log | DDD aggregate | **archtest**（`pkgs/platform/archtest`，每個 BC 的 `arch_test.go` 跑） |
+| domain struct 欄位 private；無 `Set` + 大寫開頭的方法（`SetName`；`SettlementID`、`Setup` 不算）；每個 struct 有 constructor（`*Params` 參數物件除外）；不呼叫 `time.Now()`；不 log | DDD aggregate | **archtest**（`pkgs/platform/archtest`，每個 BC 的 `arch_test.go` 跑） |
 | `*Repository` interface 只能在 domain | DDD | archtest |
 | usecase 只有 `Execute(c, in) (out, error)` 一個公開方法 | 單一職責、可被 decorator 包 | archtest |
 | dto 無方法、不 import domain / proto；port 只有 interface | 邊界純度 | archtest |

@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Rule inspects one parsed file and reports violations.
@@ -74,6 +76,18 @@ func RunRules(t *testing.T, root string, rules ...Rule) {
 	}
 }
 
+// isSetterName reports whether a method name is Set followed by an upper-case letter (SetName).
+// A name that merely starts with the letters "Set" (SettlementID, Setup, Settings) is not a setter.
+// Only the name is read: Set_x passes, a known boundary.
+func isSetterName(name string) bool {
+	rest, ok := strings.CutPrefix(name, "Set")
+	if !ok {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(rest)
+	return unicode.IsUpper(r)
+}
+
 // isParamObject reports whether a domain struct is a constructor input (<aggregate>.Params,
 // <aggregate>.ReconstituteParams): plain exported fields consumed once by New/Reconstitute,
 // not aggregate state, so the private-field and constructor rules do not apply.
@@ -114,7 +128,7 @@ func DefaultRules() []Rule {
 			Layer: "domain",
 			Check: func(_ *token.FileSet, f *ast.File, report func(token.Pos, string)) {
 				forMethods(f, func(recv string, fn *ast.FuncDecl) {
-					if strings.HasPrefix(fn.Name.Name, "Set") && len(fn.Name.Name) > 3 && ast.IsExported(fn.Name.Name) {
+					if isSetterName(fn.Name.Name) {
 						report(fn.Pos(), recv+"."+fn.Name.Name+": name the behaviour (Cancel, Activate…), not the field being set")
 					}
 				})
