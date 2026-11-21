@@ -28,14 +28,19 @@ done | rsync -a --from0 --files-from=- ./ "$tmp/"
 ln -s "$repo/bin" "$tmp/bin" # the pinned tools: building them again would be the slow part
 
 cd "$tmp"
-step "generate cisample and cisampleevents --events"
-go run ./tools/newbc --root "$tmp" cisample
-go run ./tools/newbc --root "$tmp" cisampleevents --events
-
-step "task gen, tidy (to a fixed point), wire"
-task gen
-scripts/sync-fixpoint.sh
-task wire
+# The real entry, `task new-bc` (generate, then gen, tidy to a fixed point, wire), once per BC: running its steps by hand in another order is how #602
+# stayed green (a separate `task gen` re-reads go.work, `task new-bc` did not). Each run must leave the new BC's openapi.yaml: apps/worker embeds it.
+new_bc() {
+  local bc=$1
+  step "task new-bc -- $*"
+  task new-bc -- "$@"
+  if [ ! -f "pkgs/$bc/contract/v1/openapi.yaml" ]; then
+    echo "new-bc-check: task new-bc -- $* did not write pkgs/$bc/contract/v1/openapi.yaml (#602)" >&2
+    exit 1
+  fi
+}
+new_bc cisample
+new_bc cisampleevents --events
 
 for bc in cisample cisampleevents; do
   step "pkgs/$bc: vet, lint, test"
