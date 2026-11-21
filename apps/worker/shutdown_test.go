@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -18,12 +19,36 @@ import (
 // no-op when current, so the shared pgtest database and -count=2 are fine.
 func migrateUp(t *testing.T) {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "migrate")
-	if out, err := exec.Command("go", "build", "-o", bin, "github.com/blackhorseya/x-monorepo/apps/migrate").CombinedOutput(); err != nil {
-		t.Fatalf("build apps/migrate: %v\n%s", err, out)
+	// One budget for both children, shorter than what the test binary has left (half of it, so run(nil) and the
+	// SIGTERM loop below still fit), and never more than migrateBudget: a stuck build or database must fail here
+	// with the step named, not hang until go test's own -timeout.
+	budget := migrateBudget
+	if d, ok := t.Deadline(); ok {
+		budget = min(budget, time.Until(d)/2)
 	}
-	if out, err := exec.Command(bin, "up").CombinedOutput(); err != nil {
-		t.Fatalf("migrate up: %v\n%s", err, out)
+	c, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+
+	bin := filepath.Join(t.TempDir(), "migrate")
+	runStep(t, c, budget, "build apps/migrate", "go", "build", "-o", bin, "github.com/blackhorseya/x-monorepo/apps/migrate")
+	runStep(t, c, budget, "migrate up", bin, "up")
+}
+
+// migrateBudget caps the time migrateUp may spend on its two child processes.
+const migrateBudget = 2 * time.Minute
+
+// runStep runs one child under c: on timeout CommandContext kills it, WaitDelay bounds the wait for its output
+// pipes (a grandchild such as the compiler can hold them open), and the failure says which step ran out of time.
+func runStep(t *testing.T, c context.Context, budget time.Duration, step, name string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(c, name, args...)
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	if c.Err() != nil {
+		t.Fatalf("%s: did not finish within the %s budget: %v\n%s", step, budget.Round(time.Millisecond), err, out)
+	}
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", step, err, out)
 	}
 }
 
