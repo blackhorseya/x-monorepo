@@ -238,7 +238,8 @@ worker:
 # the collector live is the cluster's business). Needs a CNI that enforces NetworkPolicy (kind's
 # kindnet does not, so helm-kind cannot prove them). rpc's ingressFrom is a list of NetworkPolicyPeer
 # (podSelector / namespaceSelector / ipBlock), and an EMPTY list means any source on the port — list your ingress controller's namespace
-# and Prometheus to tighten it. worker gets no ingress at all.
+# and Prometheus to tighten it. worker gets no ingress at all. (Chart 0.3.88 removed console: a values file that still sets
+# console.enabled=true fails to render, so this list is decided before the upgrade, not after it.)
 networkPolicy:
   enabled: false
   rpc:

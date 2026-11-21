@@ -125,3 +125,13 @@ checksum/secrets: {{ include "x-monorepo.secretData" . | sha256sum }}
 {{- end -}}
 {{- $t -}}
 {{- end -}}
+
+{{/* Refuse values that would otherwise be silently ignored with a changed meaning. console was removed in 0.3.88 (#597):
+     with networkPolicy on and an empty networkPolicy.rpc.ingressFrom, the rpc policy used to admit only the console pods and
+     would now admit any source. Only console.enabled is checked; other console.* keys are ignored as before. values.yaml
+     has no console key, so .Values.console.enabled alone would be a nil pointer: default dict first (dig rejects .Values, which is not a plain map). */}}
+{{- define "x-monorepo.validate" -}}
+{{- if (.Values.console | default dict).enabled -}}
+{{- fail "console.enabled: the web console was removed in chart 0.3.88 (#597) and this chart no longer deploys it. Remove console.enabled from your values. If networkPolicy.enabled is true, first list the allowed sources in networkPolicy.rpc.ingressFrom: an empty list admits any source to rpc." -}}
+{{- end -}}
+{{- end -}}

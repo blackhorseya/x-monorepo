@@ -86,11 +86,11 @@ WAL 會判 disk full、對每個 push 回 503 整批丟掉（`loki_ingester_wal_
 
 這一版移除 `web/apps/console` 與它的發布、部署、CI：chart 不再有 console 的 Deployment／Service／Ingress／NetworkPolicy，release 不再推 `ghcr.io/blackhorseya/x-monorepo/console`。`web/`（Turborepo）、`web/packages/proto`、`task gen-ts` 保留。
 
-- **升級時 Helm 會刪掉的資源**：用 0.3.87 與 0.3.88 各 `helm template`（帶 `console.enabled=true`、`console.ingress.enabled=true`、`networkPolicy.enabled=true`）比對資源清單，0.3.88 少了 `<release>-console` 的 Deployment、Service、Ingress、NetworkPolicy 四個；`console.enabled` 預設 off，沒開過的 release 渲染結果與 0.3.87 逐行相同（正規化掉 `helm.sh/chart` label 與註解後 0 行差異）。以上是 template 的比對，**沒有**在叢集上做 `helm upgrade` 實測。
-- **Helm values**：留著的 `console.*`、`networkPolicy.console.*` 不會報錯，只是沒有人讀（chart 沒有 `values.schema.json`；0.3.88 帶 `console.enabled=true` 照常渲染），可以從 values 拿掉。
-- **NetworkPolicy 的行為變化**：`networkPolicy.enabled=true`、`networkPolicy.rpc.ingressFrom` 是空的、而且原本 `console.enabled=true` 的 release，0.3.87 的 rpc NetworkPolicy 只放行 console 的 pod；0.3.88 沒有 console，空的 `ingressFrom` 依既有規則是「該 port 對任何來源開」（template 渲染的 rpc NetworkPolicy 不再有 `from`）。要維持收緊，升級前就在 `networkPolicy.rpc.ingressFrom` 列出實際的來源。`ingressFrom` 有列的 release，0.3.88 只剩列出來的 peers。
+- **升級時 Helm 會刪掉的資源**：`helm template`（0.3.87，帶 `console.enabled=true`、`console.ingress.enabled=true`、`networkPolicy.enabled=true`）有 `<release>-console` 的 Deployment、Service、Ingress、NetworkPolicy 四個；0.3.88 沒有 console 的 template，同樣帶 `networkPolicy.enabled=true` 渲染不出任何 console 資源。實際的升級路徑是先從 values 拿掉 `console.enabled`（見下一條，否則 render 失敗），再升到 0.3.88，這四個資源就會從 release 刪掉。`console.enabled` 預設 off，沒開過的 release 渲染結果與 0.3.87 逐行相同（正規化掉 `helm.sh/chart` label 與註解後 0 行差異）。以上是 template 的比對，**沒有**在叢集上做 `helm upgrade` 實測。
+- **Helm values**：`console.enabled=true` 會讓 `helm template`／`helm lint --strict` 在 render 階段失敗、exit 1（`helm upgrade` 走同一個 render，未在叢集上跑；`console.enabled: the web console was removed in chart 0.3.88 …`），必須從 values 拿掉。只檢查 `console.enabled`；其他留著的 `console.*`、`networkPolicy.console.*` 不會報錯，只是沒有人讀（chart 沒有 `values.schema.json`），可以一併拿掉。
+- **NetworkPolicy**：`networkPolicy.enabled=true`、`networkPolicy.rpc.ingressFrom` 是空的、而且原本 `console.enabled=true` 的 release，0.3.87 的 rpc NetworkPolicy 只放行 console 的 pod；0.3.88 沒有 console，空的 `ingressFrom` 依既有規則是「該 port 對任何來源開」（rpc NetworkPolicy 不再有 `from`）。因為上面的檢查，這種 release 升到 0.3.88 不會被靜默放寬：`console.enabled` 還在 values 裡就先 render 失敗。拿掉 `console.enabled` 之前，先決定 `networkPolicy.rpc.ingressFrom`：要維持收緊就列出實際的來源（ingress controller、Prometheus 等），留空就是對任何來源開。`ingressFrom` 本來就有列的 release，0.3.88 只剩列出來的 peers。
 - **image**：最後一版含 console 的 chart 是 0.3.87（appVersion 0.70.7）；第一個不再發 console image 的 release 是本變更合併後的下一版，**尚未發布**。已發布的舊 image、舊 chart 不動。
-- **回滾界線**：只寫實測到的：上面的資源差異與 NetworkPolicy 渲染結果。**未實測**：叢集上實際 `helm upgrade`／`helm rollback` 的行為。
+- **回滾界線**：只寫實測到的：上面的資源差異、`console.enabled=true` 的 render 失敗，以及 NetworkPolicy 渲染結果。**未實測**：叢集上實際 `helm upgrade`／`helm rollback` 的行為。
 
 ### Upgrade notes — chart 0.3.79：移除 identity bounded context（#561）
 
