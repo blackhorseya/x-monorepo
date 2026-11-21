@@ -115,7 +115,7 @@ deployments/helm Helm chart：rpc / worker Deployment、migrate pre-install/pre-
 | 任何 BC 的 domain / application / infra | — | 其他 BC 的任何東西（走 port 或 event） |
 
 **archtest（`pkgs/platform/archtest`，每個 BC 的 `arch_test.go`）強制的 DDD 形狀**：domain struct 欄位 private、
-無 `Set*`、每個 struct 有 constructor（`*Params` 除外）、不呼叫 `time.Now()`、不 log；`*Repository` interface
+無 `Set` + 大寫開頭的方法（`SetName`；`SettlementID`、`Setup` 不算）、每個 struct 有 constructor（`*Params` 除外）、不呼叫 `time.Now()`、不 log；`*Repository` interface
 只能在 domain；usecase 只有 `Execute(c, in) (out, error)` 一個公開方法；dto 無方法、不 import domain / proto；
 port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*usecase.X`。
 
