@@ -28,7 +28,7 @@ import (
 //	apps/migrate                 composition root that may collect each BC's infra
 //	apps/<other>                 composition root
 //
-// A BC is every pkgs/<name> except kernel and platform; Taskfile.yml's BCS
+// A BC is every pkgs/<name> except kernel and platform; Taskfile.yml's gen-openapi
 // applies the same rule to go.work's `use` list. Every module of those kinds has a
 // test calling RunImports (a BC reaches it through Run), so each rule runs in the
 // module whose files it judges — and in CI whenever that module is affected. A new

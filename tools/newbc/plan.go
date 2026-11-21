@@ -212,7 +212,7 @@ func checkBCS(o Options, work *modfile.WorkFile) error {
 	return nil
 }
 
-// bcsJQ runs scripts/bcs.jq (Taskfile.yml's BCS) over a go.work in `go work edit -json` shape and
+// bcsJQ runs scripts/bcs.jq (which Taskfile.yml's gen-openapi runs) over a go.work in `go work edit -json` shape and
 // returns the BC names it derives. The name rule lives there and only there.
 func bcsJQ(root string, work *modfile.WorkFile) ([]string, error) {
 	var js bytes.Buffer

@@ -17,7 +17,7 @@ task new-bc -- <name> --events   # 有 event：outbox、同 BC 的 consumer、in
 `tidy` 一定排在 `gen` 後面：gen 還沒寫出 connect package 時 tidy 會失敗。
 
 ## 名稱規則（錯了會說是哪一條）
-- `scripts/bcs.jq`：`^[a-z][a-z0-9]*$`（`BCS` 用它，產生器直接 exec `jq` 跑它；`MODULES` 用的是另一份 `scripts/modules.jq`，白名單不同）
+- `scripts/bcs.jq`：`^[a-z][a-z0-9]*$`（`gen-openapi` 用它，產生器直接 exec `jq` 跑它；`MODULES` 用的是另一份 `scripts/modules.jq`，白名單不同）
 - 最長 30 字元（名稱是 Postgres schema，也是 `events_<topic>` 表名的一段）
 - 不是 Go keyword，不是 `kernel`、`platform`、`main`
 - `pkgs/<name>` 或 `protos/<name>` 已存在 → 拒絕
