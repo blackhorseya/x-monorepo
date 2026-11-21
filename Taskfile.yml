@@ -56,10 +56,6 @@ vars:
   GORELEASER_VERSION: v2.18.2   # .github/workflows/release.yml pins the same minor
   KUBECONFORM_VERSION: v0.7.0   # helm-check; helm itself comes from PATH (brew install helm)
 
-  # Bounded contexts, one per line, derived from go.work like MODULES: every pkgs/<bc> module except kernel and platform
-  # (scripts/bcs.jq, also the allowlist for a name). Each publishes an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml).
-  BCS:
-    sh: set -o pipefail; go work edit -json go.work | jq -r -f scripts/bcs.jq
   # Every Go module in the workspace, one per line: go.work is the only list (#413). Resolved on every task run (like BUF above),
   # so go and jq must be on PATH; a failing pipeline fails the task rather than yield an empty list. scripts/modules.jq is the one
   # rule for what a path may be (it is spliced into shell commands below): anything outside [A-Za-z0-9._/-] fails every task.
@@ -272,12 +268,17 @@ tasks:
       - >-
         {{shellQuote .BUF}} generate --path protos/admin --template
         '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/platform/contract/admin/v1","opt":["path=openapi.yaml","base=protos/admin/v1/openapi.base.yaml"]}]}'
-      # no BC at all is a valid skeleton: BCS is then empty, and `for` still runs once with an empty ITEM
-      - for: { var: BCS, split: "\n" }
-        if: '{{ne .ITEM ""}}'
-        cmd: >-
-          {{shellQuote .BUF}} generate --path protos/{{.ITEM}} --template
-          '{"version":"v2","plugins":[{"local":"bin/protoc-gen-connect-openapi","out":"pkgs/{{.ITEM}}/contract/v1","opt":["path=openapi.yaml","base=protos/{{.ITEM}}/v1/openapi.base.yaml"]}]}'
+      # Every BC publishes an OpenAPI document (pkgs/<bc>/contract/v1/openapi.yaml). The list is read from go.work when this command runs, not from a
+      # Taskfile var: a var is evaluated once per task process, and `task new-bc` adds the BC to go.work after its process has started (#602).
+      # scripts/bcs.jq is the allowlist for a name (^[a-z][a-z0-9]*$), so "$bc" is safe in the command; a failing pipeline fails the task.
+      # No BC at all is a valid skeleton: the list is empty and the loop does nothing.
+      - |
+        set -euo pipefail
+        bcs=$(go work edit -json go.work | jq -r -f scripts/bcs.jq) || exit 1
+        while IFS= read -r bc; do
+          [ -n "$bc" ] || continue
+          {{shellQuote .BUF}} generate --path "protos/$bc" --template "{\"version\":\"v2\",\"plugins\":[{\"local\":\"bin/protoc-gen-connect-openapi\",\"out\":\"pkgs/$bc/contract/v1\",\"opt\":[\"path=openapi.yaml\",\"base=protos/$bc/v1/openapi.base.yaml\"]}]}"
+        done <<< "$bcs"
 
   gen-ts:
     desc: protos → web/packages/proto (remote plugin, needs network)
@@ -552,7 +553,8 @@ tasks:
     cmds:
       # every check runs before the first write; a failure after that leaves the files it names, undo with `git restore .` and `git clean -fd pkgs/<name> protos/<name>`
       - go run ./tools/newbc --root {{shellQuote .ROOT_DIR}} {{.CLI_ARGS}}
-      # gen → tidy → wire: tidy before gen fails on the connect package that gen has not written yet
+      # gen → tidy → wire: tidy before gen fails on the connect package that gen has not written yet.
+      # gen-openapi reads go.work itself when it runs, so the BC the line above just added is in it; MODULES is read by `task tidy`, which sync-fixpoint.sh starts anew (#602)
       - task: gen
       - scripts/sync-fixpoint.sh # `go work sync` can need more than one round (#475)
       - task: wire

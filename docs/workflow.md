@@ -14,7 +14,7 @@
 ### 新增 Bounded Context：`task new-bc -- <name> [--events]`
 `tools/newbc` 一次產生並接好（樣板在 `tools/newbc/templates/`，細節與失敗還原見 `.claude/skills/new-bc/SKILL.md`）：
 1. 新檔：`protos/<name>/v1/{entity,service}.proto`＋`openapi.base.yaml`、`pkgs/<name>/**`（`provider.go` 匯出自己的 `RPC`，即 `server.Mount`；`arch_test.go` 讓 layer 與 BC 隔離的 import 規則由 `archtest.Run` 自動套用）、`0001_<name>` migration（表放在 `<name>.` schema）。`--events` 另加 `event.proto`、event、outbox、同 BC 的 consumer（經 inbox）、`0002_events`（自己發的 topic 與 `<name>.events_poison`）、`0003_inbox`
-2. 共用檔各加一筆，插在 `new-bc:*` 錨點註解上方：`go.work` 的 `use`（`MODULES`、`BCS` 由它導出，名稱只收 `^[a-z][a-z0-9]*$`）、`buf.gen.yaml` 的 `go_package` override、`apps/{rpc,migrate}/go.mod` 的 `require` + `replace`、`apps/rpc/wire.go` 的 `ProviderSet`、`NewMounts` 的一個參數與一個元素、`apps/migrate/main.go` 的 `migrations`。`--events` 另加 `apps/worker`：`go.mod`、`wire.go` 的 `ProviderSet`、`NewConsumers` 的一個參數與一個元素（`NewWorker` 收 `[]Consumer`）、`poison.go` 的 `schemas`
+2. 共用檔各加一筆，插在 `new-bc:*` 錨點註解上方：`go.work` 的 `use`（`MODULES` 與 `gen-openapi` 的 BC 清單由它導出，名稱只收 `^[a-z][a-z0-9]*$`）、`buf.gen.yaml` 的 `go_package` override、`apps/{rpc,migrate}/go.mod` 的 `require` + `replace`、`apps/rpc/wire.go` 的 `ProviderSet`、`NewMounts` 的一個參數與一個元素、`apps/migrate/main.go` 的 `migrations`。`--events` 另加 `apps/worker`：`go.mod`、`wire.go` 的 `ProviderSet`、`NewConsumers` 的一個參數與一個元素（`NewWorker` 收 `[]Consumer`）、`poison.go` 的 `schemas`
 3. 然後 `task gen` → `scripts/sync-fixpoint.sh`（`go mod tidy` + `go work sync` 到沒有 diff）→ `task wire`
 4. 手動：`task gen-ts`（需要網路）把 TS client 產進 `web/packages/proto/src/gen/<name>/`（CI 的 gen-freshness 也比這個）；把樣板的 aggregate、proto 與 migration 改成真正的領域；commit tidy 的結果
 5. 驗證：`task new-bc-check`（工作樹複本，含未 `git add` 的新檔）；CI 的 gen-freshness 也跑，**沒有 DB，所以不跑 postgres repository 的測試**
