@@ -16,13 +16,13 @@ const (
 	violationsFile = "buf/validate/violations.proto"
 )
 
-// violationMessages are the only messages of validate.proto the console decodes at runtime
-// (ViolationsSchema in web/apps/console/src/client.ts), in their original order. The package stays
+// violationMessages are the only messages of validate.proto kept in the generated TypeScript
+// (Violations and what it contains), in their original order. The package stays
 // buf.validate, so type URLs (type.googleapis.com/buf.validate.Violations) do not change.
 var violationMessages = []string{"Violations", "Violation", "FieldPath", "FieldPathElement"}
 
-// Strip rewrites set so the generated TypeScript no longer carries buf.validate's ~70 kB
-// descriptor: every options message loses its extension and unknown fields (that is where
+// Strip rewrites set so the generated TypeScript no longer carries buf.validate's rule
+// descriptors: every options message loses its extension and unknown fields (that is where
 // (buf.validate.field) and friends live), nothing depends on validate.proto any more, and
 // validate.proto itself becomes violations.proto with just violationMessages. Everything
 // else, buf's own extension fields on FileDescriptorProto included, passes through untouched.

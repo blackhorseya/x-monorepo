@@ -63,7 +63,7 @@ eq_of() { local _n=$1 _w=$2 _o _r; shift 2; capture _o _r subshell "$@" || exit 
 count_lines() { local rc=0; grep -c "$@" || rc=$?; if [ "$rc" -gt 1 ]; then echo "test.sh: grep failed with exit $rc in count_lines $*" >&2; exit 2; fi; }   # grep -c prints the count (0 too) and exits 1 on "none": that is a count, not a failure
 
 # ── ci-changes.sh ───────────────────────────────────────────────────────────────
-all_jobs="gen_freshness lint work_sync coverage build release_snapshot actions_resolve web console_e2e console_image helm scripts_test helm_kind"
+all_jobs="gen_freshness lint work_sync coverage build release_snapshot actions_resolve web helm scripts_test helm_kind"
 # ci_changes_jobs: runs scripts/ci-changes.sh in $repo and prints the jobs set to true. The script's exit code and the formatting
 # pipeline are each checked: CI-CHANGES-FAILED when ci-changes.sh dies (even after printing a plausible set), FORMAT-FAILED when sed / tr die.
 ci_changes_jobs() {
@@ -83,7 +83,7 @@ jobs_on() {
 }
 # Shorthands for the sets below (#328): the Go checks every Go change runs, and what only product code adds.
 go_checks="gen_freshness lint work_sync coverage"
-go_prod="build console_e2e helm_kind"
+go_prod="build helm_kind"
 # The Grafana dashboard and alert rules are inputs of helm-check's check-observability.py (#367 slice 5c): a metric-name typo in a rule that never fires is caught there, so a change to them runs helm and nothing else.
 eq_of "grafana provisioning runs helm-check only" "helm" jobs_on grafana deployments/docker/grafana/provisioning/alerting.yaml
 eq_of "a _test.go alone runs only the Go checks" "$go_checks" jobs_on gotest pkgs/example/domain/thing/thing_test.go
@@ -95,20 +95,20 @@ eq_of "a _test.go next to a product file changes nothing about the product file"
   "$go_checks $go_prod" \
   jobs_on gomixed pkgs/example/domain/thing/thing.go pkgs/example/domain/thing/thing_test.go
 
-# Product Go: no release-snapshot, console-image.
+# Product Go: no release-snapshot.
 eq_of "go runs the Go checks and kind" \
   "$go_checks $go_prod" \
   jobs_on go pkgs/example/domain/thing/thing.go
-gomod_jobs="$go_checks build release_snapshot console_e2e helm_kind"
+gomod_jobs="$go_checks build release_snapshot helm_kind"
 eq_of "go.mod counts as go, and as a release input" "$gomod_jobs" jobs_on gomod pkgs/example/go.mod
-eq_of "go.work is the same set, plus scripts-test" "$go_checks build release_snapshot console_e2e scripts_test helm_kind" jobs_on gowork go.work
+eq_of "go.work is the same set, plus scripts-test" "$go_checks build release_snapshot scripts_test helm_kind" jobs_on gowork go.work
 eq_of ".golangci.yml is Go config" "$go_checks $go_prod" jobs_on golangci .golangci.yml
-eq_of "proto is go + web, console-image included" \
-  "$go_checks build web console_e2e console_image helm_kind" \
+eq_of "proto is go + web" \
+  "$go_checks build web helm_kind" \
   jobs_on proto protos/example/v1/service.proto
 eq_of "web only: no lint" \
-  "gen_freshness web console_e2e console_image helm_kind" \
-  jobs_on web web/apps/console/src/routes/example.tsx
+  "gen_freshness web helm_kind" \
+  jobs_on web web/packages/proto/src/index.ts
 eq_of "helm only" "helm helm_kind" jobs_on helm deployments/helm/x-monorepo/values.yaml
 # A rename is a delete plus an add. `git diff --name-only` pairs them and prints only the new path, so
 # helper.go -> helper_test.go would look test-only while it removed a product file: ci-changes.sh
@@ -128,10 +128,10 @@ rename_jobs_on() {
 eq_of "renaming a product file to _test.go removed a product input" \
   "$go_checks $go_prod" rename_jobs_on torename pkgs/example/helper.go pkgs/example/helper_test.go
 eq_of "Dockerfile is an image change" \
-  "release_snapshot console_image helm_kind" \
+  "release_snapshot helm_kind" \
   jobs_on image deployments/docker/Dockerfile.rpc
 eq_of ".goreleaser.yaml is an image change, and a scripts-test input (the release image list cases read it)" \
-  "release_snapshot console_image scripts_test helm_kind" \
+  "release_snapshot scripts_test helm_kind" \
   jobs_on goreleaser .goreleaser.yaml
 eq_of "release.yml runs release-snapshot too" "release_snapshot actions_resolve" jobs_on relyml .github/workflows/release.yml
 eq_of "ci.yml runs everything"   "$all_jobs" jobs_on ciyml .github/workflows/ci.yml
@@ -242,21 +242,20 @@ eq_of "affected --matrix: groups = the affected modules once each; a standalone 
 # ── releasable.sh ───────────────────────────────────────────────────────────────
 fixture releasable
 touch_file README.md changed; touch_file docs/guide.md; touch_file pkgs/example/README.md
-touch_file deployments/helm/x-monorepo/Chart.yaml; touch_file web/apps/console/e2e/a.spec.ts
+touch_file deployments/helm/x-monorepo/Chart.yaml; touch_file web/packages/proto/src/a.ts
 touch_file pkgs/example/domain/thing/thing_test.go; touch_file .github/workflows/ci.yml
 touch_file scripts/x.sh; touch_file Taskfile.yml
 touch_file deployments/docker/docker-compose.yaml; touch_file deployments/docker/grafana/d.json
 commit "docs: nothing shipped"
 eq_of "docs / chart / tests / CI are not releasable" "" in_repo scripts/releasable.sh
 touch_file pkgs/example/domain/thing/thing.go; touch_file deployments/docker/Dockerfile.rpc
-touch_file configs/config.example.yaml; touch_file web/apps/console/src/main.tsx; touch_file .goreleaser.yaml
+touch_file configs/config.example.yaml; touch_file .goreleaser.yaml
 commit "feat: shipped"
 eq_of "shipped files are releasable" \
   ".goreleaser.yaml
 configs/config.example.yaml
 deployments/docker/Dockerfile.rpc
-pkgs/example/domain/thing/thing.go
-web/apps/console/src/main.tsx" \
+pkgs/example/domain/thing/thing.go" \
   in_repo scripts/releasable.sh
 eq_of "explicit range sees only that range" "" in_repo scripts/releasable.sh HEAD~2 HEAD~1
 # A rename between a shipped file and a _test.go still changes what ships (--no-renames: the shipped path is listed
@@ -276,18 +275,16 @@ pkgs/example/other.go" in_repo scripts/releasable.sh
 # gives a release whose images are not all built, signed, verified or documented (a new app, #367
 # slice 5a): .goreleaser.yaml (dockers_v2: the Go images), release.yml (the summary of what was pushed),
 # scripts/release-verify.sh (the signature check of each), release-drafter.yml (the Images block of the
-# notes) and Taskfile.yml's APPS (every deployable app). The console is the one image with no Go binary:
-# it is in the last three, built by release.yml with buildx. An image added to any list alone is a red
+# notes) and Taskfile.yml's APPS (every deployable app). An image added to any list alone is a red
 # scripts-test, not a release found wrong afterwards.
 words() { tr ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ' | sed 's/ $//'; }
 images_in() { grep -o 'ghcr\.io/blackhorseya/x-monorepo/[a-z-]*' "$1" | sed 's#.*/##' | words; }
 go_images=$(images_in "$src/.goreleaser.yaml") || exit 1
 apps=$(sed -n 's/^  APPS: //p' "$src/Taskfile.yml" | words) || exit 1
-with_console=$(printf '%s console' "$go_images" | words) || exit 1
 expect_match "release images: .goreleaser.yaml lists images (positive control)" "rpc" "$go_images"
 expect_eq "release images: every app in Taskfile APPS ships a goreleaser image, and nothing else does" "$apps" "$go_images"
 got=$(sed -n 's/^for app in \(.*\); do$/\1/p' "$src/scripts/release-verify.sh" | words) || exit 1
-expect_eq "release images: release-verify.sh checks each image's signature" "$with_console" "$got"
+expect_eq "release images: release-verify.sh checks each image's signature" "$go_images" "$got"
 # ── MODULES is derived from go.work; check-modules.sh refuses go.work paths it cannot carry (#413) ──────────────
 # lint / test / cover / tidy loop over Taskfile.yml's MODULES. It used to be a second hand-kept list, and a module only
 # in go.work was silently never linted or tested (a new app, #412); five rounds of a gate comparing the two

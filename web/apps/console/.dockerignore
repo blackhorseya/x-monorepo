@@ -1,4 +1,0 @@
-# Only dist/ and deploy/ go into the image.
-*
-!dist
-!deploy

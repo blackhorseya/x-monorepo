@@ -282,8 +282,8 @@ tasks:
   gen-ts:
     desc: protos → web/packages/proto (remote plugin, needs network)
     cmds:
-      # tools/stripvalidate drops buf.validate's rule options and validate.proto (~70 kB of
-      # descriptor in the console bundle), keeping only Violations; see web/packages/proto/README.md.
+      # tools/stripvalidate drops buf.validate's rule options and validate.proto from the generated TS,
+      # keeping only Violations; see web/packages/proto/README.md.
       # --include-imports emits that kept file (buf/validate/violations.proto); WKT are skipped.
       - |
         set -o pipefail
@@ -378,8 +378,8 @@ tasks:
 
   helm-kind-up:
     run: once   # helm-kind and helm-kind-core depend on this: one cluster, built once
-    deps: [web-build, helm-kind-cluster]
-    desc: 'the base of helm-kind-core: kind cluster + its own kubeconfig (helm-kind-cluster; reused if it exists), images built from the tree (rpc / worker / migrate + the console), kind load, then deployments/helm/kind/deps.yaml (Postgres, Redis)'
+    deps: [helm-kind-cluster]
+    desc: 'the base of helm-kind-core: kind cluster + its own kubeconfig (helm-kind-cluster; reused if it exists), images built from the tree (rpc / worker / migrate), kind load, then deployments/helm/kind/deps.yaml (Postgres, Redis)'
     vars:
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
@@ -396,9 +396,7 @@ tasks:
       # spelling docker, podman and the archive loaded into kind all agree on.
       - for: [rpc, worker, migrate]
         cmd: '{{.DOCKER}} build -q -f deployments/docker/Dockerfile --build-arg APP={{.ITEM}} --build-arg TARGETPLATFORM=linux/{{.ARCH}} -t localhost/x-monorepo/{{.ITEM}}:kind {{.BIN_DIR}}/kind >/dev/null'
-      # The console: nginx + web/apps/console/dist (built by the web-build dep), context = that dir.
-      - '{{.DOCKER}} build -q -t localhost/x-monorepo/console:kind web/apps/console >/dev/null'
-      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind localhost/x-monorepo/console:kind'
+      - '{{.DOCKER}} save -o {{.BIN_DIR}}/kind/images.tar localhost/x-monorepo/rpc:kind localhost/x-monorepo/worker:kind localhost/x-monorepo/migrate:kind'
       - '{{.KIND_RUN}} kind load image-archive --name {{.CLUSTER}} {{.BIN_DIR}}/kind/images.tar'
       - '{{.KIND_RUN}} kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} apply -f {{.KIND_DIR}}/deps.yaml >/dev/null'
       - '{{.KIND_RUN}} kubectl --kubeconfig "{{.KIND_KUBECONFIG}}" -n {{.NS}} rollout status deploy/postgres deploy/redis --timeout=2m'
@@ -421,7 +419,7 @@ tasks:
 
   helm-kind-core:
     deps: [helm-kind-up]
-    desc: 'the chart installed for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (rpc and the console)'
+    desc: 'the chart installed for real on the helm-kind-up cluster: helm upgrade --install --wait twice (pre-install then pre-upgrade hook), each followed by deployments/helm/kind/smoke.sh (rpc)'
     vars:
       CHART: deployments/helm/x-monorepo
       KIND_DIR: deployments/helm/kind
@@ -507,42 +505,11 @@ tasks:
     generates: [node_modules/.modules.yaml]
     cmds: [pnpm install --frozen-lockfile]
 
-  web-dev:
-    desc: 'console on http://localhost:5173, proxying RPCs to CONSOLE_API (default http://localhost:8080 = task run)'
-    deps: [web-install]
-    dir: web/apps/console
-    cmds: [pnpm dev]
-
   web-typecheck:
-    desc: tsc --noEmit for every web package (@repo/proto, @repo/console)
+    desc: tsc --noEmit for every web package (@repo/proto)
     deps: [web-install]
     dir: web
     cmds: [pnpm typecheck]
-
-  web-test:
-    desc: 'unit tests of the console (node --test, no browser): the retry policy (src/transient.test.ts: a row per Connect code, the network-error shapes, the bounded backoff), what it does to every query once react-query merged it with the query''s own options (src/queries.retry.test.ts: the real QueryClient defaults and queryFns, a scripted server, a mocked clock), and the static guard that nothing else sets `retry` (src/retry-overrides.test.ts). What CI''s web job runs with web-typecheck'
-    deps: [web-install]
-    dir: web/apps/console
-    # src/testing/register.mjs: vite-style imports, enums and the browser-only client.ts do not load in plain node
-    cmds: [node --test --experimental-strip-types --import ./src/testing/register.mjs src/*.test.ts]
-
-  web-build:
-    desc: production build of web/apps/console → web/apps/console/dist
-    deps: [web-install]
-    dir: web
-    cmds: [pnpm build]
-
-  web-e2e:
-    desc: 'Playwright smoke of the console against a real ./bin/rpc + vite preview of the build; E2E_DATABASE_URL=postgres://… runs migrate up and uses that DB (what CI does), unset = in-memory; once: pnpm exec playwright install chromium (web/apps/console)'
-    deps: [build, web-build]
-    dir: web/apps/console
-    cmds: ['pnpm exec playwright test {{.CLI_ARGS}}']
-
-  web-e2e-image:
-    desc: 'the "image" Playwright project against the real console image: build web/apps/console/Dockerfile (docker or podman), run it with RPC_UPSTREAM back to the host, Playwright starts bin/rpc as usual. Two specs run here (playwright.config.ts, project image): e2e/image.spec.ts (SPA fallback, cache headers, security headers, CSP) and e2e/admin.spec.ts (the admin pages loaded through nginx); the rest run on vite preview in console-e2e. What CI''s console-image job runs'
-    deps: [build, web-build]
-    cmds:
-      - web/apps/console/e2e/image.sh {{.CLI_ARGS}}
 
   config:
     desc: 'create configs/local.yaml from configs/config.example.yaml if missing'

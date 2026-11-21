@@ -7,7 +7,7 @@ TypeScript types and Connect clients generated from `/protos` (protobuf-es v2).
 task gen-ts            # → web/packages/proto/src/gen/**
 ```
 
-Usage (see `web/apps/console/src/client.ts` for the real thing):
+Usage:
 
 ```ts
 import { createClient } from "@connectrpc/connect";
@@ -31,9 +31,8 @@ const { messages } = await client.listPoison({ limit: 20 });
 - no file depends on `buf/validate/validate.proto` any more, and that file becomes `buf/validate/violations.proto`
   with only `Violations`, `Violation`, `FieldPath` and `FieldPathElement` (package still `buf.validate`, so type URLs are unchanged).
 
-Why: `validate.proto`'s descriptor was a ~70 kB string every generated file listed as a dependency, so neither tree-shaking
-nor dynamic `import()` could drop it, and the console only needs `ViolationsSchema` to render field errors
-(`web/apps/console/src/client.ts`).
+Why: `validate.proto`'s descriptor was one large string that every generated file listed as a dependency, so neither tree-shaking
+nor dynamic `import()` could drop it; of that file, only `Violations` and the messages it contains are kept.
 
 Trade-offs:
 

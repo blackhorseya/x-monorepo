@@ -89,8 +89,7 @@ curl -X POST localhost:8080/api/admin.v1.AdminService/ListPoison \
 │   ├── worker/                    # 事件 consumer process：同一份 ProviderSet + Watermill router（目前沒有 BC 有 consumer，沒有 handler，啟動後只等 signal；`poison` / `prune` 子命令照常）
 │   └── migrate/                   # 收集各 BC 的 embed migrations，cobra：up / down / version；唯一能 import infra 的 app
 └── web/                           # Turborepo（pnpm）
-    ├── packages/proto/            # @repo/proto：buf 生成的 connect-es client（有 commit）
-    └── apps/console/              # Vite + React + TanStack Router / Query + Tailwind v4 + shadcn/ui
+    └── packages/proto/            # @repo/proto：buf 生成的 connect-es client（有 commit）
 ```
 
 ## Docs
@@ -130,7 +129,7 @@ dto 不要照著 pb 抄。
 `platform/server` 用 gin 當 HTTP router：每個 BC 的 Connect handler 以 `gin.WrapH` 掛在 `/api/<pkg>.<Service>/*procedure`
 （`http.StripPrefix`，給 Connect / gRPC-Web client 用 base URL `…/api`）**以及**原生路徑 `/<pkg>.<Service>/*procedure`
 （gRPC 協定把路徑寫死，grpc-go / grpcurl 加不了前綴）；`/api/healthz`（liveness：process 活著就 200，不看依賴）、`/api/readyz`（readiness：跑 app 給的 `server.Readiness` checks，
-rpc 是 Postgres ping；任一失敗或 server 正在 drain 回 503 + JSON 明細）、`/api/version`（`{version, commit, date, go}`，不用驗證：port-forward 就知道 pod 跑哪版；console 的 footer 顯示「console X · server Y」——X 是 release.yml build 時用 `VITE_CONSOLE_VERSION` 烘進去的 tag，本機 build 是 `dev`；兩邊都是真版號又不同就標 version mismatch）、`/api/metrics`、`/api/docs` 是普通 gin route。
+rpc 是 Postgres ping；任一失敗或 server 正在 drain 回 503 + JSON 明細）、`/api/version`（`{version, commit, date, go}`，不用驗證：port-forward 就知道 pod 跑哪版）、`/api/metrics`、`/api/docs` 是普通 gin route。
 **Graceful shutdown**（`Server.Serve`，`apps/rpc/main.go` 以 `signal.NotifyContext` 接 SIGINT / SIGTERM）：先把 `/api/readyz` 翻成 503 `"server":"draining"`
 但其他路徑照常服務 `http.shutdown_delay`（預設 0：本機 Ctrl-C 立刻關；k8s 設 ≥ 一個 probe period，LB 才來得及停止派流量——Helm chart 的 `rpc.shutdown` 把這個關係算死），
 再關 listener、給 in-flight request `http.shutdown_timeout`（預設 15s）跑完；超時才切斷並回 error。liveness 全程 200。
@@ -167,7 +166,7 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 - 規則故意和 domain 重複：edge 給 client 好讀的錯（哪個欄位、哪條 rule），domain 給所有入口一致的保證。
 - `buf.yaml` 的 `deps` 帶進 `buf.build/bufbuild/protovalidate`（`buf.lock` 有 commit）；`buf.gen.yaml` 用 `managed.disable` 讓它保留自己的 Go package。
 - OpenAPI 會把 rule 轉成 `minLength` / `minimum` / `pattern`，所以 `/api/docs` 看得到。
-- TS client 不帶 rule：`task gen-ts` 經 `tools/stripvalidate` 把 options（含 `buf.validate.*`，也含其他 unknown option field）和 `validate.proto` 拿掉，只留 `Violations` / `Violation` / `FieldPath` / `FieldPathElement`（`buf/validate/violations.proto`，package 與 type URL 不變），console bundle 因此少 ~70 kB raw / ~13 kB gzip。代價：瀏覽器端用不了 protovalidate 規則（驗證只在 server 與 domain）；wire 相容由 `tools/stripvalidate` 的測試鎖住。詳見 `web/packages/proto/README.md`。
+- TS client 不帶 rule：`task gen-ts` 經 `tools/stripvalidate` 把 options（含 `buf.validate.*`，也含其他 unknown option field）和 `validate.proto` 拿掉，只留 `Violations` / `Violation` / `FieldPath` / `FieldPathElement`（`buf/validate/violations.proto`，package 與 type URL 不變）。代價：瀏覽器端用不了 protovalidate 規則（驗證只在 server 與 domain）；wire 相容由 `tools/stripvalidate` 的測試鎖住。詳見 `web/packages/proto/README.md`。
 
 ## Pagination：cursor（keyset）+ opaque page token
 
@@ -186,7 +185,7 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 
 ## Events：domain event → transactional outbox（Watermill）→ worker
 
-**目前狀態**：這套機制（platform 的 outbox / inbox / poison / eventbus、`worker poison|prune`、console 的 Poison / Prune 頁）都還在，但現在沒有任何 BC 發 event 或有 consumer：`worker` 沒有 handler，啟動後只等 signal；poison 服務的 schema 清單是空的。下面以 `<bc>` 表示「有 event 的 BC」；有 event 的完整範例保存在 reference repo（見上方）。
+**目前狀態**：這套機制（platform 的 outbox / inbox / poison / eventbus、`worker poison|prune`、`admin.v1.AdminService`）都還在，但現在沒有任何 BC 發 event 或有 consumer：`worker` 沒有 handler，啟動後只等 signal；poison 服務的 schema 清單是空的。下面以 `<bc>` 表示「有 event 的 BC」；有 event 的完整範例保存在 reference repo（見上方）。
 
 x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-effort publish」掉一次就是永久掉。這裡的做法：
 
@@ -216,14 +215,13 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   改過名的 `worker.consumer_group`、broker 改 redis 前的 BC group）用 `--forget-group <name>` 先刪掉它的 cursor（真回來就當新 group，照 `worker.start_from`）。
   poison 表不在此列（`poison drop` 才是）；redis stream 的修剪是 Redis 端的 XTRIM 政策。先 `--dry-run` 看數字再跑。
   同一件事也有 RPC：`AdminService.Prune`（`older_than` / `dry_run` / `unconsumed` / `forget_groups` / `batch_size`，回每張表的列數、skipped 原因、
-  擋住的 group），console 的 **Prune** 頁就是打它——alert 響了之後不用進 pod：dry run 看 NOTE、填 forget、再跑；
-bc / days / forget 在 URL 上（`/prune?bc=<bc>&forget=<group>.<bc>`，Poison 頁的 BC badge 與 alert 說明都連過來），dry run 永遠從開著開始。它跑在 `http.timeout` 底下，
+  擋住的 group `blockers`）——alert 響了之後不用進 pod：dry run 看 `blockers`、填 `forget_groups`、再跑。它跑在 `http.timeout` 底下，
   所以是 dry-run / forget-group / 例行小量的入口；第一次清大 backlog 用 CLI / CronJob（逾時只是回應掉了，已刪的 batch 都已 commit，重跑無害）。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
   `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `auth.admin_role`
   （API key 用 `name=key:admin`，JWT 用 `roles` claim），不然 `PERMISSION_DENIED` + `x-error-code: auth.permission_denied`；
-  `auth.mode: off` 時全開（跟其他 RPC 一樣——`off` 只給本機開發，任何外面連得到的環境都要 `required` + `admin_role`）。console 的 **Poison** 頁就是打它。
+  `auth.mode: off` 時全開（跟其他 RPC 一樣——`off` 只給本機開發，任何外面連得到的環境都要 `required` + `admin_role`）。
   **CLI** `task poison -- list [-n 50] [<bc>]` 列出各 BC 停在 poison 表的訊息（offset、uuid、原 topic、最後一次 error），
   `show <bc> <offset>` 看完整 metadata 與 payload（proto bytes，印 base64；用 `buf convert` 解），`requeue <bc> <offset>…|all`
   把訊息**重新 insert 回原 topic 的 outbox 表**（同一個 message id、拿掉 poison metadata；每個 consumer group、含 redis 模式的 forwarder
@@ -300,36 +298,9 @@ admin 與每個 BC 的 `openapi.base.yaml` 都宣告 `securitySchemes`（`apiKey
 （`auth.mode: required` 時填 `configs/local.yaml` 的 `auth.api_keys` 那把 key）；`auth.mode: off` 時填不填都一樣。前端不需要它 —— `web/packages/proto`
 直接從 proto 生 connect-es client。
 
-## Web console：`web/apps/console`
+## Web：`web/packages/proto`
 
-一個最小的操作介面，用來證明 `@repo/proto` 真的能被前端用：poison / prune 的操作頁。
-
-```bash
-task run            # rpc :8080
-task web-dev        # http://localhost:5173；CONSOLE_API=http://host:port 可改 proxy 目標
-task web-typecheck  # @repo/proto + @repo/console 的 tsc --noEmit（CI 的 web job 也跑這個 + web-build）
-task web-e2e        # Playwright smoke：建好的 console（vite preview）打真的 ./bin/rpc；poison / prune 各頁走一遍。E2E_DATABASE_URL=postgres://… 先 migrate up 再接那個 DB（CI 的 console-e2e job 這樣跑：poison / prune 真的執行；`bin/migrate up` 由 `e2e/migrate.setup.ts`（globalSetup）執行；rpc webServer 的 command 也會跑，重用既有 server 時（未設 `CI`）不跑，不起 bin/worker），沒設就 in-memory、admin 頁驗 admin.no_database；另一組 project auth 起 auth.mode=required（API key + HS256 JWT）的 rpc 驗匿名 → 錯的 key → 對的 key → reload → Clear、JWT 的 roles claim 過 admin gate 且 reload 後仍在、頁面載入後才設的 key 會被 Prune 帶出去、admin probe 失敗一次或持續失敗後恢復、admin chunk 載入失敗後 Retry 恢復。第一次要 cd web/apps/console && pnpm exec playwright install chromium（CI 的兩個 console job 走 .github/actions/playwright：chromium 以 @playwright/test 版本為 key 快取在 ~/.cache/ms-playwright，命中只裝 apt deps）
-task web-e2e-image  # 只把需要 nginx 的兩支 spec（project image：e2e/image.spec.ts 與 e2e/admin.spec.ts，清單寫在 playwright.config.ts 的 testMatch）改打真的 console image，其餘留在 vite preview（e2e/image.sh：build web/apps/console/Dockerfile、容器的 RPC_UPSTREAM 回指 host 上 Playwright 起的 bin/rpc；docker 或 podman）。image.spec.ts 驗 nginx 本身：deep link 回 index.html + no-cache、assets immutable、不存在的 asset 是 404、安全 header、CSP（渲染完的 connect-src 是 `'self'`、沒有殘留的 template 變數）；admin.spec.ts 由真瀏覽器經 nginx 載入 admin 頁。image project 跑哪些 spec 由 playwright.config.ts 的 testMatch 那兩個檔名決定，repo 沒有檢查這份清單與實際檔案是否一致；改名或新增要上 image 的 spec 時要同步改它。CI 的 console-image job
-```
-
-| 主題 | 做法 |
-|---|---|
-| 呼叫後端 | `@connectrpc/connect-web` + `@repo/proto` 的 service descriptor；vite dev server 把 `/api` proxy 到 Go server，瀏覽器維持 same-origin，所以 server **不需要 CORS** |
-| 錯誤 | `describe()` 讀 `x-error-code` header，並解析 protovalidate 的 `Violations` detail 成 `items[0].sku: …`；`UNAUTHENTICATED` 另外提示去設 credential |
-| 認證 | header 右側的 **Credential**：API key（`X-API-Key`）或 JWT（`Authorization: Bearer`），存 localStorage（`console.credential`），transport 的 interceptor 每次呼叫時讀，改了下一個 RPC 就生效；`VITE_CONSOLE_API_KEY` / `VITE_CONSOLE_TOKEN` 可在 build 時 seed。server `auth.mode: off` 時什麼都不用設 |
-| 資料 | TanStack Query：server 只有 unary RPC。Poison 每 5s 輪詢；`/api/version` 每 5 分鐘重抓。domain error 不 retry |
-| 路由 | TanStack Router（code-based，`/poison`、`/prune`；首頁導到 `/poison`），不需要額外的 codegen plugin |
-| Poison 頁 | `admin.v1.AdminService`：各 BC 的 poison 表，Show（metadata + payload base64）/ Requeue / Drop，每個 BC 有 Requeue all / Drop all；server auth 開著時 credential 要帶 `admin` role |
-| UI | Tailwind v4（`@tailwindcss/vite`）+ shadcn/ui（`components.json`；component 在 `src/components/ui`，加新的用 `pnpm dlx shadcn@latest add <name>`） |
-
-`@repo/proto` 的 `exports` 指向 `src/gen/*.ts`，由 bundler 直接吃 TS 原始檔，不需要 build step。
-
-部署：`web/apps/console/Dockerfile` 把 `task web-build` 的 `dist/` 放進 `nginxinc/nginx-unprivileged`（:8080），`deploy/default.conf.template`
-一個 server：`/` 走 SPA fallback（任何路由都回 `index.html`，`assets/` immutable cache）、`/api/` proxy 到 `RPC_UPSTREAM`（預設 `http://rpc:8080`），
-瀏覽器維持 same-origin，rpc 一樣不需要 CORS；`/healthz` 給 probe。nginx 自己回的東西（index.html、assets）帶 `deploy/security-headers.inc.template` 渲染出的標頭：CSP（script 只准 self、style 允許 inline——Radix 用 style attribute、connect 只准 self、`frame-ancestors 'none'`）、nosniff、`X-Frame-Options: DENY`、Referrer-Policy、Permissions-Policy；`/api/` 的 response 是 rpc 的，不加（`/api/docs` 的 Scalar 從 CDN 載）。image 只寫 `/tmp`（entrypoint 用 envsubst 把 template render 到 `/tmp/default.conf`、`/tmp/security-headers.inc`，白名單 filter 只放 `RPC_UPSTREAM`；SPA 沒有 runtime 設定檔，也就沒有 `/config.json`，`CONSOLE_OIDC_*` 不再有人讀），
-`conf.d` 只剩一行 include），所以 read-only rootfs + 任意 uid 都能跑——Helm chart 的 `console.enabled` 就是這樣部署它（見 [`docs/operations.md`](docs/operations.md)）。
-release pipeline 把它和四個 Go image 一起推成 `ghcr.io/blackhorseya/x-monorepo/console:X.Y.Z`（見 [`docs/release.md`](docs/release.md)；`task helm-kind` 則從 working tree
-build 成 `localhost/x-monorepo/console:kind`）。所以 console 的改動**會切版**：只有 `e2e/` 和 `playwright.config.ts` 不算。
+`web/` 是 Turborepo（pnpm），目前只有 `@repo/proto`（`task gen-ts` 生成、有 commit）；`task web-typecheck` 對它跑 `tsc --noEmit`（CI 的 web job 也跑這個）。
 
 ## Conventions
 

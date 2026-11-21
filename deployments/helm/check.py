@@ -106,24 +106,6 @@ def main(profile: str) -> None:
             check(f"--forget-group={g}" in pc["args"], f"prune --forget-group={g}")
         expect(cron["spec"]["concurrencyPolicy"], "Forbid", "prune never overlaps itself")
 
-    # console: nginx with the one env var, no app config, no Secret, /tmp writable, probes on itself.
-    con = find(docs, "Deployment", "-console")
-    cv = values["console"]
-    check((con is not None) == cv["enabled"], "console Deployment iff enabled")
-    check((find(docs, "Service", "-console") is not None) == cv["enabled"], "console Service iff enabled")
-    check((find(docs, "Ingress", "-console") is not None) == (cv["enabled"] and cv["ingress"]["enabled"]), "console Ingress iff enabled")
-    if con:
-        cs = con["spec"]["template"]["spec"]
-        cc = cs["containers"][0]
-        cenv = {e["name"]: e.get("value") for e in cc["env"]}
-        expect(cenv.get("RPC_UPSTREAM"), f'http://{rpc["metadata"]["name"]}:{values["rpc"]["service"]["port"]}', "console RPC_UPSTREAM = this release's rpc Service")
-        check(not any(k.startswith("APP_") for k in cenv) and "envFrom" not in cc, "console gets no APP_* env and no Secret")
-        check(any(m["mountPath"] == "/tmp" for m in cc["volumeMounts"]) and any("emptyDir" in v for v in cs["volumes"]), "console has an emptyDir at /tmp")
-        check(cc["securityContext"].get("readOnlyRootFilesystem") is True, "console rootfs read-only")
-        expect(cc["readinessProbe"]["httpGet"]["path"], "/healthz", "console readiness path")
-        expect(cc["livenessProbe"]["httpGet"]["path"], "/healthz", "console liveness path")
-        expect(cc["ports"][0]["containerPort"], 8080, "console containerPort = nginx-unprivileged's 8080")
-
     # ServiceMonitor: scrapes the rpc Service's http port at /api/metrics.
     sm = find(docs, "ServiceMonitor", "-rpc")
     check((sm is not None) == values["rpc"]["serviceMonitor"]["enabled"], "ServiceMonitor iff enabled")
@@ -136,12 +118,11 @@ def main(profile: str) -> None:
         for k, v in values["rpc"]["serviceMonitor"]["labels"].items():
             expect(sm["metadata"]["labels"].get(k), v, f"ServiceMonitor label {k}")
 
-    # NetworkPolicy: ingress-only, one per Deployment; the console may always reach the rpc.
+    # NetworkPolicy: ingress-only, one per Deployment.
     npv = values["networkPolicy"]
-    for comp in ("rpc", "worker", "console"):
+    for comp in ("rpc", "worker"):
         pol = find(docs, "NetworkPolicy", f"-{comp}")
-        want = npv["enabled"] and (comp != "console" or cv["enabled"])
-        check((pol is not None) == want, f"NetworkPolicy {comp} iff enabled")
+        check((pol is not None) == npv["enabled"], f"NetworkPolicy {comp} iff enabled")
         if pol:
             expect(pol["spec"]["policyTypes"], ["Ingress"], f"NetworkPolicy {comp} is ingress-only")
             expect(pol["spec"]["podSelector"]["matchLabels"].get("app.kubernetes.io/component"), comp, f"NetworkPolicy {comp} selects its pods")
@@ -149,15 +130,9 @@ def main(profile: str) -> None:
         rp = one(docs, "NetworkPolicy", "-rpc")["spec"]["ingress"][0]
         expect(rp["ports"], [{"protocol": "TCP", "port": c["ports"][0]["containerPort"]}], "rpc NetworkPolicy port = http.addr")
         peers = rp.get("from", [])
-        from_console = [p for p in peers if p.get("podSelector", {}).get("matchLabels", {}).get("app.kubernetes.io/component") == "console"]
-        check(bool(from_console) == cv["enabled"], "rpc NetworkPolicy admits the console iff the console is deployed")
-        check(len(peers) == len(from_console) + len(npv["rpc"]["ingressFrom"]), "rpc NetworkPolicy peers = console + ingressFrom")
+        check(len(peers) == len(npv["rpc"]["ingressFrom"]), "rpc NetworkPolicy peers = ingressFrom")
         check(("from" in rp) == bool(peers), "rpc NetworkPolicy: no peers listed means any source")
         expect(one(docs, "NetworkPolicy", "-worker")["spec"]["ingress"], [], "worker NetworkPolicy denies all ingress")
-        if cv["enabled"]:
-            cp = one(docs, "NetworkPolicy", "-console")["spec"]["ingress"][0]
-            expect(cp["ports"], [{"protocol": "TCP", "port": 8080}], "console NetworkPolicy port")
-            expect(cp.get("from", []), npv["console"]["ingressFrom"], "console NetworkPolicy peers = ingressFrom")
 
     names = [e["name"] for e in c["env"]]
     check(len(names) == len(set(names)), f"rpc env has no duplicate names: {names}")

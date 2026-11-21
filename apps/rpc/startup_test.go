@@ -92,8 +92,7 @@ func TestStartup_Refuses(t *testing.T) {
 }
 
 // The cells where it starts: no auth, or auth with a credential the config itself holds (a static key or a JWT).
-// The deployment shapes in the repo (configs/config.example.yaml, the chart's values and ci profiles, the Console
-// e2e servers) all land in one of these.
+// The deployment shapes in the repo (configs/config.example.yaml, the chart's values and ci profiles) all land in one of these.
 func TestStartup_Starts(t *testing.T) {
 	for _, c := range []struct {
 		name, mode string
