@@ -44,6 +44,7 @@ task run                   # build 後以 configs/local.yaml 跑 ./bin/rpc（Con
 ```bash
 cd apps/rpc && go test -race -run 'TestStartup_Refuses' .
 cd pkgs/platform && go test -count=1 -run '^TestArchitecture$' .      # 只跑 archtest
+cd apps/rpc && go test -count=1 -run '^TestAcceptance$' -v .            # BDD（zh-TW Gherkin，真 rpc＋每 scenario 一個 DB）；見 docs/acceptance.md
 cd pkgs/platform && go test -race ./postgres/                         # integration test：testcontainers 自起 Postgres（需 Docker/Podman）
 TEST_DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable \
   go test -race ./postgres/                                           # 或指定現成 DB（在 pkgs/platform 下）；設了連不上是 FAIL 不是 skip
