@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -81,6 +82,8 @@ type template struct {
 	base *url.URL
 	name string
 	run  string
+
+	dropWait time.Duration // how long drop waits for the backends of a closed connection to exit
 
 	mu   sync.Mutex
 	free []string        // checked URLs of databases made and not handed out yet

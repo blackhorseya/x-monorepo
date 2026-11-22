@@ -3,10 +3,19 @@ package acceptance
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	pgtest.Terminate()
+	os.Exit(code)
+}
 
 func TestEnvClose_LastRegisteredFirstAndJoinsErrors(t *testing.T) {
 	var order []string
@@ -38,5 +47,23 @@ func TestQueryText_ConnectErrorHasNoURL(t *testing.T) {
 		if strings.Contains(err.Error(), leak) {
 			t.Fatalf("error %q contains %q", err, leak)
 		}
+	}
+}
+
+// A server error echoes the parameter that caused it: SELECT ($1::text)::integer answers SQLSTATE 22P02 with the value in the
+// message. The value here is a database URL with a password, as a step that passes one on would. QueryText answers with a
+// fixed category and the SQLSTATE, never the driver's or the server's text.
+func TestQueryText_ServerErrorHasNoParameterAndHasTheSQLState(t *testing.T) {
+	const secret = "S3cr3tSynth"
+	e := &Env{DatabaseURL: pgtest.URL(t)}
+	_, err := e.QueryText(context.Background(), "SELECT ($1::text)::integer", "postgres://app:"+secret+"@db.example/x")
+	if err == nil {
+		t.Fatal("QueryText accepted a URL as an integer")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "db.example") {
+		t.Fatalf("error %q contains the parameter", err)
+	}
+	if !strings.Contains(err.Error(), "22P02") {
+		t.Fatalf("error %q does not carry the SQLSTATE 22P02", err)
 	}
 }

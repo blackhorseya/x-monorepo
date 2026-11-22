@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -258,6 +259,58 @@ func TestGenerateTwoBCs(t *testing.T) {
 	} {
 		if n := strings.Count(read(t, root, file), anchor); n != 1 {
 			t.Errorf("%s has the anchor %q %d times after two BCs, want once", file, anchor, n)
+		}
+	}
+}
+
+// Every BC's steps live in one scenario context, so a step text must match one definition: it carries its BC's name, and
+// no step of a feature matches a definition of another BC. Two events BCs and a plain one, generated one after the other,
+// is the case that shared a text (the @worker step) before.
+func TestStepsAreUniquePerBC(t *testing.T) {
+	root := repoCopy(t)
+	bcs := []string{"alpha", "beta", "gamma"}
+	for i, bc := range bcs {
+		args := []string{bc}
+		if i != 0 { // alpha has no events; beta and gamma both do
+			args = append(args, "--events")
+		}
+		if code, stderr := gen(root, args...); code != 0 {
+			t.Fatalf("%s: exit %d: %s", bc, code, stderr)
+		}
+	}
+
+	stepDef := regexp.MustCompile("sc\\.Step\\(`([^`]+)`")
+	defs := map[string][]*regexp.Regexp{} // bc -> its step definitions
+	for _, bc := range bcs {
+		src := read(t, root, "pkgs/"+bc+"/acceptance/acceptance.go")
+		found := stepDef.FindAllStringSubmatch(src, -1)
+		if len(found) == 0 {
+			t.Fatalf("%s: no step definition found in acceptance.go", bc)
+		}
+		for _, m := range found {
+			if !strings.Contains(m[1], bc) {
+				t.Errorf("%s: step %q does not carry the BC name", bc, m[1])
+			}
+			defs[bc] = append(defs[bc], regexp.MustCompile(m[1]))
+		}
+	}
+
+	keyword := regexp.MustCompile(`^\s*(假如|當|那麼|而且|但是) (.+)$`)
+	for _, bc := range bcs {
+		feature := read(t, root, "pkgs/"+bc+"/acceptance/features/"+bc+".feature")
+		for _, line := range strings.Split(feature, "\n") {
+			m := keyword.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			text := m[2]
+			for other, rs := range defs {
+				for _, r := range rs {
+					if r.MatchString(text) && other != bc {
+						t.Errorf("a step of %s.feature, %q, also matches %s's definition %q (ambiguous in one scenario context)", bc, text, other, r)
+					}
+				}
+			}
 		}
 	}
 }

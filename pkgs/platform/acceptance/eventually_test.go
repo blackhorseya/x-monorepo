@@ -97,3 +97,16 @@ func TestEventually_ContextCancelled(t *testing.T) {
 		t.Fatalf("took %s to notice the cancel", time.Since(start))
 	}
 }
+
+// The deadline and an error of the check's own can arrive together (a query that fails as the bound ends): the failure is a cause
+// of its own, not the same thing as "the condition did not hold", so it stays identifiable.
+func TestEventually_KeepsAnIndependentErrorWhenTheBoundIsReached(t *testing.T) {
+	independent := errors.New("independent query failure")
+	_, err := Eventually(context.Background(), "a row", 20*time.Millisecond, func(c context.Context) (string, bool, error) {
+		<-c.Done() // the bound ends while the check is looking
+		return "", false, independent
+	})
+	if !errors.Is(err, independent) {
+		t.Fatalf("err = %v, want it to wrap the check's own error", err)
+	}
+}
