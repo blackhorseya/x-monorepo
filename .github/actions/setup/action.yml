@@ -23,6 +23,13 @@ inputs:
       run, and compiles nothing (web).
     default: "true"
 
+outputs:
+  write:
+    description: >-
+      plan.sh's verdict, "true" only for a push / workflow_dispatch on the default branch. For a step outside
+      this action that keeps its own cache (the lint job's ~/.cache/golangci-lint, #614): the same one rule.
+    value: ${{ steps.plan.outputs.write }}
+
 runs:
   using: composite
   steps:

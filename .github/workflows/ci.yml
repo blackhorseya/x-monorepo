@@ -124,12 +124,40 @@ jobs:
     timeout-minutes: 10 # p90 120s, max 209s (last 11 days)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/setup
+      - id: setup
+        uses: ./.github/actions/setup
       - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
         with: { setup_only: true }
+      # Binary only. The action's own cache is keyed on go.mod (none at the root of a go.work repo, so
+      # `…-<7-day interval>-nogomod`) and written by any non-pull_request run, a dispatch on a
+      # dependabot branch included (#614): skip-cache turns both off, the two steps below replace it.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
-        # install-only still saves ~/.cache/golangci-lint in its post step; a pull request must not write (#450)
-        with: { version: v2.14.0, install-only: true, skip-save-cache: "${{ github.event_name == 'pull_request' }}" }
+        with: { version: v2.14.0, install-only: true, skip-cache: true }
+      # ~/.cache/golangci-lint (what `task lint` reads by default), keyed on what changes its content:
+      # the installed version (the only place the version is written is the step above), go.sum,
+      # .golangci.yml. Same rule as every other cache: only setup's plan.sh `write` saves (default-branch
+      # push / dispatch), the restore-only twin below has the opposite `if:`.
+      - id: lint-cache-key
+        shell: bash
+        run: |
+          out=$(golangci-lint --version) || exit $?
+          re='^golangci-lint has version ([^ ]+) '
+          [[ $out =~ $re ]] || { echo "unexpected golangci-lint --version output" >&2; exit 1; }
+          v=${BASH_REMATCH[1]}
+          echo "key=golangci-lint-${{ runner.os }}-$v-${{ hashFiles('**/go.sum', '.golangci.yml') }}" >> "$GITHUB_OUTPUT"
+          echo "prefix=golangci-lint-${{ runner.os }}-$v-" >> "$GITHUB_OUTPUT"
+      - if: steps.setup.outputs.write == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/golangci-lint
+          key: ${{ steps.lint-cache-key.outputs.key }}
+          restore-keys: ${{ steps.lint-cache-key.outputs.prefix }}
+      - if: steps.setup.outputs.write != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/golangci-lint
+          key: ${{ steps.lint-cache-key.outputs.key }}
+          restore-keys: ${{ steps.lint-cache-key.outputs.prefix }}
       - run: task lint
 
   work-sync:
