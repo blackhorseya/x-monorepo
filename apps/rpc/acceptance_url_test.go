@@ -45,18 +45,3 @@ func TestTemplateURLFor(t *testing.T) {
 		t.Fatalf("urlFor = %q, %v", got, err)
 	}
 }
-
-// A URL that does not parse is refused without echoing it: it carries the database password.
-func TestCheckBaseURL_MalformedDoesNotEchoCredentials(t *testing.T) {
-	const secret = "s3cr3t-pa55"
-	_, err := checkBaseURL("postgres://postgres:" + secret + "%ZZ@127.0.0.1:1/postgres")
-	if err == nil {
-		t.Fatal("want an error for a bad escape")
-	}
-	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "127.0.0.1") {
-		t.Fatalf("error echoes the url: %v", err)
-	}
-	if !strings.Contains(err.Error(), "not a valid URL") {
-		t.Fatalf("error does not say what is wrong: %v", err)
-	}
-}

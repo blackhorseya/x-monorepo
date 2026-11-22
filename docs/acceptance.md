@@ -19,6 +19,7 @@ cd apps/rpc && go test -count=1 -run '^TestAcceptance_WorkerProcess$' -v .   # �
 | feature（`# language: zh-TW`，繁體中文） | `apps/rpc/acceptance/features/*.feature` |
 | runner、per-scenario DB、平台的 steps | `apps/rpc/acceptance_test.go`（`TestAcceptance`、`registers`、`registerPlatformSteps`） |
 | template／scenario DB、URL 檢查、身分斷言 | `apps/rpc/acceptance_db_test.go` |
+| 密碼不外洩的測試（malformed／連不上／正常／子程序輸出） | `apps/rpc/acceptance_secret_test.go` |
 | 子程序 helper（migrate、worker） | `apps/rpc/acceptance_proc_test.go` |
 | `Env`、`Register`（給之後的 BC 用） | `pkgs/platform/acceptance/acceptance.go` |
 
@@ -29,6 +30,7 @@ feature 檔用繁體中文，Go 程式碼與識別字用英文。zh-TW 的關鍵
 - **資料庫 URL**：`TEST_DATABASE_URL`（或 pgtest 自起的 container URL）必須是 `postgres://` 或 `postgresql://` 的 URL，query 的 key 只准 `sslmode`、`sslrootcert`、`sslcert`、`sslkey`、`connect_timeout`、`application_name`（`checkBaseURL`，`apps/rpc/acceptance_db_test.go`）；`dbname`、`database`、`service`、`options` 或 keyword/value 格式的 DSN 一律拒絕，因為 pgx 讓 query 的 `dbname` 蓋過 URL 的 path，scenario 會連到入口 DB 而不是自己的 clone。
 - **資料庫**：`TestAcceptance` 先用 `pgtest.URL` 連到 server，建一個名稱帶隨機 run id 的 template DB，`go build` 並執行 `apps/migrate` 對它 `up`（migration 清單由 `apps/migrate` 持有、沒有匯出，做法同 `apps/worker/shutdown_test.go` 的 `migrateUp`）。要跑的 scenario 數由 gherkin 對 feature 檔算出（outline 每列算一個），測試一開始就用 `CREATE DATABASE … TEMPLATE` 複製出同樣數量的 DB（名稱 `acc_<run id>_<序號>`）；每個 scenario 的 Before hook 領一個。複製前 template 已設 `ALLOW_CONNECTIONS false`，並檢查沒有任何連線。只刪本次執行建立的 DB。
 - **有效身分斷言**：template 和每個 scenario DB 建好後，用 rpc／worker／migrate 會拿到的**同一個 URL 字串**、同樣的 driver（pgx）連一次，要求 `SELECT current_database()` 等於該 DB 的名稱，否則測試失敗；連線在檢查完就關閉。
+- **不印 URL**：URL 帶密碼，處理它的錯誤與 log 只寫固定分類（`database url does not parse`、scheme 必須是 `postgres://`、`query key "dbname" is not accepted`），不 wrap 含 URL 的錯誤（`*url.Error`、pgx 的 `ParseConfigError` 會帶出 URL 與主機）；pgconn 連線失敗的訊息只有 `user=… database=…` 與位址、沒有密碼，子程序（apps/migrate、apps/worker）的輸出也沒有，這兩點由 `apps/rpc/acceptance_secret_test.go` 用合成密碼斷言。
 - **rpc**：scenario 的「假如」step 以 `Initialize` ＋ `httptest` 在測試程序內啟動（同 `TestPlatform_E2E`），設定 `auth.mode=required` 與一把 admin API key，資料庫指向該 scenario 的 DB。
 - **收尾（只有一個 After hook）**：godog 的 After hook 依註冊順序執行，不是 LIFO（`test_context.go:132-134`、`suite.go:377`，godog v0.16.0），所以 runner 只註冊一個，steps 不准自己註冊 After。step 啟動的東西（rpc、連線池、worker 子程序）一律用 `env.Defer` 登記；After hook 先 `env.Close()`（後登記的先關），再 drop 該 scenario 的 DB。drop 前查 `pg_stat_activity`，還有連線就讓 scenario 失敗並印出是誰（pid、user、application_name、state）；drop 不加 `FORCE`，剩下沒被 drop 的 DB 在整個測試結束時才用 `FORCE` 清掉。
 - **斷言**：用 Connect client 呼叫，斷言實際回來的 Connect code 與 `x-error-code`；授權成功則斷言 RPC 真的由 handler 回應，不看 HTTP status。

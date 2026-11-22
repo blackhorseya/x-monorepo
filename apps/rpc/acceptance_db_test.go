@@ -27,25 +27,26 @@ import (
 // is added on purpose, not accepted by default.
 var allowedQuery = []string{"sslmode", "sslrootcert", "sslcert", "sslkey", "connect_timeout", "application_name"}
 
+// Nothing here may put the database URL, or a piece of it, in an error or a log line: it carries the password, and test output
+// ends up in terminals and CI logs. Errors name a fixed category (and, for a query key, the key), never the string, and
+// never wrap an error that holds it (*url.Error, pgx's ParseConfigError). pgconn's connect error is measured, not assumed: it
+// prints "user=… database=…" and the address, never the password (TestIdentityErrorsDoNotEchoCredentials).
+
 // checkBaseURL parses raw (TEST_DATABASE_URL or pgtest's container URL) and refuses what the harness cannot
 // rename safely: anything but a postgres:// or postgresql:// URL (a keyword/value DSN included), and any
 // query key outside allowedQuery.
 func checkBaseURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		// url.Error carries the whole raw URL, password included: keep only what is wrong with it.
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			err = ue.Err
-		}
-		return nil, fmt.Errorf("database url is not a valid URL (a keyword/value DSN is not accepted): %v", err) //nolint:errorlint // the cause is stripped of the URL on purpose
+		// err is a *url.Error holding the whole raw URL: say only that it does not parse.
+		return nil, errors.New("database url does not parse (a password with special characters must be percent-encoded; a keyword/value DSN is not accepted)")
 	}
 	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
-		return nil, fmt.Errorf("database url must be postgres:// or postgresql://, got scheme %q (a keyword/value DSN is not accepted)", u.Scheme)
+		return nil, errors.New("database url scheme must be postgres:// or postgresql:// (a keyword/value DSN is not accepted)")
 	}
 	for key := range u.Query() {
 		if !slices.Contains(allowedQuery, key) {
-			return nil, fmt.Errorf("database url has query key %q: only %s are accepted, because the others can change which database it reaches", key, strings.Join(allowedQuery, ", "))
+			return nil, fmt.Errorf("database url query key %q is not accepted: only %s are, because the others can change which database it reaches", key, strings.Join(allowedQuery, ", "))
 		}
 	}
 	return u, nil
@@ -54,30 +55,21 @@ func checkBaseURL(raw string) (*url.URL, error) {
 // checkIdentity connects with exactly dbURL (the string the rpc and the worker get, through pgx) and requires
 // current_database() to be want. It must run on t's own goroutine (pgtest.Conn fails the test), and the
 // connection is closed before it returns: nothing may stay connected to a template or to a database about to be dropped.
-func checkIdentity(t *testing.T, dbURL, want string) {
+func checkIdentity(t testing.TB, dbURL, want string) {
 	t.Helper()
 	c := context.Background()
 	conn := pgtest.Conn(t, dbURL)
 	var got string
 	if err := conn.QueryRow(c, "SELECT current_database()").Scan(&got); err != nil {
-		t.Fatalf("acceptance: current_database() through %s: %v", redact(dbURL), err)
+		t.Fatalf("acceptance: current_database() on database %s: %v", want, err)
 	}
 	if err := conn.Close(c); err != nil {
-		t.Fatalf("acceptance: close identity connection: %v", err)
+		t.Fatalf("acceptance: close identity connection to %s: %v", want, err)
 	}
 	if got != want {
-		t.Fatalf("acceptance: %s reaches database %q, want %q", redact(dbURL), got, want)
+		t.Fatalf("acceptance: the url for database %s reaches database %q", want, got)
 	}
 	t.Logf("acceptance: current_database() = %s", got)
-}
-
-// redact is u without its password, for messages.
-func redact(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "<unparsable url>"
-	}
-	return u.Redacted()
 }
 
 // template is the migrated database every scenario's own database is copied from. All names carry a
@@ -158,7 +150,7 @@ func (x *template) urlFor(db string) (string, error) {
 	u.RawPath = ""
 	cfg, err := pgx.ParseConfig(u.String())
 	if err != nil {
-		return "", fmt.Errorf("parse database url for %s: %w", db, err)
+		return "", fmt.Errorf("the database url for %s is not a connection string pgx accepts", db) // err echoes the url
 	}
 	if cfg.Database != db {
 		return "", fmt.Errorf("database url for %s would connect to %q", db, cfg.Database)
@@ -222,7 +214,7 @@ func (x *template) take() (string, error) {
 func (x *template) drop(c context.Context, dbURL string) error {
 	cfg, err := pgx.ParseConfig(dbURL)
 	if err != nil {
-		return fmt.Errorf("drop scenario database: parse url: %w", err)
+		return errors.New("drop scenario database: the database url is not a connection string pgx accepts") // err echoes the url
 	}
 	name := cfg.Database
 	x.mu.Lock()
