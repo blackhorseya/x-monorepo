@@ -560,7 +560,7 @@ tasks:
       - task: wire
 
   new-bc-check:
-    desc: generate a sample BC with and without --events in a COPY of the working tree (git ls-files -co --exclude-standard, so untracked files are included), then lint, build and test it; writes nothing here, does not run postgres repository tests
+    desc: generate a sample BC with and without --events in a COPY of the working tree (git ls-files -co --exclude-standard, so untracked files are included), then lint, build and test it and run its generated acceptance (apps/rpc TestAcceptance, with a Postgres container, the real rpc and a worker subprocess for the event BC); writes nothing here, does not run the BCs' postgres repository tests
     cmds:
       - scripts/new-bc-check.sh
 

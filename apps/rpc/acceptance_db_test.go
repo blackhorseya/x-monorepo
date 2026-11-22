@@ -30,7 +30,7 @@ var allowedQuery = []string{"sslmode", "sslrootcert", "sslcert", "sslkey", "conn
 // Nothing here may put the database URL, or a piece of it, in an error or a log line: it carries the password, and test output
 // ends up in terminals and CI logs. Errors name a fixed category (and, for a query key, the key), never the string, and
 // never wrap an error that holds it (*url.Error, pgx's ParseConfigError). pgconn's connect error is measured, not assumed: it
-// prints "user=… database=…" and the address, never the password (TestIdentityErrorsDoNotEchoCredentials).
+// prints "user=… database=…" and the address, never the password (TestSecret_UnreachableDatabase).
 
 // checkBaseURL parses raw (TEST_DATABASE_URL or pgtest's container URL) and refuses what the harness cannot
 // rename safely: anything but a postgres:// or postgresql:// URL (a keyword/value DSN included), and any

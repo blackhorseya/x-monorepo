@@ -168,9 +168,9 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 （`var _ XxxServiceHandler` 會提醒）→ `task wire`。
 
 **新增 Bounded Context**：`task new-bc -- <name> [--events]`（`tools/newbc`，樣板在 `tools/newbc/templates/`，skill 在 `.claude/skills/new-bc/SKILL.md`）。
-它產生 `protos/<name>/v1/*`、`pkgs/<name>/**`（一個 aggregate、`provider.go` 匯出 `RPC`、`arch_test.go`、`0001` migration）並在 `go.work`、`buf.gen.yaml`、`apps/{rpc,migrate}/go.mod`、`apps/rpc/{wire.go,app.go}`、`apps/migrate/main.go` 各加一筆（插在 `new-bc:*` 錨點註解上方，不要刪或複製錨點）；
+它產生 `protos/<name>/v1/*`、`pkgs/<name>/**`（一個 aggregate、`provider.go` 匯出 `RPC`、`arch_test.go`、`0001` migration、`acceptance/`〔繁體中文 feature＋`Register`，`--events` 多一個 `@worker` 的事件 scenario，見 docs/acceptance.md〕）並在 `go.work`、`buf.gen.yaml`、`apps/{rpc,migrate}/go.mod`、`apps/rpc/{wire.go,app.go,acceptance_test.go}`、`apps/migrate/main.go` 各加一筆（插在 `new-bc:*` 錨點註解上方，不要刪或複製錨點）；
 `--events` 另產生 event、outbox、同 BC 的 consumer、inbox、`0002_events`／`0003_inbox` migration，並加 `apps/worker/{go.mod,wire.go,consumers.go,poison.go}`。名稱過 `scripts/bcs.jq`（`^[a-z][a-z0-9]*$`）、最長 30 字元、不是 Go keyword／`kernel`／`platform`，任何一條不過或 BC 已存在都在寫任何檔之前拒絕。
-接著自動跑 `task gen` → `scripts/sync-fixpoint.sh`（tidy 到沒有 diff）→ `task wire`；之後手動：`task gen-ts`、把樣板改成真正的領域、commit tidy 的結果。`task new-bc-check` 在工作樹複本（`git ls-files -co --exclude-standard`，含未 `git add` 的新檔）產生兩種樣本並 lint／build／test；CI 的 gen-freshness 也跑它，**但沒有 DB，不跑 postgres repository 的測試**。
+接著自動跑 `task gen` → `scripts/sync-fixpoint.sh`（tidy 到沒有 diff）→ `task wire`；之後手動：`task gen-ts`、把樣板改成真正的領域、commit tidy 的結果。`task new-bc-check` 在工作樹複本（`git ls-files -co --exclude-standard`，含未 `git add` 的新檔）產生兩種樣本並 lint／build／test，再跑它們產生的 acceptance（apps/rpc 的 `TestAcceptance`：Postgres container＋真 rpc＋事件 BC 的 worker 子程序，需要 Docker／Podman）；CI 的 gen-freshness 也跑它（先 `scripts/ci-prepull-images.sh`），**但不跑各 BC 的 postgres repository 測試**。
 `--events` 的 BC 需要 Postgres：`apps/worker` 在 `postgres.url` 為空時拒絕啟動（`apps/worker/main.go:63-65`）。
 有跨 BC 的 consumer、List、stats projection 等樣板沒有的東西，照 `docs/workflow.md` 加。
 

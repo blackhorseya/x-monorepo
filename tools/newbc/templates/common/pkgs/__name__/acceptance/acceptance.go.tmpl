@@ -1,0 +1,193 @@
+// Package acceptance is the <% .Name %> bounded context's acceptance: the steps of features/<% .Name %>.feature (Gherkin in
+// zh-TW), run by apps/rpc's TestAcceptance against the real rpc and a database of their own. Only test code imports it
+// (the runner), so godog is in no binary. `task new-bc` registers it in apps/rpc/acceptance_test.go.
+//
+// The step texts carry the BC's name: two BCs' steps live in one scenario context, and a text must match one definition.
+// The "given" (the rpc is up on the scenario's database) is the platform's step; the runner has already done it.
+package acceptance
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"<% if .Events %>
+	"encoding/hex"
+	"time"<% end %>
+
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
+	"github.com/cucumber/godog"
+<% if .Events %>	"google.golang.org/protobuf/proto"
+<% end %>
+	"<% .Module %>/pkgs/platform/acceptance"
+	"<% .Module %>/pkgs/platform/server"
+	"<% .Module %>/pkgs/platform/server/servertest"
+	<% .Name %>v1 "<% .Module %>/pkgs/<% .Name %>/contract/v1"
+	"<% .Module %>/pkgs/<% .Name %>/contract/v1/<% .Name %>v1connect"
+)
+
+// Register adds this BC's steps to a scenario's context. env is the scenario's: its rpc, its database, the admin key.
+func Register(sc *godog.ScenarioContext, env *acceptance.Env) {
+	w := &world{env: env}
+	sc.Step(`^以 admin API key 建立一筆 <% .Name %>，名稱為 "([^"]+)"$`, w.createAsAdmin)
+	sc.Step(`^不帶任何 credential 建立一筆 <% .Name %>$`, w.createAnonymous)
+	sc.Step(`^<% .Name %> 建立成功，回應有 id 且名稱為 "([^"]+)"$`, w.createdWithName)
+	sc.Step(`^用 <% .Name %> 回傳的 id 查詢，名稱為 "([^"]+)"$`, w.getByCreatedID)
+	sc.Step(`^<% .Name %> 建立被拒絕，Connect code 為 "([^"]+)"，x-error-code 為 "([^"]+)"$`, w.createRejected)<% if .Events %>
+	sc.Step(`^<% .Name %> 的 <% .Title %>Created 事件已發布到 outbox，內容的 id 就是回傳的 id$`, w.eventPublished)
+	sc.Step(`^worker 在 (\d+) 秒內消費該事件，inbox 出現同一個 message id$`, w.consumedWithin)
+	sc.Step(`^<% .Name %> 的 poison 沒有任何訊息$`, w.noPoison)<% end %>
+}
+
+// world is what one scenario of this BC has done so far.
+type world struct {
+	env     *acceptance.Env
+	created *<% .Name %>v1.Create<% .Title %>Response
+	err     error
+	client  <% .Name %>v1connect.<% .Title %>ServiceClient<% if .Events %>
+	// messageID is the uuid of the outbox row that carries the created event: the message id the worker's inbox records.
+	messageID string<% end %>
+}
+
+func (w *world) newClient(opts ...connect.ClientInterceptor) {
+	opts = append([]connect.ClientInterceptor{servertest.WithErrorMeta()}, opts...)
+	w.client = <% .Name %>v1connect.New<% .Title %>ServiceClient(connect.NewClient(connecthttp.NewTransport(http.DefaultClient, w.env.RPCURL), opts...))
+}
+
+func (w *world) createAsAdmin(c context.Context, name string) error {
+	w.newClient(servertest.WithHeader(server.APIKeyHeader, w.env.AdminKey))
+	w.created, w.err = w.client.Create<% .Title %>(c, &<% .Name %>v1.Create<% .Title %>Request{Name: name})
+
+	return nil
+}
+
+func (w *world) createAnonymous(c context.Context) error {
+	w.newClient()
+	w.created, w.err = w.client.Create<% .Title %>(c, &<% .Name %>v1.Create<% .Title %>Request{Name: "acceptance"})
+
+	return nil
+}
+
+// createdWithName asserts the answer of the handler itself: an id, and the name that was sent.
+func (w *world) createdWithName(name string) error {
+	if w.err != nil {
+		return fmt.Errorf("Create<% .Title %> failed: %w", w.err)
+	}
+	got := w.created.Get<% .Title %>()
+	if got.GetId() == "" {
+		return errors.New("Create<% .Title %> answered without an id")
+	}
+	if got.GetName() != name {
+		return fmt.Errorf("Create<% .Title %> answered name %q, want %q", got.GetName(), name)
+	}
+
+	return nil
+}
+
+// getByCreatedID reads the aggregate back through the rpc and compares it with what Create answered.
+func (w *world) getByCreatedID(c context.Context, name string) error {
+	if w.created == nil {
+		return errors.New("nothing was created in this scenario")
+	}
+	id := w.created.Get<% .Title %>().GetId()
+	res, err := w.client.Get<% .Title %>(c, &<% .Name %>v1.Get<% .Title %>Request{Id: id})
+	if err != nil {
+		return fmt.Errorf("Get<% .Title %> %s: %w", id, err)
+	}
+	if got := res.Get<% .Title %>(); got.GetId() != id || got.GetName() != name {
+		return fmt.Errorf("Get<% .Title %> answered id %q name %q, want id %q name %q", got.GetId(), got.GetName(), id, name)
+	}
+
+	return nil
+}
+
+func (w *world) createRejected(code, errorCode string) error {
+	if w.err == nil {
+		return fmt.Errorf("Create<% .Title %> succeeded (%v), want %s / %s", w.created, code, errorCode)
+	}
+
+	return acceptance.ExpectRejected(w.err, code, errorCode)
+}
+<% if .Events %>
+// eventPublished finds, among the outbox rows of the <% .Title %>Created topic, the one whose payload carries the id Create
+// answered with: a row of some other event cannot satisfy it. Its uuid is the message id the worker's inbox will record.
+func (w *world) eventPublished(c context.Context) error {
+	if w.created == nil {
+		return errors.New("nothing was created in this scenario")
+	}
+	id := w.created.Get<% .Title %>().GetId()
+	rows, err := w.env.QueryText(c, `SELECT uuid, encode(payload, 'hex') FROM <% .Name %>.events_v1_<% .Name %>created`)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		payload, err := hex.DecodeString(row[1])
+		if err != nil {
+			return fmt.Errorf("outbox row %s: %w", row[0], err)
+		}
+		var evt <% .Name %>v1.<% .Title %>Created
+		if err := proto.Unmarshal(payload, &evt); err != nil {
+			return fmt.Errorf("outbox row %s does not decode as <% .Title %>Created: %w", row[0], err)
+		}
+		if evt.GetId() == id {
+			w.messageID = row[0]
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no outbox row of <% .Title %>Created carries id %s (%d rows in the outbox)", id, len(rows))
+}
+
+// consumedWithin waits, for at most the given seconds, until the worker's inbox holds the message id of the published
+// event: that row is written in the same transaction as the handler's work, so it is the proof the worker consumed it.
+func (w *world) consumedWithin(c context.Context, seconds int) error {
+	if w.messageID == "" {
+		return errors.New("the event was not found in the outbox first")
+	}
+	waited, err := acceptance.Eventually(c, "the worker to consume the event (<% .Name %>.inbox row of its message id)", time.Duration(seconds)*time.Second,
+		func(c context.Context) (string, bool, error) {
+			inbox, err := w.count(c, `SELECT count(*) FROM <% .Name %>.inbox WHERE message_id = $1`, w.messageID)
+			if err != nil {
+				return "", false, err
+			}
+			poison, err := w.count(c, `SELECT count(*) FROM <% .Name %>.events_poison`)
+			if err != nil {
+				return "", false, err
+			}
+
+			return fmt.Sprintf("message %s: inbox rows=%d, poison rows=%d", w.messageID, inbox, poison), inbox > 0, nil
+		})
+	godog.Logf(c, "the worker consumed the event after %s", waited.Round(time.Millisecond))
+
+	return err
+}
+
+func (w *world) noPoison(c context.Context) error {
+	n, err := w.count(c, `SELECT count(*) FROM <% .Name %>.events_poison`)
+	if err != nil {
+		return err
+	}
+	if n != 0 {
+		return fmt.Errorf("the poison table holds %d message(s), want none", n)
+	}
+
+	return nil
+}
+
+func (w *world) count(c context.Context, query string, args ...any) (int, error) {
+	rows, err := w.env.QueryText(c, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) != 1 || len(rows[0]) != 1 {
+		return 0, fmt.Errorf("a count query answered %d row(s)", len(rows))
+	}
+	var n int
+	if _, err := fmt.Sscan(rows[0][0], &n); err != nil {
+		return 0, fmt.Errorf("a count query answered %q", rows[0][0])
+	}
+
+	return n, nil
+}
+<% end %>

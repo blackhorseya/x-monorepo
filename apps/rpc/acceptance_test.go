@@ -8,13 +8,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
-	gherkin "github.com/cucumber/gherkin/go/v42"
 	"github.com/cucumber/godog"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/acceptance"
@@ -34,23 +33,63 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// registers is every feature area's steps. The runner calls each once per scenario. The platform's own
-// (the admin surface under auth.mode=required) are the only ones for now. A Register never adds an After
-// hook: what a step starts goes to env.Defer, which the runner's one After hook closes before it drops the database.
-var registers = []acceptance.Register{registerPlatformSteps}
+// platformFeatures is the platform's own features (the admin surface under auth.mode=required).
+const platformFeatures = "acceptance/features"
+
+// repoRoot is the repository root, from this package's directory.
+const repoRoot = "../.."
+
+// registrations is every bounded context's acceptance, one per BC in go.work; the platform's own steps are not here.
+// The runner calls each Register once per scenario, and fails when this list and go.work's BCs differ (checkRegistered).
+// `task new-bc` adds a line at the anchor. A Register never adds an After hook: what a step starts goes to env.Defer,
+// which the runner's one After hook closes before it drops the database.
+var registrations = []registration{
+	// new-bc:acceptance
+}
 
 // adminKey is the API key (role admin) the scenarios' rpc accepts.
 const adminKey = "acceptance-admin-key-0123456789"
 
-const featuresDir = "acceptance/features"
+// testReserve is what a step's context leaves out of the test's time: 20% of what is left when the run starts, at least 5s,
+// so the closers, the database drops and the container shutdown still fit before go test's own -timeout.
+func testReserve(left time.Duration) time.Duration { return max(left/5, 5*time.Second) }
 
-// TestAcceptance runs the .feature files under acceptance/features (Gherkin in zh-TW) against the
-// real rpc (in this process, over HTTP) and a real Postgres: one database per scenario, copied from a
-// template with every migration applied.
+// TestAcceptance runs the .feature files (Gherkin in zh-TW) against the real rpc (in this process, over HTTP) and a
+// real Postgres: one database per scenario, copied from a template with every migration applied. The platform's are
+// under acceptance/features; each bounded context's are under pkgs/<bc>/acceptance/features.
 func TestAcceptance(t *testing.T) {
-	want := countScenarios(t, featuresDir)
-	if want == 0 {
-		t.Fatalf("acceptance: %s holds no scenario", featuresDir)
+	bcs, err := bcsFromWork(repoRoot)
+	if err != nil {
+		t.Fatalf("acceptance: %v", err)
+	}
+	platform := scanFeatures(t, platformFeatures)
+	if platform.scenarios == 0 {
+		t.Fatalf("acceptance: %s holds no scenario", platformFeatures)
+	}
+	dirs := []string{platformFeatures}
+	want, workers := platform.scenarios, platform.worker
+	perBC := map[string]int{}
+	for _, bc := range bcs {
+		dir := filepath.Join(repoRoot, "pkgs", bc, "acceptance", "features")
+		st := scanFeatures(t, dir)
+		perBC[bc] = st.scenarios
+		want += st.scenarios
+		workers += st.worker
+		dirs = append(dirs, dir)
+	}
+	if err := checkRegistered(bcs, registrations, perBC); err != nil {
+		t.Fatalf("acceptance: %v", err)
+	}
+
+	// What a step may use of the test's time: its context ends before go test's own -timeout.
+	var stepDeadline time.Time
+	if d, ok := t.Deadline(); ok {
+		stepDeadline = d.Add(-testReserve(time.Until(d)))
+	}
+	lim := limitsFor(t)
+	var workerBin string
+	if workers > 0 {
+		workerBin = buildApp(t, t.TempDir(), "worker")
 	}
 	tpl := newTemplate(t)
 	tpl.prepare(want)
@@ -59,30 +98,47 @@ func TestAcceptance(t *testing.T) {
 	suite := godog.TestSuite{
 		ScenarioInitializer: func(sc *godog.ScenarioContext) {
 			env := &acceptance.Env{AdminKey: adminKey}
-			sc.Before(func(c context.Context, _ *godog.Scenario) (context.Context, error) {
+			sc.Before(func(c context.Context, s *godog.Scenario) (context.Context, error) {
 				ran.Add(1)
 				dbURL, err := tpl.take()
 				if err != nil {
 					return c, err
 				}
 				env.DatabaseURL = dbURL
+				if !stepDeadline.IsZero() {
+					var cancel context.CancelFunc
+					c, cancel = context.WithDeadline(c, stepDeadline)
+					env.Defer(func() error { cancel(); return nil })
+				}
+				if err := startRPC(env); err != nil {
+					return c, err
+				}
+				if hasTag(s, workerTag) {
+					pid, err := startScenarioWorker(env, workerBin, lim)
+					if err != nil {
+						return c, err
+					}
+					godog.Logf(c, "worker started as pid %d", pid)
+				}
 				return c, nil
 			})
 			// The only After hook: godog runs them in registration order, so two hooks would be an order nobody
-			// chose. What the steps registered with env.Defer (the rpc and its pool) is closed first, then the
-			// scenario's database is dropped, and drop fails the scenario if anything is still connected.
+			// chose. What the runner and the steps registered with env.Defer (the worker, the rpc and its pool, the
+			// deadline) is closed first, last registered first; then the scenario's database is dropped, and drop
+			// fails the scenario if anything is still connected.
 			sc.After(func(c context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
 				closeErr := env.Close()
-				dropErr := tpl.drop(c, env.DatabaseURL)
+				dropErr := tpl.drop(context.WithoutCancel(c), env.DatabaseURL)
 				return c, errors.Join(closeErr, dropErr)
 			})
-			for _, register := range registers {
-				register(sc, env)
+			registerPlatformSteps(sc, env)
+			for _, r := range registrations {
+				r.register(sc, env)
 			}
 		},
 		Options: &godog.Options{
 			Format:   "pretty",
-			Paths:    []string{featuresDir},
+			Paths:    dirs,
 			TestingT: t,
 			Strict:   true,
 		},
@@ -93,51 +149,68 @@ func TestAcceptance(t *testing.T) {
 	// A green run that ran fewer scenarios than the feature files hold proves less than it says: godog passes
 	// when nothing ran. go test in CI has no -v, so this is what makes a green CI mean they all ran.
 	if got := int(ran.Load()); got != want {
-		t.Fatalf("acceptance: %d scenario(s) ran, the feature files under %s hold %d", got, featuresDir, want)
+		t.Fatalf("acceptance: %d scenario(s) ran, the feature files hold %d", got, want)
 	}
 }
 
-// countScenarios is how many scenarios godog will run for the .feature files under dir: the pickles
-// gherkin makes of them (an outline counts once per example row).
-func countScenarios(t *testing.T, dir string) int {
-	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*.feature"))
+func hasTag(s *godog.Scenario, name string) bool {
+	for _, tag := range s.Tags {
+		if tag.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// startRPC starts the rpc in this process (Initialize + httptest), as TestPlatform_E2E does: auth.mode=required, one admin
+// API key, the scenario's database. Its pool and server go on env's stack, closed before the database is dropped.
+func startRPC(env *acceptance.Env) error {
+	srv, cleanup, err := Initialize(&config.AppConfig{
+		HTTP:     config.HTTP{Addr: ":0"},
+		Log:      config.Log{Level: "error", Format: "text"},
+		Postgres: config.Postgres{URL: env.DatabaseURL},
+		Auth:     config.Auth{Mode: config.AuthRequired, APIKeys: "acceptance=" + env.AdminKey + ":admin"},
+	})
 	if err != nil {
-		t.Fatal(err)
+		return fmt.Errorf("start rpc: %w", err)
 	}
-	next := 0
-	newID := func() string { next++; return fmt.Sprint(next) }
-	total := 0
-	for _, f := range files {
-		raw, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		doc, err := gherkin.ParseGherkinDocument(strings.NewReader(string(raw)), newID)
-		if err != nil {
-			t.Fatalf("acceptance: parse %s: %v", f, err)
-		}
-		total += len(gherkin.Pickles(*doc, f, newID))
+	ts := httptest.NewServer(srv.Handler())
+	env.RPCURL = ts.URL
+	env.Defer(func() error { ts.Close(); cleanup(); return nil })
+
+	return nil
+}
+
+// startScenarioWorker starts an apps/worker subprocess on the scenario's database for a scenario tagged @worker. It is
+// stopped gracefully when env closes: SIGTERM, exit code 0 and its "worker stopped" line are part of the scenario's result.
+func startScenarioWorker(env *acceptance.Env, bin string, lim workerLimits) (pid int, err error) {
+	w, err := launchWorker(bin, env.DatabaseURL, lim)
+	if err != nil {
+		return 0, err
 	}
-	return total
+	env.Defer(func() error {
+		defer w.killAndReap()
+		return w.shutdown(lim.stop)
+	})
+
+	return w.cmd.Process.Pid, nil
 }
 
 // ── the platform's steps ─────────────────────────────────────────────────────
 
-// platformWorld is one scenario's rpc and the last call's outcome.
+// platformWorld is one scenario's last call to the admin surface.
 type platformWorld struct {
 	env    *acceptance.Env
-	ts     *httptest.Server
-	stop   func()
 	client adminv1connect.AdminServiceClient
 	resp   *adminv1.ListPoisonResponse
 	err    error
 }
 
-// registerPlatformSteps defines the steps of acceptance/features/admin_auth.feature.
+// registerPlatformSteps defines the steps of acceptance/features/admin_auth.feature. The first one is also the
+// "given" every bounded context's feature uses: the runner has already started the rpc.
 func registerPlatformSteps(sc *godog.ScenarioContext, env *acceptance.Env) {
 	w := &platformWorld{env: env}
-	sc.Step(`^rpc 以 auth\.mode=required 啟動，資料庫為該場景獨立的 DB$`, w.startRPC)
+	sc.Step(`^rpc 以 auth\.mode=required 啟動，資料庫為該場景獨立的 DB$`, w.rpcIsUp)
 	sc.Step(`^以 admin API key 呼叫 ListPoison$`, w.listPoisonAsAdmin)
 	sc.Step(`^不帶任何 credential 呼叫 ListPoison$`, w.listPoisonAnonymous)
 	sc.Step(`^呼叫成功，回應是沒有任何 poison 訊息的清單$`, w.succeededWithNoMessages)
@@ -145,34 +218,12 @@ func registerPlatformSteps(sc *godog.ScenarioContext, env *acceptance.Env) {
 	sc.Step(`^呼叫被拒絕，Connect code 為 "([^"]+)"，x-error-code 為 "([^"]+)"$`, w.rejected)
 }
 
-func (w *platformWorld) shutdown() {
-	if w.ts != nil {
-		w.ts.Close()
-		w.ts = nil
+// rpcIsUp states the precondition the runner's Before hook set up (startRPC): the rpc answers at RPCURL, on this
+// scenario's own database.
+func (w *platformWorld) rpcIsUp() error {
+	if w.env.RPCURL == "" || w.env.DatabaseURL == "" {
+		return errors.New("the runner did not start the rpc on a scenario database")
 	}
-	if w.stop != nil {
-		w.stop()
-		w.stop = nil
-	}
-}
-
-func (w *platformWorld) startRPC() error {
-	if w.env.DatabaseURL == "" {
-		return errors.New("the scenario has no database: the runner's Before hook did not run")
-	}
-	srv, cleanup, err := Initialize(&config.AppConfig{
-		HTTP:     config.HTTP{Addr: ":0"},
-		Log:      config.Log{Level: "error", Format: "text"},
-		Postgres: config.Postgres{URL: w.env.DatabaseURL},
-		Auth:     config.Auth{Mode: config.AuthRequired, APIKeys: "acceptance=" + w.env.AdminKey + ":admin"},
-	})
-	if err != nil {
-		return fmt.Errorf("start rpc: %w", err)
-	}
-	w.stop = cleanup
-	w.ts = httptest.NewServer(srv.Handler())
-	w.env.Defer(func() error { w.shutdown(); return nil }) // before the runner drops the scenario's database
-	w.env.RPCURL = w.ts.URL
 	return nil
 }
 
@@ -210,29 +261,14 @@ func (w *platformWorld) succeededWithNoMessages() error {
 // answers a bounded context it does not know.
 func (w *platformWorld) unknownBoundedContext(c context.Context, code, errorCode string) error {
 	_, err := w.client.ListPoison(c, &adminv1.ListPoisonRequest{BoundedContext: "no-such-bc"})
-	return checkRejected(err, code, errorCode)
+	return acceptance.ExpectRejected(err, code, errorCode)
 }
 
 func (w *platformWorld) rejected(code, errorCode string) error {
 	if w.err == nil {
 		return fmt.Errorf("ListPoison succeeded (%v), want %s / %s", w.resp, code, errorCode)
 	}
-	return checkRejected(w.err, code, errorCode)
-}
-
-// checkRejected asserts the Connect code and x-error-code the RPC actually answered, not an HTTP status.
-func checkRejected(err error, code, errorCode string) error {
-	var ce *connect.Error
-	if !errors.As(err, &ce) {
-		return fmt.Errorf("want a connect error %s / %s, got %w", code, errorCode, err)
-	}
-	if got := ce.Code().String(); got != code {
-		return fmt.Errorf("connect code = %q, want %q: %w", got, code, err)
-	}
-	if got := servertest.ErrorMeta(err).Get("x-error-code"); got != errorCode {
-		return fmt.Errorf("x-error-code = %q, want %q: %w", got, errorCode, err)
-	}
-	return nil
+	return acceptance.ExpectRejected(w.err, code, errorCode)
 }
 
 // ── the worker subprocess ────────────────────────────────────────────────────

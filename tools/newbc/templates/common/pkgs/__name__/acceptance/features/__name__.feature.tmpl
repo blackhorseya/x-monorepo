@@ -1,0 +1,23 @@
+# language: zh-TW
+功能: <% .Name %> 的 RPC
+  <% .Title %>Service 在 auth.mode=required 下：建立需要 admin 權限，沒有 credential 的呼叫一律被拒。
+
+  場景: 帶 admin API key 建立後可查詢
+    假如 rpc 以 auth.mode=required 啟動，資料庫為該場景獨立的 DB
+    當 以 admin API key 建立一筆 <% .Name %>，名稱為 "acceptance"
+    那麼 <% .Name %> 建立成功，回應有 id 且名稱為 "acceptance"
+    而且 用 <% .Name %> 回傳的 id 查詢，名稱為 "acceptance"
+
+  場景: 不帶 credential 建立被拒絕
+    假如 rpc 以 auth.mode=required 啟動，資料庫為該場景獨立的 DB
+    當 不帶任何 credential 建立一筆 <% .Name %>
+    那麼 <% .Name %> 建立被拒絕，Connect code 為 "unauthenticated"，x-error-code 為 "auth.unauthenticated"
+<% if .Events %>
+  @worker
+  場景: 建立後 worker 消費事件
+    假如 rpc 以 auth.mode=required 啟動，資料庫為該場景獨立的 DB
+    當 以 admin API key 建立一筆 <% .Name %>，名稱為 "acceptance"
+    那麼 <% .Name %> 的 <% .Title %>Created 事件已發布到 outbox，內容的 id 就是回傳的 id
+    而且 worker 在 15 秒內消費該事件，inbox 出現同一個 message id
+    而且 <% .Name %> 的 poison 沒有任何訊息
+<% end %>

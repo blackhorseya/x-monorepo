@@ -110,6 +110,14 @@ func waitChild(c *child, limit time.Duration) waitResult {
 	}
 }
 
+// cause is the error of the wait, or a placeholder when there was none (a zero exit, a timeout), so a message can wrap it with %w.
+func (r waitResult) cause() error {
+	if r.err == nil {
+		return errors.New("no error")
+	}
+	return r.err
+}
+
 func resultOf(err error) waitResult {
 	if err == nil {
 		return waitResult{outcome: exited, code: 0}
@@ -170,10 +178,18 @@ const (
 	workerStoppedMsg = "worker stopped"
 )
 
-// startWorker starts the worker binary against env.DatabaseURL and waits for its "worker started" line.
-// The worker is killed and reaped when env closes, if the test did not stop it first.
-func startWorker(t *testing.T, env *acceptance.Env, bin string) *worker {
+// workerLimits are how long a worker may take to say it started and to stop. They are fixed when the test starts
+// (budget needs the test's deadline), so the runner's hooks, which have no *testing.T, can use them.
+type workerLimits struct{ ready, stop time.Duration }
+
+func limitsFor(t *testing.T) workerLimits {
 	t.Helper()
+	return workerLimits{ready: budget(t, readyLimit), stop: budget(t, stopLimit)}
+}
+
+// launchWorker starts the worker binary against databaseURL and waits for its "worker started" line, or for the
+// child to end first, or for lim.ready: an error says which, with what the child wrote. The error never holds the url.
+func launchWorker(bin, databaseURL string, lim workerLimits) (*worker, error) {
 	w := &worker{ready: make(chan struct{}), stopped: make(chan struct{})}
 	var once1, once2 sync.Once
 	onLine := func(line string) {
@@ -191,32 +207,42 @@ func startWorker(t *testing.T, env *acceptance.Env, bin string) *worker {
 		}
 	}
 	c, err := startChild("", bin, childEnv(
-		"APP_POSTGRES_URL="+env.DatabaseURL,
+		"APP_POSTGRES_URL="+databaseURL,
 		"APP_LOG_LEVEL=info",
 		"APP_LOG_FORMAT=json",
 	), onLine)
 	if err != nil {
-		t.Fatalf("worker setup: %v", err)
+		return nil, fmt.Errorf("worker setup: %w", err)
 	}
 	w.child = c
-	t.Logf("worker started as pid %d", c.cmd.Process.Pid)
-	env.Defer(func() error { w.killAndReap(); return nil })
 
 	// The readiness signal is the child's own line; it either comes, or the child ends first, or the limit passes.
-	limit := budget(t, readyLimit)
-	timer := time.NewTimer(limit)
+	timer := time.NewTimer(lim.ready)
 	defer timer.Stop()
 	select {
 	case <-w.ready:
-		return w
+		return w, nil
 	case <-c.done:
 		res := resultOf(c.err)
-		t.Fatalf("worker setup: %s before it was ready (exit code %d): %v\n%s", res.outcome, res.code, res.err, c.out.String())
+		return nil, fmt.Errorf("worker setup: %s before it was ready (exit code %d): %w\n%s", res.outcome, res.code, res.cause(), c.out.String())
 	case <-timer.C:
 		w.killAndReap()
-		t.Fatalf("worker setup: no %q line within %s\n%s", workerStartedMsg, limit.Round(time.Millisecond), c.out.String())
+		return nil, fmt.Errorf("worker setup: no %q line within %s\n%s", workerStartedMsg, lim.ready.Round(time.Millisecond), c.out.String())
 	}
-	return nil
+}
+
+// startWorker is launchWorker for a test: it fails the test on an error, and kills and reaps the worker when env
+// closes, if the test did not stop it first.
+func startWorker(t *testing.T, env *acceptance.Env, bin string) *worker {
+	t.Helper()
+	w, err := launchWorker(bin, env.DatabaseURL, limitsFor(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("worker started as pid %d", w.cmd.Process.Pid)
+	env.Defer(func() error { w.killAndReap(); return nil })
+
+	return w
 }
 
 // killAndReap kills the worker if it still runs and waits until it is gone. Safe to call twice.
@@ -225,22 +251,31 @@ func (w *worker) killAndReap() {
 	waitChild(w.child, 10*time.Second)
 }
 
-// stop sends SIGTERM and requires what a graceful stop is: an exit code of 0 AND the "worker stopped"
-// line, within stopLimit. Either missing fails the test; the worker output is printed.
-func (w *worker) stop(t *testing.T) {
-	t.Helper()
+// shutdown sends SIGTERM and requires what a graceful stop is: an exit code of 0 AND the "worker stopped" line, within
+// limit. Either missing is an error with what the worker wrote. The worker is gone when it returns, in every case.
+func (w *worker) shutdown(limit time.Duration) error {
 	if err := w.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("worker stop: SIGTERM: %v\n%s", err, w.out.String())
+		w.killAndReap()
+		return fmt.Errorf("worker stop: SIGTERM: %w\n%s", err, w.out.String())
 	}
-	limit := budget(t, stopLimit)
 	res := waitChild(w.child, limit)
 	if res.outcome != exited || res.code != 0 {
-		t.Fatalf("worker stop: %s, exit code %d (want exited with 0, limit %s): %v\n%s", res.outcome, res.code, limit.Round(time.Millisecond), res.err, w.out.String())
+		return fmt.Errorf("worker stop: %s, exit code %d (want exited with 0, limit %s): %w\n%s", res.outcome, res.code, limit.Round(time.Millisecond), res.cause(), w.out.String())
 	}
 	select {
 	case <-w.stopped:
 	default:
-		t.Fatalf("worker stop: exited 0 but never logged %q\n%s", workerStoppedMsg, w.out.String())
+		return fmt.Errorf("worker stop: exited 0 but never logged %q\n%s", workerStoppedMsg, w.out.String())
+	}
+
+	return nil
+}
+
+// stop is shutdown for a test.
+func (w *worker) stop(t *testing.T) {
+	t.Helper()
+	if err := w.shutdown(budget(t, stopLimit)); err != nil {
+		t.Fatal(err)
 	}
 }
 
