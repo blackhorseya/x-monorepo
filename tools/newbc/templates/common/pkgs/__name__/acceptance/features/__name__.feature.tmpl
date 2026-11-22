@@ -18,6 +18,6 @@
     假如 rpc 以 auth.mode=required 啟動，資料庫為該場景獨立的 DB
     當 以 admin API key 建立一筆 <% .Name %>，名稱為 "acceptance"
     那麼 <% .Name %> 的 <% .Title %>Created 事件已發布到 outbox，內容的 id 就是回傳的 id
-    而且 worker 在 15 秒內消費該事件，inbox 出現同一個 message id
+    而且 <% .Name %> 的 worker 在 15 秒內消費該事件，inbox 出現同一個 message id
     而且 <% .Name %> 的 poison 沒有任何訊息
 <% end %>

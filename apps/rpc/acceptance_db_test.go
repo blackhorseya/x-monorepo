@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/acceptance"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
@@ -62,10 +63,10 @@ func checkIdentity(t testing.TB, dbURL, want string) {
 	conn := pgtest.Conn(t, dbURL)
 	var got string
 	if err := conn.QueryRow(c, "SELECT current_database()").Scan(&got); err != nil {
-		t.Fatalf("acceptance: current_database() on database %s: %v", want, err)
+		t.Fatalf("acceptance: %v", acceptance.DBFailure(c, "current_database() on database "+want, err))
 	}
 	if err := conn.Close(c); err != nil {
-		t.Fatalf("acceptance: close identity connection to %s: %v", want, err)
+		t.Fatalf("acceptance: %v", acceptance.DBFailure(c, "close the identity connection to "+want, err))
 	}
 	if got != want {
 		t.Fatalf("acceptance: the url for database %s reaches database %q", want, got)
@@ -106,18 +107,18 @@ func newTemplate(t *testing.T) *template {
 	if err != nil {
 		t.Fatalf("acceptance: %v", err)
 	}
-	tpl := &template{t: t, conn: pgtest.Conn(t, base.String()), base: base, run: randomID(t), live: map[string]bool{}}
+	tpl := &template{t: t, conn: pgtest.Conn(t, base.String()), base: base, run: randomID(t), live: map[string]bool{}, dropWait: dropWait}
 	tpl.name = "acc_tpl_" + tpl.run
 	c := context.Background()
 
 	// Cleanups run last in, first out: what is registered after the connection runs while it is still open.
 	if _, err := tpl.conn.Exec(c, "CREATE DATABASE "+quote(tpl.name)); err != nil {
-		t.Fatalf("acceptance: create template database (the role needs CREATEDB when TEST_DATABASE_URL is used): %v", err)
+		t.Fatalf("acceptance: create template database (the role needs CREATEDB when TEST_DATABASE_URL is used): %v", acceptance.DBFailure(c, "CREATE DATABASE", err))
 	}
 	t.Cleanup(func() {
 		tpl.dropRemaining()
 		if _, err := tpl.conn.Exec(c, "DROP DATABASE "+quote(tpl.name)+" WITH (FORCE)"); err != nil {
-			t.Errorf("acceptance: drop template database %s: %v", tpl.name, err)
+			t.Errorf("acceptance: drop template database %s: %v", tpl.name, acceptance.DBFailure(c, "DROP DATABASE", err))
 		}
 	})
 
@@ -135,10 +136,10 @@ func newTemplate(t *testing.T) *template {
 	// CREATE DATABASE ... TEMPLATE fails while any session is connected to the template. Nothing connects to it
 	// from here on, and the migrate process is gone; assert that instead of hoping.
 	if _, err := tpl.conn.Exec(c, "ALTER DATABASE "+quote(tpl.name)+" WITH ALLOW_CONNECTIONS false"); err != nil {
-		t.Fatalf("acceptance: lock template database: %v", err)
+		t.Fatalf("acceptance: lock template database: %v", acceptance.DBFailure(c, "ALTER DATABASE", err))
 	}
 	if who, err := tpl.sessions(c, tpl.name); err != nil || who != "" {
-		t.Fatalf("acceptance: template database %s still has sessions after migrate up: %q (%v)", tpl.name, who, err)
+		t.Fatalf("acceptance: template database %s still has sessions after migrate up: %q (%v)", tpl.name, who, acceptance.DBFailure(c, "list sessions", err))
 	}
 	return tpl
 }
@@ -169,6 +170,9 @@ func (x *template) sessions(c context.Context, db string) (string, error) {
 	return who, err
 }
 
+// dropWait is how long drop waits for the backends of closed connections to exit before it calls them leftovers.
+const dropWait = 5 * time.Second
+
 var dbSeq atomic.Int64
 
 // make creates one database from the template and checks that its URL reaches it. It runs on t's goroutine.
@@ -181,7 +185,7 @@ func (x *template) make() string {
 	}
 	q := "CREATE DATABASE " + quote(name) + " TEMPLATE " + quote(x.name)
 	if _, err := x.conn.Exec(context.Background(), q); err != nil {
-		x.t.Fatalf("acceptance: create database %s: %v", name, err)
+		x.t.Fatalf("acceptance: create database %s: %v", name, acceptance.DBFailure(context.Background(), "CREATE DATABASE", err))
 	}
 	x.mu.Lock()
 	x.live[name] = true
@@ -226,15 +230,21 @@ func (x *template) drop(c context.Context, dbURL string) error {
 	if !owned || name == x.name {
 		return fmt.Errorf("drop scenario database: %q is not a database this run made", name)
 	}
-	who, err := x.sessions(c, name)
+	// A closer's Close returns before the server's backend has exited, so a connection that was closed can still be listed for a
+	// moment: wait, within dropWait, for none to be left. What stays past the bound is something that was not closed, and it
+	// is named (pid, user, application_name, state; no query text). FORCE stays for dropRemaining, never for a scenario's drop.
+	_, err = acceptance.Eventually(c, "the connections to "+name+" to be gone", x.dropWait, func(c context.Context) (string, bool, error) {
+		who, err := x.sessions(c, name)
+		if err != nil {
+			return "", false, acceptance.DBFailure(c, "list the sessions of "+name, err)
+		}
+		return who, who == "", nil
+	})
 	if err != nil {
-		return fmt.Errorf("drop scenario database %s: list sessions: %w", name, err)
-	}
-	if who != "" {
-		return fmt.Errorf("scenario database %s still has connections when it is about to be dropped (something was not closed first): %s", name, who)
+		return fmt.Errorf("drop scenario database %s (something was not closed first): %w", name, err)
 	}
 	if _, err := x.conn.Exec(c, "DROP DATABASE "+quote(name)); err != nil {
-		return fmt.Errorf("drop scenario database %s: %w", name, err)
+		return fmt.Errorf("drop scenario database %s: %w", name, acceptance.DBFailure(c, "DROP DATABASE", err))
 	}
 	x.mu.Lock()
 	delete(x.live, name)
@@ -253,7 +263,7 @@ func (x *template) dropRemaining() {
 	x.mu.Unlock()
 	for _, n := range names {
 		if _, err := x.conn.Exec(context.Background(), "DROP DATABASE "+quote(n)+" WITH (FORCE)"); err != nil {
-			x.t.Errorf("acceptance: drop leftover database %s: %v", n, err)
+			x.t.Errorf("acceptance: drop leftover database %s: %v", n, acceptance.DBFailure(context.Background(), "DROP DATABASE", err))
 		}
 	}
 }

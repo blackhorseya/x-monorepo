@@ -15,7 +15,8 @@ const pollEvery = 100 * time.Millisecond
 // The wait is bounded by limit and by the deadline of c, whichever is nearer: a step must not outlive the test that
 // runs it, so the runner gives its steps a context that ends before go test's own -timeout. check gets a context with the
 // same bound. It returns what it saw (observed), whether the condition holds (ok), and an error only when it cannot
-// look at all (a failed query): that ends the wait at once.
+// look at all (a failed query): that ends the wait at once, and stays identifiable (errors.Is) even when it arrives as the
+// bound is reached. Only a context error of the bound itself is reported as the timeout.
 //
 // On timeout the error says what was awaited, the bound, and the last observed value. observed reaches the test output,
 // so it holds counts and names, never a URL or a credential.
@@ -33,7 +34,9 @@ func Eventually(c context.Context, what string, limit time.Duration, check func(
 	last := "nothing yet"
 	for {
 		observed, ok, err := check(ec)
-		if err != nil && ec.Err() == nil {
+		// An error ends the wait, unless it is only the bound (a context error of ec, which the timeout below reports with the
+		// last observed value). One that comes with the bound but is not a context error is a failure of its own, kept.
+		if err != nil && (ec.Err() == nil || !isContextError(err)) {
 			return time.Since(start), fmt.Errorf("eventually: %s: %w", what, err)
 		}
 		if err == nil {
@@ -65,4 +68,8 @@ func Eventually(c context.Context, what string, limit time.Duration, check func(
 	}
 
 	return waited, fmt.Errorf("eventually: %s did not hold after %s (%s); last observed: %s", what, waited.Round(time.Millisecond), why, last)
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }

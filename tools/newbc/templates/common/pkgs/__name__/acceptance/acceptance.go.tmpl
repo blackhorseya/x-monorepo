@@ -35,7 +35,7 @@ func Register(sc *godog.ScenarioContext, env *acceptance.Env) {
 	sc.Step(`^用 <% .Name %> 回傳的 id 查詢，名稱為 "([^"]+)"$`, w.getByCreatedID)
 	sc.Step(`^<% .Name %> 建立被拒絕，Connect code 為 "([^"]+)"，x-error-code 為 "([^"]+)"$`, w.createRejected)<% if .Events %>
 	sc.Step(`^<% .Name %> 的 <% .Title %>Created 事件已發布到 outbox，內容的 id 就是回傳的 id$`, w.eventPublished)
-	sc.Step(`^worker 在 (\d+) 秒內消費該事件，inbox 出現同一個 message id$`, w.consumedWithin)
+	sc.Step(`^<% .Name %> 的 worker 在 (\d+) 秒內消費該事件，inbox 出現同一個 message id$`, w.consumedWithin)
 	sc.Step(`^<% .Name %> 的 poison 沒有任何訊息$`, w.noPoison)<% end %>
 }
 
