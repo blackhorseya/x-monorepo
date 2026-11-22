@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"golang.org/x/mod/modfile"
@@ -219,6 +220,14 @@ func (p *Plan) editShared(o Options, d data, work *modfile.WorkFile) error {
 
 		return insertAt("apps/rpc/app.go", out, "//", "mount-elem", "server.Mount("+n+"),")
 	}, map[string]string{bcPkg: ""}))
+	if err != nil {
+		return err
+	}
+
+	// apps/rpc's acceptance runner: the BC's acceptance (its steps; its features are found under pkgs/<bc>/acceptance/features).
+	err = p.editFile(o.Root, "apps/rpc/acceptance_test.go", goEdit("apps/rpc/acceptance_test.go", func(src []byte) ([]byte, error) {
+		return insertAt("apps/rpc/acceptance_test.go", src, "//", "acceptance", "{bc: "+strconv.Quote(n)+", register: "+n+"acceptance.Register},")
+	}, map[string]string{bcPkg + "/acceptance": n + "acceptance"}))
 	if err != nil {
 		return err
 	}

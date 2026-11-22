@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -14,7 +15,7 @@ import (
 // copy of them, never on the repository itself.
 var sharedFiles = []string{
 	"go.work", "buf.gen.yaml", "scripts/bcs.jq", "pkgs/kernel/go.mod",
-	"apps/rpc/go.mod", "apps/rpc/wire.go", "apps/rpc/app.go",
+	"apps/rpc/go.mod", "apps/rpc/wire.go", "apps/rpc/app.go", "apps/rpc/acceptance_test.go",
 	"apps/migrate/go.mod", "apps/migrate/main.go",
 	"apps/worker/go.mod", "apps/worker/wire.go", "apps/worker/consumers.go", "apps/worker/poison.go",
 }
@@ -122,6 +123,10 @@ func TestRefusalChangesNothing(t *testing.T) {
 		{"unparsable go.mod", []string{"alpha"}, func(t *testing.T, root string) {
 			write(t, root, "apps/migrate/go.mod", []byte("this is not a go.mod {{{"))
 		}, "parse"},
+		{"acceptance anchor missing", []string{"alpha"}, func(t *testing.T, root string) {
+			s := read(t, root, "apps/rpc/acceptance_test.go")
+			write(t, root, "apps/rpc/acceptance_test.go", []byte(strings.ReplaceAll(s, "// new-bc:acceptance", "// gone")))
+		}, "not found"},
 		{"events: worker anchor missing", []string{"alpha", "--events"}, func(t *testing.T, root string) {
 			s := read(t, root, "apps/worker/poison.go")
 			write(t, root, "apps/worker/poison.go", []byte(strings.ReplaceAll(s, "// new-bc:schemas", "// gone")))
@@ -192,6 +197,21 @@ func TestGenerateTwoBCs(t *testing.T) {
 	if code, stderr := gen(root, "beta", "--events"); code != 0 {
 		t.Fatalf("beta: exit %d: %s", code, stderr)
 	}
+	// Each BC brings its own acceptance: a zh-TW feature and the steps that register it; only an events BC has the @worker scenario.
+	for _, bc := range []string{"alpha", "beta"} {
+		for _, f := range []string{"pkgs/" + bc + "/acceptance/acceptance.go", "pkgs/" + bc + "/acceptance/features/" + bc + ".feature"} {
+			if _, err := os.Stat(filepath.Join(root, f)); err != nil {
+				t.Fatalf("missing %s: %v", f, err)
+			}
+		}
+		feature := read(t, root, "pkgs/"+bc+"/acceptance/features/"+bc+".feature")
+		if !strings.HasPrefix(feature, "# language: zh-TW\n") {
+			t.Errorf("%s feature does not start with the zh-TW language line:\n%s", bc, feature)
+		}
+		if got, want := strings.Contains(feature, "@worker"), bc == "beta"; got != want {
+			t.Errorf("%s feature has @worker = %v, want %v:\n%s", bc, got, want, feature)
+		}
+	}
 	for _, f := range []string{"pkgs/beta/adapters/consumer/handler.go", "pkgs/beta/infra/postgres/migrations/0003_inbox.up.sql", "protos/beta/v1/event.proto"} {
 		if _, err := os.Stat(filepath.Join(root, f)); err != nil {
 			t.Fatalf("missing %s: %v", f, err)
@@ -207,9 +227,11 @@ func TestGenerateTwoBCs(t *testing.T) {
 		"apps/worker/wire.go":      {"beta.ProviderSet,", "usecasex.NewRecorder,"},
 		"apps/worker/consumers.go": {"betaSubs beta.Subscriptions,", "{schema: beta.Schema, subs: betaSubs},"},
 		"apps/worker/poison.go":    {"beta.Schema,"},
-		"apps/rpc/go.mod":          {"pkgs/alpha => ../../pkgs/alpha", "pkgs/beta => ../../pkgs/beta"},
-		"apps/migrate/go.mod":      {"pkgs/alpha => ../../pkgs/alpha", "pkgs/beta => ../../pkgs/beta"},
-		"apps/worker/go.mod":       {"pkgs/beta => ../../pkgs/beta"},
+		"apps/rpc/acceptance_test.go": {`{bc: "alpha", register: alphaacceptance.Register},`, `{bc: "beta", register: betaacceptance.Register},`,
+			`alphaacceptance "github.com/blackhorseya/x-monorepo/pkgs/alpha/acceptance"`, `betaacceptance "github.com/blackhorseya/x-monorepo/pkgs/beta/acceptance"`},
+		"apps/rpc/go.mod":     {"pkgs/alpha => ../../pkgs/alpha", "pkgs/beta => ../../pkgs/beta"},
+		"apps/migrate/go.mod": {"pkgs/alpha => ../../pkgs/alpha", "pkgs/beta => ../../pkgs/beta"},
+		"apps/worker/go.mod":  {"pkgs/beta => ../../pkgs/beta"},
 	} {
 		got := read(t, root, file)
 		for _, want := range wants {
@@ -233,9 +255,62 @@ func TestGenerateTwoBCs(t *testing.T) {
 		"apps/rpc/wire.go": "// new-bc:rpc-providers", "apps/rpc/app.go": "// new-bc:mount-elem", "buf.gen.yaml": "# new-bc:go-package",
 		"apps/migrate/main.go": "// new-bc:migration", "apps/worker/wire.go": "// new-bc:worker-providers",
 		"apps/worker/consumers.go": "// new-bc:consumer-elem", "apps/worker/poison.go": "// new-bc:schemas",
+		"apps/rpc/acceptance_test.go": "// new-bc:acceptance",
 	} {
 		if n := strings.Count(read(t, root, file), anchor); n != 1 {
 			t.Errorf("%s has the anchor %q %d times after two BCs, want once", file, anchor, n)
+		}
+	}
+}
+
+// Every BC's steps live in one scenario context, so a step text must match one definition: it carries its BC's name, and
+// no step of a feature matches a definition of another BC. Two events BCs and a plain one, generated one after the other,
+// is the case that shared a text (the @worker step) before.
+func TestStepsAreUniquePerBC(t *testing.T) {
+	root := repoCopy(t)
+	bcs := []string{"alpha", "beta", "gamma"}
+	for i, bc := range bcs {
+		args := []string{bc}
+		if i != 0 { // alpha has no events; beta and gamma both do
+			args = append(args, "--events")
+		}
+		if code, stderr := gen(root, args...); code != 0 {
+			t.Fatalf("%s: exit %d: %s", bc, code, stderr)
+		}
+	}
+
+	stepDef := regexp.MustCompile("sc\\.Step\\(`([^`]+)`")
+	defs := map[string][]*regexp.Regexp{} // bc -> its step definitions
+	for _, bc := range bcs {
+		src := read(t, root, "pkgs/"+bc+"/acceptance/acceptance.go")
+		found := stepDef.FindAllStringSubmatch(src, -1)
+		if len(found) == 0 {
+			t.Fatalf("%s: no step definition found in acceptance.go", bc)
+		}
+		for _, m := range found {
+			if !strings.Contains(m[1], bc) {
+				t.Errorf("%s: step %q does not carry the BC name", bc, m[1])
+			}
+			defs[bc] = append(defs[bc], regexp.MustCompile(m[1]))
+		}
+	}
+
+	keyword := regexp.MustCompile(`^\s*(假如|當|那麼|而且|但是) (.+)$`)
+	for _, bc := range bcs {
+		feature := read(t, root, "pkgs/"+bc+"/acceptance/features/"+bc+".feature")
+		for _, line := range strings.Split(feature, "\n") {
+			m := keyword.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			text := m[2]
+			for other, rs := range defs {
+				for _, r := range rs {
+					if r.MatchString(text) && other != bc {
+						t.Errorf("a step of %s.feature, %q, also matches %s's definition %q (ambiguous in one scenario context)", bc, text, other, r)
+					}
+				}
+			}
 		}
 	}
 }

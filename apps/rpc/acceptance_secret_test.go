@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/acceptance"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/postgres/pgtest"
 )
 
 // The database URL carries the password, and test output ends up in terminals and CI logs. These tests call the
@@ -146,5 +149,23 @@ func TestSecret_ChildOutput(t *testing.T) {
 			}
 			requireNoSecret(t, app+" output", c.out.String(), synthSecret)
 		}
+	}
+}
+
+// A server error echoes the parameter that caused it: SELECT ($1::text)::integer answers SQLSTATE 22P02 with the value in the
+// message. The value here is a database URL with a password, as a step that passes one on would. Env.QueryText answers with a
+// fixed category and the SQLSTATE, never the driver's or the server's text. (Here, not in pkgs/platform/acceptance: that
+// package needs no container, and its tests stay free of one.)
+func TestSecret_QueryTextServerErrorHasNoParameterAndHasTheSQLState(t *testing.T) {
+	e := &acceptance.Env{DatabaseURL: pgtest.URL(t)}
+	_, err := e.QueryText(context.Background(), "SELECT ($1::text)::integer", "postgres://app:"+synthSecret+"@db.example/x")
+	if err == nil {
+		t.Fatal("QueryText accepted a URL as an integer")
+	}
+	if strings.Contains(err.Error(), synthSecret) || strings.Contains(err.Error(), "db.example") {
+		t.Fatalf("error %q contains the parameter", err)
+	}
+	if !strings.Contains(err.Error(), "22P02") {
+		t.Fatalf("error %q does not carry the SQLSTATE 22P02", err)
 	}
 }
