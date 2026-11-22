@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/acceptance"
 )
 
 // Child processes of the acceptance harness: apps/migrate (builds the template database) and
@@ -168,9 +170,9 @@ const (
 	workerStoppedMsg = "worker stopped"
 )
 
-// startWorker starts the worker binary against databaseURL and waits for its "worker started" line.
-// The worker is killed and reaped at t's cleanup if the test did not stop it first.
-func startWorker(t *testing.T, bin, databaseURL string) *worker {
+// startWorker starts the worker binary against env.DatabaseURL and waits for its "worker started" line.
+// The worker is killed and reaped when env closes, if the test did not stop it first.
+func startWorker(t *testing.T, env *acceptance.Env, bin string) *worker {
 	t.Helper()
 	w := &worker{ready: make(chan struct{}), stopped: make(chan struct{})}
 	var once1, once2 sync.Once
@@ -189,7 +191,7 @@ func startWorker(t *testing.T, bin, databaseURL string) *worker {
 		}
 	}
 	c, err := startChild("", bin, childEnv(
-		"APP_POSTGRES_URL="+databaseURL,
+		"APP_POSTGRES_URL="+env.DatabaseURL,
 		"APP_LOG_LEVEL=info",
 		"APP_LOG_FORMAT=json",
 	), onLine)
@@ -198,7 +200,7 @@ func startWorker(t *testing.T, bin, databaseURL string) *worker {
 	}
 	w.child = c
 	t.Logf("worker started as pid %d", c.cmd.Process.Pid)
-	t.Cleanup(func() { w.killAndReap() })
+	env.Defer(func() error { w.killAndReap(); return nil })
 
 	// The readiness signal is the child's own line; it either comes, or the child ends first, or the limit passes.
 	limit := budget(t, readyLimit)
@@ -220,7 +222,7 @@ func startWorker(t *testing.T, bin, databaseURL string) *worker {
 // killAndReap kills the worker if it still runs and waits until it is gone. Safe to call twice.
 func (w *worker) killAndReap() {
 	_ = w.cmd.Process.Kill() // an already finished process: the error is ignored
-	<-w.done
+	waitChild(w.child, 10*time.Second)
 }
 
 // stop sends SIGTERM and requires what a graceful stop is: an exit code of 0 AND the "worker stopped"

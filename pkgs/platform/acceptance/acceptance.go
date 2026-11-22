@@ -4,7 +4,11 @@
 // Only test files may import it: it pulls in godog, which no shipped binary links.
 package acceptance
 
-import "github.com/cucumber/godog"
+import (
+	"errors"
+
+	"github.com/cucumber/godog"
+)
 
 // Env is what one scenario runs against: its own database and the rpc the runner started in
 // the test process. The runner creates a fresh Env per scenario; the steps read it.
@@ -16,6 +20,24 @@ type Env struct {
 	DatabaseURL string
 	// AdminKey is an API key with the admin role, accepted by the rpc in RPCURL.
 	AdminKey string
+
+	closers []func() error
+}
+
+// Defer registers something a step started (a server, a pool) to be closed when the scenario ends.
+// The runner calls Close before it drops the scenario's database, so whatever holds a connection to
+// that database belongs here, not in a godog After hook (those run in registration order, which a step
+// file cannot see).
+func (e *Env) Defer(closer func() error) { e.closers = append(e.closers, closer) }
+
+// Close runs what Defer registered, last registered first, and returns every error. The runner calls it.
+func (e *Env) Close() error {
+	var errs []error
+	for i := len(e.closers) - 1; i >= 0; i-- {
+		errs = append(errs, e.closers[i]())
+	}
+	e.closers = nil
+	return errors.Join(errs...)
 }
 
 // Register adds the steps (and hooks) of one feature area to a scenario's context.
