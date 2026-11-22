@@ -33,7 +33,12 @@ var allowedQuery = []string{"sslmode", "sslrootcert", "sslcert", "sslkey", "conn
 func checkBaseURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("database url is not a URL (a keyword/value DSN is not accepted): %w", err)
+		// url.Error carries the whole raw URL, password included: keep only what is wrong with it.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("database url is not a valid URL (a keyword/value DSN is not accepted): %v", err) //nolint:errorlint // the cause is stripped of the URL on purpose
 	}
 	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
 		return nil, fmt.Errorf("database url must be postgres:// or postgresql://, got scheme %q (a keyword/value DSN is not accepted)", u.Scheme)
