@@ -6,7 +6,7 @@ require (
 	github.com/ThreeDotsLabs/watermill v1.5.3
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
 	github.com/google/wire v0.7.0
-	github.com/redis/go-redis/v9 v9.23.0
+	github.com/redis/go-redis/v9 v9.24.0
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/otel/metric v1.47.0
 	gorm.io/gorm v1.31.2
@@ -116,7 +116,7 @@ require (
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
