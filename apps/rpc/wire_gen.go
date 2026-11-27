@@ -34,7 +34,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	poisonService := NewPoisonService(db, auth, v)
+	poisonService := NewPoisonService(db, v)
 	v2 := NewRoutes(v, poisonService)
 	v3 := NewDocs(v)
 	readiness := NewReadiness(db)
@@ -47,7 +47,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	v4 := TraceOptions()
+	v4 := NewServerOptions(v)
 	serverServer, err := server.New(http, auth, logger, v2, v3, readiness, providers, credentialResolver, oidcAuth, v4...)
 	if err != nil {
 		cleanup3()

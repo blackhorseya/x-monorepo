@@ -26,7 +26,7 @@
   `eventbus_inbox_oldest_age_seconds{schema}` 是 `<bc>.inbox`。這些是 `count(*)` 全表掃，表很大時把 OTLP 的 collect 間隔拉長。
   每個 replica 都回報同一組數字：**用 `max`，不要 `sum`**。
   worker 沒有 HTTP server，這些只走 OTLP（60s 一次）
-- **rpc 不延續外部帶進來的 `traceparent`**。信不信任遠端 trace 由各 composition root 在程式裡宣告（`apps/rpc` 的 `TraceOptions` 是 `server.DistrustRemoteTrace()`，用 wire 提供），不是 config、env 或 Helm value，operator 沒有入口能在 rpc 上打開；`server.New` 不帶選項時也是不信任（`pkgs/platform/server/trace_test.go`，protocol path 與 `/api` 兩個 mount、成功與業務錯誤都測）。`server.TrustRemoteTrace()` 仍在 `pkgs/platform/server`，但目前沒有任何服務使用它。
+- **rpc 不延續外部帶進來的 `traceparent`**。信不信任遠端 trace 由各 composition root 在程式裡宣告（`apps/rpc` 的 `TraceOptions` 是 `server.DistrustRemoteTrace()`，併在 `NewServerOptions` 裡用 wire 提供），不是 config、env 或 Helm value，operator 沒有入口能在 rpc 上打開；`server.New` 不帶選項時也是不信任（`pkgs/platform/server/trace_test.go`，protocol path 與 `/api` 兩個 mount、成功與業務錯誤都測）。`server.TrustRemoteTrace()` 仍在 `pkgs/platform/server`，但目前沒有任何服務使用它。
   - **兩種 SDK 狀態都不延續**。要查這張單的 trace，用回應的 `X-Trace-Id`，**不要**用自己送進來的 trace id。
     - rpc 開 SDK（`otel.endpoint` 有設）：server span 是新的 root，呼叫端的 span 只留成一個 link，`X-Trace-Id`（成功與錯誤都有）是 rpc 自己的。
     - rpc 關 SDK（`otel.endpoint` 空）：tracer 是 no-op，而 no-op tracer 會原樣傳遞 parent 的 trace id，所以 `otel.New` 在這時給**空的 propagator**，不讀也不寫 trace header（`pkgs/platform/otel/propagation_test.go`；不是設定項，沒有 tracer 就沒有 trace）。rpc 不回 `X-Trace-Id`／`traceparent`，外部 ID 不會出現在回應。

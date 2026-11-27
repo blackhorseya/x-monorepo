@@ -20,6 +20,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
 // slowRoute is a Route whose handler blocks until released: an in-flight
@@ -41,7 +42,7 @@ func (r *slowRoute) Register(s *connect.Server) {
 	}})
 }
 
-var slowSpec = connect.Spec{StreamType: connect.StreamTypeUnary, Procedure: "/test.v1.Slow/Call"}
+var slowSpec = servertest.Spec("/test.v1.Slow/Call", servertest.Public())
 
 // callSlow makes the slow RPC over client (a Connect unary POST) and returns the body
 // the handler answered with, "done", with the status of the response.

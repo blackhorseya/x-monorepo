@@ -25,7 +25,11 @@ import (
 // connect.Server, the entry connecthttp uses. h reads its request, if it wants it, from
 // the nil stream's place: pass a handler that does not touch the stream.
 func Invoke(c context.Context, ics []connect.ServerInterceptor, procedure, peerAddr string, headers map[string]string, h connect.ServerFunc) (*connect.CallInfo, error) {
-	spec := connect.Spec{Procedure: procedure, StreamType: connect.StreamTypeUnary}
+	return InvokeSpec(c, ics, connect.Spec{Procedure: procedure, StreamType: connect.StreamTypeUnary}, peerAddr, headers, h)
+}
+
+// InvokeSpec is Invoke for a procedure whose Spec matters to an interceptor (see Spec: a declaration to read).
+func InvokeSpec(c context.Context, ics []connect.ServerInterceptor, spec connect.Spec, peerAddr string, headers map[string]string, h connect.ServerFunc) (*connect.CallInfo, error) {
 	srv := connect.NewServer(ics...)
 	srv.Register(connect.Method{Spec: spec, Handler: h})
 	info := &connect.CallInfo{Spec: spec, Protocol: "connect", PeerAddr: peerAddr}
@@ -33,7 +37,7 @@ func Invoke(c context.Context, ics []connect.ServerInterceptor, procedure, peerA
 		info.RequestHeader().Set(k, v)
 	}
 
-	return info, srv.Call(c, procedure, info, nil)
+	return info, srv.Call(c, spec.Procedure, info, nil)
 }
 
 // WithHeader is a client interceptor that sets one request header on every call.

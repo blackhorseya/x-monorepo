@@ -2,7 +2,8 @@
 // next to the bounded contexts' services: admin.v1.AdminService over the
 // poison queues of every BC the server hosts (platform/eventbus). It is not a
 // BC — it has no domain — so it is a thin handler over the eventbus
-// functions, guarded by server.RequireRole.
+// functions. Who may call it is declared in its proto (the platform.admin
+// permission) and enforced by the server's interceptors.
 package admin
 
 import (
@@ -13,7 +14,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 
-	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1/adminv1connect"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/eventbus"
@@ -30,21 +30,11 @@ var _ adminv1connect.AdminServiceHandler = (*PoisonService)(nil)
 type PoisonService struct {
 	db      *gorm.DB
 	schemas []string
-	auth    config.Auth
 }
 
-func NewPoisonService(db *gorm.DB, auth config.Auth, schemas []string) *PoisonService {
-	// A config built by hand (tests) skips config.Load's defaults; an empty
-	// role would deny everyone with auth on.
-	if auth.AdminRole == "" {
-		auth.AdminRole = DefaultAdminRole
-	}
-
-	return &PoisonService{db: db, schemas: schemas, auth: auth}
+func NewPoisonService(db *gorm.DB, schemas []string) *PoisonService {
+	return &PoisonService{db: db, schemas: schemas}
 }
-
-// DefaultAdminRole is auth.admin_role when unset (config.Load sets the same).
-const DefaultAdminRole = "admin"
 
 // Register serves the service on s (Connect + gRPC + gRPC-Web on one port).
 func (h *PoisonService) Register(s *connect.Server) {
@@ -52,7 +42,7 @@ func (h *PoisonService) Register(s *connect.Server) {
 }
 
 func (h *PoisonService) ListPoison(c context.Context, req *adminv1.ListPoisonRequest) (*adminv1.ListPoisonResponse, error) {
-	if err := h.guard(c); err != nil {
+	if err := h.requireDB(); err != nil {
 		return nil, err
 	}
 	bcs := h.schemas
@@ -81,7 +71,7 @@ func (h *PoisonService) ListPoison(c context.Context, req *adminv1.ListPoisonReq
 }
 
 func (h *PoisonService) GetPoison(c context.Context, req *adminv1.GetPoisonRequest) (*adminv1.GetPoisonResponse, error) {
-	if err := h.guard(c); err != nil {
+	if err := h.requireDB(); err != nil {
 		return nil, err
 	}
 	bc := req.GetBoundedContext()
@@ -123,7 +113,7 @@ func (h *PoisonService) DropPoison(c context.Context, req *adminv1.DropPoisonReq
 // hosted BC's poison table protects the inbox rows, whichever BC is pruned.
 // No transaction here on purpose: each DELETE batch commits on its own.
 func (h *PoisonService) Prune(c context.Context, req *adminv1.PruneRequest) (*adminv1.PruneResponse, error) {
-	if err := h.guard(c); err != nil {
+	if err := h.requireDB(); err != nil {
 		return nil, err
 	}
 	bcs := h.schemas
@@ -167,7 +157,7 @@ func pruneToProto(r eventbus.PruneResult) *adminv1.PruneTable {
 // act runs op on the BC's rows (offsets empty = all, the request's xor rule
 // already made sure "all" was explicit).
 func (h *PoisonService) act(c context.Context, bc string, offsets []int64, op func(context.Context, *gorm.DB, string, ...int64) (int, error)) (int32, error) {
-	if err := h.guard(c); err != nil {
+	if err := h.requireDB(); err != nil {
 		return 0, err
 	}
 	if err := h.known(bc); err != nil {
@@ -181,11 +171,8 @@ func (h *PoisonService) act(c context.Context, bc string, offsets []int64, op fu
 	return int32(n), nil //nolint:gosec // row counts
 }
 
-// guard is the role check plus the "is there a database" check.
-func (h *PoisonService) guard(c context.Context) error {
-	if err := server.RequireRole(c, h.auth, h.auth.AdminRole); err != nil {
-		return err
-	}
+// requireDB is the "is there a database" check.
+func (h *PoisonService) requireDB() error {
 	if h.db == nil {
 		return server.WithMeta(connect.NewError(connect.CodeFailedPrecondition, errNoDB.Error()).WithCause(errNoDB), "x-error-code", "admin.no_database")
 	}

@@ -135,10 +135,10 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 - **Optimistic lock**：aggregate 帶 `version`，`Save` 比對後 +1。存完後記憶體中的 aggregate 版本**不會**前進，要再存一次請先 reload。
 - **Validation**：request 形狀由 protovalidate interceptor 擋（`x-error-code: request.validation_failed` + `Violations` detail），
   consumer path 沒有它，所以 domain 的檢查不能拿掉。
-- **Auth 只做 authentication**：`auth.mode` 預設 `off`（`task run` 沒帶 credential）；開了之後 `server.NewAuthInterceptor`
+- **Auth 與授權**：`auth.mode` 預設 `off`（`task run` 沒帶 credential）；開了之後 `server.NewAuthInterceptor`
   把 `X-API-Key`（config `auth.api_keys` 先、再問 `server.CredentialResolver`〔template 的 rpc 沒有接〕；resolver 失敗是拒絕不是放行）/ `Authorization: Bearer <jwt>` 解析成 `contextx.Principal` 放進 context（resolver 管的 key：`Subject` 是 account id、`CredentialID` 是 key id），usecase 用 `contextx.PrincipalFrom(c)` 讀，
-  consumer path 永遠是 anonymous。`rpc` access line 的 `auth` / `sub` 與 span 的 `enduser.id` 由 auth interceptor 透過 logging interceptor 留在 context 的 slot 回報（`recordAuth`），不要把 principal 塞進 metrics label——它記的 `auth_decisions_total{result, method}` 只有 ok / public / anonymous / missing / invalid × api_key / jwt / none（Grafana 的 Auth row 與 `rpc-auth` alert 讀它；OIDC 的 `method` 仍是 `jwt`，未綁定但 `AllowsUnbound` 放行的 procedure 記 `ok`，未綁定被擋記 `invalid`，不加新值）。要不要做授權（role 檢查）是讀的人的事，不要在 interceptor 裡加（role 檢查在 usecase 或 `server.RequireRole`）。
-  Interceptor chain 由外而內：`tracing, dropHeadersOnError, meta, logging, [rate limit], [auth], [timeout], validate, refuseExpired`——rate limit 在 auth 之外（洪水先擋再驗簽章）、
+  consumer path 永遠是 anonymous。`rpc` access line 的 `auth` / `sub` 與 span 的 `enduser.id` 由 auth interceptor 透過 logging interceptor 留在 context 的 slot 回報（`recordAuth`），不要把 principal 塞進 metrics label——它記的 `auth_decisions_total{result, method}` 只有 ok / public / anonymous / missing / invalid × api_key / jwt / none（Grafana 的 Auth row 與 `rpc-auth` alert 讀它；OIDC 的 `method` 仍是 `jwt`，未綁定但 `AllowsUnbound` 放行的 procedure 記 `ok`，未綁定被擋記 `invalid`，不加新值）。誰可以呼叫哪個方法寫在 proto 的 `(common.v1.authz)`（公開，或「種類＋權限」條件），由 authorization interceptor 執行，handler 不檢查；任一掛上的方法沒有合法宣告，server 起不來（不看 `auth.mode`）。資料層規則（只能讀自己的）寫在 usecase。種類與權限的登記見 [`docs/auth.md`](docs/auth.md) 的「授權宣告」。
+  Interceptor chain 由外而內：`tracing, dropHeadersOnError, meta, logging, [rate limit], [auth, authz], [timeout], validate, refuseExpired`——rate limit 在 auth 之外（洪水先擋再驗簽章）、
   timeout 在 auth 之內（deadline 算 validate + usecase）；`http.timeout` 到期的失敗一律 `DEADLINE_EXCEEDED` + `request.timeout`，超過 `http.rate_limit` 是 `RESOURCE_EXHAUSTED` + `request.rate_limited` + `Retry-After`。
   `refuseExpired` 在最內層：context 在進 handler 前已逾時或取消就不執行 use case（v1 的 generated unary wrapper 做這件事，v2 的 generated handler 不做）。
   interceptor 是 connect-go v2 的 `connect.ServerInterceptor`，套用到每一種 RPC 型別，錯誤的 metadata 用 `server.WithMeta` 掛在 error 上（`pkgs/platform/server/errmeta.go`）。
@@ -159,11 +159,11 @@ port 只有 interface；adapter 持有 `usecasex.UseCase[I,O]`，不持有 `*use
 `platform/config.Load()`：defaults → YAML（`$APP_CONFIG`，否則 `./configs/config.yaml`）→ `APP_*` env，由低到高。
 `configs/local.yaml` gitignored，`task run` / `task migrate` 第一次會從 `config.example.yaml` 複製。
 注意：viper 忽略空 env，`APP_POSTGRES_URL=` 清不掉 key，要「不接 DB」請改 local.yaml。完整 key 表見 `docs/config.md`。
-`auth.*`（mode / api_keys / jwt / public）見 `docs/config.md`。
+`auth.*`（mode / api_keys / jwt）見 `docs/config.md`。
 
 ## 新增東西的步驟
 
-**新增 RPC**：改 `protos/<bc>/v1/service.proto`（request 欄位規則用 `buf.validate` 寫在 proto，interceptor 會擋；domain 仍保留不變量）→ `task gen`（`task breaking` 檢查相容；允許 wire-incompatible 的變更，CI 沒有 breaking job，`task breaking` 只在本機提示）→ domain 加行為 →
+**新增 RPC**：改 `protos/<bc>/v1/service.proto`（request 欄位規則用 `buf.validate` 寫在 proto，interceptor 會擋；domain 仍保留不變量；方法一定要寫 `(common.v1.authz)`，新權限字串在 `provider.go` 加常數並放進 `RPC.Permissions`）→ `task gen`（`task breaking` 檢查相容；允許 wire-incompatible 的變更，CI 沒有 breaking job，`task breaking` 只在本機提示）→ domain 加行為 →
 `application/dto` + `usecase` → `provider.go` 加 `ProvideXxx` 並用 `decorate()`（讀）或 `decorateTx()`（寫）包 → `adapters/rpc` 實作
 （`var _ XxxServiceHandler` 會提醒）→ `task wire`。
 

@@ -31,7 +31,7 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	if cfg.HTTP.Addr != ":8080" || cfg.HTTP.Docs || cfg.Log.Level != "info" || cfg.Log.Format != "json" || cfg.Postgres.URL != "" {
 		t.Fatalf("defaults: %+v", cfg)
 	}
-	if cfg.Auth.Mode != config.AuthOff || cfg.Auth.APIKeys != "" || len(cfg.Auth.Public) != 0 || cfg.Auth.AdminRole != "admin" {
+	if cfg.Auth.Mode != config.AuthOff || cfg.Auth.APIKeys != "" || cfg.Auth.AdminRole != "admin" {
 		t.Fatalf("auth defaults: %+v", cfg.Auth)
 	}
 	if cfg.HTTP.ShutdownDelay != 0 || cfg.HTTP.ShutdownTimeout != 15*time.Second {
@@ -187,7 +187,6 @@ func TestLoad_Validate(t *testing.T) {
 		t.Fatal("hs256_secret and public_key together must fail")
 	}
 	t.Setenv("APP_AUTH_JWT_PUBLIC_KEY", "")
-	t.Setenv("APP_AUTH_PUBLIC", "/a.v1.S/Get,/a.v1.S/List")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +200,7 @@ func TestLoad_Validate(t *testing.T) {
 	if cfg.HTTP.Timeout != 0 || cfg.HTTP.RateLimit != (config.RateLimit{RPS: 2.5, Burst: 7, By: config.RateLimitPeer}) {
 		t.Fatalf("limits = %+v", cfg.HTTP)
 	}
-	if cfg.Auth.Mode != config.AuthRequired || cfg.Auth.APIKeys != "ci=secret" || len(cfg.Auth.Public) != 2 || cfg.Auth.Public[1] != "/a.v1.S/List" {
+	if cfg.Auth.Mode != config.AuthRequired || cfg.Auth.APIKeys != "ci=secret" {
 		t.Fatalf("auth = %+v", cfg.Auth)
 	}
 }

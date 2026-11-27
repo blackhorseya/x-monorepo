@@ -45,7 +45,6 @@ func TestAccessLine_Principal(t *testing.T) {
 		Mode:    config.AuthOptional,
 		APIKeys: "console=console-key-0123456789, ops=ops-key-0123456789abc:admin|ops",
 		JWT:     config.JWT{HS256Secret: secret},
-		Public:  []string{"/a.v1.S/Public"},
 	}
 	authn, err := server.NewAuthInterceptor(cfg, noop.NewMeterProvider(), nil, server.OIDCAuth{})
 	if err != nil {

@@ -6,8 +6,9 @@ type principalKey struct{}
 
 // Principal is who an RPC runs as, put into the context by the server's auth
 // interceptor and read by whoever needs it (a use case, through
-// PrincipalFrom). It is identity only: what the principal may do is a
-// decision of the layer that reads it. Outside an authenticated RPC — the
+// PrincipalFrom). It is identity only: which methods it may call is declared in
+// their protos and enforced by the server, and rules about data are a decision of
+// the layer that reads it. Outside an authenticated RPC — the
 // consumer path, tests, auth.mode off — there is none: PrincipalFrom returns
 // the zero value and IsAnonymous is true.
 type Principal struct {

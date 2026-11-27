@@ -17,16 +17,39 @@ func TestLoad_RefusesAuthPublic(t *testing.T) {
 			t.Fatalf("config.Load() = %v, want a refusal naming auth.public", err)
 		}
 	}
-	t.Run("config file", func(t *testing.T) {
+	for name, file := range map[string]string{
+		"list":          "auth:\n  public: [/a.v1.S/Get]\n",
+		"empty list":    "auth:\n  public: []\n",
+		"null":          "auth:\n  public:\n",
+		"empty string":  "auth:\n  public: \"\"\n",
+		"empty mapping": "auth:\n  public: {}\n",
+		"mapping":       "auth:\n  public: {a: b}\n",
+		"other case":    "Auth:\n  Public: []\n",
+		"dotted key":    "auth.public: []\n",
+	} {
+		t.Run("config file "+name, func(t *testing.T) {
+			chdirTemp(t)
+			if err := os.WriteFile("config.yaml", []byte(file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			refused(t)
+		})
+	}
+	for name, value := range map[string]string{"set": "/a.v1.S/Get", "empty": ""} {
+		t.Run("env "+name, func(t *testing.T) {
+			chdirTemp(t)
+			t.Setenv("APP_AUTH_PUBLIC", value)
+			refused(t)
+		})
+	}
+	// Positive control: an auth block without the key loads.
+	t.Run("absent", func(t *testing.T) {
 		chdirTemp(t)
-		if err := os.WriteFile("config.yaml", []byte("auth:\n  public: [/a.v1.S/Get]\n"), 0o600); err != nil {
+		if err := os.WriteFile("config.yaml", []byte("auth:\n  mode: \"off\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		refused(t)
-	})
-	t.Run("env", func(t *testing.T) {
-		chdirTemp(t)
-		t.Setenv("APP_AUTH_PUBLIC", "/a.v1.S/Get")
-		refused(t)
+		if _, err := config.Load(); err != nil {
+			t.Fatal(err)
+		}
 	})
 }

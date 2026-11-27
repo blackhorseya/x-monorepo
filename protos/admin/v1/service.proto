@@ -3,28 +3,62 @@ syntax = "proto3";
 package admin.v1;
 
 import "buf/validate/validate.proto";
+import "common/v1/authz.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 // AdminService is the operator side of the platform: the poison queues and
 // the outbox / inbox retention (platform/eventbus) of every bounded context
-// the server hosts. It is not part of any BC's contract. Access: with auth
-// on, the caller needs the auth.admin_role role (PERMISSION_DENIED,
-// x-error-code auth.permission_denied otherwise); with auth.mode off
-// everything is open, like the rest.
+// the server hosts. It is not part of any BC's contract. Access: every method
+// declares the platform.admin permission, which is the auth.admin_role role.
+// With auth on, an authenticated caller without it gets PERMISSION_DENIED
+// (x-error-code auth.permission_denied) and an anonymous one UNAUTHENTICATED;
+// with auth.mode off everything is open, like the rest.
 service AdminService {
   // ListPoison returns the messages parked on one BC's poison table, oldest
   // first (nothing consumes it, so this is the whole backlog).
-  rpc ListPoison(ListPoisonRequest) returns (ListPoisonResponse);
+  rpc ListPoison(ListPoisonRequest) returns (ListPoisonResponse) {
+    option (common.v1.authz) = {
+      rules: {
+        any_of: [
+          {permission: "platform.admin"}
+        ]
+      }
+    };
+  }
   // GetPoison returns one parked message in full (metadata + payload).
-  rpc GetPoison(GetPoisonRequest) returns (GetPoisonResponse);
+  rpc GetPoison(GetPoisonRequest) returns (GetPoisonResponse) {
+    option (common.v1.authz) = {
+      rules: {
+        any_of: [
+          {permission: "platform.admin"}
+        ]
+      }
+    };
+  }
   // RequeuePoison publishes parked messages back onto the topic each was
   // consumed from (same message id, poison metadata removed) and unparks
   // them in the same transaction. Every consumer group behind the topic
   // handles them again; a message that fails again is parked again.
-  rpc RequeuePoison(RequeuePoisonRequest) returns (RequeuePoisonResponse);
+  rpc RequeuePoison(RequeuePoisonRequest) returns (RequeuePoisonResponse) {
+    option (common.v1.authz) = {
+      rules: {
+        any_of: [
+          {permission: "platform.admin"}
+        ]
+      }
+    };
+  }
   // DropPoison deletes parked messages for good.
-  rpc DropPoison(DropPoisonRequest) returns (DropPoisonResponse);
+  rpc DropPoison(DropPoisonRequest) returns (DropPoisonResponse) {
+    option (common.v1.authz) = {
+      rules: {
+        any_of: [
+          {permission: "platform.admin"}
+        ]
+      }
+    };
+  }
   // Prune is `worker prune` over RPC: per bounded context, delete the outbox
   // rows older than older_than that every consumer group with a cursor has
   // acknowledged, and the consumed inbox rows older than that (ids still
@@ -33,7 +67,15 @@ service AdminService {
   // for a dry run, for forgetting a stale group and for routine runs — a big
   // first backlog belongs to the CLI / CronJob (deleted batches stay deleted
   // on DEADLINE_EXCEEDED, only the counts are lost; re-running is safe).
-  rpc Prune(PruneRequest) returns (PruneResponse);
+  rpc Prune(PruneRequest) returns (PruneResponse) {
+    option (common.v1.authz) = {
+      rules: {
+        any_of: [
+          {permission: "platform.admin"}
+        ]
+      }
+    };
+  }
 }
 
 // PoisonMessage is one row of <bc>.events_poison. offset identifies the row;

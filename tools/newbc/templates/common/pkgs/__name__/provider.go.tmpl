@@ -23,6 +23,10 @@ import (
 	"<% .Module %>/pkgs/<% .Name %>/infra/system"
 )
 
+// PermissionAdmin is the permission Create<% .Title %> declares in the proto. A principal holds it by the role of the
+// same name.
+const PermissionAdmin = "<% .Name %>.admin"
+
 // Schema is the Postgres schema of this BC (tables, migrations<% if .Events %>, event topics<% end %>).
 const Schema = postgres.Schema
 
@@ -51,14 +55,15 @@ var ProviderSet = wire.NewSet(
 	ProvideSubscriptions,<% end %>
 )
 
-// RPC is what apps/rpc mounts for this BC: the <% .Name %> service and its OpenAPI document<% if .Events %>, and the
-// schema whose poison table the admin service serves<% end %>.
+// RPC is what apps/rpc mounts for this BC: the <% .Name %> service, its OpenAPI document, the permissions its methods
+// declare<% if .Events %> and the schema whose poison table the admin service serves<% end %>.
 type RPC server.Mount
 
 func ProvideRPC(svc *rpc.<% .Title %>Service) RPC {
 	return RPC{
 		Routes: []server.Route{svc},
-		Docs:   []server.Doc{{Name: "<% .Name %>", Spec: <% .Name %>v1.OpenAPI}},<% if .Events %>
+		Docs:   []server.Doc{{Name: "<% .Name %>", Spec: <% .Name %>v1.OpenAPI}},
+		Permissions: []string{PermissionAdmin},<% if .Events %>
 		PoisonSchema: Schema,<% end %>
 	}
 }

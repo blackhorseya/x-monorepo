@@ -19,6 +19,7 @@ import (
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/admin"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/contextx"
 	adminv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/oidc"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
@@ -57,7 +58,7 @@ func NewRoutes(mounts []server.Mount, poison *admin.PoisonService) []server.Rout
 // NewPoisonService serves admin.v1.AdminService over the poison table of every
 // BC that consumes events (its Mount's PoisonSchema; the worker's poison.go
 // lists the same set). The template has no BC, so none is listed yet.
-func NewPoisonService(db *gorm.DB, auth config.Auth, mounts []server.Mount) *admin.PoisonService {
+func NewPoisonService(db *gorm.DB, mounts []server.Mount) *admin.PoisonService {
 	schemas := []string{}
 	for _, m := range mounts {
 		if m.PoisonSchema != "" {
@@ -65,7 +66,7 @@ func NewPoisonService(db *gorm.DB, auth config.Auth, mounts []server.Mount) *adm
 		}
 	}
 
-	return admin.NewPoisonService(db, auth, schemas)
+	return admin.NewPoisonService(db, schemas)
 }
 
 // NewReadiness lists what /api/readyz checks: the database when one is
@@ -95,6 +96,32 @@ func NewDocs(mounts []server.Mount) []server.Doc {
 
 // warmTimeout bounds the startup warm-up of the OIDC keys.
 const warmTimeout = 15 * time.Second
+
+// NewServerOptions is everything apps/rpc decides about the server in code: its trace policy, its kinds of caller and
+// the permissions of every mounted BC (the server registers platform.admin itself).
+func NewServerOptions(mounts []server.Mount) []server.Option {
+	var permissions []string
+	for _, m := range mounts {
+		permissions = append(permissions, m.Permissions...)
+	}
+
+	return append(TraceOptions(),
+		server.WithPrincipalKinds(PrincipalKind, server.PrincipalKind{Name: KindUser}),
+		server.WithPermissions(permissions...))
+}
+
+// KindUser is the template's one kind of caller: anyone with a verified principal. A project with more kinds (staff,
+// service, customer ...) names them here and in NewServerOptions, and its protos declare them.
+const KindUser = "user"
+
+// PrincipalKind is the template's classifier. An identity bound to no account has no principal, so no kind.
+func PrincipalKind(c context.Context) string {
+	if contextx.PrincipalFrom(c).IsAnonymous() {
+		return ""
+	}
+
+	return KindUser
+}
 
 // TraceOptions: rpc faces outside callers, so it does not continue an incoming traceparent (the server span is
 // a new root with the caller's span as a link, and X-Trace-Id is rpc's own). Declared here, in code, and not

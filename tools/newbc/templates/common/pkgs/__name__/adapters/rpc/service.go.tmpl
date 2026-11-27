@@ -7,8 +7,6 @@ import (
 	"connectrpc.com/connect/v2"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"<% .Module %>/pkgs/platform/admin"
-	"<% .Module %>/pkgs/platform/config"
 	"<% .Module %>/pkgs/platform/server"
 	"<% .Module %>/pkgs/platform/usecasex"
 	"<% .Module %>/pkgs/<% .Name %>/application/dto"
@@ -24,21 +22,15 @@ type (
 	Get<% .Title %>UC    = usecasex.UseCase[dto.Get<% .Title %>Input, *dto.<% .Title %>Output]
 )
 
-// <% .Title %>Service implements the generated <% .Title %>ServiceHandler. auth is read by the write,
-// Create<% .Title %> (server.RequireRole, the admin role); the read stays open to any caller the auth
-// interceptor lets in.
+// <% .Title %>Service implements the generated <% .Title %>ServiceHandler. Who may call each method is declared in
+// the proto and enforced by the server's interceptors, so no handler checks it.
 type <% .Title %>Service struct {
 	create Create<% .Title %>UC
 	get    Get<% .Title %>UC
-	auth   config.Auth
 }
 
-func New<% .Title %>Service(create Create<% .Title %>UC, get Get<% .Title %>UC, auth config.Auth) *<% .Title %>Service {
-	if auth.AdminRole == "" {
-		auth.AdminRole = admin.DefaultAdminRole // config.Load sets the same; this is for hand-built configs (tests)
-	}
-
-	return &<% .Title %>Service{create: create, get: get, auth: auth}
+func New<% .Title %>Service(create Create<% .Title %>UC, get Get<% .Title %>UC) *<% .Title %>Service {
+	return &<% .Title %>Service{create: create, get: get}
 }
 
 // Register serves the service on s (Connect + gRPC + gRPC-Web on one port).
@@ -46,14 +38,11 @@ func (h *<% .Title %>Service) Register(s *connect.Server) {
 	<% .Name %>v1connect.Register<% .Title %>ServiceHandler(s, h)
 }
 
-// Create<% .Title %> adds a <% .Title %>. Admin role when auth is on.
+// Create<% .Title %> adds a <% .Title %>.
 func (h *<% .Title %>Service) Create<% .Title %>(
 	c context.Context,
 	req *<% .Name %>v1.Create<% .Title %>Request,
 ) (*<% .Name %>v1.Create<% .Title %>Response, error) {
-	if err := server.RequireRole(c, h.auth, h.auth.AdminRole); err != nil {
-		return nil, err
-	}
 	out, err := h.create.Execute(c, dto.Create<% .Title %>Input{Name: req.GetName()})
 	if err != nil {
 		return nil, server.ToConnectError(err)

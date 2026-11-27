@@ -9,8 +9,8 @@ import (
 )
 
 // UnboundIdentityCode is the x-error-code (PERMISSION_DENIED) when a token
-// verifies but its (issuer, subject) is bound to no account and the procedure
-// is not one an unbound identity may call (ExternalIdentityResolver.AllowsUnbound).
+// verifies but its (issuer, subject) is bound to no account and authentication
+// does not let such an identity through to the procedure (ExternalIdentityResolver.AllowsUnbound).
 const UnboundIdentityCode = "auth.unbound_identity"
 
 // Errors a ExternalIdentityResolver answers with. Anything else it returns is
@@ -41,9 +41,11 @@ type TokenVerifier interface {
 // other error for an infrastructure failure.
 type ExternalIdentityResolver interface {
 	ResolveExternal(c context.Context, id contextx.ExternalIdentity) (contextx.Principal, error)
-	// AllowsUnbound reports whether an identity bound to no account may call
-	// procedure (an application answers true for the one that lets a person
-	// claim an account, and for no other).
+	// AllowsUnbound reports whether authentication lets an identity bound to no
+	// account through to procedure (an application answers true for the one that
+	// lets a person claim an account, and for no other). The method's declaration
+	// (common.v1.authz) still has to admit it: public, or a rule naming the kind
+	// the classifier gives such an identity.
 	AllowsUnbound(procedure string) bool
 }
 

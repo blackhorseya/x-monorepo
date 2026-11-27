@@ -10,8 +10,15 @@ import (
 
 // invoke, invokeOne and handled are servertest.Invoke with the arguments each test needs.
 func invoke(c context.Context, ics []connect.ServerInterceptor, procedure, peerAddr string, headers map[string]string, h connect.ServerFunc) (*connect.CallInfo, error) {
+	if procedure == publicFixture {
+		return servertest.InvokeSpec(c, ics, servertest.Spec(procedure, servertest.Public()), peerAddr, headers, h)
+	}
+
 	return servertest.Invoke(c, ics, procedure, peerAddr, headers, h)
 }
+
+// publicFixture is the procedure these interceptor tests declare public, as a proto would.
+const publicFixture = "/a.v1.S/Public"
 
 // invokeOne is invoke with a single interceptor, no peer address.
 func invokeOne(c context.Context, in connect.ServerInterceptor, procedure string, headers map[string]string, h connect.ServerFunc) error {

@@ -25,7 +25,7 @@ func Initialize(cfg *config.AppConfig) (*server.Server, func(), error) {
 		NewDocs,
 		NewReadiness,
 		NewOIDCAuth,
-		TraceOptions,
+		NewServerOptions,
 		// new-bc:rpc-providers
 		// Credentials beyond the config: none in the template (see NoCredentialResolver, NoExternalIdentityResolver).
 		NoCredentialResolver,

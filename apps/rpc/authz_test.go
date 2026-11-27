@@ -30,7 +30,11 @@ func TestAuthz_RefusedBeforeValidation(t *testing.T) {
 		{"required, no matching condition", config.AuthRequired, noRoleKey, connect.CodePermissionDenied, server.PermissionDeniedCode},
 		{"optional, no matching condition", config.AuthOptional, noRoleKey, connect.CodePermissionDenied, server.PermissionDeniedCode},
 		{"optional, no credential", config.AuthOptional, "", connect.CodeUnauthenticated, server.UnauthenticatedCode},
-		// Positive control on the same wiring: an admitted caller gets as far as validation.
+		// An admitted caller gets as far as validation; with auth off nothing is mounted to stop one.
+		{"off, no credential", config.AuthOff, "", connect.CodeInvalidArgument, "request.validation_failed"},
+		{"off, no matching role", config.AuthOff, noRoleKey, connect.CodeInvalidArgument, "request.validation_failed"},
+		{"optional, admitted", config.AuthOptional, adminKey, connect.CodeInvalidArgument, "request.validation_failed"},
+		{"required, no credential", config.AuthRequired, "", connect.CodeUnauthenticated, server.UnauthenticatedCode},
 		{"required, admitted", config.AuthRequired, adminKey, connect.CodeInvalidArgument, "request.validation_failed"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

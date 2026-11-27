@@ -87,7 +87,7 @@ func TestPoisonService(t *testing.T) {
 	}
 
 	auth := config.Auth{Mode: config.AuthRequired, AdminRole: "admin", APIKeys: "ops=ops-key-0123456789abcdef:admin, viewer=viewer-key-0123456789"}
-	svc := admin.NewPoisonService(db, auth, []string{"admintest"})
+	svc := admin.NewPoisonService(db, []string{"admintest"})
 	srv, err := server.New(config.HTTP{Addr: ":0"}, auth, tel.Logger, []server.Route{svc}, nil, nil, tel, nil, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestPoisonService(t *testing.T) {
 	}
 
 	// No database: a clear precondition error, not a nil-pointer panic.
-	nodb := admin.NewPoisonService(nil, config.Auth{Mode: config.AuthOff}, []string{"admintest"})
+	nodb := admin.NewPoisonService(nil, []string{"admintest"})
 	_, err = nodb.ListPoison(c, &adminv1.ListPoisonRequest{})
 	if code, ec := errCode(err); code != connect.CodeFailedPrecondition || ec != "admin.no_database" {
 		t.Fatalf("no db = %v", err)

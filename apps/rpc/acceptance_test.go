@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,11 +96,15 @@ func TestAcceptance(t *testing.T) {
 	}
 	tpl := newTemplate(t)
 	tpl.prepare(want)
+	keys, err := scenarioKeys()
+	if err != nil {
+		t.Fatalf("acceptance: %v", err)
+	}
 
 	var ran atomic.Int32
 	suite := godog.TestSuite{
 		ScenarioInitializer: func(sc *godog.ScenarioContext) {
-			env := &acceptance.Env{AdminKey: adminKey}
+			env := keys.env()
 			sc.Before(func(c context.Context, s *godog.Scenario) (context.Context, error) {
 				ran.Add(1)
 				dbURL, err := tpl.take()
@@ -110,7 +117,7 @@ func TestAcceptance(t *testing.T) {
 					c, cancel = context.WithDeadline(c, stepDeadline)
 					env.Defer(func() error { cancel(); return nil })
 				}
-				if err := startRPC(env); err != nil {
+				if err := startRPC(env, keys.apiKeys); err != nil {
 					return c, err
 				}
 				if hasTag(s, workerTag) {
@@ -162,14 +169,49 @@ func hasTag(s *godog.Scenario, name string) bool {
 	return false
 }
 
-// startRPC starts the rpc in this process (Initialize + httptest), as TestPlatform_E2E does: auth.mode=required, one admin
-// API key, the scenario's database. Its pool and server go on env's stack, closed before the database is dropped.
-func startRPC(env *acceptance.Env) error {
+// noRoleKey is the API key (no role) the scenarios' rpc accepts.
+const noRoleKey = "acceptance-norole-key-0123456789"
+
+// keyring is the credentials of the scenarios' rpc.
+type keyring struct {
+	permissions map[string]string // permission → API key
+	apiKeys     string            // auth.api_keys holding adminKey, noRoleKey and those
+}
+
+// scenarioKeys builds one API key per permission the wired server registers, asked of the server itself: it starts
+// the rpc once with auth off and no database, reads PermissionRoles and closes it.
+func scenarioKeys() (keyring, error) {
+	srv, cleanup, err := Initialize(&config.AppConfig{HTTP: config.HTTP{Addr: ":0"}, Log: config.Log{Level: "error", Format: "text"}})
+	if err != nil {
+		return keyring{}, fmt.Errorf("read the registered permissions: %w", err)
+	}
+	defer cleanup()
+	roles := srv.PermissionRoles()
+	k := keyring{permissions: map[string]string{}}
+	entries := []string{"acceptance=" + adminKey + ":admin", "acceptance-norole=" + noRoleKey}
+	for i, permission := range slices.Sorted(maps.Keys(roles)) {
+		key := fmt.Sprintf("acceptance-permission-%d-key-0123456789", i)
+		k.permissions[permission] = key
+		entries = append(entries, fmt.Sprintf("acceptance-permission-%d=%s:%s", i, key, roles[permission]))
+	}
+	k.apiKeys = strings.Join(entries, ",")
+
+	return k, nil
+}
+
+// env is a fresh scenario's Env holding the keys.
+func (k keyring) env() *acceptance.Env {
+	return &acceptance.Env{AdminKey: adminKey, NoRoleKey: noRoleKey, PermissionKeys: maps.Clone(k.permissions)}
+}
+
+// startRPC starts the rpc in this process (Initialize + httptest), as TestPlatform_E2E does: auth.mode=required, the
+// scenarios' API keys, the scenario's database. Its pool and server go on env's stack, closed before the database is dropped.
+func startRPC(env *acceptance.Env, apiKeys string) error {
 	srv, cleanup, err := Initialize(&config.AppConfig{
 		HTTP:     config.HTTP{Addr: ":0"},
 		Log:      config.Log{Level: "error", Format: "text"},
 		Postgres: config.Postgres{URL: env.DatabaseURL},
-		Auth:     config.Auth{Mode: config.AuthRequired, APIKeys: "acceptance=" + env.AdminKey + ":admin"},
+		Auth:     config.Auth{Mode: config.AuthRequired, APIKeys: apiKeys},
 	})
 	if err != nil {
 		return fmt.Errorf("start rpc: %w", err)
@@ -213,6 +255,7 @@ func registerPlatformSteps(sc *godog.ScenarioContext, env *acceptance.Env) {
 	sc.Step(`^rpc 以 auth\.mode=required 啟動，資料庫為該場景獨立的 DB$`, w.rpcIsUp)
 	sc.Step(`^以 admin API key 呼叫 ListPoison$`, w.listPoisonAsAdmin)
 	sc.Step(`^不帶任何 credential 呼叫 ListPoison$`, w.listPoisonAnonymous)
+	sc.Step(`^以沒有任何權限的 API key 呼叫 ListPoison$`, w.listPoisonWithoutPermission)
 	sc.Step(`^呼叫成功，回應是沒有任何 poison 訊息的清單$`, w.succeededWithNoMessages)
 	sc.Step(`^指定不存在的 bounded context 時，由 handler 回 ([a-z_]+) 與 x-error-code "([^"]+)"$`, w.unknownBoundedContext)
 	sc.Step(`^呼叫被拒絕，Connect code 為 "([^"]+)"，x-error-code 為 "([^"]+)"$`, w.rejected)
@@ -240,6 +283,12 @@ func (w *platformWorld) listPoisonAsAdmin(c context.Context) error {
 
 func (w *platformWorld) listPoisonAnonymous(c context.Context) error {
 	w.client = w.newClient()
+	w.resp, w.err = w.client.ListPoison(c, &adminv1.ListPoisonRequest{})
+	return nil
+}
+
+func (w *platformWorld) listPoisonWithoutPermission(c context.Context) error {
+	w.client = w.newClient(servertest.WithHeader(server.APIKeyHeader, w.env.NoRoleKey))
 	w.resp, w.err = w.client.ListPoison(c, &adminv1.ListPoisonRequest{})
 	return nil
 }

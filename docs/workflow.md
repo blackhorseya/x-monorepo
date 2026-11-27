@@ -5,7 +5,7 @@
 ## Workflow
 
 ### 新增 RPC
-1. 改 `protos/<bc>/v1/service.proto`，request 欄位的形狀規則（必填 / 範圍 / pattern）用 `buf.validate` 寫在 message 上，不要在 adapter 手刻
+1. 改 `protos/<bc>/v1/service.proto`，request 欄位的形狀規則（必填 / 範圍 / pattern）用 `buf.validate` 寫在 message 上，不要在 adapter 手刻；每個方法都要寫 `(common.v1.authz)` 宣告誰可以呼叫（[auth.md](auth.md) 的「授權宣告」），沒寫 server 起不來。用到新的權限字串時，在 BC 的 `provider.go` 加常數並放進 `RPC` 的 `Permissions`
    → `task gen`（`task breaking` 檢查相容）
 2. domain 加行為 → `application/dto` + `usecase`
 3. `provider.go` 加 `ProvideXxx`，讀取用 `decorate(name, rec, uc)`，寫入用 `decorateTx(name, rec, tx, uc)`
