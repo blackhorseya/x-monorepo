@@ -7,7 +7,7 @@ require (
 	buf.build/go/protovalidate v1.4.1
 	connectrpc.com/connect/v2 v2.0.2
 	connectrpc.com/otelconnect v0.12.0
-	github.com/MicahParks/jwkset v0.11.5
+	github.com/MicahParks/jwkset v0.12.0
 	github.com/MicahParks/keyfunc/v3 v3.9.2
 	github.com/ThreeDotsLabs/watermill v1.5.3
 	github.com/ThreeDotsLabs/watermill-redisstream v1.4.5
@@ -24,7 +24,7 @@ require (
 	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.3
 	github.com/prometheus/client_golang v1.25.0
-	github.com/redis/go-redis/v9 v9.23.0
+	github.com/redis/go-redis/v9 v9.24.0
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/viper v1.21.0
 	github.com/testcontainers/testcontainers-go v0.45.0
@@ -72,7 +72,7 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
-	github.com/cucumber/gherkin/go/v42 v42.0.0 // indirect
+	github.com/cucumber/gherkin/go/v42 v42.0.1 // indirect
 	github.com/cucumber/messages/go/v34 v34.2.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/go-connections v0.8.2 // indirect
@@ -158,11 +158,11 @@ require (
 	go.uber.org/atomic v1.12.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.31.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
-	golang.org/x/net v0.61.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/net v0.63.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect

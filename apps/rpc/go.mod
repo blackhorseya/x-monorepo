@@ -6,7 +6,7 @@ require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	connectrpc.com/connect/v2 v2.0.2
 	github.com/blackhorseya/x-monorepo/pkgs/platform v0.0.0
-	github.com/cucumber/gherkin/go/v42 v42.0.0
+	github.com/cucumber/gherkin/go/v42 v42.0.1
 	github.com/cucumber/godog v0.16.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/wire v0.7.0
@@ -25,7 +25,7 @@ require (
 	connectrpc.com/otelconnect v0.12.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20261006220739-8c912ac31dd4 // indirect
-	github.com/MicahParks/jwkset v0.11.5 // indirect
+	github.com/MicahParks/jwkset v0.12.0 // indirect
 	github.com/MicahParks/keyfunc/v3 v3.9.2 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/Rican7/retry v0.3.1 // indirect
@@ -113,7 +113,7 @@ require (
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.63.0 // indirect
-	github.com/redis/go-redis/v9 v9.23.0 // indirect
+	github.com/redis/go-redis/v9 v9.24.0 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.10 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
@@ -153,12 +153,12 @@ require (
 	go.uber.org/atomic v1.12.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.31.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
-	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
