@@ -52,8 +52,8 @@ config:
     # off | optional | required — quoted: unquoted `off` is a YAML 1.1 boolean and would render
     # as `mode: false`. With `optional` / `required` the rpc needs a credential it can check:
     # secrets.apiKeys, secrets.jwtHs256Secret or config.auth.jwt.public_key. With none of them
-    # it refuses to start (the template wires no server.CredentialResolver). `auth.public`
-    # procedures and HTTP probes (health, readiness) remain accessible without a credential.
+    # it refuses to start (the template wires no server.CredentialResolver). Methods declared public
+    # in their proto and the HTTP probes (health, readiness) remain accessible without a credential.
     mode: "off"
     admin_role: admin
     jwt: { issuer: "", audience: "", public_key: "" }
@@ -74,7 +74,6 @@ config:
       # - issuer: https://idp.example.com/realms/shop
       #   audience: x-console
       #   mapping: bound
-    public: []
     resolver_timeout: 2s
   # postgres.url comes from `secrets`. Pool limits are per pod: total connections =
   # (rpc + worker + CronJob pods) x max_open_conns, below Postgres max_connections

@@ -6,6 +6,7 @@ package acceptance
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/cucumber/godog"
 )
@@ -20,8 +21,23 @@ type Env struct {
 	DatabaseURL string
 	// AdminKey is an API key with the admin role, accepted by the rpc in RPCURL.
 	AdminKey string
+	// PermissionKeys holds, for every permission the rpc has registered ("<bc>.<function>", platform.admin
+	// included), an API key whose only role is the one that permission stands for.
+	PermissionKeys map[string]string
+	// NoRoleKey is an API key with no role at all: an authenticated caller who holds no permission.
+	NoRoleKey string
 
 	closers []func() error
+}
+
+// KeyFor is the API key that holds permission and nothing else; an error for a permission the rpc did not register.
+func (e *Env) KeyFor(permission string) (string, error) {
+	key, ok := e.PermissionKeys[permission]
+	if !ok {
+		return "", fmt.Errorf("acceptance: no key for permission %q: the rpc registered no such permission", permission)
+	}
+
+	return key, nil
 }
 
 // Defer registers something a step started (a server, a pool) to be closed when the scenario ends.

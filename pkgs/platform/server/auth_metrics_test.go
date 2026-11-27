@@ -24,7 +24,6 @@ func TestAuthInterceptor_Decisions(t *testing.T) {
 		Mode:    config.AuthRequired,
 		APIKeys: "console=console-key-0123456789",
 		JWT:     config.JWT{HS256Secret: secret},
-		Public:  []string{"/a.v1.S/Public"},
 	}
 	in, err := server.NewAuthInterceptor(cfg, mp, nil, server.OIDCAuth{})
 	if err != nil {

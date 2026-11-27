@@ -8,6 +8,7 @@ package adminv1
 
 import (
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
+	_ "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
@@ -840,7 +841,7 @@ var File_admin_v1_service_proto protoreflect.FileDescriptor
 
 const file_admin_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x16admin/v1/service.proto\x12\badmin.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xff\x02\n" +
+	"\x16admin/v1/service.proto\x12\badmin.v1\x1a\x1bbuf/validate/validate.proto\x1a\x15common/v1/authz.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xff\x02\n" +
 	"\rPoisonMessage\x12'\n" +
 	"\x0fbounded_context\x18\x01 \x01(\tR\x0eboundedContext\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x12\n" +
@@ -903,15 +904,20 @@ const file_admin_v1_service_proto_rawDesc = "" +
 	"\roldest_unread\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\foldestUnread\"S\n" +
 	"\rPruneResponse\x12,\n" +
 	"\x06tables\x18\x01 \x03(\v2\x14.admin.v1.PruneTableR\x06tables\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total2\xf2\x02\n" +
-	"\fAdminService\x12G\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total2\xf4\x03\n" +
+	"\fAdminService\x12a\n" +
 	"\n" +
-	"ListPoison\x12\x1b.admin.v1.ListPoisonRequest\x1a\x1c.admin.v1.ListPoisonResponse\x12D\n" +
-	"\tGetPoison\x12\x1a.admin.v1.GetPoisonRequest\x1a\x1b.admin.v1.GetPoisonResponse\x12P\n" +
-	"\rRequeuePoison\x12\x1e.admin.v1.RequeuePoisonRequest\x1a\x1f.admin.v1.RequeuePoisonResponse\x12G\n" +
+	"ListPoison\x12\x1b.admin.v1.ListPoisonRequest\x1a\x1c.admin.v1.ListPoisonResponse\"\x18\xea\xdb\x18\x14\x12\x12\n" +
+	"\x10\x12\x0eplatform.admin\x12^\n" +
+	"\tGetPoison\x12\x1a.admin.v1.GetPoisonRequest\x1a\x1b.admin.v1.GetPoisonResponse\"\x18\xea\xdb\x18\x14\x12\x12\n" +
+	"\x10\x12\x0eplatform.admin\x12j\n" +
+	"\rRequeuePoison\x12\x1e.admin.v1.RequeuePoisonRequest\x1a\x1f.admin.v1.RequeuePoisonResponse\"\x18\xea\xdb\x18\x14\x12\x12\n" +
+	"\x10\x12\x0eplatform.admin\x12a\n" +
 	"\n" +
-	"DropPoison\x12\x1b.admin.v1.DropPoisonRequest\x1a\x1c.admin.v1.DropPoisonResponse\x128\n" +
-	"\x05Prune\x12\x16.admin.v1.PruneRequest\x1a\x17.admin.v1.PruneResponseB\xa9\x01\n" +
+	"DropPoison\x12\x1b.admin.v1.DropPoisonRequest\x1a\x1c.admin.v1.DropPoisonResponse\"\x18\xea\xdb\x18\x14\x12\x12\n" +
+	"\x10\x12\x0eplatform.admin\x12R\n" +
+	"\x05Prune\x12\x16.admin.v1.PruneRequest\x1a\x17.admin.v1.PruneResponse\"\x18\xea\xdb\x18\x14\x12\x12\n" +
+	"\x10\x12\x0eplatform.adminB\xa9\x01\n" +
 	"\fcom.admin.v1B\fServiceProtoP\x01ZJgithub.com/blackhorseya/x-monorepo/pkgs/platform/contract/admin/v1;adminv1\xa2\x02\x03AXX\xaa\x02\bAdmin.V1\xca\x02\bAdmin\\V1\xe2\x02\x14Admin\\V1\\GPBMetadata\xea\x02\tAdmin::V1b\x06proto3"
 
 var (

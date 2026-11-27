@@ -26,10 +26,14 @@ import (
 	"<% .Module %>/pkgs/<% .Name %>/contract/v1/<% .Name %>v1connect"
 )
 
-// Register adds this BC's steps to a scenario's context. env is the scenario's: its rpc, its database, the admin key.
+// permissionAdmin is the permission Create<% .Title %> declares.
+const permissionAdmin = "<% .Name %>.admin"
+
+// Register adds this BC's steps to a scenario's context. env is the scenario's: its rpc, its database, its API keys.
 func Register(sc *godog.ScenarioContext, env *acceptance.Env) {
 	w := &world{env: env}
-	sc.Step(`^以 admin API key 建立一筆 <% .Name %>，名稱為 "([^"]+)"$`, w.createAsAdmin)
+	sc.Step(`^以 <% .Name %> 管理權限的 API key 建立一筆 <% .Name %>，名稱為 "([^"]+)"$`, w.createAsAdmin)
+	sc.Step(`^以沒有任何權限的 API key 建立一筆 <% .Name %>$`, w.createWithoutPermission)
 	sc.Step(`^不帶任何 credential 建立一筆 <% .Name %>$`, w.createAnonymous)
 	sc.Step(`^<% .Name %> 建立成功，回應有 id 且名稱為 "([^"]+)"$`, w.createdWithName)
 	sc.Step(`^用 <% .Name %> 回傳的 id 查詢，名稱為 "([^"]+)"$`, w.getByCreatedID)
@@ -55,7 +59,11 @@ func (w *world) newClient(opts ...connect.ClientInterceptor) {
 }
 
 func (w *world) createAsAdmin(c context.Context, name string) error {
-	w.newClient(servertest.WithHeader(server.APIKeyHeader, w.env.AdminKey))
+	key, err := w.env.KeyFor(permissionAdmin)
+	if err != nil {
+		return err
+	}
+	w.newClient(servertest.WithHeader(server.APIKeyHeader, key))
 	w.created, w.err = w.client.Create<% .Title %>(c, &<% .Name %>v1.Create<% .Title %>Request{Name: name})
 
 	return nil
@@ -63,6 +71,13 @@ func (w *world) createAsAdmin(c context.Context, name string) error {
 
 func (w *world) createAnonymous(c context.Context) error {
 	w.newClient()
+	w.created, w.err = w.client.Create<% .Title %>(c, &<% .Name %>v1.Create<% .Title %>Request{Name: "acceptance"})
+
+	return nil
+}
+
+func (w *world) createWithoutPermission(c context.Context) error {
+	w.newClient(servertest.WithHeader(server.APIKeyHeader, w.env.NoRoleKey))
 	w.created, w.err = w.client.Create<% .Title %>(c, &<% .Name %>v1.Create<% .Title %>Request{Name: "acceptance"})
 
 	return nil

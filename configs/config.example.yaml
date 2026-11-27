@@ -27,7 +27,8 @@ auth:
   # Probes, /api/metrics and /api/docs are outside the RPC chain and always open.
   mode: off
   # Static keys for X-API-Key, "name=key[:role|role],name=key" (≥16 chars each); the principal's
-  # subject is the name, roles the list after the colon (admin.v1.AdminService needs admin_role).
+  # subject is the name, roles the list after the colon. A role holds the permission of the same name
+  # ("<bc>.<function>", declared per method in the protos); admin_role holds platform.admin (admin.v1).
   api_keys: ""
   admin_role: admin
   jwt:
@@ -50,8 +51,6 @@ auth:
     #    audience: my-client-id
     #    mapping: bound              # bound (default) | auto_provision; checked for shape only, your resolver reads it
     #    allow_insecure_issuer: true # only for an http issuer on a non-loopback host; dev only
-  # Procedures that never need a credential, as "/<package>.<Service>/<Method>".
-  public: []
   # Bound on one server.CredentialResolver lookup (an X-API-Key the config does not know; auth runs outside
   # http.timeout). A stuck database rejects fast instead of holding every request. 0 = unbounded.
   # The template's rpc wires no resolver, so this only matters once you add one.

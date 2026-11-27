@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package common.v1;
+
+import "google/protobuf/descriptor.proto";
+
+// MethodAuthz declares who may call an RPC method. Every method the server
+// mounts carries one, or the server refuses to start (platform/server).
+message MethodAuthz {
+  oneof policy {
+    // true: anyone may call the method and no credential is checked.
+    bool public = 1;
+    // A caller who meets any one of these rules may call the method.
+    AuthzRules rules = 2;
+  }
+}
+
+// AuthzRules is the list of conditions of a method that is not public.
+message AuthzRules {
+  repeated AuthzRule any_of = 1;
+}
+
+// AuthzRule is one condition. At least one of the two fields is set, and a
+// caller meets the rule when it meets every field that is set.
+message AuthzRule {
+  // A principal kind the composition root registered
+  // (server.WithPrincipalKinds); empty = any authenticated caller.
+  string kind = 1;
+  // A registered permission, "<bc>.<function>" (server.WithPermissions); the
+  // caller's principal holds the role it stands for.
+  string permission = 2;
+}
+
+extend google.protobuf.MethodOptions {
+  MethodAuthz authz = 50621;
+}

@@ -91,7 +91,7 @@ type apiKey struct {
 // credential header was sent (api_key / jwt / none) — never who.
 const (
 	ResultOK        = "ok"        // credential verified, principal in the context
-	ResultPublic    = "public"    // procedure in auth.public, nothing checked
+	ResultPublic    = "public"    // method declared public, nothing checked
 	ResultAnonymous = "anonymous" // no credential, optional mode: runs anonymous
 	ResultMissing   = "missing"   // no credential, required mode: Unauthenticated
 	ResultInvalid   = "invalid"   // credential sent and rejected (any mode)
@@ -107,7 +107,7 @@ const (
 // database), else Authorization: Bearer against auth.jwt; a credential that is present but does not verify is
 // always an error (even in optional mode — a bad token is never "anonymous"),
 // a missing one is anonymous in optional mode and Unauthenticated in required
-// mode. auth.public procedures skip all of it. The principal goes into the
+// mode. A method declared public in its proto skips all of it. The principal goes into the
 // context, into the request logger as `sub` (use-case lines), onto the rpc
 // access line (`auth`, `sub`, see NewLoggingInterceptor) and onto the span
 // (enduser.id, enduser.roles, auth.method) — the audit trail across Loki and
@@ -158,10 +158,6 @@ func newAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 	if a.keys == nil && a.jwt == nil && a.resolver == nil && !a.oidc.enabled() {
 		return nil, nil, errors.New("auth: mode is on but neither api_keys, jwt nor oidc is configured")
 	}
-	public := make(map[string]bool, len(cfg.Public))
-	for _, p := range cfg.Public {
-		public[p] = true
-	}
 	required := cfg.Mode == config.AuthRequired
 
 	count := func(c context.Context, result, method string) {
@@ -170,7 +166,7 @@ func newAuthInterceptor(cfg config.Auth, mp metric.MeterProvider, resolver Crede
 
 	return func(next connect.ServerFunc) connect.ServerFunc {
 		return func(c context.Context, spec connect.Spec, stream connect.ServerStream) error {
-			if public[spec.Procedure] {
+			if isPublic(spec) {
 				count(c, ResultPublic, MethodNone)
 				recordAuth(c, AuthPublic, "")
 				trace.SpanFromContext(c).SetAttributes(authMethodKey.String(AuthPublic))
@@ -502,28 +498,9 @@ func (v *jwtVerifier) verify(token string) (contextx.Principal, error) {
 	return contextx.Principal{Subject: cl.Subject, Name: cl.Name, Roles: cl.Roles, Method: MethodJWT}, nil
 }
 
-// PermissionDeniedCode is the x-error-code when the principal is known but
-// lacks what the procedure requires (see RequireRole).
+// PermissionDeniedCode is the x-error-code when the caller is identified but
+// meets none of the rules the method declares (authz_interceptor.go).
 const PermissionDeniedCode = "auth.permission_denied"
-
-// RequireRole is the one authorization helper the platform offers, for its
-// own admin surface: with auth off it allows everything (the deployment chose
-// no auth); otherwise the principal must exist and hold role. Returns a
-// connect error ready to be returned from a handler.
-func RequireRole(c context.Context, cfg config.Auth, role string) error {
-	if cfg.Mode == config.AuthOff || cfg.Mode == "" {
-		return nil
-	}
-	p := contextx.PrincipalFrom(c)
-	if p.IsAnonymous() {
-		return authError(connect.CodeUnauthenticated, UnauthenticatedCode, errors.New("credentials required"))
-	}
-	if !p.HasRole(role) {
-		return authError(connect.CodePermissionDenied, PermissionDeniedCode, fmt.Errorf("role %q required", role))
-	}
-
-	return nil
-}
 
 func authError(code connect.Code, errorCode string, err error) error {
 	return WithMeta(connect.NewError(code, err.Error()).WithCause(err), "x-error-code", errorCode)

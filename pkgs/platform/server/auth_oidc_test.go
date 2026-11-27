@@ -391,9 +391,7 @@ func TestOIDC_RejectionLeaksNothing(t *testing.T) {
 // still "missing" (the OIDC wiring changes neither).
 func TestOIDC_PublicAndMissing(t *testing.T) {
 	v := &fakeVerifier{}
-	cfg := requiredCfg
-	cfg.Public = []string{otherProc}
-	out := runOIDC(t, cfg, v, &fakeExternal{}, otherProc, bearer(oidcToken))
+	out := runOIDC(t, requiredCfg, v, &fakeExternal{}, publicFixture, bearer(oidcToken))
 	if out.err != nil || v.calls != 0 {
 		t.Errorf("public procedure: err %v, verifier calls %d", out.err, v.calls)
 	}

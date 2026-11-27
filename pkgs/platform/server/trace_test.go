@@ -21,8 +21,10 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/config"
+	commonv1 "github.com/blackhorseya/x-monorepo/pkgs/platform/contract/common/v1"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/otel"
 	"github.com/blackhorseya/x-monorepo/pkgs/platform/server"
+	"github.com/blackhorseya/x-monorepo/pkgs/platform/server/servertest"
 )
 
 // pingRoute serves /test.v1.Echo/Ping, failing with a business error when the request asks for it.
@@ -30,7 +32,7 @@ type pingRoute struct{}
 
 const pingProcedure = "/test.v1.Echo/Ping"
 
-var pingSpec = connect.Spec{StreamType: connect.StreamTypeUnary, Procedure: pingProcedure}
+var pingSpec = servertest.Spec(pingProcedure, servertest.Rules(&commonv1.AuthzRule{Permission: server.PlatformAdminPermission}))
 
 func (pingRoute) Register(s *connect.Server) {
 	s.Register(connect.Method{Spec: pingSpec, Handler: func(c context.Context, _ connect.Spec, stream connect.ServerStream) error {

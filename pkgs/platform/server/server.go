@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -60,6 +61,8 @@ type Option func(*options)
 type options struct {
 	trustRemoteTrace bool
 	httpRoutes       []httpRoute
+	kinds            []kindRegistration
+	permissions      []string
 }
 
 type httpRoute struct {
@@ -102,7 +105,12 @@ type Server struct {
 	health          *health
 	shutdownDelay   time.Duration
 	shutdownTimeout time.Duration
+	permissionRoles map[string]string
 }
+
+// PermissionRoles returns every registered permission (platform.admin included)
+// with the role a principal holds it by. The map is the caller's own.
+func (s *Server) PermissionRoles() map[string]string { return maps.Clone(s.permissionRoles) }
 
 // New mounts every route, the probes (/api/healthz liveness, /api/readyz
 // readiness over checks, see health.go), /api/metrics (Prometheus exposition
@@ -111,7 +119,8 @@ type Server struct {
 // its trace_id and request_id, and every response carries X-Request-Id, and
 // X-Trace-Id when there is a trace (not when otel.endpoint is empty; see meta.go); the rate limit (limits.go, when cfg.RateLimit.RPS
 // is set) drops a flood; auth (auth.go, when auth.Mode is not off) resolves
-// the caller to a contextx.Principal; the timeout (limits.go, cfg.Timeout)
+// the caller to a contextx.Principal; authorization (authz_interceptor.go, mounted with auth) enforces what each
+// method's proto declares, and New itself refuses a mounted procedure without a valid declaration (authz.go); the timeout (limits.go, cfg.Timeout)
 // bounds the rest (and a call that outlived it is refused before the handler, refuseExpired); opts (TrustRemoteTrace / DistrustRemoteTrace) decide whether
 // an incoming traceparent is continued, and none means it is not; plain HTTP routes (docs, openapi) get spans from otelgin,
 // which skips RPC prefixes, the probes and /api/metrics so nothing is traced twice.
@@ -149,6 +158,10 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	if err != nil {
 		return nil, err
 	}
+	authz, err := newAuthzRegistry(auth.AdminRole, o)
+	if err != nil {
+		return nil, err
+	}
 	limiter, err := NewRateLimitInterceptor(cfg.RateLimit)
 	if err != nil {
 		return nil, err
@@ -158,16 +171,15 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	// X-Request-Id. Rate limit before auth so a flood is dropped before each
 	// request pays for a credential check; timeout after auth so the
 	// deadline covers validation and the use case, not credential parsing;
-	// auth before validation so an anonymous caller learns nothing about
-	// the request rules.
+	// auth and authorization before validation so an anonymous caller, or one
+	// the method does not admit, learns nothing about the request rules.
 	interceptors := []connect.ServerInterceptor{tracing, dropHeadersOnError(tel.Propagator.Fields()...), NewMetaInterceptor(), NewLoggingInterceptor(logger)}
 	if limiter != nil {
 		interceptors = append(interceptors, limiter)
 		logger.Info("rate limit enabled", "rps", cfg.RateLimit.RPS, "burst", cfg.RateLimit.Burst, "by", cfg.RateLimit.By)
 	}
 	if authn != nil {
-		interceptors = append(interceptors, authn)
-		logger.Info("auth enabled", "mode", auth.Mode, "public", auth.Public)
+		interceptors = append(interceptors, authn, authz.interceptor())
 		if authSources.resolverOnly() {
 			// The credential resolver is the only wired source (NewAuthInterceptor
 			// refuses a mode with none): it can answer alone, but until it holds a
@@ -191,9 +203,23 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 	// One request message is read up to connect-go v2's default, 4 MiB (not a setting); a larger one
 	// is refused with resource_exhausted (readlimit_test.go).
 	connecthttp.Mount(mux, rpc)
+	specs := slices.SortedFunc(rpc.Specs(), func(a, b connect.Spec) int { return strings.Compare(a.Procedure, b.Procedure) })
+	// Whatever auth.mode is, off included: a declaration that is missing or wrong must not wait for auth to be turned on.
+	if err := authz.check(specs); err != nil {
+		return nil, err
+	}
+	if authn != nil {
+		var public []string
+		for _, spec := range specs {
+			if isPublic(spec) {
+				public = append(public, spec.Procedure)
+			}
+		}
+		logger.Info("auth enabled", "mode", auth.Mode, "public", public)
+	}
 	procedures := map[string]bool{}
 	var prefixes []string
-	for spec := range rpc.Specs() {
+	for _, spec := range specs {
 		procedures[spec.Procedure] = true
 		if i := strings.LastIndexByte(spec.Procedure, '/'); i > 0 && !slices.Contains(prefixes, spec.Procedure[:i+1]) {
 			prefixes = append(prefixes, spec.Procedure[:i+1])
@@ -258,6 +284,7 @@ func New(cfg config.HTTP, auth config.Auth, logger *slog.Logger, routes []Route,
 		health:          hp,
 		shutdownDelay:   cfg.ShutdownDelay,
 		shutdownTimeout: cfg.ShutdownTimeout,
+		permissionRoles: authz.roles,
 	}, nil
 }
 

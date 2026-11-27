@@ -3,12 +3,27 @@ syntax = "proto3";
 package <% .Name %>.v1;
 
 import "buf/validate/validate.proto";
+import "common/v1/authz.proto";
 import "<% .Name %>/v1/entity.proto";
 
-// <% .Title %>Service is the <% .Name %> bounded context's API. Create<% .Title %> requires the admin role when auth is on.
+// <% .Title %>Service is the <% .Name %> bounded context's API. Every method declares who may call it, or the server refuses
+// to start; with auth on, Create<% .Title %> needs the <% .Name %>.admin permission and Get<% .Title %> any verified caller.
 service <% .Title %>Service {
-  rpc Create<% .Title %>(Create<% .Title %>Request) returns (Create<% .Title %>Response);
-  rpc Get<% .Title %>(Get<% .Title %>Request) returns (Get<% .Title %>Response);
+  rpc Create<% .Title %>(Create<% .Title %>Request) returns (Create<% .Title %>Response) {
+    option (common.v1.authz) = {
+      rules: {
+        any_of: [{permission: "<% .Name %>.admin"}]
+      }
+    };
+  }
+  rpc Get<% .Title %>(Get<% .Title %>Request) returns (Get<% .Title %>Response) {
+    // "user" is the kind apps/rpc registers for a verified principal (KindUser).
+    option (common.v1.authz) = {
+      rules: {
+        any_of: [{kind: "user"}]
+      }
+    };
+  }
 }
 
 message Create<% .Title %>Request {

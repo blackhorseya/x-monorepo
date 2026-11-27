@@ -12,3 +12,8 @@
     假如 rpc 以 auth.mode=required 啟動，資料庫為該場景獨立的 DB
     當 不帶任何 credential 呼叫 ListPoison
     那麼 呼叫被拒絕，Connect code 為 "unauthenticated"，x-error-code 為 "auth.unauthenticated"
+
+  場景: 已驗證但缺權限，被拒絕
+    假如 rpc 以 auth.mode=required 啟動，資料庫為該場景獨立的 DB
+    當 以沒有任何權限的 API key 呼叫 ListPoison
+    那麼 呼叫被拒絕，Connect code 為 "permission_denied"，x-error-code 為 "auth.permission_denied"

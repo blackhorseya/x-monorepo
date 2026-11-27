@@ -37,7 +37,7 @@ task migrate -- up  # 跑每個 BC 的 migrations（service 啟動時不會自�
 task run            # ./bin/rpc 讀 configs/local.yaml：Connect + gRPC + gRPC-Web 同一個 port、text log、/api/docs 開
                     # 不想接 DB：把 local.yaml 的 postgres.url 清空（= in-memory repository）
 
-# admin.v1 的 RPC 要 admin role（auth 關著就直接打）；沒接 DB 會回 `admin.no_database`
+# admin.v1 的 RPC 要 platform.admin 權限，即 auth.admin_role 角色（auth 關著就直接打）；沒接 DB 會回 `admin.no_database`
 curl -X POST localhost:8080/api/admin.v1.AdminService/ListPoison \
   -H 'Content-Type: application/json' \
   -d '{}'
@@ -51,7 +51,7 @@ curl -X POST localhost:8080/api/admin.v1.AdminService/ListPoison \
 ├── buf.yaml / buf.gen.yaml        # proto module；go_package 由 override 決定輸出位置
 ├── buf.gen.ts.yaml                # TS 輸出到 web/packages/proto
 ├── protos/
-│   ├── common/v1/money.proto      # 跨 BC 的 wire 型別
+│   ├── common/v1/                 # 跨 BC 的 wire 型別（money.proto）與方法的授權宣告（authz.proto）
 │   ├── admin/v1/                  # platform 的 poison / prune 操作面（不屬於任何 BC）
 │   └── <bc>/v1/                   # `task new-bc` 產生；目前沒有 BC
 │       ├── entity.proto           # aggregate 的 state schema（跨語言契約，不是 Go domain model）
@@ -103,7 +103,7 @@ README 放架構與程式碼層面的規則；流程、維運與參考表在 `do
 | [`docs/operations.md`](docs/operations.md) | Compose 本機環境（Grafana dashboards / alerts）、Helm 部署與 kind 實測 |
 | [`docs/observability.md`](docs/observability.md) | OTel → LGTM：metrics、traces、logs、每個 metric 與 alert 的意義 |
 | [`docs/config.md`](docs/config.md) | 所有 config key、預設值、env 覆寫規則、`auth.*` |
-| [`docs/auth.md`](docs/auth.md) | 認證：憑證與優先序、`server.CredentialResolver`／`server.ExternalIdentityResolver` 擴充點的契約、失敗語意、`auth.*` 的啟動檢查順序 |
+| [`docs/auth.md`](docs/auth.md) | 認證與授權：憑證與優先序、授權宣告、`server.CredentialResolver`／`server.ExternalIdentityResolver` 擴充點的契約、失敗語意、`auth.*` 的啟動檢查順序 |
 | [`docs/error-codes.md`](docs/error-codes.md) | `x-error-code` 總表 |
 | [`docs/workflow.md`](docs/workflow.md) | 新增 RPC / Bounded Context / consumer、拆 BC 成獨立服務、rename module |
 
@@ -157,7 +157,8 @@ Connect / gRPC / gRPC-Web 三種協定都有 E2E test（`apps/rpc/main_test.go`�
 | 層 | 擋什麼 | 位置 |
 |---|---|---|
 | proto | `buf.validate` rule 直接寫在 request message 上（`min_len`、`gt`、`gte`、`pattern`、`required`、`min_items`） | `protos/<bc>/v1/service.proto`、`common/v1/money.proto` |
-| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 先對 `auth.api_keys`（static，break-glass）再問 `server.CredentialResolver`（template 的 rpc 沒有接，衍生專案接自己的實作；resolver 失敗 = 拒絕，不放行；一次查詢受 `auth.resolver_timeout` 限制），否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method, CredentialID}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。只做 authentication，授權是讀的人的事（usecase 用 principal 判斷，例如 `admin.v1` 的 `auth.admin_role` 檢查，見 `pkgs/platform/admin`）。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。request body 在 interceptor chain 之內才解碼：body 解不開的請求也會先經過已掛上的 interceptor，被其中一個先拒絕就回那個 interceptor 的錯誤（例如 `UNAUTHENTICATED`、`RESOURCE_EXHAUSTED`），都通過才回 `INVALID_ARGUMENT`（`pkgs/platform/server/decode_test.go`）。解析失敗的 `message` 由 connect 函式庫產生，不是穩定契約，不要依賴它的字面。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
+| server | `NewAuthInterceptor`（`auth.mode` 不是 `off` 才掛，在 logging 之內、validate 之外）：`X-API-Key` 先對 `auth.api_keys`（static，break-glass）再問 `server.CredentialResolver`（template 的 rpc 沒有接，衍生專案接自己的實作；resolver 失敗 = 拒絕，不放行；一次查詢受 `auth.resolver_timeout` 限制），否則 `Authorization: Bearer` 對 `auth.jwt`，解析成 `contextx.Principal{Subject, Name, Roles, Method, CredentialID}` 放進 context；`rpc` access line 帶 `auth`（`api_key` / `jwt` / `anonymous` / `public`）與 `sub`（auth 在 logging 之內，透過 context 裡的 slot 回報）、usecase 的 log 帶 `sub`、span 帶 `enduser.id` / `enduser.roles` / `auth.method`——Loki 與 Tempo 都查得到誰呼叫的，被拒絕的呼叫也有一行（`code=unauthenticated auth=anonymous`）；每個決定計入 `auth_decisions_total{result, method}`（dashboard 的 Auth row 與 `rpc-auth` alert 看它）；name 與 credential 本身不記；usecase 用 `contextx.PrincipalFrom(c)` 讀（consumer path / mode off 是 anonymous zero value）。這個 interceptor 只做 authentication；授權在下一列。沒帶 → `UNAUTHENTICATED` + `x-error-code: auth.unauthenticated`，帶了驗不過 → `auth.invalid_credential`。request body 在 interceptor chain 之內才解碼：body 解不開的請求也會先經過已掛上的 interceptor，被其中一個先拒絕就回那個 interceptor 的錯誤（例如 `UNAUTHENTICATED`、`RESOURCE_EXHAUSTED`），都通過才回 `INVALID_ARGUMENT`（`pkgs/platform/server/decode_test.go`）。解析失敗的 `message` 由 connect 函式庫產生，不是穩定契約，不要依賴它的字面。probes / `/api/metrics` / `/api/docs` 是 gin route，不在 RPC chain 裡，永遠開著 | `pkgs/platform/server/auth.go`、`pkgs/platform/contextx/principal.go` |
+| server | 授權（`auth.mode` 不是 `off` 才掛，緊接在 auth 之後、timeout 與 validate 之前）：照方法在 proto 的 `(common.v1.authz)` 宣告放行或拒絕，匿名 → `auth.unauthenticated`、不符合任何條件 → `auth.permission_denied`；公開方法不檢查 credential。`server.New` 不論 `auth.mode` 都拒絕宣告缺漏或不合法的方法。細節見 [`docs/auth.md`](docs/auth.md) 的「授權宣告」 | `pkgs/platform/server/authz.go`、`authz_interceptor.go`、`protos/common/v1/authz.proto` |
 | server | `NewRateLimitInterceptor`（`http.rate_limit.rps` > 0 才掛，在 logging 之內、auth 之外——洪水要在付 JWT 簽章驗證成本之前就擋掉）：token bucket，`by: global` 一桶 / `peer` 每個 client IP 一桶（idle 1 分鐘回收）。沒 token → `RESOURCE_EXHAUSTED`、`x-error-code: request.rate_limited`、`Retry-After: <秒>`，不排隊等 | `pkgs/platform/server/limits.go` |
 | server | `NewTimeoutInterceptor`（`http.timeout` > 0 才掛，在 auth 之內、validate 之外）：usecase 拿到會到期的 context，慢 query 被 cancel 而不是吃掉整個 shutdown drain 窗口。到期後失敗的 RPC 一律回 `DEADLINE_EXCEEDED` + `x-error-code: request.timeout`（不管 driver 的 error 被 `ToConnectError` 映成什麼）；到期後仍成功的照常回 response（工作已 commit）。client 的 deadline 較短時一樣適用 | `pkgs/platform/server/limits.go` |
 | server | `NewValidateInterceptor`（最內層 interceptor）：違反 → `INVALID_ARGUMENT`、header `x-error-code: request.validation_failed`、error detail `buf.validate.Violations`（欄位路徑 + rule id + message）；rule 本身編不過 → `INTERNAL` | `pkgs/platform/server/validate.go` |
@@ -219,7 +220,7 @@ x-brain pitfall `best-effort-publish-loses-one-shot-events`：「存完再 best-
   所以是 dry-run / forget-group / 例行小量的入口；第一次清大 backlog 用 CLI / CronJob（逾時只是回應掉了，已刪的 batch 都已 commit，重跑無害）。
 - Poison / prune 操作面有兩個入口，底層同一組 `eventbus.ListPoison / Requeue / Drop / PruneSchema`：
   **RPC** `admin.v1.AdminService`（`protos/admin/v1`，platform 的 contract，不屬於任何 BC；`pkgs/platform/admin` 是 handler，
-  `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `auth.admin_role`
+  `apps/rpc` 掛上並給它 BC schema 清單）— `ListPoison / GetPoison / RequeuePoison / DropPoison / Prune`，auth 開著時要 `platform.admin` 權限，即 `auth.admin_role`
   （API key 用 `name=key:admin`，JWT 用 `roles` claim），不然 `PERMISSION_DENIED` + `x-error-code: auth.permission_denied`；
   `auth.mode: off` 時全開（跟其他 RPC 一樣——`off` 只給本機開發，任何外面連得到的環境都要 `required` + `admin_role`）。
   **CLI** `task poison -- list [-n 50] [<bc>]` 列出各 BC 停在 poison 表的訊息（offset、uuid、原 topic、最後一次 error），

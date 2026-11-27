@@ -97,7 +97,7 @@ func TestPruneRPC(t *testing.T) {
 	}
 
 	auth := config.Auth{Mode: config.AuthRequired, AdminRole: "admin", APIKeys: "ops=ops-key-0123456789abcdef:admin, viewer=viewer-key-0123456789"}
-	svc := admin.NewPoisonService(db, auth, []string{"prunea", "pruneb"})
+	svc := admin.NewPoisonService(db, []string{"prunea", "pruneb"})
 	srv, err := server.New(config.HTTP{Addr: ":0"}, auth, tel.Logger, []server.Route{svc}, nil, nil, tel, nil, server.OIDCAuth{})
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestPruneRPC(t *testing.T) {
 		t.Fatalf("inbox rows left: %d", n)
 	}
 
-	nodb := admin.NewPoisonService(nil, config.Auth{Mode: config.AuthOff}, []string{"prunea"})
+	nodb := admin.NewPoisonService(nil, []string{"prunea"})
 	_, err = nodb.Prune(c, &adminv1.PruneRequest{OlderThan: day, DryRun: true})
 	if code, ec := errCode(err); code != connect.CodeFailedPrecondition || ec != "admin.no_database" {
 		t.Fatalf("no db = %v", err)

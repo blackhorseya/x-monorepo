@@ -17,7 +17,7 @@ const (
 	// AuthAnonymous: no credential (auth.mode off or optional), or the
 	// credential was rejected (the line's code says so).
 	AuthAnonymous = "anonymous"
-	// AuthPublic: the procedure is in auth.public, nothing was checked.
+	// AuthPublic: the method is declared public, nothing was checked.
 	AuthPublic = "public"
 )
 

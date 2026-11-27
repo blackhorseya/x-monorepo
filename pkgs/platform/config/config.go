@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -73,9 +75,13 @@ const (
 	RateLimitPeer   = "peer"
 )
 
+// DefaultAdminRole is auth.admin_role when unset.
+const DefaultAdminRole = "admin"
+
 // Auth configures the server's auth interceptor (platform/server.NewAuthInterceptor):
-// who an RPC runs as, carried to use cases as contextx.Principal. It is
-// authentication only; nothing here grants or denies anything.
+// who an RPC runs as, carried to use cases as contextx.Principal. What a method
+// admits, public methods included, is declared in its proto (common.v1.authz),
+// not here.
 type Auth struct {
 	// Mode: "off" (no interceptor, every call is anonymous), "optional"
 	// (a credential is verified when present, a call without one is
@@ -85,17 +91,15 @@ type Auth struct {
 	// string so an env var can carry it). A matching X-API-Key header makes
 	// the principal {Subject: name, Roles: roles, Method: "api_key"}.
 	APIKeys string `mapstructure:"api_keys"`
-	// AdminRole is the role admin.v1.AdminService requires when auth is on
-	// (default "admin"); with auth.mode off it is not checked.
+	// AdminRole is the role that holds the platform.admin permission, which
+	// admin.v1.AdminService declares (default DefaultAdminRole); with auth.mode
+	// off nothing is checked.
 	AdminRole string `mapstructure:"admin_role"`
 	JWT       JWT    `mapstructure:"jwt"`
 	// OIDC is the external-login verifier (platform/oidc). Off by default; while
 	// off, nothing about it is read or validated. On, the rpc also needs a
 	// server.ExternalIdentityResolver wired in apps/rpc, or it refuses to start.
 	OIDC OIDC `mapstructure:"oidc"`
-	// Public lists procedures ("/<pkg>.<Service>/<Method>") that never need a
-	// credential, whatever the mode.
-	Public []string `mapstructure:"public"`
 	// ResolverTimeout bounds one server.CredentialResolver lookup (a
 	// database read behind an X-API-Key the config does not know, when the
 	// application wires a resolver). Auth runs outside http.timeout, so without this a stuck database
@@ -325,6 +329,9 @@ func Load() (*AppConfig, error) {
 	if err := readFile(v); err != nil {
 		return nil, err
 	}
+	if err := refuseRemoved(v); err != nil {
+		return nil, err
+	}
 
 	var cfg AppConfig
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -332,6 +339,27 @@ func Load() (*AppConfig, error) {
 	}
 
 	return &cfg, cfg.validate()
+}
+
+// removedAuthPublic is a key that no longer exists. viper drops a key nothing
+// reads without a word, and a deployment that sets this one believes some
+// procedures need no credential, so it is refused.
+const removedAuthPublic = "auth.public"
+
+// refuseRemoved fails when the file or the environment still sets a removed key,
+// whatever the value, empty included.
+func refuseRemoved(v *viper.Viper) error {
+	env := EnvPrefix + "_" + strings.ToUpper(strings.ReplaceAll(removedAuthPublic, ".", "_"))
+	_, inEnv := os.LookupEnv(env)
+	// AllKeys lists a key whose value is null too; the prefix covers a mapping.
+	inFile := slices.ContainsFunc(v.AllKeys(), func(k string) bool {
+		return k == removedAuthPublic || strings.HasPrefix(k, removedAuthPublic+".")
+	}) || v.InConfig(removedAuthPublic)
+	if !inEnv && !inFile {
+		return nil
+	}
+
+	return fmt.Errorf("%s (env %s) was removed: delete it, and declare a method public in its proto, option (common.v1.authz) = {public: true}", removedAuthPublic, env)
 }
 
 // validateOIDC checks auth.oidc only when it is enabled. With a legacy auth.jwt
@@ -389,12 +417,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("http.rate_limit.by", RateLimitGlobal)
 	v.SetDefault("auth.mode", AuthOff)
 	v.SetDefault("auth.api_keys", "")
-	v.SetDefault("auth.admin_role", "admin")
+	v.SetDefault("auth.admin_role", DefaultAdminRole)
 	v.SetDefault("auth.jwt.issuer", "")
 	v.SetDefault("auth.jwt.audience", "")
 	v.SetDefault("auth.jwt.hs256_secret", "")
 	v.SetDefault("auth.jwt.public_key", "")
-	v.SetDefault("auth.public", []string{})
 	v.SetDefault("auth.oidc.enabled", false)
 	v.SetDefault("auth.oidc.issuers", []OIDCIssuer{})
 	v.SetDefault("auth.resolver_timeout", 2*time.Second)
