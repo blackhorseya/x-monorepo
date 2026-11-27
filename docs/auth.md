@@ -6,7 +6,7 @@
 
 ## 範圍
 
-- 認證回答「這個呼叫以誰的身分執行」，結果是放進 context 的 `contextx.Principal`；「誰可以呼叫哪個方法」由方法在 proto 上的宣告決定，authorization interceptor 執行（見「授權宣告」）。資料層的規則（例如只能讀自己的那一筆）仍寫在 use case。
+- 認證回答「這個呼叫以誰的身分執行」，結果是放進 context 的 `contextx.Principal`；「誰可以呼叫哪個方法」由方法在 proto 上的宣告決定，`auth.mode` 為 `optional` 或 `required` 時由 authorization interceptor 執行（見「授權宣告」）。資料層的規則（例如只能讀自己的那一筆）仍寫在 use case。
 - `auth.mode: required` 時，`/api/healthz`、`/api/readyz`、`/api/version`、`/api/metrics` 仍不需要 credential；`/api/docs` 在 docs 開著時也是：它們是 Connect interceptor chain 之外的 gin 路由。
 - 下面「憑證與優先序」「擴充點的契約」「失敗語意與逾時」描述的是請求經過 auth interceptor 時的行為，只在 `auth.mode` 為 `optional` 或 `required` 時成立；`off` 時不掛 interceptor（`NewAuthInterceptor` 回 nil），也不做 interceptor 內的啟動檢查（見「啟動檢查的順序」）。
 - authorization interceptor 和 auth interceptor 一起掛：`auth.mode` 為 `off` 時兩個都不掛。啟動時對宣告的檢查則不看 `auth.mode`（見「啟動檢查的順序」）。
@@ -106,7 +106,7 @@ JWKS 失敗與 discovery 失敗的 server log 分別是 `oidc: jwks refresh fail
 
 ## 授權宣告
 
-每個 RPC 方法在 proto 上用 `(common.v1.authz)`（`protos/common/v1/authz.proto`）宣告誰可以呼叫它：公開，或一組條件。
+每個 RPC 方法在 proto 上用 `(common.v1.authz)`（`protos/common/v1/authz.proto`）宣告誰可以呼叫它：公開，或一組條件。`auth.mode` 為 `optional` 或 `required` 時，authorization interceptor 才照宣告放行或拒絕（見「執行結果」）。
 
 ```proto
 import "common/v1/authz.proto";
@@ -134,7 +134,6 @@ service OrderService {
 - 種類不寫死在 platform：composition root 用 `server.WithPrincipalKinds(classify, kinds...)` 登記判斷函式與它可能回傳的種類；`PrincipalKind.RequiresPermission` 的種類，宣告時必須同時寫權限。
 - `classify(c context.Context) string` 從 context 讀 principal（必要時加上 `contextx.ExternalIdentityFrom`），回傳一個種類名稱，`""` 表示沒有種類。
 - 登記了種類、`auth.mode` 不是 `off` 時，非公開方法上每個有 principal 或外部身分的呼叫，authorization interceptor 呼叫它一次。它在 `http.timeout` 之外，context 沒有那個 deadline。
-- 回傳未登記的種類時，這次呼叫視為不符合任何條件（只寫權限的條件也一樣），回 `PERMISSION_DENIED`，並記一筆 error log。
 - template 的 `apps/rpc` 只登記一種：`KindUser`（`"user"`），有 principal 就是它，否則沒有種類（`apps/rpc/app.go` 的 `PrincipalKind`）。
 - proto 宣告裡的種類是字串字面值：`task new-bc` 模板的 Get 寫 `kind: "user"`，模板的 kind 名稱要和 composition root 登記的一致；改了登記的名稱而沒改 proto，啟動檢查會擋下。
 
@@ -154,11 +153,14 @@ service OrderService {
 | `optional` | 放行 | `UNAUTHENTICATED` / `auth.unauthenticated`（authorization interceptor） | `PERMISSION_DENIED` / `auth.permission_denied` | 放行 |
 | `required` | 放行 | `UNAUTHENTICATED` / `auth.unauthenticated`（auth interceptor 先擋） | `PERMISSION_DENIED` / `auth.permission_denied` | 放行 |
 
+`auth.mode: off` 時不掛 authorization interceptor，所有方法放行（表的第一列），context 裡沒有種類，對宣告與登記的啟動檢查照跑。以下各條描述 `optional`／`required`，也就是 interceptor 有掛上時。
+
 - 沒有 principal（`IsAnonymous`）也沒有外部身分的呼叫，在非公開方法上是 `UNAUTHENTICATED`。
-- OIDC 未綁定的身分（`AllowsUnbound` 放行、沒有 principal）：`classify` 回傳的種類符合某一條只寫 `kind` 的條件才放行；它不持有任何權限。不符合是 `PERMISSION_DENIED`。template 的 `classify` 不給它種類，所以在非公開方法上一律被拒。
+- OIDC 未綁定的身分（`AllowsUnbound` 放行、沒有 principal）：`classify` 回傳的種類符合某一條只寫 `kind` 的條件才放行；它不持有任何權限。不符合是 `PERMISSION_DENIED`。template 的 `classify` 不給它種類，所以在非公開方法上被拒。
+- `classify` 回傳未登記的種類時，這次呼叫視為不符合任何條件（只寫權限的條件也一樣），回 `PERMISSION_DENIED`，並記一筆 error log。
 - 不在 `AllowsUnbound` 的方法上，未綁定的身分在 auth interceptor 就被拒（`auth.unbound_identity`），公開方法除外：公開方法不檢查 credential。
 - authorization interceptor 在 auth 之後、timeout 與 validate 之前：被拒的呼叫者看不到任何 request 規則。
-- 放行時，非空的種類放進 context，use case 用 `contextx.PrincipalKindFrom` 讀，不必再判斷一次；公開方法、`auth.mode: off`、consumer path 都沒有種類。
+- 放行時，非空的種類放進 context，use case 用 `contextx.PrincipalKindFrom` 讀，不必再判斷一次；公開方法與 consumer path 沒有種類。
 
 ## 啟動檢查的順序
 
